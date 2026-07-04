@@ -115,17 +115,10 @@ RUN set -eux; \
     rm -rf /tmp/fd.tgz "/tmp/fd-v${FD_VERSION}-${ft}"; \
     fd --version
 
-# --- headless browser (QA / design track) — native arm64 Chromium ------------
-# On Apple Silicon the sandbox VM is arm64; apt chromium is native arm64 (no
-# emulation). agent-browser (Vercel Labs) drives this system chromium instead of
-# downloading its own Chrome-for-Testing build. Headless needs --no-sandbox.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      chromium fonts-liberation ffmpeg \
- && rm -rf /var/lib/apt/lists/*
-RUN npm install -g --ignore-scripts agent-browser && npm cache clean --force
-ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
-    AGENT_BROWSER_ARGS=--no-sandbox
+# (Removed: headless browser stack — chromium + agent-browser. The pi
+# agent-browser extension can't survive an in-place /reload, and it's the only
+# thing that was still wedging it. Occasional browser work goes to Playwright/MCP
+# instead. Re-add chromium + pi-agent-browser-native if you want it back.)
 
 # --- non-root agent user (uid 1000, matches stock templates) ------------------
 # The hardened base ships no shadow-utils (useradd/groupadd), so create the user
@@ -182,7 +175,8 @@ USER agent
 # --- pi harness packages (curated; full-auto, no permission gate) -------------
 # subagents (multi-model fan-out; driven by our ~/.pi/agent/agents presets),
 # plan mode (pi-plan), MCP adapter (wire servers per-project), todo list,
-# simplify, web access, pi-lens (LSP diagnostics), powerbar statusline + usage.
+# simplify, web access, pi-lens (LSP diagnostics), usage. (powerbar removed: its
+# session-shutdown handler uses a stale ctx after ctx.reload(), which wedges /reload.)
 #
 # PINNED — these MUST be version-locked, not floating. They peer-depend on
 # @earendil-works/pi-ai with "*", so an unpinned `pi install` grabs the latest on
@@ -195,8 +189,8 @@ USER agent
 RUN set -eux; for p in \
       @tintinweb/pi-subagents@0.13.0 pi-plan@0.1.1 pi-mcp-adapter@2.10.0 \
       pi-manage-todo-list@0.4.0 pi-simplify@0.2.2 pi-web-access@0.13.0 pi-lens@3.8.62 \
-      @juanibiapina/pi-extension-settings@0.8.0 @juanibiapina/pi-powerbar@0.12.0 \
-      pi-usage@0.2.1 pi-agent-browser-native@0.2.63; do \
+      @juanibiapina/pi-extension-settings@0.8.0 \
+      pi-usage@0.2.1; do \
       pi install "npm:$p"; \
     done; pi list
 
