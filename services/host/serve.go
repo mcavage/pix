@@ -13,9 +13,10 @@ import (
 )
 
 type hostService struct {
-	name string
-	addr string
-	mux  http.Handler
+	name  string
+	addr  string
+	mux   http.Handler
+	check func() error // optional serve-preflight; if non-nil it MUST pass or `serve` barfs
 }
 
 // runServe starts the long-running HTTP host services. `enabled` is the list
@@ -24,8 +25,12 @@ type hostService struct {
 // stdio commands run by the sbx gateway via `sbx mcp add`, not HTTP daemons.
 func runServe(enabled []string) {
 	all := []hostService{
-		{"gws-token", env("GWS_TOKEN_BIND", "127.0.0.1") + ":" + env("GWS_TOKEN_PORT", "11441"), gwsTokenMux()},
-		{"memory", env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435"), memoryMux()},
+		// gws-token barfs if the host gws isn't authenticated (else it starts but
+		// serves "no host token" and Gmail/Calendar are silently dark in the VM).
+		{name: "gws-token", addr: env("GWS_TOKEN_BIND", "127.0.0.1") + ":" + env("GWS_TOKEN_PORT", "11441"), mux: gwsTokenMux(), check: gwsTokenCheck},
+		// memory degrades gracefully (recall -> keyword, capture off) and logs its
+		// own status, so it has no fatal preflight.
+		{name: "memory", addr: env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435"), mux: memoryMux()},
 	}
 	// Overlay services (e.g. a warehouse proxy) self-register via init() when present.
 	for _, f := range extraServiceFactories {
@@ -60,6 +65,26 @@ func runServe(enabled []string) {
 		}
 		want[n] = true
 	}
+	// Preflight: every enabled service validates its host dependency UP FRONT, and
+	// the whole `serve` barfs if any is broken — so you fix it now instead of
+	// discovering mid-session that a capability was dark the whole time (the service
+	// bound its port but couldn't actually serve). Services that degrade gracefully
+	// (memory) set no check.
+	var failures []string
+	for _, s := range all {
+		if (len(want) > 0 && !want[s.name]) || s.check == nil {
+			continue
+		}
+		if err := s.check(); err != nil {
+			failures = append(failures, "  ✗ "+s.name+": "+err.Error())
+		} else {
+			log.Printf("preflight ok: %s", s.name)
+		}
+	}
+	if len(failures) > 0 {
+		log.Fatalf("serve: host service preflight FAILED — not starting:\n%s\nFix the above, then re-run `make serve`.", strings.Join(failures, "\n"))
+	}
+
 	started := 0
 	for _, s := range all {
 		if len(want) > 0 && !want[s.name] {

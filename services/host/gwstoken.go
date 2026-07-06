@@ -148,6 +148,17 @@ func gwsTokenMux() *http.ServeMux {
 	return mux
 }
 
+// gwsTokenCheck is the serve preflight (see serve.go): confirm the host `gws` is
+// authenticated so the token service can actually mint bearers. Without it the
+// service binds its port but every /token call fails ("no host token") and the
+// sandbox's gws (Gmail/Calendar) is silently dark.
+func gwsTokenCheck() error {
+	if _, err := (&gwsTokenSvc{}).exportCreds(); err != nil {
+		return errors.New(err.Error() + " (run `gws auth login` on the host)")
+	}
+	return nil
+}
+
 func runGwsToken() {
 	addr := env("GWS_TOKEN_BIND", "127.0.0.1") + ":" + env("GWS_TOKEN_PORT", "11441")
 	log.Printf("gws token service on http://%s/token", addr)
