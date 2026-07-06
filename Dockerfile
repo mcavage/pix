@@ -194,5 +194,10 @@ RUN set -eux; for p in \
       pi install "npm:$p"; \
     done; pi list
 
+# Bound the subagent result-wait so a dead subagent can't park the event loop
+# (Esc-proof hang). Runs after the pi-subagents install; idempotent + non-fatal.
+# See scripts/patches/apply-subagent-timeout.mjs + docs/upstream/.
+RUN node /usr/local/share/pi-stack/patches/apply-subagent-timeout.mjs
+
 WORKDIR /home/agent/workspace
 CMD ["pi"]
