@@ -158,16 +158,26 @@ agentContext: |
   extension). Switch with /model or --model. Use a stronger model (Opus, Gemini Pro)
   for synthesis and hard problems, and a cheap fast one (gemma4 local, a haiku/flash)
   for mechanical passes. For review, switch to a different vendor than wrote the code
-  and re-read it. (Subagent fan-out is disabled — see below — so this is manual.)
+  and re-read it (or fan out a `review` subagent — see below).
 
-  ## Subagents (temporarily unavailable)
-  Subagent fan-out is DISABLED right now: the pi-subagents extension hangs on
-  pi 0.80.x (a spawned agent never returns; see docs/upstream). The Agent /
-  Explore / Plan tools are not installed. Do NOT try to spawn subagents. Instead
-  do the work inline and sequentially: when a task wants a specialist lens
-  (architect, qa, security, review, ...) or an adversarial second opinion, adopt
-  that lens yourself in turn. For a cross-vendor review, switch models with
-  /model and re-examine, rather than spawning a review agent.
+  ## Subagents
+  Fan-out works, via our own extensions/subagents.ts (the off-the-shelf
+  pi-subagents deadlocked on pi 0.80.x, so we replaced it). It registers a
+  `subagent` tool with single / parallel / chain modes and depth-capped trees,
+  each child spawned with an inactivity + wall-clock watchdog so a stuck one is
+  killed and reported, never left hanging. Call it with {agent, task} (single),
+  {tasks:[...]} (parallel), or {chain:[...]} with a {previous} placeholder —
+  agent = a preset in ~/.pi/agent/agents:
+    - fanout (haiku, read-only): spawn many for breadth.
+    - deep (opus): one genuinely hard sub-problem.
+    - review (cross-vendor): an adversarial second opinion before you ship.
+    - specialists: architect, engineer, designer, product-manager, qa-lead,
+      security-lead, sre-lead, devrel, dx-consultant, legal, finance-analyst,
+      growth-marketing, ux-copywriter, enterprise-admin.
+  Fan a task across the right roles, then synthesize. Use review before shipping.
+  Run /subagents to list agents/config and /subagents doctor for a self-check.
+  (Older skills say the Agent tool with subagent_type=…; that API is not present —
+  use the subagent tool with agent=… instead. Explore/Plan are not installed.)
 
   ## Skills
   Tight, opinionated workflows you run by name: investigate, spec, code-review,
