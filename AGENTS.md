@@ -9,7 +9,7 @@ read it before changing things, and keep it current as you learn.
 ## Repo layout
 
 | path | what |
-|---|---|
+| --- | --- |
 | `Dockerfile` | the image: DHI node base + LSP toolchains + chromium + gh + gws + fd + curated pi packages + the baked harness |
 | `pi-kit/spec.yaml` | the **sandbox kit** (kit-spec **v1**): image, entrypoint, multi-model proxy creds, network allowlist, `agentContext` |
 | `settings.json` | → `~/.pi/agent/settings.json` (theme, trust, `hideThinkingBlock`) |
@@ -63,7 +63,10 @@ pi is pinned via `ARG PI_PACKAGE=@earendil-works/pi-coding-agent@<version>` in t
 
 YAML frontmatter `name` + `description` (when to use), then tight markdown steps.
 Auto-discovered; invoke `/skill:<name>` or let it auto-load. Delegate heavy or
-parallel work to subagents via the `Agent` tool (`subagent_type=fanout|review|deep`).
+parallel work with the `subagent` tool (single / parallel / chain / trees), naming
+an agent from `agents/` (e.g. `fanout`, `review`, `deep`) — see the subagents note
+under “Models & subagents”. (Older skills say the `Agent` tool with
+`subagent_type=…`; that API is not present — use `subagent` with `agent=…`.)
 
 A skill is **pure mechanism** — never bake one person's specifics (their channels,
 accounts, names, thresholds) into a SKILL.md. Those are per-user and live in
@@ -90,6 +93,8 @@ user a diff.
 - Providers: **Claude + OpenAI**, keys injected proxy-side (the VM only ever sees the `proxy-managed` sentinel). Switch `/model`; cycle **Alt+P**.
 - **ALWAYS fully-qualify model ids** (`provider/id`). A bare name like `haiku` can resolve to a keyless provider (e.g. `amazon-bedrock`) and **hang the subagent forever**. Known-good: `anthropic/claude-opus-4-8`, `anthropic/claude-haiku-4-5`, `openai/gpt-5.5`.
 - Preset roles: `fanout` = haiku (cheap breadth, read-only), `review` = gpt-5.5 (cross-vendor adversary — different blind spots), `deep` = opus (one hard problem).
+- **Subagents are BACK, via our own `extensions/subagents.ts`** (replaces the off-the-shelf `@tintinweb/pi-subagents`, which deadlocked — see `docs/design/subagents-extension.md`). It registers a `subagent` tool with **single / parallel / chain** modes and depth-capped **trees**. Call it with `{agent, task}` (single), `{tasks:[...]}` (parallel), or `{chain:[...]}` with a `{previous}` placeholder — agent = a filename in `agents/`. It spawns each child as `pi --no-extensions -e <self>` (the fix: a fully-loaded child re-binds ollama/memory ports and hangs) with an inactivity + wall-clock **watchdog**, so a stuck subagent is killed and reported, never left to freeze. Run **`/subagents`** to list agents/config and **`/subagents doctor`** for a live self-audit (this is the check that never passed before). Tune via `PI_SUBAGENT_IDLE_MS` / `_TIMEOUT_MS` / `_MAX_DEPTH` / `_MAX_CONCURRENCY`.
+- **Skills still written for the old `Agent` tool** (`subagent_type=fanout|review|deep`, Explore/Plan) do NOT map 1:1 — use the `subagent` tool with `agent=fanout|review|deep` instead. The `Explore`/`Plan` tools are not provided.
 
 ## Hard-won gotchas
 

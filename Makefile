@@ -77,7 +77,7 @@ MEMORY_EMBED_MODEL   ?= nomic-embed-text
 # config/local.mk (written by `make install`) so you never pass flags by hand.
 SERVICES ?= memory gws
 
-.PHONY: help build load publish validate inspect run run-dev run-no-mcp serve doctor memory-serve gws-token-serve mcp-register pull-models secrets pack install clean link-overlay
+.PHONY: help build load publish validate inspect run run-dev run-no-mcp serve doctor memory-serve gws-token-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay
 
 # Symlink the private overlay's host plugins ($(OVERLAY)/host/overlay_*.go) into
 # services/host/ so they compile into pi-stack-host and self-register. No-op in a
@@ -160,6 +160,17 @@ memory-serve: link-overlay ## Build + run just the memory service (JSON-RPC :114
 
 gws-token-serve: link-overlay ## Build + run just the gws bearer token service (:11441) from pi-stack-host
 	(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && exec ./out/pi-stack-host gws-token
+
+mcp-auth: ## (Re)authorize the remote OAuth MCP servers (opine/granola/notion/atlassian). Run this when standup/refresh reports them "not in the gateway" — sbx's hosted MCP OAuth creds do NOT persist reliably across sessions/daemon restarts (they silently drop to "Not Found"), so re-establishing them is a recurring chore until sbx fixes it. Opens a browser per server.
+	@command -v sbx >/dev/null 2>&1 || { echo "ERROR: sbx not found"; exit 1; }
+	@echo "1/3 refreshing the control-plane session (sbx login)…"
+	sbx login
+	@echo "2/3 authorizing all registered remote OAuth servers…"
+	sbx mcp auth --all
+	@echo "3/3 status:"
+	-sbx mcp auth status --all
+	@echo ""
+	@echo "If all show authorized, recreate to pick them up: sbx rm -f pi-stack-pi-stack && make run"
 
 mcp-register: link-overlay ## Register the local stdio MCP servers you use (the ones in MCP, config/local.mk) with sbx. The gateway runs each as `op run --env-file=config/op-refs.env -- pi-stack-host <name>`, so creds come from 1Password at spawn (nothing stored in the registration). Needs SBX_MCP_URL + op + config/op-refs.env.
 	@command -v sbx >/dev/null 2>&1 || { echo "ERROR: sbx not found"; exit 1; }

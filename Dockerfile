@@ -12,7 +12,7 @@
 # nag (pi checks npm at runtime, so a new release always nags until you rebump).
 # When bumping, re-check the vendored tui patch still applies (build logs print
 # "[apply-tui-bottom-pin] patched" vs an "anchor not found" warning).
-ARG PI_PACKAGE=@earendil-works/pi-coding-agent@0.80.3
+ARG PI_PACKAGE=@earendil-works/pi-coding-agent@0.80.5
 
 # Hardened Node, maintained by Docker (DHI). Debian/glibc, so our entire apt
 # toolchain (clangd, chromium, gh, ruff, build-essential) keeps working — we just
@@ -25,9 +25,12 @@ USER root
 # --- system tools (DHI-patched via apt) ---------------------------------------
 # The node image ships node+npm+bash+apt but not these. pi needs git + ripgrep;
 # gh powers `ship`; hostname + curl are conveniences; ca-certs for TLS.
+# `which`: trixie dropped it from debianutils into its own package. Scripts
+# should prefer POSIX `command -v`, but some third-party tooling still shells
+# out to `which`, so keep it on PATH.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates git gh ripgrep hostname gzip curl \
+      ca-certificates git gh ripgrep hostname gzip curl which \
  && rm -rf /var/lib/apt/lists/*
 
 # --- Google Workspace CLI -----------------------------------------------------
@@ -173,7 +176,9 @@ LABEL com.docker.sandboxes="kit" \
 USER agent
 
 # --- pi harness packages (curated; full-auto, no permission gate) -------------
-# subagents (multi-model fan-out; driven by our ~/.pi/agent/agents presets),
+# subagents (multi-model fan-out) now ship as our OWN first-party extension
+# (extensions/subagents.ts, baked via the COPY extensions/ below); the off-the-
+# shelf @tintinweb/pi-subagents stays DISABLED — see the notes below.
 # plan mode (pi-plan), MCP adapter (wire servers per-project), todo list,
 # simplify, web access, pi-lens (LSP diagnostics), usage. (powerbar removed: its
 # session-shutdown handler uses a stale ctx after ctx.reload(), which wedges /reload.)
@@ -186,18 +191,27 @@ USER agent
 # set that was current when PI_PACKAGE (0.80.3, 2026-06-30) shipped. When you
 # bump PI_PACKAGE, re-pin this list to the versions current at that release
 # (newest published on/before the release date).
+# NOTE: @tintinweb/pi-subagents stays DISABLED (it hung the event loop forever on
+# pi 0.80.x; full trace in docs/upstream/pi-subagents-hang-pi-0.80.md). It is
+# REPLACED by our own extensions/subagents.ts, which spawns each child as
+# `pi --no-extensions -e <self>` (a fully-loaded child re-binds the ollama/memory
+# ports the parent holds and deadlocks at startup — the real freeze) with an
+# inactivity + wall-clock watchdog so a stuck subagent is killed, not hung. It is
+# a plain baked extension (no npm install line), so nothing to add here; see
+# docs/design/subagents-extension.md. Do NOT restore the @tintinweb line.
 RUN set -eux; for p in \
-      @tintinweb/pi-subagents@0.13.0 pi-plan@0.1.1 pi-mcp-adapter@2.10.0 \
-      pi-manage-todo-list@0.4.0 pi-simplify@0.2.2 pi-web-access@0.13.0 pi-lens@3.8.62 \
+      pi-plan@0.1.1 pi-mcp-adapter@2.11.0 \
+      pi-manage-todo-list@0.4.0 pi-simplify@0.2.2 pi-web-access@0.13.0 pi-lens@3.8.65 \
       @juanibiapina/pi-extension-settings@0.8.0 \
       pi-usage@0.2.1; do \
       pi install "npm:$p"; \
     done; pi list
 
 # Bound the subagent result-wait so a dead subagent can't park the event loop
-# (Esc-proof hang). Runs after the pi-subagents install; idempotent + non-fatal.
-# See scripts/patches/apply-subagent-timeout.mjs + docs/upstream/.
-RUN node /usr/local/share/pi-stack/patches/apply-subagent-timeout.mjs
+# (Esc-proof hang). Idempotent + non-fatal. DISABLED alongside pi-subagents above
+# (nothing to patch); it also proved insufficient — on 0.80.x the wait isn't the
+# `await` this patches, so it never fired. Re-enable with the extension.
+# RUN node /usr/local/share/pi-stack/patches/apply-subagent-timeout.mjs
 
 WORKDIR /home/agent/workspace
 CMD ["pi"]

@@ -155,19 +155,19 @@ agentContext: |
   ## Multi-model
   Four providers in the cycle: Claude, GPT, and Gemini (cloud, keys injected by the
   host proxy, never stored in this VM) plus Ollama (local, via the ollama-bridge
-  extension). Switch with /model or --model. Use a cheap, fast model (gemma4 local,
-  a haiku/flash) for bulk fan-out and a stronger one (Opus, Gemini Pro) for synthesis
-  and review. The review step runs on a different vendor than wrote the code.
+  extension). Switch with /model or --model. Use a stronger model (Opus, Gemini Pro)
+  for synthesis and hard problems, and a cheap fast one (gemma4 local, a haiku/flash)
+  for mechanical passes. For review, switch to a different vendor than wrote the code
+  and re-read it. (Subagent fan-out is disabled — see below — so this is manual.)
 
-  ## Subagents and the roster
-  The Agent tool runs subagents in parallel from presets in ~/.pi/agent/agents:
-    - fanout (haiku, read-only): spawn many for breadth.
-    - deep (opus): one genuinely hard sub-problem.
-    - review (cross-vendor): an adversarial second opinion before you ship.
-    - specialists: architect, engineer, designer, product-manager, qa-lead,
-      security-lead, sre-lead, devrel, dx-consultant, legal, finance-analyst,
-      growth-marketing, ux-copywriter, enterprise-admin.
-  Fan a task across the right roles, then synthesize. Use review before shipping.
+  ## Subagents (temporarily unavailable)
+  Subagent fan-out is DISABLED right now: the pi-subagents extension hangs on
+  pi 0.80.x (a spawned agent never returns; see docs/upstream). The Agent /
+  Explore / Plan tools are not installed. Do NOT try to spawn subagents. Instead
+  do the work inline and sequentially: when a task wants a specialist lens
+  (architect, qa, security, review, ...) or an adversarial second opinion, adopt
+  that lens yourself in turn. For a cross-vendor review, switch models with
+  /model and re-examine, rather than spawning a review agent.
 
   ## Skills
   Tight, opinionated workflows you run by name: investigate, spec, code-review,

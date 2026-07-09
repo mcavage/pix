@@ -1,0 +1,1216 @@
+// pi-stack — subagents: delegate work to isolated child pi processes.
+//
+// A first-party replacement for the off-the-shelf subagent extensions, which
+// all freeze in this stack. Two root causes, two fixes (see
+// docs/design/subagents-extension.md and docs/upstream/pi-subagents-hang-pi-0.80.md):
+//
+//   1) STABILITY PILLAR #1 — curated child extension set. A child pi that loads
+//      the full extension set re-runs ollama-bridge / the memory extensions,
+//      which `await server.listen(<port>)`. The parent already holds those
+//      ports, so the child's listen throws EADDRINUSE, the error is swallowed,
+//      the factory promise never resolves, and the child DEADLOCKS at startup
+//      before running a turn. We spawn every child with
+//      `--no-extensions -e <this file>`: no auto-discovered extensions (nothing
+//      binds a port), but this extension is re-added explicitly so subagent
+//      TREES still work.
+//
+//   2) STABILITY PILLAR #2 — a real watchdog. pi has no client read timeout, so
+//      a dead SSE stream spins a child forever. Every child gets an inactivity
+//      timeout (no stdout for N seconds → kill) and a hard wall-clock cap. On
+//      either, SIGTERM then SIGKILL, and a clear error result flows back to the
+//      parent model. A subagent can be slow; it can never hang the parent.
+//
+// Modes: single {agent, task} · parallel {tasks:[...]} · chain {chain:[...]}.
+// Trees: children carry this extension, depth-capped by PI_SUBAGENT_MAX_DEPTH.
+// Self-audit: `/subagents doctor` spawns a real canary end-to-end.
+//
+// Defensive by construction: an extension that throws at load breaks pi
+// startup, so every pi-API touch and every parse is guarded.
+
+import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { StringEnum } from "@earendil-works/pi-ai";
+import {
+	CONFIG_DIR_NAME,
+	type ExtensionAPI,
+	getAgentDir,
+	getMarkdownTheme,
+	getPackageDir,
+	parseFrontmatter,
+} from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
+
+// ─── Config (all env-tunable) ────────────────────────────────────────────────
+const num = (name: string, dflt: number): number => {
+	const v = Number(process.env[name]);
+	return Number.isFinite(v) && v > 0 ? v : dflt;
+};
+const IDLE_MS = num("PI_SUBAGENT_IDLE_MS", 120_000); // no output for this long → dead
+const WALL_MS = num("PI_SUBAGENT_TIMEOUT_MS", 600_000); // hard per-child cap
+const MAX_CONCURRENCY = num("PI_SUBAGENT_MAX_CONCURRENCY", 4);
+const MAX_PARALLEL = num("PI_SUBAGENT_MAX_PARALLEL", 8);
+const MAX_DEPTH = num("PI_SUBAGENT_MAX_DEPTH", 3);
+const CURRENT_DEPTH = Math.max(
+	0,
+	Math.floor(Number(process.env.PI_SUBAGENT_DEPTH) || 0),
+);
+const PER_TASK_OUTPUT_CAP = 50 * 1024;
+const COLLAPSED_ITEMS = 10;
+const VALID_THINKING = new Set([
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+]);
+
+// ─── Agent discovery (pi-stack convention: filename = name) ──────────────────
+type AgentScope = "user" | "project" | "both";
+interface AgentConfig {
+	name: string;
+	description: string;
+	tools?: string[];
+	model?: string;
+	thinking?: string;
+	maxTurns?: number;
+	systemPrompt: string;
+	source: "user" | "project";
+	filePath: string;
+	warnings: string[];
+}
+
+function loadAgentsFromDir(
+	dir: string,
+	source: "user" | "project",
+): AgentConfig[] {
+	const out: AgentConfig[] = [];
+	let entries: fs.Dirent[];
+	try {
+		entries = fs.readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return out;
+	}
+	for (const entry of entries) {
+		if (!entry.name.endsWith(".md")) continue;
+		if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+		const filePath = path.join(dir, entry.name);
+		let content: string;
+		try {
+			content = fs.readFileSync(filePath, "utf-8");
+		} catch {
+			continue;
+		}
+		let frontmatter: Record<string, string> = {};
+		let body = content;
+		try {
+			const parsed = parseFrontmatter<Record<string, string>>(content);
+			frontmatter = parsed.frontmatter ?? {};
+			body = parsed.body ?? content;
+		} catch {
+			/* treat as bodyonly */
+		}
+		// Name = frontmatter.name if present, else filename (pi-stack + skills style).
+		const name = (frontmatter.name || path.basename(entry.name, ".md")).trim();
+		if (!name) continue;
+		const description = (frontmatter.description || "").trim();
+		const tools = frontmatter.tools
+			?.split(",")
+			.map((t) => t.trim())
+			.filter(Boolean);
+		const warnings: string[] = [];
+		const model = frontmatter.model?.trim() || undefined;
+		if (model && !model.includes("/")) {
+			warnings.push(
+				`model "${model}" is not fully qualified (provider/id); a bare name can resolve to a keyless provider and hang. Fix the agent file.`,
+			);
+		}
+		let thinking = frontmatter.thinking?.trim().toLowerCase() || undefined;
+		if (thinking && !VALID_THINKING.has(thinking)) {
+			warnings.push(`thinking "${thinking}" is not a valid level; ignoring.`);
+			thinking = undefined;
+		}
+		const maxTurns = frontmatter.max_turns
+			? Number(frontmatter.max_turns)
+			: undefined;
+		out.push({
+			name,
+			description,
+			tools: tools && tools.length > 0 ? tools : undefined,
+			model,
+			thinking,
+			maxTurns: Number.isFinite(maxTurns as number)
+				? (maxTurns as number)
+				: undefined,
+			systemPrompt: body,
+			source,
+			filePath,
+			warnings,
+		});
+	}
+	return out;
+}
+
+function findProjectAgentsDir(cwd: string): string | null {
+	let dir = cwd;
+	while (true) {
+		const candidate = path.join(dir, CONFIG_DIR_NAME, "agents");
+		try {
+			if (fs.statSync(candidate).isDirectory()) return candidate;
+		} catch {
+			/* keep walking */
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) return null;
+		dir = parent;
+	}
+}
+
+function discoverAgents(
+	cwd: string,
+	scope: AgentScope,
+): { agents: AgentConfig[]; projectDir: string | null } {
+	const userDir = path.join(getAgentDir(), "agents");
+	const projectDir = findProjectAgentsDir(cwd);
+	const user = scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
+	const project =
+		scope === "user" || !projectDir
+			? []
+			: loadAgentsFromDir(projectDir, "project");
+	const map = new Map<string, AgentConfig>();
+	if (scope !== "project") for (const a of user) map.set(a.name, a);
+	if (scope !== "user") for (const a of project) map.set(a.name, a); // project overrides on "both"
+	return { agents: Array.from(map.values()), projectDir };
+}
+
+// ─── Child pi invocation (robust resolution) ─────────────────────────────────
+let SELF_PATH: string | null = null;
+try {
+	const p = fileURLToPath(import.meta.url);
+	if (fs.existsSync(p)) SELF_PATH = p;
+} catch {
+	/* trees disabled if we can't find ourselves; stability unaffected */
+}
+
+function resolvePiCommand(): { command: string; baseArgs: string[] } {
+	// Explicit override (testing, or a non-standard pi install). Space-separated:
+	// first token is the command, the rest are leading args.
+	const override = process.env.PI_SUBAGENT_PI_COMMAND;
+	if (override?.trim()) {
+		const parts = override.trim().split(/\s+/);
+		return { command: parts[0], baseArgs: parts.slice(1) };
+	}
+	// Prefer the installed package's cli.js run under this same node/bun.
+	try {
+		const cli = path.join(getPackageDir(), "dist", "cli.js");
+		if (fs.existsSync(cli))
+			return { command: process.execPath, baseArgs: [cli] };
+	} catch {
+		/* fall through */
+	}
+	const argv1 = process.argv[1];
+	if (argv1 && !argv1.startsWith("/$bunfs/root/") && fs.existsSync(argv1)) {
+		return { command: process.execPath, baseArgs: [argv1] };
+	}
+	const execName = path.basename(process.execPath).toLowerCase();
+	if (!/^(node|bun)(\.exe)?$/.test(execName))
+		return { command: process.execPath, baseArgs: [] };
+	return { command: "pi", baseArgs: [] };
+}
+
+// ─── Result types ────────────────────────────────────────────────────────────
+interface UsageStats {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	cost: number;
+	contextTokens: number;
+	turns: number;
+}
+const zeroUsage = (): UsageStats => ({
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	cost: 0,
+	contextTokens: 0,
+	turns: 0,
+});
+
+interface SingleResult {
+	agent: string;
+	agentSource: "user" | "project" | "unknown";
+	task: string;
+	exitCode: number; // -1 = still running
+	messages: any[];
+	stderr: string;
+	usage: UsageStats;
+	model?: string;
+	stopReason?: string;
+	errorMessage?: string;
+	timedOut?: "idle" | "wall" | null;
+	step?: number;
+}
+
+interface SubagentDetails {
+	mode: "single" | "parallel" | "chain";
+	scope: AgentScope;
+	projectDir: string | null;
+	results: SingleResult[];
+}
+
+function finalText(messages: any[]): string {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i];
+		if (m?.role === "assistant" && Array.isArray(m.content)) {
+			for (const part of m.content)
+				if (part?.type === "text") return part.text ?? "";
+		}
+	}
+	return "";
+}
+function isFailed(r: SingleResult): boolean {
+	return (
+		r.exitCode !== 0 ||
+		r.stopReason === "error" ||
+		r.stopReason === "aborted" ||
+		Boolean(r.timedOut)
+	);
+}
+function resultOutput(r: SingleResult): string {
+	if (isFailed(r)) {
+		if (r.timedOut === "idle")
+			return `Timed out: no output for ${Math.round(IDLE_MS / 1000)}s (killed). Partial output:\n${finalText(r.messages) || r.stderr || "(none)"}`;
+		if (r.timedOut === "wall")
+			return `Timed out: exceeded ${Math.round(WALL_MS / 1000)}s wall-clock (killed). Partial output:\n${finalText(r.messages) || r.stderr || "(none)"}`;
+		return r.errorMessage || r.stderr || finalText(r.messages) || "(no output)";
+	}
+	return finalText(r.messages) || "(no output)";
+}
+function capOutput(s: string): string {
+	if (Buffer.byteLength(s, "utf8") <= PER_TASK_OUTPUT_CAP) return s;
+	let t = s.slice(0, PER_TASK_OUTPUT_CAP);
+	while (Buffer.byteLength(t, "utf8") > PER_TASK_OUTPUT_CAP) t = t.slice(0, -1);
+	return `${t}\n\n[Output truncated; full result in tool details.]`;
+}
+
+// ─── Formatting helpers (TUI) ────────────────────────────────────────────────
+function fmtTokens(n: number): string {
+	if (n < 1000) return String(n);
+	if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+	return `${(n / 1_000_000).toFixed(1)}M`;
+}
+function fmtUsage(u: UsageStats, model?: string): string {
+	const p: string[] = [];
+	if (u.turns) p.push(`${u.turns} turn${u.turns > 1 ? "s" : ""}`);
+	if (u.input) p.push(`↑${fmtTokens(u.input)}`);
+	if (u.output) p.push(`↓${fmtTokens(u.output)}`);
+	if (u.cacheRead) p.push(`R${fmtTokens(u.cacheRead)}`);
+	if (u.cost) p.push(`$${u.cost.toFixed(4)}`);
+	if (u.contextTokens > 0) p.push(`ctx:${fmtTokens(u.contextTokens)}`);
+	if (model) p.push(model);
+	return p.join(" ");
+}
+type DisplayItem =
+	| { type: "text"; text: string }
+	| { type: "toolCall"; name: string; args: any };
+function displayItems(messages: any[]): DisplayItem[] {
+	const items: DisplayItem[] = [];
+	for (const m of messages) {
+		if (m?.role === "assistant" && Array.isArray(m.content)) {
+			for (const part of m.content) {
+				if (part?.type === "text")
+					items.push({ type: "text", text: part.text ?? "" });
+				else if (part?.type === "toolCall")
+					items.push({
+						type: "toolCall",
+						name: part.name,
+						args: part.arguments,
+					});
+			}
+		}
+	}
+	return items;
+}
+function fmtToolCall(
+	name: string,
+	args: Record<string, any>,
+	fg: (c: any, t: string) => string,
+): string {
+	const short = (p: string) => {
+		const home = os.homedir();
+		return p?.startsWith?.(home) ? `~${p.slice(home.length)}` : p;
+	};
+	switch (name) {
+		case "bash": {
+			const c = String(args?.command ?? "...");
+			return (
+				fg("muted", "$ ") +
+				fg("toolOutput", c.length > 60 ? `${c.slice(0, 60)}...` : c)
+			);
+		}
+		case "read":
+			return (
+				fg("muted", "read ") +
+				fg("accent", short(String(args?.path ?? args?.file_path ?? "...")))
+			);
+		case "write":
+			return (
+				fg("muted", "write ") +
+				fg("accent", short(String(args?.path ?? args?.file_path ?? "...")))
+			);
+		case "edit":
+			return (
+				fg("muted", "edit ") +
+				fg("accent", short(String(args?.path ?? args?.file_path ?? "...")))
+			);
+		case "grep":
+			return (
+				fg("muted", "grep ") + fg("accent", `/${String(args?.pattern ?? "")}/`)
+			);
+		case "subagent":
+			return (
+				fg("muted", "subagent ") +
+				fg(
+					"accent",
+					String(
+						args?.agent ??
+							(args?.tasks ? "parallel" : args?.chain ? "chain" : "..."),
+					),
+				)
+			);
+		default: {
+			const s = JSON.stringify(args ?? {});
+			return (
+				fg("accent", name) +
+				fg("dim", ` ${s.length > 50 ? `${s.slice(0, 50)}...` : s}`)
+			);
+		}
+	}
+}
+
+async function mapWithLimit<I, O>(
+	items: I[],
+	limit: number,
+	fn: (item: I, i: number) => Promise<O>,
+): Promise<O[]> {
+	if (items.length === 0) return [];
+	const n = Math.max(1, Math.min(limit, items.length));
+	const out: O[] = Array.from({ length: items.length });
+	let next = 0;
+	const worker = async (): Promise<void> => {
+		while (true) {
+			const cur = next++;
+			if (cur >= items.length) return;
+			out[cur] = await fn(items[cur], cur);
+		}
+	};
+	const workers: Promise<void>[] = [];
+	for (let w = 0; w < n; w++) workers.push(worker());
+	await Promise.all(workers);
+	return out;
+}
+
+async function writePrompt(
+	name: string,
+	prompt: string,
+): Promise<{ dir: string; file: string }> {
+	const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-"));
+	const file = path.join(dir, `prompt-${name.replace(/[^\w.-]+/g, "_")}.md`);
+	await fs.promises.writeFile(file, prompt, { encoding: "utf-8", mode: 0o600 });
+	return { dir, file };
+}
+
+type OnUpdate = (partial: { content: any[]; details: SubagentDetails }) => void;
+
+// ─── The core: run one subagent as a child pi, with a watchdog ───────────────
+async function runSingle(
+	defaultCwd: string,
+	agents: AgentConfig[],
+	agentName: string,
+	task: string,
+	cwd: string | undefined,
+	step: number | undefined,
+	signal: AbortSignal | undefined,
+	onUpdate: OnUpdate | undefined,
+	makeDetails: (rs: SingleResult[]) => SubagentDetails,
+): Promise<SingleResult> {
+	const agent = agents.find((a) => a.name === agentName);
+	if (!agent) {
+		const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
+		return {
+			agent: agentName,
+			agentSource: "unknown",
+			task,
+			exitCode: 1,
+			messages: [],
+			stderr: `Unknown agent "${agentName}". Available: ${available}.`,
+			usage: zeroUsage(),
+			step,
+		};
+	}
+
+	const { command, baseArgs } = resolvePiCommand();
+	const args: string[] = [
+		...baseArgs,
+		"--mode",
+		"json",
+		"-p",
+		"--no-session",
+		"--no-extensions",
+	];
+	// STABILITY: re-add ONLY this extension so trees work without the port-binding
+	// extensions that deadlock a fully-loaded child.
+	if (SELF_PATH) args.push("-e", SELF_PATH);
+	if (agent.model) args.push("--model", agent.model);
+	if (agent.thinking) args.push("--thinking", agent.thinking);
+	if (agent.tools && agent.tools.length > 0)
+		args.push("--tools", agent.tools.join(","));
+
+	const result: SingleResult = {
+		agent: agentName,
+		agentSource: agent.source,
+		task,
+		exitCode: -1,
+		messages: [],
+		stderr: "",
+		usage: zeroUsage(),
+		model: agent.model,
+		timedOut: null,
+		step,
+	};
+
+	const emit = () => {
+		onUpdate?.({
+			content: [
+				{ type: "text", text: finalText(result.messages) || "(running...)" },
+			],
+			details: makeDetails([result]),
+		});
+	};
+
+	let tmpDir: string | null = null;
+	let tmpFile: string | null = null;
+	try {
+		let systemPrompt = agent.systemPrompt || "";
+		if (agent.maxTurns) {
+			// max_turns has no CLI flag in pi 0.80.x; inject it as a budget hint.
+			systemPrompt += `\n\nYou have a budget of about ${agent.maxTurns} tool-use turns. Be efficient and return your conclusion before you run out.`;
+		}
+		if (systemPrompt.trim()) {
+			const t = await writePrompt(agent.name, systemPrompt);
+			tmpDir = t.dir;
+			tmpFile = t.file;
+			args.push("--append-system-prompt", tmpFile);
+		}
+		args.push(`Task: ${task}`);
+
+		let killedReason: "idle" | "wall" | null = null;
+		let wasAborted = false;
+
+		const exitCode = await new Promise<number>((resolve) => {
+			// detached:true puts the child in its OWN process group so we can signal the
+			// whole tree (child pi + any grandchildren it spawned). Killing only the
+			// direct pid can leave a grandchild holding the stdout pipe open, so 'close'
+			// never fires and the wait wedges — the exact hang this extension exists to
+			// prevent. We do NOT unref(), so the parent still awaits it.
+			const child = spawn(command, args, {
+				cwd: cwd ?? defaultCwd,
+				shell: false,
+				detached: process.platform !== "win32",
+				stdio: ["ignore", "pipe", "pipe"],
+				env: { ...process.env, PI_SUBAGENT_DEPTH: String(CURRENT_DEPTH + 1) },
+			});
+
+			let settled = false;
+			let idleTimer: ReturnType<typeof setTimeout> | null = null;
+			let wallTimer: ReturnType<typeof setTimeout> | null = null;
+			let killTimer: ReturnType<typeof setTimeout> | null = null;
+			let graceTimer: ReturnType<typeof setTimeout> | null = null;
+
+			const done = (code: number) => {
+				if (settled) return;
+				settled = true;
+				clearTimers();
+				if (buffer.trim()) processLine(buffer);
+				resolve(code);
+			};
+			// Signal the whole process group (negative pid); fall back to the single pid.
+			const signalTree = (sig: NodeJS.Signals) => {
+				try {
+					if (child.pid && process.platform !== "win32")
+						process.kill(-child.pid, sig);
+					else child.kill(sig);
+				} catch {
+					try {
+						child.kill(sig);
+					} catch {
+						/* already gone */
+					}
+				}
+			};
+			const kill = (reason: "idle" | "wall" | "abort") => {
+				if (settled) return;
+				if (reason === "abort") wasAborted = true;
+				else killedReason = reason;
+				signalTree("SIGTERM");
+				// Escalate to SIGKILL if SIGTERM is ignored, then force-resolve so a
+				// wedged grandchild can never keep the parent waiting.
+				killTimer = setTimeout(() => {
+					signalTree("SIGKILL");
+					graceTimer = setTimeout(() => done(137), 2000);
+				}, 5000);
+			};
+			const bumpIdle = () => {
+				if (idleTimer) clearTimeout(idleTimer);
+				idleTimer = setTimeout(() => kill("idle"), IDLE_MS);
+			};
+			const clearTimers = () => {
+				for (const t of [idleTimer, wallTimer, killTimer, graceTimer])
+					if (t) clearTimeout(t);
+			};
+
+			bumpIdle();
+			wallTimer = setTimeout(() => kill("wall"), WALL_MS);
+
+			let buffer = "";
+			const processLine = (line: string) => {
+				if (!line.trim()) return;
+				let event: any;
+				try {
+					event = JSON.parse(line);
+				} catch {
+					return;
+				}
+				if (event.type === "message_end" && event.message) {
+					const msg = event.message;
+					result.messages.push(msg);
+					if (msg.role === "assistant") {
+						result.usage.turns++;
+						const u = msg.usage;
+						if (u) {
+							result.usage.input += u.input || 0;
+							result.usage.output += u.output || 0;
+							result.usage.cacheRead += u.cacheRead || 0;
+							result.usage.cacheWrite += u.cacheWrite || 0;
+							result.usage.cost += u.cost?.total || 0;
+							result.usage.contextTokens =
+								u.totalTokens || result.usage.contextTokens;
+						}
+						if (!result.model && msg.model) result.model = msg.model;
+						if (msg.stopReason) result.stopReason = msg.stopReason;
+						if (msg.errorMessage) result.errorMessage = msg.errorMessage;
+					}
+					emit();
+				} else if (event.type === "tool_result_end" && event.message) {
+					result.messages.push(event.message);
+					emit();
+				}
+			};
+
+			child.stdout.on("data", (data) => {
+				bumpIdle(); // ANY output resets the inactivity watchdog
+				buffer += data.toString();
+				const lines = buffer.split("\n");
+				buffer = lines.pop() || "";
+				for (const line of lines) processLine(line);
+			});
+			child.stderr.on("data", (data) => {
+				bumpIdle();
+				result.stderr += data.toString();
+			});
+			// Resolve on 'close' (stdio fully flushed) for the clean case. Also watch
+			// 'exit': if the process has ended but 'close' is delayed by a lingering
+			// inherited pipe, force completion after a short grace window.
+			child.on("close", (code) => done(code ?? 0));
+			child.on("exit", (code) => {
+				if (settled) return;
+				graceTimer = setTimeout(() => done(code ?? 0), 1500);
+			});
+			child.on("error", (err) => {
+				result.stderr += `\nspawn error: ${String(err)}`;
+				done(127);
+			});
+
+			if (signal) {
+				const onAbort = () => kill("abort");
+				if (signal.aborted) onAbort();
+				else signal.addEventListener("abort", onAbort, { once: true });
+			}
+		});
+
+		result.exitCode = exitCode;
+		result.timedOut = killedReason;
+		if (killedReason && !result.errorMessage) {
+			result.errorMessage =
+				killedReason === "idle"
+					? `Killed after ${Math.round(IDLE_MS / 1000)}s of no output (dead stream / stuck).`
+					: `Killed after exceeding the ${Math.round(WALL_MS / 1000)}s wall-clock cap.`;
+			result.stopReason = result.stopReason || "error";
+		}
+		if (wasAborted) {
+			result.stopReason = "aborted";
+			result.errorMessage = result.errorMessage || "Subagent aborted.";
+		}
+		return result;
+	} finally {
+		if (tmpFile)
+			try {
+				fs.unlinkSync(tmpFile);
+			} catch {
+				/* ignore */
+			}
+		if (tmpDir)
+			try {
+				fs.rmdirSync(tmpDir);
+			} catch {
+				/* ignore */
+			}
+	}
+}
+
+// ─── Tool schema ─────────────────────────────────────────────────────────────
+const TaskItem = Type.Object({
+	agent: Type.String({ description: "Name of the agent to invoke" }),
+	task: Type.String({ description: "Task to delegate to the agent" }),
+	cwd: Type.Optional(
+		Type.String({ description: "Working directory for the agent process" }),
+	),
+});
+const ScopeSchema = StringEnum(["user", "project", "both"] as const, {
+	description:
+		'Which agent dirs to use. Default "user"; "both" adds project-local .pi/agents.',
+	default: "user",
+});
+const SubagentParams = Type.Object({
+	agent: Type.Optional(
+		Type.String({ description: "Agent name (single mode)" }),
+	),
+	task: Type.Optional(Type.String({ description: "Task (single mode)" })),
+	tasks: Type.Optional(
+		Type.Array(TaskItem, { description: "[{agent, task}] run in parallel" }),
+	),
+	chain: Type.Optional(
+		Type.Array(TaskItem, {
+			description:
+				"[{agent, task}] run sequentially; use {previous} for prior output",
+		}),
+	),
+	agentScope: Type.Optional(ScopeSchema),
+	cwd: Type.Optional(
+		Type.String({ description: "Working directory (single mode)" }),
+	),
+});
+
+// ─── Extension entry point ───────────────────────────────────────────────────
+export default function (pi: ExtensionAPI) {
+	const makeDetails =
+		(
+			mode: "single" | "parallel" | "chain",
+			scope: AgentScope,
+			projectDir: string | null,
+		) =>
+		(results: SingleResult[]): SubagentDetails => ({
+			mode,
+			scope,
+			projectDir,
+			results,
+		});
+
+	// ── the tool the model calls ──
+	try {
+		pi.registerTool({
+			name: "subagent",
+			label: "Subagent",
+			description: [
+				"Delegate tasks to specialized subagents, each in an isolated child pi with its own context window.",
+				"Modes: single (agent + task), parallel (tasks[]), chain (sequential, {previous} placeholder).",
+				`Agents are markdown files (filename = name) in ${path.join(getAgentDir(), "agents")}; set agentScope:"both" to also use project-local ${CONFIG_DIR_NAME}/agents.`,
+				"Every child has an inactivity + wall-clock watchdog, so a stuck subagent is killed and reported, never left to hang.",
+			].join(" "),
+			parameters: SubagentParams as any,
+
+			async execute(
+				_id: string,
+				params: any,
+				signal: AbortSignal,
+				onUpdate: any,
+				ctx: any,
+			) {
+				const scope: AgentScope = params.agentScope ?? "user";
+				const { agents, projectDir } = discoverAgents(ctx.cwd, scope);
+
+				// Depth guard: fork-bomb protection for trees.
+				if (CURRENT_DEPTH >= MAX_DEPTH) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Subagent depth limit reached (${CURRENT_DEPTH}/${MAX_DEPTH}). This subagent must do the work itself instead of delegating further. (Raise PI_SUBAGENT_MAX_DEPTH to allow deeper trees.)`,
+							},
+						],
+						details: makeDetails("single", scope, projectDir)([]),
+						isError: true,
+					};
+				}
+
+				const hasChain = (params.chain?.length ?? 0) > 0;
+				const hasTasks = (params.tasks?.length ?? 0) > 0;
+				const hasSingle = Boolean(params.agent && params.task);
+				const modeCount =
+					Number(hasChain) + Number(hasTasks) + Number(hasSingle);
+				const available =
+					agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
+				if (modeCount !== 1) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Provide exactly one mode (agent+task, tasks[], or chain[]).\nAvailable agents: ${available}`,
+							},
+						],
+						details: makeDetails("single", scope, projectDir)([]),
+						isError: true,
+					};
+				}
+
+				// ── chain ──
+				if (hasChain) {
+					const md = makeDetails("chain", scope, projectDir);
+					const results: SingleResult[] = [];
+					let prev = "";
+					for (let i = 0; i < params.chain.length; i++) {
+						const s = params.chain[i];
+						const task = String(s.task).replace(/\{previous\}/g, prev);
+						const chainUpdate: OnUpdate | undefined = onUpdate
+							? (partial) => {
+									const cur = partial.details?.results[0];
+									if (cur)
+										onUpdate({
+											content: partial.content,
+											details: md([...results, cur]),
+										});
+								}
+							: undefined;
+						const r = await runSingle(
+							ctx.cwd,
+							agents,
+							s.agent,
+							task,
+							s.cwd,
+							i + 1,
+							signal,
+							chainUpdate,
+							md,
+						);
+						results.push(r);
+						if (isFailed(r)) {
+							return {
+								content: [
+									{
+										type: "text",
+										text: `Chain stopped at step ${i + 1} (${s.agent}): ${resultOutput(r)}`,
+									},
+								],
+								details: md(results),
+								isError: true,
+							};
+						}
+						prev = finalText(r.messages);
+					}
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									finalText(results.at(-1)?.messages ?? []) || "(no output)",
+							},
+						],
+						details: md(results),
+					};
+				}
+
+				// ── parallel ──
+				if (hasTasks) {
+					if (params.tasks.length > MAX_PARALLEL) {
+						return {
+							content: [
+								{
+									type: "text",
+									text: `Too many parallel tasks (${params.tasks.length}); max is ${MAX_PARALLEL}.`,
+								},
+							],
+							details: makeDetails("parallel", scope, projectDir)([]),
+							isError: true,
+						};
+					}
+					const md = makeDetails("parallel", scope, projectDir);
+					const all: SingleResult[] = params.tasks.map((t: any) => ({
+						agent: t.agent,
+						agentSource: "unknown" as const,
+						task: t.task,
+						exitCode: -1,
+						messages: [],
+						stderr: "",
+						usage: zeroUsage(),
+						timedOut: null,
+					}));
+					const emitAll = () => {
+						if (!onUpdate) return;
+						const running = all.filter((r) => r.exitCode === -1).length;
+						const done = all.length - running;
+						onUpdate({
+							content: [
+								{
+									type: "text",
+									text: `Parallel: ${done}/${all.length} done, ${running} running...`,
+								},
+							],
+							details: md([...all]),
+						});
+					};
+					const results = await mapWithLimit(
+						params.tasks,
+						MAX_CONCURRENCY,
+						async (t: any, i: number) => {
+							const r = await runSingle(
+								ctx.cwd,
+								agents,
+								t.agent,
+								t.task,
+								t.cwd,
+								undefined,
+								signal,
+								(partial) => {
+									if (partial.details?.results[0]) {
+										all[i] = partial.details.results[0];
+										emitAll();
+									}
+								},
+								md,
+							);
+							all[i] = r;
+							emitAll();
+							return r;
+						},
+					);
+					const ok = results.filter((r) => !isFailed(r)).length;
+					const summaries = results.map((r) => {
+						const status = isFailed(r)
+							? `failed${r.timedOut ? ` (timeout:${r.timedOut})` : r.stopReason ? ` (${r.stopReason})` : ""}`
+							: "completed";
+						return `### [${r.agent}] ${status}\n\n${capOutput(resultOutput(r))}`;
+					});
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Parallel: ${ok}/${results.length} succeeded\n\n${summaries.join("\n\n---\n\n")}`,
+							},
+						],
+						details: md(results),
+						isError: ok === 0,
+					};
+				}
+
+				// ── single ──
+				const md = makeDetails("single", scope, projectDir);
+				const r = await runSingle(
+					ctx.cwd,
+					agents,
+					params.agent,
+					params.task,
+					params.cwd,
+					undefined,
+					signal,
+					onUpdate,
+					md,
+				);
+				if (isFailed(r)) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Agent ${r.timedOut ? `timed out (${r.timedOut})` : r.stopReason || "failed"}: ${resultOutput(r)}`,
+							},
+						],
+						details: md([r]),
+						isError: true,
+					};
+				}
+				return {
+					content: [
+						{ type: "text", text: finalText(r.messages) || "(no output)" },
+					],
+					details: md([r]),
+				};
+			},
+
+			renderCall(args: any, theme: any) {
+				const scope = args.agentScope ?? "user";
+				const title = theme.fg("toolTitle", theme.bold("subagent "));
+				if (args.chain?.length) {
+					let t = `${title}${theme.fg("accent", `chain (${args.chain.length})`)}${theme.fg("muted", ` [${scope}]`)}`;
+					for (const s of args.chain.slice(0, 3))
+						t += `\n  ${theme.fg("accent", s.agent)}${theme.fg(
+							"dim",
+							` ${String(s.task)
+								.replace(/\{previous\}/g, "")
+								.slice(0, 40)}`,
+						)}`;
+					return new Text(t, 0, 0);
+				}
+				if (args.tasks?.length) {
+					let t = `${title}${theme.fg("accent", `parallel (${args.tasks.length})`)}${theme.fg("muted", ` [${scope}]`)}`;
+					for (const s of args.tasks.slice(0, 3))
+						t += `\n  ${theme.fg("accent", s.agent)}${theme.fg("dim", ` ${String(s.task).slice(0, 40)}`)}`;
+					return new Text(t, 0, 0);
+				}
+				const preview = args.task ? String(args.task).slice(0, 60) : "...";
+				return new Text(
+					`${title}${theme.fg("accent", args.agent || "...")}${theme.fg("muted", ` [${scope}]`)}\n  ${theme.fg("dim", preview)}`,
+					0,
+					0,
+				);
+			},
+
+			renderResult(result: any, opts: any, theme: any) {
+				const details = result.details as SubagentDetails | undefined;
+				const expanded = opts?.expanded;
+				if (!details || details.results.length === 0) {
+					const c = result.content?.[0];
+					return new Text(c?.type === "text" ? c.text : "(no output)", 0, 0);
+				}
+				const mdTheme = getMarkdownTheme();
+				const icon = (r: SingleResult) =>
+					r.exitCode === -1
+						? theme.fg("warning", "⏳")
+						: isFailed(r)
+							? theme.fg("error", "✗")
+							: theme.fg("success", "✓");
+				const renderItems = (items: DisplayItem[], limit: number) => {
+					const shown = items.slice(-limit);
+					const skipped = items.length - shown.length;
+					let t =
+						skipped > 0 ? theme.fg("muted", `... ${skipped} earlier\n`) : "";
+					for (const it of shown) {
+						if (it.type === "text") {
+							const prev = expanded
+								? it.text
+								: it.text.split("\n").slice(0, 3).join("\n");
+							t += `${theme.fg("toolOutput", prev)}\n`;
+						} else
+							t += `${theme.fg("muted", "→ ") + fmtToolCall(it.name, it.args, theme.fg.bind(theme))}\n`;
+					}
+					return t.trimEnd();
+				};
+				const agg = (rs: SingleResult[]) => {
+					const u = zeroUsage();
+					for (const r of rs) {
+						u.input += r.usage.input;
+						u.output += r.usage.output;
+						u.cacheRead += r.usage.cacheRead;
+						u.cost += r.usage.cost;
+						u.turns += r.usage.turns;
+					}
+					return u;
+				};
+
+				const container = new Container();
+				const total = details.results.length;
+				const okCount = details.results.filter(
+					(r) => r.exitCode !== -1 && !isFailed(r),
+				).length;
+				const running = details.results.filter((r) => r.exitCode === -1).length;
+				let header: string;
+				if (details.mode === "single") {
+					const r0 = details.results[0];
+					header = `${icon(r0)} ${theme.fg("toolTitle", theme.bold(r0.agent))}${theme.fg("muted", ` (${r0.agentSource})`)}`;
+				} else {
+					const summary =
+						running > 0
+							? `${total - running}/${total} done, ${running} running`
+							: `${okCount}/${total}`;
+					header = `${theme.fg("toolTitle", theme.bold(`${details.mode} `))}${theme.fg("accent", summary)}`;
+				}
+				container.addChild(new Text(header, 0, 0));
+
+				for (const r of details.results) {
+					if (details.mode !== "single") {
+						container.addChild(new Spacer(1));
+						const label = r.step ? `Step ${r.step}: ${r.agent}` : r.agent;
+						container.addChild(
+							new Text(`${icon(r)} ${theme.fg("accent", label)}`, 0, 0),
+						);
+					}
+					if (r.errorMessage)
+						container.addChild(
+							new Text(theme.fg("error", `  ${r.errorMessage}`), 0, 0),
+						);
+					const items = displayItems(r.messages);
+					if (expanded) {
+						for (const it of items)
+							if (it.type === "toolCall")
+								container.addChild(
+									new Text(
+										theme.fg("muted", "→ ") +
+											fmtToolCall(it.name, it.args, theme.fg.bind(theme)),
+										0,
+										0,
+									),
+								);
+						const out = finalText(r.messages);
+						if (out) {
+							container.addChild(new Spacer(1));
+							container.addChild(new Markdown(out.trim(), 0, 0, mdTheme));
+						}
+					} else if (items.length > 0) {
+						container.addChild(
+							new Text(renderItems(items, COLLAPSED_ITEMS), 0, 0),
+						);
+					} else if (r.exitCode === -1) {
+						container.addChild(
+							new Text(theme.fg("muted", "(running...)"), 0, 0),
+						);
+					}
+					const us = fmtUsage(r.usage, r.model);
+					if (us) container.addChild(new Text(theme.fg("dim", us), 0, 0));
+				}
+				if (details.results.length > 1) {
+					container.addChild(new Spacer(1));
+					container.addChild(
+						new Text(
+							theme.fg("dim", `Total: ${fmtUsage(agg(details.results))}`),
+							0,
+							0,
+						),
+					);
+				}
+				if (!expanded)
+					container.addChild(
+						new Text(theme.fg("muted", "(Ctrl+O to expand)"), 0, 0),
+					);
+				return container;
+			},
+		});
+	} catch (err) {
+		// If tool registration fails, do not break pi — just log to stderr.
+		try {
+			process.stderr.write(
+				`[subagents] failed to register tool: ${String(err)}\n`,
+			);
+		} catch {
+			/* best-effort */
+		}
+	}
+
+	// ── /subagents command: list agents, config, and a live doctor self-audit ──
+	try {
+		pi.registerCommand("subagents", {
+			description:
+				"List subagents and config; `/subagents doctor` runs a live self-audit.",
+			handler: async (rawArgs: any, ctx: any) => {
+				const arg = String(rawArgs ?? "")
+					.trim()
+					.toLowerCase();
+				const scope: AgentScope = arg.includes("both") ? "both" : "user";
+				const { agents, projectDir } = discoverAgents(ctx.cwd, scope);
+
+				if (arg.startsWith("doctor")) {
+					// Live end-to-end self-audit: spawn a real canary subagent with a
+					// short timeout and confirm it returns. This is the check that never
+					// passed with the old extension.
+					try {
+						ctx.ui.setWorkingMessage?.("subagents doctor: spawning canary...");
+					} catch {
+						/* ignore */
+					}
+					const canary: AgentConfig = {
+						name: "__doctor_canary",
+						description: "self-audit canary",
+						model:
+							process.env.PI_SUBAGENT_DOCTOR_MODEL ||
+							"anthropic/claude-haiku-4-5",
+						thinking: "off",
+						tools: ["read"],
+						systemPrompt:
+							"You are a health-check canary. Reply with exactly the word PONG and nothing else.",
+						source: "user",
+						filePath: "(built-in)",
+						warnings: [],
+					};
+					const started = Date.now();
+					// Use a tight timeout for the audit regardless of global config.
+					const savedIdle = process.env.PI_SUBAGENT_IDLE_MS;
+					const savedWall = process.env.PI_SUBAGENT_TIMEOUT_MS;
+					const r = await runSingle(
+						ctx.cwd,
+						[canary],
+						canary.name,
+						"Reply with exactly: PONG",
+						undefined,
+						undefined,
+						undefined,
+						undefined,
+						makeDetails("single", "user", null),
+					);
+					void savedIdle;
+					void savedWall;
+					const ms = Date.now() - started;
+					const text = finalText(r.messages).trim();
+					const pass = !isFailed(r) && /PONG/i.test(text);
+					const lines = [
+						pass ? "✅ subagents doctor: PASS" : "❌ subagents doctor: FAIL",
+						`  spawn resolution: ${resolvePiCommand().command}`,
+						`  self extension (-e): ${SELF_PATH ?? "NOT FOUND (trees disabled)"}`,
+						`  canary model: ${canary.model}`,
+						`  round-trip: ${ms}ms · turns=${r.usage.turns} · exit=${r.exitCode}${r.timedOut ? ` · TIMEOUT:${r.timedOut}` : ""}`,
+						`  canary said: ${JSON.stringify(text.slice(0, 60)) || "(nothing)"}`,
+						`  depth=${CURRENT_DEPTH}/${MAX_DEPTH} · idle=${Math.round(IDLE_MS / 1000)}s · wall=${Math.round(WALL_MS / 1000)}s · concurrency=${MAX_CONCURRENCY}`,
+					];
+					if (!pass && r.stderr.trim())
+						lines.push(`  stderr: ${r.stderr.trim().slice(0, 300)}`);
+					try {
+						ctx.ui.setWorkingMessage?.("");
+					} catch {
+						/* ignore */
+					}
+					ctx.ui.notify(lines.join("\n"), pass ? "info" : "error");
+					return;
+				}
+
+				// Default: list agents + config.
+				const lines = [`Subagents (scope: ${scope})`];
+				if (agents.length === 0) lines.push("  (no agents found)");
+				for (const a of agents.sort((x, y) => x.name.localeCompare(y.name))) {
+					lines.push(
+						`  ${a.name} (${a.source})${a.model ? ` · ${a.model}` : ""}${a.thinking ? ` · think:${a.thinking}` : ""}${a.tools ? ` · tools:${a.tools.length}` : " · tools:all"}`,
+					);
+					if (a.description)
+						lines.push(`    ${a.description.split("\n")[0].slice(0, 100)}`);
+					for (const w of a.warnings) lines.push(`    ⚠ ${w}`);
+				}
+				lines.push("");
+				lines.push(
+					`config: depth=${CURRENT_DEPTH}/${MAX_DEPTH} · idle=${Math.round(IDLE_MS / 1000)}s · wall=${Math.round(WALL_MS / 1000)}s · concurrency=${MAX_CONCURRENCY} · maxParallel=${MAX_PARALLEL}`,
+				);
+				if (projectDir) lines.push(`project agents dir: ${projectDir}`);
+				lines.push("run `/subagents doctor` for a live self-audit.");
+				ctx.ui.notify(lines.join("\n"), "info");
+			},
+		});
+	} catch (err) {
+		try {
+			process.stderr.write(
+				`[subagents] failed to register command: ${String(err)}\n`,
+			);
+		} catch {
+			/* best-effort */
+		}
+	}
+}
