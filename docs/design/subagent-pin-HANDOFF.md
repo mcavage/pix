@@ -70,20 +70,28 @@ durable version):
   `node --experimental-strip-types`, then remove the symlinks.)
 
 ## What is NOT done / open items
-1. **`make load` on the HOST** — required to bake this into future sandboxes. The
-   in-sandbox agent CANNOT run it (needs the host Docker + `sbx`). This is the
-   main pending action. After it, recreate the sandbox to pick up the new image.
-2. **Visual QA in a real TUI** — the pin only renders in the interactive TUI, so
-   final polish (alignment, truncation at odd widths, spinner feel) is best
-   eyeballed after `make load`. Logic is proven by the harness; pixels are not.
-3. **`belowEditor` placement question (open, needs a decision).** Both the TODO
+1. ~~**`make load` on the HOST**~~ — **DONE** (run by the user). Image baked and
+   sandbox recreated. This session is running on the new image.
+2. ~~**Visual QA in a real TUI**~~ — **DONE**. Pin renders correctly in the live
+   TUI (parallel / chain / web-search fanouts confirmed this session).
+3. **pi bumped to 0.80.6 (commit `6c92fac`, on PR #1).** The vendored renderer
+   patch MUST move forward with every pi bump: the build log has to print
+   `[apply-tui-bottom-pin] patched`, NOT an `anchor not found` warning. The
+   patch anchors on `// Render from first changed line to end` in
+   `@earendil-works/pi-tui/dist/tui.js` (guard marker `Bottom-block pin`). On the
+   baked 0.80.5 the anchor was present and the patch applied; **re-verify on the
+   next `make load` for 0.80.6** — if the warning fires, refresh
+   `scripts/patches/tui-bottom-pin.block.txt` + the anchor in
+   `apply-tui-bottom-pin.mjs` against the new `tui.js`. (The `apply-subagent-
+   timeout.mjs` patch stays disabled — nothing to re-verify there.)
+4. **`belowEditor` placement question (open, needs a decision).** Both the TODO
    pin (`todo-list`) and this tracker (`subagent-tracker`) default to ABOVE the
    editor and pi stacks them in registration order. They coexist fine (distinct
    keys), but a long todo list + big fanout could get tall on a short terminal.
    One-line fix if wanted: pass `{ placement: "belowEditor" }` to the tracker's
    `setWidget`/`setStatus` calls in `renderWidget()` so the two pins sit on
    opposite sides of the input. Not done — waiting on the user's preference.
-4. **The NEW bet: true background dispatch (deferred, PR #2).** A `background:true`
+5. **The NEW bet: true background dispatch (deferred, PR #2).** A `background:true`
    tool param so runs return immediately and keep streaming into the pin, results
    collected later. Deliberately isolated out of PR #1. Speced in
    `.scratch/subagent-pin-plan.md` (NEW section) and the "Deferred" section of
