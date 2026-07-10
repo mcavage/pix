@@ -497,6 +497,504 @@ async function writePrompt(
 
 type OnUpdate = (partial: { content: any[]; details: SubagentDetails }) => void;
 
+// ─── Pinned live tracker ─────────────────────────────────────────────────────
+// A stable, always-visible roster of every subagent this (interactive) process
+// is running, pinned above the editor via ctx.ui.setWidget — the same mechanism
+// pi's todo-list / plan-mode pin uses. It answers "what is running right now, how
+// far along, did it succeed" without scrolling. The rich inline renderResult
+// block stays as the permanent record; this is the live cockpit.
+//
+// Discipline (peer-reviewed): top-level runs only (a headless tree child has no
+// UI, so it renders nothing and never allocates a timer); a SINGLE 1s ticker
+// (not an 8Hz spinner — repaint churn, see status.ts); ticker gated on the
+// RUNNING count so sticky failures don't spin it forever; successes auto-clear
+// after a TTL, failures/timeouts/aborts stay pinned until the next batch or
+// shutdown; every pi-API touch guarded so nothing throws at load or wedges
+// /reload.
+const TRACKER_WIDGET_ID = "subagent-tracker";
+const FINISHED_TTL_MS = num("PI_SUBAGENT_PIN_TTL_MS", 6_000);
+const MAX_VISIBLE_ROWS = 10; // string[] widgets are capped ~10 lines by pi
+const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+
+type RunStatus =
+	| "queued"
+	| "running"
+	| "done"
+	| "failed"
+	| "timeout"
+	| "aborted";
+
+interface RunEntry {
+	id: string;
+	agent: string;
+	model?: string;
+	mode: "single" | "parallel" | "chain";
+	status: RunStatus;
+	task: string;
+	step?: number;
+	startedAt: number;
+	endedAt: number | null;
+	turns: number;
+	tokensIn: number;
+	tokensOut: number;
+	cost: number;
+	lastTool: string | null;
+	error: string | null;
+}
+
+const tracker = {
+	runs: new Map<string, RunEntry>(), // insertion order = display order
+	seq: 0,
+	ui: null as any,
+	ticker: null as ReturnType<typeof setInterval> | null,
+	frame: 0,
+	lastRendered: null as string | null,
+	timers: new Map<string, ReturnType<typeof setTimeout>>(), // TTL removals
+};
+
+function captureUi(ctx: any): void {
+	try {
+		if (ctx?.hasUI && ctx.ui) {
+			if (tracker.ui !== ctx.ui) tracker.lastRendered = null; // new UI → repaint
+			tracker.ui = ctx.ui;
+		}
+	} catch {
+		/* best-effort; must not break the agent */
+	}
+}
+
+function runningCount(): number {
+	let n = 0;
+	for (const r of tracker.runs.values())
+		if (r.status === "queued" || r.status === "running") n++;
+	return n;
+}
+
+// Before a fresh batch registers, sweep away any lingering finished rows (incl.
+// sticky failures) so a new run starts on a clean pin — but only when nothing is
+// still running, so we never wipe a live sibling.
+function clearFinishedIfIdle(): void {
+	try {
+		if (runningCount() > 0) return;
+		for (const [id, r] of tracker.runs)
+			if (r.status !== "running" && r.status !== "queued") {
+				tracker.runs.delete(id);
+				const t = tracker.timers.get(id);
+				if (t) {
+					clearTimeout(t);
+					tracker.timers.delete(id);
+				}
+			}
+	} catch {
+		/* best-effort */
+	}
+}
+
+function registerRun(opts: {
+	agent: string;
+	model?: string;
+	mode: "single" | "parallel" | "chain";
+	step?: number;
+	task: string;
+	status?: RunStatus;
+}): string {
+	const id = `r${tracker.seq++}`;
+	try {
+		clearFinishedIfIdle();
+		tracker.runs.set(id, {
+			id,
+			agent: opts.agent,
+			model: opts.model,
+			mode: opts.mode,
+			status: opts.status ?? "running",
+			task: opts.task,
+			step: opts.step,
+			startedAt: Date.now(),
+			endedAt: null,
+			turns: 0,
+			tokensIn: 0,
+			tokensOut: 0,
+			cost: 0,
+			lastTool: null,
+			error: null,
+		});
+		ensureTicker();
+		renderWidget();
+	} catch {
+		/* best-effort */
+	}
+	return id;
+}
+
+function markRunning(id: string): void {
+	try {
+		const r = tracker.runs.get(id);
+		if (r && r.status === "queued") {
+			r.status = "running";
+			r.startedAt = Date.now(); // clock the wait separately from the work
+			ensureTicker();
+			renderWidget();
+		}
+	} catch {
+		/* best-effort */
+	}
+}
+
+function lastToolName(messages: any[]): string | null {
+	try {
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const m = messages[i];
+			if (m?.role === "assistant" && Array.isArray(m.content)) {
+				for (let j = m.content.length - 1; j >= 0; j--) {
+					const p = m.content[j];
+					if (p?.type === "toolCall" || p?.type === "tool_call")
+						return p.name || p.toolName || null;
+				}
+			}
+		}
+	} catch {
+		/* best-effort */
+	}
+	return null;
+}
+
+function updateRun(id: string, r: SingleResult): void {
+	try {
+		const e = tracker.runs.get(id);
+		if (!e) return;
+		e.turns = r.usage.turns;
+		e.tokensIn = r.usage.input;
+		e.tokensOut = r.usage.output;
+		e.cost = r.usage.cost;
+		if (r.model) e.model = r.model;
+		const lt = lastToolName(r.messages);
+		if (lt) e.lastTool = lt;
+		renderWidget();
+	} catch {
+		/* best-effort */
+	}
+}
+
+// Best-effort status flip the moment a watchdog fires, so the pin shows
+// "timeout"/"aborted" without waiting for the child promise to resolve.
+function setRunStatus(id: string, status: RunStatus, error?: string): void {
+	try {
+		const e = tracker.runs.get(id);
+		if (e && (e.status === "running" || e.status === "queued")) {
+			e.status = status;
+			if (error) e.error = error;
+			renderWidget();
+		}
+	} catch {
+		/* best-effort */
+	}
+}
+
+// Remove a run outright — for pre-registered "queued" rows that will never run
+// (an unknown agent, or chain steps abandoned after an early failure). Without
+// this they keep runningCount() > 0 and leak the ticker.
+function dropRun(id: string): void {
+	try {
+		if (!tracker.runs.has(id)) return;
+		tracker.runs.delete(id);
+		const t = tracker.timers.get(id);
+		if (t) {
+			clearTimeout(t);
+			tracker.timers.delete(id);
+		}
+		renderWidget();
+		maybeStopTicker();
+	} catch {
+		/* best-effort */
+	}
+}
+
+function finalizeRun(id: string, r: SingleResult): void {
+	try {
+		const e = tracker.runs.get(id);
+		if (!e || e.endedAt) return; // idempotent: finalize once
+		e.endedAt = Date.now();
+		e.turns = r.usage.turns;
+		e.tokensIn = r.usage.input;
+		e.tokensOut = r.usage.output;
+		e.cost = r.usage.cost;
+		if (r.model) e.model = r.model;
+		if (!isFailed(r)) {
+			e.status = "done";
+		} else if (r.timedOut) {
+			e.status = "timeout";
+			e.error = r.timedOut === "idle" ? "idle-timeout" : "wall-timeout";
+		} else if (r.stopReason === "aborted") {
+			e.status = "aborted";
+			e.error = "aborted";
+		} else {
+			e.status = "failed";
+			e.error = (r.errorMessage || r.stderr || "failed").split("\n")[0].slice(0, 40);
+		}
+		// Successes self-expire; failures stay pinned until the next batch/shutdown.
+		// With no UI (headless child) never allocate a timer: just drop the row.
+		if (e.status === "done" && !tracker.ui) {
+			tracker.runs.delete(id);
+		} else if (e.status === "done") {
+			const t = setTimeout(() => {
+				try {
+					tracker.runs.delete(id);
+					tracker.timers.delete(id);
+					renderWidget();
+					maybeStopTicker();
+				} catch {
+					/* best-effort */
+				}
+			}, FINISHED_TTL_MS);
+			if (typeof t.unref === "function") t.unref();
+			tracker.timers.set(id, t);
+		}
+		renderWidget();
+		maybeStopTicker();
+	} catch {
+		/* best-effort */
+	}
+}
+
+function ensureTicker(): void {
+	try {
+		// No UI (headless -p child) → never allocate a timer.
+		if (!tracker.ui) return;
+		if (tracker.ticker) return;
+		if (runningCount() === 0) return;
+		tracker.ticker = setInterval(() => {
+			try {
+				tracker.frame = (tracker.frame + 1) % SPINNER_FRAMES.length;
+				renderWidget();
+				maybeStopTicker();
+			} catch {
+				/* best-effort */
+			}
+		}, 1000);
+		if (typeof tracker.ticker.unref === "function") tracker.ticker.unref();
+	} catch {
+		/* best-effort */
+	}
+}
+
+function maybeStopTicker(): void {
+	try {
+		if (runningCount() > 0) return;
+		if (tracker.ticker) {
+			clearInterval(tracker.ticker);
+			tracker.ticker = null;
+		}
+		// If nothing is left at all, clear the pin entirely.
+		if (tracker.runs.size === 0) renderWidget();
+	} catch {
+		/* best-effort */
+	}
+}
+
+function teardown(): void {
+	try {
+		if (tracker.ticker) {
+			clearInterval(tracker.ticker);
+			tracker.ticker = null;
+		}
+		for (const t of tracker.timers.values()) clearTimeout(t);
+		tracker.timers.clear();
+		tracker.runs.clear();
+		try {
+			tracker.ui?.setWidget?.(TRACKER_WIDGET_ID, undefined);
+			tracker.ui?.setStatus?.(TRACKER_WIDGET_ID, undefined);
+		} catch {
+			/* best-effort */
+		}
+		tracker.ui = null;
+		tracker.lastRendered = null;
+	} catch {
+		/* best-effort */
+	}
+}
+
+// ─── Tracker rendering ───────────────────────────────────────────────────────
+function fmtElapsed(ms: number): string {
+	const s = Math.max(0, Math.floor(ms / 1000));
+	if (s < 60) return `${s}s`;
+	if (s < 3600) return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+	const h = Math.floor(s / 3600);
+	const m = Math.floor((s % 3600) / 60);
+	return `${h}h${String(m).padStart(2, "0")}m`;
+}
+
+function padTrunc(s: string, w: number): string {
+	if (s.length === w) return s;
+	if (s.length < w) return s + " ".repeat(w - s.length);
+	if (w <= 1) return s.slice(0, w);
+	return `${s.slice(0, w - 1)}…`;
+}
+
+function statusGlyph(e: RunEntry): { g: string; role: string } {
+	switch (e.status) {
+		case "queued":
+			return { g: "○", role: "dim" };
+		case "running":
+			return { g: SPINNER_FRAMES[tracker.frame], role: "accent" };
+		case "done":
+			return { g: "✓", role: "success" };
+		case "timeout":
+			return { g: "⏱", role: "warning" };
+		case "aborted":
+			return { g: "⊘", role: "error" };
+		default:
+			return { g: "✗", role: "error" };
+	}
+}
+
+function renderWidget(): void {
+	try {
+		const ui = tracker.ui;
+		if (!ui?.setWidget) return;
+		const fg = (role: string, s: string): string => {
+			try {
+				return ui.theme?.fg ? ui.theme.fg(role, s) : s;
+			} catch {
+				return s;
+			}
+		};
+		const entries = Array.from(tracker.runs.values());
+		if (entries.length === 0) {
+			if (tracker.lastRendered !== "") {
+				ui.setWidget(TRACKER_WIDGET_ID, undefined);
+				ui.setStatus?.(TRACKER_WIDGET_ID, undefined);
+				tracker.lastRendered = "";
+			}
+			return;
+		}
+
+		const width = Math.max(40, Math.min(process.stdout?.columns || 80, 120));
+		const counts: Record<RunStatus, number> = {
+			queued: 0,
+			running: 0,
+			done: 0,
+			failed: 0,
+			timeout: 0,
+			aborted: 0,
+		};
+		for (const e of entries) counts[e.status]++;
+		const totalCost = entries.reduce((a, e) => a + e.cost, 0);
+
+		// Header (omitted for a lone single run — the row is self-describing).
+		const lines: string[] = [];
+		const gutter = fg("accent", "▎ ");
+		const lone = entries.length === 1;
+		if (!lone) {
+			const parts: string[] = [];
+			if (counts.running) parts.push(fg("accent", `${counts.running} running`));
+			if (counts.queued) parts.push(fg("dim", `${counts.queued} queued`));
+			if (counts.done) parts.push(fg("success", `${counts.done} done`));
+			if (counts.failed) parts.push(fg("error", `${counts.failed} failed`));
+			if (counts.timeout) parts.push(fg("warning", `${counts.timeout} timed out`));
+			if (counts.aborted) parts.push(fg("error", `${counts.aborted} aborted`));
+			const title = fg("toolTitle", "subagents");
+			const cost = totalCost > 0 ? fg("dim", `  $${totalCost.toFixed(2)}`) : "";
+			lines.push(`${gutter}${title}  ${parts.join(fg("muted", " · "))}${cost}`);
+		}
+
+		// Rows: running/queued first, then finished; cap and fold the rest.
+		const ordered = entries
+			.slice()
+			.sort((a, b) => rank(a.status) - rank(b.status));
+		const budget = MAX_VISIBLE_ROWS - lines.length;
+		// Reserve one line for the "+N more" summary when we must truncate, so the
+		// total never exceeds MAX_VISIBLE_ROWS (pi clips string widgets ~10 lines).
+		const rowCap = ordered.length > budget ? budget - 1 : budget;
+		const shown = ordered.slice(0, Math.max(0, rowCap));
+		const hidden = ordered.length - shown.length;
+		for (const e of shown) lines.push(renderRow(e, width, fg));
+		if (hidden > 0)
+			lines.push(`${gutter}${fg("muted", `… +${hidden} more`)}`);
+
+		const key = lines.join("\n");
+		if (key !== tracker.lastRendered) {
+			ui.setWidget(TRACKER_WIDGET_ID, lines);
+			ui.setStatus?.(TRACKER_WIDGET_ID, renderStatusLine(counts, fg));
+			tracker.lastRendered = key;
+		}
+	} catch {
+		/* best-effort; a render failure must never break the turn */
+	}
+}
+
+function rank(s: RunStatus): number {
+	if (s === "running") return 0;
+	if (s === "queued") return 1;
+	return 2;
+}
+
+function renderRow(
+	e: RunEntry,
+	width: number,
+	fg: (role: string, s: string) => string,
+): string {
+	const { g, role } = statusGlyph(e);
+	const gutter = fg("accent", "▎ ");
+	const icon = fg(role, g);
+	const stepLabel = e.step ? `${e.step} ` : "";
+	const agent = fg("accent", padTrunc(`${stepLabel}${e.agent}`, 12));
+
+	// Meta cluster (right side): elapsed · turns · tokens.
+	const now = e.endedAt ?? Date.now();
+	const elapsed = fmtElapsed(now - e.startedAt);
+	const meta: string[] = [];
+	if (e.status === "running" || e.endedAt) {
+		if (e.turns) meta.push(`${e.turns}t`);
+		const tok = e.tokensIn + e.tokensOut;
+		if (tok) meta.push(`↑${fmtTokens(e.tokensIn)}↓${fmtTokens(e.tokensOut)}`);
+	}
+	const metaStr = [elapsed, ...meta].join(" ");
+
+	// Body: error tail for failures, live tool for running, else the task.
+	let body: string;
+	let bodyRole = "dim";
+	if (e.status === "queued") {
+		body = "queued";
+		bodyRole = "muted";
+	} else if (e.error) {
+		body = e.error;
+		bodyRole = e.status === "timeout" ? "warning" : "error";
+	} else if (e.status === "running" && e.lastTool) {
+		body = `${e.task}  ·${e.lastTool}`;
+	} else {
+		body = e.task;
+	}
+
+	// Layout: "▎ {icon} {agent} {body…}  {meta}" width-budgeted.
+	const fixed = 2 /*gutter*/ + 2 /*icon+sp*/ + 12 /*agent*/ + 1 /*sp*/;
+	const metaW = metaStr.length + 2; // leading gap
+	let bodyW = width - fixed - metaW;
+	let metaOut = ` ${fg("dim", metaStr)}`;
+	if (bodyW < 12) {
+		// Too narrow for meta: drop tokens/turns, keep elapsed only.
+		metaOut = ` ${fg("dim", elapsed)}`;
+		bodyW = width - fixed - (elapsed.length + 2);
+	}
+	if (bodyW < 6) bodyW = 6;
+	const bodyOut = fg(bodyRole, padTrunc(body, bodyW));
+	return `${gutter}${icon} ${agent} ${bodyOut}${metaOut}`;
+}
+
+function renderStatusLine(
+	counts: Record<RunStatus, number>,
+	fg: (role: string, s: string) => string,
+): string {
+	const active = counts.running + counts.queued;
+	const spin = active > 0 ? `${SPINNER_FRAMES[tracker.frame]} ` : "";
+	const bits: string[] = [];
+	if (counts.running) bits.push(`${counts.running} run`);
+	if (counts.queued) bits.push(`${counts.queued} queued`);
+	if (counts.done) bits.push(`${counts.done} done`);
+	const fail = counts.failed + counts.timeout + counts.aborted;
+	if (fail) bits.push(`${fail} failed`);
+	return fg(active > 0 ? "accent" : "muted", `${spin}subagents ${bits.join(" · ")}`);
+}
+
 // ─── The core: run one subagent as a child pi, with a watchdog ───────────────
 async function runSingle(
 	defaultCwd: string,
@@ -508,11 +1006,16 @@ async function runSingle(
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdate | undefined,
 	makeDetails: (rs: SingleResult[]) => SubagentDetails,
+	track?: {
+		mode: "single" | "parallel" | "chain";
+		preRunId?: string; // pre-registered "queued" row to adopt (parallel/chain)
+		enabled?: boolean; // false = don't pin (e.g. the doctor canary)
+	},
 ): Promise<SingleResult> {
 	const agent = agents.find((a) => a.name === agentName);
 	if (!agent) {
 		const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
-		return {
+		const errResult: SingleResult = {
 			agent: agentName,
 			agentSource: "unknown",
 			task,
@@ -522,6 +1025,12 @@ async function runSingle(
 			usage: zeroUsage(),
 			step,
 		};
+		// A pre-registered queued row (parallel/chain) would otherwise leak as
+		// "queued" forever, keeping the ticker alive. Finalize it as failed here,
+		// since this early return happens before the normal register/finalize path.
+		if (track?.enabled !== false && track?.preRunId)
+			finalizeRun(track.preRunId, errResult);
+		return errResult;
 	}
 
 	const { command, baseArgs } = resolvePiCommand();
@@ -569,7 +1078,26 @@ async function runSingle(
 		step,
 	};
 
+	// Pin this run in the live tracker. A pre-registered queued row (parallel /
+	// chain) is adopted and flipped to running; otherwise register fresh.
+	let runId = "";
+	if (track?.enabled !== false) {
+		if (track?.preRunId) {
+			runId = track.preRunId;
+			markRunning(runId);
+		} else {
+			runId = registerRun({
+				agent: agentName,
+				model: agent.model,
+				mode: track?.mode ?? "single",
+				step,
+				task,
+			});
+		}
+	}
+
 	const emit = () => {
+		if (runId) updateRun(runId, result);
 		onUpdate?.({
 			content: [
 				{ type: "text", text: finalText(result.messages) || "(running...)" },
@@ -649,6 +1177,19 @@ async function runSingle(
 				else if (reason === "drain") drained = true;
 				else killedReason = reason;
 				signalTree("SIGTERM");
+				// Reflect the watchdog fire in the pin (best-effort, AFTER the kill
+				// signal so a slow UI can never delay SIGTERM), so a killed run does not
+				// read as "running" during the SIGTERM/SIGKILL grace.
+				if (runId && reason !== "drain")
+					setRunStatus(
+						runId,
+						reason === "abort" ? "aborted" : "timeout",
+						reason === "abort"
+							? "aborted"
+							: reason === "idle"
+								? "idle-timeout"
+								: "wall-timeout",
+					);
 				// Escalate to SIGKILL if SIGTERM is ignored, then force-resolve so a
 				// wedged grandchild can never keep the parent waiting.
 				killTimer = setTimeout(() => {
@@ -772,8 +1313,12 @@ async function runSingle(
 			result.stopReason = "aborted";
 			result.errorMessage = result.errorMessage || "Subagent aborted.";
 		}
+		if (runId) finalizeRun(runId, result);
 		return result;
 	} finally {
+		// Safety net: if runSingle threw before its normal finalize, don't leave the
+		// pin stuck on "running" (finalizeRun is idempotent, so a normal path no-ops).
+		if (runId) finalizeRun(runId, result);
 		if (tmpFile)
 			try {
 				fs.unlinkSync(tmpFile);
@@ -824,6 +1369,19 @@ const SubagentParams = Type.Object({
 
 // ─── Extension entry point ───────────────────────────────────────────────────
 export default function (pi: ExtensionAPI) {
+	// Hard guarantee against a leaked ticker/widget outliving the session.
+	try {
+		pi.on("session_shutdown", () => {
+			try {
+				teardown();
+			} catch {
+				/* best-effort; must not break shutdown */
+			}
+		});
+	} catch {
+		/* best-effort; must not break the agent at load */
+	}
+
 	const makeDetails =
 		(
 			mode: "single" | "parallel" | "chain",
@@ -857,6 +1415,7 @@ export default function (pi: ExtensionAPI) {
 				onUpdate: any,
 				ctx: any,
 			) {
+				captureUi(ctx); // stable UI ref for the live pin
 				const scope: AgentScope = params.agentScope ?? "user";
 				const { agents, projectDir } = discoverAgents(ctx.cwd, scope);
 
@@ -899,6 +1458,17 @@ export default function (pi: ExtensionAPI) {
 					const md = makeDetails("chain", scope, projectDir);
 					const results: SingleResult[] = [];
 					let prev = "";
+					// Pre-register every step as "queued" so the pin shows the whole
+					// chain up front; each step flips to running as it starts.
+					const chainIds: string[] = params.chain.map((s: any, i: number) =>
+						registerRun({
+							agent: s.agent,
+							mode: "chain",
+							step: i + 1,
+							task: String(s.task).replace(/\{previous\}/g, "").trim(),
+							status: "queued",
+						}),
+					);
 					for (let i = 0; i < params.chain.length; i++) {
 						const s = params.chain[i];
 						const task = String(s.task).replace(/\{previous\}/g, prev);
@@ -922,9 +1492,14 @@ export default function (pi: ExtensionAPI) {
 							signal,
 							chainUpdate,
 							md,
+							{ mode: "chain", preRunId: chainIds[i] },
 						);
 						results.push(r);
 						if (isFailed(r)) {
+							// Later steps were pre-registered as "queued" but will never run;
+							// drop them so they don't leak the ticker as perpetually active.
+							for (let j = i + 1; j < chainIds.length; j++)
+								dropRun(chainIds[j]);
 							return {
 								content: [
 									{
@@ -975,6 +1550,16 @@ export default function (pi: ExtensionAPI) {
 						usage: zeroUsage(),
 						timedOut: null,
 					}));
+					// Pre-register all tasks as "queued" so an N-way fanout shows every
+					// row at once, even the ones beyond MAX_CONCURRENCY waiting for a slot.
+					const parIds: string[] = params.tasks.map((t: any) =>
+						registerRun({
+							agent: t.agent,
+							mode: "parallel",
+							task: t.task,
+							status: "queued",
+						}),
+					);
 					const emitAll = () => {
 						if (!onUpdate) return;
 						const running = all.filter((r) => r.exitCode === -1).length;
@@ -1008,6 +1593,7 @@ export default function (pi: ExtensionAPI) {
 									}
 								},
 								md,
+								{ mode: "parallel", preRunId: parIds[i] },
 							);
 							all[i] = r;
 							emitAll();
@@ -1045,6 +1631,7 @@ export default function (pi: ExtensionAPI) {
 					signal,
 					onUpdate,
 					md,
+					{ mode: "single" },
 				);
 				if (isFailed(r)) {
 					return {
@@ -1273,6 +1860,7 @@ export default function (pi: ExtensionAPI) {
 						undefined,
 						undefined,
 						makeDetails("single", "user", null),
+						{ mode: "single", enabled: false }, // don't pin the canary
 					);
 					void savedIdle;
 					void savedWall;
