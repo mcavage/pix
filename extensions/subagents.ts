@@ -51,6 +51,11 @@ const num = (name: string, dflt: number): number => {
 };
 const IDLE_MS = num("PI_SUBAGENT_IDLE_MS", 120_000); // no output for this long → dead
 const WALL_MS = num("PI_SUBAGENT_TIMEOUT_MS", 600_000); // hard per-child cap
+// After the child emits agent_settled the turn's output is already captured, so a
+// process that lingers (e.g. a web_search includeContent background fetch holding
+// the event loop open) gets a fast, CLEAN teardown instead of waiting out the
+// idle watchdog and being mislabeled a timeout.
+const DRAIN_MS = num("PI_SUBAGENT_DRAIN_MS", 3_000);
 const MAX_CONCURRENCY = num("PI_SUBAGENT_MAX_CONCURRENCY", 4);
 const MAX_PARALLEL = num("PI_SUBAGENT_MAX_PARALLEL", 8);
 const MAX_DEPTH = num("PI_SUBAGENT_MAX_DEPTH", 3);
@@ -78,6 +83,9 @@ interface AgentConfig {
 	model?: string;
 	thinking?: string;
 	maxTurns?: number;
+	// Web access defaults ON, but a hermetic agent (e.g. a reviewer/auditor that
+	// sees sensitive diffs) can set `web: false` to keep repo context off the wire.
+	web?: boolean;
 	systemPrompt: string;
 	source: "user" | "project";
 	filePath: string;
@@ -137,12 +145,18 @@ function loadAgentsFromDir(
 		const maxTurns = frontmatter.max_turns
 			? Number(frontmatter.max_turns)
 			: undefined;
+		// `web: false` opts an agent out of subagent web access (default on).
+		const webRaw = String(frontmatter.web ?? "")
+			.trim()
+			.toLowerCase();
+		const web = webRaw === "false" || webRaw === "no" ? false : undefined;
 		out.push({
 			name,
 			description,
 			tools: tools && tools.length > 0 ? tools : undefined,
 			model,
 			thinking,
+			web,
 			maxTurns: Number.isFinite(maxTurns as number)
 				? (maxTurns as number)
 				: undefined,
@@ -195,6 +209,61 @@ try {
 } catch {
 	/* trees disabled if we can't find ourselves; stability unaffected */
 }
+
+// Extensions re-added to the child on top of --no-extensions. The blanket
+// --no-extensions exists because a FULLY loaded child re-binds fixed ports
+// (ollama-bridge) or the memory service and deadlocks. pi-web-access is
+// different: its interactive browser "curator" is the only server, it binds an
+// ephemeral (:0) port, and it starts ONLY when a UI is present. A headless `-p`
+// child has ctx.hasUI === false, so pi-web-access's resolveWorkflow() collapses
+// the workflow to "none" and the curator/browser never starts. (Note: a config
+// default of workflow "auto-summary" still runs a summary MODEL call in a child,
+// but binds nothing — no port, no browser, no hang.) The one residual is a
+// web_search(includeContent:true) background fetch: in a --no-session child
+// sessionActive stays false, so its completion callback (incl. the sendMessage
+// triggerTurn re-entry) is a no-op, and the wall/idle watchdog backstops any
+// slow-exit. So web_search / fetch_content / get_search_content are safe to give
+// subagents that want to research. We resolve the entry from the installed
+// package's own `pi.extensions` manifest so a version/path change can't silently
+// break it, and keep every resolved path inside the package dir.
+const WEB_TOOLS = ["web_search", "fetch_content", "get_search_content"];
+function resolveWebAccessExtensions(): string[] {
+	const roots: string[] = [path.join(getAgentDir(), "npm", "node_modules")];
+	try {
+		roots.push(path.join(getPackageDir(), ".."));
+	} catch {
+		/* getPackageDir may throw in odd installs; the agent-dir root covers us */
+	}
+	for (const root of roots) {
+		const pkgDir = path.join(root, "pi-web-access");
+		try {
+			const manifest = path.join(pkgDir, "package.json");
+			if (!fs.existsSync(manifest)) continue;
+			const pkg = JSON.parse(fs.readFileSync(manifest, "utf-8"));
+			const entries: unknown = pkg?.pi?.extensions;
+			const list = Array.isArray(entries) ? (entries as string[]) : [];
+			const base = fs.realpathSync(pkgDir);
+			const resolved = list
+				.filter((e): e is string => typeof e === "string")
+				.map((e) => path.resolve(pkgDir, e))
+				.filter((p) => fs.existsSync(p))
+				// Containment: never load a path the manifest points OUTSIDE its own
+				// package dir (defense-in-depth; a malicious package already has RCE).
+				.filter((p) => {
+					try {
+						return fs.realpathSync(p).startsWith(base + path.sep);
+					} catch {
+						return false;
+					}
+				});
+			if (resolved.length) return resolved;
+		} catch {
+			/* try the next root; web access is best-effort, never fatal */
+		}
+	}
+	return [];
+}
+const WEB_ACCESS_EXTENSIONS = resolveWebAccessExtensions();
 
 function resolvePiCommand(): { command: string; baseArgs: string[] } {
 	// Explicit override (testing, or a non-standard pi install). Space-separated:
@@ -464,13 +533,28 @@ async function runSingle(
 		"--no-session",
 		"--no-extensions",
 	];
-	// STABILITY: re-add ONLY this extension so trees work without the port-binding
-	// extensions that deadlock a fully-loaded child.
+	// STABILITY: re-add ONLY safe extensions on top of --no-extensions so trees +
+	// web research work without the port-binding extensions that deadlock a
+	// fully-loaded child. SELF_PATH = subagents (trees); WEB_ACCESS = web_search
+	// et al (headless-safe, see resolveWebAccessExtensions).
 	if (SELF_PATH) args.push("-e", SELF_PATH);
+	// Web is on by default; a hermetic agent opts out with `web: false` so its
+	// (possibly sensitive) context never reaches a search provider. When off we
+	// don't even LOAD the extension — clean for restricted and unrestricted alike.
+	const webEnabled = agent.web !== false && WEB_ACCESS_EXTENSIONS.length > 0;
+	if (webEnabled) for (const ext of WEB_ACCESS_EXTENSIONS) args.push("-e", ext);
 	if (agent.model) args.push("--model", agent.model);
 	if (agent.thinking) args.push("--thinking", agent.thinking);
-	if (agent.tools && agent.tools.length > 0)
-		args.push("--tools", agent.tools.join(","));
+	if (agent.tools && agent.tools.length > 0) {
+		// A restricted tool allowlist would filter out the web tools we just loaded,
+		// so merge them back in — but ONLY when web is enabled for this agent, so a
+		// `web: false` allowlist stays exactly as its author wrote it. Unrestricted
+		// agents (no tools:) already get everything.
+		const tools = webEnabled
+			? Array.from(new Set([...agent.tools, ...WEB_TOOLS]))
+			: agent.tools;
+		args.push("--tools", tools.join(","));
+	}
 
 	const result: SingleResult = {
 		agent: agentName,
@@ -512,6 +596,7 @@ async function runSingle(
 
 		let killedReason: "idle" | "wall" | null = null;
 		let wasAborted = false;
+		let drained = false; // clean post-settle teardown, NOT a failure
 
 		const exitCode = await new Promise<number>((resolve) => {
 			// detached:true puts the child in its OWN process group so we can signal the
@@ -528,10 +613,12 @@ async function runSingle(
 			});
 
 			let settled = false;
+			let postSettled = false; // turn finished; watchdogs no longer apply
 			let idleTimer: ReturnType<typeof setTimeout> | null = null;
 			let wallTimer: ReturnType<typeof setTimeout> | null = null;
 			let killTimer: ReturnType<typeof setTimeout> | null = null;
 			let graceTimer: ReturnType<typeof setTimeout> | null = null;
+			let postSettleTimer: ReturnType<typeof setTimeout> | null = null;
 
 			const done = (code: number) => {
 				if (settled) return;
@@ -554,9 +641,12 @@ async function runSingle(
 					}
 				}
 			};
-			const kill = (reason: "idle" | "wall" | "abort") => {
+			const kill = (reason: "idle" | "wall" | "abort" | "drain") => {
 				if (settled) return;
+				// "drain" is a clean teardown after the turn already settled: don't mark
+				// it aborted or timed-out, and coerce the exit code to success below.
 				if (reason === "abort") wasAborted = true;
+				else if (reason === "drain") drained = true;
 				else killedReason = reason;
 				signalTree("SIGTERM");
 				// Escalate to SIGKILL if SIGTERM is ignored, then force-resolve so a
@@ -567,11 +657,20 @@ async function runSingle(
 				}, 5000);
 			};
 			const bumpIdle = () => {
+				// Once the turn has settled the idle watchdog is retired — trailing stdout
+				// must not re-arm it and relabel a finished run as a timeout.
+				if (postSettled) return;
 				if (idleTimer) clearTimeout(idleTimer);
 				idleTimer = setTimeout(() => kill("idle"), IDLE_MS);
 			};
 			const clearTimers = () => {
-				for (const t of [idleTimer, wallTimer, killTimer, graceTimer])
+				for (const t of [
+					idleTimer,
+					wallTimer,
+					killTimer,
+					graceTimer,
+					postSettleTimer,
+				])
 					if (t) clearTimeout(t);
 			};
 
@@ -610,6 +709,17 @@ async function runSingle(
 				} else if (event.type === "tool_result_end" && event.message) {
 					result.messages.push(event.message);
 					emit();
+				} else if (event.type === "agent_settled") {
+					// Turn is done and its output is captured. Retire the idle + wall
+					// watchdogs (they exist to catch a child stuck DURING work, not one
+					// finishing) so neither can relabel a completed turn as a timeout.
+					// Then give stdio a brief window to flush + the process to exit on its
+					// own; if it lingers (a leaked handle), tear it down cleanly.
+					postSettled = true;
+					if (idleTimer) clearTimeout(idleTimer);
+					if (wallTimer) clearTimeout(wallTimer);
+					if (!postSettleTimer && !settled)
+						postSettleTimer = setTimeout(() => kill("drain"), DRAIN_MS);
 				}
 			};
 
@@ -644,7 +754,12 @@ async function runSingle(
 			}
 		});
 
-		result.exitCode = exitCode;
+		// A drain teardown happens only after a clean agent_settled, so OUR kill
+		// signal codes (143=SIGTERM, 137=SIGKILL) are not a failure — normalize just
+		// those so isFailed() doesn't trip, while a genuine post-settle nonzero exit
+		// is still surfaced.
+		result.exitCode =
+			drained && (exitCode === 143 || exitCode === 137) ? 0 : exitCode;
 		result.timedOut = killedReason;
 		if (killedReason && !result.errorMessage) {
 			result.errorMessage =
@@ -1168,6 +1283,7 @@ export default function (pi: ExtensionAPI) {
 						pass ? "✅ subagents doctor: PASS" : "❌ subagents doctor: FAIL",
 						`  spawn resolution: ${resolvePiCommand().command}`,
 						`  self extension (-e): ${SELF_PATH ?? "NOT FOUND (trees disabled)"}`,
+						`  web access (-e): ${WEB_ACCESS_EXTENSIONS.length ? `${WEB_TOOLS.join(", ")}` : "NOT FOUND (subagents can't web search)"}`,
 						`  canary model: ${canary.model}`,
 						`  round-trip: ${ms}ms · turns=${r.usage.turns} · exit=${r.exitCode}${r.timedOut ? ` · TIMEOUT:${r.timedOut}` : ""}`,
 						`  canary said: ${JSON.stringify(text.slice(0, 60)) || "(nothing)"}`,
@@ -1198,6 +1314,9 @@ export default function (pi: ExtensionAPI) {
 				lines.push("");
 				lines.push(
 					`config: depth=${CURRENT_DEPTH}/${MAX_DEPTH} · idle=${Math.round(IDLE_MS / 1000)}s · wall=${Math.round(WALL_MS / 1000)}s · concurrency=${MAX_CONCURRENCY} · maxParallel=${MAX_PARALLEL}`,
+				);
+				lines.push(
+					`web access: ${WEB_ACCESS_EXTENSIONS.length ? `on (${WEB_TOOLS.join(", ")})` : "off (pi-web-access not found)"}`,
 				);
 				if (projectDir) lines.push(`project agents dir: ${projectDir}`);
 				lines.push("run `/subagents doctor` for a live self-audit.");

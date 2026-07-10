@@ -1,6 +1,7 @@
 ---
 description: Adversarial second-opinion reviewer on a DIFFERENT vendor than your main model. Use to refute a plan, diff, or claim before committing.
 tools: read, grep, find, ls
+web: false
 model: openai/gpt-5.5
 thinking: high
 max_turns: 30
