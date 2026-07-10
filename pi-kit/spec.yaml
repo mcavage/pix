@@ -20,7 +20,14 @@ sandbox:
     # --session-dir persists sessions on the host-mounted workspace so they
     # survive sandbox recreation (resume with `pi -c` / `pi -r`); --models sets
     # the Alt+P cycle squad (Ctrl+P is remapped to emacs cursor-up).
-    run: [pi, "--session-dir", ".pi-sessions", "--models", "anthropic/claude-opus-4-8,openai/gpt-5.5,google/gemini-3.1-pro-preview,ollama/gemma4:latest"]
+    run:
+      [
+        pi,
+        "--session-dir",
+        ".pi-sessions",
+        "--models",
+        "anthropic/claude-opus-4-8,openai/gpt-5.5,google/gemini-3.1-pro-preview,ollama/gemma4:latest",
+      ]
 
 # Provider keys are read by the host proxy and swapped into the outbound auth
 # header — the agent inside the VM only ever sees the "proxy-managed" sentinel.
@@ -118,7 +125,6 @@ credentials:
     openai:
       env:
         - OPENAI_API_KEY
-
 
 environment:
   variables:
