@@ -12,7 +12,7 @@
 # nag (pi checks npm at runtime, so a new release always nags until you rebump).
 # When bumping, re-check the vendored tui patch still applies (build logs print
 # "[apply-tui-bottom-pin] patched" vs an "anchor not found" warning).
-ARG PI_PACKAGE=@earendil-works/pi-coding-agent@0.80.5
+ARG PI_PACKAGE=@earendil-works/pi-coding-agent@0.80.6
 
 # Hardened Node, maintained by Docker (DHI). Debian/glibc, so our entire apt
 # toolchain (clangd, chromium, gh, ruff, build-essential) keeps working — we just
