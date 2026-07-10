@@ -192,7 +192,7 @@ agentContext: |
 
   ## Installed harness
   plan mode (pi-plan), pi-mcp-adapter, todo list, pi-simplify, pi-web-access,
-  pi-lens (inline LSP diagnostics), powerbar statusline + usage HUD.
+  usage HUD, and the baked status + subagents extensions.
 
   ## CLIs and MCP
   `gh` and `gws` are installed. GitHub auth is routed through sbx credentials.

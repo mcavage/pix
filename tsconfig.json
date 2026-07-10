@@ -1,5 +1,5 @@
 {
-  "// note": "Makes pi-lens/tsserver type-check pi extensions correctly. pi loads",
+  "// note": "Makes tsserver/tsc type-check pi extensions correctly. pi loads",
   "// note2": "extension .ts files with full Node globals at runtime; @types/node",
   "// note3": "+ this config tell the editor that, so `process`/`require`/timers",
   "// note4": "resolve instead of erroring. Not used to compile (pi has its own loader).",

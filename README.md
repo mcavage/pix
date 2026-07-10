@@ -123,7 +123,7 @@ harness skills (the exact set is the allowlist in `.dockerignore`) plus 17 role
 agents (`architect`, `security-lead`, `sre-lead`, `qa-lead`, and so on) you
 delegate to for the lens a change actually needs, not just a generic reviewer.
 
-Plus pi-lens for inline type and lint errors (JS/TS, Python, C/C++), `gh`, `gws`, a
+Plus `gh`, `gws`, a
 browser, plan mode, MCP, and web search. The defaults are mine: dracula, emacs
 keys, thinking collapsed, a status line, and a watchdog that cancels a stuck call
 instead of spinning on "working..." forever. They're defaults, so swap them.
@@ -156,7 +156,7 @@ make run MCP="slack"   # == sbx run pi-stack --kit ./pi-kit --mcp slack .
 ```
 
 | tool | capability | one-time setup | reaches the VM via |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **gh** | `github` | `gh auth token \| sbx secret set -g github` | sbx proxy injects the token |
 | **gws** | `gworkspace` | `gws auth login` on the host | host token service (`:11441`) |
 | **slack** | `chat` | refs in `config/op-refs.env`, then `make mcp-register` | stdio MCP via the sbx gateway; `op run` pulls creds from 1Password |

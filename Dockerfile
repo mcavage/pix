@@ -73,17 +73,16 @@ RUN npm install -g --ignore-scripts "${PI_PACKAGE}" \
 COPY scripts/patches/ /usr/local/share/pi-stack/patches/
 RUN node /usr/local/share/pi-stack/patches/apply-tui-bottom-pin.mjs
 
-# --- language servers / dev tooling (pi-lens inline diagnostics) --------------
-# clangd (C/C++ LSP) + a C/C++ build toolchain + python3, so C/C++ projects and
-# native npm modules (node-pty etc.) compile. (Java/Go/Rust omitted — add later.)
+# --- build toolchain (native npm modules + dev typecheck) ---------------------
+# build-essential + python3 so native npm modules (node-pty etc.) compile;
+# typescript gives `tsc` for type-checking the baked extensions during dev.
+# (The clangd + node LSP servers were only here to feed pi-lens inline
+# diagnostics; removed with pi-lens.)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      clangd build-essential python3 \
+      build-essential python3 \
  && rm -rf /var/lib/apt/lists/*
-# Node-based LSPs: TS/JS, Python (pyright), YAML, JSON/HTML/CSS/ESLint, Bash.
-RUN npm install -g --ignore-scripts \
-      typescript typescript-language-server \
-      pyright yaml-language-server vscode-langservers-extracted bash-language-server \
+RUN npm install -g --ignore-scripts typescript \
  && npm cache clean --force
 # ruff (Python lint/format) via official static binary.
 RUN set -eux; \
@@ -101,7 +100,7 @@ RUN set -eux; \
     ruff --version
 
 # --- fd (fast file finder) via official static binary -------------------------
-# pi/pi-lens auto-download fd to ~/.pi/agent/bin at runtime if it's not on PATH;
+# pi auto-downloads fd to ~/.pi/agent/bin at runtime if it's not on PATH;
 # baking it avoids that per-sandbox download. (fd-find is not in the DHI apt.)
 ARG FD_VERSION=10.4.2
 RUN set -eux; \
@@ -180,8 +179,9 @@ USER agent
 # (extensions/subagents.ts, baked via the COPY extensions/ below); the off-the-
 # shelf @tintinweb/pi-subagents stays DISABLED — see the notes below.
 # plan mode (pi-plan), MCP adapter (wire servers per-project), todo list,
-# simplify, web access, pi-lens (LSP diagnostics), usage. (powerbar removed: its
-# session-shutdown handler uses a stale ctx after ctx.reload(), which wedges /reload.)
+# simplify, web access, usage. (powerbar removed: its session-shutdown handler
+# uses a stale ctx after ctx.reload(), which wedges /reload. pi-lens removed: its
+# inline LSP diagnostics were not pulling their weight.)
 #
 # PINNED — these MUST be version-locked, not floating. They peer-depend on
 # @earendil-works/pi-ai with "*", so an unpinned `pi install` grabs the latest on
@@ -201,7 +201,7 @@ USER agent
 # docs/design/subagents-extension.md. Do NOT restore the @tintinweb line.
 RUN set -eux; for p in \
       pi-plan@0.1.1 pi-mcp-adapter@2.11.0 \
-      pi-manage-todo-list@0.4.0 pi-simplify@0.2.2 pi-web-access@0.13.0 pi-lens@3.8.65 \
+      pi-manage-todo-list@0.4.0 pi-simplify@0.2.2 pi-web-access@0.13.0 \
       @juanibiapina/pi-extension-settings@0.8.0 \
       pi-usage@0.2.1; do \
       pi install "npm:$p"; \

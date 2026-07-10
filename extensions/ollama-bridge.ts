@@ -74,11 +74,39 @@ export default async function (pi: any): Promise<void> {
       req.pipe(upstream);
     });
     server.on("error", () => {});
-    await new Promise<void>((resolve) => server.listen(LISTEN_PORT, "127.0.0.1", resolve));
+    // Settle on BOTH 'listening' and 'error'. Critical for /reload: the factory
+    // re-runs while the PRE-reload server may still hold the port, so listen()
+    // fires EADDRINUSE. If we only resolved on 'listening', the await would hang
+    // forever and wedge the whole reload. On error we just proceed — the existing
+    // bridge on that port still serves, so the provider keeps working.
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const settle = () => {
+        if (done) return;
+        done = true;
+        resolve();
+      };
+      server.once("listening", settle);
+      server.once("error", settle);
+      server.listen(LISTEN_PORT, "127.0.0.1");
+    });
     // Don't let the open listener keep the event loop alive: interactive pi stays
     // up on its own (the bridge serves the whole session), but `pi -p` /
     // `--list-models` must still be able to exit.
     server.unref();
+    // Close on shutdown so a /reload frees the port cleanly before the next
+    // factory run (belt-and-suspenders with the error-tolerant listen above).
+    try {
+      pi.on?.("session_shutdown", () => {
+        try {
+          server.close();
+        } catch {
+          /* already closed */
+        }
+      });
+    } catch {
+      /* best-effort; older pi may not expose on() here */
+    }
   } catch {
     /* best-effort */
   }
