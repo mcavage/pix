@@ -213,12 +213,15 @@ edit a `SKILL.md`, `/reload` in pi, and it's live. `make load` only bakes your s
 into the image for people who run it the turnkey way (`sbx run --kit git+…`), which
 uses the baked set. If you only changed the kit in `pi-kit/`, a fresh `make run` is
 enough. `make publish`
-pushes the image to Docker Hub. A GitHub Action publishes automatically too: every
-push to `main` updates the moving `:edge` dev tag, and a version tag publishes
-`:<version>` and moves `:latest`. To run the latest `main` build without building
-locally, `make run-dev` (it runs against `:edge`, re-pulled each time). The base
-image is a Docker Hardened Image, so building from source needs a DHI-entitled
-account; the `sbx run` path above does not.
+pushes the image to Docker Hub by hand. A GitHub Action publishes automatically on
+every push to `main`: it stamps a new version `0.0.<run_number>`, builds multi-arch,
+pushes `:<version>` + `:latest`, and commits the version bump back into
+`pi-kit/spec.yaml`. Because every push is a brand-new tag, `sbx run pi-stack --kit
+git+…` (which reads the pinned image from `spec.yaml` on `main`) always pulls a fresh
+image sbx has never cached — no `--template`, no `sbx template rm`. To run the latest
+published build without a local checkout, `make run-published`. The base image is a
+Docker Hardened Image, so building from source needs a DHI-entitled account; the
+`sbx run` path above does not.
 
 ## For agents
 

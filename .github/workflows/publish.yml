@@ -1,42 +1,59 @@
 name: publish
 
-# Build the pi-stack image multi-arch (amd64 + arm64) and push it to Docker Hub,
-# so consumers can `sbx run pi-stack --kit "git+...#dir=pi-kit"` with only sbx.
+# Every push to main auto-publishes a NEW immutable version. CI stamps
+# 0.0.<run_number> into the tree, builds multi-arch (amd64 + arm64), pushes
+# :<version> + :latest, then commits the bumped version files back to main
+# ([skip ci] so the bump doesn't retrigger this workflow).
 #
-# Uses native runners per arch (no QEMU) — the image is chromium-heavy and would
-# crawl under emulation. Each arch is pushed by digest, then merged into one
-# multi-arch tag.
+# Why: sbx caches materialized templates PER TAG NAME and won't re-pull a tag it
+# already has. A moving tag (:edge/:latest) therefore goes stale until you evict
+# it by hand. A brand-new version tag every push sidesteps that entirely — sbx
+# has never seen :0.0.N, so `sbx run pi-stack --kit git+...` (which reads the
+# pinned image out of pi-kit/spec.yaml on main) always pulls a fresh image with
+# NO --template flag and NO `sbx template rm`. spec.yaml on main always points at
+# the latest published version because the bump job commits it back.
+#
+# Multi-arch native runners (no QEMU) — the image is chromium-heavy. Each arch is
+# pushed by digest, then merged into one multi-arch tag.
 #
 # Required repo SECRETS (Settings → Secrets and variables → Actions):
-#   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN  — one Docker Hub PAT (Read + Write) on
-#       your DHI-entitled account. It authenticates BOTH the dhi.io base PULL and
-#       the Docker Hub PUSH (DHI is gated by your Docker account, so the same PAT
-#       works for both registries).
+#   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN  — one Docker Hub PAT (Read + Write) on a
+#       DHI-entitled account. Authenticates BOTH the dhi.io base PULL and the
+#       Docker Hub PUSH (DHI is gated by your Docker account, so one PAT does both).
 # Optional repo VARIABLE:
 #   DOCKER_USER                           — Docker Hub namespace (default: mcavage)
-#
-# Triggers:
-#   - push to `main`        → publishes the moving dev tag `:edge` only. This is
-#       active development (changes several times a day); `:edge` always points
-#       at the latest main build. `:latest` and version tags are NOT touched.
-#   - push a version tag     → publishes `:<version>` AND moves `:latest`. This is
-#       a real release (e.g. `git tag v0.1.0 && git push --tags`).
-#   - manual (workflow_dispatch) → publishes `:edge` (same as a main push).
-#
-# Run pi-stack against the dev image: `make run-dev` (sbx --template …:edge).
 
 on:
   push:
     branches: ["main"]
-    tags: ["v*"]
   workflow_dispatch: {}
+
+# Serialize runs so version bumps land in order and the commit-back never races.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write # the bump job commits the version bump back to main
 
 env:
   IMAGE: docker.io/${{ vars.DOCKER_USER || 'mcavage' }}/pi-stack
 
 jobs:
+  version:
+    name: compute version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      # run_number is monotonic per workflow and never resets → a clean, unique,
+      # always-increasing patch number with no state to track.
+      - id: v
+        run: echo "version=0.0.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
   build:
     name: build ${{ matrix.arch }}
+    needs: version
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -46,6 +63,15 @@ jobs:
           - { arch: arm64, platform: linux/arm64, runner: ubuntu-24.04-arm }
     steps:
       - uses: actions/checkout@v4
+
+      # Stamp the version into the tree BEFORE building so the image embeds it.
+      # Deterministic (run_number), so both matrix arches stamp the same value.
+      - name: Stamp version into the tree
+        run: |
+          V="${{ needs.version.outputs.version }}"
+          sed -i -E "s/^VERSION[[:space:]]*\?=.*/VERSION     ?= $V/" Makefile
+          sed -i -E "s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*\"/\1$V\"/" package.json
+          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pi-stack:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
 
       - uses: docker/setup-buildx-action@v3
 
@@ -88,8 +114,8 @@ jobs:
           retention-days: 1
 
   merge:
-    name: merge manifest
-    needs: build
+    name: merge manifest + push tags
+    needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -106,26 +132,30 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Create and push the multi-arch tag(s)
+      - name: Create and push :<version> + :latest
         working-directory: /tmp/digests
         run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            # Real release. Strip the leading "v": a git tag v0.0.1 publishes the
-            # image as :0.0.1, matching the pin in pi-kit/spec.yaml + Makefile
-            # VERSION + package.json (semver, no "v"). Mismatch here = the README
-            # "Try it" pull 404s for everyone but the local builder. Also move
-            # :latest so the discoverability tag tracks the newest release.
-            PRIMARY="${IMAGE}:${GITHUB_REF_NAME#v}"
-            tags="-t ${PRIMARY} -t ${IMAGE}:latest"
-          else
-            # Push to main / manual run: only the moving dev tag. Never touches
-            # :latest (that stays pinned to the last real release).
-            PRIMARY="${IMAGE}:edge"
-            tags="-t ${PRIMARY}"
-          fi
-          echo "PRIMARY=${PRIMARY}" >> "$GITHUB_ENV"
-          docker buildx imagetools create ${tags} \
+          V="${{ needs.version.outputs.version }}"
+          docker buildx imagetools create \
+            -t "${IMAGE}:${V}" -t "${IMAGE}:latest" \
             $(printf "${IMAGE}@sha256:%s " *)
+          docker buildx imagetools inspect "${IMAGE}:${V}"
 
-      - name: Inspect
-        run: docker buildx imagetools inspect "${PRIMARY}"
+  bump:
+    name: commit version bump to main
+    needs: [version, merge]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bump version files and commit back
+        run: |
+          V="${{ needs.version.outputs.version }}"
+          sed -i -E "s/^VERSION[[:space:]]*\?=.*/VERSION     ?= $V/" Makefile
+          sed -i -E "s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*\"/\1$V\"/" package.json
+          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pi-stack:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
+          if git diff --quiet; then echo "no version change — nothing to commit"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Makefile package.json pi-kit/spec.yaml
+          git commit -m "chore: publish $V [skip ci]"
+          git push

@@ -8,11 +8,6 @@ DOCKER_USER ?= mcavage
 VERSION     ?= 0.0.1
 IMAGE       ?= docker.io/$(DOCKER_USER)/pi-stack:$(VERSION)
 LATEST      ?= docker.io/$(DOCKER_USER)/pi-stack:latest
-# EDGE is the moving dev tag CI publishes on every push to main (see
-# .github/workflows/publish.yml). `make run-dev` runs against it so you get the
-# latest main build without cutting a release. Unlike VERSION it is NOT pinned —
-# Docker re-pulls it each run, which is exactly what you want chasing main.
-EDGE        ?= docker.io/$(DOCKER_USER)/pi-stack:edge
 KIT         ?= ./pi-kit
 # Private overlay — its OWN peer repo (not in this tree). It contributes two halves
 # (see docs/OVERLAY.md): kit/ (a mixin kit: company skills, full capabilities.json,
@@ -77,7 +72,7 @@ MEMORY_EMBED_MODEL   ?= nomic-embed-text
 # config/local.mk (written by `make install`) so you never pass flags by hand.
 SERVICES ?= memory gws
 
-.PHONY: help build load publish release validate inspect run run-dev run-edge-kit run-no-mcp serve doctor memory-serve gws-token-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay
+.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve gws-token-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay
 
 # Symlink the private overlay's host plugins ($(OVERLAY)/host/overlay_*.go) into
 # services/host/ so they compile into pi-stack-host and self-register. No-op in a
@@ -149,45 +144,15 @@ run: ## Launch a pi-stack sandbox NAME. If NAME is stopped it's recreated (works
 	[ -n "$$TAG" ] && echo "(new sandbox $(NAME), local build :$$TAG)" || echo "(new sandbox $(NAME), kit-pinned image)"; \
 	exec sbx run pi-stack --name $(NAME) $${TAG:+--template docker.io/$(DOCKER_USER)/pi-stack:$$TAG} --kit $(KIT) $(OVERLAY_KIT_FLAG) $(MCP_FLAGS) . $(OVERLAY_WS) -- $(DEV_SKILLS)
 
-# Cut a real release. The version lives as a literal in THREE files that must stay
-# in sync — Makefile VERSION, package.json "version", pi-kit/spec.yaml image: — because
-# the kit path (`sbx run --kit git+...`) reads spec.yaml straight from the repo. This
-# bumps all three, commits, and tags vX.Y.Z. CI's publish workflow fires on the v* tag,
-# pushes :X.Y.Z, and moves :latest. Every release is a NEW tag, so sbx never serves a
-# stale per-tag cache — no `sbx template rm` dance, consumers just re-run the kit.
-#   make release            # patch bump (0.0.1 -> 0.0.2)
-#   make release V=0.1.0    # explicit version
-release: ## Bump version across the 3 synced files, commit, tag vX.Y.Z (then push the tag to publish)
-	@[ -z "$$(git status --porcelain)" ] || { echo "ERROR: working tree dirty — commit or stash first."; exit 1; }
-	@cur="$(VERSION)"; \
-	if [ -n "$(V)" ]; then next="$(V)"; else \
-		next="$$(echo "$$cur" | awk -F. '{$$NF=$$NF+1; print $$1"."$$2"."$$3}')"; fi; \
-	echo "Releasing $$cur -> $$next"; \
-	sed -i.bak -E "s/^VERSION[[:space:]]*\?=.*/VERSION     ?= $$next/" Makefile && rm -f Makefile.bak; \
-	sed -i.bak -E "s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*\"/\1$$next\"/" package.json && rm -f package.json.bak; \
-	sed -i.bak -E "s#(image:[[:space:]]*\"docker.io/$(DOCKER_USER)/pi-stack:)[^\"]*\"#\1$$next\"#" pi-kit/spec.yaml && rm -f pi-kit/spec.yaml.bak; \
-	grep -q "$$next" pi-kit/spec.yaml && grep -q "$$next" package.json || { echo "ERROR: bump failed to land in all files"; git checkout -- Makefile package.json pi-kit/spec.yaml; exit 1; }; \
-	git add Makefile package.json pi-kit/spec.yaml; \
-	git commit -m "release: v$$next" >/dev/null; \
-	git tag "v$$next"; \
-	echo ""; \
-	echo "Committed + tagged v$$next. Publish it:"; \
-	echo "    git push && git push origin v$$next"
-
-# The daily driver for a fast-churning harness: don't cut a semver release for every
-# pi bump. Push to main -> CI moves :edge -> run it here. sbx caches templates PER TAG
-# NAME, and :edge is a MOVING tag, so a plain `sbx run` would boot the edge copy it
-# already materialized, NOT the fresh CI build. So we evict the cached :edge template
-# first, forcing a re-pull. (The old comment here claimed Docker re-pulls :edge each
-# run — that's the docker-run misconception; sbx's template store does not.)
-run-dev: ## Run the PUBLISHED :edge image with the LOCAL kit (evicts stale edge cache first so sbx re-pulls). Daily driver for chasing main; `make run` = local build, `make release` = a pinned checkpoint.
-	-sbx template ls 2>/dev/null | awk '$$1=="docker.io/$(DOCKER_USER)/pi-stack" && $$2=="edge"{print $$3}' | xargs -r -n1 sbx template rm
-	sbx run pi-stack --template $(EDGE) --kit $(KIT) $(OVERLAY_KIT_FLAG) $(MCP_FLAGS) .
-
-run-edge-kit: ## Same as run-dev but pulls the kit from git (no local repo needed) — the true consumer path for chasing main off the published image.
-	-sbx rm -f pi-stack-edge >/dev/null 2>&1
-	-sbx template ls 2>/dev/null | awk '$$1=="docker.io/$(DOCKER_USER)/pi-stack" && $$2=="edge"{print $$3}' | xargs -r -n1 sbx template rm
-	sbx run pi-stack --name pi-stack-edge --template $(EDGE) --kit "git+https://github.com/$(DOCKER_USER)/pi-stack.git#dir=pi-kit"
+# Run the latest PUBLISHED image straight off the git-hosted kit — the true
+# consumer path, no local repo needed. Every push to main auto-publishes a NEW
+# version (CI stamps 0.0.<run_number>, see .github/workflows/publish.yml) and
+# commits the bump into pi-kit/spec.yaml on main. Since the kit reads spec.yaml
+# from main, this always pins a version sbx has NEVER cached → a fresh pull with
+# no --template override and no `sbx template rm` dance. Wait for CI green first.
+run-published: ## Run the latest PUBLISHED image via the git kit (always fresh — every push is a new version tag; no eviction needed). `make run` = local build.
+	-sbx rm -f pi-stack-published >/dev/null 2>&1
+	sbx run pi-stack --name pi-stack-published --kit "git+https://github.com/$(DOCKER_USER)/pi-stack.git#dir=pi-kit"
 
 run-no-mcp: ## Launch without sbx Cloud MCP Gateway, for debugging MCP setup failures
 	env -u SBX_MCP_URL sbx run pi-stack --kit $(KIT) .
