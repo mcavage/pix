@@ -77,7 +77,7 @@ MEMORY_EMBED_MODEL   ?= nomic-embed-text
 # config/local.mk (written by `make install`) so you never pass flags by hand.
 SERVICES ?= memory gws
 
-.PHONY: help build load publish release validate inspect run run-dev run-no-mcp serve doctor memory-serve gws-token-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay
+.PHONY: help build load publish release validate inspect run run-dev run-edge-kit run-no-mcp serve doctor memory-serve gws-token-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay
 
 # Symlink the private overlay's host plugins ($(OVERLAY)/host/overlay_*.go) into
 # services/host/ so they compile into pi-stack-host and self-register. No-op in a
@@ -174,8 +174,20 @@ release: ## Bump version across the 3 synced files, commit, tag vX.Y.Z (then pus
 	echo "Committed + tagged v$$next. Publish it:"; \
 	echo "    git push && git push origin v$$next"
 
-run-dev: ## Launch against the moving :edge dev tag (latest main build; CI publishes it on every push to main). Re-pulled each run, so you always get the freshest build. `make run` uses the pinned release instead.
+# The daily driver for a fast-churning harness: don't cut a semver release for every
+# pi bump. Push to main -> CI moves :edge -> run it here. sbx caches templates PER TAG
+# NAME, and :edge is a MOVING tag, so a plain `sbx run` would boot the edge copy it
+# already materialized, NOT the fresh CI build. So we evict the cached :edge template
+# first, forcing a re-pull. (The old comment here claimed Docker re-pulls :edge each
+# run — that's the docker-run misconception; sbx's template store does not.)
+run-dev: ## Run the PUBLISHED :edge image with the LOCAL kit (evicts stale edge cache first so sbx re-pulls). Daily driver for chasing main; `make run` = local build, `make release` = a pinned checkpoint.
+	-sbx template ls 2>/dev/null | awk '$$1=="docker.io/$(DOCKER_USER)/pi-stack" && $$2=="edge"{print $$3}' | xargs -r -n1 sbx template rm
 	sbx run pi-stack --template $(EDGE) --kit $(KIT) $(OVERLAY_KIT_FLAG) $(MCP_FLAGS) .
+
+run-edge-kit: ## Same as run-dev but pulls the kit from git (no local repo needed) — the true consumer path for chasing main off the published image.
+	-sbx rm -f pi-stack-edge >/dev/null 2>&1
+	-sbx template ls 2>/dev/null | awk '$$1=="docker.io/$(DOCKER_USER)/pi-stack" && $$2=="edge"{print $$3}' | xargs -r -n1 sbx template rm
+	sbx run pi-stack --name pi-stack-edge --template $(EDGE) --kit "git+https://github.com/$(DOCKER_USER)/pi-stack.git#dir=pi-kit"
 
 run-no-mcp: ## Launch without sbx Cloud MCP Gateway, for debugging MCP setup failures
 	env -u SBX_MCP_URL sbx run pi-stack --kit $(KIT) .
