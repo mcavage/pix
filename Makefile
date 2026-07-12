@@ -5,7 +5,7 @@
 # else pull once. Keep in sync with `version` in package.json and `image:` in
 # pi-kit/spec.yaml.
 DOCKER_USER ?= mcavage
-VERSION     ?= 0.0.1
+VERSION     ?= 0.0.16
 IMAGE       ?= docker.io/$(DOCKER_USER)/pi-stack:$(VERSION)
 LATEST      ?= docker.io/$(DOCKER_USER)/pi-stack:latest
 KIT         ?= ./pi-kit
