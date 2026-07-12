@@ -77,7 +77,7 @@ MEMORY_EMBED_MODEL   ?= nomic-embed-text
 # config/local.mk (written by `make install`) so you never pass flags by hand.
 SERVICES ?= memory gws
 
-.PHONY: help build load publish validate inspect run run-dev run-no-mcp serve doctor memory-serve gws-token-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay
+.PHONY: help build load publish release validate inspect run run-dev run-no-mcp serve doctor memory-serve gws-token-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay
 
 # Symlink the private overlay's host plugins ($(OVERLAY)/host/overlay_*.go) into
 # services/host/ so they compile into pi-stack-host and self-register. No-op in a
@@ -148,6 +148,31 @@ run: ## Launch a pi-stack sandbox NAME. If NAME is stopped it's recreated (works
 	TAG=$$(cat out/.local-image-tag 2>/dev/null || true); \
 	[ -n "$$TAG" ] && echo "(new sandbox $(NAME), local build :$$TAG)" || echo "(new sandbox $(NAME), kit-pinned image)"; \
 	exec sbx run pi-stack --name $(NAME) $${TAG:+--template docker.io/$(DOCKER_USER)/pi-stack:$$TAG} --kit $(KIT) $(OVERLAY_KIT_FLAG) $(MCP_FLAGS) . $(OVERLAY_WS) -- $(DEV_SKILLS)
+
+# Cut a real release. The version lives as a literal in THREE files that must stay
+# in sync — Makefile VERSION, package.json "version", pi-kit/spec.yaml image: — because
+# the kit path (`sbx run --kit git+...`) reads spec.yaml straight from the repo. This
+# bumps all three, commits, and tags vX.Y.Z. CI's publish workflow fires on the v* tag,
+# pushes :X.Y.Z, and moves :latest. Every release is a NEW tag, so sbx never serves a
+# stale per-tag cache — no `sbx template rm` dance, consumers just re-run the kit.
+#   make release            # patch bump (0.0.1 -> 0.0.2)
+#   make release V=0.1.0    # explicit version
+release: ## Bump version across the 3 synced files, commit, tag vX.Y.Z (then push the tag to publish)
+	@[ -z "$$(git status --porcelain)" ] || { echo "ERROR: working tree dirty — commit or stash first."; exit 1; }
+	@cur="$(VERSION)"; \
+	if [ -n "$(V)" ]; then next="$(V)"; else \
+		next="$$(echo "$$cur" | awk -F. '{$$NF=$$NF+1; print $$1"."$$2"."$$3}')"; fi; \
+	echo "Releasing $$cur -> $$next"; \
+	sed -i.bak -E "s/^VERSION[[:space:]]*\?=.*/VERSION     ?= $$next/" Makefile && rm -f Makefile.bak; \
+	sed -i.bak -E "s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*\"/\1$$next\"/" package.json && rm -f package.json.bak; \
+	sed -i.bak -E "s#(image:[[:space:]]*\"docker.io/$(DOCKER_USER)/pi-stack:)[^\"]*\"#\1$$next\"#" pi-kit/spec.yaml && rm -f pi-kit/spec.yaml.bak; \
+	grep -q "$$next" pi-kit/spec.yaml && grep -q "$$next" package.json || { echo "ERROR: bump failed to land in all files"; git checkout -- Makefile package.json pi-kit/spec.yaml; exit 1; }; \
+	git add Makefile package.json pi-kit/spec.yaml; \
+	git commit -m "release: v$$next" >/dev/null; \
+	git tag "v$$next"; \
+	echo ""; \
+	echo "Committed + tagged v$$next. Publish it:"; \
+	echo "    git push && git push origin v$$next"
 
 run-dev: ## Launch against the moving :edge dev tag (latest main build; CI publishes it on every push to main). Re-pulled each run, so you always get the freshest build. `make run` uses the pinned release instead.
 	sbx run pi-stack --template $(EDGE) --kit $(KIT) $(OVERLAY_KIT_FLAG) $(MCP_FLAGS) .
