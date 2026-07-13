@@ -1,15 +1,24 @@
-// `serve` runs the long-running HTTP host services (gws-token, memory, plus any
-// overlay services that self-register when present), each on its own port, in one
-// process. The MCP servers (slack) are stdio and spawned on demand by the sbx
-// gateway, not here.
+// `serve` is the plugin supervisor. It runs the long-running HTTP host services
+// (gws-token :11441, memory :11435, plus any overlay services), resolving each
+// capability slot from config: a "builtin" impl runs IN-PROCESS exactly as
+// before (memoryMux() / gwsTokenMux()); a non-builtin impl is launched ONCE at
+// startup as a go-plugin subprocess and the HTTP shim proxies to it. Plugins
+// never bind ports — the supervisor owns the listeners and the stable host
+// surface every sandbox already depends on. The MCP servers (e.g. slack) are
+// stdio and spawned on demand by the sbx gateway (`mcp <name>`), not here.
 
 package main
 
 import (
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"syscall"
+
+	"pi-stack/host/config"
 )
 
 type hostService struct {
@@ -24,14 +33,61 @@ type hostService struct {
 // any overlay registers); empty means "all". The MCP servers (e.g. slack) are
 // stdio commands run by the sbx gateway via `sbx mcp add`, not HTTP daemons.
 func runServe(enabled []string) {
-	all := []hostService{
-		// gws-token barfs if the host gws isn't authenticated (else it starts but
-		// serves "no host token" and Gmail/Calendar are silently dark in the VM).
-		{name: "gws-token", addr: env("GWS_TOKEN_BIND", "127.0.0.1") + ":" + env("GWS_TOKEN_PORT", "11441"), mux: gwsTokenMux(), check: gwsTokenCheck},
-		// memory degrades gracefully (recall -> keyword, capture off) and logs its
-		// own status, so it has no fatal preflight.
-		{name: "memory", addr: env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435"), mux: memoryMux()},
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("serve: load config: %v", err)
 	}
+
+	// Broker bearer (zero friction): mint (or reuse) the shared token and REQUIRE
+	// it on the gws-token shim. Set GWS_TOKEN_AUTH before constructing the shim
+	// (gwsTokenMux() reads it at build time); the launcher injects the same token
+	// into the sandbox, so the user never sees it. Applies to both the built-in
+	// and the plugin-backed broker path.
+	tok, err := config.EnsureToken()
+	if err != nil {
+		log.Fatalf("serve: broker token: %v", err)
+	}
+	os.Setenv("GWS_TOKEN_AUTH", tok)
+
+	selfPath, err := os.Executable()
+	if err != nil {
+		log.Fatalf("serve: locate self: %v", err)
+	}
+
+	sup := &supervisor{}
+
+	// gws-token: builtin runs in-process; a non-builtin impl is launched as a
+	// CredentialBroker plugin and the /token shim proxies to it. It barfs if the
+	// host gws isn't authenticated (else it starts but serves "no host token" and
+	// Gmail/Calendar are silently dark in the VM).
+	gwsSvc := hostService{name: "gws-token", addr: env("GWS_TOKEN_BIND", "127.0.0.1") + ":" + env("GWS_TOKEN_PORT", "11441"), check: gwsTokenCheck}
+	if spec := cfg.Plugin("gws"); spec.Impl == config.BuiltinImpl {
+		gwsSvc.mux = gwsTokenMux()
+	} else {
+		h, lerr := sup.launch("gws-token", "broker", spec, selfPath)
+		if lerr != nil {
+			log.Fatalf("serve: launch gws broker plugin: %v", lerr)
+		}
+		gwsSvc.mux = gwsBrokerProxyMux(h, tok)
+		gwsSvc.check = func() error { return brokerCheck(h) }
+	}
+
+	// memory: the built-in store runs IN-PROCESS (fast path — recall is per-turn);
+	// only a non-builtin impl is spawned as a plugin. memory degrades gracefully
+	// (recall -> keyword, capture off) and logs its own status, so no fatal
+	// preflight in either path.
+	memSvc := hostService{name: "memory", addr: env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435")}
+	if spec := cfg.Plugin("memory"); spec.Impl == config.BuiltinImpl {
+		memSvc.mux = memoryMux()
+	} else {
+		h, lerr := sup.launch("memory", "memory", spec, selfPath)
+		if lerr != nil {
+			log.Fatalf("serve: launch memory plugin: %v", lerr)
+		}
+		memSvc.mux = memoryProxyMux(h)
+	}
+
+	all := []hostService{gwsSvc, memSvc}
 	// Overlay services (e.g. a warehouse proxy) self-register via init() when present.
 	for _, f := range extraServiceFactories {
 		all = append(all, f())
@@ -84,6 +140,17 @@ func runServe(enabled []string) {
 	if len(failures) > 0 {
 		log.Fatalf("serve: host service preflight FAILED — not starting:\n%s\nFix the above, then re-run `make serve`.", strings.Join(failures, "\n"))
 	}
+
+	// Graceful shutdown: kill every managed plugin subprocess on SIGINT/SIGTERM so
+	// nothing is orphaned (no-op when everything is built-in/in-process).
+	go func() {
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+		<-ch
+		log.Print("serve: shutting down; cleaning up plugin subprocesses")
+		sup.shutdown()
+		os.Exit(0)
+	}()
 
 	started := 0
 	for _, s := range all {

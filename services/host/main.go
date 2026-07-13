@@ -5,13 +5,20 @@
 //
 // Subcommands (one per host service):
 //
-//	gws-token    Google Workspace bearer svc (:11441, HTTP)
-//	memory       self-learning memory store  (:11435, JSON-RPC)
-//	slack        Slack read/search MCP       (stdio; run by the sbx gateway)
-//	serve        run the long-running HTTP services together (gws-token, memory)
+//	gws-token      Google Workspace bearer svc (:11441, HTTP)
+//	memory         self-learning memory store  (:11435, JSON-RPC)
+//	mcp <name>     stdio MCP bridge            (run by the sbx gateway)
+//	slack          alias for `mcp slack`       (stdio; run by the sbx gateway)
+//	plugin <kind>  built-in go-plugin server   (self-exec, launched by `serve`)
+//	serve          run the long-running HTTP services together (gws-token, memory)
 //
-// The MCP server (slack) is stdio and spawned by the sbx gateway via `sbx mcp
-// add` (see `make mcp-register`), not by `serve`.
+// The MCP servers are stdio and spawned by the sbx gateway via `sbx mcp add`
+// (see `make mcp-register`), not by `serve`; the gateway now runs `mcp <name>`
+// (the generic bridge), of which `slack` is a back-compatible alias.
+//
+// `plugin <kind>` is the self-exec entry `serve` launches when config selects a
+// non-builtin implementation for a capability slot; it is not meant to be run
+// by hand (go-plugin refuses without the handshake cookie).
 //
 // Company-specific integrations (a data-warehouse exec proxy, an HR-directory MCP)
 // live in a private overlay: when their source files are present in the build they
@@ -48,7 +55,17 @@ func main() {
 	case "gws-token":
 		runGwsToken()
 	case "slack":
-		runSlack()
+		// Back-compat alias: the Slack MCP is now served through the generic
+		// stdio bridge (behaviourally identical to the old runSlack()).
+		runMcpBridge("slack")
+	case "mcp":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "pi-stack-host mcp: missing <name>")
+			os.Exit(2)
+		}
+		runMcpBridge(os.Args[2])
+	case "plugin":
+		runPlugin(os.Args[2:])
 	case "memory":
 		runMemory()
 	case "serve":
@@ -66,16 +83,43 @@ func main() {
 	}
 }
 
+// runPlugin is the self-exec entry `serve` launches for a non-builtin capability
+// slot: it serves the selected built-in implementation as a go-plugin over the
+// shared handshake. kind is memory|broker|mcp (mcp also needs a <name>).
+func runPlugin(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "pi-stack-host plugin: missing <kind> (memory|broker|mcp)")
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "memory":
+		servePluginMemory()
+	case "broker":
+		servePluginBroker("broker")
+	case "mcp":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "pi-stack-host plugin mcp: missing <name>")
+			os.Exit(2)
+		}
+		servePluginMcp(args[1])
+	default:
+		fmt.Fprintf(os.Stderr, "pi-stack-host plugin: unknown kind %q (memory|broker|mcp)\n", args[0])
+		os.Exit(2)
+	}
+}
+
 func usage() {
 	fmt.Fprint(os.Stderr, `pi-stack-host — host-side services for pi-stack
 
 usage: pi-stack-host <subcommand>
 
 subcommands:
-  gws-token    Google Workspace short-lived bearer service (:11441)
-  memory       self-learning memory store, JSON-RPC (:11435)
-  slack        Slack read/search MCP server (stdio; run by the sbx gateway)
-  serve        run the long-running HTTP services (gws-token, memory)
+  gws-token      Google Workspace short-lived bearer service (:11441)
+  memory         self-learning memory store, JSON-RPC (:11435)
+  mcp <name>     stdio MCP bridge (run by the sbx gateway); slack is an alias
+  slack          alias for "mcp slack"
+  plugin <kind>  built-in go-plugin server, self-exec (memory|broker|mcp)
+  serve          run the long-running HTTP services (gws-token, memory)
 `)
 	for _, line := range extraUsage {
 		fmt.Fprintln(os.Stderr, line)
