@@ -72,6 +72,12 @@ MEMORY_EMBED_MODEL   ?= nomic-embed-text
 # config/local.mk (written by `make install`) so you never pass flags by hand.
 SERVICES ?= memory gws
 
+# out/ is gitignored, so it's absent on a fresh clone. Several targets (load,
+# launcher, serve, mcp-register, pack, …) write into it and would otherwise fail
+# with "invalid output path: stat out: no such file or directory". Create it once
+# at parse time so every target can rely on it.
+$(shell mkdir -p out)
+
 .PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve gws-token-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay launcher
 
 # Symlink the private overlay's host plugins ($(OVERLAY)/host/overlay_*.go) into
