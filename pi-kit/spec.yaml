@@ -101,6 +101,12 @@ network:
     # uses to reach host services on host.docker.internal.
     - host.docker.internal:11435
     - localhost:11435
+    # Host knowledge service (:11436). Same pattern as memory above: the recall
+    # extension calls it over JSON-RPC; the host store indexes a git-mounted OKF
+    # bundle (we ship the pointer to the bundle, not its content) and answers
+    # lookups. Host-internal, bypasses the proxy MITM; skipped if not running.
+    - host.docker.internal:11436
+    - localhost:11436
     # Optional overlay host service on :11442 (e.g. a host-side CLI exec-proxy a
     # private overlay wires up). Harmless when nothing is listening; an in-sandbox
     # wrapper forwards argv to it so credentials/SSO stay on the host.
