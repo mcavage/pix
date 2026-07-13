@@ -178,3 +178,62 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "v$V" -m "pi-stack v$V"
           git push origin "v$V"
+
+  # Cross-compile the two HOST binaries (pi-stack launcher + pi-stack-host) for
+  # darwin/linux × amd64/arm64 and attach them, plus a SHA256SUMS, to the v<VER>
+  # GitHub Release. This is the repo-less install path: `install.sh` fetches these
+  # assets so a consumer never clones. Pure Go toolchain — no Docker, no DHI base.
+  # Runs after `bump` so the `v<VER>` tag already exists and the release hangs off
+  # the commit carrying the stamped spec.yaml (same commit the kit pin resolves to).
+  release-binaries:
+    name: build + upload release binaries
+    needs: [version, bump]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release + upload assets
+    steps:
+      # Check out the tag so the tree matches the stamped commit the release points at.
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.version.outputs.version }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/host/go.mod
+          cache-dependency-path: services/host/go.sum
+
+      # -X main.version stamps the launcher (its `var version`); the host binary has
+      # no such symbol, so the linker silently ignores the flag there — harmless, and
+      # keeps one build recipe for both. Output names match install.sh's URL pattern:
+      # pi-stack-<os>-<arch> and pi-stack-host-<os>-<arch>.
+      - name: Cross-compile both binaries
+        working-directory: services/host
+        env:
+          V: ${{ needs.version.outputs.version }}
+        run: |
+          set -eu
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            os="${target%/*}"; arch="${target#*/}"
+            echo "building $os/$arch"
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
+              go build -ldflags "-X main.version=$V" \
+              -o "$GITHUB_WORKSPACE/dist/pi-stack-$os-$arch" ./cmd/pi-stack
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
+              go build -ldflags "-X main.version=$V" \
+              -o "$GITHUB_WORKSPACE/dist/pi-stack-host-$os-$arch" ./
+          done
+
+      - name: Generate SHA256SUMS
+        working-directory: dist
+        run: sha256sum pi-stack-* > SHA256SUMS && cat SHA256SUMS
+
+      - name: Upload assets to the v<version> release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: pi-stack v${{ needs.version.outputs.version }}
+          files: |
+            dist/pi-stack-*
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true
