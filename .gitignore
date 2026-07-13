@@ -92,3 +92,4 @@ services/host/host
 # Private open-core marker list (codenames/account ids) — see the .example
 config/open-core-markers.txt
 .scratch/
+.pi-agent/
