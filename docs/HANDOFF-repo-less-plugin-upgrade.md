@@ -19,8 +19,10 @@ macOS host** (Docker + `sbx` + your accounts), which the sandbox can't touch.
 - **Launcher** `pi-stack` (`services/host/cmd/pi-stack`): verb tree
   (run/serve/doctor/setup/config/version + stubs), version-coupled `sbx run`
   (`#ref=v<version>`), XDG `~/.config/pi-stack/config.toml`.
-- **Zero-friction broker bearer**: minted host-side, kept off argv, enforced on
-  gws; degrades gracefully. (Forwarding into the VM = host-verify item #2 below.)
+- **Google Workspace via `gog`**: replaced the old `gws` CLI + host token service
+  (`gws-token` :11441) with the read-only `gog` host MCP server the sbx gateway
+  spawns (the slack pattern). Creds resolve from `config/op-refs.env` at spawn;
+  nothing runs as a standalone Workspace service anymore. Setup: `docs/gog-setup.md`.
 - **OKF**: reader + built-in `knowledge` service (:11436, sqlite+FTS5+embeddings),
   `knowledge` capability (default `none`), consume extension
   (`extensions/knowledge-recall.ts`, cited + budgeted), gated `enrich` skill/agent.
@@ -52,22 +54,18 @@ sbx run pi-stack --name reftest --kit "git+https://github.com/mcavage/pi-stack.g
 sbx rm -f reftest
 ```
 
-### 3. HOST-VERIFY #2 — broker bearer forwarding into the VM
-kit-spec v1 has **no** dynamic host-env→VM-env passthrough (verified: `variables`
-is static, `proxyManaged`/`credentials.sources` are auth-header only). The
-launcher sets `GWS_TOKEN_AUTH` in the `sbx` process env; confirm it reaches the VM:
+### 3. HOST-VERIFY #2 — register + smoke-test the `gog` Workspace MCP server
+Google Workspace no longer runs as a host service (the old `gws` CLI + `gws-token`
+:11441 are gone) — it's the read-only `gog` MCP server the sbx gateway spawns.
+Register it and confirm the gateway actually gets tools (a headless keyring/
+op-refs mismatch is the classic 0-tools trap; `pi-stack doctor` now probes the
+exact gateway spawn and prints which account + op-refs it verifies). Full setup:
+`docs/gog-setup.md`.
 ```bash
-pi-stack run --name bearertest .
-# inside the VM:  echo "${GWS_TOKEN_AUTH:-EMPTY}"
+make mcp-register        # registers gog (needs GOG_ACCOUNT + config/op-refs.env)
+sbx mcp ls               # gog listed
+pi-stack doctor          # gog check: account + op-refs it's verifying, headless spawn OK
 ```
-If EMPTY, apply the documented fix (leading option, keeps value off argv shells
-but note argv is process-visible — prefer the secret path):
-```bash
-# Option A: sbx secret (preferred) — set a per-run secret the kit reads.
-# Option B: launcher-side `sbx run --env GWS_TOKEN_AUTH` (name only).
-```
-Until then gws still works (falls back to unauthenticated with a stderr warning);
-the bearer is defense-in-depth, so nothing is broken, just not yet enforced E2E.
 
 ### 4. Install the launcher + host binary
 After a release exists:
@@ -87,8 +85,8 @@ launchctl load -w ~/Library/LaunchAgents/com.pi-stack.serve.plist
 
 ### 6. Wire your accounts
 ```bash
-pi-stack setup      # seeds ~/.config/pi-stack/config.toml, prompts for missing secrets/ollama/gws/mcp
-pi-stack doctor     # confirm: keys, ollama+models, memory :11435, gws :11441, mcp
+pi-stack setup      # seeds ~/.config/pi-stack/config.toml, prompts for missing secrets/ollama/gog/mcp
+pi-stack doctor     # confirm: keys, ollama+models, memory :11435, gog MCP (see docs/gog-setup.md), mcp
 ```
 
 ### 7. (Optional) Private overlay for work
@@ -99,5 +97,6 @@ bundle is a git repo you mount and point `knowledge_bundles` at.
 
 ## The two things I could not verify (both flagged above)
 1. sbx `#ref` kit pin on your exact sbx build (step 2).
-2. Broker bearer host→VM forwarding mechanism (step 3) — code is correct + off
-   argv; the exact sbx forwarding is the one host decision left.
+2. The `gog` Workspace MCP server registered + returning tools on YOUR gateway
+   (step 3) — the headless keyring/op-refs path is host-specific; `pi-stack doctor`
+   probes it and `docs/gog-setup.md` has the fix for the 0-tools trap.

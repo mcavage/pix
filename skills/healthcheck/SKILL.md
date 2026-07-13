@@ -57,16 +57,25 @@ one-line evidence. A registered backend can still be unauthed or down.
 
 ### A4. CLIs
 ```bash
-for c in gh gws snow; do
+for c in gh snow; do
   command -v "$c" >/dev/null 2>&1 && echo "present: $c" || echo "absent: $c"
 done
 ```
 For each present CLI, run a cheap live probe and read the output: `gh --version`
 (`gh auth status` saying "not logged in" is expected — the proxy injects creds at
-the network layer, NOT a fail); `gws drive files list --params '{"pageSize":1}'`;
-`snow connection test` (expect `Status OK`; wrapper CLIs often reject
-`--help`/`--version`, so probe a real read-only subcommand). `gh` is always baked;
-`gws`/`snow` are optional — absent is optional, present-but-erroring IS a failure.
+the network layer, NOT a fail); `snow connection test` (expect `Status OK`;
+wrapper CLIs often reject `--help`/`--version`, so probe a real read-only
+subcommand). `gh` is always baked; `snow` is optional — absent is optional,
+present-but-erroring IS a failure.
+
+Google Workspace is NOT a CLI anymore — it's the read-only `gog` MCP server the
+sbx gateway spawns (there is no Workspace binary to probe). Confirm it two ways:
+`sbx mcp ls` lists `gog` as registered (skip if `sbx` is absent — inside the
+sandbox it is), and the gateway exposes its tools in A3 (group the gateway tool
+list for a `gog_*`/`gmail_*` prefix and call one cheap read-only tool, e.g. a
+`gmail_search`/`drive_search` with a tiny limit). Registered-but-0-tools IS a
+failure — it usually means the headless keyring/op-refs setup is off (run
+`pi-stack doctor` on the host, which probes the exact gateway spawn).
 
 ### A5. Agent roster
 ```bash

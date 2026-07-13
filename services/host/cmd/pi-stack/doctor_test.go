@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,10 +15,13 @@ import (
 // output, env vars, and open ports, so runDoctor can be driven with no real
 // sbx/ollama/gog.
 type fakeEnv struct {
-	present map[string]bool   // binaries on PATH
-	output  map[string]string // "cmd arg arg" -> combined output
-	envVars map[string]string // environment variables
-	ports   map[int]bool      // open TCP ports
+	present  map[string]bool   // binaries on PATH
+	output   map[string]string // "cmd arg arg" -> combined output
+	envVars  map[string]string // environment variables
+	ports    map[int]bool      // open TCP ports
+	statFile map[string]bool   // files that "exist"
+	files    map[string]string // file contents (for readFile)
+	home     string            // fake home dir
 }
 
 func (f fakeEnv) env() shellEnv {
@@ -34,12 +39,26 @@ func (f fakeEnv) env() shellEnv {
 			}
 			return "", fmt.Errorf("no fake output for %q", key)
 		},
-		getenv: func(name string) string { return f.envVars[name] },
-		dial:   func(port int) bool { return f.ports[port] },
+		getenv:   func(name string) string { return f.envVars[name] },
+		dial:     func(port int) bool { return f.ports[port] },
+		statFile: func(path string) bool { return f.statFile[path] },
+		readFile: func(path string) (string, error) {
+			if s, ok := f.files[path]; ok {
+				return s, nil
+			}
+			return "", fmt.Errorf("no fake file %q", path)
+		},
+		homeDir: func() string { return f.home },
 	}
 }
 
 const gogAcct = "you@example.com"
+
+// gogCfgFile / gogOpRefs are the fake $PI_STACK_CONFIG + resolved op-refs path
+// the gog fixtures use: setting PI_STACK_CONFIG makes resolveOpRefs return
+// gogOpRefs (its dir + op-refs.env), which gogHeadlessOK then probes with.
+const gogCfgFile = "/fake/config/config.toml"
+const gogOpRefs = "/fake/config/op-refs.env"
 
 // gogGreen adds the fixtures that make the whole gog group green: gog + op on
 // PATH, GOG_ACCOUNT set, interactive auth passing, the headless op-run probe
@@ -50,9 +69,14 @@ func gogGreen(f fakeEnv) fakeEnv {
 	if f.envVars == nil {
 		f.envVars = map[string]string{}
 	}
+	if f.statFile == nil {
+		f.statFile = map[string]bool{}
+	}
 	f.envVars["GOG_ACCOUNT"] = gogAcct
+	f.envVars["PI_STACK_CONFIG"] = gogCfgFile // makes resolveOpRefs -> gogOpRefs
+	f.statFile[gogOpRefs] = true
 	f.output["gog --account "+gogAcct+" auth doctor --check"] = "ok"
-	f.output["op run --env-file="+opRefsEnvFile()+" -- gog --account "+gogAcct+" mcp --list-tools"] =
+	f.output["op run --env-file="+gogOpRefs+" -- gog --account "+gogAcct+" mcp --list-tools"] =
 		"gmail_search\ncalendar_events\ndocs_get\n"
 	return f
 }
@@ -169,10 +193,11 @@ func TestDoctor_GogHeadlessTrap(t *testing.T) {
 			"sbx mcp ls":    "gog\n",
 			"gog --account " + gogAcct + " auth doctor --check": "ok",
 			// headless probe returns an empty tool list -> the trap.
-			"op run --env-file=" + opRefsEnvFile() + " -- gog --account " + gogAcct + " mcp --list-tools": "",
+			"op run --env-file=" + gogOpRefs + " -- gog --account " + gogAcct + " mcp --list-tools": "",
 		},
-		envVars: map[string]string{"GOG_ACCOUNT": gogAcct},
-		ports:   map[int]bool{11435: true},
+		envVars:  map[string]string{"GOG_ACCOUNT": gogAcct, "PI_STACK_CONFIG": gogCfgFile},
+		statFile: map[string]bool{gogOpRefs: true},
+		ports:    map[int]bool{11435: true},
 	}
 	r := runDoctor(defaultCfg(), f.env())
 	var gog group
@@ -218,8 +243,84 @@ func TestDoctor_GogAccountUnset(t *testing.T) {
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, nil
 	r.render(&buf)
-	if !strings.Contains(buf.String(), "cannot verify (GOG_ACCOUNT unset in env/config)") {
+	if !strings.Contains(buf.String(), "cannot verify (GOG_ACCOUNT unset in env/config/local.mk)") {
 		t.Errorf("expected a 'cannot verify' account detail, got:\n%s", buf.String())
+	}
+}
+
+// TestResolveOpRefs: the op-refs path resolves to an ABSOLUTE, canonical
+// location (here from $PI_STACK_CONFIG's dir) so doctor probes the same file the
+// gateway registration uses, never a cwd-relative one.
+func TestResolveOpRefs(t *testing.T) {
+	f := fakeEnv{
+		envVars:  map[string]string{"PI_STACK_CONFIG": "/etc/pi-stack/config.toml"},
+		statFile: map[string]bool{"/etc/pi-stack/op-refs.env": true},
+	}
+	got := resolveOpRefs(f.env())
+	if got != "/etc/pi-stack/op-refs.env" {
+		t.Errorf("expected the PI_STACK_CONFIG-dir op-refs, got %q", got)
+	}
+	if !filepath.IsAbs(got) {
+		t.Errorf("resolved op-refs must be absolute, got %q", got)
+	}
+	// Home-dir fallback when nothing else exists.
+	f2 := fakeEnv{
+		envVars:  map[string]string{},
+		statFile: map[string]bool{"/home/me/.config/pi-stack/op-refs.env": true},
+		home:     "/home/me",
+	}
+	if got := resolveOpRefs(f2.env()); got != "/home/me/.config/pi-stack/op-refs.env" {
+		t.Errorf("expected the home-dir op-refs fallback, got %q", got)
+	}
+}
+
+// TestDoctor_GogTransparency: the gog group PRINTS which account + op-refs path
+// it is verifying, plus the one-line 'must match make mcp-register' note, so a
+// green result can't hide a mismatch with the gateway registration.
+func TestDoctor_GogTransparency(t *testing.T) {
+	f := gogGreen(fakeEnv{
+		present: map[string]bool{"sbx": true},
+		output: map[string]string{
+			"sbx secret ls": "anthropic openai google github",
+			"sbx mcp ls":    "gog\n",
+		},
+		ports: map[int]bool{11435: true},
+	})
+	r := runDoctor(defaultCfg(), f.env())
+	var buf bytes.Buffer
+	r.services, r.mcp = defaultCfg().Services, []string{"gog"}
+	r.render(&buf)
+	out := buf.String()
+	if !strings.Contains(out, "verifying") || !strings.Contains(out, gogAcct) || !strings.Contains(out, gogOpRefs) {
+		t.Errorf("expected a transparency line naming account+op-refs, got:\n%s", out)
+	}
+	if !strings.Contains(out, "must match your `make mcp-register`") {
+		t.Errorf("expected the must-match note, got:\n%s", out)
+	}
+}
+
+// TestDoctor_GogAccountFromLocalMk: with config.toml gog_account AND $GOG_ACCOUNT
+// both empty, doctor greps GOG_ACCOUNT out of a located config/local.mk (exactly
+// what `make mcp-register` uses), so it no longer false-reports "cannot verify".
+func TestDoctor_GogAccountFromLocalMk(t *testing.T) {
+	f := gogGreen(fakeEnv{
+		present: map[string]bool{"sbx": true},
+		output: map[string]string{
+			"sbx secret ls": "anthropic openai google github",
+			"sbx mcp ls":    "gog\n",
+		},
+		ports: map[int]bool{11435: true},
+	})
+	delete(f.envVars, "GOG_ACCOUNT") // force the local.mk path
+	wd, _ := os.Getwd()
+	mk := filepath.Join(wd, "config", "local.mk")
+	f.statFile[filepath.Join(wd, "Makefile")] = true
+	f.statFile[mk] = true
+	f.files = map[string]string{mk: "# comment\nGOG_ACCOUNT ?= " + gogAcct + "\n"}
+	r := runDoctor(defaultCfg(), f.env())
+	joined := strings.Join(r.todos(), "\n")
+	if strings.Contains(joined, "gog_account") || strings.Contains(joined, "GOG_ACCOUNT") {
+		t.Errorf("account from config/local.mk should not TODO, got %v", r.todos())
 	}
 }
 

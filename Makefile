@@ -56,10 +56,10 @@ OP_BIN  := $(shell command -v op 2>/dev/null)
 
 # Absolute path to the host-side `gog` (Google Workspace) binary. Same rationale
 # as OP_BIN: the sbx gateway daemon's PATH may not include it, so we resolve it
-# here and register the server with the absolute path. If `gog` isn't on the make
-# PATH we fall back to the literal `gog` (TODO: user must ensure the gateway
-# daemon can find it, e.g. install gog to a system PATH dir).
-GOG_BIN := $(or $(shell command -v gog 2>/dev/null),gog)
+# here and register the server with the absolute path. NO literal fallback: if
+# `gog` isn't on the make PATH this stays empty and the mcp-register guard trips
+# (registering a bare `gog` the gateway daemon can't exec is a silent footgun).
+GOG_BIN := $(shell command -v gog 2>/dev/null)
 
 # The Google account the host-side `gog` MCP server runs as. Sourced from
 # config/local.mk (never hardcoded here) and passed to `gog --account` when
@@ -205,6 +205,7 @@ mcp-register: link-overlay ## Register the local stdio MCP servers you use (the 
 	@[ -n "$(OP_BIN)" ] || { echo "ERROR: 1Password CLI 'op' not found on PATH."; exit 1; }
 	@[ -f "$(OP_REFS)" ] || { echo "ERROR: $(OP_REFS) missing. Create it:  cp config/op-refs.env.example config/op-refs.env  then fill in your refs."; exit 1; }
 	@[ -z "$(filter gog,$(REGISTER))" ] || [ -n "$(GOG_ACCOUNT)" ] || { echo "ERROR: gog is in MCP but GOG_ACCOUNT is unset. Set GOG_ACCOUNT in config/local.mk."; exit 1; }
+	@[ -z "$(filter gog,$(REGISTER))" ] || [ -n "$(GOG_BIN)" ] || { echo 'ERROR: gog not found on PATH — brew install gog'; exit 1; }
 	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .)
 	@BIN="$(CURDIR)/out/pi-stack-host"; \
 	for s in $(REGISTER); do \

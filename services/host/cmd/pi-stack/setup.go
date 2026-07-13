@@ -105,7 +105,7 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO,
 		step(false, "GOG_ACCOUNT set",
 			"set GOG_ACCOUNT=<you@example.com> (env or config/op-refs.env) so gog knows which account to serve")
 	}
-	headOK := gogErr == nil && acct != "" && gogHeadlessOK(env, acct)
+	headOK := gogErr == nil && acct != "" && gogHeadlessOK(env, acct, resolveOpRefs(env))
 	acctArg := acct
 	if acctArg == "" {
 		acctArg = "<you@example.com>"

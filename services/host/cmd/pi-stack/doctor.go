@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -30,6 +31,9 @@ type shellEnv struct {
 	run      func(name string, args ...string) (string, error)
 	getenv   func(name string) string
 	dial     func(port int) bool
+	statFile func(path string) bool            // does a regular file exist at path?
+	readFile func(path string) (string, error) // read a file's contents
+	homeDir  func() string                     // the user's home directory ($HOME)
 }
 
 // defaultShellEnv returns a shellEnv backed by the real OS.
@@ -48,6 +52,18 @@ func defaultShellEnv() shellEnv {
 			}
 			_ = conn.Close()
 			return true
+		},
+		statFile: func(path string) bool {
+			info, err := os.Stat(path)
+			return err == nil && !info.IsDir()
+		},
+		readFile: func(path string) (string, error) {
+			b, err := os.ReadFile(path)
+			return string(b), err
+		},
+		homeDir: func() string {
+			h, _ := os.UserHomeDir()
+			return h
 		},
 	}
 }
@@ -269,37 +285,114 @@ func mcpConfigured(cfg *config.Config, name string) bool {
 	return false
 }
 
-// gogAccount resolves the Google Workspace account doctor/setup probe against.
-// It prefers config.toml's `gog_account` (the Go-side source of truth) and falls
-// back to the $GOG_ACCOUNT env var — NEVER a hardcoded address. Empty means "not
-// configured" and the caller emits a TODO to set it.
+// gogAccount resolves the Google Workspace account doctor/setup probe against,
+// in the SAME precedence order that ends at what `make mcp-register` uses, so a
+// green doctor can't mean "probed a different account than the gateway got":
+//  1. config.toml's `gog_account` (the Go-side source of truth, cfg.GogAccount),
+//  2. the $GOG_ACCOUNT env var,
+//  3. GOG_ACCOUNT parsed out of a located config/local.mk — exactly the value
+//     `make mcp-register` registers with the gateway.
 //
-// IMPORTANT: `make mcp-register` takes GOG_ACCOUNT from config/local.mk, which
-// this Go binary cannot read. The config.toml `gog_account` field here MUST be
-// kept in sync with that value, or doctor probes a different account than the
-// gateway actually registered and can report green while the gateway gets 0 tools.
+// NEVER a hardcoded address. Empty means "not configured" and the caller emits a
+// "cannot verify" TODO rather than reporting green.
 func gogAccount(cfg *config.Config, env shellEnv) string {
 	if cfg != nil {
 		if a := strings.TrimSpace(cfg.GogAccount); a != "" {
 			return a
 		}
 	}
-	if env.getenv == nil {
-		return ""
+	if env.getenv != nil {
+		if a := strings.TrimSpace(env.getenv("GOG_ACCOUNT")); a != "" {
+			return a
+		}
 	}
-	return strings.TrimSpace(env.getenv("GOG_ACCOUNT"))
+	return gogAccountFromLocalMk(env)
 }
 
-// opRefsEnvFile resolves config/op-refs.env to an ABSOLUTE path so doctor's
-// headless probe matches the gateway registration exactly. `make mcp-register`
-// registers the gog spawn with an absolute --env-file; a relative one here would
-// resolve against doctor's cwd and could probe a different file than the gateway
-// actually uses. Falls back to the relative path if Abs fails.
-func opRefsEnvFile() string {
-	if abs, err := filepath.Abs("config/op-refs.env"); err == nil {
-		return abs
+// gogAccountRe matches a `GOG_ACCOUNT = <val>` / `:= ` / `?= ` assignment in a
+// Makefile-style config/local.mk (the same var `make mcp-register` reads).
+var gogAccountRe = regexp.MustCompile(`(?m)^\s*GOG_ACCOUNT\s*[:?]?=\s*(\S+)`)
+
+// gogAccountFromLocalMk locates a repo checkout's config/local.mk and greps
+// GOG_ACCOUNT out of it, so doctor matches the make-side value even when nothing
+// is set in config.toml or the env. Returns "" when no local.mk is found or the
+// var is unset — never crashes.
+func gogAccountFromLocalMk(env shellEnv) string {
+	if env.readFile == nil {
+		return ""
 	}
-	return "config/op-refs.env"
+	path := findUpward(env, filepath.Join("config", "local.mk"))
+	if path == "" {
+		return ""
+	}
+	data, err := env.readFile(path)
+	if err != nil {
+		return ""
+	}
+	if m := gogAccountRe.FindStringSubmatch(data); len(m) >= 2 {
+		return strings.TrimSpace(m[1])
+	}
+	return ""
+}
+
+// findUpward walks up from the current working directory looking for a directory
+// that contains BOTH a Makefile and the given repo-relative file, returning the
+// absolute path to that file (or "" if none is found before the filesystem root).
+// This is how doctor locates a repo checkout's config files (op-refs.env,
+// local.mk) regardless of where it was invoked from within the tree.
+func findUpward(env shellEnv, rel string) string {
+	if env.statFile == nil {
+		return ""
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		if env.statFile(filepath.Join(dir, "Makefile")) && env.statFile(filepath.Join(dir, rel)) {
+			return filepath.Join(dir, rel)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// resolveOpRefs resolves config/op-refs.env to an ABSOLUTE, canonical location
+// so doctor's headless probe matches the gateway registration exactly (`make
+// mcp-register` registers the gog spawn with an absolute --env-file; a relative
+// one here would resolve against doctor's cwd and could probe a different file
+// than the gateway actually uses). It searches, in order, and returns the FIRST
+// that exists:
+//  1. $PI_STACK_CONFIG's directory + op-refs.env,
+//  2. a repo checkout's config/op-refs.env (walk up for Makefile + that file),
+//  3. ~/.config/pi-stack/op-refs.env.
+//
+// Returns "" when none exists, so the caller reports "cannot verify" rather than
+// probing (and blessing) a file the gateway never uses.
+func resolveOpRefs(env shellEnv) string {
+	if env.getenv != nil {
+		if p := env.getenv("PI_STACK_CONFIG"); p != "" {
+			cand := filepath.Join(filepath.Dir(p), "op-refs.env")
+			if env.statFile != nil && env.statFile(cand) {
+				return cand
+			}
+		}
+	}
+	if p := findUpward(env, filepath.Join("config", "op-refs.env")); p != "" {
+		return p
+	}
+	if env.homeDir != nil && env.statFile != nil {
+		if home := env.homeDir(); home != "" {
+			cand := filepath.Join(home, ".config", "pi-stack", "op-refs.env")
+			if env.statFile(cand) {
+				return cand
+			}
+		}
+	}
+	return ""
 }
 
 // gogHeadlessOK runs the gateway-EQUIVALENT probe — list gog's tools the exact
@@ -309,14 +402,14 @@ func opRefsEnvFile() string {
 // the real path; `gog auth doctor` in a logged-in shell passes and lies. It
 // degrades cleanly (returns false, never crashes) when gog/op/account are
 // absent. shellEnv keeps it unit-testable.
-func gogHeadlessOK(env shellEnv, acct string) bool {
-	if acct == "" {
+func gogHeadlessOK(env shellEnv, acct, opRefs string) bool {
+	if acct == "" || opRefs == "" {
 		return false
 	}
 	if _, err := env.lookPath("op"); err != nil {
 		return false
 	}
-	out, err := env.run("op", "run", "--env-file="+opRefsEnvFile(), "--",
+	out, err := env.run("op", "run", "--env-file="+opRefs, "--",
 		"gog", "--account", acct, "mcp", "--list-tools")
 	return err == nil && strings.TrimSpace(out) != ""
 }
@@ -338,12 +431,42 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 	g.checks = append(g.checks, check{label: "gog CLI", state: stateOK, detail: "installed"})
 
 	acct := gogAccount(cfg, env)
+	opRefs := resolveOpRefs(env)
+
+	// TRANSPARENCY: name EXACTLY what this probe is verifying — which account and
+	// which op-refs file — so a green result can never silently mean "checked a
+	// different account/path than the sbx gateway actually registered".
+	acctShown, refsShown := acct, opRefs
+	if acctShown == "" {
+		acctShown = "<unknown>"
+	}
+	if refsShown == "" {
+		refsShown = "<not found>"
+	}
+	g.checks = append(g.checks,
+		check{label: "verifying", state: stateInfo, detail: "gog for " + acctShown + " via " + refsShown},
+		check{label: "note", state: stateInfo,
+			detail: "must match your `make mcp-register` (config/local.mk GOG_ACCOUNT + config/op-refs.env)"})
+
 	if acct == "" {
 		// 2'. No account configured — can't probe auth or the headless path, so we
 		// must NOT report green: say we cannot verify and name the two sources.
 		g.checks = append(g.checks, check{label: "account", state: stateTODO,
-			detail: "cannot verify (GOG_ACCOUNT unset in env/config)",
-			todo:   "set gog_account in " + config.Path() + " (or GOG_ACCOUNT in the env) so doctor probes the right account"})
+			detail: "cannot verify (GOG_ACCOUNT unset in env/config/local.mk)",
+			todo:   "set gog_account in " + config.Path() + " (or GOG_ACCOUNT in config/local.mk) so doctor probes the right account"})
+		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
+		g.checks = append(g.checks, gogAttachCheck(cfg))
+		return g
+	}
+
+	if opRefs == "" {
+		// Can't run the gateway-equivalent headless probe without op-refs.env — so
+		// we must NOT report green: say we cannot verify and name the fix.
+		g.checks = append(g.checks,
+			check{label: "account", state: stateOK, detail: acct + " set"},
+			check{label: "op-refs", state: stateTODO,
+				detail: "cannot verify (config/op-refs.env not found)",
+				todo:   "create config/op-refs.env (cp config/op-refs.env.example config/op-refs.env) so doctor can probe the gateway path"})
 		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
 		return g
@@ -352,7 +475,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 	// 2. account authorized (interactive). 3. THE GOTCHA — headless spawn.
 	_, interErr := env.run("gog", "--account", acct, "auth", "doctor", "--check")
 	_, opErr := env.lookPath("op")
-	headOK := gogHeadlessOK(env, acct)
+	headOK := gogHeadlessOK(env, acct, opRefs)
 	switch {
 	case interErr != nil:
 		// Auth itself isn't set up — don't double-report the keyring below.
