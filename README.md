@@ -46,7 +46,7 @@ is worth less. (Ollama also powers the memory loop below.)
 them to Anthropic and OpenAI directly; the sandbox only ever sees the responses.
 Data tools work the same way through a small host-side Go binary (`pi-stack-host`):
 it mints short-lived tokens and runs the real CLIs on the host, and the sandbox
-reaches it over `host.docker.internal`. A `gh`, `gws`, or `snow` call leaves the VM
+reaches it over `host.docker.internal`. A `gh`, `gog`, or `snow` call leaves the VM
 with no credential in it. The MCP servers go one step further: their secrets live
 in 1Password, and the registered command is `op run --env-file=config/op-refs.env`,
 so `op` resolves the `op://` references the moment the gateway spawns the server.
@@ -89,8 +89,9 @@ Each data feature adds one dependency, and they're all optional:
   the [1Password CLI](https://developer.1password.com/docs/cli/) (`op`) signed in,
   and a `config/op-refs.env` of `op://` references. `op run` pulls the real secrets
   at spawn, so nothing lands on disk.
-- **`gh` and `gws`** bring their own auth (`gh auth`, `gws auth login`); no
-  1Password involved.
+- **`gh`** brings its own auth (`gh auth`); no 1Password involved. Google
+  Workspace is the host-side `gog` MCP server, run by the sbx gateway (see
+  `make mcp-register`).
 
 Building the image from source (not the `sbx run` path) needs a DHI-entitled Docker
 account, because the base is a Docker Hardened Image.
@@ -150,7 +151,7 @@ harness skills (the exact set is the allowlist in `.dockerignore`) plus 17 role
 agents (`architect`, `security-lead`, `sre-lead`, `qa-lead`, and so on) you
 delegate to for the lens a change actually needs, not just a generic reviewer.
 
-Plus `gh`, `gws`, a
+Plus `gh`, `gog`, a
 browser, plan mode, MCP, and web search. The defaults are mine: dracula, emacs
 keys, thinking collapsed, a status line, and a watchdog that cancels a stuck call
 instead of spinning on "working..." forever. They're defaults, so swap them.
@@ -168,9 +169,9 @@ brokered by the host-side service. One command starts the host services, another
 shows status:
 
 ```bash
-make serve         # host services: memory (:11435), gws-token (:11441)
+make serve         # host services: memory (:11435)
 make pull-models   # pull the Ollama models the memory loop needs (watcher + embed)
-make mcp-register  # register stdio MCP servers (slack) with the sbx gateway
+make mcp-register  # register stdio MCP servers (slack, gog) with the sbx gateway
 make doctor        # per tool: set up? service running? models pulled?
 ```
 
@@ -185,7 +186,7 @@ make run MCP="slack"   # == sbx run pi-stack --kit ./pi-kit --mcp slack .
 | tool | capability | one-time setup | reaches the VM via |
 | --- | --- | --- | --- |
 | **gh** | `github` | `gh auth token \| sbx secret set -g github` | sbx proxy injects the token |
-| **gws** | `gworkspace` | `gws auth login` on the host | host token service (`:11441`) |
+| **gog** | `gworkspace` | `gog auth` on the host, then `make mcp-register` | host `gog` MCP server via the sbx gateway (read-only) |
 | **slack** | `chat` | refs in `config/op-refs.env`, then `make mcp-register` | stdio MCP via the sbx gateway; `op run` pulls creds from 1Password |
 | **memory** | semantic recall | `make pull-models` (a local Ollama with a watcher model for capture and an embed model for recall; without them, recall is keyword-only and capture is skipped, loudly) | host service (`:11435`) |
 | gateway catalog (atlassian, notion, granola, linear) | `issues`, `docs`, ... | register with `sbx mcp add` | the sbx gateway; `make run MCP="<name>"` to eager-load |
