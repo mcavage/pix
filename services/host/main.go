@@ -7,10 +7,11 @@
 //
 //	gws-token      Google Workspace bearer svc (:11441, HTTP)
 //	memory         self-learning memory store  (:11435, JSON-RPC)
+//	knowledge      OKF knowledge retrieval idx (:11436, JSON-RPC)
 //	mcp <name>     stdio MCP bridge            (run by the sbx gateway)
 //	slack          alias for `mcp slack`       (stdio; run by the sbx gateway)
 //	plugin <kind>  built-in go-plugin server   (self-exec, launched by `serve`)
-//	serve          run the long-running HTTP services together (gws-token, memory)
+//	serve          run the long-running HTTP services together (gws-token, memory, knowledge)
 //
 // The MCP servers are stdio and spawned by the sbx gateway via `sbx mcp add`
 // (see `make mcp-register`), not by `serve`; the gateway now runs `mcp <name>`
@@ -85,15 +86,17 @@ func main() {
 
 // runPlugin is the self-exec entry `serve` launches for a non-builtin capability
 // slot: it serves the selected built-in implementation as a go-plugin over the
-// shared handshake. kind is memory|broker|mcp (mcp also needs a <name>).
+// shared handshake. kind is memory|knowledge|broker|mcp (mcp also needs a <name>).
 func runPlugin(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "pi-stack-host plugin: missing <kind> (memory|broker|mcp)")
+		fmt.Fprintln(os.Stderr, "pi-stack-host plugin: missing <kind> (memory|knowledge|broker|mcp)")
 		os.Exit(2)
 	}
 	switch args[0] {
 	case "memory":
 		servePluginMemory()
+	case "knowledge":
+		servePluginKnowledge()
 	case "broker":
 		servePluginBroker("broker")
 	case "mcp":
@@ -103,7 +106,7 @@ func runPlugin(args []string) {
 		}
 		servePluginMcp(args[1])
 	default:
-		fmt.Fprintf(os.Stderr, "pi-stack-host plugin: unknown kind %q (memory|broker|mcp)\n", args[0])
+		fmt.Fprintf(os.Stderr, "pi-stack-host plugin: unknown kind %q (memory|knowledge|broker|mcp)\n", args[0])
 		os.Exit(2)
 	}
 }
@@ -118,8 +121,8 @@ subcommands:
   memory         self-learning memory store, JSON-RPC (:11435)
   mcp <name>     stdio MCP bridge (run by the sbx gateway); slack is an alias
   slack          alias for "mcp slack"
-  plugin <kind>  built-in go-plugin server, self-exec (memory|broker|mcp)
-  serve          run the long-running HTTP services (gws-token, memory)
+  plugin <kind>  built-in go-plugin server, self-exec (memory|knowledge|broker|mcp)
+  serve          run the long-running HTTP services (gws-token, memory, knowledge)
 `)
 	for _, line := range extraUsage {
 		fmt.Fprintln(os.Stderr, line)

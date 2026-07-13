@@ -44,6 +44,11 @@ type Config struct {
 	MemoryWatcherModel string `toml:"memory_watcher_model"`
 	MemoryEmbedModel   string `toml:"memory_embed_model"`
 
+	// KnowledgeBundles are the git-mounted OKF bundle directory path(s) the
+	// knowledge service (:11436) indexes at startup. Empty (the default) means no
+	// bundles — the index is served empty and the service degrades cleanly.
+	KnowledgeBundles []string `toml:"knowledge_bundles"`
+
 	Kits struct {
 		Stack []string `toml:"stack"`
 	} `toml:"kits"`
@@ -155,6 +160,11 @@ mcp = []
 # Local Ollama models the memory service uses.
 memory_watcher_model = "gemma4"
 memory_embed_model = "nomic-embed-text"
+
+# OKF knowledge bundle directories the knowledge service (:11436) indexes.
+# Empty = no bundles (index served empty). The knowledge service is opt-in:
+# add "knowledge" to the services list above to run it.
+knowledge_bundles = []
 
 # Kits stacked onto the sandbox (overlay mixin kits, etc).
 [kits]

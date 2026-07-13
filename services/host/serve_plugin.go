@@ -355,6 +355,103 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 	return jsonrpcMux(methods)
 }
 
+// --- knowledge shims --------------------------------------------------------
+
+// knowledgeMethods is the JSON-RPC method table for the knowledge service,
+// shared by the in-process (knowledgeMux) and plugin (knowledgeProxyMux) paths
+// so both surfaces are byte-identical. It exposes query / reindex / health and
+// resolves the backing KnowledgeStore per call (a restart is transparent).
+func knowledgeMethods(store func() (plugin.KnowledgeStore, error)) map[string]func(jsonObj) (any, error) {
+	return map[string]func(jsonObj) (any, error){
+		"query": func(p jsonObj) (any, error) {
+			s, err := store()
+			if err != nil {
+				return nil, err
+			}
+			r, err := s.Query(plugin.QueryArgs{
+				Query: getStr(p, "query"), Bundle: getStr(p, "bundle"), Limit: clampInt(p["limit"], 0, 0, 1000),
+			})
+			if err != nil {
+				return nil, err
+			}
+			list := []jsonObj{}
+			for _, c := range r.Concepts {
+				list = append(list, jsonObj{
+					"id": c.ID, "type": c.Type, "title": c.Title, "description": c.Description,
+					"path": c.Path, "snippet": c.Snippet, "score": c.Score,
+					"citations": strSliceOrEmpty(c.Citations), "bundle": c.Bundle,
+				})
+			}
+			return jsonObj{"concepts": list}, nil
+		},
+		"reindex": func(p jsonObj) (any, error) {
+			s, err := store()
+			if err != nil {
+				return nil, err
+			}
+			r, err := s.Reindex(plugin.ReindexArgs{BundlePaths: strSliceParam(p, "bundle_paths")})
+			if err != nil {
+				return nil, err
+			}
+			return jsonObj{"indexed": r.Indexed, "bundles": strSliceOrEmpty(r.Bundles)}, nil
+		},
+		"health": func(jsonObj) (any, error) {
+			s, err := store()
+			if err != nil {
+				return nil, err
+			}
+			r, err := s.Health()
+			if err != nil {
+				return nil, err
+			}
+			return jsonObj{"ok": r.OK, "vector": r.Vector, "bundles": strSliceOrEmpty(r.Bundles), "concepts": r.Concepts}, nil
+		},
+	}
+}
+
+// knowledgeMux serves the knowledge JSON-RPC surface directly over the
+// in-process built-in store (the fast path — no subprocess), mirroring memoryMux()
+// for memory. The store is wrapped in the same adapter the plugin path dispenses.
+func knowledgeMux(store *knowledgeStore) http.Handler {
+	adapter := newKnowledgeStoreAdapter(store)
+	return jsonrpcMux(knowledgeMethods(func() (plugin.KnowledgeStore, error) { return adapter, nil }))
+}
+
+// knowledgeProxyMux serves the same surface but delegates to the dispensed
+// KnowledgeStore plugin client (mirrors memoryProxyMux). Shapes are identical to
+// the in-process path so the sandbox is unaffected by which impl backs :11436.
+func knowledgeProxyMux(h *pluginHolder) http.Handler {
+	return jsonrpcMux(knowledgeMethods(func() (plugin.KnowledgeStore, error) {
+		s, _ := h.get().(plugin.KnowledgeStore)
+		if s == nil {
+			return nil, errors.New("knowledge plugin unavailable")
+		}
+		return s, nil
+	}))
+}
+
+// strSliceOrEmpty normalizes a nil string slice to a non-nil empty one so the
+// JSON encodes as [] rather than null (matching the built-in output shape).
+func strSliceOrEmpty(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
+}
+
+// strSliceParam extracts a []string from a JSON-RPC params array of strings.
+func strSliceParam(p jsonObj, key string) []string {
+	var out []string
+	if arr, ok := p[key].([]any); ok {
+		for _, v := range arr {
+			if s, ok := v.(string); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
 // jsonrpcMux wraps a method table in the same JSON-RPC 2.0 envelope handling
 // memoryMux() uses (single + batch, parse-error, method-not-found).
 func jsonrpcMux(methods map[string]func(jsonObj) (any, error)) http.Handler {

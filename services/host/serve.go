@@ -73,7 +73,8 @@ func runServe(enabled []string) {
 	// so the public tree never hardcodes an overlay name.
 	alias := map[string]string{
 		"gws": "gws-token", "gws-token": "gws-token",
-		"memory": "memory",
+		"memory":    "memory",
+		"knowledge": "knowledge",
 	}
 	for k, v := range extraServiceAliases {
 		alias[k] = v
@@ -140,6 +141,38 @@ func runServe(enabled []string) {
 			memSvc.mux = memoryProxyMux(h)
 		}
 		all = append(all, memSvc)
+	}
+
+	// knowledge: the OKF retrieval index. Opt-in (NOT in DefaultServices) — it only
+	// runs when named in SERVICES/config, so a fresh install pays nothing for it.
+	// Like memory, the built-in store runs IN-PROCESS (fast path); only a
+	// non-builtin impl is spawned as a plugin. The configured bundles are indexed
+	// at startup and it degrades loudly (empty index / keyword-only) rather than
+	// failing, so no fatal preflight in either path.
+	if enabledSvc("knowledge") {
+		// The knowledge embedder reuses the memory embed model knob (MEMORY_EMBED_MODEL);
+		// wire it in for the case where knowledge runs without memory enabled.
+		applyMemoryModelEnv(cfg)
+		knSvc := hostService{name: "knowledge", addr: env("KNOWLEDGE_BIND", "127.0.0.1") + ":" + env("KNOWLEDGE_PORT", "11436")}
+		if spec := cfg.Plugin("knowledge"); spec.Impl == config.BuiltinImpl {
+			store, _ := buildKnowledgeStore()
+			bundles := knowledgeBundles(cfg)
+			if len(bundles) == 0 {
+				log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES) — serving an empty index")
+			} else if n, indexed, rerr := store.reindex(bundles); rerr != nil {
+				log.Printf("knowledge: reindex failed (serving whatever was already indexed): %v", rerr)
+			} else {
+				log.Printf("knowledge: indexed %d concept(s) from %d bundle(s)", n, len(indexed))
+			}
+			knSvc.mux = knowledgeMux(store)
+		} else {
+			h, lerr := sup.launch("knowledge", "knowledge", spec, selfPath, nil)
+			if lerr != nil {
+				fatalf("launch knowledge plugin: %v", lerr)
+			}
+			knSvc.mux = knowledgeProxyMux(h)
+		}
+		all = append(all, knSvc)
 	}
 
 	// Overlay services (e.g. a warehouse proxy) self-register via init() when
@@ -221,4 +254,26 @@ func applyMemoryModelEnv(cfg *config.Config) {
 	if os.Getenv("MEMORY_EMBED_MODEL") == "" && cfg.MemoryEmbedModel != "" {
 		os.Setenv("MEMORY_EMBED_MODEL", cfg.MemoryEmbedModel)
 	}
+}
+
+// knowledgeBundles resolves the OKF bundle paths to index at startup: the
+// configured knowledge_bundles win; otherwise the KNOWLEDGE_BUNDLES env is
+// split on the OS path-list separator or a comma (a convenience for `serve
+// knowledge` smoke runs without a config file). Empty means no bundles.
+func knowledgeBundles(cfg *config.Config) []string {
+	if len(cfg.KnowledgeBundles) > 0 {
+		return cfg.KnowledgeBundles
+	}
+	raw := strings.TrimSpace(os.Getenv("KNOWLEDGE_BUNDLES"))
+	if raw == "" {
+		return nil
+	}
+	split := func(r rune) bool { return r == os.PathListSeparator || r == ',' }
+	var out []string
+	for _, p := range strings.FieldsFunc(raw, split) {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
