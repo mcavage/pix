@@ -159,3 +159,22 @@ jobs:
           git add Makefile package.json pi-kit/spec.yaml
           git commit -m "chore: publish $V [skip ci]"
           git push
+
+      # Tag the stamped commit so the launcher's kit pin resolves. The `pi-stack`
+      # launcher pins the kit to its own release via
+      # `--kit "git+...#ref=v<version>&dir=pi-kit"`, so every published version
+      # needs a matching annotated tag `v<version>` on the commit that carries the
+      # stamped spec.yaml. This step runs after the commit-back, so HEAD is that
+      # commit (or the current tip when there was nothing to bump). Idempotent: a
+      # pre-existing tag is a no-op, not a failed run.
+      - name: Tag the release
+        run: |
+          V="${{ needs.version.outputs.version }}"
+          if git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
+            echo "tag v$V already exists — nothing to do"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$V" -m "pi-stack v$V"
+          git push origin "v$V"
