@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -244,6 +245,49 @@ func TestReadBundleMissingIndexTolerated(t *testing.T) {
 	}
 	if len(b.Concepts()) != 3 {
 		t.Errorf("got %d concepts, want 3", len(b.Concepts()))
+	}
+}
+
+// TestReadBundleSkipsSymlinks proves F-D: a symlink inside the bundle pointing at
+// a file OUTSIDE the bundle tree is NOT read or indexed (os.ReadFile would
+// otherwise follow the link and leak the outside file's contents as a concept).
+func TestReadBundleSkipsSymlinks(t *testing.T) {
+	dir := writeBundle(t, false)
+
+	// A secret file OUTSIDE the bundle tree.
+	outside := filepath.Join(t.TempDir(), "id_rsa")
+	if err := os.WriteFile(outside, []byte("---\ntype: secret\ntitle: leaked\n---\nBEGIN PRIVATE KEY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A symlink inside the bundle, named like a real concept, pointing at it.
+	link := filepath.Join(dir, "secrets.md")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+
+	b, err := ReadBundle(dir)
+	if err != nil {
+		t.Fatalf("ReadBundle: %v", err)
+	}
+
+	// The symlinked file must NOT be indexed as a concept.
+	if c := b.Concept("secrets"); c != nil {
+		t.Fatalf("symlinked file was indexed as a concept: %+v", c)
+	}
+	// Only the 3 real files remain.
+	if n := len(b.Concepts()); n != 3 {
+		t.Errorf("got %d concepts, want 3 (symlink must be skipped): %v", n, conceptIDs(b.Concepts()))
+	}
+	// The skip is recorded as a warning.
+	var warned bool
+	for _, w := range b.Warnings {
+		if strings.Contains(w, "symlink") && strings.Contains(w, "secrets.md") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("expected a skip-symlink warning, got %v", b.Warnings)
 	}
 }
 

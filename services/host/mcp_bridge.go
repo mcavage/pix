@@ -39,33 +39,43 @@ func builtinMcpServerFor(name string) (plugin.McpServer, error) {
 }
 
 // mcpServerFor resolves a bridge name to its McpServer implementation, honoring a
-// config-selected OVERRIDE. When [plugins.mcp] is builtin (or the name is the
-// built-in "slack"), the in-process adapter is returned. Otherwise the external
-// plugin binary is launched ONCE here via the shared supervisor helper (which
-// SHA-verifies the binary before exec and isolates its env so the broker bearer
+// config-selected OVERRIDE. [plugins.mcp] is consulted FIRST: a non-builtin impl
+// overrides EVERY name (including the sole registered public MCP, "slack"), so an
+// operator override is never silently bypassed. In that case the external plugin
+// binary is launched ONCE here via the shared supervisor helper (which SHA-pins
+// and verifies the binary before exec and isolates its env so the broker bearer
 // never leaks), dispensed as a plugin.McpServer, and wrapped so the bridge body
-// proxies to it. This is a startup-only spawn — never per request.
-func mcpServerFor(name string) (plugin.McpServer, error) {
+// proxies to it — a startup-only spawn, never per request. Only when the slot is
+// builtin does it fall back to the in-process adapter (builtinMcpServerFor, which
+// serves slack).
+//
+// It returns a cleanup func the caller MUST run on every exit path (it shuts the
+// launched supervisor down; it is a no-op for the builtin path). The cleanup is
+// always non-nil so the caller can defer it unconditionally.
+func mcpServerFor(name string) (plugin.McpServer, func(), error) {
+	noop := func() {}
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
+		return nil, noop, fmt.Errorf("load config: %w", err)
 	}
 	spec := cfg.Plugin("mcp")
-	// slack is always the in-process built-in; a non-builtin [plugins.mcp] impl
-	// overrides every other name.
-	if name == "slack" || spec.Impl == config.BuiltinImpl {
-		return builtinMcpServerFor(name)
+	// Consult config FIRST: only a builtin slot uses the in-process adapter.
+	if spec.Impl == config.BuiltinImpl {
+		srv, err := builtinMcpServerFor(name)
+		return srv, noop, err
 	}
+	// A non-builtin impl overrides every name — launch the external plugin.
 	selfPath, err := os.Executable()
 	if err != nil {
-		return nil, fmt.Errorf("locate self: %w", err)
+		return nil, noop, fmt.Errorf("locate self: %w", err)
 	}
 	sup := &supervisor{}
 	h, err := sup.launch(name, "mcp", spec, selfPath, nil)
 	if err != nil {
-		return nil, fmt.Errorf("launch external mcp plugin %q: %w", name, err)
+		sup.shutdown()
+		return nil, noop, fmt.Errorf("launch external mcp plugin %q: %w", name, err)
 	}
-	return &pluginMcpServer{h: h}, nil
+	return &pluginMcpServer{h: h}, sup.shutdown, nil
 }
 
 // pluginMcpServer adapts a supervisor-dispensed external MCP plugin to the
@@ -166,15 +176,24 @@ func toolSpecToMcpTool(sp plugin.ToolSpec) mcpTool {
 // runMcpBridge is the body for a future `pi-stack-host mcp <name>` subcommand. It
 // resolves the McpServer, builds a dispatcher that proxies to it, and serves it
 // over the newline-delimited-JSON stdio transport the gateway speaks.
+//
+// An override plugin is a real subprocess owned by mcpServerFor's supervisor, so
+// cleanup() MUST run on every exit path — the normal stdio-close return AND the
+// os.Exit error path — or the external mcp child is orphaned. defer covers the
+// normal return; the os.Exit branch calls cleanup() explicitly first (os.Exit
+// skips defers).
 func runMcpBridge(name string) {
-	srv, err := mcpServerFor(name)
+	srv, cleanup, err := mcpServerFor(name)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "pi-stack-host mcp: "+err.Error())
+		cleanup()
 		os.Exit(2)
 	}
+	defer cleanup()
 	serverName, tools, handlers, err := bridgeFromMcpServer(srv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "pi-stack-host mcp: "+err.Error())
+		cleanup()
 		os.Exit(1)
 	}
 	handle := mcpDispatcher(serverName, tools, handlers)
