@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -285,17 +286,21 @@ func mcpConfigured(cfg *config.Config, name string) bool {
 	return false
 }
 
-// gogAccount resolves the Google Workspace account doctor/setup probe against,
-// in the SAME precedence order that ends at what `make mcp-register` uses, so a
-// green doctor can't mean "probed a different account than the gateway got":
-//  1. config.toml's `gog_account` (the Go-side source of truth, cfg.GogAccount),
-//  2. the $GOG_ACCOUNT env var,
-//  3. GOG_ACCOUNT parsed out of a located config/local.mk — exactly the value
-//     `make mcp-register` registers with the gateway.
+// gogAccount resolves the Google Workspace account the best-effort fallback
+// probe runs against. config/local.mk is AUTHORITATIVE when present: it is
+// LITERALLY the GOG_ACCOUNT `make mcp-register` hands the gateway, so a green
+// fallback can't mean "probed a different account than the gateway got":
+//  1. GOG_ACCOUNT parsed out of a located config/local.mk (what mcp-register
+//     registers) — wins whenever a repo checkout's local.mk is present,
+//  2. config.toml's `gog_account` (the Go-side source of truth, cfg.GogAccount),
+//  3. the $GOG_ACCOUNT env var.
 //
 // NEVER a hardcoded address. Empty means "not configured" and the caller emits a
 // "cannot verify" TODO rather than reporting green.
 func gogAccount(cfg *config.Config, env shellEnv) string {
+	if a := gogAccountFromLocalMk(env); a != "" {
+		return a
+	}
 	if cfg != nil {
 		if a := strings.TrimSpace(cfg.GogAccount); a != "" {
 			return a
@@ -306,7 +311,7 @@ func gogAccount(cfg *config.Config, env shellEnv) string {
 			return a
 		}
 	}
-	return gogAccountFromLocalMk(env)
+	return ""
 }
 
 // gogAccountRe matches a `GOG_ACCOUNT = <val>` / `:= ` / `?= ` assignment in a
@@ -373,22 +378,31 @@ func findUpward(env shellEnv, rel string) string {
 // Returns "" when none exists, so the caller reports "cannot verify" rather than
 // probing (and blessing) a file the gateway never uses.
 func resolveOpRefs(env shellEnv) string {
+	// abs makes every resolved path ABSOLUTE regardless of doctor's cwd: a
+	// relative $PI_STACK_CONFIG (e.g. `config/config.toml`) would otherwise yield
+	// a cwd-relative op-refs path that need not match the gateway's --env-file.
+	abs := func(p string) string {
+		if a, err := filepath.Abs(p); err == nil {
+			return a
+		}
+		return p
+	}
 	if env.getenv != nil {
 		if p := env.getenv("PI_STACK_CONFIG"); p != "" {
 			cand := filepath.Join(filepath.Dir(p), "op-refs.env")
 			if env.statFile != nil && env.statFile(cand) {
-				return cand
+				return abs(cand)
 			}
 		}
 	}
 	if p := findUpward(env, filepath.Join("config", "op-refs.env")); p != "" {
-		return p
+		return abs(p)
 	}
 	if env.homeDir != nil && env.statFile != nil {
 		if home := env.homeDir(); home != "" {
 			cand := filepath.Join(home, ".config", "pi-stack", "op-refs.env")
 			if env.statFile(cand) {
-				return cand
+				return abs(cand)
 			}
 		}
 	}
@@ -414,15 +428,36 @@ func gogHeadlessOK(env shellEnv, acct, opRefs string) bool {
 	return err == nil && strings.TrimSpace(out) != ""
 }
 
-// gogGroup builds the gog check cluster in strict dependency order, naming the
-// one footgun by name: auth that works in your shell but returns 0 tools on the
-// gateway's headless spawn because GOG_KEYRING_BACKEND/PASSWORD (+ GOG_ACCOUNT/
-// GOG_HOME) never reached config/op-refs.env. Every probe degrades to a TODO
-// rather than crashing, so this runs cleanly in-sandbox (gog/sbx/op all absent).
+// gogGroup builds the gog check cluster. The HONEST path reads the ACTUAL
+// command the sbx gateway registered for gog and probes THAT (so it verifies
+// the registered account, op-refs path, and op/gog binaries as-registered). Only
+// when sbx is absent (or exposes no command) does it fall back to a best-effort
+// reconstruction from config — clearly labeled, and never a confirmed green.
+// Every probe degrades to a TODO rather than crashing, so this runs cleanly
+// in-sandbox (gog/sbx/op all absent).
 func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group {
 	g := group{title: "gog (Google Workspace via host MCP — read-only)"}
 
-	// 1. gog CLI installed.
+	// HONEST PATH: probe the command sbx ACTUALLY registered for gog. This is the
+	// only check that proves the real registration — account, op-refs path, and
+	// op/gog binaries all exactly as the gateway will spawn them.
+	if argv, ok := registeredGogCommand(env); ok {
+		g.checks = append(g.checks, check{label: "registration", state: stateInfo,
+			detail: "probing the sbx-registered command: " + strings.Join(argv, " ")})
+		if probeRegisteredGog(env, argv) {
+			g.checks = append(g.checks, check{label: "headless spawn", state: stateOK,
+				detail: "registered command exposes tools (verified as-registered)"})
+		} else {
+			g.checks = append(g.checks, check{label: "headless spawn", state: stateTODO,
+				detail: "the registered command returns 0 tools — keyring not headless",
+				todo:   "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to config/op-refs.env"})
+		}
+		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
+		g.checks = append(g.checks, gogAttachCheck(cfg))
+		return g
+	}
+
+	// 1. gog CLI installed (the reconstruction probe uses it).
 	if _, err := env.lookPath("gog"); err != nil {
 		g.checks = append(g.checks, check{label: "gog CLI", state: stateTODO,
 			detail: "not found", todo: "brew install gog"})
@@ -433,9 +468,11 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 	acct := gogAccount(cfg, env)
 	opRefs := resolveOpRefs(env)
 
-	// TRANSPARENCY: name EXACTLY what this probe is verifying — which account and
-	// which op-refs file — so a green result can never silently mean "checked a
-	// different account/path than the sbx gateway actually registered".
+	// FALLBACK / TRANSPARENCY: sbx couldn't tell us the registered command, so we
+	// reconstruct the probe from config and LABEL it best-effort — we can verify
+	// THIS account/op-refs authenticates, but NOT that it matches what the gateway
+	// registered. Name exactly what we're checking so a pass can never silently
+	// mean "checked a different account/path than the sbx gateway got".
 	acctShown, refsShown := acct, opRefs
 	if acctShown == "" {
 		acctShown = "<unknown>"
@@ -444,7 +481,8 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 		refsShown = "<not found>"
 	}
 	g.checks = append(g.checks,
-		check{label: "verifying", state: stateInfo, detail: "gog for " + acctShown + " via " + refsShown},
+		check{label: "verifying", state: stateInfo,
+			detail: "best-effort (sbx unavailable) — verifies " + acctShown + " via " + refsShown},
 		check{label: "note", state: stateInfo,
 			detail: "must match your `make mcp-register` (config/local.mk GOG_ACCOUNT + config/op-refs.env)"})
 
@@ -463,7 +501,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 		// Can't run the gateway-equivalent headless probe without op-refs.env — so
 		// we must NOT report green: say we cannot verify and name the fix.
 		g.checks = append(g.checks,
-			check{label: "account", state: stateOK, detail: acct + " set"},
+			check{label: "account", state: stateInfo, detail: acct + " set (unconfirmed vs registration)"},
 			check{label: "op-refs", state: stateTODO,
 				detail: "cannot verify (config/op-refs.env not found)",
 				todo:   "create config/op-refs.env (cp config/op-refs.env.example config/op-refs.env) so doctor can probe the gateway path"})
@@ -498,15 +536,97 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 				detail: "auth OK in your shell but the gateway spawn gets 0 tools — keyring not headless",
 				todo:   "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to config/op-refs.env"})
 	default:
+		// Best-effort success: this account authenticates headlessly, but we could
+		// NOT confirm it is the one the gateway registered — so it is INFO, not a
+		// confirmed green ✓ (see the honest path above for that).
 		g.checks = append(g.checks,
-			check{label: "account", state: stateOK, detail: acct + " authorized"},
-			check{label: "headless spawn", state: stateOK, detail: "tools exposed via headless keyring"})
+			check{label: "account", state: stateInfo, detail: acct + " authorized (best-effort, unconfirmed vs registration)"},
+			check{label: "headless spawn", state: stateInfo, detail: "tools exposed via headless keyring (best-effort)"})
 	}
 
 	// 4. registered with the gateway. 5. attached on run?
 	g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
 	g.checks = append(g.checks, gogAttachCheck(cfg))
 	return g
+}
+
+// registeredGogCommand asks sbx what command it ACTUALLY registered for the gog
+// MCP server, so doctor can probe the real registration instead of a config
+// reconstruction that may have drifted from what `make mcp-register` wired up.
+// It tries, in order, `sbx mcp get gog`, then `sbx mcp ls -o json`, returning
+// the parsed argv. Returns (nil,false) when sbx is absent or exposes no command
+// — the caller then falls back to the best-effort reconstruction.
+func registeredGogCommand(env shellEnv) ([]string, bool) {
+	if env.lookPath == nil || env.run == nil {
+		return nil, false
+	}
+	if _, err := env.lookPath("sbx"); err != nil {
+		return nil, false
+	}
+	if out, err := env.run("sbx", "mcp", "get", "gog"); err == nil {
+		if argv, ok := parseGogCommandLine(out); ok {
+			return argv, true
+		}
+	}
+	if out, err := env.run("sbx", "mcp", "ls", "-o", "json"); err == nil {
+		if argv, ok := parseGogCommandJSON(out); ok {
+			return argv, true
+		}
+	}
+	return nil, false
+}
+
+// gogCommandLineRe matches a `command: <full command>` (or `command = ...`) line
+// in `sbx mcp get gog` output.
+var gogCommandLineRe = regexp.MustCompile(`(?im)^\s*command\s*[:=]\s*(.+?)\s*$`)
+
+// parseGogCommandLine extracts the registered argv from a `sbx mcp get gog`
+// text dump: the `command:` line, split into fields. Returns (nil,false) when no
+// command line is present.
+func parseGogCommandLine(out string) ([]string, bool) {
+	m := gogCommandLineRe.FindStringSubmatch(out)
+	if len(m) < 2 {
+		return nil, false
+	}
+	fields := strings.Fields(m[1])
+	if len(fields) == 0 {
+		return nil, false
+	}
+	return fields, true
+}
+
+// parseGogCommandJSON extracts the registered argv from `sbx mcp ls -o json`
+// (an array of {name, command, args}). Returns (nil,false) when there is no gog
+// entry or the JSON doesn't parse.
+func parseGogCommandJSON(out string) ([]string, bool) {
+	var servers []struct {
+		Name    string   `json:"name"`
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+	}
+	if err := json.Unmarshal([]byte(out), &servers); err != nil {
+		return nil, false
+	}
+	for _, s := range servers {
+		if s.Name != "gog" || strings.TrimSpace(s.Command) == "" {
+			continue
+		}
+		return append([]string{s.Command}, s.Args...), true
+	}
+	return nil, false
+}
+
+// probeRegisteredGog runs the EXACT registered command with `--list-tools`
+// appended and reports whether it yields a non-empty tool list — verifying the
+// real gateway spawn (account, op-refs, op/gog binaries) all as-registered. It
+// degrades cleanly (returns false, never crashes) on any error.
+func probeRegisteredGog(env shellEnv, argv []string) bool {
+	if env.run == nil || len(argv) == 0 {
+		return false
+	}
+	full := append(append([]string{}, argv...), "--list-tools")
+	out, err := env.run(full[0], full[1:]...)
+	return err == nil && strings.TrimSpace(out) != ""
 }
 
 // gogAttachCheck is the informational check 5: is gog in the configured MCP set,

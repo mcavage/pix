@@ -19,10 +19,11 @@ macOS host** (Docker + `sbx` + your accounts), which the sandbox can't touch.
 - **Launcher** `pi-stack` (`services/host/cmd/pi-stack`): verb tree
   (run/serve/doctor/setup/config/version + stubs), version-coupled `sbx run`
   (`#ref=v<version>`), XDG `~/.config/pi-stack/config.toml`.
-- **Google Workspace via `gog`**: replaced the old `gws` CLI + host token service
-  (`gws-token` :11441) with the read-only `gog` host MCP server the sbx gateway
-  spawns (the slack pattern). Creds resolve from `config/op-refs.env` at spawn;
-  nothing runs as a standalone Workspace service anymore. Setup: `docs/gog-setup.md`.
+- **Google Workspace via `gog`**: the read-only `gog` host MCP server the sbx
+  gateway spawns (the slack pattern). Creds resolve from `config/op-refs.env` at
+  spawn; Workspace runs through the gateway, not as a standalone host service.
+  Setup: `docs/gog-setup.md`.
+- **Host services**: memory (:11435) [+ knowledge (:11436) when configured].
 - **OKF**: reader + built-in `knowledge` service (:11436, sqlite+FTS5+embeddings),
   `knowledge` capability (default `none`), consume extension
   (`extensions/knowledge-recall.ts`, cited + budgeted), gated `enrich` skill/agent.
@@ -55,8 +56,8 @@ sbx rm -f reftest
 ```
 
 ### 3. HOST-VERIFY #2 — register + smoke-test the `gog` Workspace MCP server
-Google Workspace no longer runs as a host service (the old `gws` CLI + `gws-token`
-:11441 are gone) — it's the read-only `gog` MCP server the sbx gateway spawns.
+Google Workspace runs through the sbx gateway as the read-only `gog` MCP server
+it spawns — not as a host service.
 Register it and confirm the gateway actually gets tools (a headless keyring/
 op-refs mismatch is the classic 0-tools trap; `pi-stack doctor` now probes the
 exact gateway spawn and prints which account + op-refs it verifies). Full setup:
