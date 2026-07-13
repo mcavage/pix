@@ -81,8 +81,11 @@ func (slackMcpAdapter) CallTool(name string, args json.RawMessage) (json.RawMess
 // built-in McpServer selected by name over the shared handshake (see
 // plugin.Serve / plugin.PluginMap). This is the "self-exec as a plugin" path a
 // supervisor would launch; the in-process bridge (runMcpBridge) does NOT use it.
+// It resolves the BUILT-IN adapter directly (builtinMcpServerFor), never
+// re-consulting config: config selection is the supervisor's job, and routing
+// through mcpServerFor here would recurse into another launch.
 func servePluginMcp(name string) {
-	srv, err := mcpServerFor(name)
+	srv, err := builtinMcpServerFor(name)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "pi-stack-host plugin mcp: "+err.Error())
 		os.Exit(2)

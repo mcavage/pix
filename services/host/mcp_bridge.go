@@ -2,12 +2,14 @@
 // sbx gateway spawns and that forwards every tools/list + tools/call to a
 // plugin.McpServer implementation.
 //
-// The built-in case runs the McpServer IN-PROCESS (mcpServerFor returns the
-// adapter directly — no per-request subprocess), honoring the arch rule that a
-// plugin subprocess is only ever spawned once at startup, never per request. A
-// config-selected OVERRIDE plugin would be dispensed once here at startup too
-// (see the TODO in mcpServerFor); the bridge body below is identical either way
-// because it only speaks the plugin.McpServer interface.
+// The built-in case runs the McpServer IN-PROCESS (builtinMcpServerFor returns
+// the adapter directly — no per-request subprocess), honoring the arch rule that
+// a plugin subprocess is only ever spawned once at startup, never per request. A
+// config-selected OVERRIDE plugin (config [plugins.mcp] with impl != builtin) is
+// launched ONCE here at bridge startup via the same supervisor helper the broker/
+// memory paths use (SHA-verified, env-isolated) and dispensed as a plugin.McpServer
+// client; the bridge body below is identical either way because it only speaks
+// the plugin.McpServer interface.
 //
 // main.go does NOT register this subcommand yet — a later unit wires it.
 
@@ -15,27 +17,93 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
+	"pi-stack/host/config"
 	"pi-stack/host/plugin"
 )
 
-// mcpServerFor resolves a bridge name to its McpServer implementation. Built-in
-// names return their in-process adapter (no subprocess). This is the single seam
-// where an override would be chosen.
-//
-// TODO(plugin-override): consult config (config.Config.Plugin) for the "mcp"
-// slot / this name; when Impl != config.BuiltinImpl, launch the external plugin
-// binary via go-plugin ONCE here and dispense its plugin.McpServer client
-// instead of the built-in adapter. Until that unit lands, only built-ins serve.
-func mcpServerFor(name string) (plugin.McpServer, error) {
+// builtinMcpServerFor resolves a bridge name to its IN-PROCESS built-in McpServer
+// adapter (no subprocess). This is the self-exec plugin server's view too
+// (servePluginMcp), which must serve the built-in impl WITHOUT re-consulting
+// config (config selection is decided by the supervisor, not the servant).
+func builtinMcpServerFor(name string) (plugin.McpServer, error) {
 	switch name {
 	case "slack":
 		return slackMcpAdapter{}, nil
 	default:
 		return nil, fmt.Errorf("no built-in MCP server named %q", name)
 	}
+}
+
+// mcpServerFor resolves a bridge name to its McpServer implementation, honoring a
+// config-selected OVERRIDE. When [plugins.mcp] is builtin (or the name is the
+// built-in "slack"), the in-process adapter is returned. Otherwise the external
+// plugin binary is launched ONCE here via the shared supervisor helper (which
+// SHA-verifies the binary before exec and isolates its env so the broker bearer
+// never leaks), dispensed as a plugin.McpServer, and wrapped so the bridge body
+// proxies to it. This is a startup-only spawn — never per request.
+func mcpServerFor(name string) (plugin.McpServer, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	spec := cfg.Plugin("mcp")
+	// slack is always the in-process built-in; a non-builtin [plugins.mcp] impl
+	// overrides every other name.
+	if name == "slack" || spec.Impl == config.BuiltinImpl {
+		return builtinMcpServerFor(name)
+	}
+	selfPath, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("locate self: %w", err)
+	}
+	sup := &supervisor{}
+	h, err := sup.launch(name, "mcp", spec, selfPath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("launch external mcp plugin %q: %w", name, err)
+	}
+	return &pluginMcpServer{h: h}, nil
+}
+
+// pluginMcpServer adapts a supervisor-dispensed external MCP plugin to the
+// plugin.McpServer interface, so runMcpBridge proxies to it transparently. It
+// resolves the current client per call (a watchdog restart is invisible to the
+// caller), mirroring memoryProxyMux / gwsBrokerProxyMux.
+type pluginMcpServer struct{ h *pluginHolder }
+
+func (p *pluginMcpServer) srv() (plugin.McpServer, error) {
+	s, _ := p.h.get().(plugin.McpServer)
+	if s == nil {
+		return nil, errors.New("mcp plugin unavailable")
+	}
+	return s, nil
+}
+
+func (p *pluginMcpServer) Info() (plugin.ServerInfo, error) {
+	s, err := p.srv()
+	if err != nil {
+		return plugin.ServerInfo{}, err
+	}
+	return s.Info()
+}
+
+func (p *pluginMcpServer) ListTools() ([]plugin.ToolSpec, error) {
+	s, err := p.srv()
+	if err != nil {
+		return nil, err
+	}
+	return s.ListTools()
+}
+
+func (p *pluginMcpServer) CallTool(name string, args json.RawMessage) (json.RawMessage, error) {
+	s, err := p.srv()
+	if err != nil {
+		return nil, err
+	}
+	return s.CallTool(name, args)
 }
 
 // bridgeFromMcpServer turns an McpServer into the (serverName, tools, handlers)
