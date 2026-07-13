@@ -99,12 +99,13 @@ help: ## Show this help
 build: ## Build the pi-stack image from the DHI base
 	docker build -t $(IMAGE) .
 
+# CRITICAL: sbx caches a materialized image PER TAG. With a fixed tag (:0.0.1),
+# `sbx run` keeps booting the first-cached copy and silently ignores every
+# reload — verified by creating sandboxes and finding stale extensions. So we
+# tag each build uniquely, load that, and `make run` pins --template to it.
+# Old local-*/$(VERSION) templates are pruned so the store doesn't grow.
+# (These comments live ABOVE the recipe so make doesn't echo them to the terminal.)
 load: build ## Build + load the image into sbx under a UNIQUE tag, so `make run` uses this exact build
-	# CRITICAL: sbx caches a materialized image PER TAG. With a fixed tag (:0.0.1),
-	# `sbx run` keeps booting the first-cached copy and silently ignores every
-	# reload — verified by creating sandboxes and finding stale extensions. So we
-	# tag each build uniquely, load that, and `make run` pins --template to it.
-	# Old local-*/$(VERSION) templates are pruned so the store doesn't grow.
 	@set -e; TS="local-$$(date +%s)"; T="docker.io/$(DOCKER_USER)/pi-stack:$$TS"; \
 	docker tag $(IMAGE) "$$T"; \
 	docker save "$$T" -o out/pi-stack.tar; \
