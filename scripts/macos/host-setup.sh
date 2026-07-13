@@ -62,13 +62,13 @@ else info "Skipped — but verify before relying on 'pi-stack run' version pinni
 # --- Step 3: build + install the launcher --------------------------------------
 bold "\n[3] Install the launcher + host binary"
 if ask "Build (make launcher) and install (make install) now?"; then
-  make launcher && ok "built out/pi-stack" || warn "make launcher failed"
-  make install && ok "symlinked bin/pi-stack onto PATH (~/.local/bin)" || warn "make install failed"
+  make launcher && ok "built out/pi-stack + out/pi-stack-host" || warn "make launcher failed"
+  make install && ok "symlinked out/pi-stack + out/pi-stack-host onto PATH (~/.local/bin)" || warn "make install failed"
   info "Ensure ~/.local/bin is on your PATH. (Or, after a release: curl -fsSL .../install.sh | sh)"
 else info "Skipped."; fi
 
 # --- Step 4: launchd agent for host services -----------------------------------
-bold "\n[4] Run host services as a launchd agent (memory :11435, gws :11441)"
+bold "\n[4] Run host services as a launchd agent (memory :11435)"
 PLIST="$HOME/Library/LaunchAgents/com.pi-stack.serve.plist"
 info "Installs $PLIST (RunAtLoad + KeepAlive), pointed at your pi-stack-host + \$HOME."
 if ask "Install and load the launchd agent now?"; then
@@ -84,23 +84,18 @@ else info "Skipped. Run services in a terminal instead:  pi-stack serve"; fi
 
 # --- Step 5: wire your accounts (interactive) ----------------------------------
 bold "\n[5] Wire your accounts — setup + doctor"
-info "setup seeds ~/.config/pi-stack/config.toml and prompts for missing secrets/ollama/gws/mcp."
+info "setup seeds ~/.config/pi-stack/config.toml and prompts for missing secrets/ollama/mcp."
 if ask "Run 'pi-stack setup' now?"; then pi-stack setup || warn "pi-stack setup returned nonzero"; else info "Skipped."; fi
 if ask "Run 'pi-stack doctor' to confirm?"; then pi-stack doctor || true; else info "Skipped."; fi
 
-# --- Step 6: HOST-VERIFY #2 — broker bearer reaches the VM ---------------------
-bold "\n[6] VERIFY #2 — does the broker bearer (GWS_TOKEN_AUTH) reach the sandbox?"
-info "kit-spec v1 has no dynamic host-env->VM passthrough, so this is the one open host decision."
-info "The launcher sets it in the sbx process env (off argv). Confirm it lands in the VM:"
-if ask "Launch a test sandbox to check?"; then
-  info "Starting a sandbox. INSIDE it, run:   echo \"\${GWS_TOKEN_AUTH:-EMPTY}\""
-  info " - non-empty  -> bearer enforced end-to-end, you're done."
-  info " - EMPTY      -> use 'sbx secret' or launcher-side 'sbx run --env GWS_TOKEN_AUTH' (name only)."
-  info "   Until wired, gws still works (falls back to unauthenticated, logs a warning). Not broken, just not enforced."
-  pause "Press Enter to launch the test sandbox (exit it when done, then Enter here again)…"
-  pi-stack run --name pi-stack-bearertest . || warn "launch failed"
-  sbx rm -f pi-stack-bearertest >/dev/null 2>&1 || true
-else info "Skipped — verify before depending on bearer enforcement."; fi
+# --- Step 6: Google Workspace via the gog host MCP server ----------------------
+bold "\n[6] Google Workspace — the gog host MCP server"
+info "Google Workspace is no longer a bearer smuggled into the VM. It's the host-side"
+info "'gog' MCP server, run by the sbx gateway (read-only by default: --gmail-no-send,"
+info "--wrap-untrusted, --readonly). Set it up per docs/gog-setup.md:"
+info "  - 'gog auth' on the host, fill config/op-refs.env, then 'make mcp-register'"
+info "  - add 'gog' to MCP in config/local.mk so 'make run' attaches it"
+info "Full walkthrough: docs/gog-setup.md"
 
 bold "\n[7] Optional: private overlay for work"
 info "snow/warehouse broker + private memory/OKF live in your overlay peer repo (not this one)."

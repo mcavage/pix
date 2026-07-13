@@ -54,6 +54,13 @@ REGISTER        = $(filter $(LOCAL_STDIO_MCP),$(MCP))
 OP_REFS := $(CURDIR)/config/op-refs.env
 OP_BIN  := $(shell command -v op 2>/dev/null)
 
+# Absolute path to the host-side `gog` (Google Workspace) binary. Same rationale
+# as OP_BIN: the sbx gateway daemon's PATH may not include it, so we resolve it
+# here and register the server with the absolute path. If `gog` isn't on the make
+# PATH we fall back to the literal `gog` (TODO: user must ensure the gateway
+# daemon can find it, e.g. install gog to a system PATH dir).
+GOG_BIN := $(or $(shell command -v gog 2>/dev/null),gog)
+
 # The Google account the host-side `gog` MCP server runs as. Sourced from
 # config/local.mk (never hardcoded here) and passed to `gog --account` when
 # `make mcp-register` registers gog with the gateway.
@@ -206,7 +213,8 @@ mcp-register: link-overlay ## Register the local stdio MCP servers you use (the 
 			: 'HARDENED registration (security-lead): read-only by default —'; \
 			: '--gmail-no-send + --wrap-untrusted + --readonly + `mcp --allow-tool read`.'; \
 			: 'Creds resolve from config/op-refs.env via op run at gateway spawn.'; \
-			sbx mcp add gog --command op --args run --args --no-masking --args --env-file=$(OP_REFS) --args -- --args gog --args --account --args $(GOG_ACCOUNT) --args --gmail-no-send --args --wrap-untrusted --args --readonly --args mcp --args --allow-tool --args read \
+			: 'Absolute op path ($(OP_BIN)) + resolved gog ($(GOG_BIN)) so the gateway daemon PATH need not include them.'; \
+			sbx mcp add gog --command "$(OP_BIN)" --args run --args --no-masking --args "--env-file=$(OP_REFS)" --args -- --args "$(GOG_BIN)" --args --account --args $(GOG_ACCOUNT) --args --gmail-no-send --args --wrap-untrusted --args --readonly --args mcp --args --allow-tool --args read \
 				&& echo "  registered: gog" || echo "  FAILED to register: gog" ;; \
 		*) \
 			sbx mcp add $$s --command "$(OP_BIN)" \
@@ -267,10 +275,12 @@ doctor: ## Show models + each optional integration: set up? service running?
 pack: ## Package the kit as a distributable zip
 	sbx kit pack $(KIT) -o out/pi-stack-kit.zip
 
-install: ## Put the `pi-stack` launcher on your PATH (~/.local/bin) + create config/local.mk (your stack config) if missing
+install: launcher ## Build + put the Go binaries (out/pi-stack launcher + out/pi-stack-host) on your PATH (~/.local/bin) + create config/local.mk (your stack config) if missing
 	mkdir -p $(HOME)/.local/bin
-	ln -sf $(CURDIR)/bin/pi-stack $(HOME)/.local/bin/pi-stack
-	@echo "Installed: pi-stack -> $(CURDIR)/bin/pi-stack"
+	ln -sf $(CURDIR)/out/pi-stack $(HOME)/.local/bin/pi-stack
+	ln -sf $(CURDIR)/out/pi-stack-host $(HOME)/.local/bin/pi-stack-host
+	@echo "Installed: pi-stack -> $(CURDIR)/out/pi-stack"
+	@echo "Installed: pi-stack-host -> $(CURDIR)/out/pi-stack-host"
 	@if [ ! -f config/local.mk ]; then \
 		cp config/local.mk.example config/local.mk; \
 		echo "Created config/local.mk — edit it to pick SERVICES, MCP, models, then: make serve / make run"; \

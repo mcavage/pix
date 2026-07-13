@@ -6,9 +6,11 @@
        launchctl load -w ~/Library/LaunchAgents/com.pi-stack.serve.plist
      Stop:  launchctl unload ~/Library/LaunchAgents/com.pi-stack.serve.plist
      Logs:  ~/Library/Logs/pi-stack-serve.{out,err}.log
-     This runs `pi-stack-host serve` (memory :11435, gws :11441 — from your
+     This runs `pi-stack-host serve` (memory :11435 — from your
      ~/.config/pi-stack/config.toml SERVICES). The sandbox reaches these over
-     host.docker.internal. Ollama (if used for memory) must be running too. -->
+     host.docker.internal. Google Workspace (gog) is NOT part of serve — it's a
+     host MCP server run by the sbx gateway (see `make mcp-register`). Ollama (if
+     used for memory) must be running too. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
