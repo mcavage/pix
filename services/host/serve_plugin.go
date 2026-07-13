@@ -1,15 +1,18 @@
 // serve_plugin.go — the out-of-process half of the `serve` supervisor.
 //
 // The default config runs every capability BUILT-IN and IN-PROCESS (memoryMux()
-// / gwsTokenMux() exactly as before), so nothing here executes. Only when config
-// selects a non-builtin impl for a slot does `serve` launch a go-plugin
-// subprocess (startup-only, never per request), keep it alive with a basic
-// health/backoff watchdog, and back the stable HTTP shim (:11435 JSON-RPC,
-// :11441 /token) with a handler that proxies to the dispensed plugin client.
+// exactly as before), so nothing here executes. Only when config selects a
+// non-builtin impl for a slot does `serve` launch a go-plugin subprocess
+// (startup-only, never per request), keep it alive with a basic health/backoff
+// watchdog, and back the stable HTTP shim (:11435 JSON-RPC) with a handler that
+// proxies to the dispensed plugin client.
 //
-// The sandbox never sees any of this: it still POSTs JSON-RPC to :11435 and GETs
-// :11441/token; the supervisor owns those listeners and adapts them to the
-// plugin's typed interface.
+// The sandbox never sees any of this: it still POSTs JSON-RPC to :11435; the
+// supervisor owns that listener and adapts it to the plugin's typed interface.
+//
+// The CredentialBroker seam (brokerProxyMux / servePluginBroker below) is
+// DORMANT: the public tree ships no built-in broker, but an overlay broker
+// (external binary or extraBrokerFactory) plugs into exactly this shim.
 
 package main
 
@@ -70,8 +73,8 @@ type supervisor struct {
 
 // launch spawns the plugin for a slot once at startup and starts its watchdog.
 // extraEnv is a small set of KEY=VALUE vars granted to THIS plugin's subprocess
-// only (on top of the filtered base env; see pluginEnv) — e.g. the gws broker's
-// GWS_TOKEN_AUTH bearer, which no other plugin may see (F2).
+// only (on top of the filtered base env; see pluginEnv) — e.g. an overlay
+// broker's PI_STACK_BROKER_AUTH bearer, which no other plugin may see (F2).
 func (s *supervisor) launch(name, kind string, spec config.PluginSpec, selfPath string, extraEnv []string) (*pluginHolder, error) {
 	h := &pluginHolder{}
 	if err := s.spawn(h, name, kind, spec, selfPath, extraEnv); err != nil {
@@ -83,14 +86,15 @@ func (s *supervisor) launch(name, kind string, spec config.PluginSpec, selfPath 
 
 // pluginEnv builds the environment for a plugin subprocess: the parent env with
 // the broker bearer STRIPPED (F2 — a memory/mcp plugin must never inherit
-// GWS_TOKEN_AUTH and be able to mint Google tokens), plus any extra vars the
-// caller explicitly grants (the broker gets its bearer back this way, and only
-// the broker).
+// PI_STACK_BROKER_AUTH and be able to mint tokens at a broker), plus any extra
+// vars the caller explicitly grants (a broker gets its bearer back this way, and
+// only the broker). Dormant in the public tree (no built-in broker mints a
+// bearer), kept as a belt-and-suspenders guard for overlay brokers.
 func pluginEnv(extra []string) []string {
 	base := os.Environ()
 	out := make([]string, 0, len(base)+len(extra))
 	for _, kv := range base {
-		if strings.HasPrefix(kv, "GWS_TOKEN_AUTH=") {
+		if strings.HasPrefix(kv, "PI_STACK_BROKER_AUTH=") {
 			continue
 		}
 		out = append(out, kv)
@@ -500,10 +504,20 @@ func jsonrpcMux(methods map[string]func(jsonObj) (any, error)) http.Handler {
 	return mux
 }
 
-// gwsBrokerProxyMux serves the same /token surface as gwsTokenMux() but mints via
-// the dispensed CredentialBroker client. auth is the required bearer (the shared
-// broker token); it mirrors gwsTokenMux()'s Authorization check exactly.
-func gwsBrokerProxyMux(h *pluginHolder, auth string) http.Handler {
+// brokerToken is the JSON shape a broker /token shim returns (a short-lived
+// bearer). It moved here from the deleted host token service; the generic broker
+// proxy (brokerProxyMux) is its only user.
+type brokerToken struct {
+	AccessToken string `json:"access_token"`
+	ExpiresIn   int    `json:"expires_in"`
+	TokenType   string `json:"token_type"`
+}
+
+// brokerProxyMux serves a /token surface that mints via the dispensed
+// CredentialBroker client. auth is the required bearer (empty disables the
+// check). This is the DORMANT broker seam: no built-in broker constructs it in
+// the public tree, but an overlay broker plugs into exactly this shim.
+func brokerProxyMux(h *pluginHolder, auth string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -524,7 +538,21 @@ func gwsBrokerProxyMux(h *pluginHolder, auth string) http.Handler {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token_error", "message": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, gwsBearer{AccessToken: t.AccessToken, ExpiresIn: t.ExpiresIn, TokenType: t.TokenType})
+		writeJSON(w, http.StatusOK, brokerToken{AccessToken: t.AccessToken, ExpiresIn: t.ExpiresIn, TokenType: t.TokenType})
 	})
 	return mux
+}
+
+// servePluginBroker runs a built-in CredentialBroker as a go-plugin self-exec
+// entry (`pi-stack-host plugin broker`). The public tree registers no built-in
+// broker — the seam is overlay-only and dormant — so this exits cleanly unless
+// an overlay wired one via extraBrokerFactory. An EXTERNAL overlay broker binary
+// (see examples/broker-example) ships its own main() and does not use this path.
+// name is the plugin map key the supervisor dispenses under (e.g. "broker").
+func servePluginBroker(name string) {
+	if extraBrokerFactory == nil {
+		fmt.Fprintln(os.Stderr, "pi-stack-host plugin broker: no built-in broker registered (overlay-only seam)")
+		os.Exit(2)
+	}
+	plugin.Serve(map[string]goplugin.Plugin{name: &plugin.BrokerPlugin{Impl: extraBrokerFactory()}})
 }

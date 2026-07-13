@@ -1,7 +1,7 @@
 // `serve` is the plugin supervisor. It runs the long-running HTTP host services
-// (gws-token :11441, memory :11435, plus any overlay services), resolving each
+// (memory :11435, knowledge :11436, plus any overlay services), resolving each
 // capability slot from config: a "builtin" impl runs IN-PROCESS exactly as
-// before (memoryMux() / gwsTokenMux()); a non-builtin impl is launched ONCE at
+// before (memoryMux()); a non-builtin impl is launched ONCE at
 // startup as a go-plugin subprocess and the HTTP shim proxies to it. Plugins
 // never bind ports — the supervisor owns the listeners and the stable host
 // surface every sandbox already depends on. The MCP servers (e.g. slack) are
@@ -29,8 +29,8 @@ type hostService struct {
 }
 
 // runServe starts the long-running HTTP host services. `enabled` is the list
-// from `SERVICES` in config/local.mk (config-friendly aliases: memory, gws, plus
-// any overlay registers); empty means "all". The MCP servers (e.g. slack) are
+// from `SERVICES` in config/local.mk (config-friendly aliases: memory, knowledge,
+// plus any overlay registers); empty means "all". The MCP servers (e.g. slack) are
 // stdio commands run by the sbx gateway via `sbx mcp add`, not HTTP daemons.
 func runServe(enabled []string) {
 	cfg, err := config.Load()
@@ -49,16 +49,11 @@ func runServe(enabled []string) {
 		os.Exit(1)
 	}
 
-	// Broker bearer (zero friction): mint (or reuse) the shared token and REQUIRE
-	// it on the gws-token shim. It is passed EXPLICITLY to the gws mux/handler and
-	// (for an external broker) to that plugin's OWN env only — never into the
-	// process-global env. Otherwise every memory/mcp plugin subprocess would
-	// inherit the bearer and could mint Google tokens at :11441 (F2).
-	tok, err := config.EnsureToken()
-	if err != nil {
-		fatalf("broker token: %v", err)
-	}
-
+	// The default path has NO built-in credential broker and mints NO bearer
+	// (memory/knowledge need no auth). The generic broker seam is dormant: a
+	// broker materializes only when an overlay registers one (via
+	// extraServiceFactories), and that overlay owns its own bearer through the
+	// retained plugin path — never the process-global env (see pluginEnv, F2).
 	selfPath, err := os.Executable()
 	if err != nil {
 		fatalf("locate self: %v", err)
@@ -66,13 +61,12 @@ func runServe(enabled []string) {
 
 	// Resolve the enabled set FIRST (F1): CLI args win; else config's `services`;
 	// else empty == "all". Only enabled services are constructed, launched, and
-	// preflighted below — so `serve memory` never launches or preflights gws.
+	// preflighted below — so `serve memory` never launches or preflights knowledge.
 	effective := resolveServices(enabled, cfg.Services)
 	// config-friendly aliases -> internal service name. Built-ins, plus any
 	// overlay-registered aliases (extraServiceAliases) and their identity name —
 	// so the public tree never hardcodes an overlay name.
 	alias := map[string]string{
-		"gws": "gws-token", "gws-token": "gws-token",
 		"memory":    "memory",
 		"knowledge": "knowledge",
 	}
@@ -100,26 +94,6 @@ func runServe(enabled []string) {
 
 	var all []hostService
 
-	// gws-token: builtin runs in-process; a non-builtin impl is launched as a
-	// CredentialBroker plugin and the /token shim proxies to it. It barfs if the
-	// host gws isn't authenticated (else it starts but serves "no host token" and
-	// Gmail/Calendar are silently dark in the VM).
-	if enabledSvc("gws-token") {
-		gwsSvc := hostService{name: "gws-token", addr: env("GWS_TOKEN_BIND", "127.0.0.1") + ":" + env("GWS_TOKEN_PORT", "11441"), check: gwsTokenCheck}
-		if spec := cfg.Plugin("gws"); spec.Impl == config.BuiltinImpl {
-			gwsSvc.mux = gwsTokenMux(tok)
-		} else {
-			// The bearer is granted to the broker plugin's OWN env only (F2).
-			h, lerr := sup.launch("gws-token", "broker", spec, selfPath, []string{"GWS_TOKEN_AUTH=" + tok})
-			if lerr != nil {
-				fatalf("launch gws broker plugin: %v", lerr)
-			}
-			gwsSvc.mux = gwsBrokerProxyMux(h, tok)
-			gwsSvc.check = func() error { return brokerCheck(h) }
-		}
-		all = append(all, gwsSvc)
-	}
-
 	// memory: the built-in store runs IN-PROCESS (fast path — recall is per-turn);
 	// only a non-builtin impl is spawned as a plugin. memory degrades gracefully
 	// (recall -> keyword, capture off) and logs its own status, so no fatal
@@ -127,14 +101,13 @@ func runServe(enabled []string) {
 	if enabledSvc("memory") {
 		// Wire the configured model names into the in-process build (F6). An
 		// explicit env override still wins; otherwise the config value (or its
-		// default) applies. Set AFTER any gws launch above so it can never leak
-		// into the broker subprocess's inherited env.
+		// default) applies.
 		applyMemoryModelEnv(cfg)
 		memSvc := hostService{name: "memory", addr: env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435")}
 		if spec := cfg.Plugin("memory"); spec.Impl == config.BuiltinImpl {
 			// Build the store with error handling and route a failure through fatalf
 			// (F3): a bare log.Fatalf here would skip sup.shutdown() and orphan an
-			// already-launched plugin (e.g. an external gws broker holding the bearer).
+			// already-launched plugin (e.g. an overlay broker or service subprocess).
 			store, hasEmb, berr := buildMemStore()
 			if berr != nil {
 				fatalf("%v", berr)
@@ -196,7 +169,7 @@ func runServe(enabled []string) {
 	}
 
 	if len(all) == 0 {
-		fatalf("no services enabled (set SERVICES in config/local.mk, e.g. SERVICES = memory gws)")
+		fatalf("no services enabled (set SERVICES in config/local.mk, e.g. SERVICES = memory)")
 	}
 
 	// Preflight: every enabled service validates its host dependency UP FRONT, and

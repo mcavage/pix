@@ -9,7 +9,7 @@
 //
 // This package is intentionally ADDITIVE: it defines the shared handshake, the
 // three capability interfaces (MemoryStore, CredentialBroker, McpServer) derived
-// from the real services (../memory.go, ../gwstoken.go, ../slack.go), and the
+// from the real services (../memory.go, ../slack.go), and the
 // net/rpc go-plugin wiring for each. A later unit wires the existing services
 // onto these interfaces; nothing here imports or mutates package main.
 //

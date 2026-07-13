@@ -37,13 +37,12 @@ func buildExampleBroker(t *testing.T) (bin, sha string) {
 // TestExternalBrokerOverrideEndToEnd proves the OVERRIDE mechanism: an external
 // broker binary is sha-verified, launched by the supervisor as a real
 // out-of-process go-plugin subprocess, dispensed over net/rpc, and its Mint /
-// Check / Describe round-trip. Then the stable :11441 /token shim
-// (gwsBrokerProxyMux) is shown to proxy to that same dispensed client — exactly
-// what the sandbox hits.
+// Check / Describe round-trip. Then the stable /token shim (brokerProxyMux) is
+// shown to proxy to that same dispensed client — exactly what the sandbox hits.
 func TestExternalBrokerOverrideEndToEnd(t *testing.T) {
 	bin, sha := buildExampleBroker(t)
 
-	// A config a user would write to override the built-in gws broker.
+	// A config a user would write to plug in an overlay broker (the dormant seam).
 	spec := config.PluginSpec{Impl: "example", Path: bin, SHA: sha}
 
 	sup := &supervisor{}
@@ -80,13 +79,13 @@ func TestExternalBrokerOverrideEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Describe over RPC: %v", err)
 	}
-	if info.Name != "example" || info.DefaultPort != 11441 || info.RequiresHostCLI {
-		t.Errorf("Describe = %+v, want {Name:example DefaultPort:11441 RequiresHostCLI:false}", info)
+	if info.Name != "example" || info.DefaultPort != 0 || info.RequiresHostCLI {
+		t.Errorf("Describe = %+v, want {Name:example DefaultPort:0 RequiresHostCLI:false}", info)
 	}
 
-	// The :11441 /token shim proxies to the dispensed external broker: a correct
+	// The /token shim proxies to the dispensed external broker: a correct
 	// bearer yields the fake minted token (Mint("", nil) -> "example-token-").
-	srv := httptest.NewServer(gwsBrokerProxyMux(h, "shim-secret"))
+	srv := httptest.NewServer(brokerProxyMux(h, "shim-secret"))
 	defer srv.Close()
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/token", nil)
 	req.Header.Set("Authorization", "Bearer shim-secret")
@@ -98,7 +97,7 @@ func TestExternalBrokerOverrideEndToEnd(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("shim /token status = %d, want 200", res.StatusCode)
 	}
-	var bearer gwsBearer
+	var bearer brokerToken
 	if err := json.NewDecoder(res.Body).Decode(&bearer); err != nil {
 		t.Fatal(err)
 	}

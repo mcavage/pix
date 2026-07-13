@@ -15,7 +15,7 @@ func TestLoadAbsentReturnsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() absent file: got err %v, want nil", err)
 	}
-	if want := []string{"memory", "gws"}; len(c.Services) != len(want) || c.Services[0] != want[0] || c.Services[1] != want[1] {
+	if want := []string{"memory"}; len(c.Services) != len(want) || c.Services[0] != want[0] {
 		t.Errorf("Services = %v, want %v", c.Services, want)
 	}
 	if c.MemoryWatcherModel != DefaultMemoryWatcherModel {
@@ -34,7 +34,7 @@ func TestLoadDecodesTOML(t *testing.T) {
 	path := filepath.Join(dir, "config.toml")
 	toml := `
 version_pin = "0.0.1"
-services = ["memory", "gws", "warehouse"]
+services = ["memory", "warehouse"]
 mcp = ["slack"]
 memory_watcher_model = "custom-watcher"
 memory_embed_model = "custom-embed"
@@ -65,7 +65,7 @@ port = 9000
 	if c.VersionPin != "0.0.1" {
 		t.Errorf("VersionPin = %q, want 0.0.1", c.VersionPin)
 	}
-	if len(c.Services) != 3 || c.Services[2] != "warehouse" {
+	if len(c.Services) != 2 || c.Services[1] != "warehouse" {
 		t.Errorf("Services = %v", c.Services)
 	}
 	if len(c.MCP) != 1 || c.MCP[0] != "slack" {

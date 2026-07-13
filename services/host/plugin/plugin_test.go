@@ -229,7 +229,7 @@ func (echoBroker) Mint(audience string, scopes []string) (Token, error) {
 }
 func (echoBroker) Check() error { return nil }
 func (echoBroker) Describe() (BrokerInfo, error) {
-	return BrokerInfo{Name: "gws", DefaultPort: 11441, RequiresHostCLI: true}, nil
+	return BrokerInfo{Name: "example", DefaultPort: 12345, RequiresHostCLI: true}, nil
 }
 
 func TestRPCRoundTripBroker(t *testing.T) {
@@ -244,7 +244,7 @@ func TestRPCRoundTripBroker(t *testing.T) {
 		t.Fatalf("Check round trip: err %v", err)
 	}
 	// Zero-arg method.
-	if got, err := c.Describe(); err != nil || got.Name != "gws" || got.DefaultPort != 11441 || !got.RequiresHostCLI {
+	if got, err := c.Describe(); err != nil || got.Name != "example" || got.DefaultPort != 12345 || !got.RequiresHostCLI {
 		t.Fatalf("Describe round trip: got %+v err %v", got, err)
 	}
 }

@@ -24,7 +24,7 @@ func TestResolveServices(t *testing.T) {
 	}{
 		{"cli empty falls back to config", nil, []string{"memory"}, []string{"memory"}},
 		{"cli of empty strings falls back", []string{"", " "}, []string{"memory"}, []string{"memory"}},
-		{"cli overrides config", []string{"gws"}, []string{"memory"}, []string{"gws"}},
+		{"cli overrides config", []string{"knowledge"}, []string{"memory"}, []string{"knowledge"}},
 		{"both empty means all (nil)", nil, nil, nil},
 	}
 	for _, tc := range cases {
@@ -87,11 +87,11 @@ func TestLaunchRefusesOnSHAMismatch(t *testing.T) {
 // --- F2: a plugin subprocess env never contains the broker bearer ------------
 
 func TestPluginEnvStripsBearer(t *testing.T) {
-	t.Setenv("GWS_TOKEN_AUTH", "super-secret-bearer")
+	t.Setenv("PI_STACK_BROKER_AUTH", "super-secret-bearer")
 
 	// A generic plugin (memory/mcp): the bearer must be gone.
 	for _, kv := range pluginEnv(nil) {
-		if strings.HasPrefix(kv, "GWS_TOKEN_AUTH=") {
+		if strings.HasPrefix(kv, "PI_STACK_BROKER_AUTH=") {
 			t.Fatalf("pluginEnv(nil) leaked the broker bearer: %q", kv)
 		}
 	}
@@ -99,12 +99,12 @@ func TestPluginEnvStripsBearer(t *testing.T) {
 	// The broker gets its bearer back — and ONLY the granted value, never the
 	// stripped process-global one.
 	got := ""
-	for _, kv := range pluginEnv([]string{"GWS_TOKEN_AUTH=broker-only"}) {
-		if strings.HasPrefix(kv, "GWS_TOKEN_AUTH=") {
+	for _, kv := range pluginEnv([]string{"PI_STACK_BROKER_AUTH=broker-only"}) {
+		if strings.HasPrefix(kv, "PI_STACK_BROKER_AUTH=") {
 			got = kv
 		}
 	}
-	if got != "GWS_TOKEN_AUTH=broker-only" {
+	if got != "PI_STACK_BROKER_AUTH=broker-only" {
 		t.Fatalf("broker env = %q, want the explicitly-granted value only", got)
 	}
 }
@@ -195,7 +195,7 @@ func TestMemoryProxyMuxContract(t *testing.T) {
 	}
 }
 
-// --- F7(c/d): gwsBrokerProxyMux enforces the bearer over a stub broker --------
+// --- F7(c/d): brokerProxyMux enforces the bearer over a stub broker --------
 
 type stubBroker struct{}
 
@@ -207,10 +207,10 @@ func (stubBroker) Describe() (plugin.BrokerInfo, error) {
 	return plugin.BrokerInfo{Name: "stub"}, nil
 }
 
-func TestGwsBrokerProxyMuxAuth(t *testing.T) {
+func TestBrokerProxyMuxAuth(t *testing.T) {
 	h := &pluginHolder{}
 	h.set(stubBroker{}, nil)
-	srv := httptest.NewServer(gwsBrokerProxyMux(h, "the-secret"))
+	srv := httptest.NewServer(brokerProxyMux(h, "the-secret"))
 	defer srv.Close()
 
 	// Missing bearer -> 401.
@@ -234,7 +234,7 @@ func TestGwsBrokerProxyMuxAuth(t *testing.T) {
 	if res2.StatusCode != http.StatusOK {
 		t.Fatalf("correct bearer should be 200, got %d", res2.StatusCode)
 	}
-	var bearer gwsBearer
+	var bearer brokerToken
 	if err := json.NewDecoder(res2.Body).Decode(&bearer); err != nil {
 		t.Fatal(err)
 	}

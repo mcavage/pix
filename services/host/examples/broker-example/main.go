@@ -1,6 +1,8 @@
 // Command broker-example is a REFERENCE example of an external credential
 // broker: how a private overlay ships its OWN out-of-process broker binary that
-// OVERRIDES the built-in gws broker without ever linking into the public tree.
+// provides a credential broker without ever linking into the public tree. The
+// public tree ships NO built-in broker (the seam is dormant); this is the
+// artifact that fills it.
 //
 // It is NOT wired into `serve` by default. To use it, a user points
 // ~/.config/pi-stack/config.toml's [plugins.broker] at this binary:
@@ -12,8 +14,8 @@
 //
 // The supervisor (services/host/serve_plugin.go) then sha-verifies and launches
 // it as a go-plugin subprocess, dispenses the "broker" capability, and backs the
-// stable :11441 /token shim with it. This example mints a FAKE short-lived token
-// so it can be proven end-to-end — it NEVER returns a real secret.
+// stable /token shim (brokerProxyMux) with it. This example mints a FAKE
+// short-lived token so it can be proven end-to-end — it NEVER returns a real secret.
 package main
 
 import (
@@ -34,7 +36,7 @@ func (exampleBroker) Mint(audience string, scopes []string) (plugin.Token, error
 func (exampleBroker) Check() error { return nil }
 
 func (exampleBroker) Describe() (plugin.BrokerInfo, error) {
-	return plugin.BrokerInfo{Name: "example", DefaultPort: 11441, AuthHeader: "Authorization", RequiresHostCLI: false}, nil
+	return plugin.BrokerInfo{Name: "example", DefaultPort: 0, AuthHeader: "Authorization", RequiresHostCLI: false}, nil
 }
 
 func main() {
