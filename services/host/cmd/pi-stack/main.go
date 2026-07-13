@@ -49,7 +49,11 @@ func main() {
 		runConfig(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
-	case "doctor", "setup", "mcp", "models", "upgrade", "uninstall":
+	case "doctor":
+		runDoctorCmd(os.Args[2:])
+	case "setup":
+		runSetupCmd(os.Args[2:])
+	case "mcp", "models", "upgrade", "uninstall":
 		stub(os.Args[1])
 	case "help", "-h", "--help":
 		fmt.Print(helpText)
@@ -157,8 +161,8 @@ commands:
   version             print the launcher version
   config show|path    show the resolved config path and contents
   serve [args...]     run the host services (execs pi-stack-host serve)
-  doctor              diagnose host + sandbox health          (coming in a later unit)
-  setup               guided first-run setup                   (coming in a later unit)
+  doctor              diagnose host + sandbox health
+  setup               guided first-run setup
   mcp                 manage MCP servers                        (coming in a later unit)
   models              manage local Ollama models                (coming in a later unit)
   upgrade             update the launcher + kit                 (coming in a later unit)
