@@ -137,6 +137,25 @@ environment:
     # pi runs on Node, which uses its own bundled CA store (not the system one),
     # so it must be told to also trust the proxy's intercepting CA.
     NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/proxy-ca.crt
+  # GWS_TOKEN_AUTH is the shared broker bearer the in-sandbox clients (gws
+  # wrapper, recall) use to authenticate to the host services. The host launcher
+  # (cmd/pi-stack/run.go, bin/pi-stack, Makefile `run`) sets it in the `sbx run`
+  # PROCESS ENV rather than on argv — argv is process-inspectable via ps/EDR
+  # (SECURITY). Declaring it here forwards that host env value into the VM, where
+  # the gws wrapper sends it as the Authorization bearer to the host gws-token
+  # service (:11441). It is intentionally NOT proxyManaged: the VM must READ the
+  # value (it is a local shared secret, not an upstream provider credential to
+  # hide behind the proxy sentinel).
+  #
+  # This is declared as a comment (not a functional key) on purpose: kit-spec v1
+  # has no verified env-passthrough field, and inventing one risks a `sbx run`
+  # panic (v2 already panics on unknown requirements — see the header note). The
+  # host launcher does the real work by putting GWS_TOKEN_AUTH in the sbx process
+  # env; this block documents the contract and the open verification question.
+  # TODO(host-verified): confirm sbx forwards a launcher process-env var into the
+  # VM (and, if a spec.yaml declaration is required, add it here with the correct
+  # v1 field name); if it does not forward at all, switch the launchers to
+  # `sbx secret set` (the locked design's "inject as a sandbox SECRET").
   proxyManaged:
     - ANTHROPIC_API_KEY
     - GEMINI_API_KEY

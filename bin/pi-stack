@@ -44,19 +44,23 @@ kits=( --kit "$KIT" )
 # host services with a shared token at ~/.config/pi-stack/broker-token. Read it if
 # present, else mint one into the same file (0600) so the host binary and the Go
 # launcher — which read/write the SAME file via config.EnsureToken — all agree on
-# the value. Injected via --env GWS_TOKEN_AUTH, mirroring the Go launcher's
-# cmd/pi-stack/sbxargs.go.
-# TODO(host-verified): argv is process-inspectable, so a plain --env leaks the
-# bearer to anyone with `ps`. Move it onto the sbx secret mechanism once the exact
-# host-side syntax is pinned down (same TODO as sbxargs.go).
-env_args=()
+# the value.
+#
+# SECURITY: the token is exported into the ENVIRONMENT of the `sbx run` process
+# (not passed as a --env argv flag). argv is process-inspectable — anyone with
+# `ps`, or an EDR agent, can read a plain `--env GWS_TOKEN_AUTH=<token>`. Setting
+# it in the process env keeps it off the command line; pi-kit/spec.yaml declares
+# GWS_TOKEN_AUTH so the sandbox picks it up from this forwarded host env. Mirrors
+# the Go launcher's cmd/pi-stack/run.go.
+# TODO(host-verified): confirm sbx forwards this process-env var into the VM per
+# pi-kit/spec.yaml; if not, switch to `sbx secret set` (same TODO as run.go).
 tok_file="${XDG_CONFIG_HOME:-$HOME/.config}/pi-stack/broker-token"
 if [ ! -f "$tok_file" ]; then
   mkdir -p "$(dirname "$tok_file")"
   ( umask 077; head -c32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=' > "$tok_file" )
 fi
 if [ -s "$tok_file" ]; then
-  env_args+=( --env "GWS_TOKEN_AUTH=$(cat "$tok_file")" )
+  export GWS_TOKEN_AUTH="$(cat "$tok_file")"
 fi
 
 extra_ws=()
@@ -72,7 +76,7 @@ if [ "$dev" = 1 ]; then
   fi
 fi
 
-cmd=( sbx run pi-stack "${kits[@]}" ${env_args[@]+"${env_args[@]}"} "$workspace" ${extra_ws[@]+"${extra_ws[@]}"} )
+cmd=( sbx run pi-stack "${kits[@]}" "$workspace" ${extra_ws[@]+"${extra_ws[@]}"} )
 if [ "${#pi_args[@]}" -gt 0 ] || [ "$#" -gt 0 ]; then
   cmd+=( -- ${pi_args[@]+"${pi_args[@]}"} "$@" )
 fi

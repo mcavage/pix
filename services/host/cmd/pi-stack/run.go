@@ -53,8 +53,10 @@ func runRun(argv []string) {
 	args := buildSbxArgs(cfg, o, version)
 
 	if os.Getenv("PI_STACK_DEBUG") != "" {
-		// Never print the raw broker bearer (F3): argv is process-inspectable and
-		// debug output ends up in logs/terminals. Redact the value, keep the shape.
+		// Never print the raw broker bearer: argv is process-inspectable and debug
+		// output ends up in logs/terminals. The token is no longer on argv at all
+		// (it goes in the child ENV below); redactArgs stays as belt-and-suspenders
+		// in case anything token-shaped ever creeps back onto the command line.
 		fmt.Fprintln(os.Stderr, "+ sbx "+strings.Join(redactArgs(args), " "))
 	}
 
@@ -62,6 +64,18 @@ func runRun(argv []string) {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	// SECURITY: pass the broker bearer in the sbx CHILD PROCESS ENVIRONMENT, not on
+	// argv (which `ps`/EDR can read). pi-kit/spec.yaml declares GWS_TOKEN_AUTH so
+	// the sandbox picks it up from this forwarded host env; the in-sandbox gws
+	// wrapper then sends it as the bearer to the host gws-token service.
+	//
+	// TODO(host-verified): confirm sbx forwards this process-env var into the VM
+	// per pi-kit/spec.yaml; if it does not, switch to `sbx secret set` + a
+	// credential binding (the locked design's "inject as a sandbox SECRET").
+	cmd.Env = os.Environ()
+	if o.Token != "" {
+		cmd.Env = append(cmd.Env, "GWS_TOKEN_AUTH="+o.Token)
+	}
 	if err := cmd.Run(); err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
 			os.Exit(exit.ExitCode())

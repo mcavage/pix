@@ -25,7 +25,7 @@ type runOpts struct {
 	Name        string   // --name N: sandbox name
 	Model       string   // --model M: active pi model (passed through to pi)
 	Passthrough []string // args after `--`, handed straight to pi
-	Token       string   // broker bearer injected into the sandbox env
+	Token       string   // broker bearer; injected via the sbx PROCESS ENV (run.go), never argv
 }
 
 // kitRef returns the git ref fragment the launcher pins. A stamped release
@@ -80,18 +80,12 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 		args = append(args, "--mcp", m)
 	}
 
-	// Inject the shared broker bearer so the in-sandbox clients (gws wrapper,
-	// recall) can authenticate to the host services.
-	//
-	// TODO(launcher): move the bearer OFF argv onto the sbx secret mechanism.
-	// argv is process-inspectable (anyone with `ps` on the host can read a plain
-	// `--env GWS_TOKEN_AUTH=<token>`), so this env-var injection is a stopgap.
-	// Switch to `sbx secret set` + a credential binding once the exact syntax is
-	// pinned down. Debug/printed output already redacts the value (see
-	// redactArgs in run.go); this TODO tracks removing it from argv entirely.
-	if o.Token != "" {
-		args = append(args, "--env", "GWS_TOKEN_AUTH="+o.Token)
-	}
+	// SECURITY: the shared broker bearer (o.Token) is DELIBERATELY NOT emitted on
+	// argv here. argv is process-inspectable (anyone with `ps`, or an EDR agent,
+	// can read a plain `--env GWS_TOKEN_AUTH=<token>`), so the launcher instead
+	// sets GWS_TOKEN_AUTH in the sbx CHILD PROCESS ENVIRONMENT (see run.go), and
+	// pi-kit/spec.yaml declares it so the sandbox picks it up from that forwarded
+	// host env. Keep this arg builder token-free.
 
 	// Workspace (first non-flag positional).
 	args = append(args, o.Workspace)

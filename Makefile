@@ -145,14 +145,17 @@ run: ## Launch a pi-stack sandbox NAME. If NAME is stopped it's recreated (works
 	: 'Broker bearer: read-or-mint the shared token the in-sandbox clients (gws'; \
 	: 'wrapper, recall) use to authenticate to the host services. Same file the'; \
 	: 'launcher (out/pi-stack) and pi-stack-host read/write, so whoever creates'; \
-	: 'it first wins and everyone agrees on the value. Injected via --env, mirroring'; \
-	: 'the Go launchers cmd/pi-stack/sbxargs.go. TODO(host-verified): argv is'; \
-	: 'process-inspectable — move the bearer onto the sbx secret mechanism once the'; \
-	: 'exact syntax is pinned down on the host.'; \
+	: 'it first wins and everyone agrees on the value.'; \
+	: 'SECURITY: the token is EXPORTED into the sbx PROCESS ENV, not passed as a'; \
+	: '--env argv flag. argv is process-inspectable (ps/EDR); the process env is'; \
+	: 'not. pi-kit/spec.yaml declares GWS_TOKEN_AUTH so the VM picks it up from'; \
+	: 'this forwarded host env. Mirrors cmd/pi-stack/run.go.'; \
+	: 'TODO(host-verified): confirm sbx forwards this process-env var into the VM'; \
+	: 'per pi-kit/spec.yaml; if not, switch to `sbx secret set` on the host.'; \
 	TOKFILE="$${XDG_CONFIG_HOME:-$$HOME/.config}/pi-stack/broker-token"; \
 	if [ ! -f "$$TOKFILE" ]; then mkdir -p "$$(dirname "$$TOKFILE")"; (umask 077; head -c32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=' > "$$TOKFILE"); fi; \
-	TOK="$$(cat "$$TOKFILE")"; \
-	exec sbx run pi-stack --name $(NAME) $${TAG:+--template docker.io/$(DOCKER_USER)/pi-stack:$$TAG} --kit $(KIT) $(OVERLAY_KIT_FLAG) $(MCP_FLAGS) --env GWS_TOKEN_AUTH=$$TOK . $(OVERLAY_WS) -- $(DEV_SKILLS)
+	export GWS_TOKEN_AUTH="$$(cat "$$TOKFILE")"; \
+	exec sbx run pi-stack --name $(NAME) $${TAG:+--template docker.io/$(DOCKER_USER)/pi-stack:$$TAG} --kit $(KIT) $(OVERLAY_KIT_FLAG) $(MCP_FLAGS) . $(OVERLAY_WS) -- $(DEV_SKILLS)
 
 # Run the latest PUBLISHED image straight off the git-hosted kit — the true
 # consumer path, no local repo needed. Every push to main auto-publishes a NEW
