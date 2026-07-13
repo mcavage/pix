@@ -52,7 +52,7 @@ func gogGreen(f fakeEnv) fakeEnv {
 	}
 	f.envVars["GOG_ACCOUNT"] = gogAcct
 	f.output["gog --account "+gogAcct+" auth doctor --check"] = "ok"
-	f.output["op run --env-file=config/op-refs.env -- gog --account "+gogAcct+" mcp --list-tools"] =
+	f.output["op run --env-file="+opRefsEnvFile()+" -- gog --account "+gogAcct+" mcp --list-tools"] =
 		"gmail_search\ncalendar_events\ndocs_get\n"
 	return f
 }
@@ -169,7 +169,7 @@ func TestDoctor_GogHeadlessTrap(t *testing.T) {
 			"sbx mcp ls":    "gog\n",
 			"gog --account " + gogAcct + " auth doctor --check": "ok",
 			// headless probe returns an empty tool list -> the trap.
-			"op run --env-file=config/op-refs.env -- gog --account " + gogAcct + " mcp --list-tools": "",
+			"op run --env-file=" + opRefsEnvFile() + " -- gog --account " + gogAcct + " mcp --list-tools": "",
 		},
 		envVars: map[string]string{"GOG_ACCOUNT": gogAcct},
 		ports:   map[int]bool{11435: true},
@@ -210,8 +210,39 @@ func TestDoctor_GogAccountUnset(t *testing.T) {
 	}
 	r := runDoctor(defaultCfg(), f.env())
 	joined := strings.Join(r.todos(), "\n")
-	if !strings.Contains(joined, "set GOG_ACCOUNT") {
-		t.Errorf("expected a GOG_ACCOUNT TODO, got %v", r.todos())
+	if !strings.Contains(joined, "set gog_account") {
+		t.Errorf("expected a gog_account TODO, got %v", r.todos())
+	}
+	// It must NOT report green: the account check carries the "cannot verify"
+	// detail and stays a TODO (not stateOK).
+	var buf bytes.Buffer
+	r.services, r.mcp = defaultCfg().Services, nil
+	r.render(&buf)
+	if !strings.Contains(buf.String(), "cannot verify (GOG_ACCOUNT unset in env/config)") {
+		t.Errorf("expected a 'cannot verify' account detail, got:\n%s", buf.String())
+	}
+}
+
+// TestDoctor_GogAccountFromConfig: the account is read from config.toml's
+// gog_account (the Go-side source of truth) even with GOG_ACCOUNT absent from the
+// env, so doctor no longer false-reports "unset" when make/config has it.
+func TestDoctor_GogAccountFromConfig(t *testing.T) {
+	f := gogGreen(fakeEnv{
+		present: map[string]bool{"sbx": true},
+		output: map[string]string{
+			"sbx secret ls": "anthropic openai google github",
+			"sbx mcp ls":    "gog\n",
+		},
+		ports: map[int]bool{11435: true},
+	})
+	// Drop the env var; the account must come from config instead.
+	delete(f.envVars, "GOG_ACCOUNT")
+	cfg := defaultCfg()
+	cfg.GogAccount = gogAcct
+	r := runDoctor(cfg, f.env())
+	joined := strings.Join(r.todos(), "\n")
+	if strings.Contains(joined, "gog_account") || strings.Contains(joined, "GOG_ACCOUNT") {
+		t.Errorf("account from config should not TODO, got %v", r.todos())
 	}
 }
 

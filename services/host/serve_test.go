@@ -42,6 +42,69 @@ func TestResolveServices(t *testing.T) {
 	}
 }
 
+// --- F2: the broker slot is reachable through `serve` ------------------------
+
+// TestServeBrokerSlot proves serve's OVERLAY-ONLY broker slot: with the default
+// builtin impl NOTHING starts (no built-in broker in the public tree); with
+// [plugins.broker] pointing at the sha-pinned example broker binary, the slot
+// launches it through the shared supervisor and serves the stable /token shim.
+func TestServeBrokerSlot(t *testing.T) {
+	// builtin impl (the default public case) => the slot starts nothing.
+	sup := &supervisor{}
+	defer sup.shutdown()
+	svc, err := brokerService(&config.Config{}, sup, "")
+	if err != nil {
+		t.Fatalf("brokerService(builtin): %v", err)
+	}
+	if svc != nil {
+		t.Fatalf("builtin broker must start nothing, got %+v", svc)
+	}
+
+	// external impl => launched + served through serve's shared supervisor.
+	bin, sha := buildExampleBroker(t)
+	cfg := &config.Config{Plugins: map[string]config.PluginSpec{
+		"broker": {Impl: "example", Path: bin, SHA: sha},
+	}}
+	sup2 := &supervisor{}
+	defer sup2.shutdown()
+	svc2, err := brokerService(cfg, sup2, "")
+	if err != nil {
+		t.Fatalf("brokerService(external): %v", err)
+	}
+	if svc2 == nil {
+		t.Fatal("external broker must produce a host service")
+	}
+	if svc2.name != "broker" {
+		t.Errorf("service name = %q, want broker", svc2.name)
+	}
+	// Preflight must pass (the dispensed broker's Check succeeds).
+	if svc2.check == nil {
+		t.Fatal("broker slot must set a preflight check")
+	}
+	if err := svc2.check(); err != nil {
+		t.Errorf("broker preflight: %v", err)
+	}
+	// The served /token shim proxies to the dispensed external broker. No bearer
+	// is configured here (PI_STACK_BROKER_AUTH unset), so the check is disabled.
+	srv := httptest.NewServer(svc2.mux)
+	defer srv.Close()
+	res, err := http.Get(srv.URL + "/token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("/token status = %d, want 200", res.StatusCode)
+	}
+	var bearer brokerToken
+	if err := json.NewDecoder(res.Body).Decode(&bearer); err != nil {
+		t.Fatal(err)
+	}
+	if bearer.AccessToken != "example-token-" || bearer.ExpiresIn != 300 {
+		t.Errorf("shim minted %+v, want AccessToken=example-token- ExpiresIn=300", bearer)
+	}
+}
+
 // --- F5: an external plugin with a mismatched SHA refuses to launch ----------
 
 func TestVerifyPluginSHA(t *testing.T) {

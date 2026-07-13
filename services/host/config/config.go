@@ -44,6 +44,13 @@ type Config struct {
 	MemoryWatcherModel string `toml:"memory_watcher_model"`
 	MemoryEmbedModel   string `toml:"memory_embed_model"`
 
+	// GogAccount is the Google Workspace account the gog host-MCP server serves.
+	// It is the Go-side source of truth doctor probes against; it MUST match the
+	// GOG_ACCOUNT in config/local.mk that `make mcp-register` registers with the
+	// gateway (the make path can't see this file, so the two must be kept in sync).
+	// doctor falls back to the GOG_ACCOUNT env var when this is empty.
+	GogAccount string `toml:"gog_account"`
+
 	// KnowledgeBundles are the git-mounted OKF bundle directory path(s) the
 	// knowledge service (:11436) indexes at startup. Empty (the default) means no
 	// bundles — the index is served empty and the service degrades cleanly.
@@ -160,6 +167,12 @@ mcp = []
 # Local Ollama models the memory service uses.
 memory_watcher_model = "gemma4"
 memory_embed_model = "nomic-embed-text"
+
+# Google Workspace account the gog host-MCP server serves. This is the Go-side
+# source of truth pi-stack doctor probes against, and it MUST match the
+# GOG_ACCOUNT in config/local.mk that make mcp-register registers with the
+# gateway. Empty falls back to the GOG_ACCOUNT env var.
+gog_account = ""
 
 # OKF knowledge bundle directories the knowledge service (:11436) indexes.
 # Empty = no bundles (index served empty). The knowledge service is opt-in:
