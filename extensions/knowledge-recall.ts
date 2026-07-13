@@ -102,8 +102,22 @@ function formatConcept(c: any): string {
 	return line;
 }
 
+// Truncate s to at most max characters, marking the cut with an ellipsis. Used
+// so a single concept with a huge description/citation list can never blow the
+// budget. Defensive on tiny/zero max.
+function truncate(s: string, max: number): string {
+	if (max <= 0) return "";
+	if (s.length <= max) return s;
+	if (max === 1) return "…";
+	return s.slice(0, max - 1).trimEnd() + "…";
+}
+
 // Pack concepts into the block, respecting the OWN char budget so knowledge never
 // starves memory (or gets starved by it) — each runs its own ~1000-char window.
+// The budget is enforced from the FIRST line onward: every concept line is capped
+// to the remaining budget (ellipsized if needed) and the running total never
+// exceeds CHAR_BUDGET, so even one concept with a giant description or citation
+// list cannot inject an oversized block.
 function formatBlock(concepts: any[]): string | null {
 	if (!concepts?.length) return null;
 	const header = [
@@ -113,10 +127,16 @@ function formatBlock(concepts: any[]): string | null {
 	const lines: string[] = [];
 	let used = 0;
 	for (const c of concepts) {
-		const line = formatConcept(c);
-		if (lines.length && used + line.length + 1 > CHAR_BUDGET) break;
+		if (used >= CHAR_BUDGET) break;
+		// Reserve one char per line for the joining newline in the accounting.
+		const remaining = CHAR_BUDGET - used - 1;
+		if (remaining <= 0) break;
+		const full = formatConcept(c);
+		const line = truncate(full, remaining);
+		if (!line) break;
 		lines.push(line);
 		used += line.length + 1;
+		if (line !== full) break; // truncated => budget is spent
 	}
 	if (!lines.length) return null;
 	return [...header, ...lines].join("\n");

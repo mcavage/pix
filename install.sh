@@ -163,16 +163,27 @@ do_install() {
 	# shellcheck disable=SC2064
 	trap "rm -rf '$tmp'" EXIT INT TERM
 
+	# Verify-all-then-install-all: a partial install (new pi-stack + stale
+	# pi-stack-host, or vice versa) is a mismatched pair that can misbehave subtly.
+	# So stage EVERYTHING in the temp dir and verify EVERY checksum first; only
+	# once all binaries are downloaded, verified, and made executable do we move
+	# any into place. Any failure before that point installs nothing (the temp dir
+	# is cleaned by the EXIT trap and ${PREFIX} is left untouched).
 	log "Downloading SHA256SUMS..."
 	fetch "$sums_url" "${tmp}/SHA256SUMS"
 
-	mkdir -p "$PREFIX"
 	for b in $BINARIES; do
 		asset="${b}-${os}-${arch}"
 		log "Downloading ${asset}..."
 		fetch "${base}/${asset}" "${tmp}/${b}"
 		verify "${tmp}/${b}" "$asset" "${tmp}/SHA256SUMS"
 		chmod +x "${tmp}/${b}"
+	done
+
+	# Everything verified — now install. These moves are the only writes to
+	# ${PREFIX}; they happen last so a failed/mismatched download never lands.
+	mkdir -p "$PREFIX"
+	for b in $BINARIES; do
 		mv -f "${tmp}/${b}" "${PREFIX}/${b}"
 	done
 
