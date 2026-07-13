@@ -41,6 +41,7 @@ skills/*
 !skills/design-system
 !skills/docs-standards
 !skills/docs-sync
+!skills/enrich
 !skills/git-conventions
 !skills/guard
 !skills/healthcheck
@@ -69,6 +70,7 @@ agents/*
 !agents/devrel.md
 !agents/dx-consultant.md
 !agents/engineer.md
+!agents/enrich.md
 !agents/enterprise-admin.md
 !agents/fanout.md
 !agents/finance-analyst.md
