@@ -94,10 +94,17 @@ func TestSlackAdapterCallToolRouting(t *testing.T) {
 }
 
 func TestMcpServerForSelection(t *testing.T) {
-	if _, err := mcpServerFor("slack"); err != nil {
+	srv, cleanup, err := mcpServerFor("slack")
+	if err != nil {
 		t.Fatalf("mcpServerFor(slack) = %v, want built-in adapter", err)
 	}
-	if _, err := mcpServerFor("nope"); err == nil {
+	cleanup()
+	if _, ok := srv.(slackMcpAdapter); !ok {
+		t.Errorf("mcpServerFor(slack) returned %T, want the built-in slackMcpAdapter", srv)
+	}
+	_, cleanup, err = mcpServerFor("nope")
+	cleanup()
+	if err == nil {
 		t.Fatal("mcpServerFor on an unknown name should error")
 	}
 }
@@ -107,10 +114,11 @@ func TestMcpServerForSelection(t *testing.T) {
 // the McpServer proxy path end to end.
 func TestMcpBridgeProxiesSlack(t *testing.T) {
 	clearSlackToken(t)
-	srv, err := mcpServerFor("slack")
+	srv, cleanup, err := mcpServerFor("slack")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer cleanup()
 	name, tools, handlers, err := bridgeFromMcpServer(srv)
 	if err != nil {
 		t.Fatal(err)

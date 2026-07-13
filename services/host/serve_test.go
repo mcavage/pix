@@ -51,9 +51,9 @@ func TestVerifyPluginSHA(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Empty SHA is allowed (unpinned) — no error, just a logged warning.
-	if err := verifyPluginSHA(config.PluginSpec{Path: bin}); err != nil {
-		t.Errorf("empty SHA should be allowed (unpinned), got %v", err)
+	// Empty SHA is a hard refusal (F-C): external plugins MUST be sha-pinned.
+	if err := verifyPluginSHA(config.PluginSpec{Path: bin}); err == nil || !strings.Contains(err.Error(), "unpinned") {
+		t.Errorf("empty SHA should be refused as unpinned, got %v", err)
 	}
 
 	// Wrong SHA is a hard refusal.

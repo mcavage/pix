@@ -99,13 +99,13 @@ func pluginEnv(extra []string) []string {
 }
 
 // verifyPluginSHA enforces the pinned checksum of an EXTERNAL plugin binary
-// before it is executed (F5). A configured spec.SHA that does not match the
-// binary at spec.Path is a hard refusal. An empty SHA is allowed but logged
-// loudly as UNPINNED. The built-in self-exec path (spec.Path == "") is exempt.
+// before it is executed (F5). External plugins MUST be sha-pinned: an empty
+// spec.SHA is a hard refusal (never launch an unpinned binary), and a configured
+// spec.SHA that does not match the binary at spec.Path is likewise refused. The
+// built-in self-exec path (spec.Path == "") is exempt and never reaches here.
 func verifyPluginSHA(spec config.PluginSpec) error {
 	if spec.SHA == "" {
-		log.Printf("plugin %s: UNPINNED (no sha in config) — launching an external plugin without checksum verification", spec.Path)
-		return nil
+		return fmt.Errorf("plugin %s: refusing to launch an unpinned external plugin (no sha in config); external plugins must be sha-pinned", spec.Path)
 	}
 	f, err := os.Open(spec.Path)
 	if err != nil {

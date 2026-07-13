@@ -99,6 +99,70 @@ func TestExternalMcpOverrideEndToEnd(t *testing.T) {
 	}
 }
 
+// TestMcpServerForUsesOverrideEvenForSlack proves F-A: [plugins.mcp] is consulted
+// FIRST, so a non-builtin impl overrides EVERY name — including "slack", the only
+// registered public MCP. Previously mcpServerFor hard-coded name=="slack" to the
+// built-in adapter before ever looking at config, silently bypassing the
+// operator override. Now mcpServerFor("slack") must return the external
+// pluginMcpServer (a real launched subprocess), not the in-process slackMcpAdapter.
+func TestMcpServerForUsesOverrideEvenForSlack(t *testing.T) {
+	bin, sha := buildExampleMcp(t)
+
+	// Point [plugins.mcp] at the external example binary via a temp config the
+	// loader picks up through PI_STACK_CONFIG.
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cfg := "[plugins.mcp]\nimpl = \"example\"\npath = \"" + bin + "\"\nsha = \"" + sha + "\"\n"
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PI_STACK_CONFIG", cfgPath)
+
+	srv, cleanup, err := mcpServerFor("slack")
+	if err != nil {
+		t.Fatalf("mcpServerFor(slack) with an override = %v", err)
+	}
+	defer cleanup()
+
+	if _, ok := srv.(slackMcpAdapter); ok {
+		t.Fatal("mcpServerFor(slack) returned the built-in adapter; the [plugins.mcp] override was bypassed")
+	}
+	ps, ok := srv.(*pluginMcpServer)
+	if !ok {
+		t.Fatalf("mcpServerFor(slack) returned %T, want the external *pluginMcpServer", srv)
+	}
+	// Prove it really is the launched external plugin, not a stub.
+	info, err := ps.Info()
+	if err != nil {
+		t.Fatalf("Info over the override plugin: %v", err)
+	}
+	if info.Name != "example-mcp" {
+		t.Errorf("override Info().Name = %q, want example-mcp", info.Name)
+	}
+}
+
+// TestExternalMcpRefusesUnpinned proves F-C: an external plugin with no pinned
+// sha in config is REFUSED at launch (never exec'd). External plugins must be
+// sha-pinned; an empty sha is a hard failure, not a warning.
+func TestExternalMcpRefusesUnpinned(t *testing.T) {
+	bin, _ := buildExampleMcp(t)
+
+	if err := verifyPluginSHA(config.PluginSpec{Impl: "example", Path: bin}); err == nil {
+		t.Fatal("verifyPluginSHA with an empty sha should refuse, got nil error")
+	} else if !strings.Contains(err.Error(), "unpinned") {
+		t.Errorf("expected an unpinned-refusal error, got %v", err)
+	}
+
+	sup := &supervisor{}
+	defer sup.shutdown()
+	h, err := sup.launch("example", "mcp", config.PluginSpec{Impl: "example", Path: bin}, "", nil)
+	if err == nil {
+		t.Fatal("launch with an empty sha should refuse, got nil error")
+	}
+	if h != nil {
+		t.Errorf("launch should not return a holder on unpinned refusal, got %v", h)
+	}
+}
+
 // TestExternalMcpRefusesOnSHAMismatch proves the pinned-checksum gate for the MCP
 // slot: the same real example binary is refused at launch when config pins the
 // wrong sha, so no subprocess is ever spawned.

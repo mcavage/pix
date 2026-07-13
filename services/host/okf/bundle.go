@@ -43,6 +43,18 @@ func ReadBundle(dir string) (*Bundle, error) {
 		if d.IsDir() {
 			return nil
 		}
+		// Skip symlinked entries: os.ReadFile follows links, so a symlink inside
+		// the bundle pointing at a file OUTSIDE it (e.g. secrets.md -> ~/.ssh/id_rsa)
+		// would otherwise be read and indexed as a concept. Only real files within
+		// the bundle tree are read.
+		if d.Type()&fs.ModeSymlink != 0 {
+			rel, relErr := filepath.Rel(dir, path)
+			if relErr != nil {
+				rel = path
+			}
+			b.Warnings = append(b.Warnings, fmt.Sprintf("skip symlink %s", filepath.ToSlash(rel)))
+			return nil
+		}
 		if !strings.EqualFold(filepath.Ext(d.Name()), ".md") {
 			return nil
 		}
