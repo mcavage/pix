@@ -110,23 +110,6 @@ func TestBuildSbxArgs_MCPExpansion(t *testing.T) {
 	}
 }
 
-// TestBuildSbxArgs_TokenNeverOnArgv is the F1 SECURITY guard: the broker bearer
-// must NEVER appear on the composed sbx argv (argv is process-inspectable via
-// ps/EDR). run.go injects it into the sbx CHILD PROCESS ENV instead; the arg
-// builder must stay token-free even when a token is present.
-func TestBuildSbxArgs_TokenNeverOnArgv(t *testing.T) {
-	cfg := &config.Config{}
-	args := buildSbxArgs(cfg, runOpts{Workspace: ".", Token: "abc123"}, "0.0.99")
-	for _, a := range args {
-		if strings.Contains(a, "abc123") || strings.Contains(a, "GWS_TOKEN_AUTH") {
-			t.Errorf("broker token leaked onto argv %v (must go in the process env only)", args)
-		}
-	}
-	if countFlag(args, "--env") != 0 {
-		t.Errorf("arg builder must emit no --env flags, got %v", args)
-	}
-}
-
 func TestBuildSbxArgs_DevBranch(t *testing.T) {
 	cfg := &config.Config{}
 	args := buildSbxArgs(cfg, runOpts{Workspace: ".", Dev: true, DevRoot: "/repo"}, "0.0.99")

@@ -25,7 +25,11 @@ type runOpts struct {
 	Name        string   // --name N: sandbox name
 	Model       string   // --model M: active pi model (passed through to pi)
 	Passthrough []string // args after `--`, handed straight to pi
-	Token       string   // broker bearer; injected via the sbx PROCESS ENV (run.go), never argv
+	// Token is the credential bearer for an OPTIONAL overlay broker. The default
+	// path leaves it empty and forwards no bearer (gog authenticates host-side in
+	// the gateway-spawned MCP server). Reserved for the dormant generic broker
+	// seam; never emitted on argv (it would go via the sbx child env, like run.go).
+	Token string
 }
 
 // kitRef returns the git ref fragment the launcher pins. A stamped release
@@ -80,12 +84,10 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 		args = append(args, "--mcp", m)
 	}
 
-	// SECURITY: the shared broker bearer (o.Token) is DELIBERATELY NOT emitted on
-	// argv here. argv is process-inspectable (anyone with `ps`, or an EDR agent,
-	// can read a plain `--env GWS_TOKEN_AUTH=<token>`), so the launcher instead
-	// sets GWS_TOKEN_AUTH in the sbx CHILD PROCESS ENVIRONMENT (see run.go), and
-	// pi-kit/spec.yaml declares it so the sandbox picks it up from that forwarded
-	// host env. Keep this arg builder token-free.
+	// The default path forwards NO credential bearer: gog authenticates on the
+	// host inside the gateway-spawned MCP server, so nothing needs injecting. If a
+	// future overlay broker sets o.Token, it goes via the sbx CHILD PROCESS ENV
+	// (never argv, which `ps`/EDR can read) — keep this arg builder token-free.
 
 	// Workspace (first non-flag positional).
 	args = append(args, o.Workspace)

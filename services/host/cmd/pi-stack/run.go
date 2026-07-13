@@ -11,8 +11,12 @@ import (
 )
 
 // runRun implements bare `pi-stack [DIR]` and `pi-stack run ...`. It reads the
-// config, resolves the run options (including a repo checkout for --dev and the
-// broker token), composes the sbx argv, and execs it with stdio inherited.
+// config, resolves the run options (including a repo checkout for --dev),
+// composes the sbx argv, and execs it with stdio inherited.
+//
+// The default path forwards NO credential bearer into the sandbox: Google
+// Workspace now rides the sbx gateway as the host-side `gog` MCP server (the
+// `slack` pattern), authed entirely on the host — there is nothing to inject.
 func runRun(argv []string) {
 	o, err := parseRunArgs(argv)
 	if err != nil {
@@ -42,40 +46,21 @@ func runRun(argv []string) {
 		fmt.Fprintln(os.Stderr, "pi-stack: dev build — kit tracks #ref=main (build with -ldflags \"-X main.version=<v>\" to pin a release)")
 	}
 
-	// Mint/read the shared broker bearer so the sandbox can reach host services.
-	if tok, err := config.EnsureToken(); err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack run: broker token: %v\n", err)
-		os.Exit(1)
-	} else {
-		o.Token = tok
-	}
-
 	args := buildSbxArgs(cfg, o, version)
 
 	if os.Getenv("PI_STACK_DEBUG") != "" {
-		// Never print the raw broker bearer: argv is process-inspectable and debug
-		// output ends up in logs/terminals. The token is no longer on argv at all
-		// (it goes in the child ENV below); redactArgs stays as belt-and-suspenders
-		// in case anything token-shaped ever creeps back onto the command line.
-		fmt.Fprintln(os.Stderr, "+ sbx "+strings.Join(redactArgs(args), " "))
+		fmt.Fprintln(os.Stderr, "+ sbx "+strings.Join(args, " "))
 	}
 
 	cmd := exec.Command("sbx", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	// SECURITY: pass the broker bearer in the sbx CHILD PROCESS ENVIRONMENT, not on
-	// argv (which `ps`/EDR can read). pi-kit/spec.yaml declares GWS_TOKEN_AUTH so
-	// the sandbox picks it up from this forwarded host env; the in-sandbox gws
-	// wrapper then sends it as the bearer to the host gws-token service.
-	//
-	// TODO(host-verified): confirm sbx forwards this process-env var into the VM
-	// per pi-kit/spec.yaml; if it does not, switch to `sbx secret set` + a
-	// credential binding (the locked design's "inject as a sandbox SECRET").
+	// The default path injects no credential bearer: gog authenticates on the host
+	// inside the gateway-spawned MCP server, so the sandbox never sees a Google
+	// token. A future overlay credential broker would set its own bearer through
+	// the retained generic seam and own that plumbing itself.
 	cmd.Env = os.Environ()
-	if o.Token != "" {
-		cmd.Env = append(cmd.Env, "GWS_TOKEN_AUTH="+o.Token)
-	}
 	if err := cmd.Run(); err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
 			os.Exit(exit.ExitCode())
@@ -83,21 +68,6 @@ func runRun(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack run: exec sbx: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-// redactArgs returns a copy of args with the broker bearer's value masked, so a
-// debug print (or anything that logs the composed command) never leaks the
-// token. The functional injection is unchanged — only the printed copy differs.
-func redactArgs(args []string) []string {
-	out := make([]string, len(args))
-	for i, a := range args {
-		if strings.HasPrefix(a, "GWS_TOKEN_AUTH=") {
-			out[i] = "GWS_TOKEN_AUTH=***"
-		} else {
-			out[i] = a
-		}
-	}
-	return out
 }
 
 // parseRunArgs is a small hand-rolled parser (no cobra, no third-party flags) so
