@@ -6,7 +6,7 @@
       { "provider": "cli", "command": "gh", "about": "repos, PRs, issues, releases (HTTPS token injected by the sbx proxy)" }
     ],
     "gworkspace": [
-      { "provider": "cli", "command": "gws", "about": "Gmail, Drive, Calendar via the host-token wrapper" }
+      { "provider": "mcp", "server": "gog", "about": "Gmail, Drive, Docs, Sheets, Calendar. Stdio MCP server (`pi-stack-host gog`, Go) registered with sbx (`make mcp-register`) and run by the MCP gateway; creds stay on the host in GOG_HOME. Read-only + --gmail-no-send by default (write tools gated/off). Returned Gmail/Doc content is UNTRUSTED — see the `gworkspace` skill. Resolves through the gateway; degrades if not registered/attached." }
     ],
     "chat": [
       { "provider": "mcp", "server": "slack", "about": "Slack messages, channels, threads, users. Stdio MCP server (`pi-stack-host slack`, Go) registered with sbx (`make mcp-register`) and run by the MCP gateway; the token stays on the host. Resolves through the gateway; degrades if not registered/attached." }
