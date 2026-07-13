@@ -83,5 +83,5 @@ Revisit this decision if:
 - This should take 5-10 minutes of back-and-forth. If it's taking longer, the decision is probably too large; break it into smaller decisions.
 - If the user says "just do it", say: "I can skip ahead, but you're making a decision without testing [specific untested assumption]. Your call."
 - If the challenge reveals the original idea is wrong, say so and recommend the better alternative.
-- The decision doc feeds downstream skills. If `spec` or `brainstorm` follows, this doc is the source of truth for what you're building and why.
+- The decision doc feeds downstream skills. If `build` or `brainstorm` follows, this doc is the source of truth for what you're building and why.
 - Not for routine tasks, bug fixes, or data pulls. For exploratory ideation before a decision exists, run `brainstorm` first.

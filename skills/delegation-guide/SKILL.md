@@ -62,6 +62,6 @@ Use these sibling skills as gates, not afterthoughts:
 
 - `code-review` before shipping any code wave.
 - `verify` before any completion claim or handoff.
-- `spec` to produce the story files that make each `deep` unit context-complete.
-- `investigate` if a unit fails and the root cause is not obvious.
+- `build` to produce the story files that make each `deep` unit context-complete.
+- `debug` if a unit fails and the root cause is not obvious.
 - `qa` after implementation, before `ship`.

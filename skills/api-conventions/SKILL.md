@@ -5,7 +5,7 @@ description: REST API design and review patterns. Use when designing, building, 
 # api-conventions
 
 Iron laws for REST API design. Apply these when drafting or reviewing endpoints.
-When the API surface is large or fuzzy, run `spec` first to anchor requirements.
+When the API surface is large or fuzzy, run `build` first to anchor requirements.
 Run `code-review` on the implementation before shipping.
 
 ## URLs and methods

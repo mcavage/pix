@@ -61,7 +61,7 @@ an embed model for semantic recall (`make pull-models` fetches both). Skip Ollam
 and recall falls back to keyword search and capture turns off, loudly, so you know
 it's off.
 
-**Open core.** This repo is the generic stack: ~35 dev, writing, and harness
+**Open core.** This repo is the generic stack: ~30 dev, writing, and harness
 skills, 17 role agents, the host binary, the memory loop. Anything
 company-specific (proprietary skills, an internal `capabilities.json`, connectors
 like a warehouse or an HR directory) lives in a private overlay you keep in your
@@ -112,13 +112,14 @@ stay in sbx and never reach the VM.
 
 The skills I reach for (in `skills/`):
 
-- `ship` runs tests, then code-review, then opens a PR with `gh`.
+- `plan` takes an idea to an eng-ready spec with the crew (PM, design, arch, review).
+- `build` compiles that spec into stories and executes them with the crew.
+- `ship` runs tests, code-reviews the diff, and opens a PR with `gh`.
 - `code-review` reviews the diff, then has a different vendor argue against it.
-- `investigate` finds the root cause before touching code.
-- `spec` writes a short plan and builds against it.
+- `debug` finds the root cause before touching code.
 - `qa` and `design-review` drive a headless browser against a running app.
 
-Those are the highlights. The public image bakes ~35 generic dev, writing, and
+Those are the highlights. The public image bakes ~30 generic dev, writing, and
 harness skills (the exact set is the allowlist in `.dockerignore`) plus 17 role
 agents (`architect`, `security-lead`, `sre-lead`, `qa-lead`, and so on) you
 delegate to for the lens a change actually needs, not just a generic reviewer.

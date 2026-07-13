@@ -47,7 +47,7 @@ Write that fact instead.
 
 ## Before you write
 
-If the feature is not yet specified, run `spec` first. If you are documenting
+If the feature is not yet specified, run `build` first. If you are documenting
 code that has not been reviewed yet, run `code-review` first. Do not document
 behavior that the code does not yet have.
 

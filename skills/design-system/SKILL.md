@@ -47,7 +47,7 @@ Build every state before calling a component done:
 - Default box-shadow on every element.
 
 ## Workflow
-- Use `spec` to lock the component contract before building.
+- Use `build` to lock the component contract before building.
 - Use `design-review` to screenshot and score the finished UI.
 - Use `qa` to exercise every state above in the running app.
 - Use `tdd` to drive empty/error/loading state rendering with tests.

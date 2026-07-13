@@ -1114,6 +1114,15 @@ async function runSingle(
 			// max_turns has no CLI flag in pi 0.80.x; inject it as a budget hint.
 			systemPrompt += `\n\nYou have a budget of about ${agent.maxTurns} tool-use turns. Be efficient and return your conclusion before you run out.`;
 		}
+		// Parent-enforced OUTPUT CONTRACT. Subagents run in parallel; without this
+		// two of them pick the same "sensible" path (e.g. docs/design/<topic>.md) and
+		// silently clobber each other — observed with pm + architect. Give each run a
+		// unique artifact path and forbid shared/guessable ones. The primary channel
+		// is still the final message; a file is the exception, not the default.
+		const outSlug = `${agent.name}-${Date.now().toString(36)}-${Math.random()
+			.toString(36)
+			.slice(2, 6)}`;
+		systemPrompt += `\n\n## Output contract (parent-enforced, overrides any conflicting instruction above)\nYou may be ONE of several subagents running in PARALLEL. To avoid clobbering a sibling's file:\n- Return your findings in your FINAL MESSAGE. That is the primary channel the parent reads.\n- Write a file ONLY if the task explicitly asks for one, or the output is too large to inline.\n- When you do write, use EXACTLY this unique path unless the task gave you an explicit one:\n    .pi-agent/subagents/${outSlug}.md\n- NEVER write to a shared or guessable path (e.g. docs/design/<topic>.md, README.md, a fixed report name) — a sibling may be writing there this instant.\n- NEVER overwrite or edit a file you did not create during THIS run.\n- Always state the path of anything you wrote in your final message.`;
 		if (systemPrompt.trim()) {
 			const t = await writePrompt(agent.name, systemPrompt);
 			tmpDir = t.dir;
