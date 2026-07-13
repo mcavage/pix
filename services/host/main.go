@@ -5,13 +5,12 @@
 //
 // Subcommands (one per host service):
 //
-//	gws-token      Google Workspace bearer svc (:11441, HTTP)
 //	memory         self-learning memory store  (:11435, JSON-RPC)
 //	knowledge      OKF knowledge retrieval idx (:11436, JSON-RPC)
 //	mcp <name>     stdio MCP bridge            (run by the sbx gateway)
 //	slack          alias for `mcp slack`       (stdio; run by the sbx gateway)
 //	plugin <kind>  built-in go-plugin server   (self-exec, launched by `serve`)
-//	serve          run the long-running HTTP services together (gws-token, memory, knowledge)
+//	serve          run the long-running HTTP services together (memory, knowledge)
 //
 // The MCP servers are stdio and spawned by the sbx gateway via `sbx mcp add`
 // (see `make mcp-register`), not by `serve`; the gateway now runs `mcp <name>`
@@ -33,6 +32,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"pi-stack/host/plugin"
 )
 
 // Overlay subcommands/services self-register here via init() when their (private,
@@ -45,6 +46,12 @@ var (
 	// service name a factory registers (e.g. a short "warehouse" -> "warehouse-proxy").
 	// Overlay plugins add their own here so the public tree never names one.
 	extraServiceAliases = map[string]string{}
+	// extraBrokerFactory lets an overlay register a BUILT-IN CredentialBroker
+	// served over the `plugin broker` self-exec path. nil in the public tree —
+	// there is no built-in broker (the built-in Google broker was removed), so the broker slot is
+	// overlay-only and the seam stays dormant. An external overlay broker binary
+	// (see examples/broker-example) ships its own main() and does not use this.
+	extraBrokerFactory func() plugin.CredentialBroker
 )
 
 func main() {
@@ -53,8 +60,6 @@ func main() {
 		os.Exit(2)
 	}
 	switch os.Args[1] {
-	case "gws-token":
-		runGwsToken()
 	case "slack":
 		// Back-compat alias: the Slack MCP is now served through the generic
 		// stdio bridge (behaviourally identical to the old runSlack()).
@@ -117,12 +122,11 @@ func usage() {
 usage: pi-stack-host <subcommand>
 
 subcommands:
-  gws-token      Google Workspace short-lived bearer service (:11441)
   memory         self-learning memory store, JSON-RPC (:11435)
   mcp <name>     stdio MCP bridge (run by the sbx gateway); slack is an alias
   slack          alias for "mcp slack"
   plugin <kind>  built-in go-plugin server, self-exec (memory|knowledge|broker|mcp)
-  serve          run the long-running HTTP services (gws-token, memory, knowledge)
+  serve          run the long-running HTTP services (memory, knowledge)
 `)
 	for _, line := range extraUsage {
 		fmt.Fprintln(os.Stderr, line)

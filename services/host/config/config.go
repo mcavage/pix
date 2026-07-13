@@ -24,7 +24,7 @@ const (
 )
 
 // DefaultServices is the service set a fresh install runs.
-var DefaultServices = []string{"memory", "gws"}
+var DefaultServices = []string{"memory"}
 
 // PluginSpec configures one plugin slot: how it is implemented and, for external
 // impls, where the binary lives and how it is verified/reached.
@@ -152,7 +152,7 @@ const defaultConfigTOML = `# pi-stack config. All fields optional; delete anythi
 version_pin = ""
 
 # Host services ` + "`make serve`" + ` runs.
-services = ["memory", "gws"]
+services = ["memory"]
 
 # MCP servers attached at sandbox creation.
 mcp = []

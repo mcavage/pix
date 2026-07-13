@@ -197,10 +197,10 @@ type KnowledgeHealth struct {
 
 // --- CredentialBroker --------------------------------------------------------
 //
-// Generalizes ../gwstoken.go's mint/check. The "keep the long-lived credential
-// on the host, mint a short-lived one, run the real CLI in the VM" pattern
-// becomes one interface any provider can implement. gws ignores Audience today;
-// a warehouse/CRM broker would use it.
+// The "keep the long-lived credential on the host, mint a short-lived one, run
+// the real CLI in the VM" pattern as one interface any provider can implement.
+// The public tree ships no built-in broker (the seam is dormant, for overlays);
+// a warehouse/CRM broker would honour Audience and scopes.
 
 type CredentialBroker interface {
 	Mint(audience string, scopes []string) (Token, error)
@@ -208,7 +208,7 @@ type CredentialBroker interface {
 	Describe() (BrokerInfo, error)
 }
 
-// Token mirrors gwstoken.go's gwsBearer.
+// Token is a short-lived bearer a broker mints (access token + type + TTL).
 type Token struct {
 	AccessToken string
 	TokenType   string
@@ -216,7 +216,7 @@ type Token struct {
 }
 
 // BrokerInfo describes a broker to the supervisor (port, auth header shape,
-// whether it shells out to a host CLI as gws does).
+// whether it shells out to a host CLI).
 type BrokerInfo struct {
 	Name            string
 	DefaultPort     int

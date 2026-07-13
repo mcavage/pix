@@ -81,7 +81,7 @@ func mcpServerFor(name string) (plugin.McpServer, func(), error) {
 // pluginMcpServer adapts a supervisor-dispensed external MCP plugin to the
 // plugin.McpServer interface, so runMcpBridge proxies to it transparently. It
 // resolves the current client per call (a watchdog restart is invisible to the
-// caller), mirroring memoryProxyMux / gwsBrokerProxyMux.
+// caller), mirroring memoryProxyMux / brokerProxyMux.
 type pluginMcpServer struct{ h *pluginHolder }
 
 func (p *pluginMcpServer) srv() (plugin.McpServer, error) {
