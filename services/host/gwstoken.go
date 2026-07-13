@@ -125,8 +125,11 @@ func (s *gwsTokenSvc) mint() (*gwsBearer, error) {
 	return &gwsBearer{AccessToken: s.cached, ExpiresIn: ttl, TokenType: "Bearer"}, nil
 }
 
-func gwsTokenMux() *http.ServeMux {
-	auth := env("GWS_TOKEN_AUTH", "")
+// gwsTokenMux builds the /token mux. auth is the required shared bearer (empty
+// disables the check). It is passed EXPLICITLY rather than read from a
+// process-global env var so `serve` can hand it only to this handler and never
+// leak it into unrelated plugin subprocesses (see serve.go / F2).
+func gwsTokenMux(auth string) *http.ServeMux {
 	svc := &gwsTokenSvc{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +165,7 @@ func gwsTokenCheck() error {
 func runGwsToken() {
 	addr := env("GWS_TOKEN_BIND", "127.0.0.1") + ":" + env("GWS_TOKEN_PORT", "11441")
 	log.Printf("gws token service on http://%s/token", addr)
-	if err := http.ListenAndServe(addr, gwsTokenMux()); err != nil {
+	if err := http.ListenAndServe(addr, gwsTokenMux(env("GWS_TOKEN_AUTH", ""))); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -14,12 +14,17 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -64,25 +69,76 @@ type supervisor struct {
 }
 
 // launch spawns the plugin for a slot once at startup and starts its watchdog.
-func (s *supervisor) launch(name, kind string, spec config.PluginSpec, selfPath string) (*pluginHolder, error) {
+// extraEnv is a small set of KEY=VALUE vars granted to THIS plugin's subprocess
+// only (on top of the filtered base env; see pluginEnv) — e.g. the gws broker's
+// GWS_TOKEN_AUTH bearer, which no other plugin may see (F2).
+func (s *supervisor) launch(name, kind string, spec config.PluginSpec, selfPath string, extraEnv []string) (*pluginHolder, error) {
 	h := &pluginHolder{}
-	if err := s.spawn(h, name, kind, spec, selfPath); err != nil {
+	if err := s.spawn(h, name, kind, spec, selfPath, extraEnv); err != nil {
 		return nil, err
 	}
-	go s.watch(h, name, kind, spec, selfPath)
+	go s.watch(h, name, kind, spec, selfPath, extraEnv)
 	return h, nil
 }
 
+// pluginEnv builds the environment for a plugin subprocess: the parent env with
+// the broker bearer STRIPPED (F2 — a memory/mcp plugin must never inherit
+// GWS_TOKEN_AUTH and be able to mint Google tokens), plus any extra vars the
+// caller explicitly grants (the broker gets its bearer back this way, and only
+// the broker).
+func pluginEnv(extra []string) []string {
+	base := os.Environ()
+	out := make([]string, 0, len(base)+len(extra))
+	for _, kv := range base {
+		if strings.HasPrefix(kv, "GWS_TOKEN_AUTH=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, extra...)
+}
+
+// verifyPluginSHA enforces the pinned checksum of an EXTERNAL plugin binary
+// before it is executed (F5). A configured spec.SHA that does not match the
+// binary at spec.Path is a hard refusal. An empty SHA is allowed but logged
+// loudly as UNPINNED. The built-in self-exec path (spec.Path == "") is exempt.
+func verifyPluginSHA(spec config.PluginSpec) error {
+	if spec.SHA == "" {
+		log.Printf("plugin %s: UNPINNED (no sha in config) — launching an external plugin without checksum verification", spec.Path)
+		return nil
+	}
+	f, err := os.Open(spec.Path)
+	if err != nil {
+		return fmt.Errorf("open plugin binary: %w", err)
+	}
+	defer f.Close()
+	sum := sha256.New()
+	if _, err := io.Copy(sum, f); err != nil {
+		return fmt.Errorf("hash plugin binary: %w", err)
+	}
+	got := hex.EncodeToString(sum.Sum(nil))
+	want := strings.ToLower(strings.TrimSpace(spec.SHA))
+	if !strings.EqualFold(got, want) {
+		return fmt.Errorf("plugin %s sha256 mismatch: got %s, want %s (refusing to launch)", spec.Path, got, want)
+	}
+	return nil
+}
+
 // spawn launches one go-plugin subprocess and dispenses its client. An external
-// binary (spec.Path) is preferred; otherwise the host binary re-execs itself as
-// the built-in plugin server (`pi-stack-host plugin <kind>`).
-func (s *supervisor) spawn(h *pluginHolder, name, kind string, spec config.PluginSpec, selfPath string) error {
+// binary (spec.Path) is preferred — and its pinned SHA is enforced first;
+// otherwise the host binary re-execs itself as the built-in plugin server
+// (`pi-stack-host plugin <kind>`). The subprocess env is always filtered (F2).
+func (s *supervisor) spawn(h *pluginHolder, name, kind string, spec config.PluginSpec, selfPath string, extraEnv []string) error {
 	var cmd *exec.Cmd
 	if spec.Path != "" {
+		if err := verifyPluginSHA(spec); err != nil {
+			return err
+		}
 		cmd = exec.Command(spec.Path)
 	} else {
 		cmd = exec.Command(selfPath, "plugin", kind)
 	}
+	cmd.Env = pluginEnv(extraEnv)
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: plugin.Handshake,
 		Plugins:         plugin.PluginMap,
@@ -109,7 +165,7 @@ func (s *supervisor) spawn(h *pluginHolder, name, kind string, spec config.Plugi
 // total restarts; past that it logs loudly and leaves the slot degraded (a
 // crashed plugin never takes down the kernel — the proxy handler then returns an
 // "unavailable" error, mirroring memory's "degrade loudly" ethos).
-func (s *supervisor) watch(h *pluginHolder, name, kind string, spec config.PluginSpec, selfPath string) {
+func (s *supervisor) watch(h *pluginHolder, name, kind string, spec config.PluginSpec, selfPath string, extraEnv []string) {
 	fails := 0
 	backoff := time.Second
 	ticker := time.NewTicker(2 * time.Second)
@@ -135,7 +191,7 @@ func (s *supervisor) watch(h *pluginHolder, name, kind string, spec config.Plugi
 		if backoff < 30*time.Second {
 			backoff *= 2
 		}
-		if err := s.spawn(h, name, kind, spec, selfPath); err != nil {
+		if err := s.spawn(h, name, kind, spec, selfPath, extraEnv); err != nil {
 			log.Printf("plugin %s restart failed: %v", name, err)
 		}
 	}

@@ -53,7 +53,9 @@ func runRun(argv []string) {
 	args := buildSbxArgs(cfg, o, version)
 
 	if os.Getenv("PI_STACK_DEBUG") != "" {
-		fmt.Fprintln(os.Stderr, "+ sbx "+strings.Join(args, " "))
+		// Never print the raw broker bearer (F3): argv is process-inspectable and
+		// debug output ends up in logs/terminals. Redact the value, keep the shape.
+		fmt.Fprintln(os.Stderr, "+ sbx "+strings.Join(redactArgs(args), " "))
 	}
 
 	cmd := exec.Command("sbx", args...)
@@ -67,6 +69,21 @@ func runRun(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack run: exec sbx: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// redactArgs returns a copy of args with the broker bearer's value masked, so a
+// debug print (or anything that logs the composed command) never leaks the
+// token. The functional injection is unchanged — only the printed copy differs.
+func redactArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		if strings.HasPrefix(a, "GWS_TOKEN_AUTH=") {
+			out[i] = "GWS_TOKEN_AUTH=***"
+		} else {
+			out[i] = a
+		}
+	}
+	return out
 }
 
 // parseRunArgs is a small hand-rolled parser (no cobra, no third-party flags) so

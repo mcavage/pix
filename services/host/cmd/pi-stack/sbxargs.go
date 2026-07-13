@@ -83,12 +83,12 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 	// Inject the shared broker bearer so the in-sandbox clients (gws wrapper,
 	// recall) can authenticate to the host services.
 	//
-	// TODO(launcher): confirm the exact sbx secret mechanism. This build passes
-	// the token as a plain sandbox env var (GWS_TOKEN_AUTH — what gwstoken.go
-	// reads as its shared secret) via `--env`. If this sbx build does not accept
-	// `--env` on `run`, switch to `sbx secret set` + a credential binding once
-	// the syntax is pinned down. Kept as an env var for now because the kit reads
-	// it directly.
+	// TODO(launcher): move the bearer OFF argv onto the sbx secret mechanism.
+	// argv is process-inspectable (anyone with `ps` on the host can read a plain
+	// `--env GWS_TOKEN_AUTH=<token>`), so this env-var injection is a stopgap.
+	// Switch to `sbx secret set` + a credential binding once the exact syntax is
+	// pinned down. Debug/printed output already redacts the value (see
+	// redactArgs in run.go); this TODO tracks removing it from argv entirely.
 	if o.Token != "" {
 		args = append(args, "--env", "GWS_TOKEN_AUTH="+o.Token)
 	}
