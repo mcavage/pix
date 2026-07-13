@@ -164,15 +164,15 @@ run: ## Launch a pi-stack sandbox NAME. If NAME is stopped it's recreated (works
 # commits the bump into pi-kit/spec.yaml on main. Since the kit reads spec.yaml
 # from main, this always pins a version sbx has NEVER cached → a fresh pull with
 # no --template override and no `sbx template rm` dance. Wait for CI green first.
+# run-published sets the broker bearer via the SAME shared helper as `make run`
+# (exported into the process env, never on argv) so gws works consistently here.
 run-published: ## Run the latest PUBLISHED image via the git kit (always fresh — every push is a new version tag; no eviction needed). `make run` = local build.
 	-sbx rm -f pi-stack-published >/dev/null 2>&1
-	# Set the broker bearer via the SAME shared helper as `make run`, so gws works
-	# consistently here too (exported into the process env, never on argv).
-	GWS_TOKEN_AUTH="$$($(CURDIR)/bin/pi-stack broker-token)" sbx run pi-stack --name pi-stack-published --kit "git+https://github.com/$(DOCKER_USER)/pi-stack.git#dir=pi-kit"
+	@GWS_TOKEN_AUTH="$$($(CURDIR)/bin/pi-stack broker-token)" sbx run pi-stack --name pi-stack-published --kit "git+https://github.com/$(DOCKER_USER)/pi-stack.git#dir=pi-kit"
 
+# run-no-mcp uses the same shared broker-token helper (process env, not argv).
 run-no-mcp: ## Launch without sbx Cloud MCP Gateway, for debugging MCP setup failures
-	# Same shared broker-token helper as `make run` (process env, not argv).
-	GWS_TOKEN_AUTH="$$($(CURDIR)/bin/pi-stack broker-token)" env -u SBX_MCP_URL sbx run pi-stack --kit $(KIT) .
+	@GWS_TOKEN_AUTH="$$($(CURDIR)/bin/pi-stack broker-token)" env -u SBX_MCP_URL sbx run pi-stack --kit $(KIT) .
 
 launcher: ## Build the standalone pi-stack launcher binary (out/pi-stack), version-stamped from VERSION
 	(cd services/host && go build -ldflags "-X main.version=$(VERSION)" -o $(CURDIR)/out/pi-stack ./cmd/pi-stack)
