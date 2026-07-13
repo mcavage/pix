@@ -88,10 +88,26 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO,
 	}
 	fmt.Fprintln(sio.out)
 
-	// 3. gws auth.
-	fmt.Fprintln(sio.out, "Google Workspace (optional):")
-	_, gwsErr := env.lookPath("gws")
-	step(gwsErr == nil, "gws CLI", "install gws, then `gws auth login`")
+	// 3. gog (Google Workspace via the host-side MCP server the gateway spawns).
+	// Probe the account the way the GATEWAY runs it — headless, through op-refs —
+	// NOT `gog auth doctor`, which passes in your shell and lies. This shares
+	// doctor's gogHeadlessOK so the keyring + op-refs steps converge on one file.
+	fmt.Fprintln(sio.out, "Google Workspace via gog (optional):")
+	_, gogErr := env.lookPath("gog")
+	step(gogErr == nil, "gog CLI", "brew install gog")
+	acct := gogAccount(env)
+	if gogErr == nil && acct == "" {
+		step(false, "GOG_ACCOUNT set",
+			"set GOG_ACCOUNT=<you@example.com> (env or config/op-refs.env) so gog knows which account to serve")
+	}
+	headOK := gogErr == nil && acct != "" && gogHeadlessOK(env, acct)
+	acctArg := acct
+	if acctArg == "" {
+		acctArg = "<you@example.com>"
+	}
+	step(headOK, "account authorized (headless spawn)",
+		"gog --account "+acctArg+" auth login, then add GOG_KEYRING_BACKEND=file + "+
+			"GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to config/op-refs.env")
 	fmt.Fprintln(sio.out)
 
 	// 4. 1Password + op-refs for MCP creds (only relevant if MCP is configured).

@@ -14,19 +14,20 @@ import (
 
 // doctor ports the Makefile `doctor:` target into Go. Unlike the shell version
 // it LEADS WITH A ONE-LINE VERDICT, then details the checks grouped in
-// dependency order (keys -> ollama/models -> memory -> gws -> mcp), keeping the
+// dependency order (keys -> ollama/models -> memory -> gog -> mcp), keeping the
 // copy-pasteable `TODO: <exact command>` lines for anything not set up.
 //
 // It must RUN cleanly inside the sandbox, where sbx and ollama are absent: every
 // probe degrades to a sane TODO rather than crashing. All the OS-touching work
 // goes through a shellEnv of function values so the tests drive it hermetically.
 
-// shellEnv abstracts the three ways doctor/setup touch the host: locating a
-// binary, running a command for its output, and dialing a local TCP port.
-// Tests substitute fakes; defaultShellEnv() wires the real thing.
+// shellEnv abstracts the ways doctor/setup touch the host: locating a binary,
+// running a command for its output, reading an env var, and dialing a local TCP
+// port. Tests substitute fakes; defaultShellEnv() wires the real thing.
 type shellEnv struct {
 	lookPath func(name string) (string, error)
 	run      func(name string, args ...string) (string, error)
+	getenv   func(name string) string
 	dial     func(port int) bool
 }
 
@@ -38,6 +39,7 @@ func defaultShellEnv() shellEnv {
 			out, err := exec.Command(name, args...).CombinedOutput()
 			return string(out), err
 		},
+		getenv: os.Getenv,
 		dial: func(port int) bool {
 			conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 400*time.Millisecond)
 			if err != nil {
@@ -109,6 +111,15 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	}
 	r.sbxAbsent = !sbxOK
 
+	// MCP registrations (`sbx mcp ls`), listed once and reused by the gog group
+	// (its gateway registration) and the MCP group below.
+	mcpOut, mcpOK := "", false
+	if sbxOK {
+		if out, err := env.run("sbx", "mcp", "ls"); err == nil {
+			mcpOut, mcpOK = out, true
+		}
+	}
+
 	// (a) provider secrets — proxy-injected, never in the VM.
 	providers := group{title: "Providers / keys (proxy-injected, never in the VM)"}
 	for _, p := range []struct{ label, key string }{
@@ -159,30 +170,15 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	memory.checks = append(memory.checks, serviceCheck("memory", 11435, memUp, "pi-stack serve", enabled(cfg, "memory")))
 	r.groups = append(r.groups, memory)
 
-	// (d) gws-token service on :11441 + (e) the gws CLI.
-	gws := group{title: "gws (Google Workspace data)"}
-	gwsUp := env.dial(11441)
-	gws.checks = append(gws.checks, serviceCheck("gws-token", 11441, gwsUp, "pi-stack serve", enabled(cfg, "gws")))
-	if _, err := env.lookPath("gws"); err == nil {
-		gws.checks = append(gws.checks, check{label: "gws CLI", state: stateOK, detail: "installed"})
-	} else {
-		gws.checks = append(gws.checks, check{
-			label:  "gws CLI",
-			state:  stateTODO,
-			detail: "not found",
-			todo:   "install gws + run `gws auth login`",
-		})
-	}
-	r.groups = append(r.groups, gws)
+	// (d) gog: Google Workspace via a host-side stdio MCP server the sbx gateway
+	// spawns (the slack pattern). No CLI in the VM, no token service, no bearer.
+	// Checks run in strict dependency order and DELIBERATELY probe the REAL path
+	// the gateway uses (headless, through `op run --env-file=config/op-refs.env`),
+	// because `gog auth doctor` in a logged-in shell passes and lies.
+	r.groups = append(r.groups, gogGroup(cfg, env, mcpOut, mcpOK))
 
-	// (f) MCP servers registered with sbx.
+	// (e) MCP servers registered with sbx.
 	mcp := group{title: "MCP servers (local stdio, run by the sbx gateway)"}
-	mcpOut, mcpOK := "", false
-	if sbxOK {
-		if out, err := env.run("sbx", "mcp", "ls"); err == nil {
-			mcpOut, mcpOK = out, true
-		}
-	}
 	if len(cfg.MCP) == 0 {
 		mcp.checks = append(mcp.checks, check{
 			label:  "(none configured)",
@@ -259,6 +255,124 @@ func enabled(cfg *config.Config, name string) bool {
 		}
 	}
 	return false
+}
+
+// mcpConfigured reports whether name is in the configured MCP set (so `run`
+// auto-attaches it via --mcp).
+func mcpConfigured(cfg *config.Config, name string) bool {
+	for _, m := range cfg.MCP {
+		if m == name {
+			return true
+		}
+	}
+	return false
+}
+
+// gogAccount resolves the Google Workspace account doctor/setup probe against.
+// It reads $GOG_ACCOUNT (the same var the gateway spawn inherits from
+// config/op-refs.env) — NEVER a hardcoded address. Empty means "not configured"
+// and the caller emits a TODO to set it.
+//
+// NOTE(integrator): once the config package grows a `GogAccount` field (arch
+// plan U1), prefer it here and fall back to the env var.
+func gogAccount(env shellEnv) string {
+	if env.getenv == nil {
+		return ""
+	}
+	return strings.TrimSpace(env.getenv("GOG_ACCOUNT"))
+}
+
+// gogHeadlessOK runs the gateway-EQUIVALENT probe — list gog's tools the exact
+// way the sbx gateway spawns it: headless, in a bare env, through the same
+// `op run --env-file=config/op-refs.env` wrapper mcp-register uses — and reports
+// whether it yields a NON-EMPTY tool list. This is the ONLY check that proves
+// the real path; `gog auth doctor` in a logged-in shell passes and lies. It
+// degrades cleanly (returns false, never crashes) when gog/op/account are
+// absent. shellEnv keeps it unit-testable.
+func gogHeadlessOK(env shellEnv, acct string) bool {
+	if acct == "" {
+		return false
+	}
+	if _, err := env.lookPath("op"); err != nil {
+		return false
+	}
+	out, err := env.run("op", "run", "--env-file=config/op-refs.env", "--",
+		"gog", "--account", acct, "mcp", "--list-tools")
+	return err == nil && strings.TrimSpace(out) != ""
+}
+
+// gogGroup builds the gog check cluster in strict dependency order, naming the
+// one footgun by name: auth that works in your shell but returns 0 tools on the
+// gateway's headless spawn because GOG_KEYRING_BACKEND/PASSWORD (+ GOG_ACCOUNT/
+// GOG_HOME) never reached config/op-refs.env. Every probe degrades to a TODO
+// rather than crashing, so this runs cleanly in-sandbox (gog/sbx/op all absent).
+func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group {
+	g := group{title: "gog (Google Workspace via host MCP — read-only)"}
+
+	// 1. gog CLI installed.
+	if _, err := env.lookPath("gog"); err != nil {
+		g.checks = append(g.checks, check{label: "gog CLI", state: stateTODO,
+			detail: "not found", todo: "brew install gog"})
+		return g
+	}
+	g.checks = append(g.checks, check{label: "gog CLI", state: stateOK, detail: "installed"})
+
+	acct := gogAccount(env)
+	if acct == "" {
+		// 2'. No account configured — can't probe auth or the headless path.
+		g.checks = append(g.checks, check{label: "account", state: stateTODO,
+			detail: "GOG_ACCOUNT unset",
+			todo:   "set GOG_ACCOUNT=<you@example.com> (env or config/op-refs.env) so doctor can probe the right account"})
+		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
+		g.checks = append(g.checks, gogAttachCheck(cfg))
+		return g
+	}
+
+	// 2. account authorized (interactive). 3. THE GOTCHA — headless spawn.
+	_, interErr := env.run("gog", "--account", acct, "auth", "doctor", "--check")
+	_, opErr := env.lookPath("op")
+	headOK := gogHeadlessOK(env, acct)
+	switch {
+	case interErr != nil:
+		// Auth itself isn't set up — don't double-report the keyring below.
+		g.checks = append(g.checks, check{label: "account", state: stateTODO,
+			detail: acct + " not authorized",
+			todo:   "gog auth add-client <client.json> && gog --account " + acct + " auth login"})
+	case opErr != nil:
+		// Interactive auth OK, but op is absent so we can't run the gateway-
+		// equivalent probe. Say so rather than blaming the keyring.
+		g.checks = append(g.checks,
+			check{label: "account", state: stateOK, detail: acct + " authorized (interactive)"},
+			check{label: "headless spawn", state: stateTODO,
+				detail: "can't verify the gateway spawn — op (1Password CLI) not found",
+				todo:   "install the 1Password CLI (op) so doctor can probe the real headless path"})
+	case !headOK:
+		// THE TRAP: interactive passes, the headless gateway spawn gets 0 tools.
+		g.checks = append(g.checks,
+			check{label: "account", state: stateOK, detail: acct + " authorized (interactive)"},
+			check{label: "headless spawn", state: stateTODO,
+				detail: "auth OK in your shell but the gateway spawn gets 0 tools — keyring not headless",
+				todo:   "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to config/op-refs.env"})
+	default:
+		g.checks = append(g.checks,
+			check{label: "account", state: stateOK, detail: acct + " authorized"},
+			check{label: "headless spawn", state: stateOK, detail: "tools exposed via headless keyring"})
+	}
+
+	// 4. registered with the gateway. 5. attached on run?
+	g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
+	g.checks = append(g.checks, gogAttachCheck(cfg))
+	return g
+}
+
+// gogAttachCheck is the informational check 5: is gog in the configured MCP set,
+// so `pi-stack run` auto-attaches it (--mcp gog)?
+func gogAttachCheck(cfg *config.Config) check {
+	if mcpConfigured(cfg, "gog") {
+		return check{label: "attached", state: stateInfo, detail: "auto-attached on run (--mcp gog)"}
+	}
+	return check{label: "attached", state: stateInfo,
+		detail: `add "gog" to mcp in ` + config.Path() + " to attach it"}
 }
 
 // render writes the verdict-first report to w.
