@@ -3,6 +3,7 @@ module pi-stack/host
 go 1.26
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-plugin v1.8.0
 	modernc.org/sqlite v1.53.0
