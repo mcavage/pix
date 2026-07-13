@@ -108,6 +108,32 @@ sbx run pi-stack --kit "git+https://github.com/mcavage/pi-stack.git#dir=pi-kit"
 That last line pulls the image and starts pi in the current directory. The keys
 stay in sbx and never reach the VM.
 
+## The host launcher (no checkout needed)
+
+The `sbx run` line above is enough for a plain agent. To get the data tools
+without cloning the repo, install two host binaries: `pi-stack`, a launcher that
+wraps `sbx run` and pins the kit to its own release
+(`--kit "git+...#ref=v<version>&dir=pi-kit"`), and `pi-stack-host`, the host-side
+service binary. A one-line `install.sh` that fetches the binary releases is
+coming; for now `make install` from a checkout puts them on your PATH.
+
+The launcher is the whole host surface, four verbs:
+
+```bash
+pi-stack           # launch a sandbox on the pinned release (wraps sbx run)
+pi-stack serve     # run the host services (memory, credential broker, MCP)
+pi-stack setup     # first-run setup: keys, models, config
+pi-stack doctor    # per tool: set up? service running? models pulled?
+```
+
+Host services are overridable plugins. `pi-stack serve` reads
+`~/.config/pi-stack/config.toml` and, for each slot it finds under `[plugins.*]`,
+launches the plugin binary named there instead of the built-in. The three slots
+are `broker` (credential broker), `memory` (the recall backend), and `mcp` (extra
+MCP servers). Each entry names an `impl`, a `path` to the plugin binary, and a
+`sha` it must match, so a company can swap in a private broker or memory backend
+without touching this repo (see [docs/OVERLAY.md](docs/OVERLAY.md)).
+
 ## What's in it
 
 The skills I reach for (in `skills/`):

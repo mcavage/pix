@@ -100,6 +100,59 @@ overlay's `overlay.mk`; pi-stack's Makefile `-include`s `$(OVERLAY)/overlay.mk`.
 show up in the status readout for you but not for a public cloner. Targets that
 build the binary should depend on `link-overlay`.
 
+## 4. Host plugin overrides — `[plugins.*]` in `config.toml`
+
+The `overlay_*.go` route in half 2 compiles your service *into* `pi-stack-host`.
+The plugin-override route does the opposite: it keeps your code in a **separate
+binary** the public host launcher never links, and points at it from config. Use
+this when a host capability is private end to end (a credential broker for an
+internal data warehouse, a company memory/OKF backend) and you don't want it in
+the build at all.
+
+`pi-stack serve` reads `~/.config/pi-stack/config.toml` at startup. Three host
+capabilities are pluggable slots — `broker` (the credential broker),
+`memory` (the recall backend), and `mcp` (extra MCP servers). If a slot has a
+`[plugins.<slot>]` table, `serve` launches that plugin binary once at startup in
+place of the built-in; otherwise it runs the built-in. Each entry pins three
+fields:
+
+```toml
+# ~/.config/pi-stack/config.toml
+[plugins.broker]
+impl = "warehouse-broker"                      # a name, for logs and doctor
+path = "/opt/acme/bin/warehouse-broker"        # the go-plugin binary to launch
+sha  = "sha256:1f3a…"                          # required; serve refuses a mismatch
+
+[plugins.memory]
+impl = "okf-memory"
+path = "/opt/acme/bin/okf-memory"
+sha  = "sha256:9c02…"
+```
+
+- **`impl`** is a label only (shows up in `pi-stack doctor` and logs).
+- **`path`** is the plugin binary. Ship it however you like (your overlay's build,
+  an internal artifact store); the public repo never sees it.
+- **`sha`** is mandatory and SHA-pinned: `serve` hashes the file at `path` and
+  refuses to launch it if the digest doesn't match, so a swapped or tampered binary
+  fails closed instead of running.
+
+The plugin is a `go-plugin` binary: `pi-stack serve` starts it once, speaks to it
+over the plugin protocol for the life of the process, and shuts it down on exit.
+
+This is the seam a company uses to plug private host infrastructure into pi-stack
+**without a fork**: point `[plugins.broker]` at your internal warehouse credential
+broker (the `snow`/warehouse examples elsewhere in this repo are illustrative
+only — substitute your real one), or point `[plugins.memory]` at a company OKF /
+knowledge backend, and the public launcher drives it unchanged. Nothing
+company-specific lands in the public tree — the config lives under your `$HOME`,
+the binary lives wherever you built it, and the public `pi-stack-host` keeps its
+generic built-ins as the default.
+
+Two routes, one decision: compile a service into the binary (half 2, `overlay_*.go`)
+when it's an *additive* host service you're fine building from the pi-stack tree;
+ship a separate plugin and override a slot here when the capability is private
+end to end and must stay out of the build.
+
 ## What keeps the public repo clean
 
 `.gitignore` ignores `services/host/overlay_*.go` (the symlinks), and
