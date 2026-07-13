@@ -26,6 +26,12 @@ func (noopMemory) Observe(ObserveReq) (ObserveResp, error)          { return Obs
 func (noopMemory) Stats() (Stats, error)                            { return Stats{}, nil }
 func (noopMemory) Health() (Health, error)                          { return Health{}, nil }
 
+type noopKnowledge struct{}
+
+func (noopKnowledge) Query(QueryArgs) (QueryResult, error)       { return QueryResult{}, nil }
+func (noopKnowledge) Reindex(ReindexArgs) (ReindexResult, error) { return ReindexResult{}, nil }
+func (noopKnowledge) Health() (KnowledgeHealth, error)           { return KnowledgeHealth{}, nil }
+
 type noopBroker struct{}
 
 func (noopBroker) Mint(string, []string) (Token, error) { return Token{}, nil }
@@ -43,6 +49,7 @@ func (noopMcp) CallTool(string, json.RawMessage) (json.RawMessage, error) {
 // Compile-time proof the trivial impls satisfy the interfaces.
 var (
 	_ MemoryStore      = noopMemory{}
+	_ KnowledgeStore   = noopKnowledge{}
 	_ CredentialBroker = noopBroker{}
 	_ McpServer        = noopMcp{}
 )
@@ -71,6 +78,7 @@ func TestRPCPlugins(t *testing.T) {
 		p    goplugin.Plugin
 	}{
 		{"memory", &MemoryPlugin{Impl: noopMemory{}}},
+		{"knowledge", &KnowledgePlugin{Impl: noopKnowledge{}}},
 		{"broker", &BrokerPlugin{Impl: noopBroker{}}},
 		{"mcp", &McpPlugin{Impl: noopMcp{}}},
 	}
@@ -91,9 +99,10 @@ func TestRPCPlugins(t *testing.T) {
 // the matching adapter types (nil Impl is correct for the client side).
 func TestPluginMap(t *testing.T) {
 	wants := map[string]interface{}{
-		"memory": &MemoryPlugin{},
-		"broker": &BrokerPlugin{},
-		"mcp":    &McpPlugin{},
+		"memory":    &MemoryPlugin{},
+		"knowledge": &KnowledgePlugin{},
+		"broker":    &BrokerPlugin{},
+		"mcp":       &McpPlugin{},
 	}
 	if len(PluginMap) != len(wants) {
 		t.Fatalf("PluginMap has %d entries, want %d", len(PluginMap), len(wants))
@@ -110,6 +119,10 @@ func TestPluginMap(t *testing.T) {
 		case *MemoryPlugin:
 			if _, ok := got.(*MemoryPlugin); !ok {
 				t.Fatalf("PluginMap[%q] is %T, want *MemoryPlugin", k, got)
+			}
+		case *KnowledgePlugin:
+			if _, ok := got.(*KnowledgePlugin); !ok {
+				t.Fatalf("PluginMap[%q] is %T, want *KnowledgePlugin", k, got)
 			}
 		case *BrokerPlugin:
 			if _, ok := got.(*BrokerPlugin); !ok {

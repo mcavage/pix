@@ -45,7 +45,8 @@ var Handshake = goplugin.HandshakeConfig{
 // never calls. A plugin binary serving an implementation builds its own map with
 // a populated Impl (see Serve).
 var PluginMap = map[string]goplugin.Plugin{
-	"memory": &MemoryPlugin{},
-	"broker": &BrokerPlugin{},
-	"mcp":    &McpPlugin{},
+	"memory":    &MemoryPlugin{},
+	"knowledge": &KnowledgePlugin{},
+	"broker":    &BrokerPlugin{},
+	"mcp":       &McpPlugin{},
 }

@@ -137,6 +137,64 @@ type Health struct {
 	WatcherModel string
 }
 
+// --- KnowledgeStore ----------------------------------------------------------
+//
+// A retrieval-augmented knowledge base over one or more concept "bundles".
+// Query returns cited concepts ranked by relevance; Reindex (re)ingests bundle
+// paths; Health reports index status. Like MemoryStore, it uses plain Go structs
+// so arguments and results are trivially gob-compatible for the net/rpc
+// transport.
+
+type KnowledgeStore interface {
+	Query(QueryArgs) (QueryResult, error)
+	Reindex(ReindexArgs) (ReindexResult, error)
+	Health() (KnowledgeHealth, error)
+}
+
+// QueryArgs parameterizes a knowledge query. An empty Bundle means all bundles.
+type QueryArgs struct {
+	Query  string
+	Bundle string
+	Limit  int
+}
+
+// CitedConcept is a single ranked, cited result concept.
+type CitedConcept struct {
+	ID          string
+	Type        string
+	Title       string
+	Description string
+	Path        string
+	Snippet     string
+	Score       float64
+	Citations   []string
+	Bundle      string
+}
+
+// QueryResult wraps the ranked concept list.
+type QueryResult struct {
+	Concepts []CitedConcept
+}
+
+// ReindexArgs lists the bundle paths to (re)index.
+type ReindexArgs struct {
+	BundlePaths []string
+}
+
+// ReindexResult reports the number of concepts indexed and the bundles touched.
+type ReindexResult struct {
+	Indexed int
+	Bundles []string
+}
+
+// KnowledgeHealth reports index status ({ok, vector, bundles, concepts}).
+type KnowledgeHealth struct {
+	OK       bool
+	Vector   bool
+	Bundles  []string
+	Concepts int
+}
+
 // --- CredentialBroker --------------------------------------------------------
 //
 // Generalizes ../gwstoken.go's mint/check. The "keep the long-lived credential
