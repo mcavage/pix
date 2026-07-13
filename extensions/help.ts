@@ -291,12 +291,21 @@ function maybeNudge(ctx: any): void {
 		const fs = require("node:fs");
 		const path = require("node:path");
 		const marker = path.join(agentDir(), NUDGE_MARKER);
-		if (fs.existsSync(marker)) return;
-		// Create the marker FIRST so a notify failure can't cause repeat nudges.
-		safe(() => {
+		// Atomically claim the marker: fs.openSync(..., "wx") fails with EEXIST if
+		// the file already exists, so only the one process that creates it nudges.
+		// Two simultaneous first-ever pi processes can't both win the race.
+		let claimed = false;
+		try {
 			fs.mkdirSync(agentDir(), { recursive: true });
-			fs.writeFileSync(marker, new Date().toISOString());
-		});
+			const fd = fs.openSync(marker, "wx");
+			fs.writeSync(fd, new Date().toISOString());
+			fs.closeSync(fd);
+			claimed = true;
+		} catch {
+			// EEXIST (already nudged) or any fs error → skip. Never throw at load.
+			claimed = false;
+		}
+		if (!claimed) return;
 		safe(() =>
 			ctx?.ui?.notify?.(
 				"New here? Type /help for the map or /getting-started for the tour.",

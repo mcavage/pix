@@ -16,15 +16,15 @@ import (
 //
 // net/rpc requires each server method to have the shape
 // func(args T1, reply *T2) error with exported, gob-encodable T1/T2. Methods
-// that take no arguments use an empty struct placeholder.
+// that take no arguments use an Empty struct placeholder.
 //
 // TODO(gRPC/AutoMTLS): upgrade transport per arch doc — replace the net/rpc
 // Server/Client pairs below with gRPC stubs (protoc-generated) and enable
 // AutoMTLS over the unix socket. The Handshake, interfaces, and PluginMap stay;
 // only the wiring in this file changes.
 
-// empty is the placeholder args/reply for zero-argument RPC methods.
-type empty struct{}
+// Empty is the placeholder args/reply for zero-argument RPC methods.
+type Empty struct{}
 
 // =============================== MemoryStore =================================
 
@@ -96,7 +96,7 @@ func (s *memoryRPCServer) Observe(req ObserveReq, resp *ObserveResp) error {
 	return nil
 }
 
-func (s *memoryRPCServer) Stats(_ empty, resp *Stats) error {
+func (s *memoryRPCServer) Stats(_ Empty, resp *Stats) error {
 	r, err := s.Impl.Stats()
 	if err != nil {
 		return err
@@ -105,7 +105,7 @@ func (s *memoryRPCServer) Stats(_ empty, resp *Stats) error {
 	return nil
 }
 
-func (s *memoryRPCServer) Health(_ empty, resp *Health) error {
+func (s *memoryRPCServer) Health(_ Empty, resp *Health) error {
 	r, err := s.Impl.Health()
 	if err != nil {
 		return err
@@ -154,13 +154,13 @@ func (c *memoryRPCClient) Observe(req ObserveReq) (ObserveResp, error) {
 
 func (c *memoryRPCClient) Stats() (Stats, error) {
 	var resp Stats
-	err := c.client.Call("Plugin.Stats", empty{}, &resp)
+	err := c.client.Call("Plugin.Stats", Empty{}, &resp)
 	return resp, err
 }
 
 func (c *memoryRPCClient) Health() (Health, error) {
 	var resp Health
-	err := c.client.Call("Plugin.Health", empty{}, &resp)
+	err := c.client.Call("Plugin.Health", Empty{}, &resp)
 	return resp, err
 }
 
@@ -194,11 +194,11 @@ func (s *brokerRPCServer) Mint(args MintArgs, resp *Token) error {
 	return nil
 }
 
-func (s *brokerRPCServer) Check(_ empty, _ *empty) error {
+func (s *brokerRPCServer) Check(_ Empty, _ *Empty) error {
 	return s.Impl.Check()
 }
 
-func (s *brokerRPCServer) Describe(_ empty, resp *BrokerInfo) error {
+func (s *brokerRPCServer) Describe(_ Empty, resp *BrokerInfo) error {
 	info, err := s.Impl.Describe()
 	if err != nil {
 		return err
@@ -216,12 +216,12 @@ func (c *brokerRPCClient) Mint(audience string, scopes []string) (Token, error) 
 }
 
 func (c *brokerRPCClient) Check() error {
-	return c.client.Call("Plugin.Check", empty{}, &empty{})
+	return c.client.Call("Plugin.Check", Empty{}, &Empty{})
 }
 
 func (c *brokerRPCClient) Describe() (BrokerInfo, error) {
 	var resp BrokerInfo
-	err := c.client.Call("Plugin.Describe", empty{}, &resp)
+	err := c.client.Call("Plugin.Describe", Empty{}, &resp)
 	return resp, err
 }
 
@@ -246,7 +246,7 @@ type CallToolArgs struct {
 
 type mcpRPCServer struct{ Impl McpServer }
 
-func (s *mcpRPCServer) Info(_ empty, resp *ServerInfo) error {
+func (s *mcpRPCServer) Info(_ Empty, resp *ServerInfo) error {
 	info, err := s.Impl.Info()
 	if err != nil {
 		return err
@@ -255,7 +255,7 @@ func (s *mcpRPCServer) Info(_ empty, resp *ServerInfo) error {
 	return nil
 }
 
-func (s *mcpRPCServer) ListTools(_ empty, resp *[]ToolSpec) error {
+func (s *mcpRPCServer) ListTools(_ Empty, resp *[]ToolSpec) error {
 	tools, err := s.Impl.ListTools()
 	if err != nil {
 		return err
@@ -277,13 +277,13 @@ type mcpRPCClient struct{ client *rpc.Client }
 
 func (c *mcpRPCClient) Info() (ServerInfo, error) {
 	var resp ServerInfo
-	err := c.client.Call("Plugin.Info", empty{}, &resp)
+	err := c.client.Call("Plugin.Info", Empty{}, &resp)
 	return resp, err
 }
 
 func (c *mcpRPCClient) ListTools() ([]ToolSpec, error) {
 	var resp []ToolSpec
-	err := c.client.Call("Plugin.ListTools", empty{}, &resp)
+	err := c.client.Call("Plugin.ListTools", Empty{}, &resp)
 	return resp, err
 }
 
