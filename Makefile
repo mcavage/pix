@@ -41,10 +41,11 @@ DEV_SKILLS = --no-skills --skill $(CURDIR)/skills$(if $(OVERLAY_WS), --skill $(a
 # everything registered.
 MCP         ?=
 MCP_FLAGS   = $(foreach server,$(MCP),--mcp $(server))
-# The local stdio MCP servers this host binary implements. `make mcp-register`
-# registers the ones you actually use — i.e. those listed in MCP. A private overlay
+# The local stdio MCP servers `make mcp-register` can register (the ones you
+# actually use — i.e. those listed in MCP). `slack` is a pi-stack-host subcommand;
+# `gog` is the host-side Google Workspace CLI's MCP mode. A private overlay
 # (config/overlay.mk) can append more (e.g. bamboohr).
-LOCAL_STDIO_MCP = slack
+LOCAL_STDIO_MCP = slack gog
 REGISTER        = $(filter $(LOCAL_STDIO_MCP),$(MCP))
 
 # Host MCP server credentials all come from 1Password via one file of op:// refs
@@ -52,6 +53,11 @@ REGISTER        = $(filter $(LOCAL_STDIO_MCP),$(MCP))
 # OP_BIN is op's absolute path (the sbx daemon's PATH may not include it).
 OP_REFS := $(CURDIR)/config/op-refs.env
 OP_BIN  := $(shell command -v op 2>/dev/null)
+
+# The Google account the host-side `gog` MCP server runs as. Sourced from
+# config/local.mk (never hardcoded here) and passed to `gog --account` when
+# `make mcp-register` registers gog with the gateway.
+GOG_ACCOUNT ?=
 
 # Owner-specific values live in a gitignored local override so the committed
 # defaults stay generic. config/overlay.mk (also gitignored) adds private,
@@ -66,11 +72,11 @@ OP_BIN  := $(shell command -v op 2>/dev/null)
 MEMORY_WATCHER_MODEL ?= gemma4
 MEMORY_EMBED_MODEL   ?= nomic-embed-text
 
-# SERVICES: which host services `make serve` runs (memory, gws). MCP (top of
+# SERVICES: which host services `make serve` runs (memory). MCP (top of
 # file): which MCP servers `make run` auto-attaches and `make mcp-register`
 # registers. Both are the SINGLE place to configure the stack — set them in
 # config/local.mk (written by `make install`) so you never pass flags by hand.
-SERVICES ?= memory gws
+SERVICES ?= memory
 
 # out/ is gitignored, so it's absent on a fresh clone. Several targets (load,
 # launcher, serve, mcp-register, pack, …) write into it and would otherwise fail
@@ -78,7 +84,7 @@ SERVICES ?= memory gws
 # at parse time so every target can rely on it.
 $(shell mkdir -p out)
 
-.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve gws-token-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay launcher
+.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay launcher
 
 # Symlink the private overlay's host plugins ($(OVERLAY)/host/overlay_*.go) into
 # services/host/ so they compile into pi-stack-host and self-register. No-op in a
@@ -149,13 +155,6 @@ run: ## Launch a pi-stack sandbox NAME. If NAME is stopped it's recreated (works
 	fi; \
 	TAG=$$(cat out/.local-image-tag 2>/dev/null || true); \
 	[ -n "$$TAG" ] && echo "(new sandbox $(NAME), local build :$$TAG)" || echo "(new sandbox $(NAME), kit-pinned image)"; \
-	: 'Broker bearer: read-or-mint via bin/pi-stack broker-token — the ONE shared'; \
-	: 'mechanism (concurrency-safe, same file the Go launcher + pi-stack-host use),'; \
-	: 'so every path converges on ONE token. EXPORTED into the sbx PROCESS ENV, not'; \
-	: 'passed as a --env argv flag: argv is process-inspectable (ps/EDR), the process'; \
-	: 'env is not. See pi-kit/spec.yaml GWS_TOKEN_AUTH note for the v1/host-verify'; \
-	: 'story; gws degrades to unauthenticated if the var is not forwarded.'; \
-	export GWS_TOKEN_AUTH="$$($(CURDIR)/bin/pi-stack broker-token)"; \
 	exec sbx run pi-stack --name $(NAME) $${TAG:+--template docker.io/$(DOCKER_USER)/pi-stack:$$TAG} --kit $(KIT) $(OVERLAY_KIT_FLAG) $(MCP_FLAGS) . $(OVERLAY_WS) -- $(DEV_SKILLS)
 
 # Run the latest PUBLISHED image straight off the git-hosted kit — the true
@@ -164,15 +163,12 @@ run: ## Launch a pi-stack sandbox NAME. If NAME is stopped it's recreated (works
 # commits the bump into pi-kit/spec.yaml on main. Since the kit reads spec.yaml
 # from main, this always pins a version sbx has NEVER cached → a fresh pull with
 # no --template override and no `sbx template rm` dance. Wait for CI green first.
-# run-published sets the broker bearer via the SAME shared helper as `make run`
-# (exported into the process env, never on argv) so gws works consistently here.
 run-published: ## Run the latest PUBLISHED image via the git kit (always fresh — every push is a new version tag; no eviction needed). `make run` = local build.
 	-sbx rm -f pi-stack-published >/dev/null 2>&1
-	@GWS_TOKEN_AUTH="$$($(CURDIR)/bin/pi-stack broker-token)" sbx run pi-stack --name pi-stack-published --kit "git+https://github.com/$(DOCKER_USER)/pi-stack.git#dir=pi-kit"
+	@sbx run pi-stack --name pi-stack-published --kit "git+https://github.com/$(DOCKER_USER)/pi-stack.git#dir=pi-kit"
 
-# run-no-mcp uses the same shared broker-token helper (process env, not argv).
 run-no-mcp: ## Launch without sbx Cloud MCP Gateway, for debugging MCP setup failures
-	@GWS_TOKEN_AUTH="$$($(CURDIR)/bin/pi-stack broker-token)" env -u SBX_MCP_URL sbx run pi-stack --kit $(KIT) .
+	@env -u SBX_MCP_URL sbx run pi-stack --kit $(KIT) .
 
 launcher: ## Build BOTH host binaries (out/pi-stack launcher + out/pi-stack-host services), version-stamped
 	(cd services/host && go build -ldflags "-X main.version=$(VERSION)" -o $(CURDIR)/out/pi-stack ./cmd/pi-stack)
@@ -182,9 +178,6 @@ launcher: ## Build BOTH host binaries (out/pi-stack launcher + out/pi-stack-host
 
 memory-serve: link-overlay ## Build + run just the memory service (JSON-RPC :11435) from pi-stack-host
 	(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && exec ./out/pi-stack-host memory
-
-gws-token-serve: link-overlay ## Build + run just the gws bearer token service (:11441) from pi-stack-host
-	(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && exec ./out/pi-stack-host gws-token
 
 mcp-auth: ## (Re)authorize the remote OAuth MCP servers (opine/granola/notion/atlassian). Run this when standup/refresh reports them "not in the gateway" — sbx's hosted MCP OAuth creds do NOT persist reliably across sessions/daemon restarts (they silently drop to "Not Found"), so re-establishing them is a recurring chore until sbx fixes it. Opens a browser per server.
 	@command -v sbx >/dev/null 2>&1 || { echo "ERROR: sbx not found"; exit 1; }
@@ -204,12 +197,22 @@ mcp-register: link-overlay ## Register the local stdio MCP servers you use (the 
 		echo "  Fix (once):  export SBX_MCP_URL=https://gateway.docker.com  &&  sbx daemon stop"; exit 1; }
 	@[ -n "$(OP_BIN)" ] || { echo "ERROR: 1Password CLI 'op' not found on PATH."; exit 1; }
 	@[ -f "$(OP_REFS)" ] || { echo "ERROR: $(OP_REFS) missing. Create it:  cp config/op-refs.env.example config/op-refs.env  then fill in your refs."; exit 1; }
+	@[ -z "$(filter gog,$(REGISTER))" ] || [ -n "$(GOG_ACCOUNT)" ] || { echo "ERROR: gog is in MCP but GOG_ACCOUNT is unset. Set GOG_ACCOUNT in config/local.mk."; exit 1; }
 	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .)
 	@BIN="$(CURDIR)/out/pi-stack-host"; \
 	for s in $(REGISTER); do \
-		sbx mcp add $$s --command "$(OP_BIN)" \
-			--args run --args --no-masking --args "--env-file=$(OP_REFS)" --args -- --args "$$BIN" --args mcp --args "$$s" \
-			&& echo "  registered: $$s" || echo "  FAILED to register: $$s"; \
+		case "$$s" in \
+		gog) \
+			: 'HARDENED registration (security-lead): read-only by default —'; \
+			: '--gmail-no-send + --wrap-untrusted + --readonly + `mcp --allow-tool read`.'; \
+			: 'Creds resolve from config/op-refs.env via op run at gateway spawn.'; \
+			sbx mcp add gog --command op --args run --args --no-masking --args --env-file=$(OP_REFS) --args -- --args gog --args --account --args $(GOG_ACCOUNT) --args --gmail-no-send --args --wrap-untrusted --args --readonly --args mcp --args --allow-tool --args read \
+				&& echo "  registered: gog" || echo "  FAILED to register: gog" ;; \
+		*) \
+			sbx mcp add $$s --command "$(OP_BIN)" \
+				--args run --args --no-masking --args "--env-file=$(OP_REFS)" --args -- --args "$$BIN" --args mcp --args "$$s" \
+				&& echo "  registered: $$s" || echo "  FAILED to register: $$s" ;; \
+		esac; \
 	done
 	@echo "Verify: sbx mcp ls"
 	@echo "Attach: registration is NOT enough — a sandbox only gets these if you START it with them."
@@ -220,7 +223,7 @@ mcp-register: link-overlay ## Register the local stdio MCP servers you use (the 
 	@echo "        for a running sandbox — so re-run with --mcp to pick them up."
 	@echo "Note: each server resolves its creds from config/op-refs.env via op run when the gateway spawns it — make sure those refs are filled + valid."
 
-serve: link-overlay ## Start the host services named in SERVICES (config/local.mk): memory :11435, gws :11441. MCP servers (slack) are run by the sbx gateway — see `make mcp-register`. Ctrl-C stops all.
+serve: link-overlay ## Start the host services named in SERVICES (config/local.mk): memory :11435. MCP servers (slack, gog) are run by the sbx gateway — see `make mcp-register`. Ctrl-C stops all.
 	@echo "Host services [$(SERVICES)] — sandboxes reach these on host.docker.internal. Ctrl-C stops all."
 	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) || { echo "go build failed (pi-stack-host)"; exit 1; }
 	@exec env SNOW_CONN=$(SNOW_CONN) MEMORY_WATCHER_MODEL=$(MEMORY_WATCHER_MODEL) MEMORY_EMBED_MODEL=$(MEMORY_EMBED_MODEL) out/pi-stack-host serve $(SERVICES)
@@ -249,12 +252,13 @@ doctor: ## Show models + each optional integration: set up? service running?
 	echo ""; \
 	echo "Data tools (host side):"; \
 	printf "  %-7s setup: %-30s serving: %s\n" "gh"    "$$(sset github)" "proxy-injected (no service)"; \
-	printf "  %-7s setup: %-30s serving: %s\n" "gws"   "$$(command -v gws >/dev/null 2>&1 && echo 'CLI installed' || echo 'TODO: install gws + auth')" ":11441 $$(port 11441)"; \
+	printf "  %-7s setup: %-30s serving: %s\n" "gog"   "$$(command -v gog >/dev/null 2>&1 && echo 'CLI installed' || echo 'TODO: brew install gog + gog auth')" "MCP via gateway (register: make mcp-register)"; \
 	printf "  %-7s setup: %-30s serving: %s\n" "memory" "watcher+embed above" ":11435 $$(port 11435) (capture needs the watcher model)"; \
 	echo ""; \
 	echo "MCP servers (local stdio, run by the sbx gateway — register with 'make mcp-register', attach with 'make run'):"; \
 	reg() { sbx mcp ls 2>/dev/null | grep -qw "$$1" && echo "registered" || echo "TODO: make mcp-register"; }; \
 	printf "  %-7s %-14s %s\n" "slack"  "$$(reg slack)"    "$(if $(filter slack,$(MCP)),auto-attached on make run,NOT in MCP — add to config/local.mk to use)"; \
+	printf "  %-7s %-14s %s\n" "gog"    "$$(reg gog)"      "$(if $(filter gog,$(MCP)),auto-attached on make run,NOT in MCP — add to config/local.mk to use)"; \
 	echo "  gateway catalog (atlassian/notion/granola/linear/...): sbx mcp add … then add to MCP in config/local.mk"; \
 	echo ""; \
 	echo "All of the above is configured in config/local.mk. Start it: make serve (host) + make run (sandbox)."

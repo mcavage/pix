@@ -33,26 +33,10 @@ RUN apt-get update \
       ca-certificates git gh ripgrep hostname gzip curl which \
  && rm -rf /var/lib/apt/lists/*
 
-# --- Google Workspace CLI -----------------------------------------------------
-# `gws` ships a Rust binary via GitHub releases. Install it directly from a
-# pinned release instead of using npm postinstall scripts. The wrapper at
-# /usr/local/bin/gws fetches a short-lived bearer from a host token service and
-# execs the real binary at /usr/local/bin/_gws.
-ARG GWS_CLI_VERSION=0.22.5
-RUN set -eux; \
-    arch="$(dpkg --print-architecture)"; \
-    case "$arch" in \
-      arm64) gt=aarch64-unknown-linux-gnu ;; \
-      amd64) gt=x86_64-unknown-linux-gnu  ;; \
-      *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL "https://github.com/googleworkspace/cli/releases/download/v${GWS_CLI_VERSION}/google-workspace-cli-${gt}.tar.gz" -o /tmp/gws.tgz; \
-    mkdir -p /tmp/gws; \
-    tar -xzf /tmp/gws.tgz -C /tmp/gws; \
-    mkdir -p /usr/local/bin; \
-    install -m0755 /tmp/gws/gws /usr/local/bin/_gws; \
-    rm -rf /tmp/gws /tmp/gws.tgz; \
-    /usr/local/bin/_gws --version
+# Note: Google Workspace access is NOT in this image. It runs host-side as the
+# `gog` MCP server, spawned by the sbx gateway and reached through it (the same
+# pattern as `slack`). The VM never talks to Google — no CLI, no token service,
+# no Google endpoints in the kit allowlist. See `make mcp-register`.
 
 # --- npm global prefix (sandbox-template convention) --------------------------
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
@@ -147,8 +131,6 @@ COPY --chown=agent:agent prompts/      /home/agent/.pi/agent/prompts/
 COPY --chown=agent:agent extensions/   /home/agent/.pi/agent/extensions/
 COPY --chown=agent:agent agents/       /home/agent/.pi/agent/agents/
 COPY --chown=agent:agent themes/       /home/agent/.pi/agent/themes/
-COPY bin/gws /usr/local/bin/gws
-RUN chmod 0755 /usr/local/bin/gws
 # Note: company tooling (e.g. a `snow` wrapper) is NOT in the public image. Such
 # in-sandbox wrappers are delivered by a private overlay mixin kit at run time
 # (`--kit ./pi-kit-work`); see docs/OVERLAY.md.

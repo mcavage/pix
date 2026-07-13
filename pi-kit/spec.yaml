@@ -73,16 +73,6 @@ network:
     - mcp.exa.ai
     - generativelanguage.googleapis.com
     - api.perplexity.ai
-    # Google Workspace CLI runtime endpoints. The gws wrapper obtains a bearer
-    # from a host service, then gws calls these APIs directly from the sandbox.
-    - www.googleapis.com
-    - gmail.googleapis.com
-    - calendar-pa.clients6.google.com
-    - drive.googleapis.com
-    - docs.googleapis.com
-    - sheets.googleapis.com
-    - people.googleapis.com
-    - oauth2.googleapis.com
     # Host Ollama (:11434), the fourth inference provider. The in-sandbox
     # ollama-bridge extension forwards localhost:11434 here over node:http (pi's
     # fetch can't reach host.docker.internal through the sbx proxy; see the
@@ -90,10 +80,6 @@ network:
     # Ollama. Optional; cloud models work without it.
     - host.docker.internal:11434
     - localhost:11434
-    # Host gws token service (optional; without it the gws wrapper degrades to
-    # the real binary unauthenticated).
-    - host.docker.internal:11441
-    - localhost:11441
     # Host memory service (the recall extension calls it over JSON-RPC). The store
     # and its embeddings live on the host; the sandbox only needs this URL. Host-
     # internal traffic bypasses the proxy MITM (see NO_PROXY in the Dockerfile);
@@ -137,39 +123,6 @@ environment:
     # pi runs on Node, which uses its own bundled CA store (not the system one),
     # so it must be told to also trust the proxy's intercepting CA.
     NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/proxy-ca.crt
-  # ==========================================================================
-  # GWS_TOKEN_AUTH — shared broker bearer (HANDOFF / HOST-VERIFY note)
-  # ==========================================================================
-  # The in-sandbox clients (gws wrapper, recall) authenticate to the host
-  # services with this shared token. The host launcher (cmd/pi-stack/run.go,
-  # bin/pi-stack, Makefile) sets it in the `sbx run` PROCESS ENV, never on argv
-  # (argv is process-inspectable via ps/EDR — SECURITY). The gws wrapper then
-  # sends it as the Authorization bearer to the host gws-token service (:11441).
-  # It is intentionally NOT proxyManaged: the VM must READ the value (a local
-  # shared secret), not hide it behind the upstream-provider proxy sentinel.
-  #
-  # WHAT KIT-SPEC v1 SUPPORTS (verified against the kit-reference docs):
-  #   - environment.variables: literal key=value pairs baked into the container.
-  #     STATIC ONLY — no host-env interpolation (no ${VAR}); useless for a
-  #     per-install token that lives in a committed file.
-  #   - environment.proxyManaged: names the proxy fills at REQUEST time as an
-  #     outbound auth header. NOT a readable VM env var — wrong shape for this.
-  #   - credentials.sources.<id>.env: reads a HOST env var, but only to feed the
-  #     proxy's auth-header injection (serviceAuth), again not a plain VM env var.
-  #   - commands.initFiles: writes a file at start, but substitutes only
-  #     ${WORKDIR} — no host env either.
-  # => v1 has NO clean host-env -> VM-env passthrough for a dynamic value. So
-  #    GWS_TOKEN_AUTH is documented here (not declared as a functional key):
-  #    inventing a field risks a strict-v1 `sbx run` panic (see the header note).
-  #
-  # HOST-VERIFY (cannot be checked from inside the VM — needs the host sbx CLI):
-  #   Confirm whether sbx forwards the launcher's process-env GWS_TOKEN_AUTH into
-  #   the VM as-is. If it does NOT, the leading fix is a launcher-side
-  #   `sbx run --env GWS_TOKEN_AUTH` (NAME only — the value stays in the env, so
-  #   it never touches argv), or failing that `sbx secret set` + a credential
-  #   binding (the locked design's "inject as a sandbox SECRET").
-  #   DEGRADATION IS SAFE either way: if the var never arrives, bin/gws falls
-  #   back to running unauthenticated (no error), so the sandbox still works.
   proxyManaged:
     - ANTHROPIC_API_KEY
     - GEMINI_API_KEY
@@ -234,11 +187,12 @@ agentContext: |
   usage HUD, and the baked status + subagents extensions.
 
   ## CLIs and MCP
-  `gh` and `gws` are installed. GitHub auth is routed through sbx credentials.
-  `gws` uses a host token service for short-lived Google Workspace bearers. Slack
-  (the `chat` capability) is a host-side stdio MCP server run by the MCP gateway;
-  its token stays on the host. Run the host services with `make serve`. Use sbx
-  Cloud MCP Gateway profiles for catalog servers (notion, atlassian, granola, …).
+  `gh` is installed; GitHub auth is routed through sbx credentials. Google
+  Workspace runs host-side as the `gog` MCP server (spawned by the MCP gateway,
+  authed with the host's own gog credentials, read-only by default) — the same
+  pattern as Slack (the `chat` capability). The VM never talks to Google
+  directly. Run the host services with `make serve`. Use sbx Cloud MCP Gateway
+  profiles for catalog servers (notion, atlassian, granola, …).
 
   ## Posture
   Full-auto: no permission prompts. The sandbox isolation is the safety boundary.
