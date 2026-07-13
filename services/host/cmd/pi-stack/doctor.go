@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -269,17 +270,36 @@ func mcpConfigured(cfg *config.Config, name string) bool {
 }
 
 // gogAccount resolves the Google Workspace account doctor/setup probe against.
-// It reads $GOG_ACCOUNT (the same var the gateway spawn inherits from
-// config/op-refs.env) — NEVER a hardcoded address. Empty means "not configured"
-// and the caller emits a TODO to set it.
+// It prefers config.toml's `gog_account` (the Go-side source of truth) and falls
+// back to the $GOG_ACCOUNT env var — NEVER a hardcoded address. Empty means "not
+// configured" and the caller emits a TODO to set it.
 //
-// NOTE(integrator): once the config package grows a `GogAccount` field (arch
-// plan U1), prefer it here and fall back to the env var.
-func gogAccount(env shellEnv) string {
+// IMPORTANT: `make mcp-register` takes GOG_ACCOUNT from config/local.mk, which
+// this Go binary cannot read. The config.toml `gog_account` field here MUST be
+// kept in sync with that value, or doctor probes a different account than the
+// gateway actually registered and can report green while the gateway gets 0 tools.
+func gogAccount(cfg *config.Config, env shellEnv) string {
+	if cfg != nil {
+		if a := strings.TrimSpace(cfg.GogAccount); a != "" {
+			return a
+		}
+	}
 	if env.getenv == nil {
 		return ""
 	}
 	return strings.TrimSpace(env.getenv("GOG_ACCOUNT"))
+}
+
+// opRefsEnvFile resolves config/op-refs.env to an ABSOLUTE path so doctor's
+// headless probe matches the gateway registration exactly. `make mcp-register`
+// registers the gog spawn with an absolute --env-file; a relative one here would
+// resolve against doctor's cwd and could probe a different file than the gateway
+// actually uses. Falls back to the relative path if Abs fails.
+func opRefsEnvFile() string {
+	if abs, err := filepath.Abs("config/op-refs.env"); err == nil {
+		return abs
+	}
+	return "config/op-refs.env"
 }
 
 // gogHeadlessOK runs the gateway-EQUIVALENT probe — list gog's tools the exact
@@ -296,7 +316,7 @@ func gogHeadlessOK(env shellEnv, acct string) bool {
 	if _, err := env.lookPath("op"); err != nil {
 		return false
 	}
-	out, err := env.run("op", "run", "--env-file=config/op-refs.env", "--",
+	out, err := env.run("op", "run", "--env-file="+opRefsEnvFile(), "--",
 		"gog", "--account", acct, "mcp", "--list-tools")
 	return err == nil && strings.TrimSpace(out) != ""
 }
@@ -317,12 +337,13 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 	}
 	g.checks = append(g.checks, check{label: "gog CLI", state: stateOK, detail: "installed"})
 
-	acct := gogAccount(env)
+	acct := gogAccount(cfg, env)
 	if acct == "" {
-		// 2'. No account configured — can't probe auth or the headless path.
+		// 2'. No account configured — can't probe auth or the headless path, so we
+		// must NOT report green: say we cannot verify and name the two sources.
 		g.checks = append(g.checks, check{label: "account", state: stateTODO,
-			detail: "GOG_ACCOUNT unset",
-			todo:   "set GOG_ACCOUNT=<you@example.com> (env or config/op-refs.env) so doctor can probe the right account"})
+			detail: "cannot verify (GOG_ACCOUNT unset in env/config)",
+			todo:   "set gog_account in " + config.Path() + " (or GOG_ACCOUNT in the env) so doctor probes the right account"})
 		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
 		return g

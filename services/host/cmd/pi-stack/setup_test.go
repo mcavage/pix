@@ -20,14 +20,16 @@ func TestSetup_NonTTYChecklist(t *testing.T) {
 
 	seeded := false
 	seed := func(path string) (bool, error) { seeded = true; return true, nil }
-	tokened := false
-	ensureToken := func() (string, error) { tokened = true; return "tok", nil }
 
-	steps := runSetup(defaultCfg(), f.env(), sio, seed, ensureToken)
+	steps := runSetup(defaultCfg(), f.env(), sio, seed)
 	out := buf.String()
 
-	if !seeded || !tokened {
-		t.Fatalf("setup must call seed + ensureToken (seeded=%v tokened=%v)", seeded, tokened)
+	if !seeded {
+		t.Fatalf("setup must call seed (seeded=%v)", seeded)
+	}
+	// F5: the default path mints NO broker token (there is no built-in broker).
+	if strings.Contains(out, "broker token") {
+		t.Errorf("setup must not mint a broker token by default, got:\n%s", out)
 	}
 	if len(steps) == 0 {
 		t.Fatal("expected TODO steps when nothing is installed")
@@ -60,13 +62,11 @@ func TestSetup_SeedIdempotent(t *testing.T) {
 	t.Setenv("PI_STACK_CONFIG", cfgPath)
 
 	f := fakeEnv{present: map[string]bool{}, output: map[string]string{}, ports: map[int]bool{}}
-	tokenCalls := 0
-	ensureToken := func() (string, error) { tokenCalls++; return "tok", nil }
 
 	// First run: config absent -> Seed writes it.
 	var buf1 bytes.Buffer
 	sio1 := setupIO{in: strings.NewReader(""), out: &buf1, isTTY: false}
-	runSetup(defaultCfg(), f.env(), sio1, config.Seed, ensureToken)
+	runSetup(defaultCfg(), f.env(), sio1, config.Seed)
 	if !strings.Contains(buf1.String(), "wrote default config") {
 		t.Errorf("first run should write the config, got:\n%s", buf1.String())
 	}
@@ -78,7 +78,7 @@ func TestSetup_SeedIdempotent(t *testing.T) {
 	// Second run: config present -> left as-is, byte-identical.
 	var buf2 bytes.Buffer
 	sio2 := setupIO{in: strings.NewReader(""), out: &buf2, isTTY: false}
-	runSetup(defaultCfg(), f.env(), sio2, config.Seed, ensureToken)
+	runSetup(defaultCfg(), f.env(), sio2, config.Seed)
 	if !strings.Contains(buf2.String(), "already present") {
 		t.Errorf("second run should not clobber, got:\n%s", buf2.String())
 	}
@@ -95,11 +95,10 @@ func TestSetup_SeedIdempotent(t *testing.T) {
 func TestSetup_MCPCreds(t *testing.T) {
 	f := fakeEnv{present: map[string]bool{}, output: map[string]string{}, ports: map[int]bool{}}
 	seed := func(string) (bool, error) { return false, nil }
-	ensureToken := func() (string, error) { return "tok", nil }
 
 	// No MCP -> no credentials section.
 	var noMCP bytes.Buffer
-	runSetup(defaultCfg(), f.env(), setupIO{in: strings.NewReader(""), out: &noMCP}, seed, ensureToken)
+	runSetup(defaultCfg(), f.env(), setupIO{in: strings.NewReader(""), out: &noMCP}, seed)
 	if strings.Contains(noMCP.String(), "MCP credentials:") {
 		t.Error("MCP credentials section should be absent when no MCP configured")
 	}
@@ -108,7 +107,7 @@ func TestSetup_MCPCreds(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"slack"}
 	var withMCP bytes.Buffer
-	runSetup(cfg, f.env(), setupIO{in: strings.NewReader(""), out: &withMCP}, seed, ensureToken)
+	runSetup(cfg, f.env(), setupIO{in: strings.NewReader(""), out: &withMCP}, seed)
 	if !strings.Contains(withMCP.String(), "MCP credentials:") {
 		t.Error("MCP credentials section should be present when MCP configured")
 	}

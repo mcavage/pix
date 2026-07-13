@@ -38,6 +38,7 @@ services = ["memory", "warehouse"]
 mcp = ["slack"]
 memory_watcher_model = "custom-watcher"
 memory_embed_model = "custom-embed"
+gog_account = "you@example.com"
 
 [kits]
 stack = ["overlay-a", "overlay-b"]
@@ -73,6 +74,9 @@ port = 9000
 	}
 	if c.MemoryWatcherModel != "custom-watcher" || c.MemoryEmbedModel != "custom-embed" {
 		t.Errorf("models = %q/%q", c.MemoryWatcherModel, c.MemoryEmbedModel)
+	}
+	if c.GogAccount != "you@example.com" {
+		t.Errorf("GogAccount = %q, want you@example.com", c.GogAccount)
 	}
 	if len(c.Kits.Stack) != 2 || c.Kits.Stack[1] != "overlay-b" {
 		t.Errorf("Kits.Stack = %v", c.Kits.Stack)

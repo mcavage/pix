@@ -69,6 +69,7 @@ func runServe(enabled []string) {
 	alias := map[string]string{
 		"memory":    "memory",
 		"knowledge": "knowledge",
+		"broker":    "broker",
 	}
 	for k, v := range extraServiceAliases {
 		alias[k] = v
@@ -160,6 +161,23 @@ func runServe(enabled []string) {
 		all = append(all, knSvc)
 	}
 
+	// broker: the OVERLAY-ONLY credential-broker slot. DORMANT in the public tree —
+	// there is NO built-in broker, so with the default builtin impl this starts
+	// NOTHING (brokerService returns nil). It only materializes when an overlay
+	// configures an external broker ([plugins.broker] with impl != builtin): then it
+	// is launched ONCE through the shared supervisor (sha-verified + env-isolated,
+	// F2), the dispensed CredentialBroker backs the stable /token shim, and it
+	// participates in shutdown — mirroring the memory/knowledge non-builtin path.
+	if enabledSvc("broker") {
+		brSvc, berr := brokerService(cfg, sup, selfPath)
+		if berr != nil {
+			fatalf("launch broker plugin: %v", berr)
+		}
+		if brSvc != nil {
+			all = append(all, *brSvc)
+		}
+	}
+
 	// Overlay services (e.g. a warehouse proxy) self-register via init() when
 	// present. Only the enabled ones are kept (the public tree has none).
 	for _, f := range extraServiceFactories {
@@ -213,6 +231,39 @@ func runServe(enabled []string) {
 		}()
 	}
 	select {} // block forever; the goroutines serve
+}
+
+// brokerService builds the OVERLAY-ONLY credential-broker slot. It returns
+// (nil, nil) when the broker impl is builtin — the default PUBLIC case, where NO
+// built-in broker exists, so nothing starts. When an overlay configures an
+// external broker ([plugins.broker] with impl != builtin), it launches that
+// binary ONCE through the shared supervisor (goplugin.NewClient + verifyPluginSHA
+// + pluginEnv isolation), dispenses the CredentialBroker, and returns a
+// hostService that serves the stable /token shim (brokerProxyMux). The broker is
+// the ONLY plugin granted the bearer back (pluginEnv strips PI_STACK_BROKER_AUTH
+// from every other subprocess; F2), and the same bearer gates the /token shim.
+func brokerService(cfg *config.Config, sup *supervisor, selfPath string) (*hostService, error) {
+	spec := cfg.Plugin("broker")
+	if spec.Impl == config.BuiltinImpl {
+		return nil, nil // dormant seam: no built-in broker in the public tree
+	}
+	// The broker gets its bearer back (and only the broker) via a granted extraEnv;
+	// the same value gates the /token shim. An empty bearer disables the check.
+	bearer := os.Getenv("PI_STACK_BROKER_AUTH")
+	var grant []string
+	if bearer != "" {
+		grant = []string{"PI_STACK_BROKER_AUTH=" + bearer}
+	}
+	h, err := sup.launch("broker", "broker", spec, selfPath, grant)
+	if err != nil {
+		return nil, err
+	}
+	return &hostService{
+		name:  "broker",
+		addr:  env("BROKER_BIND", "127.0.0.1") + ":" + env("BROKER_PORT", "11437"),
+		mux:   brokerProxyMux(h, bearer),
+		check: func() error { return brokerCheck(h) },
+	}, nil
 }
 
 // resolveServices picks the effective service list for `serve` (F1): the CLI
