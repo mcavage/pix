@@ -142,19 +142,13 @@ run: ## Launch a pi-stack sandbox NAME. If NAME is stopped it's recreated (works
 	fi; \
 	TAG=$$(cat out/.local-image-tag 2>/dev/null || true); \
 	[ -n "$$TAG" ] && echo "(new sandbox $(NAME), local build :$$TAG)" || echo "(new sandbox $(NAME), kit-pinned image)"; \
-	: 'Broker bearer: read-or-mint the shared token the in-sandbox clients (gws'; \
-	: 'wrapper, recall) use to authenticate to the host services. Same file the'; \
-	: 'launcher (out/pi-stack) and pi-stack-host read/write, so whoever creates'; \
-	: 'it first wins and everyone agrees on the value.'; \
-	: 'SECURITY: the token is EXPORTED into the sbx PROCESS ENV, not passed as a'; \
-	: '--env argv flag. argv is process-inspectable (ps/EDR); the process env is'; \
-	: 'not. pi-kit/spec.yaml declares GWS_TOKEN_AUTH so the VM picks it up from'; \
-	: 'this forwarded host env. Mirrors cmd/pi-stack/run.go.'; \
-	: 'TODO(host-verified): confirm sbx forwards this process-env var into the VM'; \
-	: 'per pi-kit/spec.yaml; if not, switch to `sbx secret set` on the host.'; \
-	TOKFILE="$${XDG_CONFIG_HOME:-$$HOME/.config}/pi-stack/broker-token"; \
-	if [ ! -f "$$TOKFILE" ]; then mkdir -p "$$(dirname "$$TOKFILE")"; (umask 077; head -c32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=' > "$$TOKFILE"); fi; \
-	export GWS_TOKEN_AUTH="$$(cat "$$TOKFILE")"; \
+	: 'Broker bearer: read-or-mint via bin/pi-stack broker-token — the ONE shared'; \
+	: 'mechanism (concurrency-safe, same file the Go launcher + pi-stack-host use),'; \
+	: 'so every path converges on ONE token. EXPORTED into the sbx PROCESS ENV, not'; \
+	: 'passed as a --env argv flag: argv is process-inspectable (ps/EDR), the process'; \
+	: 'env is not. See pi-kit/spec.yaml GWS_TOKEN_AUTH note for the v1/host-verify'; \
+	: 'story; gws degrades to unauthenticated if the var is not forwarded.'; \
+	export GWS_TOKEN_AUTH="$$($(CURDIR)/bin/pi-stack broker-token)"; \
 	exec sbx run pi-stack --name $(NAME) $${TAG:+--template docker.io/$(DOCKER_USER)/pi-stack:$$TAG} --kit $(KIT) $(OVERLAY_KIT_FLAG) $(MCP_FLAGS) . $(OVERLAY_WS) -- $(DEV_SKILLS)
 
 # Run the latest PUBLISHED image straight off the git-hosted kit — the true
@@ -165,10 +159,13 @@ run: ## Launch a pi-stack sandbox NAME. If NAME is stopped it's recreated (works
 # no --template override and no `sbx template rm` dance. Wait for CI green first.
 run-published: ## Run the latest PUBLISHED image via the git kit (always fresh — every push is a new version tag; no eviction needed). `make run` = local build.
 	-sbx rm -f pi-stack-published >/dev/null 2>&1
-	sbx run pi-stack --name pi-stack-published --kit "git+https://github.com/$(DOCKER_USER)/pi-stack.git#dir=pi-kit"
+	# Set the broker bearer via the SAME shared helper as `make run`, so gws works
+	# consistently here too (exported into the process env, never on argv).
+	GWS_TOKEN_AUTH="$$($(CURDIR)/bin/pi-stack broker-token)" sbx run pi-stack --name pi-stack-published --kit "git+https://github.com/$(DOCKER_USER)/pi-stack.git#dir=pi-kit"
 
 run-no-mcp: ## Launch without sbx Cloud MCP Gateway, for debugging MCP setup failures
-	env -u SBX_MCP_URL sbx run pi-stack --kit $(KIT) .
+	# Same shared broker-token helper as `make run` (process env, not argv).
+	GWS_TOKEN_AUTH="$$($(CURDIR)/bin/pi-stack broker-token)" env -u SBX_MCP_URL sbx run pi-stack --kit $(KIT) .
 
 launcher: ## Build the standalone pi-stack launcher binary (out/pi-stack), version-stamped from VERSION
 	(cd services/host && go build -ldflags "-X main.version=$(VERSION)" -o $(CURDIR)/out/pi-stack ./cmd/pi-stack)

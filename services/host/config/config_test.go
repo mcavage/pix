@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -160,6 +161,55 @@ func TestEnsureToken(t *testing.T) {
 	}
 	if got != tok1 {
 		t.Errorf("ReadToken() = %q, want %q", got, tok1)
+	}
+}
+
+// TestEnsureTokenConcurrent proves the first-run race is closed: N goroutines
+// racing on a fresh config dir must all return the SAME token. Before the
+// O_CREATE|O_EXCL election, concurrent first-runs could each mint a different
+// value and the last writer would win, so the host and the VM could end up with
+// different tokens and auth would fail.
+func TestEnsureTokenConcurrent(t *testing.T) {
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+
+	const n = 32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	toks := make([]string, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start // release all goroutines at once to maximize the race
+			toks[i], errs[i] = EnsureToken()
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("EnsureToken() goroutine %d: %v", i, err)
+		}
+		if toks[i] == "" {
+			t.Fatalf("EnsureToken() goroutine %d: empty token", i)
+		}
+	}
+	want := toks[0]
+	for i, got := range toks {
+		if got != want {
+			t.Fatalf("EnsureToken() goroutine %d = %q, want %q (tokens diverged under concurrency)", i, got, want)
+		}
+	}
+
+	// The persisted file must match the agreed token.
+	got, err := ReadToken()
+	if err != nil {
+		t.Fatalf("ReadToken() after race: %v", err)
+	}
+	if got != want {
+		t.Errorf("ReadToken() = %q, want %q", got, want)
 	}
 }
 

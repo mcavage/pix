@@ -137,25 +137,39 @@ environment:
     # pi runs on Node, which uses its own bundled CA store (not the system one),
     # so it must be told to also trust the proxy's intercepting CA.
     NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/proxy-ca.crt
-  # GWS_TOKEN_AUTH is the shared broker bearer the in-sandbox clients (gws
-  # wrapper, recall) use to authenticate to the host services. The host launcher
-  # (cmd/pi-stack/run.go, bin/pi-stack, Makefile `run`) sets it in the `sbx run`
-  # PROCESS ENV rather than on argv — argv is process-inspectable via ps/EDR
-  # (SECURITY). Declaring it here forwards that host env value into the VM, where
-  # the gws wrapper sends it as the Authorization bearer to the host gws-token
-  # service (:11441). It is intentionally NOT proxyManaged: the VM must READ the
-  # value (it is a local shared secret, not an upstream provider credential to
-  # hide behind the proxy sentinel).
+  # ==========================================================================
+  # GWS_TOKEN_AUTH — shared broker bearer (HANDOFF / HOST-VERIFY note)
+  # ==========================================================================
+  # The in-sandbox clients (gws wrapper, recall) authenticate to the host
+  # services with this shared token. The host launcher (cmd/pi-stack/run.go,
+  # bin/pi-stack, Makefile) sets it in the `sbx run` PROCESS ENV, never on argv
+  # (argv is process-inspectable via ps/EDR — SECURITY). The gws wrapper then
+  # sends it as the Authorization bearer to the host gws-token service (:11441).
+  # It is intentionally NOT proxyManaged: the VM must READ the value (a local
+  # shared secret), not hide it behind the upstream-provider proxy sentinel.
   #
-  # This is declared as a comment (not a functional key) on purpose: kit-spec v1
-  # has no verified env-passthrough field, and inventing one risks a `sbx run`
-  # panic (v2 already panics on unknown requirements — see the header note). The
-  # host launcher does the real work by putting GWS_TOKEN_AUTH in the sbx process
-  # env; this block documents the contract and the open verification question.
-  # TODO(host-verified): confirm sbx forwards a launcher process-env var into the
-  # VM (and, if a spec.yaml declaration is required, add it here with the correct
-  # v1 field name); if it does not forward at all, switch the launchers to
-  # `sbx secret set` (the locked design's "inject as a sandbox SECRET").
+  # WHAT KIT-SPEC v1 SUPPORTS (verified against the kit-reference docs):
+  #   - environment.variables: literal key=value pairs baked into the container.
+  #     STATIC ONLY — no host-env interpolation (no ${VAR}); useless for a
+  #     per-install token that lives in a committed file.
+  #   - environment.proxyManaged: names the proxy fills at REQUEST time as an
+  #     outbound auth header. NOT a readable VM env var — wrong shape for this.
+  #   - credentials.sources.<id>.env: reads a HOST env var, but only to feed the
+  #     proxy's auth-header injection (serviceAuth), again not a plain VM env var.
+  #   - commands.initFiles: writes a file at start, but substitutes only
+  #     ${WORKDIR} — no host env either.
+  # => v1 has NO clean host-env -> VM-env passthrough for a dynamic value. So
+  #    GWS_TOKEN_AUTH is documented here (not declared as a functional key):
+  #    inventing a field risks a strict-v1 `sbx run` panic (see the header note).
+  #
+  # HOST-VERIFY (cannot be checked from inside the VM — needs the host sbx CLI):
+  #   Confirm whether sbx forwards the launcher's process-env GWS_TOKEN_AUTH into
+  #   the VM as-is. If it does NOT, the leading fix is a launcher-side
+  #   `sbx run --env GWS_TOKEN_AUTH` (NAME only — the value stays in the env, so
+  #   it never touches argv), or failing that `sbx secret set` + a credential
+  #   binding (the locked design's "inject as a sandbox SECRET").
+  #   DEGRADATION IS SAFE either way: if the var never arrives, bin/gws falls
+  #   back to running unauthenticated (no error), so the sandbox still works.
   proxyManaged:
     - ANTHROPIC_API_KEY
     - GEMINI_API_KEY

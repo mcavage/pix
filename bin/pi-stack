@@ -15,7 +15,43 @@
 # anywhere on PATH.
 set -euo pipefail
 
-# Resolve the repo root from this script's real location (follows symlinks).
+# ensure_broker_token — read-or-mint the shared broker bearer and print it to
+# stdout. THE single read-or-mint mechanism: this launcher calls it directly, and
+# the Makefile calls `bin/pi-stack broker-token` so `make run`/run-published/
+# run-no-mcp all mint through the exact same code (no divergent copies to drift).
+#
+# Concurrency-safe, mirroring config.EnsureToken's O_CREATE|O_EXCL election: the
+# `set -C` (noclobber) redirect opens the file O_EXCL, so exactly ONE concurrent
+# writer creates+fills it and every other writer's redirect fails and falls
+# through to READ the winner's value. All three paths (this shell, the Go
+# launcher, the host binary) therefore converge on ONE token — the property the
+# whole scheme depends on (host has token A, VM must not get token B).
+ensure_broker_token() {
+  local tok_file i
+  tok_file="${XDG_CONFIG_HOME:-$HOME/.config}/pi-stack/broker-token"
+  mkdir -p "$(dirname "$tok_file")"
+  # Elect one writer atomically. Under `set -C` the `>` redirect fails if the
+  # file already exists (O_EXCL), so only the first writer creates+fills it.
+  if ( set -C; umask 077; head -c32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=' > "$tok_file" ) 2>/dev/null; then
+    : # we won and just filled it
+  fi
+  # Winner or loser, read the agreed value. A loser can momentarily see the file
+  # after creation but before the winner's write lands, so retry briefly.
+  i=0
+  while [ "$i" -lt 250 ]; do
+    if [ -s "$tok_file" ]; then cat "$tok_file"; return 0; fi
+    i=$((i + 1)); sleep 0.02
+  done
+  echo "pi-stack: could not read broker token at $tok_file" >&2
+  return 1
+}
+
+# `pi-stack broker-token` — print the shared token and exit (the Makefile hook).
+if [ "${1:-}" = "broker-token" ]; then
+  ensure_broker_token
+  exit $?
+fi
+
 src="${BASH_SOURCE[0]}"
 while [ -h "$src" ]; do
   dir="$(cd -P "$(dirname "$src")" && pwd)"
@@ -41,26 +77,23 @@ kits=( --kit "$KIT" )
 [ -f "$OVERLAY/kit/spec.yaml" ] && kits+=( --kit "$OVERLAY/kit" )
 
 # Broker bearer: the in-sandbox clients (gws wrapper, recall) authenticate to the
-# host services with a shared token at ~/.config/pi-stack/broker-token. Read it if
-# present, else mint one into the same file (0600) so the host binary and the Go
-# launcher — which read/write the SAME file via config.EnsureToken — all agree on
-# the value.
+# host services with a shared token minted by ensure_broker_token (above) — the
+# SAME file/mechanism the Makefile and the Go launcher use, so all agree.
 #
 # SECURITY: the token is exported into the ENVIRONMENT of the `sbx run` process
 # (not passed as a --env argv flag). argv is process-inspectable — anyone with
 # `ps`, or an EDR agent, can read a plain `--env GWS_TOKEN_AUTH=<token>`. Setting
-# it in the process env keeps it off the command line; pi-kit/spec.yaml declares
-# GWS_TOKEN_AUTH so the sandbox picks it up from this forwarded host env. Mirrors
-# the Go launcher's cmd/pi-stack/run.go.
-# TODO(host-verified): confirm sbx forwards this process-env var into the VM per
-# pi-kit/spec.yaml; if not, switch to `sbx secret set` (same TODO as run.go).
-tok_file="${XDG_CONFIG_HOME:-$HOME/.config}/pi-stack/broker-token"
-if [ ! -f "$tok_file" ]; then
-  mkdir -p "$(dirname "$tok_file")"
-  ( umask 077; head -c32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=' > "$tok_file" )
-fi
-if [ -s "$tok_file" ]; then
-  export GWS_TOKEN_AUTH="$(cat "$tok_file")"
+# it in the process env keeps the VALUE off the command line. Mirrors the Go
+# launcher's cmd/pi-stack/run.go.
+#
+# HOST-VERIFY (see pi-kit/spec.yaml "GWS_TOKEN_AUTH" note): kit-spec v1 has no
+# host-env->VM-env passthrough field, so whether sbx forwards this process-env
+# var into the VM is unconfirmed. If it does not, the in-sandbox gws wrapper
+# DEGRADES GRACEFULLY (falls back to unauthenticated, no error — see bin/gws),
+# and the fix is a launcher-side `sbx run --env GWS_TOKEN_AUTH` (name only, value
+# stays in the env, not on argv) or `sbx secret set`.
+if tok="$(ensure_broker_token)"; then
+  export GWS_TOKEN_AUTH="$tok"
 fi
 
 extra_ws=()
