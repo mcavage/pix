@@ -72,7 +72,7 @@ MEMORY_EMBED_MODEL   ?= nomic-embed-text
 # config/local.mk (written by `make install`) so you never pass flags by hand.
 SERVICES ?= memory gws
 
-.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve gws-token-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay
+.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve gws-token-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay launcher
 
 # Symlink the private overlay's host plugins ($(OVERLAY)/host/overlay_*.go) into
 # services/host/ so they compile into pi-stack-host and self-register. No-op in a
@@ -142,7 +142,17 @@ run: ## Launch a pi-stack sandbox NAME. If NAME is stopped it's recreated (works
 	fi; \
 	TAG=$$(cat out/.local-image-tag 2>/dev/null || true); \
 	[ -n "$$TAG" ] && echo "(new sandbox $(NAME), local build :$$TAG)" || echo "(new sandbox $(NAME), kit-pinned image)"; \
-	exec sbx run pi-stack --name $(NAME) $${TAG:+--template docker.io/$(DOCKER_USER)/pi-stack:$$TAG} --kit $(KIT) $(OVERLAY_KIT_FLAG) $(MCP_FLAGS) . $(OVERLAY_WS) -- $(DEV_SKILLS)
+	: 'Broker bearer: read-or-mint the shared token the in-sandbox clients (gws'; \
+	: 'wrapper, recall) use to authenticate to the host services. Same file the'; \
+	: 'launcher (out/pi-stack) and pi-stack-host read/write, so whoever creates'; \
+	: 'it first wins and everyone agrees on the value. Injected via --env, mirroring'; \
+	: 'the Go launchers cmd/pi-stack/sbxargs.go. TODO(host-verified): argv is'; \
+	: 'process-inspectable — move the bearer onto the sbx secret mechanism once the'; \
+	: 'exact syntax is pinned down on the host.'; \
+	TOKFILE="$${XDG_CONFIG_HOME:-$$HOME/.config}/pi-stack/broker-token"; \
+	if [ ! -f "$$TOKFILE" ]; then mkdir -p "$$(dirname "$$TOKFILE")"; (umask 077; head -c32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=' > "$$TOKFILE"); fi; \
+	TOK="$$(cat "$$TOKFILE")"; \
+	exec sbx run pi-stack --name $(NAME) $${TAG:+--template docker.io/$(DOCKER_USER)/pi-stack:$$TAG} --kit $(KIT) $(OVERLAY_KIT_FLAG) $(MCP_FLAGS) --env GWS_TOKEN_AUTH=$$TOK . $(OVERLAY_WS) -- $(DEV_SKILLS)
 
 # Run the latest PUBLISHED image straight off the git-hosted kit — the true
 # consumer path, no local repo needed. Every push to main auto-publishes a NEW
@@ -156,6 +166,10 @@ run-published: ## Run the latest PUBLISHED image via the git kit (always fresh �
 
 run-no-mcp: ## Launch without sbx Cloud MCP Gateway, for debugging MCP setup failures
 	env -u SBX_MCP_URL sbx run pi-stack --kit $(KIT) .
+
+launcher: ## Build the standalone pi-stack launcher binary (out/pi-stack), version-stamped from VERSION
+	(cd services/host && go build -ldflags "-X main.version=$(VERSION)" -o $(CURDIR)/out/pi-stack ./cmd/pi-stack)
+	@echo "Built out/pi-stack (version $(VERSION)). Install it with: ln -sf $(CURDIR)/out/pi-stack ~/.local/bin/pi-stack"
 
 memory-serve: link-overlay ## Build + run just the memory service (JSON-RPC :11435) from pi-stack-host
 	(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && exec ./out/pi-stack-host memory
@@ -185,7 +199,7 @@ mcp-register: link-overlay ## Register the local stdio MCP servers you use (the 
 	@BIN="$(CURDIR)/out/pi-stack-host"; \
 	for s in $(REGISTER); do \
 		sbx mcp add $$s --command "$(OP_BIN)" \
-			--args run --args --no-masking --args "--env-file=$(OP_REFS)" --args -- --args "$$BIN" --args "$$s" \
+			--args run --args --no-masking --args "--env-file=$(OP_REFS)" --args -- --args "$$BIN" --args mcp --args "$$s" \
 			&& echo "  registered: $$s" || echo "  FAILED to register: $$s"; \
 	done
 	@echo "Verify: sbx mcp ls"
