@@ -10,7 +10,7 @@ read it before changing things, and keep it current as you learn.
 
 | path | what |
 | --- | --- |
-| `Dockerfile` | the image: DHI node base + LSP toolchains + chromium + gh + gws + fd + curated pi packages + the baked harness |
+| `Dockerfile` | the image: DHI node base + LSP toolchains + chromium + gh + fd + curated pi packages + the baked harness |
 | `pi-kit/spec.yaml` | the **sandbox kit** (kit-spec **v1**): image, entrypoint, multi-model proxy creds, network allowlist, `agentContext` |
 | `settings.json` | → `~/.pi/agent/settings.json` (theme, trust, `hideThinkingBlock`) |
 | `keybindings.json` | → `~/.pi/agent/keybindings.json` (emacs; model-cycle moved to **Alt+P**) |
@@ -19,7 +19,7 @@ read it before changing things, and keep it current as you learn.
 | `agents/*.md` | 17 subagent presets: orchestration (`fanout`/`review`/`deep`) + a role crew (architect, engineer, designer, qa-lead, security-lead, …) |
 | `skills/<name>/SKILL.md` | Agent Skills. The public image bakes ~30 generic skills (the `.dockerignore` allowlist); company-specific skills live in a private overlay kit and are excluded. Dev spine: brainstorm · plan · build · ship · code-review · debug · tdd · verify · qa · design-review |
 | `extensions/*.ts` | local TypeScript extensions (`status.ts`, `timestamps.ts`) |
-| `services/host/` | **`pi-stack-host`** — the single compiled **Go** binary for everything that runs on the HOST. Subcommands: `gws-token` (:11441), `memory` (:11435), `slack`, `serve <services…>` (runs the ones named in `SERVICES`). `make serve` builds + runs it. Private overlay subcommands self-register via `init()` when present (see the open-core note below). |
+| `services/host/` | **`pi-stack-host`** — the single compiled **Go** binary for everything that runs on the HOST. Subcommands: `memory` (:11435), `slack`, `gog` (Google Workspace MCP), `serve <services…>` (runs the ones named in `SERVICES`). `make serve` builds + runs it. Private overlay subcommands self-register via `init()` when present (see the open-core note below). |
 | `config/local.mk` | **the single stack config** (gitignored; `make install` seeds it from `config/local.mk.example`). Declares `SERVICES` (what `make serve` runs), `MCP` (what `make run` attaches + `make mcp-register` registers), and the Ollama model names. Every make target derives from it — no hand-passed flags. The overlay peer repo's `overlay.mk` adds private company-specific targets. |
 | `services/host/{slack,memory}.go` | the former `mcp/*` servers, now `pi-stack-host` subcommands. `slack` is a **stdio MCP server** registered with sbx (`make mcp-register`) and run by the MCP gateway — NOT in `mcp.json`, NOT in `make serve`. `memory` (JSON-RPC :11435, sqlite+FTS5+vectors via Ollama) is a plain host service backing the recall extension. None are baked into the image. |
 | `themes/*.json` | `dracula` (default), `pi-stack` |
@@ -128,7 +128,7 @@ user a diff.
     `host.docker.internal` — that's a non-native bypass (and a `command` server hits
     pi's stdio client, which speaks newline-delimited JSON). Register with `sbx mcp
     add` instead. `mcp.json` keeps only the `gateway` entry.
-  - Plain host services that are NOT MCP (`gws-token`, `memory`, plus overlay
+  - Plain host services that are NOT MCP (`memory`, plus overlay
     services like the snow proxy) are different: the sandbox reaches them directly
     over `host.docker.internal` (kit allowlist) via a wrapper/extension, and they
     DO run under `make serve`.
@@ -141,10 +141,16 @@ user a diff.
   trips endpoint security / EDR**. A compiled Go binary doing the same work runs
   unflagged. So when you add a host service,
   add a subcommand to `pi-stack-host`, don't write another `node …/server.ts`.
-- **gws** follows the host-token pattern: the wrapper fetches a short-lived bearer
-  from the `gws-token` service (a `pi-stack-host` subcommand) and runs the real
-  binary in-sandbox. `gws-token` execs `gws auth export`, so it's a process-spawner
-  too — another reason it's Go.
+- **Google Workspace = the `gog` host MCP server** (`pi-stack-host gog`, Go),
+  spawned by the sbx gateway exactly like `slack` — NOT an HTTP daemon, NOT in
+  `make serve`. Creds stay on the host in `GOG_HOME` (never in the VM); the sandbox
+  reaches Gmail/Drive/Docs/Sheets/Calendar through the gateway. It is **read-only +
+  `--gmail-no-send` by default** (write tools gated/off), exposes typed read tools
+  (`gmail_search`, `gmail_get_message`, `drive_search`, `drive_get`, `docs_get`,
+  `sheets_read_range`, `calendar_events`), and **wraps returned Gmail/Doc content as
+  untrusted** (prompt-injection guard). Registered via `make mcp-register`, attached
+  at sandbox creation via the `MCP` list. See the `gworkspace` skill. (The old
+  Google Workspace cli host-token wrapper it replaces is gone.)
 - **Private overlay (company-specific integrations).** Open-core boundary: nothing
   company-specific is in the public repo. The overlay is its OWN **peer repo**
   (`OVERLAY`, default `../pi-stack-work`), with two halves (full guide in
@@ -170,5 +176,5 @@ user a diff.
 ## Toolchain in the image
 
 node 25 · npm · git · **gh** (HTTPS token via sbx proxy — use for PRs, not SSH) ·
-**gws** (host-token wrapper) · ripgrep · **fd** · ruff · clangd · pyright · typescript-language-server ·
+ripgrep · **fd** · ruff · clangd · pyright · typescript-language-server ·
 **chromium** + **agent-browser** (localhost QA) · python3 · build-essential.
