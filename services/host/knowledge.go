@@ -16,6 +16,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"math"
 	"os"
@@ -305,8 +306,15 @@ func (s *knowledgeStore) health() plugin.KnowledgeHealth {
 
 // buildKnowledgeStore constructs the store the way servePluginKnowledge uses it,
 // mirroring buildMemStore: resolve the DB path, probe the embedder, wire it in
-// only when available. Returns the store and whether the vector half is live.
-func buildKnowledgeStore() (*knowledgeStore, bool) {
+// only when available. Returns the store, whether the vector half is live, and
+// any error.
+//
+// It returns the error rather than log.Fatalf-ing (F3): when called from runServe
+// AFTER plugin subprocesses have already launched, a bare os.Exit would skip
+// supervisor cleanup and orphan those subprocesses (which may hold the bearer).
+// The caller routes the error through its cleanup-aware fatal path; standalone
+// callers (servePluginKnowledge self-exec) may still fatal on it.
+func buildKnowledgeStore() (*knowledgeStore, bool, error) {
 	dbPath := strings.TrimSpace(os.Getenv("KNOWLEDGE_DB"))
 	if dbPath == "" {
 		home, _ := os.UserHomeDir()
@@ -319,9 +327,9 @@ func buildKnowledgeStore() (*knowledgeStore, bool) {
 	}
 	store, err := newKnowledgeStore(dbPath, embedder)
 	if err != nil {
-		log.Fatalf("knowledge: %v", err)
+		return nil, false, fmt.Errorf("knowledge: %w", err)
 	}
-	return store, hasEmb
+	return store, hasEmb, nil
 }
 
 // --- helpers ---------------------------------------------------------------

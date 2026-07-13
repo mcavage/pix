@@ -132,7 +132,14 @@ func runServe(enabled []string) {
 		applyMemoryModelEnv(cfg)
 		memSvc := hostService{name: "memory", addr: env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435")}
 		if spec := cfg.Plugin("memory"); spec.Impl == config.BuiltinImpl {
-			memSvc.mux = memoryMux()
+			// Build the store with error handling and route a failure through fatalf
+			// (F3): a bare log.Fatalf here would skip sup.shutdown() and orphan an
+			// already-launched plugin (e.g. an external gws broker holding the bearer).
+			store, hasEmb, berr := buildMemStore()
+			if berr != nil {
+				fatalf("%v", berr)
+			}
+			memSvc.mux = newMemoryMux(store, hasEmb)
 		} else {
 			h, lerr := sup.launch("memory", "memory", spec, selfPath, nil)
 			if lerr != nil {
@@ -155,7 +162,12 @@ func runServe(enabled []string) {
 		applyMemoryModelEnv(cfg)
 		knSvc := hostService{name: "knowledge", addr: env("KNOWLEDGE_BIND", "127.0.0.1") + ":" + env("KNOWLEDGE_PORT", "11436")}
 		if spec := cfg.Plugin("knowledge"); spec.Impl == config.BuiltinImpl {
-			store, _ := buildKnowledgeStore()
+			// Route a build failure through fatalf (F3) so cleanup runs and any
+			// already-launched plugin subprocess is not orphaned.
+			store, _, kerr := buildKnowledgeStore()
+			if kerr != nil {
+				fatalf("%v", kerr)
+			}
 			bundles := knowledgeBundles(cfg)
 			if len(bundles) == 0 {
 				log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES) — serving an empty index")

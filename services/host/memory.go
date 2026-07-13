@@ -538,8 +538,21 @@ func (s *memStore) stats() jsonObj {
 
 // --- JSON-RPC server ---------------------------------------------------------
 
+// memoryMux is the standalone entry (runMemory): it builds the store and fatals
+// on failure. runServe does NOT use this path — it calls buildMemStore directly
+// and routes a failure through its cleanup-aware fatal (F3), then newMemoryMux.
 func memoryMux() http.Handler {
-	store, hasEmb := buildMemStore()
+	store, hasEmb, err := buildMemStore()
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	return newMemoryMux(store, hasEmb)
+}
+
+// newMemoryMux builds the JSON-RPC handler over an already-constructed store, so
+// runServe can construct the store with error handling and still share this
+// surface byte-for-byte with the standalone path.
+func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 	methods := map[string]func(jsonObj) (any, error){
 		"health": func(jsonObj) (any, error) {
 			return jsonObj{"ok": true, "vector": hasEmb, "capture": !watcherUnavailable.Load(), "watcherModel": memWatcherModel()}, nil
@@ -637,7 +650,12 @@ func runMemory() {
 	}
 }
 
-func buildMemStore() (*memStore, bool) {
+// buildMemStore constructs the memory store. It returns an error rather than
+// log.Fatalf-ing (F3): when called from runServe AFTER a plugin subprocess has
+// launched, a bare os.Exit would skip supervisor cleanup and orphan it. The
+// caller routes the error through its cleanup-aware fatal; standalone callers
+// (memoryMux/runMemory, servePluginMemory self-exec) may still fatal on it.
+func buildMemStore() (*memStore, bool, error) {
 	dbPath := strings.TrimSpace(os.Getenv("MEMORY_DB"))
 	if dbPath == "" {
 		home, _ := os.UserHomeDir()
@@ -654,7 +672,7 @@ func buildMemStore() (*memStore, bool) {
 	go memWatcherProbe()
 	store, err := newMemStore(dbPath, embedder)
 	if err != nil {
-		log.Fatalf("memory: %v", err)
+		return nil, false, fmt.Errorf("memory: %w", err)
 	}
 	// periodic self-synthesis
 	synthMs := 6 * 3600 * 1000
@@ -670,7 +688,7 @@ func buildMemStore() (*memStore, bool) {
 			}
 		}
 	}()
-	return store, hasEmb
+	return store, hasEmb, nil
 }
 
 // --- helpers ---------------------------------------------------------------

@@ -19,6 +19,8 @@
 package main
 
 import (
+	"log"
+
 	"pi-stack/host/plugin"
 
 	goplugin "github.com/hashicorp/go-plugin"
@@ -58,7 +60,10 @@ func (a *knowledgeStoreAdapter) Health() (plugin.KnowledgeHealth, error) {
 // `plugin` subcommand (wired in a later unit); intentionally not registered in
 // main.go.
 func servePluginKnowledge() {
-	store, _ := buildKnowledgeStore()
+	store, _, err := buildKnowledgeStore()
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
 	adapter := newKnowledgeStoreAdapter(store)
 	plugin.Serve(map[string]goplugin.Plugin{"knowledge": &plugin.KnowledgePlugin{Impl: adapter}})
 }

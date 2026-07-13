@@ -15,6 +15,7 @@
 package main
 
 import (
+	"log"
 	"strings"
 
 	"pi-stack/host/plugin"
@@ -158,7 +159,10 @@ func (a *memoryStoreAdapter) Health() (plugin.Health, error) {
 // (buildMemStore) and serves it as a go-plugin. Called by the `plugin`
 // subcommand (wired in a later unit); intentionally not registered in main.go.
 func servePluginMemory() {
-	store, hasEmb := buildMemStore()
+	store, hasEmb, err := buildMemStore()
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
 	adapter := newMemoryStoreAdapter(store, hasEmb)
 	plugin.Serve(map[string]goplugin.Plugin{"memory": &plugin.MemoryPlugin{Impl: adapter}})
 }
