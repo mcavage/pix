@@ -174,9 +174,11 @@ run-published: ## Run the latest PUBLISHED image via the git kit (always fresh â
 run-no-mcp: ## Launch without sbx Cloud MCP Gateway, for debugging MCP setup failures
 	@GWS_TOKEN_AUTH="$$($(CURDIR)/bin/pi-stack broker-token)" env -u SBX_MCP_URL sbx run pi-stack --kit $(KIT) .
 
-launcher: ## Build the standalone pi-stack launcher binary (out/pi-stack), version-stamped from VERSION
+launcher: ## Build BOTH host binaries (out/pi-stack launcher + out/pi-stack-host services), version-stamped
 	(cd services/host && go build -ldflags "-X main.version=$(VERSION)" -o $(CURDIR)/out/pi-stack ./cmd/pi-stack)
-	@echo "Built out/pi-stack (version $(VERSION)). Install it with: ln -sf $(CURDIR)/out/pi-stack ~/.local/bin/pi-stack"
+	(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .)
+	@echo "Built out/pi-stack + out/pi-stack-host (version $(VERSION))."
+	@echo "Install both: ln -sf $(CURDIR)/out/pi-stack ~/.local/bin/pi-stack && ln -sf $(CURDIR)/out/pi-stack-host ~/.local/bin/pi-stack-host"
 
 memory-serve: link-overlay ## Build + run just the memory service (JSON-RPC :11435) from pi-stack-host
 	(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && exec ./out/pi-stack-host memory
