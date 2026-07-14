@@ -60,6 +60,20 @@ const gogAcct = "you@example.com"
 const gogCfgFile = "/fake/config/config.toml"
 const gogOpRefs = "/fake/config/op-refs.env"
 
+// bareGog / opWrappedGog are the two ways `pi-stack mcp register` actually wires
+// gog (see mcp.go serverCmd/addArgs): a BARE `gog … mcp …` command when no
+// op-refs.env is present (1Password is optional for gog), or that same command
+// behind the `op run --env-file=<refs> -- …` wrapper when op-refs is present.
+// Tests use these so the fixtures match a real registration rather than a
+// stand-in binary.
+func bareGog(acct string) string {
+	return "gog --account " + acct +
+		" --gmail-no-send --wrap-untrusted --readonly mcp --allow-tool read"
+}
+func opWrappedGog(refs, acct string) string {
+	return "op run --env-file=" + refs + " -- " + bareGog(acct)
+}
+
 // gogGreen adds the fixtures that make the whole gog group green: gog + op on
 // PATH, GOG_ACCOUNT set, interactive auth passing, the headless op-run probe
 // returning a non-empty tool list, and gog registered with the gateway.
@@ -88,7 +102,7 @@ func gogGreen(f fakeEnv) fakeEnv {
 // TODO because it can't confirm what the gateway registered.
 func gogConfirmed(f fakeEnv) fakeEnv {
 	f = gogGreen(f)
-	regCmd := "op run --env-file=" + gogOpRefs + " -- pi-stack-host gog"
+	regCmd := opWrappedGog(gogOpRefs, gogAcct)
 	f.output["sbx mcp get gog"] = "name: gog\ncommand: " + regCmd + "\n"
 	f.output[regCmd+" --list-tools"] = "gmail_search\ncalendar_events\n"
 	return f
@@ -324,7 +338,7 @@ func TestDoctor_GogTransparency(t *testing.T) {
 // --list-tools) rather than reconstructing it from config. A non-empty tool
 // list reads as a confirmed-green headless spawn.
 func TestDoctor_GogRegisteredCommand(t *testing.T) {
-	regCmd := "op run --env-file=/abs/config/op-refs.env -- pi-stack-host gog"
+	regCmd := opWrappedGog("/abs/config/op-refs.env", gogAcct)
 	probeKey := regCmd + " --list-tools"
 	f := fakeEnv{
 		present: map[string]bool{"sbx": true, "op": true},
@@ -345,7 +359,7 @@ func TestDoctor_GogRegisteredCommand(t *testing.T) {
 	}
 	var regShown, headOK bool
 	for _, c := range gog.checks {
-		if c.label == "registration" && strings.Contains(c.detail, "pi-stack-host gog") {
+		if c.label == "registration" && strings.Contains(c.detail, "-- "+bareGog(gogAcct)) {
 			regShown = true
 		}
 		if c.label == "headless spawn" && c.state == stateOK {
@@ -417,14 +431,14 @@ func TestDoctor_GogFallbackUnconfirmedIsTODO(t *testing.T) {
 // a partial `command:` line (no `-- <cmd>` tail), so the line parser must FALL
 // THROUGH to the JSON form, which carries the full argv and confirms green.
 func TestDoctor_GogRegisteredCommandLineFallsThrough(t *testing.T) {
-	probeKey := "op run --env-file=/abs/config/op-refs.env -- pi-stack-host gog --list-tools"
+	probeKey := opWrappedGog("/abs/config/op-refs.env", gogAcct) + " --list-tools"
 	f := fakeEnv{
 		present: map[string]bool{"sbx": true},
 		output: map[string]string{
 			"sbx secret ls":      "anthropic openai google github",
 			"sbx mcp ls":         "gog\n",
 			"sbx mcp get gog":    "name: gog\ncommand: op\n", // partial line -> fall through
-			"sbx mcp ls -o json": `[{"name":"gog","command":"op","args":["run","--env-file=/abs/config/op-refs.env","--","pi-stack-host","gog"]}]`,
+			"sbx mcp ls -o json": `[{"name":"gog","command":"op","args":["run","--env-file=/abs/config/op-refs.env","--","gog","--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
 			probeKey:             "gmail_search\n",
 		},
 		ports: map[int]bool{11435: true},
@@ -449,13 +463,13 @@ func TestDoctor_GogRegisteredCommandLineFallsThrough(t *testing.T) {
 // TestDoctor_GogRegisteredCommandJSON: sbx exposes the registration only via
 // `sbx mcp ls -o json`; doctor parses command+args and probes it.
 func TestDoctor_GogRegisteredCommandJSON(t *testing.T) {
-	probeKey := "op run --env-file=/abs/config/op-refs.env -- pi-stack-host gog --list-tools"
+	probeKey := opWrappedGog("/abs/config/op-refs.env", gogAcct) + " --list-tools"
 	f := fakeEnv{
 		present: map[string]bool{"sbx": true},
 		output: map[string]string{
 			"sbx secret ls":      "anthropic openai google github",
 			"sbx mcp ls":         "gog\n",
-			"sbx mcp ls -o json": `[{"name":"gog","command":"op","args":["run","--env-file=/abs/config/op-refs.env","--","pi-stack-host","gog"]}]`,
+			"sbx mcp ls -o json": `[{"name":"gog","command":"op","args":["run","--env-file=/abs/config/op-refs.env","--","gog","--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
 			probeKey:             "gmail_search\n",
 		},
 		ports: map[int]bool{11435: true},
@@ -474,6 +488,87 @@ func TestDoctor_GogRegisteredCommandJSON(t *testing.T) {
 	}
 	if !headOK {
 		t.Errorf("expected a confirmed headless spawn from the JSON-parsed registration, groups=%+v", r.groups)
+	}
+}
+
+// TestDoctor_GogBareRegisteredCommand: a system-keychain macOS user with no
+// op-refs.env registers gog DIRECTLY (bare `gog … mcp …`, no op-run wrapper).
+// doctor must recognize that as a confirmed registration, name it, probe it with
+// --list-tools, and read a non-empty tool list as a confirmed-green headless
+// spawn — same as the op-wrapped form.
+func TestDoctor_GogBareRegisteredCommand(t *testing.T) {
+	regCmd := bareGog(gogAcct)
+	probeKey := regCmd + " --list-tools"
+	f := fakeEnv{
+		present: map[string]bool{"sbx": true, "gog": true},
+		output: map[string]string{
+			"sbx secret ls":   "anthropic openai google github",
+			"sbx mcp ls":      "gog\n",
+			"sbx mcp get gog": "name: gog\ncommand: " + regCmd + "\n",
+			probeKey:          "gmail_search\ncalendar_events\ndocs_get\n",
+		},
+		ports: map[int]bool{11435: true},
+	}
+	r := runDoctor(defaultCfg(), f.env())
+	var gog group
+	for _, g := range r.groups {
+		if strings.HasPrefix(g.title, "gog") {
+			gog = g
+		}
+	}
+	var regShown, headOK bool
+	for _, c := range gog.checks {
+		if c.label == "registration" && strings.Contains(c.detail, regCmd) {
+			regShown = true
+		}
+		if c.label == "headless spawn" && c.state == stateOK {
+			headOK = true
+		}
+	}
+	if !regShown {
+		t.Errorf("expected doctor to name the bare sbx-registered gog command, group=%+v", gog)
+	}
+	if !headOK {
+		t.Errorf("expected a confirmed headless spawn from probing the bare registered command, group=%+v", gog)
+	}
+	// A confirmed bare registration must NOT print the best-effort fallback lines.
+	for _, c := range gog.checks {
+		if strings.Contains(c.detail, "best-effort") {
+			t.Errorf("confirmed bare path should not print best-effort fallback lines, got %q", c.detail)
+		}
+	}
+}
+
+// TestDoctor_GogBareRegisteredCommandJSON: same bare (no op-run) registration,
+// but surfaced only via `sbx mcp ls -o json` (command="gog", args=[…]). doctor
+// must parse command+args, recognize it as a valid gog registration, and probe
+// it to a confirmed green.
+func TestDoctor_GogBareRegisteredCommandJSON(t *testing.T) {
+	probeKey := bareGog(gogAcct) + " --list-tools"
+	f := fakeEnv{
+		present: map[string]bool{"sbx": true, "gog": true},
+		output: map[string]string{
+			"sbx secret ls":      "anthropic openai google github",
+			"sbx mcp ls":         "gog\n",
+			"sbx mcp ls -o json": `[{"name":"gog","command":"gog","args":["--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
+			probeKey:             "gmail_search\n",
+		},
+		ports: map[int]bool{11435: true},
+	}
+	r := runDoctor(defaultCfg(), f.env())
+	var headOK bool
+	for _, g := range r.groups {
+		if !strings.HasPrefix(g.title, "gog") {
+			continue
+		}
+		for _, c := range g.checks {
+			if c.label == "headless spawn" && c.state == stateOK {
+				headOK = true
+			}
+		}
+	}
+	if !headOK {
+		t.Errorf("expected a confirmed headless spawn from the bare JSON-parsed registration, groups=%+v", r.groups)
 	}
 }
 
