@@ -77,6 +77,26 @@ func runRun(argv []string) {
 		}
 	}
 
+	// Own the sandbox name so we can manage its lifecycle. sbx would otherwise
+	// auto-derive `pi-stack-<dir>` and, on a re-run, reject the create-only flags
+	// (--template/--kit/--mcp) with "sandbox already exists". Mirror `make run`:
+	// refuse a RUNNING sandbox, recreate a STOPPED one (the host-mounted workspace
+	// and .pi-sessions persist, so nothing is lost).
+	if o.Name == "" {
+		o.Name = deriveSandboxName(o.Workspace)
+	}
+	switch sandboxStatus(o.Name) {
+	case "running":
+		fmt.Fprintf(os.Stderr, "pi-stack run: sandbox %q is already running. Use `pi-stack run --name <other>` for a second one, or `sbx rm -f %s` to replace it.\n", o.Name, o.Name)
+		os.Exit(1)
+	case "":
+		// absent — fresh create.
+	default:
+		// exists but not running — recreate so the create-only flags apply.
+		fmt.Fprintf(os.Stderr, "pi-stack run: recreating existing sandbox %q (workspace + .pi-sessions persist)\n", o.Name)
+		_ = exec.Command("sbx", "rm", "-f", o.Name).Run()
+	}
+
 	args := buildSbxArgs(cfg, o, version)
 
 	if os.Getenv("PI_STACK_DEBUG") != "" {
@@ -253,4 +273,38 @@ func readLocalImageTag(root string) string {
 func isRepoRoot(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, "pi-kit", "spec.yaml"))
 	return err == nil
+}
+
+// deriveSandboxName mirrors sbx's default `pi-stack-<workspace-basename>` so the
+// launcher owns (and can recreate) the same sandbox sbx would auto-name.
+func deriveSandboxName(ws string) string {
+	abs, err := filepath.Abs(ws)
+	if err != nil {
+		abs = ws
+	}
+	base := filepath.Base(abs)
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		base = "workspace"
+	}
+	return "pi-stack-" + base
+}
+
+// sandboxStatus returns the status column for `name` from `sbx ls` (e.g.
+// "running", "stopped"), or "" when the sandbox doesn't exist or sbx is absent.
+// Column layout matches `make run`'s awk: name is field 1, status is field 3.
+func sandboxStatus(name string) string {
+	out, err := exec.Command("sbx", "ls").Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 1 && f[0] == name {
+			if len(f) >= 3 {
+				return f[2]
+			}
+			return "exists"
+		}
+	}
+	return ""
 }
