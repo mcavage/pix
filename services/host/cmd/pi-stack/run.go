@@ -65,6 +65,18 @@ func runRun(argv []string) {
 		}
 	}
 
+	// --mcp is only a valid sbx flag when the gateway is enabled (SBX_MCP_URL set,
+	// like the Makefile gates it). Set MCPEnabled from the env so buildSbxArgs stays
+	// pure, and warn (once) when MCP servers are configured but the gateway is off,
+	// rather than letting sbx bail with `unknown flag: --mcp`.
+	o.MCPEnabled = strings.TrimSpace(os.Getenv("SBX_MCP_URL")) != ""
+	if !o.MCPEnabled {
+		configured := append(append([]string(nil), cfg.MCP...), o.MCP...)
+		if msg := mcpGatewayOffWarning(configured); msg != "" {
+			fmt.Fprintln(os.Stderr, msg)
+		}
+	}
+
 	args := buildSbxArgs(cfg, o, version)
 
 	if os.Getenv("PI_STACK_DEBUG") != "" {

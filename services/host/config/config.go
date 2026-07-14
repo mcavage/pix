@@ -281,6 +281,61 @@ func removeValue(list *[]string, value string) bool {
 	return changed
 }
 
+// OpRefsPath resolves the absolute XDG path of op-refs.env (the 1Password refs
+// file the sbx gateway resolves via `op run --env-file`), a sibling of
+// config.toml: <config-dir>/op-refs.env. Repo-less hosts have no repo
+// config/op-refs.env, so this is the canonical, absolute location.
+func OpRefsPath() string {
+	dir, err := configDir()
+	if err != nil {
+		return "op-refs.env"
+	}
+	return filepath.Join(dir, "op-refs.env")
+}
+
+// OpRefsTemplate is the seed content for a fresh op-refs.env: the 1Password refs
+// each host MCP server needs, with placeholders to fill. Kept in sync with the
+// repo's config/op-refs.env.example (which the make path uses).
+const OpRefsTemplate = `# pi-stack op-refs.env — 1Password refs the sbx gateway resolves via
+# ` + "`op run --env-file`" + ` when it spawns each host MCP server. Credentials live
+# ONLY in 1Password — never in the sbx registration, on disk, or in the sandbox.
+#
+# Format:  ENV_VAR=op://<vault>/<item>/<field>     (plain literals are allowed too)
+# Verify:  op read "op://Vault/Item/field" >/dev/null && echo OK
+# Tip:     1Password app -> right-click a field -> "Copy Secret Reference".
+
+# slack MCP server (its bot/user token). Required to register slack.
+SLACK_TOKEN=op://<vault>/<slack-item>/credential
+
+# gog (Google Workspace) MCP server. gog only needs op to inject a headless
+# keyring password; a keyring reachable without a password does not need this.
+# Uncomment + fill in only if the gateway can't unlock gog's keyring headlessly.
+# GOG_ACCOUNT=you@example.com
+# GOG_HOME=$HOME/.config/gog
+# GOG_KEYRING_BACKEND=file
+# GOG_KEYRING_PASSWORD=op://<vault>/<gog-item>/keyring-password
+`
+
+// SeedOpRefs writes OpRefsTemplate to OpRefsPath() with 0600 perms only if the
+// file is absent, creating the config dir (0700) as needed. It returns the
+// resolved path, whether it created the file (false if it already existed), and
+// any error. It never clobbers an existing op-refs.env.
+func SeedOpRefs() (path string, created bool, err error) {
+	path = OpRefsPath()
+	if _, statErr := os.Stat(path); statErr == nil {
+		return path, false, nil
+	} else if !os.IsNotExist(statErr) {
+		return path, false, statErr
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return path, false, err
+	}
+	if err := os.WriteFile(path, []byte(OpRefsTemplate), 0o600); err != nil {
+		return path, false, err
+	}
+	return path, true, nil
+}
+
 // Seed writes a commented default config.toml at path only if absent. It returns
 // false (and a nil error) if the file already existed — it never clobbers.
 func Seed(path string) (bool, error) {
