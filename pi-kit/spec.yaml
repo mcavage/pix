@@ -178,9 +178,10 @@ agentContext: |
   use the subagent tool with agent=… instead. Explore/Plan are not installed.)
 
   ## Skills
-  Tight, opinionated workflows you run by name: investigate, spec, code-review,
-  ship, verify, tdd, brainstorm, challenge, qa, design-review, and many more. They
-  are forcing functions, not manuals. Auto-loaded when relevant.
+  Tight, opinionated workflows you run by name: plan, build, ship, debug,
+  code-review, tdd, verify, qa, brainstorm, challenge, design-review,
+  healthcheck, and many more. They are forcing functions, not manuals.
+  Auto-loaded when relevant.
 
   ## Installed harness
   plan mode (pi-plan), pi-mcp-adapter, todo list, pi-simplify, pi-web-access,
