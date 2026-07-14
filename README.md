@@ -43,14 +43,17 @@ against by GPT or Gemini, not by another Claude. One model grading its own homew
 is worth less. (Ollama also powers the memory loop below.)
 
 **Your keys never enter the VM.** sbx stores your provider keys and its proxy hands
-them to Anthropic and OpenAI directly; the sandbox only ever sees the responses.
-Data tools work the same way through a small host-side Go binary (`pi-stack-host`):
-it mints short-lived tokens and runs the real CLIs on the host, and the sandbox
-reaches it over `host.docker.internal`. A `gh`, `gog`, or `snow` call leaves the VM
-with no credential in it. The MCP servers go one step further: their secrets live
-in 1Password, and the registered command is `op run --env-file=config/op-refs.env`,
-so `op` resolves the `op://` references the moment the gateway spawns the server.
-The token is never written to disk, never in the registration, never in the VM.
+them to Anthropic, OpenAI, and Google directly; the sandbox only ever sees the
+responses. `gh` rides the same proxy: it injects your GitHub token, so a `gh` call
+leaves the VM with no credential in it. The other data tools run entirely on the
+host. Google Workspace is the external `gog` CLI, and Slack is a `pi-stack-host`
+subcommand; both run as MCP servers that the sbx gateway spawns on the host, so the
+sandbox reaches them through the gateway and never holds a token. Their secrets live
+in 1Password: the registered command is `op run --env-file=config/op-refs.env`, so
+`op` resolves the `op://` references the moment the gateway spawns the server. The
+memory service is a plain host process the sandbox reaches over
+`host.docker.internal`. Nothing lands on disk in the VM, in a registration, or in
+the sandbox.
 
 **A memory that learns.** A host-side service (sqlite with FTS5 and vector search)
 holds facts across sessions. A local model watches each message you send and pulls
@@ -61,8 +64,8 @@ an embed model for semantic recall (`make pull-models` fetches both). Skip Ollam
 and recall falls back to keyword search and capture turns off, loudly, so you know
 it's off.
 
-**Open core.** This repo is the generic stack: ~30 dev, writing, and harness
-skills, 17 role agents, the host binary, the memory loop. Anything
+**Open core.** This repo is the generic stack: the dev, writing, and harness
+skills, the role agents, the host binary, the memory loop. Anything
 company-specific (proprietary skills, an internal `capabilities.json`, connectors
 like a warehouse or an HR directory) lives in a private overlay you keep in your
 own repo. Skills ask for a *capability* (`chat`, `docs`, `warehouse`), not a
@@ -153,7 +156,7 @@ pi-stack                     # launch a sandbox on the pinned release (== pi-sta
 pi-stack run [DIR]           # same, explicit; the kit is pinned to this build's version
 pi-stack setup               # guided setup: writes config + registers gog
 pi-stack serve               # run the host services (memory, knowledge)
-pi-stack doctor              # verdict + per-check TODOs, each a pi-stack command
+pi-stack doctor              # verdict + per-check TODOs (copy-paste; mix of pi-stack/sbx/ollama/gog)
 pi-stack config show|path    # show the resolved config and its path
 pi-stack config set|unset    # change config without hand-editing the toml
 pi-stack mcp register|ls     # register / list local stdio MCP servers with sbx
@@ -164,20 +167,23 @@ pi-stack version             # print the launcher version
 set/unset` are its only writers (they rewrite the file, so hand edits and
 comments are lost on the next save). To enable gog after the fact, run
 `pi-stack config set gog_account you@x.com` then `pi-stack config set mcp gog`,
-not an editor. `pi-stack doctor`'s TODOs are always the exact `pi-stack` command
-to run, never "edit the toml".
+not an editor. `pi-stack doctor` prints copy-pasteable fix commands (a mix of
+`pi-stack`, `sbx`, `ollama`, and `gog`); its config fixes are always a
+`pi-stack config set`, never "edit the toml".
 
 Inside the sandbox the agent has `/help` (a live map of the loaded skills,
 agents, and capabilities, so it never goes stale) and `/getting-started` (a
 first-run tour).
 
 Host services are overridable plugins. `pi-stack serve` reads
-`~/.config/pi-stack/config.toml` and, for each slot it finds under `[plugins.*]`,
-launches the plugin binary named there instead of the built-in. The slots are
-`broker` (credential broker), `memory` (the recall backend), `knowledge` (the
-OKF retrieval index), and `mcp` (extra MCP servers). Each entry names an `impl`,
-a `path` to the plugin binary, and a `sha` it must match, so a company can swap
-in a private broker or memory backend without touching this repo (see
+`~/.config/pi-stack/config.toml` and, for each service slot it finds under
+`[plugins.*]`, launches the plugin binary named there instead of the built-in.
+The service slots `serve` runs are `memory` (the recall backend), `knowledge`
+(the OKF retrieval index), and `broker` (an overlay-only credential broker,
+dormant by default). A fourth slot, `mcp`, overrides the MCP servers the sbx
+gateway spawns rather than a `serve` process. Each entry names an `impl`, a
+`path` to the plugin binary, and a `sha` it must match, so a company can swap in
+a private broker or memory backend without touching this repo (see
 [docs/OVERLAY.md](docs/OVERLAY.md)).
 
 ## What's in it
@@ -191,10 +197,10 @@ The skills I reach for (in `skills/`):
 - `debug` finds the root cause before touching code.
 - `qa` and `design-review` drive a headless browser against a running app.
 
-Those are the highlights. The public image bakes ~30 generic dev, writing, and
-harness skills (the exact set is the allowlist in `.dockerignore`) plus 17 role
-agents (`architect`, `security-lead`, `sre-lead`, `qa-lead`, and so on) you
-delegate to for the lens a change actually needs, not just a generic reviewer.
+Those are the highlights. The public image bakes a set of generic dev, writing,
+and harness skills plus role agents (`architect`, `security-lead`, `sre-lead`,
+`qa-lead`, and so on) you delegate to for the lens a change actually needs, not
+just a generic reviewer. The exact set of each is the allowlist in `.dockerignore`.
 
 Plus `gh`, `gog`, a
 browser, plan mode, MCP, and web search. The defaults are mine: dracula, emacs
@@ -209,9 +215,16 @@ skills ask for a capability and not a vendor (see `capabilities.json` and the
 `capability-routing` skill), nothing breaks when a tool is absent: the capability
 resolves to nothing and the skill degrades to web and files.
 
-Credentials never enter the sandbox. Tokens are injected by the sbx proxy or
-brokered by the host-side service. The launcher runs the host services and
-reports status:
+Credentials never enter the sandbox. `gh`'s token is injected by the sbx proxy;
+the MCP servers (gog, slack) authenticate on the host and are spawned there by
+the sbx gateway, so nothing lands in the VM. The launcher runs the host services
+and reports status:
+
+> **Note:** the sbx MCP gateway is currently Docker-internal and not yet publicly
+> released. `--mcp`, `pi-stack mcp register`, and therefore the `gog` Google
+> Workspace path all depend on it, so today they work only where the gateway is
+> available. External users get **memory** and **gh** now, and Google Workspace
+> (plus Slack) once sbx MCP ships.
 
 ```bash
 pi-stack serve            # host services: memory (:11435), knowledge (:11436 if configured)
@@ -300,7 +313,7 @@ pi-stack              # run it anywhere (keys set as above)
 Run `make load` after changing the Dockerfile or an extension, then **recreate
 the sandbox** (`sbx rm -f <name> && make run`) to pick it up: a running sandbox
 keeps its creation-time image. **Skills, you don't
-rebuild for:** `make run` (and `pi-stack --dev`) load skills live from your repo, so
+rebuild for:** `make run` (and `pi-stack run --dev`) load skills live from your repo, so
 edit a `SKILL.md`, `/reload` in pi, and it's live. `make load` only bakes your skills
 into the image for people who run it the turnkey way (`sbx run --kit git+…`), which
 uses the baked set. If you only changed the kit in `pi-kit/`, a fresh `make run` is
@@ -310,7 +323,7 @@ every push to `main`: it stamps a new version `0.0.<run_number>`, builds multi-a
 pushes `:<version>` + `:latest`, and commits the version bump back into
 `pi-kit/spec.yaml`. Because every push is a brand-new tag, `sbx run pi-stack --kit
 git+…` (which reads the pinned image from `spec.yaml` on `main`) always pulls a fresh
-image sbx has never cached — no `--template`, no `sbx template rm`. To run the latest
+image sbx has never cached, so there is no `--template` and no `sbx template rm`. To run the latest
 published build without a local checkout, `make run-published`. The base image is a
 Docker Hardened Image, so building from source needs a DHI-entitled account; the
 `sbx run` path above does not.
