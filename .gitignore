@@ -5,6 +5,10 @@ node_modules/
 .pi-sessions/
 .pi-lens/
 
+# Launcher-generated per-run knowledge scope (canonical HOST paths). The
+# .pi-stack/knowledge POINTER stays trackable; only the .scope file is ignored.
+.pi-stack/knowledge.scope
+
 
 # 1Password secret references — user-specific (vault/item names); keep local
 config/op-refs.env

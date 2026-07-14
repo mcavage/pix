@@ -308,7 +308,7 @@ type knowledgeRPC struct {
 //     daemon is down (serve not running) or the bundle is already indexed.
 //   - Scope file: write <workspace>/.pi-stack/knowledge.scope, one canonical id
 //     per line, so the in-VM recall (U6) forwards it as the `bundles` filter.
-//     With no bundles at all, nothing is written (recall = all/none).
+//     With no bundles at all, any stale scope file is removed (recall = all/none).
 func wireKnowledgeScope(cfg *config.Config, workspace string, rpc knowledgeRPC) {
 	project := projectBundle(workspace) // canonical id, or ""
 
@@ -345,7 +345,10 @@ func wireKnowledgeScope(cfg *config.Config, workspace string, rpc knowledgeRPC) 
 	}
 
 	// No bundles at all → leave the workspace un-scoped (recall queries all/none).
+	// Remove any stale scope file from a previous run (when bundles were wired)
+	// so the in-VM recall stops forwarding dead bundle ids. Best-effort.
 	if len(ids) == 0 {
+		_ = os.Remove(filepath.Join(workspace, ".pi-stack", "knowledge.scope"))
 		return
 	}
 	_ = writeKnowledgeScope(workspace, ids)
