@@ -79,8 +79,21 @@ func (s *knowledgeStore) reindex(bundlePaths []string) (int, []string, error) {
 	indexed := 0
 	bundles := make([]string, 0, len(bundlePaths))
 	for _, bp := range bundlePaths {
+		// F5: validate the bundle root UP FRONT so a typo'd, missing, non-dir, or
+		// unreadable path is a HARD error instead of "indexed 0 concept(s)" +
+		// health ok:true + silent empty recall.
+		if err := validateBundleRoot(bp); err != nil {
+			return indexed, bundles, err
+		}
 		b, err := okf.ReadBundle(bp)
 		if err != nil {
+			return indexed, bundles, err
+		}
+		// F5: surface OKF warnings. Walk/read/rel failures under the root mean recall
+		// is silently incomplete, so treat them as a hard error rather than reporting
+		// success. Benign warnings (skipped symlinks, unparseable files) are logged
+		// loudly but don't fail the reindex.
+		if err := bundleWarningError(bp, b.Warnings); err != nil {
 			return indexed, bundles, err
 		}
 
@@ -364,6 +377,49 @@ func canonicalizeBundle(path string) string {
 		return resolved
 	}
 	return filepath.Clean(abs)
+}
+
+// validateBundleRoot fail-loud checks a bundle root path before ReadBundle (F5):
+// it must exist, be a directory, and be readable. A bad root returns a hard
+// error so `knowledge use /typo` surfaces the problem instead of silently
+// serving an empty index.
+func validateBundleRoot(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("knowledge: empty bundle path")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("knowledge: bundle root %q: %w", path, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("knowledge: bundle root %q is not a directory", path)
+	}
+	if _, err := os.ReadDir(path); err != nil {
+		return fmt.Errorf("knowledge: bundle root %q not readable: %w", path, err)
+	}
+	return nil
+}
+
+// bundleWarningError classifies the non-fatal warnings ReadBundle records (F5).
+// Walk/read/rel failures mean files under the root couldn't be read, so recall
+// is silently incomplete — those are promoted to a hard error. Benign warnings
+// (skipped symlinks, unparseable concept files) are logged loudly but tolerated.
+func bundleWarningError(path string, warnings []string) error {
+	if len(warnings) == 0 {
+		return nil
+	}
+	var hard []string
+	for _, w := range warnings {
+		if strings.HasPrefix(w, "walk ") || strings.HasPrefix(w, "read ") || strings.HasPrefix(w, "rel ") {
+			hard = append(hard, w)
+		} else {
+			log.Printf("knowledge: bundle %q warning: %s", path, w)
+		}
+	}
+	if len(hard) > 0 {
+		return fmt.Errorf("knowledge: bundle %q had %d unrecoverable read error(s): %s", path, len(hard), strings.Join(hard, "; "))
+	}
+	return nil
 }
 
 // embedText is the concept text fed to the embedder: title + description + body.

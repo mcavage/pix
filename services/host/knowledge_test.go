@@ -117,6 +117,46 @@ func TestKnowledgeReindexAndQuery(t *testing.T) {
 	}
 }
 
+// TestKnowledgeReindexBadRoot is the F5 guard: reindex on a nonexistent or
+// non-directory root returns a HARD error (not nil/0), so a typo'd bundle path
+// never masquerades as a healthy empty index.
+func TestKnowledgeReindexBadRoot(t *testing.T) {
+	st := newTestKnowledgeStore(t)
+
+	// A path that does not exist.
+	missing := filepath.Join(t.TempDir(), "nope", "does-not-exist")
+	if n, _, err := st.reindex([]string{missing}); err == nil {
+		t.Fatalf("reindex(%q) = nil error (indexed %d), want a hard error", missing, n)
+	}
+
+	// A path that exists but is a regular file, not a directory.
+	file := filepath.Join(t.TempDir(), "a-file.md")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.reindex([]string{file}); err == nil {
+		t.Fatalf("reindex(%q) = nil error, want a not-a-directory error", file)
+	}
+}
+
+// TestKnowledgeReindexUnreadableFileWarns is the F5 guard for the warning path:
+// a bundle whose file can't be read makes ReadBundle record a "read ..." warning,
+// which reindex must promote to a hard error instead of silently indexing 0.
+func TestKnowledgeReindexUnreadableFileWarns(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: file mode 0 is still readable, can't simulate an unreadable file")
+	}
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "secret.md")
+	if err := os.WriteFile(bad, []byte("---\ntype: policy\ntitle: X\n---\nbody\n"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	st := newTestKnowledgeStore(t)
+	if _, _, err := st.reindex([]string{dir}); err == nil {
+		t.Fatalf("reindex over an unreadable file = nil error, want a warning-driven error")
+	}
+}
+
 func TestKnowledgeQueryBundleFilter(t *testing.T) {
 	dir := writeKnowledgeBundle(t)
 	st := newTestKnowledgeStore(t)
