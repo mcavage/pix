@@ -1,6 +1,6 @@
 ---
 name: build
-description: Ship a feature with the crew. Spec-first: compile the request into context-complete story files, then execute story-by-story across parallel worktrees with architect + engineer subagents, cross-vendor code review, QA + security, and a verification gate. Stops at verified-local changes on a feature branch; hand to `ship` to open the PR. Use for "build X", "implement this", "let's do this properly". For a throwaway to just see it, say so and it skips the rigor.
+description: Ship a feature with the crew, spec-first. Compile the request into context-complete story files, then execute story-by-story across parallel worktrees with architect + engineer subagents, cross-vendor code review, QA + security, and a verification gate. Stops at verified-local changes on a feature branch; hand to `ship` to open the PR. Use for "build X", "implement this", "let's do this properly". For a throwaway to just see it, say so and it skips the rigor.
 ---
 # build
 
