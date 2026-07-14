@@ -6,6 +6,11 @@
 # pi-kit/spec.yaml.
 DOCKER_USER ?= mcavage
 VERSION     ?= 0.0.16
+# LAUNCHER_VERSION stamps the pi-stack launcher binary. A LOCAL build marks the
+# version "+local" so the launcher knows it is UNRELEASED (no matching git tag
+# v$(VERSION) exists) and uses the local checkout kit instead of pinning a bogus
+# tag. A CI RELEASE build overrides this to a clean X.Y.Z (LAUNCHER_VERSION=$(VERSION)).
+LAUNCHER_VERSION ?= $(VERSION)+local
 IMAGE       ?= docker.io/$(DOCKER_USER)/pi-stack:$(VERSION)
 LATEST      ?= docker.io/$(DOCKER_USER)/pi-stack:latest
 KIT         ?= ./pi-kit
@@ -177,10 +182,10 @@ run-published: ## Run the latest PUBLISHED image via the git kit (always fresh â
 run-no-mcp: ## Launch without sbx Cloud MCP Gateway, for debugging MCP setup failures
 	@env -u SBX_MCP_URL sbx run pi-stack --kit $(KIT) .
 
-launcher: ## Build BOTH host binaries (out/pi-stack launcher + out/pi-stack-host services), version-stamped
-	(cd services/host && go build -ldflags "-X main.version=$(VERSION)" -o $(CURDIR)/out/pi-stack ./cmd/pi-stack)
+launcher: ## Build BOTH host binaries (out/pi-stack launcher + out/pi-stack-host services), version-stamped (local builds stamp $(VERSION)+local so the launcher uses the local kit, not a nonexistent v$(VERSION) tag)
+	(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pi-stack ./cmd/pi-stack)
 	(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .)
-	@echo "Built out/pi-stack + out/pi-stack-host (version $(VERSION))."
+	@echo "Built out/pi-stack + out/pi-stack-host (version $(LAUNCHER_VERSION))."
 	@echo "Install both: ln -sf $(CURDIR)/out/pi-stack ~/.local/bin/pi-stack && ln -sf $(CURDIR)/out/pi-stack-host ~/.local/bin/pi-stack-host"
 
 memory-serve: link-overlay ## Build + run just the memory service (JSON-RPC :11435) from pi-stack-host

@@ -31,19 +31,38 @@ func runRun(argv []string) {
 		os.Exit(1)
 	}
 
-	// --dev needs a resolvable repo checkout; fail loud otherwise.
+	// Kit selection. A CLEAN released version (e.g. "0.0.16") pins the matching
+	// git tag; anything else — an unstamped "dev" build, a "0.0.16+local" local
+	// build, or non-semver — is UNRELEASED, its tag does not exist, so we never
+	// pin v<version>. --dev forces the local checkout kit; an unreleased build
+	// uses it too when a checkout is resolvable, else falls back to #ref=main.
+	released := isReleased(version)
+	kitOverride := len(o.Kits) > 0
+
 	if o.Dev {
-		root, err := resolveDevRoot()
+		// --dev needs a resolvable repo checkout; fail loud otherwise.
+		root, err := resolveRepoRoot()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "pi-stack run --dev: %v\n", err)
 			os.Exit(1)
 		}
 		o.DevRoot = root
-		if version == "dev" {
-			fmt.Fprintln(os.Stderr, "pi-stack: dev build — kit tracks #ref=main (build with -ldflags \"-X main.version=<v>\" to pin a release)")
+		o.LocalKit = filepath.Join(root, "pi-kit")
+		o.LocalImageTag = readLocalImageTag(root)
+	} else if !released && !kitOverride {
+		if root, err := resolveRepoRoot(); err == nil {
+			o.LocalKit = filepath.Join(root, "pi-kit")
+			o.LocalImageTag = readLocalImageTag(root)
+			note := ""
+			if o.LocalImageTag != "" {
+				note = " (local image :" + o.LocalImageTag + ")"
+			}
+			fmt.Fprintf(os.Stderr, "pi-stack: unreleased build %q — using local checkout kit %s%s\n", version, o.LocalKit, note)
+		} else {
+			fmt.Fprintf(os.Stderr, "pi-stack: unreleased build %q and no pi-stack checkout found — "+
+				"kit tracks #ref=main (may not match this binary). Use `pi-stack run --dev` from a "+
+				"checkout or `pi-stack run --kit <path-or-git-url>` to override.\n", version)
 		}
-	} else if version == "dev" {
-		fmt.Fprintln(os.Stderr, "pi-stack: dev build — kit tracks #ref=main (build with -ldflags \"-X main.version=<v>\" to pin a release)")
 	}
 
 	args := buildSbxArgs(cfg, o, version)
@@ -63,6 +82,12 @@ func runRun(argv []string) {
 	cmd.Env = os.Environ()
 	if err := cmd.Run(); err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
+			// If we pinned a git #ref kit and sbx bailed (classically git exit 128
+			// "Remote branch not found"), the raw error is opaque — replace it with
+			// an actionable note instead of leaking the git 128.
+			if msg := kitResolveFailureMsg(pinnedGitKit(args)); msg != "" {
+				fmt.Fprintln(os.Stderr, msg)
+			}
 			os.Exit(exit.ExitCode())
 		}
 		fmt.Fprintf(os.Stderr, "pi-stack run: exec sbx: %v\n", err)
@@ -150,33 +175,66 @@ func parseRunArgs(argv []string) (runOpts, error) {
 	return o, nil
 }
 
-// resolveDevRoot finds a repo checkout for Mode B: $PI_STACK_DEV_ROOT if set,
-// else the current working directory if it looks like the repo (has
-// pi-kit/spec.yaml). Fails loud when neither resolves.
-func resolveDevRoot() (string, error) {
+// resolveRepoRoot finds a pi-stack repo checkout for the local kit path, in
+// order: $PI_STACK_DEV_ROOT if set, else walking up from the current working
+// directory, else the launcher binary's own location (make install symlinks
+// ~/.local/bin/pi-stack -> <repo>/out/pi-stack, so the repo is two levels up
+// from the resolved binary). Fails when none resolves.
+func resolveRepoRoot() (string, error) {
 	if r := strings.TrimSpace(os.Getenv("PI_STACK_DEV_ROOT")); r != "" {
 		if isRepoRoot(r) {
 			return r, nil
 		}
 		return "", fmt.Errorf("$PI_STACK_DEV_ROOT=%q is not a pi-stack checkout (no pi-kit/spec.yaml)", r)
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
 	// Walk up from cwd looking for a repo root.
-	dir := cwd
-	for {
-		if isRepoRoot(dir) {
-			return dir, nil
+	if cwd, err := os.Getwd(); err == nil {
+		dir := cwd
+		for {
+			if isRepoRoot(dir) {
+				return dir, nil
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
 	}
-	return "", fmt.Errorf("no repo checkout found (cwd %q is not inside a pi-stack repo); set $PI_STACK_DEV_ROOT", cwd)
+	// The launcher binary's own location (symlink-resolved).
+	if repo, ok := repoFromBinary(); ok {
+		return repo, nil
+	}
+	return "", fmt.Errorf("no pi-stack checkout found (set $PI_STACK_DEV_ROOT or run from inside a checkout)")
+}
+
+// repoFromBinary resolves the launcher binary (following symlinks) and reports
+// the repo root two levels up (<repo>/out/pi-stack -> <repo>) when it looks
+// like a checkout.
+func repoFromBinary() (string, bool) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", false
+	}
+	if resolved, err := filepath.EvalSymlinks(self); err == nil {
+		self = resolved
+	}
+	repo := filepath.Dir(filepath.Dir(self))
+	if isRepoRoot(repo) {
+		return repo, true
+	}
+	return "", false
+}
+
+// readLocalImageTag returns the trimmed contents of <root>/out/.local-image-tag
+// (written by `make load`), or "" when absent — in which case the caller skips
+// the --template pin.
+func readLocalImageTag(root string) string {
+	b, err := os.ReadFile(filepath.Join(root, "out", ".local-image-tag"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // isRepoRoot reports whether dir looks like a pi-stack repo checkout.
