@@ -1824,11 +1824,34 @@ export default function (pi: ExtensionAPI) {
 	try {
 		pi.registerCommand("subagents", {
 			description:
-				"List subagents and config; `/subagents doctor` runs a live self-audit.",
+				"List subagents and config; `/subagents doctor` runs a live self-audit; `/subagents clear` dismisses finished rows from the tracker.",
 			handler: async (rawArgs: any, ctx: any) => {
 				const arg = String(rawArgs ?? "")
 					.trim()
 					.toLowerCase();
+
+				if (arg.startsWith("clear")) {
+					// Dismiss finished/failed/timed-out rows (keep anything still running).
+					// Failures pin until the next batch or shutdown; this is the manual escape.
+					try {
+						for (const [id, r] of tracker.runs) {
+							if (r.status === "running") continue;
+							tracker.runs.delete(id);
+							const t = tracker.timers.get(id);
+							if (t) {
+								clearTimeout(t);
+								tracker.timers.delete(id);
+							}
+						}
+						renderWidget();
+						maybeStopTicker();
+					} catch {
+						/* best-effort */
+					}
+					ctx.ui?.notify?.("Subagent tracker cleared.", "info");
+					return;
+				}
+
 				const scope: AgentScope = arg.includes("both") ? "both" : "user";
 				const { agents, projectDir } = discoverAgents(ctx.cwd, scope);
 
