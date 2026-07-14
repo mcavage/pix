@@ -22,6 +22,10 @@ import (
 //	pi-stack knowledge use <path|url> point the global KB at an existing bundle: a
 //	                                  local path indexed in place, a git URL
 //	                                  cloned/pulled to <config-dir>/knowledge-cache.
+//	pi-stack knowledge use --project <path|url> [--dir D]
+//	                                  write .pi-stack/knowledge in the repo (D or
+//	                                  cwd) so recall scopes to it in that workspace.
+//	                                  Does NOT touch global config.
 //	pi-stack knowledge ls             list configured bundles + daemon health.
 func runKnowledge(argv []string) {
 	if len(argv) == 0 {
@@ -113,21 +117,89 @@ func knowledgeInit(cfg *config.Config, dir string, out io.Writer) error {
 	return nil
 }
 
-// runKnowledgeUse is the CLI entry point for `knowledge use <path|url>`.
+// runKnowledgeUse is the CLI entry point for `knowledge use <path|url>` and
+// `knowledge use --project <path|url> [--dir D]`. The bare form points the GLOBAL
+// KB at a bundle; --project writes a per-repo .pi-stack/knowledge pointer instead
+// and leaves global config untouched.
 func runKnowledgeUse(argv []string) {
-	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
+	project := false
+	dir := "."
+	ref := ""
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		switch {
+		case a == "--project":
+			project = true
+		case a == "--dir":
+			if i+1 >= len(argv) {
+				fmt.Fprintln(os.Stderr, "pi-stack knowledge use: --dir needs a value")
+				os.Exit(2)
+			}
+			i++
+			dir = argv[i]
+		case strings.HasPrefix(a, "--dir="):
+			dir = a[len("--dir="):]
+		case strings.HasPrefix(a, "-"):
+			fmt.Fprintf(os.Stderr, "pi-stack knowledge use: unknown flag %q\n", a)
+			os.Exit(2)
+		default:
+			if ref != "" {
+				fmt.Fprintln(os.Stderr, "pi-stack knowledge use: only one <path|git-url> allowed")
+				os.Exit(2)
+			}
+			ref = a
+		}
+	}
+	if strings.TrimSpace(ref) == "" {
 		fmt.Fprintln(os.Stderr, "usage: pi-stack knowledge use <path|git-url>")
+		fmt.Fprintln(os.Stderr, "       pi-stack knowledge use --project <path|git-url> [--dir D]")
 		os.Exit(2)
+	}
+	if project {
+		if err := knowledgeUseProject(ref, dir, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "pi-stack knowledge use --project: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack knowledge use: loading config: %v\n", err)
 		os.Exit(1)
 	}
-	if err := knowledgeUse(cfg, argv[0], os.Stdout); err != nil {
+	if err := knowledgeUse(cfg, ref, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack knowledge use: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// knowledgeUseProject writes the per-project knowledge pointer
+// <dir>/.pi-stack/knowledge, resolving ref to a bundle path first (a local path
+// to its absolute form, a git URL cloned/pulled into the cache — same resolver
+// the global `use` uses). It does NOT touch global config: the pointer is meant
+// to be committed to the repo so the project's knowledge travels with it. The
+// launcher's `run` wiring reads this pointer and scopes recall to
+// {global, this-project}.
+func knowledgeUseProject(ref, dir string, out io.Writer) error {
+	resolved, err := resolveBundleRef(ref, knowledgeCacheDir(), out)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(dir) == "" {
+		dir = "."
+	}
+	pointerDir := filepath.Join(dir, ".pi-stack")
+	if err := os.MkdirAll(pointerDir, 0o755); err != nil {
+		return fmt.Errorf("creating %s: %w", pointerDir, err)
+	}
+	pointer := filepath.Join(pointerDir, "knowledge")
+	if err := os.WriteFile(pointer, []byte(resolved+"\n"), 0o644); err != nil {
+		return fmt.Errorf("writing %s: %w", pointer, err)
+	}
+	fmt.Fprintf(out, "Wrote project knowledge pointer %s -> %s\n", pointer, resolved)
+	fmt.Fprintln(out, "Commit .pi-stack/knowledge to share this project's bundle; recall picks it up on the next `pi-stack run`.")
+	fmt.Fprintln(out, "Gitignore .pi-stack/knowledge.scope (it is launcher-generated per run).")
+	return nil
 }
 
 // knowledgeUse points the global KB at an existing bundle: a local path is used
@@ -219,6 +291,9 @@ func knowledgeLs(cfg *config.Config, env shellEnv, out io.Writer) {
 	} else {
 		fmt.Fprintln(out, "service: down (:11436 unreachable) — start it with `pi-stack serve`")
 	}
+	if ptr := readProjectPointer("."); ptr != "" {
+		fmt.Fprintf(out, "project pointer: .pi-stack/knowledge -> %s\n", ptr)
+	}
 }
 
 // wireKnowledge adds the bundle dir to knowledge_bundles and ensures the
@@ -226,6 +301,51 @@ func knowledgeLs(cfg *config.Config, env shellEnv, out io.Writer) {
 func wireKnowledge(cfg *config.Config, dir string) {
 	cfg.AddKnowledgeBundle(dir)
 	cfg.AddService("knowledge")
+}
+
+// canonicalizeKnowledgeBundle normalizes a bundle path to the SAME id the
+// knowledge store keys its `bundle` column on (host knowledge.go's
+// canonicalizeBundle, design risk #1): absolute + symlink-free + cleaned, with a
+// cleaned-absolute fallback when the path does not exist. Every writer (the
+// store at reindex, this launcher's lazy reindex + scope-file writer) MUST agree
+// byte-for-byte or `WHERE bundle IN (…)` matches nothing and recall goes silently
+// empty. Replicated here (not imported) because the launcher is a separate
+// dependency-light package.
+func canonicalizeKnowledgeBundle(path string) string {
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	if resolved, rerr := filepath.EvalSymlinks(abs); rerr == nil {
+		return resolved
+	}
+	return filepath.Clean(abs)
+}
+
+// readProjectPointer returns the raw (unresolved) first meaningful line of
+// <dir>/.pi-stack/knowledge — a local path or git URL — or "" when the pointer is
+// absent/empty. Blank lines and #-comments are skipped so a hand-authored
+// pointer stays readable.
+func readProjectPointer(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, ".pi-stack", "knowledge"))
+	if err != nil {
+		return ""
+	}
+	return firstNonEmptyLine(string(b))
+}
+
+// firstNonEmptyLine returns the first trimmed, non-comment, non-blank line of s.
+func firstNonEmptyLine(s string) string {
+	for _, ln := range strings.Split(s, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln != "" && !strings.HasPrefix(ln, "#") {
+			return ln
+		}
+	}
+	return ""
 }
 
 // isGitURL reports whether ref should be treated as a git URL (cloneable) rather
