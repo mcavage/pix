@@ -1,5 +1,7 @@
 # Handoff: repo-less + go-plugin + OKF upgrade (macOS host steps)
 
+> **Status: merged.** This file is historical. The branch shipped; CI stamped the version. See AGENTS.md for the current state of each component described here.
+
 Everything buildable/verifiable inside the sandbox is done, on branch
 `feat/repo-less-plugin-upgrade` (opened as a PR). Full acceptance gate is green:
 `go build/vet/test -race`, `gofmt`, `tsc`, `check-open-core.sh`, shell syntax,
@@ -73,8 +75,8 @@ After a release exists:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mcavage/pi-stack/main/install.sh | sh
 ```
-Or from a checkout right now: `make install` (symlinks `bin/pi-stack`), and build
-the Go launcher with `make launcher` (→ `out/pi-stack`).
+Or from a checkout right now: `make install` (builds both `out/pi-stack` launcher and
+`out/pi-stack-host`, then symlinks both into `~/.local/bin`).
 
 ### 5. Run the host services as a launchd agent
 ```bash

@@ -17,10 +17,11 @@ read it before changing things, and keep it current as you learn.
 | `mcp.json` | → `~/.pi/agent/mcp.json` (registers the sbx Cloud MCP Gateway: atlassian/notion/granola/linear/…; `lifecycle:lazy`) |
 | `capabilities.json` | → `~/.pi/agent/capabilities.json` (maps capabilities chat/docs/github/... → provider mcp/cli/http/none; swap to retarget every data skill at once). See the `capability-routing` skill |
 | `agents/*.md` | 17 subagent presets: orchestration (`fanout`/`review`/`deep`) + a role crew (architect, engineer, designer, qa-lead, security-lead, …) |
-| `skills/<name>/SKILL.md` | Agent Skills. The public image bakes ~30 generic skills (the `.dockerignore` allowlist); company-specific skills live in a private overlay kit and are excluded. Dev spine: brainstorm · plan · build · ship · code-review · debug · tdd · verify · qa · design-review |
+| `skills/<name>/SKILL.md` | Agent Skills. The public image bakes ~31 verb-named skills (the `.dockerignore` allowlist); company-specific skills live in a private overlay kit and are excluded. Dev spine: plan · build · ship · code-review · debug · tdd · verify · qa · enrich · healthcheck · onboard · design-review |
 | `extensions/*.ts` | local TypeScript extensions (`status.ts`, `timestamps.ts`) |
-| `services/host/` | **`pi-stack-host`** — the single compiled **Go** binary for everything that runs on the HOST. Subcommands: `memory` (:11435), `slack`, `gog` (Google Workspace MCP), `serve <services…>` (runs the ones named in `SERVICES`). `make serve` builds + runs it. Private overlay subcommands self-register via `init()` when present (see the open-core note below). |
-| `config/local.mk` | **the single stack config** (gitignored; `make install` seeds it from `config/local.mk.example`). Declares `SERVICES` (what `make serve` runs), `MCP` (what `make run` attaches + `make mcp-register` registers), and the Ollama model names. Every make target derives from it — no hand-passed flags. The overlay peer repo's `overlay.mk` adds private company-specific targets. |
+| `services/host/` | **`pi-stack-host`** — the single compiled **Go** binary for everything that runs on the HOST. Subcommands: `memory` (:11435, JSON-RPC), `knowledge` (:11436, JSON-RPC — OKF index), `mcp <name>` (stdio MCP bridge for the sbx gateway), `slack` (alias for `mcp slack`), `plugin <kind>` (go-plugin self-exec: `memory\|knowledge\|broker\|mcp`), `serve` (supervisor for the long-running HTTP services). Private overlay subcommands self-register via `init()` when present. Note: `gog` is the **external `gog` CLI** — NOT a pi-stack-host subcommand. |
+| `services/host/cmd/pi-stack/` | **`pi-stack` launcher** — the user-facing binary. Install without cloning the repo (`make install` builds + symlinks both `out/pi-stack` and `out/pi-stack-host`). Verb tree: `run [DIR]` (default), `serve`, `doctor`, `setup`, `config show\|path\|set\|unset`, `mcp register\|ls`, `version`, `help`. Runtime config: `~/.config/pi-stack/config.toml`, managed by `pi-stack config set <key> <value>` — never hand-edit. |
+| `config/local.mk` | the **make/dev config surface** (gitignored; `make install` seeds it from `config/local.mk.example`). Declares `SERVICES`, `MCP`, `GOG_ACCOUNT`, and Ollama model names for make targets. The launcher's runtime config lives at `~/.config/pi-stack/config.toml` (managed by `pi-stack config set`). The overlay peer repo's `overlay.mk` adds private make targets. |
 | `services/host/{slack,memory}.go` | the former `mcp/*` servers, now `pi-stack-host` subcommands. `slack` is a **stdio MCP server** registered with sbx (`make mcp-register`) and run by the MCP gateway — NOT in `mcp.json`, NOT in `make serve`. `memory` (JSON-RPC :11435, sqlite+FTS5+vectors via Ollama) is a plain host service backing the recall extension. None are baked into the image. |
 | `themes/*.json` | `dracula` (default), `pi-stack` |
 | `prompts/*.md` | prompt templates (`/name`) |
@@ -48,6 +49,34 @@ pi is pinned via `ARG PI_PACKAGE=@earendil-works/pi-coding-agent@<version>` in t
 4. **Verify the vendored tui patch still applied:** the build log must show `[apply-tui-bottom-pin] patched`, NOT an `anchor not found` warning. If it warns, the renderer moved: refresh `scripts/patches/tui-bottom-pin.block.txt` and the anchor in `apply-tui-bottom-pin.mjs` against the new `@earendil-works/pi-tui/dist/tui.js` (see Hard-won gotchas).
 5. **Verify the version:** `docker run --rm --entrypoint pi docker.io/mcavage/pi-stack:0.0.1 --version`.
 6. **Recreate sandboxes** to pick up the new pi (they keep their creation-time image): `sbx rm -f <name>` then re-run. A stale sandbox is also the usual cause of in-sandbox auth 401s and "missing extension" surprises, since it carries old image + proxy wiring.
+
+## `pi-stack` launcher
+
+The `pi-stack` binary (`services/host/cmd/pi-stack/`) is the user-facing launcher. `make install` builds both `out/pi-stack` and `out/pi-stack-host` and symlinks them into `~/.local/bin`. A consumer can also run `curl -fsSL https://raw.githubusercontent.com/mcavage/pi-stack/main/install.sh | sh` without cloning the repo.
+
+Verb tree (confirmed in `cmd/pi-stack/main.go`):
+- `pi-stack [DIR]` — alias for `run [DIR]`
+- `pi-stack run [DIR] [--dev] [--kit K] [--mcp M] [--name N] [-- pi-args…]` — launch the sandbox
+- `pi-stack serve [args…]` — exec `pi-stack-host serve` (long-running host services)
+- `pi-stack doctor` — diagnose host + sandbox health (probes memory, gog, keys, ollama)
+- `pi-stack setup` — guided first-run: seeds `config.toml`, prompts for creds/ollama/gog/mcp
+- `pi-stack config show|path|set|unset` — inspect or mutate config without touching the file
+- `pi-stack mcp register|ls` — register local stdio MCP servers with the sbx gateway
+- `pi-stack version` — print the stamped version
+
+Runtime config lives at `~/.config/pi-stack/config.toml` (or `$PI_STACK_CONFIG`, `$XDG_CONFIG_HOME/pi-stack/config.toml`). It is managed by `pi-stack config set <key> <value>` — never hand-edit it. Keys: `gog_account`, `mcp`, `services`, `memory_watcher_model`, `memory_embed_model`. `pi-stack config set` supports the same keys `make mcp-register` reads from `config/local.mk`, but writes to `config.toml` instead.
+
+## go-plugin host architecture
+
+`pi-stack-host serve` is a supervisor with four capability slots: **memory** (:11435), **knowledge** (:11436), **broker** (credential broker, dormant by default — overlay-only, no built-in impl), and **mcp** (stdio bridge). Each defaults to the built-in implementation compiled into the binary (`impl = "builtin"` in `config.toml`). A `[plugins.<slot>]` block in `config.toml` with `path`, `sha` (SHA-pinned), and `port` overrides a slot with an external binary at startup (launched once as a signed subprocess, not per-request). MCP servers (`slack`, `mcp <name>`) are NOT under `serve` — the sbx gateway spawns them via `sbx mcp add` registration.
+
+## OKF knowledge service
+
+The built-in knowledge service (`pi-stack-host knowledge`, JSON-RPC :11436, sqlite+FTS5+embeddings) indexes git-mounted OKF bundle directories listed in `knowledge_bundles` in `config.toml`. The `knowledge` capability in `capabilities.json` defaults to `none` in the public stack (no corpus shipped); a private overlay wires a `files` or `http` provider. The `enrich` skill and agent gate behind it. Enable it: add `"knowledge"` to `services` in `config.toml`, point `knowledge_bundles` at a bundle dir, then restart `make serve`.
+
+## Skills and /help
+
+The public image bakes ~31 verb-named skills. Key action verbs: `plan`, `build`, `ship`, `code-review`, `debug`, `tdd`, `verify`, `qa`, `enrich`, `healthcheck`, `onboard`, `brainstorm`, `challenge`, `design-review`. Support/meta skills: `anti-slop`, `conventions`, `capability-routing`, `delegation-guide`, `write-like-mark`, and more. Run `/help` for a live capability map and `/getting-started` for the setup walkthrough (both backed by the installed extension). Invoke a skill with `/skill:<name>` or let it auto-load from context.
 
 ## Writing extensions (`extensions/*.ts`)
 
@@ -91,7 +120,7 @@ user a diff.
 
 ## Models & subagents
 
-- Providers: **Claude + OpenAI**, keys injected proxy-side (the VM only ever sees the `proxy-managed` sentinel). Switch `/model`; cycle **Alt+P**.
+- Providers: **Claude, GPT, Gemini** (cloud, keys injected proxy-side; the VM only ever sees the `proxy-managed` sentinel) plus **Ollama** (local, via the ollama-bridge extension). Switch `/model`; cycle **Alt+P**.
 - **ALWAYS fully-qualify model ids** (`provider/id`). A bare name like `haiku` can resolve to a keyless provider (e.g. `amazon-bedrock`) and **hang the subagent forever**. Known-good: `anthropic/claude-opus-4-8`, `anthropic/claude-haiku-4-5`, `openai/gpt-5.6-sol`.
 - Preset roles: `fanout` = haiku (cheap breadth, read-only), `review` = gpt-5.6-sol (cross-vendor adversary — different blind spots), `deep` = opus (one hard problem).
 - **Subagents are BACK, via our own `extensions/subagents.ts`** (replaces the off-the-shelf `@tintinweb/pi-subagents`, which deadlocked — see `docs/design/subagents-extension.md`). It registers a `subagent` tool with **single / parallel / chain** modes and depth-capped **trees**. Call it with `{agent, task}` (single), `{tasks:[...]}` (parallel), or `{chain:[...]}` with a `{previous}` placeholder — agent = a filename in `agents/`. It spawns each child as `pi --no-extensions -e <self>` (the fix: a fully-loaded child re-binds ollama/memory ports and hangs) with an inactivity + wall-clock **watchdog**, so a stuck subagent is killed and reported, never left to freeze. Run **`/subagents`** to list agents/config and **`/subagents doctor`** for a live self-audit (this is the check that never passed before). Tune via `PI_SUBAGENT_IDLE_MS` / `_TIMEOUT_MS` / `_MAX_DEPTH` / `_MAX_CONCURRENCY`.
@@ -120,7 +149,7 @@ user a diff.
   attach-to-running (`sbx mcp load` doesn't exist; the flag is `--mcp <name>`, not
   `--static-mcp`). So a sandbox only gets a local stdio server (e.g. `slack`) if it
   was **created** with `--mcp <name>`. `make run` does this automatically from the `MCP` list in
-  `config/local.mk` — the single config that also drives `serve`/`mcp-register`/
+  `config/local.mk` — the make/dev config surface, which also drives `serve`/`mcp-register`/
   `doctor`/`pull-models`. Add a server = a tool table + handlers + `run<Name>()` using `mcpStdio`
   (newline-delimited JSON — what the gateway speaks; tolerates Content-Length on
   input). Transports live in `services/host/util.go`.
@@ -141,7 +170,7 @@ user a diff.
   trips endpoint security / EDR**. A compiled Go binary doing the same work runs
   unflagged. So when you add a host service,
   add a subcommand to `pi-stack-host`, don't write another `node …/server.ts`.
-- **Google Workspace = the `gog` host MCP server** (`pi-stack-host gog`, Go),
+- **Google Workspace = the external `gog` CLI run as a host MCP server**,
   spawned by the sbx gateway exactly like `slack` — NOT an HTTP daemon, NOT in
   `make serve`. Creds stay on the host in `GOG_HOME` (never in the VM); the sandbox
   reaches Gmail/Drive/Docs/Sheets/Calendar through the gateway. It is **read-only +
