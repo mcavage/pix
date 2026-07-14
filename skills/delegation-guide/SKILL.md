@@ -38,11 +38,11 @@ collect results, and move the pipeline forward.
 
 ## Subagent types (pi-stack)
 
-| Type | Agent tool value | Use for |
+| Type | subagent agent | Use for |
 |---|---|---|
-| `fanout` | `subagent_type=fanout` | Parallel investigation, data gathering, parallel coding units |
-| `deep` | `subagent_type=deep` | Single complex task needing a full context window (a whole story, deep analysis) |
-| `review` | `subagent_type=review` | Cross-vendor adversarial pass: code review, peer review, fact-check |
+| `fanout` | `agent=fanout` | Parallel investigation, data gathering, parallel coding units |
+| `deep` | `agent=deep` | Single complex task needing a full context window (a whole story, deep analysis) |
+| `review` | `agent=review` | Cross-vendor adversarial pass: code review, peer review, fact-check |
 
 ## Wave execution pattern
 

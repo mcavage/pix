@@ -4,7 +4,7 @@ description: Cross-model peer review for NON-code deliverables (docs, plans, dec
 ---
 # peer-review
 
-Send the deliverable to a `review` subagent (Agent tool, `subagent_type=review`) running
+Send the deliverable to a `review` subagent (the `subagent` tool with `agent=review`) running
 a different model vendor than the producer. Different vendor means different blind spots,
 not a rubber stamp.
 

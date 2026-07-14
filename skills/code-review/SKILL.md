@@ -20,8 +20,8 @@ point of the second pass is *different blind spots*, not a rubber stamp.
    - **Concurrency**: shared mutable state, races, missing locks/transactions, fire-and-forget tasks that need coordination.
    - **Breaking changes**: removed/renamed fields, changed signatures or types, stricter validation with no migration.
    - **Test coverage**: new logic with no test, changed behavior with stale tests, deleted tests with no replacement.
-3. **Cross-vendor pass.** Spawn a `review` subagent (Agent tool,
-   `subagent_type=review`) with the diff and your findings, instructed to
+3. **Cross-vendor pass.** Spawn a `review` subagent (the `subagent` tool with
+   `agent=review`) with the diff and your findings, instructed to
    *refute* your analysis and surface what you missed. It runs on a different
    vendor than your main model on purpose.
 4. **Reconcile.** Merge both passes. Drop findings the adversary convincingly

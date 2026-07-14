@@ -21,8 +21,8 @@ symptom disappear without an explanation is not a fix.
 1. **Reproduce.** Get a deterministic repro. If you can't, say so and gather
    signal first: logs, the stack trace, the recent diff, the env.
 2. **Investigate.** Read the actual failing code path. When the search space is
-   wide, fan out: spawn several `fanout` subagents in parallel (Agent tool,
-   `subagent_type=fanout`), each chasing one area, then collect.
+   wide, fan out: spawn several `fanout` subagents in parallel (the `subagent`
+   tool with `agent=fanout`), each chasing one area, then collect.
 3. **Hypothesize.** State the single most likely root cause as a falsifiable
    claim: "X fails because Y at `path:line`."
 4. **Verify.** Prove it: add a log, write a failing test, inspect the state. If
