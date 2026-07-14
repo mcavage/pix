@@ -621,19 +621,49 @@ func parseGogCommandLine(out string) ([]string, bool) {
 	return fields, true
 }
 
-// gogCommandComplete reports whether argv is a full, unambiguous gog spawn. The
-// sbx gateway always registers gog behind the `op run --env-file=… -- <cmd…>`
-// wrapper, so a complete argv must carry the `--` separator AND at least one
-// non-empty token after it (the wrapped binary). A partial capture has no such
-// tail and fails this, so the caller keeps looking rather than probe a
-// truncated command. Guards against index-out-of-range on short/empty argv.
+// gogCommandComplete reports whether argv is a full, unambiguous gog spawn. gog
+// can be registered TWO ways (see mcp.go serverCmd/addArgs): op-wrapped
+// (`op run --env-file=… -- gog … mcp …`, when op-refs is present) or BARE
+// (`gog … mcp …`, when op-refs is absent — 1Password is optional for gog). A
+// command is complete in EITHER form: it resolves (unwrapping any `op run … --`
+// prefix) to a binary whose basename is `gog` and whose args carry the `mcp`
+// subcommand. A partial capture (`op`, `op run`, args on a separate line) does
+// not, so the caller keeps looking rather than probe a truncated command.
 func gogCommandComplete(argv []string) bool {
+	_, ok := gogSpawnArgv(argv)
+	return ok
+}
+
+// gogSpawnArgv extracts the effective gog spawn argv from a registered command,
+// handling both the op-wrapped form (`op run … -- gog … mcp …`) and the bare
+// form (`gog … mcp …`). It returns (cmd,true) when the resolved binary's
+// basename is `gog` and its args contain the `mcp` subcommand; (nil,false)
+// otherwise. Guards against index-out-of-range on short/empty argv.
+func gogSpawnArgv(argv []string) ([]string, bool) {
+	if len(argv) == 0 {
+		return nil, false
+	}
+	// Unwrap an `op run … -- <cmd…>` prefix if present; otherwise the whole argv
+	// is the (bare) command.
+	cmd := argv
 	for i, a := range argv {
-		if a == "--" && i+1 < len(argv) && strings.TrimSpace(argv[i+1]) != "" {
-			return true
+		if a == "--" {
+			cmd = argv[i+1:]
+			break
 		}
 	}
-	return false
+	if len(cmd) == 0 || strings.TrimSpace(cmd[0]) == "" {
+		return nil, false
+	}
+	if filepath.Base(cmd[0]) != "gog" {
+		return nil, false
+	}
+	for _, a := range cmd[1:] {
+		if a == "mcp" {
+			return cmd, true
+		}
+	}
+	return nil, false
 }
 
 // parseGogCommandJSON extracts the registered argv from `sbx mcp ls -o json`
@@ -653,9 +683,9 @@ func parseGogCommandJSON(out string) ([]string, bool) {
 			continue
 		}
 		argv := append([]string{s.Command}, s.Args...)
-		// Same completeness bar as the line form: a JSON entry that lacks the
-		// `op run … -- <cmd>` tail is not a confident command, so return not-found
-		// and let doctor take the honest best-effort fallback (a TODO).
+		// Same completeness bar as the line form: a JSON entry that does not resolve
+		// to a `gog … mcp …` spawn (op-wrapped or bare) is not a confident command,
+		// so return not-found and let doctor take the honest best-effort fallback.
 		if !gogCommandComplete(argv) {
 			return nil, false
 		}
@@ -666,8 +696,11 @@ func parseGogCommandJSON(out string) ([]string, bool) {
 
 // probeRegisteredGog runs the EXACT registered command with `--list-tools`
 // appended and reports whether it yields a non-empty tool list — verifying the
-// real gateway spawn (account, op-refs, op/gog binaries) all as-registered. It
-// degrades cleanly (returns false, never crashes) on any error.
+// real gateway spawn (account, op-refs, op/gog binaries) all as-registered.
+// This works for BOTH registration forms unchanged: the op-wrapped form runs
+// `op run … -- gog … mcp … --list-tools`, and the bare form runs
+// `gog … mcp … --list-tools` (argv[0] is gog itself). It degrades cleanly
+// (returns false, never crashes) on any error.
 func probeRegisteredGog(env shellEnv, argv []string) bool {
 	if env.run == nil || len(argv) == 0 {
 		return false
