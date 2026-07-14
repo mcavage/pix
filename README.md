@@ -115,25 +115,70 @@ The `sbx run` line above is enough for a plain agent. To get the data tools
 without cloning the repo, install two host binaries: `pi-stack`, a launcher that
 wraps `sbx run` and pins the kit to its own release
 (`--kit "git+...#ref=v<version>&dir=pi-kit"`), and `pi-stack-host`, the host-side
-service binary. A one-line `install.sh` that fetches the binary releases is
-coming; for now `make install` from a checkout puts them on your PATH.
-
-The launcher is the whole host surface, four verbs:
+service binary. One line installs both:
 
 ```bash
-pi-stack           # launch a sandbox on the pinned release (wraps sbx run)
-pi-stack serve     # run the host services (memory, credential broker, MCP)
-pi-stack setup     # first-run setup: keys, models, config
-pi-stack doctor    # per tool: set up? service running? models pulled?
+curl -fsSL https://raw.githubusercontent.com/mcavage/pi-stack/main/install.sh | sh
 ```
+
+It detects your OS and arch, downloads both binaries plus `SHA256SUMS`, verifies
+each checksum before it installs anything, and drops them in `~/.local/bin` (no
+sudo, never touching an existing config). It prints a PATH hint if `~/.local/bin`
+isn't on yours. Read it before you pipe it to a shell:
+[install.sh](install.sh). To remove the binaries later,
+`curl -fsSL .../install.sh | sh -s -- --uninstall`.
+
+Then the flow is set your keys, configure, start services, launch:
+
+```bash
+sbx secret set -g anthropic      # keys live in sbx, proxy-injected, never in the VM
+sbx secret set -g openai
+sbx secret set -g google
+sbx secret set -g github
+pi-stack setup                   # wizard: writes config, registers gog, enables memory
+pi-stack serve                   # host services: memory (:11435), knowledge (:11436 if on)
+pi-stack                         # launch the sandbox on the pinned release
+```
+
+`pi-stack setup` is the whole onboarding: it detects which secrets are set,
+prompts for your Google Workspace account (or takes `--account you@x.com` /
+`--non-interactive`), writes `~/.config/pi-stack/config.toml`, registers the
+`gog` MCP server, and ensures the `memory` service. It's idempotent, so re-run it
+any time.
+
+The launcher covers the whole host surface:
+
+```bash
+pi-stack                     # launch a sandbox on the pinned release (== pi-stack run)
+pi-stack run [DIR]           # same, explicit; the kit is pinned to this build's version
+pi-stack setup               # guided setup: writes config + registers gog
+pi-stack serve               # run the host services (memory, knowledge)
+pi-stack doctor              # verdict + per-check TODOs, each a pi-stack command
+pi-stack config show|path    # show the resolved config and its path
+pi-stack config set|unset    # change config without hand-editing the toml
+pi-stack mcp register|ls     # register / list local stdio MCP servers with sbx
+pi-stack version             # print the launcher version
+```
+
+**You never hand-edit `config.toml`.** `pi-stack setup` and `pi-stack config
+set/unset` are its only writers (they rewrite the file, so hand edits and
+comments are lost on the next save). To enable gog after the fact, run
+`pi-stack config set gog_account you@x.com` then `pi-stack config set mcp gog`,
+not an editor. `pi-stack doctor`'s TODOs are always the exact `pi-stack` command
+to run, never "edit the toml".
+
+Inside the sandbox the agent has `/help` (a live map of the loaded skills,
+agents, and capabilities, so it never goes stale) and `/getting-started` (a
+first-run tour).
 
 Host services are overridable plugins. `pi-stack serve` reads
 `~/.config/pi-stack/config.toml` and, for each slot it finds under `[plugins.*]`,
-launches the plugin binary named there instead of the built-in. The three slots
-are `broker` (credential broker), `memory` (the recall backend), and `mcp` (extra
-MCP servers). Each entry names an `impl`, a `path` to the plugin binary, and a
-`sha` it must match, so a company can swap in a private broker or memory backend
-without touching this repo (see [docs/OVERLAY.md](docs/OVERLAY.md)).
+launches the plugin binary named there instead of the built-in. The slots are
+`broker` (credential broker), `memory` (the recall backend), `knowledge` (the
+OKF retrieval index), and `mcp` (extra MCP servers). Each entry names an `impl`,
+a `path` to the plugin binary, and a `sha` it must match, so a company can swap
+in a private broker or memory backend without touching this repo (see
+[docs/OVERLAY.md](docs/OVERLAY.md)).
 
 ## What's in it
 
@@ -165,34 +210,50 @@ skills ask for a capability and not a vendor (see `capabilities.json` and the
 resolves to nothing and the skill degrades to web and files.
 
 Credentials never enter the sandbox. Tokens are injected by the sbx proxy or
-brokered by the host-side service. One command starts the host services, another
-shows status:
+brokered by the host-side service. The launcher runs the host services and
+reports status:
 
 ```bash
-make serve         # host services: memory (:11435)
-make pull-models   # pull the Ollama models the memory loop needs (watcher + embed)
-make mcp-register  # register stdio MCP servers (slack, gog) with the sbx gateway
-make doctor        # per tool: set up? service running? models pulled?
+pi-stack serve            # host services: memory (:11435), knowledge (:11436 if configured)
+pi-stack mcp register     # register local stdio MCP servers (gog, slack) with the sbx gateway
+pi-stack doctor           # per tool: set up? service running? models pulled?
 ```
+
+**memory** is on by default. It needs a local [Ollama](https://ollama.com) for
+the watcher and embed models (`ollama pull gemma4` + `ollama pull
+nomic-embed-text`, the defaults); without them recall falls back to keyword
+search and capture turns off, loudly.
+
+**Google Workspace** is the `gog` host MCP server (read-only). Authorize it once
+on the host (`gog auth login`), point pi-stack at your account, and register it:
+
+```bash
+pi-stack config set gog_account you@example.com   # or run pi-stack setup
+pi-stack config set mcp gog
+pi-stack mcp register
+```
+
+Full walkthrough, including the headless-keyring gotcha, is in
+[docs/gog-setup.md](docs/gog-setup.md). **gh** brings its own auth: the sbx proxy
+injects the token, so `gh auth token | sbx secret set -g github` is all it takes.
 
 Registering a stdio MCP server does not put it in a sandbox. Local stdio servers
-aren't surfaced by dynamic `mcp-find`, and there's no attach-to-running, so you
-start the sandbox with them:
-
-```bash
-make run MCP="slack"   # == sbx run pi-stack --kit ./pi-kit --mcp slack .
-```
+aren't surfaced by dynamic `mcp-find`, and there's no attach-to-running, so a
+server in your config (`gog`, `slack`) is attached when `pi-stack run` starts the
+sandbox.
 
 | tool | capability | one-time setup | reaches the VM via |
 | --- | --- | --- | --- |
 | **gh** | `github` | `gh auth token \| sbx secret set -g github` | sbx proxy injects the token |
-| **gog** | `gworkspace` | `gog auth` on the host, then `make mcp-register` | host `gog` MCP server via the sbx gateway (read-only) |
-| **slack** | `chat` | refs in `config/op-refs.env`, then `make mcp-register` | stdio MCP via the sbx gateway; `op run` pulls creds from 1Password |
-| **memory** | semantic recall | `make pull-models` (a local Ollama with a watcher model for capture and an embed model for recall; without them, recall is keyword-only and capture is skipped, loudly) | host service (`:11435`) |
-| gateway catalog (atlassian, notion, granola, linear) | `issues`, `docs`, ... | register with `sbx mcp add` | the sbx gateway; `make run MCP="<name>"` to eager-load |
+| **gog** | `gworkspace` | `gog auth login`, then `pi-stack config set gog_account …` + `pi-stack mcp register` | host `gog` MCP server via the sbx gateway (read-only) |
+| **slack** | `chat` | refs in `config/op-refs.env`, then `pi-stack mcp register` | stdio MCP via the sbx gateway; `op run` pulls creds from 1Password |
+| **memory** | semantic recall | a local Ollama with a watcher + embed model; without them, recall is keyword-only and capture is skipped, loudly | host service (`:11435`) |
+| gateway catalog (atlassian, notion, granola, linear) | `issues`, `docs`, ... | register with `sbx mcp add` | the sbx gateway; `pi-stack run --mcp <name>` to eager-load |
 
-Company-specific connectors (a warehouse proxy, an HR directory, a CRM) are not in
-this repo. They live in a private overlay (next section).
+From a clone, the same steps are `make serve`, `make mcp-register`,
+`make pull-models`, and `make doctor` (they read `config/local.mk`).
+Company-specific connectors (a warehouse proxy, an HR directory, a CRM) are not
+in this repo. They live in a private overlay (next section).
 
 ## Extend it: skills, kits, and a private overlay
 
@@ -224,18 +285,21 @@ and there's a copyable scaffold in [`examples/overlay/`](examples/overlay).
 
 ## Build from source
 
-To change the image, the baked-in skills, or the extensions:
+This is the secondary path, for changing the image, the baked-in skills, or the
+extensions. Everyone else takes the `install.sh` path above.
 
 ```bash
 git clone https://github.com/mcavage/pi-stack
 cd pi-stack
 docker login dhi.io   # the base image is dhi.io/node; needs a DHI-entitled Docker account
 make load             # build the image, load it into sbx
-make install          # put a `pi-stack` command on your PATH
+make install          # build + put both Go binaries (pi-stack, pi-stack-host) on your PATH
 pi-stack              # run it anywhere (keys set as above)
 ```
 
-Run `make load` after changing the Dockerfile or an extension. **Skills, you don't
+Run `make load` after changing the Dockerfile or an extension, then **recreate
+the sandbox** (`sbx rm -f <name> && make run`) to pick it up: a running sandbox
+keeps its creation-time image. **Skills, you don't
 rebuild for:** `make run` (and `pi-stack --dev`) load skills live from your repo, so
 edit a `SKILL.md`, `/reload` in pi, and it's live. `make load` only bakes your skills
 into the image for people who run it the turnkey way (`sbx run --kit git+…`), which
