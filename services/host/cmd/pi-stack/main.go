@@ -52,6 +52,8 @@ func main() {
 		runSetupCmd(os.Args[2:])
 	case "mcp":
 		runMcpCmd(os.Args[2:])
+	case "knowledge":
+		runKnowledge(os.Args[2:])
 	case "models", "upgrade", "uninstall":
 		stub(os.Args[1])
 	case "help", "-h", "--help":
@@ -153,6 +155,7 @@ commands:
   doctor              diagnose host + sandbox health
   setup               guided first-run setup (writes config + registers MCP)
   mcp register|ls     register local stdio MCP servers with the sbx gateway
+  knowledge init|use|ls   scaffold/point/list the OKF knowledge bundle (:11436)
   models              manage local Ollama models                (coming in a later unit)
   upgrade             update the launcher + kit                 (coming in a later unit)
   uninstall           remove pi-stack from this host            (coming in a later unit)
