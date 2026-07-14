@@ -59,7 +59,7 @@ Verb tree (confirmed in `cmd/pi-stack/main.go`):
 - `pi-stack run [DIR] [--dev] [--kit K] [--mcp M] [--name N] [-- pi-args…]` — launch the sandbox
 - `pi-stack serve [args…]` — exec `pi-stack-host serve` (long-running host services)
 - `pi-stack doctor` — diagnose host + sandbox health (probes memory, gog, keys, ollama)
-- `pi-stack setup` — guided first-run: seeds `config.toml`, prompts for creds/ollama/gog/mcp
+- `pi-stack setup` — guided first-run: prompts only for the gog account, writes config (+ ensures memory), and prints copy-paste TODOs for provider secrets and anything else outstanding
 - `pi-stack config show|path|set|unset` — inspect or mutate config without touching the file
 - `pi-stack mcp register|ls` — register local stdio MCP servers with the sbx gateway
 - `pi-stack version` — print the stamped version
