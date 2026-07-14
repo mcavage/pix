@@ -183,7 +183,100 @@ function short(desc: string, max = 88): string {
 	return oneLine.slice(0, max - 1).trimEnd() + "…";
 }
 
+// notify("info") routes to the interactive showStatus(), which wraps the ENTIRE
+// message in theme.fg("dim", ...) — and in the default dracula theme `dim` is
+// `selection` (#44475a), nearly invisible on the #282a36 background. That is why
+// the old plain-text /help read as "faint": with no inline color codes the whole
+// block rendered at that dim color. The fix is to give every visible token its
+// own readable color so nothing falls through to the dim wrapper:
+//   • head  — bold + accent (purple): the title, section, and group headers
+//   • accent— accent (purple): command names, inline markers, labels
+//   • desc  — muted (comment blue-gray, readable): secondary detail only
+//   • text  — forces the terminal DEFAULT foreground (\x1b[39m) so body prose and
+//             skill/agent NAMES render bright/normal instead of inheriting dim
+// theme.fg() THROWS on an unknown/empty color key, so every call is guarded and
+// degrades to the raw string when a theme isn't available.
+const RESET_FG = "\x1b[39m";
+function painter(ctx: any) {
+	const theme = safe(() => ctx?.ui?.theme);
+	const wrap = (color: string, s: string): string => {
+		const r = safe(() => theme?.fg?.(color, s));
+		return typeof r === "string" ? r : s;
+	};
+	const bold = (s: string): string => {
+		const r = safe(() => theme?.bold?.(s));
+		return typeof r === "string" ? r : s;
+	};
+	return {
+		head: (s: string) => bold(wrap("accent", s)),
+		accent: (s: string) => wrap("accent", s),
+		desc: (s: string) => wrap("muted", s),
+		warn: (s: string) => wrap("warning", s),
+		// Prefix with an explicit reset-to-default so the text is drawn at the
+		// terminal's normal foreground (readable) rather than the dim wrapper.
+		text: (s: string) => RESET_FG + s,
+	};
+}
+
+// Wrap a long description into readable lines for the detail view.
+function wrapText(s: string, width = 76): string[] {
+	const words = s.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+	const lines: string[] = [];
+	let cur = "";
+	for (const w of words) {
+		if (!cur) cur = w;
+		else if ((cur + " " + w).length <= width) cur += " " + w;
+		else {
+			lines.push(cur);
+			cur = w;
+		}
+	}
+	if (cur) lines.push(cur);
+	return lines;
+}
+
+// Which display bucket a skill lands in (mirrors buildHelp's grouping), for the
+// `/help <name>` detail view.
+function groupTitleFor(s: SkillInfo): string {
+	const keys = [s.dir, s.name];
+	if (keys.some((k) => REFERENCE.has(k)))
+		return "REFERENCE (auto-loads as a convention)";
+	for (const g of GROUPS)
+		if (g.members.some((m) => s.dir === m || s.name === m)) return g.title;
+	return "OTHER";
+}
+
+// Live command objects ({name, description?, sourceInfo?}) if pi exposes them.
+function liveCommandInfos(pi: any, ctx: any): any[] {
+	const raw =
+		safe(() => ctx?.getCommands?.()) ?? safe(() => pi?.getCommands?.()) ?? null;
+	if (!Array.isArray(raw)) return [];
+	return raw
+		.map((c: any) => (typeof c === "string" ? { name: c } : c))
+		.filter((c: any) => c && typeof c.name === "string" && c.name.length > 0);
+}
+
+// Normalize a query or command name for matching: drop leading `/` and `skill:`.
+function normName(x: any): string {
+	return String(x).trim().toLowerCase().replace(/^\//, "").replace(/^skill:/, "");
+}
+
+// Coerce whatever the command handler hands us for args into a plain string.
+function argString(args: any): string {
+	if (typeof args === "string") return args.trim();
+	if (Array.isArray(args)) return args.join(" ").trim();
+	if (args && typeof args === "object") {
+		for (const k of ["args", "input", "text", "value", "argument"]) {
+			const v = args[k];
+			if (typeof v === "string") return v.trim();
+			if (Array.isArray(v)) return v.join(" ").trim();
+		}
+	}
+	return "";
+}
+
 function buildHelp(pi: any, ctx: any): string {
+	const p = painter(ctx);
 	const skills = scanSkills();
 	const agents = scanAgents();
 
@@ -195,12 +288,23 @@ function buildHelp(pi: any, ctx: any): string {
 		(s) => ![...byNameKey(s)].some((k) => REFERENCE.has(k)),
 	);
 
+	// A row: accent bullet, then the NAME at default (readable) foreground, then a
+	// muted one-line description. Padding is done on the raw name so the ANSI codes
+	// never throw the alignment off.
+	const row = (name: string, description: string, pad: number) =>
+		"    " +
+		p.accent("·") +
+		p.text(" " + name.padEnd(pad)) +
+		"  " +
+		p.desc(short(description));
+
 	// Assign each visible skill to a group; anything unmatched -> OTHER.
 	const assigned = new Set<SkillInfo>();
 	const L: string[] = [];
-	L.push("pi-stack — what's loaded right now");
+	L.push(p.head("pi-stack — what's loaded right now"));
+	L.push(p.desc("Tip: /help <name> for the detail on one skill, agent, or command."));
 	L.push("");
-	L.push("SKILLS  (run /skill:<name>, or just describe the task)");
+	L.push(p.head("SKILLS") + p.desc("  (run /skill:<name>, or just describe the task)"));
 
 	for (const group of GROUPS) {
 		const rows: SkillInfo[] = [];
@@ -215,73 +319,166 @@ function buildHelp(pi: any, ctx: any): string {
 		}
 		if (!rows.length) continue;
 		L.push("");
-		L.push("  " + group.title);
-		for (const s of rows) L.push(`    ${s.name.padEnd(16)} ${short(s.description)}`);
+		L.push("  " + p.head(group.title));
+		for (const s of rows) L.push(row(s.name, s.description, 16));
 	}
 
 	const other = visible.filter((s) => !assigned.has(s));
 	if (other.length) {
 		L.push("");
-		L.push("  OTHER");
-		for (const s of other) L.push(`    ${s.name.padEnd(16)} ${short(s.description)}`);
+		L.push("  " + p.head("OTHER"));
+		for (const s of other) L.push(row(s.name, s.description, 16));
 	}
 
 	if (agents.length) {
 		L.push("");
-		L.push("AGENTS  (delegate via the `subagent` tool, agent=<name>)");
-		for (const a of agents) L.push(`    ${a.name.padEnd(18)} ${short(a.description, 84)}`);
+		L.push(
+			p.head("AGENTS") + p.desc("  (delegate via the `subagent` tool, agent=<name>)"),
+		);
+		for (const a of agents) L.push(row(a.name, a.description, 18));
 	}
 
 	// Commands: prefer the live list, fall back to the known set; union both.
 	const live = liveCommands(pi, ctx);
 	const cmds = Array.from(new Set([...live, ...KNOWN_COMMANDS])).sort();
 	L.push("");
-	L.push("COMMANDS");
-	L.push("    " + cmds.join("  "));
-	L.push("    Alt+P — cycle model (or /model to pick)");
+	L.push(p.head("COMMANDS"));
+	L.push("    " + cmds.map((c) => p.accent(c)).join(p.desc("  ")));
+	L.push("    " + p.accent("Alt+P") + p.desc(" cycle model (or /model to pick)"));
 
 	if (reference.length) {
 		L.push("");
-		L.push(`(${reference.length} reference rules auto-load in the background)`);
+		L.push(
+			p.desc(
+				`(${reference.length} reference rules auto-load in the background — /help <name> for any)`,
+			),
+		);
 	}
 
 	L.push("");
-	L.push("New? Run /getting-started for the tour.");
+	L.push(p.desc("New? Run ") + p.accent("/getting-started") + p.desc(" for the tour."));
 	return L.join("\n");
 }
 
-function gettingStarted(): string {
+// `/help <name>` — full detail for one loaded skill, agent, or command. Reads the
+// LOADED set live (frontmatter scan + pi.getCommands()) just like the bare map.
+function buildDetail(pi: any, ctx: any, query: string): string {
+	const p = painter(ctx);
+	const path = require("node:path");
+	const q = normName(query);
+	if (!q) return buildHelp(pi, ctx);
+	const label = (k: string) => p.accent("  " + k.padEnd(9));
+
+	// Skill?
+	const skill = scanSkills().find((s) => normName(s.dir) === q || normName(s.name) === q);
+	if (skill) {
+		const file = path.join(agentDir(), "skills", skill.dir, "SKILL.md");
+		const L: string[] = [];
+		L.push(p.head(skill.name) + p.desc("   skill"));
+		L.push(label("Group") + p.text(groupTitleFor(skill)));
+		L.push(
+			label("Invoke") +
+				p.accent(`/skill:${skill.dir}`) +
+				p.desc("   (or just describe the task and let it auto-load)"),
+		);
+		L.push(label("File") + p.text(file));
+		if (skill.description) {
+			L.push("");
+			for (const ln of wrapText(skill.description)) L.push(p.desc(ln));
+		}
+		return L.join("\n");
+	}
+
+	// Agent?
+	const agent = scanAgents().find((a) => normName(a.name) === q);
+	if (agent) {
+		const file = path.join(agentDir(), "agents", agent.name + ".md");
+		const L: string[] = [];
+		L.push(p.head(agent.name) + p.desc("   agent"));
+		L.push(label("Delegate") + p.text(`subagent tool, agent=${agent.name}`));
+		L.push(label("File") + p.text(file));
+		if (agent.description) {
+			L.push("");
+			for (const ln of wrapText(agent.description)) L.push(p.desc(ln));
+		}
+		return L.join("\n");
+	}
+
+	// Command?
+	const infos = liveCommandInfos(pi, ctx);
+	const known = KNOWN_COMMANDS.map((c) => ({ name: c.replace(/^\//, "") }) as any);
+	const cmd = [...infos, ...known].find((c) => normName(c.name) === q);
+	if (cmd) {
+		const display = "/" + normName(cmd.name);
+		const L: string[] = [];
+		L.push(p.head(display) + p.desc("   command"));
+		if (cmd.description) {
+			L.push("");
+			for (const ln of wrapText(cmd.description)) L.push(p.desc(ln));
+		}
+		const cpath = cmd?.sourceInfo?.path;
+		if (cpath) L.push(label("File") + p.text(cpath));
+		L.push("");
+		L.push(p.desc("Type ") + p.accent(display) + p.desc(" at the prompt to run it."));
+		return L.join("\n");
+	}
+
+	// Not found.
+	return [
+		p.warn(`No skill, agent, or command matches "${query.trim()}".`),
+		p.desc("Run ") + p.accent("/help") + p.desc(" for the full map of what's loaded."),
+	].join("\n");
+}
+
+function gettingStarted(ctx: any): string {
 	// Mark's voice: direct, concrete, no em-dashes, no slop. Skill names match
 	// what's loaded (build/plan/debug/ship/healthcheck/onboard all present).
+	// Colored so it doesn't render at the faint `dim` wrapper (see painter note).
+	const p = painter(ctx);
+	const t = p.text; // body prose at default (readable) foreground
+	const c = p.accent; // commands
 	return [
-		"Welcome to pi-stack. This is your multi-model coding harness — it",
-		"remembers what you tell it, delegates to subagents, and ships real PRs.",
+		p.head("Welcome to pi-stack."),
+		t("Your multi-model coding harness: it remembers what you tell it,"),
+		t("delegates to subagents, and ships real PRs."),
 		"",
-		"Five things to try:",
+		p.head("Five things to try:"),
 		"",
-		"  1. /skill:onboard",
-		"     Seed who you are and what you're working on into memory. Do this",
-		"     first — everything else gets sharper once it knows you.",
+		t("  1. ") + c("/skill:onboard"),
+		t("     Seed who you are and what you're working on into memory. Do this"),
+		t("     first, everything else gets sharper once it knows you."),
 		"",
-		"  2. Build something.",
-		"     Describe the task in plain words, then /skill:build. For anything",
-		"     bigger than a quick edit, /skill:plan first to shape it.",
+		t("  2. Build something."),
+		t("     Describe the task in plain words, then ") + c("/skill:build") + t(". For"),
+		t("     anything bigger than a quick edit, ") + c("/skill:plan") + t(" first."),
 		"",
-		"  3. /skill:debug",
-		"     Hand it a failing test or a bug. It reproduces, root-causes, and",
-		"     fixes — no guessing, no symptom patches.",
+		t("  3. ") + c("/skill:debug"),
+		t("     Hand it a failing test or a bug. It reproduces, root-causes, and"),
+		t("     fixes, no guessing, no symptom patches."),
 		"",
-		"  4. /skill:ship",
-		"     Runs the tests, gets a cross-vendor review from a different model",
-		"     than wrote the code, then opens a PR. Stops there — never auto-merges.",
+		t("  4. ") + c("/skill:ship"),
+		t("     Runs the tests, gets a cross-vendor review from a different model"),
+		t("     than wrote the code, then opens a PR. Never auto-merges."),
 		"",
-		"  5. /skill:healthcheck",
-		"     Confirms the harness and your code health are both green.",
+		t("  5. ") + c("/skill:healthcheck"),
+		t("     Confirms the harness and your code health are both green."),
 		"",
-		"A few things worth knowing:",
-		"  • Memory persists across sessions. /remember to add a fact yourself.",
-		"  • /model or Alt+P switches models mid-conversation.",
-		"  • /help is the full grouped map of everything loaded.",
+		p.head("A few things worth knowing:"),
+		t("  • Memory persists across sessions. ") + c("/remember") + t(" adds a fact."),
+		t("  • ") + c("/model") + t(" or ") + c("Alt+P") + t(" switches models mid-conversation."),
+		t("  • ") + c("/help") + t(" is the full map; ") + c("/help <name>") + t(" drills into one item."),
+		"",
+		// The user complained the old tour "just dumps me and asks questions".
+		// End on ONE unambiguous do-this-now action, not open questions.
+		p.head("Start here, type this now:"),
+		"",
+		"    " + c("/skill:onboard"),
+		"",
+		t("Then describe your first task and run ") +
+			c("/skill:build") +
+			t(". Stuck? Run ") +
+			c("pi-stack doctor") +
+			t("."),
 	].join("\n");
 }
 
@@ -322,9 +519,12 @@ export default function (pi: any) {
 	safe(() =>
 		pi.registerCommand("help", {
 			description:
-				"Live map of the harness: loaded skills (grouped), agents, and commands",
-			handler: async (_args: any, ctx: any) =>
-				safe(() => ctx?.ui?.notify?.(buildHelp(pi, ctx), "info")),
+				"Live map of the harness (skills/agents/commands); /help <name> for detail on one",
+			handler: async (args: any, ctx: any) => {
+				const query = argString(args);
+				const text = query ? buildDetail(pi, ctx, query) : buildHelp(pi, ctx);
+				return safe(() => ctx?.ui?.notify?.(text, "info"));
+			},
 		}),
 	);
 
@@ -332,7 +532,7 @@ export default function (pi: any) {
 		pi.registerCommand("getting-started", {
 			description: "A warm first-run tour: five things to try and how memory works",
 			handler: async (_args: any, ctx: any) =>
-				safe(() => ctx?.ui?.notify?.(gettingStarted(), "info")),
+				safe(() => ctx?.ui?.notify?.(gettingStarted(ctx), "info")),
 		}),
 	);
 
