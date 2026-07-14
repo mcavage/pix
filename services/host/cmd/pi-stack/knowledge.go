@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -181,8 +183,13 @@ func runKnowledgeUse(argv []string) {
 // launcher's `run` wiring reads this pointer and scopes recall to
 // {global, this-project}.
 func knowledgeUseProject(ref, dir string, out io.Writer) error {
-	resolved, err := resolveBundleRef(ref, knowledgeCacheDir(), out)
-	if err != nil {
+	// Resolve to clone/pull + validate the bundle, but the resolved cache path is
+	// HOST-LOCAL (e.g. ~/.config/pi-stack/knowledge-cache/...) and MUST NOT be
+	// written into the committed pointer: a teammate who clones the repo would get
+	// a dead path and silently empty recall. Write the PORTABLE ref instead — the
+	// original git URL, or a repo-relative (else absolute) local path. run.go's
+	// projectBundle re-resolves whichever form back to a canonical id at read time.
+	if _, err := resolveBundleRef(ref, knowledgeCacheDir(), out); err != nil {
 		return err
 	}
 	if strings.TrimSpace(dir) == "" {
@@ -192,14 +199,41 @@ func knowledgeUseProject(ref, dir string, out io.Writer) error {
 	if err := os.MkdirAll(pointerDir, 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", pointerDir, err)
 	}
+	portable := portablePointerRef(ref, dir)
 	pointer := filepath.Join(pointerDir, "knowledge")
-	if err := os.WriteFile(pointer, []byte(resolved+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(pointer, []byte(portable+"\n"), 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", pointer, err)
 	}
-	fmt.Fprintf(out, "Wrote project knowledge pointer %s -> %s\n", pointer, resolved)
+	fmt.Fprintf(out, "Wrote project knowledge pointer %s -> %s\n", pointer, portable)
 	fmt.Fprintln(out, "Commit .pi-stack/knowledge to share this project's bundle; recall picks it up on the next `pi-stack run`.")
 	fmt.Fprintln(out, "Gitignore .pi-stack/knowledge.scope (it is launcher-generated per run).")
 	return nil
+}
+
+// portablePointerRef derives the PORTABLE reference to write into the committed
+// .pi-stack/knowledge pointer. A git URL is written verbatim (it travels with
+// the repo). A local path is written repo-relative when it lives under dir (so a
+// clone on another machine resolves it against the workspace), else as an
+// absolute local path. run.go's projectBundle re-resolves whichever form back to
+// a canonical bundle id.
+func portablePointerRef(ref, dir string) string {
+	ref = strings.TrimSpace(ref)
+	if isGitURL(ref) {
+		return ref
+	}
+	absBundle, err := filepath.Abs(ref)
+	if err != nil {
+		return ref
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return absBundle
+	}
+	rel, err := filepath.Rel(absDir, absBundle)
+	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+		return rel
+	}
+	return absBundle
 }
 
 // knowledgeUse points the global KB at an existing bundle: a local path is used
@@ -222,9 +256,10 @@ func knowledgeUse(cfg *config.Config, ref string, out io.Writer) error {
 }
 
 // resolveBundleRef turns a bundle reference into an absolute local path. A local
-// path resolves to its absolute form; a git URL is cloned into cacheDir/<repo>
-// (or pulled if already present). Cloning requires git — its absence is a clear
-// error on this path (unlike init, where git is optional).
+// path resolves to its absolute form; a git URL is cloned into a
+// collision-free cache dir (cacheDirForURL) or pulled if already present.
+// Cloning requires git — its absence is a clear error on this path (unlike init,
+// where git is optional).
 func resolveBundleRef(ref, cacheDir string, out io.Writer) (string, error) {
 	ref = strings.TrimSpace(ref)
 	if !isGitURL(ref) {
@@ -237,8 +272,13 @@ func resolveBundleRef(ref, cacheDir string, out io.Writer) (string, error) {
 	if _, err := exec.LookPath("git"); err != nil {
 		return "", fmt.Errorf("git not found on PATH — needed to clone %s; install git", ref)
 	}
-	dest := filepath.Join(cacheDir, repoSlug(ref))
+	dest := cacheDirForURL(cacheDir, ref)
 	if isGitRepo(dest) {
+		// Guard against ever pulling the WRONG repo into a cache dir: verify the
+		// cached checkout's origin matches the requested URL before pulling.
+		if got, err := gitRemoteURL(dest); err == nil && got != "" && !sameGitURL(got, ref) {
+			return "", fmt.Errorf("cache dir %s has origin %s, not %s — refusing to pull the wrong repo (remove it to re-clone)", dest, got, ref)
+		}
 		fmt.Fprintf(out, "Updating cached bundle %s\n", dest)
 		if err := gitPull(dest); err != nil {
 			return "", fmt.Errorf("pulling %s: %w", dest, err)
@@ -366,6 +406,77 @@ func isGitURL(ref string) bool {
 	return false
 }
 
+// cacheDirForURL derives a collision-free cache directory for a git URL under
+// cacheDir. Two URLs that share a final repo name (github.com/acme/kb.git vs
+// github.com/other/kb.git) MUST map to DISTINCT dirs, so the name embeds an
+// org-repo readable prefix PLUS a short hash of the FULL url.
+func cacheDirForURL(cacheDir, url string) string {
+	return filepath.Join(cacheDir, cacheSlug(url))
+}
+
+// cacheSlug is the pure deriver behind cacheDirForURL: "<org>-<repo>-<shorthash>"
+// where the hash of the full URL guarantees uniqueness even when org/repo
+// collide after sanitizing.
+func cacheSlug(url string) string {
+	u := strings.TrimSpace(url)
+	sum := sha256.Sum256([]byte(u))
+	short := hex.EncodeToString(sum[:])[:8]
+	return orgRepoSlug(u) + "-" + short
+}
+
+// orgRepoSlug returns a readable "<org>-<repo>" slug from a git URL's last two
+// path segments (falling back to just the repo, or "bundle"). Purely cosmetic —
+// cacheSlug appends a hash of the full URL to guarantee uniqueness.
+func orgRepoSlug(url string) string {
+	s := strings.TrimSpace(url)
+	s = strings.TrimSuffix(s, "/")
+	s = strings.TrimSuffix(s, ".git")
+	s = strings.ReplaceAll(s, ":", "/") // normalize scp-like git@host:org/repo
+	var segs []string
+	for _, p := range strings.Split(s, "/") {
+		if p != "" {
+			segs = append(segs, p)
+		}
+	}
+	if len(segs) == 0 {
+		return "bundle"
+	}
+	if len(segs) >= 2 {
+		return sanitizeSlug(segs[len(segs)-2]) + "-" + sanitizeSlug(segs[len(segs)-1])
+	}
+	return sanitizeSlug(segs[len(segs)-1])
+}
+
+// sanitizeSlug keeps only filesystem-safe characters for a cache dir component.
+func sanitizeSlug(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "bundle"
+	}
+	return out
+}
+
+// sameGitURL reports whether two git URLs refer to the same repo, ignoring a
+// trailing slash and a ".git" suffix.
+func sameGitURL(a, b string) bool {
+	norm := func(s string) string {
+		s = strings.TrimSpace(s)
+		s = strings.TrimSuffix(s, "/")
+		s = strings.TrimSuffix(s, ".git")
+		return s
+	}
+	return norm(a) == norm(b)
+}
+
 // repoSlug derives a filesystem-safe cache dir name from a git URL: the last
 // path segment with any trailing ".git" and separators stripped.
 func repoSlug(url string) string {
@@ -404,6 +515,15 @@ func gitClone(url, dest string) error {
 
 func gitPull(dir string) error {
 	return exec.Command("git", "-C", dir, "pull", "-q", "--ff-only").Run()
+}
+
+// gitRemoteURL returns the origin remote URL of the git checkout at dir.
+func gitRemoteURL(dir string) (string, error) {
+	out, err := exec.Command("git", "-C", dir, "remote", "get-url", "origin").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // scaffoldBundle writes a spec-correct OKF skeleton into dir. It writes each

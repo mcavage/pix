@@ -120,6 +120,29 @@ func TestWireKnowledgeScope_NoBundles(t *testing.T) {
 	}
 }
 
+// TestWireKnowledgeScope_RemovesStaleScope: a previously-written scope file is
+// DELETED when the resolved id set is now empty (F3), so recall stops
+// forwarding stale bundle ids and falls back to all/none.
+func TestWireKnowledgeScope_RemovesStaleScope(t *testing.T) {
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	ws := t.TempDir()
+	// Simulate a stale scope file left by an earlier run.
+	if err := writeKnowledgeScope(ws, []string{"/stale/bundle"}); err != nil {
+		t.Fatal(err)
+	}
+	scope := filepath.Join(ws, ".pi-stack", "knowledge.scope")
+	if _, err := os.Stat(scope); err != nil {
+		t.Fatalf("precondition: stale scope file missing: %v", err)
+	}
+
+	// No global bundles + no pointer -> empty id set -> the stale file is removed.
+	wireKnowledgeScope(&config.Config{}, ws, knowledgeRPC{up: func() bool { return false }})
+
+	if _, err := os.Stat(scope); !os.IsNotExist(err) {
+		t.Errorf("expected stale scope file removed, stat err = %v", err)
+	}
+}
+
 // TestWireKnowledgeScope_LazyReindexGating: reindex fires only when the daemon is
 // up AND the project bundle is absent from health.bundles.
 func TestWireKnowledgeScope_LazyReindexGating(t *testing.T) {

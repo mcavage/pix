@@ -165,6 +165,65 @@ func TestIsGitURL(t *testing.T) {
 	}
 }
 
+// TestPortablePointerRef: the committed .pi-stack/knowledge pointer holds a
+// PORTABLE ref, never a resolved host-local cache path (F1). A git URL is
+// written verbatim; a local path under the repo is written repo-relative; a
+// local path outside the repo falls back to absolute.
+func TestPortablePointerRef(t *testing.T) {
+	// Git URL: verbatim, never a cache path.
+	url := "https://github.com/acme/kb.git"
+	if got := portablePointerRef(url, t.TempDir()); got != url {
+		t.Errorf("portablePointerRef(%q) = %q, want the URL verbatim", url, got)
+	}
+
+	// Local path UNDER the repo dir -> repo-relative.
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, "docs", "kb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	under := filepath.Join(repo, "docs", "kb")
+	if got := portablePointerRef(under, repo); got != filepath.Join("docs", "kb") {
+		t.Errorf("portablePointerRef(under-repo) = %q, want %q", got, filepath.Join("docs", "kb"))
+	}
+
+	// Local path OUTSIDE the repo -> absolute.
+	outside := t.TempDir()
+	wantAbs, _ := filepath.Abs(outside)
+	if got := portablePointerRef(outside, repo); got != wantAbs {
+		t.Errorf("portablePointerRef(outside-repo) = %q, want %q", got, wantAbs)
+	}
+}
+
+// TestCacheDirForURL_DisambiguatesSameRepoName: two DIFFERENT git URLs that
+// share a final repo name must map to DISTINCT cache dirs (F7), and the same
+// URL must map stably to the same dir. Pure func, no clone.
+func TestCacheDirForURL_DisambiguatesSameRepoName(t *testing.T) {
+	cache := "/cache"
+	a := cacheDirForURL(cache, "https://github.com/acme/kb.git")
+	b := cacheDirForURL(cache, "https://github.com/other/kb.git")
+	if a == b {
+		t.Errorf("same-name repos collided: %q == %q", a, b)
+	}
+	// Both live under the cache dir.
+	if filepath.Dir(a) != cache || filepath.Dir(b) != cache {
+		t.Errorf("cache dirs not under %q: %q, %q", cache, a, b)
+	}
+	// Stable: same URL -> same dir.
+	if again := cacheDirForURL(cache, "https://github.com/acme/kb.git"); again != a {
+		t.Errorf("cacheDirForURL not stable: %q != %q", again, a)
+	}
+}
+
+// TestSameGitURL: normalized equality ignores trailing slash and .git suffix.
+func TestSameGitURL(t *testing.T) {
+	if !sameGitURL("https://h/o/kb.git", "https://h/o/kb") {
+		t.Error("sameGitURL should ignore .git suffix")
+	}
+	if sameGitURL("https://h/acme/kb", "https://h/other/kb") {
+		t.Error("sameGitURL must distinguish different orgs")
+	}
+}
+
 // TestRepoSlug: cache dir name derivation from a git URL.
 func TestRepoSlug(t *testing.T) {
 	cases := map[string]string{
