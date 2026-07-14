@@ -1,99 +1,124 @@
 ---
 name: onboard
-description: Guided onboarding that seeds identity and context into memory, probes connected data sources, and gets the agent doing useful work. Use for "set me up", "first time setup", "onboard me", or after a fresh install.
+description: "Fast onboarding: probe the environment, ask one batched question, confirm before writing, then seed identity and context to memory. Use for 'set me up', 'onboard me', or after a fresh install."
 ---
 # onboard
 
-Walk a new user from "system starts" to "system is useful." Identity and
-context live in the memory DB, not flat files. Run this after the install
-completes and environment checks pass.
+Seed identity and context into memory fast. Three beats: probe the environment
+deterministically, ask one consolidated question for the rest, show exactly what
+you will write, and only write on confirmation. No 6-step ping-pong.
 
-## Step 1: Verify the environment
+## Step 1: Probe the environment
 
-Check that the model providers are reachable before asking the user anything.
-Provider keys are injected by the sbx proxy, so probe the models rather than
-looking for env vars (they aren't present inside the VM).
+Run this in a single bash block before asking the user anything:
 
 ```bash
-pi -p 'reply with: ok' 2>&1 | tail -1   # if this answers, the active model + key work
+echo "name:     $(git config user.name 2>/dev/null)"
+echo "email:    $(git config user.email 2>/dev/null)"
+echo "gh_login: $(gh api user --jq '.login' 2>/dev/null)"
+echo "gh_name:  $(gh api user --jq '.name' 2>/dev/null)"
+echo "project:  $(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
+echo "date:     $(date '+%Y-%m-%d')"
 ```
 
-If that errors with "No API key", the user needs to set provider secrets on the
-host (`sbx secret set -g anthropic`, etc. — see the README). Run `healthcheck`
-for a full infrastructure check if multiple things look broken.
+Note which fields resolved confidently and which came back empty or conflicting.
+Name and email that agree across git and gh are confident; skip asking about them.
 
-## Step 2: Seed identity into memory
+## Step 2: One batched ask
 
-Ask these questions one at a time. Store each answer as a separate memory
-entry tagged `soul` and `bootstrap`.
+Send ONE message covering only what the environment could not answer and what
+genuinely changes how the agent behaves. Skip any question the probe already
+answered. Keep the prompt short:
 
-1. "What's your name and title?"
-2. "What's your role? What do you own?"
-3. "How do you like information presented? (bullets vs prose, level of detail)"
-4. "What annoys you about AI assistants?"
-5. "Preferred tone? (formal/casual, direct/diplomatic)"
-6. "Two or three core values you want me to operate by?"
+**Ask only these things (in one message):**
 
-For each answer, write a memory entry with the full text and tag it
-`["soul", "bootstrap"]`. Confirm by saying: "Identity stored. Future
-sessions will recall this automatically."
+- **Name** (only if not resolved above): how the agent addresses you and signs
+  off on messages you review.
+- **Communication style** (bullets or prose, brief or thorough): shapes the
+  format of every response and deliverable.
+- **AI pet peeves** (what drives you crazy about AI assistants): the agent
+  avoids those patterns starting now.
+- **Preferred tone** (casual vs. formal, blunt vs. diplomatic): changes every
+  output you will ever see.
+- **2-3 values to operate by**: guides recommendations and tradeoff calls across
+  all future sessions.
 
-## Step 3: Probe which capabilities resolve
+Do NOT ask for title, role, or org chart. The agent infers context from the work
+itself, not from a job description.
 
-This step names **capabilities**, not vendors. For each one below, resolve it
-through `capability-routing` (which reads `capabilities.json` and either pulls
-from the wired provider(s) or reports `none`). For each:
+## Step 3: Show the full picture; ask to confirm
 
-- Resolve the capability and call the cheapest read-only tool (a list, a count,
-  a status).
-- Report what came back.
-- If it resolves to `none` or the call fails, state plainly "no [capability]
-  wired" and note the fallback.
+Before writing anything to memory, display a plain summary:
 
-**Fallbacks when a capability resolves to `none`:**
+```
+Here's what I'll remember about you:
 
-| Capability | Fallback |
-|--------|----------|
-| github | Read repos/PRs directly; `gh` is almost always available |
-| gworkspace | Ask the user for upcoming deadlines; store in memory |
+  Name:   [value]
+  Email:  [value]  — used for gh operations and message sign-offs
+  Style:  [their answer]
+  Peeves: [their answer]
+  Tone:   [their answer]
+  Values: [their answer]
+
+Anything wrong or missing? I'll make corrections before writing.
+```
+
+Wait for the user's response. Apply any corrections and, if anything changed,
+show the updated list once before proceeding. Do not write until the user says
+to go ahead.
+
+## Step 4: Write to memory
+
+Write each fact as a separate `/remember` entry tagged `["soul", "bootstrap"]`.
+Confirm once: "Identity stored. Every future session will recall this
+automatically."
+
+## Step 5: Probe capabilities
+
+Resolve each capability through `capability-routing` (which reads
+`capabilities.json`). For each, call the cheapest read-only tool, report what
+came back, and state plainly "no [capability] wired" if it resolves to `none`.
+
+| Capability | Fallback when `none` |
+|---|---|
+| github | `gh` CLI; read repos and PRs directly |
+| gworkspace | Ask for upcoming deadlines; store in memory |
 | chat | Skip; no fallback |
-| docs | Skip; fall back to web search |
+| docs | Fall back to web search |
 | meeting-notes | Ask the user to paste recent notes; store in memory |
 | calls | Ask the user to paste recent call summaries; store in memory |
 
-When you probe **calls**, fan out across every wired call source and merge.
-Never pretend a capability is wired when it is not.
+When probing **calls**, fan out across every wired source and merge results.
+Never report a capability as wired if the probe failed.
 
-## Step 4: Seed initial context
+## Step 6: Seed initial context
 
-**With capabilities wired:** Run `refresh context` (or the equivalent
-sweep skill in your overlay). It pulls from the wired providers and writes
-findings to memory with appropriate tags. Takes 15-30 minutes.
+**With capabilities wired:** Run `refresh context` (or the equivalent sweep
+skill in the overlay). It pulls live data and writes findings to memory with
+appropriate tags.
 
-**With everything `none` (degraded path):** Interview the user:
+**With everything `none` (degraded path):** Ask in one message:
 
-- "Who are your direct reports?" (store tagged `people`)
-- "Top three to five current priorities?" (store tagged `priorities`)
-- "Key external accounts or customers you own?" (store tagged `accounts`)
-- "Upcoming meetings or deadlines you care about?" (store tagged `calendar`)
+- Top 3-5 current priorities (tag: `priorities`)
+- Key external accounts or customers (tag: `accounts`)
+- Upcoming meetings or deadlines (tag: `calendar`)
 
-Tell the user: "You can re-run this later with live data sources connected
-to fill gaps automatically."
+Tell the user: "You can re-run this later once live data sources are connected."
 
-## Step 5: Run a first useful task
+## Step 7: Run a first useful task
 
-Pick the most natural task given what the user said. Good options:
+Pick the most natural task from what the user said and run it. Good defaults:
 
-- `standup` if they mentioned recent meetings or inbox overload.
-- `brainstorm` or `build` if they mentioned a project they are driving.
-- `competitive` or `one-pager` if they mentioned a pitch or decision.
+- `standup` if they mentioned meetings or inbox overload
+- `brainstorm` or `build` if they mentioned an active project
+- `one-pager` or `challenge` if they mentioned a pending decision
 
-Running something real confirms the system is working and gives the user
-immediate value.
+Running something real confirms the system works and gives immediate value.
 
-## Step 6: Orient the user
+## Step 8: Orient the user
 
-Give a brief overview of the most useful daily patterns:
+Give a short overview of daily patterns. Use bold-label lines, not a table
+(terminal may not render tables).
 
 **Daily:** `standup`, `prep for my meeting with [person]`, `debrief [meeting]`
 
@@ -101,7 +126,7 @@ Give a brief overview of the most useful daily patterns:
 `draft-email`, `one-pager`, `challenge`
 
 **Maintenance:** `healthcheck` when something feels broken, `refresh context`
-to re-sync from the wired capabilities.
+to re-sync from wired capabilities.
 
 Then ask: "Want to dive into something specific, run a full context refresh,
-or just explore on your own?"
+or explore on your own?"
