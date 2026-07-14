@@ -35,6 +35,9 @@ type shellEnv struct {
 	statFile func(path string) bool            // does a regular file exist at path?
 	readFile func(path string) (string, error) // read a file's contents
 	homeDir  func() string                     // the user's home directory ($HOME)
+	// writeFile writes data to path (creating parent dirs). Nil in tests so
+	// seeding stays hermetic; defaultShellEnv wires the real os-backed writer.
+	writeFile func(path string, data []byte, perm os.FileMode) error
 }
 
 // defaultShellEnv returns a shellEnv backed by the real OS.
@@ -65,6 +68,12 @@ func defaultShellEnv() shellEnv {
 		homeDir: func() string {
 			h, _ := os.UserHomeDir()
 			return h
+		},
+		writeFile: func(path string, data []byte, perm os.FileMode) error {
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				return err
+			}
+			return os.WriteFile(path, data, perm)
 		},
 	}
 }
@@ -450,7 +459,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 		} else {
 			g.checks = append(g.checks, check{label: "headless spawn", state: stateTODO,
 				detail: "the registered command returns 0 tools — keyring not headless",
-				todo:   "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to config/op-refs.env"})
+				todo:   "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to " + defaultOpRefsPath(env)})
 		}
 		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
@@ -503,8 +512,8 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 		g.checks = append(g.checks,
 			check{label: "account", state: stateInfo, detail: acct + " set (unconfirmed vs registration)"},
 			check{label: "op-refs", state: stateTODO,
-				detail: "cannot verify (config/op-refs.env not found)",
-				todo:   "create config/op-refs.env (cp config/op-refs.env.example config/op-refs.env) so doctor can probe the gateway path"})
+				detail: "cannot verify (op-refs.env not found)",
+				todo:   "create " + defaultOpRefsPath(env) + " (run: pi-stack setup, or pi-stack mcp register) so doctor can probe the gateway path"})
 		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
 		return g
@@ -534,7 +543,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 			check{label: "account", state: stateOK, detail: acct + " authorized (interactive)"},
 			check{label: "headless spawn", state: stateTODO,
 				detail: "auth OK in your shell but the gateway spawn gets 0 tools — keyring not headless",
-				todo:   "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to config/op-refs.env"})
+				todo:   "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to " + defaultOpRefsPath(env)})
 	default:
 		// Best-effort success: this account authenticates headlessly, but we could
 		// NOT confirm it is the one the sbx gateway actually registered — so this

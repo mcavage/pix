@@ -45,6 +45,7 @@ type runOpts struct {
 	Skills        []string // --skills DIR: extra live skill trees
 	Kits          []string // --kit K: escape-hatch kit(s). When present they REPLACE the auto git/local pin (a user override), then config stack applies.
 	MCP           []string // --mcp M: extra MCP servers on top of config.MCP
+	MCPEnabled    bool     // sbx MCP gateway is on (caller sets from os.Getenv("SBX_MCP_URL")!=""). --mcp is only a valid sbx flag when the gateway is enabled, so we omit --mcp entirely when this is false.
 	Name          string   // --name N: sandbox name
 	Model         string   // --model M: active pi model (passed through to pi)
 	Passthrough   []string // args after `--`, handed straight to pi
@@ -116,12 +117,18 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 		args = append(args, "--kit", k)
 	}
 
-	// MCP servers: config first, then --mcp flags.
-	for _, m := range cfg.MCP {
-		args = append(args, "--mcp", m)
-	}
-	for _, m := range o.MCP {
-		args = append(args, "--mcp", m)
+	// MCP servers: config first, then --mcp flags. sbx only accepts --mcp when the
+	// gateway is enabled (SBX_MCP_URL set); passing it otherwise makes sbx bail with
+	// `unknown flag: --mcp`, so we omit --mcp entirely when the gateway is off (the
+	// caller warns on stderr). buildSbxArgs stays pure — it reads o.MCPEnabled, not
+	// the environment.
+	if o.MCPEnabled {
+		for _, m := range cfg.MCP {
+			args = append(args, "--mcp", m)
+		}
+		for _, m := range o.MCP {
+			args = append(args, "--mcp", m)
+		}
 	}
 
 	// The default path forwards NO credential bearer: gog authenticates on the
@@ -162,6 +169,18 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 		args = append(args, piArgs...)
 	}
 	return args
+}
+
+// mcpGatewayOffWarning returns the one-line stderr note printed when MCP servers
+// are configured but the sbx gateway is off (SBX_MCP_URL unset), so `sbx run`
+// wouldn't accept --mcp. Returns "" when there's nothing to warn about. Pure +
+// testable; run.go decides whether to print it.
+func mcpGatewayOffWarning(servers []string) string {
+	if len(servers) == 0 {
+		return ""
+	}
+	return "note: " + strings.Join(servers, "/") + " configured but the sbx MCP gateway is off " +
+		"(SBX_MCP_URL unset) — not attaching them; enable with: export SBX_MCP_URL=https://gateway.docker.com"
 }
 
 // pinnedGitKit returns the launcher's own pinned git kit URL if it appears in

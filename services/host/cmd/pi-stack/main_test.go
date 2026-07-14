@@ -230,7 +230,8 @@ func TestBuildSbxArgs_StackWithoutOverride(t *testing.T) {
 
 func TestBuildSbxArgs_MCPExpansion(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"slack", "notion"}}
-	args := buildSbxArgs(cfg, runOpts{Workspace: ".", MCP: []string{"linear"}}, "0.0.99")
+	// Gateway enabled: --mcp flags are emitted.
+	args := buildSbxArgs(cfg, runOpts{Workspace: ".", MCP: []string{"linear"}, MCPEnabled: true}, "0.0.99")
 
 	if got := countFlag(args, "--mcp"); got != 3 {
 		t.Errorf("expected 3 --mcp flags, got %d in %v", got, args)
@@ -239,6 +240,22 @@ func TestBuildSbxArgs_MCPExpansion(t *testing.T) {
 		if !contains(args, []string{"--mcp", m}) {
 			t.Errorf("--mcp %s missing from %v", m, args)
 		}
+	}
+}
+
+// TestBuildSbxArgs_MCPGatewayOff: when the gateway is OFF (MCPEnabled false), no
+// --mcp flag is emitted even with servers configured — sbx would reject it with
+// `unknown flag: --mcp`, so the sandbox must still launch without them.
+func TestBuildSbxArgs_MCPGatewayOff(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"gog", "slack"}}
+	args := buildSbxArgs(cfg, runOpts{Workspace: ".", MCP: []string{"linear"}, MCPEnabled: false}, "0.0.99")
+	if got := countFlag(args, "--mcp"); got != 0 {
+		t.Errorf("expected 0 --mcp flags when gateway off, got %d in %v", got, args)
+	}
+	// The warning helper reports the configured servers for the stderr note.
+	msg := mcpGatewayOffWarning([]string{"gog", "slack", "linear"})
+	if !strings.Contains(msg, "SBX_MCP_URL unset") || !strings.Contains(msg, "gog/slack/linear") {
+		t.Errorf("expected a gateway-off warning naming servers, got %q", msg)
 	}
 }
 
