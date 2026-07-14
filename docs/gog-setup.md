@@ -35,13 +35,14 @@ EOF
 op run --env-file=config/op-refs.env -- gog --account you@example.com mcp --list-tools
 
 # 5. Enable + register.
-echo 'GOG_ACCOUNT = you@example.com' >> config/local.mk
-echo 'MCP = gog'                     >> config/local.mk   # (add gog to the MCP list)
-make mcp-register                                          # registers the hardened read-only server
+pi-stack config set gog_account you@example.com   # writes to ~/.config/pi-stack/config.toml
+pi-stack config set mcp gog                       # adds gog to the mcp list in config.toml
+pi-stack mcp register                              # registers the hardened read-only server
+# If you use make-based flow instead: set GOG_ACCOUNT and MCP in config/local.mk, then make mcp-register.
 
 # 6. Launch with gog attached, then confirm.
-make run                    # (MCP=gog from config/local.mk attaches it)
-pi-stack doctor             # gog group should be all green
+make run          # attaches gog per MCP in config/local.mk; or: pi-stack run
+pi-stack doctor   # gog group should be all green
 ```
 
 The registered server is locked down by default:

@@ -148,7 +148,7 @@ agentContext: |
   A host memory service recalls relevant facts into your context before every
   turn, and quietly captures durable facts and corrections after. You never call
   it. To see or steer it: /recall, /remember, /forget, /learnings. If recall is
-  empty, the user needs to run `make memory-serve` on the host.
+  empty, the user needs to run `make serve` (or `pi-stack serve`) on the host.
 
   ## Multi-model
   Four providers in the cycle: Claude, GPT, and Gemini (cloud, keys injected by the
