@@ -372,8 +372,16 @@ func knowledgeMethods(store func() (plugin.KnowledgeStore, error)) map[string]fu
 			if err != nil {
 				return nil, err
 			}
+			// bundles is a SET filter. Prefer the `bundles` array; tolerate a
+			// single legacy `bundle` string by wrapping it into a 1-elem set.
+			bundles := strSliceParam(p, "bundles")
+			if len(bundles) == 0 {
+				if single := getStr(p, "bundle"); single != "" {
+					bundles = []string{single}
+				}
+			}
 			r, err := s.Query(plugin.QueryArgs{
-				Query: getStr(p, "query"), Bundle: getStr(p, "bundle"), Limit: clampInt(p["limit"], 0, 0, 1000),
+				Query: getStr(p, "query"), Bundles: bundles, Limit: clampInt(p["limit"], 0, 0, 1000),
 			})
 			if err != nil {
 				return nil, err

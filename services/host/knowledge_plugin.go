@@ -40,7 +40,7 @@ func newKnowledgeStoreAdapter(store *knowledgeStore) *knowledgeStoreAdapter {
 var _ plugin.KnowledgeStore = (*knowledgeStoreAdapter)(nil)
 
 func (a *knowledgeStoreAdapter) Query(req plugin.QueryArgs) (plugin.QueryResult, error) {
-	return plugin.QueryResult{Concepts: a.store.query(req.Query, req.Bundle, req.Limit)}, nil
+	return plugin.QueryResult{Concepts: a.store.query(req.Query, req.Bundles, req.Limit)}, nil
 }
 
 func (a *knowledgeStoreAdapter) Reindex(req plugin.ReindexArgs) (plugin.ReindexResult, error) {

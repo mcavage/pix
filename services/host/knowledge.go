@@ -84,9 +84,14 @@ func (s *knowledgeStore) reindex(bundlePaths []string) (int, []string, error) {
 			return indexed, bundles, err
 		}
 
+		// Canonicalize the bundle path (abs + symlink-free + cleaned) so the
+		// stored `bundle` id is independent of how the path was spelled — a query
+		// filter canonicalizes the same way and always matches (design risk #1).
+		canon := canonicalizeBundle(bp)
+
 		// Drop the old rows for this bundle (concepts + their FTS entries) so the
 		// re-index is idempotent and reflects deletions in the source.
-		rows, qerr := s.db.Query("SELECT rowid FROM concepts WHERE bundle = ?", bp)
+		rows, qerr := s.db.Query("SELECT rowid FROM concepts WHERE bundle = ?", canon)
 		if qerr == nil {
 			var rids []int64
 			for rows.Next() {
@@ -100,7 +105,7 @@ func (s *knowledgeStore) reindex(bundlePaths []string) (int, []string, error) {
 				s.db.Exec("DELETE FROM concepts_fts WHERE rowid = ?", rid)
 			}
 		}
-		s.db.Exec("DELETE FROM concepts WHERE bundle = ?", bp)
+		s.db.Exec("DELETE FROM concepts WHERE bundle = ?", canon)
 
 		for _, c := range b.Concepts() {
 			citationsJSON := marshalStrings(c.Citations)
@@ -120,7 +125,7 @@ func (s *knowledgeStore) reindex(bundlePaths []string) (int, []string, error) {
 			res, ierr := s.db.Exec(`INSERT INTO concepts
 				(id, type, title, description, path, body, citations, tags, bundle, embedding)
 				VALUES (?,?,?,?,?,?,?,?,?,?)`,
-				c.ID, c.Type, c.Title, c.Description, c.Path, c.Body, citationsJSON, tagsJSON, bp, embJSON)
+				c.ID, c.Type, c.Title, c.Description, c.Path, c.Body, citationsJSON, tagsJSON, canon, embJSON)
 			if ierr != nil {
 				return indexed, bundles, ierr
 			}
@@ -133,16 +138,19 @@ func (s *knowledgeStore) reindex(bundlePaths []string) (int, []string, error) {
 			}
 			indexed++
 		}
-		bundles = append(bundles, bp)
+		bundles = append(bundles, canon)
 	}
 	return indexed, bundles, nil
 }
 
 // query runs a hybrid keyword (FTS5) + vector (cosine, when embeddings are
-// present) search and returns ranked, cited concepts. An empty bundle searches
-// all bundles. Scoring mirrors memory.go's recall(): FTS and vector relevances
-// are each normalized to [0,1] and averaged when both are present.
-func (s *knowledgeStore) query(q, bundle string, limit int) []plugin.CitedConcept {
+// present) search and returns ranked, cited concepts. An empty bundles set
+// searches all bundles; a non-empty set scopes the search to those bundles (so
+// recall can restrict to e.g. {global, this-project}). Each filter is
+// canonicalized the same way reindex stores it, so ids match regardless of path
+// spelling (design risk #1). Scoring mirrors memory.go's recall(): FTS and
+// vector relevances are each normalized to [0,1] and averaged when both present.
+func (s *knowledgeStore) query(q string, bundles []string, limit int) []plugin.CitedConcept {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if limit <= 0 {
@@ -195,9 +203,13 @@ func (s *knowledgeStore) query(q, bundle string, limit int) []plugin.CitedConcep
 
 	where := "SELECT rowid, id, type, title, description, path, body, citations, bundle, embedding FROM concepts"
 	args := []any{}
-	if bundle != "" {
-		where += " WHERE bundle = ?"
-		args = append(args, bundle)
+	if len(bundles) > 0 {
+		placeholders := make([]string, len(bundles))
+		for i, b := range bundles {
+			placeholders[i] = "?"
+			args = append(args, canonicalizeBundle(b))
+		}
+		where += " WHERE bundle IN (" + strings.Join(placeholders, ", ") + ")"
 	}
 	rows, err := s.db.Query(where, args...)
 	if err != nil {
@@ -333,6 +345,26 @@ func buildKnowledgeStore() (*knowledgeStore, bool, error) {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+// canonicalizeBundle normalizes a bundle path so its stored id is independent of
+// how the path was spelled — relative vs absolute, through a symlink, or with
+// redundant separators all collapse to one form (design risk #1). It resolves to
+// an absolute, symlink-free, cleaned path; if the path does not exist (so
+// EvalSymlinks fails) it falls back to the cleaned absolute form, keeping a
+// filter for a missing bundle deterministic. An empty path stays empty.
+func canonicalizeBundle(path string) string {
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	if resolved, rerr := filepath.EvalSymlinks(abs); rerr == nil {
+		return resolved
+	}
+	return filepath.Clean(abs)
+}
 
 // embedText is the concept text fed to the embedder: title + description + body.
 func embedText(c *okf.Concept) string {
