@@ -201,7 +201,7 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 		mcp.checks = append(mcp.checks, check{
 			label:  "(none configured)",
 			state:  stateInfo,
-			detail: "add servers to `mcp` in " + config.Path(),
+			detail: "add servers with `pi-stack config set mcp <server>`",
 		})
 	} else {
 		for _, m := range cfg.MCP {
@@ -255,7 +255,7 @@ func serviceCheck(label string, port int, up bool, startCmd string, isEnabled bo
 
 // mcpCheck reports whether an MCP server is registered with sbx.
 func mcpCheck(name, mcpOut string, mcpOK bool) check {
-	cmd := "pi-stack mcp register (or `make mcp-register`)"
+	cmd := "pi-stack mcp register"
 	if !mcpOK {
 		return check{label: name, state: stateTODO, detail: "sbx unavailable here (register on the host)", todo: cmd}
 	}
@@ -491,7 +491,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 		// must NOT report green: say we cannot verify and name the two sources.
 		g.checks = append(g.checks, check{label: "account", state: stateTODO,
 			detail: "cannot verify (GOG_ACCOUNT unset in env/config/local.mk)",
-			todo:   "set gog_account in " + config.Path() + " (or GOG_ACCOUNT in config/local.mk) so doctor probes the right account"})
+			todo:   "pi-stack config set gog_account <you@example.com>"})
 		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
 		return g
@@ -675,7 +675,7 @@ func gogAttachCheck(cfg *config.Config) check {
 		return check{label: "attached", state: stateInfo, detail: "auto-attached on run (--mcp gog)"}
 	}
 	return check{label: "attached", state: stateInfo,
-		detail: `add "gog" to mcp in ` + config.Path() + " to attach it"}
+		detail: "run `pi-stack config set mcp gog` to attach it"}
 }
 
 // render writes the verdict-first report to w.

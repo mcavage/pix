@@ -8,8 +8,10 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -209,6 +211,75 @@ paths = []
 # sha  = ""
 # port = 0
 `
+
+// Save writes the config back to Path() as TOML. It is the write half of the
+// repo-less workflow: the CLI (`pi-stack config set`, `pi-stack setup`) mutates a
+// loaded Config in memory and calls Save() so the user NEVER hand-edits the file.
+// The file is machine-managed (0600, dir 0700); the commented template Seed
+// writes is only a first-touch convenience, so losing comments on a rewrite is
+// acceptable.
+func (c *Config) Save() error {
+	path := Path()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(c); err != nil {
+		return err
+	}
+	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+// SetGogAccount sets the Google Workspace account (trimmed). An empty value
+// clears it.
+func (c *Config) SetGogAccount(account string) { c.GogAccount = strings.TrimSpace(account) }
+
+// AddMCP adds name to the MCP set if absent, returning true when it changed.
+func (c *Config) AddMCP(name string) bool { return addUnique(&c.MCP, name) }
+
+// RemoveMCP removes name from the MCP set, returning true when it changed.
+func (c *Config) RemoveMCP(name string) bool { return removeValue(&c.MCP, name) }
+
+// AddService adds name to the Services set if absent, returning true when it
+// changed.
+func (c *Config) AddService(name string) bool { return addUnique(&c.Services, name) }
+
+// RemoveService removes name from the Services set, returning true when it
+// changed.
+func (c *Config) RemoveService(name string) bool { return removeValue(&c.Services, name) }
+
+// addUnique appends value to *list if it is not already present, returning true
+// when the list changed.
+func addUnique(list *[]string, value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, v := range *list {
+		if v == value {
+			return false
+		}
+	}
+	*list = append(*list, value)
+	return true
+}
+
+// removeValue drops every occurrence of value from *list, returning true when
+// the list changed.
+func removeValue(list *[]string, value string) bool {
+	value = strings.TrimSpace(value)
+	kept := (*list)[:0]
+	changed := false
+	for _, v := range *list {
+		if v == value {
+			changed = true
+			continue
+		}
+		kept = append(kept, v)
+	}
+	*list = kept
+	return changed
+}
 
 // Seed writes a commented default config.toml at path only if absent. It returns
 // false (and a nil error) if the file already existed — it never clobbers.
