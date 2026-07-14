@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"pi-stack/host/config"
 )
@@ -96,6 +102,13 @@ func runRun(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack run: recreating existing sandbox %q (workspace + .pi-sessions persist)\n", o.Name)
 		_ = exec.Command("sbx", "rm", "-f", o.Name).Run()
 	}
+
+	// Knowledge scope: resolve this workspace's bundle set (global config bundles
+	// + the project's .pi-stack/knowledge pointer), lazily reindex the project
+	// bundle when the daemon is up and doesn't know it yet, and write the scope
+	// file the in-VM recall extension reads. Entirely best-effort: it never blocks
+	// or fails the launch (recall just misses a bundle this run).
+	wireKnowledgeScope(cfg, o.Workspace, defaultKnowledgeRPC())
 
 	args := buildSbxArgs(cfg, o, version)
 
@@ -273,6 +286,185 @@ func readLocalImageTag(root string) string {
 func isRepoRoot(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, "pi-kit", "spec.yaml"))
 	return err == nil
+}
+
+// knowledgeRPC is the tiny seam the run wiring uses to talk to the knowledge
+// daemon (:11436). It is injected so tests stay hermetic — no real dial, no real
+// POST. defaultKnowledgeRPC() wires the real HTTP JSON-RPC client.
+type knowledgeRPC struct {
+	up      func() bool               // is the daemon reachable? (short-timeout dial)
+	health  func() ([]string, error)  // health.bundles: the ids already indexed
+	reindex func(bundle string) error // reindex one bundle path (lazy add)
+}
+
+// wireKnowledgeScope resolves the workspace's knowledge scope and writes it out.
+// The scope is the ordered, de-duplicated set of canonical bundle ids: the
+// global bundles from config, then the project bundle declared by
+// <workspace>/.pi-stack/knowledge (if any). All ids are canonicalized the SAME
+// way the store keys its `bundle` column so `WHERE bundle IN (…)` matches.
+//
+//   - Lazy reindex: when the daemon is up and the project bundle is NOT already
+//     in health.bundles, fire one reindex for it. Skipped entirely when the
+//     daemon is down (serve not running) or the bundle is already indexed.
+//   - Scope file: write <workspace>/.pi-stack/knowledge.scope, one canonical id
+//     per line, so the in-VM recall (U6) forwards it as the `bundles` filter.
+//     With no bundles at all, nothing is written (recall = all/none).
+func wireKnowledgeScope(cfg *config.Config, workspace string, rpc knowledgeRPC) {
+	project := projectBundle(workspace) // canonical id, or ""
+
+	var ids []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		c := canonicalizeKnowledgeBundle(p)
+		if c == "" || seen[c] {
+			return
+		}
+		seen[c] = true
+		ids = append(ids, c)
+	}
+	for _, b := range cfg.KnowledgeBundles {
+		add(b)
+	}
+	if project != "" {
+		add(project)
+	}
+
+	// Lazy reindex the project bundle when the daemon is up and doesn't have it.
+	if project != "" && rpc.up != nil && rpc.up() {
+		known := map[string]bool{}
+		if rpc.health != nil {
+			if hb, err := rpc.health(); err == nil {
+				for _, b := range hb {
+					known[b] = true
+				}
+			}
+		}
+		if !known[project] && rpc.reindex != nil {
+			_ = rpc.reindex(project) // best-effort; a cold first turn is acceptable
+		}
+	}
+
+	// No bundles at all → leave the workspace un-scoped (recall queries all/none).
+	if len(ids) == 0 {
+		return
+	}
+	_ = writeKnowledgeScope(workspace, ids)
+}
+
+// projectBundle reads <workspace>/.pi-stack/knowledge and resolves it to a
+// canonical bundle id: a git URL is cloned/pulled into the cache (same resolver
+// as `use`), an absolute path is used as-is, and a relative path is taken
+// relative to the workspace. Returns "" when there is no pointer or it can't be
+// resolved (non-fatal: the workspace just has no project bundle this run).
+func projectBundle(workspace string) string {
+	line := readProjectPointer(workspace)
+	if line == "" {
+		return ""
+	}
+	var local string
+	switch {
+	case isGitURL(line):
+		r, err := resolveBundleRef(line, knowledgeCacheDir(), io.Discard)
+		if err != nil {
+			return ""
+		}
+		local = r
+	case filepath.IsAbs(line):
+		local = line
+	default:
+		local = filepath.Join(workspace, line)
+	}
+	return canonicalizeKnowledgeBundle(local)
+}
+
+// writeKnowledgeScope writes <workspace>/.pi-stack/knowledge.scope: one canonical
+// bundle id per line, trailing newline. This is the launcher-generated,
+// per-run, gitignored file the recall extension reads (the committed pointer is
+// .pi-stack/knowledge).
+func writeKnowledgeScope(workspace string, ids []string) error {
+	dir := filepath.Join(workspace, ".pi-stack")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	content := strings.Join(ids, "\n") + "\n"
+	return os.WriteFile(filepath.Join(dir, "knowledge.scope"), []byte(content), 0o644)
+}
+
+// defaultKnowledgeRPC wires the real, short-timeout HTTP JSON-RPC client for the
+// knowledge daemon on 127.0.0.1:11436.
+func defaultKnowledgeRPC() knowledgeRPC {
+	const port = 11436
+	return knowledgeRPC{
+		up:      func() bool { return dialLocalPort(port) },
+		health:  func() ([]string, error) { return knowledgeHealthBundles(port) },
+		reindex: func(bundle string) error { return knowledgeReindex(port, bundle) },
+	}
+}
+
+// dialLocalPort reports whether something is listening on 127.0.0.1:port within
+// a short timeout (so a down daemon costs the launch almost nothing).
+func dialLocalPort(port int) bool {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// knowledgeRPCCall POSTs a JSON-RPC 2.0 request to the daemon and returns the
+// decoded envelope, mapping a JSON-RPC error object to a Go error. Short
+// timeout: launch must never hang on a slow daemon.
+func knowledgeRPCCall(port int, method string, params map[string]any) (map[string]any, error) {
+	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Post(fmt.Sprintf("http://127.0.0.1:%d/", port), "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var parsed map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+	if e, ok := parsed["error"].(map[string]any); ok {
+		return nil, fmt.Errorf("rpc %s: %v", method, e["message"])
+	}
+	return parsed, nil
+}
+
+// knowledgeHealthBundles returns the bundle ids the daemon reports as indexed.
+func knowledgeHealthBundles(port int) ([]string, error) {
+	r, err := knowledgeRPCCall(port, "health", nil)
+	if err != nil {
+		return nil, err
+	}
+	result, _ := r["result"].(map[string]any)
+	return toStringSlice(result["bundles"]), nil
+}
+
+// knowledgeReindex fires a reindex for a single bundle path (idempotent add).
+func knowledgeReindex(port int, bundle string) error {
+	_, err := knowledgeRPCCall(port, "reindex", map[string]any{"bundle_paths": []string{bundle}})
+	return err
+}
+
+// toStringSlice coerces a decoded JSON array (any of []any / []string) to
+// []string, dropping non-strings.
+func toStringSlice(v any) []string {
+	switch xs := v.(type) {
+	case []string:
+		return xs
+	case []any:
+		out := make([]string, 0, len(xs))
+		for _, x := range xs {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // deriveSandboxName mirrors sbx's default `pi-stack-<workspace-basename>` so the
