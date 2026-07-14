@@ -143,7 +143,7 @@ remembered result or a subagent's "done" report is a violation.
   ],
   "final_evidence": {
     "build":     { "command": "...", "exit": 0, "timestamp": "...", "log": "<path>" },
-    "tests":     { "command": "...", "exit": "<N>", "passed": "<N>", "failed": "<N>", "baseline_red": false, "new_failures": 0, "affected_new_tests_pass": true, "failure_set": "unchanged|reduced", "timestamp": "...", "log": "<path>" },
+    "tests":     { "command": "...", "exit": "<N>", "passed": "<N>", "failed": "<N>", "baseline_red": "<true|false>", "new_failures": "<N>", "affected_new_tests_pass": "<true|false>", "failure_set": "unchanged|reduced|n/a", "timestamp": "...", "log": "<path>" },
     "lint":      { "command": "...", "exit": 0, "timestamp": "...", "log": "<path>" },
     "typecheck": { "command": "...", "exit": 0, "timestamp": "...", "log": "<path>" }
   },
