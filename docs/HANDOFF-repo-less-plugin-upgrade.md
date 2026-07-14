@@ -10,7 +10,7 @@ three UATs (fresh-user flow included) all passed. What remains needs **your
 macOS host** (Docker + `sbx` + your accounts), which the sandbox can't touch.
 
 ## What shipped (summary)
-- **Skill taxonomy**: 35 → 31 verb-named skills (merges: `plan`←autoplan+wf-product,
+- **Skill taxonomy**: 35 → 32 verb-named skills (merges: `plan`←autoplan+wf-product,
   `build`←spec+wf-engineering, `healthcheck`←health+self-audit; renames; dropped
   prototype→a `build` mode; added `enrich`). Both allowlists (`.gitignore` +
   `.dockerignore`) synced.
@@ -53,7 +53,9 @@ Confirm your `sbx` build accepts `#ref` (docs say yes; your local sbx-0.34 has
 quirks):
 ```bash
 sbx run pi-stack --name reftest --kit "git+https://github.com/mcavage/pi-stack.git#ref=main&dir=pi-kit" .
-# boots → tags work. rejects #ref → see the fallback note in cmd/pi-stack/sbxargs.go
+# boots → tags work. If sbx rejects the #ref, the launcher detects the failure
+# and prints an actionable message with --dev / --kit override options
+# (kitResolveFailureMsg in sbxargs.go: live behavior, not a dead pointer).
 sbx rm -f reftest
 ```
 
@@ -63,9 +65,10 @@ it spawns — not as a host service.
 Register it and confirm the gateway actually gets tools (a headless keyring/
 op-refs mismatch is the classic 0-tools trap; `pi-stack doctor` now probes the
 exact gateway spawn and prints which account + op-refs it verifies). Full setup:
-`docs/gog-setup.md`.
+`docs/gog-setup.md`. Note: the sbx Cloud MCP Gateway is not yet publicly
+released — this step requires gateway access.
 ```bash
-make mcp-register        # registers gog (needs GOG_ACCOUNT + config/op-refs.env)
+make mcp-register        # registers gog (needs GOG_ACCOUNT; op-refs.env optional, see docs/gog-setup.md)
 sbx mcp ls               # gog listed
 pi-stack doctor          # gog check: account + op-refs it's verifying, headless spawn OK
 ```

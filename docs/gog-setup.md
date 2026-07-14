@@ -9,8 +9,14 @@ no in-VM wrapper, no bearer forwarding.
 `gog auth` working in your Terminal proves **nothing** about the gateway. The
 gateway spawns `gog mcp` with a bare, non-interactive env. If the keyring
 password isn't in the env it inherits, the server starts and returns **zero tools,
-silently** — the gws-style hours-in-circles trap. So step 3 below is not optional,
-and `pi-stack doctor` probes the real headless path, not just `gog auth doctor`.
+silently** — the gws-style hours-in-circles trap. On macOS with the system
+keychain, `gog` can unlock the stored token without a password and step 3 is
+skipped; on other setups (file keyring, headless CI) step 3 is not optional.
+`pi-stack doctor` probes the real headless path, not just `gog auth doctor`.
+
+> **Note:** the sbx Cloud MCP Gateway (`SBX_MCP_URL`) is not yet publicly
+> released. `gog` runs through it; without gateway access the `gworkspace`
+> capability is unavailable regardless of gog setup.
 
 ## Host quickstart (6 steps, macOS)
 ```bash
@@ -22,17 +28,23 @@ brew install gog                       # or see https://gogcli.sh/install.html
 gog auth add-client ~/Downloads/gog-oauth-client.json
 gog --account you@example.com auth login
 
-# 3. THE STEP EVERYONE SKIPS — headless keyring for the gateway spawn (one file).
-#    Put these in config/op-refs.env (op:// refs resolved by `op run` at spawn):
-cat >> config/op-refs.env <<'EOF'
+# 3. THE STEP EVERYONE SKIPS (file-keyring or headless setups only).
+#    macOS system keychain users can skip this — gog unlocks the stored OAuth
+#    token without a password. If you use a file keyring or need 1Password to
+#    supply the keyring password, create the env-file at the XDG config path:
+mkdir -p ~/.config/pi-stack
+cat >> ~/.config/pi-stack/op-refs.env <<'EOF'
 GOG_ACCOUNT=you@example.com
 GOG_HOME=/Users/you/.config/gog
 GOG_KEYRING_BACKEND=file
 GOG_KEYRING_PASSWORD=op://Private/gog-keyring/password
 EOF
+#    (make-based flow uses config/op-refs.env in the repo instead of this path)
 
 # 4. Prove it the way the gateway will — MUST print a non-empty tool list.
-op run --env-file=config/op-refs.env -- gog --account you@example.com mcp --list-tools
+#    With op-refs: use op run. Without op-refs (system keychain), run directly.
+op run --env-file=~/.config/pi-stack/op-refs.env -- gog --account you@example.com mcp --list-tools
+# or (system keychain, no op):  gog --account you@example.com mcp --list-tools
 
 # 5. Enable + register.
 pi-stack config set gog_account you@example.com   # writes to ~/.config/pi-stack/config.toml
