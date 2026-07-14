@@ -247,6 +247,54 @@ func TestKnowledgeBundleMutators(t *testing.T) {
 	}
 }
 
+// TestKnowledgeBundleCanonicalizationMatchesStore is the F6 guard: config's
+// canonicalizeBundlePath must resolve a symlinked spelling to the SAME id as the
+// real path (abs -> EvalSymlinks -> Clean), so a bundle added via a symlink
+// dedupes against the real path and can be removed by either spelling.
+func TestKnowledgeBundleCanonicalizationMatchesStore(t *testing.T) {
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link-to-bundle")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	// The real path and the symlinked spelling must canonicalize identically.
+	resolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := canonicalizeBundlePath(link); got != resolved {
+		t.Fatalf("canonicalizeBundlePath(symlink) = %q, want %q (real path)", got, resolved)
+	}
+	if got := canonicalizeBundlePath(real); got != resolved {
+		t.Fatalf("canonicalizeBundlePath(real) = %q, want %q", got, resolved)
+	}
+
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Add via the real path, then adding via the symlink must dedupe (same id).
+	if !c.AddKnowledgeBundle(real) {
+		t.Fatal("AddKnowledgeBundle(real): want changed=true")
+	}
+	if c.AddKnowledgeBundle(link) {
+		t.Fatal("AddKnowledgeBundle(symlink): want changed=false (dedupe against real path)")
+	}
+	if len(c.KnowledgeBundles) != 1 || c.KnowledgeBundles[0] != resolved {
+		t.Fatalf("KnowledgeBundles = %v, want [%q]", c.KnowledgeBundles, resolved)
+	}
+	// Remove by the OTHER spelling (symlink) still removes the entry.
+	if !c.RemoveKnowledgeBundle(link) {
+		t.Fatal("RemoveKnowledgeBundle(symlink): want changed=true (remove by either spelling)")
+	}
+	if len(c.KnowledgeBundles) != 0 {
+		t.Fatalf("KnowledgeBundles = %v, want empty after remove", c.KnowledgeBundles)
+	}
+}
+
 func contains(list []string, s string) bool {
 	for _, v := range list {
 		if v == s {

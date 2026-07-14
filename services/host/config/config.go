@@ -264,18 +264,27 @@ func (c *Config) RemoveKnowledgeBundle(path string) bool {
 	return removeValue(&c.KnowledgeBundles, canonicalizeBundlePath(path))
 }
 
-// canonicalizeBundlePath trims and resolves path to an absolute path. If the
-// path is empty or can't be made absolute it returns the trimmed input, letting
-// addUnique/removeValue reject the empty case.
+// canonicalizeBundlePath normalizes a bundle path to the SAME canonical id every
+// other writer produces. It MUST match the knowledge store's canonicalizeBundle
+// (services/host/knowledge.go) and the launcher's canonicalizeKnowledgeBundle
+// (cmd/pi-stack/knowledge.go) byte-for-byte in behavior — otherwise a symlink
+// spelling vs the real path yields two config entries and remove-by-real-path
+// can't drop a symlink entry (F6). The algorithm: trim, then abs ->
+// EvalSymlinks -> Clean, with a cleaned-abs fallback when the path doesn't exist
+// (so EvalSymlinks fails). An empty (or whitespace-only) path stays empty.
 func canonicalizeBundlePath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return ""
 	}
-	if abs, err := filepath.Abs(path); err == nil {
-		return abs
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
 	}
-	return path
+	if resolved, rerr := filepath.EvalSymlinks(abs); rerr == nil {
+		return resolved
+	}
+	return filepath.Clean(abs)
 }
 
 // addUnique appends value to *list if it is not already present, returning true

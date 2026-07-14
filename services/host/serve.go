@@ -19,6 +19,7 @@ import (
 	"syscall"
 
 	"pi-stack/host/config"
+	"pi-stack/host/plugin"
 )
 
 type hostService struct {
@@ -156,6 +157,12 @@ func runServe(enabled []string) {
 			if lerr != nil {
 				fatalf("launch knowledge plugin: %v", lerr)
 			}
+			// F2: the built-in path indexes the configured bundles at startup; the
+			// PLUGIN path must do the same or an external/self-exec knowledge plugin
+			// serves an EMPTY index. Reindex the freshly dispensed store with the same
+			// bundles + degrade behavior as the built-in branch.
+			ks, _ := h.get().(plugin.KnowledgeStore)
+			reindexKnowledgePlugin(ks, knowledgeBundles(cfg))
 			knSvc.mux = knowledgeProxyMux(h)
 		}
 		all = append(all, knSvc)
@@ -289,6 +296,29 @@ func applyMemoryModelEnv(cfg *config.Config) {
 	}
 	if os.Getenv("MEMORY_EMBED_MODEL") == "" && cfg.MemoryEmbedModel != "" {
 		os.Setenv("MEMORY_EMBED_MODEL", cfg.MemoryEmbedModel)
+	}
+}
+
+// reindexKnowledgePlugin indexes the configured bundles into a freshly launched
+// EXTERNAL knowledge plugin (F2). Without this the plugin path only installs the
+// proxy shim and never calls Reindex, so the external/self-exec plugin serves an
+// EMPTY index. It mirrors the built-in branch's logging + degrade behavior: no
+// bundles logs an empty-index notice, a reindex failure is logged loudly (a bad
+// OPTIONAL bundle must NOT crash serve), and success reports the counts. Factored
+// out of runServe so it is unit-testable with an injected/stubbed store.
+func reindexKnowledgePlugin(store plugin.KnowledgeStore, bundles []string) {
+	if store == nil {
+		log.Print("knowledge: plugin unavailable at startup — skipping reindex (will index on demand)")
+		return
+	}
+	if len(bundles) == 0 {
+		log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES) — serving an empty index")
+		return
+	}
+	if res, err := store.Reindex(plugin.ReindexArgs{BundlePaths: bundles}); err != nil {
+		log.Printf("knowledge: reindex failed (serving whatever was already indexed): %v", err)
+	} else {
+		log.Printf("knowledge: indexed %d concept(s) from %d bundle(s)", res.Indexed, len(res.Bundles))
 	}
 }
 
