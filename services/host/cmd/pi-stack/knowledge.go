@@ -274,10 +274,14 @@ func resolveBundleRef(ref, cacheDir string, out io.Writer) (string, error) {
 	}
 	dest := cacheDirForURL(cacheDir, ref)
 	if isGitRepo(dest) {
-		// Guard against ever pulling the WRONG repo into a cache dir: verify the
-		// cached checkout's origin matches the requested URL before pulling.
-		if got, err := gitRemoteURL(dest); err == nil && got != "" && !sameGitURL(got, ref) {
-			return "", fmt.Errorf("cache dir %s has origin %s, not %s — refusing to pull the wrong repo (remove it to re-clone)", dest, got, ref)
+		// Guard against ever pulling the WRONG repo into a cache dir. FAIL CLOSED:
+		// only pull when we can positively confirm the cached checkout's `origin`
+		// matches the requested URL. If origin is missing, unreadable, or different,
+		// refuse to pull (it may track some other remote) and tell the user to
+		// remove the cache dir to re-clone.
+		got, err := gitRemoteURL(dest)
+		if err != nil || got == "" || !sameGitURL(got, ref) {
+			return "", fmt.Errorf("cache dir %s does not positively match %s (origin=%q, err=%v) — refusing to pull (remove %s to re-clone)", dest, ref, got, err, dest)
 		}
 		fmt.Fprintf(out, "Updating cached bundle %s\n", dest)
 		if err := gitPull(dest); err != nil {
