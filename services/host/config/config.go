@@ -248,6 +248,36 @@ func (c *Config) AddService(name string) bool { return addUnique(&c.Services, na
 // changed.
 func (c *Config) RemoveService(name string) bool { return removeValue(&c.Services, name) }
 
+// AddKnowledgeBundle adds an OKF bundle directory to the KnowledgeBundles set if
+// absent, returning true when it changed. The path is canonicalized to an
+// absolute path (best-effort — a path that can't be resolved is trimmed and
+// used as-is) so the same bundle referenced two ways doesn't get indexed twice.
+func (c *Config) AddKnowledgeBundle(path string) bool {
+	return addUnique(&c.KnowledgeBundles, canonicalizeBundlePath(path))
+}
+
+// RemoveKnowledgeBundle removes an OKF bundle directory from the
+// KnowledgeBundles set, returning true when it changed. The path is
+// canonicalized the same way AddKnowledgeBundle canonicalizes so a bundle added
+// by a relative path can be removed by that same relative path.
+func (c *Config) RemoveKnowledgeBundle(path string) bool {
+	return removeValue(&c.KnowledgeBundles, canonicalizeBundlePath(path))
+}
+
+// canonicalizeBundlePath trims and resolves path to an absolute path. If the
+// path is empty or can't be made absolute it returns the trimmed input, letting
+// addUnique/removeValue reject the empty case.
+func canonicalizeBundlePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
+}
+
 // addUnique appends value to *list if it is not already present, returning true
 // when the list changed.
 func addUnique(list *[]string, value string) bool {

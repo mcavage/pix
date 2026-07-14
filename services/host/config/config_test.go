@@ -187,6 +187,66 @@ func TestSaveAndMutators(t *testing.T) {
 	}
 }
 
+// TestKnowledgeBundleMutators covers add/remove: idempotent, deduped,
+// canonicalized to an absolute path, and preserved across a Save/Load round-trip.
+func TestKnowledgeBundleMutators(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "config.toml")
+	t.Setenv("PI_STACK_CONFIG", path)
+
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A relative path is canonicalized to an absolute one.
+	if !c.AddKnowledgeBundle("bundles/okf") {
+		t.Error("AddKnowledgeBundle: want changed=true")
+	}
+	if len(c.KnowledgeBundles) != 1 || !filepath.IsAbs(c.KnowledgeBundles[0]) {
+		t.Errorf("KnowledgeBundles = %v, want a single abs path", c.KnowledgeBundles)
+	}
+	abs, _ := filepath.Abs("bundles/okf")
+	if c.KnowledgeBundles[0] != abs {
+		t.Errorf("KnowledgeBundles[0] = %q, want %q", c.KnowledgeBundles[0], abs)
+	}
+
+	// Adding the same bundle (relative or with surrounding space) is a no-op.
+	if c.AddKnowledgeBundle("bundles/okf") {
+		t.Error("AddKnowledgeBundle twice: want changed=false (dedupe)")
+	}
+	if c.AddKnowledgeBundle("  bundles/okf  ") {
+		t.Error("AddKnowledgeBundle trimmed dup: want changed=false")
+	}
+	if c.AddKnowledgeBundle("") {
+		t.Error("AddKnowledgeBundle empty: want changed=false")
+	}
+	if len(c.KnowledgeBundles) != 1 {
+		t.Errorf("KnowledgeBundles = %v, want exactly one entry", c.KnowledgeBundles)
+	}
+
+	if err := c.Save(); err != nil {
+		t.Fatalf("Save(): %v", err)
+	}
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.KnowledgeBundles) != 1 || got.KnowledgeBundles[0] != abs {
+		t.Errorf("round-trip KnowledgeBundles = %v, want [%q]", got.KnowledgeBundles, abs)
+	}
+
+	// Remove by the same relative path the bundle was added with.
+	if !got.RemoveKnowledgeBundle("bundles/okf") {
+		t.Error("RemoveKnowledgeBundle: want changed=true")
+	}
+	if got.RemoveKnowledgeBundle("bundles/okf") {
+		t.Error("RemoveKnowledgeBundle twice: want changed=false")
+	}
+	if len(got.KnowledgeBundles) != 0 {
+		t.Errorf("KnowledgeBundles = %v, want empty after remove", got.KnowledgeBundles)
+	}
+}
+
 func contains(list []string, s string) bool {
 	for _, v := range list {
 		if v == s {
