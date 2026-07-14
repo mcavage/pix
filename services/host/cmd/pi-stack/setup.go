@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"pi-stack/host/config"
@@ -18,6 +19,8 @@ import (
 // the Google Workspace account) but is fully flag-driven for automation:
 //
 //	--account <email>        set the gog account non-interactively
+//	--knowledge <path|url>   set up the global knowledge base non-interactively
+//	                          (local path scaffolded/wired, git URL cloned+used)
 //	--yes | --non-interactive  never prompt; do what it can, print the rest as
 //	                          `pi-stack config set …` commands
 //
@@ -29,6 +32,7 @@ import (
 // setupOpts is the parsed setup flag set.
 type setupOpts struct {
 	account   string // --account <email>
+	knowledge string // --knowledge <path|url>: the global KB source
 	assumeYes bool   // --yes / --non-interactive: never prompt
 }
 
@@ -102,12 +106,64 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
 	}
 	fmt.Fprintln(sio.out)
 
-	// 3. Services. Ensure the memory service is enabled (it is the default; this
+	// 3. Knowledge base (global-first). Set up the GLOBAL OKF bundle the first
+	// time — scaffold a new one at <config-dir>/knowledge, or point at an
+	// existing/shared bundle (local path or git URL). Idempotent: an
+	// already-configured bundle is reported and left untouched, never clobbered.
+	// knowledgeInit/knowledgeUse (the `knowledge` verb's logic) do the scaffold +
+	// config wiring (knowledge_bundles += dir, services += knowledge) — reused
+	// here so setup never re-implements the OKF skeleton.
+	fmt.Fprintln(sio.out, "Knowledge base (OKF bundle the knowledge service indexes):")
+	switch {
+	case len(cfg.KnowledgeBundles) > 0:
+		// Already wired — report + skip. Never clobber a configured bundle.
+		fmt.Fprintf(sio.out, "  ✓ already configured: %s (leaving as-is)\n",
+			strings.Join(cfg.KnowledgeBundles, ", "))
+	case strings.TrimSpace(opts.knowledge) != "":
+		// Explicit source from --knowledge: a local path is scaffolded-if-new +
+		// wired; a git URL is cloned/pulled + used (override to a shared bundle).
+		if err := setupKnowledge(cfg, opts.knowledge, sio.out); err != nil {
+			fmt.Fprintf(sio.out, "  ✗ could not set up %s — %v\n", opts.knowledge, err)
+			todo("pi-stack knowledge init")
+		}
+	case sio.isTTY && !opts.assumeYes:
+		// Interactive: default (Enter) scaffolds the global KB; a path/url points
+		// at an existing/shared bundle instead; "skip" defers it.
+		def := defaultKnowledgeDir()
+		ans := promptLine(sio, fmt.Sprintf(
+			"  Set up a knowledge base? [Enter = scaffold at %s; a path/git-url uses that; 'skip']: ", def))
+		switch {
+		case strings.EqualFold(ans, "skip"):
+			fmt.Fprintln(sio.out, "  ✗ skipped — set one up later with: pi-stack knowledge init")
+			todo("pi-stack knowledge init")
+		case ans == "":
+			if err := knowledgeInit(cfg, def, sio.out); err != nil {
+				fmt.Fprintf(sio.out, "  ✗ scaffold failed — %v\n", err)
+				todo("pi-stack knowledge init")
+			}
+		default:
+			if err := setupKnowledge(cfg, ans, sio.out); err != nil {
+				fmt.Fprintf(sio.out, "  ✗ could not set up %s — %v\n", ans, err)
+				todo("pi-stack knowledge init")
+			}
+		}
+	default:
+		// Non-interactive with no --knowledge: scaffold the default global KB so
+		// the stack ships with a working knowledge base out of the box.
+		if err := knowledgeInit(cfg, defaultKnowledgeDir(), sio.out); err != nil {
+			fmt.Fprintf(sio.out, "  ✗ scaffold failed — %v\n", err)
+			todo("pi-stack knowledge init")
+		}
+	}
+	fmt.Fprintln(sio.out)
+
+	// 4. Services. Ensure the memory service is enabled (it is the default; this
 	// is a no-op on a fresh config but makes setup self-contained).
 	cfg.AddService("memory")
 
-	// 4. Persist everything we just decided. This is the write that replaces
-	// hand-editing config.toml.
+	// 5. Persist everything we just decided. This is the write that replaces
+	// hand-editing config.toml. (knowledgeInit/knowledgeUse also Save() as they
+	// wire; this re-save is idempotent and keeps setup self-contained.)
 	if err := save(cfg); err != nil {
 		fmt.Fprintf(sio.out, "Config: ✗ could not save %s — %v\n", config.Path(), err)
 	} else {
@@ -116,7 +172,7 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
 	}
 	fmt.Fprintln(sio.out)
 
-	// 5. Register the local stdio MCP servers now configured (best-effort: guards
+	// 6. Register the local stdio MCP servers now configured (best-effort: guards
 	// degrade cleanly with an actionable message, and setup never aborts on them).
 	if len(localMCPTargets(cfg)) > 0 {
 		fmt.Fprintln(sio.out, "Registering MCP servers with the sbx gateway:")
@@ -134,11 +190,29 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
 	} else {
 		fmt.Fprintf(sio.out, "Done — %s still to finish (above). Next:\n", plural(len(steps), "item"))
 	}
-	fmt.Fprintln(sio.out, "  start services:  pi-stack serve")
+	fmt.Fprintln(sio.out, "  start services:  pi-stack serve  (indexes your knowledge base)")
 	fmt.Fprintln(sio.out, "  launch sandbox:  pi-stack run")
 	fmt.Fprintln(sio.out, "  verify anytime:  pi-stack doctor")
 
 	return steps
+}
+
+// setupKnowledge sets up the global knowledge base from a user-supplied source,
+// reusing the `knowledge` verb's logic (no duplicated OKF scaffold or config
+// wiring). A git URL is cloned/pulled and used in place (knowledgeUse); a local
+// path is scaffolded-if-new and wired (knowledgeInit, which never clobbers an
+// existing bundle). Both add the bundle to knowledge_bundles + enable the
+// knowledge service and Save().
+func setupKnowledge(cfg *config.Config, ref string, out io.Writer) error {
+	ref = strings.TrimSpace(ref)
+	if isGitURL(ref) {
+		return knowledgeUse(cfg, ref, out)
+	}
+	abs, err := filepath.Abs(ref)
+	if err != nil {
+		return fmt.Errorf("resolving %s: %w", ref, err)
+	}
+	return knowledgeInit(cfg, abs, out)
 }
 
 // localMCPTargets returns the local stdio servers in cfg.MCP (the ones
@@ -176,8 +250,16 @@ func parseSetupArgs(argv []string) (setupOpts, error) {
 			o.account = argv[i]
 		case strings.HasPrefix(a, "--account="):
 			o.account = strings.TrimPrefix(a, "--account=")
+		case a == "--knowledge":
+			if i+1 >= len(argv) {
+				return o, fmt.Errorf("--knowledge needs a value")
+			}
+			i++
+			o.knowledge = argv[i]
+		case strings.HasPrefix(a, "--knowledge="):
+			o.knowledge = strings.TrimPrefix(a, "--knowledge=")
 		default:
-			return o, fmt.Errorf("unknown flag %q (want: --account <email>, --yes/--non-interactive)", a)
+			return o, fmt.Errorf("unknown flag %q (want: --account <email>, --knowledge <path|url>, --yes/--non-interactive)", a)
 		}
 	}
 	return o, nil
