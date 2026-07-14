@@ -129,6 +129,73 @@ func TestSeedCreatesThenRefuses(t *testing.T) {
 	}
 }
 
+func TestSaveAndMutators(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "config.toml")
+	t.Setenv("PI_STACK_CONFIG", path)
+
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetGogAccount("  you@example.com ") // trimmed
+	if !c.AddMCP("gog") {
+		t.Error("AddMCP(gog): want changed=true")
+	}
+	if c.AddMCP("gog") {
+		t.Error("AddMCP(gog) twice: want changed=false (no duplicate)")
+	}
+	if !c.AddService("knowledge") {
+		t.Error("AddService(knowledge): want changed=true")
+	}
+	if err := c.Save(); err != nil {
+		t.Fatalf("Save(): %v", err)
+	}
+
+	// Machine-managed file mode is 0600.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat saved config: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("saved config mode = %o, want 600", perm)
+	}
+
+	// Round-trip: reload gets the mutated values.
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GogAccount != "you@example.com" {
+		t.Errorf("GogAccount = %q, want you@example.com", got.GogAccount)
+	}
+	if len(got.MCP) != 1 || got.MCP[0] != "gog" {
+		t.Errorf("MCP = %v, want [gog]", got.MCP)
+	}
+	if !contains(got.Services, "knowledge") {
+		t.Errorf("Services = %v, want it to contain knowledge", got.Services)
+	}
+
+	// Remove mutators.
+	if !got.RemoveMCP("gog") {
+		t.Error("RemoveMCP(gog): want changed=true")
+	}
+	if got.RemoveMCP("gog") {
+		t.Error("RemoveMCP(gog) twice: want changed=false")
+	}
+	if !got.RemoveService("knowledge") {
+		t.Error("RemoveService(knowledge): want changed=true")
+	}
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 func TestEnsureToken(t *testing.T) {
 	dir := t.TempDir()
 	// TokenPath derives from configDir; PI_STACK_CONFIG's parent is the dir.

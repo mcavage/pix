@@ -1,25 +1,36 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"pi-stack/host/config"
 )
 
-// setup is a RESUMABLE, IDEMPOTENT onboarding wizard. It reuses doctor's probes
-// to detect what's already done and only surfaces what's missing, in dependency
-// order, reusing doctor's `TODO: <command>` grammar. Running it twice is safe:
-// nothing is clobbered (config.Seed never overwrites) and it picks up wherever
-// you left off.
+// setup is a real, IDEMPOTENT onboarding wizard that WRITES config and REGISTERS
+// MCP servers — it never tells you to hand-edit the toml. It is the last piece
+// of the repo-less-host goal: `pi-stack setup` configures everything.
 //
-// The default path mints NOTHING: memory/knowledge need no auth and there is no
-// built-in broker, so setup no longer creates a broker bearer (that credential
-// only exists in an overlay broker path, which owns its own bearer).
+// It runs interactively by default (prompting for the one thing it can't infer,
+// the Google Workspace account) but is fully flag-driven for automation:
 //
-// It MUST be non-interactive-safe: with no TTY on stdin it prints the ordered
-// checklist and exits rather than blocking on input.
+//	--account <email>        set the gog account non-interactively
+//	--yes | --non-interactive  never prompt; do what it can, print the rest as
+//	                          `pi-stack config set …` commands
+//
+// Every step is idempotent: adding an already-present value is a no-op, and
+// re-running never clobbers. Secret entry is inherently external (op/1Password,
+// sbx), so setup guides the exact `sbx secret set -g …` commands rather than
+// pretending to automate them.
+
+// setupOpts is the parsed setup flag set.
+type setupOpts struct {
+	account   string // --account <email>
+	assumeYes bool   // --yes / --non-interactive: never prompt
+}
 
 // setupIO carries the streams + a TTY flag so tests can exercise the non-TTY
 // path hermetically.
@@ -29,140 +40,163 @@ type setupIO struct {
 	isTTY bool
 }
 
-// runSetup performs the (side-effect-light) part of setup that is safe and
-// idempotent — seeding the config — and prints an ordered checklist of
-// everything the user still has to do on the host. The write action goes through
-// the injected seed func so tests stay hermetic. The default path mints NO
-// broker token (there is no built-in broker). Returns the checklist steps it
-// emitted (for assertions).
-func runSetup(cfg *config.Config, env shellEnv, sio setupIO,
-	seed func(string) (bool, error)) []string {
+// runSetup performs the wizard against an injected shellEnv + save func (so
+// tests stay hermetic): it detects provider secrets, resolves + writes the gog
+// account, enables + registers gog, ensures the memory service, and prints a
+// tight next-steps summary. It returns the outstanding steps (as commands) so
+// callers/tests can assert on them.
+func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
+	save func(*config.Config) error) []string {
 
-	fmt.Fprintln(sio.out, "pi-stack setup — dependency-ordered onboarding. Idempotent; safe to re-run.")
+	fmt.Fprintln(sio.out, "pi-stack setup — configures the stack for you. Idempotent; safe to re-run.")
 	fmt.Fprintln(sio.out)
 
 	var steps []string
-	step := func(done bool, label, todo string) {
-		mark := "✗"
-		if done {
-			mark = "✓"
-		}
-		if done {
-			fmt.Fprintf(sio.out, "  %s %s\n", mark, label)
-			return
-		}
-		fmt.Fprintf(sio.out, "  %s %s\n      TODO: %s\n", mark, label, todo)
-		steps = append(steps, todo)
-	}
+	todo := func(cmd string) { steps = append(steps, cmd) }
 
-	// 0. Prerequisites: sbx + docker on the host.
-	fmt.Fprintln(sio.out, "Prerequisites:")
-	_, sbxErr := env.lookPath("sbx")
-	step(sbxErr == nil, "sbx CLI", "install Docker Sandboxes (sbx) — https://docs.docker.com/ai/sandboxes")
-	_, dockerErr := env.lookPath("docker")
-	step(dockerErr == nil, "docker", "install Docker — https://docs.docker.com/get-docker")
-	fmt.Fprintln(sio.out)
-
-	// 1. Provider secrets (needs sbx). Reuse doctor's probe.
-	fmt.Fprintln(sio.out, "Provider keys:")
+	// 1. Provider secrets. Proxy-injected, never in the VM; entry is external
+	// (interactive `sbx secret set`), so we guide the exact command per missing
+	// key rather than pretend to automate it.
+	fmt.Fprintln(sio.out, "Provider keys (proxy-injected, never in the VM):")
 	sbxOut, sbxOK := "", false
-	if sbxErr == nil {
+	if _, err := env.lookPath("sbx"); err == nil {
 		if out, err := env.run("sbx", "secret", "ls"); err == nil {
 			sbxOut, sbxOK = out, true
 		}
 	}
 	for _, key := range []string{"anthropic", "openai", "google", "github"} {
 		c := secretCheck(key, key, sbxOut, sbxOK)
-		step(c.state == stateOK, key, c.todo)
-	}
-	fmt.Fprintln(sio.out)
-
-	// 2. Ollama + the configured models.
-	fmt.Fprintln(sio.out, "Local models (optional):")
-	_, ollamaErr := env.lookPath("ollama")
-	step(ollamaErr == nil, "ollama installed", "install ollama — https://ollama.com")
-	modelOut, modelOK := "", false
-	if ollamaErr == nil {
-		if out, err := env.run("ollama", "list"); err == nil {
-			modelOut, modelOK = out, true
+		if c.state == stateOK {
+			fmt.Fprintf(sio.out, "  ✓ %s set\n", key)
+		} else {
+			fmt.Fprintf(sio.out, "  ✗ %s — run: %s\n", key, c.todo)
+			todo(c.todo)
 		}
 	}
-	for _, m := range []string{cfg.MemoryWatcherModel, cfg.MemoryEmbedModel} {
-		done := ollamaErr == nil && modelOK && modelPulled(modelOut, m)
-		step(done, "model "+m, "ollama pull "+m)
+	fmt.Fprintln(sio.out)
+
+	// 2. Google Workspace account. From --account, else the already-configured
+	// value, else an interactive prompt (only when we have a TTY and weren't told
+	// to assume-yes). Non-interactive with nothing configured: guide the command.
+	fmt.Fprintln(sio.out, "Google Workspace (gog MCP server, optional):")
+	account := strings.TrimSpace(opts.account)
+	if account == "" {
+		account = strings.TrimSpace(cfg.GogAccount)
+	}
+	if account == "" && sio.isTTY && !opts.assumeYes {
+		account = promptLine(sio, "  Google Workspace account (email, blank to skip): ")
+	}
+
+	if account != "" {
+		// 2a. Write the account. 2b. Enable gog in the MCP set. Both idempotent.
+		cfg.SetGogAccount(account)
+		cfg.AddMCP("gog")
+		fmt.Fprintf(sio.out, "  ✓ gog_account = %s\n", account)
+		fmt.Fprintln(sio.out, "  ✓ gog enabled (added to mcp)")
+	} else {
+		fmt.Fprintln(sio.out, "  ✗ no account set — enable gog later with:")
+		fmt.Fprintln(sio.out, "      pi-stack config set gog_account <you@example.com>")
+		fmt.Fprintln(sio.out, "      pi-stack config set mcp gog")
+		todo("pi-stack config set gog_account <you@example.com>")
+		todo("pi-stack config set mcp gog")
 	}
 	fmt.Fprintln(sio.out)
 
-	// 3. gog (Google Workspace via the host-side MCP server the gateway spawns).
-	// Probe the account the way the GATEWAY runs it — headless, through op-refs —
-	// NOT `gog auth doctor`, which passes in your shell and lies. This shares
-	// doctor's gogHeadlessOK so the keyring + op-refs steps converge on one file.
-	fmt.Fprintln(sio.out, "Google Workspace via gog (optional):")
-	_, gogErr := env.lookPath("gog")
-	step(gogErr == nil, "gog CLI", "brew install gog")
-	acct := gogAccount(cfg, env)
-	if gogErr == nil && acct == "" {
-		step(false, "GOG_ACCOUNT set",
-			"set GOG_ACCOUNT=<you@example.com> (env or config/op-refs.env) so gog knows which account to serve")
+	// 3. Services. Ensure the memory service is enabled (it is the default; this
+	// is a no-op on a fresh config but makes setup self-contained).
+	cfg.AddService("memory")
+
+	// 4. Persist everything we just decided. This is the write that replaces
+	// hand-editing config.toml.
+	if err := save(cfg); err != nil {
+		fmt.Fprintf(sio.out, "Config: ✗ could not save %s — %v\n", config.Path(), err)
+	} else {
+		fmt.Fprintf(sio.out, "Config: ✓ saved %s (services=%v, mcp=%v)\n",
+			config.Path(), cfg.Services, cfg.MCP)
 	}
-	headOK := gogErr == nil && acct != "" && gogHeadlessOK(env, acct, resolveOpRefs(env))
-	acctArg := acct
-	if acctArg == "" {
-		acctArg = "<you@example.com>"
-	}
-	step(headOK, "account authorized (headless spawn)",
-		"gog --account "+acctArg+" auth login, then add GOG_KEYRING_BACKEND=file + "+
-			"GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to config/op-refs.env")
 	fmt.Fprintln(sio.out)
 
-	// 4. 1Password + op-refs for MCP creds (only relevant if MCP is configured).
-	if len(cfg.MCP) > 0 {
-		fmt.Fprintln(sio.out, "MCP credentials:")
-		_, opErr := env.lookPath("op")
-		step(opErr == nil, "1Password CLI (op)", "install the 1Password CLI — https://developer.1password.com/docs/cli")
-		step(false, "op-refs.env",
-			"cp config/op-refs.env.example config/op-refs.env && fill in your refs, then `pi-stack mcp register`")
+	// 5. Register the local stdio MCP servers now configured (best-effort: guards
+	// degrade cleanly with an actionable message, and setup never aborts on them).
+	if len(localMCPTargets(cfg)) > 0 {
+		fmt.Fprintln(sio.out, "Registering MCP servers with the sbx gateway:")
+		if err := registerServers(cfg, env, sio.out, nil, findHostBinary); err != nil {
+			fmt.Fprintf(sio.out, "  skipped: %v\n", err)
+			fmt.Fprintln(sio.out, "  finish later with: pi-stack mcp register")
+			todo("pi-stack mcp register")
+		}
 		fmt.Fprintln(sio.out)
 	}
 
-	// 5. Config file — seed only if absent (never clobber).
-	fmt.Fprintln(sio.out, "Local config:")
-	path := config.Path()
-	if wrote, err := seed(path); err != nil {
-		fmt.Fprintf(sio.out, "  ✗ config %s — error: %v\n", path, err)
-	} else if wrote {
-		fmt.Fprintf(sio.out, "  ✓ wrote default config %s\n", path)
-	} else {
-		fmt.Fprintf(sio.out, "  ✓ config already present %s (left as-is)\n", path)
-	}
-
-	// Closing: the two commands that matter + the verifier.
+	// Summary: the commands that matter.
 	if len(steps) == 0 {
-		fmt.Fprintln(sio.out, "All set. Start the stack:")
+		fmt.Fprintln(sio.out, "Done — the stack is configured. Next:")
 	} else {
-		fmt.Fprintf(sio.out, "%s still to do (above). Once done, start the stack:\n", plural(len(steps), "step"))
+		fmt.Fprintf(sio.out, "Done — %s still to finish (above). Next:\n", plural(len(steps), "item"))
 	}
-	fmt.Fprintln(sio.out, "  1) in one terminal:  pi-stack serve")
-	fmt.Fprintln(sio.out, "  2) in another:       pi-stack")
-	fmt.Fprintln(sio.out, "  verify anytime:      pi-stack doctor")
-
-	if !sio.isTTY {
-		fmt.Fprintln(sio.out)
-		fmt.Fprintln(sio.out, "(non-interactive: printed the checklist above — nothing is waiting on input)")
-	}
+	fmt.Fprintln(sio.out, "  start services:  pi-stack serve")
+	fmt.Fprintln(sio.out, "  launch sandbox:  pi-stack run")
+	fmt.Fprintln(sio.out, "  verify anytime:  pi-stack doctor")
 
 	return steps
 }
 
+// localMCPTargets returns the local stdio servers in cfg.MCP (the ones
+// registerServers would act on).
+func localMCPTargets(cfg *config.Config) []string {
+	var out []string
+	for _, m := range cfg.MCP {
+		if localStdioMCP[m] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// promptLine reads a single trimmed line from sio.in after writing prompt.
+func promptLine(sio setupIO, prompt string) string {
+	fmt.Fprint(sio.out, prompt)
+	line, _ := bufio.NewReader(sio.in).ReadString('\n')
+	return strings.TrimSpace(line)
+}
+
+// parseSetupArgs parses the setup flag set.
+func parseSetupArgs(argv []string) (setupOpts, error) {
+	var o setupOpts
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		switch {
+		case a == "--yes" || a == "-y" || a == "--non-interactive":
+			o.assumeYes = true
+		case a == "--account":
+			if i+1 >= len(argv) {
+				return o, fmt.Errorf("--account needs a value")
+			}
+			i++
+			o.account = argv[i]
+		case strings.HasPrefix(a, "--account="):
+			o.account = strings.TrimPrefix(a, "--account=")
+		default:
+			return o, fmt.Errorf("unknown flag %q (want: --account <email>, --yes/--non-interactive)", a)
+		}
+	}
+	return o, nil
+}
+
 // runSetupCmd is the CLI entry point wired into main's dispatch.
 func runSetupCmd(argv []string) {
+	opts, err := parseSetupArgs(argv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack setup: %v\n", err)
+		os.Exit(2)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack setup: loading config: %v\n", err)
 		os.Exit(1)
 	}
 	sio := setupIO{in: os.Stdin, out: os.Stdout, isTTY: isTTY(os.Stdin)}
-	runSetup(cfg, defaultShellEnv(), sio, config.Seed)
+	runSetup(cfg, defaultShellEnv(), sio, opts, func(c *config.Config) error { return c.Save() })
 }
 
 // isTTY reports whether r is an interactive terminal. Any non-*os.File (e.g. a

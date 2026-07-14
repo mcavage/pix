@@ -24,9 +24,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-
-	"github.com/BurntSushi/toml"
-	"pi-stack/host/config"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=0.0.x". An
@@ -53,7 +50,9 @@ func main() {
 		runDoctorCmd(os.Args[2:])
 	case "setup":
 		runSetupCmd(os.Args[2:])
-	case "mcp", "models", "upgrade", "uninstall":
+	case "mcp":
+		runMcpCmd(os.Args[2:])
+	case "models", "upgrade", "uninstall":
 		stub(os.Args[1])
 	case "help", "-h", "--help":
 		fmt.Print(helpText)
@@ -65,32 +64,6 @@ func main() {
 		}
 		fmt.Fprintf(os.Stderr, "pi-stack: unknown subcommand %q\n\n", os.Args[1])
 		fmt.Print(helpText)
-		os.Exit(2)
-	}
-}
-
-// runConfig implements `config show` and `config path`.
-func runConfig(argv []string) {
-	sub := "show"
-	if len(argv) > 0 {
-		sub = argv[0]
-	}
-	switch sub {
-	case "path":
-		fmt.Println(config.Path())
-	case "show":
-		cfg, err := config.Load()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "pi-stack config: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("# path: %s\n", config.Path())
-		if err := toml.NewEncoder(os.Stdout).Encode(cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "pi-stack config: encoding: %v\n", err)
-			os.Exit(1)
-		}
-	default:
-		fmt.Fprintf(os.Stderr, "pi-stack config: unknown subcommand %q (want: show, path)\n", sub)
 		os.Exit(2)
 	}
 }
@@ -160,10 +133,11 @@ commands:
   run [DIR] [flags]   launch the sandbox (also the default with no command)
   version             print the launcher version
   config show|path    show the resolved config path and contents
+  config set|unset    change config without hand-editing the toml
   serve [args...]     run the host services (execs pi-stack-host serve)
   doctor              diagnose host + sandbox health
-  setup               guided first-run setup
-  mcp                 manage MCP servers                        (coming in a later unit)
+  setup               guided first-run setup (writes config + registers MCP)
+  mcp register|ls     register local stdio MCP servers with the sbx gateway
   models              manage local Ollama models                (coming in a later unit)
   upgrade             update the launcher + kit                 (coming in a later unit)
   uninstall           remove pi-stack from this host            (coming in a later unit)
