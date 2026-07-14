@@ -15,7 +15,6 @@
 # anywhere on PATH.
 set -euo pipefail
 
-# Resolve the repo root from this script's real location (follows symlinks).
 src="${BASH_SOURCE[0]}"
 while [ -h "$src" ]; do
   dir="$(cd -P "$(dirname "$src")" && pwd)"
@@ -39,6 +38,11 @@ fi
 
 kits=( --kit "$KIT" )
 [ -f "$OVERLAY/kit/spec.yaml" ] && kits+=( --kit "$OVERLAY/kit" )
+
+# NOTE: this launcher forwards NO credential. The default path mints/exports
+# nothing — the host-side Google Workspace path is the `gog` MCP server run by
+# the sbx gateway (see `make mcp-register`), not a bearer smuggled into the VM.
+# The old broker-token/bearer plumbing was removed with the Google Workspace port to gog.
 
 extra_ws=()
 pi_args=()

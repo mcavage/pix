@@ -26,7 +26,7 @@ sandbox:
         "--session-dir",
         ".pi-sessions",
         "--models",
-        "anthropic/claude-opus-4-8,openai/gpt-5.5,google/gemini-3.1-pro-preview,ollama/gemma4:latest",
+        "anthropic/claude-opus-4-8,openai/gpt-5.6-sol,google/gemini-3.1-pro-preview,ollama/gemma4:latest",
       ]
 
 # Provider keys are read by the host proxy and swapped into the outbound auth
@@ -73,16 +73,6 @@ network:
     - mcp.exa.ai
     - generativelanguage.googleapis.com
     - api.perplexity.ai
-    # Google Workspace CLI runtime endpoints. The gws wrapper obtains a bearer
-    # from a host service, then gws calls these APIs directly from the sandbox.
-    - www.googleapis.com
-    - gmail.googleapis.com
-    - calendar-pa.clients6.google.com
-    - drive.googleapis.com
-    - docs.googleapis.com
-    - sheets.googleapis.com
-    - people.googleapis.com
-    - oauth2.googleapis.com
     # Host Ollama (:11434), the fourth inference provider. The in-sandbox
     # ollama-bridge extension forwards localhost:11434 here over node:http (pi's
     # fetch can't reach host.docker.internal through the sbx proxy; see the
@@ -90,10 +80,6 @@ network:
     # Ollama. Optional; cloud models work without it.
     - host.docker.internal:11434
     - localhost:11434
-    # Host gws token service (optional; without it the gws wrapper degrades to
-    # the real binary unauthenticated).
-    - host.docker.internal:11441
-    - localhost:11441
     # Host memory service (the recall extension calls it over JSON-RPC). The store
     # and its embeddings live on the host; the sandbox only needs this URL. Host-
     # internal traffic bypasses the proxy MITM (see NO_PROXY in the Dockerfile);
@@ -101,6 +87,12 @@ network:
     # uses to reach host services on host.docker.internal.
     - host.docker.internal:11435
     - localhost:11435
+    # Host knowledge service (:11436). Same pattern as memory above: the recall
+    # extension calls it over JSON-RPC; the host store indexes a git-mounted OKF
+    # bundle (we ship the pointer to the bundle, not its content) and answers
+    # lookups. Host-internal, bypasses the proxy MITM; skipped if not running.
+    - host.docker.internal:11436
+    - localhost:11436
     # Optional overlay host service on :11442 (e.g. a host-side CLI exec-proxy a
     # private overlay wires up). Harmless when nothing is listening; an in-sandbox
     # wrapper forwards argv to it so credentials/SSO stay on the host.
@@ -156,7 +148,7 @@ agentContext: |
   A host memory service recalls relevant facts into your context before every
   turn, and quietly captures durable facts and corrections after. You never call
   it. To see or steer it: /recall, /remember, /forget, /learnings. If recall is
-  empty, the user needs to run `make memory-serve` on the host.
+  empty, the user needs to run `make serve` (or `pi-stack serve`) on the host.
 
   ## Multi-model
   Four providers in the cycle: Claude, GPT, and Gemini (cloud, keys injected by the
@@ -186,20 +178,22 @@ agentContext: |
   use the subagent tool with agent=… instead. Explore/Plan are not installed.)
 
   ## Skills
-  Tight, opinionated workflows you run by name: investigate, spec, code-review,
-  ship, verify, tdd, brainstorm, challenge, qa, design-review, and many more. They
-  are forcing functions, not manuals. Auto-loaded when relevant.
+  Tight, opinionated workflows you run by name: plan, build, ship, debug,
+  code-review, tdd, verify, qa, brainstorm, challenge, design-review,
+  healthcheck, and many more. They are forcing functions, not manuals.
+  Auto-loaded when relevant.
 
   ## Installed harness
   plan mode (pi-plan), pi-mcp-adapter, todo list, pi-simplify, pi-web-access,
   usage HUD, and the baked status + subagents extensions.
 
   ## CLIs and MCP
-  `gh` and `gws` are installed. GitHub auth is routed through sbx credentials.
-  `gws` uses a host token service for short-lived Google Workspace bearers. Slack
-  (the `chat` capability) is a host-side stdio MCP server run by the MCP gateway;
-  its token stays on the host. Run the host services with `make serve`. Use sbx
-  Cloud MCP Gateway profiles for catalog servers (notion, atlassian, granola, …).
+  `gh` is installed; GitHub auth is routed through sbx credentials. Google
+  Workspace runs host-side as the `gog` MCP server (spawned by the MCP gateway,
+  authed with the host's own gog credentials, read-only by default) — the same
+  pattern as Slack (the `chat` capability). The VM never talks to Google
+  directly. Run the host services with `make serve`. Use sbx Cloud MCP Gateway
+  profiles for catalog servers (notion, atlassian, granola, …).
 
   ## Posture
   Full-auto: no permission prompts. The sandbox isolation is the safety boundary.

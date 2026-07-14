@@ -2,7 +2,7 @@
 description: Adversarial second-opinion reviewer on a DIFFERENT vendor than your main model. Use to refute a plan, diff, or claim before committing.
 tools: read, grep, find, ls
 web: false
-model: openai/gpt-5.5
+model: openai/gpt-5.6-sol
 thinking: high
 max_turns: 30
 ---
@@ -22,8 +22,8 @@ Your job is to *refute*, not to agree.
 - If you find nothing after a real attempt, say so plainly. Do not invent
   problems to look useful.
 
-> NOTE: `openai/gpt-5.5` is the cross-vendor default assuming a Claude main
+> NOTE: `openai/gpt-5.6-sol` is the cross-vendor default assuming a Claude main
 > model. It needs an OpenAI key (`sbx secret set -g openai`). Always fully-qualify
-> the model (`provider/id`); a bare name like `gpt-5.5` or `haiku` can resolve
+> the model (`provider/id`); a bare name like `gpt-5.6-sol` or `haiku` can resolve
 > to a keyless provider and hang the subagent. Flip to `anthropic/claude-opus-4-8`
 > if you drive OpenAI as your main model.

@@ -1,176 +1,247 @@
 # pi-stack
 
-A coding agent that runs full-auto, with no "allow this command?" prompts, ever.
-The loop below is one task: fix the bug, run the tests, get a different model to
-argue against the diff, open a PR. Nothing approved by hand.
+pi-stack is an opinionated Docker-sandboxed distribution of
+[pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) for
+running autonomous coding tasks.
 
-<!--
-DEMO: drop a short (8-15s, sped up) terminal recording at docs/pi-stack-demo.gif.
-Record it in a real pi-stack sandbox running `ship` end to end, zero prompts:
-  asciinema rec /tmp/demo.cast        # then drive the task to a PR, Ctrl-D to stop
-  agg --speed 3 /tmp/demo.cast docs/pi-stack-demo.gif   # asciinema -> gif (brew install agg)
-Trim to the good part. This is the whole pitch; it should show, not tell.
-![pi-stack running ship full-auto: tests, a cross-vendor review, and a PR, with zero prompts](docs/pi-stack-demo.gif)
--->
+The goal is simple: let the agent edit code, run commands, test the result, ask a
+second model to review the diff, and open a PR without turning every shell command
+into an approval prompt. The safety boundary is the sandbox, not a stream of
+one-off confirmations.
 
-It works because pi lives in a throwaway Docker
-[sbx](https://docs.docker.com/ai/sandboxes/) sandbox that can't reach your host
-unless you let it. The VM is disposable and isolated, so there is nothing to
-approve and nothing the agent can break that you can't throw away.
+pi-stack ships the reusable parts of that setup:
 
-This is my actual setup, not a demo:
-[pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) running
-four inference providers at once, the skills I use to ship, a memory that learns
-across sessions, and a clean split between the generic stack (this repo) and the
-private, company-specific parts (a separate overlay).
+- a pinned Docker [sbx](https://docs.docker.com/ai/sandboxes/) kit for running pi
+  inside a disposable, network-limited VM
+- Claude, OpenAI, Gemini, and local Ollama model routing
+- skills for planning, building, debugging, QA, review, and shipping
+- cross-provider review, so the model that wrote a diff is not the only model
+  judging it
+- a host-side memory service with sqlite, FTS5, embeddings, and local capture
+- an optional OKF knowledge service and CLI for indexed private corpora
+- host-side data tools that keep credentials out of the sandbox
+- an overlay model for private company integrations
 
-## How it works
+## Status
 
-Five ideas, and they compose.
+The public path is usable today, but not every integration is public yet.
 
-**The sandbox is the safety boundary.** pi runs inside an sbx VM. The VM is
-disposable and its network is locked to an allowlist, so a bad command can't touch
-your machine, your keys, or anything you didn't explicitly wire in. That is why it
-runs full-auto: approval prompts exist to protect the host, and here there is no
-host to protect. Throw the VM away and start another.
+| feature | status |
+| --- | --- |
+| sandboxed pi coding agent | public |
+| Anthropic, OpenAI, Google, and GitHub credentials via sbx secrets | public |
+| local Ollama models | public |
+| memory service | public |
+| OKF knowledge service | public, but you provide the bundles |
+| `pi-stack` and `pi-stack-host` launchers | public |
+| Google Workspace and Slack MCP | requires the sbx MCP gateway |
+| building the image from source | requires a DHI-entitled Docker account |
 
-**Four inference providers.** Claude, GPT, and Gemini in the cloud, plus Ollama
-running locally on your machine (no key, no cloud). `/model` switches, `Alt+P`
-cycles, and subagents pick whichever fits, a cheap local model for breadth, a
-frontier one for the hard part. The review step is the point. It runs a second
-opinion on a *different* vendor than wrote the code, so a Claude diff gets argued
-against by GPT or Gemini, not by another Claude. One model grading its own homework
-is worth less. (Ollama also powers the memory loop below.)
+If you only want the agent, use the `sbx run` quickstart. If you want memory,
+knowledge, or host data tools, install the host launcher as well.
 
-**Your keys never enter the VM.** sbx stores your provider keys and its proxy hands
-them to Anthropic and OpenAI directly; the sandbox only ever sees the responses.
-Data tools work the same way through a small host-side Go binary (`pi-stack-host`):
-it mints short-lived tokens and runs the real CLIs on the host, and the sandbox
-reaches it over `host.docker.internal`. A `gh`, `gws`, or `snow` call leaves the VM
-with no credential in it. The MCP servers go one step further: their secrets live
-in 1Password, and the registered command is `op run --env-file=config/op-refs.env`,
-so `op` resolves the `op://` references the moment the gateway spawns the server.
-The token is never written to disk, never in the registration, never in the VM.
+## Quickstart
 
-**A memory that learns.** A host-side service (sqlite with FTS5 and vector search)
-holds facts across sessions. A local model watches each message you send and pulls
-out the durable stuff: preferences, decisions, conventions. Relevant memories get
-injected back on later turns without you asking. This is the one piece that needs
-[Ollama](https://ollama.com) running locally, a small watcher model for capture and
-an embed model for semantic recall (`make pull-models` fetches both). Skip Ollama
-and recall falls back to keyword search and capture turns off, loudly, so you know
-it's off.
-
-**Open core.** This repo is the generic stack: ~35 dev, writing, and harness
-skills, 17 role agents, the host binary, the memory loop. Anything
-company-specific (proprietary skills, an internal `capabilities.json`, connectors
-like a warehouse or an HR directory) lives in a private overlay you keep in your
-own repo. Skills ask for a *capability* (`chat`, `docs`, `warehouse`), not a
-vendor, so the same skill runs against your real provider at work and degrades to
-web and files on a laptop. See [Extend it](#extend-it-skills-kits-and-a-private-overlay)
-and [docs/OVERLAY.md](docs/OVERLAY.md).
-
-## What you need
-
-To run it, the `sbx run` path below: the [sbx CLI](https://docs.docker.com/ai/sandboxes/)
-and the Docker Desktop it sits on, plus API keys for the three cloud providers,
-Claude, GPT, and Gemini (I haven't tested subscriptions). That is the whole list
-for a working agent.
-
-Each data feature adds one dependency, and they're all optional:
-
-- **Local models + memory**: a local [Ollama](https://ollama.com), the fourth
-  provider. It serves the `ollama/*` models in the cycle (reached via the
-  in-sandbox `ollama-bridge` extension) and runs the memory loop, a watcher model
-  for capture and an embed model for recall (`make pull-models` fetches both).
-  Without it, the `ollama/*` model is unavailable, recall falls back to keyword-only,
-  and capture is off.
-- **The credential-brokered MCP tools** (Slack, plus your overlay's connectors):
-  the [1Password CLI](https://developer.1password.com/docs/cli/) (`op`) signed in,
-  and a `config/op-refs.env` of `op://` references. `op run` pulls the real secrets
-  at spawn, so nothing lands on disk.
-- **`gh` and `gws`** bring their own auth (`gh auth`, `gws auth login`); no
-  1Password involved.
-
-Building the image from source (not the `sbx run` path) needs a DHI-entitled Docker
-account, because the base is a Docker Hardened Image.
-
-## Try it
+Install Docker Desktop and the `sbx` CLI, then store provider keys once:
 
 ```bash
 sbx secret set -g anthropic
 sbx secret set -g openai
 sbx secret set -g google
 sbx secret set -g github
+```
+
+Start pi-stack in the current directory:
+
+```bash
 sbx run pi-stack --kit "git+https://github.com/mcavage/pi-stack.git#dir=pi-kit"
 ```
 
-That last line pulls the image and starts pi in the current directory. The keys
-stay in sbx and never reach the VM.
+The sandbox receives model responses, not your provider keys. The VM is
+disposable; recreate it when you want a clean environment.
 
-## What's in it
+<!--
+DEMO: drop a short (8-15s, sped up) terminal recording at docs/pi-stack-demo.gif.
+Record it in a real pi-stack sandbox running `ship` end to end:
+  asciinema rec /tmp/demo.cast
+  agg --speed 3 /tmp/demo.cast docs/pi-stack-demo.gif
+![pi-stack running ship: tests, cross-provider review, and a PR](docs/pi-stack-demo.gif)
+-->
 
-The skills I reach for (in `skills/`):
+## Install the Host Launcher
 
-- `ship` runs tests, then code-review, then opens a PR with `gh`.
-- `code-review` reviews the diff, then has a different vendor argue against it.
-- `investigate` finds the root cause before touching code.
-- `spec` writes a short plan and builds against it.
-- `qa` and `design-review` drive a headless browser against a running app.
-
-Those are the highlights. The public image bakes ~35 generic dev, writing, and
-harness skills (the exact set is the allowlist in `.dockerignore`) plus 17 role
-agents (`architect`, `security-lead`, `sre-lead`, `qa-lead`, and so on) you
-delegate to for the lens a change actually needs, not just a generic reviewer.
-
-Plus `gh`, `gws`, a
-browser, plan mode, MCP, and web search. The defaults are mine: dracula, emacs
-keys, thinking collapsed, a status line, and a watchdog that cancels a stuck call
-instead of spinning on "working..." forever. They're defaults, so swap them.
-
-## Data tools (optional)
-
-Beyond the model keys, pi-stack can reach external data through a set of optional
-tools. They're independent, so set up the ones you want and skip the rest. Because
-skills ask for a capability and not a vendor (see `capabilities.json` and the
-`capability-routing` skill), nothing breaks when a tool is absent: the capability
-resolves to nothing and the skill degrades to web and files.
-
-Credentials never enter the sandbox. Tokens are injected by the sbx proxy or
-brokered by the host-side service. One command starts the host services, another
-shows status:
+The raw `sbx run` command is enough for a plain sandboxed agent. The launcher adds
+the host side: memory, knowledge, MCP registration, diagnostics, and a stable
+version-pinned way to start sandboxes without cloning this repo.
 
 ```bash
-make serve         # host services: memory (:11435), gws-token (:11441)
-make pull-models   # pull the Ollama models the memory loop needs (watcher + embed)
-make mcp-register  # register stdio MCP servers (slack) with the sbx gateway
-make doctor        # per tool: set up? service running? models pulled?
+curl -fsSL https://raw.githubusercontent.com/mcavage/pi-stack/main/install.sh | sh
 ```
 
-Registering a stdio MCP server does not put it in a sandbox. Local stdio servers
-aren't surfaced by dynamic `mcp-find`, and there's no attach-to-running, so you
-start the sandbox with them:
+The installer downloads `pi-stack` and `pi-stack-host`, verifies checksums, and
+installs them into `~/.local/bin` without sudo. To inspect it first, read
+[install.sh](install.sh). To remove the binaries:
 
 ```bash
-make run MCP="slack"   # == sbx run pi-stack --kit ./pi-kit --mcp slack .
+curl -fsSL https://raw.githubusercontent.com/mcavage/pi-stack/main/install.sh | sh -s -- --uninstall
 ```
 
-| tool | capability | one-time setup | reaches the VM via |
+Typical flow:
+
+```bash
+sbx secret set -g anthropic
+sbx secret set -g openai
+sbx secret set -g google
+sbx secret set -g github
+
+pi-stack setup
+pi-stack serve
+pi-stack
+```
+
+`pi-stack setup` writes `~/.config/pi-stack/config.toml`, registers configured MCP
+servers, and enables memory. Re-run it when your host setup changes.
+
+## What You Get
+
+**Autonomous coding in a sandbox.** pi runs inside an sbx VM with a locked-down
+network allowlist. The agent can run normal development commands without receiving
+host credentials or direct host filesystem access beyond the mounted workspace.
+
+**Multi-model routing.** Claude, OpenAI, and Gemini run through sbx-managed
+credentials. Ollama runs locally for no-key local models and for the memory loop.
+Use `/model` to switch and `Alt+P` to cycle.
+
+**Cross-provider review.** The `code-review` and `ship` flows ask another provider
+to challenge the diff. That matters in practice: a second Claude pass on a Claude
+diff has correlated blind spots; GPT or Gemini will often object in different
+places.
+
+**Memory that survives sessions.** The host memory service stores durable facts in
+sqlite with FTS5 and vector search. A local watcher model extracts preferences,
+decisions, and project conventions from conversation, and later turns retrieve
+relevant memories automatically. Without Ollama, recall falls back to keyword
+search and capture is disabled.
+
+**OKF knowledge retrieval.** The built-in knowledge service indexes OKF bundle
+directories and serves retrieval over JSON-RPC. `pi-stack knowledge init`
+scaffolds a spec-correct bundle, `pi-stack knowledge use` points the service at
+an existing bundle, and `pi-stack knowledge ls` reports config plus daemon health.
+Public pi-stack ships the engine, not a corpus. Private teams can mount their own
+bundles through config or an overlay.
+
+**Host-side credentials.** GitHub uses sbx proxy injection. Google Workspace,
+Slack, and overlay connectors run as host-side MCP servers spawned by the sbx
+gateway, so the sandbox talks to a gateway instead of holding tokens. Slack-style
+secrets can come from 1Password via `op run`.
+
+**Skills and role agents.** The public image includes generic development,
+writing, review, QA, and harness skills plus role presets like `architect`,
+`security-lead`, `sre-lead`, and `qa-lead`. Inside the sandbox, `/help` shows the
+live skill, agent, and capability map.
+
+**Private overlays.** The public repo contains the reusable harness. Private
+skills, capability routing, credentials, and company connectors live in a separate
+overlay repo. That keeps the open-source tree clean while still letting the same
+skills run against real work systems when an overlay is present.
+
+## Launcher Commands
+
+```bash
+pi-stack                     # launch a sandbox in the current directory
+pi-stack run [DIR]           # same, explicit
+pi-stack setup               # guided setup for config, memory, and MCP
+pi-stack serve               # run enabled host services
+pi-stack doctor              # diagnose host and sandbox prerequisites
+pi-stack config show|path    # inspect resolved config
+pi-stack config set|unset    # update config without hand-editing toml
+pi-stack mcp register|ls     # register/list local stdio MCP servers with sbx
+pi-stack knowledge init|use|ls  # create, attach, or inspect OKF bundles
+pi-stack version             # print the launcher version
+```
+
+Do not hand-edit `config.toml`. `pi-stack setup` and `pi-stack config set/unset`
+are the supported writers, and `pi-stack doctor` prints copy-pasteable repair
+commands when something is missing.
+
+## Optional Data Tools
+
+These are independent. Use the ones you need and skip the rest.
+
+> **Note:** the sbx MCP gateway is currently Docker-internal and not yet publicly
+> released. `--mcp`, `pi-stack mcp register`, Google Workspace, Slack, and gateway
+> catalog tools require that gateway. External users can use the sandboxed agent,
+> GitHub, memory, and OKF knowledge today.
+
+```bash
+pi-stack serve            # memory (:11435), knowledge (:11436 if enabled), broker if configured
+pi-stack mcp register     # register local stdio MCP servers with the sbx gateway
+pi-stack doctor           # check keys, services, models, gog, and MCP state
+```
+
+| tool | capability | setup | reaches the sandbox via |
 | --- | --- | --- | --- |
-| **gh** | `github` | `gh auth token \| sbx secret set -g github` | sbx proxy injects the token |
-| **gws** | `gworkspace` | `gws auth login` on the host | host token service (`:11441`) |
-| **slack** | `chat` | refs in `config/op-refs.env`, then `make mcp-register` | stdio MCP via the sbx gateway; `op run` pulls creds from 1Password |
-| **memory** | semantic recall | `make pull-models` (a local Ollama with a watcher model for capture and an embed model for recall; without them, recall is keyword-only and capture is skipped, loudly) | host service (`:11435`) |
-| gateway catalog (atlassian, notion, granola, linear) | `issues`, `docs`, ... | register with `sbx mcp add` | the sbx gateway; `make run MCP="<name>"` to eager-load |
+| `gh` | `github` | `gh auth token \| sbx secret set -g github` | sbx proxy injection |
+| memory | semantic recall | local Ollama watcher and embed models | host service on `:11435` |
+| knowledge | OKF retrieval | `pi-stack knowledge init` or `pi-stack knowledge use <path>` | host service on `:11436` |
+| Google Workspace | `gworkspace` | `gog auth login`, config account, MCP register | host `gog` MCP through sbx gateway |
+| Slack | `chat` | `config/op-refs.env`, 1Password CLI, MCP register | host stdio MCP through sbx gateway |
+| gateway catalog | `issues`, `docs`, etc. | `sbx mcp add` | sbx gateway |
 
-Company-specific connectors (a warehouse proxy, an HR directory, a CRM) are not in
-this repo. They live in a private overlay (next section).
+Memory needs local Ollama models:
 
-## Extend it: skills, kits, and a private overlay
+```bash
+make pull-models
+```
 
-A skill is a `SKILL.md`: a name, a note on when to use it, the steps. Drop one in
-`.pi/skills/` for a single project, or put a set in a mixin kit and pass a second
-`--kit` so they ride along on every run. Kits stack:
+Knowledge is opt-in. Create a local OKF bundle or attach an existing one, then
+restart the host services:
+
+```bash
+pi-stack knowledge init
+# or: pi-stack knowledge use /path/to/okf-bundle
+pi-stack serve
+```
+
+Google Workspace is read-only by default. Authorize once on the host, then point
+pi-stack at the account:
+
+```bash
+gog auth login
+pi-stack config set gog_account you@example.com
+pi-stack config set mcp gog
+pi-stack mcp register
+```
+
+See [docs/gog-setup.md](docs/gog-setup.md) for the full walkthrough.
+
+## Skills and Overlays
+
+The flow: `brainstorm`, `plan`, `build`, and `ship` are the steps. `deliver` is
+the operator that runs them to a finished result without you in the loop. It
+plans, builds, runs UAT, gets a cross-vendor review twice, fixes every finding,
+verifies, and ships. For most tasks `deliver "X"` is the whole flow; if you skip
+`plan`, `deliver` plans itself.
+
+`brainstorm` and `plan` are optional gates you add only when you want to stay
+involved. Put `brainstorm` in front when the idea is still fuzzy and you do not
+yet know what to build. Put `plan` in front when you want to read and approve the
+spec before it starts building.
+
+| Situation | Flow |
+| --- | --- |
+| You know what you want (most tasks) | `deliver "X"` |
+| Fuzzy, then just go | `brainstorm` then `deliver` |
+| Approve the approach first | `plan` then `deliver` |
+| Fuzzy and want a design gate (rare) | `brainstorm` then `plan` then `deliver` |
+
+You rarely type `deliver`. "build X, don't stop" or "take this all the way"
+auto-loads it. For a throwaway, say "quick" and you get `build`'s lightweight
+mode instead of the full loop.
+
+A skill is a `SKILL.md` with a name, a trigger description, and the operating
+procedure. Project-local skills can live in `.pi/skills/`. Reusable skill sets can
+ship in a mixin kit:
 
 ```bash
 sbx run pi-stack \
@@ -178,53 +249,52 @@ sbx run pi-stack \
   --kit ./my-kit
 ```
 
-A mixin kit is a folder with a `spec.yaml` (`kind: mixin`) and a `files/` tree;
-anything under `files/home/.pi/agent/skills/` lands in the skills directory,
-and the same trick covers prompts, extensions, env, and network rules. Format is
-in [Docker's kit docs](https://docs.docker.com/ai/sandboxes/customize/kits/).
+A mixin kit has a `spec.yaml` and a `files/` tree. Files under
+`files/home/.pi/agent/skills/` land in the sandbox skills directory; the same
+pattern works for prompts, extensions, environment, and network rules. Docker's
+kit format is documented in the
+[sbx kit docs](https://docs.docker.com/ai/sandboxes/customize/kits/).
 
-The overlay is how the open-core split actually works, and it's the part most
-"my AI setup" repos skip. Your private, company-specific surface lives in its own
-peer repo (a sibling directory, kept private), not as hidden files in this one. It
-has two halves: a mixin kit for the sandbox (private skills, the full
-`capabilities.json`, in-sandbox wrappers) and `host/overlay_*.go` plugins for the
-host binary (an extra exec proxy or MCP server). `make run` stacks the kit and
-`make serve` builds in the host plugins, both automatically when the peer repo is
-present, so nothing company-specific ever touches the public tree. A CI guard
-fails the build if it does. The full guide is [docs/OVERLAY.md](docs/OVERLAY.md),
-and there's a copyable scaffold in [`examples/overlay/`](examples/overlay).
+The private overlay is a peer repo with two halves:
 
-## Build from source
+- `kit/`: private skills, full `capabilities.json`, in-sandbox wrappers, prompts,
+  extensions, and network rules
+- `host/overlay_*.go`: host plugins that self-register into `pi-stack-host`
 
-To change the image, the baked-in skills, or the extensions:
+When the overlay exists, `make run` stacks the kit and `make serve` compiles the
+host plugins. Public code never imports overlay files. See [docs/OVERLAY.md](docs/OVERLAY.md)
+and the scaffold in [examples/overlay](examples/overlay).
+
+## Build from Source
+
+Most users should use the `sbx run` or installer path. Build from source when you
+are changing the image, baked extensions, or the public skill set.
 
 ```bash
 git clone https://github.com/mcavage/pi-stack
 cd pi-stack
-docker login dhi.io   # the base image is dhi.io/node; needs a DHI-entitled Docker account
-make load             # build the image, load it into sbx
-make install          # put a `pi-stack` command on your PATH
-pi-stack              # run it anywhere (keys set as above)
+docker login dhi.io
+make load
+make install
+pi-stack
 ```
 
-Run `make load` after changing the Dockerfile or an extension. **Skills, you don't
-rebuild for:** `make run` (and `pi-stack --dev`) load skills live from your repo, so
-edit a `SKILL.md`, `/reload` in pi, and it's live. `make load` only bakes your skills
-into the image for people who run it the turnkey way (`sbx run --kit git+…`), which
-uses the baked set. If you only changed the kit in `pi-kit/`, a fresh `make run` is
-enough. `make publish`
-pushes the image to Docker Hub by hand. A GitHub Action publishes automatically on
-every push to `main`: it stamps a new version `0.0.<run_number>`, builds multi-arch,
-pushes `:<version>` + `:latest`, and commits the version bump back into
-`pi-kit/spec.yaml`. Because every push is a brand-new tag, `sbx run pi-stack --kit
-git+…` (which reads the pinned image from `spec.yaml` on `main`) always pulls a fresh
-image sbx has never cached — no `--template`, no `sbx template rm`. To run the latest
-published build without a local checkout, `make run-published`. The base image is a
-Docker Hardened Image, so building from source needs a DHI-entitled account; the
-`sbx run` path above does not.
+The base image is a Docker Hardened Image, so local image builds require a
+DHI-entitled Docker account. The hosted `sbx run` path does not.
 
-## For agents
+Use the right iteration loop:
 
-If you are an agent working in this repo, read [AGENTS.md](AGENTS.md): the layout,
-the build and run loop, how to write skills and extensions, and the mistakes not to
-repeat.
+- `Dockerfile`, extensions, themes, settings, baked files: `make load`, then
+  recreate the sandbox
+- `pi-kit/spec.yaml`: recreate the sandbox; no image rebuild
+- skills during local development: edit `SKILL.md`, then `/reload`
+- host binaries: `make install`
+
+`make publish` pushes the image manually. CI publishes versioned images from
+`main` and updates the kit pin.
+
+## For Agents
+
+If you are an agent working in this repo, read [AGENTS.md](AGENTS.md) before
+changing files. It covers the repo layout, build loop, extension conventions,
+overlay boundary, and the mistakes worth not repeating.

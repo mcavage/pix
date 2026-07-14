@@ -13,18 +13,23 @@ flags exactly that. A compiled Go binary doing the same work runs unflagged.
 
 ```
 # non-MCP host HTTP services (run by `make serve`, reached over host.docker.internal):
-pi-stack-host gws-token     Google Workspace bearer svc    (:11441)
 pi-stack-host memory        memory store, JSON-RPC         (:11435)
 pi-stack-host serve         run the enabled services together (SERVICES)
 
 # MCP servers (stdio, run by the sbx gateway via `sbx mcp add` / `make mcp-register`):
 pi-stack-host slack         Slack read/search MCP
+pi-stack-host gog           Google Workspace read MCP (Gmail/Drive/Docs/Sheets/Calendar)
 ```
 
-- **gws-token** — mints a short-lived Google bearer from the host `gws` creds
-  (`gws auth export`); the sandbox `gws` wrapper GETs `/token`. Env: `GWS_TOKEN_*`.
 - **memory** — the self-learning store: JSON-RPC over HTTP, pure-Go sqlite + FTS5,
   embeddings + capture watcher via Ollama. Env: `MEMORY_*`, `OLLAMA_HOST`.
+- **gog** — Google Workspace stdio MCP server. Like `slack`: NOT an HTTP daemon,
+  NOT in `make serve`; the gateway runs it on the host once registered. Creds stay
+  on the host in `GOG_HOME` (never in the VM). **Read-only + `--gmail-no-send` by
+  default** — typed read tools (`gmail_search`, `gmail_get_message`, `drive_search`,
+  `drive_get`, `docs_get`, `sheets_read_range`, `calendar_events`); write tools are
+  gated/off. Returned Gmail/Doc content is **wrapped as untrusted** (prompt-injection
+  guard). Registered via `make mcp-register`, attached at sandbox creation.
 - **slack** — stdio MCP server. NOT an HTTP daemon, NOT in `make serve`; the MCP
   gateway runs it on the host once registered. `sbx mcp add` (local stdio) has no
   `--env`, so creds come from 1Password: the registered command is
@@ -46,7 +51,6 @@ The MCP stdio transport is newline-delimited JSON (what the gateway speaks);
 
 ```bash
 make serve            # builds pi-stack-host + runs `serve` (the SERVICES from config/local.mk)
-make gws-token-serve  # just gws-token
 # or directly:
 cd services/host && go build -o pi-stack-host . && ./pi-stack-host serve
 ```
@@ -61,7 +65,7 @@ TypeScript and talks to these over HTTP.
 
 The host HTTP services bind to `127.0.0.1` and are **unauthenticated by default** —
 any process on the host (including any sandbox reaching `host.docker.internal`) can
-drive them (e.g. mint a Google bearer, read/write the memory store). This is the
+drive them (e.g. read/write the memory store). This is the
 deliberate single-user assumption: your machine, your disposable VMs, your data.
 It's bounded by loopback binding. To require a shared secret on a service, set its
 `*_AUTH` env var (the sandbox wrapper sends the matching value). Do not bind these

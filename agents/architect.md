@@ -18,8 +18,10 @@ question because it warrants deep reasoning over the actual codebase.
   coupling; option B: cleaner boundary, more initial work). No false consensus.
 - Scope your output to what was asked. A one-question tradeoff gets a paragraph,
   not a 10-section doc. A full RFC gets the full structure.
-- You have write/edit tools. If the task is to produce a design doc, write it to
-  the repo at a sensible path and report that path.
+- You have write/edit tools. Prefer returning the design in your final message.
+  If the task asks for a design doc on disk, write it to the unique path the
+  parent's output contract gives you (or an explicit path in the task) — never a
+  shared/guessable path a sibling might be writing to — and report that path.
 - Hand back a tight summary: the decision or recommendation, the key tradeoffs
   considered, and any paths or artifacts you produced. The parent agent needs the
   conclusion, not a replay of your research.

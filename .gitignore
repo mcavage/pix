@@ -5,6 +5,10 @@ node_modules/
 .pi-sessions/
 .pi-lens/
 
+# Launcher-generated per-run knowledge scope (canonical HOST paths). The
+# .pi-stack/knowledge POINTER stays trackable; only the .scope file is ignored.
+.pi-stack/knowledge.scope
+
 
 # 1Password secret references — user-specific (vault/item names); keep local
 config/op-refs.env
@@ -24,39 +28,37 @@ config/local.mk
 skills/*
 !skills/anti-slop/
 !skills/api-conventions/
-!skills/autoplan/
 !skills/brainstorm/
+!skills/build/
 !skills/capability-routing/
 !skills/challenge/
 !skills/code-review/
-!skills/competitive-analysis/
+!skills/competitive/
 !skills/conventions/
+!skills/debug/
 !skills/delegation-guide/
+!skills/deliver/
 !skills/design-review/
 !skills/design-system/
 !skills/docs-standards/
-!skills/document-release/
+!skills/docs-sync/
+!skills/enrich/
 !skills/git-conventions/
 !skills/guard/
-!skills/health/
+!skills/gworkspace/
+!skills/healthcheck/
 !skills/ingest/
-!skills/investigate/
-!skills/microcopy-patterns/
-!skills/promote-learnings/
-!skills/prototype-webapp/
+!skills/microcopy/
+!skills/onboard/
+!skills/one-pager/
+!skills/peer-review/
+!skills/plan/
+!skills/promote/
 !skills/qa/
-!skills/review-gate/
-!skills/self-audit/
-!skills/setup-user/
 !skills/ship/
-!skills/spec/
 !skills/tdd/
 !skills/verify/
-!skills/wf-engineering/
-!skills/wf-product/
-!skills/wf-prototype/
 !skills/write-like-mark/
-!skills/write-one-pager/
 
 # --- Open-core boundary: agents (MUST mirror .dockerignore) ---------------------
 # DEFAULT-DENY so git add -A can't stage a future company-specific persona.
@@ -67,6 +69,7 @@ agents/*
 !agents/devrel.md
 !agents/dx-consultant.md
 !agents/engineer.md
+!agents/enrich.md
 !agents/enterprise-admin.md
 !agents/fanout.md
 !agents/finance-analyst.md
@@ -92,3 +95,4 @@ services/host/host
 # Private open-core marker list (codenames/account ids) — see the .example
 config/open-core-markers.txt
 .scratch/
+.pi-agent/
