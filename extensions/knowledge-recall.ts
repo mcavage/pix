@@ -16,9 +16,30 @@
 //   KNOWLEDGE_URL         default http://host.docker.internal:11436
 //   KNOWLEDGE_TIMEOUT_MS  default 2000 (a slow store must never stall a turn)
 //   KNOWLEDGE_CHAR_BUDGET default 1000 (its OWN budget, independent of memory)
+//
+// SCOPE CONTRACT (per-workspace bundle filter). The shared host store indexes
+// every bundle it has ever seen (global + every project), so an un-scoped query
+// bleeds concepts across projects. The launcher (pi-stack run) resolves the
+// bundle set for THIS workspace — {global, this-project} — and communicates it
+// to us one of two ways, which we resolve in this order:
+//
+//   1. env  KNOWLEDGE_SCOPE          comma- or newline-separated bundle ids
+//   2. file <cwd>/.pi-stack/knowledge.scope   comma- or newline-separated ids
+//
+// Whichever is found first wins; entries are trimmed and blanks dropped. The ids
+// are daemon-supplied identifiers (the exact strings in the store's `bundle`
+// column, normally absolute host paths); we NEVER interpret them, we only echo
+// them back verbatim as the `bundles` array on the query RPC (U1 accepts a
+// `bundles` array; empty/absent = query all bundles). When neither source is
+// present or both are empty we send NO `bundles`, so a raw/un-launched sandbox
+// hitting the store directly keeps the backward-compatible "all bundles"
+// behavior. Reading the file is best-effort (safe()); a missing file or env is
+// the normal case, never an error.
 
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const KNOWLEDGE_URL = process.env.KNOWLEDGE_URL ?? "http://host.docker.internal:11436";
 const TIMEOUT_MS = Number(process.env.KNOWLEDGE_TIMEOUT_MS ?? 2000);
@@ -73,6 +94,42 @@ let rpcId = 0;
 async function rpc(method: string, params: any): Promise<any> {
 	const j = await postJson(KNOWLEDGE_URL, { jsonrpc: "2.0", id: ++rpcId, method, params }, TIMEOUT_MS);
 	return j?.result ?? null;
+}
+
+// Split a raw scope string (from env or the scope file) into a clean bundle-id
+// list: comma- OR newline-separated, trimmed, blanks dropped.
+function parseScope(raw: string): string[] {
+	return raw
+		.split(/[\n,]/)
+		.map((s) => s.trim())
+		.filter(Boolean);
+}
+
+// Resolve the per-workspace bundle scope (see SCOPE CONTRACT at the top). Env
+// KNOWLEDGE_SCOPE first, then <cwd>/.pi-stack/knowledge.scope. Returns [] when
+// neither is present/non-empty, in which case the caller sends NO `bundles`.
+// File read is defensive: a missing/unreadable file is the normal case.
+function resolveScope(): string[] {
+	const env = process.env.KNOWLEDGE_SCOPE;
+	if (typeof env === "string" && env.trim()) {
+		const fromEnv = parseScope(env);
+		if (fromEnv.length) return fromEnv;
+	}
+	try {
+		const raw = readFileSync(join(process.cwd(), ".pi-stack", "knowledge.scope"), "utf8");
+		return parseScope(raw);
+	} catch {
+		return []; // missing/unreadable file is normal — no scope, query all
+	}
+}
+
+// Build the query params, adding `bundles` only when a scope was resolved so the
+// empty case preserves the store's back-compat "all bundles" semantics.
+function queryParams(query: string): any {
+	const params: any = { query, limit: QUERY_LIMIT };
+	const bundles = resolveScope();
+	if (bundles.length) params.bundles = bundles;
+	return params;
 }
 
 // The user's submitted text. pi's event shape isn't fully pinned, so try the
@@ -146,7 +203,7 @@ function formatBlock(concepts: any[]): string | null {
 // from the host knowledge service.
 export async function buildKnowledgeBlock(prompt: string): Promise<string | null> {
 	if (!prompt || !prompt.trim()) return null;
-	const r = await rpc("query", { query: prompt, limit: QUERY_LIMIT });
+	const r = await rpc("query", queryParams(prompt));
 	return formatBlock(r?.concepts ?? []);
 }
 
@@ -166,7 +223,7 @@ export default function (pi: any) {
 			safe(async () => {
 				const q = String(args ?? "").trim();
 				if (!q) return ctx?.ui?.notify?.("usage: /knowledge <query>", "info");
-				const r = await rpc("query", { query: q, limit: QUERY_LIMIT });
+				const r = await rpc("query", queryParams(q));
 				const concepts = r?.concepts ?? [];
 				const text = concepts.length
 					? concepts
