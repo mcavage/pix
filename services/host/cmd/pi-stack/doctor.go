@@ -537,11 +537,16 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 				todo:   "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to config/op-refs.env"})
 	default:
 		// Best-effort success: this account authenticates headlessly, but we could
-		// NOT confirm it is the one the gateway registered — so it is INFO, not a
-		// confirmed green ✓ (see the honest path above for that).
+		// NOT confirm it is the one the sbx gateway actually registered — so this
+		// MUST count as an outstanding item (a TODO), never a silent green. A
+		// reconstructed probe that happens to pass could still be a different
+		// account/op-refs than the gateway got. Only the honest path above
+		// (registered command read + probed) earns a confirmed ✓.
 		g.checks = append(g.checks,
 			check{label: "account", state: stateInfo, detail: acct + " authorized (best-effort, unconfirmed vs registration)"},
-			check{label: "headless spawn", state: stateInfo, detail: "tools exposed via headless keyring (best-effort)"})
+			check{label: "headless spawn", state: stateTODO,
+				detail: "best-effort OK, but could not confirm the sbx-registered command",
+				todo:   "confirm the registered gog command: `sbx mcp get gog` (or `sbx mcp ls`)"})
 	}
 
 	// 4. registered with the gateway. 5. attached on run?
@@ -581,18 +586,45 @@ func registeredGogCommand(env shellEnv) ([]string, bool) {
 var gogCommandLineRe = regexp.MustCompile(`(?im)^\s*command\s*[:=]\s*(.+?)\s*$`)
 
 // parseGogCommandLine extracts the registered argv from a `sbx mcp get gog`
-// text dump: the `command:` line, split into fields. Returns (nil,false) when no
-// command line is present.
+// text dump: the `command:` line, split into fields. It only accepts an
+// UNAMBIGUOUS, COMPLETE command (see gogCommandComplete). A shell-quoted line
+// (which strings.Fields cannot split reliably), or a partial capture — just
+// `op`, `op run`, or the command line when the args landed on a separate line —
+// returns (nil,false) so registeredGogCommand falls through to the structured
+// JSON parser rather than probing a truncated/wrong argv.
 func parseGogCommandLine(out string) ([]string, bool) {
 	m := gogCommandLineRe.FindStringSubmatch(out)
 	if len(m) < 2 {
 		return nil, false
 	}
-	fields := strings.Fields(m[1])
-	if len(fields) == 0 {
+	cmd := strings.TrimSpace(m[1])
+	if cmd == "" {
+		return nil, false
+	}
+	// Shell-quoted args are ambiguous under strings.Fields — fall through to JSON.
+	if strings.ContainsAny(cmd, "\"'") {
+		return nil, false
+	}
+	fields := strings.Fields(cmd)
+	if !gogCommandComplete(fields) {
 		return nil, false
 	}
 	return fields, true
+}
+
+// gogCommandComplete reports whether argv is a full, unambiguous gog spawn. The
+// sbx gateway always registers gog behind the `op run --env-file=… -- <cmd…>`
+// wrapper, so a complete argv must carry the `--` separator AND at least one
+// non-empty token after it (the wrapped binary). A partial capture has no such
+// tail and fails this, so the caller keeps looking rather than probe a
+// truncated command. Guards against index-out-of-range on short/empty argv.
+func gogCommandComplete(argv []string) bool {
+	for i, a := range argv {
+		if a == "--" && i+1 < len(argv) && strings.TrimSpace(argv[i+1]) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // parseGogCommandJSON extracts the registered argv from `sbx mcp ls -o json`
@@ -611,7 +643,14 @@ func parseGogCommandJSON(out string) ([]string, bool) {
 		if s.Name != "gog" || strings.TrimSpace(s.Command) == "" {
 			continue
 		}
-		return append([]string{s.Command}, s.Args...), true
+		argv := append([]string{s.Command}, s.Args...)
+		// Same completeness bar as the line form: a JSON entry that lacks the
+		// `op run … -- <cmd>` tail is not a confident command, so return not-found
+		// and let doctor take the honest best-effort fallback (a TODO).
+		if !gogCommandComplete(argv) {
+			return nil, false
+		}
+		return argv, true
 	}
 	return nil, false
 }

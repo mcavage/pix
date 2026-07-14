@@ -81,6 +81,19 @@ func gogGreen(f fakeEnv) fakeEnv {
 	return f
 }
 
+// gogConfirmed layers the sbx-registered-command fixtures on top of gogGreen so
+// the gog group takes the HONEST confirmed path (doctor reads the registered
+// command via `sbx mcp get gog` and probes THAT). Only this path is a real
+// green ✓ — the best-effort reconstruction fallback (gogGreen alone) is now a
+// TODO because it can't confirm what the gateway registered.
+func gogConfirmed(f fakeEnv) fakeEnv {
+	f = gogGreen(f)
+	regCmd := "op run --env-file=" + gogOpRefs + " -- pi-stack-host gog"
+	f.output["sbx mcp get gog"] = "name: gog\ncommand: " + regCmd + "\n"
+	f.output[regCmd+" --list-tools"] = "gmail_search\ncalendar_events\n"
+	return f
+}
+
 func defaultCfg() *config.Config {
 	c := &config.Config{}
 	// apply defaults via Load's helper by round-tripping through the exported
@@ -92,8 +105,10 @@ func defaultCfg() *config.Config {
 }
 
 // TestDoctor_AllGreen: everything present -> verdict says all pass, no TODOs.
+// The gog group must take the confirmed-registered-command path (gogConfirmed):
+// a best-effort fallback pass is no longer a green.
 func TestDoctor_AllGreen(t *testing.T) {
-	f := gogGreen(fakeEnv{
+	f := gogConfirmed(fakeEnv{
 		present: map[string]bool{"sbx": true, "ollama": true},
 		output: map[string]string{
 			"sbx secret ls": "anthropic\nopenai\ngoogle\ngithub\n",
@@ -165,7 +180,7 @@ func TestDoctor_SbxAbsent(t *testing.T) {
 // TestDoctor_PartialModels: sbx keys set, ollama installed but only watcher
 // pulled -> exactly one model TODO (embed), no provider/gog TODOs.
 func TestDoctor_PartialModels(t *testing.T) {
-	f := gogGreen(fakeEnv{
+	f := gogConfirmed(fakeEnv{
 		present: map[string]bool{"sbx": true, "ollama": true},
 		output: map[string]string{
 			"sbx secret ls": "anthropic openai google github",
@@ -348,6 +363,86 @@ func TestDoctor_GogRegisteredCommand(t *testing.T) {
 		if strings.Contains(c.detail, "best-effort") {
 			t.Errorf("honest path should not print best-effort fallback lines, got %q", c.detail)
 		}
+	}
+}
+
+// TestDoctor_GogFallbackUnconfirmedIsTODO: sbx lists gog but `get` is
+// partial/unsupported (command with no op-run tail) and `ls -o json` is
+// unparseable, so doctor CANNOT confirm the registered command. Even though the
+// reconstructed best-effort probe would pass (gogGreen), the gog headless result
+// MUST be a TODO (verdict NOT all-clear), never a silent green.
+func TestDoctor_GogFallbackUnconfirmedIsTODO(t *testing.T) {
+	f := gogGreen(fakeEnv{
+		present: map[string]bool{"sbx": true, "ollama": true},
+		output: map[string]string{
+			"sbx secret ls":      "anthropic openai google github",
+			"ollama list":        "gemma4:latest\nnomic-embed-text:latest\n",
+			"sbx mcp ls":         "gog\n",
+			"sbx mcp get gog":    "name: gog\ncommand: op\n", // partial: no `-- <cmd>` tail
+			"sbx mcp ls -o json": "not json{",                // unparseable
+		},
+		ports: map[int]bool{11434: true, 11435: true},
+	})
+	r := runDoctor(defaultCfg(), f.env())
+	// The headless spawn must be a TODO whose detail says it could not confirm.
+	var headTODO bool
+	for _, g := range r.groups {
+		if !strings.HasPrefix(g.title, "gog") {
+			continue
+		}
+		for _, c := range g.checks {
+			if c.label == "headless spawn" && c.state == stateTODO &&
+				strings.Contains(c.detail, "could not confirm the sbx-registered command") {
+				headTODO = true
+			}
+		}
+	}
+	if !headTODO {
+		t.Fatalf("expected an unconfirmed-fallback headless TODO, groups=%+v", r.groups)
+	}
+	// Verdict must NOT be all-clear.
+	var buf bytes.Buffer
+	r.services, r.mcp = defaultCfg().Services, []string{"gog"}
+	r.render(&buf)
+	out := buf.String()
+	if strings.Contains(out, "all checks pass") {
+		t.Errorf("unconfirmed fallback must not report all-clear, got:\n%s", out)
+	}
+	if !strings.Contains(out, "TODO: confirm the registered gog command") {
+		t.Errorf("expected a copy-pasteable confirm-command TODO, got:\n%s", out)
+	}
+}
+
+// TestDoctor_GogRegisteredCommandLineFallsThrough: `sbx mcp get gog` emits only
+// a partial `command:` line (no `-- <cmd>` tail), so the line parser must FALL
+// THROUGH to the JSON form, which carries the full argv and confirms green.
+func TestDoctor_GogRegisteredCommandLineFallsThrough(t *testing.T) {
+	probeKey := "op run --env-file=/abs/config/op-refs.env -- pi-stack-host gog --list-tools"
+	f := fakeEnv{
+		present: map[string]bool{"sbx": true},
+		output: map[string]string{
+			"sbx secret ls":      "anthropic openai google github",
+			"sbx mcp ls":         "gog\n",
+			"sbx mcp get gog":    "name: gog\ncommand: op\n", // partial line -> fall through
+			"sbx mcp ls -o json": `[{"name":"gog","command":"op","args":["run","--env-file=/abs/config/op-refs.env","--","pi-stack-host","gog"]}]`,
+			probeKey:             "gmail_search\n",
+		},
+		ports: map[int]bool{11435: true},
+	}
+	r := runDoctor(defaultCfg(), f.env())
+	var headOK bool
+	for _, g := range r.groups {
+		if !strings.HasPrefix(g.title, "gog") {
+			continue
+		}
+		for _, c := range g.checks {
+			if c.label == "headless spawn" && c.state == stateOK {
+				headOK = true
+			}
+		}
+	}
+	if !headOK {
+		t.Errorf("expected line form to fall through to JSON and confirm green, groups=%+v", r.groups)
 	}
 }
 
