@@ -1,7 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"pi-stack/host/config"
 )
@@ -11,20 +14,40 @@ import (
 // that was published for this launcher build.
 const kitRepo = "git+https://github.com/mcavage/pi-stack.git"
 
+// dockerImageRepo is the published image repo. A local build pins a locally
+// loaded tag from <repo>/out/.local-image-tag via --template, mirroring the
+// `make run` target.
+const dockerImageRepo = "docker.io/mcavage/pi-stack"
+
+// releasedVersionRE matches a CLEAN released semver like "0.0.16" — the shape a
+// CI release stamps, for which a matching git tag "v0.0.16" is expected to
+// exist. Anything else (an unstamped "dev" build, a "0.0.16+local" local
+// build, or non-semver) is treated as UNRELEASED, so the launcher never pins a
+// nonexistent v<version> tag.
+var releasedVersionRE = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+
+// isReleased reports whether version is a clean released semver whose git tag
+// is expected to exist.
+func isReleased(version string) bool {
+	return releasedVersionRE.MatchString(version)
+}
+
 // runOpts carries everything the arg builder needs, resolved by the caller. It
 // is deliberately side-effect-free (no filesystem probing, no token minting) so
 // buildSbxArgs stays a pure function that the tests can drive without sbx or a
 // real config on disk.
 type runOpts struct {
-	Workspace   string   // positional DIR (default ".")
-	Dev         bool     // --dev: Mode B, skills load live from a repo checkout
-	DevRoot     string   // resolved repo root when Dev is set (caller resolves)
-	Skills      []string // --skills DIR: extra live skill trees
-	Kits        []string // --kit K: extra kits stacked on top of config.Kits.Stack
-	MCP         []string // --mcp M: extra MCP servers on top of config.MCP
-	Name        string   // --name N: sandbox name
-	Model       string   // --model M: active pi model (passed through to pi)
-	Passthrough []string // args after `--`, handed straight to pi
+	Workspace     string   // positional DIR (default ".")
+	Dev           bool     // --dev: Mode B, skills load live from a repo checkout
+	DevRoot       string   // resolved repo root when Dev is set (caller resolves)
+	LocalKit      string   // resolved local checkout kit dir (<repo>/pi-kit); set for --dev and for an unreleased build with a resolvable checkout. Replaces the git pin.
+	LocalImageTag string   // contents of <repo>/out/.local-image-tag; pins --template to the locally loaded image when set (caller reads it)
+	Skills        []string // --skills DIR: extra live skill trees
+	Kits          []string // --kit K: escape-hatch kit(s). When present they REPLACE the auto git/local pin (a user override), then config stack applies.
+	MCP           []string // --mcp M: extra MCP servers on top of config.MCP
+	Name          string   // --name N: sandbox name
+	Model         string   // --model M: active pi model (passed through to pi)
+	Passthrough   []string // args after `--`, handed straight to pi
 	// Token is the credential bearer for an OPTIONAL overlay broker. The default
 	// path leaves it empty and forwards no bearer (gog authenticates host-side in
 	// the gateway-spawned MCP server). Reserved for the dormant generic broker
@@ -32,20 +55,26 @@ type runOpts struct {
 	Token string
 }
 
-// kitRef returns the git ref fragment the launcher pins. A stamped release
-// (version like "0.0.99") pins the tag "v0.0.99"; an unstamped dev build
-// (version=="dev") tracks "main".
+// kitRef returns the git ref fragment the launcher pins. A clean released
+// version (e.g. "0.0.16") pins the tag "v0.0.16"; any UNRELEASED version
+// (a "dev"/"+local" or non-semver build, whose tag does not exist) tracks
+// "main" instead of pinning a bogus v<version>.
 func kitRef(version string) string {
-	if version == "dev" {
-		return "main"
+	if isReleased(version) {
+		return "v" + version
 	}
-	return "v" + version
+	return "main"
 }
 
 // gitKitURL is the full --kit URL for a repo-less consumer run, pinned to the
-// stamped version (or main for a dev build).
+// stamped version (or main for an unreleased build).
 func gitKitURL(version string) string {
 	return kitRepo + "#ref=" + kitRef(version) + "&dir=pi-kit"
+}
+
+// localImageRef is the --template ref for a locally loaded image tag.
+func localImageRef(tag string) string {
+	return dockerImageRepo + ":" + tag
 }
 
 // buildSbxArgs composes the full argv for `sbx <args...>` (i.e. it returns
@@ -59,20 +88,31 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 		args = append(args, "--name", o.Name)
 	}
 
-	// Kit selection. Dev mode uses the LOCAL repo kit (Mode B, matching
-	// bin/pi-stack --dev); otherwise pin the published git kit to this build's
-	// version.
-	if o.Dev {
-		args = append(args, "--kit", filepath.Join(o.DevRoot, "pi-kit"))
-	} else {
-		args = append(args, "--kit", gitKitURL(version))
+	// --kit is an escape hatch: when present it REPLACES the auto git/local pin
+	// (so a user can work around an unresolvable release tag). Without it, use
+	// the resolved local checkout kit if we have one, else pin the published git
+	// kit for this build's version.
+	kitOverride := len(o.Kits) > 0
+
+	// Pin a locally loaded image (mirrors `make run`) when we resolved a local
+	// checkout that carries out/.local-image-tag. Skipped when --kit overrides.
+	if !kitOverride && o.LocalKit != "" && o.LocalImageTag != "" {
+		args = append(args, "--template", localImageRef(o.LocalImageTag))
 	}
 
-	// Stack additional kits: config first, then --kit flags.
-	for _, k := range cfg.Kits.Stack {
+	if !kitOverride {
+		if o.LocalKit != "" {
+			args = append(args, "--kit", o.LocalKit)
+		} else {
+			args = append(args, "--kit", gitKitURL(version))
+		}
+	}
+	// User --kit flags are the base when present (escape hatch).
+	for _, k := range o.Kits {
 		args = append(args, "--kit", k)
 	}
-	for _, k := range o.Kits {
+	// Config/overlay stack always applies on top of the base.
+	for _, k := range cfg.Kits.Stack {
 		args = append(args, "--kit", k)
 	}
 
@@ -122,4 +162,46 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 		args = append(args, piArgs...)
 	}
 	return args
+}
+
+// pinnedGitKit returns the launcher's own pinned git kit URL if it appears in
+// the composed args, else "". Used to key the graceful post-exec failure
+// message on whether we pinned a git #ref (vs. a local checkout kit).
+func pinnedGitKit(args []string) string {
+	for _, a := range args {
+		if strings.HasPrefix(a, kitRepo) && strings.Contains(a, "#ref=") {
+			return a
+		}
+	}
+	return ""
+}
+
+// kitResolveFailureMsg formats an actionable error for when `sbx run` fails and
+// the composed kit used a git #ref (a version tag that may not be published, or
+// a fallback to main). Returns "" when no git-ref kit was pinned (so the caller
+// leaks nothing extra on unrelated failures). Pure + testable.
+func kitResolveFailureMsg(pinnedKit string) string {
+	if pinnedKit == "" {
+		return ""
+	}
+	ref := "main"
+	if i := strings.Index(pinnedKit, "#ref="); i >= 0 {
+		rest := pinnedKit[i+len("#ref="):]
+		if amp := strings.IndexByte(rest, '&'); amp >= 0 {
+			rest = rest[:amp]
+		}
+		ref = rest
+	}
+	var lead string
+	if strings.HasPrefix(ref, "v") {
+		lead = fmt.Sprintf("sbx could not resolve the pinned kit (release %s may not be published yet).", ref)
+	} else {
+		lead = fmt.Sprintf("sbx could not resolve the kit at ref %q.", ref)
+	}
+	return "pi-stack: " + lead + `
+Options:
+  - run a local build from your pi-stack checkout:  pi-stack run --dev
+  - override the kit:                               pi-stack run --kit <path-or-git-url>
+  - install a published release
+See ` + "`pi-stack help run`" + ` for the released-vs-local behavior.`
 }

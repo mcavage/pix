@@ -48,6 +48,120 @@ func TestKitRef(t *testing.T) {
 	if got := kitRef("dev"); got != "main" {
 		t.Errorf("kitRef(dev) = %q, want main", got)
 	}
+	// An unreleased +local build must NOT pin a v-tag.
+	if got := kitRef("0.0.16+local"); got != "main" {
+		t.Errorf("kitRef(0.0.16+local) = %q, want main", got)
+	}
+}
+
+func TestIsReleased(t *testing.T) {
+	released := []string{"0.0.16", "1.2.3", "10.20.30"}
+	unreleased := []string{"dev", "0.0.16+local", "0.0.16-dev", "v0.0.16", "0.0", ""}
+	for _, v := range released {
+		if !isReleased(v) {
+			t.Errorf("isReleased(%q) = false, want true", v)
+		}
+	}
+	for _, v := range unreleased {
+		if isReleased(v) {
+			t.Errorf("isReleased(%q) = true, want false", v)
+		}
+	}
+}
+
+func TestBuildSbxArgs_UnreleasedWithCheckout(t *testing.T) {
+	cfg := &config.Config{}
+	// Caller resolved a local checkout + image tag for an unreleased build.
+	args := buildSbxArgs(cfg, runOpts{
+		Workspace:     ".",
+		LocalKit:      "/repo/pi-kit",
+		LocalImageTag: "local-123",
+	}, "0.0.16+local")
+
+	if !contains(args, []string{"--kit", "/repo/pi-kit"}) {
+		t.Errorf("unreleased+checkout should use local kit, got %v", args)
+	}
+	if !contains(args, []string{"--template", "docker.io/mcavage/pi-stack:local-123"}) {
+		t.Errorf("unreleased+checkout should pin --template from .local-image-tag, got %v", args)
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "git+") {
+			t.Errorf("unreleased+checkout must not pin a git kit, found %q", a)
+		}
+	}
+}
+
+func TestBuildSbxArgs_UnreleasedWithCheckoutNoImageTag(t *testing.T) {
+	cfg := &config.Config{}
+	args := buildSbxArgs(cfg, runOpts{Workspace: ".", LocalKit: "/repo/pi-kit"}, "0.0.16+local")
+	if !contains(args, []string{"--kit", "/repo/pi-kit"}) {
+		t.Errorf("should use local kit, got %v", args)
+	}
+	if countFlag(args, "--template") != 0 {
+		t.Errorf("no .local-image-tag => no --template, got %v", args)
+	}
+}
+
+func TestBuildSbxArgs_UnreleasedNoCheckoutTracksMain(t *testing.T) {
+	cfg := &config.Config{}
+	// No LocalKit resolved (no checkout): fall back to #ref=main, never v<ver>.
+	args := buildSbxArgs(cfg, runOpts{Workspace: "."}, "0.0.16+local")
+	want := "git+https://github.com/mcavage/pi-stack.git#ref=main&dir=pi-kit"
+	if !contains(args, []string{"--kit", want}) {
+		t.Errorf("unreleased+no-checkout should track #ref=main, got %v", args)
+	}
+	for _, a := range args {
+		if strings.Contains(a, "#ref=v") {
+			t.Errorf("unreleased build produced a v-tag pin: %q", a)
+		}
+	}
+}
+
+func TestBuildSbxArgs_KitOverrideWins(t *testing.T) {
+	cfg := &config.Config{}
+	// --kit is an escape hatch even for an unreleased build with a checkout.
+	args := buildSbxArgs(cfg, runOpts{
+		Workspace:     ".",
+		Kits:          []string{"/my/kit"},
+		LocalKit:      "/repo/pi-kit",
+		LocalImageTag: "local-123",
+	}, "0.0.16+local")
+
+	if !contains(args, []string{"--kit", "/my/kit"}) {
+		t.Errorf("--kit override missing, got %v", args)
+	}
+	if countFlag(args, "--kit") != 1 {
+		t.Errorf("--kit override should be the only kit, got %v", args)
+	}
+	if countFlag(args, "--template") != 0 {
+		t.Errorf("--kit override should suppress the auto --template, got %v", args)
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "git+") {
+			t.Errorf("--kit override must suppress the git pin, found %q", a)
+		}
+	}
+}
+
+func TestKitResolveFailureMsg(t *testing.T) {
+	// No git-ref kit -> no message (unrelated failure).
+	if msg := kitResolveFailureMsg(""); msg != "" {
+		t.Errorf("expected empty message for no pinned kit, got %q", msg)
+	}
+	if msg := kitResolveFailureMsg(pinnedGitKit([]string{"--kit", "/repo/pi-kit"})); msg != "" {
+		t.Errorf("local kit should not trigger the message, got %q", msg)
+	}
+	// A v-tag pin mentions the release.
+	vtag := "git+https://github.com/mcavage/pi-stack.git#ref=v0.0.16&dir=pi-kit"
+	msg := kitResolveFailureMsg(pinnedGitKit([]string{"--kit", vtag}))
+	if !strings.Contains(msg, "v0.0.16") || !strings.Contains(msg, "--dev") || !strings.Contains(msg, "--kit") {
+		t.Errorf("v-tag failure message missing key hints: %q", msg)
+	}
+	// A main pin still explains.
+	mainRef := "git+https://github.com/mcavage/pi-stack.git#ref=main&dir=pi-kit"
+	if msg := kitResolveFailureMsg(pinnedGitKit([]string{"--kit", mainRef})); !strings.Contains(msg, "main") {
+		t.Errorf("main failure message should mention the ref, got %q", msg)
+	}
 }
 
 func TestBuildSbxArgs_VersionPin(t *testing.T) {
@@ -84,15 +198,33 @@ func TestBuildSbxArgs_KitStacking(t *testing.T) {
 	cfg.Kits.Stack = []string{"/overlay/kit", "git+https://example.com/other#dir=kit"}
 	args := buildSbxArgs(cfg, runOpts{Workspace: ".", Kits: []string{"/flag/kit"}}, "0.0.99")
 
-	// git kit + 2 config stack + 1 flag kit = 4 --kit total.
-	if got := countFlag(args, "--kit"); got != 4 {
-		t.Errorf("expected 4 --kit flags, got %d in %v", got, args)
+	// --kit override (1 flag kit, base) + 2 config stack = 3 --kit total. The
+	// override suppresses the auto git pin.
+	if got := countFlag(args, "--kit"); got != 3 {
+		t.Errorf("expected 3 --kit flags, got %d in %v", got, args)
 	}
 	if !contains(args, []string{"--kit", "/overlay/kit"}) {
 		t.Errorf("config stack kit missing from %v", args)
 	}
 	if !contains(args, []string{"--kit", "/flag/kit"}) {
 		t.Errorf("flag kit missing from %v", args)
+	}
+	// The escape-hatch override suppresses the launcher's git pin.
+	if pinnedGitKit(args) != "" {
+		t.Errorf("--kit override should suppress the git pin, got %v", args)
+	}
+}
+
+func TestBuildSbxArgs_StackWithoutOverride(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Kits.Stack = []string{"/overlay/kit"}
+	args := buildSbxArgs(cfg, runOpts{Workspace: "."}, "0.0.99")
+	// Released base git kit + 1 config stack = 2.
+	if got := countFlag(args, "--kit"); got != 2 {
+		t.Errorf("expected 2 --kit flags, got %d in %v", got, args)
+	}
+	if pinnedGitKit(args) == "" {
+		t.Errorf("released build with no override should pin the git kit, got %v", args)
 	}
 }
 
@@ -112,7 +244,7 @@ func TestBuildSbxArgs_MCPExpansion(t *testing.T) {
 
 func TestBuildSbxArgs_DevBranch(t *testing.T) {
 	cfg := &config.Config{}
-	args := buildSbxArgs(cfg, runOpts{Workspace: ".", Dev: true, DevRoot: "/repo"}, "0.0.99")
+	args := buildSbxArgs(cfg, runOpts{Workspace: ".", Dev: true, DevRoot: "/repo", LocalKit: "/repo/pi-kit"}, "0.0.99")
 
 	// Dev mode uses the local kit, NOT the git kit.
 	if !contains(args, []string{"--kit", "/repo/pi-kit"}) {

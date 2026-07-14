@@ -55,6 +55,10 @@ func main() {
 	case "models", "upgrade", "uninstall":
 		stub(os.Args[1])
 	case "help", "-h", "--help":
+		if len(os.Args) > 2 && os.Args[2] == "run" {
+			fmt.Print(runUsage)
+			return
+		}
 		fmt.Print(helpText)
 	default:
 		// A bare positional (e.g. `pi-stack ~/dev/foo`) is a run workspace.
@@ -114,12 +118,23 @@ func stub(name string) {
 const runUsage = `usage: pi-stack run [DIR] [flags] [-- pi-args...]
 
 flags:
-  --dev            Mode B: load skills live from a repo checkout (needs a checkout)
+  --dev            Mode B: use the local checkout kit + load skills live from it
+                   (needs a checkout; resolves $PI_STACK_DEV_ROOT, the cwd, or
+                   the launcher's own location)
   --skills DIR     mount an extra skill tree and load it live (repeatable)
-  --kit K          stack an extra kit (repeatable)
+  --kit K          override the kit (escape hatch): replaces the auto git/local
+                   pin, so you can work around an unresolvable release tag
+                   (repeatable; a path or git+URL)
   --mcp M          attach an MCP server at creation (repeatable)
   --name N         sandbox name
   --model M        active pi model (passed through to pi)
+
+released vs local:
+  A RELEASED launcher (clean version like 0.0.16) pins the matching kit tag
+  (git+...#ref=v0.0.16). An UNRELEASED/local build (version with +local, a dev
+  build, or non-semver) never pins a nonexistent v<version> tag: it uses your
+  local checkout kit when one is resolvable (also pinning the locally loaded
+  image via --template), otherwise it falls back to #ref=main with a warning.
 
 DIR defaults to the current directory. Everything after -- is passed to pi.
 Set PI_STACK_DEBUG=1 to print the composed sbx command.
