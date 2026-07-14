@@ -74,6 +74,8 @@ const configKeysHelp = `keys:
   gog_account <email>       Google Workspace account for the gog MCP server
   mcp <server>              add/remove an MCP server in the mcp list
   services <name>           add/remove a host service in the services list
+  knowledge_bundles <dir>   add/remove an OKF knowledge bundle dir (set also
+                            enables the knowledge service)
   memory_watcher_model <m>  ollama model for fact capture
   memory_embed_model <m>    ollama model for semantic recall
 `
@@ -120,6 +122,20 @@ func applyConfigChange(cfg *config.Config, unset bool, key string, args []string
 			cfg.AddService(args[0])
 		}
 		return fmt.Sprintf("services = %v", cfg.Services), nil
+
+	case "knowledge_bundles":
+		if len(args) != 1 {
+			return "", fmt.Errorf("config %s knowledge_bundles <dir>: needs a bundle directory path", verb)
+		}
+		if unset {
+			cfg.RemoveKnowledgeBundle(args[0])
+		} else {
+			// Setting a bundle implies wanting the knowledge service that
+			// indexes it, so ensure it's in the services list too.
+			cfg.AddKnowledgeBundle(args[0])
+			cfg.AddService("knowledge")
+		}
+		return fmt.Sprintf("knowledge_bundles = %v, services = %v", cfg.KnowledgeBundles, cfg.Services), nil
 
 	case "memory_watcher_model":
 		if unset {
