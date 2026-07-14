@@ -122,7 +122,7 @@ remembered result or a subagent's "done" report is a violation.
   "findings_ledger": [
     {
       "id":                  "<unique>",
-      "source":              "review|qa|security|lint|uat|orchestrator",
+      "source":              "review|qa|security|tests|typecheck|lint|uat|orchestrator",
       "round":               1,
       "text":                "<verbatim>",
       "status":              "open|fixed|user-triaged",
@@ -143,7 +143,7 @@ remembered result or a subagent's "done" report is a violation.
   ],
   "final_evidence": {
     "build":     { "command": "...", "exit": 0, "timestamp": "...", "log": "<path>" },
-    "tests":     { "command": "...", "exit": 0, "passed": 0, "failed": 0, "timestamp": "...", "log": "<path>" },
+    "tests":     { "command": "...", "exit": 0, "passed": 0, "failed": 0, "baseline_red": false, "timestamp": "...", "log": "<path>" },
     "lint":      { "command": "...", "exit": 0, "timestamp": "...", "log": "<path>" },
     "typecheck": { "command": "...", "exit": 0, "timestamp": "...", "log": "<path>" }
   },
@@ -241,7 +241,10 @@ remembered result or a subagent's "done" report is a violation.
    calls, all recorded in review_rounds[].
 
 10. VERIFY
-    Final gate: build/tests/lint/typecheck green from a fresh run this turn,
+    Final gate: build/tests/lint/typecheck green from a fresh run this turn
+    (exception: a gate marked BASELINE-RED passes iff no NEW failures were added,
+    every affected/new test passes, and the failure set is unchanged-or-reduced
+    vs baseline; NEVER relabel a BASELINE-RED gate green),
     docs updated for any surface change, UAT matrix complete with all rows
     passing, >= 2 explicit review rounds with the final round clean, all
     findings_ledger[] items closed or user-triaged. Write final_evidence and
@@ -329,10 +332,13 @@ The top-level orchestrator MUST NOT write, edit, or delete any file in:
 - documentation
 - configuration
 
-Permitted top-level edits:
+Permitted top-level edits (NONE are shipping files):
 - `.pi-agent/` artifacts (status.json, reports, UAT matrix)
 - Mechanical merge-conflict resolution (choose one side; no logic rewrites)
-- Final report and changelog entry
+- The final in-chat report
+
+A changelog entry or version bump IS a shipping change: dispatch it to an
+`engineer` subagent (or let `ship` handle it), NEVER hand-edit it top-level.
 
 There are NO size-based exemptions. "Glue code", "one-liner", "small fix",
 "cleanup", "just a typo" are all prohibited. Dispatch to `engineer`, `deep`,
@@ -479,7 +485,7 @@ Return to the user ONLY when every row is true with evidence on disk.
 | Gate | Passing | Proof |
 |---|---|---|
 | Build | exits 0 | fresh build output this turn |
-| Tests | 0 failures, count >= baseline, new tests for new behavior | fresh test output this turn |
+| Tests | 0 failures, count >= baseline, new tests for new behavior (BASELINE-RED: no NEW failures vs baseline + affected/new tests pass; never reported green) | fresh test output this turn |
 | Lint / typecheck | clean or repo-tolerated warnings only | fresh lint + typecheck output this turn |
 | Full UAT | every matrix row passing with thick evidence | evidence files in .pi-agent/deliver/<slug>/uat/ |
 | Security | security-lead ran; all CRITICAL/HIGH fixed | security report; findings in ledger |
