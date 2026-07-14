@@ -48,9 +48,10 @@ responses. `gh` rides the same proxy: it injects your GitHub token, so a `gh` ca
 leaves the VM with no credential in it. The other data tools run entirely on the
 host. Google Workspace is the external `gog` CLI, and Slack is a `pi-stack-host`
 subcommand; both run as MCP servers that the sbx gateway spawns on the host, so the
-sandbox reaches them through the gateway and never holds a token. Their secrets live
-in 1Password: the registered command is `op run --env-file=config/op-refs.env`, so
-`op` resolves the `op://` references the moment the gateway spawns the server. The
+sandbox reaches them through the gateway and never holds a token. Slack's token lives in 1Password: its registered command is `op run --env-file=config/op-refs.env`,
+so `op` resolves the `op://` reference when the gateway spawns it. gog is op-optional:
+`pi-stack mcp register` registers it directly when the host keychain unlocks headlessly,
+and only needs op if you need a file-keyring password injected at spawn. The
 memory service is a plain host process the sandbox reaches over
 `host.docker.internal`. Nothing lands on disk in the VM, in a registration, or in
 the sandbox.

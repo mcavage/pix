@@ -68,7 +68,7 @@ exact gateway spawn and prints which account + op-refs it verifies). Full setup:
 `docs/gog-setup.md`. Note: the sbx Cloud MCP Gateway is not yet publicly
 released — this step requires gateway access.
 ```bash
-make mcp-register        # registers gog (needs GOG_ACCOUNT; op-refs.env optional, see docs/gog-setup.md)
+make mcp-register        # registers gog (needs GOG_ACCOUNT; repo/make path: requires op + config/op-refs.env — hard-fails without both; the launcher's `pi-stack mcp register` is op-optional for gog — registers it directly when the host keychain works headlessly)
 sbx mcp ls               # gog listed
 pi-stack doctor          # gog check: account + op-refs it's verifying, headless spawn OK
 ```
@@ -91,7 +91,7 @@ launchctl load -w ~/Library/LaunchAgents/com.pi-stack.serve.plist
 
 ### 6. Wire your accounts
 ```bash
-pi-stack setup      # seeds ~/.config/pi-stack/config.toml, prompts for missing secrets/ollama/gog/mcp
+pi-stack setup      # prompts only for the gog account, writes config (+ ensures memory), and prints copy-paste TODOs for provider secrets and anything else outstanding
 pi-stack doctor     # confirm: keys, ollama+models, memory :11435, gog MCP (see docs/gog-setup.md), mcp
 ```
 
