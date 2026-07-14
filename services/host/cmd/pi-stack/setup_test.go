@@ -20,6 +20,7 @@ func captureSave(dst **config.Config) func(*config.Config) error {
 // writes the account, enables gog, ensures the memory service, and NEVER tells
 // the user to hand-edit the toml.
 func TestSetup_NonInteractiveWritesConfig(t *testing.T) {
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	f := fakeEnv{present: map[string]bool{}, output: map[string]string{}, ports: map[int]bool{}}
 	var buf bytes.Buffer
 	sio := setupIO{in: strings.NewReader(""), out: &buf, isTTY: false}
@@ -57,6 +58,7 @@ func TestSetup_NonInteractiveWritesConfig(t *testing.T) {
 // it can and guides the account via `pi-stack config set` commands (never file
 // editing), and does not prompt/hang.
 func TestSetup_NonTTYNoAccountGuides(t *testing.T) {
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	f := fakeEnv{present: map[string]bool{}, output: map[string]string{}, ports: map[int]bool{}}
 	var buf bytes.Buffer
 	sio := setupIO{in: strings.NewReader(""), out: &buf, isTTY: false}
@@ -80,6 +82,7 @@ func TestSetup_NonTTYNoAccountGuides(t *testing.T) {
 // TestSetup_ProviderSecrets: missing provider keys surface the exact
 // `sbx secret set -g <key>` command; present ones don't.
 func TestSetup_ProviderSecrets(t *testing.T) {
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	f := fakeEnv{
 		present: map[string]bool{"sbx": true},
 		output:  map[string]string{"sbx secret ls": "anthropic openai\n"},
@@ -157,6 +160,118 @@ func TestParseSetupArgs(t *testing.T) {
 	}
 	if _, err := parseSetupArgs([]string{"--bogus"}); err == nil {
 		t.Error("expected error for unknown flag")
+	}
+	// --knowledge, space + equals forms.
+	got, err = parseSetupArgs([]string{"--knowledge", "/tmp/kb", "--non-interactive"})
+	if err != nil || got.knowledge != "/tmp/kb" || !got.assumeYes {
+		t.Errorf("parseSetupArgs --knowledge = %+v, err %v", got, err)
+	}
+	got, err = parseSetupArgs([]string{"--knowledge=/tmp/kb2"})
+	if err != nil || got.knowledge != "/tmp/kb2" {
+		t.Errorf("parseSetupArgs --knowledge= = %+v, err %v", got, err)
+	}
+	if _, err := parseSetupArgs([]string{"--knowledge"}); err == nil {
+		t.Error("expected error for --knowledge with no value")
+	}
+}
+
+// TestSetup_KnowledgeFlagScaffolds: non-interactive `setup --knowledge <dir>`
+// scaffolds the global OKF bundle at that path and wires it into config (the
+// knowledge service is enabled and the bundle is added to knowledge_bundles).
+func TestSetup_KnowledgeFlagScaffolds(t *testing.T) {
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	kb := filepath.Join(t.TempDir(), "skb")
+	absKB, _ := filepath.Abs(kb)
+
+	f := fakeEnv{present: map[string]bool{}, output: map[string]string{}, ports: map[int]bool{}}
+	var buf bytes.Buffer
+	sio := setupIO{in: strings.NewReader(""), out: &buf, isTTY: false}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved *config.Config
+	runSetup(cfg, f.env(), sio,
+		setupOpts{account: "me@x.com", knowledge: kb, assumeYes: true}, captureSave(&saved))
+
+	if saved == nil {
+		t.Fatal("setup must save the config")
+	}
+	if !containsStr(saved.Services, "knowledge") {
+		t.Errorf("Services = %v, want it to contain knowledge", saved.Services)
+	}
+	if !containsStr(saved.KnowledgeBundles, absKB) {
+		t.Errorf("KnowledgeBundles = %v, want it to contain %s", saved.KnowledgeBundles, absKB)
+	}
+	// The bundle was actually scaffolded on disk (reused U3 init logic).
+	if _, err := os.Stat(filepath.Join(kb, "index.md")); err != nil {
+		t.Errorf("expected scaffolded index.md at %s: %v", kb, err)
+	}
+}
+
+// TestSetup_KnowledgeAlreadyConfiguredSkips: with a bundle already in config,
+// setup reports it and does NOT clobber it or scaffold the default dir.
+func TestSetup_KnowledgeAlreadyConfiguredSkips(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(cfgDir, "config.toml"))
+
+	cfg := defaultCfg()
+	cfg.KnowledgeBundles = []string{"/existing/bundle"}
+	cfg.AddService("knowledge")
+
+	f := fakeEnv{present: map[string]bool{}, output: map[string]string{}, ports: map[int]bool{}}
+	var buf bytes.Buffer
+	sio := setupIO{in: strings.NewReader(""), out: &buf, isTTY: false}
+
+	var saved *config.Config
+	runSetup(cfg, f.env(), sio,
+		setupOpts{account: "me@x.com", assumeYes: true}, captureSave(&saved))
+
+	if saved == nil {
+		t.Fatal("setup must save the config")
+	}
+	// No clobber: the one configured bundle is untouched.
+	if len(saved.KnowledgeBundles) != 1 || saved.KnowledgeBundles[0] != "/existing/bundle" {
+		t.Errorf("KnowledgeBundles = %v, want [/existing/bundle] unchanged", saved.KnowledgeBundles)
+	}
+	// The default KB dir must NOT have been scaffolded.
+	if _, err := os.Stat(filepath.Join(cfgDir, "knowledge", "index.md")); err == nil {
+		t.Errorf("default KB scaffolded despite an already-configured bundle")
+	}
+	if !strings.Contains(buf.String(), "already configured") {
+		t.Errorf("expected an 'already configured' report, got:\n%s", buf.String())
+	}
+}
+
+// TestSetup_KnowledgeDefaultNonInteractiveScaffolds: non-interactive setup with
+// no --knowledge flag and no configured bundle scaffolds the DEFAULT global KB
+// (<config-dir>/knowledge) and wires it.
+func TestSetup_KnowledgeDefaultNonInteractiveScaffolds(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(cfgDir, "config.toml"))
+
+	f := fakeEnv{present: map[string]bool{}, output: map[string]string{}, ports: map[int]bool{}}
+	var buf bytes.Buffer
+	sio := setupIO{in: strings.NewReader(""), out: &buf, isTTY: false}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved *config.Config
+	runSetup(cfg, f.env(), sio,
+		setupOpts{account: "me@x.com", assumeYes: true}, captureSave(&saved))
+
+	defDir := filepath.Join(cfgDir, "knowledge")
+	if _, err := os.Stat(filepath.Join(defDir, "index.md")); err != nil {
+		t.Errorf("expected default KB scaffolded at %s: %v", defDir, err)
+	}
+	if saved == nil || !containsStr(saved.Services, "knowledge") {
+		t.Errorf("Services = %v, want it to contain knowledge", saved.Services)
+	}
+	if !containsStr(saved.KnowledgeBundles, defDir) {
+		t.Errorf("KnowledgeBundles = %v, want it to contain %s", saved.KnowledgeBundles, defDir)
 	}
 }
 
