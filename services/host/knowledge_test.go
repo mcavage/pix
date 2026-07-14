@@ -79,13 +79,14 @@ func TestKnowledgeReindexAndQuery(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("indexed = %d, want 2", n)
 	}
-	if len(bundles) != 1 || bundles[0] != dir {
-		t.Fatalf("bundles = %v, want [%s]", bundles, dir)
+	canon := canonicalizeBundle(dir)
+	if len(bundles) != 1 || bundles[0] != canon {
+		t.Fatalf("bundles = %v, want [%s]", bundles, canon)
 	}
 
 	// Keyword match should rank the refund policy first and carry its citations
 	// plus a non-empty snippet drawn from the body.
-	hits := st.query("refund approval", "", 8)
+	hits := st.query("refund approval", nil, 8)
 	if len(hits) == 0 {
 		t.Fatal("query returned no hits")
 	}
@@ -96,8 +97,8 @@ func TestKnowledgeReindexAndQuery(t *testing.T) {
 	if top.Title != "Refund Policy" {
 		t.Errorf("top hit title = %q", top.Title)
 	}
-	if top.Bundle != dir {
-		t.Errorf("top hit bundle = %q, want %q", top.Bundle, dir)
+	if top.Bundle != canon {
+		t.Errorf("top hit bundle = %q, want %q", top.Bundle, canon)
 	}
 	if top.Snippet == "" {
 		t.Error("top hit snippet should be non-empty")
@@ -124,12 +125,89 @@ func TestKnowledgeQueryBundleFilter(t *testing.T) {
 	}
 
 	// A non-matching bundle name filters everything out.
-	if hits := st.query("refund", "/no/such/bundle", 8); len(hits) != 0 {
+	if hits := st.query("refund", []string{"/no/such/bundle"}, 8); len(hits) != 0 {
 		t.Fatalf("bundle filter should drop all hits, got %d", len(hits))
 	}
 	// The real bundle name still matches.
-	if hits := st.query("refund", dir, 8); len(hits) == 0 {
+	if hits := st.query("refund", []string{dir}, 8); len(hits) == 0 {
 		t.Fatal("bundle filter dropped the matching bundle")
+	}
+}
+
+// TestKnowledgeQueryBundleSet: query scoped to a SET of bundles returns only
+// concepts from those bundles; the empty set returns concepts from all bundles.
+func TestKnowledgeQueryBundleSet(t *testing.T) {
+	dirA := writeKnowledgeBundle(t)
+	dirB := writeKnowledgeBundle(t)
+	st := newTestKnowledgeStore(t)
+	if _, _, err := st.reindex([]string{dirA, dirB}); err != nil {
+		t.Fatalf("reindex: %v", err)
+	}
+	canonA := canonicalizeBundle(dirA)
+	canonB := canonicalizeBundle(dirB)
+
+	// Scope to the set {dirB}: every hit must come from dirB.
+	hitsB := st.query("refund users", []string{dirB}, 8)
+	if len(hitsB) == 0 {
+		t.Fatal("set {dirB} returned no hits")
+	}
+	for _, h := range hitsB {
+		if h.Bundle != canonB {
+			t.Fatalf("set {dirB} leaked a hit from %q, want only %q", h.Bundle, canonB)
+		}
+	}
+
+	// Scope to the set {dirA, dirB}: hits from BOTH bundles are allowed.
+	hitsBoth := st.query("refund users", []string{dirA, dirB}, 16)
+	seen := map[string]bool{}
+	for _, h := range hitsBoth {
+		seen[h.Bundle] = true
+	}
+	if !seen[canonA] || !seen[canonB] {
+		t.Fatalf("set {dirA,dirB} missing a bundle: saw %v, want both %q and %q", seen, canonA, canonB)
+	}
+
+	// Empty set == all bundles (same coverage as the explicit 2-elem set).
+	all := st.query("refund users", nil, 16)
+	seenAll := map[string]bool{}
+	for _, h := range all {
+		seenAll[h.Bundle] = true
+	}
+	if !seenAll[canonA] || !seenAll[canonB] {
+		t.Fatalf("empty set should search all bundles: saw %v, want both %q and %q", seenAll, canonA, canonB)
+	}
+}
+
+// TestKnowledgeQueryCanonicalization: a bundle stored under its canonical path
+// still matches when the filter is spelled differently — through a symlink or
+// with redundant path elements (design risk #1).
+func TestKnowledgeQueryCanonicalization(t *testing.T) {
+	dir := writeKnowledgeBundle(t)
+	st := newTestKnowledgeStore(t)
+	if _, _, err := st.reindex([]string{dir}); err != nil {
+		t.Fatalf("reindex: %v", err)
+	}
+	canon := canonicalizeBundle(dir)
+
+	// A symlink pointing at the bundle resolves to the same stored id.
+	link := filepath.Join(t.TempDir(), "linked-bundle")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	hits := st.query("refund", []string{link}, 8)
+	if len(hits) == 0 {
+		t.Fatal("symlinked bundle path did not match the stored (canonical) id")
+	}
+	for _, h := range hits {
+		if h.Bundle != canon {
+			t.Fatalf("symlink filter matched %q, want canonical %q", h.Bundle, canon)
+		}
+	}
+
+	// A redundantly-spelled path (dir/../base) also canonicalizes to a match.
+	spelled := filepath.Join(dir, "..", filepath.Base(dir))
+	if got := st.query("refund", []string{spelled}, 8); len(got) == 0 {
+		t.Fatalf("redundant path %q did not match the stored id", spelled)
 	}
 }
 
@@ -181,7 +259,7 @@ func TestKnowledgeAdapter(t *testing.T) {
 		t.Fatalf("Indexed = %d, want 2", ri.Indexed)
 	}
 
-	qr, err := a.Query(plugin.QueryArgs{Query: "users table", Limit: 8})
+	qr, err := a.Query(plugin.QueryArgs{Query: "users table", Bundles: nil, Limit: 8})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}

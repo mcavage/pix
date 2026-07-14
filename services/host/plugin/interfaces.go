@@ -151,11 +151,13 @@ type KnowledgeStore interface {
 	Health() (KnowledgeHealth, error)
 }
 
-// QueryArgs parameterizes a knowledge query. An empty Bundle means all bundles.
+// QueryArgs parameterizes a knowledge query. Bundles is a SET of bundle-path
+// filters: empty means all bundles, non-empty scopes the search to those
+// bundles (so recall can restrict to e.g. {global, this-project}).
 type QueryArgs struct {
-	Query  string
-	Bundle string
-	Limit  int
+	Query   string
+	Bundles []string
+	Limit   int
 }
 
 // CitedConcept is a single ranked, cited result concept.

@@ -20,7 +20,7 @@ func (echoKnowledge) Query(a QueryArgs) (QueryResult, error) {
 		Snippet:     "snip",
 		Score:       0.75,
 		Citations:   []string{"src1", "src2"},
-		Bundle:      a.Bundle,
+		Bundle:      strings.Join(a.Bundles, ","),
 	}}}, nil
 }
 func (echoKnowledge) Reindex(a ReindexArgs) (ReindexResult, error) {
@@ -34,7 +34,7 @@ func TestRPCRoundTripKnowledge(t *testing.T) {
 	client := newRPCPair(t, &knowledgeRPCServer{Impl: echoKnowledge{}})
 	c := &knowledgeRPCClient{client: client}
 
-	got, err := c.Query(QueryArgs{Query: "how", Bundle: "core", Limit: 5})
+	got, err := c.Query(QueryArgs{Query: "how", Bundles: []string{"core"}, Limit: 5})
 	if err != nil || len(got.Concepts) != 1 {
 		t.Fatalf("Query round trip: got %+v err %v", got, err)
 	}

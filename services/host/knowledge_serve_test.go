@@ -77,6 +77,45 @@ func TestKnowledgeMuxHealthAndQuery(t *testing.T) {
 	}
 }
 
+// TestKnowledgeMuxBundleSetParam drives the JSON-RPC `query` param parsing: the
+// new `bundles` array scopes the search, and a legacy single `bundle` string is
+// still honoured (wrapped into a 1-elem set) for back-compat.
+func TestKnowledgeMuxBundleSetParam(t *testing.T) {
+	dir := writeKnowledgeBundle(t)
+	st := newTestKnowledgeStore(t)
+	if _, _, err := st.reindex([]string{dir}); err != nil {
+		t.Fatalf("reindex: %v", err)
+	}
+	srv := httptest.NewServer(knowledgeMux(st))
+	defer srv.Close()
+
+	concepts := func(params map[string]any) []any {
+		qr := rpcParamCall(t, srv, "query", params)
+		res, ok := qr["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("query missing result: %v", qr)
+		}
+		c, _ := res["concepts"].([]any)
+		return c
+	}
+
+	// New `bundles` array with the real bundle -> hits.
+	if got := concepts(map[string]any{"query": "refund approval", "bundles": []string{dir}}); len(got) == 0 {
+		t.Error("bundles=[dir] returned no concepts")
+	}
+	// `bundles` array with a bogus path -> filtered to empty.
+	if got := concepts(map[string]any{"query": "refund", "bundles": []string{"/no/such/bundle"}}); len(got) != 0 {
+		t.Errorf("bundles=[/no/such] should drop all hits, got %d", len(got))
+	}
+	// Back-compat: a single `bundle` string still filters.
+	if got := concepts(map[string]any{"query": "refund approval", "bundle": dir}); len(got) == 0 {
+		t.Error("legacy single bundle=dir returned no concepts")
+	}
+	if got := concepts(map[string]any{"query": "refund", "bundle": "/no/such/bundle"}); len(got) != 0 {
+		t.Errorf("legacy single bundle=/no/such should drop all hits, got %d", len(got))
+	}
+}
+
 // --- plugin proxy path over a deterministic stub -----------------------------
 
 type stubKnowledge struct{}
