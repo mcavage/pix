@@ -15,8 +15,9 @@
 //	pi-stack version                   print the stamped version (full)
 //	pi-stack config show|path          show config path + contents (full)
 //	pi-stack serve [args…]             exec the sibling pi-stack-host serve (full)
-//	pi-stack doctor|setup|mcp|models|upgrade|uninstall   (stubbed — later units)
-//	pi-stack help                      print this verb tree
+//	pi-stack status|doctor|setup|mcp|memory|knowledge|profile   (all implemented)
+//	pi-stack models|upgrade|uninstall  (stubbed — later units)
+//	pi-stack help [verb]               print the verb tree (or one verb's usage)
 package main
 
 import (
@@ -52,13 +53,14 @@ func main() {
 
 	switch args[0] {
 	case "run":
-		if maybeFirstRun() {
-			return
-		}
-		runRun(args[1:])
+		runVerb(args[1:])
 	case "status", "st":
 		runStatusCmd(args[1:])
 	case "version", "--version", "-v":
+		if len(args) > 1 && (args[1] == "-h" || args[1] == "--help") {
+			fmt.Print(versionUsage)
+			return
+		}
 		fmt.Println(version)
 	case "config":
 		runConfig(args[1:])
@@ -79,9 +81,11 @@ func main() {
 	case "models", "upgrade", "uninstall":
 		stub(args[0])
 	case "help", "-h", "--help":
-		if len(args) > 1 && args[1] == "run" {
-			fmt.Print(runUsage)
-			return
+		if len(args) > 1 {
+			if u, ok := verbUsage(args[1]); ok {
+				fmt.Print(u)
+				return
+			}
 		}
 		fmt.Print(helpText)
 	default:
@@ -90,10 +94,7 @@ func main() {
 		// (e.g. `pi-stack memoyr`) — do NOT silently launch a sandbox for it.
 		if a := args[0]; len(a) > 0 && a[0] != '-' {
 			if fi, err := os.Stat(a); err == nil && fi.IsDir() {
-				if maybeFirstRun() {
-					return
-				}
-				runRun(args)
+				runVerb(args)
 				return
 			}
 			fmt.Fprintf(os.Stderr, "pi-stack: unknown command %q (and no such directory)\n\n", a)
@@ -106,9 +107,35 @@ func main() {
 	}
 }
 
+// firstRunHook is the onboarding entry point, indirected through a package var
+// so the help-before-onboarding ordering is unit-testable: a test swaps it for a
+// spy and asserts a help short-circuit never reaches it.
+var firstRunHook = maybeFirstRun
+
+// runVerb handles the `run` verb and the bare-DIR alias. It short-circuits to
+// run usage on a -h/--help request BEFORE any side effect (notably first-run
+// onboarding), so `pi-stack run --help` prints help even on a config-less host
+// instead of dropping into the setup prompt. Otherwise it runs onboarding (which
+// may fully handle a fresh host) then launches the sandbox.
+func runVerb(argv []string) {
+	if wantsHelp(argv) {
+		fmt.Print(runUsage)
+		return
+	}
+	if firstRunHook() {
+		return
+	}
+	runRun(argv)
+}
+
 // runServe execs the sibling pi-stack-host binary's `serve` subcommand, found
 // next to this binary or on PATH, passing along any args.
 func runServe(argv []string) {
+	// A leading -h/--help prints serve usage instead of execing the host binary.
+	if len(argv) > 0 && (argv[0] == "-h" || argv[0] == "--help") {
+		fmt.Print(serveUsage)
+		return
+	}
 	bin, err := findHostBinary()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack serve: %v\n", err)

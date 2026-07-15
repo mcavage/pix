@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
+
+	"pi-stack/host/config"
 )
 
 // fakeRPCServer stands up an httptest JSON-RPC server that returns canned
@@ -259,6 +262,111 @@ func TestFlagSetErrors(t *testing.T) {
 		if _, err := fs.parse(argv); !isUsage(err) {
 			t.Errorf("parse(%v) err = %v, want usageError", argv, err)
 		}
+	}
+}
+
+// TestFlagSetHelpWinsOverValue is the F3 gate: a value-taking flag must NOT
+// swallow a -h/--help token as its value. `-m --help` sets help and consumes
+// no value (msg stays empty), so help wins over the pending value and the caller
+// prints usage instead of running the side-effecting action.
+func TestFlagSetHelpWinsOverValue(t *testing.T) {
+	for _, argv := range [][]string{
+		{"-m", "--help"}, {"--message", "-h"}, {"-m", "-h", "extra"}, {"foo", "-h"},
+	} {
+		fs := newFlagSet()
+		msg := fs.str("message", "", "m")
+		pos, err := fs.parse(argv)
+		if err != nil {
+			t.Fatalf("parse(%v): %v", argv, err)
+		}
+		if !fs.help {
+			t.Errorf("parse(%v) did not set help", argv)
+		}
+		if *msg != "" {
+			t.Errorf("parse(%v) consumed a value for -m (%q) — help must win", argv, *msg)
+		}
+		if len(pos) != 0 {
+			t.Errorf("parse(%v) returned positionals %v — help must short-circuit", argv, pos)
+		}
+	}
+	// A help token AFTER a `--` terminator is passthrough, not ours: help stays off.
+	fs := newFlagSet()
+	fs.str("message", "", "m")
+	if _, err := fs.parse([]string{"--", "--help"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if fs.help {
+		t.Error("--help after -- must not set help")
+	}
+}
+
+// TestMemoryRecallHelp_BothPositions is the F3 recall gate: both `recall -h foo`
+// and `recall foo -h` print usage and never RPC (Port:1 would fail a dial).
+func TestMemoryRecallHelp_BothPositions(t *testing.T) {
+	for _, argv := range [][]string{{"-h", "foo"}, {"foo", "-h"}, {"--help", "foo"}} {
+		var out bytes.Buffer
+		if err := memoryRecall(argv, rpcClient{Port: 1}, &out, "default"); err != nil {
+			t.Fatalf("memoryRecall(%v): %v", argv, err)
+		}
+		if !strings.Contains(out.String(), "usage: pi-stack memory recall") {
+			t.Errorf("memoryRecall(%v) = %q, want recall usage", argv, out.String())
+		}
+	}
+}
+
+// TestKnowledgeSyncHelp_NoCommit is the F3 sync gate: `sync -m --help` must set
+// help via the flagSet pre-scan and NOT consume `--help` as the -m value, so the
+// commit/push path is never reached. Asserted at the flagSet level (the same
+// parser runKnowledgeSync uses) so no git repo is required.
+func TestKnowledgeSyncHelp_NoCommit(t *testing.T) {
+	fs := newFlagSet()
+	msg := fs.str("message", "", "m")
+	fs.str("bundle", "")
+	fs.bool("allow-main")
+	pos, err := fs.parse([]string{"-m", "--help"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !fs.help {
+		t.Fatal("sync -m --help must set help (so it prints usage, not commit)")
+	}
+	if *msg != "" || len(pos) != 0 {
+		t.Errorf("sync -m --help consumed a value/positional (msg=%q pos=%v) — commit path reachable", *msg, pos)
+	}
+}
+
+// TestRunMemoryCore_HelpIgnoresBrokenConfig is the F5 gate: a subcommand help
+// request prints usage WITHOUT loading config, so `memory recall --help` works
+// even when config is malformed / names an unknown profile. The injected loader
+// errors and the client panics if reached — proving neither is touched on help.
+func TestRunMemoryCore_HelpIgnoresBrokenConfig(t *testing.T) {
+	brokenLoad := func() (*config.Config, string, error) {
+		return nil, "", fmt.Errorf(`no profile "wrok" — configured: work`)
+	}
+	panicClient := func() rpcClient { panic("runMemoryCore must not RPC on a help request") }
+
+	for _, argv := range [][]string{{"recall", "--help"}, {"stats", "-h"}, {"forget", "--help"}} {
+		var out bytes.Buffer
+		if err := runMemoryCore(argv, brokenLoad, panicClient, &out); err != nil {
+			t.Fatalf("runMemoryCore(%v) with broken config: %v", argv, err)
+		}
+		if !strings.Contains(out.String(), "usage: pi-stack memory "+argv[0]) {
+			t.Errorf("runMemoryCore(%v) = %q, want %s usage", argv, out.String(), argv[0])
+		}
+	}
+
+	// Without a help request, the broken config MUST surface (never a silent
+	// fallback to the default bucket).
+	if err := runMemoryCore([]string{"recall", "foo"}, brokenLoad, memoryClient, &bytes.Buffer{}); err == nil {
+		t.Error("runMemoryCore(recall foo) with broken config should error, not fall back")
+	}
+	// Bare `memory --help` prints the top-level usage, also config-free.
+	var out bytes.Buffer
+	if err := runMemoryCore([]string{"--help"}, brokenLoad, panicClient, &out); err != nil {
+		t.Fatalf("runMemoryCore([--help]): %v", err)
+	}
+	if !strings.Contains(out.String(), "usage: pi-stack memory <") {
+		t.Errorf("memory --help = %q, want top-level usage", out.String())
 	}
 }
 

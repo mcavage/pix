@@ -118,6 +118,54 @@ func TestKnowledgeInit_Idempotent(t *testing.T) {
 
 // TestKnowledgeUse_LocalPath: use <localpath> adds the abs path + enables the
 // service, hermetically (no clone).
+// TestResolveKnowledgeInitArgs_TrailingJunk is the F2 gate: init validates EVERY
+// token, not just argv[0]. A trailing flag typo or a second positional must be a
+// usage error (no dir, no help) so nothing is scaffolded / no config is mutated.
+func TestResolveKnowledgeInitArgs_TrailingJunk(t *testing.T) {
+	bad := [][]string{
+		{"./kb", "--jsom"},  // trailing flag typo after a valid DIR
+		{"--jsom", "./kb"},  // leading flag typo
+		{"./kb", "./other"}, // two positionals
+		{"a", "b", "c"},     // several positionals
+	}
+	for _, argv := range bad {
+		dir, help, err := resolveKnowledgeInitArgs(argv)
+		if err == nil || help || dir != "" {
+			t.Errorf("resolveKnowledgeInitArgs(%v) = (%q,%v,%v), want ('',false,error)", argv, dir, help, err)
+		}
+	}
+	// A help token anywhere still wins over trailing junk.
+	if _, help, err := resolveKnowledgeInitArgs([]string{"./kb", "--help"}); !help || err != nil {
+		t.Errorf("resolveKnowledgeInitArgs([./kb --help]) help=%v err=%v, want help,nil", help, err)
+	}
+}
+
+// TestKnowledgeInitTrailingJunk_NoSideEffects: `knowledge init ./kb --jsom` must
+// NOT scaffold ./kb or touch config — the trailing typo is rejected before any
+// filesystem/config side effect.
+func TestKnowledgeInitTrailingJunk_NoSideEffects(t *testing.T) {
+	tmp := t.TempDir()
+	cfgFile := filepath.Join(tmp, "config.toml")
+	t.Setenv("PI_STACK_CONFIG", cfgFile)
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	// runKnowledgeInit calls os.Exit(2) on a usage error, so exercise the pure
+	// resolver + assert no bundle/config was created as a proxy for "no side effect".
+	if _, _, err := resolveKnowledgeInitArgs([]string{"./kb", "--jsom"}); err == nil {
+		t.Fatal("expected a usage error for trailing junk")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "kb")); err == nil {
+		t.Error("trailing-junk init created the ./kb bundle dir")
+	}
+	if _, err := os.Stat(cfgFile); err == nil {
+		t.Error("trailing-junk init wrote config")
+	}
+}
+
 func TestKnowledgeUse_LocalPath(t *testing.T) {
 	cfgFile := filepath.Join(t.TempDir(), "config.toml")
 	t.Setenv("PI_STACK_CONFIG", cfgFile)

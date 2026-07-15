@@ -33,8 +33,12 @@ import (
 //	pi-stack knowledge ls             list configured bundles + daemon health.
 func runKnowledge(argv []string) {
 	if len(argv) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: pi-stack knowledge <init|use|ls> [args]")
+		fmt.Fprint(os.Stderr, knowledgeUsage)
 		os.Exit(2)
+	}
+	if argv[0] == "-h" || argv[0] == "--help" {
+		fmt.Print(knowledgeUsage)
+		return
 	}
 	switch argv[0] {
 	case "init":
@@ -42,7 +46,7 @@ func runKnowledge(argv []string) {
 	case "use":
 		runKnowledgeUse(argv[1:])
 	case "ls":
-		runKnowledgeLs()
+		runKnowledgeLs(argv[1:])
 	case "query", "search":
 		runKnowledgeQuery(argv[1:])
 	case "sync", "push":
@@ -65,6 +69,10 @@ func runKnowledgeQuery(argv []string) {
 	positional, perr := fs.parse(argv)
 	if perr != nil {
 		exitFromErr("knowledge query", perr)
+	}
+	if fs.help {
+		fmt.Println("usage: pi-stack knowledge query <text...> [--limit N] [--json]")
+		return
 	}
 	q := strings.TrimSpace(strings.Join(positional, " "))
 	if q == "" {
@@ -119,6 +127,10 @@ func runKnowledgeRemote(argv []string) {
 		fmt.Fprintln(os.Stderr, perr.Error())
 		os.Exit(2)
 	}
+	if fs.help {
+		fmt.Println("usage: pi-stack knowledge remote [set <url>] [--bundle DIR]")
+		return
+	}
 	bundle, err := resolveSyncBundle(*bundleFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack knowledge remote: %v\n", err)
@@ -160,6 +172,10 @@ func runKnowledgeSync(argv []string) {
 	if perr != nil {
 		fmt.Fprintln(os.Stderr, perr.Error())
 		os.Exit(2)
+	}
+	if fs.help {
+		fmt.Println("usage: pi-stack knowledge sync [-m MSG] [--bundle DIR] [--allow-main]")
+		return
 	}
 	if len(positional) > 0 {
 		fmt.Fprintln(os.Stderr, "usage: pi-stack knowledge sync [-m MSG] [--bundle DIR] [--allow-main]")
@@ -279,14 +295,16 @@ func knowledgeCacheDir() string {
 
 // runKnowledgeInit is the CLI entry point for `knowledge init [DIR]`.
 func runKnowledgeInit(argv []string) {
-	dir := defaultKnowledgeDir()
-	if len(argv) > 0 && argv[0] != "" {
-		abs, err := filepath.Abs(argv[0])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "pi-stack knowledge init: %v\n", err)
-			os.Exit(1)
-		}
-		dir = abs
+	dir, help, err := resolveKnowledgeInitArgs(argv)
+	if help {
+		fmt.Print(knowledgeInitUsage)
+		return
+	}
+	if err != nil {
+		// A flag typo must NOT scaffold a junk bundle or mutate config: bail with a
+		// usage error BEFORE any filesystem / config side effect.
+		fmt.Fprintf(os.Stderr, "pi-stack knowledge init: %v\n\n%s", err, knowledgeInitUsage)
+		os.Exit(2)
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -297,6 +315,42 @@ func runKnowledgeInit(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack knowledge init: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// resolveKnowledgeInitArgs validates `knowledge init` argv WITHOUT side effects
+// so a flag typo can be rejected before any scaffold / git-init / config write.
+// It returns help=true for a -h/--help request, an error for any leading-dash
+// token (mirroring `knowledge use`), else the resolved target dir.
+func resolveKnowledgeInitArgs(argv []string) (dir string, help bool, err error) {
+	if wantsHelp(argv) {
+		return "", true, nil
+	}
+	dir = defaultKnowledgeDir()
+	// Validate EVERY token, not just argv[0]: `knowledge init ./kb --jsom` must
+	// reject the trailing flag typo rather than scaffold ./kb + mutate config. Any
+	// dash-prefixed token is an unknown flag; more than one positional is an error
+	// (init takes a single optional DIR).
+	var positionals []string
+	for _, a := range argv {
+		if a == "" {
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			return "", false, fmt.Errorf("unknown flag %q (knowledge init takes an optional DIR)", a)
+		}
+		positionals = append(positionals, a)
+	}
+	if len(positionals) > 1 {
+		return "", false, fmt.Errorf("only one DIR allowed, got %d (%s)", len(positionals), strings.Join(positionals, " "))
+	}
+	if len(positionals) == 1 {
+		abs, aerr := filepath.Abs(positionals[0])
+		if aerr != nil {
+			return "", false, aerr
+		}
+		dir = abs
+	}
+	return dir, false, nil
 }
 
 // knowledgeInit scaffolds a spec-correct OKF bundle at dir (idempotent: it never
@@ -342,6 +396,11 @@ func knowledgeInit(cfg *config.Config, dir string, out io.Writer) error {
 // KB at a bundle; --project writes a per-repo .pi-stack/knowledge pointer instead
 // and leaves global config untouched.
 func runKnowledgeUse(argv []string) {
+	if wantsHelp(argv) {
+		fmt.Println("usage: pi-stack knowledge use <path|git-url>")
+		fmt.Println("       pi-stack knowledge use --project <path|git-url> [--dir D]")
+		return
+	}
 	project := false
 	dir := "."
 	ref := ""
@@ -517,14 +576,52 @@ func resolveBundleRef(ref, cacheDir string, out io.Writer) (string, error) {
 	return dest, nil
 }
 
-// runKnowledgeLs is the CLI entry point for `knowledge ls`.
-func runKnowledgeLs() {
+// runKnowledgeLs is the CLI entry point for `knowledge ls [--json]`.
+func runKnowledgeLs(argv []string) {
+	fs := newFlagSet()
+	if _, err := fs.parse(argv); err != nil {
+		exitFromErr("knowledge ls", err)
+	}
+	if fs.help {
+		fmt.Print(knowledgeUsage)
+		return
+	}
 	cfg, _, err := loadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack knowledge ls: %v\n", err)
 		os.Exit(1)
 	}
+	if fs.json {
+		_ = writeJSONOut(os.Stdout, knowledgeLsView(cfg, defaultShellEnv()))
+		return
+	}
 	knowledgeLs(cfg, defaultShellEnv(), os.Stdout)
+}
+
+// knowledgeLsView is the machine-readable snapshot behind `knowledge ls --json`:
+// the configured bundles, whether the knowledge service is enabled + reachable,
+// and any project pointer in the cwd.
+type knowledgeLsSnapshot struct {
+	ConfigPath     string   `json:"config_path"`
+	Bundles        []string `json:"knowledge_bundles"`
+	ServiceEnabled bool     `json:"service_enabled"`
+	ServiceUp      bool     `json:"service_up"`
+	ProjectPointer string   `json:"project_pointer,omitempty"`
+}
+
+func knowledgeLsView(cfg *config.Config, env shellEnv) knowledgeLsSnapshot {
+	v := knowledgeLsSnapshot{ConfigPath: config.Path(), Bundles: cfg.KnowledgeBundles}
+	for _, s := range cfg.Services {
+		if s == "knowledge" {
+			v.ServiceEnabled = true
+			break
+		}
+	}
+	if v.ServiceEnabled && env.dial != nil {
+		v.ServiceUp = env.dial(11436)
+	}
+	v.ProjectPointer = readProjectPointer(".")
+	return v
 }
 
 // knowledgeLs prints the configured knowledge bundles and whether the knowledge

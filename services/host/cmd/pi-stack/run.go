@@ -26,6 +26,11 @@ import (
 func runRun(argv []string) {
 	o, err := parseRunArgs(argv)
 	if err != nil {
+		if err == errHelpRequested {
+			// -h/--help: usage to STDOUT, exit 0 (a help request, not an error).
+			fmt.Print(runUsage)
+			return
+		}
 		fmt.Fprintf(os.Stderr, "pi-stack run: %v\n\n", err)
 		fmt.Fprint(os.Stderr, runUsage)
 		os.Exit(2)
@@ -160,6 +165,10 @@ func runRun(argv []string) {
 // DIR can appear before or after the flags, matching the flexibility of the old
 // bin/pi-stack shell launcher. Everything after `--` is pi passthrough.
 func parseRunArgs(argv []string) (runOpts, error) {
+	// -h/--help anywhere before `--` is a help request, not a parse error.
+	if wantsHelp(argv) {
+		return runOpts{}, errHelpRequested
+	}
 	o := runOpts{Workspace: "."}
 	wsSet := false
 
@@ -233,7 +242,29 @@ func parseRunArgs(argv []string) (runOpts, error) {
 			wsSet = true
 		}
 	}
+	// A non-"." workspace MUST be an existing directory. Otherwise a mistyped verb
+	// (`pi-stack run help`, `run doctro`) would silently boot a junk sandbox named
+	// after the typo. Reject it, suggesting the verb when the token matches one.
+	if err := validateRunWorkspace(o.Workspace); err != nil {
+		return o, err
+	}
 	return o, nil
+}
+
+// validateRunWorkspace verifies a resolved run workspace is launchable: the cwd
+// default (".") always is; any other value must name an existing directory. A
+// non-directory token that matches a known verb gets a "did you mean" hint.
+func validateRunWorkspace(ws string) error {
+	if ws == "." {
+		return nil
+	}
+	if fi, err := os.Stat(ws); err == nil && fi.IsDir() {
+		return nil
+	}
+	if knownVerbs[ws] {
+		return fmt.Errorf("%q is not a directory. Did you mean `pi-stack %s`?", ws, ws)
+	}
+	return fmt.Errorf("%q is not a directory", ws)
 }
 
 // resolveRepoRoot finds a pi-stack repo checkout for the local kit path, in

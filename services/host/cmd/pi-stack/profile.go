@@ -110,32 +110,46 @@ func sanitizeProfileName(s string) string {
 //	pi-stack profile use <name>      set active_profile (persisted)
 //	pi-stack profile use default     revert to the base config
 func runProfile(argv []string) {
+	if wantsHelp(argv) {
+		fmt.Print(profileUsage)
+		return
+	}
 	if len(argv) == 0 {
-		runProfileLs(os.Stdout)
+		runProfileLs(os.Stdout, false)
 		return
 	}
 	switch argv[0] {
 	case "ls", "list":
-		runProfileLs(os.Stdout)
-	case "use", "set":
-		if len(argv) < 2 {
-			fmt.Fprintln(os.Stderr, "usage: pi-stack profile use <name>")
+		jsonOut, err := parseProfileLsArgs(argv[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(2)
 		}
-		runProfileUse(argv[1], os.Stdout)
+		runProfileLs(os.Stdout, jsonOut)
+	case "use", "set":
+		name, err := validateProfileUseArgs(argv[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(2)
+		}
+		runProfileUse(name, os.Stdout)
 	default:
 		fmt.Fprintf(os.Stderr, "pi-stack profile: unknown subcommand %q (want: ls, use)\n", argv[0])
 		os.Exit(2)
 	}
 }
 
-func runProfileLs(out io.Writer) {
+func runProfileLs(out io.Writer, jsonOut bool) {
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack profile ls: %v\n", err)
 		os.Exit(1)
 	}
 	active := resolveProfileName(cfg)
+	if jsonOut {
+		_ = writeJSONOut(out, profileLsView(cfg, active))
+		return
+	}
 	fmt.Fprintf(out, "# config: %s\n", config.Path())
 	for _, name := range cfg.ProfileNames() {
 		marker := "  "
@@ -146,6 +160,74 @@ func runProfileLs(out io.Writer) {
 		fmt.Fprintf(out, "%s%-12s gog=%s  mcp=%v  bundles=%d  kits=%d\n",
 			marker, name, dashIfEmpty(res.GogAccount), res.MCP, len(res.KnowledgeBundles), len(res.Kits.Stack))
 	}
+}
+
+// validateProfileUseArgs validates the tokens after `profile use`: exactly one
+// positional profile name, no flags, no extra positionals. It rejects trailing
+// junk (`profile use work --jsom`, `profile use a b`) BEFORE any save, so a typo
+// never silently mutates active_profile. -h/--help is handled by the wantsHelp
+// gate in runProfile before this is reached.
+func validateProfileUseArgs(argv []string) (string, error) {
+	if len(argv) == 0 {
+		return "", usageErr("usage: pi-stack profile use <name>")
+	}
+	name := argv[0]
+	if strings.HasPrefix(name, "-") {
+		return "", usageErr(fmt.Sprintf("unknown flag %q\nusage: pi-stack profile use <name>", name))
+	}
+	if len(argv) > 1 {
+		return "", usageErr(fmt.Sprintf("unexpected extra argument %q\nusage: pi-stack profile use <name>", argv[1]))
+	}
+	return name, nil
+}
+
+// parseProfileLsArgs validates the tokens after `profile ls`: only an optional
+// --json. Any other token (a flag typo like --jsom, or a stray positional) is a
+// usage error, so `profile ls --jsom` fails loud instead of silently running as
+// plain ls. -h/--help is handled by the wantsHelp gate in runProfile.
+func parseProfileLsArgs(argv []string) (bool, error) {
+	jsonOut := false
+	for _, a := range argv {
+		switch a {
+		case "--json":
+			jsonOut = true
+		default:
+			return false, usageErr(fmt.Sprintf("unknown argument %q\nusage: pi-stack profile ls [--json]", a))
+		}
+	}
+	return jsonOut, nil
+}
+
+// profileLsSnapshot is the machine-readable snapshot behind `profile ls --json`.
+type profileLsSnapshot struct {
+	ConfigPath string            `json:"config_path"`
+	Active     string            `json:"active"`
+	Profiles   []profileLineView `json:"profiles"`
+}
+
+type profileLineView struct {
+	Name       string   `json:"name"`
+	Active     bool     `json:"active"`
+	GogAccount string   `json:"gog_account,omitempty"`
+	MCP        []string `json:"mcp"`
+	Bundles    int      `json:"knowledge_bundles"`
+	Kits       int      `json:"kits"`
+}
+
+func profileLsView(cfg *config.Config, active string) profileLsSnapshot {
+	snap := profileLsSnapshot{ConfigPath: config.Path(), Active: active}
+	for _, name := range cfg.ProfileNames() {
+		res := cfg.Resolve(name)
+		snap.Profiles = append(snap.Profiles, profileLineView{
+			Name:       name,
+			Active:     name == active,
+			GogAccount: res.GogAccount,
+			MCP:        res.MCP,
+			Bundles:    len(res.KnowledgeBundles),
+			Kits:       len(res.Kits.Stack),
+		})
+	}
+	return snap
 }
 
 func runProfileUse(name string, out io.Writer) {

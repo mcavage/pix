@@ -15,11 +15,14 @@ import (
 // move" — WITHOUT launching anything. It replaces the old footgun where bare
 // `pi-stack` spun up a sandbox.
 func runStatusCmd(argv []string) {
-	jsonOut := false
-	for _, a := range argv {
-		if a == "--json" {
-			jsonOut = true
+	jsonOut, err := parseStatusArgs(argv)
+	if err != nil {
+		if err == errHelpRequested {
+			fmt.Print(statusUsage)
+			return
 		}
+		fmt.Fprintf(os.Stderr, "pi-stack status: %v\n\n%s", err, statusUsage)
+		os.Exit(2)
 	}
 	cfg, name, err := loadResolvedConfig()
 	if err != nil {
@@ -27,6 +30,23 @@ func runStatusCmd(argv []string) {
 		os.Exit(1)
 	}
 	renderStatus(cfg, name, defaultShellEnv(), os.Stdout, jsonOut)
+}
+
+// parseStatusArgs validates status flags: -h/--help returns errHelpRequested,
+// --json sets jsonOut, and any other token is a usage error (so a typo like
+// --jsom fails loud instead of running silently as if no flag were given).
+func parseStatusArgs(argv []string) (jsonOut bool, err error) {
+	for _, a := range argv {
+		switch a {
+		case "-h", "--help":
+			return false, errHelpRequested
+		case "--json":
+			jsonOut = true
+		default:
+			return false, fmt.Errorf("unknown flag %q", a)
+		}
+	}
+	return jsonOut, nil
 }
 
 // renderStatus is the testable core: it probes the environment via env and

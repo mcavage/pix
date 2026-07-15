@@ -94,6 +94,47 @@ func TestResolveProfileNamePrecedence(t *testing.T) {
 	}
 }
 
+// TestValidateProfileUseArgs is the F4 gate for `profile use`: exactly one
+// positional name; a trailing flag typo (`use work --jsom`) or an extra
+// positional (`use a b`) is a usage error, so it never silently saves
+// active_profile.
+func TestValidateProfileUseArgs(t *testing.T) {
+	if name, err := validateProfileUseArgs([]string{"work"}); err != nil || name != "work" {
+		t.Errorf(`use "work" = (%q,%v), want ("work",nil)`, name, err)
+	}
+	bad := [][]string{
+		nil,                // no name
+		{"work", "--jsom"}, // trailing flag typo
+		{"--jsom"},         // flag where a name belongs
+		{"work", "extra"},  // extra positional
+		{"a", "b", "c"},    // several extras
+	}
+	for _, argv := range bad {
+		if _, err := validateProfileUseArgs(argv); err == nil {
+			t.Errorf("validateProfileUseArgs(%v) = nil error, want usage error", argv)
+		} else if !isUsage(err) {
+			t.Errorf("validateProfileUseArgs(%v) err = %v, want usageError", argv, err)
+		}
+	}
+}
+
+// TestParseProfileLsArgs is the F4 gate for `profile ls`: only an optional
+// --json; any other token (a --jsom typo, a stray positional) is a usage error
+// rather than being silently ignored and run as plain ls.
+func TestParseProfileLsArgs(t *testing.T) {
+	if j, err := parseProfileLsArgs([]string{"--json"}); err != nil || !j {
+		t.Errorf("ls --json = (%v,%v), want (true,nil)", j, err)
+	}
+	if j, err := parseProfileLsArgs(nil); err != nil || j {
+		t.Errorf("ls (no args) = (%v,%v), want (false,nil)", j, err)
+	}
+	for _, argv := range [][]string{{"--jsom"}, {"work"}, {"--json", "extra"}} {
+		if _, err := parseProfileLsArgs(argv); err == nil || !isUsage(err) {
+			t.Errorf("parseProfileLsArgs(%v) err = %v, want usageError", argv, err)
+		}
+	}
+}
+
 func TestFirstRunFlowNonTTY(t *testing.T) {
 	var out bytes.Buffer
 	called := false

@@ -34,6 +34,7 @@ type setupOpts struct {
 	account   string // --account <email>
 	knowledge string // --knowledge <path|url>: the global KB source
 	assumeYes bool   // --yes / --non-interactive: never prompt
+	help      bool   // -h / --help: print usage + exit 0
 }
 
 // setupIO carries the streams + a TTY flag so tests can exercise the non-TTY
@@ -230,11 +231,16 @@ func promptLine(sio setupIO, prompt string) string {
 }
 
 // parseSetupArgs parses the setup flag set.
+// setupHelp is a sentinel setupOpts flag: parseSetupArgs sets it on -h/--help so
+// runSetupCmd prints usage + exits 0 rather than running the wizard.
 func parseSetupArgs(argv []string) (setupOpts, error) {
 	var o setupOpts
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		switch {
+		case a == "-h" || a == "--help":
+			o.help = true
+			return o, nil
 		case a == "--yes" || a == "-y" || a == "--non-interactive":
 			o.assumeYes = true
 		case a == "--account":
@@ -264,8 +270,12 @@ func parseSetupArgs(argv []string) (setupOpts, error) {
 func runSetupCmd(argv []string) {
 	opts, err := parseSetupArgs(argv)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack setup: %v\n", err)
+		fmt.Fprintf(os.Stderr, "pi-stack setup: %v\n\n%s", err, setupUsage)
 		os.Exit(2)
+	}
+	if opts.help {
+		fmt.Print(setupUsage)
+		return
 	}
 	cfg, err := config.Load()
 	if err != nil {

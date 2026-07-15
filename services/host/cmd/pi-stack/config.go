@@ -14,6 +14,11 @@ import (
 // run `pi-stack config set <key> <value>` and it loads, mutates, and Save()s the
 // machine-managed config for you.
 func runConfig(argv []string) {
+	// A leading -h/--help (with or without a subcommand) prints config usage.
+	if wantsHelp(argv) {
+		fmt.Print(configUsage)
+		return
+	}
 	sub := "show"
 	if len(argv) > 0 {
 		sub = argv[0]
@@ -52,6 +57,10 @@ func runConfigWrite(unset bool, argv []string) {
 	verb := "set"
 	if unset {
 		verb = "unset"
+	}
+	if wantsHelp(argv) {
+		fmt.Print(configUsage)
+		return
 	}
 	profile, argv := splitProfileArg(argv)
 	if profile == "" {

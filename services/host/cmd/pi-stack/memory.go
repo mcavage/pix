@@ -7,6 +7,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"pi-stack/host/config"
 )
 
 // runMemory is the `memory` verb tree — the host-side CLI over the memory daemon
@@ -22,24 +24,47 @@ import (
 // Every verb degrades cleanly when the daemon is down: an actionable message on
 // stderr + exit code 3 (exitServiceDown), distinct from usage (2) / generic (1).
 func runMemory(argv []string) {
+	ctx := "memory"
+	if len(argv) > 0 && argv[0] != "-h" && argv[0] != "--help" {
+		ctx = "memory " + argv[0]
+	}
+	if err := runMemoryCore(argv, loadResolvedConfig, memoryClient, os.Stdout); err != nil {
+		exitFromErr(ctx, err)
+	}
+}
+
+// runMemoryCore is the testable core of runMemory. It dispatches the memory
+// subcommand, resolving config LAZILY so a -h/--help request prints usage even
+// when config is broken or names an unknown profile (help must be
+// config-independent). load + client are injected so tests can feed a failing
+// loader and prove help still works. It returns an error (nil on success/help)
+// instead of calling os.Exit; runMemory classifies the error into an exit code.
+func runMemoryCore(argv []string, load func() (*config.Config, string, error), client func() rpcClient, out io.Writer) error {
 	if len(argv) == 0 {
-		fmt.Fprintln(os.Stderr, memoryUsage)
-		os.Exit(2)
+		return usageErr(memoryUsage)
+	}
+	// `memory -h` / `memory --help` (no subcommand): print usage, exit 0.
+	if argv[0] == "-h" || argv[0] == "--help" {
+		fmt.Fprintln(out, memoryUsage)
+		return nil
+	}
+	sub, rest := argv[0], argv[1:]
+	// A `<sub> --help` prints the subcommand usage BEFORE any config load: dispatch
+	// with a zero client + empty profile, which dispatchMemory only reaches after
+	// printing usage (fs.help short-circuits before any RPC), so neither is used.
+	if wantsHelp(rest) {
+		return dispatchMemory(sub, rest, rpcClient{}, out, "")
 	}
 	// Resolve the active profile so host-side memory ops are scoped the same way
 	// the in-VM extensions are (recall sees {profile}∪{default}; captures stamp
 	// the active profile). FAIL LOUD on a config/profile error: silently falling
 	// back to "default" would store a `--profile wrok` fact in the shared default
 	// bucket (and recall/forget the wrong bucket). Never RPC with a fallback.
-	_, profile, err := loadResolvedConfig()
+	_, profile, err := load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack memory: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-	sub, rest := argv[0], argv[1:]
-	if err := dispatchMemory(sub, rest, memoryClient(), os.Stdout, profile); err != nil {
-		exitFromErr("memory "+sub, err)
-	}
+	return dispatchMemory(sub, rest, client(), out, profile)
 }
 
 const memoryUsage = `usage: pi-stack memory <recall|remember|forget|learnings|stats> [args]
@@ -77,9 +102,14 @@ func memoryRecall(argv []string, c rpcClient, out io.Writer, profile string) err
 	if err != nil {
 		return err
 	}
+	const usage = "usage: pi-stack memory recall <query> [--limit N] [--project P] [--json]"
+	if fs.help {
+		fmt.Fprintln(out, usage)
+		return nil
+	}
 	query := strings.TrimSpace(strings.Join(positional, " "))
 	if query == "" {
-		return usageErr("usage: pi-stack memory recall <query> [--limit N] [--project P] [--json]")
+		return usageErr(usage)
 	}
 	res, err := c.Call("recall", map[string]any{"query": query, "limit": *limit, "project": *project, "profile": profile})
 	if err != nil {
@@ -104,6 +134,10 @@ func memoryRemember(argv []string, c rpcClient, out io.Writer, profile string) e
 	positional, err := fs.parse(argv)
 	if err != nil {
 		return err
+	}
+	if fs.help {
+		fmt.Fprintln(out, "usage: pi-stack memory remember <text...> [--json]")
+		return nil
 	}
 	content := strings.TrimSpace(strings.Join(positional, " "))
 	if content == "" {
@@ -131,6 +165,10 @@ func memoryForget(argv []string, c rpcClient, out io.Writer, profile string) err
 	if err != nil {
 		return err
 	}
+	if fs.help {
+		fmt.Fprintln(out, "usage: pi-stack memory forget <id>")
+		return nil
+	}
 	if len(positional) != 1 {
 		return usageErr("usage: pi-stack memory forget <id>")
 	}
@@ -156,6 +194,10 @@ func memoryLearnings(argv []string, c rpcClient, out io.Writer, profile string) 
 	positional, perr := fs.parse(argv)
 	if perr != nil {
 		return perr
+	}
+	if fs.help {
+		fmt.Fprintln(out, "usage: pi-stack memory learnings [--min N] [--json]")
+		return nil
 	}
 	if len(positional) > 0 {
 		return usageErr("usage: pi-stack memory learnings [--min N] [--json]")
@@ -187,6 +229,10 @@ func memoryStats(argv []string, c rpcClient, out io.Writer, profile string) erro
 	positional, perr := fs.parse(argv)
 	if perr != nil {
 		return perr
+	}
+	if fs.help {
+		fmt.Fprintln(out, "usage: pi-stack memory stats [--json]")
+		return nil
 	}
 	if len(positional) > 0 {
 		return usageErr("usage: pi-stack memory stats [--json]")
@@ -253,6 +299,7 @@ func shortID(id string) string {
 
 type flagSet struct {
 	json    bool
+	help    bool // set when a -h/--help token is seen; caller prints usage + exit 0
 	ints    map[string]*int
 	strs    map[string]*string
 	bools   map[string]*bool
@@ -302,6 +349,15 @@ func (f *flagSet) canon(name string) string {
 // parse consumes registered flags (plus the built-in --json bool) and returns
 // the remaining positional args in order, or a usageError on malformed input.
 func (f *flagSet) parse(argv []string) ([]string, error) {
+	// Help wins over everything. Pre-scan for a -h/--help token (before any `--`
+	// terminator) and, if present, set help + return immediately WITHOUT consuming
+	// any value. Otherwise a value-taking flag would swallow the help token as its
+	// value (`sync -m --help` -> -m="--help") and proceed to the side-effecting
+	// action instead of printing usage.
+	if wantsHelp(argv) {
+		f.help = true
+		return nil, nil
+	}
 	var pos []string
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
@@ -320,6 +376,10 @@ func (f *flagSet) parse(argv []string) ([]string, error) {
 
 		if name == "json" {
 			f.json = true
+			continue
+		}
+		if name == "help" || name == "h" {
+			f.help = true
 			continue
 		}
 		if p, ok := f.bools[name]; ok {

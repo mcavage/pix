@@ -1076,16 +1076,108 @@ func modelPulled(listOut, model string) bool {
 
 // runDoctorCmd is the CLI entry point wired into main's dispatch.
 func runDoctorCmd(argv []string) {
+	jsonOut, err := parseDoctorArgs(argv)
+	if err != nil {
+		if err == errHelpRequested {
+			fmt.Print(doctorUsage)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "pi-stack doctor: %v\n\n%s", err, doctorUsage)
+		os.Exit(2)
+	}
 	cfg, profile, err := loadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack doctor: %v\n", err)
 		os.Exit(1)
 	}
-	if profile != config.DefaultProfile {
-		fmt.Fprintf(os.Stdout, "profile: %s\n\n", profile)
-	}
 	r := runDoctor(cfg, defaultShellEnv())
 	r.services = cfg.Services
 	r.mcp = cfg.MCP
+	if jsonOut {
+		_ = writeJSONOut(os.Stdout, r.jsonView(profile))
+		return
+	}
+	if profile != config.DefaultProfile {
+		fmt.Fprintf(os.Stdout, "profile: %s\n\n", profile)
+	}
 	r.render(os.Stdout)
+}
+
+// parseDoctorArgs validates doctor flags: -h/--help returns errHelpRequested,
+// --json sets jsonOut, any other token is a usage error (exit 2).
+func parseDoctorArgs(argv []string) (jsonOut bool, err error) {
+	for _, a := range argv {
+		switch a {
+		case "-h", "--help":
+			return false, errHelpRequested
+		case "--json":
+			jsonOut = true
+		default:
+			return false, fmt.Errorf("unknown flag %q", a)
+		}
+	}
+	return jsonOut, nil
+}
+
+// doctorJSON is the machine-readable doctor report (behind --json).
+type doctorJSON struct {
+	Verdict   string            `json:"verdict"`
+	Profile   string            `json:"profile"`
+	Todos     []string          `json:"todos"`
+	Groups    []doctorGroupJSON `json:"groups"`
+	Services  []string          `json:"services"`
+	MCP       []string          `json:"mcp"`
+	SbxAbsent bool              `json:"sbx_absent"`
+}
+
+type doctorGroupJSON struct {
+	Title  string            `json:"title"`
+	Checks []doctorCheckJSON `json:"checks"`
+}
+
+type doctorCheckJSON struct {
+	Label  string `json:"label"`
+	State  string `json:"state"` // ok | todo | info
+	Detail string `json:"detail"`
+	Todo   string `json:"todo,omitempty"`
+}
+
+// jsonView renders the report into its serializable form (the same data render
+// prints, minus the ANSI/glyph presentation).
+func (r *report) jsonView(profile string) doctorJSON {
+	todos := r.todos()
+	verdict := "pass"
+	if len(todos) > 0 {
+		verdict = "outstanding"
+	}
+	v := doctorJSON{
+		Verdict:   verdict,
+		Profile:   profile,
+		Todos:     todos,
+		Services:  r.services,
+		MCP:       r.mcp,
+		SbxAbsent: r.sbxAbsent,
+	}
+	for _, g := range r.groups {
+		gj := doctorGroupJSON{Title: g.title}
+		for _, c := range g.checks {
+			gj.Checks = append(gj.Checks, doctorCheckJSON{
+				Label: c.label, State: stateName(c.state), Detail: c.detail, Todo: c.todo,
+			})
+		}
+		v.Groups = append(v.Groups, gj)
+	}
+	return v
+}
+
+// stateName maps a checkState to its JSON string.
+func stateName(s checkState) string {
+	switch s {
+	case stateOK:
+		return "ok"
+	case stateTODO:
+		return "todo"
+	default:
+		return "info"
+	}
 }

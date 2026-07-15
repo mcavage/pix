@@ -25,8 +25,12 @@ import (
 
 // runMcpCmd is the `mcp` verb tree: `register [name...]` and `ls`.
 func runMcpCmd(argv []string) {
+	if wantsHelp(argv) {
+		fmt.Print(mcpUsage)
+		return
+	}
 	if len(argv) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: pi-stack mcp <register|ls> [name...]")
+		fmt.Fprint(os.Stderr, mcpUsage)
 		os.Exit(2)
 	}
 	switch argv[0] {
