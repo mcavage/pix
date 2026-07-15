@@ -80,6 +80,13 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
 	}
 	fmt.Fprintln(sio.out)
 
+	// 1b. Secrets (1Password). Host MCP servers (slack, gog, ...) get their creds
+	// from 1Password at gateway spawn; nothing is prompted here (secret VALUES
+	// live in 1Password, never on disk). ALWAYS seed the refs template (idempotent,
+	// no-clobber) so there's a concrete file to fill, then report op state. Wholly
+	// non-blocking: 1Password is optional (a no-creds server like pio needs none).
+	setupSecretsSection(env, sio.out, todo)
+
 	// 2. Google Workspace account. From --account, else the already-configured
 	// value, else an interactive prompt (only when we have a TTY and weren't told
 	// to assume-yes). Non-interactive with nothing configured: guide the command.
@@ -196,6 +203,44 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
 	fmt.Fprintln(sio.out, "  verify anytime:  pi-stack doctor")
 
 	return steps
+}
+
+// setupSecretsSection is the "Secrets (1Password)" step of setup: a 2-sentence
+// plain explanation + the mental model, ALWAYS seed the refs template
+// (idempotent, no-clobber), and report whether op is installed + signed in.
+// Prompts nothing (secret values live in 1Password) and is wholly non-blocking
+// (1Password is optional). It adds outstanding steps as TODOs where relevant.
+func setupSecretsSection(env shellEnv, out io.Writer, todo func(string)) {
+	fmt.Fprintln(out, "Secrets (1Password, optional):")
+	fmt.Fprintln(out, "  Host MCP servers (slack, gog, ...) get their creds from 1Password at spawn")
+	fmt.Fprintln(out, "  time; pi-stack never stores them. A server with no creds needs nothing here.")
+	fmt.Fprintln(out, indent(config.OpRefsMentalModel))
+
+	// ALWAYS seed (idempotent, no-clobber). This is the ONE seeder.
+	path, created, err := config.SeedOpRefs()
+	switch {
+	case err != nil:
+		fmt.Fprintf(out, "  ✗ could not seed op-refs.env at %s: %v\n", path, err)
+	case created:
+		fmt.Fprintf(out, "  ✓ seeded a template op-refs.env at %s (fill in your op:// refs)\n", path)
+	default:
+		fmt.Fprintf(out, "  ✓ op-refs.env already present at %s (left as-is)\n", path)
+	}
+
+	// op state: installed / missing / installed-not-signed-in. All non-blocking.
+	switch {
+	case !opInstalled(env):
+		fmt.Fprintln(out, "  · op (1Password CLI) not installed — optional, install it to resolve refs:")
+		fmt.Fprintln(out, "      https://developer.1password.com/docs/cli")
+		todo("install the 1Password CLI (op) if a host MCP server needs creds")
+	case !opSignedIn(env):
+		fmt.Fprintln(out, "  · op installed, no account configured — run: op signin  (when you add creds)")
+		todo("op signin")
+	default:
+		fmt.Fprintln(out, "  ✓ op installed, account configured")
+	}
+	fmt.Fprintln(out, "  edit refs anytime:  pi-stack secret edit   (check them: pi-stack secret check)")
+	fmt.Fprintln(out)
 }
 
 // setupKnowledge sets up the global knowledge base from a user-supplied source,

@@ -1,6 +1,10 @@
 package main
 
-import "errors"
+import (
+	"errors"
+
+	"pi-stack/host/config"
+)
 
 // errHelpRequested is the shared sentinel a parser returns when the argv asks
 // for help (a leading -h/--help). Callers print the relevant usage to STDOUT
@@ -28,7 +32,7 @@ func wantsHelp(argv []string) bool {
 var knownVerbs = map[string]bool{
 	"help": true, "serve": true, "doctor": true, "setup": true, "status": true,
 	"config": true, "mcp": true, "memory": true, "knowledge": true,
-	"profile": true, "version": true, "run": true,
+	"profile": true, "version": true, "run": true, "secret": true,
 }
 
 // verbUsage maps a verb (including its aliases) to its usage text, so
@@ -56,6 +60,8 @@ func verbUsage(verb string) (string, bool) {
 		return knowledgeUsage, true
 	case "profile":
 		return profileUsage, true
+	case "secret":
+		return secretUsage, true
 	case "version":
 		return versionUsage, true
 	}
@@ -100,7 +106,7 @@ flags:
 const configUsage = `usage: pi-stack config <show|path|set|unset> [args]
 
   show                     print the resolved config path + contents
-  path                     print the config file path
+  path [op-refs]           print the config file path (or the op-refs.env path)
   set [--profile N] K V    set a config key (never hand-edit the toml)
   unset [--profile N] K    reset/clear a config key
 
@@ -135,6 +141,25 @@ const profileUsage = `usage: pi-stack profile <ls|use> [name]
 
   ls [--json]      list profiles (* = active)
   use <name>       set the active profile (use "default" to revert to the base)
+`
+
+// secretHelpBody is the mental model reused verbatim from config so the concept
+// reads identically in setup, doctor, the template header, and `secret -h`.
+const secretUsage = `usage: pi-stack secret <status|edit|check>
+
+Manage the 1Password refs (op-refs.env) the sbx gateway resolves for host MCP
+servers. Values live in 1Password, never on disk — this verb only seeds the
+refs template, opens it, and reports state. It never writes a secret.
+
+` + config.OpRefsMentalModel + `
+
+  status       op installed? signed in? which refs are filled vs placeholder
+               (the default; prints no secret values)
+  edit         seed op-refs.env if absent, then open it in $EDITOR/$VISUAL
+  check        resolve each op:// ref with "op read" and report OK/FAIL per key
+               (never prints the resolved value)
+
+The file lives at the absolute XDG path: see "pi-stack config path op-refs".
 `
 
 const versionUsage = `usage: pi-stack version

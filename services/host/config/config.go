@@ -587,19 +587,50 @@ func OpRefsPath() string {
 	return filepath.Join(dir, "op-refs.env")
 }
 
-// OpRefsTemplate is the seed content for a fresh op-refs.env: the 1Password refs
-// each host MCP server needs, with placeholders to fill. Kept in sync with the
-// repo's config/op-refs.env.example (which the make path uses).
+// OpRefsMentalModel is the ≤4-line plain explanation of what op-refs.env is and
+// how the gateway uses it. Reused VERBATIM in `pi-stack setup`, the `secret`
+// help, and the template header so the concept is described identically
+// everywhere. Keep it in sync if you change any copy.
+const OpRefsMentalModel = `op-refs.env maps ENV_VAR = op://vault/item/field. When the gateway spawns a
+host MCP server it resolves those refs from 1Password and injects them as env
+vars — the secret never touches disk or the sandbox. A server with no creds
+(pio) needs no entry.`
+
+// NonSecretOpRefsKeys is the documented allowlist of NON-secret env vars that may
+// appear in op-refs.env with a literal value; everything else must be an op://
+// vault/item/field REFERENCE. These configure gog's headless keyring +
+// account/home; the keyring PASSWORD is a secret and must still be an op:// ref,
+// so it is DELIBERATELY not listed here.
+var NonSecretOpRefsKeys = map[string]bool{
+	"GOG_ACCOUNT":         true,
+	"GOG_HOME":            true,
+	"GOG_KEYRING_BACKEND": true,
+}
+
+// OpRefsTemplate is the seed content for a fresh op-refs.env: op:// references
+// ONLY (plus the documented non-secret env allowlist), with generic placeholders
+// to fill. Every example line is COMMENTED OUT so a freshly-seeded file has ZERO
+// active entries — the user uncomments (or adds) a line only when wiring a
+// server. Kept in sync with the repo's config/op-refs.env.example (which the
+// make path uses). Its header repeats OpRefsMentalModel verbatim.
 const OpRefsTemplate = `# pi-stack op-refs.env — 1Password refs the sbx gateway resolves via
-# ` + "`op run --env-file`" + ` when it spawns each host MCP server. Credentials live
-# ONLY in 1Password — never in the sbx registration, on disk, or in the sandbox.
+# ` + "`op run --env-file`" + ` when it spawns each host MCP server.
 #
-# Format:  ENV_VAR=op://<vault>/<item>/<field>     (plain literals are allowed too)
-# Verify:  op read "op://Vault/Item/field" >/dev/null && echo OK
+# ` + OpRefsMentalModel + `
+#
+# This file holds op://vault/item/field REFERENCES only, plus the documented
+# non-secret env allowlist (GOG_ACCOUNT, GOG_HOME, GOG_KEYRING_BACKEND).
+# Everything secret (tokens, keyring passwords) is an op:// ref resolved from
+# 1Password at spawn time — never a pasted secret.
+#
+# Every line below is COMMENTED OUT: a freshly-seeded file has zero active
+# entries. Uncomment + fill in a line only when you wire that server.
+#
+# Verify:  op read "op://<vault>/<item>/<field>" >/dev/null && echo OK
 # Tip:     1Password app -> right-click a field -> "Copy Secret Reference".
 
 # slack MCP server (its bot/user token). Required to register slack.
-SLACK_TOKEN=op://<vault>/<slack-item>/credential
+# SLACK_TOKEN=op://<vault>/<item>/<field>
 
 # gog (Google Workspace) MCP server. gog only needs op to inject a headless
 # keyring password; a keyring reachable without a password does not need this.
@@ -607,27 +638,48 @@ SLACK_TOKEN=op://<vault>/<slack-item>/credential
 # GOG_ACCOUNT=you@example.com
 # GOG_HOME=$HOME/.config/gog
 # GOG_KEYRING_BACKEND=file
-# GOG_KEYRING_PASSWORD=op://<vault>/<gog-item>/keyring-password
+# GOG_KEYRING_PASSWORD=op://<vault>/<item>/<field>
 `
 
 // SeedOpRefs writes OpRefsTemplate to OpRefsPath() with 0600 perms only if the
 // file is absent, creating the config dir (0700) as needed. It returns the
 // resolved path, whether it created the file (false if it already existed), and
-// any error. It never clobbers an existing op-refs.env.
+// any error. It never clobbers an existing op-refs.env. It is the ONE seeder:
+// setup and `pi-stack mcp register` both route through it (via SeedOpRefsAt) so
+// the template + 0700/0600 perms + no-clobber rule live in a single place.
 func SeedOpRefs() (path string, created bool, err error) {
 	path = OpRefsPath()
-	if _, statErr := os.Stat(path); statErr == nil {
-		return path, false, nil
-	} else if !os.IsNotExist(statErr) {
-		return path, false, statErr
-	}
+	created, err = SeedOpRefsAt(path)
+	return path, created, err
+}
+
+// SeedOpRefsAt is the path-parameterized seeder SeedOpRefs delegates to (so a
+// caller that resolves op-refs.env through an injected env can reuse the exact
+// same no-clobber + 0700 dir / 0600 file guarantees). It writes OpRefsTemplate
+// to path only if the file is absent, creating the parent dir (0700) as needed,
+// and never clobbers an existing file.
+func SeedOpRefsAt(path string) (created bool, err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return path, false, err
+		return false, err
 	}
-	if err := os.WriteFile(path, []byte(OpRefsTemplate), 0o600); err != nil {
-		return path, false, err
+	// Tighten an existing config dir that may have been created 0755 elsewhere.
+	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
+		return false, err
 	}
-	return path, true, nil
+	// Atomic no-clobber: O_CREATE|O_EXCL fails if the file already exists, so we
+	// never truncate a populated op-refs.env (no Stat-then-Write TOCTOU window).
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(OpRefsTemplate); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Seed writes a commented default config.toml at path only if absent. It returns

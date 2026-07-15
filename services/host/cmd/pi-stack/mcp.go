@@ -248,10 +248,10 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 		// user has a concrete file to fill in later, and note that we registered
 		// bare rather than failing.
 		refsPath := defaultOpRefsPath(env)
-		if env.writeFile != nil && (env.statFile == nil || !env.statFile(refsPath)) {
-			if err := env.writeFile(refsPath, []byte(config.OpRefsTemplate), 0o600); err == nil {
-				fmt.Fprintf(out, "seeded a template op-refs.env at %s\n", refsPath)
-			}
+		// ONE seeder: route through config.SeedOpRefsAt so the template + 0700 dir /
+		// 0600 file + no-clobber rule is identical to `pi-stack setup`'s seeding.
+		if created, err := config.SeedOpRefsAt(refsPath); err == nil && created {
+			fmt.Fprintf(out, "seeded a template op-refs.env at %s\n", refsPath)
 		}
 		fmt.Fprintf(out, "note: no op-refs.env found; registered %s directly (bare, no 1Password) — "+
 			"add creds to %s if a server needs them\n",

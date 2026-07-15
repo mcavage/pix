@@ -15,13 +15,14 @@ import (
 // output, env vars, and open ports, so runDoctor can be driven with no real
 // sbx/ollama/gog.
 type fakeEnv struct {
-	present  map[string]bool   // binaries on PATH
-	output   map[string]string // "cmd arg arg" -> combined output
-	envVars  map[string]string // environment variables
-	ports    map[int]bool      // open TCP ports
-	statFile map[string]bool   // files that "exist"
-	files    map[string]string // file contents (for readFile)
-	home     string            // fake home dir
+	present  map[string]bool        // binaries on PATH
+	output   map[string]string      // "cmd arg arg" -> combined output
+	envVars  map[string]string      // environment variables
+	ports    map[int]bool           // open TCP ports
+	statFile map[string]bool        // files that "exist"
+	files    map[string]string      // file contents (for readFile)
+	modes    map[string]os.FileMode // path -> mode bits (for fileMode)
+	home     string                 // fake home dir
 }
 
 func (f fakeEnv) env() shellEnv {
@@ -49,6 +50,12 @@ func (f fakeEnv) env() shellEnv {
 			return "", fmt.Errorf("no fake file %q", path)
 		},
 		homeDir: func() string { return f.home },
+		fileMode: func(path string) (os.FileMode, bool) {
+			if m, ok := f.modes[path]; ok {
+				return m, true
+			}
+			return 0, false
+		},
 	}
 }
 
@@ -333,6 +340,88 @@ func TestDoctor_GogTransparency(t *testing.T) {
 	}
 }
 
+// TestRedactRegisteredCommand covers F3: a value token (e.g. a pasted secret
+// behind --client-secret) is never echoed verbatim, while recognizable
+// subcommands/flag names survive.
+func TestRedactRegisteredCommand(t *testing.T) {
+	argv := []string{"/usr/bin/op", "run", "--env-file=/abs/config/op-refs.env", "--",
+		"gog", "--account", "you@example.com", "--client-secret", "SEKRET", "mcp"}
+	got := redactRegisteredCommand(argv)
+	if strings.Contains(got, "SEKRET") {
+		t.Errorf("redacted command leaked the value token: %q", got)
+	}
+	if strings.Contains(got, "you@example.com") {
+		t.Errorf("redacted command leaked the account value: %q", got)
+	}
+	if strings.Contains(got, "/abs/config/op-refs.env") {
+		t.Errorf("redacted command leaked the env-file path value: %q", got)
+	}
+	// Recognizable structure survives.
+	for _, want := range []string{"op", "run", "--env-file=…", "--", "gog", "--account", "mcp", "‹redacted›"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("redacted command missing %q: %q", want, got)
+		}
+	}
+}
+
+// TestDoctor_RegisteredCommandNeverLeaksSecret covers F3 end-to-end: a full
+// doctor run with a legacy gog registration that carries a pasted secret must
+// not echo that secret in ANY rendered group.
+func TestDoctor_RegisteredCommandNeverLeaksSecret(t *testing.T) {
+	const secret = "SEKRET-DO-NOT-PRINT"
+	regCmd := "gog --account " + gogAcct + " --client-secret " + secret + " mcp"
+	f := fakeEnv{
+		present: map[string]bool{"sbx": true, "gog": true},
+		output: map[string]string{
+			"sbx secret ls":   "anthropic openai google github",
+			"sbx mcp ls":      "gog\n",
+			"sbx mcp get gog": "name: gog\ncommand: " + regCmd + "\n",
+		},
+		ports: map[int]bool{11435: true},
+	}
+	r := runDoctor(defaultCfg(), f.env())
+	for _, g := range r.groups {
+		for _, c := range g.checks {
+			if strings.Contains(c.detail, secret) || strings.Contains(c.todo, secret) {
+				t.Errorf("doctor leaked the pasted secret in group %q: detail=%q todo=%q", g.title, c.detail, c.todo)
+			}
+		}
+	}
+}
+
+// TestDoctor_SecretsGroupShortLiteralFlagged covers F4: a short, NOT-secret-
+// shaped literal in op-refs.env still produces a TODO in the Secrets group and
+// its value is never printed.
+func TestDoctor_SecretsGroupShortLiteralFlagged(t *testing.T) {
+	const val = "correcthorsebattery"
+	f := fakeEnv{
+		present: map[string]bool{"op": true},
+		envVars: map[string]string{"PI_STACK_CONFIG": gogCfgFile},
+		files:   map[string]string{gogOpRefs: "SLACK_TOKEN=" + val + "\n"},
+	}
+	cfg := defaultCfg()
+	cfg.MCP = []string{"slack"}
+	g := secretsGroup(cfg, f.env())
+	var found bool
+	for _, c := range g.checks {
+		if strings.Contains(c.detail, val) {
+			t.Errorf("secrets group LEAKED the literal value: %q", c.detail)
+		}
+		if c.label == "SLACK_TOKEN" {
+			if c.state != stateTODO {
+				t.Errorf("SLACK_TOKEN state = %v, want stateTODO", c.state)
+			}
+			if !strings.Contains(c.detail, "not an op:// ref") {
+				t.Errorf("SLACK_TOKEN detail should flag refs-only: %q", c.detail)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a SLACK_TOKEN check in the Secrets group, group=%+v", g)
+	}
+}
+
 // TestDoctor_GogRegisteredCommand is the HONEST path: sbx exposes the ACTUAL
 // registered gog command, so doctor probes THAT exact command (with
 // --list-tools) rather than reconstructing it from config. A non-empty tool
@@ -359,15 +448,23 @@ func TestDoctor_GogRegisteredCommand(t *testing.T) {
 	}
 	var regShown, headOK bool
 	for _, c := range gog.checks {
-		if c.label == "registration" && strings.Contains(c.detail, "-- "+bareGog(gogAcct)) {
-			regShown = true
+		if c.label == "registration" {
+			// The registered command is shown REDACTED: recognizable skeleton (op
+			// run/env-file/gog/mcp), but the account value scrubbed to ‹redacted›.
+			if strings.Contains(c.detail, "op run --env-file=… -- gog --account ‹redacted›") &&
+				strings.Contains(c.detail, "mcp") {
+				regShown = true
+			}
+			if strings.Contains(c.detail, gogAcct) {
+				t.Errorf("registered command detail must not echo the account verbatim: %q", c.detail)
+			}
 		}
 		if c.label == "headless spawn" && c.state == stateOK {
 			headOK = true
 		}
 	}
 	if !regShown {
-		t.Errorf("expected doctor to name the sbx-registered command, group=%+v", gog)
+		t.Errorf("expected doctor to name the sbx-registered command (redacted), group=%+v", gog)
 	}
 	if !headOK {
 		t.Errorf("expected a confirmed headless spawn from probing the registered command, group=%+v", gog)
@@ -518,15 +615,22 @@ func TestDoctor_GogBareRegisteredCommand(t *testing.T) {
 	}
 	var regShown, headOK bool
 	for _, c := range gog.checks {
-		if c.label == "registration" && strings.Contains(c.detail, regCmd) {
-			regShown = true
+		if c.label == "registration" {
+			// Bare command shown REDACTED: recognizable `gog --account ‹redacted› … mcp`.
+			if strings.Contains(c.detail, "gog --account ‹redacted›") &&
+				strings.Contains(c.detail, "mcp") {
+				regShown = true
+			}
+			if strings.Contains(c.detail, gogAcct) {
+				t.Errorf("registered command detail must not echo the account verbatim: %q", c.detail)
+			}
 		}
 		if c.label == "headless spawn" && c.state == stateOK {
 			headOK = true
 		}
 	}
 	if !regShown {
-		t.Errorf("expected doctor to name the bare sbx-registered gog command, group=%+v", gog)
+		t.Errorf("expected doctor to name the bare sbx-registered gog command (redacted), group=%+v", gog)
 	}
 	if !headOK {
 		t.Errorf("expected a confirmed headless spawn from probing the bare registered command, group=%+v", gog)
@@ -853,5 +957,95 @@ func TestModelPulled(t *testing.T) {
 	}
 	if modelPulled(list, "gemma") {
 		t.Error("gemma should not match gemma4")
+	}
+}
+
+// secretsGroupFor runs doctor with the given cfg.MCP + fake env and returns the
+// "Secrets (1Password...)" group.
+func secretsGroupFor(t *testing.T, mcp []string, f fakeEnv) group {
+	t.Helper()
+	cfg := defaultCfg()
+	cfg.MCP = mcp
+	r := runDoctor(cfg, f.env())
+	for _, g := range r.groups {
+		if strings.HasPrefix(g.title, "Secrets") {
+			return g
+		}
+	}
+	t.Fatal("no Secrets group in doctor output")
+	return group{}
+}
+
+func TestDoctor_SecretsGroup_NotNeeded(t *testing.T) {
+	g := secretsGroupFor(t, nil, fakeEnv{present: map[string]bool{}})
+	if len(g.checks) != 1 || !strings.Contains(g.checks[0].detail, "not needed") {
+		t.Errorf("no-server config should say 1Password not needed, got %+v", g.checks)
+	}
+}
+
+func TestDoctor_SecretsGroup_SlackOnly(t *testing.T) {
+	// A slack-only config must still get the Secrets group (not gog-only).
+	f := fakeEnv{
+		present: map[string]bool{"op": true},
+		output:  map[string]string{"op account list": "me@x.com\n"},
+		envVars: map[string]string{"PI_STACK_CONFIG": "/fake/config/config.toml"},
+		files:   map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=op://Private/Slack/credential\n"},
+		modes:   map[string]os.FileMode{"/fake/config/op-refs.env": 0o600, "/fake/config": 0o700},
+	}
+	g := secretsGroupFor(t, []string{"slack"}, f)
+	var sawRef bool
+	for _, c := range g.checks {
+		if c.label == "SLACK_TOKEN" && c.state == stateOK {
+			sawRef = true
+		}
+	}
+	if !sawRef {
+		t.Errorf("slack-only Secrets group should report SLACK_TOKEN filled, got %+v", g.checks)
+	}
+}
+
+func TestDoctor_SecretsGroup_PermsFinding(t *testing.T) {
+	f := fakeEnv{
+		present: map[string]bool{"op": true},
+		output:  map[string]string{"op account list": "me@x.com\n"},
+		envVars: map[string]string{"PI_STACK_CONFIG": "/fake/config/config.toml"},
+		files:   map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=op://Private/Slack/credential\n"},
+		modes:   map[string]os.FileMode{"/fake/config/op-refs.env": 0o644, "/fake/config": 0o700},
+	}
+	g := secretsGroupFor(t, []string{"slack"}, f)
+	var perms *check
+	for i := range g.checks {
+		if g.checks[i].label == "perms" {
+			perms = &g.checks[i]
+		}
+	}
+	if perms == nil || perms.state != stateTODO || !strings.Contains(perms.todo, "chmod 600") {
+		t.Errorf("0644 op-refs.env should raise a chmod 600 perms TODO, got %+v", g.checks)
+	}
+}
+
+// TestDoctor_SecretsGroup_LintNoLeak: a pasted secret is flagged WITHOUT its
+// value appearing anywhere in the rendered doctor output.
+func TestDoctor_SecretsGroup_LintNoLeak(t *testing.T) {
+	const pasted = "xoxb-PASTED-SECRET-VALUE"
+	f := fakeEnv{
+		present: map[string]bool{"op": true},
+		output:  map[string]string{"op account list": "me@x.com\n"},
+		envVars: map[string]string{"PI_STACK_CONFIG": "/fake/config/config.toml"},
+		files:   map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=" + pasted + "\n"},
+		modes:   map[string]os.FileMode{"/fake/config/op-refs.env": 0o600, "/fake/config": 0o700},
+	}
+	g := secretsGroupFor(t, []string{"slack"}, f)
+	var flagged bool
+	for _, c := range g.checks {
+		if c.label == "SLACK_TOKEN" && strings.Contains(c.detail, "possible pasted secret") {
+			flagged = true
+		}
+		if strings.Contains(c.detail, pasted) || strings.Contains(c.todo, pasted) {
+			t.Errorf("doctor LEAKED the pasted value in a check: %+v", c)
+		}
+	}
+	if !flagged {
+		t.Errorf("a pasted secret should be flagged, got %+v", g.checks)
 	}
 }

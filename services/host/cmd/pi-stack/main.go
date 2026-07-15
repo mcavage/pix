@@ -72,6 +72,8 @@ func main() {
 		runSetupCmd(args[1:])
 	case "mcp":
 		runMcpCmd(args[1:])
+	case "secret":
+		runSecretCmd(args[1:])
 	case "memory", "mem":
 		runMemory(args[1:])
 	case "knowledge", "kb":
@@ -218,6 +220,7 @@ commands:
   memory <cmd>        recall|remember|forget|learnings|stats   (:11435)
   knowledge <cmd>     init|use|ls|query|sync|remote            (:11436)
   mcp register|ls     register local stdio MCP servers with the sbx gateway
+  secret <cmd>        status|edit|check the 1Password op-refs (host MCP creds)
   profile ls|use      switch between contexts (work / personal / default)
 
   config show|path    show the resolved config path and contents

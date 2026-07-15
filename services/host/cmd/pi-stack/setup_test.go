@@ -284,3 +284,35 @@ func containsStr(list []string, s string) bool {
 	}
 	return false
 }
+
+// TestSetupSecretsSection_Seeds is the gate for the "nothing set me up" fix:
+// the secrets section ALWAYS seeds op-refs.env (idempotently) and explains
+// 1Password/op in plain terms.
+func TestSetupSecretsSection_Seeds(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
+	f := fakeEnv{present: map[string]bool{}} // op not installed (non-blocking)
+	var out bytes.Buffer
+	var todos []string
+	setupSecretsSection(f.env(), &out, func(c string) { todos = append(todos, c) })
+
+	refs := filepath.Join(dir, "op-refs.env")
+	if _, err := os.Stat(refs); err != nil {
+		t.Fatalf("op-refs.env was not seeded at %s: %v", refs, err)
+	}
+	s := out.String()
+	for _, want := range []string{"1Password", "op-refs.env", "pi-stack secret edit"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("secrets section missing %q:\n%s", want, s)
+		}
+	}
+	// Re-running must not clobber (idempotent).
+	before, _ := os.ReadFile(refs)
+	_ = os.WriteFile(refs, append(before, []byte("\nSLACK_TOKEN=op://v/i/f\n")...), 0o600)
+	edited, _ := os.ReadFile(refs)
+	setupSecretsSection(f.env(), &bytes.Buffer{}, func(string) {})
+	after, _ := os.ReadFile(refs)
+	if string(after) != string(edited) {
+		t.Error("re-running setupSecretsSection clobbered an existing op-refs.env")
+	}
+}

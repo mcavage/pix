@@ -114,6 +114,19 @@ different compiled host stacks.
   the whole-store view. Recall/remember/forget/promotable/observe ARE profile-
   scoped on both paths.
 
+## Secrets (op-refs.env) are profile-shared
+
+`op-refs.env` (the 1Password refs the gateway resolves for host MCP servers)
+resolves to a SINGLE XDG path, while `config.toml` is profile-aware. So every
+profile's MCP set shares one refs file. This is acceptable because the file holds
+only `op://` *references*, not secret values — the real authorization boundary is
+the **1Password vault ACL**, not this file (a ref only resolves if the host
+operator's `op` session can read that vault). Keep work and personal creds in
+separate 1Password vaults if you want hard segregation. Per-profile op-refs is a
+documented **v2 gap** (mirroring the shared memory store); the fix would key the
+refs path off the resolved profile. See the `secret` verb + doctor's "Secrets
+(1Password)" group for how this surfaces.
+
 ## Migration
 
 Zero-touch. A config with no `[profiles.*]` tables and no `active_profile`

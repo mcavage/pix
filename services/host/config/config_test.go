@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -126,6 +127,102 @@ func TestSeedCreatesThenRefuses(t *testing.T) {
 	t.Setenv("PI_STACK_CONFIG", path)
 	if _, err := Load(); err != nil {
 		t.Errorf("Load() seeded file: %v", err)
+	}
+}
+
+// TestSeedOpRefsAtNoClobberAndDirPerms covers F5: SeedOpRefsAt is atomic
+// no-clobber (an existing file is never truncated) and it tightens an existing
+// 0755 config dir to 0700.
+func TestSeedOpRefsAtNoClobberAndDirPerms(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cfg")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	path := filepath.Join(dir, "op-refs.env")
+
+	created, err := SeedOpRefsAt(path)
+	if err != nil {
+		t.Fatalf("SeedOpRefsAt first: %v", err)
+	}
+	if !created {
+		t.Errorf("SeedOpRefsAt first: created = false, want true")
+	}
+	// An existing 0755 dir must be tightened to 0700.
+	if fi, err := os.Stat(dir); err != nil {
+		t.Fatalf("stat dir: %v", err)
+	} else if fi.Mode().Perm() != 0o700 {
+		t.Errorf("dir perms = %04o, want 0700", fi.Mode().Perm())
+	}
+	// File must be 0600.
+	if fi, err := os.Stat(path); err != nil {
+		t.Fatalf("stat file: %v", err)
+	} else if fi.Mode().Perm() != 0o600 {
+		t.Errorf("file perms = %04o, want 0600", fi.Mode().Perm())
+	}
+
+	// Populate the file with user content, then seed again: it must NOT truncate.
+	const userContent = "SLACK_TOKEN=op://Private/Slack/credential\n"
+	if err := os.WriteFile(path, []byte(userContent), 0o600); err != nil {
+		t.Fatalf("write user content: %v", err)
+	}
+	created, err = SeedOpRefsAt(path)
+	if err != nil {
+		t.Fatalf("SeedOpRefsAt second: %v", err)
+	}
+	if created {
+		t.Errorf("SeedOpRefsAt second: created = true, want false (must not clobber)")
+	}
+	if got, _ := os.ReadFile(path); string(got) != userContent {
+		t.Errorf("SeedOpRefsAt second truncated/modified existing file: %q", string(got))
+	}
+}
+
+// TestSeedOpRefsAtConcurrent asserts that many concurrent seeders never truncate
+// a populated op-refs.env: exactly one reports created, and the others leave the
+// content intact.
+func TestSeedOpRefsAtConcurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cfg", "op-refs.env")
+	const n = 16
+	var wg sync.WaitGroup
+	createdCount := make([]bool, n)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			c, err := SeedOpRefsAt(path)
+			if err != nil {
+				t.Errorf("SeedOpRefsAt goroutine %d: %v", i, err)
+			}
+			createdCount[i] = c
+		}(i)
+	}
+	wg.Wait()
+	created := 0
+	for _, c := range createdCount {
+		if c {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Errorf("exactly one seeder should report created, got %d", created)
+	}
+	// The file must equal the template exactly (never a truncated/partial write).
+	if got, _ := os.ReadFile(path); string(got) != OpRefsTemplate {
+		t.Errorf("seeded file does not equal OpRefsTemplate after concurrent seed")
+	}
+}
+
+// TestOpRefsTemplateHasNoActiveRefs covers F1 at the source: the seed template
+// must have ZERO active (uncommented) KEY=VALUE lines.
+func TestOpRefsTemplateHasNoActiveRefs(t *testing.T) {
+	for _, ln := range strings.Split(OpRefsTemplate, "\n") {
+		trimmed := strings.TrimSpace(ln)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.IndexByte(trimmed, '=') > 0 {
+			t.Errorf("OpRefsTemplate has an active (uncommented) entry: %q", ln)
+		}
 	}
 }
 

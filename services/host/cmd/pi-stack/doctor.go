@@ -36,6 +36,10 @@ type shellEnv struct {
 	statFile func(path string) bool            // does a regular file exist at path?
 	readFile func(path string) (string, error) // read a file's contents
 	homeDir  func() string                     // the user's home directory ($HOME)
+	// fileMode returns a path's mode bits + whether it exists (file OR dir). The
+	// Secrets group's perms check uses it to flag a group/other-accessible
+	// op-refs.env or its dir. Nil in tests that don't exercise perms.
+	fileMode func(path string) (os.FileMode, bool)
 	// writeFile writes data to path (creating parent dirs). Nil in tests so
 	// seeding stays hermetic; defaultShellEnv wires the real os-backed writer.
 	writeFile func(path string, data []byte, perm os.FileMode) error
@@ -117,6 +121,13 @@ func defaultShellEnv() shellEnv {
 		homeDir: func() string {
 			h, _ := os.UserHomeDir()
 			return h
+		},
+		fileMode: func(path string) (os.FileMode, bool) {
+			fi, err := os.Stat(path)
+			if err != nil {
+				return 0, false
+			}
+			return fi.Mode(), true
 		},
 		writeFile: func(path string, data []byte, perm os.FileMode) error {
 			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -258,6 +269,13 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	// the gateway uses (headless, through `op run --env-file=config/op-refs.env`),
 	// because `gog auth doctor` in a logged-in shell passes and lies.
 	r.groups = append(r.groups, gogGroup(cfg, env, mcpOut, mcpOK))
+
+	// (d2) Secrets (1Password) — its OWN top-level group, honest and separate.
+	// Runs whenever ANY op-wrapped host MCP server is configured (slack, fastmail,
+	// gog, ...), not just gog: op install + sign-in (SAFE metadata only), op-refs.env
+	// presence + perms, and per-ref filled-vs-placeholder + a refs-only lint that
+	// never prints an offending value.
+	r.groups = append(r.groups, secretsGroup(cfg, env))
 
 	// (e) MCP servers registered with sbx. gog is DELIBERATELY skipped here — the
 	// dedicated gog group above already owns its registration check + TODO, so
@@ -708,10 +726,16 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 	// op/gog binaries all exactly as the gateway will spawn them.
 	if argv, ok := registeredGogCommand(env); ok {
 		g.checks = append(g.checks, check{label: "registration", state: stateInfo,
-			detail: "probing the sbx-registered command: " + strings.Join(argv, " ")})
+			detail: "probing the sbx-registered command: " + redactRegisteredCommand(argv)})
 		if probeRegisteredGog(env, argv) {
+			// Distinguish the op-wrapped path (op-refs resolved) from a BARE spawn so a
+			// bare green never implies 1Password creds were involved.
+			detail := "registered command exposes tools (verified as-registered, via op run)"
+			if !gogSpawnIsOpWrapped(argv) {
+				detail = "registered command exposes tools (verified as-registered) — spawned BARE (no op-refs involved)"
+			}
 			g.checks = append(g.checks, check{label: "headless spawn", state: stateOK,
-				detail: "registered command exposes tools (verified as-registered)"})
+				detail: detail})
 		} else {
 			g.checks = append(g.checks, check{label: "headless spawn", state: stateTODO,
 				detail: "the registered command returns 0 tools — keyring not headless",
@@ -769,7 +793,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 			check{label: "account", state: stateInfo, detail: acct + " set (unconfirmed vs registration)"},
 			check{label: "op-refs", state: stateTODO,
 				detail: "cannot verify (op-refs.env not found)",
-				todo:   "create " + defaultOpRefsPath(env) + " (run: pi-stack setup, or pi-stack mcp register) so doctor can probe the gateway path"})
+				todo:   "pi-stack secret edit  (creates " + defaultOpRefsPath(env) + " so doctor can probe the gateway path)"})
 		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
 		return g
@@ -818,6 +842,192 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 	g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
 	g.checks = append(g.checks, gogAttachCheck(cfg))
 	return g
+}
+
+// secretsGroup builds the standalone "Secrets (1Password)" cluster. It runs
+// whenever ANY op-wrapped host MCP server is configured; with none it stays a
+// single green info line ("1Password not needed"). It reports op install +
+// sign-in state (op --version / `op account list` — SAFE metadata ONLY, never
+// `op read` or a to-disk `op signin`), op-refs.env presence at the absolute XDG
+// path, its perms (group/other access -> a chmod finding), and per configured
+// ref: filled vs placeholder, plus a refs-only lint that flags a secret-shaped
+// literal WITHOUT ever printing its value. op sign-in is advisory (never a
+// standalone green); the confirmed "creds actually resolve" proof stays the gog
+// group's headless op-run probe.
+func secretsGroup(cfg *config.Config, env shellEnv) group {
+	g := group{title: "Secrets (1Password, host MCP creds via op-refs.env)"}
+
+	if !anyOpWrappedServer(cfg) {
+		g.checks = append(g.checks, check{label: "1Password", state: stateInfo,
+			detail: "no credentialed host MCP servers configured — 1Password not needed"})
+		return g
+	}
+
+	// op installed? (advisory sign-in only when installed — never a blocker).
+	if opInstalled(env) {
+		g.checks = append(g.checks, check{label: "op CLI", state: stateOK, detail: "installed"})
+		if opSignedIn(env) {
+			g.checks = append(g.checks, check{label: "account configured", state: stateOK,
+				detail: "op account list ok (advisory — not a proof of an unlocked session)"})
+		} else {
+			g.checks = append(g.checks, check{label: "account configured", state: stateInfo,
+				detail: "no account configured (advisory) — run: op signin"})
+		}
+	} else {
+		g.checks = append(g.checks, check{label: "op CLI", state: stateTODO,
+			detail: "not installed",
+			todo:   "install the 1Password CLI (op) — https://developer.1password.com/docs/cli"})
+	}
+
+	// op-refs.env present at the absolute XDG path?
+	path := defaultOpRefsPath(env)
+	content, exists := "", false
+	if env.readFile != nil {
+		if c, err := env.readFile(path); err == nil {
+			content, exists = c, true
+		}
+	}
+	if !exists {
+		g.checks = append(g.checks, check{label: "op-refs.env", state: stateTODO,
+			detail: "not present at " + path,
+			todo:   "pi-stack secret edit"})
+		return g
+	}
+	g.checks = append(g.checks, check{label: "op-refs.env", state: stateInfo, detail: path})
+
+	// Perms: the file AND its dir must not be group/other-accessible.
+	if env.fileMode != nil {
+		if m, ok := env.fileMode(path); ok && m.Perm()&0o077 != 0 {
+			g.checks = append(g.checks, check{label: "perms", state: stateTODO,
+				detail: fmt.Sprintf("op-refs.env is %04o — group/other accessible", m.Perm()),
+				todo:   "chmod 600 " + path})
+		}
+		dir := filepath.Dir(path)
+		if m, ok := env.fileMode(dir); ok && m.Perm()&0o077 != 0 {
+			g.checks = append(g.checks, check{label: "dir perms", state: stateTODO,
+				detail: fmt.Sprintf("%s is %04o — group/other accessible", dir, m.Perm()),
+				todo:   "chmod 700 " + dir})
+		}
+	}
+
+	// Per-ref: filled vs placeholder, plus the refs-only lint. NEVER print a value.
+	for _, rf := range parseOpRefs(content) {
+		switch {
+		case rf.nonSecret:
+			g.checks = append(g.checks, check{label: rf.key, state: stateInfo, detail: "non-secret env (allowed literal)"})
+		case rf.isRef && rf.placeholder:
+			g.checks = append(g.checks, check{label: rf.key, state: stateTODO,
+				detail: "unfilled placeholder — set the op:// ref",
+				todo:   "pi-stack secret edit"})
+		case rf.isRef:
+			g.checks = append(g.checks, check{label: rf.key, state: stateOK, detail: "op:// ref filled"})
+		case rf.placeholder:
+			// A non-ref value still carrying an unfilled <...> placeholder.
+			g.checks = append(g.checks, check{label: rf.key, state: stateTODO,
+				detail: "unfilled placeholder — set the op:// ref",
+				todo:   "pi-stack secret edit"})
+		case looksSecretShaped(rf.key, rf.value):
+			// MEDIUM finding — a pasted secret. NEVER echo the value.
+			g.checks = append(g.checks, check{label: rf.key, state: stateTODO,
+				detail: "possible pasted secret — replace with op://vault/item/field",
+				todo:   "pi-stack secret edit"})
+		default:
+			// Refs-only policy: ANY other non-ref, non-allowlisted value is flagged.
+			// NEVER echo the value.
+			g.checks = append(g.checks, check{label: rf.key, state: stateTODO,
+				detail: "not an op:// ref — this file is refs-only; use op://vault/item/field or move it to the non-secret allowlist",
+				todo:   "pi-stack secret edit"})
+		}
+	}
+	return g
+}
+
+// redactRegisteredCommand renders a registered MCP argv SAFELY for display: it
+// keeps argv[0]'s basename plus recognizable subcommands/flag NAMES (run, mcp,
+// gog, op, pi-stack-host, --account, --env-file=…, etc.) and replaces every
+// other token — any of which could be a pasted value/secret — with ‹redacted›.
+// It NEVER echoes an unrecognized token verbatim.
+func redactRegisteredCommand(argv []string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	// Bare words + flag NAMES doctor recognizes as non-secret structure. Anything
+	// NOT here is treated as a potential value and redacted, so an unrecognized
+	// token is never echoed verbatim.
+	recognized := map[string]bool{
+		// binaries / subcommands
+		"run": true, "mcp": true, "gog": true, "op": true, "pi-stack-host": true,
+		"slack": true, "auth": true, "doctor": true, "--": true,
+		// flag NAMES (their VALUES are still redacted)
+		"--list-tools": true, "--account": true, "--env-file": true, "--check": true,
+		"--gmail-no-send": true, "--wrap-untrusted": true, "--readonly": true,
+		"--allow-tool": true,
+	}
+	out := make([]string, 0, len(argv))
+	for i, tok := range argv {
+		if i == 0 {
+			out = append(out, filepath.Base(tok))
+			continue
+		}
+		// A --flag=value token: keep the recognized flag NAME, elide the value.
+		if strings.HasPrefix(tok, "--") {
+			if eq := strings.IndexByte(tok, '='); eq > 0 {
+				name := tok[:eq]
+				if recognized[name] {
+					out = append(out, name+"=…")
+					continue
+				}
+				out = append(out, "‹redacted›")
+				continue
+			}
+		}
+		if recognized[tok] {
+			out = append(out, tok)
+			continue
+		}
+		out = append(out, "‹redacted›")
+	}
+	return strings.Join(out, " ")
+}
+
+// gogSpawnIsOpWrapped reports whether the registered gog command runs via the
+// `op run --env-file=… -- gog … mcp …` wrapper (argv[0] is the op binary) rather
+// than a BARE `gog … mcp …` spawn. Used so a bare-spawn green never implies
+// op-refs were resolved.
+func gogSpawnIsOpWrapped(argv []string) bool {
+	return len(argv) > 0 && filepath.Base(argv[0]) == "op"
+}
+
+// looksSecretShaped reports whether a NON-ref, non-allowlisted op-refs.env value
+// looks like a pasted secret: a Slack token (xox* prefix), a literal for the
+// known-secret GOG_KEYRING_PASSWORD key, or a high-entropy token (long, no
+// whitespace, mixed letters+digits). It intentionally errs toward not-flagging
+// obviously-benign values; the caller NEVER prints the value regardless.
+func looksSecretShaped(key, val string) bool {
+	if val == "" {
+		return false
+	}
+	if strings.HasPrefix(val, "xox") {
+		return true
+	}
+	if key == "GOG_KEYRING_PASSWORD" {
+		return true
+	}
+	if len(val) >= 20 && !strings.ContainsAny(val, " \t") {
+		var hasLetter, hasDigit bool
+		for _, c := range val {
+			switch {
+			case c >= '0' && c <= '9':
+				hasDigit = true
+			case (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'):
+				hasLetter = true
+			}
+		}
+		if hasLetter && hasDigit {
+			return true
+		}
+	}
+	return false
 }
 
 // registeredGogCommand asks sbx what command it ACTUALLY registered for the gog

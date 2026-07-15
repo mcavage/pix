@@ -25,6 +25,12 @@ func runConfig(argv []string) {
 	}
 	switch sub {
 	case "path":
+		// `config path op-refs` prints the absolute op-refs.env path (discoverability
+		// sugar mirroring `config path`); bare `config path` prints config.toml.
+		if len(argv) > 1 && argv[1] == "op-refs" {
+			fmt.Println(config.OpRefsPath())
+			return
+		}
 		fmt.Println(config.Path())
 	case "show":
 		cfg, err := config.Load()

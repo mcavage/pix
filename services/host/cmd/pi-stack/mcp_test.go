@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -164,24 +165,29 @@ func TestRegisterServers_SlackNoOpRefsBare(t *testing.T) {
 }
 
 // TestRegisterServers_SlackOpRefsAbsentSeeds: slack with op present but op-refs
-// ABSENT -> seed a template at the absolute XDG path and register BARE (no
-// error), noting the seeded path.
+// ABSENT -> seed a template at the absolute XDG path (via the ONE seeder,
+// config.SeedOpRefsAt) and register BARE (no error), noting the seeded path.
 func TestRegisterServers_SlackOpRefsAbsentSeeds(t *testing.T) {
-	var wrote string
+	home := t.TempDir()
 	env := (fakeEnv{
 		present: map[string]bool{"op": true},
 		output:  map[string]string{"/usr/bin/pi-stack-host mcp --list": "slack\n"},
 		envVars: map[string]string{"SBX_MCP_URL": "https://gateway.docker.com"},
-		home:    "/home/me",
+		home:    home,
 	}).env()
-	env.writeFile = func(path string, data []byte, perm os.FileMode) error { wrote = path; return nil }
 	cfg := defaultCfg()
 	var buf bytes.Buffer
 	if err := registerServers(cfg, env, &buf, []string{"slack"}, hostStub("/usr/bin/pi-stack-host", nil)); err != nil {
 		t.Fatalf("unexpected error (slack should register bare, not fail): %v", err)
 	}
-	if !strings.Contains(wrote, ".config/pi-stack/op-refs.env") {
-		t.Errorf("expected the template seeded at the XDG path, wrote %q", wrote)
+	seeded := filepath.Join(home, ".config", "pi-stack", "op-refs.env")
+	info, err := os.Stat(seeded)
+	if err != nil {
+		t.Fatalf("expected the template seeded at %s: %v", seeded, err)
+	}
+	// The ONE seeder writes 0600 (owner-only).
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("seeded op-refs.env mode = %o, want 600", info.Mode().Perm())
 	}
 	if !strings.Contains(buf.String(), "seeded a template op-refs.env") {
 		t.Errorf("expected the seeded-template note, got:\n%s", buf.String())
