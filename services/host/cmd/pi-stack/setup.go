@@ -216,15 +216,10 @@ func setupKnowledge(cfg *config.Config, ref string, out io.Writer) error {
 }
 
 // localMCPTargets returns the local stdio servers in cfg.MCP (the ones
-// registerServers would act on).
+// registerServers would act on). Every configured mcp name is a local stdio
+// server (gog + everything else; see mcp.go's header), so this is just cfg.MCP.
 func localMCPTargets(cfg *config.Config) []string {
-	var out []string
-	for _, m := range cfg.MCP {
-		if localStdioMCP[m] {
-			out = append(out, m)
-		}
-	}
-	return out
+	return append([]string(nil), cfg.MCP...)
 }
 
 // promptLine reads a single trimmed line from sio.in after writing prompt.

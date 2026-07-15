@@ -22,6 +22,9 @@
     ],
     "knowledge": [
       { "provider": "none", "about": "Curated internal knowledge (e.g. an OKF bundle). Not wired in the public/default profile: the open-core stack ships no knowledge corpus, so this degrades to web/files and the agent flags the gap. A private overlay wires it — either a `files` provider pointed at a git-mounted OKF bundle dir, or an `http` provider on the host knowledge service (:11436) that indexes that bundle. Ship the pointer, not the content." }
+    ],
+    "email": [
+      { "provider": "none", "about": "Email — read/search a mailbox. Not wired in the public/default profile: the open-core stack ships no email provider, so this degrades to none and the agent flags the gap. A private overlay wires it per profile — a personal profile points at its own mail MCP server; a work profile can reuse the `gworkspace` provider (gog) for Gmail. Ship the pointer, not the account." }
     ]
   }
 }

@@ -48,13 +48,23 @@ type PluginSpec struct {
 // Only the runtime-swappable surface lives here. Overlay HOST plugins compile
 // into the single pi-stack-host binary (build time, global) and cannot be
 // swapped per profile — see docs/design/profiles.md.
+//
+// The slice fields are POINTERS so the schema can distinguish three states that
+// a plain slice cannot: a nil pointer = INHERIT (omitted on Save via omitempty),
+// while a non-nil pointer — even to an empty slice — = an explicit REPLACE that
+// IS serialized (including `mcp = []`). This is what lets `RemoveProfileMCP`
+// disable the last inherited server: it stores a present-empty list that survives
+// Save+Load instead of a nil that would revert to inherit. A plain `[]string`
+// with `omitempty` could not tell present-empty from absent, so do NOT flatten
+// these back to non-pointer slices — the round-trip tests gate them. GogAccount
+// stays a string: empty = inherit.
 type Profile struct {
-	GogAccount       string   `toml:"gog_account"`
-	MCP              []string `toml:"mcp"`
-	KnowledgeBundles []string `toml:"knowledge_bundles"`
+	GogAccount       string    `toml:"gog_account,omitempty"`
+	MCP              *[]string `toml:"mcp,omitempty"`
+	KnowledgeBundles *[]string `toml:"knowledge_bundles,omitempty"`
 	Kits             struct {
-		Stack []string `toml:"stack"`
-	} `toml:"kits"`
+		Stack *[]string `toml:"stack,omitempty"`
+	} `toml:"kits,omitempty"`
 }
 
 // Config is the pi-stack configuration, decoded from TOML.
@@ -204,7 +214,9 @@ func (c *Config) AllKnowledgeBundles() []string {
 	}
 	add(c.KnowledgeBundles)
 	for _, p := range c.Profiles {
-		add(p.KnowledgeBundles)
+		if p.KnowledgeBundles != nil {
+			add(*p.KnowledgeBundles)
+		}
 	}
 	return out
 }
@@ -241,13 +253,13 @@ func (c *Config) Resolve(name string) *Config {
 		out.GogAccount = strings.TrimSpace(p.GogAccount)
 	}
 	if p.MCP != nil {
-		out.MCP = append([]string(nil), p.MCP...)
+		out.MCP = append([]string(nil), *p.MCP...)
 	}
 	if p.KnowledgeBundles != nil {
-		out.KnowledgeBundles = append([]string(nil), p.KnowledgeBundles...)
+		out.KnowledgeBundles = append([]string(nil), *p.KnowledgeBundles...)
 	}
 	if p.Kits.Stack != nil {
-		out.Kits.Stack = append([]string(nil), p.Kits.Stack...)
+		out.Kits.Stack = append([]string(nil), *p.Kits.Stack...)
 	}
 	return &out
 }
@@ -370,6 +382,141 @@ func (c *Config) AddKnowledgeBundle(path string) bool {
 // by a relative path can be removed by that same relative path.
 func (c *Config) RemoveKnowledgeBundle(path string) bool {
 	return removeValue(&c.KnowledgeBundles, canonicalizeBundlePath(path))
+}
+
+// profile fetches (or lazily creates) the named profile entry so a mutator can
+// modify it and reassign. Map values are not addressable, so every per-profile
+// mutator is a get-modify-set: profileEntry -> mutate the struct -> putProfile.
+// Creating a profile that did not exist is intentional: `pi-stack config set
+// --profile <new> ...` scaffolds the [profiles.<new>] table.
+func (c *Config) profileEntry(name string) Profile {
+	if c.Profiles == nil {
+		return Profile{}
+	}
+	return c.Profiles[name]
+}
+
+// putProfile writes p back into the profile map, allocating the map on first use.
+func (c *Config) putProfile(name string, p Profile) {
+	if c.Profiles == nil {
+		c.Profiles = map[string]Profile{}
+	}
+	c.Profiles[name] = p
+}
+
+// SetProfileGogAccount sets (or, with an empty value, clears) the Google
+// Workspace account override on the named profile, creating the profile if
+// absent.
+func (c *Config) SetProfileGogAccount(name, account string) {
+	p := c.profileEntry(name)
+	p.GogAccount = strings.TrimSpace(account)
+	c.putProfile(name, p)
+}
+
+// The per-profile list mutators below operate on the RESOLVED EFFECTIVE list
+// (base overlaid with any existing profile override), NOT on the raw override
+// slice. So unsetting an INHERITED value materializes base-minus-value as the
+// profile's explicit list (e.g. base [gog,slack], no prior work override,
+// `unset --profile work mcp slack` -> work.mcp=[gog]); and adding starts from
+// what the profile effectively sees today. They store the full explicit list as
+// the override only when it CHANGED, so a no-op leaves an inheriting field nil
+// (still inherit) rather than silently materializing it.
+
+// effectiveList returns a fresh COPY of the named profile's effective value for
+// one field, via Resolve so it reflects base+override. The copy is essential:
+// Resolve shallow-copies the config, so an inherited field aliases the base
+// slice — mutating it in place would corrupt the base.
+func (c *Config) effectiveList(name string, pick func(*Config) []string) []string {
+	return append([]string(nil), pick(c.Resolve(name))...)
+}
+
+// AddProfileMCP adds an MCP server to the named profile's effective mcp list,
+// storing the result as the profile's explicit override. Returns true when it
+// changed. Creates the profile if absent.
+func (c *Config) AddProfileMCP(name, server string) bool {
+	eff := c.effectiveList(name, func(rc *Config) []string { return rc.MCP })
+	if !addUnique(&eff, server) {
+		return false
+	}
+	p := c.profileEntry(name)
+	p.MCP = &eff
+	c.putProfile(name, p)
+	return true
+}
+
+// RemoveProfileMCP removes an MCP server from the named profile's EFFECTIVE mcp
+// list (base+override), storing the remainder as the profile's explicit
+// override. Returns true when it changed — so removing an inherited value
+// materializes base-minus-value.
+func (c *Config) RemoveProfileMCP(name, server string) bool {
+	eff := c.effectiveList(name, func(rc *Config) []string { return rc.MCP })
+	if !removeValue(&eff, server) {
+		return false
+	}
+	p := c.profileEntry(name)
+	// Store a non-nil pointer even when eff is now empty: removing the LAST
+	// inherited value must persist an explicit empty list (`mcp = []`), NOT a nil
+	// that Save would drop and Load would read back as inherit.
+	p.MCP = &eff
+	c.putProfile(name, p)
+	return true
+}
+
+// AddProfileKnowledgeBundle adds a canonicalized OKF bundle dir to the named
+// profile's effective knowledge_bundles list, storing the result as the
+// profile's explicit override. Returns true when it changed. Creates the
+// profile if absent.
+func (c *Config) AddProfileKnowledgeBundle(name, path string) bool {
+	eff := c.effectiveList(name, func(rc *Config) []string { return rc.KnowledgeBundles })
+	if !addUnique(&eff, canonicalizeBundlePath(path)) {
+		return false
+	}
+	p := c.profileEntry(name)
+	p.KnowledgeBundles = &eff
+	c.putProfile(name, p)
+	return true
+}
+
+// RemoveProfileKnowledgeBundle removes a canonicalized OKF bundle dir from the
+// named profile's EFFECTIVE knowledge_bundles list, storing the remainder as the
+// profile's explicit override. Returns true when it changed.
+func (c *Config) RemoveProfileKnowledgeBundle(name, path string) bool {
+	eff := c.effectiveList(name, func(rc *Config) []string { return rc.KnowledgeBundles })
+	if !removeValue(&eff, canonicalizeBundlePath(path)) {
+		return false
+	}
+	p := c.profileEntry(name)
+	p.KnowledgeBundles = &eff
+	c.putProfile(name, p)
+	return true
+}
+
+// AddProfileKit adds an overlay kit path to the named profile's effective
+// kits.stack list, storing the result as the profile's explicit override.
+// Returns true when it changed. Creates the profile if absent.
+func (c *Config) AddProfileKit(name, kit string) bool {
+	eff := c.effectiveList(name, func(rc *Config) []string { return rc.Kits.Stack })
+	if !addUnique(&eff, kit) {
+		return false
+	}
+	p := c.profileEntry(name)
+	p.Kits.Stack = &eff
+	c.putProfile(name, p)
+	return true
+}
+
+// RemoveProfileKit removes an overlay kit path from the named profile's
+// EFFECTIVE kits.stack list, storing the remainder as the profile's explicit
+// override. Returns true when it changed.
+func (c *Config) RemoveProfileKit(name, kit string) bool {
+	eff := c.effectiveList(name, func(rc *Config) []string { return rc.Kits.Stack })
+	if !removeValue(&eff, kit) {
+		return false
+	}
+	p := c.profileEntry(name)
+	p.Kits.Stack = &eff
+	c.putProfile(name, p)
+	return true
 }
 
 // canonicalizeBundlePath normalizes a bundle path to the SAME canonical id every

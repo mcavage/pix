@@ -51,8 +51,19 @@ type statusReport struct {
 	Providers  map[string]bool `json:"providers"`
 	Bundles    []bundleStatus  `json:"knowledge_bundles"`
 	MCP        []string        `json:"mcp"`
+	MCPServers []mcpStatusLine `json:"mcp_servers"`
 	Sandboxes  []sandboxLine   `json:"sandboxes"`
 	Todos      []string        `json:"todos"`
+}
+
+// mcpStatusLine is the per-server MCP status: registered with the sbx gateway
+// (from `sbx mcp ls`) and attach-on-run (it's in the resolved profile's mcp
+// list, so `pi-stack run --mcp <name>` attaches it). Empty when sbx is
+// unavailable, so status degrades to the bare MCP names.
+type mcpStatusLine struct {
+	Name       string `json:"name"`
+	Registered bool   `json:"registered"`
+	Attach     bool   `json:"attach_on_run"`
 }
 
 type bundleStatus struct {
@@ -104,6 +115,36 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 		st.Bundles = append(st.Bundles, bundleStatus{Path: b, Git: bundleGitStatus(env, b)})
 	}
 
+	// MCP registration state: `sbx mcp ls` once, best-effort. Each configured
+	// server is attach-on-run (it's in cfg.MCP, so `run --mcp <name>` attaches it)
+	// and shows whether it is currently registered with the gateway. When sbx is
+	// unavailable MCPServers stays nil and render falls back to the bare names.
+	if len(cfg.MCP) > 0 && env.lookPath != nil {
+		if _, err := env.lookPath("sbx"); err == nil && env.run != nil {
+			if o, err := env.run("sbx", "mcp", "ls"); err == nil {
+				anyUnregistered := false
+				for _, m := range cfg.MCP {
+					reg := grepWord(o, m)
+					st.MCPServers = append(st.MCPServers, mcpStatusLine{
+						Name:       m,
+						Registered: reg,
+						Attach:     true,
+					})
+					if !reg {
+						anyUnregistered = true
+					}
+				}
+				// A configured server that isn't registered means `run` would attach a
+				// server the gateway can't spawn — an outstanding item, so status can't
+				// claim "all systems go". One deduped TODO covers all of them. Only
+				// emitted when sbx is reachable (otherwise registration is unknowable).
+				if anyUnregistered {
+					st.Todos = append(st.Todos, "pi-stack mcp register")
+				}
+			}
+		}
+	}
+
 	// Sandboxes: filter `sbx ls` to pi-stack-* boxes.
 	if env.lookPath != nil {
 		if _, err := env.lookPath("sbx"); err == nil && env.run != nil {
@@ -149,8 +190,21 @@ func (st statusReport) render(out io.Writer) {
 
 	if len(st.MCP) == 0 {
 		fmt.Fprintln(out, "  mcp         (none)")
-	} else {
+	} else if len(st.MCPServers) == 0 {
+		// sbx unavailable (e.g. inside the sandbox): degrade to the bare names.
 		fmt.Fprintf(out, "  mcp         %s\n", strings.Join(st.MCP, ", "))
+	} else {
+		for i, m := range st.MCPServers {
+			label := "mcp"
+			if i > 0 {
+				label = "   "
+			}
+			reg := okGlyph(m.Registered) + " registered"
+			if !m.Registered {
+				reg = okGlyph(false) + " not registered"
+			}
+			fmt.Fprintf(out, "  %-9s   %-8s %s  %s attach-on-run\n", label, m.Name, reg, okGlyph(m.Attach))
+		}
 	}
 
 	if len(st.Sandboxes) > 0 {

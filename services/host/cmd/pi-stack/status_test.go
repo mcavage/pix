@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -20,6 +21,9 @@ func fakeStatusEnv() shellEnv {
 			}
 			if name == "sbx" && len(args) >= 1 && args[0] == "ls" {
 				return "NAME STATUS\npi-stack-myrepo running\npi-stack-scratch stopped\nother-box running\n", nil
+			}
+			if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
+				return "gog\nnotion\n", nil
 			}
 			return "", nil
 		},
@@ -71,6 +75,57 @@ func TestRenderStatusHuman(t *testing.T) {
 	}
 }
 
+// TestGatherStatusMCP: cfg.MCP servers get a registration + attach-on-run state
+// parsed from `sbx mcp ls`; gog is registered, slack is not.
+func TestGatherStatusMCP(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"gog", "slack"}}
+	st := gatherStatus(cfg, "default", fakeStatusEnv())
+	if len(st.MCPServers) != 2 {
+		t.Fatalf("MCPServers = %+v, want 2 entries", st.MCPServers)
+	}
+	byName := map[string]mcpStatusLine{}
+	for _, m := range st.MCPServers {
+		byName[m.Name] = m
+	}
+	if !byName["gog"].Registered {
+		t.Errorf("gog should be registered: %+v", byName["gog"])
+	}
+	if byName["slack"].Registered {
+		t.Errorf("slack should NOT be registered: %+v", byName["slack"])
+	}
+	for _, m := range st.MCPServers {
+		if !m.Attach {
+			t.Errorf("%s should be attach-on-run (it's in cfg.MCP)", m.Name)
+		}
+	}
+}
+
+// TestGatherStatusMCPSbxAbsent: with sbx off PATH, MCPServers is empty so render
+// degrades to the bare names.
+func TestGatherStatusMCPSbxAbsent(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"gog"}}
+	env := fakeStatusEnv()
+	env.lookPath = func(name string) (string, error) { return "", fmt.Errorf("not found") }
+	st := gatherStatus(cfg, "default", env)
+	if len(st.MCPServers) != 0 {
+		t.Errorf("MCPServers = %+v, want empty when sbx absent", st.MCPServers)
+	}
+}
+
+// TestRenderStatusMCPJSON: --json carries the mcp_servers registration state.
+func TestRenderStatusMCPJSON(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"gog", "slack"}}
+	var out bytes.Buffer
+	renderStatus(cfg, "default", fakeStatusEnv(), &out, true)
+	var st statusReport
+	if err := json.Unmarshal(out.Bytes(), &st); err != nil {
+		t.Fatalf("status --json invalid: %v\n%s", err, out.String())
+	}
+	if len(st.MCPServers) != 2 || !st.MCPServers[0].Attach {
+		t.Errorf("json mcp_servers = %+v, want 2 attach-on-run entries", st.MCPServers)
+	}
+}
+
 func TestRenderStatusJSON(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"gog"}}
 	var out bytes.Buffer
@@ -81,6 +136,49 @@ func TestRenderStatusJSON(t *testing.T) {
 	}
 	if st.Profile != "default" {
 		t.Errorf("profile = %q, want default", st.Profile)
+	}
+}
+
+// TestStatusRegisterTodo: with sbx reachable and a configured server NOT
+// registered (slack), status appends exactly one `pi-stack mcp register` TODO so
+// it can't claim "all systems go" while a server is unregistered.
+func TestStatusRegisterTodo(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"gog", "slack"}}
+	st := gatherStatus(cfg, "default", fakeStatusEnv()) // sbx mcp ls -> gog,notion
+	n := 0
+	for _, tdo := range st.Todos {
+		if tdo == "pi-stack mcp register" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("expected one `pi-stack mcp register` TODO (slack unregistered), got %d: %v", n, st.Todos)
+	}
+}
+
+// TestStatusNoRegisterTodoWhenRegistered: every configured server registered ->
+// no register TODO.
+func TestStatusNoRegisterTodoWhenRegistered(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"gog", "notion"}} // both in `sbx mcp ls`
+	st := gatherStatus(cfg, "default", fakeStatusEnv())
+	for _, tdo := range st.Todos {
+		if tdo == "pi-stack mcp register" {
+			t.Errorf("did not expect a register TODO when all servers registered: %v", st.Todos)
+		}
+	}
+}
+
+// TestStatusNoRegisterTodoWhenSbxAbsent: sbx off PATH -> registration is
+// unknowable, so status must NOT invent a register TODO.
+func TestStatusNoRegisterTodoWhenSbxAbsent(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"gog", "slack"}}
+	env := fakeStatusEnv()
+	env.lookPath = func(name string) (string, error) { return "", fmt.Errorf("not found") }
+	st := gatherStatus(cfg, "default", env)
+	for _, tdo := range st.Todos {
+		if tdo == "pi-stack mcp register" {
+			t.Errorf("did not expect a register TODO when sbx absent: %v", st.Todos)
+		}
 	}
 }
 

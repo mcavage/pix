@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,6 +39,54 @@ type shellEnv struct {
 	// writeFile writes data to path (creating parent dirs). Nil in tests so
 	// seeding stays hermetic; defaultShellEnv wires the real os-backed writer.
 	writeFile func(path string, data []byte, perm os.FileMode) error
+	// probe runs an UNTRUSTED registered command with a hard timeout + capped
+	// output, so doctor never hangs (or floods) on a misbehaving MCP server. It
+	// returns (output, timedOut, err). Nil in tests, which fall back to run so
+	// they stay hermetic; defaultShellEnv wires runWithTimeout.
+	probe func(name string, args ...string) (out string, timedOut bool, err error)
+}
+
+// probeTimeout bounds every registered-command probe so doctor can never wedge
+// on a hung MCP server; probeMaxOutput caps how much of its output we capture.
+const (
+	probeTimeout   = 5 * time.Second
+	probeMaxOutput = 64 << 10 // 64KB
+)
+
+// runWithTimeout execs name+args under a hard context deadline with capped
+// captured output. It is the bounded alternative to shellEnv.run for probing
+// untrusted registered commands: a server that hangs is killed at probeTimeout
+// rather than freezing doctor, and runaway output is truncated at
+// probeMaxOutput. Returns (output, timedOut, err).
+func runWithTimeout(name string, args ...string) (string, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	// Hard wall-clock bound: if the child (or a descendant it spawned that still
+	// holds stdout/stderr) is alive when the context fires, WaitDelay forces the
+	// pipes closed + the process killed so CombinedOutput can't hang past it.
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.CombinedOutput()
+	if len(out) > probeMaxOutput {
+		out = out[:probeMaxOutput]
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return string(out), true, ctx.Err()
+	}
+	return string(out), false, err
+}
+
+// probeRun invokes the bounded env.probe when wired (the real path), else falls
+// back to env.run (tests). Returns (output, timedOut, err).
+func probeRun(env shellEnv, name string, args ...string) (string, bool, error) {
+	if env.probe != nil {
+		return env.probe(name, args...)
+	}
+	if env.run == nil {
+		return "", false, fmt.Errorf("no runner")
+	}
+	out, err := env.run(name, args...)
+	return out, false, err
 }
 
 // defaultShellEnv returns a shellEnv backed by the real OS.
@@ -75,6 +124,7 @@ func defaultShellEnv() shellEnv {
 			}
 			return os.WriteFile(path, data, perm)
 		},
+		probe: runWithTimeout,
 	}
 }
 
@@ -110,12 +160,17 @@ type report struct {
 	mcp       []string // configured MCP, for the footer
 }
 
-// todos returns every outstanding TODO command across all groups, in order.
+// todos returns every outstanding TODO command across all groups, in order,
+// with exact-duplicate commands dropped (so e.g. a `pi-stack mcp register` that
+// two groups both surface only appears once). Order is preserved: the first
+// occurrence wins.
 func (r *report) todos() []string {
 	var out []string
+	seen := map[string]bool{}
 	for _, g := range r.groups {
 		for _, c := range g.checks {
-			if c.state == stateTODO && c.todo != "" {
+			if c.state == stateTODO && c.todo != "" && !seen[c.todo] {
+				seen[c.todo] = true
 				out = append(out, c.todo)
 			}
 		}
@@ -204,17 +259,26 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	// because `gog auth doctor` in a logged-in shell passes and lies.
 	r.groups = append(r.groups, gogGroup(cfg, env, mcpOut, mcpOK))
 
-	// (e) MCP servers registered with sbx.
+	// (e) MCP servers registered with sbx. gog is DELIBERATELY skipped here — the
+	// dedicated gog group above already owns its registration check + TODO, so
+	// probing it again would emit a duplicate `pi-stack mcp register`.
 	mcp := group{title: "MCP servers (local stdio, run by the sbx gateway)"}
-	if len(cfg.MCP) == 0 {
+	var others []string
+	for _, m := range cfg.MCP {
+		if m == "gog" {
+			continue
+		}
+		others = append(others, m)
+	}
+	if len(others) == 0 {
 		mcp.checks = append(mcp.checks, check{
 			label:  "(none configured)",
 			state:  stateInfo,
 			detail: "add servers with `pi-stack config set mcp <server>`",
 		})
 	} else {
-		for _, m := range cfg.MCP {
-			mcp.checks = append(mcp.checks, mcpCheck(m, mcpOut, mcpOK))
+		for _, m := range others {
+			mcp.checks = append(mcp.checks, mcpProbeCheck(env, m, mcpOut, mcpOK))
 		}
 	}
 	r.groups = append(r.groups, mcp)
@@ -272,6 +336,198 @@ func mcpCheck(name, mcpOut string, mcpOK bool) check {
 		return check{label: name, state: stateOK, detail: "registered"}
 	}
 	return check{label: name, state: stateTODO, detail: "not registered", todo: cmd}
+}
+
+// mcpProbeCheck is the HONEST, generalized MCP check: for every configured local
+// stdio server (slack, an overlay `pio`/`fastmail`, …), not just gog, it reports
+// registered -> spawns -> returns N tools. It reads the command sbx ACTUALLY
+// registered for <name> and probes THAT (the same honest path the gog group
+// uses), so a pass proves the real gateway spawn, not a config reconstruction.
+// It degrades cleanly: sbx absent -> a register TODO; registered but no readable
+// command / no --list-tools support -> a confirmed "registered" without the tool
+// count (never a false TODO); registered but 0 tools -> a TODO naming the
+// headless-creds fix (the same trap the gog headless-spawn check catches).
+func mcpProbeCheck(env shellEnv, name, mcpOut string, mcpOK bool) check {
+	cmd := "pi-stack mcp register"
+	if !mcpOK {
+		return check{label: name, state: stateTODO, detail: "sbx unavailable here (register on the host)", todo: cmd}
+	}
+	if !grepWord(mcpOut, name) {
+		return check{label: name, state: stateTODO, detail: "not registered", todo: cmd}
+	}
+	// Registered — try the honest headless probe of the registered command.
+	argv, ok := registeredMCPCommand(env, name)
+	if !ok {
+		return check{label: name, state: stateOK, detail: "registered (tool probe unavailable)"}
+	}
+	// SAFETY: only exec a command whose SHAPE we trust. sbx will hand us whatever
+	// argv someone registered for <name>; doctor must not blindly run it. If it is
+	// not the known gog form or a `pi-stack-host mcp <name>` spawn, skip the probe
+	// (still a confirmed registration, just no tool count) rather than exec it.
+	if !recognizedMCPArgv(argv, name) {
+		return check{label: name, state: stateOK, detail: "registered (probe skipped: unrecognized command)"}
+	}
+	n, probed := probeRegisteredMCP(env, argv)
+	if !probed {
+		return check{label: name, state: stateOK, detail: "registered (tool probe unavailable)"}
+	}
+	if n == 0 {
+		return check{label: name, state: stateTODO,
+			detail: "registered but the spawned command returns 0 tools — headless creds/keyring",
+			todo:   "review the registered command: sbx mcp get " + name}
+	}
+	return check{label: name, state: stateOK, detail: fmt.Sprintf("registered, spawns %s", plural(n, "tool"))}
+}
+
+// registeredMCPCommand is the generalized sibling of registeredGogCommand: it
+// asks sbx for the command ACTUALLY registered for <name>, so doctor can probe
+// the real registration for any local stdio server. It tries `sbx mcp get
+// <name>` then `sbx mcp ls -o json`, returning the parsed argv. Unlike the gog
+// parsers it applies no gog-specific completeness bar — any non-empty,
+// unambiguous (unquoted) command counts. Returns (nil,false) when sbx is absent
+// or exposes no command; the caller then reports "registered" without a tool
+// count rather than a false TODO.
+func registeredMCPCommand(env shellEnv, name string) ([]string, bool) {
+	if env.lookPath == nil || env.run == nil {
+		return nil, false
+	}
+	if _, err := env.lookPath("sbx"); err != nil {
+		return nil, false
+	}
+	if out, err := env.run("sbx", "mcp", "get", name); err == nil {
+		if argv, ok := parseMCPCommandLine(out); ok {
+			return argv, true
+		}
+	}
+	if out, err := env.run("sbx", "mcp", "ls", "-o", "json"); err == nil {
+		if argv, ok := parseMCPCommandJSON(out, name); ok {
+			return argv, true
+		}
+	}
+	return nil, false
+}
+
+// parseMCPCommandLine extracts a registered argv from a `sbx mcp get <name>`
+// text dump: the `command:` line split into fields. A shell-quoted line (which
+// strings.Fields cannot split reliably) or an empty command returns (nil,false)
+// so registeredMCPCommand falls through to the structured JSON parser.
+func parseMCPCommandLine(out string) ([]string, bool) {
+	m := gogCommandLineRe.FindStringSubmatch(out)
+	if len(m) < 2 {
+		return nil, false
+	}
+	cmd := strings.TrimSpace(m[1])
+	if cmd == "" || strings.ContainsAny(cmd, "\"'") {
+		return nil, false
+	}
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return nil, false
+	}
+	return fields, true
+}
+
+// parseMCPCommandJSON extracts the registered argv for <name> from `sbx mcp ls
+// -o json` (an array of {name, command, args}). Returns (nil,false) when there
+// is no matching entry or the JSON doesn't parse.
+func parseMCPCommandJSON(out, name string) ([]string, bool) {
+	var servers []struct {
+		Name    string   `json:"name"`
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+	}
+	if err := json.Unmarshal([]byte(out), &servers); err != nil {
+		return nil, false
+	}
+	for _, s := range servers {
+		if s.Name != name || strings.TrimSpace(s.Command) == "" {
+			continue
+		}
+		return append([]string{s.Command}, s.Args...), true
+	}
+	return nil, false
+}
+
+// recognizedMCPArgv reports whether argv is a shape doctor TRUSTS to exec as a
+// probe: either the known gog spawn form, or (optionally wrapped in
+// `op run … -- …`) an ABSOLUTE path whose basename is `pi-stack-host` followed
+// by `mcp <name>` — exactly how mcp.go registers a local stdio server. Anything
+// else is an arbitrary command someone put in the registration, which doctor
+// must NOT run.
+func recognizedMCPArgv(argv []string, name string) bool {
+	if _, ok := gogSpawnArgv(argv); ok {
+		return true
+	}
+	// Unwrap ONLY a trusted `op run … -- <cmd…>` prefix. A `--` behind any other
+	// argv[0] is rejected: the probe execs argv[0] verbatim, so unwrapping a
+	// prefix like `/tmp/evil -- pi-stack-host mcp slack` would exec /tmp/evil.
+	cmd, ok := unwrapOpRun(argv)
+	if !ok {
+		return false
+	}
+	if len(cmd) < 3 {
+		return false
+	}
+	if !filepath.IsAbs(cmd[0]) || filepath.Base(cmd[0]) != "pi-stack-host" {
+		return false
+	}
+	return cmd[1] == "mcp" && cmd[2] == name
+}
+
+// unwrapOpRun returns the effective command doctor would trust to exec. With no
+// `--` it is argv itself (a bare command). With a `--`, it unwraps the prefix
+// ONLY when argv[0] is an absolute `op` binary (the real command runs via op,
+// which is trusted); a `--` behind any other argv[0] returns ok=false so a
+// hostile prefix is never exec'd.
+func unwrapOpRun(argv []string) ([]string, bool) {
+	if len(argv) == 0 {
+		return nil, false
+	}
+	sep := -1
+	for i, a := range argv {
+		if a == "--" {
+			sep = i
+			break
+		}
+	}
+	if sep < 0 {
+		return argv, true
+	}
+	// Only a `op run … -- <cmd>` wrapper is trusted to be unwrapped: the probe
+	// execs argv[0] verbatim, so a `--` behind a FOREIGN argv[0] (e.g.
+	// `/tmp/evil -- pi-stack-host mcp slack`) would run /tmp/evil. Requiring
+	// basename "op" blocks that. (Residual, accepted: a registration whose argv[0]
+	// is a binary literally named `op` on the exec path would pass — but that
+	// presupposes an attacker who can already write arbitrary sbx registrations,
+	// i.e. owns the gateway, which is outside doctor's threat model.)
+	if filepath.Base(argv[0]) != "op" {
+		return nil, false
+	}
+	return argv[sep+1:], true
+}
+
+// probeRegisteredMCP runs the registered command with `--list-tools` appended
+// (the same handshake probeRegisteredGog uses), BOUNDED by probeRun's timeout +
+// output cap, and returns the count of tool lines it prints plus whether the
+// command ran cleanly. A timeout, a non-zero exit, or a server that doesn't
+// support `--list-tools` -> (0,false), so the caller reports "registered"
+// without a bogus tool count instead of hanging or emitting a false failure.
+func probeRegisteredMCP(env shellEnv, argv []string) (int, bool) {
+	if len(argv) == 0 {
+		return 0, false
+	}
+	full := append(append([]string{}, argv...), "--list-tools")
+	out, timedOut, err := probeRun(env, full[0], full[1:]...)
+	if timedOut || err != nil {
+		return 0, false
+	}
+	n := 0
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.TrimSpace(ln) != "" {
+			n++
+		}
+	}
+	return n, true
 }
 
 // enabled reports whether a service name is in the configured SERVICES set.
@@ -432,9 +688,9 @@ func gogHeadlessOK(env shellEnv, acct, opRefs string) bool {
 	if _, err := env.lookPath("op"); err != nil {
 		return false
 	}
-	out, err := env.run("op", "run", "--env-file="+opRefs, "--",
+	out, timedOut, err := probeRun(env, "op", "run", "--env-file="+opRefs, "--",
 		"gog", "--account", acct, "mcp", "--list-tools")
-	return err == nil && strings.TrimSpace(out) != ""
+	return !timedOut && err == nil && strings.TrimSpace(out) != ""
 }
 
 // gogGroup builds the gog check cluster. The HONEST path reads the ACTUAL
@@ -643,14 +899,11 @@ func gogSpawnArgv(argv []string) ([]string, bool) {
 	if len(argv) == 0 {
 		return nil, false
 	}
-	// Unwrap an `op run … -- <cmd…>` prefix if present; otherwise the whole argv
-	// is the (bare) command.
-	cmd := argv
-	for i, a := range argv {
-		if a == "--" {
-			cmd = argv[i+1:]
-			break
-		}
+	// Unwrap ONLY a trusted `op run … -- <cmd…>` prefix; a `--` behind a non-op
+	// argv[0] is rejected (the probe execs argv[0] verbatim).
+	cmd, ok := unwrapOpRun(argv)
+	if !ok {
+		return nil, false
 	}
 	if len(cmd) == 0 || strings.TrimSpace(cmd[0]) == "" {
 		return nil, false
@@ -702,12 +955,12 @@ func parseGogCommandJSON(out string) ([]string, bool) {
 // `gog … mcp … --list-tools` (argv[0] is gog itself). It degrades cleanly
 // (returns false, never crashes) on any error.
 func probeRegisteredGog(env shellEnv, argv []string) bool {
-	if env.run == nil || len(argv) == 0 {
+	if len(argv) == 0 {
 		return false
 	}
 	full := append(append([]string{}, argv...), "--list-tools")
-	out, err := env.run(full[0], full[1:]...)
-	return err == nil && strings.TrimSpace(out) != ""
+	out, timedOut, err := probeRun(env, full[0], full[1:]...)
+	return !timedOut && err == nil && strings.TrimSpace(out) != ""
 }
 
 // gogAttachCheck is the informational check 5: is gog in the configured MCP set,

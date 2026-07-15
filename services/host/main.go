@@ -46,6 +46,12 @@ var (
 	// service name a factory registers (e.g. a short "warehouse" -> "warehouse-proxy").
 	// Overlay plugins add their own here so the public tree never names one.
 	extraServiceAliases = map[string]string{}
+	// extraMcpServers lets an overlay add a BUILT-IN McpServer (e.g. a private
+	// `pio` or `fastmail` bridge) served through `pi-stack-host mcp <name>`, exactly
+	// as extraCommands adds a subcommand. builtinMcpServerFor consults this map
+	// FIRST, so an overlay registers via init() (like extraCommands); the public
+	// binary ships none.
+	extraMcpServers = map[string]func() plugin.McpServer{}
 	// extraBrokerFactory lets an overlay register a BUILT-IN CredentialBroker
 	// served over the `plugin broker` self-exec path. nil in the public tree —
 	// there is no built-in broker (the built-in Google broker was removed), so the broker slot is
@@ -65,11 +71,7 @@ func main() {
 		// stdio bridge (behaviourally identical to the old runSlack()).
 		runMcpBridge("slack")
 	case "mcp":
-		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "pi-stack-host mcp: missing <name>")
-			os.Exit(2)
-		}
-		runMcpBridge(os.Args[2])
+		runMcpSubcommand(os.Args[2:])
 	case "plugin":
 		runPlugin(os.Args[2:])
 	case "memory":

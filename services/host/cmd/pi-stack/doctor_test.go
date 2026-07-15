@@ -682,6 +682,156 @@ func TestDoctor_MCPRegistration(t *testing.T) {
 	}
 }
 
+// TestDoctor_MCPToolProbe is the generalized honest probe: a NON-gog configured
+// server (slack) that is registered gets its ACTUAL registered command read via
+// sbx and probed with --list-tools, so the readout reports the real tool count
+// ("registered, spawns N tools"), not just "registered".
+func TestDoctor_MCPToolProbe(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.MCP = []string{"slack"}
+	regCmd := "/usr/local/bin/pi-stack-host mcp slack"
+	f := gogGreen(fakeEnv{
+		present: map[string]bool{"sbx": true, "ollama": true},
+		output: map[string]string{
+			"sbx secret ls":          "anthropic openai google github",
+			"ollama list":            "gemma4:latest\nnomic-embed-text:latest\n",
+			"sbx mcp ls":             "gog\nslack\n",
+			"sbx mcp get slack":      "name: slack\ncommand: " + regCmd + "\n",
+			regCmd + " --list-tools": "slack_search\nslack_post\nslack_channels\n",
+		},
+		ports: map[int]bool{11434: true, 11435: true},
+	})
+	r := runDoctor(cfg, f.env())
+	// The generic mcp group is last; slack must read as a real tool count.
+	var found bool
+	for _, c := range r.groups[len(r.groups)-1].checks {
+		if c.label == "slack" && c.state == stateOK && strings.Contains(c.detail, "spawns 3 tools") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected slack to report a real tool count, group=%+v", r.groups[len(r.groups)-1])
+	}
+}
+
+// TestDoctor_MCPToolProbeZero: a registered server whose spawned command returns
+// 0 tools is a TODO (the generalized headless-creds trap), not a silent green.
+func TestDoctor_MCPToolProbeZero(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.MCP = []string{"slack"}
+	regCmd := "/usr/local/bin/pi-stack-host mcp slack"
+	f := gogGreen(fakeEnv{
+		present: map[string]bool{"sbx": true, "ollama": true},
+		output: map[string]string{
+			"sbx secret ls":          "anthropic openai google github",
+			"ollama list":            "gemma4:latest\nnomic-embed-text:latest\n",
+			"sbx mcp ls":             "gog\nslack\n",
+			"sbx mcp get slack":      "name: slack\ncommand: " + regCmd + "\n",
+			regCmd + " --list-tools": "", // spawns but returns 0 tools
+		},
+		ports: map[int]bool{11434: true, 11435: true},
+	})
+	r := runDoctor(cfg, f.env())
+	var todo bool
+	for _, c := range r.groups[len(r.groups)-1].checks {
+		if c.label == "slack" && c.state == stateTODO && strings.Contains(c.detail, "0 tools") {
+			todo = true
+		}
+	}
+	if !todo {
+		t.Errorf("expected a 0-tools TODO for slack, group=%+v", r.groups[len(r.groups)-1])
+	}
+}
+
+// TestDoctor_MCPUnrecognizedCommand is the probe-safety gate: a registered
+// server whose command is NOT a recognized shape (not gog, not an absolute
+// `pi-stack-host mcp <name>`) must NOT be exec'd. The check reports a confirmed
+// registration with an explicit "probe skipped: unrecognized command" note, and
+// the fake run PANICS if doctor ever tries to exec the untrusted command —
+// proving it was never run.
+func TestDoctor_MCPUnrecognizedCommand(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.MCP = []string{"evil"}
+	f := gogConfirmed(fakeEnv{
+		present: map[string]bool{"sbx": true, "ollama": true},
+		output: map[string]string{
+			"sbx secret ls":    "anthropic openai google github",
+			"ollama list":      "gemma4:latest\nnomic-embed-text:latest\n",
+			"sbx mcp ls":       "gog\nevil\n",
+			"sbx mcp get evil": "name: evil\ncommand: /bin/rm -rf /\n",
+		},
+		ports: map[int]bool{11434: true, 11435: true},
+	})
+	// Wrap the fake run so an attempt to exec the untrusted command fails loudly.
+	env := f.env()
+	inner := env.run
+	env.run = func(name string, args ...string) (string, error) {
+		if name == "/bin/rm" {
+			t.Fatalf("doctor exec'd an unrecognized registered command: %s %v", name, args)
+		}
+		return inner(name, args...)
+	}
+	r := runDoctor(cfg, env)
+	var found bool
+	for _, c := range r.groups[len(r.groups)-1].checks {
+		if c.label == "evil" && c.state == stateOK &&
+			strings.Contains(c.detail, "probe skipped: unrecognized command") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected evil to report a skipped probe, group=%+v", r.groups[len(r.groups)-1])
+	}
+}
+
+// TestDoctor_GogTodoOnce is the duplicate-TODO gate: gog is UNREGISTERED and
+// also present in cfg.MCP. The dedicated gog group owns gog's registration TODO;
+// the generic mcp group must SKIP gog, and report.todos() dedupes regardless, so
+// `pi-stack mcp register` appears AT MOST ONCE.
+func TestDoctor_GogTodoOnce(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.MCP = []string{"gog"}
+	f := gogGreen(fakeEnv{
+		present: map[string]bool{"sbx": true, "ollama": true},
+		output: map[string]string{
+			"sbx secret ls": "anthropic openai google github",
+			"ollama list":   "gemma4:latest\nnomic-embed-text:latest\n",
+			"sbx mcp ls":    "notion\n", // gog NOT registered
+		},
+		ports: map[int]bool{11434: true, 11435: true},
+	})
+	r := runDoctor(cfg, f.env())
+	n := 0
+	for _, tdo := range r.todos() {
+		if tdo == "pi-stack mcp register" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("expected `pi-stack mcp register` exactly once, got %d: %v", n, r.todos())
+	}
+	// The generic mcp group must not carry a gog check at all.
+	for _, c := range r.groups[len(r.groups)-1].checks {
+		if c.label == "gog" {
+			t.Errorf("generic mcp group should skip gog, got check %+v", c)
+		}
+	}
+}
+
+// TestDoctorTodosDedup proves report.todos() drops exact-duplicate commands
+// while preserving first-occurrence order.
+func TestDoctorTodosDedup(t *testing.T) {
+	r := &report{groups: []group{
+		{checks: []check{{state: stateTODO, todo: "a"}, {state: stateTODO, todo: "b"}}},
+		{checks: []check{{state: stateTODO, todo: "a"}, {state: stateTODO, todo: "c"}}},
+	}}
+	got := r.todos()
+	want := []string{"a", "b", "c"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("todos() = %v, want %v", got, want)
+	}
+}
+
 // TestGrepWord matches the Makefile's `grep -qw` semantics.
 func TestGrepWord(t *testing.T) {
 	if !grepWord("anthropic openai", "openai") {
