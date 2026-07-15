@@ -327,8 +327,11 @@ func reindexKnowledgePlugin(store plugin.KnowledgeStore, bundles []string) {
 // split on the OS path-list separator or a comma (a convenience for `serve
 // knowledge` smoke runs without a config file). Empty means no bundles.
 func knowledgeBundles(cfg *config.Config) []string {
-	if len(cfg.KnowledgeBundles) > 0 {
-		return cfg.KnowledgeBundles
+	// Index the UNION across the base config and every profile so a `serve`
+	// started under one context still serves the bundles another profile scopes
+	// to (per-profile scoping happens at query time, not at index time).
+	if all := cfg.AllKnowledgeBundles(); len(all) > 0 {
+		return all
 	}
 	raw := strings.TrimSpace(os.Getenv("KNOWLEDGE_BUNDLES"))
 	if raw == "" {

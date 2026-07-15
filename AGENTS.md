@@ -55,16 +55,25 @@ pi is pinned via `ARG PI_PACKAGE=@earendil-works/pi-coding-agent@<version>` in t
 The `pi-stack` binary (`services/host/cmd/pi-stack/`) is the user-facing launcher. `make install` builds both `out/pi-stack` and `out/pi-stack-host` and symlinks them into `~/.local/bin`. A consumer can also run `curl -fsSL https://raw.githubusercontent.com/mcavage/pi-stack/main/install.sh | sh` without cloning the repo.
 
 Verb tree (confirmed in `cmd/pi-stack/main.go`):
-- `pi-stack [DIR]` — alias for `run [DIR]`
+- `pi-stack` (no args) — prints **status** (NEVER launches a sandbox; launching is explicit behind `run`). On a fresh host (no config file) it offers onboarding first. A bare positional launches `run` ONLY if it names an existing directory — a non-directory word is treated as a typo, not a silent sandbox.
+- `pi-stack [DIR]` — alias for `run [DIR]` (DIR must exist)
+- `pi-stack status [--json]` (alias `st`) — fast read-only control panel: services up/down (:11435/:11436), provider keys, knowledge bundles + git drift, mcp, running `pi-stack-*` sandboxes, active profile, outstanding-setup count.
 - `pi-stack run [DIR] [--dev] [--kit K] [--mcp M] [--name N] [-- pi-args…]` — launch the sandbox
 - `pi-stack serve [args…]` — exec `pi-stack-host serve` (long-running host services)
-- `pi-stack doctor` — diagnose host + sandbox health (probes memory, gog, keys, ollama)
-- `pi-stack setup` — guided first-run: prompts only for the gog account, writes config (+ ensures memory), and prints copy-paste TODOs for provider secrets and anything else outstanding
+- `pi-stack doctor` — diagnose host + sandbox health (probes memory, gog, keys, ollama); profile-aware
+- `pi-stack setup` — guided first-run: prompts only for the gog account, writes config (+ ensures memory), and prints copy-paste TODOs for provider secrets and anything else outstanding. **Auto-triggered on first run** (config-file absence): TTY → offer `[Y/n]`; non-TTY → print the one-liner and continue.
+- `pi-stack memory recall|remember|forget|learnings|stats [--json]` (alias `mem`) — drive the memory daemon (:11435) from the HOST without launching a sandbox. Degrades to a clear message + exit code 3 when the daemon is down.
+- `pi-stack knowledge init|use|ls|query|sync|remote` (alias `kb`) — scaffold/point/list + `query` (:11436 search from the host), `sync` (commit+push the bundle from anywhere — safe by default: pushes a `knowledge/sync-<ts>` branch + prints a `gh pr create` hint, mirroring `enrich`; `--allow-main` to push the default branch), `remote set <url>` (wire origin on a fresh `init` bundle).
+- `pi-stack profile ls|use <name>` — switch contexts (work / personal / default). See below.
 - `pi-stack config show|path|set|unset` — inspect or mutate config without touching the file
 - `pi-stack mcp register|ls` — register local stdio MCP servers with the sbx gateway
 - `pi-stack version` — print the stamped version
 
-Runtime config lives at `~/.config/pi-stack/config.toml` (or `$PI_STACK_CONFIG`, `$XDG_CONFIG_HOME/pi-stack/config.toml`). It is managed by `pi-stack config set <key> <value>` — never hand-edit it. Keys: `gog_account`, `mcp`, `services`, `memory_watcher_model`, `memory_embed_model`. `pi-stack config set` supports the same keys `make mcp-register` reads from `config/local.mk`, but writes to `config.toml` instead.
+All commands accept a global `--profile <name>` (before or after the subcommand); shared JSON-RPC client is `cmd/pi-stack/rpcclient.go`.
+
+Runtime config lives at `~/.config/pi-stack/config.toml` (or `$PI_STACK_CONFIG`, `$XDG_CONFIG_HOME/pi-stack/config.toml`). It is managed by `pi-stack config set <key> <value>` — never hand-edit it. Keys: `gog_account`, `mcp`, `services`, `memory_watcher_model`, `memory_embed_model`, `active_profile`. `pi-stack config set` supports the same keys `make mcp-register` reads from `config/local.mk`, but writes to `config.toml` instead.
+
+**Profiles (work + personal from one host).** A profile is a named override set layered onto the base (flat) config, so you can run distinct contexts differing in `gog_account`, `mcp`, `knowledge_bundles`, and the overlay `kits.stack`. `[profiles.<name>]` tables override the base; a present list REPLACES, an absent one INHERITS. `config.Config.Resolve(name)` returns a flat config every consumer uses unchanged. Active-profile precedence: `--profile` > `PI_STACK_PROFILE` > `active_profile` in config > `default`. `run` folds the profile into the sandbox name (`pi-stack-<dir>-<profile>`). `serve` is NOT profile-aware — it indexes the UNION of all profiles' knowledge bundles (`config.AllKnowledgeBundles()`), and per-profile recall scoping happens at query time via the `.pi-stack/knowledge.scope` file. Memory (:11435) is a single shared store across profiles for now (documented v2 gap: tag rows by profile). Overlay HOST plugins compile into the one `pi-stack-host` binary at build time, so they can't be swapped per profile — only the runtime/sandbox half is profile-swappable. Full design: `docs/design/profiles.md`.
 
 ## go-plugin host architecture
 

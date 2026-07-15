@@ -823,10 +823,13 @@ func modelPulled(listOut, model string) bool {
 
 // runDoctorCmd is the CLI entry point wired into main's dispatch.
 func runDoctorCmd(argv []string) {
-	cfg, err := config.Load()
+	cfg, profile, err := loadResolvedConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack doctor: loading config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "pi-stack doctor: %v\n", err)
 		os.Exit(1)
+	}
+	if profile != config.DefaultProfile {
+		fmt.Fprintf(os.Stdout, "profile: %s\n\n", profile)
 	}
 	r := runDoctor(cfg, defaultShellEnv())
 	r.services = cfg.Services

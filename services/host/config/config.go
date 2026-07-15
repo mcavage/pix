@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -37,11 +38,36 @@ type PluginSpec struct {
 	Port int    `toml:"port"` // port an external plugin listens on
 }
 
+// Profile is a named override set layered onto the base (flat) config so one
+// host can run distinct contexts — e.g. WORK vs PERSONAL — that differ in their
+// Google Workspace account, MCP servers, knowledge bundles, and overlay kit
+// stack, without cross-contaminating. A slice field that is PRESENT (even empty)
+// REPLACES the base value; an ABSENT (nil) field INHERITS the base. An empty
+// GogAccount inherits the base account.
+//
+// Only the runtime-swappable surface lives here. Overlay HOST plugins compile
+// into the single pi-stack-host binary (build time, global) and cannot be
+// swapped per profile — see docs/design/profiles.md.
+type Profile struct {
+	GogAccount       string   `toml:"gog_account"`
+	MCP              []string `toml:"mcp"`
+	KnowledgeBundles []string `toml:"knowledge_bundles"`
+	Kits             struct {
+		Stack []string `toml:"stack"`
+	} `toml:"kits"`
+}
+
 // Config is the pi-stack configuration, decoded from TOML.
 type Config struct {
 	VersionPin string   `toml:"version_pin"`
 	Services   []string `toml:"services"`
 	MCP        []string `toml:"mcp"`
+
+	// ActiveProfile is the profile used when no --profile flag / PI_STACK_PROFILE
+	// env is given. Empty means the base config (the implicit "default" profile).
+	ActiveProfile string `toml:"active_profile"`
+	// Profiles are named override sets layered onto the base config by Resolve.
+	Profiles map[string]Profile `toml:"profiles"`
 
 	MemoryWatcherModel string `toml:"memory_watcher_model"`
 	MemoryEmbedModel   string `toml:"memory_embed_model"`
@@ -157,6 +183,75 @@ func Load() (*Config, error) {
 	return c, nil
 }
 
+// DefaultProfile is the implicit profile name for the base (flat) config.
+const DefaultProfile = "default"
+
+// AllKnowledgeBundles returns the de-duplicated UNION of the base bundles and
+// every profile's bundles. `serve` indexes the union (one shared index); a
+// running sandbox scopes recall to its profile's subset at query time. This
+// keeps `serve` profile-agnostic while still indexing everything any profile
+// might ask for.
+func (c *Config) AllKnowledgeBundles() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(list []string) {
+		for _, b := range list {
+			if b != "" && !seen[b] {
+				seen[b] = true
+				out = append(out, b)
+			}
+		}
+	}
+	add(c.KnowledgeBundles)
+	for _, p := range c.Profiles {
+		add(p.KnowledgeBundles)
+	}
+	return out
+}
+
+// ProfileNames returns the sorted list of configured profile names, always
+// including the implicit "default" first.
+func (c *Config) ProfileNames() []string {
+	names := []string{DefaultProfile}
+	for n := range c.Profiles {
+		if n != DefaultProfile {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names[1:])
+	return names
+}
+
+// Resolve returns a flat *Config with the named profile's overrides layered onto
+// the base config, so every existing consumer (run, serve, doctor, status) keeps
+// working against a plain flat config. name "" or "default" (or an unknown name)
+// returns the base config unchanged. A present slice override REPLACES; an absent
+// one INHERITS; a non-empty GogAccount overrides. The returned config is a copy —
+// Resolve never mutates the receiver.
+func (c *Config) Resolve(name string) *Config {
+	out := *c // shallow copy; slices are replaced wholesale below, never appended
+	if name == "" || name == DefaultProfile {
+		return &out
+	}
+	p, ok := c.Profiles[name]
+	if !ok {
+		return &out
+	}
+	if strings.TrimSpace(p.GogAccount) != "" {
+		out.GogAccount = strings.TrimSpace(p.GogAccount)
+	}
+	if p.MCP != nil {
+		out.MCP = append([]string(nil), p.MCP...)
+	}
+	if p.KnowledgeBundles != nil {
+		out.KnowledgeBundles = append([]string(nil), p.KnowledgeBundles...)
+	}
+	if p.Kits.Stack != nil {
+		out.Kits.Stack = append([]string(nil), p.Kits.Stack...)
+	}
+	return &out
+}
+
 // Plugin returns the configured spec for slot, or a builtin default if unset.
 func (c *Config) Plugin(slot string) PluginSpec {
 	if spec, ok := c.Plugins[slot]; ok {
@@ -198,6 +293,19 @@ knowledge_bundles = []
 # Kits stacked onto the sandbox (overlay mixin kits, etc).
 [kits]
 stack = []
+
+# Profiles: named override sets for running distinct contexts (e.g. work vs
+# personal) that differ in gog account, MCP servers, knowledge bundles, and
+# overlay kit stack. Select one with ` + "`pi-stack --profile <name> run`" + `,
+# ` + "`pi-stack profile use <name>`" + `, or the PI_STACK_PROFILE env var. A
+# present list REPLACES the base value; an absent one INHERITS it.
+# active_profile = ""
+# [profiles.work]
+# gog_account = "you@work.com"
+# mcp = ["gog", "slack"]
+# knowledge_bundles = ["/path/to/work-kb"]
+# [profiles.work.kits]
+# stack = ["../work-overlay/kit"]
 
 # Extra skill directories loaded live (dev mode).
 [skills]

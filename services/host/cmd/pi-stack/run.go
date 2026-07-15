@@ -31,10 +31,17 @@ func runRun(argv []string) {
 		os.Exit(2)
 	}
 
-	cfg, err := config.Load()
+	// Resolve the active profile into a flat config so the rest of run (kits, mcp,
+	// gog) sees the profile's overrides. loadResolvedConfig errors on a typo'd /
+	// unknown profile name rather than silently running the base config. The
+	// profile also namespaces the sandbox name so contexts never collide.
+	cfg, profile, err := loadResolvedConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack run: loading config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "pi-stack run: %v\n", err)
 		os.Exit(1)
+	}
+	if profile != config.DefaultProfile {
+		fmt.Fprintf(os.Stderr, "pi-stack: profile %q\n", profile)
 	}
 
 	// Kit selection. A CLEAN released version (e.g. "0.0.16") pins the matching
@@ -90,6 +97,9 @@ func runRun(argv []string) {
 	// and .pi-sessions persist, so nothing is lost).
 	if o.Name == "" {
 		o.Name = deriveSandboxName(o.Workspace)
+		if profile != config.DefaultProfile {
+			o.Name += "-" + sanitizeProfileName(profile)
+		}
 	}
 	switch sandboxStatus(o.Name) {
 	case "running":

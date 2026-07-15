@@ -31,44 +31,76 @@ import (
 var version = "dev"
 
 func main() {
-	if len(os.Args) < 2 {
-		// Bare `pi-stack` == `run` in the current directory.
-		runRun(nil)
+	// A global `--profile <name>` may appear before the subcommand; pull it out
+	// first so both `pi-stack --profile work run` and `pi-stack run --profile work`
+	// work. flagProfile is consumed by loadResolvedConfig / run.
+	args, perr := extractProfileFlag(os.Args[1:])
+	if perr != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack: %v\n", perr)
+		os.Exit(2)
+	}
+
+	if len(args) == 0 {
+		// Bare `pi-stack` shows STATUS — never launches a sandbox (launching is
+		// explicit behind `run`). On a fresh host with no config, offer onboarding.
+		if maybeFirstRun() {
+			return
+		}
+		runStatusCmd(nil)
 		return
 	}
 
-	switch os.Args[1] {
+	switch args[0] {
 	case "run":
-		runRun(os.Args[2:])
+		if maybeFirstRun() {
+			return
+		}
+		runRun(args[1:])
+	case "status", "st":
+		runStatusCmd(args[1:])
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "config":
-		runConfig(os.Args[2:])
+		runConfig(args[1:])
 	case "serve":
-		runServe(os.Args[2:])
+		runServe(args[1:])
 	case "doctor":
-		runDoctorCmd(os.Args[2:])
+		runDoctorCmd(args[1:])
 	case "setup":
-		runSetupCmd(os.Args[2:])
+		runSetupCmd(args[1:])
 	case "mcp":
-		runMcpCmd(os.Args[2:])
-	case "knowledge":
-		runKnowledge(os.Args[2:])
+		runMcpCmd(args[1:])
+	case "memory", "mem":
+		runMemory(args[1:])
+	case "knowledge", "kb":
+		runKnowledge(args[1:])
+	case "profile":
+		runProfile(args[1:])
 	case "models", "upgrade", "uninstall":
-		stub(os.Args[1])
+		stub(args[0])
 	case "help", "-h", "--help":
-		if len(os.Args) > 2 && os.Args[2] == "run" {
+		if len(args) > 1 && args[1] == "run" {
 			fmt.Print(runUsage)
 			return
 		}
 		fmt.Print(helpText)
 	default:
-		// A bare positional (e.g. `pi-stack ~/dev/foo`) is a run workspace.
-		if len(os.Args[1]) > 0 && os.Args[1][0] != '-' {
-			runRun(os.Args[1:])
-			return
+		// A bare positional is a run workspace ONLY when it names an existing
+		// directory (e.g. `pi-stack ~/dev/foo`). A non-directory word is a typo
+		// (e.g. `pi-stack memoyr`) — do NOT silently launch a sandbox for it.
+		if a := args[0]; len(a) > 0 && a[0] != '-' {
+			if fi, err := os.Stat(a); err == nil && fi.IsDir() {
+				if maybeFirstRun() {
+					return
+				}
+				runRun(args)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "pi-stack: unknown command %q (and no such directory)\n\n", a)
+			fmt.Print(helpText)
+			os.Exit(2)
 		}
-		fmt.Fprintf(os.Stderr, "pi-stack: unknown subcommand %q\n\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "pi-stack: unknown flag %q\n\n", args[0])
 		fmt.Print(helpText)
 		os.Exit(2)
 	}
@@ -142,24 +174,30 @@ DIR defaults to the current directory. Everything after -- is passed to pi.
 Set PI_STACK_DEBUG=1 to print the composed sbx command.
 `
 
-const helpText = `pi-stack — launch the pi-stack sandbox
+const helpText = `pi-stack — the pi-stack sandbox + host services
 
-usage: pi-stack <command> [args]
+usage: pi-stack [--profile NAME] <command> [args]
+
+new here?  pi-stack setup     (guided one-time setup)
 
 commands:
-  run [DIR] [flags]   launch the sandbox (also the default with no command)
-  version             print the launcher version
+  (none)              show status (this does NOT launch a sandbox)
+  status              host + services + sandboxes at a glance   [--json]
+  setup               guided first-run setup (writes config + registers MCP)
+  doctor              diagnose host + sandbox health
+  run [DIR] [flags]   launch the sandbox (launching is explicit)
+  serve [args...]     run the host services (execs pi-stack-host serve)
+
+  memory <cmd>        recall|remember|forget|learnings|stats   (:11435)
+  knowledge <cmd>     init|use|ls|query|sync|remote            (:11436)
+  mcp register|ls     register local stdio MCP servers with the sbx gateway
+  profile ls|use      switch between contexts (work / personal / default)
+
   config show|path    show the resolved config path and contents
   config set|unset    change config without hand-editing the toml
-  serve [args...]     run the host services (execs pi-stack-host serve)
-  doctor              diagnose host + sandbox health
-  setup               guided first-run setup (writes config + registers MCP)
-  mcp register|ls     register local stdio MCP servers with the sbx gateway
-  knowledge init|use|ls   scaffold/point/list the OKF knowledge bundle (:11436)
-  models              manage local Ollama models                (coming in a later unit)
-  upgrade             update the launcher + kit                 (coming in a later unit)
-  uninstall           remove pi-stack from this host            (coming in a later unit)
-  help                print this help
+  version             print the launcher version
+  help [run]          print this help (or run-flag help)
 
+global: --profile NAME   run/read a named profile (work, personal, ...)
 run flags: --dev --skills DIR --kit K --mcp M --name N --model M -- pi-args...
 `

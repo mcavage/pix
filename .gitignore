@@ -96,3 +96,5 @@ services/host/host
 config/open-core-markers.txt
 .scratch/
 .pi-agent/
+services/host/pi-stack
+services/host/pi-stack-host

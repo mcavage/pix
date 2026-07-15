@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"pi-stack/host/config"
 )
@@ -41,9 +43,225 @@ func runKnowledge(argv []string) {
 		runKnowledgeUse(argv[1:])
 	case "ls":
 		runKnowledgeLs()
+	case "query", "search":
+		runKnowledgeQuery(argv[1:])
+	case "sync", "push":
+		runKnowledgeSync(argv[1:])
+	case "remote":
+		runKnowledgeRemote(argv[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "pi-stack knowledge: unknown subcommand %q (want: init, use, ls)\n", argv[0])
+		fmt.Fprintf(os.Stderr, "pi-stack knowledge: unknown subcommand %q (want: init, use, ls, query, sync, remote)\n", argv[0])
 		os.Exit(2)
+	}
+}
+
+// runKnowledgeQuery searches the knowledge daemon (:11436) from the host so you
+// can debug empty recall without launching a sandbox. It scopes the query to the
+// ACTIVE PROFILE's bundles (the daemon indexes the union of all profiles), so a
+// personal query never returns work concepts.
+func runKnowledgeQuery(argv []string) {
+	fs := newFlagSet()
+	limit := fs.int("limit", 5, "n")
+	positional, perr := fs.parse(argv)
+	if perr != nil {
+		exitFromErr("knowledge query", perr)
+	}
+	q := strings.TrimSpace(strings.Join(positional, " "))
+	if q == "" {
+		fmt.Fprintln(os.Stderr, "usage: pi-stack knowledge query <text...> [--limit N] [--json]")
+		os.Exit(2)
+	}
+	cfg, _, cerr := loadResolvedConfig()
+	if cerr != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack knowledge query: %v\n", cerr)
+		os.Exit(1)
+	}
+	params := map[string]any{"query": q, "limit": *limit}
+	// Send the profile's canonical bundle ids so recall is scoped. An empty set
+	// (no bundles configured) omits the filter, preserving the "all bundles"
+	// back-compat contract for a raw single-context host.
+	if ids := canonicalBundleIDs(cfg.KnowledgeBundles); len(ids) > 0 {
+		params["bundles"] = ids
+	}
+	res, err := knowledgeClient().Call("query", params)
+	if err != nil {
+		exitFromErr("knowledge query", err)
+	}
+	concepts := asList(res["concepts"])
+	if fs.json {
+		_ = writeJSONOut(os.Stdout, map[string]any{"concepts": concepts})
+		return
+	}
+	if len(concepts) == 0 {
+		fmt.Println("(no matches)")
+		return
+	}
+	for _, c := range concepts {
+		score := ""
+		if s, ok := c["score"].(float64); ok {
+			score = fmt.Sprintf("  [%.2f]", s)
+		}
+		fmt.Printf("%s  %s%s\n", str(c, "id"), str(c, "title"), score)
+	}
+}
+
+// runKnowledgeRemote shows or sets the git remote of the knowledge bundle, so a
+// fresh `knowledge init` bundle (git init, no remote) can be pointed at a repo
+// for backup/sync without cd-ing into it.
+//
+//	pi-stack knowledge remote [--bundle DIR]              show origin
+//	pi-stack knowledge remote set <url> [--bundle DIR]    set origin
+func runKnowledgeRemote(argv []string) {
+	fs := newFlagSet()
+	bundleFlag := fs.str("bundle", "")
+	positional, perr := fs.parse(argv)
+	if perr != nil {
+		fmt.Fprintln(os.Stderr, perr.Error())
+		os.Exit(2)
+	}
+	bundle, err := resolveSyncBundle(*bundleFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack knowledge remote: %v\n", err)
+		os.Exit(1)
+	}
+	if len(positional) == 0 {
+		url, err := gitRemoteURL(bundle)
+		if err != nil || strings.TrimSpace(url) == "" {
+			fmt.Printf("%s: no origin remote — set one with `pi-stack knowledge remote set <url>`\n", bundle)
+			return
+		}
+		fmt.Printf("%s -> %s\n", bundle, redactURL(url))
+		return
+	}
+	if positional[0] != "set" || len(positional) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: pi-stack knowledge remote set <url> [--bundle DIR]")
+		os.Exit(2)
+	}
+	if err := gitSetRemote(bundle, positional[1]); err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack knowledge remote set: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("%s origin -> %s\n", bundle, redactURL(positional[1]))
+}
+
+// runKnowledgeSync commits and pushes the knowledge bundle from anywhere, so you
+// never have to cd to ~/.config/pi-stack/knowledge to `git push`. Safe by
+// default: it pushes to a `knowledge/sync-<ts>` BRANCH and prints a PR hint (the
+// same gated, review-first model as the `enrich` skill). It NEVER blindly pushes
+// main — that requires --allow-main.
+//
+//	pi-stack knowledge sync [-m MSG] [--bundle DIR] [--allow-main]
+func runKnowledgeSync(argv []string) {
+	fs := newFlagSet()
+	msg := fs.str("message", "", "m")
+	bundleFlag := fs.str("bundle", "")
+	allowMain := fs.bool("allow-main")
+	positional, perr := fs.parse(argv)
+	if perr != nil {
+		fmt.Fprintln(os.Stderr, perr.Error())
+		os.Exit(2)
+	}
+	if len(positional) > 0 {
+		fmt.Fprintln(os.Stderr, "usage: pi-stack knowledge sync [-m MSG] [--bundle DIR] [--allow-main]")
+		os.Exit(2)
+	}
+	if err := knowledgeSync(*bundleFlag, *msg, *allowMain, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack knowledge sync: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// knowledgeSync is the testable core of `knowledge sync`.
+func knowledgeSync(bundleFlag, msg string, allowMain bool, out io.Writer) error {
+	bundle, err := resolveSyncBundle(bundleFlag)
+	if err != nil {
+		return err
+	}
+	if !isGitRepo(bundle) {
+		return fmt.Errorf("%s is not a git repo — run `pi-stack knowledge init` or `git init` there first", bundle)
+	}
+	if _, rerr := gitRemoteURL(bundle); rerr != nil {
+		return fmt.Errorf("%s has no origin remote — set one with `pi-stack knowledge remote set <url>`", bundle)
+	}
+	if strings.TrimSpace(msg) == "" {
+		msg = "knowledge: sync " + timeStamp()
+	}
+	dirty, err := gitIsDirty(bundle)
+	if err != nil {
+		return err
+	}
+
+	// --allow-main: commit + push the CURRENT branch (but refuse a detached HEAD,
+	// which would push the literal ref "HEAD").
+	if allowMain {
+		branch, berr := gitCurrentBranch(bundle)
+		if berr != nil {
+			return berr
+		}
+		if branch == "HEAD" {
+			return fmt.Errorf("detached HEAD in %s — checkout a branch before --allow-main", bundle)
+		}
+		if dirty {
+			if err := gitAddCommit(bundle, msg); err != nil {
+				return fmt.Errorf("committing: %w", err)
+			}
+			fmt.Fprintf(out, "committed changes in %s\n", bundle)
+		}
+		if err := gitPushBranch(bundle, branch); err != nil {
+			return fmt.Errorf("pushing %s: %w", branch, err)
+		}
+		fmt.Fprintf(out, "pushed %s to origin\n", branch)
+		return nil
+	}
+
+	// Default (safe): create the review branch FIRST so the current branch tip is
+	// never advanced, THEN commit onto it and push. A commit made before the
+	// branch existed would land on (and dirty) main — the exact footgun to avoid.
+	branch := "knowledge/sync-" + timeStamp() + "-" + shortRand()
+	if err := gitCheckoutBranch(bundle, branch); err != nil {
+		return fmt.Errorf("creating branch %s: %w", branch, err)
+	}
+	if dirty {
+		if err := gitAddCommit(bundle, msg); err != nil {
+			return fmt.Errorf("committing: %w", err)
+		}
+		fmt.Fprintf(out, "committed changes on %s\n", branch)
+	} else {
+		fmt.Fprintf(out, "working tree clean — pushing existing commits on %s\n", branch)
+	}
+	if err := gitPushBranch(bundle, branch); err != nil {
+		return fmt.Errorf("pushing %s: %w", branch, err)
+	}
+	fmt.Fprintf(out, "pushed branch %s to origin\n", branch)
+	fmt.Fprintln(out, "open a PR to review + merge:")
+	fmt.Fprintf(out, "    (cd %s && gh pr create --fill)\n", bundle)
+	fmt.Fprintln(out, "or push straight to your default branch with: pi-stack knowledge sync --allow-main")
+	return nil
+}
+
+// resolveSyncBundle picks the bundle dir for sync/remote: the --bundle flag if
+// given, else the single configured bundle, else an error listing candidates.
+func resolveSyncBundle(bundleFlag string) (string, error) {
+	if strings.TrimSpace(bundleFlag) != "" {
+		abs, err := filepath.Abs(bundleFlag)
+		if err != nil {
+			return "", err
+		}
+		return abs, nil
+	}
+	// Use the ACTIVE PROFILE's bundles so `--profile work knowledge sync` targets
+	// the work bundle, never the base/personal one.
+	cfg, _, err := loadResolvedConfig()
+	if err != nil {
+		return "", err
+	}
+	switch len(cfg.KnowledgeBundles) {
+	case 0:
+		return "", fmt.Errorf("no knowledge bundle configured — run `pi-stack knowledge init`")
+	case 1:
+		return cfg.KnowledgeBundles[0], nil
+	default:
+		return "", fmt.Errorf("multiple bundles configured — pick one with --bundle:\n  %s", strings.Join(cfg.KnowledgeBundles, "\n  "))
 	}
 }
 
@@ -301,9 +519,9 @@ func resolveBundleRef(ref, cacheDir string, out io.Writer) (string, error) {
 
 // runKnowledgeLs is the CLI entry point for `knowledge ls`.
 func runKnowledgeLs() {
-	cfg, err := config.Load()
+	cfg, _, err := loadResolvedConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack knowledge ls: loading config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "pi-stack knowledge ls: %v\n", err)
 		os.Exit(1)
 	}
 	knowledgeLs(cfg, defaultShellEnv(), os.Stdout)
@@ -503,14 +721,56 @@ func isOKFBundle(dir string) bool {
 	return err == nil && !fi.IsDir()
 }
 
-// isGitRepo reports whether dir has a .git directory.
+// isGitRepo reports whether dir is inside a git work tree. It uses git's own
+// check so a linked worktree (whose .git is a FILE, not a dir) is recognized.
 func isGitRepo(dir string) bool {
-	fi, err := os.Stat(filepath.Join(dir, ".git"))
-	return err == nil && fi.IsDir()
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--is-inside-work-tree").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
 func gitInit(dir string) error {
 	return exec.Command("git", "-C", dir, "init", "-q").Run()
+}
+
+// gitRun runs a git subcommand and, on failure, returns an error carrying the
+// combined stdout+stderr so auth/non-fast-forward messages aren't swallowed.
+func gitRun(dir string, args ...string) error {
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
+}
+
+// canonicalBundleIDs canonicalizes a list of bundle paths to the ids the
+// knowledge store keys on (so a query filter matches).
+func canonicalBundleIDs(paths []string) []string {
+	var out []string
+	for _, p := range paths {
+		if c := canonicalizeKnowledgeBundle(p); c != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// redactURL masks any userinfo (user:token@) in a git URL so a display line
+// never leaks an embedded credential, while the stored remote keeps the original.
+func redactURL(u string) string {
+	i := strings.Index(u, "://")
+	if i < 0 {
+		return u
+	}
+	rest := u[i+3:]
+	at := strings.IndexByte(rest, '@')
+	if at < 0 {
+		return u
+	}
+	return u[:i+3] + "***@" + rest[at+1:]
 }
 
 func gitClone(url, dest string) error {
@@ -519,6 +779,64 @@ func gitClone(url, dest string) error {
 
 func gitPull(dir string) error {
 	return exec.Command("git", "-C", dir, "pull", "-q", "--ff-only").Run()
+}
+
+// gitIsDirty reports whether the working tree has uncommitted changes.
+func gitIsDirty(dir string) (bool, error) {
+	out, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(out)) != "", nil
+}
+
+// gitAddCommit stages everything and commits with msg.
+func gitAddCommit(dir, msg string) error {
+	if err := gitRun(dir, "add", "-A"); err != nil {
+		return err
+	}
+	return gitRun(dir, "commit", "-q", "-m", msg)
+}
+
+// gitCurrentBranch returns the current branch name ("HEAD" when detached).
+func gitCurrentBranch(dir string) (string, error) {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// gitCheckoutBranch creates and switches to a new branch.
+func gitCheckoutBranch(dir, branch string) error {
+	return gitRun(dir, "checkout", "-q", "-b", branch)
+}
+
+// gitPushBranch pushes branch to origin, setting upstream.
+func gitPushBranch(dir, branch string) error {
+	return gitRun(dir, "push", "-q", "-u", "origin", branch)
+}
+
+// gitSetRemote sets (or updates) the origin remote URL.
+func gitSetRemote(dir, url string) error {
+	if cur, err := gitRemoteURL(dir); err == nil && strings.TrimSpace(cur) != "" {
+		return exec.Command("git", "-C", dir, "remote", "set-url", "origin", url).Run()
+	}
+	return exec.Command("git", "-C", dir, "remote", "add", "origin", url).Run()
+}
+
+// timeStamp is a compact UTC stamp for sync branch/commit names.
+func timeStamp() string { return time.Now().UTC().Format("20060102-150405") }
+
+// shortRand returns 4 random hex bytes to make sync branch names
+// collision-resistant even within the same second. Falls back to a nanosecond
+// tail if the RNG is unavailable.
+func shortRand() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%06d", time.Now().UnixNano()%1000000)
+	}
+	return hex.EncodeToString(b)
 }
 
 // gitRemoteURL returns the origin remote URL of the git checkout at dir.
