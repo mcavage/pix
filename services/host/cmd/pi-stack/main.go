@@ -16,7 +16,8 @@
 //	pi-stack config show|path          show config path + contents (full)
 //	pi-stack serve [args…]             exec the sibling pi-stack-host serve (full)
 //	pi-stack status|doctor|setup|mcp|memory|knowledge|profile   (all implemented)
-//	pi-stack models|upgrade|uninstall  (stubbed — later units)
+//	pi-stack reset|uninstall           (destructive, reversible: state moved aside)
+//	pi-stack models|upgrade            (stubbed — later units)
 //	pi-stack help [verb]               print the verb tree (or one verb's usage)
 package main
 
@@ -80,7 +81,11 @@ func main() {
 		runKnowledge(args[1:])
 	case "profile":
 		runProfile(args[1:])
-	case "models", "upgrade", "uninstall":
+	case "reset":
+		runReset(args[1:])
+	case "uninstall":
+		runUninstall(args[1:])
+	case "models", "upgrade":
 		stub(args[0])
 	case "help", "-h", "--help":
 		if len(args) > 1 {
@@ -137,6 +142,18 @@ func runServe(argv []string) {
 	if len(argv) > 0 && (argv[0] == "-h" || argv[0] == "--help") {
 		fmt.Print(serveUsage)
 		return
+	}
+	// `serve stop` / `serve status` are launcher-side control verbs (pidfile-based)
+	// handled HERE — they are NOT passed through to `pi-stack-host serve`.
+	if len(argv) > 0 {
+		switch argv[0] {
+		case "stop":
+			runServeStop(argv[1:])
+			return
+		case "status":
+			runServeStatus(argv[1:])
+			return
+		}
 	}
 	bin, err := findHostBinary()
 	if err != nil {
@@ -225,6 +242,8 @@ commands:
 
   config show|path    show the resolved config path and contents
   config set|unset    change config without hand-editing the toml
+  reset [flags]       move stack state aside (reversible)   [--keep-memory --sbx --yes]
+  uninstall [flags]   reset, then remove the bin symlinks    [--keep-memory --yes]
   version             print the launcher version
   help [run]          print this help (or run-flag help)
 

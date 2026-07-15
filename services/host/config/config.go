@@ -137,6 +137,20 @@ func Path() string {
 	return filepath.Join(dir, "config.toml")
 }
 
+// ServePidPath resolves the absolute path of serve.pid — the pidfile
+// `pi-stack-host serve` writes on startup so the launcher's `serve stop` /
+// `serve status` can find and signal the running supervisor SAFELY (instead of a
+// blind `pkill -f`). It is a sibling of config.toml: <config-dir>/serve.pid. Both
+// the host (the writer) and the launcher (the reader) call this so the two always
+// agree on the location.
+func ServePidPath() string {
+	dir, err := configDir()
+	if err != nil {
+		return "serve.pid"
+	}
+	return filepath.Join(dir, "serve.pid")
+}
+
 // removedServices are service names that no longer exist (e.g. gws, which the
 // Google Workspace port replaced with the host `gog` MCP server). We drop them
 // silently from a loaded config so a stale services list doesn't fatal `serve`.

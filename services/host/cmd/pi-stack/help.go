@@ -33,6 +33,7 @@ var knownVerbs = map[string]bool{
 	"help": true, "serve": true, "doctor": true, "setup": true, "status": true,
 	"config": true, "mcp": true, "memory": true, "knowledge": true,
 	"profile": true, "version": true, "run": true, "secret": true,
+	"reset": true, "uninstall": true,
 }
 
 // verbUsage maps a verb (including its aliases) to its usage text, so
@@ -64,15 +65,28 @@ func verbUsage(verb string) (string, bool) {
 		return secretUsage, true
 	case "version":
 		return versionUsage, true
+	case "reset":
+		return resetUsage, true
+	case "uninstall":
+		return uninstallUsage, true
 	}
 	return "", false
 }
 
 const serveUsage = `usage: pi-stack serve [args...]
+       pi-stack serve stop
+       pi-stack serve status [--json]
 
 Run the long-running host services (execs the sibling pi-stack-host serve):
 memory (:11435) and knowledge (:11436, when enabled). Any args are passed
 through to pi-stack-host serve unchanged.
+
+subcommands:
+  stop              stop a running 'pi-stack-host serve' via its pidfile (safe:
+                    verifies the process is ours before signalling; SIGTERM then
+                    SIGKILL if it doesn't exit)
+  status [--json]   report whether serve is running (pid) and which service
+                    ports (:11435 / :11436) are up
 `
 
 const statusUsage = `usage: pi-stack status [--json]
@@ -165,4 +179,34 @@ The file lives at the absolute XDG path: see "pi-stack config path op-refs".
 const versionUsage = `usage: pi-stack version
 
 Print the stamped launcher version.
+`
+
+const resetUsage = `usage: pi-stack reset [--keep-memory] [--sbx] [--yes]
+
+Reset the stack to a clean slate — REVERSIBLE. Nothing is hard-deleted: state is
+moved aside to a timestamped <path>.bak-<unixts> sibling you can rename back.
+
+Moves aside the config dir (~/.config/pi-stack) and the data dir (~/.pi-stack:
+captured memory + the knowledge index). Best-effort stops a running
+'pi-stack-host serve' first.
+
+flags:
+  --keep-memory   preserve ~/.pi-stack/memory (your captured facts); reset the rest
+  --sbx           also remove every pi-stack-* sandbox and unregister the
+                  configured local MCP servers (provider secrets are left alone)
+  --yes, -y       don't prompt (REQUIRED on a non-interactive terminal)
+
+Without --yes on a TTY it prints exactly what will move and prompts before acting.
+On a non-TTY it refuses unless --yes is given.
+`
+
+const uninstallUsage = `usage: pi-stack uninstall [--keep-memory] [--yes]
+
+Run the full reset (see 'pi-stack reset'), THEN remove the installed pi-stack +
+pi-stack-host bin symlinks (~/.local/bin). Only symlinks are removed — a real
+file there is left untouched. State is moved aside, never hard-deleted.
+
+flags:
+  --keep-memory   preserve ~/.pi-stack/memory (your captured facts)
+  --yes, -y       don't prompt (REQUIRED on a non-interactive terminal)
 `

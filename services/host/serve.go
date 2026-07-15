@@ -14,7 +14,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -217,14 +219,23 @@ func runServe(enabled []string) {
 		fatalf("host service preflight FAILED — not starting:\n%s\nFix the above, then re-run `make serve`.", strings.Join(failures, "\n"))
 	}
 
+	// Record our pid so the launcher's `serve stop` / `serve status` can find and
+	// signal us safely (no blind pkill). A stale pidfile from a previous crash is
+	// overwritten — the new pid is authoritative. Best-effort: a failure only logs,
+	// and we remove the file again on graceful shutdown (below) and normal return.
+	writeServePidFile()
+	defer removeServePidFile()
+
 	// Graceful shutdown: kill every managed plugin subprocess on SIGINT/SIGTERM so
-	// nothing is orphaned (no-op when everything is built-in/in-process).
+	// nothing is orphaned (no-op when everything is built-in/in-process), and drop
+	// the pidfile so `serve status` doesn't report a dead pid.
 	go func() {
 		ch := make(chan os.Signal, 1)
 		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 		<-ch
 		log.Print("serve: shutting down; cleaning up plugin subprocesses")
 		sup.shutdown()
+		removeServePidFile()
 		os.Exit(0)
 	}()
 
@@ -238,6 +249,31 @@ func runServe(enabled []string) {
 		}()
 	}
 	select {} // block forever; the goroutines serve
+}
+
+// writeServePidFile records the current pid at config.ServePidPath() (0600, dir
+// 0700) so the launcher's `serve stop` / `serve status` can find and signal this
+// supervisor safely. Best-effort: a failed MkdirAll/write only logs — it never
+// crashes serve. A stale pidfile from a previous crash is overwritten, since the
+// live pid is authoritative.
+func writeServePidFile() {
+	path := config.ServePidPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		log.Printf("serve: could not create pidfile dir %s: %v", filepath.Dir(path), err)
+		return
+	}
+	if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+		log.Printf("serve: could not write pidfile %s: %v", path, err)
+	}
+}
+
+// removeServePidFile deletes the pidfile on shutdown. Best-effort: a missing file
+// is fine and any other remove error only logs.
+func removeServePidFile() {
+	path := config.ServePidPath()
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		log.Printf("serve: could not remove pidfile %s: %v", path, err)
+	}
 }
 
 // brokerService builds the OVERLAY-ONLY credential-broker slot. It returns
