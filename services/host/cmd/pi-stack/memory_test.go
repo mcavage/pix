@@ -36,6 +36,68 @@ func fakeRPCServer(t *testing.T, results map[string]any) rpcClient {
 	return rpcClient{Port: p}
 }
 
+// capturingRPCServer stands up a JSON-RPC server that records the params of the
+// most recent request per method (so tests can assert what the CLI forwarded)
+// and returns a canned result.
+func capturingRPCServer(t *testing.T, results map[string]any, seen map[string]map[string]any) rpcClient {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		method, _ := req["method"].(string)
+		if params, ok := req["params"].(map[string]any); ok {
+			seen[method] = params
+		} else {
+			seen[method] = map[string]any{}
+		}
+		res, ok := results[method]
+		if !ok {
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1,
+				"error": map[string]any{"code": -32601, "message": "method not found"}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": res})
+	}))
+	t.Cleanup(srv.Close)
+	port := srv.URL[strings.LastIndex(srv.URL, ":")+1:]
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatalf("parsing test server port %q: %v", port, err)
+	}
+	return rpcClient{Port: p}
+}
+
+// TestMemoryProfileForwarded checks the active profile is forwarded on the
+// profile-scoped verbs (recall, remember, learnings, stats).
+func TestMemoryProfileForwarded(t *testing.T) {
+	seen := map[string]map[string]any{}
+	c := capturingRPCServer(t, map[string]any{
+		"recall":     map[string]any{"hits": []any{}},
+		"remember":   map[string]any{"id": "x", "reaffirmed": false},
+		"promotable": map[string]any{"candidates": []any{}},
+		"stats":      map[string]any{"active": 0.0},
+	}, seen)
+
+	cases := []struct {
+		sub    string
+		argv   []string
+		method string
+	}{
+		{"recall", []string{"q"}, "recall"},
+		{"remember", []string{"a", "fact"}, "remember"},
+		{"learnings", nil, "promotable"},
+		{"stats", nil, "stats"},
+	}
+	for _, tc := range cases {
+		if err := dispatchMemory(tc.sub, tc.argv, c, &bytes.Buffer{}, "work"); err != nil {
+			t.Fatalf("%s: %v", tc.sub, err)
+		}
+		if got, _ := seen[tc.method]["profile"].(string); got != "work" {
+			t.Errorf("%s forwarded profile = %q, want %q", tc.sub, got, "work")
+		}
+	}
+}
+
 func TestMemoryRecall(t *testing.T) {
 	c := fakeRPCServer(t, map[string]any{
 		"recall": map[string]any{"hits": []any{
@@ -43,7 +105,7 @@ func TestMemoryRecall(t *testing.T) {
 		}},
 	})
 	var out bytes.Buffer
-	if err := dispatchMemory("recall", []string{"guitar"}, c, &out); err != nil {
+	if err := dispatchMemory("recall", []string{"guitar"}, c, &out, "default"); err != nil {
 		t.Fatalf("recall: %v", err)
 	}
 	got := out.String()
@@ -58,7 +120,7 @@ func TestMemoryRecall(t *testing.T) {
 func TestMemoryRecallJSON(t *testing.T) {
 	c := fakeRPCServer(t, map[string]any{"recall": map[string]any{"hits": []any{}}})
 	var out bytes.Buffer
-	if err := dispatchMemory("recall", []string{"x", "--json"}, c, &out); err != nil {
+	if err := dispatchMemory("recall", []string{"x", "--json"}, c, &out, "default"); err != nil {
 		t.Fatalf("recall --json: %v", err)
 	}
 	var parsed map[string]any
@@ -69,7 +131,7 @@ func TestMemoryRecallJSON(t *testing.T) {
 
 func TestMemoryRecallNoQuery(t *testing.T) {
 	c := rpcClient{Port: 1}
-	if err := dispatchMemory("recall", nil, c, &bytes.Buffer{}); !isUsage(err) {
+	if err := dispatchMemory("recall", nil, c, &bytes.Buffer{}, "default"); !isUsage(err) {
 		t.Errorf("recall with no query: err = %v, want usageError", err)
 	}
 }
@@ -77,7 +139,7 @@ func TestMemoryRecallNoQuery(t *testing.T) {
 func TestMemoryRemember(t *testing.T) {
 	c := fakeRPCServer(t, map[string]any{"remember": map[string]any{"id": "deadbeef-00", "reaffirmed": false}})
 	var out bytes.Buffer
-	if err := dispatchMemory("remember", []string{"a", "new", "fact"}, c, &out); err != nil {
+	if err := dispatchMemory("remember", []string{"a", "new", "fact"}, c, &out, "default"); err != nil {
 		t.Fatalf("remember: %v", err)
 	}
 	if !strings.Contains(out.String(), "remembered deadbeef") {
@@ -88,7 +150,7 @@ func TestMemoryRemember(t *testing.T) {
 func TestMemoryForget(t *testing.T) {
 	c := fakeRPCServer(t, map[string]any{"forget": map[string]any{"ok": true}})
 	var out bytes.Buffer
-	if err := dispatchMemory("forget", []string{"abc123"}, c, &out); err != nil {
+	if err := dispatchMemory("forget", []string{"abc123"}, c, &out, "default"); err != nil {
 		t.Fatalf("forget: %v", err)
 	}
 	if !strings.Contains(out.String(), "forgot abc123") {
@@ -101,7 +163,7 @@ func TestMemoryLearnings(t *testing.T) {
 		map[string]any{"id": "aa11-bb", "content": "always run tests", "frequency": 5.0},
 	}}})
 	var out bytes.Buffer
-	if err := dispatchMemory("learnings", nil, c, &out); err != nil {
+	if err := dispatchMemory("learnings", nil, c, &out, "default"); err != nil {
 		t.Fatalf("learnings: %v", err)
 	}
 	if !strings.Contains(out.String(), "5x") || !strings.Contains(out.String(), "always run tests") {
@@ -114,7 +176,7 @@ func TestMemoryStats(t *testing.T) {
 		"active": 10.0, "durable": 3.0, "perishable": 7.0, "facts": 8.0, "learnings": 2.0, "deleted": 1.0,
 	}})
 	var out bytes.Buffer
-	if err := dispatchMemory("stats", nil, c, &out); err != nil {
+	if err := dispatchMemory("stats", nil, c, &out, "default"); err != nil {
 		t.Fatalf("stats: %v", err)
 	}
 	if !strings.Contains(out.String(), "active 10") {
@@ -125,14 +187,14 @@ func TestMemoryStats(t *testing.T) {
 func TestMemoryServiceDown(t *testing.T) {
 	// Nothing listening on this port -> errServiceDown.
 	c := rpcClient{Port: 1}
-	err := dispatchMemory("recall", []string{"x"}, c, &bytes.Buffer{})
+	err := dispatchMemory("recall", []string{"x"}, c, &bytes.Buffer{}, "default")
 	if err != errServiceDown {
 		t.Errorf("recall against down service: err = %v, want errServiceDown", err)
 	}
 }
 
 func TestMemoryUnknownSub(t *testing.T) {
-	if err := dispatchMemory("frobnicate", nil, rpcClient{Port: 1}, &bytes.Buffer{}); !isUsage(err) {
+	if err := dispatchMemory("frobnicate", nil, rpcClient{Port: 1}, &bytes.Buffer{}, "default"); !isUsage(err) {
 		t.Errorf("unknown sub: err = %v, want usageError", err)
 	}
 }

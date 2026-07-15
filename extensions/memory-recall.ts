@@ -10,8 +10,9 @@
 //   MEMORY_URL         default http://host.docker.internal:11435
 //   MEMORY_TIMEOUT_MS  default 2000 (a slow store must never stall a turn)
 
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { execSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 
@@ -68,6 +69,23 @@ async function rpc(method: string, params: any): Promise<any> {
 	return j?.result ?? null;
 }
 
+// The active profile scopes recall/capture (recall sees {profile}∪{default};
+// captures stamp it). The launcher writes it to <cwd>/.pi-stack/profile per run,
+// mirroring knowledge-recall.ts's scope file. Absent => "default" (the shared
+// bucket), so an un-launched sandbox keeps the backward-compatible behavior.
+//
+// Read EXACTLY ONCE at extension load and frozen immutably: if a second sandbox
+// on the same workspace overwrites the file mid-session, recall and capture must
+// NOT diverge onto different profiles. Never throws at load (try/catch).
+const ACTIVE_PROFILE: string = (() => {
+	try {
+		const raw = readFileSync(join(process.cwd(), ".pi-stack", "profile"), "utf8").trim();
+		return raw || "default";
+	} catch {
+		return "default"; // missing file is the normal, un-scoped case
+	}
+})();
+
 // The project you're in now, used to boost its memories. Inside the sandbox every
 // project mounts at /home/agent/workspace, so the dir name is useless; use the git
 // remote (stable across machines). Cached per process; null = global.
@@ -116,9 +134,10 @@ function formatBlock(hits: any[]): string | null {
 export async function buildRecallBlock(
 	prompt: string,
 	project: string | null = null,
+	profile: string = "default",
 ): Promise<string | null> {
 	if (!prompt || !prompt.trim()) return null;
-	const r = await rpc("recall", { query: prompt, project, limit: 6, charBudget: 1000 });
+	const r = await rpc("recall", { query: prompt, project, profile, limit: 6, charBudget: 1000 });
 	return formatBlock(r?.hits ?? []);
 }
 
@@ -126,7 +145,7 @@ export default function (pi: any) {
 	pi.on("before_agent_start", async (event: any, ctx: any) =>
 		safe(async () => {
 			const prompt = extractPrompt(event, ctx);
-			const block = await buildRecallBlock(prompt, currentProject(ctx));
+			const block = await buildRecallBlock(prompt, currentProject(ctx), ACTIVE_PROFILE);
 			if (!block) return undefined;
 			return { systemPrompt: (event?.systemPrompt ?? "") + "\n\n" + block };
 		}),
@@ -139,6 +158,7 @@ export default function (pi: any) {
 				const r = await rpc("recall", {
 					query: String(args ?? "").trim(),
 					project: currentProject(ctx),
+					profile: ACTIVE_PROFILE,
 				});
 				const hits = r?.hits ?? [];
 				const text = hits.length
@@ -157,7 +177,11 @@ export default function (pi: any) {
 		description: "Store a durable fact in memory (global)",
 		handler: async (args: any, ctx: any) =>
 			safe(async () => {
-				const r = await rpc("remember", { content: String(args ?? "").trim(), source: "user" });
+				const r = await rpc("remember", {
+					content: String(args ?? "").trim(),
+					source: "user",
+					profile: ACTIVE_PROFILE,
+				});
 				ctx?.ui?.notify?.(r?.reaffirmed ? "reaffirmed" : "remembered", "info");
 			}),
 	});
@@ -172,13 +196,13 @@ export default function (pi: any) {
 				let id = /^[0-9a-f-]{8,}$/i.test(arg) ? arg : null;
 				let content = arg;
 				if (!id) {
-					const r = await rpc("recall", { query: arg, limit: 1, project: currentProject(ctx) });
+					const r = await rpc("recall", { query: arg, limit: 1, project: currentProject(ctx), profile: ACTIVE_PROFILE });
 					const hit = r?.hits?.[0];
 					if (!hit) return ctx?.ui?.notify?.("no match to forget", "info");
 					id = hit.id;
 					content = hit.content;
 				}
-				const r = await rpc("forget", { id });
+				const r = await rpc("forget", { id, profile: ACTIVE_PROFILE });
 				ctx?.ui?.notify?.(r?.ok ? `forgot: ${content}` : "not found (use a full id from /recall)", "info");
 			}),
 	});
@@ -188,7 +212,7 @@ export default function (pi: any) {
 		handler: async (args: any, ctx: any) =>
 			safe(async () => {
 				const min = Number(String(args ?? "").trim()) || 3;
-				const r = await rpc("promotable", { minFrequency: min });
+				const r = await rpc("promotable", { minFrequency: min, profile: ACTIVE_PROFILE });
 				const c = r?.candidates ?? [];
 				const text = c.length
 					? c.map((x: any) => `(${x.frequency}x) ${x.content}`).join("\n")

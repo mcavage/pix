@@ -54,10 +54,40 @@ CREATE TABLE IF NOT EXISTS memories (
   content_hash TEXT NOT NULL, durability TEXT NOT NULL, confidence REAL NOT NULL,
   frequency INTEGER NOT NULL DEFAULT 1, reward REAL NOT NULL DEFAULT 0, access_count INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, last_accessed TEXT, expires_at TEXT, source TEXT NOT NULL,
-  tags TEXT NOT NULL DEFAULT '[]', project TEXT, embedding TEXT, deleted_at TEXT
+  tags TEXT NOT NULL DEFAULT '[]', project TEXT, embedding TEXT, deleted_at TEXT, profile TEXT
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content);
 `
+
+// memDefaultProfile is the shared base bucket. A memory with a NULL/empty/
+// "default" profile lives here and is visible under every profile; a named
+// profile only additionally sees its own rows. This mirrors the knowledge union
+// model (default = shared base, a named profile = base UNION its own).
+const memDefaultProfile = "default"
+
+// memNormProfile canonicalizes a profile identifier: NULL/empty/"default" all
+// collapse to the default bucket. Callers pass it through everywhere a profile
+// crosses the store boundary so an absent param is always backward-compatible.
+func memNormProfile(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return memDefaultProfile
+	}
+	return p
+}
+
+// memProfileVisible is the SQL WHERE fragment (with one bound arg) selecting the
+// rows a given active profile may see: its own rows UNION the default bucket
+// (NULL/”/'default'). Bind the normalized active profile as the single arg.
+const memProfileVisible = "(profile IS NULL OR profile = '' OR profile = 'default' OR profile = ?)"
+
+// memProfileStorage is the SQL WHERE fragment (with one bound arg) matching the
+// EXACT storage bucket of a row: its normalized profile equals the bound value.
+// Unlike memProfileVisible (the read-time union), this is the write-time bucket
+// used for dedupe/reaffirm/synthesis/ownership — so `work` remembering text that
+// `personal` already has creates a NEW work row rather than reaffirming
+// personal's. Bind the normalized profile (memNormProfile) as the single arg.
+const memProfileStorage = "COALESCE(NULLIF(profile,''),'default') = ?"
 
 func memNowIso() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
@@ -113,10 +143,51 @@ func newMemStore(path string, embedder func(string) []float64) (*memStore, error
 	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
 		return nil, err
 	}
+	// A busy timeout so a concurrent legacy open (or the periodic synthesis tick)
+	// waits briefly for the lock instead of returning SQLITE_BUSY immediately.
+	if _, err := db.Exec("PRAGMA busy_timeout=5000;"); err != nil {
+		return nil, err
+	}
 	if _, err := db.Exec(memSchema); err != nil {
 		return nil, err
 	}
+	// Idempotent migration: CREATE TABLE IF NOT EXISTS never alters an existing
+	// table, so a DB created before profile-scoping lacks the column. Probe the
+	// schema with PRAGMA table_info and ALTER only when the column is absent (more
+	// robust than string-matching a "duplicate column name" driver error). Legacy
+	// rows get profile NULL, which memNormProfile treats as the default bucket.
+	hasProfile, err := memColumnExists(db, "memories", "profile")
+	if err != nil {
+		return nil, err
+	}
+	if !hasProfile {
+		if _, err := db.Exec("ALTER TABLE memories ADD COLUMN profile TEXT"); err != nil {
+			return nil, err
+		}
+	}
 	return &memStore{db: db, embedder: embedder}, nil
+}
+
+// memColumnExists reports whether table has a column named col, via
+// PRAGMA table_info. Used to gate the idempotent profile-column migration.
+func memColumnExists(db *sql.DB, table, col string) (bool, error) {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 type memRow struct {
@@ -133,18 +204,22 @@ func (s *memStore) bump(id string, confidence float64) {
 		math.Min(1, confidence+0.05), memNowIso(), id)
 }
 
-func (s *memStore) reaffirm(hash string) string {
+func (s *memStore) reaffirm(hash, profile string) string {
 	var id string
 	var conf float64
-	if s.db.QueryRow("SELECT id, confidence FROM memories WHERE content_hash = ? AND deleted_at IS NULL", hash).Scan(&id, &conf) == nil {
+	// Scope to the SAME storage bucket: a hash collision across profiles must NOT
+	// reaffirm a sibling's row (that would leak/merge across profiles).
+	if s.db.QueryRow("SELECT id, confidence FROM memories WHERE content_hash = ? AND deleted_at IS NULL AND "+memProfileStorage, hash, memNormProfile(profile)).Scan(&id, &conf) == nil {
 		s.bump(id, conf)
 		return id
 	}
 	return ""
 }
 
-func (s *memStore) findSimilar(vec []float64, threshold float64) (string, bool) {
-	rows, err := s.db.Query("SELECT id, confidence, embedding FROM memories WHERE deleted_at IS NULL AND embedding IS NOT NULL")
+func (s *memStore) findSimilar(vec []float64, threshold float64, profile string) (string, bool) {
+	// Only scan rows in the same storage bucket: near-duplicate dedupe must never
+	// collapse a new row into a sibling profile's existing row.
+	rows, err := s.db.Query("SELECT id, confidence, embedding FROM memories WHERE deleted_at IS NULL AND embedding IS NOT NULL AND "+memProfileStorage, memNormProfile(profile))
 	if err != nil {
 		return "", false
 	}
@@ -171,6 +246,7 @@ func (s *memStore) findSimilar(vec []float64, threshold float64) (string, bool) 
 
 type rememberInput struct {
 	content, kind, durability, source, project string
+	profile                                    string
 	hasProject                                 bool
 	ttlDays                                    int
 	confidence, reward                         float64
@@ -188,7 +264,7 @@ func (s *memStore) remember(in rememberInput) (jsonObj, error) {
 		return jsonObj{"id": "", "reaffirmed": false}, nil
 	}
 	hash := memHash(content)
-	if id := s.reaffirm(hash); id != "" {
+	if id := s.reaffirm(hash, in.profile); id != "" {
 		return jsonObj{"id": id, "reaffirmed": true}, nil
 	}
 
@@ -225,7 +301,7 @@ func (s *memStore) remember(in rememberInput) (jsonObj, error) {
 		}
 	}
 	if in.hasDedupe && vec != nil {
-		if id, ok := s.findSimilar(vec, in.dedupe); ok {
+		if id, ok := s.findSimilar(vec, in.dedupe, in.profile); ok {
 			var conf float64
 			s.db.QueryRow("SELECT confidence FROM memories WHERE id = ?", id).Scan(&conf)
 			s.bump(id, conf)
@@ -237,11 +313,12 @@ func (s *memStore) remember(in rememberInput) (jsonObj, error) {
 	if in.hasProject && in.project != "" {
 		project = in.project
 	}
+	profile := memNormProfile(in.profile)
 	id := uuid.NewString()
 	res, err := s.db.Exec(`INSERT INTO memories
-		(id, kind, content, content_hash, durability, confidence, reward, source, tags, project, created_at, expires_at, embedding)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, kind, content, hash, durability, confidence, reward, source, string(tagsJSON), project, created, expiresAt, embJSON)
+		(id, kind, content, content_hash, durability, confidence, reward, source, tags, project, created_at, expires_at, embedding, profile)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, kind, content, hash, durability, confidence, reward, source, string(tagsJSON), project, created, expiresAt, embJSON, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +338,7 @@ type scoredHit struct {
 	score                         float64
 }
 
-func (s *memStore) recall(query string, limit, charBudget int, kind, project string) ([]scoredHit, error) {
+func (s *memStore) recall(query string, limit, charBudget int, kind, project, profile string) ([]scoredHit, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if limit == 0 {
@@ -291,7 +368,10 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project str
 			val float64
 		}
 		hits := []fh{}
-		rows, err := s.db.Query("SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rank LIMIT 50", match)
+		// Join FTS to memories and apply the visible-profile filter BEFORE the
+		// ORDER BY rank LIMIT 50: ranking across ALL profiles first would let a
+		// flood of invisible sibling rows evict the visible matches from the top 50.
+		rows, err := s.db.Query("SELECT f.rowid, f.rank FROM memories_fts f JOIN memories m ON m.rowid = f.rowid WHERE f.content MATCH ? AND m.deleted_at IS NULL AND "+memProfileVisible+" ORDER BY f.rank LIMIT 50", match, memNormProfile(profile))
 		if err == nil {
 			for rows.Next() {
 				var rid int64
@@ -328,12 +408,18 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project str
 		queryVec = s.embedder(query)
 	}
 
+	// Restrict candidates to the visible set for the active profile: its own rows
+	// UNION the default bucket. An FTS-only hit on an invisible row is harmless —
+	// it lands in ftsScore but the row is never scanned by this query, so it can
+	// never become a candidate.
 	where := "SELECT id, kind, content, durability, confidence, frequency, reward, created_at, project, embedding FROM memories WHERE deleted_at IS NULL"
 	args := []any{}
 	if kind != "" {
 		where += " AND kind = ?"
 		args = append(args, kind)
 	}
+	where += " AND " + memProfileVisible
+	args = append(args, memNormProfile(profile))
 	rows, err := s.db.Query(where, args...)
 	if err != nil {
 		return nil, err
@@ -424,14 +510,17 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project str
 	return out, nil
 }
 
-func (s *memStore) forget(idOrPrefix string) bool {
+func (s *memStore) forget(idOrPrefix, profile string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Restrict id/prefix matching to the VISIBLE set for this profile so a profile
+	// can't delete a sibling's row by guessing (or colliding on) its id/prefix.
+	active := memNormProfile(profile)
 	var rowid int64
 	var id string
-	err := s.db.QueryRow("SELECT rowid, id FROM memories WHERE id = ? AND deleted_at IS NULL", idOrPrefix).Scan(&rowid, &id)
+	err := s.db.QueryRow("SELECT rowid, id FROM memories WHERE id = ? AND deleted_at IS NULL AND "+memProfileVisible, idOrPrefix, active).Scan(&rowid, &id)
 	if err != nil {
-		rows, _ := s.db.Query("SELECT rowid, id FROM memories WHERE id LIKE ? AND deleted_at IS NULL", idOrPrefix+"%")
+		rows, _ := s.db.Query("SELECT rowid, id FROM memories WHERE id LIKE ? AND deleted_at IS NULL AND "+memProfileVisible, idOrPrefix+"%", active)
 		found := [][2]any{}
 		for rows.Next() {
 			var rid int64
@@ -461,7 +550,29 @@ func (s *memStore) synthesize(threshold float64) jsonObj {
 	if res != nil {
 		expired, _ = res.RowsAffected()
 	}
-	rows, _ := s.db.Query("SELECT id, confidence, frequency, embedding FROM memories WHERE deleted_at IS NULL AND embedding IS NOT NULL ORDER BY frequency DESC, confidence DESC")
+	// Partition by storage bucket and merge WITHIN each bucket only: a merge must
+	// never compare or collapse rows across profiles, and frequency must never
+	// move between buckets. Fetch the distinct normalized profiles, then run the
+	// existing pairwise merge per bucket.
+	buckets := []string{}
+	prows, _ := s.db.Query("SELECT DISTINCT COALESCE(NULLIF(profile,''),'default') FROM memories WHERE deleted_at IS NULL AND embedding IS NOT NULL")
+	for prows.Next() {
+		var p string
+		prows.Scan(&p)
+		buckets = append(buckets, p)
+	}
+	prows.Close()
+	merged := 0
+	for _, bucket := range buckets {
+		merged += s.synthesizeBucket(bucket, threshold)
+	}
+	return jsonObj{"merged": merged, "expired": expired}
+}
+
+// synthesizeBucket runs the pairwise near-duplicate merge over a SINGLE storage
+// bucket (normalized profile). The caller (synthesize) already holds s.mu.
+func (s *memStore) synthesizeBucket(profile string, threshold float64) int {
+	rows, _ := s.db.Query("SELECT id, confidence, frequency, embedding FROM memories WHERE deleted_at IS NULL AND embedding IS NOT NULL AND "+memProfileStorage+" ORDER BY frequency DESC, confidence DESC", profile)
 	type rec struct {
 		id         string
 		confidence float64
@@ -500,14 +611,14 @@ func (s *memStore) synthesize(threshold float64) jsonObj {
 			}
 		}
 	}
-	return jsonObj{"merged": merged, "expired": expired}
+	return merged
 }
 
-func (s *memStore) promotable(minFreq int) []jsonObj {
+func (s *memStore) promotable(minFreq int, profile string) []jsonObj {
 	if minFreq == 0 {
 		minFreq = 3
 	}
-	rows, _ := s.db.Query("SELECT id, content, frequency, project FROM memories WHERE deleted_at IS NULL AND kind='learning' AND frequency >= ? ORDER BY frequency DESC", minFreq)
+	rows, _ := s.db.Query("SELECT id, content, frequency, project FROM memories WHERE deleted_at IS NULL AND kind='learning' AND frequency >= ? AND "+memProfileVisible+" ORDER BY frequency DESC", minFreq, memNormProfile(profile))
 	out := []jsonObj{}
 	for rows.Next() {
 		var id, content string
@@ -520,19 +631,20 @@ func (s *memStore) promotable(minFreq int) []jsonObj {
 	return out
 }
 
-func (s *memStore) stats() jsonObj {
-	get := func(q string) int {
+func (s *memStore) stats(profile string) jsonObj {
+	active := memNormProfile(profile)
+	get := func(cond string) int {
 		var n int
-		s.db.QueryRow(q).Scan(&n)
+		s.db.QueryRow("SELECT count(*) FROM memories WHERE "+cond+" AND "+memProfileVisible, active).Scan(&n)
 		return n
 	}
 	return jsonObj{
-		"active":     get("SELECT count(*) FROM memories WHERE deleted_at IS NULL"),
-		"durable":    get("SELECT count(*) FROM memories WHERE deleted_at IS NULL AND durability='durable'"),
-		"perishable": get("SELECT count(*) FROM memories WHERE deleted_at IS NULL AND durability='perishable'"),
-		"facts":      get("SELECT count(*) FROM memories WHERE deleted_at IS NULL AND kind='fact'"),
-		"learnings":  get("SELECT count(*) FROM memories WHERE deleted_at IS NULL AND kind='learning'"),
-		"deleted":    get("SELECT count(*) FROM memories WHERE deleted_at IS NOT NULL"),
+		"active":     get("deleted_at IS NULL"),
+		"durable":    get("deleted_at IS NULL AND durability='durable'"),
+		"perishable": get("deleted_at IS NULL AND durability='perishable'"),
+		"facts":      get("deleted_at IS NULL AND kind='fact'"),
+		"learnings":  get("deleted_at IS NULL AND kind='learning'"),
+		"deleted":    get("deleted_at IS NOT NULL"),
 	}
 }
 
@@ -557,10 +669,10 @@ func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 		"health": func(jsonObj) (any, error) {
 			return jsonObj{"ok": true, "vector": hasEmb, "capture": !watcherUnavailable.Load(), "watcherModel": memWatcherModel()}, nil
 		},
-		"stats": func(jsonObj) (any, error) { return store.stats(), nil },
+		"stats": func(p jsonObj) (any, error) { return store.stats(profileFromParams(p)), nil },
 		"recall": func(p jsonObj) (any, error) {
 			hits, err := store.recall(getStr(p, "query"), clampInt(p["limit"], 0, 0, 1000),
-				clampInt(p["charBudget"], 0, 0, 1000000), getStr(p, "kind"), getStr(p, "project"))
+				clampInt(p["charBudget"], 0, 0, 1000000), getStr(p, "kind"), getStr(p, "project"), profileFromParams(p))
 			if err != nil {
 				return nil, err
 			}
@@ -571,15 +683,18 @@ func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 			}
 			return jsonObj{"hits": list}, nil
 		},
-		"remember":   func(p jsonObj) (any, error) { return store.remember(rememberFromParams(p)) },
-		"forget":     func(p jsonObj) (any, error) { return jsonObj{"ok": store.forget(getStr(p, "id"))}, nil },
+		"remember": func(p jsonObj) (any, error) { return store.remember(rememberFromParams(p)) },
+		"forget": func(p jsonObj) (any, error) {
+			return jsonObj{"ok": store.forget(getStr(p, "id"), profileFromParams(p))}, nil
+		},
 		"synthesize": func(jsonObj) (any, error) { return store.synthesize(0), nil },
 		"promotable": func(p jsonObj) (any, error) {
-			return jsonObj{"candidates": store.promotable(clampInt(p["minFrequency"], 3, 1, 1000000))}, nil
+			return jsonObj{"candidates": store.promotable(clampInt(p["minFrequency"], 3, 1, 1000000), profileFromParams(p))}, nil
 		},
 		"observe": func(p jsonObj) (any, error) {
 			user := truncate(getStr(p, "user"), 8000)
 			project, hasProj := projectFromParams(p)
+			profile := profileFromParams(p)
 			if strings.TrimSpace(user) == "" {
 				return jsonObj{"accepted": false}, nil
 			}
@@ -589,7 +704,7 @@ func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 				return jsonObj{"accepted": false,
 					"reason": "watcher model unavailable — run `ollama pull " + memWatcherModel() + "` (or set MEMORY_WATCHER_MODEL); recall still works"}, nil
 			}
-			go memCapture(store, user, project, hasProj)
+			go memCapture(store, user, project, hasProj, profile)
 			return jsonObj{"accepted": true}, nil
 		},
 	}
@@ -700,6 +815,7 @@ func rememberFromParams(p jsonObj) rememberInput {
 		ttlDays: clampInt(p["ttlDays"], 0, 0, 100000),
 	}
 	in.project, in.hasProject = projectFromParams(p)
+	in.profile = profileFromParams(p)
 	if d, ok := p["dedupe"]; ok {
 		if f, ok2 := d.(float64); ok2 {
 			in.dedupe, in.hasDedupe = f, true
@@ -724,7 +840,14 @@ func projectFromParams(p jsonObj) (string, bool) {
 	return s, true
 }
 
-func memCapture(store *memStore, user, project string, hasProj bool) {
+// profileFromParams reads the active profile from RPC params, normalizing an
+// absent/empty value to the default bucket (so an un-scoped caller keeps the
+// backward-compatible default-only behavior).
+func profileFromParams(p jsonObj) string {
+	return memNormProfile(getStr(p, "profile"))
+}
+
+func memCapture(store *memStore, user, project string, hasProj bool, profile string) {
 	defer func() { recover() }()
 	w := memWatch(user)
 	if w == nil {
@@ -734,7 +857,7 @@ func memCapture(store *memStore, user, project string, hasProj bool) {
 	rem := func(content, kind, durability string, ttl int, conf float64) {
 		store.remember(rememberInput{content: content, kind: kind, durability: durability, ttlDays: ttl,
 			confidence: conf, reward: rewardSeed, source: "watcher", project: project, hasProject: hasProj,
-			dedupe: 0.9, hasDedupe: true})
+			profile: profile, dedupe: 0.9, hasDedupe: true})
 	}
 	for _, f := range w.Facts {
 		rem(f, "fact", "durable", 0, 0.65)

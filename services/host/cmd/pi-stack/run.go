@@ -120,6 +120,12 @@ func runRun(argv []string) {
 	// or fails the launch (recall just misses a bundle this run).
 	wireKnowledgeScope(cfg, o.Workspace, defaultKnowledgeRPC())
 
+	// Memory scope: hand the active profile name to the in-VM memory extensions
+	// (recall/capture) via a per-run workspace file, mirroring the knowledge scope
+	// file. They stamp captures with it and filter recall to {profile}∪{default}.
+	// Best-effort: a failure just leaves memory un-scoped (all default) this run.
+	writeProfileFile(o.Workspace, profile)
+
 	args := buildSbxArgs(cfg, o, version)
 
 	if os.Getenv("PI_STACK_DEBUG") != "" {
@@ -388,6 +394,36 @@ func projectBundle(workspace string) string {
 		local = filepath.Join(workspace, line)
 	}
 	return canonicalizeKnowledgeBundle(local)
+}
+
+// writeProfileFile writes <workspace>/.pi-stack/profile: the active profile name
+// on one line. The in-VM memory extensions read it to scope recall/capture,
+// mirroring how writeKnowledgeScope communicates the knowledge bundle set. It is
+// launcher-generated, per-run, and gitignored. Always written (even "default")
+// so a stale name from a previous run can never linger. Best-effort.
+func writeProfileFile(workspace, profile string) error {
+	if strings.TrimSpace(profile) == "" {
+		profile = config.DefaultProfile
+	}
+	// For a NAMED (non-default) profile, a write failure means recall/capture in
+	// the VM will silently fall back to the default bucket — wrong scope, not a
+	// no-op. Warn to stderr (still best-effort; don't abort the launch). The
+	// default profile stays silent (its absence IS the default behavior).
+	named := profile != config.DefaultProfile
+	warn := func(err error) error {
+		if named {
+			fmt.Fprintf(os.Stderr, "pi-stack: warning: could not write .pi-stack/profile for profile %q (recall/capture will fall back to the default bucket): %v\n", profile, err)
+		}
+		return err
+	}
+	dir := filepath.Join(workspace, ".pi-stack")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return warn(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "profile"), []byte(profile+"\n"), 0o644); err != nil {
+		return warn(err)
+	}
+	return nil
 }
 
 // writeKnowledgeScope writes <workspace>/.pi-stack/knowledge.scope: one canonical

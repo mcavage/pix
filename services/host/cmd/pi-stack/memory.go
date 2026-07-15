@@ -26,8 +26,18 @@ func runMemory(argv []string) {
 		fmt.Fprintln(os.Stderr, memoryUsage)
 		os.Exit(2)
 	}
+	// Resolve the active profile so host-side memory ops are scoped the same way
+	// the in-VM extensions are (recall sees {profile}∪{default}; captures stamp
+	// the active profile). FAIL LOUD on a config/profile error: silently falling
+	// back to "default" would store a `--profile wrok` fact in the shared default
+	// bucket (and recall/forget the wrong bucket). Never RPC with a fallback.
+	_, profile, err := loadResolvedConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack memory: %v\n", err)
+		os.Exit(1)
+	}
 	sub, rest := argv[0], argv[1:]
-	if err := dispatchMemory(sub, rest, memoryClient(), os.Stdout); err != nil {
+	if err := dispatchMemory(sub, rest, memoryClient(), os.Stdout, profile); err != nil {
 		exitFromErr("memory "+sub, err)
 	}
 }
@@ -42,24 +52,24 @@ const memoryUsage = `usage: pi-stack memory <recall|remember|forget|learnings|st
 
 // dispatchMemory is the testable core: it runs one subcommand against an
 // injected client + writer and returns an error (instead of exiting).
-func dispatchMemory(sub string, argv []string, c rpcClient, out io.Writer) error {
+func dispatchMemory(sub string, argv []string, c rpcClient, out io.Writer, profile string) error {
 	switch sub {
 	case "recall", "search":
-		return memoryRecall(argv, c, out)
+		return memoryRecall(argv, c, out, profile)
 	case "remember", "add":
-		return memoryRemember(argv, c, out)
+		return memoryRemember(argv, c, out, profile)
 	case "forget", "rm":
-		return memoryForget(argv, c, out)
+		return memoryForget(argv, c, out, profile)
 	case "learnings", "promotable":
-		return memoryLearnings(argv, c, out)
+		return memoryLearnings(argv, c, out, profile)
 	case "stats", "status":
-		return memoryStats(argv, c, out)
+		return memoryStats(argv, c, out, profile)
 	default:
 		return usageErr(fmt.Sprintf("memory: unknown subcommand %q\n%s", sub, memoryUsage))
 	}
 }
 
-func memoryRecall(argv []string, c rpcClient, out io.Writer) error {
+func memoryRecall(argv []string, c rpcClient, out io.Writer, profile string) error {
 	fs := newFlagSet()
 	limit := fs.int("limit", 8, "n")
 	project := fs.str("project", "", "p")
@@ -71,7 +81,7 @@ func memoryRecall(argv []string, c rpcClient, out io.Writer) error {
 	if query == "" {
 		return usageErr("usage: pi-stack memory recall <query> [--limit N] [--project P] [--json]")
 	}
-	res, err := c.Call("recall", map[string]any{"query": query, "limit": *limit, "project": *project})
+	res, err := c.Call("recall", map[string]any{"query": query, "limit": *limit, "project": *project, "profile": profile})
 	if err != nil {
 		return err
 	}
@@ -89,7 +99,7 @@ func memoryRecall(argv []string, c rpcClient, out io.Writer) error {
 	return nil
 }
 
-func memoryRemember(argv []string, c rpcClient, out io.Writer) error {
+func memoryRemember(argv []string, c rpcClient, out io.Writer, profile string) error {
 	fs := newFlagSet()
 	positional, err := fs.parse(argv)
 	if err != nil {
@@ -99,7 +109,7 @@ func memoryRemember(argv []string, c rpcClient, out io.Writer) error {
 	if content == "" {
 		return usageErr("usage: pi-stack memory remember <text...>")
 	}
-	res, err := c.Call("remember", map[string]any{"content": content, "source": "cli"})
+	res, err := c.Call("remember", map[string]any{"content": content, "source": "cli", "profile": profile})
 	if err != nil {
 		return err
 	}
@@ -115,7 +125,7 @@ func memoryRemember(argv []string, c rpcClient, out io.Writer) error {
 	return nil
 }
 
-func memoryForget(argv []string, c rpcClient, out io.Writer) error {
+func memoryForget(argv []string, c rpcClient, out io.Writer, profile string) error {
 	fs := newFlagSet()
 	positional, err := fs.parse(argv)
 	if err != nil {
@@ -124,7 +134,7 @@ func memoryForget(argv []string, c rpcClient, out io.Writer) error {
 	if len(positional) != 1 {
 		return usageErr("usage: pi-stack memory forget <id>")
 	}
-	res, err := c.Call("forget", map[string]any{"id": positional[0]})
+	res, err := c.Call("forget", map[string]any{"id": positional[0], "profile": profile})
 	if err != nil {
 		return err
 	}
@@ -140,7 +150,7 @@ func memoryForget(argv []string, c rpcClient, out io.Writer) error {
 	return nil
 }
 
-func memoryLearnings(argv []string, c rpcClient, out io.Writer) error {
+func memoryLearnings(argv []string, c rpcClient, out io.Writer, profile string) error {
 	fs := newFlagSet()
 	min := fs.int("min", 3)
 	positional, perr := fs.parse(argv)
@@ -150,7 +160,7 @@ func memoryLearnings(argv []string, c rpcClient, out io.Writer) error {
 	if len(positional) > 0 {
 		return usageErr("usage: pi-stack memory learnings [--min N] [--json]")
 	}
-	res, err := c.Call("promotable", map[string]any{"minFrequency": *min})
+	res, err := c.Call("promotable", map[string]any{"minFrequency": *min, "profile": profile})
 	if err != nil {
 		return err
 	}
@@ -172,7 +182,7 @@ func memoryLearnings(argv []string, c rpcClient, out io.Writer) error {
 	return nil
 }
 
-func memoryStats(argv []string, c rpcClient, out io.Writer) error {
+func memoryStats(argv []string, c rpcClient, out io.Writer, profile string) error {
 	fs := newFlagSet()
 	positional, perr := fs.parse(argv)
 	if perr != nil {
@@ -181,7 +191,7 @@ func memoryStats(argv []string, c rpcClient, out io.Writer) error {
 	if len(positional) > 0 {
 		return usageErr("usage: pi-stack memory stats [--json]")
 	}
-	res, err := c.Call("stats", nil)
+	res, err := c.Call("stats", map[string]any{"profile": profile})
 	if err != nil {
 		return err
 	}

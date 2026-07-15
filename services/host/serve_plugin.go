@@ -259,6 +259,9 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 			if err != nil {
 				return nil, err
 			}
+			// NOTE: builtin (in-process) stats is profile-scoped; plugin-backed stats
+			// is NOT (the plugin.MemoryStore.Stats() signature is intentionally left
+			// unscoped to avoid breaking the external contract). Documented limitation.
 			r, err := s.Stats()
 			if err != nil {
 				return nil, err
@@ -274,6 +277,7 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 			r, err := s.Recall(plugin.RecallReq{
 				Query: getStr(p, "query"), Limit: clampInt(p["limit"], 0, 0, 1000),
 				CharBudget: clampInt(p["charBudget"], 0, 0, 1000000), Kind: getStr(p, "kind"), Project: getStr(p, "project"),
+				Profile: profileFromParams(p),
 			})
 			if err != nil {
 				return nil, err
@@ -295,7 +299,7 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 				Content: in.content, Kind: in.kind, Durability: in.durability, Source: in.source,
 				Project: in.project, HasProject: in.hasProject, TTLDays: in.ttlDays,
 				Confidence: in.confidence, Reward: in.reward, Tags: in.tags,
-				Dedupe: in.dedupe, HasDedupe: in.hasDedupe,
+				Dedupe: in.dedupe, HasDedupe: in.hasDedupe, Profile: in.profile,
 			})
 			if err != nil {
 				return nil, err
@@ -307,7 +311,7 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 			if err != nil {
 				return nil, err
 			}
-			r, err := s.Forget(plugin.ForgetReq{ID: getStr(p, "id")})
+			r, err := s.Forget(plugin.ForgetReq{ID: getStr(p, "id"), Profile: profileFromParams(p)})
 			if err != nil {
 				return nil, err
 			}
@@ -329,7 +333,7 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 			if err != nil {
 				return nil, err
 			}
-			r, err := s.Promotable(plugin.PromotableReq{MinFrequency: clampInt(p["minFrequency"], 3, 1, 1000000)})
+			r, err := s.Promotable(plugin.PromotableReq{MinFrequency: clampInt(p["minFrequency"], 3, 1, 1000000), Profile: profileFromParams(p)})
 			if err != nil {
 				return nil, err
 			}
@@ -345,7 +349,7 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 				return nil, err
 			}
 			project, hasProj := projectFromParams(p)
-			r, err := s.Observe(plugin.ObserveReq{User: getStr(p, "user"), Project: project, HasProject: hasProj})
+			r, err := s.Observe(plugin.ObserveReq{User: getStr(p, "user"), Project: project, HasProject: hasProj, Profile: profileFromParams(p)})
 			if err != nil {
 				return nil, err
 			}

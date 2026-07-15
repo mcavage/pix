@@ -96,6 +96,24 @@ sandbox side — so the MVP never touches the binary. Per-profile host plugins a
 out of scope; use `PI_STACK_CONFIG` + a distinct `serve` if you truly need two
 different compiled host stacks.
 
+## Known limitations
+
+- **Shared `.pi-stack/profile` per workspace.** Two sandboxes launched on the
+  SAME workspace under different profiles share the one launcher-written
+  `.pi-stack/profile` file — the later launch wins and silently reassigns the
+  first sandbox's recall/capture scope (the exact same constraint as
+  `.pi-stack/knowledge.scope`). The in-VM extensions read the file EXACTLY ONCE
+  at load and freeze it, so recall and capture never diverge within a single
+  session, but they can't detect a mid-session overwrite by a sibling sandbox.
+  Per-sandbox immutable profile identity (e.g. an env var stamped at creation,
+  independent of the shared file) is a future improvement.
+- **Plugin-backed memory stats is unscoped.** The built-in (in-process) memory
+  store scopes `stats` to `{active}∪{default}`, but the go-plugin
+  `MemoryStore.Stats()` interface takes no profile arg and is left unchanged to
+  avoid breaking the external plugin contract, so a plugin-backed store reports
+  the whole-store view. Recall/remember/forget/promotable/observe ARE profile-
+  scoped on both paths.
+
 ## Migration
 
 Zero-touch. A config with no `[profiles.*]` tables and no `active_profile`

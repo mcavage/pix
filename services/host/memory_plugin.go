@@ -45,6 +45,7 @@ func (a *memoryStoreAdapter) Remember(req plugin.RememberReq) (plugin.RememberRe
 		durability: req.Durability,
 		source:     req.Source,
 		project:    req.Project,
+		profile:    req.Profile,
 		hasProject: req.HasProject,
 		ttlDays:    req.TTLDays,
 		confidence: req.Confidence,
@@ -63,7 +64,7 @@ func (a *memoryStoreAdapter) Remember(req plugin.RememberReq) (plugin.RememberRe
 }
 
 func (a *memoryStoreAdapter) Recall(req plugin.RecallReq) (plugin.RecallResp, error) {
-	hits, err := a.store.recall(req.Query, req.Limit, req.CharBudget, req.Kind, req.Project)
+	hits, err := a.store.recall(req.Query, req.Limit, req.CharBudget, req.Kind, req.Project, req.Profile)
 	if err != nil {
 		return plugin.RecallResp{}, err
 	}
@@ -86,7 +87,7 @@ func (a *memoryStoreAdapter) Recall(req plugin.RecallReq) (plugin.RecallResp, er
 }
 
 func (a *memoryStoreAdapter) Forget(req plugin.ForgetReq) (plugin.ForgetResp, error) {
-	return plugin.ForgetResp{OK: a.store.forget(req.ID)}, nil
+	return plugin.ForgetResp{OK: a.store.forget(req.ID, req.Profile)}, nil
 }
 
 func (a *memoryStoreAdapter) Synthesize(req plugin.SynthesizeReq) (plugin.SynthesizeResp, error) {
@@ -97,7 +98,7 @@ func (a *memoryStoreAdapter) Synthesize(req plugin.SynthesizeReq) (plugin.Synthe
 }
 
 func (a *memoryStoreAdapter) Promotable(req plugin.PromotableReq) (plugin.PromotableResp, error) {
-	cands := a.store.promotable(req.MinFrequency)
+	cands := a.store.promotable(req.MinFrequency, req.Profile)
 	out := make([]plugin.Candidate, 0, len(cands))
 	for _, c := range cands {
 		id, _ := c["id"].(string)
@@ -128,12 +129,18 @@ func (a *memoryStoreAdapter) Observe(req plugin.ObserveReq) (plugin.ObserveResp,
 			Reason:   "watcher model unavailable — run `ollama pull " + memWatcherModel() + "` (or set MEMORY_WATCHER_MODEL); recall still works",
 		}, nil
 	}
-	go memCapture(a.store, user, req.Project, req.HasProject)
+	go memCapture(a.store, user, req.Project, req.HasProject, req.Profile)
 	return plugin.ObserveResp{Accepted: true}, nil
 }
 
+// Stats reports the default bucket's counts. The typed plugin surface takes no
+// profile arg (its interface predates profile-scoping), so it reports the shared
+// default view; for a deployment without profiles that is every row, unchanged.
+// Documented limitation: builtin (in-process) stats IS profile-scoped, but
+// plugin-backed stats is not (the interface is left unchanged to avoid breaking
+// the external plugin contract).
 func (a *memoryStoreAdapter) Stats() (plugin.Stats, error) {
-	s := a.store.stats()
+	s := a.store.stats("")
 	get := func(k string) int { n, _ := s[k].(int); return n }
 	return plugin.Stats{
 		Active:     get("active"),
