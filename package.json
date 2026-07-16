@@ -1,6 +1,6 @@
 {
   "name": "pi-stack",
-  "version": "0.0.18",
+  "version": "0.0.19",
   "private": true,
   "description": "Multi-model pi coding agent harness on a Docker Hardened (DHI) Debian base",
   "license": "MIT",
