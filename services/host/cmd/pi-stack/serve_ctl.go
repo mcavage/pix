@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -47,22 +49,55 @@ func defaultServeCtl() serveCtl {
 	}
 }
 
-// verifyServeProc reports whether pid is OUR `pi-stack-host serve` process by
-// reading /proc/<pid>/cmdline (Linux). known=false means the check is unavailable
-// (e.g. darwin, no /proc) so the caller falls back to trusting the pidfile it
-// wrote. ours=false with known=true means the pid is ALIVE but clearly NOT our
-// process (a recycled/hijacked pid) — the caller must REFUSE to kill it.
+// verifyServeProc reports whether pid is OUR `pi-stack-host serve` process.
+// Linux: read /proc/<pid>/cmdline (authoritative). Elsewhere (darwin/BSD, no
+// /proc): fall back to `ps -o command= -p <pid>`. known=false means the check is
+// unavailable (no /proc AND no usable ps) so the caller falls back to trusting
+// the pidfile it wrote. ours=false with known=true means the pid is ALIVE but
+// clearly NOT our process (a recycled/hijacked pid) — the caller must REFUSE to
+// kill it.
 func verifyServeProc(pid int) (ours bool, known bool) {
-	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid)); err == nil {
+		// cmdline is a NUL-separated argv (with a trailing NUL).
+		argv := strings.Split(strings.Trim(string(b), "\x00"), "\x00")
+		return cmdlineIsServe(argv), true
+	}
+	// No /proc — try ps (darwin/BSD).
+	return verifyServeProcPS(pid, func(name string, args ...string) (string, error) {
+		out, err := exec.Command(name, args...).CombinedOutput()
+		return string(out), err
+	})
+}
+
+// verifyServeProcPS is the darwin/BSD verify path: it asks `ps` for the target
+// pid's command line and matches it. run is injected so it is unit-testable
+// without a real process. A ps failure (absent, or the pid already gone) yields
+// known=false so the caller trusts the pidfile it wrote rather than refusing.
+func verifyServeProcPS(pid int, run func(name string, args ...string) (string, error)) (ours bool, known bool) {
+	out, err := run("ps", "-o", "command=", "-p", strconv.Itoa(pid))
 	if err != nil {
-		return false, false // no /proc (darwin) or unreadable — can't tell
+		return false, false // ps unavailable — can't tell
 	}
-	// cmdline is a NUL-separated argv; join with spaces for a substring check.
-	cmd := strings.ReplaceAll(string(b), "\x00", " ")
-	if strings.Contains(cmd, "pi-stack-host") && strings.Contains(cmd, "serve") {
-		return true, true
+	line := strings.TrimSpace(out)
+	if line == "" {
+		return false, false // ps returned nothing — can't tell
 	}
-	return false, true
+	return cmdlineIsServe(strings.Fields(line)), true
+}
+
+// cmdlineIsServe tightens the match from a loose substring to: the executable
+// basename is exactly `pi-stack-host` AND some later arg equals `serve`. That
+// rejects an unrelated process whose args merely happen to contain those words.
+func cmdlineIsServe(argv []string) bool {
+	if len(argv) == 0 || filepath.Base(argv[0]) != "pi-stack-host" {
+		return false
+	}
+	for _, a := range argv[1:] {
+		if a == "serve" {
+			return true
+		}
+	}
+	return false
 }
 
 // stopServe is the SAFE replacement for `pkill -f 'pi-stack-host serve'`. It
@@ -98,14 +133,10 @@ func stopServe(ctl serveCtl, out io.Writer) (stopped bool, err error) {
 		return false, nil
 	}
 
-	// It is alive — VERIFY it is ours before we signal it.
-	ours, known := ctl.verify(pid)
-	switch {
-	case known && !ours:
-		fmt.Fprintf(out, "refusing to stop pid %d — it is not 'pi-stack-host serve' (stale/hijacked pidfile). Remove %s if you're sure.\n", pid, path)
+	// It is alive — VERIFY it is ours before we signal it (guards a stale/hijacked
+	// pidfile). This is the check that immediately precedes the SIGTERM.
+	if serveOwnershipRefused(ctl, pid, path, "it is not 'pi-stack-host serve' (stale/hijacked pidfile)", out) {
 		return false, nil
-	case !known:
-		fmt.Fprintf(out, "note: cannot verify pid %d via /proc (no procfs) — trusting the pidfile we wrote\n", pid)
 	}
 
 	// SIGTERM, then poll up to ~5s for exit; escalate to SIGKILL if it survives.
@@ -118,14 +149,43 @@ func stopServe(ctl serveCtl, out io.Writer) (stopped bool, err error) {
 		return true, nil
 	}
 
-	fmt.Fprintf(out, "pid %d did not exit on SIGTERM; escalating to SIGKILL\n", pid)
+	// It survived SIGTERM. RE-VERIFY before escalating: during the 5s poll the
+	// original process could have exited and its pid been reused by an unrelated
+	// process — SIGKILLing that would be a serious bug.
+	fmt.Fprintf(out, "pid %d did not exit on SIGTERM; re-verifying before SIGKILL\n", pid)
+	if serveOwnershipRefused(ctl, pid, path, "identity changed since SIGTERM (possible PID reuse)", out) {
+		return false, nil
+	}
+	fmt.Fprintf(out, "escalating to SIGKILL\n")
 	if err := ctl.kill(pid, syscall.SIGKILL); err != nil {
 		return false, fmt.Errorf("SIGKILL pid %d: %w", pid, err)
 	}
-	serveProcGone(ctl, pid, 5*time.Second)
+	// Confirm the process is ACTUALLY gone before reporting success — don't claim
+	// we stopped it if it somehow survived SIGKILL.
+	if !serveProcGone(ctl, pid, 5*time.Second) {
+		fmt.Fprintf(out, "pid %d is STILL alive after SIGKILL — could not stop it\n", pid)
+		return false, fmt.Errorf("pid %d survived SIGKILL", pid)
+	}
 	_ = ctl.removePid(path)
 	fmt.Fprintf(out, "stopped 'pi-stack-host serve' (pid %d, SIGKILL)\n", pid)
 	return true, nil
+}
+
+// serveOwnershipRefused re-checks (via ctl.verify) that pid is still our serve
+// process right before a signal, printing + returning true when we must REFUSE
+// (alive but verified NOT ours). `when` is a short phase label folded into the
+// message. A !known result (verify unavailable) is trusted with a note, never a
+// refusal.
+func serveOwnershipRefused(ctl serveCtl, pid int, path, when string, out io.Writer) bool {
+	ours, known := ctl.verify(pid)
+	switch {
+	case known && !ours:
+		fmt.Fprintf(out, "refusing to stop pid %d — %s. Remove %s if you're sure.\n", pid, when, path)
+		return true
+	case !known:
+		fmt.Fprintf(out, "note: cannot verify pid %d via ps/proc (%s) — trusting the pidfile we wrote\n", pid, when)
+	}
+	return false
 }
 
 // serveProcGone polls kill(pid,0) until the process is gone or the timeout's worth
@@ -146,11 +206,29 @@ func serveProcGone(ctl serveCtl, pid int, timeout time.Duration) bool {
 // serveState is the resolved `serve status` snapshot: is the supervisor running
 // (pidfile present + alive + ours), and which service ports answer.
 type serveState struct {
-	Running   bool   `json:"running"`
-	PID       int    `json:"pid,omitempty"`
-	Detail    string `json:"detail,omitempty"`
-	Memory    bool   `json:"memory"`
-	Knowledge bool   `json:"knowledge"`
+	Running       bool   `json:"running"`
+	PID           int    `json:"pid,omitempty"`
+	Detail        string `json:"detail,omitempty"`
+	Memory        bool   `json:"memory"`
+	Knowledge     bool   `json:"knowledge"`
+	MemoryPort    int    `json:"memory_port"`
+	KnowledgePort int    `json:"knowledge_port"`
+}
+
+// servePort resolves a service port honoring the MEMORY_PORT / KNOWLEDGE_PORT env
+// overrides `serve` itself reads, preferring the injected env.getenv (so tests
+// stay hermetic) and falling back to the process environment.
+func servePort(env shellEnv, name string, def int) int {
+	get := os.Getenv
+	if env.getenv != nil {
+		get = env.getenv
+	}
+	if v := strings.TrimSpace(get(name)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
 }
 
 // resolveServeStatus reads the pidfile + probes the process and the service ports
@@ -177,9 +255,11 @@ func resolveServeStatus(ctl serveCtl, env shellEnv) serveState {
 	} else if !os.IsNotExist(err) {
 		st.Detail = "could not read pidfile: " + err.Error()
 	}
+	st.MemoryPort = servePort(env, "MEMORY_PORT", memoryPortDefault)
+	st.KnowledgePort = servePort(env, "KNOWLEDGE_PORT", knowledgePortDefault)
 	if env.dial != nil {
-		st.Memory = env.dial(memoryPortDefault)
-		st.Knowledge = env.dial(knowledgePortDefault)
+		st.Memory = env.dial(st.MemoryPort)
+		st.Knowledge = env.dial(st.KnowledgePort)
 	}
 	return st
 }
@@ -198,8 +278,15 @@ func printServeStatus(st serveState, out io.Writer, jsonOut bool) {
 	} else {
 		fmt.Fprintln(out, "serve: not running")
 	}
-	fmt.Fprintf(out, "  memory    (:%d): %s\n", memoryPortDefault, upDown(st.Memory))
-	fmt.Fprintf(out, "  knowledge (:%d): %s\n", knowledgePortDefault, upDown(st.Knowledge))
+	memPort, kbPort := st.MemoryPort, st.KnowledgePort
+	if memPort == 0 {
+		memPort = memoryPortDefault
+	}
+	if kbPort == 0 {
+		kbPort = knowledgePortDefault
+	}
+	fmt.Fprintf(out, "  memory    (:%d): %s\n", memPort, upDown(st.Memory))
+	fmt.Fprintf(out, "  knowledge (:%d): %s\n", kbPort, upDown(st.Knowledge))
 }
 
 // runServeStop is the `serve stop` entry point.
@@ -230,6 +317,7 @@ func runServeStatus(argv []string) {
 			os.Exit(2)
 		}
 	}
-	st := resolveServeStatus(defaultServeCtl(), defaultShellEnv())
+	env := defaultShellEnv()
+	st := resolveServeStatus(defaultServeCtl(), env)
 	printServeStatus(st, os.Stdout, jsonOut)
 }

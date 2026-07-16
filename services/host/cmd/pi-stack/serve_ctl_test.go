@@ -19,6 +19,7 @@ type fakeProc struct {
 	sigs         []syscall.Signal // every non-zero signal delivered, in order
 	dieOnTerm    bool             // exit on the next liveness probe after a SIGTERM
 	dieOnKill    bool             // exit on the next liveness probe after a SIGKILL
+	surviveKill  bool             // pathological: ignore SIGKILL, stay alive
 	termReceived bool
 	killReceived bool
 }
@@ -48,8 +49,11 @@ func (p *fakeProc) kill(pid int, sig syscall.Signal) error {
 	}
 	if sig == syscall.SIGKILL {
 		p.killReceived = true
-		// SIGKILL is uncatchable; the process is gone right away in this model.
-		p.alive = false
+		// SIGKILL is uncatchable; the process is gone right away in this model
+		// UNLESS the test is modelling a pathological survivor.
+		if !p.surviveKill {
+			p.alive = false
+		}
 	}
 	return nil
 }
@@ -250,6 +254,122 @@ func TestResolveServeStatus_StaleNotRunning(t *testing.T) {
 	}
 	if !strings.Contains(st.Detail, "stale") {
 		t.Errorf("want stale detail, got %q", st.Detail)
+	}
+}
+
+// TestVerifyServeProcPS_Darwin: the darwin/BSD verify path matches our serve
+// command line from an injected `ps` and rejects an unrelated process; an absent
+// ps yields known=false (can't tell, trust the pidfile).
+func TestVerifyServeProcPS_Darwin(t *testing.T) {
+	ours := func(string, ...string) (string, error) {
+		return "/usr/local/bin/pi-stack-host serve --foo\n", nil
+	}
+	if ok, known := verifyServeProcPS(4242, ours); !ok || !known {
+		t.Errorf("our serve cmdline: ours=%v known=%v, want true,true", ok, known)
+	}
+
+	notOurs := func(string, ...string) (string, error) {
+		return "/usr/bin/postgres -D /data serve\n", nil // basename not pi-stack-host
+	}
+	if ok, known := verifyServeProcPS(4242, notOurs); ok || !known {
+		t.Errorf("foreign cmdline: ours=%v known=%v, want false,true", ok, known)
+	}
+
+	noPS := func(string, ...string) (string, error) { return "", syscall.ENOENT }
+	if ok, known := verifyServeProcPS(4242, noPS); ok || known {
+		t.Errorf("absent ps: ours=%v known=%v, want false,false", ok, known)
+	}
+}
+
+// TestCmdlineIsServe_Tight: only `pi-stack-host` basename + a `serve` arg counts;
+// a process merely mentioning the words does not.
+func TestCmdlineIsServe_Tight(t *testing.T) {
+	if !cmdlineIsServe([]string{"/opt/pi-stack-host", "serve", "--x"}) {
+		t.Error("real serve cmdline must match")
+	}
+	if cmdlineIsServe([]string{"/bin/grep", "pi-stack-host serve"}) {
+		t.Error("a grep of the words must NOT match")
+	}
+	if cmdlineIsServe([]string{"/opt/pi-stack-host", "status"}) {
+		t.Error("pi-stack-host without a serve arg must NOT match")
+	}
+}
+
+// TestStopServe_ReVerifyBeforeKill: a pid whose identity CHANGES between the
+// up-front check and the pre-SIGKILL re-check (PID reuse during the poll) must
+// NOT be SIGKILLed — stopServe refuses on the second verify.
+func TestStopServe_ReVerifyBeforeKill(t *testing.T) {
+	removed := false
+	// dieOnTerm=false so it survives SIGTERM and we reach the re-verify gate.
+	proc := &fakeProc{pid: 202, alive: true, dieOnTerm: false}
+	calls := 0
+	verify := func(int) (bool, bool) {
+		calls++
+		return calls == 1, true // ours on the 1st (pre-SIGTERM) call, NOT ours on the 2nd
+	}
+	ctl := ctlFor("202", nil, proc, &removed, verify)
+	var buf bytes.Buffer
+	stopped, err := stopServe(ctl, &buf)
+	if stopped {
+		t.Fatalf("must not report stopped when identity changed mid-poll (err=%v)", err)
+	}
+	for _, s := range proc.sigs {
+		if s == syscall.SIGKILL {
+			t.Fatal("must NOT SIGKILL a pid that changed identity during the poll")
+		}
+	}
+	if removed {
+		t.Error("must not remove the pidfile after refusing to SIGKILL")
+	}
+	if !strings.Contains(buf.String(), "PID reuse") {
+		t.Errorf("want a PID-reuse refusal note, got %q", buf.String())
+	}
+}
+
+// TestStopServe_SurvivesSIGKILL_NotSuccess: a process that somehow outlives
+// SIGKILL must be reported as NOT stopped (with an error), never claimed stopped.
+func TestStopServe_SurvivesSIGKILL_NotSuccess(t *testing.T) {
+	removed := false
+	proc := &fakeProc{pid: 303, alive: true, dieOnTerm: false, surviveKill: true}
+	ctl := ctlFor("303", nil, proc, &removed, nil)
+	var buf bytes.Buffer
+	stopped, err := stopServe(ctl, &buf)
+	if stopped {
+		t.Fatal("must not report stopped when the process survived SIGKILL")
+	}
+	if err == nil {
+		t.Error("a survived SIGKILL must surface an error")
+	}
+	if removed {
+		t.Error("must not remove the pidfile of a process that is still alive")
+	}
+	if !strings.Contains(buf.String(), "STILL alive after SIGKILL") {
+		t.Errorf("want an honest survival report, got %q", buf.String())
+	}
+}
+
+// TestResolveServeStatus_HonorsPortEnv: an overridden MEMORY_PORT is used for
+// both the dial probe and the printed line, not the hardcoded default.
+func TestResolveServeStatus_HonorsPortEnv(t *testing.T) {
+	removed := false
+	ctl := ctlFor("", syscall.ENOENT, nil, &removed, nil)
+	const customPort = 21435
+	env := fakeEnv{
+		envVars: map[string]string{"MEMORY_PORT": strconv.Itoa(customPort)},
+		ports:   map[int]bool{customPort: true, memoryPortDefault: false},
+	}.env()
+
+	st := resolveServeStatus(ctl, env)
+	if st.MemoryPort != customPort {
+		t.Fatalf("MemoryPort = %d, want %d", st.MemoryPort, customPort)
+	}
+	if !st.Memory {
+		t.Error("must dial the overridden port (up), not the default (down)")
+	}
+	var buf bytes.Buffer
+	printServeStatus(st, &buf, false)
+	if !strings.Contains(buf.String(), strconv.Itoa(customPort)) {
+		t.Errorf("printed status must show the overridden port, got %q", buf.String())
 	}
 }
 

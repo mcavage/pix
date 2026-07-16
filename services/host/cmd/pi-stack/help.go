@@ -181,7 +181,7 @@ const versionUsage = `usage: pi-stack version
 Print the stamped launcher version.
 `
 
-const resetUsage = `usage: pi-stack reset [--keep-memory] [--sbx] [--yes]
+const resetUsage = `usage: pi-stack reset [--keep-memory] [--sbx] [--yes] [--force]
 
 Reset the stack to a clean slate — REVERSIBLE. Nothing is hard-deleted: state is
 moved aside to a timestamped <path>.bak-<unixts> sibling you can rename back.
@@ -194,13 +194,16 @@ flags:
   --keep-memory   preserve ~/.pi-stack/memory (your captured facts); reset the rest
   --sbx           also remove every pi-stack-* sandbox and unregister the
                   configured local MCP servers (provider secrets are left alone)
+  --force         move the data dir even if 'pi-stack-host serve' still appears
+                  to be running (otherwise the data move is refused to avoid
+                  splitting a live sqlite db from its wal)
   --yes, -y       don't prompt (REQUIRED on a non-interactive terminal)
 
 Without --yes on a TTY it prints exactly what will move and prompts before acting.
 On a non-TTY it refuses unless --yes is given.
 `
 
-const uninstallUsage = `usage: pi-stack uninstall [--keep-memory] [--yes]
+const uninstallUsage = `usage: pi-stack uninstall [--keep-memory] [--yes] [--force]
 
 Run the full reset (see 'pi-stack reset'), THEN remove the installed pi-stack +
 pi-stack-host bin symlinks (~/.local/bin). Only symlinks are removed — a real
@@ -208,5 +211,7 @@ file there is left untouched. State is moved aside, never hard-deleted.
 
 flags:
   --keep-memory   preserve ~/.pi-stack/memory (your captured facts)
+  --force         move the data dir even if 'pi-stack-host serve' still appears
+                  to be running
   --yes, -y       don't prompt (REQUIRED on a non-interactive terminal)
 `

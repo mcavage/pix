@@ -132,7 +132,9 @@ func TestExecuteReset_MovesConfigAndData(t *testing.T) {
 	a := resetPlan(resetCfg(), p, resetOpts{})
 
 	var buf bytes.Buffer
-	executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow)
+	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if !*called {
 		t.Error("executeReset must stop host services via stopServe")
@@ -165,7 +167,9 @@ func TestExecuteReset_KeepMemoryPreservesMemory(t *testing.T) {
 	a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
 
 	var buf bytes.Buffer
-	executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow)
+	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if !exists(p.memoryDir) {
 		t.Error("--keep-memory must preserve the memory dir")
@@ -286,6 +290,198 @@ func TestParseResetArgs(t *testing.T) {
 	}
 	if _, err := parseResetArgs([]string{"--nope"}, true); err == nil {
 		t.Error("unknown flag must error")
+	}
+}
+
+// TestExecuteReset_MoveFailureReturnsError: a failing rename makes executeReset
+// return an error, and runResetCore propagates it (non-zero exit for the CLI).
+func TestExecuteReset_MoveFailureReturnsError(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	p := tempPaths(t, root)
+	a := resetPlan(resetCfg(), p, resetOpts{})
+
+	fsys := defaultResetFS()
+	fsys.rename = func(_, _ string) error { return errors.New("disk full") }
+
+	var buf bytes.Buffer
+	_, err := executeReset(a, fsys, noToolEnv(), &buf, fixedNow)
+	if err == nil {
+		t.Fatal("a failed move must make executeReset return an error, not report success")
+	}
+
+	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
+	if rErr := runResetCore(resetCfg(), p, resetOpts{assumeYes: true}, fsys, noToolEnv(), rio, fixedNow); rErr == nil {
+		t.Error("runResetCore must return non-nil when a move failed")
+	}
+}
+
+// TestUninstall_BackupFailureKeepsSymlinks: if the reset backup fails, uninstall
+// must NOT remove the bin symlinks (never strand the user with no binaries).
+func TestUninstall_BackupFailureKeepsSymlinks(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	p := tempPaths(t, root)
+
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "out"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "out", "pi-stack")
+	if err := os.WriteFile(target, []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(bin, "pi-stack")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	fsys := defaultResetFS()
+	fsys.rename = func(_, _ string) error { return errors.New("backup failed") }
+
+	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
+	err := runUninstallCore(resetCfg(), p, []string{link}, resetOpts{assumeYes: true},
+		fsys, noToolEnv(), rio, fixedNow)
+	if err == nil {
+		t.Fatal("uninstall must return the backup error")
+	}
+	if !exists(link) {
+		t.Error("uninstall must NOT remove the bin symlink after a failed backup")
+	}
+}
+
+// TestExecuteReset_ServeUpAbortsDataMove: when serve is still up (injected dial),
+// the data dir move is refused (error) but the config dir is still backed up.
+func TestExecuteReset_ServeUpAbortsDataMove(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	p := tempPaths(t, root)
+	a := resetPlan(resetCfg(), p, resetOpts{})
+
+	env := fakeEnv{present: map[string]bool{}, ports: map[int]bool{memoryPortDefault: true}}.env()
+	var buf bytes.Buffer
+	_, err := executeReset(a, defaultResetFS(), env, &buf, fixedNow)
+	if err == nil {
+		t.Fatal("serve still up must make executeReset return an error")
+	}
+	if exists(p.dataRoot + ".bak-" + fixedTS) {
+		t.Error("the data dir must NOT move while serve is up")
+	}
+	if !exists(p.dataRoot) {
+		t.Error("the data dir must be left in place when the move is blocked")
+	}
+	if exists(p.configDir) {
+		t.Error("the config dir (safe) should still be backed up")
+	}
+
+	// --force overrides the guard: the data dir moves even with serve up.
+	aForce := resetPlan(resetCfg(), tempPaths(t, t.TempDir()), resetOpts{force: true})
+	if !aForce.Force {
+		t.Error("--force must set Force on the plan")
+	}
+}
+
+// TestExecuteReset_KeepMemoryCustomDBDir: a custom (non-"memory") MEMORY_DB dir
+// is preserved by --keep-memory (the sweep preserves the RESOLVED dir, not a
+// hardcoded name).
+func TestExecuteReset_KeepMemoryCustomDBDir(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	dataRoot := filepath.Join(root, ".pi-stack")
+	customMem := filepath.Join(dataRoot, "facts-store") // NOT named "memory"
+	kbDir := filepath.Join(dataRoot, "knowledge")
+	cache := filepath.Join(dataRoot, "cache")
+	for _, d := range []string{customMem, kbDir, cache} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(customMem, "memory.db"), "facts")
+	p := resetPaths{configDir: filepath.Join(root, "config"), dataRoot: dataRoot, memoryDir: customMem, knowledgeDir: kbDir}
+	a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+
+	var buf bytes.Buffer
+	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !exists(customMem) || !exists(filepath.Join(customMem, "memory.db")) {
+		t.Error("--keep-memory must preserve the resolved custom memory dir")
+	}
+	if exists(kbDir) {
+		t.Error("knowledge dir should have been moved aside")
+	}
+	if exists(cache) {
+		t.Error("the sweep should move aside non-memory entries")
+	}
+}
+
+// TestMoveAside_NoOverwrite: a pre-existing <path>.bak-<ts> is never overwritten;
+// moveAside picks a unique suffixed name instead.
+func TestMoveAside_NoOverwrite(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "data")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	collision := src + ".bak-" + fixedTS
+	writeFile(t, collision, "existing backup")
+
+	dest, err := moveAside(defaultResetFS(), src, 1700000000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dest == collision {
+		t.Fatal("moveAside must NOT reuse an existing .bak path")
+	}
+	if dest != collision+"-1" {
+		t.Errorf("want unique %q, got %q", collision+"-1", dest)
+	}
+	if b, _ := os.ReadFile(collision); string(b) != "existing backup" {
+		t.Error("the existing backup must be left intact")
+	}
+	if !exists(dest) {
+		t.Error("the source must have moved to the unique dest")
+	}
+}
+
+// TestUninstall_LeavesUnrelatedSymlink: a symlink in a bin slot that points at
+// something OTHER than our binary is left in place + reported, not removed.
+func TestUninstall_LeavesUnrelatedSymlink(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	p := tempPaths(t, root)
+
+	bin := filepath.Join(root, "bin")
+	other := filepath.Join(root, "usr", "bin", "ripgrep")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(other), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(other, []byte("rg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A symlink at our pi-stack-host slot but pointing at an unrelated binary.
+	link := filepath.Join(bin, "pi-stack-host")
+	if err := os.Symlink(other, link); err != nil {
+		t.Fatal(err)
+	}
+
+	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
+	if err := runUninstallCore(resetCfg(), p, []string{link}, resetOpts{assumeYes: true},
+		defaultResetFS(), noToolEnv(), rio, fixedNow); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !exists(link) {
+		t.Error("uninstall must NOT remove an unrelated symlink")
+	}
+	out := rio.out.(*bytes.Buffer).String()
+	if !strings.Contains(out, "not a pi-stack binary") {
+		t.Errorf("want a 'left in place' report, got %q", out)
 	}
 }
 

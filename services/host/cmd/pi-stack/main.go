@@ -234,7 +234,7 @@ commands:
   run [DIR] [flags]   launch the sandbox (launching is explicit)
   serve [args...]     run the host services (execs pi-stack-host serve)
 
-  memory <cmd>        recall|remember|forget|learnings|stats   (:11435)
+  memory <cmd>        recall|remember|forget|learnings|stats|backup|restore   (:11435)
   knowledge <cmd>     init|use|ls|query|sync|remote            (:11436)
   mcp register|ls     register local stdio MCP servers with the sbx gateway
   secret <cmd>        status|edit|check the 1Password op-refs (host MCP creds)

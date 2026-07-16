@@ -60,6 +60,11 @@ var (
 	extraBrokerFactory func() plugin.CredentialBroker
 )
 
+// version is stamped at build time via -ldflags "-X main.version=..." for the
+// launcher; the host binary is currently built unstamped, so it reports "dev".
+// Used in the backup manifest (pi_stack_version).
+var version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -75,7 +80,7 @@ func main() {
 	case "plugin":
 		runPlugin(os.Args[2:])
 	case "memory":
-		runMemory()
+		runMemoryHost(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
 	case "-h", "--help", "help":
@@ -125,6 +130,8 @@ usage: pi-stack-host <subcommand>
 
 subcommands:
   memory         self-learning memory store, JSON-RPC (:11435)
+  memory backup  hot, consistent snapshot of the memory DB -> tar.gz
+  memory restore restore the memory DB from a backup tar.gz (safe swap)
   mcp <name>     stdio MCP bridge (run by the sbx gateway); slack is an alias
   slack          alias for "mcp slack"
   plugin <kind>  built-in go-plugin server, self-exec (memory|knowledge|broker|mcp)

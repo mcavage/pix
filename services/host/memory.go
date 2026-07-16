@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS memories (
   tags TEXT NOT NULL DEFAULT '[]', project TEXT, embedding TEXT, deleted_at TEXT, profile TEXT
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content);
+PRAGMA user_version = 1;
 `
 
 // memDefaultProfile is the shared base bucket. A memory with a NULL/empty/
@@ -148,6 +149,18 @@ func newMemStore(path string, embedder func(string) []float64) (*memStore, error
 	if _, err := db.Exec("PRAGMA busy_timeout=5000;"); err != nil {
 		return nil, err
 	}
+	// Schema-version guard: read the CURRENT user_version BEFORE memSchema (which
+	// unconditionally stamps 1). A db written by a NEWER binary (version > 1) must
+	// be refused loudly, never silently downgraded to the 1 marker — that would
+	// corrupt a forward-incompatible schema. Only proceed (and stamp 1) when the
+	// current version is <= 1.
+	var curVersion int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&curVersion); err != nil {
+		return nil, err
+	}
+	if curVersion > 1 {
+		return nil, fmt.Errorf("database schema v%d is newer than this binary supports (1) — upgrade pi-stack", curVersion)
+	}
 	if _, err := db.Exec(memSchema); err != nil {
 		return nil, err
 	}
@@ -164,6 +177,12 @@ func newMemStore(path string, embedder func(string) []float64) (*memStore, error
 		if _, err := db.Exec("ALTER TABLE memories ADD COLUMN profile TEXT"); err != nil {
 			return nil, err
 		}
+	}
+	// Stamp the current schema version. memSchema already sets it for a fresh DB,
+	// but a migrated legacy DB predates the pragma — set it explicitly so
+	// backup/restore can detect version drift later.
+	if _, err := db.Exec("PRAGMA user_version = 1"); err != nil {
+		return nil, err
 	}
 	return &memStore{db: db, embedder: embedder}, nil
 }

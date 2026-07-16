@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,7 @@ type resetOpts struct {
 	keepMemory bool // --keep-memory: preserve <dataRoot>/memory (captured facts)
 	sbx        bool // --sbx: also remove pi-stack-* sandboxes + unregister MCP
 	assumeYes  bool // --yes: don't prompt (required on a non-TTY)
+	force      bool // --force: move the data dir even if serve appears still up
 	help       bool // -h/--help
 }
 
@@ -47,10 +49,14 @@ type resetPaths struct {
 	knowledgeDir string // <dataRoot>/knowledge or dir(KNOWLEDGE_DB): the rebuildable index
 }
 
-// backupTarget is one path the reset moves aside, with a human label.
+// backupTarget is one path the reset moves aside, with a human label. Dangerous
+// marks a move that must not run while `serve` is still up (moving the live data
+// dir out from under a sqlite writer splits the db/wal); the config-dir backup is
+// always safe.
 type backupTarget struct {
-	Path  string
-	Label string
+	Path      string
+	Label     string
+	Dangerous bool
 }
 
 // resetActions is the pure plan: exactly what will be moved + which sbx actions
@@ -62,25 +68,28 @@ type resetActions struct {
 	DataRoot        string         // the data root (for the keep-memory sweep)
 	RemoveSandboxes bool           // --sbx: remove pi-stack-* sandboxes
 	MCPRemove       []string       // --sbx: MCP server names to unregister (cfg.MCP)
+	Force           bool           // --force: skip the serve-still-up guard on the data move
 }
 
 // resetFS is the injected filesystem surface, so executeReset stays hermetic in
 // tests (a temp HOME, no real rm). defaultResetFS wires the os-backed ops.
 type resetFS struct {
-	stat    func(path string) (os.FileInfo, error)
-	lstat   func(path string) (os.FileInfo, error)
-	rename  func(oldpath, newpath string) error
-	readDir func(path string) ([]os.DirEntry, error)
-	remove  func(path string) error
+	stat     func(path string) (os.FileInfo, error)
+	lstat    func(path string) (os.FileInfo, error)
+	readlink func(path string) (string, error)
+	rename   func(oldpath, newpath string) error
+	readDir  func(path string) ([]os.DirEntry, error)
+	remove   func(path string) error
 }
 
 func defaultResetFS() resetFS {
 	return resetFS{
-		stat:    os.Stat,
-		lstat:   os.Lstat,
-		rename:  os.Rename,
-		readDir: os.ReadDir,
-		remove:  os.Remove,
+		stat:     os.Stat,
+		lstat:    os.Lstat,
+		readlink: os.Readlink,
+		rename:   os.Rename,
+		readDir:  os.ReadDir,
+		remove:   os.Remove,
 	}
 }
 
@@ -129,18 +138,27 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 		KeepMemory: opts.keepMemory,
 		MemoryDir:  paths.memoryDir,
 		DataRoot:   paths.dataRoot,
+		Force:      opts.force,
 	}
 	if paths.configDir != "" {
-		a.Backups = append(a.Backups, backupTarget{paths.configDir, "config directory"})
+		a.Backups = append(a.Backups, backupTarget{Path: paths.configDir, Label: "config directory"})
 	}
 	if opts.keepMemory {
 		// Preserve the captured facts (memory); move the rebuildable index aside.
 		if paths.knowledgeDir != "" {
-			a.Backups = append(a.Backups, backupTarget{paths.knowledgeDir, "knowledge database"})
+			a.Backups = append(a.Backups, backupTarget{Path: paths.knowledgeDir, Label: "knowledge database", Dangerous: true})
 		}
 	} else if paths.dataRoot != "" {
 		// Move the whole data root aside (captured memory + knowledge index).
-		a.Backups = append(a.Backups, backupTarget{paths.dataRoot, "data directory (memory + knowledge)"})
+		a.Backups = append(a.Backups, backupTarget{Path: paths.dataRoot, Label: "data directory (memory + knowledge)", Dangerous: true})
+		// Honor custom MEMORY_DB / KNOWLEDGE_DB that live OUTSIDE the data root: the
+		// data-root move alone would miss them, so target their dirs explicitly.
+		if paths.memoryDir != "" && !underDir(paths.memoryDir, paths.dataRoot) {
+			a.Backups = append(a.Backups, backupTarget{Path: paths.memoryDir, Label: "memory database", Dangerous: true})
+		}
+		if paths.knowledgeDir != "" && !underDir(paths.knowledgeDir, paths.dataRoot) {
+			a.Backups = append(a.Backups, backupTarget{Path: paths.knowledgeDir, Label: "knowledge database", Dangerous: true})
+		}
 	}
 	if opts.sbx {
 		a.RemoveSandboxes = true
@@ -149,8 +167,9 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 	return a
 }
 
-// moveAside renames path to "<path>.bak-<ts>" if it exists, returning the backup
-// path. A missing path yields errNotExist (a soft "nothing to move").
+// moveAside renames path to a UNIQUE "<path>.bak-<ts>" sibling if it exists,
+// returning the backup path. A missing path yields errNotExist (a soft "nothing
+// to move"). The destination is never allowed to overwrite an existing backup.
 func moveAside(fsys resetFS, path string, ts int64) (string, error) {
 	if path == "" {
 		return "", errNotExist
@@ -161,34 +180,105 @@ func moveAside(fsys resetFS, path string, ts int64) (string, error) {
 		}
 		return "", err
 	}
-	dest := fmt.Sprintf("%s.bak-%d", path, ts)
+	dest := uniqueBackupPath(fsys, fmt.Sprintf("%s.bak-%d", path, ts))
 	if err := fsys.rename(path, dest); err != nil {
 		return "", err
 	}
 	return dest, nil
 }
 
+// uniqueBackupPath returns base if nothing exists there, else base-1, base-2, …
+// (and finally a random suffix as a safety net) so a second-resolution timestamp
+// collision never overwrites an existing backup.
+func uniqueBackupPath(fsys resetFS, base string) string {
+	if !fsPathExists(fsys, base) {
+		return base
+	}
+	for i := 1; i < 10000; i++ {
+		cand := fmt.Sprintf("%s-%d", base, i)
+		if !fsPathExists(fsys, cand) {
+			return cand
+		}
+	}
+	return fmt.Sprintf("%s-%d", base, rand.Int63())
+}
+
+// fsPathExists reports whether anything (file, dir, or symlink) is present at
+// path, using lstat so a symlink counts and is never followed.
+func fsPathExists(fsys resetFS, path string) bool {
+	if fsys.lstat != nil {
+		_, err := fsys.lstat(path)
+		return err == nil
+	}
+	if fsys.stat != nil {
+		_, err := fsys.stat(path)
+		return err == nil
+	}
+	return false
+}
+
+// underDir reports whether path is dir itself or nested inside it.
+func underDir(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." && !filepath.IsAbs(rel))
+}
+
+// serveStillUp probes whether `pi-stack-host serve` is still answering on the
+// memory port (env-aware), so the executor can refuse the dangerous data move
+// after a best-effort stop failed to bring it down.
+func serveStillUp(env shellEnv) bool {
+	if env.dial == nil {
+		return false
+	}
+	return env.dial(servePort(env, "MEMORY_PORT", memoryPortDefault))
+}
+
 // executeReset performs the plan: stop services (best-effort), move each backup
 // aside, sweep the data root for non-memory entries under --keep-memory, then
 // run the sbx removals. It never hard-removes. Returns the created .bak paths
 // (for the summary's restore hint).
-func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now func() time.Time) []string {
+// It returns the created .bak paths AND a non-nil error if ANY move-aside or
+// sweep failed (or the serve-still-up guard blocked the data move). A partial
+// reset must NOT report success: the caller uses the error to exit non-zero and
+// (for uninstall) to abort removing the bin symlinks.
+func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now func() time.Time) ([]string, error) {
 	ts := now().Unix()
+	var errs []error
 
 	// 1. Best-effort stop of the host services so they don't hold the db files.
 	stopHostServices(env, out)
+
+	// 1b. Verify serve is ACTUALLY down before we move the data dir. Renaming
+	// ~/.pi-stack out from under a live sqlite writer splits the db from its wal.
+	// The config-dir backup stays safe; only the DATA moves are gated. --force
+	// overrides (the user accepts the risk).
+	dataBlocked := false
+	if !a.Force && serveStillUp(env) {
+		dataBlocked = true
+		msg := "serve is still running after the stop attempt — refusing to move the data directory (a live sqlite writer would be split from its db/wal); stop it with 'pi-stack serve stop' or re-run with --force"
+		fmt.Fprintf(out, "  ✗ %s\n", msg)
+		errs = append(errs, errors.New(msg))
+	}
 
 	// 2. Move each explicit backup aside.
 	var created []string
 	moved := map[string]bool{}
 	fmt.Fprintln(out, "Backing up state (moved aside, not deleted):")
 	for _, b := range a.Backups {
+		if b.Dangerous && dataBlocked {
+			fmt.Fprintf(out, "  · %s: %s — SKIPPED (serve still up)\n", b.Label, b.Path)
+			continue
+		}
 		dest, err := moveAside(fsys, b.Path, ts)
 		switch {
 		case errors.Is(err, errNotExist):
 			fmt.Fprintf(out, "  · %s: %s — nothing to move\n", b.Label, b.Path)
 		case err != nil:
 			fmt.Fprintf(out, "  ✗ %s: could not move %s — %v\n", b.Label, b.Path, err)
+			errs = append(errs, fmt.Errorf("move %s: %w", b.Path, err))
 		default:
 			moved[b.Path] = true
 			created = append(created, dest)
@@ -197,23 +287,30 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 	}
 
 	// 3. --keep-memory: sweep the data root, moving aside every entry that is not
-	// `memory` (and not a backup we just created), so "anything else" beside the
-	// preserved facts is reset too.
-	if a.KeepMemory && a.DataRoot != "" {
+	// the RESOLVED memory dir (honoring a custom MEMORY_DB, not a hardcoded name)
+	// and not a backup we just created, so "anything else" beside the preserved
+	// facts is reset too. Skipped when the data move was blocked.
+	if a.KeepMemory && a.DataRoot != "" && !dataBlocked {
 		if entries, err := fsys.readDir(a.DataRoot); err == nil {
 			for _, e := range entries {
 				name := e.Name()
-				if name == "memory" || strings.Contains(name, ".bak-") {
-					continue
-				}
 				p := filepath.Join(a.DataRoot, name)
+				if p == a.MemoryDir || strings.Contains(name, ".bak-") {
+					continue // preserve the resolved memory dir
+				}
 				if moved[p] {
 					continue // already handled (the explicit knowledge target)
 				}
-				if dest, mErr := moveAside(fsys, p, ts); mErr == nil {
-					created = append(created, dest)
-					fmt.Fprintf(out, "  ✓ %s -> %s\n", p, dest)
+				dest, mErr := moveAside(fsys, p, ts)
+				if mErr != nil {
+					if !errors.Is(mErr, errNotExist) {
+						fmt.Fprintf(out, "  ✗ could not move %s — %v\n", p, mErr)
+						errs = append(errs, fmt.Errorf("move %s: %w", p, mErr))
+					}
+					continue
 				}
+				created = append(created, dest)
+				fmt.Fprintf(out, "  ✓ %s -> %s\n", p, dest)
 			}
 		}
 		fmt.Fprintf(out, "  ✓ preserved captured memory: %s\n", a.MemoryDir)
@@ -225,7 +322,7 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 	if a.RemoveSandboxes {
 		executeSbxReset(a, env, out)
 	}
-	return created
+	return created, errors.Join(errs...)
 }
 
 // stopServeForReset is the serve-stop the reset executor uses, indirected through
@@ -354,9 +451,9 @@ func runResetCore(cfg *config.Config, paths resetPaths, opts resetOpts,
 		}
 	}
 
-	created := executeReset(a, fsys, env, rio.out, now)
+	created, execErr := executeReset(a, fsys, env, rio.out, now)
 	printResetSummary(created, rio.out)
-	return nil
+	return execErr
 }
 
 // parseResetArgs parses the reset/uninstall flag set (shared: both accept
@@ -372,6 +469,8 @@ func parseResetArgs(argv []string, allowSbx bool) (resetOpts, error) {
 			o.keepMemory = true
 		case "--yes", "-y":
 			o.assumeYes = true
+		case "--force":
+			o.force = true
 		case "--sbx":
 			if !allowSbx {
 				return o, fmt.Errorf("unknown flag %q", a)
@@ -446,12 +545,34 @@ func removeBinSymlinks(bins []string, fsys resetFS, out io.Writer) {
 			fmt.Fprintf(out, "  · %s — not a symlink (not ours), left in place\n", p)
 			continue
 		}
+		// Only remove a symlink that actually points at OUR binary — an unrelated
+		// symlink that happens to sit in a bin slot is left alone + reported.
+		target, lerr := fsys.readlink(p)
+		if lerr != nil {
+			fmt.Fprintf(out, "  ✗ %s — could not read symlink target: %v\n", p, lerr)
+			continue
+		}
+		if !isOurBinTarget(target) {
+			fmt.Fprintf(out, "  · %s -> %s — not a pi-stack binary, left in place\n", p, target)
+			continue
+		}
 		if err := fsys.remove(p); err != nil {
 			fmt.Fprintf(out, "  ✗ %s — could not remove: %v\n", p, err)
 		} else {
 			fmt.Fprintf(out, "  ✓ removed symlink %s\n", p)
 		}
 	}
+}
+
+// isOurBinTarget reports whether a bin-slot symlink's target is one of our
+// launcher binaries: its basename is pi-stack / pi-stack-host, OR it resolves
+// into a path that contains "pi-stack" (e.g. a repo checkout's out/pi-stack).
+func isOurBinTarget(target string) bool {
+	base := filepath.Base(target)
+	if base == "pi-stack" || base == "pi-stack-host" {
+		return true
+	}
+	return strings.Contains(target, "pi-stack")
 }
 
 // runUninstallCore runs the full reset, then removes the bin symlinks. Split for
@@ -476,7 +597,15 @@ func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts 
 		}
 	}
 
-	created := executeReset(a, fsys, env, rio.out, now)
+	created, execErr := executeReset(a, fsys, env, rio.out, now)
+	if execErr != nil {
+		// The state backup failed (or was blocked) — do NOT remove the bin symlinks.
+		// Stranding the user with no binaries after a failed backup is the worst
+		// outcome; leave the working install in place so they can retry.
+		fmt.Fprintln(rio.out, "Reset backup failed — leaving the pi-stack + pi-stack-host bin symlinks in place (not uninstalling).")
+		printResetSummary(created, rio.out)
+		return execErr
+	}
 	removeBinSymlinks(bins, fsys, rio.out)
 	printResetSummary(created, rio.out)
 	return nil
