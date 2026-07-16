@@ -287,6 +287,13 @@ install: launcher ## Build + put the Go binaries (out/pi-stack launcher + out/pi
 	ln -sf $(CURDIR)/out/pi-stack-host $(HOME)/.local/bin/pi-stack-host
 	@echo "Installed: pi-stack -> $(CURDIR)/out/pi-stack"
 	@echo "Installed: pi-stack-host -> $(CURDIR)/out/pi-stack-host"
+	@# Drop the man page on the user manpath too (bonus; the binary embed is the
+	@# guarantee, so `pi-stack man` works with or without this). No sudo.
+	mkdir -p $(HOME)/.local/share/man/man1
+	cp services/host/cmd/pi-stack/pi-stack.1 $(HOME)/.local/share/man/man1/pi-stack.1
+	@echo "Installed: man page -> $(HOME)/.local/share/man/man1/pi-stack.1"
+	@manpath 2>/dev/null | tr ':' '\n' | grep -qx "$(HOME)/.local/share/man" \
+		|| echo "Tip: add ~/.local/share/man to MANPATH for \`man pi-stack\` (or just use \`pi-stack man\`)."
 	@if [ ! -f config/local.mk ]; then \
 		cp config/local.mk.example config/local.mk; \
 		echo "Created config/local.mk — edit it to pick SERVICES, MCP, models, then: make serve / make run"; \

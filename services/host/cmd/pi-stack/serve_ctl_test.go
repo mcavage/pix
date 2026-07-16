@@ -181,23 +181,28 @@ func TestStopServe_SurvivesSIGTERM_Escalates(t *testing.T) {
 	}
 }
 
-// TestStopServe_UnverifiableTrustsPidfile: no /proc (known=false) => trust the
-// pidfile and still SIGTERM, with a note.
-func TestStopServe_UnverifiableTrustsPidfile(t *testing.T) {
+// TestStopServe_UnverifiableRefuses: no /proc AND ps unavailable (known=false) =>
+// ownership cannot be positively verified, so stopServe REFUSES to signal (never
+// trusts the pidfile alone: a stale/reused pid would otherwise get SIGTERM). No
+// signal is delivered and the pidfile is left in place.
+func TestStopServe_UnverifiableRefuses(t *testing.T) {
 	removed := false
 	proc := &fakeProc{pid: 88, alive: true, dieOnTerm: true}
-	unknown := func(int) (bool, bool) { return false, false } // can't tell (darwin)
+	unknown := func(int) (bool, bool) { return false, false } // can't tell (no /proc, no ps)
 	ctl := ctlFor("88", nil, proc, &removed, unknown)
 	var buf bytes.Buffer
 	stopped, err := stopServe(ctl, &buf)
-	if err != nil || !stopped {
-		t.Fatalf("stopped=%v err=%v, want true,nil", stopped, err)
+	if err != nil || stopped {
+		t.Fatalf("stopped=%v err=%v, want false,nil", stopped, err)
 	}
-	if len(proc.sigs) != 1 || proc.sigs[0] != syscall.SIGTERM {
-		t.Errorf("want one SIGTERM when trusting the pidfile, got %v", proc.sigs)
+	if len(proc.sigs) != 0 {
+		t.Errorf("must NOT signal an unverifiable pid, got %v", proc.sigs)
 	}
-	if !strings.Contains(buf.String(), "cannot verify") {
-		t.Errorf("want an unverifiable note, got %q", buf.String())
+	if removed {
+		t.Error("must not remove the pidfile of an unverifiable live process")
+	}
+	if !strings.Contains(buf.String(), "cannot verify") || !strings.Contains(buf.String(), "refusing to signal") {
+		t.Errorf("want a refusal message, got %q", buf.String())
 	}
 }
 

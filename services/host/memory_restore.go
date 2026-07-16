@@ -11,13 +11,17 @@
 //  3. Read the ARCHIVED db's ACTUAL user_version and cross-check it against the
 //     manifest AND the supported version (refuse a newer/mismatched db), then
 //     integrity-check it before trusting it near the live db.
-//  4. Refuse to overwrite an existing live db unless --force is given.
-//  5. Re-probe serve is STILL down (narrow the TOCTOU), then swap safely: stage
-//     the validated db into a UNIQUE dest-dir temp, move the CURRENT state
-//     (db + -wal + -shm) ASIDE into a unique .bak-<ts>-<rand> set (kept, never
-//     deleted; no stale sidecar left to replay), then os.Rename the staged file
-//     into place LAST (atomic on POSIX). On any failure at/before the final
-//     rename, ROLL the moved-aside set back so the live db is never missing.
+//  4. Verify the archived db actually carries the memory schema, then refuse to
+//     overwrite an existing live db unless --force is given.
+//  5. Stage the validated db into a UNIQUE dest-dir temp, RE-PROBE serve is STILL
+//     down IMMEDIATELY before the first live-file rename (the stage copy can be
+//     large, so this is the tightest TOCTOU point), then move the CURRENT state
+//     (db + -wal + -shm, including any ORPHAN sidecar with no main db) ASIDE into
+//     a unique .bak-<ts>-<rand> set (kept, never deleted; no stale sidecar left
+//     to replay), then os.Rename the staged file into place LAST (atomic on
+//     POSIX). On any failure at/before the final rename, ROLL the moved-aside set
+//     back so the live db is never missing — and if that rollback itself fails,
+//     return a LOUD error instead of silently continuing.
 //  6. Report the row count + the .bak path of the previous db. The FTS index
 //     travels inside memory.db (content table) — no rebuild needed.
 //
@@ -35,6 +39,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -71,6 +76,10 @@ type restoreParams struct {
 	// swapRename performs the FINAL staged->live rename. nil -> os.Rename. Tests
 	// inject a failure here to prove the rollback path restores the previous db.
 	swapRename func(oldpath, newpath string) error
+	// moveRename performs the move-aside AND rollback renames (current db/sidecars
+	// <-> .bak set). nil -> os.Rename. Tests inject a failure on the ROLLBACK
+	// direction to prove a failed rollback is surfaced LOUDLY.
+	moveRename func(oldpath, newpath string) error
 }
 
 // restoreResult reports what happened, for the CLI to print.
@@ -107,6 +116,10 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 	rename := p.swapRename
 	if rename == nil {
 		rename = os.Rename
+	}
+	moveRename := p.moveRename
+	if moveRename == nil {
+		moveRename = os.Rename
 	}
 
 	// 1. REFUSE if a serve daemon is up — it would write to the db while we swap
@@ -161,6 +174,14 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 		return restoreResult{}, err
 	}
 
+	// 3b. Integrity + user_version can PASS on a db that is missing the memory
+	// schema (e.g. a valid-but-empty sqlite file with user_version=1). Swapping
+	// that in yields an unusable live db (countLiveRows would then fail). Verify
+	// the archived db actually carries the memory store BEFORE touching live state.
+	if err := verifyArchivedUsable(archivedDB); err != nil {
+		return restoreResult{}, err
+	}
+
 	// 4. Guard against a silent clobber of an existing live db.
 	liveExists := fileExists(p.LiveDBPath)
 	if liveExists && !p.Force {
@@ -172,27 +193,34 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 		return restoreResult{}, fmt.Errorf("dest dir: %w", err)
 	}
 
-	// 4b. Re-probe serve is STILL down immediately before we start touching files
-	// (narrow the TOCTOU: serve could have been started between step 1 and now).
-	if p.ServeProbe != nil && p.ServeProbe() {
-		return restoreResult{}, fmt.Errorf("memory serve came up during restore; aborted before any swap — stop it and retry")
-	}
-
 	// 5a. Stage the validated db into a UNIQUE temp in the DEST dir (os.CreateTemp,
 	// not a predictable name) so the final rename is same-filesystem and atomic.
+	// This copy can be large; it does NOT touch live state, so it is safe to do
+	// BEFORE the final serve re-probe.
 	staged, err := stageRestoredDB(destDir, archivedDB)
 	if err != nil {
 		return restoreResult{}, fmt.Errorf("stage restored db: %w", err)
 	}
 	defer os.Remove(staged) // best-effort: gone after a successful rename
 
-	// 5b. Move the CURRENT state aside COMPLETELY (db + -wal + -shm) into a unique
+	// 5b. Re-probe serve is STILL down IMMEDIATELY before the first rename that
+	// touches live files. The stage copy above can take a while (up to ~200MB), so
+	// the earlier probe would leave a window where serve starts DURING the copy;
+	// this is the last safe point to bail with zero live-state mutation.
+	if p.ServeProbe != nil && p.ServeProbe() {
+		return restoreResult{}, fmt.Errorf("memory serve came up during restore; aborted before any swap — stop it and retry")
+	}
+
+	// 5c. Move the CURRENT state aside COMPLETELY (db + -wal + -shm) into a unique
 	// .bak-<ts>-<rand> set, so no committed WAL data is lost and no stale sidecar
-	// is left at the dest to replay onto the restored file.
+	// is left at the dest to replay onto the restored file. This runs even when the
+	// main db is ABSENT: a prior failed run can leave an ORPHAN -wal/-shm with NO
+	// main db, and installing the restored db beside a stale WAL would replay it.
 	stamp := now.Format("20060102-150405")
 	bakBase := ""
 	var movedAside [][2]string // [from, to] pairs, for rollback
-	if liveExists {
+	needMove := liveExists || pathExists(p.LiveDBPath+"-wal") || pathExists(p.LiveDBPath+"-shm")
+	if needMove {
 		token, err := restoreToken()
 		if err != nil {
 			return restoreResult{}, err
@@ -204,19 +232,24 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 				continue
 			}
 			dst := bakBase + sc
-			if err := os.Rename(src, dst); err != nil {
-				// Roll back anything already moved before we bail.
-				rollbackMoves(movedAside)
+			if err := moveRename(src, dst); err != nil {
+				// Roll back anything already moved before we bail. A rollback that
+				// itself FAILS is surfaced LOUDLY (the live db may now be missing).
+				if rbErr := rollbackMoves(moveRename, movedAside); rbErr != nil {
+					return restoreResult{}, fmt.Errorf("move current %s aside failed (%v) AND rollback FAILED — live db may be missing: %w", src, err, rbErr)
+				}
 				return restoreResult{}, fmt.Errorf("move current %s aside: %w", src, err)
 			}
 			movedAside = append(movedAside, [2]string{src, dst})
 		}
 	}
 
-	// 5c. Atomic move into place LAST. On failure, ROLL BACK the moved-aside set so
-	// the live db is never left missing.
+	// 5d. Atomic move into place LAST. On failure, ROLL BACK the moved-aside set so
+	// the live db is never left missing; a rollback that itself FAILS is LOUD.
 	if err := rename(staged, p.LiveDBPath); err != nil {
-		rollbackMoves(movedAside)
+		if rbErr := rollbackMoves(moveRename, movedAside); rbErr != nil {
+			return restoreResult{}, fmt.Errorf("swap failed (%v) AND rollback FAILED — live db may be missing: %w", err, rbErr)
+		}
 		return restoreResult{}, fmt.Errorf("swap restored db into place: %w", err)
 	}
 
@@ -235,11 +268,43 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 }
 
 // rollbackMoves undoes a set of [from,to] renames (in reverse), restoring the
-// previous db + sidecars to their original paths. Best-effort per entry.
-func rollbackMoves(moves [][2]string) {
+// previous db + sidecars to their original paths. It attempts EVERY entry and
+// returns a joined error if ANY rename back fails — a failed rollback means the
+// live db may be left missing, so the caller must surface it loudly rather than
+// silently continue.
+func rollbackMoves(rename func(oldpath, newpath string) error, moves [][2]string) error {
+	var errs []error
 	for i := len(moves) - 1; i >= 0; i-- {
-		_ = os.Rename(moves[i][1], moves[i][0])
+		if err := rename(moves[i][1], moves[i][0]); err != nil {
+			errs = append(errs, fmt.Errorf("restore %s: %w", moves[i][0], err))
+		}
 	}
+	return errors.Join(errs...)
+}
+
+// verifyArchivedUsable opens the archived db read-only and confirms it carries
+// the memory store schema (the `memories` + `memories_fts` tables). A db can
+// pass integrity_check + a version gate while missing these tables entirely
+// (e.g. an empty or unrelated sqlite file), which would swap in an unusable live
+// db that only fails LATER at countLiveRows — after the live db was clobbered.
+func verifyArchivedUsable(path string) error {
+	db, err := sql.Open("sqlite", readOnlyDSN(path))
+	if err != nil {
+		return fmt.Errorf("open archived db: %w", err)
+	}
+	defer db.Close()
+	for _, tbl := range []string{"memories", "memories_fts"} {
+		var name string
+		if err := db.QueryRow(
+			"SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tbl,
+		).Scan(&name); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("archived db is not a usable memory store: missing %q table", tbl)
+			}
+			return fmt.Errorf("archived db is not a usable memory store (checking %q table): %w", tbl, err)
+		}
+	}
+	return nil
 }
 
 // stageRestoredDB copies archivedDB into a UNIQUE temp file in destDir (via

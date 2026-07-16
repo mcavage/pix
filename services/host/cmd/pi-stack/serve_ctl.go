@@ -52,10 +52,10 @@ func defaultServeCtl() serveCtl {
 // verifyServeProc reports whether pid is OUR `pi-stack-host serve` process.
 // Linux: read /proc/<pid>/cmdline (authoritative). Elsewhere (darwin/BSD, no
 // /proc): fall back to `ps -o command= -p <pid>`. known=false means the check is
-// unavailable (no /proc AND no usable ps) so the caller falls back to trusting
-// the pidfile it wrote. ours=false with known=true means the pid is ALIVE but
-// clearly NOT our process (a recycled/hijacked pid) — the caller must REFUSE to
-// kill it.
+// unavailable (no /proc AND no usable ps) so ownership CANNOT be positively
+// verified — the caller must REFUSE to signal rather than trust the pidfile.
+// ours=false with known=true means the pid is ALIVE but clearly NOT our process
+// (a recycled/hijacked pid) — the caller must also REFUSE to kill it.
 func verifyServeProc(pid int) (ours bool, known bool) {
 	if b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid)); err == nil {
 		// cmdline is a NUL-separated argv (with a trailing NUL).
@@ -72,7 +72,8 @@ func verifyServeProc(pid int) (ours bool, known bool) {
 // verifyServeProcPS is the darwin/BSD verify path: it asks `ps` for the target
 // pid's command line and matches it. run is injected so it is unit-testable
 // without a real process. A ps failure (absent, or the pid already gone) yields
-// known=false so the caller trusts the pidfile it wrote rather than refusing.
+// known=false: ownership cannot be positively verified, so the caller REFUSES to
+// signal rather than trust the pidfile it wrote.
 func verifyServeProcPS(pid int, run func(name string, args ...string) (string, error)) (ours bool, known bool) {
 	out, err := run("ps", "-o", "command=", "-p", strconv.Itoa(pid))
 	if err != nil {
@@ -172,10 +173,12 @@ func stopServe(ctl serveCtl, out io.Writer) (stopped bool, err error) {
 }
 
 // serveOwnershipRefused re-checks (via ctl.verify) that pid is still our serve
-// process right before a signal, printing + returning true when we must REFUSE
-// (alive but verified NOT ours). `when` is a short phase label folded into the
-// message. A !known result (verify unavailable) is trusted with a note, never a
-// refusal.
+// process right before a signal, printing + returning true when we must REFUSE.
+// `when` is a short phase label folded into the message. We REFUSE in BOTH
+// unsafe cases: the pid is alive but verified NOT ours (known && !ours), AND when
+// ownership cannot be positively verified at all (!known: no /proc and ps is
+// missing/errored). Signalling an UNVERIFIABLE pid would SIGTERM/SIGKILL a
+// stale/reused pid from the pidfile — so we never trust the pidfile alone.
 func serveOwnershipRefused(ctl serveCtl, pid int, path, when string, out io.Writer) bool {
 	ours, known := ctl.verify(pid)
 	switch {
@@ -183,7 +186,8 @@ func serveOwnershipRefused(ctl serveCtl, pid int, path, when string, out io.Writ
 		fmt.Fprintf(out, "refusing to stop pid %d — %s. Remove %s if you're sure.\n", pid, when, path)
 		return true
 	case !known:
-		fmt.Fprintf(out, "note: cannot verify pid %d via ps/proc (%s) — trusting the pidfile we wrote\n", pid, when)
+		fmt.Fprintf(out, "cannot verify pid %d is 'pi-stack-host serve' (%s); refusing to signal (remove %s if you're certain)\n", pid, when, path)
+		return true
 	}
 	return false
 }

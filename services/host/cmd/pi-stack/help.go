@@ -33,7 +33,7 @@ var knownVerbs = map[string]bool{
 	"help": true, "serve": true, "doctor": true, "setup": true, "status": true,
 	"config": true, "mcp": true, "memory": true, "knowledge": true,
 	"profile": true, "version": true, "run": true, "secret": true,
-	"reset": true, "uninstall": true,
+	"reset": true, "uninstall": true, "man": true,
 }
 
 // verbUsage maps a verb (including its aliases) to its usage text, so
@@ -65,6 +65,8 @@ func verbUsage(verb string) (string, bool) {
 		return secretUsage, true
 	case "version":
 		return versionUsage, true
+	case "man":
+		return manUsage, true
 	case "reset":
 		return resetUsage, true
 	case "uninstall":

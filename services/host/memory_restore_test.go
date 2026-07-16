@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -449,8 +450,17 @@ func TestMemoryRestoreReprobeAbortsBeforeSwap(t *testing.T) {
 	}
 
 	calls := 0
+	stagedBeforeReprobe := false
 	probe := func() bool {
 		calls++
+		if calls == 2 {
+			// The re-probe must run AFTER staging the validated copy (its whole
+			// point is to catch serve starting DURING the potentially-large stage
+			// copy). Assert a staged temp already exists at the dest by now.
+			if m, _ := filepath.Glob(filepath.Join(filepath.Dir(dbPath), ".memory-restore-*.tmp")); len(m) > 0 {
+				stagedBeforeReprobe = true
+			}
+		}
 		return calls > 1 // down on first probe, up on the re-probe
 	}
 	if _, err := memoryRestore(restoreParams{
@@ -462,6 +472,9 @@ func TestMemoryRestoreReprobeAbortsBeforeSwap(t *testing.T) {
 	if calls < 2 {
 		t.Errorf("ServeProbe called %d times; the pre-swap re-probe did not run", calls)
 	}
+	if !stagedBeforeReprobe {
+		t.Error("the re-probe ran BEFORE staging; it must run AFTER the staged copy exists (right before the first live-file rename)")
+	}
 	after, err := os.ReadFile(dbPath)
 	if err != nil {
 		t.Fatalf("live db missing after aborted restore: %v", err)
@@ -471,6 +484,120 @@ func TestMemoryRestoreReprobeAbortsBeforeSwap(t *testing.T) {
 	}
 	if m, _ := filepath.Glob(dbPath + ".bak-*"); len(m) != 0 {
 		t.Errorf("aborted restore left a .bak: %v", m)
+	}
+}
+
+// TestMemoryRestoreClearsOrphanSidecarWithoutLiveDB proves a -wal/-shm left at
+// the dest by a PRIOR failed run — with NO main db present — is cleared before
+// the restored db is installed, so a stale WAL cannot replay onto it.
+func TestMemoryRestoreClearsOrphanSidecarWithoutLiveDB(t *testing.T) {
+	st, dbPath := seedMemDB(t, 2)
+	archive := backupSeeded(t, dbPath)
+	st.db.Close()
+
+	// Remove the main db + -shm, leaving an ORPHAN -wal with no main db.
+	for _, sc := range []string{dbPath, dbPath + "-shm"} {
+		_ = os.Remove(sc)
+	}
+	walPath := dbPath + "-wal"
+	if err := os.WriteFile(walPath, []byte("orphan wal from a prior failed run"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// No live main db exists, so --force is not required.
+	if _, err := memoryRestore(restoreParams{
+		ArchivePath: archive, LiveDBPath: dbPath, Force: false,
+		Now: time.Now(), ServeProbe: func() bool { return false },
+	}); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Stat(walPath); !os.IsNotExist(err) {
+		t.Errorf("orphan -wal still at dest after restore (err=%v); must be cleared", err)
+	}
+	if err := integrityCheckDB(dbPath); err != nil {
+		t.Fatalf("restored db integrity: %v", err)
+	}
+}
+
+// TestMemoryRestoreRefusesArchiveMissingMemoriesTable proves an archived db that
+// passes integrity_check + the version gate but is MISSING the memories schema
+// is refused BEFORE any swap, leaving the live db intact (otherwise it would be
+// clobbered and only fail later at the row recount).
+func TestMemoryRestoreRefusesArchiveMissingMemoriesTable(t *testing.T) {
+	st, dbPath := seedMemDB(t, 2)
+	st.db.Close()
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A VALID sqlite db (integrity ok, user_version=1) with NO memories table.
+	dir := t.TempDir()
+	emptyDB := filepath.Join(dir, "memory.db")
+	edb, err := sql.Open("sqlite", emptyDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := edb.Exec("CREATE TABLE unrelated(x)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := edb.Exec("PRAGMA user_version = 1"); err != nil {
+		t.Fatal(err)
+	}
+	edb.Close()
+
+	manifest := backupManifest{FormatVersion: backupFormatVersion, SqliteUserVersion: 1}
+	archive := filepath.Join(dir, "no-memories.tar.gz")
+	if err := writeBackupArchive(archive, emptyDB, "", "", manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := memoryRestore(restoreParams{
+		ArchivePath: archive, LiveDBPath: dbPath, Force: true,
+		Now: time.Now(), ServeProbe: func() bool { return false },
+	}); err == nil {
+		t.Fatal("restore accepted an archived db missing the memories table; want refusal")
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("live db missing after refused restore: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("live db mutated by refused restore (%d -> %d bytes)", len(before), len(after))
+	}
+	if m, _ := filepath.Glob(dbPath + ".bak-*"); len(m) != 0 {
+		t.Errorf("refused restore left a .bak: %v", m)
+	}
+}
+
+// TestMemoryRestoreSurfacesRollbackFailure proves that when the FINAL swap fails
+// AND the rollback of the moved-aside previous db ALSO fails, memoryRestore
+// returns a LOUD error (the live db may be missing) instead of silently
+// continuing — the "never left missing" guarantee must be real or loudly reported.
+func TestMemoryRestoreSurfacesRollbackFailure(t *testing.T) {
+	st, dbPath := seedMemDB(t, 3)
+	archive := backupSeeded(t, dbPath)
+	st.db.Close()
+
+	injectedSwap := fmt.Errorf("injected swap failure")
+	moveRename := func(oldpath, newpath string) error {
+		if strings.Contains(newpath, ".bak-") {
+			return os.Rename(oldpath, newpath) // aside move: perform it for real
+		}
+		return fmt.Errorf("injected rollback failure") // rollback (bak -> live): fail
+	}
+	_, err := memoryRestore(restoreParams{
+		ArchivePath: archive, LiveDBPath: dbPath, Force: true,
+		Now: time.Now(), ServeProbe: func() bool { return false },
+		swapRename: func(_, _ string) error { return injectedSwap },
+		moveRename: moveRename,
+	})
+	if err == nil {
+		t.Fatal("want an error when the final swap AND its rollback both fail")
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "rollback") || !strings.Contains(msg, "live db may be missing") {
+		t.Errorf("rollback failure not surfaced loudly: %v", err)
 	}
 }
 

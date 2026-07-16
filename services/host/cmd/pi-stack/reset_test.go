@@ -233,7 +233,12 @@ func TestUninstall_RemovesBinSymlinks(t *testing.T) {
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	target := filepath.Join(root, "real-pi-stack")
+	// A repo checkout's launcher: basename is exactly "pi-stack" (what we install).
+	outDir := filepath.Join(root, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(outDir, "pi-stack")
 	writeFile(t, target, "binary")
 	link := filepath.Join(bin, "pi-stack")
 	if err := os.Symlink(target, link); err != nil {
@@ -447,41 +452,161 @@ func TestMoveAside_NoOverwrite(t *testing.T) {
 	}
 }
 
-// TestUninstall_LeavesUnrelatedSymlink: a symlink in a bin slot that points at
-// something OTHER than our binary is left in place + reported, not removed.
-func TestUninstall_LeavesUnrelatedSymlink(t *testing.T) {
+// TestUninstall_LeavesUnrelatedSymlinks: symlinks in bin slots whose target
+// BASENAME is not EXACTLY pi-stack/pi-stack-host are left in place + reported —
+// both a genuinely unrelated target AND a DECEPTIVE one whose path merely
+// CONTAINS "pi-stack" (a substring match would wrongly delete it).
+func TestUninstall_LeavesUnrelatedSymlinks(t *testing.T) {
 	stubStopServe(t)
 	root := t.TempDir()
 	p := tempPaths(t, root)
 
 	bin := filepath.Join(root, "bin")
-	other := filepath.Join(root, "usr", "bin", "ripgrep")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Dir(other), 0o755); err != nil {
+	// A genuinely unrelated target, and a DECEPTIVE one (path contains "pi-stack"
+	// but its basename does NOT match our binaries).
+	other := filepath.Join(root, "opt", "other-tool")
+	deceptive := filepath.Join(root, "opt", "pi-stack-ish-wrapper")
+	for _, tgt := range []string{other, deceptive} {
+		if err := os.MkdirAll(filepath.Dir(tgt), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tgt, []byte("x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	linkA := filepath.Join(bin, "pi-stack")      // -> /opt/other-tool
+	linkB := filepath.Join(bin, "pi-stack-host") // -> /opt/pi-stack-ish-wrapper
+	if err := os.Symlink(other, linkA); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(other, []byte("rg"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// A symlink at our pi-stack-host slot but pointing at an unrelated binary.
-	link := filepath.Join(bin, "pi-stack-host")
-	if err := os.Symlink(other, link); err != nil {
+	if err := os.Symlink(deceptive, linkB); err != nil {
 		t.Fatal(err)
 	}
 
 	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
-	if err := runUninstallCore(resetCfg(), p, []string{link}, resetOpts{assumeYes: true},
+	if err := runUninstallCore(resetCfg(), p, []string{linkA, linkB}, resetOpts{assumeYes: true},
 		defaultResetFS(), noToolEnv(), rio, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !exists(link) {
-		t.Error("uninstall must NOT remove an unrelated symlink")
+	if !exists(linkA) {
+		t.Error("uninstall must NOT remove an unrelated symlink (/opt/other-tool)")
+	}
+	if !exists(linkB) {
+		t.Error("uninstall must NOT remove a deceptive substring symlink (/opt/pi-stack-ish-wrapper)")
 	}
 	out := rio.out.(*bytes.Buffer).String()
 	if !strings.Contains(out, "not a pi-stack binary") {
 		t.Errorf("want a 'left in place' report, got %q", out)
+	}
+}
+
+// TestExecuteReset_CustomDBOutsideRootMovesFileOnly: a custom MEMORY_DB pointing
+// at a file OUTSIDE the data root moves ONLY that file (+ its -wal sidecar),
+// NEVER the parent dir or an unrelated sibling in it.
+func TestExecuteReset_CustomDBOutsideRootMovesFileOnly(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	dataRoot := filepath.Join(root, ".pi-stack")
+	if err := os.MkdirAll(dataRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A custom MEMORY_DB in a SHARED dir alongside an unrelated file.
+	docs := filepath.Join(root, "Documents")
+	if err := os.MkdirAll(docs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	memDB := filepath.Join(docs, "memory.db")
+	writeFile(t, memDB, "facts")
+	writeFile(t, memDB+"-wal", "wal")
+	unrelated := filepath.Join(docs, "taxes.pdf")
+	writeFile(t, unrelated, "important")
+
+	p := resetPaths{
+		configDir: filepath.Join(root, "config"),
+		dataRoot:  dataRoot,
+		memoryDir: docs,  // dir(MEMORY_DB)
+		memoryDB:  memDB, // the custom file path
+	}
+	a := resetPlan(resetCfg(), p, resetOpts{})
+
+	var buf bytes.Buffer
+	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The db file + its -wal moved aside...
+	if exists(memDB) {
+		t.Error("the custom memory.db file should have moved aside")
+	}
+	if !exists(memDB + ".bak-" + fixedTS) {
+		t.Error("memory.db .bak backup missing")
+	}
+	if exists(memDB + "-wal") {
+		t.Error("the -wal sidecar should have moved aside")
+	}
+	if !exists(memDB + "-wal.bak-" + fixedTS) {
+		t.Error("memory.db-wal .bak backup missing")
+	}
+	// ...but the parent dir and the UNRELATED sibling are UNTOUCHED.
+	if !exists(docs) {
+		t.Error("the parent dir must NOT be moved (only the db file + sidecars)")
+	}
+	if !exists(unrelated) {
+		t.Error("an unrelated sibling file must NOT be moved")
+	}
+	if exists(docs + ".bak-" + fixedTS) {
+		t.Error("the parent dir must NOT be backed up wholesale")
+	}
+}
+
+// TestExecuteReset_KnowledgePortUpAbortsDataMove: a knowledge-only serve still
+// running (knowledge port up, memory port down) must ALSO block the data move.
+func TestExecuteReset_KnowledgePortUpAbortsDataMove(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	p := tempPaths(t, root)
+	a := resetPlan(resetCfg(), p, resetOpts{})
+
+	env := fakeEnv{present: map[string]bool{}, ports: map[int]bool{knowledgePortDefault: true}}.env()
+	var buf bytes.Buffer
+	_, err := executeReset(a, defaultResetFS(), env, &buf, fixedNow)
+	if err == nil {
+		t.Fatal("a knowledge-only serve still up must block the data move")
+	}
+	if exists(p.dataRoot + ".bak-" + fixedTS) {
+		t.Error("the data dir must NOT move while the knowledge port is up")
+	}
+	if !exists(p.dataRoot) {
+		t.Error("the data dir must be left in place when the move is blocked")
+	}
+	if exists(p.configDir) {
+		t.Error("the config dir (safe) should still be backed up")
+	}
+}
+
+// TestExecuteReset_KeepMemoryReadDirErrorSurfaces: a readDir failure during the
+// keep-memory sweep must surface as a returned error, not be swallowed as
+// success (never report preservation over a dir we could not even scan).
+func TestExecuteReset_KeepMemoryReadDirErrorSurfaces(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	p := tempPaths(t, root)
+	a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+
+	fsys := defaultResetFS()
+	fsys.readDir = func(string) ([]os.DirEntry, error) {
+		return nil, errors.New("permission denied")
+	}
+
+	var buf bytes.Buffer
+	_, err := executeReset(a, fsys, noToolEnv(), &buf, fixedNow)
+	if err == nil {
+		t.Fatal("a readDir failure in the keep-memory sweep must return an error")
+	}
+	if strings.Contains(buf.String(), "preserved captured memory") {
+		t.Error("must NOT report preservation/success over an unreadable data dir")
 	}
 }
 

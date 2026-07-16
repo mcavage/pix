@@ -42,6 +42,14 @@ func main() {
 		os.Exit(2)
 	}
 
+	// A global `--man` may appear anywhere on the command line (before a `--`
+	// terminator): render the embedded man page and exit. It is DISTINCT from the
+	// -h/--help contract — `--help` prints usage, `--man` opens the full page.
+	if rest, ok := extractManFlag(args); ok {
+		runMan(rest)
+		return
+	}
+
 	if len(args) == 0 {
 		// Bare `pi-stack` shows STATUS — never launches a sandbox (launching is
 		// explicit behind `run`). On a fresh host with no config, offer onboarding.
@@ -79,6 +87,8 @@ func main() {
 		runMemory(args[1:])
 	case "knowledge", "kb":
 		runKnowledge(args[1:])
+	case "man":
+		runMan(args[1:])
 	case "profile":
 		runProfile(args[1:])
 	case "reset":
@@ -245,6 +255,7 @@ commands:
   reset [flags]       move stack state aside (reversible)   [--keep-memory --sbx --yes]
   uninstall [flags]   reset, then remove the bin symlinks    [--keep-memory --yes]
   version             print the launcher version
+  man                 render the embedded man page (no MANPATH needed; also --man)
   help [run]          print this help (or run-flag help)
 
 global: --profile NAME   run/read a named profile (work, personal, ...)

@@ -47,6 +47,8 @@ type resetPaths struct {
 	dataRoot     string // ~/.pi-stack (memory/ + knowledge/)
 	memoryDir    string // <dataRoot>/memory or dir(MEMORY_DB): the user's captured facts
 	knowledgeDir string // <dataRoot>/knowledge or dir(KNOWLEDGE_DB): the rebuildable index
+	memoryDB     string // the custom MEMORY_DB file path (set ONLY when MEMORY_DB is given); "" for the default
+	knowledgeDB  string // the custom KNOWLEDGE_DB file path (set ONLY when KNOWLEDGE_DB is given); "" for the default
 }
 
 // backupTarget is one path the reset moves aside, with a human label. Dangerous
@@ -57,6 +59,11 @@ type backupTarget struct {
 	Path      string
 	Label     string
 	Dangerous bool
+	// WithSidecars marks a target that is a DB FILE (not a directory): move only
+	// that file plus its -wal/-shm sidecars, never its parent dir. Used for a
+	// custom MEMORY_DB/KNOWLEDGE_DB that lives OUTSIDE the pi-stack data root (its
+	// parent may hold unrelated files, e.g. ~/Documents).
+	WithSidecars bool
 }
 
 // resetActions is the pure plan: exactly what will be moved + which sbx actions
@@ -112,12 +119,16 @@ func resolveResetPaths(env shellEnv) resetPaths {
 	dataRoot := filepath.Join(home, ".pi-stack")
 	memoryDir := filepath.Join(dataRoot, "memory")
 	knowledgeDir := filepath.Join(dataRoot, "knowledge")
+	memoryDB := ""
+	knowledgeDB := ""
 	if env.getenv != nil {
 		if db := strings.TrimSpace(env.getenv("MEMORY_DB")); db != "" {
 			memoryDir = filepath.Dir(db)
+			memoryDB = db
 		}
 		if db := strings.TrimSpace(env.getenv("KNOWLEDGE_DB")); db != "" {
 			knowledgeDir = filepath.Dir(db)
+			knowledgeDB = db
 		}
 	}
 	return resetPaths{
@@ -125,6 +136,8 @@ func resolveResetPaths(env shellEnv) resetPaths {
 		dataRoot:     dataRoot,
 		memoryDir:    memoryDir,
 		knowledgeDir: knowledgeDir,
+		memoryDB:     memoryDB,
+		knowledgeDB:  knowledgeDB,
 	}
 }
 
@@ -151,13 +164,16 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 	} else if paths.dataRoot != "" {
 		// Move the whole data root aside (captured memory + knowledge index).
 		a.Backups = append(a.Backups, backupTarget{Path: paths.dataRoot, Label: "data directory (memory + knowledge)", Dangerous: true})
-		// Honor custom MEMORY_DB / KNOWLEDGE_DB that live OUTSIDE the data root: the
-		// data-root move alone would miss them, so target their dirs explicitly.
-		if paths.memoryDir != "" && !underDir(paths.memoryDir, paths.dataRoot) {
-			a.Backups = append(a.Backups, backupTarget{Path: paths.memoryDir, Label: "memory database", Dangerous: true})
+		// Honor a custom MEMORY_DB / KNOWLEDGE_DB that lives OUTSIDE the data root:
+		// the data-root move alone would miss it. Move ONLY the db FILE + its
+		// -wal/-shm sidecars, NEVER the whole parent dir (MEMORY_DB=~/Documents/x.db
+		// must not drag all of ~/Documents aside). A whole directory is moved only
+		// for the pi-stack-owned default dir, handled by the data-root move above.
+		if paths.memoryDB != "" && !underDir(paths.memoryDir, paths.dataRoot) {
+			a.Backups = append(a.Backups, backupTarget{Path: paths.memoryDB, Label: "memory database", Dangerous: true, WithSidecars: true})
 		}
-		if paths.knowledgeDir != "" && !underDir(paths.knowledgeDir, paths.dataRoot) {
-			a.Backups = append(a.Backups, backupTarget{Path: paths.knowledgeDir, Label: "knowledge database", Dangerous: true})
+		if paths.knowledgeDB != "" && !underDir(paths.knowledgeDir, paths.dataRoot) {
+			a.Backups = append(a.Backups, backupTarget{Path: paths.knowledgeDB, Label: "knowledge database", Dangerous: true, WithSidecars: true})
 		}
 	}
 	if opts.sbx {
@@ -185,6 +201,36 @@ func moveAside(fsys resetFS, path string, ts int64) (string, error) {
 		return "", err
 	}
 	return dest, nil
+}
+
+// moveFileWithSidecars moves a db FILE plus its -wal/-shm sidecars aside (each to
+// its own unique .bak), without ever touching the parent directory. Absent
+// sidecars are a soft skip; a real move error is collected. It records every
+// moved source in `moved` and returns the created .bak paths + any errors.
+func moveFileWithSidecars(fsys resetFS, b backupTarget, ts int64, moved map[string]bool, out io.Writer) ([]string, []error) {
+	var created []string
+	var errs []error
+	anyMoved := false
+	for _, sc := range []string{"", "-wal", "-shm"} {
+		src := b.Path + sc
+		dest, err := moveAside(fsys, src, ts)
+		switch {
+		case errors.Is(err, errNotExist):
+			// sidecar (or file) absent — nothing to move for this suffix.
+		case err != nil:
+			fmt.Fprintf(out, "  ✗ %s: could not move %s — %v\n", b.Label, src, err)
+			errs = append(errs, fmt.Errorf("move %s: %w", src, err))
+		default:
+			moved[src] = true
+			created = append(created, dest)
+			anyMoved = true
+			fmt.Fprintf(out, "  ✓ %s: %s -> %s\n", b.Label, src, dest)
+		}
+	}
+	if !anyMoved && len(errs) == 0 {
+		fmt.Fprintf(out, "  · %s: %s — nothing to move\n", b.Label, b.Path)
+	}
+	return created, errs
 }
 
 // uniqueBackupPath returns base if nothing exists there, else base-1, base-2, …
@@ -226,14 +272,19 @@ func underDir(path, dir string) bool {
 	return rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." && !filepath.IsAbs(rel))
 }
 
-// serveStillUp probes whether `pi-stack-host serve` is still answering on the
-// memory port (env-aware), so the executor can refuse the dangerous data move
-// after a best-effort stop failed to bring it down.
+// serveStillUp probes whether `pi-stack-host serve` is still answering on EITHER
+// service port (memory AND knowledge, env-aware), so the executor can refuse the
+// dangerous data move after a best-effort stop failed to bring it down. A
+// knowledge-only serve still holds a live sqlite writer under the data root, so
+// checking only the memory port would let its db be split mid-move.
 func serveStillUp(env shellEnv) bool {
 	if env.dial == nil {
 		return false
 	}
-	return env.dial(servePort(env, "MEMORY_PORT", memoryPortDefault))
+	if env.dial(servePort(env, "MEMORY_PORT", memoryPortDefault)) {
+		return true
+	}
+	return env.dial(servePort(env, "KNOWLEDGE_PORT", knowledgePortDefault))
 }
 
 // executeReset performs the plan: stop services (best-effort), move each backup
@@ -272,6 +323,13 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 			fmt.Fprintf(out, "  · %s: %s — SKIPPED (serve still up)\n", b.Label, b.Path)
 			continue
 		}
+		if b.WithSidecars {
+			// A custom db FILE outside the data root: move the file + -wal/-shm only.
+			c, e := moveFileWithSidecars(fsys, b, ts, moved, out)
+			created = append(created, c...)
+			errs = append(errs, e...)
+			continue
+		}
 		dest, err := moveAside(fsys, b.Path, ts)
 		switch {
 		case errors.Is(err, errNotExist):
@@ -291,7 +349,13 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 	// and not a backup we just created, so "anything else" beside the preserved
 	// facts is reset too. Skipped when the data move was blocked.
 	if a.KeepMemory && a.DataRoot != "" && !dataBlocked {
-		if entries, err := fsys.readDir(a.DataRoot); err == nil {
+		entries, rdErr := fsys.readDir(a.DataRoot)
+		if rdErr != nil && !os.IsNotExist(rdErr) {
+			// A real read failure (permissions, IO) MUST surface — do not report
+			// preservation/success over a directory we could not even scan.
+			fmt.Fprintf(out, "  ✗ could not read data dir %s — %v\n", a.DataRoot, rdErr)
+			errs = append(errs, fmt.Errorf("read data dir %s: %w", a.DataRoot, rdErr))
+		} else {
 			for _, e := range entries {
 				name := e.Name()
 				p := filepath.Join(a.DataRoot, name)
@@ -312,8 +376,8 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 				created = append(created, dest)
 				fmt.Fprintf(out, "  ✓ %s -> %s\n", p, dest)
 			}
+			fmt.Fprintf(out, "  ✓ preserved captured memory: %s\n", a.MemoryDir)
 		}
-		fmt.Fprintf(out, "  ✓ preserved captured memory: %s\n", a.MemoryDir)
 	}
 
 	// 4. sbx: remove pi-stack-* sandboxes + unregister the configured MCP servers.
@@ -565,14 +629,15 @@ func removeBinSymlinks(bins []string, fsys resetFS, out io.Writer) {
 }
 
 // isOurBinTarget reports whether a bin-slot symlink's target is one of our
-// launcher binaries: its basename is pi-stack / pi-stack-host, OR it resolves
-// into a path that contains "pi-stack" (e.g. a repo checkout's out/pi-stack).
+// launcher binaries. The match is on the target's BASENAME being EXACTLY
+// `pi-stack` or `pi-stack-host` — NOT a substring of the path. A deceptive
+// target like /opt/pi-stack-ish-wrapper or /repo/pi-stack/bin/other-tool merely
+// CONTAINS "pi-stack" and must NOT be treated as ours (we'd delete an unrelated
+// binary). A real repo checkout's launcher is out/pi-stack, whose basename is
+// exactly `pi-stack`, so it still matches.
 func isOurBinTarget(target string) bool {
 	base := filepath.Base(target)
-	if base == "pi-stack" || base == "pi-stack-host" {
-		return true
-	}
-	return strings.Contains(target, "pi-stack")
+	return base == "pi-stack" || base == "pi-stack-host"
 }
 
 // runUninstallCore runs the full reset, then removes the bin symlinks. Split for
@@ -607,8 +672,32 @@ func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts 
 		return execErr
 	}
 	removeBinSymlinks(bins, fsys, rio.out)
+	removeInstalledManPage(env, fsys, rio.out)
 	printResetSummary(created, rio.out)
 	return nil
+}
+
+// removeInstalledManPage removes the man page `make install` drops on the user
+// manpath (~/.local/share/man/man1/pi-stack.1) — and ONLY that file. The embed
+// in the binary remains the guarantee, so this is best-effort cleanup: a missing
+// file is fine and never fails the uninstall.
+func removeInstalledManPage(env shellEnv, fsys resetFS, out io.Writer) {
+	home := ""
+	if env.homeDir != nil {
+		home = env.homeDir()
+	}
+	p := filepath.Join(home, ".local", "share", "man", "man1", "pi-stack.1")
+	if _, err := fsys.lstat(p); err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(out, "  ✗ %s — %v\n", p, err)
+		}
+		return
+	}
+	if err := fsys.remove(p); err != nil {
+		fmt.Fprintf(out, "  ✗ %s — could not remove: %v\n", p, err)
+		return
+	}
+	fmt.Fprintf(out, "  ✓ removed man page %s\n", p)
 }
 
 // runUninstall is the `uninstall` verb entry point (replaces the old stub).
