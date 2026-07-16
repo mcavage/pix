@@ -232,6 +232,30 @@ func TestVerbUsage_Routing(t *testing.T) {
 	}
 }
 
+// TestHelpAll_ListsExpertVerbs: `help --all` must name the rare/expert verbs the
+// curated Core listing hides.
+func TestHelpAll_ListsExpertVerbs(t *testing.T) {
+	for _, v := range []string{"mcp", "secret", "restore", "reset", "uninstall", "man", "version"} {
+		if !strings.Contains(helpAllText, v) {
+			t.Errorf("help --all missing %q", v)
+		}
+	}
+}
+
+// TestSuggestVerb: a near-miss typo suggests the closest verb; a far-off input
+// yields no suggestion.
+func TestSuggestVerb(t *testing.T) {
+	if s, ok := suggestVerb("memoyr"); !ok || s != "memory" {
+		t.Errorf("suggestVerb(memoyr) = %q,%v, want memory,true", s, ok)
+	}
+	if s, ok := suggestVerb("stat"); !ok || (s != "status" && s != "state") {
+		t.Errorf("suggestVerb(stat) = %q,%v, want status|state,true", s, ok)
+	}
+	if s, ok := suggestVerb("zzzzzzzz"); ok {
+		t.Errorf("suggestVerb(zzzzzzzz) = %q,%v, want no suggestion", s, ok)
+	}
+}
+
 // --- S2: status + doctor flag validation ---
 
 func TestParseStatusArgs(t *testing.T) {

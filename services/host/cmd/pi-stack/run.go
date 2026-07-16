@@ -36,6 +36,16 @@ func runRun(argv []string) {
 		os.Exit(2)
 	}
 
+	// Preflight: refuse to launch a sandbox that has no model to talk to. A pi
+	// session needs at least one model provider key (anthropic/openai/google); a
+	// github token authorizes git, not the model, so it does NOT count. We can
+	// only check when sbx is on PATH (the keys live proxy-side); when it is
+	// absent we cannot verify and proceed as before.
+	if msg, block := modelProviderPreflight(defaultShellEnv()); block {
+		fmt.Fprint(os.Stderr, msg)
+		os.Exit(1)
+	}
+
 	// Resolve the active profile into a flat config so the rest of run (kits, mcp,
 	// gog) sees the profile's overrides. loadResolvedConfig errors on a typo'd /
 	// unknown profile name rather than silently running the base config. The
@@ -159,6 +169,45 @@ func runRun(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack run: exec sbx: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// modelProviders are the model-provider secret keys a pi session needs at least
+// one of to run. github is deliberately excluded: it authorizes git operations,
+// not the model.
+var modelProviders = []string{"anthropic", "openai", "google"}
+
+// modelProviderPreflight verifies at least one model provider key is set before
+// a launch. It reads `sbx secret ls` (the keys live proxy-side, never in the VM).
+// It returns a guidance message + block=true ONLY when sbx is on PATH, its
+// secret listing is readable, and NONE of the model providers are present. When
+// sbx is absent (e.g. inside a sandbox) or the listing can't be read we cannot
+// verify, so block=false and the launch proceeds unchanged.
+func modelProviderPreflight(env shellEnv) (msg string, block bool) {
+	if env.lookPath == nil {
+		return "", false
+	}
+	if _, err := env.lookPath("sbx"); err != nil {
+		return "", false // sbx not on PATH: cannot verify
+	}
+	if env.run == nil {
+		return "", false
+	}
+	out, err := env.run("sbx", "secret", "ls")
+	if err != nil {
+		return "", false // couldn't read secrets: don't block
+	}
+	var missing []string
+	for _, k := range modelProviders {
+		if grepWord(out, k) {
+			return "", false // at least one model key present
+		}
+		missing = append(missing, k)
+	}
+	msg = fmt.Sprintf("pi-stack run: no model provider key is set (need one of %s).\n",
+		strings.Join(missing, ", ")) +
+		"Set one on the host, then re-run. For example:\n" +
+		"  sbx secret set -g anthropic -t \"sk-...\"\n"
+	return msg, true
 }
 
 // parseRunArgs is a small hand-rolled parser (no cobra, no third-party flags) so

@@ -6,9 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"pi-stack/host/config"
 )
+
+// gogAuthTimeout bounds the `gog auth status` probe so the fast, read-only
+// `status` command can never hang on a network round-trip (mirrors doctor's
+// bounded probes). On timeout or error gog is treated as not-authed.
+const gogAuthTimeout = 2 * time.Second
 
 // runStatusCmd is the `status` verb AND the bare-`pi-stack` landing screen: a
 // fast, read-only control panel answering "what state am I in, what's my next
@@ -74,6 +80,8 @@ type statusReport struct {
 	MCPServers []mcpStatusLine `json:"mcp_servers"`
 	Sandboxes  []sandboxLine   `json:"sandboxes"`
 	Todos      []string        `json:"todos"`
+	GogAccount string          `json:"gog_account,omitempty"`
+	GogAuthed  bool            `json:"gog_authed,omitempty"`
 }
 
 // mcpStatusLine is the per-server MCP status: registered with the sbx gateway
@@ -114,11 +122,18 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	}
 
 	// Providers: probe `sbx secret ls` once (proxy-injected keys; never in VM).
+	// Track PATH-presence (sbxOnPath) separately from probe success (sbxOK): sbx
+	// being installed but `sbx secret ls` failing is a DIFFERENT state from sbx
+	// missing entirely, and the two warrant different guidance.
 	sbxOut, sbxOK := "", false
+	sbxOnPath := false
 	if env.lookPath != nil {
-		if _, err := env.lookPath("sbx"); err == nil && env.run != nil {
-			if o, err := env.run("sbx", "secret", "ls"); err == nil {
-				sbxOut, sbxOK = o, true
+		if _, err := env.lookPath("sbx"); err == nil {
+			sbxOnPath = true
+			if env.run != nil {
+				if o, err := env.run("sbx", "secret", "ls"); err == nil {
+					sbxOut, sbxOK = o, true
+				}
 			}
 		}
 	}
@@ -128,6 +143,17 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 		if sbxOK && !set {
 			st.Todos = append(st.Todos, "sbx secret set -g "+key)
 		}
+	}
+	// When sbx could NOT verify keys every provider renders ✗ but no per-key TODO
+	// is added — so without an outstanding item the verdict would be falsely "all
+	// systems go". Distinguish the two failure modes: sbx not installed at all vs
+	// installed-but-the-probe-failed. Not emitted when sbxOK is true (the per-key
+	// TODOs cover that case).
+	switch {
+	case !sbxOnPath:
+		st.Todos = append(st.Todos, "install the Docker Sandboxes CLI (sbx) to verify provider keys")
+	case !sbxOK:
+		st.Todos = append(st.Todos, "could not verify provider keys (sbx secret ls failed); check sbx")
 	}
 
 	// Knowledge bundles + git drift.
@@ -162,6 +188,18 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 					st.Todos = append(st.Todos, "pi-stack mcp register")
 				}
 			}
+		}
+	}
+
+	// Integrations: gog is "account set, needs auth" until a real `gog auth status`
+	// probe passes (an email alone is not completed OAuth). Best-effort.
+	st.GogAccount = cfg.GogAccount
+	if cfg.GogAccount != "" {
+		st.GogAuthed = gogAuthed(env, cfg.GogAccount)
+		// An account set but not authed is an outstanding item: setting an email is
+		// not completed OAuth, so the verdict must not read "all systems go".
+		if !st.GogAuthed {
+			st.Todos = append(st.Todos, "gog auth login")
 		}
 	}
 
@@ -227,6 +265,14 @@ func (st statusReport) render(out io.Writer) {
 		}
 	}
 
+	if st.GogAccount != "" {
+		label := "account set, needs auth (run gog auth login)"
+		if st.GogAuthed {
+			label = "authed"
+		}
+		fmt.Fprintf(out, "  integrations  gog %s\n", label)
+	}
+
 	if len(st.Sandboxes) > 0 {
 		for i, s := range st.Sandboxes {
 			label := "sandboxes"
@@ -243,7 +289,11 @@ func (st statusReport) render(out io.Writer) {
 	} else {
 		fmt.Fprintln(out, "  ✓ all systems go.")
 	}
-	fmt.Fprintln(out, "\n  Common:  run · serve · doctor · setup · memory · knowledge · config · help")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Next:  pi-stack serve     start the knowledge service")
+	fmt.Fprintln(out, "       pi-stack run       launch a sandbox and start working")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Everything ok? run `pi-stack doctor`.   Full command list: `pi-stack help`.")
 }
 
 // glyph renders a bool as the shared ✓/✗ status glyphs.

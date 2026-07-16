@@ -55,66 +55,61 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
 
 	fmt.Fprintln(sio.out, "pi-stack setup — configures the stack for you. Idempotent; safe to re-run.")
 	fmt.Fprintln(sio.out)
+	fmt.Fprintln(sio.out, "I will walk through 4 steps. Only the first is required. You can stop after any")
+	fmt.Fprintln(sio.out, "step and re-run `pi-stack setup` later.")
+	fmt.Fprintln(sio.out)
 
 	var steps []string
 	todo := func(cmd string) { steps = append(steps, cmd) }
 
-	// 1. Provider secrets. Proxy-injected, never in the VM; entry is external
-	// (interactive `sbx secret set`), so we guide the exact command per missing
-	// key rather than pretend to automate it.
+	// Step 1 of 4 — Provider API keys (required). Proxy-injected, never in the VM;
+	// entry is external (interactive `sbx secret set`), so we guide the exact
+	// command per missing key rather than pretend to automate it.
+	fmt.Fprintln(sio.out, "Step 1 of 4 — Provider API keys        (required)")
 	fmt.Fprintln(sio.out, "Provider keys (proxy-injected, never in the VM):")
 	sbxOut, sbxOK := "", false
+	sbxOnPath := false
 	if _, err := env.lookPath("sbx"); err == nil {
+		sbxOnPath = true
 		if out, err := env.run("sbx", "secret", "ls"); err == nil {
 			sbxOut, sbxOK = out, true
 		}
 	}
-	for _, key := range []string{"anthropic", "openai", "google", "github"} {
-		c := secretCheck(key, key, sbxOut, sbxOK)
-		if c.state == stateOK {
-			fmt.Fprintf(sio.out, "  ✓ %s set\n", key)
-		} else {
-			fmt.Fprintf(sio.out, "  ✗ %s — run: %s\n", key, c.todo)
-			todo(c.todo)
+	// Only a MODEL provider key (anthropic/openai/google) satisfies readiness — a
+	// github token authorizes git, not the model, so it is shown but never sets
+	// anyKey.
+	modelKey := map[string]bool{"anthropic": true, "openai": true, "google": true}
+	anyKey := false
+	if sbxOnPath && !sbxOK {
+		// sbx is installed but `sbx secret ls` failed: we cannot assert the keys are
+		// missing, only that we could not verify them. Printing per-key ✗ + `sbx
+		// secret set` TODOs here would falsely claim absence, so say so honestly and
+		// leave anyKey false (the readiness verdict handles this case distinctly).
+		fmt.Fprintln(sio.out, "  · could not verify provider keys (sbx secret ls failed); check sbx")
+	} else {
+		for _, key := range []string{"anthropic", "openai", "google", "github"} {
+			c := secretCheck(key, key, sbxOut, sbxOK)
+			if c.state == stateOK {
+				fmt.Fprintf(sio.out, "  ✓ %s set\n", key)
+				if modelKey[key] {
+					anyKey = true
+				}
+			} else {
+				fmt.Fprintf(sio.out, "  ✗ %s — run: %s\n", key, c.todo)
+				todo(c.todo)
+			}
 		}
 	}
 	fmt.Fprintln(sio.out)
 
-	// 1b. Secrets (1Password). Host MCP servers (slack, gog, ...) get their creds
-	// from 1Password at gateway spawn; nothing is prompted here (secret VALUES
-	// live in 1Password, never on disk). ALWAYS seed the refs template (idempotent,
-	// no-clobber) so there's a concrete file to fill, then report op state. Wholly
-	// non-blocking: 1Password is optional (a no-creds server like pio needs none).
-	setupSecretsSection(env, sio.out, todo)
+	// Step 2 of 4 — Memory & knowledge (recommended). Ensure the memory service is
+	// enabled (it is the default; a no-op on a fresh config but keeps setup
+	// self-contained), then set up the knowledge base.
+	fmt.Fprintln(sio.out, "Step 2 of 4 — Memory & knowledge       (recommended)")
+	cfg.AddService("memory")
+	fmt.Fprintln(sio.out, "  ✓ memory enabled")
 
-	// 2. Google Workspace account. From --account, else the already-configured
-	// value, else an interactive prompt (only when we have a TTY and weren't told
-	// to assume-yes). Non-interactive with nothing configured: guide the command.
-	fmt.Fprintln(sio.out, "Google Workspace (gog MCP server, optional):")
-	account := strings.TrimSpace(opts.account)
-	if account == "" {
-		account = strings.TrimSpace(cfg.GogAccount)
-	}
-	if account == "" && sio.isTTY && !opts.assumeYes {
-		account = promptLine(sio, "  Google Workspace account (email, blank to skip): ")
-	}
-
-	if account != "" {
-		// 2a. Write the account. 2b. Enable gog in the MCP set. Both idempotent.
-		cfg.SetGogAccount(account)
-		cfg.AddMCP("gog")
-		fmt.Fprintf(sio.out, "  ✓ gog_account = %s\n", account)
-		fmt.Fprintln(sio.out, "  ✓ gog enabled (added to mcp)")
-	} else {
-		fmt.Fprintln(sio.out, "  ✗ no account set — enable gog later with:")
-		fmt.Fprintln(sio.out, "      pi-stack config set gog_account <you@example.com>")
-		fmt.Fprintln(sio.out, "      pi-stack config set mcp gog")
-		todo("pi-stack config set gog_account <you@example.com>")
-		todo("pi-stack config set mcp gog")
-	}
-	fmt.Fprintln(sio.out)
-
-	// 3. Knowledge base (global-first). Set up the GLOBAL OKF bundle the first
+	// Knowledge base (global-first). Set up the GLOBAL OKF bundle the first
 	// time — scaffold a new one at <config-dir>/knowledge, or point at an
 	// existing/shared bundle (local path or git URL). Idempotent: an
 	// already-configured bundle is reported and left untouched, never clobbered.
@@ -165,11 +160,75 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
 	}
 	fmt.Fprintln(sio.out)
 
-	// 4. Services. Ensure the memory service is enabled (it is the default; this
-	// is a no-op on a fresh config but makes setup self-contained).
-	cfg.AddService("memory")
+	// Step 3 of 4 — Integrations (optional; skip if unsure). Google Workspace
+	// account from --account, else the already-configured value, else an
+	// interactive prompt (only when we have a TTY and weren't told to assume-yes).
+	// Non-interactive with nothing configured: guide the command.
+	fmt.Fprintln(sio.out, "Step 3 of 4 — Integrations             (optional; skip if unsure)")
+	fmt.Fprintln(sio.out, "Google Workspace (gog MCP server, optional):")
+	account := strings.TrimSpace(opts.account)
+	if account == "" {
+		account = strings.TrimSpace(cfg.GogAccount)
+	}
+	if account == "" && sio.isTTY && !opts.assumeYes {
+		account = promptLine(sio, "  Google Workspace account (email, blank to skip): ")
+	}
 
-	// 5. Persist everything we just decided. This is the write that replaces
+	gogNeedsAuth := false
+	if account != "" {
+		// 2a. Write the account. 2b. Enable gog in the MCP set. Both idempotent.
+		cfg.SetGogAccount(account)
+		cfg.AddMCP("gog")
+		fmt.Fprintf(sio.out, "  ✓ gog_account = %s\n", account)
+		// Setting an email is not the same as completing OAuth. Label gog "needs
+		// auth" until a real account-scoped `gog auth status` probe passes.
+		if gogAuthed(env, account) {
+			fmt.Fprintln(sio.out, "  ✓ gog enabled (added to mcp)")
+		} else {
+			gogNeedsAuth = true
+			fmt.Fprintln(sio.out, "  · gog (Google Workspace) — account set, needs auth (run gog auth login)")
+			todo("gog auth login")
+		}
+	} else {
+		fmt.Fprintln(sio.out, "  ✗ no account set — enable gog later with:")
+		fmt.Fprintln(sio.out, "      pi-stack config set gog_account <you@example.com>")
+		fmt.Fprintln(sio.out, "      pi-stack config set mcp gog")
+		todo("pi-stack config set gog_account <you@example.com>")
+		todo("pi-stack config set mcp gog")
+	}
+	fmt.Fprintln(sio.out)
+
+	// Step 4 of 4 — Integration credentials. MUST come last: needsCreds depends on
+	// what step 3 added (an integration that needs a host credential, cfg.MCP minus
+	// gog, which uses OAuth/keychain). Host MCP servers get their creds from
+	// 1Password at gateway spawn; nothing is prompted here (secret VALUES live in
+	// 1Password, never on disk). Wholly non-blocking: with no credential
+	// integration it prints a short skip note and creates NO file.
+	// needsCreds is a BEST-EFFORT signal, not an authoritative one: it is driven by
+	// LOCAL-non-gog membership (a local stdio server per `pi-stack-host mcp --list`
+	// that isn't gog). There is NO per-server credential metadata — `pi-stack-host
+	// mcp --list` returns names only (see mcp_bridge.go builtinMcpNames) — so a
+	// credential-FREE local server like `pio` will over-trigger this: it shows the
+	// Step 4 explanation and seeds a harmless empty op-refs template. That is
+	// deliberately tolerable (the seed is a no-op no-clobber template; see mcp.go).
+	// The proper fix is a per-server NeedsCreds capability on the McpServer plugin
+	// interface, which is out of scope here.
+	//
+	// The determination is THREE-state, not a boolean: the local-set probe can
+	// fail (pi-stack-host missing or `mcp --list` errored), and collapsing that to
+	// "no server needs creds" would print a confident skip when the truth is
+	// unknown. So credNeeds / credNone / credUnknown are kept distinct.
+	cstate, _ := credentialDetermination(cfg, env, hostBinaryResolver)
+	hasNonGogMCP := false
+	for _, m := range cfg.MCP {
+		if m != "gog" {
+			hasNonGogMCP = true
+			break
+		}
+	}
+	setupSecretsSection(env, sio.out, cstate, hasNonGogMCP, todo)
+
+	// Persist everything we just decided. This is the write that replaces
 	// hand-editing config.toml. (knowledgeInit/knowledgeUse also Save() as they
 	// wire; this re-save is idempotent and keeps setup self-contained.)
 	if err := save(cfg); err != nil {
@@ -180,40 +239,208 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
 	}
 	fmt.Fprintln(sio.out)
 
-	// 6. Register the local stdio MCP servers now configured (best-effort: guards
+	// Readiness verdict: whether you can run right now.
+	ready := anyKey && sbxOnPath
+	switch {
+	case ready:
+		fmt.Fprintln(sio.out, "You are ready. Run:  pi-stack run")
+	case !sbxOnPath:
+		// The real blocker is the launcher itself, not a key: sbx is required to
+		// launch a sandbox at all. Name that first, and mention a missing key too.
+		fmt.Fprintln(sio.out, "You are NOT fully ready yet: Docker Sandboxes (sbx) is not installed; it is required to launch.")
+		fmt.Fprintln(sio.out, "  Install the Docker Sandboxes CLI (sbx); see https://docs.docker.com/sandboxes/")
+		if !anyKey {
+			fmt.Fprintln(sio.out, `  Also set a model provider key, then run pi-stack setup again:  sbx secret set -g anthropic -t "sk-..."`)
+		}
+	case !sbxOK:
+		// sbx is present but `sbx secret ls` failed, so we could NOT verify any
+		// provider key. This is distinct from a confirmed no-key host: we assert
+		// nothing about which keys are set.
+		fmt.Fprintln(sio.out, "You are NOT fully ready yet: provider keys could not be verified (sbx secret ls failed). Check sbx, then run pi-stack setup again.")
+	default:
+		// sbx is present and the probe worked; the only gap is a model provider key.
+		fmt.Fprintln(sio.out, "You are NOT fully ready yet: no model provider key is set. Set one, then run:")
+		fmt.Fprintln(sio.out, `  sbx secret set -g anthropic -t "sk-..."`)
+	}
+	fmt.Fprintln(sio.out)
+
+	// Summary: register the configured MCP servers now (best-effort: guards
 	// degrade cleanly with an actionable message, and setup never aborts on them).
-	if len(localMCPTargets(cfg)) > 0 {
+	// registerServers is the tolerant path — it partitions cfg.MCP into gog, local
+	// stdio servers, and remote gateway-catalog names (which it skips), and wraps a
+	// server in `op run` only when op-refs resolves, else registers it bare
+	// (documented-harmless, recoverable via `pi-stack mcp register`). We do NOT
+	// gate individual servers on their creds.
+	if len(cfg.MCP) > 0 {
 		fmt.Fprintln(sio.out, "Registering MCP servers with the sbx gateway:")
-		if err := registerServers(cfg, env, sio.out, nil, findHostBinary); err != nil {
+		if err := registerServers(cfg, env, sio.out, nil, hostBinaryResolver); err != nil {
 			fmt.Fprintf(sio.out, "  skipped: %v\n", err)
 			fmt.Fprintln(sio.out, "  finish later with: pi-stack mcp register")
 			todo("pi-stack mcp register")
 		}
 		fmt.Fprintln(sio.out)
 	}
-
-	// Summary: the commands that matter.
-	if len(steps) == 0 {
-		fmt.Fprintln(sio.out, "Done — the stack is configured. Next:")
-	} else {
-		fmt.Fprintf(sio.out, "Done — %s still to finish (above). Next:\n", plural(len(steps), "item"))
+	// When a local server is configured but op-refs isn't resolvable yet, it was
+	// registered bare (no token). Filling op-refs.env later does not re-register
+	// it, so leave a single informational recovery step. We cannot tell whether any
+	// of those local servers actually needs a credential (no per-server metadata),
+	// so the note stays conditional rather than asserting a requirement. This is a
+	// coarse, non-per-server gate.
+	if cstate == credNeeds && !opRefsResolvable(env) {
+		fmt.Fprintln(sio.out, "Note: one or more local integrations MIGHT need a password, and op-refs isn't resolvable yet.")
+		fmt.Fprintln(sio.out, "  If any of yours do, fill op-refs.env (pi-stack secret edit), verify (pi-stack secret check),")
+		fmt.Fprintln(sio.out, "  then re-register:  pi-stack mcp register")
+		todo("pi-stack mcp register")
+		fmt.Fprintln(sio.out)
 	}
-	fmt.Fprintln(sio.out, "  start services:  pi-stack serve  (indexes your knowledge base)")
-	fmt.Fprintln(sio.out, "  launch sandbox:  pi-stack run")
-	fmt.Fprintln(sio.out, "  verify anytime:  pi-stack doctor")
+	if gogNeedsAuth {
+		fmt.Fprintln(sio.out, "Needs auth:  gog (Google Workspace) - run `gog auth login`")
+		fmt.Fprintln(sio.out)
+	}
+	fmt.Fprintln(sio.out, "Next:")
+	fmt.Fprintln(sio.out, "  pi-stack serve     start the services you set up")
+	fmt.Fprintln(sio.out, "  pi-stack run       launch a sandbox and start working")
+	fmt.Fprintln(sio.out, "  pi-stack doctor    re-check everything, anytime")
 
 	return steps
 }
 
-// setupSecretsSection is the "Secrets (1Password)" step of setup: a 2-sentence
-// plain explanation + the mental model, ALWAYS seed the refs template
-// (idempotent, no-clobber), and report whether op is installed + signed in.
-// Prompts nothing (secret values live in 1Password) and is wholly non-blocking
-// (1Password is optional). It adds outstanding steps as TODOs where relevant.
-func setupSecretsSection(env shellEnv, out io.Writer, todo func(string)) {
+// credentialMCPs returns the configured integrations that need a host credential
+// (op-refs.env) at spawn time: LOCAL stdio servers (in the `pi-stack-host mcp
+// --list` set) minus gog. gog authenticates via OAuth/keychain (`gog auth
+// login`), not an op-refs token. Remote gateway-catalog servers (notion,
+// atlassian, ...) are attached a different way and never use op-refs, so they
+// are excluded. When the local set can't be established the result is empty
+// (fail closed). needsCreds/step 4 gate on this.
+//
+// This is a BEST-EFFORT signal (local non-gog), NOT proof a server needs a
+// credential: there is no per-server credential metadata (`pi-stack-host mcp
+// --list` returns names only), so a credential-free local server like `pio`
+// will over-trigger the Step 4 explanation and a harmless empty op-refs
+// template. The proper fix is a per-server NeedsCreds capability on the
+// McpServer plugin interface (out of scope here).
+func credentialMCPs(cfg *config.Config, env shellEnv, hostResolver func() (string, error)) []string {
+	_, servers := credentialDetermination(cfg, env, hostResolver)
+	return servers
+}
+
+// credState is the three-state credential determination for Step 4. A boolean
+// would conflate two different "no" answers: the local-set probe
+// (`pi-stack-host mcp --list`) can itself fail, and there is no per-server
+// credential metadata, so we distinguish credNeeds (>=1 local non-gog server),
+// credNone (probe succeeded, found no such server), and credUnknown (the local
+// set could not be determined: pi-stack-host missing or the probe errored). This
+// mirrors the fail-closed distinction registerServers already draws, so the
+// setup copy stays honest instead of claiming "none" when the answer is unknown.
+type credState int
+
+const (
+	credNone credState = iota
+	credNeeds
+	credUnknown
+)
+
+// credentialDetermination runs the local-set probe once and classifies the
+// configured integrations into a credState plus the local non-gog servers found.
+// A failed probe is credUnknown (never silently credNone), so Step 4 does not
+// print a confident skip when it could not actually tell.
+func credentialDetermination(cfg *config.Config, env shellEnv, hostResolver func() (string, error)) (credState, []string) {
+	localSet, known := localMCPNames(env, hostResolver)
+	if !known {
+		return credUnknown, nil
+	}
+	var out []string
+	for _, m := range cfg.MCP {
+		if m != "gog" && localSet[m] {
+			out = append(out, m)
+		}
+	}
+	if len(out) > 0 {
+		return credNeeds, out
+	}
+	return credNone, nil
+}
+
+// opRefsResolvable reports whether host MCP creds can be injected yet: op is
+// installed + has an account configured AND an op-refs.env file exists. It is a
+// COARSE gate (not per-server) behind the single `pi-stack mcp register`
+// recovery step — there is no authoritative server->ref map, and registration is
+// tolerant, so we never try to resolve individual servers.
+func opRefsResolvable(env shellEnv) bool {
+	if !opInstalled(env) || !opSignedIn(env) {
+		return false
+	}
+	_, _, exists := opRefsContent(env)
+	return exists
+}
+
+// gogAuthed reports whether gog has usable auth for a specific account: it is on
+// PATH and an account-scoped `gog --account <account> auth status` exits 0.
+// Setting an account email does NOT imply completed OAuth, so setup/status pass
+// the CONFIGURED account and probe THAT account (mirroring doctor's
+// account-scoped `gog --account <acct> ...` form) before claiming gog is ready.
+// The probe is BOUNDED (gogAuthTimeout) so a network round-trip can never hang a
+// fast command like `status` (mirrors doctor's bounded probes): real callers
+// wire env.probe, and when present we run our own short-timeout exec; tests
+// leave probe nil and use the hermetic env.run. Best-effort: any gap (gog
+// absent, a timeout, status errors) is "not authed", never a crash.
+func gogAuthed(env shellEnv, account string) bool {
+	if env.lookPath == nil {
+		return false
+	}
+	if _, err := env.lookPath("gog"); err != nil {
+		return false
+	}
+	if env.probe != nil {
+		_, timedOut, err := runWithTimeoutD(gogAuthTimeout, "gog", "--account", account, "auth", "status")
+		return !timedOut && err == nil
+	}
+	if env.run == nil {
+		return false
+	}
+	_, err := env.run("gog", "--account", account, "auth", "status")
+	return err == nil
+}
+
+// setupSecretsSection is the "Secrets (1Password)" step of setup. It is
+// THREE-state (see credState):
+//   - credUnknown with non-gog integrations configured: the local-set probe
+//     failed, so it does NOT claim "nothing needs a password"; it says so plainly
+//     and adds a recovery TODO.
+//   - credNone (or credUnknown with nothing that could need creds): a short
+//     "skipped" note, and NO file is created.
+//   - credNeeds: seed the refs template (idempotent, no-clobber), give the
+//     3-step plain-language 1Password explanation (kept conditional, since we
+//     cannot prove any local server actually needs a credential), and report
+//     whether op is installed + signed in.
+//
+// Prompts nothing (secret values live in 1Password) and is wholly non-blocking.
+// It adds outstanding steps as TODOs where relevant.
+func setupSecretsSection(env shellEnv, out io.Writer, state credState, hasNonGogMCP bool, todo func(string)) {
+	if state == credUnknown && hasNonGogMCP {
+		fmt.Fprintln(out, "Step 4 of 4 — Integration credentials   (undetermined)")
+		fmt.Fprintln(out, "  Could not determine whether your integrations need credentials")
+		fmt.Fprintln(out, "  (pi-stack-host mcp --list failed). Build pi-stack-host, then run")
+		fmt.Fprintln(out, "  pi-stack mcp register and pi-stack secret check to sort it out.")
+		fmt.Fprintln(out)
+		todo("pi-stack mcp register")
+		return
+	}
+	if state != credNeeds {
+		fmt.Fprintln(out, "Step 4 of 4 — Integration credentials   (skipped)")
+		fmt.Fprintln(out, "  You added no integrations that need a password. Skipping.")
+		fmt.Fprintln(out, "  No file is created until you actually add one.")
+		fmt.Fprintln(out, "  When you do:  pi-stack secret edit, then pi-stack secret check,")
+		fmt.Fprintln(out, "  then pi-stack mcp register.")
+		fmt.Fprintln(out)
+		return
+	}
+	fmt.Fprintln(out, "Step 4 of 4 — Integration credentials   (only if a local integration needs a password)")
 	fmt.Fprintln(out, "Secrets (1Password, optional):")
-	fmt.Fprintln(out, "  Host MCP servers (slack, gog, ...) get their creds from 1Password at spawn")
-	fmt.Fprintln(out, "  time; pi-stack never stores them. A server with no creds needs nothing here.")
+	fmt.Fprintln(out, "  You added a local integration. We cannot tell which local servers need a")
+	fmt.Fprintln(out, "  password, so if any of yours do, here is how credentials work: host MCP")
+	fmt.Fprintln(out, "  servers get their creds from 1Password at spawn time; pi-stack never stores")
+	fmt.Fprintln(out, "  them. Many local servers need nothing here, so this may not apply to you.")
 	fmt.Fprintln(out, indent(config.OpRefsMentalModel))
 
 	// ALWAYS seed (idempotent, no-clobber). This is the ONE seeder.
@@ -259,13 +486,6 @@ func setupKnowledge(cfg *config.Config, ref string, out io.Writer) error {
 		return fmt.Errorf("resolving %s: %w", ref, err)
 	}
 	return knowledgeInit(cfg, abs, out)
-}
-
-// localMCPTargets returns the local stdio servers in cfg.MCP (the ones
-// registerServers would act on). Every configured mcp name is a local stdio
-// server (gog + everything else; see mcp.go's header), so this is just cfg.MCP.
-func localMCPTargets(cfg *config.Config) []string {
-	return append([]string(nil), cfg.MCP...)
 }
 
 // promptLine reads a single trimmed line from sio.in after writing prompt.

@@ -63,7 +63,14 @@ const (
 // rather than freezing doctor, and runaway output is truncated at
 // probeMaxOutput. Returns (output, timedOut, err).
 func runWithTimeout(name string, args ...string) (string, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	return runWithTimeoutD(probeTimeout, name, args...)
+}
+
+// runWithTimeoutD is runWithTimeout with a caller-chosen deadline, so a fast
+// command (e.g. `status`'s gog auth probe) can bound itself tighter than the
+// default probeTimeout.
+func runWithTimeoutD(timeout time.Duration, name string, args ...string) (string, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	// Hard wall-clock bound: if the child (or a descendant it spawned that still

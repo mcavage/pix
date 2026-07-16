@@ -34,8 +34,101 @@ var knownVerbs = map[string]bool{
 	"config": true, "mcp": true, "memory": true, "knowledge": true,
 	"profile": true, "version": true, "run": true, "secret": true,
 	"reset": true, "uninstall": true, "man": true,
-	"backup": true, "restore": true,
+	"backup": true, "restore": true, "state": true,
 }
+
+// suggestVerb returns the closest known verb to input within edit distance 2,
+// used to power the did-you-mean hint on an unknown command.
+func suggestVerb(input string) (string, bool) {
+	best, bestD := "", 3
+	for v := range knownVerbs {
+		if d := levenshtein(input, v); d < bestD {
+			best, bestD = v, d
+		}
+	}
+	return best, best != ""
+}
+
+// levenshtein is the classic edit distance (insert/delete/substitute), used by
+// suggestVerb to rank near-miss verb typos.
+func levenshtein(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	prev := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	cur := make([]int, len(rb)+1)
+	for i := 1; i <= len(ra); i++ {
+		cur[0] = i
+		for j := 1; j <= len(rb); j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			cur[j] = min3(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev, cur = cur, prev
+	}
+	return prev[len(rb)]
+}
+
+func min3(a, b, c int) int {
+	m := a
+	if b < m {
+		m = b
+	}
+	if c < m {
+		m = c
+	}
+	return m
+}
+
+// helpAllText is the full command listing revealed by `pi-stack help --all`. It
+// names every verb across all tiers (Core / occasional / rare + expert) so a
+// power user can see the whole surface, not just the curated Core view.
+const helpAllText = `pi-stack — a personal, multi-model pi coding agent in a Docker sandbox.
+
+Usage:  pi-stack [--profile NAME] <command> [args]
+
+New here?   pi-stack setup      one-time guided setup (a few minutes, resumable)
+
+Workflow
+  run [DIR]           launch the sandbox in DIR (default: .). This is the main one.
+  serve [args...]     start the host services (memory, knowledge); serve stop|status
+  status              what is up, what is down, what is next   (also the bare command)
+
+Setup & health
+  setup               guided first-run setup (writes config + registers MCP)
+  doctor              diagnose host + sandbox health, print the fix commands
+
+Data
+  memory <cmd>        recall | remember | forget | learnings | stats   (:11435)
+  knowledge <cmd>     init | use | ls | query | sync | remote          (:11436)
+
+Config & context
+  config show|path    show the resolved config path and contents
+  config set|unset    change config without hand-editing the toml
+  profile ls|use      switch between contexts (work / personal / default)
+
+Integrations & credentials
+  mcp register|ls     register local stdio MCP servers with the sbx gateway
+  secret <cmd>        status|edit|check the 1Password op-refs (host MCP creds)
+
+State (on-disk lifecycle)
+  state <cmd>         backup|restore|reset|uninstall (grouped aliases)
+  backup [--out P]    hot FULL backup (memory + config + op-refs) -> tar.gz
+  restore <archive>   restore a FULL backup (safe swap)   [--force]
+  reset [flags]       move stack state aside (reversible)   [--keep-memory --sbx --yes]
+  uninstall [flags]   reset, then remove the bin symlinks    [--keep-memory --yes]
+
+Meta
+  version             print the launcher version
+  man                 render the embedded man page (no MANPATH needed; also --man)
+  help [verb]         print this help (or a verb's usage)
+
+Global flag:  --profile NAME   run/read a named profile (work, personal, ...)
+run flags:    --dev --skills DIR --kit K --mcp M --name N --model M -- pi-args...
+`
 
 // verbUsage maps a verb (including its aliases) to its usage text, so
 // `pi-stack help <verb>` can route to each verb's own help. The returned string
@@ -76,6 +169,8 @@ func verbUsage(verb string) (string, bool) {
 		return resetUsage, true
 	case "uninstall":
 		return uninstallUsage, true
+	case "state":
+		return stateUsage, true
 	}
 	return "", false
 }
