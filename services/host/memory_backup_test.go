@@ -257,7 +257,7 @@ func TestMemoryBackupRetentionByMtimeNotName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := pruneBackups(outDir, 1); err != nil {
+	if err := pruneBackups(outDir, 1, ""); err != nil {
 		t.Fatalf("pruneBackups: %v", err)
 	}
 	if _, err := os.Stat(newer); err != nil {
@@ -265,6 +265,57 @@ func TestMemoryBackupRetentionByMtimeNotName(t *testing.T) {
 	}
 	if _, err := os.Stat(older); err == nil {
 		t.Error("retention kept the OLDER backup; want it pruned")
+	}
+}
+
+// TestMemoryBackupRetentionNeverPrunesFreshArchive is the data-safety gate for
+// the fix that EXCLUDES the just-created archive from retention. On a coarse-
+// timestamp filesystem the fresh archive can share an mtime with an older one,
+// lose the name tie-break, and be pruned while the backup still reports success.
+// Here two archives share an IDENTICAL mtime and the fresh one is given the
+// lexically SMALLER (tie-break-losing) suffix; with --keep 1 the fresh archive
+// (the path returned to the caller) must ALWAYS survive. This FAILS if the
+// keepPath exclusion is removed (a pure mtime/name prune would delete it).
+func TestMemoryBackupRetentionNeverPrunesFreshArchive(t *testing.T) {
+	st, dbPath := seedMemDB(t, 1)
+	defer st.db.Close()
+	outDir := t.TempDir()
+
+	ts := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	// The fresh archive gets the lexically SMALLEST suffix so a name tie-break would
+	// single it out for pruning; the older one gets the larger suffix.
+	older := filepath.Join(outDir, "pi-stack-backup-20260715-120000-ffffffff.tar.gz")
+	fresh := filepath.Join(outDir, "pi-stack-backup-20260715-120000-00000000.tar.gz")
+	// Keep:0 so memoryBackup itself does not prune; we drive pruneBackups directly
+	// after forcing the identical mtime.
+	if _, err := memoryBackup(backupParams{DBPath: dbPath, OutPath: older, Keep: 0, Now: ts}); err != nil {
+		t.Fatalf("backup older: %v", err)
+	}
+	res, err := memoryBackup(backupParams{DBPath: dbPath, OutPath: fresh, Keep: 0, Now: ts})
+	if err != nil {
+		t.Fatalf("backup fresh: %v", err)
+	}
+	// Give BOTH files an IDENTICAL mtime so ordering falls to the name tie-break.
+	sec := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(older, sec, sec); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(fresh, sec, sec); err != nil {
+		t.Fatal(err)
+	}
+	// Retention with --keep 1, passing the fresh archive as keepPath: it must be
+	// spared unconditionally even though its name loses the tie-break.
+	if err := pruneBackups(outDir, 1, fresh); err != nil {
+		t.Fatalf("pruneBackups: %v", err)
+	}
+	if res.Path != fresh {
+		t.Errorf("result path = %q, want the fresh archive %q", res.Path, fresh)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("retention pruned the JUST-CREATED archive %s: %v", fresh, err)
+	}
+	if _, err := os.Stat(older); err == nil {
+		t.Error("retention kept the OLDER archive; with --keep 1 and the fresh one spared, it should be pruned")
 	}
 }
 

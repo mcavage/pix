@@ -182,8 +182,9 @@ func memoryBackup(p backupParams) (backupResult, error) {
 		return backupResult{}, err
 	}
 
-	// 4. Retention: keep the newest N pi-stack-backup-*.tar.gz in the out dir.
-	if err := pruneBackups(filepath.Dir(p.OutPath), p.Keep); err != nil {
+	// 4. Retention: keep the newest N pi-stack-backup-*.tar.gz in the out dir. Pass
+	// the archive we just wrote so retention NEVER prunes it (see pruneBackups).
+	if err := pruneBackups(filepath.Dir(p.OutPath), p.Keep, p.OutPath); err != nil {
 		return backupResult{}, err
 	}
 
@@ -402,7 +403,15 @@ var backupNameRe = regexp.MustCompile(`^pi-stack-backup-\d{8}-\d{6}(-[0-9a-f]+)?
 // longer equals chronological order — a lexical prune could delete the
 // just-written backup while sparing an older one. Sorting by mtime keeps the
 // newest N regardless of the random suffix.
-func pruneBackups(dir string, keep int) error {
+//
+// keepPath is the archive THIS run just wrote ("" when called standalone). It is
+// EXCLUDED from the deletion candidates UNCONDITIONALLY — we never prune the file
+// we just created, regardless of mtime/name ordering. On a coarse-timestamp
+// filesystem the fresh archive can tie an older one on mtime, lose the name
+// tie-break, and be pruned while the command still reports success (its size was
+// captured pre-prune). Excluding it by path closes that data-loss window; the
+// newest-N-by-mtime behavior still governs the REST.
+func pruneBackups(dir string, keep int, keepPath string) error {
 	if keep <= 0 {
 		return nil
 	}
@@ -410,11 +419,13 @@ func pruneBackups(dir string, keep int) error {
 	if err != nil {
 		return err
 	}
+	keepResolved := resolvePath(keepPath)
 	type backupFile struct {
 		path    string
 		modTime time.Time
 	}
 	var matches []backupFile
+	excludedFresh := false
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -423,13 +434,28 @@ func pruneBackups(dir string, keep int) error {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
+		// NEVER prune the archive we just wrote — exclude it from the candidates
+		// before any mtime/name ordering can single it out.
+		if keepResolved != "" && resolvePath(path) == keepResolved {
+			excludedFresh = true
+			continue
+		}
 		fi, err := os.Stat(path)
 		if err != nil {
 			return fmt.Errorf("stat backup %s: %w", path, err)
 		}
 		matches = append(matches, backupFile{path: path, modTime: fi.ModTime()})
 	}
-	if len(matches) <= keep {
+	// The fresh archive already occupies one of the keep slots, so keep one fewer
+	// of the REST when it was excluded.
+	effKeep := keep
+	if excludedFresh {
+		effKeep = keep - 1
+		if effKeep < 0 {
+			effKeep = 0
+		}
+	}
+	if len(matches) <= effKeep {
 		return nil
 	}
 	// Newest first by mtime; break ties by name (descending) so the order is stable
@@ -440,7 +466,7 @@ func pruneBackups(dir string, keep int) error {
 		}
 		return matches[i].modTime.After(matches[j].modTime)
 	})
-	for _, old := range matches[keep:] { // everything after the newest N
+	for _, old := range matches[effKeep:] { // everything after the newest kept
 		if err := os.Remove(old.path); err != nil {
 			return fmt.Errorf("prune %s: %w", old.path, err)
 		}

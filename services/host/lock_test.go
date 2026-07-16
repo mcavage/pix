@@ -307,3 +307,51 @@ func TestRestoreRefusalRollsBackPlainFilesWhenLockHeld(t *testing.T) {
 		t.Errorf("refused restore left a config .bak: %v", m)
 	}
 }
+
+// TestRestoreReStatsLiveDBUnderLock is the TOCTOU gate for evaluating live-db
+// existence + the --force rule UNDER the lock. The dest has NO live db at the
+// initial (pre-lock) check, so the preliminary guard passes; a racing restore A
+// then installs a db AFTER that check but BEFORE this restore acquires the lock.
+// We simulate that race at the lock-acquire seam: the stub writes a sentinel db
+// then returns the REAL lock. Under the lock, restore must RE-STAT, find the db,
+// and (without --force) REFUSE — never os.Rename over restore A's db, never move
+// it aside to a .bak. FAILS if the existence/force decision is not re-made under
+// the lock (a stale liveExists=false would let the swap silently clobber it).
+func TestRestoreReStatsLiveDBUnderLock(t *testing.T) {
+	st, srcPath := seedMemDB(t, 3)
+	archive := backupSeeded(t, srcPath)
+	st.db.Close()
+
+	destDir := t.TempDir()
+	dbPath := filepath.Join(destDir, "memory.db")
+	lockPath := filepath.Join(destDir, ".memory.lock")
+
+	sentinel := []byte("racing restore A's db — must NOT be clobbered")
+	stub := func(path string) (func(), error) {
+		// Restore A installed a db while we waited for the lock.
+		if err := os.WriteFile(dbPath, sentinel, 0o600); err != nil {
+			return nil, err
+		}
+		return acquireLock(path)
+	}
+
+	_, err := memoryRestore(restoreParams{
+		ArchivePath: archive, LiveDBPath: dbPath, Force: false,
+		LockPath: lockPath, Now: time.Now(),
+		ServeProbe:    func() bool { return false },
+		acquireLockFn: stub,
+	})
+	if err == nil {
+		t.Fatal("restore succeeded despite a live db appearing under the lock without --force; want refusal")
+	}
+	got, rerr := os.ReadFile(dbPath)
+	if rerr != nil {
+		t.Fatalf("live db missing after refused restore: %v", rerr)
+	}
+	if string(got) != string(sentinel) {
+		t.Errorf("restore REPLACED the racing db (TOCTOU clobber): got %q, want the sentinel", got)
+	}
+	if m, _ := filepath.Glob(dbPath + ".bak-*"); len(m) != 0 {
+		t.Errorf("refused restore moved the racing db aside to a .bak: %v", m)
+	}
+}

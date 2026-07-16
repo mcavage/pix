@@ -225,8 +225,10 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 		return restoreResult{}, err
 	}
 
-	// 4. Guard against a silent clobber of an existing live db (the memory swap is
-	// LAST, but the gate is cheap and belongs with the other pre-commit checks).
+	// 4. PRELIMINARY guard against a silent clobber of an existing live db — a cheap
+	// fast-fail BEFORE the expensive lock/stage work. This check is made WITHOUT the
+	// lock, so it is only advisory: the AUTHORITATIVE existence/force decision that
+	// gates the destructive rename is re-made under the lock at step 4d below.
 	liveExists := fileExists(p.LiveDBPath)
 	if liveExists && !p.Force {
 		return restoreResult{}, fmt.Errorf("live db already exists at %s; pass --force to overwrite (the current db is moved aside to a .bak first)", p.LiveDBPath)
@@ -270,6 +272,22 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 		return restoreResult{}, fmt.Errorf("the memory service (or another restore) is using the database — stop it first: pi-stack serve stop")
 	}
 	defer releaseLock()
+
+	// 4d. RE-STAT the live db and RE-ENFORCE the --force rule UNDER the lock. The
+	// liveExists/force decision at step 4 was made BEFORE the lock, so it is stale:
+	// in the TOCTOU window between that check and this acquisition another restore
+	// could have installed a db (restore B saw none, paused; restore A took the lock,
+	// installed a db, released; B now holds the lock with a stale liveExists=false).
+	// Re-evaluating BOTH here — while we hold the store exclusive — ensures the
+	// destructive rename below is gated by state we actually own, so B cannot bypass
+	// the --force guard and silently clobber A's db. This runs BEFORE the first
+	// plain-file move, so a refusal leaves live config/op-refs/db byte-for-byte
+	// intact (nothing to roll back). The recomputed liveExists is what swapMemory
+	// uses to decide the move-aside, so a db that appeared under --force is kept.
+	liveExists = fileExists(p.LiveDBPath)
+	if liveExists && !p.Force {
+		return restoreResult{}, fmt.Errorf("live db already exists at %s; pass --force to overwrite (the current db is moved aside to a .bak first)", p.LiveDBPath)
+	}
 
 	// A stack of undo closures for every COMMITTED step, executed in reverse on any
 	// later failure. rollbackSteps attempts every undo and joins their errors so a
