@@ -97,6 +97,9 @@ func runServe(enabled []string) {
 	enabledSvc := func(name string) bool { return len(want) == 0 || want[name] }
 
 	var all []hostService
+	// Released on graceful shutdown (below), alongside the pidfile. Nil unless the
+	// built-in memory store runs in-process and took the store lock.
+	var memLockRelease func()
 
 	// memory: the built-in store runs IN-PROCESS (fast path — recall is per-turn);
 	// only a non-builtin impl is spawned as a plugin. memory degrades gracefully
@@ -109,6 +112,18 @@ func runServe(enabled []string) {
 		applyMemoryModelEnv(cfg)
 		memSvc := hostService{name: "memory", addr: env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435")}
 		if spec := cfg.Plugin("memory"); spec.Impl == config.BuiltinImpl {
+			// Take the shared advisory store lock BEFORE opening the db — the
+			// correctness primitive that makes `restore` and this daemon mutually
+			// exclusive, closing the port-probe TOCTOU (the store opens before the
+			// port binds). Held for the process lifetime; released on graceful
+			// shutdown. NON-BLOCKING: a held lock means another serve/holder owns the
+			// db, so fail loudly rather than deadlock (the port-in-use path guards
+			// double-serve; the lock is the correctness guarantee).
+			release, lerr := acquireLock(config.MemoryLockPath())
+			if lerr != nil {
+				fatalf("memory: could not acquire store lock at %s (another serve or a restore is using the database?): %v", config.MemoryLockPath(), lerr)
+			}
+			memLockRelease = release
 			// Build the store with error handling and route a failure through fatalf
 			// (F3): a bare log.Fatalf here would skip sup.shutdown() and orphan an
 			// already-launched plugin (e.g. an overlay broker or service subprocess).
@@ -235,6 +250,9 @@ func runServe(enabled []string) {
 		<-ch
 		log.Print("serve: shutting down; cleaning up plugin subprocesses")
 		sup.shutdown()
+		if memLockRelease != nil {
+			memLockRelease()
+		}
 		removeServePidFile()
 		os.Exit(0)
 	}()

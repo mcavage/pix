@@ -151,6 +151,26 @@ func ServePidPath() string {
 	return filepath.Join(dir, "serve.pid")
 }
 
+// MemoryDBPath resolves the live memory sqlite path: $MEMORY_DB if set, else
+// ~/.pi-stack/memory/memory.db. Shared by the daemon and `restore` so both point
+// at the SAME store (and the SAME lock dir, below).
+func MemoryDBPath() string {
+	if p := strings.TrimSpace(os.Getenv("MEMORY_DB")); p != "" {
+		return p
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".pi-stack", "memory", "memory.db")
+}
+
+// MemoryLockPath is the advisory flock file the memory daemon and `restore` both
+// take to be mutually exclusive around the sqlite store. It sits next to the
+// memory db (honoring MEMORY_DB's dir) as .memory.lock, so both processes
+// resolve the SAME path and the lock is the authority that closes the port-probe
+// TOCTOU (the daemon opens the db BEFORE binding its port).
+func MemoryLockPath() string {
+	return filepath.Join(filepath.Dir(MemoryDBPath()), ".memory.lock")
+}
+
 // removedServices are service names that no longer exist (e.g. gws, which the
 // Google Workspace port replaced with the host `gog` MCP server). We drop them
 // silently from a loaded config so a stale services list doesn't fatal `serve`.

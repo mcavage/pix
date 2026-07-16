@@ -86,6 +86,14 @@ type restoreParams struct {
 	OpRefsPath  string      // dest op-refs.env to restore ("" -> skip op-refs restore)
 	Now         time.Time   // timestamp source for .bak/.restore names (zero -> time.Now())
 	ServeProbe  func() bool // reports whether a serve daemon holds the db (nil -> assume down)
+	// LockPath is the shared advisory flock both this restore and the memory daemon
+	// take to be mutually exclusive around the store (config.MemoryLockPath()).
+	// Empty -> derived from LiveDBPath's dir (<dir>/.memory.lock), the SAME path
+	// the daemon resolves. This lock — not the port probe — is the authority.
+	LockPath string
+	// acquireLockFn takes the LockPath (nil -> acquireLock). Tests inject a stub to
+	// simulate a held lock without a second process.
+	acquireLockFn func(path string) (func(), error)
 	// swapRename performs the FINAL staged->live rename. nil -> os.Rename. Tests
 	// inject a failure here to prove the rollback path restores the previous db.
 	swapRename func(oldpath, newpath string) error
@@ -303,6 +311,29 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 			result.OpRefsBak = bak
 		}
 	}
+
+	// 5b.5. Take the shared advisory store lock — the AUTHORITY that makes restore
+	// and the memory daemon mutually exclusive, closing the TOCTOU the port probe
+	// alone leaves open (the daemon opens the db BEFORE binding its port, so it can
+	// hold the live store while the port still reads DOWN). NON-BLOCKING: a held
+	// lock means a daemon or another restore owns the db, so REFUSE rather than swap
+	// underneath it. Held ACROSS the whole swap and released after.
+	acquire := p.acquireLockFn
+	if acquire == nil {
+		acquire = acquireLock
+	}
+	lockPath := p.LockPath
+	if lockPath == "" {
+		lockPath = filepath.Join(filepath.Dir(p.LiveDBPath), ".memory.lock")
+	}
+	releaseLock, lockErr := acquire(lockPath)
+	if lockErr != nil {
+		if rbErr := rollbackSteps(); rbErr != nil {
+			return restoreResult{}, fmt.Errorf("the memory service (or another restore) is using the database — stop it first: pi-stack serve stop; AND rollback of restored config/op-refs FAILED — state may be inconsistent: %w", rbErr)
+		}
+		return restoreResult{}, fmt.Errorf("the memory service (or another restore) is using the database — stop it first: pi-stack serve stop")
+	}
+	defer releaseLock()
 
 	// 5c. Memory swap LAST — the expensive, corruption-prone sqlite step. On ANY
 	// failure, roll back the plain files restored above (reverse order) so a partial
@@ -898,5 +929,7 @@ func resolveRestoreParams(archive string, force bool, now time.Time) restorePara
 		OpRefsPath: config.OpRefsPath(),
 		Now:        now,
 		ServeProbe: serveIsUp,
+		// Resolve the SAME lock path the daemon takes so the two are mutually exclusive.
+		LockPath: config.MemoryLockPath(),
 	}
 }
