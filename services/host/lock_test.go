@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,16 +58,49 @@ func TestMemoryLockPathMatchesDBDir(t *testing.T) {
 
 // TestRestoreRefusesWhenLockHeld is the core contention gate: with the shared
 // lock ALREADY held (as the running daemon would hold it), restore must REFUSE
-// with the clear message and leave the LIVE db byte-for-byte UNTOUCHED. The lock
-// is taken with the REAL acquireLock (real flock), not a stub, so this proves the
-// primitive, not just the plumbing.
+// with the clear message and leave the LIVE db AND config AND op-refs
+// byte-for-byte UNTOUCHED — i.e. the refusal happens BEFORE any plain-file
+// mutation, not merely rolled back after. The lock is taken with the REAL
+// acquireLock (real flock), not a stub, so this proves the primitive, not just
+// the plumbing.
 func TestRestoreRefusesWhenLockHeld(t *testing.T) {
 	st, dbPath := seedMemDB(t, 3)
-	archive := backupSeeded(t, dbPath)
+
+	// An archive that also carries a config.toml + op-refs.env, so restore would
+	// install BOTH plain files if it got past the lock — letting us prove it does not.
+	srcDir := t.TempDir()
+	srcCfg := filepath.Join(srcDir, "config.toml")
+	if err := os.WriteFile(srcCfg, []byte("gog_account = \"restored@example.com\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srcOp := filepath.Join(srcDir, "op-refs.env")
+	if err := os.WriteFile(srcOp, []byte("FOO=op://vault/restored/field\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(t.TempDir(), "pi-stack-backup-20260715-120000.tar.gz")
+	if _, err := memoryBackup(backupParams{
+		DBPath: dbPath, OutPath: archive, Keep: 7, Version: "test",
+		ConfigPath: srcCfg, OpRefsPath: srcOp, Now: time.Now(),
+	}); err != nil {
+		t.Fatalf("seed backup: %v", err)
+	}
 	st.db.Close()
 
 	liveBefore, err := os.ReadFile(dbPath)
 	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Live config + op-refs that MUST be untouched by a refused restore.
+	destDir := t.TempDir()
+	destCfg := filepath.Join(destDir, "config.toml")
+	origCfg := []byte("gog_account = \"live@example.com\"\n")
+	if err := os.WriteFile(destCfg, origCfg, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destOp := filepath.Join(destDir, "op-refs.env")
+	origOp := []byte("FOO=op://vault/live/field\n")
+	if err := os.WriteFile(destOp, origOp, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -78,8 +112,8 @@ func TestRestoreRefusesWhenLockHeld(t *testing.T) {
 	defer release()
 
 	_, err = memoryRestore(restoreParams{
-		ArchivePath: archive, LiveDBPath: dbPath, Force: true,
-		LockPath: lockPath, Now: time.Now(),
+		ArchivePath: archive, LiveDBPath: dbPath, ConfigPath: destCfg, OpRefsPath: destOp,
+		Force: true, LockPath: lockPath, Now: time.Now(),
 		ServeProbe: func() bool { return false }, // port DOWN — lock is the authority
 	})
 	if err == nil {
@@ -99,7 +133,91 @@ func TestRestoreRefusesWhenLockHeld(t *testing.T) {
 	if m, _ := filepath.Glob(dbPath + ".bak-*"); len(m) != 0 {
 		t.Errorf("refused restore left a memory .bak: %v", m)
 	}
+
+	// The live config + op-refs must be byte-for-byte the ORIGINAL, and no .bak
+	// should exist — proving the refusal fired BEFORE any plain-file move-aside.
+	if got, _ := os.ReadFile(destCfg); string(got) != string(origCfg) {
+		t.Errorf("config mutated by a refused restore: got %q, want %q", got, origCfg)
+	}
+	if m, _ := filepath.Glob(destCfg + ".bak-*"); len(m) != 0 {
+		t.Errorf("refused restore left a config .bak: %v", m)
+	}
+	if got, _ := os.ReadFile(destOp); string(got) != string(origOp) {
+		t.Errorf("op-refs mutated by a refused restore: got %q, want %q", got, origOp)
+	}
+	if m, _ := filepath.Glob(destOp + ".bak-*"); len(m) != 0 {
+		t.Errorf("refused restore left an op-refs .bak: %v", m)
+	}
 }
+
+// TestRestoreLockPrecedesPlainFileMutation is the reordered-lock gate: it proves
+// the shared store lock is acquired BEFORE the FIRST plain-file mutation. The
+// injected acquireLockFn captures the live config's bytes AT THE MOMENT the lock
+// is attempted; if the lock were taken (as the bug had it) AFTER the config
+// install, the captured content would already be the ARCHIVED value and a .bak
+// would exist. Taken up front, the capture must still show the ORIGINAL config
+// and no .bak. Moving the acquisition back after the plain-file installs fails
+// this test.
+func TestRestoreLockPrecedesPlainFileMutation(t *testing.T) {
+	st, dbPath := seedMemDB(t, 2)
+
+	srcDir := t.TempDir()
+	srcCfg := filepath.Join(srcDir, "config.toml")
+	if err := os.WriteFile(srcCfg, []byte("gog_account = \"restored@example.com\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(t.TempDir(), "pi-stack-backup-20260715-120000.tar.gz")
+	if _, err := memoryBackup(backupParams{
+		DBPath: dbPath, OutPath: archive, Keep: 7, Version: "test",
+		ConfigPath: srcCfg, Now: time.Now(),
+	}); err != nil {
+		t.Fatalf("seed backup: %v", err)
+	}
+	st.db.Close()
+
+	destDir := t.TempDir()
+	destCfg := filepath.Join(destDir, "config.toml")
+	origCfg := []byte("gog_account = \"live@example.com\"\n")
+	if err := os.WriteFile(destCfg, origCfg, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	lockPath := filepath.Join(filepath.Dir(dbPath), ".memory.lock")
+
+	// Inject a lock that REFUSES, but first records the on-disk state of the live
+	// config at the instant it is asked for the lock.
+	var cfgAtLock string
+	var bakAtLock []string
+	stub := func(path string) (func(), error) {
+		b, _ := os.ReadFile(destCfg)
+		cfgAtLock = string(b)
+		bakAtLock, _ = filepath.Glob(destCfg + ".bak-*")
+		return nil, errBusyLock
+	}
+
+	_, err := memoryRestore(restoreParams{
+		ArchivePath: archive, LiveDBPath: dbPath, ConfigPath: destCfg,
+		Force: true, LockPath: lockPath, Now: time.Now(),
+		ServeProbe:    func() bool { return false },
+		acquireLockFn: stub,
+	})
+	if err == nil {
+		t.Fatal("restore succeeded with a refusing lock stub; want refusal")
+	}
+	if cfgAtLock != string(origCfg) {
+		t.Errorf("config was already mutated when the lock was acquired (got %q, want %q) — lock taken AFTER the plain-file install", cfgAtLock, origCfg)
+	}
+	if len(bakAtLock) != 0 {
+		t.Errorf("a config .bak existed when the lock was acquired (%v) — lock taken AFTER the move-aside", bakAtLock)
+	}
+	// And the live config is left as the original.
+	if got, _ := os.ReadFile(destCfg); string(got) != string(origCfg) {
+		t.Errorf("live config not left original: got %q, want %q", got, origCfg)
+	}
+}
+
+// errBusyLock is a sentinel the lock-order gate injects to simulate a held lock.
+var errBusyLock = errors.New("memory store is locked")
 
 // TestRestoreSucceedsAndReleasesLock proves the happy path: with the lock FREE,
 // restore performs the swap AND releases the lock afterward — so the daemon (or a

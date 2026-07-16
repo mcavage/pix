@@ -249,6 +249,28 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 		restoredCfg = cfg
 	}
 
+	// 4c. Take the shared advisory store lock BEFORE mutating ANY live file — the
+	// AUTHORITY that makes restore and the memory daemon mutually exclusive, closing
+	// the TOCTOU the port probe alone leaves open (the daemon opens the db BEFORE
+	// binding its port, so it can hold the live store while the port still reads
+	// DOWN). NON-BLOCKING and taken UP FRONT: a held lock means a daemon or another
+	// restore owns the store, so REFUSE now — BEFORE the first plain-file move — so a
+	// refused restore leaves the live config/op-refs/db byte-for-byte intact. Held
+	// ACROSS the ENTIRE commit + rollback sequence and released only at the very end.
+	acquire := p.acquireLockFn
+	if acquire == nil {
+		acquire = acquireLock
+	}
+	lockPath := p.LockPath
+	if lockPath == "" {
+		lockPath = filepath.Join(filepath.Dir(p.LiveDBPath), ".memory.lock")
+	}
+	releaseLock, lockErr := acquire(lockPath)
+	if lockErr != nil {
+		return restoreResult{}, fmt.Errorf("the memory service (or another restore) is using the database — stop it first: pi-stack serve stop")
+	}
+	defer releaseLock()
+
 	// A stack of undo closures for every COMMITTED step, executed in reverse on any
 	// later failure. rollbackSteps attempts every undo and joins their errors so a
 	// failed rollback is surfaced loudly rather than swallowed.
@@ -311,29 +333,6 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 			result.OpRefsBak = bak
 		}
 	}
-
-	// 5b.5. Take the shared advisory store lock — the AUTHORITY that makes restore
-	// and the memory daemon mutually exclusive, closing the TOCTOU the port probe
-	// alone leaves open (the daemon opens the db BEFORE binding its port, so it can
-	// hold the live store while the port still reads DOWN). NON-BLOCKING: a held
-	// lock means a daemon or another restore owns the db, so REFUSE rather than swap
-	// underneath it. Held ACROSS the whole swap and released after.
-	acquire := p.acquireLockFn
-	if acquire == nil {
-		acquire = acquireLock
-	}
-	lockPath := p.LockPath
-	if lockPath == "" {
-		lockPath = filepath.Join(filepath.Dir(p.LiveDBPath), ".memory.lock")
-	}
-	releaseLock, lockErr := acquire(lockPath)
-	if lockErr != nil {
-		if rbErr := rollbackSteps(); rbErr != nil {
-			return restoreResult{}, fmt.Errorf("the memory service (or another restore) is using the database — stop it first: pi-stack serve stop; AND rollback of restored config/op-refs FAILED — state may be inconsistent: %w", rbErr)
-		}
-		return restoreResult{}, fmt.Errorf("the memory service (or another restore) is using the database — stop it first: pi-stack serve stop")
-	}
-	defer releaseLock()
 
 	// 5c. Memory swap LAST — the expensive, corruption-prone sqlite step. On ANY
 	// failure, roll back the plain files restored above (reverse order) so a partial
