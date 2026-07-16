@@ -26,15 +26,27 @@ import (
 func runRun(argv []string) {
 	o, err := parseRunArgs(argv)
 	if err != nil {
+		if err == errHelpRequested {
+			// -h/--help: usage to STDOUT, exit 0 (a help request, not an error).
+			fmt.Print(runUsage)
+			return
+		}
 		fmt.Fprintf(os.Stderr, "pi-stack run: %v\n\n", err)
 		fmt.Fprint(os.Stderr, runUsage)
 		os.Exit(2)
 	}
 
-	cfg, err := config.Load()
+	// Resolve the active profile into a flat config so the rest of run (kits, mcp,
+	// gog) sees the profile's overrides. loadResolvedConfig errors on a typo'd /
+	// unknown profile name rather than silently running the base config. The
+	// profile also namespaces the sandbox name so contexts never collide.
+	cfg, profile, err := loadResolvedConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack run: loading config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "pi-stack run: %v\n", err)
 		os.Exit(1)
+	}
+	if profile != config.DefaultProfile {
+		fmt.Fprintf(os.Stderr, "pi-stack: profile %q\n", profile)
 	}
 
 	// Kit selection. A CLEAN released version (e.g. "0.0.16") pins the matching
@@ -90,6 +102,9 @@ func runRun(argv []string) {
 	// and .pi-sessions persist, so nothing is lost).
 	if o.Name == "" {
 		o.Name = deriveSandboxName(o.Workspace)
+		if profile != config.DefaultProfile {
+			o.Name += "-" + sanitizeProfileName(profile)
+		}
 	}
 	switch sandboxStatus(o.Name) {
 	case "running":
@@ -109,6 +124,12 @@ func runRun(argv []string) {
 	// file the in-VM recall extension reads. Entirely best-effort: it never blocks
 	// or fails the launch (recall just misses a bundle this run).
 	wireKnowledgeScope(cfg, o.Workspace, defaultKnowledgeRPC())
+
+	// Memory scope: hand the active profile name to the in-VM memory extensions
+	// (recall/capture) via a per-run workspace file, mirroring the knowledge scope
+	// file. They stamp captures with it and filter recall to {profile}∪{default}.
+	// Best-effort: a failure just leaves memory un-scoped (all default) this run.
+	writeProfileFile(o.Workspace, profile)
 
 	args := buildSbxArgs(cfg, o, version)
 
@@ -144,6 +165,10 @@ func runRun(argv []string) {
 // DIR can appear before or after the flags, matching the flexibility of the old
 // bin/pi-stack shell launcher. Everything after `--` is pi passthrough.
 func parseRunArgs(argv []string) (runOpts, error) {
+	// -h/--help anywhere before `--` is a help request, not a parse error.
+	if wantsHelp(argv) {
+		return runOpts{}, errHelpRequested
+	}
 	o := runOpts{Workspace: "."}
 	wsSet := false
 
@@ -217,7 +242,29 @@ func parseRunArgs(argv []string) (runOpts, error) {
 			wsSet = true
 		}
 	}
+	// A non-"." workspace MUST be an existing directory. Otherwise a mistyped verb
+	// (`pi-stack run help`, `run doctro`) would silently boot a junk sandbox named
+	// after the typo. Reject it, suggesting the verb when the token matches one.
+	if err := validateRunWorkspace(o.Workspace); err != nil {
+		return o, err
+	}
 	return o, nil
+}
+
+// validateRunWorkspace verifies a resolved run workspace is launchable: the cwd
+// default (".") always is; any other value must name an existing directory. A
+// non-directory token that matches a known verb gets a "did you mean" hint.
+func validateRunWorkspace(ws string) error {
+	if ws == "." {
+		return nil
+	}
+	if fi, err := os.Stat(ws); err == nil && fi.IsDir() {
+		return nil
+	}
+	if knownVerbs[ws] {
+		return fmt.Errorf("%q is not a directory. Did you mean `pi-stack %s`?", ws, ws)
+	}
+	return fmt.Errorf("%q is not a directory", ws)
 }
 
 // resolveRepoRoot finds a pi-stack repo checkout for the local kit path, in
@@ -378,6 +425,36 @@ func projectBundle(workspace string) string {
 		local = filepath.Join(workspace, line)
 	}
 	return canonicalizeKnowledgeBundle(local)
+}
+
+// writeProfileFile writes <workspace>/.pi-stack/profile: the active profile name
+// on one line. The in-VM memory extensions read it to scope recall/capture,
+// mirroring how writeKnowledgeScope communicates the knowledge bundle set. It is
+// launcher-generated, per-run, and gitignored. Always written (even "default")
+// so a stale name from a previous run can never linger. Best-effort.
+func writeProfileFile(workspace, profile string) error {
+	if strings.TrimSpace(profile) == "" {
+		profile = config.DefaultProfile
+	}
+	// For a NAMED (non-default) profile, a write failure means recall/capture in
+	// the VM will silently fall back to the default bucket — wrong scope, not a
+	// no-op. Warn to stderr (still best-effort; don't abort the launch). The
+	// default profile stays silent (its absence IS the default behavior).
+	named := profile != config.DefaultProfile
+	warn := func(err error) error {
+		if named {
+			fmt.Fprintf(os.Stderr, "pi-stack: warning: could not write .pi-stack/profile for profile %q (recall/capture will fall back to the default bucket): %v\n", profile, err)
+		}
+		return err
+	}
+	dir := filepath.Join(workspace, ".pi-stack")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return warn(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "profile"), []byte(profile+"\n"), 0o644); err != nil {
+		return warn(err)
+	}
+	return nil
 }
 
 // writeKnowledgeScope writes <workspace>/.pi-stack/knowledge.scope: one canonical

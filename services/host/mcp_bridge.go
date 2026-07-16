@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 
 	"pi-stack/host/config"
 	"pi-stack/host/plugin"
@@ -29,12 +30,72 @@ import (
 // adapter (no subprocess). This is the self-exec plugin server's view too
 // (servePluginMcp), which must serve the built-in impl WITHOUT re-consulting
 // config (config selection is decided by the supervisor, not the servant).
+//
+// The built-in switch is consulted FIRST, so an overlay's extraMcpServers entry
+// can NEVER silently shadow a public built-in (e.g. `slack`). Only NEW names —
+// ones the built-in switch does not know — fall through to the extraMcpServers
+// seam, where an overlay registers a private McpServer (e.g. `pio`, `fastmail`)
+// via init() exactly as it adds an extraCommands subcommand. The public binary
+// populates no extras. This runs on BOTH the in-process bridge (runMcpBridge)
+// and the self-exec plugin path (servePluginMcp), since both route through here.
 func builtinMcpServerFor(name string) (plugin.McpServer, error) {
 	switch name {
 	case "slack":
 		return slackMcpAdapter{}, nil
-	default:
-		return nil, fmt.Errorf("no built-in MCP server named %q", name)
+	}
+	if f := extraMcpServers[name]; f != nil {
+		return f(), nil
+	}
+	return nil, fmt.Errorf("no built-in MCP server named %q", name)
+}
+
+// builtinMcpNames returns the sorted names this binary can serve locally as a
+// `pi-stack-host mcp <name>` stdio bridge: the built-in switch names (slack)
+// plus every extraMcpServers key an overlay registered. gog is DELIBERATELY
+// excluded — it is the external Google Workspace CLI, not served by this bridge.
+// This is the source of truth for "is <name> a local stdio server" that the
+// launcher (`pi-stack mcp register`) and doctor consult via `mcp --list`.
+func builtinMcpNames() []string {
+	seen := map[string]bool{"slack": true}
+	names := []string{"slack"}
+	for k := range extraMcpServers {
+		if k == "gog" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// runMcpList prints, one per line, the MCP server names this binary can serve
+// locally (builtinMcpNames). Exit 0. It is the introspection mode
+// `pi-stack-host mcp --list` / `mcp list`.
+func runMcpList() {
+	for _, n := range builtinMcpNames() {
+		fmt.Println(n)
+	}
+}
+
+// runMcpListTools resolves the named built-in server and prints its tool names,
+// one per line, then EXITS — it never enters the stdio loop. This is the
+// bounded, fast, network-free introspection mode `pi-stack-host mcp <name>
+// --list-tools`, used by doctor to probe a registration without a hanging
+// gateway handshake. An unknown name is a non-zero exit with a stderr message.
+func runMcpListTools(name string) {
+	srv, err := builtinMcpServerFor(name)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "pi-stack-host mcp: "+err.Error())
+		os.Exit(2)
+	}
+	tools, err := srv.ListTools()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "pi-stack-host mcp: "+err.Error())
+		os.Exit(1)
+	}
+	for _, t := range tools {
+		fmt.Println(t.Name)
 	}
 }
 
@@ -173,7 +234,32 @@ func toolSpecToMcpTool(sp plugin.ToolSpec) mcpTool {
 	return t
 }
 
-// runMcpBridge is the body for a future `pi-stack-host mcp <name>` subcommand. It
+// runMcpSubcommand dispatches the `pi-stack-host mcp ...` argv across the three
+// modes: `--list`/`list` (print servable names), `<name> --list-tools`
+// (introspect a server's tools and exit), and the default `<name>` stdio bridge.
+// The introspection modes are bounded + network-free so callers (the launcher,
+// doctor) can ask "what can this binary serve, and what tools does <name> have"
+// without spawning a hanging gateway handshake.
+func runMcpSubcommand(argv []string) {
+	if len(argv) == 0 {
+		fmt.Fprintln(os.Stderr, "pi-stack-host mcp: missing <name> (or --list)")
+		os.Exit(2)
+	}
+	if argv[0] == "--list" || argv[0] == "list" {
+		runMcpList()
+		return
+	}
+	name := argv[0]
+	for _, a := range argv[1:] {
+		if a == "--list-tools" {
+			runMcpListTools(name)
+			return
+		}
+	}
+	runMcpBridge(name)
+}
+
+// runMcpBridge is the body for the `pi-stack-host mcp <name>` subcommand. It
 // resolves the McpServer, builds a dispatcher that proxies to it, and serves it
 // over the newline-delimited-JSON stdio transport the gateway speaks.
 //

@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -51,6 +53,19 @@ func TestAddArgs_Slack(t *testing.T) {
 	args := gogRegistrar().addArgs("slack")
 	if !contains(args, []string{"--args", "/usr/bin/pi-stack-host", "--args", "mcp", "--args", "slack"}) {
 		t.Errorf("slack should register pi-stack-host mcp slack, got %v", args)
+	}
+}
+
+// TestAddArgs_LocalServer builds the pi-stack-host subcommand form for an
+// arbitrary (overlay) local stdio server like "pio": it registers as
+// `pi-stack-host mcp pio`, exactly like slack, via the serverCmd default.
+func TestAddArgs_LocalServer(t *testing.T) {
+	args := gogRegistrar().addArgs("pio")
+	if !contains(args, []string{"mcp", "add", "pio", "--command", "/usr/bin/op"}) {
+		t.Errorf("missing add-command prefix for pio in %v", args)
+	}
+	if !contains(args, []string{"--args", "/usr/bin/pi-stack-host", "--args", "mcp", "--args", "pio"}) {
+		t.Errorf("pio should register pi-stack-host mcp pio, got %v", args)
 	}
 }
 
@@ -121,43 +136,147 @@ func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 	}
 }
 
-// TestRegisterServers_SlackNeedsOp: slack strictly needs op + op-refs. With op
-// absent, register must error clearly (naming 1password-cli), and reference the
-// absolute XDG op-refs path — never a repo-relative config/op-refs.env.
-func TestRegisterServers_SlackNeedsOp(t *testing.T) {
+// TestRegisterServers_SlackNoOpRefsBare: slack with op absent + op-refs absent no
+// longer errors — it registers BARE (no op-run wrapper), so a no-creds server
+// registers without 1Password. sbx absent -> the would-run command is printed.
+func TestRegisterServers_SlackNoOpRefsBare(t *testing.T) {
 	f := fakeEnv{
-		present: map[string]bool{}, // no op
-		output:  map[string]string{},
+		present: map[string]bool{}, // no op, no sbx
+		output:  map[string]string{"/usr/bin/pi-stack-host mcp --list": "slack\n"},
 		envVars: map[string]string{"SBX_MCP_URL": "https://gateway.docker.com", "HOME": "/home/me"},
 		home:    "/home/me",
 	}
 	cfg := defaultCfg()
 	var buf bytes.Buffer
-	err := registerServers(cfg, f.env(), &buf, []string{"slack"}, hostStub("/usr/bin/pi-stack-host", nil))
-	if err == nil || !strings.Contains(err.Error(), "1password-cli") {
-		t.Errorf("expected slack to require op (1password-cli), got %v", err)
+	if err := registerServers(cfg, f.env(), &buf, []string{"slack"}, hostStub("/usr/bin/pi-stack-host", nil)); err != nil {
+		t.Fatalf("unexpected error (slack should register bare, not fail): %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "registered slack directly (bare, no 1Password)") {
+		t.Errorf("expected the bare-registration note for slack, got:\n%s", out)
+	}
+	// Bare command: --command /usr/bin/pi-stack-host, no op-run wrapper.
+	if !strings.Contains(out, "sbx mcp add slack --command /usr/bin/pi-stack-host --args mcp --args slack") {
+		t.Errorf("expected a bare slack would-run command, got:\n%s", out)
+	}
+	if strings.Contains(out, "op") && strings.Contains(out, "run --no-masking") {
+		t.Errorf("bare slack must not wrap in op run, got:\n%s", out)
 	}
 }
 
 // TestRegisterServers_SlackOpRefsAbsentSeeds: slack with op present but op-refs
-// ABSENT -> seed a template at the absolute XDG path and error naming it.
+// ABSENT -> seed a template at the absolute XDG path (via the ONE seeder,
+// config.SeedOpRefsAt) and register BARE (no error), noting the seeded path.
 func TestRegisterServers_SlackOpRefsAbsentSeeds(t *testing.T) {
-	var wrote string
+	home := t.TempDir()
 	env := (fakeEnv{
 		present: map[string]bool{"op": true},
-		output:  map[string]string{},
+		output:  map[string]string{"/usr/bin/pi-stack-host mcp --list": "slack\n"},
 		envVars: map[string]string{"SBX_MCP_URL": "https://gateway.docker.com"},
-		home:    "/home/me",
+		home:    home,
 	}).env()
-	env.writeFile = func(path string, data []byte, perm os.FileMode) error { wrote = path; return nil }
 	cfg := defaultCfg()
 	var buf bytes.Buffer
-	err := registerServers(cfg, env, &buf, []string{"slack"}, hostStub("/usr/bin/pi-stack-host", nil))
-	if err == nil || !strings.Contains(err.Error(), ".config/pi-stack/op-refs.env") {
-		t.Errorf("expected an error naming the absolute XDG op-refs path, got %v", err)
+	if err := registerServers(cfg, env, &buf, []string{"slack"}, hostStub("/usr/bin/pi-stack-host", nil)); err != nil {
+		t.Fatalf("unexpected error (slack should register bare, not fail): %v", err)
 	}
-	if !strings.Contains(wrote, ".config/pi-stack/op-refs.env") {
-		t.Errorf("expected the template seeded at the XDG path, wrote %q", wrote)
+	seeded := filepath.Join(home, ".config", "pi-stack", "op-refs.env")
+	info, err := os.Stat(seeded)
+	if err != nil {
+		t.Fatalf("expected the template seeded at %s: %v", seeded, err)
+	}
+	// The ONE seeder writes 0600 (owner-only).
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("seeded op-refs.env mode = %o, want 600", info.Mode().Perm())
+	}
+	if !strings.Contains(buf.String(), "seeded a template op-refs.env") {
+		t.Errorf("expected the seeded-template note, got:\n%s", buf.String())
+	}
+}
+
+// TestRegisterServers_RemoteSkipped: a cfg.MCP entry that is NEITHER gog NOR a
+// local stdio server (per `pi-stack-host mcp --list`) is a remote gateway-
+// catalog server: it is SKIPPED with an info line, never registered as local.
+// This gate fails if the local-vs-remote guard is removed (notion would then be
+// wrongly registered).
+func TestRegisterServers_RemoteSkipped(t *testing.T) {
+	f := fakeEnv{
+		present: map[string]bool{"op": true}, // no sbx -> would-run printed
+		output: map[string]string{
+			"/usr/bin/pi-stack-host mcp --list": "slack\n", // notion is NOT local
+		},
+		envVars:  map[string]string{"PI_STACK_CONFIG": "/fake/config/config.toml", "SBX_MCP_URL": "https://gateway.docker.com"},
+		statFile: map[string]bool{"/fake/config/op-refs.env": true},
+	}
+	cfg := defaultCfg()
+	cfg.MCP = []string{"slack", "notion"}
+	var buf bytes.Buffer
+	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pi-stack-host", nil)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "notion: gateway-catalog server, not locally registered") {
+		t.Errorf("expected notion to be skipped as a gateway-catalog server, got:\n%s", out)
+	}
+	if strings.Contains(out, "sbx mcp add notion") {
+		t.Errorf("notion (remote) must NOT be registered as local, got:\n%s", out)
+	}
+	if !strings.Contains(out, "sbx mcp add slack") {
+		t.Errorf("slack (local) should still be registered, got:\n%s", out)
+	}
+}
+
+// TestRegisterServers_LocalSetUnknownFailClosed: when the local-name list can't
+// be established (pi-stack-host unresolved / `mcp --list` fails), a non-gog name
+// must FAIL CLOSED — NOT be registered as a local pi-stack-host subcommand — and
+// registerServers must return a non-nil error so the command exits non-zero.
+// This gate fails if the old fall-back-to-local behavior returns.
+func TestRegisterServers_LocalSetUnknownFailClosed(t *testing.T) {
+	f := fakeEnv{
+		present:  map[string]bool{"op": true, "sbx": true},
+		output:   map[string]string{}, // no `mcp --list` output -> local set UNKNOWN
+		envVars:  map[string]string{"PI_STACK_CONFIG": "/fake/config/config.toml", "SBX_MCP_URL": "https://gateway.docker.com"},
+		statFile: map[string]bool{"/fake/config/op-refs.env": true},
+	}
+	cfg := defaultCfg()
+	cfg.MCP = []string{"notion"} // a gateway-catalog name, NOT a local server
+	var buf bytes.Buffer
+	// hostStub fails: pi-stack-host cannot be resolved, so the local set is unknown.
+	err := registerServers(cfg, f.env(), &buf, nil, hostStub("", errors.New("pi-stack-host not found")))
+	if err == nil {
+		t.Fatal("expected a non-nil error when the local set is unknown, got nil (silent success)")
+	}
+	if !strings.Contains(err.Error(), "could not determine local MCP servers") {
+		t.Errorf("expected a fail-closed error, got %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "sbx mcp add notion") {
+		t.Errorf("notion must NOT be registered as local when the local set is unknown, got:\n%s", out)
+	}
+	if !strings.Contains(out, "cannot determine local MCP servers") {
+		t.Errorf("expected the fail-closed skip warning, got:\n%s", out)
+	}
+}
+
+// TestRegisterServers_FailuresReturnError: when `sbx mcp add` fails for a
+// server, register attempts it, prints the failure, AND returns a non-nil error
+// so `pi-stack mcp register` exits non-zero.
+func TestRegisterServers_FailuresReturnError(t *testing.T) {
+	f := fakeEnv{
+		present:  map[string]bool{"op": true, "gog": true, "sbx": true},
+		output:   map[string]string{}, // no success output for the sbx add -> it "fails"
+		envVars:  map[string]string{"PI_STACK_CONFIG": "/fake/config/config.toml", "SBX_MCP_URL": "https://gateway.docker.com"},
+		statFile: map[string]bool{"/fake/config/op-refs.env": true},
+	}
+	cfg := defaultCfg()
+	cfg.GogAccount = "me@x.com"
+	var buf bytes.Buffer
+	err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil))
+	if err == nil || !strings.Contains(err.Error(), "failed to register") || !strings.Contains(err.Error(), "gog") {
+		t.Errorf("expected a joined registration error mentioning gog, got %v", err)
+	}
+	if !strings.Contains(buf.String(), "FAILED to register: gog") {
+		t.Errorf("expected the per-server failure line, got:\n%s", buf.String())
 	}
 }
 
@@ -242,17 +361,40 @@ func TestRegisterServers_Registers(t *testing.T) {
 	}
 }
 
-// TestRegisterServers_DefaultsToConfigMCP: with no names, registers the local
-// stdio servers from cfg.MCP (and ignores remote catalog entries).
+// TestRegisterServers_DefaultsToConfigMCP: with no names, every entry in cfg.MCP
+// is registered as a local stdio server. A non-gog name like "pio" registers as
+// `pi-stack-host mcp pio` (sbx absent -> would-run is printed).
 func TestRegisterServers_DefaultsToConfigMCP(t *testing.T) {
+	f := fakeEnv{
+		present:  map[string]bool{"op": true}, // no sbx -> would-run printed
+		output:   map[string]string{"/usr/bin/pi-stack-host mcp --list": "pio\n"},
+		envVars:  map[string]string{"PI_STACK_CONFIG": "/fake/config/config.toml", "SBX_MCP_URL": "https://gateway.docker.com"},
+		statFile: map[string]bool{"/fake/config/op-refs.env": true},
+	}
+	cfg := defaultCfg()
+	cfg.MCP = []string{"pio"} // an overlay local stdio server
+	var buf bytes.Buffer
+	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pi-stack-host", nil)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "sbx mcp add pio") ||
+		!strings.Contains(out, "/usr/bin/pi-stack-host --args mcp --args pio") {
+		t.Errorf("expected pio registered as pi-stack-host mcp pio, got:\n%s", out)
+	}
+}
+
+// TestRegisterServers_EmptyConfig: with no names and an empty cfg.MCP, there is
+// nothing to register.
+func TestRegisterServers_EmptyConfig(t *testing.T) {
 	f := fakeEnv{present: map[string]bool{}, output: map[string]string{}}
 	cfg := defaultCfg()
-	cfg.MCP = []string{"notion"} // remote-only, not a local stdio server
+	cfg.MCP = nil
 	var buf bytes.Buffer
 	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("", nil)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(buf.String(), "Nothing to register") {
-		t.Errorf("expected nothing-to-register for a remote-only mcp set, got:\n%s", buf.String())
+		t.Errorf("expected nothing-to-register for an empty mcp set, got:\n%s", buf.String())
 	}
 }

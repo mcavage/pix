@@ -34,6 +34,7 @@ type setupOpts struct {
 	account   string // --account <email>
 	knowledge string // --knowledge <path|url>: the global KB source
 	assumeYes bool   // --yes / --non-interactive: never prompt
+	help      bool   // -h / --help: print usage + exit 0
 }
 
 // setupIO carries the streams + a TTY flag so tests can exercise the non-TTY
@@ -78,6 +79,13 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
 		}
 	}
 	fmt.Fprintln(sio.out)
+
+	// 1b. Secrets (1Password). Host MCP servers (slack, gog, ...) get their creds
+	// from 1Password at gateway spawn; nothing is prompted here (secret VALUES
+	// live in 1Password, never on disk). ALWAYS seed the refs template (idempotent,
+	// no-clobber) so there's a concrete file to fill, then report op state. Wholly
+	// non-blocking: 1Password is optional (a no-creds server like pio needs none).
+	setupSecretsSection(env, sio.out, todo)
 
 	// 2. Google Workspace account. From --account, else the already-configured
 	// value, else an interactive prompt (only when we have a TTY and weren't told
@@ -197,6 +205,44 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
 	return steps
 }
 
+// setupSecretsSection is the "Secrets (1Password)" step of setup: a 2-sentence
+// plain explanation + the mental model, ALWAYS seed the refs template
+// (idempotent, no-clobber), and report whether op is installed + signed in.
+// Prompts nothing (secret values live in 1Password) and is wholly non-blocking
+// (1Password is optional). It adds outstanding steps as TODOs where relevant.
+func setupSecretsSection(env shellEnv, out io.Writer, todo func(string)) {
+	fmt.Fprintln(out, "Secrets (1Password, optional):")
+	fmt.Fprintln(out, "  Host MCP servers (slack, gog, ...) get their creds from 1Password at spawn")
+	fmt.Fprintln(out, "  time; pi-stack never stores them. A server with no creds needs nothing here.")
+	fmt.Fprintln(out, indent(config.OpRefsMentalModel))
+
+	// ALWAYS seed (idempotent, no-clobber). This is the ONE seeder.
+	path, created, err := config.SeedOpRefs()
+	switch {
+	case err != nil:
+		fmt.Fprintf(out, "  ✗ could not seed op-refs.env at %s: %v\n", path, err)
+	case created:
+		fmt.Fprintf(out, "  ✓ seeded a template op-refs.env at %s (fill in your op:// refs)\n", path)
+	default:
+		fmt.Fprintf(out, "  ✓ op-refs.env already present at %s (left as-is)\n", path)
+	}
+
+	// op state: installed / missing / installed-not-signed-in. All non-blocking.
+	switch {
+	case !opInstalled(env):
+		fmt.Fprintln(out, "  · op (1Password CLI) not installed — optional, install it to resolve refs:")
+		fmt.Fprintln(out, "      https://developer.1password.com/docs/cli")
+		todo("install the 1Password CLI (op) if a host MCP server needs creds")
+	case !opSignedIn(env):
+		fmt.Fprintln(out, "  · op installed, no account configured — run: op signin  (when you add creds)")
+		todo("op signin")
+	default:
+		fmt.Fprintln(out, "  ✓ op installed, account configured")
+	}
+	fmt.Fprintln(out, "  edit refs anytime:  pi-stack secret edit   (check them: pi-stack secret check)")
+	fmt.Fprintln(out)
+}
+
 // setupKnowledge sets up the global knowledge base from a user-supplied source,
 // reusing the `knowledge` verb's logic (no duplicated OKF scaffold or config
 // wiring). A git URL is cloned/pulled and used in place (knowledgeUse); a local
@@ -216,15 +262,10 @@ func setupKnowledge(cfg *config.Config, ref string, out io.Writer) error {
 }
 
 // localMCPTargets returns the local stdio servers in cfg.MCP (the ones
-// registerServers would act on).
+// registerServers would act on). Every configured mcp name is a local stdio
+// server (gog + everything else; see mcp.go's header), so this is just cfg.MCP.
 func localMCPTargets(cfg *config.Config) []string {
-	var out []string
-	for _, m := range cfg.MCP {
-		if localStdioMCP[m] {
-			out = append(out, m)
-		}
-	}
-	return out
+	return append([]string(nil), cfg.MCP...)
 }
 
 // promptLine reads a single trimmed line from sio.in after writing prompt.
@@ -235,11 +276,16 @@ func promptLine(sio setupIO, prompt string) string {
 }
 
 // parseSetupArgs parses the setup flag set.
+// setupHelp is a sentinel setupOpts flag: parseSetupArgs sets it on -h/--help so
+// runSetupCmd prints usage + exits 0 rather than running the wizard.
 func parseSetupArgs(argv []string) (setupOpts, error) {
 	var o setupOpts
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		switch {
+		case a == "-h" || a == "--help":
+			o.help = true
+			return o, nil
 		case a == "--yes" || a == "-y" || a == "--non-interactive":
 			o.assumeYes = true
 		case a == "--account":
@@ -269,8 +315,12 @@ func parseSetupArgs(argv []string) (setupOpts, error) {
 func runSetupCmd(argv []string) {
 	opts, err := parseSetupArgs(argv)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack setup: %v\n", err)
+		fmt.Fprintf(os.Stderr, "pi-stack setup: %v\n\n%s", err, setupUsage)
 		os.Exit(2)
+	}
+	if opts.help {
+		fmt.Print(setupUsage)
+		return
 	}
 	cfg, err := config.Load()
 	if err != nil {

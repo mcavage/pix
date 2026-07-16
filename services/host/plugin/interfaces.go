@@ -33,6 +33,7 @@ type RememberReq struct {
 	Durability string
 	Source     string
 	Project    string
+	Profile    string
 	HasProject bool
 	TTLDays    int
 	Confidence float64
@@ -55,6 +56,7 @@ type RecallReq struct {
 	CharBudget int
 	Kind       string
 	Project    string
+	Profile    string
 }
 
 // Hit mirrors a scoredHit as surfaced by the recall JSON-RPC result.
@@ -74,7 +76,8 @@ type RecallResp struct {
 
 // ForgetReq / ForgetResp mirror forget(idOrPrefix) -> {ok}.
 type ForgetReq struct {
-	ID string
+	ID      string
+	Profile string
 }
 
 type ForgetResp struct {
@@ -94,6 +97,7 @@ type SynthesizeResp struct {
 // PromotableReq / PromotableResp mirror promotable(minFrequency) -> {candidates}.
 type PromotableReq struct {
 	MinFrequency int
+	Profile      string
 }
 
 type Candidate struct {
@@ -111,6 +115,7 @@ type PromotableResp struct {
 type ObserveReq struct {
 	User       string
 	Project    string
+	Profile    string
 	HasProject bool
 }
 

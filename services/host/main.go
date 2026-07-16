@@ -7,6 +7,8 @@
 //
 //	memory         self-learning memory store  (:11435, JSON-RPC)
 //	knowledge      OKF knowledge retrieval idx (:11436, JSON-RPC)
+//	backup         hot FULL backup (memory + config + op-refs) -> tar.gz
+//	restore        restore a FULL backup tar.gz (safe swap)
 //	mcp <name>     stdio MCP bridge            (run by the sbx gateway)
 //	slack          alias for `mcp slack`       (stdio; run by the sbx gateway)
 //	plugin <kind>  built-in go-plugin server   (self-exec, launched by `serve`)
@@ -46,6 +48,12 @@ var (
 	// service name a factory registers (e.g. a short "warehouse" -> "warehouse-proxy").
 	// Overlay plugins add their own here so the public tree never names one.
 	extraServiceAliases = map[string]string{}
+	// extraMcpServers lets an overlay add a BUILT-IN McpServer (e.g. a private
+	// `pio` or `fastmail` bridge) served through `pi-stack-host mcp <name>`, exactly
+	// as extraCommands adds a subcommand. builtinMcpServerFor consults this map
+	// FIRST, so an overlay registers via init() (like extraCommands); the public
+	// binary ships none.
+	extraMcpServers = map[string]func() plugin.McpServer{}
 	// extraBrokerFactory lets an overlay register a BUILT-IN CredentialBroker
 	// served over the `plugin broker` self-exec path. nil in the public tree —
 	// there is no built-in broker (the built-in Google broker was removed), so the broker slot is
@@ -53,6 +61,11 @@ var (
 	// (see examples/broker-example) ships its own main() and does not use this.
 	extraBrokerFactory func() plugin.CredentialBroker
 )
+
+// version is stamped at build time via -ldflags "-X main.version=..." for the
+// launcher; the host binary is currently built unstamped, so it reports "dev".
+// Used in the backup manifest (pi_stack_version).
+var version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -65,15 +78,15 @@ func main() {
 		// stdio bridge (behaviourally identical to the old runSlack()).
 		runMcpBridge("slack")
 	case "mcp":
-		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "pi-stack-host mcp: missing <name>")
-			os.Exit(2)
-		}
-		runMcpBridge(os.Args[2])
+		runMcpSubcommand(os.Args[2:])
 	case "plugin":
 		runPlugin(os.Args[2:])
 	case "memory":
-		runMemory()
+		runMemoryHost(os.Args[2:])
+	case "backup":
+		runBackupCLI(os.Args[2:])
+	case "restore":
+		runRestoreCLI(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
 	case "-h", "--help", "help":
@@ -123,6 +136,8 @@ usage: pi-stack-host <subcommand>
 
 subcommands:
   memory         self-learning memory store, JSON-RPC (:11435)
+  backup         hot FULL backup (memory + config + op-refs) -> tar.gz
+  restore        restore a FULL backup tar.gz (safe swap)
   mcp <name>     stdio MCP bridge (run by the sbx gateway); slack is an alias
   slack          alias for "mcp slack"
   plugin <kind>  built-in go-plugin server, self-exec (memory|knowledge|broker|mcp)

@@ -15,8 +15,9 @@
 //	pi-stack version                   print the stamped version (full)
 //	pi-stack config show|path          show config path + contents (full)
 //	pi-stack serve [args…]             exec the sibling pi-stack-host serve (full)
-//	pi-stack doctor|setup|mcp|models|upgrade|uninstall   (stubbed — later units)
-//	pi-stack help                      print this verb tree
+//	pi-stack status|doctor|setup|mcp|memory|knowledge|profile   (all implemented)
+//	pi-stack reset|uninstall           (destructive, reversible: state moved aside)
+//	pi-stack help [verb]               print the verb tree (or one verb's usage)
 package main
 
 import (
@@ -31,52 +32,144 @@ import (
 var version = "dev"
 
 func main() {
-	if len(os.Args) < 2 {
-		// Bare `pi-stack` == `run` in the current directory.
-		runRun(nil)
+	// A global `--profile <name>` may appear before the subcommand; pull it out
+	// first so both `pi-stack --profile work run` and `pi-stack run --profile work`
+	// work. flagProfile is consumed by loadResolvedConfig / run.
+	args, perr := extractProfileFlag(os.Args[1:])
+	if perr != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack: %v\n", perr)
+		os.Exit(2)
+	}
+
+	// A global `--man` may appear anywhere on the command line (before a `--`
+	// terminator): render the embedded man page and exit. It is DISTINCT from the
+	// -h/--help contract — `--help` prints usage, `--man` opens the full page.
+	if rest, ok := extractManFlag(args); ok {
+		runMan(rest)
 		return
 	}
 
-	switch os.Args[1] {
+	if len(args) == 0 {
+		// Bare `pi-stack` shows STATUS — never launches a sandbox (launching is
+		// explicit behind `run`). On a fresh host with no config, offer onboarding.
+		if maybeFirstRun() {
+			return
+		}
+		runStatusCmd(nil)
+		return
+	}
+
+	switch args[0] {
 	case "run":
-		runRun(os.Args[2:])
+		runVerb(args[1:])
+	case "status", "st":
+		runStatusCmd(args[1:])
 	case "version", "--version", "-v":
+		if len(args) > 1 {
+			if args[1] == "-h" || args[1] == "--help" {
+				fmt.Print(versionUsage)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "pi-stack version: unexpected argument %q\n\n%s", args[1], versionUsage)
+			os.Exit(2)
+		}
 		fmt.Println(version)
 	case "config":
-		runConfig(os.Args[2:])
+		runConfig(args[1:])
 	case "serve":
-		runServe(os.Args[2:])
+		runServe(args[1:])
 	case "doctor":
-		runDoctorCmd(os.Args[2:])
+		runDoctorCmd(args[1:])
 	case "setup":
-		runSetupCmd(os.Args[2:])
+		runSetupCmd(args[1:])
 	case "mcp":
-		runMcpCmd(os.Args[2:])
-	case "knowledge":
-		runKnowledge(os.Args[2:])
-	case "models", "upgrade", "uninstall":
-		stub(os.Args[1])
+		runMcpCmd(args[1:])
+	case "secret":
+		runSecretCmd(args[1:])
+	case "memory", "mem":
+		runMemory(args[1:])
+	case "backup":
+		runBackup(args[1:])
+	case "restore":
+		runRestore(args[1:])
+	case "knowledge", "kb":
+		runKnowledge(args[1:])
+	case "man":
+		runMan(args[1:])
+	case "profile":
+		runProfile(args[1:])
+	case "reset":
+		runReset(args[1:])
+	case "uninstall":
+		runUninstall(args[1:])
 	case "help", "-h", "--help":
-		if len(os.Args) > 2 && os.Args[2] == "run" {
-			fmt.Print(runUsage)
-			return
+		if len(args) > 1 {
+			if u, ok := verbUsage(args[1]); ok {
+				fmt.Print(u)
+				return
+			}
 		}
 		fmt.Print(helpText)
 	default:
-		// A bare positional (e.g. `pi-stack ~/dev/foo`) is a run workspace.
-		if len(os.Args[1]) > 0 && os.Args[1][0] != '-' {
-			runRun(os.Args[1:])
-			return
+		// A bare positional is a run workspace ONLY when it names an existing
+		// directory (e.g. `pi-stack ~/dev/foo`). A non-directory word is a typo
+		// (e.g. `pi-stack memoyr`) — do NOT silently launch a sandbox for it.
+		if a := args[0]; len(a) > 0 && a[0] != '-' {
+			if fi, err := os.Stat(a); err == nil && fi.IsDir() {
+				runVerb(args)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "pi-stack: unknown command %q (and no such directory)\n\n", a)
+			fmt.Print(helpText)
+			os.Exit(2)
 		}
-		fmt.Fprintf(os.Stderr, "pi-stack: unknown subcommand %q\n\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "pi-stack: unknown flag %q\n\n", args[0])
 		fmt.Print(helpText)
 		os.Exit(2)
 	}
 }
 
+// firstRunHook is the onboarding entry point, indirected through a package var
+// so the help-before-onboarding ordering is unit-testable: a test swaps it for a
+// spy and asserts a help short-circuit never reaches it.
+var firstRunHook = maybeFirstRun
+
+// runVerb handles the `run` verb and the bare-DIR alias. It short-circuits to
+// run usage on a -h/--help request BEFORE any side effect (notably first-run
+// onboarding), so `pi-stack run --help` prints help even on a config-less host
+// instead of dropping into the setup prompt. Otherwise it runs onboarding (which
+// may fully handle a fresh host) then launches the sandbox.
+func runVerb(argv []string) {
+	if wantsHelp(argv) {
+		fmt.Print(runUsage)
+		return
+	}
+	if firstRunHook() {
+		return
+	}
+	runRun(argv)
+}
+
 // runServe execs the sibling pi-stack-host binary's `serve` subcommand, found
 // next to this binary or on PATH, passing along any args.
 func runServe(argv []string) {
+	// A leading -h/--help prints serve usage instead of execing the host binary.
+	if len(argv) > 0 && (argv[0] == "-h" || argv[0] == "--help") {
+		fmt.Print(serveUsage)
+		return
+	}
+	// `serve stop` / `serve status` are launcher-side control verbs (pidfile-based)
+	// handled HERE — they are NOT passed through to `pi-stack-host serve`.
+	if len(argv) > 0 {
+		switch argv[0] {
+		case "stop":
+			runServeStop(argv[1:])
+			return
+		case "status":
+			runServeStatus(argv[1:])
+			return
+		}
+	}
 	bin, err := findHostBinary()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack serve: %v\n", err)
@@ -110,13 +203,6 @@ func findHostBinary() (string, error) {
 	return "", fmt.Errorf("pi-stack-host not found next to this binary or on PATH")
 }
 
-// stub prints a clearly-labeled "not yet implemented" line so the verb surface
-// exists and is testable ahead of the units that fill it in.
-func stub(name string) {
-	fmt.Fprintf(os.Stderr, "pi-stack %s: not yet implemented — coming in a later unit\n", name)
-	os.Exit(2)
-}
-
 const runUsage = `usage: pi-stack run [DIR] [flags] [-- pi-args...]
 
 flags:
@@ -142,24 +228,36 @@ DIR defaults to the current directory. Everything after -- is passed to pi.
 Set PI_STACK_DEBUG=1 to print the composed sbx command.
 `
 
-const helpText = `pi-stack — launch the pi-stack sandbox
+const helpText = `pi-stack — the pi-stack sandbox + host services
 
-usage: pi-stack <command> [args]
+usage: pi-stack [--profile NAME] <command> [args]
+
+new here?  pi-stack setup     (guided one-time setup)
 
 commands:
-  run [DIR] [flags]   launch the sandbox (also the default with no command)
-  version             print the launcher version
+  (none)              show status (this does NOT launch a sandbox)
+  status              host + services + sandboxes at a glance   [--json]
+  setup               guided first-run setup (writes config + registers MCP)
+  doctor              diagnose host + sandbox health
+  run [DIR] [flags]   launch the sandbox (launching is explicit)
+  serve [args...]     run the host services (execs pi-stack-host serve)
+
+  memory <cmd>        recall|remember|forget|learnings|stats   (:11435)
+  backup [--out P]    hot FULL backup (memory + config + op-refs) -> tar.gz
+  restore <archive>   restore a FULL backup (safe swap)   [--force]
+  knowledge <cmd>     init|use|ls|query|sync|remote            (:11436)
+  mcp register|ls     register local stdio MCP servers with the sbx gateway
+  secret <cmd>        status|edit|check the 1Password op-refs (host MCP creds)
+  profile ls|use      switch between contexts (work / personal / default)
+
   config show|path    show the resolved config path and contents
   config set|unset    change config without hand-editing the toml
-  serve [args...]     run the host services (execs pi-stack-host serve)
-  doctor              diagnose host + sandbox health
-  setup               guided first-run setup (writes config + registers MCP)
-  mcp register|ls     register local stdio MCP servers with the sbx gateway
-  knowledge init|use|ls   scaffold/point/list the OKF knowledge bundle (:11436)
-  models              manage local Ollama models                (coming in a later unit)
-  upgrade             update the launcher + kit                 (coming in a later unit)
-  uninstall           remove pi-stack from this host            (coming in a later unit)
-  help                print this help
+  reset [flags]       move stack state aside (reversible)   [--keep-memory --sbx --yes]
+  uninstall [flags]   reset, then remove the bin symlinks    [--keep-memory --yes]
+  version             print the launcher version
+  man                 render the embedded man page (no MANPATH needed; also --man)
+  help [verb]         print this help (or a verb's usage)
 
+global: --profile NAME   run/read a named profile (work, personal, ...)
 run flags: --dev --skills DIR --kit K --mcp M --name N --model M -- pi-args...
 `
