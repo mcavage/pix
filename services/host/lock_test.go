@@ -472,3 +472,35 @@ func TestRestoreReStatsLiveDBUnderLock(t *testing.T) {
 		t.Errorf("refused restore moved the racing db aside to a .bak: %v", m)
 	}
 }
+
+// TestAcquireLockCreatesMissingDir gates the fresh-setup bug: on a first-ever
+// serve the lock file's parent dir (the memory db dir) does not exist yet, since
+// it's created only when the store opens — AFTER the lock is taken. acquireLock
+// must MkdirAll that dir and succeed, not fail with ENOENT.
+func TestAcquireLockCreatesMissingDir(t *testing.T) {
+	// A path two levels below a fresh temp dir: neither intermediate exists.
+	path := filepath.Join(t.TempDir(), "memory", ".memory.lock")
+	release, err := acquireLock(path)
+	if err != nil {
+		t.Fatalf("acquireLock on a missing parent dir failed (regression): %v", err)
+	}
+	defer release()
+	if _, serr := os.Stat(path); serr != nil {
+		t.Errorf("lock file not created at %s: %v", path, serr)
+	}
+}
+
+// TestLockMemoryStoreOrFatalFreshDir: the serving prologue must NOT fatal on a
+// fresh MEMORY_DB whose dir doesn't exist yet (the user-reported first-serve bug).
+func TestLockMemoryStoreOrFatalFreshDir(t *testing.T) {
+	// MEMORY_DB in a dir that does not exist -> MemoryLockPath parent missing.
+	t.Setenv("MEMORY_DB", filepath.Join(t.TempDir(), "memory", "memory.db"))
+	fatalCalled := false
+	release := lockMemoryStoreOrFatal(func(string, ...any) { fatalCalled = true })
+	if fatalCalled {
+		t.Fatal("fatal fired on a fresh (missing) MEMORY_DB dir — first serve would be blocked")
+	}
+	if release != nil {
+		release()
+	}
+}
