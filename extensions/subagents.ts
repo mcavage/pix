@@ -49,8 +49,23 @@ const num = (name: string, dflt: number): number => {
 	const v = Number(process.env[name]);
 	return Number.isFinite(v) && v > 0 ? v : dflt;
 };
-const IDLE_MS = num("PI_SUBAGENT_IDLE_MS", 120_000); // no output for this long → dead
-const WALL_MS = num("PI_SUBAGENT_TIMEOUT_MS", 600_000); // hard per-child cap
+// Defaults are generous on purpose: frontier models (e.g. Claude Fable 5) can
+// THINK for many minutes emitting nothing the parent can see (raw thinking
+// tokens are never streamed), and a real engineering task legitimately runs long.
+// The old 120s/600s caps killed productive children mid-work. The idle watchdog
+// still catches a genuinely dead SSE stream within a few minutes; the wall cap is
+// a cost/livelock ceiling, not a productivity killer. Per-agent frontmatter
+// (idle_ms / wall_ms) overrides these for a known-slow agent WITHOUT needing the
+// env (which is read once at startup and often unwritable).
+const IDLE_MS = num("PI_SUBAGENT_IDLE_MS", 300_000); // no output for this long → dead (5m)
+const WALL_MS = num("PI_SUBAGENT_TIMEOUT_MS", 3_600_000); // hard per-child cap (1h)
+// Node's setTimeout treats a delay above 2^31-1 ms (~24.8 days) as 1 ms — which
+// would fire the watchdog INSTANTLY. Clamp every resolved budget to that range
+// (floored to an int) so a fat-fingered env/frontmatter value (e.g.
+// wall_ms: 3000000000) degrades to a long-but-valid cap, never an instant kill.
+const MAX_TIMER_MS = 2_147_483_647;
+const clampDelay = (n: number): number =>
+	Math.min(Math.max(Math.floor(n), 1), MAX_TIMER_MS);
 // After the child emits agent_settled the turn's output is already captured, so a
 // process that lingers (e.g. a web_search includeContent background fetch holding
 // the event loop open) gets a fast, CLEAN teardown instead of waiting out the
@@ -83,6 +98,12 @@ interface AgentConfig {
 	model?: string;
 	thinking?: string;
 	maxTurns?: number;
+	// Per-agent watchdog overrides (frontmatter idle_ms / wall_ms, milliseconds).
+	// A slow-by-design agent (a frontier deep worker with high thinking) declares
+	// its own budget here so it isn't killed by the global defaults. Unset =
+	// inherit IDLE_MS / WALL_MS.
+	idleMs?: number;
+	wallMs?: number;
 	// Web access defaults ON, but a hermetic agent (e.g. a reviewer/auditor that
 	// sees sensitive diffs) can set `web: false` to keep repo context off the wire.
 	web?: boolean;
@@ -145,6 +166,15 @@ function loadAgentsFromDir(
 		const maxTurns = frontmatter.max_turns
 			? Number(frontmatter.max_turns)
 			: undefined;
+		// Per-agent watchdog budgets (milliseconds). wall_ms accepts timeout_ms as an
+		// alias. Only positive finite values are honored; anything else inherits the
+		// global default.
+		const posNum = (v: unknown): number | undefined => {
+			const n = Number(v);
+			return Number.isFinite(n) && n > 0 ? n : undefined;
+		};
+		const idleMs = posNum(frontmatter.idle_ms);
+		const wallMs = posNum(frontmatter.wall_ms ?? frontmatter.timeout_ms);
 		// `web: false` opts an agent out of subagent web access (default on).
 		const webRaw = String(frontmatter.web ?? "")
 			.trim()
@@ -160,6 +190,8 @@ function loadAgentsFromDir(
 			maxTurns: Number.isFinite(maxTurns as number)
 				? (maxTurns as number)
 				: undefined,
+			idleMs,
+			wallMs,
 			systemPrompt: body,
 			source,
 			filePath,
@@ -323,6 +355,10 @@ interface SingleResult {
 	stopReason?: string;
 	errorMessage?: string;
 	timedOut?: "idle" | "wall" | null;
+	// Effective watchdog budgets this run used (agent override or global default),
+	// so timeout messages report the real numbers, not the module constants.
+	idleMs?: number;
+	wallMs?: number;
 	step?: number;
 }
 
@@ -354,9 +390,9 @@ function isFailed(r: SingleResult): boolean {
 function resultOutput(r: SingleResult): string {
 	if (isFailed(r)) {
 		if (r.timedOut === "idle")
-			return `Timed out: no output for ${Math.round(IDLE_MS / 1000)}s (killed). Partial output:\n${finalText(r.messages) || r.stderr || "(none)"}`;
+			return `Timed out: no output for ${Math.round((r.idleMs ?? IDLE_MS) / 1000)}s (killed). Partial output:\n${finalText(r.messages) || r.stderr || "(none)"}`;
 		if (r.timedOut === "wall")
-			return `Timed out: exceeded ${Math.round(WALL_MS / 1000)}s wall-clock (killed). Partial output:\n${finalText(r.messages) || r.stderr || "(none)"}`;
+			return `Timed out: exceeded ${Math.round((r.wallMs ?? WALL_MS) / 1000)}s wall-clock (killed). Partial output:\n${finalText(r.messages) || r.stderr || "(none)"}`;
 		return r.errorMessage || r.stderr || finalText(r.messages) || "(no output)";
 	}
 	return finalText(r.messages) || "(no output)";
@@ -1065,6 +1101,10 @@ async function runSingle(
 		args.push("--tools", tools.join(","));
 	}
 
+	// Effective watchdog budgets: per-agent frontmatter override, else the global
+	// default. Captured on the result so timeout messages report the real numbers.
+	const effIdleMs = clampDelay(agent.idleMs ?? IDLE_MS);
+	const effWallMs = clampDelay(agent.wallMs ?? WALL_MS);
 	const result: SingleResult = {
 		agent: agentName,
 		agentSource: agent.source,
@@ -1074,6 +1114,8 @@ async function runSingle(
 		stderr: "",
 		usage: zeroUsage(),
 		model: agent.model,
+		idleMs: effIdleMs,
+		wallMs: effWallMs,
 		timedOut: null,
 		step,
 	};
@@ -1211,7 +1253,7 @@ async function runSingle(
 				// must not re-arm it and relabel a finished run as a timeout.
 				if (postSettled) return;
 				if (idleTimer) clearTimeout(idleTimer);
-				idleTimer = setTimeout(() => kill("idle"), IDLE_MS);
+				idleTimer = setTimeout(() => kill("idle"), effIdleMs);
 			};
 			const clearTimers = () => {
 				for (const t of [
@@ -1225,7 +1267,7 @@ async function runSingle(
 			};
 
 			bumpIdle();
-			wallTimer = setTimeout(() => kill("wall"), WALL_MS);
+			wallTimer = setTimeout(() => kill("wall"), effWallMs);
 
 			let buffer = "";
 			const processLine = (line: string) => {
@@ -1314,8 +1356,8 @@ async function runSingle(
 		if (killedReason && !result.errorMessage) {
 			result.errorMessage =
 				killedReason === "idle"
-					? `Killed after ${Math.round(IDLE_MS / 1000)}s of no output (dead stream / stuck).`
-					: `Killed after exceeding the ${Math.round(WALL_MS / 1000)}s wall-clock cap.`;
+					? `Killed after ${Math.round(effIdleMs / 1000)}s of no output (dead stream / stuck).`
+					: `Killed after exceeding the ${Math.round(effWallMs / 1000)}s wall-clock cap.`;
 			result.stopReason = result.stopReason || "error";
 		}
 		if (wasAborted) {
@@ -1872,6 +1914,11 @@ export default function (pi: ExtensionAPI) {
 							"anthropic/claude-haiku-4-5",
 						thinking: "off",
 						tools: ["read"],
+						// Tight budgets for the audit regardless of global config, so a broken
+						// canary fails fast instead of hanging out the generous defaults.
+						// runSingle reads these off the AgentConfig — no env swap needed.
+						idleMs: 20_000,
+						wallMs: 45_000,
 						systemPrompt:
 							"You are a health-check canary. Reply with exactly the word PONG and nothing else.",
 						source: "user",
@@ -1879,9 +1926,6 @@ export default function (pi: ExtensionAPI) {
 						warnings: [],
 					};
 					const started = Date.now();
-					// Use a tight timeout for the audit regardless of global config.
-					const savedIdle = process.env.PI_SUBAGENT_IDLE_MS;
-					const savedWall = process.env.PI_SUBAGENT_TIMEOUT_MS;
 					const r = await runSingle(
 						ctx.cwd,
 						[canary],
@@ -1894,8 +1938,6 @@ export default function (pi: ExtensionAPI) {
 						makeDetails("single", "user", null),
 						{ mode: "single", enabled: false }, // don't pin the canary
 					);
-					void savedIdle;
-					void savedWall;
 					const ms = Date.now() - started;
 					const text = finalText(r.messages).trim();
 					const pass = !isFailed(r) && /PONG/i.test(text);
