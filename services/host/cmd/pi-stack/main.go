@@ -17,7 +17,6 @@
 //	pi-stack serve [args…]             exec the sibling pi-stack-host serve (full)
 //	pi-stack status|doctor|setup|mcp|memory|knowledge|profile   (all implemented)
 //	pi-stack reset|uninstall           (destructive, reversible: state moved aside)
-//	pi-stack models|upgrade            (stubbed — later units)
 //	pi-stack help [verb]               print the verb tree (or one verb's usage)
 package main
 
@@ -66,9 +65,13 @@ func main() {
 	case "status", "st":
 		runStatusCmd(args[1:])
 	case "version", "--version", "-v":
-		if len(args) > 1 && (args[1] == "-h" || args[1] == "--help") {
-			fmt.Print(versionUsage)
-			return
+		if len(args) > 1 {
+			if args[1] == "-h" || args[1] == "--help" {
+				fmt.Print(versionUsage)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "pi-stack version: unexpected argument %q\n\n%s", args[1], versionUsage)
+			os.Exit(2)
 		}
 		fmt.Println(version)
 	case "config":
@@ -85,6 +88,10 @@ func main() {
 		runSecretCmd(args[1:])
 	case "memory", "mem":
 		runMemory(args[1:])
+	case "backup":
+		runBackup(args[1:])
+	case "restore":
+		runRestore(args[1:])
 	case "knowledge", "kb":
 		runKnowledge(args[1:])
 	case "man":
@@ -95,8 +102,6 @@ func main() {
 		runReset(args[1:])
 	case "uninstall":
 		runUninstall(args[1:])
-	case "models", "upgrade":
-		stub(args[0])
 	case "help", "-h", "--help":
 		if len(args) > 1 {
 			if u, ok := verbUsage(args[1]); ok {
@@ -198,13 +203,6 @@ func findHostBinary() (string, error) {
 	return "", fmt.Errorf("pi-stack-host not found next to this binary or on PATH")
 }
 
-// stub prints a clearly-labeled "not yet implemented" line so the verb surface
-// exists and is testable ahead of the units that fill it in.
-func stub(name string) {
-	fmt.Fprintf(os.Stderr, "pi-stack %s: not yet implemented — coming in a later unit\n", name)
-	os.Exit(2)
-}
-
 const runUsage = `usage: pi-stack run [DIR] [flags] [-- pi-args...]
 
 flags:
@@ -244,7 +242,9 @@ commands:
   run [DIR] [flags]   launch the sandbox (launching is explicit)
   serve [args...]     run the host services (execs pi-stack-host serve)
 
-  memory <cmd>        recall|remember|forget|learnings|stats|backup|restore   (:11435)
+  memory <cmd>        recall|remember|forget|learnings|stats   (:11435)
+  backup [--out P]    hot FULL backup (memory + config + op-refs) -> tar.gz
+  restore <archive>   restore a FULL backup (safe swap)   [--force]
   knowledge <cmd>     init|use|ls|query|sync|remote            (:11436)
   mcp register|ls     register local stdio MCP servers with the sbx gateway
   secret <cmd>        status|edit|check the 1Password op-refs (host MCP creds)
@@ -256,7 +256,7 @@ commands:
   uninstall [flags]   reset, then remove the bin symlinks    [--keep-memory --yes]
   version             print the launcher version
   man                 render the embedded man page (no MANPATH needed; also --man)
-  help [run]          print this help (or run-flag help)
+  help [verb]         print this help (or a verb's usage)
 
 global: --profile NAME   run/read a named profile (work, personal, ...)
 run flags: --dev --skills DIR --kit K --mcp M --name N --model M -- pi-args...

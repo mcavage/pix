@@ -334,9 +334,82 @@ func TestDoctor_GogTransparency(t *testing.T) {
 		t.Errorf("expected the must-match note, got:\n%s", out)
 	}
 	// The fallback (sbx exposes no registered command) must be labeled best-effort
-	// so a pass can't masquerade as a confirmed registration.
-	if !strings.Contains(out, "best-effort (sbx unavailable)") {
-		t.Errorf("expected a best-effort fallback label, got:\n%s", out)
+	// so a pass can't masquerade as a confirmed registration. Here sbx IS present
+	// (the CLI is on PATH, `sbx mcp ls` succeeded) but the registered command
+	// couldn't be read, so the label must blame the registration read / gateway,
+	// NOT claim sbx is unavailable.
+	if !strings.Contains(out, "best-effort (couldn't read sbx MCP registrations") {
+		t.Errorf("expected a best-effort registration-read fallback label, got:\n%s", out)
+	}
+	if strings.Contains(out, "sbx unavailable") {
+		t.Errorf("sbx is present here — must not say 'sbx unavailable', got:\n%s", out)
+	}
+}
+
+// TestDoctor_SbxPresentMcpListFailed reproduces the HOST symptom: sbx is on PATH
+// and `sbx secret ls` SUCCEEDS (providers green), but every `sbx mcp ...` call
+// ERRORS (no fake output — the MCP gateway is off, SBX_MCP_URL unset). doctor
+// must NOT claim "sbx unavailable" anywhere, must point at the gateway /
+// SBX_MCP_URL rather than "register on the host", and must emit
+// `pi-stack secret edit` at most once.
+func TestDoctor_SbxPresentMcpListFailed(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.MCP = []string{"gog"}
+	cfg.GogAccount = gogAcct
+	f := fakeEnv{
+		present: map[string]bool{"sbx": true, "gog": true, "op": true},
+		output: map[string]string{
+			// secret ls works: providers all green, sbx clearly present.
+			"sbx secret ls": "anthropic\nopenai\ngoogle\ngithub\n",
+			// every `sbx mcp ...` errors (no fake output) — gateway off.
+		},
+		envVars: map[string]string{"GOG_ACCOUNT": gogAcct},
+		ports:   map[int]bool{11435: true},
+	}
+	r := runDoctor(cfg, f.env())
+
+	// sbx is present — the report-level sbxAbsent flag must be false.
+	if r.sbxAbsent {
+		t.Errorf("sbx is present (secret ls ok) — sbxAbsent must be false")
+	}
+
+	// No check detail may claim sbx is unavailable.
+	for _, g := range r.groups {
+		for _, c := range g.checks {
+			if strings.Contains(c.detail, "sbx unavailable") {
+				t.Errorf("sbx is present — no detail may say 'sbx unavailable', got group %q: %q", g.title, c.detail)
+			}
+		}
+	}
+
+	// The gog + mcp guidance must mention the gateway / SBX_MCP_URL, not
+	// "register on the host".
+	var buf bytes.Buffer
+	r.services, r.mcp = cfg.Services, cfg.MCP
+	r.render(&buf)
+	out := buf.String()
+	if !strings.Contains(out, "SBX_MCP_URL") {
+		t.Errorf("expected gateway / SBX_MCP_URL guidance, got:\n%s", out)
+	}
+	if strings.Contains(out, "register on the host") {
+		t.Errorf("sbx is present — must not say 'register on the host', got:\n%s", out)
+	}
+
+	// providers still green (sanity): no provider TODO.
+	joined := strings.Join(r.todos(), "\n")
+	if strings.Contains(joined, "sbx secret set -g") {
+		t.Errorf("providers are set — no provider TODO expected, got %v", r.todos())
+	}
+
+	// `pi-stack secret edit` appears at most once across all todos.
+	n := 0
+	for _, tdo := range r.todos() {
+		if todoDedupKey(tdo) == "pi-stack secret edit" {
+			n++
+		}
+	}
+	if n > 1 {
+		t.Errorf("`pi-stack secret edit` must appear at most once, got %d: %v", n, r.todos())
 	}
 }
 

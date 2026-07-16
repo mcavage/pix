@@ -1,18 +1,3 @@
-.\" Source/help discrepancies found while deriving this page:
-.\" - setupUsage omits the accepted -y alias.
-.\" - memory forget accepts and uses --json although its usage omits it; the shared
-.\"   parser also accepts --json for backup/restore but those commands ignore it.
-.\" - knowledge sync and remote accept --json through the shared parser but ignore it;
-.\"   knowledge ls accepts and ignores positional arguments.
-.\" - helpText omits the dispatched models/upgrade stubs and says "help [run]" although
-.\"   verbUsage routes help for every implemented verb.
-.\" - serve stop, mcp ls, config show/path, and version accept some trailing arguments
-.\"   that their authoritative usage strings do not advertise.
-.\" - memory, knowledge, profile, and version help omit implemented aliases and some
-.\"   short-option forms; config help omits the value required to unset list keys.
-.\" - serveUsage says process identity is verified, but stop trusts its own pidfile when
-.\"   neither /proc nor ps can identify the process.
-.\" - knowledge help calls a local `use` target existing, but code does not validate it.
 .TH PI-STACK 1 "July 2026" "pi-stack" "User Commands"
 .SH NAME
 pi-stack \- run the pi coding agent in a Docker sandbox and manage its host services
@@ -133,12 +118,13 @@ with unchanged arguments.  With no service arguments, the host configuration
 selects services.  Memory is enabled by default; knowledge runs when enabled.
 .TP
 .B "pi-stack serve stop"
-Read the supervisor pidfile and, when process inspection is available, verify
-that the process is
+Read the supervisor pidfile and verify that the process is
 .BR "pi-stack-host serve"
-before sending SIGTERM.  If neither /proc nor ps can identify it, trust the
-pidfile.  Send SIGKILL only if the process does not exit after about five
-seconds and a repeated available identity check does not reject it.
+before sending SIGTERM.  If neither /proc nor ps can identify the process, it
+REFUSES to signal (remove the pidfile to override) rather than trust the pidfile
+alone.  It sends SIGKILL only if the process does not exit after about five
+seconds and a repeated identity check still confirms the process is ours.
+Extra arguments are rejected.
 .TP
 .BR "pi-stack serve status" " [" \-\-json "]"
 Report the supervisor PID and memory and knowledge port state.
@@ -179,39 +165,69 @@ Store a fact with source
 in the active profile.
 .TP
 .BR "pi-stack memory forget" " " id " [" \-\-json "]"
-Delete the fact matching an ID or ID prefix in the active profile.
+Delete the fact matching an ID or ID prefix in the active profile.  The
+.B \-\-json
+option emits the raw result.
 .TP
 .BR "pi-stack memory learnings" " [" \-\-min " " N "] [" \-\-json "]"
 List recurring, promotable learnings.  The default minimum frequency is 3.
 .TP
 .BR "pi-stack memory stats" " [" \-\-json "]"
 Print counts by kind and durability for the active profile.
+.PP
+Memory RPC commands return status 3 when the memory daemon cannot be reached.
+Full backup and restore are now the top-level
+.B backup
+and
+.B restore
+verbs, not memory subcommands.
+.SS backup
 .TP
-.BR "pi-stack memory backup" " [" \-\-out " " PATH "] [" \-\-keep " " N "]"
-Create a hot, verified memory snapshot using SQLite
-.BR "VACUUM INTO" ,
-then package it as a gzip tar archive with a manifest and available
-configuration files.  The default output is
+.BR "pi-stack backup" " [" \-\-out " " PATH "] [" \-\-keep " " N "]"
+Create a hot, verified FULL backup, safe while
+.B serve
+holds the database.  It packages a SQLite
+.B "VACUUM INTO"
+snapshot of the memory database, the
+.B config.toml
+(profiles), the
+.B op-refs.env
+(references only), and a
+.B manifest.json
+(format version 2, recording the profile names and a note of each configured
+knowledge bundle's path and git remote) into a gzip tar archive.  Knowledge
+bundle contents are NOT archived: a bundle is a git repository and git is its
+backup; the manifest records only where it lives.  The default output is
 .BR ~/.pi-stack/backups/pi-stack-backup- timestamp .tar.gz;
 the default retention count is 7.  The alias
 .B \-o
 is accepted for
 .BR \-\-out .
+The command execes the sibling
+.B pi-stack-host
+binary and propagates its status.
+.SS restore
 .TP
-.BR "pi-stack memory restore" " " archive " [" \-\-force "]"
-Restore a backup by safe swap.  The command refuses to run while the memory
+.BR "pi-stack restore" " " archive " [" \-\-force "]"
+Restore a FULL backup by safe swap.  The command refuses to run while the memory
 service is listening and refuses to replace an existing database without
 .BR \-\-force .
 With
 .B \-\-force
 (the alias
 .B \-f
-is accepted), it moves the current database to a timestamped backup first.
-.PP
-Memory RPC commands return status 3 when the memory daemon cannot be reached.
-Backup and restore execute the sibling
+is accepted), it moves the current database to a timestamped backup first.  The
+.B config.toml
+and
+.B op-refs.env
+are always moved aside to a timestamped
+.B .bak
+file before the archived versions are written, so profiles come back and the
+change is reversible.  A format-version-1 (memory-only manifest) archive still
+restores.  The command reports the restored memory rows, the config profiles now
+present, and the recorded knowledge-bundle locations, then execes the sibling
 .B pi-stack-host
-binary and propagate its status.
+binary and propagates its status.
 .SS knowledge
 The alias
 .B kb
@@ -457,8 +473,6 @@ not a terminal, the page is written directly without a pager, so
 can be piped or redirected.  The global alias
 .B \-\-man
 is accepted anywhere on the command line.
-.SS "models, upgrade"
-These verbs are reserved stubs.  They print "not yet implemented" and exit 2.
 .SH OPTIONS
 .TP
 .BI \-\-profile " NAME"
@@ -551,7 +565,7 @@ Default memory SQLite database.
 Default knowledge SQLite index.
 .TP
 .B ~/.pi-stack/backups/pi-stack-backup-*.tar.gz
-Default memory backup archives.
+Default full backup archives (memory, config, and op-refs).
 .SS "Workspace and installation files"
 .TP
 .B .pi-stack/knowledge
@@ -606,7 +620,7 @@ command before running it.
 .TP
 .B PI_STACK_OP_REFS
 Override the refs file included by
-.BR "memory backup" .
+.BR backup .
 This does not change the canonical refs path used by
 .BR "secret" .
 .TP
@@ -664,11 +678,7 @@ Configuration, filesystem, Git, subprocess, RPC-response, or other operational
 failure.
 .TP
 .B 2
-Invalid command, option, argument, or other usage error.  The unimplemented
-.B models
-and
-.B upgrade
-stubs also return 2.
+Invalid command, option, argument, or other usage error.
 .TP
 .B 3
 A required host service or secret-check dependency is unreachable.  Memory and
@@ -730,13 +740,13 @@ pi-stack reset --keep-memory
 .RE
 .fi
 .PP
-Back up and restore memory:
+Back up and restore the full stack (memory, config, op-refs):
 .PP
 .nf
 .RS
-pi-stack memory backup --out ~/backups/pi-stack.tar.gz
+pi-stack backup --out ~/backups/pi-stack.tar.gz
 pi-stack serve stop
-pi-stack memory restore ~/backups/pi-stack.tar.gz --force
+pi-stack restore ~/backups/pi-stack.tar.gz --force
 .RE
 .fi
 .SH SEE ALSO

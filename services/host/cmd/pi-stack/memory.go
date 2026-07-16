@@ -57,13 +57,6 @@ func runMemoryCore(argv []string, load func() (*config.Config, string, error), c
 	if wantsHelp(rest) {
 		return dispatchMemory(sub, rest, rpcClient{}, out, "")
 	}
-	// backup/restore are the advertised db-RECOVERY path and must work even when
-	// config is corrupt or names an unknown profile — so dispatch them WITHOUT
-	// loadResolvedConfig. They exec pi-stack-host and use neither the client nor a
-	// profile, so a zero client + empty profile is correct.
-	if sub == "backup" || sub == "restore" {
-		return dispatchMemory(sub, rest, rpcClient{}, out, "")
-	}
 	// Resolve the active profile so host-side memory ops are scoped the same way
 	// the in-VM extensions are (recall sees {profile}∪{default}; captures stamp
 	// the active profile). FAIL LOUD on a config/profile error: silently falling
@@ -76,15 +69,17 @@ func runMemoryCore(argv []string, load func() (*config.Config, string, error), c
 	return dispatchMemory(sub, rest, client(), out, profile)
 }
 
-const memoryUsage = `usage: pi-stack memory <recall|remember|forget|learnings|stats|backup|restore> [args]
+const memoryUsage = `usage: pi-stack memory <recall|remember|forget|learnings|stats> [args]
 
   recall <query> [--limit N] [--project P] [--json]   search stored facts
   remember <text...> [--json]                          store a fact
-  forget <id>                                          delete a fact by id/prefix
+  forget <id> [--json]                                 delete a fact by id/prefix
   learnings [--min N] [--json]                          recurring learnings (promotable)
   stats [--json]                                        counts by kind/durability
-  backup [--out PATH] [--keep N]                        hot, consistent snapshot -> tar.gz
-  restore <archive> [--force]                          restore the memory DB from a backup (safe swap)`
+
+Backup/restore are now TOP-LEVEL verbs (they cover config + op-refs + memory):
+  pi-stack backup [--out PATH] [--keep N]
+  pi-stack restore <archive> [--force]`
 
 // dispatchMemory is the testable core: it runs one subcommand against an
 // injected client + writer and returns an error (instead of exiting).
@@ -100,10 +95,6 @@ func dispatchMemory(sub string, argv []string, c rpcClient, out io.Writer, profi
 		return memoryLearnings(argv, c, out, profile)
 	case "stats", "status":
 		return memoryStats(argv, c, out, profile)
-	case "backup":
-		return memoryBackup(argv, out)
-	case "restore":
-		return memoryRestore(argv, out)
 	default:
 		return usageErr(fmt.Sprintf("memory: unknown subcommand %q\n%s", sub, memoryUsage))
 	}
@@ -111,6 +102,7 @@ func dispatchMemory(sub string, argv []string, c rpcClient, out io.Writer, profi
 
 func memoryRecall(argv []string, c rpcClient, out io.Writer, profile string) error {
 	fs := newFlagSet()
+	fs.enableJSON()
 	limit := fs.int("limit", 8, "n")
 	project := fs.str("project", "", "p")
 	positional, err := fs.parse(argv)
@@ -146,6 +138,7 @@ func memoryRecall(argv []string, c rpcClient, out io.Writer, profile string) err
 
 func memoryRemember(argv []string, c rpcClient, out io.Writer, profile string) error {
 	fs := newFlagSet()
+	fs.enableJSON()
 	positional, err := fs.parse(argv)
 	if err != nil {
 		return err
@@ -176,16 +169,17 @@ func memoryRemember(argv []string, c rpcClient, out io.Writer, profile string) e
 
 func memoryForget(argv []string, c rpcClient, out io.Writer, profile string) error {
 	fs := newFlagSet()
+	fs.enableJSON()
 	positional, err := fs.parse(argv)
 	if err != nil {
 		return err
 	}
 	if fs.help {
-		fmt.Fprintln(out, "usage: pi-stack memory forget <id>")
+		fmt.Fprintln(out, "usage: pi-stack memory forget <id> [--json]")
 		return nil
 	}
 	if len(positional) != 1 {
-		return usageErr("usage: pi-stack memory forget <id>")
+		return usageErr("usage: pi-stack memory forget <id> [--json]")
 	}
 	res, err := c.Call("forget", map[string]any{"id": positional[0], "profile": profile})
 	if err != nil {
@@ -205,6 +199,7 @@ func memoryForget(argv []string, c rpcClient, out io.Writer, profile string) err
 
 func memoryLearnings(argv []string, c rpcClient, out io.Writer, profile string) error {
 	fs := newFlagSet()
+	fs.enableJSON()
 	min := fs.int("min", 3)
 	positional, perr := fs.parse(argv)
 	if perr != nil {
@@ -239,82 +234,9 @@ func memoryLearnings(argv []string, c rpcClient, out io.Writer, profile string) 
 	return nil
 }
 
-// memoryBackup is the launcher-side `pi-stack memory backup`. The real work (it
-// needs the sqlite driver) lives in pi-stack-host, so this parses --out/--keep,
-// then execs `pi-stack-host memory backup`, streaming its output through. Help is
-// config-independent (printed before any exec), matching the other verbs.
-func memoryBackup(argv []string, out io.Writer) error {
-	fs := newFlagSet()
-	outPath := fs.str("out", "", "o")
-	keep := fs.int("keep", 7)
-	positional, err := fs.parse(argv)
-	if err != nil {
-		return err
-	}
-	const usage = "usage: pi-stack memory backup [--out PATH] [--keep N]"
-	if fs.help {
-		fmt.Fprintln(out, usage)
-		return nil
-	}
-	if len(positional) > 0 {
-		return usageErr(usage)
-	}
-	bin, err := findHostBinary()
-	if err != nil {
-		return err
-	}
-	hostArgs := []string{"memory", "backup", "--keep", strconv.Itoa(*keep)}
-	if *outPath != "" {
-		hostArgs = append(hostArgs, "--out", *outPath)
-	}
-	cmd := exec.Command(bin, hostArgs...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = out
-	cmd.Stderr = os.Stderr
-	// Return the child's error through the normal path (do NOT os.Exit here) so it
-	// stays classifiable/testable; the top-level exec wrapper maps the exit code.
-	return cmd.Run()
-}
-
-// memoryRestore is the launcher-side `pi-stack memory restore`. Like backup, the
-// real work (it needs the sqlite driver) lives in pi-stack-host, so this parses
-// <archive>/--force, then execs `pi-stack-host memory restore`, streaming its
-// output through. Help is config-independent (printed before any exec), matching
-// the other verbs.
-func memoryRestore(argv []string, out io.Writer) error {
-	fs := newFlagSet()
-	force := fs.bool("force", "f")
-	positional, err := fs.parse(argv)
-	if err != nil {
-		return err
-	}
-	const usage = "usage: pi-stack memory restore <archive> [--force]"
-	if fs.help {
-		fmt.Fprintln(out, usage)
-		return nil
-	}
-	if len(positional) != 1 {
-		return usageErr(usage)
-	}
-	bin, err := findHostBinary()
-	if err != nil {
-		return err
-	}
-	hostArgs := []string{"memory", "restore", positional[0]}
-	if *force {
-		hostArgs = append(hostArgs, "--force")
-	}
-	cmd := exec.Command(bin, hostArgs...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = out
-	cmd.Stderr = os.Stderr
-	// Return the child's error through the normal path (do NOT os.Exit here) so it
-	// stays classifiable/testable; the top-level exec wrapper maps the exit code.
-	return cmd.Run()
-}
-
 func memoryStats(argv []string, c rpcClient, out io.Writer, profile string) error {
 	fs := newFlagSet()
+	fs.enableJSON()
 	positional, perr := fs.parse(argv)
 	if perr != nil {
 		return perr
@@ -388,12 +310,18 @@ func shortID(id string) string {
 
 type flagSet struct {
 	json    bool
+	jsonOK  bool // --json is a recognized flag only after enableJSON(); otherwise it is an unknown-flag usage error
 	help    bool // set when a -h/--help token is seen; caller prints usage + exit 0
 	ints    map[string]*int
 	strs    map[string]*string
 	bools   map[string]*bool
 	aliases map[string]string // short/alt name -> canonical name
 }
+
+// enableJSON registers the built-in --json flag for THIS command. Only commands
+// that actually emit JSON call it; on every other command --json is rejected as
+// an unknown flag (a usage error) rather than silently swallowed and ignored.
+func (f *flagSet) enableJSON() { f.jsonOK = true }
 
 func newFlagSet() *flagSet {
 	return &flagSet{ints: map[string]*int{}, strs: map[string]*string{}, bools: map[string]*bool{}, aliases: map[string]string{}}
@@ -464,6 +392,9 @@ func (f *flagSet) parse(argv []string) ([]string, error) {
 		name = f.canon(name)
 
 		if name == "json" {
+			if !f.jsonOK {
+				return nil, usageErr(fmt.Sprintf("unknown flag %q", a))
+			}
 			f.json = true
 			continue
 		}

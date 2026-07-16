@@ -299,6 +299,10 @@ func runServeStop(argv []string) {
 		fmt.Print(serveUsage)
 		return
 	}
+	if len(argv) > 0 {
+		fmt.Fprintf(os.Stderr, "pi-stack serve stop: unexpected argument %q\n\n%s", argv[0], serveUsage)
+		os.Exit(2)
+	}
 	_, err := stopServe(defaultServeCtl(), os.Stdout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack serve stop: %v\n", err)

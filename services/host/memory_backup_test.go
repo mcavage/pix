@@ -139,8 +139,8 @@ func TestMemoryBackupRoundtrip(t *testing.T) {
 	if err := json.Unmarshal(entries["manifest.json"], &m); err != nil {
 		t.Fatalf("manifest unmarshal: %v", err)
 	}
-	if m.FormatVersion != 1 {
-		t.Errorf("manifest FormatVersion = %d, want 1", m.FormatVersion)
+	if m.FormatVersion != backupFormatVersion {
+		t.Errorf("manifest FormatVersion = %d, want %d", m.FormatVersion, backupFormatVersion)
 	}
 	if m.PiStackVersion != "9.9.9-test" {
 		t.Errorf("manifest PiStackVersion = %q, want 9.9.9-test", m.PiStackVersion)

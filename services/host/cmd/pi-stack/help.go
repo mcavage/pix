@@ -34,6 +34,7 @@ var knownVerbs = map[string]bool{
 	"config": true, "mcp": true, "memory": true, "knowledge": true,
 	"profile": true, "version": true, "run": true, "secret": true,
 	"reset": true, "uninstall": true, "man": true,
+	"backup": true, "restore": true,
 }
 
 // verbUsage maps a verb (including its aliases) to its usage text, so
@@ -57,6 +58,10 @@ func verbUsage(verb string) (string, bool) {
 		return mcpUsage, true
 	case "memory", "mem":
 		return memoryUsage + "\n", true
+	case "backup":
+		return backupUsage, true
+	case "restore":
+		return restoreUsage, true
 	case "knowledge", "kb":
 		return knowledgeUsage, true
 	case "profile":
@@ -114,17 +119,18 @@ const setupUsage = `usage: pi-stack setup [flags]
 Guided, idempotent first-run setup: writes config and registers MCP servers.
 
 flags:
-  --account <email>          set the Google Workspace (gog) account
-  --knowledge <path|url>     set up the global knowledge base
-  --yes, --non-interactive   never prompt; print outstanding steps as commands
+  --account <email>             set the Google Workspace (gog) account
+  --knowledge <path|url>        set up the global knowledge base
+  --yes, -y, --non-interactive  never prompt; print outstanding steps as commands
 `
 
 const configUsage = `usage: pi-stack config <show|path|set|unset> [args]
 
   show                     print the resolved config path + contents
   path [op-refs]           print the config file path (or the op-refs.env path)
-  set [--profile N] K V    set a config key (never hand-edit the toml)
-  unset [--profile N] K    reset/clear a config key
+  set [--profile N] K V     set a config key (never hand-edit the toml)
+  unset [--profile N] K [V]  reset/clear a scalar key, or remove value V from a
+                            list key (mcp/services/knowledge_bundles)
 
 ` + configKeysHelp
 
@@ -138,7 +144,8 @@ const mcpUsage = `usage: pi-stack mcp <register|ls> [name...]
 const knowledgeUsage = `usage: pi-stack knowledge <init|use|ls|query|sync|remote> [args]
 
   init [DIR]                     scaffold + wire a global OKF bundle
-  use <path|url>                 point the global KB at an existing bundle
+  use <path|url>                 point the global KB at a bundle (path made
+                                 absolute; not checked for existence/OKF)
   use --project <path|url> [--dir D]   write a per-repo .pi-stack/knowledge pointer
   ls [--json]                    list configured bundles + daemon health
   query <text...> [--limit N] [--json]   search the knowledge daemon (:11436)

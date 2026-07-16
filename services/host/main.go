@@ -7,6 +7,8 @@
 //
 //	memory         self-learning memory store  (:11435, JSON-RPC)
 //	knowledge      OKF knowledge retrieval idx (:11436, JSON-RPC)
+//	backup         hot FULL backup (memory + config + op-refs) -> tar.gz
+//	restore        restore a FULL backup tar.gz (safe swap)
 //	mcp <name>     stdio MCP bridge            (run by the sbx gateway)
 //	slack          alias for `mcp slack`       (stdio; run by the sbx gateway)
 //	plugin <kind>  built-in go-plugin server   (self-exec, launched by `serve`)
@@ -81,6 +83,10 @@ func main() {
 		runPlugin(os.Args[2:])
 	case "memory":
 		runMemoryHost(os.Args[2:])
+	case "backup":
+		runBackupCLI(os.Args[2:])
+	case "restore":
+		runRestoreCLI(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
 	case "-h", "--help", "help":
@@ -130,8 +136,8 @@ usage: pi-stack-host <subcommand>
 
 subcommands:
   memory         self-learning memory store, JSON-RPC (:11435)
-  memory backup  hot, consistent snapshot of the memory DB -> tar.gz
-  memory restore restore the memory DB from a backup tar.gz (safe swap)
+  backup         hot FULL backup (memory + config + op-refs) -> tar.gz
+  restore        restore a FULL backup tar.gz (safe swap)
   mcp <name>     stdio MCP bridge (run by the sbx gateway); slack is an alias
   slack          alias for "mcp slack"
   plugin <kind>  built-in go-plugin server, self-exec (memory|knowledge|broker|mcp)

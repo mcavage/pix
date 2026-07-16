@@ -164,11 +164,32 @@ func TestFlagSetHelp(t *testing.T) {
 	}
 	// No help token -> help stays false.
 	fs := newFlagSet()
+	fs.enableJSON()
 	if _, err := fs.parse([]string{"q", "--json"}); err != nil {
 		t.Fatal(err)
 	}
 	if fs.help {
 		t.Error("fs.help set without a help token")
+	}
+}
+
+// TestFlagSetJSONOptIn proves --json is a recognized flag ONLY after
+// enableJSON(); on a command that never opts in it is an unknown-flag usage
+// error rather than a silently-swallowed no-op.
+func TestFlagSetJSONOptIn(t *testing.T) {
+	// Not enabled: --json is rejected.
+	fs := newFlagSet()
+	if _, err := fs.parse([]string{"--json"}); !isUsage(err) {
+		t.Errorf("parse([--json]) without enableJSON = %v, want usage error", err)
+	}
+	// Enabled: --json is accepted and sets fs.json.
+	fs = newFlagSet()
+	fs.enableJSON()
+	if _, err := fs.parse([]string{"--json"}); err != nil {
+		t.Fatalf("parse([--json]) with enableJSON: %v", err)
+	}
+	if !fs.json {
+		t.Error("enableJSON()+--json did not set fs.json")
 	}
 }
 

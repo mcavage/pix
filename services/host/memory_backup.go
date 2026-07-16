@@ -1,17 +1,24 @@
-// pi-stack-host `memory backup` — a HOT, consistent snapshot of the precious
-// artifact (~/.pi-stack/memory/memory.db, the captured facts) that is safe to
-// take WITHOUT stopping `serve`.
+// pi-stack-host `backup` — a HOT, consistent snapshot of the FULL pi-stack state
+// that is safe to take WITHOUT stopping `serve`:
 //
-// The snapshot is produced with sqlite's `VACUUM INTO`, which reads a consistent
-// view of the live database (WAL permits concurrent readers) and writes a single
-// defragmented file — so we never plain-cp the live db, and never copy the
-// -wal/-shm sidecars (their content is already folded into the snapshot). The
-// snapshot is then verified (`PRAGMA integrity_check` must be "ok") and packed
-// into a tar.gz alongside config.toml / op-refs.env (refs only, safe) and a
-// manifest.json describing the backup.
+//   - the precious artifact: ~/.pi-stack/memory/memory.db (the captured facts)
+//   - config.toml (profiles + all runtime settings)
+//   - op-refs.env (1Password REFS only — no secret values ever touch disk)
+//   - a manifest.json describing the backup, including the profile names it
+//     carries and a NOTE (path + git remote) for each configured knowledge
+//     bundle. Bundle CONTENT is NOT archived: a bundle is a git repo and git IS
+//     its backup; the manifest only records WHERE it lives so restore can tell
+//     you how to bring it back.
+//
+// The memory snapshot is produced with sqlite's `VACUUM INTO`, which reads a
+// consistent view of the live database (WAL permits concurrent readers) and
+// writes a single defragmented file — so we never plain-cp the live db, and
+// never copy the -wal/-shm sidecars (their content is already folded into the
+// snapshot). The snapshot is then verified (`PRAGMA integrity_check` must be
+// "ok") before it is packed.
 //
 // This lives in pi-stack-host (not the dependency-light launcher) because it
-// needs the sqlite driver. The launcher `pi-stack memory backup` execs this.
+// needs the sqlite driver. The launcher `pi-stack backup` execs this.
 
 package main
 
@@ -22,6 +29,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -29,35 +37,56 @@ import (
 	"strings"
 	"time"
 
+	"pi-stack/host/config"
+
 	_ "modernc.org/sqlite"
 )
 
-const backupFormatVersion = 1
+// backupFormatVersion is the archive format this binary writes. v1 was
+// memory-only-manifest (config.toml + op-refs.env still travelled in the tar,
+// but the manifest recorded neither profiles nor knowledge). v2 adds the
+// `profiles` list and the `knowledge` notes. Restore reads BOTH: a v1 archive
+// still restores memory (and its config/op-refs) fine — the new fields simply
+// default to empty.
+const backupFormatVersion = 2
+
+// knowledgeNote records WHERE a configured knowledge bundle lives so a restore
+// can point you back at it. The bundle content is a git repo and is NOT archived
+// (git is its backup); this is provenance only.
+type knowledgeNote struct {
+	Path   string `json:"path"`
+	Remote string `json:"remote,omitempty"`
+}
 
 // backupManifest is serialized to manifest.json inside the archive. It records
-// enough to detect version/model drift on a future restore.
+// enough to detect version/model drift on a future restore AND to tell the user
+// which profiles + knowledge bundles the backup covered.
 type backupManifest struct {
-	FormatVersion     int      `json:"format_version"`
-	PiStackVersion    string   `json:"pi_stack_version"`
-	SqliteUserVersion int      `json:"sqlite_user_version"`
-	CreatedAt         string   `json:"created_at"`
-	Hostname          string   `json:"hostname"`
-	MemoryRowCount    int      `json:"memory_row_count"`
-	MemoryEmbedModel  string   `json:"memory_embed_model"`
-	Contents          []string `json:"contents"`
+	FormatVersion     int             `json:"format_version"`
+	PiStackVersion    string          `json:"pi_stack_version"`
+	SqliteUserVersion int             `json:"sqlite_user_version"`
+	CreatedAt         string          `json:"created_at"`
+	Hostname          string          `json:"hostname"`
+	MemoryRowCount    int             `json:"memory_row_count"`
+	MemoryEmbedModel  string          `json:"memory_embed_model"`
+	Profiles          []string        `json:"profiles,omitempty"`
+	Knowledge         []knowledgeNote `json:"knowledge,omitempty"`
+	Contents          []string        `json:"contents"`
 }
 
 // backupParams are the fully-resolved inputs to the backup core, so the core is
 // hermetic and testable (no env/home lookups inside).
 type backupParams struct {
-	DBPath     string    // source live memory.db
-	OutPath    string    // full archive path to write
-	Keep       int       // retention: keep newest N pi-stack-backup-*.tar.gz in OutPath's dir
-	Version    string    // pi_stack_version for the manifest
-	EmbedModel string    // memory_embed_model for the manifest
-	ConfigPath string    // config.toml to include if it exists ("" to skip)
-	OpRefsPath string    // op-refs.env to include if it exists ("" to skip)
-	Now        time.Time // timestamp source (zero -> time.Now())
+	DBPath     string          // source live memory.db
+	OutPath    string          // full archive path to write
+	Keep       int             // retention: keep newest N pi-stack-backup-*.tar.gz in OutPath's dir
+	Version    string          // pi_stack_version for the manifest
+	EmbedModel string          // memory_embed_model for the manifest
+	ConfigPath string          // config.toml to include if it exists ("" to skip)
+	OpRefsPath string          // op-refs.env to include if it exists ("" to skip)
+	Profiles   []string        // profile names in the config being backed up (manifest note)
+	Knowledge  []knowledgeNote // configured knowledge bundle locations (manifest note; content NOT archived)
+	Now        time.Time       // timestamp source (zero -> time.Now())
 }
 
 // backupResult reports what was written, for the CLI to print.
@@ -83,6 +112,21 @@ func memoryBackup(p backupParams) (backupResult, error) {
 	// atomic rename onto one of those would destroy the very thing we back up.
 	if err := refuseClobberLive(p.OutPath, p.DBPath, p.ConfigPath, p.OpRefsPath); err != nil {
 		return backupResult{}, err
+	}
+
+	// 0b. NEVER overwrite an existing archive. An explicit --out pointed at a file
+	// that already exists (or the vanishingly-rare default-name collision) would
+	// destroy a previous backup. Refuse with a clear message BEFORE writing; the
+	// no-clobber os.Link in writeBackupArchive is the atomic backstop for the TOCTOU
+	// window between this check and the commit.
+	if pathExists(p.OutPath) {
+		return backupResult{}, fmt.Errorf("refusing to overwrite existing archive %s; choose a different --out or remove it first", p.OutPath)
+	}
+
+	// 0c. Best-effort: warn (to stderr, never blocking, never echoing the value) if
+	// op-refs.env appears to carry a pasted literal secret rather than op:// refs.
+	if p.OpRefsPath != "" && fileExists(p.OpRefsPath) && opRefsHasPastedSecret(p.OpRefsPath) {
+		fmt.Fprintln(os.Stderr, "warning: op-refs.env appears to contain a pasted secret VALUE; the backup will include it. Prefer op:// references.")
 	}
 
 	// 1. HOT snapshot via VACUUM INTO into a private temp dir. VACUUM INTO refuses
@@ -113,6 +157,8 @@ func memoryBackup(p backupParams) (backupResult, error) {
 		Hostname:          backupHostname(),
 		MemoryRowCount:    rowCount,
 		MemoryEmbedModel:  p.EmbedModel,
+		Profiles:          p.Profiles,
+		Knowledge:         p.Knowledge,
 	}
 	// contents[] mirrors what actually lands in the tar, in write order.
 	manifest.Contents = []string{"memory.db"}
@@ -242,11 +288,12 @@ func verifySnapshot(path string) (userVersion, rowCount int, err error) {
 // the manifest into a 0600 tar.gz. Only the VACUUMed snapshot is included as
 // memory.db — the -wal/-shm sidecars are deliberately never copied.
 //
-// The write is ATOMIC and PRIVATE: it builds the archive in a same-dir temp file
-// (os.CreateTemp, 0600), fsyncs it, then os.Renames it into place. The final
-// path is never O_TRUNC'd, so a mid-write failure never leaves a partial or
-// mode-widened archive at outPath, and a re-run in the same second cannot
-// corrupt an existing backup.
+// The write is ATOMIC, PRIVATE, and NO-CLOBBER: it builds the archive in a
+// same-dir temp file (os.CreateTemp, 0600), fsyncs it, then hard-LINKs it into
+// place (os.Link fails EEXIST if outPath already exists, giving atomic no-clobber
+// semantics that os.Rename lacks on POSIX). The final path is never O_TRUNC'd, so
+// a mid-write failure never leaves a partial or mode-widened archive at outPath,
+// and a re-run cannot destroy an existing backup.
 func writeBackupArchive(outPath, snapPath, configPath, opRefsPath string, manifest backupManifest) (err error) {
 	dir := filepath.Dir(outPath)
 	tmp, err := os.CreateTemp(dir, ".pi-stack-backup-*.tmp")
@@ -303,10 +350,15 @@ func writeBackupArchive(outPath, snapPath, configPath, opRefsPath string, manife
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp archive: %w", err)
 	}
-	if err := os.Rename(tmpPath, outPath); err != nil {
-		return fmt.Errorf("rename archive into place: %w", err)
+	// Hard-link (not rename) so an existing outPath is NOT clobbered: os.Link fails
+	// with EEXIST if the target exists, which is exactly the atomic no-clobber
+	// commit we want. On success the temp name is dropped (the inode survives under
+	// outPath).
+	if err := os.Link(tmpPath, outPath); err != nil {
+		return fmt.Errorf("finalize archive (refusing to clobber existing %s): %w", outPath, err)
 	}
 	committed = true
+	_ = os.Remove(tmpPath)
 	return nil
 }
 
@@ -335,10 +387,12 @@ func tarAddBytes(tw *tar.Writer, name string, data []byte) error {
 }
 
 // backupNameRe matches ONLY the filenames memoryBackup generates:
-// pi-stack-backup-<8 digits>-<6 digits>.tar.gz. Retention uses this strict match
+// pi-stack-backup-<8 digits>-<6 digits>[-<hex rand>].tar.gz. The random suffix is
+// OPTIONAL so v1 (no-suffix) names still prune. Retention uses this strict match
 // so a hand-placed file (e.g. keepme.tar.gz, or a backup from another tool) is
-// NEVER deleted — a loose *.tar.gz glob would have swept those away.
-var backupNameRe = regexp.MustCompile(`^pi-stack-backup-\d{8}-\d{6}\.tar\.gz$`)
+// NEVER deleted — a loose *.tar.gz glob would have swept those away. The leading
+// timestamp keeps lexicographic order == chronological even with the suffix.
+var backupNameRe = regexp.MustCompile(`^pi-stack-backup-\d{8}-\d{6}(-[0-9a-f]+)?\.tar\.gz$`)
 
 // pruneBackups deletes the oldest of OUR backups in dir beyond keep. It matches
 // only files whose name is exactly the generated pattern; anything else is left
@@ -387,26 +441,25 @@ func backupHostname() string {
 
 // --- CLI wiring --------------------------------------------------------------
 
-const memoryHostUsage = `usage: pi-stack-host memory [backup|restore]
+const memoryHostUsage = `usage: pi-stack-host memory
 
   (no subcommand)   run the memory daemon (:11435, JSON-RPC)
-  backup            hot, consistent snapshot of the memory DB -> tar.gz
-  restore <archive> restore the memory DB from a backup tar.gz (safe swap)`
 
-// runMemoryHost dispatches `pi-stack-host memory [backup|restore]`. Bare
-// `pi-stack-host memory` (no args) runs the daemon, preserving back-compat with
-// the service entry. An UNKNOWN first token is a typo, not a silent daemon
-// start: print usage and exit 2 (never fall through to ListenAndServe).
+The backup/restore commands are now TOP-LEVEL verbs (they cover config + op-refs
++ memory, not memory alone): pi-stack-host backup|restore.`
+
+// runMemoryHost dispatches `pi-stack-host memory`. Bare `pi-stack-host memory`
+// (no args) runs the daemon, preserving back-compat with the service entry.
+// backup/restore were PROMOTED to top-level verbs (they cover config + op-refs +
+// memory now, not memory alone), so they are no longer memory subcommands. An
+// UNKNOWN first token is a typo, not a silent daemon start: print usage and exit
+// 2 (never fall through to ListenAndServe).
 func runMemoryHost(args []string) {
 	if len(args) == 0 {
 		runMemory()
 		return
 	}
 	switch args[0] {
-	case "backup":
-		runMemoryBackupCLI(args[1:])
-	case "restore":
-		runMemoryRestoreCLI(args[1:])
 	case "-h", "--help":
 		fmt.Println(memoryHostUsage)
 	default:
@@ -415,28 +468,28 @@ func runMemoryHost(args []string) {
 	}
 }
 
-const memoryBackupUsage = `usage: pi-stack-host memory backup [--out PATH] [--keep N]
+const backupUsage = `usage: pi-stack-host backup [--out PATH] [--keep N]
 
-  Take a hot, consistent snapshot of ~/.pi-stack/memory/memory.db (honors
-  MEMORY_DB) via VACUUM INTO — safe while serve holds the db open — verify it,
-  and pack it into a tar.gz with config.toml/op-refs.env (if present) and a
-  manifest.json.
+  Take a hot, consistent FULL backup — safe while serve holds the db open. Packs
+  a VACUUM INTO snapshot of ~/.pi-stack/memory/memory.db (honors MEMORY_DB),
+  config.toml, op-refs.env (refs only), and a manifest.json (profiles +
+  knowledge-bundle notes) into a tar.gz.
 
   --out PATH   archive path (default ~/.pi-stack/backups/pi-stack-backup-<ts>.tar.gz)
   --keep N     keep only the newest N backups in the out dir (default 7)`
 
-func runMemoryBackupCLI(args []string) {
+func runBackupCLI(args []string) {
 	outPath := ""
 	keep := 7
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "-h" || a == "--help":
-			fmt.Println(memoryBackupUsage)
+			fmt.Println(backupUsage)
 			return
 		case a == "--out" || a == "-o":
 			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "pi-stack-host memory backup: --out needs a value")
+				fmt.Fprintln(os.Stderr, "pi-stack-host backup: --out needs a value")
 				os.Exit(2)
 			}
 			i++
@@ -445,39 +498,44 @@ func runMemoryBackupCLI(args []string) {
 			outPath = strings.TrimPrefix(a, "--out=")
 		case a == "--keep":
 			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "pi-stack-host memory backup: --keep needs a value")
+				fmt.Fprintln(os.Stderr, "pi-stack-host backup: --keep needs a value")
 				os.Exit(2)
 			}
 			i++
 			n, err := strconv.Atoi(args[i])
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "pi-stack-host memory backup: --keep needs an integer, got %q\n", args[i])
+				fmt.Fprintf(os.Stderr, "pi-stack-host backup: --keep needs an integer, got %q\n", args[i])
 				os.Exit(2)
 			}
 			keep = n
 		case strings.HasPrefix(a, "--keep="):
 			n, err := strconv.Atoi(strings.TrimPrefix(a, "--keep="))
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "pi-stack-host memory backup: --keep needs an integer\n")
+				fmt.Fprintf(os.Stderr, "pi-stack-host backup: --keep needs an integer\n")
 				os.Exit(2)
 			}
 			keep = n
 		default:
-			fmt.Fprintf(os.Stderr, "pi-stack-host memory backup: unknown argument %q\n%s\n", a, memoryBackupUsage)
+			fmt.Fprintf(os.Stderr, "pi-stack-host backup: unknown argument %q\n%s\n", a, backupUsage)
 			os.Exit(2)
 		}
 	}
 
 	res, err := memoryBackup(resolveBackupParams(outPath, keep, time.Now()))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack-host memory backup: %v\n", err)
+		fmt.Fprintf(os.Stderr, "pi-stack-host backup: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("backup: %s (%d rows, %s)\n", res.Path, res.RowCount, humanSize(res.Size))
+	if len(res.Contents) > 0 {
+		fmt.Printf("contents: %s\n", strings.Join(res.Contents, ", "))
+	}
 }
 
-// resolveBackupParams fills backupParams from the environment/home, so
-// memoryBackup itself stays hermetic.
+// resolveBackupParams fills backupParams from the environment/home + the loaded
+// config, so memoryBackup itself stays hermetic. It loads config best-effort to
+// record the profile names and knowledge-bundle notes in the manifest — a config
+// error never aborts a backup (the memory db is the precious part).
 func resolveBackupParams(outPath string, keep int, now time.Time) backupParams {
 	home, _ := os.UserHomeDir()
 
@@ -487,7 +545,14 @@ func resolveBackupParams(outPath string, keep int, now time.Time) backupParams {
 	}
 
 	if outPath == "" {
-		name := "pi-stack-backup-" + now.Format("20060102-150405") + ".tar.gz"
+		// A short random suffix makes the default name collision-proof: two backups
+		// in the same second (the timestamp's resolution) get distinct names instead
+		// of the second destroying the first.
+		name := "pi-stack-backup-" + now.Format("20060102-150405")
+		if tok, err := restoreToken(); err == nil {
+			name += "-" + tok
+		}
+		name += ".tar.gz"
 		outPath = filepath.Join(home, ".pi-stack", "backups", name)
 	}
 
@@ -496,37 +561,78 @@ func resolveBackupParams(outPath string, keep int, now time.Time) backupParams {
 		embedModel = "nomic-embed-text"
 	}
 
+	var profiles []string
+	var knowledge []knowledgeNote
+	if cfg, err := config.Load(); err == nil && cfg != nil {
+		profiles = cfg.ProfileNames()
+		for _, b := range cfg.AllKnowledgeBundles() {
+			// Redact any userinfo/token in the recorded remote so a manifest note
+			// (later PRINTED at restore) never leaks a credential embedded in the URL.
+			knowledge = append(knowledge, knowledgeNote{Path: b, Remote: config.RedactURL(bundleGitRemote(b))})
+		}
+	}
+
 	return backupParams{
 		DBPath:     dbPath,
 		OutPath:    outPath,
 		Keep:       keep,
 		Version:    version,
 		EmbedModel: embedModel,
-		ConfigPath: backupConfigPath(home),
-		OpRefsPath: backupOpRefsPath(home),
+		// Use the CANONICAL config paths (XDG config dir), not a CWD-relative
+		// config/op-refs.env. On a repo-less install those are the ONLY real files.
+		ConfigPath: config.Path(),
+		OpRefsPath: config.OpRefsPath(),
+		Profiles:   profiles,
+		Knowledge:  knowledge,
 		Now:        now,
 	}
 }
 
-// backupConfigPath resolves the config.toml to include, honoring the same
-// overrides config.Path() uses, without importing the config package here.
-func backupConfigPath(home string) string {
-	if p := strings.TrimSpace(os.Getenv("PI_STACK_CONFIG")); p != "" {
-		return p
+// opRefsHasPastedSecret best-effort reports whether op-refs.env carries a pasted
+// literal secret VALUE (rather than an op:// reference). It skips blank lines,
+// comments, op:// refs, and the documented non-secret allowlist, then judges the
+// remaining values with the shared config.LooksSecretShaped heuristic. It NEVER
+// returns or logs the value — only whether one looks secret-shaped.
+func opRefsHasPastedSecret(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
 	}
-	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
-		return filepath.Join(xdg, "pi-stack", "config.toml")
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		eq := strings.IndexByte(line, '=')
+		if eq < 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:eq])
+		val := strings.TrimSpace(line[eq+1:])
+		val = strings.Trim(val, `"'`)
+		if val == "" || strings.HasPrefix(val, "op://") || config.NonSecretOpRefsKeys[key] {
+			continue
+		}
+		if config.LooksSecretShaped(key, val) {
+			return true
+		}
 	}
-	return filepath.Join(home, ".config", "pi-stack", "config.toml")
+	return false
 }
 
-// backupOpRefsPath resolves the op-refs.env to include (refs only, safe to
-// archive). $PI_STACK_OP_REFS wins; otherwise the repo-relative config/op-refs.env.
-func backupOpRefsPath(home string) string {
-	if p := strings.TrimSpace(os.Getenv("PI_STACK_OP_REFS")); p != "" {
-		return p
+// bundleGitRemote best-effort reports a knowledge bundle's `origin` git remote
+// URL for the manifest note. Any error (not a git repo, no git binary, no
+// origin) yields "" — this is provenance-only and must never fail a backup.
+func bundleGitRemote(path string) string {
+	if path == "" {
+		return ""
 	}
-	return filepath.Join("config", "op-refs.env")
+	cmd := exec.Command("git", "-C", path, "remote", "get-url", "origin")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func humanSize(n int64) string {

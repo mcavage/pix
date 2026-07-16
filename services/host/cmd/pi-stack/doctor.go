@@ -172,22 +172,48 @@ type report struct {
 }
 
 // todos returns every outstanding TODO command across all groups, in order,
-// with exact-duplicate commands dropped (so e.g. a `pi-stack mcp register` that
-// two groups both surface only appears once). Order is preserved: the first
-// occurrence wins.
+// with duplicate commands dropped (so e.g. a `pi-stack mcp register` that two
+// groups both surface only appears once). Dedup is normalized via todoDedupKey
+// so two commands that differ only in a trailing parenthetical collapse. Order
+// is preserved: the first occurrence's full string wins.
 func (r *report) todos() []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, g := range r.groups {
 		for _, c := range g.checks {
-			if c.state == stateTODO && c.todo != "" && !seen[c.todo] {
-				seen[c.todo] = true
-				out = append(out, c.todo)
+			if c.state != stateTODO || c.todo == "" {
+				continue
 			}
+			key := todoDedupKey(c.todo)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, c.todo)
 		}
 	}
 	return out
 }
+
+// todoDedupKey normalizes a TODO for dedup so two commands that share the same
+// leading command but differ only in a trailing parenthetical (e.g. `pi-stack
+// secret edit` vs `pi-stack secret edit  (creates …)`) collapse to one. It keys
+// on the string up to the first `  (` separator, trimmed.
+func todoDedupKey(todo string) string {
+	if i := strings.Index(todo, "  ("); i >= 0 {
+		return strings.TrimSpace(todo[:i])
+	}
+	return strings.TrimSpace(todo)
+}
+
+// gatewayDownDetail / gatewayTODO describe the HOST condition where sbx IS
+// present (secret ls succeeded) but `sbx mcp ls` failed — almost always the MCP
+// gateway being off (SBX_MCP_URL unset). This is NOT "sbx unavailable": the CLI
+// is here, only the MCP-registration listing failed.
+const (
+	gatewayDownDetail = "sbx present but couldn't list MCP registrations — is the MCP gateway on? (export SBX_MCP_URL=https://gateway.docker.com)"
+	gatewayTODO       = "enable the sbx MCP gateway: export SBX_MCP_URL=https://gateway.docker.com  (then re-run doctor)"
+)
 
 // runDoctor builds the report. Pure apart from env: no direct OS access, so the
 // tests feed a faked shellEnv and assert on the rendered output.
@@ -205,7 +231,10 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	r.sbxAbsent = !sbxOK
 
 	// MCP registrations (`sbx mcp ls`), listed once and reused by the gog group
-	// (its gateway registration) and the MCP group below.
+	// (its gateway registration) and the MCP group below. sbxOK (sbx PRESENT +
+	// `sbx secret ls` ok) is tracked SEPARATELY from mcpOK (`sbx mcp ls` ok): on
+	// the host the CLI is present but the MCP listing can fail (gateway off), and
+	// that must not be reported as "sbx unavailable".
 	mcpOut, mcpOK := "", false
 	if sbxOK {
 		if out, err := env.run("sbx", "mcp", "ls"); err == nil {
@@ -268,7 +297,7 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	// Checks run in strict dependency order and DELIBERATELY probe the REAL path
 	// the gateway uses (headless, through `op run --env-file=config/op-refs.env`),
 	// because `gog auth doctor` in a logged-in shell passes and lies.
-	r.groups = append(r.groups, gogGroup(cfg, env, mcpOut, mcpOK))
+	r.groups = append(r.groups, gogGroup(cfg, env, mcpOut, mcpOK, sbxOK))
 
 	// (d2) Secrets (1Password) — its OWN top-level group, honest and separate.
 	// Runs whenever ANY op-wrapped host MCP server is configured (slack, fastmail,
@@ -296,7 +325,7 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 		})
 	} else {
 		for _, m := range others {
-			mcp.checks = append(mcp.checks, mcpProbeCheck(env, m, mcpOut, mcpOK))
+			mcp.checks = append(mcp.checks, mcpProbeCheck(env, m, mcpOut, mcpOK, sbxOK))
 		}
 	}
 	r.groups = append(r.groups, mcp)
@@ -344,10 +373,16 @@ func serviceCheck(label string, port int, up bool, startCmd string, isEnabled bo
 	return check{label: label, state: stateInfo, detail: fmt.Sprintf(":%d down (not in configured services)", port)}
 }
 
-// mcpCheck reports whether an MCP server is registered with sbx.
-func mcpCheck(name, mcpOut string, mcpOK bool) check {
+// mcpCheck reports whether an MCP server is registered with sbx. When the
+// registration list is unavailable it distinguishes sbx being ABSENT (in the
+// sandbox — a register-on-the-host TODO) from sbx being PRESENT but the listing
+// having failed (host, gateway likely off — an SBX_MCP_URL TODO).
+func mcpCheck(name, mcpOut string, mcpOK, sbxPresent bool) check {
 	cmd := "pi-stack mcp register"
 	if !mcpOK {
+		if sbxPresent {
+			return check{label: name, state: stateTODO, detail: gatewayDownDetail, todo: gatewayTODO}
+		}
 		return check{label: name, state: stateTODO, detail: "sbx unavailable here (register on the host)", todo: cmd}
 	}
 	if grepWord(mcpOut, name) {
@@ -365,9 +400,12 @@ func mcpCheck(name, mcpOut string, mcpOK bool) check {
 // command / no --list-tools support -> a confirmed "registered" without the tool
 // count (never a false TODO); registered but 0 tools -> a TODO naming the
 // headless-creds fix (the same trap the gog headless-spawn check catches).
-func mcpProbeCheck(env shellEnv, name, mcpOut string, mcpOK bool) check {
+func mcpProbeCheck(env shellEnv, name, mcpOut string, mcpOK, sbxPresent bool) check {
 	cmd := "pi-stack mcp register"
 	if !mcpOK {
+		if sbxPresent {
+			return check{label: name, state: stateTODO, detail: gatewayDownDetail, todo: gatewayTODO}
+		}
 		return check{label: name, state: stateTODO, detail: "sbx unavailable here (register on the host)", todo: cmd}
 	}
 	if !grepWord(mcpOut, name) {
@@ -718,7 +756,7 @@ func gogHeadlessOK(env shellEnv, acct, opRefs string) bool {
 // reconstruction from config — clearly labeled, and never a confirmed green.
 // Every probe degrades to a TODO rather than crashing, so this runs cleanly
 // in-sandbox (gog/sbx/op all absent).
-func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group {
+func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent bool) group {
 	g := group{title: "gog (Google Workspace via host MCP — read-only)"}
 
 	// HONEST PATH: probe the command sbx ACTUALLY registered for gog. This is the
@@ -741,7 +779,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 				detail: "the registered command returns 0 tools — keyring not headless",
 				todo:   "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to " + defaultOpRefsPath(env)})
 		}
-		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
+		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
 		return g
 	}
@@ -769,9 +807,16 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 	if refsShown == "" {
 		refsShown = "<not found>"
 	}
+	// The fallback reason depends on sbx presence: if sbx is PRESENT but its
+	// registration couldn't be read (host, gateway likely off), say so; only call
+	// it "sbx unavailable" when sbx is actually absent (in the sandbox).
+	fallbackWhy := "best-effort (sbx unavailable)"
+	if sbxPresent {
+		fallbackWhy = "best-effort (couldn't read sbx MCP registrations — gateway off? set SBX_MCP_URL)"
+	}
 	g.checks = append(g.checks,
 		check{label: "verifying", state: stateInfo,
-			detail: "best-effort (sbx unavailable) — verifies " + acctShown + " via " + refsShown},
+			detail: fallbackWhy + " — verifies " + acctShown + " via " + refsShown},
 		check{label: "note", state: stateInfo,
 			detail: "must match your `make mcp-register` (config/local.mk GOG_ACCOUNT + config/op-refs.env)"})
 
@@ -781,20 +826,21 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 		g.checks = append(g.checks, check{label: "account", state: stateTODO,
 			detail: "cannot verify (GOG_ACCOUNT unset in env/config/local.mk)",
 			todo:   "pi-stack config set gog_account <you@example.com>"})
-		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
+		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
 		return g
 	}
 
 	if opRefs == "" {
-		// Can't run the gateway-equivalent headless probe without op-refs.env — so
-		// we must NOT report green: say we cannot verify and name the fix.
+		// Can't run the gateway-equivalent headless probe without op-refs.env. The
+		// Secrets (1Password) group is the SOLE owner of op-refs.env guidance, so we
+		// do NOT emit a `pi-stack secret edit` TODO here (that would duplicate it) —
+		// just an info line pointing at that section.
 		g.checks = append(g.checks,
 			check{label: "account", state: stateInfo, detail: acct + " set (unconfirmed vs registration)"},
-			check{label: "op-refs", state: stateTODO,
-				detail: "cannot verify (op-refs.env not found)",
-				todo:   "pi-stack secret edit  (creates " + defaultOpRefsPath(env) + " so doctor can probe the gateway path)"})
-		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
+			check{label: "op-refs", state: stateInfo,
+				detail: "op-refs.env not found — see the Secrets (1Password) section"})
+		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
 		return g
 	}
@@ -839,7 +885,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK bool) group
 	}
 
 	// 4. registered with the gateway. 5. attached on run?
-	g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK))
+	g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
 	g.checks = append(g.checks, gogAttachCheck(cfg))
 	return g
 }
@@ -999,36 +1045,9 @@ func gogSpawnIsOpWrapped(argv []string) bool {
 }
 
 // looksSecretShaped reports whether a NON-ref, non-allowlisted op-refs.env value
-// looks like a pasted secret: a Slack token (xox* prefix), a literal for the
-// known-secret GOG_KEYRING_PASSWORD key, or a high-entropy token (long, no
-// whitespace, mixed letters+digits). It intentionally errs toward not-flagging
-// obviously-benign values; the caller NEVER prints the value regardless.
-func looksSecretShaped(key, val string) bool {
-	if val == "" {
-		return false
-	}
-	if strings.HasPrefix(val, "xox") {
-		return true
-	}
-	if key == "GOG_KEYRING_PASSWORD" {
-		return true
-	}
-	if len(val) >= 20 && !strings.ContainsAny(val, " \t") {
-		var hasLetter, hasDigit bool
-		for _, c := range val {
-			switch {
-			case c >= '0' && c <= '9':
-				hasDigit = true
-			case (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'):
-				hasLetter = true
-			}
-		}
-		if hasLetter && hasDigit {
-			return true
-		}
-	}
-	return false
-}
+// looks like a pasted secret. Thin wrapper over the shared config.LooksSecretShaped
+// so doctor's lint and backup's pre-archive warning judge identically.
+func looksSecretShaped(key, val string) bool { return config.LooksSecretShaped(key, val) }
 
 // registeredGogCommand asks sbx what command it ACTUALLY registered for the gog
 // MCP server, so doctor can probe the real registration instead of a config

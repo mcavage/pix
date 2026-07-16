@@ -1,7 +1,16 @@
-// pi-stack-host `memory restore` — the safety-critical counterpart to
-// `memory backup` (memory_backup.go). It takes a backup tar.gz and swaps the
-// contained memory.db in as the live database WITHOUT ever corrupting or
-// silently clobbering what is already there.
+// pi-stack-host `restore` — the safety-critical counterpart to `backup`
+// (memory_backup.go). It takes a backup tar.gz and restores the FULL pi-stack
+// state WITHOUT ever corrupting or silently clobbering what is already there:
+//
+//   - MEMORY (the safety-critical part): swaps the archived memory.db in as the
+//     live database via the hardened flow below.
+//   - CONFIG + OP-REFS (plain files): moves the CURRENT config.toml / op-refs.env
+//     aside to a unique .bak-<ts> (reversible) then writes the archived versions
+//     into place. This is how profiles come back. Absent-in-archive = skipped.
+//
+// Only the memory swap carries the corruption risk (a live sqlite writer), so
+// the heavy machinery below is about MEMORY; the config/op-refs restore is a
+// simple reversible move-aside.
 //
 // The whole flow is defensive, in order:
 //
@@ -48,6 +57,8 @@ import (
 	"strings"
 	"time"
 
+	"pi-stack/host/config"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -71,6 +82,8 @@ type restoreParams struct {
 	ArchivePath string      // source backup tar.gz
 	LiveDBPath  string      // dest live memory.db to swap in
 	Force       bool        // overwrite an existing live db
+	ConfigPath  string      // dest config.toml to restore ("" -> skip config restore)
+	OpRefsPath  string      // dest op-refs.env to restore ("" -> skip op-refs restore)
 	Now         time.Time   // timestamp source for .bak/.restore names (zero -> time.Now())
 	ServeProbe  func() bool // reports whether a serve daemon holds the db (nil -> assume down)
 	// swapRename performs the FINAL staged->live rename. nil -> os.Rename. Tests
@@ -87,14 +100,36 @@ type restoreResult struct {
 	LivePath   string // where the restored db now lives
 	RowCount   int    // recount of live memories in the restored db
 	BackupPath string // .bak path of the previous live db ("" if none existed)
+
+	// Config + op-refs restore outcome (plain-file move-aside). Restored is false
+	// when the archive did not carry that file; Bak is "" when there was no current
+	// file to move aside.
+	ConfigRestored bool
+	ConfigBak      string
+	OpRefsRestored bool
+	OpRefsBak      string
+
+	// Profiles present in the RESTORED config (parsed back after the write), so the
+	// CLI can report exactly which contexts came back. Empty for a config-less
+	// archive.
+	Profiles []string
+
+	// Knowledge notes copied from the manifest: where each configured bundle lived
+	// (path + git remote). Content is NOT restored (git is its backup); the CLI
+	// prints these so the user knows how to bring the bundle back.
+	Knowledge []knowledgeNote
 }
 
 // validateRestoreManifest is the PURE version gate: the archive must be a format
 // this binary understands and must NOT carry a schema newer than ours. Kept free
 // of any fs/db work so tests can exercise the gate directly.
 func validateRestoreManifest(m backupManifest) error {
-	if m.FormatVersion != backupFormatVersion {
-		return fmt.Errorf("archive format_version %d is not understood (this binary handles %d)",
+	// Accept any format from v1 up to the version this binary writes. A v1 archive
+	// (memory-only manifest, no profiles/knowledge) still restores memory (and its
+	// config/op-refs) fine — the new fields simply default to empty. Only a format
+	// NEWER than ours (written by a newer pi-stack) is refused.
+	if m.FormatVersion < 1 || m.FormatVersion > backupFormatVersion {
+		return fmt.Errorf("archive format_version %d is not understood (this binary handles 1..%d)",
 			m.FormatVersion, backupFormatVersion)
 	}
 	if m.SqliteUserVersion > restoreSchemaVersion {
@@ -182,48 +217,151 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 		return restoreResult{}, err
 	}
 
-	// 4. Guard against a silent clobber of an existing live db.
+	// 4. Guard against a silent clobber of an existing live db (the memory swap is
+	// LAST, but the gate is cheap and belongs with the other pre-commit checks).
 	liveExists := fileExists(p.LiveDBPath)
 	if liveExists && !p.Force {
 		return restoreResult{}, fmt.Errorf("live db already exists at %s; pass --force to overwrite (the current db is moved aside to a .bak first)", p.LiveDBPath)
 	}
 
-	destDir := filepath.Dir(p.LiveDBPath)
-	if err := os.MkdirAll(destDir, 0o700); err != nil {
-		return restoreResult{}, fmt.Errorf("dest dir: %w", err)
+	// 4b. VALIDATE the archived plain files BEFORE committing ANYTHING. A
+	// config.toml that does not parse as TOML must abort the whole restore now,
+	// while the live state is still fully intact — never install a config that
+	// pi-stack cannot then load. op-refs.env carries no parse contract, so it is
+	// only validated by being written atomically below.
+	stamp := now.Format("20060102-150405")
+	archivedConfig := filepath.Join(tmpDir, "config.toml")
+	archivedOpRefs := filepath.Join(tmpDir, "op-refs.env")
+	var restoredCfg *config.Config
+	if p.ConfigPath != "" && fileExists(archivedConfig) {
+		cfg, err := config.LoadFrom(archivedConfig)
+		if err != nil {
+			return restoreResult{}, fmt.Errorf("archived config.toml does not parse as TOML; refusing restore before any change: %w", err)
+		}
+		restoredCfg = cfg
 	}
 
-	// 5a. Stage the validated db into a UNIQUE temp in the DEST dir (os.CreateTemp,
-	// not a predictable name) so the final rename is same-filesystem and atomic.
-	// This copy can be large; it does NOT touch live state, so it is safe to do
-	// BEFORE the final serve re-probe.
+	// A stack of undo closures for every COMMITTED step, executed in reverse on any
+	// later failure. rollbackSteps attempts every undo and joins their errors so a
+	// failed rollback is surfaced loudly rather than swallowed.
+	var undos []func() error
+	rollbackSteps := func() error {
+		var errs []error
+		for i := len(undos) - 1; i >= 0; i-- {
+			if err := undos[i](); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
+	}
+
+	result := restoreResult{
+		LivePath:  p.LiveDBPath,
+		Knowledge: manifest.Knowledge,
+	}
+
+	// 5. Restore PLAIN FILES FIRST (config.toml, then op-refs.env). They are cheap
+	// to roll back, so doing them before the expensive/risky memory swap keeps the
+	// failure surface small. Each install moves the current file aside to a unique
+	// .bak and writes the archived content atomically (temp-in-same-dir + rename).
+
+	// 5a. config.toml. A failure here has nothing earlier to roll back (installPlainFile
+	// undoes its own partial move internally), so return directly.
+	if p.ConfigPath != "" {
+		bak, restored, undo, err := installPlainFile(archivedConfig, p.ConfigPath, stamp, false)
+		if err != nil {
+			return restoreResult{}, fmt.Errorf("restore config.toml: %w", err)
+		}
+		if restored {
+			undos = append(undos, undo)
+			result.ConfigRestored = true
+			result.ConfigBak = bak
+			// Report the profiles now present from the config we validated + wrote back
+			// (accurate even for a v1 archive whose manifest has no profiles field).
+			if restoredCfg != nil {
+				result.Profiles = restoredCfg.ProfileNames()
+			}
+		}
+	}
+	if result.Profiles == nil {
+		result.Profiles = manifest.Profiles
+	}
+
+	// 5b. op-refs.env (0600 file, parent dir tightened to 0700). On failure, roll
+	// back the already-restored config so we never leave split state.
+	if p.OpRefsPath != "" {
+		bak, restored, undo, err := installPlainFile(archivedOpRefs, p.OpRefsPath, stamp, true)
+		if err != nil {
+			if rbErr := rollbackSteps(); rbErr != nil {
+				return restoreResult{}, fmt.Errorf("restore op-refs.env failed (%v) AND rollback FAILED — state may be inconsistent: %w", err, rbErr)
+			}
+			return restoreResult{}, fmt.Errorf("restore op-refs.env: %w", err)
+		}
+		if restored {
+			undos = append(undos, undo)
+			result.OpRefsRestored = true
+			result.OpRefsBak = bak
+		}
+	}
+
+	// 5c. Memory swap LAST — the expensive, corruption-prone sqlite step. On ANY
+	// failure, roll back the plain files restored above (reverse order) so a partial
+	// restore never leaves the config/op-refs pointing at a db that never landed.
+	bakBase, rowCount, err := swapMemory(p, archivedDB, stamp, liveExists, moveRename, rename)
+	if err != nil {
+		if rbErr := rollbackSteps(); rbErr != nil {
+			return restoreResult{}, fmt.Errorf("%v; AND rollback of restored config/op-refs FAILED — state may be inconsistent: %w", err, rbErr)
+		}
+		return restoreResult{}, err
+	}
+	result.BackupPath = bakBase
+	result.RowCount = rowCount
+
+	return result, nil
+}
+
+// swapMemory performs the hardened memory-db swap: stage the validated archived
+// db into a same-dir temp, RE-PROBE serve is still down right before the first
+// live-file rename (the tightest TOCTOU point), move the CURRENT db + sidecars
+// aside into a unique .bak set (kept, never deleted; no stale WAL left to
+// replay), then os.Rename the staged file into place LAST (atomic on POSIX). On
+// any failure at/before the final rename it rolls the moved-aside set back so the
+// live db is never left missing, surfacing a failed rollback LOUDLY. Returns the
+// .bak base path ("" when nothing was moved) and the restored row count.
+func swapMemory(p restoreParams, archivedDB, stamp string, liveExists bool,
+	moveRename, rename func(oldpath, newpath string) error) (bakBase string, rowCount int, err error) {
+	destDir := filepath.Dir(p.LiveDBPath)
+	if err := os.MkdirAll(destDir, 0o700); err != nil {
+		return "", 0, fmt.Errorf("dest dir: %w", err)
+	}
+
+	// Stage the validated db into a UNIQUE temp in the DEST dir so the final rename
+	// is same-filesystem and atomic. This copy can be large; it does NOT touch live
+	// state, so it is safe to do BEFORE the final serve re-probe.
 	staged, err := stageRestoredDB(destDir, archivedDB)
 	if err != nil {
-		return restoreResult{}, fmt.Errorf("stage restored db: %w", err)
+		return "", 0, fmt.Errorf("stage restored db: %w", err)
 	}
 	defer os.Remove(staged) // best-effort: gone after a successful rename
 
-	// 5b. Re-probe serve is STILL down IMMEDIATELY before the first rename that
-	// touches live files. The stage copy above can take a while (up to ~200MB), so
-	// the earlier probe would leave a window where serve starts DURING the copy;
-	// this is the last safe point to bail with zero live-state mutation.
+	// Re-probe serve is STILL down IMMEDIATELY before the first rename that touches
+	// live files. The stage copy above can take a while, so the earlier probe would
+	// leave a window where serve starts DURING the copy; this is the last safe point
+	// to bail with zero live-state mutation.
 	if p.ServeProbe != nil && p.ServeProbe() {
-		return restoreResult{}, fmt.Errorf("memory serve came up during restore; aborted before any swap — stop it and retry")
+		return "", 0, fmt.Errorf("memory serve came up during restore; aborted before any swap — stop it and retry")
 	}
 
-	// 5c. Move the CURRENT state aside COMPLETELY (db + -wal + -shm) into a unique
-	// .bak-<ts>-<rand> set, so no committed WAL data is lost and no stale sidecar
-	// is left at the dest to replay onto the restored file. This runs even when the
-	// main db is ABSENT: a prior failed run can leave an ORPHAN -wal/-shm with NO
-	// main db, and installing the restored db beside a stale WAL would replay it.
-	stamp := now.Format("20060102-150405")
-	bakBase := ""
+	// Move the CURRENT state aside COMPLETELY (db + -wal + -shm) into a unique
+	// .bak-<ts>-<rand> set. This runs even when the main db is ABSENT: a prior
+	// failed run can leave an ORPHAN -wal/-shm, and installing the restored db
+	// beside a stale WAL would replay it.
 	var movedAside [][2]string // [from, to] pairs, for rollback
 	needMove := liveExists || pathExists(p.LiveDBPath+"-wal") || pathExists(p.LiveDBPath+"-shm")
 	if needMove {
 		token, err := restoreToken()
 		if err != nil {
-			return restoreResult{}, err
+			return "", 0, err
 		}
 		bakBase = p.LiveDBPath + ".bak-" + stamp + "-" + token
 		for _, sc := range []string{"", "-wal", "-shm"} {
@@ -233,38 +371,125 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 			}
 			dst := bakBase + sc
 			if err := moveRename(src, dst); err != nil {
-				// Roll back anything already moved before we bail. A rollback that
-				// itself FAILS is surfaced LOUDLY (the live db may now be missing).
 				if rbErr := rollbackMoves(moveRename, movedAside); rbErr != nil {
-					return restoreResult{}, fmt.Errorf("move current %s aside failed (%v) AND rollback FAILED — live db may be missing: %w", src, err, rbErr)
+					return "", 0, fmt.Errorf("move current %s aside failed (%v) AND rollback FAILED — live db may be missing: %w", src, err, rbErr)
 				}
-				return restoreResult{}, fmt.Errorf("move current %s aside: %w", src, err)
+				return "", 0, fmt.Errorf("move current %s aside: %w", src, err)
 			}
 			movedAside = append(movedAside, [2]string{src, dst})
 		}
 	}
 
-	// 5d. Atomic move into place LAST. On failure, ROLL BACK the moved-aside set so
-	// the live db is never left missing; a rollback that itself FAILS is LOUD.
+	// Atomic move into place LAST. On failure, ROLL BACK the moved-aside set so the
+	// live db is never left missing; a rollback that itself FAILS is LOUD.
 	if err := rename(staged, p.LiveDBPath); err != nil {
 		if rbErr := rollbackMoves(moveRename, movedAside); rbErr != nil {
-			return restoreResult{}, fmt.Errorf("swap failed (%v) AND rollback FAILED — live db may be missing: %w", err, rbErr)
+			return "", 0, fmt.Errorf("swap failed (%v) AND rollback FAILED — live db may be missing: %w", err, rbErr)
 		}
-		return restoreResult{}, fmt.Errorf("swap restored db into place: %w", err)
+		return "", 0, fmt.Errorf("swap restored db into place: %w", err)
 	}
 
-	// 6. Recount live memories for the report. The FTS index travels INSIDE
-	// memory.db (content table, copied by VACUUM INTO) — no rebuild needed.
-	rowCount, err := countLiveRows(p.LiveDBPath)
+	// Recount live memories for the report. The FTS index travels INSIDE memory.db
+	// (content table, copied by VACUUM INTO) — no rebuild needed.
+	rowCount, err = countLiveRows(p.LiveDBPath)
 	if err != nil {
-		return restoreResult{}, err
+		return "", 0, err
 	}
+	return bakBase, rowCount, nil
+}
 
-	return restoreResult{
-		LivePath:   p.LiveDBPath,
-		RowCount:   rowCount,
-		BackupPath: bakBase,
-	}, nil
+// installPlainFile restores a single plain file (config.toml / op-refs.env) from
+// an extracted archive. If src is absent it is a no-op (restored=false, undo=nil).
+// If a current dest exists it is moved aside to a UNIQUE <dest>.bak-<stamp>-<rand>
+// (reversible, never deleted); then the archived content is written ATOMICALLY
+// (temp-in-same-dir + rename, so a crash never leaves a partial file) with 0600.
+// When tightenDir is set the parent dir is chmod'd to 0700 (MkdirAll does NOT
+// tighten an existing dir), for op-refs.env. Returns the .bak path ("" when there
+// was nothing to move aside), whether a file was written, and an undo closure
+// that reverses this step (remove the installed file, move the .bak back).
+func installPlainFile(src, dest, stamp string, tightenDir bool) (bak string, restored bool, undo func() error, err error) {
+	if !fileExists(src) {
+		return "", false, nil, nil
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return "", false, nil, fmt.Errorf("read archived file: %w", err)
+	}
+	dir := filepath.Dir(dest)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", false, nil, fmt.Errorf("dest dir: %w", err)
+	}
+	if tightenDir {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return "", false, nil, fmt.Errorf("tighten dest dir: %w", err)
+		}
+	}
+	if pathExists(dest) {
+		token, terr := restoreToken()
+		if terr != nil {
+			return "", false, nil, terr
+		}
+		bak = dest + ".bak-" + stamp + "-" + token
+		if err := os.Rename(dest, bak); err != nil {
+			return "", false, nil, fmt.Errorf("move current aside: %w", err)
+		}
+	}
+	if err := atomicWriteFile(dest, data, 0o600); err != nil {
+		// Roll THIS step's move back so the current file is never left missing.
+		if bak != "" {
+			_ = os.Rename(bak, dest)
+		}
+		return "", false, nil, fmt.Errorf("write restored file: %w", err)
+	}
+	bakCopy := bak
+	undo = func() error {
+		if err := os.Remove(dest); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("undo restore of %s: %w", dest, err)
+		}
+		if bakCopy != "" {
+			if err := os.Rename(bakCopy, dest); err != nil {
+				return fmt.Errorf("undo restore of %s (restore .bak): %w", dest, err)
+			}
+		}
+		return nil
+	}
+	return bak, true, undo, nil
+}
+
+// atomicWriteFile writes data to dest via a same-dir temp file + rename, so a
+// crash mid-write never leaves a partial or truncated file at dest. The temp is
+// created 0600, chmod'd to mode, fsynced, then renamed into place.
+func atomicWriteFile(dest string, data []byte, mode os.FileMode) (err error) {
+	dir := filepath.Dir(dest)
+	tmp, err := os.CreateTemp(dir, ".pi-stack-restore-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		tmp.Close()
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(mode); err != nil {
+		return fmt.Errorf("chmod temp: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("write temp: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("fsync temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp: %w", err)
+	}
+	if err := os.Rename(tmpPath, dest); err != nil {
+		return fmt.Errorf("rename temp into place: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 // rollbackMoves undoes a set of [from,to] renames (in reverse), restoring the
@@ -541,57 +766,90 @@ func serveIsUp() bool {
 
 // --- CLI wiring --------------------------------------------------------------
 
-const memoryRestoreUsage = `usage: pi-stack-host memory restore <archive> [--force]
+const restoreUsage = `usage: pi-stack-host restore <archive> [--force]
 
-  Restore ~/.pi-stack/memory/memory.db (honors MEMORY_DB) from a backup tar.gz
-  produced by 'memory backup'. Refuses to run while 'serve' holds the db, and
-  refuses to overwrite an existing live db unless --force is given (in which
-  case the current db is moved aside to a .bak-<ts> first, never deleted).
+  Restore a FULL pi-stack backup tar.gz produced by 'backup': memory.db (honors
+  MEMORY_DB), config.toml (profiles), and op-refs.env. Refuses to run while
+  'serve' holds the db, and refuses to overwrite an existing live db unless
+  --force is given (in which case the current db is moved aside to a .bak-<ts>
+  first, never deleted). config.toml/op-refs.env are always moved aside to a
+  .bak-<ts> before the archived versions are written (reversible).
 
   <archive>    path to the pi-stack-backup-<ts>.tar.gz to restore
   --force      overwrite an existing live db (current db kept as .bak-<ts>)`
 
-func runMemoryRestoreCLI(args []string) {
+func runRestoreCLI(args []string) {
 	archive := ""
 	force := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "-h" || a == "--help":
-			fmt.Println(memoryRestoreUsage)
+			fmt.Println(restoreUsage)
 			return
 		case a == "--force" || a == "-f":
 			force = true
 		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(os.Stderr, "pi-stack-host memory restore: unknown flag %q\n%s\n", a, memoryRestoreUsage)
+			fmt.Fprintf(os.Stderr, "pi-stack-host restore: unknown flag %q\n%s\n", a, restoreUsage)
 			os.Exit(2)
 		default:
 			if archive != "" {
-				fmt.Fprintf(os.Stderr, "pi-stack-host memory restore: unexpected argument %q\n%s\n", a, memoryRestoreUsage)
+				fmt.Fprintf(os.Stderr, "pi-stack-host restore: unexpected argument %q\n%s\n", a, restoreUsage)
 				os.Exit(2)
 			}
 			archive = a
 		}
 	}
 	if archive == "" {
-		fmt.Fprintf(os.Stderr, "pi-stack-host memory restore: missing <archive>\n%s\n", memoryRestoreUsage)
+		fmt.Fprintf(os.Stderr, "pi-stack-host restore: missing <archive>\n%s\n", restoreUsage)
 		os.Exit(2)
 	}
 
 	res, err := memoryRestore(resolveRestoreParams(archive, force, time.Now()))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack-host memory restore: %v\n", err)
+		fmt.Fprintf(os.Stderr, "pi-stack-host restore: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("restored %d rows to %s\n", res.RowCount, res.LivePath)
+	printRestoreReport(os.Stdout, res)
+}
+
+// printRestoreReport prints the full restore outcome: memory, config (+ the
+// profiles now present), op-refs, and the knowledge-bundle notes from the
+// manifest, ending with the start hint.
+func printRestoreReport(w io.Writer, res restoreResult) {
+	fmt.Fprintf(w, "restored %d memory rows to %s\n", res.RowCount, res.LivePath)
 	if res.BackupPath != "" {
-		fmt.Printf("previous db kept at %s\n", res.BackupPath)
+		fmt.Fprintf(w, "previous db kept at %s\n", res.BackupPath)
 	}
-	fmt.Println("start it: pi-stack serve")
+	if res.ConfigRestored {
+		if len(res.Profiles) > 0 {
+			fmt.Fprintf(w, "config restored (profiles: %s)\n", strings.Join(res.Profiles, ", "))
+		} else {
+			fmt.Fprintln(w, "config restored")
+		}
+		if res.ConfigBak != "" {
+			fmt.Fprintf(w, "previous config kept at %s\n", res.ConfigBak)
+		}
+	}
+	if res.OpRefsRestored {
+		fmt.Fprintln(w, "op-refs restored")
+		if res.OpRefsBak != "" {
+			fmt.Fprintf(w, "previous op-refs kept at %s\n", res.OpRefsBak)
+		}
+	}
+	for _, k := range res.Knowledge {
+		if k.Remote != "" {
+			fmt.Fprintf(w, "your knowledge bundle lives at %s (git remote %s) — restore it with git clone / pi-stack knowledge use\n", k.Path, k.Remote)
+		} else {
+			fmt.Fprintf(w, "your knowledge bundle lives at %s — restore it with git clone / pi-stack knowledge use\n", k.Path)
+		}
+	}
+	fmt.Fprintln(w, "start it: pi-stack serve")
 }
 
 // resolveRestoreParams fills restoreParams from the environment/home, so
-// memoryRestore itself stays hermetic.
+// memoryRestore itself stays hermetic. It resolves the SAME config.toml /
+// op-refs.env paths backup uses, so a full backup round-trips back into place.
 func resolveRestoreParams(archive string, force bool, now time.Time) restoreParams {
 	home, _ := os.UserHomeDir()
 
@@ -604,7 +862,11 @@ func resolveRestoreParams(archive string, force bool, now time.Time) restorePara
 		ArchivePath: archive,
 		LiveDBPath:  dbPath,
 		Force:       force,
-		Now:         now,
-		ServeProbe:  serveIsUp,
+		// Restore to the CANONICAL config paths (XDG config dir), matching backup, so
+		// a full backup round-trips back into place even on a repo-less install.
+		ConfigPath: config.Path(),
+		OpRefsPath: config.OpRefsPath(),
+		Now:        now,
+		ServeProbe: serveIsUp,
 	}
 }

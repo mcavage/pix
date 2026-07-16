@@ -202,59 +202,28 @@ func TestMemoryUnknownSub(t *testing.T) {
 	}
 }
 
-// TestMemoryBackupHelp proves `memory backup --help` prints usage without
-// execing the host binary (config-independent, no RPC), via the shared help
-// dispatch. The exec path itself is exercised end-to-end by the host-side
-// backup tests plus the integration wiring.
-func TestMemoryBackupHelp(t *testing.T) {
-	var out bytes.Buffer
-	// dispatchMemory is reached with a zero client for the help path; backup must
-	// print usage and return nil without touching the client or a host binary.
-	if err := dispatchMemory("backup", []string{"--help"}, rpcClient{}, &out, "default"); err != nil {
-		t.Fatalf("backup --help: %v", err)
-	}
-	if !strings.Contains(out.String(), "pi-stack memory backup") {
-		t.Errorf("help output = %q, want it to mention 'pi-stack memory backup'", out.String())
+// TestMemoryUsageMentionsBackupRestore keeps the top-level memory usage pointing
+// users at the promoted top-level backup/restore verbs.
+func TestMemoryUsageMentionsBackupRestore(t *testing.T) {
+	if !strings.Contains(memoryUsage, "pi-stack backup") || !strings.Contains(memoryUsage, "pi-stack restore") {
+		t.Error("memoryUsage should point to the top-level backup/restore verbs")
 	}
 }
 
-// TestMemoryUsageMentionsBackup keeps the top-level memory usage in sync.
-func TestMemoryUsageMentionsBackup(t *testing.T) {
-	if !strings.Contains(memoryUsage, "backup") {
-		t.Error("memoryUsage does not mention the backup subcommand")
-	}
-}
-
-// TestMemoryRestoreHelp proves `memory restore --help` prints usage without
-// execing the host binary (config-independent, no RPC), via the shared help
-// dispatch. The exec path itself is exercised by the host-side restore tests.
-func TestMemoryRestoreHelp(t *testing.T) {
-	var out bytes.Buffer
-	if err := dispatchMemory("restore", []string{"--help"}, rpcClient{}, &out, "default"); err != nil {
-		t.Fatalf("restore --help: %v", err)
-	}
-	if !strings.Contains(out.String(), "pi-stack memory restore") {
-		t.Errorf("help output = %q, want it to mention 'pi-stack memory restore'", out.String())
-	}
-}
-
-// TestMemoryRestoreNeedsArchive proves the launcher rejects a restore with no
-// <archive> as a usage error before any exec.
-func TestMemoryRestoreNeedsArchive(t *testing.T) {
-	if err := dispatchMemory("restore", nil, rpcClient{}, &bytes.Buffer{}, "default"); !isUsage(err) {
-		t.Errorf("restore with no archive: err = %v, want usageError", err)
-	}
-}
-
-// TestMemoryUsageMentionsRestore keeps the top-level memory usage in sync.
-func TestMemoryUsageMentionsRestore(t *testing.T) {
-	if !strings.Contains(memoryUsage, "restore") {
-		t.Error("memoryUsage does not mention the restore subcommand")
+// TestMemoryDispatchNoLongerHasBackupRestore proves backup/restore were removed
+// as memory subcommands (they are top-level verbs now) and are treated as an
+// unknown subcommand.
+func TestMemoryDispatchNoLongerHasBackupRestore(t *testing.T) {
+	for _, sub := range []string{"backup", "restore"} {
+		if err := dispatchMemory(sub, nil, rpcClient{}, &bytes.Buffer{}, "default"); !isUsage(err) {
+			t.Errorf("dispatchMemory(%q) err = %v, want usageError (removed subcommand)", sub, err)
+		}
 	}
 }
 
 func TestFlagSetParse(t *testing.T) {
 	fs := newFlagSet()
+	fs.enableJSON()
 	limit := fs.int("limit", 8)
 	project := fs.str("project", "")
 	pos, err := fs.parse([]string{"hello", "world", "--limit", "3", "--project=recipes", "--json"})
@@ -418,39 +387,6 @@ func TestRunMemoryCore_HelpIgnoresBrokenConfig(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "usage: pi-stack memory <") {
 		t.Errorf("memory --help = %q, want top-level usage", out.String())
-	}
-}
-
-// TestRunMemoryCore_BackupRestoreHelpIgnoresBrokenConfig is the recovery-path
-// gate: `memory backup/restore --help` (and the bare verbs) must NOT call
-// loadResolvedConfig, so a corrupt/unknown-profile config cannot block the
-// advertised db-recovery commands. The loader PANICS if reached.
-func TestRunMemoryCore_BackupRestoreHelpIgnoresBrokenConfig(t *testing.T) {
-	panicLoad := func() (*config.Config, string, error) {
-		panic("runMemoryCore must not load config on backup/restore")
-	}
-	panicClient := func() rpcClient { panic("runMemoryCore must not RPC on backup/restore") }
-
-	for _, tc := range []struct {
-		argv []string
-		want string
-	}{
-		{[]string{"backup", "--help"}, "pi-stack memory backup"},
-		{[]string{"restore", "--help"}, "pi-stack memory restore"},
-	} {
-		var out bytes.Buffer
-		if err := runMemoryCore(tc.argv, panicLoad, panicClient, &out); err != nil {
-			t.Fatalf("runMemoryCore(%v) with broken config: %v", tc.argv, err)
-		}
-		if !strings.Contains(out.String(), tc.want) {
-			t.Errorf("runMemoryCore(%v) = %q, want %q", tc.argv, out.String(), tc.want)
-		}
-	}
-
-	// A `restore` with NO archive is a usage error, still reached WITHOUT loading
-	// config (the recovery path must be config-independent even on bad input).
-	if err := runMemoryCore([]string{"restore"}, panicLoad, panicClient, &bytes.Buffer{}); !isUsage(err) {
-		t.Errorf("runMemoryCore([restore]) err = %v, want usageError (config-independent)", err)
 	}
 }
 

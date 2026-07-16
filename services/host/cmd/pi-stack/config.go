@@ -26,13 +26,22 @@ func runConfig(argv []string) {
 	switch sub {
 	case "path":
 		// `config path op-refs` prints the absolute op-refs.env path (discoverability
-		// sugar mirroring `config path`); bare `config path` prints config.toml.
-		if len(argv) > 1 && argv[1] == "op-refs" {
+		// sugar mirroring `config path`); bare `config path` prints config.toml. Any
+		// other trailing token is a typo, not a silently-ignored arg.
+		if len(argv) > 1 && argv[1] == "op-refs" && len(argv) == 2 {
 			fmt.Println(config.OpRefsPath())
 			return
 		}
+		if len(argv) > 1 {
+			fmt.Fprintf(os.Stderr, "pi-stack config path: unexpected argument %q (want: op-refs)\n", argv[1])
+			os.Exit(2)
+		}
 		fmt.Println(config.Path())
 	case "show":
+		if len(argv) > 1 {
+			fmt.Fprintf(os.Stderr, "pi-stack config show: unexpected argument %q\n", argv[1])
+			os.Exit(2)
+		}
 		cfg, err := config.Load()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "pi-stack config: %v\n", err)

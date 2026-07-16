@@ -191,8 +191,16 @@ func (c *Config) applyDefaults() {
 // populated with defaults and a nil error — absence is not an error. Unknown
 // keys are tolerated.
 func Load() (*Config, error) {
+	return LoadFrom(Path())
+}
+
+// LoadFrom reads and decodes a config.toml at an EXPLICIT path (rather than the
+// resolved Path()). It is used by callers that must inspect a config file which
+// is not the active one — e.g. `restore` reading the config.toml just written
+// back from a backup archive to report the profiles it now carries. Absence is
+// not an error: it returns defaults, matching Load().
+func LoadFrom(path string) (*Config, error) {
 	c := &Config{}
-	path := Path()
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			c.applyDefaults()

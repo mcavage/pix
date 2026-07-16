@@ -37,6 +37,10 @@ func runMcpCmd(argv []string) {
 	case "register":
 		runMcpRegister(argv[1:])
 	case "ls":
+		if len(argv) > 1 {
+			fmt.Fprintf(os.Stderr, "pi-stack mcp ls: unexpected argument %q\n\n%s", argv[1], mcpUsage)
+			os.Exit(2)
+		}
 		runMcpLs()
 	default:
 		fmt.Fprintf(os.Stderr, "pi-stack mcp: unknown subcommand %q (want: register, ls)\n", argv[0])

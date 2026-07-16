@@ -65,6 +65,7 @@ func runKnowledge(argv []string) {
 // personal query never returns work concepts.
 func runKnowledgeQuery(argv []string) {
 	fs := newFlagSet()
+	fs.enableJSON()
 	limit := fs.int("limit", 5, "n")
 	positional, perr := fs.parse(argv)
 	if perr != nil {
@@ -579,12 +580,18 @@ func resolveBundleRef(ref, cacheDir string, out io.Writer) (string, error) {
 // runKnowledgeLs is the CLI entry point for `knowledge ls [--json]`.
 func runKnowledgeLs(argv []string) {
 	fs := newFlagSet()
-	if _, err := fs.parse(argv); err != nil {
+	fs.enableJSON()
+	positional, err := fs.parse(argv)
+	if err != nil {
 		exitFromErr("knowledge ls", err)
 	}
 	if fs.help {
 		fmt.Print(knowledgeUsage)
 		return
+	}
+	if len(positional) > 0 {
+		fmt.Fprintf(os.Stderr, "pi-stack knowledge ls: unexpected argument %q\nusage: pi-stack knowledge ls [--json]\n", positional[0])
+		os.Exit(2)
 	}
 	cfg, _, err := loadResolvedConfig()
 	if err != nil {
@@ -856,19 +863,9 @@ func canonicalBundleIDs(paths []string) []string {
 }
 
 // redactURL masks any userinfo (user:token@) in a git URL so a display line
-// never leaks an embedded credential, while the stored remote keeps the original.
-func redactURL(u string) string {
-	i := strings.Index(u, "://")
-	if i < 0 {
-		return u
-	}
-	rest := u[i+3:]
-	at := strings.IndexByte(rest, '@')
-	if at < 0 {
-		return u
-	}
-	return u[:i+3] + "***@" + rest[at+1:]
-}
+// never leaks an embedded credential. Thin wrapper over the shared
+// config.RedactURL so the launcher and host binary redact identically.
+func redactURL(u string) string { return config.RedactURL(u) }
 
 func gitClone(url, dest string) error {
 	return exec.Command("git", "clone", "-q", url, dest).Run()
