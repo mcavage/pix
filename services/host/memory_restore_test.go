@@ -570,6 +570,63 @@ func TestMemoryRestoreRefusesArchiveMissingMemoriesTable(t *testing.T) {
 	}
 }
 
+// TestMemoryRestoreRefusesArchiveWithWrongMemoriesColumns proves an archived db
+// whose `memories` table has the WRONG columns (e.g. `CREATE TABLE memories(x)`)
+// — but with a valid sqlite header, user_version=1, integrity ok, and the right
+// table NAMES present — is refused BEFORE any swap. A name-only check would let
+// it pass and swap out the live db, which then fails at countLiveRows, leaving
+// the live db unusable. Distinct from the missing-table test above.
+func TestMemoryRestoreRefusesArchiveWithWrongMemoriesColumns(t *testing.T) {
+	st, dbPath := seedMemDB(t, 2)
+	st.db.Close()
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A VALID sqlite db (integrity ok, user_version=1) whose tables are named
+	// `memories` + `memories_fts` but carry the WRONG columns.
+	dir := t.TempDir()
+	wrongDB := filepath.Join(dir, "memory.db")
+	wdb, err := sql.Open("sqlite", wrongDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wdb.Exec("CREATE TABLE memories(x)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wdb.Exec("CREATE TABLE memories_fts(y)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wdb.Exec("PRAGMA user_version = 1"); err != nil {
+		t.Fatal(err)
+	}
+	wdb.Close()
+
+	manifest := backupManifest{FormatVersion: backupFormatVersion, SqliteUserVersion: 1}
+	archive := filepath.Join(dir, "wrong-cols.tar.gz")
+	if err := writeBackupArchive(archive, wrongDB, "", "", manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := memoryRestore(restoreParams{
+		ArchivePath: archive, LiveDBPath: dbPath, Force: true,
+		Now: time.Now(), ServeProbe: func() bool { return false },
+	}); err == nil {
+		t.Fatal("restore accepted an archived db with wrong memories columns; want refusal")
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("live db missing after refused restore: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("live db mutated by refused restore (%d -> %d bytes)", len(before), len(after))
+	}
+	if m, _ := filepath.Glob(dbPath + ".bak-*"); len(m) != 0 {
+		t.Errorf("refused restore left a .bak: %v", m)
+	}
+}
+
 // TestMemoryRestoreSurfacesRollbackFailure proves that when the FINAL swap fails
 // AND the rollback of the moved-aside previous db ALSO fails, memoryRestore
 // returns a LOUD error (the live db may be missing) instead of silently

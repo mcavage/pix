@@ -283,26 +283,42 @@ func rollbackMoves(rename func(oldpath, newpath string) error, moves [][2]string
 }
 
 // verifyArchivedUsable opens the archived db read-only and confirms it carries
-// the memory store schema (the `memories` + `memories_fts` tables). A db can
-// pass integrity_check + a version gate while missing these tables entirely
-// (e.g. an empty or unrelated sqlite file), which would swap in an unusable live
-// db that only fails LATER at countLiveRows — after the live db was clobbered.
+// a USABLE memory store — not merely that tables with the right NAMES exist. A
+// db can pass integrity_check + a version gate while missing these tables
+// entirely (an empty/unrelated sqlite file) OR while carrying a table literally
+// named `memories` with the WRONG columns (e.g. `CREATE TABLE memories(x)`);
+// both would swap in an unusable live db that only fails LATER at countLiveRows —
+// after the live db was clobbered. So instead of checking sqlite_master names,
+// run the ACTUAL queries the app relies on, exercising the real columns. A
+// schema-shaped-but-wrong table errors on the missing columns and is refused
+// BEFORE any swap, leaving the live db untouched.
 func verifyArchivedUsable(path string) error {
 	db, err := sql.Open("sqlite", readOnlyDSN(path))
 	if err != nil {
 		return fmt.Errorf("open archived db: %w", err)
 	}
 	defer db.Close()
-	for _, tbl := range []string{"memories", "memories_fts"} {
-		var name string
-		if err := db.QueryRow(
-			"SELECT name FROM sqlite_master WHERE type='table' AND name = ?", tbl,
-		).Scan(&name); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("archived db is not a usable memory store: missing %q table", tbl)
-			}
-			return fmt.Errorf("archived db is not a usable memory store (checking %q table): %w", tbl, err)
-		}
+
+	// The exact live-row count query countLiveRows uses — exercises `deleted_at`.
+	var n int
+	if err := db.QueryRow("SELECT count(*) FROM memories WHERE deleted_at IS NULL").Scan(&n); err != nil {
+		return fmt.Errorf("archived db is not a usable memory store (live-row count failed): %w", err)
+	}
+	// Exercise the actual columns the app reads. A table named `memories` with the
+	// wrong shape (missing id/kind/content/durability/project) errors here. LIMIT 1
+	// tolerates an empty-but-correctly-shaped table (no rows -> ErrNoRows, fine).
+	var (
+		id, kind, content, durability, project any
+	)
+	if err := db.QueryRow(
+		"SELECT id, kind, content, durability, project FROM memories LIMIT 1",
+	).Scan(&id, &kind, &content, &durability, &project); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("archived db is not a usable memory store (memories schema mismatch): %w", err)
+	}
+	// The FTS index must also be present (searchable). A missing/wrong memories_fts
+	// would break search after restore.
+	if err := db.QueryRow("SELECT count(*) FROM memories_fts").Scan(&n); err != nil {
+		return fmt.Errorf("archived db is not a usable memory store (memories_fts unusable): %w", err)
 	}
 	return nil
 }

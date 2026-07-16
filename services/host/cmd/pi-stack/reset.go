@@ -158,7 +158,14 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 	}
 	if opts.keepMemory {
 		// Preserve the captured facts (memory); move the rebuildable index aside.
-		if paths.knowledgeDir != "" {
+		// A custom KNOWLEDGE_DB that lives OUTSIDE the data root must move ONLY the
+		// db file + its -wal/-shm sidecars, NEVER its parent dir (KNOWLEDGE_DB=
+		// ~/Documents/knowledge.db must not drag all of ~/Documents aside) — the same
+		// custom-outside-root handling the default path uses. A default in-root index
+		// is moved as a whole directory.
+		if t, ok := customDBOutsideRoot(paths.knowledgeDir, paths.knowledgeDB, paths.dataRoot, "knowledge database"); ok {
+			a.Backups = append(a.Backups, t)
+		} else if paths.knowledgeDir != "" {
 			a.Backups = append(a.Backups, backupTarget{Path: paths.knowledgeDir, Label: "knowledge database", Dangerous: true})
 		}
 	} else if paths.dataRoot != "" {
@@ -166,14 +173,13 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 		a.Backups = append(a.Backups, backupTarget{Path: paths.dataRoot, Label: "data directory (memory + knowledge)", Dangerous: true})
 		// Honor a custom MEMORY_DB / KNOWLEDGE_DB that lives OUTSIDE the data root:
 		// the data-root move alone would miss it. Move ONLY the db FILE + its
-		// -wal/-shm sidecars, NEVER the whole parent dir (MEMORY_DB=~/Documents/x.db
-		// must not drag all of ~/Documents aside). A whole directory is moved only
-		// for the pi-stack-owned default dir, handled by the data-root move above.
-		if paths.memoryDB != "" && !underDir(paths.memoryDir, paths.dataRoot) {
-			a.Backups = append(a.Backups, backupTarget{Path: paths.memoryDB, Label: "memory database", Dangerous: true, WithSidecars: true})
+		// -wal/-shm sidecars, NEVER the whole parent dir. A whole directory is moved
+		// only for the pi-stack-owned default dir, handled by the data-root move above.
+		if t, ok := customDBOutsideRoot(paths.memoryDir, paths.memoryDB, paths.dataRoot, "memory database"); ok {
+			a.Backups = append(a.Backups, t)
 		}
-		if paths.knowledgeDB != "" && !underDir(paths.knowledgeDir, paths.dataRoot) {
-			a.Backups = append(a.Backups, backupTarget{Path: paths.knowledgeDB, Label: "knowledge database", Dangerous: true, WithSidecars: true})
+		if t, ok := customDBOutsideRoot(paths.knowledgeDir, paths.knowledgeDB, paths.dataRoot, "knowledge database"); ok {
+			a.Backups = append(a.Backups, t)
 		}
 	}
 	if opts.sbx {
@@ -261,6 +267,20 @@ func fsPathExists(fsys resetFS, path string) bool {
 		return err == nil
 	}
 	return false
+}
+
+// customDBOutsideRoot decides dir-move vs file-only-with-sidecars for a memory/
+// knowledge db, shared by BOTH the default and --keep-memory paths so neither can
+// drift. When a custom MEMORY_DB/KNOWLEDGE_DB resolves OUTSIDE the pi-stack data
+// root, its parent dir may hold unrelated files (e.g. ~/Documents), so moving the
+// directory would drag them aside; return a file-only target that moves just the
+// db file + its -wal/-shm sidecars. For a default in-root db it returns false and
+// the caller moves the owning directory instead.
+func customDBOutsideRoot(dir, dbPath, dataRoot, label string) (backupTarget, bool) {
+	if dbPath != "" && !underDir(dir, dataRoot) {
+		return backupTarget{Path: dbPath, Label: label, Dangerous: true, WithSidecars: true}, true
+	}
+	return backupTarget{}, false
 }
 
 // underDir reports whether path is dir itself or nested inside it.

@@ -561,6 +561,76 @@ func TestExecuteReset_CustomDBOutsideRootMovesFileOnly(t *testing.T) {
 	}
 }
 
+// TestExecuteReset_KeepMemoryCustomKnowledgeDBOutsideRoot: --keep-memory with a
+// custom KNOWLEDGE_DB pointing at a file OUTSIDE the data root moves ONLY that
+// db file (+ its -wal/-shm sidecars), NEVER the parent dir or an unrelated
+// sibling in it — while captured memory is still preserved in the same run.
+func TestExecuteReset_KeepMemoryCustomKnowledgeDBOutsideRoot(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	dataRoot := filepath.Join(root, ".pi-stack")
+	memoryDir := filepath.Join(dataRoot, "memory")
+	if err := os.MkdirAll(memoryDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(memoryDir, "memory.db"), "facts")
+
+	// A custom KNOWLEDGE_DB in a SHARED dir alongside an unrelated file.
+	docs := filepath.Join(root, "Documents")
+	if err := os.MkdirAll(docs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	kbDB := filepath.Join(docs, "knowledge.db")
+	writeFile(t, kbDB, "index")
+	writeFile(t, kbDB+"-wal", "wal")
+	unrelated := filepath.Join(docs, "taxes.pdf")
+	writeFile(t, unrelated, "important")
+
+	p := resetPaths{
+		configDir:    filepath.Join(root, "config"),
+		dataRoot:     dataRoot,
+		memoryDir:    memoryDir,
+		knowledgeDir: docs, // dir(KNOWLEDGE_DB)
+		knowledgeDB:  kbDB, // the custom file path
+	}
+	a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+
+	var buf bytes.Buffer
+	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The knowledge db file + its -wal moved aside...
+	if exists(kbDB) {
+		t.Error("the custom knowledge.db file should have moved aside")
+	}
+	if !exists(kbDB + ".bak-" + fixedTS) {
+		t.Error("knowledge.db .bak backup missing")
+	}
+	if exists(kbDB + "-wal") {
+		t.Error("the -wal sidecar should have moved aside")
+	}
+	if !exists(kbDB + "-wal.bak-" + fixedTS) {
+		t.Error("knowledge.db-wal .bak backup missing")
+	}
+	// ...but the parent dir and the UNRELATED sibling are UNTOUCHED.
+	if !exists(docs) {
+		t.Error("the parent dir must NOT be moved (only the db file + sidecars)")
+	}
+	if !exists(unrelated) {
+		t.Error("an unrelated sibling file must NOT be moved")
+	}
+	if exists(docs + ".bak-" + fixedTS) {
+		t.Error("the parent dir must NOT be backed up wholesale")
+	}
+	// ...and captured memory is preserved in the same run.
+	if !exists(filepath.Join(memoryDir, "memory.db")) {
+		t.Error("captured memory must be preserved by --keep-memory")
+	}
+	if exists(memoryDir + ".bak-" + fixedTS) {
+		t.Error("the memory dir must NOT be backed up under --keep-memory")
+	}
+}
+
 // TestExecuteReset_KnowledgePortUpAbortsDataMove: a knowledge-only serve still
 // running (knowledge port up, memory port down) must ALSO block the data move.
 func TestExecuteReset_KnowledgePortUpAbortsDataMove(t *testing.T) {
