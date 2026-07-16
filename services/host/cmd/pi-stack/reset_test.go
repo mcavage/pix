@@ -750,3 +750,26 @@ func TestExecuteReset_KeepMemoryReadDirErrorSurfaces(t *testing.T) {
 func noToolEnv() shellEnv {
 	return fakeEnv{present: map[string]bool{}, output: map[string]string{}}.env()
 }
+
+// TestResolveResetPaths_RelativeMemoryDBAbsolute gates round-6: a relative
+// MEMORY_DB must be normalized to an absolute path at resolution so the
+// --keep-memory preserve set matches the sweep's absolute entries.
+func TestResolveResetPaths_RelativeMemoryDBAbsolute(t *testing.T) {
+	t.Chdir(t.TempDir())
+	env := shellEnv{
+		homeDir: func() string { return "/home/fake" },
+		getenv: func(k string) string {
+			if k == "MEMORY_DB" {
+				return ".pi-stack/custom-memory.db"
+			}
+			return ""
+		},
+	}
+	p := resolveResetPaths(env)
+	if !filepath.IsAbs(p.memoryDB) {
+		t.Errorf("memoryDB = %q, want absolute", p.memoryDB)
+	}
+	if !filepath.IsAbs(p.memoryDir) {
+		t.Errorf("memoryDir = %q, want absolute", p.memoryDir)
+	}
+}

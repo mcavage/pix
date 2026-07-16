@@ -123,11 +123,22 @@ func resolveResetPaths(env shellEnv) resetPaths {
 	memoryDB := ""
 	knowledgeDB := ""
 	if env.getenv != nil {
+		// Normalize custom db paths to ABSOLUTE at the source so every downstream
+		// comparison (dir-move vs file-only, the --keep-memory preserve set, the
+		// sweep) agrees. A relative MEMORY_DB (e.g. run from $HOME with
+		// MEMORY_DB=.pi-stack/x.db) would otherwise leave relative preserve keys
+		// that never match the sweep's absolute entries -> memory swept aside.
 		if db := strings.TrimSpace(env.getenv("MEMORY_DB")); db != "" {
+			if abs, err := filepath.Abs(db); err == nil {
+				db = abs
+			}
 			memoryDir = filepath.Dir(db)
 			memoryDB = db
 		}
 		if db := strings.TrimSpace(env.getenv("KNOWLEDGE_DB")); db != "" {
+			if abs, err := filepath.Abs(db); err == nil {
+				db = abs
+			}
 			knowledgeDir = filepath.Dir(db)
 			knowledgeDB = db
 		}
