@@ -658,6 +658,84 @@ func TestMemoryRestoreSurfacesRollbackFailure(t *testing.T) {
 	}
 }
 
+// TestMemoryRestoreRowCountComputedPreSwap is a data-safety gate for the fix that
+// eliminates the post-swap failure window: the reported row count must be read
+// from the validated ARCHIVED db BEFORE the memory rename commits, so NOTHING
+// fallible runs after the swap. We inject a swapRename that installs a
+// VALID-but-EMPTY (0-row) db at the live path instead of the staged 3-row db. A
+// pre-swap count reports 3; the reverted bug (counting the LIVE db post-swap)
+// would read the decoy and report 0.
+func TestMemoryRestoreRowCountComputedPreSwap(t *testing.T) {
+	st, dbPath := seedMemDB(t, 3)
+	archive := backupSeeded(t, dbPath)
+	st.db.Close()
+	for _, sc := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		_ = os.Remove(sc)
+	}
+
+	// Build a valid, single-file, 0-row memory db to use as the decoy live db.
+	emptyStore, emptyPath := seedMemDB(t, 0)
+	decoy := filepath.Join(t.TempDir(), "decoy.db")
+	if err := vacuumInto(emptyPath, decoy); err != nil {
+		t.Fatalf("vacuum decoy: %v", err)
+	}
+	emptyStore.db.Close()
+	decoyBytes, err := os.ReadFile(decoy)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := memoryRestore(restoreParams{
+		ArchivePath: archive, LiveDBPath: dbPath, Force: false,
+		Now: time.Now(), ServeProbe: func() bool { return false },
+		// Instead of moving the staged 3-row db into place, drop a 0-row db there.
+		swapRename: func(_, newpath string) error {
+			return os.WriteFile(newpath, decoyBytes, 0o600)
+		},
+	})
+	if err != nil {
+		t.Fatalf("memoryRestore: %v", err)
+	}
+	if res.RowCount != 3 {
+		t.Errorf("RowCount = %d, want 3 (must be counted PRE-swap from the archived db, not post-swap from the live decoy)", res.RowCount)
+	}
+}
+
+// TestInstallPlainFileSurfacesFailedRollback is a data-safety gate for the fix in
+// installPlainFile: when writing the archived file fails AFTER the current file
+// was moved aside, and the immediate rollback rename ALSO fails, it must return a
+// LOUD joined error noting the live file may be missing — never swallow it.
+func TestInstallPlainFileSurfacesFailedRollback(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "archived.toml")
+	if err := os.WriteFile(src, []byte("x=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(dest, []byte("old=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFn := func(string, []byte, os.FileMode) error {
+		return fmt.Errorf("injected write failure")
+	}
+	renameFn := func(oldpath, newpath string) error {
+		if strings.Contains(newpath, ".bak-") {
+			return os.Rename(oldpath, newpath) // move-aside: perform it for real
+		}
+		return fmt.Errorf("injected rollback failure") // rollback (bak -> dest): fail
+	}
+
+	_, _, _, err := installPlainFile(src, dest, "20260715-120000", false, writeFn, renameFn)
+	if err == nil {
+		t.Fatal("want an error when the write AND its rollback rename both fail")
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "rollback failed") || !strings.Contains(msg, "live file may be missing") {
+		t.Errorf("failed rollback not surfaced loudly: %v", err)
+	}
+}
+
 // writeManifestOnlyArchive packs just a manifest.json (no memory.db) so a test
 // can exercise the "require memory.db present" gate.
 func writeManifestOnlyArchive(t *testing.T, outPath string, m backupManifest) {

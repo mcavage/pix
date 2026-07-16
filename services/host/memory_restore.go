@@ -268,7 +268,7 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 	// 5a. config.toml. A failure here has nothing earlier to roll back (installPlainFile
 	// undoes its own partial move internally), so return directly.
 	if p.ConfigPath != "" {
-		bak, restored, undo, err := installPlainFile(archivedConfig, p.ConfigPath, stamp, false)
+		bak, restored, undo, err := installPlainFile(archivedConfig, p.ConfigPath, stamp, false, nil, nil)
 		if err != nil {
 			return restoreResult{}, fmt.Errorf("restore config.toml: %w", err)
 		}
@@ -290,7 +290,7 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 	// 5b. op-refs.env (0600 file, parent dir tightened to 0700). On failure, roll
 	// back the already-restored config so we never leave split state.
 	if p.OpRefsPath != "" {
-		bak, restored, undo, err := installPlainFile(archivedOpRefs, p.OpRefsPath, stamp, true)
+		bak, restored, undo, err := installPlainFile(archivedOpRefs, p.OpRefsPath, stamp, true, nil, nil)
 		if err != nil {
 			if rbErr := rollbackSteps(); rbErr != nil {
 				return restoreResult{}, fmt.Errorf("restore op-refs.env failed (%v) AND rollback FAILED — state may be inconsistent: %w", err, rbErr)
@@ -328,11 +328,27 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 // any failure at/before the final rename it rolls the moved-aside set back so the
 // live db is never left missing, surfacing a failed rollback LOUDLY. Returns the
 // .bak base path ("" when nothing was moved) and the restored row count.
+//
+// The row count for the report is read from the STAGED/validated ARCHIVED db
+// BEFORE the swap, so NOTHING fallible runs after the memory rename commits.
+// Counting it post-swap (from the live path) reopened a data-safety window: a
+// failure there returned an error while the memory swap stayed committed, leaving
+// old (caller-rolled-back) config/op-refs beside a NEW memory db — split state.
+// The count is identical either way (the staged file IS what becomes live).
 func swapMemory(p restoreParams, archivedDB, stamp string, liveExists bool,
 	moveRename, rename func(oldpath, newpath string) error) (bakBase string, rowCount int, err error) {
 	destDir := filepath.Dir(p.LiveDBPath)
 	if err := os.MkdirAll(destDir, 0o700); err != nil {
 		return "", 0, fmt.Errorf("dest dir: %w", err)
+	}
+
+	// Read the row count for the report from the validated archived db NOW, before
+	// any live-state mutation. This is the last fallible read; everything after the
+	// swap must be infallible so a post-swap error can never strand a committed
+	// memory swap next to rolled-back config/op-refs.
+	rowCount, err = countLiveRows(archivedDB)
+	if err != nil {
+		return "", 0, fmt.Errorf("count archived rows: %w", err)
 	}
 
 	// Stage the validated db into a UNIQUE temp in the DEST dir so the final rename
@@ -389,12 +405,9 @@ func swapMemory(p restoreParams, archivedDB, stamp string, liveExists bool,
 		return "", 0, fmt.Errorf("swap restored db into place: %w", err)
 	}
 
-	// Recount live memories for the report. The FTS index travels INSIDE memory.db
-	// (content table, copied by VACUUM INTO) — no rebuild needed.
-	rowCount, err = countLiveRows(p.LiveDBPath)
-	if err != nil {
-		return "", 0, err
-	}
+	// NOTHING fallible runs after the swap: the row count was read pre-swap from the
+	// staged archived db (identical to what just became live), and the FTS index
+	// travels INSIDE memory.db (content table, copied by VACUUM INTO) — no rebuild.
 	return bakBase, rowCount, nil
 }
 
@@ -407,7 +420,20 @@ func swapMemory(p restoreParams, archivedDB, stamp string, liveExists bool,
 // tighten an existing dir), for op-refs.env. Returns the .bak path ("" when there
 // was nothing to move aside), whether a file was written, and an undo closure
 // that reverses this step (remove the installed file, move the .bak back).
-func installPlainFile(src, dest, stamp string, tightenDir bool) (bak string, restored bool, undo func() error, err error) {
+//
+// writeFn/renameFn are injection points (nil -> atomicWriteFile / os.Rename) so a
+// test can force the write to fail AND its immediate rollback rename to fail, to
+// prove that a failed rollback is surfaced LOUDLY rather than swallowed.
+func installPlainFile(src, dest, stamp string, tightenDir bool,
+	writeFn func(dest string, data []byte, mode os.FileMode) error,
+	renameFn func(oldpath, newpath string) error,
+) (bak string, restored bool, undo func() error, err error) {
+	if writeFn == nil {
+		writeFn = atomicWriteFile
+	}
+	if renameFn == nil {
+		renameFn = os.Rename
+	}
 	if !fileExists(src) {
 		return "", false, nil, nil
 	}
@@ -430,14 +456,18 @@ func installPlainFile(src, dest, stamp string, tightenDir bool) (bak string, res
 			return "", false, nil, terr
 		}
 		bak = dest + ".bak-" + stamp + "-" + token
-		if err := os.Rename(dest, bak); err != nil {
+		if err := renameFn(dest, bak); err != nil {
 			return "", false, nil, fmt.Errorf("move current aside: %w", err)
 		}
 	}
-	if err := atomicWriteFile(dest, data, 0o600); err != nil {
-		// Roll THIS step's move back so the current file is never left missing.
+	if err := writeFn(dest, data, 0o600); err != nil {
+		// Roll THIS step's move back so the current file is never left missing. If the
+		// rollback rename ITSELF fails, the live file can be left MISSING with nothing
+		// at dest — surface that LOUDLY (joined) instead of swallowing it.
 		if bak != "" {
-			_ = os.Rename(bak, dest)
+			if rbErr := renameFn(bak, dest); rbErr != nil {
+				return "", false, nil, fmt.Errorf("install %s failed (%v) AND rollback FAILED — live file may be missing: %w", dest, err, rbErr)
+			}
 		}
 		return "", false, nil, fmt.Errorf("write restored file: %w", err)
 	}

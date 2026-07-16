@@ -390,13 +390,18 @@ func tarAddBytes(tw *tar.Writer, name string, data []byte) error {
 // pi-stack-backup-<8 digits>-<6 digits>[-<hex rand>].tar.gz. The random suffix is
 // OPTIONAL so v1 (no-suffix) names still prune. Retention uses this strict match
 // so a hand-placed file (e.g. keepme.tar.gz, or a backup from another tool) is
-// NEVER deleted — a loose *.tar.gz glob would have swept those away. The leading
-// timestamp keeps lexicographic order == chronological even with the suffix.
+// NEVER deleted — a loose *.tar.gz glob would have swept those away.
 var backupNameRe = regexp.MustCompile(`^pi-stack-backup-\d{8}-\d{6}(-[0-9a-f]+)?\.tar\.gz$`)
 
 // pruneBackups deletes the oldest of OUR backups in dir beyond keep. It matches
 // only files whose name is exactly the generated pattern; anything else is left
-// untouched. The timestamped filename makes lexicographic order == chronological.
+// untouched.
+//
+// Retention sorts by FILE MODIFICATION TIME (newest first), NOT by filename. The
+// default archive name now carries a RANDOM suffix, so a lexical filename sort no
+// longer equals chronological order — a lexical prune could delete the
+// just-written backup while sparing an older one. Sorting by mtime keeps the
+// newest N regardless of the random suffix.
 func pruneBackups(dir string, keep int) error {
 	if keep <= 0 {
 		return nil
@@ -405,22 +410,39 @@ func pruneBackups(dir string, keep int) error {
 	if err != nil {
 		return err
 	}
-	var matches []string
+	type backupFile struct {
+		path    string
+		modTime time.Time
+	}
+	var matches []backupFile
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		if backupNameRe.MatchString(e.Name()) {
-			matches = append(matches, filepath.Join(dir, e.Name()))
+		if !backupNameRe.MatchString(e.Name()) {
+			continue
 		}
+		path := filepath.Join(dir, e.Name())
+		fi, err := os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("stat backup %s: %w", path, err)
+		}
+		matches = append(matches, backupFile{path: path, modTime: fi.ModTime()})
 	}
 	if len(matches) <= keep {
 		return nil
 	}
-	sort.Strings(matches) // oldest first
-	for _, old := range matches[:len(matches)-keep] {
-		if err := os.Remove(old); err != nil {
-			return fmt.Errorf("prune %s: %w", old, err)
+	// Newest first by mtime; break ties by name (descending) so the order is stable
+	// and deterministic for two files written in the same second.
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].modTime.Equal(matches[j].modTime) {
+			return matches[i].path > matches[j].path
+		}
+		return matches[i].modTime.After(matches[j].modTime)
+	})
+	for _, old := range matches[keep:] { // everything after the newest N
+		if err := os.Remove(old.path); err != nil {
+			return fmt.Errorf("prune %s: %w", old.path, err)
 		}
 	}
 	return nil

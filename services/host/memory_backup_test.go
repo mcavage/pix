@@ -224,6 +224,50 @@ func TestMemoryBackupRetention(t *testing.T) {
 	}
 }
 
+// TestMemoryBackupRetentionByMtimeNotName is a data-safety gate for the fix that
+// makes retention sort by FILE MODIFICATION TIME, not filename. Now that default
+// archive names carry a RANDOM suffix, a lexical filename sort no longer equals
+// chronological order, so --keep N could delete the just-written backup. Two
+// archives are written in the SAME second; the one with the LATER mtime is given
+// a lexically SMALLER suffix, so a lexical sort would wrongly treat it as oldest
+// and prune it. Retention must keep the newest by mtime. This FAILS if reverted
+// to a lexical (sort.Strings) prune.
+func TestMemoryBackupRetentionByMtimeNotName(t *testing.T) {
+	st, dbPath := seedMemDB(t, 1)
+	defer st.db.Close()
+	outDir := t.TempDir()
+
+	ts := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	// Newer-written archive gets the lexically SMALLER suffix; older gets the larger.
+	older := filepath.Join(outDir, "pi-stack-backup-20260715-120000-ffffffff.tar.gz")
+	newer := filepath.Join(outDir, "pi-stack-backup-20260715-120000-00000000.tar.gz")
+	// Keep:0 so memoryBackup itself does not prune; we drive pruneBackups directly.
+	if _, err := memoryBackup(backupParams{DBPath: dbPath, OutPath: older, Keep: 0, Now: ts}); err != nil {
+		t.Fatalf("backup older: %v", err)
+	}
+	if _, err := memoryBackup(backupParams{DBPath: dbPath, OutPath: newer, Keep: 0, Now: ts}); err != nil {
+		t.Fatalf("backup newer: %v", err)
+	}
+	// Force distinct mtimes WITHIN the same wall-clock second.
+	sec := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(older, sec.Add(100*time.Millisecond), sec.Add(100*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newer, sec.Add(900*time.Millisecond), sec.Add(900*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pruneBackups(outDir, 1); err != nil {
+		t.Fatalf("pruneBackups: %v", err)
+	}
+	if _, err := os.Stat(newer); err != nil {
+		t.Errorf("retention pruned the NEWER backup (by mtime) — lexical-sort regression: %v", err)
+	}
+	if _, err := os.Stat(older); err == nil {
+		t.Error("retention kept the OLDER backup; want it pruned")
+	}
+}
+
 // TestMemoryBackupWhileServeHoldsDB proves VACUUM INTO succeeds while a second
 // connection is open on the source (simulating serve holding the db).
 func TestMemoryBackupWhileServeHoldsDB(t *testing.T) {
