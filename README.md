@@ -157,6 +157,8 @@ pi-stack config show|path    # inspect resolved config
 pi-stack config set|unset    # update config without hand-editing toml
 pi-stack mcp register|ls     # register/list local stdio MCP servers with sbx
 pi-stack knowledge init|use|ls  # create, attach, or inspect OKF bundles
+pi-stack state backup|restore|reset|uninstall  # on-disk state (also top-level aliases)
+pi-stack help [--all] [verb]  # tiered help: Core by default, --all/help <verb> for the rest
 pi-stack version             # print the launcher version
 ```
 

@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=0.0.x". An
@@ -102,8 +103,14 @@ func main() {
 		runReset(args[1:])
 	case "uninstall":
 		runUninstall(args[1:])
+	case "state":
+		runState(args[1:])
 	case "help", "-h", "--help":
 		if len(args) > 1 {
+			if args[1] == "--all" {
+				fmt.Print(helpAllText)
+				return
+			}
 			if u, ok := verbUsage(args[1]); ok {
 				fmt.Print(u)
 				return
@@ -112,21 +119,53 @@ func main() {
 		fmt.Print(helpText)
 	default:
 		// A bare positional is a run workspace ONLY when it names an existing
-		// directory (e.g. `pi-stack ~/dev/foo`). A non-directory word is a typo
-		// (e.g. `pi-stack memoyr`) — do NOT silently launch a sandbox for it.
+		// directory (e.g. `pi-stack ~/dev/foo`). Otherwise classifyBareArg decides:
+		// a path-like token is a missing/!dir workspace (no such directory), and a
+		// bare word is a probable verb typo (with a did-you-mean hint).
 		if a := args[0]; len(a) > 0 && a[0] != '-' {
-			if fi, err := os.Stat(a); err == nil && fi.IsDir() {
+			msg, launch := classifyBareArg(a)
+			if launch {
 				runVerb(args)
 				return
 			}
-			fmt.Fprintf(os.Stderr, "pi-stack: unknown command %q (and no such directory)\n\n", a)
-			fmt.Print(helpText)
+			fmt.Fprint(os.Stderr, msg)
 			os.Exit(2)
 		}
 		fmt.Fprintf(os.Stderr, "pi-stack: unknown flag %q\n\n", args[0])
 		fmt.Print(helpText)
 		os.Exit(2)
 	}
+}
+
+// looksLikePath reports whether a non-flag token is meant as a filesystem path
+// (so a failure to resolve it is a missing/!dir workspace, never a verb typo).
+// A path either contains a separator or begins with a path-ish prefix.
+func looksLikePath(a string) bool {
+	return strings.ContainsRune(a, '/') ||
+		strings.HasPrefix(a, ".") ||
+		strings.HasPrefix(a, "~")
+}
+
+// classifyBareArg decides what a bare (non-flag) positional means when it is not
+// a matched verb. It returns the stderr message to print and whether the arg
+// should launch `run` (an existing directory). A path-like token, or a token
+// that exists but is not a directory, is reported as a missing/!dir workspace
+// ("no such directory"). Only a plausible bare-word verb gets the did-you-mean
+// suggester. Both non-launch branches map to exit code 2 at the call site.
+func classifyBareArg(a string) (msg string, launch bool) {
+	fi, statErr := os.Stat(a)
+	if statErr == nil && fi.IsDir() {
+		return "", true
+	}
+	if looksLikePath(a) || statErr == nil {
+		return fmt.Sprintf("pi-stack: %q: no such directory\n", a), false
+	}
+	msg = fmt.Sprintf("pi-stack: no command named %q.\n", a)
+	if s, ok := suggestVerb(a); ok {
+		msg += fmt.Sprintf("Did you mean %q?\n", s)
+	}
+	msg += "Run `pi-stack help` to see all commands.\n"
+	return msg, false
 }
 
 // firstRunHook is the onboarding entry point, indirected through a package var
@@ -188,6 +227,11 @@ func runServe(argv []string) {
 	}
 }
 
+// hostBinaryResolver locates pi-stack-host. It is indirected through a package
+// var (like firstRunHook) so tests can inject a fake `pi-stack-host mcp --list`
+// responder when exercising the local-vs-remote MCP partition in setup.
+var hostBinaryResolver = findHostBinary
+
 // findHostBinary locates pi-stack-host next to argv[0] first (the common
 // install layout), then falls back to PATH.
 func findHostBinary() (string, error) {
@@ -228,36 +272,28 @@ DIR defaults to the current directory. Everything after -- is passed to pi.
 Set PI_STACK_DEBUG=1 to print the composed sbx command.
 `
 
-const helpText = `pi-stack — the pi-stack sandbox + host services
+const helpText = `pi-stack — a personal, multi-model pi coding agent in a Docker sandbox.
 
-usage: pi-stack [--profile NAME] <command> [args]
+Usage:  pi-stack [--profile NAME] <command> [args]
 
-new here?  pi-stack setup     (guided one-time setup)
+New here?   pi-stack setup      one-time guided setup (a few minutes, resumable)
 
-commands:
-  (none)              show status (this does NOT launch a sandbox)
-  status              host + services + sandboxes at a glance   [--json]
-  setup               guided first-run setup (writes config + registers MCP)
-  doctor              diagnose host + sandbox health
-  run [DIR] [flags]   launch the sandbox (launching is explicit)
-  serve [args...]     run the host services (execs pi-stack-host serve)
+Workflow
+  run [DIR]        launch the sandbox in DIR (default: .). This is the main one.
+  serve            start the host services (memory, knowledge); ` + "`serve stop|status`" + `
+  status           what is up, what is down, what is next   (also the bare command)
 
-  memory <cmd>        recall|remember|forget|learnings|stats   (:11435)
-  backup [--out P]    hot FULL backup (memory + config + op-refs) -> tar.gz
-  restore <archive>   restore a FULL backup (safe swap)   [--force]
-  knowledge <cmd>     init|use|ls|query|sync|remote            (:11436)
-  mcp register|ls     register local stdio MCP servers with the sbx gateway
-  secret <cmd>        status|edit|check the 1Password op-refs (host MCP creds)
-  profile ls|use      switch between contexts (work / personal / default)
+Setup & health
+  setup            guided setup: keys, memory, knowledge, integrations
+  doctor           diagnose problems and print the exact fix commands
 
-  config show|path    show the resolved config path and contents
-  config set|unset    change config without hand-editing the toml
-  reset [flags]       move stack state aside (reversible)   [--keep-memory --sbx --yes]
-  uninstall [flags]   reset, then remove the bin symlinks    [--keep-memory --yes]
-  version             print the launcher version
-  man                 render the embedded man page (no MANPATH needed; also --man)
-  help [verb]         print this help (or a verb's usage)
+Data
+  memory           recall | remember | forget | learnings | stats
+  knowledge        init | use | ls | query | sync | remote
 
-global: --profile NAME   run/read a named profile (work, personal, ...)
-run flags: --dev --skills DIR --kit K --mcp M --name N --model M -- pi-args...
+More
+  config, mcp, state, version, man     (see ` + "`pi-stack help --all`" + `)
+
+Learn a command:  pi-stack help run     ·     pi-stack <command> -h
+Global flag:      --profile NAME        run/read a named context (work, personal)
 `

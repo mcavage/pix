@@ -366,6 +366,72 @@ func TestParseRunArgs_Errors(t *testing.T) {
 	}
 }
 
+// TestModelProviderPreflight (R1-1): the run preflight blocks a launch when sbx
+// is on PATH but no MODEL provider key is set, naming the missing keys + the
+// exact `sbx secret set` line. A model key present, or sbx absent, proceeds.
+func TestModelProviderPreflight(t *testing.T) {
+	t.Run("no model key -> blocks with guidance", func(t *testing.T) {
+		f := fakeEnv{
+			present: map[string]bool{"sbx": true},
+			output:  map[string]string{"sbx secret ls": "github\n"}, // github is not a model key
+		}
+		msg, block := modelProviderPreflight(f.env())
+		if !block {
+			t.Fatalf("expected block=true with no model key, msg=%q", msg)
+		}
+		for _, want := range []string{"anthropic", "openai", "google", `sbx secret set -g anthropic -t "sk-..."`} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("guidance missing %q, got:\n%s", want, msg)
+			}
+		}
+	})
+
+	t.Run("model key present -> proceeds", func(t *testing.T) {
+		f := fakeEnv{
+			present: map[string]bool{"sbx": true},
+			output:  map[string]string{"sbx secret ls": "anthropic github\n"},
+		}
+		if _, block := modelProviderPreflight(f.env()); block {
+			t.Error("a present model key must not block")
+		}
+	})
+
+	t.Run("sbx absent -> cannot verify, proceeds", func(t *testing.T) {
+		f := fakeEnv{present: map[string]bool{}, output: map[string]string{}}
+		if _, block := modelProviderPreflight(f.env()); block {
+			t.Error("sbx absent: cannot verify, must not block")
+		}
+	})
+}
+
+// TestClassifyBareArg (R1-6): a path-like positional is diagnosed as a missing/
+// !dir workspace (no such directory), while a bare-word typo gets the
+// did-you-mean verb suggester.
+func TestClassifyBareArg(t *testing.T) {
+	t.Run("path-like -> no such directory", func(t *testing.T) {
+		msg, launch := classifyBareArg("/tmp/missing-proj-does-not-exist")
+		if launch {
+			t.Fatal("a missing path must not launch run")
+		}
+		if !strings.Contains(msg, "no such directory") {
+			t.Errorf("expected a no-such-directory message, got: %q", msg)
+		}
+		if strings.Contains(msg, "Did you mean") {
+			t.Errorf("a path must NOT get a did-you-mean hint, got: %q", msg)
+		}
+	})
+
+	t.Run("bare-word typo -> did you mean", func(t *testing.T) {
+		msg, launch := classifyBareArg("memoyr")
+		if launch {
+			t.Fatal("a verb typo must not launch run")
+		}
+		if !strings.Contains(msg, "no command named") || !strings.Contains(msg, `Did you mean "memory"`) {
+			t.Errorf("expected a did-you-mean memory hint, got: %q", msg)
+		}
+	})
+}
+
 func equalSlice(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

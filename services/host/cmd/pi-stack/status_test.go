@@ -182,6 +182,126 @@ func TestStatusNoRegisterTodoWhenSbxAbsent(t *testing.T) {
 	}
 }
 
+// TestStatusSbxAbsentNotAllGreen: with sbx off PATH provider keys can't be
+// verified, so the verdict must not be falsely "all systems go" — status adds an
+// outstanding item and --json/human reflect it.
+func TestStatusSbxAbsentNotAllGreen(t *testing.T) {
+	cfg := &config.Config{}
+	env := shellEnv{
+		lookPath: func(string) (string, error) { return "", fmt.Errorf("not found") },
+		dial:     func(int) bool { return false },
+		statFile: func(string) bool { return false },
+	}
+	st := gatherStatus(cfg, "default", env)
+	if len(st.Todos) == 0 {
+		t.Fatalf("expected a non-empty Todos when sbx is absent, got none")
+	}
+	var out bytes.Buffer
+	renderStatus(cfg, "default", env, &out, false)
+	if strings.Contains(out.String(), "all systems go") {
+		t.Errorf("verdict must not be falsely green when sbx is absent, got:\n%s", out.String())
+	}
+}
+
+// TestStatusGogNeedsAuthTodoNotAllGreen: a configured gog account that is NOT
+// authenticated is an outstanding item — status appends a `gog auth login` TODO
+// and the verdict must not be falsely "all systems go", even when every provider
+// key is set.
+func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
+	cfg := &config.Config{GogAccount: "me@x.com"}
+	env := shellEnv{
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			if name == "gog" {
+				return "", fmt.Errorf("not authed")
+			}
+			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+				return "anthropic\nopenai\ngoogle\ngithub\n", nil
+			}
+			return "", nil
+		},
+		dial:     func(int) bool { return false },
+		statFile: func(string) bool { return false },
+	}
+	st := gatherStatus(cfg, "default", env)
+	var gogTodo bool
+	for _, tdo := range st.Todos {
+		if tdo == "gog auth login" {
+			gogTodo = true
+		}
+	}
+	if !gogTodo {
+		t.Errorf("expected a `gog auth login` TODO for an unauthed account, got %v", st.Todos)
+	}
+	var out bytes.Buffer
+	renderStatus(cfg, "default", env, &out, false)
+	if strings.Contains(out.String(), "all systems go") {
+		t.Errorf("verdict must not be green when gog is unauthed, got:\n%s", out.String())
+	}
+}
+
+// TestStatusSbxProbeFailedTodo: sbx IS on PATH but `sbx secret ls` fails. Status
+// must emit the "could not verify" TODO (distinct from the install TODO), never
+// the install-sbx guidance, and never claim "all systems go".
+func TestStatusSbxProbeFailedTodo(t *testing.T) {
+	cfg := &config.Config{}
+	env := shellEnv{
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+				return "", fmt.Errorf("sbx secret ls boom")
+			}
+			return "", nil
+		},
+		dial:     func(int) bool { return false },
+		statFile: func(string) bool { return false },
+	}
+	st := gatherStatus(cfg, "default", env)
+	var sawVerify, sawInstall bool
+	for _, tdo := range st.Todos {
+		if strings.Contains(tdo, "could not verify provider keys") {
+			sawVerify = true
+		}
+		if strings.Contains(tdo, "install the Docker Sandboxes CLI") {
+			sawInstall = true
+		}
+	}
+	if !sawVerify {
+		t.Errorf("expected a 'could not verify provider keys' TODO, got %v", st.Todos)
+	}
+	if sawInstall {
+		t.Errorf("must NOT emit the install-sbx TODO when sbx is on PATH, got %v", st.Todos)
+	}
+	var out bytes.Buffer
+	renderStatus(cfg, "default", env, &out, false)
+	if strings.Contains(out.String(), "all systems go") {
+		t.Errorf("verdict must not be green when the key probe failed, got:\n%s", out.String())
+	}
+}
+
+// TestStatusGogNeedsAuth: with a gog account set but no usable auth, the human
+// render shows the "needs auth (run gog auth login)" integrations line.
+func TestStatusGogNeedsAuth(t *testing.T) {
+	cfg := &config.Config{GogAccount: "me@x.com"}
+	env := shellEnv{
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			if name == "gog" {
+				return "", fmt.Errorf("not authed")
+			}
+			return "", nil
+		},
+		dial:     func(int) bool { return false },
+		statFile: func(string) bool { return false },
+	}
+	var out bytes.Buffer
+	renderStatus(cfg, "default", env, &out, false)
+	s := out.String()
+	if !strings.Contains(s, "gog") || !strings.Contains(s, "needs auth (run gog auth login)") {
+		t.Errorf("expected gog needs-auth integrations line, got:\n%s", s)
+	}
+}
+
 func TestParseSandboxes(t *testing.T) {
 	out := parseSandboxes("NAME STATUS\npi-stack-a running\nfoo bar\npi-stack-b stopped\n")
 	if len(out) != 2 {

@@ -109,7 +109,8 @@ func TestRegisterServers_GatewayOff(t *testing.T) {
 
 // TestRegisterServers_GogNoOpRefsBare: gateway on, op + op-refs ABSENT, gog
 // present + account set -> gog registers DIRECTLY (bare command, no op wrapper)
-// with the "registered gog directly" note. 1Password is optional for gog.
+// with the OAuth note. gog uses OAuth (gog auth login), never op-refs, so the
+// note must NOT mention op-refs.
 func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 	f := fakeEnv{
 		present: map[string]bool{"gog": true}, // no op, no sbx
@@ -127,12 +128,44 @@ func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 	if !strings.Contains(out, "registered gog directly") {
 		t.Errorf("expected the bare-gog note, got:\n%s", out)
 	}
-	if !strings.Contains(out, ".config/pi-stack/op-refs.env") {
-		t.Errorf("note must reference the absolute XDG op-refs path, got:\n%s", out)
+	if strings.Contains(out, "op-refs.env") {
+		t.Errorf("gog-only note must NOT mention op-refs (gog uses OAuth), got:\n%s", out)
 	}
 	// The would-run command must be the bare gog command, not an op wrapper.
 	if !strings.Contains(out, "sbx mcp add gog --command /usr/bin/gog") {
 		t.Errorf("expected a bare gog would-run command, got:\n%s", out)
+	}
+}
+
+// TestRegisterServers_GogOnlyNoSeed (R5-1/R5-2): a gog-only clean state with op
+// NOT resolvable must NOT create op-refs.env at the XDG path and must NOT print a
+// "seeded" line. gog authenticates via OAuth (gog auth login), never op-refs, so
+// seeding one contradicts setup Step 4's "No file is created" copy.
+func TestRegisterServers_GogOnlyNoSeed(t *testing.T) {
+	home := t.TempDir()
+	env := (fakeEnv{
+		present: map[string]bool{"gog": true}, // op absent -> not resolvable
+		output:  map[string]string{},
+		envVars: map[string]string{"SBX_MCP_URL": "https://gateway.docker.com"},
+		home:    home,
+	}).env()
+	cfg := defaultCfg()
+	cfg.MCP = []string{"gog"}
+	cfg.GogAccount = "me@x.com"
+	var buf bytes.Buffer
+	if err := registerServers(cfg, env, &buf, nil, hostStub("/usr/bin/pi-stack-host", nil)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	seeded := filepath.Join(home, ".config", "pi-stack", "op-refs.env")
+	if _, err := os.Stat(seeded); !os.IsNotExist(err) {
+		t.Errorf("gog-only must NOT seed op-refs.env at %s (err=%v)", seeded, err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "seeded") {
+		t.Errorf("gog-only must NOT print a seeded line, got:\n%s", out)
+	}
+	if strings.Contains(out, "op-refs.env") {
+		t.Errorf("gog-only note must NOT mention op-refs, got:\n%s", out)
 	}
 }
 

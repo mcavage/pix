@@ -248,18 +248,25 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	}
 
 	if !opReady {
-		// Best-effort: seed a template op-refs.env at the absolute XDG path so the
-		// user has a concrete file to fill in later, and note that we registered
-		// bare rather than failing.
-		refsPath := defaultOpRefsPath(env)
-		// ONE seeder: route through config.SeedOpRefsAt so the template + 0700 dir /
-		// 0600 file + no-clobber rule is identical to `pi-stack setup`'s seeding.
-		if created, err := config.SeedOpRefsAt(refsPath); err == nil && created {
-			fmt.Fprintf(out, "seeded a template op-refs.env at %s\n", refsPath)
+		if len(localServers) > 0 {
+			// A confirmed non-gog local stdio server (slack, an overlay `pio`, ...)
+			// can actually use op-refs. Best-effort: seed a template op-refs.env at
+			// the absolute XDG path so the user has a concrete file to fill in later,
+			// and note that we registered bare rather than failing.
+			refsPath := defaultOpRefsPath(env)
+			// ONE seeder: route through config.SeedOpRefsAt so the template + 0700 dir
+			// / 0600 file + no-clobber rule is identical to `pi-stack setup`'s seeding.
+			if created, err := config.SeedOpRefsAt(refsPath); err == nil && created {
+				fmt.Fprintf(out, "seeded a template op-refs.env at %s\n", refsPath)
+			}
+			fmt.Fprintf(out, "note: no op-refs.env found; registered %s directly (bare, no 1Password) — "+
+				"add creds to %s if a server needs them\n",
+				strings.Join(finalNames, ", "), refsPath)
+		} else {
+			// gog-only: gog authenticates via OAuth (gog auth login), never op-refs,
+			// so do NOT seed op-refs.env or mention it. Register bare.
+			fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via OAuth (gog auth login)")
 		}
-		fmt.Fprintf(out, "note: no op-refs.env found; registered %s directly (bare, no 1Password) — "+
-			"add creds to %s if a server needs them\n",
-			strings.Join(finalNames, ", "), refsPath)
 	}
 
 	if wantGog {
