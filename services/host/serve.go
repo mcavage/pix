@@ -113,17 +113,15 @@ func runServe(enabled []string) {
 		memSvc := hostService{name: "memory", addr: env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435")}
 		if spec := cfg.Plugin("memory"); spec.Impl == config.BuiltinImpl {
 			// Take the shared advisory store lock BEFORE opening the db — the
-			// correctness primitive that makes `restore` and this daemon mutually
-			// exclusive, closing the port-probe TOCTOU (the store opens before the
-			// port binds). Held for the process lifetime; released on graceful
-			// shutdown. NON-BLOCKING: a held lock means another serve/holder owns the
-			// db, so fail loudly rather than deadlock (the port-in-use path guards
-			// double-serve; the lock is the correctness guarantee).
-			release, lerr := acquireLock(config.MemoryLockPath())
-			if lerr != nil {
-				fatalf("memory: could not acquire store lock at %s (another serve or a restore is using the database?): %v", config.MemoryLockPath(), lerr)
-			}
-			memLockRelease = release
+			// correctness primitive that makes `restore`, this daemon, and every
+			// other live-serving entry point mutually exclusive, closing the
+			// port-probe TOCTOU (the store opens before the port binds). Held for the
+			// process lifetime; released on graceful shutdown. NON-BLOCKING: a held
+			// lock means another serve/holder owns the db, so fail loudly rather than
+			// deadlock (the port-in-use path guards double-serve; the lock is the
+			// correctness guarantee). fatalf routes the failure through supervisor
+			// cleanup so no already-launched plugin is orphaned.
+			memLockRelease = lockMemoryStoreOrFatal(fatalf)
 			// Build the store with error handling and route a failure through fatalf
 			// (F3): a bare log.Fatalf here would skip sup.shutdown() and orphan an
 			// already-launched plugin (e.g. an overlay broker or service subprocess).

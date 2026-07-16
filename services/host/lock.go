@@ -12,9 +12,12 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"sync"
 	"syscall"
+
+	"pi-stack/host/config"
 )
 
 // acquireLock takes an EXCLUSIVE, NON-BLOCKING advisory flock on path (creating
@@ -39,4 +42,31 @@ func acquireLock(path string) (release func(), err error) {
 			_ = f.Close()
 		})
 	}, nil
+}
+
+// lockMemoryStoreOrFatal is the shared prologue every LIVE-SERVING memory entry
+// point runs BEFORE opening the store: it takes the exclusive, non-blocking
+// advisory flock on config.MemoryLockPath() — the correctness primitive that
+// makes the built-in `serve`, the bare `memory` daemon, the memory plugin
+// self-exec, and `restore` all mutually exclusive around the sqlite db, closing
+// the port-probe TOCTOU (the store opens before any port binds). It returns the
+// release func to hold for the process lifetime and drop on shutdown. On failure
+// (another memory server or a restore already holds it) it does NOT open the
+// store — it fails fast through fatal, which MUST NOT return. Pass a
+// cleanup-aware fatal (serve's fatalf, which runs supervisor shutdown before
+// os.Exit); a nil fatal defaults to log.Fatalf. The acquire is indirected via
+// acquireMemLockFn so tests can drive the refuse/free paths hermetically.
+var acquireMemLockFn = acquireLock
+
+func lockMemoryStoreOrFatal(fatal func(format string, a ...any)) func() {
+	if fatal == nil {
+		fatal = log.Fatalf
+	}
+	path := config.MemoryLockPath()
+	release, err := acquireMemLockFn(path)
+	if err != nil {
+		fatal("memory: could not acquire store lock at %s — another memory server or a restore is using the database, only one may hold it: %v", path, err)
+		return func() {} // unreachable once fatal exits; a no-op keeps callers defer-safe
+	}
+	return release
 }

@@ -166,6 +166,13 @@ func (a *memoryStoreAdapter) Health() (plugin.Health, error) {
 // (buildMemStore) and serves it as a go-plugin. Called by the `plugin`
 // subcommand (wired in a later unit); intentionally not registered in main.go.
 func servePluginMemory() {
+	// Take the shared store lock BEFORE opening the db, like serve.go's built-in
+	// branch and runMemory: the self-exec plugin serves the LIVE store, so it must
+	// be mutually exclusive with any other memory server and with `restore`. Held
+	// for the process lifetime; dropped when Serve returns (the OS also releases the
+	// flock on exit). Fails fast if another holder owns the db.
+	release := lockMemoryStoreOrFatal(nil)
+	defer release()
 	store, hasEmb, err := buildMemStore()
 	if err != nil {
 		log.Fatalf("%v", err)

@@ -775,6 +775,14 @@ func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 }
 
 func runMemory() {
+	// Take the shared store lock BEFORE opening the db (memoryMux -> buildMemStore),
+	// exactly as serve.go's built-in branch does, so the bare daemon is mutually
+	// exclusive with `serve`, the memory plugin, and `restore`. Held for the
+	// process lifetime; dropped when ListenAndServe returns (the OS also releases
+	// the flock on process exit / signal). Fails fast (log.Fatalf) if another
+	// holder owns the db instead of opening it anyway.
+	release := lockMemoryStoreOrFatal(nil)
+	defer release()
 	addr := env("MEMORY_BIND", "127.0.0.1") + ":" + env("MEMORY_PORT", "11435")
 	mux := memoryMux()
 	log.Printf("memory service (json-rpc) on http://%s", addr)
