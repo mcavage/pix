@@ -4,6 +4,10 @@ tools: read, write, edit, bash, grep, find, ls
 model: anthropic/claude-opus-4-8
 thinking: high
 max_turns: 40
+# This agent thinks hard and runs long; give it generous watchdog budgets so the
+# harness never kills it mid-reasoning (wall_ms = hard cap, idle_ms = no-output).
+wall_ms: 2400000
+idle_ms: 600000
 ---
 You are the **deep worker**: the main agent handed you one hard sub-problem
 because it warrants the strongest model and full thinking. Spend the budget.
