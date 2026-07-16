@@ -423,6 +423,70 @@ func TestExecuteReset_KeepMemoryCustomDBDir(t *testing.T) {
 	}
 }
 
+// TestExecuteReset_KeepMemoryLooseDBInRoot: --keep-memory with MEMORY_DB pointing
+// at a db FILE sitting DIRECTLY inside the data root (memoryDir == dataRoot). The
+// sweep must preserve that db file + its -wal sidecar (never move them), while an
+// unrelated sibling file/dir IS moved aside. This is the data-loss regression: the
+// old sweep only matched an entry whose path == MemoryDir (== dataRoot), so it
+// preserved NOTHING and swept the db away while reporting it preserved.
+func TestExecuteReset_KeepMemoryLooseDBInRoot(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	dataRoot := filepath.Join(root, ".pi-stack")
+	if err := os.MkdirAll(dataRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A custom MEMORY_DB loose in the data root, with a -wal sidecar.
+	memDB := filepath.Join(dataRoot, "custom-memory.db")
+	writeFile(t, memDB, "facts")
+	writeFile(t, memDB+"-wal", "wal")
+	// An unrelated sibling file and dir that MUST be swept aside.
+	siblingFile := filepath.Join(dataRoot, "scratch.log")
+	writeFile(t, siblingFile, "junk")
+	siblingDir := filepath.Join(dataRoot, "knowledge")
+	if err := os.MkdirAll(siblingDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(siblingDir, "knowledge.db"), "index")
+
+	p := resetPaths{
+		configDir:    filepath.Join(root, "config"),
+		dataRoot:     dataRoot,
+		memoryDir:    dataRoot, // dir(MEMORY_DB) == dataRoot
+		memoryDB:     memDB,    // the loose db file directly in the root
+		knowledgeDir: siblingDir,
+	}
+	a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+
+	var buf bytes.Buffer
+	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The loose db + its -wal are STILL present, untouched.
+	if !exists(memDB) {
+		t.Error("the loose custom memory db must be preserved (still present)")
+	}
+	if !exists(memDB + "-wal") {
+		t.Error("the loose memory db -wal sidecar must be preserved")
+	}
+	if exists(memDB + ".bak-" + fixedTS) {
+		t.Error("the loose memory db must NOT have been moved aside")
+	}
+	// The unrelated sibling file + dir were swept aside.
+	if exists(siblingFile) {
+		t.Error("an unrelated sibling file must be swept aside")
+	}
+	if !exists(siblingFile + ".bak-" + fixedTS) {
+		t.Error("the swept sibling file .bak backup is missing")
+	}
+	if exists(siblingDir) {
+		t.Error("the knowledge dir sibling must be swept aside")
+	}
+	if !exists(siblingDir + ".bak-" + fixedTS) {
+		t.Error("the swept knowledge dir .bak backup is missing")
+	}
+}
+
 // TestMoveAside_NoOverwrite: a pre-existing <path>.bak-<ts> is never overwritten;
 // moveAside picks a unique suffixed name instead.
 func TestMoveAside_NoOverwrite(t *testing.T) {

@@ -72,6 +72,7 @@ type resetActions struct {
 	Backups         []backupTarget // paths to move to <path>.bak-<ts>
 	KeepMemory      bool           // preserve MemoryDir (sweep DataRoot minus memory)
 	MemoryDir       string         // preserved dir when KeepMemory
+	MemoryDB        string         // resolved custom MEMORY_DB file path ("" for the default), so the sweep can preserve a db that lives DIRECTLY in DataRoot
 	DataRoot        string         // the data root (for the keep-memory sweep)
 	RemoveSandboxes bool           // --sbx: remove pi-stack-* sandboxes
 	MCPRemove       []string       // --sbx: MCP server names to unregister (cfg.MCP)
@@ -150,6 +151,7 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 	a := resetActions{
 		KeepMemory: opts.keepMemory,
 		MemoryDir:  paths.memoryDir,
+		MemoryDB:   paths.memoryDB,
 		DataRoot:   paths.dataRoot,
 		Force:      opts.force,
 	}
@@ -283,6 +285,54 @@ func customDBOutsideRoot(dir, dbPath, dataRoot, label string) (backupTarget, boo
 	return backupTarget{}, false
 }
 
+// keepMemoryPreserve computes the captured-memory artifacts the --keep-memory
+// sweep must NOT move aside, as a set of cleaned absolute top-level dataRoot
+// paths, plus a human label for the summary. Two shapes:
+//
+//   - db in a DEDICATED subdir of dataRoot (default dataRoot/memory/memory.db):
+//     preserve the top-level subdir entry on the path to it (e.g. dataRoot/memory).
+//   - db sitting DIRECTLY in dataRoot (MEMORY_DB=dataRoot/custom-memory.db, so
+//     memoryDir == dataRoot): preserve the db FILE + its -wal/-shm sidecars, and
+//     move everything else (incl. the knowledge db) aside.
+//
+// Matching by cleaned path (never a hardcoded "memory" name) is what fixes the
+// data-loss edge where a loose custom db in the root was swept away while the
+// code still reported it preserved.
+func keepMemoryPreserve(dataRoot, memoryDir, memoryDB string) (map[string]bool, string) {
+	preserve := map[string]bool{}
+	root := filepath.Clean(dataRoot)
+	dir := filepath.Clean(memoryDir)
+	db := memoryDB
+	if db == "" {
+		db = filepath.Join(memoryDir, "memory.db")
+	}
+	db = filepath.Clean(db)
+	if dir != root && underDir(dir, root) {
+		// Dedicated subdir: preserve the first path segment under dataRoot.
+		top := topLevelUnder(root, dir)
+		preserve[top] = true
+		return preserve, top
+	}
+	// The db is a loose file in the data root (or its dir resolves to the root):
+	// preserve just the db file + its -wal/-shm sidecars.
+	preserve[db] = true
+	preserve[db+"-wal"] = true
+	preserve[db+"-shm"] = true
+	return preserve, db
+}
+
+// topLevelUnder returns the cleaned path of the FIRST path segment of `path`
+// beneath `root` (root/a for root/a/b/c). Used to preserve the top-level data-root
+// entry that contains the memory db. Falls back to path when it is not under root.
+func topLevelUnder(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return filepath.Clean(path)
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	return filepath.Join(root, parts[0])
+}
+
 // underDir reports whether path is dir itself or nested inside it.
 func underDir(path, dir string) bool {
 	rel, err := filepath.Rel(dir, path)
@@ -364,11 +414,15 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 		}
 	}
 
-	// 3. --keep-memory: sweep the data root, moving aside every entry that is not
-	// the RESOLVED memory dir (honoring a custom MEMORY_DB, not a hardcoded name)
-	// and not a backup we just created, so "anything else" beside the preserved
-	// facts is reset too. Skipped when the data move was blocked.
+	// 3. --keep-memory: sweep the data root, moving aside every top-level entry
+	// that is NOT part of the captured memory (the resolved memory db + its
+	// -wal/-shm sidecars when they sit directly in the data root, or the dedicated
+	// memory subdir when the db lives in one) and not a backup we just created, so
+	// "anything else" beside the preserved facts is reset too. Preservation is by
+	// cleaned absolute path (honoring a custom MEMORY_DB), never a hardcoded name.
+	// Skipped when the data move was blocked.
 	if a.KeepMemory && a.DataRoot != "" && !dataBlocked {
+		preserve, preservedLabel := keepMemoryPreserve(a.DataRoot, a.MemoryDir, a.MemoryDB)
 		entries, rdErr := fsys.readDir(a.DataRoot)
 		if rdErr != nil && !os.IsNotExist(rdErr) {
 			// A real read failure (permissions, IO) MUST surface — do not report
@@ -379,8 +433,8 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 			for _, e := range entries {
 				name := e.Name()
 				p := filepath.Join(a.DataRoot, name)
-				if p == a.MemoryDir || strings.Contains(name, ".bak-") {
-					continue // preserve the resolved memory dir
+				if preserve[filepath.Clean(p)] || strings.Contains(name, ".bak-") {
+					continue // preserve the captured-memory artifacts
 				}
 				if moved[p] {
 					continue // already handled (the explicit knowledge target)
@@ -396,7 +450,7 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 				created = append(created, dest)
 				fmt.Fprintf(out, "  ✓ %s -> %s\n", p, dest)
 			}
-			fmt.Fprintf(out, "  ✓ preserved captured memory: %s\n", a.MemoryDir)
+			fmt.Fprintf(out, "  ✓ preserved captured memory: %s\n", preservedLabel)
 		}
 	}
 
