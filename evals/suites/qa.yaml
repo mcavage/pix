@@ -1,0 +1,18 @@
+# task_type: qa — test/QA judgment, graded by an llm-rubric (the judge model in
+# promptfooconfig.yaml defaultTest.options.provider).
+
+- description: email edge case — names a genuine tricky input
+  vars:
+    prompt: >-
+      You are testing a login form. Name one edge-case input for the email
+      field that a naive validator often gets wrong. Reply in one short phrase.
+  assert:
+    - type: llm-rubric
+      value: >-
+        Award a passing score only if the answer names a genuine tricky-but-valid
+        or tricky-invalid email edge case (e.g. plus-addressing, subdomains,
+        unicode/IDN, quoted local part, a very long address, a trailing dot, or
+        an empty string). Fail it if it is generic ("a wrong email") or not an
+        edge case.
+  metadata:
+    task_type: qa

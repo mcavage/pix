@@ -1,188 +1,117 @@
 package routing
 
 import (
-	"fmt"
+	"os"
 	"testing"
 	"time"
 )
 
-// fakeRunner returns canned output + token counts so the harness is exercised
-// with zero spend. outputs maps model id -> the text it "produces"; tokens is
-// the per-call (in,out) charged so cost/budget math is assertable.
-type fakeRunner struct {
-	outputs map[string]string
-	inTok   int
-	outTok  int
-	calls   int
-}
-
-func (f *fakeRunner) Run(model, prompt string) RunResult {
-	f.calls++
-	return RunResult{
-		Output:       f.outputs[model],
-		InputTokens:  f.inTok,
-		OutputTokens: f.outTok,
-		LatencyMs:    100,
+// TestImportPromptfoo_RealFixture pins the adapter to promptfoo's ACTUAL output
+// schema: testdata/promptfoo-smoke.json is a real `promptfoo eval --output` file
+// captured from a live run (1 case x haiku, task_type=search, score 1).
+func TestImportPromptfoo_RealFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/promptfoo-smoke.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, sum, err := ImportPromptfoo(&Scorecard{}, data, time.Unix(0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Rows != 1 || sum.Scored != 1 {
+		t.Fatalf("summary rows=%d scored=%d, want 1/1", sum.Rows, sum.Scored)
+	}
+	s, ok := out.Lookup("anthropic/claude-haiku-4-5", "search")
+	if !ok {
+		t.Fatal("expected a (haiku, search) score from the real fixture")
+	}
+	if s.Accuracy != 1 {
+		t.Fatalf("accuracy = %v, want 1", s.Accuracy)
+	}
+	if s.Source != "eval" || s.N != 1 {
+		t.Fatalf("source=%q n=%d, want eval/1", s.Source, s.N)
+	}
+	if s.CostUSD <= 0 || s.LatencyMsP50 <= 0 {
+		t.Fatalf("cost=%v latency=%v, both should be >0 from the real run", s.CostUSD, s.LatencyMsP50)
 	}
 }
 
-func evalReg() *Registry {
-	return &Registry{Models: []Model{
-		{ID: "good", Provider: "x", Available: true, InputPerMTok: 10, OutputPerMTok: 10},
-		{ID: "bad", Provider: "x", Available: true, InputPerMTok: 10, OutputPerMTok: 10},
-		{ID: "off", Provider: "x", Available: false, InputPerMTok: 10, OutputPerMTok: 10},
+// craftResults builds a promptfoo results.json in the REAL schema with multiple
+// models x task_types so aggregation (mean accuracy, p50 latency, mean cost, n)
+// and exclusion are testable deterministically.
+const craftResults = `{
+  "results": { "results": [
+    {"provider":{"id":"pi:m-good","label":"good"},"success":true,"score":1,"latencyMs":100,"cost":0.01,"testCase":{"metadata":{"task_type":"code"}}},
+    {"provider":{"id":"pi:m-good","label":"good"},"success":false,"score":0,"latencyMs":300,"cost":0.03,"testCase":{"metadata":{"task_type":"code"}}},
+    {"provider":{"id":"pi:m-good","label":"good"},"success":true,"score":1,"latencyMs":200,"cost":0.02,"testCase":{"metadata":{"task_type":"code"}}},
+    {"provider":{"id":"pi:m-good","label":"good"},"success":true,"score":1,"latencyMs":50,"cost":0.005,"testCase":{"metadata":{"task_type":"reasoning"}}},
+    {"provider":{"id":"pi:m-err","label":"err"},"response":{"error":"pi exited 1"},"score":0,"latencyMs":0,"cost":0,"testCase":{"metadata":{"task_type":"code"}}},
+    {"provider":{"id":"pi:m-good","label":"good"},"success":false,"error":"Assertion failed","score":0,"latencyMs":150,"cost":0.015,"testCase":{"metadata":{"task_type":"reasoning"}}},
+    {"provider":{"id":"openai:raw","label":"raw"},"success":true,"score":1,"testCase":{"metadata":{"task_type":"code"}}},
+    {"provider":{"id":"pi:m-good","label":"good"},"success":true,"score":1,"testCase":{"metadata":{}}}
+  ] }
+}`
+
+func TestImportPromptfoo_Aggregation(t *testing.T) {
+	out, sum, err := ImportPromptfoo(&Scorecard{}, []byte(craftResults), time.Unix(0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Rows != 8 {
+		t.Fatalf("rows=%d, want 8", sum.Rows)
+	}
+	// m-good/code: 3 scored rows (1,0,1) -> acc 0.667, p50 latency 200, mean cost 0.02.
+	s, ok := out.Lookup("m-good", "code")
+	if !ok {
+		t.Fatal("missing m-good/code")
+	}
+	if s.N != 3 {
+		t.Fatalf("n=%d, want 3 (the errored m-good... is a DIFFERENT model; non-pi + no-task_type rows skipped)", s.N)
+	}
+	if got := round3(s.Accuracy); got != 0.667 {
+		t.Fatalf("accuracy=%v, want 0.667", got)
+	}
+	if s.LatencyMsP50 != 200 {
+		t.Fatalf("p50=%v, want 200", s.LatencyMsP50)
+	}
+	if round3(s.CostUSD) != 0.02 { // mean(0.01, 0.03, 0.02)
+		t.Fatalf("mean cost=%v, want 0.02", s.CostUSD)
+	}
+	// m-err: the only row errored -> excluded -> no score row at all.
+	if _, ok := out.Lookup("m-err", "code"); ok {
+		t.Fatal("errored-only model must not get a score row")
+	}
+	// Non-pi provider (openai:raw) and empty-metadata row are skipped.
+	if _, ok := out.Lookup("raw", "code"); ok {
+		t.Fatal("non-pi provider must be skipped")
+	}
+	if sum.Errored != 1 {
+		t.Fatalf("errored=%d, want 1", sum.Errored)
+	}
+	if sum.Skipped != 2 { // openai:raw + empty-metadata
+		t.Fatalf("skipped=%d, want 2", sum.Skipped)
+	}
+	// m-good/reasoning: two rows (score 1 + a failed-ASSERTION 0, which is a
+	// legitimate 0, NOT an invocation error) -> acc 0.5, n=2.
+	if r, ok := out.Lookup("m-good", "reasoning"); !ok || r.Accuracy != 0.5 || r.N != 2 {
+		t.Fatalf("m-good/reasoning acc=%v n=%d ok=%v, want 0.5/2", r.Accuracy, r.N, ok)
+	}
+}
+
+func TestImportPromptfoo_PreservesExistingScores(t *testing.T) {
+	// A seed score for an untouched (model, task_type) survives an import.
+	base := &Scorecard{Scores: []Score{
+		{Model: "keep/me", TaskType: "qa", Accuracy: 0.9, Source: "seed"},
 	}}
-}
-
-func TestRunEvals_ContainsScoringAndCost(t *testing.T) {
-	cases := []Case{
-		{ID: "c1", TaskType: "code", Prompt: "capital of france?",
-			Scorer: Scorer{Kind: "contains", Expect: "paris"}},
-	}
-	runner := &fakeRunner{
-		outputs: map[string]string{"good": "The answer is Paris.", "bad": "London"},
-		inTok:   1_000_000, outTok: 1_000_000, // -> $20 per call at $10/$10
-	}
-	rep, out, err := RunEvals(evalReg(), &Scorecard{}, cases, EvalOptions{
-		Now: func() time.Time { return time.Unix(0, 0) },
-	}, runner)
+	out, _, err := ImportPromptfoo(base, []byte(craftResults), time.Unix(0, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// "off" is unavailable -> not called. good + bad only = 2 calls.
-	if runner.calls != 2 {
-		t.Fatalf("calls = %d, want 2 (unavailable model skipped)", runner.calls)
-	}
-	// good scores 1, bad scores 0.
-	gs, _ := out.Lookup("good", "code")
-	bs, _ := out.Lookup("bad", "code")
-	if gs.Accuracy != 1 || bs.Accuracy != 0 {
-		t.Fatalf("accuracy good=%v bad=%v, want 1/0", gs.Accuracy, bs.Accuracy)
-	}
-	if gs.Source != "eval" {
-		t.Fatalf("source = %q, want eval", gs.Source)
-	}
-	// Cost: 2 calls × $20 = $40.
-	if rep.SpentUSD != 40 {
-		t.Fatalf("spent = %v, want 40", rep.SpentUSD)
+	if s, ok := out.Lookup("keep/me", "qa"); !ok || s.Accuracy != 0.9 {
+		t.Fatal("untouched seed score must survive an import")
 	}
 }
 
-func TestRunEvals_BudgetGuardHalts(t *testing.T) {
-	// Many cases, tiny budget: the sweep must stop early rather than blow past.
-	var cases []Case
-	for i := 0; i < 10; i++ {
-		cases = append(cases, Case{ID: fmt.Sprintf("c%d", i), TaskType: "code",
-			Scorer: Scorer{Kind: "contains", Expect: "x"}})
-	}
-	runner := &fakeRunner{outputs: map[string]string{"good": "x", "bad": "x"},
-		inTok: 1_000_000, outTok: 0} // $10 per call
-	rep, _, err := RunEvals(evalReg(), &Scorecard{}, cases, EvalOptions{BudgetUSD: 25}, runner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rep.Stopped == "" {
-		t.Fatal("expected the budget guard to halt the sweep")
-	}
-	// $25 budget at $10/call: stops after spend >= 25, i.e. 3 calls ($30).
-	if rep.SpentUSD > 40 {
-		t.Fatalf("spent %v — budget guard let it run away", rep.SpentUSD)
-	}
-}
-
-func TestRunEvals_DryRunCallsNothing(t *testing.T) {
-	cases := []Case{{ID: "c1", TaskType: "code", Scorer: Scorer{Kind: "contains", Expect: "x"}}}
-	runner := &fakeRunner{outputs: map[string]string{"good": "x", "bad": "x"}}
-	rep, _, err := RunEvals(evalReg(), &Scorecard{}, cases, EvalOptions{DryRun: true}, runner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runner.calls != 0 {
-		t.Fatalf("dry-run made %d calls, want 0", runner.calls)
-	}
-	if len(rep.Plan) != 2 { // 2 available models × 1 case
-		t.Fatalf("plan len = %d, want 2", len(rep.Plan))
-	}
-}
-
-// score is a tiny test helper: run scoreCase with an unlimited budget and assert
-// there was no infra error, returning just the score.
-func score(t *testing.T, c Case, output string, r Runner) float64 {
-	t.Helper()
-	s, _, err := scoreCase(nil, c, output, r, budgetUnlimited)
-	if err != nil {
-		t.Fatalf("unexpected infra error: %v", err)
-	}
-	return s
-}
-
-func TestScoreCommand(t *testing.T) {
-	// The mechanical grader: a command reads OUTPUT_FILE and greps it.
-	c := Case{Scorer: Scorer{Kind: "command",
-		Command: []string{"sh", "-c", "grep -q PASS \"$OUTPUT_FILE\""}}}
-	if s := score(t, c, "result: PASS", nil); s != 1 {
-		t.Fatalf("PASS output scored %v, want 1", s)
-	}
-	if s := score(t, c, "result: FAIL", nil); s != 0 {
-		t.Fatalf("FAIL output scored %v, want 0", s)
-	}
-}
-
-func TestScoreCommand_SeedsFiles(t *testing.T) {
-	// A seeded file is present in the workdir alongside output.txt.
-	c := Case{Scorer: Scorer{Kind: "command",
-		Files:   map[string]string{"expected.txt": "42"},
-		Command: []string{"sh", "-c", "test \"$(cat expected.txt)\" = \"$(cat \"$OUTPUT_FILE\")\""}}}
-	if s := score(t, c, "42", nil); s != 1 {
-		t.Fatalf("matching output scored %v, want 1", s)
-	}
-	if s := score(t, c, "43", nil); s != 0 {
-		t.Fatalf("mismatched output scored %v, want 0", s)
-	}
-}
-
-func TestScoreCommand_UnsafePathIsInfraError(t *testing.T) {
-	// A seeded path escaping the workdir must be refused (infra error), never run.
-	c := Case{Scorer: Scorer{Kind: "command",
-		Files:   map[string]string{"../escape.txt": "x"},
-		Command: []string{"true"}}}
-	if _, _, err := scoreCase(nil, c, "out", nil, budgetUnlimited); err == nil {
-		t.Fatal("expected an infra error for a ../ seeded path")
-	}
-}
-
-func TestScoreJudge(t *testing.T) {
-	// The judge model emits a leading score; we parse and clamp it.
-	runner := &fakeRunner{outputs: map[string]string{"judge": "0.75\nBecause it was mostly right."}}
-	c := Case{Scorer: Scorer{Kind: "judge", JudgeModel: "judge", Expect: "is it good?"}}
-	if s := score(t, c, "some answer", runner); s != 0.75 {
-		t.Fatalf("judge score = %v, want 0.75", s)
-	}
-}
-
-func TestScoreJudge_SkippedWhenBudgetExhausted(t *testing.T) {
-	runner := &fakeRunner{outputs: map[string]string{"judge": "1.0"}}
-	c := Case{Scorer: Scorer{Kind: "judge", JudgeModel: "judge", Expect: "r"}}
-	_, _, err := scoreCase(nil, c, "a", runner, 0) // 0 budget left
-	if err == nil {
-		t.Fatal("judge should be skipped (infra error) when budget is exhausted")
-	}
-}
-
-func TestRunEvals_RegexAndP50(t *testing.T) {
-	cases := []Case{
-		{ID: "a", TaskType: "code", Scorer: Scorer{Kind: "regex", Expect: `\d{3}`}},
-	}
-	runner := &fakeRunner{outputs: map[string]string{"good": "code 200 ok", "bad": "no digits here"}}
-	_, out, err := RunEvals(evalReg(), &Scorecard{}, cases, EvalOptions{}, runner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gs, _ := out.Lookup("good", "code")
-	if gs.Accuracy != 1 {
-		t.Fatalf("regex good accuracy = %v, want 1", gs.Accuracy)
-	}
-	if gs.LatencyMsP50 != 100 {
-		t.Fatalf("p50 latency = %v, want 100", gs.LatencyMsP50)
-	}
+func round3(f float64) float64 {
+	return float64(int(f*1000+0.5)) / 1000
 }

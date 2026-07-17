@@ -1,0 +1,56 @@
+# task_type: code — production code / bugfix probes.
+# Each case tags metadata.task_type=code; the scorecard aggregates (model, code).
+
+- description: fizzbuzz — writes the function
+  vars:
+    prompt: >-
+      Write a Python function fizzbuzz(n) that returns a list of strings for
+      1..n: 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, 'FizzBuzz'
+      for both, else the number as a string. Reply with ONLY the function in a
+      code block.
+  assert:
+    - type: regex
+      value: "def\\s+fizzbuzz"
+  metadata:
+    task_type: code
+
+- description: bugfix — names the correct fix for all-negative max
+  vars:
+    prompt: >-
+      This Python returns the max of a list but is wrong on all-negative inputs:
+
+          def maxv(xs):
+              m = 0
+              for x in xs:
+                  if x > m: m = x
+              return m
+
+      What should `m` be initialized to instead of 0? Reply in one short sentence.
+  assert:
+    - type: icontains-any
+      value:
+        - "xs[0]"
+        - "first element"
+        - "-inf"
+        - "infinity"
+  metadata:
+    task_type: code
+
+# Mechanical grader: run the model's shell one-liner and check it prints 1..5.
+# NOTE: a `javascript` assertion executes here on the eval host. This mirrors v1's
+# command scorer and carries the SAME caveat — point mechanical graders only at
+# trusted output; container the grader if it ever runs untrusted code.
+- description: shell one-liner — prints 1..5 (mechanical grader)
+  vars:
+    prompt: >-
+      Write a POSIX shell one-liner that prints the numbers 1 to 5 each on its
+      own line. Reply with ONLY the command, no code fence, no explanation.
+  assert:
+    # External JS assertion file (runs in Node with require available, unlike an
+    # inline `javascript` assert). Executes the model's one-liner and checks it
+    # prints 1..5. TRUSTED-GRADER caveat: only for trusted output; container it
+    # if it ever grades untrusted code.
+    - type: javascript
+      value: file://../asserts/shell-prints-1to5.js
+  metadata:
+    task_type: code

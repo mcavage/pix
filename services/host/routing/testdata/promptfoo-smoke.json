@@ -1,0 +1,261 @@
+{
+  "evalId": "eval-74B-2026-07-17T15:19:16",
+  "results": {
+    "version": 3,
+    "timestamp": "2026-07-17T15:19:16.544Z",
+    "prompts": [
+      {
+        "id": "effa18501e44aafd9bc42a2f64ffc9b6350f94025520ca2ed382f9bdc4b6e982",
+        "raw": "{{prompt}}",
+        "label": "{{prompt}}",
+        "provider": "haiku",
+        "metrics": {
+          "score": 1,
+          "testPassCount": 1,
+          "testFailCount": 0,
+          "testErrorCount": 0,
+          "assertPassCount": 1,
+          "assertFailCount": 0,
+          "totalLatencyMs": 2907,
+          "tokenUsage": {
+            "prompt": 486,
+            "completion": 81,
+            "cached": 0,
+            "total": 567,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "namedScores": {},
+          "namedScoresCount": {},
+          "namedScoreWeights": {},
+          "cost": 0.0008910000000000001
+        }
+      }
+    ],
+    "results": [
+      {
+        "cost": 0.0008910000000000001,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "icontains",
+                "value": "client"
+              }
+            }
+          ]
+        },
+        "id": "3fc839d2-573e-426a-982a-7cdd13dea3fc",
+        "latencyMs": 2907,
+        "namedScores": {},
+        "prompt": {
+          "raw": "In one word, what HTTP status code category is 4xx? One word.",
+          "label": "{{prompt}}",
+          "config": {}
+        },
+        "promptId": "effa18501e44aafd9bc42a2f64ffc9b6350f94025520ca2ed382f9bdc4b6e982",
+        "promptIdx": 0,
+        "provider": {
+          "id": "pi:anthropic/claude-haiku-4-5",
+          "label": "haiku"
+        },
+        "response": {
+          "output": "Client",
+          "tokenUsage": {
+            "prompt": 486,
+            "completion": 81,
+            "total": 567
+          },
+          "cost": 0.0008910000000000001,
+          "metadata": {
+            "latencyMs": 2905,
+            "model": "anthropic/claude-haiku-4-5"
+          }
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "vars": {
+            "prompt": "In one word, what HTTP status code category is 4xx? One word."
+          },
+          "assert": [
+            {
+              "type": "icontains",
+              "value": "client"
+            }
+          ],
+          "metadata": {
+            "task_type": "search"
+          },
+          "options": {}
+        },
+        "testIdx": 0,
+        "tokenUsage": {
+          "prompt": 486,
+          "completion": 81,
+          "cached": 0,
+          "total": 567,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "prompt": "In one word, what HTTP status code category is 4xx? One word."
+        },
+        "metadata": {
+          "task_type": "search",
+          "latencyMs": 2905,
+          "model": "anthropic/claude-haiku-4-5",
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      }
+    ],
+    "stats": {
+      "successes": 1,
+      "failures": 0,
+      "errors": 0,
+      "tokenUsage": {
+        "prompt": 486,
+        "completion": 81,
+        "cached": 0,
+        "total": 567,
+        "numRequests": 1,
+        "completionDetails": {
+          "reasoning": 0,
+          "acceptedPrediction": 0,
+          "rejectedPrediction": 0,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0
+        },
+        "assertions": {
+          "total": 0,
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "numRequests": 0,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          }
+        }
+      },
+      "durationMs": 2934,
+      "evaluationDurationMs": 2934
+    }
+  },
+  "config": {
+    "tags": {},
+    "description": "smoke",
+    "prompts": [
+      "{{prompt}}"
+    ],
+    "providers": [
+      {
+        "id": "file://providers/pi.js",
+        "label": "haiku",
+        "config": {
+          "model": "anthropic/claude-haiku-4-5"
+        }
+      }
+    ],
+    "tests": [
+      {
+        "vars": {
+          "prompt": "In one word, what HTTP status code category is 4xx? One word."
+        },
+        "assert": [
+          {
+            "type": "icontains",
+            "value": "client"
+          }
+        ],
+        "metadata": {
+          "task_type": "search"
+        }
+      }
+    ],
+    "env": {},
+    "outputPath": [
+      "results.json"
+    ],
+    "extensions": [],
+    "metadata": {},
+    "evaluateOptions": {}
+  },
+  "shareableUrl": null,
+  "metadata": {
+    "promptfooVersion": "0.121.19",
+    "nodeVersion": "v25.9.0",
+    "platform": "linux",
+    "arch": "arm64",
+    "exportedAt": "2026-07-17T15:19:19.535Z",
+    "evaluationCreatedAt": "2026-07-17T15:19:16.544Z"
+  },
+  "vars": [
+    "prompt"
+  ],
+  "runtimeOptions": {
+    "eventSource": "cli",
+    "showProgressBar": true,
+    "repeat": 1,
+    "maxConcurrency": 4,
+    "cache": false
+  }
+}

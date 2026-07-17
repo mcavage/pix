@@ -1,0 +1,12 @@
+# task_type: search — quick factual recall (breadth fan-out probes).
+
+- description: HTTP 4xx category
+  vars:
+    prompt: >-
+      In one word, what HTTP status code category do codes in the 4xx range
+      represent? Reply with a single word.
+  assert:
+    - type: icontains
+      value: client
+  metadata:
+    task_type: search

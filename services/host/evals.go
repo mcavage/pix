@@ -1,22 +1,23 @@
-// pi-stack-host evals — the accuracy eval harness (host side). Runs a suite of
-// cases across candidate models, scores each mechanically, records real cost +
-// latency, and writes the measured scores into the scorecard so the router
-// stops guessing. Budget-guarded and dry-runnable; deliberately a manual,
-// on-new-model-release sweep, not an unattended spender. See docs/design/routing.md.
+// pi-stack-host evals — the eval harness, now a thin driver over promptfoo.
+//
+// promptfoo owns running + scoring (evals/ in the repo: promptfooconfig.yaml +
+// providers/pi.js + suites/*.yaml). This subcommand shells `promptfoo eval`,
+// then imports the results.json into the router's scorecard. `pi` stays the
+// model-invocation layer (via the pi provider), so credentials remain
+// proxy-managed and every provider pi reaches is evaluable. See
+// docs/design/routing.md.
 
 package main
 
 import (
-	"bufio"
-	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"pi-stack/host/routing"
@@ -30,6 +31,8 @@ func runEvalsHost(args []string) {
 	switch args[0] {
 	case "run":
 		evalsRun(args[1:])
+	case "import":
+		evalsImport(args[1:])
 	case "show":
 		evalsShow(args[1:])
 	case "ls":
@@ -44,108 +47,227 @@ func runEvalsHost(args []string) {
 }
 
 func evalsUsage() {
-	fmt.Fprint(os.Stderr, `pi-stack-host evals — accuracy eval harness
+	fmt.Fprint(os.Stderr, `pi-stack-host evals — accuracy eval harness (promptfoo)
 
 usage:
-  evals run [--suite DIR] [--models a,b] [--budget USD] [--dry-run] [--save] [--json]
-  evals show [--json]      the current scorecard
-  evals ls   [--suite DIR] list the cases in a suite
+  evals run [--config P] [--models a,b] [--budget USD] [--dry-run] [--save] [--json]
+  evals import FILE [--save] [--json]   fold a promptfoo results.json into the scorecard
+  evals show [--json]                   the current scorecard
+  evals ls [--config P]                 list the suites/cases
 
 run flags:
-  --suite DIR    directory of *.json cases (default: embedded starter suite)
-  --models a,b   only these model ids (default: every available model)
-  --budget USD   hard spend cap; the sweep halts before exceeding it
-  --dry-run      print the plan + case matrix, call NO models, spend nothing
-  --no-budget    allow an un-capped real sweep (otherwise --budget is required)
-  --save         write the measured scores into the scorecard (default: preview)
-  --json         machine-readable output
+  --config P     path to promptfooconfig.yaml (default: $EVALS_CONFIG or ./evals/promptfooconfig.yaml)
+  --models a,b   only these model ids (filters promptfoo providers pi:<model>)
+  --budget USD   spend cap: models are evaluated one at a time and the sweep
+                 STOPS before a model that would exceed the cap (advisory: the
+                 last model's own matrix runs whole)
+  --dry-run      print the plan, call nothing, spend nothing
+  --save         write measured scores into the scorecard (default: preview)
 
-A real sweep costs money (it calls each model on each case). It is meant to be
-run BY HAND on a new-model release, then followed by `+"`route compile`"+`.
+A real sweep calls each model on each case and COSTS MONEY. Run it by hand on a
+new-model release, then `+"`pi-stack route compile`"+`.
 `)
 }
 
+// evalsConfig resolves the promptfoo config path.
+func evalsConfig(args []string) string {
+	if c := flagValue(args, "--config", ""); c != "" {
+		return c
+	}
+	if c := strings.TrimSpace(os.Getenv("EVALS_CONFIG")); c != "" {
+		return c
+	}
+	return filepath.Join("evals", "promptfooconfig.yaml")
+}
+
 func evalsRun(args []string) {
-	reg, sc, pol := loadAll()
-	if err := routing.Validate(reg, sc, pol); err != nil {
-		fatal(fmt.Errorf("config invalid, refusing to run: %w", err))
+	cfg := evalsConfig(args)
+	if _, err := os.Stat(cfg); err != nil {
+		fatal(fmt.Errorf("promptfoo config not found at %s (run from the repo root, or pass --config)", cfg))
 	}
-	suite := flagValue(args, "--suite", "")
-	var cases []routing.Case
-	var err error
-	switch {
-	case suite != "":
-		cases, err = routing.LoadSuite(suite)
-	default:
-		if _, statErr := os.Stat(routing.SuiteDir()); statErr == nil {
-			cases, err = routing.LoadSuite(routing.SuiteDir())
-		} else {
-			cases, err = routing.LoadDefaultSuite()
-		}
-	}
-	if err != nil {
-		fatal(err)
-	}
-	if len(cases) == 0 {
-		fatal(fmt.Errorf("no cases found"))
+	promptfoo := env("PROMPTFOO_BIN", "promptfoo")
+	if _, err := exec.LookPath(promptfoo); err != nil {
+		fatal(fmt.Errorf("promptfoo not on PATH (npm i -g promptfoo), or set PROMPTFOO_BIN"))
 	}
 
-	opts := routing.EvalOptions{
-		DryRun: hasFlag(args, "--dry-run"),
-		Now:    time.Now,
-	}
+	// Which models: explicit --models, else every available model in the registry.
+	var models []string
 	if m := flagValue(args, "--models", ""); m != "" {
 		for _, s := range strings.Split(m, ",") {
 			if s = strings.TrimSpace(s); s != "" {
-				opts.Models = append(opts.Models, s)
+				models = append(models, s)
+			}
+		}
+	} else {
+		reg, err := routing.LoadRegistry()
+		if err != nil {
+			fatal(err)
+		}
+		for _, mm := range reg.Models {
+			if mm.Available {
+				models = append(models, mm.ID)
 			}
 		}
 	}
+
+	var budget float64
 	if b := flagValue(args, "--budget", ""); b != "" {
 		v, e := strconv.ParseFloat(strings.TrimSpace(b), 64)
 		if e != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
 			fatal(fmt.Errorf("--budget must be a positive number (got %q)", b))
 		}
-		opts.BudgetUSD = v
+		budget = v
 	}
-	// A real (non-dry-run) sweep with no budget is a foot-gun given this feature
-	// exists to control spend: require an explicit --budget or an explicit
-	// --no-budget opt-out.
-	if !opts.DryRun && opts.BudgetUSD == 0 && !hasFlag(args, "--no-budget") {
-		fatal(fmt.Errorf("refusing to run un-capped: pass --budget <usd> (or --no-budget to override, or --dry-run to preview)"))
+	dryRun := hasFlag(args, "--dry-run")
+
+	if dryRun {
+		fmt.Printf("DRY RUN — would run promptfoo (%s) over %d model(s), spend $0:\n", cfg, len(models))
+		for _, m := range models {
+			fmt.Printf("  %s\n", m)
+		}
+		if budget > 0 {
+			fmt.Printf("budget cap: $%.2f (models run one at a time; stops before exceeding)\n", budget)
+		}
+		fmt.Println("\nRe-run without --dry-run to execute.")
+		return
 	}
 
-	rep, updated, err := routing.RunEvals(reg, sc, cases, opts, &piRunner{})
+	base, err := routing.LoadScorecard()
 	if err != nil {
 		fatal(err)
 	}
+	sc := base
+	var spent float64
+	var stopped string
+	var totalUpdated []routing.Score
+
+	// When a budget is set, evaluate one model at a time so the sweep can stop
+	// before blowing the cap. Without a budget, one run over all models.
+	batches := [][]string{models}
+	if budget > 0 {
+		batches = nil
+		for _, m := range models {
+			batches = append(batches, []string{m})
+		}
+	}
+	for _, batch := range batches {
+		if budget > 0 && spent >= budget {
+			stopped = fmt.Sprintf("budget $%.2f reached after $%.4f", budget, spent)
+			break
+		}
+		results, rerr := runPromptfoo(promptfoo, cfg, batch)
+		if rerr != nil {
+			fatal(rerr)
+		}
+		updated, sum, ierr := routing.ImportPromptfoo(sc, results, time.Now())
+		if ierr != nil {
+			fatal(ierr)
+		}
+		sc = updated
+		spent += sum.SpentUSD
+		totalUpdated = append(totalUpdated, sum.Updated...)
+	}
 
 	if hasFlag(args, "--json") {
-		printJSON(rep)
-	} else if rep.DryRun {
-		fmt.Printf("DRY RUN — %d planned invocations (no models called, $0 spent):\n", len(rep.Plan))
-		for _, p := range rep.Plan {
-			fmt.Printf("  %s\n", p)
-		}
-		fmt.Println("\nRe-run without --dry-run to execute (use --budget to cap spend).")
+		printJSON(map[string]any{"spent_usd": spent, "stopped": stopped, "updated": totalUpdated})
 	} else {
-		fmt.Printf("ran %d invocations, spent $%.4f\n", len(rep.Runs), rep.SpentUSD)
-		if rep.Stopped != "" {
-			fmt.Printf("HALTED: %s\n", rep.Stopped)
+		fmt.Printf("ran promptfoo, spent $%.4f\n", spent)
+		if stopped != "" {
+			fmt.Printf("HALTED: %s\n", stopped)
 		}
 		fmt.Println("\nmeasured scores (source=eval):")
-		for _, s := range rep.Aggregates {
+		for _, s := range totalUpdated {
+			fmt.Printf("  %-28s %-10s acc %.2f  $%.4f  %.0fms  (n=%d)\n",
+				s.Model, s.TaskType, s.Accuracy, s.CostUSD, s.LatencyMsP50, s.N)
+		}
+		if budget > 0 && spent > budget {
+			fmt.Printf("\nNOTE: spent $%.4f > budget $%.2f (the last model's matrix runs whole).\n", spent, budget)
+		}
+	}
+
+	if hasFlag(args, "--save") {
+		if err := sc.Save(); err != nil {
+			fatal(err)
+		}
+		fmt.Printf("\nsaved scorecard -> %s\n(run `pi-stack route compile` to update routing.json)\n", routing.ScorecardPath())
+	} else {
+		fmt.Println("\n(preview only — pass --save to write these into the scorecard)")
+	}
+}
+
+// runPromptfoo runs one `promptfoo eval` (optionally filtered to a set of model
+// providers) and returns the raw results.json bytes.
+func runPromptfoo(bin, cfg string, models []string) ([]byte, error) {
+	tmp, err := os.CreateTemp("", "promptfoo-*.json")
+	if err != nil {
+		return nil, err
+	}
+	tmp.Close()
+	defer os.Remove(tmp.Name())
+
+	cmdArgs := []string{"eval", "-c", cfg, "--output", tmp.Name(), "--no-cache"}
+	if len(models) > 0 {
+		// Filter to exactly these models. promptfoo matches --filter-providers
+		// against the provider LABEL, which promptfooconfig.yaml sets to the model
+		// id. Anchor so one model id can't match another as a substring.
+		var alts []string
+		for _, m := range models {
+			alts = append(alts, regexp.QuoteMeta(m))
+		}
+		cmdArgs = append(cmdArgs, "--filter-providers", "^("+strings.Join(alts, "|")+")$")
+	}
+	cmd := exec.Command(bin, cmdArgs...)
+	cmd.Stdout = os.Stderr // promptfoo's progress goes to the user; results are in the file
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		// promptfoo exits non-zero when tests FAIL, which is normal for an eval.
+		// Only treat a missing/empty output file as a real error.
+		if fi, statErr := os.Stat(tmp.Name()); statErr != nil || fi.Size() == 0 {
+			return nil, fmt.Errorf("promptfoo produced no results: %w", err)
+		}
+	}
+	return os.ReadFile(tmp.Name())
+}
+
+func evalsImport(args []string) {
+	var file string
+	for _, a := range args {
+		if a != "" && a[0] != '-' {
+			file = a
+			break
+		}
+	}
+	if file == "" {
+		fatal(fmt.Errorf("evals import: missing results.json path"))
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		fatal(err)
+	}
+	base, err := routing.LoadScorecard()
+	if err != nil {
+		fatal(err)
+	}
+	updated, sum, err := routing.ImportPromptfoo(base, data, time.Now())
+	if err != nil {
+		fatal(err)
+	}
+	if hasFlag(args, "--json") {
+		printJSON(sum)
+	} else {
+		fmt.Printf("imported %d rows: %d scored, %d skipped, %d errored, spent $%.4f\n",
+			sum.Rows, sum.Scored, sum.Skipped, sum.Errored, sum.SpentUSD)
+		for _, s := range sum.Updated {
 			fmt.Printf("  %-28s %-10s acc %.2f  $%.4f  %.0fms  (n=%d)\n",
 				s.Model, s.TaskType, s.Accuracy, s.CostUSD, s.LatencyMsP50, s.N)
 		}
 	}
-
-	if hasFlag(args, "--save") && !rep.DryRun {
+	if hasFlag(args, "--save") {
 		if err := updated.Save(); err != nil {
 			fatal(err)
 		}
 		fmt.Printf("\nsaved scorecard -> %s\n(run `pi-stack route compile` to update routing.json)\n", routing.ScorecardPath())
-	} else if !rep.DryRun {
+	} else {
 		fmt.Println("\n(preview only — pass --save to write these into the scorecard)")
 	}
 }
@@ -163,177 +285,24 @@ func evalsShow(args []string) {
 }
 
 func evalsLs(args []string) {
-	suite := flagValue(args, "--suite", "")
-	var cases []routing.Case
-	var err error
-	if suite != "" {
-		cases, err = routing.LoadSuite(suite)
-	} else {
-		cases, err = routing.LoadDefaultSuite()
-	}
+	cfg := evalsConfig(args)
+	suitesDir := filepath.Join(filepath.Dir(cfg), "suites")
+	entries, err := os.ReadDir(suitesDir)
 	if err != nil {
-		fatal(err)
+		fatal(fmt.Errorf("no suites dir at %s: %w", suitesDir, err))
 	}
-	for _, c := range cases {
-		fmt.Printf("%-24s %-10s scorer=%s\n", c.ID, c.TaskType, c.Scorer.Kind)
-	}
-}
-
-// ── piRunner: the real model invoker ─────────────────────────────────────────
-
-// piRunner invokes a model exactly as a subagent does — a headless pi process
-// (`pi --model <id> -p <prompt> --mode json --no-session --no-extensions`) — and
-// reads the NDJSON event stream back for the answer text + token usage. Reusing
-// pi as the invocation layer means every provider pi can already reach (Claude,
-// GPT, Gemini, Ollama) is callable with no per-provider code here.
-type piRunner struct{}
-
-// piEvent is the subset of pi's --mode json events we need: assistant
-// message_end carries usage (incl. cache tokens + pi's own cost) + text content.
-type piEvent struct {
-	Type    string `json:"type"`
-	Message struct {
-		Role    string          `json:"role"`
-		Model   string          `json:"model"`
-		Content json.RawMessage `json:"content"`
-		Usage   struct {
-			Input      int `json:"input"`
-			Output     int `json:"output"`
-			CacheRead  int `json:"cacheRead"`
-			CacheWrite int `json:"cacheWrite"`
-			Cost       struct {
-				Total float64 `json:"total"`
-			} `json:"cost"`
-		} `json:"usage"`
-	} `json:"message"`
-}
-
-// piRunTimeout bounds a single model invocation. pi has NO client read timeout,
-// so a dead SSE stream would otherwise wedge the whole sweep forever. Tunable
-// via PI_EVAL_TIMEOUT_MS (default 5 min).
-func piRunTimeout() time.Duration {
-	if v := strings.TrimSpace(os.Getenv("PI_EVAL_TIMEOUT_MS")); v != "" {
-		var ms int
-		if _, e := fmt.Sscanf(v, "%d", &ms); e == nil && ms > 0 {
-			return time.Duration(ms) * time.Millisecond
-		}
-	}
-	return 5 * time.Minute
-}
-
-func (piRunner) Run(model, prompt string) routing.RunResult {
-	bin := env("PI_BIN", "pi")
-	// A run in its own temp dir so no repo AGENTS.md/context leaks in, and
-	// --no-tools so the evaluated model CANNOT touch the host (no bash/write/edit
-	// on untrusted model output). --no-context-files + --no-session + --no-extensions
-	// keep the call hermetic and reproducible.
-	ctx, cancel := context.WithTimeout(context.Background(), piRunTimeout())
-	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "--model", model, "-p", prompt,
-		"--mode", "json", "--no-session", "--no-extensions",
-		"--no-tools", "--no-context-files")
-	// A dedicated temp cwd is REQUIRED (not best-effort): running pi in the
-	// caller's cwd would leak repo context and risk writes there.
-	dir, derr := os.MkdirTemp("", "eval-run-*")
-	if derr != nil {
-		return routing.RunResult{Err: fmt.Errorf("eval workdir: %w", derr)}
-	}
-	defer os.RemoveAll(dir)
-	cmd.Dir = dir
-	// Own process group + group kill on timeout so a hung child can't leave
-	// descendants running after the deadline fires.
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.Setpgid = true
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return routing.RunResult{Err: err}
-	}
-	cmd.Stderr = os.Stderr
-	start := time.Now()
-	if err := cmd.Start(); err != nil {
-		return routing.RunResult{Err: err}
-	}
-
-	var text strings.Builder
-	var inTok, outTok, cacheR, cacheW int
-	var reportedCost float64
-	var costSeen bool
-	sc := bufio.NewScanner(stdout)
-	sc.Buffer(make([]byte, 1024*1024), 64*1024*1024) // large lines (long completions)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
+	for _, e := range entries {
+		if e.IsDir() {
+			sub, _ := os.ReadDir(filepath.Join(suitesDir, e.Name()))
+			for _, s := range sub {
+				if strings.HasSuffix(s.Name(), ".yaml") {
+					fmt.Printf("%s/%s\n", e.Name(), s.Name())
+				}
+			}
 			continue
 		}
-		var ev piEvent
-		if json.Unmarshal([]byte(line), &ev) != nil {
-			continue
-		}
-		if ev.Type == "message_end" && ev.Message.Role == "assistant" {
-			inTok += ev.Message.Usage.Input
-			outTok += ev.Message.Usage.Output
-			cacheR += ev.Message.Usage.CacheRead
-			cacheW += ev.Message.Usage.CacheWrite
-			if ev.Message.Usage.Cost.Total > 0 {
-				reportedCost += ev.Message.Usage.Cost.Total
-				costSeen = true
-			}
-			text.WriteString(extractText(ev.Message.Content))
+		if strings.HasSuffix(e.Name(), ".yaml") {
+			fmt.Println(e.Name())
 		}
 	}
-	// A scanner error (e.g. a token bigger than the buffer) must be surfaced, not
-	// silently swallowed — otherwise a truncated stream reads as a cheap 0.
-	scanErr := sc.Err()
-	waitErr := cmd.Wait()
-	res := routing.RunResult{
-		Output:       text.String(),
-		InputTokens:  inTok + cacheR + cacheW,
-		OutputTokens: outTok,
-		CostUSD:      reportedCost,
-		CostReported: costSeen,
-		LatencyMs:    float64(time.Since(start).Milliseconds()),
-	}
-	switch {
-	case ctx.Err() == context.DeadlineExceeded:
-		res.Err = fmt.Errorf("pi run timed out after %s", piRunTimeout())
-	case scanErr != nil:
-		res.Err = fmt.Errorf("reading pi output: %w", scanErr)
-	case waitErr != nil:
-		res.Err = waitErr
-	}
-	return res
-}
-
-// extractText pulls text out of a pi message `content`, which is either a plain
-// string or an array of blocks ({type,text}).
-func extractText(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s
-	}
-	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(raw, &blocks) == nil {
-		var b strings.Builder
-		for _, bl := range blocks {
-			if bl.Text != "" {
-				b.WriteString(bl.Text)
-			}
-		}
-		return b.String()
-	}
-	return ""
 }

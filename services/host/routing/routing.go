@@ -22,7 +22,7 @@ import (
 	"strings"
 )
 
-//go:embed defaults/models.json defaults/scorecard.json defaults/policy.json defaults/suite
+//go:embed defaults/models.json defaults/scorecard.json defaults/policy.json
 var defaults embed.FS
 
 // Model is one callable model and its economics. Adding a model to the stack is
