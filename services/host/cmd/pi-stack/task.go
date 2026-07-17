@@ -21,7 +21,7 @@ import (
 	"pi-stack/host/config"
 )
 
-const taskUsage = `usage: pi-stack task <new|ls|rm> [args]
+const taskUsage = `usage: pi-stack task <new|ls|rm|gc|harvest> [args]
 
 Run parallel tasks on one repo. Each task is a local clone with its own branch
 and sandbox, so tasks never collide. Commits land in the task's clone on this
@@ -30,9 +30,14 @@ host and can be pushed or fetched back.
   new <name> [--from REF] [-- pi-args]   clone + branch + launch a sandbox
   ls  [--json]                           tasks, their branch, sandbox + git state
   rm  <name> [--force]                   tear down sandbox + clone (guarded)
+  gc  [--days N] [--dry-run] [--no-harvest] [--artifact-days N]
+                                         prune clean tasks older than N days (default 7)
+  harvest <name> [--to DIR]              copy uncommitted docs to a durable dir
 
 Clones live under $XDG_STATE_HOME/pi-stack/tasks/<repo>/co/<name>, outside your
 repo. ` + "`pi-stack task rm`" + ` refuses to drop uncommitted or unpushed work.
+Harvested docs live under $XDG_DATA_HOME/pi-stack/artifacts, so they survive a
+` + "`pi-stack state reset`" + `.
 `
 
 // taskLaunch is the seam `task new` uses to hand a resolved clone to the run
@@ -55,6 +60,10 @@ func runTask(argv []string) {
 		runTaskLs(defaultShellEnv(), argv[1:])
 	case "rm", "remove":
 		runTaskRm(defaultShellEnv(), argv[1:])
+	case "gc":
+		runTaskGc(defaultShellEnv(), argv[1:])
+	case "harvest":
+		runTaskHarvest(defaultShellEnv(), argv[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "pi-stack task: unknown subcommand %q\n\n%s", argv[0], taskUsage)
 		os.Exit(2)
@@ -65,10 +74,24 @@ func runTask(argv []string) {
 // Pure helpers (name / path / key). No filesystem writes, no exec.
 // ---------------------------------------------------------------------------
 
-// maxTaskNameLen caps the sanitized <name> segment so the full sandbox name
-// (pi-stack-t-<8>-<name>[-<profile>]) stays within sbx's bound. An overflow is
-// truncated and tagged with a short hash of the full name so it stays unique.
+// maxTaskNameLen caps the sanitized <name> segment before it is composed into
+// the full sandbox name. An overflow is truncated and tagged with a short hash
+// of the full name so it stays unique. The COMPOSITE name is bounded separately
+// by boundSandboxName against maxSandboxNameLen; this per-segment cap only keeps
+// a single pathological name from dominating the whole budget.
 const maxTaskNameLen = 40
+
+// maxSandboxNameLen is the hard cap on the composed sandbox name
+// (pi-stack-t-<label>-<repokey>-<name>[-<profile>]). 63 is the strictest common
+// limit (RFC1123 label); sbx never enforced a total, so this is the safe
+// conservative bound. boundSandboxName trims to fit: name first, then label,
+// NEVER the repokey (the uniqueness guarantee).
+const maxSandboxNameLen = 63
+
+// maxRepoLabelLen caps the human repo label. The label is a legibility hint, not
+// an identifier (the repokey guarantees uniqueness), so an overflow is a plain
+// truncation with no hash tag.
+const maxRepoLabelLen = 12
 
 // taskRepoKey is the stable per-repo key: the first 8 hex of sha256 of the
 // canonical absolute path of the main worktree. Repo-qualifying the sandbox
@@ -85,6 +108,120 @@ func taskRepoKey(mainroot string) string {
 	return hex.EncodeToString(sum[:])[:8]
 }
 
+// taskRepoLabel is the human-readable repo hint stamped into the sandbox name
+// and the on-disk path so `task ls`, `sbx ls`, and a browse of the state dir are
+// legible without the user having to prefix every task name with the repo. It is
+// the sanitized basename of the repo (the git-common-dir's parent for a normal
+// repo, or the dir itself for a bare repo), capped at maxRepoLabelLen. It is a
+// hint only: two repos that both basename to "api" still differ by their
+// repokey, so the label never has to be unique and overflow is a plain truncate.
+func taskRepoLabel(mainroot string) string {
+	p := mainroot
+	if abs, err := filepath.Abs(mainroot); err == nil {
+		p = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		p = resolved
+	}
+	// mainroot is the git-common-dir. For a normal repo that ends in "/.git", so
+	// the meaningful name is its parent; for a bare repo it is the repo dir itself
+	// (often ending ".git"). Strip a trailing ".git" and a ".git" basename's parent
+	// so both shapes yield the working repo name.
+	base := filepath.Base(p)
+	if base == ".git" {
+		base = filepath.Base(filepath.Dir(p))
+	}
+	base = strings.TrimSuffix(base, ".git")
+	var b strings.Builder
+	for _, r := range base {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		out = "repo"
+	}
+	if len(out) > maxRepoLabelLen {
+		out = strings.TrimRight(out[:maxRepoLabelLen], "-")
+		if out == "" {
+			out = "repo"
+		}
+	}
+	return out
+}
+
+// taskRepoDir is the per-repo state dir segment: "<label>-<repokey>". Browsing
+// $STATE/pi-stack/tasks/ is then readable (e.g. "pi-stack-a1b2c3d4") while the
+// repokey still guarantees two same-named repos never collide.
+func taskRepoDir(mainroot string) string {
+	return taskRepoLabel(mainroot) + "-" + taskRepoKey(mainroot)
+}
+
+// taskLayout names a per-repo state dir and whether it is the legacy
+// (pre-label) shape. legacy drives which sandbox-name formula a task's metadata
+// hardens to, so rm/gc/ls target the sandbox the task ACTUALLY owns.
+type taskLayout struct {
+	dir    string
+	legacy bool
+}
+
+// hasTaskMetaDir reports whether dir (under the state root) is a populated repo
+// state dir, i.e. it has a meta/ subdir. Checking meta/ (not just the dir) means
+// an unrelated sibling dir — e.g. a locks/ tree — never reads as a layout.
+func hasTaskMetaDir(dir string) bool {
+	fi, err := os.Stat(filepath.Join(taskStateRoot(), dir, "meta"))
+	return err == nil && fi.IsDir()
+}
+
+// existingTaskLayouts returns every populated state layout for a repo: the new
+// "<label>-<repokey>" dir and/or the legacy bare "<repokey>" dir. ls/gc iterate
+// this UNION so a legacy task never becomes invisible once a new-layout task is
+// created (the pre-label-migration bug).
+func existingTaskLayouts(mainroot string) []taskLayout {
+	newer := taskRepoDir(mainroot)
+	legacy := taskRepoKey(mainroot)
+	var out []taskLayout
+	if hasTaskMetaDir(newer) {
+		out = append(out, taskLayout{newer, false})
+	}
+	if legacy != newer && hasTaskMetaDir(legacy) {
+		out = append(out, taskLayout{legacy, true})
+	}
+	return out
+}
+
+// findTaskLayout locates the layout holding task `sane` for the current repo,
+// preferring the new labeled layout. found=false means no such task. A task that
+// exists in BOTH layouts is ambiguous (two distinct sandboxes) and callers must
+// refuse rather than guess which one to act on.
+func findTaskLayout(mainroot, sane string) (lay taskLayout, found, ambiguous bool) {
+	newer := taskRepoDir(mainroot)
+	legacy := taskRepoKey(mainroot)
+	_, newMeta := taskPaths(newer, sane)
+	_, legMeta := taskPaths(legacy, sane)
+	newOK := fileExistsTask(newMeta)
+	legOK := legacy != newer && fileExistsTask(legMeta)
+	switch {
+	case newOK && legOK:
+		return taskLayout{}, false, true
+	case newOK:
+		return taskLayout{newer, false}, true, false
+	case legOK:
+		return taskLayout{legacy, true}, true, false
+	default:
+		return taskLayout{newer, false}, false, false
+	}
+}
+
+func fileExistsTask(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
 // taskStateRoot is the base dir for all task state:
 // $XDG_STATE_HOME/pi-stack/tasks (default ~/.local/state/pi-stack/tasks).
 func taskStateRoot() string {
@@ -98,10 +235,11 @@ func taskStateRoot() string {
 	return filepath.Join(home, ".local", "state", "pi-stack", "tasks")
 }
 
-// taskPaths resolves the checkout dir and metadata file for a task. name is
-// expected to be already sanitized by the caller.
-func taskPaths(repokey, name string) (co, meta string) {
-	base := filepath.Join(taskStateRoot(), repokey)
+// taskPaths resolves the checkout dir and metadata file for a task. repoDir is
+// the per-repo state dir segment (new "<label>-<repokey>" or legacy "<repokey>")
+// and name is expected to be already sanitized by the caller.
+func taskPaths(repoDir, name string) (co, meta string) {
+	base := filepath.Join(taskStateRoot(), repoDir)
 	co = filepath.Join(base, "co", name)
 	meta = filepath.Join(base, "meta", name+".json")
 	return co, meta
@@ -123,10 +261,13 @@ func reserveTaskCheckout(co string) (owned bool, err error) {
 	return true, nil
 }
 
-// taskLockPath is the per-task advisory lock file:
-// $STATE/pi-stack/tasks/<repokey>/locks/<sanitizedname>.lock. It sits OUTSIDE
-// the co/ and meta/ trees `task rm` deletes, so the lock file itself is never a
-// removed artifact (it is tiny and harmless to leave behind).
+// taskLockPath is the per-task advisory lock file, keyed by the CANONICAL repokey
+// (NOT the layout dir): $STATE/pi-stack/tasks/<repokey>/locks/<name>.lock. Keying
+// by repokey makes a legacy task and a new-layout task of the same name mutually
+// exclusive (a `task new` cannot race a legacy `task rm`). The dir has no meta/
+// subdir, so hasTaskMetaDir never mistakes it for a legacy layout. It sits
+// OUTSIDE the co/ and meta/ trees `task rm` deletes, so it is never a removed
+// artifact (tiny and harmless to leave behind).
 func taskLockPath(repokey, name string) string {
 	return filepath.Join(taskStateRoot(), repokey, "locks", sanitizeTaskName(name)+".lock")
 }
@@ -190,14 +331,119 @@ func sanitizeTaskName(name string) string {
 }
 
 // taskSandboxName is the collision-proof sandbox name for a task:
-// "pi-stack-t-" + repokey + "-" + sanitize(name) [+ "-" + profile]. The profile
-// suffix is added only for a NAMED (non-default) profile, mirroring run.go.
-func taskSandboxName(repokey, name, profile string) string {
+// "pi-stack-t-" + label + "-" + repokey + "-" + sanitize(name) [+ "-" + profile].
+// The label is a human hint; the repokey is the uniqueness guarantee. The
+// profile suffix is added only for a NAMED (non-default) profile, mirroring
+// run.go. The composed name is bounded by boundSandboxName so it always stays
+// within maxSandboxNameLen.
+func taskSandboxName(label, repokey, name, profile string) string {
+	prof := ""
+	if profile != "" && profile != config.DefaultProfile {
+		prof = sanitizeProfileName(profile)
+	}
+	return boundSandboxName(label, repokey, sanitizeTaskName(name), prof)
+}
+
+// legacyTaskSandboxName is the PRE-LABEL sandbox-name formula
+// ("pi-stack-t-<repokey>-<name>[-<profile>]"). Tasks created before the repo
+// label was introduced live in the bare-<repokey> state dir and own a sandbox
+// with THIS name, so rm/gc/ls must derive it (not the new labeled name) or they
+// would delete a clone while leaving its real sandbox running.
+func legacyTaskSandboxName(repokey, name, profile string) string {
 	n := "pi-stack-t-" + repokey + "-" + sanitizeTaskName(name)
 	if profile != "" && profile != config.DefaultProfile {
 		n += "-" + sanitizeProfileName(profile)
 	}
 	return n
+}
+
+// boundSandboxName composes "pi-stack-t-<label>-<repokey>-<name>[-<prof>]" and,
+// if it exceeds maxSandboxNameLen, trims to fit in priority order: the name
+// first (hash-tagged so it stays unique), then the label (a cosmetic hint),
+// NEVER the repokey (correctness). prof is already sanitized and may be empty.
+// name and label are already sanitized by the caller.
+func boundSandboxName(label, repokey, name, prof string) string {
+	compose := func(l, n, p string) string {
+		s := "pi-stack-t-" + l + "-" + repokey + "-" + n
+		if p != "" {
+			s += "-" + p
+		}
+		return s
+	}
+	if len(compose(label, name, prof)) <= maxSandboxNameLen {
+		return compose(label, name, prof)
+	}
+	// 1. Trim the name (hash-tag it so a truncated name is still unique), keeping
+	// the full label + profile, down to a floor so a huge label can't erase the name.
+	for n := len(name); n >= nameTrimFloor; n-- {
+		cand := hashTagTrim(name, n)
+		if len(compose(label, cand, prof)) <= maxSandboxNameLen {
+			return compose(label, cand, prof)
+		}
+	}
+	// 2. Name is at its floor; now trim the label (a plain cosmetic truncation).
+	nameFloor := hashTagTrim(name, nameTrimFloor)
+	for l := len(label); l >= 1; l-- {
+		cand := strings.TrimRight(label[:l], "-")
+		if cand == "" {
+			continue
+		}
+		if len(compose(cand, nameFloor, prof)) <= maxSandboxNameLen {
+			return compose(cand, nameFloor, prof)
+		}
+	}
+	// 3. Drop the label entirely (repokey still guarantees uniqueness), then, if an
+	// absurdly long profile STILL overflows, hash-tag-trim the profile too. The
+	// repokey is never touched, so distinct tasks never collide.
+	if len(compose("repo", nameFloor, prof)) <= maxSandboxNameLen {
+		return compose("repo", nameFloor, prof)
+	}
+	for p := len(prof); p >= 0; p-- {
+		var cand string
+		if p > 0 {
+			cand = hashTagTrim(prof, max(p, nameTrimFloor))
+			if len(cand) > p && p < nameTrimFloor {
+				continue
+			}
+		}
+		if len(compose("repo", nameFloor, cand)) <= maxSandboxNameLen {
+			return compose("repo", nameFloor, cand)
+		}
+	}
+	// Unreachable given the fixed-width prefix + repokey fit within 63, but never
+	// return an over-bound name: hard-truncate as the absolute last resort.
+	s := compose("repo", nameFloor, "")
+	if len(s) > maxSandboxNameLen {
+		s = s[:maxSandboxNameLen]
+	}
+	return s
+}
+
+// nameTrimFloor is the minimum trimmed-name length: hashTagTrim needs the 10-hex
+// tag + dash (11) plus at least 1 prefix rune.
+const nameTrimFloor = 12
+
+// hashTagTrim truncates s to n runes, appending a 10-hex tag of the ORIGINAL s
+// so two different names that truncate to the same prefix stay distinct (a
+// 40-bit tag makes a birthday collision astronomically unlikely across the
+// handful of tasks a repo ever has). n must be >= nameTrimFloor. A string
+// already <= n is returned unchanged.
+func hashTagTrim(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	if n < nameTrimFloor {
+		n = nameTrimFloor
+	}
+	sum := sha256.Sum256([]byte(s))
+	return s[:n-11] + "-" + hex.EncodeToString(sum[:])[:10]
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +460,10 @@ type taskMeta struct {
 	Origin   string `json:"origin"`
 	Profile  string `json:"profile"`
 	Created  string `json:"created"`
+	// Repo is the human repo label. Display/path only and re-derived from mainroot
+	// in hardenTaskMeta (never trusted from disk), so an old meta without it just
+	// works and a tampered value can never steer a path or argv.
+	Repo string `json:"repo,omitempty"`
 }
 
 func writeTaskMeta(path string, m taskMeta) error {
@@ -257,7 +507,7 @@ func stripURLUserinfo(raw string) string {
 // at a non-existent sandbox. The Profile field is REQUIRED: falling back to the
 // current profile would mis-target the sandbox (rm could tear down a clone while
 // leaving the real sandbox live), so a meta without it is treated as invalid.
-func hardenTaskMeta(m taskMeta, mainroot, repokey, fileBase string) (taskMeta, error) {
+func hardenTaskMeta(m taskMeta, mainroot, repokey string, legacy bool, fileBase string) (taskMeta, error) {
 	sane := sanitizeTaskName(m.Name)
 	if sane != fileBase {
 		return m, fmt.Errorf("metadata name %q does not match its file %q.json", m.Name, fileBase)
@@ -265,9 +515,19 @@ func hardenTaskMeta(m taskMeta, mainroot, repokey, fileBase string) (taskMeta, e
 	if strings.TrimSpace(m.Profile) == "" {
 		return m, fmt.Errorf("metadata for %q has no profile; cannot determine which sandbox it owns", m.Name)
 	}
+	label := taskRepoLabel(mainroot)
 	m.Mainroot = mainroot
+	m.Repo = label
 	m.Branch = "pi-stack/" + sane
-	m.Sandbox = taskSandboxName(repokey, m.Name, sanitizeProfileName(m.Profile))
+	// The sandbox name is derived from the state LAYOUT (cwd-derived, trusted),
+	// NOT the stored name: a legacy task in the bare-<repokey> dir owns the
+	// pre-label sandbox name; a new-layout task owns the labeled name. Deriving the
+	// wrong one would let rm/gc delete a clone while its real sandbox lives on.
+	if legacy {
+		m.Sandbox = legacyTaskSandboxName(repokey, m.Name, sanitizeProfileName(m.Profile))
+	} else {
+		m.Sandbox = taskSandboxName(label, repokey, m.Name, sanitizeProfileName(m.Profile))
+	}
 	return m, nil
 }
 
@@ -669,9 +929,11 @@ func runTaskNew(env shellEnv, argv []string) {
 	// The active profile namespaces the sandbox name (so contexts never collide).
 	_, profile, _ := loadResolvedConfig()
 	repokey := taskRepoKey(mainroot)
+	label := taskRepoLabel(mainroot)
+	repoDir := taskRepoDir(mainroot) // `new` always writes the new <label>-<key> layout
 	sane := sanitizeTaskName(name)
-	co, metaPath := taskPaths(repokey, sane)
-	sbxname := taskSandboxName(repokey, name, profile)
+	co, metaPath := taskPaths(repoDir, sane)
+	sbxname := taskSandboxName(label, repokey, name, profile)
 	branch := "pi-stack/" + sane
 
 	// Serialize the whole reserve -> clone -> checkout -> write-meta -> launch ->
@@ -682,6 +944,19 @@ func runTaskNew(env shellEnv, argv []string) {
 	// and we exit only after withTaskLock has released the lock.
 	exitCode := 0
 	lockErr := withTaskLock(repokey, sane, func() error {
+		// Refuse if a task of this name already exists in EITHER layout (a legacy
+		// bare-<key> task or a leftover new-layout one), so `new` never shadows a
+		// legacy task or races its removal. The new-layout dir collision is also
+		// caught atomically by reserveTaskCheckout below; this catches the legacy case.
+		if lay, found, _ := findTaskLayout(mainroot, sane); found {
+			where := "this repo"
+			if lay.legacy {
+				where = "the legacy task layout for this repo"
+			}
+			fmt.Fprintf(os.Stderr, "pi-stack task new: task %q already exists in %s; `pi-stack run` its clone to reattach, or `pi-stack task rm %s` first\n", name, where, name)
+			exitCode = 1
+			return nil
+		}
 		// Reserve co atomically. os.Mkdir fails with fs.ErrExist when the dir already
 		// exists, so there is no TOCTOU window between "check" and "clone": whoever wins
 		// the mkdir owns the directory, and a losing concurrent `task new` for the same
@@ -735,6 +1010,7 @@ func runTaskNew(env shellEnv, argv []string) {
 			Origin:   origin,
 			Profile:  profile,
 			Created:  time.Now().UTC().Format(time.RFC3339),
+			Repo:     label,
 		}
 		if err := writeTaskMeta(metaPath, meta); err != nil {
 			rollback()
@@ -949,38 +1225,45 @@ func runTaskLs(env shellEnv, argv []string) {
 		os.Exit(1)
 	}
 	repokey := taskRepoKey(mainroot)
-	metaDir := filepath.Join(taskStateRoot(), repokey, "meta")
-	entries, _ := os.ReadDir(metaDir)
 
 	var rows []taskListRow
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
+	gcEligible := 0
+	for _, lay := range existingTaskLayouts(mainroot) {
+		metaDir := filepath.Join(taskStateRoot(), lay.dir, "meta")
+		entries, _ := os.ReadDir(metaDir)
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			m, err := readTaskMeta(filepath.Join(metaDir, e.Name()))
+			if err != nil {
+				continue
+			}
+			// Never trust stored branch/sandbox/mainroot for building refs or argv;
+			// re-derive them from the validated name + trusted layout. Skip an invalid meta.
+			fileBase := strings.TrimSuffix(e.Name(), ".json")
+			m, err = hardenTaskMeta(m, mainroot, repokey, lay.legacy, fileBase)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "pi-stack task ls: skipping %s: %v\n", e.Name(), err)
+				continue
+			}
+			co, _ := taskPaths(lay.dir, sanitizeTaskName(m.Name))
+			st := gatherTaskState(env, m, co)
+			if st.sandbox != sbxRunning && !st.dirty && !st.unknown && st.unrec == 0 &&
+				taskAge(m, co) >= taskGCDefaultDays*24*time.Hour {
+				gcEligible++
+			}
+			rows = append(rows, taskListRow{
+				Name:     m.Name,
+				Branch:   m.Branch,
+				Sandbox:  m.Sandbox,
+				Status:   taskSandboxStatus(env, m.Sandbox),
+				Dirty:    st.dirty,
+				Unpushed: st.unpushed,
+				Unknown:  st.unknown,
+				Clone:    co,
+			})
 		}
-		m, err := readTaskMeta(filepath.Join(metaDir, e.Name()))
-		if err != nil {
-			continue
-		}
-		// Never trust stored branch/sandbox/mainroot for building refs or argv;
-		// re-derive them from the validated name. Skip a meta that fails validation.
-		fileBase := strings.TrimSuffix(e.Name(), ".json")
-		m, err = hardenTaskMeta(m, mainroot, repokey, fileBase)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "pi-stack task ls: skipping %s: %v\n", e.Name(), err)
-			continue
-		}
-		co, _ := taskPaths(repokey, sanitizeTaskName(m.Name))
-		st := gatherTaskState(env, m, co)
-		rows = append(rows, taskListRow{
-			Name:     m.Name,
-			Branch:   m.Branch,
-			Sandbox:  m.Sandbox,
-			Status:   taskSandboxStatus(env, m.Sandbox),
-			Dirty:    st.dirty,
-			Unpushed: st.unpushed,
-			Unknown:  st.unknown,
-			Clone:    co,
-		})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
 
@@ -998,6 +1281,7 @@ func runTaskLs(env shellEnv, argv []string) {
 		fmt.Println("Next: `pi-stack task new <name>` to start one.")
 		return
 	}
+	fmt.Printf("Tasks for %s (%s):\n", taskRepoLabel(mainroot), mainroot)
 	fmt.Printf("%-20s %-24s %-10s %s\n", "NAME", "BRANCH", "SANDBOX", "GIT")
 	for _, r := range rows {
 		status := r.Status
@@ -1021,6 +1305,10 @@ func runTaskLs(env shellEnv, argv []string) {
 			git = "unknown (probe failed)"
 		}
 		fmt.Printf("%-20s %-24s %-10s %s\n", r.Name, r.Branch, status, git)
+	}
+	if gcEligible > 0 {
+		fmt.Printf("%s clean and older than %dd; `pi-stack task gc` to prune.\n",
+			plural(gcEligible, "task"), taskGCDefaultDays)
 	}
 	fmt.Println("Next: `pi-stack task rm <name>` to tear one down (guarded).")
 }
@@ -1048,7 +1336,16 @@ func runTaskRm(env shellEnv, argv []string) {
 	}
 	repokey := taskRepoKey(mainroot)
 	sane := sanitizeTaskName(name)
-	co, metaPath := taskPaths(repokey, sane)
+	lay, found, ambiguous := findTaskLayout(mainroot, sane)
+	if ambiguous {
+		fmt.Fprintf(os.Stderr, "pi-stack task rm: %q exists in BOTH the new and legacy task layout for this repo; refusing to guess.\n", name)
+		fmt.Fprintf(os.Stderr, "Inspect %s and %s under the tasks state dir and remove one by hand.\n",
+			taskRepoDir(mainroot), taskRepoKey(mainroot))
+		os.Exit(1)
+	}
+	_ = found // a not-found task falls through to the readTaskMeta "no such task" path
+	repoDir := lay.dir
+	co, metaPath := taskPaths(repoDir, sane)
 
 	// Serialize read-meta/harden -> gather -> guard -> snapshot -> sbx rm ->
 	// delete-artifacts for this (repokey, sane) behind the per-task lock, so a
@@ -1067,7 +1364,7 @@ func runTaskRm(env shellEnv, argv []string) {
 		// Never trust stored branch/sandbox/mainroot for building refs or the
 		// `sbx rm` argv; re-derive them from the validated name. A meta that fails
 		// validation is tampered or corrupt, so refuse rather than act on it.
-		meta, err = hardenTaskMeta(meta, mainroot, repokey, sane)
+		meta, err = hardenTaskMeta(meta, mainroot, repokey, lay.legacy, sane)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "pi-stack task rm: refusing to remove %q: %v\n", name, err)
 			fmt.Fprintln(os.Stderr, "The task metadata looks tampered or corrupt; inspect it under the tasks state dir before retrying.")
@@ -1097,6 +1394,18 @@ func runTaskRm(env shellEnv, argv []string) {
 		recovered := "refs/pi-stack/recovered/" + sane
 		if rc := executeTaskTeardown(env, os.Stderr, meta, co, name, recovered, force, st); rc != 0 {
 			exitCode = rc
+			return nil
+		}
+		// b2. ALWAYS-ON harvest, AFTER the sandbox is gone (so no live session can
+		// write into the clone mid-enumeration) but BEFORE the checkout is deleted.
+		// FAIL-CLOSED: if enumeration or any copy fails, KEEP the clone + metadata and
+		// abort rather than delete the only copy of un-git'd docs. This mirrors the ref
+		// snapshot (committed work); harvest rescues the uncommitted file half, which
+		// --force would otherwise destroy.
+		if _, herr := harvestArtifacts(env, os.Stderr, meta, repoDir, co, name); herr != nil {
+			fmt.Fprintf(os.Stderr, "pi-stack task rm: sandbox %s was removed, but the uncommitted docs could not be safely harvested: %v\n", meta.Sandbox, herr)
+			fmt.Fprintf(os.Stderr, "Leaving the clone intact at %s so nothing is lost. Copy the docs out, then re-run `pi-stack task rm %s` (the sandbox is already gone).\n", co, name)
+			exitCode = 1
 			return nil
 		}
 		// c. remove checkout + metadata. The main repo's branches are never touched.
@@ -1140,6 +1449,542 @@ func removeTaskArtifacts(co, metaPath string, removeAll func(string) error, remo
 	return nil
 }
 
+// ---------------------------------------------------------------------------
+// Artifacts (harvest): rescue uncommitted docs so `rm --force`/`gc` never
+// silently destroy un-git'd work. Destination is XDG_DATA_HOME, NOT the task
+// STATE dir and NOT the knowledge bundle: harvested docs are user work product
+// that must outlive `state reset`/`uninstall`, and shared-truth promotion into
+// OKF stays a deliberate `enrich` act.
+// ---------------------------------------------------------------------------
+
+// taskArtifactRoot is the durable base dir for harvested artifacts:
+// $XDG_DATA_HOME/pi-stack/artifacts (default ~/.local/share/pi-stack/artifacts).
+// Deliberately under DATA_HOME, not the STATE tree the clones live in, so
+// `state reset`/`uninstall` never reach it.
+func taskArtifactRoot() string {
+	if x := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); x != "" {
+		return filepath.Join(x, "pi-stack", "artifacts")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	return filepath.Join(home, ".local", "share", "pi-stack", "artifacts")
+}
+
+// artifactExts is the default set of doc file extensions harvest rescues.
+// Overridable via PI_STACK_TASK_ARTIFACT_EXTS (comma-separated, with or without
+// the leading dot).
+var artifactExts = []string{".md", ".markdown", ".prd", ".txt", ".rst", ".adoc"}
+
+// artifactDirs is the default set of path prefixes whose files are always
+// rescued regardless of extension (a task's scratch docs live here).
+var artifactDirs = []string{"docs/", "notes/", ".pi-stack/"}
+
+// artifactSkipSegments are path segments that are never harvested even when they
+// contain matching files (dependency + build trees produce huge ignored dirs).
+var artifactSkipSegments = map[string]bool{
+	"node_modules": true, ".git": true, "vendor": true,
+	"dist": true, "build": true, "target": true, ".venv": true,
+}
+
+// isArtifactPath decides whether a repo-relative path is a doc artifact worth
+// rescuing: not inside a skip segment, and either under a known doc dir or
+// carrying a doc extension.
+func isArtifactPath(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	for _, seg := range strings.Split(rel, "/") {
+		if artifactSkipSegments[seg] {
+			return false
+		}
+	}
+	for _, d := range artifactDirs {
+		if strings.HasPrefix(rel, d) {
+			return true
+		}
+	}
+	ext := strings.ToLower(filepath.Ext(rel))
+	for _, e := range artifactExts {
+		if ext == e {
+			return true
+		}
+	}
+	return false
+}
+
+func init() {
+	if v := strings.TrimSpace(os.Getenv("PI_STACK_TASK_ARTIFACT_EXTS")); v != "" {
+		var exts []string
+		for _, e := range strings.Split(v, ",") {
+			e = strings.TrimSpace(e)
+			if e == "" {
+				continue
+			}
+			if !strings.HasPrefix(e, ".") {
+				e = "." + e
+			}
+			exts = append(exts, strings.ToLower(e))
+		}
+		if len(exts) > 0 {
+			artifactExts = exts
+		}
+	}
+}
+
+type harvestFile struct {
+	Path   string `json:"path"`   // repo-relative
+	Status string `json:"status"` // git porcelain code: "??" untracked, "!!" ignored
+}
+
+type harvestManifest struct {
+	Task        string        `json:"task"`
+	Repo        string        `json:"repo"`
+	Mainroot    string        `json:"mainroot"`
+	Branch      string        `json:"branch"`
+	Base        string        `json:"base"`
+	Profile     string        `json:"profile"`
+	Origin      string        `json:"origin"`
+	HarvestedAt string        `json:"harvested_at"`
+	Files       []harvestFile `json:"files"`
+}
+
+// listHarvestCandidates returns the untracked + ignored files in co that pass
+// isArtifactPath, via `git status --porcelain=v1 -z` (NUL-delimited). The -z
+// form is the ONLY reliable way to read pathnames: default porcelain C-quotes
+// paths containing spaces, tabs, newlines, quotes, or non-ASCII, and
+// core.quotePath=false does NOT disable all of that. NUL records carry raw
+// bytes, so nothing is mis-parsed and silently dropped (which, on the rm path,
+// would delete an un-git'd doc the filter never saw). A git failure returns the
+// error so the caller fails CLOSED (rm/gc leave the checkout intact).
+func listHarvestCandidates(env shellEnv, co string) ([]harvestFile, error) {
+	seen := map[string]bool{}
+	var files []harvestFile
+	add := func(rel, status string) {
+		if seen[rel] {
+			return
+		}
+		seen[rel] = true
+		files = append(files, harvestFile{Path: rel, Status: status})
+	}
+
+	// 1. Untracked + ignored docs.
+	out, err := env.run("git", "-C", co,
+		"status", "--porcelain=v1", "-z", "--ignored", "--untracked-files=all")
+	if err != nil {
+		return nil, fmt.Errorf("%s", strings.TrimSpace(out))
+	}
+	for _, rec := range strings.Split(out, "\x00") {
+		if len(rec) < 4 {
+			continue
+		}
+		code := rec[:2]
+		if code != "??" && code != "!!" {
+			continue
+		}
+		rel := rec[3:]
+		if !safeRelPath(rel) {
+			continue // never let a ".."/absolute path escape the dest tree
+		}
+		// git reports an untracked/ignored DIR as a single entry with a trailing
+		// slash; expand it to the matching files beneath it.
+		if strings.HasSuffix(rel, "/") {
+			sub, derr := expandHarvestDir(co, rel, code)
+			if derr != nil {
+				return nil, derr // fail CLOSED: an unreadable ignored dir must not read as "nothing"
+			}
+			for _, f := range sub {
+				add(f.Path, f.Status)
+			}
+			continue
+		}
+		if isArtifactPath(rel) {
+			add(rel, code)
+		}
+	}
+
+	// 2. TRACKED docs modified vs HEAD (staged or unstaged). The ref snapshot only
+	// captures committed bytes, so a committed-then-edited doc dropped under
+	// --force would lose its working-tree changes. `git diff --name-only -z HEAD`
+	// lists changed tracked paths (renames report the new name); we keep only ones
+	// that still exist on disk (skip deletions) and pass the doc filter.
+	dout, derr := env.run("git", "-C", co, "diff", "--name-only", "-z", "HEAD")
+	if derr != nil {
+		return nil, fmt.Errorf("%s", strings.TrimSpace(dout))
+	}
+	for _, rel := range strings.Split(dout, "\x00") {
+		if rel == "" || !safeRelPath(rel) || !isArtifactPath(rel) {
+			continue
+		}
+		if fi, err := os.Lstat(filepath.Join(co, filepath.FromSlash(rel))); err == nil && fi.Mode().IsRegular() {
+			add(rel, "M")
+		}
+	}
+	return files, nil
+}
+
+// safeRelPath reports whether a git-reported path is a plain repo-relative path
+// that cannot escape a destination tree: not absolute, no ".." segment. Defense
+// in depth — git never emits such paths, but harvest writes them under a dest
+// dir, so a malformed one must never traverse out.
+func safeRelPath(rel string) bool {
+	if rel == "" || filepath.IsAbs(rel) {
+		return false
+	}
+	for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+		if seg == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// expandHarvestDir walks a reported untracked/ignored directory (rel ends in
+// "/") and returns its files that pass isArtifactPath. A skip segment anywhere in
+// the dir prunes the walk cheaply. It PROPAGATES a real walk/Rel error (returns
+// it) so the caller fails closed: an unreadable ignored dir must never silently
+// read as "no docs here" and green-light teardown.
+func expandHarvestDir(co, rel, code string) ([]harvestFile, error) {
+	for _, seg := range strings.Split(strings.Trim(filepath.ToSlash(rel), "/"), "/") {
+		if artifactSkipSegments[seg] {
+			return nil, nil
+		}
+	}
+	var files []harvestFile
+	root := filepath.Join(co, filepath.FromSlash(rel))
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err // propagate: a permission/IO error must fail the harvest
+		}
+		if d.IsDir() {
+			if artifactSkipSegments[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		r, err := filepath.Rel(co, p)
+		if err != nil {
+			return err
+		}
+		r = filepath.ToSlash(r)
+		if isArtifactPath(r) {
+			files = append(files, harvestFile{Path: r, Status: code})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan ignored dir %s: %w", rel, err)
+	}
+	return files, nil
+}
+
+// harvestArtifacts copies the matching untracked/ignored/modified docs from co
+// into a fresh timestamped dir under taskArtifactRoot()/<repoDir>/<name>/<ts>/,
+// writes a manifest.json beside them, and returns the destination dir ("" when
+// nothing matched). It is idempotent: each call writes a NEW timestamped dir, so
+// re-running never clobbers a prior capture. It returns a NON-NIL error when
+// enumeration, any copy, or the manifest write fails, so rm/gc callers fail
+// CLOSED (keep the clone) rather than delete the only copy of un-git'd docs.
+func harvestArtifacts(env shellEnv, w io.Writer, meta taskMeta, repoDir, co, name string) (string, error) {
+	files, err := listHarvestCandidates(env, co)
+	if err != nil {
+		return "", err
+	}
+	if len(files) == 0 {
+		return "", nil
+	}
+	// repoDir is already path-safe (label+repokey); name is raw user input, so it
+	// is sanitized. pruneArtifacts walks the same taskArtifactRoot()/<repoDir> tree.
+	parent := filepath.Join(taskArtifactRoot(), repoDir, sanitizeTaskName(name))
+	dest, err := freshSnapshotDir(parent)
+	if err != nil {
+		return "", fmt.Errorf("create artifacts dir: %w", err)
+	}
+	var copied []harvestFile
+	var copyErrs []string
+	for _, f := range files {
+		src := filepath.Join(co, filepath.FromSlash(f.Path))
+		dst := filepath.Join(dest, filepath.FromSlash(f.Path))
+		ok, err := copyFilePreserve(src, dst)
+		if err != nil {
+			copyErrs = append(copyErrs, fmt.Sprintf("%s: %v", f.Path, err))
+			continue
+		}
+		if ok {
+			copied = append(copied, f) // only count files actually written
+		}
+	}
+	man := harvestManifest{
+		Task: name, Repo: meta.Repo, Mainroot: meta.Mainroot, Branch: meta.Branch,
+		Base: meta.Base, Profile: meta.Profile, Origin: stripURLUserinfo(meta.Origin),
+		HarvestedAt: time.Now().UTC().Format(time.RFC3339), Files: copied,
+	}
+	if b, err := json.MarshalIndent(man, "", "  "); err == nil {
+		if werr := os.WriteFile(filepath.Join(dest, "manifest.json"), append(b, '\n'), 0o600); werr != nil {
+			// A manifest we could not write means the capture is not trustworthy;
+			// surface it as a harvest failure so the caller fails closed.
+			copyErrs = append(copyErrs, fmt.Sprintf("manifest: %v", werr))
+		}
+	}
+	if len(copyErrs) > 0 {
+		return dest, fmt.Errorf("some artifacts could not be copied: %s", strings.Join(copyErrs, "; "))
+	}
+	if len(copied) > 0 {
+		fmt.Fprintf(w, "pi-stack: harvested %s to %s\n", plural(len(copied), "doc"), dest)
+	}
+	return dest, nil
+}
+
+// freshSnapshotDir creates a NEW timestamped snapshot dir under parent, never
+// reusing an existing one (the fresh-capture guarantee). The base timestamp has
+// 1s precision, so it retries with a -<n> suffix on collision using O_EXCL-style
+// Mkdir (fails on an existing dir), guaranteeing two harvests in the same second
+// get distinct dirs.
+func freshSnapshotDir(parent string) (string, error) {
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return "", err
+	}
+	base := time.Now().UTC().Format("20060102T150405Z")
+	for i := 0; i < 1000; i++ {
+		name := base
+		if i > 0 {
+			name = fmt.Sprintf("%s-%d", base, i)
+		}
+		dest := filepath.Join(parent, name)
+		err := os.Mkdir(dest, 0o700)
+		if err == nil {
+			return dest, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("could not allocate a fresh snapshot dir under %s", parent)
+}
+
+// copyFilePreserve copies src to dst (creating parent dirs), preserving the file
+// mode. It returns copied=false (no error) for a non-regular source (symlink or
+// special) so the caller does not record it as harvested when nothing was
+// written. A real IO error is returned so the caller can fail closed.
+func copyFilePreserve(src, dst string) (copied bool, err error) {
+	fi, err := os.Lstat(src)
+	if err != nil {
+		return false, err
+	}
+	if !fi.Mode().IsRegular() {
+		return false, nil // skip symlinks/specials; not a doc to rescue
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return false, err
+	}
+	// Guard against writing THROUGH a symlink or ONTO the source. A --to dir can
+	// contain a symlink (e.g. docs -> <checkout>/docs) that would alias dst back to
+	// the source; opening it O_TRUNC would empty the original. Lstat dst (following
+	// only intermediate components): if it is the SAME file as src, refuse; if the
+	// final component is itself a symlink, remove the LINK (not its target) so the
+	// create below writes a real file, never through the link.
+	if dfi, derr := os.Lstat(dst); derr == nil {
+		if os.SameFile(fi, dfi) {
+			return false, fmt.Errorf("destination %s aliases the source file; refusing to overwrite it", dst)
+		}
+		if dfi.Mode()&os.ModeSymlink != 0 {
+			if rerr := os.Remove(dst); rerr != nil {
+				return false, rerr
+			}
+		}
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return false, err
+	}
+	defer in.Close()
+	// O_EXCL after the guard above: never follow/truncate an existing path; a
+	// leftover regular file from a prior harvest to the same --to is replaced by
+	// removing it first.
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fi.Mode().Perm())
+	if errors.Is(err, fs.ErrExist) {
+		if rerr := os.Remove(dst); rerr != nil {
+			return false, rerr
+		}
+		out, err = os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fi.Mode().Perm())
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return false, err
+	}
+	return true, out.Close()
+}
+
+// runTaskHarvest is `task harvest <name> [--to DIR]`: the deliberate, re-runnable
+// capture. It reads + hardens the meta like rm/ls, then harvests. No sandbox or
+// guard interaction — it only ever COPIES from the host clone, so it is safe to
+// run mid-task, repeatedly.
+func runTaskHarvest(env shellEnv, argv []string) {
+	if wantsHelp(argv) {
+		fmt.Print(taskUsage)
+		return
+	}
+	name, to, err := parseTaskHarvestArgs(argv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack task harvest: %v\n\n%s", err, taskUsage)
+		os.Exit(2)
+	}
+	cwd, _ := os.Getwd()
+	mainroot, err := resolveMainroot(env, cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack task harvest: not a git repository: %v\n", err)
+		os.Exit(1)
+	}
+	repokey := taskRepoKey(mainroot)
+	sane := sanitizeTaskName(name)
+	lay, _, ambiguous := findTaskLayout(mainroot, sane)
+	if ambiguous {
+		fmt.Fprintf(os.Stderr, "pi-stack task harvest: %q exists in both the new and legacy layout; refusing to guess.\n", name)
+		os.Exit(1)
+	}
+	repoDir := lay.dir
+	co, metaPath := taskPaths(repoDir, sane)
+
+	// Under the per-task lock so a concurrent rm/new cannot delete or recreate the
+	// checkout mid-copy (a partial or cross-generation capture).
+	exitCode := 0
+	lockErr := withTaskLock(repokey, sane, func() error {
+		meta, err := readTaskMeta(metaPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "pi-stack task harvest: no such task %q for this repo\n", name)
+			exitCode = 1
+			return nil
+		}
+		meta, err = hardenTaskMeta(meta, mainroot, repokey, lay.legacy, sane)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "pi-stack task harvest: refusing %q: %v\n", name, err)
+			exitCode = 1
+			return nil
+		}
+		if to != "" {
+			exitCode = harvestToDir(env, co, to, name)
+			return nil
+		}
+		dest, herr := harvestArtifacts(env, os.Stdout, meta, repoDir, co, name)
+		if herr != nil {
+			fmt.Fprintf(os.Stderr, "pi-stack task harvest: %v\n", herr)
+			exitCode = 1
+			return nil
+		}
+		if dest == "" {
+			fmt.Println("No uncommitted doc artifacts to harvest.")
+		}
+		return nil
+	})
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack task harvest: %v\n", lockErr)
+		os.Exit(1)
+	}
+	if exitCode != 0 {
+		os.Exit(exitCode)
+	}
+}
+
+// harvestToDir copies the harvest candidates to an explicit user-chosen dir. It
+// REFUSES a destination equal to or nested under the checkout (source ==
+// destination would open a file O_TRUNC on itself, destroying the original), and
+// it accumulates copy failures and reports a non-zero exit code rather than a
+// false success. Returns the exit code (0 ok, 1 error).
+func harvestToDir(env shellEnv, co, to, name string) int {
+	coAbs, err := absResolve(co)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack task harvest: %v\n", err)
+		return 1
+	}
+	toAbs, err := filepath.Abs(to)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack task harvest: %v\n", err)
+		return 1
+	}
+	// If --to already exists, resolve symlinks so a symlinked dest can't alias the
+	// checkout. If it does not exist yet, its cleaned abs path is enough.
+	if r, err := filepath.EvalSymlinks(toAbs); err == nil {
+		toAbs = r
+	}
+	if toAbs == coAbs || strings.HasPrefix(toAbs+string(os.PathSeparator), coAbs+string(os.PathSeparator)) {
+		fmt.Fprintf(os.Stderr, "pi-stack task harvest: --to %q is the checkout itself (or nested inside it); choose a dir outside the clone.\n", to)
+		return 1
+	}
+	files, lerr := listHarvestCandidates(env, co)
+	if lerr != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack task harvest: %v\n", lerr)
+		return 1
+	}
+	if len(files) == 0 {
+		fmt.Println("No uncommitted doc artifacts to harvest.")
+		return 0
+	}
+	var errs []string
+	copied := 0
+	for _, f := range files {
+		ok, err := copyFilePreserve(filepath.Join(co, filepath.FromSlash(f.Path)), filepath.Join(toAbs, filepath.FromSlash(f.Path)))
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", f.Path, err))
+			continue
+		}
+		if ok {
+			copied++
+		}
+	}
+	if len(errs) > 0 {
+		fmt.Fprintf(os.Stderr, "pi-stack task harvest: %d of %d docs could not be copied: %s\n", len(errs), len(files), strings.Join(errs, "; "))
+		return 1
+	}
+	fmt.Printf("Harvested %s to %s\n", plural(copied, "doc"), toAbs)
+	return 0
+}
+
+// absResolve returns the absolute, symlink-resolved path.
+func absResolve(p string) (string, error) {
+	a, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	if r, err := filepath.EvalSymlinks(a); err == nil {
+		return r, nil
+	}
+	return a, nil
+}
+
+// parseTaskHarvestArgs parses `harvest <name> [--to DIR]`.
+func parseTaskHarvestArgs(argv []string) (name, to string, err error) {
+	nameSet := false
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		switch {
+		case a == "--to" || strings.HasPrefix(a, "--to="):
+			if eq := strings.IndexByte(a, '='); eq >= 0 {
+				to = a[eq+1:]
+			} else {
+				if i+1 >= len(argv) {
+					return "", "", fmt.Errorf("flag --to needs a value")
+				}
+				i++
+				to = argv[i]
+			}
+		case strings.HasPrefix(a, "-"):
+			return "", "", fmt.Errorf("unknown flag %q", a)
+		default:
+			if nameSet {
+				return "", "", fmt.Errorf("unexpected extra argument %q", a)
+			}
+			name = a
+			nameSet = true
+		}
+	}
+	if !nameSet || strings.TrimSpace(name) == "" {
+		return "", "", fmt.Errorf("a task name is required")
+	}
+	return name, to, nil
+}
+
 // parseTaskRmArgs parses `rm <name> [--force]`.
 func parseTaskRmArgs(argv []string) (name string, force bool, err error) {
 	nameSet := false
@@ -1161,4 +2006,353 @@ func parseTaskRmArgs(argv []string) (name string, force bool, err error) {
 		return "", false, fmt.Errorf("a task name is required")
 	}
 	return name, force, nil
+}
+
+// ---------------------------------------------------------------------------
+// task gc: prune clean, over-age tasks + retain artifact snapshots.
+// ---------------------------------------------------------------------------
+
+const (
+	// taskGCDefaultDays is the default age (in days) a task must exceed before gc
+	// will prune it. Age = now - max(meta.Created, mtime(co)).
+	taskGCDefaultDays = 7
+	// taskArtifactDefaultDays is the default retention for harvested artifact
+	// snapshots. Pruning these is pure age-gated deletion (the rescue copy has
+	// already served its purpose), never gated by the clone guard.
+	taskArtifactDefaultDays = 30
+)
+
+type taskGcOpts struct {
+	days         int
+	artifactDays int
+	dryRun       bool
+	noHarvest    bool
+}
+
+// taskAge is a task's age for gc: now - max(meta.Created, mtime(co)). Created
+// alone is a bad proxy (a weeks-old task you use daily looks stale); the checkout
+// mtime reflects real activity. A task with neither timestamp available returns 0
+// (never over-age), so a broken meta is never auto-pruned.
+func taskAge(meta taskMeta, co string) time.Duration {
+	var newest time.Time
+	bump := func(t time.Time) {
+		if t.After(newest) {
+			newest = t
+		}
+	}
+	if strings.TrimSpace(meta.Created) != "" {
+		if t, err := time.Parse(time.RFC3339, meta.Created); err == nil {
+			bump(t)
+		}
+	}
+	// The checkout DIRECTORY mtime does not change when a file inside it is
+	// edited, so it is a weak activity signal alone. Also consult git's own
+	// activity markers: the reflog (commits/checkouts) and the index (staging),
+	// plus the checkout root, and take the most recent. A task committed or
+	// staged recently then reads as active, not stale.
+	for _, p := range []string{
+		co,
+		filepath.Join(co, ".git", "logs", "HEAD"),
+		filepath.Join(co, ".git", "index"),
+	} {
+		if fi, err := os.Stat(p); err == nil {
+			bump(fi.ModTime())
+		}
+	}
+	if newest.IsZero() {
+		return 0
+	}
+	return time.Since(newest)
+}
+
+// runTaskGc prunes clean, over-age tasks for the current repo. It reuses the
+// EXACT rm machinery per candidate (gatherTaskState + taskRemoveGuard +
+// harvest + executeTaskTeardown + removeTaskArtifacts) under the per-task lock,
+// so a task with uncommitted/unpushed work is skipped and reported, never
+// force-dropped (there is no --force on gc, by design). After the task sweep it
+// prunes harvested artifact snapshots older than --artifact-days.
+func runTaskGc(env shellEnv, argv []string) {
+	if wantsHelp(argv) {
+		fmt.Print(taskUsage)
+		return
+	}
+	opts, err := parseTaskGcArgs(argv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack task gc: %v\n\n%s", err, taskUsage)
+		os.Exit(2)
+	}
+
+	cwd, _ := os.Getwd()
+	mainroot, err := resolveMainroot(env, cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack task gc: not a git repository: %v\n", err)
+		os.Exit(1)
+	}
+	repokey := taskRepoKey(mainroot)
+	maxAge := time.Duration(opts.days) * 24 * time.Hour
+	removed, skipped, wouldRemove := 0, 0, 0
+
+	// Discover candidate (layout, name) pairs across BOTH the new and legacy
+	// layouts. The scan is only for DISCOVERY; the authoritative read + harden +
+	// age + gather + guard all happen INSIDE the per-task lock below, so a task
+	// removed and recreated while gc waited for the lock is never torn down on a
+	// stale decision (the pre-lock TOCTOU).
+	type cand struct {
+		lay      taskLayout
+		fileBase string
+	}
+	var cands []cand
+	for _, lay := range existingTaskLayouts(mainroot) {
+		entries, _ := os.ReadDir(filepath.Join(taskStateRoot(), lay.dir, "meta"))
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			cands = append(cands, cand{lay, strings.TrimSuffix(e.Name(), ".json")})
+		}
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].fileBase < cands[j].fileBase })
+
+	for _, c := range cands {
+		repoDir := c.lay.dir
+		fileBase := c.fileBase
+		co, metaPath := taskPaths(repoDir, fileBase)
+		lockErr := withTaskLock(repokey, fileBase, func() error {
+			// Re-read + re-harden + re-age UNDER the lock: the file may have been
+			// removed/recreated since discovery.
+			m, err := readTaskMeta(metaPath)
+			if err != nil {
+				return nil // gone since discovery; nothing to do
+			}
+			m, err = hardenTaskMeta(m, mainroot, repokey, c.lay.legacy, fileBase)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "gc: skipping %s: %v\n", fileBase, err)
+				skipped++
+				return nil
+			}
+			age := taskAge(m, co)
+			if age < maxAge {
+				return nil // not a candidate under the lock either
+			}
+			name := m.Name
+			st := gatherTaskState(env, m, co)
+			if msg, ok := taskRemoveGuard(st, false); !ok {
+				fmt.Printf("skip %-20s %s\n", name, msg)
+				skipped++
+				return nil
+			}
+			if opts.dryRun {
+				fmt.Printf("would remove %-20s (age %dd)\n", name, int(age.Hours()/24))
+				wouldRemove++
+				return nil
+			}
+			recovered := "refs/pi-stack/recovered/" + fileBase
+			if rc := executeTaskTeardown(env, os.Stderr, m, co, name, recovered, false, st); rc != 0 {
+				skipped++
+				return nil
+			}
+			// Harvest AFTER teardown (sandbox gone), fail-closed (unless --no-harvest):
+			// a harvest error keeps the clone + metadata rather than deleting un-git'd
+			// docs. gc only reaches here on a guard-clean task, so there is normally
+			// nothing to harvest; this is the belt-and-braces path.
+			if !opts.noHarvest {
+				if _, herr := harvestArtifacts(env, os.Stdout, m, repoDir, co, name); herr != nil {
+					fmt.Fprintf(os.Stderr, "gc: %-20s sandbox removed but harvest failed; keeping clone at %s: %v\n", name, co, herr)
+					skipped++
+					return nil
+				}
+			}
+			if err := removeTaskArtifacts(co, metaPath, os.RemoveAll, os.Remove); err != nil {
+				fmt.Fprintf(os.Stderr, "gc: %v\n", err)
+				skipped++
+				return nil
+			}
+			fmt.Printf("removed %-20s (age %dd, sandbox %s)\n", name, int(age.Hours()/24), m.Sandbox)
+			removed++
+			return nil
+		})
+		if lockErr != nil {
+			fmt.Fprintf(os.Stderr, "gc: %s: %v\n", fileBase, lockErr)
+			skipped++
+		}
+	}
+
+	prunedArtifacts := pruneArtifacts(taskRepoDir(mainroot), opts.artifactDays, opts.dryRun) +
+		pruneArtifacts(taskRepoKey(mainroot), opts.artifactDays, opts.dryRun)
+
+	if opts.dryRun {
+		fmt.Printf("gc (dry run): %d would be removed, %d skipped, %s would be pruned.\n",
+			wouldRemove, skipped, plural(prunedArtifacts, "artifact snapshot"))
+	} else {
+		fmt.Printf("gc: %d removed, %d skipped, %s pruned.\n",
+			removed, skipped, plural(prunedArtifacts, "artifact snapshot"))
+	}
+}
+
+// pruneArtifacts deletes harvested artifact snapshot dirs older than days under
+// taskArtifactRoot()/<repoDir>/<task>/<ts>/, by the snapshot dir's mtime. Pure
+// age-gated deletion (the snapshot was already the rescue copy). Returns the
+// count pruned (or that WOULD be pruned under dryRun). days <= 0 disables it.
+func pruneArtifacts(repoDir string, days int, dryRun bool) int {
+	if days <= 0 {
+		return 0
+	}
+	base := filepath.Join(taskArtifactRoot(), repoDir)
+	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	pruned := 0
+	tasks, err := os.ReadDir(base)
+	if err != nil {
+		return 0
+	}
+	for _, t := range tasks {
+		if !t.IsDir() {
+			continue
+		}
+		taskDir := filepath.Join(base, t.Name())
+		snaps, err := os.ReadDir(taskDir)
+		if err != nil {
+			continue
+		}
+		for _, s := range snaps {
+			if !s.IsDir() {
+				continue
+			}
+			info, err := s.Info()
+			if err != nil || !info.ModTime().Before(cutoff) {
+				continue
+			}
+			snapPath := filepath.Join(taskDir, s.Name())
+			if dryRun {
+				pruned++
+				continue
+			}
+			if err := os.RemoveAll(snapPath); err == nil {
+				pruned++
+			}
+		}
+	}
+	return pruned
+}
+
+// parseTaskGcArgs parses `gc [--days N] [--dry-run] [--no-harvest] [--artifact-days N]`.
+func parseTaskGcArgs(argv []string) (taskGcOpts, error) {
+	o := taskGcOpts{days: taskGCDefaultDays, artifactDays: taskArtifactDefaultDays}
+	intVal := func(a string, i *int) (string, error) {
+		if eq := strings.IndexByte(a, '='); eq >= 0 {
+			return a[eq+1:], nil
+		}
+		if *i+1 >= len(argv) {
+			return "", fmt.Errorf("flag %s needs a value", a)
+		}
+		*i++
+		return argv[*i], nil
+	}
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		n := a
+		if eq := strings.IndexByte(a, '='); eq >= 0 {
+			n = a[:eq]
+		}
+		switch n {
+		case "--days":
+			v, err := intVal(a, &i)
+			if err != nil {
+				return o, err
+			}
+			d, err := parseDays(v)
+			if err != nil {
+				return o, fmt.Errorf("--days %v", err)
+			}
+			o.days = d
+		case "--artifact-days":
+			v, err := intVal(a, &i)
+			if err != nil {
+				return o, err
+			}
+			d, err := parseDays(v)
+			if err != nil {
+				return o, fmt.Errorf("--artifact-days %v", err)
+			}
+			o.artifactDays = d
+		case "--dry-run":
+			o.dryRun = true
+		case "--no-harvest":
+			o.noHarvest = true
+		default:
+			return o, fmt.Errorf("unknown flag %q", a)
+		}
+	}
+	return o, nil
+}
+
+// maxTaskGcDays caps --days / --artifact-days so `days * 24h` never overflows
+// time.Duration (int64 ns) and wraps negative, which would invert the cutoff and
+// prune everything instead of nothing.
+const maxTaskGcDays = int((int64(1) << 62) / (24 * int64(time.Hour)))
+
+func parseDays(v string) (int, error) {
+	d, err := strconv.Atoi(v)
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("must be a non-negative integer")
+	}
+	if d > maxTaskGcDays {
+		return 0, fmt.Errorf("is too large (max %d)", maxTaskGcDays)
+	}
+	return d, nil
+}
+
+// ---------------------------------------------------------------------------
+// status summary (global, repo-agnostic): total task clones + artifacts size.
+// ---------------------------------------------------------------------------
+
+// taskStateSummary walks the task state + artifact roots to a global count of
+// task clones and the on-disk size of harvested artifacts, so `pi-stack status`
+// can surface the pile without any per-repo git probing (that needs a cwd/repo).
+// Best-effort: an unreadable tree contributes 0.
+func taskStateSummary() (tasks int, artifactBytes int64) {
+	repos, _ := os.ReadDir(taskStateRoot())
+	for _, r := range repos {
+		if !r.IsDir() {
+			continue
+		}
+		metas, _ := os.ReadDir(filepath.Join(taskStateRoot(), r.Name(), "meta"))
+		for _, m := range metas {
+			if !m.IsDir() && strings.HasSuffix(m.Name(), ".json") {
+				tasks++
+			}
+		}
+	}
+	_, artifactBytes = artifactDirSize(taskArtifactRoot())
+	return tasks, artifactBytes
+}
+
+// artifactDirSize sums the file count + byte size under root (best-effort; an
+// unreadable tree or a missing root contributes 0). Shared by the status summary
+// and uninstall's "keeping artifacts" notice.
+func artifactDirSize(root string) (files int, bytes int64) {
+	_ = filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		files++
+		if info, err := d.Info(); err == nil {
+			bytes += info.Size()
+		}
+		return nil
+	})
+	return files, bytes
+}
+
+// humanBytes renders a byte count as a short human string (B/KB/MB/GB).
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%dB", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%cB", float64(n)/float64(div), "KMGTPE"[exp])
 }

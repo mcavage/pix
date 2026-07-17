@@ -283,18 +283,25 @@ func TestUninstall_NonTTYNoYesRefuses(t *testing.T) {
 
 // TestParseResetArgs: --sbx is reset-only; uninstall rejects it. Help + unknown.
 func TestParseResetArgs(t *testing.T) {
-	if o, err := parseResetArgs([]string{"--keep-memory", "--sbx", "--yes"}, true); err != nil ||
+	if o, err := parseResetArgs([]string{"--keep-memory", "--sbx", "--yes"}, true, false); err != nil ||
 		!o.keepMemory || !o.sbx || !o.assumeYes {
 		t.Fatalf("reset flags: %+v err=%v", o, err)
 	}
-	if _, err := parseResetArgs([]string{"--sbx"}, false); err == nil {
+	if _, err := parseResetArgs([]string{"--sbx"}, false, true); err == nil {
 		t.Error("uninstall must reject --sbx")
 	}
-	if o, err := parseResetArgs([]string{"-h"}, true); err != nil || !o.help {
+	if o, err := parseResetArgs([]string{"-h"}, true, false); err != nil || !o.help {
 		t.Errorf("help: %+v err=%v", o, err)
 	}
-	if _, err := parseResetArgs([]string{"--nope"}, true); err == nil {
+	if _, err := parseResetArgs([]string{"--nope"}, true, false); err == nil {
 		t.Error("unknown flag must error")
+	}
+	// --purge-data is uninstall-only.
+	if o, err := parseResetArgs([]string{"--purge-data"}, false, true); err != nil || !o.purgeData {
+		t.Errorf("uninstall --purge-data: %+v err=%v", o, err)
+	}
+	if _, err := parseResetArgs([]string{"--purge-data"}, true, false); err == nil {
+		t.Error("reset must reject --purge-data")
 	}
 }
 

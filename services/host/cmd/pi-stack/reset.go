@@ -36,6 +36,7 @@ type resetOpts struct {
 	sbx        bool // --sbx: also remove pi-stack-* sandboxes + unregister MCP
 	assumeYes  bool // --yes: don't prompt (required on a non-TTY)
 	force      bool // --force: move the data dir even if serve appears still up
+	purgeData  bool // --purge-data (uninstall only): ALSO move aside harvested task artifacts
 	help       bool // -h/--help
 }
 
@@ -49,6 +50,7 @@ type resetPaths struct {
 	knowledgeDir string // <dataRoot>/knowledge or dir(KNOWLEDGE_DB): the rebuildable index
 	memoryDB     string // the custom MEMORY_DB file path (set ONLY when MEMORY_DB is given); "" for the default
 	knowledgeDB  string // the custom KNOWLEDGE_DB file path (set ONLY when KNOWLEDGE_DB is given); "" for the default
+	artifactRoot string // taskArtifactRoot(): harvested task docs. Touched ONLY by uninstall --purge-data; reset never reaches it.
 }
 
 // backupTarget is one path the reset moves aside, with a human label. Dangerous
@@ -150,6 +152,7 @@ func resolveResetPaths(env shellEnv) resetPaths {
 		knowledgeDir: knowledgeDir,
 		memoryDB:     memoryDB,
 		knowledgeDB:  knowledgeDB,
+		artifactRoot: taskArtifactRoot(),
 	}
 }
 
@@ -198,6 +201,13 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 	if opts.sbx {
 		a.RemoveSandboxes = true
 		a.MCPRemove = append([]string(nil), cfg.MCP...)
+	}
+	// --purge-data (uninstall only): move harvested task artifacts aside too. They
+	// live under XDG_DATA_HOME, OUTSIDE every tree reset normally touches, so they
+	// survive a plain reset/uninstall by design — this is the deliberate opt-in to
+	// sweep them. Move-aside (.bak), never hard-delete, like every other data path.
+	if opts.purgeData && paths.artifactRoot != "" {
+		a.Backups = append(a.Backups, backupTarget{Path: paths.artifactRoot, Label: "harvested task artifacts"})
 	}
 	return a
 }
@@ -607,7 +617,7 @@ func runResetCore(cfg *config.Config, paths resetPaths, opts resetOpts,
 
 // parseResetArgs parses the reset/uninstall flag set (shared: both accept
 // --keep-memory / --yes; reset also accepts --sbx).
-func parseResetArgs(argv []string, allowSbx bool) (resetOpts, error) {
+func parseResetArgs(argv []string, allowSbx, allowPurge bool) (resetOpts, error) {
 	var o resetOpts
 	for _, a := range argv {
 		switch a {
@@ -625,6 +635,11 @@ func parseResetArgs(argv []string, allowSbx bool) (resetOpts, error) {
 				return o, fmt.Errorf("unknown flag %q", a)
 			}
 			o.sbx = true
+		case "--purge-data":
+			if !allowPurge {
+				return o, fmt.Errorf("unknown flag %q", a)
+			}
+			o.purgeData = true
 		default:
 			return o, fmt.Errorf("unknown flag %q", a)
 		}
@@ -634,7 +649,7 @@ func parseResetArgs(argv []string, allowSbx bool) (resetOpts, error) {
 
 // runReset is the `reset` verb entry point.
 func runReset(argv []string) {
-	opts, err := parseResetArgs(argv, true)
+	opts, err := parseResetArgs(argv, true, false)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack reset: %v\n\n%s", err, resetUsage)
 		os.Exit(2)
@@ -734,6 +749,16 @@ func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts 
 	a := resetPlan(cfg, paths, opts)
 	printResetPlan(a, rio.out)
 	fmt.Fprintln(rio.out, "Will also remove the installed pi-stack + pi-stack-host bin symlinks.")
+	// Harvested task artifacts are user work product and are NOT removed by
+	// default (they live under XDG_DATA_HOME, outside the reset trees). Print where
+	// they are + how big so they stay findable; --purge-data is the deliberate
+	// opt-in that moves them aside too (added to the plan above).
+	if !opts.purgeData && paths.artifactRoot != "" {
+		if _, size := artifactDirSize(paths.artifactRoot); size > 0 {
+			fmt.Fprintf(rio.out, "Keeping harvested task artifacts (%s) at %s — pass --purge-data to remove them too.\n",
+				humanBytes(size), paths.artifactRoot)
+		}
+	}
 	fmt.Fprintln(rio.out)
 
 	if !opts.assumeYes {
@@ -787,7 +812,7 @@ func removeInstalledManPage(env shellEnv, fsys resetFS, out io.Writer) {
 
 // runUninstall is the `uninstall` verb entry point (replaces the old stub).
 func runUninstall(argv []string) {
-	opts, err := parseResetArgs(argv, false)
+	opts, err := parseResetArgs(argv, false, true)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack uninstall: %v\n\n%s", err, uninstallUsage)
 		os.Exit(2)

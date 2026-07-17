@@ -82,13 +82,13 @@ func TestSanitizeTaskName(t *testing.T) {
 }
 
 func TestTaskSandboxName(t *testing.T) {
-	if got := taskSandboxName("abcd1234", "fix-login", "default"); got != "pi-stack-t-abcd1234-fix-login" {
+	if got := taskSandboxName("myrepo", "abcd1234", "fix-login", "default"); got != "pi-stack-t-myrepo-abcd1234-fix-login" {
 		t.Errorf("default profile: got %q", got)
 	}
-	if got := taskSandboxName("abcd1234", "fix-login", ""); got != "pi-stack-t-abcd1234-fix-login" {
+	if got := taskSandboxName("myrepo", "abcd1234", "fix-login", ""); got != "pi-stack-t-myrepo-abcd1234-fix-login" {
 		t.Errorf("empty profile: got %q", got)
 	}
-	if got := taskSandboxName("abcd1234", "fix login", "work"); got != "pi-stack-t-abcd1234-fix-login-work" {
+	if got := taskSandboxName("myrepo", "abcd1234", "fix login", "work"); got != "pi-stack-t-myrepo-abcd1234-fix-login-work" {
 		t.Errorf("named profile: got %q", got)
 	}
 }
@@ -539,17 +539,17 @@ func TestParseTaskNewArgs_RejectsDashFrom(t *testing.T) {
 func TestHardenTaskMeta_RejectsMismatchedName(t *testing.T) {
 	// The stored name must sanitize back to the file base, else the file was
 	// renamed or hand-edited.
-	if _, err := hardenTaskMeta(taskMeta{Name: "evil", Profile: config.DefaultProfile}, "/main", "abcd1234", "work"); err == nil {
+	if _, err := hardenTaskMeta(taskMeta{Name: "evil", Profile: config.DefaultProfile}, "/main", "abcd1234", false, "work"); err == nil {
 		t.Error("mismatched name should be rejected")
 	}
-	m, err := hardenTaskMeta(taskMeta{Name: "work", Profile: config.DefaultProfile, Branch: "pi-stack/../../heads/main", Sandbox: "sneaky"}, "/main", "abcd1234", "work")
+	m, err := hardenTaskMeta(taskMeta{Name: "work", Profile: config.DefaultProfile, Branch: "pi-stack/../../heads/main", Sandbox: "sneaky"}, "/main", "abcd1234", false, "work")
 	if err != nil {
 		t.Fatalf("valid name should pass: %v", err)
 	}
 	if m.Branch != "pi-stack/work" {
 		t.Errorf("branch = %q, want re-derived pi-stack/work", m.Branch)
 	}
-	if m.Sandbox != taskSandboxName("abcd1234", "work", config.DefaultProfile) {
+	if m.Sandbox != taskSandboxName("main", "abcd1234", "work", config.DefaultProfile) {
 		t.Errorf("sandbox = %q, want re-derived", m.Sandbox)
 	}
 	if m.Mainroot != "/main" {
@@ -587,7 +587,7 @@ func TestTaskMeta_TamperedBranchNeverTargetsMainRef(t *testing.T) {
 	tampered := taskMeta{Name: "work", Profile: config.DefaultProfile, Branch: "pi-stack/../../heads/main", Sandbox: "x", Mainroot: main}
 	before := strings.TrimSpace(tgit(t, main, "rev-parse", "refs/heads/main"))
 
-	hardened, err := hardenTaskMeta(tampered, main, taskRepoKey(main), "work")
+	hardened, err := hardenTaskMeta(tampered, main, taskRepoKey(main), false, "work")
 	if err != nil {
 		t.Fatalf("harden: %v", err)
 	}
@@ -795,11 +795,11 @@ func TestHardenTaskMeta_UsesStoredProfileNotCurrent(t *testing.T) {
 	// A task created under profile "work" must keep targeting its -work sandbox
 	// even when the currently active profile has since switched to default.
 	m := taskMeta{Name: "work", Profile: "work"}
-	hardened, err := hardenTaskMeta(m, "/main", "abcd1234", "work")
+	hardened, err := hardenTaskMeta(m, "/main", "abcd1234", false, "work")
 	if err != nil {
 		t.Fatalf("harden: %v", err)
 	}
-	want := taskSandboxName("abcd1234", "work", "work")
+	want := taskSandboxName("main", "abcd1234", "work", "work")
 	if hardened.Sandbox != want {
 		t.Errorf("sandbox = %q, want %q (stored profile must win)", hardened.Sandbox, want)
 	}
@@ -810,7 +810,7 @@ func TestHardenTaskMeta_UsesStoredProfileNotCurrent(t *testing.T) {
 	// mis-target the sandbox (rm dropping a clone while its real sandbox lives on),
 	// so harden refuses rather than derive a name.
 	old := taskMeta{Name: "work"}
-	if _, err := hardenTaskMeta(old, "/main", "abcd1234", "work"); err == nil {
+	if _, err := hardenTaskMeta(old, "/main", "abcd1234", false, "work"); err == nil {
 		t.Error("a meta with no stored profile must be rejected as invalid, not fall back")
 	} else if !strings.Contains(err.Error(), "no profile") {
 		t.Errorf("error = %q, want a no-profile explanation", err)
@@ -1563,7 +1563,7 @@ func TestTaskNew_ExistingCheckoutNotDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	co, _ := taskPaths(taskRepoKey(mainroot), sanitizeTaskName("busy"))
+	co, _ := taskPaths(taskRepoDir(mainroot), sanitizeTaskName("busy"))
 
 	// Fabricate a pre-existing checkout with a sentinel standing in for a
 	// sibling invocation's live work.
