@@ -217,7 +217,7 @@ remembered result or a subagent's "done" report is a violation.
    smallest independently reviewable units. A single-unit plan for non-trivial
    work MUST have explicit architect approval with written rationale recorded in
    status.json before proceeding. Fan out an `architect` for consistency check.
-   Even when Phase 0.5 was skipped (trivial work ONLY, per Law 0 — never via a
+   Even when Phase 0.5 was skipped (trivial work ONLY, per Law 0, never via a
    build/plan skip-table shortcut), shard into units to delegate.
 
 2. DELEGATE
