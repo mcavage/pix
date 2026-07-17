@@ -1,6 +1,6 @@
 ---
 name: deliver
-description: Autonomous full-rigor delivery loop. Drives a request all the way to proven, committed, review-clean without returning to the user mid-flight. Delegates build to subagents, runs full UAT with real evidence, and runs the cross-vendor review subagent at least twice, fixing every finding. Use for "take this all the way", "do it properly", "don't stop", "full send", "full UAT and review", "don't come back until it's done", "address all the findings", or any time the user is about to hand-write delivery rigor.
+description: Autonomous full-rigor delivery loop. Runs the WHOLE crew (product first, then engineering), driving a request from intent to proven, committed, review-clean without returning to the user mid-flight. Starts with the product crew (PM plus role-appropriate specialists: GTM, finance, design, DX, legal), produces a spec, then delegates build to subagents, runs full UAT with real evidence, and runs the cross-vendor review subagent at least twice, fixing every finding. Use for "cook and deliver", "cook this", "take this all the way", "do it properly", "don't stop", "full send", "run the crew", "full UAT and review", "don't come back until it's done", "address all the findings", or any time the user is about to hand-write delivery rigor.
 ---
 # deliver
 
@@ -9,13 +9,19 @@ This skill governs YOU, the orchestrator. It is a contract, not advice. When
 return control to the user. Every shortcut in the Forbidden list is a contract
 violation.
 
-`build` and `ship` are the machine. `deliver` is the operator who refuses to
-leave the machine until the part comes out finished.
+`plan`, `build`, and `ship` are the machine; `deliver` runs all of them and
+refuses to stop until the acceptance bar is met. "Cook and deliver" is NOT
+"start writing code": it is "run the crew and the loop." The crew starts with
+PRODUCT (a PM, then the role-appropriate specialists), produces a spec, and only
+then does engineering begin. Jumping straight to implementation is the single
+most common way this contract is violated.
 
 ## Checklist: hold in head under pressure
 
 Before advancing any gate or claiming done, run this list:
 
+- [ ] Product before code: non-trivial work ran Phase 0.5 (PM first, then applicable specialists) and produced prd.md BEFORE any implementation; a trivial skip is justified in status.json.product
+- [ ] Product closeout (Phase 10) is clean: PM + every Phase 0.5 role validated the built deliverable against prd.md; their findings are in the ledger and resolved
 - [ ] status.json written and current (schema below); every gate has real evidence with command+timestamp+exit+log path
 - [ ] UAT matrix covers: request paths + spec paths + all changed-code branches + test analysis + qa-lead enumeration; no spec means FRAME built the matrix first
 - [ ] Baseline labelled BASELINE-GREEN or BASELINE-RED; a BASELINE-RED gate MUST stay labelled as such; no new failures added
@@ -33,7 +39,19 @@ Before advancing any gate or claiming done, run this list:
 
 ## Iron laws
 
-**Law 0. Do not return control until the acceptance bar is met.**
+**Law 0. Product before code.**
+Non-trivial work runs the crew FIRST: `plan` full mode with a PM and the
+role-appropriate specialists (see Crew Selection), producing a spec, BEFORE any
+implementation subagent is dispatched. "Cook and deliver" means run the crew and
+the loop, not open an editor. Skipping the product crew and jumping to `build`
+(or, worse, hand-coding) is a contract violation. Only a TYPO or a one-line,
+behavior-preserving correction skips Phase 0.5. This exemption OVERRIDES the
+skip tables in `plan` and `build`: a clear brief, an existing spec, sub-day
+size, urgency, a "bug fix," or a "simple feature" may SHORTEN the artifacts, but
+MUST NOT drop the PM or any applicable specialist. The trivial classification
+and its reason are recorded in status.json.product.
+
+**Law 0.1. Do not return control until the acceptance bar is met.**
 The only exceptions are the three legit stop conditions. "Done", "should work",
 "this should be it", a partial handoff, or stopping to ask permission for
 something verifiable are all violations.
@@ -78,6 +96,19 @@ remembered result or a subagent's "done" report is a violation.
 ```json
 {
   "acceptance_bar": "<one-line restatement of the specific ask>",
+  "product": {
+    "classification":        "trivial|non-trivial",
+    "classification_reason": "<why>",
+    "spec_path":            ".pi-agent/deliver/<slug>/prd.md, or null when trivial",
+    "roles": [
+      { "role": "product-manager", "phase": "0.5|10", "status": "ran|skipped", "reason": "<skip reason or null>", "artifact": "<path or null>" }
+    ],
+    "taste_calls": [
+      { "question": "...", "decision": "...", "rationale": "..." }
+    ],
+    "phase_0_5_done": false,
+    "closeout_done":  false
+  },
   "commands": {
     "build": "<exact command>",
     "test":  "<exact command>",
@@ -122,7 +153,7 @@ remembered result or a subagent's "done" report is a violation.
   "findings_ledger": [
     {
       "id":                  "<unique>",
-      "source":              "review|qa|security|tests|typecheck|lint|uat|orchestrator",
+      "source":              "product|review|qa|security|tests|typecheck|lint|uat|orchestrator",
       "round":               1,
       "text":                "<verbatim>",
       "status":              "open|fixed|user-triaged",
@@ -159,15 +190,34 @@ remembered result or a subagent's "done" report is a violation.
    (schema above, all gates pending). Detect build/test/lint/typecheck commands.
    Run each; record real output. Label baseline BASELINE-GREEN or BASELINE-RED.
    A BASELINE-RED label persists throughout; NEVER relabel it green even after
-   all new work passes. If no spec exists, build the UAT matrix now from the
-   request and changed-code analysis; do not defer it to Phase 5.
+   all new work passes. FRAME is where you SIZE the work (trivial vs
+   non-trivial), classify it in status.json.product, and pick the crew (see
+   Crew Selection). It is NOT where you start coding.
+
+0.5 CREW / PRODUCT  (mandatory for non-trivial work; Law 0)
+   Run `plan` (full mode) with the role-appropriate crew BEFORE any
+   implementation, in this order:
+     a. `product-manager` frames the job-to-be-done, assumptions, and problem.
+     b. The specialists relevant to THIS work (see Crew Selection) fan out
+        CONCURRENTLY off that frame (one turn, disjoint artifacts).
+     c. The PM synthesizes their findings into a PR/FAQ, then a PRD.
+   Under `deliver`, plan's PR/FAQ user gate is AUTO-GATED (see Override plan):
+   apply plan's decision principles, decide every mechanical and taste question
+   yourself (record taste calls in status.json.product.taste_calls), and stop
+   ONLY for a genuine user-only decision (Legit Stop Condition 2). Product
+   specialists in this phase write PLANNING ARTIFACTS ONLY, never shipping files
+   (yes, including `designer`: it specs the UI here; it builds it in Phase 2).
+   `plan`'s package is written under .pi-agent/deliver/<slug>/product/ and the
+   final PRD is copied to .pi-agent/deliver/<slug>/prd.md. If there is no product
+   surface (pure refactor, infra), the PM still frames the JTBD + acceptance
+   criteria in one tight pass. Skipped ONLY for trivial work (Law 0).
 
 1. PLAN/SHARD
-   Non-trivial work: run plan then build's spec+shard phases. Shard into the
+   Feed the Phase 0.5 spec into build's spec+shard phases. Shard into the
    smallest independently reviewable units. A single-unit plan for non-trivial
    work MUST have explicit architect approval with written rationale recorded in
    status.json before proceeding. Fan out an `architect` for consistency check.
-   Even when skipping Phase 1 per build's skip table, shard into units to
+   Even when skipping Phase 0.5 per build's skip table, shard into units to
    delegate.
 
 2. DELEGATE
@@ -240,7 +290,22 @@ remembered result or a subagent's "done" report is a violation.
    MUST be clean. Total rounds MUST be >= 2, all explicit top-level subagent
    calls, all recorded in review_rounds[].
 
-10. VERIFY
+10. PRODUCT CLOSEOUT  (mandatory for non-trivial work; closes the loop Phase 0.5 opened)
+    The PM re-reads the implemented deliverable (current branch or PR) against
+    prd.md and confirms every P0 acceptance criterion is met. Every specialist
+    selected in Phase 0.5 validates its OWN surface against the built thing:
+    `growth-marketing` drafts positioning / release notes; `finance-analyst`
+    confirms the cost / unit-economics claim actually held; `ux-copywriter`
+    polishes user-facing strings; `designer` checks the built UI against the
+    states it specced; `dx-consultant` checks the API/CLI surface; `legal`
+    re-checks licensing / regulatory exposure. Each output is a finding
+    (source=product) in findings_ledger[]. ANY open finding loops back to
+    FIX-LOOP (Phase 7) -> RE-UAT (Phase 8) -> REVIEW (Phase 9), then re-runs the
+    affected closeout validators. Advance only when closeout is clean. Skip a
+    role only when it is genuinely irrelevant, and note the skip in
+    status.json.product. Trivial work skips this phase.
+
+11. VERIFY
     Final gate: build/tests/lint/typecheck green from a fresh run this turn
     (exception: a gate marked BASELINE-RED passes iff no NEW failures were added,
     every affected/new test passes, and the failure set is unchanged-or-reduced
@@ -250,14 +315,14 @@ remembered result or a subagent's "done" report is a violation.
     findings_ledger[] items closed or user-triaged. Write final_evidence and
     commit to status.json.
 
-11. SHIP (if in scope)
+12. SHIP (if in scope)
     If the request implies a PR, run `ship`. deliver OVERRIDES ship's stop on
     red tests or rebase conflict: loop back to fix rather than stopping, unless
     the failure is a hard external block that qualifies as a Legit Stop
     Condition. Ship stops only at PR creation. Never merge. Never force-push
     to main.
 
-12. REPORT
+13. REPORT
     Only now return to the user with the evidence bundle (see Reporting).
 ```
 
@@ -387,9 +452,19 @@ Three only. Everything else is a contract violation.
    failed, your hypotheses, and a recommended next step. Never loop silently.
    Never report "mostly done."
 
-## Overrides of build and ship
+## Overrides of plan, build, and ship
 
-`deliver` OVERRIDES the stop-and-return behavior of both `build` and `ship`.
+`deliver` OVERRIDES the stop-and-return behavior of `plan`, `build`, and `ship`.
+
+**Override plan:** every `stop`, `wait`, `present-and-wait`, and `report`
+instruction in `plan` is SUPPRESSED under `deliver` unless it meets Legit Stop
+Condition 2 or 3 in full. Specifically: the PR/FAQ user gate is auto-gated; a
+discovery "deprioritize," a peer-review REJECT, or an "infeasible" finding is a
+revision/escalation loop input, not a turn-ender. For a plan "user challenge"
+(the crew wants to change the user's stated direction): if a safe, reversible
+implementation of the user's stated direction exists, take it and record the
+crew's recommendation in status.json.product.taste_calls; ask the user ONLY when
+all three conditions of Legit Stop Condition 2 hold.
 
 **Override build:** build's intermediate stops (BLOCK verdict, red phase,
 phase-level failures) are fix-loop inputs under `deliver`, not turn-enders.
@@ -403,8 +478,10 @@ that qualifies as Legit Stop Condition 3.
 
 ## Skip logic
 
-Skip logic from `build` MAY reduce spec depth and crew size only. The following
-MUST NEVER be skipped regardless of deliverable type:
+Skip logic from `plan` and `build` MAY reduce spec DEPTH only (shorter
+artifacts). It MUST NOT drop the PM or any applicable specialist (Law 0), and it
+MUST NOT skip Phase 0.5 or Phase 10 for non-trivial work. The following MUST
+NEVER be skipped regardless of deliverable type:
 - >= 2 explicit cross-vendor review rounds
 - UAT matrix with real thick evidence
 - findings_ledger[] (all findings recorded, all resolved or user-triaged)
@@ -428,6 +505,9 @@ All security findings go in the same findings_ledger[].
 
 | Anti-pattern | What it looks like | Correction |
 |---|---|---|
+| Code-first jump | Starting to build (or hand-code) on "cook and deliver" without the product crew | Run Phase 0.5: PM + role-appropriate specialists produce a spec FIRST (Law 0) |
+| Eng-only crew | Only engineer/qa/security/review run; no PM/GTM/finance/design | Select the crew by what the work touches (Crew Selection); product roles are not optional |
+| Product loop dropped | Shipping without the PM + specialists validating the built thing | Run Phase 10 PRODUCT CLOSEOUT; findings loop back through fix/UAT/review |
 | Solo-coding | Editing product/test/docs/config yourself | Dispatch to subagent; no size exemption |
 | Done-without-UAT | "Implemented, should work" | Run every UAT matrix row; paste evidence |
 | Thin UAT | Only spec-named paths | Cover spec + changed branches + test analysis + qa-lead review |
@@ -451,13 +531,50 @@ All security findings go in the same findings_ledger[].
 | Serial-when-parallel | Disjoint units run one at a time | Fan out in the same turn |
 | Stopping for context | Pausing because the session is long | Save to disk; continue |
 
+## Crew selection
+
+The crew is chosen by what the work TOUCHES, not by habit. Pick every row that
+applies; when in doubt, include the role. One trigger adds only its OWN role,
+not the whole row's neighbors.
+
+**Discovery crew (Phase 0.5; each validates its own surface again in Phase 10).**
+
+| The work touches... | Add this role |
+|---|---|
+| Any non-trivial work (always) | `product-manager` (JTBD, PR/FAQ, PRD) |
+| Positioning, launch, adoption, or a release users see | `growth-marketing` |
+| Pricing, spend, budgets, or unit economics | `finance-analyst` |
+| A visual UI surface | `designer` (specs states in 0.5; builds in Phase 2) |
+| Any user-facing copy | `ux-copywriter` |
+| A developer-facing API / CLI / SDK / dev docs | `dx-consultant` |
+| Licensing, contracts, privacy, or regulatory obligations | `legal` |
+| SSO / SCIM / RBAC, managed deployment, or procurement | `enterprise-admin` |
+
+**Engineering crew (Phases 2-11).**
+
+| The work touches... | Add this role |
+|---|---|
+| Any non-trivial work (always) | `architect` (design + consistency), `engineer` (units) |
+| A hard problem / 2nd-attempt escalation | `deep` |
+| Any shipping code, config, or infra | `security-lead` (Phase 4), `qa-lead` (Phase 5) |
+| Reliability, SLOs, on-call, or deploy readiness | `sre-lead` |
+| Broad read-only research fan-out | `fanout` workers |
+
+Discovery roles fan out CONCURRENTLY off the PM frame in Phase 0.5 (one turn,
+disjoint artifacts per the delegation-guide output contract), writing PLANNING
+ARTIFACTS ONLY; the PM synthesizes their findings into the PR/FAQ + PRD. Every
+selected role is recorded in status.json.product.roles; a skipped role gets a
+one-line reason. Skipping the whole product crew for non-trivial work is a Law 0
+violation.
+
 ## How deliver composes
 
 `deliver` WRAPS `plan`, `build`, and `ship`. Those skills own the how of each
 stage. `deliver` owns: run all of them, gate hard, override their exits, never
 stop early.
 
-- `plan` produces the spec `deliver` feeds to `build`.
+- `plan` runs the product crew in Phase 0.5 and produces the spec `deliver`
+  feeds to `build`; `deliver` overrides plan's stops (see Override plan).
 - `build` runs under `deliver`; `deliver` overrides its phase-level stops.
 - `ship` is the final stage when a PR is in scope; `deliver` overrides its red-stop.
 - `code-review`, `verify`, `qa` are gates `deliver` refuses to skip.
@@ -471,11 +588,20 @@ keyless provider and hang the subagent forever.
 
 | Agent | Role | When |
 |---|---|---|
-| `architect` | design, consistency check, single-unit approval | spec, shard, unit-sizing gate |
+| `product-manager` | PR/FAQ, PRD, JTBD, acceptance criteria | Phase 0.5 (product crew), always for non-trivial work |
+| `growth-marketing` | GTM, positioning, release notes | Phase 0.5 + Phase 10, market-facing work |
+| `finance-analyst` | cost model, unit economics, tradeoffs | Phase 0.5 + Phase 10, cost/pricing work |
+| `designer` | UI, all states (specs in 0.5, builds in Phase 2) | Phase 0.5 + Phase 10, visual surfaces |
+| `ux-copywriter` | user-facing strings, anti-slop | Phase 0.5 + Phase 10, any UI copy |
+| `dx-consultant` | API/CLI/SDK usability | Phase 0.5, dev-facing surfaces |
+| `legal` | licensing, regulatory exposure | Phase 0.5 + Phase 10, licensing/privacy/regulatory work |
+| `enterprise-admin` | SSO/SCIM/RBAC, deploy, procurement | Phase 0.5, enterprise-governance work |
+| `architect` | design, consistency check, single-unit approval | Phase 0.5, spec, shard, unit-sizing gate |
 | `engineer` | unit implementation | every implementation unit |
 | `deep` | hard problems, second-attempt escalation | 2nd-attempt escalation on a failing stage |
 | `qa-lead` | UAT matrix build + review, coverage gaps | Phase 5, re-UAT |
 | `security-lead` | STRIDE, OWASP, secrets, auth | Phase 4, before REVIEW #1 |
+| `sre-lead` | SLOs, observability, deploy readiness | reliability-facing work |
 | `review` | cross-vendor adversarial review | every explicit review round |
 
 ## Acceptance bar
@@ -484,6 +610,8 @@ Return to the user ONLY when every row is true with evidence on disk.
 
 | Gate | Passing | Proof |
 |---|---|---|
+| Product spec | non-trivial work has a PRD from the crew (PM + applicable specialists); trivial-skip justified | prd.md under .pi-agent/deliver/<slug>/; status.json.product |
+| Product closeout | PM + every Phase 0.5 role validated the built deliverable against prd.md; findings resolved | status.json.product.closeout_done; product findings in ledger, all closed |
 | Build | exits 0 | fresh build output this turn |
 | Tests | 0 failures, count >= baseline, new tests for new behavior (BASELINE-RED: no NEW failures vs baseline + affected/new tests pass; never reported green) | fresh test output this turn |
 | Lint / typecheck | clean or repo-tolerated warnings only | fresh lint + typecheck output this turn |
@@ -499,6 +627,9 @@ When the acceptance bar is met, return this bundle. No prose padding.
 
 ```
 Delivered: <one line>
+Crew:       product 0.5: <PM + roles that ran, or "trivial-skip: <reason>">
+            spec: <.pi-agent/deliver/<slug>/prd.md, or "n/a: trivial-skip">
+            closeout 10: <roles that revalidated, or "n/a: <reason>">
 Build:      <exact command>  exit=<N>  <timestamp>
 Tests:      <exact command>  exit=<N>  <passed> passed / <failed> failed  <timestamp>
 Lint:       <exact command>  exit=<N>  <timestamp>
