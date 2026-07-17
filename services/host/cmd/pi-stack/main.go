@@ -105,6 +105,8 @@ func main() {
 		runUninstall(args[1:])
 	case "state":
 		runState(args[1:])
+	case "task":
+		runTask(args[1:])
 	case "help", "-h", "--help":
 		if len(args) > 1 {
 			if args[1] == "--all" {

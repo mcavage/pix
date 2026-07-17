@@ -498,6 +498,39 @@ Setting base
 enables the knowledge service.  A per-profile write does not; enable the global
 .B knowledge
 service separately.
+.SS task
+Run parallel tasks on one repository.  Each task is a
+.B git clone --local
+of the repo with its own branch and sandbox, so tasks never collide.  Commits
+land in the task's clone on this host and can be pushed or fetched back.  Clones
+live under
+.B $XDG_STATE_HOME/pi-stack/tasks/<repo>/co/<name>
+outside your repo.
+.TP
+.BR "pi-stack task new" " " name " [" \-\-from " " REF "] [" \-\- " pi-args..." ]
+Clone the repo, create the branch
+.BR pi-stack/ name ,
+and launch a sandbox for it.
+.B \-\-from
+accepts any branch, tag, or commit that exists in the repo (default
+.BR HEAD ).
+Everything after
+.B \-\-
+is passed to pi.
+.TP
+.BR "pi-stack task ls" " [" \-\-json "]"
+List this repo's tasks with their branch, sandbox status, and git state
+(dirty and unpushed markers).  Read-only.
+.TP
+.BR "pi-stack task rm" " " name " [" \-\-force "]"
+Tear down the sandbox and the clone, guarded.  It refuses uncommitted or
+unpushed work and prints the exact recovery command unless
+.B \-\-force
+is given.  It always snapshots the task branch to
+.B refs/pi-stack/recovered/<name>
+in the main repo first, and aborts before deleting the clone if
+.B sbx rm
+fails.  The main repo's branches are never touched.
 .SS state
 The
 .B state
@@ -865,6 +898,17 @@ Back up and restore the full stack (memory, config, op-refs):
 pi-stack backup --out ~/backups/pi-stack.tar.gz
 pi-stack serve stop
 pi-stack restore ~/backups/pi-stack.tar.gz --force
+.RE
+.fi
+.PP
+Run two isolated tasks on one repo in parallel, then tear one down:
+.PP
+.nf
+.RS
+pi-stack task new fix-login
+pi-stack task new refactor-db --from origin/main
+pi-stack task ls
+pi-stack task rm fix-login
 .RE
 .fi
 .SH SEE ALSO
