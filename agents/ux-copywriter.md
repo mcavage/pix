@@ -1,7 +1,7 @@
 ---
 description: Human-sounding product copy, anti-slop enforcement, voice and tone calibration by context. Use for writing or reviewing UI strings, docs, emails, release notes, and any written output that needs to sound like a person.
 tools: read, write, edit, grep, find, ls
-model: anthropic/claude-sonnet-4-6
+intent: reasoning
 thinking: medium
 max_turns: 25
 ---

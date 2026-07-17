@@ -1,0 +1,63 @@
+{
+  "_note": "Routing policy: the INTENTS an agent/task can declare instead of a hard-coded model. Each intent is a hard-constraint problem — filter models by the ceilings/floor + provider allowlist, then optimize the objective. This is the ONE file you tune to change the cost/latency/accuracy posture of the whole crew. Override at ~/.pi-stack/routing/policy.json.",
+  "default_fallback": "anthropic/claude-sonnet-4-6",
+  "intents": [
+    {
+      "name": "max-accuracy",
+      "task_type": "code",
+      "objective": "accuracy",
+      "fallback": "anthropic/claude-opus-4-8",
+      "about": "One genuinely hard problem. Accuracy dominates; no cost ceiling."
+    },
+    {
+      "name": "code",
+      "task_type": "code",
+      "objective": "accuracy",
+      "max_cost_usd": 0.10,
+      "fallback": "anthropic/claude-sonnet-4-6",
+      "about": "Production code/design/docs. Best accuracy under a sane per-task cost cap."
+    },
+    {
+      "name": "reasoning",
+      "task_type": "reasoning",
+      "objective": "accuracy",
+      "max_cost_usd": 0.10,
+      "fallback": "anthropic/claude-sonnet-4-6",
+      "about": "Structured reasoning + writing (PRDs, RFCs, analysis). Accuracy under a cost cap."
+    },
+    {
+      "name": "review",
+      "task_type": "reasoning",
+      "objective": "accuracy",
+      "providers": ["openai", "google", "ollama"],
+      "fallback": "openai/gpt-5.6-sol",
+      "about": "Adversarial second opinion. Provider allowlist EXCLUDES anthropic so review stays cross-vendor from the main model (different blind spots)."
+    },
+    {
+      "name": "breadth",
+      "task_type": "search",
+      "objective": "cost",
+      "min_accuracy": 0.60,
+      "max_latency_ms": 30000,
+      "fallback": "anthropic/claude-haiku-4-5",
+      "about": "Cheap, fast parallel fan-out. Cheapest model clearing an accuracy floor + latency ceiling."
+    },
+    {
+      "name": "authoring",
+      "task_type": "reasoning",
+      "objective": "accuracy",
+      "providers": ["anthropic"],
+      "fallback": "anthropic/claude-opus-4-8",
+      "about": "Powers the agentic `agent new` flow that drafts prompts + writes eval cases. Needs strong judgment + valid structured output, so it routes to the best Anthropic reasoning model (Opus). Runs rarely, so cost is not a constraint."
+    },
+    {
+      "name": "verify",
+      "task_type": "qa",
+      "objective": "balanced",
+      "max_cost_usd": 0.05,
+      "min_accuracy": 0.65,
+      "fallback": "anthropic/claude-haiku-4-5",
+      "about": "Test/QA passes. Balanced cost/latency/accuracy under a tight cost cap."
+    }
+  ]
+}

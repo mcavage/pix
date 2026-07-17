@@ -95,6 +95,12 @@ func main() {
 		runRestore(args[1:])
 	case "knowledge", "kb":
 		runKnowledge(args[1:])
+	case "route":
+		runRoute(args[1:])
+	case "evals":
+		runEvals(args[1:])
+	case "agent":
+		runAgent(args[1:])
 	case "man":
 		runMan(args[1:])
 	case "profile":
@@ -262,6 +268,8 @@ flags:
   --mcp M          attach an MCP server at creation (repeatable)
   --name N         sandbox name
   --model M        active pi model (passed through to pi)
+  --intent NAME    resolve the session model via the router (cost/latency/accuracy);
+                   --model overrides it. Intents: pi-stack route show
 
 released vs local:
   A RELEASED launcher (clean version like 0.0.16) pins the matching kit tag
@@ -292,6 +300,11 @@ Setup & health
 Data
   memory           recall | remember | forget | learnings | stats
   knowledge        init | use | ls | query | sync | remote
+
+Models & agents
+  agent            manage subagents: ls | new | edit | rm | reassess
+  route            model router: pick | compile | show | models
+  evals            accuracy eval harness: run | import | show | ls
 
 More
   config, mcp, state, version, man     (see ` + "`pi-stack help --all`" + `)

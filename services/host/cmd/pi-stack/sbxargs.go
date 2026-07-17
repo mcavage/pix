@@ -48,6 +48,7 @@ type runOpts struct {
 	MCPEnabled    bool     // sbx MCP gateway is on (caller sets from os.Getenv("SBX_MCP_URL")!=""). --mcp is only a valid sbx flag when the gateway is enabled, so we omit --mcp entirely when this is false.
 	Name          string   // --name N: sandbox name
 	Model         string   // --model M: active pi model (passed through to pi)
+	Intent        string   // --intent NAME: resolve the session model via the router (unless --model overrides)
 	Passthrough   []string // args after `--`, handed straight to pi
 	// Token is the credential bearer for an OPTIONAL overlay broker. The default
 	// path leaves it empty and forwards no bearer (gog authenticates host-side in

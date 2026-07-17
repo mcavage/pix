@@ -1,7 +1,7 @@
 ---
 description: Production code implementation. Reads the codebase, writes clean working code, verifies with build and tests, commits logical units.
 tools: read, write, edit, bash, grep, find, ls
-model: anthropic/claude-opus-4-8
+intent: code
 thinking: high
 max_turns: 40
 ---

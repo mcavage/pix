@@ -52,7 +52,7 @@ gap).
 ## Full mode
 
 ```
-1. Discovery (PM + research + optional architect, concurrent)
+1. Discovery (PM + fanout research + applicable specialists, concurrent)
 2. PR/FAQ (PM writes)
 3. PR/FAQ peer review  →  USER GATE (go / redirect / kill)
 4. PRD (PM, from approved PR/FAQ)
@@ -64,20 +64,35 @@ gap).
 
 ### Stage 1: Discovery (concurrent subagents)
 **Skip if** the user gives a clear brief with evidence, or it's a small
-enhancement with an obvious job to be done. Fan out in one turn:
+enhancement with an obvious job to be done. Fan out in one turn. The crew is
+chosen by what the work TOUCHES, not by habit: always the first two, plus every
+specialist whose surface the work hits:
 
-- **PM** (strong model): JTBD ("When [situation], I want [motivation], so I can
+- **PM** (always): JTBD ("When [situation], I want [motivation], so I can
   [outcome]"), top 3-5 assumptions (confidence / evidence / validation / impact
   if wrong), competitive landscape, opportunity score, cost of delay (H/M/L).
-- **Research** (large-context): usage/adoption signals and customer feedback via
-  `capability-routing`; prior internal docs from **docs** / **meeting-notes**.
-  Multi-capability join — prefer `code-mode` for the fan-out.
-- **Architect** (optional; include when it touches infrastructure, security
-  boundaries, or cross-system integration): feasibility, constraints/blockers,
-  complexity (trivial / moderate / hard / research-needed).
+- **Research** (always): `fanout` workers (or the orchestrator directly) pull
+  usage/adoption signals and customer feedback via `capability-routing` and
+  prior internal docs from **docs** / **meeting-notes**. There is no `research`
+  agent; use `fanout`. Multi-capability join: prefer `code-mode` for the fan-out.
+- **Architect** (when it touches infrastructure, security boundaries, or
+  cross-system integration): feasibility, constraints/blockers, complexity
+  (trivial / moderate / hard / research-needed).
+- **growth-marketing** (when the work is user-facing or has a launch/adoption
+  surface): positioning, ICP, the GTM angle the PR/FAQ must support.
+- **finance-analyst** (when it touches pricing, cost, spend, or budgets): unit
+  economics and the cost tradeoff the design must respect.
+- **designer** (a visual UI surface), **ux-copywriter** (any user-facing copy),
+  **dx-consultant** (a dev-facing API/CLI/SDK), **legal** (licensing, privacy,
+  or regulatory obligations), **enterprise-admin** (SSO/RBAC/procurement).
+
+Product-facing roles feed the PR/FAQ + PRD; engineering-facing ones feed design
++ arch. Skipping a relevant specialist is a choice you note, not a default.
 
 Merge into `discovery.md`. If the recommendation is "deprioritize," stop and
-present findings before writing anything.
+present findings before writing anything. (Under `deliver` this stop is
+suppressed: a deprioritize recommendation is escalated per Override plan, not
+returned to the user.)
 
 ### Stage 2: PR/FAQ (PM subagent)
 Input: `discovery.md` (or the user's brief). Structure: **press release**
@@ -93,6 +108,14 @@ Cross-model `peer-review` on `pr-faq.md` + `discovery.md`: accuracy, slop 0-10
 alone?). Verdict PASS / REVISE / REJECT, max 2 revision loops. **Present to the
 user and wait:** aligned PR/FAQ, verdict + scores, recommendation. Outcomes:
 **Go** → Stage 4; **Redirect** → update PR/FAQ, proceed; **Kill** → archive, done.
+
+**Auto-gate under an autonomous wrapper.** When `plan` runs inside `deliver`
+("cook and deliver": don't return mid-flight), this user gate is AUTO-GATED:
+apply the decision principles, decide every mechanical and taste question
+yourself (record taste calls), and proceed to Stage 4 without stopping. Halt for
+the user ONLY on a genuine user-only decision (no safe reversible default, and
+it blocks everything downstream). The crew still runs in full; only the pause
+is removed.
 
 ### Stages 4-8: The machine (auto after go)
 No further user involvement unless something is infeasible or peer review rejects.

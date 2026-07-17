@@ -1,0 +1,17 @@
+# task_type: reasoning — structured reasoning probes.
+
+- description: bat and ball — the classic anchoring trap
+  vars:
+    prompt: >-
+      A bat and a ball cost $1.10 together. The bat costs $1.00 more than the
+      ball. How much does the ball cost? Reply with just the amount in cents.
+  assert:
+    - type: icontains-any
+      value:
+        - "5 cents"
+        - "5 cent"
+        - "$0.05"
+        - "0.05"
+        - "five cents"
+  metadata:
+    task_type: reasoning

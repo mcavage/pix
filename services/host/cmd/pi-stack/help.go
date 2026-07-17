@@ -35,7 +35,7 @@ var knownVerbs = map[string]bool{
 	"profile": true, "version": true, "run": true, "secret": true,
 	"reset": true, "uninstall": true, "man": true,
 	"backup": true, "restore": true, "state": true,
-	"task": true,
+	"task": true, "route": true, "evals": true, "agent": true,
 }
 
 // suggestVerb returns the closest known verb to input within edit distance 2,
@@ -105,6 +105,11 @@ Setup & health
 Data
   memory <cmd>        recall | remember | forget | learnings | stats   (:11435)
   knowledge <cmd>     init | use | ls | query | sync | remote          (:11436)
+
+Models & agents (cost/latency/accuracy routing)
+  agent <cmd>         ls | new | edit | rm | reassess (subagents as objects)
+  route <cmd>         pick | compile | show | models (intent -> model)
+  evals <cmd>         run | import | show | ls (measure accuracy, feed the router)
 
 Config & context
   config show|path    show the resolved config path and contents
@@ -177,6 +182,12 @@ func verbUsage(verb string) (string, bool) {
 		return stateUsage, true
 	case "task":
 		return taskUsage, true
+	case "route":
+		return routeUsage, true
+	case "evals":
+		return evalsUsage, true
+	case "agent":
+		return agentUsage, true
 	}
 	return "", false
 }

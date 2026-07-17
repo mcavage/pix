@@ -30,6 +30,7 @@ config/local.mk
 # CORE skills below are tracked; everything else stays local.
 # Keep this list in sync with the !skills/... allowlist in .dockerignore.
 skills/*
+!skills/agent-new/
 !skills/anti-slop/
 !skills/api-conventions/
 !skills/brainstorm/

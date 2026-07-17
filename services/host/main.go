@@ -83,6 +83,10 @@ func main() {
 		runPlugin(os.Args[2:])
 	case "memory":
 		runMemoryHost(os.Args[2:])
+	case "route":
+		runRouteHost(os.Args[2:])
+	case "evals":
+		runEvalsHost(os.Args[2:])
 	case "backup":
 		runBackupCLI(os.Args[2:])
 	case "restore":
@@ -138,6 +142,8 @@ subcommands:
   memory         self-learning memory store, JSON-RPC (:11435)
   backup         hot FULL backup (memory + config + op-refs) -> tar.gz
   restore        restore a FULL backup tar.gz (safe swap)
+  route <cmd>    model router: pick | compile | show | models
+  evals <cmd>    accuracy eval harness: run | show | ls
   mcp <name>     stdio MCP bridge (run by the sbx gateway); slack is an alias
   slack          alias for "mcp slack"
   plugin <kind>  built-in go-plugin server, self-exec (memory|knowledge|broker|mcp)

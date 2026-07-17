@@ -1,7 +1,7 @@
 ---
 description: Developer experience reviewer for APIs, CLIs, and SDKs. Evaluates usability, composability, and progressive disclosure through the Hykes/Hejlsberg lens. Read-only, returns a structured DX critique with specific recommendations.
 tools: read, grep, find, ls, bash
-model: anthropic/claude-opus-4-8
+intent: reasoning
 thinking: high
 max_turns: 30
 ---

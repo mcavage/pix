@@ -1,0 +1,54 @@
+# pi-stack model-routing evals (promptfoo).
+#
+# This is the ONE home for evals. Each suite file under suites/ is a set of test
+# cases with human-readable assertions; each case carries metadata.task_type,
+# which is the key the scorecard is aggregated on (model x task_type). The pi
+# provider (providers/pi.js) invokes each candidate model through `pi`, so auth
+# is proxy-managed and every provider pi reaches is evaluable with no extra code.
+#
+# Run:   pi-stack evals run            (shells `promptfoo eval` + imports results)
+# or:    promptfoo eval -c evals/promptfooconfig.yaml --output results.json
+#
+# Add a model: one entry under `providers` (and one row in
+# services/host/routing/models.json for pricing). Add an agent's eval: one file
+# under suites/agents/. Nothing else changes.
+
+description: pi-stack model routing evals
+
+# The single prompt template: each test supplies its own `prompt` var.
+prompts:
+  - "{{prompt}}"
+
+# Candidate models. Keep in sync with services/host/routing/models.json (that
+# file owns pricing; this list owns which models the sweep exercises). The
+# provider id() is `pi:<model>`, which the scorecard importer maps back to the
+# model id.
+# label = the model id (so `pi-stack evals run --models <id>` can filter with
+# promptfoo --filter-providers matching the label). The provider's own id()
+# returns `pi:<model>`, which the scorecard importer keys on.
+providers:
+  - id: file://providers/pi.js
+    label: anthropic/claude-opus-4-8
+    config: { model: anthropic/claude-opus-4-8 }
+  - id: file://providers/pi.js
+    label: anthropic/claude-sonnet-4-6
+    config: { model: anthropic/claude-sonnet-4-6 }
+  - id: file://providers/pi.js
+    label: anthropic/claude-haiku-4-5
+    config: { model: anthropic/claude-haiku-4-5 }
+  - id: file://providers/pi.js
+    label: openai/gpt-5.6-sol
+    config: { model: openai/gpt-5.6-sol }
+
+# The llm-rubric grader (for judge-style cases) also goes through pi (a cheap model).
+defaultTest:
+  options:
+    provider:
+      id: file://providers/pi.js
+      config: { model: anthropic/claude-haiku-4-5 }
+
+# Suites. Central task_type suites back the generic intents; per-agent suites
+# (suites/agents/*.yaml, created by `pi-stack agent new`) back specialized agents.
+tests:
+  - file://suites/*.yaml
+  - file://suites/agents/*.yaml

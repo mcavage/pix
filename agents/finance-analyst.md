@@ -1,7 +1,7 @@
 ---
 description: SaaS metrics, financial models, cohort analysis, and market sizing. Use when the task involves unit economics, scenario planning, or any quantitative financial analysis.
 tools: read, write, edit, bash, grep, find, ls
-model: anthropic/claude-opus-4-8
+intent: reasoning
 thinking: high
 max_turns: 30
 ---

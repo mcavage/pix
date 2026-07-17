@@ -1,7 +1,7 @@
 ---
 description: Working React/Tailwind UI components. All states covered, empty, loading, error, edge, permission. Pairs with the design-system skill.
 tools: read, write, edit, bash, grep, find, ls
-model: anthropic/claude-opus-4-8
+intent: code
 thinking: high
 max_turns: 30
 ---

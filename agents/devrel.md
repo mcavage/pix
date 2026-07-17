@@ -1,7 +1,7 @@
 ---
 description: Developer docs, tutorials, and sample code that actually runs. Use for API references, quickstarts, onboarding guides, and developer journey work.
 tools: read, write, edit, bash, grep, find, ls
-model: anthropic/claude-opus-4-8
+intent: code
 thinking: high
 max_turns: 30
 ---
