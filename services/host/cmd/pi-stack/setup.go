@@ -132,7 +132,12 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
 	case sio.isTTY && !opts.assumeYes:
 		// Interactive: default (Enter) scaffolds the global KB; a path/url points
 		// at an existing/shared bundle instead; "skip" defers it.
-		def := defaultKnowledgeDir()
+		def, derr := defaultKnowledgeDir()
+		if derr != nil {
+			fmt.Fprintf(sio.out, "  ✗ could not resolve the knowledge dir — %v\n", derr)
+			todo("pi-stack knowledge init")
+			break
+		}
 		ans := promptLine(sio, fmt.Sprintf(
 			"  Set up a knowledge base? [Enter = scaffold at %s; a path/git-url uses that; 'skip']: ", def))
 		switch {
@@ -153,7 +158,11 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
 	default:
 		// Non-interactive with no --knowledge: scaffold the default global KB so
 		// the stack ships with a working knowledge base out of the box.
-		if err := knowledgeInit(cfg, defaultKnowledgeDir(), sio.out); err != nil {
+		def, derr := defaultKnowledgeDir()
+		if derr != nil {
+			fmt.Fprintf(sio.out, "  ✗ scaffold failed — %v\n", derr)
+			todo("pi-stack knowledge init")
+		} else if err := knowledgeInit(cfg, def, sio.out); err != nil {
 			fmt.Fprintf(sio.out, "  ✗ scaffold failed — %v\n", err)
 			todo("pi-stack knowledge init")
 		}

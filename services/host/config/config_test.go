@@ -496,18 +496,20 @@ func TestReadTokenAbsent(t *testing.T) {
 	}
 }
 
-// TestServePidPath resolves serve.pid under the config dir, honoring
-// PI_STACK_CONFIG's parent (a sibling of config.toml) so the host writer and the
-// launcher reader always agree on the location.
+// TestServePidPath resolves serve.pid under the STATE base, honoring
+// XDG_STATE_HOME, so the host writer and the launcher reader always agree on the
+// location. LegacyServePidPath still points at the config dir for the dual-read
+// window.
 func TestServePidPath(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
-	want := filepath.Join(dir, "serve.pid")
+	state := t.TempDir()
+	cfg := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(cfg, "config.toml"))
+	want := filepath.Join(state, "pi-stack", "serve.pid")
 	if got := ServePidPath(); got != want {
 		t.Errorf("ServePidPath() = %q, want %q", got, want)
 	}
-	// It must be a sibling of the config file (same directory).
-	if filepath.Dir(ServePidPath()) != filepath.Dir(Path()) {
-		t.Errorf("ServePidPath dir %q != config dir %q", filepath.Dir(ServePidPath()), filepath.Dir(Path()))
+	if got, want := LegacyServePidPath(), filepath.Join(cfg, "serve.pid"); got != want {
+		t.Errorf("LegacyServePidPath() = %q, want %q", got, want)
 	}
 }

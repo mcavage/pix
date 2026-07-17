@@ -246,10 +246,14 @@ func TestSetup_KnowledgeAlreadyConfiguredSkips(t *testing.T) {
 
 // TestSetup_KnowledgeDefaultNonInteractiveScaffolds: non-interactive setup with
 // no --knowledge flag and no configured bundle scaffolds the DEFAULT global KB
-// (<config-dir>/knowledge) and wires it.
+// (the XDG DATA base, ~/.local/share/pi-stack/knowledge) and wires it.
 func TestSetup_KnowledgeDefaultNonInteractiveScaffolds(t *testing.T) {
 	cfgDir := t.TempDir()
 	t.Setenv("PI_STACK_CONFIG", filepath.Join(cfgDir, "config.toml"))
+	// The default bundle now lives under the DATA base (XDG storage reconciliation),
+	// not beside config.toml — point XDG_DATA_HOME at a temp dir so it is hermetic.
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
 
 	f := fakeEnv{present: map[string]bool{}, output: map[string]string{}, ports: map[int]bool{}}
 	var buf bytes.Buffer
@@ -263,7 +267,7 @@ func TestSetup_KnowledgeDefaultNonInteractiveScaffolds(t *testing.T) {
 	runSetup(cfg, f.env(), sio,
 		setupOpts{account: "me@x.com", assumeYes: true}, captureSave(&saved))
 
-	defDir := filepath.Join(cfgDir, "knowledge")
+	defDir := filepath.Join(dataHome, "pi-stack", "knowledge")
 	if _, err := os.Stat(filepath.Join(defDir, "index.md")); err != nil {
 		t.Errorf("expected default KB scaffolded at %s: %v", defDir, err)
 	}

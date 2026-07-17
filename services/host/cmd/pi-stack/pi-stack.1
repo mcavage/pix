@@ -218,6 +218,33 @@ Extra arguments are rejected.
 Report the supervisor PID and memory and knowledge port state.
 .B \-\-json
 emits JSON.
+.SS paths
+.TP
+.B "pi-stack paths"
+Print where pi-stack keeps its data: the three XDG bases
+.RB ( config
+in ~/.config/pi-stack,
+.B data
+in ~/.local/share/pi-stack, and
+.B state
+in ~/.local/state/pi-stack), any active environment overrides, and, when a
+pre-XDG install still has data at a legacy location, a note to run
+.BR "pi-stack migrate" .
+Read-only; it launches nothing and mutates nothing.
+.SS migrate
+.TP
+.B "pi-stack migrate"
+Relocate storage to the standard XDG layout, once and explicitly.  Memory, the
+knowledge bundle, and backups move to ~/.local/share/pi-stack; the knowledge
+index, caches, and tasks move to ~/.local/state/pi-stack; config.toml, op-refs,
+and the broker token stay in ~/.config/pi-stack.  Nothing precious is deleted:
+each artifact is moved (or copied and verified across filesystems) and the legacy
+path is left as a symlink or a .pre-xdg timestamped safety copy.  The knowledge
+index is rebuilt, not moved.  Memory moves only while its lock is free (a running
+serve defers it, safely).  Re-running is idempotent.  Existing installs keep
+working in place until this is run.  It execs
+.BR pi-stack-host " migrate,"
+where the sqlite integrity check lives.
 .SS memory
 The aliases
 .BR mem ,
@@ -286,7 +313,7 @@ snapshot of the memory database, the
 knowledge bundle's path and git remote) into a gzip tar archive.  Knowledge
 bundle contents are NOT archived: a bundle is a git repository and git is its
 backup; the manifest records only where it lives.  The default output is
-.BR ~/.pi-stack/backups/pi-stack-backup- timestamp .tar.gz;
+.BR ~/.local/share/pi-stack/backups/pi-stack-backup- timestamp .tar.gz;
 the default retention count is 7.  The alias
 .B \-o
 is accepted for
@@ -695,28 +722,56 @@ references resolved by
 .TP
 .B ~/.config/pi-stack/broker-token
 Mode-0600 bearer shared by launcher and host broker components.
+.SS "Data tree (precious)"
+The DATA base holds the artifacts that cannot be regenerated.  It defaults to
+.B ~/.local/share/pi-stack
+and honors
+.BR XDG_DATA_HOME .
 .TP
-.B ~/.config/pi-stack/serve.pid
-PID of the running
-.B pi-stack-host serve
-supervisor.
+.B ~/.local/share/pi-stack/memory/memory.db
+Default memory SQLite database (override with
+.BR MEMORY_DB ).
 .TP
-.B ~/.config/pi-stack/knowledge/
+.B ~/.local/share/pi-stack/knowledge/
 Default global OKF bundle created by
 .BR "knowledge init" .
 .TP
-.B ~/.config/pi-stack/knowledge-cache/
-Cached clones for knowledge bundle Git URLs.
-.SS "Data tree"
-.TP
-.B ~/.pi-stack/memory/memory.db
-Default memory SQLite database.
-.TP
-.B ~/.pi-stack/knowledge/knowledge.db
-Default knowledge SQLite index.
-.TP
-.B ~/.pi-stack/backups/pi-stack-backup-*.tar.gz
+.B ~/.local/share/pi-stack/backups/pi-stack-backup-*.tar.gz
 Default full backup archives (memory, config, and op-refs).
+.SS "State tree (regenerable)"
+The STATE base holds regenerable runtime state.  It defaults to
+.B ~/.local/state/pi-stack
+and honors
+.BR XDG_STATE_HOME .
+.TP
+.B ~/.local/state/pi-stack/knowledge/index.db
+Rebuildable knowledge SQLite index (override with
+.BR KNOWLEDGE_DB ).
+.TP
+.B ~/.local/state/pi-stack/knowledge-cache/
+Cached clones for knowledge bundle Git URLs (override with
+.BR KNOWLEDGE_CACHE_DIR ).
+.TP
+.B ~/.local/state/pi-stack/tasks/
+Parallel task worktrees and metadata.
+.TP
+.B ~/.local/state/pi-stack/serve.pid
+PID of the running
+.B pi-stack-host serve
+supervisor.
+.SS "Legacy locations (pre-XDG)"
+Installs made before the XDG reconciliation keep working in place; run
+.B "pi-stack migrate"
+to relocate them.  Memory was at
+.BR ~/.pi-stack/memory/ ,
+backups at
+.BR ~/.pi-stack/backups/ ,
+the bundle at
+.BR ~/.config/pi-stack/knowledge/ ,
+the cache at
+.BR ~/.config/pi-stack/knowledge-cache/ ,
+and the pidfile at
+.BR ~/.config/pi-stack/serve.pid .
 .SS "Workspace and installation files"
 .TP
 .B .pi-stack/knowledge

@@ -109,6 +109,17 @@ func backupHas(bs []backupTarget, path string) bool {
 	return false
 }
 
+// backupDangerous reports the Dangerous flag of the backup target at path (false
+// if the target is absent), so a test can assert the fail-closed classification.
+func backupDangerous(bs []backupTarget, path string) bool {
+	for _, b := range bs {
+		if b.Path == path {
+			return b.Dangerous
+		}
+	}
+	return false
+}
+
 // stubStopServe replaces the reset executor's serve-stop with a hermetic no-op so
 // a test never signals a real `pi-stack-host serve` on the developer's machine.
 // It records that the stop ran and restores the original on cleanup.
@@ -405,6 +416,9 @@ func TestExecuteReset_KeepMemoryCustomDBDir(t *testing.T) {
 		}
 	}
 	writeFile(t, filepath.Join(customMem, "memory.db"), "facts")
+	// The .memory.lock flock file sits inside the memory subdir; it must ride along
+	// with the preserved subdir, never be swept aside (R4-1).
+	writeFile(t, filepath.Join(customMem, ".memory.lock"), "")
 	p := resetPaths{configDir: filepath.Join(root, "config"), dataRoot: dataRoot, memoryDir: customMem, knowledgeDir: kbDir}
 	a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
 
@@ -414,6 +428,9 @@ func TestExecuteReset_KeepMemoryCustomDBDir(t *testing.T) {
 	}
 	if !exists(customMem) || !exists(filepath.Join(customMem, "memory.db")) {
 		t.Error("--keep-memory must preserve the resolved custom memory dir")
+	}
+	if !exists(filepath.Join(customMem, ".memory.lock")) {
+		t.Error("--keep-memory must preserve the .memory.lock inside the memory subdir")
 	}
 	if exists(kbDir) {
 		t.Error("knowledge dir should have been moved aside")
@@ -436,10 +453,13 @@ func TestExecuteReset_KeepMemoryLooseDBInRoot(t *testing.T) {
 	if err := os.MkdirAll(dataRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// A custom MEMORY_DB loose in the data root, with a -wal sidecar.
+	// A custom MEMORY_DB loose in the data root, with a -wal sidecar and the
+	// sibling .memory.lock flock file reset holds during the sweep (R4-1).
 	memDB := filepath.Join(dataRoot, "custom-memory.db")
 	writeFile(t, memDB, "facts")
 	writeFile(t, memDB+"-wal", "wal")
+	lockFile := filepath.Join(dataRoot, ".memory.lock")
+	writeFile(t, lockFile, "")
 	// An unrelated sibling file and dir that MUST be swept aside.
 	siblingFile := filepath.Join(dataRoot, "scratch.log")
 	writeFile(t, siblingFile, "junk")
@@ -471,6 +491,14 @@ func TestExecuteReset_KeepMemoryLooseDBInRoot(t *testing.T) {
 	}
 	if exists(memDB + ".bak-" + fixedTS) {
 		t.Error("the loose memory db must NOT have been moved aside")
+	}
+	// The sibling .memory.lock is preserved IN PLACE — never swept aside — so the
+	// flock reset holds on that inode stays the canonical-path authority (R4-1).
+	if !exists(lockFile) {
+		t.Error("the sibling .memory.lock must be preserved in place")
+	}
+	if exists(lockFile + ".bak-" + fixedTS) {
+		t.Error("the sibling .memory.lock must NOT have been moved aside")
 	}
 	// The unrelated sibling file + dir were swept aside.
 	if exists(siblingFile) {
@@ -741,6 +769,515 @@ func TestExecuteReset_KeepMemoryReadDirErrorSurfaces(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "preserved captured memory") {
 		t.Error("must NOT report preservation/success over an unreadable data dir")
+	}
+}
+
+// TestResetPlan_XDGBasesMovedAside: a default reset moves aside the new DATA and
+// STATE bases too (not just the legacy ~/.pi-stack), so the XDG layout is swept.
+func TestResetPlan_XDGBasesMovedAside(t *testing.T) {
+	p := resetPaths{
+		configDir: "/c", dataRoot: "/legacy", dataDir: "/data", stateDir: "/state",
+		memoryDir: "/legacy/memory", knowledgeDir: "/legacy/knowledge",
+	}
+	full := resetPlan(resetCfg(), p, resetOpts{})
+	for _, want := range []string{"/legacy", "/data", "/state"} {
+		if !backupHas(full.Backups, want) {
+			t.Errorf("default reset must move aside %s", want)
+		}
+	}
+}
+
+// TestResetPlan_KeepMemorySweepsBothRoots: --keep-memory sweeps BOTH the legacy
+// data root and the new DATA base (each preserving memory), and moves STATE aside
+// wholesale.
+func TestResetPlan_KeepMemorySweepsBothRoots(t *testing.T) {
+	p := resetPaths{
+		configDir: "/c", dataRoot: "/legacy", dataDir: "/data", stateDir: "/state",
+		memoryDir: "/legacy/memory", knowledgeDir: "/legacy/knowledge",
+	}
+	keep := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+	if !backupHas(keep.Backups, "/state") {
+		t.Error("--keep-memory must move the STATE base aside wholesale")
+	}
+	if backupHas(keep.Backups, "/data") || backupHas(keep.Backups, "/legacy") {
+		t.Error("--keep-memory must SWEEP the data roots, not move them wholesale (memory lives there)")
+	}
+	roots := map[string]bool{}
+	for _, sr := range keep.SweepRoots {
+		roots[sr.Root] = true
+	}
+	if !roots["/legacy"] || !roots["/data"] {
+		t.Errorf("SweepRoots = %v, want both /legacy and /data", keep.SweepRoots)
+	}
+}
+
+// TestExecuteReset_KeepMemoryPreservesEveryAuthority (finding 10): --keep-memory
+// preserves memory in the legacy root, the new DATA base, AND a memory.pre-xdg-*
+// safety copy, while sweeping knowledge + backups in each.
+func TestExecuteReset_KeepMemoryPreservesEveryAuthority(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	legacy := filepath.Join(root, ".pi-stack")
+	data := filepath.Join(root, ".local", "share", "pi-stack")
+	state := filepath.Join(root, ".local", "state", "pi-stack")
+	legMem := filepath.Join(legacy, "memory")
+	legSafety := filepath.Join(legacy, "memory.pre-xdg-1699999999")
+	legKb := filepath.Join(legacy, "knowledge")
+	dataMem := filepath.Join(data, "memory")
+	dataBackups := filepath.Join(data, "backups")
+	for _, d := range []string{legMem, legSafety, legKb, dataMem, dataBackups, state} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(legMem, "memory.db"), "legacy facts")
+	writeFile(t, filepath.Join(legSafety, "memory.db"), "safety facts")
+	writeFile(t, filepath.Join(dataMem, "memory.db"), "new facts")
+	writeFile(t, filepath.Join(dataBackups, "b.tar.gz"), "backup")
+
+	p := resetPaths{
+		configDir: filepath.Join(root, "config"), dataRoot: legacy, dataDir: data, stateDir: state,
+		memoryDir: legMem, knowledgeDir: legKb,
+	}
+	a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+
+	var buf bytes.Buffer
+	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Every memory authority survives.
+	for _, keep := range []string{
+		filepath.Join(legMem, "memory.db"),
+		filepath.Join(legSafety, "memory.db"),
+		filepath.Join(dataMem, "memory.db"),
+	} {
+		if !exists(keep) {
+			t.Errorf("memory authority must be preserved: %s", keep)
+		}
+	}
+	// Knowledge (legacy) + backups (new DATA) are swept aside.
+	if exists(legKb) {
+		t.Error("legacy knowledge must be swept aside")
+	}
+	if exists(dataBackups) {
+		t.Error("new DATA backups must be swept aside under --keep-memory")
+	}
+	// STATE moved wholesale.
+	if exists(state) {
+		t.Error("STATE base must be moved aside")
+	}
+	if !exists(state + ".bak-" + fixedTS) {
+		t.Error("STATE .bak backup missing")
+	}
+}
+
+// TestExecuteReset_MemoryFlockBlocksDataMove (LOW-2): when the memory flock
+// cannot be ACQUIRED (a running serve holds it), reset refuses the dangerous
+// data move even when the port probe is down.
+func TestExecuteReset_MemoryFlockBlocksDataMove(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	p := tempPaths(t, root)
+	a := resetPlan(resetCfg(), p, resetOpts{})
+
+	env := noToolEnv()
+	env.memLockAcquire = func() (func(), bool) { return nil, false } // held => refuse
+	var buf bytes.Buffer
+	_, err := executeReset(a, defaultResetFS(), env, &buf, fixedNow)
+	if err == nil {
+		t.Fatal("a held memory flock must block the dangerous data move")
+	}
+	if exists(p.dataRoot + ".bak-" + fixedTS) {
+		t.Error("the data dir must NOT move while the memory flock is held")
+	}
+	if exists(p.configDir) {
+		t.Error("the config dir (safe) should still be backed up")
+	}
+	// --force overrides the flock guard (acquire is never even attempted).
+	aForce := resetPlan(resetCfg(), tempPaths(t, t.TempDir()), resetOpts{force: true})
+	var buf2 bytes.Buffer
+	env2 := noToolEnv()
+	acquireCalled := false
+	env2.memLockAcquire = func() (func(), bool) { acquireCalled = true; return nil, false }
+	if _, err := executeReset(aForce, defaultResetFS(), env2, &buf2, fixedNow); err != nil {
+		t.Fatalf("--force must override the flock guard: %v", err)
+	}
+	if acquireCalled {
+		t.Error("--force must NOT even attempt to acquire the memory flock")
+	}
+}
+
+// TestExecuteReset_MemoryFlockHeldAcrossMove (LOW-2): reset ACQUIRES the memory
+// flock before the data move and RELEASES it only after every move completes, so
+// a serve cannot start mid-move.
+func TestExecuteReset_MemoryFlockHeldAcrossMove(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	p := tempPaths(t, root)
+	a := resetPlan(resetCfg(), p, resetOpts{})
+
+	env := noToolEnv()
+	acquired, releasedAt, moveCount := false, -1, 0
+	// The fs rename records the order of moves so we can prove release ran LAST.
+	fsys := defaultResetFS()
+	baseRename := fsys.rename
+	fsys.rename = func(oldpath, newpath string) error {
+		if err := baseRename(oldpath, newpath); err != nil {
+			return err
+		}
+		moveCount++
+		return nil
+	}
+	env.memLockAcquire = func() (func(), bool) {
+		acquired = true
+		return func() { releasedAt = moveCount }, true
+	}
+	var buf bytes.Buffer
+	if _, err := executeReset(a, fsys, env, &buf, fixedNow); err != nil {
+		t.Fatalf("executeReset: %v", err)
+	}
+	if !acquired {
+		t.Fatal("reset must ACQUIRE the memory flock before the data move")
+	}
+	if releasedAt == -1 {
+		t.Fatal("reset must RELEASE the memory flock after the data move")
+	}
+	if releasedAt != moveCount || moveCount == 0 {
+		t.Fatalf("flock released after %d moves, but %d moves ran — must release LAST", releasedAt, moveCount)
+	}
+	if !exists(p.dataRoot + ".bak-" + fixedTS) {
+		t.Error("the data dir should have moved aside while the flock was held")
+	}
+}
+
+// TestReset_CustomMemoryDBUnderConfigProtectedOnFlockFail (R2-1): a custom
+// MEMORY_DB living UNDER the config dir must be protected by the fail-closed
+// flock-acquire refusal. resetPlan classifies the config-dir target Dangerous
+// because it CONTAINS the memory authority, so executeReset SKIPS it when the
+// flock cannot be acquired — the config dir (and the memory db inside it) is NOT
+// moved out from under a live sqlite writer.
+func TestReset_CustomMemoryDBUnderConfigProtectedOnFlockFail(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	configDir := filepath.Join(root, ".config", "pi-stack")
+	memDir := filepath.Join(configDir, "memory")
+	memoryDB := filepath.Join(memDir, "memory.db")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(configDir, "config.toml"), "x")
+	writeFile(t, memoryDB, "facts")
+	p := resetPaths{
+		configDir: configDir,
+		dataRoot:  filepath.Join(root, ".pi-stack"),
+		dataDir:   filepath.Join(root, ".local", "share", "pi-stack"),
+		stateDir:  filepath.Join(root, ".local", "state", "pi-stack"),
+		memoryDir: memDir,
+		memoryDB:  memoryDB,
+	}
+
+	// A DEFAULT reset (no --keep-memory) would move the config dir wholesale. The
+	// plan must mark it Dangerous because it holds the memory authority.
+	a := resetPlan(resetCfg(), p, resetOpts{})
+	if !backupDangerous(a.Backups, configDir) {
+		t.Fatal("a config dir that CONTAINS the memory authority must be classified Dangerous")
+	}
+
+	env := noToolEnv()
+	env.memLockAcquire = func() (func(), bool) { return nil, false } // held/failed => refuse
+	var buf bytes.Buffer
+	_, err := executeReset(a, defaultResetFS(), env, &buf, fixedNow)
+	if err == nil {
+		t.Fatal("a failed flock acquire must refuse moving the memory-bearing config dir")
+	}
+	if !exists(configDir) || !exists(memoryDB) {
+		t.Error("the config dir (and the custom MEMORY_DB inside it) must NOT move while the flock is held")
+	}
+	if exists(configDir + ".bak-" + fixedTS) {
+		t.Error("the config dir must NOT have been backed up under a held flock")
+	}
+}
+
+// TestExecuteReset_KeepMemoryCustomDBUnderXDGBase (R1-2): a custom MEMORY_DB that
+// resolves UNDER any of the XDG bases (DATA, STATE, CONFIG) is preserved by
+// --keep-memory, while the regenerable siblings in that base are swept aside.
+func TestExecuteReset_KeepMemoryCustomDBUnderXDGBase(t *testing.T) {
+	cases := []struct {
+		name string
+		// base selects which XDG base holds the custom memory db.
+		base func(root string) (baseDir string, p resetPaths)
+	}{
+		{
+			name: "DATA",
+			base: func(root string) (string, resetPaths) {
+				dataDir := filepath.Join(root, ".local", "share", "pi-stack")
+				mem := filepath.Join(dataDir, "facts-store")
+				return dataDir, resetPaths{
+					configDir: filepath.Join(root, ".config", "pi-stack"),
+					dataRoot:  filepath.Join(root, ".pi-stack"),
+					dataDir:   dataDir,
+					stateDir:  filepath.Join(root, ".local", "state", "pi-stack"),
+					memoryDir: mem, memoryDB: filepath.Join(mem, "memory.db"),
+				}
+			},
+		},
+		{
+			name: "STATE",
+			base: func(root string) (string, resetPaths) {
+				stateDir := filepath.Join(root, ".local", "state", "pi-stack")
+				mem := filepath.Join(stateDir, "memory")
+				return stateDir, resetPaths{
+					configDir: filepath.Join(root, ".config", "pi-stack"),
+					dataRoot:  filepath.Join(root, ".pi-stack"),
+					dataDir:   filepath.Join(root, ".local", "share", "pi-stack"),
+					stateDir:  stateDir,
+					memoryDir: mem, memoryDB: filepath.Join(mem, "memory.db"),
+				}
+			},
+		},
+		{
+			name: "CONFIG",
+			base: func(root string) (string, resetPaths) {
+				configDir := filepath.Join(root, ".config", "pi-stack")
+				mem := filepath.Join(configDir, "memory")
+				return configDir, resetPaths{
+					configDir: configDir,
+					dataRoot:  filepath.Join(root, ".pi-stack"),
+					dataDir:   filepath.Join(root, ".local", "share", "pi-stack"),
+					stateDir:  filepath.Join(root, ".local", "state", "pi-stack"),
+					memoryDir: mem, memoryDB: filepath.Join(mem, "memory.db"),
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stubStopServe(t)
+			root := t.TempDir()
+			baseDir, p := tc.base(root)
+			if err := os.MkdirAll(p.memoryDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, p.memoryDB, "facts")
+			// A regenerable sibling in the SAME base that must be swept aside.
+			sibling := filepath.Join(baseDir, "regenerable")
+			if err := os.MkdirAll(sibling, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(sibling, "x"), "junk")
+
+			a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+			// The base holding the memory authority must NOT be a wholesale backup target.
+			if backupHas(a.Backups, baseDir) {
+				t.Fatalf("%s base holds a custom MEMORY_DB; it must be swept, not moved wholesale", tc.name)
+			}
+			var buf bytes.Buffer
+			if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !exists(p.memoryDB) {
+				t.Errorf("custom MEMORY_DB under %s must be preserved by --keep-memory", tc.name)
+			}
+			if exists(sibling) {
+				t.Errorf("a regenerable sibling under %s must be swept aside", tc.name)
+			}
+			if !exists(sibling + ".bak-" + fixedTS) {
+				t.Errorf("the swept sibling .bak backup is missing under %s", tc.name)
+			}
+		})
+	}
+}
+
+// TestExecuteReset_KeepMemoryCustomDBUnderLegacyStray (R3-1): a custom MEMORY_DB
+// nested UNDER a legacy config-sibling stray must be PRESERVED by --keep-memory on
+// a SUCCESSFUL flock, while the rest of that stray IS still swept aside (sweep,
+// not the wholesale move that would drag the live db with it).
+func TestExecuteReset_KeepMemoryCustomDBUnderLegacyStray(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	legacyConfig := filepath.Join(root, ".config", "pi-stack")
+	strayKb := filepath.Join(legacyConfig, "knowledge") // a legacy stray dir
+	mem := filepath.Join(strayKb, "memory")             // MEMORY_DB nested UNDER the stray
+	memoryDB := filepath.Join(mem, "memory.db")
+	if err := os.MkdirAll(mem, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, memoryDB, "facts")
+	// A regenerable sibling inside the SAME stray that MUST be swept aside.
+	sibling := filepath.Join(strayKb, "index")
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sibling, "x"), "junk")
+
+	p := resetPaths{
+		configDir: filepath.Join(root, "custom-config"), // moved elsewhere, so strays exist
+		dataRoot:  filepath.Join(root, ".pi-stack"),
+		dataDir:   filepath.Join(root, ".local", "share", "pi-stack"),
+		stateDir:  filepath.Join(root, ".local", "state", "pi-stack"),
+		memoryDir: mem,
+		memoryDB:  memoryDB,
+		legacyStrays: []backupTarget{
+			{Path: strayKb, Label: "legacy knowledge bundle"},
+			{Path: filepath.Join(legacyConfig, "knowledge-cache"), Label: "legacy knowledge cache"},
+			{Path: filepath.Join(legacyConfig, "serve.pid"), Label: "legacy serve pidfile"},
+		},
+	}
+	a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+	// The stray holding the authority must NOT be a wholesale backup target.
+	if backupHas(a.Backups, strayKb) {
+		t.Fatal("a legacyStray holding the memory authority must be swept, not moved wholesale")
+	}
+
+	var buf bytes.Buffer
+	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !exists(memoryDB) {
+		t.Error("MEMORY_DB nested under a legacyStray must be preserved by --keep-memory on flock success")
+	}
+	if exists(sibling) {
+		t.Error("a regenerable sibling in the stray must be swept aside")
+	}
+	if !exists(sibling + ".bak-" + fixedTS) {
+		t.Error("the swept sibling .bak backup is missing")
+	}
+}
+
+// TestExecuteReset_KeepMemoryCustomDBUnderKnowledgeDir (R3-1): a custom MEMORY_DB
+// nested UNDER paths.knowledgeDir must be PRESERVED by --keep-memory on a
+// SUCCESSFUL flock, while the knowledge index sibling IS still swept aside
+// (sweep, not the wholesale move that would drag the live db with it).
+func TestExecuteReset_KeepMemoryCustomDBUnderKnowledgeDir(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	dataRoot := filepath.Join(root, ".pi-stack")
+	kbDir := filepath.Join(dataRoot, "knowledge")
+	mem := filepath.Join(kbDir, "memory") // MEMORY_DB nested UNDER the knowledge dir
+	memoryDB := filepath.Join(mem, "memory.db")
+	if err := os.MkdirAll(mem, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, memoryDB, "facts")
+	// The regenerable index sibling in the SAME dir that MUST be swept aside.
+	kbIndex := filepath.Join(kbDir, "knowledge.db")
+	writeFile(t, kbIndex, "index")
+
+	p := resetPaths{
+		configDir:    filepath.Join(root, "config"),
+		dataRoot:     dataRoot,
+		dataDir:      filepath.Join(root, ".local", "share", "pi-stack"),
+		stateDir:     filepath.Join(root, ".local", "state", "pi-stack"),
+		memoryDir:    mem,
+		memoryDB:     memoryDB,
+		knowledgeDir: kbDir,
+	}
+	a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+	// The knowledge dir holding the authority must NOT be a wholesale backup target.
+	if backupHas(a.Backups, kbDir) {
+		t.Fatal("knowledgeDir holding the memory authority must be swept, not moved wholesale")
+	}
+
+	var buf bytes.Buffer
+	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !exists(memoryDB) {
+		t.Error("MEMORY_DB nested under knowledgeDir must be preserved by --keep-memory on flock success")
+	}
+	if exists(kbIndex) {
+		t.Error("the knowledge index sibling must be swept aside")
+	}
+	if !exists(kbIndex + ".bak-" + fixedTS) {
+		t.Error("the swept knowledge index .bak backup is missing")
+	}
+}
+
+// TestExecuteReset_KeepMemoryCustomDBUnderConfigDirFlockSuccess (R3-1): a custom
+// MEMORY_DB nested UNDER the config dir must be PRESERVED by --keep-memory on a
+// SUCCESSFUL flock, while a regenerable config-dir sibling IS still swept aside
+// (sweep, not the wholesale move that would drag the live db with it).
+func TestExecuteReset_KeepMemoryCustomDBUnderConfigDirFlockSuccess(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	configDir := filepath.Join(root, ".config", "pi-stack")
+	mem := filepath.Join(configDir, "memory") // MEMORY_DB nested UNDER the config dir
+	memoryDB := filepath.Join(mem, "memory.db")
+	if err := os.MkdirAll(mem, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, memoryDB, "facts")
+	writeFile(t, filepath.Join(configDir, "config.toml"), "x")
+	// A regenerable sibling in the config dir that MUST be swept aside.
+	sibling := filepath.Join(configDir, "knowledge-cache")
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sibling, "x"), "junk")
+
+	p := resetPaths{
+		configDir: configDir,
+		dataRoot:  filepath.Join(root, ".pi-stack"),
+		dataDir:   filepath.Join(root, ".local", "share", "pi-stack"),
+		stateDir:  filepath.Join(root, ".local", "state", "pi-stack"),
+		memoryDir: mem,
+		memoryDB:  memoryDB,
+	}
+	a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+	// The config dir holding the authority must NOT be a wholesale backup target.
+	if backupHas(a.Backups, configDir) {
+		t.Fatal("config dir holding the memory authority must be swept, not moved wholesale")
+	}
+
+	var buf bytes.Buffer
+	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !exists(memoryDB) {
+		t.Error("MEMORY_DB nested under the config dir must be preserved by --keep-memory on flock success")
+	}
+	if exists(sibling) {
+		t.Error("a regenerable config-dir sibling must be swept aside")
+	}
+	if !exists(sibling + ".bak-" + fixedTS) {
+		t.Error("the swept config-dir sibling .bak backup is missing")
+	}
+}
+
+// TestAcquireMemoryFlock_ErrorRefusesDataMove (R1-3): acquireMemoryFlock FAILS
+// CLOSED — an acquisition error (here a mkdir failure, because the lock dir's
+// parent is a regular file) returns ok=false, and that refusal blocks the
+// dangerous data move (no --force). The old code fail-OPENed on such errors and
+// moved the data without the lock.
+func TestAcquireMemoryFlock_ErrorRefusesDataMove(t *testing.T) {
+	root := t.TempDir()
+	blocker := filepath.Join(root, "blocker")
+	writeFile(t, blocker, "x") // a FILE where a dir would need to be created
+	t.Setenv("MEMORY_DB", filepath.Join(blocker, "sub", "memory.db"))
+
+	rel, ok := acquireMemoryFlock()
+	if ok {
+		t.Fatal("an acquire error must refuse (ok=false), not fail open")
+	}
+	if rel != nil {
+		t.Error("no release func on a refused acquire")
+	}
+
+	stubStopServe(t)
+	p := tempPaths(t, root)
+	a := resetPlan(resetCfg(), p, resetOpts{})
+	env := noToolEnv()
+	env.memLockAcquire = acquireMemoryFlock // real; errors due to the bad MEMORY_DB path
+	var buf bytes.Buffer
+	_, err := executeReset(a, defaultResetFS(), env, &buf, fixedNow)
+	if err == nil {
+		t.Fatal("an acquire error must block the dangerous data move")
+	}
+	if exists(p.dataRoot + ".bak-" + fixedTS) {
+		t.Error("the data dir must NOT move when the flock cannot be acquired")
+	}
+	if !exists(p.configDir + ".bak-" + fixedTS) {
+		t.Error("the safe config dir should still be backed up")
 	}
 }
 

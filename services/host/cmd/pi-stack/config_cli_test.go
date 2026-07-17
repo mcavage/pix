@@ -3,10 +3,69 @@ package main
 import (
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"pi-stack/host/config"
 )
+
+// TestConfigSetSerializesWithMigrationRewrite (R1-1): a `config set` and a
+// migration-style config rewrite both take config.WithConfigLock and each
+// load FRESH under the lock, so racing them never loses an update. The launcher's
+// locked write path is mutateConfigLocked; the migration side is structurally
+// identical to migrate.rewriteConfig (WithConfigLock -> load -> mutate -> atomic
+// Save). Before R1-1, `config set` did load+Save OUTSIDE the lock, so a concurrent
+// migration rewrite could be clobbered (lost update).
+func TestConfigSetSerializesWithMigrationRewrite(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
+	// Seed a starting config: an empty gog account (config set mutates this) and a
+	// base bundle at an old path (the migration rewrite replaces this).
+	seed := &config.Config{KnowledgeBundles: []string{"/old/cache/repo"}}
+	if err := seed.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	// (a) `pi-stack config set gog_account` via the launcher's LOCKED write path.
+	go func() {
+		defer wg.Done()
+		_, applyErr, fatalErr := mutateConfigLocked(false, "", []string{"gog_account", "me@x.com"})
+		if applyErr != nil || fatalErr != nil {
+			t.Errorf("config set: apply=%v fatal=%v", applyErr, fatalErr)
+		}
+	}()
+	// (b) a migration-style knowledge_bundles rewrite under the SAME lock.
+	go func() {
+		defer wg.Done()
+		err := config.WithConfigLock(func() error {
+			cfg, err := config.Load() // load FRESH under the lock
+			if err != nil {
+				return err
+			}
+			cfg.KnowledgeBundles = []string{"/new/cache/repo"}
+			return cfg.Save()
+		})
+		if err != nil {
+			t.Errorf("migration rewrite: %v", err)
+		}
+	}()
+	wg.Wait()
+
+	got, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// NO lost update: BOTH writers' changes survived because each loaded fresh under
+	// the exclusive lock (whichever ran second saw the first's write and preserved it).
+	if got.GogAccount != "me@x.com" {
+		t.Errorf("config set was lost: gog_account = %q, want me@x.com", got.GogAccount)
+	}
+	if !containsStr(got.KnowledgeBundles, "/new/cache/repo") {
+		t.Errorf("migration rewrite was lost: bundles = %v", got.KnowledgeBundles)
+	}
+}
 
 // TestApplyConfigChange_GogAccount: set writes the value, unset clears it.
 func TestApplyConfigChange_GogAccount(t *testing.T) {

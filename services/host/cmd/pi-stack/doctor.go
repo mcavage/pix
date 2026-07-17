@@ -40,6 +40,16 @@ type shellEnv struct {
 	// Secrets group's perms check uses it to flag a group/other-accessible
 	// op-refs.env or its dir. Nil in tests that don't exercise perms.
 	fileMode func(path string) (os.FileMode, bool)
+	// lstatMode is fileMode WITHOUT following symlinks (os.Lstat), so a legacy path
+	// that migration converted into a symlink→new is detectable AS a symlink (and
+	// thus NOT reported as a pending migration). detectLegacyStorage uses it; nil
+	// falls back to fileMode.
+	lstatMode func(path string) (os.FileMode, bool)
+	// readlink reads a symlink's target (os.Readlink). detectLegacyStorage uses it
+	// to decide whether a legacy symlink actually points at the expected new dir
+	// (converged) or somewhere else (still pending). Nil in tests that seed no
+	// symlinks; a nil readlink makes every symlink read as NOT converged.
+	readlink func(path string) (string, error)
 	// writeFile writes data to path (creating parent dirs). Nil in tests so
 	// seeding stays hermetic; defaultShellEnv wires the real os-backed writer.
 	writeFile func(path string, data []byte, perm os.FileMode) error
@@ -48,6 +58,12 @@ type shellEnv struct {
 	// returns (output, timedOut, err). Nil in tests, which fall back to run so
 	// they stay hermetic; defaultShellEnv wires runWithTimeout.
 	probe func(name string, args ...string) (out string, timedOut bool, err error)
+	// memLockAcquire ACQUIRES and HOLDS the memory flock for the duration of the
+	// dangerous data move (LOW-2), returning a release func and ok=true on success;
+	// ok=false means a running serve holds it, so reset refuses the move. Holding
+	// (not just probing) the lock guarantees a serve cannot start mid-move. Nil in
+	// tests defaults to "acquired" (no real lock), leaving serveStillUp the guard.
+	memLockAcquire func() (release func(), ok bool)
 }
 
 // probeTimeout bounds every registered-command probe so doctor can never wedge
@@ -136,14 +152,152 @@ func defaultShellEnv() shellEnv {
 			}
 			return fi.Mode(), true
 		},
+		lstatMode: func(path string) (os.FileMode, bool) {
+			fi, err := os.Lstat(path)
+			if err != nil {
+				return 0, false
+			}
+			return fi.Mode(), true
+		},
+		readlink: os.Readlink,
 		writeFile: func(path string, data []byte, perm os.FileMode) error {
 			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 				return err
 			}
 			return os.WriteFile(path, data, perm)
 		},
-		probe: runWithTimeout,
+		probe:          runWithTimeout,
+		memLockAcquire: acquireMemoryFlock,
 	}
+}
+
+// storageGroup reports the three XDG storage bases and, when a pre-XDG install
+// still has data at a legacy location, a WARN pointing at `pi-stack migrate`. It
+// is DELIBERATELY all-informational (stateInfo): in-place operation is a
+// supported state, so a pending migration must never fail doctor's verdict.
+func storageGroup(env shellEnv) group {
+	g := group{title: "Storage layout (XDG bases)"}
+	home := ""
+	if env.homeDir != nil {
+		home = env.homeDir()
+	}
+	td := func(p string) string { return tildeHome(p, home) }
+	configDir, _ := config.ConfigDir()
+	dataDir, _ := config.DataDir()
+	stateDir, _ := config.StateDir()
+	g.checks = append(g.checks,
+		check{label: "config", state: stateInfo, detail: td(configDir) + " — config.toml, op-refs.env, broker-token"},
+		check{label: "data", state: stateInfo, detail: td(dataDir) + " — memory, knowledge, backups (precious)"},
+		check{label: "state", state: stateInfo, detail: td(stateDir) + " — index, caches, tasks, serve.pid (regenerable)"},
+	)
+	legacy := detectLegacyStorage(env, home)
+	if len(legacy) > 0 {
+		tilded := make([]string, len(legacy))
+		for i, p := range legacy {
+			tilded[i] = td(p)
+		}
+		g.checks = append(g.checks, check{
+			label:  "migration",
+			state:  stateInfo,
+			detail: "some data is at legacy locations — run `pi-stack migrate` to relocate (optional; in-place is supported): " + strings.Join(tilded, ", "),
+		})
+	}
+	return g
+}
+
+// detectLegacyStorage returns the legacy storage locations that are STILL PENDING
+// migration, probed hermetically. It is the doctor/status adapter over the shared
+// detectPendingLegacy: it uses env.lstatMode (os.Lstat, falling back to fileMode)
+// + env.readlink so a legacy path migration converted into a symlink→new is NOT
+// reported. Shared by doctor + status so both surface the same note.
+func detectLegacyStorage(env shellEnv, home string) []string {
+	lstat := env.lstatMode
+	if lstat == nil {
+		lstat = env.fileMode
+	}
+	return detectPendingLegacy(home, lstat, env.readlink)
+}
+
+// detectPendingLegacy returns the legacy MEMORY, BUNDLE, and CACHE locations that
+// still need relocation, matching `migrate`'s success end-state EXACTLY so the
+// note CLEARS after a successful migrate and never false-positives. It is shared
+// by `pi-stack paths` and doctor/status.
+//
+// "Pending" means ONLY: a legacy memory (~/.pi-stack/memory), bundle
+// (~/.config/pi-stack/knowledge), or cache (~/.config/pi-stack/knowledge-cache)
+// path that is still a REAL directory. For each, lstat the legacy path:
+//   - absent                          -> not pending
+//   - symlink -> new REAL dir (present) -> converged (resolve + compare + real-dir), not pending
+//   - symlink -> new dir (absent)      -> broken handoff (dangling); surfaced, NOT converged
+//   - symlink -> a rogue symlink at new -> NOT converged (new must be a REAL dir); surfaced
+//   - symlink elsewhere               -> NOT converged; surfaced (never silently suppressed)
+//   - a real directory                -> pending
+//
+// This mirrors migrate's converged() predicate EXACTLY (symlink->new AND new is a
+// real dir), so classify, the config-rewrite gate, and this detection all agree:
+// a broken or conflicted handoff is surfaced, never false-suppressed.
+//
+// DELIBERATELY EXCLUDED, because migrate leaves each one on success and advising
+// `pi-stack migrate` for them would be false forever: the legacy knowledge INDEX
+// dir (~/.pi-stack/knowledge, rebuilt not moved), the legacy serve.pid (ephemeral,
+// handled by serve's dual-read + cleanup), and the retained legacy backups
+// (merge-copied, legacy kept by design). lstat is os.Lstat-shaped (mode + exists,
+// never following a symlink); readlink resolves a symlink's target (nil makes
+// every symlink read as NOT converged, the safe default).
+func detectPendingLegacy(home string, lstat func(string) (os.FileMode, bool), readlink func(string) (string, error)) []string {
+	if home == "" || lstat == nil {
+		return nil
+	}
+	dataDir, _ := config.DataDir()
+	stateDir, _ := config.StateDir()
+	targets := []struct{ legacy, newDir string }{
+		{filepath.Join(home, ".pi-stack", "memory"), filepath.Join(dataDir, "memory")},
+		{filepath.Join(home, ".config", "pi-stack", "knowledge"), filepath.Join(dataDir, "knowledge")},
+		{filepath.Join(home, ".config", "pi-stack", "knowledge-cache"), filepath.Join(stateDir, "knowledge-cache")},
+	}
+	var pending []string
+	for _, t := range targets {
+		mode, ok := lstat(t.legacy)
+		if !ok {
+			continue // absent -> not pending
+		}
+		if mode&os.ModeSymlink != 0 {
+			// Converged ONLY when the symlink points at the expected new dir AND that
+			// new dir actually EXISTS AS A REAL DIRECTORY (mirrors migrate's
+			// converged()). A dangling target (new deleted) is a broken handoff; a
+			// rogue symlink sitting at the new path is a conflict — neither is
+			// convergence, so surface it rather than suppress the note.
+			if symlinkResolvesTo(t.legacy, t.newDir, readlink) {
+				if mode, ok := lstat(t.newDir); ok && mode.IsDir() {
+					continue // converged to a symlink→new REAL dir: not pending
+				}
+			}
+			// A dangling / wrong-target symlink is NOT converged: surface it rather
+			// than silently suppress, so a broken handoff is visible.
+			pending = append(pending, t.legacy)
+			continue
+		}
+		pending = append(pending, t.legacy) // a real dir -> pending
+	}
+	return pending
+}
+
+// symlinkResolvesTo reports whether the symlink at link points (after resolving a
+// relative target against its own dir) at target. A nil readlink, a read error,
+// or a mismatch all return false — the caller then treats the symlink as still
+// pending rather than assuming convergence.
+func symlinkResolvesTo(link, target string, readlink func(string) (string, error)) bool {
+	if readlink == nil {
+		return false
+	}
+	tgt, err := readlink(link)
+	if err != nil {
+		return false
+	}
+	if !filepath.IsAbs(tgt) {
+		tgt = filepath.Join(filepath.Dir(link), tgt)
+	}
+	return filepath.Clean(tgt) == filepath.Clean(target)
 }
 
 // checkState is the rendered status of a single check.
@@ -298,6 +452,11 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	memUp := env.dial(11435)
 	memory.checks = append(memory.checks, serviceCheck("memory", 11435, memUp, "pi-stack serve", enabled(cfg, "memory")))
 	r.groups = append(r.groups, memory)
+
+	// (c2) Storage layout — the three XDG bases + a pending-migration note. This is
+	// always informational (never a TODO/failure): running in place at a legacy
+	// location is a supported state, so the note is a WARN, not an error.
+	r.groups = append(r.groups, storageGroup(env))
 
 	// (d) gog: Google Workspace via a host-side stdio MCP server the sbx gateway
 	// spawns (the slack pattern). No CLI in the VM, no token service, no bearer.

@@ -105,10 +105,11 @@ type Config struct {
 	Plugins map[string]PluginSpec `toml:"plugins"`
 }
 
-// configDir resolves the directory that holds config.toml and the broker token.
+// ConfigDir resolves the directory that holds config.toml and the broker token.
 // It honors $PI_STACK_CONFIG's parent when set, then $XDG_CONFIG_HOME/pi-stack,
-// then ~/.config/pi-stack.
-func configDir() (string, error) {
+// then ~/.config/pi-stack. This is the CONFIG base of the XDG layout (see
+// paths.go for DataDir/StateDir and the typed artifact resolvers).
+func ConfigDir() (string, error) {
 	if p := os.Getenv("PI_STACK_CONFIG"); p != "" {
 		return filepath.Dir(p), nil
 	}
@@ -121,6 +122,10 @@ func configDir() (string, error) {
 	}
 	return filepath.Join(home, ".config", "pi-stack"), nil
 }
+
+// configDir is the internal alias kept so existing callers compile after
+// ConfigDir was exported.
+func configDir() (string, error) { return ConfigDir() }
 
 // Path resolves the config file path: $PI_STACK_CONFIG override, else
 // <config-dir>/config.toml.
@@ -140,26 +145,44 @@ func Path() string {
 // ServePidPath resolves the absolute path of serve.pid — the pidfile
 // `pi-stack-host serve` writes on startup so the launcher's `serve stop` /
 // `serve status` can find and signal the running supervisor SAFELY (instead of a
-// blind `pkill -f`). It is a sibling of config.toml: <config-dir>/serve.pid. Both
-// the host (the writer) and the launcher (the reader) call this so the two always
-// agree on the location.
+// blind `pkill -f`). It now lives under the STATE base (<state-dir>/serve.pid): a
+// pidfile is ephemeral, regenerable runtime state, not config. Readers should
+// also probe LegacyServePidPath() for one release so a pre-upgrade serve stays
+// controllable across the move (see paths.go).
 func ServePidPath() string {
-	dir, err := configDir()
+	dir, err := StateDir()
 	if err != nil {
 		return "serve.pid"
 	}
 	return filepath.Join(dir, "serve.pid")
 }
 
-// MemoryDBPath resolves the live memory sqlite path: $MEMORY_DB if set, else
-// ~/.pi-stack/memory/memory.db. Shared by the daemon and `restore` so both point
-// at the SAME store (and the SAME lock dir, below).
+// MemoryDBPath resolves the live memory sqlite path with the XDG read-fallback:
+// $MEMORY_DB if set, else the NEW path (DATA/memory/memory.db) when it exists,
+// else the LEGACY path (~/.pi-stack/memory/memory.db) when it exists, else the
+// NEW path fresh. The fallback is READ-ONLY (single-authority rule): it returns
+// legacy ONLY while the new path is absent; the instant migration publishes the
+// new path, new wins and no writer ever touches legacy again. The legacy branch
+// is removed next major. Shared by the daemon and `restore` so both point at the
+// SAME store (and, via MemoryLockPath, the SAME lock dir).
 func MemoryDBPath() string {
 	if p := strings.TrimSpace(os.Getenv("MEMORY_DB")); p != "" {
 		return p
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".pi-stack", "memory", "memory.db")
+	var newPath string
+	if data, err := DataDir(); err == nil {
+		newPath = filepath.Join(data, "memory", "memory.db")
+		if pathExists(newPath) {
+			return newPath
+		}
+	}
+	if legacy := legacyPiStackPath("memory", "memory.db"); legacy != "" && pathExists(legacy) {
+		return legacy
+	}
+	if newPath != "" {
+		return newPath
+	}
+	return filepath.Join("memory", "memory.db")
 }
 
 // MemoryLockPath is the advisory flock file the memory daemon and `restore` both
@@ -380,16 +403,56 @@ paths = []
 // The file is machine-managed (0600, dir 0700); the commented template Seed
 // writes is only a first-touch convenience, so losing comments on a rewrite is
 // acceptable.
+//
+// The write is ATOMIC: it encodes to a same-dir temp file, fsyncs it, then renames
+// it over the target (an fsync of the dir makes the rename durable). An
+// interrupted save can never truncate a populated config.toml — the reader sees
+// either the old file or the whole new one. This matters because migrate's config
+// rewrite and `config set` both mutate the same file under WithConfigLock; a
+// plain WriteFile could still leave a half-written file on a crash mid-write.
 func (c *Config) Save() error {
 	path := Path()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(c); err != nil {
 		return err
 	}
-	return os.WriteFile(path, buf.Bytes(), 0o600)
+	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		tmp.Close()
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(buf.Bytes()); err != nil {
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	committed = true
+	if d, derr := os.Open(dir); derr == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
 
 // SetGogAccount sets the Google Workspace account (trimmed). An empty value

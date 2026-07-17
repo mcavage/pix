@@ -87,26 +87,53 @@ func runConfigWrite(unset bool, argv []string) {
 		fmt.Fprintf(os.Stderr, "usage: pi-stack config %s [--profile <name>] <key> [value]\n%s", verb, configKeysHelp)
 		os.Exit(2)
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack config %s: loading config: %v\n", verb, err)
-		os.Exit(1)
-	}
-	var summary string
-	if profile != "" && profile != config.DefaultProfile {
-		summary, err = applyProfileConfigChange(cfg, unset, profile, argv[0], argv[1:])
-	} else {
-		summary, err = applyConfigChange(cfg, unset, argv[0], argv[1:])
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack config %s: %v\n", verb, err)
+	summary, applyErr, fatalErr := mutateConfigLocked(unset, profile, argv)
+	if applyErr != nil {
+		// A validation/arity error (bad key, wrong arity, rejected --profile): exit 2.
+		fmt.Fprintf(os.Stderr, "pi-stack config %s: %v\n", verb, applyErr)
 		os.Exit(2)
 	}
-	if err := cfg.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack config %s: saving config: %v\n", verb, err)
+	if fatalErr != nil {
+		// A load/save/lock I/O failure: exit 1.
+		fmt.Fprintf(os.Stderr, "pi-stack config %s: %v\n", verb, fatalErr)
 		os.Exit(1)
 	}
 	fmt.Printf("%s\n# saved to %s\n", summary, config.Path())
+}
+
+// mutateConfigLocked performs the whole load -> mutate -> save transaction INSIDE
+// config.WithConfigLock, so a `config set`/`unset` serializes against a concurrent
+// migrate config rewrite (which also holds that lock) and never loses an update.
+// The config is loaded FRESH under the lock, mutated, saved atomically, then the
+// lock is released. It returns the summary plus two DISTINCT error channels so
+// the caller preserves the historical exit codes: applyErr is a validation error
+// (exit 2), fatalErr is a load/save/lock I/O failure (exit 2 wrapper vs 1). A
+// validation error stops before Save, so a bad key never touches the file.
+func mutateConfigLocked(unset bool, profile string, argv []string) (summary string, applyErr, fatalErr error) {
+	fatalErr = config.WithConfigLock(func() error {
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+		var s string
+		if profile != "" && profile != config.DefaultProfile {
+			s, err = applyProfileConfigChange(cfg, unset, profile, argv[0], argv[1:])
+		} else {
+			s, err = applyConfigChange(cfg, unset, argv[0], argv[1:])
+		}
+		if err != nil {
+			// Record the validation error and stop WITHOUT saving; it is surfaced via
+			// applyErr (a nil return here keeps it off the fatal channel).
+			applyErr = err
+			return nil
+		}
+		if err := cfg.Save(); err != nil {
+			return fmt.Errorf("saving config: %w", err)
+		}
+		summary = s
+		return nil
+	})
+	return summary, applyErr, fatalErr
 }
 
 // splitProfileArg pulls a `--profile <name>` / `--profile=<name>` flag out of a

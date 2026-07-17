@@ -117,6 +117,10 @@ func TestKnowledgeInitHelp_NoSideEffects(t *testing.T) {
 	tmp := t.TempDir()
 	cfgFile := filepath.Join(tmp, "config.toml")
 	t.Setenv("PI_STACK_CONFIG", cfgFile)
+	// The default bundle lives under the DATA base now — point XDG_DATA_HOME at a
+	// temp dir so the "did it scaffold?" assertion doesn't collide with the real
+	// ~/.local/share/pi-stack/knowledge on the dev machine.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	// Run from a temp cwd so a stray filepath.Abs("--help") would land here.
 	cwd, _ := os.Getwd()
@@ -145,8 +149,10 @@ func TestKnowledgeInitHelp_NoSideEffects(t *testing.T) {
 	if _, err := os.Stat(cfgFile); err == nil {
 		t.Error("`knowledge init --help` wrote config — expected no side effects")
 	}
-	if _, err := os.Stat(defaultKnowledgeDir()); err == nil {
-		t.Error("`knowledge init --help` scaffolded the default bundle dir")
+	if def, derr := defaultKnowledgeDir(); derr == nil {
+		if _, err := os.Stat(def); err == nil {
+			t.Error("`knowledge init --help` scaffolded the default bundle dir")
+		}
 	}
 }
 

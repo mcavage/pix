@@ -35,7 +35,7 @@ var knownVerbs = map[string]bool{
 	"profile": true, "version": true, "run": true, "secret": true,
 	"reset": true, "uninstall": true, "man": true,
 	"backup": true, "restore": true, "state": true,
-	"task": true,
+	"task": true, "migrate": true, "paths": true,
 }
 
 // suggestVerb returns the closest known verb to input within edit distance 2,
@@ -118,6 +118,10 @@ Integrations & credentials
   mcp register|ls     register local stdio MCP servers with the sbx gateway
   secret <cmd>        status|edit|check the 1Password op-refs (host MCP creds)
 
+Storage
+  paths               show where data lives (config / data / state bases)
+  migrate             relocate storage to the standard XDG layout (once, explicit)
+
 State (on-disk lifecycle)
   state <cmd>         backup|restore|reset|uninstall (grouped aliases)
   backup [--out P]    hot FULL backup (memory + config + op-refs) -> tar.gz
@@ -177,6 +181,10 @@ func verbUsage(verb string) (string, bool) {
 		return stateUsage, true
 	case "task":
 		return taskUsage, true
+	case "migrate":
+		return migrateUsage, true
+	case "paths":
+		return pathsUsage, true
 	}
 	return "", false
 }
@@ -256,9 +264,9 @@ const knowledgeUsage = `usage: pi-stack knowledge <init|use|ls|query|sync|remote
 
 const knowledgeInitUsage = `usage: pi-stack knowledge init [DIR]
 
-Scaffold a spec-correct OKF bundle (default <config-dir>/knowledge), git-init it,
-and wire it into config (services += knowledge, knowledge_bundles += DIR).
-Idempotent: never clobbers an existing bundle.
+Scaffold a spec-correct OKF bundle (default ~/.local/share/pi-stack/knowledge),
+git-init it, and wire it into config (services += knowledge, knowledge_bundles +=
+DIR). Idempotent: never clobbers an existing bundle.
 `
 
 const profileUsage = `usage: pi-stack profile <ls|use> [name]
@@ -296,17 +304,20 @@ const resetUsage = `usage: pi-stack reset [--keep-memory] [--sbx] [--yes] [--for
 Reset the stack to a clean slate — REVERSIBLE. Nothing is hard-deleted: state is
 moved aside to a timestamped <path>.bak-<unixts> sibling you can rename back.
 
-Moves aside the config dir (~/.config/pi-stack) and the data dir (~/.pi-stack:
-captured memory + the knowledge index). Best-effort stops a running
-'pi-stack-host serve' first.
+Moves aside the config dir (~/.config/pi-stack), the data dir
+(~/.local/share/pi-stack: memory + knowledge + backups), the state dir
+(~/.local/state/pi-stack: index + caches + tasks + serve.pid), and any legacy
+~/.pi-stack. Best-effort stops a running 'pi-stack-host serve' first.
 
 flags:
-  --keep-memory   preserve ~/.pi-stack/memory (your captured facts); reset the rest
+  --keep-memory   preserve your captured facts in EVERY location (the new
+                  ~/.local/share/pi-stack/memory, legacy ~/.pi-stack/memory, any
+                  .pre-xdg safety copy, and a custom MEMORY_DB); reset the rest
   --sbx           also remove every pi-stack-* sandbox and unregister the
                   configured local MCP servers (provider secrets are left alone)
   --force         move the data dir even if 'pi-stack-host serve' still appears
-                  to be running (otherwise the data move is refused to avoid
-                  splitting a live sqlite db from its wal)
+                  to be running, or the memory database is locked (otherwise the
+                  data move is refused to avoid splitting a live sqlite db)
   --yes, -y       don't prompt (REQUIRED on a non-interactive terminal)
 
 Without --yes on a TTY it prints exactly what will move and prompts before acting.
@@ -320,8 +331,8 @@ pi-stack-host bin symlinks (~/.local/bin). Only symlinks are removed — a real
 file there is left untouched. State is moved aside, never hard-deleted.
 
 flags:
-  --keep-memory   preserve ~/.pi-stack/memory (your captured facts)
+  --keep-memory   preserve your captured facts in every location (see 'pi-stack reset')
   --force         move the data dir even if 'pi-stack-host serve' still appears
-                  to be running
+                  to be running (or the memory database is locked)
   --yes, -y       don't prompt (REQUIRED on a non-interactive terminal)
 `

@@ -82,6 +82,10 @@ type statusReport struct {
 	Todos      []string        `json:"todos"`
 	GogAccount string          `json:"gog_account,omitempty"`
 	GogAuthed  bool            `json:"gog_authed,omitempty"`
+	// LegacyStorage lists pre-XDG data locations that still exist. It is a WARN
+	// (advisory), never a TODO: in-place operation is supported, so it never flips
+	// the verdict to "outstanding".
+	LegacyStorage []string `json:"legacy_storage,omitempty"`
 }
 
 // mcpStatusLine is the per-server MCP status: registered with the sbx gateway
@@ -211,6 +215,14 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 			}
 		}
 	}
+
+	// Storage: a pending-migration WARN when a pre-XDG install still has data at a
+	// legacy location. Advisory only (not a TODO) — in-place is supported.
+	home := ""
+	if env.homeDir != nil {
+		home = env.homeDir()
+	}
+	st.LegacyStorage = detectLegacyStorage(env, home)
 	return st
 }
 
@@ -281,6 +293,10 @@ func (st statusReport) render(out io.Writer) {
 			}
 			fmt.Fprintf(out, "  %s   %-24s %s\n", label, s.Name, s.State)
 		}
+	}
+
+	if len(st.LegacyStorage) > 0 {
+		fmt.Fprintln(out, "  storage     some data is at legacy locations — run `pi-stack migrate` to relocate (optional)")
 	}
 
 	fmt.Fprintln(out)

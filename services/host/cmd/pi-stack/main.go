@@ -79,6 +79,10 @@ func main() {
 		runConfig(args[1:])
 	case "serve":
 		runServe(args[1:])
+	case "migrate":
+		runMigrate(args[1:])
+	case "paths":
+		runPaths(args[1:])
 	case "doctor":
 		runDoctorCmd(args[1:])
 	case "setup":

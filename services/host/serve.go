@@ -281,6 +281,14 @@ func writeServePidFile() {
 	if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
 		log.Printf("serve: could not write pidfile %s: %v", path, err)
 	}
+	// After publishing the STATE pidfile, remove a stale legacy CONFIG pidfile
+	// (finding 11) so the launcher's dual-read doesn't resolve a pre-upgrade
+	// pidfile that no longer points at us. Best-effort: absent is fine.
+	if legacy := config.LegacyServePidPath(); legacy != "" && legacy != path {
+		if err := os.Remove(legacy); err != nil && !os.IsNotExist(err) {
+			log.Printf("serve: could not remove stale legacy pidfile %s: %v", legacy, err)
+		}
+	}
 }
 
 // removeServePidFile deletes the pidfile on shutdown. Best-effort: a missing file

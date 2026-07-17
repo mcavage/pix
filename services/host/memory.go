@@ -37,6 +37,8 @@ import (
 
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
+
+	"pi-stack/host/config"
 )
 
 const (
@@ -798,11 +800,10 @@ func runMemory() {
 // caller routes the error through its cleanup-aware fatal; standalone callers
 // (memoryMux/runMemory, servePluginMemory self-exec) may still fatal on it.
 func buildMemStore() (*memStore, bool, error) {
-	dbPath := strings.TrimSpace(os.Getenv("MEMORY_DB"))
-	if dbPath == "" {
-		home, _ := os.UserHomeDir()
-		dbPath = filepath.Join(home, ".pi-stack", "memory", "memory.db")
-	}
+	// Route the db path through the config module's XDG resolver (honors
+	// MEMORY_DB, then the new DATA/memory/memory.db, then the legacy path via the
+	// read-fallback). No hand-built default lives here.
+	dbPath := config.MemoryDBPath()
 	hasEmb := memEmbedderAvailable()
 	var embedder func(string) []float64
 	if hasEmb {
