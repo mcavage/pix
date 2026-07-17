@@ -61,7 +61,9 @@ func memWatcherModel() string {
 	if v := os.Getenv("MEMORY_WATCHER_MODEL"); v != "" {
 		return v
 	}
-	return "gemma4"
+	// Small default: the watcher runs resident on the host, so a big model OOMs a
+	// 16GB laptop. Bump via MEMORY_WATCHER_MODEL / `pi-stack config set`.
+	return "gemma3:4b"
 }
 
 // watcherUnavailable is set true once a capture attempt fails because the

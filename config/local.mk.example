@@ -19,8 +19,11 @@ MCP = slack
 GOG_ACCOUNT ?=
 
 # Local Ollama models for the self-learning memory (`make pull-models` fetches
-# them). watcher = fact capture, embed = semantic recall.
-MEMORY_WATCHER_MODEL = gemma4
+# them). watcher = fact capture, embed = semantic recall. The watcher default is
+# small on purpose: it runs on the HOST during `make serve` and Ollama keeps it
+# resident, so a 26-31B model OOMs a 16GB laptop. Bump it (e.g. gemma3:12b) on a
+# roomier machine for sharper fact extraction.
+MEMORY_WATCHER_MODEL = gemma3:4b
 MEMORY_EMBED_MODEL   = nomic-embed-text
 
 # Private, company-specific integrations (a Snowflake proxy, a BambooHR directory,

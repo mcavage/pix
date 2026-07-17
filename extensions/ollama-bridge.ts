@@ -27,6 +27,26 @@ const LISTEN_PORT = Number(process.env.OLLAMA_BRIDGE_PORT ?? 11434);
 const HOST = process.env.OLLAMA_BRIDGE_HOST ?? "host.docker.internal";
 const HOST_PORT = Number(process.env.OLLAMA_BRIDGE_HOST_PORT ?? 11434);
 
+// Which local model to expose in the cycle. It MUST match a tag pulled on the
+// HOST (`ollama pull <tag>`), or the call 404s. The default is small on purpose:
+// this is a personal harness that runs on a 16GB laptop, and a 26-31B model
+// blows DRAM (Ollama keeps a model resident once invoked). Override any of these
+// via env (e.g. in the sandbox's /etc/sandbox-persistent.sh) to pick a bigger
+// model on a roomier machine — no code edit needed:
+//   OLLAMA_BRIDGE_MODEL, OLLAMA_BRIDGE_MODEL_NAME, OLLAMA_BRIDGE_CONTEXT.
+// contextWindow is what pi will fill; a smaller window means a smaller KV cache
+// on the host, which is the other half of the DRAM story after model size.
+const MODEL_ID = process.env.OLLAMA_BRIDGE_MODEL ?? "gemma3:4b";
+const MODEL_NAME = process.env.OLLAMA_BRIDGE_MODEL_NAME ?? "Gemma 3 4B (local)";
+// posInt: a positive finite integer or the fallback — so OLLAMA_BRIDGE_CONTEXT="",
+// "0", or "32k" can't feed NaN/0 into the provider metadata (which would break
+// context accounting + compaction).
+function posInt(v: string | undefined, fallback: number): number {
+	const n = Number(v);
+	return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+const MODEL_CTX = posInt(process.env.OLLAMA_BRIDGE_CONTEXT, 32768);
+
 export default async function (pi: any): Promise<void> {
 	// 1) Register the provider + model up front (no endpoint probe).
 	try {
@@ -37,13 +57,13 @@ export default async function (pi: any): Promise<void> {
 			apiKey: "ollama", // placeholder; Ollama ignores it, but pi wants auth present
 			models: [
 				{
-					id: "gemma4:latest",
-					name: "Gemma 4 (local)",
+					id: MODEL_ID,
+					name: MODEL_NAME,
 					reasoning: true,
 					input: ["text"],
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: 128000,
-					maxTokens: 16384,
+					contextWindow: MODEL_CTX,
+					maxTokens: 8192,
 				},
 			],
 		});
