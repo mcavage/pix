@@ -65,6 +65,10 @@ func main() {
 		runVerb(args[1:])
 	case "status", "st":
 		runStatusCmd(args[1:])
+	case "ls":
+		runLs(args[1:])
+	case "rm":
+		runRm(args[1:])
 	case "version", "--version", "-v":
 		if len(args) > 1 {
 			if args[1] == "-h" || args[1] == "--help" {
@@ -290,6 +294,7 @@ New here?   pi-stack setup      one-time guided setup (a few minutes, resumable)
 
 Workflow
   run [DIR]        launch the sandbox in DIR (default: .). This is the main one.
+  ls               list your pi-stack sandboxes;  rm <name>  removes one
   serve            start the host services (memory, knowledge); ` + "`serve stop|status`" + `
   status           what is up, what is down, what is next   (also the bare command)
 

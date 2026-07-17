@@ -59,6 +59,7 @@ The `pi-stack` binary (`services/host/cmd/pi-stack/`) is the user-facing launche
 Verb tree (confirmed in `cmd/pi-stack/main.go`):
 - `pi-stack` (no args) — prints **status** (NEVER launches a sandbox; launching is explicit behind `run`). On a fresh host (no config file) it offers onboarding first. A bare positional launches `run` ONLY if it names an existing directory — a non-directory word is treated as a typo, not a silent sandbox.
 - `pi-stack [DIR]` — alias for `run [DIR]` (DIR must exist)
+- `pi-stack ls [--json]` — list the pi-stack-* sandboxes (name, state, dir); `pi-stack rm <name>... [--all] [--except <name>]` removes them (scoped to pi-stack-* names, via `sbx rm -f`). `status` shows them; these act on them.
 - `pi-stack status [--json]` (alias `st`) — fast read-only control panel: services up/down (:11435/:11436), provider keys, knowledge bundles + git drift, mcp, running `pi-stack-*` sandboxes, active profile, outstanding-setup count.
 - `pi-stack run [DIR] [--dev] [--kit K] [--mcp M] [--name N] [-- pi-args…]` — launch the sandbox
 - `pi-stack serve [args…]` — exec `pi-stack-host serve` (long-running host services)
@@ -70,7 +71,7 @@ Verb tree (confirmed in `cmd/pi-stack/main.go`):
 - `pi-stack config show|path|set|unset` — inspect or mutate config without touching the file
 - `pi-stack mcp register|ls` — register local stdio MCP servers with the sbx gateway
 - `pi-stack route pick|compile|show|models` — the model router (cost/latency/accuracy). `pick <intent>` resolves one intent; `compile` writes `routing.json`; `show` prints the resolved table. Passthrough to `pi-stack-host route`.
-- `pi-stack evals run|show|ls` — accuracy eval harness that feeds the router's scorecard. `run` is budget-guarded + `--dry-run`; costs money, run it by hand on a new-model release. Passthrough to `pi-stack-host evals`.
+- `pi-stack evals run|show|ls` — accuracy eval harness that feeds the router's scorecard. **Maintainer tooling** (repo-rooted; needs `promptfoo`, an OPTIONAL host dev dependency, never bundled). Primary entry point is `make evals ARGS="..."` (and `make route ARGS="..."`); the launcher verb is a passthrough for power users. `run` is budget-guarded + `--dry-run`; costs money, run it by hand on a new-model release.
 - `pi-stack task new|ls|harvest|rm|gc` — isolated parallel-work sandboxes: each `new` creates a standalone clone + sandbox for a branch of work so several agents run without colliding; `harvest` pulls results back, `rm`/`gc` clean up with guardrails. See `docs/design/worktree-tasks.md`.
 - `pi-stack state <backup|restore|reset|uninstall>` — grouping noun for the on-disk state verbs; the four also work as top-level aliases (full back-compat).
 - `pi-stack help [--all] [verb]` — tiered help: Core sections by default, `--all` (or per-noun `help <verb>`) reveals the rest; `pi-stack help --man` renders the man page (`man` still works as an alias).

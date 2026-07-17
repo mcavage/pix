@@ -134,6 +134,25 @@ registration, the active profile, and running
 sandboxes.  The
 .B \-\-json
 option emits the snapshot as JSON.  This is also the no-command action.
+.SS ls
+.TP
+.BR "pi-stack ls" " [" \-\-json "]"
+List the
+.B pi-stack-*
+sandboxes on this host (name, state, workspace dir).  For every sbx sandbox, use
+.BR "sbx ls" .
+.SS rm
+.TP
+.BR "pi-stack rm" " " name... " [" \-\-all "] [" \-\-except " " name "]"
+Remove pi-stack sandboxes (via
+.BR "sbx rm \-f" ).
+Scoped to
+.B pi-stack-*
+names.
+.B \-\-all
+removes every pi-stack sandbox;
+.B \-\-except
+keeps one (e.g. the box you are in).
 .SS setup
 .TP
 .BR "pi-stack setup" " [" \-\-account " " email "] [" \-\-knowledge " " path-or-url "] [" \-\-yes "|" \-y "|" \-\-non-interactive "]"

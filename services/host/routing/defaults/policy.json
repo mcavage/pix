@@ -85,9 +85,10 @@
       "task_type": "qa",
       "objective": "accuracy",
       "max_cost_usd": 0.06,
+      "max_latency_ms": 20000,
       "min_accuracy": 0.65,
       "fallback": "anthropic/claude-haiku-4-5",
-      "about": "Test/QA passes: best accuracy within the cheap tier (tight cost cap). -> Haiku 4.5."
+      "about": "Test/QA passes: best accuracy within the cheap AND fast tier (tight cost + latency caps, so a free-but-slow local model can't win a high-volume role). -> Haiku 4.5."
     }
   ]
 }

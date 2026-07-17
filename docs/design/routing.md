@@ -43,7 +43,7 @@ live map):
   vendor) via `providers:` allowlists, so their blind spots genuinely differ.
 - **Cheap / high-volume** — `breadth` (`fanout`) → Gemini 3.1 Flash-Lite and
   `verify` (`qa-lead`) → Claude Haiku 4.5.
-- **Local** — `ollama/gpt-oss:20b` is registered and evaluable: free + private,
+- **Local** — `ollama/gemma4:31b` is registered and evaluable: the current open-weight leader (Apache 2.0), free + private,
   but slower, so it wins nothing by default and serves as an offline fallback.
 
 A crew task fans out across three cloud vendors plus a local option, matched to

@@ -31,6 +31,7 @@ func wantsHelp(argv []string) bool {
 // positional (a would-be run DIR) is actually a mistyped verb.
 var knownVerbs = map[string]bool{
 	"help": true, "serve": true, "doctor": true, "setup": true, "status": true,
+	"ls": true, "rm": true,
 	"config": true, "mcp": true, "memory": true, "knowledge": true,
 	"profile": true, "version": true, "run": true, "secret": true,
 	"reset": true, "uninstall": true, "man": true,
@@ -95,6 +96,8 @@ New here?   pi-stack setup      one-time guided setup (a few minutes, resumable)
 
 Workflow
   run [DIR]           launch the sandbox in DIR (default: .). This is the main one.
+  ls [--json]         list your pi-stack sandboxes (name, state, dir)
+  rm <name>...        remove pi-stack sandboxes (--all [--except <name>])
   serve [args...]     start the host services (memory, knowledge); serve stop|status
   status              what is up, what is down, what is next   (also the bare command)
 
@@ -150,6 +153,10 @@ func verbUsage(verb string) (string, bool) {
 		return serveUsage, true
 	case "status", "st":
 		return statusUsage, true
+	case "ls":
+		return lsUsage, true
+	case "rm":
+		return rmUsage, true
 	case "doctor":
 		return doctorUsage, true
 	case "setup":

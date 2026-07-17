@@ -193,6 +193,8 @@ Core:
 ```bash
 pi-stack                     # status dashboard (does NOT launch)
 pi-stack run [DIR]           # launch a sandbox in DIR (default: current dir)
+pi-stack ls                  # list your pi-stack sandboxes (name, state, dir)
+pi-stack rm <name>           # remove a sandbox (--all [--except <name>])
 pi-stack status              # fast read-only control panel (alias: st)
 pi-stack setup               # guided setup for config, memory, and MCP
 pi-stack serve               # run enabled host services
@@ -210,7 +212,6 @@ pi-stack knowledge init|use|ls|query|sync|remote         # OKF bundles (alias: k
 pi-stack mcp register|ls     # register/list local stdio MCP servers with sbx
 pi-stack secret edit|check   # 1Password op-refs for host MCP credentials
 pi-stack route pick|compile|show|models   # the model router (cost/latency/accuracy)
-pi-stack evals run|show|ls   # accuracy eval harness that feeds the router
 pi-stack agent ls|new|edit|rm|reassess    # manage subagents and their resolved models
 pi-stack task new|ls|harvest|rm           # isolated parallel-work sandboxes (see below)
 pi-stack profile ls|use      # switch work / personal / default contexts
@@ -219,6 +220,12 @@ pi-stack man                 # render the full man page
 ```
 
 Run `pi-stack help --all` for the complete tree with flags.
+
+The model router (`route`), the eval harness, and agent authoring are
+**maintainer tooling**, run from a repo checkout (`make route`, `make evals`).
+The eval harness needs `promptfoo` on the host, an **optional dev dependency**
+(`npm i -g promptfoo`) that is never bundled into the image or the launcher.
+Consumers get the compiled `routing.json` in the image and never run evals.
 
 Do not hand-edit `config.toml`. `pi-stack setup` and `pi-stack config set/unset`
 are the supported writers, and `pi-stack doctor` prints copy-pasteable repair

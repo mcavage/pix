@@ -92,14 +92,14 @@
       "notes": "The volume floor (cheapest of any major vendor). High-volume breadth fan-out + parallel reads."
     },
     {
-      "id": "ollama/gpt-oss:20b",
+      "id": "ollama/gemma4:31b",
       "provider": "ollama",
-      "label": "GPT-OSS 20B (local)",
+      "label": "Gemma 4 31B (local)",
       "input_per_mtok": 0.0,
       "output_per_mtok": 0.0,
       "local": true,
       "available": true,
-      "notes": "Local via Ollama. Free + private, laptop-runnable open-weight reasoner, but slower than cloud, so it wins nothing by default and serves as an offline fallback. Needs `ollama pull gpt-oss:20b` + the ollama-bridge to expose it."
+      "notes": "Local via Ollama, and the strongest open-weight model as of 2026-04 (Apache 2.0; leads Qwen 3.5 / Llama 4 on coding + reasoning: LiveCodeBench ~80%, GPQA ~84%). Free + private but slow (a 31B dense model, ~58GB), so it wins nothing by default and is an offline/private fallback. For tighter machines use a smaller variant (gemma4 E4B ~8GB, or ministral-3:14b). Needs `ollama pull gemma4:31b` + the ollama-bridge to expose it. NOTE: this is the ROUTER's local option, separate from the tiny memory-watcher model (gemma3:4b, resident + DRAM-bound)."
     }
   ]
 }

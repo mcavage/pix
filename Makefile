@@ -107,7 +107,7 @@ SERVE_ENV ?=
 # at parse time so every target can rely on it.
 $(shell mkdir -p out)
 
-.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay launcher
+.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay launcher route evals
 
 # Symlink the private overlay's host plugins ($(OVERLAY)/host/overlay_*.go) into
 # services/host/ so they compile into pi-stack-host and self-register. No-op in a
@@ -256,6 +256,18 @@ serve: link-overlay ## Start the host services named in SERVICES (config/local.m
 	@echo "Host services [$(SERVICES)] — sandboxes reach these on host.docker.internal. Ctrl-C stops all."
 	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) || { echo "go build failed (pi-stack-host)"; exit 1; }
 	@exec env $(SERVE_ENV) MEMORY_WATCHER_MODEL=$(MEMORY_WATCHER_MODEL) MEMORY_EMBED_MODEL=$(MEMORY_EMBED_MODEL) out/pi-stack-host serve $(SERVICES)
+
+# route + evals are MAINTAINER tooling for the model router, run from the repo
+# (they read services/host/routing/ and evals/). They are NOT part of the
+# consumer install. `evals` additionally needs promptfoo on the host — an
+# OPTIONAL dev dependency (`npm i -g promptfoo`), never bundled into the image or
+# the binary. See the `model-refresh` skill + docs/design/routing.md.
+route: ## Model router (maintainer): make route ARGS="show" | "models" | "compile" | "pick <intent>"
+	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && ./out/pi-stack-host route $(ARGS)
+
+evals: ## Accuracy eval harness (maintainer; needs promptfoo, COSTS MONEY): make evals ARGS="run --budget 5 --dry-run"
+	@command -v promptfoo >/dev/null 2>&1 || { echo "ERROR: promptfoo not found (optional dev dep). Install it: npm i -g promptfoo"; exit 1; }
+	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && ./out/pi-stack-host evals $(ARGS)
 
 pull-models: ## Pull the local Ollama models the memory loop needs (watcher + embed)
 	@command -v ollama >/dev/null 2>&1 || { echo "ollama not installed — see https://ollama.com (optional: enables semantic recall + fact capture)"; exit 1; }

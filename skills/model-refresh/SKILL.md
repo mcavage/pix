@@ -30,6 +30,15 @@ with the real date, and prefer authoritative sources:
 - **Pricing:** each vendor's official API pricing page, or an aggregator that
   syncs from it (note the sync date). Record exact `$/Mtok` input and output per
   model and the exact API model string (`provider/id`).
+- **Local (Ollama) models are their own refresh.** Do NOT trust a remembered tag:
+  check the live Ollama library / a current catalog for the exact tag, the
+  release date, and the download size, then pick by CURRENT generation, not fame.
+  (Example failure: `gpt-oss:20b` shipped 2025-08 and was overtaken by the Gemma 4
+  and Qwen 3.5 generations within months.) The router's local model is a slow,
+  free, opt-in fallback, so weight it toward a genuinely capable current model
+  and give it a high latency so it never wins latency-sensitive intents by
+  accident. This is SEPARATE from the tiny memory-watcher model (`gemma3:4b`),
+  which stays small on purpose (resident + DRAM-bound).
 - **Per-task capability (for the scorecard):** published benchmark numbers, one
   consistent benchmark per task_type:
   - `code` <- SWE-bench (Verified or Pro; pick one and stay consistent)
@@ -106,10 +115,14 @@ Card priors are honest guesses of ordering. To replace them with measured number
 (costs money, run by hand on a new-model release):
 
 ```bash
-pi-stack evals run --budget 5 --dry-run       # preview the plan + spend
-pi-stack evals run --budget 5 --save          # measure, write scorecard
+make evals ARGS="--budget 5 --dry-run"        # preview the plan + spend
+make evals ARGS="--budget 5 --save"           # measure, write scorecard
 pi-stack route compile                         # re-resolve
 ```
+
+(`make evals` is the maintainer entry point; it needs `promptfoo` on the host,
+which is an OPTIONAL dev dependency, not bundled with the stack. It runs from the
+repo because it reads `evals/`.)
 
 ## 7. Ship
 

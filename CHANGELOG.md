@@ -17,8 +17,10 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 - Model registry was built from stale/guessed model names and prices (e.g.
   `ollama/gemma4`, `claude-sonnet-4-6`). Re-grounded the whole registry on LIVE
   July 2026 vendor pricing + published benchmarks (see the new `model-refresh`
-  skill). The local model is now `ollama/gpt-oss:20b` (the tiny `gemma3:4b`
-  remains the memory-watcher default, a separate DRAM-bound job).
+  skill). The local model is now `ollama/gemma4:31b` — the current open-weight
+  leader (Apache 2.0; beats the Qwen 3.5 and Llama 4 families on coding +
+  reasoning), replacing the year-old `gpt-oss:20b`. The tiny `gemma3:4b` remains
+  the memory-watcher default (a separate, DRAM-bound job).
 - `pi-stack evals --help` advertised flags (`--suite`) the host command does not
   accept and omitted `import`; the launcher help now matches the host.
 
@@ -53,7 +55,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   Sonnet 5 for `engineer`/`designer` (`code`) and the `advisory` specialist crew;
   GPT-5.6 Sol for `review`; Gemini 3.1 Pro for `security-lead` (`red-team`);
   Gemini 3.1 Flash-Lite for `fanout` (`breadth`); Haiku 4.5 for `qa-lead`
-  (`verify`). Three cloud vendors plus a local `gpt-oss:20b` option, tiered by
+  (`verify`). Three cloud vendors plus a local `gemma4:31b` option, tiered by
   leverage with the adversarial roles pinned cross-vendor via provider
   allowlists. New intents: `strategy`, `advisory`, `red-team`. Eval providers
   mirror the registry.
