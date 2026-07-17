@@ -272,7 +272,10 @@ route: ## Model router (maintainer): make route ARGS="show" | "models" | "compil
 evals: ## Accuracy eval harness (maintainer; a `run` needs promptfoo + COSTS MONEY): make evals ARGS="run --budget 5 --dry-run"
 	@args='$(if $(strip $(ARGS)),$(ARGS),show)'; \
 	case "$$args" in \
-	  *run*) command -v promptfoo >/dev/null 2>&1 || { echo "ERROR: promptfoo not found (optional dev dep). Install it: npm i -g promptfoo"; exit 1; };; \
+	  *run*) \
+	    command -v promptfoo >/dev/null 2>&1 || { echo "ERROR: promptfoo not found (optional dev dep). Install it: npm i -g promptfoo"; exit 1; }; \
+	    { [ -n "$$PI_BIN" ] && command -v "$$PI_BIN" >/dev/null 2>&1; } || command -v pi >/dev/null 2>&1 || { echo "ERROR: the 'pi' CLI is not on PATH. Evals run each model through a headless pi (to avoid handling API keys). Install it (npm i -g @earendil-works/pi-coding-agent) or set PI_BIN."; exit 1; }; \
+	  ;; \
 	esac; \
 	(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && ./out/pi-stack-host evals $$args
 

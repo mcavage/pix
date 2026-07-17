@@ -148,10 +148,15 @@ this feature exists to control. It is a one-command sweep the user runs on a new
 model release. The importer's schema is pinned by a real `results.json` fixture
 (`services/host/routing/testdata/`).
 
-**Scope + prerequisites.** The `evals` and `agent` commands are **repo-rooted**
-(run from the repo so `evals/` and `agents/` resolve; override with
-`$EVALS_CONFIG` / `$PI_STACK_AGENTS_DIR`) and require **promptfoo on the host**
-(`npm i -g promptfoo`). They are maintainer/power-user tools, not part of the
+**Scope + prerequisites.** Evals are run via **`make evals`** (maintainer
+tooling, NOT a `pi-stack` command). They are **repo-rooted** (run from the repo so
+`evals/` and `agents/` resolve; override with `$EVALS_CONFIG` /
+`$PI_STACK_AGENTS_DIR`) and need TWO optional host dependencies, neither bundled:
+(1) **promptfoo** (`npm i -g promptfoo`) to run + score, and (2) the **`pi` CLI on
+the host PATH** (`npm i -g @earendil-works/pi-coding-agent`, or set `PI_BIN`) —
+the provider runs each model through a headless `pi` so it never handles API keys,
+so a host-run `pi` also needs working model auth. `make evals` preflight-checks
+both and fails with the fix. They are maintainer/power-user tools, not part of the
 repo-less consumer install. What the eval measures is a **model's capability at
 a `task_type`** (which sets an agent's default model), not the exact wording of
 one agent's prompt. Every requested model must have a `providers:` entry in

@@ -13,6 +13,13 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 - `make evals`/`make route` with no ARGS printed usage and exited 2 (looked
   broken); they now default to the safe read-only `show`, and the promptfoo guard
   only fires for a `run`.
+- `make evals ARGS=run` failed with an opaque `spawn pi ENOENT` on every case:
+  the eval provider runs each model through a headless `pi`, but `pi` is not on
+  the host by default (only `pi-stack`/`pi-stack-host` are). Now `make evals`
+  preflight-checks for `pi` (and `PI_BIN`), the provider returns a clear
+  install-hint on ENOENT, and an all-errored run exits non-zero with the likely
+  causes instead of reporting a cheerful $0 run. Documented `pi`-on-host as an
+  eval prerequisite.
 - Eval errors were mis-prefixed `route:` and a promptfoo host failure (e.g. a
   native-module Node-version mismatch) surfaced as an opaque "produced no
   results". Now prefixed `evals:` with an actionable message that names the likely

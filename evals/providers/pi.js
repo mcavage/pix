@@ -93,6 +93,15 @@ class PiProvider {
 				return { error: `pi exited ${code}: ${stderr.slice(0, 500)}` };
 			}
 		} catch (e) {
+			if (e && e.code === "ENOENT") {
+				return {
+					error:
+						`pi CLI not found (spawn ${this.bin}). The eval harness runs each model ` +
+						`through a headless pi process (so it never handles API keys), which ` +
+						`means pi must be on the host PATH. Install it (npm i -g ` +
+						`@earendil-works/pi-coding-agent) or set PI_BIN to its path.`,
+				};
+			}
 			return { error: String((e && e.message) || e) };
 		} finally {
 			try {

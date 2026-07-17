@@ -120,9 +120,11 @@ make evals ARGS="--budget 5 --save"           # measure, write scorecard
 pi-stack route compile                         # re-resolve
 ```
 
-(`make evals` is the maintainer entry point; it needs `promptfoo` on the host,
-which is an OPTIONAL dev dependency, not bundled with the stack. It runs from the
-repo because it reads `evals/`.)
+(`make evals` is the maintainer entry point, run from the repo. It needs TWO
+optional host dependencies, neither bundled: `promptfoo` (`npm i -g promptfoo`)
+and the `pi` CLI on the host PATH (`npm i -g @earendil-works/pi-coding-agent`, or
+`PI_BIN`) — the harness runs each model through a headless `pi`, so that `pi` also
+needs working model auth on the host. `make evals` preflight-checks both.)
 
 ## 7. Ship
 

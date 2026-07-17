@@ -239,6 +239,16 @@ func evalsRun(args []string) {
 
 	if hasFlag(args, "--json") {
 		printJSON(map[string]any{"spent_usd": spent, "stopped": stopped, "updated": totalUpdated})
+	} else if len(totalUpdated) == 0 {
+		// promptfoo ran but nothing scored: every case errored (a provider/env
+		// problem, not a low score). Do not report a cheerful $0 run — say what is
+		// almost certainly wrong.
+		fmt.Fprintln(os.Stderr, "evals: promptfoo ran but scored 0 rows — every case errored, so nothing was measured.")
+		fmt.Fprintln(os.Stderr, "  Most likely the provider could not run. Check, in order:")
+		fmt.Fprintln(os.Stderr, "    - the `pi` CLI is on PATH (evals spawn it headlessly): npm i -g @earendil-works/pi-coding-agent, or set PI_BIN")
+		fmt.Fprintln(os.Stderr, "    - pi has model auth on the host (provider keys / sbx proxy) so a headless run can reach the model")
+		fmt.Fprintln(os.Stderr, "    - the per-cell errors in the promptfoo output above, and ~/.promptfoo/logs/")
+		os.Exit(1)
 	} else {
 		fmt.Printf("ran promptfoo, spent $%.4f\n", spent)
 		if stopped != "" {
