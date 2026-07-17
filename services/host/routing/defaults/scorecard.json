@@ -10,7 +10,7 @@
     { "model": "google/gemini-3.1-pro",            "task_type": "code",      "accuracy": 0.85, "latency_ms_p50": 22000, "cost_usd": 0.112, "n": 0, "source": "card" },
     { "model": "google/gemini-3.5-flash",          "task_type": "code",      "accuracy": 0.72, "latency_ms_p50": 8000,  "cost_usd": 0.084, "n": 0, "source": "card" },
     { "model": "google/gemini-3.1-flash-lite",     "task_type": "code",      "accuracy": 0.60, "latency_ms_p50": 5000,  "cost_usd": 0.014, "n": 0, "source": "card" },
-    { "model": "ollama/gemma4:31b",             "task_type": "code",         "accuracy": 0.72, "latency_ms_p50": 42000, "cost_usd": 0.000, "n": 0, "source": "card" },
+    { "model": "ollama/qwen3.5:9b",             "task_type": "code", "accuracy": 0.68, "latency_ms_p50": 35000, "cost_usd": 0.000, "n": 0, "source": "card" },
 
     { "model": "anthropic/claude-fable-5",        "task_type": "reasoning", "accuracy": 0.90, "latency_ms_p50": 40000, "cost_usd": 0.500, "n": 0, "source": "card" },
     { "model": "anthropic/claude-opus-4-8",        "task_type": "reasoning", "accuracy": 0.89, "latency_ms_p50": 38000, "cost_usd": 0.250, "n": 0, "source": "card" },
@@ -21,7 +21,7 @@
     { "model": "google/gemini-3.1-pro",            "task_type": "reasoning", "accuracy": 0.91, "latency_ms_p50": 22000, "cost_usd": 0.112, "n": 0, "source": "card" },
     { "model": "google/gemini-3.5-flash",          "task_type": "reasoning", "accuracy": 0.76, "latency_ms_p50": 8000,  "cost_usd": 0.084, "n": 0, "source": "card" },
     { "model": "google/gemini-3.1-flash-lite",     "task_type": "reasoning", "accuracy": 0.64, "latency_ms_p50": 5000,  "cost_usd": 0.014, "n": 0, "source": "card" },
-    { "model": "ollama/gemma4:31b",             "task_type": "reasoning", "accuracy": 0.82, "latency_ms_p50": 45000, "cost_usd": 0.000, "n": 0, "source": "card" },
+    { "model": "ollama/qwen3.5:9b",             "task_type": "reasoning", "accuracy": 0.72, "latency_ms_p50": 35000, "cost_usd": 0.000, "n": 0, "source": "card" },
 
     { "model": "anthropic/claude-fable-5",        "task_type": "search",    "accuracy": 0.90, "latency_ms_p50": 40000, "cost_usd": 0.500, "n": 0, "source": "card" },
     { "model": "anthropic/claude-opus-4-8",        "task_type": "search",    "accuracy": 0.88, "latency_ms_p50": 38000, "cost_usd": 0.250, "n": 0, "source": "card" },
@@ -32,7 +32,7 @@
     { "model": "google/gemini-3.1-pro",            "task_type": "search",    "accuracy": 0.87, "latency_ms_p50": 22000, "cost_usd": 0.112, "n": 0, "source": "card" },
     { "model": "google/gemini-3.5-flash",          "task_type": "search",    "accuracy": 0.78, "latency_ms_p50": 8000,  "cost_usd": 0.084, "n": 0, "source": "card" },
     { "model": "google/gemini-3.1-flash-lite",     "task_type": "search",    "accuracy": 0.66, "latency_ms_p50": 5000,  "cost_usd": 0.014, "n": 0, "source": "card" },
-    { "model": "ollama/gemma4:31b",             "task_type": "search",         "accuracy": 0.70, "latency_ms_p50": 45000, "cost_usd": 0.000, "n": 0, "source": "card" },
+    { "model": "ollama/qwen3.5:9b",             "task_type": "search", "accuracy": 0.64, "latency_ms_p50": 35000, "cost_usd": 0.000, "n": 0, "source": "card" },
 
     { "model": "anthropic/claude-fable-5",        "task_type": "qa",        "accuracy": 0.90, "latency_ms_p50": 40000, "cost_usd": 0.500, "n": 0, "source": "card" },
     { "model": "anthropic/claude-opus-4-8",        "task_type": "qa",        "accuracy": 0.89, "latency_ms_p50": 38000, "cost_usd": 0.250, "n": 0, "source": "card" },
@@ -43,6 +43,6 @@
     { "model": "google/gemini-3.1-pro",            "task_type": "qa",        "accuracy": 0.86, "latency_ms_p50": 22000, "cost_usd": 0.112, "n": 0, "source": "card" },
     { "model": "google/gemini-3.5-flash",          "task_type": "qa",        "accuracy": 0.75, "latency_ms_p50": 8000,  "cost_usd": 0.084, "n": 0, "source": "card" },
     { "model": "google/gemini-3.1-flash-lite",     "task_type": "qa",        "accuracy": 0.67, "latency_ms_p50": 5000,  "cost_usd": 0.002, "n": 0, "source": "card" },
-    { "model": "ollama/gemma4:31b",             "task_type": "qa",         "accuracy": 0.74, "latency_ms_p50": 45000, "cost_usd": 0.000, "n": 0, "source": "card" }
+    { "model": "ollama/qwen3.5:9b",             "task_type": "qa", "accuracy": 0.68, "latency_ms_p50": 35000, "cost_usd": 0.000, "n": 0, "source": "card" }
   ]
 }

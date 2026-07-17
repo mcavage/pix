@@ -70,14 +70,6 @@ func runRoute(argv []string) {
 	execHost("route", argv)
 }
 
-func runEvals(argv []string) {
-	if len(argv) > 0 && (argv[0] == "-h" || argv[0] == "--help") {
-		fmt.Print(evalsUsage)
-		return
-	}
-	execHost("evals", argv)
-}
-
 const routeUsage = `usage: pi-stack route <command>
 
 The model router: turn a declared INTENT (a hard cost/latency/accuracy
@@ -92,25 +84,6 @@ commands:
   show [--json]             registry + scorecard + resolved table
   models [--json]           list the model registry
 
-Add a model: one entry in ~/.pi-stack/routing/models.json, then
-` + "`pi-stack evals run --models <id>`" + ` and ` + "`pi-stack route compile`" + `.
-`
-
-const evalsUsage = `usage: pi-stack evals <command>
-
-The accuracy eval harness: run a suite of cases across candidate models, score
-each mechanically, record real cost + latency, and write the measured scores
-into the router's scorecard so it stops guessing.
-
-commands:
-  run [--config P] [--models a,b] [--budget USD] [--dry-run] [--save] [--json]
-  import FILE [--save] [--json]   fold a promptfoo results.json into the scorecard
-  show [--json]                   the current scorecard
-  ls   [--config P]               list the suites/cases
-
-A real sweep calls each model on each case and COSTS MONEY — run it by hand on a
-new-model release (use --budget to cap, --dry-run to preview), then
-` + "`pi-stack route compile`" + `. Note --budget is advisory: models run one at a
-time and the sweep stops before a model that would exceed the cap, but the last
-model's own matrix runs whole.
+Add a model: one entry in ~/.pi-stack/routing/models.json, then re-measure with
+` + "`make evals ARGS=\"run --models <id> --save\"`" + ` and ` + "`pi-stack route compile`" + `.
 `

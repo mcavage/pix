@@ -454,28 +454,17 @@ Print the registry, scorecard, and resolved-intent table.
 .TP
 .BR "pi-stack route models" " [" \-\-json "]"
 List the model registry.
-.SS evals
-The accuracy eval harness: run a suite of cases across candidate models, score
-each mechanically, record real cost and latency, and write the measured scores
-into the router's scorecard.  A real sweep calls each model on each case and
-costs money — run it by hand on a new-model release.  Execes the sibling
-.B pi-stack-host
-binary.
-.TP
-.BR "pi-stack evals run" " [" \-\-suite " " DIR "] [" \-\-models " " a,b "] [" \-\-budget " " USD "] [" \-\-dry-run "] [" \-\-save "] [" \-\-json "]"
-Run the suite.
-.B \-\-dry-run
-prints the plan and calls nothing;
-.B \-\-budget
-caps spend;
-.B \-\-save
-writes the measured scores into the scorecard.
-.TP
-.BR "pi-stack evals show" " [" \-\-json "]"
-Print the current scorecard.
-.TP
-.BR "pi-stack evals ls" " [" \-\-suite " " DIR "]"
-List the cases in a suite.
+.SS "evals (maintainer)"
+The accuracy eval harness is NOT a
+.B pi-stack
+command.  It is maintainer tooling run from a repo checkout with
+.BR "make evals ARGS=\"run --budget 5 --save\"" ,
+and it needs
+.B promptfoo
+on the host \(em an optional dev dependency that is never bundled into the image
+or the launcher.  It writes measured scores into the router scorecard; then
+.B pi-stack route compile
+bakes the routes.
 .SS mcp
 .TP
 .BR "pi-stack mcp register" " [" name... "]"

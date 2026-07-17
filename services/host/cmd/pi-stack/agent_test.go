@@ -52,7 +52,7 @@ func TestResolveAgentModel(t *testing.T) {
 	}
 	// Intent resolves; WHY explains the pick (objective + what it beat).
 	m, why = resolveAgentModel(agentMeta{Intent: "code"}, reg, sc, pol)
-	if m != "anthropic/opus" || !strings.Contains(why, "code/accuracy") || !strings.Contains(why, "beat gpt") {
+	if m != "anthropic/opus" || !strings.Contains(why, "code:") || !strings.Contains(why, "beat gpt") {
 		t.Fatalf("intent: %q %q", m, why)
 	}
 	// No intent -> inherit.

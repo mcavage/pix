@@ -102,7 +102,12 @@ func main() {
 	case "route":
 		runRoute(args[1:])
 	case "evals":
-		runEvals(args[1:])
+		// evals is maintainer tooling in the Makefile, not a pi-stack command. Catch
+		// it explicitly (also shadowing the bare-arg-is-a-dir behavior when an
+		// evals/ dir is present) and point at the real door.
+		fmt.Fprintln(os.Stderr, "pi-stack: evals is maintainer tooling, not a pi-stack command.")
+		fmt.Fprintln(os.Stderr, `  Run it from a repo checkout:  make evals ARGS="run --budget 5 --dry-run"`)
+		os.Exit(2)
 	case "agent":
 		runAgent(args[1:])
 	case "man":
@@ -309,7 +314,6 @@ Data
 Models & agents
   agent            manage subagents: ls | new | edit | rm | reassess
   route            model router: pick | compile | show | models
-  evals            accuracy eval harness: run | import | show | ls
 
 More
   config, mcp, state, version, man     (see ` + "`pi-stack help --all`" + `)

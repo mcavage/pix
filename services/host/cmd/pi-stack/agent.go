@@ -221,33 +221,64 @@ func resolveAgentModel(m agentMeta, reg *routing.Registry, sc *routing.Scorecard
 		return "(inherit parent)", fmt.Sprintf("intent %q not in policy", m.Intent)
 	}
 	d := routing.Resolve(reg, sc, pol, intent)
-	return d.Model, explainDecision(m.Intent, d)
+	return d.Model, explainDecision(intent, d)
 }
 
-// explainDecision turns a routing Decision into a one-line WHY that is actually
-// actionable: the objective it optimized, the winner's headline numbers, and
-// either what it beat (a real contest) or that it was the only/forced fit (a
-// constraint did the choosing) — so you can see whether to retune policy.json.
-func explainDecision(intentName string, d routing.Decision) string {
+// explainDecision turns a routing Decision into a WHY that answers the real
+// question — why THIS model for this agent — in words, not a wall of unmeasured
+// numbers. A contest names what it beat and on which axis; a single survivor
+// names the CONSTRAINTS that eliminated everything else (the actionable part you
+// tune in policy.json); a fallback says nothing matched. The seed-vs-measured
+// caveat lives once in the table footer, not on every row.
+func explainDecision(in routing.Intent, d routing.Decision) string {
+	obj := d.Objective
+	if obj == "" {
+		obj = "accuracy"
+	}
+	cons := intentConstraints(in)
+	if cons == "" {
+		cons = "no constraints"
+	}
 	if !d.ConstraintsMet {
-		// Fallback: nothing met the hard constraints. Say so and name the runner
-		// (the best-scoring candidate that still missed) if there was one.
-		if len(d.Alternatives) > 0 {
-			return fmt.Sprintf("%s: no model met the constraints -> fallback (closest: %s)",
-				intentName, shortModel(d.Alternatives[0].ID))
-		}
-		return fmt.Sprintf("%s: no scored model for this task -> fallback", intentName)
+		return fmt.Sprintf("%s: nothing matched (%s) -> fallback", in.Name, cons)
 	}
-	metric := ""
-	if d.Chosen != nil {
-		metric = fmt.Sprintf("%.2f acc, $%.3f, %.0fs",
-			d.Chosen.Accuracy, d.Chosen.CostUSD, d.Chosen.LatencyMs/1000)
-	}
-	tail := "sole fit" // only one candidate cleared the constraints: the cap/floor chose, not a contest
+	// A real contest: >1 model cleared the constraints, so the objective broke the
+	// tie. Name the runner-up and the axis.
 	if len(d.Alternatives) > 1 {
-		tail = "beat " + shortModel(d.Alternatives[1].ID)
+		runner := shortModel(d.Alternatives[1].ID)
+		switch obj {
+		case "cost":
+			return fmt.Sprintf("%s: cheapest clearing %s; beat %s", in.Name, cons, runner)
+		case "latency":
+			return fmt.Sprintf("%s: fastest clearing %s; beat %s", in.Name, cons, runner)
+		case "balanced":
+			return fmt.Sprintf("%s: best cost/latency/accuracy blend under %s; beat %s", in.Name, cons, runner)
+		default:
+			return fmt.Sprintf("%s: best accuracy under %s; beat %s", in.Name, cons, runner)
+		}
 	}
-	return fmt.Sprintf("%s/%s: %s (%s)", intentName, d.Objective, metric, tail)
+	// Sole survivor: the constraints, not the objective, made the choice. Naming
+	// them is the useful part (loosen these in policy.json to get a contest).
+	return fmt.Sprintf("%s: only model matching %s", in.Name, cons)
+}
+
+// intentConstraints renders an intent's hard constraints compactly (the same
+// filters Resolve applies), so a WHY can explain what eliminated the field.
+func intentConstraints(in routing.Intent) string {
+	var p []string
+	if len(in.Providers) > 0 {
+		p = append(p, strings.Join(in.Providers, "/"))
+	}
+	if in.MaxCostUSD > 0 {
+		p = append(p, fmt.Sprintf("<=$%.2f", in.MaxCostUSD))
+	}
+	if in.MinAccuracy > 0 {
+		p = append(p, fmt.Sprintf(">=%.2f acc", in.MinAccuracy))
+	}
+	if in.MaxLatencyMs > 0 {
+		p = append(p, fmt.Sprintf("<=%.0fs", in.MaxLatencyMs/1000))
+	}
+	return strings.Join(p, ", ")
 }
 
 // shortModel drops the provider prefix for compact display (anthropic/claude-
@@ -301,9 +332,9 @@ func agentLs(args []string) {
 	}
 	tw.Flush()
 	fmt.Println()
-	fmt.Println("WHY = intent/objective: chosen model's accuracy, per-task $, latency (what it beat, or")
-	fmt.Println("'sole fit' = a cost/latency/accuracy constraint left one candidate). Retune the tradeoff in")
-	fmt.Println("policy.json (or re-measure with `pi-stack evals run`), then `pi-stack route compile`.")
+	fmt.Println("WHY explains the pick: what the winner beat, or the constraints that left it the only")
+	fmt.Println("fit. The accuracy/cost/latency behind it are SEED priors (see `route show`) until")
+	fmt.Println("`make evals` measures them. Tune the tradeoffs in policy.json, then `pi-stack route compile`.")
 }
 
 func agentNew(args []string) {
@@ -397,7 +428,7 @@ func agentNew(args []string) {
 		}
 	}
 
-	fmt.Printf("created agent %q\n  %s\n  %s\n\nNext:\n  1. Edit the role brief in %s\n  2. Write real eval cases in %s\n  3. pi-stack evals run --budget 1 --save   # measure it\n  4. pi-stack route compile                 # route it\nOr run `pi-stack agent new %s --interactive` to author it conversationally.\n",
+	fmt.Printf("created agent %q\n  %s\n  %s\n\nNext:\n  1. Edit the role brief in %s\n  2. Write real eval cases in %s\n  3. make evals ARGS=\"run --budget 1 --save\"   # measure it (maintainer; needs promptfoo)\n  4. pi-stack route compile                     # route it\nOr run `pi-stack agent new %s --interactive` to author it conversationally.\n",
 		name, path, suite, path, suite, name)
 }
 

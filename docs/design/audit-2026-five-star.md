@@ -21,7 +21,7 @@ ranked, so they can be scheduled rather than lost.
   (`max-accuracy`), Opus 4.8 for `strategy` (`architect`, `product-manager`),
   Sonnet 5 for `code` + the `advisory` crew, GPT-5.6 Sol for `review`, Gemini 3.1
   Pro for `red-team` (`security-lead`), Gemini 3.1 Flash-Lite for `breadth`
-  (`fanout`), Haiku 4.5 for `verify` (`qa-lead`); local `gemma4:31b` as an
+  (`fanout`), Haiku 4.5 for `verify` (`qa-lead`); local `qwen3.5:9b` as an
   offline option. New intents `strategy`/`advisory`/`red-team`; vendor diversity
   encoded via per-intent `providers` allowlists. Added the **`model-refresh`
   skill** so this refresh is a repeatable, live-data-grounded procedure, and made

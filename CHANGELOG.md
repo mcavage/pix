@@ -17,10 +17,11 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 - Model registry was built from stale/guessed model names and prices (e.g.
   `ollama/gemma4`, `claude-sonnet-4-6`). Re-grounded the whole registry on LIVE
   July 2026 vendor pricing + published benchmarks (see the new `model-refresh`
-  skill). The local model is now `ollama/gemma4:31b` — the current open-weight
-  leader (Apache 2.0; beats the Qwen 3.5 and Llama 4 families on coding +
-  reasoning), replacing the year-old `gpt-oss:20b`. The tiny `gemma3:4b` remains
-  the memory-watcher default (a separate, DRAM-bound job).
+  skill). The local model is now `ollama/qwen3.5:9b` — a current (2026-02),
+  Apache-2.0 all-rounder that actually fits a 16GB machine (~6.6GB), replacing
+  the year-old `gpt-oss:20b` (and the 58GB `gemma4:31b` that never fit a laptop).
+  The tiny `gemma3:4b` remains the memory-watcher default (a separate,
+  DRAM-bound job).
 - `pi-stack evals --help` advertised flags (`--suite`) the host command does not
   accept and omitted `import`; the launcher help now matches the host.
 
@@ -47,6 +48,16 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **evals is no longer a `pi-stack` command.** It was a consumer-facing launcher
+  verb that consumers could not actually use (repo-rooted, needs promptfoo). It
+  is now maintainer tooling in the Makefile only (`make evals`), running the
+  repo-built `pi-stack-host evals` backend. Removed the `evals` verb from the
+  launcher, help, and man page.
+- **`agent ls` WHY reasons rewritten.** They said `sole fit` (meaningless) and a
+  wall of precise-looking but unmeasured numbers. Now each WHY names the actual
+  binding constraints that left one model (e.g. `only model matching anthropic,
+  <=$0.18, >=0.80 acc`) or what the winner beat in a contest, with a footer that
+  flags the metrics as seed priors until `make evals` measures them.
 - **Routing redesign: a real tiered, multi-vendor crew instead of a monoculture,
   grounded in live model data.** Previously 13 of 18 agents collapsed onto one
   model and the rest onto Opus. The registry/scorecard/policy are now seeded from
@@ -55,7 +66,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   Sonnet 5 for `engineer`/`designer` (`code`) and the `advisory` specialist crew;
   GPT-5.6 Sol for `review`; Gemini 3.1 Pro for `security-lead` (`red-team`);
   Gemini 3.1 Flash-Lite for `fanout` (`breadth`); Haiku 4.5 for `qa-lead`
-  (`verify`). Three cloud vendors plus a local `gemma4:31b` option, tiered by
+  (`verify`). Three cloud vendors plus a local `qwen3.5:9b` option, tiered by
   leverage with the adversarial roles pinned cross-vendor via provider
   allowlists. New intents: `strategy`, `advisory`, `red-team`. Eval providers
   mirror the registry.

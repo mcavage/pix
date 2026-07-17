@@ -259,9 +259,11 @@ serve: link-overlay ## Start the host services named in SERVICES (config/local.m
 
 # route + evals are MAINTAINER tooling for the model router, run from the repo
 # (they read services/host/routing/ and evals/). They are NOT part of the
-# consumer install. `evals` additionally needs promptfoo on the host — an
-# OPTIONAL dev dependency (`npm i -g promptfoo`), never bundled into the image or
-# the binary. See the `model-refresh` skill + docs/design/routing.md.
+# consumer surface: `evals` is deliberately NOT a `pi-stack` command — it lives
+# here in the Makefile, invoking the repo-built pi-stack-host backend. It also
+# needs promptfoo on the host — an OPTIONAL dev dependency (`npm i -g promptfoo`),
+# never bundled into the image or the launcher. See the `model-refresh` skill +
+# docs/design/routing.md.
 route: ## Model router (maintainer): make route ARGS="show" | "models" | "compile" | "pick <intent>"
 	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && ./out/pi-stack-host route $(ARGS)
 

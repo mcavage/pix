@@ -58,10 +58,10 @@ providers:
     label: google/gemini-3.1-flash-lite
     config: { model: google/gemini-3.1-flash-lite }
   # Local model (Ollama). Keep it here so evals can measure it, but it is slow;
-  # run it only when you care (`pi-stack evals run --models ollama/gemma4:31b`).
+  # run it only when you care (`pi-stack evals run --models ollama/qwen3.5:9b`).
   - id: file://providers/pi.js
-    label: ollama/gemma4:31b
-    config: { model: ollama/gemma4:31b }
+    label: ollama/qwen3.5:9b
+    config: { model: ollama/qwen3.5:9b }
 
 # The llm-rubric grader (for judge-style cases) also goes through pi (a cheap model).
 defaultTest:
