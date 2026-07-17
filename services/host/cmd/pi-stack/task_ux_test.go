@@ -651,3 +651,29 @@ func TestHarvestArtifacts_FailsClosedOnUnwritableDest(t *testing.T) {
 		t.Error("harvest must return an error when the dest cannot be created (callers fail closed)")
 	}
 }
+
+func TestCopyFilePreserve_AtomicReplaceNoTempLeak(t *testing.T) {
+	dir := t.TempDir()
+	src1 := filepath.Join(dir, "s1")
+	src2 := filepath.Join(dir, "s2")
+	writeFile(t, src1, "first\n")
+	writeFile(t, src2, "second\n")
+	dst := filepath.Join(dir, "out", "d.md")
+	if ok, err := copyFilePreserve(src1, dst); !ok || err != nil {
+		t.Fatalf("first copy: ok=%v err=%v", ok, err)
+	}
+	// Re-copy a different source over the same dst: replaces content, no leftovers.
+	if ok, err := copyFilePreserve(src2, dst); !ok || err != nil {
+		t.Fatalf("second copy: ok=%v err=%v", ok, err)
+	}
+	if b, _ := os.ReadFile(dst); string(b) != "second\n" {
+		t.Errorf("dst content = %q, want second", string(b))
+	}
+	// No .harvest-* temp files left behind in the dest dir.
+	ents, _ := os.ReadDir(filepath.Dir(dst))
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), ".harvest-") {
+			t.Errorf("leftover temp file: %s", e.Name())
+		}
+	}
+}

@@ -948,9 +948,12 @@ func runTaskNew(env shellEnv, argv []string) {
 		// bare-<key> task or a leftover new-layout one), so `new` never shadows a
 		// legacy task or races its removal. The new-layout dir collision is also
 		// caught atomically by reserveTaskCheckout below; this catches the legacy case.
-		if lay, found, _ := findTaskLayout(mainroot, sane); found {
+		if lay, found, ambiguous := findTaskLayout(mainroot, sane); found || ambiguous {
 			where := "this repo"
-			if lay.legacy {
+			switch {
+			case ambiguous:
+				where = "BOTH the new and legacy task layout for this repo"
+			case lay.legacy:
 				where = "the legacy task layout for this repo"
 			}
 			fmt.Fprintf(os.Stderr, "pi-stack task new: task %q already exists in %s; `pi-stack run` its clone to reattach, or `pi-stack task rm %s` first\n", name, where, name)
@@ -1615,7 +1618,14 @@ func listHarvestCandidates(env shellEnv, co string) ([]harvestFile, error) {
 		if rel == "" || !safeRelPath(rel) || !isArtifactPath(rel) {
 			continue
 		}
-		if fi, err := os.Lstat(filepath.Join(co, filepath.FromSlash(rel))); err == nil && fi.Mode().IsRegular() {
+		fi, err := os.Lstat(filepath.Join(co, filepath.FromSlash(rel)))
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue // a deleted tracked doc has nothing to rescue
+			}
+			return nil, fmt.Errorf("stat %s: %w", rel, err) // fail CLOSED on a real stat error
+		}
+		if fi.Mode().IsRegular() {
 			add(rel, "M")
 		}
 	}
@@ -1776,45 +1786,47 @@ func copyFilePreserve(src, dst string) (copied bool, err error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return false, err
 	}
-	// Guard against writing THROUGH a symlink or ONTO the source. A --to dir can
-	// contain a symlink (e.g. docs -> <checkout>/docs) that would alias dst back to
-	// the source; opening it O_TRUNC would empty the original. Lstat dst (following
-	// only intermediate components): if it is the SAME file as src, refuse; if the
-	// final component is itself a symlink, remove the LINK (not its target) so the
-	// create below writes a real file, never through the link.
-	if dfi, derr := os.Lstat(dst); derr == nil {
-		if os.SameFile(fi, dfi) {
-			return false, fmt.Errorf("destination %s aliases the source file; refusing to overwrite it", dst)
-		}
-		if dfi.Mode()&os.ModeSymlink != 0 {
-			if rerr := os.Remove(dst); rerr != nil {
-				return false, rerr
-			}
-		}
+	// Alias guard: refuse if dst resolves to the SAME file as src (a --to dir with
+	// a symlink like docs -> <checkout>/docs makes dst alias the source). Lstat
+	// follows intermediate components, so this catches the descendant-symlink case;
+	// overwriting src with a copy of itself is refused rather than risked.
+	if dfi, derr := os.Lstat(dst); derr == nil && os.SameFile(fi, dfi) {
+		return false, fmt.Errorf("destination %s aliases the source file; refusing to overwrite it", dst)
 	}
 	in, err := os.Open(src)
 	if err != nil {
 		return false, err
 	}
 	defer in.Close()
-	// O_EXCL after the guard above: never follow/truncate an existing path; a
-	// leftover regular file from a prior harvest to the same --to is replaced by
-	// removing it first.
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fi.Mode().Perm())
-	if errors.Is(err, fs.ErrExist) {
-		if rerr := os.Remove(dst); rerr != nil {
-			return false, rerr
-		}
-		out, err = os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fi.Mode().Perm())
-	}
+	// Write to a temp file in the SAME dir, then atomically rename over dst. Rename
+	// replaces the NAME (never follows/truncates a symlink at dst) and is atomic, so
+	// a copy/close error never leaves a partial dst OR destroys a prior good copy
+	// (the temp is removed and dst is untouched).
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".harvest-*")
 	if err != nil {
 		return false, err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
+	tmpName := tmp.Name()
+	cleanup := func(e error) (bool, error) {
+		tmp.Close()
+		_ = os.Remove(tmpName)
+		return false, e
+	}
+	if _, err := io.Copy(tmp, in); err != nil {
+		return cleanup(err)
+	}
+	if err := tmp.Chmod(fi.Mode().Perm()); err != nil {
+		return cleanup(err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
 		return false, err
 	}
-	return true, out.Close()
+	if err := os.Rename(tmpName, dst); err != nil {
+		_ = os.Remove(tmpName)
+		return false, err
+	}
+	return true, nil
 }
 
 // runTaskHarvest is `task harvest <name> [--to DIR]`: the deliberate, re-runnable
@@ -2090,7 +2102,11 @@ func runTaskGc(env shellEnv, argv []string) {
 	}
 	repokey := taskRepoKey(mainroot)
 	maxAge := time.Duration(opts.days) * 24 * time.Hour
-	removed, skipped, wouldRemove := 0, 0, 0
+	// skipped = normal guard refusals (dirty/unpushed/running) — expected, exit 0.
+	// failed  = OPERATIONAL failures (corrupt meta, harvest/teardown/remove error)
+	// — a safety operation did not complete, so gc must exit non-zero so automation
+	// never reads a failed prune as success.
+	removed, skipped, wouldRemove, failed := 0, 0, 0, 0
 
 	// Discover candidate (layout, name) pairs across BOTH the new and legacy
 	// layouts. The scan is only for DISCOVERY; the authoritative read + harden +
@@ -2127,7 +2143,7 @@ func runTaskGc(env shellEnv, argv []string) {
 			m, err = hardenTaskMeta(m, mainroot, repokey, c.lay.legacy, fileBase)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "gc: skipping %s: %v\n", fileBase, err)
-				skipped++
+				failed++
 				return nil
 			}
 			age := taskAge(m, co)
@@ -2148,7 +2164,7 @@ func runTaskGc(env shellEnv, argv []string) {
 			}
 			recovered := "refs/pi-stack/recovered/" + fileBase
 			if rc := executeTaskTeardown(env, os.Stderr, m, co, name, recovered, false, st); rc != 0 {
-				skipped++
+				failed++
 				return nil
 			}
 			// Harvest AFTER teardown (sandbox gone), fail-closed (unless --no-harvest):
@@ -2158,13 +2174,13 @@ func runTaskGc(env shellEnv, argv []string) {
 			if !opts.noHarvest {
 				if _, herr := harvestArtifacts(env, os.Stdout, m, repoDir, co, name); herr != nil {
 					fmt.Fprintf(os.Stderr, "gc: %-20s sandbox removed but harvest failed; keeping clone at %s: %v\n", name, co, herr)
-					skipped++
+					failed++
 					return nil
 				}
 			}
 			if err := removeTaskArtifacts(co, metaPath, os.RemoveAll, os.Remove); err != nil {
 				fmt.Fprintf(os.Stderr, "gc: %v\n", err)
-				skipped++
+				failed++
 				return nil
 			}
 			fmt.Printf("removed %-20s (age %dd, sandbox %s)\n", name, int(age.Hours()/24), m.Sandbox)
@@ -2173,7 +2189,7 @@ func runTaskGc(env shellEnv, argv []string) {
 		})
 		if lockErr != nil {
 			fmt.Fprintf(os.Stderr, "gc: %s: %v\n", fileBase, lockErr)
-			skipped++
+			failed++
 		}
 	}
 
@@ -2181,11 +2197,16 @@ func runTaskGc(env shellEnv, argv []string) {
 		pruneArtifacts(taskRepoKey(mainroot), opts.artifactDays, opts.dryRun)
 
 	if opts.dryRun {
-		fmt.Printf("gc (dry run): %d would be removed, %d skipped, %s would be pruned.\n",
-			wouldRemove, skipped, plural(prunedArtifacts, "artifact snapshot"))
+		fmt.Printf("gc (dry run): %d would be removed, %d skipped, %d failed, %s would be pruned.\n",
+			wouldRemove, skipped, failed, plural(prunedArtifacts, "artifact snapshot"))
 	} else {
-		fmt.Printf("gc: %d removed, %d skipped, %s pruned.\n",
-			removed, skipped, plural(prunedArtifacts, "artifact snapshot"))
+		fmt.Printf("gc: %d removed, %d skipped, %d failed, %s pruned.\n",
+			removed, skipped, failed, plural(prunedArtifacts, "artifact snapshot"))
+	}
+	// A guard skip is normal (exit 0); an operational failure is not — exit non-zero
+	// so automation never treats a failed safety operation as success.
+	if failed > 0 {
+		os.Exit(1)
 	}
 }
 
