@@ -99,6 +99,8 @@ func main() {
 		runRoute(args[1:])
 	case "evals":
 		runEvals(args[1:])
+	case "agent":
+		runAgent(args[1:])
 	case "man":
 		runMan(args[1:])
 	case "profile":
@@ -299,9 +301,10 @@ Data
   memory           recall | remember | forget | learnings | stats
   knowledge        init | use | ls | query | sync | remote
 
-Models
+Models & agents
+  agent            manage subagents: ls | new | edit | rm | reassess
   route            model router: pick | compile | show | models
-  evals            accuracy eval harness: run | show | ls
+  evals            accuracy eval harness: run | import | show | ls
 
 More
   config, mcp, state, version, man     (see ` + "`pi-stack help --all`" + `)

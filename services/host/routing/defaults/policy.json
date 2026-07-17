@@ -43,6 +43,14 @@
       "about": "Cheap, fast parallel fan-out. Cheapest model clearing an accuracy floor + latency ceiling."
     },
     {
+      "name": "authoring",
+      "task_type": "reasoning",
+      "objective": "accuracy",
+      "providers": ["anthropic"],
+      "fallback": "anthropic/claude-opus-4-8",
+      "about": "Powers the agentic `agent new` flow that drafts prompts + writes eval cases. Needs strong judgment + valid structured output, so it routes to the best Anthropic reasoning model (Opus). Runs rarely, so cost is not a constraint."
+    },
+    {
       "name": "verify",
       "task_type": "qa",
       "objective": "balanced",
