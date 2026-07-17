@@ -35,6 +35,7 @@ var knownVerbs = map[string]bool{
 	"profile": true, "version": true, "run": true, "secret": true,
 	"reset": true, "uninstall": true, "man": true,
 	"backup": true, "restore": true, "state": true,
+	"task": true,
 }
 
 // suggestVerb returns the closest known verb to input within edit distance 2,
@@ -110,6 +111,9 @@ Config & context
   config set|unset    change config without hand-editing the toml
   profile ls|use      switch between contexts (work / personal / default)
 
+Parallel work
+  task <cmd>          new | ls | rm: run parallel task clones of one repo
+
 Integrations & credentials
   mcp register|ls     register local stdio MCP servers with the sbx gateway
   secret <cmd>        status|edit|check the 1Password op-refs (host MCP creds)
@@ -171,6 +175,8 @@ func verbUsage(verb string) (string, bool) {
 		return uninstallUsage, true
 	case "state":
 		return stateUsage, true
+	case "task":
+		return taskUsage, true
 	}
 	return "", false
 }
