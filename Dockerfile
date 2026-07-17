@@ -101,6 +101,34 @@ RUN set -eux; \
     rm -rf /tmp/fd.tgz "/tmp/fd-v${FD_VERSION}-${ft}"; \
     fd --version
 
+# --- Go toolchain via the official tarball -------------------------------------
+# HOST code is Go (services/host -> pi-stack-host); baking the toolchain lets you
+# build + test it FROM INSIDE a sandbox when hacking on pi-stack itself. NOT from
+# apt: Debian trixie ships golang ~1.24, but services/host/go.mod requires `go
+# 1.26`, so an older apt Go would force a per-build GOTOOLCHAIN network download
+# (or fail). Pinning the tarball to match go.mod is deterministic and offline
+# after the layer is cached. Same rationale as the ruff/fd static binaries above.
+ARG GO_VERSION=1.26.5
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      arm64) gt=linux-arm64 ;; \
+      amd64) gt=linux-amd64 ;; \
+      *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.${gt}.tar.gz" -o /tmp/go.tgz; \
+    rm -rf /usr/local/go; \
+    tar -C /usr/local -xzf /tmp/go.tgz; \
+    rm -f /tmp/go.tgz; \
+    /usr/local/go/bin/go version
+# Put the toolchain on PATH. GOTOOLCHAIN=local pins the build to THIS baked Go so
+# a build never silently downloads a toolchain from the network; keep GO_VERSION
+# >= the `go` directive in services/host/go.mod (bump both together, like
+# PI_PACKAGE). GOPATH/GOCACHE use their $HOME defaults, writable by the agent user
+# created below.
+ENV PATH=/usr/local/go/bin:$PATH
+ENV GOTOOLCHAIN=local
+
 # (Removed: headless browser stack — chromium + agent-browser. The pi
 # agent-browser extension can't survive an in-place /reload, and it's the only
 # thing that was still wedging it. Occasional browser work goes to Playwright/MCP

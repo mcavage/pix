@@ -218,4 +218,11 @@ user a diff.
 
 node 25 · npm · git · **gh** (HTTPS token via sbx proxy — use for PRs, not SSH) ·
 ripgrep · **fd** · ruff · clangd · pyright · typescript-language-server ·
+**Go** (`/usr/local/go`, pinned via `GO_VERSION` to match `services/host/go.mod`;
+`GOTOOLCHAIN=local` so builds never fetch a toolchain — bump both together) ·
 **chromium** + **agent-browser** (localhost QA) · python3 · build-essential.
+
+Go is baked so you can build + test the host binary (`services/host` →
+`pi-stack-host`) from inside a sandbox when hacking on pi-stack itself: `cd
+services/host && go build ./... && go test ./...`. HOST code still only ships to
+the host as a compiled binary; the toolchain in the image is a dev convenience.

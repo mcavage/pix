@@ -112,7 +112,7 @@ Config & context
   profile ls|use      switch between contexts (work / personal / default)
 
 Parallel work
-  task <cmd>          new | ls | rm: run parallel task clones of one repo
+  task <cmd>          new | ls | rm | gc | harvest: parallel task clones of one repo
 
 Integrations & credentials
   mcp register|ls     register local stdio MCP servers with the sbx gateway
@@ -313,14 +313,19 @@ Without --yes on a TTY it prints exactly what will move and prompts before actin
 On a non-TTY it refuses unless --yes is given.
 `
 
-const uninstallUsage = `usage: pi-stack uninstall [--keep-memory] [--yes] [--force]
+const uninstallUsage = `usage: pi-stack uninstall [--keep-memory] [--purge-data] [--yes] [--force]
 
 Run the full reset (see 'pi-stack reset'), THEN remove the installed pi-stack +
 pi-stack-host bin symlinks (~/.local/bin). Only symlinks are removed — a real
 file there is left untouched. State is moved aside, never hard-deleted.
 
+Harvested task artifacts (~/.local/share/pi-stack/artifacts) are user work
+product and are KEPT by default (their path + size are printed). Pass
+--purge-data to move them aside too.
+
 flags:
   --keep-memory   preserve ~/.pi-stack/memory (your captured facts)
+  --purge-data    also move aside harvested task artifacts (kept by default)
   --force         move the data dir even if 'pi-stack-host serve' still appears
                   to be running
   --yes, -y       don't prompt (REQUIRED on a non-interactive terminal)

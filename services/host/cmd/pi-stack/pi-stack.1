@@ -530,7 +530,38 @@ is given.  It always snapshots the task branch to
 .B refs/pi-stack/recovered/<name>
 in the main repo first, and aborts before deleting the clone if
 .B sbx rm
-fails.  The main repo's branches are never touched.
+fails.  The main repo's branches are never touched.  After the sandbox is gone
+and before the clone is deleted, it harvests any uncommitted doc files (see
+.B "task harvest" ).
+.TP
+.BR "pi-stack task gc" " [" \-\-days " " N "] [" \-\-dry\-run "] [" \-\-no\-harvest "] [" \-\-artifact\-days " " N "]"
+Prune clean tasks whose age exceeds
+.B \-\-days
+(default 7; age is the newer of the task's creation time and its checkout's git
+activity).  It reuses the same guard as
+.BR rm ,
+so a dirty, unpushed, or still-running task is skipped and reported, never
+dropped (there is no
+.BR \-\-force ).
+.B \-\-dry\-run
+reports what would happen.  It also prunes harvested artifact snapshots older
+than
+.B \-\-artifact\-days
+(default 30).
+.TP
+.BR "pi-stack task harvest" " " name " [" \-\-to " " DIR "]"
+Copy the task's uncommitted doc files (untracked, ignored, or modified-vs-HEAD)
+to
+.B $XDG_DATA_HOME/pi-stack/artifacts/<repo>/<name>/<timestamp>/
+with a
+.B manifest.json
+of provenance.  Idempotent and safe to run any time.  With
+.B \-\-to
+it copies to a caller-chosen dir instead (refused if that dir is the checkout
+itself).  Harvested docs live under
+.B XDG_DATA_HOME
+so they survive a
+.BR "pi-stack state reset" .
 .SS state
 The
 .B state
@@ -578,7 +609,7 @@ or
 suppresses confirmation and is required on a non-interactive terminal.
 .SS uninstall
 .TP
-.BR "pi-stack uninstall" " [" \-\-keep-memory "] [" \-\-force "] [" \-\-yes "|" \-y "]"
+.BR "pi-stack uninstall" " [" \-\-keep-memory "] [" \-\-purge-data "] [" \-\-force "] [" \-\-yes "|" \-y "]"
 Perform the reset action, then remove the installed
 .B pi-stack
 and
@@ -586,7 +617,12 @@ and
 entries from
 .B ~/.local/bin
 only when they are symlinks to pi-stack binaries.  If reset fails, leave the
-symlinks installed.
+symlinks installed.  Harvested task artifacts under
+.B $XDG_DATA_HOME/pi-stack/artifacts
+are user work product and are KEPT by default (their path and size are printed);
+pass
+.B \-\-purge-data
+to move them aside too.
 .SS "version"
 .TP
 .B "pi-stack version"

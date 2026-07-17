@@ -79,6 +79,8 @@ type statusReport struct {
 	MCP        []string        `json:"mcp"`
 	MCPServers []mcpStatusLine `json:"mcp_servers"`
 	Sandboxes  []sandboxLine   `json:"sandboxes"`
+	Tasks      int             `json:"tasks"`
+	ArtifactB  int64           `json:"artifact_bytes"`
 	Todos      []string        `json:"todos"`
 	GogAccount string          `json:"gog_account,omitempty"`
 	GogAuthed  bool            `json:"gog_authed,omitempty"`
@@ -211,6 +213,10 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 			}
 		}
 	}
+
+	// Tasks + harvested artifacts: global, repo-agnostic counts so the pile is
+	// visible without any per-repo git probing.
+	st.Tasks, st.ArtifactB = taskStateSummary()
 	return st
 }
 
@@ -281,6 +287,13 @@ func (st statusReport) render(out io.Writer) {
 			}
 			fmt.Fprintf(out, "  %s   %-24s %s\n", label, s.Name, s.State)
 		}
+	}
+
+	// Show the line when there are tasks OR retained artifacts — harvested docs
+	// can outlive the last task clone, and they still cost disk.
+	if st.Tasks > 0 || st.ArtifactB > 0 {
+		fmt.Fprintf(out, "  tasks       %s   artifacts %s   `pi-stack task gc` to prune\n",
+			plural(st.Tasks, "clone"), humanBytes(st.ArtifactB))
 	}
 
 	fmt.Fprintln(out)

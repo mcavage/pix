@@ -39,6 +39,13 @@ export default function (pi: any) {
 	const FAST_TOOLS = new Set(["web_search", "web_fetch", "fetch"]);
 	const FAST_TOOL_ABORT_MS = 90000;
 
+	// A long-running tool (subagent, bash, builds) is one we deliberately never
+	// auto-cancel. We also cannot see its internal progress — the parent gets no
+	// tool_execution_update while a subagent runs — so a frozen lastActivity here
+	// does NOT mean stalled. Suppress the stall warning for these and just show
+	// the live elapsed timer, otherwise every subagent run flashes "⚠ stalled".
+	const isLongTool = () => toolName != null && !FAST_TOOLS.has(toolName);
+
 	const fmt = (ms: number) => {
 		const s = Math.max(0, Math.floor(ms / 1000));
 		return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
@@ -64,7 +71,8 @@ export default function (pi: any) {
 		// While stalled, REPLACE (not append) with a short single-line warning. A
 		// long appended string can wrap to 2 lines on a narrow terminal, which would
 		// flap the loader's height by a line — the one jitter an extension can cause.
-		if (idle > STALL_WARN_MS) return `⚠ stalled ${fmt(idle)} · Esc`;
+		if (!isLongTool() && idle > STALL_WARN_MS)
+			return `⚠ stalled ${fmt(idle)} · Esc`;
 		const label = toolName ? `running ${toolName}` : "awaiting model";
 		if (!LIVE_TIMER) return label;
 		return `${label} · ${fmt(Date.now() - phaseStart)}`;
@@ -214,7 +222,7 @@ export default function (pi: any) {
 		} catch {
 			/* best-effort; must not break the agent */
 		}
-		if (turnStart != null && now - lastActivity > 60000)
+		if (turnStart != null && !isLongTool() && now - lastActivity > 60000)
 			L.push(
 				"  ⚠ no activity for 60s+ — the model/stream looks stalled. Press Esc to cancel and resend.",
 			);
