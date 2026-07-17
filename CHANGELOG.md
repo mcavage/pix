@@ -10,6 +10,14 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- `make evals`/`make route` with no ARGS printed usage and exited 2 (looked
+  broken); they now default to the safe read-only `show`, and the promptfoo guard
+  only fires for a `run`.
+- Eval errors were mis-prefixed `route:` and a promptfoo host failure (e.g. a
+  native-module Node-version mismatch) surfaced as an opaque "produced no
+  results". Now prefixed `evals:` with an actionable message that names the likely
+  cause and the reinstall fix, and states promptfoo is an optional host dep.
+
 - `deliver` skill failed to load: its frontmatter `description` was an unquoted
   YAML scalar containing `: ` sequences, which YAML parsed as a nested mapping.
 - `enterprise-admin` agent resolved to a model (`anthropic/sonnet-5`) that is not

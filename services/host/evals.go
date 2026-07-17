@@ -118,11 +118,11 @@ func evalsConfig(args []string) string {
 func evalsRun(args []string) {
 	cfg := evalsConfig(args)
 	if _, err := os.Stat(cfg); err != nil {
-		fatal(fmt.Errorf("promptfoo config not found at %s (run from the repo root, or pass --config)", cfg))
+		fatalEvals(fmt.Errorf("promptfoo config not found at %s (run from the repo root, or pass --config)", cfg))
 	}
 	promptfoo := env("PROMPTFOO_BIN", "promptfoo")
 	if _, err := exec.LookPath(promptfoo); err != nil {
-		fatal(fmt.Errorf("promptfoo not on PATH (npm i -g promptfoo), or set PROMPTFOO_BIN"))
+		fatalEvals(fmt.Errorf("promptfoo not on PATH (npm i -g promptfoo), or set PROMPTFOO_BIN"))
 	}
 
 	configured, mislabeled := configProviderLabels(cfg)
@@ -143,7 +143,7 @@ func evalsRun(args []string) {
 			}
 		}
 		if len(models) == 0 {
-			fatal(fmt.Errorf("--models was given but empty"))
+			fatalEvals(fmt.Errorf("--models was given but empty"))
 		}
 		// Every requested model MUST have a provider entry, else promptfoo runs it
 		// against nothing and the sweep silently no-ops.
@@ -154,12 +154,12 @@ func evalsRun(args []string) {
 			}
 		}
 		if len(missing) > 0 {
-			fatal(fmt.Errorf("no promptfoo provider for %v in %s (add a providers: entry with that model, then re-run)", missing, cfg))
+			fatalEvals(fmt.Errorf("no promptfoo provider for %v in %s (add a providers: entry with that model, then re-run)", missing, cfg))
 		}
 	} else {
 		reg, err := routing.LoadRegistry()
 		if err != nil {
-			fatal(err)
+			fatalEvals(err)
 		}
 		for _, mm := range reg.Models {
 			if !mm.Available {
@@ -172,7 +172,7 @@ func evalsRun(args []string) {
 			models = append(models, mm.ID)
 		}
 		if len(models) == 0 {
-			fatal(fmt.Errorf("no models to run: none of the registry's available models have a provider in %s", cfg))
+			fatalEvals(fmt.Errorf("no models to run: none of the registry's available models have a provider in %s", cfg))
 		}
 	}
 
@@ -180,7 +180,7 @@ func evalsRun(args []string) {
 	if b := flagValue(args, "--budget", ""); b != "" {
 		v, e := strconv.ParseFloat(strings.TrimSpace(b), 64)
 		if e != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
-			fatal(fmt.Errorf("--budget must be a positive number (got %q)", b))
+			fatalEvals(fmt.Errorf("--budget must be a positive number (got %q)", b))
 		}
 		budget = v
 	}
@@ -200,7 +200,7 @@ func evalsRun(args []string) {
 
 	base, err := routing.LoadScorecard()
 	if err != nil {
-		fatal(err)
+		fatalEvals(err)
 	}
 	sc := base
 	var spent float64
@@ -223,11 +223,11 @@ func evalsRun(args []string) {
 		}
 		results, rerr := runPromptfoo(promptfoo, cfg, batch)
 		if rerr != nil {
-			fatal(rerr)
+			fatalEvals(rerr)
 		}
 		updated, sum, ierr := routing.ImportPromptfoo(sc, results, time.Now())
 		if ierr != nil {
-			fatal(ierr)
+			fatalEvals(ierr)
 		}
 		if sum.Scored == 0 {
 			fmt.Fprintf(os.Stderr, "warning: promptfoo returned no scored rows for %v (check the config/providers)\n", batch)
@@ -256,12 +256,19 @@ func evalsRun(args []string) {
 
 	if hasFlag(args, "--save") {
 		if err := sc.Save(); err != nil {
-			fatal(err)
+			fatalEvals(err)
 		}
 		fmt.Printf("\nsaved scorecard -> %s\n(run `pi-stack route compile` to update routing.json)\n", routing.ScorecardPath())
 	} else {
 		fmt.Println("\n(preview only — pass --save to write these into the scorecard)")
 	}
+}
+
+// fatalEvals prints an evals-scoped error (the shared fatal() is route-scoped)
+// and exits non-zero.
+func fatalEvals(err error) {
+	fmt.Fprintf(os.Stderr, "evals: %v\n", err)
+	os.Exit(1)
 }
 
 // runPromptfoo runs one `promptfoo eval` (optionally filtered to a set of model
@@ -292,7 +299,12 @@ func runPromptfoo(bin, cfg string, models []string) ([]byte, error) {
 		// promptfoo exits non-zero when tests FAIL, which is normal for an eval.
 		// Only treat a missing/empty output file as a real error.
 		if fi, statErr := os.Stat(tmp.Name()); statErr != nil || fi.Size() == 0 {
-			return nil, fmt.Errorf("promptfoo produced no results: %w", err)
+			return nil, fmt.Errorf("promptfoo ran but produced no results (%w).\n"+
+				"  This is a promptfoo install problem on the host, not the eval harness. Common causes:\n"+
+				"    - native module built for a different Node version (NODE_MODULE_VERSION mismatch after a Node upgrade)\n"+
+				"    - an outdated or partial promptfoo install\n"+
+				"  Fix: reinstall promptfoo for the current Node, e.g. `npm i -g promptfoo@latest` (or `npm rebuild -g promptfoo`), then retry.\n"+
+				"  promptfoo is an OPTIONAL maintainer dependency; the stack does not ship or require it.", err)
 		}
 	}
 	return os.ReadFile(tmp.Name())
@@ -307,19 +319,19 @@ func evalsImport(args []string) {
 		}
 	}
 	if file == "" {
-		fatal(fmt.Errorf("evals import: missing results.json path"))
+		fatalEvals(fmt.Errorf("evals import: missing results.json path"))
 	}
 	data, err := os.ReadFile(file)
 	if err != nil {
-		fatal(err)
+		fatalEvals(err)
 	}
 	base, err := routing.LoadScorecard()
 	if err != nil {
-		fatal(err)
+		fatalEvals(err)
 	}
 	updated, sum, err := routing.ImportPromptfoo(base, data, time.Now())
 	if err != nil {
-		fatal(err)
+		fatalEvals(err)
 	}
 	if hasFlag(args, "--json") {
 		printJSON(sum)
@@ -333,7 +345,7 @@ func evalsImport(args []string) {
 	}
 	if hasFlag(args, "--save") {
 		if err := updated.Save(); err != nil {
-			fatal(err)
+			fatalEvals(err)
 		}
 		fmt.Printf("\nsaved scorecard -> %s\n(run `pi-stack route compile` to update routing.json)\n", routing.ScorecardPath())
 	} else {
@@ -358,7 +370,7 @@ func evalsLs(args []string) {
 	suitesDir := filepath.Join(filepath.Dir(cfg), "suites")
 	entries, err := os.ReadDir(suitesDir)
 	if err != nil {
-		fatal(fmt.Errorf("no suites dir at %s: %w", suitesDir, err))
+		fatalEvals(fmt.Errorf("no suites dir at %s: %w", suitesDir, err))
 	}
 	for _, e := range entries {
 		if e.IsDir() {

@@ -110,6 +110,17 @@ ranked, so they can be scheduled rather than lost.
 14. **`pi-stack secret` naming** collides with `sbx secret` in users' heads;
     consider `pi-stack mcp credentials` with `secret` as an alias.
 
+### Routing / evals
+
+- **promptfoo is a fragile host dependency.** It ships native modules
+  (better-sqlite3) that break on a host Node upgrade (NODE_MODULE_VERSION
+  mismatch), and it drifts version-wise. The failure is now legible (`make evals`
+  names the cause + fix), and promptfoo is optional + off the shipped surface
+  (make-only). But if it keeps costing maintainer time, reconsider the eval
+  backend: a small self-contained Go runner (the pre-promptfoo design) would
+  remove the native-module + Node-version coupling entirely. Tracked, not yet
+  decided.
+
 ### Virality (product surface, not bugs)
 
 15. Record and publish the planned 8-15s demo GIF (README has the placeholder).
