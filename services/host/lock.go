@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
 
@@ -27,6 +28,16 @@ import (
 // deadlocking. The returned release func drops the lock (LOCK_UN) and closes the
 // fd; it is idempotent and safe to call from a defer and a signal handler both.
 func acquireLock(path string) (release func(), err error) {
+	// On a fresh install the memory dir may not exist yet (setup writes config
+	// but never touches the store dir), and O_CREATE only creates the leaf file,
+	// not parent dirs — so ensure the parent exists first, otherwise OpenFile
+	// fails with a misleading ENOENT that the fatal wrapper reports as "another
+	// memory server ... is using the database".
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("create lock dir %s: %w", dir, err)
+		}
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open lock file %s: %w", path, err)

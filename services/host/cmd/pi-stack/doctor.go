@@ -839,14 +839,16 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 	}
 
 	if opRefs == "" {
-		// Can't run the gateway-equivalent headless probe without op-refs.env. The
-		// Secrets (1Password) group is the SOLE owner of op-refs.env guidance, so we
-		// do NOT emit a `pi-stack secret edit` TODO here (that would duplicate it) —
-		// just an info line pointing at that section.
+		// Can't run the gateway-equivalent headless probe without op-refs.env. But
+		// op-refs is OPTIONAL for gog: it authenticates via OAuth (gog auth login),
+		// and only needs op-refs to inject a headless keyring PASSWORD when the
+		// gateway can't unlock its keyring otherwise. So this is an info line, not a
+		// TODO — and it is self-contained (a gog-only config renders no Secrets
+		// group, so we must not point at one).
 		g.checks = append(g.checks,
 			check{label: "account", state: stateInfo, detail: acct + " set (unconfirmed vs registration)"},
 			check{label: "op-refs", state: stateInfo,
-				detail: "op-refs.env not found — see the Secrets (1Password) section"})
+				detail: "op-refs.env not found — only needed if the gateway can't unlock gog's keyring headlessly"})
 		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
 		return g

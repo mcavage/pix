@@ -279,13 +279,22 @@ func indent(s string) string {
 	return strings.Join(lines, "\n")
 }
 
-// anyOpWrappedServer reports whether ANY configured MCP server would be
-// op-wrapped at gateway spawn (i.e. any LOCAL stdio server — gog, slack, an
-// overlay pio/fastmail). doctor uses this to decide whether the Secrets group is
-// relevant at all: with no credentialed host MCP server configured, 1Password is
-// simply not needed. Remote gateway-catalog servers are attached a different way
-// and don't need op-refs, but distinguishing them requires probing pi-stack-host;
-// for the "is the group relevant" gate, any configured mcp name counts.
+// anyOpWrappedServer reports whether any configured MCP server makes the Secrets
+// (1Password) group relevant: a NON-gog server. gog is deliberately excluded —
+// it authenticates via OAuth (`gog auth login`), never an op-refs token, so a
+// gog-only config needs no op-refs.env (mcp-register registers gog BARE for
+// exactly this reason, and setup's Step 4 skips it via hasNonGogMCP). gog's ONE
+// conditional op-refs need — a headless keyring password — is owned by the gog
+// group's headless-spawn check, not this group, so counting gog here produced a
+// phantom `pi-stack secret edit` TODO on a fresh gog-only install. Remote
+// gateway-catalog servers don't strictly need op-refs either, but distinguishing
+// them requires probing pi-stack-host; for this coarse gate any non-gog name
+// counts (mirrors setup's hasNonGogMCP).
 func anyOpWrappedServer(cfg *config.Config) bool {
-	return len(cfg.MCP) > 0
+	for _, m := range cfg.MCP {
+		if m != "gog" {
+			return true
+		}
+	}
+	return false
 }

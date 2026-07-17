@@ -1056,6 +1056,21 @@ func TestDoctor_SecretsGroup_NotNeeded(t *testing.T) {
 	}
 }
 
+func TestDoctor_SecretsGroup_GogOnlyNotNeeded(t *testing.T) {
+	// A gog-only config must NOT trigger the Secrets group: gog authenticates via
+	// OAuth, never op-refs, so a fresh gog-only install must not surface a phantom
+	// `pi-stack secret edit` TODO for a missing op-refs.env.
+	g := secretsGroupFor(t, []string{"gog"}, fakeEnv{present: map[string]bool{}})
+	if len(g.checks) != 1 || !strings.Contains(g.checks[0].detail, "not needed") {
+		t.Errorf("gog-only config should say 1Password not needed, got %+v", g.checks)
+	}
+	for _, c := range g.checks {
+		if c.state == stateTODO {
+			t.Errorf("gog-only config must raise no Secrets TODO, got %+v", c)
+		}
+	}
+}
+
 func TestDoctor_SecretsGroup_SlackOnly(t *testing.T) {
 	// A slack-only config must still get the Secrets group (not gog-only).
 	f := fakeEnv{
