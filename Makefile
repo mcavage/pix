@@ -264,12 +264,17 @@ serve: link-overlay ## Start the host services named in SERVICES (config/local.m
 # needs promptfoo on the host — an OPTIONAL dev dependency (`npm i -g promptfoo`),
 # never bundled into the image or the launcher. See the `model-refresh` skill +
 # docs/design/routing.md.
+# Bare `make route` / `make evals` default to the safe, read-only `show` (the
+# scorecard / resolved table) so they never error or spend money without ARGS.
 route: ## Model router (maintainer): make route ARGS="show" | "models" | "compile" | "pick <intent>"
-	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && ./out/pi-stack-host route $(ARGS)
+	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && ./out/pi-stack-host route $(if $(strip $(ARGS)),$(ARGS),show)
 
-evals: ## Accuracy eval harness (maintainer; needs promptfoo, COSTS MONEY): make evals ARGS="run --budget 5 --dry-run"
-	@command -v promptfoo >/dev/null 2>&1 || { echo "ERROR: promptfoo not found (optional dev dep). Install it: npm i -g promptfoo"; exit 1; }
-	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && ./out/pi-stack-host evals $(ARGS)
+evals: ## Accuracy eval harness (maintainer; a `run` needs promptfoo + COSTS MONEY): make evals ARGS="run --budget 5 --dry-run"
+	@args='$(if $(strip $(ARGS)),$(ARGS),show)'; \
+	case "$$args" in \
+	  *run*) command -v promptfoo >/dev/null 2>&1 || { echo "ERROR: promptfoo not found (optional dev dep). Install it: npm i -g promptfoo"; exit 1; };; \
+	esac; \
+	(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && ./out/pi-stack-host evals $$args
 
 pull-models: ## Pull the local Ollama models the memory loop needs (watcher + embed)
 	@command -v ollama >/dev/null 2>&1 || { echo "ollama not installed — see https://ollama.com (optional: enables semantic recall + fact capture)"; exit 1; }
