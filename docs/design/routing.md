@@ -126,3 +126,45 @@ is baked at `~/.pi/agent/routing.json` next to `capabilities.json`.
 
 No agent files change. The router reconsiders every intent against the new model
 automatically.
+
+## Hardening notes and known limitations (be honest)
+
+A cross-vendor review shaped these; some are fixed, some are deliberate scope.
+
+**Fixed / enforced**
+
+- **Evals can't be used to attack the host.** The evaluated model runs with
+  `--no-tools --no-context-files` in a throwaway cwd, so it has no `bash`/`write`
+  /`edit` and no repo context. Command scorers run with a deadline, a scrubbed
+  env (no inherited secrets), and reject seeded paths that escape the work dir.
+- **Spend is bounded and honest.** A real sweep requires `--budget` (or explicit
+  `--no-budget`); judge-model spend counts against it; cost comes from pi's own
+  `usage.cost.total` (cache-aware) when reported, not just registry guesses. A
+  model call has a wall-clock timeout (pi has no read timeout). Failed calls and
+  scorer-infra failures are excluded from aggregates, so a transient outage can't
+  overwrite a good score with a spurious 0. The suite + config are validated
+  before any paid call.
+
+**Deliberate design choices**
+
+- **The router never returns "no model."** When no candidate satisfies the hard
+  constraints, it dispatches the intent's `fallback` (a cheap/sane model) and
+  sets `constraints_met=false` with a reason. A crew task should degrade, not
+  fail to launch. The flag is surfaced for auditing; the fallbacks in
+  `policy.json` are chosen to be economical.
+- **Command scorers still execute on the host.** They are meant for TRUSTED
+  graders (build/test/lint). Do not point one at untrusted model output without
+  wrapping it in a container/VM. The hardening above limits blast radius; it is
+  not a sandbox.
+
+**Known limitations (future work)**
+
+- The resolver treats a score as a point estimate and does not yet weight by
+  sample count (`n`) or freshness (`updated`). A one-sample eval and a
+  hundred-sample eval are equally authoritative, and scores never expire. Add a
+  min-sample / staleness policy before trusting this at scale.
+- Constraints are historical **averages** (mean cost, p50 latency), not runtime
+  ceilings. A long multi-turn agent can cost more than its short eval average.
+  The router picks well; it does not enforce a per-run budget mid-flight.
+- Registry prices are user-maintained estimates. Keep them current, or rely on
+  the eval-measured `cost_usd` (which uses pi's reported cost).

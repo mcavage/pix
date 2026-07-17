@@ -116,10 +116,13 @@ function loadRouting(): CompiledRouting | null {
 		if (!fs.existsSync(p)) return null;
 		const parsed = JSON.parse(fs.readFileSync(p, "utf-8"));
 		if (!parsed || typeof parsed !== "object" || !parsed.routes) return null;
-		if (typeof parsed.version === "number" && parsed.version !== ROUTING_SCHEMA) {
+		// Require an EXACT known schema version. A missing, non-numeric, or newer
+		// version means we can't trust the shape — ignore it (agents inherit) rather
+		// than guess.
+		if (parsed.version !== ROUTING_SCHEMA) {
 			try {
 				process.stderr.write(
-					`[subagents] routing.json schema v${parsed.version} != v${ROUTING_SCHEMA}; ignoring (agents inherit parent model).\n`,
+					`[subagents] routing.json version ${JSON.stringify(parsed.version)} != ${ROUTING_SCHEMA}; ignoring (agents inherit parent model).\n`,
 				);
 			} catch {
 				/* best-effort */
@@ -137,9 +140,17 @@ const ROUTING = loadRouting();
 // (caller inherits the parent model) when the intent is unknown, routing.json is
 // absent, or the compiled model id is not fully qualified (provider/id) — a bare
 // id can resolve to a keyless provider and hang, so we never forward one.
+function isQualifiedModelId(id: string): boolean {
+	const i = id.indexOf("/");
+	return i > 0 && i < id.length - 1;
+}
 function resolveIntentModel(intent: string): string {
-	const m = (ROUTING?.routes?.[intent]?.model || "").trim();
-	return m.includes("/") ? m : "";
+	const raw = ROUTING?.routes?.[intent]?.model;
+	// Guard the type explicitly: a malformed routing.json could carry a non-string
+	// (e.g. {model: 42}); calling .trim() on that would throw.
+	if (typeof raw !== "string") return "";
+	const m = raw.trim();
+	return isQualifiedModelId(m) ? m : "";
 }
 
 // ─── Agent discovery (pi-stack convention: filename = name) ──────────────────

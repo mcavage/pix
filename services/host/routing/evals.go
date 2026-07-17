@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,8 +11,14 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
+
+// budgetUnlimited is the sentinel for "no budget cap" passed to the scorers, so a
+// negative *remaining* budget (after an over-budget call) is never mistaken for
+// unlimited.
+const budgetUnlimited = -1.0
 
 // env returns $key trimmed, or def when unset/blank. (Local copy so the routing
 // package stays independent of the host main package.)
@@ -140,7 +147,7 @@ var knownScorers = map[string]bool{"contains": true, "regex": true, "command": t
 // an unknown scorer kind, a command scorer with no command, or a judge scorer
 // with no judge model fails fast instead of silently scoring 0 (which would
 // poison the scorecard after real spend). Returns the first problem found.
-func ValidateSuite(cases []Case) error {
+func ValidateSuite(cases []Case, reg *Registry) error {
 	if len(cases) == 0 {
 		return fmt.Errorf("empty suite")
 	}
@@ -180,6 +187,11 @@ func ValidateSuite(cases []Case) error {
 		case "judge":
 			if c.Scorer.JudgeModel == "" {
 				return fmt.Errorf("case %q: judge scorer needs a judge_model", c.ID)
+			}
+			if reg != nil {
+				if _, ok := reg.Get(c.Scorer.JudgeModel); !ok {
+					return fmt.Errorf("case %q: judge_model %q not in registry", c.ID, c.Scorer.JudgeModel)
+				}
 			}
 		}
 	}
@@ -239,7 +251,7 @@ func RunEvals(reg *Registry, base *Scorecard, cases []Case, opts EvalOptions, ru
 	}
 	// Validate the whole suite BEFORE any paid call so a bad case never spends
 	// money and then poisons the scorecard with a spurious 0.
-	if err := ValidateSuite(cases); err != nil {
+	if err := ValidateSuite(cases, reg); err != nil {
 		return nil, nil, err
 	}
 	models := opts.Models
@@ -301,15 +313,21 @@ func RunEvals(reg *Registry, base *Scorecard, cases []Case, opts EvalOptions, ru
 				run.Err = res.Err.Error()
 				exclude = true
 			} else {
-				budgetLeft := -1.0
+				// budgetLeft: unlimited sentinel when no cap, else remaining CLAMPED to
+				// >=0 so a judge is skipped once the cap is hit (never treated as
+				// unlimited via a negative remainder).
+				budgetLeft := budgetUnlimited
 				if opts.BudgetUSD > 0 {
 					budgetLeft = opts.BudgetUSD - rep.SpentUSD
+					if budgetLeft < 0 {
+						budgetLeft = 0
+					}
 				}
-				score, extraCost, serr := scoreCase(c, res.Output, runner, budgetLeft)
-				rep.SpentUSD += extraCost // judge-model spend counts against the budget
-				if extraCost > 0 {
-					run.CostUSD += extraCost
-				}
+				score, extraCost, serr := scoreCase(reg, c, res.Output, runner, budgetLeft)
+				// Judge-model spend counts against the BUDGET, but is NOT attributed to
+				// the candidate's scorecard cost (judges don't run at routing time, so
+				// folding it in would wrongly inflate the candidate's runtime cost).
+				rep.SpentUSD += extraCost
 				if serr != nil {
 					run.Err = serr.Error()
 					exclude = true
@@ -374,7 +392,7 @@ func costOf(m Model, res RunResult) float64 {
 // must count against the budget; infraErr is a scorer-infrastructure failure
 // (bad command, judge unreachable) that must NOT be recorded as a real 0.
 // budgetLeft<0 means unlimited; a judge scorer is skipped when it is 0.
-func scoreCase(c Case, output string, runner Runner, budgetLeft float64) (float64, float64, error) {
+func scoreCase(reg *Registry, c Case, output string, runner Runner, budgetLeft float64) (float64, float64, error) {
 	switch c.Scorer.Kind {
 	case "contains":
 		if strings.Contains(strings.ToLower(output), strings.ToLower(c.Scorer.Expect)) {
@@ -394,7 +412,7 @@ func scoreCase(c Case, output string, runner Runner, budgetLeft float64) (float6
 		s, err := scoreCommand(c, output)
 		return s, 0, err
 	case "judge":
-		return scoreJudge(c, output, runner, budgetLeft)
+		return scoreJudge(reg, c, output, runner, budgetLeft)
 	default:
 		return 0, 0, fmt.Errorf("unknown scorer kind %q", c.Scorer.Kind)
 	}
@@ -458,15 +476,41 @@ func scoreCommand(c Case, output string) (float64, error) {
 		"PATH=" + env("PATH", "/usr/bin:/bin"),
 		"OUTPUT_FILE=" + filepath.Join(dir, "output.txt"),
 	}
+	// Own process group + group kill on cancel, so a grader that forks children
+	// can't leave descendants running past the deadline.
+	setPgid(cmd)
+	cmd.Cancel = func() error { return killGroup(cmd) }
 	if err := cmd.Run(); err != nil {
-		// A non-zero exit is a legitimate score 0 (the grader said "fail"). A
-		// context deadline is an infra failure (grader hung), surfaced as error.
 		if ctx.Err() == context.DeadlineExceeded {
 			return 0, fmt.Errorf("command scorer timed out after %s", commandScorerTimeout())
 		}
-		return 0, nil
+		// A grader that RAN and exited non-zero is a legitimate score 0. A grader
+		// that could not START (not found, permission) is an INFRA failure — do
+		// not record it as the model being wrong.
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("command scorer failed to run: %w", err)
 	}
 	return 1, nil
+}
+
+// setPgid puts the command in its own process group (best-effort).
+func setPgid(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
+}
+
+// killGroup SIGKILLs the command's whole process group (best-effort).
+func killGroup(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	// Negative pid = the process group led by that pid.
+	return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 }
 
 // judgeRe extracts a leading 0..1 float the judge model is asked to emit first.
@@ -474,13 +518,13 @@ var judgeRe = regexp.MustCompile(`(?s)^\s*([01](?:\.\d+)?)`)
 
 // scoreJudge asks an LLM to rate the output 0..1 against a rubric. Opt-in and
 // metered (it calls a model). Returns 0 on any parse/invocation failure.
-func scoreJudge(c Case, output string, runner Runner, budgetLeft float64) (float64, float64, error) {
+func scoreJudge(reg *Registry, c Case, output string, runner Runner, budgetLeft float64) (float64, float64, error) {
 	if runner == nil || c.Scorer.JudgeModel == "" {
 		return 0, 0, fmt.Errorf("judge scorer misconfigured")
 	}
 	// Respect the budget: a judge call costs money, so skip it (infra-skip, not a
-	// real 0) when there is no headroom left.
-	if budgetLeft == 0 {
+	// real 0) when the cap is bounded and there is no headroom left.
+	if budgetLeft != budgetUnlimited && budgetLeft <= 0 {
 		return 0, 0, fmt.Errorf("judge skipped: budget exhausted")
 	}
 	prompt := fmt.Sprintf(
@@ -489,7 +533,13 @@ func scoreJudge(c Case, output string, runner Runner, budgetLeft float64) (float
 		c.Scorer.Expect, output)
 	res := runner.Run(c.Scorer.JudgeModel, prompt)
 	// The judge's own spend counts against the budget regardless of parse success.
+	// Prefer pi's reported cost; fall back to registry pricing for the judge model.
 	cost := res.CostUSD
+	if !res.CostReported && reg != nil {
+		if jm, ok := reg.Get(c.Scorer.JudgeModel); ok {
+			cost = jm.CostFor(res.InputTokens, res.OutputTokens)
+		}
+	}
 	if res.Err != nil {
 		return 0, cost, fmt.Errorf("judge invocation failed: %w", res.Err)
 	}

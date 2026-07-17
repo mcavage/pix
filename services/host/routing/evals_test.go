@@ -109,7 +109,7 @@ func TestRunEvals_DryRunCallsNothing(t *testing.T) {
 // there was no infra error, returning just the score.
 func score(t *testing.T, c Case, output string, r Runner) float64 {
 	t.Helper()
-	s, _, err := scoreCase(c, output, r, -1)
+	s, _, err := scoreCase(nil, c, output, r, budgetUnlimited)
 	if err != nil {
 		t.Fatalf("unexpected infra error: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestScoreCommand_UnsafePathIsInfraError(t *testing.T) {
 	c := Case{Scorer: Scorer{Kind: "command",
 		Files:   map[string]string{"../escape.txt": "x"},
 		Command: []string{"true"}}}
-	if _, _, err := scoreCase(c, "out", nil, -1); err == nil {
+	if _, _, err := scoreCase(nil, c, "out", nil, budgetUnlimited); err == nil {
 		t.Fatal("expected an infra error for a ../ seeded path")
 	}
 }
@@ -163,7 +163,7 @@ func TestScoreJudge(t *testing.T) {
 func TestScoreJudge_SkippedWhenBudgetExhausted(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string]string{"judge": "1.0"}}
 	c := Case{Scorer: Scorer{Kind: "judge", JudgeModel: "judge", Expect: "r"}}
-	_, _, err := scoreCase(c, "a", runner, 0) // 0 budget left
+	_, _, err := scoreCase(nil, c, "a", runner, 0) // 0 budget left
 	if err == nil {
 		t.Fatal("judge should be skipped (infra error) when budget is exhausted")
 	}

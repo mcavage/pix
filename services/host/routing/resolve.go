@@ -105,10 +105,15 @@ func Resolve(reg *Registry, sc *Scorecard, pol *Policy, intent Intent) Decision 
 		return d
 	}
 
-	// 4. Nothing feasible — fall back, flagged.
+	// 4. Nothing feasible — fall back, flagged. Canonicalize the fallback through
+	// the registry so an alias becomes the real (fully qualified) id the sandbox
+	// will accept, rather than a bare alias it would reject and inherit past.
 	fb := intent.Fallback
 	if fb == "" {
 		fb = pol.DefaultFallback
+	}
+	if m, ok := reg.Get(fb); ok {
+		fb = m.ID
 	}
 	d.Model = fb
 	d.ConstraintsMet = false

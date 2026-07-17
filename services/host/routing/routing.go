@@ -137,6 +137,15 @@ func (p *Policy) Intent(name string) (Intent, bool) {
 	return Intent{}, false
 }
 
+// IsQualifiedID reports whether id is a fully qualified provider/id with a
+// non-empty provider and a non-empty model part. A bare or half-formed id
+// ("haiku", "/x", "openai/") can resolve to a keyless provider and hang, so it
+// is rejected everywhere it matters.
+func IsQualifiedID(id string) bool {
+	i := strings.IndexByte(id, '/')
+	return i > 0 && i < len(id)-1
+}
+
 // validObjectives are the objectives the resolver understands. An unknown one
 // silently degrades to balanced in rankBy; Validate rejects it up front so a
 // typo ("accuarcy") is caught at compile/eval time, not by mystery routing.
@@ -153,7 +162,7 @@ func Validate(reg *Registry, sc *Scorecard, pol *Policy) error {
 	}
 	ids := map[string]bool{}
 	for _, m := range reg.Models {
-		if !strings.Contains(m.ID, "/") {
+		if !IsQualifiedID(m.ID) {
 			return fmt.Errorf("model id %q is not fully qualified (provider/id)", m.ID)
 		}
 		if ids[m.ID] {

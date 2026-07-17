@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"pi-stack/host/routing"
@@ -231,9 +232,25 @@ func (piRunner) Run(model, prompt string) routing.RunResult {
 	cmd := exec.CommandContext(ctx, bin, "--model", model, "-p", prompt,
 		"--mode", "json", "--no-session", "--no-extensions",
 		"--no-tools", "--no-context-files")
-	if dir, derr := os.MkdirTemp("", "eval-run-*"); derr == nil {
-		cmd.Dir = dir
-		defer os.RemoveAll(dir)
+	// A dedicated temp cwd is REQUIRED (not best-effort): running pi in the
+	// caller's cwd would leak repo context and risk writes there.
+	dir, derr := os.MkdirTemp("", "eval-run-*")
+	if derr != nil {
+		return routing.RunResult{Err: fmt.Errorf("eval workdir: %w", derr)}
+	}
+	defer os.RemoveAll(dir)
+	cmd.Dir = dir
+	// Own process group + group kill on timeout so a hung child can't leave
+	// descendants running after the deadline fires.
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
