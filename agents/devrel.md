@@ -1,7 +1,7 @@
 ---
 description: Developer docs, tutorials, and sample code that actually runs. Use for API references, quickstarts, onboarding guides, and developer journey work.
 tools: read, write, edit, bash, grep, find, ls
-intent: code
+intent: advisory
 thinking: high
 max_turns: 30
 ---

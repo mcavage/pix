@@ -13,8 +13,20 @@ ranked, so they can be scheduled rather than lost.
 **Correctness**
 - `enterprise-admin` agent pinned `anthropic/sonnet-5`, which is not in the model
   registry (would fail at spawn). Reverted to `intent: reasoning`.
-- Model registry + scorecard used `ollama/gemma4`, a nonexistent tag that
-  disagreed with the `gemma3:4b` default everywhere else. Now `ollama/gemma3:4b`.
+- **Routing redesign (the crew was a monoculture, grounded in stale data).** 13
+  of 18 agents resolved to one model and the rest to Opus, and the registry was
+  built from guessed model names/prices. Re-grounded the registry/scorecard on
+  LIVE July 2026 vendor pricing + published benchmarks (SWE-bench, GPQA/HLE) and
+  rebuilt `policy.json` into a tiered, multi-vendor crew: Fable 5 for `deep`
+  (`max-accuracy`), Opus 4.8 for `strategy` (`architect`, `product-manager`),
+  Sonnet 5 for `code` + the `advisory` crew, GPT-5.6 Sol for `review`, Gemini 3.1
+  Pro for `red-team` (`security-lead`), Gemini 3.1 Flash-Lite for `breadth`
+  (`fanout`), Haiku 4.5 for `verify` (`qa-lead`); local `gpt-oss:20b` as an
+  offline option. New intents `strategy`/`advisory`/`red-team`; vendor diversity
+  encoded via per-intent `providers` allowlists. Added the **`model-refresh`
+  skill** so this refresh is a repeatable, live-data-grounded procedure, and made
+  the `agent ls` **WHY column actionable** (objective + winner metrics + what it
+  beat / `sole fit`).
 - `pi-stack agent ls` now flags an explicit `model:` pin that is not registered
   (`pinned (UNKNOWN ...)`) instead of silently resolving to a bad model.
 - `pi-stack evals --help` (launcher) advertised `--suite` and hid `import`; it now

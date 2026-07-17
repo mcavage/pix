@@ -1,7 +1,7 @@
 ---
 description: PRDs, specs, user stories, roadmaps. JTBD, assumption mapping, testable criteria, edge cases.
 tools: read, write, edit, grep, find, ls
-intent: reasoning
+intent: strategy
 thinking: high
 max_turns: 30
 ---

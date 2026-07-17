@@ -221,11 +221,42 @@ func resolveAgentModel(m agentMeta, reg *routing.Registry, sc *routing.Scorecard
 		return "(inherit parent)", fmt.Sprintf("intent %q not in policy", m.Intent)
 	}
 	d := routing.Resolve(reg, sc, pol, intent)
-	why = fmt.Sprintf("intent %s", m.Intent)
+	return d.Model, explainDecision(m.Intent, d)
+}
+
+// explainDecision turns a routing Decision into a one-line WHY that is actually
+// actionable: the objective it optimized, the winner's headline numbers, and
+// either what it beat (a real contest) or that it was the only/forced fit (a
+// constraint did the choosing) — so you can see whether to retune policy.json.
+func explainDecision(intentName string, d routing.Decision) string {
 	if !d.ConstraintsMet {
-		why += " (fallback)"
+		// Fallback: nothing met the hard constraints. Say so and name the runner
+		// (the best-scoring candidate that still missed) if there was one.
+		if len(d.Alternatives) > 0 {
+			return fmt.Sprintf("%s: no model met the constraints -> fallback (closest: %s)",
+				intentName, shortModel(d.Alternatives[0].ID))
+		}
+		return fmt.Sprintf("%s: no scored model for this task -> fallback", intentName)
 	}
-	return d.Model, why
+	metric := ""
+	if d.Chosen != nil {
+		metric = fmt.Sprintf("%.2f acc, $%.3f, %.0fs",
+			d.Chosen.Accuracy, d.Chosen.CostUSD, d.Chosen.LatencyMs/1000)
+	}
+	tail := "sole fit" // only one candidate cleared the constraints: the cap/floor chose, not a contest
+	if len(d.Alternatives) > 1 {
+		tail = "beat " + shortModel(d.Alternatives[1].ID)
+	}
+	return fmt.Sprintf("%s/%s: %s (%s)", intentName, d.Objective, metric, tail)
+}
+
+// shortModel drops the provider prefix for compact display (anthropic/claude-
+// sonnet-5 -> claude-sonnet-5).
+func shortModel(id string) string {
+	if i := strings.IndexByte(id, '/'); i >= 0 {
+		return id[i+1:]
+	}
+	return id
 }
 
 func agentLs(args []string) {
@@ -269,6 +300,10 @@ func agentLs(args []string) {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", n, model, why, tools, budget)
 	}
 	tw.Flush()
+	fmt.Println()
+	fmt.Println("WHY = intent/objective: chosen model's accuracy, per-task $, latency (what it beat, or")
+	fmt.Println("'sole fit' = a cost/latency/accuracy constraint left one candidate). Retune the tradeoff in")
+	fmt.Println("policy.json (or re-measure with `pi-stack evals run`), then `pi-stack route compile`.")
 }
 
 func agentNew(args []string) {

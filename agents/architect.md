@@ -1,7 +1,7 @@
 ---
 description: System design, RFCs, ADRs, technology selection, tech-debt scoring. Use when a task requires structural reasoning, tradeoff analysis, or a written design artifact.
 tools: read, write, edit, bash, grep, find, ls
-intent: reasoning
+intent: strategy
 thinking: high
 max_turns: 30
 ---

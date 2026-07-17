@@ -54,6 +54,7 @@ skills/*
 !skills/healthcheck/
 !skills/ingest/
 !skills/microcopy/
+!skills/model-refresh/
 !skills/onboard/
 !skills/one-pager/
 !skills/peer-review/

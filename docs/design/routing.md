@@ -22,8 +22,37 @@ Every subagent preset hard-codes a `model:`. Thirteen of eighteen were pinned to
 `anthropic/claude-opus-4-8`, so any crew task fired a wall of Opus in parallel.
 That is the bill. Worse, the pin is a guess: no one measured whether Opus is
 actually better than Sonnet or a local model *for that specific task*, and there
-was no way to react to a new model (Sonnet 5, a GPT 5.6 variant, Kimi, GLM,
-local gemma) except hand-editing eighteen files.
+was no way to react to a new model (a new Sonnet, a GPT variant, a Gemini
+release, a local `gpt-oss`) except hand-editing eighteen files.
+
+## The posture today
+
+The policy is not "pick the single best model." It is a deliberate **tiered,
+multi-vendor crew**, encoded in `policy.json` (see `pi-stack agent ls` for the
+live map):
+
+- **Frontier** — `max-accuracy` (`deep`) → Claude Fable 5 (the one genuinely-hard
+  problem, no cap); `strategy` (`architect`, `product-manager`) → Claude Opus 4.8
+  (accuracy-critical judgment under an Opus-tier cap).
+- **Workhorse (Sonnet 5)** — `code` (`engineer`, `designer`) and `advisory` (the
+  specialist crew: sre, dx, finance, legal, devrel, growth, ux, enterprise-admin,
+  enrich): strong, cost-effective, kept on the primary production vendor.
+- **Cross-vendor adversaries** — `review` → OpenAI GPT-5.6 Sol and `red-team`
+  (`security-lead`) → Google Gemini 3.1 Pro. Their job is to independently check
+  Claude-authored work, so they are pinned OFF Anthropic (and off each other's
+  vendor) via `providers:` allowlists, so their blind spots genuinely differ.
+- **Cheap / high-volume** — `breadth` (`fanout`) → Gemini 3.1 Flash-Lite and
+  `verify` (`qa-lead`) → Claude Haiku 4.5.
+- **Local** — `ollama/gpt-oss:20b` is registered and evaluable: free + private,
+  but slower, so it wins nothing by default and serves as an offline fallback.
+
+A crew task fans out across three cloud vendors plus a local option, matched to
+the leverage of the role — not a wall of one model. The registry/scorecard are
+seeded from LIVE model cards + pricing (see the `model-refresh` skill), not from
+training-data guesses; retarget any of it by editing `policy.json`/`scorecard.json`
+and re-running `route compile`; no agent files change. `pi-stack agent ls` prints
+a WHY for each pick (objective, the winner's accuracy/$/latency, and what it beat
+or whether a constraint left a sole fit).
 
 Any agent is measurable on three axes: **cost**, **latency**, **accuracy**. Cost
 and latency are cheap to measure from a real run (token usage × price, wall

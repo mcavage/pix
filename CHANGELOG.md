@@ -14,14 +14,23 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   YAML scalar containing `: ` sequences, which YAML parsed as a nested mapping.
 - `enterprise-admin` agent resolved to a model (`anthropic/sonnet-5`) that is not
   in the registry; it now uses `intent: reasoning` like its peers.
-- Model registry used `ollama/gemma4`, which does not exist and disagreed with the
-  `gemma3:4b` default the Makefile, README, and config use. Registry and
-  scorecard now use `ollama/gemma3:4b`.
+- Model registry was built from stale/guessed model names and prices (e.g.
+  `ollama/gemma4`, `claude-sonnet-4-6`). Re-grounded the whole registry on LIVE
+  July 2026 vendor pricing + published benchmarks (see the new `model-refresh`
+  skill). The local model is now `ollama/gpt-oss:20b` (the tiny `gemma3:4b`
+  remains the memory-watcher default, a separate DRAM-bound job).
 - `pi-stack evals --help` advertised flags (`--suite`) the host command does not
   accept and omitted `import`; the launcher help now matches the host.
 
 ### Added
 
+- `model-refresh` skill: teaches how to re-ground the router (registry +
+  scorecard + policy) on LIVE model cards and pricing instead of training data,
+  then compile + verify. Baked into the public image.
+- `pi-stack agent ls` WHY column is now actionable: it shows the intent, the
+  objective, the chosen model's accuracy/per-task-$/latency, and either what it
+  beat or that a constraint left a `sole fit` — plus a legend. Previously it said
+  only `intent <name>`, which explained nothing.
 - `pi-stack agent ls` flags an explicit `model:` pin that is not in the registry
   (`pinned (UNKNOWN ...)`) instead of silently resolving to a model that fails at
   spawn.
@@ -36,6 +45,18 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Routing redesign: a real tiered, multi-vendor crew instead of a monoculture,
+  grounded in live model data.** Previously 13 of 18 agents collapsed onto one
+  model and the rest onto Opus. The registry/scorecard/policy are now seeded from
+  the current (July 2026) lineup and pricing: Claude Fable 5 for `deep`
+  (`max-accuracy`); Opus 4.8 for `architect`/`product-manager` (`strategy`);
+  Sonnet 5 for `engineer`/`designer` (`code`) and the `advisory` specialist crew;
+  GPT-5.6 Sol for `review`; Gemini 3.1 Pro for `security-lead` (`red-team`);
+  Gemini 3.1 Flash-Lite for `fanout` (`breadth`); Haiku 4.5 for `qa-lead`
+  (`verify`). Three cloud vendors plus a local `gpt-oss:20b` option, tiered by
+  leverage with the adversarial roles pinned cross-vendor via provider
+  allowlists. New intents: `strategy`, `advisory`, `red-team`. Eval providers
+  mirror the registry.
 - Removed company-specific wiring from the public tree: the `SNOW_CONN` env in
   `make serve` (now a generic overlay-populated `SERVE_ENV`), the `snow` probe in
   the `healthcheck` skill (now a generic `EXTRA_CLIS` hook), and the overlay-only

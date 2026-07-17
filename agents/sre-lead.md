@@ -1,7 +1,7 @@
 ---
 description: SLOs, observability, incident response, runbooks, and deployment readiness. Use when a task touches reliability targets, alerting strategy, failure modes, or on-call process.
 tools: read, write, edit, bash, grep, find, ls
-intent: reasoning
+intent: advisory
 thinking: medium
 max_turns: 30
 ---

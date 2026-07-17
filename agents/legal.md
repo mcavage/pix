@@ -1,7 +1,7 @@
 ---
 description: Contract/licensing/regulatory review and partnership risk analysis. Use when the task involves legal documents, open source license compliance, AI regulation, or agreement terms.
 tools: read, write, edit, grep, find, ls
-intent: reasoning
+intent: advisory
 thinking: high
 max_turns: 30
 ---
