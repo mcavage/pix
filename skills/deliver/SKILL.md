@@ -217,8 +217,8 @@ remembered result or a subagent's "done" report is a violation.
    smallest independently reviewable units. A single-unit plan for non-trivial
    work MUST have explicit architect approval with written rationale recorded in
    status.json before proceeding. Fan out an `architect` for consistency check.
-   Even when skipping Phase 0.5 per build's skip table, shard into units to
-   delegate.
+   Even when Phase 0.5 was skipped (trivial work ONLY, per Law 0 — never via a
+   build/plan skip-table shortcut), shard into units to delegate.
 
 2. DELEGATE
    For each unit in dependency order:
@@ -534,8 +534,8 @@ All security findings go in the same findings_ledger[].
 ## Crew selection
 
 The crew is chosen by what the work TOUCHES, not by habit. Pick every row that
-applies; when in doubt, include the role. One trigger adds only its OWN role,
-not the whole row's neighbors.
+applies; when in doubt, include the role. A trigger pulls in only the role(s)
+named in ITS row, never another row's roles.
 
 **Discovery crew (Phase 0.5; each validates its own surface again in Phase 10).**
 
@@ -593,9 +593,9 @@ keyless provider and hang the subagent forever.
 | `finance-analyst` | cost model, unit economics, tradeoffs | Phase 0.5 + Phase 10, cost/pricing work |
 | `designer` | UI, all states (specs in 0.5, builds in Phase 2) | Phase 0.5 + Phase 10, visual surfaces |
 | `ux-copywriter` | user-facing strings, anti-slop | Phase 0.5 + Phase 10, any UI copy |
-| `dx-consultant` | API/CLI/SDK usability | Phase 0.5, dev-facing surfaces |
+| `dx-consultant` | API/CLI/SDK usability | Phase 0.5 + Phase 10, dev-facing surfaces |
 | `legal` | licensing, regulatory exposure | Phase 0.5 + Phase 10, licensing/privacy/regulatory work |
-| `enterprise-admin` | SSO/SCIM/RBAC, deploy, procurement | Phase 0.5, enterprise-governance work |
+| `enterprise-admin` | SSO/SCIM/RBAC, deploy, procurement | Phase 0.5 + Phase 10, enterprise-governance work |
 | `architect` | design, consistency check, single-unit approval | Phase 0.5, spec, shard, unit-sizing gate |
 | `engineer` | unit implementation | every implementation unit |
 | `deep` | hard problems, second-attempt escalation | 2nd-attempt escalation on a failing stage |

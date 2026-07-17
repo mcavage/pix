@@ -82,8 +82,9 @@ specialist whose surface the work hits:
   surface): positioning, ICP, the GTM angle the PR/FAQ must support.
 - **finance-analyst** (when it touches pricing, cost, spend, or budgets): unit
   economics and the cost tradeoff the design must respect.
-- **designer** / **ux-copywriter** (visual or copy surface), **dx-consultant**
-  (dev-facing API/CLI/SDK), **legal** (external-facing or data/compliance work).
+- **designer** (a visual UI surface), **ux-copywriter** (any user-facing copy),
+  **dx-consultant** (a dev-facing API/CLI/SDK), **legal** (licensing, privacy,
+  or regulatory obligations), **enterprise-admin** (SSO/RBAC/procurement).
 
 Product-facing roles feed the PR/FAQ + PRD; engineering-facing ones feed design
 + arch. Skipping a relevant specialist is a choice you note, not a default.
