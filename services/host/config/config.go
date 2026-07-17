@@ -19,7 +19,9 @@ import (
 
 // Defaults applied when a config file is absent or a field is unset.
 const (
-	DefaultMemoryWatcherModel = "gemma4"
+	// Small on purpose: the watcher runs resident on the host during `serve`, so a
+	// 26-31B model OOMs a 16GB laptop. Bump via `pi-stack config set`.
+	DefaultMemoryWatcherModel = "gemma3:4b"
 	DefaultMemoryEmbedModel   = "nomic-embed-text"
 	// BuiltinImpl is the default plugin impl: compiled into the host binary
 	// rather than run as an external sub-process.
@@ -330,7 +332,7 @@ services = ["memory"]
 mcp = []
 
 # Local Ollama models the memory service uses.
-memory_watcher_model = "gemma4"
+memory_watcher_model = "gemma3:4b"
 memory_embed_model = "nomic-embed-text"
 
 # Google Workspace account the gog host-MCP server serves. This is the Go-side

@@ -80,8 +80,9 @@ GOG_ACCOUNT ?=
 # Local-model deps for the self-learning memory (host Ollama). The watcher model
 # turns your messages into durable facts (capture); the embed model powers
 # semantic recall. `make pull-models` fetches them. Override MEMORY_WATCHER_MODEL
-# in config/local.mk to use a different one.
-MEMORY_WATCHER_MODEL ?= gemma4
+# in config/local.mk to use a different one. Default is small (gemma3:4b): it runs
+# resident on the HOST during `make serve`, so a big model OOMs a 16GB laptop.
+MEMORY_WATCHER_MODEL ?= gemma3:4b
 MEMORY_EMBED_MODEL   ?= nomic-embed-text
 
 # SERVICES: which host services `make serve` runs (memory). MCP (top of

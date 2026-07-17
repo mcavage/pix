@@ -196,6 +196,43 @@ Memory needs local Ollama models:
 make pull-models
 ```
 
+### Ollama models and low-DRAM machines
+
+Two places use a local Ollama model, and both default to a small one
+(`gemma3:4b`, ~3.3GB) so the stack fits a 16GB laptop out of the box. **The new
+default only applies to fresh installs** — an existing `~/.config/pi-stack/
+config.toml` or `config/local.mk` keeps whatever it already has, so on an
+existing machine run the swap below explicitly:
+
+1. **Memory watcher** (fact capture) — runs on the HOST during `pi-stack serve`
+   and Ollama keeps it resident, so this is the continuous DRAM cost. Swap it
+   without editing anything:
+   ```bash
+   pi-stack config set memory_watcher_model gemma3:4b   # or another pulled tag
+   ollama pull gemma3:4b
+   pi-stack serve                                        # restart to pick it up
+   ```
+   (`make serve` reads `MEMORY_WATCHER_MODEL` from `config/local.mk` instead.)
+2. **Interactive cycle model** (the `ollama/*` entry in the Alt+P squad) — loads
+   only when you select it. The `ollama-bridge` extension reads env vars, so
+   change it with no code edit. Set them in the sandbox's persistent env, then
+   **restart pi** (a plain `/reload` re-runs the extension in the same process,
+   which keeps the already-read `process.env`, so the swap needs a new pi):
+   ```bash
+   echo 'export OLLAMA_BRIDGE_MODEL=gemma3:4b'                >> /etc/sandbox-persistent.sh
+   echo 'export OLLAMA_BRIDGE_MODEL_NAME="Gemma 3 4B (local)"' >> /etc/sandbox-persistent.sh
+   # OLLAMA_BRIDGE_CONTEXT lowers the KV cache (default 32768) for even less RAM.
+   ```
+   The kit cycles `ollama/*`, so it matches whatever tag the bridge registers —
+   no need to touch `pi-kit/spec.yaml`. (The baked default is already `gemma3:4b`,
+   so most machines need none of this.)
+
+Whatever tag you set must be `ollama pull`ed on the host or the call 404s. Size
+guide for a tight 16GB box: `gemma3:1b` (~0.8GB, featherweight), `gemma3:4b`
+(~3.3GB, recommended), `gemma3:12b` (bump up here only on a roomier machine).
+DRAM frees itself once nothing invokes the big model — Ollama only loads a model
+when it's called. Free the disk too with `ollama rm <big-tag>` if you want.
+
 Knowledge is opt-in. Create a local OKF bundle or attach an existing one, then
 restart the host services:
 
