@@ -57,16 +57,17 @@ one-line evidence. A registered backend can still be unauthed or down.
 
 ### A4. CLIs
 ```bash
-for c in gh snow; do
+for c in gh $EXTRA_CLIS; do
   command -v "$c" >/dev/null 2>&1 && echo "present: $c" || echo "absent: $c"
 done
 ```
 For each present CLI, run a cheap live probe and read the output: `gh --version`
 (`gh auth status` saying "not logged in" is expected — the proxy injects creds at
-the network layer, NOT a fail); `snow connection test` (expect `Status OK`;
-wrapper CLIs often reject `--help`/`--version`, so probe a real read-only
-subcommand). `gh` is always baked; `snow` is optional — absent is optional,
-present-but-erroring IS a failure.
+the network layer, NOT a fail). `gh` is always baked. Any overlay-provided
+wrapper CLI (set `EXTRA_CLIS` from memory/overlay) is optional: absent is fine,
+present-but-erroring on its cheapest read-only probe IS a failure. Wrapper CLIs
+often reject `--help`/`--version`, so probe a real read-only subcommand, not the
+flag.
 
 Google Workspace is NOT a CLI anymore — it's the read-only `gog` MCP server the
 sbx gateway spawns (there is no Workspace binary to probe). Confirm it two ways:

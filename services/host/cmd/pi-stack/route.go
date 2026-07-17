@@ -103,11 +103,14 @@ each mechanically, record real cost + latency, and write the measured scores
 into the router's scorecard so it stops guessing.
 
 commands:
-  run [--suite DIR] [--models a,b] [--budget USD] [--dry-run] [--save] [--json]
-  show [--json]      the current scorecard
-  ls   [--suite DIR] list the cases in a suite
+  run [--config P] [--models a,b] [--budget USD] [--dry-run] [--save] [--json]
+  import FILE [--save] [--json]   fold a promptfoo results.json into the scorecard
+  show [--json]                   the current scorecard
+  ls   [--config P]               list the suites/cases
 
 A real sweep calls each model on each case and COSTS MONEY — run it by hand on a
 new-model release (use --budget to cap, --dry-run to preview), then
-` + "`pi-stack route compile`" + `.
+` + "`pi-stack route compile`" + `. Note --budget is advisory: models run one at a
+time and the sweep stops before a model that would exceed the cap, but the last
+model's own matrix runs whole.
 `

@@ -63,7 +63,7 @@ Verb tree (confirmed in `cmd/pi-stack/main.go`):
 - `pi-stack run [DIR] [--dev] [--kit K] [--mcp M] [--name N] [-- pi-args…]` — launch the sandbox
 - `pi-stack serve [args…]` — exec `pi-stack-host serve` (long-running host services)
 - `pi-stack doctor` — diagnose host + sandbox health (probes memory, gog, keys, ollama); profile-aware
-- `pi-stack setup` — guided first-run: prompts only for the gog account, writes config (+ ensures memory), and prints copy-paste TODOs for provider secrets and anything else outstanding. **Auto-triggered on first run** (config-file absence): TTY → offer `[Y/n]`; non-TTY → print the one-liner and continue.
+- `pi-stack setup` — guided first-run: a 4-step wizard (provider keys, memory + knowledge, integrations, integration credentials). Interactive prompts are the knowledge-base source and the gog account; everything else is inferred. Writes config (+ ensures memory), registers configured MCP servers, and prints copy-paste TODOs for anything outstanding. Flag-driven for automation (`--account`, `--knowledge`, `--yes`). **Auto-triggered on first run** (config-file absence): TTY → offer `[Y/n]`; non-TTY → print the one-liner and continue.
 - `pi-stack memory recall|remember|forget|learnings|stats [--json]` (alias `mem`) — drive the memory daemon (:11435) from the HOST without launching a sandbox. Degrades to a clear message + exit code 3 when the daemon is down.
 - `pi-stack knowledge init|use|ls|query|sync|remote` (alias `kb`) — scaffold/point/list + `query` (:11436 search from the host), `sync` (commit+push the bundle from anywhere — safe by default: pushes a `knowledge/sync-<ts>` branch + prints a `gh pr create` hint, mirroring `enrich`; `--allow-main` to push the default branch), `remote set <url>` (wire origin on a fresh `init` bundle).
 - `pi-stack profile ls|use <name>` — switch contexts (work / personal / default). See below.
@@ -71,6 +71,7 @@ Verb tree (confirmed in `cmd/pi-stack/main.go`):
 - `pi-stack mcp register|ls` — register local stdio MCP servers with the sbx gateway
 - `pi-stack route pick|compile|show|models` — the model router (cost/latency/accuracy). `pick <intent>` resolves one intent; `compile` writes `routing.json`; `show` prints the resolved table. Passthrough to `pi-stack-host route`.
 - `pi-stack evals run|show|ls` — accuracy eval harness that feeds the router's scorecard. `run` is budget-guarded + `--dry-run`; costs money, run it by hand on a new-model release. Passthrough to `pi-stack-host evals`.
+- `pi-stack task new|ls|harvest|rm|gc` — isolated parallel-work sandboxes: each `new` creates a standalone clone + sandbox for a branch of work so several agents run without colliding; `harvest` pulls results back, `rm`/`gc` clean up with guardrails. See `docs/design/worktree-tasks.md`.
 - `pi-stack state <backup|restore|reset|uninstall>` — grouping noun for the on-disk state verbs; the four also work as top-level aliases (full back-compat).
 - `pi-stack help [--all] [verb]` — tiered help: Core sections by default, `--all` (or per-noun `help <verb>`) reveals the rest; `pi-stack help --man` renders the man page (`man` still works as an alias).
 - `pi-stack version` — print the stamped version

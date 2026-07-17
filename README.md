@@ -1,13 +1,24 @@
 # pi-stack
 
-pi-stack is an opinionated Docker-sandboxed distribution of
-[pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) for
-running autonomous coding tasks.
+[![test](https://github.com/mcavage/pi-stack/actions/workflows/test.yml/badge.svg)](https://github.com/mcavage/pi-stack/actions/workflows/test.yml)
+[![publish](https://github.com/mcavage/pi-stack/actions/workflows/publish.yml/badge.svg)](https://github.com/mcavage/pi-stack/actions/workflows/publish.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-The goal is simple: let the agent edit code, run commands, test the result, ask a
-second model to review the diff, and open a PR without turning every shell command
-into an approval prompt. The safety boundary is the sandbox, not a stream of
-one-off confirmations.
+**Claude writes it. GPT reviews it. Docker contains it.**
+
+pi-stack is an opinionated, Docker-sandboxed distribution of the
+[pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) coding agent
+for running autonomous coding tasks.
+
+Give pi a repo and a task. It plans, edits, runs commands, tests the result, asks
+a *different* model to review the diff, and opens a PR, without turning every
+shell command into an approval prompt. The safety boundary is the sandbox, not a
+stream of one-off confirmations.
+
+> Building the image needs a DHI-entitled Docker account, but the hosted
+> `sbx run` path below does not. A big chunk of the optional data integrations
+> also depends on the sbx MCP gateway, which is not public yet. The core, and
+> everything in the quickstart, works today.
 
 pi-stack ships the reusable parts of that setup:
 
@@ -96,11 +107,35 @@ sbx secret set -g github
 
 pi-stack setup
 pi-stack serve
-pi-stack
+pi-stack run
 ```
 
 `pi-stack setup` writes `~/.config/pi-stack/config.toml`, registers configured MCP
 servers, and enables memory. Re-run it when your host setup changes.
+
+Bare `pi-stack` (no args) prints a status dashboard; it never launches a sandbox.
+Use `pi-stack run [DIR]` to launch. This is deliberate: launching is always
+explicit.
+
+## Why pi-stack?
+
+pi-stack is a *distribution* of pi, not a new editor or a new agent runtime. It
+exists to make one specific bet safe: let a model work autonomously, and let a
+different model check it.
+
+| | plain `pi` | pi-stack | Claude Code / Cursor |
+| --- | --- | --- | --- |
+| Isolation | your shell | disposable Docker VM | your shell / IDE |
+| Approval model | per-command prompts | sandbox is the boundary, full-auto | per-command prompts |
+| Providers | multi | Claude + GPT + Gemini + local Ollama | mostly single-vendor |
+| Review | you | a *different* vendor reviews the diff | you |
+| Memory | none | host sqlite + FTS5 + vectors, survives sessions | limited |
+| Private integrations | none | overlay repo, credentials stay on the host | plugins |
+| Reproducibility | your machine | pinned image + kit | your machine |
+
+The cross-vendor review is the part that pays off in practice: a second Claude
+pass on a Claude diff has correlated blind spots, but GPT or Gemini objects in
+different places.
 
 ## What You Get
 
@@ -145,22 +180,45 @@ skills, capability routing, credentials, and company connectors live in a separa
 overlay repo. That keeps the open-source tree clean while still letting the same
 skills run against real work systems when an overlay is present.
 
+**Parallel work with `task`.** `pi-stack task new` spins up an isolated clone plus
+sandbox for a branch of work, so several agents can run at once without stepping
+on each other. `task ls` shows them, `task harvest` pulls the results back, and
+`task rm` cleans up (with guardrails). See
+[docs/design/worktree-tasks.md](docs/design/worktree-tasks.md).
+
 ## Launcher Commands
 
+Core:
+
 ```bash
-pi-stack                     # launch a sandbox in the current directory
-pi-stack run [DIR]           # same, explicit
+pi-stack                     # status dashboard (does NOT launch)
+pi-stack run [DIR]           # launch a sandbox in DIR (default: current dir)
+pi-stack status              # fast read-only control panel (alias: st)
 pi-stack setup               # guided setup for config, memory, and MCP
 pi-stack serve               # run enabled host services
 pi-stack doctor              # diagnose host and sandbox prerequisites
-pi-stack config show|path    # inspect resolved config
-pi-stack config set|unset    # update config without hand-editing toml
-pi-stack mcp register|ls     # register/list local stdio MCP servers with sbx
-pi-stack knowledge init|use|ls  # create, attach, or inspect OKF bundles
-pi-stack state backup|restore|reset|uninstall  # on-disk state (also top-level aliases)
-pi-stack help [--all] [verb]  # tiered help: Core by default, --all/help <verb> for the rest
+pi-stack config show|path|set|unset  # inspect or update config (never hand-edit toml)
+pi-stack help [--all] [verb] # tiered help: Core by default, --all for the rest
 pi-stack version             # print the launcher version
 ```
+
+Data, routing, and parallel work:
+
+```bash
+pi-stack memory recall|remember|forget|learnings|stats   # drive the memory daemon (alias: mem)
+pi-stack knowledge init|use|ls|query|sync|remote         # OKF bundles (alias: kb)
+pi-stack mcp register|ls     # register/list local stdio MCP servers with sbx
+pi-stack secret edit|check   # 1Password op-refs for host MCP credentials
+pi-stack route pick|compile|show|models   # the model router (cost/latency/accuracy)
+pi-stack evals run|show|ls   # accuracy eval harness that feeds the router
+pi-stack agent ls|new|edit|rm|reassess    # manage subagents and their resolved models
+pi-stack task new|ls|harvest|rm           # isolated parallel-work sandboxes (see below)
+pi-stack profile ls|use      # switch work / personal / default contexts
+pi-stack state backup|restore|reset|uninstall  # on-disk state (also top-level aliases)
+pi-stack man                 # render the full man page
+```
+
+Run `pi-stack help --all` for the complete tree with flags.
 
 Do not hand-edit `config.toml`. `pi-stack setup` and `pi-stack config set/unset`
 are the supported writers, and `pi-stack doctor` prints copy-pasteable repair

@@ -5,24 +5,24 @@
     { "model": "anthropic/claude-sonnet-4-6",  "task_type": "code",      "accuracy": 0.82, "latency_ms_p50": 25000, "cost_usd": 0.060, "n": 0, "source": "seed" },
     { "model": "anthropic/claude-haiku-4-5",   "task_type": "code",      "accuracy": 0.68, "latency_ms_p50": 12000, "cost_usd": 0.012, "n": 0, "source": "seed" },
     { "model": "openai/gpt-5.6-sol",           "task_type": "code",      "accuracy": 0.86, "latency_ms_p50": 30000, "cost_usd": 0.050, "n": 0, "source": "seed" },
-    { "model": "ollama/gemma4",                "task_type": "code",      "accuracy": 0.45, "latency_ms_p50": 60000, "cost_usd": 0.000, "n": 0, "source": "seed" },
+    { "model": "ollama/gemma3:4b",                "task_type": "code",      "accuracy": 0.45, "latency_ms_p50": 60000, "cost_usd": 0.000, "n": 0, "source": "seed" },
 
     { "model": "anthropic/claude-opus-4-8",   "task_type": "reasoning", "accuracy": 0.91, "latency_ms_p50": 40000, "cost_usd": 0.250, "n": 0, "source": "seed" },
     { "model": "anthropic/claude-sonnet-4-6",  "task_type": "reasoning", "accuracy": 0.84, "latency_ms_p50": 22000, "cost_usd": 0.050, "n": 0, "source": "seed" },
     { "model": "anthropic/claude-haiku-4-5",   "task_type": "reasoning", "accuracy": 0.70, "latency_ms_p50": 10000, "cost_usd": 0.010, "n": 0, "source": "seed" },
     { "model": "openai/gpt-5.6-sol",           "task_type": "reasoning", "accuracy": 0.88, "latency_ms_p50": 26000, "cost_usd": 0.045, "n": 0, "source": "seed" },
-    { "model": "ollama/gemma4",                "task_type": "reasoning", "accuracy": 0.48, "latency_ms_p50": 55000, "cost_usd": 0.000, "n": 0, "source": "seed" },
+    { "model": "ollama/gemma3:4b",                "task_type": "reasoning", "accuracy": 0.48, "latency_ms_p50": 55000, "cost_usd": 0.000, "n": 0, "source": "seed" },
 
     { "model": "anthropic/claude-opus-4-8",   "task_type": "search",    "accuracy": 0.88, "latency_ms_p50": 30000, "cost_usd": 0.120, "n": 0, "source": "seed" },
     { "model": "anthropic/claude-sonnet-4-6",  "task_type": "search",    "accuracy": 0.82, "latency_ms_p50": 16000, "cost_usd": 0.030, "n": 0, "source": "seed" },
     { "model": "anthropic/claude-haiku-4-5",   "task_type": "search",    "accuracy": 0.74, "latency_ms_p50": 7000,  "cost_usd": 0.006, "n": 0, "source": "seed" },
     { "model": "openai/gpt-5.6-sol",           "task_type": "search",    "accuracy": 0.80, "latency_ms_p50": 18000, "cost_usd": 0.025, "n": 0, "source": "seed" },
-    { "model": "ollama/gemma4",                "task_type": "search",    "accuracy": 0.52, "latency_ms_p50": 40000, "cost_usd": 0.000, "n": 0, "source": "seed" },
+    { "model": "ollama/gemma3:4b",                "task_type": "search",    "accuracy": 0.52, "latency_ms_p50": 40000, "cost_usd": 0.000, "n": 0, "source": "seed" },
 
     { "model": "anthropic/claude-opus-4-8",   "task_type": "qa",        "accuracy": 0.89, "latency_ms_p50": 35000, "cost_usd": 0.150, "n": 0, "source": "seed" },
     { "model": "anthropic/claude-sonnet-4-6",  "task_type": "qa",        "accuracy": 0.83, "latency_ms_p50": 18000, "cost_usd": 0.035, "n": 0, "source": "seed" },
     { "model": "anthropic/claude-haiku-4-5",   "task_type": "qa",        "accuracy": 0.76, "latency_ms_p50": 8000,  "cost_usd": 0.008, "n": 0, "source": "seed" },
     { "model": "openai/gpt-5.6-sol",           "task_type": "qa",        "accuracy": 0.82, "latency_ms_p50": 20000, "cost_usd": 0.030, "n": 0, "source": "seed" },
-    { "model": "ollama/gemma4",                "task_type": "qa",        "accuracy": 0.55, "latency_ms_p50": 45000, "cost_usd": 0.000, "n": 0, "source": "seed" }
+    { "model": "ollama/gemma3:4b",                "task_type": "qa",        "accuracy": 0.55, "latency_ms_p50": 45000, "cost_usd": 0.000, "n": 0, "source": "seed" }
   ]
 }

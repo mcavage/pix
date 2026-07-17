@@ -91,6 +91,16 @@ MEMORY_EMBED_MODEL   ?= nomic-embed-text
 # config/local.mk (written by `make install`) so you never pass flags by hand.
 SERVICES ?= memory
 
+# SERVE_ENV: extra `KEY=VALUE` pairs injected into the environment of the host
+# services `make serve` starts. The public stack sets nothing here; a private
+# overlay (config/overlay.mk) appends the vars its own services need so no
+# company-specific env leaks into the public tree. Values are expanded into the
+# shell UNQUOTED, so each entry must be a single shell token: no spaces or shell
+# metacharacters. For a value that needs them (e.g. a connection string with
+# `&` or spaces), have the overlay service read an env FILE instead of passing
+# it here. See docs/OVERLAY.md.
+SERVE_ENV ?=
+
 # out/ is gitignored, so it's absent on a fresh clone. Several targets (load,
 # launcher, serve, mcp-register, pack, …) write into it and would otherwise fail
 # with "invalid output path: stat out: no such file or directory". Create it once
@@ -114,6 +124,10 @@ link-overlay:
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+	@echo "Runtime, routing, agent, eval, and parallel-task commands live in the"
+	@echo "launcher, not make:  pi-stack help --all  (e.g. pi-stack evals run,"
+	@echo "pi-stack route compile, pi-stack agent ls, pi-stack task new)."
 
 build: ## Build the pi-stack image from the DHI base
 	docker build -t $(IMAGE) .
@@ -241,7 +255,7 @@ mcp-register: link-overlay ## Register the local stdio MCP servers you use (the 
 serve: link-overlay ## Start the host services named in SERVICES (config/local.mk): memory :11435. MCP servers (slack, gog) are run by the sbx gateway — see `make mcp-register`. Ctrl-C stops all.
 	@echo "Host services [$(SERVICES)] — sandboxes reach these on host.docker.internal. Ctrl-C stops all."
 	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) || { echo "go build failed (pi-stack-host)"; exit 1; }
-	@exec env SNOW_CONN=$(SNOW_CONN) MEMORY_WATCHER_MODEL=$(MEMORY_WATCHER_MODEL) MEMORY_EMBED_MODEL=$(MEMORY_EMBED_MODEL) out/pi-stack-host serve $(SERVICES)
+	@exec env $(SERVE_ENV) MEMORY_WATCHER_MODEL=$(MEMORY_WATCHER_MODEL) MEMORY_EMBED_MODEL=$(MEMORY_EMBED_MODEL) out/pi-stack-host serve $(SERVICES)
 
 pull-models: ## Pull the local Ollama models the memory loop needs (watcher + embed)
 	@command -v ollama >/dev/null 2>&1 || { echo "ollama not installed — see https://ollama.com (optional: enables semantic recall + fact capture)"; exit 1; }

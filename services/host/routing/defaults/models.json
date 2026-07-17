@@ -42,9 +42,9 @@
       "notes": "Cross-vendor. Different blind spots than Claude — good for review."
     },
     {
-      "id": "ollama/gemma4",
+      "id": "ollama/gemma3:4b",
       "provider": "ollama",
-      "label": "Gemma 4 (local)",
+      "label": "Gemma 3 4B (local)",
       "input_per_mtok": 0.0,
       "output_per_mtok": 0.0,
       "local": true,

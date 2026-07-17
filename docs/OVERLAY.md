@@ -89,8 +89,9 @@ pi-stack-host's helpers (`env`, `writeJSON`, `mcpStdio`, `hostService`, …), so
 compile only when symlinked in — edit them in your overlay, build from pi-stack.
 
 Reach the host service from the sandbox over `host.docker.internal:<port>` via the
-in-sandbox wrapper from half 1 (add the port to your kit's network rules, or the
-public kit already allows `:11442`).
+in-sandbox wrapper from half 1. Add the port to your overlay kit's network rules
+(`allowedDomains: host.docker.internal:<port>` + `localhost:<port>`) — the public
+kit deliberately allows no overlay ports, so the overlay grants its own.
 
 ## 3. Make targets — `overlay.mk`
 

@@ -202,6 +202,15 @@ func listAgents() ([]string, error) {
 // resolveAgentModel returns the model an agent resolves to and a one-line WHY.
 func resolveAgentModel(m agentMeta, reg *routing.Registry, sc *routing.Scorecard, pol *routing.Policy) (model, why string) {
 	if strings.TrimSpace(m.Model) != "" {
+		// An explicit pin bypasses intent routing, so it also bypasses the
+		// registry check. Flag a pin that resolves to no registered model — that
+		// is almost always a typo (e.g. anthropic/sonnet-5 for claude-sonnet-4-6)
+		// and will fail at spawn, not here.
+		if reg != nil {
+			if _, ok := reg.Get(m.Model); !ok {
+				return m.Model, "pinned (UNKNOWN — not in models.json)"
+			}
+		}
 		return m.Model, "pinned (explicit model:)"
 	}
 	if strings.TrimSpace(m.Intent) == "" {
