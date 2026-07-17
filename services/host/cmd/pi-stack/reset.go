@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"pi-stack/host/config"
@@ -42,13 +43,34 @@ type resetOpts struct {
 // resetPaths are the resolved host locations reset acts on. Split out so the
 // pure planner takes them injected (a test supplies temp-dir paths, no real
 // $HOME lookup). memoryDir/knowledgeDir honor MEMORY_DB/KNOWLEDGE_DB.
+//
+// The XDG reconciliation split storage across three bases, so reset sweeps all
+// of them: configDir (CONFIG), dataDir (DATA: memory/knowledge/backups), stateDir
+// (STATE: index/caches/tasks/serve.pid), PLUS the legacy dataRoot (~/.pi-stack)
+// and any legacy config-sibling strays a pre-XDG install left behind.
 type resetPaths struct {
-	configDir    string // ~/.config/pi-stack (config.toml, op-refs.env, broker-token, knowledge/, knowledge-cache/)
-	dataRoot     string // ~/.pi-stack (memory/ + knowledge/)
-	memoryDir    string // <dataRoot>/memory or dir(MEMORY_DB): the user's captured facts
-	knowledgeDir string // <dataRoot>/knowledge or dir(KNOWLEDGE_DB): the rebuildable index
-	memoryDB     string // the custom MEMORY_DB file path (set ONLY when MEMORY_DB is given); "" for the default
-	knowledgeDB  string // the custom KNOWLEDGE_DB file path (set ONLY when KNOWLEDGE_DB is given); "" for the default
+	configDir    string         // ~/.config/pi-stack (config.toml, op-refs.env, broker-token, legacy knowledge/, knowledge-cache/)
+	dataRoot     string         // legacy ~/.pi-stack (memory/ + knowledge/ + backups/)
+	dataDir      string         // new DATA base (config.DataDir(): memory/ + knowledge/ + backups/)
+	stateDir     string         // new STATE base (config.StateDir(): knowledge/ index + knowledge-cache/ + tasks/ + serve.pid)
+	memoryDir    string         // <dataRoot>/memory or dir(MEMORY_DB): the user's captured facts
+	knowledgeDir string         // <dataRoot>/knowledge or dir(KNOWLEDGE_DB): the rebuildable index
+	memoryDB     string         // the custom MEMORY_DB file path (set ONLY when MEMORY_DB is given); "" for the default
+	knowledgeDB  string         // the custom KNOWLEDGE_DB file path (set ONLY when KNOWLEDGE_DB is given); "" for the default
+	legacyStrays []backupTarget // pre-XDG config-sibling strays (~/.config/pi-stack/{knowledge,knowledge-cache,serve.pid}) when configDir moved elsewhere
+}
+
+// sweepRoot is one directory the --keep-memory sweep walks top-level, moving
+// every entry aside EXCEPT the memory authorities named by its preserve inputs.
+// One per storage root that may hold BOTH memory and regenerable data (the new
+// DATA base and the legacy ~/.pi-stack), so captured facts survive in every
+// location while indexes/caches/backups are reset.
+type sweepRoot struct {
+	Root          string   // dir to sweep
+	MemoryDir     string   // the memory dir/db to preserve (keepMemoryPreserve input)
+	MemoryDB      string   // custom MEMORY_DB when loose in Root (keepMemoryPreserve input)
+	ExtraPreserve []string // additional explicit paths to always preserve (e.g. Root/memory)
+	PreserveGlobs []string // globs to preserve (e.g. Root/memory.pre-xdg-* safety copies)
 }
 
 // backupTarget is one path the reset moves aside, with a human label. Dangerous
@@ -77,6 +99,7 @@ type resetActions struct {
 	RemoveSandboxes bool           // --sbx: remove pi-stack-* sandboxes
 	MCPRemove       []string       // --sbx: MCP server names to unregister (cfg.MCP)
 	Force           bool           // --force: skip the serve-still-up guard on the data move
+	SweepRoots      []sweepRoot    // --keep-memory: roots to sweep (memory preserved), one per DATA + legacy root
 }
 
 // resetFS is the injected filesystem surface, so executeReset stays hermetic in
@@ -143,13 +166,37 @@ func resolveResetPaths(env shellEnv) resetPaths {
 			knowledgeDB = db
 		}
 	}
+	configDir := filepath.Dir(config.Path())
+	dataDir, _ := config.DataDir()
+	stateDir, _ := config.StateDir()
+
+	// Pre-XDG installs that used a CUSTOM config dir (PI_STACK_CONFIG / XDG_CONFIG_HOME)
+	// may still have knowledge/knowledge-cache/serve.pid under the LITERAL
+	// ~/.config/pi-stack. When the config dir moved elsewhere, moving it aside
+	// misses those strays, so target them explicitly. When configDir IS the literal
+	// path they travel with the config-dir move and this list stays empty.
+	var legacyStrays []backupTarget
+	if home != "" {
+		legacyConfig := filepath.Join(home, ".config", "pi-stack")
+		if filepath.Clean(configDir) != filepath.Clean(legacyConfig) {
+			legacyStrays = []backupTarget{
+				{Path: filepath.Join(legacyConfig, "knowledge"), Label: "legacy knowledge bundle"},
+				{Path: filepath.Join(legacyConfig, "knowledge-cache"), Label: "legacy knowledge cache"},
+				{Path: filepath.Join(legacyConfig, "serve.pid"), Label: "legacy serve pidfile"},
+			}
+		}
+	}
+
 	return resetPaths{
-		configDir:    filepath.Dir(config.Path()),
+		configDir:    configDir,
 		dataRoot:     dataRoot,
+		dataDir:      dataDir,
+		stateDir:     stateDir,
 		memoryDir:    memoryDir,
 		knowledgeDir: knowledgeDir,
 		memoryDB:     memoryDB,
 		knowledgeDB:  knowledgeDB,
+		legacyStrays: legacyStrays,
 	}
 }
 
@@ -166,11 +213,37 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 		DataRoot:   paths.dataRoot,
 		Force:      opts.force,
 	}
-	if paths.configDir != "" {
+	// A custom MEMORY_DB can resolve UNDER any of the XDG bases (CONFIG/STATE),
+	// not just the data roots. When --keep-memory is set and the resolved memory
+	// authority lives under a base we would otherwise move aside WHOLESALE
+	// (configDir, stateDir), we must instead SWEEP that base (preserving memory)
+	// so the captured facts survive wherever MEMORY_DB points.
+	configHoldsMemory := opts.keepMemory && memoryAuthorityUnder(paths.configDir, paths.memoryDir, paths.memoryDB)
+	if paths.configDir != "" && !configHoldsMemory {
 		a.Backups = append(a.Backups, backupTarget{Path: paths.configDir, Label: "config directory"})
 	}
+	// Pre-XDG config-sibling strays (only populated when the config dir moved
+	// elsewhere). Normally none hold captured memory, so they move aside wholesale
+	// in BOTH plans. But a custom MEMORY_DB can resolve UNDER a stray dir (e.g.
+	// MEMORY_DB=~/.config/pi-stack/knowledge/memory.db); under --keep-memory such a
+	// stray is SWEPT instead (keepMemorySweepRoots adds it) so the authority is
+	// preserved rather than dragged aside on a successful flock (R3-1).
+	for _, s := range paths.legacyStrays {
+		if opts.keepMemory && memoryAuthorityUnder(s.Path, paths.memoryDir, paths.memoryDB) {
+			continue
+		}
+		a.Backups = append(a.Backups, s)
+	}
 	if opts.keepMemory {
-		// Preserve the captured facts (memory); move the rebuildable index aside.
+		// Preserve the captured facts (memory) in EVERY location; move the
+		// regenerable STATE (index, caches, tasks, serve.pid) aside wholesale, and
+		// SWEEP the DATA roots (legacy ~/.pi-stack + new DATA base) so knowledge +
+		// backups reset while memory survives. When a custom MEMORY_DB lives under
+		// STATE, sweep STATE instead of moving it wholesale (keepMemorySweepRoots
+		// adds it as a sweep root) so the db is never dragged aside.
+		if paths.stateDir != "" && !memoryAuthorityUnder(paths.stateDir, paths.memoryDir, paths.memoryDB) {
+			a.Backups = append(a.Backups, backupTarget{Path: paths.stateDir, Label: "state directory (index, caches, tasks)", Dangerous: true})
+		}
 		// A custom KNOWLEDGE_DB that lives OUTSIDE the data root must move ONLY the
 		// db file + its -wal/-shm sidecars, NEVER its parent dir (KNOWLEDGE_DB=
 		// ~/Documents/knowledge.db must not drag all of ~/Documents aside) — the same
@@ -178,12 +251,26 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 		// is moved as a whole directory.
 		if t, ok := customDBOutsideRoot(paths.knowledgeDir, paths.knowledgeDB, paths.dataRoot, "knowledge database"); ok {
 			a.Backups = append(a.Backups, t)
-		} else if paths.knowledgeDir != "" {
+		} else if paths.knowledgeDir != "" && !memoryAuthorityUnder(paths.knowledgeDir, paths.memoryDir, paths.memoryDB) {
+			// A custom MEMORY_DB can nest UNDER the knowledge dir (e.g.
+			// MEMORY_DB=<dataRoot>/knowledge/memory.db). Moving the knowledge dir
+			// wholesale would drag that live db aside on a successful flock (R3-1), so
+			// when it holds the authority SWEEP it instead (keepMemorySweepRoots adds
+			// it) — the index resets while the nested memory db stays put.
 			a.Backups = append(a.Backups, backupTarget{Path: paths.knowledgeDir, Label: "knowledge database", Dangerous: true})
 		}
-	} else if paths.dataRoot != "" {
-		// Move the whole data root aside (captured memory + knowledge index).
-		a.Backups = append(a.Backups, backupTarget{Path: paths.dataRoot, Label: "data directory (memory + knowledge)", Dangerous: true})
+		a.SweepRoots = keepMemorySweepRoots(paths)
+	} else {
+		// Default reset: move every base aside wholesale (memory included).
+		if paths.dataRoot != "" {
+			a.Backups = append(a.Backups, backupTarget{Path: paths.dataRoot, Label: "data directory (memory + knowledge)", Dangerous: true})
+		}
+		if paths.dataDir != "" && filepath.Clean(paths.dataDir) != filepath.Clean(paths.dataRoot) {
+			a.Backups = append(a.Backups, backupTarget{Path: paths.dataDir, Label: "data directory (XDG: memory + knowledge + backups)", Dangerous: true})
+		}
+		if paths.stateDir != "" && filepath.Clean(paths.stateDir) != filepath.Clean(paths.dataRoot) && filepath.Clean(paths.stateDir) != filepath.Clean(paths.dataDir) {
+			a.Backups = append(a.Backups, backupTarget{Path: paths.stateDir, Label: "state directory (index, caches, tasks)", Dangerous: true})
+		}
 		// Honor a custom MEMORY_DB / KNOWLEDGE_DB that lives OUTSIDE the data root:
 		// the data-root move alone would miss it. Move ONLY the db FILE + its
 		// -wal/-shm sidecars, NEVER the whole parent dir. A whole directory is moved
@@ -193,6 +280,19 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 		}
 		if t, ok := customDBOutsideRoot(paths.knowledgeDir, paths.knowledgeDB, paths.dataRoot, "knowledge database"); ok {
 			a.Backups = append(a.Backups, t)
+		}
+	}
+	// Fail-closed protection (R2-1): the resolved memory authority (its dir, or a
+	// custom MEMORY_DB file) can live UNDER a target we would otherwise treat as
+	// SAFE — the config dir, or a legacy config-sibling stray. Moving such a target
+	// while a serve holds the memory flock would split the live sqlite writer from
+	// its db/wal, exactly what the Dangerous flag guards. So mark ANY target that
+	// CONTAINS the memory authority Dangerous, routing it through executeReset's
+	// fail-closed flock-acquire refusal + the serveStillUp guard. Data/state moves
+	// are already Dangerous; this closes the config-dir and stray gap.
+	for i := range a.Backups {
+		if memoryAuthorityUnder(a.Backups[i].Path, paths.memoryDir, paths.memoryDB) {
+			a.Backups[i].Dangerous = true
 		}
 	}
 	if opts.sbx {
@@ -303,8 +403,16 @@ func customDBOutsideRoot(dir, dbPath, dataRoot, label string) (backupTarget, boo
 //   - db in a DEDICATED subdir of dataRoot (default dataRoot/memory/memory.db):
 //     preserve the top-level subdir entry on the path to it (e.g. dataRoot/memory).
 //   - db sitting DIRECTLY in dataRoot (MEMORY_DB=dataRoot/custom-memory.db, so
-//     memoryDir == dataRoot): preserve the db FILE + its -wal/-shm sidecars, and
+//     memoryDir == dataRoot): preserve the db FILE + its -wal/-shm sidecars AND
+//     the sibling .memory.lock (all top-level entries in the sweep root), and
 //     move everything else (incl. the knowledge db) aside.
+//
+// Either way the .memory.lock flock file next to the db is preserved IN PLACE: in
+// the subdir case it rides along inside the preserved subdir; in the loose case it
+// is a top-level sweep-root entry that must be named explicitly. Sweeping it aside
+// while reset still holds the flock on that inode would let a concurrent
+// serve/restore create a fresh lock at the canonical path and acquire it, breaking
+// the held-flock exclusion (R4-1).
 //
 // Matching by cleaned path (never a hardcoded "memory" name) is what fixes the
 // data-loss edge where a loose custom db in the root was swept away while the
@@ -325,11 +433,87 @@ func keepMemoryPreserve(dataRoot, memoryDir, memoryDB string) (map[string]bool, 
 		return preserve, top
 	}
 	// The db is a loose file in the data root (or its dir resolves to the root):
-	// preserve just the db file + its -wal/-shm sidecars.
+	// preserve the db file + its -wal/-shm sidecars, plus the sibling .memory.lock
+	// so the flock reset holds is never swept out from under it (R4-1).
 	preserve[db] = true
 	preserve[db+"-wal"] = true
 	preserve[db+"-shm"] = true
+	preserve[filepath.Join(filepath.Dir(db), ".memory.lock")] = true
 	return preserve, db
+}
+
+// keepMemorySweepRoots builds the set of roots the --keep-memory sweep walks, one
+// per location that may hold BOTH captured memory and regenerable data: the legacy
+// ~/.pi-stack, the new DATA base, and — when a custom MEMORY_DB resolves under
+// them — the STATE and CONFIG bases, the knowledge dir, and any legacy config-
+// sibling stray too. Each root always preserves its own
+// `memory` subdir + any `memory.pre-xdg-*` safety copy migration left behind; a
+// root that actually holds the resolved (possibly custom) memory authority ALSO
+// preserves that exact db/dir. So captured facts survive in EVERY location
+// (finding 10, and a custom MEMORY_DB under any XDG base) while knowledge +
+// backups reset. Dedup keeps two coincident bases from sweeping twice.
+func keepMemorySweepRoots(paths resetPaths) []sweepRoot {
+	var roots []sweepRoot
+	seen := map[string]bool{}
+	add := func(root string) {
+		if root == "" {
+			return
+		}
+		c := filepath.Clean(root)
+		if seen[c] {
+			return
+		}
+		seen[c] = true
+		sr := sweepRoot{
+			Root:          root,
+			MemoryDir:     filepath.Join(root, "memory"),
+			ExtraPreserve: []string{filepath.Join(root, "memory")},
+			PreserveGlobs: []string{filepath.Join(root, "memory.pre-xdg-*")},
+		}
+		// When the resolved memory authority (a custom MEMORY_DB dir/file) lives under
+		// this root, preserve THAT exact location, not just the default `memory` subdir.
+		if memoryAuthorityUnder(root, paths.memoryDir, paths.memoryDB) {
+			sr.MemoryDir = paths.memoryDir
+			sr.MemoryDB = paths.memoryDB
+		}
+		roots = append(roots, sr)
+	}
+	add(paths.dataRoot)
+	add(paths.dataDir)
+	// STATE/CONFIG are normally moved aside WHOLESALE; sweep them only when a custom
+	// MEMORY_DB lives under them, so the db is preserved rather than dragged aside.
+	if memoryAuthorityUnder(paths.stateDir, paths.memoryDir, paths.memoryDB) {
+		add(paths.stateDir)
+	}
+	if memoryAuthorityUnder(paths.configDir, paths.memoryDir, paths.memoryDB) {
+		add(paths.configDir)
+	}
+	// The knowledge dir + legacy config-sibling strays are normally moved aside
+	// WHOLESALE; sweep them only when a custom MEMORY_DB nests under one, so the
+	// authority is preserved rather than dragged aside on a successful flock (R3-1).
+	if memoryAuthorityUnder(paths.knowledgeDir, paths.memoryDir, paths.memoryDB) {
+		add(paths.knowledgeDir)
+	}
+	for _, s := range paths.legacyStrays {
+		if memoryAuthorityUnder(s.Path, paths.memoryDir, paths.memoryDB) {
+			add(s.Path)
+		}
+	}
+	return roots
+}
+
+// memoryAuthorityUnder reports whether the resolved memory authority (its
+// directory, or a custom MEMORY_DB file) lives at or under root. Used to decide
+// whether a base must be SWEPT (memory preserved) rather than moved aside
+// wholesale under --keep-memory.
+func memoryAuthorityUnder(root, memoryDir, memoryDB string) bool {
+	if root == "" {
+		return false
+	}
+	if memoryDB != "" && underDir(memoryDB, root) {
+		return true
+	}
+	return memoryDir != "" && underDir(memoryDir, root)
 }
 
 // topLevelUnder returns the cleaned path of the FIRST path segment of `path`
@@ -351,6 +535,44 @@ func underDir(path, dir string) bool {
 		return false
 	}
 	return rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." && !filepath.IsAbs(rel))
+}
+
+// acquireMemoryFlock takes the EXCLUSIVE, NON-BLOCKING memory flock and HOLDS it
+// (returning a release func) so `reset` can move the data dir with NO serve able
+// to start mid-move (LOW-2). ok=false means the lock could NOT be cleanly
+// acquired, so reset must refuse the dangerous data move (unless --force). Unlike
+// the memoryFlockHeld probe it CREATES the lock file/dir if absent, because reset
+// must own the lock for the whole move rather than merely detect contention.
+//
+// It FAILS CLOSED: ANY acquisition error — not just EWOULDBLOCK (a running serve
+// holds it), but also a mkdir/open/flock failure — yields ok=false. A failed
+// acquire means we canNOT prove no writer is present, and moving a live sqlite db
+// out from under a writer splits it from its wal, so treating an error as "go
+// ahead" (the old fail-OPEN behavior) risked exactly the corruption this lock
+// guards against. Only a clean acquire returns ok=true with a real release; on
+// refusal the release is nil (the caller never calls it when !ok).
+func acquireMemoryFlock() (release func(), ok bool) {
+	path := config.MemoryLockPath()
+	if path == "" {
+		return nil, false
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, false
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, false
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		// EWOULDBLOCK (held by a running serve) AND any other flock error both
+		// refuse: we cannot prove the db is safe to move.
+		return nil, false
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, true
 }
 
 // serveStillUp probes whether `pi-stack-host serve` is still answering on EITHER
@@ -387,12 +609,32 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 	// ~/.pi-stack out from under a live sqlite writer splits the db from its wal.
 	// The config-dir backup stays safe; only the DATA moves are gated. --force
 	// overrides (the user accepts the risk).
+	// LOW-2: ACQUIRE AND HOLD the memory flock across the ENTIRE data move (the
+	// daemon takes the same lock before binding its port), so a serve cannot start
+	// mid-move and split a live sqlite writer from its db/wal. serveStillUp's port
+	// probe stays a secondary signal. The lock is released (deferred) after every
+	// move completes. --force overrides both guards.
 	dataBlocked := false
-	if !a.Force && serveStillUp(env) {
-		dataBlocked = true
-		msg := "serve is still running after the stop attempt — refusing to move the data directory (a live sqlite writer would be split from its db/wal); stop it with 'pi-stack serve stop' or re-run with --force"
-		fmt.Fprintf(out, "  ✗ %s\n", msg)
-		errs = append(errs, errors.New(msg))
+	if !a.Force {
+		acquire := env.memLockAcquire
+		if acquire == nil {
+			acquire = func() (func(), bool) { return func() {}, true }
+		}
+		rel, gotLock := acquire()
+		switch {
+		case !gotLock:
+			dataBlocked = true
+		case serveStillUp(env):
+			rel() // acquired, but the port probe still sees serve — drop it and refuse
+			dataBlocked = true
+		default:
+			defer rel() // HOLD it until executeReset returns, after every move
+		}
+		if dataBlocked {
+			msg := "serve is still running (or the memory database is locked) after the stop attempt — refusing to move the data directory (a live sqlite writer would be split from its db/wal); stop it with 'pi-stack serve stop' or re-run with --force"
+			fmt.Fprintf(out, "  ✗ %s\n", msg)
+			errs = append(errs, errors.New(msg))
+		}
 	}
 
 	// 2. Move each explicit backup aside.
@@ -432,18 +674,33 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 	// "anything else" beside the preserved facts is reset too. Preservation is by
 	// cleaned absolute path (honoring a custom MEMORY_DB), never a hardcoded name.
 	// Skipped when the data move was blocked.
-	if a.KeepMemory && a.DataRoot != "" && !dataBlocked {
-		preserve, preservedLabel := keepMemoryPreserve(a.DataRoot, a.MemoryDir, a.MemoryDB)
-		entries, rdErr := fsys.readDir(a.DataRoot)
-		if rdErr != nil && !os.IsNotExist(rdErr) {
-			// A real read failure (permissions, IO) MUST surface — do not report
-			// preservation/success over a directory we could not even scan.
-			fmt.Fprintf(out, "  ✗ could not read data dir %s — %v\n", a.DataRoot, rdErr)
-			errs = append(errs, fmt.Errorf("read data dir %s: %w", a.DataRoot, rdErr))
-		} else {
+	if a.KeepMemory && !dataBlocked {
+		for _, sr := range a.SweepRoots {
+			if sr.Root == "" {
+				continue
+			}
+			preserve, preservedLabel := keepMemoryPreserve(sr.Root, sr.MemoryDir, sr.MemoryDB)
+			for _, extra := range sr.ExtraPreserve {
+				preserve[filepath.Clean(extra)] = true
+			}
+			for _, g := range sr.PreserveGlobs {
+				if matches, gErr := filepath.Glob(g); gErr == nil {
+					for _, mm := range matches {
+						preserve[filepath.Clean(mm)] = true
+					}
+				}
+			}
+			entries, rdErr := fsys.readDir(sr.Root)
+			if rdErr != nil && !os.IsNotExist(rdErr) {
+				// A real read failure (permissions, IO) MUST surface — do not report
+				// preservation/success over a directory we could not even scan.
+				fmt.Fprintf(out, "  ✗ could not read data dir %s — %v\n", sr.Root, rdErr)
+				errs = append(errs, fmt.Errorf("read data dir %s: %w", sr.Root, rdErr))
+				continue
+			}
 			for _, e := range entries {
 				name := e.Name()
-				p := filepath.Join(a.DataRoot, name)
+				p := filepath.Join(sr.Root, name)
 				if preserve[filepath.Clean(p)] || strings.Contains(name, ".bak-") {
 					continue // preserve the captured-memory artifacts
 				}

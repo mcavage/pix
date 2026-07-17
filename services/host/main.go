@@ -87,6 +87,8 @@ func main() {
 		runBackupCLI(os.Args[2:])
 	case "restore":
 		runRestoreCLI(os.Args[2:])
+	case "migrate":
+		runMigrateCLI(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
 	case "-h", "--help", "help":
@@ -138,6 +140,7 @@ subcommands:
   memory         self-learning memory store, JSON-RPC (:11435)
   backup         hot FULL backup (memory + config + op-refs) -> tar.gz
   restore        restore a FULL backup tar.gz (safe swap)
+  migrate        relocate storage to the standard XDG layout (explicit, one-time)
   mcp <name>     stdio MCP bridge (run by the sbx gateway); slack is an alias
   slack          alias for "mcp slack"
   plugin <kind>  built-in go-plugin server, self-exec (memory|knowledge|broker|mcp)

@@ -523,7 +523,7 @@ const backupUsage = `usage: pi-stack-host backup [--out PATH] [--keep N]
   config.toml, op-refs.env (refs only), and a manifest.json (profiles +
   knowledge-bundle notes) into a tar.gz.
 
-  --out PATH   archive path (default ~/.pi-stack/backups/pi-stack-backup-<ts>.tar.gz)
+  --out PATH   archive path (default ~/.local/share/pi-stack/backups/pi-stack-backup-<ts>.tar.gz)
   --keep N     keep only the newest N backups in the out dir (default 7)`
 
 func runBackupCLI(args []string) {
@@ -585,12 +585,10 @@ func runBackupCLI(args []string) {
 // record the profile names and knowledge-bundle notes in the manifest — a config
 // error never aborts a backup (the memory db is the precious part).
 func resolveBackupParams(outPath string, keep int, now time.Time) backupParams {
-	home, _ := os.UserHomeDir()
-
-	dbPath := strings.TrimSpace(os.Getenv("MEMORY_DB"))
-	if dbPath == "" {
-		dbPath = filepath.Join(home, ".pi-stack", "memory", "memory.db")
-	}
+	// Route the db + backups dir through the config module's XDG resolvers
+	// (MEMORY_DB / DATA/memory + DATA/backups, with the legacy read-fallback). No
+	// hand-built default lives here.
+	dbPath := config.MemoryDBPath()
 
 	if outPath == "" {
 		// A short random suffix makes the default name collision-proof: two backups
@@ -601,7 +599,11 @@ func resolveBackupParams(outPath string, keep int, now time.Time) backupParams {
 			name += "-" + tok
 		}
 		name += ".tar.gz"
-		outPath = filepath.Join(home, ".pi-stack", "backups", name)
+		if dir, err := config.BackupsDir(); err == nil {
+			outPath = filepath.Join(dir, name)
+		} else {
+			outPath = name
+		}
 	}
 
 	embedModel := strings.TrimSpace(os.Getenv("MEMORY_EMBED_MODEL"))

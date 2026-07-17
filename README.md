@@ -158,6 +158,8 @@ pi-stack config set|unset    # update config without hand-editing toml
 pi-stack mcp register|ls     # register/list local stdio MCP servers with sbx
 pi-stack knowledge init|use|ls  # create, attach, or inspect OKF bundles
 pi-stack state backup|restore|reset|uninstall  # on-disk state (also top-level aliases)
+pi-stack paths               # show where data lives (config/data/state XDG bases)
+pi-stack migrate             # relocate a pre-XDG install to the XDG layout (once, explicit)
 pi-stack help [--all] [verb]  # tiered help: Core by default, --all/help <verb> for the rest
 pi-stack version             # print the launcher version
 ```
@@ -165,6 +167,15 @@ pi-stack version             # print the launcher version
 Do not hand-edit `config.toml`. `pi-stack setup` and `pi-stack config set/unset`
 are the supported writers, and `pi-stack doctor` prints copy-pasteable repair
 commands when something is missing.
+
+Storage follows the XDG layout: config in `~/.config/pi-stack` (config.toml,
+op-refs.env, broker-token), the precious data in `~/.local/share/pi-stack`
+(memory, knowledge bundle, backups), and regenerable state in
+`~/.local/state/pi-stack` (knowledge index, caches, tasks, serve.pid). Overrides:
+`XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME`, or the per-artifact
+`MEMORY_DB`/`KNOWLEDGE_DB`/`KNOWLEDGE_CACHE_DIR`/`PI_STACK_CONFIG`. Run
+`pi-stack paths` to see them. A pre-XDG install keeps working in place; run
+`pi-stack migrate` once to relocate it (nothing is deleted).
 
 ## Optional Data Tools
 

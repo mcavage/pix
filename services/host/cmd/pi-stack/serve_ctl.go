@@ -29,23 +29,25 @@ import (
 // serveCtl bundles the injectable OS operations `serve stop`/`serve status` need.
 // defaultServeCtl() wires the real syscall-backed ops; tests substitute fakes.
 type serveCtl struct {
-	pidPath   func() string                           // where the pidfile lives (config.ServePidPath)
-	readPid   func(path string) (string, error)       // read the pidfile's raw contents
-	removePid func(path string) error                 // remove the pidfile
-	kill      func(pid int, sig syscall.Signal) error // send a signal (sig 0 = liveness probe)
-	verify    func(pid int) (ours bool, known bool)   // is pid our `pi-stack-host serve`? known=false => can't tell
-	sleep     func(d time.Duration)                   // poll delay (injected so tests don't wait)
+	pidPath       func() string                           // where the pidfile lives (config.ServePidPath, STATE)
+	legacyPidPath func() string                           // pre-XDG pidfile (config.LegacyServePidPath, CONFIG); read as a fallback for one release (finding 11)
+	readPid       func(path string) (string, error)       // read the pidfile's raw contents
+	removePid     func(path string) error                 // remove the pidfile
+	kill          func(pid int, sig syscall.Signal) error // send a signal (sig 0 = liveness probe)
+	verify        func(pid int) (ours bool, known bool)   // is pid our `pi-stack-host serve`? known=false => can't tell
+	sleep         func(d time.Duration)                   // poll delay (injected so tests don't wait)
 }
 
 // defaultServeCtl wires the real OS-backed control surface.
 func defaultServeCtl() serveCtl {
 	return serveCtl{
-		pidPath:   config.ServePidPath,
-		readPid:   func(path string) (string, error) { b, err := os.ReadFile(path); return string(b), err },
-		removePid: os.Remove,
-		kill:      func(pid int, sig syscall.Signal) error { return syscall.Kill(pid, sig) },
-		verify:    verifyServeProc,
-		sleep:     time.Sleep,
+		pidPath:       config.ServePidPath,
+		legacyPidPath: config.LegacyServePidPath,
+		readPid:       func(path string) (string, error) { b, err := os.ReadFile(path); return string(b), err },
+		removePid:     os.Remove,
+		kill:          func(pid int, sig syscall.Signal) error { return syscall.Kill(pid, sig) },
+		verify:        verifyServeProc,
+		sleep:         time.Sleep,
 	}
 }
 
@@ -108,9 +110,7 @@ func cmdlineIsServe(argv []string) bool {
 // (e.g. an unreadable pidfile that is NOT ENOENT) is returned so a caller can
 // distinguish it.
 func stopServe(ctl serveCtl, out io.Writer) (stopped bool, err error) {
-	path := ctl.pidPath()
-
-	raw, rerr := ctl.readPid(path)
+	path, raw, rerr := readServePidfile(ctl)
 	if rerr != nil {
 		if os.IsNotExist(rerr) {
 			fmt.Fprintln(out, "serve not running (no pidfile)")
@@ -207,6 +207,37 @@ func serveProcGone(ctl serveCtl, pid int, timeout time.Duration) bool {
 	return ctl.kill(pid, 0) != nil
 }
 
+// readServePidfile reads the pidfile with the finding-11 dual-read: the STATE
+// path (config.ServePidPath) FIRST, then the legacy CONFIG path
+// (config.LegacyServePidPath) for one release, so a serve started BEFORE the XDG
+// upgrade stays controllable across it. It returns the path that resolved (so a
+// caller removes the right file), the raw contents, and any error; an absent
+// STATE pidfile falls through to legacy, and both-absent returns the STATE
+// path's ENOENT.
+func readServePidfile(ctl serveCtl) (path, raw string, err error) {
+	paths := []string{ctl.pidPath()}
+	if ctl.legacyPidPath != nil {
+		if lp := ctl.legacyPidPath(); lp != "" && lp != paths[0] {
+			paths = append(paths, lp)
+		}
+	}
+	var firstErr error
+	for i, p := range paths {
+		raw, err = ctl.readPid(p)
+		if err == nil {
+			return p, raw, nil
+		}
+		if i == 0 {
+			firstErr = err
+		}
+		if !os.IsNotExist(err) {
+			// A real read error (not ENOENT) on any candidate surfaces immediately.
+			return p, "", err
+		}
+	}
+	return paths[0], "", firstErr
+}
+
 // serveState is the resolved `serve status` snapshot: is the supervisor running
 // (pidfile present + alive + ours), and which service ports answer.
 type serveState struct {
@@ -239,8 +270,7 @@ func servePort(env shellEnv, name string, def int) int {
 // WITHOUT signalling anything. Split from the printer so it is unit-testable.
 func resolveServeStatus(ctl serveCtl, env shellEnv) serveState {
 	var st serveState
-	path := ctl.pidPath()
-	if raw, err := ctl.readPid(path); err == nil {
+	if _, raw, err := readServePidfile(ctl); err == nil {
 		if pid, perr := strconv.Atoi(strings.TrimSpace(raw)); perr == nil && pid > 0 {
 			if ctl.kill(pid, 0) == nil {
 				ours, known := ctl.verify(pid)

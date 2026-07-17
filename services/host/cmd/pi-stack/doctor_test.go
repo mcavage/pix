@@ -22,6 +22,7 @@ type fakeEnv struct {
 	statFile map[string]bool        // files that "exist"
 	files    map[string]string      // file contents (for readFile)
 	modes    map[string]os.FileMode // path -> mode bits (for fileMode)
+	links    map[string]string      // symlink path -> target (for readlink)
 	home     string                 // fake home dir
 }
 
@@ -55,6 +56,18 @@ func (f fakeEnv) env() shellEnv {
 				return m, true
 			}
 			return 0, false
+		},
+		lstatMode: func(path string) (os.FileMode, bool) {
+			if m, ok := f.modes[path]; ok {
+				return m, true
+			}
+			return 0, false
+		},
+		readlink: func(path string) (string, error) {
+			if t, ok := f.links[path]; ok {
+				return t, nil
+			}
+			return "", os.ErrNotExist
 		},
 	}
 }

@@ -86,16 +86,16 @@ func taskRepoKey(mainroot string) string {
 }
 
 // taskStateRoot is the base dir for all task state:
-// $XDG_STATE_HOME/pi-stack/tasks (default ~/.local/state/pi-stack/tasks).
+// $XDG_STATE_HOME/pi-stack/tasks (default ~/.local/state/pi-stack/tasks). It
+// routes through config.TasksRoot() so the STATE layout lives in one place; on
+// the (rare) home-lookup failure it degrades to the relative default, matching
+// the pre-XDG-module behavior.
 func taskStateRoot() string {
-	if x := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); x != "" {
-		return filepath.Join(x, "pi-stack", "tasks")
-	}
-	home, err := os.UserHomeDir()
+	root, err := config.TasksRoot()
 	if err != nil {
-		home = "."
+		return filepath.Join("pi-stack", "tasks")
 	}
-	return filepath.Join(home, ".local", "state", "pi-stack", "tasks")
+	return root
 }
 
 // taskPaths resolves the checkout dir and metadata file for a task. name is

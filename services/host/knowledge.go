@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 
+	"pi-stack/host/config"
 	"pi-stack/host/okf"
 	"pi-stack/host/plugin"
 )
@@ -340,11 +341,10 @@ func (s *knowledgeStore) health() plugin.KnowledgeHealth {
 // The caller routes the error through its cleanup-aware fatal path; standalone
 // callers (servePluginKnowledge self-exec) may still fatal on it.
 func buildKnowledgeStore() (*knowledgeStore, bool, error) {
-	dbPath := strings.TrimSpace(os.Getenv("KNOWLEDGE_DB"))
-	if dbPath == "" {
-		home, _ := os.UserHomeDir()
-		dbPath = filepath.Join(home, ".pi-stack", "knowledge", "knowledge.db")
-	}
+	// Route the index path through the config module's XDG resolver (honors
+	// KNOWLEDGE_DB, then the new STATE/knowledge/index.db, then the legacy names
+	// via the read-fallback). No hand-built default lives here.
+	dbPath := config.KnowledgeIndexPath()
 	hasEmb := memEmbedderAvailable()
 	var embedder func(string) []float64
 	if hasEmb {

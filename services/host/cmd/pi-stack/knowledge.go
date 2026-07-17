@@ -282,16 +282,20 @@ func resolveSyncBundle(bundleFlag string) (string, error) {
 	}
 }
 
-// defaultKnowledgeDir is <config-dir>/knowledge — the sibling of config.toml,
-// resolved the same way config.Path() resolves its directory.
-func defaultKnowledgeDir() string {
-	return filepath.Join(filepath.Dir(config.Path()), "knowledge")
+// defaultKnowledgeDir is the default location for a scaffolded OKF bundle,
+// routed through the config module's XDG resolver (DATA/knowledge). It returns
+// the config helper's error (a home-dir lookup failure) so callers surface it
+// cleanly rather than scaffold at a bogus path.
+func defaultKnowledgeDir() (string, error) {
+	return config.KnowledgeBundleDefault()
 }
 
-// knowledgeCacheDir is <config-dir>/knowledge-cache — where git-URL bundles are
-// cloned/pulled so the resolved local path is what gets indexed and scoped.
+// knowledgeCacheDir is where git-URL bundles are cloned/pulled so the resolved
+// local path is what gets indexed and scoped, routed through the config module's
+// XDG resolver (STATE/knowledge-cache, honoring KNOWLEDGE_CACHE_DIR and the
+// legacy read-fallback).
 func knowledgeCacheDir() string {
-	return filepath.Join(filepath.Dir(config.Path()), "knowledge-cache")
+	return config.KnowledgeCacheDir()
 }
 
 // runKnowledgeInit is the CLI entry point for `knowledge init [DIR]`.
@@ -326,7 +330,9 @@ func resolveKnowledgeInitArgs(argv []string) (dir string, help bool, err error) 
 	if wantsHelp(argv) {
 		return "", true, nil
 	}
-	dir = defaultKnowledgeDir()
+	if dir, err = defaultKnowledgeDir(); err != nil {
+		return "", false, err
+	}
 	// Validate EVERY token, not just argv[0]: `knowledge init ./kb --jsom` must
 	// reject the trailing flag typo rather than scaffold ./kb + mutate config. Any
 	// dash-prefixed token is an unknown flag; more than one positional is an error
