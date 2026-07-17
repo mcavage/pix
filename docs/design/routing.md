@@ -1,9 +1,20 @@
 # Model routing — cost / latency / accuracy tradeoff selection
 
-**Status:** built (v1). The router replaces hand-pinned model ids on every agent
+**Status:** built (v2). The router replaces hand-pinned model ids on every agent
 with a declared *intent* (a hard constraint) that resolves to a concrete model
 from measured scores. Evals feed the scores; the resolver picks; nobody toggles
 models by hand.
+
+**v2 reshape (agent lifecycle + promptfoo).** v1 shipped the engine but read as
+"a router." v2 reframes it as what it is for: **agents are first-class objects
+you create, eval, and manage** (`pi-stack agent ls|new|edit|rm|reassess`), and
+routing is the engine that makes each one pick its model. Two concrete changes
+from v1: (1) evals moved from a hand-rolled Go harness to **promptfoo** (one
+legible home in `evals/`), the Go side only *imports* results into the
+scorecard; (2) an `agent` CLI makes the default-with-override behavior legible
+(`agent ls` shows each agent's resolved model and why). The resolver, data
+model, and `routing.json` contract are unchanged from v1. See the PR/FAQ +
+arch review in `.pi-agent/plan/agent-lifecycle/` for the full rationale.
 
 ## The problem
 
@@ -76,36 +87,64 @@ the launcher can import it, exactly like `config`.
    default) and set `constraints_met=false` with a human reason. The router never
    returns "no model" — a crew task always gets *a* model, just flagged.
 
-## Eval harness
+## Eval harness (promptfoo)
 
-`pi-stack-host evals run` measures accuracy (and records real cost + latency) so
-the scorecard is earned, not guessed.
+Evals live in `evals/` as **promptfoo** (the one legible home). The Go side no
+longer scores anything; it imports promptfoo's results into the scorecard.
 
-- **Suite** = a directory of case files (`*.json`). Each case: `id`,
-  `task_type`, `prompt`, and a scorer.
-- **Scorers** (pluggable): `contains`/`regex` (deterministic smoke), `command`
-  (write the model output to files, run a shell command, exit 0 = pass — the
-  mechanical coding scorer: build/test/patch), `judge` (LLM rates 0..1 vs a
-  rubric — for soft tasks, off by default, costs money).
-- **Runner** = an interface. The real one (`piRunner`) invokes a model exactly
-  like a subagent does (`pi --model <id> -p <prompt> --mode json --no-session
-  --no-extensions`) and reads token usage + wall time back. Tests inject a
-  **fake runner**, so the whole harness is unit-tested with **zero spend**.
-- **Budget guard**: `--budget <usd>` caps a sweep; the runner aborts before
-  exceeding it. `--dry-run` prints the plan and estimated cost, calls nothing.
-- Results aggregate per `(model, task_type)` into the scorecard, then
-  `route compile` regenerates `routing.json`.
+- **`evals/promptfooconfig.yaml`** — the candidate model list (as pi providers)
+  and which suites to run.
+- **`evals/providers/pi.js`** — a custom provider that invokes each model
+  through `pi` (hermetic: `--no-tools --no-context-files --no-session
+  --no-extensions`, throwaway cwd, wall-clock timeout). Credentials stay
+  proxy-managed; every provider `pi` reaches is evaluable with no extra code.
+  This is v1's `piRunner` insight, re-homed.
+- **`evals/suites/*.yaml`** — human-readable cases. Each carries
+  `metadata.task_type` (the scorecard key) and an assertion promptfoo scores:
+  `contains`/`icontains`/`icontains-any`/`regex` (JS regex — NO `(?i)` inline
+  flags), an external `javascript` grader under `evals/asserts/` (the mechanical
+  build/test grader), or `llm-rubric` (judge). Per-agent suites live under
+  `suites/agents/`.
+- **`pi-stack evals run`** shells `promptfoo eval`, then imports the results
+  (`routing.ImportPromptfoo`) into the scorecard keyed by `(model, task_type)`:
+  accuracy = mean promptfoo score, latency = p50, cost = mean. Rows whose model
+  invocation errored (`response.error`) are excluded so a transient blip can't
+  overwrite a good score; a failed *assertion* is a legitimate 0. `--budget`
+  evaluates one model at a time and stops before the cap; `--dry-run` calls
+  nothing; `--save` writes the scorecard; then `route compile`.
+- **`pi-stack evals import <results.json>`** folds an existing promptfoo run in.
 
 Deliberately NOT run unattended: evals cost real money, which is the exact thing
 this feature exists to control. It is a one-command sweep the user runs on a new
-model release.
+model release. The importer's schema is pinned by a real `results.json` fixture
+(`services/host/routing/testdata/`).
 
 ## CLI
 
 Host (`pi-stack-host`): `route pick <intent>`, `route compile`, `route show`,
-`models`, `evals run|show|ls`.
-Launcher (`pi-stack`): `route`, `evals`, `models` (passthrough to the host
-binary), and `run --intent <name>` resolves the interactive session model.
+`models`, `evals run|import|show|ls`.
+Launcher (`pi-stack`): `agent ls|new|edit|rm|reassess`, `route`, `evals`
+(passthrough to the host binary), and `run --intent <name>` resolves the
+interactive session model.
+
+## Agent lifecycle
+
+An agent is a first-class object (`agents/<name>.md` frontmatter): identity,
+`description` (used for auto-selection), prompt, `tools`, an **`intent`** (not a
+pinned model), an optional provider constraint, an advisory `budget_usd`, and an
+eval suite under `evals/suites/agents/`.
+
+- **`agent ls`** shows each agent's resolved model and WHY (its intent, and
+  whether the resolver fell back). This is what makes "sensible default with
+  override" legible — you never pick a model per task.
+- **`agent new`** scaffolds the md + a starter suite; **`agent new
+  --interactive`** runs the `agent-new` skill (powered by the `authoring` intent
+  → Opus) to author the prompt + real eval cases conversationally, run them, show
+  the tradeoff table, and set the default.
+- **`agent edit` / `agent rm`** manage an agent without hand-editing frontmatter.
+- **`agent reassess`** re-levels the roster: `--model NEW` evaluates the new
+  model across every suite and recompiles; without it, re-resolves under the
+  current policy (zero spend — the new-user-budget flow). Prints the routing diff.
 
 ## Sandbox integration
 
