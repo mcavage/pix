@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +12,15 @@ import (
 	"strings"
 	"time"
 )
+
+// env returns $key trimmed, or def when unset/blank. (Local copy so the routing
+// package stays independent of the host main package.)
+func env(key, def string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return def
+}
 
 // Case is one eval: a prompt with a task type and a scorer. A suite is a
 // directory of *.json case files.
@@ -43,6 +53,12 @@ type RunResult struct {
 	Output       string
 	InputTokens  int
 	OutputTokens int
+	// CostUSD is the provider-reported cost when the runner could read pi's own
+	// usage.cost.total (authoritative — it accounts for cache tokens + real
+	// provider rates). CostReported says whether to trust it over the registry
+	// estimate. Zero + CostReported=false means "fall back to registry pricing".
+	CostUSD      float64
+	CostReported bool
 	LatencyMs    float64
 	Err          error
 }
@@ -117,6 +133,72 @@ func LoadDefaultSuite() ([]Case, error) {
 	return cases, nil
 }
 
+// knownScorers is the set of scorer kinds RunEvals can execute.
+var knownScorers = map[string]bool{"contains": true, "regex": true, "command": true, "judge": true}
+
+// ValidateSuite checks every case BEFORE any paid model call, so a typo'd regex,
+// an unknown scorer kind, a command scorer with no command, or a judge scorer
+// with no judge model fails fast instead of silently scoring 0 (which would
+// poison the scorecard after real spend). Returns the first problem found.
+func ValidateSuite(cases []Case) error {
+	if len(cases) == 0 {
+		return fmt.Errorf("empty suite")
+	}
+	seen := map[string]bool{}
+	for _, c := range cases {
+		if c.ID == "" {
+			return fmt.Errorf("a case has an empty id")
+		}
+		if seen[c.ID] {
+			return fmt.Errorf("duplicate case id %q", c.ID)
+		}
+		seen[c.ID] = true
+		if c.TaskType == "" {
+			return fmt.Errorf("case %q: empty task_type", c.ID)
+		}
+		if !knownScorers[c.Scorer.Kind] {
+			return fmt.Errorf("case %q: unknown scorer kind %q", c.ID, c.Scorer.Kind)
+		}
+		switch c.Scorer.Kind {
+		case "regex":
+			if _, err := regexp.Compile(c.Scorer.Expect); err != nil {
+				return fmt.Errorf("case %q: bad regex: %w", c.ID, err)
+			}
+		case "contains":
+			if c.Scorer.Expect == "" {
+				return fmt.Errorf("case %q: contains scorer needs a non-empty expect", c.ID)
+			}
+		case "command":
+			if len(c.Scorer.Command) == 0 {
+				return fmt.Errorf("case %q: command scorer needs a command", c.ID)
+			}
+			for name := range c.Scorer.Files {
+				if !safeRelPath(name) {
+					return fmt.Errorf("case %q: unsafe seeded file path %q (no absolute or ../ paths)", c.ID, name)
+				}
+			}
+		case "judge":
+			if c.Scorer.JudgeModel == "" {
+				return fmt.Errorf("case %q: judge scorer needs a judge_model", c.ID)
+			}
+		}
+	}
+	return nil
+}
+
+// safeRelPath reports whether name is a relative path that stays inside the
+// work dir (no absolute path, no .. traversal).
+func safeRelPath(name string) bool {
+	if name == "" || filepath.IsAbs(name) {
+		return false
+	}
+	clean := filepath.Clean(name)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
+}
+
 // LoadSuite reads every *.json case file in dir.
 func LoadSuite(dir string) ([]Case, error) {
 	entries, err := os.ReadDir(dir)
@@ -155,6 +237,11 @@ func RunEvals(reg *Registry, base *Scorecard, cases []Case, opts EvalOptions, ru
 	if now == nil {
 		now = time.Now
 	}
+	// Validate the whole suite BEFORE any paid call so a bad case never spends
+	// money and then poisons the scorecard with a spurious 0.
+	if err := ValidateSuite(cases); err != nil {
+		return nil, nil, err
+	}
 	models := opts.Models
 	if len(models) == 0 {
 		for _, m := range reg.Models {
@@ -188,33 +275,59 @@ func RunEvals(reg *Registry, base *Scorecard, cases []Case, opts EvalOptions, ru
 		if !ok {
 			return nil, nil, fmt.Errorf("model %q not in registry", id)
 		}
+		// Canonicalize: an id may be an alias, but the scorecard + resolver key on
+		// the canonical model.ID, so aggregate under that (else --models <alias>
+		// --save would write a row the resolver never reads).
+		canon := model.ID
 		for _, c := range cases {
 			if opts.BudgetUSD > 0 && rep.SpentUSD >= opts.BudgetUSD {
 				rep.Stopped = fmt.Sprintf("budget $%.2f reached after $%.4f", opts.BudgetUSD, rep.SpentUSD)
 				goto done
 			}
-			res := runner.Run(id, c.Prompt)
-			cost := model.CostFor(res.InputTokens, res.OutputTokens)
+			res := runner.Run(canon, c.Prompt)
+			cost := costOf(model, res)
 			rep.SpentUSD += cost
 			run := EvalRun{
-				Model: id, CaseID: c.ID, TaskType: c.TaskType,
+				Model: canon, CaseID: c.ID, TaskType: c.TaskType,
 				CostUSD: cost, LatencyMs: res.LatencyMs,
 				InputTokens: res.InputTokens, OutputTokens: res.OutputTokens,
 			}
+			// invocationFailed = the model call itself errored (auth, timeout, dead
+			// stream). infraFailed = a scorer could not run (bad setup). Neither is a
+			// real accuracy-0 signal, so both are EXCLUDED from the aggregate rather
+			// than dragging a model's measured score to 0 after a transient blip.
+			exclude := false
 			if res.Err != nil {
 				run.Err = res.Err.Error()
-				// A failed invocation scores 0 (a model that errors is not accurate).
+				exclude = true
 			} else {
-				run.Score = scoreCase(c, res.Output, runner)
+				budgetLeft := -1.0
+				if opts.BudgetUSD > 0 {
+					budgetLeft = opts.BudgetUSD - rep.SpentUSD
+				}
+				score, extraCost, serr := scoreCase(c, res.Output, runner, budgetLeft)
+				rep.SpentUSD += extraCost // judge-model spend counts against the budget
+				if extraCost > 0 {
+					run.CostUSD += extraCost
+				}
+				if serr != nil {
+					run.Err = serr.Error()
+					exclude = true
+				} else {
+					run.Score = score
+				}
 			}
 			rep.Runs = append(rep.Runs, run)
-			k := key(id, c.TaskType)
+			if exclude {
+				continue // do not let a failed run overwrite a good score
+			}
+			k := key(canon, c.TaskType)
 			if agg[k] == nil {
 				agg[k] = &acc{}
 			}
 			agg[k].scores = append(agg[k].scores, run.Score)
 			agg[k].lats = append(agg[k].lats, res.LatencyMs)
-			agg[k].costs = append(agg[k].costs, cost)
+			agg[k].costs = append(agg[k].costs, run.CostUSD)
 		}
 	}
 done:
@@ -246,29 +359,44 @@ done:
 	return rep, out, nil
 }
 
-// scoreCase turns one output into a 0..1 accuracy per the case's scorer.
-func scoreCase(c Case, output string, runner Runner) float64 {
+// costOf returns the authoritative cost of one invocation: pi's own reported
+// cost.total when available (it accounts for cache tokens + real provider
+// rates), else the registry-price estimate from token counts.
+func costOf(m Model, res RunResult) float64 {
+	if res.CostReported {
+		return res.CostUSD
+	}
+	return m.CostFor(res.InputTokens, res.OutputTokens)
+}
+
+// scoreCase turns one output into a 0..1 accuracy per the case's scorer. It
+// returns (score, extraCostUSD, infraErr): extraCost is judge-model spend that
+// must count against the budget; infraErr is a scorer-infrastructure failure
+// (bad command, judge unreachable) that must NOT be recorded as a real 0.
+// budgetLeft<0 means unlimited; a judge scorer is skipped when it is 0.
+func scoreCase(c Case, output string, runner Runner, budgetLeft float64) (float64, float64, error) {
 	switch c.Scorer.Kind {
 	case "contains":
 		if strings.Contains(strings.ToLower(output), strings.ToLower(c.Scorer.Expect)) {
-			return 1
+			return 1, 0, nil
 		}
-		return 0
+		return 0, 0, nil
 	case "regex":
 		re, err := regexp.Compile(c.Scorer.Expect)
 		if err != nil {
-			return 0
+			return 0, 0, fmt.Errorf("bad regex: %w", err)
 		}
 		if re.MatchString(output) {
-			return 1
+			return 1, 0, nil
 		}
-		return 0
+		return 0, 0, nil
 	case "command":
-		return scoreCommand(c, output)
+		s, err := scoreCommand(c, output)
+		return s, 0, err
 	case "judge":
-		return scoreJudge(c, output, runner)
+		return scoreJudge(c, output, runner, budgetLeft)
 	default:
-		return 0
+		return 0, 0, fmt.Errorf("unknown scorer kind %q", c.Scorer.Kind)
 	}
 }
 
@@ -276,34 +404,69 @@ func scoreCase(c Case, output string, runner Runner) float64 {
 // files, runs the command in workdir, and scores 1 on exit 0 else 0. The
 // mechanical coding grader: a real command (go test, a build, a diff apply)
 // decides correctness.
-func scoreCommand(c Case, output string) float64 {
+// commandScorerTimeout bounds a command scorer so a hung grader can't wedge the
+// sweep. Tunable via EVAL_CMD_TIMEOUT_MS.
+func commandScorerTimeout() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("EVAL_CMD_TIMEOUT_MS")); v != "" {
+		var ms int
+		if _, err := fmt.Sscanf(v, "%d", &ms); err == nil && ms > 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	return 60 * time.Second
+}
+
+// scoreCommand writes the model output to <workdir>/output.txt, seeds any static
+// files, runs the command in workdir, and scores 1 on exit 0 else 0. Hardened:
+// the command runs with a DEADLINE (killed on timeout), a SCRUBBED environment
+// (no inherited host secrets), and in its own process group (so a fork can't
+// outlive the deadline). Returns an infra error for a setup failure so a broken
+// case is not misread as a legitimate score 0. NOTE: the command still runs on
+// the host; a command scorer must only be pointed at TRUSTED graders. Untrusted
+// model output being executed should run inside a container/VM — see
+// docs/design/routing.md.
+func scoreCommand(c Case, output string) (float64, error) {
 	if len(c.Scorer.Command) == 0 {
-		return 0
+		return 0, fmt.Errorf("command scorer has no command")
 	}
 	dir, err := os.MkdirTemp("", "eval-cmd-*")
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	defer os.RemoveAll(dir)
 	if err := os.WriteFile(filepath.Join(dir, "output.txt"), []byte(output), 0o644); err != nil {
-		return 0
+		return 0, err
 	}
 	for name, content := range c.Scorer.Files {
+		if !safeRelPath(name) {
+			return 0, fmt.Errorf("unsafe seeded file path %q", name)
+		}
 		p := filepath.Join(dir, name)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return 0
+			return 0, err
 		}
 		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-			return 0
+			return 0, err
 		}
 	}
-	cmd := exec.Command(c.Scorer.Command[0], c.Scorer.Command[1:]...)
+	ctx, cancel := context.WithTimeout(context.Background(), commandScorerTimeout())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, c.Scorer.Command[0], c.Scorer.Command[1:]...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "OUTPUT_FILE="+filepath.Join(dir, "output.txt"))
-	if err := cmd.Run(); err != nil {
-		return 0
+	// Scrubbed, minimal env: no inherited secrets. Only PATH + the output path.
+	cmd.Env = []string{
+		"PATH=" + env("PATH", "/usr/bin:/bin"),
+		"OUTPUT_FILE=" + filepath.Join(dir, "output.txt"),
 	}
-	return 1
+	if err := cmd.Run(); err != nil {
+		// A non-zero exit is a legitimate score 0 (the grader said "fail"). A
+		// context deadline is an infra failure (grader hung), surfaced as error.
+		if ctx.Err() == context.DeadlineExceeded {
+			return 0, fmt.Errorf("command scorer timed out after %s", commandScorerTimeout())
+		}
+		return 0, nil
+	}
+	return 1, nil
 }
 
 // judgeRe extracts a leading 0..1 float the judge model is asked to emit first.
@@ -311,25 +474,32 @@ var judgeRe = regexp.MustCompile(`(?s)^\s*([01](?:\.\d+)?)`)
 
 // scoreJudge asks an LLM to rate the output 0..1 against a rubric. Opt-in and
 // metered (it calls a model). Returns 0 on any parse/invocation failure.
-func scoreJudge(c Case, output string, runner Runner) float64 {
+func scoreJudge(c Case, output string, runner Runner, budgetLeft float64) (float64, float64, error) {
 	if runner == nil || c.Scorer.JudgeModel == "" {
-		return 0
+		return 0, 0, fmt.Errorf("judge scorer misconfigured")
+	}
+	// Respect the budget: a judge call costs money, so skip it (infra-skip, not a
+	// real 0) when there is no headroom left.
+	if budgetLeft == 0 {
+		return 0, 0, fmt.Errorf("judge skipped: budget exhausted")
 	}
 	prompt := fmt.Sprintf(
 		"You are a strict grader. Rate the ANSWER from 0.0 to 1.0 against the RUBRIC. "+
 			"Reply with ONLY the number on the first line.\n\nRUBRIC:\n%s\n\nANSWER:\n%s\n",
 		c.Scorer.Expect, output)
 	res := runner.Run(c.Scorer.JudgeModel, prompt)
+	// The judge's own spend counts against the budget regardless of parse success.
+	cost := res.CostUSD
 	if res.Err != nil {
-		return 0
+		return 0, cost, fmt.Errorf("judge invocation failed: %w", res.Err)
 	}
 	m := judgeRe.FindStringSubmatch(res.Output)
 	if m == nil {
-		return 0
+		return 0, cost, fmt.Errorf("judge did not emit a leading 0..1 score")
 	}
 	var v float64
 	if _, err := fmt.Sscanf(m[1], "%f", &v); err != nil {
-		return 0
+		return 0, cost, fmt.Errorf("judge score parse: %w", err)
 	}
 	if v < 0 {
 		v = 0
@@ -337,7 +507,7 @@ func scoreJudge(c Case, output string, runner Runner) float64 {
 	if v > 1 {
 		v = 1
 	}
-	return v
+	return v, cost, nil
 }
 
 func mean(xs []float64) float64 {

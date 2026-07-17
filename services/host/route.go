@@ -135,6 +135,9 @@ func routePick(args []string) {
 
 func routeCompile(args []string) {
 	reg, sc, pol := loadAll()
+	if err := routing.Validate(reg, sc, pol); err != nil {
+		fatal(fmt.Errorf("config invalid, refusing to compile: %w", err))
+	}
 	cr := routing.Compile(reg, sc, pol, time.Now())
 	out := flagValue(args, "--out", "")
 	if out == "" {

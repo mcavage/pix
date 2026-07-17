@@ -106,24 +106,40 @@ interface CompiledRouting {
 	version?: number;
 	routes?: Record<string, CompiledRoute>;
 }
+// ROUTING_SCHEMA is the routing.json version this build understands. A file
+// written by a NEWER host is rejected (we don't guess at a shape we don't know)
+// rather than silently mis-routing.
+const ROUTING_SCHEMA = 1;
 function loadRouting(): CompiledRouting | null {
 	try {
 		const p = path.join(getAgentDir(), "routing.json");
 		if (!fs.existsSync(p)) return null;
 		const parsed = JSON.parse(fs.readFileSync(p, "utf-8"));
-		if (parsed && typeof parsed === "object" && parsed.routes)
-			return parsed as CompiledRouting;
+		if (!parsed || typeof parsed !== "object" || !parsed.routes) return null;
+		if (typeof parsed.version === "number" && parsed.version !== ROUTING_SCHEMA) {
+			try {
+				process.stderr.write(
+					`[subagents] routing.json schema v${parsed.version} != v${ROUTING_SCHEMA}; ignoring (agents inherit parent model).\n`,
+				);
+			} catch {
+				/* best-effort */
+			}
+			return null;
+		}
+		return parsed as CompiledRouting;
 	} catch {
 		/* best-effort; a missing/bad file just means "inherit parent model" */
 	}
 	return null;
 }
 const ROUTING = loadRouting();
-// resolveIntentModel maps an intent name to its compiled model id, or "" when the
-// intent is unknown / routing.json is absent (caller inherits the parent model).
+// resolveIntentModel maps an intent name to its compiled model id. Returns ""
+// (caller inherits the parent model) when the intent is unknown, routing.json is
+// absent, or the compiled model id is not fully qualified (provider/id) — a bare
+// id can resolve to a keyless provider and hang, so we never forward one.
 function resolveIntentModel(intent: string): string {
-	const r = ROUTING?.routes?.[intent];
-	return (r?.model || "").trim();
+	const m = (ROUTING?.routes?.[intent]?.model || "").trim();
+	return m.includes("/") ? m : "";
 }
 
 // ─── Agent discovery (pi-stack convention: filename = name) ──────────────────

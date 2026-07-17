@@ -8,10 +8,13 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,6 +55,7 @@ run flags:
   --models a,b   only these model ids (default: every available model)
   --budget USD   hard spend cap; the sweep halts before exceeding it
   --dry-run      print the plan + case matrix, call NO models, spend nothing
+  --no-budget    allow an un-capped real sweep (otherwise --budget is required)
   --save         write the measured scores into the scorecard (default: preview)
   --json         machine-readable output
 
@@ -61,7 +65,10 @@ run BY HAND on a new-model release, then followed by `+"`route compile`"+`.
 }
 
 func evalsRun(args []string) {
-	reg, sc, _ := loadAll()
+	reg, sc, pol := loadAll()
+	if err := routing.Validate(reg, sc, pol); err != nil {
+		fatal(fmt.Errorf("config invalid, refusing to run: %w", err))
+	}
 	suite := flagValue(args, "--suite", "")
 	var cases []routing.Case
 	var err error
@@ -94,9 +101,17 @@ func evalsRun(args []string) {
 		}
 	}
 	if b := flagValue(args, "--budget", ""); b != "" {
-		if _, e := fmt.Sscanf(b, "%f", &opts.BudgetUSD); e != nil {
-			fatal(fmt.Errorf("bad --budget %q", b))
+		v, e := strconv.ParseFloat(strings.TrimSpace(b), 64)
+		if e != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
+			fatal(fmt.Errorf("--budget must be a positive number (got %q)", b))
 		}
+		opts.BudgetUSD = v
+	}
+	// A real (non-dry-run) sweep with no budget is a foot-gun given this feature
+	// exists to control spend: require an explicit --budget or an explicit
+	// --no-budget opt-out.
+	if !opts.DryRun && opts.BudgetUSD == 0 && !hasFlag(args, "--no-budget") {
+		fatal(fmt.Errorf("refusing to run un-capped: pass --budget <usd> (or --no-budget to override, or --dry-run to preview)"))
 	}
 
 	rep, updated, err := routing.RunEvals(reg, sc, cases, opts, &piRunner{})
@@ -173,7 +188,7 @@ func evalsLs(args []string) {
 type piRunner struct{}
 
 // piEvent is the subset of pi's --mode json events we need: assistant
-// message_end carries usage + text content.
+// message_end carries usage (incl. cache tokens + pi's own cost) + text content.
 type piEvent struct {
 	Type    string `json:"type"`
 	Message struct {
@@ -181,16 +196,45 @@ type piEvent struct {
 		Model   string          `json:"model"`
 		Content json.RawMessage `json:"content"`
 		Usage   struct {
-			Input  int `json:"input"`
-			Output int `json:"output"`
+			Input      int `json:"input"`
+			Output     int `json:"output"`
+			CacheRead  int `json:"cacheRead"`
+			CacheWrite int `json:"cacheWrite"`
+			Cost       struct {
+				Total float64 `json:"total"`
+			} `json:"cost"`
 		} `json:"usage"`
 	} `json:"message"`
 }
 
+// piRunTimeout bounds a single model invocation. pi has NO client read timeout,
+// so a dead SSE stream would otherwise wedge the whole sweep forever. Tunable
+// via PI_EVAL_TIMEOUT_MS (default 5 min).
+func piRunTimeout() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("PI_EVAL_TIMEOUT_MS")); v != "" {
+		var ms int
+		if _, e := fmt.Sscanf(v, "%d", &ms); e == nil && ms > 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	return 5 * time.Minute
+}
+
 func (piRunner) Run(model, prompt string) routing.RunResult {
 	bin := env("PI_BIN", "pi")
-	cmd := exec.Command(bin, "--model", model, "-p", prompt,
-		"--mode", "json", "--no-session", "--no-extensions")
+	// A run in its own temp dir so no repo AGENTS.md/context leaks in, and
+	// --no-tools so the evaluated model CANNOT touch the host (no bash/write/edit
+	// on untrusted model output). --no-context-files + --no-session + --no-extensions
+	// keep the call hermetic and reproducible.
+	ctx, cancel := context.WithTimeout(context.Background(), piRunTimeout())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "--model", model, "-p", prompt,
+		"--mode", "json", "--no-session", "--no-extensions",
+		"--no-tools", "--no-context-files")
+	if dir, derr := os.MkdirTemp("", "eval-run-*"); derr == nil {
+		cmd.Dir = dir
+		defer os.RemoveAll(dir)
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return routing.RunResult{Err: err}
@@ -202,9 +246,11 @@ func (piRunner) Run(model, prompt string) routing.RunResult {
 	}
 
 	var text strings.Builder
-	var inTok, outTok int
+	var inTok, outTok, cacheR, cacheW int
+	var reportedCost float64
+	var costSeen bool
 	sc := bufio.NewScanner(stdout)
-	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024) // large lines (long completions)
+	sc.Buffer(make([]byte, 1024*1024), 64*1024*1024) // large lines (long completions)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
@@ -217,17 +263,33 @@ func (piRunner) Run(model, prompt string) routing.RunResult {
 		if ev.Type == "message_end" && ev.Message.Role == "assistant" {
 			inTok += ev.Message.Usage.Input
 			outTok += ev.Message.Usage.Output
+			cacheR += ev.Message.Usage.CacheRead
+			cacheW += ev.Message.Usage.CacheWrite
+			if ev.Message.Usage.Cost.Total > 0 {
+				reportedCost += ev.Message.Usage.Cost.Total
+				costSeen = true
+			}
 			text.WriteString(extractText(ev.Message.Content))
 		}
 	}
+	// A scanner error (e.g. a token bigger than the buffer) must be surfaced, not
+	// silently swallowed — otherwise a truncated stream reads as a cheap 0.
+	scanErr := sc.Err()
 	waitErr := cmd.Wait()
 	res := routing.RunResult{
 		Output:       text.String(),
-		InputTokens:  inTok,
+		InputTokens:  inTok + cacheR + cacheW,
 		OutputTokens: outTok,
+		CostUSD:      reportedCost,
+		CostReported: costSeen,
 		LatencyMs:    float64(time.Since(start).Milliseconds()),
 	}
-	if waitErr != nil {
+	switch {
+	case ctx.Err() == context.DeadlineExceeded:
+		res.Err = fmt.Errorf("pi run timed out after %s", piRunTimeout())
+	case scanErr != nil:
+		res.Err = fmt.Errorf("reading pi output: %w", scanErr)
+	case waitErr != nil:
 		res.Err = waitErr
 	}
 	return res

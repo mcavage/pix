@@ -105,14 +105,25 @@ func TestRunEvals_DryRunCallsNothing(t *testing.T) {
 	}
 }
 
+// score is a tiny test helper: run scoreCase with an unlimited budget and assert
+// there was no infra error, returning just the score.
+func score(t *testing.T, c Case, output string, r Runner) float64 {
+	t.Helper()
+	s, _, err := scoreCase(c, output, r, -1)
+	if err != nil {
+		t.Fatalf("unexpected infra error: %v", err)
+	}
+	return s
+}
+
 func TestScoreCommand(t *testing.T) {
 	// The mechanical grader: a command reads OUTPUT_FILE and greps it.
 	c := Case{Scorer: Scorer{Kind: "command",
 		Command: []string{"sh", "-c", "grep -q PASS \"$OUTPUT_FILE\""}}}
-	if s := scoreCase(c, "result: PASS", nil); s != 1 {
+	if s := score(t, c, "result: PASS", nil); s != 1 {
 		t.Fatalf("PASS output scored %v, want 1", s)
 	}
-	if s := scoreCase(c, "result: FAIL", nil); s != 0 {
+	if s := score(t, c, "result: FAIL", nil); s != 0 {
 		t.Fatalf("FAIL output scored %v, want 0", s)
 	}
 }
@@ -122,11 +133,21 @@ func TestScoreCommand_SeedsFiles(t *testing.T) {
 	c := Case{Scorer: Scorer{Kind: "command",
 		Files:   map[string]string{"expected.txt": "42"},
 		Command: []string{"sh", "-c", "test \"$(cat expected.txt)\" = \"$(cat \"$OUTPUT_FILE\")\""}}}
-	if s := scoreCase(c, "42", nil); s != 1 {
+	if s := score(t, c, "42", nil); s != 1 {
 		t.Fatalf("matching output scored %v, want 1", s)
 	}
-	if s := scoreCase(c, "43", nil); s != 0 {
+	if s := score(t, c, "43", nil); s != 0 {
 		t.Fatalf("mismatched output scored %v, want 0", s)
+	}
+}
+
+func TestScoreCommand_UnsafePathIsInfraError(t *testing.T) {
+	// A seeded path escaping the workdir must be refused (infra error), never run.
+	c := Case{Scorer: Scorer{Kind: "command",
+		Files:   map[string]string{"../escape.txt": "x"},
+		Command: []string{"true"}}}
+	if _, _, err := scoreCase(c, "out", nil, -1); err == nil {
+		t.Fatal("expected an infra error for a ../ seeded path")
 	}
 }
 
@@ -134,8 +155,17 @@ func TestScoreJudge(t *testing.T) {
 	// The judge model emits a leading score; we parse and clamp it.
 	runner := &fakeRunner{outputs: map[string]string{"judge": "0.75\nBecause it was mostly right."}}
 	c := Case{Scorer: Scorer{Kind: "judge", JudgeModel: "judge", Expect: "is it good?"}}
-	if s := scoreCase(c, "some answer", runner); s != 0.75 {
+	if s := score(t, c, "some answer", runner); s != 0.75 {
 		t.Fatalf("judge score = %v, want 0.75", s)
+	}
+}
+
+func TestScoreJudge_SkippedWhenBudgetExhausted(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string]string{"judge": "1.0"}}
+	c := Case{Scorer: Scorer{Kind: "judge", JudgeModel: "judge", Expect: "r"}}
+	_, _, err := scoreCase(c, "a", runner, 0) // 0 budget left
+	if err == nil {
+		t.Fatal("judge should be skipped (infra error) when budget is exhausted")
 	}
 }
 

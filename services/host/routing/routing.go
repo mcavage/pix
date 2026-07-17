@@ -137,6 +137,68 @@ func (p *Policy) Intent(name string) (Intent, bool) {
 	return Intent{}, false
 }
 
+// validObjectives are the objectives the resolver understands. An unknown one
+// silently degrades to balanced in rankBy; Validate rejects it up front so a
+// typo ("accuarcy") is caught at compile/eval time, not by mystery routing.
+var validObjectives = map[string]bool{"accuracy": true, "cost": true, "latency": true, "balanced": true, "": true}
+
+// Validate checks the three truth sources for internal consistency BEFORE they
+// are used to compile routes or spend money on evals: prices sane, scores in
+// range and pointing at real models, intents using a known objective and a
+// resolvable fallback, and a resolvable default fallback. Returns the first
+// problem, or nil.
+func Validate(reg *Registry, sc *Scorecard, pol *Policy) error {
+	if len(reg.Models) == 0 {
+		return fmt.Errorf("registry is empty")
+	}
+	ids := map[string]bool{}
+	for _, m := range reg.Models {
+		if !strings.Contains(m.ID, "/") {
+			return fmt.Errorf("model id %q is not fully qualified (provider/id)", m.ID)
+		}
+		if ids[m.ID] {
+			return fmt.Errorf("duplicate model id %q", m.ID)
+		}
+		ids[m.ID] = true
+		if m.InputPerMTok < 0 || m.OutputPerMTok < 0 {
+			return fmt.Errorf("model %q has a negative price", m.ID)
+		}
+	}
+	for _, s := range sc.Scores {
+		if _, ok := reg.Get(s.Model); !ok {
+			return fmt.Errorf("scorecard references unknown model %q", s.Model)
+		}
+		if s.Accuracy < 0 || s.Accuracy > 1 {
+			return fmt.Errorf("scorecard accuracy for %q/%q out of range: %v", s.Model, s.TaskType, s.Accuracy)
+		}
+	}
+	if pol.DefaultFallback == "" {
+		return fmt.Errorf("policy has no default_fallback")
+	}
+	if _, ok := reg.Get(pol.DefaultFallback); !ok {
+		return fmt.Errorf("policy default_fallback %q not in registry", pol.DefaultFallback)
+	}
+	names := map[string]bool{}
+	for _, in := range pol.Intents {
+		if in.Name == "" {
+			return fmt.Errorf("an intent has an empty name")
+		}
+		if names[in.Name] {
+			return fmt.Errorf("duplicate intent %q", in.Name)
+		}
+		names[in.Name] = true
+		if !validObjectives[in.Objective] {
+			return fmt.Errorf("intent %q has unknown objective %q", in.Name, in.Objective)
+		}
+		if in.Fallback != "" {
+			if _, ok := reg.Get(in.Fallback); !ok {
+				return fmt.Errorf("intent %q fallback %q not in registry", in.Name, in.Fallback)
+			}
+		}
+	}
+	return nil
+}
+
 // ── paths ────────────────────────────────────────────────────────────────────
 
 // Dir is the on-disk routing dir: $ROUTING_DIR, else ~/.pi-stack/routing.
