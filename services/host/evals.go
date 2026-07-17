@@ -24,14 +24,17 @@ import (
 	"pi-stack/host/routing"
 )
 
-// configProviderModels reads the model ids promptfooconfig.yaml can actually run
-// (provider label + config.model). Used to reject a requested model that has no
-// provider entry, so a sweep never silently produces zero rows.
-func configProviderModels(cfgPath string) map[string]bool {
-	set := map[string]bool{}
+// configProviderLabels reads the provider LABELS from promptfooconfig.yaml — the
+// exact key `runPromptfoo` filters on (--filter-providers matches the label). A
+// requested model is valid iff it equals a label; validating against config.model
+// instead would pass a model that the filter then can't select. The config sets
+// label == model id (documented there); a provider whose label differs from its
+// config.model is a misconfig and is reported.
+func configProviderLabels(cfgPath string) (labels map[string]bool, mislabeled []string) {
+	labels = map[string]bool{}
 	b, err := os.ReadFile(cfgPath)
 	if err != nil {
-		return set
+		return labels, nil
 	}
 	var c struct {
 		Providers []struct {
@@ -42,17 +45,17 @@ func configProviderModels(cfgPath string) map[string]bool {
 		} `yaml:"providers"`
 	}
 	if yaml.Unmarshal(b, &c) != nil {
-		return set
+		return labels, nil
 	}
 	for _, p := range c.Providers {
 		if p.Label != "" {
-			set[p.Label] = true
-		}
-		if p.Config.Model != "" {
-			set[p.Config.Model] = true
+			labels[p.Label] = true
+			if p.Config.Model != "" && p.Config.Model != p.Label {
+				mislabeled = append(mislabeled, fmt.Sprintf("%s (label) != %s (model)", p.Label, p.Config.Model))
+			}
 		}
 	}
-	return set
+	return labels, mislabeled
 }
 
 func runEvalsHost(args []string) {
@@ -122,7 +125,10 @@ func evalsRun(args []string) {
 		fatal(fmt.Errorf("promptfoo not on PATH (npm i -g promptfoo), or set PROMPTFOO_BIN"))
 	}
 
-	configured := configProviderModels(cfg)
+	configured, mislabeled := configProviderLabels(cfg)
+	if len(mislabeled) > 0 {
+		fmt.Fprintf(os.Stderr, "warning: promptfoo provider label != config.model for %v; --models filters on the label, so keep them equal.\n", mislabeled)
+	}
 
 	// Which models: explicit --models, else every available model in the registry
 	// that is also a configured promptfoo provider.

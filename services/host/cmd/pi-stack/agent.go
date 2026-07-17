@@ -12,6 +12,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,16 @@ import (
 	"gopkg.in/yaml.v3"
 	"pi-stack/host/routing"
 )
+
+// parseBudget parses a budget string and rejects non-positive, NaN, and Inf
+// (ParseFloat accepts "NaN"/"+Inf", which would poison the frontmatter).
+func parseBudget(s string) (float64, error) {
+	b, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(b) || math.IsInf(b, 0) || b <= 0 {
+		return 0, fmt.Errorf("budget must be a positive finite number (got %q)", s)
+	}
+	return b, nil
+}
 
 // agentNameRe is the strict validator for an agent name. It forbids path
 // separators and dots, so a name can never traverse out of agentsDir() in
@@ -290,9 +301,9 @@ func agentNew(args []string) {
 	fmStruct.Intent = intent
 	fmStruct.Tools = tools
 	if budget != "" {
-		b, err := strconv.ParseFloat(budget, 64)
-		if err != nil || b <= 0 {
-			fatalLauncher(fmt.Errorf("--budget must be a positive number (got %q)", budget))
+		b, err := parseBudget(budget)
+		if err != nil {
+			fatalLauncher(err)
 		}
 		fmStruct.BudgetUSD = b
 	}
@@ -381,9 +392,8 @@ func agentEdit(args []string) {
 		changed = true
 	}
 	if v := flagValueLauncher(args, "--budget", ""); v != "" {
-		b, err := strconv.ParseFloat(v, 64)
-		if err != nil || b <= 0 {
-			fatalLauncher(fmt.Errorf("--budget must be a positive number (got %q)", v))
+		if _, err := parseBudget(v); err != nil {
+			fatalLauncher(err)
 		}
 		set("budget_usd", v, "!!float")
 		changed = true
@@ -469,16 +479,33 @@ func agentReassess(args []string) {
 
 	fmt.Println("routing changes:")
 	changed := 0
-	names := make([]string, 0, len(after))
+	// Union of before + after so a REMOVED intent (in the compiled file but no
+	// longer in policy) also shows in the diff.
+	nameSet := map[string]bool{}
+	for n := range before {
+		nameSet[n] = true
+	}
 	for n := range after {
+		nameSet[n] = true
+	}
+	names := make([]string, 0, len(nameSet))
+	for n := range nameSet {
 		names = append(names, n)
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		if before[n] != after[n] {
-			fmt.Printf("  %-14s %s -> %s\n", n, before[n], after[n])
-			changed++
+		b, a := before[n], after[n]
+		if b == a {
+			continue
 		}
+		if b == "" {
+			b = "(none)"
+		}
+		if a == "" {
+			a = "(removed)"
+		}
+		fmt.Printf("  %-14s %s -> %s\n", n, b, a)
+		changed++
 	}
 	if changed == 0 {
 		fmt.Println("  (none)")
@@ -500,7 +527,13 @@ func launchInteractiveAuthoring(name string) {
 	}
 	seed := fmt.Sprintf("Use the agent-new skill to author a new subagent named %q, end to end: intake, scaffold, write real eval cases, run them, show the tradeoff table, and set the default.", name)
 	fmt.Fprintf(os.Stderr, "launching pi to author %q via the agent-new skill; if it does not auto-start, run: /skill:agent-new\n", name)
-	cmd := exec.Command(pi, seed)
+	piArgs := []string{seed}
+	// Force the authoring model (Opus via the authoring intent) so the flow that
+	// writes evals is not run on a weak default model.
+	if m, err := resolveSessionModel("authoring"); err == nil && m != "" {
+		piArgs = append([]string{"--model", m}, piArgs...)
+	}
+	cmd := exec.Command(pi, piArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

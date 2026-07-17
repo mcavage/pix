@@ -181,17 +181,20 @@ A cross-vendor review shaped these; some are fixed, some are deliberate scope.
 
 **Fixed / enforced**
 
-- **Evals can't be used to attack the host.** The evaluated model runs with
-  `--no-tools --no-context-files` in a throwaway cwd, so it has no `bash`/`write`
-  /`edit` and no repo context. Command scorers run with a deadline, a scrubbed
-  env (no inherited secrets), and reject seeded paths that escape the work dir.
-- **Spend is bounded and honest.** A real sweep requires `--budget` (or explicit
-  `--no-budget`); judge-model spend counts against it; cost comes from pi's own
-  `usage.cost.total` (cache-aware) when reported, not just registry guesses. A
-  model call has a wall-clock timeout (pi has no read timeout). Failed calls and
-  scorer-infra failures are excluded from aggregates, so a transient outage can't
-  overwrite a good score with a spurious 0. The suite + config are validated
-  before any paid call.
+- **The evaluated model can't touch the host.** The pi provider runs each model
+  with `--no-tools --no-context-files --no-session --no-extensions --no-skills
+  --no-prompt-templates --no-themes` in a throwaway cwd, with a wall-clock
+  timeout (pi has no read timeout) and a bounded output buffer. The DEFAULT suite
+  uses only non-executing assertions (contains/regex/llm-rubric). The mechanical
+  exec grader (`evals/asserts/`) is OPT-IN, wired into no default suite, and
+  documented as unsafe for untrusted output (see below).
+- **Spend is bounded and honest.** `--budget` is a per-model cap: `evals run`
+  evaluates one model at a time and does not START a new model once spend has hit
+  the cap (the in-flight model's matrix runs whole, so the cap is advisory at
+  model granularity). Cost comes from pi's own `usage.cost.total` (cache-aware),
+  not registry guesses. Invocation errors (`response.error`) are excluded from
+  aggregates, so a transient outage can't overwrite a good score with a spurious
+  0. A requested model with no `providers:` entry errors before spending.
 
 **Deliberate design choices**
 
@@ -200,10 +203,12 @@ A cross-vendor review shaped these; some are fixed, some are deliberate scope.
   sets `constraints_met=false` with a reason. A crew task should degrade, not
   fail to launch. The flag is surfaced for auditing; the fallbacks in
   `policy.json` are chosen to be economical.
-- **Command scorers still execute on the host.** They are meant for TRUSTED
-  graders (build/test/lint). Do not point one at untrusted model output without
-  wrapping it in a container/VM. The hardening above limits blast radius; it is
-  not a sandbox.
+- **The opt-in mechanical (exec) grader executes model output on the host** with
+  your full environment. It is meant for TRUSTED graders (build/test/lint) and is
+  deliberately NOT in any default suite. Do not point one at untrusted model
+  output without wrapping it in a disposable container/VM (no network, no
+  secrets, unprivileged, read-only workspace). The default suite avoids execution
+  entirely.
 
 **Known limitations (future work)**
 
