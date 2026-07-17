@@ -49,8 +49,12 @@ type promptfooRow struct {
 	Response struct {
 		Error string `json:"error"`
 	} `json:"response"`
+	// Decode ONLY task_type from metadata (promptfoo metadata is arbitrary JSON;
+	// a map[string]string would fail to unmarshal a non-string sibling field).
 	TestCase struct {
-		Metadata map[string]string `json:"metadata"`
+		Metadata struct {
+			TaskType string `json:"task_type"`
+		} `json:"metadata"`
 	} `json:"testCase"`
 }
 
@@ -92,10 +96,7 @@ func ImportPromptfoo(base *Scorecard, data []byte, now time.Time) (*Scorecard, I
 			continue
 		}
 		model := strings.TrimPrefix(r.Provider.ID, PiProviderPrefix)
-		taskType := ""
-		if r.TestCase.Metadata != nil {
-			taskType = r.TestCase.Metadata["task_type"]
-		}
+		taskType := r.TestCase.Metadata.TaskType
 		if model == "" || taskType == "" {
 			sum.Skipped++
 			continue

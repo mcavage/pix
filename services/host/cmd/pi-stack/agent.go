@@ -15,13 +15,26 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
 	"gopkg.in/yaml.v3"
 	"pi-stack/host/routing"
 )
+
+// agentNameRe is the strict validator for an agent name. It forbids path
+// separators and dots, so a name can never traverse out of agentsDir() in
+// new/edit/rm (e.g. `agent rm ../README`).
+var agentNameRe = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
+
+func mustValidName(name string) {
+	if !agentNameRe.MatchString(name) {
+		fatalLauncher(fmt.Errorf("agent name %q must match %s (lowercase a-z0-9 and dashes, no slashes or dots)", name, agentNameRe.String()))
+	}
+}
 
 // --- small launcher-local arg helpers (distinct names from any host-package
 // helpers; cmd/pi-stack is its own package main) ---
@@ -243,8 +256,10 @@ func agentNew(args []string) {
 	if name == "" {
 		fatalLauncher(fmt.Errorf("agent new: missing <name>"))
 	}
-	if strings.ContainsAny(name, "/ .") {
-		fatalLauncher(fmt.Errorf("agent name %q must be a bare identifier (a-z0-9-)", name))
+	mustValidName(name)
+	if hasFlagLauncher(args, "--interactive") {
+		launchInteractiveAuthoring(name)
+		return
 	}
 	path := filepath.Join(agentsDir(), name+".md")
 	if _, err := os.Stat(path); err == nil {
@@ -262,20 +277,31 @@ func agentNew(args []string) {
 		}
 	}
 
-	var fm strings.Builder
-	fmt.Fprintf(&fm, "description: %s\n", desc)
-	fmt.Fprintf(&fm, "intent: %s\n", intent)
-	if tools != "" {
-		fmt.Fprintf(&fm, "tools: %s\n", tools)
+	// Build frontmatter via yaml.Marshal so values are safely quoted (a
+	// description containing ': ' or '#' would otherwise corrupt the frontmatter).
+	// A struct keeps field order and omits empty optionals.
+	var fmStruct struct {
+		Description string  `yaml:"description"`
+		Intent      string  `yaml:"intent"`
+		Tools       string  `yaml:"tools,omitempty"`
+		BudgetUSD   float64 `yaml:"budget_usd,omitempty"`
 	}
+	fmStruct.Description = desc
+	fmStruct.Intent = intent
+	fmStruct.Tools = tools
 	if budget != "" {
-		if !looksNumeric(budget) {
-			fatalLauncher(fmt.Errorf("--budget must be a number (got %q)", budget))
+		b, err := strconv.ParseFloat(budget, 64)
+		if err != nil || b <= 0 {
+			fatalLauncher(fmt.Errorf("--budget must be a positive number (got %q)", budget))
 		}
-		fmt.Fprintf(&fm, "budget_usd: %s\n", budget)
+		fmStruct.BudgetUSD = b
+	}
+	fmBytes, err := yaml.Marshal(&fmStruct)
+	if err != nil {
+		fatalLauncher(err)
 	}
 	body := fmt.Sprintf("You are the **%s**. (Write the role brief here: what you do, how you\nwork, what good output looks like.)\n", name)
-	content := "---\n" + fm.String() + "---\n\n" + body
+	content := "---\n" + string(fmBytes) + "---\n\n" + body
 
 	if err := os.MkdirAll(agentsDir(), 0o755); err != nil {
 		fatalLauncher(err)
@@ -325,6 +351,7 @@ func agentEdit(args []string) {
 	if name == "" {
 		fatalLauncher(fmt.Errorf("agent edit: missing <name>"))
 	}
+	mustValidName(name)
 	path := filepath.Join(agentsDir(), name+".md")
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -354,8 +381,9 @@ func agentEdit(args []string) {
 		changed = true
 	}
 	if v := flagValueLauncher(args, "--budget", ""); v != "" {
-		if !looksNumeric(v) {
-			fatalLauncher(fmt.Errorf("--budget must be a number (got %q)", v))
+		b, err := strconv.ParseFloat(v, 64)
+		if err != nil || b <= 0 {
+			fatalLauncher(fmt.Errorf("--budget must be a positive number (got %q)", v))
 		}
 		set("budget_usd", v, "!!float")
 		changed = true
@@ -383,6 +411,7 @@ func agentRm(args []string) {
 	if name == "" {
 		fatalLauncher(fmt.Errorf("agent rm: missing <name>"))
 	}
+	mustValidName(name)
 	path := filepath.Join(agentsDir(), name+".md")
 	if _, err := os.Stat(path); err != nil {
 		fatalLauncher(fmt.Errorf("agent %q not found", name))
@@ -410,9 +439,16 @@ func agentReassess(args []string) {
 	model := flagValueLauncher(args, "--model", "")
 	budget := flagValueLauncher(args, "--budget", "")
 
-	before, err := resolveRoster()
-	if err != nil {
-		fatalLauncher(err)
+	// Baseline = the CURRENTLY COMPILED routing.json (what is live), so the diff
+	// also catches a stale routing.json after a policy/budget change. Falls back to
+	// a fresh resolve when no compiled file exists yet.
+	before := readCompiledRoutes()
+	if before == nil {
+		var err error
+		before, err = resolveRoster()
+		if err != nil {
+			fatalLauncher(err)
+		}
 	}
 
 	if model != "" {
@@ -451,6 +487,47 @@ func agentReassess(args []string) {
 	if err := runHostVerb([]string{"route", "compile"}); err != nil {
 		fatalLauncher(fmt.Errorf("route compile: %w", err))
 	}
+}
+
+// launchInteractiveAuthoring hands off to an interactive `pi` session seeded to
+// run the agent-new skill (powered by the authoring intent -> Opus). It does NOT
+// scaffold here; the skill drives the whole flow (including `pi-stack agent new`
+// for the files). It replaces this process's stdio with pi's.
+func launchInteractiveAuthoring(name string) {
+	pi := "pi"
+	if _, err := exec.LookPath(pi); err != nil {
+		fatalLauncher(fmt.Errorf("pi is not on PATH; cannot launch interactive authoring (scaffold non-interactively with `pi-stack agent new %s`)", name))
+	}
+	seed := fmt.Sprintf("Use the agent-new skill to author a new subagent named %q, end to end: intake, scaffold, write real eval cases, run them, show the tradeoff table, and set the default.", name)
+	fmt.Fprintf(os.Stderr, "launching pi to author %q via the agent-new skill; if it does not auto-start, run: /skill:agent-new\n", name)
+	cmd := exec.Command(pi, seed)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			os.Exit(exit.ExitCode())
+		}
+		fatalLauncher(err)
+	}
+}
+
+// readCompiledRoutes reads the compiled routing.json (intent -> model) if it
+// exists, else nil. This is the live routing the sandbox reads.
+func readCompiledRoutes() map[string]string {
+	b, err := os.ReadFile(routing.CompiledRoutingPath())
+	if err != nil {
+		return nil
+	}
+	var cr routing.CompiledRouting
+	if json.Unmarshal(b, &cr) != nil {
+		return nil
+	}
+	out := map[string]string{}
+	for name, r := range cr.Routes {
+		out[name] = r.Model
+	}
+	return out
 }
 
 // resolveRoster returns intent -> resolved model for every policy intent, using
@@ -508,25 +585,6 @@ func setMappingValue(doc *yaml.Node, key, val, tag string) {
 		&yaml.Node{Kind: yaml.ScalarNode, Value: key, Tag: "!!str"},
 		&yaml.Node{Kind: yaml.ScalarNode, Value: val, Tag: tag},
 	)
-}
-
-// looksNumeric reports whether s parses as a plain number (for budget_usd).
-func looksNumeric(s string) bool {
-	if s == "" {
-		return false
-	}
-	dot := false
-	for i, r := range s {
-		switch {
-		case r >= '0' && r <= '9':
-		case r == '.' && !dot:
-			dot = true
-		case r == '-' && i == 0:
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 const agentUsage = `usage: pi-stack agent <command>

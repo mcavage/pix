@@ -20,8 +20,40 @@ import (
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
 	"pi-stack/host/routing"
 )
+
+// configProviderModels reads the model ids promptfooconfig.yaml can actually run
+// (provider label + config.model). Used to reject a requested model that has no
+// provider entry, so a sweep never silently produces zero rows.
+func configProviderModels(cfgPath string) map[string]bool {
+	set := map[string]bool{}
+	b, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return set
+	}
+	var c struct {
+		Providers []struct {
+			Label  string `yaml:"label"`
+			Config struct {
+				Model string `yaml:"model"`
+			} `yaml:"config"`
+		} `yaml:"providers"`
+	}
+	if yaml.Unmarshal(b, &c) != nil {
+		return set
+	}
+	for _, p := range c.Providers {
+		if p.Label != "" {
+			set[p.Label] = true
+		}
+		if p.Config.Model != "" {
+			set[p.Config.Model] = true
+		}
+	}
+	return set
+}
 
 func runEvalsHost(args []string) {
 	if len(args) < 1 {
@@ -90,13 +122,33 @@ func evalsRun(args []string) {
 		fatal(fmt.Errorf("promptfoo not on PATH (npm i -g promptfoo), or set PROMPTFOO_BIN"))
 	}
 
-	// Which models: explicit --models, else every available model in the registry.
+	configured := configProviderModels(cfg)
+
+	// Which models: explicit --models, else every available model in the registry
+	// that is also a configured promptfoo provider.
 	var models []string
-	if m := flagValue(args, "--models", ""); m != "" {
+	if hasFlag(args, "--models") {
+		m := flagValue(args, "--models", "")
+		seen := map[string]bool{}
 		for _, s := range strings.Split(m, ",") {
-			if s = strings.TrimSpace(s); s != "" {
+			if s = strings.TrimSpace(s); s != "" && !seen[s] {
+				seen[s] = true
 				models = append(models, s)
 			}
+		}
+		if len(models) == 0 {
+			fatal(fmt.Errorf("--models was given but empty"))
+		}
+		// Every requested model MUST have a provider entry, else promptfoo runs it
+		// against nothing and the sweep silently no-ops.
+		var missing []string
+		for _, m := range models {
+			if !configured[m] {
+				missing = append(missing, m)
+			}
+		}
+		if len(missing) > 0 {
+			fatal(fmt.Errorf("no promptfoo provider for %v in %s (add a providers: entry with that model, then re-run)", missing, cfg))
 		}
 	} else {
 		reg, err := routing.LoadRegistry()
@@ -104,9 +156,17 @@ func evalsRun(args []string) {
 			fatal(err)
 		}
 		for _, mm := range reg.Models {
-			if mm.Available {
-				models = append(models, mm.ID)
+			if !mm.Available {
+				continue
 			}
+			if !configured[mm.ID] {
+				fmt.Fprintf(os.Stderr, "note: %s is available but has no promptfoo provider entry; skipping (add it to %s to eval it).\n", mm.ID, cfg)
+				continue
+			}
+			models = append(models, mm.ID)
+		}
+		if len(models) == 0 {
+			fatal(fmt.Errorf("no models to run: none of the registry's available models have a provider in %s", cfg))
 		}
 	}
 
@@ -162,6 +222,9 @@ func evalsRun(args []string) {
 		updated, sum, ierr := routing.ImportPromptfoo(sc, results, time.Now())
 		if ierr != nil {
 			fatal(ierr)
+		}
+		if sum.Scored == 0 {
+			fmt.Fprintf(os.Stderr, "warning: promptfoo returned no scored rows for %v (check the config/providers)\n", batch)
 		}
 		sc = updated
 		spent += sum.SpentUSD

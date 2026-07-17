@@ -1,10 +1,14 @@
-// External promptfoo assertion: run the model's shell one-liner and score 1 iff
-// it prints the digits 1..5 (whitespace-insensitive). A mechanical grader, the
-// kind of "build/test decides correctness" eval the router is meant to support.
+// EXAMPLE, OPT-IN, NOT wired into any default suite. External promptfoo
+// assertion: run the model's shell one-liner and score 1 iff it prints 1..5. A
+// mechanical grader, the kind of "build/test decides correctness" eval the
+// router supports.
 //
-// TRUSTED-GRADER caveat (same as v1's command scorer): this EXECUTES model
-// output on the eval host. Point it only at trusted output; run it in a
-// container/VM if it could ever grade untrusted code.
+// DANGER: this EXECUTES model output on the eval host with your full
+// environment. The default code.yaml deliberately uses a NON-executing regex
+// check instead. Only reference this from a suite when the output is TRUSTED,
+// and run it inside a disposable container/VM (no network, no secrets,
+// unprivileged UID, read-only workspace) before grading anything untrusted.
+// Wire it with:  - type: javascript\n    value: file://../asserts/shell-prints-1to5.js
 
 const { execSync } = require("node:child_process");
 

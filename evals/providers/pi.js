@@ -23,6 +23,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.PI_EVAL_TIMEOUT_MS) || 300000;
+// Cap the NDJSON we buffer so a runaway generation (pi streams the accumulating
+// message on every update) can't exhaust memory. The child is killed if exceeded.
+const MAX_BYTES = Number(process.env.PI_EVAL_MAX_BYTES) || 64 * 1024 * 1024;
 
 class PiProvider {
 	constructor(options = {}) {
@@ -39,12 +42,17 @@ class PiProvider {
 	}
 
 	async callApi(prompt) {
+		// Fully hermetic + reproducible: no tools (can't touch the host), no
+		// session, no extensions, and no discovery of the host's skills / prompt
+		// templates / themes / context files (which would change tokens + behavior
+		// per machine).
 		const args = [
 			"--model", this.model,
 			"-p", prompt,
 			"--mode", "json",
 			"--no-session", "--no-extensions",
 			"--no-tools", "--no-context-files",
+			"--no-skills", "--no-prompt-templates", "--no-themes",
 		];
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "eval-run-"));
 		const started = Date.now();
@@ -55,12 +63,23 @@ class PiProvider {
 				// stdin MUST be ignored: with an open stdin pipe, headless `pi -p`
 				// waits for interactive input and never exits.
 				const child = spawn(this.bin, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+				child.stdout.setEncoding("utf8");
+				child.stderr.setEncoding("utf8");
 				const timer = setTimeout(() => {
 					child.kill("SIGKILL");
 					reject(new Error(`pi run timed out after ${this.timeoutMs}ms`));
 				}, this.timeoutMs);
-				child.stdout.on("data", (d) => (stdout += d));
-				child.stderr.on("data", (d) => (stderr += d));
+				child.stdout.on("data", (d) => {
+					stdout += d;
+					if (stdout.length > MAX_BYTES) {
+						child.kill("SIGKILL");
+						clearTimeout(timer);
+						reject(new Error(`pi output exceeded ${MAX_BYTES} bytes`));
+					}
+				});
+				child.stderr.on("data", (d) => {
+					if (stderr.length < 64 * 1024) stderr += d;
+				});
 				child.on("error", (e) => {
 					clearTimeout(timer);
 					reject(e);

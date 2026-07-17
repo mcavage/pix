@@ -36,21 +36,17 @@
   metadata:
     task_type: code
 
-# Mechanical grader: run the model's shell one-liner and check it prints 1..5.
-# NOTE: a `javascript` assertion executes here on the eval host. This mirrors v1's
-# command scorer and carries the SAME caveat — point mechanical graders only at
-# trusted output; container the grader if it ever runs untrusted code.
-- description: shell one-liner — prints 1..5 (mechanical grader)
+# Non-executing check that the model produced a plausible 1..5 printer. A
+# MECHANICAL grader that actually RUNS the output (build/test style) is powerful
+# but executes model output on the host — that is OPT-IN only, never in a default
+# suite. See evals/asserts/shell-prints-1to5.js for the example + how to sandbox it.
+- description: shell one-liner — produces a plausible 1..5 printer
   vars:
     prompt: >-
       Write a POSIX shell one-liner that prints the numbers 1 to 5 each on its
       own line. Reply with ONLY the command, no code fence, no explanation.
   assert:
-    # External JS assertion file (runs in Node with require available, unlike an
-    # inline `javascript` assert). Executes the model's one-liner and checks it
-    # prints 1..5. TRUSTED-GRADER caveat: only for trusted output; container it
-    # if it ever grades untrusted code.
-    - type: javascript
-      value: file://../asserts/shell-prints-1to5.js
+    - type: regex
+      value: "(seq 1 5|seq 5|\\{1\\.\\.5\\}|1 2 3 4 5|for .* 1 2 3 4 5)"
   metadata:
     task_type: code

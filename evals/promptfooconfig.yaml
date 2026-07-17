@@ -40,8 +40,7 @@ providers:
     label: openai/gpt-5.6-sol
     config: { model: openai/gpt-5.6-sol }
 
-# The llm-rubric grader (for judge-style cases) also goes through pi. Cheap model
-# by default; override with PI_EVAL_GRADER.
+# The llm-rubric grader (for judge-style cases) also goes through pi (a cheap model).
 defaultTest:
   options:
     provider:
@@ -49,9 +48,7 @@ defaultTest:
       config: { model: anthropic/claude-haiku-4-5 }
 
 # Suites. Central task_type suites back the generic intents; per-agent suites
-# (suites/agents/*.yaml) back specialized agents.
+# (suites/agents/*.yaml, created by `pi-stack agent new`) back specialized agents.
 tests:
-  - file://suites/code.yaml
-  - file://suites/reasoning.yaml
-  - file://suites/search.yaml
-  - file://suites/qa.yaml
+  - file://suites/*.yaml
+  - file://suites/agents/*.yaml

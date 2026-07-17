@@ -119,6 +119,15 @@ this feature exists to control. It is a one-command sweep the user runs on a new
 model release. The importer's schema is pinned by a real `results.json` fixture
 (`services/host/routing/testdata/`).
 
+**Scope + prerequisites.** The `evals` and `agent` commands are **repo-rooted**
+(run from the repo so `evals/` and `agents/` resolve; override with
+`$EVALS_CONFIG` / `$PI_STACK_AGENTS_DIR`) and require **promptfoo on the host**
+(`npm i -g promptfoo`). They are maintainer/power-user tools, not part of the
+repo-less consumer install. What the eval measures is a **model's capability at
+a `task_type`** (which sets an agent's default model), not the exact wording of
+one agent's prompt. Every requested model must have a `providers:` entry in
+`promptfooconfig.yaml`, or the run errors rather than silently scoring nothing.
+
 ## CLI
 
 Host (`pi-stack-host`): `route pick <intent>`, `route compile`, `route show`,

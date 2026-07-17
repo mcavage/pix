@@ -27,19 +27,6 @@ func TestParseAgent(t *testing.T) {
 	}
 }
 
-func TestLooksNumeric(t *testing.T) {
-	for _, ok := range []string{"0", "0.25", "-1", "1.5", "100"} {
-		if !looksNumeric(ok) {
-			t.Errorf("%q should be numeric", ok)
-		}
-	}
-	for _, bad := range []string{"", "abc", "0.2.5", "1x", "$1", "1-2"} {
-		if looksNumeric(bad) {
-			t.Errorf("%q should NOT be numeric", bad)
-		}
-	}
-}
-
 func testRouting() (*routing.Registry, *routing.Scorecard, *routing.Policy) {
 	reg := &routing.Registry{Models: []routing.Model{
 		{ID: "anthropic/opus", Provider: "anthropic", Available: true},
