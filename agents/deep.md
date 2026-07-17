@@ -1,7 +1,7 @@
 ---
 description: Strongest model for one genuinely hard sub-problem, a thorny bug, a tricky implementation, a subtle root cause. Use sparingly; it is the expensive one.
 tools: read, write, edit, bash, grep, find, ls
-model: anthropic/claude-opus-4-8
+intent: max-accuracy
 thinking: high
 max_turns: 40
 # This agent thinks hard and runs long; give it generous watchdog budgets so the

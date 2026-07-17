@@ -1,7 +1,7 @@
 ---
 description: GTM, positioning, ICP definition, campaigns, experimentation, and funnel metrics for a focused marketing task.
 tools: read, write, edit, grep, find, ls
-model: anthropic/claude-sonnet-4-6
+intent: reasoning
 thinking: medium
 max_turns: 30
 ---

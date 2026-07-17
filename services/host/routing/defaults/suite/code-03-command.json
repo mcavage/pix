@@ -1,0 +1,9 @@
+{
+  "id": "code-03-command",
+  "task_type": "code",
+  "prompt": "Write a POSIX shell one-liner that prints the numbers 1 to 5 each on their own line. Reply with ONLY the command, no code fence, no explanation.",
+  "scorer": {
+    "kind": "command",
+    "command": ["sh", "-c", "out=$(sh -c \"$(cat \\\"$OUTPUT_FILE\\\")\" 2>/dev/null); printf '%s' \"$out\" | tr -d '[:space:]' | grep -qx 12345"]
+  }
+}

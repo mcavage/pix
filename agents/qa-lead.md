@@ -1,7 +1,7 @@
 ---
 description: Test strategy, edge-case enumeration, and coverage-gap analysis. Runs the test suite, finds holes, and reports; does not modify code or tests.
 tools: read, grep, find, ls, bash
-model: anthropic/claude-haiku-4-5
+intent: verify
 thinking: medium
 max_turns: 25
 ---

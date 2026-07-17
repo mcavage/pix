@@ -381,6 +381,54 @@ Show the selected bundle's origin URL.
 .TP
 .BR "pi-stack knowledge remote set" " " url " [" \-\-bundle " " D "]"
 Add or replace the selected bundle's origin URL.
+.SS route
+The model router: turn a declared
+.B intent
+(a hard cost/latency/accuracy constraint) into a concrete model, from a registry
+of callable models and their prices plus a measured scorecard.  Replaces
+hand-pinning a model on every agent.  Execes the sibling
+.B pi-stack-host
+binary.
+.TP
+.BR "pi-stack route pick" " " intent " [" \-\-json "]"
+Resolve one intent to a model and print the rationale + ranked alternatives.
+.TP
+.BR "pi-stack route compile" " [" \-\-out " " PATH "]"
+Resolve every intent and write the intent-to-model map
+.RB ( routing.json ).
+Use
+.B "\-\-out ./routing.json"
+to update the baked file, then
+.B "make load"
+to bake it into the image.
+.TP
+.BR "pi-stack route show" " [" \-\-json "]"
+Print the registry, scorecard, and resolved-intent table.
+.TP
+.BR "pi-stack route models" " [" \-\-json "]"
+List the model registry.
+.SS evals
+The accuracy eval harness: run a suite of cases across candidate models, score
+each mechanically, record real cost and latency, and write the measured scores
+into the router's scorecard.  A real sweep calls each model on each case and
+costs money — run it by hand on a new-model release.  Execes the sibling
+.B pi-stack-host
+binary.
+.TP
+.BR "pi-stack evals run" " [" \-\-suite " " DIR "] [" \-\-models " " a,b "] [" \-\-budget " " USD "] [" \-\-dry-run "] [" \-\-save "] [" \-\-json "]"
+Run the suite.
+.B \-\-dry-run
+prints the plan and calls nothing;
+.B \-\-budget
+caps spend;
+.B \-\-save
+writes the measured scores into the scorecard.
+.TP
+.BR "pi-stack evals show" " [" \-\-json "]"
+Print the current scorecard.
+.TP
+.BR "pi-stack evals ls" " [" \-\-suite " " DIR "]"
+List the cases in a suite.
 .SS mcp
 .TP
 .BR "pi-stack mcp register" " [" name... "]"

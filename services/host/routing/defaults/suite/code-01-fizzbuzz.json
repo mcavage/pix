@@ -1,0 +1,9 @@
+{
+  "id": "code-01-fizzbuzz",
+  "task_type": "code",
+  "prompt": "Write a Python function fizzbuzz(n) that returns a list of strings for 1..n: 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, 'FizzBuzz' for both, else the number as a string. Reply with ONLY the function body in a code block.",
+  "scorer": {
+    "kind": "regex",
+    "expect": "def\\s+fizzbuzz"
+  }
+}

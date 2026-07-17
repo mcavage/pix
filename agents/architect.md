@@ -1,7 +1,7 @@
 ---
 description: System design, RFCs, ADRs, technology selection, tech-debt scoring. Use when a task requires structural reasoning, tradeoff analysis, or a written design artifact.
 tools: read, write, edit, bash, grep, find, ls
-model: anthropic/claude-opus-4-8
+intent: reasoning
 thinking: high
 max_turns: 30
 ---

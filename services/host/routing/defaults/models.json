@@ -1,0 +1,55 @@
+{
+  "_note": "Model registry: every callable model + its economics. ADDING A MODEL IS ONE ENTRY here (id must be fully qualified provider/id). Prices are USD per 1M tokens and are USER-MAINTAINED ESTIMATES — the eval harness computes real per-task cost as tokens*price, so keep these current. local=true means unmetered (Ollama/DMR). available=false hides a model from routing without deleting it. Override this file at ~/.pi-stack/routing/models.json.",
+  "models": [
+    {
+      "id": "anthropic/claude-opus-4-8",
+      "provider": "anthropic",
+      "label": "Claude Opus 4.8",
+      "input_per_mtok": 15.0,
+      "output_per_mtok": 75.0,
+      "local": false,
+      "available": true,
+      "notes": "Strongest, most expensive. Use where accuracy dominates."
+    },
+    {
+      "id": "anthropic/claude-sonnet-4-6",
+      "provider": "anthropic",
+      "label": "Claude Sonnet 4.6",
+      "input_per_mtok": 3.0,
+      "output_per_mtok": 15.0,
+      "local": false,
+      "available": true,
+      "notes": "Strong mid-tier. The usual accuracy/cost sweet spot."
+    },
+    {
+      "id": "anthropic/claude-haiku-4-5",
+      "provider": "anthropic",
+      "label": "Claude Haiku 4.5",
+      "input_per_mtok": 0.8,
+      "output_per_mtok": 4.0,
+      "local": false,
+      "available": true,
+      "notes": "Cheap and fast. Breadth fan-out, mechanical passes."
+    },
+    {
+      "id": "openai/gpt-5.6-sol",
+      "provider": "openai",
+      "label": "GPT-5.6 Sol",
+      "input_per_mtok": 1.25,
+      "output_per_mtok": 10.0,
+      "local": false,
+      "available": true,
+      "notes": "Cross-vendor. Different blind spots than Claude — good for review."
+    },
+    {
+      "id": "ollama/gemma4",
+      "provider": "ollama",
+      "label": "Gemma 4 (local)",
+      "input_per_mtok": 0.0,
+      "output_per_mtok": 0.0,
+      "local": true,
+      "available": true,
+      "notes": "Local via Ollama. Free and private; lowest accuracy. Cheapest floor."
+    }
+  ]
+}

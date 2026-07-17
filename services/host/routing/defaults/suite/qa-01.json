@@ -1,0 +1,10 @@
+{
+  "id": "qa-01",
+  "task_type": "qa",
+  "prompt": "You are testing a login form. Name one edge-case input for the email field that a naive validator often gets wrong. Reply in one short phrase.",
+  "scorer": {
+    "kind": "judge",
+    "judge_model": "anthropic/claude-haiku-4-5",
+    "expect": "Award 1.0 if the answer names a genuine tricky-but-valid or tricky-invalid email edge case (e.g. plus-addressing, subdomains, unicode/IDN, quoted local part, very long address, trailing dot, empty string). Award 0.0 if it is generic (\"a wrong email\") or not an edge case."
+  }
+}

@@ -154,6 +154,12 @@ COPY --chown=agent:agent mcp.json          /home/agent/.pi/agent/mcp.json
 # providers (mcp server / cli / http / none). Swap it to retarget every data skill
 # at once. See the capability-routing skill.
 COPY --chown=agent:agent capabilities.json /home/agent/.pi/agent/capabilities.json
+# routing.json is the model router's compiled intent->model map (same swap-one-file
+# pattern as capabilities.json, but for MODELS). Agents declare an `intent:` and
+# subagents.ts resolves it here. Regenerate on the host with `pi-stack route
+# compile` (e.g. after `pi-stack evals run` measures a new model). See
+# docs/design/routing.md.
+COPY --chown=agent:agent routing.json      /home/agent/.pi/agent/routing.json
 COPY --chown=agent:agent skills/       /home/agent/.pi/agent/skills/
 COPY --chown=agent:agent prompts/      /home/agent/.pi/agent/prompts/
 COPY --chown=agent:agent extensions/   /home/agent/.pi/agent/extensions/

@@ -1,0 +1,9 @@
+{
+  "id": "code-02-bugfix",
+  "task_type": "code",
+  "prompt": "This Python returns the max of a list but is wrong on all-negative inputs:\n\n    def maxv(xs):\n        m = 0\n        for x in xs:\n            if x > m: m = x\n        return m\n\nWhat should `m` be initialized to instead of 0? Reply in one short sentence.",
+  "scorer": {
+    "kind": "regex",
+    "expect": "(?i)(xs\\[0\\]|first element|-inf|infinity|negative infinity)"
+  }
+}

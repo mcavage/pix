@@ -2,7 +2,7 @@
 description: STRIDE threat modeling, OWASP Top 10, supply-chain audit, secrets detection, auth review. Read-only, finds and reports, never modifies code.
 tools: read, grep, find, ls, bash
 web: false
-model: anthropic/claude-opus-4-8
+intent: reasoning
 thinking: high
 max_turns: 30
 ---

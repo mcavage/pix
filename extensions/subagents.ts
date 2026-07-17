@@ -89,6 +89,43 @@ const VALID_THINKING = new Set([
 	"xhigh",
 ]);
 
+// ─── Model routing (intent → model, compiled by the host) ────────────────────
+// The host (`pi-stack-host route compile`) resolves each INTENT to a concrete
+// model against the measured cost/latency/accuracy scorecard and writes
+// routing.json next to capabilities.json. We read it ONCE, offline — the sandbox
+// never calls the host at spawn time (that path can hang a subagent). An agent
+// declares `intent:` instead of hard-pinning `model:`; an explicit `model:`
+// still wins (back-compat). A missing/unknown intent degrades to "inherit the
+// parent model", never an error. See docs/design/routing.md.
+interface CompiledRoute {
+	model?: string;
+	constraints_met?: boolean;
+	reason?: string;
+}
+interface CompiledRouting {
+	version?: number;
+	routes?: Record<string, CompiledRoute>;
+}
+function loadRouting(): CompiledRouting | null {
+	try {
+		const p = path.join(getAgentDir(), "routing.json");
+		if (!fs.existsSync(p)) return null;
+		const parsed = JSON.parse(fs.readFileSync(p, "utf-8"));
+		if (parsed && typeof parsed === "object" && parsed.routes)
+			return parsed as CompiledRouting;
+	} catch {
+		/* best-effort; a missing/bad file just means "inherit parent model" */
+	}
+	return null;
+}
+const ROUTING = loadRouting();
+// resolveIntentModel maps an intent name to its compiled model id, or "" when the
+// intent is unknown / routing.json is absent (caller inherits the parent model).
+function resolveIntentModel(intent: string): string {
+	const r = ROUTING?.routes?.[intent];
+	return (r?.model || "").trim();
+}
+
 // ─── Agent discovery (pi-stack convention: filename = name) ──────────────────
 type AgentScope = "user" | "project" | "both";
 interface AgentConfig {
@@ -96,6 +133,9 @@ interface AgentConfig {
 	description: string;
 	tools?: string[];
 	model?: string;
+	// Declared routing intent (frontmatter `intent:`). Resolved to `model` via
+	// routing.json unless an explicit `model:` overrides it. Kept for display.
+	intent?: string;
 	thinking?: string;
 	maxTurns?: number;
 	// Per-agent watchdog overrides (frontmatter idle_ms / wall_ms, milliseconds).
@@ -152,11 +192,26 @@ function loadAgentsFromDir(
 			.map((t) => t.trim())
 			.filter(Boolean);
 		const warnings: string[] = [];
-		const model = frontmatter.model?.trim() || undefined;
-		if (model && !model.includes("/")) {
+		const explicitModel = frontmatter.model?.trim() || undefined;
+		if (explicitModel && !explicitModel.includes("/")) {
 			warnings.push(
-				`model "${model}" is not fully qualified (provider/id); a bare name can resolve to a keyless provider and hang. Fix the agent file.`,
+				`model "${explicitModel}" is not fully qualified (provider/id); a bare name can resolve to a keyless provider and hang. Fix the agent file.`,
 			);
+		}
+		const intent = frontmatter.intent?.trim() || undefined;
+		// Model resolution order: explicit `model:` wins (back-compat); else
+		// `intent:` resolves through routing.json; else undefined = inherit the
+		// parent model at spawn.
+		let model = explicitModel;
+		if (!model && intent) {
+			const routed = resolveIntentModel(intent);
+			if (routed) {
+				model = routed;
+			} else {
+				warnings.push(
+					`intent "${intent}" not found in routing.json — inheriting the parent model. Run \`pi-stack route compile\` on the host (then \`make load\`).`,
+				);
+			}
 		}
 		let thinking = frontmatter.thinking?.trim().toLowerCase() || undefined;
 		if (thinking && !VALID_THINKING.has(thinking)) {
@@ -185,6 +240,7 @@ function loadAgentsFromDir(
 			description,
 			tools: tools && tools.length > 0 ? tools : undefined,
 			model,
+			intent,
 			thinking,
 			web,
 			maxTurns: Number.isFinite(maxTurns as number)
@@ -1967,7 +2023,7 @@ export default function (pi: ExtensionAPI) {
 				if (agents.length === 0) lines.push("  (no agents found)");
 				for (const a of agents.sort((x, y) => x.name.localeCompare(y.name))) {
 					lines.push(
-						`  ${a.name} (${a.source})${a.model ? ` · ${a.model}` : ""}${a.thinking ? ` · think:${a.thinking}` : ""}${a.tools ? ` · tools:${a.tools.length}` : " · tools:all"}`,
+						`  ${a.name} (${a.source})${a.intent ? ` · intent:${a.intent}` : ""}${a.model ? ` · ${a.model}` : " · model:inherit"}${a.thinking ? ` · think:${a.thinking}` : ""}${a.tools ? ` · tools:${a.tools.length}` : " · tools:all"}`,
 					);
 					if (a.description)
 						lines.push(`    ${a.description.split("\n")[0].slice(0, 100)}`);
@@ -1979,6 +2035,9 @@ export default function (pi: ExtensionAPI) {
 				);
 				lines.push(
 					`web access: ${WEB_ACCESS_EXTENSIONS.length ? `on (${WEB_TOOLS.join(", ")})` : "off (pi-web-access not found)"}`,
+				);
+				lines.push(
+					`routing: ${ROUTING ? `on (${Object.keys(ROUTING.routes ?? {}).length} intents, routing.json)` : "off (no routing.json; agents use model:/inherit)"}`,
 				);
 				if (projectDir) lines.push(`project agents dir: ${projectDir}`);
 				lines.push("run `/subagents doctor` for a live self-audit.");

@@ -36,6 +36,19 @@ func runRun(argv []string) {
 		os.Exit(2)
 	}
 
+	// Resolve --intent to a concrete session model via the router (unless --model
+	// already pinned one, which wins). This makes the INTERACTIVE session use the
+	// same cost/latency/accuracy routing the subagent crew uses.
+	if o.Intent != "" && o.Model == "" {
+		m, rerr := resolveSessionModel(o.Intent)
+		if rerr != nil {
+			fmt.Fprintf(os.Stderr, "pi-stack run: --intent %q: %v\n", o.Intent, rerr)
+			os.Exit(2)
+		}
+		o.Model = m
+		fmt.Fprintf(os.Stderr, "pi-stack: intent %q -> model %s\n", o.Intent, m)
+	}
+
 	// Preflight: refuse to launch a sandbox that has no model to talk to. A pi
 	// session needs at least one model provider key (anthropic/openai/google); a
 	// github token authorizes git, not the model, so it does NOT count. We can
@@ -263,6 +276,12 @@ func parseRunArgs(argv []string) (runOpts, error) {
 				return o, err
 			}
 			o.Model = v
+		case name == "--intent":
+			v, err := valueOf(a, &i)
+			if err != nil {
+				return o, err
+			}
+			o.Intent = v
 		case name == "--skills":
 			v, err := valueOf(a, &i)
 			if err != nil {

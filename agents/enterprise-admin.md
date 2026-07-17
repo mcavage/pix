@@ -1,7 +1,7 @@
 ---
 description: Enterprise IT and platform engineering expert for SSO/SCIM/RBAC, MDM, compliance (SOC2/FedRAMP/HIPAA), network policy, procurement, and large-scale deployment questions.
 tools: read, write, edit, grep, find, ls
-model: anthropic/claude-opus-4-8
+intent: reasoning
 thinking: high
 max_turns: 30
 ---

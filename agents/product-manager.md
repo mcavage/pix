@@ -1,7 +1,7 @@
 ---
 description: PRDs, specs, user stories, roadmaps. JTBD, assumption mapping, testable criteria, edge cases.
 tools: read, write, edit, grep, find, ls
-model: anthropic/claude-opus-4-8
+intent: reasoning
 thinking: high
 max_turns: 30
 ---
