@@ -37,8 +37,9 @@ with the real date, and prefer authoritative sources:
   and Qwen 3.5 generations within months.) The router's local model is a slow,
   free, opt-in fallback, so weight it toward a genuinely capable current model
   and give it a high latency so it never wins latency-sensitive intents by
-  accident. This is SEPARATE from the tiny memory-watcher model (`gemma3:4b`),
-  which stays small on purpose (resident + DRAM-bound).
+  accident. This is SEPARATE from the memory-watcher model, which defaults to the
+  SAME local model as the bridge (`qwen3.5:9b`) so Ollama keeps one model resident
+  for both capture and inference (override to something smaller on a tight box).
 - **Per-task capability (for the scorecard):** published benchmark numbers, one
   consistent benchmark per task_type:
   - `code` <- SWE-bench (Verified or Pro; pick one and stay consistent)

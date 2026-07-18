@@ -8,6 +8,28 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Changed
+
+- **The memory watcher defaults to `qwen3.5:9b`, the same model the ollama-bridge
+  uses.** Two defaults previously disagreed (the daemon fell back to `gemma3:4b`,
+  the launcher config to `qwen3.5:4b`), and neither matched the model already
+  resident for the bridge/router — so a fresh install ran capture on a model that
+  usually was not pulled, and capture silently did nothing. Now capture reuses the
+  one local model already loaded, so it works out of the box for anyone running
+  the bridge. Override with `pi-stack config set memory_watcher_model <model>` on
+  a memory-constrained machine.
+
+### Fixed
+
+- **Automatic fact capture could be silently dead.** The watcher-availability
+  check was one-shot at startup and latched: once it marked the watcher
+  unavailable, `observe` short-circuited and never retried, so capture stayed off
+  until a full daemon restart even after the model was pulled — and the client
+  swallowed the failure reason, so nothing surfaced. Added a throttled live
+  re-probe (capture recovers within 30s of the model appearing, no restart), a
+  one-time client warning when capture is off, and a `pi-stack doctor` line that
+  reads the daemon's live capture flag with the exact fix.
+
 ### Removed
 
 - **Tore out the automated eval harness** (`evals/`, `pi-stack-host evals`,

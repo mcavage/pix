@@ -17,7 +17,7 @@ func TestConfigValue(t *testing.T) {
 	cfg.MCP = []string{"gog", "slack"}
 	cfg.Services = []string{"memory", "knowledge"}
 	cfg.KnowledgeBundles = []string{"/kb/a", "/kb/b"}
-	cfg.MemoryWatcherModel = "gemma3:4b"
+	cfg.MemoryWatcherModel = "qwen3.5:9b"
 	cfg.MemoryEmbedModel = "nomic-embed-text"
 	cfg.OllamaBridgeModel = "qwen3.5:9b"
 	cfg.ActiveProfile = "work"
@@ -31,7 +31,7 @@ func TestConfigValue(t *testing.T) {
 		{key: "mcp", want: "gog slack"},
 		{key: "services", want: "memory knowledge"},
 		{key: "knowledge_bundles", want: "/kb/a /kb/b"},
-		{key: "memory_watcher_model", want: "gemma3:4b"},
+		{key: "memory_watcher_model", want: "qwen3.5:9b"},
 		{key: "memory_embed_model", want: "nomic-embed-text"},
 		{key: "ollama_bridge_model", want: "qwen3.5:9b"},
 		{key: "active_profile", want: "work"},
@@ -76,7 +76,7 @@ func TestConfigValue_ProfileOverride(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@home.com"
 	cfg.MCP = []string{"slack"}
-	cfg.MemoryWatcherModel = "gemma3:4b"
+	cfg.MemoryWatcherModel = "qwen3.5:9b"
 	work := []string{"gog"}
 	cfg.Profiles = map[string]config.Profile{
 		"work": {GogAccount: "me@work.com", MCP: &work},
@@ -93,7 +93,7 @@ func TestConfigValue_ProfileOverride(t *testing.T) {
 		{name: "base mcp", profile: "", key: "mcp", want: "slack"},
 		{name: "override mcp replaces", profile: "work", key: "mcp", want: "gog"},
 		// memory_* is global (no per-profile override exists): inherit the base.
-		{name: "global model inherits", profile: "work", key: "memory_watcher_model", want: "gemma3:4b"},
+		{name: "global model inherits", profile: "work", key: "memory_watcher_model", want: "qwen3.5:9b"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

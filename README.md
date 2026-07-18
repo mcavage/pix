@@ -288,12 +288,12 @@ or the call 404s.
 
 | role | config key | default | where it runs |
 | --- | --- | --- | --- |
-| fact capture | `memory_watcher_model` | `qwen3.5:4b` (~3GB) | HOST, **resident** during `pi-stack serve` (keep it small) |
+| fact capture | `memory_watcher_model` | `qwen3.5:9b` (~6.6GB) | HOST, **resident** during `pi-stack serve` (shares the bridge model) |
 | semantic recall | `memory_embed_model` | `nomic-embed-text` | HOST, embeddings |
 | local chat model | `ollama_bridge_model` | `qwen3.5:9b` (~6.6GB) | SANDBOX, loads on demand (Alt+P cycle + the router's local option) |
 
 ```bash
-pi-stack config set memory_watcher_model qwen3.5:4b   # host watcher (resident)
+pi-stack config set memory_watcher_model qwen3.5:9b   # host watcher (resident)
 pi-stack config set ollama_bridge_model  qwen3.5:9b   # local chat/router model
 make pull-models                                      # pull all three
 ```
@@ -306,10 +306,12 @@ you set ONE value (the display label is derived from the tag; an
 `OLLAMA_BRIDGE_MODEL` env var still overrides for power users, and
 `OLLAMA_BRIDGE_CONTEXT` shrinks the KV cache for less RAM).
 
-Sizing for a 16GB box: the watcher is resident so keep it small (`qwen3.5:4b`);
-the bridge model loads only when you select it, so `qwen3.5:9b` is a fine
-all-rounder there and frees its DRAM once idle. Bump either on a roomier machine
-(`qwen3.5:27b`, `gemma4:12b`, ...); free disk with `ollama rm <tag>`.
+Sizing for a 16GB box: the watcher and the bridge default to the SAME model
+(`qwen3.5:9b`), so Ollama keeps one ~6.6GB model resident for both capture and
+local inference instead of paying DRAM for two. On a tight machine, point the
+watcher at something smaller (`pi-stack config set memory_watcher_model
+qwen3.5:4b`); on a roomier one, bump either (`qwen3.5:27b`, `gemma4:12b`, ...).
+Free disk with `ollama rm <tag>`.
 
 Knowledge is opt-in. Create a local OKF bundle or attach an existing one, then
 restart the host services:

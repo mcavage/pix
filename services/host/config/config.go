@@ -19,10 +19,12 @@ import (
 
 // Defaults applied when a config file is absent or a field is unset.
 const (
-	// Small on purpose: the watcher runs resident on the host during `serve`, so a
-	// big model OOMs a 16GB laptop. qwen3.5:4b is the current small, tools-capable
-	// choice (~3GB); bump via `pi-stack config set`.
-	DefaultMemoryWatcherModel = "qwen3.5:4b"
+	// Defaults to the SAME model as the ollama-bridge (qwen3.5:9b) so Ollama keeps
+	// ONE local model resident for both fact capture and the sandbox's local chat/
+	// router option, instead of paying DRAM for a second watcher-only model. On a
+	// tight machine, point it at something smaller via `pi-stack config set
+	// memory_watcher_model <model>`.
+	DefaultMemoryWatcherModel = "qwen3.5:9b"
 	DefaultMemoryEmbedModel   = "nomic-embed-text"
 	// DefaultOllamaBridgeModel is the local model the sandbox's ollama-bridge
 	// exposes to pi (the interactive Alt+P cycle) AND the router's local option.
@@ -356,7 +358,7 @@ services = ["memory"]
 mcp = []
 
 # Local Ollama models the memory service uses.
-memory_watcher_model = "qwen3.5:4b"
+memory_watcher_model = "qwen3.5:9b"
 memory_embed_model = "nomic-embed-text"
 ollama_bridge_model = "qwen3.5:9b"
 

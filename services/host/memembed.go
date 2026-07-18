@@ -62,9 +62,13 @@ func memWatcherModel() string {
 	if v := os.Getenv("MEMORY_WATCHER_MODEL"); v != "" {
 		return v
 	}
-	// Small default: the watcher runs resident on the host, so a big model OOMs a
-	// 16GB laptop. Bump via MEMORY_WATCHER_MODEL / `pi-stack config set`.
-	return "gemma3:4b"
+	// Defaults to the same local model the ollama-bridge/router uses (qwen3.5:9b)
+	// so Ollama keeps ONE model resident for both capture and local inference,
+	// instead of a second watcher-only model. `pi-stack serve` normally passes the
+	// resolved config value (config.DefaultMemoryWatcherModel); this fallback only
+	// applies when the daemon runs with MEMORY_WATCHER_MODEL unset. Override for a
+	// smaller model via MEMORY_WATCHER_MODEL / `pi-stack config set`.
+	return "qwen3.5:9b"
 }
 
 // watcherUnavailable is set true once a capture attempt fails because the
