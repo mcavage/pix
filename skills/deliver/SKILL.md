@@ -24,6 +24,7 @@ Before advancing any gate or claiming done, run this list:
 - [ ] Product closeout (Phase 10) is clean: PM + every Phase 0.5 role validated the built deliverable against prd.md; their findings are in the ledger and resolved
 - [ ] status.json written and current (schema below); every gate has real evidence with command+timestamp+exit+log path
 - [ ] UAT matrix covers: request paths + spec paths + all changed-code branches + test analysis + qa-lead enumeration; no spec means FRAME built the matrix first
+- [ ] Traceability: every P0 acceptance criterion in prd.md maps to at least one UAT row (by id); no P0 criterion is unproven; the mapping is in status.json and the review prompt
 - [ ] Baseline labelled BASELINE-GREEN or BASELINE-RED; a BASELINE-RED gate MUST stay labelled as such; no new failures added
 - [ ] Top-level agent touched ONLY .pi-agent/ artifacts and the final report; every shipping change went through a subagent; no size exemption
 - [ ] Units are the smallest independently reviewable slices; single-unit plan for non-trivial work has written architect approval in status.json
@@ -67,10 +68,14 @@ tests, docs, or config. Every shipping change goes to an `engineer`, `deep`,
 `architect`, `qa-lead`, or `security-lead` subagent. "Glue", "small fix",
 "cleanup", "just a typo" are NOT exemptions. See Solo-Coding Prohibition.
 
-**Law 3. UAT is mandatory, real, and thick.**
+**Law 3. UAT is mandatory, real, thick, and traceable.**
 UAT MUST cover every path derived from the request, the spec (if any), all
 changed-code branches, test analysis, and qa-lead review. "Built without
 crashing" is not UAT. No spec means FRAME builds the UAT matrix first.
+Every P0 acceptance criterion in the spec MUST map to at least one UAT row that
+proves it; a P0 criterion with no covering row is an incomplete gate, not a pass.
+Testing paths you happened to build while leaving a promised criterion unproven
+is a Law 3 violation.
 
 **Law 4. Run at least two explicit top-level review rounds; loop until the final round is clean.**
 code-review's internal pass does NOT count. One round is never enough.
@@ -137,6 +142,7 @@ remembered result or a subagent's "done" report is a violation.
       "expected":       "<observable outcome>",
       "actual":         "<what actually happened>",
       "evidence_path":  "<relative path to log or screenshot>",
+      "covers_criteria": ["<acceptance-criterion id from prd.md, e.g. AC-1>"],
       "result":         "pass|fail"
     }
   ],
@@ -250,7 +256,11 @@ remembered result or a subagent's "done" report is a violation.
      d. test analysis (what existing tests assume; coverage gaps)
      e. qa-lead's own edge-case enumeration
    Each matrix row: path, preconditions, exact command/steps, expected, actual,
-   evidence path, pass/fail.
+   evidence path, the P0 acceptance-criterion id(s) it covers, pass/fail.
+   TRACEABILITY: every P0 acceptance criterion in prd.md MUST be cited by at
+   least one row's covers_criteria. A P0 criterion with no covering row means the
+   matrix is incomplete; build the missing row before the gate can pass. (Trivial
+   work with no prd.md derives criteria from the request in FRAME.)
    For web surfaces: screenshot successful primary flows AND every bug or fix.
    For docs-only: verify every changed statement is accurate and renders correctly.
    For test-only: verify each new test fails without the code change and passes with it.
@@ -265,6 +275,8 @@ remembered result or a subagent's "done" report is a violation.
      - list of changed files
      - spec and acceptance bar text
      - UAT evidence summary with evidence paths
+     - the P0 acceptance-criterion -> UAT row mapping (covers_criteria), so the
+       reviewer can confirm every promised criterion was proven, not just paths
      - build/test/lint/typecheck output summaries
      - complete findings ledger showing status of each item
      - list of fixes applied since the previous round (none on round 1)
@@ -352,6 +364,7 @@ clean.
 - list of changed files
 - spec and acceptance bar text
 - UAT evidence summary with evidence paths
+- the P0 acceptance-criterion -> UAT row mapping (covers_criteria)
 - build/test/lint/typecheck output summaries
 - complete findings ledger (all rounds, showing each item's current status)
 - list of fixes applied since the previous round
@@ -511,6 +524,7 @@ All security findings go in the same findings_ledger[].
 | Solo-coding | Editing product/test/docs/config yourself | Dispatch to subagent; no size exemption |
 | Done-without-UAT | "Implemented, should work" | Run every UAT matrix row; paste evidence |
 | Thin UAT | Only spec-named paths | Cover spec + changed branches + test analysis + qa-lead review |
+| Untraceable UAT | Tested built paths but a promised P0 criterion has no covering row | Map every P0 acceptance criterion to >= 1 UAT row (covers_criteria); prove what you promised |
 | No-spec thin-UAT | Skipping matrix build when no spec | FRAME builds the matrix from request + code analysis |
 | One-and-done review | A single review round then ship | >= 2 explicit rounds; final round clean |
 | code-review counted | Counting build's code-review as a round | Only explicit top-level subagent calls with agent=review count |
@@ -615,7 +629,7 @@ Return to the user ONLY when every row is true with evidence on disk.
 | Build | exits 0 | fresh build output this turn |
 | Tests | 0 failures, count >= baseline, new tests for new behavior (BASELINE-RED: no NEW failures vs baseline + affected/new tests pass; never reported green) | fresh test output this turn |
 | Lint / typecheck | clean or repo-tolerated warnings only | fresh lint + typecheck output this turn |
-| Full UAT | every matrix row passing with thick evidence | evidence files in .pi-agent/deliver/<slug>/uat/ |
+| Full UAT | every matrix row passing with thick evidence; every P0 acceptance criterion covered by >= 1 passing row | evidence files in .pi-agent/deliver/<slug>/uat/; covers_criteria mapping in status.json |
 | Security | security-lead ran; all CRITICAL/HIGH fixed | security report; findings in ledger |
 | Review | >= 2 explicit cross-vendor rounds; final round clean | review_rounds[] in status.json; all findings closed or user-triaged |
 | Findings | every finding fixed or user-triaged with separate user message | findings_ledger[] complete; no open items |
