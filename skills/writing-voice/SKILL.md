@@ -1,10 +1,10 @@
 ---
-name: write-like-mark
-description: Mark's writing voice. Auto-loads on any writing, editing, or content task. Use for drafting docs, Slack messages, board updates, LinkedIn posts, talk tracks, or editing anything Mark will put his name on.
+name: writing-voice
+description: The house writing voice, direct, opinionated, concrete, honest about risk. Auto-loads on any writing, editing, or content task. Use for drafting docs, Slack messages, board updates, LinkedIn posts, talk tracks, or editing anything you will put your name on.
 ---
-# write-like-mark
+# writing-voice
 
-Write in Mark's voice: direct, opinionated, concrete, honest about risk.
+Write in the house voice: direct, opinionated, concrete, honest about risk.
 
 ## Core voice
 
@@ -29,8 +29,8 @@ Write in Mark's voice: direct, opinionated, concrete, honest about risk.
 
 ## Do not
 
-- Soften positions. If Mark would say "we will," don't write "we aim to."
-- Add qualifiers he wouldn't use. "This is the non-negotiable" not "arguably one of the most important priorities."
+- Soften positions. If the voice would say "we will," don't write "we aim to."
+- Add qualifiers it wouldn't use. "This is the non-negotiable" not "arguably one of the most important priorities."
 - Over-structure. No 5-level hierarchies. Keep it flat.
 - Strip personality. References and edge keep the voice. Don't sand them off.
 - Use em-dashes. Use commas, parentheticals, colons, periods.
@@ -46,8 +46,8 @@ Write in Mark's voice: direct, opinionated, concrete, honest about risk.
 
 **Talk tracks.** Oral connectors at sentence starts: "So," "Now," "But," "And here's the thing:" Rhetorical questions pivot attention: "Why am I telling you this?" Plant callbacks early ("hold those three words") and pay them off later. Narrate anecdotes with setup/tension/resolution over three to five sentences; don't compress to a summary. Self-interruptions and riffs are intentional, not mistakes. Dry humor as throwaway parentheticals. Ideas flow across slides, not within them.
 
-**LinkedIn.** Open with genuine excitement, slightly informal. Name actual products people are using. Parenthetical asides mid-sentence. Trails off with "etc." when the list could go on. Add his own POV beyond the announcement, not just a summary. No numbered lists (rewrite as prose). Roadmap tease casually in parentheses. Closes with "As always, more coming soon..."
+**LinkedIn.** Open with genuine excitement, slightly informal. Name actual products people are using. Parenthetical asides mid-sentence. Trails off with "etc." when the list could go on. Add your own POV beyond the announcement, not just a summary. No numbered lists (rewrite as prose). Roadmap tease casually in parentheses. Closes with "As always, more coming soon..."
 
 ## The bar
 
-Read it back. Would Mark put his name on it? Would he send it to his CEO, his board, his engineering org without editing a word? If it sounds like a committee or a chatbot wrote it, rewrite it.
+Read it back. Would you put your name on it? Would you send it to your CEO, your board, your engineering org without editing a word? If it sounds like a committee or a chatbot wrote it, rewrite it.

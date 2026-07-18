@@ -156,7 +156,8 @@ places.
 sqlite with FTS5 and vector search. A local watcher model extracts preferences,
 decisions, and project conventions from conversation, and later turns retrieve
 relevant memories automatically. Without Ollama, recall falls back to keyword
-search and capture is disabled.
+search and capture is disabled. See [docs/memory.md](docs/memory.md) for the full
+picture: recall ranking, the capture loop, the commands, and the trust model.
 
 **OKF knowledge retrieval.** The built-in knowledge service indexes OKF bundle
 directories and serves retrieval over JSON-RPC. `pi-stack knowledge init`

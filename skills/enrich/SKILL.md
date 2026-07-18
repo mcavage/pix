@@ -135,5 +135,5 @@ that it originated from a promoted learning.
 Write the concept in Mark's voice: direct and concrete, no em-dashes, no AI
 slop, no hedging filler ("it's worth noting", "in today's fast-paced…"). State
 what is true, cite it, link it, stop. A concept is a reference, not an essay;
-keep it tight and skimmable. Re-read the `anti-slop` and `write-like-mark`
+keep it tight and skimmable. Re-read the `anti-slop` and `writing-voice`
 skills before drafting prose.

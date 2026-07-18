@@ -195,5 +195,5 @@ agentContext: |
 
   ## Posture
   Full-auto: no permission prompts. The sandbox isolation is the safety boundary.
-  Write in the user's voice (see the anti-slop and write-like-mark skills): no
+  Write in the user's voice (see the anti-slop and writing-voice skills): no
   em-dashes, no AI slop, direct and concrete.

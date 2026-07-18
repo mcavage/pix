@@ -93,7 +93,7 @@ The built-in knowledge service (JSON-RPC :11436, sqlite+FTS5+embeddings) runs un
 
 ## Skills and /help
 
-The public image bakes 33 verb-named skills. Key action verbs: `plan`, `build`, `ship`, `code-review`, `debug`, `tdd`, `verify`, `qa`, `enrich`, `healthcheck`, `onboard`, `brainstorm`, `challenge`, `design-review`. Support/meta skills: `anti-slop`, `conventions`, `capability-routing`, `delegation-guide`, `model-refresh` (re-ground the router on live model cards), `write-like-mark`, and more. Run `/help` for a live capability map and `/getting-started` for the setup walkthrough (both backed by the installed extension). Invoke a skill with `/skill:<name>` or let it auto-load from context.
+The public image bakes 33 verb-named skills. Key action verbs: `plan`, `build`, `ship`, `code-review`, `debug`, `tdd`, `verify`, `qa`, `enrich`, `healthcheck`, `onboard`, `brainstorm`, `challenge`, `design-review`. Support/meta skills: `anti-slop`, `conventions`, `capability-routing`, `delegation-guide`, `model-refresh` (re-ground the router on live model cards), `writing-voice`, and more. Run `/help` for a live capability map and `/getting-started` for the setup walkthrough (both backed by the installed extension). Invoke a skill with `/skill:<name>` or let it auto-load from context.
 
 ## Writing extensions (`extensions/*.ts`)
 

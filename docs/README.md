@@ -9,6 +9,8 @@ harness, [AGENTS.md](../AGENTS.md). This folder holds the deeper references.
   MCP server, read-only by default.
 - [OVERLAY.md](OVERLAY.md) — build a private company overlay (a mixin kit plus
   host plugins) without forking the public tree.
+- [memory.md](memory.md) — the memory service: what it stores, how recall and
+  capture work, the commands, and the trust model.
 - [../SECURITY.md](../SECURITY.md) — the trust boundary, what the sandbox does
   and does not protect, and how to report a vulnerability.
 - [../CONTRIBUTING.md](../CONTRIBUTING.md) — build constraints, the open-core
@@ -29,14 +31,12 @@ tutorials.
   recall loop.
 - [profiles.md](design/profiles.md) — work / personal / default profiles from one
   host.
-- [host-mode.md](design/host-mode.md) — the repo-less host architecture
-  (`pi-stack-host` and go-plugin slots).
+- [host-mode.md](design/host-mode.md) — PROPOSAL (not built): running pi-stack
+  outside the sandbox for self-development and hardware access.
 - [worktree-tasks.md](design/worktree-tasks.md) and
   [task-ux-decisions.md](design/task-ux-decisions.md) — the `pi-stack task`
   parallel-work workflow.
 - [cli-redesign.md](design/cli-redesign.md) — the launcher verb tree.
-- [audit-2026-five-star.md](design/audit-2026-five-star.md) — the standing audit:
-  what was fixed and the ranked backlog.
 
 ## Upstream (issues and patches we owe pi/sbx)
 

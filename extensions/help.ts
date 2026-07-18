@@ -26,21 +26,22 @@ const safe = <T>(fn: () => T): T | undefined => {
 // order. These are the ONLY hardcoded skill references, and only decide the
 // bucket; the displayed skills always come from scanning the dirs.
 const GROUPS: Array<{ title: string; members: string[] }> = [
-	{ title: "WORKFLOW", members: ["brainstorm", "plan", "build", "ship", "challenge"] },
+	{ title: "WORKFLOW", members: ["brainstorm", "plan", "build", "deliver", "ship", "challenge"] },
 	{ title: "DEVELOP", members: ["debug", "tdd", "code-review", "peer-review", "verify"] },
 	{ title: "QUALITY", members: ["qa", "design-review", "healthcheck"] },
 	{
 		title: "WRITE",
 		members: [
 			"anti-slop",
-			"write-like-mark",
+			"writing-voice",
 			"one-pager",
 			"microcopy",
 			"docs-sync",
 			"competitive",
 		],
 	},
-	{ title: "SYSTEM", members: ["onboard", "ingest", "promote"] },
+	{ title: "DATA", members: ["gworkspace", "ingest", "enrich"] },
+	{ title: "SYSTEM", members: ["onboard", "promote", "model-refresh"] },
 ];
 
 // Skills that are reference rules (auto-load as conventions) — hidden from the

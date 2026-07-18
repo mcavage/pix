@@ -585,10 +585,44 @@ func agentReassess(args []string) {
 	if changed == 0 {
 		fmt.Println("  (none)")
 	}
-	fmt.Fprintln(os.Stderr, "\ncompiling routing.json...")
-	if err := runHostVerb([]string{"route", "compile"}); err != nil {
+	// Compile to the RIGHT file. `route compile` with no --out writes to
+	// ~/.pi-stack/routing/routing.json, but the Docker image bakes the repo-root
+	// routing.json (Dockerfile COPY). reassess is maintainer-only (needs the repo +
+	// promptfoo), so when we are sitting in the repo — a routing.json next to a
+	// pi-kit/spec.yaml — target that file, or the reassessment silently never
+	// reaches the image.
+	compileArgs := []string{"route", "compile"}
+	if repo := repoRoutingTarget(); repo != "" {
+		compileArgs = append(compileArgs, "--out", repo)
+		fmt.Fprintf(os.Stderr, "\ncompiling routing.json (repo target: %s)...\n", repo)
+	} else {
+		fmt.Fprintln(os.Stderr, "\ncompiling routing.json...")
+	}
+	if err := runHostVerb(compileArgs); err != nil {
 		fatalLauncher(fmt.Errorf("route compile: %w", err))
 	}
+}
+
+// repoRoutingTarget returns the path of the repo-root routing.json the Docker
+// image bakes, but ONLY when the current directory is unmistakably the pi-stack
+// repo (a routing.json sitting next to pi-kit/spec.yaml). Otherwise it returns ""
+// and the caller falls back to `route compile`'s default (~/.pi-stack/routing).
+func repoRoutingTarget() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	routing := filepath.Join(wd, "routing.json")
+	spec := filepath.Join(wd, "pi-kit", "spec.yaml")
+	if fileExists(routing) && fileExists(spec) {
+		return routing
+	}
+	return ""
+}
+
+func fileExists(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && !info.IsDir()
 }
 
 // launchInteractiveAuthoring hands off to an interactive `pi` session seeded to

@@ -67,7 +67,7 @@ skills/*
 !skills/ship/
 !skills/tdd/
 !skills/verify/
-!skills/write-like-mark/
+!skills/writing-voice/
 
 # --- Open-core boundary: agents (MUST mirror .dockerignore) ---------------------
 # DEFAULT-DENY so git add -A can't stage a future company-specific persona.

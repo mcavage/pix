@@ -25,7 +25,7 @@ worth not repeating.
   channels, accounts, thresholds) into a `SKILL.md`. Read those from memory or
   the overlay at runtime; the skill only knows the shape.
 - **Write like a human.** Direct, concrete, no em-dashes, no AI filler. See the
-  `anti-slop` and `write-like-mark` skills.
+  `anti-slop` and `writing-voice` skills.
 
 ## Setup
 

@@ -111,3 +111,36 @@ func TestAgentNewEditRm(t *testing.T) {
 		t.Fatalf("agent md should be gone: %v", err)
 	}
 }
+
+// TestRepoRoutingTarget verifies reassess compiles routing.json to the repo file
+// (the one Docker bakes) only when sitting in the pi-stack repo, and otherwise
+// defers to route compile's default path. Guards the silent-wrong-path bug where
+// a maintainer's reassessment never reached the image.
+func TestRepoRoutingTarget(t *testing.T) {
+	// Not the repo (no routing.json / pi-kit/spec.yaml): empty, use the default.
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if got := repoRoutingTarget(); got != "" {
+		t.Fatalf("non-repo dir: want \"\", got %q", got)
+	}
+
+	// routing.json alone is not enough (a consumer's home dir might hold one).
+	if err := os.WriteFile(filepath.Join(dir, "routing.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := repoRoutingTarget(); got != "" {
+		t.Fatalf("routing.json without spec: want \"\", got %q", got)
+	}
+
+	// routing.json next to pi-kit/spec.yaml = unmistakably the repo: target it.
+	if err := os.MkdirAll(filepath.Join(dir, "pi-kit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pi-kit", "spec.yaml"), []byte("image: x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "routing.json")
+	if got := repoRoutingTarget(); got != want {
+		t.Fatalf("repo dir: want %q, got %q", want, got)
+	}
+}
