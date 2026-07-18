@@ -1,6 +1,6 @@
 # pi-stack CLI redesign — make it usable by a new human
 
-Status: proposal v2 (crew synthesis + cross-vendor review folded in, pending owner sign-off)
+Status: IMPLEMENTED (Shape B shipped — `state` grouping noun, tiered `help` / `help --all` with per-noun `help <verb>`, staged `setup`; all legacy verb spellings retained as aliases)
 Authors: pi + crew (dx-consultant, product-manager, architect, ux-copywriter), reviewed by cross-vendor `review`
 
 ## The problem
@@ -398,7 +398,8 @@ with existing tests bound to the old behavior. Split these out, each with tests:
 - **gog is "needs auth", not "configured", until a real auth probe passes** (P0-4):
   setting an email does not complete OAuth. Detect usable auth; otherwise label
   it deferred and print the `gog auth login` next step.
-- `help --all` branch does not exist yet (P0-2); add it with a test.
+- `help --all` branch (P0-2): **shipped** — tiered help shows Core by default and
+  reveals the rest with `--all` (and per-noun `help <verb>`).
 
 **Phase 1 — additive grouping (aliases, no removals).**
 - Shape B minimum: add `state.go` with `runState` delegating verbatim to the

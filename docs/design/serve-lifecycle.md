@@ -1,7 +1,6 @@
 # Serve lifecycle overhaul
 
-Status: DESIGN (do not implement from this alone — it is the spec another
-engineer builds from). Scope: three capabilities so users stop babysitting
+Status: IMPLEMENTED. Scope: three capabilities so users stop babysitting
 `pi-stack serve`, matching the Docker/Ollama model.
 
 ## Problem

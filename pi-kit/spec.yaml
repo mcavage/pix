@@ -26,7 +26,7 @@ sandbox:
         "--session-dir",
         ".pi-sessions",
         "--models",
-        "anthropic/claude-opus-4-8,openai/gpt-5.6-sol,google/gemini-3.1-pro-preview,ollama/*",
+        "anthropic/claude-opus-4-8,openai/gpt-5.6-sol,google/gemini-3.1-pro,ollama/*",
       ]
 
 # Provider keys are read by the host proxy and swapped into the outbound auth
@@ -44,6 +44,7 @@ network:
     console.anthropic.com: anthropic
     claude.ai: anthropic
     api.openai.com: openai
+    generativelanguage.googleapis.com: google
     api.github.com: github
     uploads.github.com: github
   serviceAuth:
@@ -53,6 +54,11 @@ network:
     openai:
       headerName: Authorization
       valueFormat: "Bearer %s"
+    google:
+      # Gemini authenticates with the raw key in the x-goog-api-key header
+      # (no Bearer prefix), unlike OpenAI's Authorization header.
+      headerName: x-goog-api-key
+      valueFormat: "%s"
     github:
       headerName: Authorization
       valueFormat: "Bearer %s"

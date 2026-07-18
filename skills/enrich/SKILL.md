@@ -20,7 +20,7 @@ explicitly, by a human's request. That is the whole point of the gate.
 Before writing anything, decide where the fact belongs. The test:
 
 - **Personal / situational → memory** (`ingest`, `/remember`). One person's
-  preferences, this week's todo, "Mark likes X", account-specific context, a
+  preferences, this week's todo, "the user prefers X", account-specific context, a
   correction about how *you* work. It changes often and is scoped to a user.
 - **Shared / domain truth → OKF** (this skill). A concept the team would want
   documented independent of any one person: how a system works, a definition, an
@@ -132,8 +132,10 @@ that it originated from a promoted learning.
 
 ## Voice
 
-Write the concept in Mark's voice: direct and concrete, no em-dashes, no AI
-slop, no hedging filler ("it's worth noting", "in today's fast-paced…"). State
+Write the concept in the repo owner's documented voice. Retrieve writing
+preferences from memory (tag: `writing-voice`) if available; otherwise default to:
+direct and concrete, no em-dashes, no AI slop, no hedging filler ("it's worth
+noting", "in today's fast-paced…"). State
 what is true, cite it, link it, stop. A concept is a reference, not an essay;
 keep it tight and skimmable. Re-read the `anti-slop` and `writing-voice`
 skills before drafting prose.

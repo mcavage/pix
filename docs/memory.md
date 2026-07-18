@@ -75,6 +75,24 @@ extraction. Install Ollama and set the embed and watcher models
 (`pi-stack config set memory_embed_model ...`, `memory_watcher_model ...`) to get
 the full loop.
 
+### When semantic recall is silently keyword-only
+
+If recall has dropped to keyword-only even though Ollama is installed, the embed
+model was almost certainly unavailable when the daemon started (or an embed call
+failed once). The embedder **latches off on the first failure** and — unlike the
+capture watcher, which live re-probes every 30s and self-recovers — it does **not**
+retry, so semantic recall stays degraded for the life of the daemon process. Pull
+the embed model, then restart the daemon so it re-probes at startup:
+
+```bash
+ollama pull nomic-embed-text          # or whatever MEMORY_EMBED_MODEL names
+pi-stack serve stop && pi-stack serve  # restart so the embedder re-probes
+```
+
+A daemon-affecting `pi-stack config set` (e.g. `memory_embed_model`) already
+restarts a managed or lazy daemon for you; only a foreground `pi-stack serve` must
+be restarted by hand.
+
 ## Profiles
 
 Memory is one shared store across profiles today. Recall is scoped per profile at
@@ -89,6 +107,23 @@ single user: your machine, your disposable VMs, your own store, so any sandbox
 you launch may read and write it. Do not bind it to a routable interface
 (`MEMORY_BIND`) or run it on a shared host without an auth proxy in front. See
 [../SECURITY.md](../SECURITY.md).
+
+## Optional authentication
+
+By default the memory (`:11435`) and knowledge (`:11436`) services are
+**loopback-only and unauthenticated** — the trust boundary is the `127.0.0.1`
+bind, nothing more. The built-in daemons do **not** check a bearer token today
+(the JSON-RPC mux is served directly), so for a shared or multi-user host the
+correct control is an **authenticating reverse proxy in front of the service**, or
+keeping it strictly loopback.
+
+The `MEMORY_AUTH` / `KNOWLEDGE_AUTH` env vars are the intended shared-secret hook:
+the design is that, when set, the service requires the matching token as an
+`Authorization: Bearer <token>` header on every JSON-RPC request and the in-sandbox
+wrapper sends it. **Note:** the daemon-side enforcement of these vars is not wired
+in the built-in services yet — setting them alone does not lock the port. Until it
+lands, rely on the loopback bind (and an auth proxy for shared hosts), and treat
+`MEMORY_AUTH` / `KNOWLEDGE_AUTH` as reserved.
 
 ## Environment knobs
 

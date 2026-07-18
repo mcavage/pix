@@ -73,7 +73,7 @@ HOST (Go, tested, owns the truth)            SANDBOX (TS, reads one file)
 ┌───────────────────────────────┐            ┌──────────────────────────┐
 │ models.json    (registry+price)│            │ routing.json (resolved)  │
 │ scorecard.json (hand-edited)   │  compile   │  intent -> model + why   │
-│ routing-policy.json (intents)  │ ─────────▶ │                          │
+│ policy.json (intents)          │ ─────────▶ │                          │
 │      │                         │            │ subagents.ts reads it:   │
 │  Resolve() constrained-opt     │            │  intent: -> model id     │
 │      ▲                         │            │  (explicit model: wins)  │

@@ -14,22 +14,31 @@ flags exactly that. A compiled Go binary doing the same work runs unflagged.
 ```
 # non-MCP host HTTP services (run by `make serve`, reached over host.docker.internal):
 pi-stack-host memory        memory store, JSON-RPC         (:11435)
-pi-stack-host serve         run the enabled services together (SERVICES)
+pi-stack-host serve         run the enabled services together (SERVICES) —
+                            supervises memory (:11435) + knowledge (:11436 when enabled)
 
 # MCP servers (stdio, run by the sbx gateway via `sbx mcp add` / `make mcp-register`):
 pi-stack-host slack         Slack read/search MCP
-pi-stack-host gog           Google Workspace read MCP (Gmail/Drive/Docs/Sheets/Calendar)
+# NB: Google Workspace (`gog`) is the EXTERNAL `gog` CLI registered as a host MCP
+#     server — NOT a pi-stack-host subcommand. See the gog bullet below.
 ```
 
 - **memory** — the self-learning store: JSON-RPC over HTTP, pure-Go sqlite + FTS5,
   embeddings + capture watcher via Ollama. Env: `MEMORY_*`, `OLLAMA_HOST`.
-- **gog** — Google Workspace stdio MCP server. Like `slack`: NOT an HTTP daemon,
-  NOT in `make serve`; the gateway runs it on the host once registered. Creds stay
-  on the host in `GOG_HOME` (never in the VM). **Read-only + `--gmail-no-send` by
-  default** — typed read tools (`gmail_search`, `gmail_get_message`, `drive_search`,
-  `drive_get`, `docs_get`, `sheets_read_range`, `calendar_events`); write tools are
-  gated/off. Returned Gmail/Doc content is **wrapped as untrusted** (prompt-injection
-  guard). Registered via `make mcp-register`, attached at sandbox creation.
+- **knowledge** — the OKF knowledge store: JSON-RPC over HTTP (:11436), pure-Go
+  sqlite + FTS5 + embeddings, indexing the OKF bundle dirs listed in
+  `knowledge_bundles`. NOT a top-level subcommand — it runs under `serve` (and via
+  `plugin knowledge`) when `knowledge` is in the enabled services set.
+- **gog** — Google Workspace read MCP. This is the **external `gog` CLI**, NOT a
+  `pi-stack-host` subcommand: it is registered as a host MCP server (via `pi-stack
+  mcp register` / `make mcp-register`) and the sbx gateway runs it on the host once
+  registered — like `slack`, but a separate binary. NOT an HTTP daemon, NOT in
+  `make serve`. Creds stay on the host in `GOG_HOME` (never in the VM). **Read-only
+  + `--gmail-no-send` by default** — typed read tools (`gmail_search`,
+  `gmail_get_message`, `drive_search`, `drive_get`, `docs_get`, `sheets_read_range`,
+  `calendar_events`); write tools are gated/off. Returned Gmail/Doc content is
+  **wrapped as untrusted** (prompt-injection guard). Registered via `make
+  mcp-register`, attached at sandbox creation.
 - **slack** — stdio MCP server. NOT an HTTP daemon, NOT in `make serve`; the MCP
   gateway runs it on the host once registered. `sbx mcp add` (local stdio) has no
   `--env`, so creds come from 1Password: the registered command is

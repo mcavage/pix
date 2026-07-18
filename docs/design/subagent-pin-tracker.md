@@ -1,4 +1,8 @@
-# Implementation plan: pinned live subagent tracker
+# Pinned live subagent tracker
+
+**Status: IMPLEMENTED** — shipped in `extensions/subagents.ts` (the pin-tracker
+section). The TTL env var and default below reflect the shipped behavior:
+`PI_SUBAGENT_PIN_TTL_MS`, default 6000 ms.
 
 Add a persistent, pinned TUI panel that shows every running / finished subagent
 in one stable place, updated in place via `ctx.ui.setWidget`, without touching
@@ -144,7 +148,7 @@ watchdog timers (those are per-spawn, inside `runSingle`, untouched).
 
 Keep the pin bounded so a big fanout does not grow it without limit:
 
-- `FINISHED_TTL_MS` (env-tunable, default ~8000). `pruneExpired()` deletes any
+- `PI_SUBAGENT_PIN_TTL_MS` (env-tunable, default 6000). `pruneExpired()` deletes any
   entry whose `status !== "running"` and `endedAt` is older than the TTL, then
   re-renders if it removed anything. Called from `tick()`.
 - Collapse: in `renderWidget()`, if the count of finished rows exceeds a small
