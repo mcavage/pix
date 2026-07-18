@@ -13,11 +13,17 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type jsonObj = map[string]any
 
 func envRaw(k string) string { return os.Getenv(k) }
+
+// postFormClient is the HTTP client used for form-encoded API calls (e.g. Slack).
+// A 30-second timeout prevents indefinite hangs when the upstream accepts the
+// TCP connection but never completes the response (H-2).
+var postFormClient = &http.Client{Timeout: 30 * time.Second}
 
 func httpPostForm(u, bearer string, form url.Values) ([]byte, int, error) {
 	req, err := http.NewRequest(http.MethodPost, u, strings.NewReader(form.Encode()))
@@ -29,7 +35,7 @@ func httpPostForm(u, bearer string, form url.Values) ([]byte, int, error) {
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := postFormClient.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}

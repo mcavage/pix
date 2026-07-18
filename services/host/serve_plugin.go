@@ -84,20 +84,59 @@ func (s *supervisor) launch(name, kind string, spec config.PluginSpec, selfPath 
 	return h, nil
 }
 
-// pluginEnv builds the environment for a plugin subprocess: the parent env with
-// the broker bearer STRIPPED (F2 — a memory/mcp plugin must never inherit
-// PI_STACK_BROKER_AUTH and be able to mint tokens at a broker), plus any extra
-// vars the caller explicitly grants (a broker gets its bearer back this way, and
-// only the broker). Dormant in the public tree (no built-in broker mints a
-// bearer), kept as a belt-and-suspenders guard for overlay brokers.
+// pluginEnvAllowlist is the set of environment variable names that plugin
+// subprocesses may inherit from the parent process. An allowlist approach
+// prevents plugins from picking up sensitive secrets (cloud credentials, API
+// keys, SSH agent sockets, etc.) the parent may carry. PI_STACK_BROKER_AUTH is
+// deliberately absent — the broker gets its bearer exclusively via extraEnv in
+// brokerService(), and no other plugin may receive it (F2).
+var pluginEnvAllowlist = map[string]bool{
+	// Runtime essentials
+	"PATH": true, "HOME": true, "USER": true,
+	"TMPDIR": true, "TEMP": true, "TMP": true,
+	// Config locations
+	"PI_STACK_CONFIG": true,
+	"XDG_CONFIG_HOME": true,
+	"XDG_DATA_HOME":   true,
+	"XDG_STATE_HOME":  true,
+	// Memory service configuration
+	"MEMORY_PORT":               true,
+	"MEMORY_BIND":               true,
+	"MEMORY_DB":                 true,
+	"MEMORY_WATCHER_MODEL":      true,
+	"MEMORY_EMBED_MODEL":        true,
+	"MEMORY_EMBED_TIMEOUT_MS":   true,
+	"MEMORY_WATCHER_TIMEOUT_MS": true,
+	"MEMORY_SYNTH_MS":           true,
+	// Knowledge service configuration
+	"KNOWLEDGE_PORT":    true,
+	"KNOWLEDGE_BIND":    true,
+	"KNOWLEDGE_DB":      true,
+	"KNOWLEDGE_BUNDLES": true,
+	// Shared Ollama endpoint
+	"OLLAMA_HOST": true,
+	// Port vars the supervisor communicates to plugins
+	"PI_STACK_MEMORY_PORT":    true,
+	"PI_STACK_KNOWLEDGE_PORT": true,
+	"PI_STACK_BROKER_PORT":    true,
+}
+
+// pluginEnv builds the environment for a plugin subprocess using an allowlist
+// approach: only variables in pluginEnvAllowlist are inherited from the parent
+// process, preventing plugins from picking up sensitive secrets (F2). The
+// broker's PI_STACK_BROKER_AUTH is absent from the allowlist and is passed
+// exclusively via the extraEnv argument (only the broker gets it back).
 func pluginEnv(extra []string) []string {
 	base := os.Environ()
-	out := make([]string, 0, len(base)+len(extra))
+	out := make([]string, 0, len(pluginEnvAllowlist)+len(extra))
 	for _, kv := range base {
-		if strings.HasPrefix(kv, "PI_STACK_BROKER_AUTH=") {
-			continue
+		key := kv
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			key = kv[:i]
 		}
-		out = append(out, kv)
+		if pluginEnvAllowlist[key] {
+			out = append(out, kv)
+		}
 	}
 	return append(out, extra...)
 }
@@ -168,10 +207,13 @@ func (s *supervisor) spawn(h *pluginHolder, name, kind string, spec config.Plugi
 // channel) and restarts a crashed plugin with exponential backoff, capped at 5
 // total restarts; past that it logs loudly and leaves the slot degraded (a
 // crashed plugin never takes down the kernel — the proxy handler then returns an
-// "unavailable" error, mirroring memory's "degrade loudly" ethos).
+// "unavailable" error, mirroring memory's "degrade loudly" ethos). After a
+// successful restart, if the plugin runs stably for one full polling interval the
+// fail counter is reset so the next crash is treated as a fresh failure (L-2).
 func (s *supervisor) watch(h *pluginHolder, name, kind string, spec config.PluginSpec, selfPath string, extraEnv []string) {
 	fails := 0
 	backoff := time.Second
+	var lastSpawnAt time.Time // time of the most recent successful spawn
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -183,9 +225,21 @@ func (s *supervisor) watch(h *pluginHolder, name, kind string, spec config.Plugi
 		}
 		c := h.cur()
 		if c == nil || !c.Exited() {
+			// Plugin is running. If it has survived at least one full polling
+			// interval since the last restart, reset the fail counter — it
+			// recovered cleanly, so the next crash starts fresh.
+			if !lastSpawnAt.IsZero() && time.Since(lastSpawnAt) >= 2*time.Second {
+				if fails > 0 {
+					log.Printf("plugin %s stable after restart; resetting fail counter", name)
+					fails = 0
+				}
+				lastSpawnAt = time.Time{} // clear to avoid repeated resets
+			}
 			continue
 		}
+		// Plugin exited — increment the fail counter and clear the stable marker.
 		fails++
+		lastSpawnAt = time.Time{}
 		if fails > 5 {
 			log.Printf("plugin %s exited %d times; degrading (no more restarts)", name, fails)
 			return
@@ -197,6 +251,8 @@ func (s *supervisor) watch(h *pluginHolder, name, kind string, spec config.Plugi
 		}
 		if err := s.spawn(h, name, kind, spec, selfPath, extraEnv); err != nil {
 			log.Printf("plugin %s restart failed: %v", name, err)
+		} else {
+			lastSpawnAt = time.Now()
 		}
 	}
 }

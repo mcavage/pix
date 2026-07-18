@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -110,9 +112,14 @@ func TestServeBrokerSlot(t *testing.T) {
 func TestVerifyPluginSHA(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "fake-plugin")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	content := []byte("#!/bin/sh\nexit 0\n")
+	if err := os.WriteFile(bin, content, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
+	// Compute the correct SHA-256 of the binary content.
+	sum := sha256.Sum256(content)
+	correctSHA := hex.EncodeToString(sum[:])
 
 	// Empty SHA is a hard refusal (F-C): external plugins MUST be sha-pinned.
 	if err := verifyPluginSHA(config.PluginSpec{Path: bin}); err == nil || !strings.Contains(err.Error(), "unpinned") {
@@ -123,6 +130,16 @@ func TestVerifyPluginSHA(t *testing.T) {
 	err := verifyPluginSHA(config.PluginSpec{Path: bin, SHA: "0000deadbeef"})
 	if err == nil || !strings.Contains(err.Error(), "mismatch") {
 		t.Fatalf("wrong SHA should refuse with a mismatch error, got %v", err)
+	}
+
+	// Correct SHA passes (M-8).
+	if err := verifyPluginSHA(config.PluginSpec{Path: bin, SHA: correctSHA}); err != nil {
+		t.Errorf("correct SHA should be accepted, got %v", err)
+	}
+
+	// Uppercase SHA is accepted (case-insensitive match) (M-8).
+	if err := verifyPluginSHA(config.PluginSpec{Path: bin, SHA: strings.ToUpper(correctSHA)}); err != nil {
+		t.Errorf("uppercase SHA should be accepted, got %v", err)
 	}
 }
 

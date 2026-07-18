@@ -10,6 +10,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"pi-stack/host/config"
 	"pi-stack/host/plugin"
@@ -240,33 +242,58 @@ func runServe(enabled []string) {
 	defer removeServePidFile()
 	defer removeServeLazyMarker()
 
-	// Graceful shutdown: kill every managed plugin subprocess on SIGINT/SIGTERM so
-	// nothing is orphaned (no-op when everything is built-in/in-process), and drop
-	// the pidfile so `serve status` doesn't report a dead pid.
-	go func() {
-		ch := make(chan os.Signal, 1)
-		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
-		<-ch
-		log.Print("serve: shutting down; cleaning up plugin subprocesses")
+	// fatalCh carries service-goroutine errors (e.g. port already in use) back to
+	// the main goroutine so deferred cleanup (pidfile, lazy marker) runs before
+	// exit rather than being skipped by a direct os.Exit in a side goroutine (M-4).
+	fatalCh := make(chan error, len(all)+1)
+
+	// sigCh receives SIGINT/SIGTERM for graceful shutdown. Handling it in the main
+	// goroutine's select (instead of a side goroutine calling os.Exit) ensures the
+	// deferred cleanup runs on normal signal handling (M-4).
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	for _, s := range all {
+		s := s
+		// Bound HTTP servers: ReadTimeout prevents slow-loris header floods;
+		// WriteTimeout caps long-running handlers. Synthesis is the ceiling at ~60s,
+		// so 90s gives comfortable headroom. (M-1)
+		srv := &http.Server{
+			Addr:         s.addr,
+			Handler:      s.mux,
+			ReadTimeout:  30 * time.Second,
+			WriteTimeout: 90 * time.Second,
+		}
+		log.Printf("starting %s on http://%s", s.name, s.addr)
+		go func() {
+			if err := srv.ListenAndServe(); err != nil {
+				fatalCh <- fmt.Errorf("%s: %v", s.name, err)
+			}
+		}()
+	}
+
+	// Block until a signal or a service failure. The select here (vs the former
+	// goroutine calling os.Exit directly) lets deferred cleanup run for both paths.
+	select {
+	case sig := <-sigCh:
+		log.Printf("serve: received %v; shutting down", sig)
 		sup.shutdown()
 		if memLockRelease != nil {
 			memLockRelease()
 		}
+		// defers (removeServePidFile, removeServeLazyMarker) run on return
+	case err := <-fatalCh:
+		log.Printf("serve: fatal: %v", err)
+		sup.shutdown()
+		if memLockRelease != nil {
+			memLockRelease()
+		}
+		// Explicitly run deferred cleanup before os.Exit since defers don't run
+		// when Exit is called (defers only run on return from runServe).
 		removeServePidFile()
 		removeServeLazyMarker()
-		os.Exit(0)
-	}()
-
-	for _, s := range all {
-		s := s
-		log.Printf("starting %s on http://%s", s.name, s.addr)
-		go func() {
-			if err := http.ListenAndServe(s.addr, s.mux); err != nil {
-				fatalf("%s: %v", s.name, err)
-			}
-		}()
+		os.Exit(1)
 	}
-	select {} // block forever; the goroutines serve
 }
 
 // writeServePidFile records the current pid at config.ServePidPath() (0600, dir
