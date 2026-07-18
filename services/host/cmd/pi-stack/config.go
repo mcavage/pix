@@ -128,6 +128,8 @@ func configValue(cfg *config.Config, key string) (string, error) {
 		return strconv.FormatBool(cfg.Host.Enabled), nil
 	case "host.autonomy":
 		return cfg.Host.Autonomy, nil
+	case "host.autoserve":
+		return strconv.FormatBool(cfg.AutoserveEnabled()), nil
 	default:
 		return "", fmt.Errorf("unknown key %q\n%s", key, configKeysHelp)
 	}
@@ -178,6 +180,14 @@ func runConfigWrite(unset bool, argv []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("%s\n# saved to %s\n", summary, config.Path())
+	// Config propagation: a daemon-affecting key (services, memory_*_model,
+	// knowledge_bundles) only takes effect when serve restarts — do that for the
+	// user per the detected lifecycle mode (managed/lazy restart; foreground/down
+	// just advise). Composes with sparse Save: the change is both persisted
+	// correctly AND live, no manual step.
+	if isDaemonAffecting(argv[0]) {
+		propagateServeConfig(defaultServeReloader(), os.Stdout)
+	}
 }
 
 // splitProfileArg pulls a `--profile <name>` / `--profile=<name>` flag out of a
@@ -217,6 +227,9 @@ const configKeysHelp = `keys:
   ollama_bridge_model <m>   local model the sandbox exposes to pi + the router
   host.enabled true|false   gate for "pi-stack host" (UNSANDBOXED; default false)
   host.autonomy <mode>      reserved for the host-guard strictness (unused yet)
+  host.autoserve true|false lazy auto-start of the services daemon on run/
+                            memory/knowledge (default true; PI_STACK_NO_AUTOSERVE
+                            env also disables it)
 
 With --profile <name>, edits the [profiles.<name>] table instead of the base
 config (creating it if absent). Per-profile keys: gog_account, mcp,
@@ -331,6 +344,24 @@ func applyConfigChange(cfg *config.Config, unset bool, key string, args []string
 		}
 		return fmt.Sprintf("host.enabled = %v", cfg.Host.Enabled), nil
 
+	case "host.autoserve":
+		// Opt-out flag for lazy auto-start (ensureServe). Unset = nil = inherit the
+		// default (true) so a future default change reaches users (no petrified
+		// bool). NOT daemon-affecting: it changes launcher behavior, not serve.
+		if unset {
+			cfg.Host.Autoserve = nil
+		} else {
+			if len(args) != 1 {
+				return "", fmt.Errorf("config set host.autoserve <true|false>: needs exactly one value")
+			}
+			v, err := strconv.ParseBool(args[0])
+			if err != nil {
+				return "", fmt.Errorf("config set host.autoserve: %q is not a boolean (want true or false)", args[0])
+			}
+			cfg.Host.Autoserve = &v
+		}
+		return fmt.Sprintf("host.autoserve = %v", cfg.AutoserveEnabled()), nil
+
 	case "host.autonomy":
 		// RESERVED: stored for the future host-guard strictness knob; nothing
 		// reads it in Phase 1.
@@ -363,7 +394,7 @@ func applyProfileConfigChange(cfg *config.Config, unset bool, profile, key strin
 		verb = "unset"
 	}
 	switch key {
-	case "services", "memory_watcher_model", "memory_embed_model", "host.enabled", "host.autonomy":
+	case "services", "memory_watcher_model", "memory_embed_model", "host.enabled", "host.autonomy", "host.autoserve":
 		return "", fmt.Errorf("%s is global (not per-profile); drop --profile and run: pi-stack config %s %s <value>", key, verb, key)
 
 	case "gog_account":

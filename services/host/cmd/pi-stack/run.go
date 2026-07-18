@@ -141,6 +141,14 @@ func runRun(argv []string) {
 		_ = exec.Command("sbx", "rm", "-f", o.Name).Run()
 	}
 
+	// Lazy auto-start: make the configured host services (memory/knowledge)
+	// reachable before the sandbox tries them, with a SHORT budget — the launch
+	// waits AT MOST ensureServeRunTimeout (8s), covering spawn-lock acquisition
+	// AND the health poll under one deadline (M2), then proceeds regardless
+	// (recall/knowledge degrade in-VM exactly as before). ensureServe prints its
+	// own progress/failure lines.
+	ensureServeUp(nil, ensureServeRunTimeout)
+
 	// Knowledge scope: resolve this workspace's bundle set (global config bundles
 	// + the project's .pi-stack/knowledge pointer), lazily reindex the project
 	// bundle when the daemon is up and doesn't know it yet, and write the scope

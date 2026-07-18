@@ -238,6 +238,7 @@ func runServe(enabled []string) {
 	// and we remove the file again on graceful shutdown (below) and normal return.
 	writeServePidFile()
 	defer removeServePidFile()
+	defer removeServeLazyMarker()
 
 	// Graceful shutdown: kill every managed plugin subprocess on SIGINT/SIGTERM so
 	// nothing is orphaned (no-op when everything is built-in/in-process), and drop
@@ -252,6 +253,7 @@ func runServe(enabled []string) {
 			memLockRelease()
 		}
 		removeServePidFile()
+		removeServeLazyMarker()
 		os.Exit(0)
 	}()
 
@@ -289,6 +291,17 @@ func removeServePidFile() {
 	path := config.ServePidPath()
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		log.Printf("serve: could not remove pidfile %s: %v", path, err)
+	}
+}
+
+// removeServeLazyMarker clears the launcher-written serve.lazy marker on a
+// clean exit (belt + suspenders with `serve stop`'s own removal), so a lazily
+// started daemon that shuts down gracefully never leaves a stale "lazy" flag.
+// A hard kill leaves it behind — harmless, since lifecycle-mode detection also
+// requires a live, verified-ours pidfile.
+func removeServeLazyMarker() {
+	if err := os.Remove(config.ServeLazyMarkerPath()); err != nil && !os.IsNotExist(err) {
+		log.Printf("serve: could not remove lazy marker: %v", err)
 	}
 }
 

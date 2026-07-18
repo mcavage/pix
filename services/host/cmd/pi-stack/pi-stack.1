@@ -289,6 +289,67 @@ Extra arguments are rejected.
 Report the supervisor PID and memory and knowledge port state.
 .B \-\-json
 emits JSON.
+.TP
+.B "pi-stack serve install"
+Install the services as a MANAGED login service: a launchd LaunchAgent
+.RB ( com.pi-stack.serve )
+on macOS, a systemd \-\-user unit
+.RB ( pi-stack-serve.service )
+on Linux.  Starts at login, auto-restarts, and starts immediately.  Logs go to
+.I ~/Library/Logs/pi-stack-serve.{out,err}.log
+(macOS) or the user journal
+.RI ( "journalctl \-\-user \-u pi-stack-serve" ,
+Linux).  Idempotent; re-running reinstalls with the current binary path.
+Before installing, a lazily-started background daemon is stopped first and a
+FOREGROUND
+.B pi-stack serve
+is refused (stop it and re-run) \(em installing over a live daemon would make
+the auto-restarting unit crash-loop on its ports.  After installing, the
+command verifies (bounded) that the services actually came up and reports
+honestly when they did not.  The generated unit captures the install-time
+environment the daemon needs to read the SAME config and ports as the
+launcher: an absolute
+.B PI_STACK_CONFIG
+is always rendered, plus
+.BR XDG_CONFIG_HOME ,
+.BR MEMORY_DB ,
+.BR MEMORY_PORT ,
+.BR KNOWLEDGE_PORT ,
+and
+.B OLLAMA_HOST
+when set at install time.
+.TP
+.B "pi-stack serve uninstall"
+Remove the managed login service (bootout/disable and delete the unit file).
+.PP
+LAZY AUTO-START: when the managed service is not installed,
+.BR "pi-stack run" ,
+.BR "pi-stack memory" ,
+and
+.B "pi-stack knowledge query"
+auto-start a detached
+.B pi-stack-host serve
+if the configured service ports are down (the ollama-CLI model), waiting
+briefly for health and printing progress.  Its log is
+.IR ~/.local/state/pi-stack/serve.log .
+Opt out with the
+.B PI_STACK_NO_AUTOSERVE
+environment variable or
+.BR "pi-stack config set host.autoserve false" .
+After a daemon-affecting config write
+.RB ( services ,
+.BR memory_watcher_model ,
+.BR memory_embed_model ,
+.BR knowledge_bundles )
+the launcher restarts a managed or lazily-started daemon automatically so the
+change takes effect; a foreground serve is never killed \(em you are told to
+restart it.
+.B "pi-stack knowledge init"
+and
+.B "pi-stack knowledge use"
+save
+.B knowledge_bundles
+too and propagate the same way.
 .SS memory
 The aliases
 .BR mem ,
@@ -609,8 +670,9 @@ Base keys are
 .BR memory_embed_model ,
 .BR ollama_bridge_model ,
 .BR host.enabled ,
+.BR host.autonomy ,
 and
-.BR host.autonomy .
+.BR host.autoserve .
 .B ollama_bridge_model
 is the local model the sandbox exposes to pi and the router's local option;
 by default the memory watcher shares it.
@@ -620,6 +682,11 @@ gates the unsandboxed
 mode (default false), and
 .B host.autonomy
 is reserved for the host-guard strictness.
+.B host.autoserve
+(default true) gates the launcher's lazy auto-start of the services daemon;
+the
+.B PI_STACK_NO_AUTOSERVE
+environment variable also disables it and wins over the config flag.
 Per-profile keys are
 .BR gog_account ,
 .BR mcp ,
@@ -634,8 +701,9 @@ is accepted).  Profile writes create the named profile if absent.
 .BR memory_embed_model ,
 .BR ollama_bridge_model ,
 .BR host.enabled ,
+.BR host.autonomy ,
 and
-.B host.autonomy
+.B host.autoserve
 are global and reject
 .BR \-\-profile .
 Setting base

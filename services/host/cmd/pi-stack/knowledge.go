@@ -92,6 +92,10 @@ func runKnowledgeQuery(argv []string) {
 	if ids := canonicalBundleIDs(cfg.KnowledgeBundles); len(ids) > 0 {
 		params["bundles"] = ids
 	}
+	// Lazy auto-start: spin up the knowledge daemon detached if it is down (only
+	// when the knowledge service is actually enabled; best-effort — a failure
+	// falls through to the existing errServiceDown degrade below).
+	ensureServeUp([]string{"knowledge"}, ensureServeTimeout)
 	res, err := knowledgeClient().Call("query", params)
 	if err != nil {
 		exitFromErr("knowledge query", err)
@@ -316,7 +320,18 @@ func runKnowledgeInit(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack knowledge init: %v\n", err)
 		os.Exit(1)
 	}
+	// knowledge_bundles (+ services) is daemon-affecting: propagate exactly like
+	// `config set knowledge_bundles` does, so a running daemon indexes the new
+	// bundle with no manual restart (L1 — keeps the docs' "daemon-affecting
+	// writes auto-restart" claim true on this path too).
+	knowledgePropagate(os.Stdout)
 }
+
+// knowledgePropagate is the config-propagation hook `knowledge init`/`use` run
+// after saving a daemon-affecting change. A package-var seam (like
+// hostBinaryResolver) so tests can observe/neutralize it without launchctl/
+// systemctl probes.
+var knowledgePropagate = func(out io.Writer) { propagateServeConfig(defaultServeReloader(), out) }
 
 // resolveKnowledgeInitArgs validates `knowledge init` argv WITHOUT side effects
 // so a flag typo can be rejected before any scaffold / git-init / config write.
@@ -388,7 +403,7 @@ func knowledgeInit(cfg *config.Config, dir string, out io.Writer) error {
 		return fmt.Errorf("saving config: %w", err)
 	}
 	fmt.Fprintf(out, "Wired into %s (knowledge_bundles += %s, services += knowledge)\n", config.Path(), dir)
-	fmt.Fprintln(out, "Next: `pi-stack serve` indexes it; recall hits the knowledge service on :11436.")
+	fmt.Fprintln(out, "The knowledge service (:11436) indexes it at startup; recall queries hit it.")
 	return nil
 }
 
@@ -451,6 +466,8 @@ func runKnowledgeUse(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack knowledge use: %v\n", err)
 		os.Exit(1)
 	}
+	// Daemon-affecting save → propagate (see runKnowledgeInit).
+	knowledgePropagate(os.Stdout)
 }
 
 // knowledgeUseProject writes the per-project knowledge pointer
@@ -529,7 +546,7 @@ func knowledgeUse(cfg *config.Config, ref string, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "Using bundle %s\n", resolved)
 	fmt.Fprintf(out, "Wired into %s (knowledge_bundles = %v, services += knowledge)\n", config.Path(), cfg.KnowledgeBundles)
-	fmt.Fprintln(out, "Next: `pi-stack serve` indexes it; recall hits the knowledge service on :11436.")
+	fmt.Fprintln(out, "The knowledge service (:11436) indexes it at startup; recall queries hit it.")
 	return nil
 }
 

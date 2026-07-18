@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"strconv"
 	"strings"
 	"syscall"
@@ -262,27 +263,107 @@ func TestResolveServeStatus_StaleNotRunning(t *testing.T) {
 	}
 }
 
+// psFake builds a two-column `ps` fake: verifyServeProcPS calls `ps -o comm=`
+// (the executable path alone, no argv) then `ps -o args=` (the full command
+// line, only ever scanned for a standalone "serve" token). Dispatch is on the
+// `-o` value so a single fake covers both calls.
+func psFake(comm, args string, commErr, argsErr error) func(string, ...string) (string, error) {
+	return func(_ string, a ...string) (string, error) {
+		for _, v := range a {
+			switch v {
+			case "comm=":
+				return comm, commErr
+			case "args=":
+				return args, argsErr
+			}
+		}
+		return "", fmt.Errorf("unexpected ps invocation: %v", a)
+	}
+}
+
 // TestVerifyServeProcPS_Darwin: the darwin/BSD verify path matches our serve
-// command line from an injected `ps` and rejects an unrelated process; an absent
-// ps yields known=false (can't tell, trust the pidfile).
+// process from injected `ps -o comm=`/`args=` calls and rejects an unrelated
+// process; an absent ps yields known=false (can't tell, trust the pidfile).
 func TestVerifyServeProcPS_Darwin(t *testing.T) {
-	ours := func(string, ...string) (string, error) {
-		return "/usr/local/bin/pi-stack-host serve --foo\n", nil
-	}
+	ours := psFake("/usr/local/bin/pi-stack-host\n", "/usr/local/bin/pi-stack-host serve --foo\n", nil, nil)
 	if ok, known := verifyServeProcPS(4242, ours); !ok || !known {
-		t.Errorf("our serve cmdline: ours=%v known=%v, want true,true", ok, known)
+		t.Errorf("our serve process: ours=%v known=%v, want true,true", ok, known)
 	}
 
-	notOurs := func(string, ...string) (string, error) {
-		return "/usr/bin/postgres -D /data serve\n", nil // basename not pi-stack-host
-	}
+	notOurs := psFake("/usr/bin/postgres\n", "/usr/bin/postgres -D /data serve\n", nil, nil) // basename not pi-stack-host
 	if ok, known := verifyServeProcPS(4242, notOurs); ok || !known {
-		t.Errorf("foreign cmdline: ours=%v known=%v, want false,true", ok, known)
+		t.Errorf("foreign process: ours=%v known=%v, want false,true", ok, known)
 	}
 
-	noPS := func(string, ...string) (string, error) { return "", syscall.ENOENT }
+	noPS := psFake("", "", syscall.ENOENT, nil)
 	if ok, known := verifyServeProcPS(4242, noPS); ok || known {
 		t.Errorf("absent ps: ours=%v known=%v, want false,false", ok, known)
+	}
+}
+
+// Round 2 (H8, space-safe): a `pi-stack-host` installed at a path containing
+// spaces (e.g. "/Users/alice/My Projects/pi-stack-host") must still verify.
+// The old single `ps -o command=` + strings.Fields(line) split THIS path on
+// its own spaces and parsed argv[0] as just "/Users/alice/My", failing the
+// basename check and breaking stop/status/the install guard.
+func TestVerifyServeProcPS_PathWithSpaces(t *testing.T) {
+	spaced := psFake(
+		"/Users/alice/My Projects/pi-stack-host\n",
+		"/Users/alice/My Projects/pi-stack-host serve\n",
+		nil, nil)
+	if ok, known := verifyServeProcPS(4242, spaced); !ok || !known {
+		t.Errorf("spaced-path serve process: ours=%v known=%v, want true,true", ok, known)
+	}
+
+	// A foreign process at a spaced path must still be rejected (basename check
+	// still discriminates correctly, it just no longer mis-splits).
+	notServe := psFake("/Users/alice/My Projects/pi-stack-host\n", "/Users/alice/My Projects/pi-stack-host status\n", nil, nil)
+	if ok, known := verifyServeProcPS(4242, notServe); ok || !known {
+		t.Errorf("spaced-path non-serve process: ours=%v known=%v, want false,true", ok, known)
+	}
+}
+
+// Round 3 (H11): the standalone "serve" token scan must ignore argv[0], since
+// a `pi-stack-host` binary installed under a path that has a directory
+// component literally named "serve" (e.g. "/Users/alice/My serve
+// Projects/pi-stack-host") produces a `ps -o args=` line whose FIRST
+// space-separated field after that component is "serve" even though the real
+// subcommand is something else entirely ("status"). The old scan ran over the
+// WHOLE line and mistook that path component for a genuine `serve` subcommand
+// — a false positive that could make a stale pidfile verify as "ours" and get
+// signalled. The genuine case (a `serve` subcommand after a spaced path) must
+// still verify.
+func TestVerifyServeProcPS_ServeInPathNotSubcommand(t *testing.T) {
+	falsePositive := psFake(
+		"pi-stack-host\n",
+		"/Users/alice/My serve Projects/pi-stack-host status\n",
+		nil, nil)
+	if ok, known := verifyServeProcPS(4242, falsePositive); ok || !known {
+		t.Errorf("a `serve` PATH component with no serve SUBCOMMAND must be rejected: ours=%v known=%v, want false,true", ok, known)
+	}
+
+	genuine := psFake(
+		"pi-stack-host\n",
+		"/Users/alice/My serve Projects/pi-stack-host serve\n",
+		nil, nil)
+	if ok, known := verifyServeProcPS(4242, genuine); !ok || !known {
+		t.Errorf("a real serve subcommand after a spaced/`serve`-containing path must still verify: ours=%v known=%v, want true,true", ok, known)
+	}
+}
+
+// TestVerifyServeProcPS_RepeatedBasenameFullComm exercises the robust primary
+// path: on macOS `ps -o comm=` returns the FULL executable path, so argv[0] is
+// stripped by exact prefix. A path that both contains spaces AND repeats the
+// basename (a "serve" directory component) must not smuggle a false serve token.
+func TestVerifyServeProcPS_RepeatedBasenameFullComm(t *testing.T) {
+	exe := "/opt/pi-stack-host/My serve dir/pi-stack-host"
+	falsePositive := psFake(exe+"\n", exe+" status\n", nil, nil)
+	if ok, known := verifyServeProcPS(4242, falsePositive); ok || !known {
+		t.Errorf("repeated-basename spaced path with no serve subcommand must be rejected: ours=%v known=%v, want false,true", ok, known)
+	}
+	genuine := psFake(exe+"\n", exe+" serve\n", nil, nil)
+	if ok, known := verifyServeProcPS(4242, genuine); !ok || !known {
+		t.Errorf("genuine serve after a repeated-basename spaced path must verify: ours=%v known=%v, want true,true", ok, known)
 	}
 }
 

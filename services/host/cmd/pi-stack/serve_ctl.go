@@ -29,23 +29,25 @@ import (
 // serveCtl bundles the injectable OS operations `serve stop`/`serve status` need.
 // defaultServeCtl() wires the real syscall-backed ops; tests substitute fakes.
 type serveCtl struct {
-	pidPath   func() string                           // where the pidfile lives (config.ServePidPath)
-	readPid   func(path string) (string, error)       // read the pidfile's raw contents
-	removePid func(path string) error                 // remove the pidfile
-	kill      func(pid int, sig syscall.Signal) error // send a signal (sig 0 = liveness probe)
-	verify    func(pid int) (ours bool, known bool)   // is pid our `pi-stack-host serve`? known=false => can't tell
-	sleep     func(d time.Duration)                   // poll delay (injected so tests don't wait)
+	pidPath    func() string                           // where the pidfile lives (config.ServePidPath)
+	readPid    func(path string) (string, error)       // read the pidfile's raw contents
+	removePid  func(path string) error                 // remove the pidfile
+	kill       func(pid int, sig syscall.Signal) error // send a signal (sig 0 = liveness probe)
+	verify     func(pid int) (ours bool, known bool)   // is pid our `pi-stack-host serve`? known=false => can't tell
+	sleep      func(d time.Duration)                   // poll delay (injected so tests don't wait)
+	removeLazy func()                                  // clear the serve.lazy marker (optional; nil = skip)
 }
 
 // defaultServeCtl wires the real OS-backed control surface.
 func defaultServeCtl() serveCtl {
 	return serveCtl{
-		pidPath:   config.ServePidPath,
-		readPid:   func(path string) (string, error) { b, err := os.ReadFile(path); return string(b), err },
-		removePid: os.Remove,
-		kill:      func(pid int, sig syscall.Signal) error { return syscall.Kill(pid, sig) },
-		verify:    verifyServeProc,
-		sleep:     time.Sleep,
+		pidPath:    config.ServePidPath,
+		readPid:    func(path string) (string, error) { b, err := os.ReadFile(path); return string(b), err },
+		removePid:  os.Remove,
+		kill:       killProcess, // platform shim (serve_ctl_unix/windows.go)
+		verify:     verifyServeProc,
+		sleep:      time.Sleep,
+		removeLazy: func() { _ = os.Remove(config.ServeLazyMarkerPath()) },
 	}
 }
 
@@ -70,20 +72,76 @@ func verifyServeProc(pid int) (ours bool, known bool) {
 }
 
 // verifyServeProcPS is the darwin/BSD verify path: it asks `ps` for the target
-// pid's command line and matches it. run is injected so it is unit-testable
-// without a real process. A ps failure (absent, or the pid already gone) yields
+// pid's identity and matches it. run is injected so it is unit-testable without
+// a real process. A ps failure (absent, or the pid already gone) yields
 // known=false: ownership cannot be positively verified, so the caller REFUSES to
 // signal rather than trust the pidfile it wrote.
+//
+// Round 2 (H8, space-safe): the original single `ps -o command=` call then
+// strings.Fields(line) SPLIT the executable path on every space in it — a
+// binary at e.g. "/Users/alice/My Projects/pi-stack-host" parsed argv[0] as
+// just "/Users/alice/My", so cmdlineIsServe's basename check always failed for
+// any path containing a space and verification broke (stop/status/install
+// guard all rely on it). `comm=` returns ONE field — the executable path alone,
+// no argv — so its basename is space-safe with no splitting at all; a separate
+// `args=` call is only ever scanned for a standalone "serve" token, which is
+// unaffected by spaces elsewhere in the line.
 func verifyServeProcPS(pid int, run func(name string, args ...string) (string, error)) (ours bool, known bool) {
-	out, err := run("ps", "-o", "command=", "-p", strconv.Itoa(pid))
+	commOut, err := run("ps", "-o", "comm=", "-p", strconv.Itoa(pid))
 	if err != nil {
 		return false, false // ps unavailable — can't tell
 	}
-	line := strings.TrimSpace(out)
-	if line == "" {
+	exe := strings.TrimSpace(commOut)
+	if exe == "" {
 		return false, false // ps returned nothing — can't tell
 	}
-	return cmdlineIsServe(strings.Fields(line)), true
+	if filepath.Base(exe) != "pi-stack-host" {
+		return false, true // alive, clearly not ours
+	}
+	argsOut, err := run("ps", "-o", "args=", "-p", strconv.Itoa(pid))
+	if err != nil {
+		return false, false // ps unavailable for the args check — can't tell
+	}
+	line := strings.TrimSpace(argsOut)
+	if line == "" {
+		return false, false
+	}
+	// Scan for the standalone "serve" token ONLY in the arguments AFTER argv[0].
+	// argv[0] in `args=` is the executable path, which `comm=` already gave us
+	// EXACTLY (both are the full path, space-safe), so we strip it as a literal
+	// prefix. This is immune to a path that both contains spaces AND repeats our
+	// basename or a "serve" component
+	// ("/opt/pi-stack-host/x/pi-stack-host serve/pi-stack-host status") — the old
+	// basename-search approaches all mis-located argv[0]'s end in that case and
+	// leaked a path "serve" into the token scan (a false positive that could
+	// signal the wrong process). Fallback (comm != argv[0], e.g. a symlinked
+	// launch, which our own spawns never produce): the basename occurrence that
+	// ENDS argv[0] (followed by whitespace or EOL); conservative, and this branch
+	// is only reached when the exact-prefix strip fails.
+	var rest string
+	if strings.HasPrefix(line, exe) {
+		rest = line[len(exe):]
+	} else {
+		base := filepath.Base(exe)
+		for off := 0; ; {
+			i := strings.Index(line[off:], base)
+			if i < 0 {
+				return false, true // basename not at any argv[0] boundary — treat as not-ours
+			}
+			end := off + i + len(base)
+			if end == len(line) || line[end] == ' ' || line[end] == '\t' {
+				rest = line[end:]
+				break
+			}
+			off = end
+		}
+	}
+	for _, a := range strings.Fields(rest) {
+		if a == "serve" {
+			return true, true
+		}
+	}
+	return false, true
 }
 
 // cmdlineIsServe tightens the match from a loose substring to: the executable
@@ -146,6 +204,7 @@ func stopServe(ctl serveCtl, out io.Writer) (stopped bool, err error) {
 	}
 	if serveProcGone(ctl, pid, 5*time.Second) {
 		_ = ctl.removePid(path)
+		clearServeLazyMarker(ctl)
 		fmt.Fprintf(out, "stopped 'pi-stack-host serve' (pid %d, SIGTERM)\n", pid)
 		return true, nil
 	}
@@ -168,8 +227,18 @@ func stopServe(ctl serveCtl, out io.Writer) (stopped bool, err error) {
 		return false, fmt.Errorf("pid %d survived SIGKILL", pid)
 	}
 	_ = ctl.removePid(path)
+	clearServeLazyMarker(ctl)
 	fmt.Fprintf(out, "stopped 'pi-stack-host serve' (pid %d, SIGKILL)\n", pid)
 	return true, nil
+}
+
+// clearServeLazyMarker best-effort removes the serve.lazy marker after a
+// successful stop, so lifecycle-mode detection never sees a stale "lazy" flag
+// for a daemon we just stopped (guarded: fakes in older tests omit the field).
+func clearServeLazyMarker(ctl serveCtl) {
+	if ctl.removeLazy != nil {
+		ctl.removeLazy()
+	}
 }
 
 // serveOwnershipRefused re-checks (via ctl.verify) that pid is still our serve

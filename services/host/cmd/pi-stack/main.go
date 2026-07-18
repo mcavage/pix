@@ -229,6 +229,12 @@ func runServe(argv []string) {
 		case "status":
 			runServeStatus(argv[1:])
 			return
+		case "install":
+			runServeInstall(argv[1:])
+			return
+		case "uninstall":
+			runServeUninstall(argv[1:])
+			return
 		}
 	}
 	bin, err := findHostBinary()

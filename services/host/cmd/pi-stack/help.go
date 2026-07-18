@@ -209,10 +209,17 @@ func verbUsage(verb string) (string, bool) {
 const serveUsage = `usage: pi-stack serve [args...]
        pi-stack serve stop
        pi-stack serve status [--json]
+       pi-stack serve install
+       pi-stack serve uninstall
 
 Run the long-running host services (execs the sibling pi-stack-host serve):
 memory (:11435) and knowledge (:11436, when enabled). Any args are passed
 through to pi-stack-host serve unchanged.
+
+You usually do NOT need to run this yourself: pi-stack run / memory /
+knowledge query auto-start a detached serve when its ports are down (lazy
+auto-start; logs in ~/.local/state/pi-stack/serve.log). Opt out with
+PI_STACK_NO_AUTOSERVE=1 or 'pi-stack config set host.autoserve false'.
 
 subcommands:
   stop              stop a running 'pi-stack-host serve' via its pidfile (safe:
@@ -220,6 +227,16 @@ subcommands:
                     SIGKILL if it doesn't exit)
   status [--json]   report whether serve is running (pid) and which service
                     ports (:11435 / :11436) are up
+  install           install serve as a managed login service (launchd on macOS,
+                    systemd --user on Linux): starts at login, auto-restarts.
+                    stops a lazily-started daemon first; refuses over a
+                    foreground serve. captures install-time env into the unit
+                    (PI_STACK_CONFIG always; XDG_CONFIG_HOME, MEMORY_DB,
+                    MEMORY_PORT, KNOWLEDGE_PORT, OLLAMA_HOST when set) and
+                    verifies the service came up.
+                    logs: ~/Library/Logs/pi-stack-serve.{out,err}.log (macOS) /
+                    journalctl --user -u pi-stack-serve (linux)
+  uninstall         remove the managed login service
 `
 
 const statusUsage = `usage: pi-stack status [--json]

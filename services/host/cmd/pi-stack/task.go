@@ -15,7 +15,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"pi-stack/host/config"
@@ -288,22 +287,9 @@ func taskLockPath(repokey, name string) string {
 // would never release. The pattern is to return an exit code out through a
 // captured variable and os.Exit only AFTER withTaskLock returns.
 func withTaskLock(repokey, name string, fn func() error) error {
-	lockPath := taskLockPath(repokey, name)
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
-		return fmt.Errorf("create task lock dir: %w", err)
-	}
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return fmt.Errorf("open task lock %s: %w", lockPath, err)
-	}
-	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("acquire task lock %s: %w", lockPath, err)
-	}
-	// LIFO defers: unlock BEFORE close (closing the fd would also drop the lock,
-	// but the explicit LOCK_UN keeps the release intent obvious).
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	return fn()
+	// Shared flock helper (serve_start.go) — the same dance the serve spawn lock
+	// uses, factored so it is written once.
+	return withFlock(taskLockPath(repokey, name), fn)
 }
 
 // sanitizeTaskName keeps a task name safe as a path + sandbox-name segment

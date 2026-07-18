@@ -195,3 +195,47 @@ func TestExtractManFlag(t *testing.T) {
 		}
 	}
 }
+
+// serveSubverbsFromUsage parses the subverb names out of serveUsage's
+// `subcommands:` block (two-space-indented leading token), the same
+// single-source-of-truth pattern configKeysFromHelp uses.
+func serveSubverbsFromUsage(t *testing.T) []string {
+	t.Helper()
+	block := serveUsage
+	if i := strings.Index(block, "subcommands:"); i >= 0 {
+		block = block[i:]
+	}
+	re := regexp.MustCompile(`(?m)^  ([a-z]+) `)
+	seen := map[string]bool{}
+	var subs []string
+	for _, m := range re.FindAllStringSubmatch(block, -1) {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			subs = append(subs, m[1])
+		}
+	}
+	if len(subs) == 0 {
+		t.Fatal("no subverbs parsed from serveUsage")
+	}
+	return subs
+}
+
+// TestManPageDocumentsServeSubverbs is the SUBVERB anti-drift guardrail (M3),
+// the sibling of TestManPageDocumentsEveryConfigKey: the verb-level check only
+// guards `pi-stack serve`, so `serve install`/`serve uninstall` could silently
+// drift out of the man page while the CLI help stayed complete. Every subverb
+// the CLI's own serveUsage advertises MUST appear in the man page as an
+// invocable `pi-stack serve <sub>` form.
+func TestManPageDocumentsServeSubverbs(t *testing.T) {
+	page := string(manPage)
+	var missing []string
+	for _, sub := range serveSubverbsFromUsage(t) {
+		if !strings.Contains(page, "pi-stack serve "+sub) {
+			missing = append(missing, sub)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		t.Errorf("serve subverbs in the CLI help but NOT in the man page (add `pi-stack serve <sub>` entries): %v", missing)
+	}
+}

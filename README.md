@@ -106,12 +106,18 @@ sbx secret set -g google
 sbx secret set -g github
 
 pi-stack setup
-pi-stack serve
 pi-stack run
 ```
 
 `pi-stack setup` writes `~/.config/pi-stack/config.toml`, registers configured MCP
 servers, and enables memory. Re-run it when your host setup changes.
+
+You don't babysit the services daemon: `pi-stack run` / `memory` / `knowledge
+query` lazily auto-start a detached `pi-stack-host serve` when its ports are
+down (opt out with `PI_STACK_NO_AUTOSERVE=1` or `pi-stack config set
+host.autoserve false`; log at `~/.local/state/pi-stack/serve.log`). Prefer an
+always-on login service? `pi-stack serve install` registers it with launchd
+(macOS) or systemd --user (Linux); `pi-stack serve uninstall` removes it.
 
 Bare `pi-stack` (no args) prints a status dashboard; it never launches a sandbox.
 Use `pi-stack run [DIR]` to launch. This is deliberate: launching is always
@@ -198,7 +204,7 @@ pi-stack ls                  # list your pi-stack sandboxes (name, state, dir)
 pi-stack rm <name>           # remove a sandbox (--all [--except <name>])
 pi-stack status              # fast read-only control panel (alias: st)
 pi-stack setup               # guided setup for config, memory, and MCP
-pi-stack serve               # run enabled host services
+pi-stack serve               # run enabled host services (auto-started lazily; install/uninstall for a login service)
 pi-stack doctor              # diagnose host and sandbox prerequisites
 pi-stack config show|path|set|unset  # inspect or update config (never hand-edit toml)
 pi-stack help [--all] [verb] # tiered help: Core by default, --all for the rest
@@ -260,6 +266,7 @@ These are independent. Use the ones you need and skip the rest.
 
 ```bash
 pi-stack serve            # memory (:11435), knowledge (:11436 if enabled), broker if configured
+                          # (auto-started on demand; `serve install` = managed login service)
 pi-stack mcp register     # register local stdio MCP servers with the sbx gateway
 pi-stack doctor           # check keys, services, models, gog, and MCP state
 ```
@@ -313,14 +320,17 @@ watcher at something smaller (`pi-stack config set memory_watcher_model
 qwen3.5:4b`); on a roomier one, bump either (`qwen3.5:27b`, `gemma4:12b`, ...).
 Free disk with `ollama rm <tag>`.
 
-Knowledge is opt-in. Create a local OKF bundle or attach an existing one, then
-restart the host services:
+Knowledge is opt-in. Create a local OKF bundle or attach an existing one:
 
 ```bash
 pi-stack knowledge init
 # or: pi-stack knowledge use /path/to/okf-bundle
-pi-stack serve
 ```
+
+Both commands wire the config AND propagate it: a managed or lazily-started
+daemon is restarted automatically so the bundle gets indexed; a foreground
+`pi-stack serve` is never killed — you're told to restart it (and if nothing is
+running, the change simply applies on the next start).
 
 Google Workspace is read-only by default. Authorize once on the host, then point
 pi-stack at the account:

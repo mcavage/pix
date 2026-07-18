@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -335,4 +336,30 @@ func conceptIDList(b *okf.Bundle) []string {
 		ids = append(ids, c.ID)
 	}
 	return ids
+}
+
+// L1: `knowledge init` and `knowledge use` save daemon-affecting config
+// (knowledge_bundles + services), so they must run the SAME config propagation
+// as `config set knowledge_bundles` — otherwise the docs' "daemon-affecting
+// writes auto-restart" claim is false on these paths and the user's running
+// daemon never indexes the new bundle.
+func TestKnowledgeInitAndUsePropagateServeConfig(t *testing.T) {
+	cfgFile := filepath.Join(t.TempDir(), "config.toml")
+	t.Setenv("PI_STACK_CONFIG", cfgFile)
+
+	propagations := 0
+	orig := knowledgePropagate
+	knowledgePropagate = func(io.Writer) { propagations++ }
+	defer func() { knowledgePropagate = orig }()
+
+	dir := filepath.Join(t.TempDir(), "kb")
+	runKnowledgeInit([]string{dir})
+	if propagations != 1 {
+		t.Fatalf("knowledge init propagated %d times, want 1", propagations)
+	}
+
+	runKnowledgeUse([]string{dir})
+	if propagations != 2 {
+		t.Fatalf("knowledge use propagated %d more times, want 1 more (total 2, got %d)", propagations-1, propagations)
+	}
 }
