@@ -133,7 +133,7 @@ func runServe(enabled []string) {
 			}
 			memSvc.mux = newMemoryMux(store, hasEmb)
 		} else {
-			h, lerr := sup.launch("memory", "memory", spec, selfPath, nil)
+			h, lerr := sup.launch("memory", "memory", spec, selfPath, spec.ExtraEnv)
 			if lerr != nil {
 				fatalf("launch memory plugin: %v", lerr)
 			}
@@ -170,7 +170,7 @@ func runServe(enabled []string) {
 			}
 			knSvc.mux = knowledgeMux(store)
 		} else {
-			h, lerr := sup.launch("knowledge", "knowledge", spec, selfPath, nil)
+			h, lerr := sup.launch("knowledge", "knowledge", spec, selfPath, spec.ExtraEnv)
 			if lerr != nil {
 				fatalf("launch knowledge plugin: %v", lerr)
 			}
@@ -353,6 +353,9 @@ func brokerService(cfg *config.Config, sup *supervisor, selfPath string) (*hostS
 	if bearer != "" {
 		grant = []string{"PI_STACK_BROKER_AUTH=" + bearer}
 	}
+	// Append any per-plugin extra env vars from config (ExtraEnv is wired here so
+	// an operator's [plugins.broker] extra_env entries are actually passed through).
+	grant = append(grant, spec.ExtraEnv...)
 	h, err := sup.launch("broker", "broker", spec, selfPath, grant)
 	if err != nil {
 		return nil, err

@@ -630,12 +630,17 @@ func (s *memStore) synthesizeBucket(profile string, threshold float64) int {
 				var rowid int64
 				if err := s.db.QueryRow("SELECT rowid FROM memories WHERE id = ?", recs[j].id).Scan(&rowid); err != nil {
 					log.Printf("synthesizeBucket: rowid lookup failed for %s: %v", recs[j].id, err)
+					// Skip the FTS delete if we don't have a valid rowid (0 is never a
+					// real SQLite rowid; DELETE WHERE rowid=0 is a silent no-op).
+					rowid = -1
 				}
 				if _, err := s.db.Exec("UPDATE memories SET deleted_at = ? WHERE id = ?", memNowIso(), recs[j].id); err != nil {
 					log.Printf("synthesizeBucket: soft-delete failed for %s: %v", recs[j].id, err)
 				}
-				if _, err := s.db.Exec("DELETE FROM memories_fts WHERE rowid = ?", rowid); err != nil {
-					log.Printf("synthesizeBucket: FTS delete failed for rowid %d: %v", rowid, err)
+				if rowid > 0 {
+					if _, err := s.db.Exec("DELETE FROM memories_fts WHERE rowid = ?", rowid); err != nil {
+						log.Printf("synthesizeBucket: FTS delete failed for rowid %d: %v", rowid, err)
+					}
 				}
 				dead[recs[j].id] = true
 				merged++

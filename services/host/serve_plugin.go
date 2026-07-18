@@ -225,10 +225,11 @@ func (s *supervisor) watch(h *pluginHolder, name, kind string, spec config.Plugi
 		}
 		c := h.cur()
 		if c == nil || !c.Exited() {
-			// Plugin is running. If it has survived at least one full polling
-			// interval since the last restart, reset the fail counter — it
-			// recovered cleanly, so the next crash starts fresh.
-			if !lastSpawnAt.IsZero() && time.Since(lastSpawnAt) >= 2*time.Second {
+			// Plugin is running. If it has survived at least 30 s since the last
+			// restart, reset the fail counter — the restart is stable, so the next
+			// crash starts fresh. 30 s is significantly larger than the 2 s polling
+			// interval to avoid trivially satisfying the condition (L-2).
+			if !lastSpawnAt.IsZero() && time.Since(lastSpawnAt) >= 30*time.Second {
 				if fails > 0 {
 					log.Printf("plugin %s stable after restart; resetting fail counter", name)
 					fails = 0

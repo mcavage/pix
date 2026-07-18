@@ -67,11 +67,11 @@ const embedProbeInterval = 60 * time.Second
 // attempt. Used to throttle recovery probes when embedDisabled is true.
 var embedLastProbe atomic.Int64
 
-// embedProbeClient is the HTTP client for lightweight Ollama model-presence
+// modelProbeClient is the HTTP client for lightweight Ollama model-presence
 // probes (/api/show). A 10-second timeout prevents goroutine leaks when Ollama
 // accepts the connection but never sends a response. It is a package-level
 // variable so tests can substitute a mock server without forking the process.
-var embedProbeClient = &http.Client{Timeout: 10 * time.Second}
+var modelProbeClient = &http.Client{Timeout: 10 * time.Second}
 
 var embedDisabled atomic.Bool
 
@@ -186,7 +186,7 @@ func isTimeoutErr(err error) bool {
 // via an indefinite hang (H-2).
 func memOllamaHasModel(model string) bool {
 	body, _ := json.Marshal(map[string]any{"name": model})
-	res, err := embedProbeClient.Post(ollamaHost()+"/api/show", "application/json", bytes.NewReader(body))
+	res, err := modelProbeClient.Post(ollamaHost()+"/api/show", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return false
 	}

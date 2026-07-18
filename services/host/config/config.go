@@ -943,6 +943,11 @@ func Seed(path string) (bool, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return false, err
 	}
+	// Tighten an existing config dir that may have been created 0755 elsewhere,
+	// matching SeedOpRefsAt() (F5).
+	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
+		return false, err
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		if os.IsExist(err) {
