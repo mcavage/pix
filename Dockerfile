@@ -143,7 +143,7 @@ RUN printf 'agent:x:1000:1000::/home/agent:/bin/bash\n' >> /etc/passwd \
  && ln -sf /usr/local/bin/fd /home/agent/.pi/agent/bin/fd \
  && chown -R 1000:1000 /home/agent "$NPM_CONFIG_PREFIX"
 
-# --- bake the harness (pi auto-discovers ~/.pi/agent/{skills,prompts,extensions})
+# --- bake the harness (pi auto-discovers ~/.pi/agent/{skills,extensions})
 COPY --chown=agent:agent settings.json    /home/agent/.pi/agent/settings.json
 COPY --chown=agent:agent keybindings.json  /home/agent/.pi/agent/keybindings.json
 # mcp.json registers the sbx Cloud MCP Gateway (atlassian/notion/granola/linear/…).
@@ -157,11 +157,10 @@ COPY --chown=agent:agent capabilities.json /home/agent/.pi/agent/capabilities.js
 # routing.json is the model router's compiled intent->model map (same swap-one-file
 # pattern as capabilities.json, but for MODELS). Agents declare an `intent:` and
 # subagents.ts resolves it here. Regenerate on the host with `pi-stack route
-# compile` (e.g. after `pi-stack evals run` measures a new model). See
+# compile` after editing services/host/routing/scorecard.json. See
 # docs/design/routing.md.
 COPY --chown=agent:agent routing.json      /home/agent/.pi/agent/routing.json
 COPY --chown=agent:agent skills/       /home/agent/.pi/agent/skills/
-COPY --chown=agent:agent prompts/      /home/agent/.pi/agent/prompts/
 COPY --chown=agent:agent extensions/   /home/agent/.pi/agent/extensions/
 COPY --chown=agent:agent agents/       /home/agent/.pi/agent/agents/
 COPY --chown=agent:agent themes/       /home/agent/.pi/agent/themes/

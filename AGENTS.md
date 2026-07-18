@@ -26,7 +26,6 @@ read it before changing things, and keep it current as you learn.
 | `config/local.mk` | the **make/dev config surface** (gitignored; `make install` seeds it from `config/local.mk.example`). Declares `SERVICES`, `MCP`, `GOG_ACCOUNT`, and Ollama model names for make targets. The launcher's runtime config lives at `~/.config/pi-stack/config.toml` (managed by `pi-stack config set`). The overlay peer repo's `overlay.mk` adds private make targets. |
 | `services/host/{slack,memory}.go` | the former `mcp/*` servers, now `pi-stack-host` subcommands. `slack` is a **stdio MCP server** registered with sbx (`make mcp-register`) and run by the MCP gateway — NOT in `mcp.json`, NOT in `make serve`. `memory` (JSON-RPC :11435, sqlite+FTS5+vectors via Ollama) is a plain host service backing the recall extension. None are baked into the image. |
 | `themes/*.json` | `dracula` (default), `pi-stack` |
-| `prompts/*.md` | prompt templates (`/name`) |
 | `docs/OVERLAY.md` | how to build a private company overlay (peer repo: mixin kit + host plugins) |
 
 ## Build → load → run (read this before iterating)
