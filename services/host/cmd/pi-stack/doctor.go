@@ -409,8 +409,9 @@ func memCaptureCheck() check {
 	defer res.Body.Close()
 	var parsed struct {
 		Result struct {
-			Capture      bool   `json:"capture"`
-			WatcherModel string `json:"watcherModel"`
+			Capture       bool   `json:"capture"`
+			CaptureReason string `json:"captureReason"`
+			WatcherModel  string `json:"watcherModel"`
 		} `json:"result"`
 	}
 	if json.NewDecoder(io.LimitReader(res.Body, 1<<16)).Decode(&parsed) != nil {
@@ -420,10 +421,17 @@ func memCaptureCheck() check {
 	if parsed.Result.Capture {
 		return check{label: "fact capture", state: stateOK, detail: fmt.Sprintf("on (watcher %s)", m)}
 	}
+	// Prefer the daemon's own live reason (e.g. a watcher inference timeout while
+	// Ollama is wedged) over the generic "unavailable" text — that's the whole
+	// point of surfacing captureReason.
+	detail := fmt.Sprintf("OFF — watcher %q unavailable (recall still works)", m)
+	if parsed.Result.CaptureReason != "" {
+		detail = fmt.Sprintf("OFF — %s (recall still works)", parsed.Result.CaptureReason)
+	}
 	return check{
 		label:  "fact capture",
 		state:  stateTODO,
-		detail: fmt.Sprintf("OFF — watcher %q unavailable (recall still works)", m),
+		detail: detail,
 		todo:   "ollama pull " + m,
 	}
 }

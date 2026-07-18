@@ -688,7 +688,12 @@ func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 		"health": func(jsonObj) (any, error) {
 			// watcherCaptureAvailable re-probes (throttled) so health reflects a live
 			// recovery after `ollama pull`, and so `pi-stack doctor` reads the truth.
-			return jsonObj{"ok": true, "vector": hasEmb, "capture": watcherCaptureAvailable(), "watcherModel": memWatcherModel()}, nil
+			capture := watcherCaptureAvailable()
+			reason := ""
+			if !capture {
+				reason = getWatcherReason()
+			}
+			return jsonObj{"ok": true, "vector": hasEmb, "capture": capture, "captureReason": reason, "watcherModel": memWatcherModel()}, nil
 		},
 		"stats": func(p jsonObj) (any, error) { return store.stats(profileFromParams(p)), nil },
 		"recall": func(p jsonObj) (any, error) {
@@ -724,8 +729,11 @@ func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 			// watcherCaptureAvailable re-probes (throttled) so capture recovers the
 			// moment the user pulls the model, without a daemon restart.
 			if !watcherCaptureAvailable() {
-				return jsonObj{"accepted": false,
-					"reason": "watcher model unavailable — run `ollama pull " + memWatcherModel() + "` (or set MEMORY_WATCHER_MODEL); recall still works"}, nil
+				reason := getWatcherReason()
+				if reason == "" {
+					reason = "watcher model unavailable — run `ollama pull " + memWatcherModel() + "` (or set MEMORY_WATCHER_MODEL)"
+				}
+				return jsonObj{"accepted": false, "reason": reason + "; recall still works"}, nil
 			}
 			go memCapture(store, user, project, hasProj, profile)
 			return jsonObj{"accepted": true}, nil
