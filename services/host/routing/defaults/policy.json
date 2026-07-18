@@ -89,6 +89,15 @@
       "min_accuracy": 0.65,
       "fallback": "anthropic/claude-haiku-4-5",
       "about": "Test/QA passes: best accuracy within the cheap AND fast tier (tight cost + latency caps, so a free-but-slow local model can't win a high-volume role). -> Haiku 4.5."
+    },
+    {
+      "name": "fast-balanced",
+      "task_type": "reasoning",
+      "objective": "balanced",
+      "max_latency_ms": 10000,
+      "min_accuracy": 0.65,
+      "fallback": "anthropic/claude-haiku-4-5",
+      "about": "Snappy interactive work that wants more smarts than the volume floor but can't wait on a frontier model: balanced accuracy/cost/latency within a hard sub-10s tier (excludes Pro/Sol/Terra/Sonnet on latency) above a 0.65 accuracy floor (excludes Flash-Lite). -> Gemini 3.5 Flash (fast, mid-accuracy, beats Haiku on the blend)."
     }
   ]
 }
