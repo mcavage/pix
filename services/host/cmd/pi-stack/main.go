@@ -290,6 +290,22 @@ flags:
   --model M        active pi model (passed through to pi)
   --intent NAME    resolve the session model via the router (cost/latency/accuracy);
                    --model overrides it. Intents: pi-stack route show
+  --replace        recreate the sandbox (sbx rm -f, then create) instead of
+                   re-attaching to an existing one; picks up changed --kit/--mcp/
+                   create-only flags
+
+lifecycle (matches sbx's own re-attach model):
+  no sandbox named N          -> create it (the flags above apply).
+  a sandbox named N exists    -> RE-ATTACH to it as-is (running or stopped);
+                                 sbx reads the agent from its own spec, so
+                                 --kit/--mcp/--template, --dev, and the
+                                 create-only skill flags are NOT re-sent (--dev
+                                 is create/replace-only and is ignored, with a
+                                 note, on a plain re-attach). Use --replace to
+                                 recreate with the current flags instead.
+                                 --model/--intent are NOT create-only: they are
+                                 pi runtime args, so they still reach the pi
+                                 session on a re-attach too.
 
 released vs local:
   A RELEASED launcher (clean version like 0.0.16) pins the matching kit tag

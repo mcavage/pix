@@ -176,7 +176,7 @@ Check provider keys, Ollama and its configured models, memory, Google Workspace,
 emits a machine-readable report.
 .SS run
 .TP
-.BR "pi-stack run" " [" DIR "] [" \-\-dev "] [" \-\-skills " " DIR "]... [" \-\-kit " " K "]... [" \-\-mcp " " M "]... [" \-\-name " " N "] [" \-\-model " " M "] [" \-\- " " pi-args... "]"
+.BR "pi-stack run" " [" DIR "] [" \-\-dev "] [" \-\-skills " " DIR "]... [" \-\-kit " " K "]... [" \-\-mcp " " M "]... [" \-\-name " " N "] [" \-\-model " " M "] [" \-\-replace "] [" \-\- " " pi-args... "]"
 Launch a sandbox for
 .IR DIR ,
 which defaults to the current directory.  An explicit directory must exist.
@@ -184,24 +184,46 @@ Arguments after
 .B \-\-
 are passed to
 .BR pi .
+.PP
+Lifecycle matches sbx's own re-attach model.  When no sandbox of the resolved
+name exists, it is created and the flags below apply.  When one already
+exists — running
+.B or
+stopped —
+.B run
+RE-ATTACHES to it as-is instead of refusing or recreating: sbx reads the agent
+from the existing sandbox's own spec, so
+.BR \-\-kit ,
+.BR \-\-mcp ,
+.BR \-\-template ,
+and the create-only skill flags are not re-sent.  Use
+.B \-\-replace
+to force a recreate instead.
 .TP
 .B \-\-dev
 Use the local checkout kit and load its skills live.  A checkout must be found
 through
 .BR PI_STACK_DEV_ROOT ,
 the current directory or an ancestor, or the launcher's installed location.
+Applies only to a fresh create; use
+.B \-\-replace
+to pick it up on an existing sandbox.
 .TP
 .BI \-\-skills " DIR"
-Mount and load an additional skill tree.  Repeatable.
+Mount and load an additional skill tree.  Repeatable.  Create-only; see
+.BR \-\-replace .
 .TP
 .BI \-\-kit " K"
 Replace automatic kit selection with a path or git URL.  Repeatable.
+Create-only; see
+.BR \-\-replace .
 .TP
 .BI \-\-mcp " M"
 Attach an MCP server when creating the sandbox.  Repeatable; attachment is used
 only when
 .B SBX_MCP_URL
-is set.
+is set.  Create-only; see
+.BR \-\-replace .
 .TP
 .BI \-\-name " N"
 Use
@@ -215,7 +237,19 @@ Pass
 .I M
 to
 .B pi
-as its active model.
+as its active model.  Unlike the other flags above, this is
+.B not
+create-only: it is a pi runtime argument, so it still reaches
+.B pi
+on a re-attach too.
+.TP
+.B \-\-replace
+Recreate the sandbox (
+.B sbx rm \-f
+then create) instead of re-attaching to an existing one, whether it is running
+or stopped.  This is the way to pick up a changed
+.BR \-\-kit / \-\-mcp /
+create-only flag.
 .SS host
 .TP
 .BR "pi-stack host" " [" DIR "] [" \-\-model " " M "] [" \-\- " " pi-args... "]"

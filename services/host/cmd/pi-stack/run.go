@@ -72,38 +72,62 @@ func runRun(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack: profile %q\n", profile)
 	}
 
-	// Kit selection. A CLEAN released version (e.g. "0.0.16") pins the matching
-	// git tag; anything else — an unstamped "dev" build, a "0.0.16+local" local
-	// build, or non-semver — is UNRELEASED, its tag does not exist, so we never
-	// pin v<version>. --dev forces the local checkout kit; an unreleased build
-	// uses it too when a checkout is resolvable, else falls back to #ref=main.
-	released := isReleased(version)
-	kitOverride := len(o.Kits) > 0
-
-	if o.Dev {
-		// --dev needs a resolvable repo checkout; fail loud otherwise.
-		root, err := resolveRepoRoot()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "pi-stack run --dev: %v\n", err)
-			os.Exit(1)
+	// Own the sandbox name so we can manage its lifecycle. sbx would otherwise
+	// auto-derive `pi-stack-<dir>`. This needs only Workspace + profile, so it is
+	// resolved (and the sandbox state probed) BEFORE any create-only input
+	// resolution below — a plain re-attach must never fail on a --dev/checkout or
+	// --kit problem it doesn't even need.
+	if o.Name == "" {
+		o.Name = deriveSandboxName(o.Workspace)
+		if profile != config.DefaultProfile {
+			o.Name += "-" + sanitizeProfileName(profile)
 		}
-		o.DevRoot = root
-		o.LocalKit = filepath.Join(root, "pi-kit")
-		o.LocalImageTag = readLocalImageTag(root)
-	} else if !released && !kitOverride {
-		if root, err := resolveRepoRoot(); err == nil {
+	}
+	state := probeTaskSandbox(defaultShellEnv(), o.Name)
+
+	// Mirror sbx's own model: an existing sandbox (running OR stopped) RE-ATTACHES
+	// instead of refusing/recreating — the create-only flags (--kit/--template/
+	// --mcp/overlay-kit/--dev/dev-skills) only apply to a fresh create, so they are
+	// simply not sent (and, per willCreate below, not even RESOLVED) on re-attach.
+	// --replace forces the old implicit-recreate behavior (rm -f then create) for
+	// either state, so changed kit/mcp/create-only flags take effect.
+	if willCreate(state, o.Replace) {
+		// Kit selection. A CLEAN released version (e.g. "0.0.16") pins the matching
+		// git tag; anything else — an unstamped "dev" build, a "0.0.16+local" local
+		// build, or non-semver — is UNRELEASED, its tag does not exist, so we never
+		// pin v<version>. --dev forces the local checkout kit; an unreleased build
+		// uses it too when a checkout is resolvable, else falls back to #ref=main.
+		released := isReleased(version)
+		kitOverride := len(o.Kits) > 0
+
+		if o.Dev {
+			// --dev needs a resolvable repo checkout; fail loud otherwise. --dev is
+			// create/replace-only (this branch), so it is a no-op on a plain re-attach.
+			root, err := resolveRepoRoot()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "pi-stack run --dev: %v\n", err)
+				os.Exit(1)
+			}
+			o.DevRoot = root
 			o.LocalKit = filepath.Join(root, "pi-kit")
 			o.LocalImageTag = readLocalImageTag(root)
-			note := ""
-			if o.LocalImageTag != "" {
-				note = " (local image :" + o.LocalImageTag + ")"
+		} else if !released && !kitOverride {
+			if root, err := resolveRepoRoot(); err == nil {
+				o.LocalKit = filepath.Join(root, "pi-kit")
+				o.LocalImageTag = readLocalImageTag(root)
+				note := ""
+				if o.LocalImageTag != "" {
+					note = " (local image :" + o.LocalImageTag + ")"
+				}
+				fmt.Fprintf(os.Stderr, "pi-stack: unreleased build %q — using local checkout kit %s%s\n", version, o.LocalKit, note)
+			} else {
+				fmt.Fprintf(os.Stderr, "pi-stack: unreleased build %q and no pi-stack checkout found — "+
+					"kit tracks #ref=main (may not match this binary). Use `pi-stack run --dev` from a "+
+					"checkout or `pi-stack run --kit <path-or-git-url>` to override.\n", version)
 			}
-			fmt.Fprintf(os.Stderr, "pi-stack: unreleased build %q — using local checkout kit %s%s\n", version, o.LocalKit, note)
-		} else {
-			fmt.Fprintf(os.Stderr, "pi-stack: unreleased build %q and no pi-stack checkout found — "+
-				"kit tracks #ref=main (may not match this binary). Use `pi-stack run --dev` from a "+
-				"checkout or `pi-stack run --kit <path-or-git-url>` to override.\n", version)
 		}
+	} else if o.Dev {
+		fmt.Fprintln(os.Stderr, "pi-stack: --dev is create/replace-only; re-attaching to the existing sandbox as-is (use --replace to recreate with --dev)")
 	}
 
 	// --mcp is only a valid sbx flag when the gateway is enabled (SBX_MCP_URL set,
@@ -118,27 +142,20 @@ func runRun(argv []string) {
 		}
 	}
 
-	// Own the sandbox name so we can manage its lifecycle. sbx would otherwise
-	// auto-derive `pi-stack-<dir>` and, on a re-run, reject the create-only flags
-	// (--template/--kit/--mcp) with "sandbox already exists". Mirror `make run`:
-	// refuse a RUNNING sandbox, recreate a STOPPED one (the host-mounted workspace
-	// and .pi-sessions persist, so nothing is lost).
-	if o.Name == "" {
-		o.Name = deriveSandboxName(o.Workspace)
-		if profile != config.DefaultProfile {
-			o.Name += "-" + sanitizeProfileName(profile)
-		}
+	plan := planSandboxLaunch(state, o.Replace, cfg, o, version)
+	switch {
+	case o.Replace:
+		fmt.Fprintf(os.Stderr, "pi-stack run: replacing sandbox %q\n", o.Name)
+	case plan.Reattach && state == sbxRunning:
+		fmt.Fprintf(os.Stderr, "pi-stack run: re-attaching to running sandbox %q\n", o.Name)
+	case plan.Reattach:
+		fmt.Fprintf(os.Stderr, "pi-stack run: starting + attaching existing sandbox %q (use --replace to recreate with current kit/mcp/flags)\n", o.Name)
 	}
-	switch sandboxStatus(o.Name) {
-	case "running":
-		fmt.Fprintf(os.Stderr, "pi-stack run: sandbox %q is already running. Use `pi-stack run --name <other>` for a second one, or `sbx rm -f %s` to replace it.\n", o.Name, o.Name)
-		os.Exit(1)
-	case "":
-		// absent — fresh create.
-	default:
-		// exists but not running — recreate so the create-only flags apply.
-		fmt.Fprintf(os.Stderr, "pi-stack run: recreating existing sandbox %q (workspace + .pi-sessions persist)\n", o.Name)
-		_ = exec.Command("sbx", "rm", "-f", o.Name).Run()
+	if plan.RmFirst {
+		if err := applyReplaceRm(defaultShellEnv(), plan, o.Name); err != nil {
+			fmt.Fprintf(os.Stderr, "pi-stack run: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	// Lazy auto-start: make the configured host services (memory/knowledge)
@@ -168,7 +185,7 @@ func runRun(argv []string) {
 	// the profile/knowledge-scope seam. Best-effort.
 	writeOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
 
-	args := buildSbxArgs(cfg, o, version)
+	args := plan.Args
 
 	if os.Getenv("PI_STACK_DEBUG") != "" {
 		fmt.Fprintln(os.Stderr, "+ sbx "+strings.Join(args, " "))
@@ -191,11 +208,35 @@ func runRun(argv []string) {
 			if msg := kitResolveFailureMsg(pinnedGitKit(args)); msg != "" {
 				fmt.Fprintln(os.Stderr, msg)
 			}
+			// A re-attach exec can fail on an sbx version that won't reattach a
+			// kit-created sandbox; don't leave the user stuck without a next step.
+			if plan.Reattach {
+				fmt.Fprintln(os.Stderr, "pi-stack run: re-attach failed; recreate it with: pi-stack run --replace")
+			}
 			os.Exit(exit.ExitCode())
 		}
 		fmt.Fprintf(os.Stderr, "pi-stack run: exec sbx: %v\n", err)
+		if plan.Reattach {
+			fmt.Fprintln(os.Stderr, "pi-stack run: re-attach failed; recreate it with: pi-stack run --replace")
+		}
 		os.Exit(1)
 	}
+}
+
+// applyReplaceRm runs the plan's RmFirst step (`sbx rm -f <name>`) via env when
+// required, and MUST be checked by the caller: a failed rm means the old
+// sandbox may still exist under that name, and proceeding to create against it
+// anyway is undefined (sbx may error, or silently reattach to a sandbox with
+// stale kit/mcp/create-only flags — exactly what --replace was trying to avoid).
+// A no-op (nil) when the plan doesn't call for it.
+func applyReplaceRm(env shellEnv, plan runLaunchPlan, name string) error {
+	if !plan.RmFirst {
+		return nil
+	}
+	if _, err := env.run("sbx", "rm", "-f", name); err != nil {
+		return fmt.Errorf("could not remove existing sandbox %q to replace it: %w", name, err)
+	}
+	return nil
 }
 
 // modelProviders are the model-provider secret keys a pi session needs at least
@@ -278,6 +319,8 @@ func parseRunArgs(argv []string) (runOpts, error) {
 		switch {
 		case a == "--dev":
 			o.Dev = true
+		case a == "--replace":
+			o.Replace = true
 		case name == "--name":
 			v, err := valueOf(a, &i)
 			if err != nil {
@@ -660,22 +703,6 @@ func deriveSandboxName(ws string) string {
 	return "pi-stack-" + base
 }
 
-// sandboxStatus returns the status column for `name` from `sbx ls` (e.g.
-// "running", "stopped"), or "" when the sandbox doesn't exist or sbx is absent.
-// Column layout matches `make run`'s awk: name is field 1, status is field 3.
-func sandboxStatus(name string) string {
-	out, err := exec.Command("sbx", "ls").Output()
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		f := strings.Fields(line)
-		if len(f) >= 1 && f[0] == name {
-			if len(f) >= 3 {
-				return f[2]
-			}
-			return "exists"
-		}
-	}
-	return ""
-}
+// The tri-state sandbox probe (running/stopped/absent/unknown) that drives the
+// create-vs-reattach-vs-replace decision lives in task.go as probeTaskSandbox +
+// sbxState — run.go reuses it rather than duplicating the `sbx ls` parse.

@@ -123,6 +123,13 @@ Bare `pi-stack` (no args) prints a status dashboard; it never launches a sandbox
 Use `pi-stack run [DIR]` to launch. This is deliberate: launching is always
 explicit.
 
+`pi-stack run` matches sbx's own lifecycle: if no sandbox by that name exists
+yet, it creates one; if one already exists — running or stopped — it
+RE-ATTACHES to it as-is instead of refusing or recreating (sbx reads the agent
+from the sandbox's own spec, so `--kit`/`--mcp`/create-only flags don't apply on
+a re-attach). Pass `--replace` to force a recreate (`sbx rm -f` then create)
+when you've changed the kit, MCP servers, or another create-only flag.
+
 ## Why pi-stack?
 
 pi-stack is a *distribution* of pi, not a new editor or a new agent runtime. It
@@ -199,7 +206,8 @@ Core:
 
 ```bash
 pi-stack                     # status dashboard (does NOT launch)
-pi-stack run [DIR]           # launch a sandbox in DIR (default: current dir)
+pi-stack run [DIR]           # launch a sandbox in DIR (default: current dir); re-attaches if it exists
+pi-stack run --replace        # recreate instead of re-attaching (picks up changed --kit/--mcp)
 pi-stack ls                  # list your pi-stack sandboxes (name, state, dir)
 pi-stack rm <name>           # remove a sandbox (--all [--except <name>])
 pi-stack status              # fast read-only control panel (alias: st)
