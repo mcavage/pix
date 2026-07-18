@@ -156,6 +156,24 @@ func routeCompile(args []string) {
 	}
 }
 
+// Reference workload for the real-dollar cost estimate. One representative agent
+// turn: enough input to carry real context, a modest completion. It is a
+// COMPARISON unit across models (same tokens for every row), not a prediction of
+// your bill. Priced from each model's actual per-Mtok rates via Model.CostFor.
+const (
+	refInputTokens  = 30_000
+	refOutputTokens = 3_000
+)
+
+// estRunCost formats the real-dollar cost of the reference workload for a model.
+// Local (Ollama/DMR) models are unmetered, so they read "free".
+func estRunCost(m routing.Model) string {
+	if m.Local {
+		return "free"
+	}
+	return fmt.Sprintf("$%.4f", m.CostFor(refInputTokens, refOutputTokens))
+}
+
 func routeShow(args []string) {
 	reg, sc, pol := loadAll()
 	if hasFlag(args, "--json") {
@@ -164,22 +182,28 @@ func routeShow(args []string) {
 	}
 	fmt.Println("== models ==")
 	printModels(reg)
-	fmt.Println("\n== resolved intents ==")
+	fmt.Printf("\n== resolved intents ==  (est/run priced at %dk in + %dk out per turn)\n",
+		refInputTokens/1000, refOutputTokens/1000)
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "INTENT\tOBJECTIVE\tMODEL\tACC\tCOST\tLATENCY\tOK")
+	// COST(score) is the scorecard's abstract cost heuristic used to RANK models;
+	// EST/RUN is the real dollar cost of the reference workload from live prices.
+	fmt.Fprintln(tw, "INTENT\tOBJECTIVE\tMODEL\tACC\tCOST(score)\tEST/RUN\tLATENCY\tOK")
 	for _, in := range pol.Intents {
 		d := routing.Resolve(reg, sc, pol, in)
-		acc, cost, lat := "-", "-", "-"
+		acc, cost, est, lat := "-", "-", "-", "-"
 		if d.Chosen != nil {
 			acc = fmt.Sprintf("%.2f", d.Chosen.Accuracy)
-			cost = fmt.Sprintf("$%.4f", d.Chosen.CostUSD)
+			cost = fmt.Sprintf("%.2f", d.Chosen.CostUSD)
 			lat = fmt.Sprintf("%.0fms", d.Chosen.LatencyMs)
+		}
+		if m, ok := reg.Get(d.Model); ok {
+			est = estRunCost(m)
 		}
 		ok := "yes"
 		if !d.ConstraintsMet {
 			ok = "FALLBACK"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", in.Name, d.Objective, d.Model, acc, cost, lat, ok)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", in.Name, d.Objective, d.Model, acc, cost, est, lat, ok)
 	}
 	tw.Flush()
 }
@@ -195,9 +219,9 @@ func routeModels(args []string) {
 
 func printModels(reg *routing.Registry) {
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "MODEL\tPROVIDER\tIN $/Mtok\tOUT $/Mtok\tLOCAL\tAVAIL")
+	fmt.Fprintln(tw, "MODEL\tPROVIDER\tIN $/Mtok\tOUT $/Mtok\tEST/RUN\tLOCAL\tAVAIL")
 	for _, m := range reg.Models {
-		fmt.Fprintf(tw, "%s\t%s\t%.2f\t%.2f\t%v\t%v\n", m.ID, m.Provider, m.InputPerMTok, m.OutputPerMTok, m.Local, m.Available)
+		fmt.Fprintf(tw, "%s\t%s\t%.2f\t%.2f\t%s\t%v\t%v\n", m.ID, m.Provider, m.InputPerMTok, m.OutputPerMTok, estRunCost(m), m.Local, m.Available)
 	}
 	tw.Flush()
 }
