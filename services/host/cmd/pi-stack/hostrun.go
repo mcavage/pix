@@ -537,9 +537,22 @@ func runHostLaunch(o hostOpts) {
 
 	if err := cmd.Run(); err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
-			os.Exit(exit.ExitCode())
+			code := exit.ExitCode()
+			// A clean interactive pi quit returns exit 0 (err == nil, not here). A
+			// NON-zero exit is usually the `op run` wrapper failing BEFORE pi ever
+			// starts — a bad op:// ref, 1Password locked/not signed in, or a vault/item
+			// mismatch. Never exit silently: say exactly what to check (this is the
+			// "banner then straight back to the shell, no error" failure).
+			if useOp {
+				fmt.Fprintf(os.Stderr, "\npi-stack host: launch failed (exit %d). If pi never opened, `op run` could not resolve your cloud keys from\n  %s\n", code, refs)
+				fmt.Fprintf(os.Stderr, "Reproduce op's own error:  op run --env-file=%s -- printenv ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY\n", refs)
+				fmt.Fprintln(os.Stderr, "Common causes: 1Password locked / not signed in; or a bad op:// ref — a field name with a space must be URL-encoded (op://Vault/Item/api%20key). Delete the file to run Ollama-only.")
+			} else {
+				fmt.Fprintf(os.Stderr, "\npi-stack host: pi exited with code %d.\n", code)
+			}
+			os.Exit(code)
 		}
-		fmt.Fprintf(os.Stderr, "pi-stack host: exec pi: %v\n", err)
+		fmt.Fprintf(os.Stderr, "pi-stack host: exec: %v\n", err)
 		os.Exit(1)
 	}
 }

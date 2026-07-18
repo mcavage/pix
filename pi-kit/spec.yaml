@@ -142,6 +142,15 @@ agentContext: |
   base, isolated by Docker Sandboxes. The environment is disposable. Work
   directly and commit often.
 
+  You run as a NON-root user (`node`) and there is NO `sudo` (the DHI base is
+  minimal and ships none). You cannot install system packages (`apt-get` needs
+  root), so do not try, and do not tell the user to `sudo`. Anything that needs a
+  system-level install or a real device (e.g. platformio + `/dev/tty*`) is a HOST
+  operation the sandbox structurally cannot do; that is what `pi-stack host` (the
+  unsandboxed escape hatch) or a host-side capability MCP is for. Use pip
+  `--user`, language-local package managers, or prebuilt static binaries when you
+  need a tool in-VM.
+
   ## Memory (automatic)
   A host memory service recalls relevant facts into your context before every
   turn, and quietly captures durable facts and corrections after. You never call
