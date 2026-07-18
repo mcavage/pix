@@ -606,8 +606,20 @@ Base keys are
 .BR services ,
 .BR knowledge_bundles ,
 .BR memory_watcher_model ,
+.BR memory_embed_model ,
+.BR ollama_bridge_model ,
+.BR host.enabled ,
 and
-.BR memory_embed_model .
+.BR host.autonomy .
+.B ollama_bridge_model
+is the local model the sandbox exposes to pi and the router's local option;
+by default the memory watcher shares it.
+.B host.enabled
+gates the unsandboxed
+.B "pi-stack host"
+mode (default false), and
+.B host.autonomy
+is reserved for the host-guard strictness.
 Per-profile keys are
 .BR gog_account ,
 .BR mcp ,
@@ -619,8 +631,11 @@ and
 is accepted).  Profile writes create the named profile if absent.
 .BR services ,
 .BR memory_watcher_model ,
+.BR memory_embed_model ,
+.BR ollama_bridge_model ,
+.BR host.enabled ,
 and
-.B memory_embed_model
+.B host.autonomy
 are global and reject
 .BR \-\-profile .
 Setting base

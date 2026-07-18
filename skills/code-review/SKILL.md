@@ -20,6 +20,7 @@ point of the second pass is *different blind spots*, not a rubber stamp.
    - **Concurrency**: shared mutable state, races, missing locks/transactions, fire-and-forget tasks that need coordination.
    - **Breaking changes**: removed/renamed fields, changed signatures or types, stricter validation with no migration.
    - **Test coverage**: new logic with no test, changed behavior with stale tests, deleted tests with no replacement.
+   - **Doc drift**: a changed user-facing surface (CLI verb/flag, config key, env var, default, public API, or a skill/agent's triggers) whose docs (man page, help/usage, README, `AGENTS.md`, CHANGELOG, or frontmatter `description`) were NOT updated in the same diff. Grep the changed identifier across the docs; an un-updated hit is a finding. Where the surface is enumerable, flag the absence of an anti-drift test as its own finding.
 3. **Cross-vendor pass.** Spawn a `review` subagent (the `subagent` tool with
    `agent=review`) with the diff and your findings, instructed to
    *refute* your analysis and surface what you missed. It runs on a different
