@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 func ollamaHost() string {
@@ -97,6 +98,42 @@ func memWatcherProbe() {
 	}
 	watcherUnavailable.Store(true)
 	log.Printf("memory watcher: model %q is not pulled (or Ollama is down) — fact capture is DISABLED until you run `ollama pull %s` (recall still works). Set MEMORY_WATCHER_MODEL to override.", m, m)
+}
+
+// watcherProbeInterval throttles the live re-probe so a disabled watcher does not
+// hammer Ollama /api/show on every captured turn.
+const watcherProbeInterval = 30 * time.Second
+
+// watcherLastProbe is the unix-nano time of the last live re-probe.
+var watcherLastProbe atomic.Int64
+
+// watcherCaptureAvailable reports whether fact capture can run RIGHT NOW, and
+// breaks the startup latch. memWatcherProbe() runs once at boot; if Ollama was
+// down or the model unpulled then, watcherUnavailable stayed true forever —
+// observe() short-circuited before ever calling the watcher, so it could never
+// reset (memWatch only clears the flag on a successful run it never reached).
+// Here, when marked unavailable, we re-probe at most once per interval; the
+// moment the model appears (the user ran `ollama pull`) capture recovers with no
+// daemon restart. Available is the common path and returns immediately.
+func watcherCaptureAvailable() bool {
+	if !watcherUnavailable.Load() {
+		return true
+	}
+	now := time.Now().UnixNano()
+	last := watcherLastProbe.Load()
+	if now-last < int64(watcherProbeInterval) {
+		return false
+	}
+	// CAS so exactly one goroutine performs the (network) probe per interval.
+	if !watcherLastProbe.CompareAndSwap(last, now) {
+		return false
+	}
+	if memOllamaHasModel(memWatcherModel()) {
+		watcherUnavailable.Store(false)
+		log.Printf("memory watcher: model %q is now available — fact capture re-enabled.", memWatcherModel())
+		return true
+	}
+	return false
 }
 
 // --- watcher ---------------------------------------------------------------

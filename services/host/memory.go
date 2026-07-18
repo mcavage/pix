@@ -686,7 +686,9 @@ func memoryMux() http.Handler {
 func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 	methods := map[string]func(jsonObj) (any, error){
 		"health": func(jsonObj) (any, error) {
-			return jsonObj{"ok": true, "vector": hasEmb, "capture": !watcherUnavailable.Load(), "watcherModel": memWatcherModel()}, nil
+			// watcherCaptureAvailable re-probes (throttled) so health reflects a live
+			// recovery after `ollama pull`, and so `pi-stack doctor` reads the truth.
+			return jsonObj{"ok": true, "vector": hasEmb, "capture": watcherCaptureAvailable(), "watcherModel": memWatcherModel()}, nil
 		},
 		"stats": func(p jsonObj) (any, error) { return store.stats(profileFromParams(p)), nil },
 		"recall": func(p jsonObj) (any, error) {
@@ -719,7 +721,9 @@ func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 			}
 			// Don't claim success when the watcher model can't run — the capture
 			// would be silently dropped. Tell the caller why (recall still works).
-			if watcherUnavailable.Load() {
+			// watcherCaptureAvailable re-probes (throttled) so capture recovers the
+			// moment the user pulls the model, without a daemon restart.
+			if !watcherCaptureAvailable() {
 				return jsonObj{"accepted": false,
 					"reason": "watcher model unavailable — run `ollama pull " + memWatcherModel() + "` (or set MEMORY_WATCHER_MODEL); recall still works"}, nil
 			}

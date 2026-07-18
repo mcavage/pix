@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -297,6 +299,13 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	memory := group{title: "Memory service (recall + capture)"}
 	memUp := env.dial(11435)
 	memory.checks = append(memory.checks, serviceCheck("memory", 11435, memUp, "pi-stack serve", enabled(cfg, "memory")))
+	// Live capture status straight from the daemon's health, not just "is the
+	// model in ollama": this is the flag that decides whether observe() actually
+	// stores anything. A latched-off watcher (daemon booted before the model was
+	// pulled) shows here even when `ollama list` now has the model.
+	if memUp {
+		memory.checks = append(memory.checks, memCaptureCheck())
+	}
 	r.groups = append(r.groups, memory)
 
 	// (d) gog: Google Workspace via a host-side stdio MCP server the sbx gateway
@@ -380,8 +389,46 @@ func serviceCheck(label string, port int, up bool, startCmd string, isEnabled bo
 	return check{label: label, state: stateInfo, detail: fmt.Sprintf(":%d down (not in configured services)", port)}
 }
 
+// memCaptureCheck asks the running memory daemon (:11435) whether automatic fact
+// capture is live. It reads the daemon's own health.capture flag (which re-probes
+// the watcher model), so it catches the latched-off case a plain `ollama list`
+// check misses. Off => the exact `ollama pull` fix.
+func memCaptureCheck() check {
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"health","params":{}}`)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://127.0.0.1:11435", bytes.NewReader(body))
+	if err != nil {
+		return check{label: "fact capture", state: stateInfo, detail: "could not query daemon health"}
+	}
+	req.Header.Set("content-type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return check{label: "fact capture", state: stateInfo, detail: "could not query daemon health"}
+	}
+	defer res.Body.Close()
+	var parsed struct {
+		Result struct {
+			Capture      bool   `json:"capture"`
+			WatcherModel string `json:"watcherModel"`
+		} `json:"result"`
+	}
+	if json.NewDecoder(io.LimitReader(res.Body, 1<<16)).Decode(&parsed) != nil {
+		return check{label: "fact capture", state: stateInfo, detail: "could not read daemon health"}
+	}
+	m := parsed.Result.WatcherModel
+	if parsed.Result.Capture {
+		return check{label: "fact capture", state: stateOK, detail: fmt.Sprintf("on (watcher %s)", m)}
+	}
+	return check{
+		label:  "fact capture",
+		state:  stateTODO,
+		detail: fmt.Sprintf("OFF — watcher %q unavailable (recall still works)", m),
+		todo:   "ollama pull " + m,
+	}
+}
+
 // mcpCheck reports whether an MCP server is registered with sbx. When the
-// registration list is unavailable it distinguishes sbx being ABSENT (in the
 // sandbox — a register-on-the-host TODO) from sbx being PRESENT but the listing
 // having failed (host, gateway likely off — an SBX_MCP_URL TODO).
 func mcpCheck(name, mcpOut string, mcpOK, sbxPresent bool) check {
