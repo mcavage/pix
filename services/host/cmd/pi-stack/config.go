@@ -9,10 +9,13 @@ import (
 	"pi-stack/host/config"
 )
 
-// runConfig implements the `config` verb tree: `show`, `path`, `set`, `unset`.
-// `set`/`unset` are THE answer to "why do I hand-edit the toml" — you don't, you
-// run `pi-stack config set <key> <value>` and it loads, mutates, and Save()s the
-// machine-managed config for you.
+// runConfig implements the `config` verb tree: `show`, `path`, `get`, `set`,
+// `unset`. `set`/`unset` are THE answer to "why do I hand-edit the toml" — you
+// don't, you run `pi-stack config set <key> <value>` and it loads, mutates, and
+// Save()s the machine-managed config for you. `get` is the machine-readable
+// read half: one resolved value, no decoration, so scripts (and the Makefile's
+// operational targets) source runtime config from config.toml instead of
+// keeping a second config file.
 func runConfig(argv []string) {
 	// A leading -h/--help (with or without a subcommand) prints config usage.
 	if wantsHelp(argv) {
@@ -52,13 +55,76 @@ func runConfig(argv []string) {
 			fmt.Fprintf(os.Stderr, "pi-stack config: encoding: %v\n", err)
 			os.Exit(1)
 		}
+	case "get":
+		runConfigGet(argv[1:])
 	case "set":
 		runConfigWrite(false, argv[1:])
 	case "unset":
 		runConfigWrite(true, argv[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "pi-stack config: unknown subcommand %q (want: show, path, set, unset)\n", sub)
+		fmt.Fprintf(os.Stderr, "pi-stack config: unknown subcommand %q (want: show, path, get, set, unset)\n", sub)
 		os.Exit(2)
+	}
+}
+
+// runConfigGet prints ONE resolved config value to stdout with no decoration —
+// the machine-readable accessor the Makefile shells out to (`$(shell pi-stack
+// config get mcp)`). It is profile-aware: the value comes from the ACTIVE
+// profile's resolved config (via config.Resolve), honoring --profile /
+// PI_STACK_PROFILE / active_profile exactly like every other read path. List
+// keys (mcp, services, knowledge_bundles) print space-separated. An unknown key
+// is a loud error on stderr + exit 2, never a silent empty value.
+func runConfigGet(argv []string) {
+	if wantsHelp(argv) {
+		fmt.Print(configUsage)
+		return
+	}
+	profile, argv := splitProfileArg(argv)
+	if profile != "" {
+		flagProfile = profile
+	}
+	if len(argv) != 1 {
+		fmt.Fprintf(os.Stderr, "usage: pi-stack config get [--profile <name>] <key>\n%s", configKeysHelp)
+		os.Exit(2)
+	}
+	cfg, _, err := loadResolvedConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack config get: %v\n", err)
+		os.Exit(1)
+	}
+	val, err := configValue(cfg, argv[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack config get: %v\n", err)
+		os.Exit(2)
+	}
+	fmt.Println(val)
+}
+
+// configValue resolves one key against an already-RESOLVED (flat) config and
+// renders it for machine consumption: scalars verbatim, lists space-separated.
+// Pure + testable; the key set mirrors configKeysHelp (plus active_profile,
+// which reads the raw base field — it is what selects a profile, so it is never
+// itself overridden by one).
+func configValue(cfg *config.Config, key string) (string, error) {
+	switch key {
+	case "gog_account":
+		return cfg.GogAccount, nil
+	case "mcp":
+		return strings.Join(cfg.MCP, " "), nil
+	case "services":
+		return strings.Join(cfg.Services, " "), nil
+	case "knowledge_bundles":
+		return strings.Join(cfg.KnowledgeBundles, " "), nil
+	case "memory_watcher_model":
+		return cfg.MemoryWatcherModel, nil
+	case "memory_embed_model":
+		return cfg.MemoryEmbedModel, nil
+	case "ollama_bridge_model":
+		return cfg.OllamaBridgeModel, nil
+	case "active_profile":
+		return cfg.ActiveProfile, nil
+	default:
+		return "", fmt.Errorf("unknown key %q\n%s", key, configKeysHelp)
 	}
 }
 

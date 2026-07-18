@@ -30,10 +30,11 @@ A copyable scaffold lives in [`examples/overlay/`](../examples/overlay). The lay
   overlay.mk                   # private make targets
 ```
 
-Point pi-stack at it once, in `config/local.mk`:
+pi-stack looks for it at `../pi-stack-work` by default. If your peer repo lives
+elsewhere, pass `OVERLAY` to make (or export it in your shell):
 
-```makefile
-OVERLAY = ../my-overlay
+```bash
+make run OVERLAY=../my-overlay
 ```
 
 ## 1. Sandbox half — the mixin kit (`kit/`)

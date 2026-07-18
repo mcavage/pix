@@ -92,10 +92,9 @@ type Config struct {
 	OllamaBridgeModel  string `toml:"ollama_bridge_model"`
 
 	// GogAccount is the Google Workspace account the gog host-MCP server serves.
-	// It is the Go-side source of truth doctor probes against; it MUST match the
-	// GOG_ACCOUNT in config/local.mk that `make mcp-register` registers with the
-	// gateway (the make path can't see this file, so the two must be kept in sync).
-	// doctor falls back to the GOG_ACCOUNT env var when this is empty.
+	// It is THE source of truth: doctor probes against it, and `make mcp-register`
+	// sources it via `pi-stack config get gog_account` when registering with the
+	// gateway. doctor falls back to the GOG_ACCOUNT env var when this is empty.
 	GogAccount string `toml:"gog_account"`
 
 	// KnowledgeBundles are the git-mounted OKF bundle directory path(s) the
@@ -346,10 +345,10 @@ memory_watcher_model = "qwen3.5:4b"
 memory_embed_model = "nomic-embed-text"
 ollama_bridge_model = "qwen3.5:9b"
 
-# Google Workspace account the gog host-MCP server serves. This is the Go-side
-# source of truth pi-stack doctor probes against, and it MUST match the
-# GOG_ACCOUNT in config/local.mk that make mcp-register registers with the
-# gateway. Empty falls back to the GOG_ACCOUNT env var.
+# Google Workspace account the gog host-MCP server serves. This is the single
+# source of truth: pi-stack doctor probes against it, and make mcp-register
+# sources it via pi-stack config get gog_account. Empty falls back to the
+# GOG_ACCOUNT env var.
 gog_account = ""
 
 # OKF knowledge bundle directories the knowledge service (:11436) indexes.

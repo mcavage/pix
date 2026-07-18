@@ -32,7 +32,7 @@ type hostService struct {
 }
 
 // runServe starts the long-running HTTP host services. `enabled` is the list
-// from `SERVICES` in config/local.mk (config-friendly aliases: memory, knowledge,
+// from `services` in config.toml (config-friendly aliases: memory, knowledge,
 // plus any overlay registers); empty means "all". The MCP servers (e.g. slack) are
 // stdio commands run by the sbx gateway via `sbx mcp add`, not HTTP daemons.
 func runServe(enabled []string) {
@@ -209,7 +209,7 @@ func runServe(enabled []string) {
 	}
 
 	if len(all) == 0 {
-		fatalf("no services enabled (set SERVICES in config/local.mk, e.g. SERVICES = memory)")
+		fatalf("no services enabled (run: pi-stack config set services memory)")
 	}
 
 	// Preflight: every enabled service validates its host dependency UP FRONT, and

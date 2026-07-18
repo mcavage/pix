@@ -535,6 +535,11 @@ or, with
 the path to
 .BR op-refs.env .
 .TP
+.BR "pi-stack config get" " [" \-\-profile " " N "] " key
+Print one resolved value with no decoration for scripts to source (list keys
+print space-separated).  The value is profile-aware, resolved through the
+active profile.  Unknown keys fail with a nonzero exit.
+.TP
 .BR "pi-stack config set" " [" \-\-profile " " N "] " key " " value
 Set a scalar key or add a value to a list key, then save the configuration.
 .TP

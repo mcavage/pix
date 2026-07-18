@@ -50,10 +50,11 @@ op run --env-file=~/.config/pi-stack/op-refs.env -- gog --account you@example.co
 pi-stack config set gog_account you@example.com   # writes to ~/.config/pi-stack/config.toml
 pi-stack config set mcp gog                       # adds gog to the mcp list in config.toml
 pi-stack mcp register                              # registers the hardened read-only server
-# If you use make-based flow instead: set GOG_ACCOUNT and MCP in config/local.mk, then make mcp-register.
+# The make-based flow reads the SAME config.toml (via pi-stack config get), so
+# the two commands above configure make mcp-register too.
 
 # 6. Launch with gog attached, then confirm.
-make run          # attaches gog per MCP in config/local.mk; or: pi-stack run
+make run          # attaches gog per the mcp list in config.toml; or: pi-stack run
 pi-stack doctor   # gog group should be all green
 ```
 

@@ -50,7 +50,7 @@ The MCP stdio transport is newline-delimited JSON (what the gateway speaks);
 ## Build / run
 
 ```bash
-make serve            # builds pi-stack-host + runs `serve` (the SERVICES from config/local.mk)
+make serve            # builds pi-stack-host + runs `serve` (the `services` list from config.toml)
 # or directly:
 cd services/host && go build -o pi-stack-host . && ./pi-stack-host serve
 ```

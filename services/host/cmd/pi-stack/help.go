@@ -115,6 +115,7 @@ Models & agents (cost/latency/accuracy routing)
 
 Config & context
   config show|path    show the resolved config path and contents
+  config get K        print one resolved value (for scripts/make)
   config set|unset    change config without hand-editing the toml
   profile ls|use      switch between contexts (work / personal / default)
 
@@ -240,10 +241,12 @@ flags:
   --yes, -y, --non-interactive  never prompt; print outstanding steps as commands
 `
 
-const configUsage = `usage: pi-stack config <show|path|set|unset> [args]
+const configUsage = `usage: pi-stack config <show|path|get|set|unset> [args]
 
   show                     print the resolved config path + contents
   path [op-refs]           print the config file path (or the op-refs.env path)
+  get [--profile N] K      print ONE resolved value, no decoration (lists are
+                            space-separated) — for scripts/make to source
   set [--profile N] K V     set a config key (never hand-edit the toml)
   unset [--profile N] K [V]  reset/clear a scalar key, or remove value V from a
                             list key (mcp/services/knowledge_bundles)

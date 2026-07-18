@@ -94,7 +94,7 @@ info "Google Workspace is no longer a bearer smuggled into the VM. It's the host
 info "'gog' MCP server, run by the sbx gateway (read-only by default: --gmail-no-send,"
 info "--wrap-untrusted, --readonly). Set it up per docs/gog-setup.md:"
 info "  - 'gog auth' on the host, fill config/op-refs.env, then 'make mcp-register'"
-info "  - add 'gog' to MCP in config/local.mk so 'make run' attaches it"
+info "  - run 'pi-stack config set mcp gog' so 'make run' / 'pi-stack run' attaches it"
 info "Full walkthrough: docs/gog-setup.md"
 
 bold "\n[7] Optional: private overlay for work"

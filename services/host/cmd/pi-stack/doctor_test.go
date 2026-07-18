@@ -279,7 +279,7 @@ func TestDoctor_GogAccountUnset(t *testing.T) {
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, nil
 	r.render(&buf)
-	if !strings.Contains(buf.String(), "cannot verify (GOG_ACCOUNT unset in env/config/local.mk)") {
+	if !strings.Contains(buf.String(), "cannot verify (gog_account unset in config.toml/env)") {
 		t.Errorf("expected a 'cannot verify' account detail, got:\n%s", buf.String())
 	}
 }
@@ -746,31 +746,6 @@ func TestDoctor_GogBareRegisteredCommandJSON(t *testing.T) {
 	}
 	if !headOK {
 		t.Errorf("expected a confirmed headless spawn from the bare JSON-parsed registration, groups=%+v", r.groups)
-	}
-}
-
-// TestDoctor_GogAccountFromLocalMk: with config.toml gog_account AND $GOG_ACCOUNT
-// both empty, doctor greps GOG_ACCOUNT out of a located config/local.mk (exactly
-// what `make mcp-register` uses), so it no longer false-reports "cannot verify".
-func TestDoctor_GogAccountFromLocalMk(t *testing.T) {
-	f := gogGreen(fakeEnv{
-		present: map[string]bool{"sbx": true},
-		output: map[string]string{
-			"sbx secret ls": "anthropic openai google github",
-			"sbx mcp ls":    "gog\n",
-		},
-		ports: map[int]bool{11435: true},
-	})
-	delete(f.envVars, "GOG_ACCOUNT") // force the local.mk path
-	wd, _ := os.Getwd()
-	mk := filepath.Join(wd, "config", "local.mk")
-	f.statFile[filepath.Join(wd, "Makefile")] = true
-	f.statFile[mk] = true
-	f.files = map[string]string{mk: "# comment\nGOG_ACCOUNT ?= " + gogAcct + "\n"}
-	r := runDoctor(defaultCfg(), f.env())
-	joined := strings.Join(r.todos(), "\n")
-	if strings.Contains(joined, "gog_account") || strings.Contains(joined, "GOG_ACCOUNT") {
-		t.Errorf("account from config/local.mk should not TODO, got %v", r.todos())
 	}
 }
 

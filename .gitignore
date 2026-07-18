@@ -24,8 +24,6 @@ config/op-refs.env
 # all build + sandbox artifacts land here (single ignored dir)
 out/
 
-# local owner-specific Makefile overrides (your real connector config, etc.)
-config/local.mk
 
 # --- Open-core boundary: skills (MUST mirror .dockerignore) ---------------------
 # DEFAULT-DENY so `git add -A` can never stage a company/overlay skill (one that
