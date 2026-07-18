@@ -1,5 +1,5 @@
 {
-  "_note": "Model registry: every callable model + its economics. Prices are USD per 1M tokens, taken from the vendors' LIVE July 2026 pricing pages (Anthropic/OpenAI/Google), NOT guessed. ADDING A MODEL IS ONE ENTRY (id must be fully qualified provider/id). The eval harness computes real per-task cost as tokens*price, so keep prices current. local=true means unmetered (Ollama). available=false hides a model from routing without deleting it. Override at ~/.pi-stack/routing/models.json.",
+  "_note": "Model registry: every callable model + its economics. Prices are USD per 1M tokens, taken from the vendors' LIVE July 2026 pricing pages (Anthropic/OpenAI/Google), NOT guessed. ADDING A MODEL IS ONE ENTRY (id must be fully qualified provider/id). Keep prices current. local=true means unmetered (Ollama). available=false hides a model from routing without deleting it. Override at ~/.pi-stack/routing/models.json.",
   "models": [
     {
       "id": "anthropic/claude-fable-5",
@@ -99,7 +99,7 @@
       "output_per_mtok": 0.0,
       "local": true,
       "available": true,
-      "notes": "Local via Ollama. The best all-rounder that fits a 16GB machine (~6.6GB download, Apache 2.0, tools + thinking; current as of 2026-02). Free + private but slower than cloud, so it wins nothing by default and is an offline/private fallback. Bigger boxes can bump to gemma4:e4b (~9GB) or qwen3.5:27b. Needs `ollama pull qwen3.5:9b` + the ollama-bridge to expose it. NOTE: this is the ROUTER's local option, separate from the tiny memory-watcher model (gemma3:4b), which is a different job."
+      "notes": "Local via Ollama. The best all-rounder that fits a 16GB machine (~6.6GB download, Apache 2.0, tools + thinking; current as of 2026-02). Free + private but slower than cloud, so it wins nothing by default and is an offline/private fallback. Bigger boxes can bump to gemma4:e4b (~9GB) or qwen3.5:27b. Needs `ollama pull qwen3.5:9b` + the ollama-bridge to expose it. NOTE: this is the ROUTER's local option; the memory watcher is a separate role but defaults to the same qwen3.5:9b so Ollama keeps one model resident for both."
     }
   ]
 }

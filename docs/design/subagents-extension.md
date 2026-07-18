@@ -1,4 +1,8 @@
-# DESIGN: pi-stack subagents extension
+# pi-stack subagents extension
+
+**Status: IMPLEMENTED** — shipped as `extensions/subagents.ts`; `/subagents doctor`
+passes. This document is the original design; the watchdog defaults and the
+per-agent frontmatter budget overrides below reflect the shipped behavior.
 
 A first-party subagent extension for pi that does not freeze. Replaces the
 off-the-shelf `@tintinweb/pi-subagents` (disabled in the image; see
@@ -130,12 +134,22 @@ Workflow prompt templates (in `prompts/`): `/fan-out`, `/deep-dive`,
 
 | var | default | meaning |
 | --- | --- | --- |
-| `PI_SUBAGENT_IDLE_MS` | 120000 | kill a child after this long with no output |
-| `PI_SUBAGENT_TIMEOUT_MS` | 600000 | hard wall-clock cap per child |
+| `PI_SUBAGENT_IDLE_MS` | 300000 (5 min) | kill a child after this long with no output |
+| `PI_SUBAGENT_TIMEOUT_MS` | 3600000 (60 min) | hard wall-clock cap per child |
 | `PI_SUBAGENT_MAX_CONCURRENCY` | 4 | concurrent children in parallel mode |
 | `PI_SUBAGENT_MAX_PARALLEL` | 8 | max tasks in one parallel call |
 | `PI_SUBAGENT_MAX_DEPTH` | 3 | tree depth cap (fork-bomb guard) |
 | `PI_SUBAGENT_DEPTH` | (internal) | current depth, set on children |
+
+**Per-agent budget overrides (frontmatter).** The env vars are read ONCE at pi
+startup, so a slow-by-design agent cannot raise them live. Instead an agent
+declares its own budget in its frontmatter: `wall_ms:` (hard wall-clock cap;
+`timeout_ms` is an alias) and `idle_ms:` (no-output cap), in milliseconds.
+Precedence is **agent frontmatter > env var > default**. Example — `agents/deep.md`
+sets `wall_ms: 2400000` (40 min) + `idle_ms: 600000` (10 min), because a frontier
+model can think for many minutes without emitting anything the parent can see (raw
+thinking tokens are never streamed). Timeout messages report the effective budget
+the run actually used.
 
 ## Risks / unknowns
 

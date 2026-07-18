@@ -1,7 +1,7 @@
 # Contributing to pi-stack
 
 Thanks for looking. pi-stack is an opinionated distribution of the
-[pi](https://github.com/badlogic/pi-mono) coding agent, so most contributions
+[pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) coding agent, so most contributions
 are skills, agents, extensions, docs, or host-service code, not changes to pi
 itself.
 

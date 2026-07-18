@@ -29,6 +29,8 @@ tutorials.
   live tracker for running subagents.
 - [self-learning-loop.md](design/self-learning-loop.md) — the memory capture and
   recall loop.
+- [serve-lifecycle.md](design/serve-lifecycle.md) — the `pi-stack serve` daemon
+  lifecycle: lazy auto-start, the managed login service, and the hardening addendum.
 - [profiles.md](design/profiles.md) — work / personal / default profiles from one
   host.
 - [host-mode.md](design/host-mode.md) — `pi-stack host`, the unsandboxed escape

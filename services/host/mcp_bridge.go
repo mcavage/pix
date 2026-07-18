@@ -11,7 +11,7 @@
 // client; the bridge body below is identical either way because it only speaks
 // the plugin.McpServer interface.
 //
-// main.go does NOT register this subcommand yet — a later unit wires it.
+// main.go registers this subcommand: `case "mcp": runMcpSubcommand`.
 
 package main
 

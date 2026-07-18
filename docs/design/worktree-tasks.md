@@ -1,6 +1,10 @@
 # Parallel task sandboxes (pi-stack task)
 
-Status: proposal v2 (crew synthesis + cross-vendor design review folded in)
+Status: IMPLEMENTED (v1), then EXTENDED. This document is the original v1 localclone
+design. The sandbox naming scheme and the `harvest` / `gc` verbs (plus auto-GC) were
+revised and added in `docs/design/task-ux-decisions.md` (accepted) — read that for
+the current behavior where the two differ. The reconciled naming and command surface
+are folded in below.
 Follows the Shape B CLI redesign (docs/design/cli-redesign.md) — same taste.
 
 ## The ask
@@ -48,18 +52,21 @@ One new `task` grouping noun (verbatim dispatcher, mirrors `state.go`). No chang
 to `pi-stack run`. Shown in `help --all`, not Core.
 
 ```
-usage: pi-stack task <new|ls|rm> [args]
+usage: pi-stack task <new|ls|harvest|rm|gc> [args]
 
 Run parallel tasks on one repo. Each task is a lightweight local clone of the
 repo with its own branch and sandbox, so tasks never collide. Commits land in
 the task's clone on this host and can be pushed or fetched back.
 
-  new <name> [--from REF] [-- pi-args]   clone + branch + launch a sandbox
-  ls  [--json]                           tasks, their branch, sandbox + git state
-  rm  <name> [--force]                   tear down sandbox + clone (guarded)
+  new     <name> [--from REF] [-- pi-args]   clone + branch + launch a sandbox
+  ls      [--json]                           tasks, their branch, sandbox + git state
+  harvest <name> [--to DIR]                  copy out uncommitted docs before teardown
+  rm      <name> [--force]                   tear down sandbox + clone (guarded)
+  gc      [--dry-run]                        clean up merged / stale tasks (guarded)
 
-Clones live under $XDG_STATE_HOME/pi-stack/tasks/<repo>/co/<name> (outside your
-repo). `pi-stack task rm` refuses to drop uncommitted or unpushed work.
+Clones live under $XDG_STATE_HOME/pi-stack/tasks/<repokey>/co/<name> (outside your
+repo). `pi-stack task rm` refuses to drop uncommitted or unpushed work; `task
+harvest` gets untracked docs out first (see docs/design/task-ux-decisions.md).
 ```
 
 ### Golden path
@@ -96,7 +103,8 @@ No new launch code; `deriveSandboxName` is BYPASSED (only used when Name=="").
 tasks set an explicit name:
 ```
 repokey      = first 8 hex of sha256(canonical MAINROOT abs path)
-sandbox name = "pi-stack-t-" + repokey + "-" + sanitize(<name>) [ + "-" + profile ]
+repolabel    = sanitized basename of the repo (human-readable; added in task-ux-decisions.md)
+sandbox name = "pi-stack-t-" + repolabel + "-" + repokey + "-" + sanitize(<name>) [ + "-" + profile ]
 ```
 `sanitizeTaskName` caps the name segment so the full name stays within sbx's
 bound. Metadata at `$STATE/pi-stack/tasks/<repokey>/meta/<name>.json` is the
@@ -200,7 +208,7 @@ when the name is nonexistent vs. running — which must be confirmed on the host
 
 - **In-sandbox mount of the clone's .git dir**: validated for git-on-the-host;
   the sandbox-mount slice is the host-checklist item above. Low risk (plain dir).
-- **Name length**: `pi-stack-t-<8>-<name>-<profile>`; `sanitizeTaskName` caps the
-  name segment.
+- **Name length**: `pi-stack-t-<repolabel>-<8>-<name>-<profile>`; `sanitizeTaskName`
+  caps the name segment (see the length budget in task-ux-decisions.md).
 - **Submodules**: not auto-initialized in v1 (note printed if `.gitmodules`
   exists). v2.
