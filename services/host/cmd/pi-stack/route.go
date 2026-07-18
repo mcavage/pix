@@ -1,7 +1,7 @@
-// pi-stack route / evals — thin launcher passthroughs to the sibling
-// pi-stack-host binary, which owns the model router (registry + scorecard +
-// resolver) and the eval harness. Kept here so a user drives the whole feature
-// from the one `pi-stack` command. See docs/design/routing.md.
+// pi-stack route — a thin launcher passthrough to the sibling pi-stack-host
+// binary, which owns the model router (registry + scorecard + resolver). Kept
+// here so a user drives the whole feature from the one `pi-stack` command. See
+// docs/design/routing.md.
 
 package main
 
@@ -42,7 +42,7 @@ func resolveSessionModel(intent string) (string, error) {
 }
 
 // execHost runs `pi-stack-host <verb> <args...>` with inherited stdio and
-// propagates the exit code. Shared by the route + evals passthroughs.
+// propagates the exit code. Used by the route passthrough.
 func execHost(verb string, argv []string) {
 	bin, err := findHostBinary()
 	if err != nil {
@@ -84,6 +84,7 @@ commands:
   show [--json]             registry + scorecard + resolved table
   models [--json]           list the model registry
 
-Add a model: one entry in ~/.pi-stack/routing/models.json, then re-measure with
-` + "`make evals ARGS=\"run --models <id> --save\"`" + ` and ` + "`pi-stack route compile`" + `.
+Add a model: one entry in ~/.pi-stack/routing/models.json, hand-edit its scores
+into scorecard.json (services/host/routing/defaults/scorecard.json), then run
+` + "`pi-stack route compile`" + `.
 `

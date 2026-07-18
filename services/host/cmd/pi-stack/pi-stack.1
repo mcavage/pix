@@ -404,7 +404,7 @@ Add or replace the selected bundle's origin URL.
 Manage subagents as first-class objects.  An agent stores an
 .B intent
 (a complexity tier), not a pinned model; the router derives its default model
-and proves it with evals.  Agents live in
+from a hand-maintained scorecard.  Agents live in
 .B ./agents
 (or
 .BR $PI_STACK_AGENTS_DIR ).
@@ -414,19 +414,19 @@ List the roster with each agent's resolved model and WHY (its intent, and
 whether the resolver fell back).
 .TP
 .BR "pi-stack agent new" " " NAME " [" \-\-intent " " I "] [" \-\-description " " D "] [" \-\-tools " " a,b "] [" \-\-budget " " USD "] [" \-\-interactive "]"
-Scaffold an agent markdown file and a starter promptfoo eval suite.
+Scaffold an agent markdown file.
 .TP
 .BR "pi-stack agent edit" " " NAME " [" \-\-intent " " I "] [" \-\-description " " D "] [" \-\-tools " " a,b "] [" \-\-budget " " USD "] [" \-\-model " " M "]"
 Change fields without hand-editing frontmatter.
 .TP
 .BR "pi-stack agent rm" " " NAME " " \-\-yes
-Remove an agent and its eval suite.
+Remove an agent.
 .TP
-.BR "pi-stack agent reassess" " [" \-\-model " " NEW "] [" \-\-budget " " USD "]"
-Re-level the roster.  With
-.BR \-\-model ,
-evaluate the new model across every suite, fold in the scores, and recompile;
-without it, re-resolve the roster under the current policy (zero spend).  Prints
+.BR "pi-stack agent reassess" " [" \-\-model " " NEW "]"
+Re-resolve the roster under the current policy/scorecard (zero spend) and
+recompile.
+.BR \-\-model
+points you at hand-editing the scorecard instead of measuring anything.  Prints
 the routing diff.
 .SS route
 The model router: turn a declared
@@ -454,17 +454,6 @@ Print the registry, scorecard, and resolved-intent table.
 .TP
 .BR "pi-stack route models" " [" \-\-json "]"
 List the model registry.
-.SS "evals (maintainer)"
-The accuracy eval harness is NOT a
-.B pi-stack
-command.  It is maintainer tooling run from a repo checkout with
-.BR "make evals ARGS=\"run --budget 5 --save\"" ,
-and it needs
-.B promptfoo
-on the host \(em an optional dev dependency that is never bundled into the image
-or the launcher.  It writes measured scores into the router scorecard; then
-.B pi-stack route compile
-bakes the routes.
 .SS mcp
 .TP
 .BR "pi-stack mcp register" " [" name... "]"

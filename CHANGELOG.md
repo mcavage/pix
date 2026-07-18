@@ -8,6 +8,17 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Removed
+
+- **Tore out the automated eval harness** (`evals/`, `pi-stack-host evals`,
+  `make evals`, `pi-stack agent reassess --model`'s auto-measure path). The
+  router never needed it: it only ever reads `scorecard.json`, regardless of
+  how the numbers got there. Scores are now hand-maintained — edit
+  `services/host/routing/defaults/scorecard.json` directly (seeded from
+  published benchmarks/pricing; see the `model-refresh` skill), then
+  `pi-stack route compile`. `pi-stack agent new`'s starter eval-suite
+  scaffolding is also gone.
+
 ### Fixed
 
 - `make evals`/`make route` with no ARGS printed usage and exited 2 (looked

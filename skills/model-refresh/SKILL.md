@@ -56,8 +56,9 @@ One entry per model you want routable. Rules:
 - `id` MUST be the exact, fully-qualified API string (`anthropic/claude-sonnet-5`,
   not a guess like `anthropic/sonnet-5`). A wrong id fails at spawn, not at
   compile. `pi-stack agent ls` flags a pin that is not in the registry.
-- Prices are the real list `$/Mtok`. Keep them current; the eval harness computes
-  real per-task cost as tokens x price.
+- Prices are the real list `$/Mtok`. Keep them current — `cost_usd` in the
+  scorecard is a hand-computed per-task estimate (tokens x price), so a stale
+  price silently poisons every cost-objective route.
 - `local: true` for Ollama/free; `available: false` to hide a model without
   deleting it.
 - Cover the tiers you actually route to: a frontier model, a workhorse, a cheap
@@ -68,13 +69,16 @@ One entry per model you want routable. Rules:
 One row per `(model, task_type)` for every model x {code, reasoning, search, qa}.
 
 - `accuracy` (0..1): normalize the published benchmark for that task_type. Tag
-  `source: "card"` (seeded from a model card / benchmark), which `pi-stack evals
-  run` later replaces with `source: "eval"`.
+  `source: "card"` (seeded from a model card / benchmark). There is no
+  automated harness that later measures a real `source: "eval"` row —
+  scores are hand-maintained; if you later have real usage data for a
+  `(model, task_type)` pair, hand-edit the row and set `source: "eval"`
+  yourself.
 - `cost_usd`: a representative per-task estimate at list price. Use a fixed task
   shape so models are comparable (e.g. ~20k input + 6k output ->
   `0.02*in$ + 0.006*out$`).
 - `latency_ms_p50`: a rough estimate (frontier/big = slower, flash/lite = fast,
-  local = slowest). Evals refine it.
+  local = slowest).
 - Keep the `_note` honest about what is measured vs interpolated vs estimated.
 
 ## 4. Re-check `policy.json` (only if needed)
@@ -106,27 +110,11 @@ Read the output like a reviewer, do not just run it:
 - Do the adversarial roles (`review`, `red-team`) land on DIFFERENT vendors from
   the author and each other?
 
-Keep `evals/promptfooconfig.yaml` providers in sync with the registry (same ids),
-or `pi-stack evals run --models <id>` errors on the missing provider.
+There is no eval harness to keep in sync — `scorecard.json` is the single
+source of truth and it is hand-maintained. If a card price/benchmark changes
+later, come back and hand-edit the row, then re-run `pi-stack route compile`.
 
-## 6. Optional: measure for real
-
-Card priors are honest guesses of ordering. To replace them with measured numbers
-(costs money, run by hand on a new-model release):
-
-```bash
-make evals ARGS="--budget 5 --dry-run"        # preview the plan + spend
-make evals ARGS="--budget 5 --save"           # measure, write scorecard
-pi-stack route compile                         # re-resolve
-```
-
-(`make evals` is the maintainer entry point, run from the repo. It needs TWO
-optional host dependencies, neither bundled: `promptfoo` (`npm i -g promptfoo`)
-and the `pi` CLI on the host PATH (`npm i -g @earendil-works/pi-coding-agent`, or
-`PI_BIN`) — the harness runs each model through a headless `pi`, so that `pi` also
-needs working model auth on the host. `make evals` preflight-checks both.)
-
-## 7. Ship
+## 6. Ship
 
 Config + baked-file changes reach new sandboxes only after `make load` on a DHI
 host. Update `CHANGELOG.md`, and if the number/naming of models or intents

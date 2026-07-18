@@ -68,8 +68,8 @@ func TestResolveAgentModel(t *testing.T) {
 }
 
 // TestAgentNewEditRm exercises the file lifecycle. new/edit write files; rm
-// removes them. We chdir into a temp workspace so ./agents and ./evals resolve
-// there, and force the embedded routing defaults via a fresh ROUTING_DIR.
+// removes them. We chdir into a temp workspace so ./agents resolves there, and
+// force the embedded routing defaults via a fresh ROUTING_DIR.
 func TestAgentNewEditRm(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -87,9 +87,6 @@ func TestAgentNewEditRm(t *testing.T) {
 	}
 	if m.Intent != "code" || m.BudgetUSD != 0.25 || m.Tools != "read,edit" {
 		t.Fatalf("new frontmatter: %+v", m)
-	}
-	if _, err := os.Stat(filepath.Join("evals", "suites", "agents", "go-eng.yaml")); err != nil {
-		t.Fatalf("starter suite not created: %v", err)
 	}
 
 	// Edit: change intent + budget; parse must still succeed (the quoted-number bug).

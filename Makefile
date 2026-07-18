@@ -114,7 +114,7 @@ SERVE_ENV ?=
 # at parse time so every target can rely on it.
 $(shell mkdir -p out)
 
-.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay launcher route evals
+.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay launcher route
 
 # Symlink the private overlay's host plugins ($(OVERLAY)/host/overlay_*.go) into
 # services/host/ so they compile into pi-stack-host and self-register. No-op in a
@@ -132,9 +132,9 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo ""
-	@echo "Runtime, routing, agent, eval, and parallel-task commands live in the"
-	@echo "launcher, not make:  pi-stack help --all  (e.g. pi-stack evals run,"
-	@echo "pi-stack route compile, pi-stack agent ls, pi-stack task new)."
+	@echo "Runtime, routing, agent, and parallel-task commands live in the launcher,"
+	@echo "not make:  pi-stack help --all  (e.g. pi-stack route compile,"
+	@echo "pi-stack agent ls, pi-stack task new)."
 
 build: ## Build the pi-stack image from the DHI base
 	docker build -t $(IMAGE) .
@@ -265,27 +265,17 @@ serve: link-overlay ## Start the host services named in SERVICES (config/local.m
 	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) || { echo "go build failed (pi-stack-host)"; exit 1; }
 	@exec env $(SERVE_ENV) MEMORY_WATCHER_MODEL=$(MEMORY_WATCHER_MODEL) MEMORY_EMBED_MODEL=$(MEMORY_EMBED_MODEL) out/pi-stack-host serve $(SERVICES)
 
-# route + evals are MAINTAINER tooling for the model router, run from the repo
-# (they read services/host/routing/ and evals/). They are NOT part of the
-# consumer surface: `evals` is deliberately NOT a `pi-stack` command — it lives
-# here in the Makefile, invoking the repo-built pi-stack-host backend. It also
-# needs promptfoo on the host — an OPTIONAL dev dependency (`npm i -g promptfoo`),
-# never bundled into the image or the launcher. See the `model-refresh` skill +
-# docs/design/routing.md.
-# Bare `make route` / `make evals` default to the safe, read-only `show` (the
-# scorecard / resolved table) so they never error or spend money without ARGS.
+# route is MAINTAINER tooling for the model router, run from the repo (it reads
+# services/host/routing/). It is NOT part of the consumer surface: `route` is
+# deliberately NOT a `pi-stack` command — it lives here in the Makefile, invoking
+# the repo-built pi-stack-host backend. See the `model-refresh` skill +
+# docs/design/routing.md. Scores are hand-maintained in
+# services/host/routing/defaults/scorecard.json — edit it, then `make route
+# ARGS=compile` (or `pi-stack route compile`).
+# Bare `make route` defaults to the safe, read-only `show` (the scorecard /
+# resolved table) so it never errors without ARGS.
 route: ## Model router (maintainer): make route ARGS="show" | "models" | "compile" | "pick <intent>"
 	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && ./out/pi-stack-host route $(if $(strip $(ARGS)),$(ARGS),show)
-
-evals: ## Accuracy eval harness (maintainer; a `run` needs promptfoo + COSTS MONEY): make evals ARGS="run --budget 5 --dry-run"
-	@args='$(if $(strip $(ARGS)),$(ARGS),show)'; \
-	case "$$args" in \
-	  *run*) \
-	    command -v promptfoo >/dev/null 2>&1 || { echo "ERROR: promptfoo not found (optional dev dep). Install it: npm i -g promptfoo"; exit 1; }; \
-	    { [ -n "$$PI_BIN" ] && command -v "$$PI_BIN" >/dev/null 2>&1; } || command -v pi >/dev/null 2>&1 || { echo "ERROR: the 'pi' CLI is not on PATH. Evals run each model through a headless pi (to avoid handling API keys). Install it (npm i -g @earendil-works/pi-coding-agent) or set PI_BIN."; exit 1; }; \
-	  ;; \
-	esac; \
-	(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && ./out/pi-stack-host evals $$args
 
 pull-models: ## Pull the local Ollama models the stack uses (memory watcher + embed, and the bridge/router local model)
 	@command -v ollama >/dev/null 2>&1 || { echo "ollama not installed — see https://ollama.com (optional: enables semantic recall + fact capture + the local model)"; exit 1; }

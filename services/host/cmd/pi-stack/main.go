@@ -102,11 +102,12 @@ func main() {
 	case "route":
 		runRoute(args[1:])
 	case "evals":
-		// evals is maintainer tooling in the Makefile, not a pi-stack command. Catch
-		// it explicitly (also shadowing the bare-arg-is-a-dir behavior when an
-		// evals/ dir is present) and point at the real door.
-		fmt.Fprintln(os.Stderr, "pi-stack: evals is maintainer tooling, not a pi-stack command.")
-		fmt.Fprintln(os.Stderr, `  Run it from a repo checkout:  make evals ARGS="run --budget 5 --dry-run"`)
+		// Catch this explicitly (also shadowing the bare-arg-is-a-dir behavior when
+		// an evals/ dir is present) so a bare `evals` gets a clear message instead
+		// of a confusing "no such directory".
+		fmt.Fprintln(os.Stderr, "pi-stack: evals were removed. Model scores are hand-maintained in")
+		fmt.Fprintln(os.Stderr, "  services/host/routing/defaults/scorecard.json; run `pi-stack route compile`")
+		fmt.Fprintln(os.Stderr, "  after editing.")
 		os.Exit(2)
 	case "agent":
 		runAgent(args[1:])

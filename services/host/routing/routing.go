@@ -26,8 +26,8 @@ import (
 var defaults embed.FS
 
 // Model is one callable model and its economics. Adding a model to the stack is
-// a single entry in models.json; everything downstream (resolver, evals,
-// compile) picks it up with no code change.
+// a single entry in models.json; everything downstream (resolver, compile)
+// picks it up with no code change.
 type Model struct {
 	ID            string   `json:"id"`             // fully qualified provider/id
 	Provider      string   `json:"provider"`       // "anthropic", "openai", "ollama", ...
@@ -148,14 +148,13 @@ func IsQualifiedID(id string) bool {
 
 // validObjectives are the objectives the resolver understands. An unknown one
 // silently degrades to balanced in rankBy; Validate rejects it up front so a
-// typo ("accuarcy") is caught at compile/eval time, not by mystery routing.
+// typo ("accuarcy") is caught at compile time, not by mystery routing.
 var validObjectives = map[string]bool{"accuracy": true, "cost": true, "latency": true, "balanced": true, "": true}
 
 // Validate checks the three truth sources for internal consistency BEFORE they
-// are used to compile routes or spend money on evals: prices sane, scores in
-// range and pointing at real models, intents using a known objective and a
-// resolvable fallback, and a resolvable default fallback. Returns the first
-// problem, or nil.
+// are used to compile routes: prices sane, scores in range and pointing at real
+// models, intents using a known objective and a resolvable fallback, and a
+// resolvable default fallback. Returns the first problem, or nil.
 func Validate(reg *Registry, sc *Scorecard, pol *Policy) error {
 	if len(reg.Models) == 0 {
 		return fmt.Errorf("registry is empty")
@@ -211,7 +210,7 @@ func Validate(reg *Registry, sc *Scorecard, pol *Policy) error {
 // ── paths ────────────────────────────────────────────────────────────────────
 
 // Dir is the on-disk routing dir: $ROUTING_DIR, else ~/.pi-stack/routing.
-// Overrides for models/scorecard/policy live here; evals write the scorecard here.
+// Overrides for models/scorecard/policy live here; hand-edit scorecard.json here.
 func Dir() string {
 	if d := strings.TrimSpace(os.Getenv("ROUTING_DIR")); d != "" {
 		return d
@@ -272,8 +271,9 @@ func LoadPolicy() (*Policy, error) {
 	return p, nil
 }
 
-// SaveScorecard writes the scorecard back to disk (evals + tests). Scores are
-// sorted (task_type, then descending accuracy) for a stable, diffable file.
+// SaveScorecard writes the scorecard back to disk (tests, and hand edits via
+// tooling). Scores are sorted (task_type, then descending accuracy) for a
+// stable, diffable file.
 func (s *Scorecard) Save() error {
 	sort.SliceStable(s.Scores, func(i, j int) bool {
 		if s.Scores[i].TaskType != s.Scores[j].TaskType {

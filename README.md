@@ -222,11 +222,11 @@ pi-stack man                 # render the full man page
 
 Run `pi-stack help --all` for the complete tree with flags.
 
-The model router (`route`), the eval harness, and agent authoring are
-**maintainer tooling**, run from a repo checkout (`make route`, `make evals`).
-The eval harness needs `promptfoo` on the host, an **optional dev dependency**
-(`npm i -g promptfoo`) that is never bundled into the image or the launcher.
-Consumers get the compiled `routing.json` in the image and never run evals.
+The model router (`route`) and agent authoring are **maintainer tooling**, run
+from a repo checkout (`make route`). Scores live in a hand-maintained
+`scorecard.json` (seeded from published benchmarks and pricing, no eval harness
+required); edit it, then `pi-stack route compile`. Consumers get the compiled
+`routing.json` baked into the image.
 
 Do not hand-edit `config.toml`. `pi-stack setup` and `pi-stack config set/unset`
 are the supported writers, and `pi-stack doctor` prints copy-pasteable repair

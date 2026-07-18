@@ -112,7 +112,6 @@ Data
 Models & agents (cost/latency/accuracy routing)
   agent <cmd>         ls | new | edit | rm | reassess (subagents as objects)
   route <cmd>         pick | compile | show | models (intent -> model)
-  (evals are maintainer-only: run "make evals" from a repo checkout, not here)
 
 Config & context
   config show|path    show the resolved config path and contents

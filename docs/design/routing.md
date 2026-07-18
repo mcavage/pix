@@ -2,19 +2,22 @@
 
 **Status:** built (v2). The router replaces hand-pinned model ids on every agent
 with a declared *intent* (a hard constraint) that resolves to a concrete model
-from measured scores. Evals feed the scores; the resolver picks; nobody toggles
-models by hand.
+from a scorecard. Scores are seeded from published benchmarks and pricing and
+are **hand-maintained** (edit `scorecard.json` directly); the resolver picks,
+nobody toggles models by hand.
 
-**v2 reshape (agent lifecycle + promptfoo).** v1 shipped the engine but read as
-"a router." v2 reframes it as what it is for: **agents are first-class objects
-you create, eval, and manage** (`pi-stack agent ls|new|edit|rm|reassess`), and
-routing is the engine that makes each one pick its model. Two concrete changes
-from v1: (1) evals moved from a hand-rolled Go harness to **promptfoo** (one
-legible home in `evals/`), the Go side only *imports* results into the
-scorecard; (2) an `agent` CLI makes the default-with-override behavior legible
-(`agent ls` shows each agent's resolved model and why). The resolver, data
-model, and `routing.json` contract are unchanged from v1. See the PR/FAQ +
-arch review in `.pi-agent/plan/agent-lifecycle/` for the full rationale.
+**v2 reshape (agent lifecycle).** v1 shipped the engine but read as "a
+router." v2 reframes it as what it is for: **agents are first-class objects
+you create and manage** (`pi-stack agent ls|new|edit|rm|reassess`), and routing
+is the engine that makes each one pick its model. The concrete change from v1:
+an `agent` CLI makes the default-with-override behavior legible (`agent ls`
+shows each agent's resolved model and why). The resolver, data model, and
+`routing.json` contract are unchanged from v1. An earlier revision of this
+system ran an automated harness to re-measure scores by calling every candidate
+model; it was torn out as a fragile host dependency the router never needed —
+the resolver only reads the scorecard, regardless of how its numbers got there.
+See the PR/FAQ + arch review in `.pi-agent/plan/agent-lifecycle/` for the full
+rationale.
 
 ## The problem
 
@@ -55,9 +58,9 @@ a WHY for each pick (objective, the winner's accuracy/$/latency, and what it bea
 or whether a constraint left a sole fit).
 
 Any agent is measurable on three axes: **cost**, **latency**, **accuracy**. Cost
-and latency are cheap to measure from a real run (token usage × price, wall
-clock). Accuracy is the hard axis — it needs a task-representative eval with a
-checkable outcome. So the design splits along that seam.
+and latency are cheap to derive from published pricing and model cards.
+Accuracy is the hard axis — it comes from published benchmarks and is
+hand-entered into the scorecard, not measured by an in-repo harness.
 
 ## Shape (mirrors `capabilities.json`)
 
@@ -69,12 +72,12 @@ same idea for models.
 HOST (Go, tested, owns the truth)            SANDBOX (TS, reads one file)
 ┌───────────────────────────────┐            ┌──────────────────────────┐
 │ models.json    (registry+price)│            │ routing.json (resolved)  │
-│ scorecard.json (measured)      │  compile   │  intent -> model + why   │
+│ scorecard.json (hand-edited)   │  compile   │  intent -> model + why   │
 │ routing-policy.json (intents)  │ ─────────▶ │                          │
 │      │                         │            │ subagents.ts reads it:   │
 │  Resolve() constrained-opt     │            │  intent: -> model id     │
 │      ▲                         │            │  (explicit model: wins)  │
-│  evals run (measures accuracy) │            └──────────────────────────┘
+│  hand-edit scorecard.json      │            └──────────────────────────┘
 └───────────────────────────────┘
 ```
 
@@ -95,7 +98,9 @@ the launcher can import it, exactly like `config`.
   `models.json`; everything downstream picks it up.
 - **Score** — one `(model, task_type)` row: `accuracy` 0..1, `latency_ms_p50`,
   `cost_usd` (mean per task), `n` samples, `source` (`eval|seed`), `updated`.
-  Bootstrapped with seed priors so routing works before the first eval.
+  Hand-maintained: seeded from published benchmarks + pricing at launch, and
+  hand-edited in `scorecard.json` whenever a model's numbers change or a new
+  model is added.
 - **Intent** — the declared need for a role/task. The hard-constraint form the
   feature was scoped to: `max_cost_usd`, `max_latency_ms` (hard ceilings),
   `min_accuracy` (floor), `objective` (`accuracy|cost|latency|balanced`, what to
@@ -116,78 +121,45 @@ the launcher can import it, exactly like `config`.
    default) and set `constraints_met=false` with a human reason. The router never
    returns "no model" — a crew task always gets *a* model, just flagged.
 
-## Eval harness (promptfoo)
+## Scoring the scorecard (hand-maintained)
 
-Evals live in `evals/` as **promptfoo** (the one legible home). The Go side no
-longer scores anything; it imports promptfoo's results into the scorecard.
-
-- **`evals/promptfooconfig.yaml`** — the candidate model list (as pi providers)
-  and which suites to run.
-- **`evals/providers/pi.js`** — a custom provider that invokes each model
-  through `pi` (hermetic: `--no-tools --no-context-files --no-session
-  --no-extensions`, throwaway cwd, wall-clock timeout). Credentials stay
-  proxy-managed; every provider `pi` reaches is evaluable with no extra code.
-  This is v1's `piRunner` insight, re-homed.
-- **`evals/suites/*.yaml`** — human-readable cases. Each carries
-  `metadata.task_type` (the scorecard key) and an assertion promptfoo scores:
-  `contains`/`icontains`/`icontains-any`/`regex` (JS regex — NO `(?i)` inline
-  flags), an external `javascript` grader under `evals/asserts/` (the mechanical
-  build/test grader), or `llm-rubric` (judge). Per-agent suites live under
-  `suites/agents/`.
-- **`pi-stack evals run`** shells `promptfoo eval`, then imports the results
-  (`routing.ImportPromptfoo`) into the scorecard keyed by `(model, task_type)`:
-  accuracy = mean promptfoo score, latency = p50, cost = mean. Rows whose model
-  invocation errored (`response.error`) are excluded so a transient blip can't
-  overwrite a good score; a failed *assertion* is a legitimate 0. `--budget`
-  evaluates one model at a time and stops before the cap; `--dry-run` calls
-  nothing; `--save` writes the scorecard; then `route compile`.
-- **`pi-stack evals import <results.json>`** folds an existing promptfoo run in.
-
-Deliberately NOT run unattended: evals cost real money, which is the exact thing
-this feature exists to control. It is a one-command sweep the user runs on a new
-model release. The importer's schema is pinned by a real `results.json` fixture
-(`services/host/routing/testdata/`).
-
-**Scope + prerequisites.** Evals are run via **`make evals`** (maintainer
-tooling, NOT a `pi-stack` command). They are **repo-rooted** (run from the repo so
-`evals/` and `agents/` resolve; override with `$EVALS_CONFIG` /
-`$PI_STACK_AGENTS_DIR`) and need TWO optional host dependencies, neither bundled:
-(1) **promptfoo** (`npm i -g promptfoo`) to run + score, and (2) the **`pi` CLI on
-the host PATH** (`npm i -g @earendil-works/pi-coding-agent`, or set `PI_BIN`) —
-the provider runs each model through a headless `pi` so it never handles API keys,
-so a host-run `pi` also needs working model auth. `make evals` preflight-checks
-both and fails with the fix. They are maintainer/power-user tools, not part of the
-repo-less consumer install. What the eval measures is a **model's capability at
-a `task_type`** (which sets an agent's default model), not the exact wording of
-one agent's prompt. Every requested model must have a `providers:` entry in
-`promptfooconfig.yaml`, or the run errors rather than silently scoring nothing.
+There is no automated measurement harness in this repo. `scorecard.json` is a
+plain data file (`services/host/routing/defaults/scorecard.json`) you edit by
+hand: one `(model, task_type)` row per line, with accuracy/latency/cost pulled
+from published model cards, vendor benchmarks, and pricing pages (see the
+`model-refresh` skill, which re-grounds the registry + scorecard against LIVE
+model cards rather than training-data guesses). This replaced an earlier harness
+that called every candidate model to re-measure scores automatically — useful
+in principle, but a fragile external host dependency for a router that only
+ever reads the scorecard, never the harness that produced it. After editing
+`scorecard.json`, run `pi-stack route compile` to bake the change into
+`routing.json`.
 
 ## CLI
 
 Host (`pi-stack-host`): `route pick <intent>`, `route compile`, `route show`,
-`models`, `evals run|import|show|ls`.
-Launcher (`pi-stack`): `agent ls|new|edit|rm|reassess`, `route`, `evals`
-(passthrough to the host binary), and `run --intent <name>` resolves the
-interactive session model.
+`models`.
+Launcher (`pi-stack`): `agent ls|new|edit|rm|reassess`, `route` (passthrough to
+the host binary), and `run --intent <name>` resolves the interactive session
+model.
 
 ## Agent lifecycle
 
 An agent is a first-class object (`agents/<name>.md` frontmatter): identity,
 `description` (used for auto-selection), prompt, `tools`, an **`intent`** (not a
-pinned model), an optional provider constraint, an advisory `budget_usd`, and an
-eval suite under `evals/suites/agents/`.
+pinned model), an optional provider constraint, and an advisory `budget_usd`.
 
 - **`agent ls`** shows each agent's resolved model and WHY (its intent, and
   whether the resolver fell back). This is what makes "sensible default with
   override" legible — you never pick a model per task.
-- **`agent new`** scaffolds the md + a starter suite; **`agent new
-  --interactive`** runs the `agent-new` skill (powered by the `authoring` intent
-  → Opus) to author the prompt + real eval cases conversationally, run them, show
-  the tradeoff table, and set the default.
+- **`agent new`** scaffolds the md; **`agent new --interactive`** runs the
+  `agent-new` skill (powered by the `authoring` intent → Opus) to author the
+  prompt conversationally and set the default.
 - **`agent edit` / `agent rm`** manage an agent without hand-editing frontmatter.
-- **`agent reassess`** re-levels the roster: `--model NEW` evaluates the new
-  model across every suite and recompiles; without it, re-resolves under the
-  current policy (zero spend — the new-user-budget flow). Prints the routing diff.
+- **`agent reassess`** re-resolves the roster under the current policy/scorecard
+  (zero spend) and recompiles. `--model NEW` no longer measures anything
+  automatically — it points you at hand-editing `scorecard.json` and re-running
+  without `--model`. Prints the routing diff either way.
 
 ## Sandbox integration
 
@@ -203,7 +175,8 @@ is baked at `~/.pi/agent/routing.json` next to `capabilities.json`.
 ## Adding a model later (the whole point)
 
 1. Add one entry to `models.json` (`id`, `provider`, prices, `available:true`).
-2. `pi-stack evals run --models <new-id>` to earn its scores (budget-guarded).
+2. Hand-add its scores to `scorecard.json` (from published benchmarks/model
+   cards).
 3. `pi-stack route compile` and `make load`.
 
 No agent files change. The router reconsiders every intent against the new model
@@ -213,23 +186,6 @@ automatically.
 
 A cross-vendor review shaped these; some are fixed, some are deliberate scope.
 
-**Fixed / enforced**
-
-- **The evaluated model can't touch the host.** The pi provider runs each model
-  with `--no-tools --no-context-files --no-session --no-extensions --no-skills
-  --no-prompt-templates --no-themes` in a throwaway cwd, with a wall-clock
-  timeout (pi has no read timeout) and a bounded output buffer. The DEFAULT suite
-  uses only non-executing assertions (contains/regex/llm-rubric). The mechanical
-  exec grader (`evals/asserts/`) is OPT-IN, wired into no default suite, and
-  documented as unsafe for untrusted output (see below).
-- **Spend is bounded and honest.** `--budget` is a per-model cap: `evals run`
-  evaluates one model at a time and does not START a new model once spend has hit
-  the cap (the in-flight model's matrix runs whole, so the cap is advisory at
-  model granularity). Cost comes from pi's own `usage.cost.total` (cache-aware),
-  not registry guesses. Invocation errors (`response.error`) are excluded from
-  aggregates, so a transient outage can't overwrite a good score with a spurious
-  0. A requested model with no `providers:` entry errors before spending.
-
 **Deliberate design choices**
 
 - **The router never returns "no model."** When no candidate satisfies the hard
@@ -237,21 +193,17 @@ A cross-vendor review shaped these; some are fixed, some are deliberate scope.
   sets `constraints_met=false` with a reason. A crew task should degrade, not
   fail to launch. The flag is surfaced for auditing; the fallbacks in
   `policy.json` are chosen to be economical.
-- **The opt-in mechanical (exec) grader executes model output on the host** with
-  your full environment. It is meant for TRUSTED graders (build/test/lint) and is
-  deliberately NOT in any default suite. Do not point one at untrusted model
-  output without wrapping it in a disposable container/VM (no network, no
-  secrets, unprivileged, read-only workspace). The default suite avoids execution
-  entirely.
 
 **Known limitations (future work)**
 
 - The resolver treats a score as a point estimate and does not yet weight by
-  sample count (`n`) or freshness (`updated`). A one-sample eval and a
-  hundred-sample eval are equally authoritative, and scores never expire. Add a
-  min-sample / staleness policy before trusting this at scale.
-- Constraints are historical **averages** (mean cost, p50 latency), not runtime
-  ceilings. A long multi-turn agent can cost more than its short eval average.
-  The router picks well; it does not enforce a per-run budget mid-flight.
-- Registry prices are user-maintained estimates. Keep them current, or rely on
-  the eval-measured `cost_usd` (which uses pi's reported cost).
+  sample count (`n`) or freshness (`updated`). A benchmark cited once and one
+  cited a hundred times are equally authoritative, and scores never expire. Add
+  a min-sample / staleness policy before trusting this at scale.
+- Constraints are **averages** (mean cost, p50 latency) pulled from published
+  benchmarks, not runtime ceilings. A long multi-turn agent can cost more than
+  its benchmark average. The router picks well; it does not enforce a per-run
+  budget mid-flight.
+- Registry prices and scorecard numbers are user-maintained estimates. Keep
+  them current by hand (see `model-refresh`), since nothing in the repo
+  re-measures them automatically.
