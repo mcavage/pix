@@ -117,7 +117,9 @@ query` lazily auto-start a detached `pi-stack-host serve` when its ports are
 down (opt out with `PI_STACK_NO_AUTOSERVE=1` or `pi-stack config set
 host.autoserve false`; log at `~/.local/state/pi-stack/serve.log`). Prefer an
 always-on login service? `pi-stack serve install` registers it with launchd
-(macOS) or systemd --user (Linux); `pi-stack serve uninstall` removes it.
+(macOS) or systemd --user (Linux); `pi-stack serve uninstall` removes it. The
+managed service logs to the SAME `~/.local/state/pi-stack/serve.log` — one
+log file regardless of how serve was started.
 
 Bare `pi-stack` (no args) prints a status dashboard; it never launches a sandbox.
 Use `pi-stack run [DIR]` to launch. This is deliberate: launching is always

@@ -330,10 +330,11 @@ Install the services as a MANAGED login service: a launchd LaunchAgent
 on macOS, a systemd \-\-user unit
 .RB ( pi-stack-serve.service )
 on Linux.  Starts at login, auto-restarts, and starts immediately.  Logs go to
-.I ~/Library/Logs/pi-stack-serve.{out,err}.log
-(macOS) or the user journal
-.RI ( "journalctl \-\-user \-u pi-stack-serve" ,
-Linux).  Idempotent; re-running reinstalls with the current binary path.
+.I ~/.local/state/pi-stack/serve.log
+on both macOS and Linux \(em the SAME file the lazy auto-start uses, so there
+is one place to look regardless of how serve was started (on Linux,
+.RI ( "journalctl \-\-user \-u pi-stack-serve" )
+also works as a secondary view).  Idempotent; re-running reinstalls with the current binary path.
 Before installing, a lazily-started background daemon is stopped first and a
 FOREGROUND
 .B pi-stack serve

@@ -234,8 +234,8 @@ subcommands:
                     (PI_STACK_CONFIG always; XDG_CONFIG_HOME, MEMORY_DB,
                     MEMORY_PORT, KNOWLEDGE_PORT, OLLAMA_HOST when set) and
                     verifies the service came up.
-                    logs: ~/Library/Logs/pi-stack-serve.{out,err}.log (macOS) /
-                    journalctl --user -u pi-stack-serve (linux)
+                    logs: ~/.local/state/pi-stack/serve.log (same file the
+                    lazy auto-start uses, on both macOS and Linux)
   uninstall         remove the managed login service
 `
 

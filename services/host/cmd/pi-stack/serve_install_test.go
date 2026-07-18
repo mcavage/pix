@@ -64,11 +64,11 @@ func (f *recFS) fs() installFS {
 // TestRenderPlist: the generated plist has no CHANGEME left and carries the
 // real paths — golden-ish assertions on the rendered output, no launchctl.
 func TestRenderPlist(t *testing.T) {
+	logPath := config.ServeLogPath()
 	got, err := renderPlist(plistData{
 		HostBin: "/home/u/.local/bin/pi-stack-host",
 		Home:    "/home/u",
-		OutLog:  "/home/u/Library/Logs/pi-stack-serve.out.log",
-		ErrLog:  "/home/u/Library/Logs/pi-stack-serve.err.log",
+		LogPath: logPath,
 		Label:   serveLaunchdLabel,
 	})
 	if err != nil {
@@ -83,17 +83,24 @@ func TestRenderPlist(t *testing.T) {
 		"<string>serve</string>",
 		"<key>RunAtLoad</key>",
 		"<key>KeepAlive</key>",
-		"/home/u/Library/Logs/pi-stack-serve.out.log",
-		"/home/u/Library/Logs/pi-stack-serve.err.log",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("plist missing %q:\n%s", want, got)
 		}
 	}
+	// StandardOutPath AND StandardErrorPath must both be config.ServeLogPath()
+	// — one unified serve log, no more ~/Library/Logs split files.
+	if n := strings.Count(got, "<string>"+logPath+"</string>"); n != 2 {
+		t.Errorf("want StandardOutPath and StandardErrorPath both = %q (2 occurrences), got %d in:\n%s", logPath, n, got)
+	}
+	if strings.Contains(got, "Library/Logs") {
+		t.Errorf("plist still references ~/Library/Logs:\n%s", got)
+	}
 }
 
 func TestRenderUnit(t *testing.T) {
-	got, err := renderUnit(unitData{HostBin: "/usr/local/bin/pi-stack-host"})
+	logPath := config.ServeLogPath()
+	got, err := renderUnit(unitData{HostBin: "/usr/local/bin/pi-stack-host", LogPath: logPath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,6 +109,10 @@ func TestRenderUnit(t *testing.T) {
 	}
 	if !strings.Contains(got, "Restart=always") || !strings.Contains(got, "WantedBy=default.target") {
 		t.Errorf("unit missing restart/install directives:\n%s", got)
+	}
+	// Logging goes to the SAME unified file, not journald.
+	if !strings.Contains(got, "StandardOutput=append:"+logPath) || !strings.Contains(got, "StandardError=append:"+logPath) {
+		t.Errorf("unit missing StandardOutput/StandardError=append:%s:\n%s", logPath, got)
 	}
 }
 
@@ -135,7 +146,7 @@ func TestLaunchdInstall(t *testing.T) {
 		}
 	}
 	if !strings.Contains(out.String(), "installed managed service com.pi-stack.serve") ||
-		!strings.Contains(out.String(), "pi-stack-serve.{out,err}.log") {
+		!strings.Contains(out.String(), "logs: "+config.ServeLogPath()) {
 		t.Errorf("install message = %q", out.String())
 	}
 }
@@ -219,8 +230,8 @@ func TestSystemdInstall(t *testing.T) {
 			t.Errorf("missing %q in %v", want, r.calls)
 		}
 	}
-	if !strings.Contains(out.String(), "journalctl --user -u pi-stack-serve") {
-		t.Errorf("install message must point at the journal: %q", out.String())
+	if !strings.Contains(out.String(), "logs: "+config.ServeLogPath()) {
+		t.Errorf("install message must point at the unified serve log: %q", out.String())
 	}
 }
 
@@ -274,7 +285,7 @@ func TestRenderPlistEscapesXMLMetachars(t *testing.T) {
 	got, err := renderPlist(plistData{
 		HostBin: evil,
 		Home:    "/home/u",
-		OutLog:  `/logs/a&b"c'd/out.log`, ErrLog: "/l/err.log", Label: serveLaunchdLabel,
+		LogPath: `/logs/a&b"c'd/out.log`, Label: serveLaunchdLabel,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -286,7 +297,7 @@ func TestRenderPlistEscapesXMLMetachars(t *testing.T) {
 		t.Errorf("HostBin not XML-escaped:\n%s", got)
 	}
 	if !strings.Contains(got, "/logs/a&amp;b&#34;c&#39;d/out.log") {
-		t.Errorf("OutLog not XML-escaped:\n%s", got)
+		t.Errorf("LogPath not XML-escaped:\n%s", got)
 	}
 }
 
@@ -294,7 +305,7 @@ func TestRenderPlistEscapesXMLMetachars(t *testing.T) {
 func TestRenderPlistRejectsControlChars(t *testing.T) {
 	_, err := renderPlist(plistData{
 		HostBin: "/bin/x\n<key>Injected</key>",
-		Home:    "/home/u", OutLog: "/l/o", ErrLog: "/l/e", Label: serveLaunchdLabel,
+		Home:    "/home/u", LogPath: "/l/o", Label: serveLaunchdLabel,
 	})
 	if err == nil {
 		t.Fatal("newline in HostBin accepted")
@@ -355,7 +366,7 @@ func TestCapturedServeEnv(t *testing.T) {
 func TestRenderPlistCarriesCapturedEnv(t *testing.T) {
 	got, err := renderPlist(plistData{
 		HostBin: "/opt/pi-stack-host", Home: "/Users/u",
-		OutLog: "/l/o", ErrLog: "/l/e", Label: serveLaunchdLabel,
+		LogPath: "/l/o", Label: serveLaunchdLabel,
 		Env: []envKV{
 			{Key: "PI_STACK_CONFIG", Value: "/custom/config.toml"},
 			{Key: "MEMORY_PORT", Value: "21435"},
@@ -380,6 +391,7 @@ func TestRenderPlistCarriesCapturedEnv(t *testing.T) {
 func TestRenderUnitCarriesCapturedEnv(t *testing.T) {
 	got, err := renderUnit(unitData{
 		HostBin: "/usr/bin/pi-stack-host",
+		LogPath: "/l/serve.log",
 		Env: []envKV{
 			{Key: "PI_STACK_CONFIG", Value: "/custom/config.toml"},
 			{Key: "KNOWLEDGE_PORT", Value: "21436"},
@@ -572,8 +584,7 @@ func TestRenderPlistHomeWithDoubleDashProducesValidXML(t *testing.T) {
 	got, err := renderPlist(plistData{
 		HostBin: "/opt/pi-stack-host",
 		Home:    home,
-		OutLog:  home + "/Library/Logs/pi-stack-serve.out.log",
-		ErrLog:  home + "/Library/Logs/pi-stack-serve.err.log",
+		LogPath: config.ServeLogPath(),
 		Label:   serveLaunchdLabel,
 	})
 	if err != nil {

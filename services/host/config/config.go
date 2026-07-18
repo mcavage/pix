@@ -230,10 +230,14 @@ func ServeLazyMarkerPath() string {
 }
 
 // StateDir resolves the per-user state dir: $XDG_STATE_HOME/pi-stack, else
-// ~/.local/state/pi-stack. Used for logs (NOT config): the lazy auto-start's
-// serve.log lives here on BOTH macOS and Linux (uniform, easy to tail into an
-// error message). The MANAGED launchd service logs to ~/Library/Logs separately
-// — that split is deliberate (Console.app expectations on macOS).
+// ~/.local/state/pi-stack. Used for logs (NOT config): serve.log lives here on
+// BOTH macOS and Linux, and every launch mode writes to it — the lazy
+// auto-start, the managed launchd LaunchAgent (StandardOutPath/
+// StandardErrorPath), and the managed systemd --user unit (StandardOutput=/
+// StandardError=append:) all point at the SAME file (ServeLogPath()), so
+// there is exactly one place to look regardless of how serve was started.
+// Only a FOREGROUND `pi-stack serve` is different — that one is interactive
+// and goes to its own terminal, not this file.
 func StateDir() (string, error) {
 	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
 		return filepath.Join(xdg, "pi-stack"), nil

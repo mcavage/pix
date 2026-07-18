@@ -209,17 +209,24 @@ config + pidfile only). There is no state/log helper today, so add one to
 
 ```go
 // StateDir resolves the per-user state dir: $XDG_STATE_HOME/pi-stack, else
-// ~/.local/state/pi-stack (Linux) / ~/Library/Logs is NOT used here so the lazy
-// path is OS-uniform; the launchd MANAGED path uses ~/Library/Logs separately).
+// ~/.local/state/pi-stack (Linux). Used for every serve log across every
+// launch mode — see the unification note below.
 func StateDir() (string, error)
 func ServeLogPath() string // <state-dir>/serve.log
 ```
 
-Decision: lazy logs go to `~/.local/state/pi-stack/serve.log` on BOTH macOS and
-Linux (XDG-state, uniform, easy for `ensureServe` to `tail` into an error).
-The MANAGED launchd service keeps its conventional `~/Library/Logs/
-pi-stack-serve.{out,err}.log` (macOS users expect Console.app to find it there).
-This split is intentional and documented in the message table.
+Decision (UPDATED — unified): every launch mode logs to the SAME
+`~/.local/state/pi-stack/serve.log`, on both macOS and Linux. Lazy logs there
+directly; the managed launchd LaunchAgent points BOTH `StandardOutPath` and
+`StandardErrorPath` at it (launchd interleaves stdout+stderr into one file,
+matching the lazy path's combined-output behavior); the managed systemd
+--user unit sets `StandardOutput=append:<path>` / `StandardError=append:<path>`
+instead of journald. This replaced an earlier split (the managed launchd
+service logging to `~/Library/Logs/pi-stack-serve.{out,err}.log` separately)
+that left three destinations for "the serve log" depending on how it was
+started — confusing enough in practice that it was collapsed to one file.
+`journalctl --user -u pi-stack-serve` still works on Linux as a secondary
+view, but the file is primary and is what every message/doc points at.
 
 ### Timeout
 
@@ -276,14 +283,13 @@ removed and `host-setup.sh` now delegates to `pi-stack serve install`.)
 type plistData struct {
     HostBin  string // absolute path to installed pi-stack-host (findHostBinary + EvalSymlinks)
     Home     string // os.UserHomeDir()
-    OutLog   string // <Home>/Library/Logs/pi-stack-serve.out.log
-    ErrLog   string // <Home>/Library/Logs/pi-stack-serve.err.log
+    LogPath  string // config.ServeLogPath() -- StandardOutPath AND StandardErrorPath both point here (unified serve log)
     Label    string // com.pi-stack.serve
 }
 ```
 
 Rewrite the embedded template's `/Users/CHANGEME/...` literals into
-`{{.HostBin}}`, `{{.Home}}`, `{{.OutLog}}`, `{{.ErrLog}}` placeholders so the
+`{{.HostBin}}`, `{{.Home}}`, `{{.LogPath}}` placeholders so the
 same file is both the human-readable reference AND the template source (single
 source of truth; no drift between the doc plist and the generated one). Keep the
 existing `EnvironmentVariables > PATH` block so the launchd-launched daemon can
@@ -295,7 +301,8 @@ reach a homebrew ollama.
    (launchd has a minimal PATH; the path MUST be absolute and real, not a
    `~/.local/bin` symlink into `out/`). Fail loudly if the binary is not found.
 2. Render the plist to `~/Library/LaunchAgents/com.pi-stack.serve.plist` (0644),
-   `MkdirAll` the LaunchAgents + Logs dirs.
+   `MkdirAll` the LaunchAgents dir plus `config.ServeLogPath()`'s parent dir
+   (0700) so launchd can create the log file.
 3. If a plist is already loaded, `launchctl bootout gui/$(id -u)/com.pi-stack.serve`
    first (idempotent re-install), ignore "not loaded" errors.
 4. `launchctl bootstrap gui/$(id -u) <plist>` (modern replacement for the
@@ -304,7 +311,7 @@ reach a homebrew ollama.
 5. `launchctl kickstart -k gui/$(id -u)/com.pi-stack.serve` to start it now
    (RunAtLoad covers reboots; kickstart covers "start immediately").
 6. Print: `installed managed service com.pi-stack.serve (starts at login,
-   auto-restarts). logs: ~/Library/Logs/pi-stack-serve.{out,err}.log`.
+   auto-restarts). logs: <config.ServeLogPath()>`.
 
 `uninstall` steps: `launchctl bootout gui/$(id -u)/com.pi-stack.serve` (ignore
 not-loaded), `os.Remove` the plist, print `removed managed service; run
@@ -327,9 +334,12 @@ launchd path (both are "generate a unit file, ask the init system to load it").
 `WantedBy=default.target`), then `systemctl --user daemon-reload`,
 `systemctl --user enable --now pi-stack-serve.service`. `uninstall`:
 `systemctl --user disable --now`, remove the unit, `daemon-reload`. Logs go to
-the journal; print `logs: journalctl --user -u pi-stack-serve`. If `systemctl` is
-absent (non-systemd distro), degrade to the explicit message: "no systemd --user
-found; use lazy auto-start (default) or run `pi-stack serve` yourself."
+the SAME `config.ServeLogPath()` file (`StandardOutput=append:<path>` /
+`StandardError=append:<path>` in the unit, not journald); print
+`logs: <config.ServeLogPath()>` (`journalctl --user -u pi-stack-serve` still
+works as a secondary view). If `systemctl` is absent (non-systemd distro),
+degrade to the explicit message: "no systemd --user found; use lazy
+auto-start (default) or run `pi-stack serve` yourself."
 
 ### Setup wizard hook (DO NOT implement — another agent owns onboarding)
 
@@ -510,7 +520,8 @@ must NOT be in `daemonAffectingKeys`.
 | lazy: spawn failed | stderr | `could not start pi-stack services: <reason>. run `pi-stack serve` to see the error.` |
 | lazy: health timed out | stderr | `pi-stack services did not become ready in 15s. last log lines:\n<tail>\nsee logs: ~/.local/state/pi-stack/serve.log` |
 | lazy: opted out + down | stderr | `serve not running and auto-start is disabled (PI_STACK_NO_AUTOSERVE / host.autoserve=false) — run `pi-stack serve`.` |
-| managed install ok | stdout | `installed managed service com.pi-stack.serve (starts at login, auto-restarts). logs: ~/Library/Logs/pi-stack-serve.{out,err}.log` |
+| managed install ok (launchd) | stdout | `installed managed service com.pi-stack.serve (starts at login, auto-restarts). logs: ~/.local/state/pi-stack/serve.log` |
+| managed install ok (systemd) | stdout | `installed managed service pi-stack-serve.service (starts at login, auto-restarts). logs: ~/.local/state/pi-stack/serve.log` |
 | managed install, no host bin | stderr | `serve install: pi-stack-host not found — run `make install` first.` |
 | managed uninstall ok | stdout | `removed managed service. run `pi-stack serve install` to re-enable, or `pi-stack serve` for foreground.` |
 | linux, no systemd | stderr | `no systemd --user found; use lazy auto-start (default) or run `pi-stack serve` yourself.` |

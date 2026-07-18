@@ -4,13 +4,16 @@
      of truth, embedded in the launcher binary — do not hand-edit the installed
      copy; re-run `pi-stack serve install` instead).
      Uninstall:  pi-stack serve uninstall
-     Logs:       see StandardOutPath / StandardErrorPath below.
+     Logs:       one unified file — see StandardOutPath / StandardErrorPath
+                 below (both point at the same path: config.ServeLogPath(),
+                 the same file the lazy auto-start and the managed systemd
+                 unit also log to).
      This runs `pi-stack-host serve` (memory :11435, knowledge :11436 — from
      your ~/.config/pi-stack/config.toml services). The sandbox reaches these
      over host.docker.internal. Google Workspace (gog) is NOT part of serve —
      it's a host MCP server run by the sbx gateway (see `make mcp-register`).
      Ollama (if used for memory) must be running too.
-     NOTE (round 2, H8): no user-interpolated value (Home/OutLog/ErrLog/HostBin)
+     NOTE (round 2, H8): no user-interpolated value (Home/LogPath/HostBin)
      may ever appear inside THIS comment. XML text-escaping does not make two
      adjacent hyphens legal inside a comment body, and a home directory or
      path with two adjacent hyphens in it would render an invalid plist. Those
@@ -46,8 +49,8 @@
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>{{.OutLog}}</string>
+  <string>{{.LogPath}}</string>
   <key>StandardErrorPath</key>
-  <string>{{.ErrLog}}</string>
+  <string>{{.LogPath}}</string>
 </dict>
 </plist>

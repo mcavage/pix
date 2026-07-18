@@ -88,8 +88,7 @@ func capturedServeEnv(getenv func(string) string) []envKV {
 type plistData struct {
 	HostBin string  // absolute, symlink-resolved path to pi-stack-host
 	Home    string  // os.UserHomeDir()
-	OutLog  string  // <Home>/Library/Logs/pi-stack-serve.out.log
-	ErrLog  string  // <Home>/Library/Logs/pi-stack-serve.err.log
+	LogPath string  // config.ServeLogPath() — StandardOutPath AND StandardErrorPath both point here (one unified serve log across lazy + managed launchd/systemd)
 	Label   string  // com.pi-stack.serve
 	Env     []envKV // install-time env overrides (H6)
 }
@@ -97,6 +96,7 @@ type plistData struct {
 // unitData fills the systemd template.
 type unitData struct {
 	HostBin string
+	LogPath string  // config.ServeLogPath() — StandardOutput/StandardError append: target (same unified serve log)
 	Env     []envKV // install-time env overrides (H6)
 }
 
@@ -127,7 +127,7 @@ func xmlEscape(v string) string {
 func renderPlist(d plistData) (string, error) {
 	for _, f := range []struct{ what, v string }{
 		{"host binary path", d.HostBin}, {"home", d.Home},
-		{"out log path", d.OutLog}, {"err log path", d.ErrLog}, {"label", d.Label},
+		{"log path", d.LogPath}, {"label", d.Label},
 	} {
 		if err := validateUnitValue(f.what, f.v); err != nil {
 			return "", err
@@ -136,8 +136,7 @@ func renderPlist(d plistData) (string, error) {
 	esc := plistData{
 		HostBin: xmlEscape(d.HostBin),
 		Home:    xmlEscape(d.Home),
-		OutLog:  xmlEscape(d.OutLog),
-		ErrLog:  xmlEscape(d.ErrLog),
+		LogPath: xmlEscape(d.LogPath),
 		Label:   xmlEscape(d.Label),
 	}
 	for _, kv := range d.Env {
@@ -165,13 +164,24 @@ func systemdQuote(v string) string {
 	return `"` + v + `"`
 }
 
+// systemdEscapePercent escapes `%` for a value used OUTSIDE ExecStart/
+// Environment (StandardOutput=append:<path> is not quoted/word-split the way
+// ExecStart is, so systemdQuote's quote-wrapping does not apply — but `%` is
+// still expanded as a unit specifier wherever it appears in a unit value).
+func systemdEscapePercent(v string) string {
+	return strings.ReplaceAll(v, "%", "%%")
+}
+
 // renderUnit renders the systemd unit from the embedded template, validating
 // values and quoting the ExecStart path + Environment entries (H7).
 func renderUnit(d unitData) (string, error) {
 	if err := validateUnitValue("host binary path", d.HostBin); err != nil {
 		return "", err
 	}
-	esc := unitData{HostBin: systemdQuote(d.HostBin)}
+	if err := validateUnitValue("log path", d.LogPath); err != nil {
+		return "", err
+	}
+	esc := unitData{HostBin: systemdQuote(d.HostBin), LogPath: systemdEscapePercent(d.LogPath)}
 	for _, kv := range d.Env {
 		if err := validateUnitValue("env "+kv.Key, kv.Value); err != nil {
 			return "", err
@@ -211,12 +221,11 @@ func realInstallFS() installFS {
 
 // --- launchd (macOS) ---------------------------------------------------------
 
-// launchdPaths derives the per-user launchd file locations from $HOME.
-func launchdPaths(home string) (plistPath, outLog, errLog string) {
-	plistPath = filepath.Join(home, "Library", "LaunchAgents", serveLaunchdLabel+".plist")
-	outLog = filepath.Join(home, "Library", "Logs", "pi-stack-serve.out.log")
-	errLog = filepath.Join(home, "Library", "Logs", "pi-stack-serve.err.log")
-	return
+// launchdPaths derives the launchd plist path from $HOME. The serve log
+// itself is config.ServeLogPath() — unified across lazy auto-start and both
+// managed forms (launchd, systemd) — so it no longer derives from $HOME here.
+func launchdPaths(home string) string {
+	return filepath.Join(home, "Library", "LaunchAgents", serveLaunchdLabel+".plist")
 }
 
 // launchdInstall renders + writes the plist and bootstraps it. Steps (all argv
@@ -226,9 +235,10 @@ func launchdPaths(home string) (plistPath, outLog, errLog string) {
 //     the deprecated `load -w` on old macOS
 //  3. kickstart -k to start it NOW (RunAtLoad covers reboots)
 func launchdInstall(run cmdRunner, fs installFS, uid int, home, hostBin string, env []envKV, out io.Writer) error {
-	plistPath, outLog, errLog := launchdPaths(home)
+	plistPath := launchdPaths(home)
+	logPath := config.ServeLogPath()
 	rendered, err := renderPlist(plistData{
-		HostBin: hostBin, Home: home, OutLog: outLog, ErrLog: errLog, Label: serveLaunchdLabel, Env: env,
+		HostBin: hostBin, Home: home, LogPath: logPath, Label: serveLaunchdLabel, Env: env,
 	})
 	if err != nil {
 		return err
@@ -236,7 +246,7 @@ func launchdInstall(run cmdRunner, fs installFS, uid int, home, hostBin string, 
 	if err := fs.mkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
 		return err
 	}
-	if err := fs.mkdirAll(filepath.Dir(outLog), 0o755); err != nil {
+	if err := fs.mkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return err
 	}
 	if err := fs.writeFile(plistPath, []byte(rendered), 0o644); err != nil {
@@ -255,13 +265,13 @@ func launchdInstall(run cmdRunner, fs installFS, uid int, home, hostBin string, 
 	// Start it now; RunAtLoad usually already did, so a kickstart failure is not fatal.
 	_, _ = run("launchctl", "kickstart", "-k", target)
 	fmt.Fprintf(out, "installed managed service %s (starts at login, auto-restarts). logs: %s\n",
-		serveLaunchdLabel, filepath.Join(home, "Library", "Logs", "pi-stack-serve.{out,err}.log"))
+		serveLaunchdLabel, logPath)
 	return nil
 }
 
 // launchdUninstall bootouts the agent (ignoring not-loaded) and removes the plist.
 func launchdUninstall(run cmdRunner, fs installFS, uid int, home string, out io.Writer) error {
-	plistPath, _, _ := launchdPaths(home)
+	plistPath := launchdPaths(home)
 	_, _ = run("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", uid, serveLaunchdLabel))
 	if err := fs.remove(plistPath); err != nil && !os.IsNotExist(err) {
 		return err
@@ -299,12 +309,16 @@ func systemdInstall(run cmdRunner, fs installFS, home, hostBin string, env []env
 	if _, err := run("systemctl", "--user", "--version"); err != nil {
 		return errNoSystemd
 	}
-	rendered, err := renderUnit(unitData{HostBin: hostBin, Env: env})
+	logPath := config.ServeLogPath()
+	rendered, err := renderUnit(unitData{HostBin: hostBin, LogPath: logPath, Env: env})
 	if err != nil {
 		return err
 	}
 	unitPath := systemdUnitPath(home)
 	if err := fs.mkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		return err
+	}
+	if err := fs.mkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return err
 	}
 	if err := fs.writeFile(unitPath, []byte(rendered), 0o644); err != nil {
@@ -316,7 +330,7 @@ func systemdInstall(run cmdRunner, fs installFS, home, hostBin string, env []env
 	if _, err := run("systemctl", "--user", "enable", "--now", serveSystemdUnit); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "installed managed service %s (starts at login, auto-restarts). logs: journalctl --user -u pi-stack-serve\n", serveSystemdUnit)
+	fmt.Fprintf(out, "installed managed service %s (starts at login, auto-restarts). logs: %s\n", serveSystemdUnit, logPath)
 	return nil
 }
 
