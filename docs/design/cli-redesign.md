@@ -269,8 +269,9 @@ keychain instead).
 
   You added no integrations that need a password. Skipping. (No file is created
   until you actually add one.)
-  When you do:  `pi-stack secret edit`, then `pi-stack secret check` to verify,
-  then `pi-stack mcp register` so the integration picks up the credentials.
+  When you do:  `pi-stack secret set <ENV_VAR> op://vault/item/field`, then
+  `pi-stack secret check` to verify, then `pi-stack mcp register` so the
+  integration picks up the credentials.
 
 --------------------------------------------------------------------------------
 Done. Saved ~/.config/pi-stack/config.toml.
@@ -347,7 +348,7 @@ Install it: https://docs.docker.com/sandboxes/
 No op-refs.env at ~/.config/pi-stack/op-refs.env.
 This file maps environment variables to 1Password paths, for integrations that
 need credentials (Google Workspace, Slack). You only need it if you use one.
-Create and open it:  pi-stack secret edit
+Add a ref:  pi-stack secret set <ENV_VAR> op://vault/item/field
 ```
 
 (All example copy uses Shape B spellings: `secret`, `profile`, `state`. If Shape

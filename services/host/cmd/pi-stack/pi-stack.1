@@ -642,20 +642,27 @@ to select the base configuration.
 With no subcommand,
 .B secret
 runs
-.BR status .
+.BR ls .
 .TP
-.B "pi-stack secret status"
+.B "pi-stack secret ls"
 Report whether
 .B op
 is installed and has an account, and classify configured refs without printing
 secret values.
 .TP
-.B "pi-stack secret edit"
-Create the refs-only template if absent, then open it with
-.B VISUAL
-or
-.BR EDITOR .
-If neither is set, print the path.
+.BI "pi-stack secret set " ENV_VAR " " op://vault/item/field
+Upsert a ref into op-refs.env, seeding the refs-only template first if absent.
+Rejects a value that is not an
+.B op://
+reference unless
+.I ENV_VAR
+is on the documented non-secret allowlist.  A raw space in the ref (a spaced
+1Password field name) is URL-encoded to
+.B %20 .
+.TP
+.BI "pi-stack secret rm " ENV_VAR
+Remove a ref from op-refs.env, preserving every other line.  A no-op
+(exit 0) if the key or the file is absent.
 .TP
 .B "pi-stack secret check"
 Resolve each active
@@ -1094,16 +1101,6 @@ only when configured knowledge bundles, including profile bundles, are empty.
 .B SBX_MCP_URL
 Enable sbx MCP operations.  MCP registration requires it; run-time MCP
 attachment is omitted when it is unset.
-.TP
-.B VISUAL
-Editor used by
-.BR "secret edit" .
-Takes precedence over
-.BR EDITOR .
-.TP
-.B EDITOR
-Fallback editor used by
-.BR "secret edit" .
 .SH EXIT STATUS
 .TP
 .B 0
@@ -1159,11 +1156,11 @@ pi-stack knowledge sync -m "knowledge: update release process"
 .RE
 .fi
 .PP
-Edit 1Password references and stop host services:
+Set a 1Password reference and stop host services:
 .PP
 .nf
 .RS
-pi-stack secret edit
+pi-stack secret set SLACK_TOKEN op://Private/Slack/credential
 pi-stack serve stop
 .RE
 .fi

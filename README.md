@@ -227,7 +227,7 @@ Data, routing, and parallel work:
 pi-stack memory recall|remember|forget|learnings|stats   # drive the memory daemon (alias: mem)
 pi-stack knowledge init|use|ls|query|sync|remote         # OKF bundles (alias: kb)
 pi-stack mcp register|ls     # register/list local stdio MCP servers with sbx
-pi-stack secret edit|check   # 1Password op-refs for host MCP credentials
+pi-stack secret ls|set|rm|check   # 1Password op-refs for host MCP credentials
 pi-stack route pick|compile|show|models   # the model router (cost/latency/accuracy)
 pi-stack agent ls|new|edit|rm|reassess    # manage subagents and their resolved models
 pi-stack task new|ls|harvest|rm           # isolated parallel-work sandboxes (see below)

@@ -301,7 +301,7 @@ func TestSetupSecretsSection_SeedsWhenNeeded(t *testing.T) {
 		t.Fatalf("op-refs.env was not seeded at %s: %v", refs, err)
 	}
 	s := out.String()
-	for _, want := range []string{"1Password", "op-refs.env", "pi-stack secret edit"} {
+	for _, want := range []string{"1Password", "op-refs.env", "pi-stack secret set"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("secrets section missing %q:\n%s", want, s)
 		}

@@ -351,7 +351,7 @@ func TestDoctor_GogTransparency(t *testing.T) {
 // ERRORS (no fake output — the MCP gateway is off, SBX_MCP_URL unset). doctor
 // must NOT claim "sbx unavailable" anywhere, must point at the gateway /
 // SBX_MCP_URL rather than "register on the host", and must emit
-// `pi-stack secret edit` at most once.
+// `pi-stack secret set <ENV_VAR> op://vault/item/field` at most once.
 func TestDoctor_SbxPresentMcpListFailed(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"gog"}
@@ -401,15 +401,15 @@ func TestDoctor_SbxPresentMcpListFailed(t *testing.T) {
 		t.Errorf("providers are set — no provider TODO expected, got %v", r.todos())
 	}
 
-	// `pi-stack secret edit` appears at most once across all todos.
+	// `pi-stack secret set <ENV_VAR> op://vault/item/field` appears at most once across all todos.
 	n := 0
 	for _, tdo := range r.todos() {
-		if todoDedupKey(tdo) == "pi-stack secret edit" {
+		if todoDedupKey(tdo) == "pi-stack secret set <ENV_VAR> op://vault/item/field" {
 			n++
 		}
 	}
 	if n > 1 {
-		t.Errorf("`pi-stack secret edit` must appear at most once, got %d: %v", n, r.todos())
+		t.Errorf("`pi-stack secret set` must appear at most once, got %d: %v", n, r.todos())
 	}
 }
 
@@ -1034,7 +1034,7 @@ func TestDoctor_SecretsGroup_NotNeeded(t *testing.T) {
 func TestDoctor_SecretsGroup_GogOnlyNotNeeded(t *testing.T) {
 	// A gog-only config must NOT trigger the Secrets group: gog authenticates via
 	// OAuth, never op-refs, so a fresh gog-only install must not surface a phantom
-	// `pi-stack secret edit` TODO for a missing op-refs.env.
+	// `pi-stack secret set <ENV_VAR> op://vault/item/field` TODO for a missing op-refs.env.
 	g := secretsGroupFor(t, []string{"gog"}, fakeEnv{present: map[string]bool{}})
 	if len(g.checks) != 1 || !strings.Contains(g.checks[0].detail, "not needed") {
 		t.Errorf("gog-only config should say 1Password not needed, got %+v", g.checks)

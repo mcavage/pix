@@ -4,24 +4,29 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
+	"regexp"
 	"strings"
 
 	"pi-stack/host/config"
 )
 
-// secret is the read-mostly home of the 1Password / op-refs.env concept. It
-// never writes a secret to disk (values belong in 1Password); it only seeds the
-// refs TEMPLATE, opens it in $EDITOR, and reports op / ref state. See the mental
-// model in config.OpRefsMentalModel.
+// secret is the CRUD home of the 1Password / op-refs.env concept. It never
+// writes a resolved secret to disk (values live in 1Password); it only reads,
+// classifies, and edits the REFS themselves (op://vault/item/field lines). See
+// the mental model in config.OpRefsMentalModel.
 
-// runSecretCmd is the `secret` verb tree: status (default), edit, check.
+// envVarNameRe validates a `secret set`/`secret rm` KEY looks like a shell env
+// var name, so a typo'd flag or a pasted ref never lands as the key half of a
+// line.
+var envVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// runSecretCmd is the `secret` verb tree: ls (default) | set | rm | check.
 func runSecretCmd(argv []string) {
 	if wantsHelp(argv) {
 		fmt.Print(secretUsage)
 		return
 	}
-	sub := "status"
+	sub := "ls"
 	var rest []string
 	if len(argv) > 0 {
 		sub = argv[0]
@@ -29,22 +34,34 @@ func runSecretCmd(argv []string) {
 	}
 	env := defaultShellEnv()
 	switch sub {
-	case "status", "edit", "check":
+	case "ls", "check":
 		// Reject trailing junk (unknown args/flags). Leading -h/--help is already
 		// handled by the wantsHelp gate above.
 		if len(rest) > 0 {
 			fmt.Fprintf(os.Stderr, "pi-stack secret %s: unexpected argument %q\n", sub, rest[0])
 			os.Exit(2)
 		}
+	case "set":
+		if len(rest) != 2 {
+			fmt.Fprintf(os.Stderr, "pi-stack secret set: want exactly 2 arguments: ENV_VAR op://vault/item/field (got %d)\n", len(rest))
+			os.Exit(2)
+		}
+	case "rm":
+		if len(rest) != 1 {
+			fmt.Fprintf(os.Stderr, "pi-stack secret rm: want exactly 1 argument: ENV_VAR (got %d)\n", len(rest))
+			os.Exit(2)
+		}
 	default:
-		fmt.Fprintf(os.Stderr, "pi-stack secret: unknown subcommand %q (want: status, edit, check)\n", sub)
+		fmt.Fprintf(os.Stderr, "pi-stack secret: unknown subcommand %q (want: ls, set, rm, check)\n", sub)
 		os.Exit(2)
 	}
 	switch sub {
-	case "status":
-		runSecretStatus(env, os.Stdout)
-	case "edit":
-		runSecretEdit(env, os.Stdout)
+	case "ls":
+		runSecretLs(env, os.Stdout)
+	case "set":
+		runSecretSet(env, os.Stdout, rest[0], rest[1])
+	case "rm":
+		runSecretRm(env, os.Stdout, rest[0])
 	case "check":
 		runSecretCheck(env, os.Stdout)
 	}
@@ -133,9 +150,10 @@ func opRefsContent(env shellEnv) (path, content string, exists bool) {
 	return path, c, true
 }
 
-// runSecretStatus prints op install/sign-in state + op-refs.env presence and,
-// per configured ref, filled-vs-placeholder. It NEVER prints a secret value.
-func runSecretStatus(env shellEnv, out io.Writer) {
+// runSecretLs prints op install/sign-in state + op-refs.env presence and, per
+// configured ref, filled-vs-placeholder-vs-pasted-secret. It NEVER prints a
+// secret value. This is the default `secret` action (no subcommand).
+func runSecretLs(env shellEnv, out io.Writer) {
 	fmt.Fprintln(out, "Secrets (1Password):")
 	fmt.Fprintln(out, indent(config.OpRefsMentalModel))
 	fmt.Fprintln(out)
@@ -151,7 +169,7 @@ func runSecretStatus(env shellEnv, out io.Writer) {
 
 	path, content, exists := opRefsContent(env)
 	if !exists {
-		fmt.Fprintf(out, "  op-refs.env: ✗ not present — create it with: pi-stack secret edit\n  (%s)\n", path)
+		fmt.Fprintf(out, "  op-refs.env: ✗ not present — create it with: pi-stack secret set <ENV_VAR> op://vault/item/field\n  (%s)\n", path)
 		return
 	}
 	fmt.Fprintf(out, "  op-refs.env: ✓ %s\n", path)
@@ -181,31 +199,148 @@ func runSecretStatus(env shellEnv, out io.Writer) {
 	}
 }
 
-// runSecretEdit seeds op-refs.env (via the ONE seeder) when absent, then opens
-// it in $EDITOR/$VISUAL. With no editor set it prints the path so the user can
-// open it themselves. It never writes a secret — only the refs template.
-func runSecretEdit(env shellEnv, out io.Writer) {
-	path, created, err := config.SeedOpRefs()
-	if err != nil {
-		fmt.Fprintf(out, "pi-stack secret edit: could not seed %s: %v\n", path, err)
+// runSecretSet is the ONE authoring primitive: it upserts ENV_VAR=value into
+// op-refs.env, no editor involved. It enforces the refs-only policy — value
+// must be an op:// ref unless ENV_VAR is on config.NonSecretOpRefsKeys — and
+// URL-encodes a raw space in a ref (a spaced 1Password field name, e.g. "api
+// key") so `op run --env-file` can parse the line. It seeds the file (via the
+// ONE seeder, config.SeedOpRefs) if absent, so the header/mental-model comment
+// is always present, then upserts preserving every other line untouched. It
+// prints the REF it stored (never a resolved secret — a ref is safe to echo).
+func runSecretSet(env shellEnv, out io.Writer, key, value string) {
+	if !envVarNameRe.MatchString(key) {
+		fmt.Fprintf(out, "pi-stack secret set: %q does not look like an env var name (want %s)\n", key, envVarNameRe.String())
+		os.Exit(2)
+	}
+
+	isRef := strings.HasPrefix(value, "op://")
+	if !isRef && !config.NonSecretOpRefsKeys[key] {
+		if config.LooksSecretShaped(key, value) {
+			fmt.Fprintf(out, "pi-stack secret set: %s looks like a pasted secret — this file is refs-only; pass op://vault/item/field, or your secret would land on disk\n", key)
+		} else {
+			fmt.Fprintf(out, "pi-stack secret set: %s is not an op:// ref — this file is refs-only; pass op://vault/item/field, or your secret would land on disk\n", key)
+		}
+		os.Exit(2)
+	}
+
+	if isRef && strings.Contains(value, " ") {
+		encoded := strings.ReplaceAll(value, " ", "%20")
+		fmt.Fprintf(out, "note: encoded a space in the ref for %s (op run can't parse a literal space)\n", key)
+		value = encoded
+	}
+
+	path, content, exists := opRefsContent(env)
+	if !exists {
+		seededPath, _, err := config.SeedOpRefs()
+		if err != nil {
+			fmt.Fprintf(out, "pi-stack secret set: could not seed %s: %v\n", seededPath, err)
+			os.Exit(1)
+		}
+		path = seededPath
+		content = config.OpRefsTemplate
+		if env.readFile != nil {
+			if c, err := env.readFile(path); err == nil {
+				content = c
+			}
+		}
+	}
+
+	newContent := upsertOpRef(content, key, value)
+	if env.writeFile == nil {
+		fmt.Fprintf(out, "pi-stack secret set: cannot write %s (no writer available)\n", path)
 		os.Exit(1)
 	}
-	if created {
-		fmt.Fprintf(out, "seeded a template op-refs.env at %s\n", path)
+	if err := env.writeFile(path, []byte(newContent), 0o600); err != nil {
+		fmt.Fprintf(out, "pi-stack secret set: could not write %s: %v\n", path, err)
+		os.Exit(1)
 	}
-	editor := firstNonEmptyEnv(env, "VISUAL", "EDITOR")
-	if editor == "" {
-		fmt.Fprintf(out, "no $EDITOR/$VISUAL set — edit it yourself:\n  %s\n", path)
+	fmt.Fprintf(out, "set %s = %s in %s\n", key, value, path)
+}
+
+// runSecretRm removes ENV_VAR's line from op-refs.env, preserving every other
+// line (comments, blanks, other refs). A missing file or a key that was never
+// present is a clean, exit-0 no-op — `rm` is idempotent.
+func runSecretRm(env shellEnv, out io.Writer, key string) {
+	path, content, exists := opRefsContent(env)
+	if !exists {
+		fmt.Fprintf(out, "op-refs.env not found (%s) — nothing to remove\n", path)
 		return
 	}
-	cmd := exec.Command(editor, path)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(out, "pi-stack secret edit: %s %s: %v\n", editor, path, err)
+	newContent, removed := removeOpRef(content, key)
+	if !removed {
+		fmt.Fprintf(out, "no ref named %s in %s\n", key, path)
+		return
+	}
+	if env.writeFile == nil {
+		fmt.Fprintf(out, "pi-stack secret rm: cannot write %s (no writer available)\n", path)
 		os.Exit(1)
 	}
+	if err := env.writeFile(path, []byte(newContent), 0o600); err != nil {
+		fmt.Fprintf(out, "pi-stack secret rm: could not write %s: %v\n", path, err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(out, "removed %s from %s\n", key, path)
+}
+
+// upsertOpRef returns content with KEY=value in place of an existing KEY= line
+// (comments/blanks/other entries untouched), or appended at the end if KEY was
+// not already present.
+func upsertOpRef(content, key, value string) string {
+	newLine := key + "=" + value
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1] // drop the trailing empty element from a final "\n"
+	}
+	found := false
+	for i, ln := range lines {
+		if opRefLineKey(ln) == key {
+			lines[i] = newLine
+			found = true
+			break
+		}
+	}
+	if !found {
+		lines = append(lines, newLine)
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// removeOpRef returns content with KEY's line dropped (everything else
+// preserved), and whether KEY was found at all.
+func removeOpRef(content, key string) (out string, removed bool) {
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	kept := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		if opRefLineKey(ln) == key {
+			removed = true
+			continue
+		}
+		kept = append(kept, ln)
+	}
+	if !removed {
+		return content, false
+	}
+	if len(kept) == 0 {
+		return "", true
+	}
+	return strings.Join(kept, "\n") + "\n", true
+}
+
+// opRefLineKey returns the KEY of a raw op-refs.env line, or "" if the line is
+// blank, a comment, or not a KEY=VALUE line at all.
+func opRefLineKey(ln string) string {
+	t := strings.TrimSpace(ln)
+	if t == "" || strings.HasPrefix(t, "#") {
+		return ""
+	}
+	eq := strings.IndexByte(t, '=')
+	if eq <= 0 {
+		return ""
+	}
+	return strings.TrimSpace(t[:eq])
 }
 
 // runSecretCheck resolves every op:// ref in op-refs.env with `op read` and
@@ -214,7 +349,7 @@ func runSecretEdit(env shellEnv, out io.Writer) {
 func runSecretCheck(env shellEnv, out io.Writer) {
 	path, content, exists := opRefsContent(env)
 	if !exists {
-		fmt.Fprintf(out, "op-refs.env not found (%s) — create it with: pi-stack secret edit\n", path)
+		fmt.Fprintf(out, "op-refs.env not found (%s) — create it with: pi-stack secret set <ENV_VAR> op://vault/item/field\n", path)
 		os.Exit(3)
 	}
 	if !opInstalled(env) {
@@ -257,19 +392,6 @@ func runSecretCheck(env shellEnv, out io.Writer) {
 	fmt.Fprintf(out, "all %d refs resolve.\n", checked)
 }
 
-// firstNonEmptyEnv returns the first non-empty value among the given env vars.
-func firstNonEmptyEnv(env shellEnv, names ...string) string {
-	if env.getenv == nil {
-		return ""
-	}
-	for _, n := range names {
-		if v := strings.TrimSpace(env.getenv(n)); v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 // indent prefixes every line of s with two spaces (for nested help/status text).
 func indent(s string) string {
 	lines := strings.Split(s, "\n")
@@ -286,7 +408,7 @@ func indent(s string) string {
 // exactly this reason, and setup's Step 4 skips it via hasNonGogMCP). gog's ONE
 // conditional op-refs need — a headless keyring password — is owned by the gog
 // group's headless-spawn check, not this group, so counting gog here produced a
-// phantom `pi-stack secret edit` TODO on a fresh gog-only install. Remote
+// phantom `pi-stack secret set` TODO on a fresh gog-only install. Remote
 // gateway-catalog servers don't strictly need op-refs either, but distinguishing
 // them requires probing pi-stack-host; for this coarse gate any non-gog name
 // counts (mirrors setup's hasNonGogMCP).

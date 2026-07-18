@@ -125,7 +125,7 @@ Parallel work
 
 Integrations & credentials
   mcp register|ls     register local stdio MCP servers with the sbx gateway
-  secret <cmd>        status|edit|check the 1Password op-refs (host MCP creds)
+  secret <cmd>        ls|set|rm|check the 1Password op-refs (host MCP creds)
 
 State (on-disk lifecycle)
   state <cmd>         backup|restore|reset|uninstall (grouped aliases)
@@ -313,19 +313,22 @@ const profileUsage = `usage: pi-stack profile <ls|use> [name]
 
 // secretHelpBody is the mental model reused verbatim from config so the concept
 // reads identically in setup, doctor, the template header, and `secret -h`.
-const secretUsage = `usage: pi-stack secret <status|edit|check>
+const secretUsage = `usage: pi-stack secret <ls|set|rm|check>
 
 Manage the 1Password refs (op-refs.env) the sbx gateway resolves for host MCP
-servers. Values live in 1Password, never on disk — this verb only seeds the
-refs template, opens it, and reports state. It never writes a secret.
+servers. Values live in 1Password, never on disk — this verb only reads,
+writes, and reports REFS (op://vault/item/field lines). It never writes a
+resolved secret.
 
 ` + config.OpRefsMentalModel + `
 
-  status       op installed? signed in? which refs are filled vs placeholder
-               (the default; prints no secret values)
-  edit         seed op-refs.env if absent, then open it in $EDITOR/$VISUAL
-  check        resolve each op:// ref with "op read" and report OK/FAIL per key
-               (never prints the resolved value)
+  ls                       op installed? signed in? which refs are filled vs
+                           placeholder (the default; prints no secret values)
+  set ENV_VAR op://ref     upsert a ref (seeds op-refs.env if absent); a raw
+                           space in the ref is URL-encoded to %20
+  rm ENV_VAR               remove a ref (a no-op if it isn't set)
+  check                    resolve each op:// ref with "op read" and report
+                           OK/FAIL per key (never prints the resolved value)
 
 The file lives at the absolute XDG path: see "pi-stack config path op-refs".
 `

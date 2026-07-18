@@ -293,7 +293,7 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
 	// coarse, non-per-server gate.
 	if cstate == credNeeds && !opRefsResolvable(env) {
 		fmt.Fprintln(sio.out, "Note: one or more local integrations MIGHT need a password, and op-refs isn't resolvable yet.")
-		fmt.Fprintln(sio.out, "  If any of yours do, fill op-refs.env (pi-stack secret edit), verify (pi-stack secret check),")
+		fmt.Fprintln(sio.out, "  If any of yours do, set a ref (pi-stack secret set ENV_VAR op://vault/item/field), verify (pi-stack secret check),")
 		fmt.Fprintln(sio.out, "  then re-register:  pi-stack mcp register")
 		todo("pi-stack mcp register")
 		fmt.Fprintln(sio.out)
@@ -435,7 +435,7 @@ func setupSecretsSection(env shellEnv, out io.Writer, state credState, hasNonGog
 		fmt.Fprintln(out, "Step 4 of 4 — Integration credentials   (skipped)")
 		fmt.Fprintln(out, "  You added no integrations that need a password. Skipping.")
 		fmt.Fprintln(out, "  No file is created until you actually add one.")
-		fmt.Fprintln(out, "  When you do:  pi-stack secret edit, then pi-stack secret check,")
+		fmt.Fprintln(out, "  When you do:  pi-stack secret set ENV_VAR op://vault/item/field, then pi-stack secret check,")
 		fmt.Fprintln(out, "  then pi-stack mcp register.")
 		fmt.Fprintln(out)
 		return
@@ -471,7 +471,7 @@ func setupSecretsSection(env shellEnv, out io.Writer, state credState, hasNonGog
 	default:
 		fmt.Fprintln(out, "  ✓ op installed, account configured")
 	}
-	fmt.Fprintln(out, "  edit refs anytime:  pi-stack secret edit   (check them: pi-stack secret check)")
+	fmt.Fprintln(out, "  set refs anytime:  pi-stack secret set ENV_VAR op://vault/item/field   (check them: pi-stack secret check)")
 	fmt.Fprintln(out)
 }
 

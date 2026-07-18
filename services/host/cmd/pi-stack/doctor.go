@@ -206,7 +206,8 @@ func (r *report) todos() []string {
 
 // todoDedupKey normalizes a TODO for dedup so two commands that share the same
 // leading command but differ only in a trailing parenthetical (e.g. `pi-stack
-// secret edit` vs `pi-stack secret edit  (creates …)`) collapse to one. It keys
+// secret set <ENV_VAR> op://vault/item/field` vs the same command with a
+// trailing `  (creates …)`) collapse to one. It keys
 // on the string up to the first `  (` separator, trimmed.
 func todoDedupKey(todo string) string {
 	if i := strings.Index(todo, "  ("); i >= 0 {
@@ -969,7 +970,7 @@ func secretsGroup(cfg *config.Config, env shellEnv) group {
 	if !exists {
 		g.checks = append(g.checks, check{label: "op-refs.env", state: stateTODO,
 			detail: "not present at " + path,
-			todo:   "pi-stack secret edit"})
+			todo:   "pi-stack secret set <ENV_VAR> op://vault/item/field"})
 		return g
 	}
 	g.checks = append(g.checks, check{label: "op-refs.env", state: stateInfo, detail: path})
@@ -997,25 +998,25 @@ func secretsGroup(cfg *config.Config, env shellEnv) group {
 		case rf.isRef && rf.placeholder:
 			g.checks = append(g.checks, check{label: rf.key, state: stateTODO,
 				detail: "unfilled placeholder — set the op:// ref",
-				todo:   "pi-stack secret edit"})
+				todo:   "pi-stack secret set <ENV_VAR> op://vault/item/field"})
 		case rf.isRef:
 			g.checks = append(g.checks, check{label: rf.key, state: stateOK, detail: "op:// ref filled"})
 		case rf.placeholder:
 			// A non-ref value still carrying an unfilled <...> placeholder.
 			g.checks = append(g.checks, check{label: rf.key, state: stateTODO,
 				detail: "unfilled placeholder — set the op:// ref",
-				todo:   "pi-stack secret edit"})
+				todo:   "pi-stack secret set <ENV_VAR> op://vault/item/field"})
 		case looksSecretShaped(rf.key, rf.value):
 			// MEDIUM finding — a pasted secret. NEVER echo the value.
 			g.checks = append(g.checks, check{label: rf.key, state: stateTODO,
 				detail: "possible pasted secret — replace with op://vault/item/field",
-				todo:   "pi-stack secret edit"})
+				todo:   "pi-stack secret set <ENV_VAR> op://vault/item/field"})
 		default:
 			// Refs-only policy: ANY other non-ref, non-allowlisted value is flagged.
 			// NEVER echo the value.
 			g.checks = append(g.checks, check{label: rf.key, state: stateTODO,
 				detail: "not an op:// ref — this file is refs-only; use op://vault/item/field or move it to the non-secret allowlist",
-				todo:   "pi-stack secret edit"})
+				todo:   "pi-stack secret set <ENV_VAR> op://vault/item/field"})
 		}
 	}
 	return g
