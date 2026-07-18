@@ -31,8 +31,9 @@ tutorials.
   recall loop.
 - [profiles.md](design/profiles.md) — work / personal / default profiles from one
   host.
-- [host-mode.md](design/host-mode.md) — PROPOSAL (not built): running pi-stack
-  outside the sandbox for self-development and hardware access.
+- [host-mode.md](design/host-mode.md) — `pi-stack host`, the unsandboxed escape
+  hatch for developing pi-stack itself (Phase 1 built, gated off by default).
+  Its guardrails reduce accidents; they are NOT a security boundary.
 - [worktree-tasks.md](design/worktree-tasks.md) and
   [task-ux-decisions.md](design/task-ux-decisions.md) — the `pi-stack task`
   parallel-work workflow.

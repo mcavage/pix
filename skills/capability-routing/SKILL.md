@@ -10,8 +10,15 @@ every data skill retargets at once.
 
 ## The registry
 
-`~/.pi/agent/capabilities.json` (project override: `.pi/capabilities.json`) maps
-each capability to an **ordered list of providers**:
+`$PI_CODING_AGENT_DIR/capabilities.json` (falling back to `~/.pi/agent/capabilities.json`
+when `PI_CODING_AGENT_DIR` is unset — the default config dir) maps each
+capability to an **ordered list of providers**. Project override:
+`.pi/capabilities.json`.
+
+Always resolve the config dir through `PI_CODING_AGENT_DIR` first. `pi-stack
+host` (docs/design/host-mode.md) points that env var at a dedicated host-agent
+dir, not `~/.pi/agent` — hardcoding the latter would read stale/wrong config
+in host-mode sessions.
 
 | provider | how to use it |
 |---|---|

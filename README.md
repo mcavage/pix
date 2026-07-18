@@ -232,6 +232,23 @@ Do not hand-edit `config.toml`. `pi-stack setup` and `pi-stack config set/unset`
 are the supported writers, and `pi-stack doctor` prints copy-pasteable repair
 commands when something is missing.
 
+### Expert: `pi-stack host` (unsandboxed, gated off)
+
+`pi-stack host [DIR]` runs pi **directly on your machine** — no sandbox, no
+network fence, real credentials. It exists for one narrow case: developing
+pi-stack itself, which needs the host's Docker/`sbx`/`make` that the VM
+structurally cannot reach. It is disabled by default and stays off until you
+run `pi-stack config set host.enabled true`, then `pi-stack host setup` once to
+provision `~/.local/state/pi-stack/host-agent`. Cloud keys come from op://
+refs in `hostmode.env` next to `config.toml`, resolved just-in-time by `op run`
+and never persisted; without that file the session is Ollama-only.
+
+Host mode ships guardrails — a guard extension, workspace refusals
+(`$HOME`/`/`/`/etc`/secret dirs), disabled subagents — but they protect against
+**accidents, not attacks**. They are guardrails, not a security boundary. For
+anything you wouldn't hand a shell to, use `pi-stack run`. Full threat model:
+[docs/design/host-mode.md](docs/design/host-mode.md).
+
 ## Optional Data Tools
 
 These are independent. Use the ones you need and skip the rest.

@@ -123,6 +123,10 @@ func main() {
 		runState(args[1:])
 	case "task":
 		runTask(args[1:])
+	case "host":
+		// The unsandboxed escape hatch (expert tier, gated off by default): execs
+		// the host-installed pi directly. See hostrun.go + docs/design/host-mode.md.
+		runHost(args[1:])
 	case "help", "-h", "--help":
 		if len(args) > 1 {
 			if args[1] == "--all" {

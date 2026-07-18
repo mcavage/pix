@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -123,6 +124,10 @@ func configValue(cfg *config.Config, key string) (string, error) {
 		return cfg.OllamaBridgeModel, nil
 	case "active_profile":
 		return cfg.ActiveProfile, nil
+	case "host.enabled":
+		return strconv.FormatBool(cfg.Host.Enabled), nil
+	case "host.autonomy":
+		return cfg.Host.Autonomy, nil
 	default:
 		return "", fmt.Errorf("unknown key %q\n%s", key, configKeysHelp)
 	}
@@ -210,6 +215,8 @@ const configKeysHelp = `keys:
   memory_watcher_model <m>  ollama model for fact capture (host, resident)
   memory_embed_model <m>    ollama model for semantic recall (host)
   ollama_bridge_model <m>   local model the sandbox exposes to pi + the router
+  host.enabled true|false   gate for "pi-stack host" (UNSANDBOXED; default false)
+  host.autonomy <mode>      reserved for the host-guard strictness (unused yet)
 
 With --profile <name>, edits the [profiles.<name>] table instead of the base
 config (creating it if absent). Per-profile keys: gog_account, mcp,
@@ -306,6 +313,37 @@ func applyConfigChange(cfg *config.Config, unset bool, key string, args []string
 		}
 		return fmt.Sprintf("ollama_bridge_model = %q", cfg.OllamaBridgeModel), nil
 
+	case "host.enabled":
+		// The gate for `pi-stack host` (unsandboxed). Default false; unset resets
+		// it. Set requires an explicit true/false — never inferred — so enabling
+		// the dangerous path is always a deliberate, legible command.
+		if unset {
+			cfg.Host.Enabled = false
+		} else {
+			if len(args) != 1 {
+				return "", fmt.Errorf("config set host.enabled <true|false>: needs exactly one value")
+			}
+			v, err := strconv.ParseBool(args[0])
+			if err != nil {
+				return "", fmt.Errorf("config set host.enabled: %q is not a boolean (want true or false)", args[0])
+			}
+			cfg.Host.Enabled = v
+		}
+		return fmt.Sprintf("host.enabled = %v", cfg.Host.Enabled), nil
+
+	case "host.autonomy":
+		// RESERVED: stored for the future host-guard strictness knob; nothing
+		// reads it in Phase 1.
+		if unset {
+			cfg.Host.Autonomy = ""
+		} else {
+			if len(args) != 1 {
+				return "", fmt.Errorf("config set host.autonomy <mode>: needs exactly one value")
+			}
+			cfg.Host.Autonomy = args[0]
+		}
+		return fmt.Sprintf("host.autonomy = %q (reserved; unused in Phase 1)", cfg.Host.Autonomy), nil
+
 	default:
 		return "", fmt.Errorf("unknown key %q\n%s", key, configKeysHelp)
 	}
@@ -325,7 +363,7 @@ func applyProfileConfigChange(cfg *config.Config, unset bool, profile, key strin
 		verb = "unset"
 	}
 	switch key {
-	case "services", "memory_watcher_model", "memory_embed_model":
+	case "services", "memory_watcher_model", "memory_embed_model", "host.enabled", "host.autonomy":
 		return "", fmt.Errorf("%s is global (not per-profile); drop --profile and run: pi-stack config %s %s <value>", key, verb, key)
 
 	case "gog_account":

@@ -216,6 +216,58 @@ Pass
 to
 .B pi
 as its active model.
+.SS host
+.TP
+.BR "pi-stack host" " [" DIR "] [" \-\-model " " M "] [" \-\- " " pi-args... "]"
+EXPERT, DANGEROUS.  Run
+.B pi
+directly on this machine \(em no sandbox, no network fence, real credentials.
+A narrow escape hatch for developing pi-stack itself (which needs the host's
+Docker, sbx, and make); never a fallback when
+.B sbx
+is missing.  Gated off by default: enable deliberately with
+.BR "pi-stack config set host.enabled true" .
+The launch refuses a workspace at
+.BR $HOME ,
+.BR / ,
+or
+.BR /etc ,
+or one inside or containing SSH/cloud/password-store secret directories
+(symlinks are resolved before the check).  Subagent spawning is disabled, a
+host-guard extension is always loaded, and a host-specific system preamble
+replaces the sandbox's disposable-VM context.  These are guardrails against
+accidents,
+.B not
+a security boundary \(em for anything you wouldn't hand a shell to, use
+.BR "pi-stack run" .
+Cloud keys come from op:// refs in
+.B hostmode.env
+next to config.toml, resolved just-in-time by
+.BR "op run" ;
+without that file the session is Ollama-only (valid).
+.TP
+.B "pi-stack host setup"
+Provision the host agent directory at
+.B $XDG_STATE_HOME/pi-stack/host-agent
+(default
+.BR ~/.local/state/pi-stack/host-agent ):
+symlinks the checkout's harness dirs (skills, agents, extensions, themes), a
+host-specific
+.BR settings.json ,
+a
+.B sessions/
+directory, and the curated pi extension packages (printing the exact install
+commands when
+.B pi
+is unavailable).
+.TP
+Naming: this verb
+.RB ( "pi-stack host" ,
+the agent running ON the host) is distinct from
+.B pi-stack-host
+(the compiled Go daemon binary) and from
+.B "pi-stack serve"
+(which runs the host services memory/knowledge).  Three names, three things.
 .SS serve
 .TP
 .BR "pi-stack serve" " [" args... "]"

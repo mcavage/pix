@@ -75,6 +75,17 @@ type Profile struct {
 	} `toml:"kits,omitempty"`
 }
 
+// HostMode gates `pi-stack host` — running pi DIRECTLY on this machine with
+// no sandbox, no network fence, and real credentials. Enabled is default-OFF
+// on purpose: the friction of `pi-stack config set host.enabled true` is the
+// deliberate opt-in (see docs/design/host-mode.md). Autonomy is RESERVED for a
+// future knob on the host-guard extension's strictness; Phase 1 stores it but
+// nothing reads it yet.
+type HostMode struct {
+	Enabled  bool   `toml:"enabled"`
+	Autonomy string `toml:"autonomy,omitempty"`
+}
+
 // Config is the pi-stack configuration, decoded from TOML.
 type Config struct {
 	VersionPin string   `toml:"version_pin"`
@@ -111,6 +122,10 @@ type Config struct {
 	} `toml:"skills"`
 
 	Plugins map[string]PluginSpec `toml:"plugins"`
+
+	// Host gates + configures `pi-stack host` (the unsandboxed escape hatch).
+	// GLOBAL, never per-profile: leaving the sandbox is a machine-level decision.
+	Host HostMode `toml:"host,omitempty"`
 }
 
 // configDir resolves the directory that holds config.toml and the broker token.
@@ -639,6 +654,19 @@ func OpRefsPath() string {
 		return "op-refs.env"
 	}
 	return filepath.Join(dir, "op-refs.env")
+}
+
+// HostRefsPath resolves the absolute XDG path of hostmode.env — the OPTIONAL
+// 1Password refs file `pi-stack host` resolves via `op run --env-file` for
+// host-mode provider keys (e.g. ANTHROPIC_API_KEY=op://vault/item/field). Same
+// mental model as op-refs.env: refs only, never a value on disk. Absent file =
+// Ollama-only host mode (valid, no cloud key).
+func HostRefsPath() string {
+	dir, err := configDir()
+	if err != nil {
+		return "hostmode.env"
+	}
+	return filepath.Join(dir, "hostmode.env")
 }
 
 // OpRefsMentalModel is the ≤4-line plain explanation of what op-refs.env is and

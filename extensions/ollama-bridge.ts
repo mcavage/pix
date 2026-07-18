@@ -44,6 +44,19 @@ const LISTEN_PORT = Number(process.env.OLLAMA_BRIDGE_PORT ?? 11434);
 const HOST = process.env.OLLAMA_BRIDGE_HOST ?? "host.docker.internal";
 const HOST_PORT = Number(process.env.OLLAMA_BRIDGE_HOST_PORT ?? 11434);
 
+// HOST MODE (pi-stack host, docs/design/host-mode.md): the Go launcher sets
+// OLLAMA_HOSTMODE=1 + OLLAMA_URL. There the bridge's whole reason to exist —
+// dodge the sbx proxy by listening on localhost and forwarding to
+// host.docker.internal — is moot (there is no proxy, no VM). Worse, starting
+// the reverse proxy here would SELF-LOOP: it would listen on
+// 127.0.0.1:11434 and forward to the same host:port, so if real ollama is
+// absent the bridge binds successfully and recursively proxies to itself
+// until exhaustion. So in host mode we skip the listener entirely and just
+// register the provider straight at OLLAMA_URL (default the real local
+// ollama). Sandbox behavior (HOSTMODE unset) is completely unchanged below.
+const HOST_MODE = process.env.OLLAMA_HOSTMODE === "1";
+const HOST_MODE_URL = process.env.OLLAMA_URL ?? "http://127.0.0.1:11434/v1";
+
 // Which local model to expose in the cycle. It MUST match a tag pulled on the
 // HOST (`ollama pull <tag>`), or the call 404s. Default: qwen3.5:9b — the current
 // all-rounder that still fits a 16GB box (loads on demand, not resident). This is
@@ -70,11 +83,13 @@ function posInt(v: string | undefined, fallback: number): number {
 const MODEL_CTX = posInt(process.env.OLLAMA_BRIDGE_CONTEXT, 32768);
 
 export default async function (pi: any): Promise<void> {
-	// 1) Register the provider + model up front (no endpoint probe).
+	// 1) Register the provider + model up front (no endpoint probe). In host
+	// mode point baseUrl straight at the real ollama (OLLAMA_URL); in the
+	// sandbox keep pointing at our own localhost listener (started below).
 	try {
 		pi.registerProvider("ollama", {
 			name: "Ollama (local)",
-			baseUrl: `http://localhost:${LISTEN_PORT}/v1`,
+			baseUrl: HOST_MODE ? HOST_MODE_URL : `http://localhost:${LISTEN_PORT}/v1`,
 			api: "openai-completions",
 			apiKey: "ollama", // placeholder; Ollama ignores it, but pi wants auth present
 			models: [
@@ -93,7 +108,12 @@ export default async function (pi: any): Promise<void> {
 		/* best-effort; must not break the agent */
 	}
 
-	// 2) Start the localhost -> host bridge for the actual calls.
+	// HOST MODE: no reverse proxy to start (see the OLLAMA_HOSTMODE comment
+	// above) — the provider above already points straight at OLLAMA_URL, so we
+	// return here without binding anything.
+	if (HOST_MODE) return;
+
+	// 2) Start the localhost -> host bridge for the actual calls (sandbox only).
 	try {
 		const server = createServer((req, res) => {
 			const upstream = request(

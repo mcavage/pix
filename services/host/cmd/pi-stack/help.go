@@ -37,6 +37,7 @@ var knownVerbs = map[string]bool{
 	"reset": true, "uninstall": true, "man": true,
 	"backup": true, "restore": true, "state": true,
 	"task": true, "route": true, "agent": true,
+	"host": true,
 }
 
 // suggestVerb returns the closest known verb to input within edit distance 2,
@@ -133,6 +134,12 @@ State (on-disk lifecycle)
   reset [flags]       move stack state aside (reversible)   [--keep-memory --sbx --yes]
   uninstall [flags]   reset, then remove the bin symlinks    [--keep-memory --yes]
 
+Expert (dangerous — read the man page first)
+  host [DIR]          run pi DIRECTLY on this machine: no sandbox, no network
+                      fence, real credentials. Gated off by default
+                      (config set host.enabled true); host setup provisions it.
+                      Guardrails, not a security boundary.
+
 Meta
   version             print the launcher version
   man                 render the embedded man page (no MANPATH needed; also --man)
@@ -189,6 +196,8 @@ func verbUsage(verb string) (string, bool) {
 		return stateUsage, true
 	case "task":
 		return taskUsage, true
+	case "host":
+		return hostUsage, true
 	case "route":
 		return routeUsage, true
 	case "agent":
