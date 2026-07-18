@@ -239,6 +239,11 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
 	}
 	fmt.Fprintln(sio.out)
 
+	// TODO(setup-onboarding): the `pi-stack setup` wizard should offer to run
+	// `serve install` here (managed always-on service) as an opt-in step. Owned by
+	// the onboarding agent — do not wire it from this change. See docs/design/
+	// serve-lifecycle.md §"Setup wizard hook".
+
 	// Readiness verdict: whether you can run right now.
 	ready := anyKey && sbxOnPath
 	switch {

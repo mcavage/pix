@@ -31,11 +31,13 @@ func wantsHelp(argv []string) bool {
 // positional (a would-be run DIR) is actually a mistyped verb.
 var knownVerbs = map[string]bool{
 	"help": true, "serve": true, "doctor": true, "setup": true, "status": true,
+	"ls": true, "rm": true,
 	"config": true, "mcp": true, "memory": true, "knowledge": true,
 	"profile": true, "version": true, "run": true, "secret": true,
 	"reset": true, "uninstall": true, "man": true,
 	"backup": true, "restore": true, "state": true,
-	"task": true, "route": true, "evals": true, "agent": true,
+	"task": true, "route": true, "agent": true,
+	"host": true,
 }
 
 // suggestVerb returns the closest known verb to input within edit distance 2,
@@ -95,6 +97,8 @@ New here?   pi-stack setup      one-time guided setup (a few minutes, resumable)
 
 Workflow
   run [DIR]           launch the sandbox in DIR (default: .). This is the main one.
+  ls [--json]         list your pi-stack sandboxes (name, state, dir)
+  rm <name>...        remove pi-stack sandboxes (--all [--except <name>])
   serve [args...]     start the host services (memory, knowledge); serve stop|status
   status              what is up, what is down, what is next   (also the bare command)
 
@@ -109,10 +113,10 @@ Data
 Models & agents (cost/latency/accuracy routing)
   agent <cmd>         ls | new | edit | rm | reassess (subagents as objects)
   route <cmd>         pick | compile | show | models (intent -> model)
-  evals <cmd>         run | import | show | ls (measure accuracy, feed the router)
 
 Config & context
   config show|path    show the resolved config path and contents
+  config get K        print one resolved value (for scripts/make)
   config set|unset    change config without hand-editing the toml
   profile ls|use      switch between contexts (work / personal / default)
 
@@ -129,6 +133,12 @@ State (on-disk lifecycle)
   restore <archive>   restore a FULL backup (safe swap)   [--force]
   reset [flags]       move stack state aside (reversible)   [--keep-memory --sbx --yes]
   uninstall [flags]   reset, then remove the bin symlinks    [--keep-memory --yes]
+
+Expert (dangerous — read the man page first)
+  host [DIR]          run pi DIRECTLY on this machine: no sandbox, no network
+                      fence, real credentials. Gated off by default
+                      (config set host.enabled true); host setup provisions it.
+                      Guardrails, not a security boundary.
 
 Meta
   version             print the launcher version
@@ -150,6 +160,10 @@ func verbUsage(verb string) (string, bool) {
 		return serveUsage, true
 	case "status", "st":
 		return statusUsage, true
+	case "ls":
+		return lsUsage, true
+	case "rm":
+		return rmUsage, true
 	case "doctor":
 		return doctorUsage, true
 	case "setup":
@@ -182,10 +196,10 @@ func verbUsage(verb string) (string, bool) {
 		return stateUsage, true
 	case "task":
 		return taskUsage, true
+	case "host":
+		return hostUsage, true
 	case "route":
 		return routeUsage, true
-	case "evals":
-		return evalsUsage, true
 	case "agent":
 		return agentUsage, true
 	}
@@ -195,10 +209,17 @@ func verbUsage(verb string) (string, bool) {
 const serveUsage = `usage: pi-stack serve [args...]
        pi-stack serve stop
        pi-stack serve status [--json]
+       pi-stack serve install
+       pi-stack serve uninstall
 
 Run the long-running host services (execs the sibling pi-stack-host serve):
 memory (:11435) and knowledge (:11436, when enabled). Any args are passed
 through to pi-stack-host serve unchanged.
+
+You usually do NOT need to run this yourself: pi-stack run / memory /
+knowledge query auto-start a detached serve when its ports are down (lazy
+auto-start; logs in ~/.local/state/pi-stack/serve.log). Opt out with
+PI_STACK_NO_AUTOSERVE=1 or 'pi-stack config set host.autoserve false'.
 
 subcommands:
   stop              stop a running 'pi-stack-host serve' via its pidfile (safe:
@@ -206,6 +227,16 @@ subcommands:
                     SIGKILL if it doesn't exit)
   status [--json]   report whether serve is running (pid) and which service
                     ports (:11435 / :11436) are up
+  install           install serve as a managed login service (launchd on macOS,
+                    systemd --user on Linux): starts at login, auto-restarts.
+                    stops a lazily-started daemon first; refuses over a
+                    foreground serve. captures install-time env into the unit
+                    (PI_STACK_CONFIG always; XDG_CONFIG_HOME, MEMORY_DB,
+                    MEMORY_PORT, KNOWLEDGE_PORT, OLLAMA_HOST when set) and
+                    verifies the service came up.
+                    logs: ~/.local/state/pi-stack/serve.log (same file the
+                    lazy auto-start uses, on both macOS and Linux)
+  uninstall         remove the managed login service
 `
 
 const statusUsage = `usage: pi-stack status [--json]
@@ -236,10 +267,12 @@ flags:
   --yes, -y, --non-interactive  never prompt; print outstanding steps as commands
 `
 
-const configUsage = `usage: pi-stack config <show|path|set|unset> [args]
+const configUsage = `usage: pi-stack config <show|path|get|set|unset> [args]
 
   show                     print the resolved config path + contents
   path [op-refs]           print the config file path (or the op-refs.env path)
+  get [--profile N] K      print ONE resolved value, no decoration (lists are
+                            space-separated) — for scripts/make to source
   set [--profile N] K V     set a config key (never hand-edit the toml)
   unset [--profile N] K [V]  reset/clear a scalar key, or remove value V from a
                             list key (mcp/services/knowledge_bundles)

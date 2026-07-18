@@ -67,20 +67,17 @@ if ask "Build (make launcher) and install (make install) now?"; then
   info "Ensure ~/.local/bin is on your PATH. (Or, after a release: curl -fsSL .../install.sh | sh)"
 else info "Skipped."; fi
 
-# --- Step 4: launchd agent for host services -----------------------------------
-bold "\n[4] Run host services as a launchd agent (memory :11435)"
-PLIST="$HOME/Library/LaunchAgents/com.pi-stack.serve.plist"
-info "Installs $PLIST (RunAtLoad + KeepAlive), pointed at your pi-stack-host + \$HOME."
-if ask "Install and load the launchd agent now?"; then
-  mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
-  cp "$ROOT/scripts/macos/com.pi-stack.serve.plist" "$PLIST"
-  # point the plist at this user + the installed binary
-  BIN="$HOME/.local/bin/pi-stack-host"; [ -x "$BIN" ] || BIN="$ROOT/out/pi-stack-host"
-  sed -i '' "s#/Users/CHANGEME/.local/bin/pi-stack-host#$BIN#g; s#/Users/CHANGEME#$HOME#g" "$PLIST"
-  launchctl unload "$PLIST" >/dev/null 2>&1 || true
-  if launchctl load -w "$PLIST"; then ok "agent loaded — logs at ~/Library/Logs/pi-stack-serve.{out,err}.log"; else warn "launchctl load failed — check the plist paths"; fi
-  info "Stop later:  launchctl unload $PLIST"
-else info "Skipped. Run services in a terminal instead:  pi-stack serve"; fi
+# --- Step 4: managed login service for host services ----------------------------
+# The plist is no longer copied/sed'd from this repo: `pi-stack serve install`
+# renders it from the template embedded in the launcher (the single source of
+# truth, services/host/cmd/pi-stack/templates/) and bootstraps it via launchctl.
+bold "\n[4] Run host services as a managed login service (memory :11435)"
+info "Installs ~/Library/LaunchAgents/com.pi-stack.serve.plist (RunAtLoad + KeepAlive)."
+if ask "Install the managed service now (pi-stack serve install)?"; then
+  PI="$HOME/.local/bin/pi-stack"; [ -x "$PI" ] || PI="$ROOT/out/pi-stack"
+  if "$PI" serve install; then ok "managed service installed — logs at ~/Library/Logs/pi-stack-serve.{out,err}.log"; else warn "pi-stack serve install failed"; fi
+  info "Remove later:  pi-stack serve uninstall"
+else info "Skipped. Lazy auto-start covers you (pi-stack run/memory start serve on demand), or run:  pi-stack serve"; fi
 
 # --- Step 5: wire your accounts (interactive) ----------------------------------
 bold "\n[5] Wire your accounts — setup + doctor"
@@ -94,7 +91,7 @@ info "Google Workspace is no longer a bearer smuggled into the VM. It's the host
 info "'gog' MCP server, run by the sbx gateway (read-only by default: --gmail-no-send,"
 info "--wrap-untrusted, --readonly). Set it up per docs/gog-setup.md:"
 info "  - 'gog auth' on the host, fill config/op-refs.env, then 'make mcp-register'"
-info "  - add 'gog' to MCP in config/local.mk so 'make run' attaches it"
+info "  - run 'pi-stack config set mcp gog' so 'make run' / 'pi-stack run' attaches it"
 info "Full walkthrough: docs/gog-setup.md"
 
 bold "\n[7] Optional: private overlay for work"

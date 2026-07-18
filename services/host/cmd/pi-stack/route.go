@@ -1,7 +1,7 @@
-// pi-stack route / evals — thin launcher passthroughs to the sibling
-// pi-stack-host binary, which owns the model router (registry + scorecard +
-// resolver) and the eval harness. Kept here so a user drives the whole feature
-// from the one `pi-stack` command. See docs/design/routing.md.
+// pi-stack route — a thin launcher passthrough to the sibling pi-stack-host
+// binary, which owns the model router (registry + scorecard + resolver). Kept
+// here so a user drives the whole feature from the one `pi-stack` command. See
+// docs/design/routing.md.
 
 package main
 
@@ -42,7 +42,7 @@ func resolveSessionModel(intent string) (string, error) {
 }
 
 // execHost runs `pi-stack-host <verb> <args...>` with inherited stdio and
-// propagates the exit code. Shared by the route + evals passthroughs.
+// propagates the exit code. Used by the route passthrough.
 func execHost(verb string, argv []string) {
 	bin, err := findHostBinary()
 	if err != nil {
@@ -70,14 +70,6 @@ func runRoute(argv []string) {
 	execHost("route", argv)
 }
 
-func runEvals(argv []string) {
-	if len(argv) > 0 && (argv[0] == "-h" || argv[0] == "--help") {
-		fmt.Print(evalsUsage)
-		return
-	}
-	execHost("evals", argv)
-}
-
 const routeUsage = `usage: pi-stack route <command>
 
 The model router: turn a declared INTENT (a hard cost/latency/accuracy
@@ -92,22 +84,7 @@ commands:
   show [--json]             registry + scorecard + resolved table
   models [--json]           list the model registry
 
-Add a model: one entry in ~/.pi-stack/routing/models.json, then
-` + "`pi-stack evals run --models <id>`" + ` and ` + "`pi-stack route compile`" + `.
-`
-
-const evalsUsage = `usage: pi-stack evals <command>
-
-The accuracy eval harness: run a suite of cases across candidate models, score
-each mechanically, record real cost + latency, and write the measured scores
-into the router's scorecard so it stops guessing.
-
-commands:
-  run [--suite DIR] [--models a,b] [--budget USD] [--dry-run] [--save] [--json]
-  show [--json]      the current scorecard
-  ls   [--suite DIR] list the cases in a suite
-
-A real sweep calls each model on each case and COSTS MONEY — run it by hand on a
-new-model release (use --budget to cap, --dry-run to preview), then
+Add a model: one entry in ~/.pi-stack/routing/models.json, hand-edit its scores
+into scorecard.json (services/host/routing/defaults/scorecard.json), then run
 ` + "`pi-stack route compile`" + `.
 `

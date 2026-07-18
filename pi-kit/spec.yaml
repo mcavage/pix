@@ -93,11 +93,9 @@ network:
     # lookups. Host-internal, bypasses the proxy MITM; skipped if not running.
     - host.docker.internal:11436
     - localhost:11436
-    # Optional overlay host service on :11442 (e.g. a host-side CLI exec-proxy a
-    # private overlay wires up). Harmless when nothing is listening; an in-sandbox
-    # wrapper forwards argv to it so credentials/SSO stay on the host.
-    - host.docker.internal:11442
-    - localhost:11442
+    # A private overlay that needs a host service (e.g. a CLI exec-proxy) adds its
+    # own port to allowedDomains from the overlay mixin kit — the public kit stays
+    # free of company-specific host services. See docs/OVERLAY.md.
     # Note: local stdio MCP servers (e.g. slack) are NOT here. They're registered
     # with sbx (`sbx mcp add … --command pi-stack-host --args slack`), run by the
     # MCP gateway and reached through it — not over host.docker.internal — so they
@@ -143,6 +141,15 @@ agentContext: |
   You are pi, running inside the pi-stack sandbox: a Docker Hardened (DHI) Debian
   base, isolated by Docker Sandboxes. The environment is disposable. Work
   directly and commit often.
+
+  You run as a NON-root user (`node`) and there is NO `sudo` (the DHI base is
+  minimal and ships none). You cannot install system packages (`apt-get` needs
+  root), so do not try, and do not tell the user to `sudo`. Anything that needs a
+  system-level install or a real device (e.g. platformio + `/dev/tty*`) is a HOST
+  operation the sandbox structurally cannot do; that is what `pi-stack host` (the
+  unsandboxed escape hatch) or a host-side capability MCP is for. Use pip
+  `--user`, language-local package managers, or prebuilt static binaries when you
+  need a tool in-VM.
 
   ## Memory (automatic)
   A host memory service recalls relevant facts into your context before every
@@ -197,5 +204,5 @@ agentContext: |
 
   ## Posture
   Full-auto: no permission prompts. The sandbox isolation is the safety boundary.
-  Write in the user's voice (see the anti-slop and write-like-mark skills): no
+  Write in the user's voice (see the anti-slop and writing-voice skills): no
   em-dashes, no AI slop, direct and concrete.

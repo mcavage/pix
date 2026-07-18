@@ -50,9 +50,9 @@ func TestResolveAgentModel(t *testing.T) {
 	if m != "x/y" || !strings.Contains(why, "pinned") {
 		t.Fatalf("pinned: %q %q", m, why)
 	}
-	// Intent resolves.
+	// Intent resolves; WHY explains the pick (objective + what it beat).
 	m, why = resolveAgentModel(agentMeta{Intent: "code"}, reg, sc, pol)
-	if m != "anthropic/opus" || !strings.Contains(why, "intent code") {
+	if m != "anthropic/opus" || !strings.Contains(why, "code:") || !strings.Contains(why, "beat gpt") {
 		t.Fatalf("intent: %q %q", m, why)
 	}
 	// No intent -> inherit.
@@ -68,8 +68,8 @@ func TestResolveAgentModel(t *testing.T) {
 }
 
 // TestAgentNewEditRm exercises the file lifecycle. new/edit write files; rm
-// removes them. We chdir into a temp workspace so ./agents and ./evals resolve
-// there, and force the embedded routing defaults via a fresh ROUTING_DIR.
+// removes them. We chdir into a temp workspace so ./agents resolves there, and
+// force the embedded routing defaults via a fresh ROUTING_DIR.
 func TestAgentNewEditRm(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -87,9 +87,6 @@ func TestAgentNewEditRm(t *testing.T) {
 	}
 	if m.Intent != "code" || m.BudgetUSD != 0.25 || m.Tools != "read,edit" {
 		t.Fatalf("new frontmatter: %+v", m)
-	}
-	if _, err := os.Stat(filepath.Join("evals", "suites", "agents", "go-eng.yaml")); err != nil {
-		t.Fatalf("starter suite not created: %v", err)
 	}
 
 	// Edit: change intent + budget; parse must still succeed (the quoted-number bug).
@@ -109,5 +106,38 @@ func TestAgentNewEditRm(t *testing.T) {
 	agentRm([]string{"go-eng", "--yes"})
 	if _, err := os.Stat(mdPath); !os.IsNotExist(err) {
 		t.Fatalf("agent md should be gone: %v", err)
+	}
+}
+
+// TestRepoRoutingTarget verifies reassess compiles routing.json to the repo file
+// (the one Docker bakes) only when sitting in the pi-stack repo, and otherwise
+// defers to route compile's default path. Guards the silent-wrong-path bug where
+// a maintainer's reassessment never reached the image.
+func TestRepoRoutingTarget(t *testing.T) {
+	// Not the repo (no routing.json / pi-kit/spec.yaml): empty, use the default.
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if got := repoRoutingTarget(); got != "" {
+		t.Fatalf("non-repo dir: want \"\", got %q", got)
+	}
+
+	// routing.json alone is not enough (a consumer's home dir might hold one).
+	if err := os.WriteFile(filepath.Join(dir, "routing.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := repoRoutingTarget(); got != "" {
+		t.Fatalf("routing.json without spec: want \"\", got %q", got)
+	}
+
+	// routing.json next to pi-kit/spec.yaml = unmistakably the repo: target it.
+	if err := os.MkdirAll(filepath.Join(dir, "pi-kit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pi-kit", "spec.yaml"), []byte("image: x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "routing.json")
+	if got := repoRoutingTarget(); got != want {
+		t.Fatalf("repo dir: want %q, got %q", want, got)
 	}
 }

@@ -18,7 +18,8 @@ KIT         ?= ./pi-kit
 # (see docs/OVERLAY.md): kit/ (a mixin kit: company skills, full capabilities.json,
 # in-sandbox wrappers — `make run` stacks it) and host/overlay_*.go (host plugins —
 # `make serve` symlinks them into services/host/ so they compile into the binary).
-# Set OVERLAY in config/local.mk if your peer repo lives elsewhere.
+# Override OVERLAY on the command line or in the environment (e.g.
+# `make run OVERLAY=../my-overlay`) if your peer repo lives elsewhere.
 OVERLAY     ?= ../pi-stack-work
 OVERLAY_KIT_FLAG = $(if $(wildcard $(OVERLAY)/kit/spec.yaml),--kit $(OVERLAY)/kit,)
 # Also mount the overlay's kit/ as a writable extra workspace, so skills/config the
@@ -35,16 +36,24 @@ OVERLAY_WS = $(if $(wildcard $(OVERLAY)/kit/spec.yaml),$(OVERLAY)/kit,)
 # mounts each workspace at its host path). Consumers who `sbx run --kit git+...` never
 # hit this target, so they get the baked set (Mode A). See AGENTS.md.
 DEV_SKILLS = --no-skills --skill $(CURDIR)/skills$(if $(OVERLAY_WS), --skill $(abspath $(OVERLAY))/kit/files/home/.pi/agent/skills,)
-# MCP enablement for `make run`. Set this in config/local.mk (written by
-# `make install`) so the stack is configured once, not by hand each run. Listed
-# servers are auto-attached (`--mcp <name>`) AND are what `make mcp-register`
-# registers among the local stdio servers. EMPTY = dynamic mode: the gateway
-# exposes only discovery tools (mcp-find / mcp-exec / code-mode) and the agent
-# pulls tools in on demand instead of dumping 100+ into context. NOTE: local
-# stdio servers (e.g. slack) are NOT surfaced by dynamic discovery — to use
-# them they must be listed here so `make run` attaches them. `MCP=all` attaches
-# everything registered.
-MCP         ?=
+# Runtime config — the SINGLE source of truth is ~/.config/pi-stack/config.toml,
+# managed by `pi-stack config set` and read here via `pi-stack config get`
+# (profile-aware, list keys space-separated). The `?=` assignments are DEFERRED:
+# they only shell out when a target actually expands the value, and a
+# command-line/env override (`make run MCP=slack`) still wins. Targets that need
+# these values depend on `require-launcher`, which fails loudly if
+# $(PI_STACK_BIN) isn't built — never silently runs with empty config.
+PI_STACK_BIN ?= $(CURDIR)/out/pi-stack
+
+# MCP enablement for `make run` (config.toml `mcp`, `pi-stack config set mcp
+# <name>`). Listed servers are auto-attached (`--mcp <name>`) AND are what
+# `make mcp-register` registers among the local stdio servers. EMPTY = dynamic
+# mode: the gateway exposes only discovery tools (mcp-find / mcp-exec /
+# code-mode) and the agent pulls tools in on demand instead of dumping 100+
+# into context. NOTE: local stdio servers (e.g. slack) are NOT surfaced by
+# dynamic discovery — to use them they must be in the mcp list so `make run`
+# attaches them. `MCP=all` attaches everything registered.
+MCP         ?= $(shell "$(PI_STACK_BIN)" config get mcp 2>/dev/null)
 MCP_FLAGS   = $(foreach server,$(MCP),--mcp $(server))
 # The local stdio MCP servers `make mcp-register` can register (the ones you
 # actually use — i.e. those listed in MCP). `slack` is a pi-stack-host subcommand;
@@ -66,30 +75,46 @@ OP_BIN  := $(shell command -v op 2>/dev/null)
 # (registering a bare `gog` the gateway daemon can't exec is a silent footgun).
 GOG_BIN := $(shell command -v gog 2>/dev/null)
 
-# The Google account the host-side `gog` MCP server runs as. Sourced from
-# config/local.mk (never hardcoded here) and passed to `gog --account` when
-# `make mcp-register` registers gog with the gateway.
-GOG_ACCOUNT ?=
+# The Google account the host-side `gog` MCP server runs as (config.toml
+# `gog_account`, `pi-stack config set gog_account <email>` — never hardcoded
+# here). Passed to `gog --account` when `make mcp-register` registers gog with
+# the gateway.
+GOG_ACCOUNT ?= $(shell "$(PI_STACK_BIN)" config get gog_account 2>/dev/null)
 
-# Owner-specific values live in a gitignored local override so the committed
-# defaults stay generic. config/overlay.mk (also gitignored) adds private,
-# company-specific integrations (Snowflake/BambooHR targets, vars, extra MCP).
--include config/local.mk
+# The private overlay's make targets (gitignored peer repo) — company-specific
+# integrations (Snowflake/BambooHR targets, vars, extra MCP).
 -include $(OVERLAY)/overlay.mk
 
 # Local-model deps for the self-learning memory (host Ollama). The watcher model
 # turns your messages into durable facts (capture); the embed model powers
-# semantic recall. `make pull-models` fetches them. Override MEMORY_WATCHER_MODEL
-# in config/local.mk to use a different one. Default is small (gemma3:4b): it runs
+# semantic recall. `make pull-models` fetches them. Override with `pi-stack
+# config set memory_watcher_model <m>`. The default is small on purpose: it runs
 # resident on the HOST during `make serve`, so a big model OOMs a 16GB laptop.
-MEMORY_WATCHER_MODEL ?= gemma3:4b
-MEMORY_EMBED_MODEL   ?= nomic-embed-text
+MEMORY_WATCHER_MODEL ?= $(shell "$(PI_STACK_BIN)" config get memory_watcher_model 2>/dev/null)
+MEMORY_EMBED_MODEL   ?= $(shell "$(PI_STACK_BIN)" config get memory_embed_model 2>/dev/null)
+# OLLAMA_BRIDGE_MODEL: the local model the sandbox's ollama-bridge exposes to pi
+# (interactive Alt+P cycle) AND the router's local option. Loads on demand (not
+# resident), so it can be bigger than the watcher. `pi-stack run` reads this from
+# ~/.config/pi-stack/config.toml (ollama_bridge_model); `make run` writes it into
+# the workspace so dev runs pick it up the same way. Keep in sync with the router
+# registry id in services/host/routing/defaults/models.json.
+OLLAMA_BRIDGE_MODEL ?= $(shell "$(PI_STACK_BIN)" config get ollama_bridge_model 2>/dev/null)
 
-# SERVICES: which host services `make serve` runs (memory). MCP (top of
-# file): which MCP servers `make run` auto-attaches and `make mcp-register`
-# registers. Both are the SINGLE place to configure the stack — set them in
-# config/local.mk (written by `make install`) so you never pass flags by hand.
-SERVICES ?= memory
+# SERVICES: which host services `make serve` runs (config.toml `services`,
+# `pi-stack config set services <name>`). MCP (top of file): which MCP servers
+# `make run` auto-attaches and `make mcp-register` registers. config.toml is
+# the SINGLE place to configure the stack — you never pass flags by hand.
+SERVICES ?= $(shell "$(PI_STACK_BIN)" config get services 2>/dev/null)
+
+# SERVE_ENV: extra `KEY=VALUE` pairs injected into the environment of the host
+# services `make serve` starts. The public stack sets nothing here; a private
+# overlay (config/overlay.mk) appends the vars its own services need so no
+# company-specific env leaks into the public tree. Values are expanded into the
+# shell UNQUOTED, so each entry must be a single shell token: no spaces or shell
+# metacharacters. For a value that needs them (e.g. a connection string with
+# `&` or spaces), have the overlay service read an env FILE instead of passing
+# it here. See docs/OVERLAY.md.
+SERVE_ENV ?=
 
 # out/ is gitignored, so it's absent on a fresh clone. Several targets (load,
 # launcher, serve, mcp-register, pack, …) write into it and would otherwise fail
@@ -97,7 +122,22 @@ SERVICES ?= memory
 # at parse time so every target can rely on it.
 $(shell mkdir -p out)
 
-.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay launcher
+.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay launcher route require-launcher
+
+# Guard for every target that sources runtime config (SERVICES/MCP/GOG_ACCOUNT/
+# models) from config.toml: the launcher binary MUST exist, and `config get`
+# MUST work — otherwise the $(shell …) sourcing above yields silently-empty
+# values. Fail loudly instead.
+require-launcher:
+	@[ -x "$(PI_STACK_BIN)" ] || { \
+		echo "ERROR: $(PI_STACK_BIN) not found. Runtime config (SERVICES/MCP/models) is"; \
+		echo "       sourced from ~/.config/pi-stack/config.toml via 'pi-stack config get',"; \
+		echo "       so the launcher must be built first: make launcher  (or: make install)"; \
+		exit 1; }
+	@"$(PI_STACK_BIN)" config get services >/dev/null || { \
+		echo "ERROR: '$(PI_STACK_BIN) config get' failed — cannot source runtime config from config.toml."; \
+		echo "       Run 'pi-stack config show' to diagnose (bad profile? corrupt config.toml?)."; \
+		exit 1; }
 
 # Symlink the private overlay's host plugins ($(OVERLAY)/host/overlay_*.go) into
 # services/host/ so they compile into pi-stack-host and self-register. No-op in a
@@ -114,6 +154,10 @@ link-overlay:
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+	@echo "Runtime, routing, agent, and parallel-task commands live in the launcher,"
+	@echo "not make:  pi-stack help --all  (e.g. pi-stack route compile,"
+	@echo "pi-stack agent ls, pi-stack task new)."
 
 build: ## Build the pi-stack image from the DHI base
 	docker build -t $(IMAGE) .
@@ -157,7 +201,7 @@ secrets: ## Store provider keys + GitHub token as global sbx service secrets
 	@echo '  gh auth token             | sbx secret set -g github   # gh in-sandbox, no GH_TOKEN export needed'
 
 NAME ?= pi-stack-pi-stack
-run: ## Launch a pi-stack sandbox NAME. If NAME is stopped it's recreated (workspace + .pi-sessions are host-mounted, so nothing is lost); if it's already running this refuses rather than clobber a live session. `make run NAME=pi-stack-2` opens a second parallel sandbox in another window. (Kit-defined agents can't be re-attached, hence recreate.)
+run: require-launcher ## Launch a pi-stack sandbox NAME. If NAME is stopped it's recreated (workspace + .pi-sessions are host-mounted, so nothing is lost); if it's already running this refuses rather than clobber a live session. `make run NAME=pi-stack-2` opens a second parallel sandbox in another window. (Kit-defined agents can't be re-attached, hence recreate.)
 	@status=$$(sbx ls 2>/dev/null | awk -v n="$(NAME)" '$$1==n{print $$3}'); \
 	if [ "$$status" = "running" ]; then \
 		echo "ERROR: sandbox $(NAME) is already running (a live pi). Use a different name (make run NAME=pi-stack-2) or 'sbx rm -f $(NAME)' first."; exit 1; \
@@ -168,6 +212,7 @@ run: ## Launch a pi-stack sandbox NAME. If NAME is stopped it's recreated (works
 	fi; \
 	TAG=$$(cat out/.local-image-tag 2>/dev/null || true); \
 	[ -n "$$TAG" ] && echo "(new sandbox $(NAME), local build :$$TAG)" || echo "(new sandbox $(NAME), kit-pinned image)"; \
+	mkdir -p .pi-stack && echo "$(OLLAMA_BRIDGE_MODEL)" > .pi-stack/ollama-bridge.model; \
 	exec sbx run pi-stack --name $(NAME) $${TAG:+--template docker.io/$(DOCKER_USER)/pi-stack:$$TAG} --kit $(KIT) $(OVERLAY_KIT_FLAG) $(MCP_FLAGS) . $(OVERLAY_WS) -- $(DEV_SKILLS)
 
 # Run the latest PUBLISHED image straight off the git-hosted kit — the true
@@ -203,14 +248,14 @@ mcp-auth: ## (Re)authorize the remote OAuth MCP servers (opine/granola/notion/at
 	@echo ""
 	@echo "If all show authorized, recreate to pick them up: sbx rm -f pi-stack-pi-stack && make run"
 
-mcp-register: link-overlay ## Register the local stdio MCP servers you use (the ones in MCP, config/local.mk) with sbx. The gateway runs each as `op run --env-file=config/op-refs.env -- pi-stack-host <name>`, so creds come from 1Password at spawn (nothing stored in the registration). Needs SBX_MCP_URL + op + config/op-refs.env.
+mcp-register: require-launcher link-overlay ## Register the local stdio MCP servers you use (the mcp list in config.toml) with sbx. The gateway runs each as `op run --env-file=config/op-refs.env -- pi-stack-host <name>`, so creds come from 1Password at spawn (nothing stored in the registration). Needs SBX_MCP_URL + op + config/op-refs.env.
 	@command -v sbx >/dev/null 2>&1 || { echo "ERROR: sbx not found"; exit 1; }
-	@[ -n "$(strip $(REGISTER))" ] || { echo "Nothing to register: no local stdio servers ($(LOCAL_STDIO_MCP)) are in MCP. Set MCP in config/local.mk."; exit 0; }
+	@[ -n "$(strip $(REGISTER))" ] || { echo "Nothing to register: no local stdio servers ($(LOCAL_STDIO_MCP)) are in MCP. Run: pi-stack config set mcp <name>."; exit 0; }
 	@[ -n "$$SBX_MCP_URL" ] || { echo "ERROR: SBX_MCP_URL is unset — MCP is not enabled, so 'sbx mcp add' will fail."; \
 		echo "  Fix (once):  export SBX_MCP_URL=https://gateway.docker.com  &&  sbx daemon stop"; exit 1; }
 	@[ -n "$(OP_BIN)" ] || { echo "ERROR: 1Password CLI 'op' not found on PATH."; exit 1; }
 	@[ -f "$(OP_REFS)" ] || { echo "ERROR: $(OP_REFS) missing. Create it:  cp config/op-refs.env.example config/op-refs.env  then fill in your refs."; exit 1; }
-	@[ -z "$(filter gog,$(REGISTER))" ] || [ -n "$(GOG_ACCOUNT)" ] || { echo "ERROR: gog is in MCP but GOG_ACCOUNT is unset. Set GOG_ACCOUNT in config/local.mk."; exit 1; }
+	@[ -z "$(filter gog,$(REGISTER))" ] || [ -n "$(GOG_ACCOUNT)" ] || { echo "ERROR: gog is in MCP but gog_account is unset. Run: pi-stack config set gog_account <you@example.com>."; exit 1; }
 	@[ -z "$(filter gog,$(REGISTER))" ] || [ -n "$(GOG_BIN)" ] || { echo 'ERROR: gog not found on PATH — brew install gog'; exit 1; }
 	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .)
 	@BIN="$(CURDIR)/out/pi-stack-host"; \
@@ -231,29 +276,42 @@ mcp-register: link-overlay ## Register the local stdio MCP servers you use (the 
 	done
 	@echo "Verify: sbx mcp ls"
 	@echo "Attach: registration is NOT enough — a sandbox only gets these if you START it with them."
-	@echo "        \`make run\` does this for you (MCP=$(MCP) from config/local.mk). Local stdio"
+	@echo "        \`make run\` does this for you (MCP=$(MCP) from config.toml). Local stdio"
 	@echo "        servers aren't surfaced by dynamic discovery, and this sbx can't attach to a"
 	@echo "        running sandbox — so just \`make run\` (it passes --mcp for each)."
 	@echo "        Local stdio servers are NOT surfaced by dynamic mcp-find, and this sbx has no 'mcp load'"
 	@echo "        for a running sandbox — so re-run with --mcp to pick them up."
 	@echo "Note: each server resolves its creds from config/op-refs.env via op run when the gateway spawns it — make sure those refs are filled + valid."
 
-serve: link-overlay ## Start the host services named in SERVICES (config/local.mk): memory :11435. MCP servers (slack, gog) are run by the sbx gateway — see `make mcp-register`. Ctrl-C stops all.
+serve: require-launcher link-overlay ## Start the host services named in SERVICES (config.toml `services`): memory :11435. MCP servers (slack, gog) are run by the sbx gateway — see `make mcp-register`. Ctrl-C stops all.
 	@echo "Host services [$(SERVICES)] — sandboxes reach these on host.docker.internal. Ctrl-C stops all."
 	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) || { echo "go build failed (pi-stack-host)"; exit 1; }
-	@exec env SNOW_CONN=$(SNOW_CONN) MEMORY_WATCHER_MODEL=$(MEMORY_WATCHER_MODEL) MEMORY_EMBED_MODEL=$(MEMORY_EMBED_MODEL) out/pi-stack-host serve $(SERVICES)
+	@exec env $(SERVE_ENV) MEMORY_WATCHER_MODEL=$(MEMORY_WATCHER_MODEL) MEMORY_EMBED_MODEL=$(MEMORY_EMBED_MODEL) out/pi-stack-host serve $(SERVICES)
 
-pull-models: ## Pull the local Ollama models the memory loop needs (watcher + embed)
-	@command -v ollama >/dev/null 2>&1 || { echo "ollama not installed — see https://ollama.com (optional: enables semantic recall + fact capture)"; exit 1; }
+# route is MAINTAINER tooling for the model router, run from the repo (it reads
+# services/host/routing/). It is NOT part of the consumer surface: `route` is
+# deliberately NOT a `pi-stack` command — it lives here in the Makefile, invoking
+# the repo-built pi-stack-host backend. See the `model-refresh` skill +
+# docs/design/routing.md. Scores are hand-maintained in
+# services/host/routing/defaults/scorecard.json — edit it, then `make route
+# ARGS=compile` (or `pi-stack route compile`).
+# Bare `make route` defaults to the safe, read-only `show` (the scorecard /
+# resolved table) so it never errors without ARGS.
+route: ## Model router (maintainer): make route ARGS="show" | "models" | "compile" | "pick <intent>"
+	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && ./out/pi-stack-host route $(if $(strip $(ARGS)),$(ARGS),show)
+
+pull-models: require-launcher ## Pull the local Ollama models the stack uses (memory watcher + embed, and the bridge/router local model)
+	@command -v ollama >/dev/null 2>&1 || { echo "ollama not installed — see https://ollama.com (optional: enables semantic recall + fact capture + the local model)"; exit 1; }
 	@echo "Pulling watcher model: $(MEMORY_WATCHER_MODEL)"; ollama pull $(MEMORY_WATCHER_MODEL)
 	@echo "Pulling embed model:   $(MEMORY_EMBED_MODEL)";   ollama pull $(MEMORY_EMBED_MODEL)
+	@echo "Pulling local model:   $(OLLAMA_BRIDGE_MODEL)";   ollama pull $(OLLAMA_BRIDGE_MODEL)
 	@echo "Done. 'make doctor' will now show capture + semantic recall as ready."
 
-doctor: ## Show models + each optional integration: set up? service running?
+doctor: require-launcher ## Show models + each optional integration: set up? service running?
 	@port() { nc -z localhost "$$1" >/dev/null 2>&1 && echo "up" || echo "down"; }; \
 	sset() { sbx secret ls 2>/dev/null | grep -qw "$$1" && echo "sbx secret set" || echo "TODO: sbx secret set -g $$1"; }; \
 	model() { command -v ollama >/dev/null 2>&1 && ollama list 2>/dev/null | grep -q "^$$1\b" && echo "pulled" || echo "TODO: ollama pull $$1 (or make pull-models)"; }; \
-	echo "Config (config/local.mk — the single source of truth):"; \
+	echo "Config (config.toml via 'pi-stack config get' — the single source of truth):"; \
 	printf "  %-9s %s\n" "SERVICES" "$(SERVICES)   (make serve runs these)"; \
 	printf "  %-9s %s\n" "MCP"      "$(if $(strip $(MCP)),$(MCP),<empty: dynamic discovery only>)   (make run attaches these)"; \
 	echo ""; \
@@ -272,17 +330,17 @@ doctor: ## Show models + each optional integration: set up? service running?
 	echo ""; \
 	echo "MCP servers (local stdio, run by the sbx gateway — register with 'make mcp-register', attach with 'make run'):"; \
 	reg() { sbx mcp ls 2>/dev/null | grep -qw "$$1" && echo "registered" || echo "TODO: make mcp-register"; }; \
-	printf "  %-7s %-14s %s\n" "slack"  "$$(reg slack)"    "$(if $(filter slack,$(MCP)),auto-attached on make run,NOT in MCP — add to config/local.mk to use)"; \
-	printf "  %-7s %-14s %s\n" "gog"    "$$(reg gog)"      "$(if $(filter gog,$(MCP)),auto-attached on make run,NOT in MCP — add to config/local.mk to use)"; \
-	echo "  gateway catalog (atlassian/notion/granola/linear/...): sbx mcp add … then add to MCP in config/local.mk"; \
+	printf "  %-7s %-14s %s\n" "slack"  "$$(reg slack)"    "$(if $(filter slack,$(MCP)),auto-attached on make run,NOT in MCP — 'pi-stack config set mcp slack' to use)"; \
+	printf "  %-7s %-14s %s\n" "gog"    "$$(reg gog)"      "$(if $(filter gog,$(MCP)),auto-attached on make run,NOT in MCP — 'pi-stack config set mcp gog' to use)"; \
+	echo "  gateway catalog (atlassian/notion/granola/linear/...): sbx mcp add … then pi-stack config set mcp <name>"; \
 	echo ""; \
-	echo "All of the above is configured in config/local.mk. Start it: make serve (host) + make run (sandbox)."
+	echo "All of the above is configured in ~/.config/pi-stack/config.toml (pi-stack config set). Start it: make serve (host) + make run (sandbox)."
 	@$(MAKE) -s doctor-overlay 2>/dev/null || true
 
 pack: ## Package the kit as a distributable zip
 	sbx kit pack $(KIT) -o out/pi-stack-kit.zip
 
-install: launcher ## Build + put the Go binaries (out/pi-stack launcher + out/pi-stack-host) on your PATH (~/.local/bin) + create config/local.mk (your stack config) if missing
+install: launcher ## Build + put the Go binaries (out/pi-stack launcher + out/pi-stack-host) on your PATH (~/.local/bin)
 	mkdir -p $(HOME)/.local/bin
 	ln -sf $(CURDIR)/out/pi-stack $(HOME)/.local/bin/pi-stack
 	ln -sf $(CURDIR)/out/pi-stack-host $(HOME)/.local/bin/pi-stack-host
@@ -295,12 +353,8 @@ install: launcher ## Build + put the Go binaries (out/pi-stack launcher + out/pi
 	@echo "Installed: man page -> $(HOME)/.local/share/man/man1/pi-stack.1"
 	@manpath 2>/dev/null | tr ':' '\n' | grep -qx "$(HOME)/.local/share/man" \
 		|| echo "Tip: add ~/.local/share/man to MANPATH for \`man pi-stack\` (or just use \`pi-stack man\`)."
-	@if [ ! -f config/local.mk ]; then \
-		cp config/local.mk.example config/local.mk; \
-		echo "Created config/local.mk — edit it to pick SERVICES, MCP, models, then: make serve / make run"; \
-	else \
-		echo "config/local.mk already present — left as-is (compare with config/local.mk.example for new options)."; \
-	fi
+	@echo "Runtime config lives in ~/.config/pi-stack/config.toml — manage it with"
+	@echo "'pi-stack config set <key> <value>' (or 'pi-stack setup' for the guided flow)."
 	@echo "Ensure ~/.local/bin is on your PATH, then: cd <any project> && pi-stack"
 
 clean: ## Remove the built image

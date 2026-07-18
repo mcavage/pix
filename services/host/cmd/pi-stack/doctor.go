@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -297,6 +299,13 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	memory := group{title: "Memory service (recall + capture)"}
 	memUp := env.dial(11435)
 	memory.checks = append(memory.checks, serviceCheck("memory", 11435, memUp, "pi-stack serve", enabled(cfg, "memory")))
+	// Live capture status straight from the daemon's health, not just "is the
+	// model in ollama": this is the flag that decides whether observe() actually
+	// stores anything. A latched-off watcher (daemon booted before the model was
+	// pulled) shows here even when `ollama list` now has the model.
+	if memUp {
+		memory.checks = append(memory.checks, memCaptureCheck())
+	}
 	r.groups = append(r.groups, memory)
 
 	// (d) gog: Google Workspace via a host-side stdio MCP server the sbx gateway
@@ -380,8 +389,54 @@ func serviceCheck(label string, port int, up bool, startCmd string, isEnabled bo
 	return check{label: label, state: stateInfo, detail: fmt.Sprintf(":%d down (not in configured services)", port)}
 }
 
+// memCaptureCheck asks the running memory daemon (:11435) whether automatic fact
+// capture is live. It reads the daemon's own health.capture flag (which re-probes
+// the watcher model), so it catches the latched-off case a plain `ollama list`
+// check misses. Off => the exact `ollama pull` fix.
+func memCaptureCheck() check {
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"health","params":{}}`)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://127.0.0.1:11435", bytes.NewReader(body))
+	if err != nil {
+		return check{label: "fact capture", state: stateInfo, detail: "could not query daemon health"}
+	}
+	req.Header.Set("content-type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return check{label: "fact capture", state: stateInfo, detail: "could not query daemon health"}
+	}
+	defer res.Body.Close()
+	var parsed struct {
+		Result struct {
+			Capture       bool   `json:"capture"`
+			CaptureReason string `json:"captureReason"`
+			WatcherModel  string `json:"watcherModel"`
+		} `json:"result"`
+	}
+	if json.NewDecoder(io.LimitReader(res.Body, 1<<16)).Decode(&parsed) != nil {
+		return check{label: "fact capture", state: stateInfo, detail: "could not read daemon health"}
+	}
+	m := parsed.Result.WatcherModel
+	if parsed.Result.Capture {
+		return check{label: "fact capture", state: stateOK, detail: fmt.Sprintf("on (watcher %s)", m)}
+	}
+	// Prefer the daemon's own live reason (e.g. a watcher inference timeout while
+	// Ollama is wedged) over the generic "unavailable" text — that's the whole
+	// point of surfacing captureReason.
+	detail := fmt.Sprintf("OFF — watcher %q unavailable (recall still works)", m)
+	if parsed.Result.CaptureReason != "" {
+		detail = fmt.Sprintf("OFF — %s (recall still works)", parsed.Result.CaptureReason)
+	}
+	return check{
+		label:  "fact capture",
+		state:  stateTODO,
+		detail: detail,
+		todo:   "ollama pull " + m,
+	}
+}
+
 // mcpCheck reports whether an MCP server is registered with sbx. When the
-// registration list is unavailable it distinguishes sbx being ABSENT (in the
 // sandbox — a register-on-the-host TODO) from sbx being PRESENT but the listing
 // having failed (host, gateway likely off — an SBX_MCP_URL TODO).
 func mcpCheck(name, mcpOut string, mcpOK, sbxPresent bool) check {
@@ -615,20 +670,15 @@ func mcpConfigured(cfg *config.Config, name string) bool {
 }
 
 // gogAccount resolves the Google Workspace account the best-effort fallback
-// probe runs against. config/local.mk is AUTHORITATIVE when present: it is
-// LITERALLY the GOG_ACCOUNT `make mcp-register` hands the gateway, so a green
-// fallback can't mean "probed a different account than the gateway got":
-//  1. GOG_ACCOUNT parsed out of a located config/local.mk (what mcp-register
-//     registers) — wins whenever a repo checkout's local.mk is present,
-//  2. config.toml's `gog_account` (the Go-side source of truth, cfg.GogAccount),
-//  3. the $GOG_ACCOUNT env var.
+// probe runs against. config.toml's `gog_account` is the SINGLE source of truth
+// (it is what `make mcp-register` / `pi-stack mcp register` hand the gateway,
+// both sourced via `pi-stack config get gog_account`):
+//  1. config.toml's `gog_account` (cfg.GogAccount, profile-resolved),
+//  2. the $GOG_ACCOUNT env var.
 //
 // NEVER a hardcoded address. Empty means "not configured" and the caller emits a
 // "cannot verify" TODO rather than reporting green.
 func gogAccount(cfg *config.Config, env shellEnv) string {
-	if a := gogAccountFromLocalMk(env); a != "" {
-		return a
-	}
 	if cfg != nil {
 		if a := strings.TrimSpace(cfg.GogAccount); a != "" {
 			return a
@@ -642,37 +692,11 @@ func gogAccount(cfg *config.Config, env shellEnv) string {
 	return ""
 }
 
-// gogAccountRe matches a `GOG_ACCOUNT = <val>` / `:= ` / `?= ` assignment in a
-// Makefile-style config/local.mk (the same var `make mcp-register` reads).
-var gogAccountRe = regexp.MustCompile(`(?m)^\s*GOG_ACCOUNT\s*[:?]?=\s*(\S+)`)
-
-// gogAccountFromLocalMk locates a repo checkout's config/local.mk and greps
-// GOG_ACCOUNT out of it, so doctor matches the make-side value even when nothing
-// is set in config.toml or the env. Returns "" when no local.mk is found or the
-// var is unset — never crashes.
-func gogAccountFromLocalMk(env shellEnv) string {
-	if env.readFile == nil {
-		return ""
-	}
-	path := findUpward(env, filepath.Join("config", "local.mk"))
-	if path == "" {
-		return ""
-	}
-	data, err := env.readFile(path)
-	if err != nil {
-		return ""
-	}
-	if m := gogAccountRe.FindStringSubmatch(data); len(m) >= 2 {
-		return strings.TrimSpace(m[1])
-	}
-	return ""
-}
-
 // findUpward walks up from the current working directory looking for a directory
 // that contains BOTH a Makefile and the given repo-relative file, returning the
 // absolute path to that file (or "" if none is found before the filesystem root).
-// This is how doctor locates a repo checkout's config files (op-refs.env,
-// local.mk) regardless of where it was invoked from within the tree.
+// This is how doctor locates a repo checkout's config files (op-refs.env)
+// regardless of where it was invoked from within the tree.
 func findUpward(env shellEnv, rel string) string {
 	if env.statFile == nil {
 		return ""
@@ -825,13 +849,13 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 		check{label: "verifying", state: stateInfo,
 			detail: fallbackWhy + " — verifies " + acctShown + " via " + refsShown},
 		check{label: "note", state: stateInfo,
-			detail: "must match your `make mcp-register` (config/local.mk GOG_ACCOUNT + config/op-refs.env)"})
+			detail: "must match your `make mcp-register` (config.toml gog_account + config/op-refs.env)"})
 
 	if acct == "" {
 		// 2'. No account configured — can't probe auth or the headless path, so we
 		// must NOT report green: say we cannot verify and name the two sources.
 		g.checks = append(g.checks, check{label: "account", state: stateTODO,
-			detail: "cannot verify (GOG_ACCOUNT unset in env/config/local.mk)",
+			detail: "cannot verify (gog_account unset in config.toml/env)",
 			todo:   "pi-stack config set gog_account <you@example.com>"})
 		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
 		g.checks = append(g.checks, gogAttachCheck(cfg))

@@ -1,6 +1,27 @@
 # Host mode — running pi-stack outside the sandbox
 
-Status: proposal (crew-assessed, not yet built)
+Status: Phase 1 IMPLEMENTED, gated off by default (`pi-stack config set
+host.enabled true`). The Go launch path (`pi-stack host [DIR]` + `pi-stack host
+setup`, hostrun.go/hostargs.go) is built: default-off gate, host agent dir at
+$XDG_STATE_HOME/pi-stack/host-agent, EvalSymlinks workspace refusals
+($HOME///etc/secret dirs — secret dirs canonicalized too, and nested entries
+like .config/gcloud caught when the workspace sits at $HOME/.config), subagents
+disabled (PI_SUBAGENT_DISABLED=1, strict "1" match, enforced centrally in
+runSingle so the doctor canary can't spawn either + PI_SUBAGENT_MAX_DEPTH=0,
+which now honors an explicit zero), passthrough flags that would displace the
+guard (--no-extensions/--extensions/-e/--extension) refused at parse,
+host-specific system preamble (launch refuses if it can't be written), op://
+just-in-time credentials via hostmode.env (Ollama-only without it), red stderr
+banner, and man/help wiring. `host setup` also symlinks capabilities.json
+(capability-routing reads $PI_CODING_AGENT_DIR/capabilities.json),
+routing.json (subagents intent→model), and keybindings.json into the host
+agent dir; mcp.json is deliberately NOT linked — it registers the sbx Cloud
+MCP Gateway, which only exists inside a sandbox. MEMORY_URL/KNOWLEDGE_URL
+honor MEMORY_PORT/KNOWLEDGE_PORT, and the configured ollama_bridge_model is
+exported as OLLAMA_BRIDGE_MODEL. The TS half (host-guard.ts, ollama-bridge OLLAMA_HOSTMODE
+bypass, status HOST badge, subagents.ts PI_SUBAGENT_DISABLED guard) tracks
+separately — the launch REFUSES until extensions/host-guard.ts exists. Phase 2
+hardening remains open.
 Owner: TBD
 Crew: architect · security-lead · engineer · dx-consultant (+ cross-vendor review)
 

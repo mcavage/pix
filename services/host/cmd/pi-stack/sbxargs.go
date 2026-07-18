@@ -49,6 +49,7 @@ type runOpts struct {
 	Name          string   // --name N: sandbox name
 	Model         string   // --model M: active pi model (passed through to pi)
 	Intent        string   // --intent NAME: resolve the session model via the router (unless --model overrides)
+	Replace       bool     // --replace: force a recreate (rm -f then create) instead of re-attaching to an existing sandbox
 	Passthrough   []string // args after `--`, handed straight to pi
 	// Token is the credential bearer for an OPTIONAL overlay broker. The default
 	// path leaves it empty and forwards no bearer (gog authenticates host-side in
@@ -165,6 +166,86 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 	}
 	piArgs = append(piArgs, o.Passthrough...)
 
+	if len(piArgs) > 0 {
+		args = append(args, "--")
+		args = append(args, piArgs...)
+	}
+	return args
+}
+
+// runLaunchPlan is the OUTCOME of the create-vs-reattach-vs-replace decision:
+// the sbx argv to exec, whether it must be preceded by `sbx rm -f <name>` first,
+// and whether Args is the thin re-attach form (vs. a full create) — the caller
+// uses Reattach to pick its stderr message and to print the re-attach-failed
+// hint if the exec fails.
+type runLaunchPlan struct {
+	RmFirst  bool     // run `sbx rm -f <name>` before Args
+	Args     []string // sbx argv (after "sbx")
+	Reattach bool     // true => Args is the thin re-attach form, not a full create
+}
+
+// planSandboxLaunch is the pure decision at the heart of `pi-stack run`'s
+// lifecycle, matching sbx's own re-attach model: a create-only flag
+// (--kit/--template/--mcp) only makes sense when the sandbox does not already
+// exist. It mirrors buildSbxArgs — no exec, no filesystem — so every branch is
+// unit-testable without sbx installed.
+//
+//   - absent (or unknown, when `sbx ls` itself failed) -> CREATE: the full
+//     buildSbxArgs, unchanged.
+//   - running or stopped, no --replace -> RE-ATTACH: sbx reads the agent from
+//     the existing sandbox's spec, so none of the create-only flags apply; see
+//     buildReattachArgs.
+//   - any state, --replace -> REPLACE: `sbx rm -f <name>` (skipped when the
+//     sandbox is already absent) then a full create, so changed kit/mcp/
+//     create-only flags take effect. This is today's implicit recreate, now
+//     explicit and available for a RUNNING sandbox too.
+func planSandboxLaunch(state sbxState, replace bool, cfg *config.Config, o runOpts, version string) runLaunchPlan {
+	if !willCreate(state, replace) {
+		return runLaunchPlan{Args: buildReattachArgs(o), Reattach: true}
+	}
+	return runLaunchPlan{
+		RmFirst: replace && (state == sbxRunning || state == sbxStopped),
+		Args:    buildSbxArgs(cfg, o, version),
+	}
+}
+
+// willCreate reports whether planSandboxLaunch(state, replace, ...) will
+// create (or replace) rather than plainly re-attach — i.e. whether the
+// create-only inputs (repo checkout / --dev / kit resolution) are even needed.
+// Kept as the single source of truth for that branching so run.go can decide
+// to SKIP resolving those create-only inputs before a plain re-attach (which
+// must never fail on a --dev/checkout problem it doesn't need) without
+// duplicating — and risking drifting from — planSandboxLaunch's own logic.
+func willCreate(state sbxState, replace bool) bool {
+	if replace {
+		return true
+	}
+	switch state {
+	case sbxRunning, sbxStopped:
+		return false
+	default: // sbxAbsent or sbxUnknown: nothing (known) is in the way, create fresh.
+		return true
+	}
+}
+
+// buildReattachArgs composes the argv for RE-ATTACHING to an existing sandbox:
+// `run --name <name>`, deliberately WITHOUT any create-only flag
+// (--kit/--template/--mcp, the overlay-kit stack, or the --dev/--skills live
+// trees) — sbx reads the agent from the existing sandbox's own spec, so
+// reapplying them would be a no-op at best and a lie about what's running at
+// worst. --model/--intent are NOT create-only, though: they are pi RUNTIME args
+// (forwarded after `--`, same as buildSbxArgs), so a resolved o.Model (whether
+// the user passed --model directly or run.go resolved it from --intent) still
+// needs to reach the pi session on a re-attach, exactly like a fresh create.
+// The user's own pi passthrough (o.Passthrough) forwards after it, mirroring
+// buildSbxArgs' own passthrough handling.
+func buildReattachArgs(o runOpts) []string {
+	args := []string{"run", "--name", o.Name}
+	var piArgs []string
+	if o.Model != "" {
+		piArgs = append(piArgs, "--model", o.Model)
+	}
+	piArgs = append(piArgs, o.Passthrough...)
 	if len(piArgs) > 0 {
 		args = append(args, "--")
 		args = append(args, piArgs...)

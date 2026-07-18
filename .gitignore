@@ -12,6 +12,9 @@ node_modules/
 # Launcher-generated per-run active-profile name (scopes in-VM memory recall/
 # capture). Regenerated every `pi-stack run`; never tracked.
 **/.pi-stack/profile
+# Local model tag the in-VM ollama-bridge exposes (from `pi-stack config set
+# ollama_bridge_model`). Regenerated every `pi-stack run`; never tracked.
+**/.pi-stack/ollama-bridge.model
 
 
 # 1Password secret references — user-specific (vault/item names); keep local
@@ -21,8 +24,6 @@ config/op-refs.env
 # all build + sandbox artifacts land here (single ignored dir)
 out/
 
-# local owner-specific Makefile overrides (your real connector config, etc.)
-config/local.mk
 
 # --- Open-core boundary: skills (MUST mirror .dockerignore) ---------------------
 # DEFAULT-DENY so `git add -A` can never stage a company/overlay skill (one that
@@ -54,6 +55,7 @@ skills/*
 !skills/healthcheck/
 !skills/ingest/
 !skills/microcopy/
+!skills/model-refresh/
 !skills/onboard/
 !skills/one-pager/
 !skills/peer-review/
@@ -63,7 +65,7 @@ skills/*
 !skills/ship/
 !skills/tdd/
 !skills/verify/
-!skills/write-like-mark/
+!skills/writing-voice/
 
 # --- Open-core boundary: agents (MUST mirror .dockerignore) ---------------------
 # DEFAULT-DENY so git add -A can't stage a future company-specific persona.
@@ -103,3 +105,5 @@ config/open-core-markers.txt
 .pi-agent/
 services/host/pi-stack
 services/host/pi-stack-host
+# stray `go build` artifact if you compile inside the launcher package dir
+services/host/cmd/pi-stack/pi-stack

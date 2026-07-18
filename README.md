@@ -1,13 +1,24 @@
 # pi-stack
 
-pi-stack is an opinionated Docker-sandboxed distribution of
-[pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) for
-running autonomous coding tasks.
+[![test](https://github.com/mcavage/pi-stack/actions/workflows/test.yml/badge.svg)](https://github.com/mcavage/pi-stack/actions/workflows/test.yml)
+[![publish](https://github.com/mcavage/pi-stack/actions/workflows/publish.yml/badge.svg)](https://github.com/mcavage/pi-stack/actions/workflows/publish.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-The goal is simple: let the agent edit code, run commands, test the result, ask a
-second model to review the diff, and open a PR without turning every shell command
-into an approval prompt. The safety boundary is the sandbox, not a stream of
-one-off confirmations.
+**Claude writes it. GPT reviews it. Docker contains it.**
+
+pi-stack is an opinionated, Docker-sandboxed distribution of the
+[pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) coding agent
+for running autonomous coding tasks.
+
+Give pi a repo and a task. It plans, edits, runs commands, tests the result, asks
+a *different* model to review the diff, and opens a PR, without turning every
+shell command into an approval prompt. The safety boundary is the sandbox, not a
+stream of one-off confirmations.
+
+> Building the image needs a DHI-entitled Docker account, but the hosted
+> `sbx run` path below does not. A big chunk of the optional data integrations
+> also depends on the sbx MCP gateway, which is not public yet. The core, and
+> everything in the quickstart, works today.
 
 pi-stack ships the reusable parts of that setup:
 
@@ -95,12 +106,51 @@ sbx secret set -g google
 sbx secret set -g github
 
 pi-stack setup
-pi-stack serve
-pi-stack
+pi-stack run
 ```
 
 `pi-stack setup` writes `~/.config/pi-stack/config.toml`, registers configured MCP
 servers, and enables memory. Re-run it when your host setup changes.
+
+You don't babysit the services daemon: `pi-stack run` / `memory` / `knowledge
+query` lazily auto-start a detached `pi-stack-host serve` when its ports are
+down (opt out with `PI_STACK_NO_AUTOSERVE=1` or `pi-stack config set
+host.autoserve false`; log at `~/.local/state/pi-stack/serve.log`). Prefer an
+always-on login service? `pi-stack serve install` registers it with launchd
+(macOS) or systemd --user (Linux); `pi-stack serve uninstall` removes it. The
+managed service logs to the SAME `~/.local/state/pi-stack/serve.log` — one
+log file regardless of how serve was started.
+
+Bare `pi-stack` (no args) prints a status dashboard; it never launches a sandbox.
+Use `pi-stack run [DIR]` to launch. This is deliberate: launching is always
+explicit.
+
+`pi-stack run` matches sbx's own lifecycle: if no sandbox by that name exists
+yet, it creates one; if one already exists — running or stopped — it
+RE-ATTACHES to it as-is instead of refusing or recreating (sbx reads the agent
+from the sandbox's own spec, so `--kit`/`--mcp`/create-only flags don't apply on
+a re-attach). Pass `--replace` to force a recreate (`sbx rm -f` then create)
+when you've changed the kit, MCP servers, or another create-only flag.
+
+## Why pi-stack?
+
+pi-stack is a *distribution* of pi, not a new editor or a new agent runtime. It
+exists to make one specific bet safe: let a model work autonomously, and let a
+different model check it.
+
+| | plain `pi` | pi-stack | Claude Code / Cursor |
+| --- | --- | --- | --- |
+| Isolation | your shell | disposable Docker VM | your shell / IDE |
+| Approval model | per-command prompts | sandbox is the boundary, full-auto | per-command prompts |
+| Providers | multi | Claude + GPT + Gemini + local Ollama | mostly single-vendor |
+| Review | you | a *different* vendor reviews the diff | you |
+| Memory | none | host sqlite + FTS5 + vectors, survives sessions | limited |
+| Private integrations | none | overlay repo, credentials stay on the host | plugins |
+| Reproducibility | your machine | pinned image + kit | your machine |
+
+The cross-vendor review is the part that pays off in practice: a second Claude
+pass on a Claude diff has correlated blind spots, but GPT or Gemini objects in
+different places.
 
 ## What You Get
 
@@ -121,7 +171,8 @@ places.
 sqlite with FTS5 and vector search. A local watcher model extracts preferences,
 decisions, and project conventions from conversation, and later turns retrieve
 relevant memories automatically. Without Ollama, recall falls back to keyword
-search and capture is disabled.
+search and capture is disabled. See [docs/memory.md](docs/memory.md) for the full
+picture: recall ranking, the capture loop, the commands, and the trust model.
 
 **OKF knowledge retrieval.** The built-in knowledge service indexes OKF bundle
 directories and serves retrieval over JSON-RPC. `pi-stack knowledge init`
@@ -145,26 +196,74 @@ skills, capability routing, credentials, and company connectors live in a separa
 overlay repo. That keeps the open-source tree clean while still letting the same
 skills run against real work systems when an overlay is present.
 
+**Parallel work with `task`.** `pi-stack task new` spins up an isolated clone plus
+sandbox for a branch of work, so several agents can run at once without stepping
+on each other. `task ls` shows them, `task harvest` pulls the results back, and
+`task rm` cleans up (with guardrails). See
+[docs/design/worktree-tasks.md](docs/design/worktree-tasks.md).
+
 ## Launcher Commands
 
+Core:
+
 ```bash
-pi-stack                     # launch a sandbox in the current directory
-pi-stack run [DIR]           # same, explicit
+pi-stack                     # status dashboard (does NOT launch)
+pi-stack run [DIR]           # launch a sandbox in DIR (default: current dir); re-attaches if it exists
+pi-stack run --replace        # recreate instead of re-attaching (picks up changed --kit/--mcp)
+pi-stack ls                  # list your pi-stack sandboxes (name, state, dir)
+pi-stack rm <name>           # remove a sandbox (--all [--except <name>])
+pi-stack status              # fast read-only control panel (alias: st)
 pi-stack setup               # guided setup for config, memory, and MCP
-pi-stack serve               # run enabled host services
+pi-stack serve               # run enabled host services (auto-started lazily; install/uninstall for a login service)
 pi-stack doctor              # diagnose host and sandbox prerequisites
-pi-stack config show|path    # inspect resolved config
-pi-stack config set|unset    # update config without hand-editing toml
-pi-stack mcp register|ls     # register/list local stdio MCP servers with sbx
-pi-stack knowledge init|use|ls  # create, attach, or inspect OKF bundles
-pi-stack state backup|restore|reset|uninstall  # on-disk state (also top-level aliases)
-pi-stack help [--all] [verb]  # tiered help: Core by default, --all/help <verb> for the rest
+pi-stack config show|path|set|unset  # inspect or update config (never hand-edit toml)
+pi-stack help [--all] [verb] # tiered help: Core by default, --all for the rest
 pi-stack version             # print the launcher version
 ```
+
+Data, routing, and parallel work:
+
+```bash
+pi-stack memory recall|remember|forget|learnings|stats   # drive the memory daemon (alias: mem)
+pi-stack knowledge init|use|ls|query|sync|remote         # OKF bundles (alias: kb)
+pi-stack mcp register|ls     # register/list local stdio MCP servers with sbx
+pi-stack secret edit|check   # 1Password op-refs for host MCP credentials
+pi-stack route pick|compile|show|models   # the model router (cost/latency/accuracy)
+pi-stack agent ls|new|edit|rm|reassess    # manage subagents and their resolved models
+pi-stack task new|ls|harvest|rm           # isolated parallel-work sandboxes (see below)
+pi-stack profile ls|use      # switch work / personal / default contexts
+pi-stack state backup|restore|reset|uninstall  # on-disk state (also top-level aliases)
+pi-stack man                 # render the full man page
+```
+
+Run `pi-stack help --all` for the complete tree with flags.
+
+The model router (`route`) and agent authoring are **maintainer tooling**, run
+from a repo checkout (`make route`). Scores live in a hand-maintained
+`scorecard.json` (seeded from published benchmarks and pricing, no eval harness
+required); edit it, then `pi-stack route compile`. Consumers get the compiled
+`routing.json` baked into the image.
 
 Do not hand-edit `config.toml`. `pi-stack setup` and `pi-stack config set/unset`
 are the supported writers, and `pi-stack doctor` prints copy-pasteable repair
 commands when something is missing.
+
+### Expert: `pi-stack host` (unsandboxed, gated off)
+
+`pi-stack host [DIR]` runs pi **directly on your machine** — no sandbox, no
+network fence, real credentials. It exists for one narrow case: developing
+pi-stack itself, which needs the host's Docker/`sbx`/`make` that the VM
+structurally cannot reach. It is disabled by default and stays off until you
+run `pi-stack config set host.enabled true`, then `pi-stack host setup` once to
+provision `~/.local/state/pi-stack/host-agent`. Cloud keys come from op://
+refs in `hostmode.env` next to `config.toml`, resolved just-in-time by `op run`
+and never persisted; without that file the session is Ollama-only.
+
+Host mode ships guardrails — a guard extension, workspace refusals
+(`$HOME`/`/`/`/etc`/secret dirs), disabled subagents — but they protect against
+**accidents, not attacks**. They are guardrails, not a security boundary. For
+anything you wouldn't hand a shell to, use `pi-stack run`. Full threat model:
+[docs/design/host-mode.md](docs/design/host-mode.md).
 
 ## Optional Data Tools
 
@@ -177,6 +276,7 @@ These are independent. Use the ones you need and skip the rest.
 
 ```bash
 pi-stack serve            # memory (:11435), knowledge (:11436 if enabled), broker if configured
+                          # (auto-started on demand; `serve install` = managed login service)
 pi-stack mcp register     # register local stdio MCP servers with the sbx gateway
 pi-stack doctor           # check keys, services, models, gog, and MCP state
 ```
@@ -196,51 +296,51 @@ Memory needs local Ollama models:
 make pull-models
 ```
 
-### Ollama models and low-DRAM machines
+### Local Ollama models
 
-Two places use a local Ollama model, and both default to a small one
-(`gemma3:4b`, ~3.3GB) so the stack fits a 16GB laptop out of the box. **The new
-default only applies to fresh installs** — an existing `~/.config/pi-stack/
-config.toml` or `config/local.mk` keeps whatever it already has, so on an
-existing machine run the swap below explicitly:
+The stack uses local Ollama models in three roles. All three are `pi-stack config`
+settings on the host — you never hand-edit sandbox env. Pull them with
+`make pull-models` (or `ollama pull <tag>`); whatever tag you set must be pulled
+or the call 404s.
 
-1. **Memory watcher** (fact capture) — runs on the HOST during `pi-stack serve`
-   and Ollama keeps it resident, so this is the continuous DRAM cost. Swap it
-   without editing anything:
-   ```bash
-   pi-stack config set memory_watcher_model gemma3:4b   # or another pulled tag
-   ollama pull gemma3:4b
-   pi-stack serve                                        # restart to pick it up
-   ```
-   (`make serve` reads `MEMORY_WATCHER_MODEL` from `config/local.mk` instead.)
-2. **Interactive cycle model** (the `ollama/*` entry in the Alt+P squad) — loads
-   only when you select it. The `ollama-bridge` extension reads env vars, so
-   change it with no code edit. Set them in the sandbox's persistent env, then
-   **restart pi** (a plain `/reload` re-runs the extension in the same process,
-   which keeps the already-read `process.env`, so the swap needs a new pi):
-   ```bash
-   echo 'export OLLAMA_BRIDGE_MODEL=gemma3:4b'                >> /etc/sandbox-persistent.sh
-   echo 'export OLLAMA_BRIDGE_MODEL_NAME="Gemma 3 4B (local)"' >> /etc/sandbox-persistent.sh
-   # OLLAMA_BRIDGE_CONTEXT lowers the KV cache (default 32768) for even less RAM.
-   ```
-   The kit cycles `ollama/*`, so it matches whatever tag the bridge registers —
-   no need to touch `pi-kit/spec.yaml`. (The baked default is already `gemma3:4b`,
-   so most machines need none of this.)
+| role | config key | default | where it runs |
+| --- | --- | --- | --- |
+| fact capture | `memory_watcher_model` | `qwen3.5:9b` (~6.6GB) | HOST, **resident** during `pi-stack serve` (shares the bridge model) |
+| semantic recall | `memory_embed_model` | `nomic-embed-text` | HOST, embeddings |
+| local chat model | `ollama_bridge_model` | `qwen3.5:9b` (~6.6GB) | SANDBOX, loads on demand (Alt+P cycle + the router's local option) |
 
-Whatever tag you set must be `ollama pull`ed on the host or the call 404s. Size
-guide for a tight 16GB box: `gemma3:1b` (~0.8GB, featherweight), `gemma3:4b`
-(~3.3GB, recommended), `gemma3:12b` (bump up here only on a roomier machine).
-DRAM frees itself once nothing invokes the big model — Ollama only loads a model
-when it's called. Free the disk too with `ollama rm <big-tag>` if you want.
+```bash
+pi-stack config set memory_watcher_model qwen3.5:9b   # host watcher (resident)
+pi-stack config set ollama_bridge_model  qwen3.5:9b   # local chat/router model
+make pull-models                                      # pull all three
+```
 
-Knowledge is opt-in. Create a local OKF bundle or attach an existing one, then
-restart the host services:
+How the sandbox picks up `ollama_bridge_model`: `pi-stack run` writes the
+configured tag into `<workspace>/.pi-stack/ollama-bridge.model`, and the
+`ollama-bridge` extension reads it at startup — so a `pi-stack config set` +
+next `pi-stack run` is all it takes. No `/etc/sandbox-persistent.sh` editing, and
+you set ONE value (the display label is derived from the tag; an
+`OLLAMA_BRIDGE_MODEL` env var still overrides for power users, and
+`OLLAMA_BRIDGE_CONTEXT` shrinks the KV cache for less RAM).
+
+Sizing for a 16GB box: the watcher and the bridge default to the SAME model
+(`qwen3.5:9b`), so Ollama keeps one ~6.6GB model resident for both capture and
+local inference instead of paying DRAM for two. On a tight machine, point the
+watcher at something smaller (`pi-stack config set memory_watcher_model
+qwen3.5:4b`); on a roomier one, bump either (`qwen3.5:27b`, `gemma4:12b`, ...).
+Free disk with `ollama rm <tag>`.
+
+Knowledge is opt-in. Create a local OKF bundle or attach an existing one:
 
 ```bash
 pi-stack knowledge init
 # or: pi-stack knowledge use /path/to/okf-bundle
-pi-stack serve
 ```
+
+Both commands wire the config AND propagate it: a managed or lazily-started
+daemon is restarted automatically so the bundle gets indexed; a foreground
+`pi-stack serve` is never killed — you're told to restart it (and if nothing is
+running, the change simply applies on the next start).
 
 Google Workspace is read-only by default. Authorize once on the host, then point
 pi-stack at the account:

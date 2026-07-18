@@ -65,6 +65,10 @@ func main() {
 		runVerb(args[1:])
 	case "status", "st":
 		runStatusCmd(args[1:])
+	case "ls":
+		runLs(args[1:])
+	case "rm":
+		runRm(args[1:])
 	case "version", "--version", "-v":
 		if len(args) > 1 {
 			if args[1] == "-h" || args[1] == "--help" {
@@ -98,7 +102,13 @@ func main() {
 	case "route":
 		runRoute(args[1:])
 	case "evals":
-		runEvals(args[1:])
+		// Catch this explicitly (also shadowing the bare-arg-is-a-dir behavior when
+		// an evals/ dir is present) so a bare `evals` gets a clear message instead
+		// of a confusing "no such directory".
+		fmt.Fprintln(os.Stderr, "pi-stack: evals were removed. Model scores are hand-maintained in")
+		fmt.Fprintln(os.Stderr, "  services/host/routing/defaults/scorecard.json; run `pi-stack route compile`")
+		fmt.Fprintln(os.Stderr, "  after editing.")
+		os.Exit(2)
 	case "agent":
 		runAgent(args[1:])
 	case "man":
@@ -113,6 +123,10 @@ func main() {
 		runState(args[1:])
 	case "task":
 		runTask(args[1:])
+	case "host":
+		// The unsandboxed escape hatch (expert tier, gated off by default): execs
+		// the host-installed pi directly. See hostrun.go + docs/design/host-mode.md.
+		runHost(args[1:])
 	case "help", "-h", "--help":
 		if len(args) > 1 {
 			if args[1] == "--all" {
@@ -215,6 +229,12 @@ func runServe(argv []string) {
 		case "status":
 			runServeStatus(argv[1:])
 			return
+		case "install":
+			runServeInstall(argv[1:])
+			return
+		case "uninstall":
+			runServeUninstall(argv[1:])
+			return
 		}
 	}
 	bin, err := findHostBinary()
@@ -270,6 +290,22 @@ flags:
   --model M        active pi model (passed through to pi)
   --intent NAME    resolve the session model via the router (cost/latency/accuracy);
                    --model overrides it. Intents: pi-stack route show
+  --replace        recreate the sandbox (sbx rm -f, then create) instead of
+                   re-attaching to an existing one; picks up changed --kit/--mcp/
+                   create-only flags
+
+lifecycle (matches sbx's own re-attach model):
+  no sandbox named N          -> create it (the flags above apply).
+  a sandbox named N exists    -> RE-ATTACH to it as-is (running or stopped);
+                                 sbx reads the agent from its own spec, so
+                                 --kit/--mcp/--template, --dev, and the
+                                 create-only skill flags are NOT re-sent (--dev
+                                 is create/replace-only and is ignored, with a
+                                 note, on a plain re-attach). Use --replace to
+                                 recreate with the current flags instead.
+                                 --model/--intent are NOT create-only: they are
+                                 pi runtime args, so they still reach the pi
+                                 session on a re-attach too.
 
 released vs local:
   A RELEASED launcher (clean version like 0.0.16) pins the matching kit tag
@@ -290,6 +326,7 @@ New here?   pi-stack setup      one-time guided setup (a few minutes, resumable)
 
 Workflow
   run [DIR]        launch the sandbox in DIR (default: .). This is the main one.
+  ls               list your pi-stack sandboxes;  rm <name>  removes one
   serve            start the host services (memory, knowledge); ` + "`serve stop|status`" + `
   status           what is up, what is down, what is next   (also the bare command)
 
@@ -304,7 +341,6 @@ Data
 Models & agents
   agent            manage subagents: ls | new | edit | rm | reassess
   route            model router: pick | compile | show | models
-  evals            accuracy eval harness: run | import | show | ls
 
 More
   config, mcp, state, version, man     (see ` + "`pi-stack help --all`" + `)

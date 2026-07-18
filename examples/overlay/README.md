@@ -13,10 +13,11 @@ cd ../my-overlay && git init              # your own private repo
 # kit/files/.../capabilities.json, and put host plugins in host/overlay_*.go
 ```
 
-Then point pi-stack at it once, in `pi-stack/config/local.mk`:
+pi-stack looks for the overlay at `../pi-stack-work` by default. If yours lives
+elsewhere, pass `OVERLAY` to make (or export it in your shell):
 
-```makefile
-OVERLAY = ../my-overlay
+```bash
+make run OVERLAY=../my-overlay
 ```
 
 `make run` stacks `kit/` automatically; `make serve` symlinks `host/overlay_*.go`

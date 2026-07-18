@@ -63,6 +63,45 @@ func TestManPageDocumentsEveryKnownVerb(t *testing.T) {
 	}
 }
 
+// configKeysFromHelp parses the canonical settable key names out of the CLI's own
+// configKeysHelp constant (the single source of truth the `config set/get/unset`
+// help prints). Key lines are indented exactly two spaces followed by the key
+// token; wrapped description lines are indented further, so they are ignored.
+func configKeysFromHelp(t *testing.T) []string {
+	t.Helper()
+	re := regexp.MustCompile(`(?m)^  ([a-z][a-z_.]+) `)
+	seen := map[string]bool{}
+	var keys []string
+	for _, m := range re.FindAllStringSubmatch(configKeysHelp, -1) {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			keys = append(keys, m[1])
+		}
+	}
+	if len(keys) == 0 {
+		t.Fatal("no keys parsed from configKeysHelp")
+	}
+	return keys
+}
+
+// TestManPageDocumentsEveryConfigKey is the config-key anti-drift guardrail, the
+// sibling of the verb check: every key the CLI's own help advertises MUST appear
+// in the embedded man page. This is exactly the gap that let ollama_bridge_model
+// and host.* drift out of the man page while the CLI help stayed complete.
+func TestManPageDocumentsEveryConfigKey(t *testing.T) {
+	page := string(manPage)
+	var missing []string
+	for _, k := range configKeysFromHelp(t) {
+		if !strings.Contains(page, k) {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		t.Errorf("config keys in the CLI help but NOT in the man page (document them in the .SS config section): %v", missing)
+	}
+}
+
 // TestManPageEmbedded proves the roff source is compiled into the binary (the
 // go:embed target is in-package) and is non-trivial.
 func TestManPageEmbedded(t *testing.T) {
@@ -154,5 +193,49 @@ func TestExtractManFlag(t *testing.T) {
 		if strings.Join(rest, "\x00") != strings.Join(c.wantRest, "\x00") {
 			t.Errorf("extractManFlag(%v) rest = %v, want %v", c.argv, rest, c.wantRest)
 		}
+	}
+}
+
+// serveSubverbsFromUsage parses the subverb names out of serveUsage's
+// `subcommands:` block (two-space-indented leading token), the same
+// single-source-of-truth pattern configKeysFromHelp uses.
+func serveSubverbsFromUsage(t *testing.T) []string {
+	t.Helper()
+	block := serveUsage
+	if i := strings.Index(block, "subcommands:"); i >= 0 {
+		block = block[i:]
+	}
+	re := regexp.MustCompile(`(?m)^  ([a-z]+) `)
+	seen := map[string]bool{}
+	var subs []string
+	for _, m := range re.FindAllStringSubmatch(block, -1) {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			subs = append(subs, m[1])
+		}
+	}
+	if len(subs) == 0 {
+		t.Fatal("no subverbs parsed from serveUsage")
+	}
+	return subs
+}
+
+// TestManPageDocumentsServeSubverbs is the SUBVERB anti-drift guardrail (M3),
+// the sibling of TestManPageDocumentsEveryConfigKey: the verb-level check only
+// guards `pi-stack serve`, so `serve install`/`serve uninstall` could silently
+// drift out of the man page while the CLI help stayed complete. Every subverb
+// the CLI's own serveUsage advertises MUST appear in the man page as an
+// invocable `pi-stack serve <sub>` form.
+func TestManPageDocumentsServeSubverbs(t *testing.T) {
+	page := string(manPage)
+	var missing []string
+	for _, sub := range serveSubverbsFromUsage(t) {
+		if !strings.Contains(page, "pi-stack serve "+sub) {
+			missing = append(missing, sub)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		t.Errorf("serve subverbs in the CLI help but NOT in the man page (add `pi-stack serve <sub>` entries): %v", missing)
 	}
 }

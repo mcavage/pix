@@ -45,6 +45,24 @@ When you print structured data to the TUI, prefer bold-label lines or bullet lis
 the terminal renderer may not render markdown tables. Example:
 `**Name:** Alice  **Role:** PM  **Status:** green`
 
+## Docs travel with code
+A change to a user-facing surface and the docs that describe it are ONE change,
+never two. When you add or rename a CLI verb/flag, a config key, an env var, a
+default, a public API, or a skill/agent's triggers, update the docs that describe
+it in the SAME commit: man page, `--help`/usage text, README, `AGENTS.md`,
+CHANGELOG, and any frontmatter `description`. Grep the changed identifier across
+the whole doc set and reconcile every hit before you commit.
+
+Vigilance is not a mechanism. Where a surface is ENUMERABLE (a verb table, a
+config-key list, a set of env vars), back it with an **anti-drift test** that
+fails when code and docs diverge, so the next person can't forget. The canonical
+pattern: pi-stack's `services/host/cmd/pi-stack/man_test.go` parses the man page
+and asserts it documents every entry in `knownVerbs` AND every key the CLI's own
+help lists, failing CI on any gap. If you fix doc drift by hand and no such test
+exists for that surface, add one as part of the fix, that is what stops it
+recurring. Prefer generating docs from the source of truth over asserting they
+match; assert only when generation is impractical.
+
 ## Secrets
 Secret injection exports keys as environment variables for the whole process tree,
 so a subagent with bash can read any key via `env`. The tool-permission model does

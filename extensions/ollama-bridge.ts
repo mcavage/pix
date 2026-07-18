@@ -22,22 +22,57 @@
 // (LM Studio, vLLM).
 
 import { createServer, request } from "node:http";
+import { readFileSync } from "node:fs";
+
+// The bridge model is configured on the HOST (`pi-stack config set
+// ollama_bridge_model <tag>`); `pi-stack run` writes the resolved value into
+// <workspace>/.pi-stack/ollama-bridge.model, and pi runs with the workspace as
+// cwd, so we read it here — the same host-writes-file / VM-reads-file seam the
+// profile + knowledge-scope files use. This is why you do NOT hand-edit sandbox
+// env: set it once with `pi-stack config set` and every `pi-stack run` picks it
+// up. A literal OLLAMA_BRIDGE_MODEL env var still wins (power-user override).
+function bridgeModelFromWorkspace(): string | undefined {
+	try {
+		const raw = readFileSync(".pi-stack/ollama-bridge.model", "utf8").trim();
+		return raw || undefined;
+	} catch {
+		return undefined; // absent (e.g. `make run` / consumer `sbx run`) -> use the default
+	}
+}
 
 const LISTEN_PORT = Number(process.env.OLLAMA_BRIDGE_PORT ?? 11434);
 const HOST = process.env.OLLAMA_BRIDGE_HOST ?? "host.docker.internal";
 const HOST_PORT = Number(process.env.OLLAMA_BRIDGE_HOST_PORT ?? 11434);
 
+// HOST MODE (pi-stack host, docs/design/host-mode.md): the Go launcher sets
+// OLLAMA_HOSTMODE=1 + OLLAMA_URL. There the bridge's whole reason to exist —
+// dodge the sbx proxy by listening on localhost and forwarding to
+// host.docker.internal — is moot (there is no proxy, no VM). Worse, starting
+// the reverse proxy here would SELF-LOOP: it would listen on
+// 127.0.0.1:11434 and forward to the same host:port, so if real ollama is
+// absent the bridge binds successfully and recursively proxies to itself
+// until exhaustion. So in host mode we skip the listener entirely and just
+// register the provider straight at OLLAMA_URL (default the real local
+// ollama). Sandbox behavior (HOSTMODE unset) is completely unchanged below.
+const HOST_MODE = process.env.OLLAMA_HOSTMODE === "1";
+const HOST_MODE_URL = process.env.OLLAMA_URL ?? "http://127.0.0.1:11434/v1";
+
 // Which local model to expose in the cycle. It MUST match a tag pulled on the
-// HOST (`ollama pull <tag>`), or the call 404s. The default is small on purpose:
-// this is a personal harness that runs on a 16GB laptop, and a 26-31B model
-// blows DRAM (Ollama keeps a model resident once invoked). Override any of these
-// via env (e.g. in the sandbox's /etc/sandbox-persistent.sh) to pick a bigger
-// model on a roomier machine — no code edit needed:
-//   OLLAMA_BRIDGE_MODEL, OLLAMA_BRIDGE_MODEL_NAME, OLLAMA_BRIDGE_CONTEXT.
-// contextWindow is what pi will fill; a smaller window means a smaller KV cache
-// on the host, which is the other half of the DRAM story after model size.
-const MODEL_ID = process.env.OLLAMA_BRIDGE_MODEL ?? "gemma3:4b";
-const MODEL_NAME = process.env.OLLAMA_BRIDGE_MODEL_NAME ?? "Gemma 3 4B (local)";
+// HOST (`ollama pull <tag>`), or the call 404s. Default: qwen3.5:9b — the current
+// all-rounder that still fits a 16GB box (loads on demand, not resident). This is
+// the SAME id the router registers as its local option (models.json), so routing
+// to local and the interactive cycle agree. Override via env (e.g. in the
+// sandbox's /etc/sandbox-persistent.sh) for a bigger/smaller model — no code edit:
+//   OLLAMA_BRIDGE_MODEL, OLLAMA_BRIDGE_CONTEXT (and OLLAMA_BRIDGE_MODEL_NAME to
+// override the auto-derived display label). contextWindow is what pi will fill; a
+// smaller window means a smaller KV cache on the host, the other half of the DRAM
+// story after model size.
+const MODEL_ID =
+	process.env.OLLAMA_BRIDGE_MODEL ?? bridgeModelFromWorkspace() ?? "qwen3.5:9b";
+// The display label is cosmetic; derive it from the tag so you only ever set ONE
+// var (OLLAMA_BRIDGE_MODEL). OLLAMA_BRIDGE_MODEL_NAME still overrides if you care.
+const MODEL_NAME =
+	process.env.OLLAMA_BRIDGE_MODEL_NAME ?? `${MODEL_ID} (local)`;
 // posInt: a positive finite integer or the fallback — so OLLAMA_BRIDGE_CONTEXT="",
 // "0", or "32k" can't feed NaN/0 into the provider metadata (which would break
 // context accounting + compaction).
@@ -48,11 +83,13 @@ function posInt(v: string | undefined, fallback: number): number {
 const MODEL_CTX = posInt(process.env.OLLAMA_BRIDGE_CONTEXT, 32768);
 
 export default async function (pi: any): Promise<void> {
-	// 1) Register the provider + model up front (no endpoint probe).
+	// 1) Register the provider + model up front (no endpoint probe). In host
+	// mode point baseUrl straight at the real ollama (OLLAMA_URL); in the
+	// sandbox keep pointing at our own localhost listener (started below).
 	try {
 		pi.registerProvider("ollama", {
 			name: "Ollama (local)",
-			baseUrl: `http://localhost:${LISTEN_PORT}/v1`,
+			baseUrl: HOST_MODE ? HOST_MODE_URL : `http://localhost:${LISTEN_PORT}/v1`,
 			api: "openai-completions",
 			apiKey: "ollama", // placeholder; Ollama ignores it, but pi wants auth present
 			models: [
@@ -71,7 +108,12 @@ export default async function (pi: any): Promise<void> {
 		/* best-effort; must not break the agent */
 	}
 
-	// 2) Start the localhost -> host bridge for the actual calls.
+	// HOST MODE: no reverse proxy to start (see the OLLAMA_HOSTMODE comment
+	// above) — the provider above already points straight at OLLAMA_URL, so we
+	// return here without binding anything.
+	if (HOST_MODE) return;
+
+	// 2) Start the localhost -> host bridge for the actual calls (sandbox only).
 	try {
 		const server = createServer((req, res) => {
 			const upstream = request(

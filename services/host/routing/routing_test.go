@@ -66,6 +66,49 @@ func TestEmbeddedDefaultsLoad(t *testing.T) {
 	}
 }
 
+func TestEmbeddedFastBalancedRoutesToFlash(t *testing.T) {
+	// fast-balanced exists to give a fast, mid-accuracy model a home: a sub-10s
+	// latency cap (drops Pro/Sol/Terra/Sonnet) above a 0.65 accuracy floor (drops
+	// Flash-Lite). It must resolve to gemini-3.5-flash; if a scorecard/price edit
+	// silently moves it, that is a routing regression worth catching here.
+	t.Setenv("ROUTING_DIR", t.TempDir()) // force embedded defaults
+	reg, sc, pol := mustLoadAll(t)
+	var intent *Intent
+	for i := range pol.Intents {
+		if pol.Intents[i].Name == "fast-balanced" {
+			intent = &pol.Intents[i]
+		}
+	}
+	if intent == nil {
+		t.Fatal("fast-balanced intent missing from embedded policy")
+	}
+	d := Resolve(reg, sc, pol, *intent)
+	if !d.ConstraintsMet {
+		t.Fatalf("fast-balanced fell back (%s): %s", d.Model, d.Reason)
+	}
+	if d.Model != "google/gemini-3.5-flash" {
+		t.Fatalf("fast-balanced = %q, want google/gemini-3.5-flash (%s)", d.Model, d.Reason)
+	}
+}
+
+// mustLoadAll loads the three embedded truth sources for a test or fails.
+func mustLoadAll(t *testing.T) (*Registry, *Scorecard, *Policy) {
+	t.Helper()
+	reg, err := LoadRegistry()
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	sc, err := LoadScorecard()
+	if err != nil {
+		t.Fatalf("scorecard: %v", err)
+	}
+	pol, err := LoadPolicy()
+	if err != nil {
+		t.Fatalf("policy: %v", err)
+	}
+	return reg, sc, pol
+}
+
 func TestCostFor(t *testing.T) {
 	m := Model{InputPerMTok: 15, OutputPerMTok: 75}
 	got := m.CostFor(1_000_000, 1_000_000)

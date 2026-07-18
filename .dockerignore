@@ -51,6 +51,7 @@ skills/*
 !skills/ingest
 !skills/debug
 !skills/microcopy
+!skills/model-refresh
 !skills/promote
 !skills/qa
 !skills/peer-review
@@ -59,7 +60,7 @@ skills/*
 !skills/tdd
 !skills/plan
 !skills/verify
-!skills/write-like-mark
+!skills/writing-voice
 !skills/one-pager
 
 # --- Open-core boundary: agents (personas) -------------------------------------

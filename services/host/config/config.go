@@ -19,10 +19,18 @@ import (
 
 // Defaults applied when a config file is absent or a field is unset.
 const (
-	// Small on purpose: the watcher runs resident on the host during `serve`, so a
-	// 26-31B model OOMs a 16GB laptop. Bump via `pi-stack config set`.
-	DefaultMemoryWatcherModel = "gemma3:4b"
+	// Defaults to the SAME model as the ollama-bridge (qwen3.5:9b) so Ollama keeps
+	// ONE local model resident for both fact capture and the sandbox's local chat/
+	// router option, instead of paying DRAM for a second watcher-only model. On a
+	// tight machine, point it at something smaller via `pi-stack config set
+	// memory_watcher_model <model>`.
+	DefaultMemoryWatcherModel = "qwen3.5:9b"
 	DefaultMemoryEmbedModel   = "nomic-embed-text"
+	// DefaultOllamaBridgeModel is the local model the sandbox's ollama-bridge
+	// exposes to pi (the interactive Alt+P cycle) AND the router's local option.
+	// It loads on demand (not resident), so it can be bigger than the watcher;
+	// qwen3.5:9b (~6.6GB) is the current all-rounder that still fits a 16GB box.
+	DefaultOllamaBridgeModel = "qwen3.5:9b"
 	// BuiltinImpl is the default plugin impl: compiled into the host binary
 	// rather than run as an external sub-process.
 	BuiltinImpl = "builtin"
@@ -69,11 +77,50 @@ type Profile struct {
 	} `toml:"kits,omitempty"`
 }
 
+// HostMode gates `pi-stack host` — running pi DIRECTLY on this machine with
+// no sandbox, no network fence, and real credentials. Enabled is default-OFF
+// on purpose: the friction of `pi-stack config set host.enabled true` is the
+// deliberate opt-in (see docs/design/host-mode.md). Autonomy is RESERVED for a
+// future knob on the host-guard extension's strictness; Phase 1 stores it but
+// nothing reads it yet.
+type HostMode struct {
+	Enabled  bool   `toml:"enabled"`
+	Autonomy string `toml:"autonomy,omitempty"`
+	// Autoserve gates the launcher's LAZY AUTO-START of `pi-stack-host serve`
+	// (docs/design/serve-lifecycle.md §1). nil = default TRUE (auto-start on).
+	// A pointer so "unset" (inherit the default, follow future default changes)
+	// is distinguishable from an explicit `false`. The PI_STACK_NO_AUTOSERVE env
+	// var wins over this flag.
+	Autoserve *bool `toml:"autoserve,omitempty"`
+}
+
+// AutoserveEnabled reports whether lazy auto-start is enabled (default true).
+func (c *Config) AutoserveEnabled() bool {
+	return c.Host.Autoserve == nil || *c.Host.Autoserve
+}
+
 // Config is the pi-stack configuration, decoded from TOML.
 type Config struct {
-	VersionPin string   `toml:"version_pin"`
-	Services   []string `toml:"services"`
-	MCP        []string `toml:"mcp"`
+	VersionPin string `toml:"version_pin"`
+
+	// Services is the RESOLVED runtime service set every consumer reads
+	// (serve, ensureServe, doctor, …). It is never (de)serialized directly:
+	// ServicesRaw below is the TOML-facing tri-state field, and applyDefaults /
+	// sparseForSave translate between the two. Services has a NON-EMPTY default
+	// (DefaultServices), so unlike mcp/knowledge_bundles a plain `[]string` with
+	// omitempty cannot distinguish "unset → default" from "explicitly empty →
+	// stays empty": `config unset services memory` used to report [] but reload
+	// silently restored ["memory"], losing intent and triggering a spurious
+	// daemon restart (H2). The pointer carries the missing presence bit, the
+	// same trick the per-profile slices use.
+	Services []string `toml:"-"`
+	// ServicesRaw is the TOML image of Services: nil = the key was ABSENT from
+	// the file (resolve to DefaultServices); non-nil — even pointing at an empty
+	// slice — = the key was PRESENT and is authoritative (`services = []` stays
+	// empty). Do not read it outside applyDefaults/sparseForSave; read Services.
+	ServicesRaw *[]string `toml:"services,omitempty"`
+
+	MCP []string `toml:"mcp,omitempty"`
 
 	// ActiveProfile is the profile used when no --profile flag / PI_STACK_PROFILE
 	// env is given. Empty means the base config (the implicit "default" profile).
@@ -81,20 +128,20 @@ type Config struct {
 	// Profiles are named override sets layered onto the base config by Resolve.
 	Profiles map[string]Profile `toml:"profiles"`
 
-	MemoryWatcherModel string `toml:"memory_watcher_model"`
-	MemoryEmbedModel   string `toml:"memory_embed_model"`
+	MemoryWatcherModel string `toml:"memory_watcher_model,omitempty"`
+	MemoryEmbedModel   string `toml:"memory_embed_model,omitempty"`
+	OllamaBridgeModel  string `toml:"ollama_bridge_model,omitempty"`
 
 	// GogAccount is the Google Workspace account the gog host-MCP server serves.
-	// It is the Go-side source of truth doctor probes against; it MUST match the
-	// GOG_ACCOUNT in config/local.mk that `make mcp-register` registers with the
-	// gateway (the make path can't see this file, so the two must be kept in sync).
-	// doctor falls back to the GOG_ACCOUNT env var when this is empty.
+	// It is THE source of truth: doctor probes against it, and `make mcp-register`
+	// sources it via `pi-stack config get gog_account` when registering with the
+	// gateway. doctor falls back to the GOG_ACCOUNT env var when this is empty.
 	GogAccount string `toml:"gog_account"`
 
 	// KnowledgeBundles are the git-mounted OKF bundle directory path(s) the
 	// knowledge service (:11436) indexes at startup. Empty (the default) means no
 	// bundles — the index is served empty and the service degrades cleanly.
-	KnowledgeBundles []string `toml:"knowledge_bundles"`
+	KnowledgeBundles []string `toml:"knowledge_bundles,omitempty"`
 
 	Kits struct {
 		Stack []string `toml:"stack"`
@@ -105,6 +152,10 @@ type Config struct {
 	} `toml:"skills"`
 
 	Plugins map[string]PluginSpec `toml:"plugins"`
+
+	// Host gates + configures `pi-stack host` (the unsandboxed escape hatch).
+	// GLOBAL, never per-profile: leaving the sandbox is a machine-level decision.
+	Host HostMode `toml:"host,omitempty"`
 }
 
 // configDir resolves the directory that holds config.toml and the broker token.
@@ -153,6 +204,61 @@ func ServePidPath() string {
 	return filepath.Join(dir, "serve.pid")
 }
 
+// ServeSpawnLockPath is the flock file the launcher's lazy auto-start takes
+// around its spawn decision (double-checked locking against a concurrent
+// `pi-stack run`). A sibling of config.toml, like the pidfile.
+func ServeSpawnLockPath() string {
+	dir, err := configDir()
+	if err != nil {
+		return "serve.spawn.lock"
+	}
+	return filepath.Join(dir, "serve.spawn.lock")
+}
+
+// ServeLazyMarkerPath is the marker file the launcher writes after a successful
+// LAZY detached spawn of `pi-stack-host serve`, so config propagation can tell
+// a lazy daemon (safe to stop-and-restart) from a FOREGROUND one the user is
+// watching (never killed, only advised). Cleared by `serve stop` and by the
+// daemon's graceful shutdown; a stale marker is harmless because mode detection
+// also requires a live, verified-ours pidfile.
+func ServeLazyMarkerPath() string {
+	dir, err := configDir()
+	if err != nil {
+		return "serve.lazy"
+	}
+	return filepath.Join(dir, "serve.lazy")
+}
+
+// StateDir resolves the per-user state dir: $XDG_STATE_HOME/pi-stack, else
+// ~/.local/state/pi-stack. Used for logs (NOT config): serve.log lives here on
+// BOTH macOS and Linux, and every launch mode writes to it — the lazy
+// auto-start, the managed launchd LaunchAgent (StandardOutPath/
+// StandardErrorPath), and the managed systemd --user unit (StandardOutput=/
+// StandardError=append:) all point at the SAME file (ServeLogPath()), so
+// there is exactly one place to look regardless of how serve was started.
+// Only a FOREGROUND `pi-stack serve` is different — that one is interactive
+// and goes to its own terminal, not this file.
+func StateDir() (string, error) {
+	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+		return filepath.Join(xdg, "pi-stack"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "state", "pi-stack"), nil
+}
+
+// ServeLogPath is <state-dir>/serve.log — where a lazily auto-started
+// `pi-stack-host serve` writes its stdout/stderr.
+func ServeLogPath() string {
+	dir, err := StateDir()
+	if err != nil {
+		return "serve.log"
+	}
+	return filepath.Join(dir, "serve.log")
+}
+
 // MemoryDBPath resolves the live memory sqlite path: $MEMORY_DB if set, else
 // ~/.pi-stack/memory/memory.db. Shared by the daemon and `restore` so both point
 // at the SAME store (and the SAME lock dir, below).
@@ -180,20 +286,38 @@ var removedServices = map[string]bool{"gws": true, "gws-token": true}
 
 // defaults returns a Config with the sane defaults applied to any unset field.
 func (c *Config) applyDefaults() {
-	if len(c.Services) > 0 {
-		kept := c.Services[:0]
-		for _, s := range c.Services {
-			if !removedServices[s] {
-				kept = append(kept, s)
+	// services is TRI-STATE (see the ServicesRaw field doc): absent key →
+	// DefaultServices; present key (even `services = []`) → authoritative.
+	if c.ServicesRaw != nil {
+		kept := make([]string, 0, len(*c.ServicesRaw))
+		dropped := false
+		for _, s := range *c.ServicesRaw {
+			if removedServices[s] {
+				dropped = true
+				continue
 			}
+			kept = append(kept, s)
 		}
 		c.Services = kept
-	}
-	if len(c.Services) == 0 {
+		// A list that became empty ONLY because every entry was a removed service
+		// (a stale `services = ["gws"]`) falls back to defaults — that user never
+		// chose an empty set. A file-explicit `services = []` (nothing dropped)
+		// stays empty: that IS the user's intent.
+		if len(c.Services) == 0 && dropped {
+			c.Services = append([]string(nil), DefaultServices...)
+		}
+	} else if len(c.Services) == 0 {
 		c.Services = append([]string(nil), DefaultServices...)
 	}
+	// Keep the TOML image aliased to the resolved field so `config show`'s
+	// whole-struct encode still prints a services line. Save never trusts this
+	// alias — sparseForSave recomputes it from Services.
+	c.ServicesRaw = &c.Services
 	if c.MemoryWatcherModel == "" {
 		c.MemoryWatcherModel = DefaultMemoryWatcherModel
+	}
+	if c.OllamaBridgeModel == "" {
+		c.OllamaBridgeModel = DefaultOllamaBridgeModel
 	}
 	if c.MemoryEmbedModel == "" {
 		c.MemoryEmbedModel = DefaultMemoryEmbedModel
@@ -332,13 +456,14 @@ services = ["memory"]
 mcp = []
 
 # Local Ollama models the memory service uses.
-memory_watcher_model = "gemma3:4b"
+memory_watcher_model = "qwen3.5:9b"
 memory_embed_model = "nomic-embed-text"
+ollama_bridge_model = "qwen3.5:9b"
 
-# Google Workspace account the gog host-MCP server serves. This is the Go-side
-# source of truth pi-stack doctor probes against, and it MUST match the
-# GOG_ACCOUNT in config/local.mk that make mcp-register registers with the
-# gateway. Empty falls back to the GOG_ACCOUNT env var.
+# Google Workspace account the gog host-MCP server serves. This is the single
+# source of truth: pi-stack doctor probes against it, and make mcp-register
+# sources it via pi-stack config get gog_account. Empty falls back to the
+# GOG_ACCOUNT env var.
 gog_account = ""
 
 # OKF knowledge bundle directories the knowledge service (:11436) indexes.
@@ -382,16 +507,86 @@ paths = []
 // The file is machine-managed (0600, dir 0700); the commented template Seed
 // writes is only a first-touch convenience, so losing comments on a rewrite is
 // acceptable.
+//
+// Save persists ONLY explicit deviations from the defaults, never resolved
+// defaults. Load()/applyDefaults fills every unset defaultable field in MEMORY
+// (so cfg.MemoryWatcherModel etc. stay populated for every reader), and a naive
+// whole-struct encode would then FREEZE the then-current defaults into the file
+// on the first `config set <anything>` — permanently pinning the user to (say)
+// a stale memory_watcher_model they never chose, defeating every future default
+// change. sparseForSave resets each defaultable field that still equals its
+// current default back to the zero value, and the `,omitempty` toml tags drop
+// it from the file, so an untouched default re-resolves on every Load.
+//
+// Tradeoff (deliberate): a value the user sets EQUAL to the current default is
+// indistinguishable from an untouched one, so it is omitted and will re-resolve
+// to whatever the default is THEN — the user cannot pin against a future
+// default change by setting today's default explicitly. Acceptable: the value
+// is identical until the default moves, and pinning-the-default is a far rarer
+// intent than the petrification bug this prevents.
 func (c *Config) Save() error {
 	path := Path()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(c); err != nil {
+	if err := toml.NewEncoder(&buf).Encode(c.sparseForSave()); err != nil {
 		return err
 	}
 	return os.WriteFile(path, buf.Bytes(), 0o600)
+}
+
+// sparseForSave returns a shallow copy with every defaultable field that equals
+// its current default reset to the zero value, so Save (via `,omitempty`)
+// writes only explicit deviations. mcp and knowledge_bundles default to EMPTY,
+// so plain omitempty already covers them; services must be compared against
+// DefaultServices, and the model strings against their Default consts. The
+// receiver is never mutated — callers keep reading resolved values.
+func (c *Config) sparseForSave() *Config {
+	sp := *c
+	// services: an untouched default is omitted (nil raw); ANY deviation —
+	// including an explicitly-empty list — is serialized. The toml encoder
+	// writes a non-nil pointer to an empty slice as `services = []`, which
+	// Load reads back as present-empty (stays empty), closing the
+	// remove-last-service round-trip hole (H2).
+	if stringSlicesEqual(sp.Services, DefaultServices) {
+		sp.ServicesRaw = nil
+	} else {
+		// make (not append-to-nil): a pointer to a NIL slice is dropped by the
+		// encoder's omitempty, but a pointer to an allocated EMPTY slice encodes
+		// as `services = []` — exactly the presence bit we need.
+		explicit := make([]string, len(sp.Services))
+		copy(explicit, sp.Services)
+		sp.ServicesRaw = &explicit
+	}
+	if sp.MemoryWatcherModel == DefaultMemoryWatcherModel {
+		sp.MemoryWatcherModel = ""
+	}
+	if sp.MemoryEmbedModel == DefaultMemoryEmbedModel {
+		sp.MemoryEmbedModel = ""
+	}
+	if sp.OllamaBridgeModel == DefaultOllamaBridgeModel {
+		sp.OllamaBridgeModel = ""
+	}
+	// applyDefaults allocates an empty Plugins map (and fills Impl=builtin) so
+	// readers never nil-check; don't petrify that resolution either.
+	if len(sp.Plugins) == 0 {
+		sp.Plugins = nil
+	}
+	return &sp
+}
+
+// stringSlicesEqual reports element-wise equality (order-sensitive).
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // SetGogAccount sets the Google Workspace account (trimmed). An empty value
@@ -629,6 +824,19 @@ func OpRefsPath() string {
 		return "op-refs.env"
 	}
 	return filepath.Join(dir, "op-refs.env")
+}
+
+// HostRefsPath resolves the absolute XDG path of hostmode.env — the OPTIONAL
+// 1Password refs file `pi-stack host` resolves via `op run --env-file` for
+// host-mode provider keys (e.g. ANTHROPIC_API_KEY=op://vault/item/field). Same
+// mental model as op-refs.env: refs only, never a value on disk. Absent file =
+// Ollama-only host mode (valid, no cloud key).
+func HostRefsPath() string {
+	dir, err := configDir()
+	if err != nil {
+		return "hostmode.env"
+	}
+	return filepath.Join(dir, "hostmode.env")
 }
 
 // OpRefsMentalModel is the ≤4-line plain explanation of what op-refs.env is and

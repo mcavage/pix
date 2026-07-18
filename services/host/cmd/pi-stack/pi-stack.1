@@ -134,6 +134,25 @@ registration, the active profile, and running
 sandboxes.  The
 .B \-\-json
 option emits the snapshot as JSON.  This is also the no-command action.
+.SS ls
+.TP
+.BR "pi-stack ls" " [" \-\-json "]"
+List the
+.B pi-stack-*
+sandboxes on this host (name, state, workspace dir).  For every sbx sandbox, use
+.BR "sbx ls" .
+.SS rm
+.TP
+.BR "pi-stack rm" " " name... " [" \-\-all "] [" \-\-except " " name "]"
+Remove pi-stack sandboxes (via
+.BR "sbx rm \-f" ).
+Scoped to
+.B pi-stack-*
+names.
+.B \-\-all
+removes every pi-stack sandbox;
+.B \-\-except
+keeps one (e.g. the box you are in).
 .SS setup
 .TP
 .BR "pi-stack setup" " [" \-\-account " " email "] [" \-\-knowledge " " path-or-url "] [" \-\-yes "|" \-y "|" \-\-non-interactive "]"
@@ -157,7 +176,7 @@ Check provider keys, Ollama and its configured models, memory, Google Workspace,
 emits a machine-readable report.
 .SS run
 .TP
-.BR "pi-stack run" " [" DIR "] [" \-\-dev "] [" \-\-skills " " DIR "]... [" \-\-kit " " K "]... [" \-\-mcp " " M "]... [" \-\-name " " N "] [" \-\-model " " M "] [" \-\- " " pi-args... "]"
+.BR "pi-stack run" " [" DIR "] [" \-\-dev "] [" \-\-skills " " DIR "]... [" \-\-kit " " K "]... [" \-\-mcp " " M "]... [" \-\-name " " N "] [" \-\-model " " M "] [" \-\-replace "] [" \-\- " " pi-args... "]"
 Launch a sandbox for
 .IR DIR ,
 which defaults to the current directory.  An explicit directory must exist.
@@ -165,24 +184,46 @@ Arguments after
 .B \-\-
 are passed to
 .BR pi .
+.PP
+Lifecycle matches sbx's own re-attach model.  When no sandbox of the resolved
+name exists, it is created and the flags below apply.  When one already
+exists — running
+.B or
+stopped —
+.B run
+RE-ATTACHES to it as-is instead of refusing or recreating: sbx reads the agent
+from the existing sandbox's own spec, so
+.BR \-\-kit ,
+.BR \-\-mcp ,
+.BR \-\-template ,
+and the create-only skill flags are not re-sent.  Use
+.B \-\-replace
+to force a recreate instead.
 .TP
 .B \-\-dev
 Use the local checkout kit and load its skills live.  A checkout must be found
 through
 .BR PI_STACK_DEV_ROOT ,
 the current directory or an ancestor, or the launcher's installed location.
+Applies only to a fresh create; use
+.B \-\-replace
+to pick it up on an existing sandbox.
 .TP
 .BI \-\-skills " DIR"
-Mount and load an additional skill tree.  Repeatable.
+Mount and load an additional skill tree.  Repeatable.  Create-only; see
+.BR \-\-replace .
 .TP
 .BI \-\-kit " K"
 Replace automatic kit selection with a path or git URL.  Repeatable.
+Create-only; see
+.BR \-\-replace .
 .TP
 .BI \-\-mcp " M"
 Attach an MCP server when creating the sandbox.  Repeatable; attachment is used
 only when
 .B SBX_MCP_URL
-is set.
+is set.  Create-only; see
+.BR \-\-replace .
 .TP
 .BI \-\-name " N"
 Use
@@ -196,7 +237,71 @@ Pass
 .I M
 to
 .B pi
-as its active model.
+as its active model.  Unlike the other flags above, this is
+.B not
+create-only: it is a pi runtime argument, so it still reaches
+.B pi
+on a re-attach too.
+.TP
+.B \-\-replace
+Recreate the sandbox (
+.B sbx rm \-f
+then create) instead of re-attaching to an existing one, whether it is running
+or stopped.  This is the way to pick up a changed
+.BR \-\-kit / \-\-mcp /
+create-only flag.
+.SS host
+.TP
+.BR "pi-stack host" " [" DIR "] [" \-\-model " " M "] [" \-\- " " pi-args... "]"
+EXPERT, DANGEROUS.  Run
+.B pi
+directly on this machine \(em no sandbox, no network fence, real credentials.
+A narrow escape hatch for developing pi-stack itself (which needs the host's
+Docker, sbx, and make); never a fallback when
+.B sbx
+is missing.  Gated off by default: enable deliberately with
+.BR "pi-stack config set host.enabled true" .
+The launch refuses a workspace at
+.BR $HOME ,
+.BR / ,
+or
+.BR /etc ,
+or one inside or containing SSH/cloud/password-store secret directories
+(symlinks are resolved before the check).  Subagent spawning is disabled, a
+host-guard extension is always loaded, and a host-specific system preamble
+replaces the sandbox's disposable-VM context.  These are guardrails against
+accidents,
+.B not
+a security boundary \(em for anything you wouldn't hand a shell to, use
+.BR "pi-stack run" .
+Cloud keys come from op:// refs in
+.B hostmode.env
+next to config.toml, resolved just-in-time by
+.BR "op run" ;
+without that file the session is Ollama-only (valid).
+.TP
+.B "pi-stack host setup"
+Provision the host agent directory at
+.B $XDG_STATE_HOME/pi-stack/host-agent
+(default
+.BR ~/.local/state/pi-stack/host-agent ):
+symlinks the checkout's harness dirs (skills, agents, extensions, themes), a
+host-specific
+.BR settings.json ,
+a
+.B sessions/
+directory, and the curated pi extension packages (printing the exact install
+commands when
+.B pi
+is unavailable).
+.TP
+Naming: this verb
+.RB ( "pi-stack host" ,
+the agent running ON the host) is distinct from
+.B pi-stack-host
+(the compiled Go daemon binary) and from
+.B "pi-stack serve"
+(which runs the host services memory/knowledge).  Three names, three things.
 .SS serve
 .TP
 .BR "pi-stack serve" " [" args... "]"
@@ -218,6 +323,68 @@ Extra arguments are rejected.
 Report the supervisor PID and memory and knowledge port state.
 .B \-\-json
 emits JSON.
+.TP
+.B "pi-stack serve install"
+Install the services as a MANAGED login service: a launchd LaunchAgent
+.RB ( com.pi-stack.serve )
+on macOS, a systemd \-\-user unit
+.RB ( pi-stack-serve.service )
+on Linux.  Starts at login, auto-restarts, and starts immediately.  Logs go to
+.I ~/.local/state/pi-stack/serve.log
+on both macOS and Linux \(em the SAME file the lazy auto-start uses, so there
+is one place to look regardless of how serve was started (on Linux,
+.RI ( "journalctl \-\-user \-u pi-stack-serve" )
+also works as a secondary view).  Idempotent; re-running reinstalls with the current binary path.
+Before installing, a lazily-started background daemon is stopped first and a
+FOREGROUND
+.B pi-stack serve
+is refused (stop it and re-run) \(em installing over a live daemon would make
+the auto-restarting unit crash-loop on its ports.  After installing, the
+command verifies (bounded) that the services actually came up and reports
+honestly when they did not.  The generated unit captures the install-time
+environment the daemon needs to read the SAME config and ports as the
+launcher: an absolute
+.B PI_STACK_CONFIG
+is always rendered, plus
+.BR XDG_CONFIG_HOME ,
+.BR MEMORY_DB ,
+.BR MEMORY_PORT ,
+.BR KNOWLEDGE_PORT ,
+and
+.B OLLAMA_HOST
+when set at install time.
+.TP
+.B "pi-stack serve uninstall"
+Remove the managed login service (bootout/disable and delete the unit file).
+.PP
+LAZY AUTO-START: when the managed service is not installed,
+.BR "pi-stack run" ,
+.BR "pi-stack memory" ,
+and
+.B "pi-stack knowledge query"
+auto-start a detached
+.B pi-stack-host serve
+if the configured service ports are down (the ollama-CLI model), waiting
+briefly for health and printing progress.  Its log is
+.IR ~/.local/state/pi-stack/serve.log .
+Opt out with the
+.B PI_STACK_NO_AUTOSERVE
+environment variable or
+.BR "pi-stack config set host.autoserve false" .
+After a daemon-affecting config write
+.RB ( services ,
+.BR memory_watcher_model ,
+.BR memory_embed_model ,
+.BR knowledge_bundles )
+the launcher restarts a managed or lazily-started daemon automatically so the
+change takes effect; a foreground serve is never killed \(em you are told to
+restart it.
+.B "pi-stack knowledge init"
+and
+.B "pi-stack knowledge use"
+save
+.B knowledge_bundles
+too and propagate the same way.
 .SS memory
 The aliases
 .BR mem ,
@@ -385,7 +552,7 @@ Add or replace the selected bundle's origin URL.
 Manage subagents as first-class objects.  An agent stores an
 .B intent
 (a complexity tier), not a pinned model; the router derives its default model
-and proves it with evals.  Agents live in
+from a hand-maintained scorecard.  Agents live in
 .B ./agents
 (or
 .BR $PI_STACK_AGENTS_DIR ).
@@ -395,19 +562,19 @@ List the roster with each agent's resolved model and WHY (its intent, and
 whether the resolver fell back).
 .TP
 .BR "pi-stack agent new" " " NAME " [" \-\-intent " " I "] [" \-\-description " " D "] [" \-\-tools " " a,b "] [" \-\-budget " " USD "] [" \-\-interactive "]"
-Scaffold an agent markdown file and a starter promptfoo eval suite.
+Scaffold an agent markdown file.
 .TP
 .BR "pi-stack agent edit" " " NAME " [" \-\-intent " " I "] [" \-\-description " " D "] [" \-\-tools " " a,b "] [" \-\-budget " " USD "] [" \-\-model " " M "]"
 Change fields without hand-editing frontmatter.
 .TP
 .BR "pi-stack agent rm" " " NAME " " \-\-yes
-Remove an agent and its eval suite.
+Remove an agent.
 .TP
-.BR "pi-stack agent reassess" " [" \-\-model " " NEW "] [" \-\-budget " " USD "]"
-Re-level the roster.  With
-.BR \-\-model ,
-evaluate the new model across every suite, fold in the scores, and recompile;
-without it, re-resolve the roster under the current policy (zero spend).  Prints
+.BR "pi-stack agent reassess" " [" \-\-model " " NEW "]"
+Re-resolve the roster under the current policy/scorecard (zero spend) and
+recompile.
+.BR \-\-model
+points you at hand-editing the scorecard instead of measuring anything.  Prints
 the routing diff.
 .SS route
 The model router: turn a declared
@@ -435,28 +602,6 @@ Print the registry, scorecard, and resolved-intent table.
 .TP
 .BR "pi-stack route models" " [" \-\-json "]"
 List the model registry.
-.SS evals
-The accuracy eval harness: run a suite of cases across candidate models, score
-each mechanically, record real cost and latency, and write the measured scores
-into the router's scorecard.  A real sweep calls each model on each case and
-costs money — run it by hand on a new-model release.  Execes the sibling
-.B pi-stack-host
-binary.
-.TP
-.BR "pi-stack evals run" " [" \-\-suite " " DIR "] [" \-\-models " " a,b "] [" \-\-budget " " USD "] [" \-\-dry-run "] [" \-\-save "] [" \-\-json "]"
-Run the suite.
-.B \-\-dry-run
-prints the plan and calls nothing;
-.B \-\-budget
-caps spend;
-.B \-\-save
-writes the measured scores into the scorecard.
-.TP
-.BR "pi-stack evals show" " [" \-\-json "]"
-Print the current scorecard.
-.TP
-.BR "pi-stack evals ls" " [" \-\-suite " " DIR "]"
-List the cases in a suite.
 .SS mcp
 .TP
 .BR "pi-stack mcp register" " [" name... "]"
@@ -538,6 +683,11 @@ or, with
 the path to
 .BR op-refs.env .
 .TP
+.BR "pi-stack config get" " [" \-\-profile " " N "] " key
+Print one resolved value with no decoration for scripts to source (list keys
+print space-separated).  The value is profile-aware, resolved through the
+active profile.  Unknown keys fail with a nonzero exit.
+.TP
 .BR "pi-stack config set" " [" \-\-profile " " N "] " key " " value
 Set a scalar key or add a value to a list key, then save the configuration.
 .TP
@@ -552,8 +702,26 @@ Base keys are
 .BR services ,
 .BR knowledge_bundles ,
 .BR memory_watcher_model ,
+.BR memory_embed_model ,
+.BR ollama_bridge_model ,
+.BR host.enabled ,
+.BR host.autonomy ,
 and
-.BR memory_embed_model .
+.BR host.autoserve .
+.B ollama_bridge_model
+is the local model the sandbox exposes to pi and the router's local option;
+by default the memory watcher shares it.
+.B host.enabled
+gates the unsandboxed
+.B "pi-stack host"
+mode (default false), and
+.B host.autonomy
+is reserved for the host-guard strictness.
+.B host.autoserve
+(default true) gates the launcher's lazy auto-start of the services daemon;
+the
+.B PI_STACK_NO_AUTOSERVE
+environment variable also disables it and wins over the config flag.
 Per-profile keys are
 .BR gog_account ,
 .BR mcp ,
@@ -565,8 +733,12 @@ and
 is accepted).  Profile writes create the named profile if absent.
 .BR services ,
 .BR memory_watcher_model ,
+.BR memory_embed_model ,
+.BR ollama_bridge_model ,
+.BR host.enabled ,
+.BR host.autonomy ,
 and
-.B memory_embed_model
+.B host.autoserve
 are global and reject
 .BR \-\-profile .
 Setting base

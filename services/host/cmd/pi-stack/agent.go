@@ -1,11 +1,12 @@
 // pi-stack agent — manage subagents as first-class objects: list them with the
-// model each one resolves to (and WHY), scaffold a new one with a starter eval
-// suite, edit fields without hand-touching frontmatter, remove one, and
-// re-level the roster after a new model or a budget change.
+// model each one resolves to (and WHY), scaffold a new one, edit fields without
+// hand-touching frontmatter, remove one, and re-level the roster after a new
+// model or a budget change.
 //
 // The point (see docs/design/routing.md): you manage AGENTS; the router manages
 // MODELS. An agent stores an INTENT, not a pinned model, so its default model is
-// derived by complexity and provable by evals. `agent ls` makes that legible.
+// derived by complexity from a hand-maintained scorecard. `agent ls` makes that
+// legible.
 
 package main
 
@@ -134,11 +135,6 @@ func agentsDir() string {
 	return "agents"
 }
 
-// suiteFor returns the per-agent eval suite path.
-func suiteFor(name string) string {
-	return filepath.Join("evals", "suites", "agents", name+".yaml")
-}
-
 // agentMeta is the typed view of an agent's frontmatter (a superset round-trips
 // through a yaml.Node so edits never drop unknown fields).
 type agentMeta struct {
@@ -202,6 +198,15 @@ func listAgents() ([]string, error) {
 // resolveAgentModel returns the model an agent resolves to and a one-line WHY.
 func resolveAgentModel(m agentMeta, reg *routing.Registry, sc *routing.Scorecard, pol *routing.Policy) (model, why string) {
 	if strings.TrimSpace(m.Model) != "" {
+		// An explicit pin bypasses intent routing, so it also bypasses the
+		// registry check. Flag a pin that resolves to no registered model — that
+		// is almost always a typo (e.g. anthropic/sonnet-5 for claude-sonnet-4-6)
+		// and will fail at spawn, not here.
+		if reg != nil {
+			if _, ok := reg.Get(m.Model); !ok {
+				return m.Model, "pinned (UNKNOWN — not in models.json)"
+			}
+		}
 		return m.Model, "pinned (explicit model:)"
 	}
 	if strings.TrimSpace(m.Intent) == "" {
@@ -212,11 +217,73 @@ func resolveAgentModel(m agentMeta, reg *routing.Registry, sc *routing.Scorecard
 		return "(inherit parent)", fmt.Sprintf("intent %q not in policy", m.Intent)
 	}
 	d := routing.Resolve(reg, sc, pol, intent)
-	why = fmt.Sprintf("intent %s", m.Intent)
-	if !d.ConstraintsMet {
-		why += " (fallback)"
+	return d.Model, explainDecision(intent, d)
+}
+
+// explainDecision turns a routing Decision into a WHY that answers the real
+// question — why THIS model for this agent — in words, not a wall of unmeasured
+// numbers. A contest names what it beat and on which axis; a single survivor
+// names the CONSTRAINTS that eliminated everything else (the actionable part you
+// tune in policy.json); a fallback says nothing matched. The seed-vs-measured
+// caveat lives once in the table footer, not on every row.
+func explainDecision(in routing.Intent, d routing.Decision) string {
+	obj := d.Objective
+	if obj == "" {
+		obj = "accuracy"
 	}
-	return d.Model, why
+	cons := intentConstraints(in)
+	if cons == "" {
+		cons = "no constraints"
+	}
+	if !d.ConstraintsMet {
+		return fmt.Sprintf("%s: nothing matched (%s) -> fallback", in.Name, cons)
+	}
+	// A real contest: >1 model cleared the constraints, so the objective broke the
+	// tie. Name the runner-up and the axis.
+	if len(d.Alternatives) > 1 {
+		runner := shortModel(d.Alternatives[1].ID)
+		switch obj {
+		case "cost":
+			return fmt.Sprintf("%s: cheapest clearing %s; beat %s", in.Name, cons, runner)
+		case "latency":
+			return fmt.Sprintf("%s: fastest clearing %s; beat %s", in.Name, cons, runner)
+		case "balanced":
+			return fmt.Sprintf("%s: best cost/latency/accuracy blend under %s; beat %s", in.Name, cons, runner)
+		default:
+			return fmt.Sprintf("%s: best accuracy under %s; beat %s", in.Name, cons, runner)
+		}
+	}
+	// Sole survivor: the constraints, not the objective, made the choice. Naming
+	// them is the useful part (loosen these in policy.json to get a contest).
+	return fmt.Sprintf("%s: only model matching %s", in.Name, cons)
+}
+
+// intentConstraints renders an intent's hard constraints compactly (the same
+// filters Resolve applies), so a WHY can explain what eliminated the field.
+func intentConstraints(in routing.Intent) string {
+	var p []string
+	if len(in.Providers) > 0 {
+		p = append(p, strings.Join(in.Providers, "/"))
+	}
+	if in.MaxCostUSD > 0 {
+		p = append(p, fmt.Sprintf("<=$%.2f", in.MaxCostUSD))
+	}
+	if in.MinAccuracy > 0 {
+		p = append(p, fmt.Sprintf(">=%.2f acc", in.MinAccuracy))
+	}
+	if in.MaxLatencyMs > 0 {
+		p = append(p, fmt.Sprintf("<=%.0fs", in.MaxLatencyMs/1000))
+	}
+	return strings.Join(p, ", ")
+}
+
+// shortModel drops the provider prefix for compact display (anthropic/claude-
+// sonnet-5 -> claude-sonnet-5).
+func shortModel(id string) string {
+	if i := strings.IndexByte(id, '/'); i >= 0 {
+		return id[i+1:]
+	}
+	return id
 }
 
 func agentLs(args []string) {
@@ -260,6 +327,10 @@ func agentLs(args []string) {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", n, model, why, tools, budget)
 	}
 	tw.Flush()
+	fmt.Println()
+	fmt.Println("WHY explains the pick: what the winner beat, or the constraints that left it the only")
+	fmt.Println("fit. The accuracy/cost/latency behind it are hand-maintained in scorecard.json (see")
+	fmt.Println("`route show`). Tune the tradeoffs in policy.json, then `pi-stack route compile`.")
 }
 
 func agentNew(args []string) {
@@ -321,40 +392,8 @@ func agentNew(args []string) {
 		fatalLauncher(err)
 	}
 
-	// Starter eval suite (promptfoo). task_type = the intent's task_type when
-	// known, else the agent name (a new specialized task_type).
-	taskType := name
-	if pol, err := routing.LoadPolicy(); err == nil {
-		if it, ok := pol.Intent(intent); ok && it.TaskType != "" {
-			taskType = it.TaskType
-		}
-	}
-	suite := suiteFor(name)
-	if _, err := os.Stat(suite); err != nil {
-		if err := os.MkdirAll(filepath.Dir(suite), 0o755); err != nil {
-			fatalLauncher(err)
-		}
-		starter := fmt.Sprintf(`# Eval suite for the %q agent (task_type: %s).
-# Add cases that PROVE this agent is good at its job. Each case: a prompt and an
-# assertion promptfoo can score (contains/icontains/regex/llm-rubric, or an
-# external javascript grader). See evals/suites/code.yaml for examples.
-
-- description: TODO — replace with a real case
-  vars:
-    prompt: "Ask the agent to do a representative task."
-  assert:
-    - type: icontains
-      value: "TODO expected substring"
-  metadata:
-    task_type: %s
-`, name, taskType, taskType)
-		if err := os.WriteFile(suite, []byte(starter), 0o644); err != nil {
-			fatalLauncher(err)
-		}
-	}
-
-	fmt.Printf("created agent %q\n  %s\n  %s\n\nNext:\n  1. Edit the role brief in %s\n  2. Write real eval cases in %s\n  3. pi-stack evals run --budget 1 --save   # measure it\n  4. pi-stack route compile                 # route it\nOr run `pi-stack agent new %s --interactive` to author it conversationally.\n",
-		name, path, suite, path, suite, name)
+	fmt.Printf("created agent %q\n  %s\n\nNext:\n  1. Edit the role brief in %s\n  2. If %q needs a new task_type, hand-add its scores to\n     services/host/routing/defaults/scorecard.json\n  3. pi-stack route compile                     # route it\nOr run `pi-stack agent new %s --interactive` to author it conversationally.\n",
+		name, path, path, intent, name)
 }
 
 func agentEdit(args []string) {
@@ -427,27 +466,20 @@ func agentRm(args []string) {
 		fatalLauncher(fmt.Errorf("agent %q not found", name))
 	}
 	if !hasFlagLauncher(args, "--yes") && !hasFlagLauncher(args, "-y") {
-		fatalLauncher(fmt.Errorf("agent rm %q removes %s and its eval suite; pass --yes to confirm", name, path))
+		fatalLauncher(fmt.Errorf("agent rm %q removes %s; pass --yes to confirm", name, path))
 	}
 	if err := os.Remove(path); err != nil {
 		fatalLauncher(err)
 	}
-	removed := path
-	if suite := suiteFor(name); suite != "" {
-		if err := os.Remove(suite); err == nil {
-			removed += " and " + suite
-		}
-	}
-	fmt.Printf("removed %s\n", removed)
+	fmt.Printf("removed %s\n", path)
 }
 
-// agentReassess re-levels the roster. With --model, it evaluates the new model
-// across every suite, folds the scores in, and recompiles routing.json. Without
-// --model, it just re-resolves the roster under the current policy/scorecard
-// (zero spend) — the new-user-budget flow. Either way it prints the routing diff.
+// agentReassess re-levels the roster: it re-resolves the roster under the
+// current policy/scorecard (zero spend) and recompiles routing.json, printing
+// the routing diff. --model is no longer measured automatically — scores are
+// hand-maintained in scorecard.json; point the user there and stop.
 func agentReassess(args []string) {
 	model := flagValueLauncher(args, "--model", "")
-	budget := flagValueLauncher(args, "--budget", "")
 
 	// Baseline = the CURRENTLY COMPILED routing.json (what is live), so the diff
 	// also catches a stale routing.json after a policy/budget change. Falls back to
@@ -462,14 +494,10 @@ func agentReassess(args []string) {
 	}
 
 	if model != "" {
-		hostArgs := []string{"evals", "run", "--models", model, "--save"}
-		if budget != "" {
-			hostArgs = append(hostArgs, "--budget", budget)
-		}
-		fmt.Fprintf(os.Stderr, "evaluating %s across all suites...\n", model)
-		if err := runHostVerb(hostArgs); err != nil {
-			fatalLauncher(fmt.Errorf("evals run: %w", err))
-		}
+		fmt.Fprintf(os.Stderr, "note: automated eval measurement was removed. Add/edit %q's scores by\n", model)
+		fmt.Fprintln(os.Stderr, "  hand in services/host/routing/defaults/scorecard.json, then re-run")
+		fmt.Fprintln(os.Stderr, "  `pi-stack agent reassess` (no --model) to re-resolve + recompile.")
+		os.Exit(2)
 	}
 
 	after, err := resolveRoster()
@@ -510,10 +538,44 @@ func agentReassess(args []string) {
 	if changed == 0 {
 		fmt.Println("  (none)")
 	}
-	fmt.Fprintln(os.Stderr, "\ncompiling routing.json...")
-	if err := runHostVerb([]string{"route", "compile"}); err != nil {
+	// Compile to the RIGHT file. `route compile` with no --out writes to
+	// ~/.pi-stack/routing/routing.json, but the Docker image bakes the repo-root
+	// routing.json (Dockerfile COPY). reassess is maintainer-only (needs the repo
+	// checkout), so when we are sitting in the repo — a routing.json next to a
+	// pi-kit/spec.yaml — target that file, or the reassessment silently never
+	// reaches the image.
+	compileArgs := []string{"route", "compile"}
+	if repo := repoRoutingTarget(); repo != "" {
+		compileArgs = append(compileArgs, "--out", repo)
+		fmt.Fprintf(os.Stderr, "\ncompiling routing.json (repo target: %s)...\n", repo)
+	} else {
+		fmt.Fprintln(os.Stderr, "\ncompiling routing.json...")
+	}
+	if err := runHostVerb(compileArgs); err != nil {
 		fatalLauncher(fmt.Errorf("route compile: %w", err))
 	}
+}
+
+// repoRoutingTarget returns the path of the repo-root routing.json the Docker
+// image bakes, but ONLY when the current directory is unmistakably the pi-stack
+// repo (a routing.json sitting next to pi-kit/spec.yaml). Otherwise it returns ""
+// and the caller falls back to `route compile`'s default (~/.pi-stack/routing).
+func repoRoutingTarget() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	routing := filepath.Join(wd, "routing.json")
+	spec := filepath.Join(wd, "pi-kit", "spec.yaml")
+	if fileExists(routing) && fileExists(spec) {
+		return routing
+	}
+	return ""
+}
+
+func fileExists(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && !info.IsDir()
 }
 
 // launchInteractiveAuthoring hands off to an interactive `pi` session seeded to
@@ -525,11 +587,11 @@ func launchInteractiveAuthoring(name string) {
 	if _, err := exec.LookPath(pi); err != nil {
 		fatalLauncher(fmt.Errorf("pi is not on PATH; cannot launch interactive authoring (scaffold non-interactively with `pi-stack agent new %s`)", name))
 	}
-	seed := fmt.Sprintf("Use the agent-new skill to author a new subagent named %q, end to end: intake, scaffold, write real eval cases, run them, show the tradeoff table, and set the default.", name)
+	seed := fmt.Sprintf("Use the agent-new skill to author a new subagent named %q, end to end: intake, scaffold, decide its scores in scorecard.json if it needs a new task_type, and set the default.", name)
 	fmt.Fprintf(os.Stderr, "launching pi to author %q via the agent-new skill; if it does not auto-start, run: /skill:agent-new\n", name)
 	piArgs := []string{seed}
 	// Force the authoring model (Opus via the authoring intent) so the flow that
-	// writes evals is not run on a weak default model.
+	// authors this agent is not run on a weak default model.
 	if m, err := resolveSessionModel("authoring"); err == nil && m != "" {
 		piArgs = append([]string{"--model", m}, piArgs...)
 	}
@@ -623,20 +685,21 @@ func setMappingValue(doc *yaml.Node, key, val, tag string) {
 const agentUsage = `usage: pi-stack agent <command>
 
 Manage subagents as first-class objects. An agent stores an INTENT, not a pinned
-model; the router derives its default model by complexity and proves it by evals.
+model; the router derives its default model from a hand-maintained scorecard.
 
 commands:
   ls [--json]                          list the roster with each agent's resolved
                                        model and WHY (intent + whether it fell back)
   new NAME [--intent I] [--description D] [--tools a,b] [--budget USD] [--interactive]
-                                       scaffold an agent + a starter eval suite
+                                       scaffold an agent
   edit NAME [--intent I] [--description D] [--tools a,b] [--budget USD] [--model M]
                                        change fields without hand-editing frontmatter
-  rm NAME --yes                        remove an agent and its eval suite
-  reassess [--model NEW] [--budget USD]
-                                       re-level the roster: with --model, eval the
-                                       new model + recompile; without, re-resolve
-                                       under the current policy (zero spend). Prints
+  rm NAME --yes                        remove an agent
+  reassess [--model NEW]
+                                       re-resolve the roster under the current
+                                       policy/scorecard (zero spend) and recompile.
+                                       --model points you at hand-editing
+                                       scorecard.json instead of measuring. Prints
                                        the routing diff.
 
 Agents live in ./agents (or $PI_STACK_AGENTS_DIR); run from the repo root.

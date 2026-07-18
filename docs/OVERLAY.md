@@ -30,10 +30,11 @@ A copyable scaffold lives in [`examples/overlay/`](../examples/overlay). The lay
   overlay.mk                   # private make targets
 ```
 
-Point pi-stack at it once, in `config/local.mk`:
+pi-stack looks for it at `../pi-stack-work` by default. If your peer repo lives
+elsewhere, pass `OVERLAY` to make (or export it in your shell):
 
-```makefile
-OVERLAY = ../my-overlay
+```bash
+make run OVERLAY=../my-overlay
 ```
 
 ## 1. Sandbox half — the mixin kit (`kit/`)
@@ -89,8 +90,9 @@ pi-stack-host's helpers (`env`, `writeJSON`, `mcpStdio`, `hostService`, …), so
 compile only when symlinked in — edit them in your overlay, build from pi-stack.
 
 Reach the host service from the sandbox over `host.docker.internal:<port>` via the
-in-sandbox wrapper from half 1 (add the port to your kit's network rules, or the
-public kit already allows `:11442`).
+in-sandbox wrapper from half 1. Add the port to your overlay kit's network rules
+(`allowedDomains: host.docker.internal:<port>` + `localhost:<port>`) — the public
+kit deliberately allows no overlay ports, so the overlay grants its own.
 
 ## 3. Make targets — `overlay.mk`
 

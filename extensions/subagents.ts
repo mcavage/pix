@@ -71,9 +71,28 @@ const clampDelay = (n: number): number =>
 // the event loop open) gets a fast, CLEAN teardown instead of waiting out the
 // idle watchdog and being mislabeled a timeout.
 const DRAIN_MS = num("PI_SUBAGENT_DRAIN_MS", 3_000);
+
 const MAX_CONCURRENCY = num("PI_SUBAGENT_MAX_CONCURRENCY", 4);
 const MAX_PARALLEL = num("PI_SUBAGENT_MAX_PARALLEL", 8);
-const MAX_DEPTH = num("PI_SUBAGENT_MAX_DEPTH", 3);
+// MAX_DEPTH does NOT use num(): num() rejects 0, but PI_SUBAGENT_MAX_DEPTH=0 is
+// the documented host-mode backup guard ("refuse at depth 0/0") — an explicit
+// zero must be honored, not silently replaced by the default 3.
+const MAX_DEPTH = (() => {
+	const v = Number(process.env.PI_SUBAGENT_MAX_DEPTH);
+	return Number.isFinite(v) && v >= 0 ? Math.floor(v) : 3;
+})();
+// Host mode (docs/design/host-mode.md) sets PI_SUBAGENT_DISABLED=1 as a
+// first-class, explicit refusal — belt-and-suspenders with PI_SUBAGENT_MAX_DEPTH=0
+// (also set there). Children spawn as `pi --no-extensions -e <this file>`, which
+// bypasses extensions/host-guard.ts entirely and inherits the full env
+// (credentials included) with no sandbox underneath either. Checked FIRST in the
+// tool (host-mode-specific message before the generic depth-limit text) AND
+// enforced centrally in runSingle(), so no other entry point (e.g. `/subagents
+// doctor`'s canary) can ever spawn a child while disabled. Strict `=== "1"`:
+// Boolean(env) would treat "0"/"false" as disabled too.
+const SUBAGENTS_DISABLED = process.env.PI_SUBAGENT_DISABLED === "1";
+const SUBAGENTS_DISABLED_MSG =
+	"Subagents are disabled in host mode (PI_SUBAGENT_DISABLED=1). Children spawn as `pi --no-extensions -e <subagents.ts>`, which bypasses the host-guard tool_call extension and inherits the full environment (credentials included) with no sandbox underneath. Do the work directly in this session instead of delegating. See docs/design/host-mode.md.";
 const CURRENT_DEPTH = Math.max(
 	0,
 	Math.floor(Number(process.env.PI_SUBAGENT_DEPTH) || 0),
@@ -1131,6 +1150,25 @@ async function runSingle(
 		enabled?: boolean; // false = don't pin (e.g. the doctor canary)
 	},
 ): Promise<SingleResult> {
+	// CENTRAL kill switch: every spawn path (tool single/parallel/chain, trees,
+	// the doctor canary, anything added later) funnels through runSingle, so the
+	// host-mode disable is enforced HERE — not only in the tool's execute().
+	if (SUBAGENTS_DISABLED) {
+		const refused: SingleResult = {
+			agent: agentName,
+			agentSource: "unknown",
+			task,
+			exitCode: 1,
+			messages: [],
+			stderr: SUBAGENTS_DISABLED_MSG,
+			errorMessage: SUBAGENTS_DISABLED_MSG,
+			usage: zeroUsage(),
+			step,
+		};
+		if (track?.enabled !== false && track?.preRunId)
+			finalizeRun(track.preRunId, refused);
+		return refused;
+	}
 	const agent = agents.find((a) => a.name === agentName);
 	if (!agent) {
 		const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
@@ -1552,6 +1590,16 @@ export default function (pi: ExtensionAPI) {
 				captureUi(ctx); // stable UI ref for the live pin
 				const scope: AgentScope = params.agentScope ?? "user";
 				const { agents, projectDir } = discoverAgents(ctx.cwd, scope);
+
+				// Host-mode guard: refuse to spawn ANY child (single/parallel/chain
+				// alike), explicitly and early. See PI_SUBAGENT_DISABLED comment above.
+				if (SUBAGENTS_DISABLED) {
+					return {
+						content: [{ type: "text", text: SUBAGENTS_DISABLED_MSG }],
+						details: makeDetails("single", scope, projectDir)([]),
+						isError: true,
+					};
+				}
 
 				// Depth guard: fork-bomb protection for trees.
 				if (CURRENT_DEPTH >= MAX_DEPTH) {
@@ -1981,6 +2029,17 @@ export default function (pi: ExtensionAPI) {
 				const { agents, projectDir } = discoverAgents(ctx.cwd, scope);
 
 				if (arg.startsWith("doctor")) {
+					// Host mode: the doctor canary is a real child spawn, and it must
+					// refuse exactly like the tool does (runSingle enforces this too —
+					// belt-and-suspenders — but refusing here gives a clear message
+					// instead of a failed canary).
+					if (SUBAGENTS_DISABLED) {
+						ctx.ui?.notify?.(
+							`⛔ subagents doctor: refusing to spawn the canary — ${SUBAGENTS_DISABLED_MSG}`,
+							"error",
+						);
+						return;
+					}
 					// Live end-to-end self-audit: spawn a real canary subagent with a
 					// short timeout and confirm it returns. This is the check that never
 					// passed with the old extension.

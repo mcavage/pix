@@ -30,6 +30,13 @@ func runMemory(argv []string) {
 	if len(argv) > 0 && argv[0] != "-h" && argv[0] != "--help" {
 		ctx = "memory " + argv[0]
 	}
+	// Lazy auto-start: if the memory daemon is down, spin it up detached before
+	// dispatching, so the common "daemon just not up yet" case just works. Never
+	// on a help request (help must stay side-effect free); best-effort — on
+	// failure the errServiceDown path below still degrades with exit 3.
+	if len(argv) > 0 && !wantsHelp(argv) {
+		ensureServeUp([]string{"memory"}, ensureServeTimeout)
+	}
 	if err := runMemoryCore(argv, loadResolvedConfig, memoryClient, os.Stdout); err != nil {
 		exitFromErr(ctx, err)
 	}

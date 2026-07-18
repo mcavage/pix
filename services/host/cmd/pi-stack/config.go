@@ -3,16 +3,20 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 	"pi-stack/host/config"
 )
 
-// runConfig implements the `config` verb tree: `show`, `path`, `set`, `unset`.
-// `set`/`unset` are THE answer to "why do I hand-edit the toml" — you don't, you
-// run `pi-stack config set <key> <value>` and it loads, mutates, and Save()s the
-// machine-managed config for you.
+// runConfig implements the `config` verb tree: `show`, `path`, `get`, `set`,
+// `unset`. `set`/`unset` are THE answer to "why do I hand-edit the toml" — you
+// don't, you run `pi-stack config set <key> <value>` and it loads, mutates, and
+// Save()s the machine-managed config for you. `get` is the machine-readable
+// read half: one resolved value, no decoration, so scripts (and the Makefile's
+// operational targets) source runtime config from config.toml instead of
+// keeping a second config file.
 func runConfig(argv []string) {
 	// A leading -h/--help (with or without a subcommand) prints config usage.
 	if wantsHelp(argv) {
@@ -52,13 +56,82 @@ func runConfig(argv []string) {
 			fmt.Fprintf(os.Stderr, "pi-stack config: encoding: %v\n", err)
 			os.Exit(1)
 		}
+	case "get":
+		runConfigGet(argv[1:])
 	case "set":
 		runConfigWrite(false, argv[1:])
 	case "unset":
 		runConfigWrite(true, argv[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "pi-stack config: unknown subcommand %q (want: show, path, set, unset)\n", sub)
+		fmt.Fprintf(os.Stderr, "pi-stack config: unknown subcommand %q (want: show, path, get, set, unset)\n", sub)
 		os.Exit(2)
+	}
+}
+
+// runConfigGet prints ONE resolved config value to stdout with no decoration —
+// the machine-readable accessor the Makefile shells out to (`$(shell pi-stack
+// config get mcp)`). It is profile-aware: the value comes from the ACTIVE
+// profile's resolved config (via config.Resolve), honoring --profile /
+// PI_STACK_PROFILE / active_profile exactly like every other read path. List
+// keys (mcp, services, knowledge_bundles) print space-separated. An unknown key
+// is a loud error on stderr + exit 2, never a silent empty value.
+func runConfigGet(argv []string) {
+	if wantsHelp(argv) {
+		fmt.Print(configUsage)
+		return
+	}
+	profile, argv := splitProfileArg(argv)
+	if profile != "" {
+		flagProfile = profile
+	}
+	if len(argv) != 1 {
+		fmt.Fprintf(os.Stderr, "usage: pi-stack config get [--profile <name>] <key>\n%s", configKeysHelp)
+		os.Exit(2)
+	}
+	cfg, _, err := loadResolvedConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack config get: %v\n", err)
+		os.Exit(1)
+	}
+	val, err := configValue(cfg, argv[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack config get: %v\n", err)
+		os.Exit(2)
+	}
+	fmt.Println(val)
+}
+
+// configValue resolves one key against an already-RESOLVED (flat) config and
+// renders it for machine consumption: scalars verbatim, lists space-separated.
+// Pure + testable; the key set mirrors configKeysHelp (plus active_profile,
+// which reads the raw base field — it is what selects a profile, so it is never
+// itself overridden by one).
+func configValue(cfg *config.Config, key string) (string, error) {
+	switch key {
+	case "gog_account":
+		return cfg.GogAccount, nil
+	case "mcp":
+		return strings.Join(cfg.MCP, " "), nil
+	case "services":
+		return strings.Join(cfg.Services, " "), nil
+	case "knowledge_bundles":
+		return strings.Join(cfg.KnowledgeBundles, " "), nil
+	case "memory_watcher_model":
+		return cfg.MemoryWatcherModel, nil
+	case "memory_embed_model":
+		return cfg.MemoryEmbedModel, nil
+	case "ollama_bridge_model":
+		return cfg.OllamaBridgeModel, nil
+	case "active_profile":
+		return cfg.ActiveProfile, nil
+	case "host.enabled":
+		return strconv.FormatBool(cfg.Host.Enabled), nil
+	case "host.autonomy":
+		return cfg.Host.Autonomy, nil
+	case "host.autoserve":
+		return strconv.FormatBool(cfg.AutoserveEnabled()), nil
+	default:
+		return "", fmt.Errorf("unknown key %q\n%s", key, configKeysHelp)
 	}
 }
 
@@ -107,6 +180,14 @@ func runConfigWrite(unset bool, argv []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("%s\n# saved to %s\n", summary, config.Path())
+	// Config propagation: a daemon-affecting key (services, memory_*_model,
+	// knowledge_bundles) only takes effect when serve restarts — do that for the
+	// user per the detected lifecycle mode (managed/lazy restart; foreground/down
+	// just advise). Composes with sparse Save: the change is both persisted
+	// correctly AND live, no manual step.
+	if isDaemonAffecting(argv[0]) {
+		propagateServeConfig(defaultServeReloader(), os.Stdout)
+	}
 }
 
 // splitProfileArg pulls a `--profile <name>` / `--profile=<name>` flag out of a
@@ -141,8 +222,14 @@ const configKeysHelp = `keys:
   services <name>           add/remove a host service in the services list
   knowledge_bundles <dir>   add/remove an OKF knowledge bundle dir (set also
                             enables the knowledge service)
-  memory_watcher_model <m>  ollama model for fact capture
-  memory_embed_model <m>    ollama model for semantic recall
+  memory_watcher_model <m>  ollama model for fact capture (host, resident)
+  memory_embed_model <m>    ollama model for semantic recall (host)
+  ollama_bridge_model <m>   local model the sandbox exposes to pi + the router
+  host.enabled true|false   gate for "pi-stack host" (UNSANDBOXED; default false)
+  host.autonomy <mode>      reserved for the host-guard strictness (unused yet)
+  host.autoserve true|false lazy auto-start of the services daemon on run/
+                            memory/knowledge (default true; PI_STACK_NO_AUTOSERVE
+                            env also disables it)
 
 With --profile <name>, edits the [profiles.<name>] table instead of the base
 config (creating it if absent). Per-profile keys: gog_account, mcp,
@@ -228,6 +315,66 @@ func applyConfigChange(cfg *config.Config, unset bool, key string, args []string
 		}
 		return fmt.Sprintf("memory_embed_model = %q", cfg.MemoryEmbedModel), nil
 
+	case "ollama_bridge_model":
+		if unset {
+			cfg.OllamaBridgeModel = config.DefaultOllamaBridgeModel
+		} else {
+			if len(args) != 1 {
+				return "", fmt.Errorf("config set ollama_bridge_model <model>: needs exactly one value")
+			}
+			cfg.OllamaBridgeModel = args[0]
+		}
+		return fmt.Sprintf("ollama_bridge_model = %q", cfg.OllamaBridgeModel), nil
+
+	case "host.enabled":
+		// The gate for `pi-stack host` (unsandboxed). Default false; unset resets
+		// it. Set requires an explicit true/false — never inferred — so enabling
+		// the dangerous path is always a deliberate, legible command.
+		if unset {
+			cfg.Host.Enabled = false
+		} else {
+			if len(args) != 1 {
+				return "", fmt.Errorf("config set host.enabled <true|false>: needs exactly one value")
+			}
+			v, err := strconv.ParseBool(args[0])
+			if err != nil {
+				return "", fmt.Errorf("config set host.enabled: %q is not a boolean (want true or false)", args[0])
+			}
+			cfg.Host.Enabled = v
+		}
+		return fmt.Sprintf("host.enabled = %v", cfg.Host.Enabled), nil
+
+	case "host.autoserve":
+		// Opt-out flag for lazy auto-start (ensureServe). Unset = nil = inherit the
+		// default (true) so a future default change reaches users (no petrified
+		// bool). NOT daemon-affecting: it changes launcher behavior, not serve.
+		if unset {
+			cfg.Host.Autoserve = nil
+		} else {
+			if len(args) != 1 {
+				return "", fmt.Errorf("config set host.autoserve <true|false>: needs exactly one value")
+			}
+			v, err := strconv.ParseBool(args[0])
+			if err != nil {
+				return "", fmt.Errorf("config set host.autoserve: %q is not a boolean (want true or false)", args[0])
+			}
+			cfg.Host.Autoserve = &v
+		}
+		return fmt.Sprintf("host.autoserve = %v", cfg.AutoserveEnabled()), nil
+
+	case "host.autonomy":
+		// RESERVED: stored for the future host-guard strictness knob; nothing
+		// reads it in Phase 1.
+		if unset {
+			cfg.Host.Autonomy = ""
+		} else {
+			if len(args) != 1 {
+				return "", fmt.Errorf("config set host.autonomy <mode>: needs exactly one value")
+			}
+			cfg.Host.Autonomy = args[0]
+		}
+		return fmt.Sprintf("host.autonomy = %q (reserved; unused in Phase 1)", cfg.Host.Autonomy), nil
+
 	default:
 		return "", fmt.Errorf("unknown key %q\n%s", key, configKeysHelp)
 	}
@@ -247,7 +394,7 @@ func applyProfileConfigChange(cfg *config.Config, unset bool, profile, key strin
 		verb = "unset"
 	}
 	switch key {
-	case "services", "memory_watcher_model", "memory_embed_model":
+	case "services", "memory_watcher_model", "memory_embed_model", "host.enabled", "host.autonomy", "host.autoserve":
 		return "", fmt.Errorf("%s is global (not per-profile); drop --profile and run: pi-stack config %s %s <value>", key, verb, key)
 
 	case "gog_account":

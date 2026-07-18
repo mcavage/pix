@@ -183,6 +183,11 @@ func mcpDispatcher(serverName string, tools []mcpTool, handlers map[string]func(
 // that's what the Docker sandboxes gateway speaks. We also tolerate Content-Length
 // (LSP) framing on input and reply in whichever framing the peer used, so the same
 // binary works behind the gateway or a Content-Length client.
+// maxMCPFrameBytes bounds a single MCP frame so a hostile or buggy peer cannot
+// force an unbounded allocation via Content-Length. 32 MiB dwarfs any real
+// tool result.
+const maxMCPFrameBytes = 32 << 20
+
 func mcpStdio(handle func(jsonObj) (jsonObj, bool)) {
 	reader := bufio.NewReader(os.Stdin)
 	useContentLength := false
@@ -213,6 +218,13 @@ func mcpStdio(handle func(jsonObj) (jsonObj, bool)) {
 			}
 			if length <= 0 {
 				continue
+			}
+			// Cap the frame before allocating: an arbitrary Content-Length from
+			// the peer would otherwise let a single header trigger an unbounded
+			// host allocation (memory exhaustion). 32 MiB is far above any real
+			// MCP message.
+			if length > maxMCPFrameBytes {
+				return
 			}
 			body = make([]byte, length)
 			if _, rerr := io.ReadFull(reader, body); rerr != nil {
