@@ -321,6 +321,16 @@ export function checkWriteEditPath(
 }
 
 export default function (pi: ExtensionAPI) {
+	// HOST-MODE ONLY. This file lives in extensions/, which the Dockerfile bakes
+	// and pi auto-discovers in EVERY sandbox — but this guard must exist ONLY under
+	// `pi-stack host` (unsandboxed). Inside the disposable VM full-auto no-prompt
+	// is the whole point (the sandbox IS the boundary), so a "HOST MODE" confirm
+	// on rm/sudo there is both wrong and alarming. The Go host launcher sets
+	// OLLAMA_HOSTMODE=1 (the same sentinel status.ts keys the HOST badge on);
+	// absent it we register NOTHING and the sandbox behaves exactly as before.
+	const hostMode =
+		typeof process !== "undefined" && process.env?.OLLAMA_HOSTMODE === "1";
+	if (!hostMode) return;
 	try {
 		pi.on("tool_call", async (event: any, ctx: any) => {
 			const toolName = event?.toolName;

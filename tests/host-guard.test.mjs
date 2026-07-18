@@ -145,25 +145,56 @@ test("M4: missing cwd yields a sentinel root that blocks every write", () => {
 	assert.equal(computeWorkspaceRoot(os.tmpdir()), fs.realpathSync(os.tmpdir()));
 });
 
-// ── M1: a failed guard registration must not be swallowed ───────────────────
-test("M1: factory rethrows when pi.on fails (never silently unguarded)", () => {
-	assert.throws(() =>
+// ── host-mode gate: inert in a sandbox (the reported bug) ───────────────────
+// host-guard.ts is baked into every sandbox via extensions/, but must be a
+// NO-OP unless the host launcher set OLLAMA_HOSTMODE=1. A false "HOST MODE"
+// prompt on sudo/rm inside the disposable VM is the exact regression this guards.
+test("factory registers NOTHING when not in host mode (sandbox)", () => {
+	const prev = process.env.OLLAMA_HOSTMODE;
+	delete process.env.OLLAMA_HOSTMODE;
+	try {
+		let registered = false;
 		guard.default({
 			on() {
-				throw new Error("registration boom");
+				registered = true;
 			},
-		}),
-	);
+		});
+		assert.equal(registered, false, "guard must not register a tool_call hook outside host mode");
+	} finally {
+		if (prev !== undefined) process.env.OLLAMA_HOSTMODE = prev;
+	}
+});
+
+// ── M1: a failed guard registration must not be swallowed (host mode) ────────
+test("M1: factory rethrows when pi.on fails (never silently unguarded)", () => {
+	const prev = process.env.OLLAMA_HOSTMODE;
+	process.env.OLLAMA_HOSTMODE = "1";
+	try {
+		assert.throws(() =>
+			guard.default({
+				on() {
+					throw new Error("registration boom");
+				},
+			}),
+		);
+	} finally {
+		if (prev !== undefined) process.env.OLLAMA_HOSTMODE = prev;
+		else delete process.env.OLLAMA_HOSTMODE;
+	}
 });
 
 // ── end-to-end: the registered tool_call handler enforces the jail ──────────
 test("registered handler blocks outside writes and headless irreversible bash", async () => {
+	const prevHM = process.env.OLLAMA_HOSTMODE;
+	process.env.OLLAMA_HOSTMODE = "1";
 	let handler = null;
 	guard.default({
 		on(event, fn) {
 			if (event === "tool_call") handler = fn;
 		},
 	});
+	if (prevHM !== undefined) process.env.OLLAMA_HOSTMODE = prevHM;
+	else delete process.env.OLLAMA_HOSTMODE;
 	assert.ok(handler, "tool_call handler registered");
 	const ctx = { cwd: process.cwd(), hasUI: false };
 	// Outside write: blocked without a prompt.
