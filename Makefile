@@ -82,8 +82,15 @@ GOG_ACCOUNT ?=
 # semantic recall. `make pull-models` fetches them. Override MEMORY_WATCHER_MODEL
 # in config/local.mk to use a different one. Default is small (gemma3:4b): it runs
 # resident on the HOST during `make serve`, so a big model OOMs a 16GB laptop.
-MEMORY_WATCHER_MODEL ?= gemma3:4b
+MEMORY_WATCHER_MODEL ?= qwen3.5:4b
 MEMORY_EMBED_MODEL   ?= nomic-embed-text
+# OLLAMA_BRIDGE_MODEL: the local model the sandbox's ollama-bridge exposes to pi
+# (interactive Alt+P cycle) AND the router's local option. Loads on demand (not
+# resident), so it can be bigger than the watcher. `pi-stack run` reads this from
+# ~/.config/pi-stack/config.toml (ollama_bridge_model); `make run` writes it into
+# the workspace so dev runs pick it up the same way. Keep in sync with the router
+# registry id in services/host/routing/defaults/models.json.
+OLLAMA_BRIDGE_MODEL ?= qwen3.5:9b
 
 # SERVICES: which host services `make serve` runs (memory). MCP (top of
 # file): which MCP servers `make run` auto-attaches and `make mcp-register`
@@ -182,6 +189,7 @@ run: ## Launch a pi-stack sandbox NAME. If NAME is stopped it's recreated (works
 	fi; \
 	TAG=$$(cat out/.local-image-tag 2>/dev/null || true); \
 	[ -n "$$TAG" ] && echo "(new sandbox $(NAME), local build :$$TAG)" || echo "(new sandbox $(NAME), kit-pinned image)"; \
+	mkdir -p .pi-stack && echo "$(OLLAMA_BRIDGE_MODEL)" > .pi-stack/ollama-bridge.model; \
 	exec sbx run pi-stack --name $(NAME) $${TAG:+--template docker.io/$(DOCKER_USER)/pi-stack:$$TAG} --kit $(KIT) $(OVERLAY_KIT_FLAG) $(MCP_FLAGS) . $(OVERLAY_WS) -- $(DEV_SKILLS)
 
 # Run the latest PUBLISHED image straight off the git-hosted kit — the true
@@ -279,10 +287,11 @@ evals: ## Accuracy eval harness (maintainer; a `run` needs promptfoo + COSTS MON
 	esac; \
 	(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && ./out/pi-stack-host evals $$args
 
-pull-models: ## Pull the local Ollama models the memory loop needs (watcher + embed)
-	@command -v ollama >/dev/null 2>&1 || { echo "ollama not installed — see https://ollama.com (optional: enables semantic recall + fact capture)"; exit 1; }
+pull-models: ## Pull the local Ollama models the stack uses (memory watcher + embed, and the bridge/router local model)
+	@command -v ollama >/dev/null 2>&1 || { echo "ollama not installed — see https://ollama.com (optional: enables semantic recall + fact capture + the local model)"; exit 1; }
 	@echo "Pulling watcher model: $(MEMORY_WATCHER_MODEL)"; ollama pull $(MEMORY_WATCHER_MODEL)
 	@echo "Pulling embed model:   $(MEMORY_EMBED_MODEL)";   ollama pull $(MEMORY_EMBED_MODEL)
+	@echo "Pulling local model:   $(OLLAMA_BRIDGE_MODEL)";   ollama pull $(OLLAMA_BRIDGE_MODEL)
 	@echo "Done. 'make doctor' will now show capture + semantic recall as ready."
 
 doctor: ## Show models + each optional integration: set up? service running?

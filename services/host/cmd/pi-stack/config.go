@@ -141,8 +141,9 @@ const configKeysHelp = `keys:
   services <name>           add/remove a host service in the services list
   knowledge_bundles <dir>   add/remove an OKF knowledge bundle dir (set also
                             enables the knowledge service)
-  memory_watcher_model <m>  ollama model for fact capture
-  memory_embed_model <m>    ollama model for semantic recall
+  memory_watcher_model <m>  ollama model for fact capture (host, resident)
+  memory_embed_model <m>    ollama model for semantic recall (host)
+  ollama_bridge_model <m>   local model the sandbox exposes to pi + the router
 
 With --profile <name>, edits the [profiles.<name>] table instead of the base
 config (creating it if absent). Per-profile keys: gog_account, mcp,
@@ -227,6 +228,17 @@ func applyConfigChange(cfg *config.Config, unset bool, key string, args []string
 			cfg.MemoryEmbedModel = args[0]
 		}
 		return fmt.Sprintf("memory_embed_model = %q", cfg.MemoryEmbedModel), nil
+
+	case "ollama_bridge_model":
+		if unset {
+			cfg.OllamaBridgeModel = config.DefaultOllamaBridgeModel
+		} else {
+			if len(args) != 1 {
+				return "", fmt.Errorf("config set ollama_bridge_model <model>: needs exactly one value")
+			}
+			cfg.OllamaBridgeModel = args[0]
+		}
+		return fmt.Sprintf("ollama_bridge_model = %q", cfg.OllamaBridgeModel), nil
 
 	default:
 		return "", fmt.Errorf("unknown key %q\n%s", key, configKeysHelp)

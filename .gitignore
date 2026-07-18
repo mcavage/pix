@@ -12,6 +12,9 @@ node_modules/
 # Launcher-generated per-run active-profile name (scopes in-VM memory recall/
 # capture). Regenerated every `pi-stack run`; never tracked.
 **/.pi-stack/profile
+# Local model tag the in-VM ollama-bridge exposes (from `pi-stack config set
+# ollama_bridge_model`). Regenerated every `pi-stack run`; never tracked.
+**/.pi-stack/ollama-bridge.model
 
 
 # 1Password secret references — user-specific (vault/item names); keep local

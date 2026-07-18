@@ -20,9 +20,15 @@ import (
 // Defaults applied when a config file is absent or a field is unset.
 const (
 	// Small on purpose: the watcher runs resident on the host during `serve`, so a
-	// 26-31B model OOMs a 16GB laptop. Bump via `pi-stack config set`.
-	DefaultMemoryWatcherModel = "gemma3:4b"
+	// big model OOMs a 16GB laptop. qwen3.5:4b is the current small, tools-capable
+	// choice (~3GB); bump via `pi-stack config set`.
+	DefaultMemoryWatcherModel = "qwen3.5:4b"
 	DefaultMemoryEmbedModel   = "nomic-embed-text"
+	// DefaultOllamaBridgeModel is the local model the sandbox's ollama-bridge
+	// exposes to pi (the interactive Alt+P cycle) AND the router's local option.
+	// It loads on demand (not resident), so it can be bigger than the watcher;
+	// qwen3.5:9b (~6.6GB) is the current all-rounder that still fits a 16GB box.
+	DefaultOllamaBridgeModel = "qwen3.5:9b"
 	// BuiltinImpl is the default plugin impl: compiled into the host binary
 	// rather than run as an external sub-process.
 	BuiltinImpl = "builtin"
@@ -83,6 +89,7 @@ type Config struct {
 
 	MemoryWatcherModel string `toml:"memory_watcher_model"`
 	MemoryEmbedModel   string `toml:"memory_embed_model"`
+	OllamaBridgeModel  string `toml:"ollama_bridge_model"`
 
 	// GogAccount is the Google Workspace account the gog host-MCP server serves.
 	// It is the Go-side source of truth doctor probes against; it MUST match the
@@ -194,6 +201,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MemoryWatcherModel == "" {
 		c.MemoryWatcherModel = DefaultMemoryWatcherModel
+	}
+	if c.OllamaBridgeModel == "" {
+		c.OllamaBridgeModel = DefaultOllamaBridgeModel
 	}
 	if c.MemoryEmbedModel == "" {
 		c.MemoryEmbedModel = DefaultMemoryEmbedModel
@@ -332,8 +342,9 @@ services = ["memory"]
 mcp = []
 
 # Local Ollama models the memory service uses.
-memory_watcher_model = "gemma3:4b"
+memory_watcher_model = "qwen3.5:4b"
 memory_embed_model = "nomic-embed-text"
+ollama_bridge_model = "qwen3.5:9b"
 
 # Google Workspace account the gog host-MCP server serves. This is the Go-side
 # source of truth pi-stack doctor probes against, and it MUST match the

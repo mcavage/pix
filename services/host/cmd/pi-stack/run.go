@@ -154,6 +154,12 @@ func runRun(argv []string) {
 	// Best-effort: a failure just leaves memory un-scoped (all default) this run.
 	writeProfileFile(o.Workspace, profile)
 
+	// Local model: hand the configured ollama_bridge_model to the in-VM
+	// ollama-bridge via a per-run workspace file, so `pi-stack config set
+	// ollama_bridge_model <tag>` is all you need (no sandbox env editing). Mirrors
+	// the profile/knowledge-scope seam. Best-effort.
+	writeOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
+
 	args := buildSbxArgs(cfg, o, version)
 
 	if os.Getenv("PI_STACK_DEBUG") != "" {
@@ -500,6 +506,23 @@ func projectBundle(workspace string) string {
 // mirroring how writeKnowledgeScope communicates the knowledge bundle set. It is
 // launcher-generated, per-run, and gitignored. Always written (even "default")
 // so a stale name from a previous run can never linger. Best-effort.
+// writeOllamaBridgeFile writes <workspace>/.pi-stack/ollama-bridge.model: the
+// local model tag the in-VM ollama-bridge should expose (interactive cycle + the
+// router's local option). Configured on the host with `pi-stack config set
+// ollama_bridge_model`; the bridge reads it (env var still overrides). Per-run,
+// gitignored, best-effort — an absent file just means the bridge uses its default.
+func writeOllamaBridgeFile(workspace, model string) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = config.DefaultOllamaBridgeModel
+	}
+	dir := filepath.Join(workspace, ".pi-stack")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(dir, "ollama-bridge.model"), []byte(model+"\n"), 0o644)
+}
+
 func writeProfileFile(workspace, profile string) error {
 	if strings.TrimSpace(profile) == "" {
 		profile = config.DefaultProfile

@@ -63,6 +63,18 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Local Ollama models are now coherent host config, not scattered env.** The
+  stale `gemma3:4b` defaults are gone: the memory watcher defaults to
+  `qwen3.5:4b` (small, current, tools-capable, still resident-friendly) and the
+  new `ollama_bridge_model` setting (the sandbox's local chat model + the
+  router's local option) defaults to `qwen3.5:9b`. Set it with `pi-stack config
+  set ollama_bridge_model <tag>`; `pi-stack run` writes it into
+  `<workspace>/.pi-stack/ollama-bridge.model` and the `ollama-bridge` extension
+  reads it — no more hand-editing `/etc/sandbox-persistent.sh`. The bridge display
+  label is now derived from the tag, so `OLLAMA_BRIDGE_MODEL_NAME` is optional
+  (you set one value, not two). `make pull-models` pulls all three local models.
+  NOTE: the host memory service uses the watcher + embed models; it does NOT use
+  the bridge/router local model — those are separate roles.
 - **evals is no longer a `pi-stack` command.** It was a consumer-facing launcher
   verb that consumers could not actually use (repo-rooted, needs promptfoo). It
   is now maintainer tooling in the Makefile only (`make evals`), running the

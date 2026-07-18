@@ -261,42 +261,37 @@ Memory needs local Ollama models:
 make pull-models
 ```
 
-### Ollama models and low-DRAM machines
+### Local Ollama models
 
-Two places use a local Ollama model, and both default to a small one
-(`gemma3:4b`, ~3.3GB) so the stack fits a 16GB laptop out of the box. **The new
-default only applies to fresh installs** — an existing `~/.config/pi-stack/
-config.toml` or `config/local.mk` keeps whatever it already has, so on an
-existing machine run the swap below explicitly:
+The stack uses local Ollama models in three roles. All three are `pi-stack config`
+settings on the host — you never hand-edit sandbox env. Pull them with
+`make pull-models` (or `ollama pull <tag>`); whatever tag you set must be pulled
+or the call 404s.
 
-1. **Memory watcher** (fact capture) — runs on the HOST during `pi-stack serve`
-   and Ollama keeps it resident, so this is the continuous DRAM cost. Swap it
-   without editing anything:
-   ```bash
-   pi-stack config set memory_watcher_model gemma3:4b   # or another pulled tag
-   ollama pull gemma3:4b
-   pi-stack serve                                        # restart to pick it up
-   ```
-   (`make serve` reads `MEMORY_WATCHER_MODEL` from `config/local.mk` instead.)
-2. **Interactive cycle model** (the `ollama/*` entry in the Alt+P squad) — loads
-   only when you select it. The `ollama-bridge` extension reads env vars, so
-   change it with no code edit. Set them in the sandbox's persistent env, then
-   **restart pi** (a plain `/reload` re-runs the extension in the same process,
-   which keeps the already-read `process.env`, so the swap needs a new pi):
-   ```bash
-   echo 'export OLLAMA_BRIDGE_MODEL=gemma3:4b'                >> /etc/sandbox-persistent.sh
-   echo 'export OLLAMA_BRIDGE_MODEL_NAME="Gemma 3 4B (local)"' >> /etc/sandbox-persistent.sh
-   # OLLAMA_BRIDGE_CONTEXT lowers the KV cache (default 32768) for even less RAM.
-   ```
-   The kit cycles `ollama/*`, so it matches whatever tag the bridge registers —
-   no need to touch `pi-kit/spec.yaml`. (The baked default is already `gemma3:4b`,
-   so most machines need none of this.)
+| role | config key | default | where it runs |
+| --- | --- | --- | --- |
+| fact capture | `memory_watcher_model` | `qwen3.5:4b` (~3GB) | HOST, **resident** during `pi-stack serve` (keep it small) |
+| semantic recall | `memory_embed_model` | `nomic-embed-text` | HOST, embeddings |
+| local chat model | `ollama_bridge_model` | `qwen3.5:9b` (~6.6GB) | SANDBOX, loads on demand (Alt+P cycle + the router's local option) |
 
-Whatever tag you set must be `ollama pull`ed on the host or the call 404s. Size
-guide for a tight 16GB box: `gemma3:1b` (~0.8GB, featherweight), `gemma3:4b`
-(~3.3GB, recommended), `gemma3:12b` (bump up here only on a roomier machine).
-DRAM frees itself once nothing invokes the big model — Ollama only loads a model
-when it's called. Free the disk too with `ollama rm <big-tag>` if you want.
+```bash
+pi-stack config set memory_watcher_model qwen3.5:4b   # host watcher (resident)
+pi-stack config set ollama_bridge_model  qwen3.5:9b   # local chat/router model
+make pull-models                                      # pull all three
+```
+
+How the sandbox picks up `ollama_bridge_model`: `pi-stack run` writes the
+configured tag into `<workspace>/.pi-stack/ollama-bridge.model`, and the
+`ollama-bridge` extension reads it at startup — so a `pi-stack config set` +
+next `pi-stack run` is all it takes. No `/etc/sandbox-persistent.sh` editing, and
+you set ONE value (the display label is derived from the tag; an
+`OLLAMA_BRIDGE_MODEL` env var still overrides for power users, and
+`OLLAMA_BRIDGE_CONTEXT` shrinks the KV cache for less RAM).
+
+Sizing for a 16GB box: the watcher is resident so keep it small (`qwen3.5:4b`);
+the bridge model loads only when you select it, so `qwen3.5:9b` is a fine
+all-rounder there and frees its DRAM once idle. Bump either on a roomier machine
+(`qwen3.5:27b`, `gemma4:12b`, ...); free disk with `ollama rm <tag>`.
 
 Knowledge is opt-in. Create a local OKF bundle or attach an existing one, then
 restart the host services:
