@@ -586,9 +586,11 @@ type brokerToken struct {
 }
 
 // brokerProxyMux serves a /token surface that mints via the dispensed
-// CredentialBroker client. auth is the required bearer (empty disables the
-// check). This is the DORMANT broker seam: no built-in broker constructs it in
-// the public tree, but an overlay broker plugs into exactly this shim.
+// CredentialBroker client. auth is the required bearer. This is the DORMANT
+// broker seam: no built-in broker constructs it in the public tree, but an
+// overlay broker plugs into exactly this shim. FAIL CLOSED: an empty bearer
+// rejects every request rather than serving /token unauthenticated (brokerService
+// already refuses to start in that state; this is defense in depth).
 func brokerProxyMux(h *pluginHolder, auth string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
@@ -596,7 +598,7 @@ func brokerProxyMux(h *pluginHolder, auth string) http.Handler {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
 			return
 		}
-		if auth != "" && r.Header.Get("Authorization") != "Bearer "+auth {
+		if auth == "" || r.Header.Get("Authorization") != "Bearer "+auth {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}

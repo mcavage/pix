@@ -545,7 +545,10 @@ func runHostLaunch(o hostOpts) {
 			// "banner then straight back to the shell, no error" failure).
 			if useOp {
 				fmt.Fprintf(os.Stderr, "\npi-stack host: launch failed (exit %d). If pi never opened, `op run` could not resolve your cloud keys from\n  %s\n", code, refs)
-				fmt.Fprintf(os.Stderr, "Reproduce op's own error:  op run --env-file=%s -- printenv ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY\n", refs)
+				// `-- true` surfaces op's OWN resolution error (op fails before it runs the
+				// command) without printing the resolved key values into the terminal /
+				// scrollback / CI logs, which `printenv <KEY>` would have done.
+				fmt.Fprintf(os.Stderr, "Reproduce op's own error (without printing your keys):  op run --env-file=%s -- true\n", refs)
 				fmt.Fprintln(os.Stderr, "Common causes: 1Password locked / not signed in; or a bad op:// ref — a field name with a space must be URL-encoded (op://Vault/Item/api%20key). Delete the file to run Ollama-only.")
 			} else {
 				fmt.Fprintf(os.Stderr, "\npi-stack host: pi exited with code %d.\n", code)
