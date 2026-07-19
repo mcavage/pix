@@ -85,8 +85,13 @@ func main() {
 		runServe(args[1:])
 	case "doctor":
 		runDoctorCmd(args[1:])
+	case "onboard":
+		runOnboardCmd(args[1:])
 	case "setup":
-		runSetupCmd(args[1:])
+		// Deprecated alias: the interactive wizard is gone; onboarding is in-session
+		// (`pi-stack run`), and the flag-driven host-config path is `pi-stack onboard`.
+		fmt.Fprintln(os.Stderr, "pi-stack: `setup` is deprecated; use `pi-stack onboard` (conversational onboarding is in-session via `pi-stack run`).")
+		runOnboardCmd(args[1:])
 	case "mcp":
 		runMcpCmd(args[1:])
 	case "secret":

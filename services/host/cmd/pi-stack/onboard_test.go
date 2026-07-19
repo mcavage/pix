@@ -1,0 +1,141 @@
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"strings"
+	"testing"
+
+	"pi-stack/host/config"
+)
+
+// containsStr reports whether list contains s (test helper, formerly in
+// setup_test.go).
+func containsStr(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// captureSave returns a save func that records the last saved config.
+func captureSave(dst **config.Config) func(*config.Config) error {
+	return func(c *config.Config) error { *dst = c; return nil }
+}
+
+// noHostResolver makes localMCPNames report the local set as UNKNOWN, so
+// validation fails closed on any non-gog/non-catalog mcp name.
+func noHostResolver() (string, error) { return "", fmt.Errorf("no host binary in test") }
+
+func TestValidateOnboarding_Allowlist(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.Profiles = map[string]config.Profile{"work": {}}
+	env := fakeEnv{present: map[string]bool{}}.env()
+
+	ok := []*onboardingResult{
+		{Version: 1, GogAccount: "me@x.com", MCP: []string{"gog"}},
+		{Version: 1, MCP: []string{"notion", "linear"}},
+		{Version: 1, ActiveProfile: "work"},
+		{Version: 1, Knowledge: &onboardKnowledge{Action: "skip"}},
+	}
+	for i, r := range ok {
+		if err := validateOnboardingResult(r, cfg, env, noHostResolver); err != nil {
+			t.Errorf("ok[%d] rejected: %v", i, err)
+		}
+	}
+
+	bad := map[string]*onboardingResult{
+		"bad version":       {Version: 2},
+		"unknown mcp":       {Version: 1, MCP: []string{"evil-server"}},
+		"unknown profile":   {Version: 1, ActiveProfile: "ghost"},
+		"bad kb action":     {Version: 1, Knowledge: &onboardKnowledge{Action: "nuke", Source: "/x"}},
+		"kb missing source": {Version: 1, Knowledge: &onboardKnowledge{Action: "use"}},
+		"model whitespace":  {Version: 1, OllamaBridgeModel: "bad model"},
+	}
+	for name, r := range bad {
+		if err := validateOnboardingResult(r, cfg, env, noHostResolver); err == nil {
+			t.Errorf("%s: expected rejection, got nil", name)
+		}
+	}
+}
+
+// TestApplyOnboarding_Idempotent is the fitness function: re-applying identical
+// input yields no further changes.
+func TestApplyOnboarding_Idempotent(t *testing.T) {
+	cfg := defaultCfg()
+	env := fakeEnv{present: map[string]bool{}}.env()
+	r := &onboardingResult{Version: 1, GogAccount: "me@x.com", MCP: []string{"gog"}, OllamaBridgeModel: "qwen3.5:9b"}
+
+	var saved *config.Config
+	first, err := applyOnboardingResult(r, cfg, env, &bytes.Buffer{}, captureSave(&saved))
+	if err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	if len(first) == 0 {
+		t.Fatal("first apply made no changes")
+	}
+	second, err := applyOnboardingResult(r, cfg, env, &bytes.Buffer{}, captureSave(&saved))
+	if err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	if len(second) != 0 {
+		t.Errorf("second apply not idempotent, changed: %v", second)
+	}
+}
+
+func TestApplyOnboarding_AppliesFields(t *testing.T) {
+	cfg := defaultCfg()
+	env := fakeEnv{present: map[string]bool{}}.env()
+	r := &onboardingResult{
+		Version: 1, GogAccount: "me@x.com", MCP: []string{"gog", "notion"},
+		OllamaBridgeModel: "qwen3.5:9b", MemoryWatcherModel: "qwen3.5:9b",
+	}
+	var saved *config.Config
+	if _, err := applyOnboardingResult(r, cfg, env, &bytes.Buffer{}, captureSave(&saved)); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if cfg.GogAccount != "me@x.com" {
+		t.Errorf("gog_account = %q", cfg.GogAccount)
+	}
+	if !containsStr(cfg.MCP, "gog") || !containsStr(cfg.MCP, "notion") {
+		t.Errorf("mcp = %v", cfg.MCP)
+	}
+	if !containsStr(cfg.Services, "memory") {
+		t.Errorf("memory service should be ensured: %v", cfg.Services)
+	}
+	if cfg.OllamaBridgeModel != "qwen3.5:9b" || cfg.MemoryWatcherModel != "qwen3.5:9b" {
+		t.Errorf("models not applied: bridge=%q watcher=%q", cfg.OllamaBridgeModel, cfg.MemoryWatcherModel)
+	}
+	if saved == nil {
+		t.Error("apply must Save the config")
+	}
+}
+
+func TestParseOnboardArgs(t *testing.T) {
+	o, err := parseOnboardArgs([]string{"--account", "a@b.com", "--mcp", "gog", "--mcp=notion", "--model", "m", "--yes"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if o.account != "a@b.com" || o.model != "m" || !o.assumeYes {
+		t.Errorf("parsed = %+v", o)
+	}
+	if !containsStr(o.mcp, "gog") || !containsStr(o.mcp, "notion") {
+		t.Errorf("mcp = %v", o.mcp)
+	}
+	if _, err := parseOnboardArgs([]string{"--account"}); err == nil {
+		t.Error("--account without value should error")
+	}
+}
+
+// TestOnboardOfferMarkerConst guards the marker/file names the extension + host
+// agree on (a rename must be deliberate).
+func TestOnboardOfferMarkerConst(t *testing.T) {
+	if onboardingOfferMarker != "onboarding.offer" || onboardingFileName != "onboarding.json" {
+		t.Errorf("marker/file names changed: %q / %q", onboardingOfferMarker, onboardingFileName)
+	}
+	if !strings.HasSuffix(onboardingFileName, ".json") {
+		t.Error("onboarding file must be json")
+	}
+}

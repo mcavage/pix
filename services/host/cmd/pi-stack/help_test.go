@@ -285,12 +285,12 @@ func TestParseDoctorArgs(t *testing.T) {
 	}
 }
 
-func TestParseSetupArgs_Help(t *testing.T) {
-	o, err := parseSetupArgs([]string{"--help"})
+func TestParseOnboardArgs_Help(t *testing.T) {
+	o, err := parseOnboardArgs([]string{"--help"})
 	if err != nil || !o.help {
-		t.Errorf("parseSetupArgs([--help]) = (%+v,%v), want help=true,nil", o, err)
+		t.Errorf("parseOnboardArgs([--help]) = (%+v,%v), want help=true,nil", o, err)
 	}
-	if _, err := parseSetupArgs([]string{"--bogus"}); err == nil {
+	if _, err := parseOnboardArgs([]string{"--bogus"}); err == nil {
 		t.Error("--bogus should be a usage error")
 	}
 }

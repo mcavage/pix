@@ -34,7 +34,9 @@ With no command,
 shows status.  It never launches a sandbox.  Launching is explicit through
 .B run
 or through the bare existing-directory form.  On a host without a configuration
-file, the no-argument form first offers setup when attached to a terminal.
+file, the no-argument form points you at
+.B pi-stack run
+(which offers conversational onboarding on the first run).
 A bare non-directory word is an error, not a workspace name.
 .SH PREREQUISITES
 Two things are required before an agent can run:
@@ -62,44 +64,34 @@ The shortest path from nothing to a working agent:
 .nf
 .RS
 curl -fsSL https://raw.githubusercontent.com/mcavage/pi-stack/main/install.sh | sh
-pi-stack setup
 sbx secret set -g anthropic -t "sk-..."
 pi-stack run
 .RE
 .fi
 .PP
-Step two runs guided setup, which checks for
-.B sbx
-and a provider key.  Step three is only needed when setup finds no provider key;
-.B setup
-does not set keys itself, it prints the exact command to run.  Step four
-launches the sandbox and drops you into the agent.
-.SH SETUP
-Guided setup narrates four steps and is idempotent, so it is safe to re-run to
-fix anything missing.
-.TP
-Step 1, provider API keys (required)
-Report which provider keys are present and print the
-.B sbx secret set
-command for each missing one.  Setup announces you are ready only when at least
-one provider key is present and
-.B sbx
-is on
-.BR PATH .
-.TP
-Step 2, memory and knowledge (recommended)
-Enable the local memory service and optionally scaffold or select a knowledge
-bundle.  Both run on the host; the sandbox reaches them across the host bridge.
-.TP
-Step 3, integrations (optional)
-Connect the agent to outside tools such as Google Workspace and Slack.
+Set at least one provider key, then
 .B run
-works without any of these.
-.TP
-Step 4, integration credentials (only when needed)
-Explained and seeded only when an integration that needs a credential was added
-in this run.  A user who adds none never sees the 1Password material and no refs
-file is created.
+launches the sandbox and drops you into the agent.  On the first run the agent
+offers to onboard you (opt-in); decline and you get a normal session.
+.SH ONBOARDING
+Onboarding is OPT-IN and happens IN-SESSION: the agent offers it on the first
+.B pi-stack run
+(say "onboard me" any time to redo it).  It seeds your identity and preferences
+into the memory service (so future sessions recall you) and may propose
+host-config changes by writing
+.B .pi-stack/onboarding.json
+in the workspace, which the host validates against an allowlist and applies
+under a confirmation gate on the next run.
+.PP
+.B run
+never forces onboarding.  Provider keys,
+.BR serve ,
+and the memory service are host-side prerequisites.  For automation and CI,
+.B pi-stack onboard
+applies deterministic host config from flags without a sandbox or a prompt (the
+former
+.B pi-stack setup
+is a deprecated alias for it; the interactive wizard was removed).
 .SH CREDENTIAL MODEL
 There are two distinct kinds of secret, and they live in different places.
 .PP
@@ -153,20 +145,33 @@ names.
 removes every pi-stack sandbox;
 .B \-\-except
 keeps one (e.g. the box you are in).
-.SS setup
+.SS onboard
 .TP
-.BR "pi-stack setup" " [" \-\-account " " email "] [" \-\-knowledge " " path-or-url "] [" \-\-yes "|" \-y "|" \-\-non-interactive "]"
-Run idempotent first-run setup, write configuration, seed the 1Password refs
-template, and register configured MCP servers.
+.BR "pi-stack onboard" " [" \-\-account " " email "] [" \-\-knowledge " " path-or-url "] [" \-\-mcp " " name "] [" \-\-model " " ollama-model "] [" \-\-apply "] [" \-\-yes "]"
+Host-side onboarding: the deterministic HOST configuration and the flag-driven
+path for automation and CI.  The CONVERSATIONAL onboarding is in-session — run
+.B pi-stack run
+(it offers onboarding on the first run) or say "onboard me" to the agent.
 .B \-\-account
-sets the Google Workspace account.
+sets the Google Workspace account and enables gog.
 .B \-\-knowledge
 scaffolds or selects the global OKF bundle.
-.BR \-\-yes ,
-.BR \-y ,
-and
-.B \-\-non-interactive
-suppress prompts and print unfinished steps as commands.
+.B \-\-mcp
+enables an allowlisted MCP server (repeatable).
+.B \-\-model
+sets the ollama-bridge model.
+.B \-\-apply
+applies a pending
+.B .pi-stack/onboarding.json
+in the current directory (the control-plane proposal the in-sandbox onboarding
+agent writes), under a confirmation gate.
+.B \-\-yes
+(alias
+.BR \-\-non-interactive )
+never prompts.
+The former
+.B pi-stack setup
+is a deprecated alias for this command; the interactive wizard is gone.
 .SS doctor
 .TP
 .BR "pi-stack doctor" " [" \-\-json "]"
@@ -1130,11 +1135,13 @@ Commands that execute
 .BR pi-stack-host ,
 or another child process may propagate that process's exit status.
 .SH EXAMPLES
-Run guided setup:
+Apply host-side config non-interactively (CI); conversational onboarding is
+in-session via
+.BR run :
 .PP
 .nf
 .RS
-pi-stack setup
+pi-stack onboard --account you@example.com --yes
 .RE
 .fi
 .PP

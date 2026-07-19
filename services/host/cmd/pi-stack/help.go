@@ -30,7 +30,7 @@ func wantsHelp(argv []string) bool {
 // knownVerbs is the set of top-level verbs, used to suggest a fix when a bare
 // positional (a would-be run DIR) is actually a mistyped verb.
 var knownVerbs = map[string]bool{
-	"help": true, "serve": true, "doctor": true, "setup": true, "status": true,
+	"help": true, "serve": true, "doctor": true, "onboard": true, "status": true,
 	"ls": true, "rm": true,
 	"config": true, "mcp": true, "memory": true, "knowledge": true,
 	"profile": true, "version": true, "run": true, "secret": true,
@@ -93,7 +93,7 @@ const helpAllText = `pi-stack — a personal, multi-model pi coding agent in a D
 
 Usage:  pi-stack [--profile NAME] <command> [args]
 
-New here?   pi-stack setup      one-time guided setup (a few minutes, resumable)
+New here?   pi-stack run       launch the agent; it offers to onboard you (opt-in)
 
 Workflow
   run [DIR]           launch the sandbox in DIR (default: .). This is the main one.
@@ -103,7 +103,7 @@ Workflow
   status              what is up, what is down, what is next   (also the bare command)
 
 Setup & health
-  setup               guided first-run setup (writes config + registers MCP)
+  onboard             host-side config (flags/CI); conversational onboarding is in-session
   doctor              diagnose host + sandbox health, print the fix commands
 
 Data
@@ -166,8 +166,8 @@ func verbUsage(verb string) (string, bool) {
 		return rmUsage, true
 	case "doctor":
 		return doctorUsage, true
-	case "setup":
-		return setupUsage, true
+	case "onboard", "setup":
+		return onboardUsage, true
 	case "config":
 		return configUsage, true
 	case "mcp":
@@ -255,16 +255,6 @@ leading with a one-line verdict and copy-pasteable TODO commands.
 
 flags:
   --json   emit the machine-readable report
-`
-
-const setupUsage = `usage: pi-stack setup [flags]
-
-Guided, idempotent first-run setup: writes config and registers MCP servers.
-
-flags:
-  --account <email>             set the Google Workspace (gog) account
-  --knowledge <path|url>        set up the global knowledge base
-  --yes, -y, --non-interactive  never prompt; print outstanding steps as commands
 `
 
 const configUsage = `usage: pi-stack config <show|path|get|set|unset> [args]
