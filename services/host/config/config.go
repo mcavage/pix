@@ -957,6 +957,9 @@ func Seed(path string) (bool, error) {
 	}
 	defer f.Close()
 	if _, err := f.WriteString(defaultConfigTOML); err != nil {
+		// Remove the empty file so future Seed() calls can retry rather than
+		// hitting os.IsExist and silently returning (false, nil).
+		_ = os.Remove(path)
 		return false, err
 	}
 	return true, nil

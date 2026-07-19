@@ -115,6 +115,9 @@ var pluginEnvAllowlist = map[string]bool{
 	"KNOWLEDGE_BUNDLES": true,
 	// Shared Ollama endpoint
 	"OLLAMA_HOST": true,
+	// Dynamic linker paths for CGO-built overlay plugins that link shared libraries.
+	"LD_LIBRARY_PATH":   true, // Linux
+	"DYLD_LIBRARY_PATH": true, // macOS
 	// Port vars the supervisor communicates to plugins
 	"PI_STACK_MEMORY_PORT":    true,
 	"PI_STACK_KNOWLEDGE_PORT": true,

@@ -182,7 +182,7 @@ func isTimeoutErr(err error) bool {
 // memOllamaHasModel asks Ollama whether a model is present locally (POST
 // /api/show, no inference) — used by the startup probe and `make doctor` so a
 // missing watcher model is loud, not a silent dropped capture. Uses
-// embedProbeClient (10-second timeout) so a wedged Ollama cannot leak goroutines
+// modelProbeClient (10-second timeout) so a wedged Ollama cannot leak goroutines
 // via an indefinite hang (H-2).
 func memOllamaHasModel(model string) bool {
 	body, _ := json.Marshal(map[string]any{"name": model})

@@ -189,6 +189,44 @@ func TestPluginEnvStripsBearer(t *testing.T) {
 	}
 }
 
+// TestPluginEnvAllowlistStripsSecrets verifies the full allowlist contract:
+// sensitive host env vars that are NOT in the allowlist must not pass through
+// to plugin subprocesses, regardless of their name. This covers the broader
+// security guarantee introduced by the allowlist refactor of pluginEnv() (M-3).
+func TestPluginEnvAllowlistStripsSecrets(t *testing.T) {
+	sensitive := map[string]string{
+		"AWS_ACCESS_KEY_ID":     "AKIAIOSFODNN7EXAMPLE",
+		"AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMI/K7MDENG",
+		"GITHUB_TOKEN":          "ghp_example1234",
+		"SSH_AUTH_SOCK":         "/tmp/ssh-agent.sock",
+		"ANTHROPIC_API_KEY":     "sk-ant-example",
+		"OPENAI_API_KEY":        "sk-openai-example",
+	}
+	for k, v := range sensitive {
+		t.Setenv(k, v)
+	}
+	env := pluginEnv(nil)
+	for _, kv := range env {
+		for k := range sensitive {
+			if strings.HasPrefix(kv, k+"=") {
+				t.Errorf("pluginEnv leaked sensitive var %q = %q", k, kv)
+			}
+		}
+	}
+	// Allowlisted vars must still pass through.
+	t.Setenv("PATH", "/usr/bin:/usr/local/bin")
+	pathFound := false
+	for _, kv := range pluginEnv(nil) {
+		if strings.HasPrefix(kv, "PATH=") {
+			pathFound = true
+			break
+		}
+	}
+	if !pathFound {
+		t.Error("PATH (an allowlisted var) was stripped — allowlist is too aggressive")
+	}
+}
+
 // --- F7(c): memoryProxyMux reproduces the JSON-RPC contract over a stub -------
 
 // stubStore is a deterministic in-memory MemoryStore for the proxy tests. No
