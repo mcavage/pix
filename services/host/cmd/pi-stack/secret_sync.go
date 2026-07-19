@@ -14,12 +14,76 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os"
 	"sort"
 	"strings"
 )
+
+// providerKeyRefOrder is the deterministic provider list for prompting (env var
+// used in op-refs.env -> sbx secret name).
+var providerKeyRefOrder = []struct{ envVar, name string }{
+	{"ANTHROPIC_API_KEY", "anthropic"},
+	{"OPENAI_API_KEY", "openai"},
+	{"GEMINI_API_KEY", "google"},
+}
+
+// offerOnePasswordKeys is the OPT-IN (default-No) setup step that wires model
+// keys to 1Password. It fires ONLY on a TTY when `op` is installed AND no
+// provider-key refs exist yet — so it never nags someone who already chose, and
+// never shows where op can't be used. Accepting writes op:// refs and force-syncs
+// them into sbx (overwriting the raw secrets), making 1Password the source of
+// truth. Declining (the default) leaves keys exactly as they were.
+func offerOnePasswordKeys(env shellEnv, in io.Reader, out io.Writer, tty bool) {
+	if !tty || in == nil || !opInstalled(env) || providerKeyRefsPresent(env) {
+		return
+	}
+	fmt.Fprintln(out, "")
+	if !confirmYN(in, out, "Manage model keys in 1Password (op:// refs) instead of raw sbx secrets? [y/N]: ", false) {
+		return
+	}
+	fmt.Fprintln(out, "Paste an op:// ref per provider (op://Vault/Item/field), or Enter to skip each.")
+	sc := bufio.NewScanner(in)
+	wrote := false
+	for _, p := range providerKeyRefOrder {
+		fmt.Fprintf(out, "  %s: ", p.name)
+		if !sc.Scan() {
+			break
+		}
+		ref := strings.TrimSpace(sc.Text())
+		if ref == "" {
+			continue
+		}
+		if !strings.HasPrefix(ref, "op://") {
+			fmt.Fprintf(out, "    skipped %s: not an op:// ref\n", p.name)
+			continue
+		}
+		if err := writeOpRefQuiet(env, p.envVar, ref); err != nil {
+			fmt.Fprintf(out, "    could not save %s: %v\n", p.name, err)
+			continue
+		}
+		wrote = true
+	}
+	if !wrote {
+		fmt.Fprintln(out, "No refs entered; keys unchanged.")
+		return
+	}
+	fmt.Fprintln(out, "Resolving from 1Password into sbx...")
+	syncProviderKeys(env, out) // force-overwrite sbx from the new refs
+}
+
+// writeOpRefQuiet upserts KEY=op://ref into op-refs.env without the CLI wrapper's
+// os.Exit, so the interactive offer can loop. Value is validated op:// by the
+// caller.
+func writeOpRefQuiet(env shellEnv, key, value string) error {
+	if env.writeFile == nil {
+		return fmt.Errorf("no writer available")
+	}
+	path, content, _ := opRefsContent(env)
+	return env.writeFile(path, []byte(upsertOpRef(content, key, value)), 0o600)
+}
 
 // providerKeyRefs maps each cloud model provider's op-refs.env ENV var to its
 // sbx secret name. Extend here to add a provider.

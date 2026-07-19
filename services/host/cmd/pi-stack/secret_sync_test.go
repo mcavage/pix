@@ -113,3 +113,39 @@ func TestEnsureProviderKeysFromRefs_OnlyMissing(t *testing.T) {
 		t.Error("must not op-read a key that sbx already has")
 	}
 }
+
+// offerOnePasswordKeys must stay silent unless TTY + op installed + no refs yet.
+func TestOfferOnePasswordKeys_Gating(t *testing.T) {
+	opEnv := shellEnv{
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			if name == "op" && len(args) >= 1 && args[0] == "--version" {
+				return "2.0", nil
+			}
+			return "", nil
+		},
+		readFile: func(string) (string, error) { return "", nil }, // no refs
+	}
+	// not a tty -> silent
+	var out bytes.Buffer
+	offerOnePasswordKeys(opEnv, strings.NewReader("y\n"), &out, false)
+	if out.String() != "" {
+		t.Errorf("must be silent when not a tty, got %q", out.String())
+	}
+	// refs already present -> silent even on a tty
+	out.Reset()
+	withRefs := opEnv
+	withRefs.readFile = func(string) (string, error) { return "ANTHROPIC_API_KEY=op://a/b/c\n", nil }
+	offerOnePasswordKeys(withRefs, strings.NewReader("y\n"), &out, true)
+	if strings.Contains(out.String(), "1Password") {
+		t.Errorf("must not offer when key refs already exist, got %q", out.String())
+	}
+	// op not installed -> silent
+	out.Reset()
+	noOp := opEnv
+	noOp.lookPath = func(string) (string, error) { return "", fmt.Errorf("nope") }
+	offerOnePasswordKeys(noOp, strings.NewReader("y\n"), &out, true)
+	if out.String() != "" {
+		t.Errorf("must be silent when op is not installed, got %q", out.String())
+	}
+}

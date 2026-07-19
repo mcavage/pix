@@ -197,7 +197,7 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 		}
 	} else if paths.dataRoot != "" {
 		// Move the whole data root aside (captured memory + knowledge index).
-		a.Backups = append(a.Backups, backupTarget{Path: paths.dataRoot, Label: "data directory (memory + knowledge)", Dangerous: true})
+		a.Backups = append(a.Backups, backupTarget{Path: paths.dataRoot, Label: "data directory (memory, knowledge, personal skills)", Dangerous: true})
 		// Honor a custom MEMORY_DB / KNOWLEDGE_DB that lives OUTSIDE the data root:
 		// the data-root move alone would miss it. Move ONLY the db FILE + its
 		// -wal/-shm sidecars, NEVER the whole parent dir. A whole directory is moved

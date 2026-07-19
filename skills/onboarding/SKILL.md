@@ -78,9 +78,12 @@ Offer AT MOST ONE follow-up, chosen from context — never a menu of options:
   nothing.
 - **Custom skill**: only if a repeatable task/gap actually surfaced. Draft it,
   show the file, save on confirm. Default location: the personal skills dir
-  `~/.local/share/pi-stack/skills/<name>/SKILL.md` (loads in every sandbox); use
-  a repo-local `skills/` path instead when it should be versioned with the
-  project.
+  `~/.local/share/pi-stack/skills/<name>/SKILL.md` (loads in every sandbox).
+  **Skills belong in git** — that dir is a working copy a `pi-stack reset` will
+  move aside, so `git init` it (if it isn't one) and tell the user to commit and
+  push to their own repo, so their skills survive a reset and sync across
+  machines. Use a repo-local `skills/` path instead when the skill should be
+  versioned with a specific project.
 
 Confirm before writing anything. Skip both if neither is real.
 

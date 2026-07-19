@@ -81,8 +81,9 @@ func runSetupCmd(argv []string) {
 		}
 	}
 
-	// Phase 1: host config (non-interactive: gate keys, report state, ensure memory).
-	if err := setupHostPhase(env, hostArgs, os.Stdout); err != nil {
+	// Phase 1: host config (report keys, ensure memory; a single opt-in 1Password
+	// offer on a TTY — see setupHostPhase).
+	if err := setupHostPhase(env, hostArgs, os.Stdin, os.Stdout, isTTY(os.Stdin)); err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack setup: %v\n", err)
 		os.Exit(1)
 	}
@@ -101,10 +102,10 @@ func runSetupCmd(argv []string) {
 }
 
 // setupHostPhase does the deterministic host configuration and reports what is
-// (and is not) ready. On a TTY with no flags it interactively offers to wire the
-// optional bits; with flags OR no TTY it applies the flags non-interactively
-// (the CI path), exactly like `pi-stack onboard`.
-func setupHostPhase(env shellEnv, flags []string, out io.Writer) error {
+// (and is not) ready. It stays non-interactive EXCEPT for one tightly-gated,
+// default-No offer to wire model keys to 1Password (TTY + op installed + no key
+// refs yet). With flags OR no TTY it is fully non-interactive (the CI path).
+func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, tty bool) error {
 	fmt.Fprintln(out, "pi-stack setup — configuring the host")
 	fmt.Fprintln(out, "")
 
@@ -119,6 +120,11 @@ func setupHostPhase(env shellEnv, flags []string, out io.Writer) error {
 	// Report status + the exact fix for any that are still missing. Keys are sbx
 	// secrets (proxy-injected); we only report them, never enter values.
 	reportProviderKeys(env, out)
+	// One opt-in, default-No offer to move keys into 1Password (only fires on a
+	// TTY when op is installed and no key refs exist yet). This is the thing that
+	// makes a fresh install AWARE of the 1Password path instead of silently doing
+	// nothing. Accepting writes op:// refs and syncs them into sbx.
+	offerOnePasswordKeys(env, in, out, tty)
 
 	// Build the config proposal. Flags win; otherwise, on a TTY, ask.
 	opts, perr := parseOnboardArgs(flags)
