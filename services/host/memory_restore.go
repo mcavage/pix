@@ -929,12 +929,7 @@ func printRestoreReport(w io.Writer, res restoreResult) {
 // memoryRestore itself stays hermetic. It resolves the SAME config.toml /
 // op-refs.env paths backup uses, so a full backup round-trips back into place.
 func resolveRestoreParams(archive string, force bool, now time.Time) restoreParams {
-	home, _ := os.UserHomeDir()
-
-	dbPath := strings.TrimSpace(os.Getenv("MEMORY_DB"))
-	if dbPath == "" {
-		dbPath = filepath.Join(home, ".pi-stack", "memory", "memory.db")
-	}
+	dbPath := config.MemoryDBPath()
 
 	return restoreParams{
 		ArchivePath: archive,

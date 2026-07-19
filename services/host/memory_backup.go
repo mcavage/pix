@@ -1,7 +1,7 @@
 // pi-stack-host `backup` — a HOT, consistent snapshot of the FULL pi-stack state
 // that is safe to take WITHOUT stopping `serve`:
 //
-//   - the precious artifact: ~/.pi-stack/memory/memory.db (the captured facts)
+//   - the precious artifact: ~/.local/share/pi-stack/memory/memory.db (the captured facts)
 //   - config.toml (profiles + all runtime settings)
 //   - op-refs.env (1Password REFS only — no secret values ever touch disk)
 //   - a manifest.json describing the backup, including the profile names it
@@ -519,11 +519,11 @@ func runMemoryHost(args []string) {
 const backupUsage = `usage: pi-stack-host backup [--out PATH] [--keep N]
 
   Take a hot, consistent FULL backup — safe while serve holds the db open. Packs
-  a VACUUM INTO snapshot of ~/.pi-stack/memory/memory.db (honors MEMORY_DB),
+  a VACUUM INTO snapshot of ~/.local/share/pi-stack/memory/memory.db (honors MEMORY_DB),
   config.toml, op-refs.env (refs only), and a manifest.json (profiles +
   knowledge-bundle notes) into a tar.gz.
 
-  --out PATH   archive path (default ~/.pi-stack/backups/pi-stack-backup-<ts>.tar.gz)
+  --out PATH   archive path (default ~/.local/share/pi-stack/backups/pi-stack-backup-<ts>.tar.gz)
   --keep N     keep only the newest N backups in the out dir (default 7)`
 
 func runBackupCLI(args []string) {
@@ -585,12 +585,7 @@ func runBackupCLI(args []string) {
 // record the profile names and knowledge-bundle notes in the manifest — a config
 // error never aborts a backup (the memory db is the precious part).
 func resolveBackupParams(outPath string, keep int, now time.Time) backupParams {
-	home, _ := os.UserHomeDir()
-
-	dbPath := strings.TrimSpace(os.Getenv("MEMORY_DB"))
-	if dbPath == "" {
-		dbPath = filepath.Join(home, ".pi-stack", "memory", "memory.db")
-	}
+	dbPath := config.MemoryDBPath()
 
 	if outPath == "" {
 		// A short random suffix makes the default name collision-proof: two backups
@@ -601,7 +596,7 @@ func resolveBackupParams(outPath string, keep int, now time.Time) backupParams {
 			name += "-" + tok
 		}
 		name += ".tar.gz"
-		outPath = filepath.Join(home, ".pi-stack", "backups", name)
+		outPath = filepath.Join(config.BackupsDir(), name)
 	}
 
 	embedModel := strings.TrimSpace(os.Getenv("MEMORY_EMBED_MODEL"))

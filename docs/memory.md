@@ -12,7 +12,7 @@ behaves, and where it stops.
 
 - **A host service.** `pi-stack-host serve` runs the memory daemon on
   `127.0.0.1:11435`, speaking JSON-RPC 2.0 over HTTP. It stores rows in a
-  pure-Go SQLite database (`~/.pi-stack/memory/memory.db`) with an FTS5
+  pure-Go SQLite database (`~/.local/share/pi-stack/memory/memory.db`) with an FTS5
   full-text index and a vector embedding per row.
 - **Reached from the sandbox over `host.docker.internal`.** The VM never holds
   the store; it makes RPC calls to the host. The kit network allowlist permits
@@ -131,7 +131,7 @@ lands, rely on the loopback bind (and an auth proxy for shared hosts), and treat
 | --- | --- | --- |
 | `MEMORY_PORT` | `11435` | daemon port |
 | `MEMORY_BIND` | `127.0.0.1` | bind address (keep it loopback) |
-| `MEMORY_DB` | `~/.pi-stack/memory/memory.db` | store path |
+| `MEMORY_DB` | `~/.local/share/pi-stack/memory/memory.db` | store path |
 | `MEMORY_EMBED_MODEL` | (config) | Ollama embedding model for recall ranking |
 | `MEMORY_WATCHER_MODEL` | (config) | Ollama model for capture extraction |
 | `OLLAMA_HOST` | Ollama default | where the daemon reaches Ollama |

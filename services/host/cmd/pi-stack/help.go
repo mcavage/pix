@@ -343,12 +343,12 @@ const resetUsage = `usage: pi-stack reset [--keep-memory] [--sbx] [--yes] [--for
 Reset the stack to a clean slate — REVERSIBLE. Nothing is hard-deleted: state is
 moved aside to a timestamped <path>.bak-<unixts> sibling you can rename back.
 
-Moves aside the config dir (~/.config/pi-stack) and the data dir (~/.pi-stack:
+Moves aside the config dir (~/.config/pi-stack) and the data dir (~/.local/share/pi-stack:
 captured memory + the knowledge index). Best-effort stops a running
 'pi-stack-host serve' first.
 
 flags:
-  --keep-memory   preserve ~/.pi-stack/memory (your captured facts); reset the rest
+  --keep-memory   preserve ~/.local/share/pi-stack/memory (your captured facts); reset the rest
   --sbx           also remove every pi-stack-* sandbox and unregister the
                   configured local MCP servers (provider secrets are left alone)
   --force         move the data dir even if 'pi-stack-host serve' still appears
@@ -371,7 +371,7 @@ product and are KEPT by default (their path + size are printed). Pass
 --purge-data to move them aside too.
 
 flags:
-  --keep-memory   preserve ~/.pi-stack/memory (your captured facts)
+  --keep-memory   preserve ~/.local/share/pi-stack/memory (your captured facts)
   --purge-data    also move aside harvested task artifacts (kept by default)
   --force         move the data dir even if 'pi-stack-host serve' still appears
                   to be running

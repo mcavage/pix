@@ -12,7 +12,7 @@
 // on a shared host without putting an auth proxy in front.
 //
 // Env: MEMORY_PORT (11435), MEMORY_BIND (127.0.0.1), MEMORY_DB
-// (~/.pi-stack/memory/memory.db), OLLAMA_HOST, MEMORY_EMBED_MODEL,
+// (~/.local/share/pi-stack/memory/memory.db), OLLAMA_HOST, MEMORY_EMBED_MODEL,
 // MEMORY_WATCHER_MODEL, MEMORY_SYNTH_MS.
 
 package main
@@ -37,6 +37,8 @@ import (
 
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
+
+	"pi-stack/host/config"
 )
 
 const (
@@ -829,11 +831,7 @@ func runMemory() {
 // caller routes the error through its cleanup-aware fatal; standalone callers
 // (memoryMux/runMemory, servePluginMemory self-exec) may still fatal on it.
 func buildMemStore() (*memStore, bool, error) {
-	dbPath := strings.TrimSpace(os.Getenv("MEMORY_DB"))
-	if dbPath == "" {
-		home, _ := os.UserHomeDir()
-		dbPath = filepath.Join(home, ".pi-stack", "memory", "memory.db")
-	}
+	dbPath := config.MemoryDBPath()
 	hasEmb := memEmbedderAvailable()
 	var embedder func(string) []float64
 	if hasEmb {

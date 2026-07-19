@@ -260,15 +260,57 @@ func ServeLogPath() string {
 	return filepath.Join(dir, "serve.log")
 }
 
+// DataDir resolves the per-user DATA dir: $XDG_DATA_HOME/pi-stack, else
+// ~/.local/share/pi-stack. This is the durable data root — the captured memory
+// store, the knowledge index, backups, and routing overrides all live under it,
+// as distinct from StateDir (ephemeral: logs, pidfiles) and configDir
+// (config.toml). It is the single source of truth for the data root; every
+// default below is derived from it so there is no second copy to drift.
+func DataDir() (string, error) {
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		return filepath.Join(xdg, "pi-stack"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "share", "pi-stack"), nil
+}
+
+// dataDirOr returns DataDir() or, if HOME cannot be resolved, a relative
+// "pi-stack" so path builders never panic on an empty base.
+func dataDirOr() string {
+	d, err := DataDir()
+	if err != nil {
+		return "pi-stack"
+	}
+	return d
+}
+
 // MemoryDBPath resolves the live memory sqlite path: $MEMORY_DB if set, else
-// ~/.pi-stack/memory/memory.db. Shared by the daemon and `restore` so both point
+// <data-dir>/memory/memory.db. Shared by the daemon and `restore` so both point
 // at the SAME store (and the SAME lock dir, below).
 func MemoryDBPath() string {
 	if p := strings.TrimSpace(os.Getenv("MEMORY_DB")); p != "" {
 		return p
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".pi-stack", "memory", "memory.db")
+	return filepath.Join(dataDirOr(), "memory", "memory.db")
+}
+
+// KnowledgeDBPath resolves the knowledge index sqlite path: $KNOWLEDGE_DB if
+// set, else <data-dir>/knowledge/knowledge.db. The index is rebuildable from the
+// OKF bundle; it lives beside the memory store under the data root.
+func KnowledgeDBPath() string {
+	if p := strings.TrimSpace(os.Getenv("KNOWLEDGE_DB")); p != "" {
+		return p
+	}
+	return filepath.Join(dataDirOr(), "knowledge", "knowledge.db")
+}
+
+// BackupsDir is <data-dir>/backups — the default destination for
+// `pi-stack state backup` archives.
+func BackupsDir() string {
+	return filepath.Join(dataDirOr(), "backups")
 }
 
 // MemoryLockPath is the advisory flock file the memory daemon and `restore` both

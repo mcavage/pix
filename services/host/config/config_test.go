@@ -511,3 +511,50 @@ func TestServePidPath(t *testing.T) {
 		t.Errorf("ServePidPath dir %q != config dir %q", filepath.Dir(ServePidPath()), filepath.Dir(Path()))
 	}
 }
+
+// TestDataDirLayout locks the XDG data-root resolution: $XDG_DATA_HOME wins,
+// else ~/.local/share/pi-stack, and every durable default derives from it.
+func TestDataDirLayout(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", xdg)
+	t.Setenv("MEMORY_DB", "")
+	t.Setenv("KNOWLEDGE_DB", "")
+
+	d, err := DataDir()
+	if err != nil {
+		t.Fatalf("DataDir: %v", err)
+	}
+	if want := filepath.Join(xdg, "pi-stack"); d != want {
+		t.Errorf("DataDir = %q, want %q", d, want)
+	}
+	if got, want := MemoryDBPath(), filepath.Join(xdg, "pi-stack", "memory", "memory.db"); got != want {
+		t.Errorf("MemoryDBPath = %q, want %q", got, want)
+	}
+	if got, want := KnowledgeDBPath(), filepath.Join(xdg, "pi-stack", "knowledge", "knowledge.db"); got != want {
+		t.Errorf("KnowledgeDBPath = %q, want %q", got, want)
+	}
+	if got, want := BackupsDir(), filepath.Join(xdg, "pi-stack", "backups"); got != want {
+		t.Errorf("BackupsDir = %q, want %q", got, want)
+	}
+
+	// Env overrides win over the derived default.
+	t.Setenv("MEMORY_DB", "/custom/mem.db")
+	if got := MemoryDBPath(); got != "/custom/mem.db" {
+		t.Errorf("MemoryDBPath with MEMORY_DB = %q, want /custom/mem.db", got)
+	}
+}
+
+// TestDataDirDefaultHome checks the ~/.local/share/pi-stack fallback when
+// XDG_DATA_HOME is unset (uses HOME).
+func TestDataDirDefaultHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("HOME", home)
+	d, err := DataDir()
+	if err != nil {
+		t.Fatalf("DataDir: %v", err)
+	}
+	if want := filepath.Join(home, ".local", "share", "pi-stack"); d != want {
+		t.Errorf("DataDir = %q, want %q", d, want)
+	}
+}
