@@ -20,11 +20,11 @@ func TestRedactURL_Userinfo(t *testing.T) {
 // (no userinfo '@') must be masked, not passed through verbatim.
 func TestRedactURL_QueryToken(t *testing.T) {
 	cases := map[string]string{
-		"https://host/repo.git?access_token=SECRET":        "https://host/repo.git?access_token=***",
-		"https://host/r.git?private_token=abc&ref=main":    "https://host/r.git?private_token=***&ref=main",
-		"https://host/r.git?ref=main&api_key=zzz":          "https://host/r.git?ref=main&api_key=***",
-		"https://u:p@host/r.git?token=T#frag":              "https://***@host/r.git?token=***#frag",
-		"https://host/r.git?ref=main":                      "https://host/r.git?ref=main", // nothing secret
+		"https://host/repo.git?access_token=SECRET":     "https://host/repo.git?access_token=***",
+		"https://host/r.git?private_token=abc&ref=main": "https://host/r.git?private_token=***&ref=main",
+		"https://host/r.git?ref=main&api_key=zzz":       "https://host/r.git?ref=main&api_key=***",
+		"https://u:p@host/r.git?token=T#frag":           "https://***@host/r.git?token=***#frag",
+		"https://host/r.git?ref=main":                   "https://host/r.git?ref=main", // nothing secret
 	}
 	for in, want := range cases {
 		if got := RedactURL(in); got != want {
