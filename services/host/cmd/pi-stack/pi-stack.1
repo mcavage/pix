@@ -453,7 +453,7 @@ snapshot of the memory database, the
 knowledge bundle's path and git remote) into a gzip tar archive.  Knowledge
 bundle contents are NOT archived: a bundle is a git repository and git is its
 backup; the manifest records only where it lives.  The default output is
-.BR ~/.pi-stack/backups/pi-stack-backup- timestamp .tar.gz;
+.BR ~/.local/share/pi-stack/backups/pi-stack-backup- timestamp .tar.gz;
 the default retention count is 7.  The alias
 .B \-o
 is accepted for
@@ -1008,13 +1008,13 @@ Default global OKF bundle created by
 Cached clones for knowledge bundle Git URLs.
 .SS "Data tree"
 .TP
-.B ~/.pi-stack/memory/memory.db
+.B ~/.local/share/pi-stack/memory/memory.db
 Default memory SQLite database.
 .TP
-.B ~/.pi-stack/knowledge/knowledge.db
+.B ~/.local/share/pi-stack/knowledge/knowledge.db
 Default knowledge SQLite index.
 .TP
-.B ~/.pi-stack/backups/pi-stack-backup-*.tar.gz
+.B ~/.local/share/pi-stack/backups/pi-stack-backup-*.tar.gz
 Default full backup archives (memory, config, and op-refs).
 .SS "Workspace and installation files"
 .TP
@@ -1076,12 +1076,12 @@ This does not change the canonical refs path used by
 .TP
 .B MEMORY_DB
 Override the memory database path, normally
-.BR ~/.pi-stack/memory/memory.db .
+.BR ~/.local/share/pi-stack/memory/memory.db .
 Reset, backup, and restore honor it.
 .TP
 .B KNOWLEDGE_DB
 Override the knowledge index path, normally
-.BR ~/.pi-stack/knowledge/knowledge.db .
+.BR ~/.local/share/pi-stack/knowledge/knowledge.db .
 Reset honors it.
 .TP
 .B MEMORY_PORT
