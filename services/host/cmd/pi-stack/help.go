@@ -121,7 +121,7 @@ Config & context
   profile ls|use      switch between contexts (work / personal / default)
 
 Parallel work
-  task <cmd>          new | ls | rm | gc | harvest: parallel task clones of one repo
+  task <cmd>          new | ls | path | rm | gc | harvest: parallel task clones of one repo
 
 Integrations & credentials
   mcp register|ls     register local stdio MCP servers with the sbx gateway

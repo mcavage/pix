@@ -777,6 +777,14 @@ is passed to pi.
 List this repo's tasks with their branch, sandbox status, and git state
 (dirty and unpushed markers).  Read-only.
 .TP
+.BR "pi-stack task path" " " name
+Print the task's checkout directory and nothing else, so it composes in a
+shell:
+.BR "cd \"$(pi-stack task " name " path)\"" .
+The convenience form
+.B "pi-stack task" name "path"
+is also accepted.  A missing task exits non-zero with an empty stdout.
+.TP
 .BR "pi-stack task rm" " " name " [" \-\-force "]"
 Tear down the sandbox and the clone, guarded.  It refuses uncommitted or
 unpushed work and prints the exact recovery command unless
