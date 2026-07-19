@@ -425,4 +425,3 @@ func slackTools() []mcpTool {
 			jsonObj{"query": s("substring"), "limit": n("1-200 (default 50)")}, []string{"query"}},
 	}
 }
-
