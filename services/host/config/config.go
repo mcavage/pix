@@ -930,6 +930,8 @@ func SeedOpRefsAt(path string) (created bool, err error) {
 	}
 	defer f.Close()
 	if _, err := f.WriteString(OpRefsTemplate); err != nil {
+		// Remove the empty file so future calls can retry (same pattern as Seed()).
+		_ = os.Remove(path)
 		return false, err
 	}
 	return true, nil
