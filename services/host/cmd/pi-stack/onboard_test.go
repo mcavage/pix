@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -137,5 +139,77 @@ func TestOnboardOfferMarkerConst(t *testing.T) {
 	}
 	if !strings.HasSuffix(onboardingFileName, ".json") {
 		t.Error("onboarding file must be json")
+	}
+}
+
+func TestIsInteractiveLaunch(t *testing.T) {
+	cases := []struct {
+		pass []string
+		want bool
+	}{
+		{nil, true},
+		{[]string{"--model", "x"}, true},
+		{[]string{"-p", "do a thing"}, false},
+		{[]string{"--print"}, false},
+		{[]string{"--print=hi"}, false},
+	}
+	for _, c := range cases {
+		if got := isInteractiveLaunch(c.pass); got != c.want {
+			t.Errorf("isInteractiveLaunch(%v) = %v, want %v", c.pass, got, c.want)
+		}
+	}
+}
+
+// TestReconcileOnboarding_AppliesFromFile writes a valid proposal, reconciles it
+// with assumeYes (CI path), and asserts the config was applied and the file
+// removed.
+func TestReconcileOnboarding_AppliesFromFile(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	t.Setenv("PI_STACK_PROFILE", "")
+	dir := filepath.Join(ws, ".pi-stack")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fp := filepath.Join(dir, "onboarding.json")
+	if err := os.WriteFile(fp, []byte(`{"version":1,"gog_account":"me@x.com","mcp":["gog"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := fakeEnv{present: map[string]bool{}}.env()
+
+	var out bytes.Buffer
+	reconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false)
+
+	if _, err := os.Stat(fp); !os.IsNotExist(err) {
+		t.Errorf("onboarding.json should be removed after apply, err=%v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GogAccount != "me@x.com" || !containsStr(cfg.MCP, "gog") {
+		t.Errorf("config not applied: gog=%q mcp=%v", cfg.GogAccount, cfg.MCP)
+	}
+}
+
+// TestReconcileOnboarding_NonTTYLeavesFile: without assumeYes and no TTY, the
+// proposal is left in place (never silently applied).
+func TestReconcileOnboarding_NonTTYLeavesFile(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	t.Setenv("PI_STACK_PROFILE", "")
+	dir := filepath.Join(ws, ".pi-stack")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fp := filepath.Join(dir, "onboarding.json")
+	if err := os.WriteFile(fp, []byte(`{"version":1,"gog_account":"me@x.com"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := fakeEnv{present: map[string]bool{}}.env()
+	var out bytes.Buffer
+	reconcileOnboarding(ws, env, strings.NewReader(""), &out, false, false)
+	if _, err := os.Stat(fp); err != nil {
+		t.Errorf("non-tty reconcile must leave the file for review, err=%v", err)
 	}
 }

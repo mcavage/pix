@@ -195,22 +195,15 @@ func classifyBareArg(a string) (msg string, launch bool) {
 	return msg, false
 }
 
-// firstRunHook is the onboarding entry point, indirected through a package var
-// so the help-before-onboarding ordering is unit-testable: a test swaps it for a
-// spy and asserts a help short-circuit never reaches it.
-var firstRunHook = maybeFirstRun
-
 // runVerb handles the `run` verb and the bare-DIR alias. It short-circuits to
-// run usage on a -h/--help request BEFORE any side effect (notably first-run
-// onboarding), so `pi-stack run --help` prints help even on a config-less host
-// instead of dropping into the setup prompt. Otherwise it runs onboarding (which
-// may fully handle a fresh host) then launches the sandbox.
+// run usage on a -h/--help request, then launches. It deliberately NEVER runs
+// onboarding (constraint: `pi-stack run` just gives the agent to the user);
+// the opt-in onboarding offer is delivered IN-SESSION by the agent (runRun
+// drops the first-run marker the `onboarding` extension reads). Only the bare
+// `pi-stack` status path nudges a config-less host toward `run`.
 func runVerb(argv []string) {
 	if wantsHelp(argv) {
 		fmt.Print(runUsage)
-		return
-	}
-	if firstRunHook() {
 		return
 	}
 	runRun(argv)

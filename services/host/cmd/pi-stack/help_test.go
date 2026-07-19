@@ -375,18 +375,11 @@ func TestDoctorJSONView(t *testing.T) {
 	}
 }
 
-// TestRunVerb_HelpSkipsOnboarding is the F1 gate: `run --help` prints run usage
-// and returns BEFORE first-run onboarding, so a config-less host is not dropped
-// into the setup prompt. firstRunHook is swapped for a spy that must never fire
-// on a help short-circuit.
-func TestRunVerb_HelpSkipsOnboarding(t *testing.T) {
-	old := firstRunHook
-	defer func() { firstRunHook = old }()
-
+// TestRunVerb_HelpPrintsUsage is the F1 gate: `run --help` prints run usage and
+// returns. `run` NEVER onboards (onboarding is opt-in and in-session), so there
+// is no first-run hook to reach; a help request just short-circuits to usage.
+func TestRunVerb_HelpPrintsUsage(t *testing.T) {
 	for _, argv := range [][]string{{"--help"}, {"-h"}, {"somedir", "--help"}} {
-		called := false
-		firstRunHook = func() bool { called = true; return true }
-
 		old := os.Stdout
 		rp, wp, _ := os.Pipe()
 		os.Stdout = wp
@@ -396,9 +389,6 @@ func TestRunVerb_HelpSkipsOnboarding(t *testing.T) {
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(rp)
 
-		if called {
-			t.Errorf("runVerb(%v) invoked first-run onboarding — help must short-circuit first", argv)
-		}
 		if !strings.Contains(buf.String(), "usage: pi-stack run") {
 			t.Errorf("runVerb(%v) = %q, want run usage", argv, buf.String())
 		}
