@@ -42,10 +42,11 @@ var DefaultServices = []string{"memory"}
 // PluginSpec configures one plugin slot: how it is implemented and, for external
 // impls, where the binary lives and how it is verified/reached.
 type PluginSpec struct {
-	Impl string `toml:"impl"` // "builtin" (default) or an external impl name
-	Path string `toml:"path"` // path to an external plugin binary
-	SHA  string `toml:"sha"`  // expected checksum of the external binary
-	Port int    `toml:"port"` // port an external plugin listens on
+	Impl     string   `toml:"impl"`      // "builtin" (default) or an external impl name
+	Path     string   `toml:"path"`      // path to an external plugin binary
+	SHA      string   `toml:"sha"`       // expected checksum of the external binary
+	Port     int      `toml:"port"`      // port an external plugin listens on
+	ExtraEnv []string `toml:"extra_env"` // additional env vars granted to this plugin subprocess
 }
 
 // Profile is a named override set layered onto the base (flat) config so one
@@ -929,6 +930,8 @@ func SeedOpRefsAt(path string) (created bool, err error) {
 	}
 	defer f.Close()
 	if _, err := f.WriteString(OpRefsTemplate); err != nil {
+		// Remove the empty file so future calls can retry (same pattern as Seed()).
+		_ = os.Remove(path)
 		return false, err
 	}
 	return true, nil
@@ -936,16 +939,29 @@ func SeedOpRefsAt(path string) (created bool, err error) {
 
 // Seed writes a commented default config.toml at path only if absent. It returns
 // false (and a nil error) if the file already existed — it never clobbers.
+// Uses O_CREATE|O_EXCL for an atomic no-clobber write (no Stat-then-Write TOCTOU
+// window), matching the SeedOpRefsAt() pattern (L-1).
 func Seed(path string) (bool, error) {
-	if _, err := os.Stat(path); err == nil {
-		return false, nil
-	} else if !os.IsNotExist(err) {
-		return false, err
-	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return false, err
 	}
-	if err := os.WriteFile(path, []byte(defaultConfigTOML), 0o644); err != nil {
+	// Tighten an existing config dir that may have been created 0755 elsewhere,
+	// matching SeedOpRefsAt() (F5).
+	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
+		return false, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(defaultConfigTOML); err != nil {
+		// Remove the empty file so future Seed() calls can retry rather than
+		// hitting os.IsExist and silently returning (false, nil).
+		_ = os.Remove(path)
 		return false, err
 	}
 	return true, nil

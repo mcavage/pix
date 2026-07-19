@@ -138,7 +138,13 @@ export default async function (pi: any): Promise<void> {
 			});
 			req.pipe(upstream);
 		});
-		server.on("error", () => {});
+		server.on("error", (err) => {
+			// Suppress EADDRINUSE on listen — handled by the settle promise
+			// above. Log everything else so post-startup errors are diagnosable.
+			if ((err as any).code !== "EADDRINUSE") {
+				process.stderr.write(`[ollama-bridge] server error: ${err}\n`);
+			}
+		});
 		// Settle on BOTH 'listening' and 'error'. Critical for /reload: the factory
 		// re-runs while the PRE-reload server may still hold the port, so listen()
 		// fires EADDRINUSE. If we only resolved on 'listening', the await would hang

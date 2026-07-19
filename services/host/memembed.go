@@ -57,11 +57,39 @@ func watcherTimeout() time.Duration { return envMs("MEMORY_WATCHER_TIMEOUT_MS", 
 // /api/show re-probe. See watcherCaptureAvailable().
 const watcherBackoff = 60 * time.Second
 
+// embedProbeInterval throttles the automatic re-probe of the embed endpoint
+// after a failure, mirroring the watcher re-probe pattern. Once embedDisabled
+// is latched, we re-attempt at most once per interval so a recovered Ollama
+// restores semantic recall without a daemon restart.
+const embedProbeInterval = 60 * time.Second
+
+// embedLastProbe is the unix-nano time of the most recent embed re-probe
+// attempt. Used to throttle recovery probes when embedDisabled is true.
+var embedLastProbe atomic.Int64
+
+// modelProbeClient is the HTTP client for lightweight Ollama model-presence
+// probes (/api/show). A 10-second timeout prevents goroutine leaks when Ollama
+// accepts the connection but never sends a response. It is a package-level
+// variable so tests can substitute a mock server without forking the process.
+var modelProbeClient = &http.Client{Timeout: 10 * time.Second}
+
 var embedDisabled atomic.Bool
 
 func memEmbed(text string) []float64 {
 	if embedDisabled.Load() {
-		return nil
+		// Re-probe: if the backoff interval has elapsed, tentatively clear the
+		// flag and let the call through. On continued failure we re-latch below;
+		// on success the flag stays clear and semantic recall is restored without
+		// a daemon restart (H-3).
+		now := time.Now().UnixNano()
+		last := embedLastProbe.Load()
+		if now-last < int64(embedProbeInterval) {
+			return nil // still in backoff
+		}
+		if !embedLastProbe.CompareAndSwap(last, now) {
+			return nil // another goroutine is already re-probing
+		}
+		embedDisabled.Store(false) // tentatively allow; re-latched below on failure
 	}
 	model := os.Getenv("MEMORY_EMBED_MODEL")
 	if model == "" {
@@ -71,13 +99,22 @@ func memEmbed(text string) []float64 {
 	client := &http.Client{Timeout: embedTimeout()}
 	res, err := client.Post(ollamaHost()+"/api/embed", "application/json", bytes.NewReader(body))
 	if err != nil {
-		embedDisabled.Store(true)
+		if !embedDisabled.Swap(true) {
+			// First time latching: log so users know why semantic recall degraded.
+			log.Printf("memory embed: semantic recall DISABLED — embed model unavailable: %v; will retry automatically every %.0fs", err, embedProbeInterval.Seconds())
+		}
 		return nil
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		embedDisabled.Store(true)
+		if !embedDisabled.Swap(true) {
+			log.Printf("memory embed: semantic recall DISABLED — embed HTTP %d; will retry automatically every %.0fs", res.StatusCode, embedProbeInterval.Seconds())
+		}
 		return nil
+	}
+	// Success: if the flag was set (recovery path), announce the restoration.
+	if embedDisabled.Swap(false) {
+		log.Printf("memory embed: embed model available again — semantic recall RE-ENABLED")
 	}
 	var parsed struct {
 		Embeddings [][]float64 `json:"embeddings"`
@@ -144,10 +181,12 @@ func isTimeoutErr(err error) bool {
 
 // memOllamaHasModel asks Ollama whether a model is present locally (POST
 // /api/show, no inference) — used by the startup probe and `make doctor` so a
-// missing watcher model is loud, not a silent dropped capture.
+// missing watcher model is loud, not a silent dropped capture. Uses
+// modelProbeClient (10-second timeout) so a wedged Ollama cannot leak goroutines
+// via an indefinite hang (H-2).
 func memOllamaHasModel(model string) bool {
 	body, _ := json.Marshal(map[string]any{"name": model})
-	res, err := http.Post(ollamaHost()+"/api/show", "application/json", bytes.NewReader(body))
+	res, err := modelProbeClient.Post(ollamaHost()+"/api/show", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return false
 	}

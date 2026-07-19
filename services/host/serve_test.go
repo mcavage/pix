@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -110,9 +112,14 @@ func TestServeBrokerSlot(t *testing.T) {
 func TestVerifyPluginSHA(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "fake-plugin")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	content := []byte("#!/bin/sh\nexit 0\n")
+	if err := os.WriteFile(bin, content, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
+	// Compute the correct SHA-256 of the binary content.
+	sum := sha256.Sum256(content)
+	correctSHA := hex.EncodeToString(sum[:])
 
 	// Empty SHA is a hard refusal (F-C): external plugins MUST be sha-pinned.
 	if err := verifyPluginSHA(config.PluginSpec{Path: bin}); err == nil || !strings.Contains(err.Error(), "unpinned") {
@@ -123,6 +130,16 @@ func TestVerifyPluginSHA(t *testing.T) {
 	err := verifyPluginSHA(config.PluginSpec{Path: bin, SHA: "0000deadbeef"})
 	if err == nil || !strings.Contains(err.Error(), "mismatch") {
 		t.Fatalf("wrong SHA should refuse with a mismatch error, got %v", err)
+	}
+
+	// Correct SHA passes (M-8).
+	if err := verifyPluginSHA(config.PluginSpec{Path: bin, SHA: correctSHA}); err != nil {
+		t.Errorf("correct SHA should be accepted, got %v", err)
+	}
+
+	// Uppercase SHA is accepted (case-insensitive match) (M-8).
+	if err := verifyPluginSHA(config.PluginSpec{Path: bin, SHA: strings.ToUpper(correctSHA)}); err != nil {
+		t.Errorf("uppercase SHA should be accepted, got %v", err)
 	}
 }
 
@@ -169,6 +186,44 @@ func TestPluginEnvStripsBearer(t *testing.T) {
 	}
 	if got != "PI_STACK_BROKER_AUTH=broker-only" {
 		t.Fatalf("broker env = %q, want the explicitly-granted value only", got)
+	}
+}
+
+// TestPluginEnvAllowlistStripsSecrets verifies the full allowlist contract:
+// sensitive host env vars that are NOT in the allowlist must not pass through
+// to plugin subprocesses, regardless of their name. This covers the broader
+// security guarantee introduced by the allowlist refactor of pluginEnv() (M-3).
+func TestPluginEnvAllowlistStripsSecrets(t *testing.T) {
+	sensitive := map[string]string{
+		"AWS_ACCESS_KEY_ID":     "AKIAIOSFODNN7EXAMPLE",
+		"AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMI/K7MDENG",
+		"GITHUB_TOKEN":          "ghp_example1234",
+		"SSH_AUTH_SOCK":         "/tmp/ssh-agent.sock",
+		"ANTHROPIC_API_KEY":     "sk-ant-example",
+		"OPENAI_API_KEY":        "sk-openai-example",
+	}
+	for k, v := range sensitive {
+		t.Setenv(k, v)
+	}
+	env := pluginEnv(nil)
+	for _, kv := range env {
+		for k := range sensitive {
+			if strings.HasPrefix(kv, k+"=") {
+				t.Errorf("pluginEnv leaked sensitive var %q = %q", k, kv)
+			}
+		}
+	}
+	// Allowlisted vars must still pass through.
+	t.Setenv("PATH", "/usr/bin:/usr/local/bin")
+	pathFound := false
+	for _, kv := range pluginEnv(nil) {
+		if strings.HasPrefix(kv, "PATH=") {
+			pathFound = true
+			break
+		}
+	}
+	if !pathFound {
+		t.Error("PATH (an allowlisted var) was stripped — allowlist is too aggressive")
 	}
 }
 

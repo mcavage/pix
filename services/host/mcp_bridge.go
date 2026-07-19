@@ -131,7 +131,7 @@ func mcpServerFor(name string) (plugin.McpServer, func(), error) {
 		return nil, noop, fmt.Errorf("locate self: %w", err)
 	}
 	sup := &supervisor{}
-	h, err := sup.launch(name, "mcp", spec, selfPath, nil)
+	h, err := sup.launch(name, "mcp", spec, selfPath, spec.ExtraEnv)
 	if err != nil {
 		sup.shutdown()
 		return nil, noop, fmt.Errorf("launch external mcp plugin %q: %w", name, err)

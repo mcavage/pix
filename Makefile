@@ -114,6 +114,9 @@ SERVICES ?= $(shell "$(PI_STACK_BIN)" config get services 2>/dev/null)
 # metacharacters. For a value that needs them (e.g. a connection string with
 # `&` or spaces), have the overlay service read an env FILE instead of passing
 # it here. See docs/OVERLAY.md.
+# VALIDATION NOTE: SERVE_ENV is passed unquoted and untested — the Makefile
+# cannot validate its content. Ensure each entry is a safe shell token before
+# setting it (e.g. `SERVE_ENV="KEY=value"` where value has no spaces or &).
 SERVE_ENV ?=
 
 # out/ is gitignored, so it's absent on a fresh clone. Several targets (load,
@@ -122,7 +125,7 @@ SERVE_ENV ?=
 # at parse time so every target can rely on it.
 $(shell mkdir -p out)
 
-.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay launcher route require-launcher
+.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay launcher route require-launcher doctor-overlay
 
 # Guard for every target that sources runtime config (SERVICES/MCP/GOG_ACCOUNT/
 # models) from config.toml: the launcher binary MUST exist, and `config get`
@@ -200,6 +203,9 @@ secrets: ## Store provider keys + GitHub token as global sbx service secrets
 	@echo '  echo "$$GEMINI_API_KEY"    | sbx secret set -g google'
 	@echo '  gh auth token             | sbx secret set -g github   # gh in-sandbox, no GH_TOKEN export needed'
 
+# NOTE: NAME must not contain spaces or shell metacharacters — the awk -v
+# assignment below is not quoted against them. The default naming convention
+# (pi-stack-<dir>) is safe. Non-default names must follow the same rule.
 NAME ?= pi-stack-pi-stack
 run: require-launcher ## Launch a pi-stack sandbox NAME. If NAME is stopped it's recreated (workspace + .pi-sessions are host-mounted, so nothing is lost); if it's already running this refuses rather than clobber a live session. `make run NAME=pi-stack-2` opens a second parallel sandbox in another window. (Kit-defined agents can't be re-attached, hence recreate.)
 	@status=$$(sbx ls 2>/dev/null | awk -v n="$(NAME)" '$$1==n{print $$3}'); \

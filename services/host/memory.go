@@ -553,8 +553,12 @@ func (s *memStore) forget(idOrPrefix, profile string) bool {
 		}
 		rowid, id = found[0][0].(int64), found[0][1].(string)
 	}
-	s.db.Exec("UPDATE memories SET deleted_at = ? WHERE id = ?", memNowIso(), id)
-	s.db.Exec("DELETE FROM memories_fts WHERE rowid = ?", rowid)
+	if _, err := s.db.Exec("UPDATE memories SET deleted_at = ? WHERE id = ?", memNowIso(), id); err != nil {
+		log.Printf("forget: soft-delete failed for %s: %v", id, err)
+	}
+	if _, err := s.db.Exec("DELETE FROM memories_fts WHERE rowid = ?", rowid); err != nil {
+		log.Printf("forget: FTS delete failed for rowid %d: %v", rowid, err)
+	}
 	return true
 }
 
@@ -618,13 +622,26 @@ func (s *memStore) synthesizeBucket(profile string, threshold float64) int {
 				continue
 			}
 			if memCosine(recs[i].vec, recs[j].vec) >= threshold {
-				s.db.Exec("UPDATE memories SET frequency = frequency + ?, confidence = ? WHERE id = ?",
-					recs[j].frequency, math.Min(1, recs[i].confidence+0.05), recs[i].id)
+				if _, err := s.db.Exec("UPDATE memories SET frequency = frequency + ?, confidence = ? WHERE id = ?",
+					recs[j].frequency, math.Min(1, recs[i].confidence+0.05), recs[i].id); err != nil {
+					log.Printf("synthesizeBucket: update survivor frequency failed for %s: %v", recs[i].id, err)
+				}
 				// forget j (inline; we already hold the lock)
 				var rowid int64
-				s.db.QueryRow("SELECT rowid FROM memories WHERE id = ?", recs[j].id).Scan(&rowid)
-				s.db.Exec("UPDATE memories SET deleted_at = ? WHERE id = ?", memNowIso(), recs[j].id)
-				s.db.Exec("DELETE FROM memories_fts WHERE rowid = ?", rowid)
+				if err := s.db.QueryRow("SELECT rowid FROM memories WHERE id = ?", recs[j].id).Scan(&rowid); err != nil {
+					log.Printf("synthesizeBucket: rowid lookup failed for %s: %v", recs[j].id, err)
+					// Skip the FTS delete if we don't have a valid rowid (0 is never a
+					// real SQLite rowid; DELETE WHERE rowid=0 is a silent no-op).
+					rowid = -1
+				}
+				if _, err := s.db.Exec("UPDATE memories SET deleted_at = ? WHERE id = ?", memNowIso(), recs[j].id); err != nil {
+					log.Printf("synthesizeBucket: soft-delete failed for %s: %v", recs[j].id, err)
+				}
+				if rowid > 0 {
+					if _, err := s.db.Exec("DELETE FROM memories_fts WHERE rowid = ?", rowid); err != nil {
+						log.Printf("synthesizeBucket: FTS delete failed for rowid %d: %v", rowid, err)
+					}
+				}
 				dead[recs[j].id] = true
 				merged++
 			}
@@ -654,7 +671,9 @@ func (s *memStore) stats(profile string) jsonObj {
 	active := memNormProfile(profile)
 	get := func(cond string) int {
 		var n int
-		s.db.QueryRow("SELECT count(*) FROM memories WHERE "+cond+" AND "+memProfileVisible, active).Scan(&n)
+		if err := s.db.QueryRow("SELECT count(*) FROM memories WHERE "+cond+" AND "+memProfileVisible, active).Scan(&n); err != nil {
+			log.Printf("stats: query failed (%s): %v", cond, err)
+		}
 		return n
 	}
 	return jsonObj{
