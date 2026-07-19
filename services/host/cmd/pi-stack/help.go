@@ -93,7 +93,7 @@ const helpAllText = `pi-stack — a personal, multi-model pi coding agent in a D
 
 Usage:  pi-stack [--profile NAME] <command> [args]
 
-New here?   pi-stack run       launch the agent; it offers to onboard you (opt-in)
+New here?   pi-stack setup     configure the host, then hand off to an agent to finish
 
 Workflow
   run [DIR]           launch the sandbox in DIR (default: .). This is the main one.
@@ -103,7 +103,8 @@ Workflow
   status              what is up, what is down, what is next   (also the bare command)
 
 Setup & health
-  onboard             host-side config (flags/CI); conversational onboarding is in-session
+  setup               guided onboarding: host config, then agent handoff to finish
+  onboard             host-side config only (flags/CI); no agent handoff
   doctor              diagnose host + sandbox health, print the fix commands
 
 Data
@@ -166,8 +167,10 @@ func verbUsage(verb string) (string, bool) {
 		return rmUsage, true
 	case "doctor":
 		return doctorUsage, true
-	case "onboard", "setup":
+	case "onboard":
 		return onboardUsage, true
+	case "setup":
+		return setupUsage, true
 	case "config":
 		return configUsage, true
 	case "mcp":
@@ -222,9 +225,13 @@ auto-start; logs in ~/.local/state/pi-stack/serve.log). Opt out with
 PI_STACK_NO_AUTOSERVE=1 or 'pi-stack config set host.autoserve false'.
 
 subcommands:
-  stop              stop a running 'pi-stack-host serve' via its pidfile (safe:
-                    verifies the process is ours before signalling; SIGTERM then
-                    SIGKILL if it doesn't exit)
+  stop              stop a running 'pi-stack-host serve' (safe: verifies the
+                    process is ours before signalling; SIGTERM then SIGKILL if
+                    it doesn't exit). Mode-aware: a MANAGED service (launchd/
+                    systemd) is stopped via its supervisor so KeepAlive/Restart=
+                    can't respawn it; if the pidfile is missing it falls back to
+                    discovering a verified 'pi-stack-host serve' (e.g. an orphan
+                    left after 'pi-stack reset' moved the config dir).
   status [--json]   report whether serve is running (pid) and which service
                     ports (:11435 / :11436) are up
   install           install serve as a managed login service (launchd on macOS,

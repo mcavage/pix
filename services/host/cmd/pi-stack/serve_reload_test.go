@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -91,11 +92,14 @@ func TestDetectServeMode(t *testing.T) {
 // missing file are (0, false) — the conservative "treat as foreground" path.
 func TestReadServeLazyMarkerPid(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("PI_STACK_CONFIG", dir+"/config.toml")
+	t.Setenv("XDG_STATE_HOME", dir) // the lazy marker lives in the STATE dir now
 	if pid, ok := readServeLazyMarkerPid(); ok {
 		t.Errorf("missing marker parsed as pid %d", pid)
 	}
-	path := dir + "/serve.lazy"
+	path := config.ServeLazyMarkerPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte("lazy\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

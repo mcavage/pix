@@ -62,7 +62,7 @@
       "notes": "OpenAI mid-tier (production default equivalent). A cheaper cross-vendor option."
     },
     {
-      "id": "google/gemini-3.1-pro",
+      "id": "google/gemini-3.1-pro-preview",
       "provider": "google",
       "label": "Gemini 3.1 Pro",
       "input_per_mtok": 2.0,

@@ -26,7 +26,7 @@ sandbox:
         "--session-dir",
         ".pi-sessions",
         "--models",
-        "anthropic/claude-opus-4-8,openai/gpt-5.6-sol,google/gemini-3.1-pro,ollama/*",
+        "anthropic/claude-opus-4-8,openai/gpt-5.6-sol,google/gemini-3.1-pro-preview,ollama/*",
       ]
 
 # Provider keys are read by the host proxy and swapped into the outbound auth

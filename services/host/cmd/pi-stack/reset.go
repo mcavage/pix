@@ -496,10 +496,12 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 
 // stopServeForReset is the serve-stop the reset executor uses, indirected through
 // a package var so a test can stub it (and so the real path never signals a live
-// serve during unit tests). It defaults to the pidfile-based stopServe — the SAFE
-// replacement for the old `pkill -f 'pi-stack-host serve'`.
+// serve during unit tests). It is MODE-AWARE: a managed service (launchd/systemd)
+// is stopped via its supervisor so KeepAlive/Restart= cannot respawn it mid-reset
+// (which would trip the data-move guard); otherwise it falls through to the
+// pidfile-based stopServe (with its discovery fallback for an orphaned daemon).
 var stopServeForReset = func(out io.Writer) (bool, error) {
-	return stopServe(defaultServeCtl(), out)
+	return stopServeAnyMode(managedServiceActive, stopManagedService, defaultServeCtl(), out)
 }
 
 // stopHostServices best-effort stops any running `pi-stack-host serve` so it

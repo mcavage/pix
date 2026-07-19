@@ -294,6 +294,19 @@ func launchdRestart(run cmdRunner, uid int) error {
 	return err
 }
 
+// launchdStop boots the agent OUT of its domain so KeepAlive stops respawning it,
+// WITHOUT removing the plist (unlike launchdUninstall). It stays installed and
+// returns at next login, or immediately via `pi-stack serve install`. This is
+// the only way to actually stop a KeepAlive agent — a bare SIGTERM to the pid is
+// undone by launchd within a second.
+func launchdStop(run cmdRunner, uid int, out io.Writer) error {
+	if _, err := run("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", uid, serveLaunchdLabel)); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "stopped the managed pi-stack service (launchd). It stays installed and returns at next login; start it now with `pi-stack serve install`, or remove it with `pi-stack serve uninstall`.")
+	return nil
+}
+
 // --- systemd --user (Linux) --------------------------------------------------
 
 // systemdUnitPath is ~/.config/systemd/user/pi-stack-serve.service.
@@ -346,6 +359,18 @@ func systemdUninstall(run cmdRunner, fs installFS, home string, out io.Writer) e
 }
 
 // systemdActive reports whether the unit is active.
+// systemdStop stops the running unit WITHOUT disabling it (unlike
+// systemdUninstall), so it stays enabled and returns at next login; a bare
+// SIGTERM to the pid is otherwise undone by Restart=. Re-run now with
+// `systemctl --user start` or `pi-stack serve install`.
+func systemdStop(run cmdRunner, out io.Writer) error {
+	if _, err := run("systemctl", "--user", "stop", serveSystemdUnit); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "stopped the managed pi-stack service (%s). It stays installed and returns at next login; start it now with `pi-stack serve install`, or remove it with `pi-stack serve uninstall`.\n", serveSystemdUnit)
+	return nil
+}
+
 func systemdActive(run cmdRunner) bool {
 	got, err := run("systemctl", "--user", "is-active", serveSystemdUnit)
 	return err == nil && strings.TrimSpace(got) == "active"

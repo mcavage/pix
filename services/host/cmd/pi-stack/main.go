@@ -88,10 +88,10 @@ func main() {
 	case "onboard":
 		runOnboardCmd(args[1:])
 	case "setup":
-		// Deprecated alias: the interactive wizard is gone; onboarding is in-session
-		// (`pi-stack run`), and the flag-driven host-config path is `pi-stack onboard`.
-		fmt.Fprintln(os.Stderr, "pi-stack: `setup` is deprecated; use `pi-stack onboard` (conversational onboarding is in-session via `pi-stack run`).")
-		runOnboardCmd(args[1:])
+		// Explicit guided onboarding: host phase, then hand off to the in-VM agent.
+		// (`pi-stack run` never onboards on its own; `pi-stack onboard` is the
+		// host-only, no-handoff path for CI.)
+		runSetupCmd(args[1:])
 	case "mcp":
 		runMcpCmd(args[1:])
 	case "secret":
@@ -197,10 +197,11 @@ func classifyBareArg(a string) (msg string, launch bool) {
 
 // runVerb handles the `run` verb and the bare-DIR alias. It short-circuits to
 // run usage on a -h/--help request, then launches. It deliberately NEVER runs
-// onboarding (constraint: `pi-stack run` just gives the agent to the user);
-// the opt-in onboarding offer is delivered IN-SESSION by the agent (runRun
-// drops the first-run marker the `onboarding` extension reads). Only the bare
-// `pi-stack` status path nudges a config-less host toward `run`.
+// onboarding (owner constraint: `pi-stack run` just gives the agent to the
+// user); an unconfigured host gets a one-line non-blocking heads-up (runRun ->
+// warnUnconfigured) and continues. The guided onboarding is the explicit
+// `pi-stack setup`, which does the host phase then launches `run --onboard` to
+// hand off to the in-VM agent (the only path that drops the offer marker).
 func runVerb(argv []string) {
 	if wantsHelp(argv) {
 		fmt.Print(runUsage)

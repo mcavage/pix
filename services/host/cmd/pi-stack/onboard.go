@@ -52,10 +52,6 @@ type onboardKnowledge struct {
 // agent and consumed by the host on the next run.
 const onboardingFileName = "onboarding.json"
 
-// onboardingOfferMarker is the one-shot first-run signal the host drops into the
-// workspace so the in-sandbox extension knows to OFFER onboarding (TTY-gated).
-const onboardingOfferMarker = "onboarding.offer"
-
 // onboardMCPCatalogAllow is the curated set of remote gateway-catalog MCP names
 // the onboarding file may enable in addition to gog and the locally-known
 // servers. Kept deliberately small; anything else is configured with
@@ -232,10 +228,10 @@ func reconcileOnboarding(workspace string, env shellEnv, in io.Reader, out io.Wr
 
 const onboardUsage = `usage: pi-stack onboard [flags]
 
-Host-side onboarding. The CONVERSATIONAL onboarding is in-session: run
-` + "`pi-stack run`" + ` (it offers onboarding on first run) or say "onboard me" to
-the agent. This command does the deterministic HOST config and is the
-flag-driven path for automation/CI (the former ` + "`pi-stack setup`" + `).
+Host-side onboarding (deterministic HOST config only; NO agent handoff). For the
+guided flow that configures the host AND hands off to an agent to finish, use
+` + "`pi-stack setup`" + `. This command is the flag-driven path for automation/CI.
+You can also say "onboard me" to a running agent at any time.
 
   --account <email>        set the Google Workspace (gog) account + enable gog
   --knowledge <path|url>   scaffold/point the global knowledge base
@@ -390,7 +386,7 @@ func onboardReportReadiness(env shellEnv, out io.Writer) {
 			fmt.Fprintln(out, `No model provider key set. Set one:  sbx secret set -g anthropic -t "sk-..."`)
 		}
 	}
-	fmt.Fprintln(out, "Next:  pi-stack run   (it offers conversational onboarding on first run)")
+	fmt.Fprintln(out, "Next:  pi-stack run   to start working, or  pi-stack setup  for the guided agent handoff.")
 }
 
 // confirmYN reads a [Y/n] answer. def is the answer for a bare Enter.

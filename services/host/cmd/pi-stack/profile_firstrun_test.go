@@ -135,8 +135,8 @@ func TestParseProfileLsArgs(t *testing.T) {
 	}
 }
 
-// firstRunFlow now only PRINTS a nudge (onboarding is in-session); it never
-// handles the invocation and never launches anything, on any TTY state.
+// firstRunFlow now only PRINTS a nudge (setup is explicit); it never handles the
+// invocation and never launches anything, on any TTY state.
 func TestFirstRunFlowNudgesNeverHandles(t *testing.T) {
 	for _, tty := range []bool{false, true} {
 		var out bytes.Buffer
@@ -144,8 +144,8 @@ func TestFirstRunFlowNudgesNeverHandles(t *testing.T) {
 			t.Errorf("tty=%v: first run must never handle the invocation", tty)
 		}
 		s := out.String()
-		if !strings.Contains(s, "pi-stack run") || !strings.Contains(s, "pi-stack onboard") {
-			t.Errorf("tty=%v: nudge should mention run + onboard: %q", tty, s)
+		if !strings.Contains(s, "pi-stack setup") || !strings.Contains(s, "pi-stack run") {
+			t.Errorf("tty=%v: nudge should mention setup + run: %q", tty, s)
 		}
 	}
 }

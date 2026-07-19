@@ -194,11 +194,13 @@ func Path() string {
 // ServePidPath resolves the absolute path of serve.pid — the pidfile
 // `pi-stack-host serve` writes on startup so the launcher's `serve stop` /
 // `serve status` can find and signal the running supervisor SAFELY (instead of a
-// blind `pkill -f`). It is a sibling of config.toml: <config-dir>/serve.pid. Both
-// the host (the writer) and the launcher (the reader) call this so the two always
-// agree on the location.
+// blind `pkill -f`). It lives in the STATE dir (<state-dir>/serve.pid), NOT the
+// config dir: it is ephemeral runtime state (like serve.log), not user config.
+// Keeping it out of the config dir also means `pi-stack reset` (which moves the
+// config dir aside) never orphans a running daemon from its pidfile. Both the
+// host (writer) and the launcher (readers) call this so the two always agree.
 func ServePidPath() string {
-	dir, err := configDir()
+	dir, err := StateDir()
 	if err != nil {
 		return "serve.pid"
 	}
@@ -207,9 +209,10 @@ func ServePidPath() string {
 
 // ServeSpawnLockPath is the flock file the launcher's lazy auto-start takes
 // around its spawn decision (double-checked locking against a concurrent
-// `pi-stack run`). A sibling of config.toml, like the pidfile.
+// `pi-stack run`). Ephemeral runtime state — a sibling of the pidfile in the
+// STATE dir.
 func ServeSpawnLockPath() string {
-	dir, err := configDir()
+	dir, err := StateDir()
 	if err != nil {
 		return "serve.spawn.lock"
 	}
@@ -221,9 +224,10 @@ func ServeSpawnLockPath() string {
 // a lazy daemon (safe to stop-and-restart) from a FOREGROUND one the user is
 // watching (never killed, only advised). Cleared by `serve stop` and by the
 // daemon's graceful shutdown; a stale marker is harmless because mode detection
-// also requires a live, verified-ours pidfile.
+// also requires a live, verified-ours pidfile. Ephemeral runtime state — a
+// sibling of the pidfile in the STATE dir.
 func ServeLazyMarkerPath() string {
-	dir, err := configDir()
+	dir, err := StateDir()
 	if err != nil {
 		return "serve.lazy"
 	}

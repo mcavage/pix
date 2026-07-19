@@ -131,31 +131,49 @@ func TestParseOnboardArgs(t *testing.T) {
 	}
 }
 
-// TestOnboardOfferMarkerConst guards the marker/file names the extension + host
-// agree on (a rename must be deliberate).
-func TestOnboardOfferMarkerConst(t *testing.T) {
-	if onboardingOfferMarker != "onboarding.offer" || onboardingFileName != "onboarding.json" {
-		t.Errorf("marker/file names changed: %q / %q", onboardingOfferMarker, onboardingFileName)
-	}
-	if !strings.HasSuffix(onboardingFileName, ".json") {
-		t.Error("onboarding file must be json")
+// TestOnboardingFileNameConst guards the reconcile file name (a rename must be
+// deliberate).
+func TestOnboardingFileNameConst(t *testing.T) {
+	if onboardingFileName != "onboarding.json" || !strings.HasSuffix(onboardingFileName, ".json") {
+		t.Errorf("onboarding file name changed: %q", onboardingFileName)
 	}
 }
 
-func TestIsInteractiveLaunch(t *testing.T) {
-	cases := []struct {
-		pass []string
-		want bool
-	}{
-		{nil, true},
-		{[]string{"--model", "x"}, true},
-		{[]string{"-p", "do a thing"}, false},
-		{[]string{"--print"}, false},
-		{[]string{"--print=hi"}, false},
+// TestWarnUnconfigured: silent once a config exists; on a fresh host it prints a
+// single non-blocking heads-up pointing at `pi-stack setup`.
+func TestWarnUnconfigured(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
+
+	// Fresh host (no config): warns.
+	var out bytes.Buffer
+	warnUnconfigured(shellEnv{dial: func(int) bool { return false }}, &out)
+	if !strings.Contains(out.String(), "pi-stack setup") {
+		t.Errorf("fresh host should nudge setup, got %q", out.String())
 	}
-	for _, c := range cases {
-		if got := isInteractiveLaunch(c.pass); got != c.want {
-			t.Errorf("isInteractiveLaunch(%v) = %v, want %v", c.pass, got, c.want)
+
+	// Config present: silent.
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	warnUnconfigured(shellEnv{dial: func(int) bool { return true }}, &out)
+	if out.String() != "" {
+		t.Errorf("configured host must be silent, got %q", out.String())
+	}
+}
+
+// TestFlagTakesValue guards the onboard-flag arity setup uses to split DIR from
+// value-bearing flags.
+func TestFlagTakesValue(t *testing.T) {
+	for _, f := range []string{"--account", "--knowledge", "--mcp", "--model"} {
+		if !flagTakesValue(f) {
+			t.Errorf("%s should take a value", f)
+		}
+	}
+	for _, f := range []string{"--help", "-h", "--yes", "--account=x"} {
+		if flagTakesValue(f) {
+			t.Errorf("%s should NOT consume a following token", f)
 		}
 	}
 }

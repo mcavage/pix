@@ -59,10 +59,13 @@ func runRun(argv []string) {
 		os.Exit(1)
 	}
 
-	// Is this a brand-new host? (No config file yet.) Captured BEFORE reconcile,
-	// which may create the config, so the first-run offer marker below is written
-	// on a genuinely fresh host only.
-	firstRun := !configExists()
+	// `pi-stack run` NEVER onboards on its own (owner decision): it just launches
+	// the agent. If the host was never set up, print a one-line, non-blocking
+	// heads-up of what is missing and continue straight into the session — no
+	// prompt, no delay. The guided flow is the explicit `pi-stack setup`, which
+	// does the host phase then hands off by launching a run whose first pi message
+	// kicks off onboarding.
+	warnUnconfigured(defaultShellEnv(), os.Stderr)
 
 	// Reconcile any control-plane proposal a prior in-session onboarding wrote
 	// (<workspace>/.pi-stack/onboarding.json): validate it, show the diff, apply
@@ -196,14 +199,6 @@ func runRun(argv []string) {
 	// ollama_bridge_model <tag>` is all you need (no sandbox env editing). Mirrors
 	// the profile/knowledge-scope seam. Best-effort.
 	writeOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
-
-	// First-run onboarding offer: on a genuinely fresh host launched INTERACTIVELY,
-	// drop a one-shot marker the in-VM `onboarding` extension reads to make the
-	// agent open with the opt-in offer. Never written for a headless (`-p`) launch,
-	// so CI never sees it. Best-effort.
-	if firstRun && isInteractiveLaunch(o.Passthrough) {
-		writeOnboardingOffer(o.Workspace)
-	}
 
 	args := plan.Args
 
@@ -592,30 +587,6 @@ func writeOllamaBridgeFile(workspace, model string) {
 		return
 	}
 	_ = os.WriteFile(filepath.Join(dir, "ollama-bridge.model"), []byte(model+"\n"), 0o644)
-}
-
-// isInteractiveLaunch reports whether the pi passthrough will run an INTERACTIVE
-// session (vs headless `-p`/`--print`). The first-run onboarding offer is only
-// meaningful interactively, and must never fire under CI/scripted `-p` launches.
-func isInteractiveLaunch(passthrough []string) bool {
-	for _, a := range passthrough {
-		if a == "-p" || a == "--print" || strings.HasPrefix(a, "--print=") {
-			return false
-		}
-	}
-	return true
-}
-
-// writeOnboardingOffer drops the one-shot marker <workspace>/.pi-stack/
-// onboarding.offer that the in-VM `onboarding` extension reads to make the agent
-// open with the opt-in onboarding offer. Best-effort: an absent marker just
-// means no offer this run.
-func writeOnboardingOffer(workspace string) {
-	dir := filepath.Join(workspace, ".pi-stack")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
-	}
-	_ = os.WriteFile(filepath.Join(dir, onboardingOfferMarker), []byte("1\n"), 0o644)
 }
 
 func writeProfileFile(workspace, profile string) error {

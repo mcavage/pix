@@ -496,19 +496,23 @@ func TestReadTokenAbsent(t *testing.T) {
 	}
 }
 
-// TestServePidPath resolves serve.pid under the config dir, honoring
-// PI_STACK_CONFIG's parent (a sibling of config.toml) so the host writer and the
-// launcher reader always agree on the location.
+// TestServePidPath resolves serve.pid under the STATE dir (ephemeral runtime
+// state, a sibling of serve.log), honoring $XDG_STATE_HOME, so the host writer
+// and the launcher reader always agree on the location — and so `pi-stack reset`
+// (which moves the CONFIG dir aside) never orphans a running daemon's pidfile.
 func TestServePidPath(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
-	want := filepath.Join(dir, "serve.pid")
+	xdg := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", xdg)
+	want := filepath.Join(xdg, "pi-stack", "serve.pid")
 	if got := ServePidPath(); got != want {
 		t.Errorf("ServePidPath() = %q, want %q", got, want)
 	}
-	// It must be a sibling of the config file (same directory).
-	if filepath.Dir(ServePidPath()) != filepath.Dir(Path()) {
-		t.Errorf("ServePidPath dir %q != config dir %q", filepath.Dir(ServePidPath()), filepath.Dir(Path()))
+	// It must be a sibling of serve.log (the state dir), NOT the config dir.
+	if filepath.Dir(ServePidPath()) != filepath.Dir(ServeLogPath()) {
+		t.Errorf("ServePidPath dir %q != state dir %q", filepath.Dir(ServePidPath()), filepath.Dir(ServeLogPath()))
+	}
+	if filepath.Dir(ServePidPath()) == filepath.Dir(Path()) {
+		t.Errorf("ServePidPath must NOT live in the config dir %q", filepath.Dir(Path()))
 	}
 }
 
