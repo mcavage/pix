@@ -15,6 +15,11 @@ node_modules/
 # Local model tag the in-VM ollama-bridge exposes (from `pi-stack config set
 # ollama_bridge_model`). Regenerated every `pi-stack run`; never tracked.
 **/.pi-stack/ollama-bridge.model
+# First-run onboarding markers: the launcher-written offer marker and the
+# agent-written control-plane proposal (consumed + deleted by the host). Neither
+# is ever tracked.
+**/.pi-stack/onboarding.offer
+**/.pi-stack/onboarding.json
 
 
 # 1Password secret references — user-specific (vault/item names); keep local
@@ -56,7 +61,7 @@ skills/*
 !skills/ingest/
 !skills/microcopy/
 !skills/model-refresh/
-!skills/onboard/
+!skills/onboarding/
 !skills/one-pager/
 !skills/peer-review/
 !skills/plan/

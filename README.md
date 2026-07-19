@@ -105,12 +105,16 @@ sbx secret set -g openai
 sbx secret set -g google
 sbx secret set -g github
 
-pi-stack setup
 pi-stack run
 ```
 
-`pi-stack setup` writes `~/.config/pi-stack/config.toml`, registers configured MCP
-servers, and enables memory. Re-run it when your host setup changes.
+Set at least one provider key, then `pi-stack run` launches the agent. On the
+first run the agent offers to onboard you (opt-in): it learns your name, style,
+and preferences, seeds them into memory, and lands you on a real first task.
+Decline and you just get a normal session; say "onboard me" any time to do it
+later. For scripted/CI hosts, `pi-stack onboard --account … --knowledge … --yes`
+writes `~/.config/pi-stack/config.toml` and registers MCP servers
+non-interactively (the former `pi-stack setup`, now a deprecated alias).
 
 You don't babysit the services daemon: `pi-stack run` / `memory` / `knowledge
 query` lazily auto-start a detached `pi-stack-host serve` when its ports are
@@ -213,7 +217,7 @@ pi-stack run --replace        # recreate instead of re-attaching (picks up chang
 pi-stack ls                  # list your pi-stack sandboxes (name, state, dir)
 pi-stack rm <name>           # remove a sandbox (--all [--except <name>])
 pi-stack status              # fast read-only control panel (alias: st)
-pi-stack setup               # guided setup for config, memory, and MCP
+pi-stack onboard             # host-side/CI config (conversational onboarding is in-session via run)
 pi-stack serve               # run enabled host services (auto-started lazily; install/uninstall for a login service)
 pi-stack doctor              # diagnose host and sandbox prerequisites
 pi-stack config show|path|set|unset  # inspect or update config (never hand-edit toml)
@@ -244,7 +248,7 @@ from a repo checkout (`make route`). Scores live in a hand-maintained
 required); edit it, then `pi-stack route compile`. Consumers get the compiled
 `routing.json` baked into the image.
 
-Do not hand-edit `config.toml`. `pi-stack setup` and `pi-stack config set/unset`
+Do not hand-edit `config.toml`. `pi-stack onboard` and `pi-stack config set/unset`
 are the supported writers, and `pi-stack doctor` prints copy-pasteable repair
 commands when something is missing.
 

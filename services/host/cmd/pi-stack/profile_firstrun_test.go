@@ -135,38 +135,17 @@ func TestParseProfileLsArgs(t *testing.T) {
 	}
 }
 
-func TestFirstRunFlowNonTTY(t *testing.T) {
-	var out bytes.Buffer
-	called := false
-	handled := firstRunFlow(strings.NewReader(""), &out, false, func([]string) { called = true })
-	if handled {
-		t.Error("non-tty first run should not be handled (should continue)")
-	}
-	if called {
-		t.Error("non-tty first run must not launch setup")
-	}
-	if !strings.Contains(out.String(), "pi-stack setup") {
-		t.Errorf("non-tty first run should hint setup: %q", out.String())
-	}
-}
-
-func TestFirstRunFlowTTYYes(t *testing.T) {
-	var out bytes.Buffer
-	called := false
-	handled := firstRunFlow(strings.NewReader("\n"), &out, true, func([]string) { called = true })
-	if !handled || !called {
-		t.Errorf("tty Enter should run setup: handled=%v called=%v", handled, called)
-	}
-}
-
-func TestFirstRunFlowTTYNo(t *testing.T) {
-	var out bytes.Buffer
-	called := false
-	handled := firstRunFlow(strings.NewReader("n\n"), &out, true, func([]string) { called = true })
-	if handled || called {
-		t.Errorf("tty 'n' should skip setup: handled=%v called=%v", handled, called)
-	}
-	if !strings.Contains(out.String(), "Skipped") {
-		t.Errorf("declining should say Skipped: %q", out.String())
+// firstRunFlow now only PRINTS a nudge (onboarding is in-session); it never
+// handles the invocation and never launches anything, on any TTY state.
+func TestFirstRunFlowNudgesNeverHandles(t *testing.T) {
+	for _, tty := range []bool{false, true} {
+		var out bytes.Buffer
+		if handled := firstRunFlow(strings.NewReader(""), &out, tty); handled {
+			t.Errorf("tty=%v: first run must never handle the invocation", tty)
+		}
+		s := out.String()
+		if !strings.Contains(s, "pi-stack run") || !strings.Contains(s, "pi-stack onboard") {
+			t.Errorf("tty=%v: nudge should mention run + onboard: %q", tty, s)
+		}
 	}
 }
