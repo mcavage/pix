@@ -67,6 +67,17 @@ func TestServeBrokerSlot(t *testing.T) {
 	cfg := &config.Config{Plugins: map[string]config.PluginSpec{
 		"broker": {Impl: "example", Path: bin, SHA: sha},
 	}}
+
+	// FAIL CLOSED: an enabled broker with no bearer must be refused, not served
+	// unauthenticated.
+	t.Setenv("PI_STACK_BROKER_AUTH", "")
+	supNoAuth := &supervisor{}
+	defer supNoAuth.shutdown()
+	if _, err := brokerService(cfg, supNoAuth, ""); err == nil {
+		t.Fatal("brokerService(external, empty bearer) must refuse to start")
+	}
+
+	t.Setenv("PI_STACK_BROKER_AUTH", "shim-secret")
 	sup2 := &supervisor{}
 	defer sup2.shutdown()
 	svc2, err := brokerService(cfg, sup2, "")
@@ -86,11 +97,20 @@ func TestServeBrokerSlot(t *testing.T) {
 	if err := svc2.check(); err != nil {
 		t.Errorf("broker preflight: %v", err)
 	}
-	// The served /token shim proxies to the dispensed external broker. No bearer
-	// is configured here (PI_STACK_BROKER_AUTH unset), so the check is disabled.
+	// The served /token shim proxies to the dispensed external broker, gated by
+	// the configured bearer.
 	srv := httptest.NewServer(svc2.mux)
 	defer srv.Close()
-	res, err := http.Get(srv.URL + "/token")
+	// Without the bearer, the shim rejects (fail closed).
+	if unauth, err := http.Get(srv.URL + "/token"); err == nil {
+		unauth.Body.Close()
+		if unauth.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("/token without bearer = %d, want 401", unauth.StatusCode)
+		}
+	}
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/token", nil)
+	req.Header.Set("Authorization", "Bearer shim-secret")
+	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -347,12 +347,15 @@ func brokerService(cfg *config.Config, sup *supervisor, selfPath string) (*hostS
 		return nil, nil // dormant seam: no built-in broker in the public tree
 	}
 	// The broker gets its bearer back (and only the broker) via a granted extraEnv;
-	// the same value gates the /token shim. An empty bearer disables the check.
+	// the same value gates the /token shim. FAIL CLOSED: an enabled broker with no
+	// bearer would serve /token unauthenticated (mint a real access token to any
+	// process that can reach the listener — and BROKER_BIND can widen that past
+	// localhost). Refuse to start rather than expose an open token endpoint.
 	bearer := os.Getenv("PI_STACK_BROKER_AUTH")
-	var grant []string
-	if bearer != "" {
-		grant = []string{"PI_STACK_BROKER_AUTH=" + bearer}
+	if bearer == "" {
+		return nil, fmt.Errorf("broker plugin is enabled but PI_STACK_BROKER_AUTH is empty: refusing to serve an unauthenticated /token endpoint")
 	}
+	grant := []string{"PI_STACK_BROKER_AUTH=" + bearer}
 	// Append any per-plugin extra env vars from config (ExtraEnv is wired here so
 	// an operator's [plugins.broker] extra_env entries are actually passed through).
 	grant = append(grant, spec.ExtraEnv...)

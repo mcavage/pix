@@ -213,6 +213,15 @@ func runSecretSet(env shellEnv, out io.Writer, key, value string) {
 		os.Exit(2)
 	}
 
+	// Reject control characters (newline, carriage return, NUL, ...) in the value.
+	// op-refs.env is line-oriented and consumed by `op run --env-file`, so a value
+	// carrying a newline could inject a SECOND, attacker-controlled KEY=value line
+	// (e.g. a pasted plaintext secret) into the file. One ref = one clean line.
+	if i := strings.IndexFunc(value, func(r rune) bool { return r < 0x20 || r == 0x7f }); i >= 0 {
+		fmt.Fprintf(out, "pi-stack secret set: %s value contains a control character at byte %d; op-refs.env is one ref per line, so newlines/control chars are not allowed\n", key, i)
+		os.Exit(2)
+	}
+
 	isRef := strings.HasPrefix(value, "op://")
 	if !isRef && !config.NonSecretOpRefsKeys[key] {
 		if config.LooksSecretShaped(key, value) {
