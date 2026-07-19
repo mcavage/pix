@@ -310,12 +310,12 @@ const profileUsage = `usage: pi-stack profile <ls|use> [name]
 
 // secretHelpBody is the mental model reused verbatim from config so the concept
 // reads identically in setup, doctor, the template header, and `secret -h`.
-const secretUsage = `usage: pi-stack secret <ls|set|rm|check>
+const secretUsage = `usage: pi-stack secret <ls|set|rm|check|sync>
 
 Manage the 1Password refs (op-refs.env) the sbx gateway resolves for host MCP
-servers. Values live in 1Password, never on disk — this verb only reads,
-writes, and reports REFS (op://vault/item/field lines). It never writes a
-resolved secret.
+servers AND the cloud model provider keys. Values live in 1Password, never on
+disk — this verb only reads, writes, and reports REFS (op://vault/item/field
+lines). It never writes a resolved secret.
 
 ` + config.OpRefsMentalModel + `
 

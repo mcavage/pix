@@ -302,9 +302,16 @@ func modelProviderPreflight(env shellEnv) (msg string, block bool) {
 		missing = append(missing, k)
 	}
 	msg = fmt.Sprintf("pi-stack run: no model provider key is set (need one of %s).\n",
-		strings.Join(missing, ", ")) +
-		"Set one on the host, then re-run. For example:\n" +
-		"  sbx secret set -g anthropic -t \"sk-...\"\n"
+		strings.Join(missing, ", "))
+	if providerKeyRefsPresent(env) {
+		// The user owns 1Password op:// refs for keys but they haven't been pushed
+		// into sbx yet — point at the sync, not a manual paste.
+		msg += "You have 1Password key refs; resolve them into sbx with:\n  pi-stack secret sync\n"
+	} else {
+		msg += "Set one on the host, then re-run. Either:\n" +
+			"  pi-stack secret set ANTHROPIC_API_KEY op://vault/item/field && pi-stack secret sync   (1Password)\n" +
+			"  sbx secret set -g anthropic -t \"sk-...\"                                            (direct)\n"
+	}
 	return msg, true
 }
 

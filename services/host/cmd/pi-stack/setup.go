@@ -113,8 +113,17 @@ func setupHostPhase(env shellEnv, flags []string, out io.Writer) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	// Provider keys: report status + the exact fix for any that are missing. Keys
-	// are sbx secrets (proxy-injected); we only report them, never enter them.
+	// Provider keys: if the user owns 1Password op:// refs for them, resolve those
+	// into sbx first (best-effort; needs op signed in), so the report below reflects
+	// keys sourced from 1Password. Never fatal here — a miss just shows as unset.
+	if providerKeyRefsPresent(env) {
+		fmt.Fprintln(out, "resolving provider keys from 1Password...")
+		if _, _, ferr := syncProviderKeys(env, out); ferr != nil {
+			fmt.Fprintf(out, "  (skipped: %v — run `pi-stack secret sync` once op is ready)\n", ferr)
+		}
+	}
+	// Report status + the exact fix for any that are missing. Keys are sbx secrets
+	// (proxy-injected); we only report them, never enter values.
 	reportProviderKeys(env, out)
 
 	// Build the config proposal. Flags win; otherwise, on a TTY, ask.

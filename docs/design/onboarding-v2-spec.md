@@ -212,8 +212,11 @@ constrained) to make the watcher reliable regardless of model.
 ## 13. Net-new work this depends on
 
 1. `host-state.json` writer (host) + reader (skill). Critical path.
-2. Extend `op-refs.env` / `pi-stack secret` to provider keys; keys gate resolves
-   refs via `op` (§5).
+2. DONE. `pi-stack secret sync` resolves provider-key `op://` refs -> sbx
+   secrets (sandbox proxy store); host mode already resolves them via `op run
+   --env-file`. Keys gate points at `pi-stack secret sync`; setup runs it
+   best-effort; host-state reports `keys.source`. Live `op` run is a host test
+   (op is a host tool; the sandbox can't reach 1Password).
 3. MCP opt-in (default off, no startup error) (§8).
 4. Overlay "provisioned" marker + reflecting overlay skills/tools into the truth
    file (§9).

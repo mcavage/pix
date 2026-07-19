@@ -69,7 +69,7 @@ type hostState struct {
 // buildHostState gathers the host-visible facts. Pure w.r.t. its inputs so it is
 // unit-testable: sbxSecretsOut is the raw `sbx secret ls` output (sbxOK false
 // when sbx couldn't be run), dial probes a local port.
-func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, mcpGatewayOn bool) hostState {
+func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, mcpGatewayOn bool, keysSource string) hostState {
 	dialer := func(p int) bool {
 		if dial == nil {
 			return false
@@ -77,12 +77,15 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		return dial(p)
 	}
 	keyOK := func(name string) bool { return secretCheck(name, name, sbxSecretsOut, sbxOK).state == stateOK }
+	if keysSource == "" {
+		keysSource = "sbx"
+	}
 	keys := hostStateKeys{
 		Anthropic: keyOK("anthropic"),
 		OpenAI:    keyOK("openai"),
 		Google:    keyOK("google"),
 		GitHub:    keyOK("github"),
-		Source:    "sbx",
+		Source:    keysSource,
 	}
 	keys.Resolved = keys.Anthropic || keys.OpenAI || keys.Google
 
@@ -148,7 +151,11 @@ func writeHostStateFile(workspace string, cfg *config.Config, env shellEnv, mcpG
 	if dial == nil {
 		dial = dialLocalPort
 	}
-	hs := buildHostState(cfg, sbxOut, sbxOK, dial, mcpGatewayOn)
+	source := "sbx"
+	if providerKeyRefsPresent(env) {
+		source = "1password"
+	}
+	hs := buildHostState(cfg, sbxOut, sbxOK, dial, mcpGatewayOn, source)
 
 	dir := filepath.Join(workspace, ".pi-stack")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

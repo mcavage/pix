@@ -34,7 +34,7 @@ func runSecretCmd(argv []string) {
 	}
 	env := defaultShellEnv()
 	switch sub {
-	case "ls", "check":
+	case "ls", "check", "sync":
 		// Reject trailing junk (unknown args/flags). Leading -h/--help is already
 		// handled by the wantsHelp gate above.
 		if len(rest) > 0 {
@@ -52,7 +52,7 @@ func runSecretCmd(argv []string) {
 			os.Exit(2)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "pi-stack secret: unknown subcommand %q (want: ls, set, rm, check)\n", sub)
+		fmt.Fprintf(os.Stderr, "pi-stack secret: unknown subcommand %q (want: ls, set, rm, check, sync)\n", sub)
 		os.Exit(2)
 	}
 	switch sub {
@@ -64,6 +64,8 @@ func runSecretCmd(argv []string) {
 		runSecretRm(env, os.Stdout, rest[0])
 	case "check":
 		runSecretCheck(env, os.Stdout)
+	case "sync":
+		runSecretSync(env, os.Stdout)
 	}
 }
 

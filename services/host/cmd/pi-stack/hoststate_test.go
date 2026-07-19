@@ -20,7 +20,10 @@ func TestBuildHostState(t *testing.T) {
 	sbxOut := "anthropic\ngithub\n"
 	up := func(int) bool { return true }
 
-	hs := buildHostState(cfg, sbxOut, true, up, true)
+	hs := buildHostState(cfg, sbxOut, true, up, true, "1password")
+	if hs.Keys.Source != "1password" {
+		t.Errorf("keys source = %q, want 1password", hs.Keys.Source)
+	}
 
 	if !hs.Keys.Anthropic || !hs.Keys.Resolved {
 		t.Errorf("anthropic key should resolve: %+v", hs.Keys)
@@ -53,7 +56,10 @@ func TestBuildHostState(t *testing.T) {
 
 func TestBuildHostState_NotProvisioned(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y"}
-	hs := buildHostState(cfg, "", false, func(int) bool { return false }, false)
+	hs := buildHostState(cfg, "", false, func(int) bool { return false }, false, "")
+	if hs.Keys.Source != "sbx" {
+		t.Errorf("default keys source = %q, want sbx", hs.Keys.Source)
+	}
 	if hs.Provisioned {
 		t.Error("empty host must not be provisioned")
 	}
