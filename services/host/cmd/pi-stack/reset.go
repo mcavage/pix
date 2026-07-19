@@ -79,6 +79,7 @@ type resetActions struct {
 	RemoveSandboxes bool           // --sbx: remove pi-stack-* sandboxes
 	MCPRemove       []string       // --sbx: MCP server names to unregister (cfg.MCP)
 	Force           bool           // --force: skip the serve-still-up guard on the data move
+	RuntimeFiles    []string       // ephemeral daemon runtime files to HARD-remove (pid/lazy/lock in StateDir) — stale after the stop, not worth a .bak
 }
 
 // resetFS is the injected filesystem surface, so executeReset stays hermetic in
@@ -211,6 +212,15 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 	if opts.sbx {
 		a.RemoveSandboxes = true
 		a.MCPRemove = append([]string(nil), cfg.MCP...)
+	}
+	// The daemon's ephemeral runtime files live in the STATE dir (not the config/
+	// data dirs we move aside), so a plain reset would leave them behind. They are
+	// stale the moment serve stops (a lock file, a pidfile, a lazy marker) and have
+	// no restore value, so hard-remove them for a truly clean slate.
+	a.RuntimeFiles = []string{
+		config.ServePidPath(),
+		config.ServeLazyMarkerPath(),
+		config.ServeSpawnLockPath(),
 	}
 	// --purge-data (uninstall only): move harvested task artifacts aside too. They
 	// live under XDG_DATA_HOME, OUTSIDE every tree reset normally touches, so they
@@ -400,6 +410,10 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 	ts := now().Unix()
 	var errs []error
 
+	// Was a daemon running BEFORE we tear down? If so, we bring a fresh one up on
+	// the clean slate at the end (step 5), so reset lands you running, not down.
+	wasUp := serveStillUp(env)
+
 	// 1. Best-effort stop of the host services so they don't hold the db files.
 	stopHostServices(env, out)
 
@@ -485,13 +499,51 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 		}
 	}
 
+	// 3b. Clear the daemon's ephemeral runtime files (pid/lazy/lock in the STATE
+	// dir). They are stale after the stop and live OUTSIDE the moved dirs, so a
+	// plain reset would strand them. Hard-remove (best-effort; a missing file is
+	// fine). Skipped if the daemon wouldn't stop (data-move blocked) so we never
+	// yank the pidfile out from under a still-live daemon.
+	if !dataBlocked {
+		for _, p := range a.RuntimeFiles {
+			if err := fsys.remove(p); err != nil && !os.IsNotExist(err) {
+				fmt.Fprintf(out, "  · could not clear runtime file %s — %v\n", p, err)
+			}
+		}
+	}
+
 	// 4. sbx: remove pi-stack-* sandboxes + unregister the configured MCP servers.
 	// Provider secrets (sbx secret) are intentionally LEFT ALONE — those are just
 	// keys, not stack state, and re-entering them is friction with no upside here.
 	if a.RemoveSandboxes {
 		executeSbxReset(a, env, out)
 	}
+
+	// 5. Restart the daemon on the clean slate if one was running before (and we
+	// actually tore down). It comes up fresh against default config (the file was
+	// moved aside) with an empty store — the intended clean-slate running state.
+	// Best-effort: a failure just leaves services down and the next `pi-stack run`
+	// lazy-starts them.
+	if wasUp && !dataBlocked {
+		fmt.Fprintln(out, "Restarting host services on the clean slate:")
+		if err := restartServeForReset(out); err != nil {
+			fmt.Fprintf(out, "  · could not restart services (%v) — `pi-stack run` will start them\n", err)
+		} else {
+			fmt.Fprintln(out, "  ✓ host services restarted")
+		}
+	}
 	return created, errors.Join(errs...)
+}
+
+// restartServeForReset brings a fresh daemon up after a reset, indirected through
+// a package var so tests can stub it. It loads the (now-default) config and lazy-
+// starts serve; ensureServe is flock-guarded and health-waited.
+var restartServeForReset = func(out io.Writer) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	return ensureServe(defaultServeStarter(), cfg, ensureServeOpts{})
 }
 
 // stopServeForReset is the serve-stop the reset executor uses, indirected through
@@ -575,6 +627,10 @@ func printResetPlan(a resetActions, out io.Writer) {
 	if a.KeepMemory {
 		fmt.Fprintf(out, "  (preserving captured memory: %s)\n", a.MemoryDir)
 	}
+	if len(a.RuntimeFiles) > 0 {
+		fmt.Fprintln(out, "Will stop the daemon, clear its runtime files (pid/lock in the state dir),")
+		fmt.Fprintln(out, "and restart it fresh if it was running.")
+	}
 	if a.RemoveSandboxes {
 		fmt.Fprintln(out, "Will remove (sbx):")
 		fmt.Fprintln(out, "  - every pi-stack-* sandbox (sbx rm -f)")
@@ -595,6 +651,7 @@ func printResetSummary(created []string, out io.Writer) {
 			fmt.Fprintf(out, "  %s\n", p)
 		}
 		fmt.Fprintln(out, "  delete them once you're sure:  rm -rf <path>.bak-*")
+		fmt.Fprintln(out, "  to restore one: `pi-stack serve stop`, rename it back, then `pi-stack run`.")
 	} else {
 		fmt.Fprintln(out, "Nothing to back up — the stack was already clean.")
 	}

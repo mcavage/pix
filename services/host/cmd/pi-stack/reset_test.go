@@ -780,3 +780,69 @@ func TestResolveResetPaths_RelativeMemoryDBAbsolute(t *testing.T) {
 		t.Errorf("memoryDir = %q, want absolute", p.memoryDir)
 	}
 }
+
+// stubRestartServe records whether the post-reset restart fired.
+func stubRestartServe(t *testing.T) *bool {
+	t.Helper()
+	called := false
+	orig := restartServeForReset
+	restartServeForReset = func(out io.Writer) error { called = true; return nil }
+	t.Cleanup(func() { restartServeForReset = orig })
+	return &called
+}
+
+// TestExecuteReset_ClearsRuntimeFilesAndRestarts: when a daemon was up, reset
+// wipes the state-dir runtime files and restarts a fresh daemon.
+func TestExecuteReset_ClearsRuntimeFilesAndRestarts(t *testing.T) {
+	stubStopServe(t)
+	restarted := stubRestartServe(t)
+
+	dir := t.TempDir()
+	pid := filepath.Join(dir, "serve.pid")
+	lock := filepath.Join(dir, "serve.spawn.lock")
+	for _, p := range []string{pid, lock} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// dial returns true exactly once: wasUp probe sees it up, the post-stop guard
+	// sees it down (so the data move isn't blocked and restart runs).
+	firstDial := true
+	env := noToolEnv()
+	env.dial = func(int) bool {
+		if firstDial {
+			firstDial = false
+			return true
+		}
+		return false
+	}
+
+	a := resetActions{RuntimeFiles: []string{pid, lock}}
+	var buf bytes.Buffer
+	if _, err := executeReset(a, defaultResetFS(), env, &buf, fixedNow); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, p := range []string{pid, lock} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("runtime file %s should have been removed", p)
+		}
+	}
+	if !*restarted {
+		t.Error("a daemon that was up should be restarted on the clean slate")
+	}
+}
+
+// TestExecuteReset_NoRestartWhenDown: nothing running -> no restart.
+func TestExecuteReset_NoRestartWhenDown(t *testing.T) {
+	stubStopServe(t)
+	restarted := stubRestartServe(t)
+	env := noToolEnv() // dial nil => serveStillUp false
+	var buf bytes.Buffer
+	if _, err := executeReset(resetActions{}, defaultResetFS(), env, &buf, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	if *restarted {
+		t.Error("must not start a daemon that wasn't running before reset")
+	}
+}
