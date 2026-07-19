@@ -28,6 +28,7 @@ host and can be pushed or fetched back.
 
   new <name> [--from REF] [-- pi-args]   clone + branch + launch a sandbox
   ls  [--json]                           tasks, their branch, sandbox + git state
+  path <name>                            print the task's checkout dir (for cd)
   rm  <name> [--force]                   tear down sandbox + clone (guarded)
   gc  [--days N] [--dry-run] [--no-harvest] [--artifact-days N]
                                          prune clean tasks older than N days (default 7)
@@ -57,6 +58,8 @@ func runTask(argv []string) {
 		runTaskNew(defaultShellEnv(), argv[1:])
 	case "ls", "list":
 		runTaskLs(defaultShellEnv(), argv[1:])
+	case "path":
+		runTaskPath(defaultShellEnv(), argv[1:])
 	case "rm", "remove":
 		runTaskRm(defaultShellEnv(), argv[1:])
 	case "gc":
@@ -64,6 +67,13 @@ func runTask(argv []string) {
 	case "harvest":
 		runTaskHarvest(defaultShellEnv(), argv[1:])
 	default:
+		// Support the `pi-stack task <name> path` grammar (name-then-verb) the
+		// user reaches for, so `cd "$(pi-stack task foo path)"` reads naturally.
+		// The canonical form is `task path <name>`; this is a convenience alias.
+		if len(argv) == 2 && argv[1] == "path" {
+			runTaskPath(defaultShellEnv(), argv[:1])
+			return
+		}
 		fmt.Fprintf(os.Stderr, "pi-stack task: unknown subcommand %q\n\n%s", argv[0], taskUsage)
 		os.Exit(2)
 	}
@@ -1300,6 +1310,45 @@ func runTaskLs(env shellEnv, argv []string) {
 			plural(gcEligible, "task"), taskGCDefaultDays)
 	}
 	fmt.Println("Next: `pi-stack task rm <name>` to tear one down (guarded).")
+}
+
+// ---------------------------------------------------------------------------
+// task path
+// ---------------------------------------------------------------------------
+
+// runTaskPath prints ONLY the task's checkout dir to stdout so it composes in a
+// shell: `cd "$(pi-stack task foo path)"`. Everything else (errors, hints) goes
+// to stderr, and a missing task is exit 1 with nothing on stdout. It is
+// read-only: no lock, no meta hardening beyond confirming the task exists.
+func runTaskPath(env shellEnv, argv []string) {
+	if wantsHelp(argv) {
+		fmt.Print(taskUsage)
+		return
+	}
+	if len(argv) != 1 || strings.HasPrefix(argv[0], "-") {
+		fmt.Fprintf(os.Stderr, "pi-stack task path: expected exactly one task name\n\n%s", taskUsage)
+		os.Exit(2)
+	}
+	name := argv[0]
+
+	cwd, _ := os.Getwd()
+	mainroot, err := resolveMainroot(env, cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack task path: not a git repository: %v\n", err)
+		os.Exit(1)
+	}
+	sane := sanitizeTaskName(name)
+	lay, found, ambiguous := findTaskLayout(mainroot, sane)
+	if ambiguous {
+		fmt.Fprintf(os.Stderr, "pi-stack task path: %q exists in BOTH the new and legacy task layout for this repo; refusing to guess.\n", name)
+		os.Exit(1)
+	}
+	if !found {
+		fmt.Fprintf(os.Stderr, "pi-stack task path: no such task %q for this repo\n", name)
+		os.Exit(1)
+	}
+	co, _ := taskPaths(lay.dir, sane)
+	fmt.Println(co)
 }
 
 // ---------------------------------------------------------------------------

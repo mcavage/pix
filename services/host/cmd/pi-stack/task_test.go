@@ -135,6 +135,38 @@ func TestTaskRemoveGuard(t *testing.T) {
 
 // --- dispatcher -------------------------------------------------------------
 
+func TestRunTaskPath_PrintsCheckoutDir(t *testing.T) {
+	main := newMainRepo(t)
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	t.Setenv("PI_STACK_PROFILE", "")
+
+	env := gitEnv(t, "", nil)
+	mainroot, err := resolveMainroot(env, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := taskRepoDir(mainroot)
+	co, metaPath := taskPaths(repoDir, "fix-login")
+	makeTaskClone(t, main, co, "pi-stack/fix-login", "HEAD")
+	if err := writeTaskMeta(metaPath, taskMeta{
+		Name: "fix-login", Mode: "localclone", Mainroot: mainroot,
+		Branch: "pi-stack/fix-login", Profile: "default",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(main)
+	// Both grammars: `task path fix-login` and `task fix-login path`.
+	for _, argv := range [][]string{{"path", "fix-login"}, {"fix-login", "path"}} {
+		out := strings.TrimSpace(captureStdout(t, func() { runTask(argv) }))
+		if out != co {
+			t.Errorf("runTask(%v) = %q, want %q", argv, out, co)
+		}
+	}
+}
+
 func TestRunTask_BareAndHelpPrintUsage(t *testing.T) {
 	for _, argv := range [][]string{nil, {"-h"}, {"--help"}} {
 		out := captureStdout(t, func() { runTask(argv) })
