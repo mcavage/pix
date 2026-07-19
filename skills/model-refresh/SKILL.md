@@ -10,7 +10,7 @@ fast, and the model you "remember" is usually a version or two behind and priced
 wrong. **Always pull live data first.** If you skip step 1, you are guessing.
 
 The router has three source-of-truth files in `services/host/routing/defaults/`
-(override at `~/.pi-stack/routing/`):
+(override at `~/.local/share/pi-stack/routing/`):
 
 - `models.json` — the registry: every callable model + real `provider/id` + real
   `$/Mtok` in/out. Adding a model is one entry.
