@@ -197,10 +197,11 @@ constrained) to make the watcher reliable regardless of model.
 
 ## 12. Decisions (owner)
 
-- **Q1 (where authored skills live): default `~/.local/share/pi-stack/skills`,
-  overridable; repo is also good.** NOTE: that personal dir is NOT wired today
-  (only routing has the `~/.local/share/pi-stack/` override precedent) — this is
-  net-new `--skill` launch wiring.
+- **Q1 (where authored skills live): SUPERSEDED by packs.** Skills live in the
+  active pack's `skills/`; the personal-pack root is the
+  `~/.local/share/pi-stack/skills` path, now a git repo (`git init` + first
+  commit, guarded if `user.email` is unset). Team-shared skills live in a work
+  pack. See `docs/design/packs.md`.
 - **Q2 (default autonomy mode): `review`.**
 - **Q3 (guided path skippable): yes** — and rev 2 makes it <60s to value, not
   5-8 min.
