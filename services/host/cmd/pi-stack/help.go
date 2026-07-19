@@ -326,6 +326,11 @@ lines). It never writes a resolved secret.
   rm ENV_VAR               remove a ref (a no-op if it isn't set)
   check                    resolve each op:// ref with "op read" and report
                            OK/FAIL per key (never prints the resolved value)
+  sync                     FORCE re-resolve every provider-key ref
+                           (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY)
+                           into sbx (rotate/repair). You normally never run this:
+                           run and setup auto-resolve a MISSING key from its ref
+                           by themselves. Never prints or stores a value.
 
 The file lives at the absolute XDG path: see "pi-stack config path op-refs".
 `

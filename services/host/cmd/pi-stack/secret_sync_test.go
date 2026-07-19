@@ -77,3 +77,39 @@ func TestProviderKeyRefsPresent(t *testing.T) {
 		t.Error("non-provider ref must not count as a provider key")
 	}
 }
+
+// ensureProviderKeysFromRefs must resolve ONLY keys missing from sbx, and must
+// never call `op read` for a key sbx already has (no prompt on later launches).
+func TestEnsureProviderKeysFromRefs_OnlyMissing(t *testing.T) {
+	refs := "ANTHROPIC_API_KEY=op://P/anthropic/key\nGEMINI_API_KEY=op://P/gemini/key\n"
+	var calls []string
+	env := shellEnv{
+		readFile: func(string) (string, error) { return refs, nil },
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			calls = append(calls, name+" "+strings.Join(args, " "))
+			switch {
+			case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
+				return "anthropic\n", nil // anthropic already present; gemini/google missing
+			case name == "op" && len(args) >= 1 && args[0] == "--version":
+				return "2.0", nil
+			case name == "op" && len(args) >= 1 && args[0] == "account":
+				return "acct", nil
+			case name == "op" && len(args) >= 1 && args[0] == "read":
+				return "val\n", nil
+			}
+			return "", nil
+		},
+	}
+	var out bytes.Buffer
+	ensureProviderKeysFromRefs(env, &out)
+	joined := strings.Join(calls, "\n")
+	// gemini -> google should be resolved and set.
+	if !strings.Contains(joined, "sbx secret set -g google -t val") {
+		t.Errorf("missing key (google) should have been resolved:\n%s", joined)
+	}
+	// anthropic is already in sbx: it must NOT be op-read (no prompt).
+	if strings.Contains(joined, "op read op://P/anthropic/key") {
+		t.Error("must not op-read a key that sbx already has")
+	}
+}

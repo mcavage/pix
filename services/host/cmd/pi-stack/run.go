@@ -54,6 +54,12 @@ func runRun(argv []string) {
 	// github token authorizes git, not the model, so it does NOT count. We can
 	// only check when sbx is on PATH (the keys live proxy-side); when it is
 	// absent we cannot verify and proceed as before.
+	//
+	// First, the no-ritual 1Password path: if a provider key is MISSING from sbx
+	// but you own an op:// ref for it, resolve it into sbx now (op prompts at most
+	// once per key, then never again). Present keys are skipped, so this is a
+	// no-op on every launch after the first.
+	ensureProviderKeysFromRefs(defaultShellEnv(), os.Stderr)
 	if msg, block := modelProviderPreflight(defaultShellEnv()); block {
 		fmt.Fprint(os.Stderr, msg)
 		os.Exit(1)

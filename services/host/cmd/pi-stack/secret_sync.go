@@ -45,6 +45,58 @@ func providerKeyRefsPresent(env shellEnv) bool {
 	return false
 }
 
+// ensureProviderKeysFromRefs is the NO-RITUAL path: for each provider-key op://
+// ref whose sbx secret is currently MISSING, resolve it from 1Password and push
+// it into sbx. Because it acts only on missing keys, `op` (which may prompt) is
+// touched at most once per key ever — once sbx has the secret, later launches
+// skip op entirely. Best-effort and quiet: any failure just leaves the key unset
+// and the keys gate guides the user. Called from `run` and `setup`; the explicit
+// `pi-stack secret sync` is the force-resync (rotate/repair) counterpart.
+func ensureProviderKeysFromRefs(env shellEnv, out io.Writer) {
+	if env.run == nil {
+		return
+	}
+	_, content, exists := opRefsContent(env)
+	if !exists {
+		return
+	}
+	sbxOut, err := env.run("sbx", "secret", "ls")
+	if err != nil {
+		return // can't tell what's set; don't guess
+	}
+	type pk struct{ name, ref string }
+	var todo []pk
+	for _, r := range parseOpRefs(content) {
+		name, ok := providerKeyRefs[r.key]
+		if !ok || !r.isRef || r.placeholder {
+			continue
+		}
+		if grepWord(sbxOut, name) {
+			continue // already in sbx — no op call, no prompt
+		}
+		todo = append(todo, pk{name, r.value})
+	}
+	if len(todo) == 0 {
+		return // nothing missing that we can fill; never touch op
+	}
+	if !opInstalled(env) || !opSignedIn(env) {
+		return // can't resolve now; the keys gate points at `pi-stack secret sync`
+	}
+	for _, p := range todo {
+		val, err := env.run("op", "read", p.ref)
+		if err != nil {
+			continue
+		}
+		val = strings.TrimRight(val, "\r\n")
+		if val == "" {
+			continue
+		}
+		if _, err := env.run("sbx", "secret", "set", "-g", p.name, "-t", val); err == nil {
+			fmt.Fprintf(out, "pi-stack: resolved %s from 1Password\n", p.name)
+		}
+	}
+}
+
 // syncProviderKeys is the testable core: resolve each present provider-key ref
 // via `op read` and push it into sbx with `sbx secret set -g <name> -t <value>`.
 // It writes per-key ✓/✗ to out (NEVER the value) and returns counts plus a fatal
