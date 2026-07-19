@@ -34,13 +34,13 @@ import (
 // deliberately ABSENT: it is memory data, written live over the memory RPC, not
 // host config.
 type onboardingResult struct {
-	Version            int                `json:"version"`
-	GogAccount         string             `json:"gog_account,omitempty"`
-	MCP                []string           `json:"mcp,omitempty"`
-	Knowledge          *onboardKnowledge  `json:"knowledge,omitempty"`
-	OllamaBridgeModel  string             `json:"ollama_bridge_model,omitempty"`
-	MemoryWatcherModel string             `json:"memory_watcher_model,omitempty"`
-	ActiveProfile      string             `json:"active_profile,omitempty"`
+	Version            int               `json:"version"`
+	GogAccount         string            `json:"gog_account,omitempty"`
+	MCP                []string          `json:"mcp,omitempty"`
+	Knowledge          *onboardKnowledge `json:"knowledge,omitempty"`
+	OllamaBridgeModel  string            `json:"ollama_bridge_model,omitempty"`
+	MemoryWatcherModel string            `json:"memory_watcher_model,omitempty"`
+	ActiveProfile      string            `json:"active_profile,omitempty"`
 }
 
 type onboardKnowledge struct {
