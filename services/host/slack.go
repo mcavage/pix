@@ -20,7 +20,6 @@ import (
 )
 
 const slackAPI = "https://slack.com/api"
-const slackSession = "pi-stack-slack"
 
 func slackToken() (string, error) {
 	for _, k := range []string{"SLACK_TOKEN", "SLACK_USER_TOKEN", "SLACK_BOT_TOKEN"} {
@@ -425,12 +424,4 @@ func slackTools() []mcpTool {
 		{"search_users", "Find users by a substring of name, display name, or email.",
 			jsonObj{"query": s("substring"), "limit": n("1-200 (default 50)")}, []string{"query"}},
 	}
-}
-
-// Slack is registered with sbx via `sbx mcp add slack --command pi-stack-host
-// --args slack --env SLACK_TOKEN=…`; the gateway runs it on the host as a stdio
-// MCP server and exposes it to the agent. (No HTTP, no mcp.json url entry.)
-func runSlack() {
-	handle := mcpDispatcher("pi-stack-slack", slackTools(), slackToolHandlers())
-	mcpStdio(handle)
 }

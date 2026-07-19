@@ -212,12 +212,12 @@ func memColumnExists(db *sql.DB, table, col string) (bool, error) {
 }
 
 type memRow struct {
-	id, kind, content, durability, source, tags string
-	confidence, reward                          float64
-	frequency, accessCount                      int
-	createdAt                                   string
-	project                                     sql.NullString
-	embedding                                   sql.NullString
+	id, kind, content, durability string
+	confidence, reward            float64
+	frequency                     int
+	createdAt                     string
+	project                       sql.NullString
+	embedding                     sql.NullString
 }
 
 func (s *memStore) bump(id string, confidence float64) {

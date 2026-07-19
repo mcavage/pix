@@ -318,17 +318,6 @@ func runSetup(cfg *config.Config, env shellEnv, sio setupIO, opts setupOpts,
 // are excluded. When the local set can't be established the result is empty
 // (fail closed). needsCreds/step 4 gate on this.
 //
-// This is a BEST-EFFORT signal (local non-gog), NOT proof a server needs a
-// credential: there is no per-server credential metadata (`pi-stack-host mcp
-// --list` returns names only), so a credential-free local server like `pio`
-// will over-trigger the Step 4 explanation and a harmless empty op-refs
-// template. The proper fix is a per-server NeedsCreds capability on the
-// McpServer plugin interface (out of scope here).
-func credentialMCPs(cfg *config.Config, env shellEnv, hostResolver func() (string, error)) []string {
-	_, servers := credentialDetermination(cfg, env, hostResolver)
-	return servers
-}
-
 // credState is the three-state credential determination for Step 4. A boolean
 // would conflate two different "no" answers: the local-set probe
 // (`pi-stack-host mcp --list`) can itself fail, and there is no per-server
