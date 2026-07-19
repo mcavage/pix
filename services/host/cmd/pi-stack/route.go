@@ -84,7 +84,7 @@ commands:
   show [--json]             registry + scorecard + resolved table
   models [--json]           list the model registry
 
-Add a model: one entry in ~/.pi-stack/routing/models.json, hand-edit its scores
+Add a model: one entry in ~/.local/share/pi-stack/routing/models.json, hand-edit its scores
 into scorecard.json (services/host/routing/defaults/scorecard.json), then run
 ` + "`pi-stack route compile`" + `.
 `

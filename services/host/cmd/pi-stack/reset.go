@@ -45,7 +45,7 @@ type resetOpts struct {
 // $HOME lookup). memoryDir/knowledgeDir honor MEMORY_DB/KNOWLEDGE_DB.
 type resetPaths struct {
 	configDir    string // ~/.config/pi-stack (config.toml, op-refs.env, broker-token, knowledge/, knowledge-cache/)
-	dataRoot     string // ~/.pi-stack (memory/ + knowledge/)
+	dataRoot     string // ~/.local/share/pi-stack (memory/ + knowledge/)
 	memoryDir    string // <dataRoot>/memory or dir(MEMORY_DB): the user's captured facts
 	knowledgeDir string // <dataRoot>/knowledge or dir(KNOWLEDGE_DB): the rebuildable index
 	memoryDB     string // the custom MEMORY_DB file path (set ONLY when MEMORY_DB is given); "" for the default
@@ -112,14 +112,24 @@ var (
 )
 
 // resolveResetPaths resolves the host paths reset touches from the injected env
-// (MEMORY_DB/KNOWLEDGE_DB honored; the data root defaults to ~/.pi-stack, the
-// config dir to config.Path()'s parent).
+// (MEMORY_DB/KNOWLEDGE_DB honored; the data root defaults to
+// $XDG_DATA_HOME/pi-stack, else ~/.local/share/pi-stack; the config dir to
+// config.Path()'s parent). It resolves the data root from the INJECTED env
+// (not config.DataDir()) so tests stay hermetic.
 func resolveResetPaths(env shellEnv) resetPaths {
 	home := ""
 	if env.homeDir != nil {
 		home = env.homeDir()
 	}
-	dataRoot := filepath.Join(home, ".pi-stack")
+	var dataRoot string
+	if env.getenv != nil {
+		if xdg := strings.TrimSpace(env.getenv("XDG_DATA_HOME")); xdg != "" {
+			dataRoot = filepath.Join(xdg, "pi-stack")
+		}
+	}
+	if dataRoot == "" {
+		dataRoot = filepath.Join(home, ".local", "share", "pi-stack")
+	}
 	memoryDir := filepath.Join(dataRoot, "memory")
 	knowledgeDir := filepath.Join(dataRoot, "knowledge")
 	memoryDB := ""
@@ -394,7 +404,7 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 	stopHostServices(env, out)
 
 	// 1b. Verify serve is ACTUALLY down before we move the data dir. Renaming
-	// ~/.pi-stack out from under a live sqlite writer splits the db from its wal.
+	// ~/.local/share/pi-stack out from under a live sqlite writer splits the db from its wal.
 	// The config-dir backup stays safe; only the DATA moves are gated. --force
 	// overrides (the user accepts the risk).
 	dataBlocked := false

@@ -539,7 +539,7 @@ func agentReassess(args []string) {
 		fmt.Println("  (none)")
 	}
 	// Compile to the RIGHT file. `route compile` with no --out writes to
-	// ~/.pi-stack/routing/routing.json, but the Docker image bakes the repo-root
+	// ~/.local/share/pi-stack/routing/routing.json, but the Docker image bakes the repo-root
 	// routing.json (Dockerfile COPY). reassess is maintainer-only (needs the repo
 	// checkout), so when we are sitting in the repo — a routing.json next to a
 	// pi-kit/spec.yaml — target that file, or the reassessment silently never
@@ -559,7 +559,7 @@ func agentReassess(args []string) {
 // repoRoutingTarget returns the path of the repo-root routing.json the Docker
 // image bakes, but ONLY when the current directory is unmistakably the pi-stack
 // repo (a routing.json sitting next to pi-kit/spec.yaml). Otherwise it returns ""
-// and the caller falls back to `route compile`'s default (~/.pi-stack/routing).
+// and the caller falls back to `route compile`'s default (~/.local/share/pi-stack/routing).
 func repoRoutingTarget() string {
 	wd, err := os.Getwd()
 	if err != nil {

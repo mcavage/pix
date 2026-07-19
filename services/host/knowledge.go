@@ -8,7 +8,7 @@
 // optional — if the host Ollama / embed model is unavailable, embeddings are
 // skipped and query() degrades to keyword-only FTS ranking.
 //
-// Env: KNOWLEDGE_DB (~/.pi-stack/knowledge/knowledge.db). Embeddings reuse the
+// Env: KNOWLEDGE_DB (~/.local/share/pi-stack/knowledge/knowledge.db). Embeddings reuse the
 // memory service's OLLAMA_HOST / MEMORY_EMBED_MODEL knobs via memEmbed.
 
 package main
@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 
+	"pi-stack/host/config"
 	"pi-stack/host/okf"
 	"pi-stack/host/plugin"
 )
@@ -340,11 +341,7 @@ func (s *knowledgeStore) health() plugin.KnowledgeHealth {
 // The caller routes the error through its cleanup-aware fatal path; standalone
 // callers (servePluginKnowledge self-exec) may still fatal on it.
 func buildKnowledgeStore() (*knowledgeStore, bool, error) {
-	dbPath := strings.TrimSpace(os.Getenv("KNOWLEDGE_DB"))
-	if dbPath == "" {
-		home, _ := os.UserHomeDir()
-		dbPath = filepath.Join(home, ".pi-stack", "knowledge", "knowledge.db")
-	}
+	dbPath := config.KnowledgeDBPath()
 	hasEmb := memEmbedderAvailable()
 	var embedder func(string) []float64
 	if hasEmb {

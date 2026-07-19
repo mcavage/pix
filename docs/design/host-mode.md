@@ -110,8 +110,9 @@ Dockerfile RUN loop), with `--session-dir` pointed away from the checkout.
 
 **Where that dir lives:** under the existing pi-stack **state** home, not a new
 dotdir. pi-stack already uses three XDG homes — `~/.config/pi-stack` (config),
-`~/.pi-stack` (precious *data*: memory + knowledge DBs, what `pi-stack backup`
-archives), and `$XDG_STATE_HOME/pi-stack` (default `~/.local/state/pi-stack`,
+`$XDG_DATA_HOME/pi-stack` (default `~/.local/share/pi-stack`, precious *data*:
+memory + knowledge DBs, what `pi-stack backup` archives), and
+`$XDG_STATE_HOME/pi-stack` (default `~/.local/state/pi-stack`,
 rebuildable *state*: per-task clones under `tasks/`, `task.go`). The host-agent
 dir is exactly state-flavored — fully rebuildable (symlinks + `pi install`), never
 precious — so it belongs beside `tasks/`:
@@ -126,7 +127,7 @@ $XDG_STATE_HOME/pi-stack/            (default ~/.local/state/pi-stack)
     └── sessions/                     # --session-dir, out of the git tree
 ```
 
-Putting it here (not `~/.pi-stack/`) keeps it out of `pi-stack backup` and lets
+Putting it here (not the data home) keeps it out of `pi-stack backup` and lets
 `pi-stack state reset` nuke it freely — it's disposable, unlike memory. Honor
 `XDG_STATE_HOME` the same way `task.go` does.
 

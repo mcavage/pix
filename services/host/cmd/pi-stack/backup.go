@@ -28,7 +28,7 @@ tar.gz. Knowledge bundle CONTENT is not archived (git is its backup) \u2014 the
 manifest just records where it lives.
 
 flags:
-  --out PATH   archive path (default ~/.pi-stack/backups/pi-stack-backup-<ts>.tar.gz)
+  --out PATH   archive path (default ~/.local/share/pi-stack/backups/pi-stack-backup-<ts>.tar.gz)
   --keep N     keep only the newest N backups in the out dir (default 7)
 `
 
