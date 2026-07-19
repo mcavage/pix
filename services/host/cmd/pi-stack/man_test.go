@@ -103,7 +103,7 @@ func TestManPageDocumentsEveryConfigKey(t *testing.T) {
 }
 
 // TestManPageEmbedded proves the roff source is compiled into the binary (the
-// go:embed target is in-package) and is non-trivial.
+// embed target is in-package) and is non-trivial.
 func TestManPageEmbedded(t *testing.T) {
 	if len(manPage) == 0 {
 		t.Fatal("embedded manPage is empty")

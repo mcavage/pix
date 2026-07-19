@@ -68,9 +68,6 @@ func resolveProfileName(cfg *config.Config) string {
 	return config.DefaultProfile
 }
 
-// activeProfileName is resolveProfileName for display (status/doctor headers).
-func activeProfileName(cfg *config.Config) string { return resolveProfileName(cfg) }
-
 // loadResolvedConfig loads config and resolves the active profile into a flat
 // config every consumer can use unchanged. It returns the resolved config and
 // the active profile NAME, and errors when a non-default profile name is not

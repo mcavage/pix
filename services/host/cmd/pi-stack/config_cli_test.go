@@ -192,7 +192,7 @@ func TestConfigSaveRoundTrip(t *testing.T) {
 // creating it if absent; unset clears it.
 func TestApplyProfileConfigChange_GogAccount(t *testing.T) {
 	cfg := defaultCfg()
-	if cfg.Profiles != nil && len(cfg.Profiles) != 0 {
+	if len(cfg.Profiles) != 0 {
 		t.Fatalf("expected no profiles to start, got %v", cfg.Profiles)
 	}
 	sum, err := applyProfileConfigChange(cfg, false, "work", "gog_account", []string{"me@work.com"})

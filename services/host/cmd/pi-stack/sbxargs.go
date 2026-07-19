@@ -144,9 +144,7 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 	// Live skill trees: config paths + --skills flags. Each is mounted as an
 	// extra workspace so pi can read it inside the sandbox.
 	liveSkills := append(append([]string(nil), cfg.Skills.Paths...), o.Skills...)
-	for _, s := range liveSkills {
-		args = append(args, s)
-	}
+	args = append(args, liveSkills...)
 	// Dev mode also mounts the repo's own skills tree.
 	if o.Dev {
 		args = append(args, filepath.Join(o.DevRoot, "skills"))
