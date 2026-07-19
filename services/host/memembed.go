@@ -154,7 +154,7 @@ func memWatcherWarm() {
 	body, _ := json.Marshal(map[string]any{
 		"model": m, "stream": false,
 		"messages": []map[string]any{{"role": "user", "content": "ok"}},
-		"options": map[string]any{"num_predict": 1},
+		"options":  map[string]any{"num_predict": 1},
 	})
 	client := &http.Client{Timeout: 5 * time.Minute} // generous: a cold load can be slow
 	res, err := client.Post(ollamaHost()+"/api/chat", "application/json", bytes.NewReader(body))

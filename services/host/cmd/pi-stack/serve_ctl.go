@@ -36,7 +36,7 @@ type serveCtl struct {
 	verify     func(pid int) (ours bool, known bool)   // is pid our `pi-stack-host serve`? known=false => can't tell
 	sleep      func(d time.Duration)                   // poll delay (injected so tests don't wait)
 	removeLazy func()                                  // clear the serve.lazy marker (optional; nil = skip)
-	discover   func() ([]int, error)                    // find running pi-stack-host serve pids when the pidfile is gone (optional; nil = skip)
+	discover   func() ([]int, error)                   // find running pi-stack-host serve pids when the pidfile is gone (optional; nil = skip)
 }
 
 // defaultServeCtl wires the real OS-backed control surface.
