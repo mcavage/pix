@@ -19,12 +19,14 @@ import (
 
 // Defaults applied when a config file is absent or a field is unset.
 const (
-	// Defaults to the SAME model as the ollama-bridge (qwen3.5:9b) so Ollama keeps
-	// ONE local model resident for both fact capture and the sandbox's local chat/
-	// router option, instead of paying DRAM for a second watcher-only model. On a
-	// tight machine, point it at something smaller via `pi-stack config set
-	// memory_watcher_model <model>`.
-	DefaultMemoryWatcherModel = "qwen3.5:9b"
+	// A small, fast, extraction-grade local model DEDICATED to fact capture. It is
+	// deliberately decoupled from the (bigger) ollama-bridge/router model: fact
+	// extraction is a bounded task that does not need a 9b, and a 9b cold-load was
+	// the cause of watcher timeouts. gemma4:e4b-mlx is small + MLX-accelerated on
+	// Apple Silicon; warm-on-start (memWatcherWarm) keeps the first capture fast.
+	// Override via `pi-stack config set memory_watcher_model <model>` (e.g.
+	// smolstruct:1.7b or osmosis-structure:0.6b on non-Apple hardware).
+	DefaultMemoryWatcherModel = "gemma4:e4b-mlx"
 	DefaultMemoryEmbedModel   = "nomic-embed-text"
 	// DefaultOllamaBridgeModel is the local model the sandbox's ollama-bridge
 	// exposes to pi (the interactive Alt+P cycle) AND the router's local option.
@@ -280,6 +282,14 @@ func DataDir() (string, error) {
 	}
 	return filepath.Join(home, ".local", "share", "pi-stack"), nil
 }
+
+// SkillsDir is the per-user personal skills override directory:
+// $XDG_DATA_HOME/pi-stack/skills, else ~/.local/share/pi-stack/skills. Skills
+// authored here load in EVERY sandbox (mounted + --skill'd by the launcher),
+// on top of the baked/overlay skills — mirroring the routing override dir. It is
+// the default home for skills you write for yourself; a repo-local skill is the
+// choice when it should be versioned/PR-reviewed with a project.
+func SkillsDir() string { return filepath.Join(dataDirOr(), "skills") }
 
 // dataDirOr returns DataDir() or, if HOME cannot be resolved, a relative
 // "pi-stack" so path builders never panic on an empty base.

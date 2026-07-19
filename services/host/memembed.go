@@ -134,13 +134,36 @@ func memWatcherModel() string {
 	if v := os.Getenv("MEMORY_WATCHER_MODEL"); v != "" {
 		return v
 	}
-	// Defaults to the same local model the ollama-bridge/router uses (qwen3.5:9b)
-	// so Ollama keeps ONE model resident for both capture and local inference,
-	// instead of a second watcher-only model. `pi-stack serve` normally passes the
-	// resolved config value (config.DefaultMemoryWatcherModel); this fallback only
-	// applies when the daemon runs with MEMORY_WATCHER_MODEL unset. Override for a
-	// smaller model via MEMORY_WATCHER_MODEL / `pi-stack config set`.
-	return "qwen3.5:9b"
+	// A small, extraction-grade model dedicated to capture. `pi-stack serve`
+	// normally passes the resolved config value (config.DefaultMemoryWatcherModel);
+	// this fallback only applies when the daemon runs with MEMORY_WATCHER_MODEL
+	// unset. Keep in sync with config.DefaultMemoryWatcherModel.
+	return "gemma4:e4b-mlx"
+}
+
+// memWatcherWarm forces the watcher model resident in Ollama at startup so the
+// FIRST real capture doesn't pay the cold-load latency that caused watcher
+// timeouts. Best-effort, background, generous cold-load budget, and it does NOT
+// touch the capture availability/degraded flags (warming is priming, not a
+// readiness verdict — memWatch owns that). No-op if the model isn't pulled.
+func memWatcherWarm() {
+	m := memWatcherModel()
+	if !memOllamaHasModel(m) {
+		return
+	}
+	body, _ := json.Marshal(map[string]any{
+		"model": m, "stream": false,
+		"messages": []map[string]any{{"role": "user", "content": "ok"}},
+		"options": map[string]any{"num_predict": 1},
+	})
+	client := &http.Client{Timeout: 5 * time.Minute} // generous: a cold load can be slow
+	res, err := client.Post(ollamaHost()+"/api/chat", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
+	res.Body.Close()
+	log.Printf("memory watcher: warmed model %q", m)
 }
 
 // watcherUnavailable is set true once a capture attempt fails because the

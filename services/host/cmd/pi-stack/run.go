@@ -157,6 +157,16 @@ func runRun(argv []string) {
 		}
 	}
 
+	// Personal skills override dir (~/.local/share/pi-stack/skills): if it exists
+	// and has skills, mount it so skills you authored for yourself load in EVERY
+	// sandbox, on top of the baked/overlay set. Create-time only (skills are
+	// create-time mounts; a re-attach keeps what it was created with).
+	if willCreate(state, o.Replace) {
+		if d := config.SkillsDir(); dirHasEntries(d) && !containsStr(o.Skills, d) {
+			o.Skills = append(o.Skills, d)
+		}
+	}
+
 	plan := planSandboxLaunch(state, o.Replace, cfg, o, version)
 	switch {
 	case o.Replace:
@@ -199,6 +209,11 @@ func runRun(argv []string) {
 	// ollama_bridge_model <tag>` is all you need (no sandbox env editing). Mirrors
 	// the profile/knowledge-scope seam. Best-effort.
 	writeOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
+
+	// Host-state truth file: the host-visible facts the fenced agent can't see
+	// (keys/services/knowledge/gog/mcp/models/overlay). The onboarding skill reads
+	// it instead of guessing. Best-effort.
+	writeHostStateFile(o.Workspace, cfg, defaultShellEnv(), o.MCPEnabled)
 
 	args := plan.Args
 

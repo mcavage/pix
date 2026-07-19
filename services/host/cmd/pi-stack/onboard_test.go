@@ -11,17 +11,6 @@ import (
 	"pi-stack/host/config"
 )
 
-// containsStr reports whether list contains s (test helper, formerly in
-// setup_test.go).
-func containsStr(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
 // captureSave returns a save func that records the last saved config.
 func captureSave(dst **config.Config) func(*config.Config) error {
 	return func(c *config.Config) error { *dst = c; return nil }

@@ -849,6 +849,9 @@ func buildMemStore() (*memStore, bool, error) {
 	// startup (and reflected in `observe`/`health`) instead of silently dropping
 	// every captured fact. Async: don't block store init on an Ollama round-trip.
 	go memWatcherProbe()
+	// Warm the watcher model into Ollama's memory so the first real capture doesn't
+	// eat the cold-load latency (background, best-effort).
+	go memWatcherWarm()
 	store, err := newMemStore(dbPath, embedder)
 	if err != nil {
 		return nil, false, fmt.Errorf("memory: %w", err)
