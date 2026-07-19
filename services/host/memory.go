@@ -756,8 +756,16 @@ func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 				}
 				return jsonObj{"accepted": false, "reason": reason + "; recall still works"}, nil
 			}
-			go memCapture(store, user, project, hasProj, profile)
-			return jsonObj{"accepted": true}, nil
+			// Bound concurrent captures (each hits the watcher model). Non-blocking
+			// acquire + backpressure so a giant observe batch can't spawn unbounded
+			// goroutines/Ollama calls. memCapture releases the slot when it finishes.
+			select {
+			case memCaptureSem <- struct{}{}:
+				go memCapture(store, user, project, hasProj, profile)
+				return jsonObj{"accepted": true}, nil
+			default:
+				return jsonObj{"accepted": false, "reason": "capture busy (too many in flight); retry shortly — recall still works"}, nil
+			}
 		},
 	}
 
@@ -903,8 +911,20 @@ func profileFromParams(p jsonObj) string {
 	return memNormProfile(getStr(p, "profile"))
 }
 
+// memCaptureMaxConcurrency bounds the number of in-flight background captures.
+// Each capture makes a watcher-model (Ollama) call, so an unbounded `go
+// memCapture` per observe entry let a single sandbox-issued JSON-RPC BATCH
+// (thousands of observe calls inside the 1 MiB body cap) spawn thousands of
+// goroutines and concurrent Ollama requests on the host — a trivial local DoS.
+// The observe handler acquires memCaptureSem non-blockingly and applies
+// honest backpressure (accepted:false) when saturated.
+const memCaptureMaxConcurrency = 8
+
+var memCaptureSem = make(chan struct{}, memCaptureMaxConcurrency)
+
 func memCapture(store *memStore, user, project string, hasProj bool, profile string) {
 	defer func() { recover() }()
+	defer func() { <-memCaptureSem }()
 	w := memWatch(user)
 	if w == nil {
 		return

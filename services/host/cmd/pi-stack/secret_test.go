@@ -343,6 +343,33 @@ func TestSecretSetRejectsNonRefForSecretKey(t *testing.T) {
 	}
 }
 
+// TestSecretSetRejectsControlChars is the injection regression: a value carrying
+// a newline must be refused (exit 2), never written, so it cannot smuggle a
+// SECOND KEY=value line (e.g. a pasted plaintext secret) into op-refs.env.
+func TestSecretSetRejectsControlChars(t *testing.T) {
+	if os.Getenv("PI_STACK_SECRET_SET_NL") == "1" {
+		runSecretSet(memEnv(map[string]string{fakeRefsPath: "X=1\n"}), os.Stdout,
+			"GITHUB_TOKEN", "op://V/I/f\nSLACK_TOKEN=xoxb-injected")
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretSetRejectsControlChars")
+	cmd.Env = append(os.Environ(), "PI_STACK_SECRET_SET_NL=1")
+	outBuf, err := cmd.CombinedOutput()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("expected an ExitError, got %v (output: %s)", err, outBuf)
+	}
+	if ee.ExitCode() != 2 {
+		t.Errorf("exit code = %d, want 2", ee.ExitCode())
+	}
+	if strings.Contains(string(outBuf), "xoxb-injected") {
+		t.Errorf("rejection LEAKED the injected value: %s", outBuf)
+	}
+	if !strings.Contains(string(outBuf), "control character") {
+		t.Errorf("rejection should name the control-character reason: %s", outBuf)
+	}
+}
+
 func TestSecretSetAllowsNonSecretAllowlistLiteral(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "X=1\n"}
 	var out bytes.Buffer
