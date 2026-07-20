@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"pi-stack/host/config"
 )
@@ -96,9 +97,10 @@ type hostStateIdentity struct {
 // --global (not repo-local) on purpose: a freshly cloned hostile repo can set a
 // repo-local user.name to an injection payload, and it's cwd-independent so
 // `pi-stack setup /other/dir` still reads the right person. The values are
-// UNTRUSTED display text — sanitizeIdentity strips them to a single short
-// printable line so a crafted value can't inject terminal escapes or break out
-// of the persisted memory fact. Best-effort: empty when git is absent or unset.
+// UNTRUSTED display text — sanitizeIdentity reduces the injection surface (strips
+// terminal-control/format chars, caps length); prompt-like text in a name is
+// further contained by the onboarding skill treating identity.name as a
+// display-only name. Best-effort: empty when git is absent or unset.
 func readGitIdentity(env shellEnv) hostStateIdentity {
 	id := hostStateIdentity{}
 	if env.run == nil {
@@ -113,22 +115,25 @@ func readGitIdentity(env shellEnv) hostStateIdentity {
 	return id
 }
 
-// sanitizeIdentity reduces an untrusted git-config value to a single, short,
-// printable line: first line only, no control chars (incl. ANSI ESC), capped so
-// it can't be a prompt-injection / terminal-injection vector when greeted or
-// persisted to memory.
+// sanitizeIdentity reduces an untrusted git-config value to a single short line
+// of GRAPHIC characters only: first line taken BEFORE trimming (so a leading
+// blank line can't promote line 2), then everything that isn't unicode.IsGraphic
+// is dropped — that excludes C0/C1 controls, DEL, Cf format chars (ANSI ESC, C1
+// CSI U+009B, bidi overrides U+202E), and Zl/Zp line/paragraph separators
+// (U+2028/U+2029). Capped by RUNE count (not bytes) so multibyte names aren't
+// truncated mid-rune or under-counted.
 func sanitizeIdentity(s string) string {
-	s = strings.TrimSpace(s)
 	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
 		s = s[:i]
 	}
 	var b strings.Builder
+	n := 0
 	for _, r := range s {
-		if r < 0x20 || r == 0x7f {
+		if !unicode.IsGraphic(r) {
 			continue
 		}
 		b.WriteRune(r)
-		if b.Len() >= 80 {
+		if n++; n >= 60 {
 			break
 		}
 	}

@@ -114,8 +114,9 @@ auto-provisions one (steering you to 1Password), then launches.
 
 `pi-stack setup` is the opposite: it *actually sets you up* — provisions model
 keys from 1Password (wiring both the sandbox and host mode), creates your
-personal pack, and always provisions + enables host mode, then hands off to a
-guided walkthrough that teaches the flow by doing your real first task. For
+personal pack, and provisions + enables host mode (when the host can run `pi`),
+then hands off to a guided walkthrough that teaches the flow by doing your real
+first task. For
 scripted/CI hosts, `pi-stack onboard --account … --knowledge … --yes` writes
 `~/.config/pi-stack/config.toml` non-interactively (host config only, no handoff).
 

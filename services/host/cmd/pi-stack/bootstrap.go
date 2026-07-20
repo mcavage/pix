@@ -46,9 +46,10 @@ func anyModelKeyPresent(env shellEnv) bool {
 //     syncs into sbx) so both the sandbox and host mode get keys from one paste.
 //
 // Returns whether a model key ended up present. It NEVER blocks or exits \u2014 the
-// caller decides what to do when it returns false (run refuses to launch; setup
-// reports and continues). Idempotent: with a key already present it does nothing
-// beyond a cheap sbx probe (op is never touched).
+// caller decides (run refuses to launch only when sbxModelKeyState POSITIVELY
+// confirms no key). Idempotent: with a key already present it does nothing beyond
+// a cheap sbx probe (op is never touched). Only `run` calls this; `setup` uses
+// the stronger setupProvisionKeys.
 func bootstrapProviderKeys(env shellEnv, in io.Reader, out io.Writer, tty bool) bool {
 	ensureProviderKeysFromRefs(env, out)
 	if anyModelKeyPresent(env) {

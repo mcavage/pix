@@ -51,13 +51,16 @@ func runRun(argv []string) {
 
 	// Bare-minimum key bootstrap: a pi session needs at least one model provider
 	// key. `run` otherwise stays out of the way (no onboarding, no nags), but with
-	// NO usable key it can't launch — so auto-run the SHARED key flow (resolve your
-	// 1Password refs into sbx; on a TTY, steer you to 1Password), the identical
-	// path `setup` uses. When a key is already present this is a cheap no-op. If it
-	// still can't get one, refuse with guidance. sbx absent = can't verify = proceed.
+	// NO usable key it can't launch — so auto-run the key flow (resolve your
+	// 1Password refs into sbx; on a TTY, steer you to 1Password). When a key is
+	// already present this is a cheap no-op. Then refuse ONLY when we can POSITIVELY
+	// confirm no key (tri-state): sbx absent OR its control plane unprobeable =
+	// can't verify = proceed, never a false refusal on a transient failure.
 	if _, err := defaultShellEnv().lookPath("sbx"); err == nil {
-		if !bootstrapProviderKeys(defaultShellEnv(), os.Stdin, os.Stderr, isTTY(os.Stdin)) {
-			fmt.Fprint(os.Stderr, modelKeyMissingMessage(defaultShellEnv()))
+		env := defaultShellEnv()
+		bootstrapProviderKeys(env, os.Stdin, os.Stderr, isTTY(os.Stdin))
+		if present, probeOK := sbxModelKeyState(env); probeOK && !present {
+			fmt.Fprint(os.Stderr, modelKeyMissingMessage(env))
 			os.Exit(1)
 		}
 	}
@@ -495,10 +498,11 @@ func localImageLoaded(env shellEnv, tag string) bool {
 			continue
 		}
 		repoSeen = true
-		for _, f := range strings.Fields(ln) {
-			if f == tag {
-				return true
-			}
+		// Substring (not exact field): tolerates both `repo tag id` and a combined
+		// `repo:tag id` column. The tag is a unique local-<unixts>, so a substring
+		// match can't collide.
+		if strings.Contains(ln, tag) {
+			return true
 		}
 	}
 	// Repo not listed at all -> unrecognized/empty format: fail OPEN. Repo listed

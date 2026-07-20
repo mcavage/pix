@@ -3,10 +3,11 @@
 // Owner decision (supersedes the in-`run` auto-offer): onboarding is a TWO-PHASE
 // thing the user opts into by NAME.
 //
-//  1. HOST phase (here, on the host): report provider keys (with the exact fix
-//     command for any that are missing), ensure the memory service, and — on a
-//     TTY — offer to wire the optional host bits (knowledge base, Google
-//     Workspace account). Non-interactive / flag-driven runs stay CI-safe.
+//  1. HOST phase (here, on the host): source model keys from 1Password
+//     (setupProvisionKeys), ensure the memory service, create the personal pack,
+//     seed git identity, and ALWAYS provision + enable host mode when it can.
+//     Host-config (gog/knowledge/mcp) comes from FLAGS, not interactive prompts;
+//     the only interaction is pasting op:// refs on a TTY. Flag/non-TTY = CI-safe.
 //  2. AGENT phase (handoff): launch a normal `pi-stack run` whose FIRST pi
 //     message kicks off the `onboarding` skill, so the agent PROACTIVELY starts
 //     the conversation (identity, tone, a real first task) instead of sitting
@@ -93,7 +94,7 @@ func runSetupCmd(argv []string) {
 
 	// Phase 2: hand off to the in-VM onboarding agent via an initial message.
 	fmt.Fprintln(os.Stdout, "")
-	fmt.Fprintln(os.Stdout, "Setup complete. Launching pi — it'll introduce itself, show you how it works,")
+	fmt.Fprintln(os.Stdout, "Sandbox ready. Launching pi — it'll introduce itself, show you how it works,")
 	fmt.Fprintln(os.Stdout, "and get you into a real task. (You can quit any time; just run `pi-stack run`.)")
 
 	runArgs := []string{}
@@ -105,9 +106,9 @@ func runSetupCmd(argv []string) {
 }
 
 // setupHostPhase does the deterministic host configuration and reports what is
-// (and is not) ready. It stays non-interactive EXCEPT for one tightly-gated,
-// default-No offer to wire model keys to 1Password (TTY + op installed + no key
-// refs yet). With flags OR no TTY it is fully non-interactive (the CI path).
+// (and is not) ready. The only interactive step is pasting op:// refs for
+// providers missing one (TTY + op installed); with flags OR no TTY it is fully
+// non-interactive (the CI path).
 func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, tty bool) error {
 	fmt.Fprintln(out, "pi-stack setup — configuring the host")
 	fmt.Fprintln(out, "")
@@ -372,13 +373,14 @@ const setupUsage = `usage: pi-stack setup [DIR] [host-config flags]
 
 Actually sets you up (use 'pi-stack run' if you just want to start working):
   1. host   — provision model keys from 1Password (wiring BOTH the sandbox and
-              host mode), ensure memory, create your personal pack, and ALWAYS
-              provision + enable host mode ('pi-stack host')
+              host mode), ensure memory, create your personal pack, and provision
+              + enable host mode ('pi-stack host') when the host can run it
   2. agent  — launch a sandbox and hand off to a GUIDED walkthrough that teaches
               the flow by doing your real first task (crew, skills, memory) and
               introduces each capability as your work needs it
-Both the sandbox and host mode are set up. Host mode runs pi UNSANDBOXED; disable
-it with 'pi-stack config set host.enabled false' if you don't want it.
+The sandbox is always set up. Host mode (pi UNSANDBOXED) is provisioned + enabled
+when provisioning succeeds (it needs pi on the host); disable it any time with
+'pi-stack config set host.enabled false'.
 
 DIR defaults to the current directory (like ` + "`pi-stack run`" + `). Setup REFUSES
 if a sandbox already exists for DIR (its agent handoff needs a fresh session);

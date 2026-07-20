@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -108,5 +109,50 @@ func TestReadGitIdentity(t *testing.T) {
 	// No git / nil run -> empty, no panic.
 	if got := readGitIdentity(shellEnv{}); got.Name != "" || got.Email != "" {
 		t.Errorf("expected empty identity with no run, got %+v", got)
+	}
+}
+
+func TestSanitizeIdentity(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"Mark Cavage", "Mark Cavage"},
+		{"  Mark  ", "Mark"},
+		{"\nSecond line first?\nthird", ""},    // leading blank line NOT promoted (first line is empty)
+		{"First\nIgnore this", "First"},        // only the first line survives
+		{"Bad\x1b[31mred", "Bad[31mred"},       // C0 ESC dropped
+		{"csi\u009bhere", "csihere"},           // C1 CSI dropped
+		{"bidi\u202eoverride", "bidioverride"}, // Cf bidi override dropped
+		{"line\u2028sep", "linesep"},           // Zl line separator dropped
+	}
+	for _, c := range cases {
+		if got := sanitizeIdentity(c.in); got != c.want {
+			t.Errorf("sanitizeIdentity(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// Rune cap: a long multibyte name is capped without splitting a rune.
+	long := strings.Repeat("\u00e9", 200) // é
+	got := sanitizeIdentity(long)
+	if n := len([]rune(got)); n != 60 {
+		t.Errorf("rune cap: got %d runes, want 60", n)
+	}
+}
+
+func TestSbxModelKeyState(t *testing.T) {
+	// present
+	p := shellEnv{lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
+		run: func(string, ...string) (string, error) { return "anthropic\ngithub\n", nil }}
+	if present, ok := sbxModelKeyState(p); !present || !ok {
+		t.Errorf("present key: got present=%v ok=%v", present, ok)
+	}
+	// no key but probeOK
+	nk := shellEnv{lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
+		run: func(string, ...string) (string, error) { return "github\n", nil }}
+	if present, ok := sbxModelKeyState(nk); present || !ok {
+		t.Errorf("no key: got present=%v ok=%v (want false,true)", present, ok)
+	}
+	// transient ls failure -> probeOK false (must NOT be read as "no key")
+	fail := shellEnv{lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
+		run: func(string, ...string) (string, error) { return "", fmt.Errorf("control plane down") }}
+	if present, ok := sbxModelKeyState(fail); present || ok {
+		t.Errorf("ls failure: got present=%v ok=%v (want false,false)", present, ok)
 	}
 }
