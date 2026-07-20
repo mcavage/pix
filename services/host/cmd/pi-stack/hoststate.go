@@ -10,6 +10,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -167,6 +168,11 @@ func hostProvisioned() bool {
 		return false
 	}
 	if _, err := os.Stat(filepath.Join(dir, "extensions", "host-guard.ts")); err != nil {
+		return false
+	}
+	// host mode launches `pi` DIRECTLY on the host; without it, host mode can't
+	// run, so it isn't truly provisioned (don't let host-state claim "ready").
+	if _, err := exec.LookPath("pi"); err != nil {
 		return false
 	}
 	return true
