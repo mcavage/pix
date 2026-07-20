@@ -50,11 +50,16 @@ func runSetupCmd(argv []string) {
 	// Split an optional positional DIR from the onboard-style flags. DIR is the
 	// single non-flag token; everything else is forwarded to the host phase.
 	dir := "."
+	dirSet := false
 	var hostArgs []string
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		if len(a) > 0 && a[0] != '-' {
-			dir = a
+			if dirSet {
+				fmt.Fprintf(os.Stderr, "pi-stack setup: too many directories (%q and %q); pass at most one DIR\n", dir, a)
+				os.Exit(2)
+			}
+			dir, dirSet = a, true
 			continue
 		}
 		hostArgs = append(hostArgs, a)
@@ -126,7 +131,8 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	// flag / --non-interactive is the scripted (CI) path and must never prompt.
 	interactive := tty && !opts.assumeYes && len(flags) == 0
 
-	// Provider keys: 1Password is the single source of truth. Solicit an op:// ref
+	// Provider keys: prefer 1Password as the source (steer there), regardless of
+	// what sbx already has. Solicit an op:// ref
 	// for any provider without one yet, mirror refs into hostmode.env, and
 	// force-sync them into sbx (overwriting) — regardless of what sbx already has,
 	// no yes/no gate. A model key is REQUIRED to run, so abort if none ends up
@@ -190,8 +196,11 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	return nil
 }
 
-// setupProvisionKeys makes 1Password the single source of model keys, with no
-// yes/no gate — the only interaction is pasting the refs themselves:
+// setupProvisionKeys STEERS model keys to 1Password (the preferred source),
+// regardless of what sbx has, with no yes/no gate — the only interaction is
+// pasting the refs themselves. It degrades gracefully: no `op` installed, or a
+// skipped provider, falls back to whatever keys sbx already holds (it never
+// hard-blocks a working box). Steps:
 //  1. (interactive) for each provider WITHOUT a ref yet, ask for an op:// ref and
 //     write it to op-refs.env + hostmode.env (one paste wires sandbox + host mode);
 //  2. mirror every provider ref into hostmode.env (covers refs that pre-date this
@@ -307,6 +316,14 @@ func setupHostMode(env shellEnv, out io.Writer) {
 		}
 	}
 	fmt.Fprintln(out, "host mode: enabled + provisioned (launch: pi-stack host).")
+	// Honest note (no prompt): host mode reaches cloud models ONLY through op://
+	// refs (it doesn't use the sandbox proxy). If none are wired — e.g. the keys are
+	// raw sbx secrets with no 1Password ref — host mode is Ollama-only until refs
+	// are added.
+	if !providerKeyRefsPresent(env) {
+		fmt.Fprintln(out, "  note: no 1Password key refs yet, so host mode is Ollama-only until you add them")
+		fmt.Fprintln(out, "  (pi-stack secret set ANTHROPIC_API_KEY op://Vault/Item/field).")
+	}
 }
 
 // reportProviderKeys prints the anthropic/openai/google/github key status and,

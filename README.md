@@ -221,7 +221,7 @@ pi-stack run --replace        # recreate instead of re-attaching (picks up chang
 pi-stack ls                  # list your pi-stack sandboxes (name, state, dir)
 pi-stack rm <name>           # remove a sandbox (--all [--except <name>])
 pi-stack status              # fast read-only control panel (alias: st)
-pi-stack onboard             # host-side/CI config (conversational onboarding is in-session via run)
+pi-stack onboard             # host-side/CI config (guided onboarding is in-session via `pi-stack setup`)
 pi-stack serve               # run enabled host services (auto-started lazily; install/uninstall for a login service)
 pi-stack doctor              # diagnose host and sandbox prerequisites
 pi-stack config show|path|set|unset  # inspect or update config (never hand-edit toml)
@@ -235,7 +235,7 @@ Data, routing, and parallel work:
 pi-stack memory recall|remember|forget|learnings|stats   # drive the memory daemon (alias: mem)
 pi-stack knowledge init|use|ls|query|sync|remote         # OKF bundles (alias: kb)
 pi-stack mcp register|ls     # register/list local stdio MCP servers with sbx
-pi-stack secret ls|set|rm|check   # 1Password op-refs for host MCP credentials
+pi-stack secret ls|set|rm|sync|check   # 1Password op-refs for model keys + host MCP creds
 pi-stack route pick|compile|show|models   # the model router (cost/latency/accuracy)
 pi-stack agent ls|new|edit|rm|reassess    # manage subagents and their resolved models
 pi-stack task new|ls|harvest|rm|gc        # isolated parallel-work sandboxes (see below)

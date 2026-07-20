@@ -191,10 +191,10 @@ func classifyBareArg(a string) (msg string, launch bool) {
 // runVerb handles the `run` verb and the bare-DIR alias. It short-circuits to
 // run usage on a -h/--help request, then launches. It deliberately NEVER runs
 // onboarding (owner constraint: `pi-stack run` just gives the agent to the
-// user); an unconfigured host gets a one-line non-blocking heads-up (runRun ->
-// warnUnconfigured) and continues. The guided onboarding is the explicit
-// `pi-stack setup`, which does the host phase then launches `run --onboard` to
-// hand off to the in-VM agent (the only path that drops the offer marker).
+// user); it auto-provisions a model key only if none exists (else it can't
+// launch), and otherwise stays out of the way. The guided onboarding is the
+// explicit `pi-stack setup`, which does the host phase then launches a normal
+// `run` handing the agent a short kickoff message to begin the walkthrough.
 func runVerb(argv []string) {
 	if wantsHelp(argv) {
 		fmt.Print(runUsage)

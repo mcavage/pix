@@ -244,7 +244,8 @@ func ensureProviderKeysFromRefs(env shellEnv, out io.Writer) {
 }
 
 // syncProviderKeys is the testable core: resolve each present provider-key ref
-// via `op read` and push it into sbx with `sbx secret set -g <name> -t <value>`.
+// via `op read` and push it into sbx with `sbx secret set -f -g <name> -t <value>`
+// (-f overwrites: 1Password is the source of truth).
 // It writes per-key ✓/✗ to out (NEVER the value) and returns counts plus a fatal
 // error for a precondition failure (op/sbx unavailable) so the CLI wrapper can
 // pick an exit code and setup can degrade quietly.

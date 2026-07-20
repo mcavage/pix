@@ -379,12 +379,20 @@ func TestLocalImageLoaded(t *testing.T) {
 	if !localImageLoaded(lsErr, "local-222") {
 		t.Error("must fail open (true) when `sbx template ls` errors")
 	}
-	// Unrecognized format (repo never appears) -> fail OPEN (true), not a false refusal.
-	unknown := shellEnv{
+	// Empty ls output -> no signal -> fail OPEN (true).
+	empty := shellEnv{
 		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
-		run:      func(string, ...string) (string, error) { return "SOME NEW HEADER\nother/repo:tag id\n", nil },
+		run:      func(string, ...string) (string, error) { return "   \n", nil },
 	}
-	if !localImageLoaded(unknown, "local-222") {
-		t.Error("must fail open (true) when the repo isn't listed at all (unknown format)")
+	if !localImageLoaded(empty, "local-222") {
+		t.Error("must fail open (true) when ls output is empty")
+	}
+	// Store fully pruned (non-empty ls, tag absent) -> REFUSE (would otherwise pull).
+	pruned := shellEnv{
+		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
+		run:      func(string, ...string) (string, error) { return "REPOSITORY TAG ID\nother/img latest xyz\n", nil },
+	}
+	if localImageLoaded(pruned, "local-222") {
+		t.Error("must refuse when the tag is absent from a non-empty store (pruned)")
 	}
 }

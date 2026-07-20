@@ -469,16 +469,16 @@ func repoFromBinary() (string, bool) {
 	return "", false
 }
 
-// localImageLoaded reports whether sbx's template store already carries
-// dockerImageRepo:tag. Used to refuse a launch that would otherwise make sbx
-// PULL a never-published local-* image (the confusing "pull? use cached?"
-// prompt). It fails OPEN (returns true) whenever it can't be sure: no sbx, an ls
-// error, OR output whose format it doesn't recognize (the repo never appears at
-// all). It only returns false in the ONE unambiguous case — the repo IS listed
-// (with other tags) but not this tag — which is exactly the stale-`.local-image-tag`
-// scenario. So a future `sbx template ls` format change degrades to the old
-// behavior, never a false refusal. Columns are repo / tag / id, matching the
-// Makefile load target's own parsing.
+// localImageLoaded reports whether sbx's template store carries the local image
+// tag. Used to refuse a launch that would otherwise make sbx PULL a
+// never-published local-* image (the confusing "pull? use cached?" prompt/stall).
+//
+// It matches the tag as a SUBSTRING anywhere in `sbx template ls` output, which
+// is both format-independent (works for `repo tag id`, a combined `repo:tag id`,
+// headers, warnings) and catches the fully-pruned case (no matching line at all
+// -> not loaded -> refuse). The tag is a unique local-<unixts>, so a substring
+// match can't collide with anything else. It fails OPEN (returns true) only when
+// there's NO signal to judge from: no sbx, an ls error, or empty output.
 func localImageLoaded(env shellEnv, tag string) bool {
 	if tag == "" || env.run == nil {
 		return true
@@ -489,25 +489,10 @@ func localImageLoaded(env shellEnv, tag string) bool {
 		}
 	}
 	out, err := env.run("sbx", "template", "ls")
-	if err != nil {
-		return true
+	if err != nil || strings.TrimSpace(out) == "" {
+		return true // no signal -> don't block
 	}
-	repoSeen := false
-	for _, ln := range strings.Split(out, "\n") {
-		if !strings.Contains(ln, dockerImageRepo) {
-			continue
-		}
-		repoSeen = true
-		// Substring (not exact field): tolerates both `repo tag id` and a combined
-		// `repo:tag id` column. The tag is a unique local-<unixts>, so a substring
-		// match can't collide.
-		if strings.Contains(ln, tag) {
-			return true
-		}
-	}
-	// Repo not listed at all -> unrecognized/empty format: fail OPEN. Repo listed
-	// but not this tag -> genuinely absent: refuse.
-	return !repoSeen
+	return strings.Contains(out, tag)
 }
 
 // readLocalImageTag returns the trimmed contents of <root>/out/.local-image-tag

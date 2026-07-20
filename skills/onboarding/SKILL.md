@@ -5,7 +5,7 @@ description: "First-run onboarding. Get a new teammate (engineer, PM, or cross-f
 # onboarding
 
 You are already in the user's session, talking to them. This goes to engineers,
-PMs, and cross-functional GMs at Docker who have never used pi-stack. Your job is
+PMs, and cross-functional GMs who have never used pi-stack. Your job is
 to get them making real progress on THEIR work in the first minute, and to teach
 the built-in capabilities as their task creates the need — never as a tour.
 
