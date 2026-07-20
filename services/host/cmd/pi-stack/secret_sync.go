@@ -220,7 +220,7 @@ func syncProviderKeys(env shellEnv, out io.Writer) (synced, failed int, fatal er
 			failed++
 			continue
 		}
-		val = strings.TrimRight(val, "\r\n")
+		val = strings.TrimSpace(val)
 		if val == "" {
 			fmt.Fprintf(out, "  \u2717 %s (%s): resolved empty\n", name, envVar)
 			failed++
@@ -229,8 +229,12 @@ func syncProviderKeys(env shellEnv, out io.Writer) (synced, failed int, fatal er
 		// `sbx secret set -g <name> -t <value>` is sbx's own documented interface.
 		// The value is briefly an argv element on the HOST; it is never written to
 		// pi-stack's disk and never enters the VM.
-		if _, err := env.run("sbx", "secret", "set", "-g", name, "-t", val); err != nil {
-			fmt.Fprintf(out, "  \u2717 %s (%s): sbx secret set failed\n", name, envVar)
+		if sbxOut, err := env.run("sbx", "secret", "set", "-g", name, "-t", val); err != nil {
+			detail := strings.TrimSpace(firstLine(sbxOut))
+			if detail == "" {
+				detail = err.Error()
+			}
+			fmt.Fprintf(out, "  \u2717 %s (%s): sbx secret set failed: %s\n", name, envVar, detail)
 			failed++
 			continue
 		}
@@ -238,6 +242,17 @@ func syncProviderKeys(env shellEnv, out io.Writer) (synced, failed int, fatal er
 		synced++
 	}
 	return synced, failed, nil
+}
+
+// firstLine returns the first non-empty line of s (sbx errors are one line;
+// guards against echoing a value if sbx unexpectedly emits one).
+func firstLine(s string) string {
+	for _, ln := range strings.Split(s, "\n") {
+		if strings.TrimSpace(ln) != "" {
+			return ln
+		}
+	}
+	return ""
 }
 
 // runSecretSync is the `pi-stack secret sync` entry: resolve provider-key op://
