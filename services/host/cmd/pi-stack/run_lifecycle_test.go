@@ -368,4 +368,12 @@ func TestLocalImageLoaded(t *testing.T) {
 	if !localImageLoaded(lsErr, "local-222") {
 		t.Error("must fail open (true) when `sbx template ls` errors")
 	}
+	// Unrecognized format (repo never appears) -> fail OPEN (true), not a false refusal.
+	unknown := shellEnv{
+		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
+		run:      func(string, ...string) (string, error) { return "SOME NEW HEADER\nother/repo:tag id\n", nil },
+	}
+	if !localImageLoaded(unknown, "local-222") {
+		t.Error("must fail open (true) when the repo isn't listed at all (unknown format)")
+	}
 }

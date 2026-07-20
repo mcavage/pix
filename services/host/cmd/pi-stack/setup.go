@@ -241,12 +241,13 @@ func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive b
 	// presence check.
 	mirrorProviderRefsToHostMode(env)
 	_, _, _ = syncProviderKeys(env, out)
-	if env.lookPath != nil {
-		if _, err := env.lookPath("sbx"); err != nil {
-			return true // can't probe sbx here — don't block setup
-		}
+	// Tri-state: only abort setup when we can POSITIVELY confirm no key. If sbx is
+	// absent OR its control plane can't be probed, don't block — we can't tell.
+	present, probeOK := sbxModelKeyState(env)
+	if !probeOK {
+		return true
 	}
-	return anyModelKeyPresent(env)
+	return present
 }
 
 // setupHostMode ALWAYS provisions host mode and enables it when provisioning
@@ -287,7 +288,11 @@ func setupHostMode(env shellEnv, out io.Writer) {
 	if rerr := runHostSetup(os.Stderr); rerr != nil || !hostProvisioned() {
 		if cfg.Host.Enabled {
 			cfg.Host.Enabled = false
-			_ = cfg.Save()
+			if serr := cfg.Save(); serr != nil {
+				// Report honestly: the gate is STILL on and we couldn't turn it off.
+				fmt.Fprintf(out, "host mode: provisioning incomplete AND could not disable the stale gate (%v) — run `pi-stack config set host.enabled false`.\n", serr)
+				return
+			}
 		}
 		fmt.Fprintln(out, "host mode: not provisioned (usually a missing `pi`) — left disabled.")
 		fmt.Fprintln(out, "Finish later: pi-stack host setup && pi-stack config set host.enabled true")
@@ -366,13 +371,14 @@ func flagTakesValue(a string) bool {
 const setupUsage = `usage: pi-stack setup [DIR] [host-config flags]
 
 Actually sets you up (use 'pi-stack run' if you just want to start working):
-  1. host   — provision keys (steer to 1Password, wiring BOTH the sandbox and
-              host mode), ensure memory, create your personal pack, and offer to
-              enable + provision host mode
-  2. agent  — launch a sandbox and hand off to a GUIDED walkthrough: teach the
-              flow by doing, co-author a real artifact into your pack, land a task
-Sandbox is always set up; host mode ('pi-stack host') is an opt-in (default-No)
-prompt during setup, so you can run both if you choose.
+  1. host   — provision model keys from 1Password (wiring BOTH the sandbox and
+              host mode), ensure memory, create your personal pack, and ALWAYS
+              provision + enable host mode ('pi-stack host')
+  2. agent  — launch a sandbox and hand off to a GUIDED walkthrough that teaches
+              the flow by doing your real first task (crew, skills, memory) and
+              introduces each capability as your work needs it
+Both the sandbox and host mode are set up. Host mode runs pi UNSANDBOXED; disable
+it with 'pi-stack config set host.enabled false' if you don't want it.
 
 DIR defaults to the current directory (like ` + "`pi-stack run`" + `). Setup REFUSES
 if a sandbox already exists for DIR (its agent handoff needs a fresh session);

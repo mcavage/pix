@@ -1166,6 +1166,16 @@ func launchTask(o runOpts) error {
 	}
 	o.MCPEnabled = strings.TrimSpace(os.Getenv("SBX_MCP_URL")) != ""
 
+	// Same local-image preflight as `pi-stack run`: a task pins --template to the
+	// local-<ts> tag, so a stale tag (pruned template) would make sbx pull a
+	// never-published image and stall on a prompt. Refuse fast with `make load`.
+	if o.LocalImageTag != "" && len(o.Kits) == 0 && o.LocalKit != "" {
+		if !localImageLoaded(defaultShellEnv(), o.LocalImageTag) {
+			return fmt.Errorf("local image %s:%s is not loaded in sbx (it's a local build, never published).\n"+
+				"Load this build first, from your pi-stack checkout:  make load", dockerImageRepo, o.LocalImageTag)
+		}
+	}
+
 	// Resolve any pre-existing sandbox of the derived name atomically before
 	// launching into it (R5-1): a stopped one is removed with `sbx rm` (no -f),
 	// a running or indeterminate one is refused. Never force-kill without --force.

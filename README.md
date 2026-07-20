@@ -112,10 +112,10 @@ pi-stack run
 nags. Its one concession: if no model provider key is set it can't launch, so it
 auto-provisions one (steering you to 1Password), then launches.
 
-`pi-stack setup` is the opposite: it *actually sets you up* — provisions keys
-(sandbox + host mode from one 1Password paste), creates your personal pack,
-optionally enables host mode (default-No), then hands off to a guided walkthrough
-that teaches the flow and co-authors a first artifact into your pack. For
+`pi-stack setup` is the opposite: it *actually sets you up* — provisions model
+keys from 1Password (wiring both the sandbox and host mode), creates your
+personal pack, and always provisions + enables host mode, then hands off to a
+guided walkthrough that teaches the flow by doing your real first task. For
 scripted/CI hosts, `pi-stack onboard --account … --knowledge … --yes` writes
 `~/.config/pi-stack/config.toml` non-interactively (host config only, no handoff).
 
@@ -260,10 +260,11 @@ commands when something is missing.
 `pi-stack host [DIR]` runs pi **directly on your machine** — no sandbox, no
 network fence, real credentials. It exists for one narrow case: developing
 pi-stack itself, which needs the host's Docker/`sbx`/`make` that the VM
-structurally cannot reach. It is disabled by default; enable it in the safe order (provision first, since
-the gate stays off until provisioning succeeds): `pi-stack host setup` to
-provision `~/.local/state/pi-stack/host-agent`, then `pi-stack config set
-host.enabled true`. Or let `pi-stack setup` offer it (default-No). Cloud keys come from op://
+structurally cannot reach. `pi-stack setup` provisions and enables it for you. To do it by hand, use the
+safe order (provision first, since the gate stays off until provisioning
+succeeds): `pi-stack host setup` to provision `~/.local/state/pi-stack/host-agent`,
+then `pi-stack config set host.enabled true`. Disable it any time with `pi-stack
+config set host.enabled false`. Cloud keys come from op://
 refs in `hostmode.env` next to `config.toml`, resolved just-in-time by `op run`
 and never persisted; without that file the session is Ollama-only.
 

@@ -469,10 +469,13 @@ func repoFromBinary() (string, bool) {
 // localImageLoaded reports whether sbx's template store already carries
 // dockerImageRepo:tag. Used to refuse a launch that would otherwise make sbx
 // PULL a never-published local-* image (the confusing "pull? use cached?"
-// prompt). Fails OPEN (returns true) whenever it can't check — no sbx, ls error,
-// unparseable output — so it never blocks a launch it isn't sure about (worst
-// case is the old behavior, never a false refusal). `sbx template ls` columns are
-// repo / tag / id, matching the Makefile's own load-target parsing.
+// prompt). It fails OPEN (returns true) whenever it can't be sure: no sbx, an ls
+// error, OR output whose format it doesn't recognize (the repo never appears at
+// all). It only returns false in the ONE unambiguous case — the repo IS listed
+// (with other tags) but not this tag — which is exactly the stale-`.local-image-tag`
+// scenario. So a future `sbx template ls` format change degrades to the old
+// behavior, never a false refusal. Columns are repo / tag / id, matching the
+// Makefile load target's own parsing.
 func localImageLoaded(env shellEnv, tag string) bool {
 	if tag == "" || env.run == nil {
 		return true
@@ -486,13 +489,21 @@ func localImageLoaded(env shellEnv, tag string) bool {
 	if err != nil {
 		return true
 	}
+	repoSeen := false
 	for _, ln := range strings.Split(out, "\n") {
-		f := strings.Fields(ln)
-		if len(f) >= 2 && f[0] == dockerImageRepo && f[1] == tag {
-			return true
+		if !strings.Contains(ln, dockerImageRepo) {
+			continue
+		}
+		repoSeen = true
+		for _, f := range strings.Fields(ln) {
+			if f == tag {
+				return true
+			}
 		}
 	}
-	return false
+	// Repo not listed at all -> unrecognized/empty format: fail OPEN. Repo listed
+	// but not this tag -> genuinely absent: refuse.
+	return !repoSeen
 }
 
 // readLocalImageTag returns the trimmed contents of <root>/out/.local-image-tag

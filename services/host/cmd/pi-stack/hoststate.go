@@ -92,20 +92,47 @@ type hostStateIdentity struct {
 	Email string `json:"email,omitempty"`
 }
 
-// readGitIdentity reads user.name/user.email from git config (global + local).
-// Best-effort: empty when git is absent or unset.
+// readGitIdentity reads the user's personal identity from git's GLOBAL config.
+// --global (not repo-local) on purpose: a freshly cloned hostile repo can set a
+// repo-local user.name to an injection payload, and it's cwd-independent so
+// `pi-stack setup /other/dir` still reads the right person. The values are
+// UNTRUSTED display text — sanitizeIdentity strips them to a single short
+// printable line so a crafted value can't inject terminal escapes or break out
+// of the persisted memory fact. Best-effort: empty when git is absent or unset.
 func readGitIdentity(env shellEnv) hostStateIdentity {
 	id := hostStateIdentity{}
 	if env.run == nil {
 		return id
 	}
-	if out, err := env.run("git", "config", "--get", "user.name"); err == nil {
-		id.Name = strings.TrimSpace(out)
+	if out, err := env.run("git", "config", "--global", "--get", "user.name"); err == nil {
+		id.Name = sanitizeIdentity(out)
 	}
-	if out, err := env.run("git", "config", "--get", "user.email"); err == nil {
-		id.Email = strings.TrimSpace(out)
+	if out, err := env.run("git", "config", "--global", "--get", "user.email"); err == nil {
+		id.Email = sanitizeIdentity(out)
 	}
 	return id
+}
+
+// sanitizeIdentity reduces an untrusted git-config value to a single, short,
+// printable line: first line only, no control chars (incl. ANSI ESC), capped so
+// it can't be a prompt-injection / terminal-injection vector when greeted or
+// persisted to memory.
+func sanitizeIdentity(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = s[:i]
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+		if b.Len() >= 80 {
+			break
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // buildHostState gathers the host-visible facts. Pure w.r.t. its inputs so it is
