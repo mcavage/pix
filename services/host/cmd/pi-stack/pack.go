@@ -535,6 +535,12 @@ func runPackRm(out io.Writer, rest []string) {
 // "git+" scheme prefix used by kit URLs.
 func isPackGitURL(s string) bool {
 	s = strings.TrimSpace(s)
+	// A git transport-helper string (ext::, fd::, ...) is URL-SHAPED, not a local
+	// path: route it here so clonePack's safeGitURL rejects it with a clear
+	// "unsafe transport" message instead of a confusing "not a pack" path error.
+	if strings.Contains(s, "::") {
+		return true
+	}
 	return strings.HasPrefix(s, "git+") || isGitURL(s)
 }
 
