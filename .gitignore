@@ -15,6 +15,9 @@ node_modules/
 # Local model tag the in-VM ollama-bridge exposes (from `pi-stack config set
 # ollama_bridge_model`). Regenerated every `pi-stack run`; never tracked.
 **/.pi-stack/ollama-bridge.model
+# Host-state truth file (keys/services/pack/host facts the in-VM agent reads).
+# Machine-specific (absolute paths, account names); regenerated every run.
+**/.pi-stack/host-state.json
 # First-run onboarding markers: the launcher-written offer marker and the
 # agent-written control-plane proposal (consumed + deleted by the host). Neither
 # is ever tracked.

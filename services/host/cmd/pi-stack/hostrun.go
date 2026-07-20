@@ -58,18 +58,20 @@ func runHost(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack host: %v\n", err)
 		os.Exit(1)
 	}
-	if !cfg.Host.Enabled {
-		fmt.Fprint(os.Stderr, hostGateMessage())
-		os.Exit(1)
-	}
-
 	switch sub {
 	case "setup":
+		// `host setup` PROVISIONS host mode; it must NOT be gated behind host.enabled
+		// (that would be a chicken-and-egg: you can't provision until enabled, can't
+		// safely enable until provisioned). The gate only guards LAUNCH.
 		if err := runHostSetup(os.Stderr); err != nil {
 			fmt.Fprintf(os.Stderr, "pi-stack host setup: %v\n", err)
 			os.Exit(1)
 		}
 	default:
+		if !cfg.Host.Enabled {
+			fmt.Fprint(os.Stderr, hostGateMessage())
+			os.Exit(1)
+		}
 		runHostLaunch(o)
 	}
 }

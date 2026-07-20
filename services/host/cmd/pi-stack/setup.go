@@ -181,19 +181,19 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 
 	// Host mode: setup's job is to leave you able to run BOTH the sandbox AND host
 	// mode (the unsandboxed escape hatch). On a TTY, offer to enable + provision it
-	// — default-Yes, since you explicitly asked to be set up, but LOUD about what it
-	// means. Its cloud keys come from hostmode.env, already written by the key
-	// bootstrap above. Skipped on non-TTY (CI never auto-enables the unsandboxed
-	// path).
+	// — default-NO (it turns off the sandbox boundary), LOUD about what it means,
+	// provision-before-enable. Its cloud keys come from hostmode.env, already
+	// written by the key bootstrap above. Skipped on non-TTY (CI never auto-enables
+	// the unsandboxed path).
 	offerHostMode(in, out, interactive)
 	return nil
 }
 
 // offerHostMode enables + provisions `pi-stack host` (unsandboxed) as part of
-// guided setup, so you finish able to run both worlds. Default-Yes on a TTY,
-// with a clear warning; never on non-TTY. Best-effort provisioning (needs a
-// pi-stack checkout to symlink the harness from; a consumer install without one
-// gets a clear TODO).
+// guided setup, so you CAN run both worlds if you opt in. Default-NO on a TTY
+// (it removes the sandbox boundary), with a clear warning; never on non-TTY.
+// Provisions BEFORE enabling and verifies (hostProvisioned) so the gate is never
+// flipped on with nothing behind it (a checkout-less/`pi`-less install stays off).
 func offerHostMode(in io.Reader, out io.Writer, interactive bool) {
 	if !interactive || in == nil {
 		return
@@ -202,8 +202,8 @@ func offerHostMode(in io.Reader, out io.Writer, interactive bool) {
 	if err != nil {
 		return
 	}
-	if cfg.Host.Enabled {
-		fmt.Fprintln(out, "host mode: already enabled.")
+	if cfg.Host.Enabled && hostProvisioned() {
+		fmt.Fprintln(out, "host mode: already enabled + provisioned.")
 		return
 	}
 	fmt.Fprintln(out, "")
@@ -216,12 +216,19 @@ func offerHostMode(in io.Reader, out io.Writer, interactive bool) {
 		fmt.Fprintln(out, "host mode: left disabled (enable later: pi-stack config set host.enabled true).")
 		return
 	}
-	// PROVISION FIRST; only persist host.enabled=true if provisioning succeeds, so a
-	// checkout-less consumer install (runHostSetup needs a checkout) never leaves
-	// the gate flipped on with nothing behind it.
+	// PROVISION FIRST; only persist host.enabled=true if provisioning ACTUALLY
+	// succeeded. runHostSetup is lenient (it returns nil even when `pi` is missing
+	// and only prints TODOs), so verify with hostProvisioned() rather than trust
+	// its error — a checkout-less/`pi`-less install must never leave the gate on
+	// with nothing behind it, and must never print "ready".
 	if err := runHostSetup(os.Stderr); err != nil {
 		fmt.Fprintf(out, "host mode: NOT enabled — provisioning failed: %v\n", err)
-		fmt.Fprintln(out, "finish it later with: pi-stack host setup (then it's enabled)")
+		fmt.Fprintln(out, "finish it later: pi-stack host setup (works even while disabled)")
+		return
+	}
+	if !hostProvisioned() {
+		fmt.Fprintln(out, "host mode: NOT enabled — provisioning incomplete (see the notes above,")
+		fmt.Fprintln(out, "usually a missing `pi`). Fix it, then: pi-stack host setup && pi-stack config set host.enabled true")
 		return
 	}
 	cfg.Host.Enabled = true
@@ -300,7 +307,8 @@ Actually sets you up (use 'pi-stack run' if you just want to start working):
               enable + provision host mode
   2. agent  — launch a sandbox and hand off to a GUIDED walkthrough: teach the
               flow by doing, co-author a real artifact into your pack, land a task
-You finish able to run BOTH the sandbox and host mode ('pi-stack host').
+Sandbox is always set up; host mode ('pi-stack host') is an opt-in (default-No)
+prompt during setup, so you can run both if you choose.
 
 DIR defaults to the current directory (like ` + "`pi-stack run`" + `). Setup REFUSES
 if a sandbox already exists for DIR (its agent handoff needs a fresh session);

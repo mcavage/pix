@@ -56,7 +56,9 @@ type hostStateModels struct {
 }
 
 type hostStateHost struct {
-	Enabled bool `json:"enabled"` // is `pi-stack host` (unsandboxed) enabled?
+	Enabled     bool `json:"enabled"`     // host.enabled config gate
+	Provisioned bool `json:"provisioned"` // host agent dir actually set up
+	Ready       bool `json:"ready"`       // enabled AND provisioned (safe to claim)
 }
 
 type hostStatePack struct {
@@ -126,7 +128,11 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		Overlay:   hostStateOverlay{Kit: overlayKit},
 		Models:    hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},
 		Pack:      pack,
-		Host:      hostStateHost{Enabled: cfg.Host.Enabled},
+		Host: hostStateHost{
+			Enabled:     cfg.Host.Enabled,
+			Provisioned: hostProvisioned(),
+			Ready:       cfg.Host.Enabled && hostProvisioned(),
+		},
 	}
 	// Provisioned: an inherited, fully set-up environment that must NOT be
 	// re-onboarded — keys resolved AND a knowledge bundle already seeded AND an
@@ -149,6 +155,21 @@ func containsStr(list []string, s string) bool {
 func dirHasEntries(path string) bool {
 	ents, err := os.ReadDir(path)
 	return err == nil && len(ents) > 0
+}
+
+// hostProvisioned reports whether host mode is actually installed (the agent dir
+// has settings.json AND the host-guard extension), mirroring runHostLaunch's own
+// launch preconditions — so host-state never claims "ready" for a bare
+// host.enabled flag with nothing behind it.
+func hostProvisioned() bool {
+	dir := hostAgentDir()
+	if _, err := os.Stat(filepath.Join(dir, "settings.json")); err != nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(dir, "extensions", "host-guard.ts")); err != nil {
+		return false
+	}
+	return true
 }
 
 // resolveHostStatePack reports the active pack (config `pack`) or, failing that,

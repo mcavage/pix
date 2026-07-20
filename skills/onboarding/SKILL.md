@@ -61,9 +61,9 @@ their pack has at least one real artifact in it.
 
 ### G1: Orient from the truth file (facts, one breath)
 Say what's wired, from host-state — e.g. "Keys: resolved via 1Password. Memory:
-up. Your pack: {pack.path}." State host mode ONLY per `host.enabled` (true =
-"host mode: ready"; false = don't mention it as ready). Never claim anything the
-file doesn't say. Do not re-ask any of it.
+up. Your pack: {pack.path}." State host mode ready ONLY when `host.ready` is true
+(that means enabled AND actually provisioned); if it's false, don't call it
+ready. Never claim anything the file doesn't say. Do not re-ask any of it.
 
 ### G2: Land a real task (the aha, BEFORE teaching)
 Pick + RUN a real verb on this repo (`healthcheck` is the safe default). Show the
@@ -88,10 +88,11 @@ show you." Only go deeper if they bite.
 Find a genuine, repeatable task the user does (ask them, one question). Draft a
 real SKILL.md for it and SHOW it. The `pi-stack` launcher runs on the HOST, not
 this sandbox, so the durable save is host-side. Give the user the exact steps:
-1. On your host: `pi-stack pack add skill <name>` (creates the file; it PRINTS
-   the path — it does not open an editor).
+1. On your host: `pi-stack pack add skill <name> {pack.path}` (pass the pack path
+   from host-state so it lands in the ACTIVE pack, not always the personal one;
+   it PRINTS the file path — it does not open an editor).
 2. Save my draft (above) into that printed path.
-3. `git -C <pack.path> add -A && git commit -m "add <name> skill"` (packs live in
+3. `git -C {pack.path} add -A && git commit -m "add <name> skill"` (packs live in
    git; push to your own remote when you want cross-machine sync).
 A KB concept via `enrich` works the same way. End with a real drafted artifact
 the user can land, not a vague description.
@@ -102,7 +103,7 @@ what you'll save, confirm, then `/remember` each tagged `["soul","bootstrap"]`.
 
 ### G6: Close — land on real work
 One-line receipt of what got written (memory facts, the drafted pack artifact).
-If (and only if) `host.enabled` is true in the truth file, note that **host mode**
+If (and only if) `host.ready` is true in the truth file, note that **host mode**
 (`pi-stack host`) is also ready for work the sandbox can't do; otherwise don't
 mention it. Then pivot straight into a real task.
 

@@ -108,13 +108,16 @@ sbx secret set -g github
 pi-stack run
 ```
 
-Set at least one provider key, then `pi-stack run` launches the agent. On the
-first run the agent offers to onboard you (opt-in): it learns your name, style,
-and preferences, seeds them into memory, and lands you on a real first task.
-Decline and you just get a normal session; say "onboard me" any time to do it
-later. For scripted/CI hosts, `pi-stack onboard --account … --knowledge … --yes`
-writes `~/.config/pi-stack/config.toml` and registers MCP servers
-non-interactively (the former `pi-stack setup`, now a deprecated alias).
+`pi-stack run` launches the agent and stays out of your way — no onboarding, no
+nags. Its one concession: if no model provider key is set it can't launch, so it
+auto-provisions one (steering you to 1Password), then launches.
+
+`pi-stack setup` is the opposite: it *actually sets you up* — provisions keys
+(sandbox + host mode from one 1Password paste), creates your personal pack,
+optionally enables host mode (default-No), then hands off to a guided walkthrough
+that teaches the flow and co-authors a first artifact into your pack. For
+scripted/CI hosts, `pi-stack onboard --account … --knowledge … --yes` writes
+`~/.config/pi-stack/config.toml` non-interactively (host config only, no handoff).
 
 You don't babysit the services daemon: `pi-stack run` / `memory` / `knowledge
 query` lazily auto-start a detached `pi-stack-host serve` when its ports are
