@@ -76,14 +76,14 @@ Offer AT MOST ONE follow-up, chosen from context — never a menu of options:
   docs (design docs, ADRs, a real README), propose 3-5 specific candidates by
   name and offer to seed one via `enrich` (one confirm). If already seeded, say
   nothing.
-- **Custom skill**: only if a repeatable task/gap actually surfaced. Draft it,
-  show the file, save on confirm. Default location: the personal skills dir
-  `~/.local/share/pi-stack/skills/<name>/SKILL.md` (loads in every sandbox).
-  **Skills belong in git** — that dir is a working copy a `pi-stack reset` will
-  move aside, so `git init` it (if it isn't one) and tell the user to commit and
-  push to their own repo, so their skills survive a reset and sync across
-  machines. Use a repo-local `skills/` path instead when the skill should be
-  versioned with a specific project.
+- **Custom skill**: only if a repeatable task/gap actually surfaced. Save it into
+  the user's PACK with `pi-stack pack add skill <name>` (implicit-creates the
+  personal pack at `~/.local/share/pi-stack/pack`, git-initialized), then draft
+  the SKILL.md and show it. **Packs live in git** — tell the user to commit it
+  (and push to their own remote when they want cross-machine sync); a reset moves
+  the working copy aside, git is the source of truth. A user who already keeps a
+  skills repo can `pi-stack pack new <path>` to adopt it instead. See
+  docs/design/packs.md.
 
 Confirm before writing anything. Skip both if neither is real.
 

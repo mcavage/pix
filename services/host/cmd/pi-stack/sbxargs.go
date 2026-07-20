@@ -50,6 +50,7 @@ type runOpts struct {
 	Model         string   // --model M: active pi model (passed through to pi)
 	Intent        string   // --intent NAME: resolve the session model via the router (unless --model overrides)
 	Replace       bool     // --replace: force a recreate (rm -f then create) instead of re-attaching to an existing sandbox
+	Pack          string   // --pack PATH: active pack for this run (overrides config.Pack); mounts its skills + knowledge
 	Passthrough   []string // args after `--`, handed straight to pi
 	// Token is the credential bearer for an OPTIONAL overlay broker. The default
 	// path leaves it empty and forwards no bearer (gog authenticates host-side in

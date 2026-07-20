@@ -110,6 +110,7 @@ Setup & health
 Data
   memory <cmd>        recall | remember | forget | learnings | stats   (:11435)
   knowledge <cmd>     init | use | ls | query | sync | remote          (:11436)
+  pack <cmd>          new | add | ls | show | use | rm (git-backed context bundle)
 
 Models & agents (cost/latency/accuracy routing)
   agent <cmd>         ls | new | edit | rm | reassess (subagents as objects)
@@ -175,6 +176,8 @@ func verbUsage(verb string) (string, bool) {
 		return configUsage, true
 	case "mcp":
 		return mcpUsage, true
+	case "pack":
+		return packUsage, true
 	case "memory", "mem":
 		return memoryUsage + "\n", true
 	case "backup":

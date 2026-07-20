@@ -124,6 +124,8 @@ func configValue(cfg *config.Config, key string) (string, error) {
 		return cfg.OllamaBridgeModel, nil
 	case "active_profile":
 		return cfg.ActiveProfile, nil
+	case "pack":
+		return cfg.Pack, nil
 	case "host.enabled":
 		return strconv.FormatBool(cfg.Host.Enabled), nil
 	case "host.autonomy":
@@ -225,6 +227,8 @@ const configKeysHelp = `keys:
   memory_watcher_model <m>  ollama model for fact capture (host, resident)
   memory_embed_model <m>    ollama model for semantic recall (host)
   ollama_bridge_model <m>   local model the sandbox exposes to pi + the router
+  pack <path>               active pack dir (run mounts its skills + knowledge);
+                            usually set via 'pi-stack pack use'
   host.enabled true|false   gate for "pi-stack host" (UNSANDBOXED; default false)
   host.autonomy <mode>      reserved for the host-guard strictness (unused yet)
   host.autoserve true|false lazy auto-start of the services daemon on run/
@@ -325,6 +329,17 @@ func applyConfigChange(cfg *config.Config, unset bool, key string, args []string
 			cfg.OllamaBridgeModel = args[0]
 		}
 		return fmt.Sprintf("ollama_bridge_model = %q", cfg.OllamaBridgeModel), nil
+
+	case "pack":
+		if unset {
+			cfg.Pack = ""
+		} else {
+			if len(args) != 1 {
+				return "", fmt.Errorf("config set pack <path>: needs exactly one value")
+			}
+			cfg.Pack = args[0]
+		}
+		return fmt.Sprintf("pack = %q", cfg.Pack), nil
 
 	case "host.enabled":
 		// The gate for `pi-stack host` (unsandboxed). Default false; unset resets

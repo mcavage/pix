@@ -163,13 +163,22 @@ func runRun(argv []string) {
 		}
 	}
 
-	// Personal skills override dir (~/.local/share/pi-stack/skills): if it exists
-	// and has skills, mount it so skills you authored for yourself load in EVERY
-	// sandbox, on top of the baked/overlay set. Create-time only (skills are
-	// create-time mounts; a re-attach keeps what it was created with).
+	// Active pack: mount its skills/ + knowledge/ so the pack's context loads in
+	// this sandbox. --pack overrides config.Pack; with neither set, the personal
+	// pack (config.PackDir()) loads if it exists. Create-time only (skills +
+	// knowledge are create-time mounts; a re-attach keeps what it was made with).
 	if willCreate(state, o.Replace) {
-		if d := config.SkillsDir(); dirHasEntries(d) && !containsStr(o.Skills, d) {
-			o.Skills = append(o.Skills, d)
+		packRoot := activePackRoot(cfg.Pack, o.Pack)
+		if packRoot == "" {
+			packRoot = config.PackDir() // personal pack, if it is one
+		}
+		if p, err := loadPack(packRoot); err == nil {
+			if p.SkillsDir != "" && !containsStr(o.Skills, p.SkillsDir) {
+				o.Skills = append(o.Skills, p.SkillsDir)
+			}
+			if p.KnowledgeDir != "" && !containsStr(cfg.KnowledgeBundles, p.KnowledgeDir) {
+				cfg.KnowledgeBundles = append(cfg.KnowledgeBundles, p.KnowledgeDir)
+			}
 		}
 	}
 
@@ -394,6 +403,12 @@ func parseRunArgs(argv []string) (runOpts, error) {
 				return o, err
 			}
 			o.Kits = append(o.Kits, v)
+		case name == "--pack":
+			v, err := valueOf(a, &i)
+			if err != nil {
+				return o, err
+			}
+			o.Pack = v
 		case name == "--mcp":
 			v, err := valueOf(a, &i)
 			if err != nil {

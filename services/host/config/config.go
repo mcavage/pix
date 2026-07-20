@@ -154,6 +154,13 @@ type Config struct {
 		Paths []string `toml:"paths"`
 	} `toml:"skills"`
 
+	// Pack is the active pack: a git-backed directory carrying skills + knowledge
+	// (+ later mcp/proxies/routing/config). Empty = no active pack. `pi-stack pack
+	// use <path>` sets it; `run` mounts the pack's skills + knowledge. This is the
+	// unifying successor to the loose skills-dir + knowledge_bundles + (eventually)
+	// profile. See docs/design/packs.md.
+	Pack string `toml:"pack,omitempty"`
+
 	Plugins map[string]PluginSpec `toml:"plugins"`
 
 	// Host gates + configures `pi-stack host` (the unsandboxed escape hatch).
@@ -283,13 +290,12 @@ func DataDir() (string, error) {
 	return filepath.Join(home, ".local", "share", "pi-stack"), nil
 }
 
-// SkillsDir is the per-user personal skills override directory:
-// $XDG_DATA_HOME/pi-stack/skills, else ~/.local/share/pi-stack/skills. Skills
-// authored here load in EVERY sandbox (mounted + --skill'd by the launcher),
-// on top of the baked/overlay skills — mirroring the routing override dir. It is
-// the default home for skills you write for yourself; a repo-local skill is the
-// choice when it should be versioned/PR-reviewed with a project.
-func SkillsDir() string { return filepath.Join(dataDirOr(), "skills") }
+// PackDir is the per-user PERSONAL PACK root: $XDG_DATA_HOME/pi-stack/pack, else
+// ~/.local/share/pi-stack/pack. A proper pack (pack.toml + skills/ + knowledge/),
+// git-initialized, the default home for what you author for yourself. The active
+// pack (config `pack`) overrides it; `pi-stack reset` moves it aside (it's a git
+// working copy — the user pushes it to their own remote). See docs/design/packs.md.
+func PackDir() string { return filepath.Join(dataDirOr(), "pack") }
 
 // dataDirOr returns DataDir() or, if HOME cannot be resolved, a relative
 // "pi-stack" so path builders never panic on an empty base.
