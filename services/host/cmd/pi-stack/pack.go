@@ -477,7 +477,7 @@ func solicitPackCredentials(env shellEnv, in io.Reader, out io.Writer, tty bool,
 		if !sc.Scan() {
 			return
 		}
-		ref := strings.TrimSpace(sc.Text())
+		ref := normalizeOpRef(sc.Text())
 		if ref == "" {
 			continue
 		}

@@ -69,6 +69,20 @@ func runSecretCmd(argv []string) {
 	}
 }
 
+// normalizeOpRef cleans a pasted op:// reference: trims whitespace and strips ONE
+// layer of matching surrounding quotes. 1Password's "Copy Secret Reference" hands
+// you the ref WITH double quotes ("op://Vault/Item/field"), which would otherwise
+// fail the op:// prefix check. Applied at every paste boundary.
+func normalizeOpRef(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			s = strings.TrimSpace(s[1 : len(s)-1])
+		}
+	}
+	return s
+}
+
 // opRef is one parsed KEY=VALUE line of op-refs.env.
 type opRef struct {
 	key         string
@@ -213,6 +227,12 @@ func runSecretSet(env shellEnv, out io.Writer, key, value string) {
 	if !envVarNameRe.MatchString(key) {
 		fmt.Fprintf(out, "pi-stack secret set: %q does not look like an env var name (want %s)\n", key, envVarNameRe.String())
 		os.Exit(2)
+	}
+	// 1Password's "Copy Secret Reference" wraps the ref in quotes; strip them so
+	// a pasted `"op://…"` is accepted (only for an op:// ref — a genuine literal
+	// value keeps its quotes and still trips the refs-only guard below).
+	if nv := normalizeOpRef(value); strings.HasPrefix(nv, "op://") {
+		value = nv
 	}
 
 	// Reject control characters (newline, carriage return, NUL, ...) in the value.

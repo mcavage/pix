@@ -52,7 +52,7 @@ func offerOnePasswordKeys(env shellEnv, in io.Reader, out io.Writer, tty bool) {
 		if !sc.Scan() {
 			break
 		}
-		ref := strings.TrimSpace(sc.Text())
+		ref := normalizeOpRef(sc.Text())
 		if ref == "" {
 			continue
 		}

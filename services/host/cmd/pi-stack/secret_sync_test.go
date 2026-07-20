@@ -149,3 +149,18 @@ func TestOfferOnePasswordKeys_Gating(t *testing.T) {
 		t.Errorf("must be silent when op is not installed, got %q", out.String())
 	}
 }
+
+func TestNormalizeOpRef(t *testing.T) {
+	cases := map[string]string{
+		`"op://Docker/ANTHROPIC_API_KEY/credential"`: "op://Docker/ANTHROPIC_API_KEY/credential",
+		`  op://V/I/f  `:                              "op://V/I/f",
+		`'op://V/I/f'`:                                "op://V/I/f",
+		`op://V/I/f`:                                  "op://V/I/f",
+		`"op://V/I/f`:                                 `"op://V/I/f`, // unbalanced: left as-is
+	}
+	for in, want := range cases {
+		if got := normalizeOpRef(in); got != want {
+			t.Errorf("normalizeOpRef(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
