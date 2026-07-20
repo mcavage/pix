@@ -75,11 +75,19 @@ func offerOnePasswordKeys(env shellEnv, in io.Reader, out io.Writer, tty bool) {
 }
 
 // writeOpRefQuiet upserts KEY=op://ref into op-refs.env without the CLI wrapper's
-// os.Exit, so the interactive offer can loop. Value is validated op:// by the
-// caller.
+// os.Exit, so the interactive offer can loop. It VALIDATES the key as a shell env
+// var name (so a malicious pack.toml integration name can't inject extra
+// op-refs.env lines) and the value as a single-line op:// ref (never a literal
+// secret) — defense in depth beside the caller's own op:// check.
 func writeOpRefQuiet(env shellEnv, key, value string) error {
 	if env.writeFile == nil {
 		return fmt.Errorf("no writer available")
+	}
+	if !envVarNameRe.MatchString(key) {
+		return fmt.Errorf("invalid env var name %q", key)
+	}
+	if !strings.HasPrefix(value, "op://") || strings.ContainsAny(value, "\n\r") {
+		return fmt.Errorf("value must be a single-line op:// ref")
 	}
 	path, content, _ := opRefsContent(env)
 	return env.writeFile(path, []byte(upsertOpRef(content, key, value)), 0o600)

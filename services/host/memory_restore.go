@@ -898,11 +898,9 @@ func printRestoreReport(w io.Writer, res restoreResult) {
 		fmt.Fprintf(w, "previous db kept at %s\n", res.BackupPath)
 	}
 	if res.ConfigRestored {
-		if len(res.Profiles) > 0 {
-			fmt.Fprintf(w, "config restored (profiles: %s)\n", strings.Join(res.Profiles, ", "))
-		} else {
-			fmt.Fprintln(w, "config restored")
-		}
+		// Profiles were removed; a restored archive's config is written verbatim but
+		// any [profiles.*] tables in it are inert, so don't advertise them.
+		fmt.Fprintln(w, "config restored")
 		if res.ConfigBak != "" {
 			fmt.Fprintf(w, "previous config kept at %s\n", res.ConfigBak)
 		}

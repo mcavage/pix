@@ -148,8 +148,8 @@ func dirHasEntries(path string) bool {
 // resolveHostStatePack reports the active pack (config `pack`) or, failing that,
 // the personal pack (PackDir), so the in-VM onboarding agent states pack facts
 // instead of guessing.
-func resolveHostStatePack(cfg *config.Config) hostStatePack {
-	root := activePackRoot(cfg.Pack, "")
+func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
+	root := activePackRoot(cfg.Pack, override)
 	if root == "" {
 		root = config.PackDir()
 	}
@@ -173,7 +173,7 @@ func resolveHostStatePack(cfg *config.Config) hostStatePack {
 // writeHostStateFile writes <workspace>/.pi-stack/host-state.json. Best-effort:
 // a failure just means the agent has no truth file and falls back to probing
 // (the pre-fix behavior), never a broken launch.
-func writeHostStateFile(workspace string, cfg *config.Config, env shellEnv, mcpGatewayOn bool) {
+func writeHostStateFile(workspace string, cfg *config.Config, env shellEnv, mcpGatewayOn bool, packOverride string) {
 	sbxOut, sbxOK := "", false
 	if env.lookPath != nil {
 		if _, err := env.lookPath("sbx"); err == nil && env.run != nil {
@@ -190,7 +190,7 @@ func writeHostStateFile(workspace string, cfg *config.Config, env shellEnv, mcpG
 	if providerKeyRefsPresent(env) {
 		source = "1password"
 	}
-	hs := buildHostState(cfg, sbxOut, sbxOK, dial, mcpGatewayOn, source, resolveHostStatePack(cfg))
+	hs := buildHostState(cfg, sbxOut, sbxOK, dial, mcpGatewayOn, source, resolveHostStatePack(cfg, packOverride))
 
 	dir := filepath.Join(workspace, ".pi-stack")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

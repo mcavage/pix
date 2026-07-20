@@ -159,23 +159,35 @@ func runRun(argv []string) {
 	// knowledge are create-time mounts; a re-attach keeps what it was made with).
 	if willCreate(state, o.Replace) {
 		packRoot := activePackRoot(cfg.Pack, o.Pack)
+		explicit := strings.TrimSpace(o.Pack) != ""
 		if packRoot == "" {
 			packRoot = config.PackDir() // personal pack, if it is one
 		}
-		if p, err := loadPack(packRoot); err == nil {
+		p, perr := loadPack(packRoot)
+		if perr != nil && explicit {
+			// An EXPLICIT --pack that can't load is a user error, not a silent skip.
+			fmt.Fprintf(os.Stderr, "pi-stack run: --pack %s: %v\n", o.Pack, perr)
+			os.Exit(1)
+		}
+		if perr == nil {
 			if p.SkillsDir != "" && !containsStr(o.Skills, p.SkillsDir) {
 				o.Skills = append(o.Skills, p.SkillsDir)
 			}
 			if p.KnowledgeDir != "" && !containsStr(cfg.KnowledgeBundles, p.KnowledgeDir) {
 				cfg.KnowledgeBundles = append(cfg.KnowledgeBundles, p.KnowledgeDir)
 			}
-			// Reference-only integrations: attach the pack's MCP servers (host-
-			// provided) and warn about any credential the pack needs but the user
-			// hasn't wired as an op:// ref yet. No pack code executes here.
+			// A pack model pref overrides the config default for this run.
+			if m := strings.TrimSpace(p.Manifest.OllamaBridgeModel); m != "" {
+				cfg.OllamaBridgeModel = m
+			}
+			// Reference-only integrations: a pack DECLARES the MCP servers it uses
+			// and the creds it needs, but we do NOT silently enable a host MCP from
+			// an (possibly adopted) pack — that would be a silent host-exec vector.
+			// Warn + tell the user to opt in explicitly.
 			penv := defaultShellEnv()
 			for _, ig := range p.Manifest.Integrations {
 				if ig.MCP != "" && !containsStr(cfg.MCP, ig.MCP) {
-					cfg.MCP = append(cfg.MCP, ig.MCP)
+					fmt.Fprintf(os.Stderr, "pi-stack: pack uses MCP %q — enable it explicitly: pi-stack config set mcp %s\n", ig.MCP, ig.MCP)
 				}
 				if ig.Env != "" && !opRefFilled(penv, ig.Env) {
 					fmt.Fprintf(os.Stderr, "pi-stack: pack integration %q needs a credential — set it: pi-stack secret set %s op://vault/item/field\n", ig.Name, ig.Env)
@@ -221,10 +233,15 @@ func runRun(argv []string) {
 	// the profile/knowledge-scope seam. Best-effort.
 	writeOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
 
+	// Profiles were removed: remove any stale <workspace>/.pi-stack/profile from a
+	// previous version so the in-VM memory extension never scopes recall/capture to
+	// a dead profile name. Best-effort.
+	_ = os.Remove(filepath.Join(o.Workspace, ".pi-stack", "profile"))
+
 	// Host-state truth file: the host-visible facts the fenced agent can't see
 	// (keys/services/knowledge/gog/mcp/models/overlay). The onboarding skill reads
 	// it instead of guessing. Best-effort.
-	writeHostStateFile(o.Workspace, cfg, defaultShellEnv(), o.MCPEnabled)
+	writeHostStateFile(o.Workspace, cfg, defaultShellEnv(), o.MCPEnabled, o.Pack)
 
 	args := plan.Args
 

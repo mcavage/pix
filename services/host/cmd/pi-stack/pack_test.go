@@ -99,10 +99,10 @@ func TestActivePackRoot_OverrideWins(t *testing.T) {
 }
 
 func TestPackURLParsing(t *testing.T) {
-	cases := []struct{ raw, url, ref, name string }{
-		{"https://github.com/me/dev-pack.git", "https://github.com/me/dev-pack.git", "", "dev-pack"},
-		{"git+https://github.com/me/work-pack#ref=v2", "https://github.com/me/work-pack", "v2", "work-pack"},
-		{"git@github.com:me/x.git#main", "git@github.com:me/x.git", "main", "x"},
+	cases := []struct{ raw, url, ref, namePrefix string }{
+		{"https://github.com/me/dev-pack.git", "https://github.com/me/dev-pack.git", "", "dev-pack-"},
+		{"git+https://github.com/me/work-pack#ref=v2", "https://github.com/me/work-pack", "v2", "work-pack-"},
+		{"git@github.com:me/x.git#main", "git@github.com:me/x.git", "main", "x-"},
 	}
 	for _, c := range cases {
 		if !isPackGitURL(c.raw) {
@@ -112,11 +112,74 @@ func TestPackURLParsing(t *testing.T) {
 		if u != c.url || r != c.ref {
 			t.Errorf("parsePackURL(%q) = (%q,%q), want (%q,%q)", c.raw, u, r, c.url, c.ref)
 		}
-		if got := packNameFromURL(u); got != c.name {
-			t.Errorf("packNameFromURL(%q) = %q, want %q", u, got, c.name)
+		// Name is <sanitized-basename>-<8 hex> (hash of the full url).
+		if got := packNameFromURL(u); !strings.HasPrefix(got, c.namePrefix) || len(got) != len(c.namePrefix)+8 {
+			t.Errorf("packNameFromURL(%q) = %q, want prefix %q + 8 hex", u, got, c.namePrefix)
 		}
 	}
 	if isPackGitURL("/local/path/pack") || isPackGitURL("./rel") {
 		t.Error("local paths must not be git URLs")
+	}
+}
+
+func TestPackNameFromURL_NoCollisionOrTraversal(t *testing.T) {
+	// Same basename, different orgs -> different dest names (no collision).
+	a := packNameFromURL("https://github.com/org-a/tools")
+	b := packNameFromURL("https://github.com/org-b/tools")
+	if a == b {
+		t.Errorf("basename collision: both resolved to %q", a)
+	}
+	// A traversal-y basename is neutralized (no `/`, `\`, `..`).
+	for _, u := range []string{"https://x/../../etc", "https://x/..", "https://x/a/b/..%2f.."} {
+		n := packNameFromURL(u)
+		if strings.ContainsAny(n, "/\\") || strings.Contains(n, "..") {
+			t.Errorf("packNameFromURL(%q) = %q still has traversal chars", u, n)
+		}
+	}
+}
+
+func TestSafeGitURL(t *testing.T) {
+	ok := []string{"https://github.com/me/p.git", "http://x/y", "ssh://git@h/p", "git://h/p", "git@github.com:me/p.git"}
+	for _, u := range ok {
+		if !safeGitURL(u) {
+			t.Errorf("safeGitURL(%q) = false, want true", u)
+		}
+	}
+	bad := []string{"ext::sh -c touch/pwn", "file:///etc/passwd", "fd::0", "-oProxyCommand=evil", "", "/local/path", "./rel"}
+	for _, u := range bad {
+		if safeGitURL(u) {
+			t.Errorf("safeGitURL(%q) = true, want false (unsafe transport)", u)
+		}
+	}
+}
+
+func TestSafeArtifactName(t *testing.T) {
+	for _, n := range []string{"deploy", "fix-login", "a_b.c"} {
+		if !safeArtifactName(n) {
+			t.Errorf("safeArtifactName(%q) = false, want true", n)
+		}
+	}
+	for _, n := range []string{"", ".", "..", "../x", "a/b", "a\\b", "a b"} {
+		if safeArtifactName(n) {
+			t.Errorf("safeArtifactName(%q) = true, want false", n)
+		}
+	}
+}
+
+func TestLoadPack_RejectsEscapingSymlink(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "pack")
+	if err := os.MkdirAll(filepath.Join(root, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte("name=\"p\"\nschema=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A symlink in skills/ pointing outside the pack (at /etc) must be refused.
+	if err := os.Symlink("/etc", filepath.Join(root, "skills", "escape")); err != nil {
+		t.Skip("symlink unsupported: " + err.Error())
+	}
+	if _, err := loadPack(root); err == nil {
+		t.Error("loadPack must reject a pack whose skills/ escapes via symlink")
 	}
 }

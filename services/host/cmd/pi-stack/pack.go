@@ -11,6 +11,8 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -69,12 +71,50 @@ func loadPack(root string) (*packInfo, error) {
 	}
 	p := &packInfo{Root: root, Manifest: m}
 	if d := filepath.Join(root, "skills"); dirHasEntries(d) {
+		if escapes, bad := dirHasEscapingSymlink(d, root); escapes {
+			return nil, fmt.Errorf("pack %s: skills/ contains a symlink escaping the pack (%s); refusing to mount", root, bad)
+		}
 		p.SkillsDir = d
 	}
 	if d := filepath.Join(root, "knowledge"); dirHasEntries(d) {
+		if escapes, bad := dirHasEscapingSymlink(d, root); escapes {
+			return nil, fmt.Errorf("pack %s: knowledge/ contains a symlink escaping the pack (%s); refusing to mount", root, bad)
+		}
 		p.KnowledgeDir = d
 	}
 	return p, nil
+}
+
+// dirHasEscapingSymlink walks dir and reports the first symlink whose target
+// resolves OUTSIDE root — an adopted pack must not smuggle a link to the host
+// filesystem (e.g. skills/x -> /etc) into a mounted tree. Returns (true, path)
+// on the first offender.
+func dirHasEscapingSymlink(dir, root string) (bool, string) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return true, root // fail closed
+	}
+	bad := ""
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d == nil {
+			return nil
+		}
+		if d.Type()&os.ModeSymlink == 0 {
+			return nil
+		}
+		target, rerr := filepath.EvalSymlinks(path)
+		if rerr != nil {
+			bad = path // unresolvable link: fail closed
+			return filepath.SkipAll
+		}
+		rel, rerr := filepath.Rel(rootAbs, target)
+		if rerr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			bad = path
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return bad != "", bad
 }
 
 // activePackRoot resolves the active pack path: the --pack override wins, else
@@ -140,13 +180,45 @@ func packTarget(rest []string) string {
 	return personalPackRoot()
 }
 
+// safeArtifactName rejects a skill/knowledge name that could escape the pack root
+// (path separators, `..`) or is empty.
+func safeArtifactName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// activatePersonalPack sets the personal pack as active (config `pack`) if no
+// pack is active yet, so implicit-create makes it immediately usable (no manual
+// `pack use`). Best-effort. Only for the personal pack root.
+func activatePersonalPack(root string) {
+	if root != personalPackRoot() {
+		return
+	}
+	cfg, err := config.Load()
+	if err != nil || cfg.Pack != "" {
+		return
+	}
+	cfg.Pack = root
+	_ = cfg.Save()
+}
+
 // runPackNew adopts a pre-existing repo (or one already carrying pack.toml) in
 // place, else creates + git-inits a fresh pack. Never re-inits or clobbers.
 func runPackNew(env shellEnv, out io.Writer, rest []string) {
 	root := packTarget(rest)
-	// Already a pack? Nothing to do.
+	// Already a pack? Nothing to do (but ensure the personal one is active).
 	if _, err := os.Stat(filepath.Join(root, packManifestName)); err == nil {
 		fmt.Fprintf(out, "already a pack: %s\n", root)
+		activatePersonalPack(root)
 		return
 	}
 	existsDir := false
@@ -182,7 +254,14 @@ func runPackNew(env shellEnv, out io.Writer, rest []string) {
 	default:
 		fmt.Fprintf(out, "created pack %q: %s (git init it to version it)\n", name, root)
 	}
-	fmt.Fprintf(out, "use it:  pi-stack pack use %s\n", root)
+	// Auto-activate the personal pack so it is immediately usable (no manual
+	// `pack use` for the common case). A named/other pack still needs `pack use`.
+	if root == personalPackRoot() {
+		activatePersonalPack(root)
+		fmt.Fprintln(out, "active pack -> this (personal) pack")
+	} else {
+		fmt.Fprintf(out, "use it:  pi-stack pack use %s\n", root)
+	}
 }
 
 // runPackAdd writes one artifact into a pack (implicit-create), then registers
@@ -193,6 +272,10 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 		os.Exit(2)
 	}
 	kind, name := rest[0], rest[1]
+	if !safeArtifactName(name) {
+		fmt.Fprintf(os.Stderr, "pi-stack pack add: invalid name %q (letters, digits, -, _, . only; no path separators)\n", name)
+		os.Exit(2)
+	}
 	root := personalPackRoot()
 	if len(rest) >= 3 {
 		root = expandUser(rest[2])
@@ -248,16 +331,23 @@ func runPackLs(out io.Writer) {
 		os.Exit(1)
 	}
 	active := activePackRoot(cfg.Pack, "")
+	via := "active"
 	if active == "" {
-		fmt.Fprintln(out, "no active pack (`pi-stack pack use <path>` or `pi-stack pack new`)")
+		// Fall back to the personal pack (what `run` mounts when nothing is set).
+		if _, err := loadPack(config.PackDir()); err == nil {
+			active, via = config.PackDir(), "personal (default)"
+		}
+	}
+	if active == "" {
+		fmt.Fprintln(out, "no pack yet (`pi-stack pack add skill <name>` to start one, or `pi-stack pack use <path|git-url>`)")
 		return
 	}
 	p, err := loadPack(active)
 	if err != nil {
-		fmt.Fprintf(out, "active pack %s: %v\n", active, err)
+		fmt.Fprintf(out, "pack %s: %v\n", active, err)
 		return
 	}
-	fmt.Fprintf(out, "active pack: %s (%s)\n", p.Manifest.Name, p.Root)
+	fmt.Fprintf(out, "%s pack: %s (%s)\n", via, p.Manifest.Name, p.Root)
 }
 
 func runPackShow(out io.Writer, rest []string) {
@@ -328,7 +418,14 @@ func solicitPackCredentials(env shellEnv, in io.Reader, out io.Writer, tty bool,
 	}
 	var missing []packIntegration
 	for _, ig := range p.Manifest.Integrations {
-		if ig.Env != "" && !opRefFilled(env, ig.Env) {
+		if ig.Env == "" {
+			continue
+		}
+		if !envVarNameRe.MatchString(ig.Env) {
+			fmt.Fprintf(out, "  (skipping integration %q: invalid env var name %q)\n", ig.Name, ig.Env)
+			continue
+		}
+		if !opRefFilled(env, ig.Env) {
 			missing = append(missing, ig)
 		}
 	}
@@ -389,6 +486,17 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		os.Exit(1)
 	}
 	cfg.Pack = root
+	// Persist the pack's knowledge bundle into config (+ enable the knowledge
+	// service) so `serve` actually INDEXES it — a per-run in-memory append would be
+	// invisible to the daemon (which reloads config from disk). Idempotent.
+	if p.KnowledgeDir != "" {
+		if cfg.AddKnowledgeBundle(p.KnowledgeDir) {
+			fmt.Fprintf(out, "knowledge bundle registered: %s\n", p.KnowledgeDir)
+		}
+		if cfg.AddService("knowledge") {
+			fmt.Fprintln(out, "enabled the knowledge service")
+		}
+	}
 	if err := cfg.Save(); err != nil {
 		fmt.Fprintf(out, "pi-stack pack use: saving config: %v\n", err)
 		os.Exit(1)
@@ -398,7 +506,11 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	solicitPackCredentials(env, os.Stdin, out, isTTY(os.Stdin), p)
 }
 
-func runPackRm(out io.Writer, _ []string) {
+func runPackRm(out io.Writer, rest []string) {
+	if len(rest) > 0 {
+		fmt.Fprintf(os.Stderr, "pi-stack pack rm: unexpected argument %q (rm detaches the ACTIVE pack; it takes no name)\n", rest[0])
+		os.Exit(2)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(out, "pi-stack pack rm: %v\n", err)
@@ -438,8 +550,10 @@ func parsePackURL(raw string) (url, ref string) {
 	return url, ref
 }
 
-// packNameFromURL derives a stable local dir name from a git URL (basename minus
-// .git).
+// packNameFromURL derives a SAFE, stable local dir name from a git URL: the
+// basename (minus .git), sanitized to [A-Za-z0-9._-] with any path-traversal
+// (`.`/`..`/empty) neutralized, plus a short hash of the FULL url so two remotes
+// with the same basename (org-a/tools vs org-b/tools) never collide on one dest.
 func packNameFromURL(url string) string {
 	u := strings.TrimSuffix(url, ".git")
 	u = strings.TrimRight(u, "/")
@@ -447,10 +561,45 @@ func packNameFromURL(url string) string {
 	if i := strings.LastIndexAny(u, "/:"); i >= 0 {
 		base = u[i+1:]
 	}
-	if base == "" {
-		base = "pack"
+	safe := make([]rune, 0, len(base))
+	for _, r := range base {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			safe = append(safe, r)
+		default:
+			safe = append(safe, '-')
+		}
 	}
-	return base
+	name := strings.Trim(string(safe), ".-")
+	if name == "" || name == ".." {
+		name = "pack"
+	}
+	sum := sha256.Sum256([]byte(url))
+	return name + "-" + hex.EncodeToString(sum[:])[:8]
+}
+
+// safeGitURL rejects git URLs whose transport can execute arbitrary commands or
+// read arbitrary host files: only https/http/ssh/git protocols and scp-style
+// `user@host:path` are allowed. `ext::`, `file://`, a leading `-` (arg
+// injection), and anything else are refused. v1 packs are Tier-0 (no shipped
+// executables), so a clone must not become a code-execution vector.
+func safeGitURL(url string) bool {
+	if url == "" || strings.HasPrefix(url, "-") {
+		return false
+	}
+	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") ||
+		strings.HasPrefix(url, "ssh://") || strings.HasPrefix(url, "git://") {
+		return true
+	}
+	// scp-style user@host:path (no scheme). Must contain ':' and not be a
+	// transport helper like ext::/fd:: (those contain '::').
+	if strings.Contains(url, "::") {
+		return false
+	}
+	if at := strings.IndexByte(url, '@'); at > 0 && strings.Contains(url[at:], ":") {
+		return true
+	}
+	return false
 }
 
 // clonePack clones (or updates) a remote pack into PacksDir/<name>, pinned to the
@@ -461,27 +610,49 @@ func clonePack(env shellEnv, out io.Writer, raw string) (string, error) {
 		return "", fmt.Errorf("git not available")
 	}
 	url, ref := parsePackURL(raw)
+	if !safeGitURL(url) {
+		return "", fmt.Errorf("refusing unsafe git URL %q (only https/ssh/git remotes; no ext::/file:: transports)", url)
+	}
+	if ref != "" && strings.HasPrefix(ref, "-") {
+		return "", fmt.Errorf("refusing ref %q (leading dash)", ref)
+	}
 	name := packNameFromURL(url)
 	dest := filepath.Join(config.PacksDir(), name)
 	if err := os.MkdirAll(config.PacksDir(), 0o755); err != nil {
 		return "", err
 	}
+	freshClone := false
 	if _, err := os.Stat(filepath.Join(dest, ".git")); err == nil {
-		// Already cloned: fetch + hard-checkout the ref (or default).
+		// Already cloned (dest is URL-hash-unique, so it IS this remote): fetch,
+		// then hard-reset to the fetched ref so an unpinned pack actually advances.
 		fmt.Fprintf(out, "updating pack %q...\n", name)
-		if _, err := env.run("git", "-C", dest, "fetch", "--tags", "origin"); err != nil {
+		if _, err := env.run("git", "-C", dest, "fetch", "--tags", "--", "origin"); err != nil {
 			return "", fmt.Errorf("git fetch %s: %w", url, err)
 		}
 	} else {
 		fmt.Fprintf(out, "cloning pack %q from %s...\n", name, url)
-		if _, err := env.run("git", "clone", url, dest); err != nil {
+		if _, err := env.run("git", "clone", "--", url, dest); err != nil {
 			return "", fmt.Errorf("git clone %s: %w", url, err)
 		}
+		freshClone = true
 	}
 	if ref != "" {
-		if _, err := env.run("git", "-C", dest, "checkout", ref); err != nil {
+		if _, err := env.run("git", "-C", dest, "checkout", "--", ref); err != nil {
+			if freshClone {
+				_ = os.RemoveAll(dest)
+			}
 			return "", fmt.Errorf("git checkout %s: %w", ref, err)
 		}
+		// Advance to the fetched tip when ref is a branch (no-op for a tag/sha).
+		_, _ = env.run("git", "-C", dest, "reset", "--hard", "origin/"+ref)
+	}
+	// A clone that has no pack.toml is not a pack: clean up the fresh clone so a
+	// retry starts clean, and fail with a clear message.
+	if _, err := os.Stat(filepath.Join(dest, packManifestName)); err != nil {
+		if freshClone {
+			_ = os.RemoveAll(dest)
+		}
+		return "", fmt.Errorf("cloned %s but it has no %s — not a pack", url, packManifestName)
 	}
 	return dest, nil
 }
