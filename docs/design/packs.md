@@ -1,8 +1,14 @@
 # Packs — design doc (FOR REVIEW)
 
-Status: DRAFT for owner review. Not implemented. Produced with the crew
-(architect, product-manager, dx-consultant, security-lead, devrel) + the
+Status: DRAFT, owner decisions locked (§14). Not implemented. Produced with the
+crew (architect, product-manager, dx-consultant, security-lead, devrel) + the
 `dx-impatient` reviewer. Goes hand in hand with `docs/design/onboarding-v2-spec.md`.
+
+Locked: name = `pack`; `profile` DELETED (active pack = context); single active
+pack (no multi-pack) in v1; packs are 100% runtime (no compile-in); v1 is
+Tier-0 + reference-only integrations with `op://` credential solicitation;
+pack-shipped executables + trust gate + signing are v2; personal pack local-only
+by default.
 
 ## 1. The idea
 
@@ -88,25 +94,52 @@ Packs are runtime-swappable for the common cases, NO recompile:
   (memory/knowledge/broker/mcp) — `serve` hashes-and-refuses on mismatch, fail
   closed, `sha` mandatory (the mechanism already exists in `services/host/plugin`).
 
-The ONLY thing that still needs a build is a Go plugin **compiled into**
-`pi-stack-host` (`overlay_*.go`). That is the advanced corner, not the headline.
-Be precise about this in every doc/onboarding line — overselling "no recompile"
-repeats the onboarding-v2 "the tool lies" failure.
+For a PACK AUTHOR this means: **packs are 100% runtime, no build, ever.** The one
+thing that still needs a compile — a Go plugin **compiled into** `pi-stack-host`
+(`overlay_*.go`) — only extends pi-stack-host's OWN binary (a new subcommand or a
+deeply-wired host service) and is a pi-stack-maintainer concern, not something a
+pack does. So it is off the pack path entirely; don't mention it in pack docs
+except to say packs never need it.
 
-## 8. Profile collapse
+## 8. Profile is DELETED (owner decision)
 
-`profile = { pack stack, memory scope }`. The per-field override tables
-(`profiles.work.mcp`, …) deprecate into synthesized packs; `Resolve(name)`
-flattens packs so no downstream consumer learns the noun. A pack **binds a memory
-scope tag** (written to `.pi-stack/memory.scope`, wire-compatible with the
-existing `Profile` field in `plugin/interfaces.go`) — which also finally ships the
-`profiles.md` memory-isolation fix. **Open question:** delete `profile` entirely
-vs keep a thin local selector for "machine posture."
+With a single active pack, the pack IS your context — switching work<->personal is
+switching the active pack, not editing four config keys. So `profile` and its
+per-field override tables (`profiles.work.mcp`, `active_profile`, the
+`.pi-stack/profile` file) are **removed**, not kept as a thin selector. What was
+spread across a profile now lives in the pack: `gog_account`, mcp/integration
+refs, knowledge, routing + model prefs (§8a), and the memory scope.
 
-## 9. Trust model (security-lead)
+A pack **binds a memory scope tag** (written to `.pi-stack/memory.scope`,
+wire-compatible with the existing `Profile` field in `plugin/interfaces.go`), so
+switching packs switches memory scope — which also finally ships the
+`profiles.md` memory-isolation fix. `active_pack` replaces `active_profile`.
 
-A pack ships EXECUTABLE code; adopting one runs someone else's code, some of it
-ON THE HOST outside the fence. Execution location is the primary boundary.
+## 8a. What "context config" in a pack means (routing vs model prefs)
+
+A pack carries BOTH model layers, which are distinct:
+- **Routing config** — intent -> model (the crew: `code`->sonnet, `review`->gpt,
+  under cost/latency/accuracy). Pack-level overrides to `models.json` /
+  `scorecard.json` / `policy.json`, recompiled to `routing.json`. A work pack can
+  pin approved-vendor-only routing.
+- **Model prefs** — specific choices: `ollama_bridge_model`, the default session
+  model/intent. Plain scalars.
+
+Both are part of a pack's context config, layered when the pack is active.
+
+## 9. Trust model — split by whether the pack EXECUTES code
+
+The common pack case is NOT shipping a custom binary. It is **referencing an
+integration** (a remote gateway-catalog MCP server, gog, Slack) and **declaring a
+credential need**. That ships NO executable code: the pack manifest lists the
+capability + the ENV VAR names it needs, and adoption/onboarding solicits the
+user's `op://` refs (`pi-stack secret set SLACK_TOKEN op://vault/item/field`).
+Values stay in 1Password; nothing pack-authored runs. This is **v1-safe** and is
+the primary credential-solicitation hook onboarding uses.
+
+Only when a pack ships a binary to RUN (a stdio MCP command, an external
+go-plugin) does host-execution trust apply — and that is **v2**. Execution
+location is the boundary there:
 
 - **In-sandbox** (wrappers, skills, extensions): constrained by DHI + the net
   allowlist. **Safe by default.**
@@ -192,14 +225,22 @@ screen, and the "`pack add mcp` can't attach in-session" lie — every place ado
 friction and "the tool lies" risk lived. So:
 
 **v1 (safe, instant, sub-60s):** `pack.toml`; `pack add skill|knowledge`; `pack
-use` (Tier 0 only — no prompt, nothing to trust); `pack ls|show|rm`; `run
---pack`; local + git-pinned; the onboarding lazy-personal-pack flow with the
-commit GUARDED (fall back to staged-not-committed if `user.email` is unset —
-never fail mid-onboarding). Single active pack (no deep-merge rework needed yet).
+use` (Tier 0 — no prompt, nothing to trust); `pack ls|show|rm`; `run --pack`;
+local + git-pinned; the onboarding lazy-personal-pack flow with the commit
+GUARDED (fall back to staged-not-committed if `user.email` is unset — never fail
+mid-onboarding); **delete `profile`** (active pack replaces active_profile,
+memory scoped per pack); and **reference-only integrations + credential
+solicitation** — a pack declares a capability it uses (remote/existing MCP, gog)
++ the ENV VAR names it needs, and adoption/onboarding walks the user through
+`pi-stack secret set <VAR> op://…` (no pack code runs, so this is v1-safe). Single
+active pack.
 
-**Deferred to v2 (everything with host execution or a subsystem migration):**
-stdio-MCP + proxy authoring; external go-plugin SHA-pin; the Tier-1 BoM adoption
-gate + `secret set op://` prompts (§9 in full); `pack.lock`; folding
+**Deferred to v2 (everything where a pack SHIPS + RUNS code, or a subsystem
+migration):** authoring a pack-shipped stdio-MCP/proxy *binary*; external
+go-plugin SHA-pin; the Tier-1 host bill-of-materials adoption gate for
+pack-shipped binaries; `pack.lock`; folding
+(NOTE: reference-only integrations + `op://` credential solicitation are v1 —
+only pack-AUTHORED executables are deferred here.)
 `knowledge init/use/sync` into `pack` (leave the working subsystem alone; a pack
 just *contains* a `knowledge/` dir); the `profile`->pack migration + `Resolve()`
 rewrite (answer open question 1 FIRST); deep-merged capabilities (only needed
@@ -214,17 +255,23 @@ Two v1 correctness must-fixes the reviewer flagged regardless of scope:
   survives, `packs = [...]` is just "the default profile's stack", documented as
   such — not a parallel authoritative key.
 
-## 14. Open questions (owner call)
+## 14. Open questions — RESOLVED (owner)
 
-1. Delete `profile` entirely, or keep a thin local "machine posture" selector?
-2. Does v1 need multi-pack composition (personal + company at once) or is
-   single-active-pack enough (stack two `--pack` flags manually)?
-3. Where is a work pack's provenance declared (a `pack.toml` field vs a marker by
-   `.pi-stack/host-state.json`) so onboarding's provisioned clause can read it?
-4. Does a personal pack ever get a remote by default (never vs prompted on a later
-   session)?
-5. Naming: `pack` is the visible noun; retire user-facing "kit"/"bundle"
-   overlap (kit = sbx sandbox image config; a pack *contains* an OKF bundle).
+1. **Delete `profile` entirely** — not a thin selector. Single active pack = your
+   context; `active_pack` replaces `active_profile`. (§8)
+2. **Single active pack for v1** — no multi-pack composition. (Revisit if a real
+   personal+company-at-once need shows up.)
+3. **Provenance/signing: deferred to v2** with host execution. v1 is markdown +
+   refs (no pack code runs), so trust = the git remote, like `npm install` from a
+   GitHub URL.
+4. **Personal pack is local-only by default** — no auto-push, no surprise repo
+   creation. Offer to add a remote later when the user wants cross-machine sync.
+5. **Name is `pack`.** Retire user-facing "kit"/"bundle" overlap (kit = sbx
+   sandbox image config; a pack *contains* an OKF bundle).
+6. **Compile-into-`pi-stack-host` is NOT a pack concern** — packs are 100%
+   runtime (external subprocess / stdio MCP / in-sandbox wrapper). Compile-in
+   (`overlay_*.go`) only extends pi-stack-host's own binary and stays a
+   maintainer/advanced concern, off the pack path entirely.
 
 ## 15. Prior art (borrow / avoid)
 
