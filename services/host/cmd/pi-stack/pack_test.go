@@ -113,8 +113,8 @@ func TestPackURLParsing(t *testing.T) {
 			t.Errorf("parsePackURL(%q) = (%q,%q), want (%q,%q)", c.raw, u, r, c.url, c.ref)
 		}
 		// Name is <sanitized-basename>-<8 hex> (hash of the full url).
-		if got := packNameFromURL(u); !strings.HasPrefix(got, c.namePrefix) || len(got) != len(c.namePrefix)+8 {
-			t.Errorf("packNameFromURL(%q) = %q, want prefix %q + 8 hex", u, got, c.namePrefix)
+		if got := packNameFromURL(u); !strings.HasPrefix(got, c.namePrefix) || len(got) != len(c.namePrefix)+16 {
+			t.Errorf("packNameFromURL(%q) = %q, want prefix %q + 16 hex", u, got, c.namePrefix)
 		}
 	}
 	if isPackGitURL("/local/path/pack") || isPackGitURL("./rel") {

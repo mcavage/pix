@@ -235,7 +235,7 @@ pi-stack secret ls|set|rm|check   # 1Password op-refs for host MCP credentials
 pi-stack route pick|compile|show|models   # the model router (cost/latency/accuracy)
 pi-stack agent ls|new|edit|rm|reassess    # manage subagents and their resolved models
 pi-stack task new|ls|harvest|rm|gc        # isolated parallel-work sandboxes (see below)
-pi-stack profile ls|use      # switch work / personal / default contexts
+pi-stack pack new|add|use|ls # your git-backed context bundle (skills + knowledge)
 pi-stack state backup|restore|reset|uninstall  # on-disk state (also top-level aliases)
 pi-stack man                 # render the full man page
 ```

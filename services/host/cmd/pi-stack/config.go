@@ -192,10 +192,6 @@ const configKeysHelp = `keys:
   host.autoserve true|false lazy auto-start of the services daemon on run/
                             memory/knowledge (default true; PI_STACK_NO_AUTOSERVE
                             env also disables it)
-
-With --profile <name>, edits the [profiles.<name>] table instead of the base
-config (creating it if absent). Per-profile keys: gog_account, mcp,
-knowledge_bundles, kit. services and memory_* are GLOBAL — reject --profile.
 `
 
 // applyConfigChange applies a set (unset=false) or unset to cfg and returns a

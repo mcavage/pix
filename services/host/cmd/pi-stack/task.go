@@ -1138,6 +1138,10 @@ func launchTask(o runOpts) error {
 		return err
 	}
 
+	// A task is a fresh sandbox; mount the active pack (skills + model pref) so it
+	// gets the same authored context a normal `pi-stack run` does.
+	applyPackToLaunch(cfg, &o, defaultShellEnv())
+
 	released := isReleased(version)
 	kitOverride := len(o.Kits) > 0
 	if o.Dev {

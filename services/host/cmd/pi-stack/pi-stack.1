@@ -3,21 +3,17 @@
 pi-stack \- run the pi coding agent in a Docker sandbox and manage its host services
 .SH SYNOPSIS
 .B pi-stack
-.RI [ \-\-profile\ NAME ]
 .br
 .B pi-stack
-.RI [ \-\-profile\ NAME ]
 .B run
 .RI [ DIR ]
 .RI [ flags ]
 .RI [ \-\- " pi-args..." ]
 .br
 .B pi-stack
-.RI [ \-\-profile\ NAME ]
 .I DIR
 .br
 .B pi-stack
-.RI [ \-\-profile\ NAME ]
 .I command
 .RI [ args ]
 .SH DESCRIPTION
@@ -927,45 +923,6 @@ can be piped or redirected.  The global alias
 .B \-\-man
 is accepted anywhere on the command line.
 .SH OPTIONS
-.TP
-.BI \-\-profile " NAME"
-Select a named profile.  The option may appear before or after the command, but
-must appear before a
-.B \-\-
-argument terminator.  The
-.BI \-\-profile= NAME
-form is also accepted.  An empty profile name is an error.  Commands that resolve a profile reject an
-unknown name.  A profile-scoped
-.B "config set"
-or
-.B "config unset"
-may instead create the named profile.  Backup, restore, global knowledge
-init/use, config show/path, setup, serve, version, and lifecycle file movement
-are not profile-scoped.  For profile-aware commands, the option selects the
-context used by run, status, doctor, memory RPCs, knowledge query/list/sync,
-MCP registration, and profile configuration writes.
-.SH PROFILES
-A profile is a named override set layered on the base configuration.  It may
-override
-.BR gog_account ,
-.BR mcp ,
-.BR knowledge_bundles ,
-and
-.BR kits.stack .
-A present list replaces the base list; an absent list inherits it.  The implicit
-.B default
-profile is the base configuration.
-.PP
-Selection precedence is:
-.B \-\-profile
-first,
-.B PI_STACK_PROFILE
-second,
-.B active_profile
-from configuration third, and
-.B default
-last.  The host supervisor indexes the union of knowledge bundles from all
-profiles; queries are scoped to the selected profile.
 .SH FILES
 .SS "Configuration tree"
 .TP
@@ -1027,9 +984,6 @@ Committed per-project knowledge bundle pointer.
 .B .pi-stack/knowledge.scope
 Launcher-generated canonical bundle scope for the current run.
 .TP
-.B .pi-stack/profile
-Launcher-generated active memory profile for the current run.
-.TP
 .B ~/.local/bin/pi-stack
 Installed launcher symlink removed by
 .BR uninstall .
@@ -1054,11 +1008,6 @@ Use
 as the configuration directory when
 .B PI_STACK_CONFIG
 is unset.
-.TP
-.B PI_STACK_PROFILE
-Select a profile when
-.B \-\-profile
-is absent.
 .TP
 .B PI_STACK_DEV_ROOT
 Directory of a pi-stack checkout used by

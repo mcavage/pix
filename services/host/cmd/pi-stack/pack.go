@@ -71,44 +71,45 @@ func loadPack(root string) (*packInfo, error) {
 	}
 	p := &packInfo{Root: root, Manifest: m}
 	if d := filepath.Join(root, "skills"); dirHasEntries(d) {
-		if escapes, bad := dirHasEscapingSymlink(d, root); escapes {
-			return nil, fmt.Errorf("pack %s: skills/ contains a symlink escaping the pack (%s); refusing to mount", root, bad)
+		if isSymlinkPath(d) {
+			return nil, fmt.Errorf("pack %s: skills/ is a symlink; refusing to mount", root)
+		}
+		if has, bad := dirHasSymlink(d); has {
+			return nil, fmt.Errorf("pack %s: skills/ contains a symlink (%s); packs must not use symlinks, refusing to mount", root, bad)
 		}
 		p.SkillsDir = d
 	}
 	if d := filepath.Join(root, "knowledge"); dirHasEntries(d) {
-		if escapes, bad := dirHasEscapingSymlink(d, root); escapes {
-			return nil, fmt.Errorf("pack %s: knowledge/ contains a symlink escaping the pack (%s); refusing to mount", root, bad)
+		if isSymlinkPath(d) {
+			return nil, fmt.Errorf("pack %s: knowledge/ is a symlink; refusing to mount", root)
+		}
+		if has, bad := dirHasSymlink(d); has {
+			return nil, fmt.Errorf("pack %s: knowledge/ contains a symlink (%s); packs must not use symlinks, refusing to mount", root, bad)
 		}
 		p.KnowledgeDir = d
 	}
 	return p, nil
 }
 
-// dirHasEscapingSymlink walks dir and reports the first symlink whose target
-// resolves OUTSIDE root — an adopted pack must not smuggle a link to the host
-// filesystem (e.g. skills/x -> /etc) into a mounted tree. Returns (true, path)
-// on the first offender.
-func dirHasEscapingSymlink(dir, root string) (bool, string) {
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return true, root // fail closed
-	}
+// dirHasSymlink walks dir and reports the first symlink of ANY kind. Adopted
+// packs have no legitimate need for symlinks, and rejecting all of them is the
+// only complete defense: WalkDir does NOT descend into a symlinked DIRECTORY, so
+// an "escaping vs not" test can be masked (skills/sub -> ../masked, then
+// masked/x -> /etc). Rejecting the link entry itself (which WalkDir DOES visit)
+// closes that bypass. Returns (true, path) on the first symlink found.
+// isSymlinkPath reports whether path itself is a symlink (Lstat, no follow).
+func isSymlinkPath(path string) bool {
+	fi, err := os.Lstat(path)
+	return err == nil && fi.Mode()&os.ModeSymlink != 0
+}
+
+func dirHasSymlink(dir string) (bool, string) {
 	bad := ""
 	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d == nil {
 			return nil
 		}
-		if d.Type()&os.ModeSymlink == 0 {
-			return nil
-		}
-		target, rerr := filepath.EvalSymlinks(path)
-		if rerr != nil {
-			bad = path // unresolvable link: fail closed
-			return filepath.SkipAll
-		}
-		rel, rerr := filepath.Rel(rootAbs, target)
-		if rerr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if d.Type()&os.ModeSymlink != 0 {
 			bad = path
 			return filepath.SkipAll
 		}
@@ -138,6 +139,44 @@ func expandUser(p string) string {
 
 // personalPackRoot is the default personal-pack location.
 func personalPackRoot() string { return config.PackDir() }
+
+// applyPackToLaunch mounts the active pack into a launch (run OR task): it appends
+// the pack's skills dir to o.Skills and applies the pack's ollama model pref, and
+// warns about declared integrations (a pack NEVER auto-enables a host MCP — that
+// would be a silent host-exec vector — and a missing credential is surfaced).
+// Knowledge is NOT handled here: a persisted active pack already has its bundle
+// in cfg.KnowledgeBundles (added at `pack use` time, indexed by the daemon), and
+// a transient --pack override's knowledge is deliberately not scoped (the daemon
+// wouldn't have indexed it). An EXPLICIT --pack that fails to load is fatal; the
+// personal/active fallback failing is a silent skip.
+func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) {
+	packRoot := activePackRoot(cfg.Pack, o.Pack)
+	if packRoot == "" {
+		return // no active pack; nothing to mount (detached or never created)
+	}
+	p, err := loadPack(packRoot)
+	if err != nil {
+		if strings.TrimSpace(o.Pack) != "" {
+			fmt.Fprintf(os.Stderr, "pi-stack: --pack %s: %v\n", o.Pack, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if p.SkillsDir != "" && !containsStr(o.Skills, p.SkillsDir) {
+		o.Skills = append(o.Skills, p.SkillsDir)
+	}
+	if m := strings.TrimSpace(p.Manifest.OllamaBridgeModel); m != "" {
+		cfg.OllamaBridgeModel = m
+	}
+	for _, ig := range p.Manifest.Integrations {
+		if ig.MCP != "" && !containsStr(cfg.MCP, ig.MCP) {
+			fmt.Fprintf(os.Stderr, "pi-stack: pack uses MCP %q — enable it explicitly: pi-stack config set mcp %s\n", ig.MCP, ig.MCP)
+		}
+		if ig.Env != "" && !opRefFilled(env, ig.Env) {
+			fmt.Fprintf(os.Stderr, "pi-stack: pack integration %q needs a credential — set it: pi-stack secret set %s op://vault/item/field\n", ig.Name, ig.Env)
+		}
+	}
+}
 
 // --- verb tree --------------------------------------------------------------
 
@@ -284,6 +323,12 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 	if _, err := os.Stat(filepath.Join(root, packManifestName)); err != nil {
 		runPackNew(env, out, []string{root})
 	}
+	// Refuse to write through a symlinked skills//knowledge/ dir (an adopted pack
+	// could point it outside the pack root); same posture as loadPack's mount check.
+	if isSymlinkPath(filepath.Join(root, "skills")) || isSymlinkPath(filepath.Join(root, "knowledge")) {
+		fmt.Fprintf(os.Stderr, "pi-stack pack add: %s has a symlinked skills//knowledge/ dir; refusing to write through it\n", root)
+		os.Exit(1)
+	}
 	switch kind {
 	case "skill":
 		dir := filepath.Join(root, "skills", name)
@@ -331,15 +376,8 @@ func runPackLs(out io.Writer) {
 		os.Exit(1)
 	}
 	active := activePackRoot(cfg.Pack, "")
-	via := "active"
 	if active == "" {
-		// Fall back to the personal pack (what `run` mounts when nothing is set).
-		if _, err := loadPack(config.PackDir()); err == nil {
-			active, via = config.PackDir(), "personal (default)"
-		}
-	}
-	if active == "" {
-		fmt.Fprintln(out, "no pack yet (`pi-stack pack add skill <name>` to start one, or `pi-stack pack use <path|git-url>`)")
+		fmt.Fprintln(out, "no active pack (`pi-stack pack add skill <name>` to start one, or `pi-stack pack use <path|git-url>`)")
 		return
 	}
 	p, err := loadPack(active)
@@ -347,7 +385,7 @@ func runPackLs(out io.Writer) {
 		fmt.Fprintf(out, "pack %s: %v\n", active, err)
 		return
 	}
-	fmt.Fprintf(out, "%s pack: %s (%s)\n", via, p.Manifest.Name, p.Root)
+	fmt.Fprintf(out, "active pack: %s (%s)\n", p.Manifest.Name, p.Root)
 }
 
 func runPackShow(out io.Writer, rest []string) {
@@ -485,6 +523,14 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		fmt.Fprintf(out, "pi-stack pack use: %v\n", err)
 		os.Exit(1)
 	}
+	// Drop the PREVIOUS active pack's knowledge bundle so switching packs doesn't
+	// accumulate stale bundles into every later context (single-active-pack
+	// isolation). Best-effort: only removes a bundle that came from that pack.
+	if cfg.Pack != "" && cfg.Pack != root {
+		if oldp, oerr := loadPack(cfg.Pack); oerr == nil && oldp.KnowledgeDir != "" {
+			cfg.RemoveKnowledgeBundle(oldp.KnowledgeDir)
+		}
+	}
 	cfg.Pack = root
 	// Persist the pack's knowledge bundle into config (+ enable the knowledge
 	// service) so `serve` actually INDEXES it — a per-run in-memory append would be
@@ -504,6 +550,9 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	fmt.Fprintf(out, "active pack -> %s\n", root)
 	// Solicit any 1Password creds this pack's reference-only integrations need.
 	solicitPackCredentials(env, os.Stdin, out, isTTY(os.Stdin), p)
+	// A knowledge change is daemon-affecting: restart/advise the running serve so
+	// the new bundle is indexed (mirrors `knowledge use`). Best-effort.
+	propagateServeConfig(defaultServeReloader(), out)
 }
 
 func runPackRm(out io.Writer, rest []string) {
@@ -581,7 +630,7 @@ func packNameFromURL(url string) string {
 		name = "pack"
 	}
 	sum := sha256.Sum256([]byte(url))
-	return name + "-" + hex.EncodeToString(sum[:])[:8]
+	return name + "-" + hex.EncodeToString(sum[:])[:16]
 }
 
 // safeGitURL rejects git URLs whose transport can execute arbitrary commands or
@@ -629,13 +678,20 @@ func clonePack(env shellEnv, out io.Writer, raw string) (string, error) {
 	}
 	freshClone := false
 	if _, err := os.Stat(filepath.Join(dest, ".git")); err == nil {
-		// Already cloned (dest is URL-hash-unique, so it IS this remote): fetch,
-		// then hard-reset to the fetched ref so an unpinned pack actually advances.
-		fmt.Fprintf(out, "updating pack %q...\n", name)
-		if _, err := env.run("git", "-C", dest, "fetch", "--tags", "--", "origin"); err != nil {
-			return "", fmt.Errorf("git fetch %s: %w", url, err)
+		// A dir already exists at this URL-hash dest. Verify its origin actually
+		// matches the requested URL before trusting it — a 64-bit hash collision (or
+		// a pre-planted dir) must NOT let us fetch/activate the wrong repo. On
+		// mismatch, wipe and re-clone.
+		if got, _ := env.run("git", "-C", dest, "remote", "get-url", "origin"); strings.TrimSpace(got) != url {
+			_ = os.RemoveAll(dest)
+		} else {
+			fmt.Fprintf(out, "updating pack %q...\n", name)
+			if _, err := env.run("git", "-C", dest, "fetch", "--tags", "--", "origin"); err != nil {
+				return "", fmt.Errorf("git fetch %s: %w", url, err)
+			}
 		}
-	} else {
+	}
+	if _, err := os.Stat(filepath.Join(dest, ".git")); err != nil {
 		fmt.Fprintf(out, "cloning pack %q from %s...\n", name, url)
 		if _, err := env.run("git", "clone", "--", url, dest); err != nil {
 			return "", fmt.Errorf("git clone %s: %w", url, err)
@@ -643,7 +699,9 @@ func clonePack(env shellEnv, out io.Writer, raw string) (string, error) {
 		freshClone = true
 	}
 	if ref != "" {
-		if _, err := env.run("git", "-C", dest, "checkout", "--", ref); err != nil {
+		// No `--` before a ref: `git checkout -- <ref>` means path-checkout, not a
+		// ref switch. ref is already validated (no leading dash), so this is safe.
+		if _, err := env.run("git", "-C", dest, "checkout", ref); err != nil {
 			if freshClone {
 				_ = os.RemoveAll(dest)
 			}
@@ -651,6 +709,9 @@ func clonePack(env shellEnv, out io.Writer, raw string) (string, error) {
 		}
 		// Advance to the fetched tip when ref is a branch (no-op for a tag/sha).
 		_, _ = env.run("git", "-C", dest, "reset", "--hard", "origin/"+ref)
+	} else if !freshClone {
+		// Unpinned existing clone: advance to the remote default branch's tip.
+		_, _ = env.run("git", "-C", dest, "reset", "--hard", "@{upstream}")
 	}
 	// A clone that has no pack.toml is not a pack: clean up the fresh clone so a
 	// retry starts clean, and fail with a clear message.

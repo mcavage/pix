@@ -278,6 +278,8 @@ flags:
                    pin, so you can work around an unresolvable release tag
                    (repeatable; a path or git+URL)
   --mcp M          attach an MCP server at creation (repeatable)
+  --pack P         active pack for this run (path or git-url); mounts its skills +
+                   knowledge, overriding the configured active pack
   --name N         sandbox name
   --model M        active pi model (passed through to pi)
   --intent NAME    resolve the session model via the router (cost/latency/accuracy);
