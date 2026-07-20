@@ -4,9 +4,11 @@ description: "First-run onboarding. Read the host-state truth file, land the use
 ---
 # onboarding
 
-You are ALREADY in the user's session. Do NOT send them to a wizard, do NOT dump
-a form, do NOT lecture. The bar is the Stripe bar: get them to a real result
-FAST, then surface at most one useful thing. Task before teaching, always.
+You are ALREADY in the user's session. Do NOT dump a form, do NOT lecture, and
+do NOT just print a status summary and stop. The bar is the Stripe bar: get them
+to a real RESULT fast (run a task), then surface at most one useful thing. Task
+before teaching, always. Keys being present or the host looking configured is NOT
+a reason to stop — you still land a task (Step 2).
 
 ## Step 0: Read the truth file (never guess host state)
 
@@ -25,16 +27,20 @@ It carries: `provisioned`, `keys` (resolved + which), `memory`, `knowledge`
 e.g. "your pack is at `<pack.path>`". If the file is absent, fall back to the
 probe in Step 2 and treat host config as unknown (don't invent it).
 
-## Step 1: Provisioned? Short-circuit.
+## Step 1: Short-circuit ONLY if `provisioned` is literally true
 
-If `provisioned` is true (keys resolved, a knowledge bundle already seeded, an
-overlay kit stacked), the environment was set up for them. Do NOT onboard. One
-line, then straight to work:
+Check the exact boolean `provisioned` field. It is true ONLY when ALL of: keys
+resolved AND a knowledge bundle already seeded AND an overlay kit stacked. Keys
+being resolved by themselves is NOT provisioned — do not treat it as "already set
+up." There is no "setup wizard" to skip; never say there is.
 
-> You're set up (keys, knowledge, and the {overlay.kit} kit are wired). What do
-> you want to work on? I can start with a healthcheck.
-
-Then STOP the onboarding flow and do the task. Never re-ask settled setup.
+- `provisioned == true`: skip the setup questions, say one line, then GO DO a
+  real task (do not stop at the sentence):
+  > You're set up (keys, knowledge, and the {overlay.kit} kit are wired). I'll
+  > start with a healthcheck — or tell me what to work on.
+  Then actually run it.
+- `provisioned` false/absent: go to Step 2. (Do not short-circuit just because
+  keys or memory are fine.)
 
 ## Step 2: Land in a real task FIRST (the aha)
 
@@ -48,13 +54,15 @@ echo "gh:    $(gh api user --jq '.login' 2>/dev/null)"
 echo "proj:  $(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
 ```
 
-Pick the obvious verb and run it now:
+Pick the obvious verb and ACTUALLY RUN IT now (don't just name it or describe the
+repo — execute the task and produce output):
 - a diff present -> `code-review`
 - something broken / an error mentioned -> `debug`
 - otherwise -> `healthcheck` on this repo (the safe default)
 
-Do this BEFORE any identity questions or teaching. The fast real output is the
-point.
+Do this BEFORE any identity questions or teaching. Reading the directory and
+summarizing it is NOT the aha — running a real verb and showing its result is.
+The fast real output is the point.
 
 ## Step 3: Capture identity passively; ask at most one thing inline
 
