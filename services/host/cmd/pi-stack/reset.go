@@ -181,7 +181,7 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 		Force:      opts.force,
 	}
 	if paths.configDir != "" {
-		a.Backups = append(a.Backups, backupTarget{Path: paths.configDir, Label: "config directory"})
+		a.Backups = append(a.Backups, backupTarget{Path: paths.configDir, Label: "config"})
 	}
 	if opts.keepMemory {
 		// Preserve the captured facts (memory); move the rebuildable index aside.
@@ -197,7 +197,7 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 		}
 	} else if paths.dataRoot != "" {
 		// Move the whole data root aside (captured memory + knowledge index).
-		a.Backups = append(a.Backups, backupTarget{Path: paths.dataRoot, Label: "data directory (memory, knowledge, personal skills)", Dangerous: true})
+		a.Backups = append(a.Backups, backupTarget{Path: paths.dataRoot, Label: "data (memory, knowledge, skills)", Dangerous: true})
 		// Honor a custom MEMORY_DB / KNOWLEDGE_DB that lives OUTSIDE the data root:
 		// the data-root move alone would miss it. Move ONLY the db FILE + its
 		// -wal/-shm sidecars, NEVER the whole parent dir. A whole directory is moved
@@ -618,18 +618,17 @@ func executeSbxReset(a resetActions, env shellEnv, out io.Writer) {
 // printResetPlan shows EXACTLY what will be moved/removed before any change, so
 // the guard prompt is informed.
 func printResetPlan(a resetActions, out io.Writer) {
-	fmt.Fprintln(out, "pi-stack reset — moves state aside (reversible), never hard-deletes.")
+	fmt.Fprintln(out, "pi-stack reset: moves state aside (reversible), never deletes.")
 	fmt.Fprintln(out)
-	fmt.Fprintln(out, "Will move aside (to <path>.bak-<timestamp>):")
+	fmt.Fprintln(out, "Moving to <path>.bak-<timestamp> (rename back to restore):")
 	for _, b := range a.Backups {
 		fmt.Fprintf(out, "  - %s: %s\n", b.Label, b.Path)
 	}
 	if a.KeepMemory {
-		fmt.Fprintf(out, "  (preserving captured memory: %s)\n", a.MemoryDir)
+		fmt.Fprintf(out, "  (keeping captured memory: %s)\n", a.MemoryDir)
 	}
 	if len(a.RuntimeFiles) > 0 {
-		fmt.Fprintln(out, "Will stop the daemon, clear its runtime files (pid/lock in the state dir),")
-		fmt.Fprintln(out, "and restart it fresh if it was running.")
+		fmt.Fprintln(out, "Stops the daemon, clears its lock/pid files, and restarts it if it was running.")
 	}
 	if a.RemoveSandboxes {
 		fmt.Fprintln(out, "Will remove (sbx):")

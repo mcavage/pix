@@ -81,3 +81,49 @@ func TestHostStateHostReadiness(t *testing.T) {
 		t.Error("Ready must be false when not provisioned")
 	}
 }
+
+func TestHostModeHasProviderRef(t *testing.T) {
+	mk := func(hostmode string) shellEnv {
+		return shellEnv{
+			getenv: func(k string) string {
+				if k == "XDG_CONFIG_HOME" {
+					return "/cfg"
+				}
+				return ""
+			},
+			readFile: func(p string) (string, error) {
+				if p == filepath.Join("/cfg", "pi-stack", "hostmode.env") {
+					return hostmode, nil
+				}
+				return "", os.ErrNotExist
+			},
+		}
+	}
+	if hostModeHasProviderRef(mk("")) {
+		t.Error("empty hostmode.env must report no provider ref")
+	}
+	if !hostModeHasProviderRef(mk("ANTHROPIC_API_KEY=op://v/a/k\n")) {
+		t.Error("a filled provider ref must be detected")
+	}
+	if hostModeHasProviderRef(mk("SLACK_TOKEN=op://v/s/t\n")) {
+		t.Error("a non-provider ref must not count")
+	}
+}
+
+// When host mode has no keys and it's non-interactive, ensureHostModeKeys warns
+// clearly (Ollama-only) and never prompts.
+func TestEnsureHostModeKeys_NoRefsNonInteractive(t *testing.T) {
+	env := shellEnv{
+		getenv:   func(string) string { return "/cfg" },
+		readFile: func(string) (string, error) { return "", os.ErrNotExist },
+	}
+	var out bytes.Buffer
+	ensureHostModeKeys(env, strings.NewReader(""), &out, false)
+	s := out.String()
+	if !strings.Contains(s, "Ollama-only") || !strings.Contains(s, "no cloud keys") {
+		t.Errorf("expected an Ollama-only warning, got: %q", s)
+	}
+	if strings.Contains(s, "Manage model keys in 1Password") {
+		t.Error("must not prompt on the non-interactive path")
+	}
+}

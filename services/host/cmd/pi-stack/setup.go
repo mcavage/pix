@@ -188,7 +188,7 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	// provision-before-enable. Its cloud keys come from hostmode.env, already
 	// written by the key bootstrap above. Skipped on non-TTY (CI never auto-enables
 	// the unsandboxed path).
-	offerHostMode(in, out, interactive)
+	offerHostMode(env, in, out, interactive)
 	return nil
 }
 
@@ -197,7 +197,31 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 // (it removes the sandbox boundary), with a clear warning; never on non-TTY.
 // Provisions BEFORE enabling and verifies (hostProvisioned) so the gate is never
 // flipped on with nothing behind it (a checkout-less/`pi`-less install stays off).
-func offerHostMode(in io.Reader, out io.Writer, interactive bool) {
+// ensureHostModeKeys wires cloud keys for host mode when it has none. Host mode
+// runs pi DIRECTLY (no sandbox proxy), so sbx's proxy-injected keys don't carry
+// over — it needs its OWN op:// refs in hostmode.env. This is why setup can show
+// keys "✓" for the sandbox yet still need a 1Password step the moment you turn on
+// host mode. Best-effort; leaves clear guidance if the user skips.
+func ensureHostModeKeys(env shellEnv, in io.Reader, out io.Writer, interactive bool) {
+	if hostModeHasProviderRef(env) {
+		return
+	}
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Host mode has NO cloud keys yet. It doesn't use the sandbox proxy, so it needs")
+	fmt.Fprintln(out, "its own keys from 1Password (hostmode.env); without them it's Ollama-only.")
+	if interactive && opInstalled(env) {
+		offerOnePasswordKeys(env, in, out, true) // writes op-refs.env + hostmode.env
+	} else if interactive {
+		fmt.Fprintln(out, "(1Password CLI `op` not found — install it, then: pi-stack secret set ANTHROPIC_API_KEY op://...)")
+	} else {
+		fmt.Fprintln(out, "Wire them later: pi-stack secret set ANTHROPIC_API_KEY op://Vault/Item/field (covers host mode too).")
+	}
+	if !hostModeHasProviderRef(env) {
+		fmt.Fprintln(out, "host mode: still no cloud keys — it will be Ollama-only until you add op:// refs.")
+	}
+}
+
+func offerHostMode(env shellEnv, in io.Reader, out io.Writer, interactive bool) {
 	if !interactive || in == nil {
 		return
 	}
@@ -255,7 +279,9 @@ func offerHostMode(in io.Reader, out io.Writer, interactive bool) {
 		fmt.Fprintf(out, "host mode: provisioned but could not enable (%v)\n", err)
 		return
 	}
-	fmt.Fprintln(out, "host mode: enabled + provisioned. Launch it with: pi-stack host")
+	fmt.Fprintln(out, "host mode: enabled + provisioned.")
+	ensureHostModeKeys(env, in, out, interactive)
+	fmt.Fprintln(out, "Launch it with: pi-stack host")
 }
 
 // reportProviderKeys prints the anthropic/openai/google/github key status and,

@@ -88,6 +88,26 @@ func hostModeRefsPath(env shellEnv) string {
 	return filepath.Join(filepath.Dir(defaultOpRefsPath(env)), "hostmode.env")
 }
 
+// hostModeHasProviderRef reports whether hostmode.env declares at least one
+// FILLED provider-key op:// ref. Host mode does NOT use the sandbox proxy, so
+// this is the real question "can host mode reach a cloud model?" — distinct from
+// sbx having proxy-injected keys.
+func hostModeHasProviderRef(env shellEnv) bool {
+	if env.readFile == nil {
+		return false
+	}
+	content, err := env.readFile(hostModeRefsPath(env))
+	if err != nil {
+		return false
+	}
+	for _, r := range parseOpRefs(content) {
+		if _, ok := providerKeyRefs[r.key]; ok && r.isRef && !r.placeholder {
+			return true
+		}
+	}
+	return false
+}
+
 // mirrorProviderRefsToHostMode copies every FILLED provider-key op:// ref from
 // op-refs.env into hostmode.env, so host mode's `op run --env-file=hostmode.env`
 // has the same model keys as the sandbox even when the refs were set BEFORE this
