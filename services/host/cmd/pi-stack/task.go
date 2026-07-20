@@ -1130,8 +1130,9 @@ func prepareTaskLaunchSandbox(env shellEnv, name string) error {
 // preflight, kit resolution, knowledge/profile wiring, buildSbxArgs) WITHOUT
 // modifying run.go, and bypasses deriveSandboxName because o.Name is set.
 func launchTask(o runOpts) error {
-	if msg, block := modelProviderPreflight(defaultShellEnv()); block {
-		return fmt.Errorf("%s", strings.TrimRight(msg, "\n"))
+	env := defaultShellEnv()
+	if _, err := env.lookPath("sbx"); err == nil && !anyModelKeyPresent(env) {
+		return fmt.Errorf("%s", strings.TrimRight(modelKeyMissingMessage(env), "\n"))
 	}
 	cfg, _, err := loadResolvedConfig()
 	if err != nil {

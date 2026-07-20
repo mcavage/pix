@@ -32,8 +32,11 @@ import (
 // auto-loads and frames the user as having opted in (they typed `setup`). The
 // rich flow (host-state truth file, task-first sequencing, tracks) is the v2
 // design in docs/design/onboarding-v2-spec.md; this is the honest interim.
-const onboardingKickoff = "Run the `onboarding` skill to get me set up — I typed `pi-stack setup`, " +
-	"so I've opted in; just begin."
+const onboardingKickoff = "Run the `onboarding` skill in GUIDED mode — I typed `pi-stack setup`, so I " +
+	"want the full walkthrough, not a quick start. Teach me the pi-stack flow by " +
+	"doing (memory, skills, the crew, knowledge, packs), land me in a real first " +
+	"task, and co-author at least one real artifact into my pack. Both the sandbox " +
+	"and host mode are set up on the host; don't re-ask host config. Begin now."
 
 // runSetupCmd is the `pi-stack setup` entry. It accepts the same host-config
 // flags as `onboard` plus an optional DIR (default "."), runs the host phase,
@@ -115,17 +118,12 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	// Provider keys: no ritual — if you own 1Password op:// refs, resolve any that
-	// are MISSING from sbx (op prompts at most once per key). Same path `run` uses.
-	ensureProviderKeysFromRefs(env, out)
-	// Report status + the exact fix for any that are still missing. Keys are sbx
-	// secrets (proxy-injected); we only report them, never enter values.
+	// Provider keys: the SHARED bootstrap (identical to what `run` auto-runs) —
+	// resolve existing 1Password refs into sbx, and on a TTY steer you to 1Password,
+	// writing refs to BOTH op-refs.env (sandbox) and hostmode.env (host mode) so one
+	// paste wires both. Report status either way.
 	reportProviderKeys(env, out)
-	// One opt-in, default-No offer to move keys into 1Password (only fires on a
-	// TTY when op is installed and no key refs exist yet). This is the thing that
-	// makes a fresh install AWARE of the 1Password path instead of silently doing
-	// nothing. Accepting writes op:// refs and syncs them into sbx.
-	offerOnePasswordKeys(env, in, out, tty)
+	bootstrapProviderKeys(env, in, out, tty)
 
 	// Build the config proposal. Flags win; otherwise, on a TTY, ask.
 	opts, perr := parseOnboardArgs(flags)
@@ -171,8 +169,59 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 			fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pi-stack mcp register)\n", err)
 		}
 	}
+
+	// Host mode: setup's job is to leave you able to run BOTH the sandbox AND host
+	// mode (the unsandboxed escape hatch). On a TTY, offer to enable + provision it
+	// — default-Yes, since you explicitly asked to be set up, but LOUD about what it
+	// means. Its cloud keys come from hostmode.env, already written by the key
+	// bootstrap above. Skipped on non-TTY (CI never auto-enables the unsandboxed
+	// path).
+	offerHostMode(in, out, tty)
 	return nil
 }
+
+// offerHostMode enables + provisions `pi-stack host` (unsandboxed) as part of
+// guided setup, so you finish able to run both worlds. Default-Yes on a TTY,
+// with a clear warning; never on non-TTY. Best-effort provisioning (needs a
+// pi-stack checkout to symlink the harness from; a consumer install without one
+// gets a clear TODO).
+func offerHostMode(in io.Reader, out io.Writer, tty bool) {
+	if !tty || in == nil {
+		return
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return
+	}
+	if cfg.Host.Enabled {
+		fmt.Fprintln(out, "host mode: already enabled.")
+		return
+	}
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Host mode runs pi DIRECTLY on this machine — NO sandbox, NO network fence,")
+	fmt.Fprintln(out, "real credentials. It's for work the sandbox can't do (system installs, real")
+	fmt.Fprintln(out, "devices). Cloud keys come from your 1Password refs (hostmode.env).")
+	if !confirmYN(in, out, "Enable host mode too? [Y/n]: ", true) {
+		fmt.Fprintln(out, "host mode: left disabled (enable later: pi-stack config set host.enabled true).")
+		return
+	}
+	cfg.Host.Enabled = true
+	if err := cfg.Save(); err != nil {
+		fmt.Fprintf(out, "host mode: could not enable (%v)\n", err)
+		return
+	}
+	if err := runHostSetup(osStderrOr(out)); err != nil {
+		fmt.Fprintf(out, "host mode enabled, but provisioning is incomplete: %v\n", err)
+		fmt.Fprintln(out, "finish it later with: pi-stack host setup")
+		return
+	}
+	fmt.Fprintln(out, "host mode: enabled + provisioned. Launch it with: pi-stack host")
+}
+
+// osStderrOr returns os.Stderr (runHostSetup writes to an *os.File); the out
+// writer in setup is os.Stdout in practice, so host provisioning logs go to
+// stderr like the rest of host setup.
+func osStderrOr(io.Writer) *os.File { return os.Stderr }
 
 // reportProviderKeys prints the anthropic/openai/google/github key status and,
 // for any that are missing, the exact `sbx secret set` command. Best-effort: if
@@ -236,11 +285,13 @@ func flagTakesValue(a string) bool {
 
 const setupUsage = `usage: pi-stack setup [DIR] [host-config flags]
 
-Guided onboarding in two phases:
-  1. host   — report provider keys, ensure memory, and (interactively) wire
-              optional knowledge + Google Workspace account
-  2. agent  — launch a sandbox and hand off to the agent, which proactively
-              starts onboarding and lands you in a working session
+Actually sets you up (use 'pi-stack run' if you just want to start working):
+  1. host   — provision keys (steer to 1Password, wiring BOTH the sandbox and
+              host mode), ensure memory, create your personal pack, and offer to
+              enable + provision host mode
+  2. agent  — launch a sandbox and hand off to a GUIDED walkthrough: teach the
+              flow by doing, co-author a real artifact into your pack, land a task
+You finish able to run BOTH the sandbox and host mode ('pi-stack host').
 
 DIR defaults to the current directory (like ` + "`pi-stack run`" + `). Setup REFUSES
 if a sandbox already exists for DIR (its agent handoff needs a fresh session);

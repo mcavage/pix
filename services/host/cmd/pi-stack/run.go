@@ -49,29 +49,18 @@ func runRun(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack: intent %q -> model %s\n", o.Intent, m)
 	}
 
-	// Preflight: refuse to launch a sandbox that has no model to talk to. A pi
-	// session needs at least one model provider key (anthropic/openai/google); a
-	// github token authorizes git, not the model, so it does NOT count. We can
-	// only check when sbx is on PATH (the keys live proxy-side); when it is
-	// absent we cannot verify and proceed as before.
-	//
-	// First, the no-ritual 1Password path: if a provider key is MISSING from sbx
-	// but you own an op:// ref for it, resolve it into sbx now (op prompts at most
-	// once per key, then never again). Present keys are skipped, so this is a
-	// no-op on every launch after the first.
-	ensureProviderKeysFromRefs(defaultShellEnv(), os.Stderr)
-	if msg, block := modelProviderPreflight(defaultShellEnv()); block {
-		fmt.Fprint(os.Stderr, msg)
-		os.Exit(1)
+	// Bare-minimum key bootstrap: a pi session needs at least one model provider
+	// key. `run` otherwise stays out of the way (no onboarding, no nags), but with
+	// NO usable key it can't launch — so auto-run the SHARED key flow (resolve your
+	// 1Password refs into sbx; on a TTY, steer you to 1Password), the identical
+	// path `setup` uses. When a key is already present this is a cheap no-op. If it
+	// still can't get one, refuse with guidance. sbx absent = can't verify = proceed.
+	if _, err := defaultShellEnv().lookPath("sbx"); err == nil {
+		if !bootstrapProviderKeys(defaultShellEnv(), os.Stdin, os.Stderr, isTTY(os.Stdin)) {
+			fmt.Fprint(os.Stderr, modelKeyMissingMessage(defaultShellEnv()))
+			os.Exit(1)
+		}
 	}
-
-	// `pi-stack run` NEVER onboards on its own (owner decision): it just launches
-	// the agent. If the host was never set up, print a one-line, non-blocking
-	// heads-up of what is missing and continue straight into the session — no
-	// prompt, no delay. The guided flow is the explicit `pi-stack setup`, which
-	// does the host phase then hands off by launching a run whose first pi message
-	// kicks off onboarding.
-	warnUnconfigured(defaultShellEnv(), os.Stderr)
 
 	// Reconcile any control-plane proposal a prior in-session onboarding wrote
 	// (<workspace>/.pi-stack/onboarding.json): validate it, show the diff, apply
@@ -274,45 +263,20 @@ func applyReplaceRm(env shellEnv, plan runLaunchPlan, name string) error {
 // not the model.
 var modelProviders = []string{"anthropic", "openai", "google"}
 
-// modelProviderPreflight verifies at least one model provider key is set before
-// a launch. It reads `sbx secret ls` (the keys live proxy-side, never in the VM).
-// It returns a guidance message + block=true ONLY when sbx is on PATH, its
-// secret listing is readable, and NONE of the model providers are present. When
-// sbx is absent (e.g. inside a sandbox) or the listing can't be read we cannot
-// verify, so block=false and the launch proceeds unchanged.
-func modelProviderPreflight(env shellEnv) (msg string, block bool) {
-	if env.lookPath == nil {
-		return "", false
-	}
-	if _, err := env.lookPath("sbx"); err != nil {
-		return "", false // sbx not on PATH: cannot verify
-	}
-	if env.run == nil {
-		return "", false
-	}
-	out, err := env.run("sbx", "secret", "ls")
-	if err != nil {
-		return "", false // couldn't read secrets: don't block
-	}
-	var missing []string
-	for _, k := range modelProviders {
-		if grepWord(out, k) {
-			return "", false // at least one model key present
-		}
-		missing = append(missing, k)
-	}
-	msg = fmt.Sprintf("pi-stack run: no model provider key is set (need one of %s).\n",
-		strings.Join(missing, ", "))
+// modelKeyMissingMessage is the guidance printed when bootstrapProviderKeys still
+// couldn't get a model key in place. (The presence CHECK now lives in
+// anyModelKeyPresent/bootstrapProviderKeys; this is only the how-to-fix text.)
+func modelKeyMissingMessage(env shellEnv) string {
+	msg := fmt.Sprintf("pi-stack run: no model provider key is set (need one of %s).\n",
+		strings.Join(modelProviders, ", "))
 	if providerKeyRefsPresent(env) {
-		// The user owns 1Password op:// refs for keys but they haven't been pushed
-		// into sbx yet — point at the sync, not a manual paste.
 		msg += "You have 1Password key refs; resolve them into sbx with:\n  pi-stack secret sync\n"
 	} else {
 		msg += "Set one on the host, then re-run. Either:\n" +
 			"  pi-stack secret set ANTHROPIC_API_KEY op://vault/item/field && pi-stack secret sync   (1Password)\n" +
 			"  sbx secret set -g anthropic -t \"sk-...\"                                            (direct)\n"
 	}
-	return msg, true
+	return msg
 }
 
 // parseRunArgs is a small hand-rolled parser (no cobra, no third-party flags) so

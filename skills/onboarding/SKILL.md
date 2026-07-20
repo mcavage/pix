@@ -1,140 +1,107 @@
 ---
 name: onboarding
-description: "First-run onboarding. Read the host-state truth file, land the user in a real task FIRST, capture identity passively, and offer at most ONE context-picked track. Use on first run, for 'onboard me', 'set me up', or after a fresh install."
+description: "First-run onboarding. Read the host-state truth file, then EITHER a guided walkthrough (when invoked by `pi-stack setup`) that teaches the flow + co-builds a pack artifact, OR a quick task-first start (for 'onboard me'). Use on first run, 'onboard me', 'set me up', or after a fresh install."
 ---
 # onboarding
 
-You are ALREADY in the user's session. Do NOT dump a form, do NOT lecture, and
-do NOT just print a status summary and stop. The bar is the Stripe bar: get them
-to a real RESULT fast (run a task), then surface at most one useful thing. Task
-before teaching, always. Keys being present or the host looking configured is NOT
-a reason to stop — you still land a task (Step 2).
+You are ALREADY in the user's session. Never dump a form, never lecture, never
+just print a status summary and stop. Read the truth file, then run in one of two
+modes.
 
 ## Step 0: Read the truth file (never guess host state)
 
-The host writes `<workspace>/.pi-stack/host-state.json`. READ IT before saying
-anything about the environment. You are network-fenced and CANNOT see host
-config any other way, so state ONLY what this file says. Never claim "no
-knowledge base" or "MCP unavailable" from a guess.
+The host writes `<workspace>/.pi-stack/host-state.json`. READ IT first; you are
+network-fenced and cannot see host config any other way. State ONLY what it says.
 
 ```bash
 cat .pi-stack/host-state.json 2>/dev/null
 ```
 
-It carries: `provisioned`, `keys` (resolved + which), `memory`, `knowledge`
-(bundles + seeded), `gog`, `mcp`, `overlay`, `models`, and `pack` (`active`,
-`path`, `git_initialized`, `skills`, `knowledge`). State pack facts from here —
-e.g. "your pack is at `<pack.path>`". If the file is absent, fall back to the
-probe in Step 2 and treat host config as unknown (don't invent it).
+Fields: `provisioned`, `keys`, `memory`, `knowledge`, `gog`, `mcp`, `overlay`,
+`models`, `pack` (`active`/`path`/`git_initialized`/`skills`/`knowledge`). If the
+file is absent, treat host config as unknown (don't invent it).
 
-## Step 1: Short-circuit ONLY if `provisioned` is literally true
+## Step 0.5: Pick the mode
 
-Check the exact boolean `provisioned` field. It is true ONLY when ALL of: keys
-resolved AND a knowledge bundle already seeded AND an overlay kit stacked. Keys
-being resolved by themselves is NOT provisioned — do not treat it as "already set
-up." There is no "setup wizard" to skip; never say there is.
+- **GUIDED** — the invoking message says "guided" / "full walkthrough" / came
+  from `pi-stack setup`. Do the full walkthrough (Steps G1-G6).
+- **QUICK** — "onboard me", or anything else. Do the minimal task-first flow
+  (Steps Q1-Q3).
 
-- `provisioned == true`: skip the setup questions, say one line, then GO DO a
-  real task (do not stop at the sentence):
-  > You're set up (keys, knowledge, and the {overlay.kit} kit are wired). I'll
-  > start with a healthcheck — or tell me what to work on.
-  Then actually run it.
-- `provisioned` false/absent: go to Step 2. (Do not short-circuit just because
-  keys or memory are fine.)
+There is no "setup wizard" to skip; never say there is. Keys or the host looking
+configured is NOT a reason to stop — you still land a real task.
 
-## Step 2: Land in a real task FIRST (the aha)
+---
 
-Not provisioned: still lead with a real result, not questions. Derive identity
-silently and pick a task from context:
+## QUICK mode (task-first, minimal)
 
-```bash
-echo "name:  $(git config user.name 2>/dev/null)"
-echo "email: $(git config user.email 2>/dev/null)"
-echo "gh:    $(gh api user --jq '.login' 2>/dev/null)"
-echo "proj:  $(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
-```
+### Q1: Land a real task FIRST
+Derive identity silently (git/gh), pick the obvious verb, and ACTUALLY RUN IT
+(don't just describe the repo): a diff -> `code-review`; something broken ->
+`debug`; else -> `healthcheck`. Running a real verb and showing its result IS the
+aha; summarizing the directory is not.
 
-Pick the obvious verb and ACTUALLY RUN IT now (don't just name it or describe the
-repo — execute the task and produce output):
-- a diff present -> `code-review`
-- something broken / an error mentioned -> `debug`
-- otherwise -> `healthcheck` on this repo (the safe default)
+### Q2: Capture identity passively
+Name/email come from git/gh — don't ask. Let the watcher learn tone from real
+work. If a real preference surfaces mid-task, `/remember` it in one line. Only if
+they ask to set up how you work, ask ONE short batched round, confirm, `/remember`.
 
-Do this BEFORE any identity questions or teaching. Reading the directory and
-summarizing it is NOT the aha — running a real verb and showing its result is.
-The fast real output is the point.
+### Q3: One context-picked track (optional), then work
+If capture-worthy docs exist and no KB is seeded, offer to seed ONE via `enrich`.
+If a repeatable gap surfaced, offer to author a skill (see G5). Otherwise just
+keep working.
 
-## Step 3: Capture identity passively; ask at most one thing inline
+---
 
-Name/email come from git/gh (Step 2) — don't ask for them. Tone and preferences
-are learned by the memory watcher from how they actually talk to you; you do not
-need a values interview. If, and only if, a real preference surfaces during the
-task (they snap at hedging, they want bullets), capture it with `/remember`
-tagged `["soul","bootstrap"]` in one line: "Noted, I'll keep that." No form, no
-"tell me your 2-3 values".
+## GUIDED mode (the full walkthrough — this is `pi-stack setup`)
 
-If they explicitly ask to set up how you work, then ask ONE short batched round
-(style, pet peeves, tone), show what you'll save, confirm, `/remember`. Only on
-request.
+Pace it: one concept at a time, each tied to something real that just happened.
+Keep each beat to a few lines. The goal is that by the end they GET the model and
+their pack has at least one real artifact in it.
 
-## Step 4: One context-picked track (after the aha, optional)
+### G1: Orient from the truth file (facts, one breath)
+Say what's wired, from host-state — e.g. "Keys: resolved via 1Password. Memory:
+up. Your pack: {pack.path}. Host mode: ready." Do not re-ask any of it.
 
-Offer AT MOST ONE follow-up, chosen from context — never a menu of options:
+### G2: Land a real task (the aha, BEFORE teaching)
+Pick + RUN a real verb on this repo (`healthcheck` is the safe default). Show the
+result. This proves the system does work, not just talks.
 
-- **Knowledge**: if `knowledge.seeded` is false AND the repo has capture-worthy
-  docs (design docs, ADRs, a real README), propose 3-5 specific candidates by
-  name and offer to seed one via `enrich` (one confirm). If already seeded, say
-  nothing.
-- **Custom skill**: only if a repeatable task/gap actually surfaced. DRAFT the
-  SKILL.md and show it. The durable save is a HOST action (the `pi-stack`
-  launcher runs on the host, not in this sandbox): tell the user to run
-  `pi-stack pack add skill <name>` on their host (creates/uses the pack at
-  `host-state.pack.path`), paste your draft into the opened file, and **commit
-  it** (packs live in git; the user pushes to their own remote). A user who
-  already keeps a skills repo can `pi-stack pack new <path>` to adopt it. See
-  docs/design/packs.md.
+### G3: Teach the flow by doing (tie each to what just happened)
+Concise, one at a time:
+- **Memory:** it remembers durable facts across every session. Demo: state one
+  fact, act on it next turn. "You correct it by acting differently, not editing."
+- **Skills:** what you just ran was a *skill* (a named, repeatable way of
+  working). Point out the always-on ones (anti-slop, verify) shaped the output
+  already. Invoke by intent, not a command list.
+- **The crew:** you're not one model. Run `agent ls` (or a small fanout) and show
+  work routed to different models by cost/latency/accuracy; it's inspectable.
+- **Knowledge vs memory:** memory = what YOU prefer (personal); a knowledge
+  bundle = shared "what is X and why" domain truth, cited.
+- **Packs:** your pack ({pack.path}) is the git-backed home for the skills and
+  knowledge you author — portable across machines, versioned like code.
 
-Confirm before writing anything. Skip both if neither is real.
+### G4: Co-author ONE real artifact into the pack
+Find a genuine, repeatable task the user does (ask them, one question). Draft a
+real SKILL.md for it. The `pi-stack` launcher runs on the HOST (not this
+sandbox), so have the user run, on their host:
+`pi-stack pack add skill <name>` — then paste your draft into the opened file and
+commit it (packs live in git; they push to their own remote). Or a KB concept via
+`enrich`. End with a real artifact in their pack, not a description of one.
 
-## Step 5: Autonomy — default, don't teach
+### G5: Capture identity to memory
+Ask ONE short batched round (style, pet peeves, tone, 2-3 values), show exactly
+what you'll save, confirm, then `/remember` each tagged `["soul","bootstrap"]`.
 
-Default is `review` (you plan/spec before building). Do NOT run a
-"pick your autonomy mode" step. The first time they say "just build it" / "don't
-stop", flip to `deliver` for that work and mention once that "just build it" and
-"spec it first" steer this any time.
+### G6: Close — both worlds ready, land on real work
+One-line receipt of what got written (memory facts, the pack artifact). Remind
+them: sandboxes are the default; **host mode** (`pi-stack host`) is set up too for
+work the sandbox can't do. Then pivot straight into a real task.
 
-## Step 6: Host config — only if they reach for it, never re-ask what's set
-
-Do NOT proactively pitch Google Workspace / knowledge / models. You are fenced;
-you cannot apply host config live. If the user asks for something host-side that
-`host-state.json` shows is NOT already set, PROPOSE it by writing
-`<workspace>/.pi-stack/onboarding.json` with ONLY the fields they chose:
-
-```json
-{
-  "version": 1,
-  "gog_account": "you@example.com",
-  "mcp": ["gog"],
-  "knowledge": {"action": "use", "source": "/path/or/git-url"}
-}
-```
-
-Then: "Noted. `pi-stack run` will show these and ask before applying them next
-session." Never include secrets (keys are 1Password `op://` refs the host owns;
-integration creds too). Never propose something the truth file shows already on.
-
-## Step 7: MCP / credential proxies — deferred, default no
-
-Never demo MCP in first-run (it needs host creds and will error otherwise). At
-most, once, offer the explanation and default to no:
-
-> Want the 90-second version of how credentials reach tools without the sandbox
-> ever seeing a token? [y/N]
-
-If yes, 3-5 flat lines, end with "nothing to set up now; ask me to wire Google
-Workspace or run `pi-stack doctor` when you're ready." Then drop it.
-
-## Closing
-
-One-line receipt of anything written (memory facts / a seeded concept / a
-skill), then keep working. No "setup complete" banner.
+## Host config (either mode)
+You are fenced; you cannot apply host config live. If the user asks for something
+host-side that the truth file shows is NOT set, PROPOSE it by writing
+`<workspace>/.pi-stack/onboarding.json` (only the fields they chose), and say
+`pi-stack run` will apply it under a gate next session. Never include secrets
+(keys are 1Password op:// refs the host owns). Never propose something already on.
+Never demo MCP/proxies that need creds you can see aren't wired.

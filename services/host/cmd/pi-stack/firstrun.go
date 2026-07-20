@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"pi-stack/host/config"
 )
@@ -41,23 +40,4 @@ func firstRunFlow(in io.Reader, out io.Writer, tty bool) bool {
 	fmt.Fprintln(out, "Set up:  pi-stack setup   — configures the host, then hands off to an agent to finish.")
 	fmt.Fprintln(out, "Or just:  pi-stack run    — skip setup and start working now.")
 	return false
-}
-
-// warnUnconfigured prints a ONE-LINE, non-blocking heads-up before `pi-stack
-// run` launches on a host that was never set up (no config file). It never
-// prompts and never delays — `run` goes straight into the session. The guided
-// path is the explicit `pi-stack setup`. Silent once the host has a config.
-func warnUnconfigured(env shellEnv, out io.Writer) {
-	if configExists() {
-		return
-	}
-	var missing []string
-	if env.dial == nil || !env.dial(memoryPortDefault) {
-		missing = append(missing, "memory service down")
-	}
-	detail := ""
-	if len(missing) > 0 {
-		detail = " (" + strings.Join(missing, ", ") + ")"
-	}
-	fmt.Fprintf(out, "pi-stack: no host setup yet%s — run `pi-stack setup` for the guided flow; continuing anyway.\n", detail)
 }

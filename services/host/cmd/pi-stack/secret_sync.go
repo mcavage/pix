@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -60,9 +61,15 @@ func offerOnePasswordKeys(env shellEnv, in io.Reader, out io.Writer, tty bool) {
 			fmt.Fprintf(out, "    skipped %s: not an op:// ref\n", p.name)
 			continue
 		}
+		// Write the ref to BOTH credential files: op-refs.env (sandbox: the gateway
+		// + `pi-stack secret sync` resolve it into sbx) AND hostmode.env (host mode:
+		// `op run --env-file` resolves it at launch). One paste wires both worlds.
 		if err := writeOpRefQuiet(env, p.envVar, ref); err != nil {
 			fmt.Fprintf(out, "    could not save %s: %v\n", p.name, err)
 			continue
+		}
+		if err := writeOpRefFileQuiet(env, hostModeRefsPath(env), p.envVar, ref); err != nil {
+			fmt.Fprintf(out, "    (host-mode ref not saved for %s: %v)\n", p.name, err)
 		}
 		wrote = true
 	}
@@ -74,12 +81,26 @@ func offerOnePasswordKeys(env shellEnv, in io.Reader, out io.Writer, tty bool) {
 	syncProviderKeys(env, out) // force-overwrite sbx from the new refs
 }
 
+// hostModeRefsPath is hostmode.env, a sibling of op-refs.env in the config dir
+// (host mode resolves it via `op run --env-file`). Derived from the same env as
+// op-refs.env so it stays test-injectable.
+func hostModeRefsPath(env shellEnv) string {
+	return filepath.Join(filepath.Dir(defaultOpRefsPath(env)), "hostmode.env")
+}
+
 // writeOpRefQuiet upserts KEY=op://ref into op-refs.env without the CLI wrapper's
 // os.Exit, so the interactive offer can loop. It VALIDATES the key as a shell env
 // var name (so a malicious pack.toml integration name can't inject extra
 // op-refs.env lines) and the value as a single-line op:// ref (never a literal
 // secret) — defense in depth beside the caller's own op:// check.
 func writeOpRefQuiet(env shellEnv, key, value string) error {
+	return writeOpRefFileQuiet(env, defaultOpRefsPath(env), key, value)
+}
+
+// writeOpRefFileQuiet is writeOpRefQuiet targeting an EXPLICIT refs file (used to
+// write both op-refs.env and hostmode.env). Same validation: env-var-name key +
+// single-line op:// value, upsert preserving other lines.
+func writeOpRefFileQuiet(env shellEnv, path, key, value string) error {
 	if env.writeFile == nil {
 		return fmt.Errorf("no writer available")
 	}
@@ -89,7 +110,12 @@ func writeOpRefQuiet(env shellEnv, key, value string) error {
 	if !strings.HasPrefix(value, "op://") || strings.ContainsAny(value, "\n\r") {
 		return fmt.Errorf("value must be a single-line op:// ref")
 	}
-	path, content, _ := opRefsContent(env)
+	content := ""
+	if env.readFile != nil {
+		if c, err := env.readFile(path); err == nil {
+			content = c
+		}
+	}
 	return env.writeFile(path, []byte(upsertOpRef(content, key, value)), 0o600)
 }
 

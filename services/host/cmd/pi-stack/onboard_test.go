@@ -125,30 +125,6 @@ func TestOnboardingFileNameConst(t *testing.T) {
 	}
 }
 
-// TestWarnUnconfigured: silent once a config exists; on a fresh host it prints a
-// single non-blocking heads-up pointing at `pi-stack setup`.
-func TestWarnUnconfigured(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
-
-	// Fresh host (no config): warns.
-	var out bytes.Buffer
-	warnUnconfigured(shellEnv{dial: func(int) bool { return false }}, &out)
-	if !strings.Contains(out.String(), "pi-stack setup") {
-		t.Errorf("fresh host should nudge setup, got %q", out.String())
-	}
-
-	// Config present: silent.
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	out.Reset()
-	warnUnconfigured(shellEnv{dial: func(int) bool { return true }}, &out)
-	if out.String() != "" {
-		t.Errorf("configured host must be silent, got %q", out.String())
-	}
-}
-
 // TestFlagTakesValue guards the onboard-flag arity setup uses to split DIR from
 // value-bearing flags.
 func TestFlagTakesValue(t *testing.T) {
