@@ -1135,7 +1135,9 @@ func launchTask(o runOpts) error {
 		// Resolve any 1Password key refs into sbx first (same no-ritual path as run),
 		// so a task on a fresh machine isn't rejected for a key it can auto-provision.
 		ensureProviderKeysFromRefs(env, os.Stderr)
-		if !anyModelKeyPresent(env) {
+		// Tri-state (same as run): refuse ONLY when we can POSITIVELY confirm no key.
+		// A transient `sbx secret ls` failure (probeOK=false) must not abort a task.
+		if present, probeOK := sbxModelKeyState(env); probeOK && !present {
 			return fmt.Errorf("%s", strings.TrimRight(modelKeyMissingMessage(env), "\n"))
 		}
 	}

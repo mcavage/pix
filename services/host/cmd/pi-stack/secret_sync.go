@@ -192,8 +192,10 @@ func providerKeyRefsPresent(env shellEnv) bool {
 // it into sbx. Because it acts only on missing keys, `op` (which may prompt) is
 // touched at most once per key ever — once sbx has the secret, later launches
 // skip op entirely. Best-effort and quiet: any failure just leaves the key unset
-// and the keys gate guides the user. Called from `run` and `setup`; the explicit
-// `pi-stack secret sync` is the force-resync (rotate/repair) counterpart.
+// and the keys gate guides the user. Called from `run` (bootstrapProviderKeys)
+// and `task new`; the explicit `pi-stack secret sync` is the force-resync
+// (rotate/repair) counterpart, and `setup` uses setupProvisionKeys (which
+// force-syncs via syncProviderKeys).
 func ensureProviderKeysFromRefs(env shellEnv, out io.Writer) {
 	if env.run == nil {
 		return

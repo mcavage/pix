@@ -352,6 +352,17 @@ func TestLocalImageLoaded(t *testing.T) {
 	if localImageLoaded(present, "local-999") {
 		t.Error("an unloaded tag must be reported absent")
 	}
+	// Combined `repo:tag id` column form (the round-2 regression) must match too.
+	combined := shellEnv{
+		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
+		run:      func(string, ...string) (string, error) { return dockerImageRepo + ":local-333  ghi789\n", nil },
+	}
+	if !localImageLoaded(combined, "local-333") {
+		t.Error("combined repo:tag column must be recognized as present")
+	}
+	if localImageLoaded(combined, "local-999") {
+		t.Error("combined form: an unloaded tag must be absent")
+	}
 	// No sbx on PATH -> fail OPEN (true).
 	noSbx := shellEnv{
 		lookPath: func(string) (string, error) { return "", fmt.Errorf("not found") },

@@ -282,9 +282,9 @@ func applyReplaceRm(env shellEnv, plan runLaunchPlan, name string) error {
 // not the model.
 var modelProviders = []string{"anthropic", "openai", "google"}
 
-// modelKeyMissingMessage is the guidance printed when bootstrapProviderKeys still
-// couldn't get a model key in place. (The presence CHECK now lives in
-// anyModelKeyPresent/bootstrapProviderKeys; this is only the how-to-fix text.)
+// modelKeyMissingMessage is the guidance printed when no model key could be put
+// in place. (The launch-blocking presence CHECK lives in runRun/launchTask via
+// sbxModelKeyState's tri-state; this is only the how-to-fix text.)
 func modelKeyMissingMessage(env shellEnv) string {
 	msg := fmt.Sprintf("pi-stack run: no model provider key is set (need one of %s).\n",
 		strings.Join(modelProviders, ", "))

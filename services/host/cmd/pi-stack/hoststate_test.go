@@ -82,6 +82,18 @@ func TestBuildHostState_NotProvisioned(t *testing.T) {
 func TestReadGitIdentity(t *testing.T) {
 	env := shellEnv{
 		run: func(name string, args ...string) (string, error) {
+			// Personal identity must come from GLOBAL config, not repo-local.
+			if name == "git" {
+				hasGlobal := false
+				for _, a := range args {
+					if a == "--global" {
+						hasGlobal = true
+					}
+				}
+				if !hasGlobal {
+					t.Errorf("readGitIdentity must use --global, got args %v", args)
+				}
+			}
 			last := args[len(args)-1]
 			if name == "git" && last == "user.name" {
 				return "Mark C\n", nil

@@ -85,8 +85,8 @@ func runSetupCmd(argv []string) {
 		}
 	}
 
-	// Phase 1: host config (report keys, ensure memory; a single opt-in 1Password
-	// offer on a TTY — see setupHostPhase).
+	// Phase 1: host config — source keys from 1Password, ensure memory, create the
+	// pack, seed identity, provision+enable host mode (see setupHostPhase).
 	if err := setupHostPhase(env, hostArgs, os.Stdin, os.Stdout, isTTY(os.Stdin)); err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack setup: %v\n", err)
 		os.Exit(1)
