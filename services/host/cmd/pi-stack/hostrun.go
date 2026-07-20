@@ -480,16 +480,12 @@ func runHostLaunch(o hostOpts) {
 	// Shared launcher machinery: profile resolution (skill/memory/knowledge
 	// scoping — the sandbox-name half is meaningless here), knowledge scope, and
 	// the per-run profile file. All best-effort, exactly like run.go.
-	cfg, profile, err := loadResolvedConfig()
+	cfg, _, err := loadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack host: %v\n", err)
 		os.Exit(1)
 	}
-	if profile != config.DefaultProfile {
-		fmt.Fprintf(os.Stderr, "pi-stack: profile %q\n", profile)
-	}
 	wireKnowledgeScope(cfg, ws, defaultKnowledgeRPC())
-	writeProfileFile(ws, profile)
 
 	// Credentials: op:// refs resolved just-in-time by `op run`, or Ollama-only.
 	// hostModelPreflight replaces modelProviderPreflight (which reads sbx

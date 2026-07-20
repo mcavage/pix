@@ -270,8 +270,4 @@ func TestHostAutoserveConfigKey(t *testing.T) {
 	if _, err := applyConfigChange(cfg, false, "host.autoserve", []string{"maybe"}); err == nil {
 		t.Error("non-boolean accepted")
 	}
-	// Per-profile is rejected: launcher-global behavior.
-	if _, err := applyProfileConfigChange(cfg, false, "work", "host.autoserve", []string{"true"}); err == nil {
-		t.Error("--profile host.autoserve accepted, want rejection")
-	}
 }

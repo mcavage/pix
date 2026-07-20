@@ -15,7 +15,7 @@
 //	pi-stack version                   print the stamped version (full)
 //	pi-stack config show|path          show config path + contents (full)
 //	pi-stack serve [args…]             exec the sibling pi-stack-host serve (full)
-//	pi-stack status|doctor|setup|mcp|memory|knowledge|profile   (all implemented)
+//	pi-stack status|doctor|setup|mcp|memory|knowledge|pack   (all implemented)
 //	pi-stack reset|uninstall           (destructive, reversible: state moved aside)
 //	pi-stack help [verb]               print the verb tree (or one verb's usage)
 package main
@@ -33,14 +33,7 @@ import (
 var version = "dev"
 
 func main() {
-	// A global `--profile <name>` may appear before the subcommand; pull it out
-	// first so both `pi-stack --profile work run` and `pi-stack run --profile work`
-	// work. flagProfile is consumed by loadResolvedConfig / run.
-	args, perr := extractProfileFlag(os.Args[1:])
-	if perr != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack: %v\n", perr)
-		os.Exit(2)
-	}
+	args := os.Args[1:]
 
 	// A global `--man` may appear anywhere on the command line (before a `--`
 	// terminator): render the embedded man page and exit. It is DISTINCT from the
@@ -120,8 +113,6 @@ func main() {
 		runAgent(args[1:])
 	case "man":
 		runMan(args[1:])
-	case "profile":
-		runProfile(args[1:])
 	case "reset":
 		runReset(args[1:])
 	case "uninstall":
@@ -321,7 +312,7 @@ Set PI_STACK_DEBUG=1 to print the composed sbx command.
 
 const helpText = `pi-stack — a personal, multi-model pi coding agent in a Docker sandbox.
 
-Usage:  pi-stack [--profile NAME] <command> [args]
+Usage:  pi-stack <command> [args]
 
 New here?   pi-stack setup      one-time guided setup (a few minutes, resumable)
 
@@ -347,5 +338,4 @@ More
   config, mcp, state, version, man     (see ` + "`pi-stack help --all`" + `)
 
 Learn a command:  pi-stack help run     ·     pi-stack <command> -h
-Global flag:      --profile NAME        run/read a named context (work, personal)
 `

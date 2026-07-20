@@ -80,12 +80,8 @@ func runConfigGet(argv []string) {
 		fmt.Print(configUsage)
 		return
 	}
-	profile, argv := splitProfileArg(argv)
-	if profile != "" {
-		flagProfile = profile
-	}
 	if len(argv) != 1 {
-		fmt.Fprintf(os.Stderr, "usage: pi-stack config get [--profile <name>] <key>\n%s", configKeysHelp)
+		fmt.Fprintf(os.Stderr, "usage: pi-stack config get <key>\n%s", configKeysHelp)
 		os.Exit(2)
 	}
 	cfg, _, err := loadResolvedConfig()
@@ -122,8 +118,6 @@ func configValue(cfg *config.Config, key string) (string, error) {
 		return cfg.MemoryEmbedModel, nil
 	case "ollama_bridge_model":
 		return cfg.OllamaBridgeModel, nil
-	case "active_profile":
-		return cfg.ActiveProfile, nil
 	case "pack":
 		return cfg.Pack, nil
 	case "host.enabled":
@@ -152,14 +146,8 @@ func runConfigWrite(unset bool, argv []string) {
 		fmt.Print(configUsage)
 		return
 	}
-	profile, argv := splitProfileArg(argv)
-	if profile == "" {
-		// The global `pi-stack --profile <name> config set …` form is stripped
-		// before dispatch (main.extractProfileFlag), so fall back to it here.
-		profile = flagProfile
-	}
 	if len(argv) == 0 {
-		fmt.Fprintf(os.Stderr, "usage: pi-stack config %s [--profile <name>] <key> [value]\n%s", verb, configKeysHelp)
+		fmt.Fprintf(os.Stderr, "usage: pi-stack config %s <key> [value]\n%s", verb, configKeysHelp)
 		os.Exit(2)
 	}
 	cfg, err := config.Load()
@@ -167,12 +155,7 @@ func runConfigWrite(unset bool, argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack config %s: loading config: %v\n", verb, err)
 		os.Exit(1)
 	}
-	var summary string
-	if profile != "" && profile != config.DefaultProfile {
-		summary, err = applyProfileConfigChange(cfg, unset, profile, argv[0], argv[1:])
-	} else {
-		summary, err = applyConfigChange(cfg, unset, argv[0], argv[1:])
-	}
+	summary, err := applyConfigChange(cfg, unset, argv[0], argv[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack config %s: %v\n", verb, err)
 		os.Exit(2)
@@ -190,31 +173,6 @@ func runConfigWrite(unset bool, argv []string) {
 	if isDaemonAffecting(argv[0]) {
 		propagateServeConfig(defaultServeReloader(), os.Stdout)
 	}
-}
-
-// splitProfileArg pulls a `--profile <name>` / `--profile=<name>` flag out of a
-// config-write argv (anywhere in the slice) and returns the name plus the
-// remaining args. Empty name means no flag was present. An empty value after
-// `--profile` is ignored (falls back to the global flag / base config).
-func splitProfileArg(argv []string) (string, []string) {
-	var name string
-	var rest []string
-	for i := 0; i < len(argv); i++ {
-		a := argv[i]
-		if a == "--profile" {
-			if i+1 < len(argv) {
-				name = strings.TrimSpace(argv[i+1])
-				i++
-			}
-			continue
-		}
-		if v, ok := cutPrefix(a, "--profile="); ok {
-			name = strings.TrimSpace(v)
-			continue
-		}
-		rest = append(rest, a)
-	}
-	return name, rest
 }
 
 // configKeysHelp lists the supported keys for set/unset.
@@ -393,80 +351,4 @@ func applyConfigChange(cfg *config.Config, unset bool, key string, args []string
 	default:
 		return "", fmt.Errorf("unknown key %q\n%s", key, configKeysHelp)
 	}
-}
-
-// applyProfileConfigChange is the per-profile sibling of applyConfigChange: it
-// mutates cfg.Profiles[profile] (creating the entry when absent) instead of the
-// base config. Only the runtime-swappable keys are per-profile — gog_account,
-// mcp, knowledge_bundles, and the overlay kit stack (`kit`/`kits`). services and
-// the memory_* models are GLOBAL (they configure the single host `serve`
-// supervisor, not a sandbox context), so a --profile on those is rejected with a
-// clear error rather than silently written to a table nothing reads. Pure +
-// testable: mutates cfg but does NOT save.
-func applyProfileConfigChange(cfg *config.Config, unset bool, profile, key string, args []string) (string, error) {
-	verb := "set"
-	if unset {
-		verb = "unset"
-	}
-	switch key {
-	case "services", "memory_watcher_model", "memory_embed_model", "host.enabled", "host.autonomy", "host.autoserve":
-		return "", fmt.Errorf("%s is global (not per-profile); drop --profile and run: pi-stack config %s %s <value>", key, verb, key)
-
-	case "gog_account":
-		if unset {
-			cfg.SetProfileGogAccount(profile, "")
-		} else {
-			if len(args) != 1 {
-				return "", fmt.Errorf("config set --profile %s gog_account <email>: needs exactly one value", profile)
-			}
-			cfg.SetProfileGogAccount(profile, args[0])
-		}
-		return fmt.Sprintf("profiles.%s.gog_account = %q", profile, cfg.Profiles[profile].GogAccount), nil
-
-	case "mcp":
-		if len(args) != 1 {
-			return "", fmt.Errorf("config %s --profile %s mcp <server>: needs a server name (e.g. gog, slack)", verb, profile)
-		}
-		if unset {
-			cfg.RemoveProfileMCP(profile, args[0])
-		} else {
-			cfg.AddProfileMCP(profile, args[0])
-		}
-		return fmt.Sprintf("profiles.%s.mcp = %v", profile, derefList(cfg.Profiles[profile].MCP)), nil
-
-	case "knowledge_bundles":
-		if len(args) != 1 {
-			return "", fmt.Errorf("config %s --profile %s knowledge_bundles <dir>: needs a bundle directory path", verb, profile)
-		}
-		if unset {
-			cfg.RemoveProfileKnowledgeBundle(profile, args[0])
-		} else {
-			cfg.AddProfileKnowledgeBundle(profile, args[0])
-		}
-		return fmt.Sprintf("profiles.%s.knowledge_bundles = %v", profile, derefList(cfg.Profiles[profile].KnowledgeBundles)), nil
-
-	case "kit", "kits":
-		if len(args) != 1 {
-			return "", fmt.Errorf("config %s --profile %s kit <path>: needs an overlay kit path", verb, profile)
-		}
-		if unset {
-			cfg.RemoveProfileKit(profile, args[0])
-		} else {
-			cfg.AddProfileKit(profile, args[0])
-		}
-		return fmt.Sprintf("profiles.%s.kits.stack = %v", profile, derefList(cfg.Profiles[profile].Kits.Stack)), nil
-
-	default:
-		return "", fmt.Errorf("unknown per-profile key %q (per-profile: gog_account, mcp, knowledge_bundles, kit)\n%s", key, configKeysHelp)
-	}
-}
-
-// derefList renders a profile's tri-state override slice for a confirmation
-// message: nil (inherit) prints as an empty list, otherwise the pointed-to
-// slice — so a present-empty REPLACE also prints as [].
-func derefList(p *[]string) []string {
-	if p == nil {
-		return nil
-	}
-	return *p
 }

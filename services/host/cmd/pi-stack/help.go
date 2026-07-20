@@ -33,7 +33,7 @@ var knownVerbs = map[string]bool{
 	"help": true, "serve": true, "doctor": true, "onboard": true, "status": true,
 	"ls": true, "rm": true,
 	"config": true, "mcp": true, "memory": true, "knowledge": true,
-	"profile": true, "version": true, "run": true, "secret": true,
+	"pack": true, "version": true, "run": true, "secret": true,
 	"reset": true, "uninstall": true, "man": true,
 	"backup": true, "restore": true, "state": true,
 	"task": true, "route": true, "agent": true,
@@ -91,7 +91,7 @@ func min3(a, b, c int) int {
 // power user can see the whole surface, not just the curated Core view.
 const helpAllText = `pi-stack — a personal, multi-model pi coding agent in a Docker sandbox.
 
-Usage:  pi-stack [--profile NAME] <command> [args]
+Usage:  pi-stack <command> [args]
 
 New here?   pi-stack setup     configure the host, then hand off to an agent to finish
 
@@ -120,7 +120,6 @@ Config & context
   config show|path    show the resolved config path and contents
   config get K        print one resolved value (for scripts/make)
   config set|unset    change config without hand-editing the toml
-  profile ls|use      switch between contexts (work / personal / default)
 
 Parallel work
   task <cmd>          new | ls | path | rm | gc | harvest: parallel task clones of one repo
@@ -147,7 +146,6 @@ Meta
   man                 render the embedded man page (no MANPATH needed; also --man)
   help [verb]         print this help (or a verb's usage)
 
-Global flag:  --profile NAME   run/read a named profile (work, personal, ...)
 run flags:    --dev --skills DIR --kit K --mcp M --name N --model M -- pi-args...
 `
 
@@ -186,8 +184,6 @@ func verbUsage(verb string) (string, bool) {
 		return restoreUsage, true
 	case "knowledge", "kb":
 		return knowledgeUsage, true
-	case "profile":
-		return profileUsage, true
 	case "secret":
 		return secretUsage, true
 	case "version":
@@ -271,10 +267,10 @@ const configUsage = `usage: pi-stack config <show|path|get|set|unset> [args]
 
   show                     print the resolved config path + contents
   path [op-refs]           print the config file path (or the op-refs.env path)
-  get [--profile N] K      print ONE resolved value, no decoration (lists are
+  get K                    print ONE resolved value, no decoration (lists are
                             space-separated) — for scripts/make to source
-  set [--profile N] K V     set a config key (never hand-edit the toml)
-  unset [--profile N] K [V]  reset/clear a scalar key, or remove value V from a
+  set K V                   set a config key (never hand-edit the toml)
+  unset K [V]               reset/clear a scalar key, or remove value V from a
                             list key (mcp/services/knowledge_bundles)
 
 ` + configKeysHelp
@@ -303,12 +299,6 @@ const knowledgeInitUsage = `usage: pi-stack knowledge init [DIR]
 Scaffold a spec-correct OKF bundle (default <config-dir>/knowledge), git-init it,
 and wire it into config (services += knowledge, knowledge_bundles += DIR).
 Idempotent: never clobbers an existing bundle.
-`
-
-const profileUsage = `usage: pi-stack profile <ls|use> [name]
-
-  ls [--json]      list profiles (* = active)
-  use <name>       set the active profile (use "default" to revert to the base)
 `
 
 // secretHelpBody is the mental model reused verbatim from config so the concept

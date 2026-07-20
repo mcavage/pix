@@ -150,11 +150,11 @@ func TestLegacyTaskSandboxName(t *testing.T) {
 	if got := legacyTaskSandboxName("abcd1234", "fix", "default"); got != "pi-stack-t-abcd1234-fix" {
 		t.Errorf("legacy default: %q", got)
 	}
-	if got := legacyTaskSandboxName("abcd1234", "fix", "work"); got != "pi-stack-t-abcd1234-fix-work" {
+	if got := legacyTaskSandboxName("abcd1234", "fix", "work"); got != "pi-stack-t-abcd1234-fix" {
 		t.Errorf("legacy work: %q", got)
 	}
 	// hardenTaskMeta with legacy=true must derive the legacy name, not the labeled one.
-	m, err := hardenTaskMeta(taskMeta{Name: "fix", Profile: config.DefaultProfile}, "/main", "abcd1234", true, "fix")
+	m, err := hardenTaskMeta(taskMeta{Name: "fix", Profile: "default"}, "/main", "abcd1234", true, "fix")
 	if err != nil {
 		t.Fatal(err)
 	}

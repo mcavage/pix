@@ -16,8 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"pi-stack/host/config"
 )
 
 const taskUsage = `usage: pi-stack task <new|ls|rm|gc|harvest> [args]
@@ -333,11 +331,8 @@ func sanitizeTaskName(name string) string {
 // run.go. The composed name is bounded by boundSandboxName so it always stays
 // within maxSandboxNameLen.
 func taskSandboxName(label, repokey, name, profile string) string {
-	prof := ""
-	if profile != "" && profile != config.DefaultProfile {
-		prof = sanitizeProfileName(profile)
-	}
-	return boundSandboxName(label, repokey, sanitizeTaskName(name), prof)
+	_ = profile // profiles removed; the parameter is retained for call-site stability
+	return boundSandboxName(label, repokey, sanitizeTaskName(name), "")
 }
 
 // legacyTaskSandboxName is the PRE-LABEL sandbox-name formula
@@ -346,11 +341,8 @@ func taskSandboxName(label, repokey, name, profile string) string {
 // with THIS name, so rm/gc/ls must derive it (not the new labeled name) or they
 // would delete a clone while leaving its real sandbox running.
 func legacyTaskSandboxName(repokey, name, profile string) string {
-	n := "pi-stack-t-" + repokey + "-" + sanitizeTaskName(name)
-	if profile != "" && profile != config.DefaultProfile {
-		n += "-" + sanitizeProfileName(profile)
-	}
-	return n
+	_ = profile // profiles removed; retained for call-site stability
+	return "pi-stack-t-" + repokey + "-" + sanitizeTaskName(name)
 }
 
 // boundSandboxName composes "pi-stack-t-<label>-<repokey>-<name>[-<prof>]" and,
@@ -520,9 +512,9 @@ func hardenTaskMeta(m taskMeta, mainroot, repokey string, legacy bool, fileBase 
 	// pre-label sandbox name; a new-layout task owns the labeled name. Deriving the
 	// wrong one would let rm/gc delete a clone while its real sandbox lives on.
 	if legacy {
-		m.Sandbox = legacyTaskSandboxName(repokey, m.Name, sanitizeProfileName(m.Profile))
+		m.Sandbox = legacyTaskSandboxName(repokey, m.Name, m.Profile)
 	} else {
-		m.Sandbox = taskSandboxName(label, repokey, m.Name, sanitizeProfileName(m.Profile))
+		m.Sandbox = taskSandboxName(label, repokey, m.Name, m.Profile)
 	}
 	return m, nil
 }
@@ -1141,7 +1133,7 @@ func launchTask(o runOpts) error {
 	if msg, block := modelProviderPreflight(defaultShellEnv()); block {
 		return fmt.Errorf("%s", strings.TrimRight(msg, "\n"))
 	}
-	cfg, profile, err := loadResolvedConfig()
+	cfg, _, err := loadResolvedConfig()
 	if err != nil {
 		return err
 	}
@@ -1172,7 +1164,6 @@ func launchTask(o runOpts) error {
 	}
 
 	wireKnowledgeScope(cfg, o.Workspace, defaultKnowledgeRPC())
-	writeProfileFile(o.Workspace, profile)
 
 	args := buildSbxArgs(cfg, o, version)
 	if os.Getenv("PI_STACK_DEBUG") != "" {

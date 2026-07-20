@@ -621,28 +621,26 @@ Execute
 If
 .B sbx
 is unavailable, print the command to run on the host.
-.SS profile
-The aliases
-.B list
-and
-.B set
-map to
-.B ls
-and
-.BR use .
+.SS pack
+A pack is a git-backed context bundle (skills + knowledge + reference-only
+integrations + config).  See
+.B docs/design/packs.md .
 .TP
-.BR "pi-stack profile ls" " [" \-\-json "]"
-List configured profiles and mark the active profile.  With no profile
-subcommand, this is the default action.
+.BR "pi-stack pack new" " [" PATH "]"
+Adopt a pre-existing repo (or one already carrying pack.toml) as a pack, else
+git-init a fresh one.  Default PATH is the personal pack root.
 .TP
-.BR "pi-stack profile use" " " name
-Persist
-.I name
-as
-.BR active_profile .
-The name must already exist.  Use
-.B default
-to select the base configuration.
+.BR "pi-stack pack add" " " "skill|knowledge" " " name " [" PATH "]"
+Add an artifact to a pack (implicit-creates it).
+.TP
+.BR "pi-stack pack use" " " path-or-git-url
+Set the active pack; a git URL is cloned (optional #ref pin).
+.TP
+.BR "pi-stack pack ls" ;
+.BR "pi-stack pack show" " [" PATH "];"
+.BR "pi-stack pack rm"
+Inspect the active pack, show a pack, or detach the active pack (files
+untouched).
 .SS secret
 With no subcommand,
 .B secret

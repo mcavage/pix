@@ -3,8 +3,6 @@ package main
 import (
 	"strings"
 	"testing"
-
-	"pi-stack/host/config"
 )
 
 // TestConfigValue is the table-driven contract for `config get`: one resolved
@@ -20,7 +18,6 @@ func TestConfigValue(t *testing.T) {
 	cfg.MemoryWatcherModel = "qwen3.5:9b"
 	cfg.MemoryEmbedModel = "nomic-embed-text"
 	cfg.OllamaBridgeModel = "qwen3.5:9b"
-	cfg.ActiveProfile = "work"
 
 	tests := []struct {
 		key     string
@@ -34,7 +31,6 @@ func TestConfigValue(t *testing.T) {
 		{key: "memory_watcher_model", want: "qwen3.5:9b"},
 		{key: "memory_embed_model", want: "nomic-embed-text"},
 		{key: "ollama_bridge_model", want: "qwen3.5:9b"},
-		{key: "active_profile", want: "work"},
 		{key: "nope", wantErr: true},
 		{key: "", wantErr: true},
 	}
@@ -66,44 +62,5 @@ func TestConfigValue_EmptyList(t *testing.T) {
 	got, err := configValue(cfg, "mcp")
 	if err != nil || got != "" {
 		t.Errorf("configValue(mcp) on empty list = %q, %v; want \"\", nil", got, err)
-	}
-}
-
-// TestConfigValue_ProfileOverride: `config get` is profile-aware via
-// config.Resolve — a profile's present override REPLACES the base value, an
-// absent field INHERITS it, exactly like every other consumer of Resolve.
-func TestConfigValue_ProfileOverride(t *testing.T) {
-	cfg := defaultCfg()
-	cfg.GogAccount = "me@home.com"
-	cfg.MCP = []string{"slack"}
-	cfg.MemoryWatcherModel = "qwen3.5:9b"
-	work := []string{"gog"}
-	cfg.Profiles = map[string]config.Profile{
-		"work": {GogAccount: "me@work.com", MCP: &work},
-	}
-
-	tests := []struct {
-		name    string
-		profile string
-		key     string
-		want    string
-	}{
-		{name: "base gog_account", profile: "", key: "gog_account", want: "me@home.com"},
-		{name: "override gog_account", profile: "work", key: "gog_account", want: "me@work.com"},
-		{name: "base mcp", profile: "", key: "mcp", want: "slack"},
-		{name: "override mcp replaces", profile: "work", key: "mcp", want: "gog"},
-		// memory_* is global (no per-profile override exists): inherit the base.
-		{name: "global model inherits", profile: "work", key: "memory_watcher_model", want: "qwen3.5:9b"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := configValue(cfg.Resolve(tt.profile), tt.key)
-			if err != nil {
-				t.Fatalf("configValue: %v", err)
-			}
-			if got != tt.want {
-				t.Errorf("profile %q key %q = %q, want %q", tt.profile, tt.key, got, tt.want)
-			}
-		})
 	}
 }

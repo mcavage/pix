@@ -215,17 +215,13 @@ func setupSandboxExists(state sbxState) bool {
 // setupSandboxName derives the sandbox name `pi-stack run` would use for dir
 // (base name + active-profile suffix), so setup's guard can probe the SAME
 // sandbox run would attach to. ok=false when the name can't be resolved (e.g. a
-// bad profile) — the caller then skips the guard rather than blocking setup.
+// unresolvable config) — the caller then skips the guard rather than blocking
+// setup.
 func setupSandboxName(dir string) (string, bool) {
-	name := deriveSandboxName(dir)
-	_, profile, err := loadResolvedConfig()
-	if err != nil {
+	if _, err := config.Load(); err != nil {
 		return "", false
 	}
-	if profile != config.DefaultProfile {
-		name += "-" + sanitizeProfileName(profile)
-	}
-	return name, true
+	return deriveSandboxName(dir), true
 }
 
 // flagTakesValue reports whether an onboard flag consumes a following token

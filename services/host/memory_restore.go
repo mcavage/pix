@@ -324,11 +324,9 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 			undos = append(undos, undo)
 			result.ConfigRestored = true
 			result.ConfigBak = bak
-			// Report the profiles now present from the config we validated + wrote back
-			// (accurate even for a v1 archive whose manifest has no profiles field).
-			if restoredCfg != nil {
-				result.Profiles = restoredCfg.ProfileNames()
-			}
+			// Profiles were removed; result.Profiles falls back to the manifest note
+			// (for reading old archives) below.
+			_ = restoredCfg
 		}
 	}
 	if result.Profiles == nil {

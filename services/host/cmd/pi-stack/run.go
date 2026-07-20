@@ -80,29 +80,19 @@ func runRun(argv []string) {
 	// Best-effort and non-blocking on a non-TTY (it just leaves the file).
 	reconcileOnboarding(o.Workspace, defaultShellEnv(), os.Stdin, os.Stdout, false, isTTY(os.Stdin))
 
-	// Resolve the active profile into a flat config so the rest of run (kits, mcp,
-	// gog) sees the profile's overrides. loadResolvedConfig errors on a typo'd /
-	// unknown profile name rather than silently running the base config. The
-	// profile also namespaces the sandbox name so contexts never collide.
-	cfg, profile, err := loadResolvedConfig()
+	// Load the config for the rest of run (kits, mcp, gog, pack). The
+	cfg, _, err := loadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack run: %v\n", err)
 		os.Exit(1)
 	}
-	if profile != config.DefaultProfile {
-		fmt.Fprintf(os.Stderr, "pi-stack: profile %q\n", profile)
-	}
 
 	// Own the sandbox name so we can manage its lifecycle. sbx would otherwise
-	// auto-derive `pi-stack-<dir>`. This needs only Workspace + profile, so it is
-	// resolved (and the sandbox state probed) BEFORE any create-only input
-	// resolution below — a plain re-attach must never fail on a --dev/checkout or
-	// --kit problem it doesn't even need.
+	// auto-derive `pi-stack-<dir>`. Resolved (and the sandbox state probed) BEFORE
+	// any create-only input resolution below — a plain re-attach must never fail on
+	// a --dev/checkout or --kit problem it doesn't even need.
 	if o.Name == "" {
 		o.Name = deriveSandboxName(o.Workspace)
-		if profile != config.DefaultProfile {
-			o.Name += "-" + sanitizeProfileName(profile)
-		}
 	}
 	state := probeTaskSandbox(defaultShellEnv(), o.Name)
 
@@ -224,12 +214,6 @@ func runRun(argv []string) {
 	// file the in-VM recall extension reads. Entirely best-effort: it never blocks
 	// or fails the launch (recall just misses a bundle this run).
 	wireKnowledgeScope(cfg, o.Workspace, defaultKnowledgeRPC())
-
-	// Memory scope: hand the active profile name to the in-VM memory extensions
-	// (recall/capture) via a per-run workspace file, mirroring the knowledge scope
-	// file. They stamp captures with it and filter recall to {profile}∪{default}.
-	// Best-effort: a failure just leaves memory un-scoped (all default) this run.
-	writeProfileFile(o.Workspace, profile)
 
 	// Local model: hand the configured ollama_bridge_model to the in-VM
 	// ollama-bridge via a per-run workspace file, so `pi-stack config set
@@ -622,11 +606,6 @@ func projectBundle(workspace string) string {
 	return canonicalizeKnowledgeBundle(local)
 }
 
-// writeProfileFile writes <workspace>/.pi-stack/profile: the active profile name
-// on one line. The in-VM memory extensions read it to scope recall/capture,
-// mirroring how writeKnowledgeScope communicates the knowledge bundle set. It is
-// launcher-generated, per-run, and gitignored. Always written (even "default")
-// so a stale name from a previous run can never linger. Best-effort.
 // writeOllamaBridgeFile writes <workspace>/.pi-stack/ollama-bridge.model: the
 // local model tag the in-VM ollama-bridge should expose (interactive cycle + the
 // router's local option). Configured on the host with `pi-stack config set
@@ -642,31 +621,6 @@ func writeOllamaBridgeFile(workspace, model string) {
 		return
 	}
 	_ = os.WriteFile(filepath.Join(dir, "ollama-bridge.model"), []byte(model+"\n"), 0o644)
-}
-
-func writeProfileFile(workspace, profile string) error {
-	if strings.TrimSpace(profile) == "" {
-		profile = config.DefaultProfile
-	}
-	// For a NAMED (non-default) profile, a write failure means recall/capture in
-	// the VM will silently fall back to the default bucket — wrong scope, not a
-	// no-op. Warn to stderr (still best-effort; don't abort the launch). The
-	// default profile stays silent (its absence IS the default behavior).
-	named := profile != config.DefaultProfile
-	warn := func(err error) error {
-		if named {
-			fmt.Fprintf(os.Stderr, "pi-stack: warning: could not write .pi-stack/profile for profile %q (recall/capture will fall back to the default bucket): %v\n", profile, err)
-		}
-		return err
-	}
-	dir := filepath.Join(workspace, ".pi-stack")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return warn(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "profile"), []byte(profile+"\n"), 0o644); err != nil {
-		return warn(err)
-	}
-	return nil
 }
 
 // writeKnowledgeScope writes <workspace>/.pi-stack/knowledge.scope: one canonical

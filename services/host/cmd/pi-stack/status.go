@@ -107,9 +107,6 @@ type sandboxLine struct {
 }
 
 func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport {
-	if profile == "" {
-		profile = config.DefaultProfile
-	}
 	memPort, knPort := memoryClient().Port, knowledgeClient().Port
 	st := statusReport{
 		Version:    version,
@@ -221,7 +218,7 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 }
 
 func (st statusReport) render(out io.Writer) {
-	fmt.Fprintf(out, "pi-stack %s    config: %s    profile: %s\n\n", st.Version, st.ConfigPath, st.Profile)
+	fmt.Fprintf(out, "pi-stack %s    config: %s\n\n", st.Version, st.ConfigPath)
 
 	serve := "down"
 	if st.Memory || st.Knowledge {

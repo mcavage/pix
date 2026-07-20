@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -49,35 +48,6 @@ type PluginSpec struct {
 	SHA      string   `toml:"sha"`       // expected checksum of the external binary
 	Port     int      `toml:"port"`      // port an external plugin listens on
 	ExtraEnv []string `toml:"extra_env"` // additional env vars granted to this plugin subprocess
-}
-
-// Profile is a named override set layered onto the base (flat) config so one
-// host can run distinct contexts — e.g. WORK vs PERSONAL — that differ in their
-// Google Workspace account, MCP servers, knowledge bundles, and overlay kit
-// stack, without cross-contaminating. A slice field that is PRESENT (even empty)
-// REPLACES the base value; an ABSENT (nil) field INHERITS the base. An empty
-// GogAccount inherits the base account.
-//
-// Only the runtime-swappable surface lives here. Overlay HOST plugins compile
-// into the single pi-stack-host binary (build time, global) and cannot be
-// swapped per profile — see docs/design/profiles.md.
-//
-// The slice fields are POINTERS so the schema can distinguish three states that
-// a plain slice cannot: a nil pointer = INHERIT (omitted on Save via omitempty),
-// while a non-nil pointer — even to an empty slice — = an explicit REPLACE that
-// IS serialized (including `mcp = []`). This is what lets `RemoveProfileMCP`
-// disable the last inherited server: it stores a present-empty list that survives
-// Save+Load instead of a nil that would revert to inherit. A plain `[]string`
-// with `omitempty` could not tell present-empty from absent, so do NOT flatten
-// these back to non-pointer slices — the round-trip tests gate them. GogAccount
-// stays a string: empty = inherit.
-type Profile struct {
-	GogAccount       string    `toml:"gog_account,omitempty"`
-	MCP              *[]string `toml:"mcp,omitempty"`
-	KnowledgeBundles *[]string `toml:"knowledge_bundles,omitempty"`
-	Kits             struct {
-		Stack *[]string `toml:"stack,omitempty"`
-	} `toml:"kits,omitempty"`
 }
 
 // HostMode gates `pi-stack host` — running pi DIRECTLY on this machine with
@@ -124,12 +94,6 @@ type Config struct {
 	ServicesRaw *[]string `toml:"services,omitempty"`
 
 	MCP []string `toml:"mcp,omitempty"`
-
-	// ActiveProfile is the profile used when no --profile flag / PI_STACK_PROFILE
-	// env is given. Empty means the base config (the implicit "default" profile).
-	ActiveProfile string `toml:"active_profile"`
-	// Profiles are named override sets layered onto the base config by Resolve.
-	Profiles map[string]Profile `toml:"profiles"`
 
 	MemoryWatcherModel string `toml:"memory_watcher_model,omitempty"`
 	MemoryEmbedModel   string `toml:"memory_embed_model,omitempty"`
@@ -429,75 +393,19 @@ func LoadFrom(path string) (*Config, error) {
 	return c, nil
 }
 
-// DefaultProfile is the implicit profile name for the base (flat) config.
-const DefaultProfile = "default"
-
-// AllKnowledgeBundles returns the de-duplicated UNION of the base bundles and
-// every profile's bundles. `serve` indexes the union (one shared index); a
-// running sandbox scopes recall to its profile's subset at query time. This
-// keeps `serve` profile-agnostic while still indexing everything any profile
-// might ask for.
+// AllKnowledgeBundles returns the de-duplicated knowledge bundles. (Formerly a
+// union across profiles; profiles were removed, so it is now just the base list,
+// deduped. Kept as a method so `serve`/backup callers are unchanged.)
 func (c *Config) AllKnowledgeBundles() []string {
 	seen := map[string]bool{}
 	var out []string
-	add := func(list []string) {
-		for _, b := range list {
-			if b != "" && !seen[b] {
-				seen[b] = true
-				out = append(out, b)
-			}
-		}
-	}
-	add(c.KnowledgeBundles)
-	for _, p := range c.Profiles {
-		if p.KnowledgeBundles != nil {
-			add(*p.KnowledgeBundles)
+	for _, b := range c.KnowledgeBundles {
+		if b != "" && !seen[b] {
+			seen[b] = true
+			out = append(out, b)
 		}
 	}
 	return out
-}
-
-// ProfileNames returns the sorted list of configured profile names, always
-// including the implicit "default" first.
-func (c *Config) ProfileNames() []string {
-	names := []string{DefaultProfile}
-	for n := range c.Profiles {
-		if n != DefaultProfile {
-			names = append(names, n)
-		}
-	}
-	sort.Strings(names[1:])
-	return names
-}
-
-// Resolve returns a flat *Config with the named profile's overrides layered onto
-// the base config, so every existing consumer (run, serve, doctor, status) keeps
-// working against a plain flat config. name "" or "default" (or an unknown name)
-// returns the base config unchanged. A present slice override REPLACES; an absent
-// one INHERITS; a non-empty GogAccount overrides. The returned config is a copy —
-// Resolve never mutates the receiver.
-func (c *Config) Resolve(name string) *Config {
-	out := *c // shallow copy; slices are replaced wholesale below, never appended
-	if name == "" || name == DefaultProfile {
-		return &out
-	}
-	p, ok := c.Profiles[name]
-	if !ok {
-		return &out
-	}
-	if strings.TrimSpace(p.GogAccount) != "" {
-		out.GogAccount = strings.TrimSpace(p.GogAccount)
-	}
-	if p.MCP != nil {
-		out.MCP = append([]string(nil), *p.MCP...)
-	}
-	if p.KnowledgeBundles != nil {
-		out.KnowledgeBundles = append([]string(nil), *p.KnowledgeBundles...)
-	}
-	if p.Kits.Stack != nil {
-		out.Kits.Stack = append([]string(nil), *p.Kits.Stack...)
-	}
-	return &out
 }
 
 // Plugin returns the configured spec for slot, or a builtin default if unset.
@@ -543,18 +451,9 @@ knowledge_bundles = []
 [kits]
 stack = []
 
-# Profiles: named override sets for running distinct contexts (e.g. work vs
-# personal) that differ in gog account, MCP servers, knowledge bundles, and
-# overlay kit stack. Select one with ` + "`pi-stack --profile <name> run`" + `,
-# ` + "`pi-stack profile use <name>`" + `, or the PI_STACK_PROFILE env var. A
-# present list REPLACES the base value; an absent one INHERITS it.
-# active_profile = ""
-# [profiles.work]
-# gog_account = "you@work.com"
-# mcp = ["gog", "slack"]
-# knowledge_bundles = ["/path/to/work-kb"]
-# [profiles.work.kits]
-# stack = ["../work-overlay/kit"]
+# Active pack (git-backed context bundle: skills + knowledge + integrations).
+# Usually set via ` + "`pi-stack pack use <path|git-url>`" + `.
+# pack = ""
 
 # Extra skill directories loaded live (dev mode).
 [skills]
@@ -689,141 +588,6 @@ func (c *Config) AddKnowledgeBundle(path string) bool {
 // by a relative path can be removed by that same relative path.
 func (c *Config) RemoveKnowledgeBundle(path string) bool {
 	return removeValue(&c.KnowledgeBundles, canonicalizeBundlePath(path))
-}
-
-// profile fetches (or lazily creates) the named profile entry so a mutator can
-// modify it and reassign. Map values are not addressable, so every per-profile
-// mutator is a get-modify-set: profileEntry -> mutate the struct -> putProfile.
-// Creating a profile that did not exist is intentional: `pi-stack config set
-// --profile <new> ...` scaffolds the [profiles.<new>] table.
-func (c *Config) profileEntry(name string) Profile {
-	if c.Profiles == nil {
-		return Profile{}
-	}
-	return c.Profiles[name]
-}
-
-// putProfile writes p back into the profile map, allocating the map on first use.
-func (c *Config) putProfile(name string, p Profile) {
-	if c.Profiles == nil {
-		c.Profiles = map[string]Profile{}
-	}
-	c.Profiles[name] = p
-}
-
-// SetProfileGogAccount sets (or, with an empty value, clears) the Google
-// Workspace account override on the named profile, creating the profile if
-// absent.
-func (c *Config) SetProfileGogAccount(name, account string) {
-	p := c.profileEntry(name)
-	p.GogAccount = strings.TrimSpace(account)
-	c.putProfile(name, p)
-}
-
-// The per-profile list mutators below operate on the RESOLVED EFFECTIVE list
-// (base overlaid with any existing profile override), NOT on the raw override
-// slice. So unsetting an INHERITED value materializes base-minus-value as the
-// profile's explicit list (e.g. base [gog,slack], no prior work override,
-// `unset --profile work mcp slack` -> work.mcp=[gog]); and adding starts from
-// what the profile effectively sees today. They store the full explicit list as
-// the override only when it CHANGED, so a no-op leaves an inheriting field nil
-// (still inherit) rather than silently materializing it.
-
-// effectiveList returns a fresh COPY of the named profile's effective value for
-// one field, via Resolve so it reflects base+override. The copy is essential:
-// Resolve shallow-copies the config, so an inherited field aliases the base
-// slice — mutating it in place would corrupt the base.
-func (c *Config) effectiveList(name string, pick func(*Config) []string) []string {
-	return append([]string(nil), pick(c.Resolve(name))...)
-}
-
-// AddProfileMCP adds an MCP server to the named profile's effective mcp list,
-// storing the result as the profile's explicit override. Returns true when it
-// changed. Creates the profile if absent.
-func (c *Config) AddProfileMCP(name, server string) bool {
-	eff := c.effectiveList(name, func(rc *Config) []string { return rc.MCP })
-	if !addUnique(&eff, server) {
-		return false
-	}
-	p := c.profileEntry(name)
-	p.MCP = &eff
-	c.putProfile(name, p)
-	return true
-}
-
-// RemoveProfileMCP removes an MCP server from the named profile's EFFECTIVE mcp
-// list (base+override), storing the remainder as the profile's explicit
-// override. Returns true when it changed — so removing an inherited value
-// materializes base-minus-value.
-func (c *Config) RemoveProfileMCP(name, server string) bool {
-	eff := c.effectiveList(name, func(rc *Config) []string { return rc.MCP })
-	if !removeValue(&eff, server) {
-		return false
-	}
-	p := c.profileEntry(name)
-	// Store a non-nil pointer even when eff is now empty: removing the LAST
-	// inherited value must persist an explicit empty list (`mcp = []`), NOT a nil
-	// that Save would drop and Load would read back as inherit.
-	p.MCP = &eff
-	c.putProfile(name, p)
-	return true
-}
-
-// AddProfileKnowledgeBundle adds a canonicalized OKF bundle dir to the named
-// profile's effective knowledge_bundles list, storing the result as the
-// profile's explicit override. Returns true when it changed. Creates the
-// profile if absent.
-func (c *Config) AddProfileKnowledgeBundle(name, path string) bool {
-	eff := c.effectiveList(name, func(rc *Config) []string { return rc.KnowledgeBundles })
-	if !addUnique(&eff, canonicalizeBundlePath(path)) {
-		return false
-	}
-	p := c.profileEntry(name)
-	p.KnowledgeBundles = &eff
-	c.putProfile(name, p)
-	return true
-}
-
-// RemoveProfileKnowledgeBundle removes a canonicalized OKF bundle dir from the
-// named profile's EFFECTIVE knowledge_bundles list, storing the remainder as the
-// profile's explicit override. Returns true when it changed.
-func (c *Config) RemoveProfileKnowledgeBundle(name, path string) bool {
-	eff := c.effectiveList(name, func(rc *Config) []string { return rc.KnowledgeBundles })
-	if !removeValue(&eff, canonicalizeBundlePath(path)) {
-		return false
-	}
-	p := c.profileEntry(name)
-	p.KnowledgeBundles = &eff
-	c.putProfile(name, p)
-	return true
-}
-
-// AddProfileKit adds an overlay kit path to the named profile's effective
-// kits.stack list, storing the result as the profile's explicit override.
-// Returns true when it changed. Creates the profile if absent.
-func (c *Config) AddProfileKit(name, kit string) bool {
-	eff := c.effectiveList(name, func(rc *Config) []string { return rc.Kits.Stack })
-	if !addUnique(&eff, kit) {
-		return false
-	}
-	p := c.profileEntry(name)
-	p.Kits.Stack = &eff
-	c.putProfile(name, p)
-	return true
-}
-
-// RemoveProfileKit removes an overlay kit path from the named profile's
-// EFFECTIVE kits.stack list, storing the remainder as the profile's explicit
-// override. Returns true when it changed.
-func (c *Config) RemoveProfileKit(name, kit string) bool {
-	eff := c.effectiveList(name, func(rc *Config) []string { return rc.Kits.Stack })
-	if !removeValue(&eff, kit) {
-		return false
-	}
-	p := c.profileEntry(name)
-	p.Kits.Stack = &eff
-	c.putProfile(name, p)
-	return true
 }
 
 // canonicalizeBundlePath normalizes a bundle path to the SAME canonical id every

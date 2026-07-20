@@ -22,13 +22,11 @@ func noHostResolver() (string, error) { return "", fmt.Errorf("no host binary in
 
 func TestValidateOnboarding_Allowlist(t *testing.T) {
 	cfg := defaultCfg()
-	cfg.Profiles = map[string]config.Profile{"work": {}}
 	env := fakeEnv{present: map[string]bool{}}.env()
 
 	ok := []*onboardingResult{
 		{Version: 1, GogAccount: "me@x.com", MCP: []string{"gog"}},
 		{Version: 1, MCP: []string{"notion", "linear"}},
-		{Version: 1, ActiveProfile: "work"},
 		{Version: 1, Knowledge: &onboardKnowledge{Action: "skip"}},
 	}
 	for i, r := range ok {
@@ -40,7 +38,6 @@ func TestValidateOnboarding_Allowlist(t *testing.T) {
 	bad := map[string]*onboardingResult{
 		"bad version":       {Version: 2},
 		"unknown mcp":       {Version: 1, MCP: []string{"evil-server"}},
-		"unknown profile":   {Version: 1, ActiveProfile: "ghost"},
 		"bad kb action":     {Version: 1, Knowledge: &onboardKnowledge{Action: "nuke", Source: "/x"}},
 		"kb missing source": {Version: 1, Knowledge: &onboardKnowledge{Action: "use"}},
 		"model whitespace":  {Version: 1, OllamaBridgeModel: "bad model"},

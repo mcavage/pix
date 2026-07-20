@@ -68,7 +68,7 @@ func TestRenderStatusHuman(t *testing.T) {
 	var out bytes.Buffer
 	renderStatus(cfg, "default", fakeStatusEnv(), &out, false)
 	s := out.String()
-	for _, want := range []string{"pi-stack", "services", "memory ✓", "knowledge ✗", "profile: default", "outstanding"} {
+	for _, want := range []string{"pi-stack", "services", "memory ✓", "knowledge ✗", "outstanding"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("status output missing %q:\n%s", want, s)
 		}

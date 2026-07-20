@@ -40,7 +40,6 @@ type onboardingResult struct {
 	Knowledge          *onboardKnowledge `json:"knowledge,omitempty"`
 	OllamaBridgeModel  string            `json:"ollama_bridge_model,omitempty"`
 	MemoryWatcherModel string            `json:"memory_watcher_model,omitempty"`
-	ActiveProfile      string            `json:"active_profile,omitempty"`
 }
 
 type onboardKnowledge struct {
@@ -95,12 +94,6 @@ func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env shell
 		}
 	}
 
-	if p := strings.TrimSpace(r.ActiveProfile); p != "" && p != config.DefaultProfile {
-		if _, ok := cfg.Profiles[p]; !ok {
-			return fmt.Errorf("active_profile %q does not exist (configured: %s)", p, strings.Join(cfg.ProfileNames(), ", "))
-		}
-	}
-
 	for label, v := range map[string]string{
 		"ollama_bridge_model":  r.OllamaBridgeModel,
 		"memory_watcher_model": r.MemoryWatcherModel,
@@ -144,10 +137,6 @@ func applyOnboardingResult(r *onboardingResult, cfg *config.Config, env shellEnv
 	if v := strings.TrimSpace(r.MemoryWatcherModel); v != "" && v != cfg.MemoryWatcherModel {
 		cfg.MemoryWatcherModel = v
 		changes = append(changes, "memory_watcher_model = "+v)
-	}
-	if p := strings.TrimSpace(r.ActiveProfile); p != "" && p != cfg.ActiveProfile {
-		cfg.ActiveProfile = p
-		changes = append(changes, "active_profile = "+p)
 	}
 	cfg.AddService("memory")
 

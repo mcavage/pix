@@ -94,17 +94,6 @@ func TestConfigValue_HostKeys(t *testing.T) {
 	}
 }
 
-// TestHostKeysAreGlobal: host.* rejects --profile (leaving the sandbox is a
-// machine-level decision, never a per-profile one).
-func TestHostKeysAreGlobal(t *testing.T) {
-	cfg := defaultCfg()
-	for _, k := range []string{"host.enabled", "host.autonomy"} {
-		if _, err := applyProfileConfigChange(cfg, false, "work", k, []string{"true"}); err == nil {
-			t.Errorf("expected %s to reject --profile", k)
-		}
-	}
-}
-
 // --- parser: `host` has its own subcommand parser ---
 
 // TestParseHostArgs_SetupIsNotADir: a bare `setup` is the provision subcommand,

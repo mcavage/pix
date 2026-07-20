@@ -72,7 +72,7 @@ RUN npm install -g --ignore-scripts typescript \
 # ARG is pinned (like FD_VERSION / GO_VERSION) so builds are reproducible:
 # `releases/latest` silently changes on every new ruff release, which could
 # introduce linting behaviour changes or build failures without warning (H-4).
-ARG RUFF_VERSION=0.11.13
+ARG RUFF_VERSION=0.15.22
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
@@ -80,7 +80,7 @@ RUN set -eux; \
       amd64) rt=x86_64-unknown-linux-gnu  ;; \
       *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL "https://github.com/astral-sh/ruff/releases/download/v${RUFF_VERSION}/ruff-${rt}.tar.gz" -o /tmp/ruff.tgz; \
+    curl -fsSL "https://github.com/astral-sh/ruff/releases/download/${RUFF_VERSION}/ruff-${rt}.tar.gz" -o /tmp/ruff.tgz; \
     tar -xzf /tmp/ruff.tgz -C /tmp; \
     mkdir -p /usr/local/bin; \
     install -m0755 "/tmp/ruff-${rt}/ruff" /usr/local/bin/ruff; \

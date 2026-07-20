@@ -1348,7 +1348,7 @@ func runDoctorCmd(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack doctor: %v\n\n%s", err, doctorUsage)
 		os.Exit(2)
 	}
-	cfg, profile, err := loadResolvedConfig()
+	cfg, _, err := loadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack doctor: %v\n", err)
 		os.Exit(1)
@@ -1357,11 +1357,8 @@ func runDoctorCmd(argv []string) {
 	r.services = cfg.Services
 	r.mcp = cfg.MCP
 	if jsonOut {
-		_ = writeJSONOut(os.Stdout, r.jsonView(profile))
+		_ = writeJSONOut(os.Stdout, r.jsonView(""))
 		return
-	}
-	if profile != config.DefaultProfile {
-		fmt.Fprintf(os.Stdout, "profile: %s\n\n", profile)
 	}
 	r.render(os.Stdout)
 }

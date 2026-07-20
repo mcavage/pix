@@ -100,8 +100,7 @@ func TestResolveBackupParamsDerivesManifestNotes(t *testing.T) {
 	cfgPath := filepath.Join(cfgDir, "config.toml")
 	kb := filepath.Join(t.TempDir(), "bundle")
 	cfg := "gog_account = \"x\"\n" +
-		"knowledge_bundles = [\"" + kb + "\"]\n" +
-		"[profiles.work]\ngog_account = \"work@example.com\"\n"
+		"knowledge_bundles = [\"" + kb + "\"]\n"
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -109,8 +108,9 @@ func TestResolveBackupParamsDerivesManifestNotes(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	bp := resolveBackupParams("", 7, time.Now())
-	if strings.Join(bp.Profiles, ",") != "default,work" {
-		t.Errorf("derived Profiles = %v, want [default work]", bp.Profiles)
+	// Profiles were removed: the manifest no longer records any.
+	if len(bp.Profiles) != 0 {
+		t.Errorf("derived Profiles = %v, want none", bp.Profiles)
 	}
 	found := false
 	for _, k := range bp.Knowledge {
