@@ -18,6 +18,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -27,17 +28,14 @@ import (
 	"pi-stack/host/config"
 )
 
-// onboardingKickoff is the first pi message `setup` sends into the fresh session
-// to hand off to the agent. Kept minimal on purpose: it names the skill so it
-// auto-loads and frames the user as having opted in (they typed `setup`). The
-// rich flow (host-state truth file, task-first sequencing, tracks) is the v2
-// design in docs/design/onboarding-v2-spec.md; this is the honest interim.
-const onboardingKickoff = "Run the `onboarding` skill in GUIDED mode — I typed `pi-stack setup`, so I " +
-	"want the full walkthrough, not a quick start. Teach me the pi-stack flow by " +
-	"doing (memory, skills, packs; crew + knowledge on ask), land me in a real " +
-	"first task, and co-author at least one real artifact into my pack. Read " +
-	".pi-stack/host-state.json for what's wired (keys, memory, host mode) and state " +
-	"only what it says; don't re-ask host config. Begin now."
+// onboardingKickoff is the first message `setup` hands the agent. It is
+// DELIBERATELY short and human — it reads like something the user would type,
+// not a machine directive wall. The rewritten `onboarding` skill owns the actual
+// flow (guided teach, read host-state, land a task); the word "guided" is all it
+// needs to pick GUIDED mode. (Making this fully invisible — agent greets with no
+// visible prompt at all — needs a session-start extension + an image rebuild;
+// tracked as a follow-up.)
+const onboardingKickoff = "I just ran pi-stack setup — give me the guided walkthrough and help me get started."
 
 // runSetupCmd is the `pi-stack setup` entry. It accepts the same host-config
 // flags as `onboard` plus an optional DIR (default "."), runs the host phase,
@@ -95,8 +93,8 @@ func runSetupCmd(argv []string) {
 
 	// Phase 2: hand off to the in-VM onboarding agent via an initial message.
 	fmt.Fprintln(os.Stdout, "")
-	fmt.Fprintln(os.Stdout, "Host ready. Launching a sandbox — the agent will pick up onboarding from here,")
-	fmt.Fprintln(os.Stdout, "ask a couple of questions, and drop you into a working session.")
+	fmt.Fprintln(os.Stdout, "Setup complete. Launching pi — it'll introduce itself, show you how it works,")
+	fmt.Fprintln(os.Stdout, "and get you into a real task. (You can quit any time; just run `pi-stack run`.)")
 
 	runArgs := []string{}
 	if dir != "." {
@@ -127,20 +125,16 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	// flag / --non-interactive is the scripted (CI) path and must never prompt.
 	interactive := tty && !opts.assumeYes && len(flags) == 0
 
-	// Provider keys: the SHARED bootstrap (identical to what `run` auto-runs) —
-	// resolve existing 1Password refs into sbx, and (interactive) steer you to
-	// 1Password, writing refs to BOTH op-refs.env (sandbox) and hostmode.env (host
-	// mode) so one paste wires both. A model key is REQUIRED: without one the guided
-	// session can't talk to a model, so abort here (before launching or claiming
-	// ready) rather than hand off to a session that will just re-prompt and fail.
+	// Provider keys: 1Password is the single source of truth. Solicit an op:// ref
+	// for any provider without one yet, mirror refs into hostmode.env, and
+	// force-sync them into sbx (overwriting) — regardless of what sbx already has,
+	// no yes/no gate. A model key is REQUIRED to run, so abort if none ends up
+	// wired rather than hand off to a session that can't talk to a model.
 	reportProviderKeys(env, out)
-	if !bootstrapProviderKeys(env, in, out, interactive) {
+	if !setupProvisionKeys(env, in, out, interactive) {
 		fmt.Fprint(out, modelKeyMissingMessage(env))
 		return fmt.Errorf("no model provider key configured — set one and re-run `pi-stack setup`")
 	}
-	// Ensure host mode gets the SAME model keys, even for refs that pre-date this
-	// feature or were resolved by the no-ritual path (which never writes hostmode.env).
-	mirrorProviderRefsToHostMode(env)
 
 	r := &onboardingResult{
 		Version:           1,
@@ -182,106 +176,131 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 		}
 	}
 
-	// Host mode: setup's job is to leave you able to run BOTH the sandbox AND host
-	// mode (the unsandboxed escape hatch). On a TTY, offer to enable + provision it
-	// — default-NO (it turns off the sandbox boundary), LOUD about what it means,
-	// provision-before-enable. Its cloud keys come from hostmode.env, already
-	// written by the key bootstrap above. Skipped on non-TTY (CI never auto-enables
-	// the unsandboxed path).
-	offerHostMode(env, in, out, interactive)
+	// Identity: read it from the HOST's git config (the sandbox can't see
+	// ~/.gitconfig) and seed it so onboarding greets you by name instead of
+	// starting anonymous. host-state carries it deterministically; memory gets it
+	// durably.
+	seedIdentity(env, out)
+
+	// Host mode: setup ALWAYS sets it up (owner decision) — provision + enable, no
+	// prompt. Its cloud keys are the same hostmode.env op:// refs written above.
+	// provision-before-enable stays, so a `pi`-less box just stays disabled.
+	setupHostMode(env, out)
 	return nil
 }
 
-// offerHostMode enables + provisions `pi-stack host` (unsandboxed) as part of
-// guided setup, so you CAN run both worlds if you opt in. Default-NO on a TTY
-// (it removes the sandbox boundary), with a clear warning; never on non-TTY.
-// Provisions BEFORE enabling and verifies (hostProvisioned) so the gate is never
-// flipped on with nothing behind it (a checkout-less/`pi`-less install stays off).
-// ensureHostModeKeys wires cloud keys for host mode when it has none. Host mode
-// runs pi DIRECTLY (no sandbox proxy), so sbx's proxy-injected keys don't carry
-// over — it needs its OWN op:// refs in hostmode.env. This is why setup can show
-// keys "✓" for the sandbox yet still need a 1Password step the moment you turn on
-// host mode. Best-effort; leaves clear guidance if the user skips.
-func ensureHostModeKeys(env shellEnv, in io.Reader, out io.Writer, interactive bool) {
-	if hostModeHasProviderRef(env) {
+// setupProvisionKeys makes 1Password the single source of model keys, with no
+// yes/no gate — the only interaction is pasting the refs themselves:
+//  1. (interactive) for each provider WITHOUT a ref yet, ask for an op:// ref and
+//     write it to op-refs.env + hostmode.env (one paste wires sandbox + host mode);
+//  2. mirror every provider ref into hostmode.env (covers refs that pre-date this
+//     or were set via `pi-stack secret set`), so host mode has the same keys;
+//  3. force-sync every provider ref into sbx (overwrite) so the sandbox uses the
+//     1Password-sourced keys too.
+//
+// It never skips because sbx already has a key (1Password is the source). Returns
+// whether a usable model key is in place (true when sbx can't be probed — never
+// block a box without sbx).
+func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive bool) bool {
+	fmt.Fprintln(out, "")
+	if !opInstalled(env) {
+		fmt.Fprintln(out, "Model keys come from 1Password, but the `op` CLI isn't installed.")
+		fmt.Fprintln(out, "Install it (https://developer.1password.com/docs/cli/) and re-run setup;")
+		fmt.Fprintln(out, "for now I'll use whatever keys are already in sbx.")
+	} else if interactive {
+		fmt.Fprintln(out, "Model keys come from 1Password. Paste an op:// ref per provider")
+		fmt.Fprintln(out, "(op://Vault/Item/field), or press Enter to keep what's already set:")
+		sc := bufio.NewScanner(in)
+		for _, p := range providerKeyRefOrder {
+			if providerRefSet(env, p.envVar) {
+				fmt.Fprintf(out, "  %-9s (already set)\n", p.name)
+				continue
+			}
+			fmt.Fprintf(out, "  %s: ", p.name)
+			if !sc.Scan() {
+				break
+			}
+			ref := normalizeOpRef(sc.Text())
+			if ref == "" {
+				continue
+			}
+			if !strings.HasPrefix(ref, "op://") {
+				fmt.Fprintln(out, "    skipped: not an op:// ref")
+				continue
+			}
+			if err := writeOpRefQuiet(env, p.envVar, ref); err != nil {
+				fmt.Fprintf(out, "    could not save: %v\n", err)
+				continue
+			}
+			_ = writeOpRefFileQuiet(env, hostModeRefsPath(env), p.envVar, ref)
+		}
+	}
+	// Ensure host mode has every provider ref (incl. pre-existing ones), then
+	// force-sync refs into sbx (prints per-key ✓/✗). A fatal precondition (no refs,
+	// op not signed in, sbx missing) is not fatal to setup — fall through to the
+	// presence check.
+	mirrorProviderRefsToHostMode(env)
+	_, _, _ = syncProviderKeys(env, out)
+	if env.lookPath != nil {
+		if _, err := env.lookPath("sbx"); err != nil {
+			return true // can't probe sbx here — don't block setup
+		}
+	}
+	return anyModelKeyPresent(env)
+}
+
+// setupHostMode ALWAYS provisions host mode and enables it when provisioning
+// actually succeeds — no prompt (owner decision: setup always sets up host mode,
+// its keys are the same op:// refs written to hostmode.env above). The
+// provision-before-enable invariant stays: runHostSetup is lenient (returns nil
+// even when `pi` is missing), so we verify with hostProvisioned() and never flip
+// the gate on with nothing behind it.
+// seedIdentity greets the user by name (from git config) and stores durable
+// identity facts in memory (best-effort, only if the daemon is up), so their
+// first session isn't anonymous. host-state.json also carries identity for the
+// onboarding skill to read directly.
+func seedIdentity(env shellEnv, out io.Writer) {
+	id := readGitIdentity(env)
+	if id.Name == "" && id.Email == "" {
 		return
 	}
-	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "Host mode has NO cloud keys yet. It doesn't use the sandbox proxy, so it needs")
-	fmt.Fprintln(out, "its own keys from 1Password (hostmode.env); without them it's Ollama-only.")
-	if interactive && opInstalled(env) {
-		offerOnePasswordKeys(env, in, out, true) // writes op-refs.env + hostmode.env
-	} else if interactive {
-		fmt.Fprintln(out, "(1Password CLI `op` not found — install it, then: pi-stack secret set ANTHROPIC_API_KEY op://...)")
-	} else {
-		fmt.Fprintln(out, "Wire them later: pi-stack secret set ANTHROPIC_API_KEY op://Vault/Item/field (covers host mode too).")
+	if id.Name != "" {
+		fmt.Fprintf(out, "\nHi %s — I'll carry that into your sessions.\n", id.Name)
 	}
-	if !hostModeHasProviderRef(env) {
-		fmt.Fprintln(out, "host mode: still no cloud keys — it will be Ollama-only until you add op:// refs.")
+	c := memoryClient()
+	if !c.Up() {
+		return
+	}
+	if id.Name != "" {
+		_, _ = c.Call("remember", map[string]any{"content": "The user's name is " + id.Name + ".", "source": "setup", "profile": "default"})
+	}
+	if id.Email != "" {
+		_, _ = c.Call("remember", map[string]any{"content": "The user's git email is " + id.Email + ".", "source": "setup", "profile": "default"})
 	}
 }
 
-func offerHostMode(env shellEnv, in io.Reader, out io.Writer, interactive bool) {
-	if !interactive || in == nil {
-		return
-	}
+func setupHostMode(env shellEnv, out io.Writer) {
 	cfg, err := config.Load()
 	if err != nil {
 		return
 	}
-	wasEnabled := cfg.Host.Enabled
-	if wasEnabled && hostProvisioned() {
-		fmt.Fprintln(out, "host mode: already enabled + provisioned.")
-		return
-	}
-	// Invariant: host.enabled must NEVER be true without a working provision. If we
-	// arrive already-enabled-but-unprovisioned (e.g. a prior `config set
-	// host.enabled true` with no `pi`/checkout), we either finish provisioning or
-	// disable the gate — we never leave the misleading partial state.
-	disable := func(reason string) {
-		if wasEnabled {
+	if rerr := runHostSetup(os.Stderr); rerr != nil || !hostProvisioned() {
+		if cfg.Host.Enabled {
 			cfg.Host.Enabled = false
 			_ = cfg.Save()
-			fmt.Fprintf(out, "host mode: disabled (%s) — it was on but not provisioned; re-enable with `pi-stack host setup` then `pi-stack config set host.enabled true`.\n", reason)
+		}
+		fmt.Fprintln(out, "host mode: not provisioned (usually a missing `pi`) — left disabled.")
+		fmt.Fprintln(out, "Finish later: pi-stack host setup && pi-stack config set host.enabled true")
+		return
+	}
+	if !cfg.Host.Enabled {
+		cfg.Host.Enabled = true
+		if serr := cfg.Save(); serr != nil {
+			fmt.Fprintf(out, "host mode: provisioned but could not enable (%v)\n", serr)
 			return
 		}
-		fmt.Fprintf(out, "host mode: left disabled (%s) — enable later with `pi-stack host setup` then `pi-stack config set host.enabled true`.\n", reason)
 	}
-	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "Host mode runs pi DIRECTLY on this machine — NO sandbox, NO network fence,")
-	fmt.Fprintln(out, "real credentials. It's for work the sandbox can't do (system installs, real")
-	fmt.Fprintln(out, "devices). Cloud keys come from your 1Password refs (hostmode.env).")
-	prompt := "Enable host mode too? [y/N]: "
-	if wasEnabled {
-		fmt.Fprintln(out, "(host mode is currently ENABLED but not fully provisioned.)")
-		prompt = "Finish provisioning host mode? [Y/n]: "
-	}
-	// Default-No when off (turning OFF the sandbox boundary must be a deliberate
-	// keystroke); default-Yes only to REPAIR an already-enabled broken state.
-	if !confirmYN(in, out, prompt, wasEnabled) {
-		disable("declined")
-		return
-	}
-	// PROVISION FIRST; only persist host.enabled=true if provisioning ACTUALLY
-	// succeeded. runHostSetup is lenient (it returns nil even when `pi` is missing
-	// and only prints TODOs), so verify with hostProvisioned() rather than trust
-	// its error — an install must never leave the gate on with nothing behind it.
-	if err := runHostSetup(os.Stderr); err != nil {
-		disable(fmt.Sprintf("provisioning failed: %v", err))
-		return
-	}
-	if !hostProvisioned() {
-		disable("provisioning incomplete (see the notes above, usually a missing `pi`)")
-		return
-	}
-	cfg.Host.Enabled = true
-	if err := cfg.Save(); err != nil {
-		fmt.Fprintf(out, "host mode: provisioned but could not enable (%v)\n", err)
-		return
-	}
-	fmt.Fprintln(out, "host mode: enabled + provisioned.")
-	ensureHostModeKeys(env, in, out, interactive)
-	fmt.Fprintln(out, "Launch it with: pi-stack host")
+	fmt.Fprintln(out, "host mode: enabled + provisioned (launch: pi-stack host).")
 }
 
 // reportProviderKeys prints the anthropic/openai/google/github key status and,

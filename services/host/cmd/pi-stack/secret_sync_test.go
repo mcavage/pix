@@ -50,8 +50,8 @@ func TestSyncProviderKeys_Success(t *testing.T) {
 	}
 	// It must map ENV var -> sbx secret name (anthropic, google) and pass the value to sbx.
 	joined := strings.Join(calls, "\n")
-	if !strings.Contains(joined, "sbx secret set -g anthropic -t sk-secret-value") ||
-		!strings.Contains(joined, "sbx secret set -g google -t sk-secret-value") {
+	if !strings.Contains(joined, "sbx secret set -f -g anthropic -t sk-secret-value") ||
+		!strings.Contains(joined, "sbx secret set -f -g google -t sk-secret-value") {
 		t.Errorf("expected sbx secret set for anthropic+google, got:\n%s", joined)
 	}
 }
@@ -108,7 +108,7 @@ func TestEnsureProviderKeysFromRefs_OnlyMissing(t *testing.T) {
 	ensureProviderKeysFromRefs(env, &out)
 	joined := strings.Join(calls, "\n")
 	// gemini -> google should be resolved and set.
-	if !strings.Contains(joined, "sbx secret set -g google -t val") {
+	if !strings.Contains(joined, "sbx secret set -f -g google -t val") {
 		t.Errorf("missing key (google) should have been resolved:\n%s", joined)
 	}
 	// anthropic is already in sbx: it must NOT be op-read (no prompt).

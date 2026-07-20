@@ -336,3 +336,36 @@ func TestParseRunArgs_Replace(t *testing.T) {
 		t.Error("expected Replace=true")
 	}
 }
+
+// localImageLoaded: present tag -> true; absent tag -> false; fails OPEN when it
+// can't check (no sbx / ls error) so it never falsely refuses a launch.
+func TestLocalImageLoaded(t *testing.T) {
+	lsOut := dockerImageRepo + "  local-111  abc123\n" +
+		dockerImageRepo + "  local-222  def456\n"
+	present := shellEnv{
+		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
+		run:      func(string, ...string) (string, error) { return lsOut, nil },
+	}
+	if !localImageLoaded(present, "local-222") {
+		t.Error("a loaded tag must be reported present")
+	}
+	if localImageLoaded(present, "local-999") {
+		t.Error("an unloaded tag must be reported absent")
+	}
+	// No sbx on PATH -> fail OPEN (true).
+	noSbx := shellEnv{
+		lookPath: func(string) (string, error) { return "", fmt.Errorf("not found") },
+		run:      func(string, ...string) (string, error) { return "", nil },
+	}
+	if !localImageLoaded(noSbx, "local-222") {
+		t.Error("must fail open (true) when sbx is unavailable")
+	}
+	// ls error -> fail OPEN (true).
+	lsErr := shellEnv{
+		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
+		run:      func(string, ...string) (string, error) { return "", fmt.Errorf("boom") },
+	}
+	if !localImageLoaded(lsErr, "local-222") {
+		t.Error("must fail open (true) when `sbx template ls` errors")
+	}
+}

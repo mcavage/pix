@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,8 +83,8 @@ func TestHostStateHostReadiness(t *testing.T) {
 	}
 }
 
-func TestHostModeHasProviderRef(t *testing.T) {
-	mk := func(hostmode string) shellEnv {
+func TestProviderRefSet(t *testing.T) {
+	mk := func(refs string) shellEnv {
 		return shellEnv{
 			getenv: func(k string) string {
 				if k == "XDG_CONFIG_HOME" {
@@ -92,38 +93,37 @@ func TestHostModeHasProviderRef(t *testing.T) {
 				return ""
 			},
 			readFile: func(p string) (string, error) {
-				if p == filepath.Join("/cfg", "pi-stack", "hostmode.env") {
-					return hostmode, nil
+				if p == filepath.Join("/cfg", "pi-stack", "op-refs.env") {
+					return refs, nil
 				}
 				return "", os.ErrNotExist
 			},
 		}
 	}
-	if hostModeHasProviderRef(mk("")) {
-		t.Error("empty hostmode.env must report no provider ref")
+	if providerRefSet(mk(""), "ANTHROPIC_API_KEY") {
+		t.Error("empty op-refs.env must report no ref")
 	}
-	if !hostModeHasProviderRef(mk("ANTHROPIC_API_KEY=op://v/a/k\n")) {
-		t.Error("a filled provider ref must be detected")
+	if !providerRefSet(mk("ANTHROPIC_API_KEY=op://v/a/k\n"), "ANTHROPIC_API_KEY") {
+		t.Error("a filled ref must be detected")
 	}
-	if hostModeHasProviderRef(mk("SLACK_TOKEN=op://v/s/t\n")) {
-		t.Error("a non-provider ref must not count")
+	if providerRefSet(mk("OPENAI_API_KEY=op://v/o/k\n"), "ANTHROPIC_API_KEY") {
+		t.Error("a different provider's ref must not count")
 	}
 }
 
-// When host mode has no keys and it's non-interactive, ensureHostModeKeys warns
-// clearly (Ollama-only) and never prompts.
-func TestEnsureHostModeKeys_NoRefsNonInteractive(t *testing.T) {
+// setupProvisionKeys, non-interactive with no op and no sbx: it must not prompt
+// and must fail OPEN (true) so a box without sbx isn't blocked.
+func TestSetupProvisionKeys_NoSbxFailsOpen(t *testing.T) {
 	env := shellEnv{
+		lookPath: func(string) (string, error) { return "", fmt.Errorf("not found") },
 		getenv:   func(string) string { return "/cfg" },
 		readFile: func(string) (string, error) { return "", os.ErrNotExist },
 	}
 	var out bytes.Buffer
-	ensureHostModeKeys(env, strings.NewReader(""), &out, false)
-	s := out.String()
-	if !strings.Contains(s, "Ollama-only") || !strings.Contains(s, "no cloud keys") {
-		t.Errorf("expected an Ollama-only warning, got: %q", s)
+	if !setupProvisionKeys(env, strings.NewReader(""), &out, false) {
+		t.Error("must fail open (true) when sbx can't be probed")
 	}
-	if strings.Contains(s, "Manage model keys in 1Password") {
-		t.Error("must not prompt on the non-interactive path")
+	if strings.Contains(out.String(), ": ") && strings.Contains(out.String(), "Paste an op://") {
+		t.Error("non-interactive must not prompt for refs")
 	}
 }

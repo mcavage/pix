@@ -81,6 +81,31 @@ type hostState struct {
 	Models      hostStateModels    `json:"models"`
 	Pack        hostStatePack      `json:"pack"`
 	Host        hostStateHost      `json:"host"`
+	Identity    hostStateIdentity  `json:"identity"`
+}
+
+// hostStateIdentity is who the user is, read from the HOST's git config (the
+// sandbox can't see ~/.gitconfig), so onboarding can greet them by name instead
+// of starting anonymous.
+type hostStateIdentity struct {
+	Name  string `json:"name,omitempty"`
+	Email string `json:"email,omitempty"`
+}
+
+// readGitIdentity reads user.name/user.email from git config (global + local).
+// Best-effort: empty when git is absent or unset.
+func readGitIdentity(env shellEnv) hostStateIdentity {
+	id := hostStateIdentity{}
+	if env.run == nil {
+		return id
+	}
+	if out, err := env.run("git", "config", "--get", "user.name"); err == nil {
+		id.Name = strings.TrimSpace(out)
+	}
+	if out, err := env.run("git", "config", "--get", "user.email"); err == nil {
+		id.Email = strings.TrimSpace(out)
+	}
+	return id
 }
 
 // buildHostState gathers the host-visible facts. Pure w.r.t. its inputs so it is
@@ -227,6 +252,7 @@ func writeHostStateFile(workspace string, cfg *config.Config, env shellEnv, mcpG
 		source = "1password"
 	}
 	hs := buildHostState(cfg, sbxOut, sbxOK, dial, mcpGatewayOn, source, resolveHostStatePack(cfg, packOverride))
+	hs.Identity = readGitIdentity(env)
 
 	dir := filepath.Join(workspace, ".pi-stack")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

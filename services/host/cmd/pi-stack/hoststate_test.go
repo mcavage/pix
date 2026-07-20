@@ -77,3 +77,25 @@ func TestBuildHostState_NotProvisioned(t *testing.T) {
 		t.Error("source must not contain a key value")
 	}
 }
+
+func TestReadGitIdentity(t *testing.T) {
+	env := shellEnv{
+		run: func(name string, args ...string) (string, error) {
+			if name == "git" && len(args) == 3 && args[2] == "user.name" {
+				return "Mark C\n", nil
+			}
+			if name == "git" && len(args) == 3 && args[2] == "user.email" {
+				return "mark@example.com\n", nil
+			}
+			return "", nil
+		},
+	}
+	id := readGitIdentity(env)
+	if id.Name != "Mark C" || id.Email != "mark@example.com" {
+		t.Errorf("git identity not read: %+v", id)
+	}
+	// No git / nil run -> empty, no panic.
+	if got := readGitIdentity(shellEnv{}); got.Name != "" || got.Email != "" {
+		t.Errorf("expected empty identity with no run, got %+v", got)
+	}
+}

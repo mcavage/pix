@@ -88,20 +88,16 @@ func hostModeRefsPath(env shellEnv) string {
 	return filepath.Join(filepath.Dir(defaultOpRefsPath(env)), "hostmode.env")
 }
 
-// hostModeHasProviderRef reports whether hostmode.env declares at least one
-// FILLED provider-key op:// ref. Host mode does NOT use the sandbox proxy, so
-// this is the real question "can host mode reach a cloud model?" — distinct from
-// sbx having proxy-injected keys.
-func hostModeHasProviderRef(env shellEnv) bool {
-	if env.readFile == nil {
-		return false
-	}
-	content, err := env.readFile(hostModeRefsPath(env))
-	if err != nil {
+// providerRefSet reports whether op-refs.env already declares a FILLED op:// ref
+// for one provider env var (used by setup to skip re-prompting a provider that's
+// already wired).
+func providerRefSet(env shellEnv, envVar string) bool {
+	_, content, exists := opRefsContent(env)
+	if !exists {
 		return false
 	}
 	for _, r := range parseOpRefs(content) {
-		if _, ok := providerKeyRefs[r.key]; ok && r.isRef && !r.placeholder {
+		if r.key == envVar && r.isRef && !r.placeholder {
 			return true
 		}
 	}
@@ -237,7 +233,9 @@ func ensureProviderKeysFromRefs(env shellEnv, out io.Writer) {
 		if val == "" {
 			continue
 		}
-		if _, err := env.run("sbx", "secret", "set", "-g", p.name, "-t", val); err == nil {
+		// -f: 1Password is the source of truth, so overwrite whatever sbx has
+		// (sbx errors on an existing secret without it).
+		if _, err := env.run("sbx", "secret", "set", "-f", "-g", p.name, "-t", val); err == nil {
 			fmt.Fprintf(out, "pi-stack: resolved %s from 1Password\n", p.name)
 		}
 	}
@@ -300,10 +298,12 @@ func syncProviderKeys(env shellEnv, out io.Writer) (synced, failed int, fatal er
 			failed++
 			continue
 		}
-		// `sbx secret set -g <name> -t <value>` is sbx's own documented interface.
-		// The value is briefly an argv element on the HOST; it is never written to
-		// pi-stack's disk and never enters the VM.
-		if sbxOut, err := env.run("sbx", "secret", "set", "-g", name, "-t", val); err != nil {
+		// `sbx secret set -f -g <name> -t <value>` is sbx's own documented interface.
+		// -f overwrites an existing secret: 1Password is the source of truth, so a
+		// re-sync must replace the sbx copy (without it sbx errors "secret already
+		// exists"). The value is briefly an argv element on the HOST; it is never
+		// written to pi-stack's disk and never enters the VM.
+		if sbxOut, err := env.run("sbx", "secret", "set", "-f", "-g", name, "-t", val); err != nil {
 			detail := strings.TrimSpace(firstLine(sbxOut))
 			if detail == "" {
 				detail = err.Error()

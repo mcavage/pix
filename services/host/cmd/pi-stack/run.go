@@ -150,6 +150,22 @@ func runRun(argv []string) {
 		applyPackToLaunch(cfg, &o, defaultShellEnv())
 	}
 
+	// Local-image preflight: when we're about to pin --template to a locally loaded
+	// tag (a --dev / unreleased build) and that tag is NOT in sbx's image store, sbx
+	// would try to PULL it from the registry — but local-* tags are never published,
+	// so the user gets a confusing interactive "pull? use cached?" prompt and a slow
+	// hang. Refuse fast with the real fix instead. (Only on create; a re-attach
+	// reads the sandbox's own spec and doesn't re-pin --template.)
+	if willCreate(state, o.Replace) && o.LocalImageTag != "" && len(o.Kits) == 0 && o.LocalKit != "" {
+		if !localImageLoaded(defaultShellEnv(), o.LocalImageTag) {
+			fmt.Fprintf(os.Stderr, "pi-stack: local image %s:%s is not loaded in sbx.\n", dockerImageRepo, o.LocalImageTag)
+			fmt.Fprintln(os.Stderr, "It's a local build (never published), so sbx would try to pull it and stall on a prompt.")
+			fmt.Fprintln(os.Stderr, "Load this build into sbx first, from your pi-stack checkout:")
+			fmt.Fprintln(os.Stderr, "  make load")
+			os.Exit(1)
+		}
+	}
+
 	plan := planSandboxLaunch(state, o.Replace, cfg, o, version)
 	switch {
 	case o.Replace:
@@ -448,6 +464,35 @@ func repoFromBinary() (string, bool) {
 		return repo, true
 	}
 	return "", false
+}
+
+// localImageLoaded reports whether sbx's template store already carries
+// dockerImageRepo:tag. Used to refuse a launch that would otherwise make sbx
+// PULL a never-published local-* image (the confusing "pull? use cached?"
+// prompt). Fails OPEN (returns true) whenever it can't check — no sbx, ls error,
+// unparseable output — so it never blocks a launch it isn't sure about (worst
+// case is the old behavior, never a false refusal). `sbx template ls` columns are
+// repo / tag / id, matching the Makefile's own load-target parsing.
+func localImageLoaded(env shellEnv, tag string) bool {
+	if tag == "" || env.run == nil {
+		return true
+	}
+	if env.lookPath != nil {
+		if _, err := env.lookPath("sbx"); err != nil {
+			return true
+		}
+	}
+	out, err := env.run("sbx", "template", "ls")
+	if err != nil {
+		return true
+	}
+	for _, ln := range strings.Split(out, "\n") {
+		f := strings.Fields(ln)
+		if len(f) >= 2 && f[0] == dockerImageRepo && f[1] == tag {
+			return true
+		}
+	}
+	return false
 }
 
 // readLocalImageTag returns the trimmed contents of <root>/out/.local-image-tag

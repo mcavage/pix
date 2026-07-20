@@ -35,6 +35,10 @@ cat .pi-stack/host-state.json 2>/dev/null
 
 ## What to actually do
 
+0. **Greet them by name if you know it.** host-state has an `identity.name` (read
+   from their git config on the host). If it's there, open with their first name,
+   naturally ("Hey Mark —"). If it's absent, don't ask for it; just skip.
+
 1. **Open with the point, in a few sentences.** Say what pi-stack is (a coding
    agent that works in a throwaway sandbox, so it can build and run things without
    risking their machine) and then the reason it's different and why they're
