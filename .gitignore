@@ -113,3 +113,6 @@ services/host/pi-stack
 services/host/pi-stack-host
 # stray `go build` artifact if you compile inside the launcher package dir
 services/host/cmd/pi-stack/pi-stack
+
+# stray cross-compile artifacts
+*.exe
