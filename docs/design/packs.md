@@ -69,6 +69,16 @@ my-pack/
   pack.lock          # generated: resolved refs + plugin SHAs
 ```
 
+**Pack creation adopts an existing repo OR inits a fresh one.** `pi-stack pack
+new [PATH]` (and the onboarding lazy-create) resolves the target this way:
+- PATH is already a git repo (or already has a `pack.toml`) -> USE it in place;
+  just add a `pack.toml` if missing. Never re-init, never clobber history.
+- PATH exists but is not a repo -> `git init` it, add `pack.toml`.
+- PATH absent -> create the dir, `git init`, add `pack.toml`.
+- No PATH -> the personal-pack root (`~/.local/share/pi-stack/skills`), same
+  rules. So a user who already keeps a skills/dotfiles repo points setup at it and
+  it becomes their pack; everyone else gets one initialized for them.
+
 `pi-stack pack add <kind> <name>` is the one authoring verb (kind =
 `skill|mcp|proxy|knowledge`). It creates `pack.toml` implicitly on first use
 (one-line stderr notice), writes the one file, and registers it — including its
@@ -264,8 +274,11 @@ Two v1 correctness must-fixes the reviewer flagged regardless of scope:
 3. **Provenance/signing: deferred to v2** with host execution. v1 is markdown +
    refs (no pack code runs), so trust = the git remote, like `npm install` from a
    GitHub URL.
-4. **Personal pack is local-only by default** — no auto-push, no surprise repo
-   creation. Offer to add a remote later when the user wants cross-machine sync.
+4. **Personal pack is local; the user pushes to git themselves.** pi-stack's
+   involvement ends at `git init` — it never adds a remote, never pushes, and
+   never even OFFERS to. Remotes, cross-machine sync, and backup are the user's
+   own git workflow, unmediated (matches "skills belong in git, the user checks
+   them in").
 5. **Name is `pack`.** Retire user-facing "kit"/"bundle" overlap (kit = sbx
    sandbox image config; a pack *contains* an OKF bundle).
 6. **Compile-into-`pi-stack-host` is NOT a pack concern** — packs are 100%
