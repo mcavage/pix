@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -208,13 +209,18 @@ func runHostSetup(errw *os.File) error {
 		fmt.Fprintln(errw, "pi-stack host setup: `pi` not found on PATH — install the image's pinned version:")
 		fmt.Fprintln(errw, "  npm install -g "+hostPinnedPiPackage)
 	} else {
+		fmt.Fprintf(errw, "pi-stack host setup: installing %d pi extensions...\n", len(hostPiPackages))
 		for _, p := range hostPiPackages {
 			cmd := exec.Command(piBin, "install", "npm:"+p)
 			cmd.Env = append(os.Environ(), "PI_CODING_AGENT_DIR="+dir)
-			cmd.Stdout = errw
-			cmd.Stderr = errw
+			// Capture the (very noisy) npm output; only surface it if the install
+			// FAILS, so a clean setup stays quiet but real errors still show.
+			var buf bytes.Buffer
+			cmd.Stdout = &buf
+			cmd.Stderr = &buf
 			if err := cmd.Run(); err != nil {
 				failed = append(failed, p)
+				fmt.Fprintf(errw, "  ✗ %s: %v\n%s\n", p, err, strings.TrimRight(buf.String(), "\n"))
 			}
 		}
 	}
