@@ -260,9 +260,10 @@ commands when something is missing.
 `pi-stack host [DIR]` runs pi **directly on your machine** — no sandbox, no
 network fence, real credentials. It exists for one narrow case: developing
 pi-stack itself, which needs the host's Docker/`sbx`/`make` that the VM
-structurally cannot reach. It is disabled by default and stays off until you
-run `pi-stack config set host.enabled true`, then `pi-stack host setup` once to
-provision `~/.local/state/pi-stack/host-agent`. Cloud keys come from op://
+structurally cannot reach. It is disabled by default; enable it in the safe order (provision first, since
+the gate stays off until provisioning succeeds): `pi-stack host setup` to
+provision `~/.local/state/pi-stack/host-agent`, then `pi-stack config set
+host.enabled true`. Or let `pi-stack setup` offer it (default-No). Cloud keys come from op://
 refs in `hostmode.env` next to `config.toml`, resolved just-in-time by `op run`
 and never persisted; without that file the session is Ollama-only.
 

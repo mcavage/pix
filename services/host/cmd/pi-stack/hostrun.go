@@ -92,11 +92,13 @@ guardrails (guard extension, workspace checks, disabled subagents) reduce
 accidents — they are NOT a security boundary. For anything you wouldn't hand a
 shell to, use ` + "`pi-stack run`" + ` (the sandbox).
 
-If you understand the above and want it anyway, enable it deliberately:
+If you understand the above and want it anyway, provision first, THEN enable
+(the gate stays off until provisioning succeeds, so this is the safe order):
 
+  pi-stack host setup
   pi-stack config set host.enabled true
 
-then provision once with ` + "`pi-stack host setup`" + ` and launch with ` + "`pi-stack host`" + `.
+then launch with ` + "`pi-stack host`" + `.
 `
 }
 

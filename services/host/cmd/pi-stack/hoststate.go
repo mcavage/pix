@@ -129,11 +129,7 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		Overlay:   hostStateOverlay{Kit: overlayKit},
 		Models:    hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},
 		Pack:      pack,
-		Host: hostStateHost{
-			Enabled:     cfg.Host.Enabled,
-			Provisioned: hostProvisioned(),
-			Ready:       cfg.Host.Enabled && hostProvisioned(),
-		},
+		Host:      buildHostStateHost(cfg),
 	}
 	// Provisioned: an inherited, fully set-up environment that must NOT be
 	// re-onboarded — keys resolved AND a knowledge bundle already seeded AND an
@@ -156,6 +152,13 @@ func containsStr(list []string, s string) bool {
 func dirHasEntries(path string) bool {
 	ents, err := os.ReadDir(path)
 	return err == nil && len(ents) > 0
+}
+
+// buildHostStateHost builds the host slice with a SINGLE hostProvisioned() probe so
+// Ready can never disagree with Provisioned within one snapshot.
+func buildHostStateHost(cfg *config.Config) hostStateHost {
+	prov := hostProvisioned()
+	return hostStateHost{Enabled: cfg.Host.Enabled, Provisioned: prov, Ready: cfg.Host.Enabled && prov}
 }
 
 // hostProvisioned reports whether host mode is actually installed (the agent dir

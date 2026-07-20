@@ -88,6 +88,26 @@ func hostModeRefsPath(env shellEnv) string {
 	return filepath.Join(filepath.Dir(defaultOpRefsPath(env)), "hostmode.env")
 }
 
+// mirrorProviderRefsToHostMode copies every FILLED provider-key op:// ref from
+// op-refs.env into hostmode.env, so host mode's `op run --env-file=hostmode.env`
+// has the same model keys as the sandbox even when the refs were set BEFORE this
+// feature (e.g. via `pi-stack secret set`, which writes only op-refs.env, or by a
+// bootstrap that resolved EXISTING refs without ever touching the offer path).
+// Upserts (never truncates unrelated host-mode entries); best-effort.
+func mirrorProviderRefsToHostMode(env shellEnv) {
+	_, content, exists := opRefsContent(env)
+	if !exists {
+		return
+	}
+	dst := hostModeRefsPath(env)
+	for _, r := range parseOpRefs(content) {
+		if _, ok := providerKeyRefs[r.key]; !ok || !r.isRef || r.placeholder {
+			continue
+		}
+		_ = writeOpRefFileQuiet(env, dst, r.key, r.value)
+	}
+}
+
 // writeOpRefQuiet upserts KEY=op://ref into op-refs.env without the CLI wrapper's
 // os.Exit, so the interactive offer can loop. It VALIDATES the key as a shell env
 // var name (so a malicious pack.toml integration name can't inject extra

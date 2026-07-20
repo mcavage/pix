@@ -138,6 +138,9 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 		fmt.Fprint(out, modelKeyMissingMessage(env))
 		return fmt.Errorf("no model provider key configured — set one and re-run `pi-stack setup`")
 	}
+	// Ensure host mode gets the SAME model keys, even for refs that pre-date this
+	// feature or were resolved by the no-ritual path (which never writes hostmode.env).
+	mirrorProviderRefsToHostMode(env)
 
 	r := &onboardingResult{
 		Version:           1,
@@ -202,33 +205,49 @@ func offerHostMode(in io.Reader, out io.Writer, interactive bool) {
 	if err != nil {
 		return
 	}
-	if cfg.Host.Enabled && hostProvisioned() {
+	wasEnabled := cfg.Host.Enabled
+	if wasEnabled && hostProvisioned() {
 		fmt.Fprintln(out, "host mode: already enabled + provisioned.")
 		return
+	}
+	// Invariant: host.enabled must NEVER be true without a working provision. If we
+	// arrive already-enabled-but-unprovisioned (e.g. a prior `config set
+	// host.enabled true` with no `pi`/checkout), we either finish provisioning or
+	// disable the gate — we never leave the misleading partial state.
+	disable := func(reason string) {
+		if wasEnabled {
+			cfg.Host.Enabled = false
+			_ = cfg.Save()
+			fmt.Fprintf(out, "host mode: disabled (%s) — it was on but not provisioned; re-enable with `pi-stack host setup` then `pi-stack config set host.enabled true`.\n", reason)
+			return
+		}
+		fmt.Fprintf(out, "host mode: left disabled (%s) — enable later with `pi-stack host setup` then `pi-stack config set host.enabled true`.\n", reason)
 	}
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Host mode runs pi DIRECTLY on this machine — NO sandbox, NO network fence,")
 	fmt.Fprintln(out, "real credentials. It's for work the sandbox can't do (system installs, real")
 	fmt.Fprintln(out, "devices). Cloud keys come from your 1Password refs (hostmode.env).")
-	// Default-No: this turns OFF the sandbox safety boundary, so enabling it must be
-	// a deliberate keystroke, never the Enter-through fall-through.
-	if !confirmYN(in, out, "Enable host mode too? [y/N]: ", false) {
-		fmt.Fprintln(out, "host mode: left disabled (enable later: pi-stack config set host.enabled true).")
+	prompt := "Enable host mode too? [y/N]: "
+	if wasEnabled {
+		fmt.Fprintln(out, "(host mode is currently ENABLED but not fully provisioned.)")
+		prompt = "Finish provisioning host mode? [Y/n]: "
+	}
+	// Default-No when off (turning OFF the sandbox boundary must be a deliberate
+	// keystroke); default-Yes only to REPAIR an already-enabled broken state.
+	if !confirmYN(in, out, prompt, wasEnabled) {
+		disable("declined")
 		return
 	}
 	// PROVISION FIRST; only persist host.enabled=true if provisioning ACTUALLY
 	// succeeded. runHostSetup is lenient (it returns nil even when `pi` is missing
 	// and only prints TODOs), so verify with hostProvisioned() rather than trust
-	// its error — a checkout-less/`pi`-less install must never leave the gate on
-	// with nothing behind it, and must never print "ready".
+	// its error — an install must never leave the gate on with nothing behind it.
 	if err := runHostSetup(os.Stderr); err != nil {
-		fmt.Fprintf(out, "host mode: NOT enabled — provisioning failed: %v\n", err)
-		fmt.Fprintln(out, "finish it later: pi-stack host setup (works even while disabled)")
+		disable(fmt.Sprintf("provisioning failed: %v", err))
 		return
 	}
 	if !hostProvisioned() {
-		fmt.Fprintln(out, "host mode: NOT enabled — provisioning incomplete (see the notes above,")
-		fmt.Fprintln(out, "usually a missing `pi`). Fix it, then: pi-stack host setup && pi-stack config set host.enabled true")
+		disable("provisioning incomplete (see the notes above, usually a missing `pi`)")
 		return
 	}
 	cfg.Host.Enabled = true

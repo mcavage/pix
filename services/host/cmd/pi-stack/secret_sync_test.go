@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -162,5 +165,52 @@ func TestNormalizeOpRef(t *testing.T) {
 		if got := normalizeOpRef(in); got != want {
 			t.Errorf("normalizeOpRef(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// mirrorProviderRefsToHostMode copies FILLED provider refs from op-refs.env into
+// hostmode.env, upserting without touching unrelated entries.
+func TestMirrorProviderRefsToHostMode(t *testing.T) {
+	files := map[string]string{}
+	dir := "/cfg/pi-stack"
+	files[filepath.Join(dir, "op-refs.env")] = "ANTHROPIC_API_KEY=op://v/anthropic/key\nSLACK_TOKEN=op://v/slack/tok\n"
+	files[filepath.Join(dir, "hostmode.env")] = "EXISTING=op://v/x/y\n"
+	env := shellEnv{
+		getenv: func(k string) string {
+			if k == "XDG_CONFIG_HOME" {
+				return "/cfg"
+			}
+			return ""
+		},
+		readFile: func(p string) (string, error) {
+			if v, ok := files[p]; ok {
+				return v, nil
+			}
+			return "", os.ErrNotExist
+		},
+		writeFile: func(p string, d []byte, _ os.FileMode) error { files[p] = string(d); return nil },
+	}
+	mirrorProviderRefsToHostMode(env)
+	got := files[filepath.Join(dir, "hostmode.env")]
+	if !strings.Contains(got, "ANTHROPIC_API_KEY=op://v/anthropic/key") {
+		t.Errorf("provider ref not mirrored into hostmode.env: %q", got)
+	}
+	if !strings.Contains(got, "EXISTING=op://v/x/y") {
+		t.Errorf("mirror clobbered an unrelated hostmode.env entry: %q", got)
+	}
+	if strings.Contains(got, "SLACK_TOKEN") {
+		t.Errorf("mirror copied a non-provider ref: %q", got)
+	}
+}
+
+// writeOpRefFileQuiet must NOT clobber a file it can't read (a real read error,
+// e.g. EACCES); it fails closed instead of truncating to a single entry.
+func TestWriteOpRefFileQuiet_ReadErrorNoClobber(t *testing.T) {
+	env := shellEnv{
+		readFile:  func(string) (string, error) { return "", errors.New("permission denied") },
+		writeFile: func(string, []byte, os.FileMode) error { t.Fatal("must not write when read fails"); return nil },
+	}
+	if err := writeOpRefFileQuiet(env, "/x/op-refs.env", "ANTHROPIC_API_KEY", "op://v/a/k"); err == nil {
+		t.Fatal("expected error on unreadable file, got nil")
 	}
 }
