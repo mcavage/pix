@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"pi-stack/host/config"
@@ -147,6 +148,13 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	changes, err := applyOnboardingResult(r, cfg, env, out, func(c *config.Config) error { return c.Save() })
 	if err != nil {
 		return err
+	}
+
+	// Ensure a personal pack exists (git-init'd) so authored skills + captured
+	// knowledge have a durable, versioned home the onboarding agent can point at.
+	// Best-effort; adopts an existing repo at the path, else inits one.
+	if _, err := os.Stat(filepath.Join(config.PackDir(), packManifestName)); err != nil {
+		runPackNew(env, out, []string{config.PackDir()})
 	}
 
 	fmt.Fprintln(out, "")

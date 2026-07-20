@@ -9,6 +9,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -24,9 +25,20 @@ import (
 // Skills and knowledge are discovered by convention (skills/, knowledge/), so a
 // pack does not have to enumerate them.
 type packManifest struct {
-	Name              string `toml:"name"`
-	Schema            int    `toml:"schema"`
-	OllamaBridgeModel string `toml:"ollama_bridge_model,omitempty"`
+	Name              string            `toml:"name"`
+	Schema            int               `toml:"schema"`
+	OllamaBridgeModel string            `toml:"ollama_bridge_model,omitempty"`
+	Integrations      []packIntegration `toml:"integrations,omitempty"`
+}
+
+// packIntegration is a REFERENCE-ONLY integration (v1): the pack says "I use
+// <mcp> and need the credential <env>". It ships NO executable code — the MCP
+// server is host-provided (gog, a gateway-catalog server), and the credential is
+// solicited as an op:// ref the user owns. Pack-SHIPPED executables are v2.
+type packIntegration struct {
+	Name string `toml:"name"`          // human label
+	Env  string `toml:"env,omitempty"` // op-refs.env ENV VAR the credential lives under
+	MCP  string `toml:"mcp,omitempty"` // MCP server name to attach (host-provided)
 }
 
 // packInfo is a resolved pack on disk.
@@ -110,7 +122,7 @@ func runPackCmd(argv []string) {
 	case "show":
 		runPackShow(os.Stdout, rest)
 	case "use":
-		runPackUse(os.Stdout, rest)
+		runPackUse(env, os.Stdout, rest)
 	case "rm":
 		runPackRm(os.Stdout, rest)
 	default:
@@ -268,19 +280,106 @@ func runPackShow(out io.Writer, rest []string) {
 	if p.Manifest.OllamaBridgeModel != "" {
 		fmt.Fprintf(out, "ollama:    %s\n", p.Manifest.OllamaBridgeModel)
 	}
+	if len(p.Manifest.Integrations) > 0 {
+		env := defaultShellEnv()
+		fmt.Fprintln(out, "integrations:")
+		for _, ig := range p.Manifest.Integrations {
+			cred := ""
+			if ig.Env != "" {
+				if opRefFilled(env, ig.Env) {
+					cred = ig.Env + " ✓"
+				} else {
+					cred = ig.Env + " ✗ (run: pi-stack secret set " + ig.Env + " op://vault/item/field)"
+				}
+			}
+			fmt.Fprintf(out, "  - %s", ig.Name)
+			if ig.MCP != "" {
+				fmt.Fprintf(out, " (mcp: %s)", ig.MCP)
+			}
+			if cred != "" {
+				fmt.Fprintf(out, " — %s", cred)
+			}
+			fmt.Fprintln(out)
+		}
+	}
 }
 
-func runPackUse(out io.Writer, rest []string) {
+// opRefFilled reports whether op-refs.env has a FILLED op:// ref for env var key.
+func opRefFilled(env shellEnv, key string) bool {
+	_, content, exists := opRefsContent(env)
+	if !exists {
+		return false
+	}
+	for _, r := range parseOpRefs(content) {
+		if r.key == key && r.isRef && !r.placeholder {
+			return true
+		}
+	}
+	return false
+}
+
+// solicitPackCredentials, on a TTY, prompts for any pack integration whose op://
+// credential ref is missing, writing each accepted ref. No-op off-TTY or when op
+// isn't installed; missing refs then just surface as warnings at run time. The
+// pack ships no secret — only the user's own op:// reference is stored.
+func solicitPackCredentials(env shellEnv, in io.Reader, out io.Writer, tty bool, p *packInfo) {
+	if !tty || in == nil || !opInstalled(env) {
+		return
+	}
+	var missing []packIntegration
+	for _, ig := range p.Manifest.Integrations {
+		if ig.Env != "" && !opRefFilled(env, ig.Env) {
+			missing = append(missing, ig)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\nThis pack uses %d integration(s) needing a 1Password credential.\n", len(missing))
+	sc := bufio.NewScanner(in)
+	for _, ig := range missing {
+		fmt.Fprintf(out, "  %s -> op:// ref for %s (Enter to skip): ", ig.Name, ig.Env)
+		if !sc.Scan() {
+			return
+		}
+		ref := strings.TrimSpace(sc.Text())
+		if ref == "" {
+			continue
+		}
+		if !strings.HasPrefix(ref, "op://") {
+			fmt.Fprintf(out, "    skipped %s: not an op:// ref\n", ig.Env)
+			continue
+		}
+		if err := writeOpRefQuiet(env, ig.Env, ref); err != nil {
+			fmt.Fprintf(out, "    could not save %s: %v\n", ig.Env, err)
+			continue
+		}
+		fmt.Fprintf(out, "    saved %s\n", ig.Env)
+	}
+}
+
+func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	if len(rest) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: pi-stack pack use <path>")
+		fmt.Fprintln(os.Stderr, "usage: pi-stack pack use <path|git-url>")
 		os.Exit(2)
 	}
-	root := expandUser(rest[0])
-	abs, err := filepath.Abs(root)
-	if err == nil {
-		root = abs
+	arg := strings.TrimSpace(rest[0])
+	var root string
+	if isPackGitURL(arg) {
+		r, err := clonePack(env, out, arg)
+		if err != nil {
+			fmt.Fprintf(out, "pi-stack pack use: %v\n", err)
+			os.Exit(1)
+		}
+		root = r
+	} else {
+		root = expandUser(arg)
+		if abs, err := filepath.Abs(root); err == nil {
+			root = abs
+		}
 	}
-	if _, err := loadPack(root); err != nil {
+	p, err := loadPack(root)
+	if err != nil {
 		fmt.Fprintf(out, "pi-stack pack use: %v\n", err)
 		os.Exit(1)
 	}
@@ -295,6 +394,8 @@ func runPackUse(out io.Writer, rest []string) {
 		os.Exit(1)
 	}
 	fmt.Fprintf(out, "active pack -> %s\n", root)
+	// Solicit any 1Password creds this pack's reference-only integrations need.
+	solicitPackCredentials(env, os.Stdin, out, isTTY(os.Stdin), p)
 }
 
 func runPackRm(out io.Writer, _ []string) {
@@ -314,6 +415,75 @@ func runPackRm(out io.Writer, _ []string) {
 		os.Exit(1)
 	}
 	fmt.Fprintf(out, "detached active pack (%s). The files are untouched; re-attach with `pi-stack pack use`.\n", old)
+}
+
+// --- git-URL adoption -------------------------------------------------------
+
+// isPackGitURL reuses knowledge.go's isGitURL and additionally accepts the
+// "git+" scheme prefix used by kit URLs.
+func isPackGitURL(s string) bool {
+	s = strings.TrimSpace(s)
+	return strings.HasPrefix(s, "git+") || isGitURL(s)
+}
+
+// parsePackURL splits an optional "#ref=<ref>" (or bare "#<ref>") pin off a git
+// URL and strips a leading "git+" scheme prefix. Returns (url, ref).
+func parsePackURL(raw string) (url, ref string) {
+	url = strings.TrimPrefix(raw, "git+")
+	if i := strings.IndexByte(url, '#'); i >= 0 {
+		frag := url[i+1:]
+		url = url[:i]
+		ref = strings.TrimPrefix(frag, "ref=")
+	}
+	return url, ref
+}
+
+// packNameFromURL derives a stable local dir name from a git URL (basename minus
+// .git).
+func packNameFromURL(url string) string {
+	u := strings.TrimSuffix(url, ".git")
+	u = strings.TrimRight(u, "/")
+	base := u
+	if i := strings.LastIndexAny(u, "/:"); i >= 0 {
+		base = u[i+1:]
+	}
+	if base == "" {
+		base = "pack"
+	}
+	return base
+}
+
+// clonePack clones (or updates) a remote pack into PacksDir/<name>, pinned to the
+// optional ref, and returns the local path. SHA-pin/provenance is a v2 concern;
+// v1 trusts the git remote (Tier 0: skills/knowledge/config, no host execution).
+func clonePack(env shellEnv, out io.Writer, raw string) (string, error) {
+	if env.run == nil {
+		return "", fmt.Errorf("git not available")
+	}
+	url, ref := parsePackURL(raw)
+	name := packNameFromURL(url)
+	dest := filepath.Join(config.PacksDir(), name)
+	if err := os.MkdirAll(config.PacksDir(), 0o755); err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(filepath.Join(dest, ".git")); err == nil {
+		// Already cloned: fetch + hard-checkout the ref (or default).
+		fmt.Fprintf(out, "updating pack %q...\n", name)
+		if _, err := env.run("git", "-C", dest, "fetch", "--tags", "origin"); err != nil {
+			return "", fmt.Errorf("git fetch %s: %w", url, err)
+		}
+	} else {
+		fmt.Fprintf(out, "cloning pack %q from %s...\n", name, url)
+		if _, err := env.run("git", "clone", url, dest); err != nil {
+			return "", fmt.Errorf("git clone %s: %w", url, err)
+		}
+	}
+	if ref != "" {
+		if _, err := env.run("git", "-C", dest, "checkout", ref); err != nil {
+			return "", fmt.Errorf("git checkout %s: %w", ref, err)
+		}
+	}
+	return dest, nil
 }
 
 // --- helpers ----------------------------------------------------------------
@@ -353,6 +523,7 @@ that defines your context. See docs/design/packs.md.
                           implicit-creates the pack)
   ls                      show the active pack
   show [PATH]             inspect a pack (default: the active pack)
-  use <path>              set the active pack (run mounts its skills + knowledge)
+  use <path|git-url>      set the active pack; a git URL is cloned to
+                          ~/.local/share/pi-stack/packs/<name> (optional #ref pin)
   rm                      detach the active pack (files untouched)
 `

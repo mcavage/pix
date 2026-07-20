@@ -20,9 +20,10 @@ cat .pi-stack/host-state.json 2>/dev/null
 ```
 
 It carries: `provisioned`, `keys` (resolved + which), `memory`, `knowledge`
-(bundles + seeded), `gog`, `mcp`, `overlay`, `models`. If the file is absent,
-fall back to the probe in Step 2 and treat host config as unknown (don't invent
-it).
+(bundles + seeded), `gog`, `mcp`, `overlay`, `models`, and `pack` (`active`,
+`path`, `git_initialized`, `skills`, `knowledge`). State pack facts from here —
+e.g. "your pack is at `<pack.path>`". If the file is absent, fall back to the
+probe in Step 2 and treat host config as unknown (don't invent it).
 
 ## Step 1: Provisioned? Short-circuit.
 
@@ -76,13 +77,13 @@ Offer AT MOST ONE follow-up, chosen from context — never a menu of options:
   docs (design docs, ADRs, a real README), propose 3-5 specific candidates by
   name and offer to seed one via `enrich` (one confirm). If already seeded, say
   nothing.
-- **Custom skill**: only if a repeatable task/gap actually surfaced. Save it into
-  the user's PACK with `pi-stack pack add skill <name>` (implicit-creates the
-  personal pack at `~/.local/share/pi-stack/pack`, git-initialized), then draft
-  the SKILL.md and show it. **Packs live in git** — tell the user to commit it
-  (and push to their own remote when they want cross-machine sync); a reset moves
-  the working copy aside, git is the source of truth. A user who already keeps a
-  skills repo can `pi-stack pack new <path>` to adopt it instead. See
+- **Custom skill**: only if a repeatable task/gap actually surfaced. DRAFT the
+  SKILL.md and show it. The durable save is a HOST action (the `pi-stack`
+  launcher runs on the host, not in this sandbox): tell the user to run
+  `pi-stack pack add skill <name>` on their host (creates/uses the pack at
+  `host-state.pack.path`), paste your draft into the opened file, and **commit
+  it** (packs live in git; the user pushes to their own remote). A user who
+  already keeps a skills repo can `pi-stack pack new <path>` to adopt it. See
   docs/design/packs.md.
 
 Confirm before writing anything. Skip both if neither is real.

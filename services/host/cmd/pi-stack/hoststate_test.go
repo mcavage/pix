@@ -20,7 +20,10 @@ func TestBuildHostState(t *testing.T) {
 	sbxOut := "anthropic\ngithub\n"
 	up := func(int) bool { return true }
 
-	hs := buildHostState(cfg, sbxOut, true, up, true, "1password")
+	hs := buildHostState(cfg, sbxOut, true, up, true, "1password", hostStatePack{Active: true, Path: "/kb/acme", GitInitialized: true, Skills: true})
+	if !hs.Pack.Active || !hs.Pack.GitInitialized {
+		t.Errorf("pack facts not carried: %+v", hs.Pack)
+	}
 	if hs.Keys.Source != "1password" {
 		t.Errorf("keys source = %q, want 1password", hs.Keys.Source)
 	}
@@ -56,7 +59,7 @@ func TestBuildHostState(t *testing.T) {
 
 func TestBuildHostState_NotProvisioned(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y"}
-	hs := buildHostState(cfg, "", false, func(int) bool { return false }, false, "")
+	hs := buildHostState(cfg, "", false, func(int) bool { return false }, false, "", hostStatePack{})
 	if hs.Keys.Source != "sbx" {
 		t.Errorf("default keys source = %q, want sbx", hs.Keys.Source)
 	}

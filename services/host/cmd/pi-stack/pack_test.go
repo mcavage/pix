@@ -97,3 +97,26 @@ func TestActivePackRoot_OverrideWins(t *testing.T) {
 		t.Errorf("no pack -> empty, got %q", got)
 	}
 }
+
+func TestPackURLParsing(t *testing.T) {
+	cases := []struct{ raw, url, ref, name string }{
+		{"https://github.com/me/dev-pack.git", "https://github.com/me/dev-pack.git", "", "dev-pack"},
+		{"git+https://github.com/me/work-pack#ref=v2", "https://github.com/me/work-pack", "v2", "work-pack"},
+		{"git@github.com:me/x.git#main", "git@github.com:me/x.git", "main", "x"},
+	}
+	for _, c := range cases {
+		if !isPackGitURL(c.raw) {
+			t.Errorf("%q should be a git URL", c.raw)
+		}
+		u, r := parsePackURL(c.raw)
+		if u != c.url || r != c.ref {
+			t.Errorf("parsePackURL(%q) = (%q,%q), want (%q,%q)", c.raw, u, r, c.url, c.ref)
+		}
+		if got := packNameFromURL(u); got != c.name {
+			t.Errorf("packNameFromURL(%q) = %q, want %q", u, got, c.name)
+		}
+	}
+	if isPackGitURL("/local/path/pack") || isPackGitURL("./rel") {
+		t.Error("local paths must not be git URLs")
+	}
+}

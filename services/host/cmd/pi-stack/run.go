@@ -179,6 +179,18 @@ func runRun(argv []string) {
 			if p.KnowledgeDir != "" && !containsStr(cfg.KnowledgeBundles, p.KnowledgeDir) {
 				cfg.KnowledgeBundles = append(cfg.KnowledgeBundles, p.KnowledgeDir)
 			}
+			// Reference-only integrations: attach the pack's MCP servers (host-
+			// provided) and warn about any credential the pack needs but the user
+			// hasn't wired as an op:// ref yet. No pack code executes here.
+			penv := defaultShellEnv()
+			for _, ig := range p.Manifest.Integrations {
+				if ig.MCP != "" && !containsStr(cfg.MCP, ig.MCP) {
+					cfg.MCP = append(cfg.MCP, ig.MCP)
+				}
+				if ig.Env != "" && !opRefFilled(penv, ig.Env) {
+					fmt.Fprintf(os.Stderr, "pi-stack: pack integration %q needs a credential — set it: pi-stack secret set %s op://vault/item/field\n", ig.Name, ig.Env)
+				}
+			}
 		}
 	}
 

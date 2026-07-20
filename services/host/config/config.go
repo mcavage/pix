@@ -297,6 +297,11 @@ func DataDir() (string, error) {
 // working copy — the user pushes it to their own remote). See docs/design/packs.md.
 func PackDir() string { return filepath.Join(dataDirOr(), "pack") }
 
+// PacksDir is where adopted REMOTE packs are cloned:
+// $XDG_DATA_HOME/pi-stack/packs, else ~/.local/share/pi-stack/packs. Each lives
+// at <PacksDir>/<name>. Distinct from PackDir (the single personal pack).
+func PacksDir() string { return filepath.Join(dataDirOr(), "packs") }
+
 // dataDirOr returns DataDir() or, if HOME cannot be resolved, a relative
 // "pi-stack" so path builders never panic on an empty base.
 func dataDirOr() string {

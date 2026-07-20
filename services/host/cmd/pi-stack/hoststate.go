@@ -55,6 +55,14 @@ type hostStateModels struct {
 	Embed   string `json:"embed"`
 }
 
+type hostStatePack struct {
+	Active         bool   `json:"active"`          // an active/personal pack exists
+	Path           string `json:"path"`            // its root
+	GitInitialized bool   `json:"git_initialized"` // has a .git
+	Skills         bool   `json:"skills"`          // has skills/
+	Knowledge      bool   `json:"knowledge"`       // has knowledge/
+}
+
 type hostState struct {
 	Provisioned bool               `json:"provisioned"`
 	Keys        hostStateKeys      `json:"keys"`
@@ -64,12 +72,13 @@ type hostState struct {
 	MCP         hostStateMCP       `json:"mcp"`
 	Overlay     hostStateOverlay   `json:"overlay"`
 	Models      hostStateModels    `json:"models"`
+	Pack        hostStatePack      `json:"pack"`
 }
 
 // buildHostState gathers the host-visible facts. Pure w.r.t. its inputs so it is
 // unit-testable: sbxSecretsOut is the raw `sbx secret ls` output (sbxOK false
 // when sbx couldn't be run), dial probes a local port.
-func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, mcpGatewayOn bool, keysSource string) hostState {
+func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, mcpGatewayOn bool, keysSource string, pack hostStatePack) hostState {
 	dialer := func(p int) bool {
 		if dial == nil {
 			return false
@@ -111,6 +120,7 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		MCP:       hostStateMCP{Enabled: mcpGatewayOn && len(mcpServers) > 0, Servers: mcpServers},
 		Overlay:   hostStateOverlay{Kit: overlayKit},
 		Models:    hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},
+		Pack:      pack,
 	}
 	// Provisioned: an inherited, fully set-up environment that must NOT be
 	// re-onboarded — keys resolved AND a knowledge bundle already seeded AND an
@@ -135,6 +145,31 @@ func dirHasEntries(path string) bool {
 	return err == nil && len(ents) > 0
 }
 
+// resolveHostStatePack reports the active pack (config `pack`) or, failing that,
+// the personal pack (PackDir), so the in-VM onboarding agent states pack facts
+// instead of guessing.
+func resolveHostStatePack(cfg *config.Config) hostStatePack {
+	root := activePackRoot(cfg.Pack, "")
+	if root == "" {
+		root = config.PackDir()
+	}
+	p, err := loadPack(root)
+	if err != nil {
+		return hostStatePack{}
+	}
+	gitInit := false
+	if _, e := os.Stat(filepath.Join(root, ".git")); e == nil {
+		gitInit = true
+	}
+	return hostStatePack{
+		Active:         true,
+		Path:           p.Root,
+		GitInitialized: gitInit,
+		Skills:         p.SkillsDir != "",
+		Knowledge:      p.KnowledgeDir != "",
+	}
+}
+
 // writeHostStateFile writes <workspace>/.pi-stack/host-state.json. Best-effort:
 // a failure just means the agent has no truth file and falls back to probing
 // (the pre-fix behavior), never a broken launch.
@@ -155,7 +190,7 @@ func writeHostStateFile(workspace string, cfg *config.Config, env shellEnv, mcpG
 	if providerKeyRefsPresent(env) {
 		source = "1password"
 	}
-	hs := buildHostState(cfg, sbxOut, sbxOK, dial, mcpGatewayOn, source)
+	hs := buildHostState(cfg, sbxOut, sbxOK, dial, mcpGatewayOn, source, resolveHostStatePack(cfg))
 
 	dir := filepath.Join(workspace, ".pi-stack")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
