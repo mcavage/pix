@@ -55,6 +55,10 @@ type hostStateModels struct {
 	Embed   string `json:"embed"`
 }
 
+type hostStateHost struct {
+	Enabled bool `json:"enabled"` // is `pi-stack host` (unsandboxed) enabled?
+}
+
 type hostStatePack struct {
 	Active         bool   `json:"active"`          // an active/personal pack exists
 	Path           string `json:"path"`            // its root
@@ -73,6 +77,7 @@ type hostState struct {
 	Overlay     hostStateOverlay   `json:"overlay"`
 	Models      hostStateModels    `json:"models"`
 	Pack        hostStatePack      `json:"pack"`
+	Host        hostStateHost      `json:"host"`
 }
 
 // buildHostState gathers the host-visible facts. Pure w.r.t. its inputs so it is
@@ -121,6 +126,7 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		Overlay:   hostStateOverlay{Kit: overlayKit},
 		Models:    hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},
 		Pack:      pack,
+		Host:      hostStateHost{Enabled: cfg.Host.Enabled},
 	}
 	// Provisioned: an inherited, fully set-up environment that must NOT be
 	// re-onboarded — keys resolved AND a knowledge bundle already seeded AND an

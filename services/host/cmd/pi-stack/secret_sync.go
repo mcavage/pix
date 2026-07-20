@@ -112,8 +112,16 @@ func writeOpRefFileQuiet(env shellEnv, path, key, value string) error {
 	}
 	content := ""
 	if env.readFile != nil {
-		if c, err := env.readFile(path); err == nil {
+		c, rerr := env.readFile(path)
+		switch {
+		case rerr == nil:
 			content = c
+		case os.IsNotExist(rerr):
+			// absent file = empty, upsert creates it
+		default:
+			// A real read error (e.g. EACCES on a write-only file) must NOT be
+			// treated as empty — overwriting would truncate existing refs.
+			return fmt.Errorf("read %s: %w", path, rerr)
 		}
 	}
 	return env.writeFile(path, []byte(upsertOpRef(content, key, value)), 0o600)

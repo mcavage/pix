@@ -1131,8 +1131,13 @@ func prepareTaskLaunchSandbox(env shellEnv, name string) error {
 // modifying run.go, and bypasses deriveSandboxName because o.Name is set.
 func launchTask(o runOpts) error {
 	env := defaultShellEnv()
-	if _, err := env.lookPath("sbx"); err == nil && !anyModelKeyPresent(env) {
-		return fmt.Errorf("%s", strings.TrimRight(modelKeyMissingMessage(env), "\n"))
+	if _, err := env.lookPath("sbx"); err == nil {
+		// Resolve any 1Password key refs into sbx first (same no-ritual path as run),
+		// so a task on a fresh machine isn't rejected for a key it can auto-provision.
+		ensureProviderKeysFromRefs(env, os.Stderr)
+		if !anyModelKeyPresent(env) {
+			return fmt.Errorf("%s", strings.TrimRight(modelKeyMissingMessage(env), "\n"))
+		}
 	}
 	cfg, _, err := loadResolvedConfig()
 	if err != nil {
