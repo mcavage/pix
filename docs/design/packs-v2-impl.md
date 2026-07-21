@@ -11,6 +11,50 @@ lightweight ATAM tradeoff notes on each hard decision.
 
 ---
 
+## AS-SHIPPED ADDENDUM (supersedes the `pack.lock`-based trust design below)
+
+Both phases shipped and passed cross-vendor review + security 5/5. The build
+hardened the trust model well past this original spec; where they conflict, THIS
+addendum is authoritative (the sections below are the pre-review design intent):
+
+- **Trust acceptance AND activation provenance live in a launcher-owned host-state
+  store, NOT in the pack's `pack.lock`.** A pack-supplied `pack.lock` is
+  attacker-controlled (a downloaded/ZIP'd pack), so nothing security-relevant is
+  ever read from the payload. The store is `<config-dir>/pack-trust.json`
+  (`packtruststore.go`): symlink-refused on read AND write, atomic, and every
+  read-modify-write is serialized by a cross-process **flock** (so `pack use`
+  racing `pi-stack host` can't clobber state or orphan a host wrapper). `pack.lock`
+  remains only a local hint, never trusted; a pack-supplied one is scrubbed on
+  adoption; a one-time migration lifts a NON-adopted (local/authored) Phase-1
+  `pack.lock` activation into the store.
+- **The Tier-1 gate keys on a canonical, injective host-exec FINGERPRINT** (sorted
+  structured JSON over: each MCP's resolved argv, each host-proxy's script
+  content-sha, each `[[bin]]` name+sha+host, egress, cred names) — not name-only
+  coverage. Any host-exec change (incl. a mutated host-proxy script or a changed
+  `gog_account` argv) re-gates; acceptance is keyed by stable identity
+  (remote-without-commit, or canonical path) so a same-fingerprint new commit does
+  NOT re-prompt.
+- **Host proxies are content-pinned like `[[bin]]`** (re-hashed at install and
+  every host launch; a mutated script refuses to launch until re-accepted).
+  Install is a staged + atomic dir swap under the store lock; strict/launch fails
+  closed on any skipped/failed/never-accepted item (no half-installed set, no
+  orphan on PATH).
+- **Local-vs-remote MCP classification fails CLOSED:** an unknown/unprobeable
+  classification is treated as host-exec (Tier-1, gated), never silently Tier-0.
+  A remote gateway-catalog reference (and gog) stays Tier-0.
+- **All `<workspace>/.pi-stack/*` writes AND removes are symlink-safe**
+  (`workspacestate.go`): refuse a symlinked `.pi-stack` dir, atomic temp+rename
+  that replaces a symlinked destination rather than following it.
+- **Known residual (deliberate):** a hard kill (SIGKILL) in the tiny window
+  between the atomic activation-store write and the atomic `cfg.Save` can
+  over-retain a pack's own contribution (no user data removed; lock-only removal
+  protects hand-added entries). Recovered by re-activating or a manual config
+  edit. Ordinary failures (read-only dir, disk full) roll back cleanly.
+
+User-facing map: `docs/reference.md`.
+
+---
+
 ## 0. What already exists (do not rebuild)
 
 v1 shipped the Tier-0 slice. These are the seams v2 extends, not replaces:
