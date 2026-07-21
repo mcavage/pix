@@ -32,7 +32,7 @@ func wantsHelp(argv []string) bool {
 var knownVerbs = map[string]bool{
 	"help": true, "serve": true, "doctor": true, "onboard": true, "setup": true, "status": true,
 	"ls": true, "rm": true,
-	"config": true, "mcp": true, "memory": true, "knowledge": true,
+	"config": true, "mcp": true, "memory": true, "monitor": true, "knowledge": true,
 	"pack": true, "version": true, "run": true, "secret": true,
 	"reset": true, "uninstall": true, "man": true,
 	"backup": true, "restore": true, "state": true,
@@ -112,6 +112,9 @@ Data
   knowledge <cmd>     init | use | ls | query | sync | remote          (:11436)
   pack <cmd>          new | add | ls | show | use | rm (git-backed context bundle)
 
+Observability
+  monitor [name]       live-follow a sandbox's out-of-sandbox traffic (:11437)
+
 Models & agents (cost/latency/accuracy routing)
   agent <cmd>         ls | new | edit | rm | reassess (subagents as objects)
   route <cmd>         pick | compile | show | models (intent -> model)
@@ -178,6 +181,8 @@ func verbUsage(verb string) (string, bool) {
 		return packUsage, true
 	case "memory", "mem":
 		return memoryUsage + "\n", true
+	case "monitor":
+		return monitorUsage, true
 	case "backup":
 		return backupUsage, true
 	case "restore":

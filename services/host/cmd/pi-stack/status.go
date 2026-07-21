@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"pi-stack/host/config"
+	"pi-stack/host/monitor"
 )
 
 // gogAuthTimeout bounds the `gog auth status` probe so the fast, read-only
@@ -74,6 +75,7 @@ type statusReport struct {
 	Profile    string          `json:"profile"`
 	Memory     bool            `json:"memory_up"`
 	Knowledge  bool            `json:"knowledge_up"`
+	Monitor    bool            `json:"monitor_up"`
 	Providers  map[string]bool `json:"providers"`
 	Bundles    []bundleStatus  `json:"knowledge_bundles"`
 	MCP        []string        `json:"mcp"`
@@ -118,6 +120,10 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	if env.dial != nil {
 		st.Memory = env.dial(memPort)
 		st.Knowledge = env.dial(knPort)
+		// monitor is an on-demand tool (`pi-stack monitor`), not a background
+		// serve service, so its up/down state is reported but never feeds the
+		// "serve: up/down" label or an outstanding-item TODO below.
+		st.Monitor = env.dial(monitor.DefaultPort)
 	}
 
 	// Providers: probe `sbx secret ls` once (proxy-injected keys; never in VM).
@@ -226,6 +232,7 @@ func (st statusReport) render(out io.Writer) {
 	}
 	fmt.Fprintf(out, "  services    memory %s :%d    knowledge %s :%d    (serve: %s)\n",
 		okGlyph(st.Memory), memoryClient().Port, okGlyph(st.Knowledge), knowledgeClient().Port, serve)
+	fmt.Fprintf(out, "  monitor     %s :%d    (on-demand: `pi-stack monitor`)\n", okGlyph(st.Monitor), monitor.DefaultPort)
 
 	var prov []string
 	for _, k := range []string{"anthropic", "openai", "google", "github"} {

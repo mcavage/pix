@@ -93,6 +93,8 @@ func main() {
 		runSecretCmd(args[1:])
 	case "memory", "mem":
 		runMemory(args[1:])
+	case "monitor":
+		runMonitor(args[1:])
 	case "backup":
 		runBackup(args[1:])
 	case "restore":
@@ -327,6 +329,7 @@ Workflow
 Setup & health
   setup            guided setup: keys, memory, pack (knowledge/integrations optional)
   doctor           diagnose problems and print the exact fix commands
+  monitor [name]   live-follow a sandbox's out-of-sandbox traffic (:11437)
 
 Data
   memory           recall | remember | forget | learnings | stats

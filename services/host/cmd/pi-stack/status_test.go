@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"pi-stack/host/config"
+	"pi-stack/host/monitor"
 )
 
 // fakeStatusEnv builds a shellEnv where memory is up, knowledge down, sbx lists
@@ -72,6 +73,51 @@ func TestRenderStatusHuman(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("status output missing %q:\n%s", want, s)
 		}
+	}
+}
+
+// TestGatherStatusMonitor (DX-5): the monitor hub's up/down state is probed
+// via env.dial(monitor.DefaultPort), independent of memory/knowledge.
+func TestGatherStatusMonitor(t *testing.T) {
+	cfg := &config.Config{}
+	env := fakeStatusEnv()
+	env.dial = func(port int) bool { return port == monitor.DefaultPort }
+	st := gatherStatus(cfg, "default", env)
+	if !st.Monitor {
+		t.Error("monitor should be up when its port dials")
+	}
+	if st.Memory {
+		t.Error("memory should be down (dial only matches the monitor port here)")
+	}
+}
+
+// TestRenderStatusMonitorLine (DX-5): the human render shows a monitor line
+// with its glyph and port, consistent with the memory/knowledge line style.
+func TestRenderStatusMonitorLine(t *testing.T) {
+	cfg := &config.Config{}
+	env := fakeStatusEnv()
+	env.dial = func(port int) bool { return port == monitor.DefaultPort }
+	var out bytes.Buffer
+	renderStatus(cfg, "default", env, &out, false)
+	s := out.String()
+	if !strings.Contains(s, fmt.Sprintf("monitor     ✓ :%d", monitor.DefaultPort)) {
+		t.Errorf("status output missing the monitor line:\n%s", s)
+	}
+}
+
+// TestRenderStatusMonitorJSON (DX-5): --json carries monitor_up.
+func TestRenderStatusMonitorJSON(t *testing.T) {
+	cfg := &config.Config{}
+	env := fakeStatusEnv()
+	env.dial = func(port int) bool { return port == monitor.DefaultPort }
+	var out bytes.Buffer
+	renderStatus(cfg, "default", env, &out, true)
+	var st statusReport
+	if err := json.Unmarshal(out.Bytes(), &st); err != nil {
+		t.Fatalf("status --json invalid: %v\n%s", err, out.String())
+	}
+	if !st.Monitor {
+		t.Error("json monitor_up = false, want true")
 	}
 }
 
