@@ -37,6 +37,9 @@ import (
 //	                             --no-extensions, so they'd escape the guard)
 //	PI_SUBAGENT_MAX_DEPTH = 0    belt-and-suspenders: today's depth guard already
 //	                             refuses at depth 0/0 with no TS change
+//	PATH                  = <hostPackBinDir()>:<PATH>  (F3: the active pack's
+//	                             ACCEPTED host wrappers — host mode ONLY; the
+//	                             sandbox and the login shell never see this dir)
 //
 // All of it goes through the child's cmd.Env — never exported to the shell,
 // never persisted, gone when pi exits.
@@ -197,6 +200,18 @@ func runHostSetup(errw *os.File) error {
 	dir := hostAgentDir()
 	if err := provisionHostAgentDir(root, dir, errw); err != nil {
 		return err
+	}
+
+	// F3: lay down the ACTIVE pack's accepted host-mode wrappers (idempotent;
+	// missing or Tier-0 pack is a no-op). Best-effort by contract: a failed
+	// install prints a TODO — exactly like the pi-extension loop below — and
+	// never fails setup. The strict re-hash gate runs at every host LAUNCH.
+	if cfg, cerr := config.Load(); cerr == nil {
+		if _, werr := refreshHostPackWrappers(errw, cfg, false); werr != nil {
+			fmt.Fprintf(errw, "pi-stack host setup: TODO — pack host wrappers not installed: %v\n", werr)
+		}
+	} else {
+		fmt.Fprintf(errw, "pi-stack host setup: TODO — could not load config to install pack host wrappers: %v\n", cerr)
 	}
 
 	// Curated pi extension packages, mirroring the Dockerfile install loop. `pi
@@ -403,6 +418,12 @@ func hostChildEnv(agentDir, ollamaModel string) []string {
 		"OLLAMA_URL=http://127.0.0.1:11434/v1",
 		"PI_SUBAGENT_DISABLED=1",
 		"PI_SUBAGENT_MAX_DEPTH=0",
+		// F3: pack host-mode wrappers, prepended so an accepted wrapper shadows
+		// a same-named host tool by design (the BoM screen names every wrapper
+		// before adoption). exec.Cmd de-duplicates env keys keeping the LAST
+		// entry, so this wins over os.Environ()'s PATH for the child only —
+		// never exported, never persisted. A not-yet-existing dir is harmless.
+		"PATH=" + hostPackBinDir() + string(os.PathListSeparator) + os.Getenv("PATH"),
 	}
 	if m := strings.TrimSpace(ollamaModel); m != "" {
 		env = append(env, "OLLAMA_BRIDGE_MODEL="+m)
@@ -496,6 +517,22 @@ func runHostLaunch(o hostOpts) {
 		os.Exit(1)
 	}
 	wireKnowledgeScope(cfg, ws, defaultKnowledgeRPC())
+
+	// F3: refresh the active pack's host wrappers so a `pack use` since the
+	// last `host setup` takes effect, re-hashing every ACCEPTED [[bin]] against
+	// its pinned sha — a tampered external binary REFUSES the launch (fail
+	// closed; packs.md §9 safeguard 2). The wrappers land in hostPackBinDir(),
+	// which hostChildEnv prepends to the child PATH — this launch path is the
+	// ONLY thing that ever puts them on a PATH.
+	activePack, perr := refreshHostPackWrappers(os.Stderr, cfg, true)
+	if perr != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack host: %v\n", perr)
+		os.Exit(1)
+	}
+	// F4: tag the host session's memory scope from the active pack — the same
+	// .pi-stack/profile file `pi-stack run` writes (memory-recall/capture read
+	// it). Best-effort by contract (writeMemoryScope discards errors).
+	writeMemoryScope(ws, activePack)
 
 	// Credentials: op:// refs resolved just-in-time by `op run`, or Ollama-only.
 	// hostModelPreflight replaces modelProviderPreflight (which reads sbx

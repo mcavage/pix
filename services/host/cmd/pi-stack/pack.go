@@ -571,6 +571,20 @@ type packLock struct {
 	PriorGogAccount        string `toml:"prior_gog_account,omitempty"`
 	OllamaBridgeModel      string `toml:"ollama_bridge_model,omitempty"`
 	PriorOllamaBridgeModel string `toml:"prior_ollama_bridge_model,omitempty"`
+	// Accepted* record the Tier-1 host bill-of-materials the user approved at
+	// adoption (F5 — packtrust.go): MCP names, host wrapper names, [[bin]]
+	// name=sha pairs, egress domains, credential VAR names (never values).
+	// lockCoversBoM keys the no-re-prompt path on these; clonePack's
+	// scrubRemotePackLock guarantees a remote can never pre-accept itself.
+	AcceptedMCP         []string `toml:"accepted_mcp,omitempty"`
+	AcceptedHostProxies []string `toml:"accepted_host_proxies,omitempty"`
+	AcceptedBins        []string `toml:"accepted_bins,omitempty"`
+	AcceptedEgress      []string `toml:"accepted_egress,omitempty"`
+	AcceptedCreds       []string `toml:"accepted_creds,omitempty"`
+	// HostWrappers records the wrapper names the last activation installed into
+	// hostPackBinDir() (F3), so a switch/refresh removes exactly those — the
+	// same lock-attributed-removal posture as MCP/Knowledge above.
+	HostWrappers []string `toml:"host_wrappers,omitempty"`
 }
 
 const packLockName = "pack.lock"
@@ -1051,7 +1065,7 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 	// Parse the tail: flags (--host, --private, --ref VALUE, --env VALUE) plus an
 	// optional trailing PACK positional. Flags are shared across kinds; each kind
 	// below reads only the ones it understands.
-	var host, private bool
+	var host, private, yes bool
 	var ref, envVar string
 	var positionals []string
 	tail := rest[2:]
@@ -1062,6 +1076,8 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 			host = true
 		case a == "--private":
 			private = true
+		case a == "--yes" || a == "-y":
+			yes = true
 		case a == "--ref":
 			if i+1 >= len(tail) {
 				fmt.Fprintln(os.Stderr, "pi-stack pack add: --ref needs a value")
@@ -1210,9 +1226,12 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 		}
 		fmt.Fprintf(out, "added proxy %q to pack.toml (host=%v)\n", name, host)
 		if host {
-			// F3 (host-mode wrappers) is P2: the struct field is carried, but
-			// installation into the host agent dir's PATH is not wired in this build.
-			fmt.Fprintln(out, "note: host=true wrappers are a Phase-2 facet (host-mode PATH install is not yet wired).")
+			// F3: a host wrapper is a Tier-1 facet — it installs only after the
+			// F5 BoM gate accepts it at `pack use`, and it is on PATH for
+			// `pi-stack host` sessions ONLY (never the sandbox), behind the
+			// host.enabled machine gate.
+			fmt.Fprintf(out, "host wrapper: review + accept it with `pi-stack pack use %s` (Tier-1 host BoM gate);\n", root)
+			fmt.Fprintln(out, "once accepted it installs for `pi-stack host` sessions only (requires host.enabled).")
 		} else {
 			// Edit it, then a sandbox recreate is needed to mount it (F2/ADR-3).
 			printPackRecreateLine(out)
@@ -1250,6 +1269,19 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 		// inactive whenever the two spellings differed (e.g. `pack add mcp
 		// fastmail ./work` while cfg.Pack is the absolute form).
 		if cerr == nil && canonicalizePackRoot(cfg.Pack) == canonicalizePackRoot(root) {
+			// F5: attaching an MCP means the gateway runs its command ON THE
+			// HOST — a Tier-1 fact. Same gate as `pack use`: covered-by-lock
+			// skips the prompt, non-TTY fails closed unless --yes. On refusal
+			// the declaration stays in pack.toml (inert) but NOTHING attaches.
+			selfLock := readPackLock(root)
+			bom := computeHostBoM(p)
+			gateFired := bom.tier1() && !lockCoversBoM(selfLock, bom)
+			if gateFired {
+				if gerr := packTrustGate(os.Stdin, out, isTTY(os.Stdin), yes, p.Manifest.Name, bom); gerr != nil {
+					fmt.Fprintf(out, "pi-stack pack add: %v (declared in pack.toml, but NOT attached)\n", gerr)
+					os.Exit(1)
+				}
+			}
 			added := cfg.AddMCP(name)
 			if added {
 				// Attribution stays gated on the AddMCP result (finding #2): a
@@ -1262,9 +1294,22 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 				if !containsStr(lock.MCP, name) {
 					lock.MCP = append(lock.MCP, name)
 				}
+				// F5: the acceptance travels with the same commit as the
+				// attachment, so a later `pack use` of this pack won't re-prompt
+				// for what was just accepted here.
+				acceptHostBoM(&lock, bom)
 				if err := commitPackActivation(cfg, root, lock); err != nil {
 					fmt.Fprintf(out, "pi-stack pack add: %v\n", err)
 					os.Exit(1)
+				}
+			} else if gateFired {
+				// Nothing new attached (the name was already in cfg.MCP), but the
+				// gate DID fire and the user accepted — record it (best-effort;
+				// no config change happened, so no commit point is owed).
+				lock := readPackLock(root)
+				acceptHostBoM(&lock, bom)
+				if werr := writePackLock(root, lock); werr != nil {
+					fmt.Fprintf(out, "note: could not record the accepted host BoM: %v\n", werr)
 				}
 			}
 			// finding E: registration runs even when the name was ALREADY in
@@ -1438,11 +1483,24 @@ func solicitPackCredentials(env shellEnv, in io.Reader, out io.Writer, tty bool,
 }
 
 func runPackUse(env shellEnv, out io.Writer, rest []string) {
-	if len(rest) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: pi-stack pack use <path|git-url>")
+	// --yes / -y accepts the F5 Tier-1 host BoM without prompting (the ONLY way
+	// a non-TTY adoption of a host-exec pack can proceed — it fails closed
+	// otherwise).
+	var yes bool
+	var args []string
+	for _, a := range rest {
+		switch a {
+		case "--yes", "-y":
+			yes = true
+		default:
+			args = append(args, a)
+		}
+	}
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: pi-stack pack use [--yes] <path|git-url>")
 		os.Exit(2)
 	}
-	arg := strings.TrimSpace(rest[0])
+	arg := strings.TrimSpace(args[0])
 	var root, remoteURL, remoteCommit string
 	if isPackGitURL(arg) {
 		r, err := clonePack(env, out, arg)
@@ -1467,6 +1525,16 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	if err != nil {
 		fmt.Fprintf(out, "pi-stack pack use: %v\n", err)
 		os.Exit(1)
+	}
+	// F5: re-hash every SHA-pinned [[bin]] BEFORE anything commits or the gate
+	// even renders — activating a pack whose pinned binary does not match its
+	// declared sha is refused outright (tampered binary or stale pin), so the
+	// sha the BoM screen shows is always the sha of the actual bytes on disk.
+	for _, bn := range p.Manifest.Bins {
+		if verr := verifyPackBinSHA(root, bn); verr != nil {
+			fmt.Fprintf(out, "pi-stack pack use: pack %s: %v\n", root, verr)
+			os.Exit(1)
+		}
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -1493,15 +1561,31 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// refs are never honored (enforced inside resolvePackKnowledgeRef below).
 	adopted := remoteURL != "" || isAdoptedPack(root)
 
+	// F5: the Tier-1 trust gate. Tier-0 (no host-exec facet) adopts silently,
+	// exactly as Phase 1 did. Tier-1 halts at the BoM screen unless this pack's
+	// own lock already covers the CURRENT BoM (trust was granted at a prior
+	// adoption and nothing host-exec changed since — switching between adopted
+	// packs never re-prompts, but a new facet or a changed [[bin]] sha does).
+	// Refusal aborts here: nothing registered, installed, or committed.
+	bom := computeHostBoM(p)
+	if bom.tier1() && !lockCoversBoM(selfLock, bom) {
+		if gerr := packTrustGate(os.Stdin, out, isTTY(os.Stdin), yes, p.Manifest.Name, bom); gerr != nil {
+			fmt.Fprintf(out, "pi-stack pack use: %v\n", gerr)
+			os.Exit(1)
+		}
+	}
+
 	// MCP set (F1 + ADR-1): remove exactly what the PREVIOUS pack's last
 	// activation ACTUALLY ADDED (never a user's own manually-added MCP the
 	// pack merely re-declares — finding #2), then add what the NEW pack
 	// declares. Reversible: pack-use(A) -> pack-use(B) -> pack-use(A) restores
 	// cfg.MCP to what it was after the first pack-use(A).
 	var removedMCP, removedKnowledge []string
+	var prevLock packLock // the PREVIOUS pack's lock (switch path) — also drives the F3 host-wrapper swap
 	switch {
 	case switching:
-		removedMCP, removedKnowledge = revertPackPriorContribution(cfg, readPackLock(prevRoot))
+		prevLock = readPackLock(prevRoot)
+		removedMCP, removedKnowledge = revertPackPriorContribution(cfg, prevLock)
 	case prevRoot == root:
 		// SAME-pack reactivation (finding D): revert THIS pack's own prior
 		// contribution first, then re-apply the manifest fresh below. Without
@@ -1620,6 +1704,16 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		lock.Remote = selfLock.Remote
 		lock.Commit = selfLock.Commit
 	}
+	// F5: record the accepted host BoM (the gate above passed, or the prior
+	// acceptance already covered it — acceptance is always re-normalized to the
+	// CURRENT BoM). F3: record the intended host-wrapper install set, so the
+	// next switch/refresh clears exactly these (over-claim on a failed install
+	// is harmless: removing an absent file is a no-op).
+	acceptHostBoM(&lock, bom)
+	lock.HostWrappers = nil
+	if bom.tier1() {
+		lock.HostWrappers = declaredHostWrapperNames(p)
+	}
 	if err := commitPackActivation(cfg, root, lock); err != nil {
 		// The lock IS part of this switch's committed state (finding #3 +
 		// round-4 F1): if it can't be written, NOTHING is committed — the
@@ -1675,6 +1769,21 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		fmt.Fprintf(out, "skipped %d private knowledge ref(s) from an adopted pack (shared=false local paths are never honored for a pack cloned from a remote)\n", skippedPrivate)
 	}
 
+	// F3: swap the host-mode wrappers NOW (live for the next `pi-stack host`):
+	// clear what the previous activation installed (lock-attributed — the
+	// previous pack's lock on a switch, this pack's own on a reactivation),
+	// then install this pack's ACCEPTED set. Best-effort, like every other
+	// post-Save side effect; the strict re-hash happens again at every host
+	// launch (refreshHostPackWrappers).
+	prevHostWrappers := selfLock.HostWrappers
+	if switching {
+		prevHostWrappers = prevLock.HostWrappers
+	}
+	clearHostPackWrappers(prevHostWrappers)
+	if installed := installHostPackWrappers(out, p, lock); len(installed) > 0 {
+		fmt.Fprintf(out, "host wrappers installed (on PATH for `pi-stack host` only): %s\n", strings.Join(installed, ", "))
+	}
+
 	// Solicit any 1Password creds this pack's reference-only integrations need.
 	solicitPackCredentials(env, os.Stdin, out, isTTY(os.Stdin), p)
 
@@ -1717,6 +1826,19 @@ func runPackRm(out io.Writer, rest []string) {
 		os.Exit(1)
 	}
 	fmt.Fprintf(out, "detached active pack (%s). The files are untouched; re-attach with `pi-stack pack use`.\n", old)
+	// F3: "detached" includes the host wrappers — remove exactly what this
+	// pack's last activation installed into hostPackBinDir() (lock-attributed),
+	// and record the now-empty install set. Acceptance (Accepted*) is kept:
+	// trust was granted at adoption and re-attaching must not re-prompt.
+	if len(oldLock.HostWrappers) > 0 {
+		clearHostPackWrappers(oldLock.HostWrappers)
+		l2 := readPackLock(old)
+		l2.HostWrappers = nil
+		if werr := writePackLock(old, l2); werr != nil {
+			fmt.Fprintf(out, "note: could not update %s's pack.lock after removing its host wrappers: %v\n", old, werr)
+		}
+		fmt.Fprintf(out, "removed host wrappers: %s\n", strings.Join(oldLock.HostWrappers, ", "))
+	}
 	if len(removedMCP) > 0 {
 		fmt.Fprintf(out, "detached mcp: %s\n", strings.Join(removedMCP, ", "))
 	}
@@ -2010,19 +2132,28 @@ wrappers + config that defines your context. See docs/design/packs.md.
                                      embedding: shared (default) travels with
                                      the pack; --private does not
   add proxy <name> [P] [--host]     scaffold bin/<name> (an in-sandbox CLI
-                                     wrapper on PATH); --host marks it a
-                                     Phase-2 host-mode wrapper (not yet wired)
+                                     wrapper on PATH); --host makes it a
+                                     HOST-mode wrapper instead: Tier-1, gated
+                                     by the "pack use" BoM review, on PATH for
+                                     "pi-stack host" only
   add mcp <name> [P] [--env VAR]    declare an MCP server this pack needs +
                                      the op-refs.env credential var name
+                                     (attaching to the ACTIVE pack is Tier-1:
+                                     the host BoM gate fires; --yes accepts)
                           (all "add" forms implicit-create pack P; default P
                           is the personal pack)
   ls                      show the active pack
   show [PATH]             inspect a pack (default: the active pack)
-  use <path|git-url>      set the active pack: swaps mcp/knowledge/config in
+  use [--yes] <path|git-url>
+                          set the active pack: swaps mcp/knowledge/config in
                           ONE transaction (pack.lock tracks what to remove on
                           the next switch); a git URL is cloned to
                           ~/.local/share/pi-stack/packs/<name> (optional #ref pin).
-                          MCP attach + sandbox bin/ wrappers need a recreate
+                          A pack with HOST-exec facets (mcp, host wrappers,
+                          [[bin]]) is Tier-1: adoption halts at a host
+                          bill-of-materials review ([y/N], default No);
+                          non-TTY fails closed unless --yes. MCP attach +
+                          sandbox bin/ wrappers need a recreate
                           (pi-stack run --replace) to take effect.
   rm                      detach the active pack (files untouched)
 `

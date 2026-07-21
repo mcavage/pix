@@ -174,7 +174,8 @@ func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 	mustWritePack(t, rootB, packManifest{Name: "b", Schema: 1})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{rootA})
+	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
+	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"})
 
 	lockA := readPackLock(rootA)
 	if containsStr(lockA.MCP, "gog") {
@@ -274,7 +275,8 @@ func TestPackRm_RemovesActivePackContributions(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root})
+	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
+	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"})
 	cfgActive, _ := config.Load()
 	if !containsStr(cfgActive.MCP, "fastmail") || cfgActive.GogAccount != "work@company.com" {
 		t.Fatalf("setup: pack use did not attach as expected: %+v", cfgActive)
@@ -410,7 +412,7 @@ func TestPackAdd_Mcp_CanonicalizesActivePackComparison(t *testing.T) {
 
 	t.Chdir(dir)
 	var out bytes.Buffer
-	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", "./work"})
+	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", "./work", "--yes"})
 
 	if strings.Contains(out.String(), "activate the pack to attach it") {
 		t.Errorf("finding #7: relative path should have matched the active pack, got:\n%s", out.String())

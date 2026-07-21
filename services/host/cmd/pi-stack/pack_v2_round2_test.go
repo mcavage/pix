@@ -197,7 +197,8 @@ func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 	mustWritePack(t, rootB, packManifest{Name: "b", Schema: 1})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{rootA})
+	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
+	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"})
 	aID := canonicalizeKnowledgeBundle(filepath.Join(rootA, "knowledge"))
 	cfg, _ := config.Load()
 	if !containsStr(cfg.KnowledgeBundles, aID) || !containsStr(cfg.MCP, "a-mcp") {
@@ -238,7 +239,9 @@ func TestPackUse_SamePackReactivationPreservesAttribution(t *testing.T) {
 
 	env := fakeGitEnv(nil)
 	var out bytes.Buffer
-	runPackUse(env, &out, []string{rootA})
+	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
+	// The reactivation needs no --yes: the first use recorded the acceptance.
+	runPackUse(env, &out, []string{rootA, "--yes"})
 	out.Reset()
 	runPackUse(env, &out, []string{rootA}) // same-pack reactivation
 
@@ -326,7 +329,8 @@ func TestPackUse_RegistersMcpAlreadyPresentInConfig(t *testing.T) {
 		Integrations: []packIntegration{{Name: "Fastmail", MCP: "fastmail"}}})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root})
+	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
+	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"})
 	if !strings.Contains(out.String(), "mcp registration") {
 		t.Errorf("registerServers must run for an already-present pack MCP (retry recovery), got:\n%s", out.String())
 	}
@@ -351,7 +355,7 @@ func TestPackAdd_Mcp_RetryReregisters(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root})
+	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--yes"})
 	if !strings.Contains(out.String(), "mcp registration") {
 		t.Errorf("retrying pack add mcp must re-invoke registration, got:\n%s", out.String())
 	}

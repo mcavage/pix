@@ -223,7 +223,8 @@ func TestRevertPackPriorContribution_ToleratesOverclaimingLock(t *testing.T) {
 func TestPackAddMcp_LockWrittenBeforeSaveFailure(t *testing.T) {
 	if os.Getenv("PI_STACK_TEST_SAVEFAIL") == "add" {
 		// Child: exits 1 at the commit point (Save fails on the read-only dir).
-		runPackAdd(fakeGitEnv(nil), os.Stdout, []string{"mcp", "fastmail", os.Getenv("PI_STACK_TEST_PACK_ROOT")})
+		// --yes accepts the Phase-2 Tier-1 gate so the commit point is reached.
+		runPackAdd(fakeGitEnv(nil), os.Stdout, []string{"mcp", "fastmail", os.Getenv("PI_STACK_TEST_PACK_ROOT"), "--yes"})
 		return
 	}
 	if os.Getuid() == 0 {

@@ -324,6 +324,8 @@ func TestHostChildEnv_Contract(t *testing.T) {
 		"OLLAMA_URL=http://127.0.0.1:11434/v1",
 		"PI_SUBAGENT_DISABLED=1",
 		"PI_SUBAGENT_MAX_DEPTH=0",
+		// F3: pack host wrappers on the child PATH — host mode ONLY.
+		"PATH=" + hostPackBinDir() + string(os.PathListSeparator) + os.Getenv("PATH"),
 	}
 	if strings.Join(env, "\n") != strings.Join(want, "\n") {
 		t.Errorf("host env contract drifted:\n got: %v\nwant: %v", env, want)

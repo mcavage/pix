@@ -280,7 +280,9 @@ func TestPackAdd_Mcp_Active_AttachesAndPrintsRecreate(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root})
+	// F5 (Phase 2): attaching an MCP to the active pack is Tier-1 — the host
+	// BoM gate fires; --yes accepts it non-interactively (tests have no TTY).
+	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--yes"})
 
 	cfg2, err := config.Load()
 	if err != nil {
@@ -337,12 +339,14 @@ func TestPackUse_ReversibleSwitch(t *testing.T) {
 	env := fakeGitEnv(nil)
 	var out bytes.Buffer
 
-	runPackUse(env, &out, []string{rootA})
+	// F5 (Phase 2): packs declaring an integration.mcp are Tier-1 — --yes
+	// accepts the host BoM non-interactively (tests have no TTY).
+	runPackUse(env, &out, []string{rootA, "--yes"})
 	cfgAfterA1, _ := config.Load()
 	wantAfterA := append([]string(nil), cfgAfterA1.MCP...)
 
 	out.Reset()
-	runPackUse(env, &out, []string{rootB})
+	runPackUse(env, &out, []string{rootB, "--yes"})
 	cfgAfterB, _ := config.Load()
 	if !containsStr(cfgAfterB.MCP, "usermcp") {
 		t.Errorf("user-added mcp must survive a switch, cfg.MCP = %v", cfgAfterB.MCP)
@@ -355,7 +359,7 @@ func TestPackUse_ReversibleSwitch(t *testing.T) {
 	}
 
 	out.Reset()
-	runPackUse(env, &out, []string{rootA})
+	runPackUse(env, &out, []string{rootA, "--yes"})
 	cfgAfterA2, _ := config.Load()
 
 	if !stringSlicesEqualUnordered(cfgAfterA2.MCP, wantAfterA) {

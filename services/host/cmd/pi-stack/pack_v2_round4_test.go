@@ -91,8 +91,10 @@ func TestCommitPackActivation_LockFailureAbortsBeforeSave(t *testing.T) {
 // config file is never written at all.
 func TestPackUse_LockWriteFailureAbortsWithoutCommit(t *testing.T) {
 	if os.Getenv("PI_STACK_TEST_LOCKFAIL") == "use" {
-		// Child: this os.Exits(1) at the commit point if the fix holds.
-		runPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PI_STACK_TEST_PACK_ROOT")})
+		// Child: this os.Exits(1) at the commit point if the fix holds. --yes
+		// accepts the Phase-2 Tier-1 gate (the pack declares an mcp) so the
+		// child reaches the commit point instead of failing closed at the gate.
+		runPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PI_STACK_TEST_PACK_ROOT"), "--yes"})
 		return // reaching here (exit 0) means runPackUse did NOT abort
 	}
 	dir := t.TempDir()
@@ -130,7 +132,7 @@ func TestPackUse_LockWriteFailureAbortsWithoutCommit(t *testing.T) {
 // MCP) is left byte-for-byte alone when the lock can't be written.
 func TestPackAddMcp_LockWriteFailureAbortsWithoutCommit(t *testing.T) {
 	if os.Getenv("PI_STACK_TEST_LOCKFAIL") == "add" {
-		runPackAdd(fakeGitEnv(nil), os.Stdout, []string{"mcp", "fastmail", os.Getenv("PI_STACK_TEST_PACK_ROOT")})
+		runPackAdd(fakeGitEnv(nil), os.Stdout, []string{"mcp", "fastmail", os.Getenv("PI_STACK_TEST_PACK_ROOT"), "--yes"})
 		return
 	}
 	dir := t.TempDir()
