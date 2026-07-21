@@ -178,6 +178,14 @@ func runRun(argv []string) {
 	case plan.Reattach:
 		fmt.Fprintf(os.Stderr, "pi-stack run: starting + attaching existing sandbox %q (use --replace to recreate with current kit/mcp/flags)\n", o.Name)
 	}
+	// finding #8: a reattach is honest about live-vs-recreate for MOST facets
+	// above, but says nothing about a pack switched since this sandbox was
+	// created — its mcp/bin/skills are create-only and won't attach without
+	// --replace. Surface that explicitly rather than silently reattaching to a
+	// stale facet set.
+	if msg := stalePackReattachWarning(cfg, o, plan.Reattach); msg != "" {
+		fmt.Fprintln(os.Stderr, msg)
+	}
 	if plan.RmFirst {
 		if err := applyReplaceRm(defaultShellEnv(), plan, o.Name); err != nil {
 			fmt.Fprintf(os.Stderr, "pi-stack run: %v\n", err)
@@ -286,6 +294,28 @@ func applyReplaceRm(env shellEnv, plan runLaunchPlan, name string) error {
 		return fmt.Errorf("could not remove existing sandbox %q to replace it: %w", name, err)
 	}
 	return nil
+}
+
+// stalePackReattachWarning returns the ADR-3 "stale pack" reminder
+// (packs-v2-impl.md finding #8) `runRun` should print when RE-ATTACHING (not
+// creating, not --replace) to a sandbox while the active pack carries
+// create-only facets (mcp integrations, sandbox bin/ proxies, or skills) — none
+// of those attach to an already-running/stopped sandbox without a recreate.
+// Returns "" when there is nothing to warn about: this IS a create/replace, no
+// pack is active, or the active pack has no create-only facet.
+func stalePackReattachWarning(cfg *config.Config, o runOpts, reattaching bool) string {
+	if !reattaching || o.Replace {
+		return ""
+	}
+	root := activePackRoot(cfg.Pack, o.Pack)
+	if root == "" {
+		return ""
+	}
+	p, err := loadPack(root)
+	if err != nil || !packHasCreateOnlyFacets(p) {
+		return ""
+	}
+	return fmt.Sprintf("pi-stack: re-attaching without --replace — pack %q's mcp/bin/skills won't attach until you recreate: pi-stack run --replace", p.Manifest.Name)
 }
 
 // modelProviders are the model-provider secret keys a pi session needs at least

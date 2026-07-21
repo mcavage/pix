@@ -493,14 +493,59 @@ paths = []
 // intent than the petrification bug this prevents.
 func (c *Config) Save() error {
 	path := Path()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(c.sparseForSave()); err != nil {
 		return err
 	}
-	return os.WriteFile(path, buf.Bytes(), 0o600)
+	return writeFileAtomic(dir, path, buf.Bytes(), 0o600)
+}
+
+// writeFileAtomic writes data to path by writing a temp file IN THE SAME dir
+// (so the rename below is on one filesystem), fsync-ing it, then atomically
+// renaming it over path. os.WriteFile truncates the destination in place, so a
+// process killed (or a disk-full write error) mid-write can leave path
+// half-written/empty — the classic torn-config bug. A temp-file + fsync +
+// rename means path either has its old complete content or its new complete
+// content, never a truncated in-between: a failed write here NEVER touches
+// path, so the prior file is always left intact. The temp file is removed on
+// every failure path (best-effort; a leftover .tmp-* is harmless clutter, never
+// read by any loader) and is a no-op after a successful rename.
+func writeFileAtomic(dir, path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false // renamed away; nothing left at tmpPath to remove
+	return nil
 }
 
 // sparseForSave returns a shallow copy with every defaultable field that equals

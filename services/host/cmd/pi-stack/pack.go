@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -346,16 +347,23 @@ func packKitDir(root string) string {
 	return filepath.Join(dir, "pi-stack", "pack-kits", hex.EncodeToString(sum[:])[:16])
 }
 
-// synthesizePackKit builds (or refreshes, overwrite-in-place) the ephemeral
-// mixin kit that puts a pack's non-host bin/ wrappers on the sandbox PATH
-// (F2/ADR-2): a minimal `kind: mixin` spec.yaml, plus
-// files/usr/local/bin/<name> (0755) for each [[proxy]] with Host unset/false
-// — /usr/local/bin is already on the DHI image's PATH, so the wrapper needs no
-// in-VM shim. Returns the kit dir, or "" when the pack has no sandbox proxies
-// (nothing to mount — the caller must not stack an empty kit). Copies (never
-// symlinks): loadPack already refuses a symlinked bin/, and sbx mounts a real
-// tree. Best-effort: an I/O failure warns to out and skips that one wrapper (or
-// returns "" on a directory-level failure) rather than failing the launch.
+// synthesizePackKit builds the ephemeral mixin kit that puts a pack's non-host
+// bin/ wrappers on the sandbox PATH (F2/ADR-2): a minimal `kind: mixin`
+// spec.yaml, plus files/usr/local/bin/<name> (0755) for each [[proxy]] with
+// Host unset/false — /usr/local/bin is already on the DHI image's PATH, so the
+// wrapper needs no in-VM shim. Returns the kit dir, or "" when the pack has no
+// sandbox proxies (nothing to mount — the caller must not stack an empty kit).
+// Copies (never symlinks): loadPack already refuses a symlinked bin/, and sbx
+// mounts a real tree.
+//
+// REBUILT FROM SCRATCH every call, via a temp-dir-then-atomic-rename swap
+// (finding #6): the kit dir is never mutated/reused in place — a proxy removed
+// from pack.toml since the last synth must not leave its wrapper on PATH
+// (a stale-wrapper resurrection would otherwise persist indefinitely, keyed by
+// pack root so it never self-heals). And it FAILS CLOSED: if any declared
+// wrapper can't be read or copied, the whole synth is refused ("", no kit) —
+// never a partial/stale kit with that one wrapper silently missing or, worse,
+// left over from a previous successful synth of the SAME pack.
 func synthesizePackKit(p *packInfo, out io.Writer) string {
 	var sandboxProxies []packProxy
 	for _, pr := range p.Manifest.Proxies {
@@ -363,16 +371,22 @@ func synthesizePackKit(p *packInfo, out io.Writer) string {
 			sandboxProxies = append(sandboxProxies, pr)
 		}
 	}
+	dir := packKitDir(p.Root)
 	if len(sandboxProxies) == 0 {
+		// No sandbox proxies (any more): remove a stale kit from a pack.toml that
+		// used to declare some, so a removed proxy's wrapper never lingers on PATH.
+		_ = os.RemoveAll(dir)
 		return ""
 	}
-	dir := packKitDir(p.Root)
-	binOut := filepath.Join(dir, "files", "usr", "local", "bin")
+	tmp := dir + ".tmp"
+	_ = os.RemoveAll(tmp) // clear any leftover from a crashed prior synth
+	defer os.RemoveAll(tmp)
+	binOut := filepath.Join(tmp, "files", "usr", "local", "bin")
 	if err := os.MkdirAll(binOut, 0o755); err != nil {
 		fmt.Fprintf(out, "pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
 		return ""
 	}
-	if err := os.WriteFile(filepath.Join(dir, "spec.yaml"), []byte("kind: mixin\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, "spec.yaml"), []byte("kind: mixin\n"), 0o644); err != nil {
 		fmt.Fprintf(out, "pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
 		return ""
 	}
@@ -380,12 +394,26 @@ func synthesizePackKit(p *packInfo, out io.Writer) string {
 		src := filepath.Join(p.Root, "bin", pr.Name)
 		b, err := os.ReadFile(src)
 		if err != nil {
-			fmt.Fprintf(out, "pi-stack: pack proxy %q: %v (skipping)\n", pr.Name, err)
-			continue
+			// Fail closed: never launch with a stale/partial kit because one
+			// declared wrapper couldn't be read.
+			fmt.Fprintf(out, "pi-stack: pack proxy %q: %v (refusing to build the pack kit)\n", pr.Name, err)
+			return ""
 		}
 		if err := os.WriteFile(filepath.Join(binOut, pr.Name), b, 0o755); err != nil {
-			fmt.Fprintf(out, "pi-stack: pack proxy %q: %v (skipping)\n", pr.Name, err)
+			fmt.Fprintf(out, "pi-stack: pack proxy %q: %v (refusing to build the pack kit)\n", pr.Name, err)
+			return ""
 		}
+	}
+	// Atomic swap: everything above landed in tmp; only now replace the real kit
+	// dir, so a reader never sees a half-written kit and a removed wrapper never
+	// survives the rebuild.
+	if err := os.RemoveAll(dir); err != nil {
+		fmt.Fprintf(out, "pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
+		return ""
+	}
+	if err := os.Rename(tmp, dir); err != nil {
+		fmt.Fprintf(out, "pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
+		return ""
 	}
 	return dir
 }
@@ -408,30 +436,54 @@ func proxyShimTemplate(name string) string {
 
 // packLock is <pack-root>/pack.lock: GENERATED activation provenance, not a
 // resolver lockfile (packs-v2-impl.md §3/ADR-1). It records exactly what the
-// LAST `pack use` of this pack contributed to cfg.MCP / cfg.KnowledgeBundles, so
-// switching AWAY removes exactly that contribution — never a user's own
-// manually-added entry. Git-ignored by default (runPackNew seeds a pack-local
-// .gitignore line for it).
+// LAST `pack use` of this pack contributed to cfg.MCP / cfg.KnowledgeBundles /
+// cfg.GogAccount / cfg.OllamaBridgeModel, so switching AWAY removes/restores
+// exactly that contribution — never a user's own manually-added entry, and
+// never leaking one pack's config into the next (finding #5). Git-ignored by
+// default (runPackNew seeds a pack-local .gitignore line for it).
 type packLock struct {
 	MCP       []string `toml:"mcp,omitempty"`
 	Knowledge []string `toml:"knowledge,omitempty"`
+	// Remote/Commit are set ONLY when this pack was adopted via `pack use
+	// <git-url>` (clonePack) — a non-empty Remote is the provenance marker
+	// isAdoptedPack reads (finding #1, CRITICAL). Once set they are preserved
+	// across every later re-activation of this same pack (never re-derived from
+	// a local-path `pack use`), so adoption status can't be laundered by
+	// pointing `pack use` at the already-cloned local directory.
+	Remote string `toml:"remote,omitempty"`
+	Commit string `toml:"commit,omitempty"`
+	// GogAccount/OllamaBridgeModel record the value THIS pack's last activation
+	// set on cfg (only present when the pack's manifest declares the field).
+	// Prior* is whatever cfg held immediately BEFORE this pack overwrote it, so
+	// reverting on switch-away restores exactly that (or empty, if there was
+	// none) instead of leaking this pack's value into the next one (finding #5).
+	GogAccount             string `toml:"gog_account,omitempty"`
+	PriorGogAccount        string `toml:"prior_gog_account,omitempty"`
+	OllamaBridgeModel      string `toml:"ollama_bridge_model,omitempty"`
+	PriorOllamaBridgeModel string `toml:"prior_ollama_bridge_model,omitempty"`
 }
 
 const packLockName = "pack.lock"
 
 func packLockPath(root string) string { return filepath.Join(root, packLockName) }
 
-// readPackLock reads root's pack.lock, best-effort: an absent or unparsable
+// readPackLock reads root's pack.lock, best-effort: an absent OR UNPARSABLE
 // file returns the zero value (no recorded contribution — the caller's removal
 // set is then empty, which is the safe default: never guess at what an older
-// activation contributed).
+// activation contributed). A corrupt file is deliberately NOT trusted for a
+// partial decode (finding #3): toml.Unmarshal can populate some fields before
+// hitting a parse error, and treating that partial result as authoritative
+// could silently under- or over-report a removal set. On any parse error this
+// returns a clean zero value instead of whatever the decoder half-filled.
 func readPackLock(root string) packLock {
-	var l packLock
 	b, err := os.ReadFile(packLockPath(root))
 	if err != nil {
-		return l
+		return packLock{}
 	}
-	_ = toml.Unmarshal(b, &l)
+	var l packLock
+	if err := toml.Unmarshal(b, &l); err != nil {
+		return packLock{}
+	}
 	return l
 }
 
@@ -443,6 +495,100 @@ func writePackLock(root string, l packLock) error {
 		return err
 	}
 	return os.WriteFile(packLockPath(root), buf.Bytes(), 0o644)
+}
+
+// warnPackLockWriteFailure prints a LOUD warning when pack.lock can't be
+// written (finding #3): the lock is part of the switch's committed state (it
+// is what makes the NEXT switch reversible), so a silent "note:" undersells
+// the risk — a future `pack use`/`pack rm` may not fully undo this activation.
+func warnPackLockWriteFailure(out io.Writer, root string, err error) {
+	fmt.Fprintf(out, "WARNING: could not write pack.lock for %s: %v\n", root, err)
+	fmt.Fprintln(out, "WARNING: a future `pack use`/`pack rm` may not fully reverse this activation's mcp/knowledge/config changes.")
+}
+
+// isAdoptedPack reports whether root's pack.lock carries adoption provenance
+// (a non-empty Remote), i.e. this pack was cloned from a remote via `pack use
+// <git-url>` at some point (clonePack/markPackAdopted set it, and it survives
+// every later re-activation). Used by the finding-#1 CRITICAL guard: a
+// shared=false local-path [[knowledge]] reference is NEVER honored for an
+// adopted pack, because pack.toml there is attacker-controlled input from the
+// remote — honoring it would let a malicious pack.toml point AddKnowledgeBundle
+// at an arbitrary host directory (e.g. ~/.ssh) that the sandbox can then read
+// via the knowledge service.
+func isAdoptedPack(root string) bool {
+	return strings.TrimSpace(readPackLock(root).Remote) != ""
+}
+
+// errPrivateRefSkippedAdopted is the sentinel resolvePackKnowledgeRef returns
+// when it refuses to honor a shared=false local-path reference because the
+// pack is adopted (finding #1). Callers use errors.Is to distinguish this from
+// an ordinary resolution failure so they can batch it into one aggregate
+// notice instead of per-ref noise.
+var errPrivateRefSkippedAdopted = errors.New("private knowledge ref skipped: pack is adopted from a remote")
+
+// revertPackPriorContribution undoes a previous activation's contribution
+// (F4/finding #5): removes exactly the MCP + knowledge entries prevLock
+// attributes to prevRoot's pack (never a value the lock doesn't mention — the
+// finding #3 reversibility guarantee), and restores gog_account /
+// ollama_bridge_model to whatever cfg held immediately before that pack
+// overwrote them (or empty, if there was none). Shared by runPackUse
+// (switching to a different pack) and runPackRm (detaching), so both are
+// equally honest about what "detached"/"switched away" means.
+func revertPackPriorContribution(cfg *config.Config, prevRoot string, prevLock packLock) (removedMCP, removedKnowledge []string) {
+	for _, m := range prevLock.MCP {
+		if cfg.RemoveMCP(m) {
+			removedMCP = append(removedMCP, m)
+		}
+	}
+	for _, id := range prevPackKnowledgeIDs(prevRoot, prevLock) {
+		if cfg.RemoveKnowledgeBundle(id) {
+			removedKnowledge = append(removedKnowledge, id)
+		}
+	}
+	// Only revert if cfg still holds exactly what THIS pack set — never clobber
+	// a value something else changed in the meantime.
+	if prevLock.GogAccount != "" && cfg.GogAccount == prevLock.GogAccount {
+		cfg.SetGogAccount(prevLock.PriorGogAccount)
+	}
+	if prevLock.OllamaBridgeModel != "" && cfg.OllamaBridgeModel == prevLock.OllamaBridgeModel {
+		cfg.OllamaBridgeModel = prevLock.PriorOllamaBridgeModel
+	}
+	return removedMCP, removedKnowledge
+}
+
+// canonicalizePackRoot normalizes a pack root path for identity comparison
+// (finding #7): expands ~, then filepath.Abs + Clean, so e.g. `pack add mcp
+// fastmail ./work` compares correctly against cfg.Pack even when cfg.Pack is
+// stored absolute and the CLI argument is a relative path (or vice versa).
+// Best-effort: a path that can't be made absolute falls back to
+// expandUser+Clean rather than failing.
+func canonicalizePackRoot(p string) string {
+	p = expandUser(strings.TrimSpace(p))
+	if p == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(p)
+}
+
+// packHasCreateOnlyFacets reports whether p carries any facet that only
+// attaches to a sandbox at CREATE time (skills, mcp integrations, sandbox
+// bin/ proxies) — used by the finding #8 stale-pack reattach reminder.
+func packHasCreateOnlyFacets(p *packInfo) bool {
+	if p.SkillsDir != "" {
+		return true
+	}
+	if len(packMcpNames(p)) > 0 {
+		return true
+	}
+	for _, pr := range p.Manifest.Proxies {
+		if !pr.Host {
+			return true
+		}
+	}
+	return false
 }
 
 // prevPackKnowledgeIDs computes the canonical bundle ids the PREVIOUS active
@@ -477,13 +623,27 @@ func prevPackKnowledgeIDs(prevRoot string, lock packLock) []string {
 // bundle path (F6). Shared=true TRAVELS: resolved via the existing
 // resolveBundleRef, which clones/pulls a git URL into the shared knowledge
 // cache (or uses a local path as-is) — an adopter who shares the pack pulls the
-// SAME team bundle. Shared=false does NOT travel: it is deliberately NOT
-// root-scoped (expandUser + Abs only) — pointing outside the pack at the
-// owner's own machine is the entire point of a private reference; when the
-// pack repo is shared, the reference line is simply inert for an adopter
-// (nothing to resolve locally), and the referenced content never entered the
-// pack's git tree.
-func resolvePackKnowledgeRef(out io.Writer, k packKnowledge) (string, error) {
+// SAME team bundle.
+//
+// Shared=false does NOT travel: it is deliberately NOT root-scoped — pointing
+// outside the pack at the owner's own machine is the entire point of a private
+// reference. But it is CRITICAL-SECURITY-SENSITIVE (finding #1): pack.toml for
+// an ADOPTED pack (cloned from a remote, adopted==true) is attacker-controlled
+// input, so a shared=false local path there is NEVER honored — without this
+// guard, `pack use <attacker-git-url>` could point AddKnowledgeBundle at an
+// arbitrary host directory (e.g. ~/.ssh) that the knowledge service then indexes
+// and the sandbox can read. The caller aggregates these into one notice rather
+// than per-ref noise (see errPrivateRefSkippedAdopted).
+//
+// For a pack the user authored locally (adopted==false), two more guards apply
+// before AddKnowledgeBundle ever sees the path: (a) it must resolve to an
+// existing, readable directory — a typo'd/nonexistent path is skipped rather
+// than indexed, so the knowledge service is never pointed at a dangling entry
+// (no knowledge-service poisoning); (b) it must resolve OUTSIDE the pack's own
+// tree — a private reference that actually lives inside root should be embedded
+// under knowledge/ instead (that travels honestly), not declared "private" while
+// silently living in the repo.
+func resolvePackKnowledgeRef(out io.Writer, root string, adopted bool, k packKnowledge) (string, error) {
 	source := strings.TrimSpace(k.Source)
 	if source == "" {
 		return "", fmt.Errorf("[[knowledge]] %q has no source", k.Name)
@@ -491,11 +651,39 @@ func resolvePackKnowledgeRef(out io.Writer, k packKnowledge) (string, error) {
 	if k.Shared {
 		return resolveBundleRef(source, knowledgeCacheDir(), out)
 	}
+	if adopted {
+		return "", errPrivateRefSkippedAdopted
+	}
 	abs, err := filepath.Abs(expandUser(source))
 	if err != nil {
 		return "", fmt.Errorf("resolving private knowledge %q: %w", k.Name, err)
 	}
-	return abs, nil
+	resolved := filepath.Clean(abs)
+	if r, rerr := filepath.EvalSymlinks(abs); rerr == nil {
+		resolved = r
+	}
+	// (b) reject a source resolving inside the pack tree.
+	rootResolved := filepath.Clean(root)
+	if r, rerr := filepath.EvalSymlinks(root); rerr == nil {
+		rootResolved = r
+	}
+	if resolved == rootResolved || strings.HasPrefix(resolved, rootResolved+string(filepath.Separator)) {
+		return "", fmt.Errorf("private knowledge %q (%s) resolves INSIDE the pack tree; embed it under knowledge/ instead of referencing it as private", k.Name, source)
+	}
+	// (a) validate it exists and is a readable directory before AddKnowledgeBundle.
+	fi, statErr := os.Stat(resolved)
+	if statErr != nil {
+		return "", fmt.Errorf("private knowledge %q: %s: %w", k.Name, resolved, statErr)
+	}
+	if !fi.IsDir() {
+		return "", fmt.Errorf("private knowledge %q: %s is not a directory", k.Name, resolved)
+	}
+	f, openErr := os.Open(resolved)
+	if openErr != nil {
+		return "", fmt.Errorf("private knowledge %q: %s is not readable: %w", k.Name, resolved, openErr)
+	}
+	f.Close()
+	return resolved, nil
 }
 
 // writeMemoryScope writes (or removes) <workspace>/.pi-stack/profile: the
@@ -531,7 +719,7 @@ func writeMemoryScope(workspace string, p *packInfo) {
 // wrappers) MUST print this, because --mcp/--kit are create-only — a running
 // sandbox cannot pick either up without a recreate (packs.md §13 must-fix).
 func printPackRecreateLine(out io.Writer) {
-	fmt.Fprintln(out, "MCP attach + sandbox bin/ wrappers only take effect on a sandbox CREATE.")
+	fmt.Fprintln(out, "MCP attach + sandbox bin/ wrappers + pack skills only take effect on a sandbox CREATE.")
 	fmt.Fprintln(out, "Recreate to pick them up:  pi-stack run --replace")
 }
 
@@ -873,7 +1061,12 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 		// otherwise nothing has changed in the sandbox facet set yet, so no
 		// recreate line is owed until the pack is actually activated.
 		cfg, cerr := config.Load()
-		if cerr == nil && cfg.Pack == root {
+		// finding #7: compare CANONICALIZED paths — root here may be a raw
+		// (possibly relative) CLI argument, while cfg.Pack is stored resolved
+		// absolute by `pack use`. A raw-string compare made an active pack look
+		// inactive whenever the two spellings differed (e.g. `pack add mcp
+		// fastmail ./work` while cfg.Pack is the absolute form).
+		if cerr == nil && canonicalizePackRoot(cfg.Pack) == canonicalizePackRoot(root) {
 			if cfg.AddMCP(name) {
 				if err := cfg.Save(); err != nil {
 					fmt.Fprintf(out, "note: saving config: %v\n", err)
@@ -887,7 +1080,7 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 						lock.MCP = append(lock.MCP, name)
 					}
 					if err := writePackLock(root, lock); err != nil {
-						fmt.Fprintf(out, "note: writing pack.lock: %v\n", err)
+						warnPackLockWriteFailure(out, root, err)
 					}
 					printPackRecreateLine(out)
 				}
@@ -1057,7 +1250,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		os.Exit(2)
 	}
 	arg := strings.TrimSpace(rest[0])
-	var root string
+	var root, remoteURL, remoteCommit string
 	if isPackGitURL(arg) {
 		r, err := clonePack(env, out, arg)
 		if err != nil {
@@ -1065,6 +1258,12 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 			os.Exit(1)
 		}
 		root = r
+		remoteURL, _ = parsePackURL(arg)
+		if env.run != nil {
+			if sha, cerr := env.run("git", "-C", root, "rev-parse", "HEAD"); cerr == nil {
+				remoteCommit = strings.TrimSpace(sha)
+			}
+		}
 	} else {
 		root = expandUser(arg)
 		if abs, err := filepath.Abs(root); err == nil {
@@ -1093,69 +1292,93 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	if switching {
 		prevLock = readPackLock(prevRoot)
 	}
+	// selfLock is THIS pack's own lock as it existed before this activation
+	// overwrites it — read up front so the adoption marker (Remote/Commit) and
+	// the config Prior* baseline can be preserved across a re-activation of the
+	// SAME pack (see below).
+	selfLock := readPackLock(root)
+
+	// Adoption provenance (finding #1, CRITICAL): a pack cloned via a git URL
+	// THIS activation, or one whose lock already carries a Remote from a PRIOR
+	// clone (re-activating the same clone by local path), is "adopted" —
+	// pack.toml there is attacker-controlled, so shared=false local knowledge
+	// refs are never honored (enforced inside resolvePackKnowledgeRef below).
+	adopted := remoteURL != "" || isAdoptedPack(root)
 
 	// MCP set (F1 + ADR-1): remove exactly what the PREVIOUS pack's last
-	// activation contributed (never a user's own manually-added MCP), then add
-	// what the NEW pack declares. Reversible: pack-use(A) -> pack-use(B) ->
-	// pack-use(A) restores cfg.MCP to what it was after the first pack-use(A).
-	var removedMCP, addedMCP []string
+	// activation ACTUALLY ADDED (never a user's own manually-added MCP the
+	// pack merely re-declares — finding #2), then add what the NEW pack
+	// declares. Reversible: pack-use(A) -> pack-use(B) -> pack-use(A) restores
+	// cfg.MCP to what it was after the first pack-use(A).
+	var removedMCP, removedKnowledge []string
 	if switching {
-		for _, m := range prevLock.MCP {
-			if cfg.RemoveMCP(m) {
-				removedMCP = append(removedMCP, m)
-			}
-		}
+		removedMCP, removedKnowledge = revertPackPriorContribution(cfg, prevRoot, prevLock)
 	}
-	newMCP := packMcpNames(p)
-	for _, m := range newMCP {
+	var addedMCP []string
+	for _, m := range packMcpNames(p) {
 		if cfg.AddMCP(m) {
 			addedMCP = append(addedMCP, m)
 		}
 	}
 
-	// Knowledge (F4 + F6): remove exactly what the PREVIOUS pack contributed
-	// (embedded dir + [[knowledge]] refs, from pack.lock — falling back to the
-	// v1 embedded-dir-only removal when no lock was recorded yet), then add the
-	// NEW pack's embedded dir + resolved [[knowledge]] refs (shared travels via
-	// resolveBundleRef; private resolves to a local path that never entered the
-	// pack's git tree).
-	var removedKnowledge, addedKnowledge []string
-	if switching {
-		for _, id := range prevPackKnowledgeIDs(prevRoot, prevLock) {
-			if cfg.RemoveKnowledgeBundle(id) {
-				removedKnowledge = append(removedKnowledge, id)
-			}
-		}
-	}
-	var newKnowledgeIDs []string
+	// Knowledge (F4 + F6): add the NEW pack's embedded dir + resolved
+	// [[knowledge]] refs (shared travels via resolveBundleRef; private resolves
+	// to a local path that never entered the pack's git tree — and is skipped
+	// entirely for an adopted pack, finding #1). Only what cfg.AddKnowledgeBundle
+	// ACTUALLY ADDED is recorded for the next switch's removal set (finding #2):
+	// a bundle already present (added by the user, or by another mechanism) is
+	// never claimed as this pack's own contribution.
+	var addedKnowledge, newKnowledgeIDs []string
 	if p.KnowledgeDir != "" {
 		if cfg.AddKnowledgeBundle(p.KnowledgeDir) {
 			addedKnowledge = append(addedKnowledge, p.KnowledgeDir)
+			newKnowledgeIDs = append(newKnowledgeIDs, canonicalizeKnowledgeBundle(p.KnowledgeDir))
 		}
-		newKnowledgeIDs = append(newKnowledgeIDs, canonicalizeKnowledgeBundle(p.KnowledgeDir))
 		cfg.AddService("knowledge")
 	}
+	var skippedPrivate int
 	for _, k := range p.Manifest.Knowledge {
-		resolved, rerr := resolvePackKnowledgeRef(out, k)
+		resolved, rerr := resolvePackKnowledgeRef(out, root, adopted, k)
 		if rerr != nil {
+			if errors.Is(rerr, errPrivateRefSkippedAdopted) {
+				skippedPrivate++
+				continue
+			}
 			fmt.Fprintf(out, "note: knowledge %q: %v (skipping)\n", k.Name, rerr)
 			continue
 		}
 		if cfg.AddKnowledgeBundle(resolved) {
 			addedKnowledge = append(addedKnowledge, resolved)
+			newKnowledgeIDs = append(newKnowledgeIDs, canonicalizeKnowledgeBundle(resolved))
 		}
-		newKnowledgeIDs = append(newKnowledgeIDs, canonicalizeKnowledgeBundle(resolved))
 		cfg.AddService("knowledge")
 	}
 
-	// Config layering (F4): a value the pack declares overwrites; an undeclared
-	// one is left as whatever was already configured ("layered when active", per
-	// the schema doc — not a reset-to-zero on every switch).
+	// Config layering (F4/finding #5): a value the pack declares overwrites, but
+	// remembers what cfg held immediately BEFORE the overwrite so switching away
+	// restores exactly that (or empty) — never leaking one pack's value into the
+	// next. Re-activating the SAME pack (not switching) keeps the ORIGINAL prior
+	// baseline from selfLock rather than re-capturing cfg's current (already-this-
+	// pack's) value, so a chain of re-activations doesn't lose the true baseline.
+	var lockGogAccount, lockPriorGogAccount, lockOllamaModel, lockPriorOllamaModel string
+	firstOrSwitching := switching || prevRoot == ""
 	if p.Manifest.GogAccount != "" {
-		cfg.SetGogAccount(p.Manifest.GogAccount)
+		prior := selfLock.PriorGogAccount
+		if firstOrSwitching {
+			prior = cfg.GogAccount
+		}
+		lockPriorGogAccount = prior
+		lockGogAccount = p.Manifest.GogAccount
+		cfg.SetGogAccount(lockGogAccount)
 	}
 	if m := strings.TrimSpace(p.Manifest.OllamaBridgeModel); m != "" {
-		cfg.OllamaBridgeModel = m
+		prior := selfLock.PriorOllamaBridgeModel
+		if firstOrSwitching {
+			prior = cfg.OllamaBridgeModel
+		}
+		lockPriorOllamaModel = prior
+		lockOllamaModel = m
+		cfg.OllamaBridgeModel = lockOllamaModel
 	}
 
 	cfg.Pack = root
@@ -1183,13 +1406,36 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	for _, id := range addedKnowledge {
 		fmt.Fprintf(out, "knowledge bundle registered: %s\n", id)
 	}
+	if skippedPrivate > 0 {
+		fmt.Fprintf(out, "skipped %d private knowledge ref(s) from an adopted pack (shared=false local paths are never honored for a pack cloned from a remote)\n", skippedPrivate)
+	}
 
 	// Solicit any 1Password creds this pack's reference-only integrations need.
 	solicitPackCredentials(env, os.Stdin, out, isTTY(os.Stdin), p)
 
-	// Record this activation's contribution for the NEXT switch's removal set.
-	if err := writePackLock(root, packLock{MCP: newMCP, Knowledge: newKnowledgeIDs}); err != nil {
-		fmt.Fprintf(out, "note: writing pack.lock: %v\n", err)
+	// Record this activation's contribution for the NEXT switch's removal set
+	// (finding #2: only what was actually added, never everything declared), and
+	// preserve the adoption marker (finding #1) across the rewrite.
+	lock := packLock{
+		MCP:                    addedMCP,
+		Knowledge:              newKnowledgeIDs,
+		Remote:                 remoteURL,
+		Commit:                 remoteCommit,
+		GogAccount:             lockGogAccount,
+		PriorGogAccount:        lockPriorGogAccount,
+		OllamaBridgeModel:      lockOllamaModel,
+		PriorOllamaBridgeModel: lockPriorOllamaModel,
+	}
+	if lock.Remote == "" {
+		// Not cloned THIS activation: keep whatever adoption marker this pack
+		// already carried (a re-activation via local path must not un-adopt it).
+		lock.Remote = selfLock.Remote
+		lock.Commit = selfLock.Commit
+	}
+	if err := writePackLock(root, lock); err != nil {
+		// The lock IS part of this switch's committed state (finding #3): a
+		// future switch away may not fully reverse what just happened.
+		warnPackLockWriteFailure(out, root, err)
 	}
 
 	// A knowledge change is daemon-affecting: restart/advise the running serve so
@@ -1217,12 +1463,29 @@ func runPackRm(out io.Writer, rest []string) {
 		return
 	}
 	old := cfg.Pack
+	// finding #5: `rm` must undo the active pack's contributions (mcp,
+	// knowledge, gog/model overrides) too — not just clear cfg.Pack — or
+	// "detached" is a lie about what actually happened.
+	oldLock := readPackLock(old)
+	removedMCP, removedKnowledge := revertPackPriorContribution(cfg, old, oldLock)
 	cfg.Pack = ""
 	if err := cfg.Save(); err != nil {
 		fmt.Fprintf(out, "pi-stack pack rm: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Fprintf(out, "detached active pack (%s). The files are untouched; re-attach with `pi-stack pack use`.\n", old)
+	if len(removedMCP) > 0 {
+		fmt.Fprintf(out, "detached mcp: %s\n", strings.Join(removedMCP, ", "))
+	}
+	for _, id := range removedKnowledge {
+		fmt.Fprintf(out, "knowledge bundle detached: %s\n", id)
+	}
+	if len(removedKnowledge) > 0 {
+		propagateServeConfig(defaultServeReloader(), out)
+	}
+	if len(removedMCP) > 0 {
+		printPackRecreateLine(out)
+	}
 }
 
 // --- git-URL adoption -------------------------------------------------------

@@ -226,6 +226,61 @@ func TestOpRefsTemplateHasNoActiveRefs(t *testing.T) {
 	}
 }
 
+// TestSaveAtomic_WriteFailureLeavesPriorFileIntact (packs-v2 review finding
+// #4): Save writes to a temp file + atomic rename rather than truncating
+// config.toml in place, so a failed write never leaves the prior file
+// half-written. Simulate a write failure by revoking write access to the
+// config dir AFTER a first successful save, so the temp-file create itself
+// fails.
+func TestSaveAtomic_WriteFailureLeavesPriorFileIntact(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	t.Setenv("PI_STACK_CONFIG", path)
+
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetGogAccount("first@example.com")
+	if err := c.Save(); err != nil {
+		t.Fatalf("first Save(): %v", err)
+	}
+	orig, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading saved config: %v", err)
+	}
+
+	// Revoke write access to the dir so os.CreateTemp fails inside Save.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) // let TempDir clean up
+
+	c.SetGogAccount("second@example.com")
+	if err := c.Save(); err == nil {
+		t.Fatal("expected Save() to fail with a read-only config dir")
+	}
+
+	_ = os.Chmod(dir, 0o700) // restore before reading
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading config after failed Save: %v", err)
+	}
+	if string(got) != string(orig) {
+		t.Errorf("a failed Save() modified the prior config file:\nbefore:\n%s\nafter:\n%s", orig, got)
+	}
+	// And no stray temp file was left behind.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp-") {
+			t.Errorf("leftover temp file after failed Save: %s", e.Name())
+		}
+	}
+}
+
 func TestSaveAndMutators(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "config.toml")
 	t.Setenv("PI_STACK_CONFIG", path)
