@@ -260,7 +260,11 @@ export default function (pi: any) {
 						return undefined;
 					}
 					state.turns++; // persisted — survives across sessions (invariant 3)
-					writeState(state);
+					// FAIL SAFE: only inject if we could RECORD the increment. If the
+					// state file is unwritable (readonly / full disk), persisting fails,
+					// the cap can never advance, and we'd nag forever — so suppress the
+					// reminder this turn instead. It resumes once writes succeed again.
+					if (!writeState(state)) return undefined;
 					return { systemPrompt: (event?.systemPrompt ?? "") + "\n\n" + buildReminder(rem) };
 				}),
 			),
