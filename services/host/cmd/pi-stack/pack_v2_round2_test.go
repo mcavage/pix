@@ -176,10 +176,12 @@ func TestPrevPackKnowledgeIDs_EmptyLockRemovesNothing(t *testing.T) {
 	}
 }
 
-// TestPackUse_EmptyLockSwitchRemovesNothing: with the previous pack's lock
-// missing, switching packs removes NOTHING — the previous pack's bundle (which,
-// lock-less, is indistinguishable from a user-added one) survives. Accumulation
-// is accepted over deleting a user's bundle.
+// TestPackUse_EmptyLockSwitchRemovesNothing: with the previous pack's
+// activation attribution LOST (since round-2 A that is the HOST-STATE
+// activation record — the pack.lock is only a hint), switching packs removes
+// NOTHING — the previous pack's bundle (which, attribution-less, is
+// indistinguishable from a user-added one) survives. Accumulation is accepted
+// over deleting a user's bundle.
 func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
@@ -205,7 +207,16 @@ func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 		t.Fatalf("setup: pack use A did not attach: %+v", cfg)
 	}
 
-	// Simulate a lost/never-written lock (e.g. the loud pack.lock write failure).
+	// Simulate lost/never-written attribution: drop BOTH the host-state
+	// activation record (the authoritative source) and the pack.lock hint.
+	store, serr := loadPackTrustStore()
+	if serr != nil {
+		t.Fatal(serr)
+	}
+	store.Activation = nil
+	if err := store.save(); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(packLockPath(rootA)); err != nil {
 		t.Fatal(err)
 	}

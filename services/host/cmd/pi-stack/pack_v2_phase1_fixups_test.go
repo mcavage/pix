@@ -26,10 +26,13 @@ import (
 // --- FIX A: Save failure restores the prior lock -------------------------------
 
 // TestCommitPackActivation_SaveFailureRestoresPriorLock: a same-pack
-// reactivation that DROPS an MCP, with cfg.Save forced to fail (read-only
-// config dir), must (1) restore the prior pack.lock byte-for-byte, (2) leave
-// the on-disk config unchanged, and (3) let a subsequent successful `pack rm`
-// remove everything cleanly — no orphaned, unattributed MCP.
+// reactivation that DROPS an MCP, with the commit forced to fail (read-only
+// config dir — under the round-2 A model this now trips the HOST-STATE
+// activation write, which shares the config dir and aborts BEFORE cfg.Save),
+// must (1) restore the prior pack.lock byte-for-byte, (2) leave the on-disk
+// config unchanged, (3) leave the on-disk PRIOR activation record intact, and
+// (4) let a subsequent successful `pack rm` remove everything cleanly — no
+// orphaned, unattributed MCP.
 func TestCommitPackActivation_SaveFailureRestoresPriorLock(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: a read-only dir cannot force cfg.Save to fail")
@@ -54,6 +57,16 @@ func TestCommitPackActivation_SaveFailureRestoresPriorLock(t *testing.T) {
 	if err := writePackLock(root, packLock{MCP: []string{"fastmail"}}); err != nil {
 		t.Fatal(err)
 	}
+	// Round-2 A: the AUTHORITATIVE attribution is the host-state activation
+	// record — seed it exactly as the prior activation's commit would have.
+	priorStore, err := loadPackTrustStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorStore.setActivation(root, packLock{MCP: []string{"fastmail"}})
+	if err := priorStore.save(); err != nil {
+		t.Fatal(err)
+	}
 	lockBefore, err := os.ReadFile(packLockPath(root))
 	if err != nil {
 		t.Fatal(err)
@@ -76,12 +89,16 @@ func TestCommitPackActivation_SaveFailureRestoresPriorLock(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(cfgDir, 0o755) })
 
-	cerr := commitPackActivation(cfg, root, packLock{})
-	if cerr == nil {
-		t.Fatal("expected commitPackActivation to fail when cfg.Save cannot write")
+	store, err := loadPackTrustStore()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(cerr.Error(), "pack.lock rolled back") {
-		t.Errorf("error should say the lock was rolled back, got: %v", cerr)
+	cerr := commitPackActivation(cfg, store, root, packLock{})
+	if cerr == nil {
+		t.Fatal("expected commitPackActivation to fail when the commit cannot write")
+	}
+	if !strings.Contains(cerr.Error(), "nothing was committed") {
+		t.Errorf("error should say nothing was committed, got: %v", cerr)
 	}
 
 	// (1) The prior lock is back, byte-for-byte — NOT the new empty lock.
@@ -101,11 +118,22 @@ func TestCommitPackActivation_SaveFailureRestoresPriorLock(t *testing.T) {
 		t.Errorf("on-disk config must be unchanged after a Save failure.\nbefore: %q\nafter:  %q", cfgBefore, cfgAfter)
 	}
 
-	// (3) Config writable again: `pack rm` removes everything cleanly — the
-	// restored lock still attributes fastmail, so nothing is orphaned.
+	// (3) The on-disk PRIOR activation record is intact (the failed commit
+	// never overwrote it).
 	if err := os.Chmod(cfgDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	afterStore, err := loadPackTrustStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := afterStore.activationFor(root); len(got.MCP) != 1 || got.MCP[0] != "fastmail" {
+		t.Errorf("prior activation record must survive a failed commit, got %+v", got)
+	}
+
+	// (4) Config writable again: `pack rm` removes everything cleanly — the
+	// intact activation record still attributes fastmail, so nothing is
+	// orphaned.
 	var out bytes.Buffer
 	runPackRm(&out, nil)
 	saved, err := config.Load()
@@ -146,7 +174,7 @@ func TestCommitPackActivation_SaveFailureRemovesFirstLock(t *testing.T) {
 	cfg.AddMCP("fastmail")
 	cfg.Pack = root
 
-	if cerr := commitPackActivation(cfg, root, packLock{MCP: []string{"fastmail"}}); cerr == nil {
+	if cerr := commitPackActivation(cfg, &packTrustStore{}, root, packLock{MCP: []string{"fastmail"}}); cerr == nil {
 		t.Fatal("expected commitPackActivation to fail when cfg.Save cannot write")
 	}
 	if _, serr := os.Stat(packLockPath(root)); !os.IsNotExist(serr) {

@@ -151,16 +151,21 @@ func TestPackUse_ForgedSymlinkLockScrubbedNotFollowed(t *testing.T) {
 // TestPackUse_ChangedGogAccountRegates: acceptance is over the RESOLVED MCP
 // argv, so changing config gog_account after adoption changes what the
 // gateway would spawn — the next `pack use` re-gates (non-TTY fails closed)
-// and a strict host launch refuses until re-accepted.
+// and a strict host launch refuses until re-accepted. gog is pinned as a
+// LOCAL host-spawned server here (round-2 C: an unlisted gog is a
+// reference-only Tier-0 fact — see TestPackUse_GogReferenceStaysTier0); this
+// test pins the account→argv→fingerprint machinery for the local case.
 func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	if os.Getenv("PI_STACK_TEST_TRUST") == "gog-regate" {
-		runPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PI_STACK_TEST_PACK_ROOT")})
+		hostBinaryResolver = func() (string, error) { return "pi-stack-host", nil }
+		runPackUse(localMCPEnv("gog"), os.Stdout, []string{os.Getenv("PI_STACK_TEST_PACK_ROOT")})
 		return
 	}
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
 	t.Setenv("PI_STACK_CONFIG", cfgPath)
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	pinLocalMCP(t, "gog")
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packManifest{Name: "work", Schema: 1,
 		Integrations: []packIntegration{{Name: "Gog", MCP: "gog"}}})
@@ -174,11 +179,11 @@ func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}) // accept with a@
+	runPackUse(localMCPEnv("gog"), &out, []string{root, "--yes"}) // accept with a@
 	// Same account: re-activation must NOT re-prompt (in-process; a misfiring
 	// gate would os.Exit and fail the test binary).
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{root})
+	runPackUse(localMCPEnv("gog"), &out, []string{root})
 	if strings.Contains(out.String(), "runs code on your host") {
 		t.Errorf("unchanged surface must not re-gate:\n%s", out.String())
 	}

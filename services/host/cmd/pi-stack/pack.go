@@ -551,6 +551,16 @@ func proxyShimTemplate(name string) string {
 // exactly that contribution — never a user's own manually-added entry, and
 // never leaking one pack's config into the next (finding #5). Git-ignored by
 // default (runPackNew seeds a pack-local .gitignore line for it).
+//
+// TRUST (round-2 A): pack.lock is a LOCAL, HUMAN-READABLE HINT only. It sits
+// inside the pack directory — attacker-writable for any cloned pack via a
+// plain `git pull` (or a zip update), even for a pack that is ALREADY active
+// — so NOTHING that drives a config mutation is ever read from it. The
+// authoritative activation provenance lives in the launcher-owned trust
+// store (packtruststore.go, Activation), written at the same commit point.
+// The only field ever read back from pack.lock is Remote/Commit, used purely
+// as a FAIL-SAFE adoption marker (a forged marker only RESTRICTS what a pack
+// may do — isAdoptedPack).
 type packLock struct {
 	MCP       []string `toml:"mcp,omitempty"`
 	Knowledge []string `toml:"knowledge,omitempty"`
@@ -641,25 +651,25 @@ func writePackLockBytes(root string, data []byte) error {
 	return atomicWriteInDir(root, packLockName, data, 0o644)
 }
 
-// commitPackActivation is the two-file commit point shared by `pack use` and
-// the active-pack `pack add mcp` path: write the attribution lock FIRST, then
-// cfg.Save. A lock-write failure ABORTS before Save (round-4 F1): committing
-// the config without its attribution would strand MCP/knowledge/config
-// entries that no later `pack use`/`pack rm` could ever remove (removal is
-// deliberately scoped to lock attribution ONLY — see the commit-ordering
-// comment in runPackUse). On abort nothing is committed: the mutated cfg was
-// in-memory only, so the on-disk config is unchanged.
+// commitPackActivation is the commit point shared by `pack use` and the
+// active-pack `pack add mcp` path. It writes THREE things, in an order whose
+// failure residue is always safe:
 //
-// A cfg.Save FAILURE (an ordinary error — read-only config dir, disk full —
-// not a crash) ROLLS the lock BACK: the prior pack.lock bytes are snapshotted
-// before the new lock is written and restored atomically before returning the
-// error, so the on-disk lock and config stay mutually consistent. Without the
-// rollback, a same-pack reactivation that DROPPED a contribution would leave
-// the new (narrower) lock beside the old config — stranding the dropped entry
-// with no attribution, unremovable by `pack rm`. See the KNOWN RESIDUAL
-// comment in runPackUse for the only inconsistency window left (a hard kill
-// between the two renames).
-func commitPackActivation(cfg *config.Config, root string, lock packLock) error {
+//  1. pack.lock (the local HINT — round-4 abort-on-unwritable contract kept:
+//     a lock that cannot be written, e.g. a dir-shaped pack.lock, ABORTS
+//     before anything commits).
+//  2. The AUTHORITATIVE activation record in the launcher-owned trust store
+//     (round-2 A) — a store-write failure also aborts before cfg.Save, so
+//     the config is never committed without host-state attribution.
+//  3. cfg.Save. An ordinary Save failure ROLLS BACK both the store record
+//     and the prior pack.lock bytes, so on-disk state stays mutually
+//     consistent (the rollback contract the round-4 tests pin, now anchored
+//     on the HOST-STATE record).
+//
+// A true hard kill between the store write and the config rename leaves an
+// activation record that OVER-claims — harmless, because removing an absent
+// MCP/bundle is a no-op (see the commit-ordering comment in runPackUse).
+func commitPackActivation(cfg *config.Config, store *packTrustStore, root string, lock packLock) error {
 	priorLock, priorErr := os.ReadFile(packLockPath(root))
 	priorExists := priorErr == nil
 	if priorErr != nil && !os.IsNotExist(priorErr) {
@@ -670,18 +680,31 @@ func commitPackActivation(cfg *config.Config, root string, lock packLock) error 
 	if err := writePackLock(root, lock); err != nil {
 		return fmt.Errorf("writing pack.lock for %s: %v — aborting without saving config (nothing was committed; fix the pack directory and re-run)", root, err)
 	}
-	if err := cfg.Save(); err != nil {
-		// Roll the lock back so it matches the (unchanged) on-disk config.
-		var rerr error
+	restoreLock := func() error {
 		if priorExists {
-			rerr = writePackLockBytes(root, priorLock)
-		} else {
-			rerr = os.Remove(packLockPath(root))
+			return writePackLockBytes(root, priorLock)
 		}
-		if rerr != nil {
-			return fmt.Errorf("saving config: %v (and restoring the prior pack.lock failed: %v — the lock may over-claim this activation's contributions; harmless, but re-run `pack use` once the config is writable)", err, rerr)
+		return os.Remove(packLockPath(root))
+	}
+	priorActivation := store.Activation
+	store.setActivation(root, lock)
+	if err := store.save(); err != nil {
+		store.Activation = priorActivation
+		if rerr := restoreLock(); rerr != nil {
+			return fmt.Errorf("recording activation in pack trust state: %v (and restoring the prior pack.lock failed: %v) — aborting without saving config (nothing was committed)", err, rerr)
 		}
-		return fmt.Errorf("saving config: %v (pack.lock rolled back; nothing was committed)", err)
+		return fmt.Errorf("recording activation in pack trust state: %v — aborting without saving config (nothing was committed; fix %s and re-run)", err, packTrustStorePath())
+	}
+	if err := cfg.Save(); err != nil {
+		// Roll BOTH the store record and the lock back so they match the
+		// (unchanged) on-disk config.
+		store.Activation = priorActivation
+		serr := store.save()
+		rerr := restoreLock()
+		if serr != nil || rerr != nil {
+			return fmt.Errorf("saving config: %v (rollback incomplete — trust store: %v, pack.lock: %v — the activation record may over-claim this activation's contributions; harmless, but re-run `pack use` once the config is writable)", err, serr, rerr)
+		}
+		return fmt.Errorf("saving config: %v (activation record rolled back; nothing was committed)", err)
 	}
 	return nil
 }
@@ -1323,10 +1346,13 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 			// stays in pack.toml (inert) but NOTHING attaches.
 			trustStore, tserr := loadPackTrustStore()
 			if tserr != nil {
-				fmt.Fprintf(out, "note: pack trust state unreadable (%v); treating as empty — the Tier-1 gate will prompt\n", tserr)
-				trustStore = &packTrustStore{}
+				// FATAL (round-2 A): the store is both the acceptance source and
+				// the activation-attribution commit target; an empty stand-in
+				// would clobber it at the commit point.
+				fmt.Fprintf(out, "pi-stack pack add: pack trust state unreadable: %v (fix or remove %s and re-run)\n", tserr, packTrustStorePath())
+				os.Exit(1)
 			}
-			bom := computeHostBoM(p, cfg.GogAccount)
+			bom := computeHostBoM(p, cfg.GogAccount, localMCPClassifier(env, hostBinaryResolver))
 			var bomFingerprint, packKey string
 			if bom.tier1() {
 				fp, _, ferr := computeHostExecFingerprint(root, bom)
@@ -1350,12 +1376,20 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 				// Lock BEFORE Save, ABORT on lock failure (round-3 R1 + round-4 F1,
 				// same commit point as runPackUse): the config is never committed
 				// without its attribution, so a later `pack use`/`pack rm` can
-				// always clean up what this command added.
-				lock := readPackLock(root)
+				// always clean up what this command added. The attribution BASE is
+				// the HOST-state activation record (round-2 A), never the payload
+				// lock; the adoption marker for the hint comes from host-recorded
+				// provenance first, else the (fail-safe) payload marker.
+				lock := trustStore.activationFor(root)
 				if !containsStr(lock.MCP, name) {
 					lock.MCP = append(lock.MCP, name)
 				}
-				if err := commitPackActivation(cfg, root, lock); err != nil {
+				if prov, ok := trustStore.Adopted[canonicalizePackRoot(root)]; ok {
+					lock.Remote, lock.Commit = prov.Remote, prov.Commit
+				} else if hint := readPackLock(root); strings.TrimSpace(hint.Remote) != "" {
+					lock.Remote, lock.Commit = strings.TrimSpace(hint.Remote), strings.TrimSpace(hint.Commit)
+				}
+				if err := commitPackActivation(cfg, trustStore, root, lock); err != nil {
 					fmt.Fprintf(out, "pi-stack pack add: %v\n", err)
 					os.Exit(1)
 				}
@@ -1611,28 +1645,24 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 
 	prevRoot := cfg.Pack
 	switching := prevRoot != "" && prevRoot != root
-	// selfLock is THIS pack's own lock. It is TRUSTED only when this pack is
-	// already ACTIVE (the launcher wrote it at the last activation). For any
-	// other target the lock arrived with the pack payload (downloaded, unzipped,
-	// hand-forged) — trust-model item 4: capture the fail-safe adoption marker,
-	// then SCRUB the file and IGNORE its decoded content. A forged lock could
-	// otherwise claim the user's own mcp/knowledge entries as this pack's
-	// contribution (a later switch-away would then remove them), or be a
-	// symlink aimed at the fresh lock write. (A URL adoption's lock was just
-	// written by clonePack/markPackAdopted — host-authored, not pack-supplied —
-	// so scrubbing there would only destroy the durable adoption marker.)
-	selfLock := readPackLock(root)
-	if prevRoot != root {
-		untrusted := selfLock
-		selfLock = packLock{
-			Remote: strings.TrimSpace(untrusted.Remote),
-			Commit: strings.TrimSpace(untrusted.Commit),
-		}
-		if remoteURL == "" {
-			if serr := scrubUntrustedPackLock(root); serr != nil {
-				fmt.Fprintf(out, "pi-stack pack use: %v (refusing to adopt with an untrusted %s in place)\n", serr, packLockName)
-				os.Exit(1)
-			}
+	// The pack-supplied pack.lock is NEVER trusted for reversibility (round-2
+	// A) — not even when this pack is already active: a plain `git pull` (or a
+	// zip update) rewrites files under an already-active pack root, so a forged
+	// lock claiming the user's own mcp/knowledge entries as the pack's
+	// contribution would make the revert below DELETE them. The ONLY thing
+	// read off the lock is the fail-safe adoption marker (Remote/Commit — a
+	// forged marker only RESTRICTS what a pack may do). Reversibility reads
+	// come exclusively from the launcher-owned trust store's activation
+	// record. The payload lock is additionally SCRUBBED on a not-currently-
+	// active local-path adoption (a symlinked lock must not redirect the fresh
+	// hint write); a URL adoption's lock was just written by
+	// clonePack/markPackAdopted — host-authored — so it is kept.
+	hint := readPackLock(root)
+	hintRemote, hintCommit := strings.TrimSpace(hint.Remote), strings.TrimSpace(hint.Commit)
+	if prevRoot != root && remoteURL == "" {
+		if serr := scrubUntrustedPackLock(root); serr != nil {
+			fmt.Fprintf(out, "pi-stack pack use: %v (refusing to adopt with an untrusted %s in place)\n", serr, packLockName)
+			os.Exit(1)
 		}
 	}
 
@@ -1642,7 +1672,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// PacksDir proves was cloned (isAdoptedPack), is "adopted" — pack.toml
 	// there is attacker-controlled, so shared=false local knowledge refs are
 	// never honored (enforced inside resolvePackKnowledgeRef below).
-	adopted := remoteURL != "" || selfLock.Remote != "" || isAdoptedPack(root)
+	adopted := remoteURL != "" || hintRemote != "" || isAdoptedPack(root)
 
 	// F5: the Tier-1 trust gate — against TRUSTED HOST STATE (packtruststore.go),
 	// never anything the pack ships. Tier-0 (no host-exec facet) adopts
@@ -1652,12 +1682,17 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// content, bin pins, egress, creds). Switching between accepted packs never
 	// re-prompts; ANY surface change does. Refusal aborts here: nothing
 	// registered, installed, or committed.
+	//
+	// An UNREADABLE trust store is now FATAL (it is the reversibility AND
+	// acceptance backbone): proceeding with an empty stand-in would both lose
+	// the previous activation's removal set and — at the commit point — clobber
+	// the store file with the stand-in. Fail closed with a pointer at the file.
 	trustStore, tserr := loadPackTrustStore()
 	if tserr != nil {
-		fmt.Fprintf(out, "note: pack trust state unreadable (%v); treating as empty — the Tier-1 gate will prompt\n", tserr)
-		trustStore = &packTrustStore{}
+		fmt.Fprintf(out, "pi-stack pack use: pack trust state unreadable: %v (fix or remove %s and re-run)\n", tserr, packTrustStorePath())
+		os.Exit(1)
 	}
-	bom := computeHostBoM(p, cfg.GogAccount)
+	bom := computeHostBoM(p, cfg.GogAccount, localMCPClassifier(env, hostBinaryResolver))
 	var bomFingerprint, packKey string
 	if bom.tier1() {
 		fp, _, ferr := computeHostExecFingerprint(root, bom)
@@ -1681,11 +1716,10 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// declares. Reversible: pack-use(A) -> pack-use(B) -> pack-use(A) restores
 	// cfg.MCP to what it was after the first pack-use(A).
 	var removedMCP, removedKnowledge []string
-	var prevLock packLock // the PREVIOUS pack's lock (switch path) — also drives the F3 host-wrapper swap
 	switch {
 	case switching:
-		prevLock = readPackLock(prevRoot)
-		removedMCP, removedKnowledge = revertPackPriorContribution(cfg, prevLock)
+		// The previous pack's contribution set: HOST state only (round-2 A).
+		removedMCP, removedKnowledge = revertPackPriorContribution(cfg, trustStore.activationFor(prevRoot))
 	case prevRoot == root:
 		// SAME-pack reactivation (finding D): revert THIS pack's own prior
 		// contribution first, then re-apply the manifest fresh below. Without
@@ -1696,8 +1730,10 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		// (gog_account, ollama_bridge_model, an mcp, a knowledge ref) would
 		// stay live forever. Revert-then-reapply reconciles both: facets still
 		// declared re-add just below (regaining attribution), dropped ones
-		// stay reverted.
-		removedMCP, removedKnowledge = revertPackPriorContribution(cfg, selfLock)
+		// stay reverted. The removal set comes from HOST state (round-2 A),
+		// never the pack-payload lock — a same-pack `git pull` forgery buys
+		// nothing.
+		removedMCP, removedKnowledge = revertPackPriorContribution(cfg, trustStore.activationFor(root))
 	}
 	var addedMCP []string
 	for _, m := range packMcpNames(p) {
@@ -1802,14 +1838,16 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		// Not cloned THIS activation: keep whatever adoption marker this pack
 		// already carried (a re-activation via local path must not un-adopt it) —
 		// the launcher's own host-state provenance first, else the (fail-safe)
-		// marker captured off the pack-supplied lock before the scrub.
+		// marker captured off the pack-supplied lock before the scrub. This
+		// lands only in the pack.lock HINT (fail-safe marker), never in the
+		// host-state activation or acceptance records.
 		if prov, ok := trustStore.Adopted[canonicalizePackRoot(root)]; ok {
 			lock.Remote, lock.Commit = prov.Remote, prov.Commit
 		} else {
-			lock.Remote, lock.Commit = selfLock.Remote, selfLock.Commit
+			lock.Remote, lock.Commit = hintRemote, hintCommit
 		}
 	}
-	if err := commitPackActivation(cfg, root, lock); err != nil {
+	if err := commitPackActivation(cfg, trustStore, root, lock); err != nil {
 		// The lock IS part of this switch's committed state (finding #3 +
 		// round-4 F1): if it can't be written, NOTHING is committed — the
 		// in-memory cfg mutations above are discarded, the on-disk config (and
@@ -1823,12 +1861,18 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// idempotent and re-normalizes provenance). A failed write just means the
 	// gate re-prompts next time: fail closed, never open.
 	if bom.tier1() {
-		trustStore.recordAcceptance(packKey, packTrustRecord{
-			Path:        canonicalizePackRoot(root),
-			Remote:      lock.Remote,
-			Commit:      lock.Commit,
-			Fingerprint: bomFingerprint,
-		})
+		// Provenance on the acceptance record is HOST-recorded ONLY (round-2 E):
+		// this activation's own clone, or the launcher's adoption record — never
+		// the pack-supplied pack.lock, whose forged Remote could alias a legit
+		// pack and make recordAcceptance's hygiene sweep DELETE its acceptance.
+		rec := packTrustRecord{Path: canonicalizePackRoot(root), Fingerprint: bomFingerprint}
+		rec.Remote, rec.Commit = remoteURL, remoteCommit
+		if rec.Remote == "" {
+			if prov, ok := trustStore.Adopted[rec.Path]; ok {
+				rec.Remote, rec.Commit = prov.Remote, prov.Commit
+			}
+		}
+		trustStore.recordAcceptance(packKey, rec)
 		if werr := trustStore.save(); werr != nil {
 			fmt.Fprintf(out, "note: could not record the accepted host BoM: %v (the Tier-1 gate will re-prompt)\n", werr)
 		}
@@ -1923,23 +1967,37 @@ func runPackRm(out io.Writer, rest []string) {
 	old := cfg.Pack
 	// finding #5: `rm` must undo the active pack's contributions (mcp,
 	// knowledge, gog/model overrides) too — not just clear cfg.Pack — or
-	// "detached" is a lie about what actually happened.
-	oldLock := readPackLock(old)
-	removedMCP, removedKnowledge := revertPackPriorContribution(cfg, oldLock)
+	// "detached" is a lie about what actually happened. The contribution set
+	// comes from HOST state (round-2 A), never the pack-payload lock — and an
+	// unreadable trust store is FATAL: without it neither the removal set nor
+	// the wrapper attribution can be honored.
+	store, serr := loadPackTrustStore()
+	if serr != nil {
+		fmt.Fprintf(out, "pi-stack pack rm: pack trust state unreadable: %v (fix or remove %s and re-run)\n", serr, packTrustStorePath())
+		os.Exit(1)
+	}
+	removedMCP, removedKnowledge := revertPackPriorContribution(cfg, store.activationFor(old))
 	cfg.Pack = ""
 	if err := cfg.Save(); err != nil {
 		fmt.Fprintf(out, "pi-stack pack rm: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Fprintf(out, "detached active pack (%s). The files are untouched; re-attach with `pi-stack pack use`.\n", old)
+	// The activation record is spent (its contributions were just reverted).
+	// Dropped only when it was attributed to THIS pack; a failed store write
+	// merely over-claims (removals of absent entries are no-ops).
+	if store.Activation != nil && (store.Activation.Path == canonicalizePackRoot(old) || store.Activation.Owner == store.trustKey(old)) {
+		store.Activation = nil
+		if werr := store.save(); werr != nil {
+			fmt.Fprintf(out, "note: could not clear the activation record: %v (harmless over-claim; re-run `pack rm` once %s is writable)\n", werr, packTrustStorePath())
+		}
+	}
 	// F3: "detached" includes the host wrappers — remove exactly what HOST
 	// state attributes to hostPackBinDir() (reliable even when the pack
 	// directory itself is gone; attribution never lived in the pack). The
 	// attribution is discarded only on CONFIRMED removal. Acceptance is kept:
 	// trust was granted at adoption and re-attaching must not re-prompt.
-	if store, serr := loadPackTrustStore(); serr != nil {
-		fmt.Fprintf(out, "note: pack trust state unreadable (%v); host wrappers not cleared\n", serr)
-	} else if store.Installed != nil && len(store.Installed.Wrappers) > 0 {
+	if store.Installed != nil && len(store.Installed.Wrappers) > 0 {
 		names := append([]string(nil), store.Installed.Wrappers...)
 		if cerr := clearInstalledHostPackWrappers(out, store); cerr == nil {
 			fmt.Fprintf(out, "removed host wrappers: %s\n", strings.Join(names, ", "))

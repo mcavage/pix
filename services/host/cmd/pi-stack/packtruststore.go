@@ -22,6 +22,16 @@
 //     which pack put them there, so clear/swap stays reliable even when the
 //     pack directory itself is gone. Attribution is only discarded once
 //     removal is CONFIRMED.
+//   - Activation: the Phase-1 ACTIVATION PROVENANCE (which mcp/knowledge/
+//     gog_account/ollama_bridge_model entries the ACTIVE pack's last
+//     activation contributed, plus the prior config values to restore).
+//     This used to live only in pack.lock — INSIDE the pack payload — so a
+//     local `git pull`/zip update could forge it and make the next
+//     switch-away DELETE the user's own config entries (the same-pack
+//     reactivation path trusted the lock unconditionally). The launcher's
+//     own record here is now the ONLY source revertPackPriorContribution
+//     reads; pack.lock remains as a human-readable local hint but is never
+//     trusted for reversibility.
 //
 // Pack identity (trustKey): "remote:<url>#<commit>" when the launcher's own
 // adoption provenance exists for the pack's canonical path, else
@@ -73,11 +83,28 @@ type packInstalledSet struct {
 	Wrappers []string `json:"wrappers"`
 }
 
+// packActivationRecord is the HOST-owned copy of one activation's Phase-1
+// contribution set (what commitPackActivation used to trust pack.lock for).
+// There is at most one — the ACTIVE pack's. Keyed by the same pack identity
+// as acceptance (Owner = trustKey at activation time) plus the canonical
+// path, so lookups survive a later path→remote identity upgrade.
+type packActivationRecord struct {
+	Owner                  string   `json:"owner"`
+	Path                   string   `json:"path"`
+	MCP                    []string `json:"mcp,omitempty"`
+	Knowledge              []string `json:"knowledge,omitempty"`
+	GogAccount             string   `json:"gog_account,omitempty"`
+	PriorGogAccount        string   `json:"prior_gog_account,omitempty"`
+	OllamaBridgeModel      string   `json:"ollama_bridge_model,omitempty"`
+	PriorOllamaBridgeModel string   `json:"prior_ollama_bridge_model,omitempty"`
+}
+
 type packTrustStore struct {
-	Version   int                        `json:"version"`
-	Accepted  map[string]packTrustRecord `json:"accepted,omitempty"`
-	Adopted   map[string]packProvenance  `json:"adopted,omitempty"`
-	Installed *packInstalledSet          `json:"installed,omitempty"`
+	Version    int                        `json:"version"`
+	Accepted   map[string]packTrustRecord `json:"accepted,omitempty"`
+	Adopted    map[string]packProvenance  `json:"adopted,omitempty"`
+	Installed  *packInstalledSet          `json:"installed,omitempty"`
+	Activation *packActivationRecord      `json:"activation,omitempty"`
 }
 
 // loadPackTrustStore reads the trust store. Absent → an empty store (fresh
@@ -85,6 +112,12 @@ type packTrustStore struct {
 // decode: callers fail closed (the gate re-prompts; a strict host launch
 // refuses) rather than trusting half a store.
 func loadPackTrustStore() (*packTrustStore, error) {
+	// Lstat-REFUSE a symlinked store file on READ too (write already does): a
+	// pack-trust.json symlinked at an attacker-readable/-writable file must
+	// never supply crafted acceptance records. Fail closed, never follow.
+	if fi, lerr := os.Lstat(packTrustStorePath()); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s is a symlink; refusing to read through it", packTrustStorePath())
+	}
 	b, err := os.ReadFile(packTrustStorePath())
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -165,6 +198,44 @@ func (s *packTrustStore) recordAcceptance(key string, rec packTrustRecord) {
 		}
 	}
 	s.Accepted[key] = rec
+}
+
+// activationFor returns the activation provenance HOST state attributes to
+// root, as a packLock for revertPackPriorContribution. The record must be
+// attributed to THIS pack — canonical path or trust-key match — else the
+// zero value is returned (remove NOTHING; the safe default, same posture as
+// a missing lock). Nothing here ever reads the pack payload.
+func (s *packTrustStore) activationFor(root string) packLock {
+	if s == nil || s.Activation == nil {
+		return packLock{}
+	}
+	a := s.Activation
+	if a.Path != canonicalizePackRoot(root) && a.Owner != s.trustKey(root) {
+		return packLock{}
+	}
+	return packLock{
+		MCP:                    append([]string(nil), a.MCP...),
+		Knowledge:              append([]string(nil), a.Knowledge...),
+		GogAccount:             a.GogAccount,
+		PriorGogAccount:        a.PriorGogAccount,
+		OllamaBridgeModel:      a.OllamaBridgeModel,
+		PriorOllamaBridgeModel: a.PriorOllamaBridgeModel,
+	}
+}
+
+// setActivation records lock as the active pack's contribution set (the
+// caller saves the store; commitPackActivation owns the write ordering).
+func (s *packTrustStore) setActivation(root string, lock packLock) {
+	s.Activation = &packActivationRecord{
+		Owner:                  s.trustKey(root),
+		Path:                   canonicalizePackRoot(root),
+		MCP:                    append([]string(nil), lock.MCP...),
+		Knowledge:              append([]string(nil), lock.Knowledge...),
+		GogAccount:             lock.GogAccount,
+		PriorGogAccount:        lock.PriorGogAccount,
+		OllamaBridgeModel:      lock.OllamaBridgeModel,
+		PriorOllamaBridgeModel: lock.PriorOllamaBridgeModel,
+	}
 }
 
 // recordPackAdoptionInTrustStore durably records clone provenance in HOST

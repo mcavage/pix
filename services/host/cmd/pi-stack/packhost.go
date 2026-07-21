@@ -27,6 +27,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"pi-stack/host/config"
@@ -124,7 +125,11 @@ func clearInstalledHostPackWrappers(out io.Writer, store *packTrustStore) error 
 	}
 	store.Installed = nil
 	if err := store.save(); err != nil {
+		// The wrappers ARE gone; a stale attribution only over-claims (the next
+		// removal is a no-op). Still surfaced AND returned so launch-critical
+		// callers fail closed on an unwritable trust store.
 		fmt.Fprintf(out, "note: could not update pack trust state after removing host wrappers: %v\n", err)
+		return err
 	}
 	return nil
 }
@@ -260,6 +265,18 @@ func installHostPackWrappersStaged(p *packInfo, proxySHA map[string]string) ([]s
 // runHostSetup (strict=false: notes, setup never fails), and runHostLaunch
 // (strict=true: ANY problem returns an error and the launch must refuse).
 //
+// Wrapper install + attribution is a fail-closed transaction (round-2 D):
+// the INTENDED attribution (owner + the union of the previously-attributed
+// and about-to-be-installed names) is written to the trust store BEFORE the
+// dir swap, and trimmed to the actual set after. Install counts as
+// successful only when BOTH the swap and the store write succeeded; any
+// store-write failure returns an error (strict callers refuse the launch),
+// and at every point the store's attribution is a SUPERSET of what is live
+// in hostPackBinDir() — never a live wrapper the store attributes to nobody.
+// Clearing stale wrappers (no active pack, absent pack dir, Tier-0,
+// no-longer-accepted surface) is equally fail-closed in strict mode: a
+// launch never proceeds with orphan host executables on PATH.
+//
 // The gate here is the trust store's fingerprint (packtruststore.go): the
 // CURRENT host-exec surface is recomputed — MCP argv, host proxy script
 // CONTENT, bin pins, egress — and compared to the fingerprint the user
@@ -285,21 +302,31 @@ func refreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*p
 	if root == "" {
 		// No active pack: clear whatever host state attributes to the bin dir
 		// (works even though the previous pack's directory may be long gone).
-		_ = clearInstalledHostPackWrappers(out, store)
+		// A failed clear is FATAL for a strict (launch) caller: stale wrappers
+		// from a detached pack must never stay reachable on the host PATH.
+		if cerr := clearInstalledHostPackWrappers(out, store); cerr != nil && strict {
+			return nil, fmt.Errorf("stale pack host wrappers could not be cleared: %v (refusing host launch)", cerr)
+		}
 		return nil, nil
 	}
 	p, err := loadPack(root)
 	if err != nil {
 		if errors.Is(err, errNotAPack) {
+			// Genuinely absent pack: it still must not leave ITS wrappers live.
+			if cerr := clearInstalledHostPackWrappers(out, store); cerr != nil && strict {
+				return nil, fmt.Errorf("active pack unavailable (%v) and its host wrappers could not be cleared: %v (refusing host launch)", err, cerr)
+			}
 			fmt.Fprintf(out, "note: active pack unavailable (%v); host wrappers not refreshed\n", err)
 			return nil, nil
 		}
 		return nil, fmt.Errorf("active pack %s: %v (refusing to use its host wrappers; fix the pack or `pi-stack pack rm` to detach it)", root, err)
 	}
-	bom := computeHostBoM(p, cfg.GogAccount)
+	bom := computeHostBoM(p, cfg.GogAccount, packLocalMCP())
 	if !bom.tier1() {
 		// Tier-0 for host purposes: nothing to install; clear stale leftovers.
-		_ = clearInstalledHostPackWrappers(out, store)
+		if cerr := clearInstalledHostPackWrappers(out, store); cerr != nil && strict {
+			return nil, fmt.Errorf("stale pack host wrappers could not be cleared: %v (refusing host launch)", cerr)
+		}
 		return p, nil
 	}
 	fp, proxySHA, ferr := computeHostExecFingerprint(root, bom)
@@ -322,6 +349,44 @@ func refreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*p
 		_ = clearInstalledHostPackWrappers(out, store)
 		return p, nil
 	}
+
+	// Fail-closed install transaction (round-2 D). Step 1: record the INTENDED
+	// attribution — the new owner plus the UNION of the previously-attributed
+	// names and the names about to be staged — BEFORE anything touches the bin
+	// dir. If this write fails nothing installs (no orphan possible); if the
+	// swap below fails or is interrupted, the union still covers BOTH the old
+	// and the (possibly) new set, so a later clear can always attribute
+	// whatever is live. Over-attribution is safe: removing an absent name is a
+	// no-op.
+	intended := map[string]bool{}
+	if store.Installed != nil {
+		for _, n := range store.Installed.Wrappers {
+			intended[n] = true
+		}
+	}
+	for _, pr := range p.Manifest.Proxies {
+		if pr.Host {
+			intended[pr.Name] = true
+		}
+	}
+	for _, bn := range p.Manifest.Bins {
+		if bn.Host {
+			intended[bn.Name] = true
+		}
+	}
+	var intendedNames []string
+	for n := range intended {
+		intendedNames = append(intendedNames, n)
+	}
+	sort.Strings(intendedNames)
+	store.Installed = &packInstalledSet{Owner: key, Wrappers: intendedNames}
+	if werr := store.save(); werr != nil {
+		err := fmt.Errorf("pack %s: could not record intended host-wrapper attribution: %v (host wrappers NOT installed; fail closed)", p.Manifest.Name, werr)
+		if strict {
+			return nil, fmt.Errorf("%v — refusing host launch", err)
+		}
+		return p, err
+	}
 	installed, ierr := installHostPackWrappersStaged(p, proxySHA)
 	if ierr != nil {
 		if strict {
@@ -330,9 +395,17 @@ func refreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*p
 		fmt.Fprintf(out, "TODO: pack %s host wrappers not installed: %v\n", p.Manifest.Name, ierr)
 		return p, nil
 	}
+	// Step 2: the swap succeeded — trim the attribution to the ACTUAL set. A
+	// failure here still leaves the union attribution covering every live
+	// wrapper (no orphan), but the install is NOT considered successful: the
+	// error propagates and a strict caller refuses the launch.
 	store.Installed = &packInstalledSet{Owner: key, Wrappers: installed}
 	if werr := store.save(); werr != nil {
-		fmt.Fprintf(out, "note: could not record installed host wrappers in pack trust state: %v\n", werr)
+		err := fmt.Errorf("pack %s: host wrappers installed but the attribution write failed: %v (attribution over-claims until the store is writable)", p.Manifest.Name, werr)
+		if strict {
+			return nil, fmt.Errorf("%v — refusing host launch", err)
+		}
+		return p, err
 	}
 	if len(installed) > 0 {
 		fmt.Fprintf(out, "host wrappers installed (on PATH for `pi-stack host` only): %s\n", strings.Join(installed, ", "))

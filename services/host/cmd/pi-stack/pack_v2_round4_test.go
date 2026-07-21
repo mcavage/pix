@@ -57,7 +57,11 @@ func TestCommitPackActivation_LockFailureAbortsBeforeSave(t *testing.T) {
 	cfg.AddMCP("fastmail")
 	cfg.Pack = root
 
-	if err := commitPackActivation(cfg, root, packLock{MCP: []string{"fastmail"}}); err == nil {
+	store, serr := loadPackTrustStore()
+	if serr != nil {
+		t.Fatal(serr)
+	}
+	if err := commitPackActivation(cfg, store, root, packLock{MCP: []string{"fastmail"}}); err == nil {
 		t.Fatal("expected an error when the lock cannot be written")
 	}
 	if _, err := os.Stat(cfgPath); !os.IsNotExist(err) {
@@ -68,7 +72,7 @@ func TestCommitPackActivation_LockFailureAbortsBeforeSave(t *testing.T) {
 	if err := os.RemoveAll(packLockPath(root)); err != nil {
 		t.Fatal(err)
 	}
-	if err := commitPackActivation(cfg, root, packLock{MCP: []string{"fastmail"}}); err != nil {
+	if err := commitPackActivation(cfg, store, root, packLock{MCP: []string{"fastmail"}}); err != nil {
 		t.Fatalf("commit with a writable lock should succeed: %v", err)
 	}
 	if readPackLock(root).MCP[0] != "fastmail" {

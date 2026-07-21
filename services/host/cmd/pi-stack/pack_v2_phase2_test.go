@@ -38,7 +38,7 @@ func acceptPackSurface(t *testing.T, root, cfgGogAccount string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fp, _, err := computeHostExecFingerprint(root, computeHostBoM(p, cfgGogAccount))
+	fp, _, err := computeHostExecFingerprint(root, computeHostBoM(p, cfgGogAccount, packLocalMCP()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,10 +54,13 @@ func acceptPackSurface(t *testing.T, root, cfgGogAccount string) {
 
 // --- F5: computeHostBoM ---------------------------------------------------------
 
-// TestComputeHostBoM_EnumeratesEveryHostExecFacet: the BoM lists every MCP (with
-// the resolved serverCmd argv), every host wrapper, every [[bin]] (path+sha),
-// the egress union across ALL proxies (sandbox egress informs the screen even
-// though it never raises the tier), and credential VAR names — never values.
+// TestComputeHostBoM_EnumeratesEveryHostExecFacet: the BoM lists every LOCAL
+// MCP (with the resolved serverCmd argv), every host wrapper, every host=true
+// [[bin]] (path+sha), the egress union across ALL proxies (sandbox egress
+// informs the screen even though it never raises the tier), and credential
+// VAR names — never values. The classifier here marks both names LOCAL (the
+// Tier-1 case); the remote/reference-only partition half is pinned by
+// TestComputeHostBoM_RemoteMCPReferenceIsTier0.
 func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 	p := &packInfo{Root: "/p", Manifest: packManifest{
 		Name: "work",
@@ -71,7 +74,7 @@ func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 		},
 		Bins: []packBin{{Name: "fastmail-mcp", Path: "bin/fastmail-mcp", SHA: "9F2C", Host: true}},
 	}}
-	b := computeHostBoM(p, "")
+	b := computeHostBoM(p, "", func(string) bool { return true })
 	if !b.tier1() {
 		t.Fatal("a pack with mcp + host proxy + bin must be Tier-1")
 	}
@@ -107,7 +110,7 @@ func TestComputeHostBoM_Tier0(t *testing.T) {
 		Proxies:      []packProxy{{Name: "snowflake", Egress: []string{"snowflakecomputing.com"}}},
 		Integrations: []packIntegration{{Name: "ref-only", Env: "SOME_TOKEN"}}, // env but NO mcp
 	}}
-	if b := computeHostBoM(p, ""); b.tier1() {
+	if b := computeHostBoM(p, "", func(string) bool { return true }); b.tier1() {
 		t.Errorf("no mcp, no host proxy, no bin must be Tier-0, got %+v", b)
 	}
 }
@@ -167,7 +170,9 @@ func TestHostExecFingerprint(t *testing.T) {
 	}
 	fpOf := func(account string, m packManifest) string {
 		t.Helper()
-		fp, _, err := computeHostExecFingerprint(root, computeHostBoM(&packInfo{Root: root, Manifest: m}, account))
+		// Classifier: every declared mcp name is LOCAL here — this test pins
+		// the fingerprint's coverage of the host-spawned MCP surface.
+		fp, _, err := computeHostExecFingerprint(root, computeHostBoM(&packInfo{Root: root, Manifest: m}, account, func(string) bool { return true }))
 		if err != nil {
 			t.Fatalf("fingerprint: %v", err)
 		}
@@ -201,7 +206,7 @@ func TestHostExecFingerprint(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "bin", "platformio")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := computeHostExecFingerprint(root, computeHostBoM(&packInfo{Root: root, Manifest: base}, "")); err == nil {
+	if _, _, err := computeHostExecFingerprint(root, computeHostBoM(&packInfo{Root: root, Manifest: base}, "", func(string) bool { return true })); err == nil {
 		t.Error("a missing host proxy script must fail the fingerprint (fail closed)")
 	}
 }
@@ -213,7 +218,10 @@ func TestHostExecFingerprint(t *testing.T) {
 // commit, no acceptance recorded. Subprocess because runPackUse os.Exits.
 func TestPackUse_Tier1NonTTYFailsClosed(t *testing.T) {
 	if os.Getenv("PI_STACK_TEST_PHASE2") == "tier1-nontty" {
-		runPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PI_STACK_TEST_PACK_ROOT")})
+		// The pack's mcp must classify as a LOCAL host command for Tier-1
+		// (round-2 C: a remote reference no longer gates).
+		hostBinaryResolver = func() (string, error) { return "pi-stack-host", nil }
+		runPackUse(localMCPEnv("fastmail"), os.Stdout, []string{os.Getenv("PI_STACK_TEST_PACK_ROOT")})
 		return // exit 0 == the gate did NOT fail closed
 	}
 	dir := t.TempDir()
@@ -286,17 +294,19 @@ func TestPackUse_Tier0StillSilent(t *testing.T) {
 // TestPackUse_AcceptanceSticksAcrossReactivation: after a --yes adoption the
 // acceptance is recorded in the HOST trust store (never in the pack payload),
 // so re-activating the SAME pack without --yes on a non-TTY succeeds (trust
-// granted at adoption, no re-prompt).
+// granted at adoption, no re-prompt). The mcp is pinned LOCAL so the pack is
+// Tier-1 (round-2 C: a remote reference would not gate at all).
 func TestPackUse_AcceptanceSticksAcrossReactivation(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	pinLocalMCP(t, "fastmail")
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packManifest{Name: "work", Schema: 1,
 		Integrations: []packIntegration{{Name: "Fastmail", MCP: "fastmail"}}})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"})
+	runPackUse(localMCPEnv("fastmail"), &out, []string{root, "--yes"})
 	store, serr := loadPackTrustStore()
 	if serr != nil {
 		t.Fatal(serr)
@@ -311,7 +321,7 @@ func TestPackUse_AcceptanceSticksAcrossReactivation(t *testing.T) {
 	// Reactivation without --yes on a non-TTY: a misfiring gate would
 	// os.Exit(1) here and fail the whole test binary.
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{root})
+	runPackUse(localMCPEnv("fastmail"), &out, []string{root})
 	if strings.Contains(out.String(), "runs code on your host") {
 		t.Errorf("covered BoM must not re-render the gate screen:\n%s", out.String())
 	}
