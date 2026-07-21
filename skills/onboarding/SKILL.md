@@ -104,6 +104,17 @@ concrete first thing grounded in what's in front of you. Do not interview them.
   git -C <pack.path> add -A && git commit -m "add <name> skill"
   ```
 
+## Onboarding persists across turns (don't lose the thread)
+
+Onboarding is NOT a one-shot: a scaffold keeps it open so you keep teaching as the
+work unfolds instead of forgetting after the first task. While
+`<workspace>/.pi-stack/onboarding.state` exists and is active, you'll get a short
+reminder each turn. Honor it: at natural breaks, surface one not-yet-seen
+capability if it fits. When you've given a light tour across a few of them and
+the user is working smoothly (or they say they're done), tell them onboarding's
+wrapped and DELETE `<workspace>/.pi-stack/onboarding.state` so the reminders
+stop.
+
 ## Leave them working
 
 No closing banner or receipt. When the first real piece of work is done, keep

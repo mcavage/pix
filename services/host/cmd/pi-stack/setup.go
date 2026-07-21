@@ -97,6 +97,12 @@ func runSetupCmd(argv []string) {
 		os.Exit(1)
 	}
 
+	// Drop the onboarding scaffold marker into the workspace so the in-VM
+	// onboarding extension keeps the "teach as we go" intent alive across turns
+	// (a single kickoff message gets forgotten once the agent dives into a task).
+	// Best-effort; the kickoff still works without it, just without persistence.
+	writeOnboardingMarker(dir)
+
 	// Phase 2: hand off to the in-VM onboarding agent via an initial message.
 	fmt.Fprintln(os.Stdout, "")
 	fmt.Fprintln(os.Stdout, "Sandbox ready. Launching pi — it'll introduce itself, show you how it works,")
@@ -114,6 +120,22 @@ func runSetupCmd(argv []string) {
 // (and is not) ready. The only interactive step is pasting op:// refs for
 // providers missing one (TTY + op installed); with flags OR no TTY it is fully
 // non-interactive (the CI path).
+// writeOnboardingMarker writes <dir>/.pi-stack/onboarding.state ({"active":true}),
+// the one-shot marker the in-VM onboarding extension reads to keep the teaching
+// intent alive every turn until it (or the user, or a turn cap) clears it.
+func writeOnboardingMarker(dir string) {
+	if strings.TrimSpace(dir) == "" || dir == "." {
+		if wd, err := os.Getwd(); err == nil {
+			dir = wd
+		}
+	}
+	d := filepath.Join(dir, ".pi-stack")
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(d, "onboarding.state"), []byte("{\"active\":true}\n"), 0o644)
+}
+
 func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, tty bool) error {
 	fmt.Fprintln(out, "pi-stack setup — configuring the host")
 	fmt.Fprintln(out, "")
