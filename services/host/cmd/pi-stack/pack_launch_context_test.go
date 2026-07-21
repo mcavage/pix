@@ -27,7 +27,7 @@ func TestWritePackContextFiles_WritesMemoryScopeAndOllamaModel(t *testing.T) {
 	cfg := &config.Config{Pack: packRoot, OllamaBridgeModel: "qwen3.5:9b"}
 	o := runOpts{Workspace: ws}
 
-	writePackContextFiles(cfg, o)
+	writePackContextFiles(cfg, o, activePackRoot(cfg.Pack, o.Pack))
 
 	gotScope := readFile(t, filepath.Join(ws, ".pi-stack", "profile"))
 	if got := trimTrailingNewline(gotScope); got != "work" {
@@ -47,7 +47,7 @@ func TestWritePackContextFiles_NoPack_UnscopedMemoryDefaultModel(t *testing.T) {
 	cfg := &config.Config{}
 	o := runOpts{Workspace: ws}
 
-	writePackContextFiles(cfg, o)
+	writePackContextFiles(cfg, o, activePackRoot(cfg.Pack, o.Pack))
 
 	if _, err := os.Stat(filepath.Join(ws, ".pi-stack", "profile")); err == nil {
 		t.Error("no active pack should leave memory unscoped (no profile file)")
@@ -71,7 +71,7 @@ func TestWritePackContextFiles_PackOverrideWins(t *testing.T) {
 	cfg := &config.Config{Pack: "/nonexistent/pack"}
 	o := runOpts{Workspace: ws, Pack: packRoot}
 
-	writePackContextFiles(cfg, o)
+	writePackContextFiles(cfg, o, activePackRoot(cfg.Pack, o.Pack))
 
 	gotScope := trimTrailingNewline(readFile(t, filepath.Join(ws, ".pi-stack", "profile")))
 	if gotScope != "personal-scope" {

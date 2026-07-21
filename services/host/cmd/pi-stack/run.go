@@ -149,14 +149,25 @@ func runRun(argv []string) {
 	// this sandbox. --pack overrides config.Pack; with neither set, the personal
 	// pack (config.PackDir()) loads if it exists. Create-time only (skills +
 	// knowledge are create-time mounts; a re-attach keeps what it was made with).
+	// effectivePack is the pack root that ACTUALLY loaded and applied, as
+	// opposed to activePackRoot(cfg.Pack, o.Pack) (the merely CONFIGURED one).
+	// It defaults to the configured root for a re-attach (no applyPackToLaunch
+	// call — writePackContextFiles below still attempts its own load and
+	// degrades to unscoped on failure), and is overwritten with
+	// applyPackToLaunch's honest return on a create, where it becomes "" if
+	// the pack degraded via errNotAPack. This is what keeps the sandbox.pack
+	// marker and memory scope from disagreeing about what actually loaded.
+	effectivePack := activePackRoot(cfg.Pack, o.Pack)
 	if willCreate(state, o.Replace) {
 		// Fatal on error (explicit --pack that doesn't load, or a declared
 		// sandbox proxy whose kit can't be built — round-4 F2 fail-closed):
 		// never create a sandbox missing context the pack declared.
-		if err := applyPackToLaunch(cfg, &o, defaultShellEnv()); err != nil {
+		root, err := applyPackToLaunch(cfg, &o, defaultShellEnv())
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "pi-stack: %v\n", err)
 			os.Exit(1)
 		}
+		effectivePack = root
 	}
 
 	// Local-image preflight: when we're about to pin --template to a locally loaded
@@ -222,7 +233,7 @@ func runRun(argv []string) {
 	// unloadable pack degrades to unscoped rather than failing run. Shared with
 	// `task new` via writePackContextFiles (pack.go) so both launch paths write
 	// the SAME pack context.
-	writePackContextFiles(cfg, o)
+	writePackContextFiles(cfg, o, effectivePack)
 
 	// finding G + round-3 R3: record the pack this sandbox is being CREATED
 	// with (workspace marker), so a later re-attach can warn precisely when the
@@ -232,9 +243,14 @@ func runRun(argv []string) {
 	// create args for a FAILED probe, but sbx may well re-attach the OLD sandbox
 	// then, and overwriting the marker with the active pack would silence the
 	// stale-pack warning for a sandbox still carrying its create-time pack. On
-	// a re-attach/unknown path any existing marker stays untouched.
+	// a re-attach/unknown path any existing marker stays untouched. Written
+	// from effectivePack (what applyPackToLaunch actually applied), NOT
+	// activePackRoot(cfg.Pack, o.Pack) — a degraded (errNotAPack) launch must
+	// record NO pack, or a later reattach's stalePackReattachWarning would
+	// wrongly stay silent comparing marker == active while the sandbox never got
+	// the pack's facets.
 	if definitelyCreating(state, o.Replace) {
-		writeSandboxPackMarker(o.Workspace, activePackRoot(cfg.Pack, o.Pack))
+		writeSandboxPackMarker(o.Workspace, effectivePack)
 	}
 
 	// Host-state truth file: the host-visible facts the fenced agent can't see

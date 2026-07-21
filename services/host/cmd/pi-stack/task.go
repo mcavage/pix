@@ -1149,7 +1149,12 @@ func launchTask(o runOpts) error {
 	// A task is a fresh sandbox; mount the active pack (skills + model pref) so it
 	// gets the same authored context a normal `pi-stack run` does. Fatal on error
 	// (round-4 F2): a declared-but-unbuildable pack wrapper refuses the launch.
-	if err := applyPackToLaunch(cfg, &o, defaultShellEnv()); err != nil {
+	// effectivePack is what actually loaded/applied — "" when there is no active
+	// pack OR applyPackToLaunch degraded via errNotAPack — and is what the
+	// sandbox.pack marker + memory scope below must agree on (never the merely
+	// CONFIGURED activePackRoot(cfg.Pack, o.Pack)).
+	effectivePack, err := applyPackToLaunch(cfg, &o, defaultShellEnv())
+	if err != nil {
 		return err
 	}
 
@@ -1205,8 +1210,8 @@ func launchTask(o runOpts) error {
 			fmt.Fprintln(os.Stderr, msg)
 		}
 	}
-	writePackContextFiles(cfg, o)
-	writeSandboxPackMarker(o.Workspace, activePackRoot(cfg.Pack, o.Pack))
+	writePackContextFiles(cfg, o, effectivePack)
+	writeSandboxPackMarker(o.Workspace, effectivePack)
 
 	args := buildSbxArgs(cfg, o, version)
 	if os.Getenv("PI_STACK_DEBUG") != "" {

@@ -327,27 +327,39 @@ func personalPackRoot() string { return config.PackDir() }
 // as if no pack were active. A declared-but-unbuildable sandbox proxy is ALSO
 // fatal (round-4 F2): the launch fails CLOSED rather than creating a sandbox
 // missing a declared wrapper.
-func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) error {
+//
+// It returns the EFFECTIVE active-pack root it actually applied: "" when there
+// is no active pack, OR when it degraded via errNotAPack (genuinely absent —
+// see below); the real packRoot when a pack loaded and its context was mounted
+// onto o/cfg. Callers (run.go, task.go) MUST write the sandbox.pack marker and
+// scope memory from this returned root, never from activePackRoot(cfg.Pack,
+// o.Pack) directly — the configured path can name a pack that degraded to
+// pack-less this launch, and recording it anyway would make a later
+// stalePackReattachWarning wrongly stay silent (marker == active) even though
+// the sandbox never got the pack's create-time facets.
+func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, error) {
 	packRoot := activePackRoot(cfg.Pack, o.Pack)
 	if packRoot == "" {
-		return nil // no active pack; nothing to mount (detached or never created)
+		return "", nil // no active pack; nothing to mount (detached or never created)
 	}
 	p, err := loadPack(packRoot)
 	if err != nil {
 		if strings.TrimSpace(o.Pack) != "" {
-			return fmt.Errorf("--pack %s: %v", o.Pack, err)
+			return "", fmt.Errorf("--pack %s: %v", o.Pack, err)
 		}
 		if errors.Is(err, errNotAPack) {
 			// Genuinely absent (deleted dir / no pack.toml): warn and launch
 			// without it, as if no pack were active. Not fatal — a stale
-			// cfg.Pack must not brick every launch.
+			// cfg.Pack must not brick every launch. The pack did NOT apply, so
+			// the effective root is "" — the caller must not mark this launch
+			// as having this pack.
 			fmt.Fprintf(os.Stderr, "pi-stack: active pack unavailable (%v); launching without it — `pi-stack pack use <path>` to re-point it or `pi-stack pack rm` to detach\n", err)
-			return nil
+			return "", nil
 		}
 		// The pack EXISTS but won't load (symlink injected, validation/parse
 		// failure): fail the launch closed. Creating a sandbox from a broken or
 		// tampered active pack would silently drop its declared context.
-		return fmt.Errorf("active pack %s: %v (refusing to launch without the pack's declared context; fix the pack or `pi-stack pack rm` to detach it)", packRoot, err)
+		return "", fmt.Errorf("active pack %s: %v (refusing to launch without the pack's declared context; fix the pack or `pi-stack pack rm` to detach it)", packRoot, err)
 	}
 	if p.SkillsDir != "" && !containsStr(o.Skills, p.SkillsDir) {
 		o.Skills = append(o.Skills, p.SkillsDir)
@@ -366,7 +378,7 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) error {
 	// wrapper the pack promised it.
 	kit, kerr := synthesizePackKit(p)
 	if kerr != nil {
-		return fmt.Errorf("pack %s: %v (refusing to launch a sandbox missing a declared wrapper; fix the pack's bin/ or drop the [[proxy]] entry)", p.Manifest.Name, kerr)
+		return "", fmt.Errorf("pack %s: %v (refusing to launch a sandbox missing a declared wrapper; fix the pack's bin/ or drop the [[proxy]] entry)", p.Manifest.Name, kerr)
 	}
 	if kit != "" && !containsStr(o.PackKits, kit) {
 		o.PackKits = append(o.PackKits, kit)
@@ -376,7 +388,7 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) error {
 			fmt.Fprintf(os.Stderr, "pi-stack: pack integration %q needs a credential — set it: pi-stack secret set %s op://vault/item/field\n", ig.Name, ig.Env)
 		}
 	}
-	return nil
+	return packRoot, nil
 }
 
 // packMcpNames returns the de-duplicated `integration.mcp` names a pack
@@ -893,11 +905,17 @@ func writeMemoryScope(workspace string, p *packInfo) {
 // write these but not `task new`. Best-effort throughout: an unloadable pack
 // degrades to unscoped memory rather than failing the launch (mirrors
 // writeMemoryScope's own contract).
-func writePackContextFiles(cfg *config.Config, o runOpts) {
+//
+// effectivePack is the root applyPackToLaunch actually applied (its returned
+// value) — NOT activePackRoot(cfg.Pack, o.Pack) directly. This keeps memory
+// scoping honest with the sandbox.pack marker: when applyPackToLaunch
+// degraded (errNotAPack), effectivePack is "" and memory stays unscoped, even
+// though cfg.Pack/o.Pack still name the (unavailable) configured pack.
+func writePackContextFiles(cfg *config.Config, o runOpts, effectivePack string) {
 	writeOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
 	var activePack *packInfo
-	if root := activePackRoot(cfg.Pack, o.Pack); root != "" {
-		if lp, lerr := loadPack(root); lerr == nil {
+	if effectivePack != "" {
+		if lp, lerr := loadPack(effectivePack); lerr == nil {
 			activePack = lp
 		}
 	}
