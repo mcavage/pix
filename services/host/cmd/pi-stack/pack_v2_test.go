@@ -45,7 +45,7 @@ host = true
 
 [[knowledge]]
 name = "team-runbooks"
-source = "/tmp/does-not-need-to-exist"
+source = "https://github.com/acme/runbooks.git"
 shared = true
 
 [[knowledge]]

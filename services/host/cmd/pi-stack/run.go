@@ -230,6 +230,14 @@ func runRun(argv []string) {
 		writeMemoryScope(o.Workspace, activePack)
 	}
 
+	// finding G: record the pack this sandbox is being CREATED with (workspace
+	// marker), so a later re-attach can warn precisely when the create-time
+	// pack differs from the then-active pack — and stay silent when they match.
+	// Never rewritten on a re-attach: the marker is create-time truth.
+	if willCreate(state, o.Replace) {
+		writeSandboxPackMarker(o.Workspace, activePackRoot(cfg.Pack, o.Pack))
+	}
+
 	// Host-state truth file: the host-visible facts the fenced agent can't see
 	// (keys/services/knowledge/gog/mcp/models/overlay). The onboarding skill reads
 	// it instead of guessing. Best-effort.
@@ -296,26 +304,74 @@ func applyReplaceRm(env shellEnv, plan runLaunchPlan, name string) error {
 	return nil
 }
 
-// stalePackReattachWarning returns the ADR-3 "stale pack" reminder
-// (packs-v2-impl.md finding #8) `runRun` should print when RE-ATTACHING (not
-// creating, not --replace) to a sandbox while the active pack carries
-// create-only facets (mcp integrations, sandbox bin/ proxies, or skills) — none
-// of those attach to an already-running/stopped sandbox without a recreate.
-// Returns "" when there is nothing to warn about: this IS a create/replace, no
-// pack is active, or the active pack has no create-only facet.
+// sandboxPackMarkerPath is <workspace>/.pi-stack/sandbox.pack: the pack root
+// this workspace's sandbox was CREATED with (finding G). Written on every
+// create (removed when created pack-less), never on a re-attach, so a later
+// re-attach compares create-time truth against the CURRENT active pack instead
+// of guessing from the active pack alone.
+func sandboxPackMarkerPath(workspace string) string {
+	return filepath.Join(workspace, ".pi-stack", "sandbox.pack")
+}
+
+// writeSandboxPackMarker records the pack root a sandbox is being created with
+// (or removes the marker when creating pack-less). Best-effort: a failed write
+// only costs a future stale-pack reminder, never the launch.
+func writeSandboxPackMarker(workspace, packRoot string) {
+	path := sandboxPackMarkerPath(workspace)
+	if strings.TrimSpace(packRoot) == "" {
+		_ = os.Remove(path)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(path, []byte(canonicalizePackRoot(packRoot)+"\n"), 0o644)
+}
+
+// readSandboxPackMarker returns the create-time pack root recorded for this
+// workspace's sandbox, or "" when no marker exists (a sandbox created before
+// markers existed, or created pack-less).
+func readSandboxPackMarker(workspace string) string {
+	b, err := os.ReadFile(sandboxPackMarkerPath(workspace))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// stalePackReattachWarning returns the "stale pack" reminder `runRun` prints
+// when RE-ATTACHING (not creating, not --replace) to a sandbox whose
+// CREATE-TIME pack differs from the current active pack (finding G). The
+// create-time pack comes from the workspace marker written at create
+// (writeSandboxPackMarker); comparing marker vs active is what makes the
+// message honest in BOTH directions:
+//   - no false warning when the sandbox already carries the current pack
+//     (marker == active pack), and
+//   - a warning after `pack rm` (marker set, active empty): the old sandbox
+//     still has the removed pack's create-time mcp/bin/skills baked in.
+//
+// No marker => no warning: a sandbox created before markers existed (or
+// pack-less) gives us nothing to compare, and guessing from the active pack
+// alone is exactly what produced the old false positives.
 func stalePackReattachWarning(cfg *config.Config, o runOpts, reattaching bool) string {
 	if !reattaching || o.Replace {
 		return ""
 	}
-	root := activePackRoot(cfg.Pack, o.Pack)
-	if root == "" {
+	created := readSandboxPackMarker(o.Workspace)
+	if created == "" {
 		return ""
 	}
-	p, err := loadPack(root)
-	if err != nil || !packHasCreateOnlyFacets(p) {
+	active := ""
+	if root := activePackRoot(cfg.Pack, o.Pack); root != "" {
+		active = canonicalizePackRoot(root)
+	}
+	if created == active {
 		return ""
 	}
-	return fmt.Sprintf("pi-stack: re-attaching without --replace — pack %q's mcp/bin/skills won't attach until you recreate: pi-stack run --replace", p.Manifest.Name)
+	if active == "" {
+		return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q (since detached); its mcp/bin/skills are still attached until you recreate: pi-stack run --replace", created)
+	}
+	return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q, not the active pack %q; the active pack's mcp/bin/skills won't attach until you recreate: pi-stack run --replace", created, active)
 }
 
 // modelProviders are the model-provider secret keys a pi session needs at least

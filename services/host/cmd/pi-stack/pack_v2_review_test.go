@@ -457,42 +457,69 @@ func TestPrintPackRecreateLine_MentionsSkills(t *testing.T) {
 	}
 }
 
-func TestStalePackReattachWarning_FiresOnReattachWithActiveFacets(t *testing.T) {
-	root := t.TempDir()
-	mustWritePack(t, root, packManifest{Name: "work", Schema: 1, Integrations: []packIntegration{
-		{Name: "Fastmail", MCP: "fastmail"},
-	}})
-	cfg := &config.Config{Pack: root}
-	msg := stalePackReattachWarning(cfg, runOpts{}, true)
+// TestStalePackReattachWarning_FiresWhenCreateTimePackDiffers (finding G): the
+// warning keys on the CREATE-TIME marker vs the active pack — it fires when
+// they differ (a pack switched since create, or removed via `pack rm`), and
+// names both sides.
+func TestStalePackReattachWarning_FiresWhenCreateTimePackDiffers(t *testing.T) {
+	ws := t.TempDir()
+	oldRoot := filepath.Join(t.TempDir(), "old-pack")
+	newRoot := filepath.Join(t.TempDir(), "new-pack")
+	writeSandboxPackMarker(ws, oldRoot)
+
+	// Switched pack since create: marker != active -> warn.
+	cfg := &config.Config{Pack: newRoot}
+	msg := stalePackReattachWarning(cfg, runOpts{Workspace: ws}, true)
 	if msg == "" {
-		t.Fatal("expected a stale-pack warning on reattach with an mcp-carrying active pack")
+		t.Fatal("expected a stale-pack warning when the create-time pack differs from the active pack")
 	}
-	if !strings.Contains(msg, "work") || !strings.Contains(msg, "--replace") {
-		t.Errorf("warning should name the pack and the fix, got: %q", msg)
+	if !strings.Contains(msg, canonicalizePackRoot(oldRoot)) || !strings.Contains(msg, canonicalizePackRoot(newRoot)) || !strings.Contains(msg, "--replace") {
+		t.Errorf("warning should name both packs and the fix, got: %q", msg)
+	}
+
+	// `pack rm` case: marker set, active pack EMPTY -> still warn (the old
+	// sandbox keeps the removed pack's create-time facets).
+	msgRm := stalePackReattachWarning(&config.Config{}, runOpts{Workspace: ws}, true)
+	if msgRm == "" {
+		t.Fatal("expected a warning after pack rm (marker set, active pack empty)")
+	}
+	if !strings.Contains(msgRm, canonicalizePackRoot(oldRoot)) || !strings.Contains(msgRm, "--replace") {
+		t.Errorf("rm-case warning should name the create-time pack and the fix, got: %q", msgRm)
 	}
 }
 
-func TestStalePackReattachWarning_SilentOnCreateOrReplaceOrNoPack(t *testing.T) {
-	root := t.TempDir()
-	mustWritePack(t, root, packManifest{Name: "work", Schema: 1, Integrations: []packIntegration{
-		{Name: "Fastmail", MCP: "fastmail"},
-	}})
+// TestStalePackReattachWarning_SilentWhenNoMarkerOrIdentical (finding G): no
+// marker (a pre-marker or pack-less sandbox) or an identical marker (the
+// sandbox already carries the active pack) must NOT warn — the identical case
+// is the false positive the marker exists to kill.
+func TestStalePackReattachWarning_SilentWhenNoMarkerOrIdentical(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "work")
 	cfg := &config.Config{Pack: root}
 
-	if msg := stalePackReattachWarning(cfg, runOpts{}, false); msg != "" {
-		t.Errorf("a create/first-launch (reattaching=false) must not warn, got %q", msg)
-	}
-	if msg := stalePackReattachWarning(cfg, runOpts{Replace: true}, true); msg != "" {
-		t.Errorf("--replace recreates, so must not warn, got %q", msg)
-	}
-	if msg := stalePackReattachWarning(&config.Config{}, runOpts{}, true); msg != "" {
-		t.Errorf("no active pack must not warn, got %q", msg)
+	// No marker in the workspace: silent, even with an active pack.
+	if msg := stalePackReattachWarning(cfg, runOpts{Workspace: t.TempDir()}, true); msg != "" {
+		t.Errorf("no marker must not warn, got %q", msg)
 	}
 
-	noFacets := t.TempDir()
-	mustWritePack(t, noFacets, packManifest{Name: "plain", Schema: 1})
-	cfgPlain := &config.Config{Pack: noFacets}
-	if msg := stalePackReattachWarning(cfgPlain, runOpts{}, true); msg != "" {
-		t.Errorf("a pack with no create-only facets must not warn, got %q", msg)
+	// Marker matches the active pack: the sandbox already has it — silent.
+	ws := t.TempDir()
+	writeSandboxPackMarker(ws, root)
+	if msg := stalePackReattachWarning(cfg, runOpts{Workspace: ws}, true); msg != "" {
+		t.Errorf("marker == active pack must not warn (false positive), got %q", msg)
+	}
+
+	// Create / --replace paths never warn, marker or not.
+	if msg := stalePackReattachWarning(cfg, runOpts{Workspace: ws}, false); msg != "" {
+		t.Errorf("a create/first-launch (reattaching=false) must not warn, got %q", msg)
+	}
+	writeSandboxPackMarker(ws, filepath.Join(t.TempDir(), "other"))
+	if msg := stalePackReattachWarning(cfg, runOpts{Workspace: ws, Replace: true}, true); msg != "" {
+		t.Errorf("--replace recreates, so must not warn, got %q", msg)
+	}
+
+	// Marker removed when the sandbox is created pack-less: silent afterwards.
+	writeSandboxPackMarker(ws, "")
+	if msg := stalePackReattachWarning(&config.Config{}, runOpts{Workspace: ws}, true); msg != "" {
+		t.Errorf("pack-less create removes the marker, so no warning, got %q", msg)
 	}
 }
