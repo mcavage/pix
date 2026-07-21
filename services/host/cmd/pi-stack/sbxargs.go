@@ -241,6 +241,18 @@ func willCreate(state sbxState, replace bool) bool {
 	}
 }
 
+// definitelyCreating reports whether the launch is CERTAIN to create a fresh
+// sandbox: --replace (rm -f then create), or a POSITIVE "not present" probe.
+// It deliberately differs from willCreate on sbxUnknown (round-3 R3):
+// willCreate optimistically prepares create args when the probe FAILED — sbx
+// itself may still re-attach the existing sandbox — so persisted create-time
+// state (the workspace sandbox.pack marker) must gate on THIS stricter
+// predicate, never on willCreate, or a transient `sbx ls` failure would
+// overwrite the marker for a sandbox that was in fact re-attached.
+func definitelyCreating(state sbxState, replace bool) bool {
+	return replace || state == sbxAbsent
+}
+
 // buildReattachArgs composes the argv for RE-ATTACHING to an existing sandbox:
 // `run --name <name>`, deliberately WITHOUT any create-only flag
 // (--kit/--template/--mcp, the overlay-kit stack, or the --dev/--skills live

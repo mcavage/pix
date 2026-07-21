@@ -357,12 +357,13 @@ func TestPackAdd_Mcp_RetryReregisters(t *testing.T) {
 	}
 }
 
-// --- finding F [BLOCK]: kit synth is atomic, unique-temped, and never leaves
-// no kit ------------------------------------------------------------------------
+// --- finding F [BLOCK] + round-3 R2: every synth yields its OWN complete kit
+// dir — no shared mutable path, no no-kit window --------------------------------
 
-// TestSynthesizePackKit_ResynthOverExistingKit: a synth while a previous kit
-// already exists (the concurrent/stale case) yields a complete, valid kit at
-// the same stable path, and leaves no temp/aside debris behind.
+// TestSynthesizePackKit_ResynthOverExistingKit: two synths of the SAME pack
+// yield two INDEPENDENT, complete kit dirs (round-3 R2: each launch gets a
+// unique per-launch dir, so concurrent launches never clash and there is no
+// replace-in-place window), and neither leaves legacy temp/aside debris.
 func TestSynthesizePackKit_ResynthOverExistingKit(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
@@ -381,16 +382,23 @@ func TestSynthesizePackKit_ResynthOverExistingKit(t *testing.T) {
 	if kit1 == "" {
 		t.Fatal("first synth failed")
 	}
-	kit2 := synthesizePackKit(p, &bytes.Buffer{}) // over the existing kit
-	if kit2 != kit1 {
-		t.Fatalf("kit dir must be stable, got %q then %q", kit1, kit2)
+	kit2 := synthesizePackKit(p, &bytes.Buffer{}) // second launch, same pack
+	if kit2 == "" {
+		t.Fatal("second synth failed")
 	}
-	for _, f := range []string{"spec.yaml", "files/usr/local/bin/a", "files/usr/local/bin/b"} {
-		if _, err := os.Stat(filepath.Join(kit2, f)); err != nil {
-			t.Errorf("resynth kit incomplete, missing %s: %v", f, err)
+	if kit2 == kit1 {
+		t.Fatalf("round-3 R2: two launches must get two independent kit dirs, got %q twice", kit1)
+	}
+	// BOTH kits are complete and valid — the second synth never mutated or
+	// displaced the first (a concurrent launch may still be reading it).
+	for _, kit := range []string{kit1, kit2} {
+		for _, f := range []string{"spec.yaml", "files/usr/local/bin/a", "files/usr/local/bin/b"} {
+			if _, err := os.Stat(filepath.Join(kit, f)); err != nil {
+				t.Errorf("kit %s incomplete, missing %s: %v", kit, f, err)
+			}
 		}
 	}
-	// No shared fixed ".tmp" path and no leftover temp/aside dirs.
+	// No legacy swap debris (temp/aside dirs from the old replace-in-place synth).
 	entries, err := os.ReadDir(filepath.Dir(kit2))
 	if err != nil {
 		t.Fatal(err)

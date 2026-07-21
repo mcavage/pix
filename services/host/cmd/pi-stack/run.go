@@ -230,11 +230,16 @@ func runRun(argv []string) {
 		writeMemoryScope(o.Workspace, activePack)
 	}
 
-	// finding G: record the pack this sandbox is being CREATED with (workspace
-	// marker), so a later re-attach can warn precisely when the create-time
-	// pack differs from the then-active pack — and stay silent when they match.
-	// Never rewritten on a re-attach: the marker is create-time truth.
-	if willCreate(state, o.Replace) {
+	// finding G + round-3 R3: record the pack this sandbox is being CREATED
+	// with (workspace marker), so a later re-attach can warn precisely when the
+	// create-time pack differs from the then-active pack — and stay silent when
+	// they match. Written ONLY on a DEFINITE create (--replace, or a positive
+	// "absent" probe) — never on sbxUnknown: willCreate optimistically prepares
+	// create args for a FAILED probe, but sbx may well re-attach the OLD sandbox
+	// then, and overwriting the marker with the active pack would silence the
+	// stale-pack warning for a sandbox still carrying its create-time pack. On
+	// a re-attach/unknown path any existing marker stays untouched.
+	if definitelyCreating(state, o.Replace) {
 		writeSandboxPackMarker(o.Workspace, activePackRoot(cfg.Pack, o.Pack))
 	}
 

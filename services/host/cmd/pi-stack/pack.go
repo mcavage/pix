@@ -357,11 +357,12 @@ func packMcpNames(p *packInfo) []string {
 	return names
 }
 
-// packKitDir resolves the ephemeral mixin-kit dir a pack's sandbox bin/
-// wrappers are synthesized into: <StateDir>/pi-stack/pack-kits/<hash>/, keyed by
-// a hash of the pack root so re-launching the same pack overwrites in place
-// (bounded disk use — see packs-v2-impl.md §8's "ephemeral pack-kit dir
-// lifecycle" risk note; a `pi-stack state reset` sweep is the cleanup path).
+// packKitDir resolves the PER-PACK KEY under which a pack's ephemeral mixin
+// kits are synthesized: <StateDir>/pi-stack/pack-kits/<hash>, keyed by a hash
+// of the pack root. Since round-3 R2 this is a naming PREFIX, not a live dir:
+// every launch synthesizes into its own unique <hash>.kit-XXXX dir beside it
+// (see synthesizePackKit), and sweepStaleKitTemps age-gates the cleanup of old
+// ones (a `pi-stack state reset` sweep is the backstop).
 func packKitDir(root string) string {
 	sum := sha256.Sum256([]byte(root))
 	dir, err := config.StateDir()
@@ -380,14 +381,18 @@ func packKitDir(root string) string {
 // Copies (never symlinks): loadPack already refuses a symlinked bin/, and sbx
 // mounts a real tree.
 //
-// REBUILT FROM SCRATCH every call, via a temp-dir-then-atomic-rename swap
-// (finding #6): the kit dir is never mutated/reused in place — a proxy removed
-// from pack.toml since the last synth must not leave its wrapper on PATH
-// (a stale-wrapper resurrection would otherwise persist indefinitely, keyed by
-// pack root so it never self-heals). And it FAILS CLOSED: if any declared
-// wrapper can't be read or copied, the whole synth is refused ("", no kit) —
-// never a partial/stale kit with that one wrapper silently missing or, worse,
-// left over from a previous successful synth of the SAME pack.
+// PER-LAUNCH UNIQUE DIR (round-3 R2): every call synthesizes into its OWN
+// os.MkdirTemp dir (keyed by the pack hash as a name prefix) and returns THAT
+// path for --kit. There is no stable shared path any more, so there is no
+// replace-in-place window where the live kit is briefly absent, and two
+// concurrent launches of the same pack can never clash on a shared mutable
+// dir — each builds its kit COMPLETELY before returning it, then never touches
+// it again. A proxy removed from pack.toml can't resurrect either: the fresh
+// dir only ever holds what THIS synth wrote (the old finding-#6 guarantee,
+// now structural). Old launch dirs are age-gate swept (sweepStaleKitTemps).
+// And it FAILS CLOSED: if any declared wrapper can't be read or copied, the
+// whole synth is refused ("", no kit) — never a partial kit with that one
+// wrapper silently missing.
 func synthesizePackKit(p *packInfo, out io.Writer) string {
 	var sandboxProxies []packProxy
 	for _, pr := range p.Manifest.Proxies {
@@ -395,88 +400,66 @@ func synthesizePackKit(p *packInfo, out io.Writer) string {
 			sandboxProxies = append(sandboxProxies, pr)
 		}
 	}
-	dir := packKitDir(p.Root)
+	base := packKitDir(p.Root)
+	parent := filepath.Dir(base)
+	sweepStaleKitTemps(parent, filepath.Base(base))
 	if len(sandboxProxies) == 0 {
-		// No sandbox proxies (any more): remove a stale kit from a pack.toml that
-		// used to declare some, so a removed proxy's wrapper never lingers on PATH.
-		_ = os.RemoveAll(dir)
+		// No sandbox proxies: nothing to mount. A previous launch's kit dir is
+		// inert (nothing references it) and the sweep above cleans it up.
 		return ""
 	}
-	// UNIQUE temp dir (finding F): never a fixed dir+".tmp" — two concurrent
-	// launches of the same pack must not clobber each other's half-built kit.
-	parent := filepath.Dir(dir)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		fmt.Fprintf(out, "pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
 		return ""
 	}
-	sweepStaleKitTemps(parent, filepath.Base(dir))
-	tmp, err := os.MkdirTemp(parent, filepath.Base(dir)+kitTmpInfix)
+	dir, err := os.MkdirTemp(parent, filepath.Base(base)+kitLaunchInfix)
 	if err != nil {
 		fmt.Fprintf(out, "pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
 		return ""
 	}
-	defer os.RemoveAll(tmp)
-	_ = os.Chmod(tmp, 0o755) // MkdirTemp creates 0700; the kit is a mounted tree
-	binOut := filepath.Join(tmp, "files", "usr", "local", "bin")
-	if err := os.MkdirAll(binOut, 0o755); err != nil {
-		fmt.Fprintf(out, "pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
+	fail := func(format string, a ...any) string {
+		fmt.Fprintf(out, format, a...)
+		_ = os.RemoveAll(dir) // never leave a half-built kit dir behind
 		return ""
 	}
-	if err := os.WriteFile(filepath.Join(tmp, "spec.yaml"), []byte("kind: mixin\n"), 0o644); err != nil {
-		fmt.Fprintf(out, "pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
-		return ""
+	_ = os.Chmod(dir, 0o755) // MkdirTemp creates 0700; the kit is a mounted tree
+	binOut := filepath.Join(dir, "files", "usr", "local", "bin")
+	if err := os.MkdirAll(binOut, 0o755); err != nil {
+		return fail("pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "spec.yaml"), []byte("kind: mixin\n"), 0o644); err != nil {
+		return fail("pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
 	}
 	for _, pr := range sandboxProxies {
 		src := filepath.Join(p.Root, "bin", pr.Name)
 		b, err := os.ReadFile(src)
 		if err != nil {
-			// Fail closed: never launch with a stale/partial kit because one
-			// declared wrapper couldn't be read.
-			fmt.Fprintf(out, "pi-stack: pack proxy %q: %v (refusing to build the pack kit)\n", pr.Name, err)
-			return ""
+			// Fail closed: never launch with a partial kit because one declared
+			// wrapper couldn't be read.
+			return fail("pi-stack: pack proxy %q: %v (refusing to build the pack kit)\n", pr.Name, err)
 		}
 		if err := os.WriteFile(filepath.Join(binOut, pr.Name), b, 0o755); err != nil {
-			fmt.Fprintf(out, "pi-stack: pack proxy %q: %v (refusing to build the pack kit)\n", pr.Name, err)
-			return ""
+			return fail("pi-stack: pack proxy %q: %v (refusing to build the pack kit)\n", pr.Name, err)
 		}
 	}
-	// Swap the finished tmp into place (finding F): a plain rename when no kit
-	// exists yet; otherwise (os.Rename cannot replace a non-empty dir) rename
-	// the live kit ASIDE to a unique name, rename the new one in, then delete
-	// the old — the only portable near-atomic replace. The old RemoveAll-then-
-	// Rename left NO kit at all if the process died between the two calls; here
-	// a failure to install the new kit restores the old one, so there is never
-	// a lasting window without a valid kit, and a reader never sees a
-	// half-written one (tmp is fully built before any rename).
-	if err := os.Rename(tmp, dir); err == nil {
-		return dir
-	}
-	stale := fmt.Sprintf("%s%s%d-%d", dir, kitOldInfix, os.Getpid(), time.Now().UnixNano())
-	if err := os.Rename(dir, stale); err != nil {
-		fmt.Fprintf(out, "pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
-		return ""
-	}
-	if err := os.Rename(tmp, dir); err != nil {
-		_ = os.Rename(stale, dir) // restore the previous kit; never leave none
-		fmt.Fprintf(out, "pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
-		return ""
-	}
-	_ = os.RemoveAll(stale)
 	return dir
 }
 
-// kitTmpInfix/kitOldInfix name the unique build-temp and renamed-aside dirs a
-// kit synth uses, as suffixes on the kit dir's basename (so they sit beside it
-// under pack-kits/ and sweepStaleKitTemps can find them by prefix).
+// kitLaunchInfix names each per-launch unique kit dir as a suffix on the pack
+// hash (so launch dirs sit beside their key under pack-kits/ and
+// sweepStaleKitTemps finds them by prefix). kitTmpInfix/kitOldInfix are the
+// LEGACY names the old swap-in-place synth used; they remain only so the sweep
+// still cleans debris left by older builds.
 const (
-	kitTmpInfix = ".tmp-"
-	kitOldInfix = ".old-"
+	kitLaunchInfix = ".kit-"
+	kitTmpInfix    = ".tmp-"
+	kitOldInfix    = ".old-"
 )
 
-// sweepStaleKitTemps best-effort removes leftover temp/aside dirs from crashed
-// prior synths of THIS pack's kit (unique names no longer self-clean the way a
-// fixed ".tmp" path did). Only entries older than an hour are touched, so a
-// concurrently-running synth's live temp dir is never yanked out from under it.
+// sweepStaleKitTemps best-effort removes old per-launch kit dirs (and legacy
+// temp/aside/stable-path debris) for THIS pack. Only entries older than an
+// hour are touched, so a concurrent launch's freshly-built kit — which sbx may
+// still be reading at create time — is never yanked out from under it.
 func sweepStaleKitTemps(parent, base string) {
 	entries, err := os.ReadDir(parent)
 	if err != nil {
@@ -485,7 +468,9 @@ func sweepStaleKitTemps(parent, base string) {
 	cutoff := time.Now().Add(-time.Hour)
 	for _, e := range entries {
 		name := e.Name()
-		if !strings.HasPrefix(name, base+kitTmpInfix) && !strings.HasPrefix(name, base+kitOldInfix) {
+		// base+"." covers kitLaunchInfix, kitTmpInfix, and kitOldInfix; the bare
+		// base is the legacy stable kit path older builds synthesized into.
+		if name != base && !strings.HasPrefix(name, base+".") {
 			continue
 		}
 		if info, ierr := e.Info(); ierr != nil || info.ModTime().After(cutoff) {
@@ -566,12 +551,53 @@ func readPackLock(root string) packLock {
 
 // writePackLock writes root's pack.lock (0644; not a secret — it holds server
 // NAMES and canonical bundle PATHS, never a credential value).
+//
+// Hardened two ways (round-3 S1 CRITICAL + R1):
+//   - Lstat-REFUSES a symlinked destination. os.WriteFile FOLLOWS a symlink,
+//     so a malicious cloned pack committing pack.lock as a symlink (-> /dev/null
+//     or a host file) could both swallow the adoption marker (the pack then
+//     reads as AUTHORED, bypassing the local-path knowledge guard) and
+//     overwrite an arbitrary host file. clonePack scrubs any checked-in
+//     pack.lock right after clone, so a symlink here is always hostile or
+//     corrupt — never legitimate local state.
+//   - Writes ATOMICALLY via a same-dir temp file + rename: an interrupted
+//     write can never truncate/corrupt an existing lock, and rename REPLACES a
+//     symlink rather than following it (a second layer under the Lstat check).
 func writePackLock(root string, l packLock) error {
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(l); err != nil {
 		return err
 	}
-	return os.WriteFile(packLockPath(root), buf.Bytes(), 0o644)
+	dest := packLockPath(root)
+	if fi, err := os.Lstat(dest); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink; refusing to write through it", dest)
+	}
+	tmp, err := os.CreateTemp(root, packLockName+".tmp-")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := func(werr error) error {
+		tmp.Close()
+		_ = os.Remove(tmpName)
+		return werr
+	}
+	if _, err := tmp.Write(buf.Bytes()); err != nil {
+		return cleanup(err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil { // CreateTemp makes 0600
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, dest); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 // warnPackLockWriteFailure prints a LOUD warning when pack.lock can't be
@@ -1133,6 +1159,19 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 			added := cfg.AddMCP(name)
 			saveOK := true
 			if added {
+				// Attribution stays gated on the AddMCP result (finding #2): a
+				// pre-existing, user-added name is never claimed as this pack's.
+				// Lock BEFORE Save (round-3 R1, same ordering as runPackUse): a
+				// crash/failure between the two leaves a lock that over-claims one
+				// name (removal of an absent MCP is a no-op), never a committed
+				// config entry with no lock attribution.
+				lock := readPackLock(root)
+				if !containsStr(lock.MCP, name) {
+					lock.MCP = append(lock.MCP, name)
+					if err := writePackLock(root, lock); err != nil {
+						warnPackLockWriteFailure(out, root, err)
+					}
+				}
 				if err := cfg.Save(); err != nil {
 					fmt.Fprintf(out, "note: saving config: %v\n", err)
 					saveOK = false
@@ -1148,15 +1187,6 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 				}
 				solicitPackCredentials(env, os.Stdin, out, isTTY(os.Stdin), p)
 				if added {
-					// Attribution stays gated on the AddMCP result (finding #2): a
-					// pre-existing, user-added name is never claimed as this pack's.
-					lock := readPackLock(root)
-					if !containsStr(lock.MCP, name) {
-						lock.MCP = append(lock.MCP, name)
-					}
-					if err := writePackLock(root, lock); err != nil {
-						warnPackLockWriteFailure(out, root, err)
-					}
 					printPackRecreateLine(out)
 				}
 			}
@@ -1459,6 +1489,37 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 
 	cfg.Pack = root
 
+	// COMMIT ORDERING (round-3 R1): the lock is written BEFORE cfg.Save, and it
+	// records the INTENDED contribution set computed above. The two writes can't
+	// be one atomic transaction (two files), so pick the safe failure residue: a
+	// crash between lock-write and Save leaves a lock that OVER-claims (it names
+	// contributions the config never committed) — harmless, because removal of
+	// an absent MCP/bundle is a no-op (config.removeValue tolerates missing
+	// entries). The reverse order left the fatal residue: an ACTIVE pack whose
+	// config-committed contributions had NO lock attribution, so no later
+	// switch/rm could ever remove them.
+	lock := packLock{
+		MCP:                    addedMCP,
+		Knowledge:              newKnowledgeIDs,
+		Remote:                 remoteURL,
+		Commit:                 remoteCommit,
+		GogAccount:             lockGogAccount,
+		PriorGogAccount:        lockPriorGogAccount,
+		OllamaBridgeModel:      lockOllamaModel,
+		PriorOllamaBridgeModel: lockPriorOllamaModel,
+	}
+	if lock.Remote == "" {
+		// Not cloned THIS activation: keep whatever adoption marker this pack
+		// already carried (a re-activation via local path must not un-adopt it).
+		lock.Remote = selfLock.Remote
+		lock.Commit = selfLock.Commit
+	}
+	if err := writePackLock(root, lock); err != nil {
+		// The lock IS part of this switch's committed state (finding #3): a
+		// future switch away may not fully reverse what is about to happen.
+		warnPackLockWriteFailure(out, root, err)
+	}
+
 	if err := cfg.Save(); err != nil {
 		fmt.Fprintf(out, "pi-stack pack use: saving config: %v\n", err)
 		os.Exit(1)
@@ -1513,30 +1574,8 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// Solicit any 1Password creds this pack's reference-only integrations need.
 	solicitPackCredentials(env, os.Stdin, out, isTTY(os.Stdin), p)
 
-	// Record this activation's contribution for the NEXT switch's removal set
-	// (finding #2: only what was actually added, never everything declared), and
-	// preserve the adoption marker (finding #1) across the rewrite.
-	lock := packLock{
-		MCP:                    addedMCP,
-		Knowledge:              newKnowledgeIDs,
-		Remote:                 remoteURL,
-		Commit:                 remoteCommit,
-		GogAccount:             lockGogAccount,
-		PriorGogAccount:        lockPriorGogAccount,
-		OllamaBridgeModel:      lockOllamaModel,
-		PriorOllamaBridgeModel: lockPriorOllamaModel,
-	}
-	if lock.Remote == "" {
-		// Not cloned THIS activation: keep whatever adoption marker this pack
-		// already carried (a re-activation via local path must not un-adopt it).
-		lock.Remote = selfLock.Remote
-		lock.Commit = selfLock.Commit
-	}
-	if err := writePackLock(root, lock); err != nil {
-		// The lock IS part of this switch's committed state (finding #3): a
-		// future switch away may not fully reverse what just happened.
-		warnPackLockWriteFailure(out, root, err)
-	}
+	// (The activation lock — this switch's removal set for the NEXT switch — was
+	// already written just BEFORE cfg.Save; see the R1 commit-ordering comment.)
 
 	// A knowledge change is daemon-affecting: restart/advise the running serve so
 	// the new bundle is indexed (mirrors `knowledge use`). Best-effort.
@@ -1731,6 +1770,22 @@ func clonePack(env shellEnv, out io.Writer, raw string) (string, error) {
 		}
 		return "", fmt.Errorf("cloned %s but it has no %s — not a pack", url, packManifestName)
 	}
+	// pack.lock is LOCAL GENERATED activation state (ADR-1) and must NEVER come
+	// from the remote (round-3 S1, CRITICAL): a malicious pack could commit it
+	// as a SYMLINK (-> /dev/null, or a host file) so the adoption marker written
+	// below would land on the symlink's TARGET — un-adopting the pack (bypassing
+	// the local-path knowledge guard) and/or overwriting an arbitrary host file.
+	// A checked-in REGULAR pack.lock is just as hostile (its attribution fields
+	// would be merged by markPackAdopted and could claim the user's own MCP
+	// entries for removal on switch-away). Scrub it AFTER every git operation
+	// above (checkout/reset --hard restore tracked files) and BEFORE
+	// markPackAdopted writes the real one. Failing the scrub fails the adoption.
+	if err := scrubRemotePackLock(env, dest, freshClone); err != nil {
+		if freshClone {
+			_ = os.RemoveAll(dest)
+		}
+		return "", err
+	}
 	// Provenance durability (finding B): mark the clone ADOPTED here — durably,
 	// before returning — never leaving it to the caller's post-Save lock
 	// rewrite. A cfg.Save()/lock-write failure after this return must not leave
@@ -1746,6 +1801,35 @@ func clonePack(env shellEnv, out io.Writer, raw string) (string, error) {
 		return "", fmt.Errorf("recording adoption provenance for %s: %w", url, err)
 	}
 	return dest, nil
+}
+
+// scrubRemotePackLock deletes a pack.lock that came from the REMOTE in a
+// cloned pack tree (round-3 S1): on a fresh clone ANY pack.lock came from the
+// remote; on an update, one that is a symlink (never legitimate — writePackLock
+// only ever creates regular files) or that git tracks (checkout/reset restore
+// it from the remote) is remote-authored. A legit LOCAL lock (untracked regular
+// file carrying prior activation attribution) is preserved. os.Remove removes a
+// symlink itself, never its target.
+func scrubRemotePackLock(env shellEnv, dest string, freshClone bool) error {
+	path := packLockPath(dest)
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil // no pack.lock at all — nothing to scrub
+	}
+	fromRemote := freshClone || fi.Mode()&os.ModeSymlink != 0
+	if !fromRemote && env.run != nil {
+		// Tracked by git => restored from the remote by checkout/reset above.
+		if _, lerr := env.run("git", "-C", dest, "ls-files", "--error-unmatch", "--", packLockName); lerr == nil {
+			fromRemote = true
+		}
+	}
+	if !fromRemote {
+		return nil
+	}
+	if rerr := os.Remove(path); rerr != nil && !os.IsNotExist(rerr) {
+		return fmt.Errorf("removing checked-in %s: %w", packLockName, rerr)
+	}
+	return nil
 }
 
 // markPackAdopted durably records adoption provenance (pack.lock Remote +

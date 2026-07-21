@@ -354,8 +354,11 @@ func TestSynthesizePackKit_RebuildRemovesStaleWrapper(t *testing.T) {
 	// pack.toml no longer declares "b" (e.g. the author removed it).
 	p2 := &packInfo{Root: root, Manifest: packManifest{Name: "p", Proxies: []packProxy{{Name: "a"}}}}
 	kit2 := synthesizePackKit(p2, &bytes.Buffer{})
-	if kit2 != kit1 {
-		t.Fatalf("kit dir should be stable (keyed by pack root), got %q then %q", kit1, kit2)
+	if kit2 == "" {
+		t.Fatal("expected a kit dir from the second synth")
+	}
+	if kit2 == kit1 {
+		t.Fatalf("round-3 R2: each launch must synthesize into its OWN unique dir, got %q twice", kit1)
 	}
 	if _, err := os.Stat(filepath.Join(kit2, "files", "usr", "local", "bin", "b")); err == nil {
 		t.Error("finding #6: a removed proxy's wrapper must NOT survive a rebuild")
