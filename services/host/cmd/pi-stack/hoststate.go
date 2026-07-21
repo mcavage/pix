@@ -265,7 +265,9 @@ func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
 
 // writeHostStateFile writes <workspace>/.pi-stack/host-state.json. Best-effort:
 // a failure just means the agent has no truth file and falls back to probing
-// (the pre-fix behavior), never a broken launch.
+// (the pre-fix behavior), never a broken launch. Symlink-safe via
+// writeWorkspaceStateFile (the workspace may be an untrusted clone shipping
+// .pi-stack/host-state.json as a tracked symlink).
 func writeHostStateFile(workspace string, cfg *config.Config, env shellEnv, mcpGatewayOn bool, packOverride string) {
 	sbxOut, sbxOK := "", false
 	if env.lookPath != nil {
@@ -286,13 +288,9 @@ func writeHostStateFile(workspace string, cfg *config.Config, env shellEnv, mcpG
 	hs := buildHostState(cfg, sbxOut, sbxOK, dial, mcpGatewayOn, source, resolveHostStatePack(cfg, packOverride))
 	hs.Identity = readGitIdentity(env)
 
-	dir := filepath.Join(workspace, ".pi-stack")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
-	}
 	b, err := json.MarshalIndent(hs, "", "  ")
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(filepath.Join(dir, "host-state.json"), append(b, '\n'), 0o644)
+	_ = writeWorkspaceStateFile(workspace, "host-state.json", append(b, '\n'), 0o644)
 }

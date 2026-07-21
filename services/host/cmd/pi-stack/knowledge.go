@@ -490,13 +490,11 @@ func knowledgeUseProject(ref, dir string, out io.Writer) error {
 	if strings.TrimSpace(dir) == "" {
 		dir = "."
 	}
-	pointerDir := filepath.Join(dir, ".pi-stack")
-	if err := os.MkdirAll(pointerDir, 0o755); err != nil {
-		return fmt.Errorf("creating %s: %w", pointerDir, err)
-	}
 	portable := portablePointerRef(ref, dir)
-	pointer := filepath.Join(pointerDir, "knowledge")
-	if err := os.WriteFile(pointer, []byte(portable+"\n"), 0o644); err != nil {
+	pointer := filepath.Join(dir, ".pi-stack", "knowledge")
+	// Symlink-safe: the target repo may be an untrusted clone shipping
+	// .pi-stack (or .pi-stack/knowledge) as a tracked symlink.
+	if err := writeWorkspaceStateFile(dir, "knowledge", []byte(portable+"\n"), 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", pointer, err)
 	}
 	fmt.Fprintf(out, "Wrote project knowledge pointer %s -> %s\n", pointer, portable)

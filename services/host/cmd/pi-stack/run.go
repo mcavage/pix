@@ -330,17 +330,16 @@ func sandboxPackMarkerPath(workspace string) string {
 
 // writeSandboxPackMarker records the pack root a sandbox is being created with
 // (or removes the marker when creating pack-less). Best-effort: a failed write
-// only costs a future stale-pack reminder, never the launch.
+// only costs a future stale-pack reminder, never the launch. Symlink-safe via
+// writeWorkspaceStateFile (a cloned repo can ship .pi-stack/sandbox.pack as a
+// tracked symlink); the removal is fine as-is — os.Remove unlinks a symlink,
+// never its target.
 func writeSandboxPackMarker(workspace, packRoot string) {
-	path := sandboxPackMarkerPath(workspace)
 	if strings.TrimSpace(packRoot) == "" {
-		_ = os.Remove(path)
+		_ = os.Remove(sandboxPackMarkerPath(workspace))
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return
-	}
-	_ = os.WriteFile(path, []byte(canonicalizePackRoot(packRoot)+"\n"), 0o644)
+	_ = writeWorkspaceStateFile(workspace, "sandbox.pack", []byte(canonicalizePackRoot(packRoot)+"\n"), 0o644)
 }
 
 // readSandboxPackMarker returns the create-time pack root recorded for this
@@ -721,29 +720,22 @@ func projectBundle(workspace string) string {
 // router's local option). Configured on the host with `pi-stack config set
 // ollama_bridge_model`; the bridge reads it (env var still overrides). Per-run,
 // gitignored, best-effort — an absent file just means the bridge uses its default.
+// Symlink-safe via writeWorkspaceStateFile.
 func writeOllamaBridgeFile(workspace, model string) {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		model = config.DefaultOllamaBridgeModel
 	}
-	dir := filepath.Join(workspace, ".pi-stack")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
-	}
-	_ = os.WriteFile(filepath.Join(dir, "ollama-bridge.model"), []byte(model+"\n"), 0o644)
+	_ = writeWorkspaceStateFile(workspace, "ollama-bridge.model", []byte(model+"\n"), 0o644)
 }
 
 // writeKnowledgeScope writes <workspace>/.pi-stack/knowledge.scope: one canonical
 // bundle id per line, trailing newline. This is the launcher-generated,
 // per-run, gitignored file the recall extension reads (the committed pointer is
-// .pi-stack/knowledge).
+// .pi-stack/knowledge). Symlink-safe via writeWorkspaceStateFile.
 func writeKnowledgeScope(workspace string, ids []string) error {
-	dir := filepath.Join(workspace, ".pi-stack")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
 	content := strings.Join(ids, "\n") + "\n"
-	return os.WriteFile(filepath.Join(dir, "knowledge.scope"), []byte(content), 0o644)
+	return writeWorkspaceStateFile(workspace, "knowledge.scope", []byte(content), 0o644)
 }
 
 // defaultKnowledgeRPC wires the real, short-timeout HTTP JSON-RPC client for the

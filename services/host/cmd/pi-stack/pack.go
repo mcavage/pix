@@ -629,32 +629,7 @@ func writePackLockBytes(root string, data []byte) error {
 	if fi, err := os.Lstat(dest); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%s is a symlink; refusing to write through it", dest)
 	}
-	tmp, err := os.CreateTemp(root, packLockName+".tmp-")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	cleanup := func(werr error) error {
-		tmp.Close()
-		_ = os.Remove(tmpName)
-		return werr
-	}
-	if _, err := tmp.Write(data); err != nil {
-		return cleanup(err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := os.Chmod(tmpName, 0o644); err != nil { // CreateTemp makes 0600
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := os.Rename(tmpName, dest); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	return nil
+	return atomicWriteInDir(root, packLockName, data, 0o644)
 }
 
 // commitPackActivation is the two-file commit point shared by `pack use` and
@@ -875,7 +850,10 @@ func resolvePackKnowledgeRef(out io.Writer, root string, adopted bool, k packKno
 // to the pack's Name; an empty result or the literal "default" selects the
 // shared/unscoped tag, matching "default" == the shared scope from the schema
 // doc. No pack (or an unscoped pack) removes any stale file — this REPLACES the
-// old unconditional profile-delete in run.go.
+// old unconditional profile-delete in run.go. Symlink-safe via
+// writeWorkspaceStateFile (a hostile repo can commit .pi-stack/profile as a
+// symlink); the removals are fine as-is — os.Remove unlinks a symlink, never
+// its target.
 func writeMemoryScope(workspace string, p *packInfo) {
 	dir := filepath.Join(workspace, ".pi-stack")
 	if p == nil {
@@ -890,10 +868,7 @@ func writeMemoryScope(workspace string, p *packInfo) {
 		_ = os.Remove(filepath.Join(dir, "profile"))
 		return
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
-	}
-	_ = os.WriteFile(filepath.Join(dir, "profile"), []byte(scope+"\n"), 0o644)
+	_ = writeWorkspaceStateFile(workspace, "profile", []byte(scope+"\n"), 0o644)
 }
 
 // writePackContextFiles writes the two per-launch, pack-scoped workspace files
