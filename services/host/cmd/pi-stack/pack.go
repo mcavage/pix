@@ -23,14 +23,74 @@ import (
 	"pi-stack/host/config"
 )
 
-// packManifest is pack.toml. Minimal in v1: identity + optional model prefs.
-// Skills and knowledge are discovered by convention (skills/, knowledge/), so a
-// pack does not have to enumerate them.
+// packManifest is pack.toml. Identity + model prefs (v1), plus the v2 facets:
+// F1 integrations attach (unchanged shape, now enabling), F2/F3 proxy wrappers,
+// the (struct-only, P2) external-binary facet, F4 config layering (gog_account/
+// memory_scope/routing), and F6 knowledge references. Skills and embedded
+// knowledge are still discovered by convention (skills/, knowledge/), so a pack
+// does not have to enumerate them.
 type packManifest struct {
-	Name              string            `toml:"name"`
-	Schema            int               `toml:"schema"`
-	OllamaBridgeModel string            `toml:"ollama_bridge_model,omitempty"`
-	Integrations      []packIntegration `toml:"integrations,omitempty"`
+	Name              string `toml:"name"`
+	Schema            int    `toml:"schema"`
+	OllamaBridgeModel string `toml:"ollama_bridge_model,omitempty"`
+	// GogAccount, when set, is layered into cfg.GogAccount on `pack use` (F4).
+	GogAccount string `toml:"gog_account,omitempty"`
+	// MemoryScope tags in-VM memory recall/capture (F4); default = the pack Name.
+	// "default" (or the pack's own default) selects the shared/unscoped tag.
+	MemoryScope string `toml:"memory_scope,omitempty"`
+	// Routing is a STRUCT-ONLY placeholder for a pack-level routing override
+	// (packs-v2-impl.md §2: "optional/stretch"). Nothing reads it in Phase 1.
+	Routing      *packRouting      `toml:"routing,omitempty"`
+	Integrations []packIntegration `toml:"integrations,omitempty"`
+	// Proxies are [[proxy]] entries: F2 in-sandbox bin/ wrappers (Host unset/
+	// false) and F3 host-mode wrappers (Host true, struct carried but NOT
+	// installed/PATH-wired until Phase 2 — no host exec in this build).
+	Proxies []packProxy `toml:"proxy,omitempty"`
+	// Bins are [[bin]] external host binaries (Tier-1, SHA-pinned). STRUCT ONLY
+	// in Phase 1: loadPack validates the shape (fail-closed on a missing sha) but
+	// nothing executes one — that is the P2 trust-gated host-exec path.
+	Bins []packBin `toml:"bin,omitempty"`
+	// Knowledge are [[knowledge]] references (F6): shared=true travels (a git
+	// URL an adopter pulls), shared=false does not (a local path, standalone).
+	Knowledge []packKnowledge `toml:"knowledge,omitempty"`
+}
+
+// packRouting is the struct-only pack-level routing override placeholder
+// (packs-v2-impl.md §2). Repo-relative paths; nothing wires them in Phase 1.
+type packRouting struct {
+	Policy    string `toml:"policy,omitempty"`
+	Scorecard string `toml:"scorecard,omitempty"`
+}
+
+// packProxy is one [[proxy]] entry: a bin/<name> wrapper script. Host=false
+// (default) is an F2 in-sandbox wrapper, synthesized into an ephemeral mixin
+// kit at launch (synthesizePackKit). Host=true is an F3 host-mode wrapper —
+// carried by the schema in Phase 1, but installation/PATH-wiring is P2.
+type packProxy struct {
+	Name   string   `toml:"name"`
+	Host   bool     `toml:"host,omitempty"`
+	Egress []string `toml:"egress,omitempty"`
+}
+
+// packBin is one [[bin]] entry: an external, SHA-pinned host binary (Tier-1,
+// rare, P2). loadPack fails closed on an empty SHA (never reaches an exec path
+// unpinned) even though Phase 1 never executes one.
+type packBin struct {
+	Name string `toml:"name"`
+	Path string `toml:"path"`
+	SHA  string `toml:"sha"`
+	Host bool   `toml:"host,omitempty"`
+}
+
+// packKnowledge is one [[knowledge]] entry (F6): a reference to a bundle beyond
+// the pack's own embedded knowledge/ dir. Shared=true travels with the pack (a
+// git URL adopters pull); Shared=false does not (a local path, standalone —
+// deliberately NOT repo-root-scoped, since pointing outside the pack is the
+// entire point of a private reference).
+type packKnowledge struct {
+	Name   string `toml:"name"`
+	Source string `toml:"source"`
+	Shared bool   `toml:"shared,omitempty"`
 }
 
 // packIntegration is a REFERENCE-ONLY integration (v1): the pack says "I use
@@ -49,6 +109,7 @@ type packInfo struct {
 	Manifest     packManifest
 	SkillsDir    string // <root>/skills if it exists, else ""
 	KnowledgeDir string // <root>/knowledge if it exists, else ""
+	BinDir       string // <root>/bin if it exists, else "" (F2/F3 proxy wrapper scripts)
 }
 
 const packManifestName = "pack.toml"
@@ -88,7 +149,77 @@ func loadPack(root string) (*packInfo, error) {
 		}
 		p.KnowledgeDir = d
 	}
+	if d := filepath.Join(root, "bin"); dirHasEntries(d) {
+		if isSymlinkPath(d) {
+			return nil, fmt.Errorf("pack %s: bin/ is a symlink; refusing to mount", root)
+		}
+		if has, bad := dirHasSymlink(d); has {
+			return nil, fmt.Errorf("pack %s: bin/ contains a symlink (%s); packs must not use symlinks, refusing to mount", root, bad)
+		}
+		p.BinDir = d
+	}
+	if err := validatePackFacets(root, &m); err != nil {
+		return nil, err
+	}
 	return p, nil
+}
+
+// validatePackFacets hardens the v2 typed facets at load time (fail closed,
+// same posture as the existing skills/knowledge symlink checks): every
+// proxy/bin/knowledge Name must be a safe artifact name (reusing
+// safeArtifactName); every [[bin]].Path must be a repo-relative path that does
+// not escape the pack root and is not a symlink; every [[bin]] MUST carry a
+// non-empty SHA (an external binary is never registered unpinned — P2 never
+// reaches an exec path for one that failed to load). [[knowledge]].Source is
+// deliberately NOT root-scoped: a shared=false reference pointing OUTSIDE the
+// pack (e.g. ~/notes/okf) is the entire point of a private reference (F6).
+func validatePackFacets(root string, m *packManifest) error {
+	for _, p := range m.Proxies {
+		if !safeArtifactName(p.Name) {
+			return fmt.Errorf("pack %s: [[proxy]] name %q is invalid (letters, digits, -, _, . only; no path separators)", root, p.Name)
+		}
+	}
+	for _, b := range m.Bins {
+		if !safeArtifactName(b.Name) {
+			return fmt.Errorf("pack %s: [[bin]] name %q is invalid (letters, digits, -, _, . only; no path separators)", root, b.Name)
+		}
+		if strings.TrimSpace(b.SHA) == "" {
+			return fmt.Errorf("pack %s: [[bin]] %q has no sha — external binaries must be SHA-pinned (fail closed)", root, b.Name)
+		}
+		if err := validateRepoRelativePath(root, b.Path); err != nil {
+			return fmt.Errorf("pack %s: [[bin]] %q: %w", root, b.Name, err)
+		}
+	}
+	for _, k := range m.Knowledge {
+		if !safeArtifactName(k.Name) {
+			return fmt.Errorf("pack %s: [[knowledge]] name %q is invalid (letters, digits, -, _, . only; no path separators)", root, k.Name)
+		}
+		if strings.TrimSpace(k.Source) == "" {
+			return fmt.Errorf("pack %s: [[knowledge]] %q has no source", root, k.Name)
+		}
+	}
+	return nil
+}
+
+// validateRepoRelativePath rejects a [[bin]].Path that is empty, absolute, that
+// escapes root via `..`, or that resolves to a symlink — mirroring the
+// skills/knowledge symlink posture. rel MUST be repo-relative (packs-v2-impl.md
+// §2: "path = bin/fastmail-mcp").
+func validateRepoRelativePath(root, rel string) error {
+	if strings.TrimSpace(rel) == "" {
+		return fmt.Errorf("path is empty")
+	}
+	if filepath.IsAbs(rel) {
+		return fmt.Errorf("path %q must be repo-relative, not absolute", rel)
+	}
+	clean := filepath.Join(root, rel)
+	if !strings.HasPrefix(clean, filepath.Clean(root)+string(filepath.Separator)) {
+		return fmt.Errorf("path %q escapes the pack root", rel)
+	}
+	if isSymlinkPath(clean) {
+		return fmt.Errorf("path %q is a symlink; refusing to mount", rel)
+	}
+	return nil
 }
 
 // dirHasSymlink walks dir and reports the first symlink of ANY kind. Adopted
@@ -140,15 +271,20 @@ func expandUser(p string) string {
 // personalPackRoot is the default personal-pack location.
 func personalPackRoot() string { return config.PackDir() }
 
-// applyPackToLaunch mounts the active pack into a launch (run OR task): it appends
-// the pack's skills dir to o.Skills and applies the pack's ollama model pref, and
-// warns about declared integrations (a pack NEVER auto-enables a host MCP — that
-// would be a silent host-exec vector — and a missing credential is surfaced).
-// Knowledge is NOT handled here: a persisted active pack already has its bundle
-// in cfg.KnowledgeBundles (added at `pack use` time, indexed by the daemon), and
-// a transient --pack override's knowledge is deliberately not scoped (the daemon
-// wouldn't have indexed it). An EXPLICIT --pack that fails to load is fatal; the
-// personal/active fallback failing is a silent skip.
+// applyPackToLaunch mounts the active pack into a launch (run OR task): it
+// appends the pack's skills dir to o.Skills, applies the pack's ollama model
+// pref, synthesizes + stacks the pack's sandbox bin/ mixin kit (F2), and warns
+// about a missing integration credential. A pack's `integration.mcp` is NOT
+// warned about here (v1 behavior): F1 enables it into cfg.MCP at `pack use`
+// time, so buildSbxArgs' existing --mcp loop already attaches it on the next
+// create — nothing new needed in the arg builder, and warning here would be
+// stale noise for an already-attached pack. Knowledge is NOT handled here
+// either: a persisted active pack already has its bundles (embedded dir AND
+// [[knowledge]] refs) in cfg.KnowledgeBundles (added at `pack use` time,
+// indexed by the daemon), and a transient --pack override's knowledge is
+// deliberately not scoped (the daemon wouldn't have indexed it). An EXPLICIT
+// --pack that fails to load is fatal; the personal/active fallback failing is a
+// silent skip.
 func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) {
 	packRoot := activePackRoot(cfg.Pack, o.Pack)
 	if packRoot == "" {
@@ -168,14 +304,235 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) {
 	if m := strings.TrimSpace(p.Manifest.OllamaBridgeModel); m != "" {
 		cfg.OllamaBridgeModel = m
 	}
+	// F2: synthesize (or refresh) the ephemeral mixin kit carrying this pack's
+	// non-host bin/ wrappers, and stack it via the DEDICATED PackKits field (never
+	// o.Kits — see the PackKits field doc for why folding it into the --kit
+	// escape hatch would silently drop the base image kit).
+	if kit := synthesizePackKit(p, os.Stderr); kit != "" && !containsStr(o.PackKits, kit) {
+		o.PackKits = append(o.PackKits, kit)
+	}
 	for _, ig := range p.Manifest.Integrations {
-		if ig.MCP != "" && !containsStr(cfg.MCP, ig.MCP) {
-			fmt.Fprintf(os.Stderr, "pi-stack: pack uses MCP %q — enable it explicitly: pi-stack config set mcp %s\n", ig.MCP, ig.MCP)
-		}
 		if ig.Env != "" && !opRefFilled(env, ig.Env) {
 			fmt.Fprintf(os.Stderr, "pi-stack: pack integration %q needs a credential — set it: pi-stack secret set %s op://vault/item/field\n", ig.Name, ig.Env)
 		}
 	}
+}
+
+// packMcpNames returns the de-duplicated `integration.mcp` names a pack
+// declares, in manifest order. Used by runPackUse to compute what F1 attaches.
+func packMcpNames(p *packInfo) []string {
+	var names []string
+	seen := map[string]bool{}
+	for _, ig := range p.Manifest.Integrations {
+		if ig.MCP != "" && !seen[ig.MCP] {
+			seen[ig.MCP] = true
+			names = append(names, ig.MCP)
+		}
+	}
+	return names
+}
+
+// packKitDir resolves the ephemeral mixin-kit dir a pack's sandbox bin/
+// wrappers are synthesized into: <StateDir>/pi-stack/pack-kits/<hash>/, keyed by
+// a hash of the pack root so re-launching the same pack overwrites in place
+// (bounded disk use — see packs-v2-impl.md §8's "ephemeral pack-kit dir
+// lifecycle" risk note; a `pi-stack state reset` sweep is the cleanup path).
+func packKitDir(root string) string {
+	sum := sha256.Sum256([]byte(root))
+	dir, err := config.StateDir()
+	if err != nil {
+		dir = "pi-stack-state"
+	}
+	return filepath.Join(dir, "pi-stack", "pack-kits", hex.EncodeToString(sum[:])[:16])
+}
+
+// synthesizePackKit builds (or refreshes, overwrite-in-place) the ephemeral
+// mixin kit that puts a pack's non-host bin/ wrappers on the sandbox PATH
+// (F2/ADR-2): a minimal `kind: mixin` spec.yaml, plus
+// files/usr/local/bin/<name> (0755) for each [[proxy]] with Host unset/false
+// — /usr/local/bin is already on the DHI image's PATH, so the wrapper needs no
+// in-VM shim. Returns the kit dir, or "" when the pack has no sandbox proxies
+// (nothing to mount — the caller must not stack an empty kit). Copies (never
+// symlinks): loadPack already refuses a symlinked bin/, and sbx mounts a real
+// tree. Best-effort: an I/O failure warns to out and skips that one wrapper (or
+// returns "" on a directory-level failure) rather than failing the launch.
+func synthesizePackKit(p *packInfo, out io.Writer) string {
+	var sandboxProxies []packProxy
+	for _, pr := range p.Manifest.Proxies {
+		if !pr.Host {
+			sandboxProxies = append(sandboxProxies, pr)
+		}
+	}
+	if len(sandboxProxies) == 0 {
+		return ""
+	}
+	dir := packKitDir(p.Root)
+	binOut := filepath.Join(dir, "files", "usr", "local", "bin")
+	if err := os.MkdirAll(binOut, 0o755); err != nil {
+		fmt.Fprintf(out, "pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
+		return ""
+	}
+	if err := os.WriteFile(filepath.Join(dir, "spec.yaml"), []byte("kind: mixin\n"), 0o644); err != nil {
+		fmt.Fprintf(out, "pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
+		return ""
+	}
+	for _, pr := range sandboxProxies {
+		src := filepath.Join(p.Root, "bin", pr.Name)
+		b, err := os.ReadFile(src)
+		if err != nil {
+			fmt.Fprintf(out, "pi-stack: pack proxy %q: %v (skipping)\n", pr.Name, err)
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(binOut, pr.Name), b, 0o755); err != nil {
+			fmt.Fprintf(out, "pi-stack: pack proxy %q: %v (skipping)\n", pr.Name, err)
+		}
+	}
+	return dir
+}
+
+// proxyShimTemplate is the scaffold `pack add proxy <name>` writes to bin/<name>
+// (0755): a bash shim the pack author fills in.
+func proxyShimTemplate(name string) string {
+	return "#!/usr/bin/env bash\n" +
+		"# " + name + " — pack proxy wrapper (scaffolded by `pi-stack pack add proxy`).\n" +
+		"#\n" +
+		"# Runs IN THE SANDBOX, fenced by the net allowlist (F2: in-sandbox, safe by\n" +
+		"# default). Edit this to wrap the real CLI/API call — e.g. curl a REST\n" +
+		"# endpoint, or exec a real binary already on PATH under a different name.\n" +
+		"# Declare any domains it needs in pack.toml's [[proxy]] egress = [...] so\n" +
+		"# the sbx kit allowlist can be updated to match.\n" +
+		"set -euo pipefail\n" +
+		"echo \"" + name + ": TODO — implement this wrapper\" >&2\n" +
+		"exit 1\n"
+}
+
+// packLock is <pack-root>/pack.lock: GENERATED activation provenance, not a
+// resolver lockfile (packs-v2-impl.md §3/ADR-1). It records exactly what the
+// LAST `pack use` of this pack contributed to cfg.MCP / cfg.KnowledgeBundles, so
+// switching AWAY removes exactly that contribution — never a user's own
+// manually-added entry. Git-ignored by default (runPackNew seeds a pack-local
+// .gitignore line for it).
+type packLock struct {
+	MCP       []string `toml:"mcp,omitempty"`
+	Knowledge []string `toml:"knowledge,omitempty"`
+}
+
+const packLockName = "pack.lock"
+
+func packLockPath(root string) string { return filepath.Join(root, packLockName) }
+
+// readPackLock reads root's pack.lock, best-effort: an absent or unparsable
+// file returns the zero value (no recorded contribution — the caller's removal
+// set is then empty, which is the safe default: never guess at what an older
+// activation contributed).
+func readPackLock(root string) packLock {
+	var l packLock
+	b, err := os.ReadFile(packLockPath(root))
+	if err != nil {
+		return l
+	}
+	_ = toml.Unmarshal(b, &l)
+	return l
+}
+
+// writePackLock writes root's pack.lock (0644; not a secret — it holds server
+// NAMES and canonical bundle PATHS, never a credential value).
+func writePackLock(root string, l packLock) error {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(l); err != nil {
+		return err
+	}
+	return os.WriteFile(packLockPath(root), buf.Bytes(), 0o644)
+}
+
+// prevPackKnowledgeIDs computes the canonical bundle ids the PREVIOUS active
+// pack contributed, for removal on switch (F4). It prefers the recorded
+// pack.lock; when that is empty (a pack activated before pack.lock existed, or
+// one that predates F6's [[knowledge]] refs) it falls back to the v1 behavior
+// of removing just the embedded knowledge/ dir, so an upgrade never leaves a
+// stale v1 bundle stuck in cfg.KnowledgeBundles forever.
+func prevPackKnowledgeIDs(prevRoot string, lock packLock) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(id string) {
+		id = canonicalizeKnowledgeBundle(id)
+		if id == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	for _, id := range lock.Knowledge {
+		add(id)
+	}
+	if len(lock.Knowledge) == 0 {
+		if op, err := loadPack(prevRoot); err == nil && op.KnowledgeDir != "" {
+			add(op.KnowledgeDir)
+		}
+	}
+	return out
+}
+
+// resolvePackKnowledgeRef resolves one [[knowledge]] entry to an absolute local
+// bundle path (F6). Shared=true TRAVELS: resolved via the existing
+// resolveBundleRef, which clones/pulls a git URL into the shared knowledge
+// cache (or uses a local path as-is) — an adopter who shares the pack pulls the
+// SAME team bundle. Shared=false does NOT travel: it is deliberately NOT
+// root-scoped (expandUser + Abs only) — pointing outside the pack at the
+// owner's own machine is the entire point of a private reference; when the
+// pack repo is shared, the reference line is simply inert for an adopter
+// (nothing to resolve locally), and the referenced content never entered the
+// pack's git tree.
+func resolvePackKnowledgeRef(out io.Writer, k packKnowledge) (string, error) {
+	source := strings.TrimSpace(k.Source)
+	if source == "" {
+		return "", fmt.Errorf("[[knowledge]] %q has no source", k.Name)
+	}
+	if k.Shared {
+		return resolveBundleRef(source, knowledgeCacheDir(), out)
+	}
+	abs, err := filepath.Abs(expandUser(source))
+	if err != nil {
+		return "", fmt.Errorf("resolving private knowledge %q: %w", k.Name, err)
+	}
+	return abs, nil
+}
+
+// writeMemoryScope writes (or removes) <workspace>/.pi-stack/profile: the
+// memory scope tag the in-VM recall/capture extensions already read
+// (memory-recall.ts, memory-capture.ts — no extension change for F4). p is the
+// active pack (nil when none). The scope is p.Manifest.MemoryScope, defaulting
+// to the pack's Name; an empty result or the literal "default" selects the
+// shared/unscoped tag, matching "default" == the shared scope from the schema
+// doc. No pack (or an unscoped pack) removes any stale file — this REPLACES the
+// old unconditional profile-delete in run.go.
+func writeMemoryScope(workspace string, p *packInfo) {
+	dir := filepath.Join(workspace, ".pi-stack")
+	if p == nil {
+		_ = os.Remove(filepath.Join(dir, "profile"))
+		return
+	}
+	scope := strings.TrimSpace(p.Manifest.MemoryScope)
+	if scope == "" {
+		scope = strings.TrimSpace(p.Manifest.Name)
+	}
+	if scope == "" || scope == "default" {
+		_ = os.Remove(filepath.Join(dir, "profile"))
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(dir, "profile"), []byte(scope+"\n"), 0o644)
+}
+
+// packRecreateLine is the ADR-3 "same breath" recreate instruction: any
+// operation that changes the sandbox facet set (MCP attach, sandbox bin/
+// wrappers) MUST print this, because --mcp/--kit are create-only — a running
+// sandbox cannot pick either up without a recreate (packs.md §13 must-fix).
+func printPackRecreateLine(out io.Writer) {
+	fmt.Fprintln(out, "MCP attach + sandbox bin/ wrappers only take effect on a sandbox CREATE.")
+	fmt.Fprintln(out, "Recreate to pick them up:  pi-stack run --replace")
 }
 
 // --- verb tree --------------------------------------------------------------
@@ -285,6 +642,11 @@ func runPackNew(env shellEnv, out io.Writer, rest []string) {
 		fmt.Fprintf(out, "pi-stack pack new: could not write %s: %v\n", packManifestName, err)
 		os.Exit(1)
 	}
+	// pack.lock is GENERATED activation provenance (ADR-1), never hand-authored;
+	// seed a pack-local .gitignore line for it so a fresh pack never accidentally
+	// commits it. Best-effort, no-clobber (never touches an existing .gitignore
+	// beyond appending the line once).
+	seedPackGitignore(root)
 	switch {
 	case existsDir && isRepo:
 		fmt.Fprintf(out, "adopted existing repo as pack %q: %s\n", name, root)
@@ -307,7 +669,7 @@ func runPackNew(env shellEnv, out io.Writer, rest []string) {
 // it by presence (skills/knowledge are discovered by convention).
 func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 	if len(rest) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: pi-stack pack add <skill|knowledge> <name> [PACK]")
+		fmt.Fprintln(os.Stderr, "usage: pi-stack pack add <skill|knowledge|proxy|mcp> <name> [PACK] [flags]")
 		os.Exit(2)
 	}
 	kind, name := rest[0], rest[1]
@@ -315,19 +677,61 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack pack add: invalid name %q (letters, digits, -, _, . only; no path separators)\n", name)
 		os.Exit(2)
 	}
+	// Parse the tail: flags (--host, --private, --ref VALUE, --env VALUE) plus an
+	// optional trailing PACK positional. Flags are shared across kinds; each kind
+	// below reads only the ones it understands.
+	var host, private bool
+	var ref, envVar string
+	var positionals []string
+	tail := rest[2:]
+	for i := 0; i < len(tail); i++ {
+		a := tail[i]
+		switch {
+		case a == "--host":
+			host = true
+		case a == "--private":
+			private = true
+		case a == "--ref":
+			if i+1 >= len(tail) {
+				fmt.Fprintln(os.Stderr, "pi-stack pack add: --ref needs a value")
+				os.Exit(2)
+			}
+			i++
+			ref = tail[i]
+		case strings.HasPrefix(a, "--ref="):
+			ref = strings.TrimPrefix(a, "--ref=")
+		case a == "--env":
+			if i+1 >= len(tail) {
+				fmt.Fprintln(os.Stderr, "pi-stack pack add: --env needs a value")
+				os.Exit(2)
+			}
+			i++
+			envVar = tail[i]
+		case strings.HasPrefix(a, "--env="):
+			envVar = strings.TrimPrefix(a, "--env=")
+		case strings.HasPrefix(a, "-"):
+			fmt.Fprintf(os.Stderr, "pi-stack pack add: unknown flag %q\n", a)
+			os.Exit(2)
+		default:
+			positionals = append(positionals, a)
+		}
+	}
 	root := personalPackRoot()
-	if len(rest) >= 3 {
-		root = expandUser(rest[2])
+	if len(positionals) >= 1 {
+		root = expandUser(positionals[0])
 	}
 	// Implicit-create the pack if absent.
 	if _, err := os.Stat(filepath.Join(root, packManifestName)); err != nil {
 		runPackNew(env, out, []string{root})
 	}
-	// Refuse to write through a symlinked skills//knowledge/ dir (an adopted pack
-	// could point it outside the pack root); same posture as loadPack's mount check.
-	if isSymlinkPath(filepath.Join(root, "skills")) || isSymlinkPath(filepath.Join(root, "knowledge")) {
-		fmt.Fprintf(os.Stderr, "pi-stack pack add: %s has a symlinked skills//knowledge/ dir; refusing to write through it\n", root)
-		os.Exit(1)
+	// Refuse to write through a symlinked skills/knowledge/bin dir (an adopted
+	// pack could point it outside the pack root); same posture as loadPack's
+	// mount check.
+	for _, d := range []string{"skills", "knowledge", "bin"} {
+		if isSymlinkPath(filepath.Join(root, d)) {
+			fmt.Fprintf(os.Stderr, "pi-stack pack add: %s has a symlinked %s/ dir; refusing to write through it\n", root, d)
+			os.Exit(1)
+		}
 	}
 	switch kind {
 	case "skill":
@@ -348,23 +752,151 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 		fmt.Fprintf(out, "added skill %q: %s\n", name, f)
 		fmt.Fprintln(out, "edit it, then commit it to your pack's git repo.")
 	case "knowledge":
-		dir := filepath.Join(root, "knowledge")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			fmt.Fprintf(out, "pi-stack pack add: %v\n", err)
-			os.Exit(1)
-		}
-		f := filepath.Join(dir, name+".md")
-		if _, err := os.Stat(f); err == nil {
-			fmt.Fprintf(out, "knowledge doc already exists: %s\n", f)
+		if strings.TrimSpace(ref) == "" {
+			// Embed (v1 behavior): a literal knowledge/ doc, discovered by convention.
+			dir := filepath.Join(root, "knowledge")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				fmt.Fprintf(out, "pi-stack pack add: %v\n", err)
+				os.Exit(1)
+			}
+			f := filepath.Join(dir, name+".md")
+			if _, err := os.Stat(f); err == nil {
+				fmt.Fprintf(out, "knowledge doc already exists: %s\n", f)
+				return
+			}
+			if err := os.WriteFile(f, []byte(knowledgeTemplate(name)), 0o644); err != nil {
+				fmt.Fprintf(out, "pi-stack pack add: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Fprintf(out, "added knowledge doc %q: %s\n", name, f)
 			return
 		}
-		if err := os.WriteFile(f, []byte(knowledgeTemplate(name)), 0o644); err != nil {
+		// F6 reference: [[knowledge]] name/source/shared. --private (shared=false)
+		// does NOT travel with the pack — the source is a local path that stays on
+		// this machine; the default (shared=true) is meant for a git URL an adopter
+		// pulls.
+		p, err := loadPack(root)
+		if err != nil {
 			fmt.Fprintf(out, "pi-stack pack add: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Fprintf(out, "added knowledge doc %q: %s\n", name, f)
+		entry := packKnowledge{Name: name, Source: ref, Shared: !private}
+		replaced := false
+		for i, k := range p.Manifest.Knowledge {
+			if k.Name == name {
+				p.Manifest.Knowledge[i] = entry
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			p.Manifest.Knowledge = append(p.Manifest.Knowledge, entry)
+		}
+		if err := writePackManifest(root, p.Manifest); err != nil {
+			fmt.Fprintf(out, "pi-stack pack add: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(out, "added knowledge reference %q (shared=%v) to pack.toml\n", name, entry.Shared)
+		if private {
+			fmt.Fprintln(out, "private: this reference will NOT travel if you share the pack.")
+		}
+		fmt.Fprintln(out, "run `pi-stack pack use` on this pack to index it.")
+	case "proxy":
+		binDir := filepath.Join(root, "bin")
+		if err := os.MkdirAll(binDir, 0o755); err != nil {
+			fmt.Fprintf(out, "pi-stack pack add: %v\n", err)
+			os.Exit(1)
+		}
+		f := filepath.Join(binDir, name)
+		if _, err := os.Stat(f); err != nil {
+			if err := os.WriteFile(f, []byte(proxyShimTemplate(name)), 0o755); err != nil {
+				fmt.Fprintf(out, "pi-stack pack add: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Fprintf(out, "scaffolded proxy wrapper: %s\n", f)
+		} else {
+			fmt.Fprintf(out, "proxy wrapper already exists: %s\n", f)
+		}
+		p, err := loadPack(root)
+		if err != nil {
+			fmt.Fprintf(out, "pi-stack pack add: %v\n", err)
+			os.Exit(1)
+		}
+		exists := false
+		for i, pr := range p.Manifest.Proxies {
+			if pr.Name == name {
+				p.Manifest.Proxies[i].Host = host
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			p.Manifest.Proxies = append(p.Manifest.Proxies, packProxy{Name: name, Host: host})
+		}
+		if err := writePackManifest(root, p.Manifest); err != nil {
+			fmt.Fprintf(out, "pi-stack pack add: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(out, "added proxy %q to pack.toml (host=%v)\n", name, host)
+		if host {
+			// F3 (host-mode wrappers) is P2: the struct field is carried, but
+			// installation into the host agent dir's PATH is not wired in this build.
+			fmt.Fprintln(out, "note: host=true wrappers are a Phase-2 facet (host-mode PATH install is not yet wired).")
+		} else {
+			// Edit it, then a sandbox recreate is needed to mount it (F2/ADR-3).
+			printPackRecreateLine(out)
+		}
+	case "mcp":
+		p, err := loadPack(root)
+		if err != nil {
+			fmt.Fprintf(out, "pi-stack pack add: %v\n", err)
+			os.Exit(1)
+		}
+		exists := false
+		for i, ig := range p.Manifest.Integrations {
+			if ig.MCP == name {
+				p.Manifest.Integrations[i].Env = envVar
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			p.Manifest.Integrations = append(p.Manifest.Integrations, packIntegration{Name: name, MCP: name, Env: envVar})
+		}
+		if err := writePackManifest(root, p.Manifest); err != nil {
+			fmt.Fprintf(out, "pi-stack pack add: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(out, "added mcp integration %q to pack.toml\n", name)
+		// F1: if this IS the active pack, attach it right now (cfg.MCP + gateway
+		// registration + credential solicit), same mechanism as `pack use` —
+		// otherwise nothing has changed in the sandbox facet set yet, so no
+		// recreate line is owed until the pack is actually activated.
+		cfg, cerr := config.Load()
+		if cerr == nil && cfg.Pack == root {
+			if cfg.AddMCP(name) {
+				if err := cfg.Save(); err != nil {
+					fmt.Fprintf(out, "note: saving config: %v\n", err)
+				} else {
+					if err := registerServers(cfg, env, out, []string{name}, findHostBinary); err != nil {
+						fmt.Fprintf(out, "note: mcp registration: %v\n", err)
+					}
+					solicitPackCredentials(env, os.Stdin, out, isTTY(os.Stdin), p)
+					lock := readPackLock(root)
+					if !containsStr(lock.MCP, name) {
+						lock.MCP = append(lock.MCP, name)
+					}
+					if err := writePackLock(root, lock); err != nil {
+						fmt.Fprintf(out, "note: writing pack.lock: %v\n", err)
+					}
+					printPackRecreateLine(out)
+				}
+			}
+		} else {
+			fmt.Fprintf(out, "activate the pack to attach it to a sandbox:  pi-stack pack use %s\n", root)
+		}
 	default:
-		fmt.Fprintf(os.Stderr, "pi-stack pack add: unknown kind %q (want: skill, knowledge)\n", kind)
+		fmt.Fprintf(os.Stderr, "pi-stack pack add: unknown kind %q (want: skill, knowledge, proxy, mcp)\n", kind)
 		os.Exit(2)
 	}
 }
@@ -407,6 +939,32 @@ func runPackShow(out io.Writer, rest []string) {
 	fmt.Fprintf(out, "knowledge: %s\n", present(p.KnowledgeDir))
 	if p.Manifest.OllamaBridgeModel != "" {
 		fmt.Fprintf(out, "ollama:    %s\n", p.Manifest.OllamaBridgeModel)
+	}
+	if p.Manifest.GogAccount != "" {
+		fmt.Fprintf(out, "gog:       %s\n", p.Manifest.GogAccount)
+	}
+	if p.Manifest.MemoryScope != "" {
+		fmt.Fprintf(out, "memory:    %s\n", p.Manifest.MemoryScope)
+	}
+	if len(p.Manifest.Proxies) > 0 {
+		fmt.Fprintln(out, "proxies:")
+		for _, pr := range p.Manifest.Proxies {
+			kind := "sandbox bin/"
+			if pr.Host {
+				kind = "HOST (Phase 2)"
+			}
+			fmt.Fprintf(out, "  - %s (%s)\n", pr.Name, kind)
+		}
+	}
+	if len(p.Manifest.Knowledge) > 0 {
+		fmt.Fprintln(out, "knowledge refs:")
+		for _, k := range p.Manifest.Knowledge {
+			shared := "private (does not travel)"
+			if k.Shared {
+				shared = "shared (travels)"
+			}
+			fmt.Fprintf(out, "  - %s -> %s [%s]\n", k.Name, k.Source, shared)
+		}
 	}
 	if len(p.Manifest.Integrations) > 0 {
 		env := defaultShellEnv()
@@ -523,36 +1081,125 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		fmt.Fprintf(out, "pi-stack pack use: %v\n", err)
 		os.Exit(1)
 	}
-	// Drop the PREVIOUS active pack's knowledge bundle so switching packs doesn't
-	// accumulate stale bundles into every later context (single-active-pack
-	// isolation). Best-effort: only removes a bundle that came from that pack.
-	if cfg.Pack != "" && cfg.Pack != root {
-		if oldp, oerr := loadPack(cfg.Pack); oerr == nil && oldp.KnowledgeDir != "" {
-			cfg.RemoveKnowledgeBundle(oldp.KnowledgeDir)
+
+	// --- F4: the atomic swap. Everything below mutates the in-memory cfg; the
+	// ONE cfg.Save() further down is the single commit point for every host-side/
+	// config facet (ADR-3). Nothing is half-written to config if Save fails: the
+	// pre-Save cfg was never persisted. ---
+
+	prevRoot := cfg.Pack
+	switching := prevRoot != "" && prevRoot != root
+	var prevLock packLock
+	if switching {
+		prevLock = readPackLock(prevRoot)
+	}
+
+	// MCP set (F1 + ADR-1): remove exactly what the PREVIOUS pack's last
+	// activation contributed (never a user's own manually-added MCP), then add
+	// what the NEW pack declares. Reversible: pack-use(A) -> pack-use(B) ->
+	// pack-use(A) restores cfg.MCP to what it was after the first pack-use(A).
+	var removedMCP, addedMCP []string
+	if switching {
+		for _, m := range prevLock.MCP {
+			if cfg.RemoveMCP(m) {
+				removedMCP = append(removedMCP, m)
+			}
 		}
 	}
-	cfg.Pack = root
-	// Persist the pack's knowledge bundle into config (+ enable the knowledge
-	// service) so `serve` actually INDEXES it — a per-run in-memory append would be
-	// invisible to the daemon (which reloads config from disk). Idempotent.
+	newMCP := packMcpNames(p)
+	for _, m := range newMCP {
+		if cfg.AddMCP(m) {
+			addedMCP = append(addedMCP, m)
+		}
+	}
+
+	// Knowledge (F4 + F6): remove exactly what the PREVIOUS pack contributed
+	// (embedded dir + [[knowledge]] refs, from pack.lock — falling back to the
+	// v1 embedded-dir-only removal when no lock was recorded yet), then add the
+	// NEW pack's embedded dir + resolved [[knowledge]] refs (shared travels via
+	// resolveBundleRef; private resolves to a local path that never entered the
+	// pack's git tree).
+	var removedKnowledge, addedKnowledge []string
+	if switching {
+		for _, id := range prevPackKnowledgeIDs(prevRoot, prevLock) {
+			if cfg.RemoveKnowledgeBundle(id) {
+				removedKnowledge = append(removedKnowledge, id)
+			}
+		}
+	}
+	var newKnowledgeIDs []string
 	if p.KnowledgeDir != "" {
 		if cfg.AddKnowledgeBundle(p.KnowledgeDir) {
-			fmt.Fprintf(out, "knowledge bundle registered: %s\n", p.KnowledgeDir)
+			addedKnowledge = append(addedKnowledge, p.KnowledgeDir)
 		}
-		if cfg.AddService("knowledge") {
-			fmt.Fprintln(out, "enabled the knowledge service")
-		}
+		newKnowledgeIDs = append(newKnowledgeIDs, canonicalizeKnowledgeBundle(p.KnowledgeDir))
+		cfg.AddService("knowledge")
 	}
+	for _, k := range p.Manifest.Knowledge {
+		resolved, rerr := resolvePackKnowledgeRef(out, k)
+		if rerr != nil {
+			fmt.Fprintf(out, "note: knowledge %q: %v (skipping)\n", k.Name, rerr)
+			continue
+		}
+		if cfg.AddKnowledgeBundle(resolved) {
+			addedKnowledge = append(addedKnowledge, resolved)
+		}
+		newKnowledgeIDs = append(newKnowledgeIDs, canonicalizeKnowledgeBundle(resolved))
+		cfg.AddService("knowledge")
+	}
+
+	// Config layering (F4): a value the pack declares overwrites; an undeclared
+	// one is left as whatever was already configured ("layered when active", per
+	// the schema doc — not a reset-to-zero on every switch).
+	if p.Manifest.GogAccount != "" {
+		cfg.SetGogAccount(p.Manifest.GogAccount)
+	}
+	if m := strings.TrimSpace(p.Manifest.OllamaBridgeModel); m != "" {
+		cfg.OllamaBridgeModel = m
+	}
+
+	cfg.Pack = root
+
 	if err := cfg.Save(); err != nil {
 		fmt.Fprintf(out, "pi-stack pack use: saving config: %v\n", err)
 		os.Exit(1)
 	}
+
+	// --- post-Save: best-effort side effects (each already idempotent). ---
+
 	fmt.Fprintf(out, "active pack -> %s\n", root)
+	if len(removedMCP) > 0 {
+		fmt.Fprintf(out, "detached mcp (previous pack): %s\n", strings.Join(removedMCP, ", "))
+	}
+	if len(addedMCP) > 0 {
+		fmt.Fprintf(out, "attached mcp: %s\n", strings.Join(addedMCP, ", "))
+		if err := registerServers(cfg, env, out, addedMCP, findHostBinary); err != nil {
+			fmt.Fprintf(out, "note: mcp registration: %v\n", err)
+		}
+	}
+	for _, id := range removedKnowledge {
+		fmt.Fprintf(out, "knowledge bundle detached (previous pack): %s\n", id)
+	}
+	for _, id := range addedKnowledge {
+		fmt.Fprintf(out, "knowledge bundle registered: %s\n", id)
+	}
+
 	// Solicit any 1Password creds this pack's reference-only integrations need.
 	solicitPackCredentials(env, os.Stdin, out, isTTY(os.Stdin), p)
+
+	// Record this activation's contribution for the NEXT switch's removal set.
+	if err := writePackLock(root, packLock{MCP: newMCP, Knowledge: newKnowledgeIDs}); err != nil {
+		fmt.Fprintf(out, "note: writing pack.lock: %v\n", err)
+	}
+
 	// A knowledge change is daemon-affecting: restart/advise the running serve so
 	// the new bundle is indexed (mirrors `knowledge use`). Best-effort.
 	propagateServeConfig(defaultServeReloader(), out)
+
+	// ADR-3: --mcp/--kit are create-only. Print the recreate line UNCONDITIONALLY
+	// (this is "the change" for the purposes of packs.md §13's must-fix), so the
+	// sandbox-facet-changing case is never silently skipped.
+	printPackRecreateLine(out)
 }
 
 func runPackRm(out io.Writer, rest []string) {
@@ -734,6 +1381,25 @@ func writePackManifest(root string, m packManifest) error {
 	return os.WriteFile(filepath.Join(root, packManifestName), buf.Bytes(), 0o644)
 }
 
+// seedPackGitignore appends a `pack.lock` line to <root>/.gitignore, creating
+// the file if absent, so a fresh pack never accidentally commits its generated
+// activation-provenance lockfile (ADR-1). Idempotent (checked by substring) and
+// best-effort: a write failure is silent — it must never block `pack new`.
+func seedPackGitignore(root string) {
+	path := filepath.Join(root, ".gitignore")
+	const line = packLockName
+	b, err := os.ReadFile(path)
+	if err == nil && strings.Contains(string(b), line) {
+		return // already present
+	}
+	content := string(b)
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	content += line + "\n"
+	_ = os.WriteFile(path, []byte(content), 0o644)
+}
+
 func present(p string) string {
 	if p == "" {
 		return "(none)"
@@ -751,17 +1417,32 @@ func knowledgeTemplate(name string) string {
 
 const packUsage = `usage: pi-stack pack <new|add|ls|show|use|rm>
 
-A pack is a git-backed bundle of skills + knowledge (+ later mcp/proxies/config)
-that defines your context. See docs/design/packs.md.
+A pack is a git-backed bundle of skills + knowledge + mcp integrations + proxy
+wrappers + config that defines your context. See docs/design/packs.md.
 
   new [PATH]              adopt an existing repo (or one with pack.toml) as a
                           pack, else git-init a fresh one. Default PATH is the
                           personal pack root (~/.local/share/pi-stack/skills).
-  add <kind> <name> [P]   add a skill|knowledge doc to pack P (default: personal;
-                          implicit-creates the pack)
+  add skill <name> [P]              add a skill doc
+  add knowledge <name> [P]          add an embedded knowledge doc
+  add knowledge <name> [P] --ref <git-url|path> [--private]
+                                     add a knowledge REFERENCE instead of
+                                     embedding: shared (default) travels with
+                                     the pack; --private does not
+  add proxy <name> [P] [--host]     scaffold bin/<name> (an in-sandbox CLI
+                                     wrapper on PATH); --host marks it a
+                                     Phase-2 host-mode wrapper (not yet wired)
+  add mcp <name> [P] [--env VAR]    declare an MCP server this pack needs +
+                                     the op-refs.env credential var name
+                          (all "add" forms implicit-create pack P; default P
+                          is the personal pack)
   ls                      show the active pack
   show [PATH]             inspect a pack (default: the active pack)
-  use <path|git-url>      set the active pack; a git URL is cloned to
-                          ~/.local/share/pi-stack/packs/<name> (optional #ref pin)
+  use <path|git-url>      set the active pack: swaps mcp/knowledge/config in
+                          ONE transaction (pack.lock tracks what to remove on
+                          the next switch); a git URL is cloned to
+                          ~/.local/share/pi-stack/packs/<name> (optional #ref pin).
+                          MCP attach + sandbox bin/ wrappers need a recreate
+                          (pi-stack run --replace) to take effect.
   rm                      detach the active pack (files untouched)
 `

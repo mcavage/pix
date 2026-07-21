@@ -206,10 +206,21 @@ func runRun(argv []string) {
 	// the profile/knowledge-scope seam. Best-effort.
 	writeOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
 
-	// Profiles were removed: remove any stale <workspace>/.pi-stack/profile from a
-	// previous version so the in-VM memory extension never scopes recall/capture to
-	// a dead profile name. Best-effort.
-	_ = os.Remove(filepath.Join(o.Workspace, ".pi-stack", "profile"))
+	// Memory scope tag (F4): the active pack's memory_scope (default: the pack
+	// name; "default" is the shared/unscoped tag) selects the in-VM recall/
+	// capture scope (memory-recall.ts, memory-capture.ts already read this file —
+	// no extension change). No active pack -> writeMemoryScope removes any stale
+	// file (unscoped recall), replacing the old unconditional profile-delete.
+	// Best-effort: an unloadable pack degrades to unscoped rather than failing run.
+	{
+		var activePack *packInfo
+		if root := activePackRoot(cfg.Pack, o.Pack); root != "" {
+			if lp, lerr := loadPack(root); lerr == nil {
+				activePack = lp
+			}
+		}
+		writeMemoryScope(o.Workspace, activePack)
+	}
 
 	// Host-state truth file: the host-visible facts the fenced agent can't see
 	// (keys/services/knowledge/gog/mcp/models/overlay). The onboarding skill reads

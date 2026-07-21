@@ -51,7 +51,14 @@ type runOpts struct {
 	Intent        string   // --intent NAME: resolve the session model via the router (unless --model overrides)
 	Replace       bool     // --replace: force a recreate (rm -f then create) instead of re-attaching to an existing sandbox
 	Pack          string   // --pack PATH: active pack for this run (overrides config.Pack); mounts its skills + knowledge
-	Passthrough   []string // args after `--`, handed straight to pi
+	// PackKits are ephemeral mixin kit dir(s) synthesized from the active pack's
+	// bin/ wrappers (F2, see synthesizePackKit). Deliberately SEPARATE from Kits:
+	// Kits non-empty is the --kit ESCAPE HATCH that replaces the auto git/local
+	// pin (see kitOverride in buildSbxArgs); a pack-synthesized kit must stack
+	// alongside the base kit, never suppress it, so it gets its own field and its
+	// own unconditional --kit loop.
+	PackKits    []string
+	Passthrough []string // args after `--`, handed straight to pi
 	// Token is the credential bearer for an OPTIONAL overlay broker. The default
 	// path leaves it empty and forwards no bearer (gog authenticates host-side in
 	// the gateway-spawned MCP server). Reserved for the dormant generic broker
@@ -113,6 +120,13 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 	}
 	// User --kit flags are the base when present (escape hatch).
 	for _, k := range o.Kits {
+		args = append(args, "--kit", k)
+	}
+	// Pack-synthesized kit(s) (F2 sandbox bin/ wrappers) ALWAYS stack, regardless
+	// of the --kit escape hatch: they are never the base image kit, only an
+	// additive mixin, so they must not be folded into kitOverride's replace
+	// semantics (see the PackKits field doc).
+	for _, k := range o.PackKits {
 		args = append(args, "--kit", k)
 	}
 	// Config/overlay stack always applies on top of the base.
