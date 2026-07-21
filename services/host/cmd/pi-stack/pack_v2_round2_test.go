@@ -378,13 +378,13 @@ func TestSynthesizePackKit_ResynthOverExistingKit(t *testing.T) {
 	}
 	p := &packInfo{Root: root, Manifest: packManifest{Name: "p", Proxies: []packProxy{{Name: "a"}, {Name: "b"}}}}
 
-	kit1 := synthesizePackKit(p, &bytes.Buffer{})
-	if kit1 == "" {
-		t.Fatal("first synth failed")
+	kit1, err := synthesizePackKit(p)
+	if err != nil || kit1 == "" {
+		t.Fatalf("first synth failed: %q, err=%v", kit1, err)
 	}
-	kit2 := synthesizePackKit(p, &bytes.Buffer{}) // second launch, same pack
-	if kit2 == "" {
-		t.Fatal("second synth failed")
+	kit2, err := synthesizePackKit(p) // second launch, same pack
+	if err != nil || kit2 == "" {
+		t.Fatalf("second synth failed: %q, err=%v", kit2, err)
 	}
 	if kit2 == kit1 {
 		t.Fatalf("round-3 R2: two launches must get two independent kit dirs, got %q twice", kit1)

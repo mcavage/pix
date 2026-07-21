@@ -559,6 +559,16 @@ Note on F1's tier: a pack that only *references* a host-provided MCP (`integrati
   when the gateway is off, `pack use` still updates config and prints the enable hint (existing
   behavior). The MCP is not attached until both the gateway is on *and* the sandbox is recreated —
   surface both in the recreate line so it is not a silent miss.
+- **Known residual: crash-window over-retention (deliberate).** The activation commit is two
+  atomic file writes that can't be one transaction: `pack.lock` first, then `cfg.Save`. A
+  lock-write *failure* aborts before Save (round-4 F1 — config is never committed without its
+  attribution), but a true crash (SIGKILL/power loss) in the millisecond window *between* the two
+  writes during a switch/reactivation can leave the pack's OWN contributions slightly
+  over-retained: an MCP/bundle the freshly-written lock no longer attributes stays in config until
+  the next `pack use`/`pack rm`. This is the chosen safe side of the lock-only-removal design —
+  removal is scoped to lock attribution ONLY, so it can never remove a user's manually-added entry
+  (the worse bug, finding #2). Manifest-based reconciliation would reopen that. Over-retention is
+  safe and recoverable (`pack rm`); do NOT add manifest-driven removal to "fix" it.
 
 ---
 

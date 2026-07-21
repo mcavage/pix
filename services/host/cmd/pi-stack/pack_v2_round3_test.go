@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -215,8 +216,14 @@ func TestRevertPackPriorContribution_ToleratesOverclaimingLock(t *testing.T) {
 // cfg.Save fails (read-only config dir) AFTER the lock write — the residue is a
 // lock that over-claims the one name. A later `pack rm` (once the disk
 // recovers) must detach cleanly with no orphaned contributions and no bogus
-// "detached mcp" claim.
+// "detached mcp" claim. Since round-4 F1 the commit point exits non-zero on a
+// Save failure, so the add runs in a re-exec of this test binary.
 func TestPackAddMcp_LockWrittenBeforeSaveFailure(t *testing.T) {
+	if os.Getenv("PI_STACK_TEST_SAVEFAIL") == "add" {
+		// Child: exits 1 at the commit point (Save fails on the read-only dir).
+		runPackAdd(fakeGitEnv(nil), os.Stdout, []string{"mcp", "fastmail", os.Getenv("PI_STACK_TEST_PACK_ROOT")})
+		return
+	}
 	if os.Getuid() == 0 {
 		t.Skip("root ignores directory write permissions")
 	}
@@ -247,10 +254,18 @@ func TestPackAddMcp_LockWrittenBeforeSaveFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(cfgDir, 0o755) })
-	var out bytes.Buffer
-	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root})
-	if !strings.Contains(out.String(), "note: saving config") {
-		t.Fatalf("expected the save failure note, got:\n%s", out.String())
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestPackAddMcp_LockWrittenBeforeSaveFailure$")
+	cmd.Env = append(os.Environ(),
+		"PI_STACK_TEST_SAVEFAIL=add",
+		"PI_STACK_TEST_PACK_ROOT="+root,
+		"PI_STACK_CONFIG="+filepath.Join(cfgDir, "config.toml"),
+	)
+	childOut, childErr := cmd.CombinedOutput()
+	if childErr == nil {
+		t.Fatalf("round-4 F1: pack add must exit non-zero when cfg.Save fails, got:\n%s", childOut)
+	}
+	if !strings.Contains(string(childOut), "saving config") {
+		t.Fatalf("expected the save failure message, got:\n%s", childOut)
 	}
 	// The lock was written FIRST: it over-claims the never-committed name.
 	if lock := readPackLock(root); !containsStr(lock.MCP, "fastmail") {
@@ -304,9 +319,9 @@ func TestSweepStaleKitTemps_AgeGatedLaunchDirs(t *testing.T) {
 	}
 	p := &packInfo{Root: root, Manifest: packManifest{Name: "p", Proxies: []packProxy{{Name: "a"}}}}
 
-	kit1 := synthesizePackKit(p, &bytes.Buffer{})
-	if kit1 == "" {
-		t.Fatal("first synth failed")
+	kit1, err := synthesizePackKit(p)
+	if err != nil || kit1 == "" {
+		t.Fatalf("first synth failed: %q, err=%v", kit1, err)
 	}
 	// Plant an OLD launch dir and an old legacy stable dir beside it.
 	base := packKitDir(root)
@@ -321,9 +336,9 @@ func TestSweepStaleKitTemps_AgeGatedLaunchDirs(t *testing.T) {
 		}
 	}
 
-	kit2 := synthesizePackKit(p, &bytes.Buffer{})
-	if kit2 == "" {
-		t.Fatal("second synth failed")
+	kit2, err := synthesizePackKit(p)
+	if err != nil || kit2 == "" {
+		t.Fatalf("second synth failed: %q, err=%v", kit2, err)
 	}
 	for _, gone := range []string{old, base} {
 		if _, err := os.Stat(gone); !os.IsNotExist(err) {
@@ -357,8 +372,14 @@ func TestSandboxPackMarker_NotOverwrittenOnInconclusiveProbe(t *testing.T) {
 		{sbxUnknown, false, false}, // R3: inconclusive probe never writes
 		{sbxRunning, false, false},
 		{sbxStopped, false, false},
-		{sbxUnknown, true, true}, // --replace is a definite create
-		{sbxRunning, true, true},
+		// round-4 F3: --replace on an INCONCLUSIVE probe is NOT a definite
+		// create — planSandboxLaunch skips the rm on sbxUnknown (RmFirst is
+		// false), so sbx may re-attach the old sandbox; the marker must not be
+		// overwritten (or stalePackReattachWarning would wrongly go silent).
+		{sbxUnknown, true, false},
+		{sbxAbsent, true, true},  // absent + replace: rm is a no-op, create is certain
+		{sbxRunning, true, true}, // --replace with a positive probe really removes + creates
+		{sbxStopped, true, true},
 	}
 	oldPack := canonicalizePackRoot(filepath.Join(t.TempDir(), "old-pack"))
 	newPack := filepath.Join(t.TempDir(), "new-pack")

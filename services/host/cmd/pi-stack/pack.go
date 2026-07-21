@@ -308,20 +308,22 @@ func personalPackRoot() string { return config.PackDir() }
 // [[knowledge]] refs) in cfg.KnowledgeBundles (added at `pack use` time,
 // indexed by the daemon), and a transient --pack override's knowledge is
 // deliberately not scoped (the daemon wouldn't have indexed it). An EXPLICIT
-// --pack that fails to load is fatal; the personal/active fallback failing is a
-// silent skip.
-func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) {
+// --pack that fails to load is fatal (a non-nil return the caller must treat
+// as launch-aborting); the personal/active fallback failing is a silent skip.
+// A declared-but-unbuildable sandbox proxy is ALSO fatal (round-4 F2): the
+// launch fails CLOSED rather than creating a sandbox missing a declared
+// wrapper.
+func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) error {
 	packRoot := activePackRoot(cfg.Pack, o.Pack)
 	if packRoot == "" {
-		return // no active pack; nothing to mount (detached or never created)
+		return nil // no active pack; nothing to mount (detached or never created)
 	}
 	p, err := loadPack(packRoot)
 	if err != nil {
 		if strings.TrimSpace(o.Pack) != "" {
-			fmt.Fprintf(os.Stderr, "pi-stack: --pack %s: %v\n", o.Pack, err)
-			os.Exit(1)
+			return fmt.Errorf("--pack %s: %v", o.Pack, err)
 		}
-		return
+		return nil
 	}
 	if p.SkillsDir != "" && !containsStr(o.Skills, p.SkillsDir) {
 		o.Skills = append(o.Skills, p.SkillsDir)
@@ -332,8 +334,17 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) {
 	// F2: synthesize (or refresh) the ephemeral mixin kit carrying this pack's
 	// non-host bin/ wrappers, and stack it via the DEDICATED PackKits field (never
 	// o.Kits — see the PackKits field doc for why folding it into the --kit
-	// escape hatch would silently drop the base image kit).
-	if kit := synthesizePackKit(p, os.Stderr); kit != "" && !containsStr(o.PackKits, kit) {
+	// escape hatch would silently drop the base image kit). FAIL CLOSED at the
+	// launch boundary (round-4 F2): a pack that DECLARES a sandbox proxy whose
+	// kit can't be built must abort the launch — synthesizePackKit distinguishes
+	// "no proxies declared" (("", nil): fine, no kit) from "declared but
+	// unbuildable" (("", err)), so a sandbox is never created silently missing a
+	// wrapper the pack promised it.
+	kit, kerr := synthesizePackKit(p)
+	if kerr != nil {
+		return fmt.Errorf("pack %s: %v (refusing to launch a sandbox missing a declared wrapper; fix the pack's bin/ or drop the [[proxy]] entry)", p.Manifest.Name, kerr)
+	}
+	if kit != "" && !containsStr(o.PackKits, kit) {
 		o.PackKits = append(o.PackKits, kit)
 	}
 	for _, ig := range p.Manifest.Integrations {
@@ -341,6 +352,7 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) {
 			fmt.Fprintf(os.Stderr, "pi-stack: pack integration %q needs a credential — set it: pi-stack secret set %s op://vault/item/field\n", ig.Name, ig.Env)
 		}
 	}
+	return nil
 }
 
 // packMcpNames returns the de-duplicated `integration.mcp` names a pack
@@ -376,8 +388,11 @@ func packKitDir(root string) string {
 // bin/ wrappers on the sandbox PATH (F2/ADR-2): a minimal `kind: mixin`
 // spec.yaml, plus files/usr/local/bin/<name> (0755) for each [[proxy]] with
 // Host unset/false — /usr/local/bin is already on the DHI image's PATH, so the
-// wrapper needs no in-VM shim. Returns the kit dir, or "" when the pack has no
-// sandbox proxies (nothing to mount — the caller must not stack an empty kit).
+// wrapper needs no in-VM shim. Returns (dir, nil) on success, ("", nil) when
+// the pack has no sandbox proxies (nothing to mount — the caller must not
+// stack an empty kit), and ("", err) when the pack DECLARES a sandbox proxy
+// but the kit can't be built — the caller must fail the launch closed
+// (round-4 F2), never proceed to a kitless create.
 // Copies (never symlinks): loadPack already refuses a symlinked bin/, and sbx
 // mounts a real tree.
 //
@@ -391,9 +406,9 @@ func packKitDir(root string) string {
 // dir only ever holds what THIS synth wrote (the old finding-#6 guarantee,
 // now structural). Old launch dirs are age-gate swept (sweepStaleKitTemps).
 // And it FAILS CLOSED: if any declared wrapper can't be read or copied, the
-// whole synth is refused ("", no kit) — never a partial kit with that one
+// whole synth is refused with an error — never a partial kit with that one
 // wrapper silently missing.
-func synthesizePackKit(p *packInfo, out io.Writer) string {
+func synthesizePackKit(p *packInfo) (string, error) {
 	var sandboxProxies []packProxy
 	for _, pr := range p.Manifest.Proxies {
 		if !pr.Host {
@@ -406,29 +421,26 @@ func synthesizePackKit(p *packInfo, out io.Writer) string {
 	if len(sandboxProxies) == 0 {
 		// No sandbox proxies: nothing to mount. A previous launch's kit dir is
 		// inert (nothing references it) and the sweep above cleans it up.
-		return ""
+		return "", nil
 	}
 	if err := os.MkdirAll(parent, 0o755); err != nil {
-		fmt.Fprintf(out, "pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
-		return ""
+		return "", fmt.Errorf("pack kit for %s: %v", p.Manifest.Name, err)
 	}
 	dir, err := os.MkdirTemp(parent, filepath.Base(base)+kitLaunchInfix)
 	if err != nil {
-		fmt.Fprintf(out, "pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
-		return ""
+		return "", fmt.Errorf("pack kit for %s: %v", p.Manifest.Name, err)
 	}
-	fail := func(format string, a ...any) string {
-		fmt.Fprintf(out, format, a...)
+	fail := func(format string, a ...any) (string, error) {
 		_ = os.RemoveAll(dir) // never leave a half-built kit dir behind
-		return ""
+		return "", fmt.Errorf(format, a...)
 	}
 	_ = os.Chmod(dir, 0o755) // MkdirTemp creates 0700; the kit is a mounted tree
 	binOut := filepath.Join(dir, "files", "usr", "local", "bin")
 	if err := os.MkdirAll(binOut, 0o755); err != nil {
-		return fail("pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
+		return fail("pack kit for %s: %v", p.Manifest.Name, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "spec.yaml"), []byte("kind: mixin\n"), 0o644); err != nil {
-		return fail("pi-stack: pack kit for %s: %v\n", p.Manifest.Name, err)
+		return fail("pack kit for %s: %v", p.Manifest.Name, err)
 	}
 	for _, pr := range sandboxProxies {
 		src := filepath.Join(p.Root, "bin", pr.Name)
@@ -436,13 +448,13 @@ func synthesizePackKit(p *packInfo, out io.Writer) string {
 		if err != nil {
 			// Fail closed: never launch with a partial kit because one declared
 			// wrapper couldn't be read.
-			return fail("pi-stack: pack proxy %q: %v (refusing to build the pack kit)\n", pr.Name, err)
+			return fail("pack proxy %q: %v (refusing to build the pack kit)", pr.Name, err)
 		}
 		if err := os.WriteFile(filepath.Join(binOut, pr.Name), b, 0o755); err != nil {
-			return fail("pi-stack: pack proxy %q: %v (refusing to build the pack kit)\n", pr.Name, err)
+			return fail("pack proxy %q: %v (refusing to build the pack kit)", pr.Name, err)
 		}
 	}
-	return dir
+	return dir, nil
 }
 
 // kitLaunchInfix names each per-launch unique kit dir as a suffix on the pack
@@ -600,13 +612,22 @@ func writePackLock(root string, l packLock) error {
 	return nil
 }
 
-// warnPackLockWriteFailure prints a LOUD warning when pack.lock can't be
-// written (finding #3): the lock is part of the switch's committed state (it
-// is what makes the NEXT switch reversible), so a silent "note:" undersells
-// the risk — a future `pack use`/`pack rm` may not fully undo this activation.
-func warnPackLockWriteFailure(out io.Writer, root string, err error) {
-	fmt.Fprintf(out, "WARNING: could not write pack.lock for %s: %v\n", root, err)
-	fmt.Fprintln(out, "WARNING: a future `pack use`/`pack rm` may not fully reverse this activation's mcp/knowledge/config changes.")
+// commitPackActivation is the two-file commit point shared by `pack use` and
+// the active-pack `pack add mcp` path: write the attribution lock FIRST, then
+// cfg.Save. A lock-write failure ABORTS before Save (round-4 F1): committing
+// the config without its attribution would strand MCP/knowledge/config
+// entries that no later `pack use`/`pack rm` could ever remove (removal is
+// deliberately scoped to lock attribution ONLY — see the commit-ordering
+// comment in runPackUse). On abort nothing is committed: the mutated cfg was
+// in-memory only, so the on-disk config is unchanged.
+func commitPackActivation(cfg *config.Config, root string, lock packLock) error {
+	if err := writePackLock(root, lock); err != nil {
+		return fmt.Errorf("writing pack.lock for %s: %v — aborting without saving config (nothing was committed; fix the pack directory and re-run)", root, err)
+	}
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("saving config: %v", err)
+	}
+	return nil
 }
 
 // isAdoptedPack reports whether root's pack.lock carries adoption provenance
@@ -1157,38 +1178,32 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 		// fastmail ./work` while cfg.Pack is the absolute form).
 		if cerr == nil && canonicalizePackRoot(cfg.Pack) == canonicalizePackRoot(root) {
 			added := cfg.AddMCP(name)
-			saveOK := true
 			if added {
 				// Attribution stays gated on the AddMCP result (finding #2): a
 				// pre-existing, user-added name is never claimed as this pack's.
-				// Lock BEFORE Save (round-3 R1, same ordering as runPackUse): a
-				// crash/failure between the two leaves a lock that over-claims one
-				// name (removal of an absent MCP is a no-op), never a committed
-				// config entry with no lock attribution.
+				// Lock BEFORE Save, ABORT on lock failure (round-3 R1 + round-4 F1,
+				// same commit point as runPackUse): the config is never committed
+				// without its attribution, so a later `pack use`/`pack rm` can
+				// always clean up what this command added.
 				lock := readPackLock(root)
 				if !containsStr(lock.MCP, name) {
 					lock.MCP = append(lock.MCP, name)
-					if err := writePackLock(root, lock); err != nil {
-						warnPackLockWriteFailure(out, root, err)
-					}
 				}
-				if err := cfg.Save(); err != nil {
-					fmt.Fprintf(out, "note: saving config: %v\n", err)
-					saveOK = false
+				if err := commitPackActivation(cfg, root, lock); err != nil {
+					fmt.Fprintf(out, "pi-stack pack add: %v\n", err)
+					os.Exit(1)
 				}
 			}
-			if saveOK {
-				// finding E: registration runs even when the name was ALREADY in
-				// cfg.MCP (added == false) — it is idempotent, and a retry after a
-				// failed gateway registration must actually re-register instead of
-				// silently doing nothing.
-				if err := registerServers(cfg, env, out, []string{name}, findHostBinary); err != nil {
-					fmt.Fprintf(out, "note: mcp registration: %v\n", err)
-				}
-				solicitPackCredentials(env, os.Stdin, out, isTTY(os.Stdin), p)
-				if added {
-					printPackRecreateLine(out)
-				}
+			// finding E: registration runs even when the name was ALREADY in
+			// cfg.MCP (added == false) — it is idempotent, and a retry after a
+			// failed gateway registration must actually re-register instead of
+			// silently doing nothing.
+			if err := registerServers(cfg, env, out, []string{name}, findHostBinary); err != nil {
+				fmt.Fprintf(out, "note: mcp registration: %v\n", err)
+			}
+			solicitPackCredentials(env, os.Stdin, out, isTTY(os.Stdin), p)
+			if added {
+				printPackRecreateLine(out)
 			}
 		} else {
 			fmt.Fprintf(out, "activate the pack to attach it to a sandbox:  pi-stack pack use %s\n", root)
@@ -1489,15 +1504,27 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 
 	cfg.Pack = root
 
-	// COMMIT ORDERING (round-3 R1): the lock is written BEFORE cfg.Save, and it
-	// records the INTENDED contribution set computed above. The two writes can't
-	// be one atomic transaction (two files), so pick the safe failure residue: a
-	// crash between lock-write and Save leaves a lock that OVER-claims (it names
-	// contributions the config never committed) — harmless, because removal of
-	// an absent MCP/bundle is a no-op (config.removeValue tolerates missing
-	// entries). The reverse order left the fatal residue: an ACTIVE pack whose
-	// config-committed contributions had NO lock attribution, so no later
-	// switch/rm could ever remove them.
+	// COMMIT ORDERING (round-3 R1 + round-4 F1): the lock is written BEFORE
+	// cfg.Save, it records the INTENDED contribution set computed above, and a
+	// lock-write FAILURE aborts before Save (commitPackActivation) — the config
+	// is never committed without its attribution. The two writes can't be one
+	// atomic transaction (two files), so pick the safe failure residue: a true
+	// crash (SIGKILL/power loss) in the window between lock-write and Save
+	// leaves a lock that OVER-claims (it names contributions the config never
+	// committed) — harmless, because removal of an absent MCP/bundle is a no-op
+	// (config.removeValue tolerates missing entries). The reverse order left
+	// the fatal residue: an ACTIVE pack whose config-committed contributions
+	// had NO lock attribution, so no later switch/rm could ever remove them.
+	//
+	// KNOWN RESIDUAL (deliberate): on a switch/reactivation, the same crash
+	// window can leave the pack's OWN contributions slightly OVER-RETAINED (an
+	// MCP/bundle the reverted lock no longer attributes stays in config until
+	// the next `pack use`/`pack rm`). That is the chosen safe side of the
+	// lock-only-removal design: removal is scoped to lock attribution ONLY so
+	// it can never remove a user's manually-added entry (the worse bug fixed in
+	// finding #2). Manifest-based reconciliation would reopen that. Over-
+	// retention is safe and recoverable; do NOT "fix" it with manifest-driven
+	// removal.
 	lock := packLock{
 		MCP:                    addedMCP,
 		Knowledge:              newKnowledgeIDs,
@@ -1514,14 +1541,12 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		lock.Remote = selfLock.Remote
 		lock.Commit = selfLock.Commit
 	}
-	if err := writePackLock(root, lock); err != nil {
-		// The lock IS part of this switch's committed state (finding #3): a
-		// future switch away may not fully reverse what is about to happen.
-		warnPackLockWriteFailure(out, root, err)
-	}
-
-	if err := cfg.Save(); err != nil {
-		fmt.Fprintf(out, "pi-stack pack use: saving config: %v\n", err)
+	if err := commitPackActivation(cfg, root, lock); err != nil {
+		// The lock IS part of this switch's committed state (finding #3 +
+		// round-4 F1): if it can't be written, NOTHING is committed — the
+		// in-memory cfg mutations above are discarded, the on-disk config (and
+		// the active pack) stay exactly as they were.
+		fmt.Fprintf(out, "pi-stack pack use: %v\n", err)
 		os.Exit(1)
 	}
 

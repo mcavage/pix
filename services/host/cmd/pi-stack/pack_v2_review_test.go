@@ -211,34 +211,9 @@ func TestReadPackLock_CorruptFileReturnsSafeDefault(t *testing.T) {
 	}
 }
 
-// TestPackUse_LockWriteFailureWarnsLoudly: when pack.lock can't be written,
-// `pack use` must surface a LOUD warning (not a quiet "note:") that a future
-// switch may not fully reverse this activation.
-func TestPackUse_LockWriteFailureWarnsLoudly(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-
-	root := filepath.Join(dir, "p")
-	mustWritePack(t, root, packManifest{Name: "p", Schema: 1})
-
-	// Revoke write access to root so writePackLock's os.WriteFile fails, while
-	// pack.toml is still readable (loadPack succeeds).
-	if err := os.Chmod(root, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
-
-	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root})
-
-	if !strings.Contains(out.String(), "WARNING") {
-		t.Errorf("expected a loud WARNING when pack.lock can't be written, got:\n%s", out.String())
-	}
-	if !strings.Contains(out.String(), "may not fully reverse") {
-		t.Errorf("expected the warning to explain the reversibility risk, got:\n%s", out.String())
-	}
-}
+// (finding #3's warn-on-lock-failure behavior was superseded by round-4 F1:
+// a lock-write failure now ABORTS `pack use` before cfg.Save — see
+// TestPackUse_LockWriteFailureAbortsWithoutCommit in pack_v2_round4_test.go.)
 
 // --- finding #5 [BLOCK]: F4 must switch ALL config, and pack rm must undo
 // contributions ---------------------------------------------------------------
@@ -343,9 +318,9 @@ func TestSynthesizePackKit_RebuildRemovesStaleWrapper(t *testing.T) {
 	}
 
 	p1 := &packInfo{Root: root, Manifest: packManifest{Name: "p", Proxies: []packProxy{{Name: "a"}, {Name: "b"}}}}
-	kit1 := synthesizePackKit(p1, &bytes.Buffer{})
-	if kit1 == "" {
-		t.Fatal("expected a kit dir")
+	kit1, err := synthesizePackKit(p1)
+	if err != nil || kit1 == "" {
+		t.Fatalf("expected a kit dir, got %q, err=%v", kit1, err)
 	}
 	if _, err := os.Stat(filepath.Join(kit1, "files", "usr", "local", "bin", "b")); err != nil {
 		t.Fatalf("wrapper b should exist after the first synth: %v", err)
@@ -353,9 +328,9 @@ func TestSynthesizePackKit_RebuildRemovesStaleWrapper(t *testing.T) {
 
 	// pack.toml no longer declares "b" (e.g. the author removed it).
 	p2 := &packInfo{Root: root, Manifest: packManifest{Name: "p", Proxies: []packProxy{{Name: "a"}}}}
-	kit2 := synthesizePackKit(p2, &bytes.Buffer{})
-	if kit2 == "" {
-		t.Fatal("expected a kit dir from the second synth")
+	kit2, err := synthesizePackKit(p2)
+	if err != nil || kit2 == "" {
+		t.Fatalf("expected a kit dir from the second synth, got %q, err=%v", kit2, err)
 	}
 	if kit2 == kit1 {
 		t.Fatalf("round-3 R2: each launch must synthesize into its OWN unique dir, got %q twice", kit1)
@@ -384,20 +359,19 @@ func TestSynthesizePackKit_FailsClosedOnUnreadableWrapper(t *testing.T) {
 	}
 
 	pGood := &packInfo{Root: root, Manifest: packManifest{Name: "p", Proxies: []packProxy{{Name: "a"}}}}
-	kitGood := synthesizePackKit(pGood, &bytes.Buffer{})
-	if kitGood == "" {
-		t.Fatal("expected the first (good) synth to succeed")
+	kitGood, err := synthesizePackKit(pGood)
+	if err != nil || kitGood == "" {
+		t.Fatalf("expected the first (good) synth to succeed, got %q, err=%v", kitGood, err)
 	}
 
 	// "missing" has no bin/missing file on disk.
-	var out bytes.Buffer
 	pBad := &packInfo{Root: root, Manifest: packManifest{Name: "p", Proxies: []packProxy{{Name: "a"}, {Name: "missing"}}}}
-	kitBad := synthesizePackKit(pBad, &out)
-	if kitBad != "" {
-		t.Errorf("expected \"\" (fail closed) when a declared wrapper is unreadable, got %q", kitBad)
+	kitBad, badErr := synthesizePackKit(pBad)
+	if kitBad != "" || badErr == nil {
+		t.Errorf("expected (\"\", error) (fail closed) when a declared wrapper is unreadable, got %q, err=%v", kitBad, badErr)
 	}
-	if !strings.Contains(out.String(), "refusing") {
-		t.Errorf("expected a refusal message, got:\n%s", out.String())
+	if badErr != nil && !strings.Contains(badErr.Error(), "refusing") {
+		t.Errorf("expected a refusal message, got: %v", badErr)
 	}
 	// The previously-good kit must be untouched (still has "a").
 	if _, err := os.Stat(filepath.Join(kitGood, "files", "usr", "local", "bin", "a")); err != nil {

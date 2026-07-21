@@ -150,7 +150,13 @@ func runRun(argv []string) {
 	// pack (config.PackDir()) loads if it exists. Create-time only (skills +
 	// knowledge are create-time mounts; a re-attach keeps what it was made with).
 	if willCreate(state, o.Replace) {
-		applyPackToLaunch(cfg, &o, defaultShellEnv())
+		// Fatal on error (explicit --pack that doesn't load, or a declared
+		// sandbox proxy whose kit can't be built — round-4 F2 fail-closed):
+		// never create a sandbox missing context the pack declared.
+		if err := applyPackToLaunch(cfg, &o, defaultShellEnv()); err != nil {
+			fmt.Fprintf(os.Stderr, "pi-stack: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	// Local-image preflight: when we're about to pin --template to a locally loaded

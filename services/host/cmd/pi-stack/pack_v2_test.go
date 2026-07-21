@@ -202,10 +202,9 @@ func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 			{Name: "platformio", Host: true},
 		},
 	}}
-	var out bytes.Buffer
-	kit := synthesizePackKit(p, &out)
-	if kit == "" {
-		t.Fatal("expected a synthesized kit dir")
+	kit, err := synthesizePackKit(p)
+	if err != nil || kit == "" {
+		t.Fatalf("expected a synthesized kit dir, got %q, err=%v", kit, err)
 	}
 	if _, err := os.Stat(filepath.Join(kit, "spec.yaml")); err != nil {
 		t.Errorf("spec.yaml missing: %v", err)
@@ -222,8 +221,8 @@ func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 // synthesizes nothing (the caller must not stack an empty kit).
 func TestSynthesizePackKit_NoProxiesReturnsEmpty(t *testing.T) {
 	p := &packInfo{Root: t.TempDir(), Manifest: packManifest{Name: "p"}}
-	if kit := synthesizePackKit(p, &bytes.Buffer{}); kit != "" {
-		t.Errorf("expected no kit, got %q", kit)
+	if kit, err := synthesizePackKit(p); err != nil || kit != "" {
+		t.Errorf("expected no kit and no error, got %q, err=%v", kit, err)
 	}
 }
 

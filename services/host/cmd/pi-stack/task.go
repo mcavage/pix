@@ -1147,8 +1147,11 @@ func launchTask(o runOpts) error {
 	}
 
 	// A task is a fresh sandbox; mount the active pack (skills + model pref) so it
-	// gets the same authored context a normal `pi-stack run` does.
-	applyPackToLaunch(cfg, &o, defaultShellEnv())
+	// gets the same authored context a normal `pi-stack run` does. Fatal on error
+	// (round-4 F2): a declared-but-unbuildable pack wrapper refuses the launch.
+	if err := applyPackToLaunch(cfg, &o, defaultShellEnv()); err != nil {
+		return err
+	}
 
 	released := isReleased(version)
 	kitOverride := len(o.Kits) > 0
