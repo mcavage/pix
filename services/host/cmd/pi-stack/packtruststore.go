@@ -81,9 +81,12 @@ func packTrustLockPath() string {
 // serializes trust-store writes. It reuses the shared blocking withFlock
 // helper (serve_start_unix.go; the non-unix shim runs fn unserialized —
 // single-process correctness is unaffected there). SINGLE lock, never
-// nested: fn must not call another withPackTrustLock/mutatePackTrustStore —
-// flock is per open file description, so a nested acquire in the same
-// process self-deadlocks.
+// nested: fn must not call another withPackTrustLock/mutatePackTrustStore/
+// clearInstalledHostPackWrappers/refreshHostPackWrappers — flock is per open
+// file description, so a nested acquire in the same process self-deadlocks.
+// Code that already holds the lock uses the *Locked variants
+// (mutatePackTrustStoreLocked, clearInstalledHostPackWrappersLocked,
+// refreshHostPackWrappersLocked) instead.
 func withPackTrustLock(fn func() error) error {
 	return withFlock(packTrustLockPath(), fn)
 }
@@ -97,20 +100,31 @@ func withPackTrustLock(fn func() error) error {
 func mutatePackTrustStore(mutate func(*packTrustStore) error) (*packTrustStore, error) {
 	var fresh *packTrustStore
 	err := withPackTrustLock(func() error {
-		s, lerr := loadPackTrustStore()
-		if lerr != nil {
-			return lerr
-		}
-		if merr := mutate(s); merr != nil {
-			return merr
-		}
-		if serr := s.save(); serr != nil {
-			return serr
-		}
-		fresh = s
-		return nil
+		var e error
+		fresh, e = mutatePackTrustStoreLocked(mutate)
+		return e
 	})
 	return fresh, err
+}
+
+// mutatePackTrustStoreLocked is the ALREADY-HOLDING-THE-LOCK core of
+// mutatePackTrustStore: fresh load → mutate → save, with NO lock acquisition
+// of its own. Callers MUST hold withPackTrustLock — the flock is per open
+// file description, so re-acquiring it in the same process self-deadlocks;
+// this variant exists precisely so a locked region (the transactional
+// wrapper refresh, `pack rm`) never nests the lock.
+func mutatePackTrustStoreLocked(mutate func(*packTrustStore) error) (*packTrustStore, error) {
+	s, lerr := loadPackTrustStore()
+	if lerr != nil {
+		return nil, lerr
+	}
+	if merr := mutate(s); merr != nil {
+		return nil, merr
+	}
+	if serr := s.save(); serr != nil {
+		return nil, serr
+	}
+	return s, nil
 }
 
 // packTrustStorePath is <config-dir>/pack-trust.json — beside config.toml,

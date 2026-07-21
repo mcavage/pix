@@ -2032,69 +2032,96 @@ func runPackRm(out io.Writer, rest []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack pack rm: unexpected argument %q (rm detaches the ACTIVE pack; it takes no name)\n", rest[0])
 		os.Exit(2)
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(out, "pi-stack pack rm: %v\n", err)
+	// The ENTIRE detach — re-reading cfg (the active pack) AND the trust
+	// store, clearing the wrappers, reverting the contribution set, cfg.Save,
+	// and dropping the spent activation record — runs under ONE hold of the
+	// cross-process trust lock (concurrency review): `rm` used to decide what
+	// to clear from a PRE-lock snapshot, so a concurrent `pi-stack host`
+	// wrapper refresh could install + attribute AFTER rm reported "detached",
+	// or interleave into a live dir the store attributed to nobody. Under the
+	// one lock the refresh and the detach serialize: either rm wins (nothing
+	// installed, nothing attributed) or the refresh wins (installed AND
+	// attributed) — never installed-but-unattributed. os.Exit stays OUTSIDE
+	// the locked fn (withFlock contract); failures return and exit after the
+	// lock is released.
+	var (
+		noActive         bool
+		old              string
+		removedWrappers  []string
+		removedMCP       []string
+		removedKnowledge []string
+	)
+	rmErr := withPackTrustLock(func() error {
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		if cfg.Pack == "" {
+			noActive = true
+			return nil
+		}
+		old = cfg.Pack
+		// finding #5: `rm` must undo the active pack's contributions (mcp,
+		// knowledge, gog/model overrides) too — not just clear cfg.Pack — or
+		// "detached" is a lie about what actually happened. The contribution set
+		// comes from HOST state (round-2 A), never the pack-payload lock — and an
+		// unreadable trust store is FATAL: without it neither the removal set nor
+		// the wrapper attribution can be honored.
+		store, serr := loadPackTrustStore()
+		if serr != nil {
+			return fmt.Errorf("pack trust state unreadable: %v (fix or remove %s and re-run)", serr, packTrustStorePath())
+		}
+		// One-time Phase-1 → Phase-2 migration (round-3 #2), same as `pack use`:
+		// a Phase-1 active pack's attribution lives only in its (local) pack.lock.
+		migratePhase1Activation(store, old)
+		// F3 + round-3 #4: "detached" includes the host wrappers — remove exactly
+		// what HOST state attributes to hostPackBinDir() (reliable even when the
+		// pack directory itself is gone; attribution never lived in the pack), and
+		// do it FIRST: a failed clear aborts with a non-zero exit BEFORE anything
+		// detaches, so `pack rm` never claims success while host executables
+		// remain, and a plain re-run retries the whole detach cleanly. The
+		// attribution is discarded only on CONFIRMED removal. Acceptance is kept:
+		// trust was granted at adoption and re-attaching must not re-prompt.
+		if store.Installed != nil && len(store.Installed.Wrappers) > 0 {
+			removedWrappers = append([]string(nil), store.Installed.Wrappers...)
+			if cerr := clearInstalledHostPackWrappersLocked(out, store); cerr != nil {
+				removedWrappers = nil
+				return fmt.Errorf("host wrappers could not be removed: %v — nothing detached; fix that and re-run (a `pi-stack host` launch refuses until they are cleared)", cerr)
+			}
+		}
+		removedMCP, removedKnowledge = revertPackPriorContribution(cfg, store.activationFor(old))
+		cfg.Pack = ""
+		if err := cfg.Save(); err != nil {
+			return err
+		}
+		// The activation record is spent (its contributions were just reverted).
+		// Dropped only when it was attributed to THIS pack, via the fresh-load
+		// already-locked mutation (round-3 #1; the lock is held — never nest
+		// withPackTrustLock); a failed store write merely over-claims (removals
+		// of absent entries are no-ops).
+		if store.hasActivationFor(old) {
+			if _, werr := mutatePackTrustStoreLocked(func(s *packTrustStore) error {
+				if s.hasActivationFor(old) {
+					s.Activation = nil
+				}
+				return nil
+			}); werr != nil {
+				fmt.Fprintf(out, "note: could not clear the activation record: %v (harmless over-claim; re-run `pack rm` once %s is writable)\n", werr, packTrustStorePath())
+			}
+		}
+		return nil
+	})
+	if rmErr != nil {
+		fmt.Fprintf(out, "pi-stack pack rm: %v\n", rmErr)
 		os.Exit(1)
 	}
-	if cfg.Pack == "" {
+	if noActive {
 		fmt.Fprintln(out, "no active pack to detach")
 		return
-	}
-	old := cfg.Pack
-	// finding #5: `rm` must undo the active pack's contributions (mcp,
-	// knowledge, gog/model overrides) too — not just clear cfg.Pack — or
-	// "detached" is a lie about what actually happened. The contribution set
-	// comes from HOST state (round-2 A), never the pack-payload lock — and an
-	// unreadable trust store is FATAL: without it neither the removal set nor
-	// the wrapper attribution can be honored.
-	store, serr := loadPackTrustStore()
-	if serr != nil {
-		fmt.Fprintf(out, "pi-stack pack rm: pack trust state unreadable: %v (fix or remove %s and re-run)\n", serr, packTrustStorePath())
-		os.Exit(1)
-	}
-	// One-time Phase-1 → Phase-2 migration (round-3 #2), same as `pack use`:
-	// a Phase-1 active pack's attribution lives only in its (local) pack.lock.
-	migratePhase1Activation(store, old)
-	// F3 + round-3 #4: "detached" includes the host wrappers — remove exactly
-	// what HOST state attributes to hostPackBinDir() (reliable even when the
-	// pack directory itself is gone; attribution never lived in the pack), and
-	// do it FIRST: a failed clear aborts with a non-zero exit BEFORE anything
-	// detaches, so `pack rm` never claims success while host executables
-	// remain, and a plain re-run retries the whole detach cleanly. The
-	// attribution is discarded only on CONFIRMED removal. Acceptance is kept:
-	// trust was granted at adoption and re-attaching must not re-prompt.
-	var removedWrappers []string
-	if store.Installed != nil && len(store.Installed.Wrappers) > 0 {
-		removedWrappers = append([]string(nil), store.Installed.Wrappers...)
-		if cerr := clearInstalledHostPackWrappers(out, store); cerr != nil {
-			fmt.Fprintf(out, "pi-stack pack rm: host wrappers could not be removed: %v — nothing detached; fix that and re-run (a `pi-stack host` launch refuses until they are cleared)\n", cerr)
-			os.Exit(1)
-		}
-	}
-	removedMCP, removedKnowledge := revertPackPriorContribution(cfg, store.activationFor(old))
-	cfg.Pack = ""
-	if err := cfg.Save(); err != nil {
-		fmt.Fprintf(out, "pi-stack pack rm: %v\n", err)
-		os.Exit(1)
 	}
 	fmt.Fprintf(out, "detached active pack (%s). The files are untouched; re-attach with `pi-stack pack use`.\n", old)
 	if len(removedWrappers) > 0 {
 		fmt.Fprintf(out, "removed host wrappers: %s\n", strings.Join(removedWrappers, ", "))
-	}
-	// The activation record is spent (its contributions were just reverted).
-	// Dropped only when it was attributed to THIS pack, via the lock-serialized
-	// fresh-load mutation (round-3 #1); a failed store write merely over-claims
-	// (removals of absent entries are no-ops).
-	if store.hasActivationFor(old) {
-		if _, werr := mutatePackTrustStore(func(s *packTrustStore) error {
-			if s.hasActivationFor(old) {
-				s.Activation = nil
-			}
-			return nil
-		}); werr != nil {
-			fmt.Fprintf(out, "note: could not clear the activation record: %v (harmless over-claim; re-run `pack rm` once %s is writable)\n", werr, packTrustStorePath())
-		}
 	}
 	if len(removedMCP) > 0 {
 		fmt.Fprintf(out, "detached mcp: %s\n", strings.Join(removedMCP, ", "))
