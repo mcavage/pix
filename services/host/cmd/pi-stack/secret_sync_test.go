@@ -214,3 +214,22 @@ func TestWriteOpRefFileQuiet_ReadErrorNoClobber(t *testing.T) {
 		t.Fatal("expected error on unreadable file, got nil")
 	}
 }
+
+// writeOpRefFileQuiet URL-encodes literal spaces so `op run --env-file` (host
+// mode) doesn't choke on a field name like ".../api key".
+func TestWriteOpRefFileQuiet_EncodesSpaces(t *testing.T) {
+	var written string
+	env := shellEnv{
+		readFile:  func(string) (string, error) { return "", os.ErrNotExist },
+		writeFile: func(_ string, d []byte, _ os.FileMode) error { written = string(d); return nil },
+	}
+	if err := writeOpRefFileQuiet(env, "/x/hostmode.env", "OPENAI_API_KEY", "op://Docker/OPENAI_API_KEY/api key"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(written, "op://Docker/OPENAI_API_KEY/api%20key") {
+		t.Errorf("space not encoded: %q", written)
+	}
+	if strings.Contains(written, "api key") {
+		t.Errorf("raw space still present: %q", written)
+	}
+}

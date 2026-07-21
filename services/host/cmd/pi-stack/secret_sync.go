@@ -167,6 +167,12 @@ func writeOpRefFileQuiet(env shellEnv, path, key, value string) error {
 	if !strings.HasPrefix(value, "op://") || strings.ContainsAny(value, "\n\r") {
 		return fmt.Errorf("value must be a single-line op:// ref")
 	}
+	// URL-encode literal spaces in the ref. `op read` tolerates a raw space in an
+	// item/field name (e.g. .../api key), but `op run --env-file` — how host mode
+	// resolves keys at launch — does NOT, so an un-encoded space silently breaks
+	// host mode's key. Encoding at the write chokepoint fixes both files and
+	// self-heals existing refs on the next write (e.g. setup's re-mirror).
+	value = strings.ReplaceAll(value, " ", "%20")
 	content := ""
 	if env.readFile != nil {
 		c, rerr := env.readFile(path)
