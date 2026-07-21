@@ -23,7 +23,6 @@ node_modules/
 # is ever tracked.
 **/.pi-stack/onboarding.offer
 **/.pi-stack/onboarding.json
-**/.pi-stack/onboarding.state
 
 
 # 1Password secret references — user-specific (vault/item names); keep local
