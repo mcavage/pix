@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -151,5 +152,90 @@ func TestHostModeProviderKeys(t *testing.T) {
 	got := hostModeProviderKeys(mk("OPENAI_API_KEY=op://v/o/k\nANTHROPIC_API_KEY=op://v/a/k\nSLACK_TOKEN=op://v/s/t\n"))
 	if len(got) != 2 || got[0] != "anthropic" || got[1] != "openai" {
 		t.Errorf("want [anthropic openai] sorted, got %v", got)
+	}
+}
+
+// writeOnboardingMarker writes the full five-capability checklist (all false)
+// plus the persisted turns counter, at <dir>/.pi-stack/onboarding.state.
+func TestWriteOnboardingMarker_WritesFullChecklist(t *testing.T) {
+	dir := t.TempDir()
+	writeOnboardingMarker(dir)
+
+	markerPath := filepath.Join(dir, ".pi-stack", "onboarding.state")
+	b, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatalf("reading marker: %v", err)
+	}
+
+	var got struct {
+		Active  bool            `json:"active"`
+		Covered map[string]bool `json:"covered"`
+		Turns   int             `json:"turns"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("marker is not valid JSON: %v (%q)", err, string(b))
+	}
+	if !got.Active {
+		t.Error("freshly written marker must be active")
+	}
+	if got.Turns != 0 {
+		t.Errorf("turns = %d, want 0", got.Turns)
+	}
+	want := []string{"memory", "skills", "crew", "packs", "knowledge"}
+	if len(got.Covered) != len(want) {
+		t.Fatalf("covered has %d keys, want %d (%v)", len(got.Covered), len(want), got.Covered)
+	}
+	for _, cap := range want {
+		if v, ok := got.Covered[cap]; !ok || v {
+			t.Errorf("covered[%q] = (present=%v, value=%v), want (true, false)", cap, ok, v)
+		}
+	}
+}
+
+// A symlinked .pi-stack dir must be REFUSED — writeOnboardingMarker must not
+// follow it and clobber whatever it points at.
+func TestWriteOnboardingMarker_SkipsSymlinkedPiStackDir(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "elsewhere")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	link := filepath.Join(dir, ".pi-stack")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unsupported here: %v", err)
+	}
+
+	writeOnboardingMarker(dir)
+
+	if _, err := os.Stat(filepath.Join(target, "onboarding.state")); err == nil {
+		t.Error("writeOnboardingMarker must not write through a symlinked .pi-stack dir")
+	}
+}
+
+// A symlinked onboarding.state PATH itself (dir is real, the marker file is a
+// symlink to something else) must also be refused.
+func TestWriteOnboardingMarker_SkipsSymlinkedMarkerFile(t *testing.T) {
+	dir := t.TempDir()
+	d := filepath.Join(dir, ".pi-stack")
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatalf("mkdir .pi-stack: %v", err)
+	}
+	targetFile := filepath.Join(dir, "secret-host-file")
+	if err := os.WriteFile(targetFile, []byte("do not touch\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	markerPath := filepath.Join(d, "onboarding.state")
+	if err := os.Symlink(targetFile, markerPath); err != nil {
+		t.Skipf("symlinks unsupported here: %v", err)
+	}
+
+	writeOnboardingMarker(dir)
+
+	b, err := os.ReadFile(targetFile)
+	if err != nil {
+		t.Fatalf("reading target: %v", err)
+	}
+	if string(b) != "do not touch\n" {
+		t.Errorf("symlinked marker file was overwritten: %q", string(b))
 	}
 }

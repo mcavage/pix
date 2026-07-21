@@ -65,6 +65,13 @@ actually trying to get done — a repo to move, a decision to make, something to
 write. If nothing's pressing, ask what their work looks like and suggest a
 concrete first thing grounded in what's in front of you. Do not interview them.
 
+That opening line ITSELF introduces memory and the crew before either has a real
+moment. So the instant you finish saying it, call `onboarding_progress` for each
+of `memory` and `crew` — they're taught, right there in the open, and must never
+be taught again later as if for the first time. This is the same rule as below
+(mark a capability the moment you introduce it, not before); it just applies to
+the opening too, since the opening is where those two actually get introduced.
+
 ## Then teach as the work demands it (each is a trigger, not a slot)
 
 - **A core skill (the "flows").** Whatever their task naturally invokes — `plan`,
@@ -107,13 +114,22 @@ concrete first thing grounded in what's in front of you. Do not interview them.
 ## Onboarding persists across turns (don't lose the thread)
 
 Onboarding is NOT a one-shot: a scaffold keeps it open so you keep teaching as the
-work unfolds instead of forgetting after the first task. While
-`<workspace>/.pi-stack/onboarding.state` exists and is active, you'll get a short
-reminder each turn. Honor it: at natural breaks, surface one not-yet-seen
-capability if it fits. When you've given a light tour across a few of them and
-the user is working smoothly (or they say they're done), tell them onboarding's
-wrapped and DELETE `<workspace>/.pi-stack/onboarding.state` so the reminders
-stop.
+work unfolds instead of forgetting after the first task. `<workspace>/.pi-stack/onboarding.state`
+is a CHECKLIST of five capabilities — `memory`, `skills`, `crew`, `packs`,
+`knowledge` — each starting uncovered. While it's active and anything is still
+uncovered, you'll get a short reminder each turn naming exactly what's left (never
+what you've already taught). Honor it: at a natural break, if it genuinely fits,
+teach ONE remaining capability in a sentence tied to what just happened, then
+call the `onboarding_progress` tool with `{"capability": "<name>"}` for the one
+you just taught. Never force it, never repeat one already covered, never dump the
+full list at the user.
+
+Onboarding completes on its own once all five are covered — the tool flips
+`active` to false for you when the last one lands, so you don't need to touch the
+file by hand. If the user opts out or clearly signals they're done first, tell
+them onboarding's wrapped and DELETE `<workspace>/.pi-stack/onboarding.state`
+yourself so the reminders stop. Either way, a hard turn cap is the backstop if
+neither happens.
 
 ## Leave them working
 
