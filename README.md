@@ -160,6 +160,10 @@ The cross-vendor review is the part that pays off in practice: a second Claude
 pass on a Claude diff has correlated blind spots, but GPT or Gemini objects in
 different places.
 
+New here and want the whole capability map in one place (memory, skills, the
+crew, packs, knowledge, host mode, MCP)? See the reference manual:
+[docs/reference.md](docs/reference.md).
+
 ## What You Get
 
 **Autonomous coding in a sandbox.** pi runs inside an sbx VM with a locked-down
