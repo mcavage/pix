@@ -559,16 +559,22 @@ Note on F1's tier: a pack that only *references* a host-provided MCP (`integrati
   when the gateway is off, `pack use` still updates config and prints the enable hint (existing
   behavior). The MCP is not attached until both the gateway is on *and* the sandbox is recreated —
   surface both in the recreate line so it is not a silent miss.
-- **Known residual: crash-window over-retention (deliberate).** The activation commit is two
-  atomic file writes that can't be one transaction: `pack.lock` first, then `cfg.Save`. A
-  lock-write *failure* aborts before Save (round-4 F1 — config is never committed without its
-  attribution), but a true crash (SIGKILL/power loss) in the millisecond window *between* the two
-  writes during a switch/reactivation can leave the pack's OWN contributions slightly
-  over-retained: an MCP/bundle the freshly-written lock no longer attributes stays in config until
-  the next `pack use`/`pack rm`. This is the chosen safe side of the lock-only-removal design —
-  removal is scoped to lock attribution ONLY, so it can never remove a user's manually-added entry
-  (the worse bug, finding #2). Manifest-based reconciliation would reopen that. Over-retention is
-  safe and recoverable (`pack rm`); do NOT add manifest-driven removal to "fix" it.
+- **Known residual: crash-window over-retention (deliberate, crash-only).** The activation commit
+  is two atomic file writes that can't be one transaction: `pack.lock` first, then `cfg.Save`. Both
+  ordinary-failure sides are now consistent: a lock-write *failure* aborts before Save (round-4 F1
+  — config is never committed without its attribution), and a `cfg.Save` *failure* (read-only
+  config dir, disk full) rolls the lock back — `commitPackActivation` snapshots the prior
+  `pack.lock` bytes before writing the new one and restores them atomically before returning the
+  error, so lock and config never diverge on a plain error. The only window left is a true hard
+  kill (SIGKILL/power loss) in the milliseconds *between* the atomic lock rename and the atomic
+  config rename during a switch/reactivation: the new (narrower) lock lands beside the old config,
+  so an MCP/bundle the fresh lock no longer attributes stays in config *with no attribution* — a
+  later `pack use`/`pack rm` will NOT remove it (removal is deliberately scoped to lock
+  attribution ONLY), so it stays until removed by hand (`pi-stack config`). That scoping is the
+  chosen safe side of the lock-only-removal design — it can never remove a user's manually-added
+  entry (the worse bug, finding #2). Manifest-based reconciliation would reopen that.
+  Over-retention is safe (an extra entry, never a lost one) and recoverable; do NOT add
+  manifest-driven removal to "fix" it.
 
 ---
 

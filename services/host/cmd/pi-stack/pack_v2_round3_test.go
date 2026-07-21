@@ -213,11 +213,13 @@ func TestRevertPackPriorContribution_ToleratesOverclaimingLock(t *testing.T) {
 }
 
 // TestPackAddMcp_LockWrittenBeforeSaveFailure: the R1 ordering, behaviorally.
-// cfg.Save fails (read-only config dir) AFTER the lock write — the residue is a
-// lock that over-claims the one name. A later `pack rm` (once the disk
-// recovers) must detach cleanly with no orphaned contributions and no bogus
-// "detached mcp" claim. Since round-4 F1 the commit point exits non-zero on a
-// Save failure, so the add runs in a re-exec of this test binary.
+// cfg.Save fails (read-only config dir) AFTER the lock write — and since the
+// phase-1 consistency fix (FIX A) the commit point ROLLS the lock BACK to its
+// prior state (here: absent), so an ordinary Save failure leaves NO residue at
+// all. A later `pack rm` (once the disk recovers) must detach cleanly with no
+// orphaned contributions and no bogus "detached mcp" claim. Since round-4 F1
+// the commit point exits non-zero on a Save failure, so the add runs in a
+// re-exec of this test binary.
 func TestPackAddMcp_LockWrittenBeforeSaveFailure(t *testing.T) {
 	if os.Getenv("PI_STACK_TEST_SAVEFAIL") == "add" {
 		// Child: exits 1 at the commit point (Save fails on the read-only dir).
@@ -267,9 +269,10 @@ func TestPackAddMcp_LockWrittenBeforeSaveFailure(t *testing.T) {
 	if !strings.Contains(string(childOut), "saving config") {
 		t.Fatalf("expected the save failure message, got:\n%s", childOut)
 	}
-	// The lock was written FIRST: it over-claims the never-committed name.
-	if lock := readPackLock(root); !containsStr(lock.MCP, "fastmail") {
-		t.Fatalf("R1: the lock must be written before cfg.Save, got %+v", lock)
+	// FIX A: the lock (written first, R1) is ROLLED BACK on the Save failure —
+	// no prior lock existed, so nothing may over-claim the never-committed name.
+	if lock := readPackLock(root); containsStr(lock.MCP, "fastmail") {
+		t.Fatalf("FIX A: the lock must be rolled back after a Save failure, got %+v", lock)
 	}
 	// Config on disk never committed the entry.
 	cfgAfter, err := config.Load()

@@ -116,15 +116,24 @@ type packInfo struct {
 
 const packManifestName = "pack.toml"
 
+// errNotAPack is the sentinel loadPack wraps when root is not a pack AT ALL
+// (no pack.toml, including the root directory itself being gone). Callers use
+// errors.Is to distinguish this "genuinely absent" class — safe to degrade on
+// (e.g. a stale cfg.Pack pointing at a deleted dir) — from every OTHER load
+// error (symlink rejection, facet validation, parse failure), which means a
+// pack that EXISTS but is broken or tampered and must fail closed.
+var errNotAPack = errors.New("not a pack")
+
 // loadPack reads a pack from a directory. A missing pack.toml is an error (the
-// presence of pack.toml is the entire "is this a pack" test).
+// presence of pack.toml is the entire "is this a pack" test), wrapped around
+// errNotAPack so callers can tell "absent" from "broken".
 func loadPack(root string) (*packInfo, error) {
 	root = filepath.Clean(root)
 	mf := filepath.Join(root, packManifestName)
 	b, err := os.ReadFile(mf)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("%s is not a pack (no %s)", root, packManifestName)
+			return nil, fmt.Errorf("%s is %w (no %s)", root, errNotAPack, packManifestName)
 		}
 		return nil, err
 	}
@@ -309,10 +318,15 @@ func personalPackRoot() string { return config.PackDir() }
 // indexed by the daemon), and a transient --pack override's knowledge is
 // deliberately not scoped (the daemon wouldn't have indexed it). An EXPLICIT
 // --pack that fails to load is fatal (a non-nil return the caller must treat
-// as launch-aborting); the personal/active fallback failing is a silent skip.
-// A declared-but-unbuildable sandbox proxy is ALSO fatal (round-4 F2): the
-// launch fails CLOSED rather than creating a sandbox missing a declared
-// wrapper.
+// as launch-aborting). The CONFIGURED active pack (cfg.Pack, or the personal
+// pack fallback) fails CLOSED too when it exists but won't load — a symlink
+// rejection, facet-validation failure, or parse error means a broken or
+// TAMPERED pack, and launching without its declared wrappers/skills would be
+// a silent downgrade. The ONLY degradable case is errNotAPack ("genuinely
+// absent": the dir or its pack.toml is gone), which warns once and proceeds
+// as if no pack were active. A declared-but-unbuildable sandbox proxy is ALSO
+// fatal (round-4 F2): the launch fails CLOSED rather than creating a sandbox
+// missing a declared wrapper.
 func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) error {
 	packRoot := activePackRoot(cfg.Pack, o.Pack)
 	if packRoot == "" {
@@ -323,7 +337,17 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) error {
 		if strings.TrimSpace(o.Pack) != "" {
 			return fmt.Errorf("--pack %s: %v", o.Pack, err)
 		}
-		return nil
+		if errors.Is(err, errNotAPack) {
+			// Genuinely absent (deleted dir / no pack.toml): warn and launch
+			// without it, as if no pack were active. Not fatal — a stale
+			// cfg.Pack must not brick every launch.
+			fmt.Fprintf(os.Stderr, "pi-stack: active pack unavailable (%v); launching without it — `pi-stack pack use <path>` to re-point it or `pi-stack pack rm` to detach\n", err)
+			return nil
+		}
+		// The pack EXISTS but won't load (symlink injected, validation/parse
+		// failure): fail the launch closed. Creating a sandbox from a broken or
+		// tampered active pack would silently drop its declared context.
+		return fmt.Errorf("active pack %s: %v (refusing to launch without the pack's declared context; fix the pack or `pi-stack pack rm` to detach it)", packRoot, err)
 	}
 	if p.SkillsDir != "" && !containsStr(o.Skills, p.SkillsDir) {
 		o.Skills = append(o.Skills, p.SkillsDir)
@@ -580,6 +604,15 @@ func writePackLock(root string, l packLock) error {
 	if err := toml.NewEncoder(&buf).Encode(l); err != nil {
 		return err
 	}
+	return writePackLockBytes(root, buf.Bytes())
+}
+
+// writePackLockBytes is the raw-bytes half of writePackLock (same Lstat
+// symlink refusal, same atomic same-dir temp + rename). Split out so
+// commitPackActivation can restore a SNAPSHOT of the prior lock byte-for-byte
+// on a cfg.Save failure without round-tripping it through the decoder (which
+// would silently normalize — or, for an unparsable lock, erase — it).
+func writePackLockBytes(root string, data []byte) error {
 	dest := packLockPath(root)
 	if fi, err := os.Lstat(dest); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%s is a symlink; refusing to write through it", dest)
@@ -594,7 +627,7 @@ func writePackLock(root string, l packLock) error {
 		_ = os.Remove(tmpName)
 		return werr
 	}
-	if _, err := tmp.Write(buf.Bytes()); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		return cleanup(err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -620,12 +653,39 @@ func writePackLock(root string, l packLock) error {
 // deliberately scoped to lock attribution ONLY — see the commit-ordering
 // comment in runPackUse). On abort nothing is committed: the mutated cfg was
 // in-memory only, so the on-disk config is unchanged.
+//
+// A cfg.Save FAILURE (an ordinary error — read-only config dir, disk full —
+// not a crash) ROLLS the lock BACK: the prior pack.lock bytes are snapshotted
+// before the new lock is written and restored atomically before returning the
+// error, so the on-disk lock and config stay mutually consistent. Without the
+// rollback, a same-pack reactivation that DROPPED a contribution would leave
+// the new (narrower) lock beside the old config — stranding the dropped entry
+// with no attribution, unremovable by `pack rm`. See the KNOWN RESIDUAL
+// comment in runPackUse for the only inconsistency window left (a hard kill
+// between the two renames).
 func commitPackActivation(cfg *config.Config, root string, lock packLock) error {
+	priorLock, priorErr := os.ReadFile(packLockPath(root))
+	priorExists := priorErr == nil
+	if priorErr != nil && !os.IsNotExist(priorErr) {
+		// Can't snapshot the prior lock, so a Save-failure rollback would be
+		// impossible: abort BEFORE writing anything (nothing is committed).
+		return fmt.Errorf("reading prior pack.lock for %s: %v — aborting without saving config (nothing was committed; fix the pack directory and re-run)", root, priorErr)
+	}
 	if err := writePackLock(root, lock); err != nil {
 		return fmt.Errorf("writing pack.lock for %s: %v — aborting without saving config (nothing was committed; fix the pack directory and re-run)", root, err)
 	}
 	if err := cfg.Save(); err != nil {
-		return fmt.Errorf("saving config: %v", err)
+		// Roll the lock back so it matches the (unchanged) on-disk config.
+		var rerr error
+		if priorExists {
+			rerr = writePackLockBytes(root, priorLock)
+		} else {
+			rerr = os.Remove(packLockPath(root))
+		}
+		if rerr != nil {
+			return fmt.Errorf("saving config: %v (and restoring the prior pack.lock failed: %v — the lock may over-claim this activation's contributions; harmless, but re-run `pack use` once the config is writable)", err, rerr)
+		}
+		return fmt.Errorf("saving config: %v (pack.lock rolled back; nothing was committed)", err)
 	}
 	return nil
 }
@@ -1516,15 +1576,21 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// the fatal residue: an ACTIVE pack whose config-committed contributions
 	// had NO lock attribution, so no later switch/rm could ever remove them.
 	//
-	// KNOWN RESIDUAL (deliberate): on a switch/reactivation, the same crash
-	// window can leave the pack's OWN contributions slightly OVER-RETAINED (an
-	// MCP/bundle the reverted lock no longer attributes stays in config until
-	// the next `pack use`/`pack rm`). That is the chosen safe side of the
-	// lock-only-removal design: removal is scoped to lock attribution ONLY so
-	// it can never remove a user's manually-added entry (the worse bug fixed in
-	// finding #2). Manifest-based reconciliation would reopen that. Over-
-	// retention is safe and recoverable; do NOT "fix" it with manifest-driven
-	// removal.
+	// KNOWN RESIDUAL (deliberate, now crash-only): an ORDINARY cfg.Save
+	// failure is fully consistent — commitPackActivation snapshots the prior
+	// pack.lock and restores it atomically before returning the error, so lock
+	// and config never diverge on a plain error (read-only config dir, disk
+	// full). The only window left is a TRUE hard kill (SIGKILL/power loss) in
+	// the milliseconds between the atomic lock rename and the atomic config
+	// rename during a switch/reactivation: the new (narrower) lock lands
+	// beside the old config, leaving a dropped MCP/bundle in config with no
+	// lock attribution — over-retained until removed by hand (`pi-stack
+	// config`), since `pack use`/`pack rm` deliberately remove ONLY what the
+	// lock attributes. That scoping is the chosen safe side of the
+	// lock-only-removal design: it can never remove a user's manually-added
+	// entry (the worse bug fixed in finding #2). Manifest-based reconciliation
+	// would reopen that. Over-retention is safe (an extra entry, never a lost
+	// one); do NOT "fix" it with manifest-driven removal.
 	lock := packLock{
 		MCP:                    addedMCP,
 		Knowledge:              newKnowledgeIDs,
