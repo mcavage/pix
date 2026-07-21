@@ -332,11 +332,12 @@ func sandboxPackMarkerPath(workspace string) string {
 // (or removes the marker when creating pack-less). Best-effort: a failed write
 // only costs a future stale-pack reminder, never the launch. Symlink-safe via
 // writeWorkspaceStateFile (a cloned repo can ship .pi-stack/sandbox.pack as a
-// tracked symlink); the removal is fine as-is — os.Remove unlinks a symlink,
-// never its target.
+// tracked symlink) and removeWorkspaceStateFile (a cloned repo can ship
+// .pi-stack ITSELF as a symlink to another repo's .pi-stack, which a plain
+// os.Remove would traverse and delete through).
 func writeSandboxPackMarker(workspace, packRoot string) {
 	if strings.TrimSpace(packRoot) == "" {
-		_ = os.Remove(sandboxPackMarkerPath(workspace))
+		_ = removeWorkspaceStateFile(workspace, "sandbox.pack")
 		return
 	}
 	_ = writeWorkspaceStateFile(workspace, "sandbox.pack", []byte(canonicalizePackRoot(packRoot)+"\n"), 0o644)
@@ -683,7 +684,7 @@ func wireKnowledgeScope(cfg *config.Config, workspace string, rpc knowledgeRPC) 
 	// Remove any stale scope file from a previous run (when bundles were wired)
 	// so the in-VM recall stops forwarding dead bundle ids. Best-effort.
 	if len(ids) == 0 {
-		_ = os.Remove(filepath.Join(workspace, ".pi-stack", "knowledge.scope"))
+		_ = removeWorkspaceStateFile(workspace, "knowledge.scope")
 		return
 	}
 	_ = writeKnowledgeScope(workspace, ids)

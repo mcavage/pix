@@ -182,7 +182,7 @@ func reconcileOnboarding(workspace string, env shellEnv, in io.Reader, out io.Wr
 		return
 	}
 	if len(changes) == 0 {
-		_ = os.Remove(path) // nothing new; clear the marker
+		_ = removeWorkspaceStateFile(workspace, onboardingFileName) // nothing new; clear the marker
 		return
 	}
 
@@ -211,7 +211,7 @@ func reconcileOnboarding(workspace string, env shellEnv, in io.Reader, out io.Wr
 			fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pi-stack mcp register)\n", err)
 		}
 	}
-	_ = os.Remove(path)
+	_ = removeWorkspaceStateFile(workspace, onboardingFileName)
 	fmt.Fprintf(out, "Applied %d onboarding change(s) to %s.\n", len(applied), config.Path())
 }
 

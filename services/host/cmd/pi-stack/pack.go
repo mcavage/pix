@@ -852,12 +852,12 @@ func resolvePackKnowledgeRef(out io.Writer, root string, adopted bool, k packKno
 // doc. No pack (or an unscoped pack) removes any stale file — this REPLACES the
 // old unconditional profile-delete in run.go. Symlink-safe via
 // writeWorkspaceStateFile (a hostile repo can commit .pi-stack/profile as a
-// symlink); the removals are fine as-is — os.Remove unlinks a symlink, never
-// its target.
+// symlink) and removeWorkspaceStateFile (a hostile repo can commit .pi-stack
+// ITSELF as a symlink to another repo's .pi-stack, which a plain os.Remove
+// would traverse and delete through).
 func writeMemoryScope(workspace string, p *packInfo) {
-	dir := filepath.Join(workspace, ".pi-stack")
 	if p == nil {
-		_ = os.Remove(filepath.Join(dir, "profile"))
+		_ = removeWorkspaceStateFile(workspace, "profile")
 		return
 	}
 	scope := strings.TrimSpace(p.Manifest.MemoryScope)
@@ -865,7 +865,7 @@ func writeMemoryScope(workspace string, p *packInfo) {
 		scope = strings.TrimSpace(p.Manifest.Name)
 	}
 	if scope == "" || scope == "default" {
-		_ = os.Remove(filepath.Join(dir, "profile"))
+		_ = removeWorkspaceStateFile(workspace, "profile")
 		return
 	}
 	_ = writeWorkspaceStateFile(workspace, "profile", []byte(scope+"\n"), 0o644)

@@ -157,3 +157,72 @@ func TestWriteKnowledgeScopeSymlinkedDirRefused(t *testing.T) {
 		t.Fatal("writeKnowledgeScope through a symlinked .pi-stack dir: want error, got nil")
 	}
 }
+
+// A .pi-stack that is a SYMLINK to another repo's .pi-stack must be refused
+// outright: removeWorkspaceStateFile must not traverse the symlinked parent
+// to delete the TARGET repo's profile/knowledge.scope/sandbox.pack, which a
+// plain os.Remove(filepath.Join(workspace, ".pi-stack", name)) would do (it
+// only refuses to follow a symlinked *destination file*, not a symlinked
+// *parent directory*).
+func TestRemoveWorkspaceStateFileSymlinkedDirRefused(t *testing.T) {
+	ws := t.TempDir()
+	target := t.TempDir() // another "repo"'s real .pi-stack dir
+	victims := map[string]string{
+		"profile":         "acme\n",
+		"knowledge.scope": "/bundle/a\n",
+		"sandbox.pack":    "/packs/acme\n",
+	}
+	for name, content := range victims {
+		if err := os.WriteFile(filepath.Join(target, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	requireSymlink(t, target, filepath.Join(ws, ".pi-stack"))
+
+	for name := range victims {
+		if err := removeWorkspaceStateFile(ws, name); err == nil {
+			t.Fatalf("removeWorkspaceStateFile(%q) through a symlinked .pi-stack dir: want error, got nil", name)
+		}
+	}
+
+	// The target repo's files must all still be intact, byte for byte.
+	for name, want := range victims {
+		b, err := os.ReadFile(filepath.Join(target, name))
+		if err != nil {
+			t.Fatalf("target %s missing after refused removal: %v", name, err)
+		}
+		if string(b) != want {
+			t.Fatalf("target %s = %q, want %q", name, b, want)
+		}
+	}
+}
+
+// A normal (real) .pi-stack dir: removeWorkspaceStateFile actually removes
+// the file, and a missing file is a clean no-op (not an error).
+func TestRemoveWorkspaceStateFileNormal(t *testing.T) {
+	ws := t.TempDir()
+	stateDir := filepath.Join(ws, ".pi-stack")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(stateDir, "profile")
+	if err := os.WriteFile(dest, []byte("acme\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeWorkspaceStateFile(ws, "profile"); err != nil {
+		t.Fatalf("removeWorkspaceStateFile: %v", err)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("profile still present after removal (err=%v)", err)
+	}
+
+	// Removing an already-absent file (or an absent .pi-stack dir entirely)
+	// is a no-op, not an error.
+	if err := removeWorkspaceStateFile(ws, "profile"); err != nil {
+		t.Fatalf("removeWorkspaceStateFile on already-absent file: %v", err)
+	}
+	if err := removeWorkspaceStateFile(t.TempDir(), "profile"); err != nil {
+		t.Fatalf("removeWorkspaceStateFile with no .pi-stack dir at all: %v", err)
+	}
+}
