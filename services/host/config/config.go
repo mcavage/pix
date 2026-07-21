@@ -254,12 +254,19 @@ func DataDir() (string, error) {
 	return filepath.Join(home, ".local", "share", "pi-stack"), nil
 }
 
-// PackDir is the per-user PERSONAL PACK root: $XDG_DATA_HOME/pi-stack/pack, else
-// ~/.local/share/pi-stack/pack. A proper pack (pack.toml + skills/ + knowledge/),
-// git-initialized, the default home for what you author for yourself. The active
-// pack (config `pack`) overrides it; `pi-stack reset` moves it aside (it's a git
-// working copy — the user pushes it to their own remote). See docs/design/packs.md.
-func PackDir() string { return filepath.Join(dataDirOr(), "pack") }
+// PackDir is the per-user PERSONAL PACK root: $XDG_DATA_HOME/pi-stack/personal,
+// else ~/.local/share/pi-stack/personal. A proper pack (pack.toml + skills/ +
+// knowledge/), git-initialized, the default home for what you author for
+// yourself — named "personal" (the pack's name derives from the dir basename)
+// so the auto-created pack and its messaging ("created pack ...", "active pack
+// -> this (personal) pack") are coherent. The active pack (config `pack`)
+// overrides it; `pi-stack reset` moves it aside (it's a git working copy — the
+// user pushes it to their own remote). See docs/design/packs.md.
+//
+// Was "pack" (basename) before the personal-pack rename; personalPackRoot()
+// migrates an existing .../pack dir to .../personal on first resolution so no
+// user is orphaned (see migrateLegacyPackDir in pack.go).
+func PackDir() string { return filepath.Join(dataDirOr(), "personal") }
 
 // PacksDir is where adopted REMOTE packs are cloned:
 // $XDG_DATA_HOME/pi-stack/packs, else ~/.local/share/pi-stack/packs. Each lives

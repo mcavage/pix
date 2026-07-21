@@ -120,7 +120,7 @@ func TestSetupProvisionKeys_NoSbxFailsOpen(t *testing.T) {
 		readFile: func(string) (string, error) { return "", os.ErrNotExist },
 	}
 	var out bytes.Buffer
-	if !setupProvisionKeys(env, strings.NewReader(""), &out, false) {
+	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
 		t.Error("must fail open (true) when sbx can't be probed")
 	}
 	if strings.Contains(out.String(), ": ") && strings.Contains(out.String(), "Paste an op://") {

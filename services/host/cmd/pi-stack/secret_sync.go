@@ -92,16 +92,8 @@ func hostModeRefsPath(env shellEnv) string {
 // for one provider env var (used by setup to skip re-prompting a provider that's
 // already wired).
 func providerRefSet(env shellEnv, envVar string) bool {
-	_, content, exists := opRefsContent(env)
-	if !exists {
-		return false
-	}
-	for _, r := range parseOpRefs(content) {
-		if r.key == envVar && r.isRef && !r.placeholder {
-			return true
-		}
-	}
-	return false
+	_, ok := currentOpRef(env, envVar)
+	return ok
 }
 
 // hostModeProviderKeys lists the provider sbx-names (anthropic/openai/google)
@@ -268,6 +260,112 @@ func ensureProviderKeysFromRefs(env shellEnv, out io.Writer) {
 			fmt.Fprintf(out, "pi-stack: resolved %s from 1Password\n", p.name)
 		}
 	}
+}
+
+// reconcileProviderKeysWithSbx is setupProvisionKeys' STEP 2: bring sbx to the
+// same state as each provider's op-refs.env ref (already current after STEP 1
+// in setup.go), using the launcher-owned synced-ref record
+// (syncedrefs.go) — never sbx's own value, which is WRITE-ONLY (`sbx secret
+// ls` lists names only, so "did the value change" can't be read back):
+//
+//   - sbx MISSING the key: op read + `sbx secret set -f` + record. No ask.
+//   - sbx HAS the key and the recorded ref == the current ref: NO OP — skip
+//     both `op read` and `sbx secret set`.
+//   - sbx HAS the key but the ref is new/changed (no record, or a different
+//     one): ask before overwriting (default No). Non-interactive only
+//     overwrites with assumeYes; declining/skipping leaves sbx alone AND
+//     leaves the ref unrecorded, so a real change keeps re-prompting instead
+//     of silently sticking with a stale key.
+//
+// Degrades quietly on any precondition failure (op missing/not signed in, sbx
+// absent) — setupProvisionKeys' final tri-state probe is what decides whether
+// setup itself must abort.
+func reconcileProviderKeysWithSbx(env shellEnv, sc *bufio.Scanner, out io.Writer, interactive, assumeYes bool) {
+	if !opInstalled(env) {
+		return // already explained in STEP 1
+	}
+	if !opSignedIn(env) {
+		fmt.Fprintln(out, "  (op installed but not signed in — run `op signin`; sbx keys left as-is)")
+		return
+	}
+	if env.lookPath != nil {
+		if _, err := env.lookPath("sbx"); err != nil {
+			return // no sbx to reconcile against
+		}
+	}
+	sbxOut, err := env.run("sbx", "secret", "ls")
+	if err != nil {
+		return // can't tell what's set; don't guess
+	}
+	for _, p := range providerKeyRefOrder {
+		ref, hasRef := currentOpRef(env, p.envVar)
+		if !hasRef {
+			continue
+		}
+		if !grepWord(sbxOut, p.name) {
+			syncProviderKeyToSbx(env, out, p, ref) // missing -> set + record, no ask
+			continue
+		}
+		if recorded, ok := syncedRef(p.envVar); ok && recorded == ref {
+			continue // unchanged since we last synced it — no op read, no sbx set
+		}
+		overwrite := assumeYes
+		if interactive {
+			fmt.Fprintf(out, "  sbx already has a value for %s; overwrite it with the 1Password ref? [y/N]: ", p.name)
+			overwrite = scanYN(sc, false)
+		}
+		if !overwrite {
+			if interactive {
+				fmt.Fprintf(out, "    kept sbx's existing %s\n", p.name)
+			}
+			continue // leave sbx AND the record alone — a real change re-prompts
+		}
+		syncProviderKeyToSbx(env, out, p, ref)
+	}
+}
+
+// syncProviderKeyToSbx resolves ref via `op read`, pushes it into sbx with
+// `-f` (overwrite — the caller already decided this key should change), and
+// records the ref as synced. Never prints the resolved value.
+func syncProviderKeyToSbx(env shellEnv, out io.Writer, p struct{ envVar, name string }, ref string) {
+	val, err := env.run("op", "read", ref)
+	if err != nil {
+		fmt.Fprintf(out, "  \u2717 %s: op read failed\n", p.name)
+		return
+	}
+	val = strings.TrimRight(val, "\r\n")
+	if val == "" {
+		fmt.Fprintf(out, "  \u2717 %s: resolved empty\n", p.name)
+		return
+	}
+	if sbxOut, err := env.run("sbx", "secret", "set", "-f", "-g", p.name, "-t", val); err != nil {
+		detail := strings.TrimSpace(firstLine(sbxOut))
+		if detail == "" {
+			detail = err.Error()
+		}
+		fmt.Fprintf(out, "  \u2717 %s: sbx secret set failed: %s\n", p.name, detail)
+		return
+	}
+	if err := recordSyncedRef(p.envVar, ref); err != nil {
+		fmt.Fprintf(out, "  \u2713 %s synced (record not saved: %v)\n", p.name, err)
+		return
+	}
+	fmt.Fprintf(out, "  \u2713 %s synced from 1Password\n", p.name)
+}
+
+// scanYN reads one line from sc as a yes/no answer (same semantics as
+// confirmYN, but sharing the caller's bufio.Scanner instead of reading the
+// underlying io.Reader directly — mixing fmt.Fscanln with a bufio.Scanner on
+// the same reader can desync since the scanner buffers ahead).
+func scanYN(sc *bufio.Scanner, def bool) bool {
+	if !sc.Scan() {
+		return def
+	}
+	ans := strings.ToLower(strings.TrimSpace(sc.Text()))
+	if ans == "" {
+		return def
+	}
+	return ans == "y" || ans == "yes"
 }
 
 // syncProviderKeys is the testable core: resolve each present provider-key ref

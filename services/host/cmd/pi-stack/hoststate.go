@@ -244,7 +244,7 @@ func hostProvisioned() bool {
 func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
 	root := activePackRoot(cfg.Pack, override)
 	if root == "" {
-		root = config.PackDir()
+		root = personalPackRoot() // runs the legacy "pack" -> "personal" migration
 	}
 	p, err := loadPack(root)
 	if err != nil {

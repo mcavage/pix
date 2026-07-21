@@ -302,8 +302,56 @@ func expandUser(p string) string {
 	return p
 }
 
-// personalPackRoot is the default personal-pack location.
-func personalPackRoot() string { return config.PackDir() }
+// personalPackRoot is the default personal-pack location. It runs the
+// legacy-dir migration (the "pack" -> "personal" rename) once per resolution
+// so every call site that resolves the personal pack picks up an existing
+// user's pack without a second copy of the migration logic.
+func personalPackRoot() string {
+	migrateLegacyPackDir()
+	return config.PackDir()
+}
+
+// migrateLegacyPackDir renames an existing legacy ".../pack" personal-pack dir
+// to the new ".../personal" one (config.PackDir()'s basename rename), so an
+// existing user is never orphaned. Best-effort and cheap to call repeatedly:
+// once the new dir exists (freshly created or already migrated) it's a no-op
+// after two stats.
+//
+// Symlink-safe: Lstat (not Stat) the legacy path so a SYMLINKED legacy dir is
+// refused rather than followed into a rename that could escape the data dir
+// (a plain os.Rename on a symlink would rename the link itself, silently
+// separating it from its target and potentially placing "personal" at an
+// attacker-chosen location if the link were ever attacker-controlled).
+func migrateLegacyPackDir() {
+	newDir := config.PackDir()
+	if _, err := os.Stat(newDir); err == nil {
+		return // already migrated, or a fresh "personal" pack already exists
+	}
+	dataDir, err := config.DataDir()
+	if err != nil {
+		return
+	}
+	legacyDir := filepath.Join(dataDir, "pack")
+	fi, lerr := os.Lstat(legacyDir)
+	if lerr != nil || fi.Mode()&os.ModeSymlink != 0 {
+		return // no legacy dir, or it's a symlink — refuse to follow it
+	}
+	if _, err := os.Stat(filepath.Join(legacyDir, packManifestName)); err != nil {
+		return // not actually a pack (no pack.toml) — nothing to migrate
+	}
+	// Preserve git history: a plain directory rename keeps .git intact.
+	if err := os.Rename(legacyDir, newDir); err != nil {
+		return // best-effort; leave both as they were
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return
+	}
+	if cfg.Pack == legacyDir {
+		cfg.Pack = newDir
+		_ = cfg.Save()
+	}
+}
 
 // applyPackToLaunch mounts the active pack into a launch (run OR task): it
 // appends the pack's skills dir to o.Skills, applies the pack's ollama model

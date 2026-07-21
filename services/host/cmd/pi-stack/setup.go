@@ -138,7 +138,7 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	// no yes/no gate. A model key is REQUIRED to run, so abort if none ends up
 	// wired rather than hand off to a session that can't talk to a model.
 	reportProviderKeys(env, out)
-	if !setupProvisionKeys(env, in, out, interactive) {
+	if !setupProvisionKeys(env, in, out, interactive, opts.assumeYes) {
 		fmt.Fprint(out, modelKeyMissingMessage(env))
 		return fmt.Errorf("no model provider key configured — set one and re-run `pi-stack setup`")
 	}
@@ -164,8 +164,9 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	// Ensure a personal pack exists (git-init'd) so authored skills + captured
 	// knowledge have a durable, versioned home the onboarding agent can point at.
 	// Best-effort; adopts an existing repo at the path, else inits one.
-	if _, err := os.Stat(filepath.Join(config.PackDir(), packManifestName)); err != nil {
-		runPackNew(env, out, []string{config.PackDir()})
+	personalRoot := personalPackRoot() // runs the legacy "pack" -> "personal" migration
+	if _, err := os.Stat(filepath.Join(personalRoot, packManifestName)); err != nil {
+		runPackNew(env, out, []string{personalRoot})
 	}
 
 	fmt.Fprintln(out, "")
@@ -196,61 +197,51 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	return nil
 }
 
-// setupProvisionKeys STEERS model keys to 1Password (the preferred source),
-// regardless of what sbx has, with no yes/no gate — the only interaction is
-// pasting the refs themselves. It degrades gracefully: no `op` installed, or a
-// skipped provider, falls back to whatever keys sbx already holds (it never
-// hard-blocks a working box). Steps:
-//  1. (interactive) for each provider WITHOUT a ref yet, ask for an op:// ref and
-//     write it to op-refs.env + hostmode.env (one paste wires sandbox + host mode);
-//  2. mirror every provider ref into hostmode.env (covers refs that pre-date this
-//     or were set via `pi-stack secret set`), so host mode has the same keys;
-//  3. force-sync every provider ref into sbx (overwrite) so the sandbox uses the
-//     1Password-sourced keys too.
+// setupProvisionKeys wires model keys through 1Password with NO blind re-sync:
+// a 1Password ref is REQUIRED per provider (host mode needs it), but once a
+// ref and sbx are both in a known-good state, re-running setup touches
+// neither `op` nor `sbx secret set` for that provider again. Two steps per
+// provider (providerKeyRefOrder):
 //
-// It never skips because sbx already has a key (1Password is the source). Returns
-// whether a usable model key is in place (true when sbx can't be probed — never
-// block a box without sbx).
-func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive bool) bool {
+//	STEP 1 (op-refs.env, this file): a ref is REQUIRED.
+//	 - a ref already exists -> CONFIRM it (print it, Enter keeps it, or paste a
+//	   new op:// ref to replace it) — never a blind re-paste.
+//	 - no ref -> GET it (interactive prompt only); non-interactive never
+//	   prompts and never blocks — it just notes host mode will be Ollama-only
+//	   for that provider until one is added.
+//	 A new/changed ref is written to BOTH op-refs.env and hostmode.env.
+//
+//	STEP 2 (secret_sync.go's reconcileProviderKeysWithSbx): reconcile that ref
+//	 against sbx using the launcher-owned synced-ref record (syncedrefs.go) —
+//	 sbx secret VALUES are write-only (`sbx secret ls` lists names only), so
+//	 "did the ref change since we last synced it" is tracked by us, not read
+//	 back from sbx. Missing key -> set + record, no ask. Present key with an
+//	 unchanged recorded ref -> NO op read, NO sbx set. Present key with a new/
+//	 changed ref -> ask before overwriting (default No); non-interactive only
+//	 overwrites with --yes.
+//
+// Returns whether a usable model key is in place afterward (true when sbx
+// can't be probed — never block a box without sbx).
+func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive, assumeYes bool) bool {
 	fmt.Fprintln(out, "")
+	sc := bufio.NewScanner(in)
 	if !opInstalled(env) {
 		fmt.Fprintln(out, "Model keys come from 1Password, but the `op` CLI isn't installed.")
 		fmt.Fprintln(out, "Install it (https://developer.1password.com/docs/cli/) and re-run setup;")
 		fmt.Fprintln(out, "for now I'll use whatever keys are already in sbx.")
-	} else if interactive {
-		fmt.Fprintln(out, "Model keys come from 1Password. Paste an op:// ref per provider")
-		fmt.Fprintln(out, "(op://Vault/Item/field), or press Enter to keep what's already set:")
-		sc := bufio.NewScanner(in)
+	} else {
+		if interactive {
+			fmt.Fprintln(out, "Model keys come from 1Password (a ref is required per provider).")
+			fmt.Fprintln(out, "Paste an op:// ref (op://Vault/Item/field), or press Enter to keep/skip:")
+		}
 		for _, p := range providerKeyRefOrder {
-			if providerRefSet(env, p.envVar) {
-				fmt.Fprintf(out, "  %-9s (already set)\n", p.name)
-				continue
-			}
-			fmt.Fprintf(out, "  %s: ", p.name)
-			if !sc.Scan() {
-				break
-			}
-			ref := normalizeOpRef(sc.Text())
-			if ref == "" {
-				continue
-			}
-			if !strings.HasPrefix(ref, "op://") {
-				fmt.Fprintln(out, "    skipped: not an op:// ref")
-				continue
-			}
-			if err := writeOpRefQuiet(env, p.envVar, ref); err != nil {
-				fmt.Fprintf(out, "    could not save: %v\n", err)
-				continue
-			}
-			_ = writeOpRefFileQuiet(env, hostModeRefsPath(env), p.envVar, ref)
+			provisionProviderRef(env, sc, out, p, interactive)
 		}
 	}
-	// Ensure host mode has every provider ref (incl. pre-existing ones), then
-	// force-sync refs into sbx (prints per-key ✓/✗). A fatal precondition (no refs,
-	// op not signed in, sbx missing) is not fatal to setup — fall through to the
-	// presence check.
+	// Covers refs that pre-date this feature or were set via `pi-stack secret
+	// set` (op-refs.env only), so host mode has the same keys the sandbox does.
 	mirrorProviderRefsToHostMode(env)
-	_, _, _ = syncProviderKeys(env, out)
+	reconcileProviderKeysWithSbx(env, sc, out, interactive, assumeYes)
 	// Tri-state: only abort setup when we can POSITIVELY confirm no key. If sbx is
 	// absent OR its control plane can't be probed, don't block — we can't tell.
 	present, probeOK := sbxModelKeyState(env)
@@ -258,6 +249,73 @@ func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive b
 		return true
 	}
 	return present
+}
+
+// provisionProviderRef is setupProvisionKeys' STEP 1 for one provider.
+func provisionProviderRef(env shellEnv, sc *bufio.Scanner, out io.Writer, p struct{ envVar, name string }, interactive bool) {
+	current, hasRef := currentOpRef(env, p.envVar)
+	switch {
+	case hasRef && interactive:
+		fmt.Fprintf(out, "  %-9s %s\n", p.name, current)
+		fmt.Fprint(out, "    Enter to keep, or paste a new op:// ref to replace: ")
+		if !sc.Scan() {
+			return
+		}
+		ref := normalizeOpRef(sc.Text())
+		if ref == "" {
+			return // kept
+		}
+		if !strings.HasPrefix(ref, "op://") {
+			fmt.Fprintln(out, "    skipped: not an op:// ref (kept the existing one)")
+			return
+		}
+		writeProviderRef(env, out, p, ref)
+	case hasRef:
+		// non-interactive: confirming a blind re-paste is meaningless — keep it.
+	case interactive:
+		fmt.Fprintf(out, "  %s: ", p.name)
+		if !sc.Scan() {
+			return
+		}
+		ref := normalizeOpRef(sc.Text())
+		if ref == "" {
+			fmt.Fprintf(out, "    (no ref for %s — host mode will be Ollama-only for it)\n", p.name)
+			return
+		}
+		if !strings.HasPrefix(ref, "op://") {
+			fmt.Fprintln(out, "    skipped: not an op:// ref")
+			return
+		}
+		writeProviderRef(env, out, p, ref)
+	default:
+		// non-interactive, no ref yet: never block, never prompt.
+		fmt.Fprintf(out, "  %-9s (no 1Password ref — host mode Ollama-only for it; add one: pi-stack secret set %s op://vault/item/field)\n", p.name, p.envVar)
+	}
+}
+
+// writeProviderRef upserts a new/changed ref into BOTH op-refs.env and
+// hostmode.env (one paste wires sandbox + host mode).
+func writeProviderRef(env shellEnv, out io.Writer, p struct{ envVar, name string }, ref string) {
+	if err := writeOpRefQuiet(env, p.envVar, ref); err != nil {
+		fmt.Fprintf(out, "    could not save: %v\n", err)
+		return
+	}
+	_ = writeOpRefFileQuiet(env, hostModeRefsPath(env), p.envVar, ref)
+}
+
+// currentOpRef returns the current FILLED op:// ref for a provider env var
+// from op-refs.env, if any.
+func currentOpRef(env shellEnv, envVar string) (string, bool) {
+	_, content, exists := opRefsContent(env)
+	if !exists {
+		return "", false
+	}
+	for _, r := range parseOpRefs(content) {
+		if r.key == envVar && r.isRef && !r.placeholder {
+			return r.value, true
+		}
+	}
+	return "", false
 }
 
 // setupHostMode ALWAYS provisions host mode and enables it when provisioning
