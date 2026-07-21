@@ -33,11 +33,23 @@
 //     reads; pack.lock remains as a human-readable local hint but is never
 //     trusted for reversibility.
 //
-// Pack identity (trustKey): "remote:<url>#<commit>" when the launcher's own
-// adoption provenance exists for the pack's canonical path, else
-// "path:<canonical-abs-path>". Identity is never derived from pack.lock — but
-// even a forged identity buys nothing: the fingerprint is the actual control,
-// and matching it requires a byte-identical host-exec surface.
+// Pack identity (trustKey): "remote:<url>" when the launcher's own adoption
+// provenance exists for the pack's canonical path, else
+// "path:<canonical-abs-path>". The identity is STABLE across commits
+// (round-3 #5): the commit is provenance METADATA on the records, never part
+// of the key — acceptance is (stable identity, fingerprint), so a
+// README-only pull with an unchanged host-exec surface never re-prompts,
+// while any surface change still re-gates via the fingerprint. Identity is
+// never derived from pack.lock — but even a forged identity buys nothing:
+// the fingerprint is the actual control, and matching it requires a
+// byte-identical host-exec surface.
+//
+// CONCURRENCY (round-3 #1): every read-modify-write of this file is
+// serialized by a cross-process flock (packTrustLockPath) held across a
+// FRESH load → mutate → save — see mutatePackTrustStore/withPackTrustLock.
+// `pack use` racing a `pi-stack host` wrapper refresh used to be plain
+// last-writer-wins: whichever process loaded first could save its stale
+// in-memory object over the other's committed activation/acceptance.
 package main
 
 import (
@@ -51,6 +63,55 @@ import (
 )
 
 const packTrustStoreName = "pack-trust.json"
+
+// packTrustLockPath is the advisory cross-process lock file serializing every
+// trust-store read-modify-write (round-3 #1). It lives in the STATE dir —
+// ephemeral runtime state, the same home as the serve spawn lock — never in
+// the config dir beside the store itself (a `pi-stack state reset` moving the
+// config dir aside must not orphan a held lock).
+func packTrustLockPath() string {
+	dir, err := config.StateDir()
+	if err != nil {
+		return filepath.Join(filepath.Dir(config.Path()), "pack-trust.lock")
+	}
+	return filepath.Join(dir, "pack-trust.lock")
+}
+
+// withPackTrustLock runs fn holding the exclusive cross-process flock that
+// serializes trust-store writes. It reuses the shared blocking withFlock
+// helper (serve_start_unix.go; the non-unix shim runs fn unserialized —
+// single-process correctness is unaffected there). SINGLE lock, never
+// nested: fn must not call another withPackTrustLock/mutatePackTrustStore —
+// flock is per open file description, so a nested acquire in the same
+// process self-deadlocks.
+func withPackTrustLock(fn func() error) error {
+	return withFlock(packTrustLockPath(), fn)
+}
+
+// mutatePackTrustStore is the sanctioned way to WRITE the trust store
+// (round-3 #1): under the cross-process lock it re-loads the store FRESH
+// from disk, applies mutate, and saves — so no caller can ever save a stale
+// in-memory object over a concurrent writer's committed record. mutate sees
+// the CURRENT on-disk state; returning an error aborts without saving. The
+// freshly-saved store is returned so callers can sync their own view.
+func mutatePackTrustStore(mutate func(*packTrustStore) error) (*packTrustStore, error) {
+	var fresh *packTrustStore
+	err := withPackTrustLock(func() error {
+		s, lerr := loadPackTrustStore()
+		if lerr != nil {
+			return lerr
+		}
+		if merr := mutate(s); merr != nil {
+			return merr
+		}
+		if serr := s.save(); serr != nil {
+			return serr
+		}
+		fresh = s
+		return nil
+	})
+	return fresh, err
+}
 
 // packTrustStorePath is <config-dir>/pack-trust.json — beside config.toml,
 // host-owned, never inside any pack.
@@ -154,32 +215,41 @@ func (s *packTrustStore) save() error {
 }
 
 // trustKey resolves a pack's identity for trust-store lookup: launcher-recorded
-// clone provenance (remote#commit) when present for the canonical path, else
-// the canonical absolute path. NEVER derived from pack.lock (untrusted payload).
+// clone provenance ("remote:<url>" — STABLE across commits, round-3 #5) when
+// present for the canonical path, else the canonical absolute path. The
+// commit is provenance metadata on the records, never identity: keying
+// acceptance by commit re-gated every pull even when the host-exec
+// fingerprint — the actual control — was byte-identical. NEVER derived from
+// pack.lock (untrusted payload).
 func (s *packTrustStore) trustKey(root string) string {
 	canon := canonicalizePackRoot(root)
 	if s != nil {
 		if prov, ok := s.Adopted[canon]; ok && strings.TrimSpace(prov.Remote) != "" {
-			k := "remote:" + strings.TrimSpace(prov.Remote)
-			if c := strings.TrimSpace(prov.Commit); c != "" {
-				k += "#" + c
-			}
-			return k
+			return "remote:" + strings.TrimSpace(prov.Remote)
 		}
 	}
 	return "path:" + canon
 }
 
-// acceptedFingerprint returns the fingerprint accepted for key, if any.
+// acceptedFingerprint returns the fingerprint accepted for key, if any. A
+// legacy record keyed "remote:<url>#<commit>" (the pre-round-3 scheme) is
+// honored via a one-time prefix fallback so an existing acceptance does not
+// spuriously re-prompt after the identity became commit-stable; the
+// fingerprint comparison at the call site is still the control, and
+// recordAcceptance sweeps the legacy key on the next write.
 func (s *packTrustStore) acceptedFingerprint(key string) (string, bool) {
 	if s == nil || s.Accepted == nil {
 		return "", false
 	}
-	r, ok := s.Accepted[key]
-	if !ok || strings.TrimSpace(r.Fingerprint) == "" {
-		return "", false
+	if r, ok := s.Accepted[key]; ok && strings.TrimSpace(r.Fingerprint) != "" {
+		return r.Fingerprint, true
 	}
-	return r.Fingerprint, true
+	for k, r := range s.Accepted {
+		if strings.HasPrefix(k, key+"#") && strings.TrimSpace(r.Fingerprint) != "" {
+			return r.Fingerprint, true
+		}
+	}
+	return "", false
 }
 
 // recordAcceptance stores rec under key and drops stale records for the same
@@ -193,7 +263,8 @@ func (s *packTrustStore) recordAcceptance(key string, rec packTrustRecord) {
 		if k == key {
 			continue
 		}
-		if (rec.Remote != "" && r.Remote == rec.Remote) || (rec.Path != "" && r.Path == rec.Path) {
+		if strings.HasPrefix(k, key+"#") || // legacy commit-suffixed key (pre-round-3 #5)
+			(rec.Remote != "" && r.Remote == rec.Remote) || (rec.Path != "" && r.Path == rec.Path) {
 			delete(s.Accepted, k)
 		}
 	}
@@ -206,13 +277,10 @@ func (s *packTrustStore) recordAcceptance(key string, rec packTrustRecord) {
 // zero value is returned (remove NOTHING; the safe default, same posture as
 // a missing lock). Nothing here ever reads the pack payload.
 func (s *packTrustStore) activationFor(root string) packLock {
-	if s == nil || s.Activation == nil {
+	if !s.hasActivationFor(root) {
 		return packLock{}
 	}
 	a := s.Activation
-	if a.Path != canonicalizePackRoot(root) && a.Owner != s.trustKey(root) {
-		return packLock{}
-	}
 	return packLock{
 		MCP:                    append([]string(nil), a.MCP...),
 		Knowledge:              append([]string(nil), a.Knowledge...),
@@ -221,6 +289,16 @@ func (s *packTrustStore) activationFor(root string) packLock {
 		OllamaBridgeModel:      a.OllamaBridgeModel,
 		PriorOllamaBridgeModel: a.PriorOllamaBridgeModel,
 	}
+}
+
+// hasActivationFor reports whether the store carries an activation record
+// attributed to root (canonical path or trust-key match) — the existence test
+// behind activationFor's zero-value contract, split out so the one-time
+// Phase-1 migration (migratePhase1Activation) can tell "no record" apart
+// from "a record with an empty contribution set".
+func (s *packTrustStore) hasActivationFor(root string) bool {
+	return s != nil && s.Activation != nil &&
+		(s.Activation.Path == canonicalizePackRoot(root) || s.Activation.Owner == s.trustKey(root))
 }
 
 // setActivation records lock as the active pack's contribution set (the
@@ -239,18 +317,18 @@ func (s *packTrustStore) setActivation(root string, lock packLock) {
 }
 
 // recordPackAdoptionInTrustStore durably records clone provenance in HOST
-// state, keyed by the clone's canonical path (called from markPackAdopted).
-// A load error propagates (never clobber a store the user might fix); the
-// caller treats it as best-effort — the pack.lock marker and the
-// under-PacksDir location check keep the adopted-pack guard fail-safe.
+// state, keyed by the clone's canonical path (called from markPackAdopted),
+// under the cross-process store lock (round-3 #1). A load error propagates
+// (never clobber a store the user might fix); the caller treats it as
+// best-effort — the pack.lock marker and the under-PacksDir location check
+// keep the adopted-pack guard fail-safe.
 func recordPackAdoptionInTrustStore(root, remote, commit string) error {
-	s, err := loadPackTrustStore()
-	if err != nil {
-		return err
-	}
-	if s.Adopted == nil {
-		s.Adopted = map[string]packProvenance{}
-	}
-	s.Adopted[canonicalizePackRoot(root)] = packProvenance{Remote: remote, Commit: commit}
-	return s.save()
+	_, err := mutatePackTrustStore(func(s *packTrustStore) error {
+		if s.Adopted == nil {
+			s.Adopted = map[string]packProvenance{}
+		}
+		s.Adopted[canonicalizePackRoot(root)] = packProvenance{Remote: remote, Commit: commit}
+		return nil
+	})
+	return err
 }

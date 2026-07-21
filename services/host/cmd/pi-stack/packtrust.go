@@ -73,18 +73,31 @@ func (b hostBoM) tier1() bool {
 }
 
 // localMCPClassifier resolves mcpRegistrar's local-vs-gateway partition into
-// a predicate: TRUE only for a name CONFIRMED to be a LOCAL stdio server this
-// host runs (`pi-stack-host mcp --list`) — i.e. attaching it spawns a host
-// command. Everything else — remote gateway-catalog names (notion/atlassian),
-// the host-provided gog registration (never listed), and every name when the
-// local set cannot be established — is a reference-only Tier-0 fact: nothing
-// pack-authored executes. The unknown-set case is still fail-closed overall,
-// because registerServers independently SKIPS (and errors on) every non-gog
-// name when the local set is unknown — an unclassifiable name can be
-// Tier-0 here precisely because it can never silently register as local.
+// a predicate: TRUE for a name treated as a LOCAL stdio server this host runs
+// (`pi-stack-host mcp --list`) — i.e. attaching it spawns a host command.
+// With the partition ESTABLISHED, a name not in the local set — a remote
+// gateway-catalog name (notion/atlassian) or the host-provided gog
+// registration (never listed) — is a reference-only Tier-0 fact: nothing
+// pack-authored executes.
+//
+// UNKNOWN classification FAILS CLOSED (round-3 #3): when the local set cannot
+// be established (probe error / pi-stack-host unresolved), every non-gog name
+// is treated as HOST-EXEC (Tier-1) so the adoption gate fires. The old
+// unknown⇒Tier-0 shortcut leaned on registerServers skipping registration on
+// the same condition — but the name still lands in cfg.MCP and is attached
+// via --mcp, so one ALREADY-registered in the gateway would run its host
+// command with NO gate ever shown. Over-prompting on a transient probe
+// failure is acceptable; silently skipping the gate is not. gog stays the
+// reference-only special case (its registration is launcher-built, never
+// pack-authored).
 func localMCPClassifier(env shellEnv, hostResolver func() (string, error)) func(string) bool {
 	set, known := localMCPNames(env, hostResolver)
-	return func(name string) bool { return known && set[name] }
+	return func(name string) bool {
+		if !known {
+			return name != "gog" // fail closed: unknown ⇒ gate (except gog)
+		}
+		return set[name]
+	}
 }
 
 // packLocalMCP builds the classifier for callers without an injected env
@@ -110,8 +123,9 @@ var packLocalMCP = func() func(string) bool {
 // integration.mcp that resolves to a LOCAL host command enters the BoM — a
 // remote gateway-catalog reference (notion/atlassian/gog) ships no
 // pack-authored executable and stays Tier-0 (packs.md §9). nil means "no
-// local partition available": nothing classifies as host-exec (and
-// registerServers fails closed on the same unknown-set condition).
+// local partition available" and FAILS CLOSED exactly like an unknown probe
+// (round-3 #3): every non-gog name classifies as host-exec, so an
+// unclassifiable MCP reference is gated rather than silently Tier-0.
 //
 // [[bin]] entries enter the BoM ONLY with host=true (mirroring host=true
 // proxies): an inert host=false bin never enters the accepted surface, so
@@ -126,9 +140,14 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 		account = "<gog_account>"
 	}
 	reg := mcpRegistrar{gog: "gog", account: account, hostBin: "pi-stack-host"}
+	if isLocalMCP == nil {
+		// No partition available at all: same fail-closed posture as an
+		// unknown probe (round-3 #3) — gate every non-gog name.
+		isLocalMCP = func(name string) bool { return name != "gog" }
+	}
 	for _, name := range packMcpNames(p) {
-		if isLocalMCP == nil || !isLocalMCP(name) {
-			continue // reference-only (remote/gog/unknown): Tier-0, not host-exec
+		if !isLocalMCP(name) {
+			continue // reference-only (remote catalog / gog): Tier-0, not host-exec
 		}
 		b.MCP = append(b.MCP, hostBoMMCP{Name: name, Argv: reg.serverCmd(name)})
 	}

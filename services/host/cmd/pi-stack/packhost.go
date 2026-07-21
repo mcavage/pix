@@ -115,23 +115,55 @@ func clearHostPackWrappers(names []string) error {
 // attribution is kept, so the next refresh retries instead of stranding
 // wrappers with no owner. Works with no pack directory at all — attribution
 // lives in host state, never in the (possibly deleted) pack.
+//
+// The whole remove→drop-attribution cycle runs under the cross-process trust
+// lock against a FRESH load (round-3 #1): saving the caller's in-memory store
+// here could clobber an activation/acceptance a concurrent `pack use` just
+// committed. The removal set is the UNION of the caller's view and the
+// on-disk attribution (removing an absent name is a no-op, so over-removal is
+// safe); the caller's view is synced on success.
 func clearInstalledHostPackWrappers(out io.Writer, store *packTrustStore) error {
 	if store == nil || store.Installed == nil || len(store.Installed.Wrappers) == 0 {
 		return nil
 	}
-	if err := clearHostPackWrappers(store.Installed.Wrappers); err != nil {
-		fmt.Fprintf(out, "note: could not remove installed host wrappers: %v (attribution kept; removal will be retried)\n", err)
-		return err
-	}
-	store.Installed = nil
-	if err := store.save(); err != nil {
-		// The wrappers ARE gone; a stale attribution only over-claims (the next
-		// removal is a no-op). Still surfaced AND returned so launch-critical
-		// callers fail closed on an unwritable trust store.
-		fmt.Fprintf(out, "note: could not update pack trust state after removing host wrappers: %v\n", err)
-		return err
-	}
-	return nil
+	return withPackTrustLock(func() error {
+		disk, lerr := loadPackTrustStore()
+		if lerr != nil {
+			fmt.Fprintf(out, "note: pack trust state unreadable while clearing host wrappers: %v (attribution kept)\n", lerr)
+			return lerr
+		}
+		names := map[string]bool{}
+		for _, n := range store.Installed.Wrappers {
+			names[n] = true
+		}
+		if disk.Installed != nil {
+			for _, n := range disk.Installed.Wrappers {
+				names[n] = true
+			}
+		}
+		var all []string
+		for n := range names {
+			all = append(all, n)
+		}
+		sort.Strings(all)
+		if err := clearHostPackWrappers(all); err != nil {
+			fmt.Fprintf(out, "note: could not remove installed host wrappers: %v (attribution kept; removal will be retried)\n", err)
+			return err
+		}
+		store.Installed = nil
+		if disk.Installed == nil {
+			return nil // nothing persisted to update
+		}
+		disk.Installed = nil
+		if err := disk.save(); err != nil {
+			// The wrappers ARE gone; a stale attribution only over-claims (the next
+			// removal is a no-op). Still surfaced AND returned so launch-critical
+			// callers fail closed on an unwritable trust store.
+			fmt.Fprintf(out, "note: could not update pack trust state after removing host wrappers: %v\n", err)
+			return err
+		}
+		return nil
+	})
 }
 
 // installHostPackWrappersStaged builds the COMPLETE host-wrapper set for pack
@@ -303,9 +335,14 @@ func refreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*p
 		// No active pack: clear whatever host state attributes to the bin dir
 		// (works even though the previous pack's directory may be long gone).
 		// A failed clear is FATAL for a strict (launch) caller: stale wrappers
-		// from a detached pack must never stay reachable on the host PATH.
-		if cerr := clearInstalledHostPackWrappers(out, store); cerr != nil && strict {
-			return nil, fmt.Errorf("stale pack host wrappers could not be cleared: %v (refusing host launch)", cerr)
+		// from a detached pack must never stay reachable on the host PATH. A
+		// LENIENT caller gets the error back too (round-3 #4): a clear failure
+		// is never reported as a silent success.
+		if cerr := clearInstalledHostPackWrappers(out, store); cerr != nil {
+			if strict {
+				return nil, fmt.Errorf("stale pack host wrappers could not be cleared: %v (refusing host launch)", cerr)
+			}
+			return nil, cerr
 		}
 		return nil, nil
 	}
@@ -313,8 +350,11 @@ func refreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*p
 	if err != nil {
 		if errors.Is(err, errNotAPack) {
 			// Genuinely absent pack: it still must not leave ITS wrappers live.
-			if cerr := clearInstalledHostPackWrappers(out, store); cerr != nil && strict {
-				return nil, fmt.Errorf("active pack unavailable (%v) and its host wrappers could not be cleared: %v (refusing host launch)", err, cerr)
+			if cerr := clearInstalledHostPackWrappers(out, store); cerr != nil {
+				if strict {
+					return nil, fmt.Errorf("active pack unavailable (%v) and its host wrappers could not be cleared: %v (refusing host launch)", err, cerr)
+				}
+				return nil, cerr
 			}
 			fmt.Fprintf(out, "note: active pack unavailable (%v); host wrappers not refreshed\n", err)
 			return nil, nil
@@ -324,8 +364,11 @@ func refreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*p
 	bom := computeHostBoM(p, cfg.GogAccount, packLocalMCP())
 	if !bom.tier1() {
 		// Tier-0 for host purposes: nothing to install; clear stale leftovers.
-		if cerr := clearInstalledHostPackWrappers(out, store); cerr != nil && strict {
-			return nil, fmt.Errorf("stale pack host wrappers could not be cleared: %v (refusing host launch)", cerr)
+		if cerr := clearInstalledHostPackWrappers(out, store); cerr != nil {
+			if strict {
+				return nil, fmt.Errorf("stale pack host wrappers could not be cleared: %v (refusing host launch)", cerr)
+			}
+			return p, cerr
 		}
 		return p, nil
 	}
@@ -345,8 +388,11 @@ func refreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*p
 		}
 		fmt.Fprintln(out, "note: "+msg)
 		// Don't leave wrappers installed for a surface that is no longer
-		// accepted (e.g. a mutated proxy script must stop being reachable).
-		_ = clearInstalledHostPackWrappers(out, store)
+		// accepted (e.g. a mutated proxy script must stop being reachable). A
+		// failed clear is surfaced to the lenient caller too (round-3 #4).
+		if cerr := clearInstalledHostPackWrappers(out, store); cerr != nil {
+			return p, cerr
+		}
 		return p, nil
 	}
 
@@ -358,29 +404,40 @@ func refreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*p
 	// and the (possibly) new set, so a later clear can always attribute
 	// whatever is live. Over-attribution is safe: removing an absent name is a
 	// no-op.
-	intended := map[string]bool{}
-	if store.Installed != nil {
-		for _, n := range store.Installed.Wrappers {
-			intended[n] = true
+	// Both attribution writes below go through mutatePackTrustStore (round-3
+	// #1): a FRESH load under the cross-process lock, so this refresh can
+	// never save a stale store object over an activation/acceptance a
+	// concurrent `pack use` just committed (last-writer-wins clobber).
+	if _, werr := mutatePackTrustStore(func(s *packTrustStore) error {
+		intended := map[string]bool{}
+		if s.Installed != nil {
+			for _, n := range s.Installed.Wrappers {
+				intended[n] = true
+			}
 		}
-	}
-	for _, pr := range p.Manifest.Proxies {
-		if pr.Host {
-			intended[pr.Name] = true
+		if store.Installed != nil { // the (possibly older) view loaded above, too
+			for _, n := range store.Installed.Wrappers {
+				intended[n] = true
+			}
 		}
-	}
-	for _, bn := range p.Manifest.Bins {
-		if bn.Host {
-			intended[bn.Name] = true
+		for _, pr := range p.Manifest.Proxies {
+			if pr.Host {
+				intended[pr.Name] = true
+			}
 		}
-	}
-	var intendedNames []string
-	for n := range intended {
-		intendedNames = append(intendedNames, n)
-	}
-	sort.Strings(intendedNames)
-	store.Installed = &packInstalledSet{Owner: key, Wrappers: intendedNames}
-	if werr := store.save(); werr != nil {
+		for _, bn := range p.Manifest.Bins {
+			if bn.Host {
+				intended[bn.Name] = true
+			}
+		}
+		var intendedNames []string
+		for n := range intended {
+			intendedNames = append(intendedNames, n)
+		}
+		sort.Strings(intendedNames)
+		s.Installed = &packInstalledSet{Owner: key, Wrappers: intendedNames}
+		return nil
+	}); werr != nil {
 		err := fmt.Errorf("pack %s: could not record intended host-wrapper attribution: %v (host wrappers NOT installed; fail closed)", p.Manifest.Name, werr)
 		if strict {
 			return nil, fmt.Errorf("%v — refusing host launch", err)
@@ -399,8 +456,10 @@ func refreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*p
 	// failure here still leaves the union attribution covering every live
 	// wrapper (no orphan), but the install is NOT considered successful: the
 	// error propagates and a strict caller refuses the launch.
-	store.Installed = &packInstalledSet{Owner: key, Wrappers: installed}
-	if werr := store.save(); werr != nil {
+	if _, werr := mutatePackTrustStore(func(s *packTrustStore) error {
+		s.Installed = &packInstalledSet{Owner: key, Wrappers: installed}
+		return nil
+	}); werr != nil {
 		err := fmt.Errorf("pack %s: host wrappers installed but the attribution write failed: %v (attribution over-claims until the store is writable)", p.Manifest.Name, werr)
 		if strict {
 			return nil, fmt.Errorf("%v — refusing host launch", err)

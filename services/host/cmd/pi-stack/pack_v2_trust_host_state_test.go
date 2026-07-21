@@ -432,8 +432,9 @@ func TestRefreshHostPackWrappers_FailClosedNoPartialSet(t *testing.T) {
 // --- identity + provenance in host state --------------------------------------
 
 // TestPackTrustStore_IdentityAndProvenance: identity is host-derived — clone
-// provenance (remote#commit) when recorded, else the canonical path — and a
-// host-state adoption record marks the pack adopted even with no pack.lock.
+// provenance (the remote URL, commit-STABLE since round-3 #5) when recorded,
+// else the canonical path — and a host-state adoption record marks the pack
+// adopted even with no pack.lock.
 func TestPackTrustStore_IdentityAndProvenance(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
@@ -454,8 +455,8 @@ func TestPackTrustStore_IdentityAndProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := store.trustKey(root); got != "remote:https://example.com/x.git#abc123" {
-		t.Errorf("adopted pack must key by remote#commit, got %q", got)
+	if got := store.trustKey(root); got != "remote:https://example.com/x.git" {
+		t.Errorf("adopted pack must key by the commit-stable remote (round-3 #5), got %q", got)
 	}
 	// No pack.lock at all — host state alone marks it adopted.
 	if !isAdoptedPack(root) {

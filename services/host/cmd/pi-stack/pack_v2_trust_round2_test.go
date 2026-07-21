@@ -291,9 +291,11 @@ func TestComputeHostBoM_InertBinNeverInSurface(t *testing.T) {
 // TestComputeHostBoM_RemoteMCPReferenceIsTier0: the local-vs-gateway partition
 // decides the tier — a name NOT in the local set (a remote gateway-catalog
 // server, or gog, which the bridge never lists) is a reference-only Tier-0
-// fact; a name the host serves locally is Tier-1. An unknown partition
-// (pi-stack-host unresolved) classifies nothing as local — safe, because
-// registerServers independently fails closed on the same condition.
+// fact; a name the host serves locally is Tier-1. An UNKNOWN partition
+// (pi-stack-host unresolved / probe failed) now FAILS CLOSED (round-3 #3):
+// every non-gog name classifies as host-exec so the gate fires — the name
+// still lands in cfg.MCP and attaches via --mcp, so an already-registered
+// local server would otherwise run its host command ungated.
 func TestComputeHostBoM_RemoteMCPReferenceIsTier0(t *testing.T) {
 	p := &packInfo{Root: "/p", Manifest: packManifest{
 		Name:         "personal",
@@ -307,8 +309,8 @@ func TestComputeHostBoM_RemoteMCPReferenceIsTier0(t *testing.T) {
 		t.Errorf("credential names are still solicited/reviewable, got %v", b.Creds)
 	}
 	unknown := localMCPClassifier(shellEnv{}, nil)
-	if b := computeHostBoM(p, "", unknown); b.tier1() {
-		t.Errorf("an unknown local partition must not classify as host-exec, got %+v", b)
+	if b := computeHostBoM(p, "", unknown); !b.tier1() {
+		t.Errorf("an unknown local partition must FAIL CLOSED as host-exec (round-3 #3), got %+v", b)
 	}
 	local := localMCPClassifier(localMCPEnv("notion"), resolver)
 	if b := computeHostBoM(p, "", local); !b.tier1() || len(b.MCP) != 1 {
