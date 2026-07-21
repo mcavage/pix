@@ -1190,6 +1190,24 @@ func launchTask(o runOpts) error {
 
 	wireKnowledgeScope(cfg, o.Workspace, defaultKnowledgeRPC())
 
+	// Mirror run.go's pack-context writes (packs-v2 Phase 1 gap): applyPackToLaunch
+	// above only updates cfg/o with the pack's overrides, it does not write the
+	// per-launch workspace files that carry that context INTO the sandbox. Without
+	// these a task sandbox silently loses the active pack's memory scope, its
+	// ollama-bridge model, the MCP-gateway-off warning, and the stale-pack marker
+	// run.go relies on. A task is always a fresh create, so writeMemoryScope and
+	// writeSandboxPackMarker run unconditionally (no willCreate/definitelyCreating
+	// gating needed — that only exists in run.go to distinguish create from
+	// re-attach, and a task never re-attaches).
+	if !o.MCPEnabled {
+		configured := append(append([]string(nil), cfg.MCP...), o.MCP...)
+		if msg := mcpGatewayOffWarning(configured); msg != "" {
+			fmt.Fprintln(os.Stderr, msg)
+		}
+	}
+	writePackContextFiles(cfg, o)
+	writeSandboxPackMarker(o.Workspace, activePackRoot(cfg.Pack, o.Pack))
+
 	args := buildSbxArgs(cfg, o, version)
 	if os.Getenv("PI_STACK_DEBUG") != "" {
 		fmt.Fprintln(os.Stderr, "+ sbx "+strings.Join(args, " "))

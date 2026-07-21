@@ -214,27 +214,15 @@ func runRun(argv []string) {
 	// or fails the launch (recall just misses a bundle this run).
 	wireKnowledgeScope(cfg, o.Workspace, defaultKnowledgeRPC())
 
-	// Local model: hand the configured ollama_bridge_model to the in-VM
-	// ollama-bridge via a per-run workspace file, so `pi-stack config set
-	// ollama_bridge_model <tag>` is all you need (no sandbox env editing). Mirrors
-	// the profile/knowledge-scope seam. Best-effort.
-	writeOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
-
-	// Memory scope tag (F4): the active pack's memory_scope (default: the pack
-	// name; "default" is the shared/unscoped tag) selects the in-VM recall/
-	// capture scope (memory-recall.ts, memory-capture.ts already read this file —
-	// no extension change). No active pack -> writeMemoryScope removes any stale
-	// file (unscoped recall), replacing the old unconditional profile-delete.
-	// Best-effort: an unloadable pack degrades to unscoped rather than failing run.
-	{
-		var activePack *packInfo
-		if root := activePackRoot(cfg.Pack, o.Pack); root != "" {
-			if lp, lerr := loadPack(root); lerr == nil {
-				activePack = lp
-			}
-		}
-		writeMemoryScope(o.Workspace, activePack)
-	}
+	// Local model + memory scope: hand the configured ollama_bridge_model to the
+	// in-VM ollama-bridge, and the active pack's memory_scope (default: the pack
+	// name; "default" is the shared/unscoped tag) to the in-VM recall/capture
+	// extensions, via per-run workspace files. No active pack -> writeMemoryScope
+	// removes any stale file (unscoped recall). Best-effort throughout: an
+	// unloadable pack degrades to unscoped rather than failing run. Shared with
+	// `task new` via writePackContextFiles (pack.go) so both launch paths write
+	// the SAME pack context.
+	writePackContextFiles(cfg, o)
 
 	// finding G + round-3 R3: record the pack this sandbox is being CREATED
 	// with (workspace marker), so a later re-attach can warn precisely when the

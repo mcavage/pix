@@ -884,6 +884,26 @@ func writeMemoryScope(workspace string, p *packInfo) {
 	_ = os.WriteFile(filepath.Join(dir, "profile"), []byte(scope+"\n"), 0o644)
 }
 
+// writePackContextFiles writes the two per-launch, pack-scoped workspace files
+// that carry the active pack's context into a sandbox: the ollama-bridge model
+// (.pi-stack/ollama-bridge.model, via writeOllamaBridgeFile) and the memory
+// scope (.pi-stack/profile, via writeMemoryScope, resolved from the active
+// pack). Shared by `pi-stack run` and `pi-stack task new` so a task sandbox
+// gets the SAME pack context as a normal run — packs-v2 Phase 1 had `run`
+// write these but not `task new`. Best-effort throughout: an unloadable pack
+// degrades to unscoped memory rather than failing the launch (mirrors
+// writeMemoryScope's own contract).
+func writePackContextFiles(cfg *config.Config, o runOpts) {
+	writeOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
+	var activePack *packInfo
+	if root := activePackRoot(cfg.Pack, o.Pack); root != "" {
+		if lp, lerr := loadPack(root); lerr == nil {
+			activePack = lp
+		}
+	}
+	writeMemoryScope(o.Workspace, activePack)
+}
+
 // packRecreateLine is the ADR-3 "same breath" recreate instruction: any
 // operation that changes the sandbox facet set (MCP attach, sandbox bin/
 // wrappers) MUST print this, because --mcp/--kit are create-only — a running
