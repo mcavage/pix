@@ -571,20 +571,15 @@ type packLock struct {
 	PriorGogAccount        string `toml:"prior_gog_account,omitempty"`
 	OllamaBridgeModel      string `toml:"ollama_bridge_model,omitempty"`
 	PriorOllamaBridgeModel string `toml:"prior_ollama_bridge_model,omitempty"`
-	// Accepted* record the Tier-1 host bill-of-materials the user approved at
-	// adoption (F5 — packtrust.go): MCP names, host wrapper names, [[bin]]
-	// name=sha pairs, egress domains, credential VAR names (never values).
-	// lockCoversBoM keys the no-re-prompt path on these; clonePack's
-	// scrubRemotePackLock guarantees a remote can never pre-accept itself.
-	AcceptedMCP         []string `toml:"accepted_mcp,omitempty"`
-	AcceptedHostProxies []string `toml:"accepted_host_proxies,omitempty"`
-	AcceptedBins        []string `toml:"accepted_bins,omitempty"`
-	AcceptedEgress      []string `toml:"accepted_egress,omitempty"`
-	AcceptedCreds       []string `toml:"accepted_creds,omitempty"`
-	// HostWrappers records the wrapper names the last activation installed into
-	// hostPackBinDir() (F3), so a switch/refresh removes exactly those — the
-	// same lock-attributed-removal posture as MCP/Knowledge above.
-	HostWrappers []string `toml:"host_wrappers,omitempty"`
+	// NOTHING security-relevant lives here. Trust acceptance and installed
+	// host-wrapper attribution used to (Accepted*/HostWrappers) — but pack.lock
+	// sits INSIDE the pack directory, i.e. inside the attacker-controlled
+	// payload for any downloaded/unzipped pack, so a pre-filled lock could
+	// pre-accept its own host-exec surface. Both moved to the launcher-owned
+	// trust store (<config-dir>/pack-trust.json — packtruststore.go). pack.lock
+	// is ONLY Phase-1 activation provenance for reversibility, and it is
+	// scrubbed/ignored whenever `pack use` targets a pack that is not already
+	// active (scrubUntrustedPackLock).
 }
 
 const packLockName = "pack.lock"
@@ -691,17 +686,69 @@ func commitPackActivation(cfg *config.Config, root string, lock packLock) error 
 	return nil
 }
 
-// isAdoptedPack reports whether root's pack.lock carries adoption provenance
-// (a non-empty Remote), i.e. this pack was cloned from a remote via `pack use
-// <git-url>` at some point (clonePack/markPackAdopted set it, and it survives
-// every later re-activation). Used by the finding-#1 CRITICAL guard: a
-// shared=false local-path [[knowledge]] reference is NEVER honored for an
-// adopted pack, because pack.toml there is attacker-controlled input from the
-// remote — honoring it would let a malicious pack.toml point AddKnowledgeBundle
-// at an arbitrary host directory (e.g. ~/.ssh) that the sandbox can then read
-// via the knowledge service.
+// isAdoptedPack reports whether root carries adoption provenance, i.e. this
+// pack was cloned from a remote via `pack use <git-url>` at some point. Used
+// by the finding-#1 CRITICAL guard: a shared=false local-path [[knowledge]]
+// reference is NEVER honored for an adopted pack, because pack.toml there is
+// attacker-controlled input from the remote — honoring it would let a
+// malicious pack.toml point AddKnowledgeBundle at an arbitrary host directory
+// (e.g. ~/.ssh) that the sandbox can then read via the knowledge service.
+//
+// Three signals, ANY of which marks the pack adopted (all fail-safe: a forged
+// marker only ever RESTRICTS what a pack may do): the pack.lock Remote marker
+// (clonePack/markPackAdopted write it), the launcher-owned trust store's
+// adoption provenance (host state — survives even a scrubbed/forged lock),
+// and the clone LOCATION itself (everything under PacksDir was put there by
+// clonePack, never authored by the user).
 func isAdoptedPack(root string) bool {
-	return strings.TrimSpace(readPackLock(root).Remote) != ""
+	if strings.TrimSpace(readPackLock(root).Remote) != "" {
+		return true
+	}
+	if store, err := loadPackTrustStore(); err == nil {
+		if _, ok := store.Adopted[canonicalizePackRoot(root)]; ok {
+			return true
+		}
+	}
+	return packRootInPacksDir(root)
+}
+
+// packRootInPacksDir reports whether root lives under config.PacksDir() — the
+// directory only clonePack ever populates, so location alone proves adoption.
+func packRootInPacksDir(root string) bool {
+	packs := canonicalizePackRoot(config.PacksDir())
+	r := canonicalizePackRoot(root)
+	return packs != "" && strings.HasPrefix(r, packs+string(filepath.Separator))
+}
+
+// scrubUntrustedPackLock removes a pack-supplied pack.lock before a pack that
+// is NOT currently active is adopted (item 4 of the trust-model rework): a
+// downloaded/unzipped pack can ship a forged pack.lock — clonePack scrubs it
+// for remote clones, but a local-path adoption used to bypass that. The forged
+// file could claim the user's OWN mcp/knowledge entries as the pack's
+// contribution (corrupting Phase-1 reversibility: a later switch-away would
+// remove them) or be a symlink that blocks/redirects the fresh lock write.
+// os.Remove removes a symlink itself, never its target. The caller must also
+// IGNORE the lock's decoded content (treat as zero value) — scrubbing plus a
+// fresh regenerate at commit is the whole contract.
+func scrubUntrustedPackLock(root string) error {
+	path := packLockPath(root)
+	fi, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if fi.IsDir() {
+		// A DIRECTORY named pack.lock cannot carry forged lock content
+		// (readPackLock zero-values it) — leave it for the commit point, which
+		// fails loudly with the established abort-without-commit message.
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing untrusted %s: %w", packLockName, err)
+	}
+	return nil
 }
 
 // errPrivateRefSkippedAdopted is the sentinel resolvePackKnowledgeRef returns
@@ -1270,16 +1317,30 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 		// fastmail ./work` while cfg.Pack is the absolute form).
 		if cerr == nil && canonicalizePackRoot(cfg.Pack) == canonicalizePackRoot(root) {
 			// F5: attaching an MCP means the gateway runs its command ON THE
-			// HOST — a Tier-1 fact. Same gate as `pack use`: covered-by-lock
-			// skips the prompt, non-TTY fails closed unless --yes. On refusal
-			// the declaration stays in pack.toml (inert) but NOTHING attaches.
-			selfLock := readPackLock(root)
-			bom := computeHostBoM(p)
-			gateFired := bom.tier1() && !lockCoversBoM(selfLock, bom)
-			if gateFired {
-				if gerr := packTrustGate(os.Stdin, out, isTTY(os.Stdin), yes, p.Manifest.Name, bom); gerr != nil {
-					fmt.Fprintf(out, "pi-stack pack add: %v (declared in pack.toml, but NOT attached)\n", gerr)
+			// HOST — a Tier-1 fact. Same gate as `pack use`: an exact
+			// fingerprint match in the HOST trust store skips the prompt,
+			// non-TTY fails closed unless --yes. On refusal the declaration
+			// stays in pack.toml (inert) but NOTHING attaches.
+			trustStore, tserr := loadPackTrustStore()
+			if tserr != nil {
+				fmt.Fprintf(out, "note: pack trust state unreadable (%v); treating as empty — the Tier-1 gate will prompt\n", tserr)
+				trustStore = &packTrustStore{}
+			}
+			bom := computeHostBoM(p, cfg.GogAccount)
+			var bomFingerprint, packKey string
+			if bom.tier1() {
+				fp, _, ferr := computeHostExecFingerprint(root, bom)
+				if ferr != nil {
+					fmt.Fprintf(out, "pi-stack pack add: pack %s: %v\n", root, ferr)
 					os.Exit(1)
+				}
+				bomFingerprint = fp
+				packKey = trustStore.trustKey(root)
+				if got, ok := trustStore.acceptedFingerprint(packKey); !ok || got != fp {
+					if gerr := packTrustGate(os.Stdin, out, isTTY(os.Stdin), yes, p.Manifest.Name, bom); gerr != nil {
+						fmt.Fprintf(out, "pi-stack pack add: %v (declared in pack.toml, but NOT attached)\n", gerr)
+						os.Exit(1)
+					}
 				}
 			}
 			added := cfg.AddMCP(name)
@@ -1294,22 +1355,23 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 				if !containsStr(lock.MCP, name) {
 					lock.MCP = append(lock.MCP, name)
 				}
-				// F5: the acceptance travels with the same commit as the
-				// attachment, so a later `pack use` of this pack won't re-prompt
-				// for what was just accepted here.
-				acceptHostBoM(&lock, bom)
 				if err := commitPackActivation(cfg, root, lock); err != nil {
 					fmt.Fprintf(out, "pi-stack pack add: %v\n", err)
 					os.Exit(1)
 				}
-			} else if gateFired {
-				// Nothing new attached (the name was already in cfg.MCP), but the
-				// gate DID fire and the user accepted — record it (best-effort;
-				// no config change happened, so no commit point is owed).
-				lock := readPackLock(root)
-				acceptHostBoM(&lock, bom)
-				if werr := writePackLock(root, lock); werr != nil {
-					fmt.Fprintf(out, "note: could not record the accepted host BoM: %v\n", werr)
+			}
+			// F5: persist the acceptance in HOST state (the gate above passed,
+			// or the stored fingerprint already covered this surface), so a
+			// later `pack use` of this pack won't re-prompt for what was just
+			// accepted here. Best-effort: a failed write only re-prompts.
+			if bom.tier1() {
+				rec := packTrustRecord{Path: canonicalizePackRoot(root), Fingerprint: bomFingerprint}
+				if prov, ok := trustStore.Adopted[rec.Path]; ok {
+					rec.Remote, rec.Commit = prov.Remote, prov.Commit
+				}
+				trustStore.recordAcceptance(packKey, rec)
+				if werr := trustStore.save(); werr != nil {
+					fmt.Fprintf(out, "note: could not record the accepted host BoM: %v (the Tier-1 gate will re-prompt)\n", werr)
 				}
 			}
 			// finding E: registration runs even when the name was ALREADY in
@@ -1549,29 +1611,67 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 
 	prevRoot := cfg.Pack
 	switching := prevRoot != "" && prevRoot != root
-	// selfLock is THIS pack's own lock as it existed before this activation
-	// overwrites it — read up front so the adoption marker (Remote/Commit) is
-	// preserved across a re-activation of the SAME pack (see below).
+	// selfLock is THIS pack's own lock. It is TRUSTED only when this pack is
+	// already ACTIVE (the launcher wrote it at the last activation). For any
+	// other target the lock arrived with the pack payload (downloaded, unzipped,
+	// hand-forged) — trust-model item 4: capture the fail-safe adoption marker,
+	// then SCRUB the file and IGNORE its decoded content. A forged lock could
+	// otherwise claim the user's own mcp/knowledge entries as this pack's
+	// contribution (a later switch-away would then remove them), or be a
+	// symlink aimed at the fresh lock write. (A URL adoption's lock was just
+	// written by clonePack/markPackAdopted — host-authored, not pack-supplied —
+	// so scrubbing there would only destroy the durable adoption marker.)
 	selfLock := readPackLock(root)
+	if prevRoot != root {
+		untrusted := selfLock
+		selfLock = packLock{
+			Remote: strings.TrimSpace(untrusted.Remote),
+			Commit: strings.TrimSpace(untrusted.Commit),
+		}
+		if remoteURL == "" {
+			if serr := scrubUntrustedPackLock(root); serr != nil {
+				fmt.Fprintf(out, "pi-stack pack use: %v (refusing to adopt with an untrusted %s in place)\n", serr, packLockName)
+				os.Exit(1)
+			}
+		}
+	}
 
 	// Adoption provenance (finding #1, CRITICAL): a pack cloned via a git URL
-	// THIS activation, or one whose lock already carries a Remote from a PRIOR
-	// clone (re-activating the same clone by local path), is "adopted" —
-	// pack.toml there is attacker-controlled, so shared=false local knowledge
-	// refs are never honored (enforced inside resolvePackKnowledgeRef below).
-	adopted := remoteURL != "" || isAdoptedPack(root)
+	// THIS activation, one whose lock carried a Remote marker (fail-safe: a
+	// forged marker only RESTRICTS), or one host state / its location under
+	// PacksDir proves was cloned (isAdoptedPack), is "adopted" — pack.toml
+	// there is attacker-controlled, so shared=false local knowledge refs are
+	// never honored (enforced inside resolvePackKnowledgeRef below).
+	adopted := remoteURL != "" || selfLock.Remote != "" || isAdoptedPack(root)
 
-	// F5: the Tier-1 trust gate. Tier-0 (no host-exec facet) adopts silently,
-	// exactly as Phase 1 did. Tier-1 halts at the BoM screen unless this pack's
-	// own lock already covers the CURRENT BoM (trust was granted at a prior
-	// adoption and nothing host-exec changed since — switching between adopted
-	// packs never re-prompts, but a new facet or a changed [[bin]] sha does).
-	// Refusal aborts here: nothing registered, installed, or committed.
-	bom := computeHostBoM(p)
-	if bom.tier1() && !lockCoversBoM(selfLock, bom) {
-		if gerr := packTrustGate(os.Stdin, out, isTTY(os.Stdin), yes, p.Manifest.Name, bom); gerr != nil {
-			fmt.Fprintf(out, "pi-stack pack use: %v\n", gerr)
+	// F5: the Tier-1 trust gate — against TRUSTED HOST STATE (packtruststore.go),
+	// never anything the pack ships. Tier-0 (no host-exec facet) adopts
+	// silently, exactly as Phase 1 did. Tier-1 halts at the BoM screen unless
+	// the trust store holds this pack identity's acceptance of the EXACT
+	// current host-exec surface (fingerprint match: MCP argv, host proxy script
+	// content, bin pins, egress, creds). Switching between accepted packs never
+	// re-prompts; ANY surface change does. Refusal aborts here: nothing
+	// registered, installed, or committed.
+	trustStore, tserr := loadPackTrustStore()
+	if tserr != nil {
+		fmt.Fprintf(out, "note: pack trust state unreadable (%v); treating as empty — the Tier-1 gate will prompt\n", tserr)
+		trustStore = &packTrustStore{}
+	}
+	bom := computeHostBoM(p, cfg.GogAccount)
+	var bomFingerprint, packKey string
+	if bom.tier1() {
+		fp, _, ferr := computeHostExecFingerprint(root, bom)
+		if ferr != nil {
+			fmt.Fprintf(out, "pi-stack pack use: pack %s: %v\n", root, ferr)
 			os.Exit(1)
+		}
+		bomFingerprint = fp
+		packKey = trustStore.trustKey(root)
+		if got, ok := trustStore.acceptedFingerprint(packKey); !ok || got != fp {
+			if gerr := packTrustGate(os.Stdin, out, isTTY(os.Stdin), yes, p.Manifest.Name, bom); gerr != nil {
+				fmt.Fprintf(out, "pi-stack pack use: %v\n", gerr)
+				os.Exit(1)
+			}
 		}
 	}
 
@@ -1700,19 +1800,14 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	}
 	if lock.Remote == "" {
 		// Not cloned THIS activation: keep whatever adoption marker this pack
-		// already carried (a re-activation via local path must not un-adopt it).
-		lock.Remote = selfLock.Remote
-		lock.Commit = selfLock.Commit
-	}
-	// F5: record the accepted host BoM (the gate above passed, or the prior
-	// acceptance already covered it — acceptance is always re-normalized to the
-	// CURRENT BoM). F3: record the intended host-wrapper install set, so the
-	// next switch/refresh clears exactly these (over-claim on a failed install
-	// is harmless: removing an absent file is a no-op).
-	acceptHostBoM(&lock, bom)
-	lock.HostWrappers = nil
-	if bom.tier1() {
-		lock.HostWrappers = declaredHostWrapperNames(p)
+		// already carried (a re-activation via local path must not un-adopt it) —
+		// the launcher's own host-state provenance first, else the (fail-safe)
+		// marker captured off the pack-supplied lock before the scrub.
+		if prov, ok := trustStore.Adopted[canonicalizePackRoot(root)]; ok {
+			lock.Remote, lock.Commit = prov.Remote, prov.Commit
+		} else {
+			lock.Remote, lock.Commit = selfLock.Remote, selfLock.Commit
+		}
 	}
 	if err := commitPackActivation(cfg, root, lock); err != nil {
 		// The lock IS part of this switch's committed state (finding #3 +
@@ -1721,6 +1816,22 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		// the active pack) stay exactly as they were.
 		fmt.Fprintf(out, "pi-stack pack use: %v\n", err)
 		os.Exit(1)
+	}
+
+	// F5: persist the acceptance in HOST state (the gate above passed, or the
+	// stored fingerprint already covered this exact surface — recording is
+	// idempotent and re-normalizes provenance). A failed write just means the
+	// gate re-prompts next time: fail closed, never open.
+	if bom.tier1() {
+		trustStore.recordAcceptance(packKey, packTrustRecord{
+			Path:        canonicalizePackRoot(root),
+			Remote:      lock.Remote,
+			Commit:      lock.Commit,
+			Fingerprint: bomFingerprint,
+		})
+		if werr := trustStore.save(); werr != nil {
+			fmt.Fprintf(out, "note: could not record the accepted host BoM: %v (the Tier-1 gate will re-prompt)\n", werr)
+		}
 	}
 
 	// --- post-Save: best-effort side effects (each already idempotent). ---
@@ -1770,18 +1881,13 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	}
 
 	// F3: swap the host-mode wrappers NOW (live for the next `pi-stack host`):
-	// clear what the previous activation installed (lock-attributed — the
-	// previous pack's lock on a switch, this pack's own on a reactivation),
-	// then install this pack's ACCEPTED set. Best-effort, like every other
-	// post-Save side effect; the strict re-hash happens again at every host
-	// launch (refreshHostPackWrappers).
-	prevHostWrappers := selfLock.HostWrappers
-	if switching {
-		prevHostWrappers = prevLock.HostWrappers
-	}
-	clearHostPackWrappers(prevHostWrappers)
-	if installed := installHostPackWrappers(out, p, lock); len(installed) > 0 {
-		fmt.Fprintf(out, "host wrappers installed (on PATH for `pi-stack host` only): %s\n", strings.Join(installed, ", "))
+	// refreshHostPackWrappers clears what host state attributes to the previous
+	// activation and stages+verifies+swaps in this pack's ACCEPTED set (the
+	// acceptance recorded just above). Best-effort here, like every other
+	// post-Save side effect; the strict fingerprint + content re-verification
+	// happens again at every host launch.
+	if _, werr := refreshHostPackWrappers(out, cfg, false); werr != nil {
+		fmt.Fprintf(out, "note: host wrappers not refreshed: %v\n", werr)
 	}
 
 	// Solicit any 1Password creds this pack's reference-only integrations need.
@@ -1826,18 +1932,18 @@ func runPackRm(out io.Writer, rest []string) {
 		os.Exit(1)
 	}
 	fmt.Fprintf(out, "detached active pack (%s). The files are untouched; re-attach with `pi-stack pack use`.\n", old)
-	// F3: "detached" includes the host wrappers — remove exactly what this
-	// pack's last activation installed into hostPackBinDir() (lock-attributed),
-	// and record the now-empty install set. Acceptance (Accepted*) is kept:
+	// F3: "detached" includes the host wrappers — remove exactly what HOST
+	// state attributes to hostPackBinDir() (reliable even when the pack
+	// directory itself is gone; attribution never lived in the pack). The
+	// attribution is discarded only on CONFIRMED removal. Acceptance is kept:
 	// trust was granted at adoption and re-attaching must not re-prompt.
-	if len(oldLock.HostWrappers) > 0 {
-		clearHostPackWrappers(oldLock.HostWrappers)
-		l2 := readPackLock(old)
-		l2.HostWrappers = nil
-		if werr := writePackLock(old, l2); werr != nil {
-			fmt.Fprintf(out, "note: could not update %s's pack.lock after removing its host wrappers: %v\n", old, werr)
+	if store, serr := loadPackTrustStore(); serr != nil {
+		fmt.Fprintf(out, "note: pack trust state unreadable (%v); host wrappers not cleared\n", serr)
+	} else if store.Installed != nil && len(store.Installed.Wrappers) > 0 {
+		names := append([]string(nil), store.Installed.Wrappers...)
+		if cerr := clearInstalledHostPackWrappers(out, store); cerr == nil {
+			fmt.Fprintf(out, "removed host wrappers: %s\n", strings.Join(names, ", "))
 		}
-		fmt.Fprintf(out, "removed host wrappers: %s\n", strings.Join(oldLock.HostWrappers, ", "))
 	}
 	if len(removedMCP) > 0 {
 		fmt.Fprintf(out, "detached mcp: %s\n", strings.Join(removedMCP, ", "))
@@ -2061,6 +2167,10 @@ func scrubRemotePackLock(env shellEnv, dest string, freshClone bool) error {
 // markPackAdopted durably records adoption provenance (pack.lock Remote +
 // Commit) on a cloned/updated pack (finding B). It MERGES into any existing
 // lock so a re-clone or update never sheds earlier activation attribution.
+// The same provenance is mirrored into the launcher-owned trust store (host
+// state — the trusted source for pack identity and the adopted-pack guard);
+// that mirror is best-effort because the lock marker plus the under-PacksDir
+// location check already keep the guard fail-safe without it.
 func markPackAdopted(env shellEnv, root, remote string) error {
 	lock := readPackLock(root)
 	lock.Remote = remote
@@ -2070,6 +2180,7 @@ func markPackAdopted(env shellEnv, root, remote string) error {
 			lock.Commit = strings.TrimSpace(sha)
 		}
 	}
+	_ = recordPackAdoptionInTrustStore(root, remote, lock.Commit)
 	return writePackLock(root, lock)
 }
 
@@ -2087,9 +2198,19 @@ func writePackManifest(root string, m packManifest) error {
 // the file if absent, so a fresh pack never accidentally commits its generated
 // activation-provenance lockfile (ADR-1). Idempotent (checked by substring) and
 // best-effort: a write failure is silent — it must never block `pack new`.
+//
+// Symlink-safe (mirrors writePackLockBytes): `pack new .` can run in an
+// UNTRUSTED directory, and os.ReadFile/os.WriteFile FOLLOW symlinks — a
+// .gitignore symlinked at e.g. ~/.bashrc would have pack.lock appended to the
+// TARGET. Lstat-REFUSE a symlinked .gitignore outright, and write via the
+// same-dir atomic temp+rename (rename replaces a symlink, never follows one)
+// so there is no check-then-write window either.
 func seedPackGitignore(root string) {
 	path := filepath.Join(root, ".gitignore")
 	const line = packLockName
+	if isSymlinkPath(path) {
+		return // never read or write through a symlinked .gitignore
+	}
 	b, err := os.ReadFile(path)
 	if err == nil && strings.Contains(string(b), line) {
 		return // already present
@@ -2099,7 +2220,7 @@ func seedPackGitignore(root string) {
 		content += "\n"
 	}
 	content += line + "\n"
-	_ = os.WriteFile(path, []byte(content), 0o644)
+	_ = atomicWriteInDir(root, ".gitignore", []byte(content), 0o644)
 }
 
 func present(p string) string {

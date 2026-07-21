@@ -10,25 +10,32 @@
 //     external binary. Adoption halts at the bill-of-materials screen and
 //     requires an explicit yes; non-TTY FAILS CLOSED unless --yes.
 //
-// Acceptance is recorded in pack.lock (Accepted*), so switching between
-// already-adopted packs never re-prompts — but a facet ADDED (or a [[bin]] sha
-// CHANGED) since acceptance is no longer covered and re-triggers the gate.
-// clonePack scrubs any remote-authored pack.lock, so acceptance can never be
-// smuggled in by the pack itself. The typed schema is the allowlist: only
-// integration.mcp, host [[proxy]], and [[bin]] ever reach an exec path.
+// Acceptance lives in TRUSTED HOST STATE (packtruststore.go — never inside
+// the pack payload), keyed by pack identity, over a FINGERPRINT of the entire
+// host-exec surface (computeHostExecFingerprint). Switching between accepted
+// packs never re-prompts, but ANY change to the surface — a facet added, a
+// [[bin]] sha changed, a host proxy script mutated, an MCP argv resolved
+// differently (e.g. gog_account) — changes the fingerprint and re-triggers
+// the gate. The typed schema is the allowlist: only integration.mcp, host
+// [[proxy]], and [[bin]] ever reach an exec path.
 package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
 
 // hostBoM is the host bill-of-materials: everything a pack would run on (or
 // solicit from) THIS machine. Pure data, computed by computeHostBoM, rendered
-// by renderHostBoM, gated by packTrustGate, recorded by acceptHostBoM.
+// by renderHostBoM, gated by packTrustGate, and accepted as a fingerprint in
+// the HOST trust store (computeHostExecFingerprint + packtruststore.go).
 type hostBoM struct {
 	MCP     []hostBoMMCP // MCP servers the gateway will spawn on the host
 	Proxies []string     // host=true [[proxy]] wrapper names (bin/<name>)
@@ -60,9 +67,18 @@ func (b hostBoM) tier1() bool {
 // display registrar uses the bare binary names ("gog", "pi-stack-host") so the
 // result is deterministic — the real registration resolves absolute paths, but
 // the SHAPE the user reviews is identical.
-func computeHostBoM(p *packInfo) hostBoM {
+//
+// cfgGogAccount is the RESOLVED fallback account (config gog_account) used
+// when the manifest doesn't pin one: the argv the user reviews — and the
+// fingerprint the acceptance is recorded over — must be the argv that will
+// actually run, so a later gog_account change re-gates (it changes what the
+// gateway spawns on the host).
+func computeHostBoM(p *packInfo, cfgGogAccount string) hostBoM {
 	var b hostBoM
 	account := strings.TrimSpace(p.Manifest.GogAccount)
+	if account == "" {
+		account = strings.TrimSpace(cfgGogAccount)
+	}
 	if account == "" {
 		account = "<gog_account>"
 	}
@@ -96,51 +112,51 @@ func computeHostBoM(p *packInfo) hostBoM {
 	return b
 }
 
-// lockCoversBoM reports whether a previously-recorded acceptance (pack.lock's
-// Accepted* fields) covers EVERY element of the current BoM. Covered → no
-// re-prompt (trust was granted at adoption); any new MCP/wrapper/bin-pair/
-// egress/cred since acceptance → the gate fires again. A [[bin]] is keyed by
-// name=sha (packBinPair), so a changed sha is never covered by an old yes.
-func lockCoversBoM(l packLock, b hostBoM) bool {
-	subset := func(want, have []string) bool {
-		for _, w := range want {
-			if !containsStr(have, w) {
-				return false
-			}
+// computeHostExecFingerprint hashes the ENTIRE host-exec surface of a pack —
+// what the Tier-1 acceptance is actually FOR: every MCP's resolved argv,
+// every host=true [[proxy]] script's CONTENT (sha256 of the bytes on disk,
+// symlink-refused — a mutated script changes the fingerprint), every [[bin]]
+// name + pinned sha (the pin itself is verified against the file separately,
+// at activation/install/launch), the egress union, and the credential VAR
+// names. Entries are sorted into a canonical form so a pure manifest reorder
+// never re-gates. Returns the fingerprint plus the per-proxy content hashes
+// it was computed over, so the installer can verify the exact bytes it stages
+// against what was accepted (no hash-then-install TOCTOU).
+//
+// An unreadable host proxy script is an ERROR (fail closed): a surface that
+// cannot be fingerprinted cannot be accepted or installed.
+func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]string, error) {
+	proxySHA := map[string]string{}
+	var lines []string
+	for _, m := range b.MCP {
+		lines = append(lines, "mcp\x00"+m.Name+"\x00"+strings.Join(m.Argv, "\x1f"))
+	}
+	for _, name := range b.Proxies {
+		src := filepath.Join(root, "bin", name)
+		if isSymlinkPath(src) {
+			return "", nil, fmt.Errorf("host wrapper %q is a symlink; refusing to fingerprint it", name)
 		}
-		return true
-	}
-	var mcpNames, binPairs []string
-	for _, m := range b.MCP {
-		mcpNames = append(mcpNames, m.Name)
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return "", nil, fmt.Errorf("host wrapper %q: %v (cannot fingerprint the host-exec surface; fail closed)", name, err)
+		}
+		sum := sha256.Sum256(data)
+		sha := hex.EncodeToString(sum[:])
+		proxySHA[name] = sha
+		lines = append(lines, "proxy\x00"+name+"\x00"+sha)
 	}
 	for _, bn := range b.Bins {
-		binPairs = append(binPairs, packBinPair(bn))
+		lines = append(lines, "bin\x00"+bn.Name+"\x00"+strings.ToLower(strings.TrimSpace(bn.SHA)))
 	}
-	return subset(mcpNames, l.AcceptedMCP) &&
-		subset(b.Proxies, l.AcceptedHostProxies) &&
-		subset(binPairs, l.AcceptedBins) &&
-		subset(b.Egress, l.AcceptedEgress) &&
-		subset(b.Creds, l.AcceptedCreds)
-}
-
-// acceptHostBoM records b as the accepted BoM on lock (called only after the
-// gate passed, or when the prior acceptance already covered b). Acceptance is
-// always set to the CURRENT BoM — shrinking is deliberate hygiene: a facet
-// dropped and later re-added re-prompts, which errs on the safe side. A Tier-0
-// BoM clears every accepted field.
-func acceptHostBoM(lock *packLock, b hostBoM) {
-	lock.AcceptedMCP, lock.AcceptedHostProxies, lock.AcceptedBins = nil, nil, nil
-	lock.AcceptedEgress, lock.AcceptedCreds = nil, nil
-	for _, m := range b.MCP {
-		lock.AcceptedMCP = append(lock.AcceptedMCP, m.Name)
+	for _, e := range b.Egress {
+		lines = append(lines, "egress\x00"+e)
 	}
-	lock.AcceptedHostProxies = append(lock.AcceptedHostProxies, b.Proxies...)
-	for _, bn := range b.Bins {
-		lock.AcceptedBins = append(lock.AcceptedBins, packBinPair(bn))
+	for _, c := range b.Creds {
+		lines = append(lines, "cred\x00"+c)
 	}
-	lock.AcceptedEgress = append(lock.AcceptedEgress, b.Egress...)
-	lock.AcceptedCreds = append(lock.AcceptedCreds, b.Creds...)
+	sort.Strings(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return hex.EncodeToString(sum[:]), proxySHA, nil
 }
 
 // renderHostBoM prints the review screen: exactly what would run on the host,
