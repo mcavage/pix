@@ -41,7 +41,7 @@ const GROUPS: Array<{ title: string; members: string[] }> = [
 		],
 	},
 	{ title: "DATA", members: ["gworkspace", "ingest", "enrich"] },
-	{ title: "SYSTEM", members: ["onboard", "promote", "model-refresh"] },
+	{ title: "SYSTEM", members: ["onboarding", "promote", "model-refresh"] },
 ];
 
 // Skills that are reference rules (auto-load as conventions) — hidden from the
@@ -433,7 +433,7 @@ function buildDetail(pi: any, ctx: any, query: string): string {
 
 function gettingStarted(ctx: any): string {
 	// Mark's voice: direct, concrete, no em-dashes, no slop. Skill names match
-	// what's loaded (build/plan/debug/ship/healthcheck/onboard all present).
+	// what's loaded (build/plan/debug/ship/healthcheck/onboarding all present).
 	// Colored so it doesn't render at the faint `dim` wrapper (see painter note).
 	const p = painter(ctx);
 	const t = p.text; // body prose at default (readable) foreground
@@ -445,9 +445,9 @@ function gettingStarted(ctx: any): string {
 		"",
 		p.head("Five things to try:"),
 		"",
-		t("  1. ") + c("/skill:onboard"),
-		t("     Seed who you are and what you're working on into memory. Do this"),
-		t("     first, everything else gets sharper once it knows you."),
+		t("  1. Just start working."),
+		t("     No setup ritual. It remembers what matters as you go, so it gets"),
+		t("     sharper every session on its own."),
 		"",
 		t("  2. Build something."),
 		t("     Describe the task in plain words, then ") + c("/skill:build") + t(". For"),
@@ -471,13 +471,13 @@ function gettingStarted(ctx: any): string {
 		"",
 		// The user complained the old tour "just dumps me and asks questions".
 		// End on ONE unambiguous do-this-now action, not open questions.
-		p.head("Start here, type this now:"),
+		p.head("Start here:"),
 		"",
-		"    " + c("/skill:onboard"),
-		"",
-		t("Then describe your first task and run ") +
+		t("Describe your first task in plain words. ") +
 			c("/skill:build") +
-			t(". Stuck? Run ") +
+			t(" for a feature, ") +
+			c("/skill:debug") +
+			t(" for a bug. Stuck? Run ") +
 			c("pi-stack doctor") +
 			t("."),
 	].join("\n");
