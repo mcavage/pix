@@ -127,3 +127,29 @@ func TestSetupProvisionKeys_NoSbxFailsOpen(t *testing.T) {
 		t.Error("non-interactive must not prompt for refs")
 	}
 }
+
+func TestHostModeProviderKeys(t *testing.T) {
+	mk := func(hostmode string) shellEnv {
+		return shellEnv{
+			getenv: func(k string) string {
+				if k == "XDG_CONFIG_HOME" {
+					return "/cfg"
+				}
+				return ""
+			},
+			readFile: func(p string) (string, error) {
+				if p == filepath.Join("/cfg", "pi-stack", "hostmode.env") {
+					return hostmode, nil
+				}
+				return "", os.ErrNotExist
+			},
+		}
+	}
+	if got := hostModeProviderKeys(mk("")); len(got) != 0 {
+		t.Errorf("empty hostmode.env: want none, got %v", got)
+	}
+	got := hostModeProviderKeys(mk("OPENAI_API_KEY=op://v/o/k\nANTHROPIC_API_KEY=op://v/a/k\nSLACK_TOKEN=op://v/s/t\n"))
+	if len(got) != 2 || got[0] != "anthropic" || got[1] != "openai" {
+		t.Errorf("want [anthropic openai] sorted, got %v", got)
+	}
+}

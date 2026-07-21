@@ -104,6 +104,27 @@ func providerRefSet(env shellEnv, envVar string) bool {
 	return false
 }
 
+// hostModeProviderKeys lists the provider sbx-names (anthropic/openai/google)
+// that have a FILLED op:// ref in hostmode.env — i.e. the cloud models host mode
+// can actually reach (it doesn't use the sandbox proxy). Sorted, deduped-by-input.
+func hostModeProviderKeys(env shellEnv) []string {
+	var names []string
+	if env.readFile == nil {
+		return names
+	}
+	content, err := env.readFile(hostModeRefsPath(env))
+	if err != nil {
+		return names
+	}
+	for _, r := range parseOpRefs(content) {
+		if name, ok := providerKeyRefs[r.key]; ok && r.isRef && !r.placeholder {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 // mirrorProviderRefsToHostMode copies every FILLED provider-key op:// ref from
 // op-refs.env into hostmode.env, so host mode's `op run --env-file=hostmode.env`
 // has the same model keys as the sandbox even when the refs were set BEFORE this

@@ -275,18 +275,27 @@ func seedIdentity(env shellEnv, out io.Writer) {
 	if id.Name == "" && id.Email == "" {
 		return
 	}
-	if id.Name != "" {
-		fmt.Fprintf(out, "\nHi %s — I'll carry that into your sessions.\n", id.Name)
-	}
-	c := memoryClient()
-	if !c.Up() {
-		return
-	}
-	if id.Name != "" {
-		_, _ = c.Call("remember", map[string]any{"content": "The user's name is " + id.Name + ".", "source": "setup", "profile": "default"})
-	}
+	who := id.Name
 	if id.Email != "" {
-		_, _ = c.Call("remember", map[string]any{"content": "The user's git email is " + id.Email + ".", "source": "setup", "profile": "default"})
+		who = strings.TrimSpace(who + " <" + id.Email + ">")
+	}
+	// State it factually and NAME the source (git config) so it isn't mysterious.
+	// The warm by-first-name greeting belongs to the in-session agent, not this log.
+	seeded := false
+	if c := memoryClient(); c.Up() {
+		if id.Name != "" {
+			_, _ = c.Call("remember", map[string]any{"content": "The user's name is " + id.Name + ".", "source": "setup", "profile": "default"})
+			seeded = true
+		}
+		if id.Email != "" {
+			_, _ = c.Call("remember", map[string]any{"content": "The user's git email is " + id.Email + ".", "source": "setup", "profile": "default"})
+			seeded = true
+		}
+	}
+	if seeded {
+		fmt.Fprintf(out, "\nIdentity (from your git config): %s — saved so your sessions know you.\n", who)
+	} else {
+		fmt.Fprintf(out, "\nIdentity (from your git config): %s\n", who)
 	}
 }
 
@@ -315,14 +324,15 @@ func setupHostMode(env shellEnv, out io.Writer) {
 			return
 		}
 	}
-	fmt.Fprintln(out, "host mode: enabled + provisioned (launch: pi-stack host).")
-	// Honest note (no prompt): host mode reaches cloud models ONLY through op://
-	// refs (it doesn't use the sandbox proxy). If none are wired — e.g. the keys are
-	// raw sbx secrets with no 1Password ref — host mode is Ollama-only until refs
-	// are added.
-	if !providerKeyRefsPresent(env) {
-		fmt.Fprintln(out, "  note: no 1Password key refs yet, so host mode is Ollama-only until you add them")
-		fmt.Fprintln(out, "  (pi-stack secret set ANTHROPIC_API_KEY op://Vault/Item/field).")
+	// Report BOTH axes so "is host mode on?" is never ambiguous: it's enabled +
+	// provisioned (the command works), AND which cloud keys it actually has. Host
+	// mode reaches cloud models ONLY through op:// refs in hostmode.env (it does not
+	// use the sandbox proxy); with none it runs Ollama-only.
+	if keys := hostModeProviderKeys(env); len(keys) > 0 {
+		fmt.Fprintf(out, "host mode: enabled + provisioned; cloud keys wired (%s). Launch: pi-stack host\n", strings.Join(keys, ", "))
+	} else {
+		fmt.Fprintln(out, "host mode: enabled + provisioned, but Ollama-only — no 1Password key refs in hostmode.env yet.")
+		fmt.Fprintln(out, "  add them: pi-stack secret set ANTHROPIC_API_KEY op://Vault/Item/field (then re-run setup).")
 	}
 }
 
