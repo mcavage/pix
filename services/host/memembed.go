@@ -153,8 +153,9 @@ func memWatcherWarm() {
 	}
 	body, _ := json.Marshal(map[string]any{
 		"model": m, "stream": false,
-		"messages": []map[string]any{{"role": "user", "content": "ok"}},
-		"options":  map[string]any{"num_predict": 1},
+		"keep_alive": "10m", // stay resident so the first real capture isn't a cold reload
+		"messages":   []map[string]any{{"role": "user", "content": "ok"}},
+		"options":    map[string]any{"num_predict": 1},
 	})
 	client := &http.Client{Timeout: 5 * time.Minute} // generous: a cold load can be slow
 	res, err := client.Post(ollamaHost()+"/api/chat", "application/json", bytes.NewReader(body))
@@ -347,19 +348,17 @@ func extractJSONObject(s string) string {
 
 func memWatch(user string) *watchResult {
 	model := memWatcherModel()
-	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"facts":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"events":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"corrections": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"valence":     map[string]any{"type": "number"},
-		},
-		"required": []string{"facts", "events", "corrections", "valence"},
-	}
+	// NO constrained `format` schema. ollama's grammar-constrained decode hung the
+	// watcher (90s timeouts on qwen3.5:9b even for a 13-char input; nil on
+	// gemma4:e4b-mlx). The system prompt already fully specifies the JSON shape
+	// (facts/events/corrections/valence) and says "Output only the JSON", and we
+	// parse it leniently (extractJSONObject). Unconstrained decode is fast and works
+	// across models. num_predict caps a runaway; keep_alive avoids cold reloads
+	// between captures (a cold 9B reload was part of the 90s).
 	body, _ := json.Marshal(map[string]any{
-		"model": model, "stream": false, "format": schema,
-		"options": map[string]any{"temperature": 0},
+		"model": model, "stream": false,
+		"keep_alive": "10m",
+		"options":    map[string]any{"temperature": 0, "num_predict": 512},
 		"messages": []map[string]any{
 			{"role": "system", "content": memWatcherSystem},
 			{"role": "user", "content": user},
