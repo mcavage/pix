@@ -10,16 +10,16 @@ Run after a build or config change, when something feels off, or before shipping
 Two parts. Run the one the user asked for; run both for a full check ("is
 everything healthy?"). Lead with a one-line verdict per part, then the detail.
 
-- **Part A — Harness health:** is *pi-stack itself* working?
-- **Part B — Code health:** is *this repo's code* in good shape?
+- **Part A, Harness health:** is *pi-stack itself* working?
+- **Part B, Code health:** is *this repo's code* in good shape?
 
 ---
 
-## Part A — Harness health
+## Part A, Harness health
 
 **Exercise, don't assume presence.** A thing on PATH, a registered MCP server, or
 a listed tool is NOT proof it works. Every external dependency gets a live, cheap,
-read-only call, and you report what came back. `command -v <x>` (never `which` —
+read-only call, and you report what came back. `command -v <x>` (never `which` -
 the DHI trixie base ships without it) tells you a CLI exists; only running it
 tells you it works. No step is optional; skipping one and marking it OK is a
 false signal.
@@ -35,13 +35,27 @@ Anthropic + OpenAI are required (the model cycle and the cross-vendor `review`
 agent). Gemini is optional.
 
 ### A2. Memory service
+This raw curl is an explicit **harness diagnostic**, it hits the daemon directly
+to verify the service itself is up, separate from whether any memory has been
+captured yet. It is NOT how a normal agent workflow reads memory; that's the
+`memory_recall`/`memory_stats` tools (or `/recall`/`/learnings` in the
+sandbox, `pi-stack memory stats` on the host), which is the path to point
+someone at for actually using memory.
 ```bash
 curl -s -m3 -X POST "${MEMORY_URL:-http://host.docker.internal:11435}" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"stats"}' || echo "no memory service"
+  -d '{"jsonrpc":"2.0","id":1,"method":"health"}' || echo "no memory service"
 ```
-A stats response means recall + capture are live. "no memory service" means the
-host has not started it (`make memory-serve` / `pi-stack serve` on the host); the
-harness still works, recall is just empty.
+Reads as `{"ok":true,"vector":<bool>,"capture":<bool>,"captureReason":"<string>","watcherModel":"<name>"}`.
+`ok` means the daemon answered at all, "no memory service" (a failed curl)
+means the host hasn't started it (`make memory-serve` / `pi-stack serve` on the
+host); the harness still works, recall is just empty. Given `ok`, report the
+other fields as **daemon-reported state**, not proof of a live inference:
+`vector:true` means the startup embedding probe succeeded, but a later failure
+can still force keyword-only fallback; `capture:true` means the watcher is not
+currently latched unavailable, but it does not prove the next chat request will
+finish. `capture:false` plus `captureReason` is a confirmed degraded state, so
+quote that reason. A full end-to-end check requires an actual recall/capture
+operation; do not certify those paths from `health` alone.
 
 ### A3. MCP servers
 ```
@@ -62,20 +76,20 @@ for c in gh $EXTRA_CLIS; do
 done
 ```
 For each present CLI, run a cheap live probe and read the output: `gh --version`
-(`gh auth status` saying "not logged in" is expected — the proxy injects creds at
+(`gh auth status` saying "not logged in" is expected, the proxy injects creds at
 the network layer, NOT a fail). `gh` is always baked. Any overlay-provided
 wrapper CLI (set `EXTRA_CLIS` from memory/overlay) is optional: absent is fine,
 present-but-erroring on its cheapest read-only probe IS a failure. Wrapper CLIs
 often reject `--help`/`--version`, so probe a real read-only subcommand, not the
 flag.
 
-Google Workspace is NOT a CLI anymore — it's the read-only `gog` MCP server the
+Google Workspace is NOT a CLI anymore, it's the read-only `gog` MCP server the
 sbx gateway spawns (there is no Workspace binary to probe). Confirm it two ways:
-`sbx mcp ls` lists `gog` as registered (skip if `sbx` is absent — inside the
+`sbx mcp ls` lists `gog` as registered (skip if `sbx` is absent, inside the
 sandbox it is), and the gateway exposes its tools in A3 (group the gateway tool
 list for a `gog_*`/`gmail_*` prefix and call one cheap read-only tool, e.g. a
 `gmail_search`/`drive_search` with a tiny limit). Registered-but-0-tools IS a
-failure — it usually means the headless keyring/op-refs setup is off (run
+failure, it usually means the headless keyring/op-refs setup is off (run
 `pi-stack doctor` on the host, which probes the exact gateway spawn).
 
 ### A5. Agent roster
@@ -97,7 +111,7 @@ ls ~/.pi/agent/skills | wc -l
 ```
 Report the count (expect dozens); spot-check two or three have a non-empty
 SKILL.md. Then confirm scoping holds: a read-only role (`fanout`, `qa-lead`) has
-no write/edit in its `tools:`, a builder (`engineer`) does — read the frontmatter.
+no write/edit in its `tools:`, a builder (`engineer`) does, read the frontmatter.
 
 ### Part A report
 A table per check: OK / FAIL / optional + a one-line note, covering keys, memory,
@@ -109,12 +123,12 @@ so; do not imply coverage you didn't run.
 
 ---
 
-## Part B — Code health
+## Part B, Code health
 
 Run every detectable quality check, score it, compare to history, emit a compact
 dashboard with the highest-impact fixes first.
 
-### Detection (auto-detect from project files; SKIPPED, not CRITICAL, when a tool genuinely isn't present — never invent one)
+### Detection (auto-detect from project files; SKIPPED, not CRITICAL, when a tool genuinely isn't present, never invent one)
 | Category | Weight | Detect via |
 |---|---|---|
 | Tests | 30% | `package.json` scripts, `pytest.ini`, `go.mod`, `Cargo.toml` |

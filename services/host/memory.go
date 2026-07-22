@@ -87,7 +87,7 @@ const memProfileVisible = "(profile IS NULL OR profile = '' OR profile = 'defaul
 // memProfileStorage is the SQL WHERE fragment (with one bound arg) matching the
 // EXACT storage bucket of a row: its normalized profile equals the bound value.
 // Unlike memProfileVisible (the read-time union), this is the write-time bucket
-// used for dedupe/reaffirm/synthesis/ownership — so `work` remembering text that
+// used for dedupe/reaffirm/synthesis/ownership, so `work` remembering text that
 // `personal` already has creates a NEW work row rather than reaffirming
 // personal's. Bind the normalized profile (memNormProfile) as the single arg.
 const memProfileStorage = "COALESCE(NULLIF(profile,''),'default') = ?"
@@ -153,7 +153,7 @@ func newMemStore(path string, embedder func(string) []float64) (*memStore, error
 	}
 	// Schema-version guard: read the CURRENT user_version BEFORE memSchema (which
 	// unconditionally stamps 1). A db written by a NEWER binary (version > 1) must
-	// be refused loudly, never silently downgraded to the 1 marker — that would
+	// be refused loudly, never silently downgraded to the 1 marker, that would
 	// corrupt a forward-incompatible schema. Only proceed (and stamp 1) when the
 	// current version is <= 1.
 	var curVersion int
@@ -161,7 +161,7 @@ func newMemStore(path string, embedder func(string) []float64) (*memStore, error
 		return nil, err
 	}
 	if curVersion > 1 {
-		return nil, fmt.Errorf("database schema v%d is newer than this binary supports (1) — upgrade pi-stack", curVersion)
+		return nil, fmt.Errorf("database schema v%d is newer than this binary supports (1), upgrade pi-stack", curVersion)
 	}
 	if _, err := db.Exec(memSchema); err != nil {
 		return nil, err
@@ -181,12 +181,71 @@ func newMemStore(path string, embedder func(string) []float64) (*memStore, error
 		}
 	}
 	// Stamp the current schema version. memSchema already sets it for a fresh DB,
-	// but a migrated legacy DB predates the pragma — set it explicitly so
+	// but a migrated legacy DB predates the pragma, set it explicitly so
 	// backup/restore can detect version drift later.
 	if _, err := db.Exec("PRAGMA user_version = 1"); err != nil {
 		return nil, err
 	}
+	// Idempotent data migration (no schema change): shorten any pre-existing
+	// watcher/perishable rows still carrying the old 21-day TTL down to the
+	// current 7-day TTL. See migrateLegacyWatcherPerishableTTL.
+	if err := migrateLegacyWatcherPerishableTTL(db); err != nil {
+		return nil, err
+	}
 	return &memStore{db: db, embedder: embedder}, nil
+}
+
+// migrateLegacyWatcherPerishableTTL is an idempotent startup migration, run on
+// every newMemStore. Before this change, a watcher-captured perishable event
+// got a 21-day TTL (memCapture now uses 7); a database written by an older
+// binary can still have active rows expiring up to 21 days out. Shorten ONLY
+// those rows, source='watcher', durability='perishable', not deleted, and
+// expiring later than created_at+7d, down to created_at+7d, in place. This
+// never touches a user-created row (source='user'/'agent'/anything else) or a
+// row someone gave a custom/shorter TTL: a row already at or before
+// created_at+7d is left exactly as it is. No schema change, safe to run on
+// every startup.
+func migrateLegacyWatcherPerishableTTL(db *sql.DB) error {
+	rows, err := db.Query(
+		"SELECT id, created_at, expires_at FROM memories WHERE source = 'watcher' AND durability = 'perishable' AND deleted_at IS NULL AND expires_at IS NOT NULL",
+	)
+	if err != nil {
+		return err
+	}
+	type legacyRow struct{ id, createdAt, expiresAt string }
+	var candidates []legacyRow
+	for rows.Next() {
+		var r legacyRow
+		if err := rows.Scan(&r.id, &r.createdAt, &r.expiresAt); err != nil {
+			rows.Close()
+			return err
+		}
+		candidates = append(candidates, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	for _, r := range candidates {
+		created, ok := parseTimeStrict(r.createdAt)
+		if !ok {
+			continue // unparseable created_at: leave the row alone rather than guess
+		}
+		expires, ok := parseTimeStrict(r.expiresAt)
+		if !ok {
+			continue
+		}
+		ttlCap := created.Add(7 * 24 * time.Hour)
+		if !expires.After(ttlCap) {
+			continue // already at or before the 7-day cap
+		}
+		if _, err := db.Exec("UPDATE memories SET expires_at = ? WHERE id = ?", ttlCap.UTC().Format(time.RFC3339Nano), r.id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // memColumnExists reports whether table has a column named col, via
@@ -378,7 +437,7 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 	// newest memories visible to the requested profile/project, respecting limit
 	// and charBudget. This is what `pi-stack memory recall '*'` and a blank
 	// sandbox /recall both send, and it must work even with no FTS match and no
-	// embedder configured (keyword-only store, or Ollama down) — a relevance-
+	// embedder configured (keyword-only store, or Ollama down), a relevance-
 	// scored query can legitimately return nothing in that case, but "show me
 	// everything" must not.
 	if strings.TrimSpace(query) == "*" {
@@ -443,7 +502,7 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 	}
 
 	// Restrict candidates to the visible set for the active profile: its own rows
-	// UNION the default bucket. An FTS-only hit on an invisible row is harmless —
+	// UNION the default bucket. An FTS-only hit on an invisible row is harmless -
 	// it lands in ftsScore but the row is never scanned by this query, so it can
 	// never become a candidate.
 	where := "SELECT id, kind, content, durability, confidence, frequency, reward, created_at, project, embedding FROM memories WHERE deleted_at IS NULL"
@@ -477,7 +536,7 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 			if json.Unmarshal([]byte(r.embedding.String), &v) == nil {
 				if len(v) != len(queryVec) {
 					// Stored embedding has a different dimension than the current
-					// model — the embedding model changed. memCosine would return 0
+					// model, the embedding model changed. memCosine would return 0
 					// (silent degradation); count it and warn after the loop.
 					dimMismatch++
 				} else {
@@ -519,7 +578,7 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 		cands = append(cands, cand{scoredHit{r.id, r.content, r.kind, r.durability, r.project, score, r.createdAt}, score})
 	}
 	if dimMismatch > 0 {
-		log.Printf("memory: %d stored embeddings have a different dimension than the current model (%d dims) — they degrade to keyword-only. The embedding model likely changed; re-embed to restore semantic recall.", dimMismatch, len(queryVec))
+		log.Printf("memory: %d stored embeddings have a different dimension than the current model (%d dims), they degrade to keyword-only. The embedding model likely changed; re-embed to restore semantic recall.", dimMismatch, len(queryVec))
 	}
 
 	// sort desc by score
@@ -777,7 +836,7 @@ func (s *memStore) stats(profile string) jsonObj {
 // --- JSON-RPC server ---------------------------------------------------------
 
 // memoryMux is the standalone entry (runMemory): it builds the store and fatals
-// on failure. runServe does NOT use this path — it calls buildMemStore directly
+// on failure. runServe does NOT use this path, it calls buildMemStore directly
 // and routes a failure through its cleanup-aware fatal (F3), then newMemoryMux.
 func memoryMux() http.Handler {
 	store, hasEmb, err := buildMemStore()
@@ -831,14 +890,14 @@ func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 			if strings.TrimSpace(user) == "" {
 				return jsonObj{"accepted": false}, nil
 			}
-			// Don't claim success when the watcher model can't run — the capture
+			// Don't claim success when the watcher model can't run, the capture
 			// would be silently dropped. Tell the caller why (recall still works).
 			// watcherCaptureAvailable re-probes (throttled) so capture recovers the
 			// moment the user pulls the model, without a daemon restart.
 			if !watcherCaptureAvailable() {
 				reason := getWatcherReason()
 				if reason == "" {
-					reason = "watcher model unavailable — run `ollama pull " + memWatcherModel() + "` (or set MEMORY_WATCHER_MODEL)"
+					reason = "watcher model unavailable, run `ollama pull " + memWatcherModel() + "` (or set MEMORY_WATCHER_MODEL)"
 				}
 				return jsonObj{"accepted": false, "reason": reason + "; recall still works"}, nil
 			}
@@ -850,7 +909,7 @@ func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 				go memCapture(store, user, project, hasProj, profile)
 				return jsonObj{"accepted": true}, nil
 			default:
-				return jsonObj{"accepted": false, "reason": "capture busy (too many in flight); retry shortly — recall still works"}, nil
+				return jsonObj{"accepted": false, "reason": "capture busy (too many in flight); retry shortly, recall still works"}, nil
 			}
 		},
 	}
@@ -1004,7 +1063,7 @@ func profileFromParams(p jsonObj) string {
 // Each capture makes a watcher-model (Ollama) call, so an unbounded `go
 // memCapture` per observe entry let a single sandbox-issued JSON-RPC BATCH
 // (thousands of observe calls inside the 1 MiB body cap) spawn thousands of
-// goroutines and concurrent Ollama requests on the host — a trivial local DoS.
+// goroutines and concurrent Ollama requests on the host, a trivial local DoS.
 // The observe handler acquires memCaptureSem non-blockingly and applies
 // honest backpressure (accepted:false) when saturated.
 const memCaptureMaxConcurrency = 8
@@ -1016,13 +1075,48 @@ func memCapture(store *memStore, user, project string, hasProj bool, profile str
 	defer func() { <-memCaptureSem }()
 	// Observability: make every capture attempt visible. memWatch logs its own
 	// errors (Ollama down, HTTP != 200), but a 200 with unparseable/empty content
-	// returns nil SILENTLY — the exact "capture on but 0 facts" black box. Log it.
+	// returns nil SILENTLY, the exact "capture on but 0 facts" black box. Log it.
 	log.Printf("memory: observe -> watcher (user %d chars, project %q, profile %q)", len(user), project, profile)
 	w := memWatch(user)
 	if w == nil {
-		log.Printf("memory: watcher returned nil (no extraction) — nothing captured")
+		log.Printf("memory: watcher returned nil (no extraction), nothing captured")
 		return
 	}
+	// A question-only user message asserts nothing, so any "facts" the watcher
+	// still extracted from it are a false positive (the observed failure: "so
+	// are you using my memories?" -> "user is using memory"). Drop facts
+	// deterministically rather than trust the model's own judgment here.
+	// Corrections are exempt: a correction phrased as a polite question
+	// ("Can you stop using em dashes?") is still a real, capturable rule.
+	if len(w.Facts) > 0 && questionOnlyUserMessage(user) {
+		log.Printf("memory: dropping %d fact(s), user message was question-only, no assertions to extract", len(w.Facts))
+		w.Facts = nil
+	}
+	// Noise filter: facts and events are session narration ABOUT the user's
+	// activity ("user asked...", "user ran...") often enough that a conservative
+	// prefix match is worth the (rare) false drop. Corrections are exempt and
+	// NEVER run through this filter: a legitimate correction can be phrased
+	// exactly like the noise patterns ("The user requested the agent stop doing
+	// X" is a real, capturable rule, not narration), so filtering that channel
+	// would eat real corrections for no benefit.
+	dropNoise := func(label string, in []string) []string {
+		out := make([]string, 0, len(in))
+		dropped := 0
+		for _, s := range in {
+			if watcherNoise(s) {
+				dropped++
+				continue
+			}
+			out = append(out, s)
+		}
+		if dropped > 0 {
+			log.Printf("memory: dropped %d watcher %s item(s) as session-narration noise", dropped, label)
+		}
+		return out
+	}
+	w.Facts = dropNoise("fact", w.Facts)
+	w.Events = dropNoise("event", w.Events)
+
 	rewardSeed := w.Valence * 0.3
 	rem := func(content, kind, durability string, ttl int, conf float64) {
 		store.remember(rememberInput{content: content, kind: kind, durability: durability, ttlDays: ttl,
@@ -1033,7 +1127,10 @@ func memCapture(store *memStore, user, project string, hasProj bool, profile str
 		rem(f, "fact", "durable", 0, 0.65)
 	}
 	for _, e := range w.Events {
-		rem(e, "fact", "perishable", 21, 0.6)
+		// 7-day TTL (was 21): watcher events are perishable session status, and
+		// 21 days let stale "currently doing X" rows linger and get recalled long
+		// after they went false.
+		rem(e, "fact", "perishable", 7, 0.6)
 	}
 	for _, c := range w.Corrections {
 		rem(c, "learning", "durable", 0, 0.75)
@@ -1076,4 +1173,17 @@ func parseTime(s string) time.Time {
 		}
 	}
 	return time.Now()
+}
+
+// parseTimeStrict is parseTime without the time.Now() fallback: a migration
+// that decides whether to rewrite a row must never treat an unparseable
+// timestamp as "now", which would silently shorten a row it should have left
+// alone. Callers get an explicit ok=false instead.
+func parseTimeStrict(s string) (time.Time, bool) {
+	for _, f := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(f, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }

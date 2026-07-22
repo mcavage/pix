@@ -6,7 +6,12 @@
 // a fresh module instance via a cache-busting query string.
 import assert from "node:assert";
 import * as http from "node:http";
+import { register } from "node:module";
 import { test } from "node:test";
+
+// memory-recall.ts imports `typebox` for the tool schemas; stub it (and the
+// other pi runtime packages) so plain node can import the extension.
+register("./stub-loader.mjs", import.meta.url);
 
 // A minimal fake memory daemon: records every JSON-RPC request it receives and
 // replies with a canned result per method. Lets tests assert on query/timeout
@@ -70,6 +75,26 @@ function getRecallHandler(mod, pi) {
 	return handler;
 }
 
+// Captures every registered slash command and tool so tool tests can exercise
+// memory_recall/memory_stats directly.
+function capturePi(mod) {
+	const commands = new Map();
+	const tools = new Map();
+	mod.default({
+		on() {},
+		registerCommand(name, cfg) {
+			commands.set(name, cfg);
+		},
+		registerTool(t) {
+			tools.set(t.name, t);
+		},
+	});
+	return { commands, tools };
+}
+
+const noopCtx = { cwd: process.cwd() };
+const toolText = (r) => r.content?.map((c) => c.text ?? "").join("\n") ?? "";
+
 // ── (1) blank args query "*" (show everything), matching the host CLI ───────
 test("blank /recall queries '*' instead of an empty string", async (t) => {
 	const { server, requests } = makeFakeDaemon(() => ({ hits: [] }));
@@ -87,10 +112,15 @@ test("blank /recall queries '*' instead of an empty string", async (t) => {
 	for (const req of requests) {
 		assert.equal(req.method, "recall");
 		assert.equal(req.params.query, "*");
+		// A blank /recall means "show everything": it must ask for the full
+		// 100-row cap and a charBudget large enough that the daemon's 1200-char
+		// default doesn't truncate the response long before `limit` kicks in.
+		assert.equal(req.params.limit, 100);
+		assert.equal(req.params.charBudget, 1_000_000);
 	}
 });
 
-test("an explicit /recall query is passed through unchanged", async (t) => {
+test("an explicit /recall query is passed through unchanged, keeping the daemon's own defaults", async (t) => {
 	const { server, requests } = makeFakeDaemon(() => ({ hits: [] }));
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
@@ -99,6 +129,21 @@ test("an explicit /recall query is passed through unchanged", async (t) => {
 
 	await handler("  docker sandboxes  ", fakeCtx([]));
 	assert.equal(requests[0].params.query, "docker sandboxes");
+	assert.equal(requests[0].params.limit, undefined, "an explicit query must not override the daemon's own limit default");
+	assert.equal(requests[0].params.charBudget, undefined, "an explicit query must not override the daemon's own charBudget default");
+});
+
+test("/recall on '*' appends a truncation notice when the daemon returns a full 100-hit page", async (t) => {
+	const hits = Array.from({ length: 100 }, (_, i) => ({ id: `id${i}`.padEnd(8, "0"), kind: "fact", durability: "durable", content: `fact ${i}` }));
+	const { server } = makeFakeDaemon(() => ({ hits }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+	const handler = getRecallHandler(mod);
+
+	const notes = [];
+	await handler(undefined, fakeCtx(notes));
+	assert.match(notes[0].msg, /truncated at 100 hits/i);
 });
 
 // Rendered hits preserve the RFC3339 offset supplied by the host daemon. The
@@ -195,7 +240,7 @@ test("a JSON-RPC error surfaces a visible error instead of '(nothing)'", async (
 
 test("a slow daemon past the command timeout surfaces a visible error, not a hang", async (t) => {
 	const server = http.createServer((req, res) => {
-		// Never respond — forces the client-side timeout to fire.
+		// Never respond, forces the client-side timeout to fire.
 	});
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
@@ -242,7 +287,7 @@ test("/recall survives a delay well past the default 2s auto-recall timeout", as
 test("the auto-recall hook (before_agent_start) stays silent on a dead daemon", async () => {
 	// Same dead endpoint as the transport-error /recall test above, but through
 	// the registered before_agent_start hook (the auto-injection path, still
-	// wrapped in safe()) — must resolve to undefined, never throw, never notify.
+	// wrapped in safe()), must resolve to undefined, never throw, never notify.
 	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1" });
 	let hookHandler = null;
 	mod.default({
@@ -259,4 +304,219 @@ test("the auto-recall hook (before_agent_start) stays silent on a dead daemon", 
 test("buildRecallBlock itself rejects on a dead daemon (safe() is the hook's job, not buildRecallBlock's)", async () => {
 	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1" });
 	await assert.rejects(() => mod.buildRecallBlock("some prompt"));
+});
+
+// ── typed agent-facing tools (memory_recall/memory_stats, read-only) ───────
+
+test("only the two read-only memory tools are registered; write/delete stay human slash commands", async () => {
+	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1" });
+	const { commands, tools } = capturePi(mod);
+	assert.deepEqual([...tools.keys()].sort(), ["memory_recall", "memory_stats"]);
+	assert.ok(!tools.has("memory_remember"), "memory_remember must not be agent-callable");
+	assert.ok(!tools.has("memory_forget"), "memory_forget must not be agent-callable");
+	for (const name of ["recall", "remember", "forget", "learnings"]) {
+		assert.ok(commands.has(name), `/${name} command still registered`);
+	}
+});
+
+test("memory_recall defaults query to '*', requests up to 100 rows with a large charBudget, and returns formatted hit lines", async (t) => {
+	const { server, requests } = makeFakeDaemon(() => ({
+		hits: [
+			{ id: "abcdef1234567890", kind: "fact", durability: "durable", content: "hello", createdAt: null },
+		],
+	}));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+	const { tools } = capturePi(mod);
+
+	const r = await tools.get("memory_recall").execute("id", {}, undefined, undefined, noopCtx);
+	assert.equal(requests[0].method, "recall");
+	assert.equal(requests[0].params.query, "*");
+	assert.equal(requests[0].params.limit, 100, "'*' defaults to the full 100-row cap, not the search default of 6");
+	assert.equal(requests[0].params.charBudget, 1_000_000, "'*' must not be truncated by the daemon's 1200-char default");
+	assert.equal(toolText(r), "• [abcdef12] (fact/durable) hello");
+});
+
+test("memory_recall keeps a search default of 6 (and no charBudget override) for an explicit non-'*' query", async (t) => {
+	const { server, requests } = makeFakeDaemon(() => ({ hits: [] }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+	const { tools } = capturePi(mod);
+
+	await tools.get("memory_recall").execute("id", { query: "docker sandboxes" }, undefined, undefined, noopCtx);
+	assert.equal(requests[0].params.query, "docker sandboxes");
+	assert.equal(requests[0].params.limit, 6, "an explicit search query keeps the default limit of 6");
+	assert.equal(requests[0].params.charBudget, undefined, "an explicit search query must not get the '*' charBudget override");
+});
+
+test("memory_recall passes an explicit query through and clamps limit to 1..100", async (t) => {
+	const { server, requests } = makeFakeDaemon(() => ({ hits: [] }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+	const { tools } = capturePi(mod);
+	const recall = tools.get("memory_recall");
+
+	await recall.execute("id", { query: "docker sandboxes", limit: 250 }, undefined, undefined, noopCtx);
+	assert.equal(requests[0].params.query, "docker sandboxes");
+	assert.equal(requests[0].params.limit, 100, "limit clamps to the 100 max");
+
+	await recall.execute("id", { limit: 0 }, undefined, undefined, noopCtx);
+	assert.equal(requests[1].params.limit, 1, "limit clamps to the 1 min");
+
+	const r = await recall.execute("id", {}, undefined, undefined, noopCtx);
+	assert.equal(toolText(r), "(nothing)");
+});
+
+test("memory_recall appends a clear truncation line when hits.length equals the effective limit", async (t) => {
+	const hits = Array.from({ length: 3 }, (_, i) => ({ id: `id${i}`.padEnd(8, "0"), kind: "fact", durability: "durable", content: `fact ${i}` }));
+	const { server } = makeFakeDaemon(() => ({ hits }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+	const { tools } = capturePi(mod);
+
+	const r = await tools.get("memory_recall").execute("id", { query: "x", limit: 3 }, undefined, undefined, noopCtx);
+	assert.match(toolText(r), /truncated at 3 hits/i, "hits.length === limit must append a truncation line");
+});
+
+test("memory_recall does NOT append a truncation line when hits.length is below the limit", async (t) => {
+	const hits = [{ id: "id00000", kind: "fact", durability: "durable", content: "only one" }];
+	const { server } = makeFakeDaemon(() => ({ hits }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+	const { tools } = capturePi(mod);
+
+	const r = await tools.get("memory_recall").execute("id", { query: "x", limit: 6 }, undefined, undefined, noopCtx);
+	assert.doesNotMatch(toolText(r), /truncated/i);
+});
+
+test("memory_recall throws (does not swallow) when the daemon is unreachable", async () => {
+	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1", MEMORY_COMMAND_TIMEOUT_MS: "500" });
+	const { tools } = capturePi(mod);
+	await assert.rejects(() => tools.get("memory_recall").execute("id", {}, undefined, undefined, noopCtx));
+});
+
+test("memory_stats calls the stats RPC with the active profile and returns the raw counts", async (t) => {
+	const { server, requests } = makeFakeDaemon(() => ({ active: 3, durable: 2, perishable: 1 }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+	const { tools } = capturePi(mod);
+
+	const r = await tools.get("memory_stats").execute("id", {}, undefined, undefined, noopCtx);
+	assert.equal(requests[0].method, "stats");
+	assert.deepEqual(JSON.parse(toolText(r)), { active: 3, durable: 2, perishable: 1 });
+});
+
+test("memory_stats throws when the daemon is unreachable", async () => {
+	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1", MEMORY_COMMAND_TIMEOUT_MS: "500" });
+	const { tools } = capturePi(mod);
+	await assert.rejects(() => tools.get("memory_stats").execute("id", {}, undefined, undefined, noopCtx));
+});
+
+// ── buildRecallBlock: perishable relevance floor (silent injection only) ───
+
+test("buildRecallBlock omits a low-score perishable hit but keeps a low-score durable one", async (t) => {
+	const hits = [
+		{ content: "low-score perishable status", durability: "perishable", score: 0.1 },
+		{ content: "low-score durable fact", durability: "durable", score: 0.05 },
+	];
+	const { server } = makeFakeDaemon(() => ({ hits }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+
+	const block = await mod.buildRecallBlock("some prompt");
+	assert.ok(!block.includes("low-score perishable status"), "low-score perishable must be filtered from silent injection");
+	assert.ok(block.includes("low-score durable fact"), "durable hits are never filtered by score");
+});
+
+test("buildRecallBlock keeps a perishable hit at or above the 0.30 floor", async (t) => {
+	const hits = [
+		{ content: "boundary perishable", durability: "perishable", score: 0.3 },
+		{ content: "well above floor perishable", durability: "perishable", score: 0.9 },
+	];
+	const { server } = makeFakeDaemon(() => ({ hits }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+
+	const block = await mod.buildRecallBlock("some prompt");
+	assert.ok(block.includes("boundary perishable"), "exactly 0.30 must be included, not excluded");
+	assert.ok(block.includes("well above floor perishable"));
+});
+
+test("buildRecallBlock returns null when every hit is filtered out", async (t) => {
+	const hits = [{ content: "dropped", durability: "perishable", score: 0.01 }];
+	const { server } = makeFakeDaemon(() => ({ hits }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+
+	assert.equal(await mod.buildRecallBlock("some prompt"), null);
+});
+
+test("the injected block tells the model it's a relevance-filtered subset and to use memory_recall", async (t) => {
+	const hits = [{ content: "some fact", durability: "durable", score: 0.9 }];
+	const { server } = makeFakeDaemon(() => ({ hits }));
+	t.after(() => server.close());
+	const MEMORY_URL = await listen(server);
+	const mod = await loadWithEnv({ MEMORY_URL });
+
+	const block = await mod.buildRecallBlock("some prompt");
+	assert.match(block, /relevance-filtered subset from the host memory daemon, not the full store/);
+	assert.match(block, /Use memory_recall to inspect the store/);
+});
+
+// ── descriptions encode read-only + capability semantics ───────────────────
+//
+// This tool surface (memory_recall/memory_stats) is read-only by design, but
+// that is a UX/safety posture on the AGENT'S TYPED TOOLS, not a security
+// boundary on the daemon: the host memory service is unauthenticated and
+// reachable, so arbitrary sandbox code could still POST to it directly. The
+// descriptions must say the tool surface is read-only without claiming the
+// agent/sandbox is incapable of mutating the store.
+
+test("memory tool descriptions state this tool surface is read-only, without over-claiming the agent/sandbox cannot mutate memory", async () => {
+	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1" });
+	const { tools } = capturePi(mod);
+	for (const name of ["memory_recall", "memory_stats"]) {
+		const d = tools.get(name).description;
+		assert.match(d, /read-only/i, `${name} description`);
+		assert.match(d, /cannot store or delete/i, `${name} description`);
+		assert.match(d, /human-driven slash commands/i, `${name} description`);
+		assert.match(d, /not a security control/i, `${name} description must caveat this is UX posture, not a security boundary`);
+		assert.doesNotMatch(
+			d,
+			/cannot autonomously mutate/i,
+			`${name} description must not claim the agent/sandbox cannot mutate memory (the daemon is unauthenticated and reachable)`,
+		);
+		assert.doesNotMatch(d, /memory_remember/, `${name} description must not reference memory_remember`);
+	}
+});
+
+test("memory_recall description tells the model when to use it and that it can return up to 100 rows, not the whole store", async () => {
+	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1" });
+	const { tools } = capturePi(mod);
+	const d = tools.get("memory_recall").description;
+	assert.match(d, /what is remembered/i);
+	assert.match(d, /memory semantics/i);
+	assert.match(d, /whether the agent can see memory/i);
+	assert.match(d, /up to 100 rows/i, "must describe the real cap, not claim the full/unbounded store");
+	assert.doesNotMatch(d, /the full store/i, "must not claim memory_recall sees the unbounded full store");
+});
+
+test("every memory tool description states direct-daemon access and never shelling out", async () => {
+	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1" });
+	const { tools } = capturePi(mod);
+	for (const name of ["memory_recall", "memory_stats"]) {
+		const d = tools.get(name).description;
+		assert.match(d, /never shell out to `pi-stack` or `curl`/, `${name} description`);
+		assert.match(d, /durable memories have no automatic expiry/i, `${name} description`);
+		assert.match(d, /perishable and expire after 7 days/i, `${name} description`);
+	}
 });

@@ -14,10 +14,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 )
 
 func ollamaHost() string {
@@ -42,12 +44,12 @@ func envMs(key string, defMs int) time.Duration {
 }
 
 // embedTimeout bounds the recall-side /api/embed call (MEMORY_EMBED_TIMEOUT_MS,
-// default 15s) — short, because a wedged Ollama should degrade recall to
+// default 15s), short, because a wedged Ollama should degrade recall to
 // keyword search well within a turn, not hang it.
 func embedTimeout() time.Duration { return envMs("MEMORY_EMBED_TIMEOUT_MS", 15000) }
 
 // watcherTimeout bounds the capture-side /api/chat call (MEMORY_WATCHER_TIMEOUT_MS,
-// default 90s) — generous enough for a slow cold local model load, but bounded:
+// default 90s), generous enough for a slow cold local model load, but bounded:
 // Ollama can accept the connection and never finish inference, and an
 // unbounded http.Post there is exactly how captures silently pile up and vanish.
 func watcherTimeout() time.Duration { return envMs("MEMORY_WATCHER_TIMEOUT_MS", 90000) }
@@ -101,20 +103,20 @@ func memEmbed(text string) []float64 {
 	if err != nil {
 		if !embedDisabled.Swap(true) {
 			// First time latching: log so users know why semantic recall degraded.
-			log.Printf("memory embed: semantic recall DISABLED — embed model unavailable: %v; will retry automatically every %.0fs", err, embedProbeInterval.Seconds())
+			log.Printf("memory embed: semantic recall DISABLED, embed model unavailable: %v; will retry automatically every %.0fs", err, embedProbeInterval.Seconds())
 		}
 		return nil
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
 		if !embedDisabled.Swap(true) {
-			log.Printf("memory embed: semantic recall DISABLED — embed HTTP %d; will retry automatically every %.0fs", res.StatusCode, embedProbeInterval.Seconds())
+			log.Printf("memory embed: semantic recall DISABLED, embed HTTP %d; will retry automatically every %.0fs", res.StatusCode, embedProbeInterval.Seconds())
 		}
 		return nil
 	}
 	// Success: if the flag was set (recovery path), announce the restoration.
 	if embedDisabled.Swap(false) {
-		log.Printf("memory embed: embed model available again — semantic recall RE-ENABLED")
+		log.Printf("memory embed: embed model available again, semantic recall RE-ENABLED")
 	}
 	var parsed struct {
 		Embeddings [][]float64 `json:"embeddings"`
@@ -145,7 +147,7 @@ func memWatcherModel() string {
 // FIRST real capture doesn't pay the cold-load latency that caused watcher
 // timeouts. Best-effort, background, generous cold-load budget, and it does NOT
 // touch the capture availability/degraded flags (warming is priming, not a
-// readiness verdict — memWatch owns that). No-op if the model isn't pulled.
+// readiness verdict, memWatch owns that). No-op if the model isn't pulled.
 func memWatcherWarm() {
 	m := memWatcherModel()
 	if !memOllamaHasModel(m) {
@@ -180,7 +182,7 @@ var watcherReason atomic.Pointer[string]
 
 // watcherDegradedUntil is the unix-nano deadline of a backoff started by a real
 // memWatch() failure (timeout/transport error/non-200). While in this window,
-// watcherCaptureAvailable() returns false WITHOUT re-probing /api/show — that
+// watcherCaptureAvailable() returns false WITHOUT re-probing /api/show, that
 // probe only checks the model is present, which succeeds even while inference
 // itself is wedged, so it must not be allowed to flip capture back to available
 // mid-wedge.
@@ -204,7 +206,7 @@ func isTimeoutErr(err error) bool {
 }
 
 // memOllamaHasModel asks Ollama whether a model is present locally (POST
-// /api/show, no inference) — used by the startup probe and `make doctor` so a
+// /api/show, no inference), used by the startup probe and `make doctor` so a
 // missing watcher model is loud, not a silent dropped capture. Uses
 // modelProbeClient (10-second timeout) so a wedged Ollama cannot leak goroutines
 // via an indefinite hang (H-2).
@@ -230,8 +232,8 @@ func memWatcherProbe() {
 		return
 	}
 	watcherUnavailable.Store(true)
-	setWatcherReason(fmt.Sprintf("model %q is not pulled (or Ollama is down) — run `ollama pull %s`", m, m))
-	log.Printf("memory watcher: model %q is not pulled (or Ollama is down) — fact capture is DISABLED until you run `ollama pull %s` (recall still works). Set MEMORY_WATCHER_MODEL to override.", m, m)
+	setWatcherReason(fmt.Sprintf("model %q is not pulled (or Ollama is down), run `ollama pull %s`", m, m))
+	log.Printf("memory watcher: model %q is not pulled (or Ollama is down), fact capture is DISABLED until you run `ollama pull %s` (recall still works). Set MEMORY_WATCHER_MODEL to override.", m, m)
 }
 
 // watcherProbeInterval throttles the live re-probe so a disabled watcher does not
@@ -243,7 +245,7 @@ var watcherLastProbe atomic.Int64
 
 // watcherCaptureAvailable reports whether fact capture can run RIGHT NOW, and
 // breaks the startup latch. memWatcherProbe() runs once at boot; if Ollama was
-// down or the model unpulled then, watcherUnavailable stayed true forever —
+// down or the model unpulled then, watcherUnavailable stayed true forever -
 // observe() short-circuited before ever calling the watcher, so it could never
 // reset (memWatch only clears the flag on a successful run it never reached).
 // Here, when marked unavailable, we re-probe at most once per interval; the
@@ -251,7 +253,7 @@ var watcherLastProbe atomic.Int64
 // daemon restart. Available is the common path and returns immediately.
 func watcherCaptureAvailable() bool {
 	if time.Now().UnixNano() < watcherDegradedUntil.Load() {
-		// Backing off after a real inference failure — do NOT let the metadata-only
+		// Backing off after a real inference failure, do NOT let the metadata-only
 		// /api/show probe below flip this back to available mid-wedge (it lies:
 		// /api/show succeeds instantly even while /api/chat is hung).
 		return false
@@ -272,10 +274,10 @@ func watcherCaptureAvailable() bool {
 	if memOllamaHasModel(m) {
 		watcherUnavailable.Store(false)
 		setWatcherReason("")
-		log.Printf("memory watcher: model %q is now available — fact capture re-enabled.", m)
+		log.Printf("memory watcher: model %q is now available, fact capture re-enabled.", m)
 		return true
 	}
-	setWatcherReason(fmt.Sprintf("model %q is not pulled (or Ollama is down) — run `ollama pull %s`", m, m))
+	setWatcherReason(fmt.Sprintf("model %q is not pulled (or Ollama is down), run `ollama pull %s`", m, m))
 	return false
 }
 
@@ -302,17 +304,156 @@ The fact-vs-event test: if a statement could become false without the user chang
 
 Hard rules:
 - Only what the USER asserts. A QUESTION states nothing ("which branch do I use?" => all empty).
+- NEVER infer preferences, interests, or tool usage from a question. Asking ABOUT a capability is not evidence the user has it, wants it, or is using it. A question about memory itself, in particular, asserts nothing about the user, never record "user is interested in memory" or "user is using memory" from it. Examples that must produce all-empty output: "so are you using my memories?", "why do we think those are the right things to inject?", "can I see what you remember?", "is memory working right now?", "how does recall pick what to show me?".
 - NEVER record mood or feelings; that is what valence is for.
 - Acknowledgments ("thanks", "great", "cool") => all empty.
 - Code, file names, and one-off task details are not worth saving.
 - When in doubt, leave it out. Empty arrays are the common, correct answer.
-- "facts", "events", and "corrections" are always JSON arrays of strings — never objects, even when empty. An empty list is [], not {}.
+- "facts", "events", and "corrections" are always JSON arrays of strings, never objects, even when empty. An empty list is [], not {}.
 
 Output only the JSON, compact, no prose, no code fence. Exact shape:
 {"facts":[],"events":[],"corrections":[],"valence":0}`
 
+// fencedCodeBlockRE matches a ``` ... ``` fenced code block (any language tag,
+// any content, including newlines) so questionOnlyUserMessage can ignore code
+// entirely rather than mis-splitting it into "sentences".
+var fencedCodeBlockRE = regexp.MustCompile("(?s)```.*?```")
+
+// hasWordChar reports whether s contains at least one letter or digit, used
+// to tell a real clause ("i like cheese") apart from a stray fragment left
+// over from splitting on punctuation (an empty string, or bare punctuation).
+func hasWordChar(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitSentenceClauses splits s into sentence-ish clauses on runs of
+// terminal punctuation (. ! ?), keeping the punctuation attached to the
+// clause it ends. A run of punctuation ("...?", "?!") collapses to its LAST
+// mark, so "explain this...?" still reads as a question. Any trailing text
+// with no terminal punctuation becomes one final clause.
+//
+// A punctuation run only TERMINATES a clause when it is followed by
+// whitespace or the end of the string. An inline mark immediately followed by
+// more non-space text, "main.go", "v1.2", "example.com/path", is not
+// sentence punctuation; it is absorbed into the running clause instead of
+// splitting it, so a question that happens to contain a filename, a version
+// number, or a URL isn't chopped into a bogus non-question fragment.
+func splitSentenceClauses(s string) []string {
+	var clauses []string
+	var buf strings.Builder
+	runes := []rune(s)
+	for i := 0; i < len(runes); {
+		c := runes[i]
+		buf.WriteRune(c)
+		if c == '.' || c == '!' || c == '?' {
+			last := c
+			j := i + 1
+			for j < len(runes) && (runes[j] == '.' || runes[j] == '!' || runes[j] == '?') {
+				last = runes[j]
+				j++
+			}
+			if j >= len(runes) || unicode.IsSpace(runes[j]) {
+				text := strings.TrimRight(buf.String(), ".!?")
+				clauses = append(clauses, text+string(last))
+				buf.Reset()
+				i = j
+				continue
+			}
+			// Not a terminator: keep the whole punctuation run as ordinary text
+			// in the current clause and keep going.
+			for k := i + 1; k < j; k++ {
+				buf.WriteRune(runes[k])
+			}
+			i = j
+			continue
+		}
+		i++
+	}
+	if strings.TrimSpace(buf.String()) != "" {
+		clauses = append(clauses, buf.String())
+	}
+	return clauses
+}
+
+// trailingWrapperChars are closing/markdown wrapper characters that can
+// legitimately follow a question's terminal "?" without changing its
+// meaning: closing quotes (straight and curly), closing parens/brackets/
+// braces, markdown emphasis (`*`, `_`), and inline-code backticks. Trimmed
+// (TrimRight handles a whole run, e.g. the two asterisks in "**...?**") before
+// checking whether a clause is a question, so a message that is nothing but
+// a wrapped question, `"Are you using my memories?"`, `**Are you using my
+// memories?**`, `(Are you using my memories?)`, still reads as
+// question-only instead of a false-negative fact extraction.
+const trailingWrapperChars = "\"'\u201d\u2019)]}*_`"
+
+// questionOnlyUserMessage reports whether a user message is, in substance,
+// nothing but question(s), no assertions worth extracting as a fact. It
+// strips fenced code (which isn't prose and shouldn't be sentence-split), then
+// requires every non-trivial clause (one with an actual word or digit in it,
+// after trimming trailing wrapper punctuation) to end in "?", and that there
+// is at least one such clause.
+//
+// This gates FACT extraction only (see memCapture), a correction phrased as
+// a polite question ("Can you stop using em dashes?") must still be
+// capturable, so callers must never apply this to corrections.
+func questionOnlyUserMessage(user string) bool {
+	stripped := fencedCodeBlockRE.ReplaceAllString(user, "")
+	nontrivial := 0
+	for _, clause := range splitSentenceClauses(stripped) {
+		trimmed := strings.TrimSpace(clause)
+		trimmed = strings.TrimSpace(strings.TrimRight(trimmed, trailingWrapperChars))
+		if !hasWordChar(trimmed) {
+			continue
+		}
+		nontrivial++
+		if !strings.HasSuffix(trimmed, "?") {
+			return false
+		}
+	}
+	return nontrivial > 0
+}
+
+// watcherNoisePrefixes are conservative, observed session-narration openers
+// the watcher model sometimes emits in place of a real fact/event, text
+// describing what happened in THIS session rather than a durable thing worth
+// recalling later. Prefix-only (not substring) so a legitimate fact that
+// happens to mention "the user" mid-sentence is never dropped.
+//
+// Deliberately excludes anything about what the user "expects": "the user
+// expects tests on every PR" is a real, durable expectation/preference, not
+// narration, so no "expects"/"expected" prefix belongs on this list.
+var watcherNoisePrefixes = []string{
+	"user requested", "the user requested",
+	"user asked", "the user asked",
+	"user is interested", "the user is interested",
+	"user wants to know", "the user wants to know",
+	"user ran", "the user ran",
+	"user executed", "the user executed",
+}
+
+// watcherNoise reports whether content opens with one of watcherNoisePrefixes
+// (case-insensitive, leading whitespace ignored), a session-narration
+// artifact rather than a real fact/event. Callers apply it to the fact and
+// event channels ONLY, see memCapture, never to corrections, since a
+// legitimate correction can be phrased exactly like these openers ("The user
+// requested the agent stop doing X").
+func watcherNoise(content string) bool {
+	lower := strings.ToLower(strings.TrimSpace(content))
+	for _, p := range watcherNoisePrefixes {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // extractJSONObject returns the first balanced {...} JSON object substring in s,
-// or "" if none — salvaging the object from a model that wraps it in prose or a
+// or "" if none, salvaging the object from a model that wraps it in prose or a
 // ```json fence instead of returning bare JSON.
 func extractJSONObject(s string) string {
 	start := strings.IndexByte(s, '{')
@@ -380,7 +521,7 @@ func flexibleStringList(raw json.RawMessage) ([]string, error) {
 // The top level is deliberately strict: a watcher model that returns `null`,
 // `{}`, an array/string/number/bool, or an object missing one of the four
 // required keys (facts/events/corrections/valence) is a malformed response,
-// not "nothing captured" — it must error so the caller falls back/salvages
+// not "nothing captured", it must error so the caller falls back/salvages
 // instead of silently recording an empty capture. Only the per-field list
 // shape (facts/events/corrections) tolerates the {} vs [] vs null wrinkle,
 // via flexibleStringList.
@@ -390,7 +531,7 @@ func parseWatchJSON(s string) (*watchResult, error) {
 		return nil, fmt.Errorf("top-level value is not a JSON object: %w", err)
 	}
 	if top == nil {
-		// json.Unmarshal("null", &map) succeeds with a nil map and no error —
+		// json.Unmarshal("null", &map) succeeds with a nil map and no error -
 		// must be rejected explicitly, not treated as an all-empty capture.
 		return nil, fmt.Errorf("top-level value is null, not a JSON object")
 	}
@@ -458,8 +599,8 @@ func memWatch(user string) *watchResult {
 	res, err := client.Post(ollamaHost()+"/api/chat", "application/json", bytes.NewReader(body))
 	if err != nil {
 		// Surface it: a silent return here is why the capture half can look "dead"
-		// (Ollama down, MEMORY_WATCHER_MODEL not pulled, or — the observed live
-		// failure mode — Ollama accepting the connection but never finishing
+		// (Ollama down, MEMORY_WATCHER_MODEL not pulled, or, the observed live
+		// failure mode, Ollama accepting the connection but never finishing
 		// inference). Recall still works.
 		watcherUnavailable.Store(true)
 		var reason string
@@ -470,7 +611,7 @@ func memWatch(user string) *watchResult {
 		}
 		setWatcherReason(reason)
 		watcherDegradedUntil.Store(time.Now().Add(watcherBackoff).UnixNano())
-		log.Printf("memory watcher: %s — capture skipped", reason)
+		log.Printf("memory watcher: %s, capture skipped", reason)
 		return nil
 	}
 	defer res.Body.Close()
@@ -481,7 +622,7 @@ func memWatch(user string) *watchResult {
 			res.StatusCode, model, model, strings.TrimSpace(string(b)))
 		setWatcherReason(reason)
 		watcherDegradedUntil.Store(time.Now().Add(watcherBackoff).UnixNano())
-		log.Printf("memory watcher: %s — capture skipped", reason)
+		log.Printf("memory watcher: %s, capture skipped", reason)
 		return nil
 	}
 	watcherUnavailable.Store(false)
@@ -499,11 +640,11 @@ func memWatch(user string) *watchResult {
 		if len(raw) > 400 {
 			raw = raw[:400] + "..."
 		}
-		log.Printf("memory watcher: empty/undecodable chat response from model %q — raw: %q", model, raw)
+		log.Printf("memory watcher: empty/undecodable chat response from model %q, raw: %q", model, raw)
 		return nil
 	}
 	// Primary: the whole content is the JSON object (structured-output models).
-	// Fallback: some models wrap it in prose or a ```json fence — salvage the first
+	// Fallback: some models wrap it in prose or a ```json fence, salvage the first
 	// balanced {...} object rather than returning nil. Log the raw output on total
 	// failure so "returned nil" is never a mystery (which model, what it said).
 	content := chat.Message.Content
@@ -513,7 +654,7 @@ func memWatch(user string) *watchResult {
 		if len(raw) > 300 {
 			raw = raw[:300] + "..."
 		}
-		log.Printf("memory watcher: model %q returned unparseable output (no JSON object) — raw: %q", model, raw)
+		log.Printf("memory watcher: model %q returned unparseable output (no JSON object), raw: %q", model, raw)
 		return nil
 	}
 	clean := func(in []string) []string {

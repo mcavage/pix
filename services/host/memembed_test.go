@@ -160,7 +160,7 @@ func TestWatcherCaptureAvailableRecoversAfterBackoff(t *testing.T) {
 	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
 
 	watcherUnavailable.Store(true)
-	setWatcherReason(`model "test-watcher" is not pulled (or Ollama is down) — run ` + "`ollama pull test-watcher`")
+	setWatcherReason(`model "test-watcher" is not pulled (or Ollama is down), run ` + "`ollama pull test-watcher`")
 	watcherDegradedUntil.Store(0) // backoff window elapsed
 	watcherLastProbe.Store(0)
 
@@ -249,7 +249,7 @@ func TestMemEmbedTimeout(t *testing.T) {
 // (slow-loris / wedged inference scenario). Without the timeout fix (H-2) the
 // function would block indefinitely, leaking the goroutine.
 func TestMemOllamaHasModelTimeout(t *testing.T) {
-	// A handler that accepts the connection and blocks — but with a maximum
+	// A handler that accepts the connection and blocks, but with a maximum
 	// dwell time so the test server can shut down cleanly when the test ends.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -276,7 +276,7 @@ func TestMemOllamaHasModelTimeout(t *testing.T) {
 	}
 	// Should have returned well within 1s (probe timeout is 100ms + overhead).
 	if elapsed > 2*time.Second {
-		t.Errorf("memOllamaHasModel blocked for %v; want < 2s — timeout not enforced", elapsed)
+		t.Errorf("memOllamaHasModel blocked for %v; want < 2s, timeout not enforced", elapsed)
 	}
 }
 
@@ -303,7 +303,7 @@ func FuzzMemFtsQuery(f *testing.F) {
 	f.Fuzz(func(t *testing.T, q string) {
 		got := memFtsQuery(q)
 		if got == "" {
-			return // empty is valid — all tokens were single-char or input was empty
+			return // empty is valid, all tokens were single-char or input was empty
 		}
 		// The output must only consist of quoted terms joined by ' OR '.
 		// Unquoted FTS5 metacharacters would cause a sqlite syntax error on query.
@@ -508,5 +508,240 @@ func TestExtractJSONObject(t *testing.T) {
 		if got := extractJSONObject(c.in); got != c.want {
 			t.Errorf("extractJSONObject(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestQuestionOnlyUserMessage covers the exact incident messages: pure
+// questions must gate facts, mixed question+assertion messages must not, and a
+// correction phrased as a polite question still reads as "question-only" here
+// (questionOnlyUserMessage doesn't know about correction/fact distinction -
+// memCapture is the one that must never apply it to corrections).
+func TestQuestionOnlyUserMessage(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"pure question about memory use", "so are you using my memories?", true},
+		{"pure question about injection", "why do we think those are the right things to inject?", true},
+		{
+			"mixed question + assertion is not question-only",
+			"can you explain how memory works? I ran the build twice and im confused. Also can you see what's stored?",
+			false,
+		},
+		{"plain assertion, no question", "i like cheese", false},
+		{"correction phrased as a polite question", "Can you stop using em dashes?", true},
+		{"empty string has no assertions to gate", "", false},
+		{"only punctuation/whitespace", "... ?? !!", false},
+		{"acknowledgment, not a question", "thanks, that works", false},
+		{"fenced code is ignored, remaining prose is a bare question", "```\nfunc main() {}\n```\nis this right?", true},
+		{"fenced code is ignored, remaining prose is an assertion", "```\nfunc main() {}\n```\nthis is how I write Go.", false},
+		{"inline filename period is not a sentence break", "Why does main.go fail?", true},
+		{"inline version-number period is not a sentence break", "Is v1.2 installed?", true},
+		{"inline URL periods are not sentence breaks", "Why https://example.com/path?", true},
+		{
+			"a question followed by a real declarative sentence stays mixed (not question-only)",
+			"Why does main.go fail? I already checked twice.",
+			false,
+		},
+		{"double-quote wrapped question", `"Are you using my memories?"`, true},
+		{"single-quote wrapped question", `'Are you using my memories?'`, true},
+		{"markdown bold wrapped question", "**Are you using my memories?**", true},
+		{"parenthesis wrapped question", "(Are you using my memories?)", true},
+		{"backtick wrapped question", "`Are you using my memories?`", true},
+		{"bracket wrapped question", "[Are you using my memories?]", true},
+		{"curly-quote wrapped question", "\u201cAre you using my memories?\u201d", true},
+		{"quote-wrapped assertion is still not a question", `"I like cheese."`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := questionOnlyUserMessage(c.in); got != c.want {
+				t.Errorf("questionOnlyUserMessage(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// TestSplitSentenceClauses locks in the clause-boundary fix directly: a run of
+// terminal punctuation (. ! ?) only ends a clause when followed by whitespace
+// or end of string. An inline mark immediately followed by more non-space text
+// (a filename, a version number, a URL) must NOT split the clause.
+func TestSplitSentenceClauses(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"filename period does not split", "Why does main.go fail?", []string{"Why does main.go fail?"}},
+		{"version number period does not split", "Is v1.2 installed?", []string{"Is v1.2 installed?"}},
+		{"URL periods do not split", "Why https://example.com/path?", []string{"Why https://example.com/path?"}},
+		{
+			"a real sentence boundary (period + space) still splits",
+			"Why does main.go fail? I already checked twice.",
+			[]string{"Why does main.go fail?", " I already checked twice."},
+		},
+		{
+			"punctuation run collapses to its last mark and still respects the trailing-space rule",
+			"explain this...? then what",
+			[]string{"explain this?", " then what"},
+		},
+		{"trailing text with no terminal punctuation is one final clause", "no ending here", []string{"no ending here"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := splitSentenceClauses(c.in)
+			if len(got) != len(c.want) {
+				t.Fatalf("splitSentenceClauses(%q) = %#v, want %#v", c.in, got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Fatalf("splitSentenceClauses(%q) = %#v, want %#v", c.in, got, c.want)
+				}
+			}
+		})
+	}
+}
+
+// TestWatcherNoise checks the conservative prefix list, case-insensitively,
+// and proves it does NOT substring-match legitimate content that merely
+// mentions "the user" mid-sentence.
+func TestWatcherNoise(t *testing.T) {
+	noisy := []string{
+		"user requested a summary of the changes",
+		"The user requested a summary of the changes",
+		"USER REQUESTED a summary of the changes",
+		"user asked about the deploy process",
+		"the user asked about the deploy process",
+		"user is interested in memory internals",
+		"the user is interested in memory internals",
+		"user wants to know how recall scores hits",
+		"the user wants to know how recall scores hits",
+		"user ran the test suite twice",
+		"the user ran the test suite twice",
+		"user executed the migration script",
+		"the user executed the migration script",
+		"  user ran the build",
+	}
+	for _, s := range noisy {
+		if !watcherNoise(s) {
+			t.Errorf("watcherNoise(%q) = false, want true", s)
+		}
+	}
+	clean := []string{
+		"the user prefers tabs over spaces",
+		"the user always deploys from main, never a release branch",
+		"i like cheese",
+		"the user's staging DB is postgres://staging.internal:5432",
+		"always ask before running destructive commands for the user",
+		// "expects" was deliberately dropped from watcherNoisePrefixes: a stated
+		// expectation is a durable preference, not session narration.
+		"user expects a reply within a day",
+		"the user expects a reply within a day",
+		"User expects tests on every PR",
+	}
+	for _, s := range clean {
+		if watcherNoise(s) {
+			t.Errorf("watcherNoise(%q) = true, want false (must not substring-match)", s)
+		}
+	}
+}
+
+// watchServer stands in for Ollama's /api/chat: returns a fixed watcher JSON
+// payload for the capture call, so memCapture can be exercised end to end
+// without a real model. memCapture is called with a slot already taken from
+// memCaptureSem, mirroring how the observe handler acquires it before the
+// (normally goroutine) call.
+func watchServer(t *testing.T, content string) *memStore {
+	t.Helper()
+	resetWatcherState()
+	t.Cleanup(resetWatcherState)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			b, _ := json.Marshal(map[string]any{"message": map[string]any{"content": content}})
+			w.WriteHeader(200)
+			w.Write(b)
+			return
+		}
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("OLLAMA_HOST", srv.URL)
+	t.Setenv("MEMORY_WATCHER_MODEL", "test-watcher")
+	st, err := newMemStore(":memory:", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+// TestMemCaptureDropsFactsForQuestionOnlyMessage is the end-to-end version of
+// the observed incident: a question about memory itself must never land as a
+// stored fact, even when the watcher model wrongly extracted one.
+func TestMemCaptureDropsFactsForQuestionOnlyMessage(t *testing.T) {
+	st := watchServer(t, `{"facts":["user is using memory"],"events":[],"corrections":[],"valence":0}`)
+	memCaptureSem <- struct{}{}
+	memCapture(st, "so are you using my memories?", "", false, "default")
+
+	hits, err := st.recallAll(100, 1000000, "", "", "default", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("expected the question-only false-positive fact to be dropped, got %+v", hits)
+	}
+}
+
+// TestMemCaptureAppliesNoiseFilterToFactsAndEventsOnlyAndSevenDayEventTTL
+// proves the watcherNoise filter runs on facts and events but is NEVER
+// applied to corrections (a correction may legitimately be phrased exactly
+// like a noise prefix, e.g. "the user requested the agent stop doing X"),
+// that legitimate items in each channel still survive, and that a captured
+// event gets the 7-day TTL (not the old 21).
+func TestMemCaptureAppliesNoiseFilterToFactsAndEventsOnlyAndSevenDayEventTTL(t *testing.T) {
+	content := `{"facts":["user asked about the deploy process","user requested guidance","the user prefers tabs over spaces"],` +
+		`"events":["user ran the test suite twice","migrating the staging DB this week"],` +
+		`"corrections":["the user requested this be ignored","always confirm before deleting a branch"],` +
+		`"valence":0}`
+	st := watchServer(t, content)
+	memCaptureSem <- struct{}{}
+	memCapture(st, "an assertion-bearing message, not a question.", "", false, "default")
+
+	hits, err := st.recallAll(100, 1000000, "", "", "default", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, h := range hits {
+		seen[h.content] = true
+	}
+	for _, noisy := range []string{
+		"user asked about the deploy process",
+		"user requested guidance",
+		"user ran the test suite twice",
+	} {
+		if seen[noisy] {
+			t.Errorf("noise item %q should have been dropped before storage, got %+v", noisy, seen)
+		}
+	}
+	for _, legit := range []string{
+		"the user prefers tabs over spaces",
+		"migrating the staging DB this week",
+		"always confirm before deleting a branch",
+		// A correction is NEVER run through the noise filter, even though this
+		// phrasing would trip the "requested" prefix on the fact/event channels.
+		"the user requested this be ignored",
+	} {
+		if !seen[legit] {
+			t.Errorf("legitimate item %q should have survived the noise filter, got %+v", legit, seen)
+		}
+	}
+
+	var expiresAt string
+	if err := st.db.QueryRow("SELECT expires_at FROM memories WHERE content = ?", "migrating the staging DB this week").Scan(&expiresAt); err != nil {
+		t.Fatal(err)
+	}
+	days := time.Until(parseTime(expiresAt)).Hours() / 24
+	if days < 6.9 || days > 7.1 {
+		t.Fatalf("expected a ~7 day TTL on a captured event, got %.2f days (expiresAt=%s)", days, expiresAt)
 	}
 }

@@ -32,18 +32,54 @@ acting differently next time, the same way you'd correct a person.
 /learnings [minFreq]  # recurring captured facts worth promoting into a skill (see the `promote` skill)
 ```
 
+The agent has read-only access via **typed tools** (`memory_recall`,
+`memory_stats`) that reach the host daemon directly, it never shells out to
+`pi-stack` or `curl`. It reaches for `memory_recall`/`memory_stats` when you
+ask what's remembered or how much is stored (`memory_recall` can return up to
+100 rows, not an unbounded dump, see the truncation note below). Writing and
+deleting are **human-driven slash commands** (`/remember`, `/forget`), not
+agent tools, but that's a UX/safety choice on this tool surface, **not a
+security boundary**: the memory daemon is unauthenticated and reachable (see
+"Trust model" in [memory.md](memory.md)), so any sandbox code capable of an
+HTTP POST could still write to it directly, independent of the agent's typed
+tools.
+
+**Privacy.** Extraction and embedding run on local Ollama and never leave your
+machine, but recalled memory is not private from your model provider: once a
+row is recalled, its content goes into the prompt sent to whichever model is
+active (Claude, OpenAI, Gemini, or local Ollama). Never store secrets, tokens,
+or credentials in memory.
+
 Example: you tell pi three times across different sessions that your staging
 DB is `postgres://staging.internal:5432`. The watcher notices the repetition
 and remembers it without being asked. Next session, `/recall staging db` finds
 it, or it surfaces unprompted in the system prompt when it's relevant.
 
+**Durability.** A durable fact (preference, decision, convention) has no
+automatic expiry. A watcher-captured **event** (time-bound status: what you're
+doing right now) is perishable and expires after 7 days on its own. `/remember`
+is the reliable explicit write, driven by the human, not the agent, though a
+stable fact the watcher captures on its own can also land durable.
+
+**What gets silently injected vs. what you can see.** Each turn, only a small
+relevance-filtered subset is silently added to context, low-scoring
+perishable hits are left out of that silent injection specifically, so a
+noisy time-bound status doesn't compete for space in every turn. Durable hits
+are never filtered by score. An explicit `/recall` or `memory_recall` skips
+that score filter, but is still capped: a blank query (or `*`) returns up to
+100 rows (with a truncation line if the store has more), not a true unbounded
+dump.
+
 **Limits.** Memory runs as a host service (`pi-stack serve`, port 11435) and is
 per-machine, not shared across your laptop and your desktop, and not shared
 with teammates. It's SQLite plus FTS5 and embeddings on disk at
 `~/.local/state/pi-stack` (or wherever your config points it). If the service
-is down, recall and capture both fail silently and pi-stack works without
-memory, just dumber. Nothing here is a pack: memory is what pi-stack learned by
-watching, not what you deliberately taught it (that's a pack, see §5).
+is down, the commands and tools above surface a clear error rather than
+failing silently; only the silent per-turn auto-injection degrades quietly (no
+memory gets added that turn, so a dead daemon never blocks the conversation).
+Nothing here is a pack: memory is what pi-stack learned by watching, not what
+you deliberately taught it (that's a pack, see §5); a pack can still scope
+memory to itself via `memory_scope` (see [memory.md](memory.md)).
 
 ## 3. Skills (the flows)
 
