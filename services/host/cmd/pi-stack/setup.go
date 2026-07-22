@@ -303,16 +303,27 @@ func writeProviderRef(env shellEnv, out io.Writer, p struct{ envVar, name string
 	_ = writeOpRefFileQuiet(env, hostModeRefsPath(env), p.envVar, ref)
 }
 
-// currentOpRef returns the current FILLED op:// ref for a provider env var
-// from op-refs.env, if any.
+// currentOpRef returns the current FILLED op:// ref for a provider env var. It
+// checks op-refs.env (sandbox) AND hostmode.env (host mode): a ref given via
+// EITHER path counts, so setup never re-prompts for a ref the user already
+// provided in one file but not the other. If it's found only in hostmode.env, it
+// backfills op-refs.env so the sbx reconcile step has it too.
 func currentOpRef(env shellEnv, envVar string) (string, bool) {
-	_, content, exists := opRefsContent(env)
-	if !exists {
-		return "", false
+	if _, content, exists := opRefsContent(env); exists {
+		for _, r := range parseOpRefs(content) {
+			if r.key == envVar && r.isRef && !r.placeholder {
+				return r.value, true
+			}
+		}
 	}
-	for _, r := range parseOpRefs(content) {
-		if r.key == envVar && r.isRef && !r.placeholder {
-			return r.value, true
+	if env.readFile != nil {
+		if content, err := env.readFile(hostModeRefsPath(env)); err == nil {
+			for _, r := range parseOpRefs(content) {
+				if r.key == envVar && r.isRef && !r.placeholder {
+					_ = writeOpRefQuiet(env, envVar, r.value) // backfill op-refs.env
+					return r.value, true
+				}
+			}
 		}
 	}
 	return "", false
