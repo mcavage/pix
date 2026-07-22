@@ -97,26 +97,26 @@ installs them into `~/.local/bin` without sudo. To inspect it first, read
 curl -fsSL https://raw.githubusercontent.com/mcavage/pi-stack/main/install.sh | sh -s -- --uninstall
 ```
 
-Typical flow:
+Typical first run:
 
 ```bash
-sbx secret set -g anthropic
-sbx secret set -g openai
-sbx secret set -g google
-sbx secret set -g github
-
-pi-stack run
+pi-stack setup
 ```
 
-`pi-stack run` launches the agent and stays out of your way — no onboarding, no
-nags. Its one concession: if no model provider key is set it can't launch, so it
-auto-provisions one (steering you to 1Password), then launches.
+Setup requires a signed-in 1Password CLI, validates references for Anthropic,
+OpenAI, and Google, reconciles them into `sbx`, creates the default pack, and
+launches one upfront onboarding tour. It stores references, never resolved keys.
+After that, `pi-stack run` launches or reattaches without replaying onboarding.
 
 `pi-stack setup` is the opposite: it *actually sets you up* — provisions model
 keys from 1Password (wiring both the sandbox and host mode), creates your
-personal pack, and provisions + enables host mode (when the host can run `pi`),
-then hands off to a guided walkthrough that teaches the flow by doing your real
-first task. For
+default pack, and provisions + enables host mode (when the host can run `pi`),
+then hands off to a one-shot upfront guide that names the exact workflows,
+explains memory and packs, reports grounded setup gaps, and asks for your real
+task. Repeat it any time: the host phase reconciles keys/config again; an
+existing sandbox is left alone (reattach with `pi-stack run`, or recreate it
+with your current settings *and* get the tour via `pi-stack setup --replace`).
+For
 scripted/CI hosts, `pi-stack onboard --account … --knowledge … --yes` writes
 `~/.config/pi-stack/config.toml` non-interactively (host config only, no handoff).
 

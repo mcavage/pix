@@ -1,7 +1,14 @@
 // workspacestate.go is the single symlink-safe writer AND remover for the
 // launcher's per-workspace state files (<workspace>/.pi-stack/*: sandbox.pack,
-// profile, ollama-bridge.model, knowledge.scope, knowledge, host-state.json,
-// onboarding.json).
+// profile, ollama-bridge.model, knowledge.scope, knowledge, onboarding.json).
+//
+// Trusted host-state facts (keys/services/knowledge/gog/mcp/models/overlay/
+// identity) are deliberately NOT among these: they are built in memory and
+// injected directly into the launcher-generated initial prompt (see
+// hoststate.go's injectTrustedHostState), never written as a workspace file.
+// A workspace is attacker-influenced (a cloned repo), so a file there can
+// never be the trust boundary for facts the fenced agent treats as ground
+// truth — see the top of hoststate.go for the full rationale.
 //
 // Why this exists (class fix, not a one-off): the workspace is
 // attacker-influenced — a user can `pi-stack run` inside a freshly cloned,
@@ -101,7 +108,12 @@ func removeWorkspaceStateFile(workspace, name string) error {
 // atomicWriteInDir writes dir/name via a same-dir temp file + os.Rename.
 // The destination is never opened, so an existing symlink there is replaced,
 // never followed; an interrupted write can never truncate an existing file.
-// Shared by writeWorkspaceStateFile and writePackLockBytes (pack.go).
+// This is LEAF-safe only: it protects the FINAL path component (name), not a
+// symlinked ancestor of dir itself — callers that write into an
+// attacker-influenced tree (workspace .pi-stack/, XDG config dirs) still need
+// their own Lstat-the-parent check (see writeWorkspaceStateFile) if a
+// symlinked *directory* is also in scope. Shared by writeWorkspaceStateFile,
+// writePackLockBytes (pack.go), and defaultShellEnv's writeFile (doctor.go).
 func atomicWriteInDir(dir, name string, data []byte, perm os.FileMode) error {
 	tmp, err := os.CreateTemp(dir, name+".tmp-")
 	if err != nil {
@@ -113,11 +125,26 @@ func atomicWriteInDir(dir, name string, data []byte, perm os.FileMode) error {
 		_ = os.Remove(tmpName)
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	// chmod the REQUESTED mode before Sync (CreateTemp makes 0600): fchmod on
+	// the open handle, so the fsync below flushes data AND metadata with the
+	// intended mode already in place — the file is never made visible (or made
+	// durable) under a mode other than the one the caller asked for.
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
 		_ = os.Remove(tmpName)
 		return err
 	}
-	if err := os.Chmod(tmpName, perm); err != nil { // CreateTemp makes 0600
+	// fsync before rename: the write must be durable on disk before the atomic
+	// rename makes it visible at the destination name, so a crash between
+	// rename and the next read can never observe a zero-length/truncated file
+	// (the OS buffer cache alone doesn't guarantee that ordering on all
+	// filesystems).
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpName)
 		return err
 	}

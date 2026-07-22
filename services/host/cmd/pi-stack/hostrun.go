@@ -320,8 +320,19 @@ func runHostSetup(errw *os.File) error {
 	}
 
 	fmt.Fprintf(errw, "pi-stack host setup: provisioned %s (harness -> %s)\n", dir, root)
-	fmt.Fprintf(errw, "Optional cloud keys: put op:// refs in %s (op run resolves them at launch;\n", config.HostRefsPath())
-	fmt.Fprintln(errw, "nothing is persisted). Without it, host mode is Ollama-only.")
+	// `pi-stack setup` ALWAYS wires all three provider-key refs into hostmode.env
+	// (the mandatory-1Password invariant); a bare `pi-stack host setup` run on its
+	// own can still land here with none yet, so report the ACTUAL state instead of
+	// unconditionally calling cloud keys "optional" — an incomplete host mode is
+	// a REQUIRED follow-up, not a shrug.
+	env := defaultShellEnv()
+	if keys := hostModeProviderKeys(env); len(keys) > 0 {
+		fmt.Fprintf(errw, "Cloud keys: 1Password refs wired (%s).\n", strings.Join(keys, ", "))
+	} else {
+		fmt.Fprintf(errw, "Cloud keys: NOT wired — host mode is Ollama-only until refs are set (required action):\n")
+		fmt.Fprintf(errw, "  pi-stack setup   # wires all three provider keys via 1Password, sandbox + host mode alike\n")
+		fmt.Fprintf(errw, "  (or by hand: put op:// refs in %s — op run resolves them at launch, nothing is persisted)\n", config.HostRefsPath())
+	}
 	return nil
 }
 

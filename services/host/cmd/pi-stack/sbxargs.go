@@ -195,6 +195,12 @@ type runLaunchPlan struct {
 	RmFirst  bool     // run `sbx rm -f <name>` before Args
 	Args     []string // sbx argv (after "sbx")
 	Reattach bool     // true => Args is the thin re-attach form, not a full create
+	// Err is set ONLY for the fail-closed --replace-on-unknown-state case (see
+	// planSandboxLaunch below). A non-nil Err means Args/RmFirst/Reattach are
+	// meaningless zero values — the caller MUST check Err first and abort
+	// before printing anything that claims a replace/create/reattach is
+	// happening, and before running RmFirst or exec'ing sbx at all.
+	Err error
 }
 
 // planSandboxLaunch is the pure decision at the heart of `pi-stack run`'s
@@ -212,7 +218,25 @@ type runLaunchPlan struct {
 //     sandbox is already absent) then a full create, so changed kit/mcp/
 //     create-only flags take effect. This is today's implicit recreate, now
 //     explicit and available for a RUNNING sandbox too.
+//   - --replace requested but the sandbox's existence could not be determined
+//     (state == sbxUnknown, i.e. the run lifecycle's OWN probe of `sbx ls`
+//     failed or sbx is unavailable): FAIL CLOSED, not create. "Replace" means
+//     "remove whatever is there, then create" — with no reliable read on
+//     whether there IS anything there, an unconditional create can collide
+//     with a sandbox that in fact exists (sbx may itself reattach it with
+//     stale kit/mcp/create-only flags, exactly what --replace exists to
+//     avoid), while RmFirst stays false regardless (planSandboxLaunch never
+//     rm's on an unknown probe) so the two paths would silently disagree about
+//     what "replacing" even did. Refusing before doing anything mirrors
+//     setup.go's own sbxUnknown fail-closed posture (runSetupHandoff) at this
+//     lifecycle's independent probe site, rather than assuming setup's guard
+//     covers every path that can reach a replace. A plain (non-replace) launch
+//     on sbxUnknown is unaffected — it still optimistically creates via
+//     willCreate, same as always.
 func planSandboxLaunch(state sbxState, replace bool, cfg *config.Config, o runOpts, version string) runLaunchPlan {
+	if replace && state == sbxUnknown {
+		return runLaunchPlan{Err: fmt.Errorf("--replace requested but could not determine whether sandbox %q exists (`sbx ls` failed or sbx is unavailable); refusing to replace blind — fix sbx and retry (or run without --replace to attempt a plain launch)", o.Name)}
+	}
 	if !willCreate(state, replace) {
 		return runLaunchPlan{Args: buildReattachArgs(o), Reattach: true}
 	}

@@ -10,6 +10,14 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- Guided `pi-stack setup` now establishes a complete host: validated 1Password
+  references for Anthropic, OpenAI, and Google, rational `sbx` reconciliation,
+  memory, the default pack, host mode, and a one-shot in-session handoff.
+- Read-only `memory_recall` and `memory_stats` tools let the agent inspect memory
+  without exposing memory mutation as a normal tool action.
+- Long autonomous tasks resume after threshold compaction when their structured
+  todo list still has work in progress. Queued user messages and `/todos clear`
+  take precedence.
 - `model-refresh` skill: teaches how to re-ground the router (registry +
   scorecard + policy) on LIVE model cards and pricing instead of training data,
   then compile + verify. Baked into the public image.
@@ -31,6 +39,16 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **The built-in pack is named `default`, not `personal`.** Existing `personal`
+  and older `pack` directories migrate with their git history, config, trust,
+  wrapper ownership, and activation provenance intact. Bare `personal` remains a
+  deprecated compatibility alias.
+- **Onboarding is one upfront, grounded handoff.** Trusted host facts travel in
+  the launcher-generated initial prompt rather than through a workspace file,
+  so a cloned repository cannot forge setup guidance.
+- **Memory capture is quieter and easier to inspect.** Questions and routine
+  watcher narration no longer become durable facts, perishable watcher entries
+  expire after seven days, and literal `*` recall lists stored rows newest first.
 - **The memory watcher defaults to `qwen3.5:9b`, the same model the ollama-bridge
   uses.** Two defaults previously disagreed (the daemon fell back to `gemma3:4b`,
   the launcher config to `qwen3.5:4b`), and neither matched the model already

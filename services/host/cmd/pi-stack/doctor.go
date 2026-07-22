@@ -138,11 +138,19 @@ func defaultShellEnv() shellEnv {
 			}
 			return fi.Mode(), true
 		},
+		// writeFile is LEAF-symlink-safe (parent-directory symlinks are a
+		// separate, honestly out-of-scope concern — see atomicWriteInDir's doc
+		// comment): the destination is never opened directly, so a leaf that is
+		// itself a symlink is REPLACED by an atomic same-directory temp file +
+		// rename, never followed/truncated through. Parent creation stays 0700
+		// (unchanged perm posture). Shared with writeWorkspaceStateFile's exact
+		// mechanism (workspacestate.go) so there is one hardened writer, not two.
 		writeFile: func(path string, data []byte, perm os.FileMode) error {
-			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			dir := filepath.Dir(path)
+			if err := os.MkdirAll(dir, 0o700); err != nil {
 				return err
 			}
-			return os.WriteFile(path, data, perm)
+			return atomicWriteInDir(dir, filepath.Base(path), data, perm)
 		},
 		probe: runWithTimeout,
 	}

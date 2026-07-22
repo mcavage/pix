@@ -146,9 +146,9 @@ func runRun(argv []string) {
 	}
 
 	// Active pack: mount its skills/ + knowledge/ so the pack's context loads in
-	// this sandbox. --pack overrides config.Pack; with neither set, the personal
-	// pack (config.PackDir()) loads if it exists. Create-time only (skills +
-	// knowledge are create-time mounts; a re-attach keeps what it was made with).
+	// this sandbox. --pack overrides config.Pack; with neither set, no pack is
+	// active. Create-time only (skills + knowledge are create-time mounts; a
+	// re-attach keeps what it was made with).
 	// effectivePack is the pack root that ACTUALLY loaded and applied, as
 	// opposed to activePackRoot(cfg.Pack, o.Pack) (the merely CONFIGURED one).
 	// It defaults to the configured root for a re-attach (no applyPackToLaunch
@@ -187,6 +187,13 @@ func runRun(argv []string) {
 	}
 
 	plan := planSandboxLaunch(state, o.Replace, cfg, o, version)
+	if plan.Err != nil {
+		// Fail closed BEFORE any output claims a replace/create/reattach is
+		// happening, and before RmFirst or exec — see planSandboxLaunch's
+		// sbxUnknown+replace case.
+		fmt.Fprintf(os.Stderr, "pi-stack run: %v\n", plan.Err)
+		os.Exit(1)
+	}
 	switch {
 	case o.Replace:
 		fmt.Fprintf(os.Stderr, "pi-stack run: replacing sandbox %q\n", o.Name)
@@ -253,19 +260,30 @@ func runRun(argv []string) {
 		writeSandboxPackMarker(o.Workspace, effectivePack)
 	}
 
-	// Host-state truth file: the host-visible facts the fenced agent can't see
-	// (keys/services/knowledge/gog/mcp/models/overlay). The onboarding skill reads
-	// it instead of guessing. Best-effort.
+	// Trusted host state: the host-visible facts the fenced agent can't see for
+	// itself (keys/services/knowledge/gog/mcp/models/overlay/identity). This
+	// travels ONLY inside the launcher-generated initial prompt (the pi
+	// passthrough arg carrying generatedInputMarker, e.g. onboardingKickoff) —
+	// never as a workspace file, which a cloned repo could plant or leave stale.
+	// injectTrustedHostState is a no-op (and probes nothing) when no such arg is
+	// present, so a normal run never pays for or produces onboarding truth.
+	//
 	// The --pack override only takes effect on a CREATE (packs mount at creation);
 	// on a re-attach the sandbox keeps whatever pack it was made with, so don't
-	// claim the override in host-state — fall back to the persisted active pack.
+	// claim the override in the payload — fall back to the persisted active pack.
 	packForState := ""
 	if willCreate(state, o.Replace) {
 		packForState = o.Pack
 	}
-	writeHostStateFile(o.Workspace, cfg, defaultShellEnv(), o.MCPEnabled, packForState)
-
-	args := plan.Args
+	// This is a HARD contract, not best-effort: when a generated prompt IS
+	// present, it is the fenced in-VM agent's ONLY source of trusted host-visible
+	// truth, so a launch that can't build/encode it must ABORT before exec'ing
+	// sbx rather than hand the agent a generated prompt with no trusted payload.
+	args, err := injectTrustedHostState(plan.Args, cfg, defaultShellEnv(), o.MCPEnabled, packForState)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack run: could not build trusted host state: %v\n", err)
+		os.Exit(1)
+	}
 
 	if os.Getenv("PI_STACK_DEBUG") != "" {
 		fmt.Fprintln(os.Stderr, "+ sbx "+strings.Join(args, " "))
@@ -291,13 +309,13 @@ func runRun(argv []string) {
 			// A re-attach exec can fail on an sbx version that won't reattach a
 			// kit-created sandbox; don't leave the user stuck without a next step.
 			if plan.Reattach {
-				fmt.Fprintln(os.Stderr, "pi-stack run: re-attach failed; recreate it with: pi-stack run --replace")
+				fmt.Fprintf(os.Stderr, "pi-stack run: re-attach failed; recreate it with: %s\n", runReplaceCommand(o.Workspace))
 			}
 			os.Exit(exit.ExitCode())
 		}
 		fmt.Fprintf(os.Stderr, "pi-stack run: exec sbx: %v\n", err)
 		if plan.Reattach {
-			fmt.Fprintln(os.Stderr, "pi-stack run: re-attach failed; recreate it with: pi-stack run --replace")
+			fmt.Fprintf(os.Stderr, "pi-stack run: re-attach failed; recreate it with: %s\n", runReplaceCommand(o.Workspace))
 		}
 		os.Exit(1)
 	}
@@ -384,9 +402,25 @@ func stalePackReattachWarning(cfg *config.Config, o runOpts, reattaching bool) s
 		return ""
 	}
 	if active == "" {
-		return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q (since detached); its mcp/bin/skills are still attached until you recreate: pi-stack run --replace", created)
+		return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q (since detached); its mcp/bin/skills are still attached until you recreate: %s", created, runReplaceCommand(o.Workspace))
 	}
-	return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q, not the active pack %q; the active pack's mcp/bin/skills won't attach until you recreate: pi-stack run --replace", created, active)
+	return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q, not the active pack %q; the active pack's mcp/bin/skills won't attach until you recreate: %s", created, active, runReplaceCommand(o.Workspace))
+}
+
+// runReplaceCommand returns the exact `pi-stack run [WORKSPACE] --replace`
+// recovery command to print for workspace, POSIX-shell-safe via
+// shellQuoteArg. Bare "pi-stack run --replace" is only correct for the "."
+// default (the sandbox name derives from cwd, so a bare re-run from the SAME
+// cwd targets the same sandbox); an EXPLICIT workspace must be echoed back
+// verbatim (quoted) — omitting it would target whatever sandbox the CURRENT
+// cwd derives, which can be a completely different sandbox than the one that
+// just failed to reattach or is carrying a stale pack. Printing the wrong
+// recovery command is worse than a slightly longer one.
+func runReplaceCommand(workspace string) string {
+	if workspace == "" || workspace == "." {
+		return "pi-stack run --replace"
+	}
+	return "pi-stack run " + shellQuoteArg(workspace) + " --replace"
 }
 
 // modelProviders are the model-provider secret keys a pi session needs at least

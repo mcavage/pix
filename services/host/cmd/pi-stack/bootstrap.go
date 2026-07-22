@@ -1,8 +1,10 @@
 // bootstrap.go: the "bare-minimum keys" provisioning flow used by `pi-stack run`
 // (auto, only when no key is present). Policy: steer to 1Password. `pi-stack
-// setup` does NOT use bootstrapProviderKeys — it runs the stronger
-// setupProvisionKeys (always sources from 1Password, force-syncs sbx); this file
-// keeps the tri-state sbx probe (sbxModelKeyState) both share.
+// setup` does NOT use bootstrapProviderKeys — it runs the stronger, MANDATORY
+// setupProvisionKeys (always requires all three provider refs from 1Password,
+// reconciling sbx to match — set when missing, no-op when unchanged, ask before
+// overwriting a changed ref); this file keeps the tri-state sbx probes
+// (sbxModelKeyState, sbxAllModelKeysPresent) both share.
 package main
 
 import (
@@ -30,6 +32,56 @@ func sbxModelKeyState(env shellEnv) (present, probeOK bool) {
 		}
 	}
 	return false, true
+}
+
+// sbxSecretsProbeState distinguishes WHY `sbx secret ls` couldn't answer, so
+// callers with a MANDATORY-keys invariant (setupProvisionKeys) can fail-open
+// only for genuine portability (sbx isn't installed here at all — there is
+// nothing to reconcile against) and fail CLOSED with a diagnostic when sbx IS
+// installed but its control plane errored (a real, fixable problem, not "no
+// sandbox here"). sbxModelKeyState (the `run`/bootstrap path) deliberately
+// keeps its own coarser tri-state — `run` fails open on EITHER cause, since
+// its only question is "is there a key", not "can I trust a completeness
+// claim".
+type sbxSecretsProbeState int
+
+const (
+	sbxSecretsAbsent sbxSecretsProbeState = iota // sbx not on PATH: fail-open (portability)
+	sbxSecretsError                              // sbx on PATH but `sbx secret ls` failed: fail CLOSED
+	sbxSecretsOK                                 // sbx on PATH and `sbx secret ls` succeeded
+)
+
+// probeSbxSecrets runs `sbx secret ls` and classifies the result into
+// sbxSecretsProbeState. out is only meaningful when state == sbxSecretsOK.
+func probeSbxSecrets(env shellEnv) (out string, state sbxSecretsProbeState) {
+	if env.lookPath == nil || env.run == nil {
+		return "", sbxSecretsAbsent
+	}
+	if _, err := env.lookPath("sbx"); err != nil {
+		return "", sbxSecretsAbsent
+	}
+	o, err := env.run("sbx", "secret", "ls")
+	if err != nil {
+		return "", sbxSecretsError
+	}
+	return o, sbxSecretsOK
+}
+
+// sbxAllModelKeysPresent probes sbx for ALL THREE model provider keys
+// (anthropic/openai/google). `pi-stack setup`'s mandatory-keys invariant
+// requires ALL three (not merely one), so this is deliberately stricter than
+// sbxModelKeyState, which `run` uses to decide "is there ANY usable key".
+func sbxAllModelKeysPresent(env shellEnv) (all bool, state sbxSecretsProbeState) {
+	out, state := probeSbxSecrets(env)
+	if state != sbxSecretsOK {
+		return false, state
+	}
+	for _, k := range modelProviders {
+		if !grepWord(out, k) {
+			return false, sbxSecretsOK
+		}
+	}
+	return true, sbxSecretsOK
 }
 
 // anyModelKeyPresent reports whether sbx has at least one model provider key.

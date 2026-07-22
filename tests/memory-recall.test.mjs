@@ -520,3 +520,34 @@ test("every memory tool description states direct-daemon access and never shelli
 		assert.match(d, /perishable and expire after 7 days/i, `${name} description`);
 	}
 });
+
+// The agent has NO control over the watcher's automatic capture: it must never
+// assert a specific statement will or won't be remembered/saved/pinned/captured
+// unless memory_recall confirms it after the fact, and it must always point a
+// user who cares at the explicit `/remember` pin. This lives in promptGuidelines
+// (not just description) so it's in the model's face on every relevant turn, and
+// the exact wording is pinned here so it can't regress or drift between tools.
+const MEMORY_CAPTURE_HONESTY_GUIDELINE =
+	"The agent does not control automatic capture. Never claim a statement will or will not be remembered, saved, pinned, or auto-captured unless memory_recall confirms it after capture. " +
+	"If it matters, tell the user /remember <fact> is the explicit reliable path.";
+
+test("memory_recall and memory_stats promptGuidelines carry the exact capture-honesty guideline", async () => {
+	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1" });
+	const { tools } = capturePi(mod);
+	for (const name of ["memory_recall", "memory_stats"]) {
+		const guidelines = tools.get(name).promptGuidelines;
+		assert.ok(Array.isArray(guidelines) && guidelines.length > 0, `${name} must declare promptGuidelines`);
+		assert.ok(
+			guidelines.includes(MEMORY_CAPTURE_HONESTY_GUIDELINE),
+			`${name} promptGuidelines must include the exact capture-honesty guideline`,
+		);
+	}
+});
+
+test("the capture-honesty guideline never claims a statement is off-topic for code so it won't save", () => {
+	assert.doesNotMatch(
+		MEMORY_CAPTURE_HONESTY_GUIDELINE,
+		/won'?t help( with)? code/i,
+		"must not claim something 'won't help code so won't save'",
+	);
+});

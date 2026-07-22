@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -225,5 +226,25 @@ func TestRemoveWorkspaceStateFileNormal(t *testing.T) {
 	}
 	if err := removeWorkspaceStateFile(t.TempDir(), "profile"); err != nil {
 		t.Fatalf("removeWorkspaceStateFile with no .pi-stack dir at all: %v", err)
+	}
+}
+
+// atomicWriteInDir must land the file with the REQUESTED mode (fchmod'd on
+// the open handle BEFORE fsync, so data + metadata are flushed together under
+// the intended mode — CreateTemp starts at 0600).
+func TestAtomicWriteInDir_AppliesRequestedMode(t *testing.T) {
+	dir := t.TempDir()
+	for _, perm := range []os.FileMode{0o600, 0o644} {
+		name := fmt.Sprintf("f-%o.txt", perm)
+		if err := atomicWriteInDir(dir, name, []byte("data"), perm); err != nil {
+			t.Fatal(err)
+		}
+		fi, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != perm {
+			t.Errorf("mode = %o, want %o", got, perm)
+		}
 	}
 }

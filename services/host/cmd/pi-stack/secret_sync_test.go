@@ -233,3 +233,190 @@ func TestWriteOpRefFileQuiet_EncodesSpaces(t *testing.T) {
 		t.Errorf("raw space still present: %q", written)
 	}
 }
+
+// --- item 3: hostModeProviderKeys dedupes; completeness is exact-set -------
+
+// A duplicate ANTHROPIC_API_KEY line (or any repeated provider ref) must
+// never inflate hostModeProviderKeys past the real distinct-provider count —
+// dedupe is by PROVIDER NAME, not by input line.
+func TestHostModeProviderKeys_DedupesDuplicateEntries(t *testing.T) {
+	env := shellEnv{
+		getenv: func(k string) string {
+			if k == "XDG_CONFIG_HOME" {
+				return "/cfg"
+			}
+			return ""
+		},
+		readFile: func(p string) (string, error) {
+			if p == filepath.Join("/cfg", "pi-stack", "hostmode.env") {
+				// ANTHROPIC_API_KEY declared TWICE, GEMINI_API_KEY never.
+				return "ANTHROPIC_API_KEY=op://v/a/k\nANTHROPIC_API_KEY=op://v/a/k2\nOPENAI_API_KEY=op://v/o/k\n", nil
+			}
+			return "", os.ErrNotExist
+		},
+	}
+	got := hostModeProviderKeys(env)
+	if len(got) != 2 {
+		t.Fatalf("duplicate anthropic entries must not inflate the count: got %v (len %d), want 2 distinct providers", got, len(got))
+	}
+	if hasAllProviderKeyNames(got) {
+		t.Error("a duplicate anthropic entry must NEVER let the exact-set check pass with google actually missing")
+	}
+}
+
+// hasAllProviderKeyNames is a set-membership check, not a length check: a
+// padded-but-incomplete list (e.g. from a duplicate/aliased entry) must not
+// satisfy it, and the real three-provider set must.
+func TestHasAllProviderKeyNames_ExactSetNotLength(t *testing.T) {
+	if hasAllProviderKeyNames([]string{"anthropic", "anthropic", "openai"}) {
+		t.Error("a duplicate name padding the length to 3 must NOT count as complete (google is missing)")
+	}
+	if !hasAllProviderKeyNames([]string{"anthropic", "openai", "google"}) {
+		t.Error("the real three-provider set must count as complete")
+	}
+	if hasAllProviderKeyNames([]string{"anthropic", "openai"}) {
+		t.Error("two of three must not count as complete")
+	}
+}
+
+// --- item 4: hasRef branch writes to BOTH files, fails if either fails ----
+
+// A ref found ONLY in hostmode.env (currentOpRef's cross-file lookup) must be
+// backfilled into op-refs.env by setupProvisionKeys itself; if that write
+// fails, setup fails outright — even when sbx can't be probed at all (the old
+// bug: the ignored backfill let a fail-open final probe mask a real write
+// failure).
+func TestSetupProvisionKeys_HasRefOnlyInHostMode_UnwritableOpRefsFailsEvenSbxUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "cfg", "config.toml"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+
+	files := map[string]string{
+		// op-refs.env absent; hostmode.env carries all three refs.
+		"/cfg/pi-stack/hostmode.env": "ANTHROPIC_API_KEY=op://v/anthropic/key\n" +
+			"OPENAI_API_KEY=op://v/openai/key\nGEMINI_API_KEY=op://v/gemini/key\n",
+	}
+	env := shellEnv{
+		getenv: func(k string) string {
+			if k == "XDG_CONFIG_HOME" {
+				return "/cfg"
+			}
+			return ""
+		},
+		readFile: func(p string) (string, error) {
+			if v, ok := files[p]; ok {
+				return v, nil
+			}
+			return "", os.ErrNotExist
+		},
+		writeFile: func(p string, d []byte, m os.FileMode) error {
+			if strings.HasSuffix(p, "op-refs.env") {
+				return os.ErrPermission // op-refs.env is unwritable
+			}
+			files[p] = string(d)
+			return nil
+		},
+		// sbx entirely unavailable (but `op` IS on PATH) — the OLD bug's final
+		// probe would fail OPEN (return true) here, masking the op-refs.env write
+		// failure.
+		lookPath: func(name string) (string, error) {
+			if name == "sbx" {
+				return "", os.ErrNotExist
+			}
+			return "/usr/bin/" + name, nil
+		},
+		run: func(name string, args ...string) (string, error) {
+			if name == "op" && len(args) >= 1 && args[0] == "--version" {
+				return "2.0", nil
+			}
+			if name == "op" && len(args) >= 1 && args[0] == "account" {
+				return "acct", nil
+			}
+			if name == "op" && len(args) >= 1 && args[0] == "read" {
+				return "sk-val", nil
+			}
+			return "", nil
+		},
+	}
+	var out bytes.Buffer
+	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
+		t.Fatal("an unwritable op-refs.env must fail setup even when sbx can't be probed at all")
+	}
+	if !strings.Contains(out.String(), "op-refs.env") {
+		t.Errorf("must explain the op-refs.env write failure, got:\n%s", out.String())
+	}
+}
+
+// --- item 2: opReadNonEmpty trims all whitespace, rejects whitespace-only --
+
+// opReadNonEmpty must strip leading/trailing whitespace of every kind (tabs,
+// spaces, CRLF), and a value that is whitespace-only after trimming must be
+// rejected exactly like a truly empty one — never accepted as a valid (if
+// odd) secret.
+func TestOpReadNonEmpty_TrimsWhitespaceAndRejectsWhitespaceOnly(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		wantVal string
+		wantOK  bool
+	}{
+		{"tabs and spaces around a real value", "\t  sk-real-value  \t\n", "sk-real-value", true},
+		{"whitespace only: spaces", "   ", "", false},
+		{"whitespace only: tabs", "\t\t\t", "", false},
+		{"whitespace only: mixed tabs/spaces/newlines", " \t\n \t ", "", false},
+		{"truly empty", "", "", false},
+		{"CRLF around a real value", "\r\nsk-real-value\r\n", "sk-real-value", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			env := shellEnv{run: func(string, ...string) (string, error) { return c.raw, nil }}
+			val, ok := opReadNonEmpty(env, "op://v/a/k")
+			if ok != c.wantOK || val != c.wantVal {
+				t.Errorf("opReadNonEmpty(%q) = (%q, %v), want (%q, %v)", c.raw, val, ok, c.wantVal, c.wantOK)
+			}
+		})
+	}
+}
+
+// --- item 3: syncProviderKeys redacts resolved values from output+error ---
+
+// syncProviderKeys must redact the resolved value from BOTH sbx's own raw
+// output and the wrapping Go error text before printing either — mirrors
+// TestSyncProviderKeyToSbx_RedactsValueFromOutputAndError but for the
+// legacy/general sync path.
+func TestSyncProviderKeys_RedactsValueFromOutputAndError(t *testing.T) {
+	const secretVal = "sk-should-never-print-either"
+	refs := "ANTHROPIC_API_KEY=op://Private/anthropic/key\n"
+	env := shellEnv{
+		readFile: func(string) (string, error) { return refs, nil },
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			switch {
+			case name == "op" && len(args) >= 1 && args[0] == "--version":
+				return "2.0", nil
+			case name == "op" && len(args) >= 1 && args[0] == "account":
+				return "acct", nil
+			case name == "op" && len(args) >= 1 && args[0] == "read":
+				return secretVal, nil
+			case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "set":
+				// Simulate sbx echoing the full failed command (including the
+				// secret value) back in its own stdout/stderr AND the wrapping Go
+				// error carrying the same argv.
+				return "sbx: command failed: sbx secret set -f -g anthropic -t " + secretVal,
+					fmt.Errorf("exit status 1: -t %s", secretVal)
+			}
+			return "", nil
+		},
+	}
+	var out bytes.Buffer
+	synced, failed, fatal := syncProviderKeys(env, &out)
+	if fatal != nil || synced != 0 || failed != 1 {
+		t.Fatalf("synced=%d failed=%d fatal=%v; out=%q", synced, failed, fatal, out.String())
+	}
+	if strings.Contains(out.String(), secretVal) {
+		t.Errorf("resolved secret value must never appear in printed output, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "***") {
+		t.Errorf("expected the redaction marker in place of the value, got:\n%s", out.String())
+	}
+}

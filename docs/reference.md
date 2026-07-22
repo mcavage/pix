@@ -160,12 +160,12 @@ A pack is a git repo that is your portable capability context: the skills you
 taught pi-stack, an OKF knowledge bundle, the MCP servers and CLI wrappers
 you're wired to, and config (which Google account, which model prefs). It's
 the thing you'd `git diff`, as opposed to memory, which you'd only see in a
-`/recall`. Work and personal are two packs; switching between them is
-switching the active pack.
+`/recall`. The default pack is active automatically; switching to another
+context is switching the active pack.
 
 ```
-pi-stack pack use work           # switch active pack (config, knowledge, MCP set)
-pi-stack pack use personal
+pi-stack pack use default        # return to the default pack
+pi-stack pack use <path|git-url> # switch to another pack (config, knowledge, MCP set)
 pi-stack pack new [PATH]         # adopt an existing repo, or git-init a fresh one
 pi-stack pack add skill <name> [PACK]
 pi-stack pack add knowledge <name> [PACK] [--ref <git-url|path>] [--private]
@@ -219,8 +219,8 @@ Default is No. On a non-TTY (CI, a script), it fails closed unless you pass
 `--yes`. A pack that ships only skills and knowledge, nothing that executes,
 adopts with no prompt.
 
-**Limits.** One active pack at a time (no multi-pack stacking of work +
-personal simultaneously). External binaries in a pack are SHA-pinned and
+**Limits.** One active pack at a time (no multi-pack stacking of two packs
+simultaneously). External binaries in a pack are SHA-pinned and
 re-hashed before every launch; a tampered binary refuses to run rather than
 warning you. Switching packs is reversible for what the pack itself
 contributed (tracked in a generated `pack.lock`), but it will never remove an

@@ -207,8 +207,8 @@ USER agent
 # every rebuild; a newer extension then imports a pi-ai API (e.g. `/compat`) that
 # the pinned PI_PACKAGE doesn't ship, and the agent dies at load
 # ("Cannot find module '.../pi-ai/dist/index.js/compat'"). These versions are the
-# set that was current when PI_PACKAGE (0.80.3, 2026-06-30) shipped. When you
-# bump PI_PACKAGE, re-pin this list to the versions current at that release
+# set that was current when the pinned PI_PACKAGE shipped. When you bump
+# PI_PACKAGE, re-pin this list to the versions current at that release
 # (newest published on/before the release date).
 # NOTE: @tintinweb/pi-subagents stays DISABLED (it hung the event loop forever on
 # pi 0.80.x; full trace in docs/upstream/pi-subagents-hang-pi-0.80.md). It is
@@ -225,6 +225,10 @@ RUN set -eux; for p in \
       pi-usage@0.2.1; do \
       pi install "npm:$p"; \
     done; pi list
+
+# `/todos clear` in pi-manage-todo-list 0.4.0 clears only live memory. Persist
+# the clear marker so session resume and compaction continuation respect it.
+RUN node /usr/local/share/pi-stack/patches/apply-todo-durable-clear.mjs
 
 # Bound the subagent result-wait so a dead subagent can't park the event loop
 # (Esc-proof hang). Idempotent + non-fatal. DISABLED alongside pi-subagents above

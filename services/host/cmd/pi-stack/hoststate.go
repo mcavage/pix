@@ -1,14 +1,28 @@
-// hoststate.go writes <workspace>/.pi-stack/host-state.json at launch: the
-// host-visible facts the fenced in-VM agent CANNOT see for itself (keys resolved,
-// services up, knowledge bundles, gog/mcp state, models, overlay/provisioned).
-// The onboarding skill READS this and states facts instead of guessing — the fix
-// for "the agent said 'no knowledge base' when one was configured".
+// hoststate.go builds the host-visible facts the fenced in-VM agent CANNOT see
+// for itself (keys resolved, services up, knowledge bundles, gog/mcp state,
+// models, overlay/provisioned) ENTIRELY IN MEMORY — it is never written to a
+// workspace file. run.go injects the resulting JSON directly into the
+// launcher-generated initial prompt (the one message carrying
+// generatedInputMarker), so the onboarding skill reads trusted facts from that
+// prompt instead of guessing, and instead of reading anything from the
+// (attacker-influenced) workspace.
+//
+// Why not a file: a workspace like <workspace>/.pi-stack/host-state.json is
+// inside a directory a user can `pi-stack run` against after cloning an
+// untrusted repo. A file there is racy (nothing stops a stale copy from a
+// prior run, or a tracked file/symlink an attacker committed, from being read
+// instead of — or before — a fresh write) and is plain file content the agent
+// would read like any other untrusted workspace file. Trusted facts must
+// travel only inside the launcher-generated prompt, which the agent already
+// treats specially (see generatedInputMarker in setup.go), never through a
+// path a hostile clone can also write to.
 //
 // Nothing secret goes in it: booleans and names only, never a key value.
 package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,8 +78,10 @@ type hostStateHost struct {
 }
 
 type hostStatePack struct {
-	Active         bool   `json:"active"`          // an active/personal pack exists
-	Path           string `json:"path"`            // its root
+	Active         bool   `json:"active"`          // a pack is ACTUALLY active (config `pack` or a --pack override)
+	Exists         bool   `json:"exists"`          // a loadable pack exists at Path
+	Default        bool   `json:"default"`         // Path IS the default pack root
+	Path           string `json:"path"`            // the active pack's root, or the default pack's when none is active
 	GitInitialized bool   `json:"git_initialized"` // has a .git
 	Skills         bool   `json:"skills"`          // has skills/
 	Knowledge      bool   `json:"knowledge"`       // has knowledge/
@@ -238,13 +254,19 @@ func hostProvisioned() bool {
 	return true
 }
 
-// resolveHostStatePack reports the active pack (config `pack`) or, failing that,
-// the personal pack (PackDir), so the in-VM onboarding agent states pack facts
-// instead of guessing.
+// resolveHostStatePack reports pack truth for the in-VM onboarding agent, so
+// it states facts instead of guessing. `Active` means ACTUALLY active: config
+// `pack` (or a create-time --pack override) names a loadable pack. When
+// neither is set, the DEFAULT pack's existence and facts are still reported
+// (Exists/Default/Path/...), but Active stays FALSE — the old code marked the
+// default pack active merely because it existed on disk, which made the
+// onboarding copy unconditionally claim "a pack is active" on hosts where
+// nothing was.
 func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
 	root := activePackRoot(cfg.Pack, override)
+	active := root != ""
 	if root == "" {
-		root = personalPackRoot() // runs the legacy "pack" -> "personal" migration
+		root = defaultPackRoot() // runs the legacy pack/personal -> default migration
 	}
 	p, err := loadPack(root)
 	if err != nil {
@@ -255,7 +277,9 @@ func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
 		gitInit = true
 	}
 	return hostStatePack{
-		Active:         true,
+		Active:         active,
+		Exists:         true,
+		Default:        canonicalizePackRoot(p.Root) == canonicalizePackRoot(defaultPackRoot()),
 		Path:           p.Root,
 		GitInitialized: gitInit,
 		Skills:         p.SkillsDir != "",
@@ -263,12 +287,12 @@ func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
 	}
 }
 
-// writeHostStateFile writes <workspace>/.pi-stack/host-state.json. Best-effort:
-// a failure just means the agent has no truth file and falls back to probing
-// (the pre-fix behavior), never a broken launch. Symlink-safe via
-// writeWorkspaceStateFile (the workspace may be an untrusted clone shipping
-// .pi-stack/host-state.json as a tracked symlink).
-func writeHostStateFile(workspace string, cfg *config.Config, env shellEnv, mcpGatewayOn bool, packOverride string) {
+// buildTrustedHostState gathers the host-visible facts, entirely in memory —
+// reusing the exact same probes (sbx secret ls, port dial, key-ref source,
+// pack resolution, git identity) writeHostStateFile used to run before it
+// wrote them to a file. Pure w.r.t. env/cfg (all I/O goes through the shellEnv
+// seam), so it is unit-testable without touching disk.
+func buildTrustedHostState(cfg *config.Config, env shellEnv, mcpGatewayOn bool, packOverride string) hostState {
 	sbxOut, sbxOK := "", false
 	if env.lookPath != nil {
 		if _, err := env.lookPath("sbx"); err == nil && env.run != nil {
@@ -287,10 +311,72 @@ func writeHostStateFile(workspace string, cfg *config.Config, env shellEnv, mcpG
 	}
 	hs := buildHostState(cfg, sbxOut, sbxOK, dial, mcpGatewayOn, source, resolveHostStatePack(cfg, packOverride))
 	hs.Identity = readGitIdentity(env)
+	return hs
+}
 
-	b, err := json.MarshalIndent(hs, "", "  ")
+// encodeTrustedHostState JSON-encodes hs for injection into the
+// launcher-generated initial prompt. A separate function (rather than
+// inlining json.Marshal at the call site) so the encode step has its own
+// explicit error seam: the caller (injectTrustedHostState) must abort the
+// launch BEFORE exec'ing sbx on a non-nil error, never proceed with a
+// half-built or silently-omitted trusted payload.
+func encodeTrustedHostState(hs hostState) ([]byte, error) {
+	b, err := json.Marshal(hs)
 	if err != nil {
-		return
+		return nil, fmt.Errorf("encoding trusted host state: %w", err)
 	}
-	_ = writeWorkspaceStateFile(workspace, "host-state.json", append(b, '\n'), 0o644)
+	return b, nil
+}
+
+// trustedHostStateBegin/End clearly delimit the trusted host-state JSON block
+// appended to the launcher-generated prompt, so the onboarding skill (and a
+// human glancing at the transcript) can tell exactly where machine-generated
+// data starts and ends inside that one message. Keep this pair in sync with
+// skills/onboarding/SKILL.md's parsing instructions.
+const (
+	trustedHostStateBegin = "\n\n[pi-stack-trusted-host-state]\n"
+	trustedHostStateEnd   = "\n[/pi-stack-trusted-host-state]"
+)
+
+// injectTrustedHostState appends the trusted host-state JSON payload to the
+// ONE pi passthrough arg that is the launcher's own generated prompt (the arg
+// with generatedInputMarker as a prefix — see setup.go), and ONLY that arg.
+// It returns a COPY of args; the input slice is never mutated.
+//
+// This is the ENTIRE mechanism by which trusted host facts reach the fenced
+// in-VM agent: no file is written to the workspace for this purpose. An
+// ordinary user-typed prompt never carries generatedInputMarker, so it is
+// never a target here — injectTrustedHostState must not, and does not, touch
+// any arg the user actually typed.
+//
+// When no generated-marker arg is present (a normal `pi-stack run` with no
+// onboarding kickoff), this is a no-op: args is copied unchanged and no host
+// probe (sbx secret ls, port dial, git config, pack resolution) runs at all —
+// onboarding truth is built ONLY when there is actually a generated prompt to
+// carry it.
+//
+// Building or encoding the trusted state is a HARD contract when a
+// generated-marker arg IS present: a launch that can't produce the payload
+// must abort BEFORE exec'ing sbx (the caller in run.go checks the returned
+// error) rather than hand the onboarding agent a generated prompt with no
+// trusted facts, or — worse — let it fall back to reading something else.
+func injectTrustedHostState(args []string, cfg *config.Config, env shellEnv, mcpGatewayOn bool, packOverride string) ([]string, error) {
+	idx := -1
+	for i, a := range args {
+		if strings.HasPrefix(a, generatedInputMarker) {
+			idx = i
+			break
+		}
+	}
+	out := append([]string(nil), args...)
+	if idx < 0 {
+		return out, nil
+	}
+	hs := buildTrustedHostState(cfg, env, mcpGatewayOn, packOverride)
+	b, err := encodeTrustedHostState(hs)
+	if err != nil {
+		return nil, err
+	}
+	out[idx] = out[idx] + trustedHostStateBegin + string(b) + trustedHostStateEnd
+	return out, nil
 }

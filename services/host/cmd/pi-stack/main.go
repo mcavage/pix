@@ -325,7 +325,7 @@ Workflow
   status           what is up, what is down, what is next   (also the bare command)
 
 Setup & health
-  setup            guided setup: keys, memory, knowledge, integrations
+  setup            guided setup: keys, memory, pack (knowledge/integrations optional)
   doctor           diagnose problems and print the exact fix commands
 
 Data

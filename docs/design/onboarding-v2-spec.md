@@ -1,5 +1,17 @@
 # Onboarding v2 — product spec (FOR REVIEW, rev 2)
 
+> **Historical, superseded.** The owner decided against this draft's "land in a
+> real task first, no upfront tour" shape (§3-§4). The current, shipped design
+> is the opposite: ONE thorough, hyper-opinionated upfront message that names
+> the exact workflow for the situation, then a single direct question, see
+> `skills/onboarding/SKILL.md`. Read this doc for the host-state FIELD SCHEMA
+> (§6, still accurate) and the keys/MCP-gating background, not for the
+> onboarding flow shape, and NOT for the delivery mechanism: §6's
+> `<workspace>/.pi-stack/host-state.json` file design is ITSELF superseded —
+> the shipped mechanism builds the same fields in memory and injects them
+> directly into the launcher-generated initial prompt (never a workspace
+> file); see `skills/onboarding/SKILL.md` and `hoststate.go`.
+
 Status: DRAFT for owner review. Not implemented. Supersedes the in-session
 identity-Q&A flow in `skills/onboarding/SKILL.md` and extends (does not replace)
 the trust-plane architecture in `docs/design/onboarding.md`.
@@ -90,12 +102,22 @@ Decision (owner): **1Password holds the secret VALUES; pi-stack owns the
   future secrets backend. Injection target (proxy vs sbx secret vs direct) is an
   implementation detail behind the ref model, not a user-facing choice.
 
-## 6. Host->agent truth file
+## 6. Host->agent truth (SUPERSEDED delivery mechanism, fields still accurate)
 
-Host writes `<workspace>/.pi-stack/host-state.json` at launch (sibling of the
-existing `profile`, `ollama-bridge.model`, `knowledge.scope` files). The agent
-READS it and states facts; it never probes host config. It is NOT printed as an
-onboarding block (§3) — it feeds the agent and gates the short-circuit (§9).
+> **Superseded:** this section originally specified a written
+> `<workspace>/.pi-stack/host-state.json` file. That mechanism shipped, then was
+> replaced: a workspace is attacker-influenced (a cloned repo), so a file there
+> can never be the trust boundary for facts the agent treats as ground truth —
+> it is racy (stale/planted content) and reads like any other untrusted
+> workspace file. The shipped mechanism instead builds this same JSON shape
+> entirely in memory and injects it directly into the launcher-generated
+> initial prompt (the onboarding kickoff message), clearly delimited, never
+written to disk. The field schema below is still accurate.
+
+The agent reads the payload from that ONE generated message and states facts;
+it never probes host config, and never reads any workspace file for this. It is
+NOT printed as an onboarding block (§3) — it feeds the agent and gates the
+short-circuit (§9).
 
 ```json
 {
@@ -212,7 +234,9 @@ constrained) to make the watcher reliable regardless of model.
 
 ## 13. Net-new work this depends on
 
-1. `host-state.json` writer (host) + reader (skill). Critical path.
+1. In-memory host-state builder (host) + prompt-injected payload reader
+   (skill). Critical path. (Originally shipped as a `host-state.json` writer;
+   superseded per §6 — the file mechanism was replaced with prompt injection.)
 2. DONE. `pi-stack secret sync` resolves provider-key `op://` refs -> sbx
    secrets (sandbox proxy store); host mode already resolves them via `op run
    --env-file`. Keys gate points at `pi-stack secret sync`; setup runs it

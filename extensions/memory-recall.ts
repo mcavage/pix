@@ -206,6 +206,18 @@ const MEMORY_TOOL_SEMANTICS =
 	"This tool surface is read-only: it can inspect memory but cannot store or delete it. Writing (`/remember`) and deleting (`/forget`) are human-driven slash commands, not agent tools, " +
 	"that's a UX/safety design choice on this tool surface, not a security control.";
 
+// Always-visible honesty guardrail, surfaced in promptGuidelines (not just the
+// description) so it stays in the model's face on every turn a memory tool is in
+// scope, not just when it reads the tool description once. The agent has NO
+// control over the watcher's automatic capture, so it must never assert a
+// specific statement will or won't be captured, pinned, or saved, that's a claim
+// only memory_recall can confirm AFTER the fact by checking the store. This also
+// forecloses the specific failure mode of reasoning from tool relevance ("this
+// won't help with code, so it won't be saved") instead of reading the store.
+const MEMORY_CAPTURE_HONESTY_GUIDELINE =
+	"The agent does not control automatic capture. Never claim a statement will or will not be remembered, saved, pinned, or auto-captured unless memory_recall confirms it after capture. " +
+	"If it matters, tell the user /remember <fact> is the explicit reliable path.";
+
 const MemoryRecallParams = Type.Object({
 	query: Type.Optional(
 		Type.String({
@@ -258,6 +270,7 @@ export default function (pi: any) {
 		promptSnippet: "Inspect the host memory store; '*' lists all visible memories",
 		promptGuidelines: [
 			"Use memory_recall when the user asks what is remembered, whether memory is accessible, or how stored memory affects the current answer; do not probe the daemon with shell commands.",
+			MEMORY_CAPTURE_HONESTY_GUIDELINE,
 		],
 		description: [
 			"Query the memory store for what pi-stack remembers. Use this when the user asks what is remembered, asks about memory semantics or what's currently stored, or asks whether the agent can see memory, do not guess or answer from context alone.",
@@ -289,6 +302,7 @@ export default function (pi: any) {
 		promptSnippet: "Read durable, perishable, active, and deleted memory counts",
 		promptGuidelines: [
 			"Use memory_stats for memory-store counts instead of guessing or probing the daemon with shell commands.",
+			MEMORY_CAPTURE_HONESTY_GUIDELINE,
 		],
 		description: [
 			"Report counts from the memory store (active, durable, perishable, facts, learnings, deleted). Use this when the user asks how much memory there is, or what the current store looks like.",

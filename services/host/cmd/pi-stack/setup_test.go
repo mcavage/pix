@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,24 +11,6 @@ import (
 
 	"pi-stack/host/config"
 )
-
-// TestSetupSandboxExists: setup blocks only on a POSITIVELY present sandbox.
-func TestSetupSandboxExists(t *testing.T) {
-	cases := []struct {
-		state sbxState
-		block bool
-	}{
-		{sbxRunning, true},
-		{sbxStopped, true},
-		{sbxAbsent, false},
-		{sbxUnknown, false},
-	}
-	for _, c := range cases {
-		if got := setupSandboxExists(c.state); got != c.block {
-			t.Errorf("setupSandboxExists(%v) = %v, want %v", c.state, got, c.block)
-		}
-	}
-}
 
 // TestSetupSandboxName derives pi-stack-<base> under the default profile.
 func TestSetupSandboxName(t *testing.T) {
@@ -40,6 +23,78 @@ func TestSetupSandboxName(t *testing.T) {
 	}
 	if want := "pi-stack-tact"; name != want {
 		t.Errorf("setupSandboxName = %q, want %q", name, want)
+	}
+}
+
+// --- item 4: DIR must be validated BEFORE the host phase mutates anything ---
+
+// runSetupCore must refuse a NONEXISTENT DIR before ever invoking hostPhase —
+// the stub fails the test if called, proving the invalid-DIR path never
+// reaches (and therefore never mutates) op-refs.env/hostmode.env/config.toml/
+// the default pack/memory/host-mode.
+func TestRunSetupCore_NonexistentDir_NoHostPhaseInvocation(t *testing.T) {
+	invoked := false
+	stub := func(shellEnv, []string, io.Reader, io.Writer, bool) error {
+		invoked = true
+		return nil
+	}
+	err := runSetupCore(shellEnv{}, filepath.Join(t.TempDir(), "does-not-exist"), nil, strings.NewReader(""), &bytes.Buffer{}, false, stub)
+	if err == nil {
+		t.Fatal("a nonexistent DIR must fail runSetupCore")
+	}
+	if invoked {
+		t.Fatal("hostPhase must NEVER be invoked for a nonexistent DIR")
+	}
+}
+
+// runSetupCore must refuse a DIR that names a FILE (not a directory) before
+// ever invoking hostPhase, for the same reason.
+func TestRunSetupCore_FileNotDir_NoHostPhaseInvocation(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a-file")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	invoked := false
+	stub := func(shellEnv, []string, io.Reader, io.Writer, bool) error {
+		invoked = true
+		return nil
+	}
+	err := runSetupCore(shellEnv{}, file, nil, strings.NewReader(""), &bytes.Buffer{}, false, stub)
+	if err == nil {
+		t.Fatal("a DIR that is a file (not a directory) must fail runSetupCore")
+	}
+	if invoked {
+		t.Fatal("hostPhase must NEVER be invoked when DIR is a file, not a directory")
+	}
+}
+
+// runSetupCore must invoke hostPhase (and return its result) for a DIR that
+// genuinely exists and is a directory, and for the "." default.
+func TestRunSetupCore_ValidDir_InvokesHostPhase(t *testing.T) {
+	dir := t.TempDir()
+	for _, valid := range []string{dir, "."} {
+		invoked := false
+		stub := func(shellEnv, []string, io.Reader, io.Writer, bool) error {
+			invoked = true
+			return nil
+		}
+		if err := runSetupCore(shellEnv{}, valid, nil, strings.NewReader(""), &bytes.Buffer{}, false, stub); err != nil {
+			t.Fatalf("dir=%q: unexpected error: %v", valid, err)
+		}
+		if !invoked {
+			t.Fatalf("dir=%q: hostPhase must be invoked for a valid dir", valid)
+		}
+	}
+}
+
+// runSetupCore must propagate hostPhase's own error/return value unchanged
+// (it's a thin validate-then-call, not a swallow).
+func TestRunSetupCore_PropagatesHostPhaseError(t *testing.T) {
+	wantErr := fmt.Errorf("boom")
+	stub := func(shellEnv, []string, io.Reader, io.Writer, bool) error { return wantErr }
+	if err := runSetupCore(shellEnv{}, ".", nil, strings.NewReader(""), &bytes.Buffer{}, false, stub); err != wantErr {
+		t.Errorf("expected hostPhase's own error to propagate, got %v", err)
 	}
 }
 
@@ -65,6 +120,48 @@ func TestSetupHostPhase_NoKeyAborts(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "1Password") && strings.Contains(out.String(), "Manage model keys") {
 		t.Error("non-interactive setup must not show the 1Password prompt")
+	}
+}
+
+// setupHostPhase must reject unsupported setup flags and validate
+// --mcp/--knowledge/--model BEFORE touching provider keys at all. An invalid
+// flag must abort before setupProvisionKeysFn, with no 1Password prompt, ref
+// write, or sbx reconciliation for a request that cannot be applied.
+func TestSetupHostPhase_InvalidFlags_NeverInvokesProviderKeyFlow(t *testing.T) {
+	orig := setupProvisionKeysFn
+	t.Cleanup(func() { setupProvisionKeysFn = orig })
+
+	cases := []struct {
+		name  string
+		flags []string
+	}{
+		{"unallowlisted mcp name", []string{"--yes", "--mcp", "not-a-real-server"}},
+		{"whitespace in ollama_bridge_model", []string{"--yes", "--model", "bad model"}},
+		{"onboard-only apply", []string{"--yes", "--apply"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
+
+			invoked := false
+			setupProvisionKeysFn = func(shellEnv, io.Reader, io.Writer, bool, bool) bool {
+				invoked = true
+				return true
+			}
+
+			var out bytes.Buffer
+			err := setupHostPhase(shellEnv{}, tc.flags, strings.NewReader(""), &out, false)
+			if err == nil {
+				t.Fatalf("expected setupHostPhase to fail for flags %v", tc.flags)
+			}
+			if invoked {
+				t.Errorf("setupProvisionKeysFn must NEVER be invoked when flag validation fails (flags %v); no provider-key/ref/sbx work may run for a request that will be rejected", tc.flags)
+			}
+			if _, statErr := os.Stat(filepath.Join(dir, "config.toml")); !os.IsNotExist(statErr) {
+				t.Errorf("config.toml must not be written when flag validation fails, stat err = %v", statErr)
+			}
+		})
 	}
 }
 
@@ -111,19 +208,21 @@ func TestProviderRefSet(t *testing.T) {
 	}
 }
 
-// setupProvisionKeys, non-interactive with no op and no sbx: it must not prompt
-// and must fail OPEN (true) so a box without sbx isn't blocked.
-func TestSetupProvisionKeys_NoSbxFailsOpen(t *testing.T) {
+// setupProvisionKeys with `op` entirely missing is a HARD precondition
+// failure (never fail-open) — without op there's nothing to source keys
+// from at all. See setup_keys_flow_test.go's SbxUnavailable_FailsOpen for the
+// case that DOES fail open (valid refs, sbx itself unreachable).
+func TestSetupProvisionKeys_OpMissingNeverFailsOpen(t *testing.T) {
 	env := shellEnv{
 		lookPath: func(string) (string, error) { return "", fmt.Errorf("not found") },
 		getenv:   func(string) string { return "/cfg" },
 		readFile: func(string) (string, error) { return "", os.ErrNotExist },
 	}
 	var out bytes.Buffer
-	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
-		t.Error("must fail open (true) when sbx can't be probed")
+	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
+		t.Error("op missing must fail setup, never fail open")
 	}
-	if strings.Contains(out.String(), ": ") && strings.Contains(out.String(), "Paste an op://") {
+	if strings.Contains(out.String(), "Paste an op://") {
 		t.Error("non-interactive must not prompt for refs")
 	}
 }
@@ -166,5 +265,389 @@ func TestOnboardingKickoffCarriesGeneratedMarker(t *testing.T) {
 	}
 	if !strings.HasPrefix(generatedInputMarker, "[pi-stack-generated:") {
 		t.Fatalf("generatedInputMarker must start with the [pi-stack-generated: contract prefix, got %q", generatedInputMarker)
+	}
+}
+
+// --- item C: runSetupHandoff (post-host-phase decision) -------------------
+
+// An EXISTING sandbox without --replace is left alone: setup reports success
+// ("reconciled", not "current"), prints the exact choices, and never calls
+// runFn (never replays the onboarding kickoff into a live session).
+func TestRunSetupHandoff_ExistingSandbox_LeftAloneNoRunFn(t *testing.T) {
+	for _, state := range []sbxState{sbxRunning, sbxStopped} {
+		var out bytes.Buffer
+		called := false
+		if err := runSetupHandoff(".", "pi-stack-demo", state, false, &out, func([]string) { called = true }); err != nil {
+			t.Fatalf("state %v: unexpected error: %v", state, err)
+		}
+		if called {
+			t.Errorf("state %v: an existing sandbox must never be handed the onboarding kickoff", state)
+		}
+		if !strings.Contains(out.String(), `Host configuration reconciled. Existing sandbox "pi-stack-demo" was left alone.`) {
+			t.Errorf("state %v: must print the exact reconciled line, got:\n%s", state, out.String())
+		}
+		if !strings.Contains(out.String(), "pi-stack run ") {
+			t.Errorf("state %v: must print the reattach choice, got:\n%s", state, out.String())
+		}
+		if !strings.Contains(out.String(), "pi-stack setup --replace") {
+			t.Errorf("state %v: recreate choice must be `pi-stack setup --replace` (setup owns the tour), got:\n%s", state, out.String())
+		}
+		if strings.Contains(out.String(), "pi-stack run --replace") {
+			t.Errorf("state %v: must NOT steer at bare `pi-stack run --replace` (it would recreate without the tour), got:\n%s", state, out.String())
+		}
+		// The explanation of what each choice means (attachments are create-time).
+		if !strings.Contains(out.String(), "create time") {
+			t.Errorf("state %v: must explain reattach keeps create-time attachments, got:\n%s", state, out.String())
+		}
+	}
+}
+
+// An EXISTING sandbox WITH --replace relaunches through `run --replace`
+// carrying the kickoff, so the recreated sandbox actually receives the tour.
+func TestRunSetupHandoff_ExistingSandbox_ReplaceRecreatesWithKickoff(t *testing.T) {
+	var out bytes.Buffer
+	var gotArgs []string
+	if err := runSetupHandoff("/some/repo", "pi-stack-repo", sbxRunning, true, &out, func(args []string) { gotArgs = args }); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"/some/repo", "--replace", "--", onboardingKickoff}
+	if len(gotArgs) != len(want) {
+		t.Fatalf("runFn args = %v, want %v", gotArgs, want)
+	}
+	for i := range want {
+		if gotArgs[i] != want[i] {
+			t.Fatalf("runFn args = %v, want %v", gotArgs, want)
+		}
+	}
+}
+
+// sbxUnknown FAILS CLOSED: no launch, no leave-alone success message — an
+// error telling the user to retry, because launching blind could replay the
+// kickoff into a live session the probe couldn't see.
+func TestRunSetupHandoff_UnknownState_FailsClosed(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		var out bytes.Buffer
+		called := false
+		err := runSetupHandoff(".", "pi-stack-demo", sbxUnknown, replace, &out, func([]string) { called = true })
+		if err == nil {
+			t.Fatalf("replace=%v: unknown state must return an error", replace)
+		}
+		if called {
+			t.Errorf("replace=%v: unknown state must never call runFn", replace)
+		}
+		if !strings.Contains(err.Error(), "cannot determine") {
+			t.Errorf("replace=%v: error must say the state cannot be determined, got: %v", replace, err)
+		}
+		if !strings.Contains(err.Error(), "pi-stack setup") {
+			t.Errorf("replace=%v: error must tell the user to retry setup, got: %v", replace, err)
+		}
+	}
+}
+
+// sbxUnknown's retry command must preserve an EXPLICIT DIR and a requested
+// --replace, both shell-quoted correctly, so copy-pasting the printed retry
+// command reproduces exactly what the user originally asked for (dropping
+// --replace here would silently downgrade a requested recreate into a plain
+// reattach on retry).
+func TestRunSetupHandoff_UnknownState_RetryCommandPreservesDirAndReplace(t *testing.T) {
+	var out bytes.Buffer
+	called := false
+	err := runSetupHandoff("/some/repo", "pi-stack-repo", sbxUnknown, true, &out, func([]string) { called = true })
+	if err == nil {
+		t.Fatal("unknown state must return an error")
+	}
+	if called {
+		t.Error("unknown state must never call runFn")
+	}
+	want := "pi-stack setup /some/repo --replace"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error must contain the exact retry command %q, got: %v", want, err)
+	}
+
+	// A DIR needing shell quoting must still round-trip, with --replace after it.
+	var out2 bytes.Buffer
+	err2 := runSetupHandoff("/some/repo's dir", "pi-stack-repo", sbxUnknown, true, &out2, func([]string) {})
+	if err2 == nil {
+		t.Fatal("unknown state must return an error")
+	}
+	want2 := "pi-stack setup " + shellQuoteArg("/some/repo's dir") + " --replace"
+	if !strings.Contains(err2.Error(), want2) {
+		t.Errorf("error must contain the exact quoted retry command %q, got: %v", want2, err2)
+	}
+}
+
+// An ABSENT sandbox gets the normal first-launch handoff: runFn IS called with
+// the onboarding kickoff.
+func TestRunSetupHandoff_AbsentSandbox_LaunchesWithKickoff(t *testing.T) {
+	var out bytes.Buffer
+	var gotArgs []string
+	if err := runSetupHandoff(".", "pi-stack-demo", sbxAbsent, false, &out, func(args []string) { gotArgs = args }); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotArgs == nil {
+		t.Fatal("an absent sandbox must launch via runFn")
+	}
+	if len(gotArgs) == 0 || gotArgs[len(gotArgs)-1] != onboardingKickoff {
+		t.Errorf("launch args must end with the onboarding kickoff, got: %v", gotArgs)
+	}
+	if !strings.Contains(out.String(), "Launching sandbox") {
+		t.Errorf("must print the first-launch message, got:\n%s", out.String())
+	}
+}
+
+// A non-"." dir is passed through as the leading positional to runFn.
+func TestRunSetupHandoff_AbsentSandbox_PassesDir(t *testing.T) {
+	var out bytes.Buffer
+	var gotArgs []string
+	if err := runSetupHandoff("/some/repo", "pi-stack-repo", sbxAbsent, false, &out, func(args []string) { gotArgs = args }); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gotArgs) < 3 || gotArgs[0] != "/some/repo" {
+		t.Errorf("dir must be forwarded as the leading positional, got: %v", gotArgs)
+	}
+}
+
+// Absent + --replace: the flag is harmless — forwarded to run (create path
+// ignores it), and the kickoff still rides along.
+func TestRunSetupHandoff_AbsentSandbox_ReplaceHarmless(t *testing.T) {
+	var out bytes.Buffer
+	var gotArgs []string
+	if err := runSetupHandoff(".", "pi-stack-demo", sbxAbsent, true, &out, func(args []string) { gotArgs = args }); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"--replace", "--", onboardingKickoff}
+	if len(gotArgs) != len(want) {
+		t.Fatalf("runFn args = %v, want %v", gotArgs, want)
+	}
+	for i := range want {
+		if gotArgs[i] != want[i] {
+			t.Fatalf("runFn args = %v, want %v", gotArgs, want)
+		}
+	}
+}
+
+// An explicit DIR with spaces and an apostrophe is preserved in the printed
+// repeat commands via POSIX single-quoting (with the '\” escape), so the
+// commands are copy-paste safe.
+func TestRunSetupHandoff_ExistingSandbox_QuotesExplicitDir(t *testing.T) {
+	dir := "/tmp/my repo's checkout"
+	var out bytes.Buffer
+	if err := runSetupHandoff(dir, "pi-stack-checkout", sbxStopped, false, &out, func([]string) {
+		t.Fatal("must not launch")
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	quoted := `'/tmp/my repo'\''s checkout'`
+	if !strings.Contains(out.String(), "pi-stack run "+quoted) {
+		t.Errorf("reattach command must carry the quoted DIR %s, got:\n%s", quoted, out.String())
+	}
+	if !strings.Contains(out.String(), "pi-stack setup "+quoted+" --replace") {
+		t.Errorf("recreate command must carry the quoted DIR %s, got:\n%s", quoted, out.String())
+	}
+}
+
+// shellQuoteArg: safe tokens pass through; anything else is single-quoted with
+// apostrophes escaped.
+func TestShellQuoteArg(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", "''"},
+		{"/plain/path-1.2_3", "/plain/path-1.2_3"},
+		{"with space", "'with space'"},
+		{"it's", `'it'\''s'`},
+		{"$HOME", `'$HOME'`},
+		{"a;b", "'a;b'"},
+	}
+	for _, c := range cases {
+		if got := shellQuoteArg(c.in); got != c.want {
+			t.Errorf("shellQuoteArg(%q) = %s, want %s", c.in, got, c.want)
+		}
+	}
+}
+
+// --- item 1: ordinary value flags must NOT suppress interactive prompts ---
+
+func TestSetupInteractivePrompts_OnlyAssumeYesSuppresses(t *testing.T) {
+	cases := []struct {
+		tty, assumeYes, want bool
+	}{
+		{true, false, true},   // TTY, no opt-out -> interactive
+		{true, true, false},   // TTY but --yes -> non-interactive
+		{false, false, false}, // no TTY at all -> non-interactive
+		{false, true, false},
+	}
+	for _, c := range cases {
+		if got := setupInteractivePrompts(c.tty, c.assumeYes); got != c.want {
+			t.Errorf("setupInteractivePrompts(tty=%v, assumeYes=%v) = %v, want %v", c.tty, c.assumeYes, got, c.want)
+		}
+	}
+}
+
+// --- seedIdentity honesty: memory claims track actual RPC outcomes ---------
+
+// fakeIdentityMemory simulates the memory daemon for seedIdentity: up or not,
+// per-fact remember failures keyed by content substring (a real RPC error),
+// and per-fact "emptyID" substrings simulating the daemon's OWN no-error but
+// nothing-persisted response ({"id": "", "reaffirmed": false} — memory.go's
+// remember handler for empty content). A fact matching neither returns the
+// real daemon's success shape: a nonempty "id".
+type fakeIdentityMemory struct {
+	up      bool
+	fail    []string // content substrings whose remember call errors
+	emptyID []string // content substrings whose remember call succeeds with NO id
+	calls   []string
+}
+
+func (f *fakeIdentityMemory) Up() bool { return f.up }
+func (f *fakeIdentityMemory) Call(method string, params map[string]any) (map[string]any, error) {
+	content, _ := params["content"].(string)
+	f.calls = append(f.calls, content)
+	for _, sub := range f.fail {
+		if strings.Contains(content, sub) {
+			return nil, fmt.Errorf("remember failed")
+		}
+	}
+	for _, sub := range f.emptyID {
+		if strings.Contains(content, sub) {
+			return map[string]any{"id": "", "reaffirmed": false}, nil
+		}
+	}
+	return map[string]any{"id": "mem-" + content, "reaffirmed": false}, nil
+}
+
+func gitIdentityEnv(name, email string) shellEnv {
+	return shellEnv{run: func(cmd string, args ...string) (string, error) {
+		if cmd == "git" && len(args) >= 4 && args[3] == "user.name" {
+			return name, nil
+		}
+		if cmd == "git" && len(args) >= 4 && args[3] == "user.email" {
+			return email, nil
+		}
+		return "", fmt.Errorf("unexpected: %s %v", cmd, args)
+	}}
+}
+
+func withIdentityMemory(t *testing.T, m identityMemory) {
+	t.Helper()
+	orig := newIdentityMemory
+	newIdentityMemory = func() identityMemory { return m }
+	t.Cleanup(func() { newIdentityMemory = orig })
+}
+
+// All remember RPCs succeed: the output may claim the memory save, and always
+// names host state as the deterministic carrier.
+func TestSeedIdentity_AllSaved(t *testing.T) {
+	m := &fakeIdentityMemory{up: true}
+	withIdentityMemory(t, m)
+	var out bytes.Buffer
+	seedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
+	if len(m.calls) != 2 {
+		t.Fatalf("expected 2 remember calls, got %v", m.calls)
+	}
+	if !strings.Contains(out.String(), "Saved to memory and available to sessions via host state.") {
+		t.Errorf("full success must claim the memory save, got:\n%s", out.String())
+	}
+	if strings.ContainsRune(out.String(), '\u2014') {
+		t.Errorf("user copy must not contain an em dash, got:\n%s", out.String())
+	}
+}
+
+// One of two remember RPCs fails: the output must be honest about the partial
+// save, never claim the full batch landed.
+func TestSeedIdentity_PartialSaveHonest(t *testing.T) {
+	m := &fakeIdentityMemory{up: true, fail: []string{"git email"}}
+	withIdentityMemory(t, m)
+	var out bytes.Buffer
+	seedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
+	if !strings.Contains(out.String(), "Only 1 of 2 facts saved to memory") {
+		t.Errorf("partial failure must be reported honestly, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "Saved to memory and") {
+		t.Errorf("partial failure must not claim the full save, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "available to sessions via host state") {
+		t.Errorf("host state carrier is always true and must be stated, got:\n%s", out.String())
+	}
+}
+
+// item 9: a remember call that returns NO ERROR but an EMPTY "id" (the
+// daemon's real no-op response shape) must NOT be counted as a save — this
+// is the specific gap err==nil alone used to miss.
+func TestSeedIdentity_PartialEmptyID_NotCountedAsSaved(t *testing.T) {
+	m := &fakeIdentityMemory{up: true, emptyID: []string{"git email"}}
+	withIdentityMemory(t, m)
+	var out bytes.Buffer
+	seedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
+	if len(m.calls) != 2 {
+		t.Fatalf("expected 2 remember calls (both attempted), got %v", m.calls)
+	}
+	if !strings.Contains(out.String(), "Only 1 of 2 facts saved to memory") {
+		t.Errorf("a no-error-but-empty-id response must be treated exactly like a failed save, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "Saved to memory and") {
+		t.Errorf("must not claim the full save when one RPC returned no id, got:\n%s", out.String())
+	}
+}
+
+// item 9: when EVERY remember call returns no error but an empty id, that is
+// a full failure to persist, indistinguishable in outcome from every RPC
+// erroring outright — the same "could not save" message must fire.
+func TestSeedIdentity_AllEmptyID_TreatedAsFullFailure(t *testing.T) {
+	m := &fakeIdentityMemory{up: true, emptyID: []string{"name is", "git email"}}
+	withIdentityMemory(t, m)
+	var out bytes.Buffer
+	seedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
+	if !strings.Contains(out.String(), "Could not save to memory") {
+		t.Errorf("an all-empty-id batch must be reported as a full failure, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "Saved to memory") {
+		t.Errorf("must not claim any save when every result had an empty id, got:\n%s", out.String())
+	}
+}
+
+// item 9: a successful remember call is counted ONLY via its result's actual
+// "id" field — the fake's success shape now mirrors the real daemon
+// (nonempty id), proving the counting path reads it rather than merely
+// checking err == nil.
+func TestSeedIdentity_SuccessCountsViaPersistedID(t *testing.T) {
+	m := &fakeIdentityMemory{up: true}
+	withIdentityMemory(t, m)
+	var out bytes.Buffer
+	seedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
+	if len(m.calls) != 2 {
+		t.Fatalf("expected 2 remember calls, got %v", m.calls)
+	}
+	if !strings.Contains(out.String(), "Saved to memory and available to sessions via host state.") {
+		t.Errorf("a genuine nonempty-id result on every call must count as a full save, got:\n%s", out.String())
+	}
+}
+
+// Every remember RPC fails: no memory-save claim at all, no promise.
+func TestSeedIdentity_AllRPCsFailNoClaim(t *testing.T) {
+	m := &fakeIdentityMemory{up: true, fail: []string{"user's"}}
+	withIdentityMemory(t, m)
+	var out bytes.Buffer
+	seedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
+	if !strings.Contains(out.String(), "Could not save to memory") {
+		t.Errorf("full RPC failure must be stated, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "Saved to memory") {
+		t.Errorf("must not claim any save on full failure, got:\n%s", out.String())
+	}
+}
+
+// Daemon down: identity still reported via host state, zero memory claims.
+func TestSeedIdentity_DaemonDownNoClaim(t *testing.T) {
+	m := &fakeIdentityMemory{up: false}
+	withIdentityMemory(t, m)
+	var out bytes.Buffer
+	seedIdentity(gitIdentityEnv("Mark", ""), &out)
+	if len(m.calls) != 0 {
+		t.Fatalf("daemon down must attempt no remember calls, got %v", m.calls)
+	}
+	if !strings.Contains(out.String(), "Available to sessions via host state.") {
+		t.Errorf("host-state availability must still be stated, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "memory") {
+		t.Errorf("daemon down must make no memory claim, got:\n%s", out.String())
 	}
 }

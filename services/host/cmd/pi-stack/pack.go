@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -302,55 +303,516 @@ func expandUser(p string) string {
 	return p
 }
 
-// personalPackRoot is the default personal-pack location. It runs the
-// legacy-dir migration (the "pack" -> "personal" rename) once per resolution
-// so every call site that resolves the personal pack picks up an existing
+// defaultPackRoot is the default-pack location. It runs the legacy-dir
+// migration (the "pack"/"personal" -> "default" rename) once per resolution
+// so every call site that resolves the default pack picks up an existing
 // user's pack without a second copy of the migration logic.
-func personalPackRoot() string {
-	migrateLegacyPackDir()
+//
+// FAIL CLOSED on a failed migration: a failed (rolled-back) migration leaves
+// the user's real pack at the LEGACY path, so this returns that legacy path
+// rather than the nonexistent default root — returning the empty default
+// would make callers (setup's ensure-default-pack, `pack new`) create a
+// SECOND empty pack beside the real one and strand cfg.Pack.
+func defaultPackRoot() string {
+	if err := migrateLegacyPackDirErr(); err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack: pack migration: %v\n", err)
+		if legacy := existingLegacyPackRoot(); legacy != "" {
+			return legacy
+		}
+	}
 	return config.PackDir()
 }
 
-// migrateLegacyPackDir renames an existing legacy ".../pack" personal-pack dir
-// to the new ".../personal" one (config.PackDir()'s basename rename), so an
-// existing user is never orphaned. Best-effort and cheap to call repeatedly:
-// once the new dir exists (freshly created or already migrated) it's a no-op
-// after two stats.
+// migrateLegacyPackDir renames an existing legacy default-pack dir to the new
+// ".../default" one (config.PackDir()'s basename), so an existing user is
+// never orphaned across either rename ("pack" -> "personal" -> "default").
+// Best-effort and cheap to call repeatedly: once ".../default" exists
+// (freshly created or already migrated) it's a no-op after one stat.
 //
-// Symlink-safe: Lstat (not Stat) the legacy path so a SYMLINKED legacy dir is
-// refused rather than followed into a rename that could escape the data dir
-// (a plain os.Rename on a symlink would rename the link itself, silently
-// separating it from its target and potentially placing "personal" at an
+// Preference when BOTH a legacy ".../personal" and an older ".../pack" exist:
+// ".../personal" wins (it's the more recent name) and ".../pack" is left
+// untouched — migrating both would be ambiguous, and silently deleting/merging
+// the older one could lose a user's data.
+//
+// Symlink-safe: Lstat (not Stat) each legacy candidate so a SYMLINKED legacy
+// dir is refused rather than followed into a rename that could escape the data
+// dir (a plain os.Rename on a symlink would rename the link itself, silently
+// separating it from its target and potentially placing "default" at an
 // attacker-chosen location if the link were ever attacker-controlled).
-func migrateLegacyPackDir() {
+//
+// The migration is ONE TRANSACTION under a single hold of the pack-trust
+// flock (withPackTrustLock): directory rename, manifest `name` rewrite,
+// trust-store path-state migration (migratePackTrustPaths), and cfg.Pack
+// old->new, in that order, every persist error CHECKED. On any failure it
+// rolls the already-applied steps back as far as safely possible (config ->
+// trust -> manifest -> directory) and returns a loud error; defaultPackRoot
+// then fails CLOSED to the legacy path, so a failed migration never strands
+// cfg.Pack pointing at a gone dir and never lets a caller create a second
+// empty pack at the default root.
+func migrateLegacyPackDirErr() error {
 	newDir := config.PackDir()
 	if _, err := os.Stat(newDir); err == nil {
-		return // already migrated, or a fresh "personal" pack already exists
+		// Already migrated (or a fresh "default" pack exists). Repair any state
+		// stranded by the OLD, non-transactional migration (which ignored
+		// cfg.Save errors and never migrated trust state).
+		repairStaleLegacyPackState(newDir)
+		return nil
 	}
+	oldDir := existingLegacyPackRoot()
+	if oldDir == "" {
+		return nil // no legacy dir to migrate
+	}
+	return withPackTrustLock(func() error {
+		// Re-check under the lock: a concurrent invocation may have migrated
+		// while we were waiting for it.
+		if _, err := os.Stat(newDir); err == nil {
+			return nil
+		}
+		return migrateLegacyPackDirLocked(oldDir, newDir)
+	})
+}
+
+// savePackMigrationConfig is the config-persist seam the pack migration goes
+// through (a package var so tests can force a save failure and assert the
+// rollback without breaking config.Save globally).
+var savePackMigrationConfig = func(c *config.Config) error { return c.Save() }
+
+// migrateLegacyPackDirLocked is the transactional core of the legacy-pack
+// migration. The caller MUST hold withPackTrustLock (it touches the trust
+// store directly, never via mutatePackTrustStore, so the flock is never
+// nested). Order + rollback:
+//
+//  0. snapshot: config + trust store are loaded (and the trust store
+//     deep-copied via JSON) BEFORE anything is touched; a snapshot failure
+//     aborts the migration outright (a migration that cannot guarantee its
+//     own rollback never starts).
+//  1. directory: os.Rename old -> new (plain rename preserves .git).
+//  2. manifest: Name -> "default", every other field preserved.
+//  3. trust store: every PATH-KEYED record (accepted keys + record paths,
+//     adoption keys, installed-set owner, activation path/owner) follows the
+//     rename; remote-keyed identity is stable and stays put. Saved with the
+//     error checked.
+//  4. config: cfg.Pack old -> new, saved with the error checked.
+//
+// A failure at step N rolls back steps N-1..1 (best-effort, each rollback
+// failure reported in the returned error) so the migration is all-or-nothing
+// as far as the filesystem allows.
+func migrateLegacyPackDirLocked(oldDir, newDir string) error {
+	cfg, cfgErr := config.Load()
+	if cfgErr != nil {
+		return fmt.Errorf("loading config before migration: %w (cannot verify cfg.pack; leaving %s in place)", cfgErr, oldDir)
+	}
+	trust, terr := loadPackTrustStore()
+	if terr != nil {
+		return fmt.Errorf("loading pack-trust store before migration: %w (leaving %s in place)", terr, oldDir)
+	}
+	trustSnapshot, serr := snapshotPackTrustStore(trust)
+	if serr != nil {
+		return fmt.Errorf("snapshotting pack-trust store before migration: %w (leaving %s in place)", serr, oldDir)
+	}
+	oldCanon := canonicalizePackRoot(oldDir)
+	newCanon := canonicalizePackRoot(newDir)
+
+	// cfg.Pack ALIAS guard: canonicalizePackRoot is Abs+Clean only (never
+	// EvalSymlinks — see its own doc comment), so a cfg.Pack that is itself a
+	// DIFFERENT path which happens to be a SYMLINK resolving onto oldDir will
+	// never string-match oldCanon in step 4 below, even though it is, on disk,
+	// exactly the same pack. Renaming oldDir out from under such an alias would
+	// leave cfg.Pack pointing at a now-dangling symlink, and the trust store's
+	// alias-keyed state would never get migrated either (it also keys off the
+	// alias path, not oldCanon). Detect this BEFORE touching anything —
+	// EvalSymlinks(cfg.Pack) resolves to oldDir but the canonical STRINGS differ
+	// — and refuse the whole migration outright: no rename, no manifest edit, no
+	// trust-store change, no config write. defaultPackRoot's caller already
+	// falls back to the legacy path on any migration error, which is exactly
+	// right here (the alias's target keeps its original name).
+	if alias := strings.TrimSpace(cfg.Pack); alias != "" {
+		aliasCanon := canonicalizePackRoot(alias)
+		if aliasCanon != oldCanon {
+			if resolved, rerr := filepath.EvalSymlinks(alias); rerr == nil && canonicalizePackRoot(resolved) == oldCanon {
+				return fmt.Errorf("cfg.pack %q is a symlink alias resolving to %s, but its own path does not match — refusing to migrate (would leave the alias dangling); repoint cfg.pack directly at %s first, or remove the alias", alias, oldDir, oldDir)
+			}
+		}
+	}
+
+	// 1) directory. Preserve git history: a plain rename keeps .git intact.
+	if err := os.Rename(oldDir, newDir); err != nil {
+		return fmt.Errorf("renaming %s to %s: %w", oldDir, newDir, err)
+	}
+	rollbackDir := func() error { return os.Rename(newDir, oldDir) }
+
+	// 2) manifest.
+	prevName, merr := renamePackManifestToDefault(newDir)
+	if merr != nil {
+		if back := rollbackDir(); back != nil {
+			return fmt.Errorf("renamed %s to %s but could not update its manifest (%v), AND the directory rollback failed (%v) — fix manually", oldDir, newDir, merr, back)
+		}
+		return fmt.Errorf("could not rename pack manifest to %q (%v); migration rolled back, %s left in place", "default", merr, oldDir)
+	}
+	rollbackManifest := func() error { return setPackManifestName(newDir, prevName) }
+
+	// 3) trust store: path-keyed state follows the rename. Saved directly (the
+	// caller holds the lock; mutatePackTrustStore here would nest the flock).
+	trustChanged := migratePackTrustPaths(trust, oldCanon, newCanon)
+	if trustChanged {
+		if err := trust.save(); err != nil {
+			msgs := []string{fmt.Sprintf("could not save migrated pack-trust store: %v", err)}
+			if back := rollbackManifest(); back != nil {
+				msgs = append(msgs, fmt.Sprintf("manifest rollback failed: %v", back))
+			}
+			if back := rollbackDir(); back != nil {
+				msgs = append(msgs, fmt.Sprintf("directory rollback failed: %v", back))
+			}
+			return fmt.Errorf("pack migration failed and was rolled back: %s", strings.Join(msgs, "; "))
+		}
+	}
+	rollbackTrust := func() error {
+		if !trustChanged {
+			return nil
+		}
+		return restorePackTrustSnapshot(trustSnapshot)
+	}
+
+	// 4) config: cfg.Pack old -> new, error CHECKED (the old code ignored the
+	// save error and could strand cfg.Pack pointing at the gone legacy dir).
+	if cfg.Pack == oldDir || (strings.TrimSpace(cfg.Pack) != "" && canonicalizePackRoot(cfg.Pack) == oldCanon) {
+		cfg.Pack = newDir
+		if err := savePackMigrationConfig(cfg); err != nil {
+			msgs := []string{fmt.Sprintf("could not save cfg.pack %s -> %s: %v", oldDir, newDir, err)}
+			if back := rollbackTrust(); back != nil {
+				msgs = append(msgs, fmt.Sprintf("trust-store rollback failed: %v", back))
+			}
+			if back := rollbackManifest(); back != nil {
+				msgs = append(msgs, fmt.Sprintf("manifest rollback failed: %v", back))
+			}
+			if back := rollbackDir(); back != nil {
+				msgs = append(msgs, fmt.Sprintf("directory rollback failed: %v", back))
+			}
+			return fmt.Errorf("pack migration failed and was rolled back: %s", strings.Join(msgs, "; "))
+		}
+	}
+	return nil
+}
+
+// legacyPackCandidates returns the legacy default-pack paths in preference
+// order ("personal" — the more recent legacy name — before the original
+// "pack"). Empty when the data dir can't be resolved.
+func legacyPackCandidates() []string {
 	dataDir, err := config.DataDir()
 	if err != nil {
+		return nil
+	}
+	return []string{
+		filepath.Join(dataDir, "personal"), // preferred: the more recent legacy name
+		filepath.Join(dataDir, "pack"),     // original legacy name
+	}
+}
+
+// existingLegacyPackRoot returns the first migratable legacy pack dir
+// (non-symlinked real pack), or "" when none exists.
+func existingLegacyPackRoot() string {
+	for _, c := range legacyPackCandidates() {
+		if isMigratableLegacyPackDir(c) {
+			return c
+		}
+	}
+	return ""
+}
+
+// migratePackTrustPaths rewrites every PATH-KEYED piece of trust state from
+// oldCanon to newCanon: Accepted keys "path:<old>" (including legacy
+// commit-suffixed "path:<old>#<commit>" keys) and each record's Path field,
+// Adopted map keys, Installed.Owner (only a "path:" owner — remote identity
+// is stable across a directory rename), and Activation.Path/Owner (same
+// remote caveat). Fingerprints, provenance metadata, wrapper lists, and
+// contribution sets are preserved bit-for-bit; a remote-keyed accepted
+// record only gets its Path metadata refreshed. Reports whether anything
+// changed. Pure in-memory: the caller persists.
+func migratePackTrustPaths(s *packTrustStore, oldCanon, newCanon string) bool {
+	if s == nil || strings.TrimSpace(oldCanon) == "" || oldCanon == newCanon {
+		return false
+	}
+	changed := false
+	oldKey, newKey := "path:"+oldCanon, "path:"+newCanon
+	if len(s.Accepted) > 0 {
+		next := make(map[string]packTrustRecord, len(s.Accepted))
+		for k, rec := range s.Accepted {
+			nk := k
+			if k == oldKey {
+				nk = newKey
+			} else if strings.HasPrefix(k, oldKey+"#") { // legacy commit-suffixed key
+				nk = newKey + strings.TrimPrefix(k, oldKey)
+			}
+			if rec.Path == oldCanon {
+				rec.Path = newCanon
+				changed = true
+			}
+			if nk != k {
+				changed = true
+			}
+			next[nk] = rec
+		}
+		s.Accepted = next
+	}
+	if prov, ok := s.Adopted[oldCanon]; ok {
+		delete(s.Adopted, oldCanon)
+		s.Adopted[newCanon] = prov
+		changed = true
+	}
+	if s.Installed != nil && s.Installed.Owner == oldKey {
+		s.Installed.Owner = newKey
+		changed = true
+	}
+	if s.Activation != nil {
+		if s.Activation.Path == oldCanon {
+			s.Activation.Path = newCanon
+			changed = true
+		}
+		if s.Activation.Owner == oldKey {
+			s.Activation.Owner = newKey
+			changed = true
+		}
+	}
+	return changed
+}
+
+// snapshotPackTrustStore returns a JSON snapshot of s suitable for
+// restorePackTrustSnapshot, so a caller can persist a mutation and still roll
+// it back if a LATER step in the same transaction fails.
+func snapshotPackTrustStore(s *packTrustStore) ([]byte, error) {
+	return json.Marshal(s)
+}
+
+// restorePackTrustSnapshot writes back a snapshot produced by
+// snapshotPackTrustStore, undoing an already-persisted trust-store save when a
+// later step of the same transaction (e.g. the paired config save) fails.
+// Shared by migrateLegacyPackDirLocked and repairStaleLegacyPackState so both
+// trust-then-config transactions roll back identically.
+func restorePackTrustSnapshot(snapshot []byte) error {
+	var snap packTrustStore
+	if err := json.Unmarshal(snapshot, &snap); err != nil {
+		return err
+	}
+	return snap.save()
+}
+
+// repairStaleLegacyPackState handles the aftermath of the OLD,
+// non-transactional migration (directory + manifest renamed, but the cfg.Save
+// error ignored and trust path-state never migrated): once ".../default"
+// exists, a cfg.Pack still pointing EXACTLY at a legacy personal/pack path
+// that is GONE is repointed at newDir, and trust-store path state still keyed
+// by a gone legacy path is migrated. Idempotent, and deliberately
+// conservative: a legacy path that still EXISTS on disk is a real, live pack
+// the user may be using — never hijacked. Best-effort in the sense that a
+// repair failure never blocks resolution (the default dir is present and
+// usable either way) — but NOT best-effort about leaving inconsistent state
+// behind: trust and config are saved as ONE transaction (snapshot before
+// touching either, save trust, then save config with its error CHECKED; a cfg
+// save failure rolls the just-persisted trust save back), so a failure never
+// leaves the trust store migrated while cfg.Pack still points at the stale
+// path (or vice versa) — the old bug this function exists to fix in the first
+// place, now also guarded against in ITS OWN repair path. A repair failure is
+// reported to stderr; the next call retries from scratch (idempotent probes).
+//
+// legacyRepairMightBeNeeded runs an UNLOCKED, cheap probe purely to skip the
+// flock in the steady state (nothing stale). It is a SKIP-ONLY decision: a
+// probe load error or a race is never treated as "no need" (that was the old
+// bug — a preliminary decision made outside the lock, off a possibly stale or
+// errored read, was carried straight into the locked section instead of being
+// recomputed). Every needCfg/needTrust decision that actually drives a
+// mutation is recomputed FRESH, under the lock, in repairStaleLegacyPackStateLocked
+// — including which legacy dirs are still absent, so a legacy dir that came
+// back to life while this call was waiting for the lock is left untouched.
+func repairStaleLegacyPackState(newDir string) {
+	newCanon := canonicalizePackRoot(newDir)
+	if !legacyRepairMightBeNeeded(newCanon) {
 		return
 	}
-	legacyDir := filepath.Join(dataDir, "pack")
-	fi, lerr := os.Lstat(legacyDir)
-	if lerr != nil || fi.Mode()&os.ModeSymlink != 0 {
-		return // no legacy dir, or it's a symlink — refuse to follow it
+	if err := withPackTrustLock(func() error {
+		return repairStaleLegacyPackStateLocked(newDir, newCanon)
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack: pack migration repair: %v\n", err)
 	}
-	if _, err := os.Stat(filepath.Join(legacyDir, packManifestName)); err != nil {
-		return // not actually a pack (no pack.toml) — nothing to migrate
+}
+
+// legacyRepairMightBeNeeded is the unlocked preflight: it may say "nothing to
+// do" only when it can POSITIVELY confirm that (every legacy candidate still
+// exists, or both stores loaded clean and neither needs a change). Anything
+// uncertain — a config/trust load error, or an actual pending change — returns
+// true so the caller takes the lock and lets repairStaleLegacyPackStateLocked
+// make the real, fresh decision.
+func legacyRepairMightBeNeeded(newCanon string) bool {
+	var stale []string
+	for _, c := range legacyPackCandidates() {
+		if _, err := os.Lstat(c); os.IsNotExist(err) {
+			stale = append(stale, c)
+		}
 	}
-	// Preserve git history: a plain directory rename keeps .git intact.
-	if err := os.Rename(legacyDir, newDir); err != nil {
-		return // best-effort; leave both as they were
+	if len(stale) == 0 {
+		return false
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		return
+	cfg, cerr := config.Load()
+	if cerr != nil {
+		return true // can't rule it out; let the locked path decide
 	}
-	if cfg.Pack == legacyDir {
+	if legacyPathIsAmong(cfg.Pack, stale) {
+		return true
+	}
+	s, terr := loadPackTrustStore()
+	if terr != nil {
+		return true
+	}
+	for _, c := range stale {
+		// Probe on the in-memory copy only; nothing is saved here.
+		if migratePackTrustPaths(s, canonicalizePackRoot(c), newCanon) {
+			return true
+		}
+	}
+	return false
+}
+
+// legacyPathIsAmong reports whether cfgPack (cfg.Pack) names one of the given
+// legacy candidate paths, by exact string or canonical-path match.
+func legacyPathIsAmong(cfgPack string, candidates []string) bool {
+	if strings.TrimSpace(cfgPack) == "" {
+		return false
+	}
+	for _, c := range candidates {
+		if cfgPack == c || canonicalizePackRoot(cfgPack) == canonicalizePackRoot(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// repairStaleLegacyPackStateLocked is the LOCKED core of
+// repairStaleLegacyPackState. The caller MUST hold withPackTrustLock. Nothing
+// decided before the lock was taken (the cheap preflight) is trusted here:
+// which legacy dirs are absent, and whether config/trust actually need a
+// change, are all recomputed against a FRESH load taken under the lock — so a
+// concurrent repair (or a legacy dir that reappeared while this call waited
+// for the lock) can never be raced into a one-sided mutation, and a load
+// error here aborts the WHOLE repair (never a partial needCfg/needTrust
+// decision made off a failed read) rather than silently treating the load
+// failure as "nothing to do". The caller logs the error and retries next time
+// (idempotent probes, so a transient load failure is never fatal to the
+// user).
+func repairStaleLegacyPackStateLocked(newDir, newCanon string) error {
+	var stale []string // legacy candidates that no longer exist on disk, as of NOW
+	for _, c := range legacyPackCandidates() {
+		if _, err := os.Lstat(c); os.IsNotExist(err) {
+			stale = append(stale, c)
+		}
+	}
+	if len(stale) == 0 {
+		// Every legacy candidate is live again (e.g. re-created while this call
+		// waited for the lock) — do nothing for it.
+		return nil
+	}
+	cfg, cerr := config.Load()
+	if cerr != nil {
+		return fmt.Errorf("loading config for repair: %w", cerr)
+	}
+	trust, terr := loadPackTrustStore()
+	if terr != nil {
+		return fmt.Errorf("loading pack-trust store for repair: %w", terr)
+	}
+	needCfg := legacyPathIsAmong(cfg.Pack, stale)
+	// Snapshot BEFORE mutating the freshly-loaded trust object, so a later
+	// cfg-save failure can still roll back an already-persisted trust save.
+	trustSnapshot, serr := snapshotPackTrustStore(trust)
+	if serr != nil {
+		return fmt.Errorf("snapshotting pack-trust store before repair: %w", serr)
+	}
+	needTrust := false
+	for _, c := range stale {
+		if migratePackTrustPaths(trust, canonicalizePackRoot(c), newCanon) {
+			needTrust = true
+		}
+	}
+	if !needCfg && !needTrust {
+		return nil
+	}
+	trustSaved := false
+	if needTrust {
+		if err := trust.save(); err != nil {
+			return err
+		}
+		trustSaved = true
+	}
+	// failCheckedRollback wraps a step error, rolling back an already-saved
+	// trust mutation first (reporting BOTH failures if the rollback itself
+	// fails) so a cfg-save failure after a successful trust save never leaves
+	// the two out of sync — this is the transactional guarantee this function
+	// exists to add.
+	failCheckedRollback := func(stepErr error) error {
+		if !trustSaved {
+			return stepErr
+		}
+		if back := restorePackTrustSnapshot(trustSnapshot); back != nil {
+			return fmt.Errorf("%w (AND trust-store rollback failed: %v)", stepErr, back)
+		}
+		return fmt.Errorf("%w (trust-store change rolled back)", stepErr)
+	}
+	if needCfg {
 		cfg.Pack = newDir
-		_ = cfg.Save()
+		if serr := savePackMigrationConfig(cfg); serr != nil {
+			return failCheckedRollback(serr)
+		}
 	}
+	return nil
+}
+
+// isMigratableLegacyPackDir reports whether dir is a real, non-symlinked pack
+// (has pack.toml) safe to rename — the shared guard both migration candidates
+// go through.
+func isMigratableLegacyPackDir(dir string) bool {
+	fi, lerr := os.Lstat(dir)
+	if lerr != nil || fi.Mode()&os.ModeSymlink != 0 {
+		return false // absent, or a symlink — refuse to follow it
+	}
+	if !fi.IsDir() {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(dir, packManifestName)); err != nil {
+		return false // not actually a pack (no pack.toml)
+	}
+	return true
+}
+
+// renamePackManifestToDefault loads root's manifest and rewrites its Name to
+// "default", preserving every other field, then writes it back via the
+// leaf-symlink-safe atomic writePackManifest. A no-op if Name is already
+// "default". Returns the PREVIOUS name so the transactional migration can
+// roll the rewrite back.
+func renamePackManifestToDefault(root string) (string, error) {
+	p, err := loadPack(root)
+	if err != nil {
+		return "", err
+	}
+	prev := p.Manifest.Name
+	if prev == "default" {
+		return prev, nil
+	}
+	p.Manifest.Name = "default"
+	if err := writePackManifest(root, p.Manifest); err != nil {
+		return prev, err
+	}
+	return prev, nil
+}
+
+// setPackManifestName rewrites root's manifest Name to name, preserving every
+// other field (the rollback half of renamePackManifestToDefault).
+func setPackManifestName(root, name string) error {
+	p, err := loadPack(root)
+	if err != nil {
+		return err
+	}
+	if p.Manifest.Name == name {
+		return nil
+	}
+	p.Manifest.Name = name
+	return writePackManifest(root, p.Manifest)
 }
 
 // applyPackToLaunch mounts the active pack into a launch (run OR task): it
@@ -366,7 +828,7 @@ func migrateLegacyPackDir() {
 // indexed by the daemon), and a transient --pack override's knowledge is
 // deliberately not scoped (the daemon wouldn't have indexed it). An EXPLICIT
 // --pack that fails to load is fatal (a non-nil return the caller must treat
-// as launch-aborting). The CONFIGURED active pack (cfg.Pack, or the personal
+// as launch-aborting). The CONFIGURED active pack (cfg.Pack, or the default
 // pack fallback) fails CLOSED too when it exists but won't load — a symlink
 // rejection, facet-validation failure, or parse error means a broken or
 // TAMPERED pack, and launching without its declared wrappers/skills would be
@@ -1049,9 +1511,11 @@ func writeMemoryScope(workspace string, p *packInfo) {
 	// Memory is a single SHARED store by default (AGENTS: the in-store scope column
 	// is dormant). ONLY an explicit `memory_scope` in the manifest isolates a pack.
 	// The pack NAME must NOT become a scope: doing so stamped every conversational
-	// capture with the pack name (e.g. "personal"), which hid it from the default
-	// recall view (recall sees {scope}∪{default}; host-side recall queries default),
-	// so captured preferences looked lost. Empty/"default" => shared, no scope file.
+	// capture with the pack's own name, which hid it from the default recall view
+	// (recall sees {scope}∪{default}; host-side recall queries default), so
+	// captured preferences looked lost. Empty/"default" => shared, no scope file.
+	// (The default pack's own Name IS literally "default", so this guard is what
+	// keeps its captures shared rather than accidentally scoped to itself.)
 	scope := strings.TrimSpace(p.Manifest.MemoryScope)
 	if scope == "" || scope == "default" {
 		_ = removeWorkspaceStateFile(workspace, "profile")
@@ -1128,12 +1592,12 @@ func runPackCmd(argv []string) {
 }
 
 // packTarget resolves an optional positional PATH to a pack root, defaulting to
-// the personal pack root.
+// the default pack root.
 func packTarget(rest []string) string {
 	if len(rest) > 0 && strings.TrimSpace(rest[0]) != "" {
 		return expandUser(rest[0])
 	}
-	return personalPackRoot()
+	return defaultPackRoot()
 }
 
 // safeArtifactName rejects a skill/knowledge name that could escape the pack root
@@ -1152,29 +1616,46 @@ func safeArtifactName(name string) bool {
 	return true
 }
 
-// activatePersonalPack sets the personal pack as active (config `pack`) if no
+// activateDefaultPack sets the default pack as active (config `pack`) if no
 // pack is active yet, so implicit-create makes it immediately usable (no manual
-// `pack use`). Best-effort. Only for the personal pack root.
-func activatePersonalPack(root string) {
-	if root != personalPackRoot() {
-		return
+// `pack use`). Best-effort. Only for the default pack root.
+// activateDefaultPack points cfg.Pack at root when (and only when) root IS the
+// resolved default pack AND cfg.Pack is currently empty — it must NEVER
+// override an explicitly active alternate pack (cfg.Pack != ""), which is a
+// no-op, not an error. Returns an error instead of swallowing one: a caller
+// that reports "active pack -> this (default) pack" (or, worse, propagates
+// setup success) after a cfg.Save failure would be lying — the config on
+// disk still has no active pack. Every caller MUST check the returned error
+// before claiming activation succeeded.
+func activateDefaultPack(root string) error {
+	if root != defaultPackRoot() {
+		return nil // not the default pack; nothing for this to do
 	}
 	cfg, err := config.Load()
-	if err != nil || cfg.Pack != "" {
-		return
+	if err != nil {
+		return fmt.Errorf("loading config to activate default pack: %w", err)
+	}
+	if cfg.Pack != "" {
+		return nil // an explicitly active (possibly alternate) pack is never overridden
 	}
 	cfg.Pack = root
-	_ = cfg.Save()
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("could not save config to activate default pack %s: %w", root, err)
+	}
+	return nil
 }
 
 // runPackNew adopts a pre-existing repo (or one already carrying pack.toml) in
 // place, else creates + git-inits a fresh pack. Never re-inits or clobbers.
 func runPackNew(env shellEnv, out io.Writer, rest []string) {
 	root := packTarget(rest)
-	// Already a pack? Nothing to do (but ensure the personal one is active).
+	// Already a pack? Nothing to do (but ensure the default one is active).
 	if _, err := os.Stat(filepath.Join(root, packManifestName)); err == nil {
 		fmt.Fprintf(out, "already a pack: %s\n", root)
-		activatePersonalPack(root)
+		if aerr := activateDefaultPack(root); aerr != nil {
+			fmt.Fprintf(out, "pi-stack pack new: %v\n", aerr)
+			os.Exit(1)
+		}
 		return
 	}
 	existsDir := false
@@ -1215,11 +1696,14 @@ func runPackNew(env shellEnv, out io.Writer, rest []string) {
 	default:
 		fmt.Fprintf(out, "created pack %q: %s (git init it to version it)\n", name, root)
 	}
-	// Auto-activate the personal pack so it is immediately usable (no manual
+	// Auto-activate the default pack so it is immediately usable (no manual
 	// `pack use` for the common case). A named/other pack still needs `pack use`.
-	if root == personalPackRoot() {
-		activatePersonalPack(root)
-		fmt.Fprintln(out, "active pack -> this (personal) pack")
+	if root == defaultPackRoot() {
+		if aerr := activateDefaultPack(root); aerr != nil {
+			fmt.Fprintf(out, "pi-stack pack new: %v\n", aerr)
+			os.Exit(1)
+		}
+		fmt.Fprintln(out, "active pack -> this (default) pack")
 	} else {
 		fmt.Fprintf(out, "use it:  pi-stack pack use %s\n", root)
 	}
@@ -1278,7 +1762,7 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 			positionals = append(positionals, a)
 		}
 	}
-	root := personalPackRoot()
+	root := defaultPackRoot()
 	if len(positionals) >= 1 {
 		root = expandUser(positionals[0])
 	}
@@ -1706,10 +2190,24 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		}
 	}
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: pi-stack pack use [--yes] <path|git-url>")
+		fmt.Fprintln(os.Stderr, "usage: pi-stack pack use [--yes] <path|git-url|default>")
 		os.Exit(2)
 	}
 	arg := strings.TrimSpace(args[0])
+	// "default" is a real built-in alias for the default pack root (NOT
+	// $PWD/default): resolves through defaultPackRoot() exactly like every other
+	// call site, running the same legacy migration. "personal" is a DEPRECATED
+	// alias kept for backward compatibility with a deprecation warning; only the
+	// EXACT bare token matches — a git URL or a real path/dir literally named
+	// "personal" (e.g. `./personal`, `../personal`, a full path, or a git URL
+	// ending in personal.git) is unaffected and still resolves as a path/URL.
+	switch arg {
+	case "default":
+		arg = defaultPackRoot()
+	case "personal":
+		fmt.Fprintln(out, "pi-stack pack use: \"personal\" is deprecated; use \"default\" instead.")
+		arg = defaultPackRoot()
+	}
 	var root, remoteURL, remoteCommit string
 	if isPackGitURL(arg) {
 		r, err := clonePack(env, out, arg)
@@ -2415,12 +2913,23 @@ func markPackAdopted(env shellEnv, root, remote string) error {
 
 // --- helpers ----------------------------------------------------------------
 
+// writePackManifest writes root's pack.toml. LEAF-symlink-safe (mirrors
+// writePackLock/writePackLockBytes): the pack root is untrusted input — an
+// adopted or migrated pack could have pack.toml replaced with a symlink (e.g.
+// pointing outside the pack root) — so this Lstat-REFUSES a symlinked
+// destination outright, then writes ATOMICALLY via a same-dir temp file +
+// rename (an interrupted write can never truncate/corrupt an existing
+// manifest).
 func writePackManifest(root string, m packManifest) error {
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(m); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(root, packManifestName), buf.Bytes(), 0o644)
+	dest := filepath.Join(root, packManifestName)
+	if fi, err := os.Lstat(dest); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink; refusing to write through it", dest)
+	}
+	return atomicWriteInDir(root, packManifestName, buf.Bytes(), 0o644)
 }
 
 // seedPackGitignore appends a `pack.lock` line to <root>/.gitignore, creating
@@ -2474,7 +2983,7 @@ wrappers + config that defines your context. See docs/design/packs.md.
 
   new [PATH]              adopt an existing repo (or one with pack.toml) as a
                           pack, else git-init a fresh one. Default PATH is the
-                          personal pack root (~/.local/share/pi-stack/skills).
+                          default pack root (~/.local/share/pi-stack/default).
   add skill <name> [P]              add a skill doc
   add knowledge <name> [P]          add an embedded knowledge doc
   add knowledge <name> [P] --ref <git-url|path> [--private]
@@ -2491,14 +3000,17 @@ wrappers + config that defines your context. See docs/design/packs.md.
                                      (attaching to the ACTIVE pack is Tier-1:
                                      the host BoM gate fires; --yes accepts)
                           (all "add" forms implicit-create pack P; default P
-                          is the personal pack)
+                          is the default pack)
   ls                      show the active pack
   show [PATH]             inspect a pack (default: the active pack)
-  use [--yes] <path|git-url>
+  use [--yes] <path|git-url|default>
                           set the active pack: swaps mcp/knowledge/config in
                           ONE transaction (pack.lock tracks what to remove on
                           the next switch); a git URL is cloned to
                           ~/.local/share/pi-stack/packs/<name> (optional #ref pin).
+                          "default" is a built-in alias for the default pack
+                          root (not $PWD/default); "personal" also works as a
+                          deprecated alias (prints a deprecation warning).
                           A pack with HOST-exec facets (mcp, host wrappers,
                           [[bin]]) is Tier-1: adoption halts at a host
                           bill-of-materials review ([y/N], default No);
