@@ -7,8 +7,10 @@
 // JSON-RPC via host.docker.internal. Defensive throughout: if the service is
 // down or slow, recall is skipped and the turn proceeds normally.
 //
-//   MEMORY_URL         default http://host.docker.internal:11435
-//   MEMORY_TIMEOUT_MS  default 2000 (a slow store must never stall a turn)
+//   MEMORY_URL                 default http://host.docker.internal:11435
+//   MEMORY_TIMEOUT_MS          default 2000 (a slow store must never stall a turn)
+//   MEMORY_COMMAND_TIMEOUT_MS  default 10000 (a user-invoked /recall can afford to
+//                              wait longer than the silent per-turn auto-recall)
 
 import { basename, join } from "node:path";
 import { execSync } from "node:child_process";
@@ -18,6 +20,9 @@ import { request as httpsRequest } from "node:https";
 
 const MEMORY_URL = process.env.MEMORY_URL ?? "http://host.docker.internal:11435";
 const TIMEOUT_MS = Number(process.env.MEMORY_TIMEOUT_MS ?? 2000);
+// /recall is a user-invoked command, not a per-turn hook — it can afford to wait
+// longer than the silent auto-recall without slowing anything down.
+const COMMAND_TIMEOUT_MS = Number(process.env.MEMORY_COMMAND_TIMEOUT_MS ?? 10000);
 
 const safe = async <T>(fn: () => Promise<T>): Promise<T | undefined> => {
 	try {
@@ -48,6 +53,9 @@ function postJson(urlStr: string, body: unknown, timeoutMs: number): Promise<any
 				let chunks = "";
 				res.on("data", (c) => (chunks += c));
 				res.on("end", () => {
+					if ((res.statusCode ?? 500) < 200 || (res.statusCode ?? 500) >= 300) {
+						return reject(new Error(`memory service HTTP ${res.statusCode ?? "unknown"}`));
+					}
 					try {
 						resolve(chunks ? JSON.parse(chunks) : null);
 					} catch (e) {
@@ -64,8 +72,12 @@ function postJson(urlStr: string, body: unknown, timeoutMs: number): Promise<any
 }
 
 let rpcId = 0;
-async function rpc(method: string, params: any): Promise<any> {
-	const j = await postJson(MEMORY_URL, { jsonrpc: "2.0", id: ++rpcId, method, params }, TIMEOUT_MS);
+async function rpc(method: string, params: any, timeoutMs: number = TIMEOUT_MS): Promise<any> {
+	const j = await postJson(MEMORY_URL, { jsonrpc: "2.0", id: ++rpcId, method, params }, timeoutMs);
+	if (j?.error) {
+		const message = typeof j.error.message === "string" ? j.error.message : "memory service RPC error";
+		throw new Error(message);
+	}
 	return j?.result ?? null;
 }
 
@@ -119,6 +131,24 @@ function extractPrompt(event: any, ctx: any): string {
 	return lastUser?.content ?? lastUser?.text ?? "";
 }
 
+// Render the host's RFC3339 timestamp at second precision while preserving its
+// encoded offset. Do not call Date#getTimezoneOffset here: this code runs inside
+// the sandbox, whose timezone may differ from the host user's timezone.
+export function formatMemoryIso(value: unknown): string | null {
+	if (typeof value !== "string" || !value.trim()) return null;
+	const raw = value.trim();
+	if (Number.isNaN(Date.parse(raw))) return null;
+	const match = raw.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/i);
+	return match ? `${match[1]}T${match[2]}${match[3].toUpperCase()}` : null;
+}
+
+// One rendered /recall line: id, kind/durability/project, an optional local
+// timestamp, then the content.
+export function formatHitLine(h: any): string {
+	const ts = formatMemoryIso(h?.createdAt);
+	return `• [${String(h.id).slice(0, 8)}] (${h.kind}/${h.durability}${h.project ? "/" + h.project : ""})${ts ? ` ${ts}` : ""} ${h.content}`;
+}
+
 function formatBlock(hits: any[]): string | null {
 	if (!hits?.length) return null;
 	const lines = hits.map((h) => `- ${h.content}`);
@@ -152,25 +182,28 @@ export default function (pi: any) {
 	);
 
 	pi.registerCommand?.("recall", {
-		description: "Show what memory would recall for a query",
-		handler: async (args: any, ctx: any) =>
-			safe(async () => {
-				const r = await rpc("recall", {
-					query: String(args ?? "").trim(),
-					project: currentProject(ctx),
-					profile: ACTIVE_PROFILE,
-				});
+		description: "Show what memory would recall for a query (blank = show all)",
+		handler: async (args: any, ctx: any) => {
+			// A bare `/recall` means "show everything", matching the host CLI's
+			// `pi-stack memory recall '*'` — not an empty (and therefore useless) query.
+			const query = String(args ?? "").trim() || "*";
+			// Deliberately NOT wrapped in safe(): this is a user-invoked command, so a
+			// dead/slow memory service must surface as a visible error, not vanish.
+			// The silent best-effort behavior stays on the before_agent_start hook only.
+			try {
+				const r = await rpc(
+					"recall",
+					{ query, project: currentProject(ctx), profile: ACTIVE_PROFILE },
+					COMMAND_TIMEOUT_MS,
+				);
 				const hits = r?.hits ?? [];
-				const text = hits.length
-					? hits
-							.map(
-								(h: any) =>
-									`• [${String(h.id).slice(0, 8)}] (${h.kind}/${h.durability}${h.project ? "/" + h.project : ""}) ${h.content}`,
-							)
-							.join("\n")
-					: "(nothing)";
+				const text = hits.length ? hits.map(formatHitLine).join("\n") : "(nothing)";
 				ctx?.ui?.notify?.(text, "info");
-			}),
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				ctx?.ui?.notify?.(`/recall failed: ${msg} (is the memory service reachable?)`, "error");
+			}
+		},
 	});
 
 	pi.registerCommand?.("remember", {

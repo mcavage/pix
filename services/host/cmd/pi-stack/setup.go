@@ -29,14 +29,24 @@ import (
 	"pi-stack/host/config"
 )
 
+// generatedInputMarker prefixes any user-role message that `pi-stack` itself
+// synthesizes and hands to the agent as if typed by the user (currently just
+// onboardingKickoff). It is NOT the user talking, so extensions that observe
+// user turns (memory-capture.ts) must recognize it and skip capture — without
+// this, the watcher model treats the kickoff line as a real user statement and
+// invents facts/events from it (the bug this constant fixes). Keep this string
+// and extensions/memory-capture.ts's prefix check in sync.
+const generatedInputMarker = "[pi-stack-generated:onboarding] "
+
 // onboardingKickoff is the first message `setup` hands the agent. It is
 // DELIBERATELY short and human — it reads like something the user would type,
 // not a machine directive wall. The rewritten `onboarding` skill owns the actual
 // flow (guided teach, read host-state, land a task); the word "guided" is all it
 // needs to pick GUIDED mode. (Making this fully invisible — agent greets with no
 // visible prompt at all — needs a session-start extension + an image rebuild;
-// tracked as a follow-up.)
-const onboardingKickoff = "I just ran pi-stack setup — give me the guided walkthrough and help me get started."
+// tracked as a follow-up.) It carries generatedInputMarker so memory-capture.ts
+// can tell this was machine-generated, not typed by the user.
+const onboardingKickoff = generatedInputMarker + "I just ran pi-stack setup — give me the guided walkthrough and help me get started."
 
 // runSetupCmd is the `pi-stack setup` entry. It accepts the same host-config
 // flags as `onboard` plus an optional DIR (default "."), runs the host phase,

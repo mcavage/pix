@@ -373,6 +373,18 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 
 	s.db.Exec("UPDATE memories SET deleted_at = ? WHERE expires_at IS NOT NULL AND expires_at < ? AND deleted_at IS NULL", memNowIso(), memNowIso())
 
+	// Explicit, deterministic "list everything" semantics: the literal query "*"
+	// (trimmed) bypasses FTS and embedding relevance entirely and just returns the
+	// newest memories visible to the requested profile/project, respecting limit
+	// and charBudget. This is what `pi-stack memory recall '*'` and a blank
+	// sandbox /recall both send, and it must work even with no FTS match and no
+	// embedder configured (keyword-only store, or Ollama down) — a relevance-
+	// scored query can legitimately return nothing in that case, but "show me
+	// everything" must not.
+	if strings.TrimSpace(query) == "*" {
+		return s.recallAll(limit, charBudget, kind, project, profile, now)
+	}
+
 	// FTS candidates → normalized [0,1] per id.
 	ftsScore := map[string]float64{}
 	if match := memFtsQuery(query); match != "" {
@@ -524,6 +536,79 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 		}
 		out = append(out, c.hit)
 		used += len(c.hit.content)
+	}
+	ts := memNowIso()
+	for _, h := range out {
+		s.db.Exec("UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?", ts, h.id)
+	}
+	return out, nil
+}
+
+// recallAll is the deterministic "list everything" path for the literal query
+// "*" (see recall). It never touches FTS or the embedder: rows are selected by
+// the same visible-profile/kind filter as normal recall, ordered newest-first
+// (created_at DESC, rowid DESC as a same-timestamp tiebreak so the order is
+// stable across calls), then truncated by limit and charBudget exactly like
+// normal recall. Scores are populated with the same recency/confidence/
+// frequency/reward/project factors as a relevance match (relevance pinned to
+// 1, since there is no query to be relevant to) so hits carry normal,
+// non-zero scores rather than a placeholder. The caller (recall) already holds
+// s.mu.
+func (s *memStore) recallAll(limit, charBudget int, kind, project, profile string, now time.Time) ([]scoredHit, error) {
+	where := "SELECT id, kind, content, durability, confidence, frequency, reward, created_at, project FROM memories WHERE deleted_at IS NULL"
+	args := []any{}
+	if kind != "" {
+		where += " AND kind = ?"
+		args = append(args, kind)
+	}
+	where += " AND " + memProfileVisible
+	args = append(args, memNormProfile(profile))
+	where += " ORDER BY created_at DESC, rowid DESC"
+	rows, err := s.db.Query(where, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []scoredHit{}
+	used := 0
+	for rows.Next() {
+		if len(out) >= limit {
+			break
+		}
+		var id, kindVal, content, durability, createdAt string
+		var confidence, reward float64
+		var frequency int
+		var proj sql.NullString
+		if err := rows.Scan(&id, &kindVal, &content, &durability, &confidence, &frequency, &reward, &createdAt, &proj); err != nil {
+			continue
+		}
+		if used+len(content) > charBudget && len(out) > 0 {
+			break
+		}
+		ageDays := now.Sub(parseTime(createdAt)).Hours() / 24
+		recency := math.Pow(2, -ageDays/memRecencyHalflifeDays)
+		freqBoost := 1 + math.Log(float64(frequency))
+		rewardBoost := 1 + reward
+		projectFactor := 1.0
+		if project != "" {
+			if proj.Valid && proj.String == project {
+				projectFactor = memProjectMatchBoost
+			} else if proj.Valid && proj.String != "" {
+				projectFactor = memProjectOtherFactor
+			}
+		}
+		score := confidence * recency * freqBoost * rewardBoost * projectFactor
+		out = append(out, scoredHit{id, content, kindVal, durability, proj, score, createdAt})
+		used += len(content)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Close before updating access metadata. With SQLite's single connection,
+	// stopping early at limit leaves the query active and the updates deadlock.
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	ts := memNowIso()
 	for _, h := range out {

@@ -153,3 +153,18 @@ func TestHostModeProviderKeys(t *testing.T) {
 		t.Errorf("want [anthropic openai] sorted, got %v", got)
 	}
 }
+
+// TestOnboardingKickoffCarriesGeneratedMarker: onboardingKickoff is a
+// synthesized user-role message, not something the user typed. It must carry
+// generatedInputMarker so extensions/memory-capture.ts's shouldCaptureUserText
+// recognizes it and skips capture — the fix for the watcher inventing
+// pi-stack facts/events from the kickoff line (see generatedInputMarker's doc
+// comment in setup.go).
+func TestOnboardingKickoffCarriesGeneratedMarker(t *testing.T) {
+	if !strings.HasPrefix(onboardingKickoff, generatedInputMarker) {
+		t.Fatalf("onboardingKickoff must start with generatedInputMarker %q, got %q", generatedInputMarker, onboardingKickoff)
+	}
+	if !strings.HasPrefix(generatedInputMarker, "[pi-stack-generated:") {
+		t.Fatalf("generatedInputMarker must start with the [pi-stack-generated: contract prefix, got %q", generatedInputMarker)
+	}
+}

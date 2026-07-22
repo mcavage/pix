@@ -326,6 +326,175 @@ func FuzzMemFtsQuery(f *testing.F) {
 	})
 }
 
+func TestFlexibleStringList(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    []string
+		wantErr bool
+	}{
+		{"proper array", `["a","b"]`, []string{"a", "b"}, false},
+		{"empty array", `[]`, []string{}, false},
+		{"null", `null`, []string{}, false},
+		{"absent (empty raw)", ``, []string{}, false},
+		{"empty object normalizes to empty slice", `{}`, []string{}, false},
+		{"non-empty object rejected", `{"a":1}`, nil, true},
+		{"wrong scalar: string rejected", `"x"`, nil, true},
+		{"wrong scalar: number rejected", `1`, nil, true},
+		{"wrong scalar: bool rejected", `true`, nil, true},
+		{"array of non-strings rejected", `[1,2]`, nil, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := flexibleStringList(json.RawMessage(c.in))
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("flexibleStringList(%q) = %v, nil; want error", c.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("flexibleStringList(%q) unexpected error: %v", c.in, err)
+			}
+			if len(got) != len(c.want) {
+				t.Fatalf("flexibleStringList(%q) = %v, want %v", c.in, got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Fatalf("flexibleStringList(%q) = %v, want %v", c.in, got, c.want)
+				}
+			}
+		})
+	}
+}
+
+func TestParseWatchJSON(t *testing.T) {
+	cases := []struct {
+		name       string
+		in         string
+		wantFacts  []string
+		wantErr    bool
+		wantValNum float64
+	}{
+		{
+			name:      "proper arrays",
+			in:        `{"facts":["uses pnpm"],"events":[],"corrections":[],"valence":0.5}`,
+			wantFacts: []string{"uses pnpm"}, wantValNum: 0.5,
+		},
+		{
+			// observed qwen output: fenced JSON with facts as {} instead of [].
+			name:      "fenced JSON with empty object facts, salvaged via extractJSONObject",
+			in:        "here you go:\n```json\n{\"facts\":{},\"events\":[],\"corrections\":[],\"valence\":0}\n```",
+			wantFacts: []string{}, wantValNum: 0,
+		},
+		{
+			name:      "empty object facts",
+			in:        `{"facts":{},"events":[],"corrections":[],"valence":0}`,
+			wantFacts: []string{}, wantValNum: 0,
+		},
+		{
+			name:      "null facts",
+			in:        `{"facts":null,"events":[],"corrections":[],"valence":0}`,
+			wantFacts: []string{}, wantValNum: 0,
+		},
+		{
+			name:    "non-empty object facts rejected",
+			in:      `{"facts":{"a":"b"},"events":[],"corrections":[],"valence":0}`,
+			wantErr: true,
+		},
+		{
+			name:    "wrong scalar facts rejected",
+			in:      `{"facts":"nope","events":[],"corrections":[],"valence":0}`,
+			wantErr: true,
+		},
+		{
+			name:    "not JSON at all",
+			in:      `not json`,
+			wantErr: true,
+		},
+		{
+			name:    "top-level null rejected",
+			in:      `null`,
+			wantErr: true,
+		},
+		{
+			name:    "top-level empty object rejected (missing all required keys)",
+			in:      `{}`,
+			wantErr: true,
+		},
+		{
+			name:    "missing facts key rejected",
+			in:      `{"events":[],"corrections":[],"valence":0}`,
+			wantErr: true,
+		},
+		{
+			name:    "missing events key rejected",
+			in:      `{"facts":[],"corrections":[],"valence":0}`,
+			wantErr: true,
+		},
+		{
+			name:    "missing corrections key rejected",
+			in:      `{"facts":[],"events":[],"valence":0}`,
+			wantErr: true,
+		},
+		{
+			name:    "missing valence key rejected",
+			in:      `{"facts":[],"events":[],"corrections":[]}`,
+			wantErr: true,
+		},
+		{
+			name:    "top-level array rejected (wrong top-level type)",
+			in:      `["facts","events"]`,
+			wantErr: true,
+		},
+		{
+			name:    "top-level array containing otherwise-valid object is not salvaged",
+			in:      `[{"facts":[],"events":[],"corrections":[],"valence":0}]`,
+			wantErr: true,
+		},
+		{
+			name:    "top-level string rejected (wrong top-level type)",
+			in:      `"just a string"`,
+			wantErr: true,
+		},
+		{
+			name:    "top-level number rejected (wrong top-level type)",
+			in:      `42`,
+			wantErr: true,
+		},
+		{
+			name:    "top-level bool rejected (wrong top-level type)",
+			in:      `true`,
+			wantErr: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := parseWatchContent(c.in)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("parseWatchContent(%q) = %+v, nil; want error", c.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseWatchContent(%q) unexpected error: %v", c.in, err)
+			}
+			if len(got.Facts) != len(c.wantFacts) {
+				t.Fatalf("parseWatchContent(%q).Facts = %v, want %v", c.in, got.Facts, c.wantFacts)
+			}
+			for i := range got.Facts {
+				if got.Facts[i] != c.wantFacts[i] {
+					t.Fatalf("parseWatchContent(%q).Facts = %v, want %v", c.in, got.Facts, c.wantFacts)
+				}
+			}
+			if got.Valence != c.wantValNum {
+				t.Fatalf("parseWatchContent(%q).Valence = %v, want %v", c.in, got.Valence, c.wantValNum)
+			}
+		})
+	}
+}
+
 func TestExtractJSONObject(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{`{"facts":["x"]}`, `{"facts":["x"]}`},

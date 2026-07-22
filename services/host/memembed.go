@@ -306,8 +306,10 @@ Hard rules:
 - Acknowledgments ("thanks", "great", "cool") => all empty.
 - Code, file names, and one-off task details are not worth saving.
 - When in doubt, leave it out. Empty arrays are the common, correct answer.
+- "facts", "events", and "corrections" are always JSON arrays of strings — never objects, even when empty. An empty list is [], not {}.
 
-Output only the JSON.`
+Output only the JSON, compact, no prose, no code fence. Exact shape:
+{"facts":[],"events":[],"corrections":[],"valence":0}`
 
 // extractJSONObject returns the first balanced {...} JSON object substring in s,
 // or "" if none — salvaging the object from a model that wraps it in prose or a
@@ -344,6 +346,92 @@ func extractJSONObject(s string) string {
 		}
 	}
 	return ""
+}
+
+// flexibleStringList decodes a watcher list field (facts/events/corrections)
+// that is supposed to be a JSON array of strings, but some models (observed:
+// qwen) emit an empty object {} instead of [] when the list is empty. Accept:
+// a string array, null/absent (=> empty), or an empty object (=> empty).
+// Reject a non-empty object and any other shape (string, number, bool, array
+// of non-strings) as an error so the caller can fall back or give up.
+func flexibleStringList(raw json.RawMessage) ([]string, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return []string{}, nil
+	}
+	var arr []string
+	if err := json.Unmarshal(trimmed, &arr); err == nil {
+		return arr, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &obj); err == nil {
+		if len(obj) == 0 {
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("list field is a non-empty object: %s", trimmed)
+	}
+	return nil, fmt.Errorf("list field has unexpected shape: %s", trimmed)
+}
+
+// parseWatchJSON decodes one candidate JSON object (either the model's raw
+// content, or content salvaged by extractJSONObject) into a watchResult,
+// tolerating the {} vs [] wrinkle in flexibleStringList for each list field.
+//
+// The top level is deliberately strict: a watcher model that returns `null`,
+// `{}`, an array/string/number/bool, or an object missing one of the four
+// required keys (facts/events/corrections/valence) is a malformed response,
+// not "nothing captured" — it must error so the caller falls back/salvages
+// instead of silently recording an empty capture. Only the per-field list
+// shape (facts/events/corrections) tolerates the {} vs [] vs null wrinkle,
+// via flexibleStringList.
+func parseWatchJSON(s string) (*watchResult, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(s), &top); err != nil {
+		return nil, fmt.Errorf("top-level value is not a JSON object: %w", err)
+	}
+	if top == nil {
+		// json.Unmarshal("null", &map) succeeds with a nil map and no error —
+		// must be rejected explicitly, not treated as an all-empty capture.
+		return nil, fmt.Errorf("top-level value is null, not a JSON object")
+	}
+	for _, key := range []string{"facts", "events", "corrections", "valence"} {
+		if _, ok := top[key]; !ok {
+			return nil, fmt.Errorf("missing required key %q", key)
+		}
+	}
+	facts, err := flexibleStringList(top["facts"])
+	if err != nil {
+		return nil, fmt.Errorf("facts: %w", err)
+	}
+	events, err := flexibleStringList(top["events"])
+	if err != nil {
+		return nil, fmt.Errorf("events: %w", err)
+	}
+	corrections, err := flexibleStringList(top["corrections"])
+	if err != nil {
+		return nil, fmt.Errorf("corrections: %w", err)
+	}
+	var valence float64
+	if err := json.Unmarshal(top["valence"], &valence); err != nil {
+		return nil, fmt.Errorf("valence: %w", err)
+	}
+	return &watchResult{
+		Facts: facts, Events: events, Corrections: corrections,
+		Valence: math.Max(-1, math.Min(1, valence)),
+	}, nil
+}
+
+func parseWatchContent(content string) (*watchResult, error) {
+	p, err := parseWatchJSON(content)
+	// Salvage only a non-JSON envelope (prose or a code fence). If the model
+	// returned valid JSON with the wrong top-level shape, such as [{...}], keep
+	// that error instead of accepting a nested object and bypassing validation.
+	if err != nil && !json.Valid([]byte(content)) {
+		if salvaged := extractJSONObject(content); salvaged != "" {
+			return parseWatchJSON(salvaged)
+		}
+	}
+	return p, err
 }
 
 func memWatch(user string) *watchResult {
@@ -414,27 +502,19 @@ func memWatch(user string) *watchResult {
 		log.Printf("memory watcher: empty/undecodable chat response from model %q — raw: %q", model, raw)
 		return nil
 	}
-	var p struct {
-		Facts       []string `json:"facts"`
-		Events      []string `json:"events"`
-		Corrections []string `json:"corrections"`
-		Valence     float64  `json:"valence"`
-	}
 	// Primary: the whole content is the JSON object (structured-output models).
 	// Fallback: some models wrap it in prose or a ```json fence — salvage the first
 	// balanced {...} object rather than returning nil. Log the raw output on total
 	// failure so "returned nil" is never a mystery (which model, what it said).
 	content := chat.Message.Content
-	if json.Unmarshal([]byte(content), &p) != nil {
-		salvaged := extractJSONObject(content)
-		if salvaged == "" || json.Unmarshal([]byte(salvaged), &p) != nil {
-			raw := content
-			if len(raw) > 300 {
-				raw = raw[:300] + "..."
-			}
-			log.Printf("memory watcher: model %q returned unparseable output (no JSON object) — raw: %q", model, raw)
-			return nil
+	p, err := parseWatchContent(content)
+	if err != nil || p == nil {
+		raw := content
+		if len(raw) > 300 {
+			raw = raw[:300] + "..."
 		}
+		log.Printf("memory watcher: model %q returned unparseable output (no JSON object) — raw: %q", model, raw)
+		return nil
 	}
 	clean := func(in []string) []string {
 		out := []string{}
@@ -447,6 +527,6 @@ func memWatch(user string) *watchResult {
 	}
 	return &watchResult{
 		Facts: clean(p.Facts), Events: clean(p.Events), Corrections: clean(p.Corrections),
-		Valence: math.Max(-1, math.Min(1, p.Valence)),
+		Valence: p.Valence,
 	}
 }
