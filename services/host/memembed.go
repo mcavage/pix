@@ -358,7 +358,9 @@ func memWatch(user string) *watchResult {
 	body, _ := json.Marshal(map[string]any{
 		"model": model, "stream": false,
 		"keep_alive": "10m",
-		"options":    map[string]any{"temperature": 0, "num_predict": 512},
+		"think":      false, // qwen3.x et al default to thinking; the reasoning ate the
+		// num_predict budget and left content empty. We want the JSON answer directly.
+		"options": map[string]any{"temperature": 0, "num_predict": 1024},
 		"messages": []map[string]any{
 			{"role": "system", "content": memWatcherSystem},
 			{"role": "user", "content": user},
@@ -397,13 +399,19 @@ func memWatch(user string) *watchResult {
 	watcherUnavailable.Store(false)
 	setWatcherReason("")
 	watcherDegradedUntil.Store(0)
+	rawBody, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	var chat struct {
 		Message struct {
-			Content string `json:"content"`
+			Content  string `json:"content"`
+			Thinking string `json:"thinking"`
 		} `json:"message"`
 	}
-	if json.NewDecoder(res.Body).Decode(&chat) != nil || chat.Message.Content == "" {
-		log.Printf("memory watcher: empty/undecodable chat response from model %q", model)
+	if json.Unmarshal(rawBody, &chat) != nil || chat.Message.Content == "" {
+		raw := string(rawBody)
+		if len(raw) > 400 {
+			raw = raw[:400] + "..."
+		}
+		log.Printf("memory watcher: empty/undecodable chat response from model %q — raw: %q", model, raw)
 		return nil
 	}
 	var p struct {

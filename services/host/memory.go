@@ -357,6 +357,7 @@ type scoredHit struct {
 	id, content, kind, durability string
 	project                       sql.NullString
 	score                         float64
+	createdAt                     string
 }
 
 func (s *memStore) recall(query string, limit, charBudget int, kind, project, profile string) ([]scoredHit, error) {
@@ -503,7 +504,7 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 			}
 		}
 		score := relevance * r.confidence * recency * freqBoost * rewardBoost * projectFactor
-		cands = append(cands, cand{scoredHit{r.id, r.content, r.kind, r.durability, r.project, score}, score})
+		cands = append(cands, cand{scoredHit{r.id, r.content, r.kind, r.durability, r.project, score, r.createdAt}, score})
 	}
 	if dimMismatch > 0 {
 		log.Printf("memory: %d stored embeddings have a different dimension than the current model (%d dims) — they degrade to keyword-only. The embedding model likely changed; re-embed to restore semantic recall.", dimMismatch, len(queryVec))
@@ -656,14 +657,14 @@ func (s *memStore) promotable(minFreq int, profile string) []jsonObj {
 	if minFreq == 0 {
 		minFreq = 3
 	}
-	rows, _ := s.db.Query("SELECT id, content, frequency, project FROM memories WHERE deleted_at IS NULL AND kind='learning' AND frequency >= ? AND "+memProfileVisible+" ORDER BY frequency DESC", minFreq, memNormProfile(profile))
+	rows, _ := s.db.Query("SELECT id, content, frequency, project, created_at FROM memories WHERE deleted_at IS NULL AND kind='learning' AND frequency >= ? AND "+memProfileVisible+" ORDER BY frequency DESC", minFreq, memNormProfile(profile))
 	out := []jsonObj{}
 	for rows.Next() {
-		var id, content string
+		var id, content, createdAt string
 		var freq int
 		var proj sql.NullString
-		rows.Scan(&id, &content, &freq, &proj)
-		out = append(out, jsonObj{"id": id, "content": content, "frequency": freq, "project": nullStr(proj)})
+		rows.Scan(&id, &content, &freq, &proj, &createdAt)
+		out = append(out, jsonObj{"id": id, "content": content, "frequency": freq, "project": nullStr(proj), "createdAt": createdAt})
 	}
 	rows.Close()
 	return out
@@ -726,7 +727,7 @@ func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 			list := []jsonObj{}
 			for _, h := range hits {
 				list = append(list, jsonObj{"id": h.id, "content": h.content, "score": h.score,
-					"kind": h.kind, "durability": h.durability, "project": nullStr(h.project)})
+					"kind": h.kind, "durability": h.durability, "project": nullStr(h.project), "createdAt": h.createdAt})
 			}
 			return jsonObj{"hits": list}, nil
 		},

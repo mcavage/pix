@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -145,6 +146,96 @@ var hostPiPackages = []string{
 	"pi-usage@0.2.1",
 }
 
+// hostPiExtensionsLockFile records the EXACT hostPiPackages set successfully
+// installed into a host agent dir, so a re-run of `pi-stack setup` skips the
+// (slow, silent-looking) reinstall unless the package list actually changed
+// (a version bump busts it). Lives in the host agent dir itself — host-owned,
+// so a plain read/write is fine, but the marker is never FOLLOWED if it's a
+// symlink (hostPiExtensionsInstalled/writeHostPiExtensionsMarker both Lstat).
+const hostPiExtensionsLockFile = ".pi-extensions.lock"
+
+// hostPiExtensionsMarker is the marker's canonical content: the exact
+// hostPiPackages set, one per line.
+func hostPiExtensionsMarker() string {
+	return strings.Join(hostPiPackages, "\n") + "\n"
+}
+
+// hostPiExtensionsInstalled reports whether dir's marker exists and matches
+// the CURRENT hostPiPackages set exactly. A symlinked marker is never
+// followed — treated as absent (untrusted), so it always falls through to a
+// real (re)install rather than trusting a link it didn't write.
+func hostPiExtensionsInstalled(dir string) bool {
+	path := filepath.Join(dir, hostPiExtensionsLockFile)
+	fi, err := os.Lstat(path)
+	if err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return string(b) == hostPiExtensionsMarker()
+}
+
+// writeHostPiExtensionsMarker refreshes the marker AFTER every package in
+// hostPiPackages installs successfully. Symlink-safe: a pre-existing symlink
+// at the marker path is removed (never written through) before the real file
+// is written.
+func writeHostPiExtensionsMarker(dir string) error {
+	path := filepath.Join(dir, hostPiExtensionsLockFile)
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if rerr := os.Remove(path); rerr != nil {
+			return rerr
+		}
+	}
+	return os.WriteFile(path, []byte(hostPiExtensionsMarker()), 0o644)
+}
+
+// installHostPiExtensions installs the curated pi extension packages into dir
+// (PI_CODING_AGENT_DIR), mirroring the Dockerfile's curated `pi install` loop.
+// Returns the packages that failed to install (empty on full success, or the
+// whole set when `pi` isn't on PATH). Split out of runHostSetup so tests can
+// drive it directly against a fake `pi` on PATH.
+func installHostPiExtensions(errw io.Writer, dir string) []string {
+	piBin, lookErr := exec.LookPath("pi")
+	if lookErr != nil {
+		fmt.Fprintln(errw, "pi-stack host setup: `pi` not found on PATH — install the image's pinned version:")
+		fmt.Fprintln(errw, "  npm install -g "+hostPinnedPiPackage)
+		return hostPiPackages
+	}
+	if hostPiExtensionsInstalled(dir) {
+		fmt.Fprintf(errw, "pi-stack host setup: pi extensions: already installed (%d), skipping\n", len(hostPiPackages))
+		return nil
+	}
+	fmt.Fprintf(errw, "pi-stack host setup: installing %d pi extensions...\n", len(hostPiPackages))
+	var failed []string
+	for i, p := range hostPiPackages {
+		// A progress line BEFORE the install so a slow/noisy npm install is never a
+		// silent multi-minute hang — the noisy output itself stays captured and
+		// only surfaces on failure.
+		fmt.Fprintf(errw, "  installing pi extension %s (%d/%d)...\n", p, i+1, len(hostPiPackages))
+		cmd := exec.Command(piBin, "install", "npm:"+p)
+		cmd.Env = append(os.Environ(), "PI_CODING_AGENT_DIR="+dir)
+		// Capture the (very noisy) npm output; only surface it if the install
+		// FAILS, so a clean setup stays quiet but real errors still show.
+		var buf bytes.Buffer
+		cmd.Stdout = &buf
+		cmd.Stderr = &buf
+		if err := cmd.Run(); err != nil {
+			failed = append(failed, p)
+			fmt.Fprintf(errw, "  ✗ %s: %v\n%s\n", p, err, strings.TrimRight(buf.String(), "\n"))
+		}
+	}
+	if len(failed) == 0 {
+		// Write/refresh the marker ONLY after every package installs
+		// successfully — a partial failure must keep re-attempting next run.
+		if merr := writeHostPiExtensionsMarker(dir); merr != nil {
+			fmt.Fprintf(errw, "pi-stack host setup: could not write extensions marker: %v\n", merr)
+		}
+	}
+	return failed
+}
+
 // hostSettingsJSON is the host-specific pi settings file. It deliberately does
 // NOT copy the sandbox settings: defaultProjectTrust is "ask" (in the sandbox
 // it is "always" — safe only because the VM is the boundary; on the host,
@@ -216,29 +307,10 @@ func runHostSetup(errw *os.File) error {
 
 	// Curated pi extension packages, mirroring the Dockerfile install loop. `pi
 	// install` writes into the config dir's npm/node_modules, so point it at the
-	// host agent dir via PI_CODING_AGENT_DIR.
-	var failed []string
-	piBin, lookErr := exec.LookPath("pi")
-	if lookErr != nil {
-		failed = hostPiPackages
-		fmt.Fprintln(errw, "pi-stack host setup: `pi` not found on PATH — install the image's pinned version:")
-		fmt.Fprintln(errw, "  npm install -g "+hostPinnedPiPackage)
-	} else {
-		fmt.Fprintf(errw, "pi-stack host setup: installing %d pi extensions...\n", len(hostPiPackages))
-		for _, p := range hostPiPackages {
-			cmd := exec.Command(piBin, "install", "npm:"+p)
-			cmd.Env = append(os.Environ(), "PI_CODING_AGENT_DIR="+dir)
-			// Capture the (very noisy) npm output; only surface it if the install
-			// FAILS, so a clean setup stays quiet but real errors still show.
-			var buf bytes.Buffer
-			cmd.Stdout = &buf
-			cmd.Stderr = &buf
-			if err := cmd.Run(); err != nil {
-				failed = append(failed, p)
-				fmt.Fprintf(errw, "  ✗ %s: %v\n%s\n", p, err, strings.TrimRight(buf.String(), "\n"))
-			}
-		}
-	}
+	// host agent dir via PI_CODING_AGENT_DIR. IDEMPOTENT (installHostPiExtensions):
+	// skips the whole install when the marker matches the current hostPiPackages
+	// set, so a re-run of `pi-stack setup` isn't a silent multi-minute reinstall.
+	failed := installHostPiExtensions(errw, dir)
 	if len(failed) > 0 {
 		fmt.Fprintln(errw, "pi-stack host setup: TODO — these pi extension packages did not install;")
 		fmt.Fprintln(errw, "run the following once `pi` works (they land in "+dir+"):")

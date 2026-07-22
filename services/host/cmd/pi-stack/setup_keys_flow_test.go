@@ -1,7 +1,8 @@
-// setup_keys_flow_test.go — the setupProvisionKeys rework: a 1Password ref
-// is required per provider (STEP 1, setup.go), but sbx reconciliation
-// (STEP 2, secret_sync.go) never re-pastes or re-syncs a key that's already
-// in the known-good state, tracked via the launcher-owned synced-ref record
+// setup_keys_flow_test.go — the setupProvisionKeys rework: setup NEVER
+// prompts to paste an op:// ref (that's `pi-stack secret set` only now); it
+// just uses whatever ref already exists (setup.go) and reconciles it into sbx
+// (secret_sync.go) without re-pasting or re-syncing a key that's already in
+// the known-good state, tracked via the launcher-owned synced-ref record
 // (syncedrefs.go) since sbx secret values are write-only.
 package main
 
@@ -64,19 +65,19 @@ func stepEnv(t *testing.T, refsContent, sbxLsOut string, opReadVal string) (shel
 
 // --- STEP 1: op-refs.env -----------------------------------------------
 
-// A ref that already exists is CONFIRMED (Enter keeps it) rather than
-// blindly re-pasted, and since sbx already has the synced value, STEP 2 must
-// not touch op/sbx either.
-func TestSetupProvisionKeys_RefPresent_ConfirmKeepsNoResync(t *testing.T) {
+// A ref that already exists and is already synced is left alone — no
+// prompt, and since sbx already has the synced value, STEP 2 must not touch
+// op/sbx either.
+func TestSetupProvisionKeys_RefPresent_NoPromptNoResync(t *testing.T) {
 	env, calls := stepEnv(t, "ANTHROPIC_API_KEY=op://v/anthropic/key\n", "anthropic\n", "sk-val\n")
 	if err := recordSyncedRef("ANTHROPIC_API_KEY", "op://v/anthropic/key"); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	setupProvisionKeys(env, strings.NewReader("\n\n\n"), &out, true, false)
+	setupProvisionKeys(env, strings.NewReader(""), &out, true, false)
 
-	if !strings.Contains(out.String(), "op://v/anthropic/key") {
-		t.Errorf("must show the stored ref for confirmation, got:\n%s", out.String())
+	if strings.Contains(out.String(), "?") {
+		t.Errorf("an already-synced ref must never prompt, got:\n%s", out.String())
 	}
 	joined := strings.Join(*calls, "\n")
 	if strings.Contains(joined, "op read") || strings.Contains(joined, "secret set") {
@@ -84,13 +85,19 @@ func TestSetupProvisionKeys_RefPresent_ConfirmKeepsNoResync(t *testing.T) {
 	}
 }
 
-// No ref yet: interactive prompts for one.
-func TestSetupProvisionKeys_RefAbsent_Prompted(t *testing.T) {
+// No ref for any provider: ONE summary line, never a per-provider prompt.
+func TestSetupProvisionKeys_NoRefs_SummaryLineNoPrompt(t *testing.T) {
 	env, _ := stepEnv(t, "", "\n", "sk-val\n")
 	var out bytes.Buffer
-	setupProvisionKeys(env, strings.NewReader("op://v/anthropic/key\nop://v/openai/key\nop://v/google/key\n"), &out, true, false)
-	if !strings.Contains(out.String(), "anthropic:") {
-		t.Errorf("must prompt for a ref when none exists, got:\n%s", out.String())
+	setupProvisionKeys(env, strings.NewReader(""), &out, true, false)
+	if strings.Contains(out.String(), "?") {
+		t.Errorf("missing refs must never prompt, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "No 1Password ref for: anthropic, openai, google") {
+		t.Errorf("must print one summary line naming the providers with no ref, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "pi-stack secret set") {
+		t.Errorf("summary line must point at `pi-stack secret set`, got:\n%s", out.String())
 	}
 }
 
@@ -142,15 +149,15 @@ func TestReconcile_SbxPresentChangedRef_OverwritePrompt(t *testing.T) {
 	// declines -> left alone; the record stays at its OLD (stale) value rather
 	// than being updated to the declined NEW ref, so the mismatch persists and
 	// a real change keeps re-prompting on the next run.
-	// (STEP 1 prompts once per provider in providerKeyRefOrder — anthropic has
-	// a ref (blank keeps it), openai/google don't (blank skips them) — so the
-	// STEP 2 overwrite answer for anthropic is the 4th line.)
+	// (setupProvisionKeys no longer prompts per-provider for an existing ref —
+	// the ONLY interactive prompt left is STEP 2's overwrite question, so it's
+	// the first and only line of input.)
 	env, calls := stepEnv(t, refs, "anthropic\n", "sk-val\n")
 	if err := recordSyncedRef("ANTHROPIC_API_KEY", "op://v/anthropic/key-OLD"); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	setupProvisionKeys(env, strings.NewReader("\n\n\nn\n"), &out, true, false)
+	setupProvisionKeys(env, strings.NewReader("n\n"), &out, true, false)
 	if !strings.Contains(out.String(), "overwrite it with the 1Password ref?") {
 		t.Errorf("must ask before overwriting a changed ref, got:\n%s", out.String())
 	}
@@ -168,7 +175,7 @@ func TestReconcile_SbxPresentChangedRef_OverwritePrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out2 bytes.Buffer
-	setupProvisionKeys(env2, strings.NewReader("\n\n\ny\n"), &out2, true, false)
+	setupProvisionKeys(env2, strings.NewReader("y\n"), &out2, true, false)
 	joined2 := strings.Join(*calls2, "\n")
 	if !strings.Contains(joined2, "op read op://v/anthropic/key-NEW") {
 		t.Errorf("accepted overwrite must op-read the new ref:\n%s", joined2)

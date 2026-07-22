@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -501,5 +502,175 @@ func TestHostInHelpTiers(t *testing.T) {
 	}
 	if strings.Contains(helpText, "host [DIR]") {
 		t.Error("Core helpText must NOT list host (expert tier only)")
+	}
+}
+
+// --- FIX 1: idempotent pi-extension install (installHostPiExtensions) ---
+
+// fakePiBin puts an executable `pi` shim on PATH (and restores the original
+// PATH via t.Cleanup) that logs every `install npm:<pkg>` call to a file, so
+// tests can assert whether/how many times it ran. failOn (may be empty) marks
+// package names whose install exits non-zero.
+func fakePiBin(t *testing.T, failOn ...string) (logPath string) {
+	t.Helper()
+	dir := t.TempDir()
+	logPath = filepath.Join(dir, "calls.log")
+	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var script strings.Builder
+	script.WriteString("#!/bin/sh\n")
+	script.WriteString("echo \"$@\" >> " + logPath + "\n")
+	for _, f := range failOn {
+		script.WriteString("case \"$2\" in *" + f + "*) echo boom >&2; exit 1;; esac\n")
+	}
+	script.WriteString("exit 0\n")
+	pi := filepath.Join(dir, "pi")
+	if err := os.WriteFile(pi, []byte(script.String()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
+}
+
+// A marker matching the current hostPiPackages set skips the whole install:
+// `pi` is never invoked, and the "already installed" line is printed.
+func TestInstallHostPiExtensions_SkipsWhenMarkerMatches(t *testing.T) {
+	dir := t.TempDir()
+	logPath := fakePiBin(t)
+	if err := os.WriteFile(filepath.Join(dir, hostPiExtensionsLockFile), []byte(hostPiExtensionsMarker()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	failed := installHostPiExtensions(&out, dir)
+	if len(failed) != 0 {
+		t.Errorf("want no failures on a skipped install, got %v", failed)
+	}
+	if !strings.Contains(out.String(), "already installed") {
+		t.Errorf("must print the skip line, got:\n%s", out.String())
+	}
+	b, err := os.ReadFile(logPath)
+	if err != nil || len(b) != 0 {
+		t.Errorf("pi must never be invoked when the marker matches, log: %q, err=%v", string(b), err)
+	}
+}
+
+// No marker: every package installs (with a visible per-package progress
+// line so it's never a silent hang), and the marker is written afterward.
+func TestInstallHostPiExtensions_InstallsAndWritesMarker(t *testing.T) {
+	dir := t.TempDir()
+	logPath := fakePiBin(t)
+	var out strings.Builder
+	failed := installHostPiExtensions(&out, dir)
+	if len(failed) != 0 {
+		t.Fatalf("want no failures, got %v", failed)
+	}
+	for i, p := range hostPiPackages {
+		want := fmt.Sprintf("installing pi extension %s (%d/%d)...", p, i+1, len(hostPiPackages))
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing progress line %q in:\n%s", want, out.String())
+		}
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range hostPiPackages {
+		if !strings.Contains(string(logged), "npm:"+p) {
+			t.Errorf("pi was never invoked for %s: log=%q", p, string(logged))
+		}
+	}
+	marker, err := os.ReadFile(filepath.Join(dir, hostPiExtensionsLockFile))
+	if err != nil || string(marker) != hostPiExtensionsMarker() {
+		t.Errorf("marker not written correctly: %q (err=%v)", string(marker), err)
+	}
+}
+
+// A stale marker (package list changed since it was written) busts the
+// idempotency check and re-installs, refreshing the marker to the new set.
+func TestInstallHostPiExtensions_StaleMarkerBustsAndRefreshes(t *testing.T) {
+	dir := t.TempDir()
+	logPath := fakePiBin(t)
+	if err := os.WriteFile(filepath.Join(dir, hostPiExtensionsLockFile), []byte("pi-plan@0.0.1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	failed := installHostPiExtensions(&out, dir)
+	if len(failed) != 0 {
+		t.Fatalf("want no failures, got %v", failed)
+	}
+	if strings.Contains(out.String(), "already installed") {
+		t.Errorf("a stale marker must NOT skip the install, got:\n%s", out.String())
+	}
+	logged, _ := os.ReadFile(logPath)
+	if !strings.Contains(string(logged), "npm:"+hostPiPackages[0]) {
+		t.Errorf("stale marker must trigger a real (re)install, log=%q", string(logged))
+	}
+	marker, err := os.ReadFile(filepath.Join(dir, hostPiExtensionsLockFile))
+	if err != nil || string(marker) != hostPiExtensionsMarker() {
+		t.Errorf("marker not refreshed to the current set: %q (err=%v)", string(marker), err)
+	}
+}
+
+// A failed package install is reported (name + captured output) and the
+// marker is NEVER written when anything failed — so the next run retries.
+func TestInstallHostPiExtensions_FailureReportedMarkerNotWritten(t *testing.T) {
+	dir := t.TempDir()
+	failing := hostPiPackages[2] // pi-manage-todo-list@0.4.0
+	fakePiBin(t, strings.SplitN(failing, "@", 2)[0])
+	var out strings.Builder
+	failed := installHostPiExtensions(&out, dir)
+	if len(failed) != 1 || failed[0] != failing {
+		t.Fatalf("want exactly %q to fail, got %v", failing, failed)
+	}
+	if !strings.Contains(out.String(), "✗ "+failing) {
+		t.Errorf("failure must be reported by name, got:\n%s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, hostPiExtensionsLockFile)); err == nil {
+		t.Error("marker must NOT be written when any package failed to install")
+	}
+}
+
+// Missing `pi` on PATH: every package is reported as failed and the marker
+// check never runs (no marker written, no crash).
+func TestInstallHostPiExtensions_NoPiOnPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir) // a PATH with nothing on it
+	var out strings.Builder
+	failed := installHostPiExtensions(&out, dir)
+	if len(failed) != len(hostPiPackages) {
+		t.Errorf("want all %d packages reported failed, got %d: %v", len(hostPiPackages), len(failed), failed)
+	}
+	if !strings.Contains(out.String(), "`pi` not found on PATH") {
+		t.Errorf("must explain the missing binary, got:\n%s", out.String())
+	}
+}
+
+// Symlink safety: a symlinked marker is never followed for a read (treated as
+// absent/untrusted) or a write (the symlink is removed, never written through,
+// and the link target is left untouched).
+func TestHostPiExtensionsMarker_SymlinkSafe(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "elsewhere")
+	if err := os.WriteFile(target, []byte(hostPiExtensionsMarker()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, hostPiExtensionsLockFile)
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	if hostPiExtensionsInstalled(dir) {
+		t.Error("a symlinked marker must never be trusted, even with matching content")
+	}
+	if err := writeHostPiExtensionsMarker(dir); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Lstat(link)
+	if err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("marker must be replaced with a REAL file after writing, got %v/%v", fi, err)
+	}
+	b, err := os.ReadFile(target)
+	if err != nil || string(b) != hostPiExtensionsMarker() {
+		t.Errorf("symlink target must be untouched by the write: %q, err=%v", string(b), err)
 	}
 }

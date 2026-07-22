@@ -197,28 +197,23 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	return nil
 }
 
-// setupProvisionKeys wires model keys through 1Password with NO blind re-sync:
-// a 1Password ref is REQUIRED per provider (host mode needs it), but once a
-// ref and sbx are both in a known-good state, re-running setup touches
-// neither `op` nor `sbx secret set` for that provider again. Two steps per
-// provider (providerKeyRefOrder):
+// setupProvisionKeys wires model keys through 1Password with NO PROMPTS: adding
+// a ref is `pi-stack secret set` ONLY — setup never asks you to paste one.
+// It uses whatever refs already exist (currentOpRef checks op-refs.env AND
+// hostmode.env), mirrors them into hostmode (mirrorProviderRefsToHostMode) so
+// host mode has the same keys the sandbox does, then reconciles them into sbx
+// (secret_sync.go's reconcileProviderKeysWithSbx) using the launcher-owned
+// synced-ref record (syncedrefs.go) — sbx secret VALUES are write-only (`sbx
+// secret ls` lists names only), so "did the ref change since we last synced
+// it" is tracked by us, not read back from sbx:
 //
-//	STEP 1 (op-refs.env, this file): a ref is REQUIRED.
-//	 - a ref already exists -> CONFIRM it (print it, Enter keeps it, or paste a
-//	   new op:// ref to replace it) — never a blind re-paste.
-//	 - no ref -> GET it (interactive prompt only); non-interactive never
-//	   prompts and never blocks — it just notes host mode will be Ollama-only
-//	   for that provider until one is added.
-//	 A new/changed ref is written to BOTH op-refs.env and hostmode.env.
+//   - sbx MISSING the key: op read + `sbx secret set -f` + record. No ask.
+//   - sbx HAS the key and the recorded ref is unchanged: NO op read, NO sbx set.
+//   - sbx HAS the key but the ref is new/changed: ask before overwriting
+//     (default No); non-interactive only overwrites with --yes.
 //
-//	STEP 2 (secret_sync.go's reconcileProviderKeysWithSbx): reconcile that ref
-//	 against sbx using the launcher-owned synced-ref record (syncedrefs.go) —
-//	 sbx secret VALUES are write-only (`sbx secret ls` lists names only), so
-//	 "did the ref change since we last synced it" is tracked by us, not read
-//	 back from sbx. Missing key -> set + record, no ask. Present key with an
-//	 unchanged recorded ref -> NO op read, NO sbx set. Present key with a new/
-//	 changed ref -> ask before overwriting (default No); non-interactive only
-//	 overwrites with --yes.
+// Providers with NO ref get ONE summary line (not a per-provider prompt)
+// pointing at `pi-stack secret set`.
 //
 // Returns whether a usable model key is in place afterward (true when sbx
 // can't be probed — never block a box without sbx).
@@ -230,12 +225,15 @@ func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive, 
 		fmt.Fprintln(out, "Install it (https://developer.1password.com/docs/cli/) and re-run setup;")
 		fmt.Fprintln(out, "for now I'll use whatever keys are already in sbx.")
 	} else {
-		if interactive {
-			fmt.Fprintln(out, "Model keys come from 1Password (a ref is required per provider).")
-			fmt.Fprintln(out, "Paste an op:// ref (op://Vault/Item/field), or press Enter to keep/skip:")
-		}
+		var missing []string
 		for _, p := range providerKeyRefOrder {
-			provisionProviderRef(env, sc, out, p, interactive)
+			if _, hasRef := currentOpRef(env, p.envVar); !hasRef {
+				missing = append(missing, p.name)
+			}
+		}
+		if len(missing) > 0 {
+			fmt.Fprintf(out, "No 1Password ref for: %s. They work in the sandbox; host mode is Ollama-only for them.\n", strings.Join(missing, ", "))
+			fmt.Fprintln(out, "Add one with: pi-stack secret set ANTHROPIC_API_KEY op://Vault/Item/field")
 		}
 	}
 	// Covers refs that pre-date this feature or were set via `pi-stack secret
@@ -249,58 +247,6 @@ func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive, 
 		return true
 	}
 	return present
-}
-
-// provisionProviderRef is setupProvisionKeys' STEP 1 for one provider.
-func provisionProviderRef(env shellEnv, sc *bufio.Scanner, out io.Writer, p struct{ envVar, name string }, interactive bool) {
-	current, hasRef := currentOpRef(env, p.envVar)
-	switch {
-	case hasRef && interactive:
-		fmt.Fprintf(out, "  %-9s %s\n", p.name, current)
-		fmt.Fprint(out, "    Enter to keep, or paste a new op:// ref to replace: ")
-		if !sc.Scan() {
-			return
-		}
-		ref := normalizeOpRef(sc.Text())
-		if ref == "" {
-			return // kept
-		}
-		if !strings.HasPrefix(ref, "op://") {
-			fmt.Fprintln(out, "    skipped: not an op:// ref (kept the existing one)")
-			return
-		}
-		writeProviderRef(env, out, p, ref)
-	case hasRef:
-		// non-interactive: confirming a blind re-paste is meaningless — keep it.
-	case interactive:
-		fmt.Fprintf(out, "  %s: ", p.name)
-		if !sc.Scan() {
-			return
-		}
-		ref := normalizeOpRef(sc.Text())
-		if ref == "" {
-			fmt.Fprintf(out, "    (no ref for %s — host mode will be Ollama-only for it)\n", p.name)
-			return
-		}
-		if !strings.HasPrefix(ref, "op://") {
-			fmt.Fprintln(out, "    skipped: not an op:// ref")
-			return
-		}
-		writeProviderRef(env, out, p, ref)
-	default:
-		// non-interactive, no ref yet: never block, never prompt.
-		fmt.Fprintf(out, "  %-9s (no 1Password ref — host mode Ollama-only for it; add one: pi-stack secret set %s op://vault/item/field)\n", p.name, p.envVar)
-	}
-}
-
-// writeProviderRef upserts a new/changed ref into BOTH op-refs.env and
-// hostmode.env (one paste wires sandbox + host mode).
-func writeProviderRef(env shellEnv, out io.Writer, p struct{ envVar, name string }, ref string) {
-	if err := writeOpRefQuiet(env, p.envVar, ref); err != nil {
-		fmt.Fprintf(out, "    could not save: %v\n", err)
-		return
-	}
-	_ = writeOpRefFileQuiet(env, hostModeRefsPath(env), p.envVar, ref)
 }
 
 // currentOpRef returns the current FILLED op:// ref for a provider env var. It

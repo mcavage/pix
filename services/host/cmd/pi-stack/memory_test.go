@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"pi-stack/host/config"
 )
@@ -104,7 +105,7 @@ func TestMemoryProfileForwarded(t *testing.T) {
 func TestMemoryRecall(t *testing.T) {
 	c := fakeRPCServer(t, map[string]any{
 		"recall": map[string]any{"hits": []any{
-			map[string]any{"id": "abc12345-de", "content": "likes midi guitar", "kind": "fact", "durability": "perishable", "project": "recipes", "score": 0.59},
+			map[string]any{"id": "abc12345-de", "content": "likes midi guitar", "kind": "fact", "durability": "perishable", "project": "recipes", "score": 0.59, "createdAt": "2026-07-22T16:15:03Z"},
 		}},
 	})
 	var out bytes.Buffer
@@ -117,6 +118,50 @@ func TestMemoryRecall(t *testing.T) {
 	}
 	if !strings.Contains(got, "0.59") {
 		t.Errorf("recall output missing score: %q", got)
+	}
+	// FIX 3: a leading LOCAL-time ISO8601 timestamp, parsed from the RPC's
+	// createdAt, must precede the id column.
+	wantLocal := time.Date(2026, 7, 22, 16, 15, 3, 0, time.UTC).Local().Format(time.RFC3339)
+	if !strings.HasPrefix(got, wantLocal) {
+		t.Errorf("recall output must lead with the local-time timestamp %q, got: %q", wantLocal, got)
+	}
+}
+
+// A hit with no createdAt gets a blank, column-aligned placeholder instead of
+// crashing or dropping the column.
+func TestMemoryRecall_NoTimestampDoesNotCrash(t *testing.T) {
+	c := fakeRPCServer(t, map[string]any{
+		"recall": map[string]any{"hits": []any{
+			map[string]any{"id": "abc12345-de", "content": "no timestamp on this one"},
+		}},
+	})
+	var out bytes.Buffer
+	if err := dispatchMemory("recall", []string{"x"}, c, &out, "default"); err != nil {
+		t.Fatalf("recall: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "abc12345") || !strings.Contains(got, "no timestamp on this one") {
+		t.Errorf("recall output missing content: %q", got)
+	}
+	if !strings.HasPrefix(got, strings.Repeat(" ", len(time.RFC3339))) {
+		t.Errorf("missing hit must get a blank column-aligned placeholder, got: %q", got)
+	}
+}
+
+func TestMemoryTimestamp(t *testing.T) {
+	if got := memoryTimestamp(""); got != strings.Repeat(" ", len(time.RFC3339)) {
+		t.Errorf("empty createdAt should render a blank placeholder, got %q", got)
+	}
+	if got := memoryTimestamp("not-a-time"); got != strings.Repeat(" ", len(time.RFC3339)) {
+		t.Errorf("unparseable createdAt should render a blank placeholder, got %q", got)
+	}
+	utc := time.Date(2026, 7, 22, 16, 15, 3, 0, time.UTC)
+	want := utc.Local().Format(time.RFC3339)
+	if got := memoryTimestamp(utc.Format(time.RFC3339)); got != want {
+		t.Errorf("memoryTimestamp(RFC3339) = %q, want %q", got, want)
+	}
+	if got := memoryTimestamp(utc.Format(time.RFC3339Nano)); got != want {
+		t.Errorf("memoryTimestamp(RFC3339Nano) = %q, want %q", got, want)
 	}
 }
 
@@ -163,7 +208,7 @@ func TestMemoryForget(t *testing.T) {
 
 func TestMemoryLearnings(t *testing.T) {
 	c := fakeRPCServer(t, map[string]any{"promotable": map[string]any{"candidates": []any{
-		map[string]any{"id": "aa11-bb", "content": "always run tests", "frequency": 5.0},
+		map[string]any{"id": "aa11-bb", "content": "always run tests", "frequency": 5.0, "createdAt": "2026-07-22T16:15:03Z"},
 	}}})
 	var out bytes.Buffer
 	if err := dispatchMemory("learnings", nil, c, &out, "default"); err != nil {
@@ -171,6 +216,10 @@ func TestMemoryLearnings(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "5x") || !strings.Contains(out.String(), "always run tests") {
 		t.Errorf("learnings output = %q", out.String())
+	}
+	wantLocal := time.Date(2026, 7, 22, 16, 15, 3, 0, time.UTC).Local().Format(time.RFC3339)
+	if !strings.HasPrefix(out.String(), wantLocal) {
+		t.Errorf("learnings output must lead with the local-time timestamp %q, got: %q", wantLocal, out.String())
 	}
 }
 
