@@ -153,6 +153,107 @@ func TestExecuteReset_MovesConfigAndData(t *testing.T) {
 	}
 }
 
+// TestExecuteReset_PreservesOnePasswordRefs: op-refs.env + hostmode.env survive
+// the config-dir move byte-identical into a fresh config dir, while config.toml
+// (which moved aside with everything else) does NOT come back.
+func TestExecuteReset_PreservesOnePasswordRefs(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	p := tempPaths(t, root)
+	writeFile(t, filepath.Join(p.configDir, "op-refs.env"), "ANTHROPIC_API_KEY=op://vault/item/field\n")
+	writeFile(t, filepath.Join(p.configDir, "hostmode.env"), "OPENAI_API_KEY=op://vault/item2/field\n")
+	a := resetPlan(resetCfg(), p, resetOpts{})
+	a.PreserveRefs = true // reset semantics (runResetCore sets this; uninstall does not)
+
+	var buf bytes.Buffer
+	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The old config dir moved aside as usual — config.toml is still in the .bak.
+	if !exists(p.configDir + ".bak-" + fixedTS + string(filepath.Separator) + "config.toml") {
+		t.Error("config.toml should still be in the .bak")
+	}
+
+	// A FRESH config dir exists with just the ref files, not config.toml.
+	if !exists(p.configDir) {
+		t.Fatal("a fresh config dir should have been recreated to hold the preserved refs")
+	}
+	if exists(filepath.Join(p.configDir, "config.toml")) {
+		t.Error("config.toml must NOT come back into the fresh config dir")
+	}
+	gotOP, err := os.ReadFile(filepath.Join(p.configDir, "op-refs.env"))
+	if err != nil {
+		t.Fatalf("op-refs.env missing from fresh config dir: %v", err)
+	}
+	if string(gotOP) != "ANTHROPIC_API_KEY=op://vault/item/field\n" {
+		t.Errorf("op-refs.env content mismatch, got %q", gotOP)
+	}
+	gotHM, err := os.ReadFile(filepath.Join(p.configDir, "hostmode.env"))
+	if err != nil {
+		t.Fatalf("hostmode.env missing from fresh config dir: %v", err)
+	}
+	if string(gotHM) != "OPENAI_API_KEY=op://vault/item2/field\n" {
+		t.Errorf("hostmode.env content mismatch, got %q", gotHM)
+	}
+
+	// And the same refs are STILL present in the .bak (additive, not a move).
+	bakOP, err := os.ReadFile(p.configDir + ".bak-" + fixedTS + string(filepath.Separator) + "op-refs.env")
+	if err != nil {
+		t.Fatalf("op-refs.env should still be present in the .bak: %v", err)
+	}
+	if string(bakOP) != "ANTHROPIC_API_KEY=op://vault/item/field\n" {
+		t.Errorf(".bak op-refs.env content mismatch, got %q", bakOP)
+	}
+
+	if !strings.Contains(buf.String(), "kept 1Password refs") {
+		t.Errorf("expected a 'kept 1Password refs' line in output, got %q", buf.String())
+	}
+}
+
+// TestExecuteReset_NoRefsNoFreshConfigDir: a config dir with no ref files must
+// NOT get a fresh (empty) config dir recreated after the move.
+func TestExecuteReset_NoRefsNoFreshConfigDir(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	p := tempPaths(t, root) // seeds only config.toml, no ref files
+	a := resetPlan(resetCfg(), p, resetOpts{})
+	a.PreserveRefs = true
+
+	var buf bytes.Buffer
+	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if exists(p.configDir) {
+		t.Error("no ref files were present — a fresh config dir must NOT be recreated")
+	}
+	if strings.Contains(buf.String(), "kept 1Password refs") {
+		t.Error("must not claim refs were kept when none existed")
+	}
+}
+
+// TestExecuteReset_UninstallDoesNotPreserveRefs: uninstall is a clean wipe —
+// PreserveRefs stays false, so refs are NOT restored (they remain only in .bak).
+func TestExecuteReset_UninstallDoesNotPreserveRefs(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	p := tempPaths(t, root)
+	writeFile(t, filepath.Join(p.configDir, "op-refs.env"), "ANTHROPIC_API_KEY=op://vault/item/field\n")
+	a := resetPlan(resetCfg(), p, resetOpts{}) // PreserveRefs defaults false (uninstall)
+
+	var buf bytes.Buffer
+	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exists(p.configDir) {
+		t.Error("uninstall must NOT recreate the config dir to preserve refs")
+	}
+	if !exists(p.configDir + ".bak-" + fixedTS + string(filepath.Separator) + "op-refs.env") {
+		t.Error("the ref should still be in the .bak")
+	}
+}
+
 // TestExecuteReset_KeepMemoryPreservesMemory: memory survives, knowledge + any
 // other data-root entry are moved aside.
 func TestExecuteReset_KeepMemoryPreservesMemory(t *testing.T) {

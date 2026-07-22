@@ -76,6 +76,8 @@ type resetActions struct {
 	MemoryDir       string         // preserved dir when KeepMemory
 	MemoryDB        string         // resolved custom MEMORY_DB file path ("" for the default), so the sweep can preserve a db that lives DIRECTLY in DataRoot
 	DataRoot        string         // the data root (for the keep-memory sweep)
+	ConfigDir       string         // the config dir (~/.config/pi-stack) being backed up, so executeReset can snapshot + restore its 1Password ref files
+	PreserveRefs    bool           // reset ONLY: restore op-refs.env/hostmode.env into a fresh config dir (uninstall is a clean wipe, leaves it false)
 	RemoveSandboxes bool           // --sbx: remove pi-stack-* sandboxes
 	MCPRemove       []string       // --sbx: MCP server names to unregister (cfg.MCP)
 	Force           bool           // --force: skip the serve-still-up guard on the data move
@@ -85,23 +87,42 @@ type resetActions struct {
 // resetFS is the injected filesystem surface, so executeReset stays hermetic in
 // tests (a temp HOME, no real rm). defaultResetFS wires the os-backed ops.
 type resetFS struct {
-	stat     func(path string) (os.FileInfo, error)
-	lstat    func(path string) (os.FileInfo, error)
-	readlink func(path string) (string, error)
-	rename   func(oldpath, newpath string) error
-	readDir  func(path string) ([]os.DirEntry, error)
-	remove   func(path string) error
+	stat      func(path string) (os.FileInfo, error)
+	lstat     func(path string) (os.FileInfo, error)
+	readlink  func(path string) (string, error)
+	rename    func(oldpath, newpath string) error
+	readDir   func(path string) ([]os.DirEntry, error)
+	remove    func(path string) error
+	readFile  func(path string) ([]byte, error)
+	writeFile func(path string, data []byte, perm os.FileMode) error
+	mkdirAll  func(path string, perm os.FileMode) error
 }
 
 func defaultResetFS() resetFS {
 	return resetFS{
-		stat:     os.Stat,
-		lstat:    os.Lstat,
-		readlink: os.Readlink,
-		rename:   os.Rename,
-		readDir:  os.ReadDir,
-		remove:   os.Remove,
+		stat:      os.Stat,
+		lstat:     os.Lstat,
+		readlink:  os.Readlink,
+		rename:    os.Rename,
+		readDir:   os.ReadDir,
+		remove:    os.Remove,
+		readFile:  os.ReadFile,
+		writeFile: os.WriteFile,
+		mkdirAll:  os.MkdirAll,
 	}
+}
+
+// preservedRefFiles are the config-dir files reset snapshots before the config
+// dir moves aside and restores into the fresh one: 1Password op:// REFERENCES
+// (pointers, not secrets), so a reset doesn't force re-pasting every one of
+// them. They also stay in the .bak, so this is purely additive.
+var preservedRefFiles = []string{"op-refs.env", "hostmode.env"}
+
+// refFileSnapshot is one preserved-ref-file's captured content, read from the
+// config dir before it moves aside and written back after.
+type refFileSnapshot struct {
+	name string
+	data []byte
 }
 
 // errResetNeedsYes is returned by runResetCore when it can't prompt (non-TTY)
@@ -180,6 +201,7 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 		DataRoot:   paths.dataRoot,
 		Force:      opts.force,
 	}
+	a.ConfigDir = paths.configDir
 	if paths.configDir != "" {
 		a.Backups = append(a.Backups, backupTarget{Path: paths.configDir, Label: "config"})
 	}
@@ -429,6 +451,23 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 		errs = append(errs, errors.New(msg))
 	}
 
+	// Snapshot the 1Password ref files (op-refs.env, hostmode.env) BEFORE the
+	// config dir moves aside. They are op:// POINTERS, not secrets — resolvable
+	// only with the user's own 1Password — so re-pasting every one of them after
+	// every reset is pure friction. They stay in the .bak too, so restoring them
+	// into the fresh config dir below is purely additive, never a data loss risk.
+	var refSnapshots []refFileSnapshot
+	if a.PreserveRefs && a.ConfigDir != "" && fsys.readFile != nil {
+		for _, name := range preservedRefFiles {
+			p := filepath.Join(a.ConfigDir, name)
+			data, err := fsys.readFile(p)
+			if err != nil {
+				continue // missing (or unreadable) — nothing to preserve
+			}
+			refSnapshots = append(refSnapshots, refFileSnapshot{name: name, data: data})
+		}
+	}
+
 	// 2. Move each explicit backup aside.
 	var created []string
 	moved := map[string]bool{}
@@ -456,6 +495,29 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 			moved[b.Path] = true
 			created = append(created, dest)
 			fmt.Fprintf(out, "  ✓ %s: %s -> %s\n", b.Label, b.Path, dest)
+		}
+	}
+
+	// 2b. Restore the snapshotted 1Password refs into a fresh config dir, now that
+	// the old one has actually moved aside. Best-effort: a restore failure is
+	// reported but never fails the reset (the ref is still safe in the .bak).
+	if len(refSnapshots) > 0 && moved[a.ConfigDir] {
+		mkdirErr := fsys.mkdirAll(a.ConfigDir, 0o755)
+		allOK := true
+		for _, snap := range refSnapshots {
+			if mkdirErr != nil {
+				fmt.Fprintf(out, "  ✗ could not preserve %s\n", snap.name)
+				allOK = false
+				continue
+			}
+			dest := filepath.Join(a.ConfigDir, snap.name)
+			if err := fsys.writeFile(dest, snap.data, 0o600); err != nil {
+				fmt.Fprintf(out, "  ✗ could not preserve %s\n", snap.name)
+				allOK = false
+			}
+		}
+		if allOK {
+			fmt.Fprintln(out, "  ✓ kept 1Password refs (op-refs.env, hostmode.env) so you don't re-paste")
 		}
 	}
 
@@ -624,6 +686,14 @@ func printResetPlan(a resetActions, out io.Writer) {
 	for _, b := range a.Backups {
 		fmt.Fprintf(out, "  - %s: %s\n", b.Label, b.Path)
 	}
+	if a.PreserveRefs {
+		for _, b := range a.Backups {
+			if b.Path == a.ConfigDir {
+				fmt.Fprintln(out, "  (keeping your 1Password refs: op-refs.env, hostmode.env)")
+				break
+			}
+		}
+	}
 	if a.KeepMemory {
 		fmt.Fprintf(out, "  (keeping captured memory: %s)\n", a.MemoryDir)
 	}
@@ -665,6 +735,9 @@ func runResetCore(cfg *config.Config, paths resetPaths, opts resetOpts,
 	fsys resetFS, env shellEnv, rio setupIO, now func() time.Time) error {
 
 	a := resetPlan(cfg, paths, opts)
+	// reset keeps your 1Password refs (op:// pointers, not secrets) so you don't
+	// re-paste after every reset. uninstall is a clean wipe and leaves this false.
+	a.PreserveRefs = true
 	printResetPlan(a, rio.out)
 
 	if !opts.assumeYes {
