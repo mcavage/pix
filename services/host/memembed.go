@@ -138,7 +138,7 @@ func memWatcherModel() string {
 	// normally passes the resolved config value (config.DefaultMemoryWatcherModel);
 	// this fallback only applies when the daemon runs with MEMORY_WATCHER_MODEL
 	// unset. Keep in sync with config.DefaultMemoryWatcherModel.
-	return "gemma4:e4b-mlx"
+	return "qwen3.5:9b"
 }
 
 // memWatcherWarm forces the watcher model resident in Ollama at startup so the
@@ -308,6 +308,43 @@ Hard rules:
 
 Output only the JSON.`
 
+// extractJSONObject returns the first balanced {...} JSON object substring in s,
+// or "" if none — salvaging the object from a model that wraps it in prose or a
+// ```json fence instead of returning bare JSON.
+func extractJSONObject(s string) string {
+	start := strings.IndexByte(s, '{')
+	if start < 0 {
+		return ""
+	}
+	depth, inStr, esc := 0, false, false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			switch {
+			case esc:
+				esc = false
+			case c == '\\':
+				esc = true
+			case c == '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return ""
+}
+
 func memWatch(user string) *watchResult {
 	model := memWatcherModel()
 	schema := map[string]any{
@@ -367,6 +404,7 @@ func memWatch(user string) *watchResult {
 		} `json:"message"`
 	}
 	if json.NewDecoder(res.Body).Decode(&chat) != nil || chat.Message.Content == "" {
+		log.Printf("memory watcher: empty/undecodable chat response from model %q", model)
 		return nil
 	}
 	var p struct {
@@ -375,8 +413,21 @@ func memWatch(user string) *watchResult {
 		Corrections []string `json:"corrections"`
 		Valence     float64  `json:"valence"`
 	}
-	if json.Unmarshal([]byte(chat.Message.Content), &p) != nil {
-		return nil
+	// Primary: the whole content is the JSON object (structured-output models).
+	// Fallback: some models wrap it in prose or a ```json fence — salvage the first
+	// balanced {...} object rather than returning nil. Log the raw output on total
+	// failure so "returned nil" is never a mystery (which model, what it said).
+	content := chat.Message.Content
+	if json.Unmarshal([]byte(content), &p) != nil {
+		salvaged := extractJSONObject(content)
+		if salvaged == "" || json.Unmarshal([]byte(salvaged), &p) != nil {
+			raw := content
+			if len(raw) > 300 {
+				raw = raw[:300] + "..."
+			}
+			log.Printf("memory watcher: model %q returned unparseable output (no JSON object) — raw: %q", model, raw)
+			return nil
+		}
 	}
 	clean := func(in []string) []string {
 		out := []string{}

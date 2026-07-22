@@ -325,3 +325,19 @@ func FuzzMemFtsQuery(f *testing.F) {
 		}
 	})
 }
+
+func TestExtractJSONObject(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`{"facts":["x"]}`, `{"facts":["x"]}`},
+		{"here you go:\n```json\n{\"facts\":[\"x\"]}\n```", `{"facts":["x"]}`},
+		{`prefix {"a":{"b":1}} suffix`, `{"a":{"b":1}}`},
+		{`{"s":"has } brace in string"}`, `{"s":"has } brace in string"}`},
+		{`no json here`, ``},
+		{`{unbalanced`, ``},
+	}
+	for _, c := range cases {
+		if got := extractJSONObject(c.in); got != c.want {
+			t.Errorf("extractJSONObject(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

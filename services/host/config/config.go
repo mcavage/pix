@@ -19,13 +19,14 @@ import (
 // Defaults applied when a config file is absent or a field is unset.
 const (
 	// A small, fast, extraction-grade local model DEDICATED to fact capture. It is
-	// deliberately decoupled from the (bigger) ollama-bridge/router model: fact
-	// extraction is a bounded task that does not need a 9b, and a 9b cold-load was
-	// the cause of watcher timeouts. gemma4:e4b-mlx is small + MLX-accelerated on
-	// Apple Silicon; warm-on-start (memWatcherWarm) keeps the first capture fast.
-	// Override via `pi-stack config set memory_watcher_model <model>` (e.g.
-	// smolstruct:1.7b or osmosis-structure:0.6b on non-Apple hardware).
-	DefaultMemoryWatcherModel = "gemma4:e4b-mlx"
+	// The watcher must reliably emit STRUCTURED JSON (facts/events/corrections).
+	// The previous default (gemma4:e4b-mlx) could not — it returned unparseable
+	// output on every extraction, so auto-capture silently stored nothing. A capable
+	// instruct model that honors ollama structured outputs is required; qwen3.5:9b
+	// works. warm-on-start (memWatcherWarm) keeps the first capture fast. Override
+	// via `pi-stack config set memory_watcher_model <model>` if you have a smaller
+	// model that reliably does structured extraction on your hardware.
+	DefaultMemoryWatcherModel = "qwen3.5:9b"
 	DefaultMemoryEmbedModel   = "nomic-embed-text"
 	// DefaultOllamaBridgeModel is the local model the sandbox's ollama-bridge
 	// exposes to pi (the interactive Alt+P cycle) AND the router's local option.
