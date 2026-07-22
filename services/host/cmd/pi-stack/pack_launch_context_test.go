@@ -18,7 +18,8 @@ import (
 // path a task workspace goes through.
 func TestWritePackContextFiles_WritesMemoryScopeAndOllamaModel(t *testing.T) {
 	packRoot := t.TempDir()
-	manifest := "name = \"work\"\nschema = 1\n"
+	// EXPLICIT memory_scope is what isolates a pack now (a bare name does NOT).
+	manifest := "name = \"work\"\nschema = 1\nmemory_scope = \"work-scope\"\n"
 	if err := os.WriteFile(filepath.Join(packRoot, packManifestName), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -30,8 +31,8 @@ func TestWritePackContextFiles_WritesMemoryScopeAndOllamaModel(t *testing.T) {
 	writePackContextFiles(cfg, o, activePackRoot(cfg.Pack, o.Pack))
 
 	gotScope := readFile(t, filepath.Join(ws, ".pi-stack", "profile"))
-	if got := trimTrailingNewline(gotScope); got != "work" {
-		t.Errorf("profile = %q, want %q", got, "work")
+	if got := trimTrailingNewline(gotScope); got != "work-scope" {
+		t.Errorf("profile = %q, want %q", got, "work-scope")
 	}
 	gotModel := readFile(t, filepath.Join(ws, ".pi-stack", "ollama-bridge.model"))
 	if got := trimTrailingNewline(gotModel); got != "qwen3.5:9b" {

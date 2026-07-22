@@ -600,13 +600,15 @@ func TestSolicitPackCredentials_RejectsPastedLiteral(t *testing.T) {
 
 // --- F4: memory scope tag ------------------------------------------------------
 
-func TestWriteMemoryScope_PackNameDefault(t *testing.T) {
+func TestWriteMemoryScope_NoExplicitScopeIsShared(t *testing.T) {
+	// A pack with NO explicit memory_scope must NOT scope memory to its name —
+	// memory stays the single shared store (no profile file => "default"), else
+	// conversational captures get hidden from the default recall view.
 	ws := t.TempDir()
 	p := &packInfo{Manifest: packManifest{Name: "work"}}
 	writeMemoryScope(ws, p)
-	got := strings.TrimSpace(readFile(t, filepath.Join(ws, ".pi-stack", "profile")))
-	if got != "work" {
-		t.Errorf("profile = %q, want %q", got, "work")
+	if _, err := os.Stat(filepath.Join(ws, ".pi-stack", "profile")); err == nil {
+		t.Error("a pack without explicit memory_scope must NOT write a scope file (memory stays shared)")
 	}
 }
 

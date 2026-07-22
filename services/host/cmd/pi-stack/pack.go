@@ -1046,10 +1046,13 @@ func writeMemoryScope(workspace string, p *packInfo) {
 		_ = removeWorkspaceStateFile(workspace, "profile")
 		return
 	}
+	// Memory is a single SHARED store by default (AGENTS: the in-store scope column
+	// is dormant). ONLY an explicit `memory_scope` in the manifest isolates a pack.
+	// The pack NAME must NOT become a scope: doing so stamped every conversational
+	// capture with the pack name (e.g. "personal"), which hid it from the default
+	// recall view (recall sees {scope}∪{default}; host-side recall queries default),
+	// so captured preferences looked lost. Empty/"default" => shared, no scope file.
 	scope := strings.TrimSpace(p.Manifest.MemoryScope)
-	if scope == "" {
-		scope = strings.TrimSpace(p.Manifest.Name)
-	}
 	if scope == "" || scope == "default" {
 		_ = removeWorkspaceStateFile(workspace, "profile")
 		return

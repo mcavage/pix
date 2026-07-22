@@ -138,7 +138,8 @@ func TestWriteMemoryScopeSymlinkSafe(t *testing.T) {
 	}
 	requireSymlink(t, target, filepath.Join(stateDir, "profile"))
 
-	writeMemoryScope(ws, &packInfo{Manifest: packManifest{Name: "acme"}})
+	// Needs an EXPLICIT memory_scope to write at all (a bare name no longer scopes).
+	writeMemoryScope(ws, &packInfo{Manifest: packManifest{Name: "acme", MemoryScope: "acme"}})
 
 	if b, err := os.ReadFile(target); err != nil || string(b) != secret {
 		t.Fatalf("writeMemoryScope followed the symlink: target = %q (err %v), want %q", b, err, secret)
