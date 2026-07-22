@@ -928,8 +928,13 @@ var memCaptureSem = make(chan struct{}, memCaptureMaxConcurrency)
 func memCapture(store *memStore, user, project string, hasProj bool, profile string) {
 	defer func() { recover() }()
 	defer func() { <-memCaptureSem }()
+	// Observability: make every capture attempt visible. memWatch logs its own
+	// errors (Ollama down, HTTP != 200), but a 200 with unparseable/empty content
+	// returns nil SILENTLY — the exact "capture on but 0 facts" black box. Log it.
+	log.Printf("memory: observe -> watcher (user %d chars, project %q, profile %q)", len(user), project, profile)
 	w := memWatch(user)
 	if w == nil {
+		log.Printf("memory: watcher returned nil (no extraction) — nothing captured")
 		return
 	}
 	rewardSeed := w.Valence * 0.3
@@ -949,6 +954,8 @@ func memCapture(store *memStore, user, project string, hasProj bool, profile str
 	}
 	if len(w.Facts)+len(w.Events)+len(w.Corrections) > 0 {
 		log.Printf("captured %d fact(s), %d event(s), %d correction(s) (valence %v)", len(w.Facts), len(w.Events), len(w.Corrections), w.Valence)
+	} else {
+		log.Printf("memory: watcher ran but extracted 0 items (nothing it judged worth keeping, or an empty result)")
 	}
 }
 
