@@ -96,6 +96,47 @@ func TestStopServe_NoPidfile(t *testing.T) {
 	}
 }
 
+// TestStopServe_NoPidfile_DiscoversOrphan: no pidfile, but a live verified-ours
+// serve is discovered (the `pi-stack reset` orphan case) => it is stopped.
+func TestStopServe_NoPidfile_DiscoversOrphan(t *testing.T) {
+	removed := false
+	proc := &fakeProc{pid: 5150, alive: true, dieOnTerm: true}
+	ctl := ctlFor("", syscall.ENOENT, proc, &removed, nil)
+	ctl.discover = func() ([]int, error) { return []int{5150}, nil }
+	var buf bytes.Buffer
+	stopped, err := stopServe(ctl, &buf)
+	if err != nil || !stopped {
+		t.Fatalf("stopped=%v err=%v, want true,nil; out=%q", stopped, err, buf.String())
+	}
+	if !proc.termReceived {
+		t.Error("discovered orphan should have received SIGTERM")
+	}
+	if !strings.Contains(buf.String(), "no pidfile, but found a running") {
+		t.Errorf("want discovery message, got %q", buf.String())
+	}
+}
+
+// TestStopServe_NoPidfile_DiscoveryNotOurs: a discovered pid that verifies as
+// NOT ours is left alone (never signalled) => honest "not running".
+func TestStopServe_NoPidfile_DiscoveryNotOurs(t *testing.T) {
+	removed := false
+	proc := &fakeProc{pid: 6000, alive: true}
+	notOurs := func(int) (bool, bool) { return false, true } // alive, not ours
+	ctl := ctlFor("", syscall.ENOENT, proc, &removed, notOurs)
+	ctl.discover = func() ([]int, error) { return []int{6000}, nil }
+	var buf bytes.Buffer
+	stopped, err := stopServe(ctl, &buf)
+	if err != nil || stopped {
+		t.Fatalf("stopped=%v err=%v, want false,nil", stopped, err)
+	}
+	if proc.termReceived {
+		t.Error("a not-ours discovered pid must never be signalled")
+	}
+	if !strings.Contains(buf.String(), "no pidfile") {
+		t.Errorf("want 'no pidfile' message, got %q", buf.String())
+	}
+}
+
 // TestStopServe_StalePidfile: pid dead (kill(0) ESRCH) => stale removed, not running.
 func TestStopServe_StalePidfile(t *testing.T) {
 	removed := false
@@ -367,8 +408,8 @@ func TestVerifyServeProcPS_RepeatedBasenameFullComm(t *testing.T) {
 	}
 }
 
-// TestCmdlineIsServe_Tight: only `pi-stack-host` basename + a `serve` arg counts;
-// a process merely mentioning the words does not.
+// TestCmdlineIsServe_Tight: only `pi-stack-host` basename + `serve` as the
+// first subcommand counts; a process merely mentioning the words does not.
 func TestCmdlineIsServe_Tight(t *testing.T) {
 	if !cmdlineIsServe([]string{"/opt/pi-stack-host", "serve", "--x"}) {
 		t.Error("real serve cmdline must match")
@@ -378,6 +419,14 @@ func TestCmdlineIsServe_Tight(t *testing.T) {
 	}
 	if cmdlineIsServe([]string{"/opt/pi-stack-host", "status"}) {
 		t.Error("pi-stack-host without a serve arg must NOT match")
+	}
+	if cmdlineIsServe([]string{"/opt/pi-stack-host", "plugin", "broker", "serve"}) {
+		t.Error("serve in a later plugin argument must NOT match the supervisor")
+	}
+	exe := "/opt/pi-stack-host"
+	plugin := psFake(exe+"\n", exe+" plugin broker serve\n", nil, nil)
+	if ok, known := verifyServeProcPS(4242, plugin); ok || !known {
+		t.Errorf("ps fallback must reject a later serve arg: ours=%v known=%v", ok, known)
 	}
 }
 

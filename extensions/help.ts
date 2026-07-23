@@ -1,5 +1,5 @@
 // pi-stack — a LIVE map of the harness (`/help`) plus a warm first-run tour
-// (`/getting-started`) and a one-time first-turn nudge.
+// and a one-time first-turn nudge (points at /help).
 //
 // The whole point is that it never goes stale: `/help` enumerates the skills,
 // agents, and commands that are ACTUALLY loaded, by scanning the agent dir on
@@ -41,7 +41,7 @@ const GROUPS: Array<{ title: string; members: string[] }> = [
 		],
 	},
 	{ title: "DATA", members: ["gworkspace", "ingest", "enrich"] },
-	{ title: "SYSTEM", members: ["onboard", "promote", "model-refresh"] },
+	{ title: "SYSTEM", members: ["onboarding", "promote", "model-refresh"] },
 ];
 
 // Skills that are reference rules (auto-load as conventions) — hidden from the
@@ -70,7 +70,6 @@ const KNOWN_COMMANDS = [
 	"/model",
 	"/reload",
 	"/help",
-	"/getting-started",
 ];
 
 const NUDGE_MARKER = ".pi-stack-help-nudged";
@@ -356,8 +355,6 @@ function buildHelp(pi: any, ctx: any): string {
 		);
 	}
 
-	L.push("");
-	L.push(p.desc("New? Run ") + p.accent("/getting-started") + p.desc(" for the tour."));
 	return L.join("\n");
 }
 
@@ -431,57 +428,6 @@ function buildDetail(pi: any, ctx: any, query: string): string {
 	].join("\n");
 }
 
-function gettingStarted(ctx: any): string {
-	// Mark's voice: direct, concrete, no em-dashes, no slop. Skill names match
-	// what's loaded (build/plan/debug/ship/healthcheck/onboard all present).
-	// Colored so it doesn't render at the faint `dim` wrapper (see painter note).
-	const p = painter(ctx);
-	const t = p.text; // body prose at default (readable) foreground
-	const c = p.accent; // commands
-	return [
-		p.head("Welcome to pi-stack."),
-		t("Your multi-model coding harness: it remembers what you tell it,"),
-		t("delegates to subagents, and ships real PRs."),
-		"",
-		p.head("Five things to try:"),
-		"",
-		t("  1. ") + c("/skill:onboard"),
-		t("     Seed who you are and what you're working on into memory. Do this"),
-		t("     first, everything else gets sharper once it knows you."),
-		"",
-		t("  2. Build something."),
-		t("     Describe the task in plain words, then ") + c("/skill:build") + t(". For"),
-		t("     anything bigger than a quick edit, ") + c("/skill:plan") + t(" first."),
-		"",
-		t("  3. ") + c("/skill:debug"),
-		t("     Hand it a failing test or a bug. It reproduces, root-causes, and"),
-		t("     fixes, no guessing, no symptom patches."),
-		"",
-		t("  4. ") + c("/skill:ship"),
-		t("     Runs the tests, gets a cross-vendor review from a different model"),
-		t("     than wrote the code, then opens a PR. Never auto-merges."),
-		"",
-		t("  5. ") + c("/skill:healthcheck"),
-		t("     Confirms the harness and your code health are both green."),
-		"",
-		p.head("A few things worth knowing:"),
-		t("  • Memory persists across sessions. ") + c("/remember") + t(" adds a fact."),
-		t("  • ") + c("/model") + t(" or ") + c("Alt+P") + t(" switches models mid-conversation."),
-		t("  • ") + c("/help") + t(" is the full map; ") + c("/help <name>") + t(" drills into one item."),
-		"",
-		// The user complained the old tour "just dumps me and asks questions".
-		// End on ONE unambiguous do-this-now action, not open questions.
-		p.head("Start here, type this now:"),
-		"",
-		"    " + c("/skill:onboard"),
-		"",
-		t("Then describe your first task and run ") +
-			c("/skill:build") +
-			t(". Stuck? Run ") +
-			c("pi-stack doctor") +
-			t("."),
-	].join("\n");
-}
 
 // Fire the first-turn nudge at most once per machine, gated by a marker file.
 function maybeNudge(ctx: any): void {
@@ -506,7 +452,7 @@ function maybeNudge(ctx: any): void {
 		if (!claimed) return;
 		safe(() =>
 			ctx?.ui?.notify?.(
-				"New here? Type /help for the map or /getting-started for the tour.",
+				"New here? Type /help for the map.",
 				"info",
 			),
 		);
@@ -526,14 +472,6 @@ export default function (pi: any) {
 				const text = query ? buildDetail(pi, ctx, query) : buildHelp(pi, ctx);
 				return safe(() => ctx?.ui?.notify?.(text, "info"));
 			},
-		}),
-	);
-
-	safe(() =>
-		pi.registerCommand("getting-started", {
-			description: "A warm first-run tour: five things to try and how memory works",
-			handler: async (_args: any, ctx: any) =>
-				safe(() => ctx?.ui?.notify?.(gettingStarted(ctx), "info")),
 		}),
 	);
 

@@ -76,31 +76,53 @@ type resetActions struct {
 	MemoryDir       string         // preserved dir when KeepMemory
 	MemoryDB        string         // resolved custom MEMORY_DB file path ("" for the default), so the sweep can preserve a db that lives DIRECTLY in DataRoot
 	DataRoot        string         // the data root (for the keep-memory sweep)
+	ConfigDir       string         // the config dir (~/.config/pi-stack) being backed up, so executeReset can snapshot + restore its 1Password ref files
+	PreserveRefs    bool           // reset ONLY: restore op-refs.env/hostmode.env into a fresh config dir (uninstall is a clean wipe, leaves it false)
 	RemoveSandboxes bool           // --sbx: remove pi-stack-* sandboxes
 	MCPRemove       []string       // --sbx: MCP server names to unregister (cfg.MCP)
 	Force           bool           // --force: skip the serve-still-up guard on the data move
+	RuntimeFiles    []string       // ephemeral daemon runtime files to HARD-remove (pid/lazy/lock in StateDir) — stale after the stop, not worth a .bak
 }
 
 // resetFS is the injected filesystem surface, so executeReset stays hermetic in
 // tests (a temp HOME, no real rm). defaultResetFS wires the os-backed ops.
 type resetFS struct {
-	stat     func(path string) (os.FileInfo, error)
-	lstat    func(path string) (os.FileInfo, error)
-	readlink func(path string) (string, error)
-	rename   func(oldpath, newpath string) error
-	readDir  func(path string) ([]os.DirEntry, error)
-	remove   func(path string) error
+	stat      func(path string) (os.FileInfo, error)
+	lstat     func(path string) (os.FileInfo, error)
+	readlink  func(path string) (string, error)
+	rename    func(oldpath, newpath string) error
+	readDir   func(path string) ([]os.DirEntry, error)
+	remove    func(path string) error
+	readFile  func(path string) ([]byte, error)
+	writeFile func(path string, data []byte, perm os.FileMode) error
+	mkdirAll  func(path string, perm os.FileMode) error
 }
 
 func defaultResetFS() resetFS {
 	return resetFS{
-		stat:     os.Stat,
-		lstat:    os.Lstat,
-		readlink: os.Readlink,
-		rename:   os.Rename,
-		readDir:  os.ReadDir,
-		remove:   os.Remove,
+		stat:      os.Stat,
+		lstat:     os.Lstat,
+		readlink:  os.Readlink,
+		rename:    os.Rename,
+		readDir:   os.ReadDir,
+		remove:    os.Remove,
+		readFile:  os.ReadFile,
+		writeFile: os.WriteFile,
+		mkdirAll:  os.MkdirAll,
 	}
+}
+
+// preservedRefFiles are the config-dir files reset snapshots before the config
+// dir moves aside and restores into the fresh one: 1Password op:// REFERENCES
+// (pointers, not secrets), so a reset doesn't force re-pasting every one of
+// them. They also stay in the .bak, so this is purely additive.
+var preservedRefFiles = []string{"op-refs.env", "hostmode.env"}
+
+// refFileSnapshot is one preserved-ref-file's captured content, read from the
+// config dir before it moves aside and written back after.
+type refFileSnapshot struct {
+	name string
+	data []byte
 }
 
 // errResetNeedsYes is returned by runResetCore when it can't prompt (non-TTY)
@@ -179,8 +201,9 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 		DataRoot:   paths.dataRoot,
 		Force:      opts.force,
 	}
+	a.ConfigDir = paths.configDir
 	if paths.configDir != "" {
-		a.Backups = append(a.Backups, backupTarget{Path: paths.configDir, Label: "config directory"})
+		a.Backups = append(a.Backups, backupTarget{Path: paths.configDir, Label: "config"})
 	}
 	if opts.keepMemory {
 		// Preserve the captured facts (memory); move the rebuildable index aside.
@@ -196,7 +219,7 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 		}
 	} else if paths.dataRoot != "" {
 		// Move the whole data root aside (captured memory + knowledge index).
-		a.Backups = append(a.Backups, backupTarget{Path: paths.dataRoot, Label: "data directory (memory + knowledge)", Dangerous: true})
+		a.Backups = append(a.Backups, backupTarget{Path: paths.dataRoot, Label: "data (memory, knowledge, skills)", Dangerous: true})
 		// Honor a custom MEMORY_DB / KNOWLEDGE_DB that lives OUTSIDE the data root:
 		// the data-root move alone would miss it. Move ONLY the db FILE + its
 		// -wal/-shm sidecars, NEVER the whole parent dir. A whole directory is moved
@@ -211,6 +234,15 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 	if opts.sbx {
 		a.RemoveSandboxes = true
 		a.MCPRemove = append([]string(nil), cfg.MCP...)
+	}
+	// The daemon's ephemeral runtime files live in the STATE dir (not the config/
+	// data dirs we move aside), so a plain reset would leave them behind. They are
+	// stale the moment serve stops (a lock file, a pidfile, a lazy marker) and have
+	// no restore value, so hard-remove them for a truly clean slate.
+	a.RuntimeFiles = []string{
+		config.ServePidPath(),
+		config.ServeLazyMarkerPath(),
+		config.ServeSpawnLockPath(),
 	}
 	// --purge-data (uninstall only): move harvested task artifacts aside too. They
 	// live under XDG_DATA_HOME, OUTSIDE every tree reset normally touches, so they
@@ -400,6 +432,10 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 	ts := now().Unix()
 	var errs []error
 
+	// Was a daemon running BEFORE we tear down? If so, we bring a fresh one up on
+	// the clean slate at the end (step 5), so reset lands you running, not down.
+	wasUp := serveStillUp(env)
+
 	// 1. Best-effort stop of the host services so they don't hold the db files.
 	stopHostServices(env, out)
 
@@ -413,6 +449,23 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 		msg := "serve is still running after the stop attempt — refusing to move the data directory (a live sqlite writer would be split from its db/wal); stop it with 'pi-stack serve stop' or re-run with --force"
 		fmt.Fprintf(out, "  ✗ %s\n", msg)
 		errs = append(errs, errors.New(msg))
+	}
+
+	// Snapshot the 1Password ref files (op-refs.env, hostmode.env) BEFORE the
+	// config dir moves aside. They are op:// POINTERS, not secrets — resolvable
+	// only with the user's own 1Password — so re-pasting every one of them after
+	// every reset is pure friction. They stay in the .bak too, so restoring them
+	// into the fresh config dir below is purely additive, never a data loss risk.
+	var refSnapshots []refFileSnapshot
+	if a.PreserveRefs && a.ConfigDir != "" && fsys.readFile != nil {
+		for _, name := range preservedRefFiles {
+			p := filepath.Join(a.ConfigDir, name)
+			data, err := fsys.readFile(p)
+			if err != nil {
+				continue // missing (or unreadable) — nothing to preserve
+			}
+			refSnapshots = append(refSnapshots, refFileSnapshot{name: name, data: data})
+		}
 	}
 
 	// 2. Move each explicit backup aside.
@@ -442,6 +495,29 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 			moved[b.Path] = true
 			created = append(created, dest)
 			fmt.Fprintf(out, "  ✓ %s: %s -> %s\n", b.Label, b.Path, dest)
+		}
+	}
+
+	// 2b. Restore the snapshotted 1Password refs into a fresh config dir, now that
+	// the old one has actually moved aside. Best-effort: a restore failure is
+	// reported but never fails the reset (the ref is still safe in the .bak).
+	if len(refSnapshots) > 0 && moved[a.ConfigDir] {
+		mkdirErr := fsys.mkdirAll(a.ConfigDir, 0o755)
+		allOK := true
+		for _, snap := range refSnapshots {
+			if mkdirErr != nil {
+				fmt.Fprintf(out, "  ✗ could not preserve %s\n", snap.name)
+				allOK = false
+				continue
+			}
+			dest := filepath.Join(a.ConfigDir, snap.name)
+			if err := fsys.writeFile(dest, snap.data, 0o600); err != nil {
+				fmt.Fprintf(out, "  ✗ could not preserve %s\n", snap.name)
+				allOK = false
+			}
+		}
+		if allOK {
+			fmt.Fprintln(out, "  ✓ kept 1Password refs (op-refs.env, hostmode.env) so you don't re-paste")
 		}
 	}
 
@@ -485,21 +561,61 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 		}
 	}
 
+	// 3b. Clear the daemon's ephemeral runtime files (pid/lazy/lock in the STATE
+	// dir). They are stale after the stop and live OUTSIDE the moved dirs, so a
+	// plain reset would strand them. Hard-remove (best-effort; a missing file is
+	// fine). Skipped if the daemon wouldn't stop (data-move blocked) so we never
+	// yank the pidfile out from under a still-live daemon.
+	if !dataBlocked {
+		for _, p := range a.RuntimeFiles {
+			if err := fsys.remove(p); err != nil && !os.IsNotExist(err) {
+				fmt.Fprintf(out, "  · could not clear runtime file %s — %v\n", p, err)
+			}
+		}
+	}
+
 	// 4. sbx: remove pi-stack-* sandboxes + unregister the configured MCP servers.
 	// Provider secrets (sbx secret) are intentionally LEFT ALONE — those are just
 	// keys, not stack state, and re-entering them is friction with no upside here.
 	if a.RemoveSandboxes {
 		executeSbxReset(a, env, out)
 	}
+
+	// 5. Restart the daemon on the clean slate if one was running before (and we
+	// actually tore down). It comes up fresh against default config (the file was
+	// moved aside) with an empty store — the intended clean-slate running state.
+	// Best-effort: a failure just leaves services down and the next `pi-stack run`
+	// lazy-starts them.
+	if wasUp && !dataBlocked {
+		fmt.Fprintln(out, "Restarting host services on the clean slate:")
+		if err := restartServeForReset(out); err != nil {
+			fmt.Fprintf(out, "  · could not restart services (%v) — `pi-stack run` will start them\n", err)
+		} else {
+			fmt.Fprintln(out, "  ✓ host services restarted")
+		}
+	}
 	return created, errors.Join(errs...)
+}
+
+// restartServeForReset brings a fresh daemon up after a reset, indirected through
+// a package var so tests can stub it. It loads the (now-default) config and lazy-
+// starts serve; ensureServe is flock-guarded and health-waited.
+var restartServeForReset = func(out io.Writer) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	return ensureServe(defaultServeStarter(), cfg, ensureServeOpts{})
 }
 
 // stopServeForReset is the serve-stop the reset executor uses, indirected through
 // a package var so a test can stub it (and so the real path never signals a live
-// serve during unit tests). It defaults to the pidfile-based stopServe — the SAFE
-// replacement for the old `pkill -f 'pi-stack-host serve'`.
+// serve during unit tests). It is MODE-AWARE: a managed service (launchd/systemd)
+// is stopped via its supervisor so KeepAlive/Restart= cannot respawn it mid-reset
+// (which would trip the data-move guard); otherwise it falls through to the
+// pidfile-based stopServe (with its discovery fallback for an orphaned daemon).
 var stopServeForReset = func(out io.Writer) (bool, error) {
-	return stopServe(defaultServeCtl(), out)
+	return stopServeAnyMode(managedServiceActive, stopManagedService, defaultServeCtl(), out)
 }
 
 // stopHostServices best-effort stops any running `pi-stack-host serve` so it
@@ -564,14 +680,25 @@ func executeSbxReset(a resetActions, env shellEnv, out io.Writer) {
 // printResetPlan shows EXACTLY what will be moved/removed before any change, so
 // the guard prompt is informed.
 func printResetPlan(a resetActions, out io.Writer) {
-	fmt.Fprintln(out, "pi-stack reset — moves state aside (reversible), never hard-deletes.")
+	fmt.Fprintln(out, "pi-stack reset: moves state aside (reversible), never deletes.")
 	fmt.Fprintln(out)
-	fmt.Fprintln(out, "Will move aside (to <path>.bak-<timestamp>):")
+	fmt.Fprintln(out, "Moving to <path>.bak-<timestamp> (rename back to restore):")
 	for _, b := range a.Backups {
 		fmt.Fprintf(out, "  - %s: %s\n", b.Label, b.Path)
 	}
+	if a.PreserveRefs {
+		for _, b := range a.Backups {
+			if b.Path == a.ConfigDir {
+				fmt.Fprintln(out, "  (keeping your 1Password refs: op-refs.env, hostmode.env)")
+				break
+			}
+		}
+	}
 	if a.KeepMemory {
-		fmt.Fprintf(out, "  (preserving captured memory: %s)\n", a.MemoryDir)
+		fmt.Fprintf(out, "  (keeping captured memory: %s)\n", a.MemoryDir)
+	}
+	if len(a.RuntimeFiles) > 0 {
+		fmt.Fprintln(out, "Stops the daemon, clears its lock/pid files, and restarts it if it was running.")
 	}
 	if a.RemoveSandboxes {
 		fmt.Fprintln(out, "Will remove (sbx):")
@@ -593,6 +720,7 @@ func printResetSummary(created []string, out io.Writer) {
 			fmt.Fprintf(out, "  %s\n", p)
 		}
 		fmt.Fprintln(out, "  delete them once you're sure:  rm -rf <path>.bak-*")
+		fmt.Fprintln(out, "  to restore one: `pi-stack serve stop`, rename it back, then `pi-stack run`.")
 	} else {
 		fmt.Fprintln(out, "Nothing to back up — the stack was already clean.")
 	}
@@ -607,6 +735,9 @@ func runResetCore(cfg *config.Config, paths resetPaths, opts resetOpts,
 	fsys resetFS, env shellEnv, rio setupIO, now func() time.Time) error {
 
 	a := resetPlan(cfg, paths, opts)
+	// reset keeps your 1Password refs (op:// pointers, not secrets) so you don't
+	// re-paste after every reset. uninstall is a clean wipe and leaves this false.
+	a.PreserveRefs = true
 	printResetPlan(a, rio.out)
 
 	if !opts.assumeYes {

@@ -39,3 +39,7 @@ func managedServiceActive() bool { return systemdActive(realCmdRunner) }
 
 // restartManagedService restarts the systemd --user unit.
 func restartManagedService() error { return systemdRestart(realCmdRunner) }
+
+// stopManagedService stops the systemd --user unit so Restart= stops respawning
+// it (without disabling it).
+func stopManagedService(out io.Writer) error { return systemdStop(realCmdRunner, out) }

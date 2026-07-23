@@ -1,9 +1,3 @@
 {
-  "mcpServers": {
-    "gateway": {
-      "url": "http://mcp-gateway.docker.internal/mcp",
-      "auth": false,
-      "lifecycle": "lazy"
-    }
-  }
+  "mcpServers": {}
 }

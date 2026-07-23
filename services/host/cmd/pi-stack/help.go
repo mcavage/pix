@@ -30,10 +30,10 @@ func wantsHelp(argv []string) bool {
 // knownVerbs is the set of top-level verbs, used to suggest a fix when a bare
 // positional (a would-be run DIR) is actually a mistyped verb.
 var knownVerbs = map[string]bool{
-	"help": true, "serve": true, "doctor": true, "onboard": true, "status": true,
+	"help": true, "serve": true, "doctor": true, "onboard": true, "setup": true, "status": true,
 	"ls": true, "rm": true,
 	"config": true, "mcp": true, "memory": true, "knowledge": true,
-	"profile": true, "version": true, "run": true, "secret": true,
+	"pack": true, "version": true, "run": true, "secret": true,
 	"reset": true, "uninstall": true, "man": true,
 	"backup": true, "restore": true, "state": true,
 	"task": true, "route": true, "agent": true,
@@ -91,9 +91,9 @@ func min3(a, b, c int) int {
 // power user can see the whole surface, not just the curated Core view.
 const helpAllText = `pi-stack — a personal, multi-model pi coding agent in a Docker sandbox.
 
-Usage:  pi-stack [--profile NAME] <command> [args]
+Usage:  pi-stack <command> [args]
 
-New here?   pi-stack run       launch the agent; it offers to onboard you (opt-in)
+New here?   pi-stack setup     configure the host, then hand off to an agent for a guided tour
 
 Workflow
   run [DIR]           launch the sandbox in DIR (default: .). This is the main one.
@@ -103,12 +103,14 @@ Workflow
   status              what is up, what is down, what is next   (also the bare command)
 
 Setup & health
-  onboard             host-side config (flags/CI); conversational onboarding is in-session
+  setup               guided onboarding: host config, then agent handoff for a guided tour
+  onboard             host-side config only (flags/CI); no agent handoff
   doctor              diagnose host + sandbox health, print the fix commands
 
 Data
   memory <cmd>        recall | remember | forget | learnings | stats   (:11435)
   knowledge <cmd>     init | use | ls | query | sync | remote          (:11436)
+  pack <cmd>          new | add | ls | show | use | rm (git-backed context bundle)
 
 Models & agents (cost/latency/accuracy routing)
   agent <cmd>         ls | new | edit | rm | reassess (subagents as objects)
@@ -118,7 +120,6 @@ Config & context
   config show|path    show the resolved config path and contents
   config get K        print one resolved value (for scripts/make)
   config set|unset    change config without hand-editing the toml
-  profile ls|use      switch between contexts (work / personal / default)
 
 Parallel work
   task <cmd>          new | ls | path | rm | gc | harvest: parallel task clones of one repo
@@ -145,7 +146,6 @@ Meta
   man                 render the embedded man page (no MANPATH needed; also --man)
   help [verb]         print this help (or a verb's usage)
 
-Global flag:  --profile NAME   run/read a named profile (work, personal, ...)
 run flags:    --dev --skills DIR --kit K --mcp M --name N --model M -- pi-args...
 `
 
@@ -166,12 +166,16 @@ func verbUsage(verb string) (string, bool) {
 		return rmUsage, true
 	case "doctor":
 		return doctorUsage, true
-	case "onboard", "setup":
+	case "onboard":
 		return onboardUsage, true
+	case "setup":
+		return setupUsage, true
 	case "config":
 		return configUsage, true
 	case "mcp":
 		return mcpUsage, true
+	case "pack":
+		return packUsage, true
 	case "memory", "mem":
 		return memoryUsage + "\n", true
 	case "backup":
@@ -180,8 +184,6 @@ func verbUsage(verb string) (string, bool) {
 		return restoreUsage, true
 	case "knowledge", "kb":
 		return knowledgeUsage, true
-	case "profile":
-		return profileUsage, true
 	case "secret":
 		return secretUsage, true
 	case "version":
@@ -222,9 +224,13 @@ auto-start; logs in ~/.local/state/pi-stack/serve.log). Opt out with
 PI_STACK_NO_AUTOSERVE=1 or 'pi-stack config set host.autoserve false'.
 
 subcommands:
-  stop              stop a running 'pi-stack-host serve' via its pidfile (safe:
-                    verifies the process is ours before signalling; SIGTERM then
-                    SIGKILL if it doesn't exit)
+  stop              stop a running 'pi-stack-host serve' (safe: verifies the
+                    process is ours before signalling; SIGTERM then SIGKILL if
+                    it doesn't exit). Mode-aware: a MANAGED service (launchd/
+                    systemd) is stopped via its supervisor so KeepAlive/Restart=
+                    can't respawn it; if the pidfile is missing it falls back to
+                    discovering a verified 'pi-stack-host serve' (e.g. an orphan
+                    left after 'pi-stack reset' moved the config dir).
   status [--json]   report whether serve is running (pid) and which service
                     ports (:11435 / :11436) are up
   install           install serve as a managed login service (launchd on macOS,
@@ -261,10 +267,10 @@ const configUsage = `usage: pi-stack config <show|path|get|set|unset> [args]
 
   show                     print the resolved config path + contents
   path [op-refs]           print the config file path (or the op-refs.env path)
-  get [--profile N] K      print ONE resolved value, no decoration (lists are
+  get K                    print ONE resolved value, no decoration (lists are
                             space-separated) — for scripts/make to source
-  set [--profile N] K V     set a config key (never hand-edit the toml)
-  unset [--profile N] K [V]  reset/clear a scalar key, or remove value V from a
+  set K V                   set a config key (never hand-edit the toml)
+  unset K [V]               reset/clear a scalar key, or remove value V from a
                             list key (mcp/services/knowledge_bundles)
 
 ` + configKeysHelp
@@ -295,20 +301,14 @@ and wire it into config (services += knowledge, knowledge_bundles += DIR).
 Idempotent: never clobbers an existing bundle.
 `
 
-const profileUsage = `usage: pi-stack profile <ls|use> [name]
-
-  ls [--json]      list profiles (* = active)
-  use <name>       set the active profile (use "default" to revert to the base)
-`
-
 // secretHelpBody is the mental model reused verbatim from config so the concept
 // reads identically in setup, doctor, the template header, and `secret -h`.
-const secretUsage = `usage: pi-stack secret <ls|set|rm|check>
+const secretUsage = `usage: pi-stack secret <ls|set|rm|check|sync>
 
 Manage the 1Password refs (op-refs.env) the sbx gateway resolves for host MCP
-servers. Values live in 1Password, never on disk — this verb only reads,
-writes, and reports REFS (op://vault/item/field lines). It never writes a
-resolved secret.
+servers AND the cloud model provider keys. Values live in 1Password, never on
+disk — this verb only reads, writes, and reports REFS (op://vault/item/field
+lines). It never writes a resolved secret.
 
 ` + config.OpRefsMentalModel + `
 
@@ -319,6 +319,11 @@ resolved secret.
   rm ENV_VAR               remove a ref (a no-op if it isn't set)
   check                    resolve each op:// ref with "op read" and report
                            OK/FAIL per key (never prints the resolved value)
+  sync                     FORCE re-resolve every provider-key ref
+                           (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY)
+                           into sbx (rotate/repair). You normally never run this:
+                           run and setup auto-resolve a MISSING key from its ref
+                           by themselves. Never prints or stores a value.
 
 The file lives at the absolute XDG path: see "pi-stack config path op-refs".
 `

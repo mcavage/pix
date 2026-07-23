@@ -439,7 +439,7 @@ func TestRecordSpawnedServePidReturnsErrorOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PI_STACK_CONFIG", "")
-	t.Setenv("XDG_CONFIG_HOME", blocker) // config.ServePidPath() nests under this; a FILE where a dir is needed makes MkdirAll fail
+	t.Setenv("XDG_STATE_HOME", blocker) // config.ServePidPath() nests under the STATE dir; a FILE where a dir is needed makes MkdirAll fail
 	if err := recordSpawnedServePid(4242); err == nil {
 		t.Fatal("want an error when the pidfile directory cannot be created")
 	}

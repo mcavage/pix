@@ -366,42 +366,38 @@ func TestParseRunArgs_Errors(t *testing.T) {
 	}
 }
 
-// TestModelProviderPreflight (R1-1): the run preflight blocks a launch when sbx
-// is on PATH but no MODEL provider key is set, naming the missing keys + the
-// exact `sbx secret set` line. A model key present, or sbx absent, proceeds.
-func TestModelProviderPreflight(t *testing.T) {
-	t.Run("no model key -> blocks with guidance", func(t *testing.T) {
-		f := fakeEnv{
-			present: map[string]bool{"sbx": true},
-			output:  map[string]string{"sbx secret ls": "github\n"}, // github is not a model key
-		}
-		msg, block := modelProviderPreflight(f.env())
-		if !block {
-			t.Fatalf("expected block=true with no model key, msg=%q", msg)
-		}
-		for _, want := range []string{"anthropic", "openai", "google", `sbx secret set -g anthropic -t "sk-..."`} {
-			if !strings.Contains(msg, want) {
-				t.Errorf("guidance missing %q, got:\n%s", want, msg)
-			}
+// TestAnyModelKeyPresent + TestModelKeyMissingMessage (R1-1): the run bootstrap
+// detects a present model key, and the guidance names the missing keys + the
+// exact `sbx secret set` line when none is present.
+func TestAnyModelKeyPresent(t *testing.T) {
+	t.Run("no model key", func(t *testing.T) {
+		f := fakeEnv{present: map[string]bool{"sbx": true}, output: map[string]string{"sbx secret ls": "github\n"}}
+		if anyModelKeyPresent(f.env()) {
+			t.Error("github alone is not a model key")
 		}
 	})
-
-	t.Run("model key present -> proceeds", func(t *testing.T) {
-		f := fakeEnv{
-			present: map[string]bool{"sbx": true},
-			output:  map[string]string{"sbx secret ls": "anthropic github\n"},
-		}
-		if _, block := modelProviderPreflight(f.env()); block {
-			t.Error("a present model key must not block")
+	t.Run("model key present", func(t *testing.T) {
+		f := fakeEnv{present: map[string]bool{"sbx": true}, output: map[string]string{"sbx secret ls": "anthropic github\n"}}
+		if !anyModelKeyPresent(f.env()) {
+			t.Error("anthropic present should count")
 		}
 	})
-
-	t.Run("sbx absent -> cannot verify, proceeds", func(t *testing.T) {
+	t.Run("sbx absent -> cannot verify (false)", func(t *testing.T) {
 		f := fakeEnv{present: map[string]bool{}, output: map[string]string{}}
-		if _, block := modelProviderPreflight(f.env()); block {
-			t.Error("sbx absent: cannot verify, must not block")
+		if anyModelKeyPresent(f.env()) {
+			t.Error("sbx absent must report not-present")
 		}
 	})
+}
+
+func TestModelKeyMissingMessage(t *testing.T) {
+	f := fakeEnv{present: map[string]bool{"sbx": true}, output: map[string]string{"sbx secret ls": "github\n"}}
+	msg := modelKeyMissingMessage(f.env())
+	for _, want := range []string{"anthropic", "openai", "google", `sbx secret set -g anthropic -t "sk-..."`} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("guidance missing %q, got:\n%s", want, msg)
+		}
+	}
 }
 
 // TestClassifyBareArg (R1-6): a path-like positional is diagnosed as a missing/

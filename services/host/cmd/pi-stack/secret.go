@@ -34,7 +34,7 @@ func runSecretCmd(argv []string) {
 	}
 	env := defaultShellEnv()
 	switch sub {
-	case "ls", "check":
+	case "ls", "check", "sync":
 		// Reject trailing junk (unknown args/flags). Leading -h/--help is already
 		// handled by the wantsHelp gate above.
 		if len(rest) > 0 {
@@ -52,19 +52,43 @@ func runSecretCmd(argv []string) {
 			os.Exit(2)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "pi-stack secret: unknown subcommand %q (want: ls, set, rm, check)\n", sub)
+		fmt.Fprintf(os.Stderr, "pi-stack secret: unknown subcommand %q (want: ls, set, rm, check, sync)\n", sub)
 		os.Exit(2)
 	}
 	switch sub {
 	case "ls":
 		runSecretLs(env, os.Stdout)
 	case "set":
-		runSecretSet(env, os.Stdout, rest[0], rest[1])
+		// The dispatcher owns the exit code for a returned error (any file
+		// transaction or lock failure; runSecretSet still os.Exit(2)s itself for
+		// CLI-argument validation failures) — a mirror failure must never leave
+		// the CLI exiting 0 while quietly reporting a shortfall.
+		if err := runSecretSet(env, os.Stdout, rest[0], rest[1]); err != nil {
+			os.Exit(1)
+		}
 	case "rm":
-		runSecretRm(env, os.Stdout, rest[0])
+		if err := runSecretRm(env, os.Stdout, rest[0]); err != nil {
+			os.Exit(1)
+		}
 	case "check":
 		runSecretCheck(env, os.Stdout)
+	case "sync":
+		runSecretSync(env, os.Stdout)
 	}
+}
+
+// normalizeOpRef cleans a pasted op:// reference: trims whitespace and strips ONE
+// layer of matching surrounding quotes. 1Password's "Copy Secret Reference" hands
+// you the ref WITH double quotes ("op://Vault/Item/field"), which would otherwise
+// fail the op:// prefix check. Applied at every paste boundary.
+func normalizeOpRef(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			s = strings.TrimSpace(s[1 : len(s)-1])
+		}
+	}
+	return s
 }
 
 // opRef is one parsed KEY=VALUE line of op-refs.env.
@@ -207,10 +231,32 @@ func runSecretLs(env shellEnv, out io.Writer) {
 // ONE seeder, config.SeedOpRefs) if absent, so the header/mental-model comment
 // is always present, then upserts preserving every other line untouched. It
 // prints the REF it stored (never a resolved secret — a ref is safe to echo).
-func runSecretSet(env shellEnv, out io.Writer, key, value string) {
+//
+// CLI-ARGUMENT validation failures (a bad env-var name, a control character, a
+// non-ref value for a secret key) still call os.Exit(2) directly, exactly as
+// before: they are immediate, unrecoverable rejections of the invocation
+// itself, and existing subprocess tests depend on the process actually
+// exiting from within this call. Everything AFTER argument validation — the
+// read/seed/upsert of op-refs.env plus the provider-key mirror into
+// hostmode.env — is one transaction under the provider-refs lock
+// (withProviderRefsLock), so a concurrent `secret set`/`secret rm`/setup in
+// another process can never interleave between the two file writes. File
+// failures inside the transaction return errors (never os.Exit — the lock's
+// deferred release must run); runSecretCmd turns any non-nil error into a
+// nonzero exit. The one failure mode that must NOT exit silently-successful
+// is a provider key's hostmode.env MIRROR failing after op-refs.env was
+// already written — the op-refs.env write genuinely succeeded (the sandbox
+// is wired), but the CLI as a whole must still report failure.
+func runSecretSet(env shellEnv, out io.Writer, key, value string) error {
 	if !envVarNameRe.MatchString(key) {
 		fmt.Fprintf(out, "pi-stack secret set: %q does not look like an env var name (want %s)\n", key, envVarNameRe.String())
 		os.Exit(2)
+	}
+	// 1Password's "Copy Secret Reference" wraps the ref in quotes; strip them so
+	// a pasted `"op://…"` is accepted (only for an op:// ref — a genuine literal
+	// value keeps its quotes and still trips the refs-only guard below).
+	if nv := normalizeOpRef(value); strings.HasPrefix(nv, "op://") {
+		value = nv
 	}
 
 	// Reject control characters (newline, carriage return, NUL, ...) in the value.
@@ -238,12 +284,44 @@ func runSecretSet(env shellEnv, out io.Writer, key, value string) {
 		value = encoded
 	}
 
-	path, content, exists := opRefsContent(env)
+	// Arguments are valid; the rest is the both-file transaction. A lock
+	// acquisition failure fails the command honestly — never write unlocked.
+	var txErr error
+	if lerr := withProviderRefsLock(env, func() error {
+		txErr = runSecretSetLocked(env, out, key, value)
+		return nil
+	}); lerr != nil {
+		fmt.Fprintf(out, "pi-stack secret set: could not lock provider refs (%s): %v\n", providerRefsLockPath(env), lerr)
+		return lerr
+	}
+	return txErr
+}
+
+// runSecretSetLocked is runSecretSet's file transaction (read/seed/upsert
+// op-refs.env + the provider-key hostmode.env mirror). Caller MUST hold the
+// provider-refs lock; every failure returns an error (never os.Exit) so the
+// lock is always released.
+func runSecretSetLocked(env shellEnv, out io.Writer, key, value string) error {
+	path := defaultOpRefsPath(env)
+	content := ""
+	exists := false
+	if env.readFile != nil {
+		c, err := env.readFile(path)
+		switch {
+		case err == nil:
+			content, exists = c, true
+		case os.IsNotExist(err):
+			// A missing refs file is seeded below.
+		default:
+			fmt.Fprintf(out, "pi-stack secret set: could not read %s: %v\n", path, err)
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+	}
 	if !exists {
 		seededPath, _, err := config.SeedOpRefs()
 		if err != nil {
 			fmt.Fprintf(out, "pi-stack secret set: could not seed %s: %v\n", seededPath, err)
-			os.Exit(1)
+			return fmt.Errorf("seed %s: %w", seededPath, err)
 		}
 		path = seededPath
 		content = config.OpRefsTemplate
@@ -257,38 +335,143 @@ func runSecretSet(env shellEnv, out io.Writer, key, value string) {
 	newContent := upsertOpRef(content, key, value)
 	if env.writeFile == nil {
 		fmt.Fprintf(out, "pi-stack secret set: cannot write %s (no writer available)\n", path)
-		os.Exit(1)
+		return fmt.Errorf("no writer available for %s", path)
 	}
 	if err := env.writeFile(path, []byte(newContent), 0o600); err != nil {
 		fmt.Fprintf(out, "pi-stack secret set: could not write %s: %v\n", path, err)
-		os.Exit(1)
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+
+	// One of the three model-provider keys ALSO needs to land in hostmode.env
+	// (`pi-stack host` resolves cloud keys from THAT file, never op-refs.env) —
+	// otherwise "run `pi-stack secret set` three times" would wire the sandbox
+	// but silently leave host mode local/Ollama-only until the next full
+	// `pi-stack setup`. Mirror it here so a single `secret set` per provider is
+	// really enough, matching what the command's own guidance elsewhere
+	// promises. The op-refs.env write above already landed (the sandbox is
+	// wired regardless), so a failed mirror is reported as a partial, actionable
+	// shortfall — never silently dropped, and never claimed as done alongside a
+	// success line that would contradict it.
+	if _, isProviderKey := providerKeyRefs[key]; isProviderKey {
+		if err := writeOpRefFileQuietLocked(env, hostModeRefsPath(env), key, value); err != nil {
+			fmt.Fprintf(out, "set %s = %s in %s, but could not mirror it to %s: %v — host mode won't see this key until you fix that (or re-run `pi-stack setup`)\n", key, value, path, hostModeRefsPath(env), err)
+			return fmt.Errorf("mirror %s to hostmode.env: %w", key, err)
+		}
 	}
 	fmt.Fprintf(out, "set %s = %s in %s\n", key, value, path)
+	return nil
 }
 
 // runSecretRm removes ENV_VAR's line from op-refs.env, preserving every other
 // line (comments, blanks, other refs). A missing file or a key that was never
 // present is a clean, exit-0 no-op — `rm` is idempotent.
-func runSecretRm(env shellEnv, out io.Writer, key string) {
-	path, content, exists := opRefsContent(env)
-	if !exists {
+//
+// For one of the three model-provider keys, it ALSO removes the same line
+// from hostmode.env — the mirror runSecretSet writes there — so `secret rm`
+// fully undoes what `secret set` did in BOTH files, never leaving a stale
+// key in one of them. A non-provider key is unchanged: op-refs.env only.
+//
+// Every write goes through env.writeFile, which for the real CLI
+// (defaultShellEnv) is symlink-safe and atomic (a same-directory temp file +
+// rename, so a symlinked leaf is replaced rather than followed/truncated —
+// see atomicWriteInDir). A partial failure (one file's removal succeeds, the
+// other's write errors) is reported HONESTLY and returns a non-nil error so
+// the dispatcher exits nonzero — it never claims a clean removal while a
+// file still carries the key. Never prints a resolved secret value: rm takes
+// no value at all, only a ref (refs are safe to echo).
+//
+// The whole both-file removal is one transaction under the provider-refs
+// lock, mirroring runSecretSet: a concurrent set/setup cannot interleave
+// between op-refs.env and hostmode.env being updated. A lock acquisition
+// failure fails the command honestly.
+func runSecretRm(env shellEnv, out io.Writer, key string) error {
+	var txErr error
+	if lerr := withProviderRefsLock(env, func() error {
+		txErr = runSecretRmLocked(env, out, key)
+		return nil
+	}); lerr != nil {
+		fmt.Fprintf(out, "pi-stack secret rm: could not lock provider refs (%s): %v\n", providerRefsLockPath(env), lerr)
+		return lerr
+	}
+	return txErr
+}
+
+// runSecretRmLocked is runSecretRm's file transaction. Caller MUST hold the
+// provider-refs lock.
+func runSecretRmLocked(env shellEnv, out io.Writer, key string) error {
+	path := defaultOpRefsPath(env)
+	content := ""
+	exists := false
+	if env.readFile != nil {
+		c, err := env.readFile(path)
+		switch {
+		case err == nil:
+			content, exists = c, true
+		case os.IsNotExist(err):
+			// Missing is an idempotent no-op unless hostmode.env has the key.
+		default:
+			fmt.Fprintf(out, "pi-stack secret rm: could not read %s: %v\n", path, err)
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+	}
+	opRemoved := false
+	if exists {
+		newContent, removed := removeOpRef(content, key)
+		if removed {
+			if env.writeFile == nil {
+				fmt.Fprintf(out, "pi-stack secret rm: cannot write %s (no writer available)\n", path)
+				return fmt.Errorf("no writer available for %s", path)
+			}
+			if err := env.writeFile(path, []byte(newContent), 0o600); err != nil {
+				fmt.Fprintf(out, "pi-stack secret rm: could not write %s: %v\n", path, err)
+				return err
+			}
+			opRemoved = true
+		}
+	}
+
+	hmPath := hostModeRefsPath(env)
+	hmRemoved := false
+	if _, isProviderKey := providerKeyRefs[key]; isProviderKey && env.readFile != nil {
+		hmContent, rerr := env.readFile(hmPath)
+		switch {
+		case rerr == nil:
+			newHm, removed := removeOpRef(hmContent, key)
+			if removed {
+				if env.writeFile == nil {
+					fmt.Fprintf(out, "pi-stack secret rm: cannot write %s (no writer available)\n", hmPath)
+					return fmt.Errorf("no writer available for %s", hmPath)
+				}
+				if err := env.writeFile(hmPath, []byte(newHm), 0o600); err != nil {
+					fmt.Fprintf(out, "pi-stack secret rm: removed %s from %s, but could not remove it from %s: %v — host mode still has this key until you fix that\n", key, path, hmPath, err)
+					return fmt.Errorf("remove %s from hostmode.env: %w", key, err)
+				}
+				hmRemoved = true
+			}
+		case os.IsNotExist(rerr):
+			// hostmode.env absent: nothing there to remove, not an error.
+		default:
+			// A real read error must never be silently treated as "nothing to
+			// remove" — that would leave a stale key in hostmode.env while
+			// claiming a clean removal.
+			fmt.Fprintf(out, "pi-stack secret rm: removed %s from %s, but could not check %s: %v\n", key, path, hmPath, rerr)
+			return fmt.Errorf("check %s: %w", hmPath, rerr)
+		}
+	}
+
+	switch {
+	case !exists && !hmRemoved:
 		fmt.Fprintf(out, "op-refs.env not found (%s) — nothing to remove\n", path)
-		return
-	}
-	newContent, removed := removeOpRef(content, key)
-	if !removed {
+	case !opRemoved && !hmRemoved:
 		fmt.Fprintf(out, "no ref named %s in %s\n", key, path)
-		return
+	case opRemoved && hmRemoved:
+		fmt.Fprintf(out, "removed %s from %s and %s\n", key, path, hmPath)
+	case opRemoved:
+		fmt.Fprintf(out, "removed %s from %s\n", key, path)
+	default: // hmRemoved only
+		fmt.Fprintf(out, "removed %s from %s\n", key, hmPath)
 	}
-	if env.writeFile == nil {
-		fmt.Fprintf(out, "pi-stack secret rm: cannot write %s (no writer available)\n", path)
-		os.Exit(1)
-	}
-	if err := env.writeFile(path, []byte(newContent), 0o600); err != nil {
-		fmt.Fprintf(out, "pi-stack secret rm: could not write %s: %v\n", path, err)
-		os.Exit(1)
-	}
-	fmt.Fprintf(out, "removed %s from %s\n", key, path)
+	return nil
 }
 
 // upsertOpRef returns content with KEY=value in place of an existing KEY= line
@@ -301,17 +484,23 @@ func upsertOpRef(content, key, value string) string {
 		lines = lines[:len(lines)-1] // drop the trailing empty element from a final "\n"
 	}
 	found := false
-	for i, ln := range lines {
-		if opRefLineKey(ln) == key {
-			lines[i] = newLine
-			found = true
-			break
+	out := make([]string, 0, len(lines)+1)
+	for _, line := range lines {
+		if opRefLineKey(line) != key {
+			out = append(out, line)
+			continue
 		}
+		if !found {
+			out = append(out, newLine)
+			found = true
+		}
+		// Drop later duplicates. Keeping conflicting KEY= lines would let one
+		// caller validate the first while another applies the last.
 	}
 	if !found {
-		lines = append(lines, newLine)
+		out = append(out, newLine)
 	}
-	return strings.Join(lines, "\n") + "\n"
+	return strings.Join(out, "\n") + "\n"
 }
 
 // removeOpRef returns content with KEY's line dropped (everything else

@@ -27,6 +27,19 @@ jobs:
         working-directory: services/host
         run: go test -race ./...
 
+  extensions:
+    name: extension types + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "25.9.0"
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx --no-install tsc --noEmit
+      - run: node --test tests/*.test.mjs
+
   open-core:
     name: open-core boundary (no company/overlay leak)
     runs-on: ubuntu-latest

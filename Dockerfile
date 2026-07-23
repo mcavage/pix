@@ -12,7 +12,7 @@
 # nag (pi checks npm at runtime, so a new release always nags until you rebump).
 # When bumping, re-check the vendored tui patch still applies (build logs print
 # "[apply-tui-bottom-pin] patched" vs an "anchor not found" warning).
-ARG PI_PACKAGE=@earendil-works/pi-coding-agent@0.80.10
+ARG PI_PACKAGE=@earendil-works/pi-coding-agent@0.81.1
 
 # Hardened Node, maintained by Docker (DHI). Debian/glibc, so our entire apt
 # toolchain (clangd, chromium, gh, ruff, build-essential) keeps working — we just
@@ -72,7 +72,7 @@ RUN npm install -g --ignore-scripts typescript \
 # ARG is pinned (like FD_VERSION / GO_VERSION) so builds are reproducible:
 # `releases/latest` silently changes on every new ruff release, which could
 # introduce linting behaviour changes or build failures without warning (H-4).
-ARG RUFF_VERSION=0.11.13
+ARG RUFF_VERSION=0.15.22
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
@@ -80,7 +80,7 @@ RUN set -eux; \
       amd64) rt=x86_64-unknown-linux-gnu  ;; \
       *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL "https://github.com/astral-sh/ruff/releases/download/v${RUFF_VERSION}/ruff-${rt}.tar.gz" -o /tmp/ruff.tgz; \
+    curl -fsSL "https://github.com/astral-sh/ruff/releases/download/${RUFF_VERSION}/ruff-${rt}.tar.gz" -o /tmp/ruff.tgz; \
     tar -xzf /tmp/ruff.tgz -C /tmp; \
     mkdir -p /usr/local/bin; \
     install -m0755 "/tmp/ruff-${rt}/ruff" /usr/local/bin/ruff; \
@@ -207,8 +207,8 @@ USER agent
 # every rebuild; a newer extension then imports a pi-ai API (e.g. `/compat`) that
 # the pinned PI_PACKAGE doesn't ship, and the agent dies at load
 # ("Cannot find module '.../pi-ai/dist/index.js/compat'"). These versions are the
-# set that was current when PI_PACKAGE (0.80.3, 2026-06-30) shipped. When you
-# bump PI_PACKAGE, re-pin this list to the versions current at that release
+# set that was current when the pinned PI_PACKAGE shipped. When you bump
+# PI_PACKAGE, re-pin this list to the versions current at that release
 # (newest published on/before the release date).
 # NOTE: @tintinweb/pi-subagents stays DISABLED (it hung the event loop forever on
 # pi 0.80.x; full trace in docs/upstream/pi-subagents-hang-pi-0.80.md). It is
@@ -225,6 +225,10 @@ RUN set -eux; for p in \
       pi-usage@0.2.1; do \
       pi install "npm:$p"; \
     done; pi list
+
+# `/todos clear` in pi-manage-todo-list 0.4.0 clears only live memory. Persist
+# the clear marker so session resume and compaction continuation respect it.
+RUN node /usr/local/share/pi-stack/patches/apply-todo-durable-clear.mjs
 
 # Bound the subagent result-wait so a dead subagent can't park the event loop
 # (Esc-proof hang). Idempotent + non-fatal. DISABLED alongside pi-subagents above

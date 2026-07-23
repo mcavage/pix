@@ -123,7 +123,9 @@ guardrails (the host-guard extension, workspace checks) reduce accidents; they
 are NOT a security boundary. For anything you wouldn't hand a shell to, use
 ` + "`pi-stack run`" + `.
 
-Gated OFF by default. Enable deliberately with:
+Gated OFF by default. Provision first, THEN enable (the gate stays off until
+provisioning succeeds):
+  pi-stack host setup
   pi-stack config set host.enabled true
 
 subcommands:

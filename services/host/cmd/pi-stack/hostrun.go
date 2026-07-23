@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +38,9 @@ import (
 //	                             --no-extensions, so they'd escape the guard)
 //	PI_SUBAGENT_MAX_DEPTH = 0    belt-and-suspenders: today's depth guard already
 //	                             refuses at depth 0/0 with no TS change
+//	PATH                  = <hostPackBinDir()>:<PATH>  (F3: the active pack's
+//	                             ACCEPTED host wrappers — host mode ONLY; the
+//	                             sandbox and the login shell never see this dir)
 //
 // All of it goes through the child's cmd.Env — never exported to the shell,
 // never persisted, gone when pi exits.
@@ -58,18 +63,20 @@ func runHost(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack host: %v\n", err)
 		os.Exit(1)
 	}
-	if !cfg.Host.Enabled {
-		fmt.Fprint(os.Stderr, hostGateMessage())
-		os.Exit(1)
-	}
-
 	switch sub {
 	case "setup":
+		// `host setup` PROVISIONS host mode; it must NOT be gated behind host.enabled
+		// (that would be a chicken-and-egg: you can't provision until enabled, can't
+		// safely enable until provisioned). The gate only guards LAUNCH.
 		if err := runHostSetup(os.Stderr); err != nil {
 			fmt.Fprintf(os.Stderr, "pi-stack host setup: %v\n", err)
 			os.Exit(1)
 		}
 	default:
+		if !cfg.Host.Enabled {
+			fmt.Fprint(os.Stderr, hostGateMessage())
+			os.Exit(1)
+		}
 		runHostLaunch(o)
 	}
 }
@@ -90,11 +97,13 @@ guardrails (guard extension, workspace checks, disabled subagents) reduce
 accidents — they are NOT a security boundary. For anything you wouldn't hand a
 shell to, use ` + "`pi-stack run`" + ` (the sandbox).
 
-If you understand the above and want it anyway, enable it deliberately:
+If you understand the above and want it anyway, provision first, THEN enable
+(the gate stays off until provisioning succeeds, so this is the safe order):
 
+  pi-stack host setup
   pi-stack config set host.enabled true
 
-then provision once with ` + "`pi-stack host setup`" + ` and launch with ` + "`pi-stack host`" + `.
+then launch with ` + "`pi-stack host`" + `.
 `
 }
 
@@ -122,7 +131,7 @@ var hostHarnessDirs = []string{"skills", "agents", "extensions", "prompts", "the
 // "install pi" hints tell the user to match the image's version, so they must
 // name the ACTUAL pinned version, not an unversioned latest. When you bump the
 // Dockerfile ARG, bump this in the same commit (a test cross-checks the two).
-const hostPinnedPiPackage = "@earendil-works/pi-coding-agent@0.80.10"
+const hostPinnedPiPackage = "@earendil-works/pi-coding-agent@0.81.1"
 
 // hostPiPackages mirrors the Dockerfile's curated `pi install` loop (the PINNED
 // set — see the Dockerfile comment on why these must be version-locked to the
@@ -135,6 +144,96 @@ var hostPiPackages = []string{
 	"pi-web-access@0.13.0",
 	"@juanibiapina/pi-extension-settings@0.8.0",
 	"pi-usage@0.2.1",
+}
+
+// hostPiExtensionsLockFile records the EXACT hostPiPackages set successfully
+// installed into a host agent dir, so a re-run of `pi-stack setup` skips the
+// (slow, silent-looking) reinstall unless the package list actually changed
+// (a version bump busts it). Lives in the host agent dir itself — host-owned,
+// so a plain read/write is fine, but the marker is never FOLLOWED if it's a
+// symlink (hostPiExtensionsInstalled/writeHostPiExtensionsMarker both Lstat).
+const hostPiExtensionsLockFile = ".pi-extensions.lock"
+
+// hostPiExtensionsMarker is the marker's canonical content: the exact
+// hostPiPackages set, one per line.
+func hostPiExtensionsMarker() string {
+	return strings.Join(hostPiPackages, "\n") + "\n"
+}
+
+// hostPiExtensionsInstalled reports whether dir's marker exists and matches
+// the CURRENT hostPiPackages set exactly. A symlinked marker is never
+// followed — treated as absent (untrusted), so it always falls through to a
+// real (re)install rather than trusting a link it didn't write.
+func hostPiExtensionsInstalled(dir string) bool {
+	path := filepath.Join(dir, hostPiExtensionsLockFile)
+	fi, err := os.Lstat(path)
+	if err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return string(b) == hostPiExtensionsMarker()
+}
+
+// writeHostPiExtensionsMarker refreshes the marker AFTER every package in
+// hostPiPackages installs successfully. Symlink-safe: a pre-existing symlink
+// at the marker path is removed (never written through) before the real file
+// is written.
+func writeHostPiExtensionsMarker(dir string) error {
+	path := filepath.Join(dir, hostPiExtensionsLockFile)
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if rerr := os.Remove(path); rerr != nil {
+			return rerr
+		}
+	}
+	return os.WriteFile(path, []byte(hostPiExtensionsMarker()), 0o644)
+}
+
+// installHostPiExtensions installs the curated pi extension packages into dir
+// (PI_CODING_AGENT_DIR), mirroring the Dockerfile's curated `pi install` loop.
+// Returns the packages that failed to install (empty on full success, or the
+// whole set when `pi` isn't on PATH). Split out of runHostSetup so tests can
+// drive it directly against a fake `pi` on PATH.
+func installHostPiExtensions(errw io.Writer, dir string) []string {
+	piBin, lookErr := exec.LookPath("pi")
+	if lookErr != nil {
+		fmt.Fprintln(errw, "pi-stack host setup: `pi` not found on PATH — install the image's pinned version:")
+		fmt.Fprintln(errw, "  npm install -g "+hostPinnedPiPackage)
+		return hostPiPackages
+	}
+	if hostPiExtensionsInstalled(dir) {
+		fmt.Fprintf(errw, "pi-stack host setup: pi extensions: already installed (%d), skipping\n", len(hostPiPackages))
+		return nil
+	}
+	fmt.Fprintf(errw, "pi-stack host setup: installing %d pi extensions...\n", len(hostPiPackages))
+	var failed []string
+	for i, p := range hostPiPackages {
+		// A progress line BEFORE the install so a slow/noisy npm install is never a
+		// silent multi-minute hang — the noisy output itself stays captured and
+		// only surfaces on failure.
+		fmt.Fprintf(errw, "  installing pi extension %s (%d/%d)...\n", p, i+1, len(hostPiPackages))
+		cmd := exec.Command(piBin, "install", "npm:"+p)
+		cmd.Env = append(os.Environ(), "PI_CODING_AGENT_DIR="+dir)
+		// Capture the (very noisy) npm output; only surface it if the install
+		// FAILS, so a clean setup stays quiet but real errors still show.
+		var buf bytes.Buffer
+		cmd.Stdout = &buf
+		cmd.Stderr = &buf
+		if err := cmd.Run(); err != nil {
+			failed = append(failed, p)
+			fmt.Fprintf(errw, "  ✗ %s: %v\n%s\n", p, err, strings.TrimRight(buf.String(), "\n"))
+		}
+	}
+	if len(failed) == 0 {
+		// Write/refresh the marker ONLY after every package installs
+		// successfully — a partial failure must keep re-attempting next run.
+		if merr := writeHostPiExtensionsMarker(dir); merr != nil {
+			fmt.Fprintf(errw, "pi-stack host setup: could not write extensions marker: %v\n", merr)
+		}
+	}
+	return failed
 }
 
 // hostSettingsJSON is the host-specific pi settings file. It deliberately does
@@ -194,26 +293,24 @@ func runHostSetup(errw *os.File) error {
 		return err
 	}
 
+	// F3: lay down the ACTIVE pack's accepted host-mode wrappers (idempotent;
+	// missing or Tier-0 pack is a no-op). Best-effort by contract: a failed
+	// install prints a TODO — exactly like the pi-extension loop below — and
+	// never fails setup. The strict re-hash gate runs at every host LAUNCH.
+	if cfg, cerr := config.Load(); cerr == nil {
+		if _, werr := refreshHostPackWrappers(errw, cfg, false); werr != nil {
+			fmt.Fprintf(errw, "pi-stack host setup: TODO — pack host wrappers not installed: %v\n", werr)
+		}
+	} else {
+		fmt.Fprintf(errw, "pi-stack host setup: TODO — could not load config to install pack host wrappers: %v\n", cerr)
+	}
+
 	// Curated pi extension packages, mirroring the Dockerfile install loop. `pi
 	// install` writes into the config dir's npm/node_modules, so point it at the
-	// host agent dir via PI_CODING_AGENT_DIR.
-	var failed []string
-	piBin, lookErr := exec.LookPath("pi")
-	if lookErr != nil {
-		failed = hostPiPackages
-		fmt.Fprintln(errw, "pi-stack host setup: `pi` not found on PATH — install the image's pinned version:")
-		fmt.Fprintln(errw, "  npm install -g "+hostPinnedPiPackage)
-	} else {
-		for _, p := range hostPiPackages {
-			cmd := exec.Command(piBin, "install", "npm:"+p)
-			cmd.Env = append(os.Environ(), "PI_CODING_AGENT_DIR="+dir)
-			cmd.Stdout = errw
-			cmd.Stderr = errw
-			if err := cmd.Run(); err != nil {
-				failed = append(failed, p)
-			}
-		}
-	}
+	// host agent dir via PI_CODING_AGENT_DIR. IDEMPOTENT (installHostPiExtensions):
+	// skips the whole install when the marker matches the current hostPiPackages
+	// set, so a re-run of `pi-stack setup` isn't a silent multi-minute reinstall.
+	failed := installHostPiExtensions(errw, dir)
 	if len(failed) > 0 {
 		fmt.Fprintln(errw, "pi-stack host setup: TODO — these pi extension packages did not install;")
 		fmt.Fprintln(errw, "run the following once `pi` works (they land in "+dir+"):")
@@ -223,8 +320,28 @@ func runHostSetup(errw *os.File) error {
 	}
 
 	fmt.Fprintf(errw, "pi-stack host setup: provisioned %s (harness -> %s)\n", dir, root)
-	fmt.Fprintf(errw, "Optional cloud keys: put op:// refs in %s (op run resolves them at launch;\n", config.HostRefsPath())
-	fmt.Fprintln(errw, "nothing is persisted). Without it, host mode is Ollama-only.")
+	// Host mode reaches cloud models only through hostmode.env refs. A user may
+	// deliberately trust existing sbx keys during setup, leaving host mode local.
+	// Report the actual state without treating that choice as a setup failure.
+	env := defaultShellEnv()
+	// "configured", not "wired": this only checks that hostmode.env carries a
+	// syntactically filled op:// ref per provider name — it does NOT run `op
+	// read` here, so it proves nothing about whether the ref actually resolves.
+	// Real validation happens at every host LAUNCH via `op run --env-file`
+	// (runHostLaunch); this line must never overclaim that as already done.
+	// Tri-state: an unreadable hostmode.env is neither "local-only" nor
+	// "configured" — both would be a confident guess about state we couldn't
+	// actually read. Host mode itself is already provisioned above regardless.
+	keys, kerr := hostModeProviderKeys(env)
+	switch {
+	case kerr != nil:
+		fmt.Fprintf(errw, "Cloud keys: credential state unreadable: %v\n", kerr)
+	case len(keys) > 0:
+		fmt.Fprintf(errw, "Cloud refs configured (%s); resolved just-in-time at each host launch via `op run` (not verified here).\n", strings.Join(keys, ", "))
+	default:
+		fmt.Fprintln(errw, "Cloud keys: not wired; host mode is local/Ollama-only.")
+		fmt.Fprintln(errw, "  To add cloud providers later, re-run `pi-stack setup` and choose the 1Password path.")
+	}
 	return nil
 }
 
@@ -393,6 +510,12 @@ func hostChildEnv(agentDir, ollamaModel string) []string {
 		"OLLAMA_URL=http://127.0.0.1:11434/v1",
 		"PI_SUBAGENT_DISABLED=1",
 		"PI_SUBAGENT_MAX_DEPTH=0",
+		// F3: pack host-mode wrappers, prepended so an accepted wrapper shadows
+		// a same-named host tool by design (the BoM screen names every wrapper
+		// before adoption). exec.Cmd de-duplicates env keys keeping the LAST
+		// entry, so this wins over os.Environ()'s PATH for the child only —
+		// never exported, never persisted. A not-yet-existing dir is harmless.
+		"PATH=" + hostPackBinDir() + string(os.PathListSeparator) + os.Getenv("PATH"),
 	}
 	if m := strings.TrimSpace(ollamaModel); m != "" {
 		env = append(env, "OLLAMA_BRIDGE_MODEL="+m)
@@ -480,16 +603,28 @@ func runHostLaunch(o hostOpts) {
 	// Shared launcher machinery: profile resolution (skill/memory/knowledge
 	// scoping — the sandbox-name half is meaningless here), knowledge scope, and
 	// the per-run profile file. All best-effort, exactly like run.go.
-	cfg, profile, err := loadResolvedConfig()
+	cfg, _, err := loadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack host: %v\n", err)
 		os.Exit(1)
 	}
-	if profile != config.DefaultProfile {
-		fmt.Fprintf(os.Stderr, "pi-stack: profile %q\n", profile)
-	}
 	wireKnowledgeScope(cfg, ws, defaultKnowledgeRPC())
-	writeProfileFile(ws, profile)
+
+	// F3: refresh the active pack's host wrappers so a `pack use` since the
+	// last `host setup` takes effect, re-hashing every ACCEPTED [[bin]] against
+	// its pinned sha — a tampered external binary REFUSES the launch (fail
+	// closed; packs.md §9 safeguard 2). The wrappers land in hostPackBinDir(),
+	// which hostChildEnv prepends to the child PATH — this launch path is the
+	// ONLY thing that ever puts them on a PATH.
+	activePack, perr := refreshHostPackWrappers(os.Stderr, cfg, true)
+	if perr != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack host: %v\n", perr)
+		os.Exit(1)
+	}
+	// F4: tag the host session's memory scope from the active pack — the same
+	// .pi-stack/profile file `pi-stack run` writes (memory-recall/capture read
+	// it). Best-effort by contract (writeMemoryScope discards errors).
+	writeMemoryScope(ws, activePack)
 
 	// Credentials: op:// refs resolved just-in-time by `op run`, or Ollama-only.
 	// hostModelPreflight replaces modelProviderPreflight (which reads sbx

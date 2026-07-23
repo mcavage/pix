@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"pi-stack/host/config"
 )
@@ -138,7 +139,7 @@ func memoryRecall(argv []string, c rpcClient, out io.Writer, profile string) err
 		return nil
 	}
 	for _, h := range hits {
-		fmt.Fprintf(out, "%s  %s%s\n", shortID(str(h, "id")), str(h, "content"), memoryMeta(h))
+		fmt.Fprintf(out, "%s  %s  %s%s\n", memoryTimestamp(str(h, "createdAt")), shortID(str(h, "id")), str(h, "content"), memoryMeta(h))
 	}
 	return nil
 }
@@ -236,7 +237,7 @@ func memoryLearnings(argv []string, c rpcClient, out io.Writer, profile string) 
 		if f, ok := cn["frequency"].(float64); ok {
 			freq = int(f)
 		}
-		fmt.Fprintf(out, "%s  (%dx)  %s\n", shortID(str(cn, "id")), freq, str(cn, "content"))
+		fmt.Fprintf(out, "%s  %s  (%dx)  %s\n", memoryTimestamp(str(cn, "createdAt")), shortID(str(cn, "id")), freq, str(cn, "content"))
 	}
 	return nil
 }
@@ -296,6 +297,26 @@ func memoryMeta(h map[string]any) string {
 		return ""
 	}
 	return "  [" + meta + "]"
+}
+
+// memoryTimestamp parses a hit's stored createdAt (RFC3339 or RFC3339Nano,
+// whatever the daemon returned) and renders it in the user's LOCAL time zone,
+// ISO8601/RFC3339-formatted, for `recall`'s leading column — e.g.
+// "2026-07-22T09:15:03-07:00". A hit with no timestamp (or one that fails to
+// parse) gets a blank, column-aligned placeholder instead of crashing.
+func memoryTimestamp(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return strings.Repeat(" ", len(time.RFC3339))
+	}
+	t, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, raw)
+	}
+	if err != nil {
+		return strings.Repeat(" ", len(time.RFC3339))
+	}
+	return t.Local().Format(time.RFC3339)
 }
 
 // shortID trims a uuid to its first segment for readable listings.

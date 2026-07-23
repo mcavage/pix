@@ -40,7 +40,6 @@ type onboardingResult struct {
 	Knowledge          *onboardKnowledge `json:"knowledge,omitempty"`
 	OllamaBridgeModel  string            `json:"ollama_bridge_model,omitempty"`
 	MemoryWatcherModel string            `json:"memory_watcher_model,omitempty"`
-	ActiveProfile      string            `json:"active_profile,omitempty"`
 }
 
 type onboardKnowledge struct {
@@ -51,10 +50,6 @@ type onboardKnowledge struct {
 // onboardingFileName is the per-workspace control-plane proposal, written by the
 // agent and consumed by the host on the next run.
 const onboardingFileName = "onboarding.json"
-
-// onboardingOfferMarker is the one-shot first-run signal the host drops into the
-// workspace so the in-sandbox extension knows to OFFER onboarding (TTY-gated).
-const onboardingOfferMarker = "onboarding.offer"
 
 // onboardMCPCatalogAllow is the curated set of remote gateway-catalog MCP names
 // the onboarding file may enable in addition to gog and the locally-known
@@ -96,12 +91,6 @@ func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env shell
 		}
 		if r.Knowledge.Action != "skip" && strings.TrimSpace(r.Knowledge.Source) == "" {
 			return fmt.Errorf("knowledge.action %q needs a source", r.Knowledge.Action)
-		}
-	}
-
-	if p := strings.TrimSpace(r.ActiveProfile); p != "" && p != config.DefaultProfile {
-		if _, ok := cfg.Profiles[p]; !ok {
-			return fmt.Errorf("active_profile %q does not exist (configured: %s)", p, strings.Join(cfg.ProfileNames(), ", "))
 		}
 	}
 
@@ -149,10 +138,6 @@ func applyOnboardingResult(r *onboardingResult, cfg *config.Config, env shellEnv
 		cfg.MemoryWatcherModel = v
 		changes = append(changes, "memory_watcher_model = "+v)
 	}
-	if p := strings.TrimSpace(r.ActiveProfile); p != "" && p != cfg.ActiveProfile {
-		cfg.ActiveProfile = p
-		changes = append(changes, "active_profile = "+p)
-	}
 	cfg.AddService("memory")
 
 	if err := save(cfg); err != nil {
@@ -197,7 +182,7 @@ func reconcileOnboarding(workspace string, env shellEnv, in io.Reader, out io.Wr
 		return
 	}
 	if len(changes) == 0 {
-		_ = os.Remove(path) // nothing new; clear the marker
+		_ = removeWorkspaceStateFile(workspace, onboardingFileName) // nothing new; clear the marker
 		return
 	}
 
@@ -226,16 +211,16 @@ func reconcileOnboarding(workspace string, env shellEnv, in io.Reader, out io.Wr
 			fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pi-stack mcp register)\n", err)
 		}
 	}
-	_ = os.Remove(path)
+	_ = removeWorkspaceStateFile(workspace, onboardingFileName)
 	fmt.Fprintf(out, "Applied %d onboarding change(s) to %s.\n", len(applied), config.Path())
 }
 
 const onboardUsage = `usage: pi-stack onboard [flags]
 
-Host-side onboarding. The CONVERSATIONAL onboarding is in-session: run
-` + "`pi-stack run`" + ` (it offers onboarding on first run) or say "onboard me" to
-the agent. This command does the deterministic HOST config and is the
-flag-driven path for automation/CI (the former ` + "`pi-stack setup`" + `).
+Host-side onboarding (deterministic HOST config only; NO agent handoff). For the
+guided flow that configures the host AND hands off to an agent to finish, use
+` + "`pi-stack setup`" + `. This command is the flag-driven path for automation/CI.
+You can also say "onboard me" to a running agent at any time.
 
   --account <email>        set the Google Workspace (gog) account + enable gog
   --knowledge <path|url>   scaffold/point the global knowledge base
@@ -245,6 +230,10 @@ flag-driven path for automation/CI (the former ` + "`pi-stack setup`" + `).
   --yes | --non-interactive  never prompt (CI); apply what is given
   -h | --help              this help
 
+--use-sbx-keys and --use-1password belong to ` + "`pi-stack setup`" + ` (they select
+a provider-key source); onboard never provisions provider keys, so both are
+rejected here.
+
 Always ensures the memory service is enabled. Idempotent; safe to re-run.
 Provider keys are sbx secrets (proxy-injected) and are only reported here,
 never entered.
@@ -252,13 +241,15 @@ never entered.
 
 // onboardOpts is the parsed onboard flag set.
 type onboardOpts struct {
-	account   string
-	knowledge string
-	mcp       []string
-	model     string
-	apply     bool
-	assumeYes bool
-	help      bool
+	account      string
+	knowledge    string
+	mcp          []string
+	model        string
+	apply        bool
+	assumeYes    bool
+	useSbxKeys   bool
+	use1Password bool
+	help         bool
 }
 
 func parseOnboardArgs(argv []string) (onboardOpts, error) {
@@ -279,6 +270,10 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 			return o, nil
 		case a == "--apply":
 			o.apply = true
+		case a == "--use-sbx-keys":
+			o.useSbxKeys = true
+		case a == "--use-1password":
+			o.use1Password = true
 		case a == "--yes" || a == "-y" || a == "--non-interactive":
 			o.assumeYes = true
 		case a == "--account":
@@ -307,6 +302,9 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 			return o, err
 		}
 	}
+	if o.useSbxKeys && o.use1Password {
+		return o, fmt.Errorf("--use-sbx-keys and --use-1password are mutually exclusive (pick the one source for this run)")
+	}
 	return o, nil
 }
 
@@ -322,6 +320,14 @@ func runOnboardCmd(argv []string) {
 	if opts.help {
 		fmt.Print(onboardUsage)
 		return
+	}
+	if opts.useSbxKeys {
+		fmt.Fprintln(os.Stderr, "pi-stack onboard: --use-sbx-keys belongs to `pi-stack setup`; onboard does not provision provider keys")
+		os.Exit(2)
+	}
+	if opts.use1Password {
+		fmt.Fprintln(os.Stderr, "pi-stack onboard: --use-1password belongs to `pi-stack setup`; onboard does not provision provider keys")
+		os.Exit(2)
 	}
 	env := defaultShellEnv()
 
@@ -390,7 +396,7 @@ func onboardReportReadiness(env shellEnv, out io.Writer) {
 			fmt.Fprintln(out, `No model provider key set. Set one:  sbx secret set -g anthropic -t "sk-..."`)
 		}
 	}
-	fmt.Fprintln(out, "Next:  pi-stack run   (it offers conversational onboarding on first run)")
+	fmt.Fprintln(out, "Next:  pi-stack run   to start working, or  pi-stack setup  for the guided agent handoff.")
 }
 
 // confirmYN reads a [Y/n] answer. def is the answer for a bare Enter.

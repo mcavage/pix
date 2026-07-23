@@ -604,10 +604,9 @@ func resolveBackupParams(outPath string, keep int, now time.Time) backupParams {
 		embedModel = "nomic-embed-text"
 	}
 
-	var profiles []string
+	var profiles []string // profiles were removed; field kept for old-archive compat
 	var knowledge []knowledgeNote
 	if cfg, err := config.Load(); err == nil && cfg != nil {
-		profiles = cfg.ProfileNames()
 		for _, b := range cfg.AllKnowledgeBundles() {
 			// Redact any userinfo/token in the recorded remote so a manifest note
 			// (later PRINTED at restore) never leaks a credential embedded in the URL.

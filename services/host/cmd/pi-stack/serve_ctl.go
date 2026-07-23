@@ -36,6 +36,7 @@ type serveCtl struct {
 	verify     func(pid int) (ours bool, known bool)   // is pid our `pi-stack-host serve`? known=false => can't tell
 	sleep      func(d time.Duration)                   // poll delay (injected so tests don't wait)
 	removeLazy func()                                  // clear the serve.lazy marker (optional; nil = skip)
+	discover   func() ([]int, error)                   // find running pi-stack-host serve pids when the pidfile is gone (optional; nil = skip)
 }
 
 // defaultServeCtl wires the real OS-backed control surface.
@@ -48,6 +49,7 @@ func defaultServeCtl() serveCtl {
 		verify:     verifyServeProc,
 		sleep:      time.Sleep,
 		removeLazy: func() { _ = os.Remove(config.ServeLazyMarkerPath()) },
+		discover:   discoverServeProcs, // platform shim (serve_ctl_unix/windows.go)
 	}
 }
 
@@ -136,27 +138,15 @@ func verifyServeProcPS(pid int, run func(name string, args ...string) (string, e
 			off = end
 		}
 	}
-	for _, a := range strings.Fields(rest) {
-		if a == "serve" {
-			return true, true
-		}
-	}
-	return false, true
+	args := strings.Fields(rest)
+	return len(args) > 0 && args[0] == "serve", true
 }
 
-// cmdlineIsServe tightens the match from a loose substring to: the executable
-// basename is exactly `pi-stack-host` AND some later arg equals `serve`. That
-// rejects an unrelated process whose args merely happen to contain those words.
+// cmdlineIsServe requires the exact executable and first subcommand. Looking
+// for `serve` anywhere later in argv could mistake `plugin broker serve` for
+// the supervisor and kill an unrelated process after PID reuse.
 func cmdlineIsServe(argv []string) bool {
-	if len(argv) == 0 || filepath.Base(argv[0]) != "pi-stack-host" {
-		return false
-	}
-	for _, a := range argv[1:] {
-		if a == "serve" {
-			return true
-		}
-	}
-	return false
+	return len(argv) >= 2 && filepath.Base(argv[0]) == "pi-stack-host" && argv[1] == "serve"
 }
 
 // stopServe is the SAFE replacement for `pkill -f 'pi-stack-host serve'`. It
@@ -171,8 +161,12 @@ func stopServe(ctl serveCtl, out io.Writer) (stopped bool, err error) {
 	raw, rerr := ctl.readPid(path)
 	if rerr != nil {
 		if os.IsNotExist(rerr) {
-			fmt.Fprintln(out, "serve not running (no pidfile)")
-			return false, nil
+			// No pidfile. This is the common orphan case after `pi-stack reset`
+			// (which moves the config dir — pidfile included — aside while a daemon
+			// keeps running). Fall back to discovery: find any live process that we
+			// can POSITIVELY verify is our `pi-stack-host serve` and stop it. Still
+			// never a blind pkill — each candidate is verified before signalling.
+			return stopServeByDiscovery(ctl, out)
 		}
 		return false, fmt.Errorf("read pidfile %s: %w", path, rerr)
 	}
@@ -198,13 +192,72 @@ func stopServe(ctl serveCtl, out io.Writer) (stopped bool, err error) {
 		return false, nil
 	}
 
-	// SIGTERM, then poll up to ~5s for exit; escalate to SIGKILL if it survives.
+	stopped, serr := signalServeToExit(ctl, pid, path, out)
+	if serr != nil {
+		return false, serr
+	}
+	if stopped {
+		_ = ctl.removePid(path)
+		clearServeLazyMarker(ctl)
+	}
+	return stopped, nil
+}
+
+// stopServeByDiscovery handles the missing-pidfile case: it asks ctl.discover
+// for candidate pids, keeps only those it can POSITIVELY verify are our
+// `pi-stack-host serve` (alive + verified-ours), and stops each. This recovers
+// an orphaned daemon (classically: `pi-stack reset` moved the config dir, and
+// the pidfile with it, out from under a still-running serve) without ever
+// resorting to a blind `pkill`. No verified process => the honest "not running".
+func stopServeByDiscovery(ctl serveCtl, out io.Writer) (bool, error) {
+	if ctl.discover == nil {
+		fmt.Fprintln(out, "serve not running (no pidfile)")
+		return false, nil
+	}
+	pids, derr := ctl.discover()
+	if derr != nil {
+		fmt.Fprintln(out, "serve not running (no pidfile)")
+		return false, nil
+	}
+	var ours []int
+	for _, pid := range pids {
+		if pid <= 0 || ctl.kill(pid, 0) != nil {
+			continue // invalid or dead
+		}
+		if o, known := ctl.verify(pid); known && o {
+			ours = append(ours, pid)
+		}
+	}
+	if len(ours) == 0 {
+		fmt.Fprintln(out, "serve not running (no pidfile)")
+		return false, nil
+	}
+	anyStopped := false
+	for _, pid := range ours {
+		fmt.Fprintf(out, "no pidfile, but found a running 'pi-stack-host serve' (pid %d) — stopping it\n", pid)
+		s, e := signalServeToExit(ctl, pid, "", out)
+		if e != nil {
+			return anyStopped, e
+		}
+		if s {
+			anyStopped = true
+		}
+	}
+	if anyStopped {
+		clearServeLazyMarker(ctl)
+	}
+	return anyStopped, nil
+}
+
+// signalServeToExit runs the SIGTERM -> poll -> re-verify -> SIGKILL escalation
+// against an already-verified-alive-and-ours pid, returning stopped=true only
+// once the process is confirmed gone. path (may be "") only feeds the refusal
+// hint; pidfile removal is the caller's job (discovery has none to remove).
+func signalServeToExit(ctl serveCtl, pid int, path string, out io.Writer) (bool, error) {
 	if err := ctl.kill(pid, syscall.SIGTERM); err != nil {
 		return false, fmt.Errorf("SIGTERM pid %d: %w", pid, err)
 	}
 	if serveProcGone(ctl, pid, 5*time.Second) {
-		_ = ctl.removePid(path)
-		clearServeLazyMarker(ctl)
 		fmt.Fprintf(out, "stopped 'pi-stack-host serve' (pid %d, SIGTERM)\n", pid)
 		return true, nil
 	}
@@ -226,8 +279,6 @@ func stopServe(ctl serveCtl, out io.Writer) (stopped bool, err error) {
 		fmt.Fprintf(out, "pid %d is STILL alive after SIGKILL — could not stop it\n", pid)
 		return false, fmt.Errorf("pid %d survived SIGKILL", pid)
 	}
-	_ = ctl.removePid(path)
-	clearServeLazyMarker(ctl)
 	fmt.Fprintf(out, "stopped 'pi-stack-host serve' (pid %d, SIGKILL)\n", pid)
 	return true, nil
 }
@@ -250,12 +301,17 @@ func clearServeLazyMarker(ctl serveCtl) {
 // stale/reused pid from the pidfile — so we never trust the pidfile alone.
 func serveOwnershipRefused(ctl serveCtl, pid int, path, when string, out io.Writer) bool {
 	ours, known := ctl.verify(pid)
+	rmHint, certainHint := "", ""
+	if path != "" {
+		rmHint = fmt.Sprintf(" Remove %s if you're sure.", path)
+		certainHint = fmt.Sprintf(" (remove %s if you're certain)", path)
+	}
 	switch {
 	case known && !ours:
-		fmt.Fprintf(out, "refusing to stop pid %d — %s. Remove %s if you're sure.\n", pid, when, path)
+		fmt.Fprintf(out, "refusing to stop pid %d — %s.%s\n", pid, when, rmHint)
 		return true
 	case !known:
-		fmt.Fprintf(out, "cannot verify pid %d is 'pi-stack-host serve' (%s); refusing to signal (remove %s if you're certain)\n", pid, when, path)
+		fmt.Fprintf(out, "cannot verify pid %d is 'pi-stack-host serve' (%s); refusing to signal%s\n", pid, when, certainHint)
 		return true
 	}
 	return false
@@ -362,6 +418,22 @@ func printServeStatus(st serveState, out io.Writer, jsonOut bool) {
 	fmt.Fprintf(out, "  knowledge (:%d): %s\n", kbPort, upDown(st.Knowledge))
 }
 
+// stopServeAnyMode stops the serve daemon in whatever lifecycle mode it is in.
+// A MANAGED service (launchd KeepAlive / systemd Restart=) MUST be stopped via
+// its supervisor — a bare SIGTERM to the pid is respawned within a second — so
+// managed is handled FIRST via stopManagedService. Lazy/foreground/down all fall
+// through to the pidfile-based (and discovery-fallback) stopServe. Injectable
+// deps mirror the rest of this file so it stays unit-testable.
+func stopServeAnyMode(managedActive func() bool, stopManaged func(io.Writer) error, ctl serveCtl, out io.Writer) (bool, error) {
+	if managedActive() {
+		if err := stopManaged(out); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return stopServe(ctl, out)
+}
+
 // runServeStop is the `serve stop` entry point.
 func runServeStop(argv []string) {
 	if wantsHelp(argv) {
@@ -372,7 +444,7 @@ func runServeStop(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack serve stop: unexpected argument %q\n\n%s", argv[0], serveUsage)
 		os.Exit(2)
 	}
-	_, err := stopServe(defaultServeCtl(), os.Stdout)
+	_, err := stopServeAnyMode(managedServiceActive, stopManagedService, defaultServeCtl(), os.Stdout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack serve stop: %v\n", err)
 		os.Exit(1)

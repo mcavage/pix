@@ -50,7 +50,15 @@ type runOpts struct {
 	Model         string   // --model M: active pi model (passed through to pi)
 	Intent        string   // --intent NAME: resolve the session model via the router (unless --model overrides)
 	Replace       bool     // --replace: force a recreate (rm -f then create) instead of re-attaching to an existing sandbox
-	Passthrough   []string // args after `--`, handed straight to pi
+	Pack          string   // --pack PATH: active pack for this run (overrides config.Pack); mounts its skills + knowledge
+	// PackKits are ephemeral mixin kit dir(s) synthesized from the active pack's
+	// bin/ wrappers (F2, see synthesizePackKit). Deliberately SEPARATE from Kits:
+	// Kits non-empty is the --kit ESCAPE HATCH that replaces the auto git/local
+	// pin (see kitOverride in buildSbxArgs); a pack-synthesized kit must stack
+	// alongside the base kit, never suppress it, so it gets its own field and its
+	// own unconditional --kit loop.
+	PackKits    []string
+	Passthrough []string // args after `--`, handed straight to pi
 	// Token is the credential bearer for an OPTIONAL overlay broker. The default
 	// path leaves it empty and forwards no bearer (gog authenticates host-side in
 	// the gateway-spawned MCP server). Reserved for the dormant generic broker
@@ -112,6 +120,13 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 	}
 	// User --kit flags are the base when present (escape hatch).
 	for _, k := range o.Kits {
+		args = append(args, "--kit", k)
+	}
+	// Pack-synthesized kit(s) (F2 sandbox bin/ wrappers) ALWAYS stack, regardless
+	// of the --kit escape hatch: they are never the base image kit, only an
+	// additive mixin, so they must not be folded into kitOverride's replace
+	// semantics (see the PackKits field doc).
+	for _, k := range o.PackKits {
 		args = append(args, "--kit", k)
 	}
 	// Config/overlay stack always applies on top of the base.
@@ -180,6 +195,12 @@ type runLaunchPlan struct {
 	RmFirst  bool     // run `sbx rm -f <name>` before Args
 	Args     []string // sbx argv (after "sbx")
 	Reattach bool     // true => Args is the thin re-attach form, not a full create
+	// Err is set ONLY for the fail-closed --replace-on-unknown-state case (see
+	// planSandboxLaunch below). A non-nil Err means Args/RmFirst/Reattach are
+	// meaningless zero values — the caller MUST check Err first and abort
+	// before printing anything that claims a replace/create/reattach is
+	// happening, and before running RmFirst or exec'ing sbx at all.
+	Err error
 }
 
 // planSandboxLaunch is the pure decision at the heart of `pi-stack run`'s
@@ -197,7 +218,25 @@ type runLaunchPlan struct {
 //     sandbox is already absent) then a full create, so changed kit/mcp/
 //     create-only flags take effect. This is today's implicit recreate, now
 //     explicit and available for a RUNNING sandbox too.
+//   - --replace requested but the sandbox's existence could not be determined
+//     (state == sbxUnknown, i.e. the run lifecycle's OWN probe of `sbx ls`
+//     failed or sbx is unavailable): FAIL CLOSED, not create. "Replace" means
+//     "remove whatever is there, then create" — with no reliable read on
+//     whether there IS anything there, an unconditional create can collide
+//     with a sandbox that in fact exists (sbx may itself reattach it with
+//     stale kit/mcp/create-only flags, exactly what --replace exists to
+//     avoid), while RmFirst stays false regardless (planSandboxLaunch never
+//     rm's on an unknown probe) so the two paths would silently disagree about
+//     what "replacing" even did. Refusing before doing anything mirrors
+//     setup.go's own sbxUnknown fail-closed posture (runSetupHandoff) at this
+//     lifecycle's independent probe site, rather than assuming setup's guard
+//     covers every path that can reach a replace. A plain (non-replace) launch
+//     on sbxUnknown is unaffected — it still optimistically creates via
+//     willCreate, same as always.
 func planSandboxLaunch(state sbxState, replace bool, cfg *config.Config, o runOpts, version string) runLaunchPlan {
+	if replace && state == sbxUnknown {
+		return runLaunchPlan{Err: fmt.Errorf("--replace requested but could not determine whether sandbox %q exists (`sbx ls` failed or sbx is unavailable); refusing to replace blind — fix sbx and retry (or run without --replace to attempt a plain launch)", o.Name)}
+	}
 	if !willCreate(state, replace) {
 		return runLaunchPlan{Args: buildReattachArgs(o), Reattach: true}
 	}
@@ -224,6 +263,22 @@ func willCreate(state sbxState, replace bool) bool {
 	default: // sbxAbsent or sbxUnknown: nothing (known) is in the way, create fresh.
 		return true
 	}
+}
+
+// definitelyCreating reports whether the launch is CERTAIN to create a fresh
+// sandbox: a POSITIVE "not present" probe, or --replace when removal actually
+// happens (planSandboxLaunch only runs `sbx rm -f` for a POSITIVELY known
+// running/stopped sandbox). It deliberately differs from willCreate on
+// sbxUnknown (round-3 R3 + round-4 F3): willCreate optimistically prepares
+// create args when the probe FAILED — sbx itself may still re-attach the
+// existing sandbox, and on sbxUnknown even --replace skips the rm (RmFirst is
+// false), so the old sandbox can come back — so persisted create-time state
+// (the workspace sandbox.pack marker) must gate on THIS stricter predicate,
+// never on willCreate or on --replace alone, or a transient `sbx ls` failure
+// would overwrite the marker for a sandbox that was in fact re-attached (and
+// wrongly silence stalePackReattachWarning).
+func definitelyCreating(state sbxState, replace bool) bool {
+	return state == sbxAbsent || (replace && state != sbxUnknown)
 }
 
 // buildReattachArgs composes the argv for RE-ATTACHING to an existing sandbox:

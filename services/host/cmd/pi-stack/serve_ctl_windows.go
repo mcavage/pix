@@ -16,3 +16,7 @@ import (
 func killProcess(pid int, sig syscall.Signal) error {
 	return fmt.Errorf("signalling pid %d (sig %d) is not supported on this platform", pid, sig)
 }
+
+// discoverServeProcs: no orphan discovery on this platform (managed/lazy serve
+// is unix-only). Returns no candidates so stopServe degrades to "not running".
+func discoverServeProcs() ([]int, error) { return nil, nil }

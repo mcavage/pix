@@ -324,11 +324,9 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 			undos = append(undos, undo)
 			result.ConfigRestored = true
 			result.ConfigBak = bak
-			// Report the profiles now present from the config we validated + wrote back
-			// (accurate even for a v1 archive whose manifest has no profiles field).
-			if restoredCfg != nil {
-				result.Profiles = restoredCfg.ProfileNames()
-			}
+			// Profiles were removed; result.Profiles falls back to the manifest note
+			// (for reading old archives) below.
+			_ = restoredCfg
 		}
 	}
 	if result.Profiles == nil {
@@ -900,11 +898,9 @@ func printRestoreReport(w io.Writer, res restoreResult) {
 		fmt.Fprintf(w, "previous db kept at %s\n", res.BackupPath)
 	}
 	if res.ConfigRestored {
-		if len(res.Profiles) > 0 {
-			fmt.Fprintf(w, "config restored (profiles: %s)\n", strings.Join(res.Profiles, ", "))
-		} else {
-			fmt.Fprintln(w, "config restored")
-		}
+		// Profiles were removed; a restored archive's config is written verbatim but
+		// any [profiles.*] tables in it are inert, so don't advertise them.
+		fmt.Fprintln(w, "config restored")
 		if res.ConfigBak != "" {
 			fmt.Fprintf(w, "previous config kept at %s\n", res.ConfigBak)
 		}

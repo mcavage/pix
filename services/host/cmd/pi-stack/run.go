@@ -49,20 +49,21 @@ func runRun(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack: intent %q -> model %s\n", o.Intent, m)
 	}
 
-	// Preflight: refuse to launch a sandbox that has no model to talk to. A pi
-	// session needs at least one model provider key (anthropic/openai/google); a
-	// github token authorizes git, not the model, so it does NOT count. We can
-	// only check when sbx is on PATH (the keys live proxy-side); when it is
-	// absent we cannot verify and proceed as before.
-	if msg, block := modelProviderPreflight(defaultShellEnv()); block {
-		fmt.Fprint(os.Stderr, msg)
-		os.Exit(1)
+	// Bare-minimum key bootstrap: a pi session needs at least one model provider
+	// key. `run` otherwise stays out of the way (no onboarding, no nags), but with
+	// NO usable key it can't launch — so auto-run the key flow (resolve your
+	// 1Password refs into sbx; on a TTY, steer you to 1Password). When a key is
+	// already present this is a cheap no-op. Then refuse ONLY when we can POSITIVELY
+	// confirm no key (tri-state): sbx absent OR its control plane unprobeable =
+	// can't verify = proceed, never a false refusal on a transient failure.
+	if _, err := defaultShellEnv().lookPath("sbx"); err == nil {
+		env := defaultShellEnv()
+		bootstrapProviderKeys(env, os.Stdin, os.Stderr, isTTY(os.Stdin))
+		if present, probeOK := sbxModelKeyState(env); probeOK && !present {
+			fmt.Fprint(os.Stderr, modelKeyMissingMessage(env))
+			os.Exit(1)
+		}
 	}
-
-	// Is this a brand-new host? (No config file yet.) Captured BEFORE reconcile,
-	// which may create the config, so the first-run offer marker below is written
-	// on a genuinely fresh host only.
-	firstRun := !configExists()
 
 	// Reconcile any control-plane proposal a prior in-session onboarding wrote
 	// (<workspace>/.pi-stack/onboarding.json): validate it, show the diff, apply
@@ -71,29 +72,19 @@ func runRun(argv []string) {
 	// Best-effort and non-blocking on a non-TTY (it just leaves the file).
 	reconcileOnboarding(o.Workspace, defaultShellEnv(), os.Stdin, os.Stdout, false, isTTY(os.Stdin))
 
-	// Resolve the active profile into a flat config so the rest of run (kits, mcp,
-	// gog) sees the profile's overrides. loadResolvedConfig errors on a typo'd /
-	// unknown profile name rather than silently running the base config. The
-	// profile also namespaces the sandbox name so contexts never collide.
-	cfg, profile, err := loadResolvedConfig()
+	// Load the config for the rest of run (kits, mcp, gog, pack). The
+	cfg, _, err := loadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack run: %v\n", err)
 		os.Exit(1)
 	}
-	if profile != config.DefaultProfile {
-		fmt.Fprintf(os.Stderr, "pi-stack: profile %q\n", profile)
-	}
 
 	// Own the sandbox name so we can manage its lifecycle. sbx would otherwise
-	// auto-derive `pi-stack-<dir>`. This needs only Workspace + profile, so it is
-	// resolved (and the sandbox state probed) BEFORE any create-only input
-	// resolution below — a plain re-attach must never fail on a --dev/checkout or
-	// --kit problem it doesn't even need.
+	// auto-derive `pi-stack-<dir>`. Resolved (and the sandbox state probed) BEFORE
+	// any create-only input resolution below — a plain re-attach must never fail on
+	// a --dev/checkout or --kit problem it doesn't even need.
 	if o.Name == "" {
 		o.Name = deriveSandboxName(o.Workspace)
-		if profile != config.DefaultProfile {
-			o.Name += "-" + sanitizeProfileName(profile)
-		}
 	}
 	state := probeTaskSandbox(defaultShellEnv(), o.Name)
 
@@ -154,7 +145,55 @@ func runRun(argv []string) {
 		}
 	}
 
+	// Active pack: mount its skills/ + knowledge/ so the pack's context loads in
+	// this sandbox. --pack overrides config.Pack; with neither set, no pack is
+	// active. Create-time only (skills + knowledge are create-time mounts; a
+	// re-attach keeps what it was made with).
+	// effectivePack is the pack root that ACTUALLY loaded and applied, as
+	// opposed to activePackRoot(cfg.Pack, o.Pack) (the merely CONFIGURED one).
+	// It defaults to the configured root for a re-attach (no applyPackToLaunch
+	// call — writePackContextFiles below still attempts its own load and
+	// degrades to unscoped on failure), and is overwritten with
+	// applyPackToLaunch's honest return on a create, where it becomes "" if
+	// the pack degraded via errNotAPack. This is what keeps the sandbox.pack
+	// marker and memory scope from disagreeing about what actually loaded.
+	effectivePack := activePackRoot(cfg.Pack, o.Pack)
+	if willCreate(state, o.Replace) {
+		// Fatal on error (explicit --pack that doesn't load, or a declared
+		// sandbox proxy whose kit can't be built — round-4 F2 fail-closed):
+		// never create a sandbox missing context the pack declared.
+		root, err := applyPackToLaunch(cfg, &o, defaultShellEnv())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "pi-stack: %v\n", err)
+			os.Exit(1)
+		}
+		effectivePack = root
+	}
+
+	// Local-image preflight: when we're about to pin --template to a locally loaded
+	// tag (a --dev / unreleased build) and that tag is NOT in sbx's image store, sbx
+	// would try to PULL it from the registry — but local-* tags are never published,
+	// so the user gets a confusing interactive "pull? use cached?" prompt and a slow
+	// hang. Refuse fast with the real fix instead. (Only on create; a re-attach
+	// reads the sandbox's own spec and doesn't re-pin --template.)
+	if willCreate(state, o.Replace) && o.LocalImageTag != "" && len(o.Kits) == 0 && o.LocalKit != "" {
+		if !localImageLoaded(defaultShellEnv(), o.LocalImageTag) {
+			fmt.Fprintf(os.Stderr, "pi-stack: local image %s:%s is not loaded in sbx.\n", dockerImageRepo, o.LocalImageTag)
+			fmt.Fprintln(os.Stderr, "It's a local build (never published), so sbx would try to pull it and stall on a prompt.")
+			fmt.Fprintln(os.Stderr, "Load this build into sbx first, from your pi-stack checkout:")
+			fmt.Fprintln(os.Stderr, "  make load")
+			os.Exit(1)
+		}
+	}
+
 	plan := planSandboxLaunch(state, o.Replace, cfg, o, version)
+	if plan.Err != nil {
+		// Fail closed BEFORE any output claims a replace/create/reattach is
+		// happening, and before RmFirst or exec — see planSandboxLaunch's
+		// sbxUnknown+replace case.
+		fmt.Fprintf(os.Stderr, "pi-stack run: %v\n", plan.Err)
+		os.Exit(1)
+	}
 	switch {
 	case o.Replace:
 		fmt.Fprintf(os.Stderr, "pi-stack run: replacing sandbox %q\n", o.Name)
@@ -162,6 +201,14 @@ func runRun(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack run: re-attaching to running sandbox %q\n", o.Name)
 	case plan.Reattach:
 		fmt.Fprintf(os.Stderr, "pi-stack run: starting + attaching existing sandbox %q (use --replace to recreate with current kit/mcp/flags)\n", o.Name)
+	}
+	// finding #8: a reattach is honest about live-vs-recreate for MOST facets
+	// above, but says nothing about a pack switched since this sandbox was
+	// created — its mcp/bin/skills are create-only and won't attach without
+	// --replace. Surface that explicitly rather than silently reattaching to a
+	// stale facet set.
+	if msg := stalePackReattachWarning(cfg, o, plan.Reattach); msg != "" {
+		fmt.Fprintln(os.Stderr, msg)
 	}
 	if plan.RmFirst {
 		if err := applyReplaceRm(defaultShellEnv(), plan, o.Name); err != nil {
@@ -185,27 +232,58 @@ func runRun(argv []string) {
 	// or fails the launch (recall just misses a bundle this run).
 	wireKnowledgeScope(cfg, o.Workspace, defaultKnowledgeRPC())
 
-	// Memory scope: hand the active profile name to the in-VM memory extensions
-	// (recall/capture) via a per-run workspace file, mirroring the knowledge scope
-	// file. They stamp captures with it and filter recall to {profile}∪{default}.
-	// Best-effort: a failure just leaves memory un-scoped (all default) this run.
-	writeProfileFile(o.Workspace, profile)
+	// Local model + memory scope: hand the configured ollama_bridge_model to the
+	// in-VM ollama-bridge, and the active pack's memory_scope (default: the pack
+	// name; "default" is the shared/unscoped tag) to the in-VM recall/capture
+	// extensions, via per-run workspace files. No active pack -> writeMemoryScope
+	// removes any stale file (unscoped recall). Best-effort throughout: an
+	// unloadable pack degrades to unscoped rather than failing run. Shared with
+	// `task new` via writePackContextFiles (pack.go) so both launch paths write
+	// the SAME pack context.
+	writePackContextFiles(cfg, o, effectivePack)
 
-	// Local model: hand the configured ollama_bridge_model to the in-VM
-	// ollama-bridge via a per-run workspace file, so `pi-stack config set
-	// ollama_bridge_model <tag>` is all you need (no sandbox env editing). Mirrors
-	// the profile/knowledge-scope seam. Best-effort.
-	writeOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
-
-	// First-run onboarding offer: on a genuinely fresh host launched INTERACTIVELY,
-	// drop a one-shot marker the in-VM `onboarding` extension reads to make the
-	// agent open with the opt-in offer. Never written for a headless (`-p`) launch,
-	// so CI never sees it. Best-effort.
-	if firstRun && isInteractiveLaunch(o.Passthrough) {
-		writeOnboardingOffer(o.Workspace)
+	// finding G + round-3 R3: record the pack this sandbox is being CREATED
+	// with (workspace marker), so a later re-attach can warn precisely when the
+	// create-time pack differs from the then-active pack — and stay silent when
+	// they match. Written ONLY on a DEFINITE create (--replace, or a positive
+	// "absent" probe) — never on sbxUnknown: willCreate optimistically prepares
+	// create args for a FAILED probe, but sbx may well re-attach the OLD sandbox
+	// then, and overwriting the marker with the active pack would silence the
+	// stale-pack warning for a sandbox still carrying its create-time pack. On
+	// a re-attach/unknown path any existing marker stays untouched. Written
+	// from effectivePack (what applyPackToLaunch actually applied), NOT
+	// activePackRoot(cfg.Pack, o.Pack) — a degraded (errNotAPack) launch must
+	// record NO pack, or a later reattach's stalePackReattachWarning would
+	// wrongly stay silent comparing marker == active while the sandbox never got
+	// the pack's facets.
+	if definitelyCreating(state, o.Replace) {
+		writeSandboxPackMarker(o.Workspace, effectivePack)
 	}
 
-	args := plan.Args
+	// Trusted host state: the host-visible facts the fenced agent can't see for
+	// itself (keys/services/knowledge/gog/mcp/models/overlay/identity). This
+	// travels ONLY inside the launcher-generated initial prompt (the pi
+	// passthrough arg carrying generatedInputMarker, e.g. onboardingKickoff) —
+	// never as a workspace file, which a cloned repo could plant or leave stale.
+	// injectTrustedHostState is a no-op (and probes nothing) when no such arg is
+	// present, so a normal run never pays for or produces onboarding truth.
+	//
+	// The --pack override only takes effect on a CREATE (packs mount at creation);
+	// on a re-attach the sandbox keeps whatever pack it was made with, so don't
+	// claim the override in the payload — fall back to the persisted active pack.
+	packForState := ""
+	if willCreate(state, o.Replace) {
+		packForState = o.Pack
+	}
+	// This is a HARD contract, not best-effort: when a generated prompt IS
+	// present, it is the fenced in-VM agent's ONLY source of trusted host-visible
+	// truth, so a launch that can't build/encode it must ABORT before exec'ing
+	// sbx rather than hand the agent a generated prompt with no trusted payload.
+	args, err := injectTrustedHostState(plan.Args, cfg, defaultShellEnv(), o.MCPEnabled, packForState)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack run: could not build trusted host state: %v\n", err)
+		os.Exit(1)
+	}
 
 	if os.Getenv("PI_STACK_DEBUG") != "" {
 		fmt.Fprintln(os.Stderr, "+ sbx "+strings.Join(args, " "))
@@ -231,13 +309,13 @@ func runRun(argv []string) {
 			// A re-attach exec can fail on an sbx version that won't reattach a
 			// kit-created sandbox; don't leave the user stuck without a next step.
 			if plan.Reattach {
-				fmt.Fprintln(os.Stderr, "pi-stack run: re-attach failed; recreate it with: pi-stack run --replace")
+				fmt.Fprintf(os.Stderr, "pi-stack run: re-attach failed; recreate it with: %s\n", runReplaceCommand(o.Workspace))
 			}
 			os.Exit(exit.ExitCode())
 		}
 		fmt.Fprintf(os.Stderr, "pi-stack run: exec sbx: %v\n", err)
 		if plan.Reattach {
-			fmt.Fprintln(os.Stderr, "pi-stack run: re-attach failed; recreate it with: pi-stack run --replace")
+			fmt.Fprintf(os.Stderr, "pi-stack run: re-attach failed; recreate it with: %s\n", runReplaceCommand(o.Workspace))
 		}
 		os.Exit(1)
 	}
@@ -259,43 +337,111 @@ func applyReplaceRm(env shellEnv, plan runLaunchPlan, name string) error {
 	return nil
 }
 
+// sandboxPackMarkerPath is <workspace>/.pi-stack/sandbox.pack: the pack root
+// this workspace's sandbox was CREATED with (finding G). Written on every
+// create (removed when created pack-less), never on a re-attach, so a later
+// re-attach compares create-time truth against the CURRENT active pack instead
+// of guessing from the active pack alone.
+func sandboxPackMarkerPath(workspace string) string {
+	return filepath.Join(workspace, ".pi-stack", "sandbox.pack")
+}
+
+// writeSandboxPackMarker records the pack root a sandbox is being created with
+// (or removes the marker when creating pack-less). Best-effort: a failed write
+// only costs a future stale-pack reminder, never the launch. Symlink-safe via
+// writeWorkspaceStateFile (a cloned repo can ship .pi-stack/sandbox.pack as a
+// tracked symlink) and removeWorkspaceStateFile (a cloned repo can ship
+// .pi-stack ITSELF as a symlink to another repo's .pi-stack, which a plain
+// os.Remove would traverse and delete through).
+func writeSandboxPackMarker(workspace, packRoot string) {
+	if strings.TrimSpace(packRoot) == "" {
+		_ = removeWorkspaceStateFile(workspace, "sandbox.pack")
+		return
+	}
+	_ = writeWorkspaceStateFile(workspace, "sandbox.pack", []byte(canonicalizePackRoot(packRoot)+"\n"), 0o644)
+}
+
+// readSandboxPackMarker returns the create-time pack root recorded for this
+// workspace's sandbox, or "" when no marker exists (a sandbox created before
+// markers existed, or created pack-less).
+func readSandboxPackMarker(workspace string) string {
+	b, err := os.ReadFile(sandboxPackMarkerPath(workspace))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// stalePackReattachWarning returns the "stale pack" reminder `runRun` prints
+// when RE-ATTACHING (not creating, not --replace) to a sandbox whose
+// CREATE-TIME pack differs from the current active pack (finding G). The
+// create-time pack comes from the workspace marker written at create
+// (writeSandboxPackMarker); comparing marker vs active is what makes the
+// message honest in BOTH directions:
+//   - no false warning when the sandbox already carries the current pack
+//     (marker == active pack), and
+//   - a warning after `pack rm` (marker set, active empty): the old sandbox
+//     still has the removed pack's create-time mcp/bin/skills baked in.
+//
+// No marker => no warning: a sandbox created before markers existed (or
+// pack-less) gives us nothing to compare, and guessing from the active pack
+// alone is exactly what produced the old false positives.
+func stalePackReattachWarning(cfg *config.Config, o runOpts, reattaching bool) string {
+	if !reattaching || o.Replace {
+		return ""
+	}
+	created := readSandboxPackMarker(o.Workspace)
+	if created == "" {
+		return ""
+	}
+	active := ""
+	if root := activePackRoot(cfg.Pack, o.Pack); root != "" {
+		active = canonicalizePackRoot(root)
+	}
+	if created == active {
+		return ""
+	}
+	if active == "" {
+		return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q (since detached); its mcp/bin/skills are still attached until you recreate: %s", created, runReplaceCommand(o.Workspace))
+	}
+	return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q, not the active pack %q; the active pack's mcp/bin/skills won't attach until you recreate: %s", created, active, runReplaceCommand(o.Workspace))
+}
+
+// runReplaceCommand returns the exact `pi-stack run [WORKSPACE] --replace`
+// recovery command to print for workspace, POSIX-shell-safe via
+// shellQuoteArg. Bare "pi-stack run --replace" is only correct for the "."
+// default (the sandbox name derives from cwd, so a bare re-run from the SAME
+// cwd targets the same sandbox); an EXPLICIT workspace must be echoed back
+// verbatim (quoted) — omitting it would target whatever sandbox the CURRENT
+// cwd derives, which can be a completely different sandbox than the one that
+// just failed to reattach or is carrying a stale pack. Printing the wrong
+// recovery command is worse than a slightly longer one.
+func runReplaceCommand(workspace string) string {
+	if workspace == "" || workspace == "." {
+		return "pi-stack run --replace"
+	}
+	return "pi-stack run " + shellQuoteArg(workspace) + " --replace"
+}
+
 // modelProviders are the model-provider secret keys a pi session needs at least
 // one of to run. github is deliberately excluded: it authorizes git operations,
 // not the model.
 var modelProviders = []string{"anthropic", "openai", "google"}
 
-// modelProviderPreflight verifies at least one model provider key is set before
-// a launch. It reads `sbx secret ls` (the keys live proxy-side, never in the VM).
-// It returns a guidance message + block=true ONLY when sbx is on PATH, its
-// secret listing is readable, and NONE of the model providers are present. When
-// sbx is absent (e.g. inside a sandbox) or the listing can't be read we cannot
-// verify, so block=false and the launch proceeds unchanged.
-func modelProviderPreflight(env shellEnv) (msg string, block bool) {
-	if env.lookPath == nil {
-		return "", false
+// modelKeyMissingMessage is the guidance printed when no model key could be put
+// in place. (The launch-blocking presence CHECK lives in runRun/launchTask via
+// sbxModelKeyState's tri-state; this is only the how-to-fix text.)
+func modelKeyMissingMessage(env shellEnv) string {
+	msg := fmt.Sprintf("pi-stack run: no model provider key is set (need one of %s).\n",
+		strings.Join(modelProviders, ", "))
+	if providerKeyRefsPresent(env) {
+		msg += "You have 1Password key refs; resolve them into sbx with:\n  pi-stack secret sync\n"
+	} else {
+		msg += "Set one on the host, then re-run. Either:\n" +
+			"  pi-stack secret set ANTHROPIC_API_KEY op://vault/item/field && pi-stack secret sync   (1Password)\n" +
+			"  sbx secret set -g anthropic -t \"sk-...\"                                            (direct)\n"
 	}
-	if _, err := env.lookPath("sbx"); err != nil {
-		return "", false // sbx not on PATH: cannot verify
-	}
-	if env.run == nil {
-		return "", false
-	}
-	out, err := env.run("sbx", "secret", "ls")
-	if err != nil {
-		return "", false // couldn't read secrets: don't block
-	}
-	var missing []string
-	for _, k := range modelProviders {
-		if grepWord(out, k) {
-			return "", false // at least one model key present
-		}
-		missing = append(missing, k)
-	}
-	msg = fmt.Sprintf("pi-stack run: no model provider key is set (need one of %s).\n",
-		strings.Join(missing, ", ")) +
-		"Set one on the host, then re-run. For example:\n" +
-		"  sbx secret set -g anthropic -t \"sk-...\"\n"
-	return msg, true
+	return msg
 }
 
 // parseRunArgs is a small hand-rolled parser (no cobra, no third-party flags) so
@@ -371,6 +517,12 @@ func parseRunArgs(argv []string) (runOpts, error) {
 				return o, err
 			}
 			o.Kits = append(o.Kits, v)
+		case name == "--pack":
+			v, err := valueOf(a, &i)
+			if err != nil {
+				return o, err
+			}
+			o.Pack = v
 		case name == "--mcp":
 			v, err := valueOf(a, &i)
 			if err != nil {
@@ -463,6 +615,32 @@ func repoFromBinary() (string, bool) {
 	return "", false
 }
 
+// localImageLoaded reports whether sbx's template store carries the local image
+// tag. Used to refuse a launch that would otherwise make sbx PULL a
+// never-published local-* image (the confusing "pull? use cached?" prompt/stall).
+//
+// It matches the tag as a SUBSTRING anywhere in `sbx template ls` output, which
+// is both format-independent (works for `repo tag id`, a combined `repo:tag id`,
+// headers, warnings) and catches the fully-pruned case (no matching line at all
+// -> not loaded -> refuse). The tag is a unique local-<unixts>, so a substring
+// match can't collide with anything else. It fails OPEN (returns true) only when
+// there's NO signal to judge from: no sbx, an ls error, or empty output.
+func localImageLoaded(env shellEnv, tag string) bool {
+	if tag == "" || env.run == nil {
+		return true
+	}
+	if env.lookPath != nil {
+		if _, err := env.lookPath("sbx"); err != nil {
+			return true
+		}
+	}
+	out, err := env.run("sbx", "template", "ls")
+	if err != nil || strings.TrimSpace(out) == "" {
+		return true // no signal -> don't block
+	}
+	return strings.Contains(out, tag)
+}
+
 // readLocalImageTag returns the trimmed contents of <root>/out/.local-image-tag
 // (written by `make load`), or "" when absent — in which case the caller skips
 // the --template pin.
@@ -540,7 +718,7 @@ func wireKnowledgeScope(cfg *config.Config, workspace string, rpc knowledgeRPC) 
 	// Remove any stale scope file from a previous run (when bundles were wired)
 	// so the in-VM recall stops forwarding dead bundle ids. Best-effort.
 	if len(ids) == 0 {
-		_ = os.Remove(filepath.Join(workspace, ".pi-stack", "knowledge.scope"))
+		_ = removeWorkspaceStateFile(workspace, "knowledge.scope")
 		return
 	}
 	_ = writeKnowledgeScope(workspace, ids)
@@ -572,88 +750,27 @@ func projectBundle(workspace string) string {
 	return canonicalizeKnowledgeBundle(local)
 }
 
-// writeProfileFile writes <workspace>/.pi-stack/profile: the active profile name
-// on one line. The in-VM memory extensions read it to scope recall/capture,
-// mirroring how writeKnowledgeScope communicates the knowledge bundle set. It is
-// launcher-generated, per-run, and gitignored. Always written (even "default")
-// so a stale name from a previous run can never linger. Best-effort.
 // writeOllamaBridgeFile writes <workspace>/.pi-stack/ollama-bridge.model: the
 // local model tag the in-VM ollama-bridge should expose (interactive cycle + the
 // router's local option). Configured on the host with `pi-stack config set
 // ollama_bridge_model`; the bridge reads it (env var still overrides). Per-run,
 // gitignored, best-effort — an absent file just means the bridge uses its default.
+// Symlink-safe via writeWorkspaceStateFile.
 func writeOllamaBridgeFile(workspace, model string) {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		model = config.DefaultOllamaBridgeModel
 	}
-	dir := filepath.Join(workspace, ".pi-stack")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
-	}
-	_ = os.WriteFile(filepath.Join(dir, "ollama-bridge.model"), []byte(model+"\n"), 0o644)
-}
-
-// isInteractiveLaunch reports whether the pi passthrough will run an INTERACTIVE
-// session (vs headless `-p`/`--print`). The first-run onboarding offer is only
-// meaningful interactively, and must never fire under CI/scripted `-p` launches.
-func isInteractiveLaunch(passthrough []string) bool {
-	for _, a := range passthrough {
-		if a == "-p" || a == "--print" || strings.HasPrefix(a, "--print=") {
-			return false
-		}
-	}
-	return true
-}
-
-// writeOnboardingOffer drops the one-shot marker <workspace>/.pi-stack/
-// onboarding.offer that the in-VM `onboarding` extension reads to make the agent
-// open with the opt-in onboarding offer. Best-effort: an absent marker just
-// means no offer this run.
-func writeOnboardingOffer(workspace string) {
-	dir := filepath.Join(workspace, ".pi-stack")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
-	}
-	_ = os.WriteFile(filepath.Join(dir, onboardingOfferMarker), []byte("1\n"), 0o644)
-}
-
-func writeProfileFile(workspace, profile string) error {
-	if strings.TrimSpace(profile) == "" {
-		profile = config.DefaultProfile
-	}
-	// For a NAMED (non-default) profile, a write failure means recall/capture in
-	// the VM will silently fall back to the default bucket — wrong scope, not a
-	// no-op. Warn to stderr (still best-effort; don't abort the launch). The
-	// default profile stays silent (its absence IS the default behavior).
-	named := profile != config.DefaultProfile
-	warn := func(err error) error {
-		if named {
-			fmt.Fprintf(os.Stderr, "pi-stack: warning: could not write .pi-stack/profile for profile %q (recall/capture will fall back to the default bucket): %v\n", profile, err)
-		}
-		return err
-	}
-	dir := filepath.Join(workspace, ".pi-stack")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return warn(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "profile"), []byte(profile+"\n"), 0o644); err != nil {
-		return warn(err)
-	}
-	return nil
+	_ = writeWorkspaceStateFile(workspace, "ollama-bridge.model", []byte(model+"\n"), 0o644)
 }
 
 // writeKnowledgeScope writes <workspace>/.pi-stack/knowledge.scope: one canonical
 // bundle id per line, trailing newline. This is the launcher-generated,
 // per-run, gitignored file the recall extension reads (the committed pointer is
-// .pi-stack/knowledge).
+// .pi-stack/knowledge). Symlink-safe via writeWorkspaceStateFile.
 func writeKnowledgeScope(workspace string, ids []string) error {
-	dir := filepath.Join(workspace, ".pi-stack")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
 	content := strings.Join(ids, "\n") + "\n"
-	return os.WriteFile(filepath.Join(dir, "knowledge.scope"), []byte(content), 0o644)
+	return writeWorkspaceStateFile(workspace, "knowledge.scope", []byte(content), 0o644)
 }
 
 // defaultKnowledgeRPC wires the real, short-timeout HTTP JSON-RPC client for the

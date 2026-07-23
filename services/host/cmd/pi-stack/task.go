@@ -16,8 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"pi-stack/host/config"
 )
 
 const taskUsage = `usage: pi-stack task <new|ls|rm|gc|harvest> [args]
@@ -333,11 +331,8 @@ func sanitizeTaskName(name string) string {
 // run.go. The composed name is bounded by boundSandboxName so it always stays
 // within maxSandboxNameLen.
 func taskSandboxName(label, repokey, name, profile string) string {
-	prof := ""
-	if profile != "" && profile != config.DefaultProfile {
-		prof = sanitizeProfileName(profile)
-	}
-	return boundSandboxName(label, repokey, sanitizeTaskName(name), prof)
+	_ = profile // profiles removed; the parameter is retained for call-site stability
+	return boundSandboxName(label, repokey, sanitizeTaskName(name), "")
 }
 
 // legacyTaskSandboxName is the PRE-LABEL sandbox-name formula
@@ -346,11 +341,8 @@ func taskSandboxName(label, repokey, name, profile string) string {
 // with THIS name, so rm/gc/ls must derive it (not the new labeled name) or they
 // would delete a clone while leaving its real sandbox running.
 func legacyTaskSandboxName(repokey, name, profile string) string {
-	n := "pi-stack-t-" + repokey + "-" + sanitizeTaskName(name)
-	if profile != "" && profile != config.DefaultProfile {
-		n += "-" + sanitizeProfileName(profile)
-	}
-	return n
+	_ = profile // profiles removed; retained for call-site stability
+	return "pi-stack-t-" + repokey + "-" + sanitizeTaskName(name)
 }
 
 // boundSandboxName composes "pi-stack-t-<label>-<repokey>-<name>[-<prof>]" and,
@@ -520,9 +512,9 @@ func hardenTaskMeta(m taskMeta, mainroot, repokey string, legacy bool, fileBase 
 	// pre-label sandbox name; a new-layout task owns the labeled name. Deriving the
 	// wrong one would let rm/gc delete a clone while its real sandbox lives on.
 	if legacy {
-		m.Sandbox = legacyTaskSandboxName(repokey, m.Name, sanitizeProfileName(m.Profile))
+		m.Sandbox = legacyTaskSandboxName(repokey, m.Name, m.Profile)
 	} else {
-		m.Sandbox = taskSandboxName(label, repokey, m.Name, sanitizeProfileName(m.Profile))
+		m.Sandbox = taskSandboxName(label, repokey, m.Name, m.Profile)
 	}
 	return m, nil
 }
@@ -1138,10 +1130,30 @@ func prepareTaskLaunchSandbox(env shellEnv, name string) error {
 // preflight, kit resolution, knowledge/profile wiring, buildSbxArgs) WITHOUT
 // modifying run.go, and bypasses deriveSandboxName because o.Name is set.
 func launchTask(o runOpts) error {
-	if msg, block := modelProviderPreflight(defaultShellEnv()); block {
-		return fmt.Errorf("%s", strings.TrimRight(msg, "\n"))
+	env := defaultShellEnv()
+	if _, err := env.lookPath("sbx"); err == nil {
+		// Resolve any 1Password key refs into sbx first (same no-ritual path as run),
+		// so a task on a fresh machine isn't rejected for a key it can auto-provision.
+		ensureProviderKeysFromRefs(env, os.Stderr)
+		// Tri-state (same as run): refuse ONLY when we can POSITIVELY confirm no key.
+		// A transient `sbx secret ls` failure (probeOK=false) must not abort a task.
+		if present, probeOK := sbxModelKeyState(env); probeOK && !present {
+			return fmt.Errorf("%s", strings.TrimRight(modelKeyMissingMessage(env), "\n"))
+		}
 	}
-	cfg, profile, err := loadResolvedConfig()
+	cfg, _, err := loadResolvedConfig()
+	if err != nil {
+		return err
+	}
+
+	// A task is a fresh sandbox; mount the active pack (skills + model pref) so it
+	// gets the same authored context a normal `pi-stack run` does. Fatal on error
+	// (round-4 F2): a declared-but-unbuildable pack wrapper refuses the launch.
+	// effectivePack is what actually loaded/applied — "" when there is no active
+	// pack OR applyPackToLaunch degraded via errNotAPack — and is what the
+	// sandbox.pack marker + memory scope below must agree on (never the merely
+	// CONFIGURED activePackRoot(cfg.Pack, o.Pack)).
+	effectivePack, err := applyPackToLaunch(cfg, &o, defaultShellEnv())
 	if err != nil {
 		return err
 	}
@@ -1164,6 +1176,16 @@ func launchTask(o runOpts) error {
 	}
 	o.MCPEnabled = strings.TrimSpace(os.Getenv("SBX_MCP_URL")) != ""
 
+	// Same local-image preflight as `pi-stack run`: a task pins --template to the
+	// local-<ts> tag, so a stale tag (pruned template) would make sbx pull a
+	// never-published image and stall on a prompt. Refuse fast with `make load`.
+	if o.LocalImageTag != "" && len(o.Kits) == 0 && o.LocalKit != "" {
+		if !localImageLoaded(defaultShellEnv(), o.LocalImageTag) {
+			return fmt.Errorf("local image %s:%s is not loaded in sbx (it's a local build, never published).\n"+
+				"Load this build first, from your pi-stack checkout:  make load", dockerImageRepo, o.LocalImageTag)
+		}
+	}
+
 	// Resolve any pre-existing sandbox of the derived name atomically before
 	// launching into it (R5-1): a stopped one is removed with `sbx rm` (no -f),
 	// a running or indeterminate one is refused. Never force-kill without --force.
@@ -1172,7 +1194,24 @@ func launchTask(o runOpts) error {
 	}
 
 	wireKnowledgeScope(cfg, o.Workspace, defaultKnowledgeRPC())
-	writeProfileFile(o.Workspace, profile)
+
+	// Mirror run.go's pack-context writes (packs-v2 Phase 1 gap): applyPackToLaunch
+	// above only updates cfg/o with the pack's overrides, it does not write the
+	// per-launch workspace files that carry that context INTO the sandbox. Without
+	// these a task sandbox silently loses the active pack's memory scope, its
+	// ollama-bridge model, the MCP-gateway-off warning, and the stale-pack marker
+	// run.go relies on. A task is always a fresh create, so writeMemoryScope and
+	// writeSandboxPackMarker run unconditionally (no willCreate/definitelyCreating
+	// gating needed — that only exists in run.go to distinguish create from
+	// re-attach, and a task never re-attaches).
+	if !o.MCPEnabled {
+		configured := append(append([]string(nil), cfg.MCP...), o.MCP...)
+		if msg := mcpGatewayOffWarning(configured); msg != "" {
+			fmt.Fprintln(os.Stderr, msg)
+		}
+	}
+	writePackContextFiles(cfg, o, effectivePack)
+	writeSandboxPackMarker(o.Workspace, effectivePack)
 
 	args := buildSbxArgs(cfg, o, version)
 	if os.Getenv("PI_STACK_DEBUG") != "" {

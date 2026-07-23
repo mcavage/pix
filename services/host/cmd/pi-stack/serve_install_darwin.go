@@ -39,3 +39,9 @@ func managedServiceActive() bool { return launchdActive(realCmdRunner, os.Getuid
 
 // restartManagedService kickstarts the launchd unit in place.
 func restartManagedService() error { return launchdRestart(realCmdRunner, os.Getuid()) }
+
+// stopManagedService boots the launchd unit out so KeepAlive stops respawning it
+// (without removing the plist).
+func stopManagedService(out io.Writer) error {
+	return launchdStop(realCmdRunner, os.Getuid(), out)
+}

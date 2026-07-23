@@ -24,3 +24,7 @@ func managedServiceActive() bool { return false }
 func restartManagedService() error {
 	return fmt.Errorf("no managed service on this platform")
 }
+
+func stopManagedService(io.Writer) error {
+	return fmt.Errorf("no managed service on this platform")
+}

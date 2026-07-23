@@ -59,7 +59,7 @@
       "task_type": "reasoning",
       "objective": "accuracy",
       "providers": ["google"],
-      "fallback": "google/gemini-3.1-pro",
+      "fallback": "google/gemini-3.1-pro-preview",
       "about": "A SECOND, independent cross-vendor voice for adversarial scrutiny (e.g. security review). Pinned to a THIRD vendor so it is independent of both the author (Claude) and the reviewer (GPT). -> Gemini 3.1 Pro (reasoning/GPQA leader)."
     },
     {

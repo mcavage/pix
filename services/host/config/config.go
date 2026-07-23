@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -19,11 +18,14 @@ import (
 
 // Defaults applied when a config file is absent or a field is unset.
 const (
-	// Defaults to the SAME model as the ollama-bridge (qwen3.5:9b) so Ollama keeps
-	// ONE local model resident for both fact capture and the sandbox's local chat/
-	// router option, instead of paying DRAM for a second watcher-only model. On a
-	// tight machine, point it at something smaller via `pi-stack config set
-	// memory_watcher_model <model>`.
+	// A small, fast, extraction-grade local model DEDICATED to fact capture. It is
+	// The watcher must reliably emit STRUCTURED JSON (facts/events/corrections).
+	// The previous default (gemma4:e4b-mlx) could not — it returned unparseable
+	// output on every extraction, so auto-capture silently stored nothing. A capable
+	// instruct model that honors ollama structured outputs is required; qwen3.5:9b
+	// works. warm-on-start (memWatcherWarm) keeps the first capture fast. Override
+	// via `pi-stack config set memory_watcher_model <model>` if you have a smaller
+	// model that reliably does structured extraction on your hardware.
 	DefaultMemoryWatcherModel = "qwen3.5:9b"
 	DefaultMemoryEmbedModel   = "nomic-embed-text"
 	// DefaultOllamaBridgeModel is the local model the sandbox's ollama-bridge
@@ -47,35 +49,6 @@ type PluginSpec struct {
 	SHA      string   `toml:"sha"`       // expected checksum of the external binary
 	Port     int      `toml:"port"`      // port an external plugin listens on
 	ExtraEnv []string `toml:"extra_env"` // additional env vars granted to this plugin subprocess
-}
-
-// Profile is a named override set layered onto the base (flat) config so one
-// host can run distinct contexts — e.g. WORK vs PERSONAL — that differ in their
-// Google Workspace account, MCP servers, knowledge bundles, and overlay kit
-// stack, without cross-contaminating. A slice field that is PRESENT (even empty)
-// REPLACES the base value; an ABSENT (nil) field INHERITS the base. An empty
-// GogAccount inherits the base account.
-//
-// Only the runtime-swappable surface lives here. Overlay HOST plugins compile
-// into the single pi-stack-host binary (build time, global) and cannot be
-// swapped per profile — see docs/design/profiles.md.
-//
-// The slice fields are POINTERS so the schema can distinguish three states that
-// a plain slice cannot: a nil pointer = INHERIT (omitted on Save via omitempty),
-// while a non-nil pointer — even to an empty slice — = an explicit REPLACE that
-// IS serialized (including `mcp = []`). This is what lets `RemoveProfileMCP`
-// disable the last inherited server: it stores a present-empty list that survives
-// Save+Load instead of a nil that would revert to inherit. A plain `[]string`
-// with `omitempty` could not tell present-empty from absent, so do NOT flatten
-// these back to non-pointer slices — the round-trip tests gate them. GogAccount
-// stays a string: empty = inherit.
-type Profile struct {
-	GogAccount       string    `toml:"gog_account,omitempty"`
-	MCP              *[]string `toml:"mcp,omitempty"`
-	KnowledgeBundles *[]string `toml:"knowledge_bundles,omitempty"`
-	Kits             struct {
-		Stack *[]string `toml:"stack,omitempty"`
-	} `toml:"kits,omitempty"`
 }
 
 // HostMode gates `pi-stack host` — running pi DIRECTLY on this machine with
@@ -123,12 +96,6 @@ type Config struct {
 
 	MCP []string `toml:"mcp,omitempty"`
 
-	// ActiveProfile is the profile used when no --profile flag / PI_STACK_PROFILE
-	// env is given. Empty means the base config (the implicit "default" profile).
-	ActiveProfile string `toml:"active_profile"`
-	// Profiles are named override sets layered onto the base config by Resolve.
-	Profiles map[string]Profile `toml:"profiles"`
-
 	MemoryWatcherModel string `toml:"memory_watcher_model,omitempty"`
 	MemoryEmbedModel   string `toml:"memory_embed_model,omitempty"`
 	OllamaBridgeModel  string `toml:"ollama_bridge_model,omitempty"`
@@ -152,11 +119,49 @@ type Config struct {
 		Paths []string `toml:"paths"`
 	} `toml:"skills"`
 
+	// Pack is the active pack: a git-backed directory carrying skills + knowledge
+	// (+ later mcp/proxies/routing/config). Empty = no active pack. `pi-stack pack
+	// use <path>` sets it; `run` mounts the pack's skills + knowledge. This is the
+	// unifying successor to the loose skills-dir + knowledge_bundles + (eventually)
+	// profile. See docs/design/packs.md.
+	Pack string `toml:"pack,omitempty"`
+
 	Plugins map[string]PluginSpec `toml:"plugins"`
 
 	// Host gates + configures `pi-stack host` (the unsandboxed escape hatch).
 	// GLOBAL, never per-profile: leaving the sandbox is a machine-level decision.
 	Host HostMode `toml:"host,omitempty"`
+
+	// ProviderKeyMode records which provider-key source `pi-stack setup` used
+	// LAST successfully, so a repeat run doesn't re-litigate the choice: "sbx"
+	// (an explicit --use-sbx-keys or the accepted convenience prompt) auto-skips
+	// 1Password with the same exact all-three probe, no prompt; "1password" (an
+	// explicit --use-1password, or a declined convenience prompt, or the plain
+	// strict flow) skips the convenience prompt on the next run. Empty is the
+	// legacy/unset state: no mode has ever been recorded, so setup falls back to
+	// its ordinary flag/prompt/refs-configured logic. Never anything but "",
+	// "sbx", or "1password" — see ValidProviderKeyMode. omitempty already makes
+	// this sparse (the unset default is the empty string, same as GogAccount).
+	ProviderKeyMode string `toml:"provider_key_mode,omitempty"`
+}
+
+// ProviderKeyModeSbx and ProviderKeyMode1Password are the two valid non-empty
+// values of ProviderKeyMode. An empty string is the third, legacy/unset state.
+const (
+	ProviderKeyModeSbx       = "sbx"
+	ProviderKeyMode1Password = "1password"
+)
+
+// ValidProviderKeyMode reports whether mode is a value ProviderKeyMode may
+// hold: "" (unset), "sbx", or "1password". Any other string is rejected by
+// callers before it ever reaches the config file.
+func ValidProviderKeyMode(mode string) bool {
+	switch mode {
+	case "", ProviderKeyModeSbx, ProviderKeyMode1Password:
+		return true
+	default:
+		return false
+	}
 }
 
 // configDir resolves the directory that holds config.toml and the broker token.
@@ -194,11 +199,13 @@ func Path() string {
 // ServePidPath resolves the absolute path of serve.pid — the pidfile
 // `pi-stack-host serve` writes on startup so the launcher's `serve stop` /
 // `serve status` can find and signal the running supervisor SAFELY (instead of a
-// blind `pkill -f`). It is a sibling of config.toml: <config-dir>/serve.pid. Both
-// the host (the writer) and the launcher (the reader) call this so the two always
-// agree on the location.
+// blind `pkill -f`). It lives in the STATE dir (<state-dir>/serve.pid), NOT the
+// config dir: it is ephemeral runtime state (like serve.log), not user config.
+// Keeping it out of the config dir also means `pi-stack reset` (which moves the
+// config dir aside) never orphans a running daemon from its pidfile. Both the
+// host (writer) and the launcher (readers) call this so the two always agree.
 func ServePidPath() string {
-	dir, err := configDir()
+	dir, err := StateDir()
 	if err != nil {
 		return "serve.pid"
 	}
@@ -207,9 +214,10 @@ func ServePidPath() string {
 
 // ServeSpawnLockPath is the flock file the launcher's lazy auto-start takes
 // around its spawn decision (double-checked locking against a concurrent
-// `pi-stack run`). A sibling of config.toml, like the pidfile.
+// `pi-stack run`). Ephemeral runtime state — a sibling of the pidfile in the
+// STATE dir.
 func ServeSpawnLockPath() string {
-	dir, err := configDir()
+	dir, err := StateDir()
 	if err != nil {
 		return "serve.spawn.lock"
 	}
@@ -221,9 +229,10 @@ func ServeSpawnLockPath() string {
 // a lazy daemon (safe to stop-and-restart) from a FOREGROUND one the user is
 // watching (never killed, only advised). Cleared by `serve stop` and by the
 // daemon's graceful shutdown; a stale marker is harmless because mode detection
-// also requires a live, verified-ours pidfile.
+// also requires a live, verified-ours pidfile. Ephemeral runtime state — a
+// sibling of the pidfile in the STATE dir.
 func ServeLazyMarkerPath() string {
-	dir, err := configDir()
+	dir, err := StateDir()
 	if err != nil {
 		return "serve.lazy"
 	}
@@ -276,6 +285,27 @@ func DataDir() (string, error) {
 	}
 	return filepath.Join(home, ".local", "share", "pi-stack"), nil
 }
+
+// PackDir is the per-user DEFAULT PACK root: $XDG_DATA_HOME/pi-stack/default,
+// else ~/.local/share/pi-stack/default. A proper pack (pack.toml + skills/ +
+// knowledge/), git-initialized, the default home for what you author for
+// yourself — named "default" (the pack's name derives from the dir basename)
+// so the auto-created pack and its messaging ("created pack ...", "active pack
+// -> this (default) pack") are coherent. The active pack (config `pack`)
+// overrides it; `pi-stack reset` moves it aside (it's a git working copy — the
+// user pushes it to their own remote). See docs/design/packs.md.
+//
+// The basename has been renamed twice: originally "pack", then briefly
+// "personal" (which wrongly implied non-work use), now "default".
+// defaultPackRoot() migrates an existing ".../personal" dir (preferred) or an
+// older ".../pack" dir to ".../default" on first resolution, so no user is
+// orphaned (see migrateLegacyPackDir in pack.go).
+func PackDir() string { return filepath.Join(dataDirOr(), "default") }
+
+// PacksDir is where adopted REMOTE packs are cloned:
+// $XDG_DATA_HOME/pi-stack/packs, else ~/.local/share/pi-stack/packs. Each lives
+// at <PacksDir>/<name>. Distinct from PackDir (the single default pack).
+func PacksDir() string { return filepath.Join(dataDirOr(), "packs") }
 
 // dataDirOr returns DataDir() or, if HOME cannot be resolved, a relative
 // "pi-stack" so path builders never panic on an empty base.
@@ -404,75 +434,19 @@ func LoadFrom(path string) (*Config, error) {
 	return c, nil
 }
 
-// DefaultProfile is the implicit profile name for the base (flat) config.
-const DefaultProfile = "default"
-
-// AllKnowledgeBundles returns the de-duplicated UNION of the base bundles and
-// every profile's bundles. `serve` indexes the union (one shared index); a
-// running sandbox scopes recall to its profile's subset at query time. This
-// keeps `serve` profile-agnostic while still indexing everything any profile
-// might ask for.
+// AllKnowledgeBundles returns the de-duplicated knowledge bundles. (Formerly a
+// union across profiles; profiles were removed, so it is now just the base list,
+// deduped. Kept as a method so `serve`/backup callers are unchanged.)
 func (c *Config) AllKnowledgeBundles() []string {
 	seen := map[string]bool{}
 	var out []string
-	add := func(list []string) {
-		for _, b := range list {
-			if b != "" && !seen[b] {
-				seen[b] = true
-				out = append(out, b)
-			}
-		}
-	}
-	add(c.KnowledgeBundles)
-	for _, p := range c.Profiles {
-		if p.KnowledgeBundles != nil {
-			add(*p.KnowledgeBundles)
+	for _, b := range c.KnowledgeBundles {
+		if b != "" && !seen[b] {
+			seen[b] = true
+			out = append(out, b)
 		}
 	}
 	return out
-}
-
-// ProfileNames returns the sorted list of configured profile names, always
-// including the implicit "default" first.
-func (c *Config) ProfileNames() []string {
-	names := []string{DefaultProfile}
-	for n := range c.Profiles {
-		if n != DefaultProfile {
-			names = append(names, n)
-		}
-	}
-	sort.Strings(names[1:])
-	return names
-}
-
-// Resolve returns a flat *Config with the named profile's overrides layered onto
-// the base config, so every existing consumer (run, serve, doctor, status) keeps
-// working against a plain flat config. name "" or "default" (or an unknown name)
-// returns the base config unchanged. A present slice override REPLACES; an absent
-// one INHERITS; a non-empty GogAccount overrides. The returned config is a copy —
-// Resolve never mutates the receiver.
-func (c *Config) Resolve(name string) *Config {
-	out := *c // shallow copy; slices are replaced wholesale below, never appended
-	if name == "" || name == DefaultProfile {
-		return &out
-	}
-	p, ok := c.Profiles[name]
-	if !ok {
-		return &out
-	}
-	if strings.TrimSpace(p.GogAccount) != "" {
-		out.GogAccount = strings.TrimSpace(p.GogAccount)
-	}
-	if p.MCP != nil {
-		out.MCP = append([]string(nil), *p.MCP...)
-	}
-	if p.KnowledgeBundles != nil {
-		out.KnowledgeBundles = append([]string(nil), *p.KnowledgeBundles...)
-	}
-	if p.Kits.Stack != nil {
-		out.Kits.Stack = append([]string(nil), *p.Kits.Stack...)
-	}
-	return &out
 }
 
 // Plugin returns the configured spec for slot, or a builtin default if unset.
@@ -518,18 +492,9 @@ knowledge_bundles = []
 [kits]
 stack = []
 
-# Profiles: named override sets for running distinct contexts (e.g. work vs
-# personal) that differ in gog account, MCP servers, knowledge bundles, and
-# overlay kit stack. Select one with ` + "`pi-stack --profile <name> run`" + `,
-# ` + "`pi-stack profile use <name>`" + `, or the PI_STACK_PROFILE env var. A
-# present list REPLACES the base value; an absent one INHERITS it.
-# active_profile = ""
-# [profiles.work]
-# gog_account = "you@work.com"
-# mcp = ["gog", "slack"]
-# knowledge_bundles = ["/path/to/work-kb"]
-# [profiles.work.kits]
-# stack = ["../work-overlay/kit"]
+# Active pack (git-backed context bundle: skills + knowledge + integrations).
+# Usually set via ` + "`pi-stack pack use <path|git-url>`" + `.
+# pack = ""
 
 # Extra skill directories loaded live (dev mode).
 [skills]
@@ -569,14 +534,59 @@ paths = []
 // intent than the petrification bug this prevents.
 func (c *Config) Save() error {
 	path := Path()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(c.sparseForSave()); err != nil {
 		return err
 	}
-	return os.WriteFile(path, buf.Bytes(), 0o600)
+	return writeFileAtomic(dir, path, buf.Bytes(), 0o600)
+}
+
+// writeFileAtomic writes data to path by writing a temp file IN THE SAME dir
+// (so the rename below is on one filesystem), fsync-ing it, then atomically
+// renaming it over path. os.WriteFile truncates the destination in place, so a
+// process killed (or a disk-full write error) mid-write can leave path
+// half-written/empty — the classic torn-config bug. A temp-file + fsync +
+// rename means path either has its old complete content or its new complete
+// content, never a truncated in-between: a failed write here NEVER touches
+// path, so the prior file is always left intact. The temp file is removed on
+// every failure path (best-effort; a leftover .tmp-* is harmless clutter, never
+// read by any loader) and is a no-op after a successful rename.
+func writeFileAtomic(dir, path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false // renamed away; nothing left at tmpPath to remove
+	return nil
 }
 
 // sparseForSave returns a shallow copy with every defaultable field that equals
@@ -664,141 +674,6 @@ func (c *Config) AddKnowledgeBundle(path string) bool {
 // by a relative path can be removed by that same relative path.
 func (c *Config) RemoveKnowledgeBundle(path string) bool {
 	return removeValue(&c.KnowledgeBundles, canonicalizeBundlePath(path))
-}
-
-// profile fetches (or lazily creates) the named profile entry so a mutator can
-// modify it and reassign. Map values are not addressable, so every per-profile
-// mutator is a get-modify-set: profileEntry -> mutate the struct -> putProfile.
-// Creating a profile that did not exist is intentional: `pi-stack config set
-// --profile <new> ...` scaffolds the [profiles.<new>] table.
-func (c *Config) profileEntry(name string) Profile {
-	if c.Profiles == nil {
-		return Profile{}
-	}
-	return c.Profiles[name]
-}
-
-// putProfile writes p back into the profile map, allocating the map on first use.
-func (c *Config) putProfile(name string, p Profile) {
-	if c.Profiles == nil {
-		c.Profiles = map[string]Profile{}
-	}
-	c.Profiles[name] = p
-}
-
-// SetProfileGogAccount sets (or, with an empty value, clears) the Google
-// Workspace account override on the named profile, creating the profile if
-// absent.
-func (c *Config) SetProfileGogAccount(name, account string) {
-	p := c.profileEntry(name)
-	p.GogAccount = strings.TrimSpace(account)
-	c.putProfile(name, p)
-}
-
-// The per-profile list mutators below operate on the RESOLVED EFFECTIVE list
-// (base overlaid with any existing profile override), NOT on the raw override
-// slice. So unsetting an INHERITED value materializes base-minus-value as the
-// profile's explicit list (e.g. base [gog,slack], no prior work override,
-// `unset --profile work mcp slack` -> work.mcp=[gog]); and adding starts from
-// what the profile effectively sees today. They store the full explicit list as
-// the override only when it CHANGED, so a no-op leaves an inheriting field nil
-// (still inherit) rather than silently materializing it.
-
-// effectiveList returns a fresh COPY of the named profile's effective value for
-// one field, via Resolve so it reflects base+override. The copy is essential:
-// Resolve shallow-copies the config, so an inherited field aliases the base
-// slice — mutating it in place would corrupt the base.
-func (c *Config) effectiveList(name string, pick func(*Config) []string) []string {
-	return append([]string(nil), pick(c.Resolve(name))...)
-}
-
-// AddProfileMCP adds an MCP server to the named profile's effective mcp list,
-// storing the result as the profile's explicit override. Returns true when it
-// changed. Creates the profile if absent.
-func (c *Config) AddProfileMCP(name, server string) bool {
-	eff := c.effectiveList(name, func(rc *Config) []string { return rc.MCP })
-	if !addUnique(&eff, server) {
-		return false
-	}
-	p := c.profileEntry(name)
-	p.MCP = &eff
-	c.putProfile(name, p)
-	return true
-}
-
-// RemoveProfileMCP removes an MCP server from the named profile's EFFECTIVE mcp
-// list (base+override), storing the remainder as the profile's explicit
-// override. Returns true when it changed — so removing an inherited value
-// materializes base-minus-value.
-func (c *Config) RemoveProfileMCP(name, server string) bool {
-	eff := c.effectiveList(name, func(rc *Config) []string { return rc.MCP })
-	if !removeValue(&eff, server) {
-		return false
-	}
-	p := c.profileEntry(name)
-	// Store a non-nil pointer even when eff is now empty: removing the LAST
-	// inherited value must persist an explicit empty list (`mcp = []`), NOT a nil
-	// that Save would drop and Load would read back as inherit.
-	p.MCP = &eff
-	c.putProfile(name, p)
-	return true
-}
-
-// AddProfileKnowledgeBundle adds a canonicalized OKF bundle dir to the named
-// profile's effective knowledge_bundles list, storing the result as the
-// profile's explicit override. Returns true when it changed. Creates the
-// profile if absent.
-func (c *Config) AddProfileKnowledgeBundle(name, path string) bool {
-	eff := c.effectiveList(name, func(rc *Config) []string { return rc.KnowledgeBundles })
-	if !addUnique(&eff, canonicalizeBundlePath(path)) {
-		return false
-	}
-	p := c.profileEntry(name)
-	p.KnowledgeBundles = &eff
-	c.putProfile(name, p)
-	return true
-}
-
-// RemoveProfileKnowledgeBundle removes a canonicalized OKF bundle dir from the
-// named profile's EFFECTIVE knowledge_bundles list, storing the remainder as the
-// profile's explicit override. Returns true when it changed.
-func (c *Config) RemoveProfileKnowledgeBundle(name, path string) bool {
-	eff := c.effectiveList(name, func(rc *Config) []string { return rc.KnowledgeBundles })
-	if !removeValue(&eff, canonicalizeBundlePath(path)) {
-		return false
-	}
-	p := c.profileEntry(name)
-	p.KnowledgeBundles = &eff
-	c.putProfile(name, p)
-	return true
-}
-
-// AddProfileKit adds an overlay kit path to the named profile's effective
-// kits.stack list, storing the result as the profile's explicit override.
-// Returns true when it changed. Creates the profile if absent.
-func (c *Config) AddProfileKit(name, kit string) bool {
-	eff := c.effectiveList(name, func(rc *Config) []string { return rc.Kits.Stack })
-	if !addUnique(&eff, kit) {
-		return false
-	}
-	p := c.profileEntry(name)
-	p.Kits.Stack = &eff
-	c.putProfile(name, p)
-	return true
-}
-
-// RemoveProfileKit removes an overlay kit path from the named profile's
-// EFFECTIVE kits.stack list, storing the remainder as the profile's explicit
-// override. Returns true when it changed.
-func (c *Config) RemoveProfileKit(name, kit string) bool {
-	eff := c.effectiveList(name, func(rc *Config) []string { return rc.Kits.Stack })
-	if !removeValue(&eff, kit) {
-		return false
-	}
-	p := c.profileEntry(name)
-	p.Kits.Stack = &eff
-	c.putProfile(name, p)
-	return true
 }
 
 // canonicalizeBundlePath normalizes a bundle path to the SAME canonical id every

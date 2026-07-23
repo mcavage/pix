@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -137,6 +139,87 @@ func TestPlanSandboxLaunch_UnknownCreates(t *testing.T) {
 	}
 	if !contains(plan.Args, []string{"--kit"}) {
 		t.Errorf("unknown state should still create, got %v", plan.Args)
+	}
+}
+
+// TestPlanSandboxLaunch_ReplaceOnUnknown_FailsClosed (item 5): --replace
+// requested but the sandbox's existence could not be determined (sbxUnknown,
+// i.e. the probe itself failed) must NOT build a create or a reattach plan —
+// it must return an error and leave Args/RmFirst/Reattach at their zero
+// values, so the caller errors out before ever claiming "replacing" or
+// touching sbx. This is deliberately DIFFERENT from a plain (non-replace)
+// launch on sbxUnknown, which still optimistically creates (see
+// TestPlanSandboxLaunch_UnknownCreates).
+func TestPlanSandboxLaunch_ReplaceOnUnknown_FailsClosed(t *testing.T) {
+	cfg := &config.Config{}
+	o := runOpts{Workspace: ".", Name: "pi-stack-t", Replace: true}
+	plan := planSandboxLaunch(sbxUnknown, true, cfg, o, "0.0.99")
+	if plan.Err == nil {
+		t.Fatal("--replace on an indeterminate (unknown) sandbox state must fail closed with an error")
+	}
+	if plan.Reattach {
+		t.Error("a failed-closed plan must not claim Reattach")
+	}
+	if plan.RmFirst {
+		t.Error("a failed-closed plan must not claim RmFirst")
+	}
+	if len(plan.Args) != 0 {
+		t.Errorf("a failed-closed plan must carry no Args, got %v", plan.Args)
+	}
+	if !strings.Contains(plan.Err.Error(), o.Name) {
+		t.Errorf("error should name the sandbox, got: %v", plan.Err)
+	}
+}
+
+// --- item 12: reattach/recreate recovery commands preserve an explicit
+// workspace path (never print a bare command that would target cwd's
+// sandbox instead of the one that actually failed/is stale) ---------------
+
+func TestRunReplaceCommand_BareForCwdDefault(t *testing.T) {
+	for _, ws := range []string{".", ""} {
+		if got := runReplaceCommand(ws); got != "pi-stack run --replace" {
+			t.Errorf("runReplaceCommand(%q) = %q, want bare %q", ws, got, "pi-stack run --replace")
+		}
+	}
+}
+
+func TestRunReplaceCommand_PreservesExplicitWorkspace(t *testing.T) {
+	if got := runReplaceCommand("/home/mark/myproject"); got != "pi-stack run /home/mark/myproject --replace" {
+		t.Errorf("runReplaceCommand(explicit) = %q, want the explicit path preserved", got)
+	}
+}
+
+// A workspace path needing shell-quoting (spaces, apostrophe) must be quoted
+// POSIX-safely via the existing shellQuoteArg, not printed raw (which would
+// paste-and-break, or worse, silently split into multiple shell words).
+func TestRunReplaceCommand_QuotesUnsafeWorkspace(t *testing.T) {
+	ws := "/home/mark/my repo's"
+	got := runReplaceCommand(ws)
+	want := "pi-stack run " + shellQuoteArg(ws) + " --replace"
+	if got != want {
+		t.Errorf("runReplaceCommand(%q) = %q, want %q", ws, got, want)
+	}
+	if !strings.Contains(got, `'`) {
+		t.Errorf("an unsafe workspace path must be quoted, got: %q", got)
+	}
+}
+
+// stalePackReattachWarning must embed the SAME explicit-workspace-preserving
+// recovery command, not a bare --replace that would target the wrong sandbox
+// if cwd differs from the workspace that triggered the warning.
+func TestStalePackReattachWarning_PreservesExplicitWorkspaceInFix(t *testing.T) {
+	ws := filepath.Join(t.TempDir(), "sub dir") // needs quoting
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldRoot := filepath.Join(t.TempDir(), "old-pack")
+	writeSandboxPackMarker(ws, oldRoot)
+	cfg := &config.Config{Pack: filepath.Join(t.TempDir(), "new-pack")}
+
+	msg := stalePackReattachWarning(cfg, runOpts{Workspace: ws}, true)
+	want := runReplaceCommand(ws)
+	if !strings.Contains(msg, want) {
+		t.Errorf("warning must embed the explicit-workspace recovery command %q, got: %q", want, msg)
 	}
 }
 
@@ -334,5 +417,65 @@ func TestParseRunArgs_Replace(t *testing.T) {
 	}
 	if !o.Replace {
 		t.Error("expected Replace=true")
+	}
+}
+
+// localImageLoaded: present tag -> true; absent tag -> false; fails OPEN when it
+// can't check (no sbx / ls error) so it never falsely refuses a launch.
+func TestLocalImageLoaded(t *testing.T) {
+	lsOut := dockerImageRepo + "  local-111  abc123\n" +
+		dockerImageRepo + "  local-222  def456\n"
+	present := shellEnv{
+		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
+		run:      func(string, ...string) (string, error) { return lsOut, nil },
+	}
+	if !localImageLoaded(present, "local-222") {
+		t.Error("a loaded tag must be reported present")
+	}
+	if localImageLoaded(present, "local-999") {
+		t.Error("an unloaded tag must be reported absent")
+	}
+	// Combined `repo:tag id` column form (the round-2 regression) must match too.
+	combined := shellEnv{
+		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
+		run:      func(string, ...string) (string, error) { return dockerImageRepo + ":local-333  ghi789\n", nil },
+	}
+	if !localImageLoaded(combined, "local-333") {
+		t.Error("combined repo:tag column must be recognized as present")
+	}
+	if localImageLoaded(combined, "local-999") {
+		t.Error("combined form: an unloaded tag must be absent")
+	}
+	// No sbx on PATH -> fail OPEN (true).
+	noSbx := shellEnv{
+		lookPath: func(string) (string, error) { return "", fmt.Errorf("not found") },
+		run:      func(string, ...string) (string, error) { return "", nil },
+	}
+	if !localImageLoaded(noSbx, "local-222") {
+		t.Error("must fail open (true) when sbx is unavailable")
+	}
+	// ls error -> fail OPEN (true).
+	lsErr := shellEnv{
+		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
+		run:      func(string, ...string) (string, error) { return "", fmt.Errorf("boom") },
+	}
+	if !localImageLoaded(lsErr, "local-222") {
+		t.Error("must fail open (true) when `sbx template ls` errors")
+	}
+	// Empty ls output -> no signal -> fail OPEN (true).
+	empty := shellEnv{
+		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
+		run:      func(string, ...string) (string, error) { return "   \n", nil },
+	}
+	if !localImageLoaded(empty, "local-222") {
+		t.Error("must fail open (true) when ls output is empty")
+	}
+	// Store fully pruned (non-empty ls, tag absent) -> REFUSE (would otherwise pull).
+	pruned := shellEnv{
+		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
+		run:      func(string, ...string) (string, error) { return "REPOSITORY TAG ID\nother/img latest xyz\n", nil },
+	}
+	if localImageLoaded(pruned, "local-222") {
+		t.Error("must refuse when the tag is absent from a non-empty store (pruned)")
 	}
 }

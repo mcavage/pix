@@ -3,21 +3,17 @@
 pi-stack \- run the pi coding agent in a Docker sandbox and manage its host services
 .SH SYNOPSIS
 .B pi-stack
-.RI [ \-\-profile\ NAME ]
 .br
 .B pi-stack
-.RI [ \-\-profile\ NAME ]
 .B run
 .RI [ DIR ]
 .RI [ flags ]
 .RI [ \-\- " pi-args..." ]
 .br
 .B pi-stack
-.RI [ \-\-profile\ NAME ]
 .I DIR
 .br
 .B pi-stack
-.RI [ \-\-profile\ NAME ]
 .I command
 .RI [ args ]
 .SH DESCRIPTION
@@ -36,7 +32,7 @@ shows status.  It never launches a sandbox.  Launching is explicit through
 or through the bare existing-directory form.  On a host without a configuration
 file, the no-argument form points you at
 .B pi-stack run
-(which offers conversational onboarding on the first run).
+(which launches a normal session without onboarding).
 A bare non-directory word is an error, not a workspace name.
 .SH PREREQUISITES
 Two things are required before an agent can run:
@@ -47,62 +43,102 @@ The Docker Sandboxes CLI must be installed and on
 It creates and runs the sandbox and injects provider keys through its network
 proxy.
 .TP
-At least one provider key
-The agent needs at least one model provider.  Keys are stored on the host as
+.BR op (1)
+Guided setup prefers the 1Password CLI, signed in.  It validates references
+for Anthropic, OpenAI, and Google, stores only those references in pi-stack,
+and reconciles the resolved values into host-managed
 .B sbx
-secrets and injected into every sandbox by the proxy; they never appear in a
-configuration file or inside the sandbox.  Set one with, for example:
-.PP
-.nf
-.RS
-sbx secret set -g anthropic -t "sk-..."
-.RE
-.fi
+secrets.  Resolved keys are never written to pi-stack configuration or shown
+in its output.  When sbx already has all three provider keys, setup can
+instead trust them for a run and skip 1Password entirely; see
+.B \-\-use\-sbx\-keys
+under
+.B setup
+below.  A working sbx is enough to start; 1Password stays the recommended
+path for a durable, portable credential source.
 .SH QUICK START
-The shortest path from nothing to a working agent:
+The shortest path from nothing to a fully configured agent:
 .PP
 .nf
 .RS
 curl -fsSL https://raw.githubusercontent.com/mcavage/pi-stack/main/install.sh | sh
-sbx secret set -g anthropic -t "sk-..."
-pi-stack run
+pi-stack setup
 .RE
 .fi
 .PP
-Set at least one provider key, then
-.B run
-launches the sandbox and drops you into the agent.  On the first run the agent
-offers to onboard you (opt-in); decline and you get a normal session.
-.SH ONBOARDING
-Onboarding is OPT-IN and happens IN-SESSION: the agent offers it on the first
+.B setup
+configures the host, sources the three provider keys (preferring 1Password;
+accepting a complete existing sbx key set via
+.B \-\-use\-sbx\-keys
+or a one-time prompt instead; see
+.B setup
+below), and creates the
+default pack every time.  On a fresh machine (no sandbox exists yet) it also
+launches the one-shot onboarding tour; if a sandbox already exists for the
+directory it is left alone by default (never force-removed, never replayed
+into a live session) unless
+.B \-\-replace
+is given, and if sbx cannot even be probed setup fails closed after the host
+phase.  Later,
 .B pi-stack run
-(say "onboard me" any time to redo it).  It seeds your identity and preferences
-into the memory service (so future sessions recall you) and may propose
-host-config changes by writing
+launches or reattaches a normal session without replaying onboarding.
+.SH ONBOARDING
+Onboarding is EXPLICIT, by name:
+.B pi-stack setup
+is the real two-phase entry (see its own section below); it hands off to a
+ONE-SHOT guided tour up front, not a progressive teach-as-you-go flow (say
+"onboard me" to the agent inside a running sandbox to redo the tour any
+time).  Setup's host phase seeds your identity (read from git's global
+config) into the trusted host-state payload injected directly into the
+launcher-generated kickoff prompt, deterministically, and best-effort into
+the memory service — setup reports honestly which of the two actually
+happened.  The in-session tour reads that trusted payload (never a workspace
+file) and tells you the exact HOST command for anything not yet configured;
+it does not write host config on your behalf.  (Separately, if a
 .B .pi-stack/onboarding.json
-in the workspace, which the host validates against an allowlist and applies
-under a confirmation gate on the next run.
+proposal file exists in the workspace, the host validates it against an
+allowlist and applies it under a confirmation gate on the next run.)
 .PP
-.B run
-never forces onboarding.  Provider keys,
+.B pi-stack run
+on its own NEVER onboards and never forces it — its only concession is
+bootstrapping a model key when none is set at all (resolving your 1Password
+refs into sbx, steering you to 1Password on a TTY).  Provider keys,
 .BR serve ,
 and the memory service are host-side prerequisites.  For automation and CI,
 .B pi-stack onboard
-applies deterministic host config from flags without a sandbox or a prompt (the
-former
+applies deterministic host config from flags without a sandbox or a prompt and
+without the agent handoff
 .B pi-stack setup
-is a deprecated alias for it; the interactive wizard was removed).
+does.
 .SH CREDENTIAL MODEL
 There are two distinct kinds of secret, and they live in different places.
 .PP
-Provider keys (Anthropic, OpenAI, Google, GitHub) are
+Provider keys (Anthropic, OpenAI, Google, GitHub) are injected into every
+sandbox by the network proxy from
 .B sbx
-secrets stored on the host and injected into every sandbox by the network proxy.
-They never appear in a configuration file or inside the sandbox.  Manage them
-with
-.BR sbx ,
-not with
-.BR pi-stack .
+secrets stored on the host.  By default the model keys are sourced from
+1Password:
+.B pi-stack setup
+collects an
+.B op://
+ref per provider, mirrors the refs into
+.B op-refs.env
+(sandbox) and
+.B hostmode.env
+(host mode), and reconciles the sbx secrets to match — 1Password is the
+source of truth, sbx is where the proxy reads from.  Key values never appear
+in a configuration file or inside the sandbox.  You can still set an sbx
+secret by hand, but a later
+.B pi-stack setup
+will reconcile it against your 1Password refs unless you skip that with
+.B \-\-use\-sbx\-keys
+(or accept the one-time prompt offered when sbx already has all three keys
+and no ref is configured yet).  Skipping 1Password wires the sandbox from the
+existing sbx keys as-is; it never deletes a ref or synced record, it just
+doesn't use one this run, and host mode stays local/Ollama-only until
+.B op://
+refs are configured in
+.BR hostmode.env .
 .PP
 Integration credentials (for host MCP servers such as Slack) are 1Password
 references kept in
@@ -149,9 +185,13 @@ keeps one (e.g. the box you are in).
 .TP
 .BR "pi-stack onboard" " [" \-\-account " " email "] [" \-\-knowledge " " path-or-url "] [" \-\-mcp " " name "] [" \-\-model " " ollama-model "] [" \-\-apply "] [" \-\-yes "]"
 Host-side onboarding: the deterministic HOST configuration and the flag-driven
-path for automation and CI.  The CONVERSATIONAL onboarding is in-session — run
+path for automation and CI, with NO agent handoff.
 .B pi-stack run
-(it offers onboarding on the first run) or say "onboard me" to the agent.
+never auto-onboards on its own — it stays out of your way (it only auto-
+provisions a bare-minimum model key when none is set at all). Use
+.B pi-stack setup
+for the guided, in-session flow, or say "onboard me" to the agent inside a
+running sandbox.
 .B \-\-account
 sets the Google Workspace account and enables gog.
 .B \-\-knowledge
@@ -169,9 +209,82 @@ agent writes), under a confirmation gate.
 (alias
 .BR \-\-non-interactive )
 never prompts.
-The former
-.B pi-stack setup
-is a deprecated alias for this command; the interactive wizard is gone.
+.SS setup
+.TP
+.BR "pi-stack setup" " [" DIR "] [" \-\-replace "] [" \-\-use\-sbx\-keys "] [" \-\-account " " email "] [" \-\-knowledge " " path-or-url "] [" \-\-mcp " " name "] [" \-\-model " " ollama-model "] [" \-\-yes "]"
+Actually sets you up: a real, two-phase command, not a deprecated alias for
+.BR "pi-stack onboard" .
+Phase 1 (host) ALWAYS runs first, even on a repeat invocation: it sources
+model-provider keys, PREFERRING 1Password (wiring both the sandbox and host
+mode; see
+.BR "pi-stack secret" ),
+ensures memory, creates your default pack, and provisions + enables host mode
+when the host can run
+.BR pi .
+An ordinary value flag
+.RB ( \-\-account ,
+.BR \-\-knowledge ,
+.BR \-\-mcp ,
+.BR \-\-model )
+does NOT suppress the interactive key prompts; only
+.B \-\-yes
+(alias
+.BR \-\-non-interactive )
+does.  It does NOT imply
+.BR \-\-use\-sbx\-keys .
+.PP
+Two ways to skip 1Password for a run instead, trusting sbx's existing keys.
+Both require an EXACT successful sbx probe reporting all three provider keys
+(anthropic, openai, google); an absent, erroring, or incomplete sbx fails with
+a clear message.  Neither ever deletes an existing ref or synced record; it
+simply isn't used this run.
+.RS
+.IP \(bu 2
+.B \-\-use\-sbx\-keys
+(explicit, works interactively or headless): trusts sbx outright and skips
+every 1Password install/signin/ref/reconciliation step.  Wins even if
+provider refs already exist.
+.IP \(bu 2
+Interactive convenience (no flag, offered ONCE): when sbx already has all
+three keys AND no provider ref is configured yet, setup asks
+.PP
+.RS
+sbx already has anthropic, openai, and google.  Use those keys and skip
+1Password-backed host credentials? [Y/n]:
+.RE
+.PP
+Default Enter is yes.  Declining falls through to the strict 1Password flow
+with no further retries.  Once any provider ref exists, or non-interactively,
+this prompt never appears; setup goes straight to the strict flow.
+.RE
+.PP
+Skipping 1Password wires the sandbox fully from the existing sbx keys; it does
+NOT claim setup is always cloud-ready.  Host mode still reaches cloud models
+only through
+.B op://
+refs in
+.BR hostmode.env ,
+so it stays local/Ollama-only (a legitimate result, not an error) until you
+configure those refs.  Setup never asks for refs again later in the same run.
+Phase 2 (agent) depends on the sandbox state for DIR, and only a POSITIVE
+answer acts: a confirmed-ABSENT sandbox gets a fresh launch handed off to a
+ONE-SHOT guided tour (not progressive/teach-as-you-go); a confirmed-EXISTING
+sandbox without
+.B \-\-replace
+is left alone — never force-removed, never replayed into a live session —
+and setup instead prints
+.B "pi-stack run [DIR]"
+(reattach as-is; the sandbox keeps its create-time pack/MCP/skills) or
+.B "pi-stack setup [DIR] \-\-replace"
+(recreate with your current settings and receive the tour).  With
+.B \-\-replace
+setup relaunches through
+.B "run \-\-replace"
+carrying the tour kickoff, so the recreated sandbox actually gets it
+(\-\-replace is harmless when the sandbox is absent).  If the sandbox state
+cannot be determined at all (sbx errored or is missing), setup FAILS CLOSED
+after the host phase — it never launches blind — and tells you to fix sbx
+and re-run.
 .SS doctor
 .TP
 .BR "pi-stack doctor" " [" \-\-json "]"
@@ -621,28 +734,31 @@ Execute
 If
 .B sbx
 is unavailable, print the command to run on the host.
-.SS profile
-The aliases
-.B list
-and
-.B set
-map to
-.B ls
-and
-.BR use .
+.SS pack
+A pack is a git-backed context bundle (skills + knowledge + reference-only
+integrations + config).  See
+.B docs/design/packs.md .
 .TP
-.BR "pi-stack profile ls" " [" \-\-json "]"
-List configured profiles and mark the active profile.  With no profile
-subcommand, this is the default action.
+.BR "pi-stack pack new" " [" PATH "]"
+Adopt a pre-existing repo (or one already carrying pack.toml) as a pack, else
+git-init a fresh one.  Default PATH is the default pack root.
 .TP
-.BR "pi-stack profile use" " " name
-Persist
-.I name
-as
-.BR active_profile .
-The name must already exist.  Use
+.BR "pi-stack pack add" " " "skill|knowledge" " " name " [" PATH "]"
+Add an artifact to a pack (implicit-creates it).
+.TP
+.BR "pi-stack pack use" " " path-or-git-url-or-default
+Set the active pack; a git URL is cloned (optional #ref pin).
 .B default
-to select the base configuration.
+is a built-in alias for the default pack root (not
+.IR $PWD/default );
+.B personal
+also works as a deprecated alias (prints a deprecation warning).
+.TP
+.BR "pi-stack pack ls" ;
+.BR "pi-stack pack show" " [" PATH "];"
+.BR "pi-stack pack rm"
+Inspect the active pack, show a pack, or detach the active pack (files
+untouched).
 .SS secret
 With no subcommand,
 .B secret
@@ -716,6 +832,7 @@ Base keys are
 .BR memory_watcher_model ,
 .BR memory_embed_model ,
 .BR ollama_bridge_model ,
+.BR provider_key_mode ,
 .BR host.enabled ,
 .BR host.autonomy ,
 and
@@ -723,6 +840,13 @@ and
 .B ollama_bridge_model
 is the local model the sandbox exposes to pi and the router's local option;
 by default the memory watcher shares it.
+.B provider_key_mode
+records which provider-key source (
+.I sbx
+or
+.IR 1password )
+.B setup
+last used successfully, so a repeat run reuses that choice with no prompt.
 .B host.enabled
 gates the unsandboxed
 .B "pi-stack host"
@@ -929,45 +1053,6 @@ can be piped or redirected.  The global alias
 .B \-\-man
 is accepted anywhere on the command line.
 .SH OPTIONS
-.TP
-.BI \-\-profile " NAME"
-Select a named profile.  The option may appear before or after the command, but
-must appear before a
-.B \-\-
-argument terminator.  The
-.BI \-\-profile= NAME
-form is also accepted.  An empty profile name is an error.  Commands that resolve a profile reject an
-unknown name.  A profile-scoped
-.B "config set"
-or
-.B "config unset"
-may instead create the named profile.  Backup, restore, global knowledge
-init/use, config show/path, setup, serve, version, and lifecycle file movement
-are not profile-scoped.  For profile-aware commands, the option selects the
-context used by run, status, doctor, memory RPCs, knowledge query/list/sync,
-MCP registration, and profile configuration writes.
-.SH PROFILES
-A profile is a named override set layered on the base configuration.  It may
-override
-.BR gog_account ,
-.BR mcp ,
-.BR knowledge_bundles ,
-and
-.BR kits.stack .
-A present list replaces the base list; an absent list inherits it.  The implicit
-.B default
-profile is the base configuration.
-.PP
-Selection precedence is:
-.B \-\-profile
-first,
-.B PI_STACK_PROFILE
-second,
-.B active_profile
-from configuration third, and
-.B default
-last.  The host supervisor indexes the union of knowledge bundles from all
-profiles; queries are scoped to the selected profile.
 .SH FILES
 .SS "Configuration tree"
 .TP
@@ -1029,9 +1114,6 @@ Committed per-project knowledge bundle pointer.
 .B .pi-stack/knowledge.scope
 Launcher-generated canonical bundle scope for the current run.
 .TP
-.B .pi-stack/profile
-Launcher-generated active memory profile for the current run.
-.TP
 .B ~/.local/bin/pi-stack
 Installed launcher symlink removed by
 .BR uninstall .
@@ -1056,11 +1138,6 @@ Use
 as the configuration directory when
 .B PI_STACK_CONFIG
 is unset.
-.TP
-.B PI_STACK_PROFILE
-Select a profile when
-.B \-\-profile
-is absent.
 .TP
 .B PI_STACK_DEV_ROOT
 Directory of a pi-stack checkout used by

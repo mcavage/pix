@@ -14,8 +14,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"pi-stack/host/config"
 )
 
 // --- pure helpers -----------------------------------------------------------
@@ -88,8 +86,9 @@ func TestTaskSandboxName(t *testing.T) {
 	if got := taskSandboxName("myrepo", "abcd1234", "fix-login", ""); got != "pi-stack-t-myrepo-abcd1234-fix-login" {
 		t.Errorf("empty profile: got %q", got)
 	}
-	if got := taskSandboxName("myrepo", "abcd1234", "fix login", "work"); got != "pi-stack-t-myrepo-abcd1234-fix-login-work" {
-		t.Errorf("named profile: got %q", got)
+	// Profiles were removed: the profile arg is ignored, never a name suffix.
+	if got := taskSandboxName("myrepo", "abcd1234", "fix login", "work"); got != "pi-stack-t-myrepo-abcd1234-fix-login" {
+		t.Errorf("profile arg must be ignored: got %q", got)
 	}
 }
 
@@ -571,17 +570,17 @@ func TestParseTaskNewArgs_RejectsDashFrom(t *testing.T) {
 func TestHardenTaskMeta_RejectsMismatchedName(t *testing.T) {
 	// The stored name must sanitize back to the file base, else the file was
 	// renamed or hand-edited.
-	if _, err := hardenTaskMeta(taskMeta{Name: "evil", Profile: config.DefaultProfile}, "/main", "abcd1234", false, "work"); err == nil {
+	if _, err := hardenTaskMeta(taskMeta{Name: "evil", Profile: "default"}, "/main", "abcd1234", false, "work"); err == nil {
 		t.Error("mismatched name should be rejected")
 	}
-	m, err := hardenTaskMeta(taskMeta{Name: "work", Profile: config.DefaultProfile, Branch: "pi-stack/../../heads/main", Sandbox: "sneaky"}, "/main", "abcd1234", false, "work")
+	m, err := hardenTaskMeta(taskMeta{Name: "work", Profile: "default", Branch: "pi-stack/../../heads/main", Sandbox: "sneaky"}, "/main", "abcd1234", false, "work")
 	if err != nil {
 		t.Fatalf("valid name should pass: %v", err)
 	}
 	if m.Branch != "pi-stack/work" {
 		t.Errorf("branch = %q, want re-derived pi-stack/work", m.Branch)
 	}
-	if m.Sandbox != taskSandboxName("main", "abcd1234", "work", config.DefaultProfile) {
+	if m.Sandbox != taskSandboxName("main", "abcd1234", "work", "default") {
 		t.Errorf("sandbox = %q, want re-derived", m.Sandbox)
 	}
 	if m.Mainroot != "/main" {
@@ -616,7 +615,7 @@ func TestTaskMeta_TamperedBranchNeverTargetsMainRef(t *testing.T) {
 	}
 
 	// A tampered branch that, un-hardened, would resolve a fetch onto refs/heads/main.
-	tampered := taskMeta{Name: "work", Profile: config.DefaultProfile, Branch: "pi-stack/../../heads/main", Sandbox: "x", Mainroot: main}
+	tampered := taskMeta{Name: "work", Profile: "default", Branch: "pi-stack/../../heads/main", Sandbox: "x", Mainroot: main}
 	before := strings.TrimSpace(tgit(t, main, "rev-parse", "refs/heads/main"))
 
 	hardened, err := hardenTaskMeta(tampered, main, taskRepoKey(main), false, "work")
@@ -880,7 +879,7 @@ func TestRunTaskLs_UnknownStateSurfaced(t *testing.T) {
 	co, metaPath := taskPaths(repokey, "work")
 	makeTaskClone(t, main, co, "pi-stack/work", "HEAD")
 	if err := writeTaskMeta(metaPath, taskMeta{
-		Name: "work", Mode: "localclone", Profile: config.DefaultProfile, Branch: "pi-stack/work",
+		Name: "work", Mode: "localclone", Profile: "default", Branch: "pi-stack/work",
 	}); err != nil {
 		t.Fatalf("writeTaskMeta: %v", err)
 	}

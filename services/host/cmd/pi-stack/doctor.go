@@ -45,6 +45,12 @@ type shellEnv struct {
 	// writeFile writes data to path (creating parent dirs). Nil in tests so
 	// seeding stays hermetic; defaultShellEnv wires the real os-backed writer.
 	writeFile func(path string, data []byte, perm os.FileMode) error
+	// flock serializes a cross-process critical section on lockPath (an
+	// advisory exclusive file lock). Nil in tests, which run fn directly so
+	// hermetic unit tests never create a real lock file (the lock path derives
+	// from defaultOpRefsPath, which those tests fake anyway); defaultShellEnv
+	// wires the real blocking withFlock. See withProviderRefsLock.
+	flock func(lockPath string, fn func() error) error
 	// probe runs an UNTRUSTED registered command with a hard timeout + capped
 	// output, so doctor never hangs (or floods) on a misbehaving MCP server. It
 	// returns (output, timedOut, err). Nil in tests, which fall back to run so
@@ -138,12 +144,21 @@ func defaultShellEnv() shellEnv {
 			}
 			return fi.Mode(), true
 		},
+		// writeFile is LEAF-symlink-safe (parent-directory symlinks are a
+		// separate, honestly out-of-scope concern — see atomicWriteInDir's doc
+		// comment): the destination is never opened directly, so a leaf that is
+		// itself a symlink is REPLACED by an atomic same-directory temp file +
+		// rename, never followed/truncated through. Parent creation stays 0700
+		// (unchanged perm posture). Shared with writeWorkspaceStateFile's exact
+		// mechanism (workspacestate.go) so there is one hardened writer, not two.
 		writeFile: func(path string, data []byte, perm os.FileMode) error {
-			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			dir := filepath.Dir(path)
+			if err := os.MkdirAll(dir, 0o700); err != nil {
 				return err
 			}
-			return os.WriteFile(path, data, perm)
+			return atomicWriteInDir(dir, filepath.Base(path), data, perm)
 		},
+		flock: withFlock,
 		probe: runWithTimeout,
 	}
 }
@@ -1348,7 +1363,7 @@ func runDoctorCmd(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack doctor: %v\n\n%s", err, doctorUsage)
 		os.Exit(2)
 	}
-	cfg, profile, err := loadResolvedConfig()
+	cfg, _, err := loadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack doctor: %v\n", err)
 		os.Exit(1)
@@ -1357,11 +1372,8 @@ func runDoctorCmd(argv []string) {
 	r.services = cfg.Services
 	r.mcp = cfg.MCP
 	if jsonOut {
-		_ = writeJSONOut(os.Stdout, r.jsonView(profile))
+		_ = writeJSONOut(os.Stdout, r.jsonView(""))
 		return
-	}
-	if profile != config.DefaultProfile {
-		fmt.Fprintf(os.Stdout, "profile: %s\n\n", profile)
 	}
 	r.render(os.Stdout)
 }

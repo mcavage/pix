@@ -11,17 +11,6 @@ import (
 	"pi-stack/host/config"
 )
 
-// containsStr reports whether list contains s (test helper, formerly in
-// setup_test.go).
-func containsStr(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
 // captureSave returns a save func that records the last saved config.
 func captureSave(dst **config.Config) func(*config.Config) error {
 	return func(c *config.Config) error { *dst = c; return nil }
@@ -33,13 +22,11 @@ func noHostResolver() (string, error) { return "", fmt.Errorf("no host binary in
 
 func TestValidateOnboarding_Allowlist(t *testing.T) {
 	cfg := defaultCfg()
-	cfg.Profiles = map[string]config.Profile{"work": {}}
 	env := fakeEnv{present: map[string]bool{}}.env()
 
 	ok := []*onboardingResult{
 		{Version: 1, GogAccount: "me@x.com", MCP: []string{"gog"}},
 		{Version: 1, MCP: []string{"notion", "linear"}},
-		{Version: 1, ActiveProfile: "work"},
 		{Version: 1, Knowledge: &onboardKnowledge{Action: "skip"}},
 	}
 	for i, r := range ok {
@@ -51,7 +38,6 @@ func TestValidateOnboarding_Allowlist(t *testing.T) {
 	bad := map[string]*onboardingResult{
 		"bad version":       {Version: 2},
 		"unknown mcp":       {Version: 1, MCP: []string{"evil-server"}},
-		"unknown profile":   {Version: 1, ActiveProfile: "ghost"},
 		"bad kb action":     {Version: 1, Knowledge: &onboardKnowledge{Action: "nuke", Source: "/x"}},
 		"kb missing source": {Version: 1, Knowledge: &onboardKnowledge{Action: "use"}},
 		"model whitespace":  {Version: 1, OllamaBridgeModel: "bad model"},
@@ -131,31 +117,25 @@ func TestParseOnboardArgs(t *testing.T) {
 	}
 }
 
-// TestOnboardOfferMarkerConst guards the marker/file names the extension + host
-// agree on (a rename must be deliberate).
-func TestOnboardOfferMarkerConst(t *testing.T) {
-	if onboardingOfferMarker != "onboarding.offer" || onboardingFileName != "onboarding.json" {
-		t.Errorf("marker/file names changed: %q / %q", onboardingOfferMarker, onboardingFileName)
-	}
-	if !strings.HasSuffix(onboardingFileName, ".json") {
-		t.Error("onboarding file must be json")
+// TestOnboardingFileNameConst guards the reconcile file name (a rename must be
+// deliberate).
+func TestOnboardingFileNameConst(t *testing.T) {
+	if onboardingFileName != "onboarding.json" || !strings.HasSuffix(onboardingFileName, ".json") {
+		t.Errorf("onboarding file name changed: %q", onboardingFileName)
 	}
 }
 
-func TestIsInteractiveLaunch(t *testing.T) {
-	cases := []struct {
-		pass []string
-		want bool
-	}{
-		{nil, true},
-		{[]string{"--model", "x"}, true},
-		{[]string{"-p", "do a thing"}, false},
-		{[]string{"--print"}, false},
-		{[]string{"--print=hi"}, false},
+// TestFlagTakesValue guards the onboard-flag arity setup uses to split DIR from
+// value-bearing flags.
+func TestFlagTakesValue(t *testing.T) {
+	for _, f := range []string{"--account", "--knowledge", "--mcp", "--model"} {
+		if !flagTakesValue(f) {
+			t.Errorf("%s should take a value", f)
+		}
 	}
-	for _, c := range cases {
-		if got := isInteractiveLaunch(c.pass); got != c.want {
-			t.Errorf("isInteractiveLaunch(%v) = %v, want %v", c.pass, got, c.want)
+	for _, f := range []string{"--help", "-h", "--yes", "--account=x"} {
+		if flagTakesValue(f) {
+			t.Errorf("%s should NOT consume a following token", f)
 		}
 	}
 }

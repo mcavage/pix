@@ -15,7 +15,7 @@
 //	pi-stack version                   print the stamped version (full)
 //	pi-stack config show|path          show config path + contents (full)
 //	pi-stack serve [args…]             exec the sibling pi-stack-host serve (full)
-//	pi-stack status|doctor|setup|mcp|memory|knowledge|profile   (all implemented)
+//	pi-stack status|doctor|setup|mcp|memory|knowledge|pack   (all implemented)
 //	pi-stack reset|uninstall           (destructive, reversible: state moved aside)
 //	pi-stack help [verb]               print the verb tree (or one verb's usage)
 package main
@@ -33,14 +33,7 @@ import (
 var version = "dev"
 
 func main() {
-	// A global `--profile <name>` may appear before the subcommand; pull it out
-	// first so both `pi-stack --profile work run` and `pi-stack run --profile work`
-	// work. flagProfile is consumed by loadResolvedConfig / run.
-	args, perr := extractProfileFlag(os.Args[1:])
-	if perr != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack: %v\n", perr)
-		os.Exit(2)
-	}
+	args := os.Args[1:]
 
 	// A global `--man` may appear anywhere on the command line (before a `--`
 	// terminator): render the embedded man page and exit. It is DISTINCT from the
@@ -88,12 +81,14 @@ func main() {
 	case "onboard":
 		runOnboardCmd(args[1:])
 	case "setup":
-		// Deprecated alias: the interactive wizard is gone; onboarding is in-session
-		// (`pi-stack run`), and the flag-driven host-config path is `pi-stack onboard`.
-		fmt.Fprintln(os.Stderr, "pi-stack: `setup` is deprecated; use `pi-stack onboard` (conversational onboarding is in-session via `pi-stack run`).")
-		runOnboardCmd(args[1:])
+		// Explicit guided onboarding: host phase, then hand off to the in-VM agent.
+		// (`pi-stack run` never onboards on its own; `pi-stack onboard` is the
+		// host-only, no-handoff path for CI.)
+		runSetupCmd(args[1:])
 	case "mcp":
 		runMcpCmd(args[1:])
+	case "pack":
+		runPackCmd(args[1:])
 	case "secret":
 		runSecretCmd(args[1:])
 	case "memory", "mem":
@@ -118,8 +113,6 @@ func main() {
 		runAgent(args[1:])
 	case "man":
 		runMan(args[1:])
-	case "profile":
-		runProfile(args[1:])
 	case "reset":
 		runReset(args[1:])
 	case "uninstall":
@@ -197,10 +190,11 @@ func classifyBareArg(a string) (msg string, launch bool) {
 
 // runVerb handles the `run` verb and the bare-DIR alias. It short-circuits to
 // run usage on a -h/--help request, then launches. It deliberately NEVER runs
-// onboarding (constraint: `pi-stack run` just gives the agent to the user);
-// the opt-in onboarding offer is delivered IN-SESSION by the agent (runRun
-// drops the first-run marker the `onboarding` extension reads). Only the bare
-// `pi-stack` status path nudges a config-less host toward `run`.
+// onboarding (owner constraint: `pi-stack run` just gives the agent to the
+// user); it auto-provisions a model key only if none exists (else it can't
+// launch), and otherwise stays out of the way. The guided onboarding is the
+// explicit `pi-stack setup`, which does the host phase then launches a normal
+// `run` handing the agent a short kickoff message to begin the walkthrough.
 func runVerb(argv []string) {
 	if wantsHelp(argv) {
 		fmt.Print(runUsage)
@@ -284,6 +278,8 @@ flags:
                    pin, so you can work around an unresolvable release tag
                    (repeatable; a path or git+URL)
   --mcp M          attach an MCP server at creation (repeatable)
+  --pack P         active pack for this run (path or git-url); mounts its skills +
+                   knowledge, overriding the configured active pack
   --name N         sandbox name
   --model M        active pi model (passed through to pi)
   --intent NAME    resolve the session model via the router (cost/latency/accuracy);
@@ -318,7 +314,7 @@ Set PI_STACK_DEBUG=1 to print the composed sbx command.
 
 const helpText = `pi-stack — a personal, multi-model pi coding agent in a Docker sandbox.
 
-Usage:  pi-stack [--profile NAME] <command> [args]
+Usage:  pi-stack <command> [args]
 
 New here?   pi-stack setup      one-time guided setup (a few minutes, resumable)
 
@@ -329,7 +325,7 @@ Workflow
   status           what is up, what is down, what is next   (also the bare command)
 
 Setup & health
-  setup            guided setup: keys, memory, knowledge, integrations
+  setup            guided setup: keys, memory, pack (knowledge/integrations optional)
   doctor           diagnose problems and print the exact fix commands
 
 Data
@@ -344,5 +340,4 @@ More
   config, mcp, state, version, man     (see ` + "`pi-stack help --all`" + `)
 
 Learn a command:  pi-stack help run     ·     pi-stack <command> -h
-Global flag:      --profile NAME        run/read a named context (work, personal)
 `

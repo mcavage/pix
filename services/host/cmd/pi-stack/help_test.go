@@ -213,7 +213,7 @@ func TestMemoryHelp_NoRPC(t *testing.T) {
 }
 
 func TestVerbUsage_Routing(t *testing.T) {
-	for _, verb := range []string{"run", "memory", "knowledge", "config", "status", "profile", "doctor", "mcp", "serve", "setup", "version", "reset", "uninstall"} {
+	for _, verb := range []string{"run", "memory", "knowledge", "config", "status", "pack", "doctor", "mcp", "serve", "setup", "version", "reset", "uninstall"} {
 		u, ok := verbUsage(verb)
 		if !ok || strings.TrimSpace(u) == "" {
 			t.Errorf("verbUsage(%q) = (%q,%v), want non-empty usage", verb, u, ok)
