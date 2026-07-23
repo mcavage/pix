@@ -96,6 +96,17 @@ type Config struct {
 
 	MCP []string `toml:"mcp,omitempty"`
 
+	// MCPStatic / MCPDynamic set a server's attach mode. The DEFAULT is dynamic
+	// for every registered server (local stdio or remote): it sits behind the
+	// local gateway and the in-VM agent pulls it on demand via mcp-find/code-mode,
+	// keeping its tool schema out of context until needed. A server in MCPStatic
+	// is instead attached EAGERLY at CREATE (`--static-mcp`, tools always in
+	// context). MCPDynamic is the explicit opposite (already the default) and wins
+	// if a server is somehow in both. Type-independent: eager vs lazy, not
+	// local vs remote.
+	MCPStatic  []string `toml:"mcp_static,omitempty"`
+	MCPDynamic []string `toml:"mcp_dynamic,omitempty"`
+
 	MemoryWatcherModel string `toml:"memory_watcher_model,omitempty"`
 	MemoryEmbedModel   string `toml:"memory_embed_model,omitempty"`
 	OllamaBridgeModel  string `toml:"ollama_bridge_model,omitempty"`
@@ -620,6 +631,13 @@ func (c *Config) AddMCP(name string) bool { return addUnique(&c.MCP, name) }
 
 // RemoveMCP removes name from the MCP set, returning true when it changed.
 func (c *Config) RemoveMCP(name string) bool { return removeValue(&c.MCP, name) }
+
+// AddMCPStatic/RemoveMCPStatic and AddMCPDynamic/RemoveMCPDynamic manage the
+// per-server attach-mode override lists (see MCPStatic/MCPDynamic).
+func (c *Config) AddMCPStatic(name string) bool     { return addUnique(&c.MCPStatic, name) }
+func (c *Config) RemoveMCPStatic(name string) bool  { return removeValue(&c.MCPStatic, name) }
+func (c *Config) AddMCPDynamic(name string) bool    { return addUnique(&c.MCPDynamic, name) }
+func (c *Config) RemoveMCPDynamic(name string) bool { return removeValue(&c.MCPDynamic, name) }
 
 // AddService adds name to the Services set if absent, returning true when it
 // changed.

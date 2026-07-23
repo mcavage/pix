@@ -417,6 +417,43 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	return skippedErr
 }
 
+// resolveStaticMCP returns, order-preserving and de-duplicated, the subset of
+// `servers` to attach EAGERLY at create (emitted to sbx as --static-mcp; their
+// tools sit in context from the start).
+//
+// The DEFAULT is DYNAMIC for every registered server, regardless of kind: once a
+// server is registered (`pi-stack mcp register` / `sbx mcp add`) it's behind the
+// local gateway, and the in-VM agent discovers + calls it on demand via
+// mcp-find/mcp-exec/code-mode — the daemon spawns local stdio servers host-side
+// (with their op-run creds) exactly as it serves remotes, so local vs remote is
+// irrelevant here. This keeps heavy tool schemas out of context until needed.
+//
+// Two per-server override knobs (see cfg.MCPStatic/MCPDynamic): a server in
+// MCPStatic is pinned eager; MCPDynamic wins if a server is somehow in both
+// (explicit lazy beats explicit eager). No env/host probe needed — this is a
+// pure eager-vs-lazy choice, not a local-vs-remote one.
+func resolveStaticMCP(servers []string, cfg *config.Config) []string {
+	static := map[string]bool{}
+	for _, n := range cfg.MCPStatic {
+		static[n] = true
+	}
+	for _, n := range cfg.MCPDynamic {
+		delete(static, n) // MCPDynamic wins over MCPStatic
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, n := range servers {
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		if static[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // localMCPNames asks the pi-stack-host binary which MCP servers it can serve
 // locally (`pi-stack-host mcp --list`), the source of truth for local vs remote
 // registration. It returns the set of names and whether the list was obtained.

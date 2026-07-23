@@ -229,10 +229,11 @@ func TestBuildSbxArgs_StackWithoutOverride(t *testing.T) {
 }
 
 func TestBuildSbxArgs_MCPExpansion(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"slack", "notion"}}
-	// Configured MCP servers are emitted as --static-mcp (the sbx local gateway
-	// serves them; no SBX_MCP_URL gate anymore).
-	args := buildSbxArgs(cfg, runOpts{Workspace: ".", MCP: []string{"linear"}}, "0.0.99")
+	cfg := &config.Config{}
+	// buildSbxArgs emits --static-mcp for the RESOLVED static set (o.StaticMCP);
+	// the caller computes it via resolveStaticMCP. The sbx local gateway serves
+	// them, no SBX_MCP_URL.
+	args := buildSbxArgs(cfg, runOpts{Workspace: ".", StaticMCP: []string{"slack", "notion", "linear"}}, "0.0.99")
 
 	if got := countFlag(args, "--static-mcp"); got != 3 {
 		t.Errorf("expected 3 --static-mcp flags, got %d in %v", got, args)
@@ -244,6 +245,25 @@ func TestBuildSbxArgs_MCPExpansion(t *testing.T) {
 		if !contains(args, []string{"--static-mcp", m}) {
 			t.Errorf("--static-mcp %s missing from %v", m, args)
 		}
+	}
+}
+
+// resolveStaticMCP: default dynamic for every server; only mcp_static pins eager;
+// mcp_dynamic wins if a server is in both.
+func TestResolveStaticMCP(t *testing.T) {
+	// Default: nothing configured -> nothing static (all dynamic), local or remote.
+	if got := resolveStaticMCP([]string{"slack", "notion", "gog"}, &config.Config{}); len(got) != 0 {
+		t.Errorf("default must be all-dynamic (empty static set), got %v", got)
+	}
+	// mcp_static pins eager; mcp_dynamic wins over mcp_static; order preserved.
+	cfg := &config.Config{
+		MCPStatic:  []string{"slack", "notion"},
+		MCPDynamic: []string{"notion"}, // overrides its own static entry
+	}
+	got := resolveStaticMCP([]string{"gog", "slack", "notion", "atlassian"}, cfg)
+	// slack: static. notion: static-but-dynamic-override -> dropped. gog/atlassian: default dynamic.
+	if len(got) != 1 || got[0] != "slack" {
+		t.Errorf("resolveStaticMCP = %v, want [slack]", got)
 	}
 }
 

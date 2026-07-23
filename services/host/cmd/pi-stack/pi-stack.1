@@ -852,6 +852,8 @@ from a list key.
 Base keys are
 .BR gog_account ,
 .BR mcp ,
+.BR mcp_static ,
+.BR mcp_dynamic ,
 .BR services ,
 .BR knowledge_bundles ,
 .BR memory_watcher_model ,
@@ -861,6 +863,23 @@ Base keys are
 .BR host.autonomy ,
 and
 .BR host.autoserve .
+.B mcp_static
+and
+.B mcp_dynamic
+override a server's attach mode: a server in
+.B mcp_static
+is always attached at sandbox create
+.RB ( \-\-static\-mcp );
+one in
+.B mcp_dynamic
+is never statically attached (the in-VM agent pulls it via mcp-find/code-mode,
+or attach it live with
+.BR "pi-stack mcp load" ).
+The default is dynamic for every registered server (local or remote):
+.B mcp_static
+pins one eager, and
+.B mcp_dynamic
+wins if a server is in both.
 .B ollama_bridge_model
 is the local model the sandbox exposes to pi and the router's local option;
 by default the memory watcher shares it.

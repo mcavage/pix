@@ -170,11 +170,19 @@ user a diff.
   `config/mcp-catalog.bundle.json` set in one step, then `pi-stack mcp auth --all`
   does the hosted-control-plane OAuth. **The sandbox flag is `--static-mcp <name>`**
   (the fixed set chosen at CREATE; `--mcp` is gone — sbx rejects it). pi-stack's own
-  `pi-stack run --mcp M` CLI flag stays and translates to `--static-mcp`. A sandbox
-  gets its servers at create from the `mcp` list in `~/.config/pi-stack/config.toml`
-  (via `pi-stack config get mcp`, which also drives `serve`/`mcp-register`/`doctor`/
-  `pull-models`); to attach one to an ALREADY-RUNNING sandbox live (no recreate) use
-  `pi-stack mcp load <name>` (`sbx mcp load`). Add a server = a tool table + handlers + `run<Name>()` using `mcpStdio`
+  `pi-stack run --mcp M` CLI flag stays. Servers come from the `mcp` list in
+  `~/.config/pi-stack/config.toml` (via `pi-stack config get mcp`, which also drives
+  `serve`/`mcp-register`/`doctor`/`pull-models`). **Per-server attach mode**
+  (`resolveStaticMCP`): each configured server is either **static** (emitted as
+  `--static-mcp`, tools in context from create) or **dynamic** (omitted; the in-VM
+  agent discovers + calls it on demand via mcp-find/mcp-exec/code-mode). This is
+  eager-vs-lazy, **NOT local-vs-remote**: once a server is registered it's behind
+  the gateway, and mcp-find surfaces local stdio servers (the daemon spawns them
+  host-side with their op-run creds) exactly like remotes — verified. The
+  **default is dynamic** for every server (lean context); pin one eager with
+  `mcp_static`, and `mcp_dynamic` wins if a server is in both. Attach one to an
+  ALREADY-RUNNING sandbox live (no recreate) with `pi-stack mcp load <name>`
+  (`sbx mcp load`). Add a server = a tool table + handlers + `run<Name>()` using `mcpStdio`
   (newline-delimited JSON — what the gateway speaks; tolerates Content-Length on
   input). Transports live in `services/host/util.go`.
   - **Do NOT** hand-bake `url`/`command` entries into `mcp.json` pointing at

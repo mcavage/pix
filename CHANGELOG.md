@@ -51,11 +51,16 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 - **MCP migrated to sbx's nightly gateway.** The sandbox flag is now
   `--static-mcp` (sbx removed `--mcp`), and MCP runs through sbx's **local
-  data-plane gateway** — always available, **no `SBX_MCP_URL`** needed. pi-stack
-  now emits `--static-mcp` for every configured server unconditionally (dropped
-  the old SBX_MCP_URL gate + "gateway off" warning) and no longer requires
-  `SBX_MCP_URL` for `pi-stack mcp register`. pi-stack's own `pi-stack run --mcp M`
-  CLI flag is unchanged (it translates to `--static-mcp`). New:
+  data-plane gateway** — always available, **no `SBX_MCP_URL`** needed (dropped
+  the old SBX_MCP_URL gate + "gateway off" warning; `pi-stack mcp register` no
+  longer requires it). pi-stack's own `pi-stack run --mcp M` CLI flag is unchanged.
+  **Per-server attach mode:** a configured server is attached eagerly at create
+  (`--static-mcp`, tools always in context) or left dynamic (the in-VM agent
+  discovers + calls it on demand via mcp-find/mcp-exec/code-mode; the daemon
+  spawns local stdio servers host-side, so local and remote behave the same). The
+  **default is dynamic for every registered server** — keeps heavy tool schemas
+  out of context until needed. Pin a server eager with the new `mcp_static` list
+  (`mcp_dynamic` is the explicit opposite, and wins if a server is in both). New:
   - `pi-stack mcp load <name> [DIR]` — attach an already-registered server to a
     RUNNING sandbox live, no recreate (`sbx mcp load`).
   - `pi-stack mcp auth [args…]` — hosted-control-plane OAuth for remote servers
