@@ -123,10 +123,9 @@ guardrails (the host-guard extension, workspace checks) reduce accidents; they
 are NOT a security boundary. For anything you wouldn't hand a shell to, use
 ` + "`pi-stack run`" + `.
 
-Gated OFF by default. Provision first, THEN enable (the gate stays off until
-provisioning succeeds):
+Gated OFF by default. One command provisions AND enables it (the gate stays off
+unless provisioning succeeds):
   pi-stack host setup
-  pi-stack config set host.enabled true
 
 subcommands:
   setup            provision the host agent dir ($XDG_STATE_HOME/pi-stack/

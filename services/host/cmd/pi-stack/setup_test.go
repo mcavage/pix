@@ -128,8 +128,8 @@ func TestSetupHostPhase_NoKeyAborts(t *testing.T) {
 // flag must abort before setupProvisionKeysFn, with no 1Password prompt, ref
 // write, or sbx reconciliation for a request that cannot be applied.
 func TestSetupHostPhase_InvalidFlags_NeverInvokesProviderKeyFlow(t *testing.T) {
-	orig := provisionProviderKeysFn
-	t.Cleanup(func() { provisionProviderKeysFn = orig })
+	orig := setupProvisionKeysFn
+	t.Cleanup(func() { setupProvisionKeysFn = orig })
 
 	cases := []struct {
 		name  string
@@ -145,9 +145,9 @@ func TestSetupHostPhase_InvalidFlags_NeverInvokesProviderKeyFlow(t *testing.T) {
 			t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
 
 			invoked := false
-			provisionProviderKeysFn = func(shellEnv, io.Reader, io.Writer, bool, bool, bool, bool, string) providerKeySetupResult {
+			setupProvisionKeysFn = func(shellEnv, io.Reader, io.Writer, bool, bool) bool {
 				invoked = true
-				return providerKeySetupResult{OK: true, Mode: "1password"}
+				return true
 			}
 
 			var out bytes.Buffer
@@ -156,7 +156,7 @@ func TestSetupHostPhase_InvalidFlags_NeverInvokesProviderKeyFlow(t *testing.T) {
 				t.Fatalf("expected setupHostPhase to fail for flags %v", tc.flags)
 			}
 			if invoked {
-				t.Errorf("provisionProviderKeysFn must NEVER be invoked when flag validation fails (flags %v); no provider-key/ref/sbx work may run for a request that will be rejected", tc.flags)
+				t.Errorf("setupProvisionKeysFn must NEVER be invoked when flag validation fails (flags %v); no provider-key/ref/sbx work may run for a request that will be rejected", tc.flags)
 			}
 			if _, statErr := os.Stat(filepath.Join(dir, "config.toml")); !os.IsNotExist(statErr) {
 				t.Errorf("config.toml must not be written when flag validation fails, stat err = %v", statErr)
@@ -219,7 +219,7 @@ func TestSetupProvisionKeys_OpMissingNeverFailsOpen(t *testing.T) {
 		readFile: func(string) (string, error) { return "", os.ErrNotExist },
 	}
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false, false) {
+	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
 		t.Error("op missing must fail setup, never fail open")
 	}
 	if strings.Contains(out.String(), "Paste an op://") {
@@ -585,91 +585,62 @@ func withIdentityMemory(t *testing.T, m identityMemory) {
 	t.Cleanup(func() { newIdentityMemory = orig })
 }
 
-// All remember RPCs succeed: the output may claim the memory save, and always
-// names host state as the deterministic carrier.
+// The single first-name fact saves: the output claims the memory save and names
+// host state as the deterministic carrier. Only ONE fact is stored now (first
+// name, no surname, no email), so exactly one remember call fires.
 func TestSeedIdentity_AllSaved(t *testing.T) {
 	m := &fakeIdentityMemory{up: true}
 	withIdentityMemory(t, m)
 	var out bytes.Buffer
 	seedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
-	if len(m.calls) != 2 {
-		t.Fatalf("expected 2 remember calls, got %v", m.calls)
+	if len(m.calls) != 1 {
+		t.Fatalf("expected exactly 1 remember call (first name only), got %v", m.calls)
+	}
+	if !strings.Contains(m.calls[0], "first name is Mark") {
+		t.Errorf("stored fact must be the first name only, got: %q", m.calls[0])
+	}
+	if strings.Contains(m.calls[0], "email") || strings.Contains(m.calls[0], "m@x.com") {
+		t.Errorf("must NOT store email as a memory fact, got: %q", m.calls[0])
 	}
 	if !strings.Contains(out.String(), "Saved to memory and available to sessions via host state.") {
-		t.Errorf("full success must claim the memory save, got:\n%s", out.String())
+		t.Errorf("success must claim the memory save, got:\n%s", out.String())
 	}
-	if strings.ContainsRune(out.String(), '\u2014') {
+	if strings.ContainsRune(out.String(), '—') {
 		t.Errorf("user copy must not contain an em dash, got:\n%s", out.String())
 	}
 }
 
-// One of two remember RPCs fails: the output must be honest about the partial
-// save, never claim the full batch landed.
-func TestSeedIdentity_PartialSaveHonest(t *testing.T) {
-	m := &fakeIdentityMemory{up: true, fail: []string{"git email"}}
+// A remember call that returns NO ERROR but an EMPTY "id" (the daemon's real
+// no-op shape) must NOT count as a save; with one fact that's a full failure.
+func TestSeedIdentity_EmptyID_TreatedAsFailure(t *testing.T) {
+	m := &fakeIdentityMemory{up: true, emptyID: []string{"first name is"}}
 	withIdentityMemory(t, m)
 	var out bytes.Buffer
 	seedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
-	if !strings.Contains(out.String(), "Only 1 of 2 facts saved to memory") {
-		t.Errorf("partial failure must be reported honestly, got:\n%s", out.String())
+	if len(m.calls) != 1 {
+		t.Fatalf("expected 1 remember call, got %v", m.calls)
 	}
-	if strings.Contains(out.String(), "Saved to memory and") {
-		t.Errorf("partial failure must not claim the full save, got:\n%s", out.String())
-	}
-	if !strings.Contains(out.String(), "available to sessions via host state") {
-		t.Errorf("host state carrier is always true and must be stated, got:\n%s", out.String())
-	}
-}
-
-// item 9: a remember call that returns NO ERROR but an EMPTY "id" (the
-// daemon's real no-op response shape) must NOT be counted as a save — this
-// is the specific gap err==nil alone used to miss.
-func TestSeedIdentity_PartialEmptyID_NotCountedAsSaved(t *testing.T) {
-	m := &fakeIdentityMemory{up: true, emptyID: []string{"git email"}}
-	withIdentityMemory(t, m)
-	var out bytes.Buffer
-	seedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
-	if len(m.calls) != 2 {
-		t.Fatalf("expected 2 remember calls (both attempted), got %v", m.calls)
-	}
-	if !strings.Contains(out.String(), "Only 1 of 2 facts saved to memory") {
-		t.Errorf("a no-error-but-empty-id response must be treated exactly like a failed save, got:\n%s", out.String())
-	}
-	if strings.Contains(out.String(), "Saved to memory and") {
-		t.Errorf("must not claim the full save when one RPC returned no id, got:\n%s", out.String())
-	}
-}
-
-// item 9: when EVERY remember call returns no error but an empty id, that is
-// a full failure to persist, indistinguishable in outcome from every RPC
-// erroring outright — the same "could not save" message must fire.
-func TestSeedIdentity_AllEmptyID_TreatedAsFullFailure(t *testing.T) {
-	m := &fakeIdentityMemory{up: true, emptyID: []string{"name is", "git email"}}
-	withIdentityMemory(t, m)
-	var out bytes.Buffer
-	seedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
 	if !strings.Contains(out.String(), "Could not save to memory") {
-		t.Errorf("an all-empty-id batch must be reported as a full failure, got:\n%s", out.String())
+		t.Errorf("a no-error-but-empty-id response must be treated as a failed save, got:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), "Saved to memory") {
-		t.Errorf("must not claim any save when every result had an empty id, got:\n%s", out.String())
+		t.Errorf("must not claim a save when the RPC returned no id, got:\n%s", out.String())
 	}
 }
 
-// item 9: a successful remember call is counted ONLY via its result's actual
-// "id" field — the fake's success shape now mirrors the real daemon
-// (nonempty id), proving the counting path reads it rather than merely
-// checking err == nil.
+// A successful remember call is counted ONLY via its result's actual "id" field
+// (the fake mirrors the real daemon's nonempty id), proving the counting path
+// reads it rather than merely checking err == nil.
 func TestSeedIdentity_SuccessCountsViaPersistedID(t *testing.T) {
 	m := &fakeIdentityMemory{up: true}
 	withIdentityMemory(t, m)
 	var out bytes.Buffer
 	seedIdentity(gitIdentityEnv("Mark", "m@x.com"), &out)
-	if len(m.calls) != 2 {
-		t.Fatalf("expected 2 remember calls, got %v", m.calls)
+	if len(m.calls) != 1 {
+		t.Fatalf("expected 1 remember call, got %v", m.calls)
 	}
 	if !strings.Contains(out.String(), "Saved to memory and available to sessions via host state.") {
-		t.Errorf("a genuine nonempty-id result on every call must count as a full save, got:\n%s", out.String())
+		t.Errorf("a genuine nonempty-id result must count as a save, got:\n%s", out.String())
 	}
 }
 

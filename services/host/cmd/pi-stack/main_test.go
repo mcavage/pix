@@ -393,10 +393,13 @@ func TestAnyModelKeyPresent(t *testing.T) {
 func TestModelKeyMissingMessage(t *testing.T) {
 	f := fakeEnv{present: map[string]bool{"sbx": true}, output: map[string]string{"sbx secret ls": "github\n"}}
 	msg := modelKeyMissingMessage(f.env())
-	for _, want := range []string{"anthropic", "openai", "google", `sbx secret set -g anthropic -t "sk-..."`} {
+	for _, want := range []string{"anthropic", "openai", "google", "pi-stack setup", "op://vault/item/field"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("guidance missing %q, got:\n%s", want, msg)
 		}
+	}
+	if strings.Contains(msg, "sbx secret set -g") {
+		t.Errorf("op is the only source now; guidance must not suggest a direct `sbx secret set`, got:\n%s", msg)
 	}
 }
 

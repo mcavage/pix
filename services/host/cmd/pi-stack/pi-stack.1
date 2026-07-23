@@ -218,10 +218,11 @@ Phase 1 (host) ALWAYS runs first, even on a repeat invocation: it sources
 model-provider keys, PREFERRING 1Password (wiring both the sandbox and host
 mode; see
 .BR "pi-stack secret" ),
-ensures memory, creates your default pack, and provisions + enables host mode
-when the host can run
-.BR pi .
-An ordinary value flag
+ensures memory, and creates your default pack.  Provider keys come from
+1Password ONLY: the
+.B op
+CLI must be installed and signed in, or setup fails with the exact fix.  There
+is no "trust existing sbx keys" shortcut.  An ordinary value flag
 .RB ( \-\-account ,
 .BR \-\-knowledge ,
 .BR \-\-mcp ,
@@ -230,42 +231,18 @@ does NOT suppress the interactive key prompts; only
 .B \-\-yes
 (alias
 .BR \-\-non-interactive )
-does.  It does NOT imply
-.BR \-\-use\-sbx\-keys .
+does.
 .PP
-Two ways to skip 1Password for a run instead, trusting sbx's existing keys.
-Both require an EXACT successful sbx probe reporting all three provider keys
-(anthropic, openai, google); an absent, erroring, or incomplete sbx fails with
-a clear message.  Neither ever deletes an existing ref or synced record; it
-simply isn't used this run.
-.RS
-.IP \(bu 2
-.B \-\-use\-sbx\-keys
-(explicit, works interactively or headless): trusts sbx outright and skips
-every 1Password install/signin/ref/reconciliation step.  Wins even if
-provider refs already exist.
-.IP \(bu 2
-Interactive convenience (no flag, offered ONCE): when sbx already has all
-three keys AND no provider ref is configured yet, setup asks
-.PP
-.RS
-sbx already has anthropic, openai, and google.  Use those keys and skip
-1Password-backed host credentials? [Y/n]:
-.RE
-.PP
-Default Enter is yes.  Declining falls through to the strict 1Password flow
-with no further retries.  Once any provider ref exists, or non-interactively,
-this prompt never appears; setup goes straight to the strict flow.
-.RE
-.PP
-Skipping 1Password wires the sandbox fully from the existing sbx keys; it does
-NOT claim setup is always cloud-ready.  Host mode still reaches cloud models
-only through
+Setup validates one
 .B op://
-refs in
-.BR hostmode.env ,
-so it stays local/Ollama-only (a legitimate result, not an error) until you
-configure those refs.  Setup never asks for refs again later in the same run.
+ref per provider, mirrors them into
+.B hostmode.env
+(host mode) and reconciles them into sbx (the sandbox), so both worlds share
+the same source.  Host mode (pi UNSANDBOXED) is NOT provisioned or enabled by
+setup; it is opt-in via
+.B "pi-stack host setup"
+(which provisions AND enables it in one step \(em see
+.BR "pi-stack host" ).
 Phase 2 (agent) depends on the sandbox state for DIR, and only a POSITIVE
 answer acts: a confirmed-ABSENT sandbox gets a fresh launch handed off to a
 ONE-SHOT guided tour (not progressive/teach-as-you-go); a confirmed-EXISTING
@@ -377,8 +354,11 @@ directly on this machine \(em no sandbox, no network fence, real credentials.
 A narrow escape hatch for developing pi-stack itself (which needs the host's
 Docker, sbx, and make); never a fallback when
 .B sbx
-is missing.  Gated off by default: enable deliberately with
-.BR "pi-stack config set host.enabled true" .
+is missing.  Gated off by default: set it up deliberately with
+.BR "pi-stack host setup" ,
+which provisions the host agent AND enables the gate in one step (the gate
+stays off unless provisioning succeeds).  Turn it back off with
+.BR "pi-stack config set host.enabled false" .
 The launch refuses a workspace at
 .BR $HOME ,
 .BR / ,
@@ -859,7 +839,6 @@ Base keys are
 .BR memory_watcher_model ,
 .BR memory_embed_model ,
 .BR ollama_bridge_model ,
-.BR provider_key_mode ,
 .BR host.enabled ,
 .BR host.autonomy ,
 and
@@ -867,13 +846,6 @@ and
 .B ollama_bridge_model
 is the local model the sandbox exposes to pi and the router's local option;
 by default the memory watcher shares it.
-.B provider_key_mode
-records which provider-key source (
-.I sbx
-or
-.IR 1password )
-.B setup
-last used successfully, so a repeat run reuses that choice with no prompt.
 .B host.enabled
 gates the unsandboxed
 .B "pi-stack host"

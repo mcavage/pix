@@ -103,36 +103,28 @@ Typical first run:
 pi-stack setup
 ```
 
-Setup prefers a signed-in 1Password CLI: it validates references for
+Setup requires a signed-in 1Password CLI (`op`): it validates references for
 Anthropic, OpenAI, and Google, reconciles them into `sbx`, creates the default
 pack, and launches one upfront onboarding tour. It stores references, never
-resolved keys. If `sbx` already has all three keys and you'd rather not set up
-1Password right now, setup can trust them instead: pass `--use-sbx-keys`, or
-just answer the one-time prompt it offers when that's the case (`--use-1password`
-is the mutually exclusive opposite — force the strict 1Password flow for one
-run). Both flags are setup-only; `pi-stack onboard` rejects either one, since
-onboard never provisions provider keys at all. Whichever source succeeds is
-remembered as `provider_key_mode` in `config.toml`, so the *next* `pi-stack
-setup` reuses that same choice with no prompt. After that, `pi-stack run`
-launches or reattaches without replaying onboarding.
+resolved keys. 1Password is the ONLY provider-key source — there is no
+"trust existing sbx keys" shortcut; without `op` installed and signed in,
+setup fails with the exact fix. `pi-stack onboard` never provisions provider
+keys at all. After setup, `pi-stack run` launches or reattaches without
+replaying onboarding.
 
 `pi-stack setup` is the opposite: it *actually sets you up* — provisions model
-keys (preferring 1Password, wiring both the sandbox and host mode; or a
-complete existing sbx key set via `--use-sbx-keys`/prompt/persisted mode),
-creates your default pack, and provisions + enables host mode (when the host
-can run `pi`), then hands off to a one-shot upfront guide that names the
-exact workflows, explains memory and packs, reports grounded setup gaps, and
+keys from 1Password (wiring both the sandbox and host mode's `hostmode.env`),
+creates your default pack, then hands off to a one-shot upfront guide that names
+the exact workflows, explains memory and packs, reports grounded setup gaps, and
 asks for your real task. Repeat it any time: the host phase reconciles
-keys/config again; an existing sandbox is left alone (reattach with
-`pi-stack run`, or recreate it with your current settings *and* get the tour
-via `pi-stack setup --replace`). Skipping 1Password wires the sandbox fully
-from sbx's existing keys, but host mode still needs `op://` refs in
-`hostmode.env` for cloud models; without them it stays local/Ollama-only, and
-that's an expected, honest result, not a failure. Setup's own copy reflects
-which source actually ran: keys are only reported as "validated this run"
-after the strict 1Password flow resolved them; a run that used existing sbx
-keys says "configured (not verified this run)" instead — real validation
-still happens at every `pi-stack host` launch. For
+keys/config again; an existing sandbox is left alone (reattach with `pi-stack
+run`, or recreate it with your current settings *and* get the tour via `pi-stack
+setup --replace`). Host mode (the unsandboxed escape hatch) is **not** set up by
+setup — it's opt-in and needs `pi` on the host; enable it only if you need it
+with a single command, `pi-stack host setup` (it provisions **and** enables host
+mode when provisioning succeeds). It reaches cloud models through the same
+`op://` refs in `hostmode.env` that setup wrote, resolved via `op run` at each
+launch. For
 scripted/CI hosts, `pi-stack onboard --account … --knowledge … --yes` writes
 `~/.config/pi-stack/config.toml` non-interactively (host config only, no handoff).
 
@@ -281,14 +273,13 @@ commands when something is missing.
 `pi-stack host [DIR]` runs pi **directly on your machine** — no sandbox, no
 network fence, real credentials. It exists for one narrow case: developing
 pi-stack itself, which needs the host's Docker/`sbx`/`make` that the VM
-structurally cannot reach. `pi-stack setup` provisions and enables it for you
-when the host can run `pi`. To do it by hand, use the safe order (provision
-first, since the gate stays off until provisioning succeeds): `pi-stack host
-setup` to provision `~/.local/state/pi-stack/host-agent`,
-then `pi-stack config set host.enabled true`. Disable it any time with `pi-stack
-config set host.enabled false`. Cloud keys come from op://
-refs in `hostmode.env` next to `config.toml`, resolved just-in-time by `op run`
-and never persisted; without that file the session is Ollama-only.
+structurally cannot reach. It's opt-in (not touched by `pi-stack setup`): run
+`pi-stack host setup`, which provisions `~/.local/state/pi-stack/host-agent`
+**and** enables the gate in one step (the gate stays off unless provisioning
+succeeds). Disable it any time with `pi-stack config set host.enabled false`.
+Cloud keys come from op:// refs in `hostmode.env` next to `config.toml`,
+resolved just-in-time by `op run` and never persisted; without that file the
+session is Ollama-only.
 
 Host mode ships guardrails — a guard extension, workspace refusals
 (`$HOME`/`/`/`/etc`/secret dirs), disabled subagents — but they protect against

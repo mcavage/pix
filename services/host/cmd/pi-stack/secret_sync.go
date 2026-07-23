@@ -39,6 +39,11 @@ func opReadNonEmpty(env shellEnv, ref string) (string, bool) {
 	if env.run == nil {
 		return "", false
 	}
+	// Decode any %20 from refs written by the old (buggy) encoding path: `op read`
+	// rejects a percent-encoded ref, so a space-containing item name (e.g.
+	// "Anthropic API Key") stored as %20 would never resolve. Reading it decoded
+	// resolves it now; the write path stores literal so files self-heal.
+	ref = strings.ReplaceAll(ref, "%20", " ")
 	val, err := env.run("op", "read", ref)
 	if err != nil {
 		return "", false
@@ -275,12 +280,14 @@ func writeOpRefFileQuietLocked(env shellEnv, path, key, value string) error {
 	if !strings.HasPrefix(value, "op://") || strings.ContainsAny(value, "\n\r") {
 		return fmt.Errorf("value must be a single-line op:// ref")
 	}
-	// URL-encode literal spaces in the ref. `op read` tolerates a raw space in an
-	// item/field name (e.g. .../api key), but `op run --env-file` — how host mode
-	// resolves keys at launch — does NOT, so an un-encoded space silently breaks
-	// host mode's key. Encoding at the write chokepoint fixes both files and
-	// self-heals existing refs on the next write (e.g. setup's re-mirror).
-	value = strings.ReplaceAll(value, " ", "%20")
+	// Store refs with LITERAL spaces. Verified on op 2.35.0: BOTH `op read` (the
+	// setup strict flow) and `op run --env-file` (host mode + the MCP gateway)
+	// require literal spaces and REJECT a percent-encoded ref outright ("invalid
+	// character in secret reference: '%'"). An earlier version encoded spaces to
+	// %20 here on a false premise — that broke every item name with a space (e.g.
+	// "Anthropic API Key"). Decode any %20 we find so already-broken files
+	// self-heal on the next write (e.g. setup's re-mirror).
+	value = strings.ReplaceAll(value, "%20", " ")
 	content := ""
 	if env.readFile != nil {
 		c, rerr := env.readFile(path)

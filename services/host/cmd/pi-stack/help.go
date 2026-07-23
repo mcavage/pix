@@ -140,8 +140,8 @@ State (on-disk lifecycle)
 
 Expert (dangerous — read the man page first)
   host [DIR]          run pi DIRECTLY on this machine: no sandbox, no network
-                      fence, real credentials. Gated off by default
-                      (config set host.enabled true); host setup provisions it.
+                      fence, real credentials. Gated off by default; enable with
+                      'host setup' (provisions AND enables it in one step).
                       Guardrails, not a security boundary.
 
 Meta

@@ -102,31 +102,37 @@ type hostState struct {
 }
 
 // hostStateIdentity is who the user is, read from the HOST's git config (the
-// sandbox can't see ~/.gitconfig), so onboarding can greet them by name instead
-// of starting anonymous.
+// sandbox can't see ~/.gitconfig), so onboarding can greet them by FIRST name
+// instead of starting anonymous. Deliberately FIRST NAME ONLY — no surname, no
+// email: this payload is injected into every session, so it carries the minimum
+// PII needed to greet, nothing a model should be handed by default.
 type hostStateIdentity struct {
-	Name  string `json:"name,omitempty"`
-	Email string `json:"email,omitempty"`
+	Name string `json:"name,omitempty"` // first name only
 }
 
-// readGitIdentity reads the user's personal identity from git's GLOBAL config.
+// firstName returns the first whitespace-delimited token of a name, or "".
+func firstName(full string) string {
+	if f := strings.Fields(full); len(f) > 0 {
+		return f[0]
+	}
+	return ""
+}
+
+// readGitIdentity reads the user's FIRST name from git's GLOBAL config.
 // --global (not repo-local) on purpose: a freshly cloned hostile repo can set a
 // repo-local user.name to an injection payload, and it's cwd-independent so
-// `pi-stack setup /other/dir` still reads the right person. The values are
+// `pi-stack setup /other/dir` still reads the right person. The value is
 // UNTRUSTED display text — sanitizeIdentity reduces the injection surface (strips
-// terminal-control/format chars, caps length); prompt-like text in a name is
-// further contained by the onboarding skill treating identity.name as a
-// display-only name. Best-effort: empty when git is absent or unset.
+// terminal-control/format chars, caps length), then firstName takes only the
+// leading token. Email is deliberately NOT read (unused, and it's PII we won't
+// inject). Best-effort: empty when git is absent or unset.
 func readGitIdentity(env shellEnv) hostStateIdentity {
 	id := hostStateIdentity{}
 	if env.run == nil {
 		return id
 	}
 	if out, err := env.run("git", "config", "--global", "--get", "user.name"); err == nil {
-		id.Name = sanitizeIdentity(out)
-	}
-	if out, err := env.run("git", "config", "--global", "--get", "user.email"); err == nil {
-		id.Email = sanitizeIdentity(out)
+		id.Name = firstName(sanitizeIdentity(out))
 	}
 	return id
 }
