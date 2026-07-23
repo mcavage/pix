@@ -46,12 +46,13 @@ DEV_SKILLS = --no-skills --skill $(CURDIR)/skills$(if $(OVERLAY_WS), --skill $(a
 PI_STACK_BIN ?= $(CURDIR)/out/pi-stack
 
 # MCP enablement for `make run` (config.toml `mcp`, `pi-stack config set mcp
-# <name>`). Listed servers are attached at CREATE via `--static-mcp <name>` (the
-# sbx flag; sbx's local data-plane gateway serves them, no SBX_MCP_URL) AND are
-# what `make mcp-register` registers among the local stdio servers. EMPTY = no
-# servers attached (the sandbox still has the gateway, just no configured set).
-# To attach one to an ALREADY-RUNNING sandbox without recreating, use
-# `pi-stack mcp load <name>`. `MCP=all` attaches everything registered.
+# <name>`). NOTE: `make run` execs `sbx run` DIRECTLY, so MCP_FLAGS attaches every
+# listed server STATICALLY (`--static-mcp <name>`) — the dev flow gets all tools.
+# The per-server static/dynamic resolution (default local stdio static, remote
+# catalog dynamic; overridable via `mcp_static`/`mcp_dynamic`) lives in the
+# `pi-stack run` launcher, which is what consumers use. sbx's local data-plane
+# gateway serves them (no SBX_MCP_URL). Attach one to an ALREADY-RUNNING sandbox
+# with `pi-stack mcp load <name>`. `MCP=all` = everything registered.
 MCP         ?= $(shell "$(PI_STACK_BIN)" config get mcp 2>/dev/null)
 MCP_FLAGS   = $(foreach server,$(MCP),--static-mcp $(server))
 # The local stdio MCP servers `make mcp-register` can register (the ones you

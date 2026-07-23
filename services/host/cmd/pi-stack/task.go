@@ -1205,6 +1205,10 @@ func launchTask(o runOpts) error {
 	writePackContextFiles(cfg, o, effectivePack)
 	writeSandboxPackMarker(o.Workspace, effectivePack)
 
+	// Resolve the eager (--static-mcp) set; default dynamic, only mcp_static pins
+	// eager. A task is always a fresh create, so it's always needed.
+	o.StaticMCP = resolveStaticMCP(append(append([]string(nil), cfg.MCP...), o.MCP...), cfg)
+
 	args := buildSbxArgs(cfg, o, version)
 	if os.Getenv("PI_STACK_DEBUG") != "" {
 		fmt.Fprintln(os.Stderr, "+ sbx "+strings.Join(args, " "))

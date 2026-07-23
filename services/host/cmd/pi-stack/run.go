@@ -174,6 +174,14 @@ func runRun(argv []string) {
 		}
 	}
 
+	// Resolve which configured MCP servers attach EAGERLY at create (--static-mcp).
+	// Default is dynamic for every server (the in-VM agent discovers them via
+	// mcp-find on demand); only mcp_static pins one eager. Only needed on a
+	// create — a re-attach never sends --static-mcp.
+	if willCreate(state, o.Replace) {
+		o.StaticMCP = resolveStaticMCP(append(append([]string(nil), cfg.MCP...), o.MCP...), cfg)
+	}
+
 	plan := planSandboxLaunch(state, o.Replace, cfg, o, version)
 	if plan.Err != nil {
 		// Fail closed BEFORE any output claims a replace/create/reattach is

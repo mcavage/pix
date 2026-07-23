@@ -317,11 +317,17 @@ concrete provider: an `mcp` server, a `cli` on PATH, an `http` service, a
 every skill that reads that capability retargets at once. See the
 `capability-routing` skill for the resolution and fan-out rules.
 
-**Limits.** A sandbox's static MCP set is chosen at CREATE time (`--static-mcp`,
-which pi-stack emits for every server in your `mcp` list). To add one to an
-ALREADY-RUNNING sandbox without recreating it, use `pi-stack mcp load <name>`
-(sbx's live attach). A full recreate (`pi-stack run --replace`) also picks up
-changes to the set.
+**Attach mode.** Each registered server is either *eager* (`--static-mcp`, tools
+always in context) or *dynamic* (the in-VM agent discovers + calls it on demand
+via mcp-find/mcp-exec/code-mode). This is eager-vs-lazy, not local-vs-remote:
+once a server is registered it sits behind the local gateway, and mcp-find
+surfaces local stdio servers (the daemon spawns them host-side with their creds)
+exactly like remotes. The **default is dynamic** for every server, so large tool
+schemas stay out of context until needed. Pin one eager with `pi-stack config set
+mcp_static <name>` (`mcp_dynamic <name>` is the explicit opposite and wins if a
+server is in both). To attach one to an ALREADY-RUNNING sandbox without
+recreating, use `pi-stack mcp load <name>`; a full recreate (`pi-stack run
+--replace`) also picks up changes.
 
 ## 9. Your first hour
 
