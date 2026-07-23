@@ -638,6 +638,53 @@ export function redactHeaders(h: Record<string, string> | undefined): Record<str
 	return out;
 }
 
+/**
+ * Reconstruct the DETERMINISTIC subset of request headers pi-stack's VM
+ * actually sends, for the request row's `headers` field when
+ * before_provider_headers never fires. Confirmed empirically: a live run
+ * with headers toggled on shows only the `POST <url>` request line, never a
+ * headers block — pi's provider SDK assembles headers like x-api-key/
+ * anthropic-version/user-agent internally, and no extension hook exposes
+ * the assembled set. So this is NOT a full packet capture; it is only what
+ * is deterministically true of what the VM sends, and it never fabricates
+ * an uncertain value (no anthropic-version/user-agent/accept guess):
+ *   - always: `content-type: application/json`
+ *   - api "anthropic-messages" (or any api containing "anthropic"):
+ *     `x-api-key: proxy-managed`
+ *   - api containing "openai" (openai-responses/openai-completions/...):
+ *     `authorization: Bearer proxy-managed`
+ *   - api containing "google"/"gemini"/"generative": `x-goog-api-key: proxy-managed`
+ *   - unknown/empty api: content-type only
+ * Custom per-model headers (`model.headers`, set via config) are spread in
+ * LAST, so a real configured header shows exactly as configured rather than
+ * being shadowed by a guessed default.
+ *
+ * The literal "proxy-managed" is the sentinel value the sandbox actually
+ * sends on these headers (the real provider credential is injected
+ * host-side by the proxy and never reaches the VM) — it also matches
+ * `SENSITIVE_HEADER_NAMES` above, so `redactHeaders` renders it
+ * "<redacted>" the same as a real credential would be.
+ *
+ * Pure and total: never throws, and an undefined/malformed `model`
+ * degrades to `{ "content-type": "application/json" }` rather than
+ * breaking event emission.
+ */
+export function reconstructRequestHeaders(model: { api?: string; headers?: Record<string, string> } | undefined): Record<string, string> {
+	const out: Record<string, string> = { "content-type": "application/json" };
+	const api = safe(() => (typeof model?.api === "string" ? model.api : "")) ?? "";
+	if (api.includes("anthropic")) out["x-api-key"] = "proxy-managed";
+	else if (api.includes("openai")) out["authorization"] = "Bearer proxy-managed";
+	else if (api.includes("google") || api.includes("gemini") || api.includes("generative")) out["x-goog-api-key"] = "proxy-managed";
+
+	const custom = safe(() => model?.headers);
+	if (custom && typeof custom === "object") {
+		for (const [k, v] of Object.entries(custom)) {
+			if (typeof v === "string") out[k] = v;
+		}
+	}
+	return out;
+}
+
 export type TurnTrigger = "user" | "tool_result" | "compaction" | "unknown";
 
 /**
@@ -720,15 +767,37 @@ export function requestUrl(model: { baseUrl?: string; api?: string; id?: string 
 }
 
 /**
- * Best-effort session id: prefer the session file path (stable, unique per
- * session), fall back to any id-shaped field, else mint a random one for the
- * lifetime of this session (ephemeral/in-memory sessions have no file).
+ * Strip a session FILE path down to its basename, minus the `.jsonl`
+ * extension — e.g. "/root/.pi/sessions/2026-07-21T14-28-47-879Z_019f8514.jsonl"
+ * becomes "2026-07-21T14-28-47-879Z_019f8514". Handles both "/" and "\\"
+ * separators (a Windows sandbox host is plausible here) since this is
+ * string surgery, not `node:path` (kept dependency-free and trivially
+ * testable). Pure and total: an already-bare basename, or a path with no
+ * recognized extension, passes through unchanged rather than throwing or
+ * mangling it.
+ */
+function sessionIdFromFile(file: string): string {
+	const basename = file.split(/[\\/]/).pop() ?? file;
+	return basename.replace(/\.jsonl$/i, "");
+}
+
+/**
+ * Best-effort session id for the TUI's short session label. Prefers the
+ * session FILE path (stable, unique per session) but returns just its
+ * basename with the directory and `.jsonl` extension stripped (R6-3): the
+ * raw file path made the TUI's label an ugly, truncated `session
+ * f4.jsonl` instead of a real session id like
+ * `2026-07-21T14-28-47-879Z_019f8514-...`. Falls back to any id-shaped
+ * field, else mints a random one for the lifetime of this session
+ * (ephemeral/in-memory sessions have no file) — same session always
+ * resolves to the same id since `getSessionFile()` is stable for the
+ * session's lifetime.
  */
 export function extractSessionId(ctx: any): string {
 	const file = safe(() =>
 		typeof ctx?.sessionManager?.getSessionFile === "function" ? ctx.sessionManager.getSessionFile() : undefined,
 	);
-	if (typeof file === "string" && file) return file;
+	if (typeof file === "string" && file) return sessionIdFromFile(file);
 	const direct = ctx?.sessionId ?? ctx?.session?.id;
 	if (typeof direct === "string" && direct) return direct;
 	return safe(() => randomUUID()) ?? String(Date.now());
@@ -1088,24 +1157,30 @@ export default function (pi: ExtensionAPI) {
 				trigger: inferTurnTrigger({ isFirstTurn, compacted, prevEventKind }),
 			});
 
-			// Attach headers inline ONLY when before_provider_headers already fired
-			// for THIS turn (the hook-order-diagram order: before_provider_headers ->
-			// before_provider_request). In the real transport before_provider_headers
-			// fires INSIDE transformHeaders, which runs AFTER before_provider_request
-			// (onPayload) — the opposite order — so pendingRequestHeaders is usually
-			// still empty here; in that case before_provider_headers, once it does
-			// fire, emits a separate request_headers merge event (see that handler
-			// below) rather than this event ever waiting for it. Emitting
-			// provider_request immediately (rather than waiting for a later hook) is
-			// what keeps it ordered before its own turn's provider_response, instead
-			// of leaking into the NEXT turn.
-			const headers = pendingRequestHeaders;
+			// Attach headers ALWAYS now — the request block is never header-less.
+			// Prefer REAL headers when before_provider_headers already fired for
+			// THIS turn (the hook-order-diagram order: before_provider_headers ->
+			// before_provider_request) via `pendingRequestHeaders`; otherwise fall
+			// back to `reconstructRequestHeaders`, the deterministic subset
+			// (confirmed empirically that before_provider_headers does not fire in
+			// the real runtime — see that function's doc comment). If
+			// before_provider_headers ever DOES fire late for this turn (the real
+			// transport order, INSIDE transformHeaders, AFTER before_provider_request's
+			// onPayload), that handler still emits a request_headers merge event
+			// (see below) that OVERRIDES this reconstruction with the real headers
+			// in the TUI — lastRequestTurnId tracks that regardless of whether we
+			// used the reconstruction here. Emitting provider_request immediately
+			// (rather than waiting for a later hook) is what keeps it ordered
+			// before its own turn's provider_response, instead of leaking into the
+			// NEXT turn.
+			const realHeaders = pendingRequestHeaders;
 			pendingRequestHeaders = undefined;
 			// method/url reconstruct the actual HTTP request line pi sent to the
 			// provider (WIRE: ProviderRequest.Method/URL) from ctx.model, which pi
 			// never hands us directly — read it defensively, same as ctx?.model
 			// above, so a missing/odd ctx.model shape never breaks the emit.
 			const url = safe(() => requestUrl(ctx?.model)) ?? "";
+			const headers = redactHeaders(realHeaders ?? safe(() => reconstructRequestHeaders(ctx?.model)) ?? { "content-type": "application/json" });
 			emitEvent({
 				...baseEnvelope("provider_request"),
 				model,
@@ -1121,22 +1196,24 @@ export default function (pi: ExtensionAPI) {
 					toolSchemaHash: result.toolSchemaHash, // R2-6: same hash the tool-schema blob (below) is enqueued under.
 				},
 				changedBlobs,
-				...(headers ? { headers } : {}),
+				headers,
 				method: "POST",
 				url,
 			});
-			// Track whether THIS request is still awaiting its headers.
-			// - headers attached inline just now (headers-first order): nothing
-			//   left to track, so clear it — otherwise a stale turnId here would
-			//   false-match the NEXT turn's before_provider_headers, which fires
-			//   while currentTurnId still holds THIS turn's id (before_provider_request
-			//   hasn't run for the next turn yet).
-			// - no headers attached (request-first order, the real transport): this
-			//   request went out with no headers and is awaiting its
-			//   before_provider_headers merge event — record its turnId so that
-			//   handler (below) can recognize it and emit the merge event instead
-			//   of stashing for a future request.
-			lastRequestTurnId = headers ? "" : currentTurnId;
+			// Track whether THIS request is still awaiting its REAL headers (not
+			// whether `headers` above is populated — it always is now).
+			// - real headers attached inline just now (headers-first order):
+			//   nothing left to track, so clear it — otherwise a stale turnId here
+			//   would false-match the NEXT turn's before_provider_headers, which
+			//   fires while currentTurnId still holds THIS turn's id
+			//   (before_provider_request hasn't run for the next turn yet).
+			// - no real headers attached (request-first order, the real
+			//   transport, or before_provider_headers never fires at all): this
+			//   request went out with the reconstructed subset and is still
+			//   awaiting a possible before_provider_headers merge event — record
+			//   its turnId so that handler (below) can recognize it and emit the
+			//   merge event instead of stashing for a future request.
+			lastRequestTurnId = realHeaders ? "" : currentTurnId;
 		});
 
 		on("before_provider_headers", (e: any) => {

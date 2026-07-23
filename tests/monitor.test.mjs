@@ -22,7 +22,9 @@ const {
 	extractAssistantOutput,
 	normalizeHeaders,
 	redactHeaders,
+	reconstructRequestHeaders,
 	requestUrl,
+	extractSessionId,
 } = monitor;
 
 // ─── R2-3: MCP classification fallback ──────────────────────────────────────
@@ -279,6 +281,69 @@ test("requestUrl: missing baseUrl returns empty string, never throws", () => {
 	assert.equal(requestUrl(undefined), "");
 });
 
+// ─── reconstructRequestHeaders: deterministic-subset fallback (FIX 1) ──────
+// before_provider_headers is confirmed to never fire in the real runtime
+// (a live run with headers toggled on shows only the `POST <url>` line, no
+// headers block), so this is the fallback reconstruction: only what's
+// deterministically true of what the pi-stack VM sends, never a fabricated
+// value like anthropic-version/user-agent/accept.
+
+test("reconstructRequestHeaders: anthropic api gets x-api-key alongside content-type", () => {
+	assert.deepEqual(reconstructRequestHeaders({ api: "anthropic-messages" }), {
+		"content-type": "application/json",
+		"x-api-key": "proxy-managed",
+	});
+	// api CONTAINING "anthropic", not just the exact string.
+	assert.deepEqual(reconstructRequestHeaders({ api: "custom-anthropic-gateway" }), {
+		"content-type": "application/json",
+		"x-api-key": "proxy-managed",
+	});
+});
+
+test("reconstructRequestHeaders: openai api gets authorization Bearer alongside content-type", () => {
+	assert.deepEqual(reconstructRequestHeaders({ api: "openai-responses" }), {
+		"content-type": "application/json",
+		authorization: "Bearer proxy-managed",
+	});
+	assert.deepEqual(reconstructRequestHeaders({ api: "openai-completions" }), {
+		"content-type": "application/json",
+		authorization: "Bearer proxy-managed",
+	});
+});
+
+test("reconstructRequestHeaders: google/gemini api gets x-goog-api-key alongside content-type", () => {
+	assert.deepEqual(reconstructRequestHeaders({ api: "google-generative-ai" }), {
+		"content-type": "application/json",
+		"x-goog-api-key": "proxy-managed",
+	});
+	assert.deepEqual(reconstructRequestHeaders({ api: "gemini-messages" }), {
+		"content-type": "application/json",
+		"x-goog-api-key": "proxy-managed",
+	});
+	assert.deepEqual(reconstructRequestHeaders({ api: "generative-language" }), {
+		"content-type": "application/json",
+		"x-goog-api-key": "proxy-managed",
+	});
+});
+
+test("reconstructRequestHeaders: unknown/empty api gets content-type only", () => {
+	assert.deepEqual(reconstructRequestHeaders({ api: "some-unknown-api" }), { "content-type": "application/json" });
+	assert.deepEqual(reconstructRequestHeaders({ api: "" }), { "content-type": "application/json" });
+	assert.deepEqual(reconstructRequestHeaders({}), { "content-type": "application/json" });
+});
+
+test("reconstructRequestHeaders: undefined model never throws, degrades to content-type only", () => {
+	assert.deepEqual(reconstructRequestHeaders(undefined), { "content-type": "application/json" });
+});
+
+test("reconstructRequestHeaders: model.headers (custom per-model config headers) are spread in, showing exactly as configured", () => {
+	assert.deepEqual(reconstructRequestHeaders({ api: "anthropic-messages", headers: { "x-custom-thing": "abc", "content-type": "application/json; charset=utf-8" } }), {
+		"content-type": "application/json; charset=utf-8", // custom headers win, spread in LAST
+		"x-api-key": "proxy-managed",
+		"x-custom-thing": "abc",
+	});
+});
+
 // ─── hook ordering: provider_request must emit BEFORE its own provider_response ───
 // This is the regression under test: pi's documented hook order (docs/extensions.md
 // hook-order diagram) is
@@ -359,7 +424,10 @@ test("two turns fired in pi's documented hook order emit provider_request/provid
 	assert.equal(requests[1].headers["x-request-id"], "turn-2", "turn 2's request carries the headers stashed at ITS before_provider_headers, not turn 1's");
 });
 
-test("a missing before_provider_headers still emits the request in order, just without headers", async (t) => {
+test("a missing before_provider_headers still emits the request in order, now WITH reconstructed headers", async (t) => {
+	// FIX 1: before_provider_headers is confirmed to never fire in the real
+	// runtime, so provider_request must never go out header-less — it falls
+	// back to the deterministic reconstructRequestHeaders() subset.
 	const { server, port, lines } = await startRecordingServer();
 	t.after(() => server.close());
 
@@ -368,8 +436,11 @@ test("a missing before_provider_headers still emits the request in order, just w
 	factory(pi);
 
 	handlers.get("session_start")?.({}, {});
-	// before_provider_headers never fires (missing hook on this pi version).
-	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "hi" }] } }, {});
+	// before_provider_headers never fires (the real runtime).
+	handlers.get("before_provider_request")?.(
+		{ payload: { messages: [{ role: "user", content: "hi" }] } },
+		{ model: { api: "anthropic-messages" } },
+	);
 	handlers.get("message_end")?.({ message: assistantMessage("reply") }, {});
 	await new Promise((r) => setTimeout(r, 100));
 
@@ -378,7 +449,31 @@ test("a missing before_provider_headers still emits the request in order, just w
 
 	const pr = lines.find((l) => l.kind === "provider_request");
 	assert.ok(pr, "provider_request must still be emitted with no headers hook");
-	assert.equal("headers" in pr, false, "no headers hook fired, so no headers field");
+	assert.equal(pr.headers["content-type"], "application/json", "reconstructed headers still attached with no headers hook at all");
+	assert.equal(pr.headers["x-api-key"], "<redacted>", "reconstructed x-api-key is redacted just like a real one would be");
+});
+
+test("FIX 1: a provider_request event ALWAYS carries a non-empty redacted headers map, even with no headers hook ever firing", async (t) => {
+	const { server, port, lines } = await startRecordingServer();
+	t.after(() => server.close());
+
+	const factory = await loadMonitorAgainst(port);
+	const { pi, handlers } = makeStubPi();
+	factory(pi);
+
+	handlers.get("session_start")?.({}, {});
+	handlers.get("before_provider_request")?.(
+		{ payload: { messages: [{ role: "user", content: "hi" }] } },
+		{ model: { api: "anthropic-messages", provider: "anthropic", id: "claude-opus-4-8" } },
+	);
+	await new Promise((r) => setTimeout(r, 100));
+
+	const pr = lines.find((l) => l.kind === "provider_request");
+	assert.ok(pr, "provider_request must be emitted");
+	assert.ok(pr.headers && typeof pr.headers === "object", "headers must be present");
+	assert.ok(Object.keys(pr.headers).length > 0, "headers must be non-empty");
+	assert.equal(pr.headers["x-api-key"], "<redacted>", "the reconstructed x-api-key sentinel is redacted, not the literal proxy-managed value");
+	assert.equal(pr.headers["content-type"], "application/json");
 });
 
 // ─── request_headers merge event: real-transport order (request-first) ────
@@ -407,10 +502,11 @@ test("request-first order: before_provider_request then before_provider_headers 
 	await new Promise((r) => setTimeout(r, 100));
 
 	const kinds = lines.filter((l) => l.kind === "provider_request" || l.kind === "request_headers" || l.kind === "provider_response").map((l) => l.kind);
-	assert.deepEqual(kinds, ["provider_request", "request_headers", "provider_response"], "provider_request emits with no headers, then a request_headers merge event follows");
+	assert.deepEqual(kinds, ["provider_request", "request_headers", "provider_response"], "provider_request emits with reconstructed headers, then a request_headers merge event overrides with the real ones");
 
 	const pr = lines.find((l) => l.kind === "provider_request");
-	assert.equal("headers" in pr, false, "provider_request itself carries no headers in this order");
+	assert.equal(pr.headers["content-type"], "application/json", "provider_request carries the reconstructed fallback in this order, not the real headers yet");
+	assert.equal("x-request-id" in pr.headers, false, "the real x-request-id header isn't known yet at provider_request time in this order");
 
 	const rh = lines.find((l) => l.kind === "request_headers");
 	assert.ok(rh, "a request_headers merge event must be emitted");
@@ -711,4 +807,42 @@ test("R6-1: multiple text blocks concatenate, multiple tool calls all collected"
 	const { text, toolCalls } = extractAssistantOutput(message);
 	assert.equal(text, "First.\nSecond.");
 	assert.deepEqual(toolCalls, ["read", "bash"]);
+});
+
+// ─── FIX 2: extractSessionId returns a bare session id, not a full file path ───
+// The raw session FILE path made the TUI's short label an ugly `session
+// f4.jsonl` instead of a real session id. extractSessionId now strips the
+// directory and the `.jsonl` extension.
+
+test("extractSessionId: strips directory and .jsonl extension from the session file path", () => {
+	const ctx = {
+		sessionManager: {
+			getSessionFile: () => "/home/agent/.pi/sessions/2026-07-21T14-28-47-879Z_019f8514-abcd.jsonl",
+		},
+	};
+	assert.equal(extractSessionId(ctx), "2026-07-21T14-28-47-879Z_019f8514-abcd");
+});
+
+test("extractSessionId: handles a Windows-style backslash path too", () => {
+	const ctx = { sessionManager: { getSessionFile: () => "C:\\Users\\agent\\.pi\\sessions\\f4.jsonl" } };
+	assert.equal(extractSessionId(ctx), "f4");
+});
+
+test("extractSessionId: same session (same file path) resolves to the same id every call", () => {
+	const ctx = { sessionManager: { getSessionFile: () => "/x/sessions/stable-id.jsonl" } };
+	assert.equal(extractSessionId(ctx), extractSessionId(ctx));
+	assert.equal(extractSessionId(ctx), "stable-id");
+});
+
+test("extractSessionId: falls back to a direct id-shaped field when no session file", () => {
+	assert.equal(extractSessionId({ sessionId: "abc-123" }), "abc-123");
+	assert.equal(extractSessionId({ session: { id: "def-456" } }), "def-456");
+});
+
+test("extractSessionId: mints a random uuid-shaped id for an ephemeral session with no file at all", () => {
+	const id = extractSessionId({});
+	assert.ok(typeof id === "string" && id.length > 0);
+	// A random uuid contains no directory separators or .jsonl residue.
+	assert.equal(id.includes("/"), false);
+	assert.equal(id.endsWith(".jsonl"), false);
 });
