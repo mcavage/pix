@@ -646,6 +646,33 @@ Show the selected bundle's origin URL.
 .TP
 .BR "pi-stack knowledge remote set" " " url " [" \-\-bundle " " D "]"
 Add or replace the selected bundle's origin URL.
+.SS monitor
+.TP
+.BR "pi-stack monitor" " [" name "] [" \-\-port " " N "] [" \-\-bind " " ADDR "]"
+Live-follow a running sandbox's out-of-sandbox traffic (model requests and
+responses, tool and MCP calls) in a host TUI.  Binds
+.B :11437
+by default.  The optional
+.I name
+filters to one sandbox by name or ID substring; without it, every sandbox is
+shown.  Quit with
+.BR q .
+.TP
+.BI \-\-port " N"
+Override the hub port (default 11437).
+.TP
+.BI \-\-bind " ADDR"
+Override the hub's listen address (default
+.BR 127.0.0.1 ,
+loopback-only).  Linux hosts watching a real sandbox may need
+.BR "\-\-bind 0.0.0.0" ", since"
+.B host.docker.internal
+maps to the bridge gateway there rather than to loopback (unlike Docker
+Desktop on macOS/Windows).  A non-loopback bind exposes the monitor hub —
+with
+.B no authentication
+— serving the sandbox's full agent context and tool output to your local
+network.
 .SS agent
 Manage subagents as first-class objects.  An agent stores an
 .B intent
