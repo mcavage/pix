@@ -45,7 +45,6 @@ func TestEventEncodeDecodeRoundTrip(t *testing.T) {
 				EstTokens:      38000,
 			},
 			ChangedBlobs: []string{"hash-sys"},
-			Headers:      map[string]string{"user-agent": "pi/1.0"},
 			Method:       "POST",
 			URL:          "https://api.anthropic.com/v1/messages",
 		},
@@ -54,7 +53,6 @@ func TestEventEncodeDecodeRoundTrip(t *testing.T) {
 			Status:      200,
 			StopReason:  "tool_use",
 			Usage:       &UsageSummary{InputTokens: 37900, OutputTokens: 512, TotalTokens: 38412},
-			Headers:     map[string]string{"x-request-id": "abc"},
 			TextBytes:   11,
 			TextPreview: "hello world",
 			TextHash:    "hash-text",
@@ -87,10 +85,6 @@ func TestEventEncodeDecodeRoundTrip(t *testing.T) {
 			env:     sampleEnvelope(KindContextEvent),
 			CtxKind: "model_change",
 			Detail:  "switched to opus",
-		},
-		RequestHeaders{
-			env:     sampleEnvelope(KindRequestHeaders),
-			Headers: map[string]string{"user-agent": "pi/1.0", "x-request-id": "abc"},
 		},
 	}
 
@@ -179,7 +173,6 @@ func TestEventJSONTagsGolden(t *testing.T) {
 			EstTokens:         10,
 		},
 		ChangedBlobs: []string{"h"},
-		Headers:      map[string]string{"user-agent": "pi/1.0"},
 		Method:       "POST",
 		URL:          "https://api.anthropic.com/v1/messages",
 	}
@@ -191,7 +184,7 @@ func TestEventJSONTagsGolden(t *testing.T) {
 	if err := json.Unmarshal(line, &m); err != nil {
 		t.Fatalf("Unmarshal() error: %v", err)
 	}
-	for _, key := range []string{"kind", "sandboxId", "sessionId", "turnId", "seq", "ts", "model", "summary", "changedBlobs", "headers", "method", "url"} {
+	for _, key := range []string{"kind", "sandboxId", "sessionId", "turnId", "seq", "ts", "model", "summary", "changedBlobs", "method", "url"} {
 		if _, ok := m[key]; !ok {
 			t.Fatalf("provider_request JSON missing key %q; got keys %v", key, m)
 		}
@@ -236,21 +229,6 @@ func TestEventJSONTagsGolden(t *testing.T) {
 	}
 	if !strings.Contains(string(line), `"ctxKind":"compaction"`) {
 		t.Fatalf("context_event JSON = %s, want ctxKind key", line)
-	}
-
-	rh := RequestHeaders{env: env{Kind: KindRequestHeaders}, Headers: map[string]string{"user-agent": "pi/1.0"}}
-	line, err = Encode(rh)
-	if err != nil {
-		t.Fatalf("Encode() error: %v", err)
-	}
-	var rhMap map[string]json.RawMessage
-	if err := json.Unmarshal(line, &rhMap); err != nil {
-		t.Fatalf("Unmarshal() error: %v", err)
-	}
-	for _, key := range []string{"kind", "sandboxId", "sessionId", "turnId", "seq", "ts", "headers"} {
-		if _, ok := rhMap[key]; !ok {
-			t.Fatalf("request_headers JSON missing key %q; got keys %v", key, rhMap)
-		}
 	}
 
 	b, err := json.Marshal(Blob{Hash: "h", Bytes: 3, Text: "abc"})
@@ -362,13 +340,10 @@ func TestDecodeCapsOversizedFieldMultibyteUTF8(t *testing.T) {
 	}
 }
 
-// TestDecodeCapsToolIDAndHeaders is R4-1: two spots the round-3 decode
-// capping missed. ToolStart/ToolEnd.ToolID was never capped (an oversized
-// toolId passes the ingest-line limit and lands in TUI row keys), and
-// ProviderResponse.Headers (and, per the request-headers wire addition,
-// ProviderRequest.Headers, which shares the same capHeaders call) retained
-// an unbounded number of uncapped key/value strings.
-func TestDecodeCapsToolIDAndHeaders(t *testing.T) {
+// TestDecodeCapsToolID is R4-1: ToolStart/ToolEnd.ToolID was never capped
+// (an oversized toolId passes the ingest-line limit and lands in TUI row
+// keys).
+func TestDecodeCapsToolID(t *testing.T) {
 	hugeID := strings.Repeat("t", 10_000)
 
 	line, err := Encode(ToolStart{env: env{Kind: KindToolStart}, ToolID: hugeID, Name: "bash"})
@@ -395,86 +370,6 @@ func TestDecodeCapsToolIDAndHeaders(t *testing.T) {
 	te := got.(ToolEnd)
 	if n := len(te.ToolID); n > maxIdBytes {
 		t.Fatalf("ToolEnd.ToolID len = %d, want <= maxIdBytes (%d)", n, maxIdBytes)
-	}
-
-	// Headers: more than maxHeaderEntries entries, each with an oversized key
-	// and value, must come out bounded on both count and per-string size.
-	headers := make(map[string]string, maxHeaderEntries+50)
-	for i := 0; i < maxHeaderEntries+50; i++ {
-		key := fmt.Sprintf("x-header-%03d-%s", i, strings.Repeat("k", 2000))
-		headers[key] = strings.Repeat("v", 2000)
-	}
-	line, err = Encode(ProviderResponse{env: env{Kind: KindProviderResponse}, Headers: headers})
-	if err != nil {
-		t.Fatalf("Encode(ProviderResponse) error: %v", err)
-	}
-	got, err = Decode(line)
-	if err != nil {
-		t.Fatalf("Decode(ProviderResponse) error: %v", err)
-	}
-	pr := got.(ProviderResponse)
-	if n := len(pr.Headers); n > maxHeaderEntries {
-		t.Fatalf("Headers len = %d, want <= maxHeaderEntries (%d)", n, maxHeaderEntries)
-	}
-	for k, v := range pr.Headers {
-		if n := len(k); n > maxIdBytes {
-			t.Fatalf("Headers key len = %d, want <= maxIdBytes (%d): %q", n, maxIdBytes, k)
-		}
-		if n := len(v); n > maxFieldBytes {
-			t.Fatalf("Headers value len = %d, want <= maxFieldBytes (%d)", n, maxFieldBytes)
-		}
-	}
-
-	// Same bounding, same headers fixture, but on ProviderRequest.Headers
-	// (the request-headers wire addition) — must be identically capped.
-	line, err = Encode(ProviderRequest{env: env{Kind: KindProviderRequest}, Headers: headers})
-	if err != nil {
-		t.Fatalf("Encode(ProviderRequest) error: %v", err)
-	}
-	got, err = Decode(line)
-	if err != nil {
-		t.Fatalf("Decode(ProviderRequest) error: %v", err)
-	}
-	prq, ok := got.(ProviderRequest)
-	if !ok {
-		t.Fatalf("Decode() returned %T, want ProviderRequest", got)
-	}
-	if n := len(prq.Headers); n > maxHeaderEntries {
-		t.Fatalf("ProviderRequest.Headers len = %d, want <= maxHeaderEntries (%d)", n, maxHeaderEntries)
-	}
-	for k, v := range prq.Headers {
-		if n := len(k); n > maxIdBytes {
-			t.Fatalf("ProviderRequest.Headers key len = %d, want <= maxIdBytes (%d): %q", n, maxIdBytes, k)
-		}
-		if n := len(v); n > maxFieldBytes {
-			t.Fatalf("ProviderRequest.Headers value len = %d, want <= maxFieldBytes (%d)", n, maxFieldBytes)
-		}
-	}
-
-	// Same bounding, same headers fixture, on RequestHeaders.Headers (the
-	// deferred-merge-event kind) — must be identically capped.
-	line, err = Encode(RequestHeaders{env: env{Kind: KindRequestHeaders}, Headers: headers})
-	if err != nil {
-		t.Fatalf("Encode(RequestHeaders) error: %v", err)
-	}
-	got, err = Decode(line)
-	if err != nil {
-		t.Fatalf("Decode(RequestHeaders) error: %v", err)
-	}
-	rh, ok := got.(RequestHeaders)
-	if !ok {
-		t.Fatalf("Decode() returned %T, want RequestHeaders", got)
-	}
-	if n := len(rh.Headers); n > maxHeaderEntries {
-		t.Fatalf("RequestHeaders.Headers len = %d, want <= maxHeaderEntries (%d)", n, maxHeaderEntries)
-	}
-	for k, v := range rh.Headers {
-		if n := len(k); n > maxIdBytes {
-			t.Fatalf("RequestHeaders.Headers key len = %d, want <= maxIdBytes (%d): %q", n, maxIdBytes, k)
-		}
-		if n := len(v); n > maxFieldBytes {
-			t.Fatalf("RequestHeaders.Headers value len = %d, want <= maxFieldBytes (%d)", n, maxFieldBytes)
-		}
 	}
 }
 

@@ -3,7 +3,6 @@ package monitor
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 )
 
 // Kind discriminates the flat wire event shape. See architecture.md Section
@@ -19,7 +18,6 @@ const (
 	KindToolStart        Kind = "tool_start"
 	KindToolEnd          Kind = "tool_end"
 	KindContextEvent     Kind = "context_event"
-	KindRequestHeaders   Kind = "request_headers"
 	KindBlob             Kind = "blob"
 )
 
@@ -103,14 +101,6 @@ type ProviderRequest struct {
 	Model        string         `json:"model"`
 	Summary      RequestSummary `json:"summary"`
 	ChangedBlobs []string       `json:"changedBlobs"`
-	// Headers carries the request headers assembled for the provider HTTP
-	// call (pi's before_provider_headers hook, which fires AFTER
-	// before_provider_request — the extension stashes the rest of this event
-	// and attaches Headers once that later hook fires). Mirrors
-	// ProviderResponse.Headers below: same json tag, same decode capping
-	// (capHeaders). Omitted (nil) when the headers hook never fired for this
-	// request (e.g. a stale stash flushed by ordering safety nets).
-	Headers map[string]string `json:"headers,omitempty"`
 	// Method and URL capture the actual HTTP request line sent to the
 	// provider (e.g. "POST" / "https://api.anthropic.com/v1/messages"), so
 	// the TUI's header view can render a real request instead of just a
@@ -127,14 +117,13 @@ func (e ProviderRequest) Kind() Kind         { return e.env.Kind }
 // ProviderResponse summarizes the provider's response for this turn.
 type ProviderResponse struct {
 	env
-	Status     int               `json:"status"`
-	StopReason string            `json:"stopReason"`
-	Usage      *UsageSummary     `json:"usage"`
-	Headers    map[string]string `json:"headers,omitempty"`
+	Status     int           `json:"status"`
+	StopReason string        `json:"stopReason"`
+	Usage      *UsageSummary `json:"usage"`
 	// TextBytes/TextPreview/TextHash/ToolCalls capture what the assistant
 	// actually GENERATED this turn (R6-1) — previously this event only ever
-	// recorded status/usage/headers, so the model's own reply was lost and
-	// only reappeared a turn later as a message in the NEXT provider_request.
+	// recorded status/usage, so the model's own reply was lost and only
+	// reappeared a turn later as a message in the NEXT provider_request.
 	// TextHash is the content hash of the full assistant text, which the
 	// extension POSTs separately via POST /blob (same first-seen-blob pattern
 	// as ToolSchemaHash/ArgsHash/ResultHash) so the TUI can resolve the full
@@ -185,26 +174,6 @@ type ContextEvent struct {
 
 func (e ContextEvent) Envelope() Envelope { return e.env }
 func (e ContextEvent) Kind() Kind         { return e.env.Kind }
-
-// RequestHeaders carries request headers that arrived from pi's
-// before_provider_headers hook AFTER the provider_request event for the same
-// turn had already been emitted. In the real transport, before_provider_headers
-// fires INSIDE transformHeaders, which runs AFTER before_provider_request
-// (onPayload) — the opposite of the order the extension originally assumed —
-// so the real assembled headers (before_provider_headers's return value is
-// what pi actually sends) show up one beat late relative to provider_request.
-// Rather than delaying provider_request's own emit to wait for headers, the
-// extension emits this small merge event carrying the same TurnID, so the TUI
-// can attach the headers to the matching request row after the fact. Headers
-// caps identically to ProviderRequest.Headers/ProviderResponse.Headers
-// (capHeaders on decode).
-type RequestHeaders struct {
-	env
-	Headers map[string]string `json:"headers"`
-}
-
-func (e RequestHeaders) Envelope() Envelope { return e.env }
-func (e RequestHeaders) Kind() Kind         { return e.env.Kind }
 
 // Blob is a content-addressed payload body: system prompt, message text,
 // tool args/result, etc. It is data-only — sent via POST /blob, never inline
@@ -281,14 +250,6 @@ func capHash(s string) string {
 	return s[:maxHashBytes]
 }
 
-// maxHeaderEntries caps the number of Headers entries retained on decode
-// (R4-1b), for both ProviderResponse.Headers and ProviderRequest.Headers.
-// Per-string caps alone (capID/capField below)
-// don't stop an attacker/bug from sending an unbounded NUMBER of small
-// headers instead of one huge string; this bounds the map's entry count
-// independently, the same way maxListEntries bounds slice length.
-const maxHeaderEntries = 64
-
 // capStringSlice caps list to at most maxListEntries entries, then applies
 // capFn to every remaining entry in place. Shared by every capped
 // string-slice field (tool names, mcp tool names, changed-blob hashes).
@@ -300,34 +261,6 @@ func capStringSlice(list []string, capFn func(string) string) []string {
 		list[i] = capFn(list[i])
 	}
 	return list
-}
-
-// capHeaders bounds a decoded Headers map (ProviderResponse.Headers or
-// ProviderRequest.Headers) to at most maxHeaderEntries entries (R4-1b) —
-// extras are dropped deterministically by
-// keeping the lexicographically-first maxHeaderEntries keys (sorted, so
-// which entries survive is reproducible instead of depending on Go's
-// randomized map iteration order) — and caps every surviving key (capID:
-// header names are short identifiers) and value (capField: some real header
-// values, e.g. long trace/correlation strings, run longer than a typical
-// id) individually. A nil map stays nil.
-func capHeaders(h map[string]string) map[string]string {
-	if h == nil {
-		return nil
-	}
-	keys := make([]string, 0, len(h))
-	for k := range h {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	if len(keys) > maxHeaderEntries {
-		keys = keys[:maxHeaderEntries]
-	}
-	out := make(map[string]string, len(keys))
-	for _, k := range keys {
-		out[capID(k)] = capField(h[k])
-	}
-	return out
 }
 
 // capEnvelopeIDs caps the free-text id fields carried on every event's
@@ -401,7 +334,6 @@ func Decode(line []byte) (Event, error) {
 		e.Summary.ToolNames = capStringSlice(e.Summary.ToolNames, capID)
 		e.Summary.McpToolNames = capStringSlice(e.Summary.McpToolNames, capID)
 		e.ChangedBlobs = capStringSlice(e.ChangedBlobs, capHash)
-		e.Headers = capHeaders(e.Headers)
 		if len(e.Summary.NewMessages) > maxListEntries {
 			e.Summary.NewMessages = e.Summary.NewMessages[:maxListEntries]
 		}
@@ -418,7 +350,6 @@ func Decode(line []byte) (Event, error) {
 		}
 		capEnvelopeIDs(&e.env)
 		e.StopReason = capID(e.StopReason)
-		e.Headers = capHeaders(e.Headers)
 		e.TextPreview = capField(e.TextPreview)
 		e.TextHash = capHash(e.TextHash)
 		e.ToolCalls = capStringSlice(e.ToolCalls, capID)
@@ -453,14 +384,6 @@ func Decode(line []byte) (Event, error) {
 		capEnvelopeIDs(&e.env)
 		e.CtxKind = capID(e.CtxKind)
 		e.Detail = capField(e.Detail)
-		return e, nil
-	case KindRequestHeaders:
-		var e RequestHeaders
-		if err := json.Unmarshal(line, &e); err != nil {
-			return nil, fmt.Errorf("monitor: decode %s: %w", probe.Kind, err)
-		}
-		capEnvelopeIDs(&e.env)
-		e.Headers = capHeaders(e.Headers)
 		return e, nil
 	default:
 		return nil, fmt.Errorf("monitor: unknown event kind %q", probe.Kind)

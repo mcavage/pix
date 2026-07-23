@@ -1302,12 +1302,11 @@ func TestMonitorTUI_LineCursorScrollsThroughExpandedPayload(t *testing.T) {
 	}
 }
 
-// Bug 2: expanding a response row must show detail (status/stop/usage +
-// headers), not be a silent no-op.
+// Bug 2: expanding a response row must show detail (status/stop/usage),
+// not be a silent no-op.
 func TestMonitorTUI_ExpandResponseRowShowsDetail(t *testing.T) {
 	m := NewModel(TUIConfig{})
 	resp := mkProviderResponse("7", 200, "tool_use", &monitor.UsageSummary{InputTokens: 100, OutputTokens: 50, TotalTokens: 150})
-	resp.Headers = map[string]string{"x-request-id": "abc-123"}
 	m = feed(t, m, resp)
 
 	before := m.View()
@@ -1321,14 +1320,6 @@ func TestMonitorTUI_ExpandResponseRowShowsDetail(t *testing.T) {
 	}
 	if !strings.Contains(after, "in=100") || !strings.Contains(after, "out=50") || !strings.Contains(after, "total=150") {
 		t.Errorf("response detail missing usage tokens, got:\n%s", after)
-	}
-	// Headers are behind the `h` toggle now (default off).
-	if strings.Contains(after, "x-request-id") {
-		t.Errorf("response detail shows headers with h:headers=off, got:\n%s", after)
-	}
-	m = key(t, m, runeKey("h"))
-	if !strings.Contains(m.View(), "x-request-id: abc-123") {
-		t.Errorf("response detail missing headers after h, got:\n%s", m.View())
 	}
 }
 
@@ -1765,7 +1756,6 @@ func TestMonitorTUI_ResponseSummaryLeadsWithAssistantReply(t *testing.T) {
 		&monitor.UsageSummary{InputTokens: 37900, OutputTokens: 512, TotalTokens: 38412},
 		"The bug is in reconcileScroll; fixing it now.", "text-h1", 1800,
 		[]string{"bash", "read"})
-	resp.Headers = map[string]string{"x-request-id": "abc-123", "content-type": "application/json"}
 	m = feed(t, m, resp)
 
 	line := summaryLine(t, m, "resp 200")
@@ -1781,10 +1771,6 @@ func TestMonitorTUI_ResponseSummaryLeadsWithAssistantReply(t *testing.T) {
 	// The reply must LEAD: preview before the demoted status/usage suffix.
 	if strings.Index(line, "The bug is") > strings.Index(line, "resp 200") {
 		t.Errorf("response summary leads with diagnostics instead of the reply, got: %q", line)
-	}
-	// Headers never appear on the summary line (nor anywhere collapsed).
-	if strings.Contains(m.View(), "x-request-id") || strings.Contains(m.View(), "application/json") {
-		t.Errorf("raw HTTP header text visible on the collapsed feed, got:\n%s", m.View())
 	}
 }
 
@@ -1812,10 +1798,10 @@ func TestMonitorTUI_RequestSummaryLeadsWithUserMessage(t *testing.T) {
 	}
 }
 
-// (c)+(d) Expanding a response shows the FULL assistant reply first, then
-// the — diagnostics — section, with HTTP headers dead last — and headers
-// appear ONLY in the expand.
-func TestMonitorTUI_ExpandedResponseReplyBeforeDiagnosticsHeadersLast(t *testing.T) {
+// (c) Expanding a response shows the FULL assistant reply first, then the
+// — diagnostics — section (status/usage) — status/usage appear ONLY in
+// the expand.
+func TestMonitorTUI_ExpandedResponseReplyBeforeDiagnostics(t *testing.T) {
 	fullReply := "Here is the full assistant answer.\nIt spans multiple lines.\nDone."
 	fakeBlob := func(h string) (monitor.Blob, bool) {
 		if h == "text-h9" {
@@ -1828,32 +1814,29 @@ func TestMonitorTUI_ExpandedResponseReplyBeforeDiagnosticsHeadersLast(t *testing
 	resp := mkAssistantResponse("4", 200, "end_turn",
 		&monitor.UsageSummary{InputTokens: 100, OutputTokens: 50, TotalTokens: 150},
 		"Here is the full assistant answer.", "text-h9", len(fullReply), nil)
-	resp.Headers = map[string]string{"x-request-id": "hdr-xyz"}
 	m = feed(t, m, resp)
 
-	// Headers absent while collapsed (d).
-	if strings.Contains(m.View(), "hdr-xyz") {
-		t.Fatalf("header text visible before expand, got:\n%s", m.View())
+	// status absent while collapsed.
+	if strings.Contains(m.View(), "status 200") {
+		t.Fatalf("diagnostics visible before expand, got:\n%s", m.View())
 	}
 
 	m = key(t, m, runeKey("f")) // showFull on
-	m = key(t, m, runeKey("h")) // headers on (hidden by default)
 	m = key(t, m, runeKey(" ")) // expand (following: cursor on the response row)
 
 	view := m.View()
 	iReply := strings.Index(view, "It spans multiple lines.")
 	iDiag := strings.Index(view, "— diagnostics —")
 	iStatus := strings.Index(view, "status 200")
-	iHdr := strings.Index(view, "hdr-xyz")
 	if iReply < 0 {
 		t.Fatalf("expanded response missing the full assistant reply, got:\n%s", view)
 	}
-	if iDiag < 0 || iStatus < 0 || iHdr < 0 {
-		t.Fatalf("expanded response missing diagnostics/status/headers (%d/%d/%d), got:\n%s", iDiag, iStatus, iHdr, view)
+	if iDiag < 0 || iStatus < 0 {
+		t.Fatalf("expanded response missing diagnostics/status (%d/%d), got:\n%s", iDiag, iStatus, view)
 	}
-	if !(iReply < iDiag && iDiag < iStatus && iStatus < iHdr) {
-		t.Errorf("expanded response order wrong: reply=%d diagnostics=%d status=%d headers=%d, got:\n%s",
-			iReply, iDiag, iStatus, iHdr, view)
+	if !(iReply < iDiag && iDiag < iStatus) {
+		t.Errorf("expanded response order wrong: reply=%d diagnostics=%d status=%d, got:\n%s",
+			iReply, iDiag, iStatus, view)
 	}
 }
 
@@ -2017,153 +2000,64 @@ func TestMonitorTUI_SingleSessionShowsHeaderNoIndent(t *testing.T) {
 	}
 }
 
-// --- `h`: HTTP headers hidden by default, toggled on for req + resp ---
+// --- request line: accurate `POST <url>` in request diagnostics, no HTTP headers ---
 
-func TestMonitorTUI_HeaderToggleShowsRequestAndResponseHeaders(t *testing.T) {
+// TestMonitorTUI_RequestExpandShowsRequestLineNoHeaders locks in the
+// post-headers-removal shape (decision: stop showing HTTP headers — wrong
+// source; keep the accurate request LINE): the request expand shows an
+// unconditional `request: POST <url>` line in diagnostics (no more `h`
+// gate — it's small and accurate), there are no HTTP header lines
+// anywhere, and the footer no longer has an `h:headers=` toggle at all.
+func TestMonitorTUI_RequestExpandShowsRequestLineNoHeaders(t *testing.T) {
 	m := NewModel(TUIConfig{})
 
 	req := mkProviderRequest("9", "opus-4-8", "h1", 1000, 1, 100, nil)
 	req.Method = "POST"
 	req.URL = "https://api.anthropic.com/v1/messages"
-	req.Headers = map[string]string{"x-req-trace": "req-va\x1b[31mlue"}
 	m = feed(t, m, req)
+
+	// Request line absent while collapsed.
+	if strings.Contains(m.View(), "POST https://api.anthropic.com") {
+		t.Fatalf("request line visible before expand, got:\n%s", m.View())
+	}
+
 	m = key(t, m, runeKey(" ")) // expand request (following: cursor on it)
 
 	resp := mkProviderResponse("9", 200, "end_turn", nil)
-	resp.Headers = map[string]string{"x-resp-id": "resp-value"}
 	m = feed(t, m, resp)
 	m = key(t, m, runeKey(" ")) // expand response (follow moved cursor to it)
 
 	view := m.View()
-	if strings.Contains(view, "hdr ") || strings.Contains(view, "x-req-trace") || strings.Contains(view, "x-resp-id") ||
-		strings.Contains(view, "POST https://api.anthropic.com") || strings.Contains(view, "HTTP 200") {
-		t.Fatalf("headers visible while h:headers=off (the default), got:\n%s", view)
+	if !strings.Contains(view, "request: POST https://api.anthropic.com/v1/messages") {
+		t.Errorf("request expand missing the unconditional request line, got:\n%s", view)
 	}
-	if !strings.Contains(view, "h:headers=off") {
-		t.Errorf("footer missing h:headers=off, got:\n%s", view)
+	if strings.Contains(view, "HTTP 200") {
+		t.Errorf("response expand still shows an HTTP status block, got:\n%s", view)
 	}
-
-	m = key(t, m, runeKey("h"))
-	view = m.View()
-	if !strings.Contains(view, "POST https://api.anthropic.com/v1/messages") {
-		t.Errorf("request line missing after h, got:\n%s", view)
-	}
-	if !strings.Contains(view, "x-req-trace: req-value") || strings.Contains(view, "hdr ") {
-		t.Errorf("request headers missing (or unsanitized, or still `hdr `-prefixed) after h, got:\n%s", view)
-	}
-	if !strings.Contains(view, "HTTP 200") {
-		t.Errorf("response status line missing after h, got:\n%s", view)
-	}
-	if !strings.Contains(view, "x-resp-id: resp-value") {
-		t.Errorf("response headers missing after h, got:\n%s", view)
-	}
-	// The request line must render BEFORE the request's headers, and the
-	// status line before the response's headers (a status/method dump with
-	// headers scrambled ahead of it would defeat the point of the block).
-	if i, j := strings.Index(view, "POST https://api.anthropic.com"), strings.Index(view, "x-req-trace: req-value"); i < 0 || j < 0 || i > j {
-		t.Errorf("want request line before request headers, got:\n%s", view)
-	}
-	if i, j := strings.Index(view, "HTTP 200"), strings.Index(view, "x-resp-id: resp-value"); i < 0 || j < 0 || i > j {
-		t.Errorf("want status line before response headers, got:\n%s", view)
-	}
-	if !strings.Contains(view, "h:headers=on") {
-		t.Errorf("footer missing h:headers=on, got:\n%s", view)
+	if strings.Contains(view, "h:headers") {
+		t.Errorf("footer still advertises an h:headers toggle, got:\n%s", view)
 	}
 	assertNoControlRunes(t, view)
 
-	m = key(t, m, runeKey("h")) // toggle back off
-	view = m.View()
-	if strings.Contains(view, "hdr ") || strings.Contains(view, "POST https://api.anthropic.com") || strings.Contains(view, "HTTP 200") {
-		t.Errorf("headers still visible after toggling h back off, got:\n%s", view)
+	// The `h` key no longer does anything (no toggle left to flip).
+	before := view
+	m = key(t, m, runeKey("h"))
+	if m.View() != before {
+		t.Errorf("`h` key changed the view; it should now be a no-op:\nbefore:\n%s\nafter:\n%s", before, m.View())
 	}
 }
 
-// TestMonitorTUI_HeaderToggleRendersRequestLineAndStatusLine locks in the
-// exact shape of the HTTP-request-style block (live feedback: "I'd expect
-// something like POST /api/..." instead of an alphabetized `hdr k: v`
-// dump): the request expand shows `METHOD url` immediately followed by its
-// header lines (no `hdr` prefix), and the response expand shows `HTTP
-// <status>` immediately followed by ITS header lines — both hidden
-// entirely while h is off.
-func TestMonitorTUI_HeaderToggleRendersRequestLineAndStatusLine(t *testing.T) {
+// A request with no Method/URL omits the request line entirely (older
+// events / no method-and-url hook fired) rather than rendering a bare
+// "request: ".
+func TestMonitorTUI_RequestExpandOmitsRequestLineWhenEmpty(t *testing.T) {
 	m := NewModel(TUIConfig{})
-
-	req := mkProviderRequest("1", "opus-4-8", "", 0, 0, 0, nil)
-	req.Method = "POST"
-	req.URL = "https://api.anthropic.com/v1/messages"
-	req.Headers = map[string]string{"anthropic-version": "2023-06-01"}
-	m = feed(t, m, req)
+	m = feed(t, m, mkProviderRequest("1", "opus-4-8", "", 0, 0, 0, nil))
 	m = key(t, m, runeKey(" ")) // expand
 
-	if view := m.View(); strings.Contains(view, "POST https://api.anthropic.com/v1/messages") {
-		t.Fatalf("request line visible with h off, got:\n%s", view)
-	}
-
-	m = key(t, m, runeKey("h"))
 	view := m.View()
-	reqLine := strings.Index(view, "POST https://api.anthropic.com/v1/messages")
-	if reqLine < 0 {
-		t.Fatalf("request line missing with h on, got:\n%s", view)
-	}
-	hdrLine := strings.Index(view, "anthropic-version: 2023-06-01")
-	if hdrLine < 0 || hdrLine < reqLine {
-		t.Fatalf("want `POST <url>` before its headers, got:\n%s", view)
-	}
-
-	resp := mkProviderResponse("1", 200, "end_turn", nil)
-	resp.Headers = map[string]string{"server": "cloudflare"}
-	m = feed(t, m, resp)
-	m = key(t, m, runeKey(" ")) // expand response
-
-	view = m.View()
-	statusLine := strings.Index(view, "HTTP 200")
-	if statusLine < 0 {
-		t.Fatalf("HTTP 200 status line missing with h on, got:\n%s", view)
-	}
-	respHdrLine := strings.Index(view, "server: cloudflare")
-	if respHdrLine < 0 || respHdrLine < statusLine {
-		t.Fatalf("want `HTTP 200` before its headers, got:\n%s", view)
-	}
-
-	m = key(t, m, runeKey("h")) // toggle back off
-	view = m.View()
-	if strings.Contains(view, "POST https://api.anthropic.com") || strings.Contains(view, "HTTP 200") {
-		t.Fatalf("request/status lines still visible with h off, got:\n%s", view)
-	}
-}
-
-// TestMonitorTUI_RequestHeadersEventMergesIntoRequestRow covers the
-// monitor.RequestHeaders merge event: the real transport's
-// before_provider_headers hook fires AFTER before_provider_request, so the
-// extension emits provider_request first (Headers unset) and follows up a
-// beat later with a request_headers event carrying the same turn's real
-// headers. applyEvent must find the matching REQUEST row by the same
-// session+turnId key and attach the sanitized headers to it, so `h` still
-// renders them under the request line even though they arrived late.
-func TestMonitorTUI_RequestHeadersEventMergesIntoRequestRow(t *testing.T) {
-	m := NewModel(TUIConfig{})
-
-	req := mkProviderRequest("1", "opus-4-8", "", 0, 0, 0, nil)
-	req.Method = "POST"
-	req.URL = "https://api.anthropic.com/v1/messages"
-	// No Headers on the inline event — this is the late-arriving case.
-	m = feed(t, m, req)
-
-	hdrs := monitor.RequestHeaders{Headers: map[string]string{"anthropic-version": "2023-06-01"}}
-	hdrs.TurnID = "1"
-	m = feed(t, m, hdrs)
-
-	m = key(t, m, runeKey(" ")) // expand the request row
-	m = key(t, m, runeKey("h")) // headers on
-
-	view := m.View()
-	reqLine := strings.Index(view, "POST https://api.anthropic.com/v1/messages")
-	if reqLine < 0 {
-		t.Fatalf("request line missing, got:\n%s", view)
-	}
-	hdrLine := strings.Index(view, "anthropic-version: 2023-06-01")
-	if hdrLine < 0 || hdrLine < reqLine {
-		t.Fatalf("want the merged header rendered under the request line, got:\n%s", view)
+	if strings.Contains(view, "request:") {
+		t.Errorf("request line rendered despite empty Method/URL, got:\n%s", view)
 	}
 }
 

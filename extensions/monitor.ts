@@ -600,91 +600,6 @@ export function extractAssistantOutput(message: any): AssistantOutput {
 	return { text: stringifyContent(textBlocks), toolCalls };
 }
 
-/** Coerce before_provider_headers/after_provider_response's normalized headers into Record<string,string>, or undefined when empty. */
-export function normalizeHeaders(headers: any): Record<string, string> | undefined {
-	if (!headers || typeof headers !== "object") return undefined;
-	const out: Record<string, string> = {};
-	for (const [k, v] of Object.entries(headers)) {
-		if (typeof v === "string") out[k] = v;
-		else if (Array.isArray(v)) out[k] = v.join(", ");
-		else if (v != null) out[k] = String(v);
-	}
-	return Object.keys(out).length ? out : undefined;
-}
-
-// Header NAMES whose VALUE is redacted before a headers map ever leaves the
-// sandbox, matched case-insensitively (HTTP header names are
-// case-insensitive). In this proxy-managed setup Authorization/x-api-key are
-// typically already the literal "proxy-managed" sentinel (the real provider
-// credential never reaches the VM), but headers are provider/runtime input,
-// not something this file controls, so redaction is by NAME defensively
-// rather than trusting that invariant to always hold.
-const SENSITIVE_HEADER_NAMES = new Set(["authorization", "x-api-key", "api-key", "cookie", "set-cookie", "proxy-authorization"]);
-
-/**
- * Redact sensitive header VALUES (never the keys/shape) to "<redacted>".
- * Pure and total: a nullish `h` passes through unchanged so this composes
- * directly with `normalizeHeaders`'s `Record<string,string> | undefined`
- * return (`redactHeaders(normalizeHeaders(raw))`). Applied to BOTH the
- * request headers (before_provider_headers) and the response headers
- * (after_provider_response) before either is ever emitted on the wire.
- */
-export function redactHeaders(h: Record<string, string> | undefined): Record<string, string> | undefined {
-	if (!h) return h;
-	const out: Record<string, string> = {};
-	for (const [k, v] of Object.entries(h)) {
-		out[k] = SENSITIVE_HEADER_NAMES.has(k.toLowerCase()) ? "<redacted>" : v;
-	}
-	return out;
-}
-
-/**
- * Reconstruct the DETERMINISTIC subset of request headers pi-stack's VM
- * actually sends, for the request row's `headers` field when
- * before_provider_headers never fires. Confirmed empirically: a live run
- * with headers toggled on shows only the `POST <url>` request line, never a
- * headers block — pi's provider SDK assembles headers like x-api-key/
- * anthropic-version/user-agent internally, and no extension hook exposes
- * the assembled set. So this is NOT a full packet capture; it is only what
- * is deterministically true of what the VM sends, and it never fabricates
- * an uncertain value (no anthropic-version/user-agent/accept guess):
- *   - always: `content-type: application/json`
- *   - api "anthropic-messages" (or any api containing "anthropic"):
- *     `x-api-key: proxy-managed`
- *   - api containing "openai" (openai-responses/openai-completions/...):
- *     `authorization: Bearer proxy-managed`
- *   - api containing "google"/"gemini"/"generative": `x-goog-api-key: proxy-managed`
- *   - unknown/empty api: content-type only
- * Custom per-model headers (`model.headers`, set via config) are spread in
- * LAST, so a real configured header shows exactly as configured rather than
- * being shadowed by a guessed default.
- *
- * The literal "proxy-managed" is the sentinel value the sandbox actually
- * sends on these headers (the real provider credential is injected
- * host-side by the proxy and never reaches the VM) — it also matches
- * `SENSITIVE_HEADER_NAMES` above, so `redactHeaders` renders it
- * "<redacted>" the same as a real credential would be.
- *
- * Pure and total: never throws, and an undefined/malformed `model`
- * degrades to `{ "content-type": "application/json" }` rather than
- * breaking event emission.
- */
-export function reconstructRequestHeaders(model: { api?: string; headers?: Record<string, string> } | undefined): Record<string, string> {
-	const out: Record<string, string> = { "content-type": "application/json" };
-	const api = safe(() => (typeof model?.api === "string" ? model.api : "")) ?? "";
-	if (api.includes("anthropic")) out["x-api-key"] = "proxy-managed";
-	else if (api.includes("openai")) out["authorization"] = "Bearer proxy-managed";
-	else if (api.includes("google") || api.includes("gemini") || api.includes("generative")) out["x-goog-api-key"] = "proxy-managed";
-
-	const custom = safe(() => model?.headers);
-	if (custom && typeof custom === "object") {
-		for (const [k, v] of Object.entries(custom)) {
-			if (typeof v === "string") out[k] = v;
-		}
-	}
-	return out;
-}
-
 export type TurnTrigger = "user" | "tool_result" | "compaction" | "unknown";
 
 /**
@@ -859,31 +774,10 @@ export default function (pi: ExtensionAPI) {
 		let currentModelLabel = "";
 		let prevMessageCount = 0;
 		let lastEventKind = ""; // last emitted event's "kind", used to infer turn_start.trigger
-		// status/headers observed on the most recent after_provider_response,
-		// held until message_end supplies the real usage/stopReason for the
-		// same round-trip (see the after_provider_response/message_end handlers).
-		let pendingResponseMeta: { status: number; headers?: Record<string, string> } | null = null;
-		// Request headers observed on the most recent before_provider_headers,
-		// held until before_provider_request supplies the summary/changedBlobs and
-		// emits the provider_request event for the SAME round-trip. This covers
-		// the order where before_provider_headers fires FIRST (its documented
-		// position in the hook-order diagram: before_provider_headers ->
-		// before_provider_request -> after_provider_response -> message_end).
-		//
-		// In practice, though, the real transport fires before_provider_headers
-		// INSIDE transformHeaders, which runs AFTER before_provider_request
-		// (onPayload) — the opposite order. When that happens, provider_request
-		// has ALREADY been emitted with no headers by the time this hook fires,
-		// so there is nothing left to stash into for that turn: the
-		// before_provider_headers handler below instead emits a small merge event,
-		// request_headers, carrying the same turnId (WIRE: KindRequestHeaders),
-		// so the TUI can attach the real headers to the already-emitted request
-		// row. `lastRequestTurnId` is what before_provider_headers checks to tell
-		// the two orders apart: it is the turnId of the most recently emitted
-		// provider_request, set by the before_provider_request handler right
-		// after that emit.
-		let pendingRequestHeaders: Record<string, string> | undefined;
-		let lastRequestTurnId = "";
+		// status observed on the most recent after_provider_response, held until
+		// message_end supplies the real usage/stopReason for the same round-trip
+		// (see the after_provider_response/message_end handlers).
+		let pendingResponseMeta: { status: number } | null = null;
 		const seenBlobHashes = new Set<string>();
 		const toolStartedAt = new Map<string, number>();
 		const emittedToolStart = new Set<string>();
@@ -1042,10 +936,7 @@ export default function (pi: ExtensionAPI) {
 		function resetSessionState(ctx: any) {
 			// Nothing to flush here anymore — provider_request now emits synchronously
 			// at before_provider_request, so there is never an un-emitted stash left
-			// behind when the session switches. Just discard any headers stashed for
-			// a round-trip that never completed under the OUTGOING session.
-			pendingRequestHeaders = undefined;
-			lastRequestTurnId = "";
+			// behind when the session switches.
 			sessionId = extractSessionId(ctx);
 			turnSeqCounter = 0;
 			currentTurnId = "";
@@ -1157,30 +1048,15 @@ export default function (pi: ExtensionAPI) {
 				trigger: inferTurnTrigger({ isFirstTurn, compacted, prevEventKind }),
 			});
 
-			// Attach headers ALWAYS now — the request block is never header-less.
-			// Prefer REAL headers when before_provider_headers already fired for
-			// THIS turn (the hook-order-diagram order: before_provider_headers ->
-			// before_provider_request) via `pendingRequestHeaders`; otherwise fall
-			// back to `reconstructRequestHeaders`, the deterministic subset
-			// (confirmed empirically that before_provider_headers does not fire in
-			// the real runtime — see that function's doc comment). If
-			// before_provider_headers ever DOES fire late for this turn (the real
-			// transport order, INSIDE transformHeaders, AFTER before_provider_request's
-			// onPayload), that handler still emits a request_headers merge event
-			// (see below) that OVERRIDES this reconstruction with the real headers
-			// in the TUI — lastRequestTurnId tracks that regardless of whether we
-			// used the reconstruction here. Emitting provider_request immediately
-			// (rather than waiting for a later hook) is what keeps it ordered
-			// before its own turn's provider_response, instead of leaking into the
-			// NEXT turn.
-			const realHeaders = pendingRequestHeaders;
-			pendingRequestHeaders = undefined;
 			// method/url reconstruct the actual HTTP request line pi sent to the
 			// provider (WIRE: ProviderRequest.Method/URL) from ctx.model, which pi
 			// never hands us directly — read it defensively, same as ctx?.model
-			// above, so a missing/odd ctx.model shape never breaks the emit.
+			// above, so a missing/odd ctx.model shape never breaks the emit. This
+			// is the accurate request LINE; pi's hooks never hand us the real
+			// assembled HTTP headers, so header capture was removed rather than
+			// emitting reconstructed/guessed values (decision: pi's hooks are the
+			// wrong source for real HTTP headers).
 			const url = safe(() => requestUrl(ctx?.model)) ?? "";
-			const headers = redactHeaders(realHeaders ?? safe(() => reconstructRequestHeaders(ctx?.model)) ?? { "content-type": "application/json" });
 			emitEvent({
 				...baseEnvelope("provider_request"),
 				model,
@@ -1196,51 +1072,9 @@ export default function (pi: ExtensionAPI) {
 					toolSchemaHash: result.toolSchemaHash, // R2-6: same hash the tool-schema blob (below) is enqueued under.
 				},
 				changedBlobs,
-				headers,
 				method: "POST",
 				url,
 			});
-			// Track whether THIS request is still awaiting its REAL headers (not
-			// whether `headers` above is populated — it always is now).
-			// - real headers attached inline just now (headers-first order):
-			//   nothing left to track, so clear it — otherwise a stale turnId here
-			//   would false-match the NEXT turn's before_provider_headers, which
-			//   fires while currentTurnId still holds THIS turn's id
-			//   (before_provider_request hasn't run for the next turn yet).
-			// - no real headers attached (request-first order, the real
-			//   transport, or before_provider_headers never fires at all): this
-			//   request went out with the reconstructed subset and is still
-			//   awaiting a possible before_provider_headers merge event — record
-			//   its turnId so that handler (below) can recognize it and emit the
-			//   merge event instead of stashing for a future request.
-			lastRequestTurnId = realHeaders ? "" : currentTurnId;
-		});
-
-		on("before_provider_headers", (e: any) => {
-			// Real headers, redacted (R6-2) before they ever leave the sandbox,
-			// regardless of which order this fires relative to
-			// before_provider_request for the current turn.
-			const h = redactHeaders(normalizeHeaders(e?.headers));
-			if (currentTurnId && currentTurnId === lastRequestTurnId) {
-				// Request-first order (the real transport: before_provider_headers
-				// fires INSIDE transformHeaders, AFTER before_provider_request's
-				// onPayload): provider_request for THIS turn already went out with no
-				// headers, and lastRequestTurnId is still set to its turnId (not yet
-				// cleared — see above). Emit a small merge event carrying the same
-				// turnId (baseEnvelope stamps currentTurnId, which equals
-				// lastRequestTurnId here and is correct since headers fire after the
-				// request in this order) so the TUI can attach the real headers to
-				// the already-emitted request row. Clear lastRequestTurnId: this
-				// request's headers are now accounted for.
-				emitEvent({ ...baseEnvelope("request_headers"), headers: h });
-				lastRequestTurnId = "";
-				return;
-			}
-			// Headers-first order (the hook-order-diagram's documented order):
-			// before_provider_request hasn't emitted this turn's provider_request
-			// yet (lastRequestTurnId is either "" or a PREVIOUS, already-cleared
-			// turn), so stash the headers for it to attach inline.
-			pendingRequestHeaders = h;
 		});
 
 		on("after_provider_response", (e: any) => {
@@ -1249,13 +1083,11 @@ export default function (pi: ExtensionAPI) {
 			// fires before the response stream is consumed, so there is no usage
 			// or stopReason here yet. The old code emitted a provider_response
 			// with a fake all-zero usage block right at this hook; that's gone
-			// (R1-5). Stash status/headers and let the message_end handler below
-			// emit the actual provider_response once the assistant message (with
-			// real usage + stopReason) has finalized.
-			pendingResponseMeta = {
-				status: Number(e?.status ?? 0) || 0,
-				headers: redactHeaders(normalizeHeaders(e?.headers)),
-			};
+			// (R1-5). Stash status and let the message_end handler below emit the
+			// actual provider_response once the assistant message (with real
+			// usage + stopReason) has finalized. Headers are NOT captured here
+			// (decision: pi's hooks are the wrong source for real HTTP headers).
+			pendingResponseMeta = { status: Number(e?.status ?? 0) || 0 };
 		});
 
 		on("message_end", (e: any) => {
@@ -1264,13 +1096,13 @@ export default function (pi: ExtensionAPI) {
 			// AssistantMessage). before_provider_request -> after_provider_response
 			// -> message_end fire in that order for the same round-trip
 			// (docs/extensions.md hook-order diagram), so pendingResponseMeta set
-			// above is still the right status/headers pairing for this message.
+			// above is still the right status pairing for this message.
 			const message = e?.message;
 			if (!message || message.role !== "assistant") return;
 			// R6-1: capture what the assistant actually GENERATED this turn — until
-			// now provider_response only recorded status/usage/headers, so the
-			// model's own reply was lost and only reappeared a turn later as a
-			// message in the NEXT provider_request.
+			// now provider_response only recorded status/usage, so the model's own
+			// reply was lost and only reappeared a turn later as a message in the
+			// NEXT provider_request.
 			const { text: assistantText, toolCalls } = extractAssistantOutput(message);
 			const textBytes = Buffer.byteLength(assistantText, "utf8");
 			const textHash = sha256Hex(assistantText);
@@ -1282,7 +1114,6 @@ export default function (pi: ExtensionAPI) {
 				status: pendingResponseMeta?.status ?? 0,
 				stopReason: String(message?.stopReason ?? ""),
 				usage: extractUsage(message),
-				headers: pendingResponseMeta?.headers,
 				textBytes,
 				textPreview: truncatePreview(assistantText, 200),
 				textHash,

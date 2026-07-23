@@ -20,9 +20,6 @@ const {
 	partitionToolNames,
 	summarizeRequest,
 	extractAssistantOutput,
-	normalizeHeaders,
-	redactHeaders,
-	reconstructRequestHeaders,
 	requestUrl,
 	extractSessionId,
 } = monitor;
@@ -164,48 +161,6 @@ test("R2-6: toolSchemaHash is empty string when there are no tools", () => {
 	assert.ok(!result.blobs.some((b) => b.text === "[]"));
 });
 
-// ─── redactHeaders: sensitive header VALUES are redacted, keys/shape kept ──
-
-test("redactHeaders redacts known sensitive header names, case-insensitively", () => {
-	const headers = {
-		Authorization: "proxy-managed",
-		"X-Api-Key": "proxy-managed",
-		"api-key": "secret-value",
-		Cookie: "session=abc",
-		"Set-Cookie": "session=abc; Path=/",
-		"Proxy-Authorization": "Basic xyz",
-		"content-type": "application/json",
-		"user-agent": "pi/1.0",
-	};
-	const redacted = redactHeaders(headers);
-	assert.equal(redacted.Authorization, "<redacted>");
-	assert.equal(redacted["X-Api-Key"], "<redacted>");
-	assert.equal(redacted["api-key"], "<redacted>");
-	assert.equal(redacted.Cookie, "<redacted>");
-	assert.equal(redacted["Set-Cookie"], "<redacted>");
-	assert.equal(redacted["Proxy-Authorization"], "<redacted>");
-	// Non-sensitive headers pass through unchanged, and every original key is
-	// still present (redaction never drops a header).
-	assert.equal(redacted["content-type"], "application/json");
-	assert.equal(redacted["user-agent"], "pi/1.0");
-	assert.deepEqual(Object.keys(redacted).sort(), Object.keys(headers).sort());
-});
-
-test("redactHeaders passes through undefined unchanged", () => {
-	assert.equal(redactHeaders(undefined), undefined);
-});
-
-test("redactHeaders composes with normalizeHeaders for a before_provider_headers-shaped payload", () => {
-	// ProviderHeaders = Record<string, string | null>; a null value is an
-	// explicit "suppress this header" per pi's docs and normalizeHeaders drops
-	// it (v != null check), so it never reaches redactHeaders at all.
-	const raw = { authorization: "proxy-managed", "x-request-id": "abc-123", "x-suppressed": null };
-	const redacted = redactHeaders(normalizeHeaders(raw));
-	assert.equal(redacted.authorization, "<redacted>");
-	assert.equal(redacted["x-request-id"], "abc-123");
-	assert.equal("x-suppressed" in redacted, false);
-});
-
 // ─── requestUrl: reconstruct the HTTP request line from ctx.model ──────────
 
 test("requestUrl: anthropic-messages appends /v1/messages", () => {
@@ -281,81 +236,12 @@ test("requestUrl: missing baseUrl returns empty string, never throws", () => {
 	assert.equal(requestUrl(undefined), "");
 });
 
-// ─── reconstructRequestHeaders: deterministic-subset fallback (FIX 1) ──────
-// before_provider_headers is confirmed to never fire in the real runtime
-// (a live run with headers toggled on shows only the `POST <url>` line, no
-// headers block), so this is the fallback reconstruction: only what's
-// deterministically true of what the pi-stack VM sends, never a fabricated
-// value like anthropic-version/user-agent/accept.
-
-test("reconstructRequestHeaders: anthropic api gets x-api-key alongside content-type", () => {
-	assert.deepEqual(reconstructRequestHeaders({ api: "anthropic-messages" }), {
-		"content-type": "application/json",
-		"x-api-key": "proxy-managed",
-	});
-	// api CONTAINING "anthropic", not just the exact string.
-	assert.deepEqual(reconstructRequestHeaders({ api: "custom-anthropic-gateway" }), {
-		"content-type": "application/json",
-		"x-api-key": "proxy-managed",
-	});
-});
-
-test("reconstructRequestHeaders: openai api gets authorization Bearer alongside content-type", () => {
-	assert.deepEqual(reconstructRequestHeaders({ api: "openai-responses" }), {
-		"content-type": "application/json",
-		authorization: "Bearer proxy-managed",
-	});
-	assert.deepEqual(reconstructRequestHeaders({ api: "openai-completions" }), {
-		"content-type": "application/json",
-		authorization: "Bearer proxy-managed",
-	});
-});
-
-test("reconstructRequestHeaders: google/gemini api gets x-goog-api-key alongside content-type", () => {
-	assert.deepEqual(reconstructRequestHeaders({ api: "google-generative-ai" }), {
-		"content-type": "application/json",
-		"x-goog-api-key": "proxy-managed",
-	});
-	assert.deepEqual(reconstructRequestHeaders({ api: "gemini-messages" }), {
-		"content-type": "application/json",
-		"x-goog-api-key": "proxy-managed",
-	});
-	assert.deepEqual(reconstructRequestHeaders({ api: "generative-language" }), {
-		"content-type": "application/json",
-		"x-goog-api-key": "proxy-managed",
-	});
-});
-
-test("reconstructRequestHeaders: unknown/empty api gets content-type only", () => {
-	assert.deepEqual(reconstructRequestHeaders({ api: "some-unknown-api" }), { "content-type": "application/json" });
-	assert.deepEqual(reconstructRequestHeaders({ api: "" }), { "content-type": "application/json" });
-	assert.deepEqual(reconstructRequestHeaders({}), { "content-type": "application/json" });
-});
-
-test("reconstructRequestHeaders: undefined model never throws, degrades to content-type only", () => {
-	assert.deepEqual(reconstructRequestHeaders(undefined), { "content-type": "application/json" });
-});
-
-test("reconstructRequestHeaders: model.headers (custom per-model config headers) are spread in, showing exactly as configured", () => {
-	assert.deepEqual(reconstructRequestHeaders({ api: "anthropic-messages", headers: { "x-custom-thing": "abc", "content-type": "application/json; charset=utf-8" } }), {
-		"content-type": "application/json; charset=utf-8", // custom headers win, spread in LAST
-		"x-api-key": "proxy-managed",
-		"x-custom-thing": "abc",
-	});
-});
-
 // ─── hook ordering: provider_request must emit BEFORE its own provider_response ───
-// This is the regression under test: pi's documented hook order (docs/extensions.md
-// hook-order diagram) is
-//   turn_start -> before_provider_headers -> before_provider_request -> after_provider_response -> message_end
-// so before_provider_headers fires strictly BEFORE before_provider_request. The
-// fix stashes headers at before_provider_headers and EMITS the provider_request
-// immediately at before_provider_request (attaching those stashed headers), so a
-// turn's request always lands before that same turn's response, and before the
-// NEXT turn's request. End-to-end against a stub `pi` + a local HTTP server that
-// RECORDS every posted NDJSON line, since the header stash is intentionally
-// private to the default export's closure, same as the R2-1 queue/timer state
-// below.
+// This is the regression under test: each turn's request must land before
+// that same turn's response, and before the NEXT turn's request.
+// End-to-end against a stub `pi` + a local HTTP server that RECORDS every
+// posted NDJSON line, since this ordering is intentionally internal to the
+// default export's closure, same as the R2-1 queue/timer state below.
 
 function startRecordingServer() {
 	const lines = [];
@@ -381,7 +267,7 @@ function assistantMessage(text) {
 	return { role: "assistant", content: [{ type: "text", text }], stopReason: "end_turn", usage: {} };
 }
 
-test("two turns fired in pi's documented hook order emit provider_request/provider_response in the same order, per turn, with headers on the right turn", async (t) => {
+test("two turns emit provider_request/provider_response in the same order, per turn", async (t) => {
 	const { server, port, lines } = await startRecordingServer();
 	t.after(() => server.close());
 
@@ -391,17 +277,9 @@ test("two turns fired in pi's documented hook order emit provider_request/provid
 
 	handlers.get("session_start")?.({}, {});
 
-	// Turn 1: before_provider_headers -> before_provider_request -> message_end.
-	handlers.get("before_provider_headers")?.({
-		headers: { authorization: "proxy-managed", "x-request-id": "turn-1" },
-	});
 	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "first" }] } }, {});
 	handlers.get("message_end")?.({ message: assistantMessage("reply one") }, {});
 
-	// Turn 2: same shape.
-	handlers.get("before_provider_headers")?.({
-		headers: { authorization: "proxy-managed", "x-request-id": "turn-2" },
-	});
 	handlers.get("before_provider_request")?.(
 		{ payload: { messages: [{ role: "user", content: "first" }, { role: "user", content: "second" }] } },
 		{},
@@ -419,160 +297,6 @@ test("two turns fired in pi's documented hook order emit provider_request/provid
 
 	const requests = lines.filter((l) => l.kind === "provider_request");
 	assert.equal(requests.length, 2);
-	assert.equal(requests[0].headers.authorization, "<redacted>");
-	assert.equal(requests[0].headers["x-request-id"], "turn-1", "turn 1's request carries the headers stashed at ITS before_provider_headers");
-	assert.equal(requests[1].headers["x-request-id"], "turn-2", "turn 2's request carries the headers stashed at ITS before_provider_headers, not turn 1's");
-});
-
-test("a missing before_provider_headers still emits the request in order, now WITH reconstructed headers", async (t) => {
-	// FIX 1: before_provider_headers is confirmed to never fire in the real
-	// runtime, so provider_request must never go out header-less — it falls
-	// back to the deterministic reconstructRequestHeaders() subset.
-	const { server, port, lines } = await startRecordingServer();
-	t.after(() => server.close());
-
-	const factory = await loadMonitorAgainst(port);
-	const { pi, handlers } = makeStubPi();
-	factory(pi);
-
-	handlers.get("session_start")?.({}, {});
-	// before_provider_headers never fires (the real runtime).
-	handlers.get("before_provider_request")?.(
-		{ payload: { messages: [{ role: "user", content: "hi" }] } },
-		{ model: { api: "anthropic-messages" } },
-	);
-	handlers.get("message_end")?.({ message: assistantMessage("reply") }, {});
-	await new Promise((r) => setTimeout(r, 100));
-
-	const kinds = lines.filter((l) => l.kind === "provider_request" || l.kind === "provider_response").map((l) => l.kind);
-	assert.deepEqual(kinds, ["provider_request", "provider_response"]);
-
-	const pr = lines.find((l) => l.kind === "provider_request");
-	assert.ok(pr, "provider_request must still be emitted with no headers hook");
-	assert.equal(pr.headers["content-type"], "application/json", "reconstructed headers still attached with no headers hook at all");
-	assert.equal(pr.headers["x-api-key"], "<redacted>", "reconstructed x-api-key is redacted just like a real one would be");
-});
-
-test("FIX 1: a provider_request event ALWAYS carries a non-empty redacted headers map, even with no headers hook ever firing", async (t) => {
-	const { server, port, lines } = await startRecordingServer();
-	t.after(() => server.close());
-
-	const factory = await loadMonitorAgainst(port);
-	const { pi, handlers } = makeStubPi();
-	factory(pi);
-
-	handlers.get("session_start")?.({}, {});
-	handlers.get("before_provider_request")?.(
-		{ payload: { messages: [{ role: "user", content: "hi" }] } },
-		{ model: { api: "anthropic-messages", provider: "anthropic", id: "claude-opus-4-8" } },
-	);
-	await new Promise((r) => setTimeout(r, 100));
-
-	const pr = lines.find((l) => l.kind === "provider_request");
-	assert.ok(pr, "provider_request must be emitted");
-	assert.ok(pr.headers && typeof pr.headers === "object", "headers must be present");
-	assert.ok(Object.keys(pr.headers).length > 0, "headers must be non-empty");
-	assert.equal(pr.headers["x-api-key"], "<redacted>", "the reconstructed x-api-key sentinel is redacted, not the literal proxy-managed value");
-	assert.equal(pr.headers["content-type"], "application/json");
-});
-
-// ─── request_headers merge event: real-transport order (request-first) ────
-// Root cause under test: in the REAL transport, before_provider_headers fires
-// INSIDE transformHeaders, which runs AFTER before_provider_request (onPayload)
-// — the opposite of the hook-order-diagram's documented order this file used
-// to assume. So provider_request emits first with no headers, and the real
-// assembled headers show up one beat later on before_provider_headers. The fix
-// is a small merge event, request_headers, carrying the same turnId.
-
-test("request-first order: before_provider_request then before_provider_headers emits provider_request followed by request_headers carrying the redacted headers with the SAME turnId", async (t) => {
-	const { server, port, lines } = await startRecordingServer();
-	t.after(() => server.close());
-
-	const factory = await loadMonitorAgainst(port);
-	const { pi, handlers } = makeStubPi();
-	factory(pi);
-
-	handlers.get("session_start")?.({}, {});
-	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "first" }] } }, {});
-	handlers.get("before_provider_headers")?.({
-		headers: { authorization: "proxy-managed", "x-request-id": "real-1" },
-	});
-	handlers.get("message_end")?.({ message: assistantMessage("reply") }, {});
-
-	await new Promise((r) => setTimeout(r, 100));
-
-	const kinds = lines.filter((l) => l.kind === "provider_request" || l.kind === "request_headers" || l.kind === "provider_response").map((l) => l.kind);
-	assert.deepEqual(kinds, ["provider_request", "request_headers", "provider_response"], "provider_request emits with reconstructed headers, then a request_headers merge event overrides with the real ones");
-
-	const pr = lines.find((l) => l.kind === "provider_request");
-	assert.equal(pr.headers["content-type"], "application/json", "provider_request carries the reconstructed fallback in this order, not the real headers yet");
-	assert.equal("x-request-id" in pr.headers, false, "the real x-request-id header isn't known yet at provider_request time in this order");
-
-	const rh = lines.find((l) => l.kind === "request_headers");
-	assert.ok(rh, "a request_headers merge event must be emitted");
-	assert.equal(rh.turnId, pr.turnId, "request_headers must carry the SAME turnId as its provider_request");
-	assert.equal(rh.headers["x-request-id"], "real-1");
-	assert.equal(rh.headers.authorization, "<redacted>", "redaction (R6-2) still applies on the merge event too");
-});
-
-test("request-first order across two turns: each request_headers merge event carries its own turn's turnId", async (t) => {
-	const { server, port, lines } = await startRecordingServer();
-	t.after(() => server.close());
-
-	const factory = await loadMonitorAgainst(port);
-	const { pi, handlers } = makeStubPi();
-	factory(pi);
-
-	handlers.get("session_start")?.({}, {});
-
-	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "first" }] } }, {});
-	handlers.get("before_provider_headers")?.({ headers: { "x-request-id": "turn-1" } });
-	handlers.get("message_end")?.({ message: assistantMessage("reply one") }, {});
-
-	handlers.get("before_provider_request")?.(
-		{ payload: { messages: [{ role: "user", content: "first" }, { role: "user", content: "second" }] } },
-		{},
-	);
-	handlers.get("before_provider_headers")?.({ headers: { "x-request-id": "turn-2" } });
-	handlers.get("message_end")?.({ message: assistantMessage("reply two") }, {});
-
-	await new Promise((r) => setTimeout(r, 100));
-
-	const requests = lines.filter((l) => l.kind === "provider_request");
-	const headerEvents = lines.filter((l) => l.kind === "request_headers");
-	assert.equal(requests.length, 2);
-	assert.equal(headerEvents.length, 2);
-	assert.equal(headerEvents[0].turnId, requests[0].turnId);
-	assert.equal(headerEvents[0].headers["x-request-id"], "turn-1");
-	assert.equal(headerEvents[1].turnId, requests[1].turnId);
-	assert.equal(headerEvents[1].headers["x-request-id"], "turn-2");
-	assert.notEqual(requests[0].turnId, requests[1].turnId, "the two turns must have distinct turnIds");
-});
-
-test("headers-first order still attaches inline on provider_request and emits NO separate request_headers event", async (t) => {
-	const { server, port, lines } = await startRecordingServer();
-	t.after(() => server.close());
-
-	const factory = await loadMonitorAgainst(port);
-	const { pi, handlers } = makeStubPi();
-	factory(pi);
-
-	handlers.get("session_start")?.({}, {});
-	handlers.get("before_provider_headers")?.({
-		headers: { authorization: "proxy-managed", "x-request-id": "inline-1" },
-	});
-	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "hi" }] } }, {});
-	handlers.get("message_end")?.({ message: assistantMessage("reply") }, {});
-
-	await new Promise((r) => setTimeout(r, 100));
-
-	const pr = lines.find((l) => l.kind === "provider_request");
-	assert.ok(pr, "provider_request must be emitted");
-	assert.equal(pr.headers["x-request-id"], "inline-1", "headers attach inline on provider_request itself");
-	assert.equal(pr.headers.authorization, "<redacted>", "redaction (R6-2) still applies");
-
-	const rh = lines.find((l) => l.kind === "request_headers");
-	assert.equal(rh, undefined, "headers-first order must not also emit a separate request_headers merge event");
 });
 
 test("provider_request carries method=POST and the requestUrl derived from ctx.model", async (t) => {

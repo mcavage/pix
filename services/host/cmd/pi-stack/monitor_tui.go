@@ -16,7 +16,6 @@ package main
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -90,17 +89,13 @@ type tuiRow struct {
 	toolNames    []string
 	mcpToolNames []string
 	estTokens    int
-	// reqHeaders holds the provider REQUEST's sanitized "key: value"
-	// header lines (monitor.ProviderRequest.Headers), same shape and
-	// diagnostics-only placement as the response `headers` below. Rendered
-	// dead last in the request expand's diagnostics, and only while the
-	// `h` toggle (Model.showHeaders) is on — headers are noise by default.
-	reqHeaders []string
 	// reqMethod/reqURL are the sanitized HTTP method + URL of the provider
-	// request (monitor.ProviderRequest.Method/URL) — the request line of
-	// the `h`-gated HTTP-request-style block above reqHeaders (live
-	// feedback: a bare header dump "is not giving me the actual request";
-	// they wanted `POST https://...` first, like the real wire request).
+	// request (monitor.ProviderRequest.Method/URL) — rendered as the small,
+	// accurate `POST https://...` request line in the request expand's
+	// diagnostics (live feedback: a bare header dump "is not giving me the
+	// actual request"; HTTP headers themselves turned out to be the wrong
+	// source and were removed, but this request line stays — it's small
+	// and accurate).
 	reqMethod string
 	reqURL    string
 
@@ -108,13 +103,6 @@ type tuiRow struct {
 	status     int
 	stopReason string
 	usage      *monitor.UsageSummary
-	// headers holds the response's already-sanitized "key: value" header
-	// lines, sorted by key for deterministic rendering (small: the wire
-	// decoder caps entry count and sizes — see monitor.capHeaders).
-	// Headers are DIAGNOSTICS: they render only in the expanded view,
-	// after the assistant text, never on the summary line (live feedback:
-	// "HTTP headers show instead of the actual high-level LLM data").
-	headers []string
 	// textPreview/textBytes/textHash/toolCalls carry what the assistant
 	// actually SAID this turn (monitor.ProviderResponse R6-1) — the
 	// response row LEADS with these, so the reply reads at the response
@@ -231,11 +219,6 @@ type Model struct {
 	showMCP      bool // p
 	showThinking bool // x
 	showContext  bool // c
-	// showHeaders gates the `hdr k: v` diagnostics lines in BOTH the
-	// request and response expands (`h`). DEFAULT OFF: live feedback
-	// called HTTP headers noise — they only render when explicitly asked
-	// for, and never on a summary line either way.
-	showHeaders bool // h
 
 	showHelp bool // `?` overlay, closed by `?`/esc; replaces the body while open
 
@@ -493,8 +476,6 @@ func (m Model) handleKeyInner(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showThinking = !m.showThinking
 	case "c":
 		m.showContext = !m.showContext
-	case "h":
-		m.showHeaders = !m.showHeaders
 	case "/":
 		m.filtering = true
 		m.filterInput = ""
@@ -849,7 +830,6 @@ func (m *Model) applyEvent(e monitor.Event) {
 			mcpToolNames:   sanitizeStrings(ev.Summary.McpToolNames),
 			estTokens:      ev.Summary.EstTokens,
 			toolSchemaHash: ev.Summary.ToolSchemaHash,
-			reqHeaders:     sanitizeHeaderLines(ev.Headers),
 			reqMethod:      sanitizeText(ev.Method, false),
 			reqURL:         sanitizeText(ev.URL, false),
 		})
@@ -858,20 +838,6 @@ func (m *Model) applyEvent(e monitor.Event) {
 		// retain a full body for nothing.
 		if m.expanded[id] && m.showFull {
 			m.resolveRowBlobs(id)
-		}
-
-	case monitor.RequestHeaders:
-		// Headers arrived a beat after the matching provider_request (see
-		// monitor.RequestHeaders' doc comment: before_provider_headers fires
-		// AFTER before_provider_request in the real transport). Find that
-		// request row by the SAME id this package already keys it under
-		// (session + turnId) and merge the sanitized headers in; if the row
-		// isn't there (e.g. evicted, or this event arrived out of order and
-		// somehow beat its own request), silently drop it — there is nothing
-		// to attach it to.
-		id := sess + "/" + env.TurnID + ":req"
-		if idx, ok := m.rowIndex[id]; ok {
-			m.rows[idx].reqHeaders = sanitizeHeaderLines(ev.Headers)
 		}
 
 	case monitor.ProviderResponse:
@@ -884,7 +850,6 @@ func (m *Model) applyEvent(e monitor.Event) {
 			status:      ev.Status,
 			stopReason:  sanitizeText(ev.StopReason, false),
 			usage:       ev.Usage,
-			headers:     sanitizeHeaderLines(ev.Headers),
 			textPreview: sanitizeText(ev.TextPreview, false),
 			textBytes:   ev.TextBytes,
 			textHash:    ev.TextHash,
@@ -1079,28 +1044,6 @@ func ansiSeqLen(s string) int {
 	default:
 		return 2
 	}
-}
-
-// sanitizeHeaderLines flattens an event's HTTP-header map into sorted,
-// SANITIZED "key: value" lines for a row's diagnostics section — shared by
-// the provider_request and provider_response paths so both sides' headers
-// get the identical R1-8 treatment (keys and values are event-derived
-// attacker text like any other). nil/empty maps yield nil (no lines). The
-// wire decoder already caps entry count and sizes (monitor.capHeaders).
-func sanitizeHeaderLines(h map[string]string) []string {
-	if len(h) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(h))
-	for k := range h {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	out := make([]string, 0, len(keys))
-	for _, k := range keys {
-		out = append(out, sanitizeText(k, false)+": "+sanitizeText(h[k], false))
-	}
-	return out
 }
 
 // sanitizeStrings maps sanitizeText (single-line: keepNewlines=false) over
@@ -1538,7 +1481,6 @@ func (m Model) helpBodyLines() []bodyLine {
 		"  p               mcp tool rows",
 		"  x               thinking-level context rows",
 		"  c               context rows",
-		"  h               http headers in expanded request/response rows (default off)",
 		"",
 		"filter",
 		"  /               start typing a filter; enter commits, esc cancels",
@@ -1581,10 +1523,10 @@ func (m Model) footerLine() string {
 		follow = "[paused]"
 	}
 	return fmt.Sprintf(
-		"%s f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s h:headers=%s  nav:\u2191\u2193  enter/space:expand  /:filter  ?:help  q:quit",
+		"%s f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s  nav:\u2191\u2193  enter/space:expand  /:filter  ?:help  q:quit",
 		follow,
 		onoff(m.showFull), onoff(m.showModel), onoff(m.showTools), onoff(m.showMCP),
-		onoff(m.showThinking), onoff(m.showContext), onoff(m.showHeaders))
+		onoff(m.showThinking), onoff(m.showContext))
 }
 
 func onoff(b bool) string {
@@ -1761,24 +1703,12 @@ func (m Model) detailLines(r tuiRow) []string {
 				block("        ", r.toolSchemaText)
 			}
 		}
-		// Request HTTP headers dead LAST in diagnostics, mirroring the
-		// response side — and only behind the `h` toggle (default off:
-		// headers are noise). Rendered as an actual HTTP request block (a
-		// `METHOD url` request line, then `Key: value` header lines) —
-		// live feedback: a flat alphabetized `hdr k: v` dump "is not
-		// giving me the actual request", the user wanted something that
-		// reads like the real wire request. The request line is built
-		// from the row's (sanitized) Method/URL and omitted — but headers
-		// still shown — if both are empty (older events / no headers hook
-		// fired yet).
-		if m.showHeaders {
-			lines = append(lines, "      request:")
-			if r.reqMethod != "" || r.reqURL != "" {
-				lines = append(lines, "        "+strings.TrimSpace(r.reqMethod+" "+r.reqURL))
-			}
-			for _, h := range r.reqHeaders {
-				lines = append(lines, "        "+h)
-			}
+		// The request line — the accurate `METHOD url` this turn actually
+		// sent — rendered unconditionally now (small and accurate; HTTP
+		// headers were the wrong source and are gone, see the removed `h`
+		// toggle). Omitted if both Method/URL are empty (older events).
+		if r.reqMethod != "" || r.reqURL != "" {
+			lines = append(lines, "      request: "+strings.TrimSpace(r.reqMethod+" "+r.reqURL))
 		}
 	case rowKindResponse:
 		// CONVERSATION FIRST: the assistant's reply (full resolved body
@@ -1806,18 +1736,6 @@ func (m Model) detailLines(r tuiRow) []string {
 				humanCount(r.usage.InputTokens), humanCount(r.usage.OutputTokens), humanCount(r.usage.TotalTokens)))
 		} else {
 			lines = append(lines, "      usage  (not reported)")
-		}
-		// HTTP headers dead last, and only behind the `h` toggle
-		// (default off: headers are noise, per live feedback). Rendered
-		// as an actual HTTP response block (an `HTTP <status>` status
-		// line, then `Key: value` header lines) — same live feedback as
-		// the request side above.
-		if m.showHeaders {
-			lines = append(lines, "      response:")
-			lines = append(lines, fmt.Sprintf("        HTTP %d", r.status))
-			for _, h := range r.headers {
-				lines = append(lines, "        "+h)
-			}
 		}
 	case rowKindTool:
 		state := "pending"
