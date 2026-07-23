@@ -1292,8 +1292,13 @@ func TestMonitorTUI_ExpandResponseRowShowsDetail(t *testing.T) {
 	if !strings.Contains(after, "in=100") || !strings.Contains(after, "out=50") || !strings.Contains(after, "total=150") {
 		t.Errorf("response detail missing usage tokens, got:\n%s", after)
 	}
-	if !strings.Contains(after, "x-request-id: abc-123") {
-		t.Errorf("response detail missing headers, got:\n%s", after)
+	// Headers are behind the `h` toggle now (default off).
+	if strings.Contains(after, "x-request-id") {
+		t.Errorf("response detail shows headers with h:headers=off, got:\n%s", after)
+	}
+	m = key(t, m, runeKey("h"))
+	if !strings.Contains(m.View(), "x-request-id: abc-123") {
+		t.Errorf("response detail missing headers after h, got:\n%s", m.View())
 	}
 }
 
@@ -1802,6 +1807,7 @@ func TestMonitorTUI_ExpandedResponseReplyBeforeDiagnosticsHeadersLast(t *testing
 	}
 
 	m = key(t, m, runeKey("f")) // showFull on
+	m = key(t, m, runeKey("h")) // headers on (hidden by default)
 	m = key(t, m, runeKey(" ")) // expand (following: cursor on the response row)
 
 	view := m.View()
@@ -1872,5 +1878,196 @@ func TestMonitorTUI_ExpandedRequestPromptBeforeDiagnostics(t *testing.T) {
 	}
 	if !(iBody < iDiag && iDiag < iSys) {
 		t.Errorf("expanded request order wrong: body=%d diagnostics=%d sys=%d, got:\n%s", iBody, iDiag, iSys, view)
+	}
+}
+
+// --- session grouping (live feedback: 2 sandboxes = undifferentiated mess) ---
+
+// Two interleaved sessions: group headers appear before each run, rows are
+// indented under them, and the line cursor skips the non-selectable
+// header lines.
+func TestMonitorTUI_GroupHeadersTwoSessions(t *testing.T) {
+	m := NewModel(TUIConfig{})
+
+	reqA := mkProviderRequest("1", "opus-a", "ha", 1000, 1, 100, nil)
+	reqA.SandboxID, reqA.SessionID = "sbx-alpha", "sess-aaaa1111"
+	ctxA := mkContextEvent("1", 5, "skill_loaded", "row-a2")
+	ctxA.SandboxID, ctxA.SessionID = "sbx-alpha", "sess-aaaa1111"
+	reqB := mkProviderRequest("1", "sonnet-b", "hb", 2000, 2, 200, nil)
+	reqB.SandboxID, reqB.SessionID = "sbx-beta", "sess-bbbb2222"
+	ctxB := mkContextEvent("1", 6, "skill_loaded", "row-b2")
+	ctxB.SandboxID, ctxB.SessionID = "sbx-beta", "sess-bbbb2222"
+
+	m = feed(t, m, reqA)
+	m = feed(t, m, ctxA)
+	m = feed(t, m, reqB)
+	m = feed(t, m, ctxB)
+
+	view := m.View()
+	// Group headers: rule + label, sandbox id + short (last-8) session id.
+	if !strings.Contains(view, "── sandbox sbx-alpha  ·  session aaaa1111 ──") {
+		t.Fatalf("missing session A group header, got:\n%s", view)
+	}
+	if !strings.Contains(view, "── sandbox sbx-beta  ·  session bbbb2222 ──") {
+		t.Fatalf("missing session B group header, got:\n%s", view)
+	}
+	// Headers sit at column 0 (no gutter, no indent).
+	var headerLines int
+	for _, l := range strings.Split(view, "\n") {
+		if strings.Contains(l, "── sandbox ") {
+			headerLines++
+			if !strings.HasPrefix(l, "──") {
+				t.Errorf("group header not at column 0: %q", l)
+			}
+		}
+	}
+	if headerLines != 2 {
+		t.Errorf("want 2 group header lines, got %d in:\n%s", headerLines, view)
+	}
+	// Every row line is indented under its header (gutter + 4-space
+	// indent before the caret).
+	for _, l := range strings.Split(view, "\n") {
+		if strings.Contains(l, "▸") && !strings.Contains(l, "    ▸") {
+			t.Errorf("row line not indented in grouped view: %q", l)
+		}
+	}
+
+	// Cursor skips headers: from the bottom (ctxB row), two ups cross
+	// session B's header and land on session A's ctx row — never on a
+	// header (selectedRowID would be "").
+	m = key(t, m, runeKey("k")) // -> reqB row
+	if id := m.selectedRowID(); !strings.Contains(id, "sess-bbbb2222") || !strings.Contains(id, ":req") {
+		t.Fatalf("after k: selected %q, want session B's request row", id)
+	}
+	m = key(t, m, runeKey("k")) // header skipped -> ctxA row
+	if id := m.selectedRowID(); !strings.Contains(id, "sess-aaaa1111") || !strings.Contains(id, "ctx") {
+		t.Fatalf("after k,k: selected %q, want session A's ctx row (header must be skipped)", id)
+	}
+
+	// g jumps to the top and lands on the first ROW (line 0 is a group
+	// header, non-selectable).
+	m = key(t, m, runeKey("g"))
+	if id := m.selectedRowID(); !strings.Contains(id, "sess-aaaa1111") || !strings.Contains(id, ":req") {
+		t.Fatalf("after g: selected %q, want session A's request row", id)
+	}
+	// Another up: nowhere above but the header — cursor stays on the row.
+	m = key(t, m, runeKey("k"))
+	if id := m.selectedRowID(); !strings.Contains(id, ":req") || !strings.Contains(id, "sess-aaaa1111") {
+		t.Fatalf("up from first row landed on %q, want it to stay on the row", id)
+	}
+}
+
+// Single-session feed: NO group header, NO indent — flat, exactly like the
+// pre-grouping rendering.
+func TestMonitorTUI_SingleSessionRendersFlat(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	m = nRows(t, m, 3) // all rows share the (empty) default session
+
+	view := m.View()
+	if strings.Contains(view, "──") || strings.Contains(view, "(local)") {
+		t.Fatalf("single-session feed rendered a group header, got:\n%s", view)
+	}
+	if strings.Contains(view, "    ▸") {
+		t.Fatalf("single-session feed indented its rows, got:\n%s", view)
+	}
+	// The flat two-space gutter + caret shape is intact.
+	if !strings.Contains(view, "▸ ") {
+		t.Fatalf("row carets missing, got:\n%s", view)
+	}
+}
+
+// --- `h`: HTTP headers hidden by default, toggled on for req + resp ---
+
+func TestMonitorTUI_HeaderToggleShowsRequestAndResponseHeaders(t *testing.T) {
+	m := NewModel(TUIConfig{})
+
+	req := mkProviderRequest("9", "opus-4-8", "h1", 1000, 1, 100, nil)
+	req.Headers = map[string]string{"x-req-trace": "req-va\x1b[31mlue"}
+	m = feed(t, m, req)
+	m = key(t, m, runeKey(" ")) // expand request (following: cursor on it)
+
+	resp := mkProviderResponse("9", 200, "end_turn", nil)
+	resp.Headers = map[string]string{"x-resp-id": "resp-value"}
+	m = feed(t, m, resp)
+	m = key(t, m, runeKey(" ")) // expand response (follow moved cursor to it)
+
+	view := m.View()
+	if strings.Contains(view, "hdr ") || strings.Contains(view, "x-req-trace") || strings.Contains(view, "x-resp-id") {
+		t.Fatalf("headers visible while h:headers=off (the default), got:\n%s", view)
+	}
+	if !strings.Contains(view, "h:headers=off") {
+		t.Errorf("footer missing h:headers=off, got:\n%s", view)
+	}
+
+	m = key(t, m, runeKey("h"))
+	view = m.View()
+	if !strings.Contains(view, "hdr x-req-trace: req-value") {
+		t.Errorf("request headers missing (or unsanitized) after h, got:\n%s", view)
+	}
+	if !strings.Contains(view, "hdr x-resp-id: resp-value") {
+		t.Errorf("response headers missing after h, got:\n%s", view)
+	}
+	if !strings.Contains(view, "h:headers=on") {
+		t.Errorf("footer missing h:headers=on, got:\n%s", view)
+	}
+	assertNoControlRunes(t, view)
+
+	m = key(t, m, runeKey("h")) // toggle back off
+	if strings.Contains(m.View(), "hdr ") {
+		t.Errorf("headers still visible after toggling h back off, got:\n%s", m.View())
+	}
+}
+
+// --- emacs keybindings + harmless left/right arrows ---
+
+func TestMonitorTUI_EmacsKeybindings(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	m = nRows(t, m, 6) // row-0..row-5, follow on (idx 5)
+
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyCtrlP})
+	if idx := selectedIdx(m); idx != 4 {
+		t.Fatalf("after ctrl+p: selected index = %d, want 4", idx)
+	}
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if idx := selectedIdx(m); idx != 5 {
+		t.Fatalf("after ctrl+n: selected index = %d, want 5", idx)
+	}
+
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("<"), Alt: true})
+	if idx := selectedIdx(m); idx != 0 {
+		t.Fatalf("after alt+<: selected index = %d, want 0", idx)
+	}
+	if m.follow {
+		t.Errorf("after alt+<: follow should be detached")
+	}
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(">"), Alt: true})
+	if idx := selectedIdx(m); idx != 5 {
+		t.Fatalf("after alt+>: selected index = %d, want 5", idx)
+	}
+	if !m.follow {
+		t.Errorf("after alt+>: follow should be re-attached")
+	}
+
+	// Paging: ctrl+v down, alt+v up (a real page needs a sized frame).
+	m = resize(t, m, 80, 8)
+	m = nRows(t, m, 24) // 30 rows total
+	start := selectedIdx(m)
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v"), Alt: true})
+	afterUp := selectedIdx(m)
+	if afterUp >= start {
+		t.Fatalf("alt+v did not page up: before=%d after=%d", start, afterUp)
+	}
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyCtrlV})
+	afterDown := selectedIdx(m)
+	if afterDown <= afterUp {
+		t.Fatalf("ctrl+v did not page down: afterUp=%d afterDown=%d", afterUp, afterDown)
+	}
+
+	// Left/right arrows: harmless no-ops — no movement, no state flip.
+	before := selectedIdx(m)
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyLeft})
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyRight})
+	if idx := selectedIdx(m); idx != before {
+		t.Errorf("left/right moved the cursor: before=%d after=%d", before, idx)
 	}
 }

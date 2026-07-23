@@ -13,8 +13,16 @@ import * as http from "node:http";
 import { test } from "node:test";
 
 const monitor = await import("../extensions/monitor.ts");
-const { classifyToolSource, isMcpSourceInfo, mcpServerFromSourceInfo, partitionToolNames, summarizeRequest, extractAssistantOutput } =
-	monitor;
+const {
+	classifyToolSource,
+	isMcpSourceInfo,
+	mcpServerFromSourceInfo,
+	partitionToolNames,
+	summarizeRequest,
+	extractAssistantOutput,
+	normalizeHeaders,
+	redactHeaders,
+} = monitor;
 
 // ─── R2-3: MCP classification fallback ──────────────────────────────────────
 
@@ -151,6 +159,142 @@ test("R2-6: toolSchemaHash is empty string when there are no tools", () => {
 	const result = summarizeRequest({ messages: [{ role: "user", content: "hi" }] }, 0);
 	assert.equal(result.toolSchemaHash, "");
 	assert.ok(!result.blobs.some((b) => b.text === "[]"));
+});
+
+// ─── redactHeaders: sensitive header VALUES are redacted, keys/shape kept ──
+
+test("redactHeaders redacts known sensitive header names, case-insensitively", () => {
+	const headers = {
+		Authorization: "proxy-managed",
+		"X-Api-Key": "proxy-managed",
+		"api-key": "secret-value",
+		Cookie: "session=abc",
+		"Set-Cookie": "session=abc; Path=/",
+		"Proxy-Authorization": "Basic xyz",
+		"content-type": "application/json",
+		"user-agent": "pi/1.0",
+	};
+	const redacted = redactHeaders(headers);
+	assert.equal(redacted.Authorization, "<redacted>");
+	assert.equal(redacted["X-Api-Key"], "<redacted>");
+	assert.equal(redacted["api-key"], "<redacted>");
+	assert.equal(redacted.Cookie, "<redacted>");
+	assert.equal(redacted["Set-Cookie"], "<redacted>");
+	assert.equal(redacted["Proxy-Authorization"], "<redacted>");
+	// Non-sensitive headers pass through unchanged, and every original key is
+	// still present (redaction never drops a header).
+	assert.equal(redacted["content-type"], "application/json");
+	assert.equal(redacted["user-agent"], "pi/1.0");
+	assert.deepEqual(Object.keys(redacted).sort(), Object.keys(headers).sort());
+});
+
+test("redactHeaders passes through undefined unchanged", () => {
+	assert.equal(redactHeaders(undefined), undefined);
+});
+
+test("redactHeaders composes with normalizeHeaders for a before_provider_headers-shaped payload", () => {
+	// ProviderHeaders = Record<string, string | null>; a null value is an
+	// explicit "suppress this header" per pi's docs and normalizeHeaders drops
+	// it (v != null check), so it never reaches redactHeaders at all.
+	const raw = { authorization: "proxy-managed", "x-request-id": "abc-123", "x-suppressed": null };
+	const redacted = redactHeaders(normalizeHeaders(raw));
+	assert.equal(redacted.authorization, "<redacted>");
+	assert.equal(redacted["x-request-id"], "abc-123");
+	assert.equal("x-suppressed" in redacted, false);
+});
+
+// ─── before_provider_headers: stash/flush wiring for request headers ──────
+// End-to-end against a stub `pi` + a local HTTP server that RECORDS every
+// posted NDJSON line, since the stash (`pendingRequest`) is intentionally
+// private to the default export's closure, same as the R2-1 queue/timer
+// state above.
+
+function startRecordingServer() {
+	const lines = [];
+	const server = http.createServer((req, res) => {
+		let body = "";
+		req.on("data", (chunk) => (body += chunk));
+		req.on("end", () => {
+			if (req.url === "/ingest") {
+				for (const line of body.split("\n")) {
+					if (line.trim()) lines.push(JSON.parse(line));
+				}
+			}
+			res.writeHead(200);
+			res.end();
+		});
+	});
+	return new Promise((resolve) => {
+		server.listen(0, "127.0.0.1", () => resolve({ server, port: server.address().port, lines }));
+	});
+}
+
+test("before_provider_headers attaches redacted headers to the stashed provider_request", async (t) => {
+	const { server, port, lines } = await startRecordingServer();
+	t.after(() => server.close());
+
+	const factory = await loadMonitorAgainst(port);
+	const { pi, handlers } = makeStubPi();
+	factory(pi);
+
+	handlers.get("session_start")?.({}, {});
+	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "hi" }] } }, {});
+	// Not emitted yet: before_provider_headers hasn't fired.
+	await new Promise((r) => setTimeout(r, 100));
+	assert.ok(
+		!lines.some((l) => l.kind === "provider_request"),
+		"provider_request must not be emitted before before_provider_headers fires",
+	);
+
+	handlers.get("before_provider_headers")?.({
+		headers: { authorization: "proxy-managed", "x-request-id": "abc-123" },
+	});
+	await new Promise((r) => setTimeout(r, 100));
+
+	const pr = lines.find((l) => l.kind === "provider_request");
+	assert.ok(pr, "provider_request must be emitted once before_provider_headers fires");
+	assert.equal(pr.headers.authorization, "<redacted>");
+	assert.equal(pr.headers["x-request-id"], "abc-123");
+});
+
+test("a stash with no before_provider_headers is flushed headers-less by the NEXT before_provider_request", async (t) => {
+	const { server, port, lines } = await startRecordingServer();
+	t.after(() => server.close());
+
+	const factory = await loadMonitorAgainst(port);
+	const { pi, handlers } = makeStubPi();
+	factory(pi);
+
+	handlers.get("session_start")?.({}, {});
+	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "first" }] } }, {});
+	// before_provider_headers never fires for turn 1 (simulates a missing hook
+	// or an out-of-order pi version). A second turn starts instead.
+	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "first" }, { role: "user", content: "second" }] } }, {});
+	await new Promise((r) => setTimeout(r, 100));
+
+	const requests = lines.filter((l) => l.kind === "provider_request");
+	assert.equal(requests.length, 1, "the orphaned first stash must be flushed, never silently dropped");
+	assert.equal("headers" in requests[0], false, "the flushed orphan carries no headers");
+});
+
+test("a stash with no before_provider_headers is flushed headers-less by a session reset (session_start)", async (t) => {
+	const { server, port, lines } = await startRecordingServer();
+	t.after(() => server.close());
+
+	const factory = await loadMonitorAgainst(port);
+	const { pi, handlers } = makeStubPi();
+	factory(pi);
+
+	handlers.get("session_start")?.({}, {});
+	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "hi" }] } }, {});
+	// before_provider_headers never fires; the session resets instead (e.g. a
+	// new session_start on the same live extension instance).
+	handlers.get("session_start")?.({}, {});
+	await new Promise((r) => setTimeout(r, 100));
+
+	const requests = lines.filter((l) => l.kind === "provider_request");
+	assert.equal(requests.length, 1, "the orphaned stash must be flushed on session reset, never silently dropped");
+	assert.equal("headers" in requests[0], false, "the flushed orphan carries no headers");
 });
 
 // ─── R2-1: shutdown must not resurrect the retry timer / requeue ───────────

@@ -600,7 +600,7 @@ export function extractAssistantOutput(message: any): AssistantOutput {
 	return { text: stringifyContent(textBlocks), toolCalls };
 }
 
-/** Coerce after_provider_response's normalized headers into Record<string,string>, or undefined when empty. */
+/** Coerce before_provider_headers/after_provider_response's normalized headers into Record<string,string>, or undefined when empty. */
 export function normalizeHeaders(headers: any): Record<string, string> | undefined {
 	if (!headers || typeof headers !== "object") return undefined;
 	const out: Record<string, string> = {};
@@ -610,6 +610,32 @@ export function normalizeHeaders(headers: any): Record<string, string> | undefin
 		else if (v != null) out[k] = String(v);
 	}
 	return Object.keys(out).length ? out : undefined;
+}
+
+// Header NAMES whose VALUE is redacted before a headers map ever leaves the
+// sandbox, matched case-insensitively (HTTP header names are
+// case-insensitive). In this proxy-managed setup Authorization/x-api-key are
+// typically already the literal "proxy-managed" sentinel (the real provider
+// credential never reaches the VM), but headers are provider/runtime input,
+// not something this file controls, so redaction is by NAME defensively
+// rather than trusting that invariant to always hold.
+const SENSITIVE_HEADER_NAMES = new Set(["authorization", "x-api-key", "api-key", "cookie", "set-cookie", "proxy-authorization"]);
+
+/**
+ * Redact sensitive header VALUES (never the keys/shape) to "<redacted>".
+ * Pure and total: a nullish `h` passes through unchanged so this composes
+ * directly with `normalizeHeaders`'s `Record<string,string> | undefined`
+ * return (`redactHeaders(normalizeHeaders(raw))`). Applied to BOTH the
+ * request headers (before_provider_headers) and the response headers
+ * (after_provider_response) before either is ever emitted on the wire.
+ */
+export function redactHeaders(h: Record<string, string> | undefined): Record<string, string> | undefined {
+	if (!h) return h;
+	const out: Record<string, string> = {};
+	for (const [k, v] of Object.entries(h)) {
+		out[k] = SENSITIVE_HEADER_NAMES.has(k.toLowerCase()) ? "<redacted>" : v;
+	}
+	return out;
 }
 
 export type TurnTrigger = "user" | "tool_result" | "compaction" | "unknown";
@@ -715,6 +741,14 @@ export default function (pi: ExtensionAPI) {
 		// held until message_end supplies the real usage/stopReason for the
 		// same round-trip (see the after_provider_response/message_end handlers).
 		let pendingResponseMeta: { status: number; headers?: Record<string, string> } | null = null;
+		// The provider_request summary/changedBlobs computed in before_provider_request,
+		// held until before_provider_headers supplies the request headers assembled
+		// for the SAME round-trip (before_provider_headers fires AFTER
+		// before_provider_request but before the provider HTTP call — see the
+		// before_provider_request/before_provider_headers handlers below). turnId is
+		// captured at stash time so a flush always emits under the turn it actually
+		// belongs to, never whatever `currentTurnId` happens to be later.
+		let pendingRequest: { model: string; summary: Record<string, unknown>; changedBlobs: string[]; turnId: string } | null = null;
 		const seenBlobHashes = new Set<string>();
 		const toolStartedAt = new Map<string, number>();
 		const emittedToolStart = new Set<string>();
@@ -839,12 +873,12 @@ export default function (pi: ExtensionAPI) {
 			return seqCounter;
 		}
 
-		function baseEnvelope(kind: string) {
+		function baseEnvelope(kind: string, turnIdOverride?: string) {
 			return {
 				kind,
 				sandboxId: SANDBOX_ID,
 				sessionId,
-				turnId: currentTurnId,
+				turnId: turnIdOverride ?? currentTurnId,
 				seq: nextSeq(),
 				ts: Date.now(),
 			};
@@ -870,7 +904,34 @@ export default function (pi: ExtensionAPI) {
 			return true;
 		}
 
+		/**
+		 * Emit the stashed provider_request (from before_provider_request),
+		 * optionally with the request headers assembled for it (from
+		 * before_provider_headers). A no-op when nothing is stashed. This is the
+		 * ONLY place provider_request is ever emitted, and it is called from every
+		 * spot that could otherwise silently lose a stashed request: the headers
+		 * hook itself (the happy path), a NEW before_provider_request arriving
+		 * while the previous stash is still un-emitted (the headers hook never
+		 * fired for it), a session reset, and session_shutdown — never emit twice
+		 * for the same stash, since `pendingRequest` is cleared before emitting.
+		 */
+		function flushPendingRequest(headers?: Record<string, string>) {
+			if (!pendingRequest) return;
+			const pending = pendingRequest;
+			pendingRequest = null;
+			emitEvent({
+				...baseEnvelope("provider_request", pending.turnId),
+				model: pending.model,
+				summary: pending.summary,
+				changedBlobs: pending.changedBlobs,
+				...(headers ? { headers } : {}),
+			});
+		}
+
 		function resetSessionState(ctx: any) {
+			// Flush any request stashed under the OUTGOING session before switching
+			// sessionId out from under it (never silently drop a request event).
+			flushPendingRequest();
 			sessionId = extractSessionId(ctx);
 			turnSeqCounter = 0;
 			currentTurnId = "";
@@ -982,8 +1043,17 @@ export default function (pi: ExtensionAPI) {
 				trigger: inferTurnTrigger({ isFirstTurn, compacted, prevEventKind }),
 			});
 
-			emitEvent({
-				...baseEnvelope("provider_request"),
+			// STASH rather than emit: before_provider_request fires BEFORE request
+			// headers are assembled (BeforeProviderHeadersEvent's own doc: "Fired
+			// after request headers are assembled, before the provider HTTP
+			// call"), so there is no headers value available yet. The
+			// before_provider_headers handler below attaches headers and does the
+			// actual emit. Flush any PREVIOUS stash first — if before_provider_headers
+			// never fired for it (ordering surprise / hook missing on this pi
+			// version), this new turn's request must never silently overwrite and
+			// lose it; it goes out headers-less instead.
+			flushPendingRequest();
+			pendingRequest = {
 				model,
 				summary: {
 					systemPromptHash: result.systemPromptHash,
@@ -997,7 +1067,20 @@ export default function (pi: ExtensionAPI) {
 					toolSchemaHash: result.toolSchemaHash, // R2-6: same hash the tool-schema blob (below) is enqueued under.
 				},
 				changedBlobs,
-			});
+				turnId: currentTurnId,
+			};
+		});
+
+		on("before_provider_headers", (e: any) => {
+			// Fires after request headers are assembled, before the provider HTTP
+			// call (BeforeProviderHeadersEvent, e.headers: ProviderHeaders =
+			// Record<string,string|null>). This is the SAME round-trip as the most
+			// recent before_provider_request (docs/extensions.md hook-order
+			// diagram), so the stash it left behind is the right one to attach
+			// headers to and emit now. Redact sensitive values (R6-2) before this
+			// ever leaves the sandbox.
+			const headers = redactHeaders(normalizeHeaders(e?.headers));
+			flushPendingRequest(headers);
 		});
 
 		on("after_provider_response", (e: any) => {
@@ -1011,7 +1094,7 @@ export default function (pi: ExtensionAPI) {
 			// real usage + stopReason) has finalized.
 			pendingResponseMeta = {
 				status: Number(e?.status ?? 0) || 0,
-				headers: normalizeHeaders(e?.headers),
+				headers: redactHeaders(normalizeHeaders(e?.headers)),
 			};
 		});
 
@@ -1108,6 +1191,17 @@ export default function (pi: ExtensionAPI) {
 
 
 		on("session_shutdown", () => {
+			// NOTE: deliberately does NOT flush a pending stash here. Unlike
+			// resetSessionState/the next before_provider_request (which flush into
+			// the SAME still-live queue), a flush here would enqueue a brand-new
+			// send right as the extension is tearing down — it would either race
+			// the abort below (aborting the very send this just started) or, if
+			// ordered after, still never be retried once shuttingDown gates
+			// drain()'s failure branch. R2-1's whole point is that shutdown aborts
+			// rather than attempts one more delivery; a lost stash at process
+			// teardown is the same acceptable tradeoff as any other event still
+			// in flight at this instant, not a silent-drop regression.
+
 			// R2-1: set shuttingDown FIRST, before clearing the timer or aborting
 			// the in-flight request — enqueue/kick/scheduleRetry and drain()'s
 			// failure branch all check it and no-op, so the abort below can't

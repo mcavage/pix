@@ -45,6 +45,7 @@ func TestEventEncodeDecodeRoundTrip(t *testing.T) {
 				EstTokens:      38000,
 			},
 			ChangedBlobs: []string{"hash-sys"},
+			Headers:      map[string]string{"user-agent": "pi/1.0"},
 		},
 		ProviderResponse{
 			env:         sampleEnvelope(KindProviderResponse),
@@ -172,6 +173,7 @@ func TestEventJSONTagsGolden(t *testing.T) {
 			EstTokens:         10,
 		},
 		ChangedBlobs: []string{"h"},
+		Headers:      map[string]string{"user-agent": "pi/1.0"},
 	}
 	var m map[string]json.RawMessage
 	line, err = Encode(pr)
@@ -181,7 +183,7 @@ func TestEventJSONTagsGolden(t *testing.T) {
 	if err := json.Unmarshal(line, &m); err != nil {
 		t.Fatalf("Unmarshal() error: %v", err)
 	}
-	for _, key := range []string{"kind", "sandboxId", "sessionId", "turnId", "seq", "ts", "model", "summary", "changedBlobs"} {
+	for _, key := range []string{"kind", "sandboxId", "sessionId", "turnId", "seq", "ts", "model", "summary", "changedBlobs", "headers"} {
 		if _, ok := m[key]; !ok {
 			t.Fatalf("provider_request JSON missing key %q; got keys %v", key, m)
 		}
@@ -340,8 +342,9 @@ func TestDecodeCapsOversizedFieldMultibyteUTF8(t *testing.T) {
 // TestDecodeCapsToolIDAndHeaders is R4-1: two spots the round-3 decode
 // capping missed. ToolStart/ToolEnd.ToolID was never capped (an oversized
 // toolId passes the ingest-line limit and lands in TUI row keys), and
-// ProviderResponse.Headers retained an unbounded number of uncapped
-// key/value strings.
+// ProviderResponse.Headers (and, per the request-headers wire addition,
+// ProviderRequest.Headers, which shares the same capHeaders call) retained
+// an unbounded number of uncapped key/value strings.
 func TestDecodeCapsToolIDAndHeaders(t *testing.T) {
 	hugeID := strings.Repeat("t", 10_000)
 
@@ -396,6 +399,32 @@ func TestDecodeCapsToolIDAndHeaders(t *testing.T) {
 		}
 		if n := len(v); n > maxFieldBytes {
 			t.Fatalf("Headers value len = %d, want <= maxFieldBytes (%d)", n, maxFieldBytes)
+		}
+	}
+
+	// Same bounding, same headers fixture, but on ProviderRequest.Headers
+	// (the request-headers wire addition) — must be identically capped.
+	line, err = Encode(ProviderRequest{env: env{Kind: KindProviderRequest}, Headers: headers})
+	if err != nil {
+		t.Fatalf("Encode(ProviderRequest) error: %v", err)
+	}
+	got, err = Decode(line)
+	if err != nil {
+		t.Fatalf("Decode(ProviderRequest) error: %v", err)
+	}
+	prq, ok := got.(ProviderRequest)
+	if !ok {
+		t.Fatalf("Decode() returned %T, want ProviderRequest", got)
+	}
+	if n := len(prq.Headers); n > maxHeaderEntries {
+		t.Fatalf("ProviderRequest.Headers len = %d, want <= maxHeaderEntries (%d)", n, maxHeaderEntries)
+	}
+	for k, v := range prq.Headers {
+		if n := len(k); n > maxIdBytes {
+			t.Fatalf("ProviderRequest.Headers key len = %d, want <= maxIdBytes (%d): %q", n, maxIdBytes, k)
+		}
+		if n := len(v); n > maxFieldBytes {
+			t.Fatalf("ProviderRequest.Headers value len = %d, want <= maxFieldBytes (%d)", n, maxFieldBytes)
 		}
 	}
 }

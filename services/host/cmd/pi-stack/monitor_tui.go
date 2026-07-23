@@ -75,7 +75,7 @@ const (
 // specific row's expanded state, without cross-session bleed.
 type tuiRow struct {
 	id      string
-	session string // sessionKey(env) this row belongs to — see Model.sessionRowCount
+	session string // sessionKey(env) this row belongs to — see Model.sessionRowCount and the group headers in bodyLayoutLines
 	turnID  string
 	kind    rowKind
 
@@ -90,6 +90,12 @@ type tuiRow struct {
 	toolNames    []string
 	mcpToolNames []string
 	estTokens    int
+	// reqHeaders holds the provider REQUEST's sanitized "key: value"
+	// header lines (monitor.ProviderRequest.Headers), same shape and
+	// diagnostics-only placement as the response `headers` below. Rendered
+	// dead last in the request expand's diagnostics, and only while the
+	// `h` toggle (Model.showHeaders) is on — headers are noise by default.
+	reqHeaders []string
 
 	// response
 	status     int
@@ -218,6 +224,11 @@ type Model struct {
 	showMCP      bool // p
 	showThinking bool // x
 	showContext  bool // c
+	// showHeaders gates the `hdr k: v` diagnostics lines in BOTH the
+	// request and response expands (`h`). DEFAULT OFF: live feedback
+	// called HTTP headers noise — they only render when explicitly asked
+	// for, and never on a summary line either way.
+	showHeaders bool // h
 
 	showHelp bool // `?` overlay, closed by `?`/esc; replaces the body while open
 
@@ -369,19 +380,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sized = true
 		m.reconcileScroll()
 		return m, nil
-	case tea.MouseMsg:
-		// Optional nice-to-have (requirement 1: "tea.WithMouseCellMotion()
-		// is optional/nice for scroll"): wheel up/down nudges the cursor
-		// the same as k/j, including the same follow-detach/reattach rule.
-		switch tea.MouseEvent(msg).Button {
-		case tea.MouseButtonWheelUp:
-			m.moveCursor(-1)
-		case tea.MouseButtonWheelDown:
-			m.moveCursor(1)
-		}
-		m.reconcileScroll()
-		return m, nil
 	default:
+		// No tea.MouseMsg case: mouse capture is intentionally OFF (see
+		// RunTUI), so no mouse events ever arrive.
 		return m, nil
 	}
 }
@@ -448,17 +449,17 @@ func (m Model) handleKeyInner(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.follow = true
 		case "q":
 			return m, tea.Quit
-		case "up", "k":
+		case "up", "k", "ctrl+p":
 			m.moveCursor(-1)
-		case "down", "j":
+		case "down", "j", "ctrl+n":
 			m.moveCursor(1)
-		case "g", "home":
+		case "g", "home", "alt+<":
 			m.cursorToTop()
-		case "G", "end":
+		case "G", "end", "alt+>":
 			m.reattachFollow()
-		case "pgup", "ctrl+u":
+		case "pgup", "ctrl+u", "alt+v":
 			m.moveCursor(-m.pageSize())
-		case "pgdown", "ctrl+d":
+		case "pgdown", "ctrl+d", "ctrl+v":
 			m.moveCursor(m.pageSize())
 		}
 		return m, nil
@@ -485,6 +486,8 @@ func (m Model) handleKeyInner(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showThinking = !m.showThinking
 	case "c":
 		m.showContext = !m.showContext
+	case "h":
+		m.showHeaders = !m.showHeaders
 	case "/":
 		m.filtering = true
 		m.filterInput = ""
@@ -499,18 +502,22 @@ func (m Model) handleKeyInner(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.follow = false
 	case " ", "enter":
 		m.toggleExpandAtCursor()
-	case "up", "k":
+	case "up", "k", "ctrl+p":
 		m.moveCursor(-1)
-	case "down", "j":
+	case "down", "j", "ctrl+n":
 		m.moveCursor(1)
-	case "g", "home":
+	case "g", "home", "alt+<":
 		m.cursorToTop()
-	case "G", "end":
+	case "G", "end", "alt+>":
 		m.reattachFollow()
-	case "pgup", "ctrl+u":
+	case "pgup", "ctrl+u", "alt+v":
 		m.moveCursor(-m.pageSize())
-	case "pgdown", "ctrl+d":
+	case "pgdown", "ctrl+d", "ctrl+v":
 		m.moveCursor(m.pageSize())
+	case "left", "right":
+		// Deliberate no-ops: the feed has no horizontal axis, but arrow
+		// keys must always be safe to press (never mis-typed into a
+		// toggle, never a crash).
 	}
 	return m, nil
 }
@@ -661,12 +668,16 @@ func (m *Model) reconcileScroll() {
 // follow: landing anywhere but the last body line detaches it (so a live
 // stream stops yanking the view while the user is reading); landing back
 // on the last line (stepping/paging down to the bottom) re-attaches it,
-// same as pressing G.
+// same as pressing G. Group-header lines (bodyLine.group) are NOT
+// selectable: after the raw move the cursor skips over them in the
+// direction of travel (falling back the other way at a boundary), so
+// navigation only ever lands on real row/detail lines.
 func (m *Model) moveCursor(delta int) {
 	if !m.navigableBody() {
 		return
 	}
-	total := len(m.bodyLayoutLines())
+	lines := m.bodyLayoutLines()
+	total := len(lines)
 	if total == 0 {
 		return
 	}
@@ -677,22 +688,50 @@ func (m *Model) moveCursor(delta int) {
 	if cur > total-1 {
 		cur = total - 1
 	}
+	dir := 1
+	if delta < 0 {
+		dir = -1
+	}
+	cur = skipGroupLines(lines, cur, dir)
 	m.cursor = cur
 	m.follow = cur == total-1
 }
 
+// skipGroupLines returns the nearest selectable (non-group-header) line
+// index to idx, searching first in direction dir (+1 down / -1 up), then
+// the opposite way when the boundary is hit — e.g. pressing `up` from the
+// first row of the first group lands back on that row, not on its header.
+// A layout can never be ALL group headers (a header is only ever emitted
+// before a row), so this always terminates on a selectable line.
+func skipGroupLines(lines []bodyLine, idx, dir int) int {
+	for i := idx; i >= 0 && i < len(lines); i += dir {
+		if !lines[i].group {
+			return i
+		}
+	}
+	for i := idx; i >= 0 && i < len(lines); i -= dir {
+		if !lines[i].group {
+			return i
+		}
+	}
+	return idx
+}
+
 // cursorToTop implements `g`/Home: jump to the first body line and detach
-// follow (unless that line is also the only/last line).
+// follow (unless that line is also the only/last line). When grouping is
+// active, line 0 is a group header — the cursor lands on the first
+// SELECTABLE line below it instead (headers are non-selectable).
 func (m *Model) cursorToTop() {
 	if !m.navigableBody() {
 		return
 	}
-	total := len(m.bodyLayoutLines())
+	lines := m.bodyLayoutLines()
+	total := len(lines)
 	if total == 0 {
 		return
 	}
-	m.cursor = 0
-	m.follow = total == 1
+	m.cursor = skipGroupLines(lines, 0, 1)
+	m.follow = m.cursor == total-1
 }
 
 // navigableBody reports whether navigation keys have anything to act on:
@@ -803,6 +842,7 @@ func (m *Model) applyEvent(e monitor.Event) {
 			mcpToolNames:   sanitizeStrings(ev.Summary.McpToolNames),
 			estTokens:      ev.Summary.EstTokens,
 			toolSchemaHash: ev.Summary.ToolSchemaHash,
+			reqHeaders:     sanitizeHeaderLines(ev.Headers),
 		})
 		// Only re-resolve while the row is both expanded AND showFull is
 		// on (review finding R3-2b) — resolving-but-not-displaying would
@@ -813,17 +853,6 @@ func (m *Model) applyEvent(e monitor.Event) {
 
 	case monitor.ProviderResponse:
 		id := sess + "/" + env.TurnID + ":resp"
-		var hdrs []string
-		if len(ev.Headers) > 0 {
-			keys := make([]string, 0, len(ev.Headers))
-			for k := range ev.Headers {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				hdrs = append(hdrs, sanitizeText(k, false)+": "+sanitizeText(ev.Headers[k], false))
-			}
-		}
 		m.upsertRow(tuiRow{
 			id:          id,
 			session:     sess,
@@ -832,7 +861,7 @@ func (m *Model) applyEvent(e monitor.Event) {
 			status:      ev.Status,
 			stopReason:  sanitizeText(ev.StopReason, false),
 			usage:       ev.Usage,
-			headers:     hdrs,
+			headers:     sanitizeHeaderLines(ev.Headers),
 			textPreview: sanitizeText(ev.TextPreview, false),
 			textBytes:   ev.TextBytes,
 			textHash:    ev.TextHash,
@@ -1029,6 +1058,28 @@ func ansiSeqLen(s string) int {
 	}
 }
 
+// sanitizeHeaderLines flattens an event's HTTP-header map into sorted,
+// SANITIZED "key: value" lines for a row's diagnostics section — shared by
+// the provider_request and provider_response paths so both sides' headers
+// get the identical R1-8 treatment (keys and values are event-derived
+// attacker text like any other). nil/empty maps yield nil (no lines). The
+// wire decoder already caps entry count and sizes (monitor.capHeaders).
+func sanitizeHeaderLines(h map[string]string) []string {
+	if len(h) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(h))
+	for k := range h {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, sanitizeText(k, false)+": "+sanitizeText(h[k], false))
+	}
+	return out
+}
+
 // sanitizeStrings maps sanitizeText (single-line: keepNewlines=false) over
 // a slice, preserving nil vs. empty so an unset ToolNames/McpToolNames
 // stays unset rather than becoming a spurious empty (non-nil) slice.
@@ -1167,6 +1218,11 @@ type bodyLine struct {
 	text     string
 	rowID    string
 	isHeader bool
+	// group marks a session GROUP HEADER line (the `── sandbox … ──` rule
+	// emitted when 2+ distinct sessions are in view). Group lines are
+	// NON-selectable: they own no row (rowID==""), the line cursor skips
+	// over them (skipGroupLines), and expand on one is a no-op.
+	group bool
 }
 
 // View renders the current state. PURE: no channel reads, no goroutines, no
@@ -1259,22 +1315,76 @@ func (m Model) bodyLayoutLines() []bodyLine {
 			{text: fmt.Sprintf("waiting for a monitor-enabled sandbox on :%d — if nothing appears, the sandbox may predate the monitor extension (rebuild image / make load)", m.hubPort())},
 		}
 	}
+	// Session grouping (live feedback: with 2 sandboxes running the feed
+	// is an undifferentiated mess). Active ONLY when the visible feed
+	// spans 2+ distinct sessionKeys — the common single-session case
+	// renders flat, exactly as before (no headers, no indent). When
+	// active, a non-selectable group-header line precedes each contiguous
+	// RUN of same-session rows (chronological order is preserved — rows
+	// are never reordered, so follow keeps tracking the true newest event
+	// and a bursty feed reads as threads), and every row/detail line in
+	// the run is indented under its header.
+	grouped := multiSession(rows)
+	indent := ""
+	if grouped {
+		indent = "    "
+	}
 	var lines []bodyLine
-	for _, r := range rows {
+	prevSession := ""
+	for i, r := range rows {
+		if grouped && (i == 0 || r.session != prevSession) {
+			lines = append(lines, bodyLine{text: groupHeaderText(r.session), group: true})
+		}
+		prevSession = r.session
 		// ▸/▾ is the expand affordance: every row kind has detail after
 		// this rework, so every header carries a caret.
 		caret := "\u25b8 "
 		if m.expanded[r.id] {
 			caret = "\u25be "
 		}
-		lines = append(lines, bodyLine{text: caret + m.renderRow(r), rowID: r.id, isHeader: true})
+		lines = append(lines, bodyLine{text: indent + caret + m.renderRow(r), rowID: r.id, isHeader: true})
 		if m.expanded[r.id] {
 			for _, dl := range m.detailLines(r) {
-				lines = append(lines, bodyLine{text: dl, rowID: r.id})
+				lines = append(lines, bodyLine{text: indent + dl, rowID: r.id})
 			}
 		}
 	}
 	return lines
+}
+
+// multiSession reports whether the visible rows span more than one
+// distinct sessionKey — the switch that turns session grouping on.
+func multiSession(rows []tuiRow) bool {
+	for _, r := range rows[1:] {
+		if r.session != rows[0].session {
+			return true
+		}
+	}
+	return false
+}
+
+// groupHeaderText renders a session group's header rule at column 0 (no
+// indent — the rows under it are indented instead, so the feed reads as
+// threads): `── sandbox <id>  ·  session <short> ──`. The sessionKey is
+// split back into its sandbox/session halves (sessionKey joins them with
+// "/"); both are event-derived attacker text, so they're sanitized here —
+// the raw key is only ever a map/identity key, never rendered. An empty
+// sandbox id reads "(local)"; the session id is shortened to its last 8
+// runes (the tail is the distinctive part of a generated id).
+func groupHeaderText(session string) string {
+	sandbox, sess, _ := strings.Cut(session, "/")
+	sandbox = sanitizeText(sandbox, false)
+	sess = sanitizeText(sess, false)
+	if sandbox == "" {
+		sandbox = "(local)"
+	}
+	if r := []rune(sess); len(r) > 8 {
+		sess = string(r[len(r)-8:])
+	}
+	if sess == "" {
+		sess = "-"
+	}
+	return fmt.Sprintf("\u2500\u2500 sandbox %s  \u00b7  session %s \u2500\u2500", sandbox, sess)
 }
 
 // renderBodyLines decorates bodyLayoutLines for display: a "> "/"  " gutter
@@ -1303,10 +1413,15 @@ func (m Model) renderBodyLines() []bodyLine {
 			text = gutter + text
 		}
 		text = m.truncate(text)
-		if i == cur && l.rowID != "" {
+		switch {
+		case l.group:
+			// Group headers stay at column 0 (no gutter) and are dimmed —
+			// visually a rule between threads, never a selectable line.
+			text = groupHeaderStyle.Render(text)
+		case i == cur && l.rowID != "":
 			text = selectedStyle.Render(text)
 		}
-		out[i] = bodyLine{text: text, rowID: l.rowID, isHeader: l.isHeader}
+		out[i] = bodyLine{text: text, rowID: l.rowID, isHeader: l.isHeader, group: l.group}
 	}
 	return out
 }
@@ -1380,10 +1495,10 @@ func (m Model) helpBodyLines() []bodyLine {
 		"pi-stack monitor — keys",
 		"",
 		"navigation (line-granular: expanded payloads scroll line by line)",
-		"  up/k, down/j    move one line",
-		"  g/Home          jump to the top",
-		"  G/End           jump to the bottom (re-attach follow)",
-		"  PgUp/PgDn        page up/down (ctrl+u/ctrl+d also work)",
+		"  up/k, down/j    move one line (emacs: ctrl+p / ctrl+n)",
+		"  g/Home, alt+<   jump to the top",
+		"  G/End, alt+>    jump to the bottom (re-attach follow)",
+		"  PgUp/PgDn       page up/down (ctrl+u/ctrl+d; emacs: alt+v / ctrl+v)",
 		"",
 		"row detail",
 		"  enter, space    expand/collapse the row owning the cursor line (▸/▾)",
@@ -1395,6 +1510,7 @@ func (m Model) helpBodyLines() []bodyLine {
 		"  p               mcp tool rows",
 		"  x               thinking-level context rows",
 		"  c               context rows",
+		"  h               http headers in expanded request/response rows (default off)",
 		"",
 		"filter",
 		"  /               start typing a filter; enter commits, esc cancels",
@@ -1437,10 +1553,10 @@ func (m Model) footerLine() string {
 		follow = "[paused]"
 	}
 	return fmt.Sprintf(
-		"%s f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s  j/k:nav  enter/space:expand  /:filter  ?:help  q:quit",
+		"%s f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s h:headers=%s  j/k:nav  enter/space:expand  /:filter  ?:help  q:quit",
 		follow,
 		onoff(m.showFull), onoff(m.showModel), onoff(m.showTools), onoff(m.showMCP),
-		onoff(m.showThinking), onoff(m.showContext))
+		onoff(m.showThinking), onoff(m.showContext), onoff(m.showHeaders))
 }
 
 func onoff(b bool) string {
@@ -1617,6 +1733,14 @@ func (m Model) detailLines(r tuiRow) []string {
 				block("        ", r.toolSchemaText)
 			}
 		}
+		// Request HTTP headers dead LAST in diagnostics, mirroring the
+		// response side — and only behind the `h` toggle (default off:
+		// headers are noise).
+		if m.showHeaders {
+			for _, h := range r.reqHeaders {
+				lines = append(lines, "      hdr "+h)
+			}
+		}
 	case rowKindResponse:
 		// CONVERSATION FIRST: the assistant's reply (full resolved body
 		// under showFull, else the preview) and its tool calls, THEN the
@@ -1644,8 +1768,12 @@ func (m Model) detailLines(r tuiRow) []string {
 		} else {
 			lines = append(lines, "      usage  (not reported)")
 		}
-		for _, h := range r.headers {
-			lines = append(lines, "      hdr "+h)
+		// HTTP headers dead last, and only behind the `h` toggle
+		// (default off: headers are noise, per live feedback).
+		if m.showHeaders {
+			for _, h := range r.headers {
+				lines = append(lines, "      hdr "+h)
+			}
 		}
 	case rowKindTool:
 		state := "pending"
@@ -1830,19 +1958,26 @@ func humanCount(n int) string {
 }
 
 var (
-	headerStyle   = lipgloss.NewStyle().Bold(true)
-	footerStyle   = lipgloss.NewStyle().Faint(true)
-	filterStyle   = lipgloss.NewStyle().Italic(true)
-	selectedStyle = lipgloss.NewStyle().Reverse(true).Bold(true)
+	headerStyle      = lipgloss.NewStyle().Bold(true)
+	footerStyle      = lipgloss.NewStyle().Faint(true)
+	filterStyle      = lipgloss.NewStyle().Italic(true)
+	selectedStyle    = lipgloss.NewStyle().Reverse(true).Bold(true)
+	groupHeaderStyle = lipgloss.NewStyle().Faint(true).Bold(true)
 )
 
 // RunTUI runs the bubbletea program to completion (blocking). Unit C calls
 // this after wiring cfg from a live monitor.Hub. Requirement 1: runs in the
 // terminal's alt screen (so a live monitor session never scrolls into, or
-// leaves its frame behind in, the caller's shell scrollback) and enables
-// mouse-wheel scrolling as a nice-to-have on top of the keyboard nav.
+// leaves its frame behind in, the caller's shell scrollback).
+//
+// Mouse capture (tea.WithMouseCellMotion) is intentionally OFF: capturing
+// mouse events disables the terminal's NATIVE text selection, which made
+// copy/paste out of the monitor impossible (live user feedback). Copy/paste
+// beats wheel scroll — keyboard nav (arrows/j/k/PgUp/PgDn/emacs keys)
+// covers scrolling, and with no capture the terminal handles selection,
+// copy, and wheel itself.
 func RunTUI(cfg TUIConfig) error {
-	p := tea.NewProgram(NewModel(cfg), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(NewModel(cfg), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }

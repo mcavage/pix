@@ -102,6 +102,14 @@ type ProviderRequest struct {
 	Model        string         `json:"model"`
 	Summary      RequestSummary `json:"summary"`
 	ChangedBlobs []string       `json:"changedBlobs"`
+	// Headers carries the request headers assembled for the provider HTTP
+	// call (pi's before_provider_headers hook, which fires AFTER
+	// before_provider_request — the extension stashes the rest of this event
+	// and attaches Headers once that later hook fires). Mirrors
+	// ProviderResponse.Headers below: same json tag, same decode capping
+	// (capHeaders). Omitted (nil) when the headers hook never fired for this
+	// request (e.g. a stale stash flushed by ordering safety nets).
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 func (e ProviderRequest) Envelope() Envelope { return e.env }
@@ -244,8 +252,9 @@ func capHash(s string) string {
 	return s[:maxHashBytes]
 }
 
-// maxHeaderEntries caps the number of ProviderResponse.Headers entries
-// retained on decode (R4-1b). Per-string caps alone (capID/capField below)
+// maxHeaderEntries caps the number of Headers entries retained on decode
+// (R4-1b), for both ProviderResponse.Headers and ProviderRequest.Headers.
+// Per-string caps alone (capID/capField below)
 // don't stop an attacker/bug from sending an unbounded NUMBER of small
 // headers instead of one huge string; this bounds the map's entry count
 // independently, the same way maxListEntries bounds slice length.
@@ -264,8 +273,9 @@ func capStringSlice(list []string, capFn func(string) string) []string {
 	return list
 }
 
-// capHeaders bounds a decoded ProviderResponse.Headers map to at most
-// maxHeaderEntries entries (R4-1b) — extras are dropped deterministically by
+// capHeaders bounds a decoded Headers map (ProviderResponse.Headers or
+// ProviderRequest.Headers) to at most maxHeaderEntries entries (R4-1b) —
+// extras are dropped deterministically by
 // keeping the lexicographically-first maxHeaderEntries keys (sorted, so
 // which entries survive is reproducible instead of depending on Go's
 // randomized map iteration order) — and caps every surviving key (capID:
@@ -360,6 +370,7 @@ func Decode(line []byte) (Event, error) {
 		e.Summary.ToolNames = capStringSlice(e.Summary.ToolNames, capID)
 		e.Summary.McpToolNames = capStringSlice(e.Summary.McpToolNames, capID)
 		e.ChangedBlobs = capStringSlice(e.ChangedBlobs, capHash)
+		e.Headers = capHeaders(e.Headers)
 		if len(e.Summary.NewMessages) > maxListEntries {
 			e.Summary.NewMessages = e.Summary.NewMessages[:maxListEntries]
 		}
