@@ -16,11 +16,13 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"pi-stack/host/monitor"
 )
@@ -93,6 +95,10 @@ type tuiRow struct {
 	status     int
 	stopReason string
 	usage      *monitor.UsageSummary
+	// headers holds the response's already-sanitized "key: value" header
+	// lines, sorted by key for deterministic rendering (small: the wire
+	// decoder caps entry count and sizes — see monitor.capHeaders).
+	headers []string
 
 	// tool (start fields + end fields merged into one row)
 	toolID        string
@@ -109,7 +115,14 @@ type tuiRow struct {
 
 	// context
 	ctxKind string
-	detail  string
+	detail  string // single-line (flattened) copy for the row summary line
+	// detailFull is the sanitized MULTILINE context detail rendered by the
+	// expanded view (split into physical lines like every other body).
+	// The single-line `detail` above stays the row-summary/filter copy —
+	// without this a multiline or long ctx detail was flattened to one
+	// line with no way to see the rest (review finding: context detail
+	// flattened).
+	detailFull string
 
 	// resolved (and sanitized) blob text for the expanded detail view,
 	// stored here by Update — never fetched from View (review finding
@@ -177,7 +190,7 @@ type Model struct {
 	// decremented in evictOldRows for each dropped row.
 	sessionRowCount map[string]int
 
-	expanded map[string]bool // row id -> expanded, toggled by `space`
+	expanded map[string]bool // row id -> expanded, toggled by `space`/`enter`
 
 	filtering   bool // `/` was pressed; subsequent runes build filterInput
 	filterInput string
@@ -189,6 +202,54 @@ type Model struct {
 	showMCP      bool // p
 	showThinking bool // x
 	showContext  bool // c
+
+	showHelp bool // `?` overlay, closed by `?`/esc; replaces the body while open
+
+	// width/height come from tea.WindowSizeMsg. `sized` records whether a
+	// WindowSizeMsg has EVER arrived: before it does (every existing
+	// headless unit test, which drives Update directly), View stays fully
+	// unbounded — the pre-rework behavior the substring-based tests depend
+	// on. Once sized, the numeric height is authoritative even at 0 (a
+	// minimize/zero-height resize renders NOTHING rather than dumping the
+	// entire retained feed — the height==0-as-sentinel overload this
+	// replaces), and View clamps its total output to at most `height`
+	// lines, shedding lower-priority chrome (filter line first, then
+	// footer, then header) when the terminal is too short for all of it.
+	width, height int
+	sized         bool
+
+	// cursor is a LINE cursor: an index into the flattened body-line list
+	// (the same order bodyLayoutLines produces — one physical line per row
+	// header, plus one per expanded-detail line). Navigation is
+	// line-granular so a 60-line expanded payload can actually be read by
+	// stepping/paging through it, not just glimpsed at its first lines
+	// (the headline defect the live-terminal audit exposed in the old
+	// per-ROW cursor). It is ignored while follow is true — the cursor is
+	// then always the LAST body line, recomputed fresh every call
+	// (clampedCursor), so a live stream auto-tracks new events with zero
+	// bookkeeping in applyEvent. While detached, the stored index is
+	// stable across appends (new lines only ever land BELOW it) and is
+	// clamped defensively whenever the layout shrinks (toggle/filter/
+	// eviction). follow starts true (NewModel) so a freshly attached
+	// monitor opens already tracking the live feed.
+	cursor int
+	follow bool
+
+	// scrollTop is the index (into the body's flattened line list, the
+	// same order bodyLayoutLines produces) of the first line
+	// shown, i.e. bubbles/viewport's YOffset by another name (see
+	// reconcileScroll, which owns every write to this field). It is
+	// PERSISTED rather than recomputed from scratch on every render
+	// deliberately: recomputing "top" purely from the current total line
+	// count would let a bottom-of-window clamp creep the window back down
+	// every time a new row is appended below a detached, already-scrolled
+	// selection — the exact bug this rework is fixing (a live sandbox
+	// report confirmed the view jumping around while the user tried to
+	// read something older). Reconciled after every Update path that can
+	// change the row/line layout (a new event, a toggle/filter/expand/nav
+	// key, or a resize) rather than inside View, so View stays a pure
+	// read of already-settled state.
+	scrollTop int
 }
 
 // NewModel constructs a Model with the design doc's default toggle state:
@@ -206,6 +267,7 @@ func NewModel(cfg TUIConfig) Model {
 		showTools:       true,
 		showMCP:         true,
 		showContext:     true,
+		follow:          true,
 	}
 }
 
@@ -232,22 +294,101 @@ func waitForEvent(events <-chan monitor.Event) tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case eventMsg:
+		// While the view is detached (paused), cursor and scrollTop are raw
+		// LINE indices — but an event can shift every line index out from
+		// under them: maxRows eviction drops lines off the TOP, and a
+		// tool_end landing on an expanded pending tool row INSERTS result
+		// lines above anything below it. Without remapping, the same index
+		// silently points at a different row and a paused view walks
+		// through the feed. So: capture semantic anchors (rowID + line
+		// offset within that row) before the mutation, remap after.
+		// follow==true needs none of this — clampedCursor/reconcileScroll
+		// re-derive the bottom anchor fresh every call.
+		var curAnchor, topAnchor lineAnchor
+		anchored := !m.follow && !m.showHelp
+		if anchored {
+			lines := m.bodyLayoutLines()
+			curAnchor = captureLineAnchor(m.clampedCursor(len(lines)), lines)
+			top := m.scrollTop
+			if top > len(lines)-1 {
+				top = len(lines) - 1
+			}
+			if top < 0 {
+				top = 0
+			}
+			topAnchor = captureLineAnchor(top, lines)
+		}
 		m.applyEvent(msg.event)
+		if anchored {
+			lines := m.bodyLayoutLines()
+			if idx, ok := resolveLineAnchor(curAnchor, lines); ok {
+				m.cursor = idx
+			} else if curAnchor.valid {
+				// Anchored row evicted: clamp to the nearest surviving
+				// row's header (the oldest retained one — eviction only
+				// ever drops from the top).
+				m.cursor = firstHeaderLine(lines)
+			}
+			if idx, ok := resolveLineAnchor(topAnchor, lines); ok {
+				m.scrollTop = idx
+			} else if topAnchor.valid {
+				m.scrollTop = firstHeaderLine(lines)
+			}
+		}
+		m.reconcileScroll()
 		return m, waitForEvent(m.cfg.Events)
 	case eventsClosedMsg:
 		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+	case tea.WindowSizeMsg:
+		// Requirement 1: the alt-screen frame is sized off the real
+		// terminal. Before this arrives (sized=false, e.g. every existing
+		// headless unit test) View stays unbounded — see the width/height
+		// doc comment on Model. sized (not height==0) is what flips the
+		// clamp on, so a real zero-height resize clamps to nothing instead
+		// of being mistaken for "no size yet" and dumping the whole feed.
+		m.width = msg.Width
+		m.height = msg.Height
+		m.sized = true
+		m.reconcileScroll()
+		return m, nil
+	case tea.MouseMsg:
+		// Optional nice-to-have (requirement 1: "tea.WithMouseCellMotion()
+		// is optional/nice for scroll"): wheel up/down nudges the cursor
+		// the same as k/j, including the same follow-detach/reattach rule.
+		switch tea.MouseEvent(msg).Button {
+		case tea.MouseButtonWheelUp:
+			m.moveCursor(-1)
+		case tea.MouseButtonWheelDown:
+			m.moveCursor(1)
+		}
+		m.reconcileScroll()
+		return m, nil
 	default:
 		return m, nil
 	}
 }
 
-// handleKey implements the toggle/filter/expand/quit keymap from
+// handleKey wraps handleKeyInner with a single reconcileScroll pass so
+// every key path (toggle, filter, nav, expand, help) leaves scrollTop
+// consistent with whatever it just changed, without threading a
+// reconcileScroll call through each of handleKeyInner's many return
+// points individually.
+func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	nm, cmd := m.handleKeyInner(msg)
+	if mm, ok := nm.(Model); ok {
+		mm.reconcileScroll()
+		return mm, cmd
+	}
+	return nm, cmd
+}
+
+// handleKeyInner implements the toggle/filter/expand/quit keymap from
 // architecture.md 3.B. `ctrl+c` always quits, even while typing a filter (it
 // is a control signal, never filter text). `q` only quits outside filter
 // input mode, so a filter string containing "q" can actually be typed.
-func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleKeyInner(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	if key == "ctrl+c" {
 		return m, tea.Quit
@@ -272,6 +413,37 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if utf8.RuneCountInString(key) == 1 {
 				m.filterInput += key
 			}
+		}
+		return m, nil
+	}
+	// The help overlay swallows every key except quit, the two that close
+	// it, and the line-navigation keys (so help taller than the viewport
+	// can be scrolled with the exact same nav the row view uses) —
+	// anything else (a toggle, expand, filter) is swallowed so a stray
+	// keypress while reading the overlay can't silently flip state
+	// underneath it.
+	if m.showHelp {
+		switch key {
+		case "?", "esc":
+			// Close and restore the row view. Simplest correct restore:
+			// re-attach follow (cursor back to the newest line) rather
+			// than trying to remember the pre-help cursor.
+			m.showHelp = false
+			m.follow = true
+		case "q":
+			return m, tea.Quit
+		case "up", "k":
+			m.moveCursor(-1)
+		case "down", "j":
+			m.moveCursor(1)
+		case "g", "home":
+			m.cursorToTop()
+		case "G", "end":
+			m.reattachFollow()
+		case "pgup", "ctrl+u":
+			m.moveCursor(-m.pageSize())
+		case "pgdown", "ctrl+d":
+			m.moveCursor(m.pageSize())
 		}
 		return m, nil
 	}
@@ -300,33 +472,282 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		m.filtering = true
 		m.filterInput = ""
-	case " ":
-		m.toggleExpandLast()
+	case "?":
+		// Help renders from its own top (the audit's frame F showed it
+		// inheriting the row view's scrollTop and starting mid-list):
+		// reset the cursor and scroll and detach follow so the first
+		// help line is what the user sees.
+		m.showHelp = true
+		m.cursor = 0
+		m.scrollTop = 0
+		m.follow = false
+	case " ", "enter":
+		m.toggleExpandAtCursor()
+	case "up", "k":
+		m.moveCursor(-1)
+	case "down", "j":
+		m.moveCursor(1)
+	case "g", "home":
+		m.cursorToTop()
+	case "G", "end":
+		m.reattachFollow()
+	case "pgup", "ctrl+u":
+		m.moveCursor(-m.pageSize())
+	case "pgdown", "ctrl+d":
+		m.moveCursor(m.pageSize())
 	}
 	return m, nil
 }
 
-// toggleExpandLast expands/collapses the most recent VISIBLE row — "current
-// turn pinned" per the design doc. There is no up/down row cursor in the
-// architecture.md 3.B keymap, so `space` acts on the row the user is
-// currently looking at: whatever is newest under the active filter/toggles.
-func (m *Model) toggleExpandLast() {
-	rows := m.visibleRows()
-	if len(rows) == 0 {
+// lineAnchor pins one body line SEMANTICALLY — by the row that owns it
+// plus the line's offset within that row's contiguous block of lines —
+// rather than by raw index, so eviction/insertion above it can be remapped
+// (see the eventMsg case in Update). valid=false means the line was untied
+// (empty-state hint, help) or out of range; nothing to remap then.
+type lineAnchor struct {
+	rowID  string
+	offset int
+	valid  bool
+}
+
+// captureLineAnchor anchors the line at idx in the given layout.
+func captureLineAnchor(idx int, lines []bodyLine) lineAnchor {
+	if idx < 0 || idx >= len(lines) || lines[idx].rowID == "" {
+		return lineAnchor{}
+	}
+	first := idx
+	for first > 0 && lines[first-1].rowID == lines[idx].rowID {
+		first--
+	}
+	return lineAnchor{rowID: lines[idx].rowID, offset: idx - first, valid: true}
+}
+
+// resolveLineAnchor maps an anchor back to a line index in the NEW layout:
+// the anchored row's first line plus the saved offset, clamped to the
+// row's (possibly changed) line count. ok=false when the anchor is invalid
+// or its row no longer exists in the layout (evicted / filtered out).
+func resolveLineAnchor(a lineAnchor, lines []bodyLine) (int, bool) {
+	if !a.valid {
+		return 0, false
+	}
+	first, count := -1, 0
+	for i, l := range lines {
+		if l.rowID == a.rowID {
+			if first < 0 {
+				first = i
+			}
+			count++
+		} else if first >= 0 {
+			break // a row's lines are contiguous
+		}
+	}
+	if first < 0 {
+		return 0, false
+	}
+	off := a.offset
+	if off > count-1 {
+		off = count - 1
+	}
+	return first + off, true
+}
+
+// firstHeaderLine is the index of the first row-backed header line in the
+// layout (0 when there is none) — the clamp target when an anchored row
+// was evicted out from under a detached cursor.
+func firstHeaderLine(lines []bodyLine) int {
+	for i, l := range lines {
+		if l.isHeader && l.rowID != "" {
+			return i
+		}
+	}
+	return 0
+}
+
+// clampedCursor resolves the effective cursor line against the CURRENT
+// body-line total: the last line while follow is on (this is what makes
+// follow-mode auto-track new events with zero extra bookkeeping in
+// applyEvent), otherwise the stored m.cursor clamped defensively into
+// [0, total) — the layout can shrink out from under it (toggle/filter
+// change, eviction, collapse).
+func (m Model) clampedCursor(total int) int {
+	if total <= 0 {
+		return 0
+	}
+	if m.follow {
+		return total - 1
+	}
+	c := m.cursor
+	if c < 0 {
+		c = 0
+	}
+	if c > total-1 {
+		c = total - 1
+	}
+	return c
+}
+
+// selectedRowID is the id of the row that OWNS the cursor's current body
+// line (its header line or one of its expanded detail lines) — the row
+// View highlights. "" when the cursor sits on an untied line (empty-state
+// hint, help overlay).
+func (m Model) selectedRowID() string {
+	lines := m.bodyLayoutLines()
+	if len(lines) == 0 {
+		return ""
+	}
+	return lines[m.clampedCursor(len(lines))].rowID
+}
+
+// reconcileScroll updates m.scrollTop ("the body scrolls to keep the
+// cursor LINE visible") after every Update path that can change the
+// row/line layout — a new event, a toggle/filter/expand/nav key, or a
+// resize. See the scrollTop field doc comment for why this is persisted
+// state rather than something View recomputes from scratch every render.
+//
+// While follow is on, scrollTop always bottom-anchors (newest line
+// visible). While detached, scrollTop only moves the minimum amount needed
+// to bring the cursor line back inside [scrollTop, scrollTop+bodyHeight)
+// — exactly bubbles/viewport's "ensure visible" behavior — so a detached
+// view that's already showing the cursor line stays exactly where it is
+// even as new rows keep appending below it.
+func (m *Model) reconcileScroll() {
+	bh := m.bodyHeight()
+	if bh <= 0 {
+		m.scrollTop = 0
 		return
 	}
-	id := rows[len(rows)-1].id
+	total := len(m.bodyLayoutLines())
+	if total <= bh {
+		m.scrollTop = 0
+		return
+	}
+	if m.follow {
+		m.scrollTop = total - bh
+		return
+	}
+	cur := m.clampedCursor(total)
+	if cur < m.scrollTop {
+		m.scrollTop = cur
+	} else if cur >= m.scrollTop+bh {
+		m.scrollTop = cur - bh + 1
+	}
+	if m.scrollTop < 0 {
+		m.scrollTop = 0
+	}
+	if m.scrollTop > total-bh {
+		m.scrollTop = total - bh
+	}
+}
+
+// moveCursor shifts the LINE cursor by delta physical lines (j/k/arrows:
+// ±1 — so an expanded 60-line payload is read by stepping THROUGH it, the
+// audit's headline defect; PgUp/PgDn/ctrl+u/ctrl+d: ±pageSize) and updates
+// follow: landing anywhere but the last body line detaches it (so a live
+// stream stops yanking the view while the user is reading); landing back
+// on the last line (stepping/paging down to the bottom) re-attaches it,
+// same as pressing G.
+func (m *Model) moveCursor(delta int) {
+	if !m.navigableBody() {
+		return
+	}
+	total := len(m.bodyLayoutLines())
+	if total == 0 {
+		return
+	}
+	cur := m.clampedCursor(total) + delta
+	if cur < 0 {
+		cur = 0
+	}
+	if cur > total-1 {
+		cur = total - 1
+	}
+	m.cursor = cur
+	m.follow = cur == total-1
+}
+
+// cursorToTop implements `g`/Home: jump to the first body line and detach
+// follow (unless that line is also the only/last line).
+func (m *Model) cursorToTop() {
+	if !m.navigableBody() {
+		return
+	}
+	total := len(m.bodyLayoutLines())
+	if total == 0 {
+		return
+	}
+	m.cursor = 0
+	m.follow = total == 1
+}
+
+// navigableBody reports whether navigation keys have anything to act on:
+// the help overlay always does (its lines are the content), the row feed
+// only when at least one visible row exists. On the EMPTY state (the two
+// untied hint lines) nav must be a no-op that never detaches follow —
+// otherwise an Up/wheel/Home pressed while waiting for the first event
+// left the monitor opening PAUSED on the first events, looking stuck.
+func (m Model) navigableBody() bool {
+	return m.showHelp || len(m.visibleRows()) > 0
+}
+
+// reattachFollow implements `G`/End: jump to (and keep tracking) the last
+// body line — clampedCursor derives the cursor from follow from here on,
+// so no stored index needs updating per event.
+func (m *Model) reattachFollow() {
+	m.follow = true
+	if total := len(m.bodyLayoutLines()); total > 0 {
+		m.cursor = total - 1
+	}
+}
+
+// pageSize is the line-count step for PgUp/PgDn/ctrl+u/ctrl+d: the current
+// clamped body height when one is known (height>0), else a fixed fallback
+// (no real terminal size yet — e.g. a test driving Update directly without
+// a WindowSizeMsg).
+func (m Model) pageSize() int {
+	if bh := m.bodyHeight(); bh > 0 {
+		return bh
+	}
+	return 10
+}
+
+// toggleExpandAtCursor expands/collapses the row that OWNS the cursor's
+// current body line (its header line, or — for a collapse — any of its
+// expanded detail lines). Bound to both `space` and `enter`. Keeps the
+// R3-2b memory discipline exactly as before: resolve blobs on expand (only
+// while showFull is also on), clear them on collapse. On collapse the
+// cursor SNAPS to the row's header line, so it never lands on a
+// now-removed detail line (which would silently jump it to whatever line
+// slid up into that index).
+func (m *Model) toggleExpandAtCursor() {
+	lines := m.bodyLayoutLines()
+	if len(lines) == 0 {
+		return
+	}
+	id := lines[m.clampedCursor(len(lines))].rowID
+	if id == "" {
+		return // untied line (empty-state hint): nothing to expand
+	}
 	m.expanded[id] = !m.expanded[id]
 	if m.expanded[id] {
 		if m.showFull {
 			m.resolveRowBlobs(id)
 		}
-	} else {
-		// Collapsing: drop this row's resolved full-body text so it can
-		// be GC'd rather than retained for the rest of the row's
-		// lifetime (review finding R3-2b). The small summary fields
-		// (hashes, previews, byte counts) are untouched.
-		m.clearRowBlobs(id)
+		return
+	}
+	// Collapsing: drop this row's resolved full-body text so it can be
+	// GC'd rather than retained for the rest of the row's lifetime
+	// (review finding R3-2b). The small summary fields (hashes, previews,
+	// byte counts) are untouched.
+	m.clearRowBlobs(id)
+	// Snap the cursor to the collapsed row's header line in the NEW
+	// (post-collapse) layout.
+	after := m.bodyLayoutLines()
+	for i, l := range after {
+		if l.rowID == id && l.isHeader {
+			m.cursor = i
+			m.follow = i == len(after)-1
+			return
+		}
 	}
 }
 
@@ -376,6 +797,17 @@ func (m *Model) applyEvent(e monitor.Event) {
 
 	case monitor.ProviderResponse:
 		id := sess + "/" + env.TurnID + ":resp"
+		var hdrs []string
+		if len(ev.Headers) > 0 {
+			keys := make([]string, 0, len(ev.Headers))
+			for k := range ev.Headers {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				hdrs = append(hdrs, sanitizeText(k, false)+": "+sanitizeText(ev.Headers[k], false))
+			}
+		}
 		m.upsertRow(tuiRow{
 			id:         id,
 			session:    sess,
@@ -384,6 +816,7 @@ func (m *Model) applyEvent(e monitor.Event) {
 			status:     ev.Status,
 			stopReason: sanitizeText(ev.StopReason, false),
 			usage:      ev.Usage,
+			headers:    hdrs,
 		})
 
 	case monitor.ToolStart:
@@ -394,11 +827,16 @@ func (m *Model) applyEvent(e monitor.Event) {
 		// late tool_end would mutate the wrong turn's row.
 		id := sess + "/" + env.TurnID + "/tool:" + ev.ToolID
 		m.upsertRow(tuiRow{
-			id:          id,
-			session:     sess,
-			turnID:      sanitizeText(env.TurnID, false),
-			kind:        rowKindTool,
-			toolID:      ev.ToolID,
+			id:      id,
+			session: sess,
+			turnID:  sanitizeText(env.TurnID, false),
+			kind:    rowKindTool,
+			// The row KEY above keeps the raw ToolID (correlation with the
+			// later tool_end must be byte-exact and the key is never
+			// rendered); the stored/displayed copy is sanitized like every
+			// other event-derived string (R1-8 — the expanded detail line
+			// renders it, so a raw OSC/CSI ToolID would drive the terminal).
+			toolID:      sanitizeText(ev.ToolID, false),
 			source:      sanitizeText(ev.Source, false),
 			name:        sanitizeText(ev.Name, false),
 			argsSummary: sanitizeText(ev.ArgsSummary, false),
@@ -425,11 +863,13 @@ func (m *Model) applyEvent(e monitor.Event) {
 			// tool_end with no matching tool_start (e.g. TUI attached
 			// mid-tool-call): render it standalone rather than drop it.
 			m.upsertRow(tuiRow{
-				id:            id,
-				session:       sess,
-				turnID:        sanitizeText(env.TurnID, false),
-				kind:          rowKindTool,
-				toolID:        ev.ToolID,
+				id:      id,
+				session: sess,
+				turnID:  sanitizeText(env.TurnID, false),
+				kind:    rowKindTool,
+				// Sanitized for display, same as the ToolStart path (R1-8);
+				// the raw ToolID lives only in the row key.
+				toolID:        sanitizeText(ev.ToolID, false),
 				ok:            ev.OK,
 				resultBytes:   ev.ResultBytes,
 				resultSummary: sanitizeText(ev.ResultSummary, false),
@@ -457,6 +897,11 @@ func (m *Model) applyEvent(e monitor.Event) {
 			kind:    rowKindContext,
 			ctxKind: sanitizeText(ev.CtxKind, false),
 			detail:  sanitizeText(ev.Detail, false),
+			// keepNewlines=true: the expanded view renders this across
+			// multiple physical lines (split by detailLines' block helper),
+			// so a multiline ctx detail is actually readable instead of
+			// being flattened+truncated into the single summary line.
+			detailFull: sanitizeText(ev.Detail, true),
 		})
 	}
 }
@@ -685,39 +1130,258 @@ func (m Model) passesToggles(r tuiRow) bool {
 	}
 }
 
+// bodyLine is one PHYSICAL line of the scrollable body region — text never
+// contains '\n' (multi-line blob bodies are split into one bodyLine per
+// physical line by detailLines, so the height clamp and per-line width
+// truncation both count what actually renders). Either a row's own summary
+// line (isHeader=true, carries the caret/cursor gutter) or one of its
+// expanded detail lines, or an untied line (help overlay / empty-state
+// hint, rowID="").
+type bodyLine struct {
+	text     string
+	rowID    string
+	isHeader bool
+}
+
 // View renders the current state. PURE: no channel reads, no goroutines, no
 // tea.Program access — see the Model doc comment and architecture.md 3.B
-// ("View() must be a PURE function of Model state").
+// ("View() must be a PURE function of Model state"). Requirement 1's
+// height==0 sentinel (no WindowSizeMsg yet) keeps this fully unbounded —
+// every existing substring-based unit test still passes unmodified; only
+// height>0 clamps the body to a fixed number of lines and scrolls it
+// (requirements 1/3/4).
 func (m Model) View() string {
-	var b strings.Builder
-	b.WriteString(headerStyle.Render(m.headerLine()))
-	b.WriteString("\n")
-	switch {
-	case m.filtering:
-		b.WriteString(filterStyle.Render("filter> " + m.filterInput))
-		b.WriteString("\n")
-	case m.filter != "":
-		b.WriteString(filterStyle.Render("filter: " + m.filter))
-		b.WriteString("\n")
+	header, filter, footer := m.chrome()
+	var parts []string
+	if header {
+		parts = append(parts, headerStyle.Render(m.truncate(m.headerLine())))
+	}
+	if filter {
+		if m.filtering {
+			parts = append(parts, filterStyle.Render(m.truncate("filter> "+m.filterInput)))
+		} else {
+			parts = append(parts, filterStyle.Render(m.truncate("filter: "+m.filter)))
+		}
+	}
+	for _, l := range m.windowedBodyLines(m.renderBodyLines()) {
+		parts = append(parts, l.text)
+	}
+	if footer {
+		parts = append(parts, footerStyle.Render(m.truncate(m.footerLine())))
+	}
+	return strings.Join(parts, "\n")
+}
+
+// chrome decides which frame-chrome lines View renders. Pre-size
+// (sized=false, every headless test) everything relevant renders,
+// unbounded. Once sized, chrome is shed lowest-priority-first when the
+// terminal is too short for all of it — the filter line drops first (it
+// needs height>=3), then the footer (height>=2), then the header
+// (height>=1) — so the TOTAL rendered line count (chrome + body, see
+// bodyHeight) never exceeds the terminal height, even at height 0-3.
+func (m Model) chrome() (header, filter, footer bool) {
+	filterActive := m.filtering || m.filter != ""
+	if !m.sized {
+		return true, filterActive, true
+	}
+	return m.height >= 1, filterActive && m.height >= 3, m.height >= 2
+}
+
+// bodyHeight is the number of body lines that fit around the chrome lines
+// View actually renders. 0 pre-size is the "unbounded" sentinel (sized
+// false — callers treat it as no clamp); once sized it is an exact budget
+// and MAY be 0 (a terminal of height 0-2 has no room for body lines —
+// rendering "at least one" anyway would overflow the frame).
+func (m Model) bodyHeight() int {
+	if !m.sized {
+		return 0
+	}
+	header, filter, footer := m.chrome()
+	h := m.height
+	if header {
+		h--
+	}
+	if filter {
+		h--
+	}
+	if footer {
+		h--
+	}
+	if h < 0 {
+		h = 0
+	}
+	return h
+}
+
+// bodyLayoutLines builds the flat physical-line layout of the scrollable
+// body: one line per visible row header (with its ▸/▾ expand caret), plus
+// one line per expanded-detail physical line (detailLines already split
+// every multi-line body on '\n'). This is the single source of truth for
+// line positions — the cursor, reconcileScroll, expand-at-cursor, and
+// renderBodyLines all index into the SAME layout — so no line here ever
+// contains a '\n'. Text is raw (no gutter, no truncation, no styling);
+// renderBodyLines decorates it. The help overlay REPLACES this entirely
+// rather than being one more toggle over the row feed.
+func (m Model) bodyLayoutLines() []bodyLine {
+	if m.showHelp {
+		return m.helpBodyLines()
 	}
 	rows := m.visibleRows()
 	if len(rows) == 0 {
-		b.WriteString("(no events yet)\n")
-		b.WriteString(fmt.Sprintf("waiting for a monitor-enabled sandbox on :%d — if nothing appears, the sandbox may predate the monitor extension (rebuild image / make load)\n", m.hubPort()))
-	} else {
-		for _, r := range rows {
-			b.WriteString(m.renderRow(r))
-			b.WriteString("\n")
-			if m.expanded[r.id] {
-				for _, line := range m.detailLines(r) {
-					b.WriteString(line)
-					b.WriteString("\n")
-				}
+		return []bodyLine{
+			{text: "(no events yet)"},
+			{text: fmt.Sprintf("waiting for a monitor-enabled sandbox on :%d — if nothing appears, the sandbox may predate the monitor extension (rebuild image / make load)", m.hubPort())},
+		}
+	}
+	var lines []bodyLine
+	for _, r := range rows {
+		// ▸/▾ is the expand affordance: every row kind has detail after
+		// this rework, so every header carries a caret.
+		caret := "\u25b8 "
+		if m.expanded[r.id] {
+			caret = "\u25be "
+		}
+		lines = append(lines, bodyLine{text: caret + m.renderRow(r), rowID: r.id, isHeader: true})
+		if m.expanded[r.id] {
+			for _, dl := range m.detailLines(r) {
+				lines = append(lines, bodyLine{text: dl, rowID: r.id})
 			}
 		}
 	}
-	b.WriteString(footerStyle.Render(m.footerLine()))
-	return b.String()
+	return lines
+}
+
+// renderBodyLines decorates bodyLayoutLines for display: a "> "/"  " gutter
+// on row lines (the marker lands on the header of the row that OWNS the
+// cursor line — visible/assertable independent of terminal color support,
+// since lipgloss renders plain whenever stdout isn't a TTY, e.g. every
+// unit test), per-line truncation of the FULL composed line to the
+// terminal width (so nothing — gutter included — escapes the frame), and
+// reverse styling on the exact cursor line so line-granular position is
+// legible on a real color terminal.
+func (m Model) renderBodyLines() []bodyLine {
+	lines := m.bodyLayoutLines()
+	if len(lines) == 0 {
+		return lines
+	}
+	cur := m.clampedCursor(len(lines))
+	selID := lines[cur].rowID
+	out := make([]bodyLine, len(lines))
+	for i, l := range lines {
+		text := l.text
+		if l.rowID != "" {
+			gutter := "  "
+			if l.isHeader && selID != "" && l.rowID == selID {
+				gutter = "> "
+			}
+			text = gutter + text
+		}
+		text = m.truncate(text)
+		if i == cur && l.rowID != "" {
+			text = selectedStyle.Render(text)
+		}
+		out[i] = bodyLine{text: text, rowID: l.rowID, isHeader: l.isHeader}
+	}
+	return out
+}
+
+// windowedBodyLines clamps+scrolls the body to bodyHeight lines (requirement
+// 4: this is the ONE place full payloads/detail get bounded — nothing ever
+// escapes the frame by being written outside this window). height==0
+// (requirement 1's unbounded sentinel) and "everything already fits" both
+// return every line unchanged. The actual scroll POSITION is decided by
+// reconcileScroll (persisted in m.scrollTop, not recomputed here) — see its
+// doc comment for why: recomputing "top" fresh from the current total line
+// count on every render is what let a detached view get pulled back toward
+// the bottom as new rows kept appending underneath it. This function just
+// clamps that stored offset defensively (e.g. after a toggle/filter change
+// shrinks the total out from under it) and slices.
+func (m Model) windowedBodyLines(lines []bodyLine) []bodyLine {
+	if !m.sized {
+		return lines
+	}
+	bh := m.bodyHeight()
+	if bh <= 0 {
+		return nil // sized but no room for body lines (height 0-2)
+	}
+	total := len(lines)
+	if bh >= total {
+		return lines
+	}
+	top := m.scrollTop
+	if top < 0 {
+		top = 0
+	}
+	if top > total-bh {
+		top = total - bh
+	}
+	return lines[top : top+bh]
+}
+
+// truncate clamps a single line to the real terminal width (requirement 4:
+// "long lines should be truncated to width... so nothing escapes the
+// frame"). width==0 (no WindowSizeMsg yet, or a caller that never sets it —
+// every existing unit test) is unbounded, matching the pre-size sentinel.
+func (m Model) truncate(s string) string {
+	return truncateLine(s, m.width)
+}
+
+// truncateLine measures and truncates by terminal DISPLAY cells
+// (go-runewidth), not runes: CJK/emoji occupy two cells each, so a
+// rune-count clamp let wide text overflow the width, wrap, and corrupt the
+// alt-screen frame. runewidth.Truncate never splits a rune (or a wide rune
+// across the boundary), and the … ellipsis (1 cell, reserved inside the
+// budget) marks a truncated line as distinct from a short one.
+func truncateLine(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	if runewidth.StringWidth(s) <= width {
+		return s
+	}
+	if width == 1 {
+		return runewidth.Truncate(s, 1, "")
+	}
+	return runewidth.Truncate(s, width, "…")
+}
+
+// helpBodyLines is the `?` overlay content: every key the keymap
+// recognizes, grouped by purpose. Raw lines (rowID="") — renderBodyLines
+// truncates them, and the shared line cursor scrolls them when help is
+// taller than the viewport.
+func (m Model) helpBodyLines() []bodyLine {
+	text := []string{
+		"pi-stack monitor — keys",
+		"",
+		"navigation (line-granular: expanded payloads scroll line by line)",
+		"  up/k, down/j    move one line",
+		"  g/Home          jump to the top",
+		"  G/End           jump to the bottom (re-attach follow)",
+		"  PgUp/PgDn        page up/down (ctrl+u/ctrl+d also work)",
+		"",
+		"row detail",
+		"  enter, space    expand/collapse the row owning the cursor line (▸/▾)",
+		"",
+		"toggles",
+		"  f               full payloads (system prompt / message / tool bodies)",
+		"  m               model request/response rows",
+		"  t               tool rows",
+		"  p               mcp tool rows",
+		"  x               thinking-level context rows",
+		"  c               context rows",
+		"",
+		"filter",
+		"  /               start typing a filter; enter commits, esc cancels",
+		"",
+		"other",
+		"  ?               toggle this help",
+		"  q, ctrl+c       quit",
+	}
+	lines := make([]bodyLine, len(text))
+	for i, t := range text {
+		lines[i] = bodyLine{text: t}
+	}
+	return lines
 }
 
 // hubPort returns cfg.Port, falling back to monitor.DefaultPort when unset
@@ -742,8 +1406,13 @@ func (m Model) headerLine() string {
 }
 
 func (m Model) footerLine() string {
+	follow := "[following]"
+	if !m.follow {
+		follow = "[paused]"
+	}
 	return fmt.Sprintf(
-		"f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s  /:filter  space:expand  q:quit",
+		"%s f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s  j/k:nav  enter/space:expand  /:filter  ?:help  q:quit",
+		follow,
 		onoff(m.showFull), onoff(m.showModel), onoff(m.showTools), onoff(m.showMCP),
 		onoff(m.showThinking), onoff(m.showContext))
 }
@@ -817,38 +1486,111 @@ func renderContextRow(r tuiRow) string {
 	return fmt.Sprintf("   ctx   %-14s %s", r.ctxKind, r.detail)
 }
 
-// detailLines renders the expanded (space-toggled) detail for a row: the
-// new-message list for a request row, and — only when showFull is also on —
-// the full blob body, pre-resolved and sanitized by resolveRowBlobs (into
-// r.sysPromptText / r.argsText / r.resultText) back when the row was
+// detailLines renders the expanded (space-toggled) detail for a row as
+// PHYSICAL lines — every stored body/preview is split on '\n' and each
+// fragment becomes its own line, so no returned string ever contains a
+// newline (the height clamp and per-line width truncation both depend on
+// that). Every row kind returns at least one line even with showFull off
+// (expand always has a visible effect — the audit found expanding a
+// response/context row was a silent no-op): a request row shows its
+// system-prompt/tool/token summary and new-message previews; a response
+// row shows status, stop reason, usage tokens, and headers when present; a
+// tool row shows name/source/id, args and — once done — result summaries;
+// a context row shows ctxKind + its full detail text. showFull adds the
+// full blob bodies, pre-resolved and sanitized by resolveRowBlobs (into
+// r.sysPromptText / r.argsText / r.resultText / …) back when the row was
 // expanded or the blob arrived. detailLines reads ONLY that stored state —
 // never cfg.Blob — because View must be a pure function of Model (review
 // finding R1-12); blob lookup happens in Update, not here.
 func (m Model) detailLines(r tuiRow) []string {
 	var lines []string
+	block := func(prefix, body string) {
+		for _, ln := range strings.Split(body, "\n") {
+			lines = append(lines, prefix+ln)
+		}
+	}
 	switch r.kind {
 	case rowKindRequest:
+		label := "new"
+		if r.sysUnchanged {
+			label = "unchanged"
+		}
+		lines = append(lines, fmt.Sprintf("      system prompt %s (%s)  tools=%d  est ~%s",
+			humanBytes(int64(r.sysBytes)), label, r.toolCount, humanTok(r.estTokens)))
+		if len(r.toolNames) > 0 {
+			lines = append(lines, "      tools: "+strings.Join(r.toolNames, ", "))
+		}
+		if len(r.mcpToolNames) > 0 {
+			lines = append(lines, "      mcp tools: "+strings.Join(r.mcpToolNames, ", "))
+		}
 		for i, nm := range r.newMessages {
 			lines = append(lines, fmt.Sprintf("      msg %-9s %-6s %s", nm.Role, humanBytes(int64(nm.Bytes)), nm.Preview))
 			if m.showFull && i < len(r.newMessageTexts) {
-				lines = append(lines, "        "+r.newMessageTexts[i])
+				block("        ", r.newMessageTexts[i])
 			}
 		}
 		if m.showFull {
 			lines = append(lines, "      system prompt:")
-			lines = append(lines, "        "+r.sysPromptText)
+			block("        ", r.sysPromptText)
 			if r.toolCount > 0 {
 				lines = append(lines, "      tool schema:")
-				lines = append(lines, "        "+r.toolSchemaText)
+				block("        ", r.toolSchemaText)
 			}
+		}
+	case rowKindResponse:
+		stop := r.stopReason
+		if stop == "" {
+			stop = "-"
+		}
+		lines = append(lines, fmt.Sprintf("      status %d  stop=%s", r.status, stop))
+		if r.usage != nil {
+			lines = append(lines, fmt.Sprintf("      usage  in=%s out=%s total=%s",
+				humanCount(r.usage.InputTokens), humanCount(r.usage.OutputTokens), humanCount(r.usage.TotalTokens)))
+		} else {
+			lines = append(lines, "      usage  (not reported)")
+		}
+		for _, h := range r.headers {
+			lines = append(lines, "      hdr "+h)
 		}
 	case rowKindTool:
+		state := "pending"
+		if r.toolDone {
+			okLabel := "ok"
+			if !r.ok {
+				okLabel = "FAIL"
+			}
+			state = fmt.Sprintf("%s %s %.1fs", okLabel, humanBytes(int64(r.resultBytes)), float64(r.durationMs)/1000)
+		}
+		lines = append(lines, fmt.Sprintf("      tool %s  source=%s  id=%s  %s", r.name, r.source, r.toolID, state))
+		if r.argsSummary != "" {
+			lines = append(lines, "      args: "+r.argsSummary)
+		}
+		if r.toolDone && r.resultSummary != "" {
+			lines = append(lines, "      result: "+r.resultSummary)
+		}
 		if m.showFull {
-			lines = append(lines, "      args:   "+r.argsText)
+			lines = append(lines, "      args:")
+			block("        ", r.argsText)
 			if r.toolDone {
-				lines = append(lines, "      result: "+r.resultText)
+				lines = append(lines, "      result:")
+				block("        ", r.resultText)
 			}
 		}
+	case rowKindContext:
+		kind := r.ctxKind
+		if kind == "" {
+			kind = "-"
+		}
+		// detailFull is the sanitized MULTILINE copy (keepNewlines=true);
+		// block splits it into physical lines like every other body, so a
+		// multiline ctx detail expands readably instead of staying the
+		// flattened one-liner the row summary shows. Fall back to the
+		// flattened copy for rows built before detailFull existed.
+		detail := r.detailFull
+		if detail == "" {
+			detail = r.detail
+		}
+		block("      ", kind+": "+detail)
 	}
 	return lines
 }
@@ -990,15 +1732,19 @@ func humanCount(n int) string {
 }
 
 var (
-	headerStyle = lipgloss.NewStyle().Bold(true)
-	footerStyle = lipgloss.NewStyle().Faint(true)
-	filterStyle = lipgloss.NewStyle().Italic(true)
+	headerStyle   = lipgloss.NewStyle().Bold(true)
+	footerStyle   = lipgloss.NewStyle().Faint(true)
+	filterStyle   = lipgloss.NewStyle().Italic(true)
+	selectedStyle = lipgloss.NewStyle().Reverse(true).Bold(true)
 )
 
 // RunTUI runs the bubbletea program to completion (blocking). Unit C calls
-// this after wiring cfg from a live monitor.Hub.
+// this after wiring cfg from a live monitor.Hub. Requirement 1: runs in the
+// terminal's alt screen (so a live monitor session never scrolls into, or
+// leaves its frame behind in, the caller's shell scrollback) and enables
+// mouse-wheel scrolling as a nice-to-have on top of the keyboard nav.
 func RunTUI(cfg TUIConfig) error {
-	p := tea.NewProgram(NewModel(cfg))
+	p := tea.NewProgram(NewModel(cfg), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }
