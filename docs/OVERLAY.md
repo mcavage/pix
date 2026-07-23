@@ -44,7 +44,7 @@ that maps directly into the sandbox filesystem. `make run` stacks it automatical
 when `$(OVERLAY)/kit/spec.yaml` exists:
 
 ```bash
-sbx run pi-stack --kit ./pi-kit --kit ../my-overlay/kit --mcp ... .
+sbx run pi-stack --kit ./pi-kit --kit ../my-overlay/kit --static-mcp ... .
 ```
 
 - **Skills** under `files/home/.pi/agent/skills/` are added to the agent's

@@ -342,7 +342,10 @@ func TestPackUse_RegistersMcpAlreadyPresentInConfig(t *testing.T) {
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
 	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"})
-	if !strings.Contains(out.String(), "mcp registration") {
+	// registerServers must be INVOKED for an already-present pack MCP (retry
+	// recovery), not skipped by an only-newly-added gate — observable as its own
+	// per-server line for fastmail (here classified remote in the fake env).
+	if !strings.Contains(out.String(), "fastmail") {
 		t.Errorf("registerServers must run for an already-present pack MCP (retry recovery), got:\n%s", out.String())
 	}
 }
@@ -367,7 +370,9 @@ func TestPackAdd_Mcp_RetryReregisters(t *testing.T) {
 
 	var out bytes.Buffer
 	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--yes"})
-	if !strings.Contains(out.String(), "mcp registration") {
+	// Re-invocation is observable as registerServers' own per-server line for
+	// fastmail (here classified remote in the fake env), not the error-only note.
+	if !strings.Contains(out.String(), "fastmail") {
 		t.Errorf("retrying pack add mcp must re-invoke registration, got:\n%s", out.String())
 	}
 }

@@ -128,7 +128,7 @@ Parallel work
   task <cmd>          new | ls | path | rm | gc | harvest: parallel task clones of one repo
 
 Integrations & credentials
-  mcp register|ls     register local stdio MCP servers with the sbx gateway
+  mcp <cmd>           register|ls|load|auth|bundle MCP servers (sbx gateway)
   secret <cmd>        ls|set|rm|check the 1Password op-refs (host MCP creds)
 
 State (on-disk lifecycle)
@@ -280,11 +280,18 @@ const configUsage = `usage: pi-stack config <show|path|get|set|unset> [args]
 
 ` + configKeysHelp
 
-const mcpUsage = `usage: pi-stack mcp <register|ls> [name...]
+const mcpUsage = `usage: pi-stack mcp <register|ls|load> [args]
 
   register [name...]   register local stdio MCP servers with the sbx gateway
                        (no names = every local server in the resolved mcp list)
   ls                   list servers registered with the gateway (sbx mcp ls)
+  load <name> [DIR]    attach an already-registered server to the RUNNING sandbox
+                       for DIR (default cwd) — live, no recreate (sbx mcp load)
+  auth [args...]       authorize remote OAuth servers via the hosted control
+                       plane (sbx mcp auth; e.g. auth --all, auth status --all)
+  bundle [ls|rm ...]   register the shipped public catalog bundle
+                       (notion/atlassian/granola) in one step; ls/rm forward to
+                       sbx mcp bundle. Then: pi-stack mcp auth --all
 `
 
 const knowledgeUsage = `usage: pi-stack knowledge <init|use|ls|query|sync|remote> [args]

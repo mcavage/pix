@@ -26,7 +26,7 @@ func TestBuildHostState(t *testing.T) {
 	sbxOut := "anthropic\ngithub\n"
 	up := func(int) bool { return true }
 
-	hs := buildHostState(cfg, sbxOut, true, up, true, "1password", hostStatePack{Active: true, Path: "/kb/acme", GitInitialized: true, Skills: true})
+	hs := buildHostState(cfg, sbxOut, true, up, "1password", hostStatePack{Active: true, Path: "/kb/acme", GitInitialized: true, Skills: true})
 	if !hs.Pack.Active || !hs.Pack.GitInitialized {
 		t.Errorf("pack facts not carried: %+v", hs.Pack)
 	}
@@ -65,7 +65,7 @@ func TestBuildHostState(t *testing.T) {
 
 func TestBuildHostState_NotProvisioned(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y"}
-	hs := buildHostState(cfg, "", false, func(int) bool { return false }, false, "", hostStatePack{})
+	hs := buildHostState(cfg, "", false, func(int) bool { return false }, "", hostStatePack{})
 	if hs.Keys.Source != "sbx" {
 		t.Errorf("default keys source = %q, want sbx", hs.Keys.Source)
 	}
@@ -186,7 +186,7 @@ func trustedHostStateTestCfg() *config.Config {
 func TestInjectTrustedHostState_GeneratedPromptGetsJSON(t *testing.T) {
 	env := shellEnv{lookPath: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}
 	args := []string{"run", "pi-stack", ".", "--", generatedInputMarker + "hello there"}
-	out, err := injectTrustedHostState(args, trustedHostStateTestCfg(), env, false, "")
+	out, err := injectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
 	if err != nil {
 		t.Fatalf("injectTrustedHostState: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestInjectTrustedHostState_GeneratedPromptGetsJSON(t *testing.T) {
 func TestInjectTrustedHostState_UserPromptUntouched(t *testing.T) {
 	env := shellEnv{lookPath: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}
 	args := []string{"run", "pi-stack", ".", "--", "fix the flaky test please"}
-	out, err := injectTrustedHostState(args, trustedHostStateTestCfg(), env, false, "")
+	out, err := injectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
 	if err != nil {
 		t.Fatalf("injectTrustedHostState: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestInjectTrustedHostState_NoGeneratedArg_NoProbe(t *testing.T) {
 		run:      func(string, ...string) (string, error) { probed = true; return "", nil },
 	}
 	args := []string{"run", "pi-stack", "."}
-	out, err := injectTrustedHostState(args, trustedHostStateTestCfg(), env, false, "")
+	out, err := injectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
 	if err != nil {
 		t.Fatalf("injectTrustedHostState: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestInjectTrustedHostState_ReturnsCopy(t *testing.T) {
 	env := shellEnv{lookPath: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}
 	args := []string{"run", "pi-stack", ".", "--", generatedInputMarker + "hi"}
 	orig := append([]string(nil), args...)
-	out, err := injectTrustedHostState(args, trustedHostStateTestCfg(), env, false, "")
+	out, err := injectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
 	if err != nil {
 		t.Fatalf("injectTrustedHostState: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestBuildTrustedHostState_MatchesBuildHostStateShape(t *testing.T) {
 		lookPath: func(string) (string, error) { return "", fmt.Errorf("no sbx") },
 		dial:     func(int) bool { return true },
 	}
-	hs := buildTrustedHostState(cfg, env, true, "")
+	hs := buildTrustedHostState(cfg, env, "")
 	if !hs.Memory.Up {
 		t.Error("dial stub says up; buildTrustedHostState must reflect it")
 	}
@@ -324,7 +324,7 @@ func TestInjectTrustedHostState_IgnoresStaleWorkspaceFile(t *testing.T) {
 	}
 	env := shellEnv{lookPath: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}
 	args := []string{"run", "pi-stack", dir, "--", generatedInputMarker + "hi"}
-	out, err := injectTrustedHostState(args, trustedHostStateTestCfg(), env, false, "")
+	out, err := injectTrustedHostState(args, trustedHostStateTestCfg(), env, "")
 	if err != nil {
 		t.Fatalf("injectTrustedHostState: %v", err)
 	}

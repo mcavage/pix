@@ -314,10 +314,12 @@ Create-only; see
 .BR \-\-replace .
 .TP
 .BI \-\-mcp " M"
-Attach an MCP server when creating the sandbox.  Repeatable; attachment is used
-only when
+Attach an MCP server when creating the sandbox (emitted to sbx as
+.BR \-\-static\-mcp ;
+served by the local data-plane gateway, no
 .B SBX_MCP_URL
-is set.  Create-only; see
+needed).  Repeatable; create-only (attach to a running sandbox with
+.BR "pi-stack mcp load" ).  See
 .BR \-\-replace .
 .TP
 .BI \-\-name " N"
@@ -728,12 +730,14 @@ Print the registry, scorecard, and resolved-intent table.
 .BR "pi-stack route models" " [" \-\-json "]"
 List the model registry.
 .SS mcp
+MCP runs through sbx's local data-plane gateway (always available, no
+.BR SBX_MCP_URL ).
 .TP
 .BR "pi-stack mcp register" " [" name... "]"
 Register named local stdio MCP servers with the sbx gateway.  With no names,
 use the active profile's configured MCP list.  Remote gateway-catalog names are
-skipped.  Registration requires
-.BR SBX_MCP_URL .
+skipped (register those with
+.BR "pi-stack mcp bundle" ).
 .TP
 .B "pi-stack mcp ls"
 Execute
@@ -741,6 +745,20 @@ Execute
 If
 .B sbx
 is unavailable, print the command to run on the host.
+.TP
+.BR "pi-stack mcp load" " " name " [" DIR "]"
+Attach an already-registered server to the RUNNING sandbox for DIR (default
+cwd) live, with no recreate
+.RB ( "sbx mcp load" ).
+.TP
+.BR "pi-stack mcp auth" " [" args... "]"
+Authorize remote OAuth servers via the hosted control plane
+.RB ( "sbx mcp auth" ";" " e.g. " "auth --all" ).
+.TP
+.BR "pi-stack mcp bundle" " [" ls|rm... "]"
+Register the shipped public catalog bundle (notion/atlassian/granola) in one
+step; other args forward to
+.BR "sbx mcp bundle" .
 .SS pack
 A pack is a git-backed context bundle (skills + knowledge + reference-only
 integrations + config).  See
@@ -1188,8 +1206,8 @@ Comma- or platform path-list-separated bundle paths used by the host supervisor
 only when configured knowledge bundles, including profile bundles, are empty.
 .TP
 .B SBX_MCP_URL
-Enable sbx MCP operations.  MCP registration requires it; run-time MCP
-attachment is omitted when it is unset.
+Optional cloud/SaaS MCP gateway URL.  No longer required: sbx's local
+data-plane gateway serves MCP (registration + attachment) without it.
 .SH EXIT STATUS
 .TP
 .B 0

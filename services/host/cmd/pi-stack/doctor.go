@@ -232,12 +232,13 @@ func todoDedupKey(todo string) string {
 }
 
 // gatewayDownDetail / gatewayTODO describe the HOST condition where sbx IS
-// present (secret ls succeeded) but `sbx mcp ls` failed — almost always the MCP
-// gateway being off (SBX_MCP_URL unset). This is NOT "sbx unavailable": the CLI
-// is here, only the MCP-registration listing failed.
+// present (secret ls succeeded) but `sbx mcp ls` failed. The MCP gateway is now
+// the local data-plane one (always available, no SBX_MCP_URL), so a failed
+// listing means the sbx daemon/gateway is unhealthy, not "gateway off". This is
+// NOT "sbx unavailable": the CLI is here, only the MCP-registration listing failed.
 const (
-	gatewayDownDetail = "sbx present but couldn't list MCP registrations — is the MCP gateway on? (export SBX_MCP_URL=https://gateway.docker.com)"
-	gatewayTODO       = "enable the sbx MCP gateway: export SBX_MCP_URL=https://gateway.docker.com  (then re-run doctor)"
+	gatewayDownDetail = "sbx present but couldn't list MCP registrations — check the sbx daemon (sbx mcp status; sbx daemon status)"
+	gatewayTODO       = "check the sbx MCP gateway: run `sbx mcp status` and `sbx daemon status`, then re-run doctor"
 )
 
 // runDoctor builds the report. Pure apart from env: no direct OS access, so the
@@ -454,7 +455,7 @@ func memCaptureCheck() check {
 
 // mcpCheck reports whether an MCP server is registered with sbx. When the
 // sandbox — a register-on-the-host TODO) from sbx being PRESENT but the listing
-// having failed (host, gateway likely off — an SBX_MCP_URL TODO).
+// having failed (host, sbx daemon/gateway likely unhealthy — a check-the-daemon TODO).
 func mcpCheck(name, mcpOut string, mcpOK, sbxPresent bool) check {
 	cmd := "pi-stack mcp register"
 	if !mcpOK {
@@ -859,7 +860,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 	// it "sbx unavailable" when sbx is actually absent (in the sandbox).
 	fallbackWhy := "best-effort (sbx unavailable)"
 	if sbxPresent {
-		fallbackWhy = "best-effort (couldn't read sbx MCP registrations — gateway off? set SBX_MCP_URL)"
+		fallbackWhy = "best-effort (couldn't read sbx MCP registrations — check the sbx daemon: sbx mcp status)"
 	}
 	g.checks = append(g.checks,
 		check{label: "verifying", state: stateInfo,

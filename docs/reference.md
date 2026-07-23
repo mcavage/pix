@@ -317,11 +317,11 @@ concrete provider: an `mcp` server, a `cli` on PATH, an `http` service, a
 every skill that reads that capability retargets at once. See the
 `capability-routing` skill for the resolution and fan-out rules.
 
-**Limits.** Registering a stdio MCP server with the gateway is not the same
-as attaching it to a running sandbox; like packs, a new MCP needs a sandbox
-recreate to show up. Local stdio servers aren't surfaced by the gateway's
-dynamic discovery tool, only servers your sandbox was created with `--mcp`
-show up.
+**Limits.** A sandbox's static MCP set is chosen at CREATE time (`--static-mcp`,
+which pi-stack emits for every server in your `mcp` list). To add one to an
+ALREADY-RUNNING sandbox without recreating it, use `pi-stack mcp load <name>`
+(sbx's live attach). A full recreate (`pi-stack run --replace`) also picks up
+changes to the set.
 
 ## 9. Your first hour
 

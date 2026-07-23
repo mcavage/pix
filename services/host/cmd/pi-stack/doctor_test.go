@@ -348,9 +348,9 @@ func TestDoctor_GogTransparency(t *testing.T) {
 
 // TestDoctor_SbxPresentMcpListFailed reproduces the HOST symptom: sbx is on PATH
 // and `sbx secret ls` SUCCEEDS (providers green), but every `sbx mcp ...` call
-// ERRORS (no fake output — the MCP gateway is off, SBX_MCP_URL unset). doctor
-// must NOT claim "sbx unavailable" anywhere, must point at the gateway /
-// SBX_MCP_URL rather than "register on the host", and must emit
+// ERRORS (no fake output — the sbx daemon/gateway is unhealthy). doctor
+// must NOT claim "sbx unavailable" anywhere, must point at the sbx daemon/gateway
+// rather than "register on the host", and must emit
 // `pi-stack secret set <ENV_VAR> op://vault/item/field` at most once.
 func TestDoctor_SbxPresentMcpListFailed(t *testing.T) {
 	cfg := defaultCfg()
@@ -361,7 +361,7 @@ func TestDoctor_SbxPresentMcpListFailed(t *testing.T) {
 		output: map[string]string{
 			// secret ls works: providers all green, sbx clearly present.
 			"sbx secret ls": "anthropic\nopenai\ngoogle\ngithub\n",
-			// every `sbx mcp ...` errors (no fake output) — gateway off.
+			// every `sbx mcp ...` errors (no fake output) — daemon/gateway unhealthy.
 		},
 		envVars: map[string]string{"GOG_ACCOUNT": gogAcct},
 		ports:   map[int]bool{11435: true},
@@ -382,14 +382,14 @@ func TestDoctor_SbxPresentMcpListFailed(t *testing.T) {
 		}
 	}
 
-	// The gog + mcp guidance must mention the gateway / SBX_MCP_URL, not
+	// The gog + mcp guidance must point at the sbx daemon/gateway, not
 	// "register on the host".
 	var buf bytes.Buffer
 	r.services, r.mcp = cfg.Services, cfg.MCP
 	r.render(&buf)
 	out := buf.String()
-	if !strings.Contains(out, "SBX_MCP_URL") {
-		t.Errorf("expected gateway / SBX_MCP_URL guidance, got:\n%s", out)
+	if !strings.Contains(out, "sbx mcp status") && !strings.Contains(out, "sbx daemon") {
+		t.Errorf("expected sbx daemon/gateway guidance, got:\n%s", out)
 	}
 	if strings.Contains(out, "register on the host") {
 		t.Errorf("sbx is present — must not say 'register on the host', got:\n%s", out)

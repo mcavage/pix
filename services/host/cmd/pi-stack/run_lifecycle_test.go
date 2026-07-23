@@ -37,7 +37,6 @@ func TestPlanSandboxLaunch_RunningReattaches(t *testing.T) {
 	o := runOpts{
 		Workspace:   ".",
 		Name:        "pi-stack-t",
-		MCPEnabled:  true,
 		Kits:        []string{"/flag/kit"},
 		Passthrough: []string{"--resume"},
 	}
@@ -58,7 +57,7 @@ func TestPlanSandboxLaunch_RunningReattaches(t *testing.T) {
 			t.Fatalf("reattach argv = %v, want %v", plan.Args, want)
 		}
 	}
-	for _, flag := range []string{"--kit", "--template", "--mcp"} {
+	for _, flag := range []string{"--kit", "--template", "--static-mcp"} {
 		if contains(plan.Args, []string{flag}) {
 			t.Errorf("reattach argv must not carry %s, got %v", flag, plan.Args)
 		}

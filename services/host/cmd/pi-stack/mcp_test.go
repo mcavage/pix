@@ -94,19 +94,6 @@ func TestAddArgs_GogBare(t *testing.T) {
 	}
 }
 
-// TestRegisterServers_GatewayOff: SBX_MCP_URL unset -> a clear up-front guard
-// naming the export, before any registration is attempted.
-func TestRegisterServers_GatewayOff(t *testing.T) {
-	f := fakeEnv{present: map[string]bool{"op": true, "gog": true}, output: map[string]string{}}
-	cfg := defaultCfg()
-	cfg.GogAccount = "me@x.com"
-	var buf bytes.Buffer
-	err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil))
-	if err == nil || !strings.Contains(err.Error(), "SBX_MCP_URL=https://gateway.docker.com") {
-		t.Errorf("expected an SBX_MCP_URL gateway guard, got %v", err)
-	}
-}
-
 // TestRegisterServers_GogNoOpRefsBare: gateway on, op + op-refs ABSENT, gog
 // present + account set -> gog registers DIRECTLY (bare command, no op wrapper)
 // with the OAuth note. gog uses OAuth (gog auth login), never op-refs, so the
