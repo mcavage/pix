@@ -10,6 +10,12 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- `pi-stack host` now launches its interactive session under `op run
+  --no-masking`. op's default output masking pipes pi's stdout/stderr through a
+  filter, which makes them non-TTYs — pi's TUI then saw no terminal and exited
+  immediately (banner, then straight back to the shell, exit 0). Non-interactive
+  paths were unaffected, which is why it looked like a silent failure. (The
+  mcp-gateway op-run path already used `--no-masking`.)
 - Provider-key op:// refs are stored with **literal spaces** again. An earlier
   change percent-encoded spaces (`Anthropic%20API%20Key`) on a false premise;
   op 2.35.0's `op read` AND `op run --env-file` both reject `%20`, so any

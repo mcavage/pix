@@ -667,7 +667,15 @@ func runHostLaunch(o hostOpts) {
 	piArgs := buildHostArgs(agentDir, string(preamble), o)
 	var cmd *exec.Cmd
 	if useOp {
-		opArgs := append([]string{"run", "--env-file=" + refs, "--", piBin}, piArgs...)
+		// --no-masking is REQUIRED for an interactive launch: op's default output
+		// masking pipes the child's stdout/stderr through a secret-scanning filter,
+		// which makes them non-TTYs — pi's TUI then sees no terminal and exits
+		// immediately (banner, then straight back to the shell, exit 0). Masking is
+		// also pointless here: pi is a full-screen TUI, not a secret-echoing script,
+		// and the mcp-gateway op-run path (Makefile mcp-register) already runs
+		// --no-masking for the same reason. The real key still never enters this
+		// process — op injects it into pi's env only.
+		opArgs := append([]string{"run", "--no-masking", "--env-file=" + refs, "--", piBin}, piArgs...)
 		cmd = exec.Command("op", opArgs...)
 	} else {
 		cmd = exec.Command(piBin, piArgs...)
