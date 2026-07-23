@@ -98,7 +98,20 @@ type tuiRow struct {
 	// headers holds the response's already-sanitized "key: value" header
 	// lines, sorted by key for deterministic rendering (small: the wire
 	// decoder caps entry count and sizes — see monitor.capHeaders).
+	// Headers are DIAGNOSTICS: they render only in the expanded view,
+	// after the assistant text, never on the summary line (live feedback:
+	// "HTTP headers show instead of the actual high-level LLM data").
 	headers []string
+	// textPreview/textBytes/textHash/toolCalls carry what the assistant
+	// actually SAID this turn (monitor.ProviderResponse R6-1) — the
+	// response row LEADS with these, so the reply reads at the response
+	// instead of surfacing a turn later as the next request's msg
+	// assistant. textHash resolves to the full reply via resolveRowBlobs
+	// (into assistantText below), same pattern as sysHash/sysPromptText.
+	textPreview string
+	textBytes   int
+	textHash    string
+	toolCalls   []string
 
 	// tool (start fields + end fields merged into one row)
 	toolID        string
@@ -138,6 +151,9 @@ type tuiRow struct {
 	sysPromptText string
 	argsText      string
 	resultText    string
+	// assistantText is the resolved full assistant reply (textHash) for an
+	// expanded response row — same R1-12/R3-2b lifecycle as sysPromptText.
+	assistantText string
 
 	// full-payload contract (review finding R2-6): resolved bodies for
 	// each of the request row's newMessages (parallel to newMessages,
@@ -809,15 +825,25 @@ func (m *Model) applyEvent(e monitor.Event) {
 			}
 		}
 		m.upsertRow(tuiRow{
-			id:         id,
-			session:    sess,
-			turnID:     sanitizeText(env.TurnID, false),
-			kind:       rowKindResponse,
-			status:     ev.Status,
-			stopReason: sanitizeText(ev.StopReason, false),
-			usage:      ev.Usage,
-			headers:    hdrs,
+			id:          id,
+			session:     sess,
+			turnID:      sanitizeText(env.TurnID, false),
+			kind:        rowKindResponse,
+			status:      ev.Status,
+			stopReason:  sanitizeText(ev.StopReason, false),
+			usage:       ev.Usage,
+			headers:     hdrs,
+			textPreview: sanitizeText(ev.TextPreview, false),
+			textBytes:   ev.TextBytes,
+			textHash:    ev.TextHash,
+			toolCalls:   sanitizeStrings(ev.ToolCalls),
 		})
+		// Same R3-2b gating as the request path: a response row the user
+		// already expanded (e.g. re-delivered/overwritten) re-resolves its
+		// assistant body only while showFull is on.
+		if m.expanded[id] && m.showFull {
+			m.resolveRowBlobs(id)
+		}
 
 	case monitor.ToolStart:
 		// Keyed by turnId+toolId (review finding R2-2), not toolId alone: a
@@ -1363,7 +1389,7 @@ func (m Model) helpBodyLines() []bodyLine {
 		"  enter, space    expand/collapse the row owning the cursor line (▸/▾)",
 		"",
 		"toggles",
-		"  f               full payloads (system prompt / message / tool bodies)",
+		"  f               full payloads (system prompt / message / assistant / tool bodies)",
 		"  m               model request/response rows",
 		"  t               tool rows",
 		"  p               mcp tool rows",
@@ -1442,6 +1468,12 @@ func (m Model) renderRow(r tuiRow) string {
 	}
 }
 
+// renderRequestRow is CONVERSATION-FIRST (live feedback: "the user message
+// is buried"): the headline is the newest new-message content — the actual
+// prompt that drove this turn — labeled by role; the model / system-prompt
+// bytes / msg delta / tool count / est tokens are demoted to a `·`-separated
+// diagnostics suffix. When the turn carried no new messages (pure re-send),
+// the row falls back to a bare `req` label with the same suffix.
 func renderRequestRow(r tuiRow) string {
 	label := "new"
 	if r.sysUnchanged {
@@ -1451,10 +1483,36 @@ func renderRequestRow(r tuiRow) string {
 	if r.msgDelta > 0 {
 		msgs = fmt.Sprintf("+%d", r.msgDelta)
 	}
-	return fmt.Sprintf("turn %s  %s  \u25b2 req  sys=%s(%s) msgs=%s tools=%d ~%s",
+	diag := fmt.Sprintf("turn %s  %s  sys=%s(%s) msgs=%s tools=%d ~%s",
 		r.turnID, r.model, humanBytes(int64(r.sysBytes)), label, msgs, r.toolCount, humanTok(r.estTokens))
+	if len(r.newMessages) == 0 {
+		return "req        \u00b7 " + diag
+	}
+	// Newest entry last — that's the message that triggered this turn.
+	nm := r.newMessages[len(r.newMessages)-1]
+	return fmt.Sprintf("%-9s \u201c%s\u201d  \u00b7 %s", requestRoleLabel(nm.Role), nm.Preview, diag)
 }
 
+// requestRoleLabel maps a new-message role to the row's left-hand
+// conversation label. A user message reads `user`; a tool-result-driven
+// turn reads `(tool result)`; anything else is labeled by its (already
+// sanitized) role verbatim so the eye can still scan the transcript.
+func requestRoleLabel(role string) string {
+	switch role {
+	case "", "user":
+		return "user"
+	case "tool", "toolResult", "tool_result", "tool-result":
+		return "(tool result)"
+	default:
+		return role
+	}
+}
+
+// renderResponseRow LEADS with what the model actually said (textPreview)
+// plus the tool calls it made (`→ name, name`), demoting status/stopReason/
+// usage to a dim `·`-separated suffix. HTTP headers never appear here —
+// they live at the very END of the expanded diagnostics section (live
+// feedback: headers showed instead of the high-level LLM data).
 func renderResponseRow(r tuiRow) string {
 	in, out := "-", "-"
 	if r.usage != nil {
@@ -1465,7 +1523,14 @@ func renderResponseRow(r tuiRow) string {
 	if stop == "" {
 		stop = "-"
 	}
-	return fmt.Sprintf("        \u25bc resp %d  stop=%s  in %s out %s", r.status, stop, in, out)
+	head := "assistant"
+	if r.textPreview != "" {
+		head += fmt.Sprintf("  \u201c%s\u201d", r.textPreview)
+	}
+	if len(r.toolCalls) > 0 {
+		head += "  \u2192 " + strings.Join(r.toolCalls, ", ")
+	}
+	return fmt.Sprintf("%s  \u00b7 resp %d  stop=%s  in %s out %s", head, r.status, stop, in, out)
 }
 
 func renderToolRow(r tuiRow) string {
@@ -1486,15 +1551,25 @@ func renderContextRow(r tuiRow) string {
 	return fmt.Sprintf("   ctx   %-14s %s", r.ctxKind, r.detail)
 }
 
+// diagnosticsMarker visually separates the conversation content (the
+// prompt / the assistant's reply) from the plumbing (model, tokens,
+// system prompt, status, usage, HTTP headers) in every expanded view —
+// the conversation always comes FIRST, the marker second, diagnostics
+// after it (live feedback: the row hierarchy led with diagnostics and
+// buried the human-readable conversation).
+const diagnosticsMarker = "      \u2014 diagnostics \u2014"
+
 // detailLines renders the expanded (space-toggled) detail for a row as
 // PHYSICAL lines — every stored body/preview is split on '\n' and each
 // fragment becomes its own line, so no returned string ever contains a
 // newline (the height clamp and per-line width truncation both depend on
 // that). Every row kind returns at least one line even with showFull off
 // (expand always has a visible effect — the audit found expanding a
-// response/context row was a silent no-op): a request row shows its
-// system-prompt/tool/token summary and new-message previews; a response
-// row shows status, stop reason, usage tokens, and headers when present; a
+// response/context row was a silent no-op): a request row shows the new
+// messages (the prompt) first, then a `— diagnostics —` section with its
+// system-prompt/tool/token summary; a response row shows the assistant's
+// reply and tool calls first, then diagnostics — status, stop reason,
+// usage tokens — with headers dead last; a
 // tool row shows name/source/id, args and — once done — result summaries;
 // a context row shows ctxKind + its full detail text. showFull adds the
 // full blob bodies, pre-resolved and sanitized by resolveRowBlobs (into
@@ -1511,23 +1586,28 @@ func (m Model) detailLines(r tuiRow) []string {
 	}
 	switch r.kind {
 	case rowKindRequest:
-		label := "new"
-		if r.sysUnchanged {
-			label = "unchanged"
-		}
-		lines = append(lines, fmt.Sprintf("      system prompt %s (%s)  tools=%d  est ~%s",
-			humanBytes(int64(r.sysBytes)), label, r.toolCount, humanTok(r.estTokens)))
-		if len(r.toolNames) > 0 {
-			lines = append(lines, "      tools: "+strings.Join(r.toolNames, ", "))
-		}
-		if len(r.mcpToolNames) > 0 {
-			lines = append(lines, "      mcp tools: "+strings.Join(r.mcpToolNames, ", "))
-		}
+		// CONVERSATION FIRST: the actual prompt — every new message this
+		// turn (preview line, plus the full resolved body under showFull) —
+		// then a clearly separated diagnostics section for the plumbing
+		// (model, tokens, system prompt, tool schema, tool name lists).
 		for i, nm := range r.newMessages {
 			lines = append(lines, fmt.Sprintf("      msg %-9s %-6s %s", nm.Role, humanBytes(int64(nm.Bytes)), nm.Preview))
 			if m.showFull && i < len(r.newMessageTexts) {
 				block("        ", r.newMessageTexts[i])
 			}
+		}
+		label := "new"
+		if r.sysUnchanged {
+			label = "unchanged"
+		}
+		lines = append(lines, diagnosticsMarker)
+		lines = append(lines, fmt.Sprintf("      model %s  system prompt %s (%s)  tools=%d  est ~%s",
+			r.model, humanBytes(int64(r.sysBytes)), label, r.toolCount, humanTok(r.estTokens)))
+		if len(r.toolNames) > 0 {
+			lines = append(lines, "      tools: "+strings.Join(r.toolNames, ", "))
+		}
+		if len(r.mcpToolNames) > 0 {
+			lines = append(lines, "      mcp tools: "+strings.Join(r.mcpToolNames, ", "))
 		}
 		if m.showFull {
 			lines = append(lines, "      system prompt:")
@@ -1538,10 +1618,25 @@ func (m Model) detailLines(r tuiRow) []string {
 			}
 		}
 	case rowKindResponse:
+		// CONVERSATION FIRST: the assistant's reply (full resolved body
+		// under showFull, else the preview) and its tool calls, THEN the
+		// diagnostics section — status, stop reason, usage — with HTTP
+		// headers dead LAST (the least interesting data, per live user
+		// feedback; they never appear on the summary line at all).
+		if m.showFull && r.assistantText != "" {
+			lines = append(lines, fmt.Sprintf("      assistant %s:", humanBytes(int64(r.textBytes))))
+			block("        ", r.assistantText)
+		} else if r.textPreview != "" {
+			lines = append(lines, fmt.Sprintf("      assistant %s  %s", humanBytes(int64(r.textBytes)), r.textPreview))
+		}
+		if len(r.toolCalls) > 0 {
+			lines = append(lines, "      tool calls: "+strings.Join(r.toolCalls, ", "))
+		}
 		stop := r.stopReason
 		if stop == "" {
 			stop = "-"
 		}
+		lines = append(lines, diagnosticsMarker)
 		lines = append(lines, fmt.Sprintf("      status %d  stop=%s", r.status, stop))
 		if r.usage != nil {
 			lines = append(lines, fmt.Sprintf("      usage  in=%s out=%s total=%s",
@@ -1627,6 +1722,8 @@ func (m *Model) resolveRowBlobs(id string) {
 			texts[i] = m.fetchBlobText(nm.Hash)
 		}
 		r.newMessageTexts = texts
+	case rowKindResponse:
+		r.assistantText = m.fetchBlobText(r.textHash)
 	case rowKindTool:
 		r.argsText = m.fetchBlobText(r.argsHash)
 		if r.toolDone {
@@ -1679,6 +1776,7 @@ func (m *Model) clearRowBlobsAt(idx int) {
 	r.resultText = ""
 	r.newMessageTexts = nil
 	r.toolSchemaText = ""
+	r.assistantText = ""
 	m.rows[idx] = r
 }
 

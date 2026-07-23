@@ -13,7 +13,8 @@ import * as http from "node:http";
 import { test } from "node:test";
 
 const monitor = await import("../extensions/monitor.ts");
-const { classifyToolSource, isMcpSourceInfo, mcpServerFromSourceInfo, partitionToolNames, summarizeRequest } = monitor;
+const { classifyToolSource, isMcpSourceInfo, mcpServerFromSourceInfo, partitionToolNames, summarizeRequest, extractAssistantOutput } =
+	monitor;
 
 // ─── R2-3: MCP classification fallback ──────────────────────────────────────
 
@@ -272,4 +273,93 @@ test("R2-1: aborting an in-flight send on shutdown does not requeue or reschedul
 	// server well within this window.
 	await new Promise((r) => setTimeout(r, 800));
 	assert.equal(count, 1, "the aborted send must not be requeued or retried");
+});
+
+// ─── R6-1: extractAssistantOutput captures the assistant's actual generated output ───
+
+test("R6-1: Anthropic content-block shape — text plus tool_use", () => {
+	const message = {
+		role: "assistant",
+		content: [
+			{ type: "text", text: "Let me check that file." },
+			{ type: "tool_use", id: "call_1", name: "read", input: { path: "foo.ts" } },
+		],
+	};
+	const { text, toolCalls } = extractAssistantOutput(message);
+	assert.equal(text, "Let me check that file.");
+	assert.deepEqual(toolCalls, ["read"]);
+});
+
+test("R6-1: pi's own normalized AgentMessage shape — text plus toolCall blocks", () => {
+	// docs/session-format.md AssistantMessage.content: (TextContent |
+	// ThinkingContent | ToolCall)[] — a tool call block is {type:"toolCall"}.
+	// Thinking blocks must be excluded from the extracted text.
+	const message = {
+		role: "assistant",
+		content: [
+			{ type: "thinking", thinking: "private reasoning, should not appear" },
+			{ type: "text", text: "On it." },
+			{ type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } },
+		],
+	};
+	const { text, toolCalls } = extractAssistantOutput(message);
+	assert.equal(text, "On it.");
+	assert.deepEqual(toolCalls, ["bash"]);
+});
+
+test("R6-1: OpenAI shape — text content plus top-level tool_calls[].function.name", () => {
+	const message = {
+		role: "assistant",
+		content: [{ type: "text", text: "Searching now." }],
+		tool_calls: [{ id: "call_1", type: "function", function: { name: "web_search", arguments: "{}" } }],
+	};
+	const { text, toolCalls } = extractAssistantOutput(message);
+	assert.equal(text, "Searching now.");
+	assert.deepEqual(toolCalls, ["web_search"]);
+});
+
+test("R6-1: OpenAI Responses-API function_call item shape", () => {
+	const message = {
+		role: "assistant",
+		content: [
+			{ type: "text", text: "One sec." },
+			{ type: "function_call", name: "get_weather", arguments: "{}" },
+		],
+	};
+	const { text, toolCalls } = extractAssistantOutput(message);
+	assert.equal(text, "One sec.");
+	assert.deepEqual(toolCalls, ["get_weather"]);
+});
+
+test("R6-1: Gemini parts[] shape — untagged text part plus functionCall part", () => {
+	// Gemini's raw parts have no "type" tag at all: {text} or {functionCall:{name}}.
+	const message = {
+		role: "assistant",
+		parts: [{ text: "Looking that up." }, { functionCall: { name: "lookup", args: { q: "pi-stack" } } }],
+	};
+	const { text, toolCalls } = extractAssistantOutput(message);
+	assert.equal(text, "Looking that up.");
+	assert.deepEqual(toolCalls, ["lookup"]);
+});
+
+test("R6-1: empty/no-content message yields empty text and no tool calls", () => {
+	assert.deepEqual(extractAssistantOutput({ role: "assistant" }), { text: "", toolCalls: [] });
+	assert.deepEqual(extractAssistantOutput({ role: "assistant", content: [] }), { text: "", toolCalls: [] });
+	assert.deepEqual(extractAssistantOutput(null), { text: "", toolCalls: [] });
+	assert.deepEqual(extractAssistantOutput(undefined), { text: "", toolCalls: [] });
+});
+
+test("R6-1: multiple text blocks concatenate, multiple tool calls all collected", () => {
+	const message = {
+		role: "assistant",
+		content: [
+			{ type: "text", text: "First." },
+			{ type: "tool_use", name: "read" },
+			{ type: "text", text: "Second." },
+			{ type: "tool_use", name: "bash" },
+		],
+	};
+	const { text, toolCalls } = extractAssistantOutput(message);
+	assert.equal(text, "First.\nSecond.");
+	assert.deepEqual(toolCalls, ["read", "bash"]);
 });

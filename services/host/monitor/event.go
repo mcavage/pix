@@ -114,6 +114,18 @@ type ProviderResponse struct {
 	StopReason string            `json:"stopReason"`
 	Usage      *UsageSummary     `json:"usage"`
 	Headers    map[string]string `json:"headers,omitempty"`
+	// TextBytes/TextPreview/TextHash/ToolCalls capture what the assistant
+	// actually GENERATED this turn (R6-1) — previously this event only ever
+	// recorded status/usage/headers, so the model's own reply was lost and
+	// only reappeared a turn later as a message in the NEXT provider_request.
+	// TextHash is the content hash of the full assistant text, which the
+	// extension POSTs separately via POST /blob (same first-seen-blob pattern
+	// as ToolSchemaHash/ArgsHash/ResultHash) so the TUI can resolve the full
+	// reply on demand instead of inlining it on every event.
+	TextBytes   int      `json:"textBytes"`
+	TextPreview string   `json:"textPreview"`
+	TextHash    string   `json:"textHash"`
+	ToolCalls   []string `json:"toolCalls"`
 }
 
 func (e ProviderResponse) Envelope() Envelope { return e.env }
@@ -365,6 +377,9 @@ func Decode(line []byte) (Event, error) {
 		capEnvelopeIDs(&e.env)
 		e.StopReason = capID(e.StopReason)
 		e.Headers = capHeaders(e.Headers)
+		e.TextPreview = capField(e.TextPreview)
+		e.TextHash = capHash(e.TextHash)
+		e.ToolCalls = capStringSlice(e.ToolCalls, capID)
 		return e, nil
 	case KindToolStart:
 		var e ToolStart

@@ -246,25 +246,33 @@ func TestMonitorTUI_FilterHidesNonMatchingRows(t *testing.T) {
 
 // --- space expands a row ---
 
+// The conversation-first rework put the user-message PREVIEW on the summary
+// line itself (it is the headline now), so "expand shows something new" is
+// asserted via expand-only content: the per-message detail line and the
+// `— diagnostics —` section marker.
 func TestMonitorTUI_SpaceExpandsRow(t *testing.T) {
 	m := NewModel(TUIConfig{})
 	m = feed(t, m, mkProviderRequest("9", "sonnet-5", "h1", 500, 2, 1000,
 		[]monitor.MessageSummary{{Role: "user", Bytes: 12, Hash: "mh1", Preview: "hello there"}}))
 
 	collapsed := m.View()
-	if strings.Contains(collapsed, "hello there") {
-		t.Fatalf("new-message detail visible before expanding, got:\n%s", collapsed)
+	if strings.Contains(collapsed, "msg user") || strings.Contains(collapsed, "\u2014 diagnostics \u2014") {
+		t.Fatalf("expand-only detail visible before expanding, got:\n%s", collapsed)
+	}
+	// The preview itself IS the collapsed headline now.
+	if !strings.Contains(collapsed, "hello there") {
+		t.Fatalf("collapsed summary missing the user message preview, got:\n%s", collapsed)
 	}
 
 	m = key(t, m, runeKey(" "))
 	expanded := m.View()
-	if !strings.Contains(expanded, "hello there") {
-		t.Errorf("expanded View() missing new-message preview, got:\n%s", expanded)
+	if !strings.Contains(expanded, "msg user") || !strings.Contains(expanded, "\u2014 diagnostics \u2014") {
+		t.Errorf("expanded View() missing message detail / diagnostics section, got:\n%s", expanded)
 	}
 
 	// space again collapses it back.
 	m = key(t, m, runeKey(" "))
-	if strings.Contains(m.View(), "hello there") {
+	if strings.Contains(m.View(), "msg user") || strings.Contains(m.View(), "\u2014 diagnostics \u2014") {
 		t.Errorf("row still expanded after second space, got:\n%s", m.View())
 	}
 }
@@ -1042,17 +1050,24 @@ func TestMonitorTUI_EnterExpandsSelectedRowNotLast(t *testing.T) {
 	}
 
 	m = key(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	// Previews live on the summary lines now (conversation-first), so
+	// "which row expanded" is asserted on expand-only content: exactly one
+	// diagnostics section, owned by the OLDER row's detail lines.
 	view := m.View()
-	if !strings.Contains(view, "older row preview") {
-		t.Errorf("expanding the selected (older) row did not expand it, got:\n%s", view)
+	if got := strings.Count(view, "\u2014 diagnostics \u2014"); got != 1 {
+		t.Fatalf("want exactly 1 expanded row (1 diagnostics section), got %d:\n%s", got, view)
 	}
-	if strings.Contains(view, "newer row preview") {
+	olderID, newerID := m.rows[0].id, m.rows[1].id
+	if !m.expanded[olderID] {
+		t.Errorf("enter did not expand the selected (older) row")
+	}
+	if m.expanded[newerID] {
 		t.Errorf("enter expanded the NEWER row instead of the selected older one, got:\n%s", view)
 	}
 
 	// space toggles the same selected row back closed.
 	m = key(t, m, runeKey(" "))
-	if strings.Contains(m.View(), "older row preview") {
+	if strings.Contains(m.View(), "\u2014 diagnostics \u2014") {
 		t.Errorf("space did not collapse the selected row, got:\n%s", m.View())
 	}
 }
@@ -1675,5 +1690,187 @@ func TestMonitorTUI_ContextDetailMultilineExpands(t *testing.T) {
 	}
 	if !sawSecond || !sawThird {
 		t.Errorf("multiline context detail not split into physical lines (second=%v third=%v), got:\n%s", sawSecond, sawThird, view)
+	}
+}
+
+// --- conversation-first rework: the feed reads like a transcript ---
+
+// mkAssistantResponse builds a provider_response carrying the new
+// assistant-output fields (TextPreview/TextBytes/TextHash/ToolCalls).
+func mkAssistantResponse(turnID string, status int, stopReason string, usage *monitor.UsageSummary, preview, textHash string, textBytes int, toolCalls []string) monitor.ProviderResponse {
+	e := mkProviderResponse(turnID, status, stopReason, usage)
+	e.TextPreview = preview
+	e.TextHash = textHash
+	e.TextBytes = textBytes
+	e.ToolCalls = toolCalls
+	return e
+}
+
+// summaryLine returns the (single) rendered header line of the row whose
+// summary contains marker — the collapsed one-liner, not any expanded
+// detail line.
+func summaryLine(t *testing.T, m Model, marker string) string {
+	t.Helper()
+	for _, l := range m.bodyLayoutLines() {
+		if l.isHeader && strings.Contains(l.text, marker) {
+			return l.text
+		}
+	}
+	t.Fatalf("no row summary line contains %q in:\n%s", marker, m.View())
+	return ""
+}
+
+// (a) The response row's SUMMARY leads with what the assistant said and
+// the tools it called — never raw HTTP header text (live feedback: "HTTP
+// headers show instead of the actual high-level LLM data").
+func TestMonitorTUI_ResponseSummaryLeadsWithAssistantReply(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	m = resize(t, m, 200, 30) // sized: prove the headline survives a real bounded frame
+	resp := mkAssistantResponse("3", 200, "tool_use",
+		&monitor.UsageSummary{InputTokens: 37900, OutputTokens: 512, TotalTokens: 38412},
+		"The bug is in reconcileScroll; fixing it now.", "text-h1", 1800,
+		[]string{"bash", "read"})
+	resp.Headers = map[string]string{"x-request-id": "abc-123", "content-type": "application/json"}
+	m = feed(t, m, resp)
+
+	line := summaryLine(t, m, "resp 200")
+	if !strings.Contains(line, "assistant") {
+		t.Errorf("response summary missing the assistant role label, got: %q", line)
+	}
+	if !strings.Contains(line, "The bug is in reconcileScroll") {
+		t.Errorf("response summary missing the assistant text preview, got: %q", line)
+	}
+	if !strings.Contains(line, "→ bash, read") {
+		t.Errorf("response summary missing tool-call names, got: %q", line)
+	}
+	// The reply must LEAD: preview before the demoted status/usage suffix.
+	if strings.Index(line, "The bug is") > strings.Index(line, "resp 200") {
+		t.Errorf("response summary leads with diagnostics instead of the reply, got: %q", line)
+	}
+	// Headers never appear on the summary line (nor anywhere collapsed).
+	if strings.Contains(m.View(), "x-request-id") || strings.Contains(m.View(), "application/json") {
+		t.Errorf("raw HTTP header text visible on the collapsed feed, got:\n%s", m.View())
+	}
+}
+
+// (b) The request row's SUMMARY leads with the newest user message — the
+// prompt is the headline, model/tokens/sys-bytes are a demoted suffix.
+func TestMonitorTUI_RequestSummaryLeadsWithUserMessage(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	m = feed(t, m, mkProviderRequest("12", "opus-4-8", "h1", 41984, 14, 38000,
+		[]monitor.MessageSummary{{Role: "user", Bytes: 40, Hash: "m1", Preview: "why is the build red?"}}))
+
+	line := summaryLine(t, m, "turn 12")
+	if !strings.Contains(line, "user") || !strings.Contains(line, "why is the build red?") {
+		t.Fatalf("request summary missing user label/preview, got: %q", line)
+	}
+	if strings.Index(line, "why is the build red?") > strings.Index(line, "opus-4-8") {
+		t.Errorf("request summary leads with diagnostics instead of the prompt, got: %q", line)
+	}
+
+	// A tool_result-driven turn is labeled as such, not as "user".
+	m = feed(t, m, mkProviderRequest("13", "opus-4-8", "h1", 41984, 14, 39000,
+		[]monitor.MessageSummary{{Role: "toolResult", Bytes: 900, Hash: "m2", Preview: "exit 0"}}))
+	line = summaryLine(t, m, "turn 13")
+	if !strings.Contains(line, "(tool result)") {
+		t.Errorf("tool_result-driven request row not labeled (tool result), got: %q", line)
+	}
+}
+
+// (c)+(d) Expanding a response shows the FULL assistant reply first, then
+// the — diagnostics — section, with HTTP headers dead last — and headers
+// appear ONLY in the expand.
+func TestMonitorTUI_ExpandedResponseReplyBeforeDiagnosticsHeadersLast(t *testing.T) {
+	fullReply := "Here is the full assistant answer.\nIt spans multiple lines.\nDone."
+	fakeBlob := func(h string) (monitor.Blob, bool) {
+		if h == "text-h9" {
+			return monitor.Blob{Hash: h, Bytes: len(fullReply), Text: fullReply}, true
+		}
+		return monitor.Blob{}, false
+	}
+	m := NewModel(TUIConfig{Blob: fakeBlob})
+	m = resize(t, m, 200, 40) // bounded frame: ordering must hold in a real sized window
+	resp := mkAssistantResponse("4", 200, "end_turn",
+		&monitor.UsageSummary{InputTokens: 100, OutputTokens: 50, TotalTokens: 150},
+		"Here is the full assistant answer.", "text-h9", len(fullReply), nil)
+	resp.Headers = map[string]string{"x-request-id": "hdr-xyz"}
+	m = feed(t, m, resp)
+
+	// Headers absent while collapsed (d).
+	if strings.Contains(m.View(), "hdr-xyz") {
+		t.Fatalf("header text visible before expand, got:\n%s", m.View())
+	}
+
+	m = key(t, m, runeKey("f")) // showFull on
+	m = key(t, m, runeKey(" ")) // expand (following: cursor on the response row)
+
+	view := m.View()
+	iReply := strings.Index(view, "It spans multiple lines.")
+	iDiag := strings.Index(view, "— diagnostics —")
+	iStatus := strings.Index(view, "status 200")
+	iHdr := strings.Index(view, "hdr-xyz")
+	if iReply < 0 {
+		t.Fatalf("expanded response missing the full assistant reply, got:\n%s", view)
+	}
+	if iDiag < 0 || iStatus < 0 || iHdr < 0 {
+		t.Fatalf("expanded response missing diagnostics/status/headers (%d/%d/%d), got:\n%s", iDiag, iStatus, iHdr, view)
+	}
+	if !(iReply < iDiag && iDiag < iStatus && iStatus < iHdr) {
+		t.Errorf("expanded response order wrong: reply=%d diagnostics=%d status=%d headers=%d, got:\n%s",
+			iReply, iDiag, iStatus, iHdr, view)
+	}
+}
+
+// With showFull OFF, the expanded response still puts the assistant
+// PREVIEW before the diagnostics section (conversation first at every
+// fidelity level), and the new event-derived fields are sanitized.
+func TestMonitorTUI_ExpandedResponsePreviewFirstAndSanitized(t *testing.T) {
+	osc52 := "\x1b]52;c;YQ==\x07"
+	csi := "\x1b[31m"
+	resp := mkAssistantResponse("5", 200, "tool_use", nil,
+		"dirty"+osc52+"preview"+csi, "", 40, []string{"ba" + csi + "sh", "re" + osc52 + "ad"})
+	m := NewModel(TUIConfig{})
+	m = feed(t, m, resp)
+	m = key(t, m, runeKey(" ")) // expand
+
+	view := m.View()
+	assertNoControlRunes(t, view)
+	if !strings.Contains(view, "dirtypreview") {
+		t.Errorf("sanitizing ate the preview's plain text, got:\n%s", view)
+	}
+	if !strings.Contains(view, "bash") || !strings.Contains(view, "read") {
+		t.Errorf("sanitizing ate the tool-call names, got:\n%s", view)
+	}
+	iPrev := strings.Index(view, "dirtypreview")
+	iDiag := strings.Index(view, "— diagnostics —")
+	if iDiag < 0 || iPrev < 0 || iPrev > iDiag {
+		t.Errorf("preview (%d) must precede diagnostics (%d), got:\n%s", iPrev, iDiag, view)
+	}
+}
+
+// A request row's expand shows the full prompt body(ies) BEFORE its
+// diagnostics section (model/system-prompt/tool schema).
+func TestMonitorTUI_ExpandedRequestPromptBeforeDiagnostics(t *testing.T) {
+	msgBody := "full user prompt body line one\nand line two"
+	sysBody := "SYSTEM PROMPT CONTENTS"
+	blobs := map[string]monitor.Blob{
+		"mh": {Hash: "mh", Bytes: len(msgBody), Text: msgBody},
+		"sh": {Hash: "sh", Bytes: len(sysBody), Text: sysBody},
+	}
+	m := NewModel(TUIConfig{Blob: func(h string) (monitor.Blob, bool) { b, ok := blobs[h]; return b, ok }})
+	m = feed(t, m, mkProviderRequest("8", "opus-4-8", "sh", len(sysBody), 0, 500,
+		[]monitor.MessageSummary{{Role: "user", Bytes: len(msgBody), Hash: "mh", Preview: "full user prompt body…"}}))
+	m = key(t, m, runeKey("f"))
+	m = key(t, m, runeKey(" "))
+
+	view := m.View()
+	iBody := strings.Index(view, "and line two")
+	iDiag := strings.Index(view, "— diagnostics —")
+	iSys := strings.Index(view, sysBody)
+	if iBody < 0 || iDiag < 0 || iSys < 0 {
+		t.Fatalf("expanded request missing body/diagnostics/system prompt (%d/%d/%d), got:\n%s", iBody, iDiag, iSys, view)
+	}
+	if !(iBody < iDiag && iDiag < iSys) {
+		t.Errorf("expanded request order wrong: body=%d diagnostics=%d sys=%d, got:\n%s", iBody, iDiag, iSys, view)
 	}
 }

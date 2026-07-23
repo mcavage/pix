@@ -528,6 +528,78 @@ export function extractUsage(source: any): UsageSummary | null {
 	return { inputTokens, outputTokens, totalTokens };
 }
 
+export interface AssistantOutput {
+	text: string;
+	toolCalls: string[];
+}
+
+/**
+ * Extract what the assistant actually GENERATED this turn (R6-1): the
+ * concatenated text of every text block, plus the names of every tool/
+ * function call it emitted. Called with a `message_end` AssistantMessage
+ * (`docs/session-format.md`: `content: (TextContent | ThinkingContent |
+ * ToolCall)[]`, a tool call block is `{type:"toolCall", name, ...}`), but
+ * kept defensive against raw provider shapes too, in case one ever leaks
+ * through un-normalized: Anthropic content blocks (`{type:"tool_use",
+ * name}`), OpenAI Responses/Chat-Completions items (`{type:"function_call",
+ * name}` or a top-level `tool_calls[].function.name`), and Gemini `parts[]`
+ * entries, which have no `type` tag at all (`{text}` or `{functionCall:
+ * {name}}`). Thinking blocks are deliberately excluded from `text` — only
+ * the assistant's actual reply, not its private reasoning.
+ */
+export function extractAssistantOutput(message: any): AssistantOutput {
+	const rawContent = message?.content ?? message?.parts;
+	const blocks: any[] = Array.isArray(rawContent) ? rawContent : rawContent != null ? [rawContent] : [];
+
+	const textBlocks: unknown[] = [];
+	const toolCalls: string[] = [];
+	const pushToolName = (name: unknown) => {
+		if (typeof name === "string" && name) toolCalls.push(name);
+	};
+
+	for (const block of blocks) {
+		if (block == null) continue;
+		if (typeof block === "string") {
+			textBlocks.push(block);
+			continue;
+		}
+		const type = (block as any)?.type;
+		if (type === "text" || (type == null && typeof block.text === "string")) {
+			textBlocks.push(block);
+			continue;
+		}
+		// pi's normalized shape (session-format.md AssistantMessage.content) and
+		// Anthropic's raw content-block shape both use `name` directly.
+		if (type === "toolCall" || type === "tool_use") {
+			pushToolName(block.name);
+			continue;
+		}
+		// OpenAI Responses API item shape / Chat-Completions delta shape.
+		if (type === "function_call" || type === "functionCall") {
+			pushToolName(block.name ?? block.function_call?.name ?? block.functionCall?.name);
+			continue;
+		}
+		// Gemini `parts[]` entries have no `type` tag: `{functionCall:{name}}`.
+		if (block.functionCall && typeof block.functionCall.name === "string") {
+			pushToolName(block.functionCall.name);
+			continue;
+		}
+		if (block.function && typeof block.function.name === "string") {
+			pushToolName(block.function.name);
+			continue;
+		}
+	}
+
+	// OpenAI Chat-Completions-shaped message: top-level `tool_calls[]`, each
+	// `{function:{name}}`.
+	for (const list of [message?.tool_calls, message?.toolCalls]) {
+		if (!Array.isArray(list)) continue;
+		for (const tc of list) pushToolName(tc?.function?.name ?? tc?.name);
+	}
+
+	return { text: stringifyContent(textBlocks), toolCalls };
+}
+
 /** Coerce after_provider_response's normalized headers into Record<string,string>, or undefined when empty. */
 export function normalizeHeaders(headers: any): Record<string, string> | undefined {
 	if (!headers || typeof headers !== "object") return undefined;
@@ -952,12 +1024,26 @@ export default function (pi: ExtensionAPI) {
 			// above is still the right status/headers pairing for this message.
 			const message = e?.message;
 			if (!message || message.role !== "assistant") return;
+			// R6-1: capture what the assistant actually GENERATED this turn — until
+			// now provider_response only recorded status/usage/headers, so the
+			// model's own reply was lost and only reappeared a turn later as a
+			// message in the NEXT provider_request.
+			const { text: assistantText, toolCalls } = extractAssistantOutput(message);
+			const textBytes = Buffer.byteLength(assistantText, "utf8");
+			const textHash = sha256Hex(assistantText);
+			// Enqueue the full reply as a first-seen blob keyed by textHash (same
+			// pattern as tool argsHash/resultHash) so the TUI can resolve it later.
+			sendBlobIfNew(textHash, textBytes, assistantText);
 			emitEvent({
 				...baseEnvelope("provider_response"),
 				status: pendingResponseMeta?.status ?? 0,
 				stopReason: String(message?.stopReason ?? ""),
 				usage: extractUsage(message),
 				headers: pendingResponseMeta?.headers,
+				textBytes,
+				textPreview: truncatePreview(assistantText, 200),
+				textHash,
+				toolCalls,
 			});
 			pendingResponseMeta = null;
 		});

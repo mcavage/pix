@@ -47,11 +47,15 @@ func TestEventEncodeDecodeRoundTrip(t *testing.T) {
 			ChangedBlobs: []string{"hash-sys"},
 		},
 		ProviderResponse{
-			env:        sampleEnvelope(KindProviderResponse),
-			Status:     200,
-			StopReason: "tool_use",
-			Usage:      &UsageSummary{InputTokens: 37900, OutputTokens: 512, TotalTokens: 38412},
-			Headers:    map[string]string{"x-request-id": "abc"},
+			env:         sampleEnvelope(KindProviderResponse),
+			Status:      200,
+			StopReason:  "tool_use",
+			Usage:       &UsageSummary{InputTokens: 37900, OutputTokens: 512, TotalTokens: 38412},
+			Headers:     map[string]string{"x-request-id": "abc"},
+			TextBytes:   11,
+			TextPreview: "hello world",
+			TextHash:    "hash-text",
+			ToolCalls:   []string{"bash", "read"},
 		},
 		ProviderResponse{
 			env:        sampleEnvelope(KindProviderResponse),
@@ -189,6 +193,29 @@ func TestEventJSONTagsGolden(t *testing.T) {
 	for _, key := range []string{"systemPromptHash", "systemPromptBytes", "messageCount", "newMessages", "toolCount", "toolNames", "mcpToolNames", "toolSchemaHash", "estTokens"} {
 		if _, ok := summary[key]; !ok {
 			t.Fatalf("summary JSON missing key %q; got keys %v", key, summary)
+		}
+	}
+
+	presp := ProviderResponse{
+		env:         env{Kind: KindProviderResponse, Seq: 2},
+		Status:      200,
+		StopReason:  "stop",
+		TextBytes:   5,
+		TextPreview: "hello",
+		TextHash:    "hash-text",
+		ToolCalls:   []string{"bash"},
+	}
+	line, err = Encode(presp)
+	if err != nil {
+		t.Fatalf("Encode() error: %v", err)
+	}
+	var prespMap map[string]json.RawMessage
+	if err := json.Unmarshal(line, &prespMap); err != nil {
+		t.Fatalf("Unmarshal() error: %v", err)
+	}
+	for _, key := range []string{"kind", "status", "stopReason", "usage", "textBytes", "textPreview", "textHash", "toolCalls"} {
+		if _, ok := prespMap[key]; !ok {
+			t.Fatalf("provider_response JSON missing key %q; got keys %v", key, prespMap)
 		}
 	}
 
@@ -406,6 +433,12 @@ func TestDecodeCapsEveryStringBearingField(t *testing.T) {
 		{"ProviderResponse.StopReason", func() ([]byte, error) {
 			return Encode(ProviderResponse{env: env{Kind: KindProviderResponse}, StopReason: hugeID})
 		}, maxIdBytes, func(e Event) string { return e.(ProviderResponse).StopReason }},
+		{"ProviderResponse.TextPreview", func() ([]byte, error) {
+			return Encode(ProviderResponse{env: env{Kind: KindProviderResponse}, TextPreview: hugeField})
+		}, maxFieldBytes, func(e Event) string { return e.(ProviderResponse).TextPreview }},
+		{"ProviderResponse.TextHash", func() ([]byte, error) {
+			return Encode(ProviderResponse{env: env{Kind: KindProviderResponse}, TextHash: hugeHash})
+		}, maxHashBytes, func(e Event) string { return e.(ProviderResponse).TextHash }},
 		{"ToolStart.ToolID", func() ([]byte, error) { return Encode(ToolStart{env: env{Kind: KindToolStart}, ToolID: hugeID}) }, maxIdBytes, func(e Event) string { return e.(ToolStart).ToolID }},
 		{"ToolStart.Source", func() ([]byte, error) { return Encode(ToolStart{env: env{Kind: KindToolStart}, Source: hugeID}) }, maxIdBytes, func(e Event) string { return e.(ToolStart).Source }},
 		{"ToolStart.Name", func() ([]byte, error) { return Encode(ToolStart{env: env{Kind: KindToolStart}, Name: hugeID}) }, maxIdBytes, func(e Event) string { return e.(ToolStart).Name }},
@@ -519,6 +552,44 @@ func TestDecodeCapsProviderRequestStringSlices(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestDecodeCapsProviderResponseToolCalls is R6-1 companion coverage for
+// ProviderResponse.ToolCalls: Decode must length-cap the slice to
+// maxListEntries AND per-entry-cap every surviving name (capID), the same
+// pattern TestDecodeCapsProviderRequestStringSlices exercises for
+// ProviderRequest's plain string-slice fields. The input has more than
+// maxListEntries entries, each ALSO individually oversized past capID's
+// bound, so length-capping and per-entry-capping are both exercised in one
+// decode.
+func TestDecodeCapsProviderResponseToolCalls(t *testing.T) {
+	overLen := maxListEntries + 50
+	hugeName := strings.Repeat("n", maxIdBytes+1)
+	toolCalls := make([]string, overLen)
+	for i := range toolCalls {
+		toolCalls[i] = hugeName
+	}
+
+	line, err := Encode(ProviderResponse{env: env{Kind: KindProviderResponse}, ToolCalls: toolCalls})
+	if err != nil {
+		t.Fatalf("Encode() error: %v", err)
+	}
+	got, err := Decode(line)
+	if err != nil {
+		t.Fatalf("Decode() error: %v", err)
+	}
+	pr, ok := got.(ProviderResponse)
+	if !ok {
+		t.Fatalf("Decode() returned %T, want ProviderResponse", got)
+	}
+	if n := len(pr.ToolCalls); n > maxListEntries {
+		t.Fatalf("ToolCalls len = %d, want <= maxListEntries (%d)", n, maxListEntries)
+	}
+	for i, name := range pr.ToolCalls {
+		if n := len(name); n > maxIdBytes {
+			t.Fatalf("ToolCalls[%d] len = %d, want <= maxIdBytes (%d)", i, n, maxIdBytes)
+		}
 	}
 }
 
