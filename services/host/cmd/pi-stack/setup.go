@@ -5,8 +5,8 @@
 //
 //  1. HOST phase (here, on the host): source model keys from 1Password
 //     (setupProvisionKeys) — op is REQUIRED and the only source; ensure the
-//     memory service, create the default pack, seed git identity, and ALWAYS
-//     provision + enable host mode when it can.
+//     memory service, create the default pack, and seed first-name identity.
+//     Host mode is NOT set up here — it's opt-in via `pi-stack host setup`.
 //     Host-config (gog/knowledge/mcp) comes from FLAGS, not interactive prompts;
 //     the only interaction is pasting op:// refs on a TTY. Flag/non-TTY = CI-safe.
 //  2. AGENT phase (handoff): launch a normal `pi-stack run` whose FIRST pi
@@ -523,7 +523,7 @@ func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer,
 		// `pi-stack secret set` mirrors a provider key into BOTH op-refs.env AND
 		// hostmode.env, so the three commands above really are enough — no extra
 		// step needed before re-running setup.
-		fmt.Fprintln(out, "then re-run: pi-stack setup --use-1password")
+		fmt.Fprintln(out, "then re-run: pi-stack setup")
 		return false
 	}
 
@@ -743,23 +743,23 @@ func flagTakesValue(a string) bool {
 const setupUsage = `usage: pi-stack setup [DIR] [host-config flags]
 
 Actually sets you up (use 'pi-stack run' if you just want to start working):
-  1. host   — provision model keys (prefers 1Password, wiring BOTH the sandbox
-              and host mode; accepts a complete existing sbx key set instead
-              via --use-sbx-keys or a one-time prompt, see below), ensure
-              memory, create your default pack, and provision + enable host
-              mode ('pi-stack host') when the host can run it
+  1. host   — resolve model keys from 1Password and reconcile them into sbx
+              (op is REQUIRED), wiring BOTH the sandbox and host mode's
+              hostmode.env; ensure memory; create your default pack
   2. agent  - launch a sandbox and hand off to a ONE-SHOT upfront guide that
               names the exact workflows, explains memory and packs, reports
               grounded setup gaps, then asks for your real task
-Host mode (pi UNSANDBOXED) is provisioned + enabled when provisioning succeeds
-(it needs pi on the host); disable it any time with
-'pi-stack config set host.enabled false'.
+
+Provider keys come from 1Password only — the ` + "`op`" + ` CLI must be installed and
+signed in, or setup fails with the exact fix. There is no "trust existing sbx
+keys" shortcut. Host mode (pi UNSANDBOXED) is NOT set up here; it's opt-in via
+'pi-stack host setup' (which provisions AND enables it in one step).
 
 DIR defaults to the current directory (like ` + "`pi-stack run`" + `). Repeat semantics:
-the host phase (keys/memory/pack/host-mode) ALWAYS reconciles again, even when a
-sandbox already exists for DIR. If one exists and you did not pass --replace,
-setup leaves it alone (never force-removes it, never replays the tour into a
-live session) and prints your choices: 'pi-stack run [DIR]' to reattach, or
+the host phase (keys/memory/pack) ALWAYS reconciles again, even when a sandbox
+already exists for DIR. If one exists and you did not pass --replace, setup
+leaves it alone (never force-removes it, never replays the tour into a live
+session) and prints your choices: 'pi-stack run [DIR]' to reattach, or
 'pi-stack setup [DIR] --replace' to recreate it with your current settings and
 get the tour. Only a POSITIVELY absent sandbox gets the first-launch handoff;
 if the sandbox state cannot be determined at all (sbx errored), setup fails
@@ -770,51 +770,15 @@ Setup flags:
                            create) so it picks up current pack/MCP/skills and
                            receives the guided tour; harmless when absent
 
-Host-config flags (all optional). Provider keys PREFER 1Password and are
-collected/reconciled from it by default; an ordinary value flag (--account/
---knowledge/--mcp/--model) does NOT suppress that. --use-sbx-keys and
---use-1password are mutually exclusive explicit overrides for THIS run; either
-one is persisted (provider_key_mode in config.toml) once it succeeds, so a
-repeat 'pi-stack setup' with no flag reuses that same choice with no prompt.
-  --use-sbx-keys            trust sbx outright; skips all 1Password checks.
-                           Requires sbx to already have all three keys
-                           (anthropic, openai, google), fails clearly if any
-                           is missing, absent, or unverifiable. Works
-                           non-interactively. Never deletes existing refs; it
-                           just doesn't use them this run. Persists
-                           provider_key_mode=sbx on success, so the NEXT
-                           'pi-stack setup' auto-skips 1Password the same way
-                           with no prompt (re-checking the exact all-three
-                           probe every time).
-  --use-1password            force the strict 1Password flow for this run even
-                           if provider_key_mode is persisted as sbx, or sbx
-                           already has all three keys (skips the convenience
-                           prompt entirely). Persists provider_key_mode=
-                           1password on success.
-  (interactive, no flag,   when provider_key_mode is UNSET and no provider ref
-   mode unset)             is configured yet, and sbx already has all three
-                           keys, setup asks ONCE: "sbx already has anthropic,
-                           openai, and google. Use those keys and skip
-                           1Password-backed host credentials? [Y/n]" (default
-                           yes). Accepting persists provider_key_mode=sbx;
-                           declining falls through to the strict flow (which
-                           persists provider_key_mode=1password on success),
-                           with no further retries this run. Once any ref
-                           exists, a mode is persisted, or setup runs
-                           non-interactively, this prompt never appears.
+Host-config flags (all optional):
   --account <email>        set the Google Workspace (gog) account + enable gog
   --knowledge <path|url>   scaffold/point the global knowledge base
   --mcp <name>             enable an MCP server (repeatable; allowlisted)
   --model <ollama-model>   set the ollama-bridge model
-  --yes | --non-interactive  never prompt (CI); does NOT imply --use-sbx-keys.
-                           Strict 1Password refs must already resolve unless
-                           --use-sbx-keys is also given (or provider_key_mode
-                           is already persisted as sbx)
+  --yes | --non-interactive  never prompt (CI); each provider's op:// ref must
+                           already be configured and resolve (setup prints the
+                           exact 'pi-stack secret set' command for any missing)
   -h | --help              this help
-
-Inspect or reset the persisted choice any time:
-  pi-stack config get provider_key_mode
-  pi-stack config unset provider_key_mode
 
 For scripted host config with NO agent handoff, use ` + "`pi-stack onboard`" + ` instead.
 `

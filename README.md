@@ -121,9 +121,10 @@ keys/config again; an existing sandbox is left alone (reattach with `pi-stack
 run`, or recreate it with your current settings *and* get the tour via `pi-stack
 setup --replace`). Host mode (the unsandboxed escape hatch) is **not** set up by
 setup — it's opt-in and needs `pi` on the host; enable it only if you need it
-with `pi-stack host setup && pi-stack config set host.enabled true`. It reaches
-cloud models through the same `op://` refs in `hostmode.env` that setup wrote,
-resolved via `op run` at each launch. For
+with a single command, `pi-stack host setup` (it provisions **and** enables host
+mode when provisioning succeeds). It reaches cloud models through the same
+`op://` refs in `hostmode.env` that setup wrote, resolved via `op run` at each
+launch. For
 scripted/CI hosts, `pi-stack onboard --account … --knowledge … --yes` writes
 `~/.config/pi-stack/config.toml` non-interactively (host config only, no handoff).
 
@@ -272,14 +273,13 @@ commands when something is missing.
 `pi-stack host [DIR]` runs pi **directly on your machine** — no sandbox, no
 network fence, real credentials. It exists for one narrow case: developing
 pi-stack itself, which needs the host's Docker/`sbx`/`make` that the VM
-structurally cannot reach. `pi-stack setup` provisions and enables it for you
-when the host can run `pi`. To do it by hand, use the safe order (provision
-first, since the gate stays off until provisioning succeeds): `pi-stack host
-setup` to provision `~/.local/state/pi-stack/host-agent`,
-then `pi-stack config set host.enabled true`. Disable it any time with `pi-stack
-config set host.enabled false`. Cloud keys come from op://
-refs in `hostmode.env` next to `config.toml`, resolved just-in-time by `op run`
-and never persisted; without that file the session is Ollama-only.
+structurally cannot reach. It's opt-in (not touched by `pi-stack setup`): run
+`pi-stack host setup`, which provisions `~/.local/state/pi-stack/host-agent`
+**and** enables the gate in one step (the gate stays off unless provisioning
+succeeds). Disable it any time with `pi-stack config set host.enabled false`.
+Cloud keys come from op:// refs in `hostmode.env` next to `config.toml`,
+resolved just-in-time by `op run` and never persisted; without that file the
+session is Ollama-only.
 
 Host mode ships guardrails — a guard extension, workspace refusals
 (`$HOME`/`/`/`/etc`/secret dirs), disabled subagents — but they protect against

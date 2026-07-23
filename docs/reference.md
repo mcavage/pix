@@ -267,9 +267,8 @@ pi-stack image itself (you can't `make load` from inside the VM you're
 building).
 
 ```
-pi-stack config set host.enabled true   # gate is off by default; you turn it on
-pi-stack host [DIR]
-pi-stack host setup                     # provision the host agent dir first
+pi-stack host setup   # provisions the host agent dir AND enables the gate (off by default)
+pi-stack host [DIR]   # launch; disable again with: pi-stack config set host.enabled false
 ```
 
 **Say this plainly: host mode is not a security boundary.** pi has no
