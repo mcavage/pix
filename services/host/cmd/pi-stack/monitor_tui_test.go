@@ -3077,6 +3077,73 @@ func TestMonitorTUI_EvictedParentToolRowChildFallsBack(t *testing.T) {
 	}
 }
 
+// (e) A `pi models` tool — no model id anywhere in its args — still
+// adopts a child session that boots inside its (still-open) execution
+// window: no model-match signal exists, so this exercises the window
+// fallback, gated on the tool actually being a pi invocation.
+func TestMonitorTUI_PiModelsToolAdoptsChildInWindow(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	m = feed(t, m, spawnTool("sbx", "sess-primary1", "call_1", `pi models`, 1000))
+	// Tool still running (no tool_end yet): window is open-ended to now.
+	m = feed(t, m, mkTurnStart("sbx", "sess-child111", "1", "some-default-model", 1500))
+	m = feed(t, m, spawnCtx("sbx", "sess-child111", 1, "child-event", 1501))
+
+	if got := m.sessionParentRow["sbx/sess-child111"]; got != "sbx/sess-primary1/1/tool:call_1" {
+		t.Fatalf("sessionParentRow = %q, want the spawning `pi models` tool row id", got)
+	}
+	assertShape(t, m, []string{
+		"node:" + sessionNodeID("sbx/sess-primary1"),
+		"row:sbx/sess-primary1/1/tool:call_1",
+		"node:" + sessionNodeID("sbx/sess-child111"), // nested under the tool
+		"row:sbx/sess-child111/ctx:1:1",
+	})
+}
+
+// (f) A `curl ...` tool running in the very same window as (e) must NOT
+// adopt the child — toolInvokesPi is false, so the window signal never
+// fires and correlation falls back to the primary-level child node.
+func TestMonitorTUI_CurlToolInWindowDoesNotAdoptChild(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	m = feed(t, m, spawnTool("sbx", "sess-primary1", "call_1", `curl https://api.example.com/status`, 1000))
+	// Tool still running: window open-ended to now, but it isn't a pi
+	// invocation — must not adopt.
+	m = feed(t, m, mkTurnStart("sbx", "sess-child111", "1", "some-default-model", 1500))
+	m = feed(t, m, spawnCtx("sbx", "sess-child111", 1, "child-event", 1501))
+
+	if got := m.sessionParentRow["sbx/sess-child111"]; got != "" {
+		t.Fatalf("sessionParentRow = %q, want \"\" (curl tool must not adopt)", got)
+	}
+	assertShape(t, m, []string{
+		"node:" + sessionNodeID("sbx/sess-primary1"),
+		"row:sbx/sess-primary1/1/tool:call_1",
+		"node:" + sessionNodeID("sbx/sess-child111"), // primary-level fallback
+		"row:sbx/sess-child111/ctx:1:1",
+	})
+}
+
+// toolInvokesPi must match `pi`/`pi-stack` as a COMMAND TOKEN — anchored
+// at the start or right after a shell separator (including a literal
+// newline in a multi-line bash block) — never as a bare substring.
+func TestToolInvokesPi(t *testing.T) {
+	cases := []struct {
+		args string
+		want bool
+	}{
+		{"pi models", true},
+		{"pi-stack route show", true},
+		{"for spec in a b; do pi --print --model x \"hi\"; done", true},
+		{"for spec in a b\ndo\n  pi --print --model x \"hi\"\ndone", true},
+		{"curl https://api.example.com", false},
+		{"grep pip", false},
+		{"pipenv install", false},
+	}
+	for _, c := range cases {
+		if got := toolInvokesPi(c.args); got != c.want {
+			t.Errorf("toolInvokesPi(%q) = %v, want %v", c.args, got, c.want)
+		}
+	}
+}
+
 // --- markdown rendering (glamour) of natural-language bodies ---
 
 // mdBlobModel builds a sized, showFull-on model whose Blob func serves one

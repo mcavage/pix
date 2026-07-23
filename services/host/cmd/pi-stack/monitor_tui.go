@@ -16,6 +16,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -1297,6 +1298,23 @@ func (m *Model) applyEvent(e monitor.Event) {
 	}
 }
 
+// piInvocationRe matches a `pi` or `pi-stack` COMMAND TOKEN — anchored at
+// the start of the string or right after a shell separator (whitespace,
+// `;`, `&`, `|`, `(`), and followed by whitespace/quote/end — so it never
+// substring-matches inside another word (`pip`, `api`, `spider`,
+// `--provider`). A literal newline (multi-line bash, e.g. a `for ... do pi
+// --print ...; done` heredoc) is a separator too: \s covers \n.
+var piInvocationRe = regexp.MustCompile(`(?i)(^|[\s;&|(])(pi|pi-stack)([\s"']|$)`)
+
+// toolInvokesPi reports whether a tool's ArgsSummary actually runs `pi` or
+// `pi-stack` as a command (as opposed to merely mentioning something that
+// contains those letters as a substring). Used to gate the time-window
+// fallback signal in spawnParentRow: only a tool that could plausibly have
+// spawned a pi child process is eligible for window-based correlation.
+func toolInvokesPi(argsSummary string) bool {
+	return piInvocationRe.MatchString(argsSummary)
+}
+
 // spawnParentRow finds the tool row in the SAME sandbox that most likely
 // spawned the session sess (whose first event just arrived, at envelope TS
 // childTS), returning its row id — or "" when nothing plausible matches
@@ -1306,12 +1324,16 @@ func (m *Model) applyEvent(e monitor.Event) {
 //  1. STRONG signal: a tool row whose ArgsSummary contains the child
 //     session's model id (any `provider/` prefix stripped, case-insensitive
 //     substring) — e.g. child model `google/gemini-3.6-flash` matches bash
-//     args `pi -p --model gemini-3.6-flash ...`.
+//     args `pi -p --model gemini-3.6-flash ...`. This path is always
+//     eligible, independent of toolInvokesPi.
 //  2. Among model matches (or, when none match, among all candidates),
 //     prefer a tool row whose execution WINDOW contains childTS:
 //     [tool.ts, tool.ts+durationMs], open-ended to now while the tool
 //     hasn't ended yet. With NO model match, window containment is
-//     REQUIRED — a merely-preceding tool row is not plausible on its own.
+//     REQUIRED — a merely-preceding tool row is not plausible on its own —
+//     AND the tool must be a pi invocation (toolInvokesPi): a coincidental
+//     curl/grep/etc. tool that happens to be running when an unrelated pi
+//     session starts must not adopt it.
 //  3. Tiebreak: the latest start ts that is still <= childTS (the most
 //     recent preceding tool); equal ts falls to the latest-inserted row.
 //
@@ -1329,6 +1351,7 @@ func (m *Model) spawnParentRow(sess string, childTS int64) string {
 		ts         int64
 		modelMatch bool
 		inWindow   bool
+		invokesPi  bool
 	}
 	var cands []candidate
 	anyModel := false
@@ -1339,7 +1362,7 @@ func (m *Model) spawnParentRow(sess string, childTS int64) string {
 		if childTS > 0 && r.ts > 0 && r.ts > childTS {
 			continue // started after the child's first event: can't have spawned it
 		}
-		c := candidate{idx: i, ts: r.ts}
+		c := candidate{idx: i, ts: r.ts, invokesPi: toolInvokesPi(r.argsSummary)}
 		if childModel != "" && strings.Contains(strings.ToLower(r.argsSummary), childModel) {
 			c.modelMatch = true
 			anyModel = true
@@ -1358,8 +1381,8 @@ func (m *Model) spawnParentRow(sess string, childTS int64) string {
 		if anyModel && !c.modelMatch {
 			continue // model matches exist: only they are in the running
 		}
-		if !anyModel && !c.inWindow {
-			continue // no model signal anywhere: require window containment
+		if !anyModel && (!c.inWindow || !c.invokesPi) {
+			continue // no model signal anywhere: require window containment AND a pi-invoking tool
 		}
 		if best < 0 {
 			best = i
