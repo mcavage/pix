@@ -2899,3 +2899,180 @@ func TestHumanDuration(t *testing.T) {
 		}
 	}
 }
+
+// --- spawn correlation: child pi sessions nest under the tool that ran them ---
+
+// mkTurnStart builds a turn_start tagged with sandbox/session/ts — the
+// typical FIRST event a freshly-booted child pi session emits, carrying
+// the model the correlation heuristic keys on.
+func mkTurnStart(sandbox, session, turnID, model string, ts int64) monitor.TurnStart {
+	e := monitor.TurnStart{Model: model}
+	e.SandboxID, e.SessionID, e.TurnID, e.TS = sandbox, session, turnID, ts
+	return e
+}
+
+// spawnTool builds a bash tool_start (the `pi -p ...` spawner shape)
+// tagged with sandbox/session/ts.
+func spawnTool(sandbox, session, toolID, args string, ts int64) monitor.ToolStart {
+	e := mkToolStart("1", toolID, "builtin", "bash", args, "ah-"+toolID)
+	e.SandboxID, e.SessionID, e.TS = sandbox, session, ts
+	return e
+}
+
+// spawnCtx builds a context event row tagged with sandbox/session/ts.
+func spawnCtx(sandbox, session string, seq uint64, detail string, ts int64) monitor.ContextEvent {
+	e := mkContextEvent("1", seq, "skill_loaded", detail)
+	e.SandboxID, e.SessionID, e.TS = sandbox, session, ts
+	return e
+}
+
+// (a) A primary session runs a bash tool whose args contain the child's
+// model id; the child session then boots. The child session node must
+// render nested immediately UNDER that tool row — in place in the
+// conversation, before the primary's later rows — one level deeper, not
+// piled at the end of the primary session.
+func TestMonitorTUI_ChildSessionNestsUnderSpawningToolRow(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	req := mkProviderRequest("1", "claude-opus-4-8", "h1", 100, 1, 10,
+		[]monitor.MessageSummary{{Role: "user", Bytes: 5, Hash: "m1", Preview: "go"}})
+	req.SandboxID, req.SessionID = "sbx", "sess-primary1"
+	req.TS = 1000
+	m = feed(t, m, req)
+	m = feed(t, m, spawnTool("sbx", "sess-primary1", "call_1", `pi -p --model gemini-3.6-flash "summarize"`, 2000))
+	// A later PRIMARY event, so "nested under the tool" is distinguishable
+	// from "dumped at the end".
+	m = feed(t, m, spawnCtx("sbx", "sess-primary1", 9, "later-primary-event", 2500))
+
+	// Child session boots: first event is turn_start carrying the model
+	// (with a provider/ prefix the matcher must strip), then an event row.
+	m = feed(t, m, mkTurnStart("sbx", "sess-child111", "1", "google/gemini-3.6-flash", 3000))
+	m = feed(t, m, spawnCtx("sbx", "sess-child111", 1, "child-event", 3100))
+
+	if got := m.sessionParentRow["sbx/sess-child111"]; got != "sbx/sess-primary1/1/tool:call_1" {
+		t.Fatalf("sessionParentRow = %q, want the spawning tool row id", got)
+	}
+	assertShape(t, m, []string{
+		"node:" + sessionNodeID("sbx/sess-primary1"),
+		"row:sbx/sess-primary1/1:req",
+		"row:sbx/sess-primary1/1/tool:call_1",
+		"node:" + sessionNodeID("sbx/sess-child111"), // nested right under the tool
+		"row:sbx/sess-child111/ctx:1:1",
+		"row:sbx/sess-primary1/ctx:1:9", // primary flow continues after
+	})
+	// Depths: tool row depth 1 -> child session node depth 2 -> child
+	// event depth 3 (2 spaces per depth in the layout text).
+	lines := m.bodyLayoutLines()
+	if !strings.HasPrefix(lines[2].text, "  \u25b8") {
+		t.Errorf("tool row = %q, want depth-1 indent", lines[2].text)
+	}
+	if !strings.HasPrefix(lines[3].text, "    \u25be child111") {
+		t.Errorf("child session node = %q, want depth-2 `    \u25be child111…`", lines[3].text)
+	}
+	if !strings.HasPrefix(lines[4].text, "      \u25b8") {
+		t.Errorf("child event row = %q, want depth-3 indent", lines[4].text)
+	}
+}
+
+// (b) Three parallel `pi -p` tool rows with different --model args, three
+// child sessions: each child nests under the tool whose args contain ITS
+// model id (provider/ prefix stripped, case-insensitive), not merely the
+// most recent tool.
+func TestMonitorTUI_ParallelChildSessionsNestUnderMatchingTools(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	m = feed(t, m, spawnTool("sbx", "sess-primary1", "call_g", `pi -p --model gemini-3.6-flash "a"`, 1000))
+	m = feed(t, m, spawnTool("sbx", "sess-primary1", "call_o", `pi -p --model gpt-5.6-sol "b"`, 1001))
+	m = feed(t, m, spawnTool("sbx", "sess-primary1", "call_q", `pi -p --model qwen3:8b "c"`, 1002))
+
+	// Children boot out of order relative to their tools.
+	m = feed(t, m, mkTurnStart("sbx", "sess-childqqq", "1", "ollama/qwen3:8b", 2000))
+	m = feed(t, m, spawnCtx("sbx", "sess-childqqq", 1, "q-event", 2001))
+	m = feed(t, m, mkTurnStart("sbx", "sess-childggg", "1", "google/gemini-3.6-flash", 2100))
+	m = feed(t, m, spawnCtx("sbx", "sess-childggg", 1, "g-event", 2101))
+	m = feed(t, m, mkTurnStart("sbx", "sess-childooo", "1", "openai/gpt-5.6-sol", 2200))
+	m = feed(t, m, spawnCtx("sbx", "sess-childooo", 1, "o-event", 2201))
+
+	assertShape(t, m, []string{
+		"node:" + sessionNodeID("sbx/sess-primary1"),
+		"row:sbx/sess-primary1/1/tool:call_g",
+		"node:" + sessionNodeID("sbx/sess-childggg"),
+		"row:sbx/sess-childggg/ctx:1:1",
+		"row:sbx/sess-primary1/1/tool:call_o",
+		"node:" + sessionNodeID("sbx/sess-childooo"),
+		"row:sbx/sess-childooo/ctx:1:1",
+		"row:sbx/sess-primary1/1/tool:call_q",
+		"node:" + sessionNodeID("sbx/sess-childqqq"),
+		"row:sbx/sess-childqqq/ctx:1:1",
+	})
+}
+
+// (c) A child session with NO matching tool row (model matches nothing,
+// and the only tool's window closed long before the child booted) must
+// fall back to the old behavior: a primary-level child node at the end —
+// never a wild guess.
+func TestMonitorTUI_ChildSessionNoMatchFallsBackToPrimaryLevel(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	tool := spawnTool("sbx", "sess-primary1", "call_1", `ls -la`, 1000)
+	m = feed(t, m, tool)
+	end := mkToolEnd("1", "call_1", true, 10, "done", "rh", 500)
+	end.SandboxID, end.SessionID = "sbx", "sess-primary1"
+	end.TS = 1500
+	m = feed(t, m, end) // window [1000, 1500] — closed well before the child
+
+	m = feed(t, m, mkTurnStart("sbx", "sess-child111", "1", "mystery-model", 5000))
+	m = feed(t, m, spawnCtx("sbx", "sess-child111", 1, "child-event", 5001))
+
+	if got := m.sessionParentRow["sbx/sess-child111"]; got != "" {
+		t.Fatalf("sessionParentRow = %q, want \"\" (no plausible spawner)", got)
+	}
+	assertShape(t, m, []string{
+		"node:" + sessionNodeID("sbx/sess-primary1"),
+		"row:sbx/sess-primary1/1/tool:call_1",
+		"node:" + sessionNodeID("sbx/sess-child111"), // primary-level child, at the end
+		"row:sbx/sess-child111/ctx:1:1",
+	})
+	// Depth 1 node, depth 2 events — the pre-existing child layout.
+	lines := m.bodyLayoutLines()
+	if !strings.HasPrefix(lines[2].text, "  \u25be child111") {
+		t.Errorf("fallback child node = %q, want depth-1 indent", lines[2].text)
+	}
+}
+
+// (d) Evicting the parent tool row (maxRows churn) must leave the child
+// session rendering as a primary-level child node — no crash, no orphaned
+// nesting under a row that no longer exists.
+func TestMonitorTUI_EvictedParentToolRowChildFallsBack(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	m = feed(t, m, spawnTool("sbx", "sess-primary1", "call_1", `pi -p --model gemini-3.6-flash "x"`, 1000))
+	// Fill the primary up to exactly maxRows retained rows.
+	for i := 0; i < maxRows-1; i++ {
+		m = feed(t, m, spawnCtx("sbx", "sess-primary1", uint64(10+i), fmt.Sprintf("filler-%d", i), int64(2000+i)))
+	}
+	// Child boots while the tool row is still retained: correlation lands.
+	m = feed(t, m, mkTurnStart("sbx", "sess-child111", "1", "google/gemini-3.6-flash", 900000))
+	if got := m.sessionParentRow["sbx/sess-child111"]; got != "sbx/sess-primary1/1/tool:call_1" {
+		t.Fatalf("sessionParentRow = %q, want the tool row id before eviction", got)
+	}
+	// The child's first ROW pushes the count past maxRows and evicts the
+	// oldest row — the parent tool row.
+	m = feed(t, m, spawnCtx("sbx", "sess-child111", 1, "child-event", 900001))
+	if _, ok := m.rowIndex["sbx/sess-primary1/1/tool:call_1"]; ok {
+		t.Fatalf("parent tool row still retained; test needs it evicted")
+	}
+
+	shape := treeShape(m)
+	if len(shape) != maxRows+2 { // primary node + (maxRows-1) fillers + child node + child row
+		t.Fatalf("tree shape has %d header lines, want %d", len(shape), maxRows+2)
+	}
+	if want := "node:" + sessionNodeID("sbx/sess-child111"); shape[len(shape)-2] != want {
+		t.Fatalf("shape[-2] = %q, want fallback child node %q", shape[len(shape)-2], want)
+	}
+	if want := "row:sbx/sess-child111/ctx:1:1"; shape[len(shape)-1] != want {
+		t.Fatalf("shape[-1] = %q, want child event row %q", shape[len(shape)-1], want)
+	}
+	// View() must render without panicking, with the child at depth 1.
+	_ = m.View()
+	lines := m.bodyLayoutLines()
+	if !strings.HasPrefix(lines[len(lines)-2].text, "  \u25be child111") {
+		t.Errorf("fallback child node = %q, want depth-1 indent", lines[len(lines)-2].text)
+	}
+}

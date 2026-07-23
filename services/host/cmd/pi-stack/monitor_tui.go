@@ -236,6 +236,27 @@ type Model struct {
 	sessionModel map[string]string
 	sessionTitle map[string]string
 
+	// sessionParentRow records, per sessionKey, the id of the TOOL row
+	// that most likely SPAWNED that session (e.g. a bash tool running
+	// `pi -p --model X ...` boots a child pi session), so bodyLayoutLines
+	// can nest the child session's subtree directly under that tool row —
+	// in place in the conversation flow — instead of piling every child
+	// session at the bottom of the primary. "" means "no plausible
+	// spawner" and falls back to the old primary-level child node.
+	//
+	// Correlation is ONE-SHOT: computed by spawnParentRow the first time a
+	// session is sighted in applyEvent (map presence — even with a ""
+	// value — is the seen marker), never re-run per event. That timing
+	// works because the spawning tool's tool_start reaches the hub before
+	// the child pi process boots and emits anything. Entries are cleaned
+	// up in evictOldRows when the session's last retained row is evicted
+	// (same class as prevSysHash/R4-2). If the PARENT tool row is evicted
+	// while the child session lives on, the stale row id simply no longer
+	// matches any emitted row and the child gracefully falls back to a
+	// primary-level child node (bodyLayoutLines nests only under rows it
+	// actually emits).
+	sessionParentRow map[string]string
+
 	// reqTS tracks the envelope TS of the most recent provider_request per
 	// turn, keyed by sess+"/"+env.TurnID (the SAME composite turn key the
 	// request/response row ids are built from, minus their ":req"/":resp"
@@ -387,23 +408,24 @@ type Model struct {
 // toggle").
 func NewModel(cfg TUIConfig) Model {
 	return Model{
-		cfg:             cfg,
-		rowIndex:        make(map[string]int),
-		prevSysHash:     make(map[string]string),
-		sessionModel:    make(map[string]string),
-		sessionTitle:    make(map[string]string),
-		reqTS:           make(map[string]int64),
-		sessionRowCount: make(map[string]int),
-		sandboxRowCount: make(map[string]int),
-		sandboxUnread:   make(map[string]bool),
-		expanded:        make(map[string]bool),
-		collapsed:       make(map[string]bool),
-		showModel:       true,
-		showTools:       true,
-		showMCP:         true,
-		showContext:     true,
-		showTimestamps:  true,
-		follow:          true,
+		cfg:              cfg,
+		rowIndex:         make(map[string]int),
+		prevSysHash:      make(map[string]string),
+		sessionModel:     make(map[string]string),
+		sessionTitle:     make(map[string]string),
+		sessionParentRow: make(map[string]string),
+		reqTS:            make(map[string]int64),
+		sessionRowCount:  make(map[string]int),
+		sandboxRowCount:  make(map[string]int),
+		sandboxUnread:    make(map[string]bool),
+		expanded:         make(map[string]bool),
+		collapsed:        make(map[string]bool),
+		showModel:        true,
+		showTools:        true,
+		showMCP:          true,
+		showContext:      true,
+		showTimestamps:   true,
+		follow:           true,
 	}
 }
 
@@ -1225,6 +1247,15 @@ func (m *Model) applyEvent(e monitor.Event) {
 			detailFull: sanitizeText(ev.Detail, true),
 		})
 	}
+	// SPAWN CORRELATION, one-shot per session: the first time this session
+	// is sighted (no sessionParentRow entry yet — "" counts as an entry),
+	// find the tool row that most likely spawned it. This runs AFTER the
+	// switch above so a first event that carries the session's model
+	// (turn_start / provider_request) has already populated sessionModel —
+	// the strong correlation signal.
+	if _, seen := m.sessionParentRow[sess]; !seen {
+		m.sessionParentRow[sess] = m.spawnParentRow(sess, env.TS)
+	}
 	// TAB unread marker: an event for a BACKGROUND sandbox (one that has a
 	// tab — at least one retained row — and isn't the active one) lights
 	// its • in the tab bar. It never moves the active view: visibleRows is
@@ -1233,6 +1264,94 @@ func (m *Model) applyEvent(e monitor.Event) {
 	if env.SandboxID != m.activeSandbox && m.sandboxRowCount[env.SandboxID] > 0 {
 		m.sandboxUnread[env.SandboxID] = true
 	}
+}
+
+// spawnParentRow finds the tool row in the SAME sandbox that most likely
+// spawned the session sess (whose first event just arrived, at envelope TS
+// childTS), returning its row id — or "" when nothing plausible matches
+// (never a wild guess; "" renders as the pre-existing primary-level child
+// node fallback). Heuristic, in order:
+//
+//  1. STRONG signal: a tool row whose ArgsSummary contains the child
+//     session's model id (any `provider/` prefix stripped, case-insensitive
+//     substring) — e.g. child model `google/gemini-3.6-flash` matches bash
+//     args `pi -p --model gemini-3.6-flash ...`.
+//  2. Among model matches (or, when none match, among all candidates),
+//     prefer a tool row whose execution WINDOW contains childTS:
+//     [tool.ts, tool.ts+durationMs], open-ended to now while the tool
+//     hasn't ended yet. With NO model match, window containment is
+//     REQUIRED — a merely-preceding tool row is not plausible on its own.
+//  3. Tiebreak: the latest start ts that is still <= childTS (the most
+//     recent preceding tool); equal ts falls to the latest-inserted row.
+//
+// Candidates are tool rows of OTHER sessions in the same sandbox that did
+// not start after the child's first event (when both timestamps are
+// known). Called from applyEvent (Update) only — never from View.
+func (m *Model) spawnParentRow(sess string, childTS int64) string {
+	sandbox := rowSandbox(sess)
+	childModel := strings.ToLower(m.sessionModel[sess])
+	if i := strings.LastIndex(childModel, "/"); i >= 0 {
+		childModel = childModel[i+1:]
+	}
+	type candidate struct {
+		idx        int
+		ts         int64
+		modelMatch bool
+		inWindow   bool
+	}
+	var cands []candidate
+	anyModel := false
+	for i, r := range m.rows {
+		if r.kind != rowKindTool || r.session == sess || rowSandbox(r.session) != sandbox {
+			continue
+		}
+		if childTS > 0 && r.ts > 0 && r.ts > childTS {
+			continue // started after the child's first event: can't have spawned it
+		}
+		c := candidate{idx: i, ts: r.ts}
+		if childModel != "" && strings.Contains(strings.ToLower(r.argsSummary), childModel) {
+			c.modelMatch = true
+			anyModel = true
+		}
+		if r.ts > 0 && childTS > 0 {
+			if !r.toolDone {
+				c.inWindow = true // still running: window is open-ended to now
+			} else {
+				c.inWindow = childTS <= r.ts+int64(r.durationMs)
+			}
+		}
+		cands = append(cands, c)
+	}
+	best := -1
+	for i, c := range cands {
+		if anyModel && !c.modelMatch {
+			continue // model matches exist: only they are in the running
+		}
+		if !anyModel && !c.inWindow {
+			continue // no model signal anywhere: require window containment
+		}
+		if best < 0 {
+			best = i
+			continue
+		}
+		b := cands[best]
+		switch {
+		case c.inWindow != b.inWindow:
+			if c.inWindow {
+				best = i
+			}
+		case c.ts != b.ts:
+			if c.ts > b.ts {
+				best = i
+			}
+		default:
+			best = i // equal ts: the latest-inserted row wins
+		}
+	}
+	if best < 0 {
+		return ""
+	}
+	return m.rows[cands[best].idx].id
 }
 
 // sessionKey returns the composite (sandbox, session) key used to scope row
@@ -1438,6 +1557,10 @@ func (m *Model) evictOldRows() {
 			delete(m.prevSysHash, r.session)
 			delete(m.sessionModel, r.session)
 			delete(m.sessionTitle, r.session)
+			// The session's spawn-correlation entry (and its one-shot
+			// "seen" marker) dies with its last retained row too (same
+			// class as R4-2). If the session comes back it re-correlates.
+			delete(m.sessionParentRow, r.session)
 			// The session's tree-node collapse state dies with its last
 			// retained row too (same class as R4-2).
 			delete(m.collapsed, sessionNodeID(r.session))
@@ -1719,25 +1842,53 @@ func (m Model) bodyLayoutLines() []bodyLine {
 		lines = append(lines, bodyLine{text: strings.Repeat("  ", depth) + caret + label, nodeID: nodeID, ts: ts})
 	}
 	sessions := groupSessionRows(rows)
-	primary := sessions[0]
-	pnid := sessionNodeID(primary.session)
-	emitNode(pnid, m.sessionNodeLabel(primary.session), 0, primary.latestTS)
-	if !m.collapsed[pnid] {
-		// Collapsing the primary hides only its OWN events; the
-		// child-session nodes below stay visible — they are the
-		// user's other conversations, not the primary's payload.
-		for _, r := range primary.rows {
-			emitRow(r, 1)
+	// SPAWN NESTING: a session whose sessionParentRow names a tool row is
+	// rendered nested directly under that tool row — in place in the
+	// spawning session's conversation flow — one level deeper than the
+	// tool (tool at depth d → child session node at d+1 → its events at
+	// d+2). byParent indexes the non-primary sessions by their recorded
+	// parent tool row id, in first-seen session order; nesting only
+	// happens under rows this layout pass actually EMITS, so a parent
+	// tool row that was evicted, filtered out (`t` off, text filter), or
+	// hidden under a collapsed node leaves its child to the fallback loop
+	// at the bottom — a primary-level child node, exactly the old
+	// behavior. The emitted set makes this cycle-proof (a session renders
+	// at most once, however the correlation map is shaped).
+	byParent := make(map[string][]*sessionGroup)
+	for _, ses := range sessions[1:] {
+		if pid := m.sessionParentRow[ses.session]; pid != "" {
+			byParent[pid] = append(byParent[pid], ses)
 		}
 	}
-	for _, ses := range sessions[1:] {
-		cnid := sessionNodeID(ses.session)
-		emitNode(cnid, m.sessionNodeLabel(ses.session), 1, ses.latestTS)
-		if m.collapsed[cnid] {
-			continue
+	emitted := make(map[string]bool)
+	var emitSession func(ses *sessionGroup, depth int)
+	emitSession = func(ses *sessionGroup, depth int) {
+		emitted[ses.session] = true
+		nid := sessionNodeID(ses.session)
+		emitNode(nid, m.sessionNodeLabel(ses.session), depth, ses.latestTS)
+		if m.collapsed[nid] {
+			// Collapsing a session hides only its OWN events; sessions
+			// spawned from its tool rows are the user's other
+			// conversations, not this session's payload — they fall back
+			// to primary-level child nodes via the loop below.
+			return
 		}
 		for _, r := range ses.rows {
-			emitRow(r, 2)
+			emitRow(r, depth+1)
+			for _, child := range byParent[r.id] {
+				if !emitted[child.session] {
+					emitSession(child, depth+2)
+				}
+			}
+		}
+	}
+	emitSession(sessions[0], 0)
+	for _, ses := range sessions[1:] {
+		// Fallback: any session not already nested under its spawning
+		// tool row (no correlation, or the parent row isn't in this
+		// layout) renders as a child node under the primary, as before.
+		if !emitted[ses.session] {
+			emitSession(ses, 1)
 		}
 	}
 	return lines
@@ -1968,8 +2119,10 @@ func (m Model) helpBodyLines() []bodyLine {
 		"tree",
 		"  the body is the active sandbox's session tree: session ▸ events.",
 		"  the first-seen session is the sandbox's PRIMARY conversation;",
-		"  every other pi session nests under it as a child node. session",
-		"  headers are navigable lines like any event row.",
+		"  a session spawned by a tool call (e.g. a shelled-out `pi -p`)",
+		"  nests under that tool row; any other session nests under the",
+		"  primary as a child node. session headers are navigable lines",
+		"  like any event row.",
 		"",
 		"navigation (line-granular: expanded payloads scroll line by line)",
 		"  up, down        move one line (emacs: ctrl+p / ctrl+n)",
