@@ -300,22 +300,33 @@ func TestWriteOpRefFileQuiet_ReadErrorNoClobber(t *testing.T) {
 	}
 }
 
-// writeOpRefFileQuiet URL-encodes literal spaces so `op run --env-file` (host
-// mode) doesn't choke on a field name like ".../api key".
-func TestWriteOpRefFileQuiet_EncodesSpaces(t *testing.T) {
-	var written string
-	env := shellEnv{
-		readFile:  func(string) (string, error) { return "", os.ErrNotExist },
-		writeFile: func(_ string, d []byte, _ os.FileMode) error { written = string(d); return nil },
+// writeOpRefFileQuiet stores refs with LITERAL spaces (op 2.35.0: both `op read`
+// and `op run --env-file` require literal spaces and reject %20), and decodes any
+// %20 from refs written by the old buggy encoding so files self-heal.
+func TestWriteOpRefFileQuiet_KeepsLiteralSpaces_DecodesEncoded(t *testing.T) {
+	write := func(val string) string {
+		var written string
+		env := shellEnv{
+			readFile:  func(string) (string, error) { return "", os.ErrNotExist },
+			writeFile: func(_ string, d []byte, _ os.FileMode) error { written = string(d); return nil },
+		}
+		if err := writeOpRefFileQuiet(env, "/x/hostmode.env", "OPENAI_API_KEY", val); err != nil {
+			t.Fatal(err)
+		}
+		return written
 	}
-	if err := writeOpRefFileQuiet(env, "/x/hostmode.env", "OPENAI_API_KEY", "op://Docker/OPENAI_API_KEY/api key"); err != nil {
-		t.Fatal(err)
+	// A literal-space ref is stored literally (never encoded).
+	written := write("op://Docker/OPENAI_API_KEY/api key")
+	if !strings.Contains(written, "op://Docker/OPENAI_API_KEY/api key") {
+		t.Errorf("literal space not preserved: %q", written)
 	}
-	if !strings.Contains(written, "op://Docker/OPENAI_API_KEY/api%20key") {
-		t.Errorf("space not encoded: %q", written)
+	if strings.Contains(written, "api%20key") {
+		t.Errorf("space must NOT be percent-encoded (op read/op run reject %%20): %q", written)
 	}
-	if strings.Contains(written, "api key") {
-		t.Errorf("raw space still present: %q", written)
+	// An already-encoded ref (from the old bug) self-heals to literal on write.
+	healed := write("op://Docker/OPENAI_API_KEY/api%20key")
+	if !strings.Contains(healed, "op://Docker/OPENAI_API_KEY/api key") {
+		t.Errorf("existing %%20 not decoded to a literal space: %q", healed)
 	}
 }
 
@@ -427,7 +438,7 @@ func TestSetupProvisionKeys_HasRefOnlyInHostMode_UnwritableOpRefsFailsEvenSbxUna
 		},
 	}
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false, false) {
+	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
 		t.Fatal("an unwritable op-refs.env must fail setup even when sbx can't be probed at all")
 	}
 	if !strings.Contains(out.String(), "op-refs.env") {

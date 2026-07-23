@@ -216,9 +216,37 @@ report() {
 		log "Existing config left untouched: ${CONFIG_FILE}"
 	fi
 
+	check_prereqs
+
 	log ""
 	log "Next:"
 	info "pi-stack setup"
+}
+
+# check_prereqs warns (never installs, never fails) about the two host tools
+# pi-stack requires: the 1Password CLI `op` (the ONLY provider-key source — setup
+# resolves op:// refs into sbx and refuses without it) and `sbx` (Docker
+# Sandboxes; the credential/kit model needs a recent nightly). We only guide;
+# installing software is the user's call.
+check_prereqs() {
+	if ! have op; then
+		log ""
+		log "REQUIRED: the 1Password CLI 'op' is not on your PATH."
+		info "pi-stack sources all model keys from 1Password; 'pi-stack setup' needs it."
+		info "Install:  https://developer.1password.com/docs/cli/get-started/  (macOS: brew install 1password-cli)"
+		info "Then:     op signin"
+	elif ! op whoami >/dev/null 2>&1; then
+		log ""
+		log "NOTE: 'op' is installed but no 1Password account is signed in."
+		info "Run: op signin   (setup resolves your op:// refs from it)"
+	fi
+
+	if ! have sbx; then
+		log ""
+		log "REQUIRED: Docker Sandboxes 'sbx' is not on your PATH."
+		info "pi-stack runs the agent inside an sbx sandbox; a recent nightly is needed for kit-spec v2 credentials."
+		info "Install:  https://docs.docker.com/ai/sandboxes/"
+	fi
 }
 
 # --- uninstall --------------------------------------------------------------

@@ -1,4 +1,4 @@
-schemaVersion: "1"
+schemaVersion: "2"
 kind: mixin
 name: my-overlay
 displayName: My private overlay
@@ -9,7 +9,9 @@ description: >
   pi-stack-host services) is NOT here — it's services/host/overlay_*.go plugins.
   See docs/OVERLAY.md.
 
-# A mixin can also add network rules / install commands if your overlay needs them:
-# network:
-#   allowedDomains:
-#     - api.your-internal-service.example
+# A mixin can also add network rules / install commands if your overlay needs them
+# (kit-spec v2 — matches the public kit):
+# caps:
+#   network:
+#     allow:
+#       - api.your-internal-service.example

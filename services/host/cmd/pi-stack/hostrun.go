@@ -65,13 +65,30 @@ func runHost(argv []string) {
 	}
 	switch sub {
 	case "setup":
-		// `host setup` PROVISIONS host mode; it must NOT be gated behind host.enabled
-		// (that would be a chicken-and-egg: you can't provision until enabled, can't
-		// safely enable until provisioned). The gate only guards LAUNCH.
+		// `host setup` PROVISIONS host mode AND enables it when provisioning
+		// actually succeeds — one command, no separate `config set host.enabled
+		// true` step. It must NOT be gated behind host.enabled itself (that would
+		// be chicken-and-egg); the gate only guards LAUNCH. The provision-before-
+		// enable invariant holds: runHostSetup is lenient (returns nil even when
+		// `pi` is missing), so we verify with hostProvisioned() and never flip the
+		// gate on with nothing behind it.
 		if err := runHostSetup(os.Stderr); err != nil {
 			fmt.Fprintf(os.Stderr, "pi-stack host setup: %v\n", err)
 			os.Exit(1)
 		}
+		if !hostProvisioned() {
+			fmt.Fprintln(os.Stderr, "pi-stack host setup: not fully provisioned (usually a missing `pi`) — left DISABLED.")
+			fmt.Fprintln(os.Stderr, "Install the pinned `pi` (see above), then re-run: pi-stack host setup")
+			os.Exit(1)
+		}
+		if !cfg.Host.Enabled {
+			cfg.Host.Enabled = true
+			if err := cfg.Save(); err != nil {
+				fmt.Fprintf(os.Stderr, "pi-stack host setup: provisioned but could not enable (%v); run: pi-stack config set host.enabled true\n", err)
+				os.Exit(1)
+			}
+		}
+		fmt.Fprintln(os.Stderr, "pi-stack host setup: host mode enabled (UNSANDBOXED). Launch: pi-stack host")
 	default:
 		if !cfg.Host.Enabled {
 			fmt.Fprint(os.Stderr, hostGateMessage())
@@ -97,11 +114,10 @@ guardrails (guard extension, workspace checks, disabled subagents) reduce
 accidents — they are NOT a security boundary. For anything you wouldn't hand a
 shell to, use ` + "`pi-stack run`" + ` (the sandbox).
 
-If you understand the above and want it anyway, provision first, THEN enable
-(the gate stays off until provisioning succeeds, so this is the safe order):
+If you understand the above and want it anyway, set it up (this provisions AND
+enables it — the gate stays off unless provisioning actually succeeds):
 
   pi-stack host setup
-  pi-stack config set host.enabled true
 
 then launch with ` + "`pi-stack host`" + `.
 `
@@ -651,7 +667,15 @@ func runHostLaunch(o hostOpts) {
 	piArgs := buildHostArgs(agentDir, string(preamble), o)
 	var cmd *exec.Cmd
 	if useOp {
-		opArgs := append([]string{"run", "--env-file=" + refs, "--", piBin}, piArgs...)
+		// --no-masking is REQUIRED for an interactive launch: op's default output
+		// masking pipes the child's stdout/stderr through a secret-scanning filter,
+		// which makes them non-TTYs — pi's TUI then sees no terminal and exits
+		// immediately (banner, then straight back to the shell, exit 0). Masking is
+		// also pointless here: pi is a full-screen TUI, not a secret-echoing script,
+		// and the mcp-gateway op-run path (Makefile mcp-register) already runs
+		// --no-masking for the same reason. The real key still never enters this
+		// process — op injects it into pi's env only.
+		opArgs := append([]string{"run", "--no-masking", "--env-file=" + refs, "--", piBin}, piArgs...)
 		cmd = exec.Command("op", opArgs...)
 	} else {
 		cmd = exec.Command(piBin, piArgs...)

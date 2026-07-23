@@ -395,16 +395,19 @@ func TestUpsertOpRefCanonicalizesConflictingDuplicates(t *testing.T) {
 	}
 }
 
-func TestSecretSetEncodesSpacedField(t *testing.T) {
+func TestSecretSetKeepsLiteralSpacedField(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "X=1\n"}
 	var out bytes.Buffer
 	runSecretSet(memEnv(files), &out, "OPENAI_API_KEY", "op://Docker/OPENAI_API_KEY/api key")
 	got := files[fakeRefsPath]
-	if !strings.Contains(got, "OPENAI_API_KEY=op://Docker/OPENAI_API_KEY/api%20key") {
-		t.Errorf("content after set = %q, want the space encoded to %%20", got)
+	if !strings.Contains(got, "OPENAI_API_KEY=op://Docker/OPENAI_API_KEY/api key") {
+		t.Errorf("content after set = %q, want the space kept literal", got)
 	}
-	if !strings.Contains(out.String(), "encoded a space") {
-		t.Errorf("output = %q, want a note about the encoding", out.String())
+	if strings.Contains(got, "api%20key") {
+		t.Errorf("content after set = %q, must NOT percent-encode the space (op read/op run reject %%20)", got)
+	}
+	if strings.Contains(out.String(), "encoded a space") {
+		t.Errorf("output = %q, must not claim it encoded a space", out.String())
 	}
 }
 

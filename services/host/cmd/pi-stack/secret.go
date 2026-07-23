@@ -278,11 +278,10 @@ func runSecretSet(env shellEnv, out io.Writer, key, value string) error {
 		os.Exit(2)
 	}
 
-	if isRef && strings.Contains(value, " ") {
-		encoded := strings.ReplaceAll(value, " ", "%20")
-		fmt.Fprintf(out, "note: encoded a space in the ref for %s (op run can't parse a literal space)\n", key)
-		value = encoded
-	}
+	// Store refs with LITERAL spaces (an item/field name like "Anthropic API Key"
+	// is common): op 2.35.0's `op read` AND `op run --env-file` both require a
+	// literal space and reject %20. The write chokepoint normalizes any stray %20
+	// back to a space, so we pass the value through untouched here.
 
 	// Arguments are valid; the rest is the both-file transaction. A lock
 	// acquisition failure fails the command honestly — never write unlocked.

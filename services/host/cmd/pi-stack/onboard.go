@@ -230,26 +230,24 @@ You can also say "onboard me" to a running agent at any time.
   --yes | --non-interactive  never prompt (CI); apply what is given
   -h | --help              this help
 
---use-sbx-keys and --use-1password belong to ` + "`pi-stack setup`" + ` (they select
-a provider-key source); onboard never provisions provider keys, so both are
-rejected here.
+Provider keys come from 1Password via ` + "`pi-stack setup`" + ` (op is required);
+onboard never provisions them. The removed --use-sbx-keys / --use-1password
+flags now error.
 
 Always ensures the memory service is enabled. Idempotent; safe to re-run.
-Provider keys are sbx secrets (proxy-injected) and are only reported here,
-never entered.
+Provider keys are sbx secrets (proxy-injected, seeded from 1Password) and are
+only reported here, never entered.
 `
 
 // onboardOpts is the parsed onboard flag set.
 type onboardOpts struct {
-	account      string
-	knowledge    string
-	mcp          []string
-	model        string
-	apply        bool
-	assumeYes    bool
-	useSbxKeys   bool
-	use1Password bool
-	help         bool
+	account   string
+	knowledge string
+	mcp       []string
+	model     string
+	apply     bool
+	assumeYes bool
+	help      bool
 }
 
 func parseOnboardArgs(argv []string) (onboardOpts, error) {
@@ -271,9 +269,9 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 		case a == "--apply":
 			o.apply = true
 		case a == "--use-sbx-keys":
-			o.useSbxKeys = true
+			return o, fmt.Errorf("--use-sbx-keys has been removed: 1Password (op) is now the only provider-key source; run `pi-stack setup` with op installed + signed in")
 		case a == "--use-1password":
-			o.use1Password = true
+			return o, fmt.Errorf("--use-1password has been removed: 1Password is now the only provider-key source, so `pi-stack setup` always uses it")
 		case a == "--yes" || a == "-y" || a == "--non-interactive":
 			o.assumeYes = true
 		case a == "--account":
@@ -302,9 +300,6 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 			return o, err
 		}
 	}
-	if o.useSbxKeys && o.use1Password {
-		return o, fmt.Errorf("--use-sbx-keys and --use-1password are mutually exclusive (pick the one source for this run)")
-	}
 	return o, nil
 }
 
@@ -320,14 +315,6 @@ func runOnboardCmd(argv []string) {
 	if opts.help {
 		fmt.Print(onboardUsage)
 		return
-	}
-	if opts.useSbxKeys {
-		fmt.Fprintln(os.Stderr, "pi-stack onboard: --use-sbx-keys belongs to `pi-stack setup`; onboard does not provision provider keys")
-		os.Exit(2)
-	}
-	if opts.use1Password {
-		fmt.Fprintln(os.Stderr, "pi-stack onboard: --use-1password belongs to `pi-stack setup`; onboard does not provision provider keys")
-		os.Exit(2)
 	}
 	env := defaultShellEnv()
 

@@ -202,7 +202,7 @@ func TestStrictFlowHoldsLockThroughReconcile(t *testing.T) {
 	env.flock = newRecordingFlock(t, &events).flock
 
 	var out bytes.Buffer
-	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, true, false) {
+	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, true) {
 		t.Fatalf("setupProvisionKeys strict flow failed: %s", out.String())
 	}
 
@@ -747,7 +747,7 @@ func TestLockAcquisitionErrorFailsStrictSetup(t *testing.T) {
 	env, _ := stepEnv(t, allRefs("", "", ""), "", "tok-value")
 	env.flock = func(string, func() error) error { return errors.New("lock dir unwritable") }
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, false, true, false) {
+	if setupProvisionKeys(env, strings.NewReader(""), &out, false, true) {
 		t.Fatal("strict setup must fail when the provider-refs lock cannot be acquired")
 	}
 	if !strings.Contains(out.String(), "could not lock provider refs") {
