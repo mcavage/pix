@@ -187,7 +187,6 @@ type Model struct {
 	rows     []tuiRow
 	rowIndex map[string]int // row id -> index into rows, for tool_end merge + expand lookup
 
-	turnModel string // last seen turn_start.Model, shown in the header
 	// prevSysHash is compared against each provider_request's
 	// SystemPromptHash to render "(unchanged)" vs "(new)" — keyed by
 	// sessionKey(env) (sandboxId+"/"+sessionId), NOT global, because the
@@ -195,6 +194,26 @@ type Model struct {
 	// single shared value would let one session's hash mark another
 	// session's first-seen prompt as "(unchanged)" (review finding R1-7).
 	prevSysHash map[string]string
+
+	// sessionModel/sessionTitle are keyed by sessionKey(env) and feed the
+	// per-session group header (groupHeaderText) so a multi-session feed
+	// is self-explanatory — which model each session is on, and what its
+	// user actually asked for — instead of a bare sandbox/session id. The
+	// old global turnModel (last turn_start.Model across EVERY session,
+	// shown in the top bar) was actively misleading once sessions with
+	// different models interleave, so it's gone; each session now carries
+	// its own model.
+	//
+	// sessionModel is set from turn_start.Model and provider_request.Model
+	// (whichever arrives — they're consistent within one session, so last
+	// non-empty wins). sessionTitle is set ONCE, from the first
+	// user-triggered provider_request's newest NewMessages preview (the
+	// message that actually caused the turn) — a later prompt in the same
+	// session never overwrites it, and a tool_result-triggered request
+	// (the tool's own output being replayed to the model, not a user ask)
+	// never sets it at all.
+	sessionModel map[string]string
+	sessionTitle map[string]string
 
 	// sessionRowCount tracks how many currently-retained rows belong to
 	// each session (sessionKey(env)), so evictOldRows can tell when a
@@ -205,7 +224,8 @@ type Model struct {
 	// nothing ever removes it (review finding R4-2, same class as
 	// R1-13). Incremented in upsertRow when a NEW row is inserted (never
 	// on an in-place overwrite/mutate, which doesn't change row count),
-	// decremented in evictOldRows for each dropped row.
+	// decremented in evictOldRows for each dropped row. sessionModel and
+	// sessionTitle are cleaned up the same way, for the same reason.
 	sessionRowCount map[string]int
 
 	expanded map[string]bool // row id -> expanded, toggled by `space`/`enter`
@@ -279,6 +299,8 @@ func NewModel(cfg TUIConfig) Model {
 		cfg:             cfg,
 		rowIndex:        make(map[string]int),
 		prevSysHash:     make(map[string]string),
+		sessionModel:    make(map[string]string),
+		sessionTitle:    make(map[string]string),
 		sessionRowCount: make(map[string]int),
 		expanded:        make(map[string]bool),
 		showModel:       true,
@@ -805,9 +827,26 @@ func (m *Model) applyEvent(e monitor.Event) {
 	sess := sessionKey(env)
 	switch ev := e.(type) {
 	case monitor.TurnStart:
-		m.turnModel = sanitizeText(ev.Model, false)
+		if model := sanitizeText(ev.Model, false); model != "" {
+			m.sessionModel[sess] = model
+		}
 
 	case monitor.ProviderRequest:
+		if model := sanitizeText(ev.Model, false); model != "" {
+			m.sessionModel[sess] = model
+		}
+		// The group header's title is the FIRST real user ask for this
+		// session, never a later one and never a tool_result request (that's
+		// the tool's own output being replayed to the model, not something
+		// the user typed) — so this only fires once, guarded by the
+		// "not already set" check, on a user (or unknown/empty-trigger, e.g.
+		// an initial turn with no clear cause) request.
+		if _, captured := m.sessionTitle[sess]; !captured && (ev.Trigger == "user" || ev.Trigger == "") && len(ev.Summary.NewMessages) > 0 {
+			// Newest entry last, same convention as renderRequestRow — that's
+			// the message that actually triggered this turn.
+			preview := ev.Summary.NewMessages[len(ev.Summary.NewMessages)-1].Preview
+			m.sessionTitle[sess] = truncateLine(sanitizeText(preview, false), 40)
+		}
 		hash := ev.Summary.SystemPromptHash
 		prevHash := m.prevSysHash[sess]
 		unchanged := hash != "" && prevHash != "" && hash == prevHash
@@ -1124,6 +1163,8 @@ func (m *Model) evictOldRows() {
 		if m.sessionRowCount[r.session] <= 0 {
 			delete(m.sessionRowCount, r.session)
 			delete(m.prevSysHash, r.session)
+			delete(m.sessionModel, r.session)
+			delete(m.sessionTitle, r.session)
 		}
 	}
 	m.rows = append([]tuiRow(nil), m.rows[drop:]...)
@@ -1316,7 +1357,7 @@ func (m Model) bodyLayoutLines() []bodyLine {
 	prevSession := ""
 	for i, r := range rows {
 		if i == 0 || r.session != prevSession {
-			lines = append(lines, bodyLine{text: groupHeaderText(r.session), group: true})
+			lines = append(lines, bodyLine{text: m.groupHeaderText(r.session), group: true})
 		}
 		prevSession = r.session
 		// ▸/▾ is the expand affordance: every row kind has detail after
@@ -1348,13 +1389,32 @@ func multiSession(rows []tuiRow) bool {
 
 // groupHeaderText renders a session group's header rule at column 0 (no
 // indent — the rows under it are indented instead, so the feed reads as
-// threads): `── sandbox <id>  ·  session <short> ──`. The sessionKey is
-// split back into its sandbox/session halves (sessionKey joins them with
-// "/"); both are event-derived attacker text, so they're sanitized here —
-// the raw key is only ever a map/identity key, never rendered. An empty
-// sandbox id reads "(local)"; the session id is shortened to its last 8
-// runes (the tail is the distinctive part of a generated id).
-func groupHeaderText(session string) string {
+// threads): `── <sandbox> · <session> · <model> · "<title>" ──`, e.g.
+// `── pi-stack-dev · 10f905c3 · claude-opus-4-8 · "can you send a test
+// ping to gemini…" ──`. With several concurrent sessions streaming (a main
+// conversation, child `pi -p` provider calls, other interactive sessions)
+// the bare sandbox/session id told you nothing about what a session
+// actually IS — the model and title segments make the header
+// self-explanatory: which model this session is on, and what its user
+// actually asked for. See sessionModel/sessionTitle. Either segment is
+// omitted when not yet captured: a session with no turn_start/
+// provider_request yet has no known model, and a session whose first
+// user prompt hasn't landed (or was tool_result-only, e.g. a `pi -p`
+// one-shot with no clear "user" trigger — empty trigger still counts)
+// has no title.
+//
+// The sessionKey is split back into its sandbox/session halves
+// (sessionKey joins them with "/"); sandbox/model/title are all
+// event-derived attacker text, so they're sanitized here too (the model
+// and title are already sanitized when stored, but this stays
+// defense-in-depth rather than trusting the map) — the raw key is only
+// ever a map/identity key, never rendered. An empty sandbox id reads
+// "(local)"; the session id is shortened to its last 8 runes (the tail is
+// the distinctive part of a generated id). The whole line is composed
+// unbounded here; renderBodyLines' shared m.truncate pass clamps it (and
+// every other body line) to the terminal width, so a long title
+// ellipsizes instead of wrapping — it never gets its own truncation here.
+func (m Model) groupHeaderText(session string) string {
 	sandbox, sess, _ := strings.Cut(session, "/")
 	sandbox = sanitizeText(sandbox, false)
 	sess = sanitizeText(sess, false)
@@ -1367,7 +1427,14 @@ func groupHeaderText(session string) string {
 	if sess == "" {
 		sess = "-"
 	}
-	return fmt.Sprintf("\u2500\u2500 sandbox %s  \u00b7  session %s \u2500\u2500", sandbox, sess)
+	head := fmt.Sprintf("\u2500\u2500 %s \u00b7 %s", sandbox, sess)
+	if model := sanitizeText(m.sessionModel[session], false); model != "" {
+		head += " \u00b7 " + model
+	}
+	if title := sanitizeText(m.sessionTitle[session], false); title != "" {
+		head += fmt.Sprintf(" \u00b7 \u201c%s\u201d", title)
+	}
+	return head + " \u2500\u2500"
 }
 
 // renderBodyLines decorates bodyLayoutLines for display: a "> "/"  " gutter
@@ -1522,9 +1589,6 @@ func (m Model) headerLine() string {
 	sandbox := m.cfg.Filter
 	if sandbox == "" {
 		sandbox = "all"
-	}
-	if m.turnModel != "" {
-		return fmt.Sprintf("pi-stack monitor  sandbox=%s  model=%s  events=%d", sandbox, m.turnModel, len(m.rows))
 	}
 	return fmt.Sprintf("pi-stack monitor  sandbox=%s  events=%d", sandbox, len(m.rows))
 }

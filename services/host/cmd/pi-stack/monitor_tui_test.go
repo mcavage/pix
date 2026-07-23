@@ -1917,17 +1917,19 @@ func TestMonitorTUI_GroupHeadersTwoSessions(t *testing.T) {
 	m = feed(t, m, ctxB)
 
 	view := m.View()
-	// Group headers: rule + label, sandbox id + short (last-8) session id.
-	if !strings.Contains(view, "── sandbox sbx-alpha  ·  session aaaa1111 ──") {
+	// Group headers: rule + sandbox id + short (last-8) session id + model.
+	// Neither session has a captured title yet (no NewMessages on either
+	// mkProviderRequest call in this test), so the title segment is absent.
+	if !strings.Contains(view, "── sbx-alpha · aaaa1111 · opus-a ──") {
 		t.Fatalf("missing session A group header, got:\n%s", view)
 	}
-	if !strings.Contains(view, "── sandbox sbx-beta  ·  session bbbb2222 ──") {
+	if !strings.Contains(view, "── sbx-beta · bbbb2222 · sonnet-b ──") {
 		t.Fatalf("missing session B group header, got:\n%s", view)
 	}
 	// Headers sit at column 0 (no gutter, no indent).
 	var headerLines int
 	for _, l := range strings.Split(view, "\n") {
-		if strings.Contains(l, "── sandbox ") {
+		if strings.Contains(l, "── sbx-") {
 			headerLines++
 			if !strings.HasPrefix(l, "──") {
 				t.Errorf("group header not at column 0: %q", l)
@@ -1979,12 +1981,14 @@ func TestMonitorTUI_SingleSessionShowsHeaderNoIndent(t *testing.T) {
 	m = nRows(t, m, 3) // all rows share the (empty) default session
 
 	view := m.View()
-	if !strings.Contains(view, "── sandbox (local)  ·  session - ──") {
+	// No model/title captured (nRows only feeds context_events, never a
+	// turn_start/provider_request), so both segments are omitted.
+	if !strings.Contains(view, "── (local) · - ──") {
 		t.Fatalf("single-session feed missing its sandbox/session label, got:\n%s", view)
 	}
 	var headerLines int
 	for _, l := range strings.Split(view, "\n") {
-		if strings.Contains(l, "── sandbox ") {
+		if strings.Contains(l, "── (local) ") {
 			headerLines++
 		}
 	}
@@ -1997,6 +2001,81 @@ func TestMonitorTUI_SingleSessionShowsHeaderNoIndent(t *testing.T) {
 	// The flat two-space gutter + caret shape is intact.
 	if !strings.Contains(view, "▸ ") {
 		t.Fatalf("row carets missing, got:\n%s", view)
+	}
+}
+
+// --- group header carries per-session model + first-user-prompt title ---
+
+// TestMonitorTUI_GroupHeaderShowsModelAndFirstUserPromptTitle locks in the
+// enriched group header: it must show the session's model, and a title
+// taken from the FIRST user-triggered request only — a later prompt in
+// the same session must never overwrite it, and a tool_result-triggered
+// request (the tool's own output replayed to the model, not something the
+// user typed) must never set it at all.
+func TestMonitorTUI_GroupHeaderShowsModelAndFirstUserPromptTitle(t *testing.T) {
+	m := NewModel(TUIConfig{})
+
+	first := mkProviderRequest("1", "claude-opus-4-8", "h1", 1000, 1, 100,
+		[]monitor.MessageSummary{{Role: "user", Bytes: 10, Hash: "m1", Preview: "can you send a test ping to gemini"}})
+	first.Trigger = "user"
+	m = feed(t, m, first)
+
+	view := m.View()
+	if !strings.Contains(view, "claude-opus-4-8") {
+		t.Fatalf("group header missing the session's model, got:\n%s", view)
+	}
+	if !strings.Contains(view, "\u201ccan you send a test ping to gemini\u201d") {
+		t.Fatalf("group header missing the first user prompt as its title, got:\n%s", view)
+	}
+
+	// A tool_result-triggered request must never set (or change) the title.
+	toolReq := mkProviderRequest("2", "claude-opus-4-8", "h1", 1000, 1, 100,
+		[]monitor.MessageSummary{{Role: "tool", Bytes: 20, Hash: "m2", Preview: "tool result text"}})
+	toolReq.Trigger = "tool_result"
+	m = feed(t, m, toolReq)
+
+	// A later user prompt must not overwrite the FIRST one.
+	later := mkProviderRequest("3", "claude-opus-4-8", "h1", 1000, 1, 100,
+		[]monitor.MessageSummary{{Role: "user", Bytes: 10, Hash: "m3", Preview: "a completely different later ask"}})
+	later.Trigger = "user"
+	m = feed(t, m, later)
+
+	var headerLine string
+	for _, l := range strings.Split(m.View(), "\n") {
+		if strings.HasPrefix(l, "──") {
+			headerLine = l
+		}
+	}
+	if !strings.Contains(headerLine, "\u201ccan you send a test ping to gemini\u201d") {
+		t.Fatalf("group header title changed away from the FIRST user prompt, got header:\n%s", headerLine)
+	}
+	if strings.Contains(headerLine, "tool result text") || strings.Contains(headerLine, "a completely different later ask") {
+		t.Fatalf("group header title picked up a non-first/tool_result request, got header:\n%s", headerLine)
+	}
+}
+
+// TestMonitorTUI_GroupHeaderPerSessionModelDiffers proves the model in the
+// header is per-SESSION, not a single global last-seen value: a child
+// session (e.g. a `pi -p` provider call) running a different model from
+// the main session must show ITS OWN model in its own header, and each
+// session's header must show only its own model — never the other one's.
+func TestMonitorTUI_GroupHeaderPerSessionModelDiffers(t *testing.T) {
+	m := NewModel(TUIConfig{})
+
+	parent := mkProviderRequest("1", "claude-opus-4-8", "hp", 1000, 1, 100, nil)
+	parent.SandboxID, parent.SessionID = "sbx", "sess-parent"
+	child := mkProviderRequest("1", "gemini-2.5-flash", "hc", 500, 0, 50, nil)
+	child.SandboxID, child.SessionID = "sbx", "sess-child"
+
+	m = feed(t, m, parent)
+	m = feed(t, m, child)
+
+	view := m.View()
+	if !strings.Contains(view, "── sbx · s-parent · claude-opus-4-8 ──") {
+		t.Fatalf("parent session header missing its own model, got:\n%s", view)
+	}
+	if !strings.Contains(view, "── sbx · ss-child · gemini-2.5-flash ──") {
+		t.Fatalf("child session header missing its own (different) model, got:\n%s", view)
 	}
 }
 
