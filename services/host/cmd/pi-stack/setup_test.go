@@ -128,8 +128,8 @@ func TestSetupHostPhase_NoKeyAborts(t *testing.T) {
 // flag must abort before setupProvisionKeysFn, with no 1Password prompt, ref
 // write, or sbx reconciliation for a request that cannot be applied.
 func TestSetupHostPhase_InvalidFlags_NeverInvokesProviderKeyFlow(t *testing.T) {
-	orig := setupProvisionKeysFn
-	t.Cleanup(func() { setupProvisionKeysFn = orig })
+	orig := provisionProviderKeysFn
+	t.Cleanup(func() { provisionProviderKeysFn = orig })
 
 	cases := []struct {
 		name  string
@@ -145,9 +145,9 @@ func TestSetupHostPhase_InvalidFlags_NeverInvokesProviderKeyFlow(t *testing.T) {
 			t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
 
 			invoked := false
-			setupProvisionKeysFn = func(shellEnv, io.Reader, io.Writer, bool, bool) bool {
+			provisionProviderKeysFn = func(shellEnv, io.Reader, io.Writer, bool, bool, bool, bool, string) providerKeySetupResult {
 				invoked = true
-				return true
+				return providerKeySetupResult{OK: true, Mode: "1password"}
 			}
 
 			var out bytes.Buffer
@@ -156,7 +156,7 @@ func TestSetupHostPhase_InvalidFlags_NeverInvokesProviderKeyFlow(t *testing.T) {
 				t.Fatalf("expected setupHostPhase to fail for flags %v", tc.flags)
 			}
 			if invoked {
-				t.Errorf("setupProvisionKeysFn must NEVER be invoked when flag validation fails (flags %v); no provider-key/ref/sbx work may run for a request that will be rejected", tc.flags)
+				t.Errorf("provisionProviderKeysFn must NEVER be invoked when flag validation fails (flags %v); no provider-key/ref/sbx work may run for a request that will be rejected", tc.flags)
 			}
 			if _, statErr := os.Stat(filepath.Join(dir, "config.toml")); !os.IsNotExist(statErr) {
 				t.Errorf("config.toml must not be written when flag validation fails, stat err = %v", statErr)
@@ -219,7 +219,7 @@ func TestSetupProvisionKeys_OpMissingNeverFailsOpen(t *testing.T) {
 		readFile: func(string) (string, error) { return "", os.ErrNotExist },
 	}
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
+	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false, false) {
 		t.Error("op missing must fail setup, never fail open")
 	}
 	if strings.Contains(out.String(), "Paste an op://") {
@@ -244,12 +244,64 @@ func TestHostModeProviderKeys(t *testing.T) {
 			},
 		}
 	}
-	if got := hostModeProviderKeys(mk("")); len(got) != 0 {
-		t.Errorf("empty hostmode.env: want none, got %v", got)
+	if got, err := hostModeProviderKeys(mk("")); len(got) != 0 || err != nil {
+		t.Errorf("empty hostmode.env: want none/nil, got %v, %v", got, err)
 	}
-	got := hostModeProviderKeys(mk("OPENAI_API_KEY=op://v/o/k\nANTHROPIC_API_KEY=op://v/a/k\nSLACK_TOKEN=op://v/s/t\n"))
+	got, err := hostModeProviderKeys(mk("OPENAI_API_KEY=op://v/o/k\nANTHROPIC_API_KEY=op://v/a/k\nSLACK_TOKEN=op://v/s/t\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(got) != 2 || got[0] != "anthropic" || got[1] != "openai" {
 		t.Errorf("want [anthropic openai] sorted, got %v", got)
+	}
+}
+
+// TestHostModeProviderKeys_ENOENTIsNoneNotError: a genuinely absent
+// hostmode.env is "no refs configured yet" (nil error), never treated the
+// same as a real read failure.
+func TestHostModeProviderKeys_ENOENTIsNoneNotError(t *testing.T) {
+	env := shellEnv{
+		getenv:   func(string) string { return "/cfg" },
+		readFile: func(string) (string, error) { return "", os.ErrNotExist },
+	}
+	got, err := hostModeProviderKeys(env)
+	if err != nil || len(got) != 0 {
+		t.Errorf("ENOENT: got %v, %v; want none, nil", got, err)
+	}
+}
+
+// TestHostModeProviderKeys_RealReadErrorIsError: EACCES/ELOOP/etc must surface
+// as a non-nil error naming the path, never silently downgraded to "none".
+func TestHostModeProviderKeys_RealReadErrorIsError(t *testing.T) {
+	env := shellEnv{
+		getenv:   func(string) string { return "/cfg" },
+		readFile: func(string) (string, error) { return "", os.ErrPermission },
+	}
+	got, err := hostModeProviderKeys(env)
+	if err == nil {
+		t.Fatal("a real read error must not be masked as none")
+	}
+	if !strings.Contains(err.Error(), "hostmode.env") {
+		t.Errorf("error must name the path, got: %v", err)
+	}
+	if got != nil {
+		t.Errorf("got %v, want nil on error", got)
+	}
+}
+
+// TestHostModeProviderKeys_SymlinkLoopIsError: a symlink-loop-shaped error
+// (ELOOP via os.PathError) classifies identically to any other non-ENOENT
+// error.
+func TestHostModeProviderKeys_SymlinkLoopIsError(t *testing.T) {
+	env := shellEnv{
+		getenv: func(string) string { return "/cfg" },
+		readFile: func(string) (string, error) {
+			return "", &os.PathError{Op: "open", Path: "hostmode.env", Err: os.ErrInvalid}
+		},
+	}
+	_, err := hostModeProviderKeys(env)
+	if err == nil {
+		t.Error("a symlink-loop-shaped read error must classify as an error, never none")
 	}
 }
 

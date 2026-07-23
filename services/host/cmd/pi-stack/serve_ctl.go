@@ -138,27 +138,15 @@ func verifyServeProcPS(pid int, run func(name string, args ...string) (string, e
 			off = end
 		}
 	}
-	for _, a := range strings.Fields(rest) {
-		if a == "serve" {
-			return true, true
-		}
-	}
-	return false, true
+	args := strings.Fields(rest)
+	return len(args) > 0 && args[0] == "serve", true
 }
 
-// cmdlineIsServe tightens the match from a loose substring to: the executable
-// basename is exactly `pi-stack-host` AND some later arg equals `serve`. That
-// rejects an unrelated process whose args merely happen to contain those words.
+// cmdlineIsServe requires the exact executable and first subcommand. Looking
+// for `serve` anywhere later in argv could mistake `plugin broker serve` for
+// the supervisor and kill an unrelated process after PID reuse.
 func cmdlineIsServe(argv []string) bool {
-	if len(argv) == 0 || filepath.Base(argv[0]) != "pi-stack-host" {
-		return false
-	}
-	for _, a := range argv[1:] {
-		if a == "serve" {
-			return true
-		}
-	}
-	return false
+	return len(argv) >= 2 && filepath.Base(argv[0]) == "pi-stack-host" && argv[1] == "serve"
 }
 
 // stopServe is the SAFE replacement for `pkill -f 'pi-stack-host serve'`. It

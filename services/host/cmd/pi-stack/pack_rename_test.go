@@ -830,11 +830,13 @@ func TestSetupHostPhase_ActivatesExistingMigratedDefaultPack_WhenCfgPackEmpty(t 
 
 	refs := "ANTHROPIC_API_KEY=op://v/anthropic/key\nOPENAI_API_KEY=op://v/openai/key\nGEMINI_API_KEY=op://v/gemini/key\n"
 	env, _ := stepEnv(t, refs, "anthropic openai google", "sk-val")
-	// stepEnv points PI_STACK_CONFIG/XDG_STATE_HOME at ITS OWN temp dir
-	// (overriding what we set above); redirect them back to cfgDir so the real
-	// config.Load/Save this test asserts on lands where we expect.
+	// stepEnv points PI_STACK_CONFIG/XDG_STATE_HOME/XDG_DATA_HOME at ITS OWN
+	// temp dirs (overriding what we set above); redirect them back to cfgDir /
+	// data so the real config.Load/Save AND the pre-created default pack this
+	// test asserts on both land where we expect.
 	t.Setenv("PI_STACK_CONFIG", filepath.Join(cfgDir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(cfgDir, "state"))
+	t.Setenv("XDG_DATA_HOME", data)
 	for envVar, ref := range map[string]string{
 		"ANTHROPIC_API_KEY": "op://v/anthropic/key",
 		"OPENAI_API_KEY":    "op://v/openai/key",
@@ -880,11 +882,13 @@ func TestSetupHostPhase_PackActivationFailure_FailsSetup(t *testing.T) {
 
 	refs := "ANTHROPIC_API_KEY=op://v/anthropic/key\nOPENAI_API_KEY=op://v/openai/key\nGEMINI_API_KEY=op://v/gemini/key\n"
 	env, _ := stepEnv(t, refs, "anthropic openai google", "sk-val")
-	// stepEnv points PI_STACK_CONFIG/XDG_STATE_HOME at ITS OWN temp dir
-	// (overriding what we set above); redirect them back to cfgDir so we chmod
-	// the SAME directory config.Save() actually writes into.
+	// stepEnv points PI_STACK_CONFIG/XDG_STATE_HOME/XDG_DATA_HOME at ITS OWN
+	// temp dirs (overriding what we set above); redirect them back to cfgDir /
+	// data so we chmod the SAME directory config.Save() actually writes into
+	// and the pre-created pack above is the one setupHostPhase resolves.
 	t.Setenv("PI_STACK_CONFIG", filepath.Join(cfgDir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(cfgDir, "state"))
+	t.Setenv("XDG_DATA_HOME", data)
 	for envVar, ref := range map[string]string{
 		"ANTHROPIC_API_KEY": "op://v/anthropic/key",
 		"OPENAI_API_KEY":    "op://v/openai/key",

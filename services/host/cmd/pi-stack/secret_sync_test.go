@@ -56,6 +56,28 @@ func TestSyncProviderKeys_Success(t *testing.T) {
 	}
 }
 
+// A duplicate ANTHROPIC_API_KEY line must resolve the FIRST conflicting ref
+// — never whichever duplicate happens to land last in the map — matching
+// currentOpRef/mirrorProviderRefsToHostModeLocked's first-wins semantics
+// (see TestMirrorProviderRefsToHostModeUsesFirstConflictingRef).
+func TestSyncProviderKeysUsesFirstConflictingRef(t *testing.T) {
+	refs := "ANTHROPIC_API_KEY=op://vault/new/key\nANTHROPIC_API_KEY=op://vault/old/key\n"
+	var calls []string
+	env := fakeSyncEnv(refs, "sk-secret-value\n", nil, &calls)
+	var out bytes.Buffer
+	synced, failed, fatal := syncProviderKeys(env, &out)
+	if fatal != nil || failed != 0 || synced != 1 {
+		t.Fatalf("synced=%d failed=%d fatal=%v; out=%q", synced, failed, fatal, out.String())
+	}
+	joined := strings.Join(calls, "\n")
+	if !strings.Contains(joined, "op read op://vault/new/key") {
+		t.Errorf("expected op read of the FIRST conflicting ref, got:\n%s", joined)
+	}
+	if strings.Contains(joined, "op read op://vault/old/key") {
+		t.Errorf("must not read the second/duplicate conflicting ref, got:\n%s", joined)
+	}
+}
+
 func TestSyncProviderKeys_OpMissing(t *testing.T) {
 	env := shellEnv{
 		readFile: func(string) (string, error) { return "ANTHROPIC_API_KEY=op://a/b/c\n", nil },
@@ -114,6 +136,43 @@ func TestEnsureProviderKeysFromRefs_OnlyMissing(t *testing.T) {
 	// anthropic is already in sbx: it must NOT be op-read (no prompt).
 	if strings.Contains(joined, "op read op://P/anthropic/key") {
 		t.Error("must not op-read a key that sbx already has")
+	}
+}
+
+// A duplicate GEMINI_API_KEY line must resolve the FIRST conflicting ref, same
+// as syncProviderKeys and currentOpRef/mirror.
+func TestEnsureProviderKeysFromRefsUsesFirstConflictingRef(t *testing.T) {
+	refs := "GEMINI_API_KEY=op://vault/new/key\nGEMINI_API_KEY=op://vault/old/key\n"
+	var calls []string
+	env := shellEnv{
+		readFile: func(string) (string, error) { return refs, nil },
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			calls = append(calls, name+" "+strings.Join(args, " "))
+			switch {
+			case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
+				return "", nil // google not present yet
+			case name == "op" && len(args) >= 1 && args[0] == "--version":
+				return "2.0", nil
+			case name == "op" && len(args) >= 1 && args[0] == "account":
+				return "acct", nil
+			case name == "op" && len(args) >= 1 && args[0] == "read":
+				return "val\n", nil
+			}
+			return "", nil
+		},
+	}
+	var out bytes.Buffer
+	ensureProviderKeysFromRefs(env, &out)
+	joined := strings.Join(calls, "\n")
+	if !strings.Contains(joined, "op read op://vault/new/key") {
+		t.Errorf("expected op read of the FIRST conflicting ref, got:\n%s", joined)
+	}
+	if strings.Contains(joined, "op read op://vault/old/key") {
+		t.Errorf("must not read the second/duplicate conflicting ref, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "sbx secret set -f -g google -t val") {
+		t.Errorf("expected google resolved from the first conflicting ref, got:\n%s", joined)
 	}
 }
 
@@ -203,6 +262,32 @@ func TestMirrorProviderRefsToHostMode(t *testing.T) {
 	}
 }
 
+func TestMirrorProviderRefsToHostModeUsesFirstConflictingRef(t *testing.T) {
+	files := map[string]string{}
+	dir := "/cfg/pi-stack"
+	files[filepath.Join(dir, "op-refs.env")] = "ANTHROPIC_API_KEY=op://vault/new/key\nANTHROPIC_API_KEY=op://vault/old/key\n"
+	env := shellEnv{
+		getenv: func(k string) string {
+			if k == "XDG_CONFIG_HOME" {
+				return "/cfg"
+			}
+			return ""
+		},
+		readFile: func(p string) (string, error) {
+			if v, ok := files[p]; ok {
+				return v, nil
+			}
+			return "", os.ErrNotExist
+		},
+		writeFile: func(p string, d []byte, _ os.FileMode) error { files[p] = string(d); return nil },
+	}
+	mirrorProviderRefsToHostMode(env)
+	got := files[filepath.Join(dir, "hostmode.env")]
+	if !strings.Contains(got, "ANTHROPIC_API_KEY=op://vault/new/key") || strings.Contains(got, "old/key") {
+		t.Fatalf("mirror must use the same first ref setup validates, got %q", got)
+	}
+}
+
 // writeOpRefFileQuiet must NOT clobber a file it can't read (a real read error,
 // e.g. EACCES); it fails closed instead of truncating to a single entry.
 func TestWriteOpRefFileQuiet_ReadErrorNoClobber(t *testing.T) {
@@ -255,7 +340,10 @@ func TestHostModeProviderKeys_DedupesDuplicateEntries(t *testing.T) {
 			return "", os.ErrNotExist
 		},
 	}
-	got := hostModeProviderKeys(env)
+	got, err := hostModeProviderKeys(env)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(got) != 2 {
 		t.Fatalf("duplicate anthropic entries must not inflate the count: got %v (len %d), want 2 distinct providers", got, len(got))
 	}
@@ -339,7 +427,7 @@ func TestSetupProvisionKeys_HasRefOnlyInHostMode_UnwritableOpRefsFailsEvenSbxUna
 		},
 	}
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
+	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false, false) {
 		t.Fatal("an unwritable op-refs.env must fail setup even when sbx can't be probed at all")
 	}
 	if !strings.Contains(out.String(), "op-refs.env") {

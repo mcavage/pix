@@ -408,8 +408,8 @@ func TestVerifyServeProcPS_RepeatedBasenameFullComm(t *testing.T) {
 	}
 }
 
-// TestCmdlineIsServe_Tight: only `pi-stack-host` basename + a `serve` arg counts;
-// a process merely mentioning the words does not.
+// TestCmdlineIsServe_Tight: only `pi-stack-host` basename + `serve` as the
+// first subcommand counts; a process merely mentioning the words does not.
 func TestCmdlineIsServe_Tight(t *testing.T) {
 	if !cmdlineIsServe([]string{"/opt/pi-stack-host", "serve", "--x"}) {
 		t.Error("real serve cmdline must match")
@@ -419,6 +419,14 @@ func TestCmdlineIsServe_Tight(t *testing.T) {
 	}
 	if cmdlineIsServe([]string{"/opt/pi-stack-host", "status"}) {
 		t.Error("pi-stack-host without a serve arg must NOT match")
+	}
+	if cmdlineIsServe([]string{"/opt/pi-stack-host", "plugin", "broker", "serve"}) {
+		t.Error("serve in a later plugin argument must NOT match the supervisor")
+	}
+	exe := "/opt/pi-stack-host"
+	plugin := psFake(exe+"\n", exe+" plugin broker serve\n", nil, nil)
+	if ok, known := verifyServeProcPS(4242, plugin); ok || !known {
+		t.Errorf("ps fallback must reject a later serve arg: ours=%v known=%v", ok, known)
 	}
 }
 

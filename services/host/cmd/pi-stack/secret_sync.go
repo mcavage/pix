@@ -84,13 +84,29 @@ func offerOnePasswordKeys(env shellEnv, in io.Reader, out io.Writer, tty bool) {
 		}
 		// Write the ref to BOTH credential files: op-refs.env (sandbox: the gateway
 		// + `pi-stack secret sync` resolve it into sbx) AND hostmode.env (host mode:
-		// `op run --env-file` resolves it at launch). One paste wires both worlds.
-		if err := writeOpRefQuiet(env, p.envVar, ref); err != nil {
-			fmt.Fprintf(out, "    could not save %s: %v\n", p.name, err)
+		// `op run --env-file` resolves it at launch). One paste wires both worlds,
+		// and it is ONE transaction under ONE withProviderRefsLock acquisition (via
+		// the *Locked helpers) — never two separate lock windows for the pair, and
+		// never nested (a nested acquisition of the same lock file would deadlock
+		// against the real flock). A lock-acquisition failure is reported and this
+		// provider is skipped, honestly, rather than writing unlocked.
+		var refErr, hostErr error
+		if lerr := withProviderRefsLock(env, func() error {
+			refErr = writeOpRefQuietLocked(env, p.envVar, ref)
+			if refErr == nil {
+				hostErr = writeOpRefFileQuietLocked(env, hostModeRefsPath(env), p.envVar, ref)
+			}
+			return nil
+		}); lerr != nil {
+			fmt.Fprintf(out, "    could not lock provider refs for %s: %v\n", p.name, lerr)
 			continue
 		}
-		if err := writeOpRefFileQuiet(env, hostModeRefsPath(env), p.envVar, ref); err != nil {
-			fmt.Fprintf(out, "    (host-mode ref not saved for %s: %v)\n", p.name, err)
+		if refErr != nil {
+			fmt.Fprintf(out, "    could not save %s: %v\n", p.name, refErr)
+			continue
+		}
+		if hostErr != nil {
+			fmt.Fprintf(out, "    (host-mode ref not saved for %s: %v)\n", p.name, hostErr)
 		}
 		wrote = true
 	}
@@ -99,6 +115,10 @@ func offerOnePasswordKeys(env shellEnv, in io.Reader, out io.Writer, tty bool) {
 		return
 	}
 	fmt.Fprintln(out, "Resolving from 1Password into sbx...")
+	// Called only after every per-provider lock above was released — syncProviderKeys
+	// takes the provider-refs lock itself for its own read/resolve/sbx-sync
+	// transaction, so this must never run from inside a held lock (nesting
+	// deadlocks the real flock).
 	syncProviderKeys(env, out) // force-overwrite sbx from the new refs
 }
 
@@ -125,15 +145,28 @@ func providerRefSet(env shellEnv, envVar string) bool {
 // set, or a completeness check comparing len() against 3 could pass with only
 // two providers actually wired (see hasAllProviderKeyNames, which compares the
 // exact set rather than a count for exactly this reason).
-func hostModeProviderKeys(env shellEnv) []string {
-	var names []string
+//
+// TRI-STATE via the returned error: hostmode.env genuinely ABSENT (ENOENT) is
+// not an error — it means "no refs configured yet", the same as an empty
+// file, so callers get (nil, nil). Any OTHER read error (EACCES, a symlink
+// loop, a real I/O failure) is a credential-state-UNREADABLE condition and is
+// returned as a non-nil error wrapping the path — callers MUST report that
+// honestly ("credential state unreadable: ..."), never silently treat it as
+// "local-only" or "configured", both of which would be a confident guess
+// about state we could not actually read.
+func hostModeProviderKeys(env shellEnv) ([]string, error) {
+	path := hostModeRefsPath(env)
 	if env.readFile == nil {
-		return names
+		return nil, nil
 	}
-	content, err := env.readFile(hostModeRefsPath(env))
+	content, err := env.readFile(path)
 	if err != nil {
-		return names
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
+	var names []string
 	seen := map[string]bool{}
 	for _, r := range parseOpRefs(content) {
 		if name, ok := providerKeyRefs[r.key]; ok && r.isRef && !r.placeholder && !seen[name] {
@@ -142,7 +175,7 @@ func hostModeProviderKeys(env shellEnv) []string {
 		}
 	}
 	sort.Strings(names)
-	return names
+	return names, nil
 }
 
 // hasAllProviderKeyNames reports whether names covers the EXACT required
@@ -167,18 +200,34 @@ func hasAllProviderKeyNames(names []string) bool {
 // has the same model keys as the sandbox even when the refs were set BEFORE this
 // feature (e.g. via `pi-stack secret set`, which writes only op-refs.env, or by a
 // bootstrap that resolved EXISTING refs without ever touching the offer path).
-// Upserts (never truncates unrelated host-mode entries); best-effort.
+// Upserts (never truncates unrelated host-mode entries); best-effort BY
+// CONTRACT (callers treat a partial mirror as re-verifiable, never fatal).
+// This PUBLIC entry takes the provider-refs transaction lock around the whole
+// read-op-refs -> write-hostmode pass; code already holding the lock must use
+// mirrorProviderRefsToHostModeLocked instead (nested flock on the same file
+// deadlocks).
 func mirrorProviderRefsToHostMode(env shellEnv) {
+	_ = withProviderRefsLock(env, func() error {
+		mirrorProviderRefsToHostModeLocked(env)
+		return nil
+	})
+}
+
+// mirrorProviderRefsToHostModeLocked is the transaction body of
+// mirrorProviderRefsToHostMode. Caller MUST hold the provider-refs lock.
+func mirrorProviderRefsToHostModeLocked(env shellEnv) {
 	_, content, exists := opRefsContent(env)
 	if !exists {
 		return
 	}
 	dst := hostModeRefsPath(env)
+	seen := map[string]bool{}
 	for _, r := range parseOpRefs(content) {
-		if _, ok := providerKeyRefs[r.key]; !ok || !r.isRef || r.placeholder {
+		if _, ok := providerKeyRefs[r.key]; !ok || !r.isRef || r.placeholder || seen[r.key] {
 			continue
 		}
-		_ = writeOpRefFileQuiet(env, dst, r.key, r.value)
+		seen[r.key] = true
+		_ = writeOpRefFileQuietLocked(env, dst, r.key, r.value)
 	}
 }
 
@@ -187,14 +236,36 @@ func mirrorProviderRefsToHostMode(env shellEnv) {
 // var name (so a malicious pack.toml integration name can't inject extra
 // op-refs.env lines) and the value as a single-line op:// ref (never a literal
 // secret) — defense in depth beside the caller's own op:// check.
+//
+// PUBLIC (standalone) entry: takes the provider-refs transaction lock around
+// the read-modify-write. Callers already inside a locked transaction (setup's
+// strict flow) use writeOpRefQuietLocked instead.
 func writeOpRefQuiet(env shellEnv, key, value string) error {
-	return writeOpRefFileQuiet(env, defaultOpRefsPath(env), key, value)
+	return withProviderRefsLock(env, func() error {
+		return writeOpRefQuietLocked(env, key, value)
+	})
+}
+
+// writeOpRefQuietLocked is writeOpRefQuiet's transaction body. Caller MUST
+// hold the provider-refs lock.
+func writeOpRefQuietLocked(env shellEnv, key, value string) error {
+	return writeOpRefFileQuietLocked(env, defaultOpRefsPath(env), key, value)
 }
 
 // writeOpRefFileQuiet is writeOpRefQuiet targeting an EXPLICIT refs file (used to
 // write both op-refs.env and hostmode.env). Same validation: env-var-name key +
-// single-line op:// value, upsert preserving other lines.
+// single-line op:// value, upsert preserving other lines. PUBLIC (standalone)
+// entry: takes the provider-refs transaction lock; locked callers use
+// writeOpRefFileQuietLocked.
 func writeOpRefFileQuiet(env shellEnv, path, key, value string) error {
+	return withProviderRefsLock(env, func() error {
+		return writeOpRefFileQuietLocked(env, path, key, value)
+	})
+}
+
+// writeOpRefFileQuietLocked is writeOpRefFileQuiet's transaction body (the
+// validation + upsert). Caller MUST hold the provider-refs lock.
+func writeOpRefFileQuietLocked(env shellEnv, path, key, value string) error {
 	if env.writeFile == nil {
 		return fmt.Errorf("no writer available")
 	}
@@ -235,6 +306,35 @@ var providerKeyRefs = map[string]string{
 	"GEMINI_API_KEY":    "google",
 }
 
+// firstProviderKeyRefs scans content and returns, for each provider-key op-refs
+// ENV var, the FIRST valid entry it sees — matching currentOpRef and
+// mirrorProviderRefsToHostModeLocked, which both treat a provider key as
+// having exactly one ref: the first non-placeholder op:// value for that env
+// var, never whichever duplicate line happens to come last. A later
+// non-placeholder ref still supersedes an earlier PLACEHOLDER for the same
+// key (a placeholder never counts as configured), but once a real ref is
+// recorded for a key, any further duplicate — placeholder or not — is
+// ignored. This is the one place ensureProviderKeysFromRefs and
+// syncProviderKeys resolve "which ref wins" for a duplicated env var, so
+// they can never disagree with setup/currentOpRef/mirror about which
+// provider key is actually configured.
+func firstProviderKeyRefs(content string) map[string]opRef {
+	best := map[string]opRef{}
+	for _, r := range parseOpRefs(content) {
+		if _, ok := providerKeyRefs[r.key]; !ok || !r.isRef {
+			continue
+		}
+		cur, exists := best[r.key]
+		switch {
+		case !exists:
+			best[r.key] = r
+		case cur.placeholder && !r.placeholder:
+			best[r.key] = r
+		}
+	}
+	return best
+}
+
 // providerKeyRefsPresent reports whether op-refs.env declares at least one FILLED
 // provider-key ref, so the keys gate can point at `pi-stack secret sync` and the
 // trusted host-state payload can report source="1password".
@@ -260,7 +360,29 @@ func providerKeyRefsPresent(env shellEnv) bool {
 // and `task new`; the explicit `pi-stack secret sync` is the force-resync
 // (rotate/repair) counterpart, and `setup` uses setupProvisionKeys (which
 // force-syncs via syncProviderKeys).
+//
+// PUBLIC entry: it acquires the provider-refs transaction lock for its whole
+// read-op-refs / resolve-from-1Password / sbx-sync pass, so a concurrent
+// `pi-stack secret set`/`secret rm` in another process can never change
+// op-refs.env between the snapshot this reads and the sbx values it pushes.
+// "Best-effort" describes how failures degrade (quietly, leaving the key
+// unset for the keys gate to explain) — it never means proceeding without the
+// lock: a lock-acquisition failure is reported and this call is a no-op for
+// the run.
 func ensureProviderKeysFromRefs(env shellEnv, out io.Writer) {
+	if lerr := withProviderRefsLock(env, func() error {
+		ensureProviderKeysFromRefsLocked(env, out)
+		return nil
+	}); lerr != nil {
+		fmt.Fprintf(out, "pi-stack: could not lock provider refs (%s): %v\n", providerRefsLockPath(env), lerr)
+	}
+}
+
+// ensureProviderKeysFromRefsLocked is ensureProviderKeysFromRefs' transaction
+// body. Caller MUST hold the provider-refs lock. Uses firstProviderKeyRefs so
+// a duplicated env-var line resolves the SAME ref setup/currentOpRef/mirror
+// would pick, never whichever duplicate happens to come last in the file.
+func ensureProviderKeysFromRefsLocked(env shellEnv, out io.Writer) {
 	if env.run == nil {
 		return
 	}
@@ -272,17 +394,18 @@ func ensureProviderKeysFromRefs(env shellEnv, out io.Writer) {
 	if err != nil {
 		return // can't tell what's set; don't guess
 	}
+	firstRefs := firstProviderKeyRefs(content)
 	type pk struct{ name, ref string }
 	var todo []pk
-	for _, r := range parseOpRefs(content) {
-		name, ok := providerKeyRefs[r.key]
-		if !ok || !r.isRef || r.placeholder {
+	for _, p := range providerKeyRefOrder {
+		r, ok := firstRefs[p.envVar]
+		if !ok || r.placeholder {
 			continue
 		}
-		if grepWord(sbxOut, name) {
+		if grepWord(sbxOut, p.name) {
 			continue // already in sbx — no op call, no prompt
 		}
-		todo = append(todo, pk{name, r.value})
+		todo = append(todo, pk{p.name, r.value})
 	}
 	if len(todo) == 0 {
 		return // nothing missing that we can fill; never touch op
@@ -304,8 +427,13 @@ func ensureProviderKeysFromRefs(env shellEnv, out io.Writer) {
 }
 
 // reconcileProviderKeysWithSbx is setupProvisionKeys' STEP 3: bring sbx to the
-// same state as each provider's op-refs.env ref (already validated + current
-// after STEP 1 in setup.go), using the launcher-owned synced-ref record
+// same state as each provider's VALIDATED ref — the refs snapshot STEP 1
+// built (envVar -> ref, every entry already `op read`-validated and
+// canonical-written to BOTH refs files under the provider-refs lock the
+// caller still holds), never a fresh reread of the files (a reread could see
+// a different ref than the one that was validated; the snapshot keeps
+// validation and reconciliation working on the same state) — using the
+// launcher-owned synced-ref record
 // (syncedrefs.go) — never sbx's own value, which is WRITE-ONLY (`sbx secret
 // ls` lists names only, so "did the value change" can't be read back):
 //
@@ -329,7 +457,8 @@ func ensureProviderKeysFromRefs(env shellEnv, out io.Writer) {
 //     key from two different places. Non-interactive requires --yes to
 //     replace; without it, reconcile fails with the exact rerun command.
 //
-// resolved carries the STEP-1 validation's already-resolved op-read values
+// refs carries the STEP-1 validated ref snapshot (envVar -> op:// ref);
+// resolved carries the same validation's already-resolved op-read values
 // (envVar -> value) so a provider whose sbx key is genuinely missing doesn't
 // pay for a second `op read` of the same ref.
 //
@@ -337,7 +466,7 @@ func ensureProviderKeysFromRefs(env shellEnv, out io.Writer) {
 // reconcile fails OPEN. sbx being installed but `sbx secret ls` erroring is a
 // real, diagnosable problem: reconcile fails CLOSED (see sbxSecretsProbeState
 // in bootstrap.go, shared with the final probe in setupProvisionKeys).
-func reconcileProviderKeysWithSbx(env shellEnv, sc *bufio.Scanner, out io.Writer, interactive, assumeYes bool, resolved map[string]string) bool {
+func reconcileProviderKeysWithSbx(env shellEnv, sc *bufio.Scanner, out io.Writer, interactive, assumeYes bool, refs, resolved map[string]string) bool {
 	if !opInstalled(env) || !opSignedIn(env) {
 		// setupProvisionKeys already enforces these as HARD preconditions before
 		// ever calling reconcile; treat an unexpected miss defensively as failure
@@ -357,8 +486,8 @@ func reconcileProviderKeysWithSbx(env shellEnv, sc *bufio.Scanner, out io.Writer
 	type changedKey struct{ envVar, name, ref string }
 	var toConfirm []changedKey
 	for _, p := range providerKeyRefOrder {
-		ref, hasRef := currentOpRef(env, p.envVar)
-		if !hasRef {
+		ref, hasRef := refs[p.envVar]
+		if !hasRef || ref == "" {
 			continue // required earlier as a hard precondition; defensive no-op here
 		}
 		if !grepWord(sbxOut, p.name) {
@@ -385,7 +514,15 @@ func reconcileProviderKeysWithSbx(env shellEnv, sc *bufio.Scanner, out io.Writer
 	if interactive {
 		fmt.Fprintf(out, "  sbx already has a value for: %s\n", strings.Join(names, ", "))
 		fmt.Fprint(out, "  Replace these sbx values from 1Password so sandbox and host mode use the same source? [Y/n]: ")
-		replace = scanYN(sc, true) // default YES: 1Password is the source of truth
+		line, gotAnswer := scanYN(sc)
+		if !gotAnswer {
+			fmt.Fprintln(out, "  no answer read (EOF) — that is not consent; re-run and answer y or n.")
+			return false
+		}
+		replace = true // default YES: 1Password is the source of truth
+		if line != "" {
+			replace = line == "y" || line == "yes"
+		}
 	}
 	if !replace {
 		fmt.Fprintf(out, "  kept sbx's existing value for: %s\n", strings.Join(names, ", "))
@@ -445,28 +582,59 @@ func syncProviderKeyToSbx(env shellEnv, out io.Writer, p struct{ envVar, name st
 	return true
 }
 
-// scanYN reads one line from sc as a yes/no answer (same semantics as
-// confirmYN, but sharing the caller's bufio.Scanner instead of reading the
-// underlying io.Reader directly — mixing fmt.Fscanln with a bufio.Scanner on
-// the same reader can desync since the scanner buffers ahead).
-func scanYN(sc *bufio.Scanner, def bool) bool {
+// scanYN reads one line from sc as a yes/no PROMPT ANSWER, sharing the
+// caller's bufio.Scanner instead of reading the underlying io.Reader directly
+// (mixing fmt.Fscanln with a bufio.Scanner on the same reader can desync,
+// since the scanner buffers ahead). It returns the trimmed, lowercased line
+// text and ok=true when a line was actually read. ok is false when the scan
+// FAILED — EOF (no input available) or a genuine Scanner error (including an
+// oversized token past bufio.Scanner's default buffer) — and that is NEVER
+// treated as consent: a caller seeing ok=false must fail the prompt/reconcile
+// outright with a clear message, not silently apply its default answer (the
+// bug this replaces: the old bool-returning scanYN collapsed "no input at
+// all" and "blank line" into the same default-value branch, so a broken/EOF'd
+// stdin during the reconcile-overwrite confirm was silently read as an
+// affirmative "yes, replace my sbx secrets"). A blank (Enter-only) line is
+// legitimate and returns ("", true); the CALLER applies its own default for
+// that case, since different prompts default differently.
+func scanYN(sc *bufio.Scanner) (line string, ok bool) {
 	if !sc.Scan() {
-		return def
+		return "", false
 	}
-	ans := strings.ToLower(strings.TrimSpace(sc.Text()))
-	if ans == "" {
-		return def
-	}
-	return ans == "y" || ans == "yes"
+	return strings.ToLower(strings.TrimSpace(sc.Text())), true
 }
 
-// syncProviderKeys is the testable core: resolve each present provider-key ref
+// syncProviderKeys is the PUBLIC entry: resolve each present provider-key ref
 // via `op read` and push it into sbx with `sbx secret set -f -g <name> -t <value>`
 // (-f overwrites: 1Password is the source of truth).
 // It writes per-key ✓/✗ to out (NEVER the value) and returns counts plus a fatal
 // error for a precondition failure (op/sbx unavailable) so the CLI wrapper can
 // pick an exit code and setup can degrade quietly.
+//
+// It acquires the provider-refs transaction lock for its whole
+// read-op-refs / resolve-from-1Password / sbx-sync pass (delegating to the
+// Locked core), so a concurrent `pi-stack secret set`/`secret rm` can never
+// change op-refs.env between the snapshot this reads and the sbx values it
+// pushes. A lock-acquisition failure is reported and returned as fatal —
+// sync never proceeds unlocked.
 func syncProviderKeys(env shellEnv, out io.Writer) (synced, failed int, fatal error) {
+	lerr := withProviderRefsLock(env, func() error {
+		synced, failed, fatal = syncProviderKeysLocked(env, out)
+		return nil
+	})
+	if lerr != nil {
+		fmt.Fprintf(out, "  \u2717 could not lock provider refs (%s): %v\n", providerRefsLockPath(env), lerr)
+		return 0, 0, fmt.Errorf("could not lock provider refs (%s): %w", providerRefsLockPath(env), lerr)
+	}
+	return synced, failed, fatal
+}
+
+// syncProviderKeysLocked is syncProviderKeys' transaction body. Caller MUST
+// hold the provider-refs lock. Uses firstProviderKeyRefs so a duplicated
+// env-var line resolves the SAME ref setup/currentOpRef/mirror would pick,
+// never whichever duplicate happens to come last in the file (a naive
+// map[key]=r overwrite would silently take the LAST line instead).
+func syncProviderKeysLocked(env shellEnv, out io.Writer) (synced, failed int, fatal error) {
 	_, content, exists := opRefsContent(env)
 	if !exists {
 		return 0, 0, fmt.Errorf("op-refs.env not found (%s)", defaultOpRefsPath(env))
@@ -483,12 +651,7 @@ func syncProviderKeys(env shellEnv, out io.Writer) (synced, failed int, fatal er
 		}
 	}
 
-	present := map[string]opRef{}
-	for _, r := range parseOpRefs(content) {
-		if _, ok := providerKeyRefs[r.key]; ok && r.isRef {
-			present[r.key] = r
-		}
-	}
+	present := firstProviderKeyRefs(content)
 	if len(present) == 0 {
 		return 0, 0, nil // nothing to do (not fatal)
 	}

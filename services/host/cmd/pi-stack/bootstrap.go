@@ -1,9 +1,8 @@
 // bootstrap.go: the "bare-minimum keys" provisioning flow used by `pi-stack run`
 // (auto, only when no key is present). Policy: steer to 1Password. `pi-stack
-// setup` does NOT use bootstrapProviderKeys — it runs the stronger, MANDATORY
-// setupProvisionKeys (always requires all three provider refs from 1Password,
-// reconciling sbx to match — set when missing, no-op when unchanged, ask before
-// overwriting a changed ref); this file keeps the tri-state sbx probes
+// setup` does NOT use bootstrapProviderKeys. Its setupProvisionKeys path either
+// validates and reconciles all three 1Password refs or explicitly trusts a
+// complete existing sbx key set. This file keeps the tri-state sbx probes
 // (sbxModelKeyState, sbxAllModelKeysPresent) both share.
 package main
 

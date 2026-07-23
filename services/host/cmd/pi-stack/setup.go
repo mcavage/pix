@@ -3,9 +3,11 @@
 // Owner decision (supersedes the in-`run` auto-offer): onboarding is a TWO-PHASE
 // thing the user opts into by NAME.
 //
-//  1. HOST phase (here, on the host): source model keys from 1Password
-//     (setupProvisionKeys), ensure the memory service, create the default pack,
-//     seed git identity, and ALWAYS provision + enable host mode when it can.
+//  1. HOST phase (here, on the host): source model keys, preferring 1Password
+//     (setupProvisionKeys), but accepting a complete existing sbx key set via
+//     --use-sbx-keys or a one-time interactive prompt; ensure the memory
+//     service, create the default pack, seed git identity, and ALWAYS provision
+//     + enable host mode when it can.
 //     Host-config (gog/knowledge/mcp) comes from FLAGS, not interactive prompts;
 //     the only interaction is pasting op:// refs on a TTY. Flag/non-TTY = CI-safe.
 //  2. AGENT phase (handoff): launch a normal `pi-stack run` whose FIRST pi
@@ -309,16 +311,39 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 		return err
 	}
 
-	// Provider keys are MANDATORY and ALWAYS sourced from 1Password (never merely
-	// from whatever sbx already has): setupProvisionKeysFn collects+validates an
+	// Provider keys PREFER 1Password (never merely trusting whatever sbx already
+	// has, on the normal path): provisionProviderKeysFn collects+validates an
 	// op:// ref for every provider (prompting once each on a TTY; printing exact
 	// `pi-stack secret set` commands otherwise), mirrors them into hostmode.env,
-	// and reconciles sbx to match. It already prints exactly what's wrong; abort
-	// setup on failure rather than hand off to a session that can't talk to a
-	// model. Only reached now that the flags themselves are known-valid.
-	reportProviderKeys(env, out)
-	if !setupProvisionKeysFn(env, in, out, interactive, opts.assumeYes) {
-		return fmt.Errorf("provider keys not fully configured — fix the above and re-run the same setup command")
+	// and reconciles sbx to match. Three ways to skip 1Password for a run: the
+	// explicit --use-sbx-keys flag, a PERSISTED mode of "sbx" from a prior
+	// successful run (cfg.ProviderKeyMode; an explicit --use-1password overrides
+	// it back to strict for this run), or (interactive only, mode unset, no ref
+	// configured yet) accepting the one-time convenience prompt. Every path still
+	// requires an EXACT successful sbx probe with all three keys present; none
+	// trusts a partial or unprobeable sbx. It already prints exactly what's
+	// wrong; abort setup on failure rather than hand off to a session that can't
+	// talk to a model. Only reached now that the flags themselves are known-valid
+	// (parseOnboardArgs already rejected --use-sbx-keys + --use-1password
+	// together).
+	keyResult := provisionProviderKeysFn(env, in, out, interactive, opts.assumeYes, opts.useSbxKeys, opts.use1Password, cfg.ProviderKeyMode)
+	if !keyResult.OK {
+		// Not always "re-run the same setup command": the fix printed above may
+		// instead be `sbx secret set` for a missing key, `pi-stack setup
+		// --use-1password`, or `pi-stack config unset provider_key_mode` — so
+		// point at that, not a single fixed rerun command.
+		return fmt.Errorf("provider keys not fully configured — follow the fix printed above")
+	}
+	// Persist the mode that just succeeded so a repeat run doesn't re-litigate
+	// the choice (an unchanged value is a harmless no-op write, skipped to avoid
+	// a pointless Save on every ordinary re-run). A save failure here is NOT
+	// swallowed: setup must never report success while claiming a mode it could
+	// not actually persist.
+	if keyResult.Mode != "" && keyResult.Mode != cfg.ProviderKeyMode {
+		cfg.ProviderKeyMode = keyResult.Mode
+		if err := cfg.Save(); err != nil {
+			return fmt.Errorf("provider keys configured, but could not persist provider_key_mode=%s: %w", keyResult.Mode, err)
+		}
 	}
 
 	changes, err := applyOnboardingResult(r, cfg, env, out, func(c *config.Config) error { return c.Save() })
@@ -367,18 +392,167 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	// Host mode: setup ALWAYS sets it up (owner decision) — provision + enable, no
 	// prompt. Its cloud keys are the same hostmode.env op:// refs written above.
 	// provision-before-enable stays, so a `pi`-less box just stays disabled.
-	setupHostMode(env, out)
+	setupHostMode(env, out, keyResult)
 	return nil
 }
 
 // providerKeyPromptAttempts caps how many times setupProvisionKeys reprompts
-// for a single provider's ref before giving up — a human who keeps mistyping
-// (or an unattended TTY feeding garbage) must not hang setup forever.
+// for a single provider's ref before giving up, since a human who keeps
+// mistyping (or an unattended TTY feeding garbage) must not hang setup
+// forever.
 const providerKeyPromptAttempts = 3
 
-// setupProvisionKeys enforces the mandatory-1Password-provider-key invariant:
-// pi-stack ALWAYS gets its model provider keys (Anthropic/OpenAI/Google) from
-// 1Password, never merely from whatever sbx happens to already have.
+// sbxKeysConveniencePrompt is the exact, single, one-time question offered on
+// an interactive TTY when sbx already has all three provider keys AND no
+// provider ref is configured yet (see probeProviderKeyRefs). It never
+// repeats within a run and never fires once any ref exists.
+const sbxKeysConveniencePrompt = "sbx already has anthropic, openai, and google. Use those keys and skip 1Password-backed host credentials? [Y/n]: "
+
+// providerKeyRefsProbeState is the tri-state result of probeProviderKeyRefs:
+// unlike this helper's bool-returning predecessor (which silently treated
+// ANY read failure as "no refs"), a genuine read error (permission denied, an
+// unreadable symlink, a real I/O failure) is distinguished from a PROVEN
+// absence, so the caller never masks a real problem as a clean "nothing
+// configured yet".
+type providerKeyRefsProbeState int
+
+const (
+	providerKeyRefsProbeNone  providerKeyRefsProbeState = iota // proven: neither file has a configured provider ref
+	providerKeyRefsProbeSome                                   // at least one provider ref is configured
+	providerKeyRefsProbeError                                  // a file could not be read/parsed safely
+)
+
+// probeProviderKeyRefs reads op-refs.env AND hostmode.env through env's
+// injected readFile and classifies whether any provider-key ref is already
+// configured, as a tri-state: ENOENT on a file means that file is absent (the
+// OTHER file might still carry the ref, or neither does — a normal, common
+// case), but any OTHER read error is NOT the same as absence and must never be
+// silently treated as "no refs configured" — the caller (the interactive
+// convenience-prompt gate) would otherwise offer to skip 1Password while
+// masking a real problem reading credentials state. This gates the interactive
+// convenience prompt: once any ref exists, the user has already made a
+// 1Password choice, so the prompt must not resurface it.
+func probeProviderKeyRefs(env shellEnv) (state providerKeyRefsProbeState, path string, err error) {
+	check := func(p string) (found bool, readErr error) {
+		if env.readFile == nil {
+			return false, nil
+		}
+		content, rerr := env.readFile(p)
+		if rerr != nil {
+			if os.IsNotExist(rerr) {
+				return false, nil
+			}
+			return false, rerr
+		}
+		for _, r := range parseOpRefs(content) {
+			if _, ok := providerKeyRefs[r.key]; ok && r.isRef && !r.placeholder {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	opPath := defaultOpRefsPath(env)
+	if found, rerr := check(opPath); rerr != nil {
+		return providerKeyRefsProbeError, opPath, rerr
+	} else if found {
+		return providerKeyRefsProbeSome, "", nil
+	}
+
+	hmPath := hostModeRefsPath(env)
+	if found, rerr := check(hmPath); rerr != nil {
+		return providerKeyRefsProbeError, hmPath, rerr
+	} else if found {
+		return providerKeyRefsProbeSome, "", nil
+	}
+	return providerKeyRefsProbeNone, "", nil
+}
+
+// missingModelProviders returns the subset of modelProviders (anthropic,
+// openai, google — order preserved) NOT present in a `sbx secret ls` output,
+// shared by acceptExistingSbxKeys and providerKeyFlow's partial-sbx gate so
+// both name the exact same missing set from the same probe output.
+func missingModelProviders(sbxOut string) []string {
+	var missing []string
+	for _, name := range modelProviders {
+		if !grepWord(sbxOut, name) {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
+
+// acceptExistingSbxKeys is the SKIP-1Password path. It requires an EXACT
+// successful sbx probe reporting ALL THREE provider keys present, never a
+// partial match, and never a fail-open on an absent/unreachable sbx (that
+// leniency belongs only to the strict flow's final probe, where sbx was never
+// the thing being trusted). It never touches op, op-refs.env, hostmode.env, or
+// the synced-ref record: existing refs and synced metadata are left exactly as
+// they are, simply unused for this run. On success it prints ONE compact,
+// honest status line about ONLY what this function itself did (the sandbox now
+// uses existing sbx keys; 1Password reconciliation was skipped) — it does NOT
+// speak for host mode's cloud-key status (local/Ollama-only vs configured):
+// setupHostMode owns that ONE status line, so the two never risk printing
+// conflicting claims about the same thing. On an incomplete sbx it names the
+// EXACT missing provider(s) from the probe output, not a vague "at least one"
+// (unwritten copy, unwatched here, at least once printed a confidently wrong
+// culprit — a set-membership check against the real probe output is the fix).
+//
+// The copy here is deliberately SOURCE-AGNOSTIC: this path fires for an
+// explicit --use-sbx-keys flag, a persisted provider_key_mode=sbx from a
+// PRIOR run, or an accepted interactive convenience prompt — in the latter
+// two cases the user typed nothing this run, so wording like "drop the flag"
+// would misname something they never passed. persisted names whether a
+// prior-run persisted mode is the reason this path is running (as opposed to
+// an explicit flag or a fresh convenience-prompt accept); only then is
+// `pi-stack config unset provider_key_mode` an actually useful thing to
+// suggest.
+func acceptExistingSbxKeys(env shellEnv, out io.Writer, persisted bool) bool {
+	sbxOut, state := probeSbxSecrets(env)
+	switch state {
+	case sbxSecretsAbsent:
+		fmt.Fprintln(out, "sbx isn't installed or reachable here, so its provider keys can't be used.")
+		fmt.Fprintln(out, "Install/configure sbx and re-run, or use: pi-stack setup --use-1password")
+		return false
+	case sbxSecretsError:
+		fmt.Fprintln(out, "could not verify sbx's provider keys (`sbx secret ls` failed).")
+		fmt.Fprintln(out, "Check sbx and re-run, or use: pi-stack setup --use-1password")
+		return false
+	}
+	if missing := missingModelProviders(sbxOut); len(missing) > 0 {
+		fmt.Fprintf(out, "sbx is missing provider key(s): %s.\n", strings.Join(missing, ", "))
+		fmt.Fprintln(out, "Choose one:")
+		for _, name := range missing {
+			fmt.Fprintf(out, "  sbx secret set -g %s -t <value>          # restore it in sbx, then re-run setup\n", name)
+		}
+		fmt.Fprintln(out, "  pi-stack setup --use-1password           # source all provider keys from 1Password instead")
+		if persisted {
+			fmt.Fprintln(out, "  pi-stack config unset provider_key_mode  # stop auto-using sbx keys on future runs")
+		}
+		return false
+	}
+	fmt.Fprintln(out, "provider keys: using existing sbx keys (anthropic, openai, google). 1Password reconciliation and host credential setup are skipped this run.")
+	return true
+}
+
+// setupProvisionKeys sources model provider keys (Anthropic/OpenAI/Google),
+// preferring 1Password but accepting a complete existing sbx key set instead:
+//
+// Skip path 1 (explicit, useSbxKeys / --use-sbx-keys): trust sbx outright,
+// skipping every op install/signin/ref/reconciliation step below. Wins even if
+// provider refs already exist, since an explicit flag is a deliberate choice
+// for THIS run, and it never deletes or touches those refs or their synced
+// metadata. Requires the exact successful sbx probe (acceptExistingSbxKeys);
+// absent/erroring/incomplete sbx fails with a clear message.
+//
+// Skip path 2 (interactive convenience, no flag): offered ONCE, only when
+// interactive, not --yes, the exact sbx probe reports all three keys present,
+// AND no provider ref is configured yet (probeProviderKeyRefs), so it
+// never nags someone who already chose 1Password. Default Enter is yes. Yes
+// re-probes (acceptExistingSbxKeys) and returns immediately on success; No
+// falls through to the strict flow below with no further retries.
+//
+// Strict flow (the fallback, and the only path when neither skip applies):
 //
 // Step 0 (hard preconditions): `op` must be installed AND have an account
 // configured. Without either, there is nothing to source keys from — fail
@@ -400,13 +574,23 @@ const providerKeyPromptAttempts = 3
 //
 // Step 2 (mirror + verify): every validated ref is written to BOTH
 // op-refs.env (sandbox) and hostmode.env (host mode) so both worlds see
-// identical keys; mirrorProviderRefsToHostMode backfills any that pre-date
-// this feature. Setup then verifies all three landed in hostmode.env.
+// identical keys — the canonical both-file write happens per ref inside Step
+// 1's loop, so there is no separate reread-and-remirror pass. Setup then
+// verifies all three landed in hostmode.env (the final membership check).
 //
 // Step 3 (reconcile sbx): reconcileProviderKeysWithSbx brings sbx to the same
-// state as the now-validated refs (missing -> set; present+same -> no-op;
-// present+changed -> ask, default no). A reconcile failure (sbx ends up
-// without a key it should have) fails setup.
+// state as the now-validated refs — fed the Step-1 SNAPSHOT (envVar -> ref +
+// envVar -> resolved value), never a reread of the files (missing -> set;
+// present+same -> no-op; present+changed -> ask, default no). A reconcile
+// failure (sbx ends up without a key it should have) fails setup.
+//
+// The whole strict flow — Step 1's initial ref reads/validation through the
+// canonical writes, the hostmode verification, and Step 3/4's sbx
+// reconciliation + synced-ref metadata — runs holding the provider-refs
+// transaction lock (withProviderRefsLock), so a concurrent `pi-stack secret
+// set`/`secret rm` in another process cannot interleave between validating a
+// ref and acting on it. Inside that section only *Locked write variants are
+// used (nested flock on the same file would deadlock).
 //
 // Step 4 (final probe): success requires ALL THREE keys are actually usable in
 // sbx — or sbx genuinely can't be probed (absent/control-plane down), in
@@ -414,18 +598,184 @@ const providerKeyPromptAttempts = 3
 // probe that finds even one key missing is a real failure, not portability.
 //
 // Never persists or prints a resolved secret value.
-// setupProvisionKeysFn is the seam setupHostPhase calls through (a package var
-// so a test can replace it with a stub that records whether it was invoked —
-// e.g. to prove that an invalid --mcp/--knowledge/--model aborts setup via
-// validateOnboardingResult BEFORE any 1Password prompting, ref writing, or sbx
-// reconciliation is ever attempted).
+//
+// setupProvisionKeysFn is the seam setupHostPhase's legacy call path used to
+// go through (a package var so a test can replace it with a stub that records
+// whether it was invoked); setupHostPhase itself now calls the typed
+// provisionProviderKeysFn instead (see below), but setupProvisionKeysFn stays
+// for the many tests exercising setupProvisionKeys directly (it never touches
+// the persisted mode, matching its unchanged bool-returning signature).
 var setupProvisionKeysFn = setupProvisionKeys
 
-func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive, assumeYes bool) bool {
+// setupProvisionKeys is the legacy, bool-returning entry point: it resolves
+// keys with NO persisted-mode awareness and NO --use-1password override,
+// exactly as before this feature. It now delegates to providerKeyFlow (the
+// shared decision core also used by provisionProviderKeys), passing
+// use1Password=false and persistedMode="" so its behavior is byte-for-byte
+// unchanged for every existing caller/test.
+func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive, assumeYes, useSbxKeys bool) bool {
+	ok, _ := providerKeyFlow(env, in, out, interactive, assumeYes, useSbxKeys, false, "")
+	return ok
+}
+
+// providerKeySetupResult is the typed outcome of resolving provider keys for
+// one setup run: whether it succeeded, and — only when it did — which mode
+// actually supplied the keys, so the caller can persist that choice. It is a
+// plain returned value, never a package global: nothing about "which mode won"
+// is stored anywhere except this struct and the config field the caller
+// chooses to save it into.
+type providerKeySetupResult struct {
+	OK   bool
+	Mode string // config.ProviderKeyModeSbx | config.ProviderKeyMode1Password | "" (OK==false, or not applicable)
+}
+
+// provisionProviderKeysFn is setupHostPhase's seam to provisionProviderKeys,
+// mirroring setupProvisionKeysFn's existing pattern: a package-level function
+// variable purely for dependency injection in tests (never mutated at
+// runtime to carry state), so a test can replace it with a stub that records
+// exactly what it was called with.
+var provisionProviderKeysFn = provisionProviderKeys
+
+// provisionProviderKeys is setupHostPhase's actual entry point: it resolves
+// the effective provider-key source for this run — an explicit override flag
+// (useSbxKeys/use1Password, mutually exclusive, validated by parseOnboardArgs)
+// wins over a persisted mode from a prior successful run, which in turn wins
+// over the on-the-fly interactive convenience prompt used only when neither
+// exists — and reports back which mode actually succeeded via the typed
+// result, so setupHostPhase can persist it.
+func provisionProviderKeys(env shellEnv, in io.Reader, out io.Writer, interactive, assumeYes, useSbxKeys, use1Password bool, persistedMode string) providerKeySetupResult {
+	ok, mode := providerKeyFlow(env, in, out, interactive, assumeYes, useSbxKeys, use1Password, persistedMode)
+	if !ok {
+		return providerKeySetupResult{}
+	}
+	return providerKeySetupResult{OK: true, Mode: mode}
+}
+
+// providerKeyFlow is the single decision core behind BOTH setupProvisionKeys
+// (the legacy bool-returning entry many existing tests exercise directly,
+// which always passes use1Password=false and persistedMode="") and
+// provisionProviderKeys (the persisted-mode-aware, typed-result entry
+// setupHostPhase actually calls). Resolution order:
+//
+//  1. useSbxKeys (explicit --use-sbx-keys, or a persisted mode of "sbx" when
+//     neither explicit flag is given): skip straight to acceptExistingSbxKeys,
+//     no prompt, exact all-three probe required.
+//  2. use1Password (explicit --use-1password, or a persisted mode of
+//     "1password" when neither explicit flag is given): skip the interactive
+//     convenience prompt entirely and go straight to the strict flow.
+//  3. Neither resolved (mode unset, no explicit flag): fall back to the
+//     original behavior — if any provider ref is already configured
+//     (probeProviderKeyRefs), go straight to strict; otherwise, on an
+//     interactive TTY with sbx reporting all three keys present, offer the
+//     one-time convenience prompt (default yes); declining, or any other
+//     case, falls through to the strict flow.
+//
+// mode is only meaningful when ok is true: "sbx" when acceptExistingSbxKeys
+// supplied the keys, "1password" when the strict flow did.
+//
+// A fourth case sits between (1) and (3): mode unset, no explicit flag, no
+// provider ref configured yet, and sbx reports SOME but not all three keys.
+// That is never silently handed to the strict flow (which would demand a
+// fresh 1Password ref even for providers sbx already has) — it fails early
+// with sbxPartialKeysGuidance, naming exactly what's missing and offering
+// the cheaper sbx fix alongside the 1Password alternative. This applies
+// whether or not the run is interactive; it's guidance, not a question.
+func providerKeyFlow(env shellEnv, in io.Reader, out io.Writer, interactive, assumeYes, useSbxKeys, use1Password bool, persistedMode string) (ok bool, mode string) {
+	effectiveSbx := useSbxKeys || (!use1Password && persistedMode == config.ProviderKeyModeSbx)
+	effectiveStrict := use1Password || (!useSbxKeys && persistedMode == config.ProviderKeyMode1Password)
+
+	if effectiveSbx {
+		// persisted (not useSbxKeys, but a prior run saved provider_key_mode=sbx)
+		// is the only case where suggesting `pi-stack config unset
+		// provider_key_mode` on failure is actually useful — an explicit flag or
+		// a fresh convenience-prompt accept never persisted anything to unset.
+		persisted := !useSbxKeys && persistedMode == config.ProviderKeyModeSbx
+		if acceptExistingSbxKeys(env, out, persisted) {
+			return true, config.ProviderKeyModeSbx
+		}
+		return false, ""
+	}
+
+	sc := bufio.NewScanner(in)
+
+	if !effectiveStrict {
+		switch state, path, rerr := probeProviderKeyRefs(env); state {
+		case providerKeyRefsProbeError:
+			fmt.Fprintf(out, "could not check whether provider-key refs are already configured (reading %s: %v) \u2014 fix that and re-run.\n", path, rerr)
+			return false, ""
+		case providerKeyRefsProbeNone:
+			sbxOut, sstate := probeSbxSecrets(env)
+			if sstate != sbxSecretsOK {
+				break // can't probe sbx here at all — nothing sbx-related to say
+			}
+			missing := missingModelProviders(sbxOut)
+			switch {
+			case len(missing) == 0:
+				// sbx already has all three: offer the one-time interactive
+				// convenience prompt. Non-interactive/--yes never asks; it falls
+				// straight through to the strict flow below, unchanged from
+				// before this feature.
+				if interactive && !assumeYes {
+					fmt.Fprint(out, sbxKeysConveniencePrompt)
+					line, gotAnswer := scanYN(sc)
+					if !gotAnswer {
+						fmt.Fprintln(out, "  no answer read (EOF) \u2014 that is not consent; re-run setup and answer y or n.")
+						return false, ""
+					}
+					yes := true // default
+					if line != "" {
+						yes = line == "y" || line == "yes"
+					}
+					if yes {
+						if acceptExistingSbxKeys(env, out, false) {
+							return true, config.ProviderKeyModeSbx
+						}
+						return false, ""
+					}
+				}
+			case len(missing) < len(modelProviders):
+				// sbx has SOME but not all three: fail early, interactive or
+				// not, rather than blindly launching the strict flow.
+				sbxPartialKeysGuidance(out, missing)
+				return false, ""
+			}
+			// len(missing) == len(modelProviders): sbx has none either — nothing
+			// sbx-related to say; fall through to the strict flow.
+		}
+	}
+
+	if runStrictProviderKeyFlow(env, sc, out, interactive, assumeYes) {
+		return true, config.ProviderKeyMode1Password
+	}
+	return false, ""
+}
+
+// sbxPartialKeysGuidance is printed when sbx already carries SOME but not all
+// three provider keys, mode is unset, and no 1Password ref is configured yet:
+// rather than silently launching the full strict 1Password flow (which would
+// demand a fresh ref even for providers sbx already has), it names exactly
+// what's missing and offers the cheaper sbx fix alongside the 1Password
+// alternative. Applies whether or not the run is interactive — this is
+// guidance, not a question.
+func sbxPartialKeysGuidance(out io.Writer, missing []string) {
+	fmt.Fprintf(out, "sbx already has some provider keys, but is missing: %s.\n", strings.Join(missing, ", "))
+	fmt.Fprintln(out, "Choose one:")
+	for _, name := range missing {
+		fmt.Fprintf(out, "  sbx secret set -g %s -t <value>          # restore it in sbx, then re-run setup\n", name)
+	}
+	fmt.Fprintln(out, "  pi-stack setup --use-1password           # source all provider keys from 1Password instead")
+}
+
+// runStrictProviderKeyFlow is setupProvisionKeys' original strict-flow body
+// (Steps 0-4 documented above), extracted verbatim so providerKeyFlow can
+// invoke it from either the legacy or persisted-mode-aware entry point
+// without duplicating the logic.
+func runStrictProviderKeyFlow(env shellEnv, sc *bufio.Scanner, out io.Writer, interactive, assumeYes bool) bool {
 	fmt.Fprintln(out, "")
+	reportProviderKeys(env, out)
 
 	if !opInstalled(env) {
-		fmt.Fprintln(out, "Model keys must come from 1Password, but the `op` CLI isn't installed.")
+		fmt.Fprintln(out, "1Password provider setup requires the `op` CLI, but it isn't installed.")
 		fmt.Fprintln(out, "Install it (https://developer.1password.com/docs/cli/) and re-run the same setup command.")
 		return false
 	}
@@ -435,9 +785,30 @@ func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive, 
 		return false
 	}
 
-	sc := bufio.NewScanner(in)
-	// resolved caches each provider's validated op-read value so reconcile
-	// (STEP 3) never pays for a second `op read` of the same ref.
+	// Hold the provider-refs transaction lock across the WHOLE flow: initial
+	// ref reads/validation, the canonical both-file writes, the hostmode
+	// verification, and the sbx reconciliation + synced-ref metadata. A lock
+	// acquisition failure fails setup honestly — never proceed unlocked.
+	ok := false
+	if lerr := withProviderRefsLock(env, func() error {
+		ok = strictProviderKeyFlowLocked(env, sc, out, interactive, assumeYes)
+		return nil
+	}); lerr != nil {
+		fmt.Fprintf(out, "  \u2717 could not lock provider refs (%s): %v — another pi-stack credential operation may hold it; fix that and re-run the same setup command.\n", providerRefsLockPath(env), lerr)
+		return false
+	}
+	return ok
+}
+
+// strictProviderKeyFlowLocked is runStrictProviderKeyFlow's transaction body
+// (Steps 1-4). Caller MUST hold the provider-refs lock; every refs-file write
+// in here goes through a *Locked variant for exactly that reason.
+func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer, interactive, assumeYes bool) bool {
+	// refs is the validated snapshot reconcile (STEP 3) works from (envVar ->
+	// op:// ref — every entry validated AND canonical-written to both files
+	// below); resolved caches each provider's validated op-read value so
+	// reconcile never pays for a second `op read` of the same ref.
+	refs := make(map[string]string, len(providerKeyRefOrder))
 	resolved := make(map[string]string, len(providerKeyRefOrder))
 	var missingNonInteractive []struct{ envVar, name string }
 
@@ -457,30 +828,32 @@ func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive, 
 			// write errors, rather than silently backfilling one file and calling
 			// that success (the bug: a ref found only in hostmode.env must not be
 			// allowed to leave op-refs.env permanently missing it).
-			if err := writeOpRefQuiet(env, p.envVar, ref); err != nil {
+			if err := writeOpRefQuietLocked(env, p.envVar, ref); err != nil {
 				fmt.Fprintf(out, "  %s \u2717 could not write ref to op-refs.env: %v\n", p.name, err)
 				return false
 			}
-			if err := writeOpRefFileQuiet(env, hostModeRefsPath(env), p.envVar, ref); err != nil {
+			if err := writeOpRefFileQuietLocked(env, hostModeRefsPath(env), p.envVar, ref); err != nil {
 				fmt.Fprintf(out, "  %s \u2717 could not write ref to hostmode.env: %v\n", p.name, err)
 				return false
 			}
 			fmt.Fprintf(out, "  %s \u2713 1Password ref configured\n", p.name)
+			refs[p.envVar] = ref
 			resolved[p.envVar] = val
 		case interactive:
 			ref, val, ok := promptProviderRef(env, sc, out, p)
 			if !ok {
 				return false
 			}
-			if err := writeOpRefQuiet(env, p.envVar, ref); err != nil {
+			if err := writeOpRefQuietLocked(env, p.envVar, ref); err != nil {
 				fmt.Fprintf(out, "  %s \u2717 could not save ref: %v\n", p.name, err)
 				return false
 			}
-			if err := writeOpRefFileQuiet(env, hostModeRefsPath(env), p.envVar, ref); err != nil {
+			if err := writeOpRefFileQuietLocked(env, hostModeRefsPath(env), p.envVar, ref); err != nil {
 				fmt.Fprintf(out, "  %s \u2717 could not save host-mode ref: %v\n", p.name, err)
 				return false
 			}
 			fmt.Fprintf(out, "  %s \u2713 saved\n", p.name)
+			refs[p.envVar] = ref
 			resolved[p.envVar] = val
 		default:
 			missingNonInteractive = append(missingNonInteractive, p)
@@ -492,14 +865,23 @@ func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive, 
 		for _, p := range missingNonInteractive {
 			fmt.Fprintf(out, "  pi-stack secret set %s op://Vault/Item/field\n", p.envVar)
 		}
+		// `pi-stack secret set` mirrors a provider key into BOTH op-refs.env AND
+		// hostmode.env, so the three commands above really are enough — no extra
+		// step needed before re-running setup.
+		fmt.Fprintln(out, "then re-run: pi-stack setup --use-1password")
 		return false
 	}
 
-	// Every ref is now validated; mirror into hostmode.env (idempotent upsert,
-	// covers refs that pre-date this feature) and verify all three landed —
-	// host mode reads ONLY hostmode.env (`op run --env-file`), never op-refs.env.
-	mirrorProviderRefsToHostMode(env)
-	if got := hostModeProviderKeys(env); !hasAllProviderKeyNames(got) {
+	// Every validated ref was already canonical-written to BOTH files above, so
+	// there is no reread-and-remirror pass here — just the final membership
+	// verification that all three landed in hostmode.env (host mode reads ONLY
+	// hostmode.env via `op run --env-file`, never op-refs.env).
+	got, kerr := hostModeProviderKeys(env)
+	if kerr != nil {
+		fmt.Fprintf(out, "  \u2717 credential state unreadable: %v\n", kerr)
+		return false
+	}
+	if !hasAllProviderKeyNames(got) {
 		// Compare the EXACT required set, not a length — hostModeProviderKeys
 		// already dedupes by provider name, but the completeness check itself
 		// must never accept "the count matches" as a proxy for "every provider is
@@ -508,7 +890,7 @@ func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive, 
 		return false
 	}
 
-	if !reconcileProviderKeysWithSbx(env, sc, out, interactive, assumeYes, resolved) {
+	if !reconcileProviderKeysWithSbx(env, sc, out, interactive, assumeYes, refs, resolved) {
 		return false
 	}
 
@@ -694,12 +1076,26 @@ func seedIdentity(env shellEnv, out io.Writer) {
 	}
 }
 
-func setupHostMode(env shellEnv, out io.Writer) {
+// runHostSetupFn and hostProvisionedFn are setupHostMode's seams to the real
+// host-mode provisioning (hostrun.go): runHostSetup does real filesystem work
+// (symlinks, settings.json) AND — whenever `pi` happens to be on the CALLING
+// machine's PATH — real `pi install npm:...` network calls; hostProvisioned
+// probes for `pi` on PATH. A test exercising setupHostMode/setupHostPhase
+// through to success MUST replace both with fakes, or it silently mutates
+// real host state and can make real network calls regardless of what's on the
+// test runner's PATH. Package vars purely for dependency injection (like
+// setupProvisionKeysFn/newIdentityMemory), never mutated to carry state.
+var (
+	runHostSetupFn    = runHostSetup
+	hostProvisionedFn = hostProvisioned
+)
+
+func setupHostMode(env shellEnv, out io.Writer, keyResult providerKeySetupResult) {
 	cfg, err := config.Load()
 	if err != nil {
 		return
 	}
-	if rerr := runHostSetup(os.Stderr); rerr != nil || !hostProvisioned() {
+	if rerr := runHostSetupFn(os.Stderr); rerr != nil || !hostProvisionedFn() {
 		if cfg.Host.Enabled {
 			cfg.Host.Enabled = false
 			if serr := cfg.Save(); serr != nil {
@@ -723,25 +1119,57 @@ func setupHostMode(env shellEnv, out io.Writer) {
 	// provisioned (the command works), AND which cloud keys it actually has. Host
 	// mode reaches cloud models ONLY through op:// refs in hostmode.env (it does not
 	// use the sandbox proxy); with none it runs Ollama-only.
-	if keys := hostModeProviderKeys(env); len(keys) > 0 {
-		fmt.Fprintf(out, "host mode: enabled + provisioned; cloud keys wired (%s). Launch: pi-stack host\n", strings.Join(keys, ", "))
+	//
+	// Wording depends on WHICH mode supplied the keys this run (keyResult.Mode),
+	// never merely on hostModeProviderKeys' syntax check: the strict (1password)
+	// flow just resolved and reconciled every ref via `op read` THIS run, so
+	// "validated" is earned; the sbx skip path (explicit --use-sbx-keys,
+	// persisted sbx mode, or the accepted convenience prompt) never touched
+	// hostmode.env at all this run — any refs it lists are simply whatever a
+	// PRIOR run configured, unverified here, so it must say "configured", not
+	// "wired"/"validated". Either way, actual validation still happens for real
+	// at every host launch via `op run --env-file` (runHostLaunch) — this is
+	// only about what the COPY may honestly claim happened just now.
+	// Tri-state: an UNREADABLE hostmode.env (permission error, symlink loop,
+	// real I/O failure) is neither "local-only" nor "configured" — either claim
+	// would be a confident guess about state we could not actually read. Host
+	// mode itself may still be enabled + provisioned (that already happened
+	// above); this function just can't truthfully finish with a keys claim, so
+	// it says so instead of guessing.
+	keys, kerr := hostModeProviderKeys(env)
+	if kerr != nil {
+		fmt.Fprintf(out, "host mode: enabled + provisioned, but credential state unreadable: %v\n", kerr)
+		fmt.Fprintln(out, "  cannot confirm whether cloud keys are configured; fix the above and re-run `pi-stack setup`.")
+		return
+	}
+	if len(keys) > 0 {
+		if keyResult.Mode == config.ProviderKeyMode1Password {
+			fmt.Fprintf(out, "host mode: enabled + provisioned; cloud keys validated this run (%s). Launch: pi-stack host\n", strings.Join(keys, ", "))
+		} else {
+			fmt.Fprintf(out, "host mode: enabled + provisioned; cloud refs configured (%s) but not verified this run (used existing sbx keys) — resolved just-in-time at launch via `op run`. Launch: pi-stack host\n", strings.Join(keys, ", "))
+		}
 	} else {
-		// Defensive only: setupHostMode runs AFTER setupProvisionKeys has already
-		// required + verified all three provider refs in hostmode.env, so a
-		// successful `pi-stack setup` never reaches this branch. It's reachable
-		// only via the separate `pi-stack host setup` entry point, which provisions
-		// host mode WITHOUT touching provider keys.
-		fmt.Fprintln(out, "host mode: enabled + provisioned, but INCOMPLETE (Ollama-only) — no 1Password key refs in hostmode.env.")
-		fmt.Fprintln(out, "  this should not happen after a successful setup; finish it by re-running the same setup command")
+		// A legitimate, expected result, not a bug: setup succeeds with no
+		// hostmode.env refs whenever it skipped 1Password this run (--use-sbx-keys,
+		// or accepting the interactive convenience prompt). sbx keys wire the
+		// sandbox, but host mode reaches cloud models ONLY through hostmode.env's
+		// op:// refs, never the sandbox proxy. Never asks for refs here or anywhere
+		// else in this same setup run; the local/Ollama-only result stands until
+		// the user configures refs themselves.
+		fmt.Fprintln(out, "host mode: enabled + provisioned; local/Ollama-only for now, no 1Password key refs in hostmode.env.")
+		fmt.Fprintln(out, "  add cloud keys later with: pi-stack secret set ANTHROPIC_API_KEY op://Vault/Item/field (repeat per provider)")
 	}
 }
 
-// reportProviderKeys prints the anthropic/openai/google/github key status.
+// reportProviderKeys prints the anthropic/openai/google/github key status. It
+// runs only on the strict (1Password) path, never when a run skipped
+// 1Password via --use-sbx-keys or the interactive convenience prompt, where it
+// would be noisy and confusing right before (or after) a one-line skip status.
 // Best-effort: if sbx is not on PATH we say so instead of guessing. It never
-// suggests a raw `sbx secret set ... -t "sk-..."` command — setup's own
-// mandatory-1Password flow (setupProvisionKeys, called right after this) is
-// what actually collects a missing ref, so pointing at a raw-secret shortcut
-// here would contradict the invariant this command enforces.
+// suggests a raw `sbx secret set ... -t "sk-..."` command; setup's own
+// 1Password flow (setupProvisionKeys, called right after this) is what
+// actually collects a missing ref, so pointing at a raw-secret shortcut here
+// would contradict the invariant this command enforces.
 func reportProviderKeys(env shellEnv, out io.Writer) {
 	fmt.Fprintln(out, "provider keys (host secrets, injected by the sandbox proxy):")
 	sbxOut, sbxOK := "", false
@@ -795,9 +1223,11 @@ func flagTakesValue(a string) bool {
 const setupUsage = `usage: pi-stack setup [DIR] [host-config flags]
 
 Actually sets you up (use 'pi-stack run' if you just want to start working):
-  1. host   — provision model keys from 1Password (wiring BOTH the sandbox and
-              host mode), ensure memory, create your default pack, and provision
-              + enable host mode ('pi-stack host') when the host can run it
+  1. host   — provision model keys (prefers 1Password, wiring BOTH the sandbox
+              and host mode; accepts a complete existing sbx key set instead
+              via --use-sbx-keys or a one-time prompt, see below), ensure
+              memory, create your default pack, and provision + enable host
+              mode ('pi-stack host') when the host can run it
   2. agent  - launch a sandbox and hand off to a ONE-SHOT upfront guide that
               names the exact workflows, explains memory and packs, reports
               grounded setup gaps, then asks for your real task
@@ -820,16 +1250,51 @@ Setup flags:
                            create) so it picks up current pack/MCP/skills and
                            receives the guided tour; harmless when absent
 
-Host-config flags (all optional). Provider keys are ALWAYS mandatory and ALWAYS
-collected/reconciled from 1Password — an ordinary value flag (--account/
---knowledge/--mcp/--model) does NOT suppress that. Only --yes/-y/--non-interactive
-(the scripted/CI path) skips every prompt:
+Host-config flags (all optional). Provider keys PREFER 1Password and are
+collected/reconciled from it by default; an ordinary value flag (--account/
+--knowledge/--mcp/--model) does NOT suppress that. --use-sbx-keys and
+--use-1password are mutually exclusive explicit overrides for THIS run; either
+one is persisted (provider_key_mode in config.toml) once it succeeds, so a
+repeat 'pi-stack setup' with no flag reuses that same choice with no prompt.
+  --use-sbx-keys            trust sbx outright; skips all 1Password checks.
+                           Requires sbx to already have all three keys
+                           (anthropic, openai, google), fails clearly if any
+                           is missing, absent, or unverifiable. Works
+                           non-interactively. Never deletes existing refs; it
+                           just doesn't use them this run. Persists
+                           provider_key_mode=sbx on success, so the NEXT
+                           'pi-stack setup' auto-skips 1Password the same way
+                           with no prompt (re-checking the exact all-three
+                           probe every time).
+  --use-1password            force the strict 1Password flow for this run even
+                           if provider_key_mode is persisted as sbx, or sbx
+                           already has all three keys (skips the convenience
+                           prompt entirely). Persists provider_key_mode=
+                           1password on success.
+  (interactive, no flag,   when provider_key_mode is UNSET and no provider ref
+   mode unset)             is configured yet, and sbx already has all three
+                           keys, setup asks ONCE: "sbx already has anthropic,
+                           openai, and google. Use those keys and skip
+                           1Password-backed host credentials? [Y/n]" (default
+                           yes). Accepting persists provider_key_mode=sbx;
+                           declining falls through to the strict flow (which
+                           persists provider_key_mode=1password on success),
+                           with no further retries this run. Once any ref
+                           exists, a mode is persisted, or setup runs
+                           non-interactively, this prompt never appears.
   --account <email>        set the Google Workspace (gog) account + enable gog
   --knowledge <path|url>   scaffold/point the global knowledge base
   --mcp <name>             enable an MCP server (repeatable; allowlisted)
   --model <ollama-model>   set the ollama-bridge model
-  --yes | --non-interactive  never prompt (CI); requires 1Password refs to already resolve
+  --yes | --non-interactive  never prompt (CI); does NOT imply --use-sbx-keys.
+                           Strict 1Password refs must already resolve unless
+                           --use-sbx-keys is also given (or provider_key_mode
+                           is already persisted as sbx)
   -h | --help              this help
+
+Inspect or reset the persisted choice any time:
+  pi-stack config get provider_key_mode
+  pi-stack config unset provider_key_mode
 
 For scripted host config with NO agent handoff, use ` + "`pi-stack onboard`" + ` instead.
 `

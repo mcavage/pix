@@ -120,6 +120,8 @@ func configValue(cfg *config.Config, key string) (string, error) {
 		return cfg.OllamaBridgeModel, nil
 	case "pack":
 		return cfg.Pack, nil
+	case "provider_key_mode":
+		return cfg.ProviderKeyMode, nil
 	case "host.enabled":
 		return strconv.FormatBool(cfg.Host.Enabled), nil
 	case "host.autonomy":
@@ -187,6 +189,9 @@ const configKeysHelp = `keys:
   ollama_bridge_model <m>   local model the sandbox exposes to pi + the router
   pack <path>               active pack dir (run mounts its skills + knowledge);
                             usually set via 'pi-stack pack use'
+  provider_key_mode <mode>  which provider-key source 'pi-stack setup' last used
+                            (sbx|1password); usually set by setup itself, not
+                            by hand
   host.enabled true|false   gate for "pi-stack host" (UNSANDBOXED; default false)
   host.autonomy <mode>      reserved for the host-guard strictness (unused yet)
   host.autoserve true|false lazy auto-start of the services daemon on run/
@@ -294,6 +299,25 @@ func applyConfigChange(cfg *config.Config, unset bool, key string, args []string
 			cfg.Pack = args[0]
 		}
 		return fmt.Sprintf("pack = %q", cfg.Pack), nil
+
+	case "provider_key_mode":
+		// setup's own persistence writes this directly (not through this CLI path),
+		// but a human/CI may still want to inspect or force-reset it, so it's a
+		// real config key like any other — validated against the same allowlist
+		// setup itself enforces (config.ValidProviderKeyMode), never an arbitrary
+		// string.
+		if unset {
+			cfg.ProviderKeyMode = ""
+		} else {
+			if len(args) != 1 {
+				return "", fmt.Errorf("config set provider_key_mode <sbx|1password>: needs exactly one value")
+			}
+			if !config.ValidProviderKeyMode(args[0]) {
+				return "", fmt.Errorf("config set provider_key_mode: %q is not valid (want sbx, 1password, or unset)", args[0])
+			}
+			cfg.ProviderKeyMode = args[0]
+		}
+		return fmt.Sprintf("provider_key_mode = %q", cfg.ProviderKeyMode), nil
 
 	case "host.enabled":
 		// The gate for `pi-stack host` (unsandboxed). Default false; unset resets

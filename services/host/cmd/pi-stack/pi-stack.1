@@ -44,12 +44,18 @@ It creates and runs the sandbox and injects provider keys through its network
 proxy.
 .TP
 .BR op (1)
-Guided setup requires the 1Password CLI, signed in.  It validates references
+Guided setup prefers the 1Password CLI, signed in.  It validates references
 for Anthropic, OpenAI, and Google, stores only those references in pi-stack,
 and reconciles the resolved values into host-managed
 .B sbx
 secrets.  Resolved keys are never written to pi-stack configuration or shown
-in its output.
+in its output.  When sbx already has all three provider keys, setup can
+instead trust them for a run and skip 1Password entirely; see
+.B \-\-use\-sbx\-keys
+under
+.B setup
+below.  A working sbx is enough to start; 1Password stays the recommended
+path for a durable, portable credential source.
 .SH QUICK START
 The shortest path from nothing to a fully configured agent:
 .PP
@@ -61,7 +67,12 @@ pi-stack setup
 .fi
 .PP
 .B setup
-configures the host, requires all three provider references, and creates the
+configures the host, sources the three provider keys (preferring 1Password;
+accepting a complete existing sbx key set via
+.B \-\-use\-sbx\-keys
+or a one-time prompt instead; see
+.B setup
+below), and creates the
 default pack every time.  On a fresh machine (no sandbox exists yet) it also
 launches the one-shot onboarding tour; if a sandbox already exists for the
 directory it is left alone by default (never force-removed, never replayed
@@ -105,7 +116,8 @@ There are two distinct kinds of secret, and they live in different places.
 Provider keys (Anthropic, OpenAI, Google, GitHub) are injected into every
 sandbox by the network proxy from
 .B sbx
-secrets stored on the host.  The model keys are sourced from 1Password:
+secrets stored on the host.  By default the model keys are sourced from
+1Password:
 .B pi-stack setup
 collects an
 .B op://
@@ -118,8 +130,15 @@ source of truth, sbx is where the proxy reads from.  Key values never appear
 in a configuration file or inside the sandbox.  You can still set an sbx
 secret by hand, but a later
 .B pi-stack setup
-will reconcile it against your 1Password refs (all three provider references
-are mandatory, so a hand-set secret alone never satisfies setup).
+will reconcile it against your 1Password refs unless you skip that with
+.B \-\-use\-sbx\-keys
+(or accept the one-time prompt offered when sbx already has all three keys
+and no ref is configured yet).  Skipping 1Password wires the sandbox from the
+existing sbx keys as-is; it never deletes a ref or synced record, it just
+doesn't use one this run, and host mode stays local/Ollama-only until
+.B op://
+refs are configured in
+.BR hostmode.env .
 .PP
 Integration credentials (for host MCP servers such as Slack) are 1Password
 references kept in
@@ -192,12 +211,12 @@ agent writes), under a confirmation gate.
 never prompts.
 .SS setup
 .TP
-.BR "pi-stack setup" " [" DIR "] [" \-\-replace "] [" \-\-account " " email "] [" \-\-knowledge " " path-or-url "] [" \-\-mcp " " name "] [" \-\-model " " ollama-model "] [" \-\-yes "]"
+.BR "pi-stack setup" " [" DIR "] [" \-\-replace "] [" \-\-use\-sbx\-keys "] [" \-\-account " " email "] [" \-\-knowledge " " path-or-url "] [" \-\-mcp " " name "] [" \-\-model " " ollama-model "] [" \-\-yes "]"
 Actually sets you up: a real, two-phase command, not a deprecated alias for
 .BR "pi-stack onboard" .
-Phase 1 (host) ALWAYS runs first, even on a repeat invocation: it collects and
-reconciles mandatory model-provider keys from 1Password (wiring both the
-sandbox and host mode — see
+Phase 1 (host) ALWAYS runs first, even on a repeat invocation: it sources
+model-provider keys, PREFERRING 1Password (wiring both the sandbox and host
+mode; see
 .BR "pi-stack secret" ),
 ensures memory, creates your default pack, and provisions + enables host mode
 when the host can run
@@ -211,7 +230,42 @@ does NOT suppress the interactive key prompts; only
 .B \-\-yes
 (alias
 .BR \-\-non-interactive )
-does.
+does.  It does NOT imply
+.BR \-\-use\-sbx\-keys .
+.PP
+Two ways to skip 1Password for a run instead, trusting sbx's existing keys.
+Both require an EXACT successful sbx probe reporting all three provider keys
+(anthropic, openai, google); an absent, erroring, or incomplete sbx fails with
+a clear message.  Neither ever deletes an existing ref or synced record; it
+simply isn't used this run.
+.RS
+.IP \(bu 2
+.B \-\-use\-sbx\-keys
+(explicit, works interactively or headless): trusts sbx outright and skips
+every 1Password install/signin/ref/reconciliation step.  Wins even if
+provider refs already exist.
+.IP \(bu 2
+Interactive convenience (no flag, offered ONCE): when sbx already has all
+three keys AND no provider ref is configured yet, setup asks
+.PP
+.RS
+sbx already has anthropic, openai, and google.  Use those keys and skip
+1Password-backed host credentials? [Y/n]:
+.RE
+.PP
+Default Enter is yes.  Declining falls through to the strict 1Password flow
+with no further retries.  Once any provider ref exists, or non-interactively,
+this prompt never appears; setup goes straight to the strict flow.
+.RE
+.PP
+Skipping 1Password wires the sandbox fully from the existing sbx keys; it does
+NOT claim setup is always cloud-ready.  Host mode still reaches cloud models
+only through
+.B op://
+refs in
+.BR hostmode.env ,
+so it stays local/Ollama-only (a legitimate result, not an error) until you
+configure those refs.  Setup never asks for refs again later in the same run.
 Phase 2 (agent) depends on the sandbox state for DIR, and only a POSITIVE
 answer acts: a confirmed-ABSENT sandbox gets a fresh launch handed off to a
 ONE-SHOT guided tour (not progressive/teach-as-you-go); a confirmed-EXISTING
@@ -778,6 +832,7 @@ Base keys are
 .BR memory_watcher_model ,
 .BR memory_embed_model ,
 .BR ollama_bridge_model ,
+.BR provider_key_mode ,
 .BR host.enabled ,
 .BR host.autonomy ,
 and
@@ -785,6 +840,13 @@ and
 .B ollama_bridge_model
 is the local model the sandbox exposes to pi and the router's local option;
 by default the memory watcher shares it.
+.B provider_key_mode
+records which provider-key source (
+.I sbx
+or
+.IR 1password )
+.B setup
+last used successfully, so a repeat run reuses that choice with no prompt.
 .B host.enabled
 gates the unsandboxed
 .B "pi-stack host"

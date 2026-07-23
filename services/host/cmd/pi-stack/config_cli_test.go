@@ -30,6 +30,50 @@ func TestApplyConfigChange_GogAccount(t *testing.T) {
 	}
 }
 
+// TestApplyConfigChange_ProviderKeyMode: set validates against the allowlist,
+// unset clears back to "".
+func TestApplyConfigChange_ProviderKeyMode(t *testing.T) {
+	cfg := defaultCfg()
+	if _, err := applyConfigChange(cfg, false, "provider_key_mode", []string{"sbx"}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderKeyMode != "sbx" {
+		t.Errorf("ProviderKeyMode = %q, want sbx", cfg.ProviderKeyMode)
+	}
+	if _, err := applyConfigChange(cfg, false, "provider_key_mode", []string{"1password"}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderKeyMode != "1password" {
+		t.Errorf("ProviderKeyMode = %q, want 1password", cfg.ProviderKeyMode)
+	}
+	if _, err := applyConfigChange(cfg, false, "provider_key_mode", []string{"bogus"}); err == nil {
+		t.Error("expected an error for an invalid provider_key_mode value")
+	}
+	if cfg.ProviderKeyMode != "1password" {
+		t.Errorf("an invalid set attempt must not mutate the field, got %q", cfg.ProviderKeyMode)
+	}
+	if _, err := applyConfigChange(cfg, true, "provider_key_mode", nil); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderKeyMode != "" {
+		t.Errorf("unset provider_key_mode: cfg=%q, want empty", cfg.ProviderKeyMode)
+	}
+}
+
+// TestConfigValue_ProviderKeyMode: `config get provider_key_mode` reads the
+// resolved field.
+func TestConfigValue_ProviderKeyMode(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.ProviderKeyMode = "sbx"
+	got, err := configValue(cfg, "provider_key_mode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "sbx" {
+		t.Errorf("configValue(provider_key_mode) = %q, want sbx", got)
+	}
+}
+
 // TestApplyConfigChange_MCP: set adds (idempotent), unset removes.
 func TestApplyConfigChange_MCP(t *testing.T) {
 	cfg := defaultCfg()

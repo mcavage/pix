@@ -13,6 +13,42 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 - Guided `pi-stack setup` now establishes a complete host: validated 1Password
   references for Anthropic, OpenAI, and Google, rational `sbx` reconciliation,
   memory, the default pack, host mode, and a one-shot in-session handoff.
+- `pi-stack setup` accepts `--use-sbx-keys`: trust a COMPLETE existing `sbx`
+  provider key set (anthropic, openai, google) instead of the strict
+  1Password flow, skipping every op install/signin/ref/reconciliation step. It
+  requires an exact successful sbx probe with all three keys (absent,
+  erroring, or incomplete sbx fails with a clear message, naming exactly which
+  provider(s) are missing), and never deletes an existing 1Password ref or
+  synced record, it just isn't used that run. `--use-1password` is the
+  mutually exclusive explicit opposite: it forces the strict flow for this
+  run even when sbx already has all three keys or a prior run persisted the
+  sbx mode. Both flags are **setup-only**; `pi-stack onboard` rejects either
+  one (onboard never provisions provider keys at all).
+  Interactively, with no flag and no persisted mode, setup also offers a
+  one-time convenience prompt when sbx already has all three keys and no
+  provider ref is configured yet (default yes); declining falls through to
+  the strict flow with no further retries, and the prompt never reappears
+  once a ref exists. `--yes` alone does NOT imply the skip.
+  Whichever source succeeds is PERSISTED as `provider_key_mode` (`sbx` or
+  `1password`) in `config.toml`, so a repeat `pi-stack setup` with no flags
+  reuses that exact choice with no prompt — a persisted `sbx` mode still
+  re-runs the exact all-three probe every time (never a cached bypass), an
+  explicit flag always overrides the persisted choice for that one run, and a
+  mode-save failure fails setup honestly rather than reporting success while
+  silently failing to remember the choice. Inspect or clear it with
+  `pi-stack config get/unset provider_key_mode`.
+  Setup no longer claims every run is always cloud-ready: skipping 1Password
+  leaves host mode local/Ollama-only until you configure `hostmode.env` refs,
+  and `setupHostMode` reports that as an expected result instead of a
+  should-not-happen message. Host-mode/setup copy also no longer overclaims
+  cloud keys as "wired": it says keys were "validated this run" only after
+  the strict 1Password flow actually resolved them, and "configured (not
+  verified this run)" when a run used existing sbx keys instead — real
+  validation still happens at every `pi-stack host` launch via `op run`.
+  `pi-stack secret set` for a provider key now mirrors the ref into
+  `hostmode.env` as well as `op-refs.env` in one step, so three `secret set`
+  commands (one per provider) really are enough to wire both the sandbox and
+  host mode, no separate step needed.
 - Read-only `memory_recall` and `memory_stats` tools let the agent inspect memory
   without exposing memory mutation as a normal tool action.
 - Long autonomous tasks resume after threshold compaction when their structured

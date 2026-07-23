@@ -320,18 +320,27 @@ func runHostSetup(errw *os.File) error {
 	}
 
 	fmt.Fprintf(errw, "pi-stack host setup: provisioned %s (harness -> %s)\n", dir, root)
-	// `pi-stack setup` ALWAYS wires all three provider-key refs into hostmode.env
-	// (the mandatory-1Password invariant); a bare `pi-stack host setup` run on its
-	// own can still land here with none yet, so report the ACTUAL state instead of
-	// unconditionally calling cloud keys "optional" — an incomplete host mode is
-	// a REQUIRED follow-up, not a shrug.
+	// Host mode reaches cloud models only through hostmode.env refs. A user may
+	// deliberately trust existing sbx keys during setup, leaving host mode local.
+	// Report the actual state without treating that choice as a setup failure.
 	env := defaultShellEnv()
-	if keys := hostModeProviderKeys(env); len(keys) > 0 {
-		fmt.Fprintf(errw, "Cloud keys: 1Password refs wired (%s).\n", strings.Join(keys, ", "))
-	} else {
-		fmt.Fprintf(errw, "Cloud keys: NOT wired — host mode is Ollama-only until refs are set (required action):\n")
-		fmt.Fprintf(errw, "  pi-stack setup   # wires all three provider keys via 1Password, sandbox + host mode alike\n")
-		fmt.Fprintf(errw, "  (or by hand: put op:// refs in %s — op run resolves them at launch, nothing is persisted)\n", config.HostRefsPath())
+	// "configured", not "wired": this only checks that hostmode.env carries a
+	// syntactically filled op:// ref per provider name — it does NOT run `op
+	// read` here, so it proves nothing about whether the ref actually resolves.
+	// Real validation happens at every host LAUNCH via `op run --env-file`
+	// (runHostLaunch); this line must never overclaim that as already done.
+	// Tri-state: an unreadable hostmode.env is neither "local-only" nor
+	// "configured" — both would be a confident guess about state we couldn't
+	// actually read. Host mode itself is already provisioned above regardless.
+	keys, kerr := hostModeProviderKeys(env)
+	switch {
+	case kerr != nil:
+		fmt.Fprintf(errw, "Cloud keys: credential state unreadable: %v\n", kerr)
+	case len(keys) > 0:
+		fmt.Fprintf(errw, "Cloud refs configured (%s); resolved just-in-time at each host launch via `op run` (not verified here).\n", strings.Join(keys, ", "))
+	default:
+		fmt.Fprintln(errw, "Cloud keys: not wired; host mode is local/Ollama-only.")
+		fmt.Fprintln(errw, "  To add cloud providers later, re-run `pi-stack setup` and choose the 1Password path.")
 	}
 	return nil
 }

@@ -45,6 +45,12 @@ type shellEnv struct {
 	// writeFile writes data to path (creating parent dirs). Nil in tests so
 	// seeding stays hermetic; defaultShellEnv wires the real os-backed writer.
 	writeFile func(path string, data []byte, perm os.FileMode) error
+	// flock serializes a cross-process critical section on lockPath (an
+	// advisory exclusive file lock). Nil in tests, which run fn directly so
+	// hermetic unit tests never create a real lock file (the lock path derives
+	// from defaultOpRefsPath, which those tests fake anyway); defaultShellEnv
+	// wires the real blocking withFlock. See withProviderRefsLock.
+	flock func(lockPath string, fn func() error) error
 	// probe runs an UNTRUSTED registered command with a hard timeout + capped
 	// output, so doctor never hangs (or floods) on a misbehaving MCP server. It
 	// returns (output, timedOut, err). Nil in tests, which fall back to run so
@@ -152,6 +158,7 @@ func defaultShellEnv() shellEnv {
 			}
 			return atomicWriteInDir(dir, filepath.Base(path), data, perm)
 		},
+		flock: withFlock,
 		probe: runWithTimeout,
 	}
 }

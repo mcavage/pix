@@ -230,6 +230,10 @@ You can also say "onboard me" to a running agent at any time.
   --yes | --non-interactive  never prompt (CI); apply what is given
   -h | --help              this help
 
+--use-sbx-keys and --use-1password belong to ` + "`pi-stack setup`" + ` (they select
+a provider-key source); onboard never provisions provider keys, so both are
+rejected here.
+
 Always ensures the memory service is enabled. Idempotent; safe to re-run.
 Provider keys are sbx secrets (proxy-injected) and are only reported here,
 never entered.
@@ -237,13 +241,15 @@ never entered.
 
 // onboardOpts is the parsed onboard flag set.
 type onboardOpts struct {
-	account   string
-	knowledge string
-	mcp       []string
-	model     string
-	apply     bool
-	assumeYes bool
-	help      bool
+	account      string
+	knowledge    string
+	mcp          []string
+	model        string
+	apply        bool
+	assumeYes    bool
+	useSbxKeys   bool
+	use1Password bool
+	help         bool
 }
 
 func parseOnboardArgs(argv []string) (onboardOpts, error) {
@@ -264,6 +270,10 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 			return o, nil
 		case a == "--apply":
 			o.apply = true
+		case a == "--use-sbx-keys":
+			o.useSbxKeys = true
+		case a == "--use-1password":
+			o.use1Password = true
 		case a == "--yes" || a == "-y" || a == "--non-interactive":
 			o.assumeYes = true
 		case a == "--account":
@@ -292,6 +302,9 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 			return o, err
 		}
 	}
+	if o.useSbxKeys && o.use1Password {
+		return o, fmt.Errorf("--use-sbx-keys and --use-1password are mutually exclusive (pick the one source for this run)")
+	}
 	return o, nil
 }
 
@@ -307,6 +320,14 @@ func runOnboardCmd(argv []string) {
 	if opts.help {
 		fmt.Print(onboardUsage)
 		return
+	}
+	if opts.useSbxKeys {
+		fmt.Fprintln(os.Stderr, "pi-stack onboard: --use-sbx-keys belongs to `pi-stack setup`; onboard does not provision provider keys")
+		os.Exit(2)
+	}
+	if opts.use1Password {
+		fmt.Fprintln(os.Stderr, "pi-stack onboard: --use-1password belongs to `pi-stack setup`; onboard does not provision provider keys")
+		os.Exit(2)
 	}
 	env := defaultShellEnv()
 
