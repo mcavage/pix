@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -1901,6 +1902,11 @@ func TestMonitorTUI_ExpandedRequestPromptBeforeDiagnostics(t *testing.T) {
 // header lines.
 func TestMonitorTUI_GroupHeadersTwoSessions(t *testing.T) {
 	m := NewModel(TUIConfig{})
+	// This test locks in "group header sits at column 0" — orthogonal to
+	// showTimestamps (on by default), which prefixes EVERY line (including
+	// group headers) with its own blank/HH:MM:SS column. Turn it off so the
+	// column-0 assertion below tests what it means to.
+	m = key(t, m, runeKey("T"))
 
 	reqA := mkProviderRequest("1", "opus-a", "ha", 1000, 1, 100, nil)
 	reqA.SandboxID, reqA.SessionID = "sbx-alpha", "sess-aaaa1111"
@@ -1978,6 +1984,10 @@ func TestMonitorTUI_GroupHeadersTwoSessions(t *testing.T) {
 // session never needs the extra indent that tells threads apart.
 func TestMonitorTUI_SingleSessionShowsHeaderNoIndent(t *testing.T) {
 	m := NewModel(TUIConfig{})
+	// See TestMonitorTUI_GroupHeadersTwoSessions: disable the (on-by-
+	// default) timestamp column so its blank prefix doesn't shift the
+	// column-0/no-indent assertions below.
+	m = key(t, m, runeKey("T"))
 	m = nRows(t, m, 3) // all rows share the (empty) default session
 
 	view := m.View()
@@ -2014,6 +2024,10 @@ func TestMonitorTUI_SingleSessionShowsHeaderNoIndent(t *testing.T) {
 // user typed) must never set it at all.
 func TestMonitorTUI_GroupHeaderShowsModelAndFirstUserPromptTitle(t *testing.T) {
 	m := NewModel(TUIConfig{})
+	// See TestMonitorTUI_GroupHeadersTwoSessions: disable the (on-by-
+	// default) timestamp column so its blank prefix doesn't defeat the
+	// strings.HasPrefix(l, "\u2500\u2500") header lookup below.
+	m = key(t, m, runeKey("T"))
 
 	first := mkProviderRequest("1", "claude-opus-4-8", "h1", 1000, 1, 100,
 		[]monitor.MessageSummary{{Role: "user", Bytes: 10, Hash: "m1", Preview: "can you send a test ping to gemini"}})
@@ -2192,5 +2206,322 @@ func TestMonitorTUI_EmacsKeybindings(t *testing.T) {
 	m = key(t, m, tea.KeyMsg{Type: tea.KeyRight})
 	if idx := selectedIdx(m); idx != before {
 		t.Errorf("left/right moved the cursor: before=%d after=%d", before, idx)
+	}
+}
+
+// --- SESSION FOCUS (solo) mode: `s` ---
+
+// sessionOfRow looks up the session key that owns id in m.rows — a small
+// helper so focus tests can assert "which session does the selected row
+// belong to" without duplicating the lookup inline.
+func sessionOfRow(m Model, id string) string {
+	for _, r := range m.rows {
+		if r.id == id {
+			return r.session
+		}
+	}
+	return ""
+}
+
+func TestMonitorTUI_FocusSoloesSelectedSessionAndBackAgain(t *testing.T) {
+	m := NewModel(TUIConfig{})
+
+	reqA1 := mkProviderRequest("1", "opus-4-8", "hash-a", 100, 0, 10, nil)
+	reqA1.SandboxID, reqA1.SessionID = "sbx-a", "sess-a"
+	reqB1 := mkProviderRequest("1", "sonnet-5", "hash-b", 100, 0, 10, nil)
+	reqB1.SandboxID, reqB1.SessionID = "sbx-b", "sess-b"
+	reqA2 := mkProviderRequest("2", "opus-4-8", "hash-a", 100, 0, 10, nil)
+	reqA2.SandboxID, reqA2.SessionID = "sbx-a", "sess-a"
+	reqB2 := mkProviderRequest("2", "sonnet-5", "hash-b", 100, 0, 10, nil)
+	reqB2.SandboxID, reqB2.SessionID = "sbx-b", "sess-b"
+
+	// Interleaved arrival: A, B, A, B — the exact "concurrent sessions
+	// interleave" shape the focus feature exists to collapse.
+	m = feed(t, m, reqA1)
+	m = feed(t, m, reqB1)
+	m = feed(t, m, reqA2)
+	m = feed(t, m, reqB2)
+
+	if got := len(m.visibleRows()); got != 4 {
+		t.Fatalf("want 4 rows before focus, got %d", got)
+	}
+	// Interleaved arrival means each session's rows form two SEPARATE
+	// contiguous runs (A, B, A, B), so a group header renders before each
+	// run — 2 for session A, 2 for session B (this incoherence, one
+	// session split across non-contiguous blocks, is exactly the problem
+	// focus exists to collapse).
+	view := m.View()
+	if strings.Count(view, "\u2500\u2500 sbx-a") != 2 || strings.Count(view, "\u2500\u2500 sbx-b") != 2 {
+		t.Fatalf("want 2 group headers per session before focus (interleaved), got:\n%s", view)
+	}
+
+	// Land the cursor on session A's row (turn 2): follow starts on the
+	// newest line (session B's turn 2), one `up` skips the group header in
+	// between and lands on session A's turn 2 row.
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyUp})
+	if sess := sessionOfRow(m, m.selectedRowID()); sess != "sbx-a/sess-a" {
+		t.Fatalf("cursor not on session A's row before focus, got session %q", sess)
+	}
+
+	m = key(t, m, runeKey("s"))
+	if m.focusSession != "sbx-a/sess-a" {
+		t.Fatalf("focusSession = %q, want sbx-a/sess-a", m.focusSession)
+	}
+	rows := m.visibleRows()
+	if len(rows) != 2 {
+		t.Fatalf("want only session A's 2 rows visible when focused, got %d", len(rows))
+	}
+	for _, r := range rows {
+		if r.session != "sbx-a/sess-a" {
+			t.Fatalf("visibleRows leaked a non-focused session row: %+v", r)
+		}
+	}
+	view = m.View()
+	if !strings.Contains(view, "opus-4-8") {
+		t.Fatalf("focused view missing session A's model, got:\n%s", view)
+	}
+	if strings.Contains(view, "sonnet-5") {
+		t.Fatalf("focused view leaked session B's rows, got:\n%s", view)
+	}
+	if strings.Contains(view, "\u2500\u2500") {
+		t.Fatalf("focused view should suppress group header lines (flat render), got:\n%s", view)
+	}
+	if !strings.Contains(view, "focus sbx-a/sess-a") {
+		t.Fatalf("top bar missing focus context, got:\n%s", view)
+	}
+
+	// A new event for the OTHER session while focused must stay filtered
+	// and must not steal follow (visibleRows still only session A's rows).
+	reqB3 := mkProviderRequest("3", "sonnet-5", "hash-b", 100, 0, 10, nil)
+	reqB3.SandboxID, reqB3.SessionID = "sbx-b", "sess-b"
+	m = feed(t, m, reqB3)
+	if got := len(m.visibleRows()); got != 2 {
+		t.Fatalf("want still only 2 rows visible (session B's new event hidden), got %d", got)
+	}
+	if strings.Contains(m.View(), "sonnet-5") {
+		t.Fatalf("new event for the unfocused session leaked into the view:\n%s", m.View())
+	}
+
+	// `s` again toggles focus OFF: every row returns, including the one
+	// that arrived while focused.
+	m = key(t, m, runeKey("s"))
+	if m.focusSession != "" {
+		t.Fatalf("focusSession = %q, want \"\" after second s", m.focusSession)
+	}
+	if got := len(m.visibleRows()); got != 5 {
+		t.Fatalf("want all 5 rows back after unfocus, got %d", got)
+	}
+	if !strings.Contains(m.View(), "sonnet-5") {
+		t.Fatalf("unfocused view missing session B's model, got:\n%s", m.View())
+	}
+}
+
+// TestMonitorTUI_FocusNoOpOnUntiedLine confirms `s` is a no-op when the
+// cursor sits on an untied line (the empty-state hint) rather than a real
+// row — there is nothing to focus on.
+func TestMonitorTUI_FocusNoOpOnUntiedLine(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	m = key(t, m, runeKey("s"))
+	if m.focusSession != "" {
+		t.Fatalf("focusSession = %q, want \"\" (no-op on the empty feed)", m.focusSession)
+	}
+}
+
+// TestMonitorTUI_EscClearsFocus covers the nice-to-have: `esc` outside
+// filtering/help also clears an active focus.
+func TestMonitorTUI_EscClearsFocus(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	req := mkProviderRequest("1", "opus-4-8", "h1", 100, 0, 10, nil)
+	req.SandboxID, req.SessionID = "sbx-a", "sess-a"
+	m = feed(t, m, req)
+	m = key(t, m, runeKey("s"))
+	if m.focusSession == "" {
+		t.Fatalf("expected focus to be set before esc")
+	}
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.focusSession != "" {
+		t.Fatalf("focusSession = %q, want \"\" after esc", m.focusSession)
+	}
+}
+
+// TestMonitorTUI_FocusFooterAndHelpAdvertiseState covers the footer's
+// compact focus segment and the help overlay's `s` line.
+func TestMonitorTUI_FocusFooterAndHelpAdvertiseState(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	if !strings.Contains(m.footerLine(), "s:focus=off") {
+		t.Fatalf("footer missing unfocused state, got: %s", m.footerLine())
+	}
+	req := mkProviderRequest("1", "opus-4-8", "h1", 100, 0, 10, nil)
+	req.SandboxID, req.SessionID = "sbx-a", "sess-a"
+	m = feed(t, m, req)
+	m = key(t, m, runeKey("s"))
+	if !strings.Contains(m.footerLine(), "[focus]") {
+		t.Fatalf("footer missing focused state, got: %s", m.footerLine())
+	}
+
+	m.showHelp = true
+	m.cursor, m.scrollTop, m.follow = 0, 0, false
+	if !strings.Contains(m.View(), "focus/unfocus the selected session") {
+		t.Fatalf("help overlay missing the `s` line, got:\n%s", m.View())
+	}
+}
+
+// TestMonitorTUI_FocusEmptyStateWhenSessionHasNoRowsInView covers the edge
+// case where the focused session's rows are no longer in the visible set
+// (e.g. all evicted) — focus stays on, and a dedicated empty-state line
+// tells the user how to get back to the full feed.
+func TestMonitorTUI_FocusEmptyStateWhenSessionHasNoRowsInView(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	req := mkProviderRequest("1", "opus-4-8", "h1", 100, 0, 10, nil)
+	req.SandboxID, req.SessionID = "sbx-a", "sess-a"
+	m = feed(t, m, req)
+	// Focus a session with no rows at all (simulating "the focused
+	// session's rows are all evicted") directly rather than churning
+	// maxRows rows through eviction.
+	m.focusSession = "sbx-a/gone"
+	view := m.View()
+	if !strings.Contains(view, "focused session has no events in view") {
+		t.Fatalf("expected the focused-empty hint, got:\n%s", view)
+	}
+	if !strings.Contains(view, "press s to unfocus") {
+		t.Fatalf("expected the unfocus hint, got:\n%s", view)
+	}
+}
+
+// --- timestamps (`T`) + model latency ---
+
+// TestMonitorTUI_ShowTimestampsOnByDefaultRendersLocalTime feeds a row with
+// a known envelope ts and asserts the rendered HH:MM:SS (local time) shows
+// up in View() with showTimestamps left at its default (on).
+func TestMonitorTUI_ShowTimestampsOnByDefaultRendersLocalTime(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	if !m.showTimestamps {
+		t.Fatalf("showTimestamps should default to true")
+	}
+	ts := time.Date(2024, 3, 14, 9, 5, 32, 0, time.Local).UnixMilli()
+	req := mkProviderRequest("1", "opus-4-8", "h1", 100, 0, 10, nil)
+	req.TS = ts
+	m = feed(t, m, req)
+
+	want := time.UnixMilli(ts).Format("15:04:05")
+	if !strings.Contains(m.View(), want) {
+		t.Fatalf("View() missing formatted timestamp %q, got:\n%s", want, m.View())
+	}
+}
+
+// TestMonitorTUI_ToggleTimestampsRemovesColumn covers `T`: pressing it
+// once (default on) hides the HH:MM:SS column; pressing it again restores
+// it.
+func TestMonitorTUI_ToggleTimestampsRemovesColumn(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	ts := time.Date(2024, 3, 14, 9, 5, 32, 0, time.Local).UnixMilli()
+	req := mkProviderRequest("1", "opus-4-8", "h1", 100, 0, 10, nil)
+	req.TS = ts
+	m = feed(t, m, req)
+
+	want := time.UnixMilli(ts).Format("15:04:05")
+	if !strings.Contains(m.View(), want) {
+		t.Fatalf("View() missing formatted timestamp before toggle, got:\n%s", m.View())
+	}
+	if !strings.Contains(m.footerLine(), "T:time=on") {
+		t.Fatalf("footer missing T:time=on, got: %s", m.footerLine())
+	}
+
+	m = key(t, m, runeKey("T"))
+	if m.showTimestamps {
+		t.Fatalf("showTimestamps still true after toggling T")
+	}
+	if strings.Contains(m.View(), want) {
+		t.Fatalf("View() still shows timestamp after T toggled off, got:\n%s", m.View())
+	}
+	if !strings.Contains(m.footerLine(), "T:time=off") {
+		t.Fatalf("footer missing T:time=off, got: %s", m.footerLine())
+	}
+
+	// Toggle back on: the column returns.
+	m = key(t, m, runeKey("T"))
+	if !strings.Contains(m.View(), want) {
+		t.Fatalf("View() missing timestamp after toggling T back on, got:\n%s", m.View())
+	}
+}
+
+// TestMonitorTUI_HelpLineAdvertisesTimestampToggle covers the `T   toggle
+// timestamps` help line.
+func TestMonitorTUI_HelpLineAdvertisesTimestampToggle(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	m.showHelp = true
+	m.cursor, m.scrollTop, m.follow = 0, 0, false
+	if !strings.Contains(m.View(), "toggle timestamps") {
+		t.Fatalf("help overlay missing the `T` line, got:\n%s", m.View())
+	}
+}
+
+// TestMonitorTUI_ResponseLatencyComputedFromRequestTS feeds a request at
+// ts=T and its matching response at ts=T+1300 and asserts the response row
+// shows the humanDuration-formatted "1.3s" latency.
+func TestMonitorTUI_ResponseLatencyComputedFromRequestTS(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	const baseTS int64 = 1_700_000_000_000
+
+	req := mkProviderRequest("1", "opus-4-8", "h1", 100, 0, 10, nil)
+	req.TS = baseTS
+	m = feed(t, m, req)
+
+	resp := mkProviderResponse("1", 200, "stop", &monitor.UsageSummary{InputTokens: 2, OutputTokens: 17})
+	resp.TS = baseTS + 1300
+	m = feed(t, m, resp)
+
+	view := m.View()
+	if !strings.Contains(view, "1.3s") {
+		t.Fatalf("View() missing computed latency 1.3s, got:\n%s", view)
+	}
+	// Sanity: the usage segment this latency is appended after is still
+	// there (the requirement is ADD, not replace).
+	if !strings.Contains(view, "in 2 out 17") {
+		t.Fatalf("View() missing usage segment alongside latency, got:\n%s", view)
+	}
+}
+
+// TestMonitorTUI_ResponseLatencyOmittedWhenRequestTSUnknown covers the
+// unknown case: a response for a turn with no recorded request TS (e.g.
+// the TUI attached mid-turn, or a synthetic event that never set ts) shows
+// no latency segment at all — never "0ms" or a bogus value.
+func TestMonitorTUI_ResponseLatencyOmittedWhenRequestTSUnknown(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	resp := mkProviderResponse("1", 200, "stop", &monitor.UsageSummary{InputTokens: 2, OutputTokens: 17})
+	resp.TS = 1_700_000_000_000
+	m = feed(t, m, resp)
+
+	idx, ok := m.rowIndex[m.rows[0].id]
+	if !ok {
+		t.Fatalf("expected the response row to be indexed")
+	}
+	if got := m.rows[idx].latencyMs; got != 0 {
+		t.Fatalf("latencyMs = %d, want 0 (no matching request ts)", got)
+	}
+	view := m.View()
+	if strings.Contains(view, "ms") || strings.Contains(view, "0s") {
+		t.Fatalf("View() rendered a bogus latency with no matching request ts, got:\n%s", view)
+	}
+}
+
+// --- humanDuration unit cases ---
+
+func TestHumanDuration(t *testing.T) {
+	cases := []struct {
+		ms   int
+		want string
+	}{
+		{0, "0ms"},
+		{820, "820ms"},
+		{999, "999ms"},
+		{1300, "1.3s"},
+		{4300, "4.3s"},
+		{62000, "1m2s"},
+	}
+	for _, c := range cases {
+		if got := humanDuration(c.ms); got != c.want {
+			t.Errorf("humanDuration(%d) = %q, want %q", c.ms, got, c.want)
+		}
 	}
 }

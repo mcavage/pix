@@ -17,6 +17,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -78,6 +79,19 @@ type tuiRow struct {
 	turnID  string
 	kind    rowKind
 
+	// ts is the row's timestamp (unix millis, client clock — envelope TS),
+	// used to render the optional HH:MM:SS column (showTimestamps/`T`). It
+	// is FIRST-SEEN/creation time: set once, when the row is first created
+	// (upsertRow preserves it across any later in-place overwrite — see
+	// its doc comment), never bumped by a later event that merely mutates
+	// the row (e.g. tool_end completing a tool_start row keeps the
+	// tool_start's ts). A response row is only ever created once, by its
+	// own provider_response event, so "first-seen" and "the response
+	// event's TS" are the same value for it. 0 means unknown (no envelope
+	// TS reached this row, e.g. a hand-built event in a test that never
+	// set it) and renders as a blank column rather than a bogus time.
+	ts int64
+
 	// request
 	model        string
 	sysHash      string
@@ -114,6 +128,13 @@ type tuiRow struct {
 	textBytes   int
 	textHash    string
 	toolCalls   []string
+	// latencyMs is the model round-trip: this response's envelope TS minus
+	// the matching provider_request's envelope TS (same session+turnId),
+	// looked up via Model.reqTS at the moment the response row is created.
+	// 0 means unknown (no matching request TS on record — e.g. the TUI
+	// attached mid-turn, or a hand-built test event with no ts) and is
+	// omitted from the rendered summary rather than shown as "0ms".
+	latencyMs int
 
 	// tool (start fields + end fields merged into one row)
 	toolID        string
@@ -188,7 +209,7 @@ type Model struct {
 	rowIndex map[string]int // row id -> index into rows, for tool_end merge + expand lookup
 
 	// prevSysHash is compared against each provider_request's
-	// SystemPromptHash to render "(unchanged)" vs "(new)" — keyed by
+	// SystemPromptHash to render "(unchanged)" vs "(changed)" — keyed by
 	// sessionKey(env) (sandboxId+"/"+sessionId), NOT global, because the
 	// default `monitor` watches every sandbox/session at once and a
 	// single shared value would let one session's hash mark another
@@ -215,6 +236,17 @@ type Model struct {
 	sessionModel map[string]string
 	sessionTitle map[string]string
 
+	// reqTS tracks the envelope TS of the most recent provider_request per
+	// turn, keyed by sess+"/"+env.TurnID (the SAME composite turn key the
+	// request/response row ids are built from, minus their ":req"/":resp"
+	// suffix) — so a provider_response landing later in the same turn can
+	// compute its model round-trip latency (response TS minus request TS)
+	// without a fresh scan of rows/rowIndex. Cleaned up in evictOldRows
+	// alongside every other per-session/per-turn map here (same class as
+	// R4-2/R1-13): when a request row is evicted, its reqTS entry goes with
+	// it, so this never accumulates one entry per turn forever.
+	reqTS map[string]int64
+
 	// sessionRowCount tracks how many currently-retained rows belong to
 	// each session (sessionKey(env)), so evictOldRows can tell when a
 	// session's LAST row is gone and it's safe to drop that session's
@@ -230,9 +262,30 @@ type Model struct {
 
 	expanded map[string]bool // row id -> expanded, toggled by `space`/`enter`
 
+	// showTimestamps (`T`, capital — lowercase `t` is showTools) renders a
+	// dim HH:MM:SS column (local time, from each row's first-seen ts) at
+	// the very start of every body line. Default TRUE: unlike the other
+	// show* toggles (which start OFF/summary-only per docs/design/
+	// monitor.md), wall-clock context is useful from the first frame, not
+	// something you opt into after noticing you need it.
+	showTimestamps bool
+
 	filtering   bool // `/` was pressed; subsequent runes build filterInput
 	filterInput string
 	filter      string // committed filter (Enter); substring match on the rendered row line
+
+	// focusSession is SESSION FOCUS (solo) mode: "" (the default) shows
+	// every session; a non-empty sessionKey(env) collapses the feed down
+	// to ONLY that session's rows (see visibleRows), so a single coherent
+	// conversation reads cleanly instead of interleaving with every other
+	// concurrent session reaching the hub. Toggled by `s`
+	// (toggleFocusAtCursor) on the session that owns the cursor's current
+	// row; `esc` also clears it (outside filtering/help). While focused,
+	// the per-session group header/indent bodyLayoutLines would otherwise
+	// render is redundant (there's only ever one session in view) and is
+	// suppressed instead; the sandbox/session/model/title context it used
+	// to carry moves to the top bar (focusHeaderLine).
+	focusSession string
 
 	showFull     bool // f
 	showModel    bool // m
@@ -301,12 +354,14 @@ func NewModel(cfg TUIConfig) Model {
 		prevSysHash:     make(map[string]string),
 		sessionModel:    make(map[string]string),
 		sessionTitle:    make(map[string]string),
+		reqTS:           make(map[string]int64),
 		sessionRowCount: make(map[string]int),
 		expanded:        make(map[string]bool),
 		showModel:       true,
 		showTools:       true,
 		showMCP:         true,
 		showContext:     true,
+		showTimestamps:  true,
 		follow:          true,
 	}
 }
@@ -499,6 +554,16 @@ func (m Model) handleKeyInner(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showThinking = !m.showThinking
 	case "c":
 		m.showContext = !m.showContext
+	case "s":
+		m.toggleFocusAtCursor()
+	case "T":
+		m.showTimestamps = !m.showTimestamps
+	case "esc":
+		// Nice-to-have: `esc` also clears session focus outside filtering/
+		// help (both of which already claim `esc` for their own purposes
+		// above, so this case only ever fires in the main keymap). A no-op
+		// when nothing is focused.
+		m.focusSession = ""
 	case "/":
 		m.filtering = true
 		m.filterInput = ""
@@ -817,6 +882,44 @@ func (m *Model) toggleExpandAtCursor() {
 	}
 }
 
+// toggleFocusAtCursor implements `s`: SESSION FOCUS (solo) mode. Toggles
+// focus on the session that owns the row at the cursor's CURRENT body line
+// (its header line, or one of its expanded detail lines) — the same
+// row-under-cursor lookup toggleExpandAtCursor uses. Toggle, not set:
+// pressing `s` again on the ALREADY-focused session clears focus (back to
+// "show all"); a no-op when the cursor sits on an untied line (empty-state
+// hint, help overlay) — nothing to focus on there. Cursor/scroll are left
+// to the existing generic clamp (clampedCursor/reconcileScroll — the
+// handleKey wrapper runs reconcileScroll right after this returns): the
+// visible set just changed size, and follow==true (the default) already
+// re-derives "the last line" fresh from whatever that set now is, which is
+// exactly "stay valid within the focused set" for the common case; a
+// detached cursor is clamped defensively the same way every other toggle
+// (f/m/t/p/x/c) already relies on.
+func (m *Model) toggleFocusAtCursor() {
+	lines := m.bodyLayoutLines()
+	if len(lines) == 0 {
+		return
+	}
+	id := lines[m.clampedCursor(len(lines))].rowID
+	if id == "" {
+		return // untied line: nothing to focus on
+	}
+	idx, ok := m.rowIndex[id]
+	if !ok {
+		return
+	}
+	sess := m.rows[idx].session
+	if sess == "" {
+		return
+	}
+	if m.focusSession == sess {
+		m.focusSession = ""
+	} else {
+		m.focusSession = sess
+	}
+}
+
 // applyEvent updates row state from one decoded monitor.Event. It type
 // switches on the concrete Go type (matching monitor's "interface +
 // concrete structs" decision, architecture.md 2.3) rather than Kind(), so
@@ -854,11 +957,17 @@ func (m *Model) applyEvent(e monitor.Event) {
 			m.prevSysHash[sess] = hash
 		}
 		id := sess + "/" + env.TurnID + ":req"
+		// reqTS records this request's envelope TS, keyed by the shared
+		// turn key (sess+turnId, no ":req" suffix), so the matching
+		// provider_response — landing later, same turn — can compute its
+		// model round-trip latency below.
+		m.reqTS[sess+"/"+env.TurnID] = env.TS
 		m.upsertRow(tuiRow{
 			id:             id,
 			session:        sess,
 			turnID:         sanitizeText(env.TurnID, false),
 			kind:           rowKindRequest,
+			ts:             env.TS,
 			model:          sanitizeText(ev.Model, false),
 			sysHash:        hash,
 			sysBytes:       ev.Summary.SystemPromptBytes,
@@ -881,11 +990,21 @@ func (m *Model) applyEvent(e monitor.Event) {
 
 	case monitor.ProviderResponse:
 		id := sess + "/" + env.TurnID + ":resp"
+		// Model round-trip latency: this response's envelope TS minus the
+		// matching request's (same turn key), looked up in reqTS — 0/unknown
+		// when there's no recorded request TS for this turn (e.g. the TUI
+		// attached mid-turn, or a hand-built event with no ts) or the clock
+		// delta comes out non-positive.
+		var latencyMs int
+		if reqTS, ok := m.reqTS[sess+"/"+env.TurnID]; ok && reqTS > 0 && env.TS > reqTS {
+			latencyMs = int(env.TS - reqTS)
+		}
 		m.upsertRow(tuiRow{
 			id:          id,
 			session:     sess,
 			turnID:      sanitizeText(env.TurnID, false),
 			kind:        rowKindResponse,
+			ts:          env.TS,
 			status:      ev.Status,
 			stopReason:  sanitizeText(ev.StopReason, false),
 			usage:       ev.Usage,
@@ -893,6 +1012,7 @@ func (m *Model) applyEvent(e monitor.Event) {
 			textBytes:   ev.TextBytes,
 			textHash:    ev.TextHash,
 			toolCalls:   sanitizeStrings(ev.ToolCalls),
+			latencyMs:   latencyMs,
 		})
 		// Same R3-2b gating as the request path: a response row the user
 		// already expanded (e.g. re-delivered/overwritten) re-resolves its
@@ -913,6 +1033,7 @@ func (m *Model) applyEvent(e monitor.Event) {
 			session: sess,
 			turnID:  sanitizeText(env.TurnID, false),
 			kind:    rowKindTool,
+			ts:      env.TS,
 			// The row KEY above keeps the raw ToolID (correlation with the
 			// later tool_end must be byte-exact and the key is never
 			// rendered); the stored/displayed copy is sanitized like every
@@ -949,6 +1070,7 @@ func (m *Model) applyEvent(e monitor.Event) {
 				session: sess,
 				turnID:  sanitizeText(env.TurnID, false),
 				kind:    rowKindTool,
+				ts:      env.TS,
 				// Sanitized for display, same as the ToolStart path (R1-8);
 				// the raw ToolID lives only in the row key.
 				toolID:        sanitizeText(ev.ToolID, false),
@@ -977,6 +1099,7 @@ func (m *Model) applyEvent(e monitor.Event) {
 			session: sess,
 			turnID:  sanitizeText(env.TurnID, false),
 			kind:    rowKindContext,
+			ts:      env.TS,
 			ctxKind: sanitizeText(ev.CtxKind, false),
 			detail:  sanitizeText(ev.Detail, false),
 			// keepNewlines=true: the expanded view renders this across
@@ -1125,7 +1248,14 @@ func (m *Model) upsertRow(row tuiRow) {
 	if idx, ok := m.rowIndex[row.id]; ok {
 		// In-place overwrite/mutate: row count for this session is
 		// unchanged, so sessionRowCount is untouched (only insertion below
-		// changes how many rows a session has retained).
+		// changes how many rows a session has retained). ts is first-seen/
+		// creation time (see the tuiRow.ts doc comment): a re-fired event
+		// for the same id (e.g. a replayed provider_request) must not bump
+		// it, so the row's original ts wins whenever one was already
+		// recorded.
+		if old := m.rows[idx].ts; old != 0 {
+			row.ts = old
+		}
 		m.rows[idx] = row
 		return
 	}
@@ -1147,7 +1277,7 @@ func (m *Model) upsertRow(row tuiRow) {
 // finding R4-2: prevSysHash otherwise keeps one entry per distinct session
 // forever, even long after every row for that session is gone). A live
 // session (one that still has at least one retained row) is never touched,
-// so delta ((unchanged) vs (new)) computation for it keeps working.
+// so delta ((unchanged) vs (changed)) computation for it keeps working.
 func (m *Model) evictOldRows() {
 	if len(m.rows) <= maxRows {
 		return
@@ -1156,6 +1286,14 @@ func (m *Model) evictOldRows() {
 	for _, r := range m.rows[:drop] {
 		delete(m.rowIndex, r.id)
 		delete(m.expanded, r.id)
+		// A dropped request row's reqTS entry goes with it (same class as
+		// R4-2/R1-13 below): otherwise reqTS keeps one entry per turn ever
+		// seen, forever, even long after the request row itself is gone.
+		// The matching response row (if retained) already computed its
+		// latencyMs at creation time, so it needs no further lookups.
+		if r.kind == rowKindRequest {
+			delete(m.reqTS, r.session+"/"+r.turnID)
+		}
 		if r.session == "" {
 			continue
 		}
@@ -1173,12 +1311,18 @@ func (m *Model) evictOldRows() {
 	}
 }
 
-// visibleRows applies the show* toggles and the active text filter, in that
-// order, preserving row order.
+// visibleRows applies the show* toggles, the active session focus, and the
+// active text filter, in that order, preserving row order.
 func (m Model) visibleRows() []tuiRow {
 	var out []tuiRow
 	for _, r := range m.rows {
 		if !m.passesToggles(r) {
+			continue
+		}
+		// SESSION FOCUS (solo) mode (`s`): only the focused session's rows
+		// pass, so a new event for any OTHER session never appears (and
+		// never steals follow) while focused.
+		if m.focusSession != "" && r.session != m.focusSession {
 			continue
 		}
 		if m.filter != "" && !strings.Contains(strings.ToLower(m.renderRow(r)), strings.ToLower(m.filter)) {
@@ -1242,6 +1386,11 @@ type bodyLine struct {
 	// NON-selectable: they own no row (rowID==""), the line cursor skips
 	// over them (skipGroupLines), and expand on one is a no-op.
 	group bool
+	// ts is the owning row's tuiRow.ts (0 for a group header or an untied
+	// line — help overlay, empty-state hint), used by renderBodyLines to
+	// render the showTimestamps HH:MM:SS column (or blanks) aligned across
+	// every line kind.
+	ts int64
 }
 
 // View renders the current state. PURE: no channel reads, no goroutines, no
@@ -1329,6 +1478,15 @@ func (m Model) bodyLayoutLines() []bodyLine {
 	}
 	rows := m.visibleRows()
 	if len(rows) == 0 {
+		if m.focusSession != "" {
+			// The focused session's rows all evicted out from under it
+			// (maxRows churn) rather than the feed being empty overall —
+			// stay focused (the user's `s` press isn't silently undone) and
+			// say so, with the way back out right there in the message.
+			return []bodyLine{
+				{text: "(focused session has no events in view — press s to unfocus)"},
+			}
+		}
 		return []bodyLine{
 			{text: "(no events yet)"},
 			{text: fmt.Sprintf("waiting for a monitor-enabled sandbox on :%d — if nothing appears, the sandbox may predate the monitor extension (rebuild image / make load)", m.hubPort())},
@@ -1348,7 +1506,11 @@ func (m Model) bodyLayoutLines() []bodyLine {
 	// 2-col gutter (no indent) with the one header line at top — it reads
 	// cleaner than indenting an entire feed under a header it can never
 	// need to distinguish from another.
-	grouped := multiSession(rows)
+	// SESSION FOCUS (solo) mode: with only one session ever in view, the
+	// group header/indent below is redundant (the top bar carries that
+	// context instead — see focusHeaderLine) and rendering it flat matches
+	// the "render like a single session" ask.
+	grouped := multiSession(rows) && m.focusSession == ""
 	indent := ""
 	if grouped {
 		indent = "    "
@@ -1356,7 +1518,7 @@ func (m Model) bodyLayoutLines() []bodyLine {
 	var lines []bodyLine
 	prevSession := ""
 	for i, r := range rows {
-		if i == 0 || r.session != prevSession {
+		if m.focusSession == "" && (i == 0 || r.session != prevSession) {
 			lines = append(lines, bodyLine{text: m.groupHeaderText(r.session), group: true})
 		}
 		prevSession = r.session
@@ -1366,10 +1528,10 @@ func (m Model) bodyLayoutLines() []bodyLine {
 		if m.expanded[r.id] {
 			caret = "\u25be "
 		}
-		lines = append(lines, bodyLine{text: indent + caret + m.renderRow(r), rowID: r.id, isHeader: true})
+		lines = append(lines, bodyLine{text: indent + caret + m.renderRow(r), rowID: r.id, isHeader: true, ts: r.ts})
 		if m.expanded[r.id] {
 			for _, dl := range m.detailLines(r) {
-				lines = append(lines, bodyLine{text: indent + dl, rowID: r.id})
+				lines = append(lines, bodyLine{text: indent + dl, rowID: r.id, ts: r.ts})
 			}
 		}
 	}
@@ -1462,6 +1624,17 @@ func (m Model) renderBodyLines() []bodyLine {
 			}
 			text = gutter + text
 		}
+		// The HH:MM:SS column goes at the VERY start of the line — before
+		// the cursor gutter/indent — so it reads as its own fixed-width
+		// column across every line kind: row headers, expanded detail
+		// lines, and group-header rules alike (see the bodyLine.ts doc
+		// comment; a line with no owning row's ts, or the help overlay,
+		// renders blanks so the column still aligns). It's part of the line
+		// like everything else, so the width-truncation pass right below
+		// still clamps it along with the rest.
+		if m.showTimestamps && !m.showHelp {
+			text = timestampPrefix(l.ts) + text
+		}
 		text = m.truncate(text)
 		switch {
 		case l.group:
@@ -1474,6 +1647,23 @@ func (m Model) renderBodyLines() []bodyLine {
 		out[i] = bodyLine{text: text, rowID: l.rowID, isHeader: l.isHeader, group: l.group}
 	}
 	return out
+}
+
+// timestampWidth is the rendered width of the showTimestamps column: an
+// 8-char "HH:MM:SS" plus one trailing space, so it reads as a fixed column
+// whether or not a given line has a known ts.
+const timestampWidth = len("15:04:05") + 1
+
+// timestampPrefix renders the showTimestamps column for one body line: the
+// row's ts (unix millis) formatted in LOCAL time as "HH:MM:SS ", or
+// timestampWidth blanks when ts is 0/unknown (a group header, an untied
+// line, or a row whose creating event carried no envelope ts) — so the
+// column stays aligned across every line kind.
+func timestampPrefix(ts int64) string {
+	if ts <= 0 {
+		return strings.Repeat(" ", timestampWidth)
+	}
+	return time.UnixMilli(ts).Format("15:04:05") + " "
 }
 
 // windowedBodyLines clamps+scrolls the body to bodyHeight lines (requirement
@@ -1554,12 +1744,14 @@ func (m Model) helpBodyLines() []bodyLine {
 		"  enter, space    expand/collapse the row owning the cursor line (▸/▾)",
 		"",
 		"toggles",
+		"  T               toggle timestamps",
 		"  f               full payloads (system prompt / message / assistant / tool bodies)",
 		"  m               model request/response rows",
 		"  t               tool rows",
 		"  p               mcp tool rows",
 		"  x               thinking-level context rows",
 		"  c               context rows",
+		"  s               focus/unfocus the selected session",
 		"",
 		"filter",
 		"  /               start typing a filter; enter commits, esc cancels",
@@ -1586,6 +1778,9 @@ func (m Model) hubPort() int {
 }
 
 func (m Model) headerLine() string {
+	if m.focusSession != "" {
+		return m.focusHeaderLine()
+	}
 	sandbox := m.cfg.Filter
 	if sandbox == "" {
 		sandbox = "all"
@@ -1593,14 +1788,57 @@ func (m Model) headerLine() string {
 	return fmt.Sprintf("pi-stack monitor  sandbox=%s  events=%d", sandbox, len(m.rows))
 }
 
+// focusHeaderLine renders the top bar while SESSION FOCUS is active
+// (m.focusSession != ""): the per-session group header this replaces
+// (groupHeaderText) is suppressed from the body entirely when focused (see
+// bodyLayoutLines), so the sandbox/session/model/title context it used to
+// carry has to live somewhere — the top bar is that somewhere now. Same
+// sandbox/session-short/model/title derivation as groupHeaderText (kept as
+// its own function rather than shared, since the surrounding punctuation
+// differs: a header rule vs. a single info line), same sanitize-again
+// defense in depth even though the map values are already sanitized.
+// events=<n> counts only the FOCUSED session's retained rows
+// (sessionRowCount), not the global len(m.rows) the unfocused header
+// shows — the number on screen should describe what's actually in view.
+func (m Model) focusHeaderLine() string {
+	sandbox, sess, _ := strings.Cut(m.focusSession, "/")
+	sandbox = sanitizeText(sandbox, false)
+	sess = sanitizeText(sess, false)
+	if sandbox == "" {
+		sandbox = "(local)"
+	}
+	if r := []rune(sess); len(r) > 8 {
+		sess = string(r[len(r)-8:])
+	}
+	if sess == "" {
+		sess = "-"
+	}
+	label := sandbox + "/" + sess
+	if model := sanitizeText(m.sessionModel[m.focusSession], false); model != "" {
+		label += " " + model
+	}
+	if title := sanitizeText(m.sessionTitle[m.focusSession], false); title != "" {
+		label += fmt.Sprintf(" \u201c%s\u201d", title)
+	}
+	return fmt.Sprintf("pi-stack monitor  focus %s  events=%d", label, m.sessionRowCount[m.focusSession])
+}
+
 func (m Model) footerLine() string {
 	follow := "[following]"
 	if !m.follow {
 		follow = "[paused]"
 	}
+	// s:focus=off/[focus]: unfocused reads like every other toggle
+	// ("key:name=state"); focused is called out with brackets like
+	// follow/paused above it, since it's a mode change that reshapes the
+	// WHOLE feed rather than a per-row display toggle.
+	focus := "s:focus=off"
+	if m.focusSession != "" {
+		focus = "[focus]"
+	}
 	return fmt.Sprintf(
-		"%s f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s  nav:\u2191\u2193  enter/space:expand  /:filter  ?:help  q:quit",
-		follow,
+		"%s %s T:time=%s f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s  nav:\u2191\u2193  enter/space:expand  /:filter  ?:help  q:quit",
+		follow, focus, onoff(m.showTimestamps),
 		onoff(m.showFull), onoff(m.showModel), onoff(m.showTools), onoff(m.showMCP),
 		onoff(m.showThinking), onoff(m.showContext))
 }
@@ -1637,7 +1875,7 @@ func (m Model) renderRow(r tuiRow) string {
 // diagnostics suffix. When the turn carried no new messages (pure re-send),
 // the row falls back to a bare `req` label with the same suffix.
 func renderRequestRow(r tuiRow) string {
-	label := "new"
+	label := "changed"
 	if r.sysUnchanged {
 		label = "unchanged"
 	}
@@ -1692,7 +1930,16 @@ func renderResponseRow(r tuiRow) string {
 	if len(r.toolCalls) > 0 {
 		head += "  \u2192 " + strings.Join(r.toolCalls, ", ")
 	}
-	return fmt.Sprintf("%s  \u00b7 resp %d  stop=%s  in %s out %s", head, r.status, stop, in, out)
+	line := fmt.Sprintf("%s  \u00b7 resp %d  stop=%s  in %s out %s", head, r.status, stop, in, out)
+	// Model round-trip latency (this response's TS minus the matching
+	// request's TS, computed in applyEvent) tacks on as one more ·-
+	// separated segment, same convention as the rest of this suffix.
+	// Omitted entirely when unknown (0) — no "0ms"/bogus latency ever
+	// renders.
+	if r.latencyMs > 0 {
+		line += "  \u00b7 " + humanDuration(r.latencyMs)
+	}
+	return line
 }
 
 func renderToolRow(r tuiRow) string {
@@ -1702,7 +1949,7 @@ func renderToolRow(r tuiRow) string {
 		if !r.ok {
 			okLabel = "FAIL"
 		}
-		base += fmt.Sprintf("  \u2192 %s %s %.1fs", okLabel, humanBytes(int64(r.resultBytes)), float64(r.durationMs)/1000)
+		base += fmt.Sprintf("  \u2192 %s %s %s", okLabel, humanBytes(int64(r.resultBytes)), humanDuration(r.durationMs))
 	} else {
 		base += "  \u2026" // pending: tool_start seen, tool_end not yet
 	}
@@ -1758,7 +2005,7 @@ func (m Model) detailLines(r tuiRow) []string {
 				block("        ", r.newMessageTexts[i])
 			}
 		}
-		label := "new"
+		label := "changed"
 		if r.sysUnchanged {
 			label = "unchanged"
 		}
@@ -1813,7 +2060,7 @@ func (m Model) detailLines(r tuiRow) []string {
 			if !r.ok {
 				okLabel = "FAIL"
 			}
-			state = fmt.Sprintf("%s %s %.1fs", okLabel, humanBytes(int64(r.resultBytes)), float64(r.durationMs)/1000)
+			state = fmt.Sprintf("%s %s %s", okLabel, humanBytes(int64(r.resultBytes)), humanDuration(r.durationMs))
 		}
 		lines = append(lines, fmt.Sprintf("      tool %s  source=%s  id=%s  %s", r.name, r.source, r.toolID, state))
 		if r.argsSummary != "" {
@@ -1986,6 +2233,30 @@ func humanCount(n int) string {
 		return fmt.Sprintf("%.1fk", float64(n)/1000)
 	}
 	return fmt.Sprintf("%d", n)
+}
+
+// humanDuration formats a millisecond duration compactly for inline display
+// (a tool row's `→ ok 2.1KB 4.3s`, a response row's model round-trip
+// latency): sub-second as e.g. "820ms" (a decimal-seconds value under 1.0
+// reads worse than a plain millisecond count), 1s-<1m as e.g. "1.3s", and
+// 1m+ as e.g. "1m2s" (no sub-second remainder at that scale — it's noise).
+// ms<=0 (unknown/not-yet-elapsed) renders "0ms" — callers that want to omit
+// an unknown duration entirely (e.g. renderResponseRow's latency segment)
+// check ms>0 themselves before calling this.
+func humanDuration(ms int) string {
+	if ms <= 0 {
+		return "0ms"
+	}
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	d := time.Duration(ms) * time.Millisecond
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	mins := int(d.Minutes())
+	secs := int(d.Seconds()) - mins*60
+	return fmt.Sprintf("%dm%ds", mins, secs)
 }
 
 var (
