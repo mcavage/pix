@@ -131,37 +131,6 @@ type Config struct {
 	// Host gates + configures `pi-stack host` (the unsandboxed escape hatch).
 	// GLOBAL, never per-profile: leaving the sandbox is a machine-level decision.
 	Host HostMode `toml:"host,omitempty"`
-
-	// ProviderKeyMode records which provider-key source `pi-stack setup` used
-	// LAST successfully, so a repeat run doesn't re-litigate the choice: "sbx"
-	// (an explicit --use-sbx-keys or the accepted convenience prompt) auto-skips
-	// 1Password with the same exact all-three probe, no prompt; "1password" (an
-	// explicit --use-1password, or a declined convenience prompt, or the plain
-	// strict flow) skips the convenience prompt on the next run. Empty is the
-	// legacy/unset state: no mode has ever been recorded, so setup falls back to
-	// its ordinary flag/prompt/refs-configured logic. Never anything but "",
-	// "sbx", or "1password" — see ValidProviderKeyMode. omitempty already makes
-	// this sparse (the unset default is the empty string, same as GogAccount).
-	ProviderKeyMode string `toml:"provider_key_mode,omitempty"`
-}
-
-// ProviderKeyModeSbx and ProviderKeyMode1Password are the two valid non-empty
-// values of ProviderKeyMode. An empty string is the third, legacy/unset state.
-const (
-	ProviderKeyModeSbx       = "sbx"
-	ProviderKeyMode1Password = "1password"
-)
-
-// ValidProviderKeyMode reports whether mode is a value ProviderKeyMode may
-// hold: "" (unset), "sbx", or "1password". Any other string is rejected by
-// callers before it ever reaches the config file.
-func ValidProviderKeyMode(mode string) bool {
-	switch mode {
-	case "", ProviderKeyModeSbx, ProviderKeyMode1Password:
-		return true
-	default:
-		return false
-	}
 }
 
 // configDir resolves the directory that holds config.toml and the broker token.

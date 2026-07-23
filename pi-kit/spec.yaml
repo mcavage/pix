@@ -1,4 +1,4 @@
-schemaVersion: "1"
+schemaVersion: "2"
 kind: sandbox
 name: pi-stack
 displayName: Pi Stack
@@ -30,108 +30,126 @@ sandbox:
       ]
 
 # Provider keys are read by the host proxy and swapped into the outbound auth
-# header — the agent inside the VM only ever sees the "proxy-managed" sentinel.
+# header — the agent inside the VM only ever sees the "proxy-managed" sentinel
+# (credentials[].apiKey.proxyManaged below). The real key never enters the VM:
+# the proxy holds it, sourced from the sbx secret store, which pi-stack seeds
+# from 1Password (`pi-stack setup`; op is required). See docs/CREDENTIALS.md.
 #
-# Uses kit-spec v1. `sbx kit validate` flags these fields as deprecated for v2
-# (credentials[].apiKey.inject[] + caps.network.allow), but v2 ALSO requires an
-# as-yet-undocumented per-credential source/service binding — omitting it makes
-# `sbx run` panic ("invalid identifier ... credentials/<sandbox>/"). v1 is what
-# every official Docker example + the contrib `pi` kit use; it validates (with
-# deprecation warnings only) and works. Revisit v2 once its schema is documented.
-network:
-  serviceDomains:
-    api.anthropic.com: anthropic
-    console.anthropic.com: anthropic
-    claude.ai: anthropic
-    api.openai.com: openai
-    generativelanguage.googleapis.com: google
-    api.github.com: github
-    uploads.github.com: github
-  serviceAuth:
-    anthropic:
-      headerName: x-api-key
-      valueFormat: "%s"
-    openai:
-      headerName: Authorization
-      valueFormat: "Bearer %s"
-    google:
-      # Gemini authenticates with the raw key in the x-goog-api-key header
-      # (no Bearer prefix), unlike OpenAI's Authorization header.
-      headerName: x-goog-api-key
-      valueFormat: "%s"
-    github:
-      headerName: Authorization
-      valueFormat: "Bearer %s"
-  allowedDomains:
-    - registry.npmjs.org
-    - nodejs.org
-    - github.com
-    - api.github.com
-    - uploads.github.com
-    - codeload.github.com
-    - objects.githubusercontent.com
-    - raw.githubusercontent.com
-    - pi.dev
-    # pi-web-access web_search backends (else the call is blocked → hangs). Exa
-    # is the zero-config default; the rest are its fallbacks. Add a provider key
-    # (EXA_API_KEY / GEMINI_API_KEY / PERPLEXITY_API_KEY) for reliable results.
-    - api.exa.ai
-    - mcp.exa.ai
-    - generativelanguage.googleapis.com
-    - api.perplexity.ai
-    # Host Ollama (:11434), the fourth inference provider. The in-sandbox
-    # ollama-bridge extension forwards localhost:11434 here over node:http (pi's
-    # fetch can't reach host.docker.internal through the sbx proxy; see the
-    # extension). The memory loop's watcher + embeddings also run against host
-    # Ollama. Optional; cloud models work without it.
-    - host.docker.internal:11434
-    - localhost:11434
-    # Host memory service (the recall extension calls it over JSON-RPC). The store
-    # and its embeddings live on the host; the sandbox only needs this URL. Host-
-    # internal traffic bypasses the proxy MITM (see NO_PROXY in the Dockerfile);
-    # recall is skipped if the service isn't running. Same pattern the private overlay kit
-    # uses to reach host services on host.docker.internal.
-    - host.docker.internal:11435
-    - localhost:11435
-    # Host knowledge service (:11436). Same pattern as memory above: the recall
-    # extension calls it over JSON-RPC; the host store indexes a git-mounted OKF
-    # bundle (we ship the pointer to the bundle, not its content) and answers
-    # lookups. Host-internal, bypasses the proxy MITM; skipped if not running.
-    - host.docker.internal:11436
-    - localhost:11436
-    # A private overlay that needs a host service (e.g. a CLI exec-proxy) adds its
-    # own port to allowedDomains from the overlay mixin kit — the public kit stays
-    # free of company-specific host services. See docs/OVERLAY.md.
-    # Note: local stdio MCP servers (e.g. slack) are NOT here. They're registered
-    # with sbx (`sbx mcp add … --command pi-stack-host --args slack`), run by the
-    # MCP gateway and reached through it — not over host.docker.internal — so they
-    # need no allowlist entry.
+# kit-spec v2. Each credential is a `service` (the sbx secret-store identifier)
+# plus an apiKey block: apiKey.name is the in-VM env var (set to the sentinel),
+# apiKey.inject[] tells the proxy which outbound domains to rewrite and with
+# which header/format. Egress is separate: a domain the proxy injects into must
+# ALSO be allowed for egress under caps.network.allow, so the credential API
+# hosts are listed there too. The per-credential `service:` is required — without
+# it `sbx run` panics ("invalid identifier ... credentials/<sandbox>/").
+caps:
+  network:
+    allow:
+      # Cloud model + GitHub API hosts the proxy injects credentials into (see
+      # credentials[] below). Listed here because inject sets the auth header, but
+      # egress is gated separately by this allowlist.
+      - api.anthropic.com
+      - console.anthropic.com
+      - claude.ai
+      - api.openai.com
+      - api.github.com
+      - uploads.github.com
+      # Package registries + git fetch.
+      - registry.npmjs.org
+      - nodejs.org
+      - github.com
+      - codeload.github.com
+      - objects.githubusercontent.com
+      - raw.githubusercontent.com
+      - pi.dev
+      # pi-web-access web_search backends (else the call is blocked → hangs). Exa
+      # is the zero-config default; the rest are its fallbacks. Add a provider key
+      # (EXA_API_KEY / GEMINI_API_KEY / PERPLEXITY_API_KEY) for reliable results.
+      - api.exa.ai
+      - mcp.exa.ai
+      - generativelanguage.googleapis.com
+      - api.perplexity.ai
+      # Host Ollama (:11434), the fourth inference provider. The in-sandbox
+      # ollama-bridge extension forwards localhost:11434 here over node:http (pi's
+      # fetch can't reach host.docker.internal through the sbx proxy; see the
+      # extension). The memory loop's watcher + embeddings also run against host
+      # Ollama. Optional; cloud models work without it.
+      - host.docker.internal:11434
+      - localhost:11434
+      # Host memory service (the recall extension calls it over JSON-RPC). The store
+      # and its embeddings live on the host; the sandbox only needs this URL. Host-
+      # internal traffic bypasses the proxy MITM (see NO_PROXY in the Dockerfile);
+      # recall is skipped if the service isn't running. Same pattern the private overlay kit
+      # uses to reach host services on host.docker.internal.
+      - host.docker.internal:11435
+      - localhost:11435
+      # Host knowledge service (:11436). Same pattern as memory above: the recall
+      # extension calls it over JSON-RPC; the host store indexes a git-mounted OKF
+      # bundle (we ship the pointer to the bundle, not its content) and answers
+      # lookups. Host-internal, bypasses the proxy MITM; skipped if not running.
+      - host.docker.internal:11436
+      - localhost:11436
+      # A private overlay that needs a host service (e.g. a CLI exec-proxy) adds its
+      # own domain to caps.network.allow from the overlay mixin kit — the public kit
+      # stays free of company-specific host services. See docs/OVERLAY.md.
+      # Note: local stdio MCP servers (e.g. slack) are NOT here. They're registered
+      # with sbx (`sbx mcp add … --command pi-stack-host --args slack`), run by the
+      # MCP gateway and reached through it — not over host.docker.internal — so they
+      # need no allowlist entry.
 
+# Each provider key: `service` is the sbx secret-store identifier (pi-stack seeds
+# it from 1Password); apiKey.name is the in-VM env var, set to the proxy-managed
+# sentinel; inject[] rewrites the auth header on the listed outbound domains.
 credentials:
-  sources:
-    anthropic:
-      env:
-        - ANTHROPIC_API_KEY
-    github:
-      env:
-        - GH_TOKEN
-    google:
-      env:
-        - GEMINI_API_KEY
-    openai:
-      env:
-        - OPENAI_API_KEY
+  - service: anthropic
+    apiKey:
+      name: ANTHROPIC_API_KEY
+      proxyManaged: true
+      inject:
+        - domain: api.anthropic.com
+          header: x-api-key
+          format: "%s"
+        - domain: console.anthropic.com
+          header: x-api-key
+          format: "%s"
+        - domain: claude.ai
+          header: x-api-key
+          format: "%s"
+  - service: openai
+    apiKey:
+      name: OPENAI_API_KEY
+      proxyManaged: true
+      inject:
+        - domain: api.openai.com
+          header: Authorization
+          format: "Bearer %s"
+  - service: google
+    apiKey:
+      name: GEMINI_API_KEY
+      proxyManaged: true
+      inject:
+        # Gemini authenticates with the raw key in the x-goog-api-key header
+        # (no Bearer prefix), unlike OpenAI's Authorization header.
+        - domain: generativelanguage.googleapis.com
+          header: x-goog-api-key
+          format: "%s"
+  - service: github
+    apiKey:
+      name: GH_TOKEN
+      proxyManaged: true
+      inject:
+        - domain: api.github.com
+          header: Authorization
+          format: "Bearer %s"
+        - domain: uploads.github.com
+          header: Authorization
+          format: "Bearer %s"
 
 environment:
   variables:
     # pi runs on Node, which uses its own bundled CA store (not the system one),
     # so it must be told to also trust the proxy's intercepting CA.
     NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/proxy-ca.crt
-  proxyManaged:
-    - ANTHROPIC_API_KEY
-    - GEMINI_API_KEY
-    - GH_TOKEN
-    - OPENAI_API_KEY
 
 # The sandbox proxy terminates TLS and presents its own CA (delivered at runtime
 # via $PROXY_CA_CERT_B64). The stock template images trust it out of the box; a

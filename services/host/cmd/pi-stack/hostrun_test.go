@@ -466,7 +466,7 @@ func TestHostAgentDir_HonorsXDGStateHome(t *testing.T) {
 func TestHostGateMessage(t *testing.T) {
 	msg := hostGateMessage()
 	for _, want := range []string{
-		"pi-stack config set host.enabled true",
+		"pi-stack host setup",
 		"no sandbox",
 		"no network fence",
 		"real credentials",

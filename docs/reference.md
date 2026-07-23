@@ -282,31 +282,18 @@ disk, and the session prints a visible red banner so you can't mistake it for
 a normal run. Use it narrowly, for the two cases above, not as a default
 runtime.
 
-`pi-stack setup` prefers 1Password for cloud keys, but it's not mandatory: if
-`sbx` already has all three provider keys, pass `--use-sbx-keys` (or accept
-the one-time prompt setup offers in that case) to wire the sandbox from them
-instead. `--use-1password` is the mutually exclusive explicit opposite,
-forcing the strict flow for one run. Both flags are setup-only —
-`pi-stack onboard` rejects either, since onboard never provisions provider
-keys. Skipping 1Password never deletes an existing ref; it just isn't used
-for that run.
+`pi-stack setup` sources cloud keys from 1Password, and it's mandatory: the
+`op` CLI must be installed and signed in, or setup fails with the exact fix.
+1Password is the only provider-key source — the old `--use-sbx-keys` /
+`--use-1password` flags and the persisted `provider_key_mode` are gone (both
+flags now error). setup validates one `op://` ref per provider, mirrors them
+into `hostmode.env`, and reconciles them into `sbx`. `pi-stack onboard` never
+provisions provider keys.
 
-Whichever source succeeds is persisted as `provider_key_mode` (`sbx` or
-`1password`) in `config.toml`, so a repeat `pi-stack setup` with no flags
-reuses that exact choice with no prompt — a persisted `sbx` mode still
-re-checks the exact all-three sbx probe every time, never a cached bypass.
-An explicit flag always overrides the persisted choice for that one run.
-Inspect or reset it with `pi-stack config get provider_key_mode` /
-`pi-stack config unset provider_key_mode`.
-
-Host mode reaches cloud models only through `op://` refs in `hostmode.env`,
-so skipping 1Password leaves host mode local/Ollama-only until you configure
-those refs. That's an honest, expected result, not an error. Setup's own
-copy is careful about what it claims happened: cloud keys are reported as
-"validated this run" only when the strict 1Password flow actually resolved
-them via `op read`; a run that used existing sbx keys instead says
-"configured (not verified this run)" — real validation always happens for
-real at every `pi-stack host` launch via `op run --env-file`.
+Host mode reaches cloud models through the same `op://` refs in `hostmode.env`
+that setup writes; real validation happens again at every `pi-stack host`
+launch via `op run --env-file`. Cloud keys are reported "validated this run"
+because setup just resolved them via `op read`.
 
 **Limits.** No sandbox means no network fence, no throwaway teardown, and no
 subagent fan-out. If you find yourself reaching for `pi-stack host` as your

@@ -110,8 +110,9 @@ func TestReadGitIdentity(t *testing.T) {
 		},
 	}
 	id := readGitIdentity(env)
-	if id.Name != "Mark C" || id.Email != "mark@example.com" {
-		t.Errorf("git identity not read: %+v", id)
+	// First name only, no email: "Mark C" -> "Mark", email deliberately not read.
+	if id.Name != "Mark" {
+		t.Errorf("git identity not read as first name: %+v", id)
 	}
 	// Untrusted value: control chars / injection payload / newline are sanitized.
 	dirty := shellEnv{run: func(_ string, args ...string) (string, error) {
@@ -124,7 +125,7 @@ func TestReadGitIdentity(t *testing.T) {
 		t.Errorf("identity not sanitized: %q", got)
 	}
 	// No git / nil run -> empty, no panic.
-	if got := readGitIdentity(shellEnv{}); got.Name != "" || got.Email != "" {
+	if got := readGitIdentity(shellEnv{}); got.Name != "" {
 		t.Errorf("expected empty identity with no run, got %+v", got)
 	}
 }

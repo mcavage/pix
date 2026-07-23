@@ -119,7 +119,7 @@ func TestSetupProvisionKeys_OpNotInstalled_FailsWithExactFix(t *testing.T) {
 		readFile: func(string) (string, error) { return "", os.ErrNotExist },
 	}
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false, false) {
+	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
 		t.Fatal("must fail when op is not installed")
 	}
 	if !strings.Contains(out.String(), "1Password provider setup requires") || !strings.Contains(out.String(), "op` CLI, but it isn't installed") {
@@ -145,7 +145,7 @@ func TestSetupProvisionKeys_OpNotSignedIn_FailsWithExactFix(t *testing.T) {
 		},
 	}
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false, false) {
+	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
 		t.Fatal("must fail when op has no account configured")
 	}
 	if !strings.Contains(out.String(), "op signin") {
@@ -178,7 +178,7 @@ func TestSetupProvisionKeys_RefsPresent_ConfirmedNotRepastedNoResync(t *testing.
 		}
 	}
 	var out bytes.Buffer
-	if !setupProvisionKeys(env, strings.NewReader(""), &out, true, false, false) {
+	if !setupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
 		t.Fatalf("expected success, got:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), "paste a 1Password ref") {
@@ -203,7 +203,7 @@ func TestSetupProvisionKeys_ExistingRefBroken_FailsNoPersist(t *testing.T) {
 	refs := allRefs("", "", "")
 	env, _ := stepEnv(t, refs, "anthropic openai google", "") // op read resolves EMPTY
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false, false) {
+	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
 		t.Fatal("a broken existing ref must fail setup")
 	}
 	if !strings.Contains(out.String(), "does not resolve") {
@@ -227,7 +227,7 @@ func TestSetupProvisionKeys_MissingRefs_InteractivePromptsCollectsAndPersistsBot
 	env, calls := stepEnv(t, "", "", "sk-val")
 	in := strings.NewReader("op://V/anthropic/key\nop://V/openai/key\nop://V/gemini/key\n")
 	var out bytes.Buffer
-	if !setupProvisionKeys(env, in, &out, true, false, false) {
+	if !setupProvisionKeys(env, in, &out, true, false) {
 		t.Fatalf("expected success, got:\n%s", out.String())
 	}
 	if n := strings.Count(out.String(), "paste a 1Password ref"); n != 3 {
@@ -263,7 +263,7 @@ func TestSetupProvisionKeys_InvalidThenValidRef_Reprompts(t *testing.T) {
 	env, _ := stepEnv(t, "", "", "sk-val")
 	in := strings.NewReader("not-a-ref\nop://V/anthropic/key\nop://V/openai/key\nop://V/gemini/key\n")
 	var out bytes.Buffer
-	if !setupProvisionKeys(env, in, &out, true, false, false) {
+	if !setupProvisionKeys(env, in, &out, true, false) {
 		t.Fatalf("expected eventual success, got:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "not a valid op:// ref") {
@@ -279,7 +279,7 @@ func TestSetupProvisionKeys_InvalidThenValidRef_Reprompts(t *testing.T) {
 func TestSetupProvisionKeys_EOFDuringPrompt_Fails(t *testing.T) {
 	env, _ := stepEnv(t, "", "", "sk-val")
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false, false) {
+	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
 		t.Fatal("EOF must fail setup, not silently skip the provider")
 	}
 	if !strings.Contains(out.String(), "no input") || !strings.Contains(out.String(), "required") {
@@ -292,7 +292,7 @@ func TestSetupProvisionKeys_TooManyInvalidAttempts_Fails(t *testing.T) {
 	env, _ := stepEnv(t, "", "", "sk-val")
 	in := strings.NewReader("nope\nnope\nnope\nnope\n")
 	var out bytes.Buffer
-	if setupProvisionKeys(env, in, &out, true, false, false) {
+	if setupProvisionKeys(env, in, &out, true, false) {
 		t.Fatal("must fail after too many invalid attempts")
 	}
 	if !strings.Contains(out.String(), "too many invalid attempts") {
@@ -308,7 +308,7 @@ func TestSetupProvisionKeys_TooManyInvalidAttempts_Fails(t *testing.T) {
 func TestSetupProvisionKeys_MissingRefs_NonInteractive_ExactCommandsNoPrompt(t *testing.T) {
 	env, _ := stepEnv(t, "", "", "sk-val")
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false, false) {
+	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
 		t.Fatal("missing refs non-interactively must fail")
 	}
 	if strings.Contains(out.String(), "paste a 1Password ref") {
@@ -339,7 +339,7 @@ func TestReconcile_SbxMissingOneKey_SetsAndRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, false, false) {
+	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
 		t.Fatalf("expected success, got:\n%s", out.String())
 	}
 	joined := strings.Join(*calls, "\n")
@@ -366,7 +366,7 @@ func TestReconcile_SbxPresentSameRef_NoOp(t *testing.T) {
 		}
 	}
 	var out bytes.Buffer
-	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, false, false) {
+	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
 		t.Fatalf("expected success, got:\n%s", out.String())
 	}
 	joined := strings.Join(*calls, "\n")
@@ -400,7 +400,7 @@ func TestReconcile_SbxPresentChangedRef_OverwritePrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader("n\n"), &out, true, false, false) {
+	if setupProvisionKeys(env, strings.NewReader("n\n"), &out, true, false) {
 		t.Fatalf("a declined batch overwrite must fail setup (1Password is the source of truth), got:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "Replace these sbx values from 1Password so sandbox and host mode use the same source? [Y/n]:") {
@@ -431,7 +431,7 @@ func TestReconcile_SbxPresentChangedRef_OverwritePrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out2 bytes.Buffer
-	if !setupProvisionKeys(env2, strings.NewReader("\n"), &out2, true, false, false) {
+	if !setupProvisionKeys(env2, strings.NewReader("\n"), &out2, true, false) {
 		t.Fatalf("expected success (default answer is YES), got:\n%s", out2.String())
 	}
 	joined2 := strings.Join(*calls2, "\n")
@@ -461,7 +461,7 @@ func TestReconcile_MultipleChangedRefs_OneBatchedPrompt(t *testing.T) {
 		}
 	}
 	var out bytes.Buffer
-	if !setupProvisionKeys(env, strings.NewReader("y\n"), &out, true, false, false) {
+	if !setupProvisionKeys(env, strings.NewReader("y\n"), &out, true, false) {
 		t.Fatalf("expected success, got:\n%s", out.String())
 	}
 	if n := strings.Count(out.String(), "Replace these sbx values from 1Password"); n != 1 {
@@ -492,7 +492,7 @@ func TestSetupProvisionKeys_NonInteractive_MissingSyncsButChangedRefFailsWithRer
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false, false) {
+	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
 		t.Fatalf("a changed ref sbx wasn't allowed to replace (no --yes) must fail setup, got:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), "?") {
@@ -528,7 +528,7 @@ func TestSetupProvisionKeys_NonInteractiveAssumeYes_Overwrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, true, false) {
+	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, true) {
 		t.Fatalf("expected success, got:\n%s", out.String())
 	}
 	joined := strings.Join(*calls, "\n")
@@ -558,7 +558,7 @@ func TestSetupProvisionKeys_HostModeMissingRef_Fails(t *testing.T) {
 		return realWrite(p, d, m)
 	}
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false, false) {
+	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
 		t.Fatal("must fail when hostmode.env doesn't end up with all three refs")
 	}
 	if !strings.Contains(out.String(), "hostmode.env") {
@@ -580,7 +580,7 @@ func TestSetupProvisionKeys_SbxUnavailable_FailsOpen(t *testing.T) {
 		return "/usr/bin/" + name, nil
 	}
 	var out bytes.Buffer
-	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, false, false) {
+	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
 		t.Error("must fail open (true) when sbx can't be probed, refs are still fully valid")
 	}
 }
@@ -610,7 +610,7 @@ func TestSetupProvisionKeys_FinalProbeRequiresAllThree(t *testing.T) {
 		return "", nil
 	}
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false, false) {
+	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
 		t.Fatal("must fail when the final probe can't confirm all three keys")
 	}
 }
@@ -649,9 +649,9 @@ func TestSetupProvisionKeys_FinalProbe_SbxCommandFails_FailsClosed(t *testing.T)
 			return "sk-val", nil
 		case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
 			calls++
-			// The first N calls succeed (reportProviderKeys' up-front status report,
-			// then reconcile's own probe); only the LAST call (the FINAL probe) fails.
-			if calls <= 2 {
+			// The first call (reconcile's own probe) succeeds; only the LAST call
+			// (the FINAL probe) fails.
+			if calls <= 1 {
 				return "anthropic\nopenai\ngoogle\n", nil
 			}
 			return "", fmt.Errorf("control plane down") // the FINAL probe fails
@@ -661,7 +661,7 @@ func TestSetupProvisionKeys_FinalProbe_SbxCommandFails_FailsClosed(t *testing.T)
 		return "", nil
 	}
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false, false) {
+	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
 		t.Fatal("a failing final `sbx secret ls` must fail setup, not fail open")
 	}
 	if !strings.Contains(out.String(), "could not verify sbx has all three provider keys") {
@@ -726,7 +726,7 @@ func TestReconcile_SameRefRotatedValue_TreatedAsChanged(t *testing.T) {
 	var out bytes.Buffer
 	// Non-interactive with --yes: no prompt needed, but the changed (rotated)
 	// value must still be re-synced to sbx.
-	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, true, false) {
+	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, true) {
 		t.Fatalf("expected success, got:\n%s", out.String())
 	}
 	joined := strings.Join(*calls, "\n")
@@ -757,7 +757,7 @@ func TestReconcile_SameRefRotatedValue_PromptsAndDeclineFails(t *testing.T) {
 		}
 	}
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader("n\n"), &out, true, false, false) {
+	if setupProvisionKeys(env, strings.NewReader("n\n"), &out, true, false) {
 		t.Fatalf("declining a rotated-value overwrite must fail setup, got:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "Replace these sbx values from 1Password") {
@@ -788,7 +788,7 @@ func TestReconcile_LegacyRecordNoDigest_TreatedAsUnknownNotSame(t *testing.T) {
 		}
 	}
 	var out bytes.Buffer
-	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false, false) {
+	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
 		t.Fatalf("a legacy record without --yes must fail setup (not silently treated as same), got:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "kept sbx's existing value for") {
@@ -812,7 +812,7 @@ func TestReconcile_LegacyRecordNoDigest_TreatedAsUnknownNotSame(t *testing.T) {
 		}
 	}
 	var out2 bytes.Buffer
-	if !setupProvisionKeys(env2, strings.NewReader(""), &out2, false, true, false) {
+	if !setupProvisionKeys(env2, strings.NewReader(""), &out2, false, true) {
 		t.Fatalf("expected success with --yes, got:\n%s", out2.String())
 	}
 	joined2 := strings.Join(*calls2, "\n")

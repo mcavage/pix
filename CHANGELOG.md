@@ -8,6 +8,58 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Fixed
+
+- Provider-key op:// refs are stored with **literal spaces** again. An earlier
+  change percent-encoded spaces (`Anthropic%20API%20Key`) on a false premise;
+  op 2.35.0's `op read` AND `op run --env-file` both reject `%20`, so any
+  1Password item whose name has a space (very common) failed to resolve and
+  `pi-stack setup` aborted. Existing encoded refs self-heal: they're decoded on
+  read and rewritten literal on the next write.
+
+### Changed
+
+- `pi-stack setup` no longer provisions or enables **host mode** (the unsandboxed
+  escape hatch). It was noisy (it needs `pi` on PATH, which sandbox-only users
+  don't have) and only relevant to some people. Host mode is now opt-in via a
+  single command: `pi-stack host setup` now PROVISIONS **and** enables it (when
+  provisioning succeeds), so the separate `config set host.enabled true` step is
+  gone.
+- `pi-stack setup` no longer prints the redundant up-front sbx provider-key
+  status block; the 1Password flow reports each provider's ref + sync itself.
+- Identity seeded from git config is now **first name only** — no surname, no
+  email. It's recalled into every session, so it carries the minimum to greet.
+  (`readGitIdentity` no longer reads `user.email`; memory stores one first-name
+  fact instead of name + email.)
+
+### Changed (breaking)
+
+- **Kit migrated to kit-spec v2** (`pi-kit/spec.yaml`, `schemaVersion: "2"`).
+  Credentials are now a `credentials[]` list of `service` + `apiKey`
+  (name/proxyManaged/inject[]); egress is `caps.network.allow`. Replaces the v1
+  `network.serviceDomains`/`serviceAuth`/`allowedDomains` + `credentials.sources`
+  + `environment.proxyManaged`. Injection is unchanged (proxy-managed sentinels;
+  all four providers verified). **Requires a recent `sbx` nightly** (v0.37+); the
+  per-credential `service:` is mandatory or `sbx run` panics. Overlay/mixin kits
+  should move their network rules to `caps.network.allow` too.
+- **1Password is now the only provider-key source; the `op` CLI is required.**
+  Removed `pi-stack setup --use-sbx-keys` / `--use-1password` (both now error),
+  the one-time "use existing sbx keys?" convenience prompt, and the persisted
+  `provider_key_mode` config key (dropped from `config.toml`, `config
+  get/set/unset`). `pi-stack setup` fails without `op` installed + signed in.
+  `pi-stack run` still launches when a usable key is already in `sbx` (op is
+  required at setup, not re-checked every run). `install.sh` now warns when `op`
+  or `sbx` is missing.
+
+### Known issues
+
+- On `sbx` v0.37.0-rc1 the cosmetic `credential ... discovered but no domains
+  allowed by your bindings; not injecting` line prints once per stored provider
+  key even though injection works (verified: cloud providers return HTTP 200
+  through the proxy). Hand-written `credentials.yaml` bindings are not honored by
+  rc1, so it can't be silenced from our side; left visible and filed upstream
+  (see `docs/upstream/sbx-0.37-binding-warning.md`). Do not mask `sbx` output.
+
 ### Added
 
 - Guided `pi-stack setup` now establishes a complete host: validated 1Password

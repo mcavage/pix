@@ -437,9 +437,9 @@ func modelKeyMissingMessage(env shellEnv) string {
 	if providerKeyRefsPresent(env) {
 		msg += "You have 1Password key refs; resolve them into sbx with:\n  pi-stack secret sync\n"
 	} else {
-		msg += "Set one on the host, then re-run. Either:\n" +
-			"  pi-stack secret set ANTHROPIC_API_KEY op://vault/item/field && pi-stack secret sync   (1Password)\n" +
-			"  sbx secret set -g anthropic -t \"sk-...\"                                            (direct)\n"
+		msg += "Keys come from 1Password (op is required). Configure them, then re-run:\n" +
+			"  pi-stack setup                                                       (guided, all providers)\n" +
+			"  pi-stack secret set ANTHROPIC_API_KEY op://vault/item/field && pi-stack secret sync   (one provider)\n"
 	}
 	return msg
 }
