@@ -22,6 +22,8 @@ const {
 	extractAssistantOutput,
 	isToolResultMessage,
 	extractSessionId,
+	commandInvokesPi,
+	truncatePreview,
 } = monitor;
 
 // ─── R2-3: MCP classification fallback ──────────────────────────────────────
@@ -319,6 +321,78 @@ test("a provider_request whose newest new message is a tool result carries trigg
 	assert.equal(requests[1].trigger, "tool_result");
 });
 
+// ─── BUG 1: commandInvokesPi must see the FULL command, not the 200-char
+// truncated argsSummary ─────────────────────────────────────────────────────
+// The TUI correlates a spawned child pi session to the bash tool that
+// launched it partly by checking the tool actually invokes `pi`/`pi-stack`.
+// A long multi-line for-loop command (several quoted model specs, then a
+// `pi --print ...` invocation) can push that invocation well past char 200,
+// past where truncatePreview(argsText, 200) cuts argsSummary off — so
+// invokesPi must be computed from the full, untruncated text.
+
+function longForLoopCommand() {
+	const specs = Array.from({ length: 12 }, (_, i) => `"model-spec-${i}-${"a".repeat(12)}"`).join(" ");
+	return `cd /workspace/repo; for spec in ${specs} "ollama/qwen3.5:9b:some-long-tag"; do\n  m="$spec"\n  pi --print --model "$m" --thing extra-arg\ndone`;
+}
+
+test("commandInvokesPi: true for a long for-loop command whose `pi --print` lands past char 200", () => {
+	const cmd = longForLoopCommand();
+	// Sanity-check the fixture actually reproduces the bug precondition: the
+	// `pi --print` invocation must land AFTER truncatePreview's 200-char cut.
+	assert.ok(cmd.indexOf("pi --print") > 200, "fixture command must put `pi --print` past char 200");
+	assert.equal(commandInvokesPi(cmd), true);
+	// And the truncated 200-char preview (what argsSummary carries) does NOT
+	// contain the invocation — confirming the OLD approach (deriving invokesPi
+	// from argsSummary) would have missed it.
+	const truncated = truncatePreview(cmd, 200);
+	assert.equal(commandInvokesPi(truncated), false, "the truncated preview alone must NOT detect the pi invocation");
+});
+
+test("commandInvokesPi: false for curl/grep commands that merely contain \"pi\"-like substrings", () => {
+	assert.equal(commandInvokesPi('curl -s https://example.com/api | jq .'), false);
+	assert.equal(commandInvokesPi("grep pip requirements.txt"), false);
+	assert.equal(commandInvokesPi("pip install requests"), false);
+});
+
+test("commandInvokesPi: true for a bare `pi` or `pi-stack` command token in various positions", () => {
+	assert.equal(commandInvokesPi('pi --print --model "x"'), true);
+	assert.equal(commandInvokesPi("cd /tmp && pi-stack run"), true);
+	assert.equal(commandInvokesPi('echo hi; pi "do a thing"'), true);
+	assert.equal(commandInvokesPi(""), false);
+});
+
+test("commandInvokesPi: a literal newline separator counts (\\s covers newlines)", () => {
+	// A real newline directly preceding "pi" (no other whitespace in between) —
+	// multi-line bash via a heredoc/for-loop is exactly this shape.
+	assert.equal(commandInvokesPi("echo start\npi --print --model x"), true);
+	assert.equal(commandInvokesPi("echo start\npip install x"), false);
+});
+
+test("tool_start event carries invokesPi computed from the FULL command", async (t) => {
+	const { server, port, lines } = await startRecordingServer();
+	t.after(() => server.close());
+
+	const factory = await loadMonitorAgainst(port);
+	const { pi, handlers } = makeStubPi();
+	factory(pi);
+
+	handlers.get("session_start")?.({}, {});
+
+	const longCmd = longForLoopCommand();
+	handlers.get("tool_execution_start")?.({ toolCallId: "t-long", toolName: "bash", args: { command: longCmd } });
+	handlers.get("tool_execution_start")?.({ toolCallId: "t-curl", toolName: "bash", args: { command: "curl -s https://example.com | grep pip" } });
+
+	await new Promise((r) => setTimeout(r, 100));
+
+	const starts = lines.filter((l) => l.kind === "tool_start");
+	const longStart = starts.find((l) => l.toolId === "t-long");
+	const curlStart = starts.find((l) => l.toolId === "t-curl");
+	assert.ok(longStart, "tool_start for the long command must be emitted");
+	assert.ok(curlStart, "tool_start for the curl command must be emitted");
+	assert.equal(longStart.invokesPi, true, "long for-loop command past char 200 must set invokesPi=true");
+	assert.equal(curlStart.invokesPi, false, "curl/grep-pip command must set invokesPi=false");
+});
+
 // ─── R2-1: shutdown must not resurrect the retry timer / requeue ───────────
 // End-to-end against a stub `pi` + a local HTTP server, since the queue/timer
 // state is intentionally private to the default export's closure.
@@ -439,6 +513,71 @@ test("R2-1: aborting an in-flight send on shutdown does not requeue or reschedul
 	// server well within this window.
 	await new Promise((r) => setTimeout(r, 800));
 	assert.equal(count, 1, "the aborted send must not be requeued or retried");
+});
+
+// ─── BUG 2: session_shutdown(reason:"quit") must FLUSH, not drop, the final ───
+// provider_response ────────────────────────────────────────────────────────────────────────────────
+// A `pi --print` child does exactly one turn and exits: its just-queued
+// final provider_response must not be discarded the way the pre-existing
+// R2-1 abort-and-drop behavior discards it for reload/new/resume/fork.
+
+test('BUG 2: session_shutdown reason="quit" flushes a queued provider_response before teardown', async (t) => {
+	const { server, port, lines } = await startRecordingServer();
+	t.after(() => server.close());
+
+	const factory = await loadMonitorAgainst(port);
+	const { pi, handlers } = makeStubPi();
+	factory(pi);
+
+	handlers.get("session_start")?.({}, {});
+	// The provider_response is enqueued right here, then session_shutdown
+	// fires with reason "quit" before the drain() this enqueue kicked off has
+	// had a chance to actually finish sending it — exactly the `pi --print`
+	// one-turn-and-exit race.
+	handlers.get("message_end")?.({ message: assistantMessage("final reply") }, {});
+	await handlers.get("session_shutdown")?.({ reason: "quit" });
+
+	const responses = lines.filter((l) => l.kind === "provider_response");
+	assert.equal(responses.length, 1, "the queued provider_response must be FLUSHED, not dropped, on reason=quit");
+	assert.equal(responses[0].textPreview, "final reply");
+});
+
+test('BUG 2: session_shutdown reason="reload" still drops a queued provider_response (unchanged R2-1 behavior)', async (t) => {
+	const { server, port, lines } = await startRecordingServer();
+	t.after(() => server.close());
+
+	const factory = await loadMonitorAgainst(port);
+	const { pi, handlers } = makeStubPi();
+	factory(pi);
+
+	handlers.get("session_start")?.({}, {});
+	handlers.get("message_end")?.({ message: assistantMessage("final reply") }, {});
+	await handlers.get("session_shutdown")?.({ reason: "reload" });
+
+	// Give any (incorrectly) in-flight send time to land, if the fix ever regressed.
+	await new Promise((r) => setTimeout(r, 200));
+
+	const responses = lines.filter((l) => l.kind === "provider_response");
+	assert.equal(responses.length, 0, "reason=reload must keep dropping the queue, never posting it");
+});
+
+test("BUG 2: session_shutdown with no reason (undefined) keeps the strict R2-1 drop behavior", async (t) => {
+	// Existing callers (e.g. a bare `session_shutdown` event with no reason
+	// field at all) must not accidentally fall into the new flush path.
+	const { server, port, lines } = await startRecordingServer();
+	t.after(() => server.close());
+
+	const factory = await loadMonitorAgainst(port);
+	const { pi, handlers } = makeStubPi();
+	factory(pi);
+
+	handlers.get("session_start")?.({}, {});
+	handlers.get("message_end")?.({ message: assistantMessage("final reply") }, {});
+	await handlers.get("session_shutdown")?.();
+
+	await new Promise((r) => setTimeout(r, 200));
+	const responses = lines.filter((l) => l.kind === "provider_response");
+	assert.equal(responses.length, 0, "an undefined/missing reason must not be treated as quit");
 });
 
 // ─── R6-1: extractAssistantOutput captures the assistant's actual generated output ───

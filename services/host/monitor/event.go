@@ -144,6 +144,16 @@ type ToolStart struct {
 	Name        string `json:"name"`
 	ArgsSummary string `json:"argsSummary"`
 	ArgsHash    string `json:"argsHash"`
+	// InvokesPi is computed by the extension from the FULL, untruncated
+	// command text (never from ArgsSummary, which truncatePreview caps to
+	// 200 chars — see extensions/monitor.ts commandInvokesPi). A long bash
+	// command (e.g. a multi-line for-loop spawning several `pi --print`
+	// children) can carry its `pi`/`pi-stack` invocation well past char 200,
+	// past where ArgsSummary is cut off, which broke the TUI's
+	// spawn-correlation heuristic for any child spawned late in such a
+	// command. Shipping the flag pre-computed on the full text sidesteps
+	// that truncation entirely. Plain bool: no decode cap needed.
+	InvokesPi bool `json:"invokesPi"`
 }
 
 func (e ToolStart) Envelope() Envelope { return e.env }

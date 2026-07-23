@@ -3121,6 +3121,72 @@ func TestMonitorTUI_CurlToolInWindowDoesNotAdoptChild(t *testing.T) {
 	})
 }
 
+// (g) FIX 1: a tool_start's InvokesPi flag (computed extension-side from
+// the FULL, untruncated command) must be what spawnParentRow's window
+// fallback trusts — NOT a re-derivation from the truncated ArgsSummary.
+// Here ArgsSummary carries no `pi` token at all (as if it had been cut by
+// the 200-char truncation before the token), so toolInvokesPi(argsSummary)
+// alone would say false and the child would wrongly fall back to a
+// primary-level node; InvokesPi=true on the event must still adopt it via
+// the window path. Child model "qwen3.5:9b" also can't model-match
+// anything, so this exercises the window+invokesPi fallback exclusively.
+func TestMonitorTUI_InvokesPiFlagAdoptsChildWhenArgsSummaryTruncated(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	tool := spawnTool("sbx", "sess-primary1", "call_1", strings.Repeat("x", 200), 1000)
+	tool.InvokesPi = true
+	m = feed(t, m, tool)
+	// Tool still running (no tool_end): window open-ended to now.
+	m = feed(t, m, mkTurnStart("sbx", "sess-child111", "1", "qwen3.5:9b", 1500))
+	m = feed(t, m, spawnCtx("sbx", "sess-child111", 1, "child-event", 1501))
+
+	if got := m.sessionParentRow["sbx/sess-child111"]; got != "sbx/sess-primary1/1/tool:call_1" {
+		t.Fatalf("sessionParentRow = %q, want the spawning tool row id (via InvokesPi, not argsSummary)", got)
+	}
+	assertShape(t, m, []string{
+		"node:" + sessionNodeID("sbx/sess-primary1"),
+		"row:sbx/sess-primary1/1/tool:call_1",
+		"node:" + sessionNodeID("sbx/sess-child111"), // nested under the tool
+		"row:sbx/sess-child111/ctx:1:1",
+	})
+}
+
+// (h) FIX 2: a FALLBACK child session (sessionParentRow resolves to "" —
+// no spawning tool row anywhere) whose first event's ts is BEFORE a later
+// primary row must render its node ABOVE that later primary row —
+// interleaved by timestamp — instead of always trailing every primary row
+// at the very end (the bug: a 14:55:48 child rendering below a 14:56:26
+// final assistant row).
+func TestMonitorTUI_FallbackChildSessionInterleavesChronologically(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	req := mkProviderRequest("1", "claude-opus-4-8", "h1", 100, 0, 10,
+		[]monitor.MessageSummary{{Role: "user", Bytes: 5, Hash: "m1", Preview: "go"}})
+	req.SandboxID, req.SessionID = "sbx", "sess-primary1"
+	req.TS = 1000
+	m = feed(t, m, req)
+
+	// Fallback child session: no tool row anywhere to correlate against,
+	// so sessionParentRow is "" — its first event lands chronologically
+	// BEFORE the primary's response fed below.
+	m = feed(t, m, mkTurnStart("sbx", "sess-child111", "1", "mystery-model", 1500))
+	m = feed(t, m, spawnCtx("sbx", "sess-child111", 1, "child-event", 1501))
+
+	resp := mkProviderResponse("1", 200, "end_turn", nil)
+	resp.SandboxID, resp.SessionID = "sbx", "sess-primary1"
+	resp.TS = 2000
+	m = feed(t, m, resp)
+
+	if got := m.sessionParentRow["sbx/sess-child111"]; got != "" {
+		t.Fatalf("sessionParentRow = %q, want \"\" (true fallback, no spawner)", got)
+	}
+	assertShape(t, m, []string{
+		"node:" + sessionNodeID("sbx/sess-primary1"),
+		"row:sbx/sess-primary1/1:req",
+		"node:" + sessionNodeID("sbx/sess-child111"), // interleaved BEFORE the later primary row
+		"row:sbx/sess-child111/ctx:1:1",
+		"row:sbx/sess-primary1/1:resp", // primary's later (higher-ts) row still comes after
+	})
+}
+
 // toolInvokesPi must match `pi`/`pi-stack` as a COMMAND TOKEN — anchored
 // at the start or right after a shell separator (including a literal
 // newline in a multi-line bash block) — never as a bare substring.

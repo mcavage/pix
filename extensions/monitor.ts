@@ -38,6 +38,13 @@ const MAX_QUEUE = 500; // bounded in-VM queue; backpressure drops OLDEST, never 
 const POST_TIMEOUT_MS = 2000;
 const BASE_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 30_000; // cap ~30s per architecture.md 3.D
+// How long session_shutdown(reason:"quit") waits for the queue to fully
+// drain before giving up and tearing down anyway (R2-1 quit-flush). A `pi
+// --print` child does exactly one turn and exits immediately after, so its
+// final provider_response is enqueued right as this fires; this bounds the
+// wait so a dead/unreachable monitor host can never hang process exit.
+const QUIT_FLUSH_TIMEOUT_MS = 1500;
+const QUIT_FLUSH_POLL_MS = 20;
 
 // Module-level: shared across every extension instance in this process. A
 // session switch resets sessionId/turnId/etc via session_start, but seq keeps
@@ -68,6 +75,31 @@ export function truncatePreview(text: string, max = 120): string {
 /** Rough token estimate: ~4 bytes/token (no tokenizer available client-side). */
 export function estimateTokens(bytes: number): number {
 	return Math.max(0, Math.round(bytes / 4));
+}
+
+// Matches a `pi` or `pi-stack` COMMAND TOKEN — anchored at the start of the
+// string or right after a shell separator (whitespace, `;`, `&`, `|`, `(`),
+// and followed by whitespace/quote/end — so it never substring-matches
+// inside another word (`pip`, `api`, `spider`, `--provider`). A literal
+// newline (multi-line bash, e.g. a `for ... do pi --print ...; done` loop) is
+// a separator too: \s covers \n. Mirrors `piInvocationRe` in
+// `services/host/cmd/pi-stack/monitor_tui.go` (`toolInvokesPi`) — keep the
+// two in sync if either changes.
+const PI_INVOCATION_RE = /(^|[\s;&|(])(pi|pi-stack)([\s"']|$)/i;
+
+/**
+ * True when `cmd` actually RUNS `pi`/`pi-stack` as a command (as opposed to
+ * merely mentioning something that contains those letters as a substring).
+ * Computed against the FULL, untruncated command text — never against
+ * `truncatePreview`'s 200-char-capped `argsSummary` — so a long multi-line
+ * command (e.g. a for-loop spawning several `pi --print` children) whose
+ * invocation lands past char 200 is still correctly flagged. Used to set
+ * `tool_start.invokesPi` on the wire so the TUI's spawn-correlation
+ * heuristic no longer depends on a truncated preview.
+ */
+export function commandInvokesPi(cmd: string): boolean {
+	if (!cmd) return false;
+	return PI_INVOCATION_RE.test(cmd);
 }
 
 /**
@@ -838,6 +870,32 @@ export default function (pi: ExtensionAPI) {
 			void drain();
 		}
 
+		function sleep(ms: number): Promise<void> {
+			return new Promise((resolve) => {
+				const t = setTimeout(resolve, ms);
+				t.unref?.(); // never keep the process alive on its own
+			});
+		}
+
+		/**
+		 * Waits (polling) for the queue to fully drain AND nothing to be
+		 * in-flight — used only by session_shutdown(reason:"quit")'s bounded
+		 * flush (`Promise.race([drainAll(), timeout])` at the call site).
+		 * Deliberately does NOT bypass the normal kick()/drain() machinery (so
+		 * a mid-flush failure still backs off/retries exactly as it would
+		 * mid-session): it just re-kicks a drain if one isn't already running
+		 * and waits for `flushing` to settle false with an empty queue. Never
+		 * throws; the caller bounds total wait time via Promise.race, so an
+		 * unreachable host just means this keeps polling harmlessly until the
+		 * race's timeout wins.
+		 */
+		async function drainAll(): Promise<void> {
+			while (queue.length > 0 || flushing) {
+				if (!flushing) kick();
+				await sleep(QUIT_FLUSH_POLL_MS);
+			}
+		}
+
 		async function drain() {
 			try {
 				while (true) {
@@ -982,6 +1040,10 @@ export default function (pi: ExtensionAPI) {
 			const name = String(e?.toolName ?? e?.name ?? "");
 			const argsText = stringifyContent(e?.args ?? e?.input ?? {});
 			const argsHash = sha256Hex(argsText);
+			// Computed on the FULL, untruncated argsText (BEFORE truncatePreview
+			// caps argsSummary to 200 chars below) so a long command whose `pi`
+			// invocation lands past char 200 is still flagged correctly.
+			const invokesPi = commandInvokesPi(argsText);
 			// Enqueue the full args body as a blob keyed by the SAME hash carried
 			// on the event, so the host can resolve it later (R1-3) — previously
 			// argsHash was computed and shipped on the event but the body itself
@@ -994,6 +1056,7 @@ export default function (pi: ExtensionAPI) {
 				name,
 				argsSummary: truncatePreview(argsText, 200),
 				argsHash,
+				invokesPi,
 			});
 		}
 
@@ -1172,20 +1235,47 @@ export default function (pi: ExtensionAPI) {
 		// (no stream/token event kind exists on the wire schema).
 
 
-		on("session_shutdown", () => {
-			// R2-1: set shuttingDown FIRST, before clearing the timer or aborting
-			// the in-flight request — enqueue/kick/scheduleRetry and drain()'s
-			// failure branch all check it and no-op, so the abort below can't
-			// resurrect the retry timer or requeue the aborted item. Then clear the
-			// pending backoff retry timer, abort any in-flight POST rather than
-			// attempting one more flush, and drop anything still queued — the
-			// extension runtime is being torn down, so there's no later kick()
-			// that would ever see the result (R1-6), and nothing queued now will
-			// ever be sent by this instance.
-			shuttingDown = true;
-			clearRetryTimer();
-			if (inFlightReq) safe(() => inFlightReq?.destroy(new Error("session_shutdown")));
-			queue.length = 0;
+		on("session_shutdown", async (e: any) => {
+			// Branch on WHY the session is shutting down (R2-2). A `pi --print`
+			// child does exactly one turn and exits: its just-generated
+			// provider_response is enqueued right as "quit" fires, and the old
+			// unconditional abort-and-drop below discarded it before it was ever
+			// sent — the monitor only ever saw the child's REQUEST, never its
+			// reply. "quit" (the process is actually exiting) gets a best-effort
+			// bounded FLUSH instead. Every other reason (reload/new/resume/fork)
+			// tears down a STALE instance about to be replaced by a fresh one for
+			// the next session (R2-1) and keeps the original abort-and-drop
+			// behavior exactly, so a reloaded/switched instance can't keep
+			// posting old-session events.
+			try {
+				if (String(e?.reason ?? "") === "quit") {
+					// Do NOT set shuttingDown or abort the in-flight request yet —
+					// both enqueue()/kick()/drain() need to keep working normally
+					// while drainAll() waits for everything (including the final
+					// provider_response just queued for this exact hook) to finish
+					// sending. Bounded so an unreachable monitor host can never hang
+					// process exit.
+					await Promise.race([drainAll(), sleep(QUIT_FLUSH_TIMEOUT_MS)]);
+				} else {
+					// R2-1: set shuttingDown FIRST, before clearing the timer or
+					// aborting the in-flight request — enqueue/kick/scheduleRetry and
+					// drain()'s failure branch all check it and no-op, so the abort
+					// below can't resurrect the retry timer or requeue the aborted
+					// item.
+					shuttingDown = true;
+					clearRetryTimer();
+					if (inFlightReq) safe(() => inFlightReq?.destroy(new Error("session_shutdown")));
+				}
+			} catch {
+				// best-effort; must never throw out of session_shutdown
+			} finally {
+				// Only now — after the flush (or its timeout) on the "quit" path, or
+				// immediately on every other path — actually tear down: stop any
+				// pending retry and drop whatever, if anything, is still queued.
+				shuttingDown = true;
+				clearRetryTimer();
+				queue.length = 0;
+			}
 		});
 	});
 }

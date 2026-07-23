@@ -16,7 +16,9 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -141,11 +143,20 @@ type tuiRow struct {
 	latencyMs int
 
 	// tool (start fields + end fields merged into one row)
-	toolID        string
-	source        string
-	name          string
-	argsSummary   string
-	argsHash      string
+	toolID      string
+	source      string
+	name        string
+	argsSummary string
+	argsHash    string
+	// invokesPi is monitor.ToolStart.InvokesPi, computed by the extension
+	// from the tool's FULL command (before truncation) — the authoritative
+	// signal for spawnParentRow's window-fallback gate (see toolInvokesPi's
+	// doc comment: argsSummary is truncated to 200 chars, so a long `for …
+	// do pi --print …; done` command's `pi` token can be past the cut and
+	// toolInvokesPi(argsSummary) would wrongly say false). "" old events
+	// (recorded before this field existed) simply carry the zero value
+	// false, so spawnParentRow ORs it with toolInvokesPi as a fallback.
+	invokesPi     bool
 	toolDone      bool
 	ok            bool
 	resultBytes   int
@@ -1214,6 +1225,7 @@ func (m *Model) applyEvent(e monitor.Event) {
 			name:        sanitizeText(ev.Name, false),
 			argsSummary: sanitizeText(ev.ArgsSummary, false),
 			argsHash:    ev.ArgsHash,
+			invokesPi:   ev.InvokesPi,
 		})
 		// See the ProviderRequest case above: gated on showFull too (R3-2b).
 		if m.expanded[id] && m.showFull {
@@ -1362,7 +1374,12 @@ func (m *Model) spawnParentRow(sess string, childTS int64) string {
 		if childTS > 0 && r.ts > 0 && r.ts > childTS {
 			continue // started after the child's first event: can't have spawned it
 		}
-		c := candidate{idx: i, ts: r.ts, invokesPi: toolInvokesPi(r.argsSummary)}
+		// Prefer the event-carried flag (computed by the extension from the
+		// FULL command, before the 200-char argsSummary truncation — see the
+		// tuiRow.invokesPi doc comment); OR it with the text-derived signal
+		// as a fallback for events recorded before InvokesPi existed (where
+		// the stored flag is just the zero value false).
+		c := candidate{idx: i, ts: r.ts, invokesPi: r.invokesPi || toolInvokesPi(r.argsSummary)}
 		if childModel != "" && strings.Contains(strings.ToLower(r.argsSummary), childModel) {
 			c.modelMatch = true
 			anyModel = true
@@ -1880,7 +1897,13 @@ func (m Model) bodyLayoutLines() []bodyLine {
 	// visibleRows solos the focused session, which then renders as the
 	// (single) primary at depth 0 — exactly the old solo layout.
 	var lines []bodyLine
-	emitRow := func(r tuiRow, depth int) {
+	// emitRowInto/emitNodeInto/emitSession all write into a caller-supplied
+	// slice pointer (rather than closing over the top-level `lines`
+	// directly) so bodyLayoutLines can build a FALLBACK child session's
+	// subtree into its own scratch slice — to measure/position it by its
+	// first event's ts — before splicing it into the final line order
+	// (see the fallback-interleaving block below).
+	emitRowInto := func(dst *[]bodyLine, r tuiRow, depth int) {
 		indent := strings.Repeat("  ", depth)
 		// ▸/▾ is the payload-expand affordance: every row kind has
 		// detail, so every header carries a caret.
@@ -1888,19 +1911,19 @@ func (m Model) bodyLayoutLines() []bodyLine {
 		if m.expanded[r.id] {
 			caret = "\u25be "
 		}
-		lines = append(lines, bodyLine{text: indent + caret + m.renderRow(r), rowID: r.id, isHeader: true, ts: r.ts})
+		*dst = append(*dst, bodyLine{text: indent + caret + m.renderRow(r), rowID: r.id, isHeader: true, ts: r.ts})
 		if m.expanded[r.id] {
 			for _, dl := range m.detailLines(r) {
-				lines = append(lines, bodyLine{text: indent + dl.text, rowID: r.id, ts: r.ts, pre: dl.pre})
+				*dst = append(*dst, bodyLine{text: indent + dl.text, rowID: r.id, ts: r.ts, pre: dl.pre})
 			}
 		}
 	}
-	emitNode := func(nodeID, label string, depth int, ts int64) {
+	emitNodeInto := func(dst *[]bodyLine, nodeID, label string, depth int, ts int64) {
 		caret := "\u25be "
 		if m.collapsed[nodeID] {
 			caret = "\u25b8 "
 		}
-		lines = append(lines, bodyLine{text: strings.Repeat("  ", depth) + caret + label, nodeID: nodeID, ts: ts})
+		*dst = append(*dst, bodyLine{text: strings.Repeat("  ", depth) + caret + label, nodeID: nodeID, ts: ts})
 	}
 	sessions := groupSessionRows(rows)
 	// SPAWN NESTING: a session whose sessionParentRow names a tool row is
@@ -1922,11 +1945,11 @@ func (m Model) bodyLayoutLines() []bodyLine {
 		}
 	}
 	emitted := make(map[string]bool)
-	var emitSession func(ses *sessionGroup, depth int)
-	emitSession = func(ses *sessionGroup, depth int) {
+	var emitSession func(dst *[]bodyLine, ses *sessionGroup, depth int)
+	emitSession = func(dst *[]bodyLine, ses *sessionGroup, depth int) {
 		emitted[ses.session] = true
 		nid := sessionNodeID(ses.session)
-		emitNode(nid, m.sessionNodeLabel(ses.session), depth, ses.latestTS)
+		emitNodeInto(dst, nid, m.sessionNodeLabel(ses.session), depth, ses.latestTS)
 		if m.collapsed[nid] {
 			// Collapsing a session hides only its OWN events; sessions
 			// spawned from its tool rows are the user's other
@@ -1935,22 +1958,93 @@ func (m Model) bodyLayoutLines() []bodyLine {
 			return
 		}
 		for _, r := range ses.rows {
-			emitRow(r, depth+1)
+			emitRowInto(dst, r, depth+1)
 			for _, child := range byParent[r.id] {
 				if !emitted[child.session] {
-					emitSession(child, depth+2)
+					emitSession(dst, child, depth+2)
 				}
 			}
 		}
 	}
-	emitSession(sessions[0], 0)
-	for _, ses := range sessions[1:] {
-		// Fallback: any session not already nested under its spawning
-		// tool row (no correlation, or the parent row isn't in this
-		// layout) renders as a child node under the primary, as before.
-		if !emitted[ses.session] {
-			emitSession(ses, 1)
+
+	primary := sessions[0]
+	emitted[primary.session] = true
+	primaryNode := sessionNodeID(primary.session)
+	emitNodeInto(&lines, primaryNode, m.sessionNodeLabel(primary.session), 0, primary.latestTS)
+	if m.collapsed[primaryNode] {
+		// Primary collapsed: there are no primary-row positions left to
+		// interleave a fallback against, so every still-unemitted session
+		// (a true fallback, or a would-be nested child whose tool row is
+		// hidden under the collapse) just appends in session order, exactly
+		// as before the chronological-fallback change.
+		for _, ses := range sessions[1:] {
+			if !emitted[ses.session] {
+				emitSession(&lines, ses, 1)
+			}
 		}
+		return lines
+	}
+	// One SEGMENT per primary row — its own line(s) plus any REAL spawned
+	// children nested immediately under it (byParent) — in arrival order.
+	// This reproduces the old contiguous-per-row emission exactly when
+	// there's nothing to interleave.
+	type segment struct {
+		ts    int64
+		lines []bodyLine
+	}
+	segs := make([]segment, 0, len(primary.rows))
+	for _, r := range primary.rows {
+		var seg []bodyLine
+		emitRowInto(&seg, r, 1)
+		for _, child := range byParent[r.id] {
+			if !emitted[child.session] {
+				emitSession(&seg, child, 2)
+			}
+		}
+		segs = append(segs, segment{ts: r.ts, lines: seg})
+	}
+	// FALLBACK CHRONOLOGICAL INTERLEAVING: any session still unemitted
+	// after the above (no correlated parent tool row, or its parent row
+	// was evicted/filtered/hidden — same fallback set the old "dump at the
+	// end" loop used) renders as a primary-level child node, but now
+	// POSITIONED among the primary's own rows by its FIRST event's
+	// timestamp, instead of always trailing every primary row (the bug: a
+	// 14:55:48 fallback child rendering below a 14:56:26 primary row). A
+	// fallback with no known first-event ts (0) keeps the old
+	// always-trailing behavior — there's no timestamp to position it by.
+	type fallback struct {
+		key   int64 // merge key: first-event ts, or MaxInt64 (append at the end) when unknown
+		lines []bodyLine
+	}
+	var fbs []fallback
+	for _, ses := range sessions[1:] {
+		if emitted[ses.session] {
+			continue
+		}
+		var sub []bodyLine
+		emitSession(&sub, ses, 1)
+		key := int64(math.MaxInt64)
+		if len(ses.rows) > 0 && ses.rows[0].ts > 0 {
+			key = ses.rows[0].ts
+		}
+		fbs = append(fbs, fallback{key: key, lines: sub})
+	}
+	sort.SliceStable(fbs, func(i, j int) bool { return fbs[i].key < fbs[j].key })
+	// Merge the (already chronological) primary segments with the
+	// ts-sorted fallbacks: a standard two-pointer merge. Ties keep the
+	// primary row first, so a fallback with the exact same ts as a
+	// primary row still reads as "right after it" rather than displacing
+	// it.
+	fi := 0
+	for _, seg := range segs {
+		for fi < len(fbs) && fbs[fi].key <= seg.ts {
+			lines = append(lines, fbs[fi].lines...)
+			fi++
+		}
+		lines = append(lines, seg.lines...)
+	}
+	for ; fi < len(fbs); fi++ {
+		lines = append(lines, fbs[fi].lines...)
 	}
 	return lines
 }

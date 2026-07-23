@@ -70,6 +70,16 @@ func TestEventEncodeDecodeRoundTrip(t *testing.T) {
 			Name:        "bash",
 			ArgsSummary: "go test ./...",
 			ArgsHash:    "hash-args",
+			InvokesPi:   false,
+		},
+		ToolStart{
+			env:         sampleEnvelope(KindToolStart),
+			ToolID:      "t2",
+			Source:      "builtin",
+			Name:        "bash",
+			ArgsSummary: "pi --print --model foo",
+			ArgsHash:    "hash-args-2",
+			InvokesPi:   true,
 		},
 		ToolEnd{
 			env:           sampleEnvelope(KindToolEnd),
@@ -227,6 +237,18 @@ func TestEventJSONTagsGolden(t *testing.T) {
 	}
 	if !strings.Contains(string(line), `"ctxKind":"compaction"`) {
 		t.Fatalf("context_event JSON = %s, want ctxKind key", line)
+	}
+
+	// tool_start.invokesPi (added alongside the extension's commandInvokesPi
+	// fix): pin both that the key exists and that it round-trips true/false,
+	// since it's a plain bool with no capping to exercise elsewhere.
+	ts2 := ToolStart{env: env{Kind: KindToolStart}, Name: "bash", InvokesPi: true}
+	line, err = Encode(ts2)
+	if err != nil {
+		t.Fatalf("Encode() error: %v", err)
+	}
+	if !strings.Contains(string(line), `"invokesPi":true`) {
+		t.Fatalf("tool_start JSON = %s, want invokesPi key", line)
 	}
 
 	b, err := json.Marshal(Blob{Hash: "h", Bytes: 3, Text: "abc"})
