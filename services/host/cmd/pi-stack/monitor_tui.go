@@ -217,9 +217,9 @@ type Model struct {
 	prevSysHash map[string]string
 
 	// sessionModel/sessionTitle are keyed by sessionKey(env) and feed the
-	// per-session group header (groupHeaderText) so a multi-session feed
-	// is self-explanatory — which model each session is on, and what its
-	// user actually asked for — instead of a bare sandbox/session id. The
+	// per-session tree-node header (sessionNodeLabel) so a multi-session
+	// feed is self-explanatory — which model each session is on, and what
+	// its user actually asked for — instead of a bare sandbox/session id. The
 	// old global turnModel (last turn_start.Model across EVERY session,
 	// shown in the top bar) was actively misleading once sessions with
 	// different models interleave, so it's gone; each session now carries
@@ -260,7 +260,27 @@ type Model struct {
 	// sessionTitle are cleaned up the same way, for the same reason.
 	sessionRowCount map[string]int
 
-	expanded map[string]bool // row id -> expanded, toggled by `space`/`enter`
+	expanded map[string]bool // row id -> expanded, toggled by `space`/`enter` on an event row
+
+	// collapsed tracks TREE-NODE collapse state, keyed by nodeID
+	// (sandboxNodeID / sessionNodeID — see bodyLayoutLines' tree): true
+	// hides the node's subtree lines (a collapsed sandbox hides all its
+	// sessions+events; a collapsed session hides its own event rows — for
+	// the primary session, its child-session nodes stay visible: they are
+	// the user's other conversations, not the primary's payload).
+	// Absent/false means expanded — the default, so a fresh view always
+	// shows the whole tree. Entries are cleaned up in evictOldRows when
+	// the node's last retained row is evicted (same class as
+	// prevSysHash/R4-2).
+	collapsed map[string]bool
+
+	// sandboxRowCount mirrors sessionRowCount one level up the tree: how
+	// many retained rows belong to each sandbox (the sessionKey's sandbox
+	// half, rowSandbox), so evictOldRows can drop a sandbox node's
+	// collapsed entry when its LAST row is gone — without it, collapsed
+	// would keep one entry per sandbox ever collapsed, forever (same
+	// class as R4-2).
+	sandboxRowCount map[string]int
 
 	// showTimestamps (`T`, capital — lowercase `t` is showTools) renders a
 	// dim HH:MM:SS column (local time, from each row's first-seen ts) at
@@ -280,11 +300,11 @@ type Model struct {
 	// conversation reads cleanly instead of interleaving with every other
 	// concurrent session reaching the hub. Toggled by `s`
 	// (toggleFocusAtCursor) on the session that owns the cursor's current
-	// row; `esc` also clears it (outside filtering/help). While focused,
-	// the per-session group header/indent bodyLayoutLines would otherwise
-	// render is redundant (there's only ever one session in view) and is
-	// suppressed instead; the sandbox/session/model/title context it used
-	// to carry moves to the top bar (focusHeaderLine).
+	// row or session-node line; `esc` also clears it (outside filtering/
+	// help). While focused, bodyLayoutLines renders just that session's
+	// node + its events, flat — no sandbox level, no sibling sessions —
+	// and the sandbox/session/model/title context also shows in the top
+	// bar (focusHeaderLine).
 	focusSession string
 
 	showFull     bool // f
@@ -356,7 +376,9 @@ func NewModel(cfg TUIConfig) Model {
 		sessionTitle:    make(map[string]string),
 		reqTS:           make(map[string]int64),
 		sessionRowCount: make(map[string]int),
+		sandboxRowCount: make(map[string]int),
 		expanded:        make(map[string]bool),
+		collapsed:       make(map[string]bool),
 		showModel:       true,
 		showTools:       true,
 		showMCP:         true,
@@ -403,7 +425,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		anchored := !m.follow && !m.showHelp
 		if anchored {
 			lines := m.bodyLayoutLines()
-			curAnchor = captureLineAnchor(m.clampedCursor(len(lines)), lines)
+			curAnchor = captureLineAnchor(m.clampedCursor(lines), lines)
 			top := m.scrollTop
 			if top > len(lines)-1 {
 				top = len(lines) - 1
@@ -577,7 +599,7 @@ func (m Model) handleKeyInner(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.scrollTop = 0
 		m.follow = false
 	case " ", "enter":
-		m.toggleExpandAtCursor()
+		m.toggleAtCursor()
 	case "up", "ctrl+p":
 		m.moveCursor(-1)
 	case "down", "ctrl+n":
@@ -598,20 +620,30 @@ func (m Model) handleKeyInner(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// lineAnchor pins one body line SEMANTICALLY — by the row that owns it
-// plus the line's offset within that row's contiguous block of lines —
-// rather than by raw index, so eviction/insertion above it can be remapped
-// (see the eventMsg case in Update). valid=false means the line was untied
-// (empty-state hint, help) or out of range; nothing to remap then.
+// lineAnchor pins one body line SEMANTICALLY — by the row (or tree node)
+// that owns it, plus the line's offset within that row's contiguous block
+// of lines — rather than by raw index, so eviction/insertion above it can
+// be remapped (see the eventMsg case in Update). valid=false means the
+// line was untied (empty-state hint, help) or out of range; nothing to
+// remap then.
 type lineAnchor struct {
 	rowID  string
+	nodeID string
 	offset int
 	valid  bool
 }
 
-// captureLineAnchor anchors the line at idx in the given layout.
+// captureLineAnchor anchors the line at idx in the given layout. A tree
+// node header anchors by its nodeID (always a single line); a row-owned
+// line anchors by rowID + offset within the row's block.
 func captureLineAnchor(idx int, lines []bodyLine) lineAnchor {
-	if idx < 0 || idx >= len(lines) || lines[idx].rowID == "" {
+	if idx < 0 || idx >= len(lines) {
+		return lineAnchor{}
+	}
+	if lines[idx].nodeID != "" {
+		return lineAnchor{nodeID: lines[idx].nodeID, valid: true}
+	}
+	if lines[idx].rowID == "" {
 		return lineAnchor{}
 	}
 	first := idx
@@ -622,11 +654,18 @@ func captureLineAnchor(idx int, lines []bodyLine) lineAnchor {
 }
 
 // resolveLineAnchor maps an anchor back to a line index in the NEW layout:
-// the anchored row's first line plus the saved offset, clamped to the
-// row's (possibly changed) line count. ok=false when the anchor is invalid
-// or its row no longer exists in the layout (evicted / filtered out).
+// a node anchor to its (single) node header line; a row anchor to the
+// row's first line plus the saved offset, clamped to the row's (possibly
+// changed) line count. ok=false when the anchor is invalid or its row/node
+// no longer exists in the layout (evicted / filtered out / collapsed away).
 func resolveLineAnchor(a lineAnchor, lines []bodyLine) (int, bool) {
 	if !a.valid {
+		return 0, false
+	}
+	if a.nodeID != "" {
+		if i := nodeLineIndex(lines, a.nodeID); i >= 0 {
+			return i, true
+		}
 		return 0, false
 	}
 	first, count := -1, 0
@@ -663,17 +702,18 @@ func firstHeaderLine(lines []bodyLine) int {
 }
 
 // clampedCursor resolves the effective cursor line against the CURRENT
-// body-line total: the last line while follow is on (this is what makes
-// follow-mode auto-track new events with zero extra bookkeeping in
-// applyEvent), otherwise the stored m.cursor clamped defensively into
-// [0, total) — the layout can shrink out from under it (toggle/filter
-// change, eviction, collapse).
-func (m Model) clampedCursor(total int) int {
+// layout: the follow target line while follow is on (see followLineIndex —
+// this is what makes follow-mode auto-track new events with zero extra
+// bookkeeping in applyEvent), otherwise the stored m.cursor clamped
+// defensively into [0, total) — the layout can shrink out from under it
+// (toggle/filter change, eviction, node collapse).
+func (m Model) clampedCursor(lines []bodyLine) int {
+	total := len(lines)
 	if total <= 0 {
 		return 0
 	}
 	if m.follow {
-		return total - 1
+		return m.followLineIndex(lines)
 	}
 	c := m.cursor
 	if c < 0 {
@@ -685,6 +725,60 @@ func (m Model) clampedCursor(total int) int {
 	return c
 }
 
+// followLineIndex is the line follow tracks: the LAST line belonging to
+// the NEWEST visible event row (its header line, or — when expanded — its
+// last detail line). The tree can place that line MID-layout (a child
+// session's node+events render after the primary session's events), so
+// this is NOT simply the last layout line. When the newest event's session
+// or sandbox node is collapsed, follow lands on the nearest visible
+// ancestor node line instead — collapse is user intent, never
+// force-expanded out from under them. The help overlay (and an
+// untied-lines-only layout) follows the last line, so End/G still
+// bottom-anchor there.
+func (m Model) followLineIndex(lines []bodyLine) int {
+	total := len(lines)
+	if total == 0 {
+		return 0
+	}
+	if m.showHelp {
+		return total - 1
+	}
+	rows := m.visibleRows()
+	if len(rows) == 0 {
+		return total - 1
+	}
+	newest := rows[len(rows)-1] // visibleRows preserves arrival order
+	last := -1
+	for i, l := range lines {
+		if l.rowID == newest.id {
+			last = i
+		}
+	}
+	if last >= 0 {
+		return last
+	}
+	// Hidden under a collapsed ancestor: nearest visible ancestor node.
+	if i := nodeLineIndex(lines, sessionNodeID(newest.session)); i >= 0 {
+		return i
+	}
+	if i := nodeLineIndex(lines, sandboxNodeID(rowSandbox(newest.session))); i >= 0 {
+		return i
+	}
+	return total - 1
+}
+
+// nodeLineIndex is the index of the node header line carrying nodeID, or
+// -1 when the layout doesn't contain it (collapsed ancestor, filtered
+// away, different focus).
+func nodeLineIndex(lines []bodyLine, nodeID string) int {
+	for i, l := range lines {
+		if l.nodeID == nodeID {
+			return i
+		}
+	}
+	return -1
+}
+
 // selectedRowID is the id of the row that OWNS the cursor's current body
 // line (its header line or one of its expanded detail lines) — the row
 // View highlights. "" when the cursor sits on an untied line (empty-state
@@ -694,7 +788,7 @@ func (m Model) selectedRowID() string {
 	if len(lines) == 0 {
 		return ""
 	}
-	return lines[m.clampedCursor(len(lines))].rowID
+	return lines[m.clampedCursor(lines)].rowID
 }
 
 // reconcileScroll updates m.scrollTop ("the body scrolls to keep the
@@ -703,28 +797,29 @@ func (m Model) selectedRowID() string {
 // resize. See the scrollTop field doc comment for why this is persisted
 // state rather than something View recomputes from scratch every render.
 //
-// While follow is on, scrollTop always bottom-anchors (newest line
-// visible). While detached, scrollTop only moves the minimum amount needed
-// to bring the cursor line back inside [scrollTop, scrollTop+bodyHeight)
-// — exactly bubbles/viewport's "ensure visible" behavior — so a detached
-// view that's already showing the cursor line stays exactly where it is
-// even as new rows keep appending below it.
+// Follow and detached both get bubbles/viewport's "ensure visible"
+// behavior on the effective cursor line: scrollTop only moves the minimum
+// amount needed to bring it back inside [scrollTop, scrollTop+bodyHeight).
+// While following a single conversation the follow line is the last
+// layout line, so this still bottom-anchors exactly like the pre-tree
+// code; when the tree places the follow line mid-layout (child sessions
+// render below the primary's newest event) the window tracks THAT line
+// instead of blindly jumping to the bottom. A detached view that's
+// already showing the cursor line stays exactly where it is even as new
+// rows keep appending below it.
 func (m *Model) reconcileScroll() {
 	bh := m.bodyHeight()
 	if bh <= 0 {
 		m.scrollTop = 0
 		return
 	}
-	total := len(m.bodyLayoutLines())
+	lines := m.bodyLayoutLines()
+	total := len(lines)
 	if total <= bh {
 		m.scrollTop = 0
 		return
 	}
-	if m.follow {
-		m.scrollTop = total - bh
-		return
-	}
-	cur := m.clampedCursor(total)
+	cur := m.clampedCursor(lines)
 	if cur < m.scrollTop {
 		m.scrollTop = cur
 	} else if cur >= m.scrollTop+bh {
@@ -738,16 +833,16 @@ func (m *Model) reconcileScroll() {
 	}
 }
 
-// moveCursor shifts the LINE cursor by delta physical lines (j/k/arrows:
-// ±1 — so an expanded 60-line payload is read by stepping THROUGH it, the
-// audit's headline defect; PgUp/PgDn/ctrl+u/ctrl+d: ±pageSize) and updates
-// follow: landing anywhere but the last body line detaches it (so a live
-// stream stops yanking the view while the user is reading); landing back
-// on the last line (stepping/paging down to the bottom) re-attaches it,
-// same as pressing G. Group-header lines (bodyLine.group) are NOT
-// selectable: after the raw move the cursor skips over them in the
-// direction of travel (falling back the other way at a boundary), so
-// navigation only ever lands on real row/detail lines.
+// moveCursor shifts the LINE cursor by delta physical lines (arrows/
+// ctrl+p/ctrl+n: ±1 — so an expanded 60-line payload is read by stepping
+// THROUGH it, the audit's headline defect; PgUp/PgDn/ctrl+u/ctrl+d:
+// ±pageSize) and updates follow: landing anywhere but the follow target
+// line (followLineIndex — the newest event's line, or its nearest visible
+// ancestor node when collapsed away) detaches it (so a live stream stops
+// yanking the view while the user is reading); landing back on the follow
+// line re-attaches it, same as pressing G. EVERY line of the tree is
+// navigable — sandbox/session node headers included (they're how collapse
+// is reached) — so no line-skipping is needed.
 func (m *Model) moveCursor(delta int) {
 	if !m.navigableBody() {
 		return
@@ -757,57 +852,30 @@ func (m *Model) moveCursor(delta int) {
 	if total == 0 {
 		return
 	}
-	cur := m.clampedCursor(total) + delta
+	cur := m.clampedCursor(lines) + delta
 	if cur < 0 {
 		cur = 0
 	}
 	if cur > total-1 {
 		cur = total - 1
 	}
-	dir := 1
-	if delta < 0 {
-		dir = -1
-	}
-	cur = skipGroupLines(lines, cur, dir)
 	m.cursor = cur
-	m.follow = cur == total-1
+	m.follow = cur == m.followLineIndex(lines)
 }
 
-// skipGroupLines returns the nearest selectable (non-group-header) line
-// index to idx, searching first in direction dir (+1 down / -1 up), then
-// the opposite way when the boundary is hit — e.g. pressing `up` from the
-// first row of the first group lands back on that row, not on its header.
-// A layout can never be ALL group headers (a header is only ever emitted
-// before a row), so this always terminates on a selectable line.
-func skipGroupLines(lines []bodyLine, idx, dir int) int {
-	for i := idx; i >= 0 && i < len(lines); i += dir {
-		if !lines[i].group {
-			return i
-		}
-	}
-	for i := idx; i >= 0 && i < len(lines); i -= dir {
-		if !lines[i].group {
-			return i
-		}
-	}
-	return idx
-}
-
-// cursorToTop implements `g`/Home: jump to the first body line and detach
-// follow (unless that line is also the only/last line). When grouping is
-// active, line 0 is a group header — the cursor lands on the first
-// SELECTABLE line below it instead (headers are non-selectable).
+// cursorToTop implements `g`/Home: jump to the first body line — the
+// first sandbox node in the tree, which is navigable now — and detach
+// follow (unless that line is also the follow target).
 func (m *Model) cursorToTop() {
 	if !m.navigableBody() {
 		return
 	}
 	lines := m.bodyLayoutLines()
-	total := len(lines)
-	if total == 0 {
+	if len(lines) == 0 {
 		return
 	}
-	m.cursor = skipGroupLines(lines, 0, 1)
-	m.follow = m.cursor == total-1
+	m.cursor = 0
+	m.follow = m.followLineIndex(lines) == 0
 }
 
 // navigableBody reports whether navigation keys have anything to act on:
@@ -820,13 +888,13 @@ func (m Model) navigableBody() bool {
 	return m.showHelp || len(m.visibleRows()) > 0
 }
 
-// reattachFollow implements `G`/End: jump to (and keep tracking) the last
-// body line — clampedCursor derives the cursor from follow from here on,
-// so no stored index needs updating per event.
+// reattachFollow implements `G`/End: jump to (and keep tracking) the
+// follow target line — clampedCursor derives the cursor from follow from
+// here on, so no stored index needs updating per event.
 func (m *Model) reattachFollow() {
 	m.follow = true
-	if total := len(m.bodyLayoutLines()); total > 0 {
-		m.cursor = total - 1
+	if lines := m.bodyLayoutLines(); len(lines) > 0 {
+		m.cursor = m.followLineIndex(lines)
 	}
 }
 
@@ -841,22 +909,40 @@ func (m Model) pageSize() int {
 	return 10
 }
 
-// toggleExpandAtCursor expands/collapses the row that OWNS the cursor's
-// current body line (its header line, or — for a collapse — any of its
-// expanded detail lines). Bound to both `space` and `enter`. Keeps the
-// R3-2b memory discipline exactly as before: resolve blobs on expand (only
-// while showFull is also on), clear them on collapse. On collapse the
-// cursor SNAPS to the row's header line, so it never lands on a
-// now-removed detail line (which would silently jump it to whatever line
-// slid up into that index).
-func (m *Model) toggleExpandAtCursor() {
+// toggleAtCursor implements `enter`/`space`, CONTEXT-SENSITIVE on the
+// selected line: a sandbox/session NODE header toggles that node's tree
+// collapse (m.collapsed); an EVENT row line toggles that row's payload
+// expand (m.expanded — the pre-tree behavior, on the row that OWNS the
+// cursor's line: its header, or any of its expanded detail lines). One
+// key, does the right thing for what's selected. The row path keeps the
+// R3-2b memory discipline exactly as before: resolve blobs on expand
+// (only while showFull is also on), clear them on collapse. After a
+// collapse (node or row) the cursor SNAPS to the toggled node's/row's
+// header line in the NEW layout, so it never lands on a now-removed line
+// (which would silently jump it to whatever line slid up into that
+// index).
+func (m *Model) toggleAtCursor() {
 	lines := m.bodyLayoutLines()
 	if len(lines) == 0 {
 		return
 	}
-	id := lines[m.clampedCursor(len(lines))].rowID
+	l := lines[m.clampedCursor(lines)]
+	if l.nodeID != "" {
+		if m.collapsed[l.nodeID] {
+			delete(m.collapsed, l.nodeID) // expanded is the default: keep the map sparse
+		} else {
+			m.collapsed[l.nodeID] = true
+		}
+		after := m.bodyLayoutLines()
+		if i := nodeLineIndex(after, l.nodeID); i >= 0 {
+			m.cursor = i
+			m.follow = i == m.followLineIndex(after)
+		}
+		return
+	}
+	id := l.rowID
 	if id == "" {
-		return // untied line (empty-state hint): nothing to expand
+		return // untied line (empty-state hint): nothing to toggle
 	}
 	m.expanded[id] = !m.expanded[id]
 	if m.expanded[id] {
@@ -873,27 +959,26 @@ func (m *Model) toggleExpandAtCursor() {
 	// Snap the cursor to the collapsed row's header line in the NEW
 	// (post-collapse) layout.
 	after := m.bodyLayoutLines()
-	for i, l := range after {
-		if l.rowID == id && l.isHeader {
+	for i, al := range after {
+		if al.rowID == id && al.isHeader {
 			m.cursor = i
-			m.follow = i == len(after)-1
+			m.follow = i == m.followLineIndex(after)
 			return
 		}
 	}
 }
 
-// toggleFocusAtCursor implements `s`: SESSION FOCUS (solo) mode. Toggles
-// focus on the session that owns the row at the cursor's CURRENT body line
-// (its header line, or one of its expanded detail lines) — the same
-// row-under-cursor lookup toggleExpandAtCursor uses. Toggle, not set:
-// pressing `s` again on the ALREADY-focused session clears focus (back to
-// "show all"); a no-op when the cursor sits on an untied line (empty-state
-// hint, help overlay) — nothing to focus on there. Cursor/scroll are left
-// to the existing generic clamp (clampedCursor/reconcileScroll — the
+// toggleFocusAtCursor implements `s`: SESSION FOCUS (solo) mode — solo
+// the selected session subtree. The session comes from whatever the
+// cursor's line is: an event row's owning session, or a session NODE
+// header itself (nodeID). A sandbox node has no single session to solo,
+// so `s` there is a no-op (as is an untied line — empty-state hint, help
+// overlay). Toggle, not set: pressing `s` again on the ALREADY-focused
+// session clears focus (back to "show all"). Cursor/scroll are left to
+// the existing generic clamp (clampedCursor/reconcileScroll — the
 // handleKey wrapper runs reconcileScroll right after this returns): the
 // visible set just changed size, and follow==true (the default) already
-// re-derives "the last line" fresh from whatever that set now is, which is
-// exactly "stay valid within the focused set" for the common case; a
+// re-derives the follow line fresh from whatever that set now is; a
 // detached cursor is clamped defensively the same way every other toggle
 // (f/m/t/p/x/c) already relies on.
 func (m *Model) toggleFocusAtCursor() {
@@ -901,15 +986,20 @@ func (m *Model) toggleFocusAtCursor() {
 	if len(lines) == 0 {
 		return
 	}
-	id := lines[m.clampedCursor(len(lines))].rowID
-	if id == "" {
-		return // untied line: nothing to focus on
+	l := lines[m.clampedCursor(lines)]
+	var sess string
+	switch {
+	case strings.HasPrefix(l.nodeID, sessionNodePrefix):
+		sess = strings.TrimPrefix(l.nodeID, sessionNodePrefix)
+	case l.rowID != "":
+		idx, ok := m.rowIndex[l.rowID]
+		if !ok {
+			return
+		}
+		sess = m.rows[idx].session
+	default:
+		return // sandbox node or untied line: no single session to solo
 	}
-	idx, ok := m.rowIndex[id]
-	if !ok {
-		return
-	}
-	sess := m.rows[idx].session
 	if sess == "" {
 		return
 	}
@@ -938,7 +1028,7 @@ func (m *Model) applyEvent(e monitor.Event) {
 		if model := sanitizeText(ev.Model, false); model != "" {
 			m.sessionModel[sess] = model
 		}
-		// The group header's title is the FIRST real user ask for this
+		// The session node's title is the FIRST real user ask for this
 		// session, never a later one and never a tool_result request (that's
 		// the tool's own output being replayed to the model, not something
 		// the user typed) — so this only fires once, guarded by the
@@ -1263,6 +1353,7 @@ func (m *Model) upsertRow(row tuiRow) {
 	m.rows = append(m.rows, row)
 	if row.session != "" {
 		m.sessionRowCount[row.session]++
+		m.sandboxRowCount[rowSandbox(row.session)]++
 	}
 	m.evictOldRows()
 }
@@ -1303,6 +1394,15 @@ func (m *Model) evictOldRows() {
 			delete(m.prevSysHash, r.session)
 			delete(m.sessionModel, r.session)
 			delete(m.sessionTitle, r.session)
+			// The session's tree-node collapse state dies with its last
+			// retained row too (same class as R4-2).
+			delete(m.collapsed, sessionNodeID(r.session))
+		}
+		sandbox := rowSandbox(r.session)
+		m.sandboxRowCount[sandbox]--
+		if m.sandboxRowCount[sandbox] <= 0 {
+			delete(m.sandboxRowCount, sandbox)
+			delete(m.collapsed, sandboxNodeID(sandbox))
 		}
 	}
 	m.rows = append([]tuiRow(nil), m.rows[drop:]...)
@@ -1341,8 +1441,9 @@ func (m Model) passesToggles(r tuiRow) bool {
 		// content the tool row right above it already rendered as
 		// `→ ok ...`. Hiding it here (rather than at applyEvent/upsertRow)
 		// keeps the row itself intact so the response row for this same
-		// turn still renders, group headers still see a real row to key
-		// off of, and toggling something else off/on never resurrects it.
+		// turn still renders, the tree's session nodes still see a real
+		// row to key off of, and toggling something else off/on never
+		// resurrects it.
 		if r.trigger == "tool_result" {
 			return false
 		}
@@ -1381,13 +1482,14 @@ type bodyLine struct {
 	text     string
 	rowID    string
 	isHeader bool
-	// group marks a session GROUP HEADER line (the `── sandbox … ──` rule
-	// emitted when 2+ distinct sessions are in view). Group lines are
-	// NON-selectable: they own no row (rowID==""), the line cursor skips
-	// over them (skipGroupLines), and expand on one is a no-op.
-	group bool
-	// ts is the owning row's tuiRow.ts (0 for a group header or an untied
-	// line — help overlay, empty-state hint), used by renderBodyLines to
+	// nodeID marks a TREE NODE header line (a sandbox or session — see
+	// sandboxNodeID/sessionNodeID) and is the key into Model.collapsed.
+	// Node headers are NAVIGABLE (the line cursor lands on them; enter/
+	// space toggles their collapse) but own no row (rowID=="").
+	nodeID string
+	// ts is the owning row's tuiRow.ts (for a node header: the newest ts
+	// anywhere in its subtree — its latest activity; 0 for an untied line
+	// — help overlay, empty-state hint), used by renderBodyLines to
 	// render the showTimestamps HH:MM:SS column (or blanks) aligned across
 	// every line kind.
 	ts int64
@@ -1464,14 +1566,16 @@ func (m Model) bodyHeight() int {
 }
 
 // bodyLayoutLines builds the flat physical-line layout of the scrollable
-// body: one line per visible row header (with its ▸/▾ expand caret), plus
-// one line per expanded-detail physical line (detailLines already split
-// every multi-line body on '\n'). This is the single source of truth for
-// line positions — the cursor, reconcileScroll, expand-at-cursor, and
-// renderBodyLines all index into the SAME layout — so no line here ever
-// contains a '\n'. Text is raw (no gutter, no truncation, no styling);
-// renderBodyLines decorates it. The help overlay REPLACES this entirely
-// rather than being one more toggle over the row feed.
+// body by FLATTENING the collapsible tree (sandbox -> session -> events):
+// one line per visible node header and row header (each with its ▸/▾
+// caret), plus one line per expanded-detail physical line (detailLines
+// already split every multi-line body on '\n'). This is the single source
+// of truth for line positions — the cursor, reconcileScroll,
+// toggle-at-cursor, and renderBodyLines all index into the SAME layout —
+// so no line here ever contains a '\n'. Text is raw apart from the tree
+// indent (no gutter, no truncation, no styling); renderBodyLines
+// decorates it. The help overlay REPLACES this entirely rather than being
+// one more toggle over the row feed.
 func (m Model) bodyLayoutLines() []bodyLine {
 	if m.showHelp {
 		return m.helpBodyLines()
@@ -1492,38 +1596,27 @@ func (m Model) bodyLayoutLines() []bodyLine {
 			{text: fmt.Sprintf("waiting for a monitor-enabled sandbox on :%d — if nothing appears, the sandbox may predate the monitor extension (rebuild image / make load)", m.hubPort())},
 		}
 	}
-	// Session grouping (live feedback: with 2 sandboxes running the feed
-	// is an undifferentiated mess; and separately, "sandboxes aren't
-	// labeled" — a single-sandbox feed showed no label at all). The
-	// group-header line now ALWAYS renders, one per contiguous RUN of
-	// same-session rows (chronological order is preserved — rows are
-	// never reordered, so follow keeps tracking the true newest event and
-	// a bursty feed reads as threads), so the user always sees which
-	// sandbox/session they're watching, even with only one. Extra indent
-	// under the header is reserved for when it's actually needed to tell
-	// threads apart: 2+ distinct sessionKeys (multiSession) indents rows
-	// 4 spaces under their header; a single session keeps the plain
-	// 2-col gutter (no indent) with the one header line at top — it reads
-	// cleaner than indenting an entire feed under a header it can never
-	// need to distinguish from another.
-	// SESSION FOCUS (solo) mode: with only one session ever in view, the
-	// group header/indent below is redundant (the top bar carries that
-	// context instead — see focusHeaderLine) and rendering it flat matches
-	// the "render like a single session" ask.
-	grouped := multiSession(rows) && m.focusSession == ""
-	indent := ""
-	if grouped {
-		indent = "    "
-	}
+	// COLLAPSIBLE TREE: sandbox -> session -> conversation. Rows are
+	// grouped by sandbox (first-seen order), then by session within the
+	// sandbox (first-seen order); each session's event rows render
+	// CONTIGUOUSLY, in arrival order — never interleaved with another
+	// session's, even when the events arrived interleaved (the flat
+	// chronological feed this replaces was unparseable with more than one
+	// concurrent session: one session appeared as several non-contiguous
+	// blocks). The FIRST-SEEN session is the sandbox's PRIMARY
+	// conversation (depth 1, directly under the sandbox node at depth 0);
+	// every other session in that sandbox nests under the primary as a
+	// child node (depth 2, its events at depth 3) — the user's model:
+	// any pi session is a child of the top one in the sandbox. Node
+	// headers are NAVIGABLE and collapsible (m.collapsed); a collapsed
+	// subtree contributes no lines. Indent is 2 spaces per depth, applied
+	// here (renderBodyLines adds the timestamp column + cursor gutter in
+	// front of it).
 	var lines []bodyLine
-	prevSession := ""
-	for i, r := range rows {
-		if m.focusSession == "" && (i == 0 || r.session != prevSession) {
-			lines = append(lines, bodyLine{text: m.groupHeaderText(r.session), group: true})
-		}
-		prevSession = r.session
-		// ▸/▾ is the expand affordance: every row kind has detail after
-		// this rework, so every header carries a caret.
+	emitRow := func(r tuiRow, depth int) {
+		indent := strings.Repeat("  ", depth)
+		// ▸/▾ is the payload-expand affordance: every row kind has
+		// detail, so every header carries a caret.
 		caret := "\u25b8 "
 		if m.expanded[r.id] {
 			caret = "\u25be "
@@ -1535,116 +1628,228 @@ func (m Model) bodyLayoutLines() []bodyLine {
 			}
 		}
 	}
+	emitNode := func(nodeID, label string, depth int, ts int64) {
+		caret := "\u25be "
+		if m.collapsed[nodeID] {
+			caret = "\u25b8 "
+		}
+		lines = append(lines, bodyLine{text: strings.Repeat("  ", depth) + caret + label, nodeID: nodeID, ts: ts})
+	}
+	groups := groupTreeRows(rows)
+	if m.focusSession != "" {
+		// SESSION FOCUS (solo) mode: exactly one session is ever in view
+		// (visibleRows already dropped everything else), so render just
+		// that session's node + its events, flat — no sandbox level, no
+		// sibling sessions. The sandbox context lives in the top bar
+		// while focused (focusHeaderLine).
+		for _, sb := range groups {
+			for _, ses := range sb.sessions {
+				nid := sessionNodeID(ses.session)
+				emitNode(nid, m.sessionNodeLabel(ses.session), 0, ses.latestTS)
+				if m.collapsed[nid] {
+					continue
+				}
+				for _, r := range ses.rows {
+					emitRow(r, 1)
+				}
+			}
+		}
+		return lines
+	}
+	for _, sb := range groups {
+		bnid := sandboxNodeID(sb.sandbox)
+		emitNode(bnid, m.sandboxNodeLabel(sb.sandbox, len(sb.sessions)), 0, sb.latestTS)
+		if m.collapsed[bnid] {
+			continue // a collapsed sandbox hides ALL its sessions+events
+		}
+		primary := sb.sessions[0]
+		pnid := sessionNodeID(primary.session)
+		emitNode(pnid, m.sessionNodeLabel(primary.session), 1, primary.latestTS)
+		if !m.collapsed[pnid] {
+			// Collapsing the primary hides only its OWN events; the
+			// child-session nodes below stay visible — they are the
+			// user's other conversations, not the primary's payload.
+			for _, r := range primary.rows {
+				emitRow(r, 2)
+			}
+		}
+		for _, ses := range sb.sessions[1:] {
+			cnid := sessionNodeID(ses.session)
+			emitNode(cnid, m.sessionNodeLabel(ses.session), 2, ses.latestTS)
+			if m.collapsed[cnid] {
+				continue
+			}
+			for _, r := range ses.rows {
+				emitRow(r, 3)
+			}
+		}
+	}
 	return lines
 }
 
-// multiSession reports whether the visible rows span more than one
-// distinct sessionKey — the switch that turns session grouping on.
-func multiSession(rows []tuiRow) bool {
-	for _, r := range rows[1:] {
-		if r.session != rows[0].session {
-			return true
-		}
-	}
-	return false
+// sessionGroup / sandboxGroup are the tree's grouping buckets, built
+// fresh from the visible rows on every layout pass by groupTreeRows.
+type sessionGroup struct {
+	session  string // sessionKey — raw, identity only, never rendered
+	rows     []tuiRow
+	latestTS int64 // newest row ts in this session (node-header timestamp)
 }
 
-// groupHeaderText renders a session group's header rule at column 0 (no
-// indent — the rows under it are indented instead, so the feed reads as
-// threads): `── <sandbox> · <session> · <model> · "<title>" ──`, e.g.
-// `── pi-stack-dev · 10f905c3 · claude-opus-4-8 · "can you send a test
-// ping to gemini…" ──`. With several concurrent sessions streaming (a main
-// conversation, child `pi -p` provider calls, other interactive sessions)
-// the bare sandbox/session id told you nothing about what a session
-// actually IS — the model and title segments make the header
-// self-explanatory: which model this session is on, and what its user
-// actually asked for. See sessionModel/sessionTitle. Either segment is
-// omitted when not yet captured: a session with no turn_start/
-// provider_request yet has no known model, and a session whose first
-// user prompt hasn't landed (or was tool_result-only, e.g. a `pi -p`
-// one-shot with no clear "user" trigger — empty trigger still counts)
-// has no title.
-//
-// The sessionKey is split back into its sandbox/session halves
-// (sessionKey joins them with "/"); sandbox/model/title are all
-// event-derived attacker text, so they're sanitized here too (the model
-// and title are already sanitized when stored, but this stays
-// defense-in-depth rather than trusting the map) — the raw key is only
-// ever a map/identity key, never rendered. An empty sandbox id reads
-// "(local)"; the session id is shortened to its last 8 runes (the tail is
-// the distinctive part of a generated id). The whole line is composed
-// unbounded here; renderBodyLines' shared m.truncate pass clamps it (and
-// every other body line) to the terminal width, so a long title
-// ellipsizes instead of wrapping — it never gets its own truncation here.
-func (m Model) groupHeaderText(session string) string {
-	sandbox, sess, _ := strings.Cut(session, "/")
-	sandbox = sanitizeText(sandbox, false)
-	sess = sanitizeText(sess, false)
-	if sandbox == "" {
-		sandbox = "(local)"
+type sandboxGroup struct {
+	sandbox  string // sandbox id — raw; sanitized by sandboxNodeLabel
+	sessions []*sessionGroup
+	latestTS int64
+}
+
+// groupTreeRows groups the (already toggle/focus/filter-passed) rows by
+// sandbox then session, both in FIRST-SEEN order — rows preserve arrival
+// order in m.rows, so first appearance here IS earliest-seen. Events stay
+// in arrival order within their session and are never reordered, so a
+// session's conversation reads chronologically and contiguously.
+func groupTreeRows(rows []tuiRow) []*sandboxGroup {
+	var out []*sandboxGroup
+	sbIdx := make(map[string]*sandboxGroup)
+	sesIdx := make(map[string]*sessionGroup)
+	for _, r := range rows {
+		sandbox := rowSandbox(r.session)
+		sb, ok := sbIdx[sandbox]
+		if !ok {
+			sb = &sandboxGroup{sandbox: sandbox}
+			sbIdx[sandbox] = sb
+			out = append(out, sb)
+		}
+		ses, ok := sesIdx[r.session]
+		if !ok {
+			ses = &sessionGroup{session: r.session}
+			sesIdx[r.session] = ses
+			sb.sessions = append(sb.sessions, ses)
+		}
+		ses.rows = append(ses.rows, r)
+		if r.ts > ses.latestTS {
+			ses.latestTS = r.ts
+		}
+		if r.ts > sb.latestTS {
+			sb.latestTS = r.ts
+		}
 	}
+	return out
+}
+
+// rowSandbox extracts the sandbox half of a sessionKey (sandboxId+"/"+
+// sessionId — the same Cut convention focusHeaderLine uses).
+func rowSandbox(session string) string {
+	sandbox, _, _ := strings.Cut(session, "/")
+	return sandbox
+}
+
+// sandboxNodePrefix / sessionNodePrefix namespace the collapse-state keys
+// (Model.collapsed) so a sandbox id shaped like a sessionKey can never
+// collide with a session node's key.
+const (
+	sandboxNodePrefix = "sandbox:"
+	sessionNodePrefix = "session:"
+)
+
+// sandboxNodeID / sessionNodeID are the stable node ids tree headers
+// carry (bodyLine.nodeID) and collapse state is keyed by.
+func sandboxNodeID(sandbox string) string { return sandboxNodePrefix + sandbox }
+func sessionNodeID(session string) string { return sessionNodePrefix + session }
+
+// sandboxNodeLabel renders a sandbox node's header text (after the
+// caret): the sanitized sandbox name plus its visible session count, e.g.
+// `pi-stack-dev  (3 sessions)`. An empty sandbox id reads "(local)". The
+// line is composed unbounded; renderBodyLines' shared m.truncate pass
+// clamps it to the terminal width like every other body line.
+func (m Model) sandboxNodeLabel(sandbox string, sessions int) string {
+	name := sanitizeText(sandbox, false)
+	if name == "" {
+		name = "(local)"
+	}
+	noun := "sessions"
+	if sessions == 1 {
+		noun = "session"
+	}
+	return fmt.Sprintf("%s  (%d %s)", name, sessions, noun)
+}
+
+// sessionNodeLabel renders a session node's header text (after the
+// caret): `<short-session-id> · <model> · “<first user prompt>”`, e.g.
+// `a9bd1638 · claude-opus-4-8 · “hi there”`. Model/title come from
+// sessionModel/sessionTitle; either segment is omitted when not yet
+// captured (no turn_start/provider_request yet, or no user-triggered
+// prompt yet). Session id, model, and title are all event-derived
+// attacker text, so they're sanitized here too (the map values are
+// already sanitized when stored — this stays defense-in-depth rather than
+// trusting the map). The session id is shortened to its last 8 runes (the
+// tail is the distinctive part of a generated id); empty reads "-".
+func (m Model) sessionNodeLabel(session string) string {
+	_, sess, _ := strings.Cut(session, "/")
+	sess = sanitizeText(sess, false)
 	if r := []rune(sess); len(r) > 8 {
 		sess = string(r[len(r)-8:])
 	}
 	if sess == "" {
 		sess = "-"
 	}
-	head := fmt.Sprintf("\u2500\u2500 %s \u00b7 %s", sandbox, sess)
+	label := sess
 	if model := sanitizeText(m.sessionModel[session], false); model != "" {
-		head += " \u00b7 " + model
+		label += " \u00b7 " + model
 	}
 	if title := sanitizeText(m.sessionTitle[session], false); title != "" {
-		head += fmt.Sprintf(" \u00b7 \u201c%s\u201d", title)
+		label += fmt.Sprintf(" \u00b7 \u201c%s\u201d", title)
 	}
-	return head + " \u2500\u2500"
+	return label
 }
 
 // renderBodyLines decorates bodyLayoutLines for display: a "> "/"  " gutter
-// on row lines (the marker lands on the header of the row that OWNS the
-// cursor line — visible/assertable independent of terminal color support,
-// since lipgloss renders plain whenever stdout isn't a TTY, e.g. every
-// unit test), per-line truncation of the FULL composed line to the
-// terminal width (so nothing — gutter included — escapes the frame), and
-// reverse styling on the exact cursor line so line-granular position is
-// legible on a real color terminal.
+// on row and node lines (the marker lands on the header of the row that
+// OWNS the cursor line, or on the selected node header — visible/
+// assertable independent of terminal color support, since lipgloss
+// renders plain whenever stdout isn't a TTY, e.g. every unit test),
+// per-line truncation of the FULL composed line to the terminal width (so
+// nothing — gutter included — escapes the frame), and reverse styling on
+// the exact cursor line so line-granular position is legible on a real
+// color terminal.
 func (m Model) renderBodyLines() []bodyLine {
 	lines := m.bodyLayoutLines()
 	if len(lines) == 0 {
 		return lines
 	}
-	cur := m.clampedCursor(len(lines))
-	selID := lines[cur].rowID
+	cur := m.clampedCursor(lines)
+	selRow := lines[cur].rowID
+	selNode := lines[cur].nodeID
 	out := make([]bodyLine, len(lines))
 	for i, l := range lines {
 		text := l.text
-		if l.rowID != "" {
+		if l.rowID != "" || l.nodeID != "" {
 			gutter := "  "
-			if l.isHeader && selID != "" && l.rowID == selID {
+			if (l.isHeader && l.rowID != "" && l.rowID == selRow) ||
+				(l.nodeID != "" && l.nodeID == selNode) {
 				gutter = "> "
 			}
 			text = gutter + text
 		}
 		// The HH:MM:SS column goes at the VERY start of the line — before
 		// the cursor gutter/indent — so it reads as its own fixed-width
-		// column across every line kind: row headers, expanded detail
-		// lines, and group-header rules alike (see the bodyLine.ts doc
-		// comment; a line with no owning row's ts, or the help overlay,
-		// renders blanks so the column still aligns). It's part of the line
-		// like everything else, so the width-truncation pass right below
-		// still clamps it along with the rest.
+		// column across every line kind: node headers, row headers, and
+		// expanded detail lines alike (see the bodyLine.ts doc comment; a
+		// line with no known ts, or the help overlay, renders blanks so
+		// the column still aligns). It's part of the line like everything
+		// else, so the width-truncation pass right below still clamps it
+		// along with the rest.
 		if m.showTimestamps && !m.showHelp {
 			text = timestampPrefix(l.ts) + text
 		}
 		text = m.truncate(text)
 		switch {
-		case l.group:
-			// Group headers stay at column 0 (no gutter) and are dimmed —
-			// visually a rule between threads, never a selectable line.
-			text = groupHeaderStyle.Render(text)
-		case i == cur && l.rowID != "":
+		case i == cur && (l.rowID != "" || l.nodeID != ""):
 			text = selectedStyle.Render(text)
+		case l.nodeID != "":
+			// Node headers are dimmed+bold structure lines — legible as
+			// the tree's skeleton without competing with event content.
+			text = nodeHeaderStyle.Render(text)
 		}
-		out[i] = bodyLine{text: text, rowID: l.rowID, isHeader: l.isHeader, group: l.group}
+		out[i] = bodyLine{text: text, rowID: l.rowID, isHeader: l.isHeader, nodeID: l.nodeID}
 	}
 	return out
 }
@@ -1655,10 +1860,11 @@ func (m Model) renderBodyLines() []bodyLine {
 const timestampWidth = len("15:04:05") + 1
 
 // timestampPrefix renders the showTimestamps column for one body line: the
-// row's ts (unix millis) formatted in LOCAL time as "HH:MM:SS ", or
-// timestampWidth blanks when ts is 0/unknown (a group header, an untied
-// line, or a row whose creating event carried no envelope ts) — so the
-// column stays aligned across every line kind.
+// line's ts (unix millis — a row's first-seen ts, or a node's latest
+// activity) formatted in LOCAL time as "HH:MM:SS ", or timestampWidth
+// blanks when ts is 0/unknown (an untied line, or a row whose creating
+// event carried no envelope ts) — so the column stays aligned across
+// every line kind.
 func timestampPrefix(ts int64) string {
 	if ts <= 0 {
 		return strings.Repeat(" ", timestampWidth)
@@ -1734,14 +1940,21 @@ func (m Model) helpBodyLines() []bodyLine {
 	text := []string{
 		"pi-stack monitor — keys",
 		"",
+		"tree",
+		"  the feed is a tree: sandbox ▸ session ▸ events. the first-seen",
+		"  session is the sandbox's PRIMARY conversation; every other pi",
+		"  session in that sandbox nests under it as a child node. sandbox",
+		"  and session headers are navigable lines like any event row.",
+		"",
 		"navigation (line-granular: expanded payloads scroll line by line)",
 		"  up, down        move one line (emacs: ctrl+p / ctrl+n)",
 		"  g/Home, alt+<   jump to the top",
-		"  G/End, alt+>    jump to the bottom (re-attach follow)",
+		"  G/End, alt+>    jump to the newest event (re-attach follow)",
 		"  PgUp/PgDn       page up/down (ctrl+u/ctrl+d; emacs: alt+v / ctrl+v)",
 		"",
-		"row detail",
-		"  enter, space    expand/collapse the row owning the cursor line (▸/▾)",
+		"enter / space — context-sensitive on the selected line (▸/▾)",
+		"  on a sandbox/session node: collapse/expand that subtree",
+		"  on an event row: expand/collapse its payload detail",
 		"",
 		"toggles",
 		"  T               toggle timestamps",
@@ -1751,7 +1964,7 @@ func (m Model) helpBodyLines() []bodyLine {
 		"  p               mcp tool rows",
 		"  x               thinking-level context rows",
 		"  c               context rows",
-		"  s               focus/unfocus the selected session",
+		"  s               focus/unfocus the selected session (solo its subtree)",
 		"",
 		"filter",
 		"  /               start typing a filter; enter commits, esc cancels",
@@ -1789,14 +2002,13 @@ func (m Model) headerLine() string {
 }
 
 // focusHeaderLine renders the top bar while SESSION FOCUS is active
-// (m.focusSession != ""): the per-session group header this replaces
-// (groupHeaderText) is suppressed from the body entirely when focused (see
-// bodyLayoutLines), so the sandbox/session/model/title context it used to
-// carry has to live somewhere — the top bar is that somewhere now. Same
-// sandbox/session-short/model/title derivation as groupHeaderText (kept as
-// its own function rather than shared, since the surrounding punctuation
-// differs: a header rule vs. a single info line), same sanitize-again
-// defense in depth even though the map values are already sanitized.
+// (m.focusSession != ""): the sandbox level of the tree is suppressed
+// from the body when focused (see bodyLayoutLines), so the full
+// sandbox/session/model/title context lives here. Same
+// sandbox/session-short/model/title derivation as sessionNodeLabel (kept
+// as its own function rather than shared, since the surrounding
+// punctuation differs), same sanitize-again defense in depth even though
+// the map values are already sanitized.
 // events=<n> counts only the FOCUSED session's retained rows
 // (sessionRowCount), not the global len(m.rows) the unfocused header
 // shows — the number on screen should describe what's actually in view.
@@ -1837,7 +2049,7 @@ func (m Model) footerLine() string {
 		focus = "[focus]"
 	}
 	return fmt.Sprintf(
-		"%s %s T:time=%s f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s  nav:\u2191\u2193  enter/space:expand  /:filter  ?:help  q:quit",
+		"%s %s T:time=%s f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s  nav:\u2191\u2193  enter/space:toggle  /:filter  ?:help  q:quit",
 		follow, focus, onoff(m.showTimestamps),
 		onoff(m.showFull), onoff(m.showModel), onoff(m.showTools), onoff(m.showMCP),
 		onoff(m.showThinking), onoff(m.showContext))
@@ -2260,11 +2472,11 @@ func humanDuration(ms int) string {
 }
 
 var (
-	headerStyle      = lipgloss.NewStyle().Bold(true)
-	footerStyle      = lipgloss.NewStyle().Faint(true)
-	filterStyle      = lipgloss.NewStyle().Italic(true)
-	selectedStyle    = lipgloss.NewStyle().Reverse(true).Bold(true)
-	groupHeaderStyle = lipgloss.NewStyle().Faint(true).Bold(true)
+	headerStyle     = lipgloss.NewStyle().Bold(true)
+	footerStyle     = lipgloss.NewStyle().Faint(true)
+	filterStyle     = lipgloss.NewStyle().Italic(true)
+	selectedStyle   = lipgloss.NewStyle().Reverse(true).Bold(true)
+	nodeHeaderStyle = lipgloss.NewStyle().Faint(true).Bold(true)
 )
 
 // RunTUI runs the bubbletea program to completion (blocking). Unit C calls
