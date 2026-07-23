@@ -667,6 +667,59 @@ export function modelLabel(model: any): string {
 }
 
 /**
+ * Joins a stripped-trailing-slash baseUrl to `version` + `path`, but skips
+ * re-adding `version` when baseUrl already ends with it (e.g. a custom
+ * gateway baseUrl of "https://x/v1" must not become ".../v1/v1/messages").
+ * Shared by every versioned branch of `requestUrl` below.
+ */
+function joinVersionedPath(baseUrl: string, version: string, path: string): string {
+	if (baseUrl.endsWith(`/${version}`)) return `${baseUrl}${path}`;
+	return `${baseUrl}/${version}${path}`;
+}
+
+/**
+ * Derives the actual HTTP request URL pi would have sent for `model`, from
+ * `baseUrl` + the conventional endpoint path for `api` — pi's hooks never
+ * hand us the literal outgoing URL, only the model descriptor (baseUrl/api/
+ * id/provider), so this reconstructs it. Pure and total: never throws, and
+ * degrades to a best-effort value (or "") on anything unexpected, since a
+ * wrong/missing request URL must never break event emission.
+ *
+ * - anthropic-messages -> baseUrl + "/v1/messages" (baseUrl already ending in
+ *   "/v1" gets just "/messages", never a doubled "/v1/v1/...").
+ * - openai-responses -> baseUrl + "/v1/responses" (same /v1 dedupe).
+ * - openai-completions -> baseUrl + "/v1/chat/completions" (same /v1 dedupe).
+ * - a google/gemini api (api containing "google", "gemini", or "generative")
+ *   -> baseUrl + "/v1beta/models/<id>:streamGenerateContent" (same dedupe,
+ *   against "/v1beta").
+ * - unknown/empty api -> baseUrl as-is.
+ * - no baseUrl at all -> "".
+ *
+ * A trailing slash on baseUrl is stripped first so no branch ever produces a
+ * double slash.
+ */
+export function requestUrl(model: { baseUrl?: string; api?: string; id?: string } | null | undefined): string {
+	return (
+		safe(() => {
+			const rawBaseUrl = typeof model?.baseUrl === "string" ? model.baseUrl : "";
+			const baseUrl = rawBaseUrl.replace(/\/+$/, "");
+			if (!baseUrl) return "";
+
+			const api = typeof model?.api === "string" ? model.api : "";
+			const id = typeof model?.id === "string" ? model.id : "";
+
+			if (api === "anthropic-messages") return joinVersionedPath(baseUrl, "v1", "/messages");
+			if (api === "openai-responses") return joinVersionedPath(baseUrl, "v1", "/responses");
+			if (api === "openai-completions") return joinVersionedPath(baseUrl, "v1", "/chat/completions");
+			if (api.includes("google") || api.includes("gemini") || api.includes("generative")) {
+				return joinVersionedPath(baseUrl, "v1beta", `/models/${id}:streamGenerateContent`);
+			}
+			return baseUrl;
+		}) ?? ""
+	);
+}
+
+/**
  * Best-effort session id: prefer the session file path (stable, unique per
  * session), fall back to any id-shaped field, else mint a random one for the
  * lifetime of this session (ephemeral/in-memory sessions have no file).
@@ -741,14 +794,14 @@ export default function (pi: ExtensionAPI) {
 		// held until message_end supplies the real usage/stopReason for the
 		// same round-trip (see the after_provider_response/message_end handlers).
 		let pendingResponseMeta: { status: number; headers?: Record<string, string> } | null = null;
-		// The provider_request summary/changedBlobs computed in before_provider_request,
-		// held until before_provider_headers supplies the request headers assembled
-		// for the SAME round-trip (before_provider_headers fires AFTER
-		// before_provider_request but before the provider HTTP call — see the
-		// before_provider_request/before_provider_headers handlers below). turnId is
-		// captured at stash time so a flush always emits under the turn it actually
-		// belongs to, never whatever `currentTurnId` happens to be later.
-		let pendingRequest: { model: string; summary: Record<string, unknown>; changedBlobs: string[]; turnId: string } | null = null;
+		// Request headers observed on the most recent before_provider_headers,
+		// held until before_provider_request supplies the summary/changedBlobs and
+		// emits the provider_request event for the SAME round-trip (pi's
+		// documented hook order is before_provider_headers -> before_provider_request
+		// -> after_provider_response -> message_end, so before_provider_headers
+		// always fires first — see the before_provider_headers/before_provider_request
+		// handlers below).
+		let pendingRequestHeaders: Record<string, string> | undefined;
 		const seenBlobHashes = new Set<string>();
 		const toolStartedAt = new Map<string, number>();
 		const emittedToolStart = new Set<string>();
@@ -873,12 +926,12 @@ export default function (pi: ExtensionAPI) {
 			return seqCounter;
 		}
 
-		function baseEnvelope(kind: string, turnIdOverride?: string) {
+		function baseEnvelope(kind: string) {
 			return {
 				kind,
 				sandboxId: SANDBOX_ID,
 				sessionId,
-				turnId: turnIdOverride ?? currentTurnId,
+				turnId: currentTurnId,
 				seq: nextSeq(),
 				ts: Date.now(),
 			};
@@ -904,34 +957,12 @@ export default function (pi: ExtensionAPI) {
 			return true;
 		}
 
-		/**
-		 * Emit the stashed provider_request (from before_provider_request),
-		 * optionally with the request headers assembled for it (from
-		 * before_provider_headers). A no-op when nothing is stashed. This is the
-		 * ONLY place provider_request is ever emitted, and it is called from every
-		 * spot that could otherwise silently lose a stashed request: the headers
-		 * hook itself (the happy path), a NEW before_provider_request arriving
-		 * while the previous stash is still un-emitted (the headers hook never
-		 * fired for it), a session reset, and session_shutdown — never emit twice
-		 * for the same stash, since `pendingRequest` is cleared before emitting.
-		 */
-		function flushPendingRequest(headers?: Record<string, string>) {
-			if (!pendingRequest) return;
-			const pending = pendingRequest;
-			pendingRequest = null;
-			emitEvent({
-				...baseEnvelope("provider_request", pending.turnId),
-				model: pending.model,
-				summary: pending.summary,
-				changedBlobs: pending.changedBlobs,
-				...(headers ? { headers } : {}),
-			});
-		}
-
 		function resetSessionState(ctx: any) {
-			// Flush any request stashed under the OUTGOING session before switching
-			// sessionId out from under it (never silently drop a request event).
-			flushPendingRequest();
+			// Nothing to flush here anymore — provider_request now emits synchronously
+			// at before_provider_request, so there is never an un-emitted stash left
+			// behind when the session switches. Just discard any headers stashed for
+			// a round-trip that never completed under the OUTGOING session.
+			pendingRequestHeaders = undefined;
 			sessionId = extractSessionId(ctx);
 			turnSeqCounter = 0;
 			currentTurnId = "";
@@ -1043,17 +1074,23 @@ export default function (pi: ExtensionAPI) {
 				trigger: inferTurnTrigger({ isFirstTurn, compacted, prevEventKind }),
 			});
 
-			// STASH rather than emit: before_provider_request fires BEFORE request
-			// headers are assembled (BeforeProviderHeadersEvent's own doc: "Fired
-			// after request headers are assembled, before the provider HTTP
-			// call"), so there is no headers value available yet. The
-			// before_provider_headers handler below attaches headers and does the
-			// actual emit. Flush any PREVIOUS stash first — if before_provider_headers
-			// never fired for it (ordering surprise / hook missing on this pi
-			// version), this new turn's request must never silently overwrite and
-			// lose it; it goes out headers-less instead.
-			flushPendingRequest();
-			pendingRequest = {
+			// EMIT NOW, not stash: pi's documented hook order (docs/extensions.md
+			// hook-order diagram) is before_provider_headers -> before_provider_request
+			// -> after_provider_response -> message_end, so before_provider_headers has
+			// ALREADY fired for this round-trip by the time this handler runs —
+			// whatever it stashed in `pendingRequestHeaders` is the right value to
+			// attach here. Emitting immediately (rather than waiting for a later
+			// hook) is what keeps provider_request ordered before its own turn's
+			// provider_response, instead of leaking into the NEXT turn.
+			const headers = pendingRequestHeaders;
+			pendingRequestHeaders = undefined;
+			// method/url reconstruct the actual HTTP request line pi sent to the
+			// provider (WIRE: ProviderRequest.Method/URL) from ctx.model, which pi
+			// never hands us directly — read it defensively, same as ctx?.model
+			// above, so a missing/odd ctx.model shape never breaks the emit.
+			const url = safe(() => requestUrl(ctx?.model)) ?? "";
+			emitEvent({
+				...baseEnvelope("provider_request"),
 				model,
 				summary: {
 					systemPromptHash: result.systemPromptHash,
@@ -1067,20 +1104,20 @@ export default function (pi: ExtensionAPI) {
 					toolSchemaHash: result.toolSchemaHash, // R2-6: same hash the tool-schema blob (below) is enqueued under.
 				},
 				changedBlobs,
-				turnId: currentTurnId,
-			};
+				...(headers ? { headers } : {}),
+				method: "POST",
+				url,
+			});
 		});
 
 		on("before_provider_headers", (e: any) => {
-			// Fires after request headers are assembled, before the provider HTTP
-			// call (BeforeProviderHeadersEvent, e.headers: ProviderHeaders =
-			// Record<string,string|null>). This is the SAME round-trip as the most
-			// recent before_provider_request (docs/extensions.md hook-order
-			// diagram), so the stash it left behind is the right one to attach
-			// headers to and emit now. Redact sensitive values (R6-2) before this
-			// ever leaves the sandbox.
-			const headers = redactHeaders(normalizeHeaders(e?.headers));
-			flushPendingRequest(headers);
+			// Fires BEFORE before_provider_request (pi's documented hook order:
+			// before_provider_headers -> before_provider_request ->
+			// after_provider_response -> message_end — docs/extensions.md hook-order
+			// diagram). ONLY stash the headers here; before_provider_request (which
+			// fires right after) picks this up and does the actual emit. Redact
+			// sensitive values (R6-2) before this ever leaves the sandbox.
+			pendingRequestHeaders = redactHeaders(normalizeHeaders(e?.headers));
 		});
 
 		on("after_provider_response", (e: any) => {
@@ -1191,17 +1228,6 @@ export default function (pi: ExtensionAPI) {
 
 
 		on("session_shutdown", () => {
-			// NOTE: deliberately does NOT flush a pending stash here. Unlike
-			// resetSessionState/the next before_provider_request (which flush into
-			// the SAME still-live queue), a flush here would enqueue a brand-new
-			// send right as the extension is tearing down — it would either race
-			// the abort below (aborting the very send this just started) or, if
-			// ordered after, still never be retried once shuttingDown gates
-			// drain()'s failure branch. R2-1's whole point is that shutdown aborts
-			// rather than attempts one more delivery; a lost stash at process
-			// teardown is the same acceptable tradeoff as any other event still
-			// in flight at this instant, not a silent-drop regression.
-
 			// R2-1: set shuttingDown FIRST, before clearing the timer or aborting
 			// the in-flight request — enqueue/kick/scheduleRetry and drain()'s
 			// failure branch all check it and no-op, so the abort below can't

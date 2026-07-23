@@ -96,6 +96,13 @@ type tuiRow struct {
 	// dead last in the request expand's diagnostics, and only while the
 	// `h` toggle (Model.showHeaders) is on — headers are noise by default.
 	reqHeaders []string
+	// reqMethod/reqURL are the sanitized HTTP method + URL of the provider
+	// request (monitor.ProviderRequest.Method/URL) — the request line of
+	// the `h`-gated HTTP-request-style block above reqHeaders (live
+	// feedback: a bare header dump "is not giving me the actual request";
+	// they wanted `POST https://...` first, like the real wire request).
+	reqMethod string
+	reqURL    string
 
 	// response
 	status     int
@@ -843,6 +850,8 @@ func (m *Model) applyEvent(e monitor.Event) {
 			estTokens:      ev.Summary.EstTokens,
 			toolSchemaHash: ev.Summary.ToolSchemaHash,
 			reqHeaders:     sanitizeHeaderLines(ev.Headers),
+			reqMethod:      sanitizeText(ev.Method, false),
+			reqURL:         sanitizeText(ev.URL, false),
 		})
 		// Only re-resolve while the row is both expanded AND showFull is
 		// on (review finding R3-2b) — resolving-but-not-displaying would
@@ -1316,14 +1325,19 @@ func (m Model) bodyLayoutLines() []bodyLine {
 		}
 	}
 	// Session grouping (live feedback: with 2 sandboxes running the feed
-	// is an undifferentiated mess). Active ONLY when the visible feed
-	// spans 2+ distinct sessionKeys — the common single-session case
-	// renders flat, exactly as before (no headers, no indent). When
-	// active, a non-selectable group-header line precedes each contiguous
-	// RUN of same-session rows (chronological order is preserved — rows
-	// are never reordered, so follow keeps tracking the true newest event
-	// and a bursty feed reads as threads), and every row/detail line in
-	// the run is indented under its header.
+	// is an undifferentiated mess; and separately, "sandboxes aren't
+	// labeled" — a single-sandbox feed showed no label at all). The
+	// group-header line now ALWAYS renders, one per contiguous RUN of
+	// same-session rows (chronological order is preserved — rows are
+	// never reordered, so follow keeps tracking the true newest event and
+	// a bursty feed reads as threads), so the user always sees which
+	// sandbox/session they're watching, even with only one. Extra indent
+	// under the header is reserved for when it's actually needed to tell
+	// threads apart: 2+ distinct sessionKeys (multiSession) indents rows
+	// 4 spaces under their header; a single session keeps the plain
+	// 2-col gutter (no indent) with the one header line at top — it reads
+	// cleaner than indenting an entire feed under a header it can never
+	// need to distinguish from another.
 	grouped := multiSession(rows)
 	indent := ""
 	if grouped {
@@ -1332,7 +1346,7 @@ func (m Model) bodyLayoutLines() []bodyLine {
 	var lines []bodyLine
 	prevSession := ""
 	for i, r := range rows {
-		if grouped && (i == 0 || r.session != prevSession) {
+		if i == 0 || r.session != prevSession {
 			lines = append(lines, bodyLine{text: groupHeaderText(r.session), group: true})
 		}
 		prevSession = r.session
@@ -1553,7 +1567,7 @@ func (m Model) footerLine() string {
 		follow = "[paused]"
 	}
 	return fmt.Sprintf(
-		"%s f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s h:headers=%s  j/k:nav  enter/space:expand  /:filter  ?:help  q:quit",
+		"%s f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s h:headers=%s  nav:\u2191\u2193/j/k  enter/space:expand  /:filter  ?:help  q:quit",
 		follow,
 		onoff(m.showFull), onoff(m.showModel), onoff(m.showTools), onoff(m.showMCP),
 		onoff(m.showThinking), onoff(m.showContext), onoff(m.showHeaders))
@@ -1735,10 +1749,21 @@ func (m Model) detailLines(r tuiRow) []string {
 		}
 		// Request HTTP headers dead LAST in diagnostics, mirroring the
 		// response side — and only behind the `h` toggle (default off:
-		// headers are noise).
+		// headers are noise). Rendered as an actual HTTP request block (a
+		// `METHOD url` request line, then `Key: value` header lines) —
+		// live feedback: a flat alphabetized `hdr k: v` dump "is not
+		// giving me the actual request", the user wanted something that
+		// reads like the real wire request. The request line is built
+		// from the row's (sanitized) Method/URL and omitted — but headers
+		// still shown — if both are empty (older events / no headers hook
+		// fired yet).
 		if m.showHeaders {
+			lines = append(lines, "      request:")
+			if r.reqMethod != "" || r.reqURL != "" {
+				lines = append(lines, "        "+strings.TrimSpace(r.reqMethod+" "+r.reqURL))
+			}
 			for _, h := range r.reqHeaders {
-				lines = append(lines, "      hdr "+h)
+				lines = append(lines, "        "+h)
 			}
 		}
 	case rowKindResponse:
@@ -1769,10 +1794,15 @@ func (m Model) detailLines(r tuiRow) []string {
 			lines = append(lines, "      usage  (not reported)")
 		}
 		// HTTP headers dead last, and only behind the `h` toggle
-		// (default off: headers are noise, per live feedback).
+		// (default off: headers are noise, per live feedback). Rendered
+		// as an actual HTTP response block (an `HTTP <status>` status
+		// line, then `Key: value` header lines) — same live feedback as
+		// the request side above.
 		if m.showHeaders {
+			lines = append(lines, "      response:")
+			lines = append(lines, fmt.Sprintf("        HTTP %d", r.status))
 			for _, h := range r.headers {
-				lines = append(lines, "      hdr "+h)
+				lines = append(lines, "        "+h)
 			}
 		}
 	case rowKindTool:

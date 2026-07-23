@@ -110,6 +110,14 @@ type ProviderRequest struct {
 	// (capHeaders). Omitted (nil) when the headers hook never fired for this
 	// request (e.g. a stale stash flushed by ordering safety nets).
 	Headers map[string]string `json:"headers,omitempty"`
+	// Method and URL capture the actual HTTP request line sent to the
+	// provider (e.g. "POST" / "https://api.anthropic.com/v1/messages"), so
+	// the TUI's header view can render a real request instead of just a
+	// header map. Derived by the extension from ctx.model (baseUrl + api),
+	// not observed on the wire directly. Short identifiers, capped with
+	// capID on decode like every other id/label field.
+	Method string `json:"method"`
+	URL    string `json:"url"`
 }
 
 func (e ProviderRequest) Envelope() Envelope { return e.env }
@@ -365,6 +373,8 @@ func Decode(line []byte) (Event, error) {
 		}
 		capEnvelopeIDs(&e.env)
 		e.Model = capID(e.Model)
+		e.Method = capID(e.Method)
+		e.URL = capID(e.URL)
 		e.Summary.SystemPromptHash = capHash(e.Summary.SystemPromptHash)
 		e.Summary.ToolSchemaHash = capHash(e.Summary.ToolSchemaHash)
 		e.Summary.ToolNames = capStringSlice(e.Summary.ToolNames, capID)

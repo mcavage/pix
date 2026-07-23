@@ -46,6 +46,8 @@ func TestEventEncodeDecodeRoundTrip(t *testing.T) {
 			},
 			ChangedBlobs: []string{"hash-sys"},
 			Headers:      map[string]string{"user-agent": "pi/1.0"},
+			Method:       "POST",
+			URL:          "https://api.anthropic.com/v1/messages",
 		},
 		ProviderResponse{
 			env:         sampleEnvelope(KindProviderResponse),
@@ -174,6 +176,8 @@ func TestEventJSONTagsGolden(t *testing.T) {
 		},
 		ChangedBlobs: []string{"h"},
 		Headers:      map[string]string{"user-agent": "pi/1.0"},
+		Method:       "POST",
+		URL:          "https://api.anthropic.com/v1/messages",
 	}
 	var m map[string]json.RawMessage
 	line, err = Encode(pr)
@@ -183,7 +187,7 @@ func TestEventJSONTagsGolden(t *testing.T) {
 	if err := json.Unmarshal(line, &m); err != nil {
 		t.Fatalf("Unmarshal() error: %v", err)
 	}
-	for _, key := range []string{"kind", "sandboxId", "sessionId", "turnId", "seq", "ts", "model", "summary", "changedBlobs", "headers"} {
+	for _, key := range []string{"kind", "sandboxId", "sessionId", "turnId", "seq", "ts", "model", "summary", "changedBlobs", "headers", "method", "url"} {
 		if _, ok := m[key]; !ok {
 			t.Fatalf("provider_request JSON missing key %q; got keys %v", key, m)
 		}
@@ -459,6 +463,12 @@ func TestDecodeCapsEveryStringBearingField(t *testing.T) {
 		{"ProviderRequest.Model", func() ([]byte, error) {
 			return Encode(ProviderRequest{env: env{Kind: KindProviderRequest}, Model: hugeID})
 		}, maxIdBytes, func(e Event) string { return e.(ProviderRequest).Model }},
+		{"ProviderRequest.Method", func() ([]byte, error) {
+			return Encode(ProviderRequest{env: env{Kind: KindProviderRequest}, Method: hugeID})
+		}, maxIdBytes, func(e Event) string { return e.(ProviderRequest).Method }},
+		{"ProviderRequest.URL", func() ([]byte, error) {
+			return Encode(ProviderRequest{env: env{Kind: KindProviderRequest}, URL: hugeID})
+		}, maxIdBytes, func(e Event) string { return e.(ProviderRequest).URL }},
 		{"ProviderResponse.StopReason", func() ([]byte, error) {
 			return Encode(ProviderResponse{env: env{Kind: KindProviderResponse}, StopReason: hugeID})
 		}, maxIdBytes, func(e Event) string { return e.(ProviderResponse).StopReason }},

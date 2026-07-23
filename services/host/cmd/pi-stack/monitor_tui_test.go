@@ -1957,15 +1957,26 @@ func TestMonitorTUI_GroupHeadersTwoSessions(t *testing.T) {
 	}
 }
 
-// Single-session feed: NO group header, NO indent — flat, exactly like the
-// pre-grouping rendering.
-func TestMonitorTUI_SingleSessionRendersFlat(t *testing.T) {
+// Single-session feed: the sandbox/session ALWAYS gets labeled now (live
+// feedback: "sandboxes aren't labeled") — one group header at the top,
+// but rows stay at the plain two-space gutter (no indent), since a single
+// session never needs the extra indent that tells threads apart.
+func TestMonitorTUI_SingleSessionShowsHeaderNoIndent(t *testing.T) {
 	m := NewModel(TUIConfig{})
 	m = nRows(t, m, 3) // all rows share the (empty) default session
 
 	view := m.View()
-	if strings.Contains(view, "──") || strings.Contains(view, "(local)") {
-		t.Fatalf("single-session feed rendered a group header, got:\n%s", view)
+	if !strings.Contains(view, "── sandbox (local)  ·  session - ──") {
+		t.Fatalf("single-session feed missing its sandbox/session label, got:\n%s", view)
+	}
+	var headerLines int
+	for _, l := range strings.Split(view, "\n") {
+		if strings.Contains(l, "── sandbox ") {
+			headerLines++
+		}
+	}
+	if headerLines != 1 {
+		t.Errorf("want exactly 1 group header line for a single session, got %d in:\n%s", headerLines, view)
 	}
 	if strings.Contains(view, "    ▸") {
 		t.Fatalf("single-session feed indented its rows, got:\n%s", view)
@@ -1982,6 +1993,8 @@ func TestMonitorTUI_HeaderToggleShowsRequestAndResponseHeaders(t *testing.T) {
 	m := NewModel(TUIConfig{})
 
 	req := mkProviderRequest("9", "opus-4-8", "h1", 1000, 1, 100, nil)
+	req.Method = "POST"
+	req.URL = "https://api.anthropic.com/v1/messages"
 	req.Headers = map[string]string{"x-req-trace": "req-va\x1b[31mlue"}
 	m = feed(t, m, req)
 	m = key(t, m, runeKey(" ")) // expand request (following: cursor on it)
@@ -1992,7 +2005,8 @@ func TestMonitorTUI_HeaderToggleShowsRequestAndResponseHeaders(t *testing.T) {
 	m = key(t, m, runeKey(" ")) // expand response (follow moved cursor to it)
 
 	view := m.View()
-	if strings.Contains(view, "hdr ") || strings.Contains(view, "x-req-trace") || strings.Contains(view, "x-resp-id") {
+	if strings.Contains(view, "hdr ") || strings.Contains(view, "x-req-trace") || strings.Contains(view, "x-resp-id") ||
+		strings.Contains(view, "POST https://api.anthropic.com") || strings.Contains(view, "HTTP 200") {
 		t.Fatalf("headers visible while h:headers=off (the default), got:\n%s", view)
 	}
 	if !strings.Contains(view, "h:headers=off") {
@@ -2001,11 +2015,26 @@ func TestMonitorTUI_HeaderToggleShowsRequestAndResponseHeaders(t *testing.T) {
 
 	m = key(t, m, runeKey("h"))
 	view = m.View()
-	if !strings.Contains(view, "hdr x-req-trace: req-value") {
-		t.Errorf("request headers missing (or unsanitized) after h, got:\n%s", view)
+	if !strings.Contains(view, "POST https://api.anthropic.com/v1/messages") {
+		t.Errorf("request line missing after h, got:\n%s", view)
 	}
-	if !strings.Contains(view, "hdr x-resp-id: resp-value") {
+	if !strings.Contains(view, "x-req-trace: req-value") || strings.Contains(view, "hdr ") {
+		t.Errorf("request headers missing (or unsanitized, or still `hdr `-prefixed) after h, got:\n%s", view)
+	}
+	if !strings.Contains(view, "HTTP 200") {
+		t.Errorf("response status line missing after h, got:\n%s", view)
+	}
+	if !strings.Contains(view, "x-resp-id: resp-value") {
 		t.Errorf("response headers missing after h, got:\n%s", view)
+	}
+	// The request line must render BEFORE the request's headers, and the
+	// status line before the response's headers (a status/method dump with
+	// headers scrambled ahead of it would defeat the point of the block).
+	if i, j := strings.Index(view, "POST https://api.anthropic.com"), strings.Index(view, "x-req-trace: req-value"); i < 0 || j < 0 || i > j {
+		t.Errorf("want request line before request headers, got:\n%s", view)
+	}
+	if i, j := strings.Index(view, "HTTP 200"), strings.Index(view, "x-resp-id: resp-value"); i < 0 || j < 0 || i > j {
+		t.Errorf("want status line before response headers, got:\n%s", view)
 	}
 	if !strings.Contains(view, "h:headers=on") {
 		t.Errorf("footer missing h:headers=on, got:\n%s", view)
@@ -2013,8 +2042,63 @@ func TestMonitorTUI_HeaderToggleShowsRequestAndResponseHeaders(t *testing.T) {
 	assertNoControlRunes(t, view)
 
 	m = key(t, m, runeKey("h")) // toggle back off
-	if strings.Contains(m.View(), "hdr ") {
-		t.Errorf("headers still visible after toggling h back off, got:\n%s", m.View())
+	view = m.View()
+	if strings.Contains(view, "hdr ") || strings.Contains(view, "POST https://api.anthropic.com") || strings.Contains(view, "HTTP 200") {
+		t.Errorf("headers still visible after toggling h back off, got:\n%s", view)
+	}
+}
+
+// TestMonitorTUI_HeaderToggleRendersRequestLineAndStatusLine locks in the
+// exact shape of the HTTP-request-style block (live feedback: "I'd expect
+// something like POST /api/..." instead of an alphabetized `hdr k: v`
+// dump): the request expand shows `METHOD url` immediately followed by its
+// header lines (no `hdr` prefix), and the response expand shows `HTTP
+// <status>` immediately followed by ITS header lines — both hidden
+// entirely while h is off.
+func TestMonitorTUI_HeaderToggleRendersRequestLineAndStatusLine(t *testing.T) {
+	m := NewModel(TUIConfig{})
+
+	req := mkProviderRequest("1", "opus-4-8", "", 0, 0, 0, nil)
+	req.Method = "POST"
+	req.URL = "https://api.anthropic.com/v1/messages"
+	req.Headers = map[string]string{"anthropic-version": "2023-06-01"}
+	m = feed(t, m, req)
+	m = key(t, m, runeKey(" ")) // expand
+
+	if view := m.View(); strings.Contains(view, "POST https://api.anthropic.com/v1/messages") {
+		t.Fatalf("request line visible with h off, got:\n%s", view)
+	}
+
+	m = key(t, m, runeKey("h"))
+	view := m.View()
+	reqLine := strings.Index(view, "POST https://api.anthropic.com/v1/messages")
+	if reqLine < 0 {
+		t.Fatalf("request line missing with h on, got:\n%s", view)
+	}
+	hdrLine := strings.Index(view, "anthropic-version: 2023-06-01")
+	if hdrLine < 0 || hdrLine < reqLine {
+		t.Fatalf("want `POST <url>` before its headers, got:\n%s", view)
+	}
+
+	resp := mkProviderResponse("1", 200, "end_turn", nil)
+	resp.Headers = map[string]string{"server": "cloudflare"}
+	m = feed(t, m, resp)
+	m = key(t, m, runeKey(" ")) // expand response
+
+	view = m.View()
+	statusLine := strings.Index(view, "HTTP 200")
+	if statusLine < 0 {
+		t.Fatalf("HTTP 200 status line missing with h on, got:\n%s", view)
+	}
+	respHdrLine := strings.Index(view, "server: cloudflare")
+	if respHdrLine < 0 || respHdrLine < statusLine {
+		t.Fatalf("want `HTTP 200` before its headers, got:\n%s", view)
+	}
+
+	m = key(t, m, runeKey("h")) // toggle back off
+	view = m.View()
+	if strings.Contains(view, "POST https://api.anthropic.com") || strings.Contains(view, "HTTP 200") {
+		t.Fatalf("request/status lines still visible with h off, got:\n%s", view)
 	}
 }
 

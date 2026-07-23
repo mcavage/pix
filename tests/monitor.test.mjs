@@ -22,6 +22,7 @@ const {
 	extractAssistantOutput,
 	normalizeHeaders,
 	redactHeaders,
+	requestUrl,
 } = monitor;
 
 // ─── R2-3: MCP classification fallback ──────────────────────────────────────
@@ -203,11 +204,93 @@ test("redactHeaders composes with normalizeHeaders for a before_provider_headers
 	assert.equal("x-suppressed" in redacted, false);
 });
 
-// ─── before_provider_headers: stash/flush wiring for request headers ──────
-// End-to-end against a stub `pi` + a local HTTP server that RECORDS every
-// posted NDJSON line, since the stash (`pendingRequest`) is intentionally
-// private to the default export's closure, same as the R2-1 queue/timer
-// state above.
+// ─── requestUrl: reconstruct the HTTP request line from ctx.model ──────────
+
+test("requestUrl: anthropic-messages appends /v1/messages", () => {
+	assert.equal(
+		requestUrl({ baseUrl: "https://api.anthropic.com", api: "anthropic-messages", id: "claude-opus-4-8" }),
+		"https://api.anthropic.com/v1/messages",
+	);
+});
+
+test("requestUrl: anthropic-messages with an existing /v1 baseUrl does not double it", () => {
+	assert.equal(
+		requestUrl({ baseUrl: "https://gateway.example.com/v1", api: "anthropic-messages" }),
+		"https://gateway.example.com/v1/messages",
+	);
+});
+
+test("requestUrl: openai-responses appends /v1/responses", () => {
+	assert.equal(requestUrl({ baseUrl: "https://api.openai.com", api: "openai-responses" }), "https://api.openai.com/v1/responses");
+});
+
+test("requestUrl: openai-responses respects an existing trailing /v1", () => {
+	assert.equal(requestUrl({ baseUrl: "https://api.openai.com/v1", api: "openai-responses" }), "https://api.openai.com/v1/responses");
+});
+
+test("requestUrl: openai-completions appends /v1/chat/completions", () => {
+	assert.equal(
+		requestUrl({ baseUrl: "https://api.openai.com", api: "openai-completions" }),
+		"https://api.openai.com/v1/chat/completions",
+	);
+});
+
+test("requestUrl: openai-completions respects an existing trailing /v1", () => {
+	assert.equal(
+		requestUrl({ baseUrl: "https://api.openai.com/v1", api: "openai-completions" }),
+		"https://api.openai.com/v1/chat/completions",
+	);
+});
+
+test("requestUrl: a google/gemini api builds the streamGenerateContent path with the model id", () => {
+	assert.equal(
+		requestUrl({ baseUrl: "https://generativelanguage.googleapis.com", api: "google-generative-ai", id: "gemini-2.5-pro" }),
+		"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent",
+	);
+	assert.equal(
+		requestUrl({ baseUrl: "https://x.example.com", api: "gemini-messages", id: "gemini-flash" }),
+		"https://x.example.com/v1beta/models/gemini-flash:streamGenerateContent",
+	);
+});
+
+test("requestUrl: google/gemini api does not double an existing /v1beta baseUrl", () => {
+	assert.equal(
+		requestUrl({ baseUrl: "https://x.example.com/v1beta", api: "generative-language", id: "gemini-flash" }),
+		"https://x.example.com/v1beta/models/gemini-flash:streamGenerateContent",
+	);
+});
+
+test("requestUrl: strips a trailing slash on baseUrl before joining, never a double slash", () => {
+	assert.equal(
+		requestUrl({ baseUrl: "https://api.anthropic.com/", api: "anthropic-messages" }),
+		"https://api.anthropic.com/v1/messages",
+	);
+});
+
+test("requestUrl: unknown api falls back to baseUrl as-is", () => {
+	assert.equal(requestUrl({ baseUrl: "https://custom.example.com/proxy", api: "some-unknown-api" }), "https://custom.example.com/proxy");
+	assert.equal(requestUrl({ baseUrl: "https://custom.example.com/proxy" }), "https://custom.example.com/proxy");
+});
+
+test("requestUrl: missing baseUrl returns empty string, never throws", () => {
+	assert.equal(requestUrl({ api: "anthropic-messages" }), "");
+	assert.equal(requestUrl({}), "");
+	assert.equal(requestUrl(null), "");
+	assert.equal(requestUrl(undefined), "");
+});
+
+// ─── hook ordering: provider_request must emit BEFORE its own provider_response ───
+// This is the regression under test: pi's documented hook order (docs/extensions.md
+// hook-order diagram) is
+//   turn_start -> before_provider_headers -> before_provider_request -> after_provider_response -> message_end
+// so before_provider_headers fires strictly BEFORE before_provider_request. The
+// fix stashes headers at before_provider_headers and EMITS the provider_request
+// immediately at before_provider_request (attaching those stashed headers), so a
+// turn's request always lands before that same turn's response, and before the
+// NEXT turn's request. End-to-end against a stub `pi` + a local HTTP server that
+// RECORDS every posted NDJSON line, since the header stash is intentionally
+// private to the default export's closure, same as the R2-1 queue/timer state
+// below.
 
 function startRecordingServer() {
 	const lines = [];
@@ -229,7 +312,11 @@ function startRecordingServer() {
 	});
 }
 
-test("before_provider_headers attaches redacted headers to the stashed provider_request", async (t) => {
+function assistantMessage(text) {
+	return { role: "assistant", content: [{ type: "text", text }], stopReason: "end_turn", usage: {} };
+}
+
+test("two turns fired in pi's documented hook order emit provider_request/provider_response in the same order, per turn, with headers on the right turn", async (t) => {
 	const { server, port, lines } = await startRecordingServer();
 	t.after(() => server.close());
 
@@ -238,26 +325,63 @@ test("before_provider_headers attaches redacted headers to the stashed provider_
 	factory(pi);
 
 	handlers.get("session_start")?.({}, {});
-	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "hi" }] } }, {});
-	// Not emitted yet: before_provider_headers hasn't fired.
+
+	// Turn 1: before_provider_headers -> before_provider_request -> message_end.
+	handlers.get("before_provider_headers")?.({
+		headers: { authorization: "proxy-managed", "x-request-id": "turn-1" },
+	});
+	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "first" }] } }, {});
+	handlers.get("message_end")?.({ message: assistantMessage("reply one") }, {});
+
+	// Turn 2: same shape.
+	handlers.get("before_provider_headers")?.({
+		headers: { authorization: "proxy-managed", "x-request-id": "turn-2" },
+	});
+	handlers.get("before_provider_request")?.(
+		{ payload: { messages: [{ role: "user", content: "first" }, { role: "user", content: "second" }] } },
+		{},
+	);
+	handlers.get("message_end")?.({ message: assistantMessage("reply two") }, {});
+
 	await new Promise((r) => setTimeout(r, 100));
-	assert.ok(
-		!lines.some((l) => l.kind === "provider_request"),
-		"provider_request must not be emitted before before_provider_headers fires",
+
+	const kinds = lines.filter((l) => l.kind === "provider_request" || l.kind === "provider_response").map((l) => l.kind);
+	assert.deepEqual(
+		kinds,
+		["provider_request", "provider_response", "provider_request", "provider_response"],
+		"each turn's request must precede its own response, and precede the NEXT turn's request",
 	);
 
-	handlers.get("before_provider_headers")?.({
-		headers: { authorization: "proxy-managed", "x-request-id": "abc-123" },
-	});
+	const requests = lines.filter((l) => l.kind === "provider_request");
+	assert.equal(requests.length, 2);
+	assert.equal(requests[0].headers.authorization, "<redacted>");
+	assert.equal(requests[0].headers["x-request-id"], "turn-1", "turn 1's request carries the headers stashed at ITS before_provider_headers");
+	assert.equal(requests[1].headers["x-request-id"], "turn-2", "turn 2's request carries the headers stashed at ITS before_provider_headers, not turn 1's");
+});
+
+test("a missing before_provider_headers still emits the request in order, just without headers", async (t) => {
+	const { server, port, lines } = await startRecordingServer();
+	t.after(() => server.close());
+
+	const factory = await loadMonitorAgainst(port);
+	const { pi, handlers } = makeStubPi();
+	factory(pi);
+
+	handlers.get("session_start")?.({}, {});
+	// before_provider_headers never fires (missing hook on this pi version).
+	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "hi" }] } }, {});
+	handlers.get("message_end")?.({ message: assistantMessage("reply") }, {});
 	await new Promise((r) => setTimeout(r, 100));
+
+	const kinds = lines.filter((l) => l.kind === "provider_request" || l.kind === "provider_response").map((l) => l.kind);
+	assert.deepEqual(kinds, ["provider_request", "provider_response"]);
 
 	const pr = lines.find((l) => l.kind === "provider_request");
-	assert.ok(pr, "provider_request must be emitted once before_provider_headers fires");
-	assert.equal(pr.headers.authorization, "<redacted>");
-	assert.equal(pr.headers["x-request-id"], "abc-123");
+	assert.ok(pr, "provider_request must still be emitted with no headers hook");
+	assert.equal("headers" in pr, false, "no headers hook fired, so no headers field");
 });
 
-test("a stash with no before_provider_headers is flushed headers-less by the NEXT before_provider_request", async (t) => {
+test("provider_request carries method=POST and the requestUrl derived from ctx.model", async (t) => {
 	const { server, port, lines } = await startRecordingServer();
 	t.after(() => server.close());
 
@@ -266,35 +390,18 @@ test("a stash with no before_provider_headers is flushed headers-less by the NEX
 	factory(pi);
 
 	handlers.get("session_start")?.({}, {});
-	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "first" }] } }, {});
-	// before_provider_headers never fires for turn 1 (simulates a missing hook
-	// or an out-of-order pi version). A second turn starts instead.
-	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "first" }, { role: "user", content: "second" }] } }, {});
+	handlers.get("before_provider_request")?.(
+		{ payload: { messages: [{ role: "user", content: "hi" }] } },
+		{ model: { baseUrl: "https://api.anthropic.com", api: "anthropic-messages", id: "claude-opus-4-8", provider: "anthropic" } },
+	);
+	handlers.get("message_end")?.({ message: assistantMessage("reply") }, {});
+
 	await new Promise((r) => setTimeout(r, 100));
 
-	const requests = lines.filter((l) => l.kind === "provider_request");
-	assert.equal(requests.length, 1, "the orphaned first stash must be flushed, never silently dropped");
-	assert.equal("headers" in requests[0], false, "the flushed orphan carries no headers");
-});
-
-test("a stash with no before_provider_headers is flushed headers-less by a session reset (session_start)", async (t) => {
-	const { server, port, lines } = await startRecordingServer();
-	t.after(() => server.close());
-
-	const factory = await loadMonitorAgainst(port);
-	const { pi, handlers } = makeStubPi();
-	factory(pi);
-
-	handlers.get("session_start")?.({}, {});
-	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "hi" }] } }, {});
-	// before_provider_headers never fires; the session resets instead (e.g. a
-	// new session_start on the same live extension instance).
-	handlers.get("session_start")?.({}, {});
-	await new Promise((r) => setTimeout(r, 100));
-
-	const requests = lines.filter((l) => l.kind === "provider_request");
-	assert.equal(requests.length, 1, "the orphaned stash must be flushed on session reset, never silently dropped");
-	assert.equal("headers" in requests[0], false, "the flushed orphan carries no headers");
+	const pr2 = lines.find((l) => l.kind === "provider_request");
+	assert.ok(pr2, "provider_request must be emitted");
+	assert.equal(pr2.method, "POST");
+	assert.equal(pr2.url, "https://api.anthropic.com/v1/messages");
 });
 
 // ─── R2-1: shutdown must not resurrect the retry timer / requeue ───────────
