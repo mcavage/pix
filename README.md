@@ -291,10 +291,12 @@ anything you wouldn't hand a shell to, use `pi-stack run`. Full threat model:
 
 These are independent. Use the ones you need and skip the rest.
 
-> **Note:** the sbx MCP gateway is currently Docker-internal and not yet publicly
-> released. `--mcp`, `pi-stack mcp register`, Google Workspace, Slack, and gateway
-> catalog tools require that gateway. External users can use the sandboxed agent,
-> GitHub, memory, and OKF knowledge today.
+> **Note:** MCP runs through sbx's local data-plane gateway (always available, no
+> `SBX_MCP_URL`). Local stdio servers (Slack, Google Workspace) register with
+> `pi-stack mcp register`; the remote catalog (notion/atlassian/granola) registers
+> with `pi-stack mcp bundle` then `pi-stack mcp auth --all`. Attach one to a running
+> sandbox live with `pi-stack mcp load <name>`. External users can use the sandboxed
+> agent, GitHub, memory, and OKF knowledge with no MCP setup at all.
 
 ```bash
 pi-stack serve            # memory (:11435), knowledge (:11436 if enabled), broker if configured

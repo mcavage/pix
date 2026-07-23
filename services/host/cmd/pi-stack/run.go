@@ -133,18 +133,6 @@ func runRun(argv []string) {
 		fmt.Fprintln(os.Stderr, "pi-stack: --dev is create/replace-only; re-attaching to the existing sandbox as-is (use --replace to recreate with --dev)")
 	}
 
-	// --mcp is only a valid sbx flag when the gateway is enabled (SBX_MCP_URL set,
-	// like the Makefile gates it). Set MCPEnabled from the env so buildSbxArgs stays
-	// pure, and warn (once) when MCP servers are configured but the gateway is off,
-	// rather than letting sbx bail with `unknown flag: --mcp`.
-	o.MCPEnabled = strings.TrimSpace(os.Getenv("SBX_MCP_URL")) != ""
-	if !o.MCPEnabled {
-		configured := append(append([]string(nil), cfg.MCP...), o.MCP...)
-		if msg := mcpGatewayOffWarning(configured); msg != "" {
-			fmt.Fprintln(os.Stderr, msg)
-		}
-	}
-
 	// Active pack: mount its skills/ + knowledge/ so the pack's context loads in
 	// this sandbox. --pack overrides config.Pack; with neither set, no pack is
 	// active. Create-time only (skills + knowledge are create-time mounts; a
@@ -279,7 +267,7 @@ func runRun(argv []string) {
 	// present, it is the fenced in-VM agent's ONLY source of trusted host-visible
 	// truth, so a launch that can't build/encode it must ABORT before exec'ing
 	// sbx rather than hand the agent a generated prompt with no trusted payload.
-	args, err := injectTrustedHostState(plan.Args, cfg, defaultShellEnv(), o.MCPEnabled, packForState)
+	args, err := injectTrustedHostState(plan.Args, cfg, defaultShellEnv(), packForState)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack run: could not build trusted host state: %v\n", err)
 		os.Exit(1)

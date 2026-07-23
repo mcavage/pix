@@ -49,6 +49,23 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed (breaking)
 
+- **MCP migrated to sbx's nightly gateway.** The sandbox flag is now
+  `--static-mcp` (sbx removed `--mcp`), and MCP runs through sbx's **local
+  data-plane gateway** — always available, **no `SBX_MCP_URL`** needed. pi-stack
+  now emits `--static-mcp` for every configured server unconditionally (dropped
+  the old SBX_MCP_URL gate + "gateway off" warning) and no longer requires
+  `SBX_MCP_URL` for `pi-stack mcp register`. pi-stack's own `pi-stack run --mcp M`
+  CLI flag is unchanged (it translates to `--static-mcp`). New:
+  - `pi-stack mcp load <name> [DIR]` — attach an already-registered server to a
+    RUNNING sandbox live, no recreate (`sbx mcp load`).
+  - `pi-stack mcp auth [args…]` — hosted-control-plane OAuth for remote servers
+    (`sbx mcp auth`; e.g. `auth --all`).
+  - `pi-stack mcp bundle` — register the shipped public catalog
+    (notion/atlassian/granola, `config/mcp-catalog.bundle.json`) in one step.
+  `make mcp-auth` already used native `sbx mcp auth`; its tail now points at
+  `pi-stack mcp load` instead of a recreate. `doctor` guidance no longer mentions
+  `SBX_MCP_URL` (a failed `sbx mcp ls` now points at the sbx daemon).
+
 - **Kit migrated to kit-spec v2** (`pi-kit/spec.yaml`, `schemaVersion: "2"`).
   Credentials are now a `credentials[]` list of `service` + `apiKey`
   (name/proxyManaged/inject[]); egress is `caps.network.allow`. Replaces the v1

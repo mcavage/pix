@@ -156,23 +156,25 @@ user a diff.
 - **Stalled model streams:** pi has no client read timeout, so a dead SSE stream spins "working…" forever. `status.ts`'s watchdog auto-cancels a turn with no output for 3 min; otherwise `Esc`. Diagnose a hung sandbox with `ps` (idle CPU + no child process = network wait, not compute).
 - **Compaction continuation:** threshold compaction normally ends a completed low-level agent run unless a retry or message is queued. `extensions/compaction-continuation.ts` queues one private follow-up only when the latest structured todo snapshot still has an `in-progress` item and no user message is already queued. Manual compaction, overflow retries, completed plans, and merely `not-started` plans stay quiet. `scripts/patches/apply-todo-durable-clear.mjs` makes `/todos clear` durable in `pi-manage-todo-list@0.4.0`, so cleared work is never resurrected after compaction or resume. This prevents a long autonomous task from waiting for the user to type "continue" without creating a general-purpose auto-reply loop.
 - **Full-auto:** no permission prompts — the sandbox isolation is the safety boundary.
-- **MCP host servers go through the sbx gateway — read the runbook**
-  (docker/sandboxes `docs/plan/mcp-runbook.md`; needs `SBX_MCP_URL=https://gateway.docker.com`).
-  They are **stdio** subcommands of `pi-stack-host` (`slack`; plus overlay servers
-  like `bamboohr` when present). `sbx mcp
-  add` for a local stdio server takes only `--command` + `--args` (**no `--env`**),
-  and the command runs on the HOST as a daemon subprocess. So creds come from
-  1Password: the registered command is `op run --env-file=config/op-refs.env --
-  pi-stack-host <name>`, which resolves the op:// refs at spawn time. One file
-  (`config/op-refs.env`) is the single mechanism for every MCP credential; nothing
-  is stored in the registration or the VM. `make mcp-register` wires this.
-  **Registration ≠ attachment, and local stdio servers are NOT surfaced by dynamic
-  `mcp-find`** (only the remote catalog is) — and this `sbx` build has no
-  attach-to-running (`sbx mcp load` doesn't exist; the flag is `--mcp <name>`, not
-  `--static-mcp`). So a sandbox only gets a local stdio server (e.g. `slack`) if it
-  was **created** with `--mcp <name>`. `make run` does this automatically from the `mcp` list in
-  `~/.config/pi-stack/config.toml` (sourced via `pi-stack config get mcp`), which also drives
-  `serve`/`mcp-register`/`doctor`/`pull-models`. Add a server = a tool table + handlers + `run<Name>()` using `mcpStdio`
+- **MCP runs through sbx's LOCAL data-plane gateway** — always available, **no
+  `SBX_MCP_URL`** (nightly serves remotes directly; `sbx mcp status` shows mode
+  `local`). Two kinds of server: **local stdio** subcommands of `pi-stack-host`
+  (`slack`; plus overlay servers like `bamboohr`), registered with `sbx mcp add
+  <name> --command … --args …` (**no `--env`**); the command runs on the HOST as a
+  daemon subprocess, so creds come from 1Password — the registered command is `op
+  run --no-masking --env-file=config/op-refs.env -- pi-stack-host <name>`, which
+  resolves the op:// refs at spawn (`config/op-refs.env` is the single mechanism;
+  nothing stored in the registration or the VM). `pi-stack mcp register` /
+  `make mcp-register` wire these. **Remote catalog** servers (notion/atlassian/
+  granola) are registered by URL — `pi-stack mcp bundle` adds the shipped
+  `config/mcp-catalog.bundle.json` set in one step, then `pi-stack mcp auth --all`
+  does the hosted-control-plane OAuth. **The sandbox flag is `--static-mcp <name>`**
+  (the fixed set chosen at CREATE; `--mcp` is gone — sbx rejects it). pi-stack's own
+  `pi-stack run --mcp M` CLI flag stays and translates to `--static-mcp`. A sandbox
+  gets its servers at create from the `mcp` list in `~/.config/pi-stack/config.toml`
+  (via `pi-stack config get mcp`, which also drives `serve`/`mcp-register`/`doctor`/
+  `pull-models`); to attach one to an ALREADY-RUNNING sandbox live (no recreate) use
+  `pi-stack mcp load <name>` (`sbx mcp load`). Add a server = a tool table + handlers + `run<Name>()` using `mcpStdio`
   (newline-delimited JSON — what the gateway speaks; tolerates Content-Length on
   input). Transports live in `services/host/util.go`.
   - **Do NOT** hand-bake `url`/`command` entries into `mcp.json` pointing at

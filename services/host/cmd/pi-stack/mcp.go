@@ -42,9 +42,93 @@ func runMcpCmd(argv []string) {
 			os.Exit(2)
 		}
 		runMcpLs()
+	case "load":
+		runMcpLoad(argv[1:])
+	case "auth":
+		runMcpAuth(argv[1:])
+	case "bundle":
+		runMcpBundle(argv[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "pi-stack mcp: unknown subcommand %q (want: register, ls)\n", argv[0])
+		fmt.Fprintf(os.Stderr, "pi-stack mcp: unknown subcommand %q (want: register, ls, load, auth, bundle)\n", argv[0])
 		os.Exit(2)
+	}
+}
+
+// runMcpBundle manages the shipped public MCP catalog bundle
+// (notion/atlassian/granola) via `sbx mcp bundle`. Bare (or `add`) registers the
+// pinned pi-stack catalog in one step — the remote set that matches this build.
+// `ls`/`rm` (and any other args) forward verbatim to `sbx mcp bundle`.
+func runMcpBundle(argv []string) {
+	var sbxArgs []string
+	if len(argv) == 0 || (len(argv) == 1 && argv[0] == "add") {
+		sbxArgs = []string{"mcp", "bundle", "add", mcpCatalogBundleName, "--url", mcpCatalogBundleURL(version)}
+	} else {
+		sbxArgs = append([]string{"mcp", "bundle"}, argv...)
+	}
+	if _, err := exec.LookPath("sbx"); err != nil {
+		fmt.Printf("sbx not on PATH — would run: sbx %s (run it on the host)\n", strings.Join(sbxArgs, " "))
+		return
+	}
+	cmd := exec.Command("sbx", sbxArgs...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			os.Exit(exit.ExitCode())
+		}
+		fmt.Fprintf(os.Stderr, "pi-stack mcp bundle: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runMcpAuth is a thin passthrough to `sbx mcp auth <args...>` — the native
+// hosted-control-plane OAuth flow for remote MCP servers (notion/atlassian/…),
+// so repo-less hosts get it without the Makefile. All args/subcommands forward
+// verbatim: `pi-stack mcp auth --all`, `pi-stack mcp auth notion`,
+// `pi-stack mcp auth status --all`, `pi-stack mcp auth rm notion`.
+func runMcpAuth(argv []string) {
+	if _, err := exec.LookPath("sbx"); err != nil {
+		fmt.Printf("sbx not on PATH — would run: sbx mcp auth %s (run it on the host)\n", strings.Join(argv, " "))
+		return
+	}
+	cmd := exec.Command("sbx", append([]string{"mcp", "auth"}, argv...)...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			os.Exit(exit.ExitCode())
+		}
+		fmt.Fprintf(os.Stderr, "pi-stack mcp auth: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runMcpLoad attaches an ALREADY-REGISTERED MCP server to the RUNNING sandbox
+// for DIR (default cwd) via `sbx mcp load <name> --sandbox <derived>`. Connected
+// agents see the new tools immediately (MCP tools/list_changed), no recreate —
+// the nightly gateway's live-attach that the old --mcp-at-create model couldn't
+// do. Register first with `pi-stack mcp register` (or `sbx mcp add`).
+func runMcpLoad(argv []string) {
+	if len(argv) == 0 || wantsHelp(argv) {
+		fmt.Fprint(os.Stderr, mcpUsage)
+		os.Exit(2)
+	}
+	name := argv[0]
+	ws := "."
+	if len(argv) > 1 {
+		ws = argv[1]
+	}
+	sandbox := deriveSandboxName(ws)
+	if _, err := exec.LookPath("sbx"); err != nil {
+		fmt.Printf("sbx not on PATH — would run: sbx mcp load %s --sandbox %s (run it on the host)\n", name, sandbox)
+		return
+	}
+	cmd := exec.Command("sbx", "mcp", "load", name, "--sandbox", sandbox)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			os.Exit(exit.ExitCode())
+		}
+		fmt.Fprintf(os.Stderr, "pi-stack mcp load: %v\n", err)
+		os.Exit(1)
 	}
 }
 
@@ -170,11 +254,17 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 		return nil
 	}
 
-	// The sbx MCP gateway must be enabled (like the Makefile's mcp-register
-	// target): `sbx mcp add` only works when SBX_MCP_URL points at the gateway.
-	// Fail up front rather than emit a confusing per-server failure.
-	if env.getenv == nil || strings.TrimSpace(env.getenv("SBX_MCP_URL")) == "" {
-		return fmt.Errorf("MCP gateway not enabled: export SBX_MCP_URL=https://gateway.docker.com")
+	// `sbx mcp add` registers against sbx's local data-plane gateway, which is
+	// always available (no SBX_MCP_URL needed on nightly) — so there's no gateway
+	// precondition to check here anymore.
+
+	// Nil-safe lookPath: a partially-populated shellEnv (some tests set only
+	// env.run) must degrade to "binary not found" rather than panic — the same
+	// posture localMCPNames takes for a nil env.run. Every op/gog/sbx lookup below
+	// goes through this.
+	lookPath := env.lookPath
+	if lookPath == nil {
+		lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
 	}
 
 	// The set of names this host can serve locally is the source of truth
@@ -237,7 +327,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	// `op run`. When either is absent we register BARE (1Password is optional):
 	// a no-creds server registers fine, and a creds server runs uncredentialed
 	// until an op-refs.env is added — never a hard failure.
-	opPath, opErr := env.lookPath("op")
+	opPath, opErr := lookPath("op")
 	opRefs := resolveOpRefs(env)
 	opReady := opErr == nil && opRefs != ""
 
@@ -270,7 +360,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	}
 
 	if wantGog {
-		gogPath, err := env.lookPath("gog")
+		gogPath, err := lookPath("gog")
 		if err != nil {
 			return fmt.Errorf("gog is requested but gog not found — brew install gog")
 		}
@@ -291,7 +381,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 		reg.hostBin = hb
 	}
 
-	_, sbxErr := env.lookPath("sbx")
+	_, sbxErr := lookPath("sbx")
 	sbxOK := sbxErr == nil
 	if !sbxOK {
 		fmt.Fprintln(out, "sbx not on PATH — here is what WOULD be registered (run these on the host):")

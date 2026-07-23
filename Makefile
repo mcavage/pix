@@ -46,15 +46,14 @@ DEV_SKILLS = --no-skills --skill $(CURDIR)/skills$(if $(OVERLAY_WS), --skill $(a
 PI_STACK_BIN ?= $(CURDIR)/out/pi-stack
 
 # MCP enablement for `make run` (config.toml `mcp`, `pi-stack config set mcp
-# <name>`). Listed servers are auto-attached (`--mcp <name>`) AND are what
-# `make mcp-register` registers among the local stdio servers. EMPTY = dynamic
-# mode: the gateway exposes only discovery tools (mcp-find / mcp-exec /
-# code-mode) and the agent pulls tools in on demand instead of dumping 100+
-# into context. NOTE: local stdio servers (e.g. slack) are NOT surfaced by
-# dynamic discovery — to use them they must be in the mcp list so `make run`
-# attaches them. `MCP=all` attaches everything registered.
+# <name>`). Listed servers are attached at CREATE via `--static-mcp <name>` (the
+# sbx flag; sbx's local data-plane gateway serves them, no SBX_MCP_URL) AND are
+# what `make mcp-register` registers among the local stdio servers. EMPTY = no
+# servers attached (the sandbox still has the gateway, just no configured set).
+# To attach one to an ALREADY-RUNNING sandbox without recreating, use
+# `pi-stack mcp load <name>`. `MCP=all` attaches everything registered.
 MCP         ?= $(shell "$(PI_STACK_BIN)" config get mcp 2>/dev/null)
-MCP_FLAGS   = $(foreach server,$(MCP),--mcp $(server))
+MCP_FLAGS   = $(foreach server,$(MCP),--static-mcp $(server))
 # The local stdio MCP servers `make mcp-register` can register (the ones you
 # actually use — i.e. those listed in MCP). `slack` is a pi-stack-host subcommand;
 # `gog` is the host-side Google Workspace CLI's MCP mode. A private overlay
@@ -231,8 +230,8 @@ run-published: ## Run the latest PUBLISHED image via the git kit (always fresh �
 	-sbx rm -f pi-stack-published >/dev/null 2>&1
 	@sbx run pi-stack --name pi-stack-published --kit "git+https://github.com/$(DOCKER_USER)/pi-stack.git#dir=pi-kit"
 
-run-no-mcp: ## Launch without sbx Cloud MCP Gateway, for debugging MCP setup failures
-	@env -u SBX_MCP_URL sbx run pi-stack --kit $(KIT) .
+run-no-mcp: ## Launch with NO MCP servers attached (debugging MCP setup failures)
+	@sbx run pi-stack --kit $(KIT) .
 
 launcher: ## Build BOTH host binaries (out/pi-stack launcher + out/pi-stack-host services), version-stamped (local builds stamp $(VERSION)+local so the launcher uses the local kit, not a nonexistent v$(VERSION) tag)
 	(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pi-stack ./cmd/pi-stack)
@@ -252,13 +251,13 @@ mcp-auth: ## (Re)authorize the remote OAuth MCP servers (opine/granola/notion/at
 	@echo "3/3 status:"
 	-sbx mcp auth status --all
 	@echo ""
-	@echo "If all show authorized, recreate to pick them up: sbx rm -f pi-stack-pi-stack && make run"
+	@echo "If all show authorized, attach them LIVE to a running sandbox (no recreate):"
+	@echo "  pi-stack mcp load <server>   # or: sbx mcp load <server> --sandbox pi-stack-pi-stack"
+	@echo "A fresh 'make run' also picks them up."
 
-mcp-register: require-launcher link-overlay ## Register the local stdio MCP servers you use (the mcp list in config.toml) with sbx. The gateway runs each as `op run --env-file=config/op-refs.env -- pi-stack-host <name>`, so creds come from 1Password at spawn (nothing stored in the registration). Needs SBX_MCP_URL + op + config/op-refs.env.
+mcp-register: require-launcher link-overlay ## Register the local stdio MCP servers you use (the mcp list in config.toml) with sbx's local data-plane gateway (no SBX_MCP_URL needed). The gateway runs each as `op run --no-masking --env-file=config/op-refs.env -- pi-stack-host <name>`, so creds come from 1Password at spawn (nothing stored in the registration). Needs op + config/op-refs.env.
 	@command -v sbx >/dev/null 2>&1 || { echo "ERROR: sbx not found"; exit 1; }
 	@[ -n "$(strip $(REGISTER))" ] || { echo "Nothing to register: no local stdio servers ($(LOCAL_STDIO_MCP)) are in MCP. Run: pi-stack config set mcp <name>."; exit 0; }
-	@[ -n "$$SBX_MCP_URL" ] || { echo "ERROR: SBX_MCP_URL is unset — MCP is not enabled, so 'sbx mcp add' will fail."; \
-		echo "  Fix (once):  export SBX_MCP_URL=https://gateway.docker.com  &&  sbx daemon stop"; exit 1; }
 	@[ -n "$(OP_BIN)" ] || { echo "ERROR: 1Password CLI 'op' not found on PATH."; exit 1; }
 	@[ -f "$(OP_REFS)" ] || { echo "ERROR: $(OP_REFS) missing. Create it:  cp config/op-refs.env.example config/op-refs.env  then fill in your refs."; exit 1; }
 	@[ -z "$(filter gog,$(REGISTER))" ] || [ -n "$(GOG_ACCOUNT)" ] || { echo "ERROR: gog is in MCP but gog_account is unset. Run: pi-stack config set gog_account <you@example.com>."; exit 1; }
@@ -281,12 +280,9 @@ mcp-register: require-launcher link-overlay ## Register the local stdio MCP serv
 		esac; \
 	done
 	@echo "Verify: sbx mcp ls"
-	@echo "Attach: registration is NOT enough — a sandbox only gets these if you START it with them."
-	@echo "        \`make run\` does this for you (MCP=$(MCP) from config.toml). Local stdio"
-	@echo "        servers aren't surfaced by dynamic discovery, and this sbx can't attach to a"
-	@echo "        running sandbox — so just \`make run\` (it passes --mcp for each)."
-	@echo "        Local stdio servers are NOT surfaced by dynamic mcp-find, and this sbx has no 'mcp load'"
-	@echo "        for a running sandbox — so re-run with --mcp to pick them up."
+	@echo "Attach: registration is NOT enough — a sandbox gets a server at CREATE via --static-mcp."
+	@echo "        \`make run\` does this for you (MCP=$(MCP) from config.toml, passing --static-mcp for each)."
+	@echo "        To attach one to an ALREADY-RUNNING sandbox live (no recreate): pi-stack mcp load <name>"
 	@echo "Note: each server resolves its creds from config/op-refs.env via op run when the gateway spawns it — make sure those refs are filled + valid."
 
 serve: require-launcher link-overlay ## Start the host services named in SERVICES (config.toml `services`): memory :11435. MCP servers (slack, gog) are run by the sbx gateway — see `make mcp-register`. Ctrl-C stops all.
