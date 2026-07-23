@@ -2000,64 +2000,65 @@ func TestMonitorTUI_SingleSessionShowsHeaderNoIndent(t *testing.T) {
 	}
 }
 
-// --- request line: accurate `POST <url>` in request diagnostics, no HTTP headers ---
+// --- tool-result continuation requests are hidden from the feed ---
 
-// TestMonitorTUI_RequestExpandShowsRequestLineNoHeaders locks in the
-// post-headers-removal shape (decision: stop showing HTTP headers — wrong
-// source; keep the accurate request LINE): the request expand shows an
-// unconditional `request: POST <url>` line in diagnostics (no more `h`
-// gate — it's small and accurate), there are no HTTP header lines
-// anywhere, and the footer no longer has an `h:headers=` toggle at all.
-func TestMonitorTUI_RequestExpandShowsRequestLineNoHeaders(t *testing.T) {
+// TestMonitorTUI_ToolResultTriggeredRequestHidden locks in the
+// transcript-shape fix: in a multi-step tool conversation, each tool
+// result is fed back to the model as the next turn's provider_request —
+// but that request row would just duplicate the tool row's `→ ok ...`
+// line right above it. A provider_request with Trigger="tool_result"
+// must not appear in visibleRows (or the rendered feed) at all, while an
+// ordinary Trigger="user" request row still does, and the tool-result
+// turn's own response row still renders normally (assistant rows are
+// never hidden, only the redundant request row is).
+func TestMonitorTUI_ToolResultTriggeredRequestHidden(t *testing.T) {
 	m := NewModel(TUIConfig{})
 
-	req := mkProviderRequest("9", "opus-4-8", "h1", 1000, 1, 100, nil)
-	req.Method = "POST"
-	req.URL = "https://api.anthropic.com/v1/messages"
-	m = feed(t, m, req)
+	// Turn 1: a real user prompt kicks things off.
+	userReq := mkProviderRequest("1", "opus-4-8", "h1", 1000, 1, 100,
+		[]monitor.MessageSummary{{Role: "user", Bytes: 10, Hash: "m1", Preview: "do the thing"}})
+	userReq.Trigger = "user"
+	m = feed(t, m, userReq)
+	m = feed(t, m, mkProviderResponse("1", 200, "tool_use", nil))
+	m = feed(t, m, mkToolStart("1", "call_1", "builtin", "read", "path=foo", "a1"))
+	m = feed(t, m, mkToolEnd("1", "call_1", true, 128, "ok", "r1", 50))
 
-	// Request line absent while collapsed.
-	if strings.Contains(m.View(), "POST https://api.anthropic.com") {
-		t.Fatalf("request line visible before expand, got:\n%s", m.View())
+	// Turn 2: the tool's own result is fed back as this turn's request —
+	// Trigger="tool_result" — and must be hidden.
+	toolReq := mkProviderRequest("2", "opus-4-8", "h1", 1000, 1, 100,
+		[]monitor.MessageSummary{{Role: "tool", Bytes: 128, Hash: "m2", Preview: "ok"}})
+	toolReq.Trigger = "tool_result"
+	m = feed(t, m, toolReq)
+	m = feed(t, m, mkProviderResponse("2", 200, "end_turn", nil))
+
+	rows := m.visibleRows()
+	for _, r := range rows {
+		if r.kind == rowKindRequest && r.trigger == "tool_result" {
+			t.Fatalf("tool_result-triggered request row is visible: turn=%s", r.turnID)
+		}
 	}
 
-	m = key(t, m, runeKey(" ")) // expand request (following: cursor on it)
+	var sawUserReq, sawTurn2Resp bool
+	for _, r := range rows {
+		if r.kind == rowKindRequest && r.turnID == "1" && r.trigger == "user" {
+			sawUserReq = true
+		}
+		if r.kind == rowKindResponse && r.turnID == "2" {
+			sawTurn2Resp = true
+		}
+	}
+	if !sawUserReq {
+		t.Errorf("turn 1's user-triggered request row should be visible")
+	}
+	if !sawTurn2Resp {
+		t.Errorf("turn 2's response row should still render even though its request was hidden")
+	}
 
-	resp := mkProviderResponse("9", 200, "end_turn", nil)
-	m = feed(t, m, resp)
-	m = key(t, m, runeKey(" ")) // expand response (follow moved cursor to it)
-
+	// Also confirmed at the View level: the hidden turn's tool-result
+	// preview text never appears as a request-row headline.
 	view := m.View()
-	if !strings.Contains(view, "request: POST https://api.anthropic.com/v1/messages") {
-		t.Errorf("request expand missing the unconditional request line, got:\n%s", view)
-	}
-	if strings.Contains(view, "HTTP 200") {
-		t.Errorf("response expand still shows an HTTP status block, got:\n%s", view)
-	}
-	if strings.Contains(view, "h:headers") {
-		t.Errorf("footer still advertises an h:headers toggle, got:\n%s", view)
-	}
-	assertNoControlRunes(t, view)
-
-	// The `h` key no longer does anything (no toggle left to flip).
-	before := view
-	m = key(t, m, runeKey("h"))
-	if m.View() != before {
-		t.Errorf("`h` key changed the view; it should now be a no-op:\nbefore:\n%s\nafter:\n%s", before, m.View())
-	}
-}
-
-// A request with no Method/URL omits the request line entirely (older
-// events / no method-and-url hook fired) rather than rendering a bare
-// "request: ".
-func TestMonitorTUI_RequestExpandOmitsRequestLineWhenEmpty(t *testing.T) {
-	m := NewModel(TUIConfig{})
-	m = feed(t, m, mkProviderRequest("1", "opus-4-8", "", 0, 0, 0, nil))
-	m = key(t, m, runeKey(" ")) // expand
-
-	view := m.View()
-	if strings.Contains(view, "request:") {
-		t.Errorf("request line rendered despite empty Method/URL, got:\n%s", view)
+	if strings.Contains(view, "tool     \u201cok\u201d") {
+		t.Errorf("hidden tool_result request row rendered in the feed, got:\n%s", view)
 	}
 }
 

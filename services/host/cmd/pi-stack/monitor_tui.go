@@ -89,15 +89,16 @@ type tuiRow struct {
 	toolNames    []string
 	mcpToolNames []string
 	estTokens    int
-	// reqMethod/reqURL are the sanitized HTTP method + URL of the provider
-	// request (monitor.ProviderRequest.Method/URL) — rendered as the small,
-	// accurate `POST https://...` request line in the request expand's
-	// diagnostics (live feedback: a bare header dump "is not giving me the
-	// actual request"; HTTP headers themselves turned out to be the wrong
-	// source and were removed, but this request line stays — it's small
-	// and accurate).
-	reqMethod string
-	reqURL    string
+	// trigger is monitor.ProviderRequest.Trigger ("user"|"tool_result"|
+	// "compaction"|"unknown"): what caused this provider request. A
+	// tool_result-triggered request is a tool's output being fed back to
+	// the model — the SAME content the tool row right above it already
+	// shows as `→ ok ...` — so passesToggles hides these request rows
+	// entirely (see the rowKindRequest case) rather than rendering a
+	// redundant `user "<tool output>"` row. user/compaction/unknown are
+	// real conversational turns (an actual prompt, or a first/continuation
+	// turn with no clear trigger) and stay visible.
+	trigger string
 
 	// response
 	status     int
@@ -830,8 +831,7 @@ func (m *Model) applyEvent(e monitor.Event) {
 			mcpToolNames:   sanitizeStrings(ev.Summary.McpToolNames),
 			estTokens:      ev.Summary.EstTokens,
 			toolSchemaHash: ev.Summary.ToolSchemaHash,
-			reqMethod:      sanitizeText(ev.Method, false),
-			reqURL:         sanitizeText(ev.URL, false),
+			trigger:        sanitizeText(ev.Trigger, false),
 		})
 		// Only re-resolve while the row is both expanded AND showFull is
 		// on (review finding R3-2b) — resolving-but-not-displaying would
@@ -1150,7 +1150,19 @@ func (m Model) visibleRows() []tuiRow {
 
 func (m Model) passesToggles(r tuiRow) bool {
 	switch r.kind {
-	case rowKindRequest, rowKindResponse:
+	case rowKindRequest:
+		// A tool_result-triggered request is the tool's own output being fed
+		// back to the model as the next turn's "new message" — the exact
+		// content the tool row right above it already rendered as
+		// `→ ok ...`. Hiding it here (rather than at applyEvent/upsertRow)
+		// keeps the row itself intact so the response row for this same
+		// turn still renders, group headers still see a real row to key
+		// off of, and toggling something else off/on never resurrects it.
+		if r.trigger == "tool_result" {
+			return false
+		}
+		return m.showModel
+	case rowKindResponse:
 		return m.showModel
 	case rowKindTool:
 		if !m.showTools {
@@ -1702,13 +1714,6 @@ func (m Model) detailLines(r tuiRow) []string {
 				lines = append(lines, "      tool schema:")
 				block("        ", r.toolSchemaText)
 			}
-		}
-		// The request line — the accurate `METHOD url` this turn actually
-		// sent — rendered unconditionally now (small and accurate; HTTP
-		// headers were the wrong source and are gone, see the removed `h`
-		// toggle). Omitted if both Method/URL are empty (older events).
-		if r.reqMethod != "" || r.reqURL != "" {
-			lines = append(lines, "      request: "+strings.TrimSpace(r.reqMethod+" "+r.reqURL))
 		}
 	case rowKindResponse:
 		// CONVERSATION FIRST: the assistant's reply (full resolved body

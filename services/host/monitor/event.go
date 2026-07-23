@@ -101,14 +101,13 @@ type ProviderRequest struct {
 	Model        string         `json:"model"`
 	Summary      RequestSummary `json:"summary"`
 	ChangedBlobs []string       `json:"changedBlobs"`
-	// Method and URL capture the actual HTTP request line sent to the
-	// provider (e.g. "POST" / "https://api.anthropic.com/v1/messages"), so
-	// the TUI's header view can render a real request instead of just a
-	// header map. Derived by the extension from ctx.model (baseUrl + api),
-	// not observed on the wire directly. Short identifiers, capped with
+	// Trigger classifies why this turn started: "user" | "tool_result" |
+	// "compaction" | "unknown" — the same value the paired turn_start event
+	// carries (extensions/monitor.ts computes it once and sets it on both),
+	// so the TUI can hide a tool-result continuation turn from the feed
+	// without cross-referencing turn_start. Short identifier, capped with
 	// capID on decode like every other id/label field.
-	Method string `json:"method"`
-	URL    string `json:"url"`
+	Trigger string `json:"trigger"`
 }
 
 func (e ProviderRequest) Envelope() Envelope { return e.env }
@@ -327,8 +326,7 @@ func Decode(line []byte) (Event, error) {
 		}
 		capEnvelopeIDs(&e.env)
 		e.Model = capID(e.Model)
-		e.Method = capID(e.Method)
-		e.URL = capID(e.URL)
+		e.Trigger = capID(e.Trigger)
 		e.Summary.SystemPromptHash = capHash(e.Summary.SystemPromptHash)
 		e.Summary.ToolSchemaHash = capHash(e.Summary.ToolSchemaHash)
 		e.Summary.ToolNames = capStringSlice(e.Summary.ToolNames, capID)

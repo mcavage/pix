@@ -434,6 +434,14 @@ export interface RequestSummaryResult {
 	toolSchemaHash: string;
 	/** Candidate blob bodies (system prompt + newly-added messages + tool schemas); caller dedupes by hash. */
 	blobs: BlobCandidate[];
+	/**
+	 * The raw (non-summarized) newest message added since the previous turn,
+	 * if any — used ONLY by `inferTurnTrigger`/`isToolResultMessage` to detect
+	 * a tool-result continuation turn. NOT part of the wire schema:
+	 * `MessageSummary` (role/bytes/hash/preview) already strips the
+	 * structural markers (content blocks, tool_call_id) that detection needs.
+	 */
+	newestNewMessage?: { role?: string; content?: unknown };
 }
 
 /**
@@ -452,7 +460,8 @@ export function summarizeRequest(payload: any, prevMessageCount: number): Reques
 	const messageCount = messages.length;
 	const messageTexts = messages.map((m) => stringifyContent(m?.content));
 	const startIdx = prevMessageCount <= messageCount ? prevMessageCount : 0;
-	const newMessages: MessageSummary[] = messages.slice(startIdx).map((m, i) => {
+	const newMessagesRaw = messages.slice(startIdx);
+	const newMessages: MessageSummary[] = newMessagesRaw.map((m, i) => {
 		const text = messageTexts[startIdx + i] ?? "";
 		const bytes = Buffer.byteLength(text, "utf8");
 		return { role: String(m?.role ?? "unknown"), bytes, hash: text ? sha256Hex(text) : "", preview: truncatePreview(text) };
@@ -499,6 +508,7 @@ export function summarizeRequest(payload: any, prevMessageCount: number): Reques
 		estTokens,
 		toolSchemaHash,
 		blobs,
+		newestNewMessage: newMessagesRaw.length ? newMessagesRaw[newMessagesRaw.length - 1] : undefined,
 	};
 }
 
@@ -603,16 +613,54 @@ export function extractAssistantOutput(message: any): AssistantOutput {
 export type TurnTrigger = "user" | "tool_result" | "compaction" | "unknown";
 
 /**
+ * True when `msg` (a normalized `{role, content}` message entry, per
+ * `normalizeMessageEntry`) IS a tool-result message, across every provider
+ * shape pi ships:
+ *   - Anthropic: `content` is an array containing a block with
+ *     `type==="tool_result"`
+ *   - OpenAI: `role==="tool"`, or the entry carries a `tool_call_id` /
+ *     `toolCallId`
+ *   - Gemini: `content` (normalized from `parts`) is an array containing a
+ *     part with a `functionResponse` (or snake_case `function_response`)
+ * Pure and total: never throws, false for anything unrecognized (a plain
+ * user text message, `null`/`undefined`, ...).
+ */
+export function isToolResultMessage(msg: any): boolean {
+	if (!msg || typeof msg !== "object") return false;
+	if (msg.role === "tool") return true;
+	if (typeof msg.tool_call_id === "string" && msg.tool_call_id) return true;
+	if (typeof msg.toolCallId === "string" && msg.toolCallId) return true;
+	const content = msg.content ?? msg.parts;
+	if (Array.isArray(content)) {
+		for (const block of content) {
+			if (!block || typeof block !== "object") continue;
+			if (block.type === "tool_result") return true;
+			if (block.functionResponse || block.function_response) return true;
+		}
+	}
+	return false;
+}
+
+/**
  * Best-effort classification of why a turn started. pi does not surface an
- * explicit "why" on before_provider_request, so this leans on cheap signals
- * only: the first turn of a session is virtually always kicked off by a user
- * message; a request payload that shrank since the previous turn implies
- * compaction ran between turns; otherwise, if the last event emitted was a
- * tool_end, the agent looped straight from a tool result back into the model
- * without new user input. Anything else falls back to "unknown" rather than
+ * explicit "why" on before_provider_request, so this leans on cheap signals:
+ * a positive `isToolResultMessage` hit on the newest new message is the
+ * strongest signal (the model is being fed a tool result directly, whatever
+ * the previously-emitted event kind was) and wins outright; otherwise the
+ * first turn of a session is virtually always kicked off by a user message;
+ * a request payload that shrank since the previous turn implies compaction
+ * ran between turns; otherwise, if the last event emitted was a tool_end,
+ * the agent looped straight from a tool result back into the model without
+ * new user input. Anything else falls back to "unknown" rather than
  * guessing.
  */
-export function inferTurnTrigger(opts: { isFirstTurn: boolean; compacted: boolean; prevEventKind: string }): TurnTrigger {
+export function inferTurnTrigger(opts: {
+	isFirstTurn: boolean;
+	compacted: boolean;
+	prevEventKind: string;
+	newestNewMessage?: unknown;
+}): TurnTrigger {
+	if (isToolResultMessage(opts.newestNewMessage)) return "tool_result";
 	if (opts.isFirstTurn) return "user";
 	if (opts.compacted) return "compaction";
 	if (opts.prevEventKind === "tool_end") return "tool_result";
@@ -626,59 +674,6 @@ export function modelLabel(model: any): string {
 	const id = typeof model.id === "string" ? model.id : "";
 	if (provider && id) return `${provider}/${id}`;
 	return id || provider;
-}
-
-/**
- * Joins a stripped-trailing-slash baseUrl to `version` + `path`, but skips
- * re-adding `version` when baseUrl already ends with it (e.g. a custom
- * gateway baseUrl of "https://x/v1" must not become ".../v1/v1/messages").
- * Shared by every versioned branch of `requestUrl` below.
- */
-function joinVersionedPath(baseUrl: string, version: string, path: string): string {
-	if (baseUrl.endsWith(`/${version}`)) return `${baseUrl}${path}`;
-	return `${baseUrl}/${version}${path}`;
-}
-
-/**
- * Derives the actual HTTP request URL pi would have sent for `model`, from
- * `baseUrl` + the conventional endpoint path for `api` — pi's hooks never
- * hand us the literal outgoing URL, only the model descriptor (baseUrl/api/
- * id/provider), so this reconstructs it. Pure and total: never throws, and
- * degrades to a best-effort value (or "") on anything unexpected, since a
- * wrong/missing request URL must never break event emission.
- *
- * - anthropic-messages -> baseUrl + "/v1/messages" (baseUrl already ending in
- *   "/v1" gets just "/messages", never a doubled "/v1/v1/...").
- * - openai-responses -> baseUrl + "/v1/responses" (same /v1 dedupe).
- * - openai-completions -> baseUrl + "/v1/chat/completions" (same /v1 dedupe).
- * - a google/gemini api (api containing "google", "gemini", or "generative")
- *   -> baseUrl + "/v1beta/models/<id>:streamGenerateContent" (same dedupe,
- *   against "/v1beta").
- * - unknown/empty api -> baseUrl as-is.
- * - no baseUrl at all -> "".
- *
- * A trailing slash on baseUrl is stripped first so no branch ever produces a
- * double slash.
- */
-export function requestUrl(model: { baseUrl?: string; api?: string; id?: string } | null | undefined): string {
-	return (
-		safe(() => {
-			const rawBaseUrl = typeof model?.baseUrl === "string" ? model.baseUrl : "";
-			const baseUrl = rawBaseUrl.replace(/\/+$/, "");
-			if (!baseUrl) return "";
-
-			const api = typeof model?.api === "string" ? model.api : "";
-			const id = typeof model?.id === "string" ? model.id : "";
-
-			if (api === "anthropic-messages") return joinVersionedPath(baseUrl, "v1", "/messages");
-			if (api === "openai-responses") return joinVersionedPath(baseUrl, "v1", "/responses");
-			if (api === "openai-completions") return joinVersionedPath(baseUrl, "v1", "/chat/completions");
-			if (api.includes("google") || api.includes("gemini") || api.includes("generative")) {
-				return joinVersionedPath(baseUrl, "v1beta", `/models/${id}:streamGenerateContent`);
-			}
-			return baseUrl;
-		}) ?? ""
-	);
 }
 
 /**
@@ -1040,23 +1035,20 @@ export default function (pi: ExtensionAPI) {
 			const model = (typeof payload?.model === "string" && payload.model) || modelLabel(ctx?.model) || currentModelLabel;
 			currentModelLabel = model;
 
+			// Computed ONCE and set on BOTH turn_start and provider_request below,
+			// so they always agree — the TUI hides a tool-result continuation turn
+			// from the feed using this same value regardless of which event it
+			// reads it off.
+			const trigger = inferTurnTrigger({ isFirstTurn, compacted, prevEventKind, newestNewMessage: result.newestNewMessage });
+
 			// Emitted right before provider_request so the TUI's header (which reads
 			// turn_start.Model) reflects this turn before the request row lands.
 			emitEvent({
 				...baseEnvelope("turn_start"),
 				model,
-				trigger: inferTurnTrigger({ isFirstTurn, compacted, prevEventKind }),
+				trigger,
 			});
 
-			// method/url reconstruct the actual HTTP request line pi sent to the
-			// provider (WIRE: ProviderRequest.Method/URL) from ctx.model, which pi
-			// never hands us directly — read it defensively, same as ctx?.model
-			// above, so a missing/odd ctx.model shape never breaks the emit. This
-			// is the accurate request LINE; pi's hooks never hand us the real
-			// assembled HTTP headers, so header capture was removed rather than
-			// emitting reconstructed/guessed values (decision: pi's hooks are the
-			// wrong source for real HTTP headers).
-			const url = safe(() => requestUrl(ctx?.model)) ?? "";
 			emitEvent({
 				...baseEnvelope("provider_request"),
 				model,
@@ -1072,8 +1064,7 @@ export default function (pi: ExtensionAPI) {
 					toolSchemaHash: result.toolSchemaHash, // R2-6: same hash the tool-schema blob (below) is enqueued under.
 				},
 				changedBlobs,
-				method: "POST",
-				url,
+				trigger,
 			});
 		});
 

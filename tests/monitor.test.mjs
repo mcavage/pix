@@ -20,7 +20,7 @@ const {
 	partitionToolNames,
 	summarizeRequest,
 	extractAssistantOutput,
-	requestUrl,
+	isToolResultMessage,
 	extractSessionId,
 } = monitor;
 
@@ -161,79 +161,39 @@ test("R2-6: toolSchemaHash is empty string when there are no tools", () => {
 	assert.ok(!result.blobs.some((b) => b.text === "[]"));
 });
 
-// ─── requestUrl: reconstruct the HTTP request line from ctx.model ──────────
+// ─── isToolResultMessage: cross-provider tool-result detection ─────────────
 
-test("requestUrl: anthropic-messages appends /v1/messages", () => {
+test("isToolResultMessage: Anthropic content array with a tool_result block is true", () => {
 	assert.equal(
-		requestUrl({ baseUrl: "https://api.anthropic.com", api: "anthropic-messages", id: "claude-opus-4-8" }),
-		"https://api.anthropic.com/v1/messages",
+		isToolResultMessage({ role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: "42" }] }),
+		true,
 	);
 });
 
-test("requestUrl: anthropic-messages with an existing /v1 baseUrl does not double it", () => {
+test("isToolResultMessage: OpenAI role:tool is true", () => {
+	assert.equal(isToolResultMessage({ role: "tool", tool_call_id: "call_1", content: "42" }), true);
+});
+
+test("isToolResultMessage: OpenAI a bare tool_call_id (no role:tool) is still true", () => {
+	assert.equal(isToolResultMessage({ role: "user", tool_call_id: "call_1", content: "42" }), true);
+});
+
+test("isToolResultMessage: Gemini a part with functionResponse is true", () => {
 	assert.equal(
-		requestUrl({ baseUrl: "https://gateway.example.com/v1", api: "anthropic-messages" }),
-		"https://gateway.example.com/v1/messages",
+		isToolResultMessage({ role: "user", parts: [{ functionResponse: { name: "lookup", response: { result: 42 } } }] }),
+		true,
 	);
 });
 
-test("requestUrl: openai-responses appends /v1/responses", () => {
-	assert.equal(requestUrl({ baseUrl: "https://api.openai.com", api: "openai-responses" }), "https://api.openai.com/v1/responses");
+test("isToolResultMessage: a plain user text message is false", () => {
+	assert.equal(isToolResultMessage({ role: "user", content: "what's the weather" }), false);
+	assert.equal(isToolResultMessage({ role: "user", content: [{ type: "text", text: "hi" }] }), false);
 });
 
-test("requestUrl: openai-responses respects an existing trailing /v1", () => {
-	assert.equal(requestUrl({ baseUrl: "https://api.openai.com/v1", api: "openai-responses" }), "https://api.openai.com/v1/responses");
-});
-
-test("requestUrl: openai-completions appends /v1/chat/completions", () => {
-	assert.equal(
-		requestUrl({ baseUrl: "https://api.openai.com", api: "openai-completions" }),
-		"https://api.openai.com/v1/chat/completions",
-	);
-});
-
-test("requestUrl: openai-completions respects an existing trailing /v1", () => {
-	assert.equal(
-		requestUrl({ baseUrl: "https://api.openai.com/v1", api: "openai-completions" }),
-		"https://api.openai.com/v1/chat/completions",
-	);
-});
-
-test("requestUrl: a google/gemini api builds the streamGenerateContent path with the model id", () => {
-	assert.equal(
-		requestUrl({ baseUrl: "https://generativelanguage.googleapis.com", api: "google-generative-ai", id: "gemini-2.5-pro" }),
-		"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent",
-	);
-	assert.equal(
-		requestUrl({ baseUrl: "https://x.example.com", api: "gemini-messages", id: "gemini-flash" }),
-		"https://x.example.com/v1beta/models/gemini-flash:streamGenerateContent",
-	);
-});
-
-test("requestUrl: google/gemini api does not double an existing /v1beta baseUrl", () => {
-	assert.equal(
-		requestUrl({ baseUrl: "https://x.example.com/v1beta", api: "generative-language", id: "gemini-flash" }),
-		"https://x.example.com/v1beta/models/gemini-flash:streamGenerateContent",
-	);
-});
-
-test("requestUrl: strips a trailing slash on baseUrl before joining, never a double slash", () => {
-	assert.equal(
-		requestUrl({ baseUrl: "https://api.anthropic.com/", api: "anthropic-messages" }),
-		"https://api.anthropic.com/v1/messages",
-	);
-});
-
-test("requestUrl: unknown api falls back to baseUrl as-is", () => {
-	assert.equal(requestUrl({ baseUrl: "https://custom.example.com/proxy", api: "some-unknown-api" }), "https://custom.example.com/proxy");
-	assert.equal(requestUrl({ baseUrl: "https://custom.example.com/proxy" }), "https://custom.example.com/proxy");
-});
-
-test("requestUrl: missing baseUrl returns empty string, never throws", () => {
-	assert.equal(requestUrl({ api: "anthropic-messages" }), "");
-	assert.equal(requestUrl({}), "");
-	assert.equal(requestUrl(null), "");
-	assert.equal(requestUrl(undefined), "");
+test("isToolResultMessage: null/undefined/non-object is false", () => {
+	assert.equal(isToolResultMessage(null), false);
+	assert.equal(isToolResultMessage(undefined), false);
+	assert.equal(isToolResultMessage("just a string"), false);
 });
 
 // ─── hook ordering: provider_request must emit BEFORE its own provider_response ───
@@ -299,7 +259,7 @@ test("two turns emit provider_request/provider_response in the same order, per t
 	assert.equal(requests.length, 2);
 });
 
-test("provider_request carries method=POST and the requestUrl derived from ctx.model", async (t) => {
+test("a fresh user prompt: turn_start and provider_request both carry trigger=user", async (t) => {
 	const { server, port, lines } = await startRecordingServer();
 	t.after(() => server.close());
 
@@ -308,18 +268,55 @@ test("provider_request carries method=POST and the requestUrl derived from ctx.m
 	factory(pi);
 
 	handlers.get("session_start")?.({}, {});
-	handlers.get("before_provider_request")?.(
-		{ payload: { messages: [{ role: "user", content: "hi" }] } },
-		{ model: { baseUrl: "https://api.anthropic.com", api: "anthropic-messages", id: "claude-opus-4-8", provider: "anthropic" } },
-	);
+	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "hi" }] } }, {});
 	handlers.get("message_end")?.({ message: assistantMessage("reply") }, {});
 
 	await new Promise((r) => setTimeout(r, 100));
 
-	const pr2 = lines.find((l) => l.kind === "provider_request");
-	assert.ok(pr2, "provider_request must be emitted");
-	assert.equal(pr2.method, "POST");
-	assert.equal(pr2.url, "https://api.anthropic.com/v1/messages");
+	const ts = lines.find((l) => l.kind === "turn_start");
+	const pr = lines.find((l) => l.kind === "provider_request");
+	assert.ok(ts && pr, "both turn_start and provider_request must be emitted");
+	assert.equal(ts.trigger, "user");
+	assert.equal(pr.trigger, "user");
+});
+
+test("a provider_request whose newest new message is a tool result carries trigger=tool_result on both events", async (t) => {
+	const { server, port, lines } = await startRecordingServer();
+	t.after(() => server.close());
+
+	const factory = await loadMonitorAgainst(port);
+	const { pi, handlers } = makeStubPi();
+	factory(pi);
+
+	handlers.get("session_start")?.({}, {});
+	// First turn: a plain user prompt (establishes prevMessageCount).
+	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "read foo.ts" }] } }, {});
+	handlers.get("message_end")?.({ message: assistantMessage("reading now") }, {});
+
+	// Second turn: the newest new message is an OpenAI-shaped tool result fed
+	// back to the model — no user input in between, so prevEventKind alone
+	// (message_end, not tool_end) would NOT have inferred tool_result.
+	handlers.get("before_provider_request")?.(
+		{
+			payload: {
+				messages: [
+					{ role: "user", content: "read foo.ts" },
+					{ role: "tool", tool_call_id: "call_1", content: "file contents..." },
+				],
+			},
+		},
+		{},
+	);
+	handlers.get("message_end")?.({ message: assistantMessage("done") }, {});
+
+	await new Promise((r) => setTimeout(r, 100));
+
+	const turnStarts = lines.filter((l) => l.kind === "turn_start");
+	const requests = lines.filter((l) => l.kind === "provider_request");
+	assert.equal(turnStarts.length, 2);
+	assert.equal(requests.length, 2);
+	assert.equal(turnStarts[1].trigger, "tool_result");
+	assert.equal(requests[1].trigger, "tool_result");
 });
 
 // ─── R2-1: shutdown must not resurrect the retry timer / requeue ───────────
