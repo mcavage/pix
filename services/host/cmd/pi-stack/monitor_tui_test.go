@@ -3076,3 +3076,152 @@ func TestMonitorTUI_EvictedParentToolRowChildFallsBack(t *testing.T) {
 		t.Errorf("fallback child node = %q, want depth-1 indent", lines[len(lines)-2].text)
 	}
 }
+
+// --- markdown rendering (glamour) of natural-language bodies ---
+
+// mdBlobModel builds a sized, showFull-on model whose Blob func serves one
+// assistant-reply blob under hash "md-h", with the response row already
+// fed. The caller expands it (space) when ready.
+func mdBlobModel(t *testing.T, md string, w, h int) Model {
+	t.Helper()
+	m := NewModel(TUIConfig{Blob: func(hash string) (monitor.Blob, bool) {
+		if hash == "md-h" {
+			return monitor.Blob{Hash: hash, Bytes: len(md), Text: md}, true
+		}
+		return monitor.Blob{}, false
+	}})
+	if w > 0 {
+		m = resize(t, m, w, h)
+	}
+	m = key(t, m, runeKey("f")) // showFull on
+	m = feed(t, m, mkAssistantResponse("1", 200, "end_turn", nil, "Ping results:", "md-h", len(md), nil))
+	return m
+}
+
+// (a) A markdown assistant reply renders FORMATTED: the bullet list comes
+// out as multiple physical detail lines, one bullet glyph per item, with
+// the item text + emoji preserved and the literal ** emphasis markers
+// consumed by the renderer (the plain fallback would show them verbatim).
+// No exact-ANSI assertions: glamour degrades to the headless color
+// profile, so items are essentially plain text here.
+func TestMonitorTUI_MarkdownAssistantBodyRendersFormatted(t *testing.T) {
+	md := "Ping results:\n\n- **gemini-3.6-flash** (google) → ping ✅\n- **qwen3** (ollama) → ping ✅"
+	m := mdBlobModel(t, md, 120, 40)
+	m = key(t, m, runeKey(" ")) // expand (following: cursor on the response row)
+
+	view := m.View()
+	if !strings.Contains(view, "gemini-3.6-flash") || !strings.Contains(view, "qwen3") {
+		t.Fatalf("expanded markdown body lost the list-item text, got:\n%s", view)
+	}
+	if !strings.Contains(view, "✅") {
+		t.Errorf("expanded markdown body lost the emoji, got:\n%s", view)
+	}
+	if strings.Contains(view, "**") {
+		t.Errorf("literal ** markers survived — body was NOT markdown-rendered, got:\n%s", view)
+	}
+	// Bullet-ish structure: each item on its own line, marked as a bullet.
+	var itemLines []string
+	for _, l := range strings.Split(view, "\n") {
+		if strings.Contains(l, "gemini-3.6-flash") || strings.Contains(l, "qwen3") {
+			itemLines = append(itemLines, l)
+		}
+	}
+	if len(itemLines) < 2 {
+		t.Fatalf("list items not on separate lines (%d line(s)), got:\n%s", len(itemLines), view)
+	}
+	for _, l := range itemLines {
+		if !strings.Contains(l, "•") {
+			t.Errorf("list item line missing a bullet glyph: %q", l)
+		}
+	}
+
+	// R3-2b: toggling showFull OFF clears the rendered lines along with
+	// the raw resolved text.
+	m = key(t, m, runeKey("f"))
+	for _, r := range m.rows {
+		if r.assistantRendered != nil || r.assistantText != "" {
+			t.Errorf("rendered/raw assistant body retained after showFull off")
+		}
+	}
+}
+
+// (b) Sanitize-before-glamour: raw ANSI/control-sequence injection in the
+// assistant text is stripped BEFORE markdown rendering, so no attacker
+// escape bytes leak into the rendered output (glamour's own trusted
+// styling may remain — the assertions target the injected sequences).
+func TestMonitorTUI_MarkdownSanitizesInjectionBeforeGlamour(t *testing.T) {
+	md := "- alpha \x1b]52;c;EVIL\x07beta\n- \x1b[31mgamma\x1b[0m delta"
+	m := mdBlobModel(t, md, 120, 40)
+	m = key(t, m, runeKey(" ")) // expand
+
+	view := m.View()
+	if strings.Contains(view, "EVIL") {
+		t.Fatalf("OSC-52 payload leaked through the markdown path, got:\n%q", view)
+	}
+	if strings.Contains(view, "\x1b]") {
+		t.Fatalf("raw OSC escape leaked through the markdown path, got:\n%q", view)
+	}
+	if strings.Contains(view, "\x1b[31m") {
+		t.Fatalf("attacker CSI color sequence leaked through the markdown path, got:\n%q", view)
+	}
+	// The harmless text around the injections still renders.
+	if !strings.Contains(view, "alpha beta") || !strings.Contains(view, "gamma") || !strings.Contains(view, "delta") {
+		t.Errorf("sanitize-then-render ate the plain item text, got:\n%s", view)
+	}
+}
+
+// (c) Tool args/results are NOT markdown-rendered: they are shell/JSON
+// payloads and must stay byte-exact plain text even when they LOOK like
+// markdown.
+func TestMonitorTUI_ToolArgsAndResultsStayPlain(t *testing.T) {
+	args := "- **not** a list"
+	result := "| not | a table |"
+	blobs := map[string]monitor.Blob{
+		"ah": {Hash: "ah", Bytes: len(args), Text: args},
+		"rh": {Hash: "rh", Bytes: len(result), Text: result},
+	}
+	m := NewModel(TUIConfig{Blob: func(h string) (monitor.Blob, bool) { b, ok := blobs[h]; return b, ok }})
+	m = resize(t, m, 120, 40)
+	m = key(t, m, runeKey("f"))
+	m = feed(t, m, mkToolStart("1", "t1", "builtin", "bash", "go test", "ah"))
+	m = feed(t, m, mkToolEnd("1", "t1", true, len(result), "ok", "rh", 10))
+	m = key(t, m, runeKey(" ")) // expand the tool row
+
+	view := m.View()
+	if !strings.Contains(view, args) {
+		t.Errorf("tool args were markdown-rendered (literal body missing), got:\n%s", view)
+	}
+	if !strings.Contains(view, result) {
+		t.Errorf("tool result was markdown-rendered (literal body missing), got:\n%s", view)
+	}
+}
+
+// (d) Width unknown (headless, no WindowSizeMsg): the markdown path is
+// skipped and the plain sanitized line-split fallback still shows the raw
+// text — then the first real resize re-renders the expanded body at the
+// new width (same trigger as toggling showFull).
+func TestMonitorTUI_MarkdownFallbackUnsizedThenRerenderOnResize(t *testing.T) {
+	md := "- **flash** ok\n- **qwen** ok"
+	m := mdBlobModel(t, md, 0, 0) // never sized
+	m = key(t, m, runeKey(" "))   // expand
+
+	view := m.View()
+	if !strings.Contains(view, "- **flash** ok") || !strings.Contains(view, "- **qwen** ok") {
+		t.Fatalf("plain fallback lost the raw body with width unknown, got:\n%s", view)
+	}
+	for _, r := range m.rows {
+		if r.assistantRendered != nil {
+			t.Fatalf("assistantRendered populated with no width — glamour should not have run")
+		}
+	}
+
+	// A WindowSizeMsg arrives: the expanded body re-renders as markdown.
+	m = resize(t, m, 120, 40)
+	view = m.View()
+	if strings.Contains(view, "**") {
+		t.Errorf("resize did not re-render the expanded body as markdown, got:\n%s", view)
+	}
+	if !strings.Contains(view, "flash") || !strings.Contains(view, "qwen") {
+		t.Errorf("re-rendered body lost the item text, got:\n%s", view)
+	}
+}
