@@ -796,12 +796,25 @@ export default function (pi: ExtensionAPI) {
 		let pendingResponseMeta: { status: number; headers?: Record<string, string> } | null = null;
 		// Request headers observed on the most recent before_provider_headers,
 		// held until before_provider_request supplies the summary/changedBlobs and
-		// emits the provider_request event for the SAME round-trip (pi's
-		// documented hook order is before_provider_headers -> before_provider_request
-		// -> after_provider_response -> message_end, so before_provider_headers
-		// always fires first — see the before_provider_headers/before_provider_request
-		// handlers below).
+		// emits the provider_request event for the SAME round-trip. This covers
+		// the order where before_provider_headers fires FIRST (its documented
+		// position in the hook-order diagram: before_provider_headers ->
+		// before_provider_request -> after_provider_response -> message_end).
+		//
+		// In practice, though, the real transport fires before_provider_headers
+		// INSIDE transformHeaders, which runs AFTER before_provider_request
+		// (onPayload) — the opposite order. When that happens, provider_request
+		// has ALREADY been emitted with no headers by the time this hook fires,
+		// so there is nothing left to stash into for that turn: the
+		// before_provider_headers handler below instead emits a small merge event,
+		// request_headers, carrying the same turnId (WIRE: KindRequestHeaders),
+		// so the TUI can attach the real headers to the already-emitted request
+		// row. `lastRequestTurnId` is what before_provider_headers checks to tell
+		// the two orders apart: it is the turnId of the most recently emitted
+		// provider_request, set by the before_provider_request handler right
+		// after that emit.
 		let pendingRequestHeaders: Record<string, string> | undefined;
+		let lastRequestTurnId = "";
 		const seenBlobHashes = new Set<string>();
 		const toolStartedAt = new Map<string, number>();
 		const emittedToolStart = new Set<string>();
@@ -963,6 +976,7 @@ export default function (pi: ExtensionAPI) {
 			// behind when the session switches. Just discard any headers stashed for
 			// a round-trip that never completed under the OUTGOING session.
 			pendingRequestHeaders = undefined;
+			lastRequestTurnId = "";
 			sessionId = extractSessionId(ctx);
 			turnSeqCounter = 0;
 			currentTurnId = "";
@@ -1074,14 +1088,17 @@ export default function (pi: ExtensionAPI) {
 				trigger: inferTurnTrigger({ isFirstTurn, compacted, prevEventKind }),
 			});
 
-			// EMIT NOW, not stash: pi's documented hook order (docs/extensions.md
-			// hook-order diagram) is before_provider_headers -> before_provider_request
-			// -> after_provider_response -> message_end, so before_provider_headers has
-			// ALREADY fired for this round-trip by the time this handler runs —
-			// whatever it stashed in `pendingRequestHeaders` is the right value to
-			// attach here. Emitting immediately (rather than waiting for a later
-			// hook) is what keeps provider_request ordered before its own turn's
-			// provider_response, instead of leaking into the NEXT turn.
+			// Attach headers inline ONLY when before_provider_headers already fired
+			// for THIS turn (the hook-order-diagram order: before_provider_headers ->
+			// before_provider_request). In the real transport before_provider_headers
+			// fires INSIDE transformHeaders, which runs AFTER before_provider_request
+			// (onPayload) — the opposite order — so pendingRequestHeaders is usually
+			// still empty here; in that case before_provider_headers, once it does
+			// fire, emits a separate request_headers merge event (see that handler
+			// below) rather than this event ever waiting for it. Emitting
+			// provider_request immediately (rather than waiting for a later hook) is
+			// what keeps it ordered before its own turn's provider_response, instead
+			// of leaking into the NEXT turn.
 			const headers = pendingRequestHeaders;
 			pendingRequestHeaders = undefined;
 			// method/url reconstruct the actual HTTP request line pi sent to the
@@ -1108,16 +1125,45 @@ export default function (pi: ExtensionAPI) {
 				method: "POST",
 				url,
 			});
+			// Track whether THIS request is still awaiting its headers.
+			// - headers attached inline just now (headers-first order): nothing
+			//   left to track, so clear it — otherwise a stale turnId here would
+			//   false-match the NEXT turn's before_provider_headers, which fires
+			//   while currentTurnId still holds THIS turn's id (before_provider_request
+			//   hasn't run for the next turn yet).
+			// - no headers attached (request-first order, the real transport): this
+			//   request went out with no headers and is awaiting its
+			//   before_provider_headers merge event — record its turnId so that
+			//   handler (below) can recognize it and emit the merge event instead
+			//   of stashing for a future request.
+			lastRequestTurnId = headers ? "" : currentTurnId;
 		});
 
 		on("before_provider_headers", (e: any) => {
-			// Fires BEFORE before_provider_request (pi's documented hook order:
-			// before_provider_headers -> before_provider_request ->
-			// after_provider_response -> message_end — docs/extensions.md hook-order
-			// diagram). ONLY stash the headers here; before_provider_request (which
-			// fires right after) picks this up and does the actual emit. Redact
-			// sensitive values (R6-2) before this ever leaves the sandbox.
-			pendingRequestHeaders = redactHeaders(normalizeHeaders(e?.headers));
+			// Real headers, redacted (R6-2) before they ever leave the sandbox,
+			// regardless of which order this fires relative to
+			// before_provider_request for the current turn.
+			const h = redactHeaders(normalizeHeaders(e?.headers));
+			if (currentTurnId && currentTurnId === lastRequestTurnId) {
+				// Request-first order (the real transport: before_provider_headers
+				// fires INSIDE transformHeaders, AFTER before_provider_request's
+				// onPayload): provider_request for THIS turn already went out with no
+				// headers, and lastRequestTurnId is still set to its turnId (not yet
+				// cleared — see above). Emit a small merge event carrying the same
+				// turnId (baseEnvelope stamps currentTurnId, which equals
+				// lastRequestTurnId here and is correct since headers fire after the
+				// request in this order) so the TUI can attach the real headers to
+				// the already-emitted request row. Clear lastRequestTurnId: this
+				// request's headers are now accounted for.
+				emitEvent({ ...baseEnvelope("request_headers"), headers: h });
+				lastRequestTurnId = "";
+				return;
+			}
+			// Headers-first order (the hook-order-diagram's documented order):
+			// before_provider_request hasn't emitted this turn's provider_request
+			// yet (lastRequestTurnId is either "" or a PREVIOUS, already-cleared
+			// turn), so stash the headers for it to attach inline.
+			pendingRequestHeaders = h;
 		});
 
 		on("after_provider_response", (e: any) => {

@@ -456,9 +456,9 @@ func (m Model) handleKeyInner(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.follow = true
 		case "q":
 			return m, tea.Quit
-		case "up", "k", "ctrl+p":
+		case "up", "ctrl+p":
 			m.moveCursor(-1)
-		case "down", "j", "ctrl+n":
+		case "down", "ctrl+n":
 			m.moveCursor(1)
 		case "g", "home", "alt+<":
 			m.cursorToTop()
@@ -509,9 +509,9 @@ func (m Model) handleKeyInner(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.follow = false
 	case " ", "enter":
 		m.toggleExpandAtCursor()
-	case "up", "k", "ctrl+p":
+	case "up", "ctrl+p":
 		m.moveCursor(-1)
-	case "down", "j", "ctrl+n":
+	case "down", "ctrl+n":
 		m.moveCursor(1)
 	case "g", "home", "alt+<":
 		m.cursorToTop()
@@ -858,6 +858,20 @@ func (m *Model) applyEvent(e monitor.Event) {
 		// retain a full body for nothing.
 		if m.expanded[id] && m.showFull {
 			m.resolveRowBlobs(id)
+		}
+
+	case monitor.RequestHeaders:
+		// Headers arrived a beat after the matching provider_request (see
+		// monitor.RequestHeaders' doc comment: before_provider_headers fires
+		// AFTER before_provider_request in the real transport). Find that
+		// request row by the SAME id this package already keys it under
+		// (session + turnId) and merge the sanitized headers in; if the row
+		// isn't there (e.g. evicted, or this event arrived out of order and
+		// somehow beat its own request), silently drop it — there is nothing
+		// to attach it to.
+		id := sess + "/" + env.TurnID + ":req"
+		if idx, ok := m.rowIndex[id]; ok {
+			m.rows[idx].reqHeaders = sanitizeHeaderLines(ev.Headers)
 		}
 
 	case monitor.ProviderResponse:
@@ -1509,7 +1523,7 @@ func (m Model) helpBodyLines() []bodyLine {
 		"pi-stack monitor — keys",
 		"",
 		"navigation (line-granular: expanded payloads scroll line by line)",
-		"  up/k, down/j    move one line (emacs: ctrl+p / ctrl+n)",
+		"  up, down        move one line (emacs: ctrl+p / ctrl+n)",
 		"  g/Home, alt+<   jump to the top",
 		"  G/End, alt+>    jump to the bottom (re-attach follow)",
 		"  PgUp/PgDn       page up/down (ctrl+u/ctrl+d; emacs: alt+v / ctrl+v)",
@@ -1567,7 +1581,7 @@ func (m Model) footerLine() string {
 		follow = "[paused]"
 	}
 	return fmt.Sprintf(
-		"%s f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s h:headers=%s  nav:\u2191\u2193/j/k  enter/space:expand  /:filter  ?:help  q:quit",
+		"%s f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s h:headers=%s  nav:\u2191\u2193  enter/space:expand  /:filter  ?:help  q:quit",
 		follow,
 		onoff(m.showFull), onoff(m.showModel), onoff(m.showTools), onoff(m.showMCP),
 		onoff(m.showThinking), onoff(m.showContext), onoff(m.showHeaders))

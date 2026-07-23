@@ -19,6 +19,7 @@ const (
 	KindToolStart        Kind = "tool_start"
 	KindToolEnd          Kind = "tool_end"
 	KindContextEvent     Kind = "context_event"
+	KindRequestHeaders   Kind = "request_headers"
 	KindBlob             Kind = "blob"
 )
 
@@ -184,6 +185,26 @@ type ContextEvent struct {
 
 func (e ContextEvent) Envelope() Envelope { return e.env }
 func (e ContextEvent) Kind() Kind         { return e.env.Kind }
+
+// RequestHeaders carries request headers that arrived from pi's
+// before_provider_headers hook AFTER the provider_request event for the same
+// turn had already been emitted. In the real transport, before_provider_headers
+// fires INSIDE transformHeaders, which runs AFTER before_provider_request
+// (onPayload) — the opposite of the order the extension originally assumed —
+// so the real assembled headers (before_provider_headers's return value is
+// what pi actually sends) show up one beat late relative to provider_request.
+// Rather than delaying provider_request's own emit to wait for headers, the
+// extension emits this small merge event carrying the same TurnID, so the TUI
+// can attach the headers to the matching request row after the fact. Headers
+// caps identically to ProviderRequest.Headers/ProviderResponse.Headers
+// (capHeaders on decode).
+type RequestHeaders struct {
+	env
+	Headers map[string]string `json:"headers"`
+}
+
+func (e RequestHeaders) Envelope() Envelope { return e.env }
+func (e RequestHeaders) Kind() Kind         { return e.env.Kind }
 
 // Blob is a content-addressed payload body: system prompt, message text,
 // tool args/result, etc. It is data-only — sent via POST /blob, never inline
@@ -432,6 +453,14 @@ func Decode(line []byte) (Event, error) {
 		capEnvelopeIDs(&e.env)
 		e.CtxKind = capID(e.CtxKind)
 		e.Detail = capField(e.Detail)
+		return e, nil
+	case KindRequestHeaders:
+		var e RequestHeaders
+		if err := json.Unmarshal(line, &e); err != nil {
+			return nil, fmt.Errorf("monitor: decode %s: %w", probe.Kind, err)
+		}
+		capEnvelopeIDs(&e.env)
+		e.Headers = capHeaders(e.Headers)
 		return e, nil
 	default:
 		return nil, fmt.Errorf("monitor: unknown event kind %q", probe.Kind)

@@ -88,6 +88,10 @@ func TestEventEncodeDecodeRoundTrip(t *testing.T) {
 			CtxKind: "model_change",
 			Detail:  "switched to opus",
 		},
+		RequestHeaders{
+			env:     sampleEnvelope(KindRequestHeaders),
+			Headers: map[string]string{"user-agent": "pi/1.0", "x-request-id": "abc"},
+		},
 	}
 
 	for _, want := range cases {
@@ -232,6 +236,21 @@ func TestEventJSONTagsGolden(t *testing.T) {
 	}
 	if !strings.Contains(string(line), `"ctxKind":"compaction"`) {
 		t.Fatalf("context_event JSON = %s, want ctxKind key", line)
+	}
+
+	rh := RequestHeaders{env: env{Kind: KindRequestHeaders}, Headers: map[string]string{"user-agent": "pi/1.0"}}
+	line, err = Encode(rh)
+	if err != nil {
+		t.Fatalf("Encode() error: %v", err)
+	}
+	var rhMap map[string]json.RawMessage
+	if err := json.Unmarshal(line, &rhMap); err != nil {
+		t.Fatalf("Unmarshal() error: %v", err)
+	}
+	for _, key := range []string{"kind", "sandboxId", "sessionId", "turnId", "seq", "ts", "headers"} {
+		if _, ok := rhMap[key]; !ok {
+			t.Fatalf("request_headers JSON missing key %q; got keys %v", key, rhMap)
+		}
 	}
 
 	b, err := json.Marshal(Blob{Hash: "h", Bytes: 3, Text: "abc"})
@@ -429,6 +448,32 @@ func TestDecodeCapsToolIDAndHeaders(t *testing.T) {
 		}
 		if n := len(v); n > maxFieldBytes {
 			t.Fatalf("ProviderRequest.Headers value len = %d, want <= maxFieldBytes (%d)", n, maxFieldBytes)
+		}
+	}
+
+	// Same bounding, same headers fixture, on RequestHeaders.Headers (the
+	// deferred-merge-event kind) — must be identically capped.
+	line, err = Encode(RequestHeaders{env: env{Kind: KindRequestHeaders}, Headers: headers})
+	if err != nil {
+		t.Fatalf("Encode(RequestHeaders) error: %v", err)
+	}
+	got, err = Decode(line)
+	if err != nil {
+		t.Fatalf("Decode(RequestHeaders) error: %v", err)
+	}
+	rh, ok := got.(RequestHeaders)
+	if !ok {
+		t.Fatalf("Decode() returned %T, want RequestHeaders", got)
+	}
+	if n := len(rh.Headers); n > maxHeaderEntries {
+		t.Fatalf("RequestHeaders.Headers len = %d, want <= maxHeaderEntries (%d)", n, maxHeaderEntries)
+	}
+	for k, v := range rh.Headers {
+		if n := len(k); n > maxIdBytes {
+			t.Fatalf("RequestHeaders.Headers key len = %d, want <= maxIdBytes (%d): %q", n, maxIdBytes, k)
+		}
+		if n := len(v); n > maxFieldBytes {
+			t.Fatalf("RequestHeaders.Headers value len = %d, want <= maxFieldBytes (%d)", n, maxFieldBytes)
 		}
 	}
 }

@@ -381,6 +381,104 @@ test("a missing before_provider_headers still emits the request in order, just w
 	assert.equal("headers" in pr, false, "no headers hook fired, so no headers field");
 });
 
+// ─── request_headers merge event: real-transport order (request-first) ────
+// Root cause under test: in the REAL transport, before_provider_headers fires
+// INSIDE transformHeaders, which runs AFTER before_provider_request (onPayload)
+// — the opposite of the hook-order-diagram's documented order this file used
+// to assume. So provider_request emits first with no headers, and the real
+// assembled headers show up one beat later on before_provider_headers. The fix
+// is a small merge event, request_headers, carrying the same turnId.
+
+test("request-first order: before_provider_request then before_provider_headers emits provider_request followed by request_headers carrying the redacted headers with the SAME turnId", async (t) => {
+	const { server, port, lines } = await startRecordingServer();
+	t.after(() => server.close());
+
+	const factory = await loadMonitorAgainst(port);
+	const { pi, handlers } = makeStubPi();
+	factory(pi);
+
+	handlers.get("session_start")?.({}, {});
+	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "first" }] } }, {});
+	handlers.get("before_provider_headers")?.({
+		headers: { authorization: "proxy-managed", "x-request-id": "real-1" },
+	});
+	handlers.get("message_end")?.({ message: assistantMessage("reply") }, {});
+
+	await new Promise((r) => setTimeout(r, 100));
+
+	const kinds = lines.filter((l) => l.kind === "provider_request" || l.kind === "request_headers" || l.kind === "provider_response").map((l) => l.kind);
+	assert.deepEqual(kinds, ["provider_request", "request_headers", "provider_response"], "provider_request emits with no headers, then a request_headers merge event follows");
+
+	const pr = lines.find((l) => l.kind === "provider_request");
+	assert.equal("headers" in pr, false, "provider_request itself carries no headers in this order");
+
+	const rh = lines.find((l) => l.kind === "request_headers");
+	assert.ok(rh, "a request_headers merge event must be emitted");
+	assert.equal(rh.turnId, pr.turnId, "request_headers must carry the SAME turnId as its provider_request");
+	assert.equal(rh.headers["x-request-id"], "real-1");
+	assert.equal(rh.headers.authorization, "<redacted>", "redaction (R6-2) still applies on the merge event too");
+});
+
+test("request-first order across two turns: each request_headers merge event carries its own turn's turnId", async (t) => {
+	const { server, port, lines } = await startRecordingServer();
+	t.after(() => server.close());
+
+	const factory = await loadMonitorAgainst(port);
+	const { pi, handlers } = makeStubPi();
+	factory(pi);
+
+	handlers.get("session_start")?.({}, {});
+
+	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "first" }] } }, {});
+	handlers.get("before_provider_headers")?.({ headers: { "x-request-id": "turn-1" } });
+	handlers.get("message_end")?.({ message: assistantMessage("reply one") }, {});
+
+	handlers.get("before_provider_request")?.(
+		{ payload: { messages: [{ role: "user", content: "first" }, { role: "user", content: "second" }] } },
+		{},
+	);
+	handlers.get("before_provider_headers")?.({ headers: { "x-request-id": "turn-2" } });
+	handlers.get("message_end")?.({ message: assistantMessage("reply two") }, {});
+
+	await new Promise((r) => setTimeout(r, 100));
+
+	const requests = lines.filter((l) => l.kind === "provider_request");
+	const headerEvents = lines.filter((l) => l.kind === "request_headers");
+	assert.equal(requests.length, 2);
+	assert.equal(headerEvents.length, 2);
+	assert.equal(headerEvents[0].turnId, requests[0].turnId);
+	assert.equal(headerEvents[0].headers["x-request-id"], "turn-1");
+	assert.equal(headerEvents[1].turnId, requests[1].turnId);
+	assert.equal(headerEvents[1].headers["x-request-id"], "turn-2");
+	assert.notEqual(requests[0].turnId, requests[1].turnId, "the two turns must have distinct turnIds");
+});
+
+test("headers-first order still attaches inline on provider_request and emits NO separate request_headers event", async (t) => {
+	const { server, port, lines } = await startRecordingServer();
+	t.after(() => server.close());
+
+	const factory = await loadMonitorAgainst(port);
+	const { pi, handlers } = makeStubPi();
+	factory(pi);
+
+	handlers.get("session_start")?.({}, {});
+	handlers.get("before_provider_headers")?.({
+		headers: { authorization: "proxy-managed", "x-request-id": "inline-1" },
+	});
+	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "hi" }] } }, {});
+	handlers.get("message_end")?.({ message: assistantMessage("reply") }, {});
+
+	await new Promise((r) => setTimeout(r, 100));
+
+	const pr = lines.find((l) => l.kind === "provider_request");
+	assert.ok(pr, "provider_request must be emitted");
+	assert.equal(pr.headers["x-request-id"], "inline-1", "headers attach inline on provider_request itself");
+	assert.equal(pr.headers.authorization, "<redacted>", "redaction (R6-2) still applies");
+
+	const rh = lines.find((l) => l.kind === "request_headers");
+	assert.equal(rh, undefined, "headers-first order must not also emit a separate request_headers merge event");
+});
+
 test("provider_request carries method=POST and the requestUrl derived from ctx.model", async (t) => {
 	const { server, port, lines } = await startRecordingServer();
 	t.after(() => server.close());

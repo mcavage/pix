@@ -934,7 +934,7 @@ func selectedIdx(m Model) int {
 	return -1
 }
 
-func TestMonitorTUI_CursorMovesWithJKAndArrows(t *testing.T) {
+func TestMonitorTUI_CursorMovesWithArrowsAndEmacsKeys(t *testing.T) {
 	m := NewModel(TUIConfig{})
 	m = nRows(t, m, 5) // row-0 .. row-4, newest (row-4) selected by default (follow)
 
@@ -942,20 +942,20 @@ func TestMonitorTUI_CursorMovesWithJKAndArrows(t *testing.T) {
 		t.Fatalf("default selection = %q, want the newest row (contains 4)", got)
 	}
 
-	// k / up move the cursor up (older).
-	m = key(t, m, runeKey("k"))
+	// ctrl+p / up move the cursor up (older).
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyCtrlP})
 	if idx := selectedIdx(m); idx != 3 {
-		t.Fatalf("after k: selected index = %d, want 3", idx)
+		t.Fatalf("after ctrl+p: selected index = %d, want 3", idx)
 	}
 	m = key(t, m, tea.KeyMsg{Type: tea.KeyUp})
 	if idx := selectedIdx(m); idx != 2 {
 		t.Fatalf("after up: selected index = %d, want 2", idx)
 	}
 
-	// j / down move it back down.
-	m = key(t, m, runeKey("j"))
+	// ctrl+n / down move it back down.
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyCtrlN})
 	if idx := selectedIdx(m); idx != 3 {
-		t.Fatalf("after j: selected index = %d, want 3", idx)
+		t.Fatalf("after ctrl+n: selected index = %d, want 3", idx)
 	}
 	m = key(t, m, tea.KeyMsg{Type: tea.KeyDown})
 	if idx := selectedIdx(m); idx != 4 {
@@ -963,10 +963,40 @@ func TestMonitorTUI_CursorMovesWithJKAndArrows(t *testing.T) {
 	}
 }
 
+// j and k are deliberately NOT nav keys (the user explicitly doesn't want
+// them clobbering vi muscle memory near filter/other future letter keys):
+// pressed outside filter mode they must be complete no-ops, never moving
+// the cursor or touching follow.
+func TestMonitorTUI_JAndKAreNotNavKeys(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	m = nRows(t, m, 5) // row-0 .. row-4, newest (row-4) selected by default (follow)
+
+	before := selectedIdx(m)
+	if !m.follow {
+		t.Fatalf("setup: expected follow to be attached")
+	}
+
+	m = key(t, m, runeKey("k"))
+	if idx := selectedIdx(m); idx != before {
+		t.Fatalf("after k: selected index = %d, want unchanged %d (k must be a no-op)", idx, before)
+	}
+	if !m.follow {
+		t.Fatalf("k detached follow — it must be a no-op")
+	}
+
+	m = key(t, m, runeKey("j"))
+	if idx := selectedIdx(m); idx != before {
+		t.Fatalf("after j: selected index = %d, want unchanged %d (j must be a no-op)", idx, before)
+	}
+	if !m.follow {
+		t.Fatalf("j detached follow — it must be a no-op")
+	}
+}
+
 func TestMonitorTUI_SelectedRowIsHighlighted(t *testing.T) {
 	m := NewModel(TUIConfig{})
 	m = nRows(t, m, 3)
-	m = key(t, m, runeKey("k")) // select row-1 (middle)
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyUp}) // select row-1 (middle)
 
 	view := m.View()
 	var selectedLine, otherLine string
@@ -1044,7 +1074,7 @@ func TestMonitorTUI_EnterExpandsSelectedRowNotLast(t *testing.T) {
 		[]monitor.MessageSummary{{Role: "user", Bytes: 12, Hash: "mh2", Preview: "newer row preview"}}))
 
 	// Select the OLDER row (turn 1), not the last/newest one.
-	m = key(t, m, runeKey("k"))
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyUp})
 	if idx := selectedIdx(m); idx != 0 {
 		t.Fatalf("selected index = %d, want 0 (the older row)", idx)
 	}
@@ -1142,7 +1172,7 @@ func TestMonitorTUI_MovingCursorUpDetachesFollow(t *testing.T) {
 	m = resize(t, m, 100, 10)
 	m = nRows(t, m, 50)
 
-	m = key(t, m, runeKey("k")) // move up: detach
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyUp}) // move up: detach
 	if m.follow {
 		t.Fatalf("moving the cursor up did not detach follow")
 	}
@@ -1418,20 +1448,20 @@ func TestMonitorTUI_LineCursorFollowReattachAndCollapseSnap(t *testing.T) {
 	m := NewModel(TUIConfig{})
 	m = nRows(t, m, 3)
 
-	m = key(t, m, runeKey("k")) // detach, cursor on row-1's line
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyUp}) // detach, cursor on row-1's line
 	if m.follow {
 		t.Fatalf("k did not detach follow")
 	}
-	m = key(t, m, runeKey("j")) // back to the last line: re-attach
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyDown}) // back to the last line: re-attach
 	if !m.follow {
 		t.Errorf("stepping down to the last body line did not re-attach follow")
 	}
 
 	// Expand the middle row, walk into its detail, collapse from there:
 	// the cursor must snap to that row's header line.
-	m = key(t, m, runeKey("k")) // cursor on row-1 header (detached)
-	m = key(t, m, runeKey(" ")) // expand row-1
-	m = key(t, m, runeKey("j")) // step onto row-1's detail line
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyUp})   // cursor on row-1 header (detached)
+	m = key(t, m, runeKey(" "))                  // expand row-1
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyDown}) // step onto row-1's detail line
 	// nRows rows are ctx events seq 0/1/2; row-1's id ends in ":1" (the
 	// seq), which distinguishes it from ":0"/":2" — a bare Contains(":1")
 	// would match every row's "ctx:1:" turn segment.
@@ -1507,7 +1537,7 @@ func TestMonitorTUI_DetachedCursorStableUnderEviction(t *testing.T) {
 	m = nRows(t, m, maxRows) // fill to the cap (cheap: pre-size, still following)
 	m = resize(t, m, 80, 10)
 	for i := 0; i < 5; i++ {
-		m = key(t, m, runeKey("k")) // detach, a few lines above the bottom
+		m = key(t, m, tea.KeyMsg{Type: tea.KeyUp}) // detach, a few lines above the bottom
 	}
 	if m.follow {
 		t.Fatalf("cursor-up did not detach follow")
@@ -1541,7 +1571,7 @@ func TestMonitorTUI_DetachedCursorStableUnderInsertionAbove(t *testing.T) {
 	m = feed(t, m, mkContextEvent("1", 1, "skill_loaded", "ctx-below-a"))
 	m = feed(t, m, mkContextEvent("1", 2, "skill_loaded", "ctx-below-b"))
 
-	m = key(t, m, runeKey("k")) // detach onto ctx-below-a's header
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyUp}) // detach onto ctx-below-a's header
 	if m.follow {
 		t.Fatalf("cursor-up did not detach follow")
 	}
@@ -1573,7 +1603,7 @@ func TestMonitorTUI_EmptyStateNavKeepsFollow(t *testing.T) {
 
 	navMsgs := []tea.Msg{
 		tea.KeyMsg{Type: tea.KeyUp},
-		runeKey("k"),
+		tea.KeyMsg{Type: tea.KeyCtrlP},
 		tea.KeyMsg{Type: tea.KeyHome},
 		tea.KeyMsg{Type: tea.KeyPgUp},
 		tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp},
@@ -1605,7 +1635,7 @@ func TestMonitorTUI_WideRunesClampedToDisplayWidth(t *testing.T) {
 	m = feed(t, m, mkContextEvent("1", 1, "skill_loaded", strings.Repeat("界", 100)))
 	m = feed(t, m, mkContextEvent("1", 2, "skill_loaded", "🎉🎉🎉"+strings.Repeat("界", 50)))
 	m = resize(t, m, width, 20)
-	m = key(t, m, runeKey("k")) // select the wide row so the styled/selected line is covered too
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyUp}) // select the wide row so the styled/selected line is covered too
 
 	for i, l := range strings.Split(m.View(), "\n") {
 		if w := runewidth.StringWidth(l); w > width {
@@ -1935,13 +1965,13 @@ func TestMonitorTUI_GroupHeadersTwoSessions(t *testing.T) {
 	// Cursor skips headers: from the bottom (ctxB row), two ups cross
 	// session B's header and land on session A's ctx row — never on a
 	// header (selectedRowID would be "").
-	m = key(t, m, runeKey("k")) // -> reqB row
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyUp}) // -> reqB row
 	if id := m.selectedRowID(); !strings.Contains(id, "sess-bbbb2222") || !strings.Contains(id, ":req") {
-		t.Fatalf("after k: selected %q, want session B's request row", id)
+		t.Fatalf("after up: selected %q, want session B's request row", id)
 	}
-	m = key(t, m, runeKey("k")) // header skipped -> ctxA row
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyUp}) // header skipped -> ctxA row
 	if id := m.selectedRowID(); !strings.Contains(id, "sess-aaaa1111") || !strings.Contains(id, "ctx") {
-		t.Fatalf("after k,k: selected %q, want session A's ctx row (header must be skipped)", id)
+		t.Fatalf("after up,up: selected %q, want session A's ctx row (header must be skipped)", id)
 	}
 
 	// g jumps to the top and lands on the first ROW (line 0 is a group
@@ -1951,7 +1981,7 @@ func TestMonitorTUI_GroupHeadersTwoSessions(t *testing.T) {
 		t.Fatalf("after g: selected %q, want session A's request row", id)
 	}
 	// Another up: nowhere above but the header — cursor stays on the row.
-	m = key(t, m, runeKey("k"))
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyUp})
 	if id := m.selectedRowID(); !strings.Contains(id, ":req") || !strings.Contains(id, "sess-aaaa1111") {
 		t.Fatalf("up from first row landed on %q, want it to stay on the row", id)
 	}
@@ -2099,6 +2129,41 @@ func TestMonitorTUI_HeaderToggleRendersRequestLineAndStatusLine(t *testing.T) {
 	view = m.View()
 	if strings.Contains(view, "POST https://api.anthropic.com") || strings.Contains(view, "HTTP 200") {
 		t.Fatalf("request/status lines still visible with h off, got:\n%s", view)
+	}
+}
+
+// TestMonitorTUI_RequestHeadersEventMergesIntoRequestRow covers the
+// monitor.RequestHeaders merge event: the real transport's
+// before_provider_headers hook fires AFTER before_provider_request, so the
+// extension emits provider_request first (Headers unset) and follows up a
+// beat later with a request_headers event carrying the same turn's real
+// headers. applyEvent must find the matching REQUEST row by the same
+// session+turnId key and attach the sanitized headers to it, so `h` still
+// renders them under the request line even though they arrived late.
+func TestMonitorTUI_RequestHeadersEventMergesIntoRequestRow(t *testing.T) {
+	m := NewModel(TUIConfig{})
+
+	req := mkProviderRequest("1", "opus-4-8", "", 0, 0, 0, nil)
+	req.Method = "POST"
+	req.URL = "https://api.anthropic.com/v1/messages"
+	// No Headers on the inline event — this is the late-arriving case.
+	m = feed(t, m, req)
+
+	hdrs := monitor.RequestHeaders{Headers: map[string]string{"anthropic-version": "2023-06-01"}}
+	hdrs.TurnID = "1"
+	m = feed(t, m, hdrs)
+
+	m = key(t, m, runeKey(" ")) // expand the request row
+	m = key(t, m, runeKey("h")) // headers on
+
+	view := m.View()
+	reqLine := strings.Index(view, "POST https://api.anthropic.com/v1/messages")
+	if reqLine < 0 {
+		t.Fatalf("request line missing, got:\n%s", view)
+	}
+	hdrLine := strings.Index(view, "anthropic-version: 2023-06-01")
+	if hdrLine < 0 || hdrLine < reqLine {
+		t.Fatalf("want the merged header rendered under the request line, got:\n%s", view)
 	}
 }
 
