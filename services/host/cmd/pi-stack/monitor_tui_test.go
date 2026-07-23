@@ -538,10 +538,12 @@ func TestMonitorTUI_SanitizeTextKeepNewlines(t *testing.T) {
 func TestMonitorTUI_DistinctSessionsDontCollide(t *testing.T) {
 	m := NewModel(TUIConfig{})
 
+	// Same sandbox (the body shows one sandbox at a time now — sandboxes
+	// are tabs), two sessions sharing turnId/toolId.
 	reqA := mkProviderRequest("1", "opus-4-8", "hash-a", 1000, 1, 100, nil)
-	reqA.SandboxID, reqA.SessionID = "sbx-a", "sess-a"
+	reqA.SandboxID, reqA.SessionID = "sbx", "sess-a"
 	reqB := mkProviderRequest("1", "sonnet-5", "hash-b", 2000, 2, 200, nil)
-	reqB.SandboxID, reqB.SessionID = "sbx-b", "sess-b"
+	reqB.SandboxID, reqB.SessionID = "sbx", "sess-b"
 
 	m = feed(t, m, reqA)
 	m = feed(t, m, reqB)
@@ -558,7 +560,7 @@ func TestMonitorTUI_DistinctSessionsDontCollide(t *testing.T) {
 	// request should read as unchanged; it must not be affected by
 	// session B's different hash having been seen in between.
 	reqA2 := mkProviderRequest("2", "opus-4-8", "hash-a", 1000, 1, 100, nil)
-	reqA2.SandboxID, reqA2.SessionID = "sbx-a", "sess-a"
+	reqA2.SandboxID, reqA2.SessionID = "sbx", "sess-a"
 	m = feed(t, m, reqA2)
 	if !strings.Contains(m.View(), "sys=1000B(unchanged)") {
 		t.Errorf("session A's own repeated hash not marked unchanged, got:\n%s", m.View())
@@ -567,9 +569,9 @@ func TestMonitorTUI_DistinctSessionsDontCollide(t *testing.T) {
 	// Session B's turn 1 tool_start (toolId "t1") and session A's own
 	// tool_start with the SAME toolId must render as two separate rows.
 	toolA := mkToolStart("1", "t1", "builtin", "bash-a", "args-a", "ha")
-	toolA.SandboxID, toolA.SessionID = "sbx-a", "sess-a"
+	toolA.SandboxID, toolA.SessionID = "sbx", "sess-a"
 	toolB := mkToolStart("1", "t1", "builtin", "bash-b", "args-b", "hb")
-	toolB.SandboxID, toolB.SessionID = "sbx-b", "sess-b"
+	toolB.SandboxID, toolB.SessionID = "sbx", "sess-b"
 	m = feed(t, m, toolA)
 	m = feed(t, m, toolB)
 	view = m.View()
@@ -579,7 +581,7 @@ func TestMonitorTUI_DistinctSessionsDontCollide(t *testing.T) {
 
 	// tool_end on session A's t1 must mutate only session A's row.
 	toolEndA := mkToolEnd("1", "t1", true, 100, "ok", "rha", 50)
-	toolEndA.SandboxID, toolEndA.SessionID = "sbx-a", "sess-a"
+	toolEndA.SandboxID, toolEndA.SessionID = "sbx", "sess-a"
 	m = feed(t, m, toolEndA)
 	view = m.View()
 	if !strings.Contains(view, "bash-b") {
@@ -1031,11 +1033,11 @@ func TestMonitorTUI_GHomeAndGEnd(t *testing.T) {
 	m = nRows(t, m, 5)
 
 	m = key(t, m, runeKey("g"))
-	// Line 0 is the SANDBOX NODE now — navigable, so the cursor lands ON
-	// it (selectedRowID is empty there; the node is what's selected).
+	// Line 0 is the primary SESSION NODE — navigable, so the cursor lands
+	// ON it (selectedRowID is empty there; the node is what's selected).
 	lines := m.bodyLayoutLines()
-	if cur := m.clampedCursor(lines); cur != 0 || !strings.HasPrefix(lines[cur].nodeID, "sandbox:") {
-		t.Fatalf("after g: cursor line %d (nodeID %q), want the sandbox node at line 0", cur, lines[cur].nodeID)
+	if cur := m.clampedCursor(lines); cur != 0 || !strings.HasPrefix(lines[cur].nodeID, sessionNodePrefix) {
+		t.Fatalf("after g: cursor line %d (nodeID %q), want the session node at line 0", cur, lines[cur].nodeID)
 	}
 	if m.follow {
 		t.Errorf("after g: follow should be detached")
@@ -1277,8 +1279,7 @@ func TestMonitorTUI_LineCursorScrollsThroughExpandedPayload(t *testing.T) {
 	m = feed(t, m, mkProviderRequest("1", "opus-4-8", blob.Hash, sb.Len(), 0, 10, nil))
 	m = feed(t, m, mkContextEvent("1", 2, "skill_loaded", "later-row"))
 
-	m = key(t, m, runeKey("g"))                   // cursor to the top (sandbox node), detach
-	m = key(t, m, tea.KeyMsg{Type: tea.KeyDown})  // session node
+	m = key(t, m, runeKey("g"))                   // cursor to the top (session node), detach
 	m = key(t, m, tea.KeyMsg{Type: tea.KeyDown})  // the request row header
 	m = key(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // expand it
 
@@ -1960,10 +1961,11 @@ func mkSandboxCtx(sandbox, session string, seq uint64, detail string) monitor.Co
 	return e
 }
 
-// (a) Two sessions in one sandbox: sandbox node -> primary session
-// (first-seen) with its events -> child session node with its events —
-// each session's events CONTIGUOUS and chronological, never interleaved,
-// even though the events ARRIVED interleaved.
+// (a) Two sessions in one sandbox: primary session (first-seen, depth 0)
+// with its events -> child session node with its events — each session's
+// events CONTIGUOUS and chronological, never interleaved, even though the
+// events ARRIVED interleaved. There is NO sandbox node level any more —
+// sandboxes are tabs.
 func TestMonitorTUI_TreeGroupsInterleavedSessionsContiguously(t *testing.T) {
 	m := NewModel(TUIConfig{})
 	m = feed(t, m, mkSandboxCtx("pi-stack-dev", "sess-aaaa1111", 1, "a-first"))
@@ -1972,7 +1974,6 @@ func TestMonitorTUI_TreeGroupsInterleavedSessionsContiguously(t *testing.T) {
 	m = feed(t, m, mkSandboxCtx("pi-stack-dev", "sess-bbbb2222", 4, "b-second"))
 
 	assertShape(t, m, []string{
-		"node:" + sandboxNodeID("pi-stack-dev"),
 		"node:" + sessionNodeID("pi-stack-dev/sess-aaaa1111"), // primary = first-seen
 		"row:pi-stack-dev/sess-aaaa1111/ctx:1:1",
 		"row:pi-stack-dev/sess-aaaa1111/ctx:1:3",
@@ -1984,68 +1985,65 @@ func TestMonitorTUI_TreeGroupsInterleavedSessionsContiguously(t *testing.T) {
 	// Labels + 2-space-per-depth indent (layout text — the timestamp
 	// column and cursor gutter are prepended later by renderBodyLines).
 	lines := m.bodyLayoutLines()
-	if !strings.HasPrefix(lines[0].text, "\u25be pi-stack-dev  (2 sessions)") {
-		t.Errorf("sandbox node label = %q, want `\u25be pi-stack-dev  (2 sessions)`", lines[0].text)
+	if !strings.HasPrefix(lines[0].text, "\u25be aaaa1111") {
+		t.Errorf("primary session node = %q, want depth-0 `\u25be aaaa1111…`", lines[0].text)
 	}
-	if !strings.HasPrefix(lines[1].text, "  \u25be aaaa1111") {
-		t.Errorf("primary session node = %q, want depth-1 `  \u25be aaaa1111…`", lines[1].text)
+	if !strings.HasPrefix(lines[1].text, "  \u25b8 ") {
+		t.Errorf("primary event row = %q, want depth-1 indent", lines[1].text)
 	}
-	if !strings.HasPrefix(lines[2].text, "    \u25b8 ") {
-		t.Errorf("primary event row = %q, want depth-2 indent", lines[2].text)
+	if !strings.HasPrefix(lines[3].text, "  \u25be bbbb2222") {
+		t.Errorf("child session node = %q, want depth-1 `  \u25be bbbb2222…`", lines[3].text)
 	}
-	if !strings.HasPrefix(lines[4].text, "    \u25be bbbb2222") {
-		t.Errorf("child session node = %q, want depth-2 `    \u25be bbbb2222…`", lines[4].text)
-	}
-	if !strings.HasPrefix(lines[5].text, "      \u25b8 ") {
-		t.Errorf("child event row = %q, want depth-3 indent", lines[5].text)
+	if !strings.HasPrefix(lines[4].text, "    \u25b8 ") {
+		t.Errorf("child event row = %q, want depth-2 indent", lines[4].text)
 	}
 }
 
-// (b) Collapsing the sandbox node hides every descendant line; collapsing
-// a session node hides its events but leaves sibling/child session nodes.
-func TestMonitorTUI_CollapseSandboxAndSessionNodes(t *testing.T) {
+// (b) Collapsing the primary session node hides its events but leaves the
+// child session nodes (and their events) visible; collapsing a child
+// hides its events too.
+func TestMonitorTUI_CollapseSessionNodes(t *testing.T) {
 	m := NewModel(TUIConfig{})
 	m = feed(t, m, mkSandboxCtx("pi-stack-dev", "sess-aaaa1111", 1, "a-first"))
 	m = feed(t, m, mkSandboxCtx("pi-stack-dev", "sess-bbbb2222", 2, "b-first"))
 	m = feed(t, m, mkSandboxCtx("pi-stack-dev", "sess-aaaa1111", 3, "a-second"))
 	m = feed(t, m, mkSandboxCtx("pi-stack-dev", "sess-bbbb2222", 4, "b-second"))
 
-	sbxNode := sandboxNodeID("pi-stack-dev")
 	primaryNode := sessionNodeID("pi-stack-dev/sess-aaaa1111")
 	childNode := sessionNodeID("pi-stack-dev/sess-bbbb2222")
 
-	// Collapse the SANDBOX: g lands on its node (line 0), enter toggles.
+	// Collapse the PRIMARY session: g lands on its node (line 0), enter
+	// toggles — its events hide, the child session node AND the child's
+	// events stay visible.
 	m = key(t, m, runeKey("g"))
 	m = key(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	assertShape(t, m, []string{"node:" + sbxNode})
-	if !strings.Contains(m.bodyLayoutLines()[0].text, "\u25b8") {
-		t.Errorf("collapsed sandbox node missing \u25b8 caret: %q", m.bodyLayoutLines()[0].text)
-	}
-
-	// Enter again re-expands the whole subtree.
-	m = key(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if got := len(treeShape(m)); got != 7 {
-		t.Fatalf("re-expanded tree has %d header lines, want 7: %v", got, treeShape(m))
-	}
-
-	// Collapse the PRIMARY session: its events hide, the child session
-	// node AND the child's events stay visible.
-	m = key(t, m, tea.KeyMsg{Type: tea.KeyDown}) // primary session node
-	m = key(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	assertShape(t, m, []string{
-		"node:" + sbxNode,
 		"node:" + primaryNode,
 		"node:" + childNode,
 		"row:pi-stack-dev/sess-bbbb2222/ctx:1:2",
 		"row:pi-stack-dev/sess-bbbb2222/ctx:1:4",
 	})
+	if !strings.Contains(m.bodyLayoutLines()[0].text, "\u25b8") {
+		t.Errorf("collapsed primary node missing \u25b8 caret: %q", m.bodyLayoutLines()[0].text)
+	}
 
-	// Collapse the CHILD session: its events hide too.
-	m = key(t, m, tea.KeyMsg{Type: tea.KeyDown}) // child session node
+	// Enter again re-expands the whole subtree.
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if got := len(treeShape(m)); got != 6 {
+		t.Fatalf("re-expanded tree has %d header lines, want 6: %v", got, treeShape(m))
+	}
+
+	// Collapse the CHILD session: its events hide too. After the
+	// re-expand the cursor snapped back to the primary node (line 0);
+	// the child node sits below the primary's two event rows.
+	for i := 0; i < 3; i++ {
+		m = key(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	}
 	m = key(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	assertShape(t, m, []string{
-		"node:" + sbxNode,
 		"node:" + primaryNode,
+		"row:pi-stack-dev/sess-aaaa1111/ctx:1:1",
+		"row:pi-stack-dev/sess-aaaa1111/ctx:1:3",
 		"node:" + childNode,
 	})
 }
@@ -2072,17 +2070,17 @@ func TestMonitorTUI_EnterContextSensitiveRowVsNode(t *testing.T) {
 	}
 
 	// Enter on a NODE header toggles collapse, never payload expand.
-	m = key(t, m, runeKey("g")) // sandbox node (line 0)
+	m = key(t, m, runeKey("g")) // primary session node (line 0)
 	m = key(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if !m.collapsed[sandboxNodeID("")] {
-		t.Fatalf("enter on the sandbox node did not collapse it: %v", m.collapsed)
+	if !m.collapsed[sessionNodeID("/")] {
+		t.Fatalf("enter on the session node did not collapse it: %v", m.collapsed)
 	}
 	if m.expanded[rowID] {
 		t.Fatalf("enter on a node expanded a row payload")
 	}
 	m = key(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.collapsed[sandboxNodeID("")] {
-		t.Fatalf("second enter did not re-expand the sandbox node")
+	if m.collapsed[sessionNodeID("/")] {
+		t.Fatalf("second enter did not re-expand the session node")
 	}
 }
 
@@ -2132,35 +2130,197 @@ func TestMonitorTUI_FollowTracksNewestEventInTree(t *testing.T) {
 	}
 }
 
-// (e) A second sandbox appears as its own top-level node.
-func TestMonitorTUI_SecondSandboxIsItsOwnTopLevelNode(t *testing.T) {
+// --- sandbox TAB BAR: one tab per sandbox, body = active sandbox only ---
+
+// (e/a) A second sandbox becomes a TAB, not a top-level node: the tab bar
+// renders with the active (first-seen) tab bracketed, and the body shows
+// ONLY the active sandbox's session tree.
+func TestMonitorTUI_TabBarRendersAndBodyShowsActiveSandboxOnly(t *testing.T) {
 	m := NewModel(TUIConfig{})
 	m = feed(t, m, mkSandboxCtx("box-one", "sess-1", 1, "one-a"))
 	m = feed(t, m, mkSandboxCtx("box-two", "sess-2", 2, "two-a"))
 	m = feed(t, m, mkSandboxCtx("box-one", "sess-1", 3, "one-b"))
 
+	if m.activeSandbox != "box-one" {
+		t.Fatalf("activeSandbox = %q, want the first-seen box-one", m.activeSandbox)
+	}
+	view := m.View()
+	// The tab bar: active tab bracketed (color-independent marker), the
+	// background one plain (with its unread • — it got an event while
+	// box-one was active).
+	if !strings.Contains(view, "[box-one]") {
+		t.Errorf("tab bar missing bracketed active tab, got:\n%s", view)
+	}
+	if !strings.Contains(view, "box-two\u2022") {
+		t.Errorf("tab bar missing background tab with unread marker, got:\n%s", view)
+	}
+
+	// The BODY is box-one's session tree only — no sandbox node line, no
+	// box-two rows.
 	assertShape(t, m, []string{
-		"node:" + sandboxNodeID("box-one"),
 		"node:" + sessionNodeID("box-one/sess-1"),
 		"row:box-one/sess-1/ctx:1:1",
 		"row:box-one/sess-1/ctx:1:3",
-		"node:" + sandboxNodeID("box-two"),
-		"node:" + sessionNodeID("box-two/sess-2"),
-		"row:box-two/sess-2/ctx:1:2",
 	})
-	// Both sandbox nodes sit at depth 0 (no indent in the layout text).
-	for _, l := range m.bodyLayoutLines() {
-		if strings.HasPrefix(l.nodeID, "sandbox:") && !strings.HasPrefix(l.text, "\u25be ") {
-			t.Errorf("sandbox node not at depth 0: %q", l.text)
-		}
+	if !strings.Contains(view, "one-a") || !strings.Contains(view, "one-b") {
+		t.Errorf("active sandbox's rows missing from the body, got:\n%s", view)
 	}
-	if !strings.Contains(m.View(), "box-one  (1 session)") || !strings.Contains(m.View(), "box-two  (1 session)") {
-		t.Errorf("sandbox node labels missing, got:\n%s", m.View())
+	if strings.Contains(view, "two-a") {
+		t.Errorf("background sandbox's rows leaked into the body, got:\n%s", view)
 	}
 }
 
-// A single sandbox + single session still renders as the tree —
-// consistent and labeled.
+// (b) `tab` switches the active sandbox (wrapping) and the body swaps to
+// the other sandbox's sessions; shift+tab and the ]/[ aliases cycle too.
+func TestMonitorTUI_TabKeySwitchesActiveSandbox(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	m = feed(t, m, mkSandboxCtx("box-one", "sess-1", 1, "one-a"))
+	m = feed(t, m, mkSandboxCtx("box-two", "sess-2", 2, "two-a"))
+
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.activeSandbox != "box-two" {
+		t.Fatalf("after tab: activeSandbox = %q, want box-two", m.activeSandbox)
+	}
+	if !m.follow {
+		t.Errorf("switching tabs did not re-attach follow")
+	}
+	view := m.View()
+	if !strings.Contains(view, "[box-two]") {
+		t.Errorf("tab bar active bracket did not move, got:\n%s", view)
+	}
+	if !strings.Contains(view, "two-a") || strings.Contains(view, "one-a") {
+		t.Errorf("body did not swap to box-two's sessions, got:\n%s", view)
+	}
+	assertShape(t, m, []string{
+		"node:" + sessionNodeID("box-two/sess-2"),
+		"row:box-two/sess-2/ctx:1:2",
+	})
+
+	// tab again wraps around to the first tab.
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.activeSandbox != "box-one" {
+		t.Fatalf("tab did not wrap around: activeSandbox = %q", m.activeSandbox)
+	}
+	// shift+tab wraps backward.
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.activeSandbox != "box-two" {
+		t.Fatalf("shift+tab did not cycle back: activeSandbox = %q", m.activeSandbox)
+	}
+	// ] / [ aliases.
+	m = key(t, m, runeKey("]"))
+	if m.activeSandbox != "box-one" {
+		t.Fatalf("] did not cycle forward: activeSandbox = %q", m.activeSandbox)
+	}
+	m = key(t, m, runeKey("["))
+	if m.activeSandbox != "box-two" {
+		t.Fatalf("[ did not cycle backward: activeSandbox = %q", m.activeSandbox)
+	}
+}
+
+// (c) A new event in a BACKGROUND sandbox sets its unread marker but does
+// not move the active body/cursor; switching to it clears the marker.
+func TestMonitorTUI_BackgroundSandboxEventSetsUnreadNotView(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	m = feed(t, m, mkSandboxCtx("box-one", "sess-1", 1, "one-a"))
+	m = feed(t, m, mkSandboxCtx("box-two", "sess-2", 2, "two-a"))
+	if m.sandboxUnread["box-two"] != true {
+		t.Fatalf("background sandbox's first event did not set unread")
+	}
+
+	selBefore := m.selectedRowID()
+	bodyBefore := treeShape(m)
+
+	// Another background event: unread stays lit, active body unmoved.
+	m = feed(t, m, mkSandboxCtx("box-two", "sess-2", 3, "two-b"))
+	if !m.sandboxUnread["box-two"] {
+		t.Fatalf("background event did not keep unread set")
+	}
+	if got := m.selectedRowID(); got != selBefore {
+		t.Errorf("background event moved the cursor: before=%q after=%q", selBefore, got)
+	}
+	after := treeShape(m)
+	if len(after) != len(bodyBefore) {
+		t.Fatalf("background event changed the active body: before=%v after=%v", bodyBefore, after)
+	}
+	for i := range after {
+		if after[i] != bodyBefore[i] {
+			t.Fatalf("background event changed the active body: before=%v after=%v", bodyBefore, after)
+		}
+	}
+	if strings.Contains(m.View(), "two-b") {
+		t.Errorf("background sandbox's new event rendered in the active view:\n%s", m.View())
+	}
+
+	// Switching to it clears the marker (and shows the rows).
+	m = key(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.sandboxUnread["box-two"] {
+		t.Errorf("switching to the sandbox did not clear its unread marker")
+	}
+	view := m.View()
+	if strings.Contains(view, "box-two\u2022") {
+		t.Errorf("tab bar still shows the unread marker after switching, got:\n%s", view)
+	}
+	if !strings.Contains(view, "two-b") {
+		t.Errorf("switched-to sandbox's newest event not shown (follow re-attach), got:\n%s", view)
+	}
+}
+
+// (d) A single sandbox renders NO tab bar; its name lives in the title.
+func TestMonitorTUI_SingleSandboxNoTabBarNameInTitle(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	m = feed(t, m, mkSandboxCtx("solo-box", "sess-1", 1, "solo-a"))
+
+	view := m.View()
+	if strings.Contains(view, "[solo-box]") {
+		t.Errorf("single sandbox rendered a tab bar entry, got:\n%s", view)
+	}
+	if !strings.Contains(view, "pi-stack monitor  solo-box  events=1") {
+		t.Errorf("title line missing the single sandbox's name, got:\n%s", view)
+	}
+	// Chrome accounting agrees: no tab line.
+	if _, tabs, _, _ := m.chrome(); tabs {
+		t.Errorf("chrome() wants a tab bar with a single sandbox")
+	}
+}
+
+// (e) Digit keys jump straight to the Nth sandbox tab; out-of-range
+// digits are no-ops. While typing a filter, digits are filter text.
+func TestMonitorTUI_DigitKeyJumpsToSandbox(t *testing.T) {
+	m := NewModel(TUIConfig{})
+	m = feed(t, m, mkSandboxCtx("box-one", "sess-1", 1, "one-a"))
+	m = feed(t, m, mkSandboxCtx("box-two", "sess-2", 2, "two-a"))
+	m = feed(t, m, mkSandboxCtx("box-three", "sess-3", 3, "three-a"))
+
+	m = key(t, m, runeKey("3"))
+	if m.activeSandbox != "box-three" {
+		t.Fatalf("digit 3 did not jump to the 3rd sandbox: activeSandbox = %q", m.activeSandbox)
+	}
+	if !strings.Contains(m.View(), "three-a") {
+		t.Errorf("body did not swap to the jumped-to sandbox, got:\n%s", m.View())
+	}
+	m = key(t, m, runeKey("9")) // no 9th tab: no-op
+	if m.activeSandbox != "box-three" {
+		t.Fatalf("out-of-range digit changed the active sandbox: %q", m.activeSandbox)
+	}
+	m = key(t, m, runeKey("1"))
+	if m.activeSandbox != "box-one" {
+		t.Fatalf("digit 1 did not jump back to the 1st sandbox: %q", m.activeSandbox)
+	}
+
+	// Digits typed while filtering are filter text, never a tab jump.
+	m = key(t, m, runeKey("/"))
+	m = key(t, m, runeKey("2"))
+	if m.activeSandbox != "box-one" {
+		t.Fatalf("digit while filtering switched tabs: %q", m.activeSandbox)
+	}
+	if m.filterInput != "2" {
+		t.Fatalf("filterInput = %q, want %q", m.filterInput, "2")
+	}
+}
+
+// A single sandbox + single session still renders as the session tree —
+// consistent and labeled, with NO sandbox line (the sandbox name lives in
+// the title line when there's only one).
 func TestMonitorTUI_SingleSessionStillRendersTree(t *testing.T) {
 	m := NewModel(TUIConfig{})
 	// Disable the (on-by-default) timestamp column so its blank prefix
@@ -2169,16 +2329,17 @@ func TestMonitorTUI_SingleSessionStillRendersTree(t *testing.T) {
 	m = nRows(t, m, 3) // all rows share the (empty) default sandbox/session
 
 	lines := m.bodyLayoutLines()
-	if lines[0].nodeID != sandboxNodeID("") || !strings.HasPrefix(lines[0].text, "\u25be (local)  (1 session)") {
-		t.Fatalf("line 0 = %+v, want the (local) sandbox node", lines[0])
+	if lines[0].nodeID != sessionNodeID("/") || !strings.HasPrefix(lines[0].text, "\u25be -") {
+		t.Fatalf("line 0 = %+v, want the (unnamed) session node at depth 0", lines[0])
 	}
-	if lines[1].nodeID != sessionNodeID("/") || !strings.HasPrefix(lines[1].text, "  \u25be -") {
-		t.Fatalf("line 1 = %+v, want the (unnamed) session node at depth 1", lines[1])
-	}
-	for _, l := range lines[2:] {
-		if !l.isHeader || !strings.HasPrefix(l.text, "    \u25b8 ") {
-			t.Fatalf("event row not at depth 2: %+v", l)
+	for _, l := range lines[1:] {
+		if !l.isHeader || !strings.HasPrefix(l.text, "  \u25b8 ") {
+			t.Fatalf("event row not at depth 1: %+v", l)
 		}
+	}
+	// The (local) sandbox name is in the title line, not the body.
+	if !strings.Contains(m.headerLine(), "pi-stack monitor  (local)  events=3") {
+		t.Errorf("single-sandbox title missing the sandbox name, got: %q", m.headerLine())
 	}
 }
 
@@ -2253,13 +2414,18 @@ func TestMonitorTUI_SessionNodePerSessionModelDiffers(t *testing.T) {
 // Collapse state is evicted with a node's last retained row, exactly like
 // prevSysHash/sessionModel/sessionTitle (R4-2 class), so a long-running
 // monitor never accumulates one collapsed entry per node ever collapsed.
+// The sandbox TAB state (sandboxOrder/sandboxUnread/activeSandbox) is
+// cleaned up the same way: an evicted sandbox loses its tab, and an
+// evicted ACTIVE sandbox falls back to the first remaining tab.
 func TestMonitorTUI_CollapsedStateEvictedWithLastRow(t *testing.T) {
 	m := NewModel(TUIConfig{})
 	first := mkProviderRequest("1", "opus", "h", 100, 0, 10, nil)
 	first.SandboxID, first.SessionID = "sbx-0", "sess-0"
 	m = feed(t, m, first)
 	m.collapsed[sessionNodeID("sbx-0/sess-0")] = true
-	m.collapsed[sandboxNodeID("sbx-0")] = true
+	if m.activeSandbox != "sbx-0" {
+		t.Fatalf("activeSandbox = %q, want the first-seen sbx-0", m.activeSandbox)
+	}
 
 	for i := 1; i <= maxRows+100; i++ {
 		req := mkProviderRequest("1", "opus", "h", 100, 0, 10, nil)
@@ -2270,11 +2436,19 @@ func TestMonitorTUI_CollapsedStateEvictedWithLastRow(t *testing.T) {
 	if _, ok := m.collapsed[sessionNodeID("sbx-0/sess-0")]; ok {
 		t.Errorf("collapsed still holds the evicted session's node entry")
 	}
-	if _, ok := m.collapsed[sandboxNodeID("sbx-0")]; ok {
-		t.Errorf("collapsed still holds the evicted sandbox's node entry")
-	}
 	if len(m.sandboxRowCount) != maxRows {
 		t.Errorf("len(sandboxRowCount) = %d, want %d (one live sandbox per retained row)", len(m.sandboxRowCount), maxRows)
+	}
+	// Tab state is bounded by live sandboxes too, and the evicted active
+	// tab fell back to the (new) first tab.
+	if len(m.sandboxOrder) != maxRows {
+		t.Errorf("len(sandboxOrder) = %d, want %d (one tab per live sandbox)", len(m.sandboxOrder), maxRows)
+	}
+	if m.activeSandbox != m.sandboxOrder[0] {
+		t.Errorf("activeSandbox = %q, want fallback to the first remaining tab %q", m.activeSandbox, m.sandboxOrder[0])
+	}
+	if _, ok := m.sandboxUnread["sbx-0"]; ok {
+		t.Errorf("sandboxUnread still holds the evicted sandbox's entry")
 	}
 
 	// A LIVE node's collapse state survives eviction churn.
@@ -2364,11 +2538,11 @@ func TestMonitorTUI_EmacsKeybindings(t *testing.T) {
 	}
 
 	m = key(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("<"), Alt: true})
-	// Top of the tree is the sandbox node (navigable) — the cursor lands
-	// on it.
+	// Top of the tree is the primary session node (navigable) — the
+	// cursor lands on it.
 	lines := m.bodyLayoutLines()
-	if cur := m.clampedCursor(lines); cur != 0 || !strings.HasPrefix(lines[cur].nodeID, "sandbox:") {
-		t.Fatalf("after alt+<: cursor line %d, want the sandbox node at line 0", cur)
+	if cur := m.clampedCursor(lines); cur != 0 || !strings.HasPrefix(lines[cur].nodeID, sessionNodePrefix) {
+		t.Fatalf("after alt+<: cursor line %d, want the session node at line 0", cur)
 	}
 	if m.follow {
 		t.Errorf("after alt+<: follow should be detached")
@@ -2422,14 +2596,16 @@ func sessionOfRow(m Model, id string) string {
 func TestMonitorTUI_FocusSoloesSelectedSessionAndBackAgain(t *testing.T) {
 	m := NewModel(TUIConfig{})
 
+	// One sandbox, two sessions (focus solos a SESSION within the active
+	// sandbox tab — cross-sandbox is what the tab bar is for now).
 	reqA1 := mkProviderRequest("1", "opus-4-8", "hash-a", 100, 0, 10, nil)
-	reqA1.SandboxID, reqA1.SessionID = "sbx-a", "sess-a"
+	reqA1.SandboxID, reqA1.SessionID = "sbx", "sess-a"
 	reqB1 := mkProviderRequest("1", "sonnet-5", "hash-b", 100, 0, 10, nil)
-	reqB1.SandboxID, reqB1.SessionID = "sbx-b", "sess-b"
+	reqB1.SandboxID, reqB1.SessionID = "sbx", "sess-b"
 	reqA2 := mkProviderRequest("2", "opus-4-8", "hash-a", 100, 0, 10, nil)
-	reqA2.SandboxID, reqA2.SessionID = "sbx-a", "sess-a"
+	reqA2.SandboxID, reqA2.SessionID = "sbx", "sess-a"
 	reqB2 := mkProviderRequest("2", "sonnet-5", "hash-b", 100, 0, 10, nil)
-	reqB2.SandboxID, reqB2.SessionID = "sbx-b", "sess-b"
+	reqB2.SandboxID, reqB2.SessionID = "sbx", "sess-b"
 
 	// Interleaved arrival: A, B, A, B — the exact "concurrent sessions
 	// interleave" shape the focus feature exists to collapse.
@@ -2442,28 +2618,27 @@ func TestMonitorTUI_FocusSoloesSelectedSessionAndBackAgain(t *testing.T) {
 		t.Fatalf("want 4 rows before focus, got %d", got)
 	}
 
-	// Land the cursor on session A's row (turn 2): follow starts on the
-	// newest event (session B's turn 2); session A's whole subtree renders
-	// ABOVE session B's, so walking up crosses B's rows and the two node
-	// headers (B's session + sandbox — navigable lines) before landing on
-	// session A's newest row.
+	// Land the cursor on session A's row: follow starts on the newest
+	// event (session B's turn 2); session A's whole subtree renders ABOVE
+	// session B's, so walking up crosses B's rows and B's session node
+	// header (a navigable line) before landing on session A's rows.
 	for i := 0; i < 4; i++ {
 		m = key(t, m, tea.KeyMsg{Type: tea.KeyUp})
 	}
-	if sess := sessionOfRow(m, m.selectedRowID()); sess != "sbx-a/sess-a" {
+	if sess := sessionOfRow(m, m.selectedRowID()); sess != "sbx/sess-a" {
 		t.Fatalf("cursor not on session A's row before focus, got session %q (row %q)", sess, m.selectedRowID())
 	}
 
 	m = key(t, m, runeKey("s"))
-	if m.focusSession != "sbx-a/sess-a" {
-		t.Fatalf("focusSession = %q, want sbx-a/sess-a", m.focusSession)
+	if m.focusSession != "sbx/sess-a" {
+		t.Fatalf("focusSession = %q, want sbx/sess-a", m.focusSession)
 	}
 	rows := m.visibleRows()
 	if len(rows) != 2 {
 		t.Fatalf("want only session A's 2 rows visible when focused, got %d", len(rows))
 	}
 	for _, r := range rows {
-		if r.session != "sbx-a/sess-a" {
+		if r.session != "sbx/sess-a" {
 			t.Fatalf("visibleRows leaked a non-focused session row: %+v", r)
 		}
 	}
@@ -2474,29 +2649,25 @@ func TestMonitorTUI_FocusSoloesSelectedSessionAndBackAgain(t *testing.T) {
 	if strings.Contains(view, "sonnet-5") {
 		t.Fatalf("focused view leaked session B's rows, got:\n%s", view)
 	}
-	// SOLO render: only the focused session's node — no sandbox level, no
-	// sibling session nodes.
+	// SOLO render: only the focused session's node — no sibling session
+	// nodes.
 	var nodes int
 	for _, l := range m.bodyLayoutLines() {
-		if l.nodeID == "" {
-			continue
-		}
-		nodes++
-		if strings.HasPrefix(l.nodeID, "sandbox:") {
-			t.Fatalf("solo view rendered a sandbox node: %q", l.nodeID)
+		if l.nodeID != "" {
+			nodes++
 		}
 	}
 	if nodes != 1 {
 		t.Fatalf("solo view: want exactly the focused session's node line, got %d node lines", nodes)
 	}
-	if !strings.Contains(view, "focus sbx-a/sess-a") {
+	if !strings.Contains(view, "focus sbx/sess-a") {
 		t.Fatalf("top bar missing focus context, got:\n%s", view)
 	}
 
 	// A new event for the OTHER session while focused must stay filtered
 	// and must not steal follow (visibleRows still only session A's rows).
 	reqB3 := mkProviderRequest("3", "sonnet-5", "hash-b", 100, 0, 10, nil)
-	reqB3.SandboxID, reqB3.SessionID = "sbx-b", "sess-b"
+	reqB3.SandboxID, reqB3.SessionID = "sbx", "sess-b"
 	m = feed(t, m, reqB3)
 	if got := len(m.visibleRows()); got != 2 {
 		t.Fatalf("want still only 2 rows visible (session B's new event hidden), got %d", got)

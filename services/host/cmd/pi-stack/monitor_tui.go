@@ -263,9 +263,8 @@ type Model struct {
 	expanded map[string]bool // row id -> expanded, toggled by `space`/`enter` on an event row
 
 	// collapsed tracks TREE-NODE collapse state, keyed by nodeID
-	// (sandboxNodeID / sessionNodeID — see bodyLayoutLines' tree): true
-	// hides the node's subtree lines (a collapsed sandbox hides all its
-	// sessions+events; a collapsed session hides its own event rows — for
+	// (sessionNodeID — see bodyLayoutLines' tree): true hides the node's
+	// subtree lines (a collapsed session hides its own event rows — for
 	// the primary session, its child-session nodes stay visible: they are
 	// the user's other conversations, not the primary's payload).
 	// Absent/false means expanded — the default, so a fresh view always
@@ -274,13 +273,32 @@ type Model struct {
 	// prevSysHash/R4-2).
 	collapsed map[string]bool
 
-	// sandboxRowCount mirrors sessionRowCount one level up the tree: how
-	// many retained rows belong to each sandbox (the sessionKey's sandbox
-	// half, rowSandbox), so evictOldRows can drop a sandbox node's
-	// collapsed entry when its LAST row is gone — without it, collapsed
-	// would keep one entry per sandbox ever collapsed, forever (same
-	// class as R4-2).
+	// sandboxRowCount mirrors sessionRowCount one level up: how many
+	// retained rows belong to each sandbox (the sessionKey's sandbox half,
+	// rowSandbox), so evictOldRows can tell when a sandbox's LAST row is
+	// gone and its TAB (sandboxOrder/sandboxUnread/activeSandbox below)
+	// must be cleaned up too (same class as R4-2).
 	sandboxRowCount map[string]int
+
+	// activeSandbox is the sandbox whose session tree the body currently
+	// shows. Sandboxes are TABS (one visible at a time), not tree nodes —
+	// with 5-10 concurrent sandboxes, stacking them all as top-level nodes
+	// was untenable. Defaults to the first-seen sandbox; tab/shift+tab
+	// (aliases ]/[) cycle, digits 1-9 jump to the Nth tab. "" is only
+	// ambiguous while sandboxOrder is empty (no rows yet) — the (local)
+	// sandbox's id is also "" — so "is there an active tab" is always
+	// answered by len(sandboxOrder), never by activeSandbox != "".
+	activeSandbox string
+	// sandboxOrder is the tab order: sandboxes by FIRST-SEEN row, appended
+	// when a sandbox's first row is inserted (upsertRow) and removed when
+	// its last row is evicted (evictOldRows). Invariant: a sandbox is in
+	// sandboxOrder iff sandboxRowCount[it] > 0.
+	sandboxOrder []string
+	// sandboxUnread marks BACKGROUND tabs that received events since they
+	// were last active (the tab bar's • marker): set in applyEvent when an
+	// event's sandbox != activeSandbox, cleared when the user switches to
+	// that tab (setActiveSandbox), deleted with the tab on eviction.
+	sandboxUnread map[string]bool
 
 	// showTimestamps (`T`, capital — lowercase `t` is showTools) renders a
 	// dim HH:MM:SS column (local time, from each row's first-seen ts) at
@@ -377,6 +395,7 @@ func NewModel(cfg TUIConfig) Model {
 		reqTS:           make(map[string]int64),
 		sessionRowCount: make(map[string]int),
 		sandboxRowCount: make(map[string]int),
+		sandboxUnread:   make(map[string]bool),
 		expanded:        make(map[string]bool),
 		collapsed:       make(map[string]bool),
 		showModel:       true,
@@ -612,6 +631,15 @@ func (m Model) handleKeyInner(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveCursor(-m.pageSize())
 	case "pgdown", "ctrl+d", "ctrl+v":
 		m.moveCursor(m.pageSize())
+	case "tab", "]":
+		m.cycleSandbox(1)
+	case "shift+tab", "[":
+		m.cycleSandbox(-1)
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		// Digit N jumps straight to the Nth sandbox tab (first-seen
+		// order); out-of-range digits are safe no-ops. While filtering,
+		// digits are filter text (the filtering branch returned above).
+		m.jumpToSandbox(int(key[0] - '0'))
 	case "left", "right":
 		// Deliberate no-ops: the feed has no horizontal axis, but arrow
 		// keys must always be safe to press (never mis-typed into a
@@ -757,11 +785,9 @@ func (m Model) followLineIndex(lines []bodyLine) int {
 	if last >= 0 {
 		return last
 	}
-	// Hidden under a collapsed ancestor: nearest visible ancestor node.
+	// Hidden under its collapsed session node: land on that node instead
+	// — collapse is user intent, never force-expanded out from under them.
 	if i := nodeLineIndex(lines, sessionNodeID(newest.session)); i >= 0 {
-		return i
-	}
-	if i := nodeLineIndex(lines, sandboxNodeID(rowSandbox(newest.session))); i >= 0 {
 		return i
 	}
 	return total - 1
@@ -841,8 +867,8 @@ func (m *Model) reconcileScroll() {
 // ancestor node when collapsed away) detaches it (so a live stream stops
 // yanking the view while the user is reading); landing back on the follow
 // line re-attaches it, same as pressing G. EVERY line of the tree is
-// navigable — sandbox/session node headers included (they're how collapse
-// is reached) — so no line-skipping is needed.
+// navigable — session node headers included (they're how collapse is
+// reached) — so no line-skipping is needed.
 func (m *Model) moveCursor(delta int) {
 	if !m.navigableBody() {
 		return
@@ -864,7 +890,7 @@ func (m *Model) moveCursor(delta int) {
 }
 
 // cursorToTop implements `g`/Home: jump to the first body line — the
-// first sandbox node in the tree, which is navigable now — and detach
+// primary session node of the active sandbox, which is navigable — and detach
 // follow (unless that line is also the follow target).
 func (m *Model) cursorToTop() {
 	if !m.navigableBody() {
@@ -910,7 +936,7 @@ func (m Model) pageSize() int {
 }
 
 // toggleAtCursor implements `enter`/`space`, CONTEXT-SENSITIVE on the
-// selected line: a sandbox/session NODE header toggles that node's tree
+// selected line: a session NODE header toggles that node's tree
 // collapse (m.collapsed); an EVENT row line toggles that row's payload
 // expand (m.expanded — the pre-tree behavior, on the row that OWNS the
 // cursor's line: its header, or any of its expanded detail lines). One
@@ -998,7 +1024,7 @@ func (m *Model) toggleFocusAtCursor() {
 		}
 		sess = m.rows[idx].session
 	default:
-		return // sandbox node or untied line: no single session to solo
+		return // untied line (empty-state hint, help): nothing to solo
 	}
 	if sess == "" {
 		return
@@ -1199,6 +1225,14 @@ func (m *Model) applyEvent(e monitor.Event) {
 			detailFull: sanitizeText(ev.Detail, true),
 		})
 	}
+	// TAB unread marker: an event for a BACKGROUND sandbox (one that has a
+	// tab — at least one retained row — and isn't the active one) lights
+	// its • in the tab bar. It never moves the active view: visibleRows is
+	// scoped to activeSandbox, so the layout the cursor/scroll/follow are
+	// derived from doesn't change at all.
+	if env.SandboxID != m.activeSandbox && m.sandboxRowCount[env.SandboxID] > 0 {
+		m.sandboxUnread[env.SandboxID] = true
+	}
 }
 
 // sessionKey returns the composite (sandbox, session) key used to scope row
@@ -1352,8 +1386,18 @@ func (m *Model) upsertRow(row tuiRow) {
 	m.rowIndex[row.id] = len(m.rows)
 	m.rows = append(m.rows, row)
 	if row.session != "" {
+		sandbox := rowSandbox(row.session)
+		if m.sandboxRowCount[sandbox] == 0 {
+			// First retained row for this sandbox: it becomes a TAB, in
+			// first-seen order. The very first sandbox seen becomes the
+			// active tab (the default view).
+			m.sandboxOrder = append(m.sandboxOrder, sandbox)
+			if len(m.sandboxOrder) == 1 {
+				m.activeSandbox = sandbox
+			}
+		}
 		m.sessionRowCount[row.session]++
-		m.sandboxRowCount[rowSandbox(row.session)]++
+		m.sandboxRowCount[sandbox]++
 	}
 	m.evictOldRows()
 }
@@ -1401,8 +1445,28 @@ func (m *Model) evictOldRows() {
 		sandbox := rowSandbox(r.session)
 		m.sandboxRowCount[sandbox]--
 		if m.sandboxRowCount[sandbox] <= 0 {
+			// The sandbox's last retained row is gone: its TAB dies with
+			// it — drop it from the tab order and the unread set (same
+			// class as the per-session cleanup above / R4-2).
 			delete(m.sandboxRowCount, sandbox)
-			delete(m.collapsed, sandboxNodeID(sandbox))
+			delete(m.sandboxUnread, sandbox)
+			for i, sb := range m.sandboxOrder {
+				if sb == sandbox {
+					m.sandboxOrder = append(m.sandboxOrder[:i], m.sandboxOrder[i+1:]...)
+					break
+				}
+			}
+			if m.activeSandbox == sandbox {
+				// The ACTIVE tab was evicted: fall back to the first
+				// remaining tab (or none), re-attached to its live feed.
+				if len(m.sandboxOrder) > 0 {
+					m.activeSandbox = m.sandboxOrder[0]
+					delete(m.sandboxUnread, m.activeSandbox)
+					m.follow = true
+				} else {
+					m.activeSandbox = ""
+				}
+			}
 		}
 	}
 	m.rows = append([]tuiRow(nil), m.rows[drop:]...)
@@ -1411,11 +1475,21 @@ func (m *Model) evictOldRows() {
 	}
 }
 
-// visibleRows applies the show* toggles, the active session focus, and the
-// active text filter, in that order, preserving row order.
+// visibleRows applies the ACTIVE SANDBOX TAB, the show* toggles, the
+// active session focus, and the active text filter, in that order,
+// preserving row order. Scoping to the active tab here — rather than in
+// bodyLayoutLines — makes everything downstream (follow's "newest visible
+// row", navigableBody, the focus empty-state) automatically per-tab: a new
+// event in a background sandbox changes NOTHING the cursor/scroll/follow
+// are derived from.
 func (m Model) visibleRows() []tuiRow {
 	var out []tuiRow
 	for _, r := range m.rows {
+		// Only the active sandbox's rows are in view — sandboxes are
+		// tabs (Model.activeSandbox), not tree nodes.
+		if rowSandbox(r.session) != m.activeSandbox {
+			continue
+		}
 		if !m.passesToggles(r) {
 			continue
 		}
@@ -1482,8 +1556,8 @@ type bodyLine struct {
 	text     string
 	rowID    string
 	isHeader bool
-	// nodeID marks a TREE NODE header line (a sandbox or session — see
-	// sandboxNodeID/sessionNodeID) and is the key into Model.collapsed.
+	// nodeID marks a TREE NODE header line (a session — see
+	// sessionNodeID) and is the key into Model.collapsed.
 	// Node headers are NAVIGABLE (the line cursor lands on them; enter/
 	// space toggles their collapse) but own no row (rowID=="").
 	nodeID string
@@ -1503,10 +1577,13 @@ type bodyLine struct {
 // height>0 clamps the body to a fixed number of lines and scrolls it
 // (requirements 1/3/4).
 func (m Model) View() string {
-	header, filter, footer := m.chrome()
+	header, tabs, filter, footer := m.chrome()
 	var parts []string
 	if header {
 		parts = append(parts, headerStyle.Render(m.truncate(m.headerLine())))
+	}
+	if tabs {
+		parts = append(parts, m.renderTabBar())
 	}
 	if filter {
 		if m.filtering {
@@ -1527,16 +1604,20 @@ func (m Model) View() string {
 // chrome decides which frame-chrome lines View renders. Pre-size
 // (sized=false, every headless test) everything relevant renders,
 // unbounded. Once sized, chrome is shed lowest-priority-first when the
-// terminal is too short for all of it — the filter line drops first (it
-// needs height>=3), then the footer (height>=2), then the header
+// terminal is too short for all of it — the sandbox tab bar drops first
+// (it needs height>=4; it only exists with >=2 sandboxes), then the
+// filter line (height>=3), then the footer (height>=2), then the header
 // (height>=1) — so the TOTAL rendered line count (chrome + body, see
 // bodyHeight) never exceeds the terminal height, even at height 0-3.
-func (m Model) chrome() (header, filter, footer bool) {
+func (m Model) chrome() (header, tabs, filter, footer bool) {
 	filterActive := m.filtering || m.filter != ""
+	// The tab bar only renders with two or more sandbox tabs — a single
+	// sandbox puts its name in the title line instead (headerLine).
+	hasTabs := len(m.sandboxOrder) >= 2
 	if !m.sized {
-		return true, filterActive, true
+		return true, hasTabs, filterActive, true
 	}
-	return m.height >= 1, filterActive && m.height >= 3, m.height >= 2
+	return m.height >= 1, hasTabs && m.height >= 4, filterActive && m.height >= 3, m.height >= 2
 }
 
 // bodyHeight is the number of body lines that fit around the chrome lines
@@ -1548,9 +1629,12 @@ func (m Model) bodyHeight() int {
 	if !m.sized {
 		return 0
 	}
-	header, filter, footer := m.chrome()
+	header, tabs, filter, footer := m.chrome()
 	h := m.height
 	if header {
+		h--
+	}
+	if tabs {
 		h--
 	}
 	if filter {
@@ -1596,22 +1680,21 @@ func (m Model) bodyLayoutLines() []bodyLine {
 			{text: fmt.Sprintf("waiting for a monitor-enabled sandbox on :%d — if nothing appears, the sandbox may predate the monitor extension (rebuild image / make load)", m.hubPort())},
 		}
 	}
-	// COLLAPSIBLE TREE: sandbox -> session -> conversation. Rows are
-	// grouped by sandbox (first-seen order), then by session within the
-	// sandbox (first-seen order); each session's event rows render
-	// CONTIGUOUSLY, in arrival order — never interleaved with another
-	// session's, even when the events arrived interleaved (the flat
-	// chronological feed this replaces was unparseable with more than one
-	// concurrent session: one session appeared as several non-contiguous
-	// blocks). The FIRST-SEEN session is the sandbox's PRIMARY
-	// conversation (depth 1, directly under the sandbox node at depth 0);
-	// every other session in that sandbox nests under the primary as a
-	// child node (depth 2, its events at depth 3) — the user's model:
-	// any pi session is a child of the top one in the sandbox. Node
-	// headers are NAVIGABLE and collapsible (m.collapsed); a collapsed
+	// The body shows the ACTIVE SANDBOX ONLY (sandboxes are TABS, not tree
+	// nodes — visibleRows already scoped rows to Model.activeSandbox), as a
+	// COLLAPSIBLE SESSION TREE with no sandbox level: the FIRST-SEEN
+	// session is the sandbox's PRIMARY conversation (depth 0), its events
+	// at depth 1; every other session nests under the primary as a child
+	// node (depth 1, its events at depth 2) — the user's model: any pi
+	// session is a child of the top one in the sandbox. Each session's
+	// event rows render CONTIGUOUSLY, in arrival order — never interleaved
+	// with another session's, even when the events arrived interleaved.
+	// Node headers are NAVIGABLE and collapsible (m.collapsed); a collapsed
 	// subtree contributes no lines. Indent is 2 spaces per depth, applied
 	// here (renderBodyLines adds the timestamp column + cursor gutter in
-	// front of it).
+	// front of it). SESSION FOCUS (`s`) needs no special-casing any more:
+	// visibleRows solos the focused session, which then renders as the
+	// (single) primary at depth 0 — exactly the old solo layout.
 	var lines []bodyLine
 	emitRow := func(r tuiRow, depth int) {
 		indent := strings.Repeat("  ", depth)
@@ -1635,101 +1718,57 @@ func (m Model) bodyLayoutLines() []bodyLine {
 		}
 		lines = append(lines, bodyLine{text: strings.Repeat("  ", depth) + caret + label, nodeID: nodeID, ts: ts})
 	}
-	groups := groupTreeRows(rows)
-	if m.focusSession != "" {
-		// SESSION FOCUS (solo) mode: exactly one session is ever in view
-		// (visibleRows already dropped everything else), so render just
-		// that session's node + its events, flat — no sandbox level, no
-		// sibling sessions. The sandbox context lives in the top bar
-		// while focused (focusHeaderLine).
-		for _, sb := range groups {
-			for _, ses := range sb.sessions {
-				nid := sessionNodeID(ses.session)
-				emitNode(nid, m.sessionNodeLabel(ses.session), 0, ses.latestTS)
-				if m.collapsed[nid] {
-					continue
-				}
-				for _, r := range ses.rows {
-					emitRow(r, 1)
-				}
-			}
+	sessions := groupSessionRows(rows)
+	primary := sessions[0]
+	pnid := sessionNodeID(primary.session)
+	emitNode(pnid, m.sessionNodeLabel(primary.session), 0, primary.latestTS)
+	if !m.collapsed[pnid] {
+		// Collapsing the primary hides only its OWN events; the
+		// child-session nodes below stay visible — they are the
+		// user's other conversations, not the primary's payload.
+		for _, r := range primary.rows {
+			emitRow(r, 1)
 		}
-		return lines
 	}
-	for _, sb := range groups {
-		bnid := sandboxNodeID(sb.sandbox)
-		emitNode(bnid, m.sandboxNodeLabel(sb.sandbox, len(sb.sessions)), 0, sb.latestTS)
-		if m.collapsed[bnid] {
-			continue // a collapsed sandbox hides ALL its sessions+events
+	for _, ses := range sessions[1:] {
+		cnid := sessionNodeID(ses.session)
+		emitNode(cnid, m.sessionNodeLabel(ses.session), 1, ses.latestTS)
+		if m.collapsed[cnid] {
+			continue
 		}
-		primary := sb.sessions[0]
-		pnid := sessionNodeID(primary.session)
-		emitNode(pnid, m.sessionNodeLabel(primary.session), 1, primary.latestTS)
-		if !m.collapsed[pnid] {
-			// Collapsing the primary hides only its OWN events; the
-			// child-session nodes below stay visible — they are the
-			// user's other conversations, not the primary's payload.
-			for _, r := range primary.rows {
-				emitRow(r, 2)
-			}
-		}
-		for _, ses := range sb.sessions[1:] {
-			cnid := sessionNodeID(ses.session)
-			emitNode(cnid, m.sessionNodeLabel(ses.session), 2, ses.latestTS)
-			if m.collapsed[cnid] {
-				continue
-			}
-			for _, r := range ses.rows {
-				emitRow(r, 3)
-			}
+		for _, r := range ses.rows {
+			emitRow(r, 2)
 		}
 	}
 	return lines
 }
 
-// sessionGroup / sandboxGroup are the tree's grouping buckets, built
-// fresh from the visible rows on every layout pass by groupTreeRows.
+// sessionGroup is the tree's grouping bucket, built fresh from the
+// visible rows on every layout pass by groupSessionRows.
 type sessionGroup struct {
 	session  string // sessionKey — raw, identity only, never rendered
 	rows     []tuiRow
 	latestTS int64 // newest row ts in this session (node-header timestamp)
 }
 
-type sandboxGroup struct {
-	sandbox  string // sandbox id — raw; sanitized by sandboxNodeLabel
-	sessions []*sessionGroup
-	latestTS int64
-}
-
-// groupTreeRows groups the (already toggle/focus/filter-passed) rows by
-// sandbox then session, both in FIRST-SEEN order — rows preserve arrival
-// order in m.rows, so first appearance here IS earliest-seen. Events stay
-// in arrival order within their session and are never reordered, so a
+// groupSessionRows groups the (already tab/toggle/focus/filter-passed)
+// rows by session, in FIRST-SEEN order — rows preserve arrival order in
+// m.rows, so first appearance here IS earliest-seen. Events stay in
+// arrival order within their session and are never reordered, so a
 // session's conversation reads chronologically and contiguously.
-func groupTreeRows(rows []tuiRow) []*sandboxGroup {
-	var out []*sandboxGroup
-	sbIdx := make(map[string]*sandboxGroup)
+func groupSessionRows(rows []tuiRow) []*sessionGroup {
+	var out []*sessionGroup
 	sesIdx := make(map[string]*sessionGroup)
 	for _, r := range rows {
-		sandbox := rowSandbox(r.session)
-		sb, ok := sbIdx[sandbox]
-		if !ok {
-			sb = &sandboxGroup{sandbox: sandbox}
-			sbIdx[sandbox] = sb
-			out = append(out, sb)
-		}
 		ses, ok := sesIdx[r.session]
 		if !ok {
 			ses = &sessionGroup{session: r.session}
 			sesIdx[r.session] = ses
-			sb.sessions = append(sb.sessions, ses)
+			out = append(out, ses)
 		}
 		ses.rows = append(ses.rows, r)
 		if r.ts > ses.latestTS {
 			ses.latestTS = r.ts
-		}
-		if r.ts > sb.latestTS {
-			sb.latestTS = r.ts
 		}
 	}
 	return out
@@ -1742,35 +1781,14 @@ func rowSandbox(session string) string {
 	return sandbox
 }
 
-// sandboxNodePrefix / sessionNodePrefix namespace the collapse-state keys
-// (Model.collapsed) so a sandbox id shaped like a sessionKey can never
-// collide with a session node's key.
-const (
-	sandboxNodePrefix = "sandbox:"
-	sessionNodePrefix = "session:"
-)
+// sessionNodePrefix namespaces the collapse-state keys (Model.collapsed)
+// so a future non-session node kind could never collide with a session
+// node's key.
+const sessionNodePrefix = "session:"
 
-// sandboxNodeID / sessionNodeID are the stable node ids tree headers
-// carry (bodyLine.nodeID) and collapse state is keyed by.
-func sandboxNodeID(sandbox string) string { return sandboxNodePrefix + sandbox }
+// sessionNodeID is the stable node id tree headers carry
+// (bodyLine.nodeID) and collapse state is keyed by.
 func sessionNodeID(session string) string { return sessionNodePrefix + session }
-
-// sandboxNodeLabel renders a sandbox node's header text (after the
-// caret): the sanitized sandbox name plus its visible session count, e.g.
-// `pi-stack-dev  (3 sessions)`. An empty sandbox id reads "(local)". The
-// line is composed unbounded; renderBodyLines' shared m.truncate pass
-// clamps it to the terminal width like every other body line.
-func (m Model) sandboxNodeLabel(sandbox string, sessions int) string {
-	name := sanitizeText(sandbox, false)
-	if name == "" {
-		name = "(local)"
-	}
-	noun := "sessions"
-	if sessions == 1 {
-		noun = "session"
-	}
-	return fmt.Sprintf("%s  (%d %s)", name, sessions, noun)
-}
 
 // sessionNodeLabel renders a session node's header text (after the
 // caret): `<short-session-id> · <model> · “<first user prompt>”`, e.g.
@@ -1940,11 +1958,18 @@ func (m Model) helpBodyLines() []bodyLine {
 	text := []string{
 		"pi-stack monitor — keys",
 		"",
+		"sandbox tabs",
+		"  each sandbox is a TAB in the bar under the title; the body shows",
+		"  only the active sandbox's sessions. • marks a background tab",
+		"  with unseen events.",
+		"  tab / shift+tab   next / previous sandbox (aliases: ] and [)",
+		"  1-9               jump to the Nth sandbox tab",
+		"",
 		"tree",
-		"  the feed is a tree: sandbox ▸ session ▸ events. the first-seen",
-		"  session is the sandbox's PRIMARY conversation; every other pi",
-		"  session in that sandbox nests under it as a child node. sandbox",
-		"  and session headers are navigable lines like any event row.",
+		"  the body is the active sandbox's session tree: session ▸ events.",
+		"  the first-seen session is the sandbox's PRIMARY conversation;",
+		"  every other pi session nests under it as a child node. session",
+		"  headers are navigable lines like any event row.",
 		"",
 		"navigation (line-granular: expanded payloads scroll line by line)",
 		"  up, down        move one line (emacs: ctrl+p / ctrl+n)",
@@ -1953,7 +1978,7 @@ func (m Model) helpBodyLines() []bodyLine {
 		"  PgUp/PgDn       page up/down (ctrl+u/ctrl+d; emacs: alt+v / ctrl+v)",
 		"",
 		"enter / space — context-sensitive on the selected line (▸/▾)",
-		"  on a sandbox/session node: collapse/expand that subtree",
+		"  on a session node: collapse/expand that subtree",
 		"  on an event row: expand/collapse its payload detail",
 		"",
 		"toggles",
@@ -1994,11 +2019,141 @@ func (m Model) headerLine() string {
 	if m.focusSession != "" {
 		return m.focusHeaderLine()
 	}
+	if len(m.sandboxOrder) == 1 {
+		// ONE sandbox: no tab bar renders (chrome), so the sandbox name
+		// lives in the title line instead.
+		return fmt.Sprintf("pi-stack monitor  %s  events=%d", sandboxTabName(m.sandboxOrder[0]), len(m.rows))
+	}
 	sandbox := m.cfg.Filter
 	if sandbox == "" {
 		sandbox = "all"
 	}
 	return fmt.Sprintf("pi-stack monitor  sandbox=%s  events=%d", sandbox, len(m.rows))
+}
+
+// sandboxTabName is a sandbox id's display name in the tab bar / title
+// line: sanitized, with the empty (local) sandbox id reading "(local)".
+func sandboxTabName(sandbox string) string {
+	name := sanitizeText(sandbox, false)
+	if name == "" {
+		name = "(local)"
+	}
+	return name
+}
+
+// tabBarLine composes the sandbox TAB BAR (one entry per sandbox,
+// first-seen order): the ACTIVE tab bracketed `[name]` — a
+// color-independent marker, assertable headless (renderTabBar additionally
+// reverse/bold-styles it on a real terminal) — and a background tab with
+// unseen events suffixed `•` (sandboxUnread). When the full bar exceeds
+// the terminal width it is windowed around the active tab (the active tab
+// always stays visible), with `…` marking hidden tabs on either side.
+// Returns the plain, already width-clamped line plus the active tab's
+// entry text so renderTabBar can style exactly that segment. PURE: reads
+// Model state only — tab state changes happen exclusively in Update.
+func (m Model) tabBarLine() (string, string) {
+	entries := make([]string, len(m.sandboxOrder))
+	active := 0
+	for i, sb := range m.sandboxOrder {
+		switch {
+		case sb == m.activeSandbox:
+			entries[i] = "[" + sandboxTabName(sb) + "]"
+			active = i
+		case m.sandboxUnread[sb]:
+			entries[i] = sandboxTabName(sb) + "\u2022"
+		default:
+			entries[i] = sandboxTabName(sb)
+		}
+	}
+	window := func(lo, hi int) string {
+		s := strings.Join(entries[lo:hi+1], "  ")
+		if lo > 0 {
+			s = "\u2026 " + s
+		}
+		if hi < len(entries)-1 {
+			s += " \u2026"
+		}
+		return s
+	}
+	full := window(0, len(entries)-1)
+	if m.width <= 0 || runewidth.StringWidth(full) <= m.width {
+		return full, entries[active]
+	}
+	// Too wide: grow a window outward from the active tab, right then
+	// left, while it still fits.
+	lo, hi := active, active
+	for {
+		grew := false
+		if hi+1 < len(entries) && runewidth.StringWidth(window(lo, hi+1)) <= m.width {
+			hi++
+			grew = true
+		}
+		if lo > 0 && runewidth.StringWidth(window(lo-1, hi)) <= m.width {
+			lo--
+			grew = true
+		}
+		if !grew {
+			break
+		}
+	}
+	// The active tab alone can still exceed a very narrow terminal —
+	// truncateLine is the final defensive clamp.
+	return truncateLine(window(lo, hi), m.width), entries[active]
+}
+
+// renderTabBar decorates tabBarLine for display: the active tab's entry
+// (already bracket-marked) additionally gets the reverse/bold selected
+// style so it pops on a real color terminal; headless (no-color) renders
+// leave just the brackets, which is what the tests assert on.
+func (m Model) renderTabBar() string {
+	line, active := m.tabBarLine()
+	if i := strings.Index(line, active); i >= 0 {
+		line = line[:i] + selectedStyle.Render(active) + line[i+len(active):]
+	}
+	return line
+}
+
+// setActiveSandbox switches the visible tab: clears the target's unread
+// marker, drops a session focus that belonged to the OLD sandbox (focus
+// is scoped to the active tab), and re-attaches follow so the switched-to
+// feed opens at its newest event. Called only from Update paths (keys,
+// eviction fallback) — View never mutates tab state.
+func (m *Model) setActiveSandbox(sandbox string) {
+	if sandbox == m.activeSandbox {
+		return
+	}
+	m.activeSandbox = sandbox
+	delete(m.sandboxUnread, sandbox)
+	if m.focusSession != "" && rowSandbox(m.focusSession) != sandbox {
+		m.focusSession = ""
+	}
+	m.reattachFollow()
+}
+
+// cycleSandbox moves the active tab by delta (tab/`]` = +1, shift+tab/`[`
+// = -1), wrapping around the tab order. A no-op with fewer than two tabs.
+func (m *Model) cycleSandbox(delta int) {
+	n := len(m.sandboxOrder)
+	if n < 2 {
+		return
+	}
+	cur := 0
+	for i, sb := range m.sandboxOrder {
+		if sb == m.activeSandbox {
+			cur = i
+			break
+		}
+	}
+	m.setActiveSandbox(m.sandboxOrder[((cur+delta)%n+n)%n])
+}
+
+// jumpToSandbox implements the digit keys: jump straight to the Nth tab
+// (1-based, first-seen order). Out-of-range is a safe no-op.
+func (m *Model) jumpToSandbox(n int) {
+	if n < 1 || n > len(m.sandboxOrder) {
+		return
+	}
+	m.setActiveSandbox(m.sandboxOrder[n-1])
 }
 
 // focusHeaderLine renders the top bar while SESSION FOCUS is active
@@ -2048,11 +2203,17 @@ func (m Model) footerLine() string {
 	if m.focusSession != "" {
 		focus = "[focus]"
 	}
+	// With two or more sandbox tabs, a compact hint advertises the tab
+	// switching keys; a single sandbox has nothing to switch to.
+	tabHint := ""
+	if len(m.sandboxOrder) >= 2 {
+		tabHint = "tab:sandbox  "
+	}
 	return fmt.Sprintf(
-		"%s %s T:time=%s f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s  nav:\u2191\u2193  enter/space:toggle  /:filter  ?:help  q:quit",
+		"%s %s T:time=%s f:full=%s m:model=%s t:tools=%s p:mcp=%s x:think=%s c:ctx=%s  %snav:\u2191\u2193  enter/space:toggle  /:filter  ?:help  q:quit",
 		follow, focus, onoff(m.showTimestamps),
 		onoff(m.showFull), onoff(m.showModel), onoff(m.showTools), onoff(m.showMCP),
-		onoff(m.showThinking), onoff(m.showContext))
+		onoff(m.showThinking), onoff(m.showContext), tabHint)
 }
 
 func onoff(b bool) string {
