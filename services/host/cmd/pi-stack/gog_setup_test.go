@@ -173,6 +173,12 @@ type gogTestEnv struct {
 	// test that WANTS to exercise a registration failure (e.g.
 	// TestGogSetup_RegistrationFailureReported) leaves this false.
 	sbxRegisterOK bool
+	// fileModeOverride lets a test (R2-05) drive env.fileMode's answer for a
+	// specific path directly (e.g. a FIFO/socket/device mode, or "not found").
+	// A path absent here falls back to env().fileMode's default: a plain
+	// regular-file mode iff statFile[path] is true, so every existing test that
+	// only sets statFile for its credentials path keeps working unchanged.
+	fileModeOverride map[string]os.FileMode
 }
 
 // gogBareHeadlessKey is the exact bare (no op wrapper) hardened headless probe
@@ -212,10 +218,35 @@ func (g gogTestEnv) env() shellEnv {
 			if g.sbxRegisterOK && name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "add" {
 				return "", nil
 			}
+			// R2-03/R2-04 default: an otherwise-unfixtured bounded `sbx mcp ls`
+			// listing (snapshotGogRegistration's presence probe) defaults to an
+			// EMPTY listing (confirmed absent) — most gogSetup tests don't care
+			// about a prior registration, and requiring every one of them to
+			// fixture this explicitly would be pure noise. A test that DOES care
+			// sets g.output["sbx mcp ls"] explicitly, which the check above
+			// already wins over this default.
+			if name == "sbx" && len(args) == 2 && args[0] == "mcp" && args[1] == "ls" {
+				return "", nil
+			}
 			return "", fmt.Errorf("no fake output for %q", key)
 		},
 		getenv:   os.Getenv,
 		statFile: func(path string) bool { return g.statFile[path] },
+		// R2-05: fileMode drives the credentials regular-file check. A test-set
+		// override wins; otherwise a path marked present in statFile defaults to
+		// a plain regular-file mode (0o600) so every pre-existing statFile-only
+		// fixture keeps behaving as a valid regular file.
+		fileMode: func(path string) (os.FileMode, bool) {
+			if g.fileModeOverride != nil {
+				if m, ok := g.fileModeOverride[path]; ok {
+					return m, true
+				}
+			}
+			if g.statFile[path] {
+				return 0o600, true
+			}
+			return 0, false
+		},
 		runInteractive: func(name string, args ...string) error {
 			*calls = append(*calls, append([]string{name}, args...))
 			return g.interErr
@@ -453,7 +484,10 @@ func TestGogSetup_ZeroHeadlessToolsFailsWithGuidance(t *testing.T) {
 		t.Fatal(err)
 	}
 	ge := gogTestEnv{
-		present: map[string]bool{"gog": true, "op": true},
+		// sbx present: the R2-04 preflight (sbx binary + registration snapshot)
+		// runs before this test's headless-verification step, so sbx must be
+		// wired for the test to reach it at all.
+		present: map[string]bool{"gog": true, "op": true, "sbx": true},
 		output: mergeOutputs(gogAuthCapabilityFixtures("setup", true), map[string]string{
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",

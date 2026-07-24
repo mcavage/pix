@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -127,7 +128,15 @@ func (g *gogPipelineFake) env() shellEnv {
 			return ""
 		},
 		statFile: func(path string) bool { return path == g.cred || path == g.opRefs },
-		dial:     func(int) bool { return false }, // memory/ollama ports irrelevant here
+		// R2-05: the credentials regular-file check now reads fileMode, not
+		// statFile — report a plain regular file for the same paths.
+		fileMode: func(path string) (os.FileMode, bool) {
+			if path == g.cred || path == g.opRefs {
+				return 0o600, true
+			}
+			return 0, false
+		},
+		dial: func(int) bool { return false }, // memory/ollama ports irrelevant here
 		runInteractive: func(name string, args ...string) error {
 			g.interCalls = append(g.interCalls, append([]string{name}, args...))
 			return nil

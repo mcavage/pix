@@ -212,11 +212,10 @@ never prompts.
 Actually sets you up: a real, two-phase command, not a deprecated alias for
 .BR "pi-stack onboard" .
 Phase 1 (host) ALWAYS runs first, even on a repeat invocation: it sources
-model-provider keys, PREFERRING 1Password (wiring both the sandbox and host
+model-provider keys from 1Password ONLY (wiring both the sandbox and host
 mode; see
 .BR "pi-stack secret" ),
-ensures memory, and creates your default pack.  Provider keys come from
-1Password ONLY: the
+ensures memory, and creates your default pack.  The
 .B op
 CLI must be installed and signed in, or setup fails with the exact fix.  There
 is no "trust existing sbx keys" shortcut.  An ordinary value flag

@@ -59,6 +59,37 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   failure (present-but-probe-failed, gateway down, list-unverifiable,
   not-configured). Setup shares the same bounded Ollama probe via
   `probeOllama`.
+- **`pi-stack gog setup` now preflights every predictable hard requirement
+  BEFORE any OAuth side effect, and the prior gog registration snapshot is
+  now tri-state (review round 2, R2-03/R2-04).** Previously, sbx presence
+  was only checked right before registration — AFTER the interactive OAuth
+  route had already run — and whatever gog registration already existed was
+  captured with a single `(argv, bool)` that collapsed three different
+  situations (confirmed absent, confirmed present but unparseable, and "the
+  sbx probe itself failed") into one "nothing to restore" answer. Now: gog
+  CLI + its selected auth route's capability, the credentials regular-file
+  check, config loading, the `sbx` binary, and a bounded snapshot of
+  whatever gog registration already exists are ALL confirmed before the
+  first `runInteractive` call, so a missing `sbx`, an unparseable
+  `config.toml`, or an unreadable/unlistable prior registration aborts with
+  zero OAuth side effects and zero config mutation. The registration
+  snapshot is genuinely tri-state (confirmed absent / confirmed present with
+  a restorable argv / unknown): unknown is never treated as absent, so
+  rollback can never silently clobber a registration it couldn't actually
+  read back.
+- **`pi-stack gog setup`'s credentials-path check now requires a TRUE
+  regular file (review round 2, R2-05).** It previously only checked
+  "exists and isn't a directory", which a FIFO, socket, or device also
+  satisfies. It now checks `Mode().IsRegular()`; a symlink POINTING AT a
+  regular file is still allowed (the check follows symlinks via `os.Stat`,
+  same as before), but a FIFO, socket, device, or a symlink to any of those
+  is rejected before ever being handed to `gog`.
+- **`pi-stack.1` no longer contradicts itself about where provider keys come
+  from (review round 2, R2-06).** The `setup` section previously said keys
+  are sourced "PREFERRING 1Password" in one sentence and "1Password ONLY"
+  in the very next. There is no preference/fallback: provider keys come
+  from 1Password only, matching `setup`'s actual behavior (and the rest of
+  the man page).
 - **`pi-stack gog setup` now enforces read-only OAuth authorization at grant
   time, not just at MCP runtime.** Every supported auth route always passes
   gog's `--readonly` flag on whichever step actually performs the OAuth

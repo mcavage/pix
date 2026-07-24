@@ -87,6 +87,11 @@ func TestManPageNoStaleTerms(t *testing.T) {
 		`\-\-use\-sbx\-keys`,
 		"use-sbx-keys",
 		"gemma3:4b",
+		// R2-06: the man page previously claimed setup sources keys "PREFERRING
+		// 1Password" in one sentence, then "1Password ONLY" in the very next —
+		// a self-contradiction. There is no preference/fallback: provider keys
+		// come from 1Password only, matching setup's actual behavior.
+		"PREFERRING 1Password",
 	)
 	if strings.Contains(page, ".BR active_profile") {
 		t.Error("pi-stack.1 documents active_profile as a live schema field (.BR active_profile) — it was removed")

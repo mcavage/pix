@@ -217,7 +217,17 @@ func gogR106Env(t *testing.T, probe func(name string, args ...string) (string, b
 		sbxRegisterOK: true,
 	}
 	env := ge.env()
-	env.probe = probe
+	// R2-03: snapshotGogRegistration's presence probe (`sbx mcp ls`) defaults
+	// to an empty (confirmed-absent) listing unless the caller's probe func
+	// itself cares to override it — none of gogR106Env's callers are testing
+	// prior-registration behavior, so they'd otherwise have to fixture this
+	// unrelated call themselves.
+	env.probe = func(name string, args ...string) (string, bool, error) {
+		if name == "sbx" && len(args) == 2 && args[0] == "mcp" && args[1] == "ls" {
+			return "", false, nil
+		}
+		return probe(name, args...)
+	}
 	return env, cred
 }
 
@@ -470,6 +480,10 @@ func gogR108RollbackEnv(t *testing.T, priorRegistered bool) (env shellEnv, cred 
 	priorArgv := []string{"/usr/bin/gog", "--account", "old@example.com", "--gmail-no-send",
 		"--wrap-untrusted", "--readonly", "mcp", "--allow-tool", "read"}
 	if priorRegistered {
+		// R2-03: snapshotGogRegistration confirms presence via the bounded PLAIN
+		// `sbx mcp ls` listing FIRST, independent of whether the detailed `sbx
+		// mcp get gog` command parses — both must agree gog is registered.
+		fixtures["sbx mcp ls"] = "gog\n"
 		fixtures["sbx mcp get gog"] = "name: gog\ncommand: " + strings.Join(priorArgv, " ") + "\n"
 	}
 	ge := gogTestEnv{
@@ -602,7 +616,14 @@ func TestGogSetup_R114_CapabilityAndBareHeadlessProbesAreBounded(t *testing.T) {
 			return "", fmt.Errorf("exec: %q not found", name)
 		},
 		statFile: func(path string) bool { return path == cred },
-		getenv:   func(string) string { return "" },
+		// R2-05: the credentials regular-file check now reads fileMode.
+		fileMode: func(path string) (os.FileMode, bool) {
+			if path == cred {
+				return 0o600, true
+			}
+			return 0, false
+		},
+		getenv: func(string) string { return "" },
 		probe: func(name string, args ...string) (string, bool, error) {
 			key := strings.Join(append([]string{name}, args...), " ")
 			probed = append(probed, key)
@@ -615,6 +636,9 @@ func TestGogSetup_R114_CapabilityAndBareHeadlessProbesAreBounded(t *testing.T) {
 				return "ok", false, nil
 			case headlessKey:
 				return "gmail_search\n", false, nil
+			case "sbx mcp ls":
+				// R2-03 preflight: confirm no prior gog registration.
+				return "", false, nil
 			}
 			return "", false, fmt.Errorf("no fake probe output for %q", key)
 		},

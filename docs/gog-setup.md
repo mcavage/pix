@@ -26,7 +26,9 @@ and idempotent — it re-verifies and re-registers deterministically.
 
 1. Checks the `gog` CLI is installed. If not, it prints the install command
    (`brew install gog`, or see https://gogcli.sh/install.html) and stops.
-2. Validates `--credentials` points at a regular file. The contents are never
+2. Validates `--credentials` points at a TRUE regular file (a FIFO, socket,
+   or device is rejected, even though it "exists and isn't a directory"; a
+   symlink to a genuine regular file is still fine). The contents are never
    read or printed — only the path is passed to `gog` as an argument.
 3. Probes `gog auth --help` once and picks the **first supported route** for
    the installed version (see below). It then probes that SELECTED route's
@@ -36,11 +38,24 @@ and idempotent — it re-verifies and re-registers deterministically.
    the OAuth grant.** `pi-stack gog setup` always passes `--readonly` at
    grant time; if the installed `gog` cannot advertise that flag for the
    selected route, the command fails with upgrade guidance rather than
-   authorizing without it or trying an older, unguarded route. Only then
-   does it import the client and authorize `--account` by running the route
+   authorizing without it or trying an older, unguarded route.
+4. **Preflights every remaining predictable hard requirement before any
+   authorization happens:** `sbx` must be on PATH (it registers gog with
+   the gateway; missing it is a hard failure, never a silent "would
+   register" success), your `pi-stack` config must load cleanly, and
+   whatever gog registration already exists must be **confirmed** — either
+   confirmed absent, or confirmed present with a readable command. This
+   confirmation is bounded and genuinely three-way, not a yes/no: if the
+   registration listing itself is momentarily unavailable, or gog is listed
+   but its registered command can't be parsed back, that counts as
+   **unknown**, never as absent — and `pi-stack gog setup` refuses to
+   authorize or overwrite anything until it's readable, so an existing
+   registration this command can't confidently read is never silently lost
+   to a same-run rollback. Only once every one of these is confirmed does
+   it import the client and authorize `--account` by running the route
    interactively — it inherits this terminal's stdin/stdout/stderr, so a
    browser or device-code flow works normally.
-4. Verifies interactive auth (`gog --account <you> auth doctor --check`),
+5. Verifies interactive auth (`gog --account <you> auth doctor --check`),
    **then** verifies the headless path the sbx gateway will actually use
    (see "the one trap" below) — through the `op run` wrapper when
    1Password/op-refs.env are set up, or the **bare hardened command
@@ -50,15 +65,13 @@ and idempotent — it re-verifies and re-registers deterministically.
    **fails the command** with the exact fix, rather than claiming you're
    ready; a probe that times out or can't exec is unverifiable and is
    likewise never reported as success.
-5. Requires **sbx**: a missing `sbx` binary, or a failed `sbx mcp add`, is a
-   hard failure — never a silent "would register" success. On success: it
-   registers gog with the sbx gateway FIRST, and only once that genuinely
-   succeeds does it save `gog_account` and add `gog` to your configured MCP
-   set. A registration failure never touches your persisted config; if
-   saving the config fails AFTER a successful registration, it rolls the
-   sbx-side registration back (restoring whatever was registered before, or
-   removing the new one) rather than leaving config and the gateway to
-   drift apart.
+6. On success: it registers gog with the sbx gateway FIRST, and only once
+   that genuinely succeeds does it save `gog_account` and add `gog` to your
+   configured MCP set. A registration failure never touches your persisted
+   config; if saving the config fails AFTER a successful registration, it
+   rolls the sbx-side registration back to exactly the step 4 snapshot
+   (restoring whatever was registered before, or removing the new one)
+   rather than leaving config and the gateway to drift apart.
 
 ### Current and fallback `gog` CLI routes
 

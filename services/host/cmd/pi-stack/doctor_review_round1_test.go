@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
@@ -640,7 +641,14 @@ func TestGogSetup_R114_ProbesBounded(t *testing.T) {
 			return "", fmt.Errorf("exec: %q not found", name)
 		},
 		statFile: func(path string) bool { return path == cred },
-		getenv:   func(string) string { return "" },
+		// R2-05: the credentials regular-file check now reads fileMode.
+		fileMode: func(path string) (os.FileMode, bool) {
+			if path == cred {
+				return 0o600, true
+			}
+			return 0, false
+		},
+		getenv: func(string) string { return "" },
 		probe: func(name string, args ...string) (string, bool, error) {
 			key := strings.Join(append([]string{name}, args...), " ")
 			probed = append(probed, key)
@@ -653,6 +661,9 @@ func TestGogSetup_R114_ProbesBounded(t *testing.T) {
 				return "ok", false, nil
 			case headlessKey:
 				return "gmail_search\n", false, nil
+			case "sbx mcp ls":
+				// R2-03 preflight: confirm no prior gog registration.
+				return "", false, nil
 			}
 			return "", false, fmt.Errorf("no fake probe output for %q", key)
 		},

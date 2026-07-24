@@ -37,6 +37,19 @@
 // config, and a save failure AFTER a successful registration rolls the sbx
 // side back (restoring whatever was registered before, or removing the new
 // registration) rather than leaving config and the gateway to drift apart.
+//
+// R2-03/R2-04 (review round 2): every PREDICTABLE hard requirement — config
+// loads cleanly, the gog CLI and its selected auth route are capable, the
+// credentials path is a true regular file, sbx is on PATH, and whatever gog
+// registration already exists can be confirmed — is checked BEFORE the first
+// OAuth side effect (the interactive auth route below). The prior
+// registration check in particular is TRI-STATE (gogRegSnapshot): confirmed
+// absent, confirmed present with a restorable argv, or unknown (the bounded
+// `sbx mcp ls` listing itself failed, or gog is listed but its registered
+// command can't be parsed/read). Unknown is never treated as absent — this
+// command refuses to authorize or overwrite the registration until it can be
+// read, so an unreadable or momentarily-unlistable prior registration is
+// never silently clobbered by a same-run rollback.
 package main
 
 import (
@@ -61,30 +74,39 @@ Run 'pi-stack gog setup -h' for its flags.
 const gogSetupUsage = `usage: pi-stack gog setup [--account <email>] [--credentials <path>] [--yes]
 
 Guides Google Workspace (gog) onboarding end to end:
-  1. checks the gog CLI AND sbx are both installed (exact install guidance
-     if not — sbx is required to register gog with the gateway; a missing
-     sbx fails this command, it never reports a silent "would register")
-  2. imports YOUR Desktop OAuth client JSON by invoking gog itself — this
-     command never reads or prints its contents, and never copies it into
-     pi-stack config
-  3. probes the selected auth route's OWN subcommand help/flags, then
-     authorizes <email> REQUESTING READ-ONLY OAUTH SCOPES at grant time
+  1. checks the gog CLI is installed (exact install guidance if not), then
+     validates your credentials path is a true regular file and imports it
+     by invoking gog itself — this command never reads or prints its
+     contents, and never copies it into pi-stack config
+  2. probes the selected auth route's OWN subcommand help/flags for the
+     read-only capability it needs at grant time (see step 3)
+  3. preflights EVERY remaining predictable hard requirement BEFORE any
+     authorization happens: sbx must be installed (it registers gog with
+     the gateway; a missing sbx fails this command, it never reports a
+     silent "would register"), config must load cleanly, and whatever gog
+     registration already exists must be CONFIRMED — absent, or present
+     with a readable command. An unreadable/unlistable prior registration
+     (or a transiently unavailable sbx listing) aborts HERE, before any
+     authorization runs and before config is touched, rather than risking
+     that registration on a same-run rollback later
+  4. authorizes <email> REQUESTING READ-ONLY OAUTH SCOPES at grant time
      (gog's --readonly flag on the OAuth-granting command) — if the
      installed gog cannot advertise --readonly for the selected route, this
      fails with upgrade guidance rather than authorizing without it (may
      open a browser; inherits this terminal)
-  4. verifies interactive auth, THEN verifies headless tools the same way
+  5. verifies interactive auth, THEN verifies headless tools the same way
      the sbx gateway will actually spawn gog — direct and bare when
      1Password isn't set up, through the same op wrapper when it is. A
      healthy interactive auth with zero headless tools is a documented trap
      (see docs/gog-setup.md) and FAILS this command with the exact fix,
      rather than claiming ready; an unverifiable probe (timeout/exec error)
      is never reported as success either
-  5. on success: registers gog with the sbx gateway FIRST, and only once
+  6. on success: registers gog with the sbx gateway FIRST, and only once
      that succeeds saves gog_account + enables gog in the configured MCP
      set — a registration failure never touches the persisted config, and a
      save failure after a successful registration rolls the registration
-     back rather than leaving config and the gateway out of sync
+     back (to exactly the step 3 snapshot) rather than leaving config and
+     the gateway out of sync
 
 flags:
   --account <email>      the Google Workspace account to authorize
@@ -391,10 +413,19 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		return fmt.Errorf("gog is not installed")
 	}
 
-	// Validate the credentials path BEFORE ever handing it to gog: must be a
-	// regular file. This command never opens/reads it — only checks existence
-	// and passes the path through as an argv token.
-	if env.statFile == nil || !env.statFile(credentials) {
+	// R2-05: validate the credentials path BEFORE ever handing it to gog: must
+	// be a TRUE regular file — Mode().IsRegular(), not merely "exists and isn't
+	// a directory" (which a FIFO, socket, or device would also satisfy).
+	// env.fileMode wraps os.Stat (not os.Lstat), so a symlink POINTING AT a
+	// regular file is allowed (Stat reports the TARGET's mode), while a FIFO,
+	// socket, device, or a symlink to any of those is rejected. This command
+	// never opens/reads its contents — only checks the mode and passes the path
+	// through as an argv token.
+	if env.fileMode == nil {
+		return fmt.Errorf("internal: shellEnv.fileMode not wired")
+	}
+	credMode, credOK := env.fileMode(credentials)
+	if !credOK || !credMode.IsRegular() {
 		return fmt.Errorf("credentials file not found (must be a regular file): %s", credentials)
 	}
 
@@ -429,6 +460,38 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		fmt.Fprintln(out, "  then re-run: pi-stack gog setup")
 		fmt.Fprintln(out, "  pi-stack never falls back to an auth route it cannot confirm requests read-only scopes.")
 		return fmt.Errorf("installed gog cannot guarantee read-only OAuth authorization (route: %s): %s", route.name, detail)
+	}
+
+	// R2-04: preflight every remaining PREDICTABLE hard requirement here, BEFORE
+	// the first OAuth side effect (the interactive route steps just below) ever
+	// runs — sbx must be on PATH, config must load cleanly, and the prior gog
+	// registration snapshot must be CONFIRMED (never unknown). Any failure here
+	// returns before a single runInteractive call and before config is touched,
+	// so a botched preflight can never leave OAuth half-run or config mutated.
+	if _, err := env.lookPath("sbx"); err != nil {
+		return fmt.Errorf("sbx not found — pi-stack gog setup requires sbx to register the MCP server " +
+			"(install: https://docs.docker.com/ai/sandboxes); install it, then re-run pi-stack gog setup")
+	}
+	// R1-08: load the candidate config change IN MEMORY only — cfg.Save() must
+	// never run before the sbx registration it describes actually succeeds, or
+	// a registration failure would leave a persisted config claiming gog is
+	// registered when it is not (config/registration drift).
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	// R2-03: a TRI-STATE, bounded snapshot of whatever gog registration already
+	// exists BEFORE this run would overwrite it. gogRegUnknown (the bounded `sbx
+	// mcp ls` listing itself failed/timed out, OR gog is confirmed listed but
+	// its registered command can't be parsed/read) is NEVER treated as "nothing
+	// to restore" — this command refuses to authorize or overwrite until the
+	// prior registration is actually readable, so it can never be silently lost
+	// to a same-run rollback.
+	snap := snapshotGogRegistration(env)
+	if snap.state == gogRegUnknown {
+		return fmt.Errorf("could not confirm the prior gog registration (sbx mcp ls/get did not resolve cleanly) — " +
+			"refusing to authorize or overwrite it until this is readable; check the sbx daemon (sbx mcp status), " +
+			"then re-run pi-stack gog setup")
 	}
 
 	runInteractive := env.runInteractive
@@ -490,27 +553,9 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		return fmt.Errorf("headless verification unverifiable for %s (%s) — not registering until this is fixed", account, head.detail)
 	}
 
-	// R1-08: pi-stack gog setup ends by registering gog with the sbx gateway,
-	// and a missing sbx must be a FAILURE, never a silent "would register"
-	// success — check this before touching config at all.
-	if _, err := env.lookPath("sbx"); err != nil {
-		return fmt.Errorf("sbx not found — pi-stack gog setup requires sbx to register the MCP server " +
-			"(install: https://docs.docker.com/ai/sandboxes); install it, then re-run pi-stack gog setup")
-	}
-
-	// R1-08: build the candidate config change IN MEMORY only — cfg.Save() must
-	// never run before the sbx registration it describes actually succeeds, or
-	// a registration failure would leave a persisted config claiming gog is
-	// registered when it is not (config/registration drift).
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
-	// Capture whatever gog registration already exists BEFORE this run
-	// overwrites it, so a later Save() failure can roll the sbx side back to
-	// exactly that prior state instead of leaving the gateway ahead of the
-	// (unsaved) config on disk.
-	priorArgv, hadPrior := registeredGogCommand(env)
+	// R1-08/R2-04: sbx presence, config.Load(), and the prior registration
+	// snapshot were ALL already confirmed above, before the interactive auth
+	// route ran — nothing left to preflight here, just apply the change.
 	cfg.SetGogAccount(account)
 	// AC-08 idempotency: ALWAYS ensure gog is in the configured MCP set, even
 	// when the account already matched (a healthy re-run must still leave gog
@@ -534,7 +579,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		// registered before this run (if anything), else remove the just-added
 		// registration entirely. Any rollback failure is folded into the
 		// returned error explicitly rather than swallowed.
-		if rerr := gogSetupRollbackRegistration(env, priorArgv, hadPrior); rerr != nil {
+		if rerr := gogSetupRollbackRegistration(env, snap); rerr != nil {
 			return fmt.Errorf("saving config: %w; additionally, rollback of the gog registration failed: %v — fix by hand (sbx mcp get gog / sbx mcp rm gog)", err, rerr)
 		}
 		return fmt.Errorf("saving config: %w (gog registration rolled back so config and the gateway stay in sync)", err)
@@ -553,21 +598,22 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 // gogSetupRollbackRegistration undoes a just-succeeded `sbx mcp add gog ...`
 // when the config.Save() that was supposed to follow it fails (R1-08),
 // so the sbx gateway and pi-stack's persisted config never drift apart:
-//   - hadPrior true: priorArgv is the exact command that was registered for
-//     gog BEFORE this run (captured via registeredGogCommand before it was
-//     overwritten) — re-register it verbatim via `sbx mcp add`.
-//   - hadPrior false: nothing was registered before this run — remove the
-//     new registration via `sbx mcp rm gog`.
+//   - snap.state == gogRegPresent: snap.argv is the exact command that was
+//     registered for gog BEFORE this run (captured by snapshotGogRegistration
+//     before it was overwritten) — re-register it verbatim via `sbx mcp add`.
+//   - otherwise (gogRegAbsent — gogRegUnknown is refused earlier by gogSetup's
+//     preflight and never reaches here): nothing was registered before this
+//     run — remove the new registration via `sbx mcp rm gog`.
 //
 // Every outcome is reported: nil on a confirmed rollback, a descriptive error
 // (never silent) when the rollback itself fails, naming the exact command to
 // run by hand.
-func gogSetupRollbackRegistration(env shellEnv, priorArgv []string, hadPrior bool) error {
+func gogSetupRollbackRegistration(env shellEnv, snap gogRegSnapshot) error {
 	if env.run == nil {
 		return fmt.Errorf("internal: shellEnv.run not wired")
 	}
-	if hadPrior {
-		args := rawAddArgs("gog", priorArgv)
+	if snap.state == gogRegPresent {
+		args := rawAddArgs("gog", snap.argv)
 		if _, err := env.run("sbx", args...); err != nil {
 			return fmt.Errorf("could not restore the prior gog registration: %w", err)
 		}
@@ -577,4 +623,75 @@ func gogSetupRollbackRegistration(env shellEnv, priorArgv []string, hadPrior boo
 		return fmt.Errorf("could not remove the new gog registration: %w", err)
 	}
 	return nil
+}
+
+// gogRegState is the TRI-STATE result of snapshotting whatever gog
+// registration exists before gogSetup would overwrite it (R2-03).
+type gogRegState int
+
+const (
+	// gogRegAbsent: the bounded `sbx mcp ls` listing was read successfully and
+	// confirmed gog is NOT in it — safe to treat as "nothing to restore".
+	gogRegAbsent gogRegState = iota
+	// gogRegPresent: the bounded listing confirmed gog IS registered, and its
+	// command argv was successfully read back — safe to restore verbatim.
+	gogRegPresent
+	// gogRegUnknown: gog's presence could not be confirmed either way (the
+	// listing probe itself failed or timed out), OR it is confirmed present but
+	// its registered command could not be parsed/read. Either way this must
+	// NEVER be treated as absent: gogSetup's preflight aborts on this state
+	// rather than risk losing, or silently overwriting, an unreadable prior
+	// registration.
+	gogRegUnknown
+)
+
+// gogRegSnapshot is the result of snapshotGogRegistration: state, plus (only
+// when state == gogRegPresent) the exact argv that was registered.
+type gogRegSnapshot struct {
+	state gogRegState
+	argv  []string
+}
+
+// snapshotGogRegistration takes a TRI-STATE, bounded snapshot of the gog MCP
+// registration BEFORE gogSetup would overwrite it (R2-03). The prior
+// registeredGogCommand-based rollback collapsed three genuinely different
+// situations into a single (nil,false): confirmed absent, confirmed present
+// but unparseable, and "the sbx probe itself failed" — all three read as
+// "nothing to restore", so a registration that was merely unreadable (a
+// quoted command, an unexpected shape) or hit a transient sbx hiccup could be
+// silently clobbered by rollback's bare `sbx mcp rm gog`.
+//
+// This distinguishes presence FIRST, via the bounded, PLAIN `sbx mcp ls`
+// listing (independent of whether the detailed argv parses — exactly the
+// listing doctor's own mcpCheck/mcpProbeCheck already use via grepWord), so
+// "present but unreadable" is never mistaken for "confirmed absent":
+//   - the listing probe fails or times out               -> gogRegUnknown
+//   - the listing succeeds and gog is NOT in it           -> gogRegAbsent
+//   - the listing succeeds, gog IS in it, but the detailed
+//     command can't be read/parsed (registeredGogCommand's
+//     own `sbx mcp get gog` + `sbx mcp ls -o json` probes
+//     both come up empty, quoted, or malformed)            -> gogRegUnknown
+//   - the listing succeeds, gog IS in it, and the detailed
+//     command parses cleanly                               -> gogRegPresent(argv)
+func snapshotGogRegistration(env shellEnv) gogRegSnapshot {
+	if env.lookPath == nil {
+		return gogRegSnapshot{state: gogRegUnknown}
+	}
+	if _, err := env.lookPath("sbx"); err != nil {
+		// Defensive only: gogSetup's own preflight already refuses to run past a
+		// missing sbx (R1-08/R2-04), so a caller reaching here with sbx absent is
+		// unexpected — report unknown rather than guessing absent.
+		return gogRegSnapshot{state: gogRegUnknown}
+	}
+	listOut, timedOut, err := probeRun(env, "sbx", "mcp", "ls")
+	if err != nil || timedOut {
+		return gogRegSnapshot{state: gogRegUnknown}
+	}
+	if !grepWord(listOut, "gog") {
+		return gogRegSnapshot{state: gogRegAbsent}
+	}
+	if argv, ok := registeredGogCommand(env); ok {
+		return gogRegSnapshot{state: gogRegPresent, argv: argv}
+	}
+	return gogRegSnapshot{state: gogRegUnknown}
 }
