@@ -144,9 +144,13 @@ memory_scope = "work"                # → .pi-stack/profile; default = pack nam
 
 # ── F1 reference-only integrations (v1 shape, now ATTACHES) ──
 [[integrations]]
-  name = "Fastmail"
-  mcp  = "fastmail"              # local stdio server name (must be in `pi-stack-host mcp --list`)
-  env  = "FASTMAIL_TOKEN"        # op:// ref var name solicited at adoption; value NEVER in pack
+  name   = "Fastmail"
+  mcp    = "fastmail"            # MCP server name to attach (registered host-side)
+  env    = "FASTMAIL_TOKEN"      # op:// ref var name solicited at adoption; value NEVER in pack
+  static = true                  # optional: EAGER attach (--static-mcp) so the pack's
+                                 # skills have its tools in context. Default false =
+                                 # dynamic (agent pulls via mcp-find on demand). A
+                                 # user `mcp_dynamic <name>` overrides back to dynamic.
 
 # ── F2 in-sandbox proxy wrappers (bin/, fenced) ──
 [[proxy]]

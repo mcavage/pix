@@ -60,7 +60,10 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   spawns local stdio servers host-side, so local and remote behave the same). The
   **default is dynamic for every registered server** — keeps heavy tool schemas
   out of context until needed. Pin a server eager with the new `mcp_static` list
-  (`mcp_dynamic` is the explicit opposite, and wins if a server is in both). New:
+  (`mcp_dynamic` is the explicit opposite, and wins if a server is in both). A
+  **pack** can request eager attach for its own integrations with
+  `[[integrations]] static = true` (folded into the eager set at launch; a user
+  `mcp_dynamic` still overrides). New:
   - `pi-stack mcp load <name> [DIR]` — attach an already-registered server to a
     RUNNING sandbox live, no recreate (`sbx mcp load`).
   - `pi-stack mcp auth [args…]` — hosted-control-plane OAuth for remote servers

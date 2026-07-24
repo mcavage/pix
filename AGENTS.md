@@ -180,8 +180,10 @@ user a diff.
   the gateway, and mcp-find surfaces local stdio servers (the daemon spawns them
   host-side with their op-run creds) exactly like remotes — verified. The
   **default is dynamic** for every server (lean context); pin one eager with
-  `mcp_static`, and `mcp_dynamic` wins if a server is in both. Attach one to an
-  ALREADY-RUNNING sandbox live (no recreate) with `pi-stack mcp load <name>`
+  `mcp_static`, and `mcp_dynamic` wins if a server is in both. A **pack** can pin
+  its OWN integration eager via `[[integrations]] static = true` (folded into the
+  eager set at launch by applyPackToLaunch; a user `mcp_dynamic` still overrides).
+  Attach one to an ALREADY-RUNNING sandbox live (no recreate) with `pi-stack mcp load <name>`
   (`sbx mcp load`). Add a server = a tool table + handlers + `run<Name>()` using `mcpStdio`
   (newline-delimited JSON — what the gateway speaks; tolerates Content-Length on
   input). Transports live in `services/host/util.go`.
