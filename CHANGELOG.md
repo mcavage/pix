@@ -39,6 +39,26 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`pi-stack doctor` no longer trusts alternate symlink paths for registered
+  probe executables (review round 2, R2-01).** The trusted-executable gate
+  used to resolve symlinks at check time and then exec the ORIGINAL
+  registered path — a check-then-exec race an attacker could win by swapping
+  the symlink between the two. Trust is now strict exact (cleaned) path
+  equality with the resolver's answer (`lookPath` for gog/op,
+  `findHostBinary` for pi-stack-host), and the probe execs ONLY the
+  resolver's canonical token, never the registered spelling. A
+  versioned-release symlink install (e.g. `/opt/pi-stack/current/…`) that was
+  previously blessed now reads as "probe skipped … never executed"
+  (unverifiable) — register the canonical binary path instead.
+- **Every `pi-stack doctor` discovery subprocess is now bounded (review
+  round 2, R2-02).** `sbx secret ls`, `sbx mcp ls`, `sbx mcp get <name>`,
+  `sbx mcp ls -o json`, `ollama list`, and `op account list` all run through
+  the same bounded probe seam as the MCP tool probes (hard 5s timeout +
+  capped output), so a hung sbx daemon, wedged ollama, or stuck 1Password CLI
+  can never wedge doctor — each hang classifies exactly like the equivalent
+  failure (present-but-probe-failed, gateway down, list-unverifiable,
+  not-configured). Setup shares the same bounded Ollama probe via
+  `probeOllama`.
 - **`pi-stack gog setup` now enforces read-only OAuth authorization at grant
   time, not just at MCP runtime.** Every supported auth route always passes
   gog's `--readonly` flag on whichever step actually performs the OAuth

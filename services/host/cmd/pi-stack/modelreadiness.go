@@ -20,7 +20,11 @@ type ollamaProbe struct {
 
 // probeOllama runs lookPath, a :11434 daemon dial, and `ollama list` — daemon
 // dial and list are skipped entirely when ollama isn't even on PATH, so a
-// host with no Ollama pays for exactly one failed lookPath call.
+// host with no Ollama pays for exactly one failed lookPath call. R2-02: the
+// `ollama list` exec is BOUNDED (probeRun: hard timeout + output cap), so a
+// wedged ollama classifies as list-unverified for BOTH callers — doctor's
+// Ollama group and setup's receipt share this one bounded probe — rather
+// than hanging either command.
 func probeOllama(env shellEnv) ollamaProbe {
 	if env.lookPath == nil {
 		return ollamaProbe{}
@@ -32,10 +36,8 @@ func probeOllama(env shellEnv) ollamaProbe {
 	if env.dial != nil {
 		p.daemonUp = env.dial(11434)
 	}
-	if env.run != nil {
-		if out, err := env.run("ollama", "list"); err == nil {
-			p.listOut, p.listOK = out, true
-		}
+	if out, timedOut, err := probeRun(env, "ollama", "list"); err == nil && !timedOut {
+		p.listOut, p.listOK = out, true
 	}
 	return p
 }

@@ -31,11 +31,6 @@ type fakeEnv struct {
 	// means "unresolved": the trust gate must fail closed, never trust a
 	// registered pi-stack-host argv with no canonical answer to compare against.
 	hostBinary string
-	// symlinks maps a path to what filepath.EvalSymlinks would resolve it to,
-	// so a test can prove a symlinked-but-legitimate pi-stack-host install is
-	// still trusted. A path with no entry resolves to itself (the identity
-	// default filepath.EvalSymlinks gives a non-symlinked path).
-	symlinks map[string]string
 }
 
 func (f fakeEnv) env() shellEnv {
@@ -74,12 +69,6 @@ func (f fakeEnv) env() shellEnv {
 				return "", fmt.Errorf("no fake pi-stack-host binary configured")
 			}
 			return f.hostBinary, nil
-		},
-		evalSymlinks: func(path string) (string, error) {
-			if r, ok := f.symlinks[path]; ok {
-				return r, nil
-			}
-			return path, nil
 		},
 	}
 }

@@ -83,37 +83,40 @@ func TestDoctor_R201_CanonicalHostBinaryProbed(t *testing.T) {
 	}
 }
 
-// TestDoctor_R201_SymlinkedHostBinaryProbed: a registration whose argv[0] is a
-// DIFFERENT path string that resolves (via env.evalSymlinks) to the SAME real
-// file as env.hostBinary()'s answer (e.g. an install where the launcher
-// resolved through a symlink) is still trusted and probed.
-func TestDoctor_R201_SymlinkedHostBinaryProbed(t *testing.T) {
+// TestDoctor_R201_SymlinkedHostBinaryNeverTrusted (R2-01 round 2b): a
+// registration whose argv[0] is a DIFFERENT path string — even one that, on
+// disk, is a symlink resolving to the SAME real file as env.hostBinary()'s
+// answer at check time — is NEVER trusted or executed. Resolving symlinks at
+// check time and exec'ing the registered path afterwards is a check-then-exec
+// race (swap the link between the two and doctor runs the attacker's binary),
+// so trust is strict exact path equality with the resolver's answer, nothing
+// else.
+func TestDoctor_R201_SymlinkedHostBinaryNeverTrusted(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"slack"}
-	symlinked := "/opt/pi-stack/current/pi-stack-host" // a versioned-release symlink path
+	// A versioned-release symlink path that resolves to the same real file as
+	// the canonical binary at CHECK time — and to whatever the attacker points
+	// it at by EXEC time. Doctor must reject it on path inequality alone.
+	symlinked := "/opt/pi-stack/current/pi-stack-host"
 	canonical := "/usr/local/bin/pi-stack-host"
-	real := "/opt/pi-stack/releases/1.2.3/pi-stack-host" // what both actually resolve to
 	regCmd := symlinked + " mcp slack"
 	f := gogGreen(fakeEnv{
 		present:    map[string]bool{"sbx": true, "ollama": true},
 		hostBinary: canonical,
-		symlinks: map[string]string{
-			symlinked: real,
-			canonical: real,
-		},
 		output: map[string]string{
 			"sbx secret ls":          "anthropic openai google github",
 			"ollama list":            "gemma4:latest\nnomic-embed-text:latest\n",
 			"sbx mcp ls":             "gog\nslack\n",
 			"sbx mcp get slack":      "name: slack\ncommand: " + regCmd + "\n",
-			regCmd + " --list-tools": "slack_search\n",
+			regCmd + " --list-tools": "slack_search\n", // proves the exploit if ever exec'd
 		},
 		ports: map[int]bool{11434: true, 11435: true},
 	})
-	r := runDoctor(cfg, f.env())
+	env := fatalOnExec(t, f.env(), symlinked)
+	r := runDoctor(cfg, env)
 	c := findCheck(r, "Other MCP servers", "slack")
-	if c == nil || c.evidence != EvidenceHealthy || c.state() != stateOK {
-		t.Fatalf("a symlinked-but-legitimate pi-stack-host registration must still probe green, got %+v", c)
+	if c == nil || c.evidence != EvidenceUnverifiable || !strings.Contains(c.detail, "probe skipped") {
+		t.Fatalf("an alternate symlink path must never be trusted (skipped/unverifiable), got %+v", c)
 	}
 }
 

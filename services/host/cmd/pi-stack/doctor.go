@@ -33,12 +33,7 @@ import (
 // port. Tests substitute fakes; defaultShellEnv() wires the real thing.
 type shellEnv struct {
 	lookPath func(name string) (string, error)
-	// evalSymlinks canonicalizes a path (filepath.EvalSymlinks) so the R1-01
-	// registered-executable trust gate can equate a symlinked install path with
-	// the PATH-resolved binary. Nil in tests, which then compare cleaned paths
-	// only; defaultShellEnv wires the real resolver.
-	evalSymlinks func(path string) (string, error)
-	run          func(name string, args ...string) (string, error)
+	run      func(name string, args ...string) (string, error)
 	// hostBinary resolves the CANONICAL pi-stack-host binary path — the same
 	// injected/hermetic seam mcp.go registration actually uses
 	// (hostBinaryResolver/findHostBinary: sibling-to-launcher first, PATH
@@ -67,8 +62,11 @@ type shellEnv struct {
 	// from defaultOpRefsPath, which those tests fake anyway); defaultShellEnv
 	// wires the real blocking withFlock. See withProviderRefsLock.
 	flock func(lockPath string, fn func() error) error
-	// probe runs an UNTRUSTED registered command with a hard timeout + capped
-	// output, so doctor never hangs (or floods) on a misbehaving MCP server. It
+	// probe runs an UNTRUSTED registered command — and (R2-02) EVERY
+	// noninteractive discovery subprocess (`sbx secret ls`, `sbx mcp ls`,
+	// `sbx mcp get`, `sbx mcp ls -o json`, `ollama list`, `op account list`)
+	// — with a hard timeout + capped output, so doctor never hangs (or
+	// floods) on a misbehaving MCP server, sbx daemon, or ollama. It
 	// returns (output, timedOut, err). Nil in tests, which fall back to run so
 	// they stay hermetic; defaultShellEnv wires runWithTimeout.
 	probe func(name string, args ...string) (out string, timedOut bool, err error)
@@ -134,8 +132,7 @@ func probeRun(env shellEnv, name string, args ...string) (string, bool, error) {
 // defaultShellEnv returns a shellEnv backed by the real OS.
 func defaultShellEnv() shellEnv {
 	return shellEnv{
-		lookPath:     exec.LookPath,
-		evalSymlinks: filepath.EvalSymlinks,
+		lookPath: exec.LookPath,
 		// hostBinaryResolver (findHostBinary) is the SAME resolver mcp.go
 		// registration uses — wrapped in a closure (not bound directly) so a
 		// test that swaps the package var mid-run (pack_v2_trust_*_test.go) is
@@ -341,7 +338,9 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	sbxOut, sbxOK, sbxPresent := "", false, false
 	if _, err := env.lookPath("sbx"); err == nil {
 		sbxPresent = true
-		if out, err := env.run("sbx", "secret", "ls"); err == nil {
+		// R2-02: BOUNDED — a hung `sbx secret ls` is killed at probeTimeout and
+		// classifies as present-but-probe-failed, never a wedged doctor.
+		if out, timedOut, err := probeRun(env, "sbx", "secret", "ls"); err == nil && !timedOut {
 			sbxOut, sbxOK = out, true
 		}
 	}
@@ -355,7 +354,9 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	// that must not be reported as "sbx unavailable".
 	mcpOut, mcpOK := "", false
 	if sbxOK {
-		if out, err := env.run("sbx", "mcp", "ls"); err == nil {
+		// R2-02: BOUNDED — a hung `sbx mcp ls` classifies as the gateway-down
+		// condition rather than hanging doctor.
+		if out, timedOut, err := probeRun(env, "sbx", "mcp", "ls"); err == nil && !timedOut {
 			mcpOut, mcpOK = out, true
 		}
 	}
@@ -706,11 +707,15 @@ func mcpProbeCheck(env shellEnv, name, mcpOut string, mcpOK, sbxPresent bool) ch
 	// not blindly run it. If it is not the known gog form or a canonical
 	// `pi-stack-host mcp <name>` spawn (with any op wrapper's binary matching
 	// env.lookPath("op")), skip the probe — registration seen, health unverifiable.
-	if !recognizedMCPArgv(env, argv, name) {
+	// R2-01: what gets exec'd is the NORMALIZED argv recognizedMCPArgv returns
+	// (executable tokens replaced with the resolvers' canonical paths), never
+	// the registered spelling.
+	trustedArgv, ok := recognizedMCPArgv(env, argv, name)
+	if !ok {
 		return check{label: name, detail: "registered (probe skipped: unrecognized/untrusted command — never executed)",
 			requirement: req, evidence: EvidenceUnverifiable}
 	}
-	res := probeListTools(env, argv)
+	res := probeListTools(env, trustedArgv)
 	switch res.status {
 	case probeToolsOK:
 		return check{label: name, detail: fmt.Sprintf("registered, spawns %s", plural(res.tools, "tool")), requirement: req, evidence: EvidenceHealthy}
@@ -737,18 +742,20 @@ func mcpProbeCheck(env shellEnv, name, mcpOut string, mcpOK, sbxPresent bool) ch
 // or exposes no command; the caller then reports "registered" without a tool
 // count rather than a false TODO.
 func registeredMCPCommand(env shellEnv, name string) ([]string, bool) {
-	if env.lookPath == nil || env.run == nil {
+	if env.lookPath == nil {
 		return nil, false
 	}
 	if _, err := env.lookPath("sbx"); err != nil {
 		return nil, false
 	}
-	if out, err := env.run("sbx", "mcp", "get", name); err == nil {
+	// R2-02: BOUNDED — a hung `sbx mcp get`/`sbx mcp ls -o json` degrades to
+	// "couldn't read the registered command", never a wedged doctor.
+	if out, timedOut, err := probeRun(env, "sbx", "mcp", "get", name); err == nil && !timedOut {
 		if argv, ok := parseMCPCommandLine(out); ok {
 			return argv, true
 		}
 	}
-	if out, err := env.run("sbx", "mcp", "ls", "-o", "json"); err == nil {
+	if out, timedOut, err := probeRun(env, "sbx", "mcp", "ls", "-o", "json"); err == nil && !timedOut {
 		if argv, ok := parseMCPCommandJSON(out, name); ok {
 			return argv, true
 		}
@@ -800,36 +807,51 @@ func parseMCPCommandJSON(out, name string) ([]string, bool) {
 // recognizedMCPArgv reports whether argv is a shape doctor TRUSTS to exec as a
 // probe: either a TRUSTED gog spawn (canonical gog/op executables — R1-01), or
 // (optionally wrapped in `op run … -- …`, with the op binary itself canonical)
-// an ABSOLUTE path whose basename is `pi-stack-host` followed by `mcp <name>`
-// — exactly how mcp.go registers a local stdio server. Anything else is an
-// arbitrary command someone put in the registration, which doctor must NOT run.
-func recognizedMCPArgv(env shellEnv, argv []string, name string) bool {
-	if trustedGogSpawn(env, argv) {
-		return true
+// an ABSOLUTE path equal to the canonical `pi-stack-host` followed by
+// `mcp <name>` — exactly how mcp.go registers a local stdio server. Anything
+// else is an arbitrary command someone put in the registration, which doctor
+// must NOT run. On success it returns the NORMALIZED argv (R2-01): every
+// executable token replaced with the resolver's canonical path, so the caller
+// execs the TRUSTED tokens, never the registered spelling — there is no
+// check-then-exec window on a path an attacker controls.
+func recognizedMCPArgv(env shellEnv, argv []string, name string) ([]string, bool) {
+	if norm, ok := trustedGogSpawn(env, argv); ok {
+		return norm, true
 	}
 	// Unwrap ONLY a trusted `op run … -- <cmd…>` prefix. A `--` behind any other
-	// argv[0] is rejected: the probe execs argv[0] verbatim, so unwrapping a
+	// argv[0] is rejected: the probe execs the wrapper token, so unwrapping a
 	// prefix like `/tmp/evil -- pi-stack-host mcp slack` would exec /tmp/evil.
 	cmd, ok := unwrapOpRun(argv)
 	if !ok {
-		return false
+		return nil, false
 	}
-	// R1-01: an op-wrapped command must run the SAME op binary env.lookPath
-	// finds — a look-alike `/tmp/op` is never executed.
-	if len(cmd) < len(argv) && !trustedExecPath(env, argv[0], "op") {
-		return false
+	norm := append([]string(nil), argv...)
+	innerStart := len(argv) - len(cmd)
+	if innerStart > 0 {
+		// R1-01: an op-wrapped command must run the SAME op binary env.lookPath
+		// finds — a look-alike `/tmp/op` is never executed.
+		opTok, opOK := trustedExecPath(env, argv[0], "op")
+		if !opOK {
+			return nil, false
+		}
+		norm[0] = opTok
 	}
 	if len(cmd) < 3 {
-		return false
+		return nil, false
+	}
+	if cmd[1] != "mcp" || cmd[2] != name {
+		return nil, false
 	}
 	// R2-01: basename alone ("pi-stack-host") is NOT enough — an absolute path
 	// anywhere on disk with that basename (e.g. /tmp/malicious/pi-stack-host)
 	// satisfied the old check. Require the CANONICAL binary registration
-	// actually uses.
-	if !trustedHostBinaryExecPath(env, cmd[0]) {
-		return false
+	// actually uses, and exec THAT token.
+	hostTok, hostOK := trustedHostBinaryExecPath(env, cmd[0])
+	if !hostOK {
+		return nil, false
 	}
-	return cmd[1] == "mcp" && cmd[2] == name
+	norm[innerStart] = hostTok
+	return norm, true
 }
 
 // trustedHostBinaryExecPath is the R2-01 canonical-pi-stack-host gate: mcp.go
@@ -841,91 +863,103 @@ func recognizedMCPArgv(env shellEnv, argv []string, name string) bool {
 // hostBinaryResolver so this compares against the SAME canonical answer the
 // real registration used, without doctor ever re-deriving install-path logic
 // of its own (a second, drifting implementation would be its own bug class).
-// tok must be absolute AND either byte-equal (cleaned) to the resolved
-// binary, or — when env.evalSymlinks is wired — resolve to the same real file
-// (a versioned-release symlink install). An unresolvable canonical answer
-// (env.hostBinary nil or erroring) fails CLOSED: never fall back to trusting
-// basename alone.
-func trustedHostBinaryExecPath(env shellEnv, tok string) bool {
+// tok must be absolute AND byte-equal (cleaned) to the resolved binary —
+// STRICT equality only. Symlink resolution is deliberately NOT consulted
+// (R2-01 round 2b): blessing an alternate symlink path at check time and
+// exec'ing it afterwards is a check-then-exec race an attacker wins by
+// swapping the link between the two. On success it returns the RESOLVER's
+// canonical token — the only thing the caller may exec. An unresolvable
+// canonical answer (env.hostBinary nil or erroring) fails CLOSED: never fall
+// back to trusting basename alone.
+func trustedHostBinaryExecPath(env shellEnv, tok string) (string, bool) {
 	if filepath.Base(tok) != "pi-stack-host" {
-		return false
+		return "", false
 	}
 	if !filepath.IsAbs(tok) {
-		return false // never trust a bare/relative name for pi-stack-host
+		return "", false // never trust a bare/relative name for pi-stack-host
 	}
 	if env.hostBinary == nil {
-		return false
+		return "", false
 	}
 	canonical, err := env.hostBinary()
 	if err != nil || canonical == "" || !filepath.IsAbs(canonical) {
-		return false
+		return "", false
 	}
-	if filepath.Clean(tok) == filepath.Clean(canonical) {
-		return true
+	if filepath.Clean(tok) != filepath.Clean(canonical) {
+		return "", false
 	}
-	if env.evalSymlinks != nil {
-		r1, e1 := env.evalSymlinks(filepath.Clean(tok))
-		r2, e2 := env.evalSymlinks(filepath.Clean(canonical))
-		return e1 == nil && e2 == nil && r1 == r2
-	}
-	return false
+	return filepath.Clean(canonical), true
 }
 
-// trustedExecPath is the R1-01 canonical-executable gate: a registered
-// executable token is trusted ONLY when it is the same binary
-// `env.lookPath(base)` resolves. A bare name (no path separator) is trusted
-// as-is — exec resolves it through PATH, which IS lookPath's answer. A
-// path-carrying token must equal the PATH-resolved binary (cleaned), or
-// resolve to the same file after symlink evaluation when available. Anything
-// else (a look-alike /tmp/gog, a fake op) is untrusted and never executed.
-func trustedExecPath(env shellEnv, tok, base string) bool {
+// trustedExecPath is the R1-01/R2-01 canonical-executable gate: it returns
+// the exec token doctor may run for base, and whether the registered token is
+// trusted. A bare name (no path separator) is trusted as-is — exec resolves
+// it through PATH at spawn time, which IS lookPath's answer; there is no
+// recorded path for an attacker to swap. A path-carrying token must be
+// byte-equal (cleaned) to the PATH-resolved binary — STRICT equality only,
+// with symlink resolution deliberately NOT consulted (R2-01 round 2b: a
+// check-time symlink bless followed by exec of the registered path is a race
+// the attacker wins by swapping the link). On success the returned token is
+// the RESOLVER's canonical path, never the registered spelling, so the exec'd
+// token is the trusted one by construction. Anything else (a look-alike
+// /tmp/gog, a fake op) is untrusted and never executed.
+func trustedExecPath(env shellEnv, tok, base string) (string, bool) {
 	if filepath.Base(tok) != base {
-		return false
+		return "", false
 	}
 	if !strings.ContainsAny(tok, `/\`) {
-		return true // bare name: exec resolves via PATH = lookPath's answer
+		return tok, true // bare name: exec resolves via PATH = lookPath's answer
 	}
 	if env.lookPath == nil {
-		return false
+		return "", false
 	}
 	canonical, err := env.lookPath(base)
-	if err != nil {
-		return false
+	if err != nil || canonical == "" {
+		return "", false
 	}
-	if filepath.Clean(tok) == filepath.Clean(canonical) {
-		return true
+	if filepath.Clean(tok) != filepath.Clean(canonical) {
+		return "", false
 	}
-	if env.evalSymlinks != nil {
-		r1, e1 := env.evalSymlinks(filepath.Clean(tok))
-		r2, e2 := env.evalSymlinks(filepath.Clean(canonical))
-		return e1 == nil && e2 == nil && r1 == r2
-	}
-	return false
+	return filepath.Clean(canonical), true
 }
 
 // trustedGogSpawn reports whether a registered gog command is BOTH the
 // recognized gog shape (gogSpawnArgv) AND built from canonical executables
 // (R1-01): the inner gog binary must match env.lookPath("gog"), and — when
-// op-wrapped — the op binary must match env.lookPath("op"). Only a trusted
-// spawn is ever executed as a probe.
-func trustedGogSpawn(env shellEnv, argv []string) bool {
+// op-wrapped — the op binary must match env.lookPath("op"). On success it
+// returns the NORMALIZED argv (R2-01): the gog/op executable tokens replaced
+// with the resolvers' canonical paths, so the caller execs the TRUSTED
+// tokens, never the registered spelling. Only that normalized spawn is ever
+// executed as a probe.
+func trustedGogSpawn(env shellEnv, argv []string) ([]string, bool) {
 	inner, ok := gogSpawnArgv(argv)
 	if !ok {
-		return false
+		return nil, false
 	}
-	if !trustedExecPath(env, inner[0], "gog") {
-		return false
+	gogTok, gogOK := trustedExecPath(env, inner[0], "gog")
+	if !gogOK {
+		return nil, false
 	}
-	if gogSpawnIsOpWrapped(argv) && !trustedExecPath(env, argv[0], "op") {
-		return false
+	norm := append([]string(nil), argv...)
+	// inner is the suffix gogSpawnArgv/unwrapOpRun peeled off argv, so the
+	// inner executable sits at len(argv)-len(inner); >0 means op-wrapped.
+	innerStart := len(argv) - len(inner)
+	norm[innerStart] = gogTok
+	if innerStart > 0 {
+		opTok, opOK := trustedExecPath(env, argv[0], "op")
+		if !opOK {
+			return nil, false
+		}
+		norm[0] = opTok
 	}
-	return true
+	return norm, true
 }
 
 // unwrapOpRun returns the effective command doctor would trust to exec. With no
 // `--` it is argv itself (a bare command). With a `--`, it unwraps the prefix
-// ONLY when argv[0] is an absolute `op` binary (the real command runs via op,
-// which is trusted); a `--` behind any other argv[0] returns ok=false so a
+// ONLY when argv[0] has basename `op` (the real command runs via op; the
+// caller still verifies the op token against lookPath and execs the canonical
+// path — R1-01/R2-01); a `--` behind any other argv[0] returns ok=false so a
 // hostile prefix is never exec'd.
 func unwrapOpRun(argv []string) ([]string, bool) {
 	if len(argv) == 0 {
@@ -942,7 +976,7 @@ func unwrapOpRun(argv []string) ([]string, bool) {
 		return argv, true
 	}
 	// Only a `op run … -- <cmd>` wrapper is trusted to be unwrapped: the probe
-	// execs argv[0] verbatim, so a `--` behind a FOREIGN argv[0] (e.g.
+	// execs the wrapper token, so a `--` behind a FOREIGN argv[0] (e.g.
 	// `/tmp/evil -- pi-stack-host mcp slack`) would run /tmp/evil. Requiring
 	// basename "op" blocks that. (Residual, accepted: a registration whose argv[0]
 	// is a binary literally named `op` on the exec path would pass — but that
@@ -1180,8 +1214,11 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 			requirement: req, evidence: EvidenceUnverifiable})
 		// R1-01: NEVER exec a registered command whose gog/op executable is not
 		// the canonical PATH-resolved binary — a look-alike /tmp/gog or fake op
-		// is skipped (unverifiable), not probed.
-		if !trustedGogSpawn(env, argv) {
+		// is skipped (unverifiable), not probed. R2-01: on trust, exec the
+		// NORMALIZED argv (canonical executable tokens), never the registered
+		// spelling.
+		trustedArgv, trusted := trustedGogSpawn(env, argv)
+		if !trusted {
 			g.checks = append(g.checks, check{label: "headless spawn",
 				detail:      "probe skipped: the registered command's gog/op executable does not match the PATH-resolved binary (inspect: sbx mcp get gog) — never executed",
 				requirement: req, evidence: EvidenceUnverifiable})
@@ -1189,7 +1226,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 			g.checks = append(g.checks, gogAttachCheck(cfg))
 			return g
 		}
-		res := probeListTools(env, argv)
+		res := probeListTools(env, trustedArgv)
 		switch res.status {
 		case probeToolsOK:
 			// Distinguish the op-wrapped path (op-refs resolved) from a BARE spawn so a
@@ -1547,18 +1584,20 @@ func looksSecretShaped(key, val string) bool { return config.LooksSecretShaped(k
 // the parsed argv. Returns (nil,false) when sbx is absent or exposes no command
 // — the caller then falls back to the best-effort reconstruction.
 func registeredGogCommand(env shellEnv) ([]string, bool) {
-	if env.lookPath == nil || env.run == nil {
+	if env.lookPath == nil {
 		return nil, false
 	}
 	if _, err := env.lookPath("sbx"); err != nil {
 		return nil, false
 	}
-	if out, err := env.run("sbx", "mcp", "get", "gog"); err == nil {
+	// R2-02: BOUNDED — a hung `sbx mcp get`/`sbx mcp ls -o json` falls back to
+	// the best-effort reconstruction, never a wedged doctor.
+	if out, timedOut, err := probeRun(env, "sbx", "mcp", "get", "gog"); err == nil && !timedOut {
 		if argv, ok := parseGogCommandLine(out); ok {
 			return argv, true
 		}
 	}
-	if out, err := env.run("sbx", "mcp", "ls", "-o", "json"); err == nil {
+	if out, timedOut, err := probeRun(env, "sbx", "mcp", "ls", "-o", "json"); err == nil && !timedOut {
 		if argv, ok := parseGogCommandJSON(out); ok {
 			return argv, true
 		}
@@ -1620,7 +1659,7 @@ func gogSpawnArgv(argv []string) ([]string, bool) {
 		return nil, false
 	}
 	// Unwrap ONLY a trusted `op run … -- <cmd…>` prefix; a `--` behind a non-op
-	// argv[0] is rejected (the probe execs argv[0] verbatim).
+	// argv[0] is rejected (never a token doctor would exec).
 	cmd, ok := unwrapOpRun(argv)
 	if !ok {
 		return nil, false

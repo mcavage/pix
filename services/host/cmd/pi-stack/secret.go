@@ -151,13 +151,14 @@ func opInstalled(env shellEnv) bool {
 // metadata (`op account list`) — never `op read` or an on-disk `op signin`. A
 // non-empty account list proves an account is configured, NOT that the session
 // is unlocked/usable. Best-effort: any error is "no account configured", never a
-// crash.
+// crash. R2-02: BOUNDED via probeRun — a hung op (e.g. a wedged desktop-app
+// integration) reads as not-configured rather than hanging doctor/setup.
 func opSignedIn(env shellEnv) bool {
-	if !opInstalled(env) || env.run == nil {
+	if !opInstalled(env) {
 		return false
 	}
-	out, err := env.run("op", "account", "list")
-	return err == nil && strings.TrimSpace(out) != ""
+	out, timedOut, err := probeRun(env, "op", "account", "list")
+	return err == nil && !timedOut && strings.TrimSpace(out) != ""
 }
 
 // opRefsContent resolves + reads op-refs.env through the injected env, returning
