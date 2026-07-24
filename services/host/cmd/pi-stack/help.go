@@ -214,6 +214,7 @@ func verbUsage(verb string) (string, bool) {
 }
 
 const serveUsage = `usage: pi-stack serve [args...]
+       pi-stack serve start   (alias: install)
        pi-stack serve stop
        pi-stack serve status [--json]
        pi-stack serve install
@@ -238,6 +239,8 @@ subcommands:
                     left after 'pi-stack reset' moved the config dir).
   status [--json]   report whether serve is running (pid) and which service
                     ports (:11435 / :11436) are up
+  start             alias for 'install' — (re)start the managed service, picking
+                    up a freshly-rebuilt binary. The partner to 'stop'.
   install           install serve as a managed login service (launchd on macOS,
                     systemd --user on Linux): starts at login, auto-restarts.
                     stops a lazily-started daemon first; refuses over a

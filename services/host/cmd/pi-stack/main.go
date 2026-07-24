@@ -223,7 +223,10 @@ func runServe(argv []string) {
 		case "status":
 			runServeStatus(argv[1:])
 			return
-		case "install":
+		case "start", "install":
+			// `start` is an alias for `install`: it registers + (re)starts the
+			// managed service, picking up a freshly-rebuilt binary — the natural
+			// partner to `serve stop`.
 			runServeInstall(argv[1:])
 			return
 		case "uninstall":
