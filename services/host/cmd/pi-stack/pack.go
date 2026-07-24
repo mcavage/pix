@@ -1101,7 +1101,10 @@ func synthesizePackKit(p *packInfo) (string, error) {
 		return "", fmt.Errorf(format, a...)
 	}
 	_ = os.Chmod(dir, 0o755) // MkdirTemp creates 0700; the kit is a mounted tree
-	if err := os.WriteFile(filepath.Join(dir, "spec.yaml"), []byte("kind: mixin\n"), 0o644); err != nil {
+	// A stacked kit needs a valid manifest: schemaVersion (required by the loader),
+	// kind: mixin, and a name. Match the base kit's schemaVersion "2".
+	spec := fmt.Sprintf("schemaVersion: \"2\"\nkind: mixin\nname: %s\n", p.Manifest.Name)
+	if err := os.WriteFile(filepath.Join(dir, "spec.yaml"), []byte(spec), 0o644); err != nil {
 		return fail("pack kit for %s: %v", p.Manifest.Name, err)
 	}
 	if len(sandboxProxies) > 0 {

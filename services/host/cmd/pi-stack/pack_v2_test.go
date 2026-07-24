@@ -698,6 +698,15 @@ func TestPackCapabilitiesJSON_LoadedAndMounted(t *testing.T) {
 	if err != nil || kit == "" {
 		t.Fatalf("expected a kit for a capabilities-only pack, got %q err=%v", kit, err)
 	}
+	// The synthesized kit's manifest MUST carry schemaVersion — the sbx kit loader
+	// rejects a manifest without it ("schemaVersion is required").
+	spec, err := os.ReadFile(filepath.Join(kit, "spec.yaml"))
+	if err != nil {
+		t.Fatalf("kit spec.yaml missing: %v", err)
+	}
+	if !strings.Contains(string(spec), "schemaVersion:") || !strings.Contains(string(spec), "kind: mixin") {
+		t.Fatalf("synthesized kit spec.yaml must declare schemaVersion + kind: mixin, got:\n%s", spec)
+	}
 	got, err := os.ReadFile(filepath.Join(kit, "files", "home", ".pi", "agent", "capabilities.json"))
 	if err != nil {
 		t.Fatalf("capabilities.json not mounted into the kit: %v", err)
