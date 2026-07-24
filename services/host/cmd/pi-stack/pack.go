@@ -120,6 +120,27 @@ type packIntegration struct {
 	// the op-run wrapper. Leave empty for a host-provided server (slack, gog) or a
 	// remote gateway-catalog server.
 	Manifest string `toml:"manifest,omitempty"`
+	// Image, when set, is a CONTAINER integration registered by DIRECT image ref:
+	// pi-stack registers it as `docker run -i --rm -e <KEY>… <image>`, op-run
+	// wrapped exactly like slack (so its creds resolve from 1Password at gateway
+	// spawn and forward into the container via `-e`). Simpler than Manifest — no
+	// server.json to host: a locally-built image tag works, and a registry only
+	// matters when you share it. Mutually exclusive with Manifest.
+	Image string `toml:"image,omitempty"`
+	// EnvKeys are ADDITIONAL (typically non-secret) env var names forwarded into an
+	// Image container via `-e <KEY>` (e.g. BAMBOOHR_COMPANY_DOMAIN). The primary
+	// op-refs-backed secret goes in Env (also forwarded, and warned about if unset).
+	EnvKeys []string `toml:"env_keys,omitempty"`
+}
+
+// packContainer is a resolved pack CONTAINER integration: either a Manifest
+// (`sbx mcp add --local --url`, gateway resolves the OCI image; creds Docker-side)
+// or an Image ref (`docker run <image>`, op-run wrapped; creds from op-refs
+// forwarded via EnvKeys). Exactly one of Manifest/Image is set.
+type packContainer struct {
+	Manifest string
+	Image    string
+	EnvKeys  []string // env var names to forward into an Image container (-e KEY)
 }
 
 // packInfo is a resolved pack on disk.
@@ -955,15 +976,27 @@ func packStaticMcpNames(p *packInfo) []string {
 	return names
 }
 
-// packContainerMCP returns {integration.mcp: manifest} for a pack's CONTAINER
-// integrations (those with a Manifest ref) — the servers `pi-stack mcp register`
-// must add via `sbx mcp add <name> --local --url <manifest>` rather than as a
-// host `--command`. Returns nil when the pack declares none.
-func packContainerMCP(p *packInfo) map[string]string {
-	out := map[string]string{}
+// packContainerMCP returns {integration.mcp: packContainer} for a pack's
+// CONTAINER integrations — Manifest servers (`sbx mcp add <name> --local --url`)
+// and Image servers (`docker run <image>`, op-run wrapped). These are what
+// `pi-stack mcp register` adds specially rather than as a plain host subcommand.
+// Returns nil when the pack declares none.
+func packContainerMCP(p *packInfo) map[string]packContainer {
+	out := map[string]packContainer{}
 	for _, ig := range p.Manifest.Integrations {
-		if ig.MCP != "" && strings.TrimSpace(ig.Manifest) != "" {
-			out[ig.MCP] = strings.TrimSpace(ig.Manifest)
+		if ig.MCP == "" {
+			continue
+		}
+		switch {
+		case strings.TrimSpace(ig.Manifest) != "":
+			out[ig.MCP] = packContainer{Manifest: strings.TrimSpace(ig.Manifest)}
+		case strings.TrimSpace(ig.Image) != "":
+			var keys []string
+			if ig.Env != "" {
+				keys = append(keys, ig.Env) // the op-refs secret, forwarded too
+			}
+			keys = append(keys, ig.EnvKeys...)
+			out[ig.MCP] = packContainer{Image: strings.TrimSpace(ig.Image), EnvKeys: keys}
 		}
 	}
 	if len(out) == 0 {
@@ -975,7 +1008,7 @@ func packContainerMCP(p *packInfo) map[string]string {
 // activeContainerMCP resolves packContainerMCP for the active pack. Returns nil
 // when there is no active pack or it won't load (registration of the other
 // servers proceeds regardless).
-func activeContainerMCP(cfg *config.Config) map[string]string {
+func activeContainerMCP(cfg *config.Config) map[string]packContainer {
 	root := activePackRoot(cfg.Pack, "")
 	if root == "" {
 		return nil
@@ -2208,9 +2241,14 @@ func runPackShow(out io.Writer, rest []string) {
 			}
 			switch {
 			case ig.Manifest != "":
-				// Container integration: creds are Docker-side, not op-refs.
-				fmt.Fprintf(out, " — container: %s (creds Docker-side)", ig.Manifest)
-			case ig.Env != "":
+				// Manifest container: creds are Docker-side, not op-refs.
+				fmt.Fprintf(out, " — manifest: %s (creds Docker-side)", ig.Manifest)
+			case ig.Image != "":
+				fmt.Fprintf(out, " — image: %s", ig.Image)
+			}
+			// Image + host/remote integrations resolve their secret from op-refs
+			// (Manifest containers don't — those are Docker-side).
+			if ig.Env != "" && ig.Manifest == "" {
 				if opRefFilled(env, ig.Env) {
 					fmt.Fprintf(out, " — %s ✓", ig.Env)
 				} else {

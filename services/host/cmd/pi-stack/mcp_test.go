@@ -428,15 +428,34 @@ func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 		op:      "/usr/bin/op",
 		opRefs:  "/abs/op-refs.env",
 		hostBin: "/usr/local/bin/pi-stack-host",
-		containers: map[string]string{
-			"bamboohr": "https://example.com/mcp/bamboohr/server.json",
+		containers: map[string]packContainer{
+			"notion-ish": {Manifest: "https://example.com/mcp/x/server.json"},
+			"bamboohr":   {Image: "bamboohr-mcp:0.0.1", EnvKeys: []string{"BAMBOOHR_API_KEY", "BAMBOOHR_COMPANY_DOMAIN"}},
 		},
 	}
 
-	got := strings.Join(reg.addArgs("bamboohr"), " ")
-	want := "mcp add bamboohr --local --url https://example.com/mcp/bamboohr/server.json"
+	// Manifest container: --local --url, NOT op-run wrapped.
+	got := strings.Join(reg.addArgs("notion-ish"), " ")
+	want := "mcp add notion-ish --local --url https://example.com/mcp/x/server.json"
 	if got != want {
-		t.Fatalf("container addArgs:\n got: %s\nwant: %s", got, want)
+		t.Fatalf("manifest addArgs:\n got: %s\nwant: %s", got, want)
+	}
+
+	// Image container: op-run-wrapped `docker run -i --rm -e KEY… <image>`.
+	img := strings.Join(reg.addArgs("bamboohr"), " ")
+	for _, must := range []string{
+		"mcp add bamboohr --command /usr/bin/op",
+		"--args run", "--args --env-file=/abs/op-refs.env", "--args --",
+		"--args docker --args run --args -i --args --rm",
+		"--args -e --args BAMBOOHR_API_KEY --args -e --args BAMBOOHR_COMPANY_DOMAIN",
+		"--args bamboohr-mcp:0.0.1",
+	} {
+		if !strings.Contains(img, must) {
+			t.Fatalf("image addArgs missing %q in:\n%s", must, img)
+		}
+	}
+	if strings.Contains(img, "--local") {
+		t.Fatalf("image container must not use --local, got:\n%s", img)
 	}
 
 	// A non-container name (slack) must still be op-run wrapped, not --local.

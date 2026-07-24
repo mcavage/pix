@@ -176,16 +176,28 @@ type mcpRegistrar struct {
 	gog     string // absolute gog (only needed to register gog)
 	account string // gog --account value
 	hostBin string // absolute pi-stack-host (for slack + other host subcommands)
-	// containers maps a server name to its `--local --url` manifest ref (pack
-	// CONTAINER integrations). A name present here registers as an OCI container
-	// the sbx gateway runs, NOT as a host --command, and is never op-run wrapped.
-	containers map[string]string
+	// containers maps a server name to its pack CONTAINER spec (Manifest or Image).
+	// A Manifest name registers via `--local --url` (gateway resolves the OCI
+	// image; creds Docker-side; never op-run wrapped). An Image name registers as
+	// an op-run-wrapped `docker run <image>` (creds from op-refs forwarded via -e),
+	// exactly like a local stdio server otherwise.
+	containers map[string]packContainer
 }
 
 // serverCmd is the bare command+args the gateway must ultimately spawn for one
 // server (before any op-run wrapping): gog with its hardened flags, or a
 // pi-stack-host subcommand (slack + friends).
 func (m mcpRegistrar) serverCmd(name string) []string {
+	// Image container: the bare command is `docker run -i --rm -e <KEY>… <image>`.
+	// addArgs op-run wraps it (when op-refs is present), so op resolves each KEY
+	// from 1Password and `-e KEY` forwards it into the container.
+	if c := m.containers[name]; c.Image != "" {
+		argv := []string{"docker", "run", "-i", "--rm"}
+		for _, k := range c.EnvKeys {
+			argv = append(argv, "-e", k)
+		}
+		return append(argv, c.Image)
+	}
 	switch name {
 	case "gog":
 		return []string{
@@ -213,11 +225,12 @@ func (m mcpRegistrar) serverCmd(name string) []string {
 // creds until an op-refs.env is added (harmless: the op-run wrapper is a no-op
 // for a server that needs no creds).
 func (m mcpRegistrar) addArgs(name string) []string {
-	// Container integration: register the OCI server by manifest, run locally by
-	// the gateway via Docker. No op-run wrap — its creds are provided Docker-side
-	// (declared in the server's server.json), never through op-refs.
-	if manifest := m.containers[name]; manifest != "" {
-		return []string{"mcp", "add", name, "--local", "--url", manifest}
+	// Manifest container: register the OCI server by manifest, run locally by the
+	// gateway via Docker. No op-run wrap — its creds are provided Docker-side
+	// (declared in the server's server.json), never through op-refs. (Image
+	// containers fall through to serverCmd + the op-run wrapper below.)
+	if c := m.containers[name]; c.Manifest != "" {
+		return []string{"mcp", "add", name, "--local", "--url", c.Manifest}
 	}
 	cmd := m.serverCmd(name)
 	if m.opRefs == "" {
@@ -252,7 +265,7 @@ func (m mcpRegistrar) addArgs(name string) []string {
 // crashing. hostResolver locates pi-stack-host (injected so tests stay
 // hermetic).
 func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
-	requested []string, hostResolver func() (string, error), containers map[string]string) error {
+	requested []string, hostResolver func() (string, error), containers map[string]packContainer) error {
 
 	names := requested
 	if len(names) == 0 {
@@ -290,10 +303,14 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 		switch {
 		case n == "gog":
 			wantGog = true
-		case containers[n] != "":
-			// A pack container integration: registered by manifest, not as a host
-			// --command, so it doesn't depend on the pi-stack-host local-name set.
+		case containers[n].Manifest != "":
+			// Manifest container: registered by --local --url, not a host --command,
+			// so it doesn't depend on the pi-stack-host local-name set.
 			containerServers = append(containerServers, n)
+		case containers[n].Image != "":
+			// Image container: an op-run-wrapped `docker run` — behaves like a local
+			// stdio server (host-registered, op-refs-backed), just a different cmd.
+			localServers = append(localServers, n)
 		case !localKnown:
 			// FAIL CLOSED: the local-name list could NOT be established
 			// (pi-stack-host unresolved or `mcp --list` failed). We must NOT assume
