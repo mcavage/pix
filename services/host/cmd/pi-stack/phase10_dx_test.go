@@ -60,6 +60,43 @@ func TestStatusDoctorAgreeOnSbxAbsent(t *testing.T) {
 	}
 }
 
+// TestStatusDoctorAgreeOnOneKeyGitHubOptional is finding #4: given the
+// identical env (one model-provider key set, github unset), bare `pi-stack`
+// (status) and `pi-stack doctor` must agree there is nothing outstanding --
+// neither the unused model-key alternatives nor the missing optional github
+// key may be reported as a gap by either command.
+func TestStatusDoctorAgreeOnOneKeyGitHubOptional(t *testing.T) {
+	cfg := &config.Config{}
+	f := fakeEnv{
+		present: map[string]bool{"sbx": true},
+		output: map[string]string{
+			"sbx secret ls": "anthropic\n",
+			"sbx mcp ls":    "",
+		},
+		ports: map[int]bool{11435: true},
+	}
+	env := f.env()
+
+	dr := runDoctor(cfg, env)
+	if dr.blocking() {
+		t.Error("doctor must not block with one model key present")
+	}
+	if len(dr.todos()) != 0 {
+		t.Errorf("doctor must report zero todos (one key present, github optional), got %v", dr.todos())
+	}
+
+	st := gatherStatus(cfg, "default", env)
+	if len(st.Todos) != 0 {
+		t.Errorf("status must report zero todos (one key present, github optional), got %v", st.Todos)
+	}
+
+	var out bytes.Buffer
+	renderStatus(cfg, "default", env, &out, false)
+	if strings.Contains(out.String(), "outstanding") {
+		t.Errorf("bare status must not report anything outstanding, got:\n%s", out.String())
+	}
+}
+
 // --- DX-3 ----------------------------------------------------------------
 
 // TestModelKeysAggregateTodo_BareCommand: the zero-of-three-keys TODO must be

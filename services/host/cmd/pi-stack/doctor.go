@@ -503,6 +503,11 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 // secretCheck reports whether a provider secret is set. When sbx couldn't be
 // probed its evidence is unverifiable, not failed, so req=core still never
 // blocks in that case (only a CONFIRMED absence does; see AC-05).
+//
+// finding #4: a req=Core secret missing is a verified failure (todo, ✗) --
+// but an OPTIONAL one (either flavor; e.g. github) missing is expected/not-yet
+// -opted-in, never a verified failure, so it must not add a repair TODO or
+// count as outstanding (mirrors modelProviderKeyCheck's per-key treatment).
 func secretCheck(label, key, sbxOut string, sbxOK, sbxPresent bool, req Requirement) check {
 	cmd := "sbx secret set -g " + key
 	if !sbxOK {
@@ -511,6 +516,10 @@ func secretCheck(label, key, sbxOut string, sbxOK, sbxPresent bool, req Requirem
 	}
 	if grepWord(sbxOut, key) {
 		return check{label: label, detail: "set", requirement: req, evidence: EvidenceHealthy}
+	}
+	if req != RequirementCore {
+		return check{label: label, detail: "not set (optional)",
+			requirement: req, evidence: EvidenceNotConfigured}
 	}
 	return check{label: label, detail: "not set", todo: cmd,
 		requirement: req, evidence: EvidenceFailed}
@@ -1173,20 +1182,29 @@ func resolveOpRefs(env shellEnv) string {
 }
 
 // gogHeadlessProbe runs the gateway-EQUIVALENT probe — list gog's tools the
-// exact way the sbx gateway spawns it: headless, in a bare env, through the
-// same `op run --env-file=config/op-refs.env` wrapper mcp-register uses — and
+// EXACT way the sbx gateway spawns it: the same hardened invocation +
+// `op run --no-masking --env-file=config/op-refs.env` wrapper mcp-register
+// actually registers (gogRegisteredArgv), never a lighter reconstruction — and
 // returns the STRUCTURED outcome (R1-07). This is the only check that proves
-// the real path; `gog auth doctor` in a logged-in shell passes and lies. It
-// degrades cleanly (probeError, never a crash) when gog/op/account are absent.
+// the real path; `gog auth doctor` in a logged-in shell passes and lies. op is
+// OPTIONAL (gog authenticates via OAuth; op-refs only supplies a headless
+// keyring password), so a missing op or empty opRefs falls back to a bare
+// (still hardened) probe, mirroring registerServers' opReady gate — op and
+// op-refs are only ever used together. Degrades cleanly (probeError, never a
+// crash) when gog/account are absent.
 func gogHeadlessProbe(env shellEnv, acct, opRefs string) probeResult {
-	if acct == "" || opRefs == "" {
-		return probeResult{status: probeError, detail: "could not run (account/op-refs unresolved)"}
+	if acct == "" {
+		return probeResult{status: probeError, detail: "could not run (account unresolved)"}
 	}
-	if _, err := env.lookPath("op"); err != nil {
-		return probeResult{status: probeError, detail: "could not run (op not found)"}
+	gogPath, err := env.lookPath("gog")
+	if err != nil {
+		return probeResult{status: probeError, detail: "could not run (gog not found)"}
 	}
-	return probeListTools(env, []string{"op", "run", "--env-file=" + opRefs, "--",
-		"gog", "--account", acct, "mcp"})
+	opPath, opErr := env.lookPath("op")
+	if opErr != nil || opRefs == "" {
+		opPath, opRefs = "", ""
+	}
+	return probeListTools(env, gogRegisteredArgv(gogPath, opPath, opRefs, acct))
 }
 
 // gogHeadlessOK is gogHeadlessProbe collapsed to a bool for callers that only
@@ -1345,10 +1363,12 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 			detail:      acct + "; `gog auth doctor --check` timed out; could not verify",
 			requirement: req, evidence: EvidenceUnverifiable})
 	case interErr != nil:
-		// Auth itself isn't set up — don't double-report the keyring below.
+		// Auth itself isn't set up — don't double-report the keyring below. Point
+		// at the guided command, never the raw legacy `gog auth add-client` +
+		// `auth login` recipe (finding #3).
 		g.checks = append(g.checks, check{label: "account",
 			detail:      acct + " not authorized",
-			todo:        "gog auth add-client <client.json> && gog --account " + acct + " auth login",
+			todo:        "pi-stack gog setup",
 			requirement: req, evidence: EvidenceFailed})
 	case opErr != nil:
 		// Interactive auth OK, but op is absent so we can't run the gateway-

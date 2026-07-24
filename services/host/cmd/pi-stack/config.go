@@ -185,7 +185,9 @@ const configKeysHelp = `keys:
   mcp <server>              add/remove an MCP server in the mcp list
   mcp_static <server>       pin a server EAGER: attach at create (--static-mcp)
   mcp_dynamic <server>      keep a server dynamic (agent pulls on demand); this is
-                            the DEFAULT for every server, and wins over mcp_static
+                            the DEFAULT for every configured server, and wins
+                            over mcp_static AND over a per-run --mcp flag
+                            (which is otherwise eager by default)
   services <name>           add/remove a host service in the services list
   knowledge_bundles <dir>   add/remove an OKF knowledge bundle dir (set also
                             enables the knowledge service)

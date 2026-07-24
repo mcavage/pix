@@ -312,6 +312,43 @@ func TestDoctor_R104_OneKeyIsEnough(t *testing.T) {
 	}
 }
 
+// TestDoctor_GitHubMissingNeverOutstanding is finding #4: with one model key
+// present and github NOT set, github's own check must read as an expected
+// absence (not-configured, no todo) -- it must never add a repair TODO or
+// make doctor report items outstanding.
+func TestDoctor_GitHubMissingNeverOutstanding(t *testing.T) {
+	f := fakeEnv{
+		present: map[string]bool{"sbx": true},
+		output: map[string]string{
+			"sbx secret ls": "anthropic\n", // one model key, no github
+			"sbx mcp ls":    "",
+		},
+		ports: map[int]bool{11435: true},
+	}
+	r := runDoctor(defaultCfg(), f.env())
+	gh := findCheck(r, "Providers", "github")
+	if gh == nil {
+		t.Fatalf("missing github check")
+	}
+	if gh.evidence != EvidenceNotConfigured || gh.todo != "" {
+		t.Errorf("github missing must be not-configured with no todo, got %+v", gh)
+	}
+	if gh.state() == stateTODO {
+		t.Errorf("github missing must not render ✗, got %+v", gh)
+	}
+	for _, tdo := range r.todos() {
+		if strings.Contains(tdo, "github") {
+			t.Errorf("github must never emit a repair TODO, got %v", r.todos())
+		}
+	}
+	if len(r.todos()) != 0 {
+		t.Errorf("one model key + github unset must leave zero outstanding todos, got %v", r.todos())
+	}
+	if r.blocking() {
+		t.Error("one model key present must never block, github missing or not")
+	}
+}
+
 // Zero of three model-provider keys is a verified core failure: doctor blocks
 // with exactly one aggregate repair TODO.
 func TestDoctor_R104_ZeroKeysBlock(t *testing.T) {
@@ -536,7 +573,7 @@ func TestDoctor_R111_SbxPresentProbeFailedWording(t *testing.T) {
 // machinery (env.probe), never a raw unbounded env.run.
 func TestDoctor_R114_GogAuthCheckBounded(t *testing.T) {
 	authKey := "gog --account " + gogAcct + " auth doctor --check"
-	headlessKey := "op run --env-file=" + gogOpRefs + " -- gog --account " + gogAcct + " mcp --list-tools"
+	headlessKey := gogFallbackHeadlessKey(gogAcct, gogOpRefs)
 	f := fakeEnv{
 		present: map[string]bool{"sbx": true, "gog": true, "op": true},
 		output: map[string]string{

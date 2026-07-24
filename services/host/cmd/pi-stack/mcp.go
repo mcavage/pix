@@ -208,38 +208,50 @@ func (m mcpRegistrar) serverCmd(name string) []string {
 	}
 }
 
-// addArgs builds the `sbx mcp add <name> …` argv for one server. When op-refs is
-// present (m.opRefs != "") the command is wrapped in
-// `op run --no-masking --env-file=<refs> -- <cmd…>` so creds resolve from
-// 1Password at gateway spawn time (needed for slack's token + gog's headless
-// keyring password). When op-refs is ABSENT every local server is registered
-// DIRECTLY as a bare command — 1Password is optional, so a no-creds server (a
-// future `pio`) still registers, and a creds server just runs without injected
-// creds until an op-refs.env is added (harmless: the op-run wrapper is a no-op
-// for a server that needs no creds).
-func (m mcpRegistrar) addArgs(name string) []string {
+// execArgv returns the EXACT, literal command line the sbx gateway will exec to
+// spawn server `name` — serverCmd's bare invocation, wrapped in
+// `op run --no-masking --env-file=<refs> -- <cmd…>` when m.opRefs is present so
+// creds resolve from 1Password at gateway spawn time (needed for slack's token +
+// gog's headless keyring password), or returned bare when m.opRefs is empty —
+// 1Password is optional, so a no-creds server (a future `pio`) still registers,
+// and a creds server just runs without injected creds until an op-refs.env is
+// added — never a hard failure.
+//
+// This is the single source of truth for "what will actually run": addArgs
+// below re-encodes it into sbx's --command/--args form, and gogRegisteredArgv
+// calls it directly so a probe of the real headless path can never drift from
+// what gets registered (finding #2).
+func (m mcpRegistrar) execArgv(name string) []string {
 	cmd := m.serverCmd(name)
 	if m.opRefs == "" {
-		// Bare registration: --command <cmd[0]> --args <cmd[1]> ...
-		args := []string{"mcp", "add", name, "--command", cmd[0]}
-		for _, c := range cmd[1:] {
-			args = append(args, "--args", c)
-		}
-		return args
+		return cmd
 	}
-	// op-run wrapper: --command <op> --args run … --args -- --args <cmd...>
-	args := []string{
-		"mcp", "add", name,
-		"--command", m.op,
-		"--args", "run",
-		"--args", "--no-masking",
-		"--args", "--env-file=" + m.opRefs,
-		"--args", "--",
-	}
-	for _, c := range cmd {
+	wrapped := []string{m.op, "run", "--no-masking", "--env-file=" + m.opRefs, "--"}
+	return append(wrapped, cmd...)
+}
+
+// addArgs builds the `sbx mcp add <name> …` argv for one server: execArgv's
+// literal command line, re-encoded as --command <argv[0]> --args <argv[1]> ...
+func (m mcpRegistrar) addArgs(name string) []string {
+	cmd := m.execArgv(name)
+	args := []string{"mcp", "add", name, "--command", cmd[0]}
+	for _, c := range cmd[1:] {
 		args = append(args, "--args", c)
 	}
 	return args
+}
+
+// gogRegisteredArgv returns the EXACT argv the sbx gateway will exec for gog,
+// given resolved binaries/refs/account — literally mcpRegistrar{...}.execArgv
+// ("gog") for the same inputs registerServers would use. gog_setup.go's
+// pre-commit headless verification and doctor's best-effort reconstruction
+// fallback (when sbx's own registration can't be read) both call THIS, so
+// neither can silently probe lighter flags/wrapper than what registration will
+// actually run (finding #2). Pass opBin/opRefs both "" for a bare (no
+// 1Password) probe — mirrors registerServers' opReady gate, where op and
+// op-refs are only ever used together.
+func gogRegisteredArgv(gogBin, opBin, opRefs, account string) []string {
+	return mcpRegistrar{gog: gogBin, account: account, op: opBin, opRefs: opRefs}.execArgv("gog")
 }
 
 // rawAddArgs builds a literal `sbx mcp add <name> --command <argv[0]> --args
@@ -473,6 +485,58 @@ func resolveStaticMCP(servers []string, cfg *config.Config) []string {
 		}
 		seen[n] = true
 		if static[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// resolveStaticMCPForRun is the entry point run.go/task.go actually call to
+// compute o.StaticMCP. It layers one more rule on top of resolveStaticMCP:
+//
+// configServers (cfg.MCP, the persistent config/pack list) keep the plain
+// default-dynamic/mcp_static semantics unchanged.
+//
+// explicit (o.MCP, a per-run `--mcp NAME` CLI flag) is a ONE-RUN, explicit
+// promise from the user to attach that server now, so unlike a config entry it
+// defaults to EAGER (--static-mcp) rather than dynamic -- the whole point of
+// typing `--mcp` on a launch is to have the tools in context for that session
+// without first editing mcp_static. The only thing that can override an
+// explicit --mcp back to lazy is the stronger, already-documented mcp_dynamic
+// knob (a persistent, deliberate "keep this one lazy" pin) -- mcp_static has no
+// say over an explicit flag since it would be redundant (the flag already means
+// eager) and mcp_dynamic already outranks mcp_static in resolveStaticMCP.
+//
+// Order-preserving and de-duplicated across configServers then explicit, same
+// as resolveStaticMCP.
+func resolveStaticMCPForRun(configServers, explicit []string, cfg *config.Config) []string {
+	dynamic := map[string]bool{}
+	for _, n := range cfg.MCPDynamic {
+		dynamic[n] = true
+	}
+	configStatic := map[string]bool{}
+	for _, n := range cfg.MCPStatic {
+		if !dynamic[n] { // mcp_dynamic wins over mcp_static, same as resolveStaticMCP
+			configStatic[n] = true
+		}
+	}
+	explicitSet := map[string]bool{}
+	for _, n := range explicit {
+		if n != "" {
+			explicitSet[n] = true
+		}
+	}
+
+	var out []string
+	seen := map[string]bool{}
+	all := append(append([]string(nil), configServers...), explicit...)
+	for _, n := range all {
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		eager := configStatic[n] || (explicitSet[n] && !dynamic[n])
+		if eager {
 			out = append(out, n)
 		}
 	}

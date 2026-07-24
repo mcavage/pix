@@ -94,6 +94,43 @@ func TestAddArgs_GogBare(t *testing.T) {
 	}
 }
 
+// TestGogRegisteredArgv_MatchesAddArgs is finding #2's exact-argv-equality
+// test: gogRegisteredArgv (the canonical builder gog_setup.go's headless
+// verification and doctor's fallback probe both call) must produce the
+// IDENTICAL command line that mcpRegistrar.addArgs("gog") will register with
+// sbx -- not merely an equivalent one. We derive the expected argv from
+// addArgs' own --command/--args encoding (the real registration path) rather
+// than hand-typing a second copy, so the two can never independently drift.
+func TestGogRegisteredArgv_MatchesAddArgs(t *testing.T) {
+	reg := gogRegistrar()
+	want := reg.execArgv("gog")
+	got := gogRegisteredArgv(reg.gog, reg.op, reg.opRefs, reg.account)
+	if !equalSlice(got, want) {
+		t.Fatalf("gogRegisteredArgv = %v, want exactly reg.execArgv(gog) = %v", got, want)
+	}
+	// Must actually carry the hardened flags + op wrapper, not just agree with
+	// itself.
+	for _, tok := range []string{"--no-masking", "--gmail-no-send", "--wrap-untrusted", "--readonly", "read"} {
+		found := false
+		for _, g := range got {
+			if g == tok {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("gogRegisteredArgv missing hardened token %q in %v", tok, got)
+		}
+	}
+
+	// Bare (no op-refs): still hardened, still exactly execArgv's bare form.
+	wantBare := mcpRegistrar{gog: reg.gog, account: reg.account}.execArgv("gog")
+	gotBare := gogRegisteredArgv(reg.gog, "", "", reg.account)
+	if !equalSlice(gotBare, wantBare) {
+		t.Errorf("bare gogRegisteredArgv = %v, want %v", gotBare, wantBare)
+	}
+}
+
 // TestRegisterServers_GogNoOpRefsBare: gateway on, op + op-refs ABSENT, gog
 // present + account set -> gog registers DIRECTLY (bare command, no op wrapper)
 // with the OAuth note. gog uses OAuth (gog auth login), never op-refs, so the

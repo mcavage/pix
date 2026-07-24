@@ -142,12 +142,23 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 			}
 		}
 	}
-	for _, key := range []string{"anthropic", "openai", "google", "github"} {
+	// finding #4: the runtime needs ANY ONE of the three model-provider keys
+	// (anthropic/openai/google) -- mirrors doctor's modelProviderAggregateCheck.
+	// An individually-missing key is never itself outstanding once at least one
+	// alternative is present; only ALL THREE missing is a genuine gap, worth
+	// exactly one aggregate todo (never one per missing key). GitHub is always
+	// optional and must never add a todo, mirroring doctor's secretCheck.
+	modelKeysPresent := 0
+	for _, key := range []string{"anthropic", "openai", "google"} {
 		set := sbxOK && grepWord(sbxOut, key)
 		st.Providers[key] = set
-		if sbxOK && !set {
-			st.Todos = append(st.Todos, "sbx secret set -g "+key)
+		if set {
+			modelKeysPresent++
 		}
+	}
+	st.Providers["github"] = sbxOK && grepWord(sbxOut, "github")
+	if sbxOK && modelKeysPresent == 0 {
+		st.Todos = append(st.Todos, "sbx secret set -g anthropic")
 	}
 	// When sbx could NOT verify keys every provider renders ✗ but no per-key TODO
 	// is added — so without an outstanding item the verdict would be falsely "all
@@ -216,7 +227,7 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 		// An account set but not authed is an outstanding item: setting an email is
 		// not completed OAuth, so the verdict must not read "all systems go".
 		if !st.GogAuthed {
-			st.Todos = append(st.Todos, "gog auth login")
+			st.Todos = append(st.Todos, "pi-stack gog setup")
 		}
 	}
 
@@ -288,7 +299,7 @@ func (st statusReport) render(out io.Writer) {
 	}
 
 	if st.GogAccount != "" {
-		label := "account set, needs auth (run gog auth login)"
+		label := "account set, needs auth (run pi-stack gog setup)"
 		if st.GogAuthed {
 			label = "authed"
 		}

@@ -20,14 +20,14 @@ import (
 // `sbx` here REMEMBERS the argv gogSetup registers via `sbx mcp add gog …`
 // and replays it for doctor's `sbx mcp get gog`, so doctor's HONEST path
 // (registeredGogCommand + probeRegisteredGog) probes the EXACT command setup
-// produced. The underlying `gog … mcp --list-tools` process is modeled by
-// ONE canned answer shared by both gogSetup's own lighter verification probe
-// (gogHeadlessOK: `op run --env-file=… -- gog --account … mcp --list-tools`)
-// and doctor's honest-path probe of the fuller, hardened, ACTUALLY-registered
-// command (`op run --no-masking --env-file=… -- gog --account … --gmail-no-send
-// --wrap-untrusted --readonly mcp --allow-tool read --list-tools`) — two
-// different exact command strings that must still describe the same real
-// account, so a real gog process would answer both the same way.
+// produced. Both gogSetup's own pre-commit verification (gogHeadlessProbe) and
+// doctor's honest-path probe of the registered command now route through the
+// SAME canonical builder (gogRegisteredArgv), so the underlying `gog … mcp
+// --list-tools` process is modeled by ONE canned answer keyed on the single
+// EXACT hardened, op-wrapped command line both sides must issue
+// byte-for-byte (`op run --no-masking --env-file=… -- gog --account …
+// --gmail-no-send --wrap-untrusted --readonly mcp --allow-tool read
+// --list-tools`) — not merely two strings describing the same account.
 
 // reconstructMCPAddCommand rebuilds the single command line `sbx mcp get`
 // would report for a `sbx mcp add <name> --command X --args a --args b …`
@@ -64,10 +64,15 @@ type gogPipelineFake struct {
 	cfgPathEnv string            // the fake $PI_STACK_CONFIG path (drives resolveOpRefs)
 	registered map[string]string // name -> the argv `sbx mcp get <name>` would show
 	// headlessEmpty makes every `… mcp … --list-tools` probe (both gogSetup's
-	// own lighter one and doctor's fuller honest-path one) return ZERO tools —
-	// the shared "underlying gog process" fact both commands observe.
+	// own pre-commit one and doctor's honest-path one) return ZERO tools — the
+	// shared "underlying gog process" fact both commands observe.
 	headlessEmpty bool
 	interCalls    [][]string
+	// headlessProbes records every headless-probe command line that actually
+	// matched the fixture (finding #2): both gogSetup's own verification and
+	// doctor's honest-path probe must land here, and they must be IDENTICAL
+	// strings, proving the two sides build the exact same argv.
+	headlessProbes []string
 }
 
 func (g *gogPipelineFake) env() shellEnv {
@@ -106,14 +111,13 @@ func (g *gogPipelineFake) env() shellEnv {
 				return gogAuthSetupHelpReadonly, nil
 			case name == "gog" && joined == "--account "+g.acct+" auth doctor --check":
 				return "ok", nil
-			// Both gogSetup's own light headless verification (name="op", a bare
-			// lookPath-free call) AND doctor's honest-path probe of the fuller
-			// registered command (name="/usr/bin/op", the looked-up absolute path
-			// baked into the registered argv) end in "--list-tools" and carry the
-			// same account — model ONE real gog process answering both.
-			case filepath.Base(name) == "op" && strings.HasPrefix(joined, "run ") &&
-				strings.Contains(joined, "--account "+g.acct+" ") &&
-				strings.HasSuffix(joined, "--list-tools"):
+			// gogSetup's own pre-commit verification AND doctor's honest-path probe
+			// of the registered command now both build the EXACT SAME argv via
+			// gogRegisteredArgv, so this fixture only answers that one literal
+			// command line (recorded for both calls in g.headlessProbes below) —
+			// an exact-equality check, not a loose prefix/contains match.
+			case joined == strings.Join(gogRegisteredArgv("/usr/bin/gog", "/usr/bin/op", g.opRefs, g.acct)[1:], " ")+" --list-tools" && name == "/usr/bin/op":
+				g.headlessProbes = append(g.headlessProbes, name+" "+joined)
 				if g.headlessEmpty {
 					return "", nil
 				}
@@ -181,6 +185,12 @@ func TestGogSetupDoctorAgreement(t *testing.T) {
 	if _, ok := g.registered["gog"]; !ok {
 		t.Fatalf("expected gogSetup to register gog with the fake sbx")
 	}
+	// gogSetup's OWN pre-commit verification must have issued exactly the one
+	// canonical headless probe (finding #2's exact-argv-equality proof).
+	if len(g.headlessProbes) != 1 {
+		t.Fatalf("expected exactly 1 headless probe from gogSetup's verification, got %d: %v", len(g.headlessProbes), g.headlessProbes)
+	}
+	setupProbe := g.headlessProbes[0]
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -198,6 +208,16 @@ func TestGogSetupDoctorAgreement(t *testing.T) {
 	}
 	if !strings.Contains(headless.detail, "exposes tools") {
 		t.Errorf("expected doctor's honest-path healthy detail, got %q", headless.detail)
+	}
+	// Finding #2's core proof: doctor's honest-path probe of the registration it
+	// just read back must be the EXACT same command line gogSetup itself probed
+	// before ever registering — byte-for-byte, not "describes the same account".
+	if len(g.headlessProbes) != 2 {
+		t.Fatalf("expected doctor to add exactly 1 more headless probe (2 total), got %d: %v", len(g.headlessProbes), g.headlessProbes)
+	}
+	doctorProbe := g.headlessProbes[1]
+	if setupProbe != doctorProbe {
+		t.Errorf("gogSetup's pre-commit probe and doctor's honest-path probe must be byte-identical:\n  setup:  %q\n  doctor: %q", setupProbe, doctorProbe)
 	}
 	// Both agree on Evidence == healthy. Their WORDING is intentionally
 	// different (gogSetup: "headless tools OK …", addressed at the person who

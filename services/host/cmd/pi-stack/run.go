@@ -174,12 +174,15 @@ func runRun(argv []string) {
 		}
 	}
 
-	// Resolve which configured MCP servers attach EAGERLY at create (--static-mcp).
-	// Default is dynamic for every server (the in-VM agent discovers them via
-	// mcp-find on demand); only mcp_static pins one eager. Only needed on a
-	// create — a re-attach never sends --static-mcp.
+	// Resolve which MCP servers attach EAGERLY at create (--static-mcp). Default
+	// is dynamic for every CONFIG-listed server (the in-VM agent discovers them
+	// via mcp-find on demand); only mcp_static pins one eager. An EXPLICIT
+	// per-run `--mcp` flag (o.MCP) is different: it's a one-run promise to attach
+	// now, so it defaults to eager unless mcp_dynamic overrides it — see
+	// resolveStaticMCPForRun. Only needed on a create — a re-attach never sends
+	// --static-mcp.
 	if willCreate(state, o.Replace) {
-		o.StaticMCP = resolveStaticMCP(append(append([]string(nil), cfg.MCP...), o.MCP...), cfg)
+		o.StaticMCP = resolveStaticMCPForRun(cfg.MCP, o.MCP, cfg)
 	}
 
 	plan := planSandboxLaunch(state, o.Replace, cfg, o, version)

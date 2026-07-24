@@ -267,6 +267,73 @@ func TestResolveStaticMCP(t *testing.T) {
 	}
 }
 
+// resolveStaticMCPForRun is what run.go/task.go actually call: config-listed
+// servers (cfg.MCP) keep the default-dynamic/mcp_static semantics of
+// resolveStaticMCP, but an EXPLICIT per-run `--mcp` flag is a one-run promise
+// to attach eagerly, so it must be emitted as --static-mcp on create unless
+// the user pins it dynamic via the stronger, documented mcp_dynamic override.
+func TestResolveStaticMCPForRun(t *testing.T) {
+	// Explicit --mcp with no config at all: still eager (this is finding #1 --
+	// the bug was these got silently filtered to dynamic).
+	got := resolveStaticMCPForRun(nil, []string{"linear"}, &config.Config{})
+	if len(got) != 1 || got[0] != "linear" {
+		t.Fatalf("explicit --mcp must be eager by default, got %v", got)
+	}
+
+	// mcp_dynamic is the documented stronger override: it still wins even over
+	// an explicit --mcp for the same server.
+	cfgDynamic := &config.Config{MCPDynamic: []string{"linear"}}
+	got = resolveStaticMCPForRun(nil, []string{"linear"}, cfgDynamic)
+	if len(got) != 0 {
+		t.Errorf("mcp_dynamic must override an explicit --mcp, got %v", got)
+	}
+
+	// Config-listed servers (cfg.MCP, not explicit --mcp) keep the plain
+	// default-dynamic behavior: unlisted in mcp_static -> stays dynamic.
+	got = resolveStaticMCPForRun([]string{"notion"}, nil, &config.Config{})
+	if len(got) != 0 {
+		t.Errorf("cfg.MCP alone must stay dynamic by default, got %v", got)
+	}
+
+	// A server that is BOTH config-listed and mcp_static stays eager (unchanged
+	// resolveStaticMCP behavior), alongside an explicit --mcp for another server,
+	// preserving order and de-duplication.
+	cfgMixed := &config.Config{MCPStatic: []string{"notion"}}
+	got = resolveStaticMCPForRun([]string{"notion", "gog"}, []string{"linear", "gog"}, cfgMixed)
+	if !equalSlice(got, []string{"notion", "gog", "linear"}) {
+		t.Errorf("resolveStaticMCPForRun = %v, want [notion gog linear]", got)
+	}
+}
+
+// TestBuildSbxArgs_ExplicitMCPFlagIsStatic is the parse-to-argv integration
+// test the review asked for: an explicit `pi-stack run --mcp M` on a DEFAULT
+// config must reach sbx as --static-mcp, not be silently dropped to dynamic.
+func TestBuildSbxArgs_ExplicitMCPFlagIsStatic(t *testing.T) {
+	cfg := &config.Config{} // default config: no mcp_static/mcp_dynamic at all
+	o, err := parseRunArgs([]string{"--mcp", "linear"})
+	if err != nil {
+		t.Fatalf("parseRunArgs: %v", err)
+	}
+	o.StaticMCP = resolveStaticMCPForRun(cfg.MCP, o.MCP, cfg)
+	args := buildSbxArgs(cfg, o, "0.0.99")
+	if !contains(args, []string{"--static-mcp", "linear"}) {
+		t.Errorf("explicit --mcp linear must be emitted as --static-mcp on default config, got %v", args)
+	}
+
+	// Same explicit flag, but the user pinned it mcp_dynamic (the stronger,
+	// documented override) -- now it must NOT be static.
+	cfgDynamic := &config.Config{MCPDynamic: []string{"linear"}}
+	o2, err := parseRunArgs([]string{"--mcp", "linear"})
+	if err != nil {
+		t.Fatalf("parseRunArgs: %v", err)
+	}
+	o2.StaticMCP = resolveStaticMCPForRun(cfgDynamic.MCP, o2.MCP, cfgDynamic)
+	args2 := buildSbxArgs(cfgDynamic, o2, "0.0.99")
+	if contains(args2, []string{"--static-mcp", "linear"}) {
+		t.Errorf("mcp_dynamic override must keep explicit --mcp lazy, got %v", args2)
+	}
+}
+
 // A pack integration with static=true folds into cfg.MCPStatic (eager); a user
 // mcp_dynamic still overrides it back to lazy.
 func TestPackStaticMcpNames_AndOverride(t *testing.T) {

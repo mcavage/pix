@@ -49,9 +49,11 @@ func TestGatherStatus(t *testing.T) {
 	if st.Providers["google"] || st.Providers["github"] {
 		t.Errorf("providers = %v, want google+github unset", st.Providers)
 	}
-	// google + github missing -> two todos.
-	if len(st.Todos) != 2 {
-		t.Errorf("todos = %v, want 2 (google, github)", st.Todos)
+	// finding #4: with two of three model-provider keys already present,
+	// google is merely an unused alternative, not an outstanding gap -- and
+	// GitHub is always optional. Neither may add a todo.
+	if len(st.Todos) != 0 {
+		t.Errorf("todos = %v, want 0 (one-of-three keys already satisfied; github is optional)", st.Todos)
 	}
 	// Only pi-stack-* sandboxes, "other-box" filtered out.
 	if len(st.Sandboxes) != 2 {
@@ -64,8 +66,74 @@ func TestGatherStatus(t *testing.T) {
 	}
 }
 
+// TestGatherStatus_OneKeyNoOutstandingAlternatives is finding #4: with any
+// ONE of anthropic/openai/google set, the missing alternatives must not add a
+// todo, and GitHub (always optional) must never add one either -- status must
+// agree with doctor's modelProviderAggregateCheck/secretCheck semantics.
+func TestGatherStatus_OneKeyNoOutstandingAlternatives(t *testing.T) {
+	cfg := &config.Config{}
+	env := shellEnv{
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+				return "anthropic\n", nil // exactly ONE of three model keys
+			}
+			return "", nil
+		},
+		dial:     func(int) bool { return false },
+		statFile: func(string) bool { return false },
+	}
+	st := gatherStatus(cfg, "default", env)
+	if !st.Providers["anthropic"] {
+		t.Fatalf("expected anthropic set, providers=%v", st.Providers)
+	}
+	if st.Providers["openai"] || st.Providers["google"] || st.Providers["github"] {
+		t.Errorf("expected openai/google/github unset, providers=%v", st.Providers)
+	}
+	if len(st.Todos) != 0 {
+		t.Errorf("one model-provider key must leave zero outstanding todos, got %v", st.Todos)
+	}
+}
+
+// TestGatherStatus_ZeroKeysStillOutstanding: the flip side -- with NONE of the
+// three model-provider keys set, status must still surface a genuine,
+// required TODO (this is not a blanket suppression, only the one-key and
+// github-optional cases are exempted).
+func TestGatherStatus_ZeroKeysStillOutstanding(t *testing.T) {
+	cfg := &config.Config{}
+	env := shellEnv{
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+				return "github\n", nil // github set, but zero of the three model keys
+			}
+			return "", nil
+		},
+		dial:     func(int) bool { return false },
+		statFile: func(string) bool { return false },
+	}
+	st := gatherStatus(cfg, "default", env)
+	found := false
+	for _, tdo := range st.Todos {
+		if tdo == "sbx secret set -g anthropic" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a genuine model-provider-key todo when zero of three are set, got %v", st.Todos)
+	}
+	var out bytes.Buffer
+	renderStatus(cfg, "default", env, &out, false)
+	if strings.Contains(out.String(), "all systems go") {
+		t.Errorf("verdict must not be green with zero model-provider keys, got:\n%s", out.String())
+	}
+}
+
 func TestRenderStatusHuman(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog"}, KnowledgeBundles: []string{"/kb"}}
+	// slack is configured but not in fakeStatusEnv's `sbx mcp ls` output ("gog\nnotion"),
+	// which is a genuine outstanding item independent of provider-key semantics --
+	// keeps this test decoupled from finding #4's one-key/github-optional fix.
+	cfg := &config.Config{MCP: []string{"gog", "slack"}, KnowledgeBundles: []string{"/kb"}}
 	var out bytes.Buffer
 	renderStatus(cfg, "default", fakeStatusEnv(), &out, false)
 	s := out.String()
@@ -250,9 +318,10 @@ func TestStatusSbxAbsentNotAllGreen(t *testing.T) {
 }
 
 // TestStatusGogNeedsAuthTodoNotAllGreen: a configured gog account that is NOT
-// authenticated is an outstanding item — status appends a `gog auth login` TODO
-// and the verdict must not be falsely "all systems go", even when every provider
-// key is set.
+// authenticated is an outstanding item — status appends a `pi-stack gog setup`
+// TODO (the guided recovery path, finding #3 -- never the legacy `gog auth
+// login` recipe) and the verdict must not be falsely "all systems go", even
+// when every provider key is set.
 func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
 	cfg := &config.Config{GogAccount: "me@x.com"}
 	env := shellEnv{
@@ -272,12 +341,15 @@ func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
 	st := gatherStatus(cfg, "default", env)
 	var gogTodo bool
 	for _, tdo := range st.Todos {
-		if tdo == "gog auth login" {
+		if tdo == "pi-stack gog setup" {
 			gogTodo = true
+		}
+		if strings.Contains(tdo, "gog auth login") || strings.Contains(tdo, "add-client") {
+			t.Errorf("must never recommend the legacy gog auth recipe, got TODO %q", tdo)
 		}
 	}
 	if !gogTodo {
-		t.Errorf("expected a `gog auth login` TODO for an unauthed account, got %v", st.Todos)
+		t.Errorf("expected a `pi-stack gog setup` TODO for an unauthed account, got %v", st.Todos)
 	}
 	var out bytes.Buffer
 	renderStatus(cfg, "default", env, &out, false)
@@ -326,7 +398,8 @@ func TestStatusSbxProbeFailedTodo(t *testing.T) {
 }
 
 // TestStatusGogNeedsAuth: with a gog account set but no usable auth, the human
-// render shows the "needs auth (run gog auth login)" integrations line.
+// render shows the "needs auth (run pi-stack gog setup)" integrations line --
+// the guided recovery path, never the legacy `gog auth login` recipe.
 func TestStatusGogNeedsAuth(t *testing.T) {
 	cfg := &config.Config{GogAccount: "me@x.com"}
 	env := shellEnv{
@@ -343,8 +416,11 @@ func TestStatusGogNeedsAuth(t *testing.T) {
 	var out bytes.Buffer
 	renderStatus(cfg, "default", env, &out, false)
 	s := out.String()
-	if !strings.Contains(s, "gog") || !strings.Contains(s, "needs auth (run gog auth login)") {
+	if !strings.Contains(s, "gog") || !strings.Contains(s, "needs auth (run pi-stack gog setup)") {
 		t.Errorf("expected gog needs-auth integrations line, got:\n%s", s)
+	}
+	if strings.Contains(s, "gog auth login") || strings.Contains(s, "add-client") {
+		t.Errorf("must never surface the legacy gog auth recipe, got:\n%s", s)
 	}
 }
 

@@ -95,6 +95,16 @@ func opWrappedGog(refs, acct string) string {
 	return "op run --env-file=" + refs + " -- " + bareGog(acct)
 }
 
+// gogFallbackHeadlessKey is the exact probe key gogHeadlessProbe issues (used
+// both by doctor's best-effort fallback, when sbx's own registration can't be
+// read, and gog setup's own pre-commit verification, finding #2): the same
+// hardened invocation + `op run --no-masking --env-file=<refs>` wrapper
+// mcpRegistrar/gogRegisteredArgv actually register, resolved to the canonical
+// "/usr/bin/<name>" paths fakeEnv's lookPath answers, plus "--list-tools".
+func gogFallbackHeadlessKey(acct, opRefs string) string {
+	return strings.Join(gogRegisteredArgv("/usr/bin/gog", "/usr/bin/op", opRefs, acct), " ") + " --list-tools"
+}
+
 // gogGreen adds the fixtures that make the whole gog group green: gog + op on
 // PATH, GOG_ACCOUNT set, interactive auth passing, the headless op-run probe
 // returning a non-empty tool list, and gog registered with the gateway.
@@ -111,7 +121,7 @@ func gogGreen(f fakeEnv) fakeEnv {
 	f.envVars["PI_STACK_CONFIG"] = gogCfgFile // makes resolveOpRefs -> gogOpRefs
 	f.statFile[gogOpRefs] = true
 	f.output["gog --account "+gogAcct+" auth doctor --check"] = "ok"
-	f.output["op run --env-file="+gogOpRefs+" -- gog --account "+gogAcct+" mcp --list-tools"] =
+	f.output[gogFallbackHeadlessKey(gogAcct, gogOpRefs)] =
 		"gmail_search\ncalendar_events\ndocs_get\n"
 	return f
 }
@@ -295,7 +305,7 @@ func TestDoctor_GogHeadlessTrap(t *testing.T) {
 			"sbx mcp ls":    "gog\n",
 			"gog --account " + gogAcct + " auth doctor --check": "ok",
 			// headless probe returns an empty tool list -> the trap.
-			"op run --env-file=" + gogOpRefs + " -- gog --account " + gogAcct + " mcp --list-tools": "",
+			gogFallbackHeadlessKey(gogAcct, gogOpRefs): "",
 		},
 		envVars:  map[string]string{"GOG_ACCOUNT": gogAcct, "PI_STACK_CONFIG": gogCfgFile},
 		statFile: map[string]bool{gogOpRefs: true},
@@ -323,6 +333,51 @@ func TestDoctor_GogHeadlessTrap(t *testing.T) {
 	}
 	if !headTODO {
 		t.Errorf("expected the headless-keyring TODO naming config/op-refs.env, group=%+v", gog)
+	}
+}
+
+// TestDoctor_GogNotAuthorizedRecoveryIsGuided is finding #3: when interactive
+// auth (`gog auth doctor --check`) fails outright (account not authorized at
+// all, as opposed to the headless-only trap above), the fallback TODO must
+// point at the guided `pi-stack gog setup`, never the legacy raw
+// `gog auth add-client ... && gog ... auth login` recipe.
+func TestDoctor_GogNotAuthorizedRecoveryIsGuided(t *testing.T) {
+	f := fakeEnv{
+		present: map[string]bool{"sbx": true, "gog": true, "op": true},
+		output: map[string]string{
+			"sbx secret ls": "anthropic openai google github",
+			"sbx mcp ls":    "gog\n",
+			// interactive auth check FAILS (not authorized), unlike gogGreen's
+			// default "ok" -- deliberately no fixture for it, so fakeEnv.run's
+			// "no fake output" fallback returns an error, driving the interErr!=nil
+			// branch.
+		},
+		envVars:  map[string]string{"GOG_ACCOUNT": gogAcct, "PI_STACK_CONFIG": gogCfgFile},
+		statFile: map[string]bool{gogOpRefs: true},
+		ports:    map[int]bool{11435: true},
+	}
+	f.present["gog"] = true
+	f.present["op"] = true
+	r := runDoctor(defaultCfg(), f.env())
+	var acct check
+	for _, g := range r.groups {
+		if !strings.HasPrefix(g.title, "gog") {
+			continue
+		}
+		for _, c := range g.checks {
+			if c.label == "account" {
+				acct = c
+			}
+		}
+	}
+	if acct.state() != stateTODO {
+		t.Fatalf("expected a not-authorized TODO, got %+v", acct)
+	}
+	if acct.todo != "pi-stack gog setup" {
+		t.Errorf("expected the guided pi-stack gog setup TODO, got %q", acct.todo)
+	}
+	if strings.Contains(acct.todo, "add-client") || strings.Contains(acct.todo, "auth login") {
+		t.Errorf("must never recommend the legacy gog auth add-client/login recipe, got %q", acct.todo)
 	}
 }
 

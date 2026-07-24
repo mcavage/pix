@@ -195,6 +195,15 @@ func gogBareHeadlessFixture(acct string) map[string]string {
 	return map[string]string{gogBareHeadlessKey(acct): "gmail_search\ncalendar_events\n"}
 }
 
+// gogWrappedHeadlessKey is the exact op-wrapped, hardened headless probe key
+// (op + opRefs both present): the same `op run --no-masking --env-file=<refs>`
+// wrapper + hardened gog invocation mcpRegistrar/gogRegisteredArgv actually
+// register, plus "--list-tools" (finding #2 -- gogSetup's own verification
+// must probe this EXACT command, never a lighter reconstruction).
+func gogWrappedHeadlessKey(acct, opRefs string) string {
+	return strings.Join(gogRegisteredArgv("/usr/bin/gog", "/usr/bin/op", opRefs, acct), " ") + " --list-tools"
+}
+
 func (g gogTestEnv) env() shellEnv {
 	calls := g.interCalls
 	if calls == nil {
@@ -491,9 +500,10 @@ func TestGogSetup_ZeroHeadlessToolsFailsWithGuidance(t *testing.T) {
 		output: mergeOutputs(gogAuthCapabilityFixtures("setup", true), map[string]string{
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",
-			// headless probe (op run --env-file=... -- gog ... mcp --list-tools)
-			// returns EMPTY output => zero tools.
-			"op run --env-file=" + refs + " -- gog --account you@example.com mcp --list-tools": "",
+			// headless probe: the EXACT hardened, op-wrapped command registration
+			// will use (gogWrappedHeadlessKey/gogRegisteredArgv) returns EMPTY
+			// output => zero tools.
+			gogWrappedHeadlessKey("you@example.com", refs): "",
 		}),
 		statFile: map[string]bool{cred: true, refs: true},
 	}

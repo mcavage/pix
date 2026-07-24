@@ -415,8 +415,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	if env.lookPath == nil {
 		return fmt.Errorf("internal: shellEnv.lookPath not wired")
 	}
-	gogPath, err := env.lookPath("gog")
-	if err != nil {
+	if _, err := env.lookPath("gog"); err != nil {
 		fmt.Fprintln(out, "gog CLI not found.")
 		fmt.Fprintln(out, "  install it:  brew install gog   (or see https://gogcli.sh/install.html)")
 		return fmt.Errorf("gog is not installed")
@@ -530,24 +529,23 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	}
 	fmt.Fprintf(out, "interactive auth OK for %s\n", account)
 
-	// Verify headless tools the SAME host-side path doctor uses. This is the
-	// documented gws-style trap: interactive auth in a logged-in shell proves
-	// nothing about the bare env the sbx gateway spawns gog in.
+	// Verify headless tools the SAME host-side path doctor uses — and the SAME
+	// exact argv/flags/op-wrapper that registration is about to register
+	// (gogHeadlessProbe -> gogRegisteredArgv is the ONE canonical builder, finding
+	// #2: this can never silently probe a lighter command than what gets
+	// registered below). This is the documented gws-style trap: interactive auth
+	// in a logged-in shell proves nothing about the bare env the sbx gateway
+	// spawns gog in.
 	//
 	// R1-06: when op/op-refs are unavailable this MUST NOT skip verification —
-	// it probes the bare gog headless command directly instead (the exact
-	// hardened invocation mcp.go registers, minus the op wrapper), bounded by
-	// the same probeListTools machinery. "macOS system keychain" is not an
-	// excuse to skip the test: a clean zero-tools result still fails, and an
-	// exec/timeout result is unverifiable and must never be reported as success.
+	// gogHeadlessProbe falls back to the bare hardened invocation (minus the op
+	// wrapper), bounded by the same probeListTools machinery. "macOS system
+	// keychain" is not an excuse to skip the test: a clean zero-tools result
+	// still fails, and an exec/timeout result is unverifiable and must never be
+	// reported as success. Nothing here mutates config/registration yet — that
+	// only happens after `head` is confirmed healthy, below.
 	opRefs := resolveOpRefs(env)
-	_, opErr := env.lookPath("op")
-	var head probeResult
-	if opErr == nil && opRefs != "" {
-		head = gogHeadlessProbe(env, account, opRefs)
-	} else {
-		head = probeListTools(env, gogHardenedArgv(gogPath, account))
-	}
+	head := gogHeadlessProbe(env, account, opRefs)
 	switch head.status {
 	case probeToolsOK:
 		fmt.Fprintln(out, "headless tools OK (verified the same host-side path the sbx gateway/doctor use)")

@@ -166,6 +166,42 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   same bounded timeout + output-cap machinery `doctor` uses; only the
   interactive, browser-opening auth commands keep inherited stdio and stay
   user-cancellable.
+- **`pi-stack run --mcp M` now actually attaches eagerly (ship-gate review,
+  finding #1).** An explicit per-run `--mcp` flag used to be silently folded
+  into the same default-dynamic pool as a config-listed server, so on a
+  default config it was filtered OUT of `--static-mcp` and never reached the
+  sandbox as eager — the flag was a promise the launcher didn't keep. A
+  server named via `--mcp` now attaches eagerly (`--static-mcp`) unless the
+  user pins it lazy with the stronger, already-documented `mcp_dynamic`
+  override; a server merely listed in config (`mcp` in `config.toml`) keeps
+  the existing default-dynamic/`mcp_static` behavior, unchanged.
+- **`pi-stack gog setup`'s pre-commit headless verification now probes the
+  EXACT argv the sbx gateway will register (ship-gate review, finding #2).**
+  It used to probe a lighter reconstruction (missing `--no-masking`,
+  `--gmail-no-send`, `--wrap-untrusted`, `--readonly`, `--allow-tool read`)
+  when 1Password was available — a healthy verification against flags
+  registration never actually uses. Both `gog setup`'s verification and
+  `doctor`'s best-effort fallback probe now build their argv through the ONE
+  canonical registrar (`gogRegisteredArgv`), so a probe can never silently
+  drift from what actually gets registered.
+- **`doctor`/`status` failure paths point at `pi-stack gog setup`, never the
+  legacy `gog auth login`/`add-client` recipe (ship-gate review, finding
+  #3).** A not-authorized account used to carry a raw `gog auth add-client
+  <client.json> && gog --account <acct> auth login` repair command in
+  `doctor`, and bare `pi-stack status` told you to "run gog auth login" —
+  both bypass the guided, hardened, headless-verified setup flow. Both now
+  point at `pi-stack gog setup`.
+- **`status`/`doctor` no longer report a missing alternative model-provider
+  key or a missing GitHub key as outstanding (ship-gate review, finding
+  #4).** With any ONE of anthropic/openai/google set, the other two used to
+  each add their own `sbx secret set -g <key>` TODO — contradicting the
+  documented "any one of three is enough" policy and inflating the
+  outstanding-items count. GitHub's key was also always treated as a
+  verified failure when unset, even though it has always been
+  configured-optional. Both now agree: an individually-missing model key is
+  only ever a gap when ALL THREE are missing (a single aggregate TODO, as
+  before), and a missing GitHub key never adds a TODO or counts as
+  outstanding.
 
 ### Changed
 

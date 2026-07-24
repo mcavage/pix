@@ -281,7 +281,12 @@ flags:
   --kit K          override the kit (escape hatch): replaces the auto git/local
                    pin, so you can work around an unresolvable release tag
                    (repeatable; a path or git+URL)
-  --mcp M          attach an MCP server at creation (repeatable)
+  --mcp M          attach an MCP server at creation, EAGERLY (emitted as
+                   --static-mcp; repeatable). Unlike a server merely listed in
+                   config (mcp in config.toml), which defaults dynamic, an
+                   explicit --mcp is a one-run promise to have it in context now.
+                   Override: pi-stack config set mcp_dynamic <server> pins it
+                   lazy even when passed via --mcp.
   --pack P         active pack for this run (path or git-url); mounts its skills +
                    knowledge, overriding the configured active pack
   --name N         sandbox name
