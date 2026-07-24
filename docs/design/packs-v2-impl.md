@@ -280,7 +280,7 @@ it is Tier-0 for the pack (nothing pack-authored executes) even though a remote 
 **Schema:** `[[proxy]]` with `host` unset/false. `pack add proxy <name>` scaffolds `bin/<name>`
 (0755, a `#!/usr/bin/env bash` shim template) and appends the `[[proxy]]` entry.
 
-**Mechanism — reuse the overlay mixin-kit `files/` mount, made first-class.** A pack's `bin/` is
+**Mechanism — reuse the proven mixin-kit `files/` mount (from the retired overlay), made first-class.** A pack's `bin/` is
 not itself a kit, and mounting it as a bare workspace would not put it on PATH. So synthesize an
 **ephemeral mixin kit** at launch that drops the sandbox wrappers into the image's existing PATH
 dir:
@@ -293,7 +293,7 @@ dir:
   - returns the kit dir path.
 - `applyPackToLaunch` calls it (create-time only, gated by the existing `willCreate` guard in
   run.go) and appends the dir to `o.Kits`. `buildSbxArgs` already loops `o.Kits` into `--kit`
-  *before* `cfg.Kits.Stack`, so the pack kit stacks under the overlay, later-wins per packs.md §6.
+  *before* `cfg.Kits.Stack`, so the pack kit stacks under any configured `cfg.Kits.Stack`, later-wins per packs.md §6.
 
 `/usr/local/bin` is already on PATH in the DHI image and writable per AGENTS.md ("`/usr/local/bin`
 may not exist → `mkdir -p`" — the mixin `files/` tree handles creation). So the wrapper is on PATH
@@ -511,7 +511,7 @@ not touch PATH.
 (new in-VM moving part, PATH-injection timing risk). (b) Require the pack author to hand-write
 `kit/files/usr/local/bin/` (defeats `pack add proxy` first-class UX). (c) Synthesize a mixin kit at
 launch from `bin/`, copy into `files/usr/local/bin/`, `--kit` it.
-**Decision: (c).** Reuses the one proven mount path (overlay mixin kit → `/usr/local/bin`, already
+**Decision: (c).** Reuses the one proven mount path (mixin kit → `/usr/local/bin`, already
 on PATH), keeps `pack add proxy` to one file, no new in-VM code. Cost: a per-pack kit dir under the
 state dir, regenerated on change; create-only (recreate to attach) — consistent with MCP, honest
 about sbx's model. **Rejected (a)** for added in-VM surface; **(b)** for UX.

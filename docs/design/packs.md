@@ -1,8 +1,16 @@
 # Packs — design doc (FOR REVIEW)
 
-Status: DRAFT, owner decisions locked (§14). Not implemented. Produced with the
+Status: DRAFT, owner decisions locked (§14). Produced with the
 crew (architect, product-manager, dx-consultant, security-lead, devrel) + the
 `dx-impatient` reviewer. Goes hand in hand with `docs/design/onboarding-v2-spec.md`.
+
+> **Update:** packs shipped (v2 — see `docs/design/packs-v2*.md`), and the
+> build-time **overlay is now fully retired** — including the host-plugin half.
+> Host-executing integrations ship as **containers** (a pack `[[integrations]]`
+> `manifest`, run on the host by the sbx gateway) or as **host daemons**; **no
+> `pi-stack-host` recompile is ever needed.** Where this doc calls the overlay the
+> live "before" state or says the host-plugin half "stays distinct," read it as the
+> design-time record. See [../OVERLAY.md](../OVERLAY.md).
 
 Locked: name = `pack`; `profile` DELETED (active pack = context); single active
 pack (no multi-pack) in v1; packs are 100% runtime (no compile-in); v1 is

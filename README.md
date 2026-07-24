@@ -382,7 +382,7 @@ pi-stack mcp register
 
 See [docs/gog-setup.md](docs/gog-setup.md) for the full walkthrough.
 
-## Skills and Overlays
+## Skills and Packs
 
 The flow: `brainstorm`, `plan`, `build`, and `ship` are the steps. `deliver` is
 the operator that runs them to a finished result without you in the loop. It
@@ -468,4 +468,4 @@ Use the right iteration loop:
 
 If you are an agent working in this repo, read [AGENTS.md](AGENTS.md) before
 changing files. It covers the repo layout, build loop, extension conventions,
-overlay boundary, and the mistakes worth not repeating.
+the pack boundary, and the mistakes worth not repeating.

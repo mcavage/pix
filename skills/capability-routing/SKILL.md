@@ -88,7 +88,7 @@ Reserve it for real joins; a single lookup does not need it.
 `knowledge` is curated internal reference material (an OKF bundle, a wiki export, a
 policy corpus). In the public/default profile it resolves to `none`: the open-core
 stack ships no corpus, so it degrades to web research + local files and the agent
-flags the gap out loud. A private overlay wires it, either a `files` provider
+flags the gap out loud. A private pack wires it, either a `files` provider
 pointed at a git-mounted OKF bundle dir, or an `http` provider on the host
 knowledge service (`:11436`, JSON-RPC) that indexes that bundle. We ship the
 pointer, not the content, so nothing company-specific lands in the public tree.

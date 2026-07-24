@@ -77,8 +77,8 @@ done
 ```
 For each present CLI, run a cheap live probe and read the output: `gh --version`
 (`gh auth status` saying "not logged in" is expected, the proxy injects creds at
-the network layer, NOT a fail). `gh` is always baked. Any overlay-provided
-wrapper CLI (set `EXTRA_CLIS` from memory/overlay) is optional: absent is fine,
+the network layer, NOT a fail). `gh` is always baked. Any pack-provided
+wrapper CLI (set `EXTRA_CLIS` from memory or a pack) is optional: absent is fine,
 present-but-erroring on its cheapest read-only probe IS a failure. Wrapper CLIs
 often reject `--help`/`--version`, so probe a real read-only subcommand, not the
 flag.
@@ -117,7 +117,7 @@ no write/edit in its `tools:`, a builder (`engineer`) does, read the frontmatter
 A table per check: OK / FAIL / optional + a one-line note, covering keys, memory,
 MCP (per backend), CLIs (per CLI), roster, skills, routing. Verdict is ALL CLEAR
 only when keys, roster, skills, and every present MCP backend + CLI are healthy. A
-missing memory service, Gemini key, MCP server, or overlay CLI is optional; a
+missing memory service, Gemini key, MCP server, or pack CLI is optional; a
 present-but-erroring backend or CLI IS a failure. If you skipped a subsystem, say
 so; do not imply coverage you didn't run.
 

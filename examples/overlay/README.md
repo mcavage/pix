@@ -1,38 +1,20 @@
-# Example private overlay
+# RETIRED — the overlay example is gone
 
-A minimal, copyable scaffold for a pi-stack private overlay. See
-[`docs/OVERLAY.md`](../../docs/OVERLAY.md) for the full explanation.
+**The build-time "overlay" model has been removed.** It required compiling private
+Go into `pi-stack-host` (`make ... OVERLAY=..`) plus a stacked mixin kit — exactly
+the coupling packs were meant to kill. The old scaffold that lived here (a `kit/`
+tree + `host/overlay_example.go` + `overlay.mk`) demonstrated a mechanism that no
+longer exists, so it was deleted to stop misleading readers.
 
-An overlay is its own **peer repo** (a sibling of pi-stack), kept private. To make
-yours:
+Private company context is now a **pack** (git-backed, mounted at runtime, no
+build), and host-executing integrations ship as **containers** the sbx gateway
+runs (or, when host-only, a small host daemon). Nothing private is compiled into
+`pi-stack` anymore.
 
-```bash
-cp -r examples/overlay ../my-overlay      # a sibling dir, NOT inside pi-stack
-cd ../my-overlay && git init              # your own private repo
-# edit kit/spec.yaml, add skills under kit/files/.../skills/, fill in
-# kit/files/.../capabilities.json, and put host plugins in host/overlay_*.go
-```
+Start here:
 
-pi-stack looks for the overlay at `../pi-stack-work` by default. If yours lives
-elsewhere, pass `OVERLAY` to make (or export it in your shell):
+- [../../docs/OVERLAY.md](../../docs/OVERLAY.md) — the migration note (where each
+  old overlay piece went, and how to add a private integration now).
+- [../../docs/design/packs.md](../../docs/design/packs.md) — the pack design.
 
-```bash
-make run OVERLAY=../my-overlay
-```
-
-`make run` stacks `kit/` automatically; `make serve` symlinks `host/overlay_*.go`
-into pi-stack's `services/host/`.
-
-Layout:
-
-```
-my-overlay/
-  kit/                                              # sandbox half — mixin kit
-    spec.yaml                                       # kind: mixin
-    files/home/.pi/agent/
-      capabilities.json                             # full routing (overwrites public)
-      skills/example-data-skill/SKILL.md            # a private skill
-  host/
-    overlay_example.go                              # a host plugin (package main)
-  overlay.mk                                        # private make targets
-```
+To scaffold a pack: `pi-stack pack new`, then `pi-stack pack use <path>`.
