@@ -162,7 +162,7 @@ func runServe(enabled []string) {
 			}
 			bundles := knowledgeBundles(cfg)
 			if len(bundles) == 0 {
-				log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES) — serving an empty index")
+				log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES); serving an empty index")
 			} else if n, indexed, rerr := store.reindex(bundles); rerr != nil {
 				log.Printf("knowledge: reindex failed (serving whatever was already indexed): %v", rerr)
 			} else {
@@ -231,7 +231,7 @@ func runServe(enabled []string) {
 		}
 	}
 	if len(failures) > 0 {
-		fatalf("host service preflight FAILED — not starting:\n%s\nFix the above, then re-run `make serve`.", strings.Join(failures, "\n"))
+		fatalf("host service preflight FAILED; not starting:\n%s\nFix the above, then re-run `pi-stack serve`.", strings.Join(failures, "\n"))
 	}
 
 	// Record our pid so the launcher's `serve stop` / `serve status` can find and
@@ -406,11 +406,11 @@ func applyMemoryModelEnv(cfg *config.Config) {
 // out of runServe so it is unit-testable with an injected/stubbed store.
 func reindexKnowledgePlugin(store plugin.KnowledgeStore, bundles []string) {
 	if store == nil {
-		log.Print("knowledge: plugin unavailable at startup — skipping reindex (will index on demand)")
+		log.Print("knowledge: plugin unavailable at startup; skipping reindex (will index on demand)")
 		return
 	}
 	if len(bundles) == 0 {
-		log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES) — serving an empty index")
+		log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES); serving an empty index")
 		return
 	}
 	if res, err := store.Reindex(plugin.ReindexArgs{BundlePaths: bundles}); err != nil {

@@ -390,7 +390,7 @@ func systemdRestart(run cmdRunner) error {
 func resolvedHostBinary() (string, error) {
 	bin, err := findHostBinary()
 	if err != nil {
-		return "", fmt.Errorf("pi-stack-host not found — run `make install` first")
+		return "", fmt.Errorf("pi-stack-host not found next to pi-stack or on PATH; reinstall pi-stack")
 	}
 	if resolved, rerr := filepath.EvalSymlinks(bin); rerr == nil {
 		bin = resolved
@@ -410,15 +410,15 @@ func resolvedHostBinary() (string, error) {
 func preInstallGuard(mode func() serveMode, stop func(io.Writer) (bool, error), out io.Writer) error {
 	switch mode() {
 	case serveForeground:
-		return fmt.Errorf("a foreground `pi-stack serve` is running — stop it (Ctrl-C in its terminal, or `pi-stack serve stop`) and re-run `pi-stack serve install`")
+		return fmt.Errorf("a foreground `pi-stack serve` is running; stop it (Ctrl-C in its terminal, or `pi-stack serve stop`) and re-run `pi-stack serve install`")
 	case serveLazy:
 		fmt.Fprintln(out, "stopping the background (lazy-started) pi-stack services before installing the managed service…")
 		stopped, err := stop(out)
 		if err != nil {
-			return fmt.Errorf("could not stop the background pi-stack services: %v — stop them (`pi-stack serve stop`) and re-run", err)
+			return fmt.Errorf("could not stop the background pi-stack services: %v; stop them (`pi-stack serve stop`) and re-run", err)
 		}
 		if !stopped {
-			return fmt.Errorf("the background pi-stack services were not stopped — stop them (`pi-stack serve stop`) and re-run `pi-stack serve install`")
+			return fmt.Errorf("the background pi-stack services were not stopped; stop them (`pi-stack serve stop`) and re-run `pi-stack serve install`")
 		}
 	}
 	return nil
@@ -438,7 +438,7 @@ const managedHealthTimeout = 10 * time.Second
 // claiming health we never checked. Returns whether health was verified.
 func verifyManagedInstallHealth(cfg *config.Config, cfgErr error, st serveStarter, out io.Writer) bool {
 	if cfgErr != nil {
-		fmt.Fprintf(out, "warning: installed managed service, but could not verify it started: config.toml failed to load (%v). It will not start until this is fixed — edit config.toml, then check with `pi-stack serve status`.\n", cfgErr)
+		fmt.Fprintf(out, "warning: installed managed service, but could not verify it started: config.toml failed to load (%v). It will not start until this is fixed. Edit config.toml, then check with `pi-stack serve status`.\n", cfgErr)
 		return false
 	}
 	return reportManagedServeHealth(st.dial, requiredServePorts(st, cfg, nil),
@@ -468,7 +468,7 @@ func reportManagedServeHealth(dial func(int) bool, ports []servePortSpec,
 			return true
 		}
 		if !now().Before(deadline) {
-			fmt.Fprintf(out, "warning: the managed service was installed but its services (%s) did not answer within %s — it may be failing to start; check the logs above and `pi-stack serve status`.\n",
+			fmt.Fprintf(out, "warning: the managed service was installed but its services (%s) did not answer within %s. It may be failing to start; check the logs above and `pi-stack serve status`.\n",
 				describeServePorts(ports), timeout)
 			return false
 		}

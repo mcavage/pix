@@ -112,7 +112,7 @@ type Config struct {
 	OllamaBridgeModel  string `toml:"ollama_bridge_model,omitempty"`
 
 	// GogAccount is the Google Workspace account the gog host-MCP server serves.
-	// It is THE source of truth: doctor probes against it, and `make mcp-register`
+	// It is THE source of truth: doctor probes against it, and `pi-stack mcp register`
 	// sources it via `pi-stack config get gog_account` when registering with the
 	// gateway. doctor falls back to the GOG_ACCOUNT env var when this is empty.
 	GogAccount string `toml:"gog_account"`

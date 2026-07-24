@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -27,21 +28,23 @@ import (
 func TestGoStringLiteralsHaveNoEmDash(t *testing.T) {
 	root := repoRoot(t)
 	files := []string{
-		"main.go",
-		"help.go",
-		"doctor.go",
-		"status.go",
-		"gog_setup.go",
-		"setup.go",
-		"run.go",
-		"pack.go",
-		"memory.go",
-		"serve_start.go",
-		"reset.go",
+		"services/host/serve.go",
+		"services/host/cmd/pi-stack/main.go",
+		"services/host/cmd/pi-stack/help.go",
+		"services/host/cmd/pi-stack/doctor.go",
+		"services/host/cmd/pi-stack/status.go",
+		"services/host/cmd/pi-stack/gog_setup.go",
+		"services/host/cmd/pi-stack/setup.go",
+		"services/host/cmd/pi-stack/run.go",
+		"services/host/cmd/pi-stack/pack.go",
+		"services/host/cmd/pi-stack/memory.go",
+		"services/host/cmd/pi-stack/serve_start.go",
+		"services/host/cmd/pi-stack/serve_install.go",
+		"services/host/cmd/pi-stack/reset.go",
 	}
 
 	for _, name := range files {
-		path := filepath.Join(root, "services", "host", "cmd", "pi-stack", name)
+		path := filepath.Join(root, name)
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, path, nil, 0)
 		if err != nil {
@@ -66,6 +69,51 @@ func TestGoStringLiteralsHaveNoEmDash(t *testing.T) {
 			}
 			return true
 		})
+	}
+}
+
+// TestShippingGoStringsHaveNoRepoOnlyRecoveryCommands prevents installed
+// binaries from telling users to run Makefile targets that only exist in a
+// source checkout. Contributor comments and tests are intentionally excluded.
+func TestShippingGoStringsHaveNoRepoOnlyRecoveryCommands(t *testing.T) {
+	root := repoRoot(t)
+	hostRoot := filepath.Join(root, "services", "host")
+	stale := []string{"make serve", "make install", "make mcp-register"}
+
+	err := filepath.WalkDir(hostRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			val, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				val = lit.Value
+			}
+			for _, phrase := range stale {
+				if strings.Contains(val, phrase) {
+					pos := fset.Position(lit.Pos())
+					t.Errorf("%s:%d: shipping string contains repo-only recovery command %q",
+						filepath.ToSlash(strings.TrimPrefix(path, root+string(os.PathSeparator))), pos.Line, phrase)
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan shipping Go strings: %v", err)
 	}
 }
 
