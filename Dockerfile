@@ -12,7 +12,7 @@
 # nag (pi checks npm at runtime, so a new release always nags until you rebump).
 # When bumping, re-check the vendored tui patch still applies (build logs print
 # "[apply-tui-bottom-pin] patched" vs an "anchor not found" warning).
-ARG PI_PACKAGE=@earendil-works/pi-coding-agent@0.81.1
+ARG PI_PACKAGE=@earendil-works/pi-coding-agent@0.82.0
 
 # Hardened Node, maintained by Docker (DHI). Debian/glibc, so our entire apt
 # toolchain (clangd, chromium, gh, ruff, build-essential) keeps working — we just
@@ -220,9 +220,9 @@ USER agent
 # docs/design/subagents-extension.md. Do NOT restore the @tintinweb line.
 RUN set -eux; for p in \
       pi-plan@0.1.1 pi-mcp-adapter@2.11.0 \
-      pi-manage-todo-list@0.4.0 pi-simplify@0.2.2 pi-web-access@0.13.0 \
-      @juanibiapina/pi-extension-settings@0.8.0 \
-      pi-usage@0.2.1; do \
+      pi-manage-todo-list@0.4.0 pi-simplify@0.2.3 pi-web-access@0.13.0 \
+      @juanibiapina/pi-extension-settings@0.9.1 \
+      pi-usage@0.3.0; do \
       pi install "npm:$p"; \
     done; pi list
 

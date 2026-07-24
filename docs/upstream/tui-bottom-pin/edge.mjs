@@ -1,6 +1,9 @@
 // Edge-case / regression coverage for the bottom-pin patch.
-import { TUI, CURSOR_MARKER } from "/usr/local/share/npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.js";
+import { pathToFileURL } from "node:url";
 import { TerminalEmulator } from "./emulator.mjs";
+
+const tuiIndex = process.env.PI_TUI_INDEX ?? "/usr/local/share/npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.js";
+const { TUI, CURSOR_MARKER } = await import(pathToFileURL(tuiIndex).href);
 
 let failures = 0;
 const check = (cond, msg) => {
@@ -38,7 +41,8 @@ console.log("\n[1] multi-line shrink (drop 3)");
 	const b = rowsOf(emu);
 	check(b.editor === a.editor && b.powerbar === a.powerbar && b.footer === a.footer,
 		`bottom pinned across 3-line shrink (${JSON.stringify(a)} -> ${JSON.stringify(b)})`);
-	check(tui.fullRedraws === fr, "3-line shrink pinned WITHOUT a full screen clear (smooth)");
+	check(tui.fullRedraws === fr + 1, "3-line shrink rebuilt the terminal buffer once");
+	check(emu.lines.length === src.lines.length, "physical buffer has one row per logical row after shrink");
 	const curScreenRow = emu.cur - emu.screenTop();
 	check(curScreenRow === b.editor, `IME hardware cursor landed on editor row (screenRow=${curScreenRow}, editor=${b.editor})`);
 }

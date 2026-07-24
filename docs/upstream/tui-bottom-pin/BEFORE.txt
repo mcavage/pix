@@ -1,4 +1,4 @@
-########## ORIGINAL (unpatched) ##########
+########## ORIGINAL ##########
 ===== test.mjs =====
 === pi-tui bottom-block jitter test (ROWS=12) ===
 
@@ -12,6 +12,8 @@
   FAIL  EDITOR_ROW stayed put (before=9 after=8)
   FAIL  POWERBAR_ROW stayed put (before=10 after=9)
   FAIL  FOOTER_ROW stayed put (before=11 after=10)
+  FAIL  shrink rebuilt the terminal buffer once
+  PASS  new viewport-top line has one physical copy (no duplicate left in scrollback)
 
 [Frame C] chat grows back by 1
   bottom block rows: { editor: 9, powerbar: 10, footer: 11 } | fullRedraws delta= 0
@@ -24,15 +26,16 @@
   PASS  steady state did not trigger a full clear
 
 ========================================
-RESULT: FAIL — 3 assertion(s) failed (bug present)
+RESULT: FAIL — 4 assertion(s) failed (bug present)
 [exit 1]
 
 ===== edge.mjs =====
 
 [1] multi-line shrink (drop 3)
-  PASS  bottom pinned across 3-line shrink ({"editor":9,"powerbar":10,"footer":11} -> {"editor":9,"powerbar":10,"footer":11})
-  FAIL  3-line shrink pinned WITHOUT a full screen clear (smooth)
-  PASS  IME hardware cursor landed on editor row (screenRow=9, editor=9)
+  FAIL  bottom pinned across 3-line shrink ({"editor":9,"powerbar":10,"footer":11} -> {"editor":6,"powerbar":7,"footer":8})
+  FAIL  3-line shrink rebuilt the terminal buffer once
+  FAIL  physical buffer has one row per logical row after shrink
+  PASS  IME hardware cursor landed on editor row (screenRow=6, editor=6)
 
 [2] shrink + footer content changes
   FAIL  editor/powerbar pinned (e=8 p=9)
@@ -51,7 +54,7 @@ RESULT: FAIL — 3 assertion(s) failed (bug present)
   PASS  growth did not force a full clear
 
 ========================================
-EDGE RESULT: FAIL (3)
+EDGE RESULT: FAIL (5)
 [exit 1]
 
 ===== integrity.mjs =====
@@ -71,6 +74,7 @@ EDGE RESULT: FAIL (3)
     row 11: got="" exp="FOOTER_ROW"
   FAIL  every visible row equals expected bottom-anchored content (history pulled down, no blanks)
   FAIL  no spurious blank rows introduced
+  FAIL  physical buffer matches logical history exactly (no duplicate viewport-top row)
 
 [2] large collapse (shrink by 19) pins bottom, no blank fill
   PASS  bottom block visible after large collapse (a={"e":9,"p":10,"f":11} b={"e":6,"p":7,"f":8})
@@ -86,6 +90,6 @@ EDGE RESULT: FAIL (3)
   FAIL  no blank rows accumulated at top across sustained shrink
 
 ========================================
-INTEGRITY RESULT: FAIL (4)
+INTEGRITY RESULT: FAIL (5)
 [exit 1]
 

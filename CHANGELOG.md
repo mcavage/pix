@@ -25,6 +25,15 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- The sandbox and opt-in host mode now use pi `0.82.0`. Curated pi
+  extensions were re-pinned to the newest versions published by the 0.82.0
+  release, and CI now checks both vendored runtime patches against the exact pi
+  and todo-list package pins.
+- Fixed intermittent adjacent duplicate lines in terminal scrollback. The
+  bottom-pin patch had repainted a row copied from immutable scrollback, leaving
+  both physical copies behind. Bottom-anchored shrinks now rebuild the terminal
+  buffer under synchronized output, which also keeps the editor and footer from
+  jumping.
 - `pi-stack setup` no longer provisions or enables **host mode** (the unsandboxed
   escape hatch). It was noisy (it needs `pi` on PATH, which sandbox-only users
   don't have) and only relevant to some people. Host mode is now opt-in via a

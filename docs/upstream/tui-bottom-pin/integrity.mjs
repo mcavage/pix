@@ -1,8 +1,11 @@
 // Deep integrity checks: the re-anchor repaint must show EXACTLY the correct
 // bottom-anchored window (real history pulled down, no blanks, no corruption),
 // across large and sustained shrinks.
-import { TUI, CURSOR_MARKER } from "/usr/local/share/npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.js";
+import { pathToFileURL } from "node:url";
 import { TerminalEmulator } from "./emulator.mjs";
+
+const tuiIndex = process.env.PI_TUI_INDEX ?? "/usr/local/share/npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.js";
+const { TUI, CURSOR_MARKER } = await import(pathToFileURL(tuiIndex).href);
 
 let failures = 0;
 const check = (cond, msg) => { console.log((cond ? "  PASS  " : "  FAIL  ") + msg); if (!cond) failures++; };
@@ -40,6 +43,10 @@ console.log("\n[1] visible window matches bottom-anchored slice after shrink");
 	for (let r = 0; r < ROWS; r++) if (got[r] !== exp[r]) { ok = false; console.log(`    row ${r}: got=${JSON.stringify(got[r])} exp=${JSON.stringify(exp[r])}`); }
 	check(ok, "every visible row equals expected bottom-anchored content (history pulled down, no blanks)");
 	check(got.every((l) => l !== "" ) || exp.some((l) => l === ""), "no spurious blank rows introduced");
+	check(
+		JSON.stringify(emu.lines) === JSON.stringify(src.lines.map(plain)),
+		"physical buffer matches logical history exactly (no duplicate viewport-top row)",
+	);
 }
 
 // 2) Large collapse: 20-line tool output -> 1-line result (shrink by 19)
