@@ -40,12 +40,12 @@ Be clear-eyed about these:
   and prefer read-only, least-privilege configuration.
 - **Gmail/Drive/Docs/Calendar content is not private from your model
   provider.** Once `gog` returns a message, doc, or event, its text goes into
-  the prompt sent to whichever model is active for that session — the same
-  disclosure as [memory](docs/memory.md#the-shape). Only the OAuth token and
+  the prompt sent to whichever model is active for that session. This is the
+  same disclosure as [memory](docs/memory.md#the-shape). Only the OAuth token and
   the network call to Google stay on the host; the content itself is visible
   to your cloud provider like any other context. If you have enterprise
   data-handling terms with a provider, they govern what that provider does
-  with it — pi-stack makes no compliance claim of its own. See
+  with it; pi-stack makes no compliance claim of its own. See
   [docs/gog-setup.md](docs/gog-setup.md#data-disclosure).
 - **Local models run on your machine.** Ollama models the memory loop uses run on
   the host, outside the VM boundary.

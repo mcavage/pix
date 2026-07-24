@@ -108,6 +108,20 @@ func TestSeedCreatesThenRefuses(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("Seed() did not write file: %v", err)
 	}
+	seeded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read seeded config: %v", err)
+	}
+	for _, stale := range []string{"make serve", "make mcp-register"} {
+		if strings.Contains(string(seeded), stale) {
+			t.Errorf("seeded config contains repo-only command %q", stale)
+		}
+	}
+	for _, current := range []string{"pi-stack serve", "pi-stack mcp register"} {
+		if !strings.Contains(string(seeded), current) {
+			t.Errorf("seeded config missing installed command %q", current)
+		}
+	}
 
 	// Second call must not clobber.
 	before, _ := os.ReadFile(path)

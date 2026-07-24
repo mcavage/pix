@@ -446,7 +446,7 @@ const defaultConfigTOML = `# pi-stack config. All fields optional; delete anythi
 # Pin the pi-stack image/version the launcher runs (empty = latest baked).
 version_pin = ""
 
-# Host services ` + "`make serve`" + ` runs.
+# Host services ` + "`pi-stack serve`" + ` runs.
 services = ["memory"]
 
 # MCP servers attached at sandbox creation.
@@ -458,7 +458,7 @@ memory_embed_model = "nomic-embed-text"
 ollama_bridge_model = "qwen3.5:9b"
 
 # Google Workspace account the gog host-MCP server serves. This is the single
-# source of truth: pi-stack doctor probes against it, and make mcp-register
+# source of truth: pi-stack doctor probes against it, and pi-stack mcp register
 # sources it via pi-stack config get gog_account. Empty falls back to the
 # GOG_ACCOUNT env var.
 gog_account = ""

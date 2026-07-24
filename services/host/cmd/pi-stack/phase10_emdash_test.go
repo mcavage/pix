@@ -69,7 +69,7 @@ func TestGoStringLiteralsHaveNoEmDash(t *testing.T) {
 	}
 }
 
-// TestProseFilesHaveNoEmDash is the doc half of the same guard: the four
+// TestProseFilesHaveNoEmDash is the doc half of the same guard: the public
 // user-facing prose files named in the Phase-10 findings (plus the embedded
 // man page, which ships the identical prose to a terminal `man` reader) must
 // never contain an em dash (U+2014). Reports the exact line so a regression
@@ -78,7 +78,9 @@ func TestProseFilesHaveNoEmDash(t *testing.T) {
 	root := repoRoot(t)
 	files := []string{
 		"README.md",
+		"SECURITY.md",
 		"skills/onboarding/SKILL.md",
+		"skills/gworkspace/SKILL.md",
 		"docs/gog-setup.md",
 		"services/host/cmd/pi-stack/pi-stack.1",
 	}
