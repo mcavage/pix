@@ -154,9 +154,21 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	// systems go". Distinguish the two failure modes: sbx not installed at all vs
 	// installed-but-the-probe-failed. Not emitted when sbxOK is true (the per-key
 	// TODOs cover that case).
+	//
+	// DX-2: sbx being entirely absent from PATH is the SAME ambiguous signal
+	// doctor sees (`sbxUnverifiableDetail`/the sbxAbsent note in doctor.go's
+	// render) — it usually means "you're inside the sandbox", where sbx is
+	// structurally absent and installing it here is not an available repair,
+	// not "sbx is missing on the host and needs installing". status must share
+	// that same perspective/action: it never presumes a host-install fix from
+	// absence alone (that would only be knowable running ON the host, which
+	// `pi-stack mcp register`'s own missing-sbx note already covers — see
+	// mcp.go); it advises the same next step doctor gives, running `pi-stack
+	// doctor` on the host, rather than a copy-paste install command that may not
+	// even apply from here.
 	switch {
 	case !sbxOnPath:
-		st.Todos = append(st.Todos, "install the Docker Sandboxes CLI (sbx) to verify provider keys")
+		st.Todos = append(st.Todos, "can't verify provider keys here (sbx not on PATH, likely inside a sandbox) — run `pi-stack doctor` on the host")
 	case !sbxOK:
 		st.Todos = append(st.Todos, "could not verify provider keys (sbx secret ls failed); check sbx")
 	}

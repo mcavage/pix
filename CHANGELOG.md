@@ -39,6 +39,43 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`pi-stack gog setup -h` now reaches its own detailed usage (Phase-10
+  product/DX review, DX-1).** `pi-stack gog setup -h`/`--help` used to be
+  intercepted by the `gog` noun dispatcher's blanket help gate (it scanned the
+  WHOLE remaining argv for `-h`/`--help`, matching on `setup -h` before
+  `setup` was ever dispatched) and printed the short top-level `gog` usage
+  instead of `gog setup`'s detailed usage (numbered steps + flags). The gate
+  now only fires for `gog -h`/`gog --help` with no subcommand; a subcommand
+  is always dispatched first and owns its own `-h`/`--help`.
+- **`pi-stack status` and `pi-stack doctor` now agree on what a missing `sbx`
+  binary means (Phase-10 product/DX review, DX-2).** `status` used to tell
+  you to "install the Docker Sandboxes CLI (sbx)" the moment `sbx` wasn't on
+  PATH — presuming this IS the host and sbx is genuinely missing, when
+  absence just as often means running inside the sandbox, where `sbx` is
+  structurally never there (exactly the case `doctor` already treats as
+  "can't verify from here", not a repair item). `status` now shares that
+  same perspective: it advises running `pi-stack doctor` on the host rather
+  than presuming a host-install fix it cannot actually confirm applies.
+- **The aggregate `model keys` repair TODO is a bare, copy-pasteable command
+  again (Phase-10 product/DX review, DX-3).** It used to read `sbx secret
+  set -g anthropic  (or: sbx secret set -g openai / google — any one
+  model-provider key)` — a parenthetical glued onto the command that breaks
+  a straight copy-paste. The TODO is now exactly `sbx secret set -g
+  anthropic`; the any-one-of-three alternative and caveat moved to the
+  check's `detail` line, where they read as context instead of shell noise.
+- **`pi-stack doctor` marks the one CORE blocking check distinctly from an
+  optional failure (Phase-10 product/DX review, DX-4).** Both a verified
+  core failure and a verified optional failure rendered as a plain `✗` with
+  no way to tell which one actually blocks the exit code. The blocking core
+  check (`model keys`, zero of three set) now renders `✗ model keys
+  (required)`; every other `✗` stays plain.
+- **`pi-stack doctor`'s `--verbose` hint only prints when concise mode
+  actually hid something (Phase-10 product/DX review, DX-5).** The concise
+  "(concise output — run `pi-stack doctor --verbose` for full group detail)"
+  hint used to print unconditionally in non-verbose mode, even on a cold run
+  where nothing was healthy and so nothing was collapsed — pointing at
+  detail `--verbose` would not actually add. It now only prints when at
+  least one healthy check was hidden by concise mode.
 - **`pi-stack doctor` no longer trusts alternate symlink paths for registered
   probe executables (review round 2, R2-01).** The trusted-executable gate
   used to resolve symlinks at check time and then exec the ORIGINAL

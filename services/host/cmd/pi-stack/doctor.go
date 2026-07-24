@@ -547,8 +547,12 @@ func modelProviderAggregateCheck(present int, sbxOK, sbxPresent bool) check {
 			requirement: RequirementCore, evidence: EvidenceHealthy}
 	}
 	return check{label: label,
-		detail:      "NONE of anthropic/openai/google set — at least one model-provider key is required",
-		todo:        "sbx secret set -g anthropic  (or: sbx secret set -g openai / google — any one model-provider key)",
+		// DX-3: the todo itself stays a BARE, copy-pasteable command (no trailing
+		// parenthetical) — the any-one-of-three alternative + caveat live in
+		// detail instead, where they read as context rather than breaking a
+		// straight paste of the fix-it line.
+		detail:      "NONE of anthropic/openai/google set — at least one model-provider key is required (any one of the three is enough; e.g. `sbx secret set -g openai` or `-g google` work just as well)",
+		todo:        "sbx secret set -g anthropic",
 		requirement: RequirementCore, evidence: EvidenceFailed}
 }
 
@@ -1062,8 +1066,11 @@ func enabled(cfg *config.Config, name string) bool {
 	return false
 }
 
-// mcpConfigured reports whether name is in the configured MCP set (so `run`
-// auto-attaches it via --mcp).
+// mcpConfigured reports whether name is in the configured MCP set. Attach mode
+// is eager-vs-lazy, not implied by set membership: a configured server is
+// DYNAMIC (discovered/called on demand via mcp-find/mcp-exec) by default, and
+// only EAGER (its tools loaded into context at sandbox create) when pinned via
+// mcp_static (resolveStaticMCP) — see gogAttachCheck and AGENTS.md's MCP notes.
 func mcpConfigured(cfg *config.Config, name string) bool {
 	for _, m := range cfg.MCP {
 		if m == name {
@@ -1706,8 +1713,12 @@ func parseGogCommandJSON(out string) ([]string, bool) {
 	return nil, false
 }
 
-// gogAttachCheck is the informational check 5: is gog in the configured MCP set,
-// so `pi-stack run` auto-attaches it (--mcp gog)?
+// gogAttachCheck is the informational check 5: is gog in the configured MCP
+// set at all, and if so is it registered eager (pinned via mcp_static — tools
+// in context from sandbox create) or the default dynamic (discovered/called on
+// demand via mcp-find/mcp-exec)? There is no --mcp-at-create auto-attach
+// anymore (see resolveStaticMCP): every configured server is attached at
+// create via the gateway, and mcp_static/mcp_dynamic decide eager vs. lazy.
 func gogAttachCheck(cfg *config.Config) check {
 	req := gogRequirement(cfg, shellEnv{})
 	if !mcpConfigured(cfg, "gog") {
@@ -1762,14 +1773,19 @@ func (r *report) render(w io.Writer, verbose bool) {
 	}
 	fmt.Fprintln(w)
 
+	// DX-5: only hint at --verbose when concise mode actually HID something.
+	// A cold/all-todo run (nothing healthy to collapse) shows every check
+	// already, so the hint would point at detail that doesn't exist.
+	collapsedAny := false
 	for _, g := range r.groups {
 		fmt.Fprintf(w, "%s:\n", g.title)
 		shown := 0
 		for _, c := range g.checks {
 			if !verbose && c.evidence == EvidenceHealthy {
+				collapsedAny = true
 				continue // concise: collapse healthy detail
 			}
-			fmt.Fprintf(w, "  %s %-12s %s\n", glyph(c.state()), c.label, c.detail)
+			fmt.Fprintf(w, "  %s %-12s %s\n", glyph(c.state()), checkLabel(c), c.detail)
 			shown++
 		}
 		if !verbose && shown == 0 {
@@ -1787,9 +1803,23 @@ func (r *report) render(w io.Writer, verbose bool) {
 	}
 	fmt.Fprintf(w, "Config: %s   (services=%s, mcp=%s)\n",
 		config.Path(), strings.Join(r.cfgServices(), " "), r.cfgMCP())
-	if !verbose {
+	// DX-5: the hint is only useful — and only printed — when concise mode
+	// actually hid a healthy detail line; otherwise --verbose would show
+	// nothing new and the hint is noise.
+	if !verbose && collapsedAny {
 		fmt.Fprintln(w, "(concise output — run `pi-stack doctor --verbose` for full group detail)")
 	}
+}
+
+// checkLabel is the DX-4 rendered label: a verified CORE (blocking) failure
+// is marked "(required)" so it reads as distinct from an optional ✗ with no
+// such hierarchy — both glyphs are ✗, but only one of them actually blocks
+// `pi-stack doctor`'s exit code.
+func checkLabel(c check) string {
+	if Blocking(c.requirement, c.evidence) {
+		return c.label + " (required)"
+	}
+	return c.label
 }
 
 // unverifiedCore counts the CORE checks whose evidence is unverifiable (note

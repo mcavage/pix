@@ -127,14 +127,23 @@ No organization OAuth client is bundled or referenced here — bring your own.
 
 // runGogCmd is the `pi-stack gog` verb tree. Today it has one subcommand,
 // `setup`; the tree exists so a later addition (e.g. `gog status`) has a home.
+//
+// DX-1: the help gate is checked ONLY for the no-subcommand case (`gog -h` /
+// `gog --help` / `gog` with nothing after it) — it must NOT blanket-scan the
+// whole argv the way wantsHelp does for a plain flag verb. wantsHelp(argv)
+// matches -h/--help ANYWHERE in argv, so gating on it before dispatching would
+// catch `gog setup -h` too and print the noun-level gogUsage instead of ever
+// reaching runGogSetupCmd, which owns the detailed gogSetupUsage (flags,
+// numbered steps). Once a subcommand token is present, dispatch to it first
+// and let it parse/handle its OWN -h/--help.
 func runGogCmd(argv []string) {
-	if wantsHelp(argv) {
-		fmt.Print(gogUsage)
-		return
-	}
 	if len(argv) == 0 {
 		fmt.Fprint(os.Stderr, gogUsage)
 		os.Exit(2)
+	}
+	if wantsHelp(argv[:1]) {
+		fmt.Print(gogUsage)
+		return
 	}
 	switch argv[0] {
 	case "setup":
