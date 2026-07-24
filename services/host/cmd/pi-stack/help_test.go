@@ -303,17 +303,20 @@ func TestParseOnboardArgs_Help(t *testing.T) {
 
 // TestDoctorJSONView round-trips the doctor report through the REAL serializer
 // and asserts the JSON actually carries the groups, their checks, and each
-// check's ok|todo|info state (not merely that it is valid JSON). The fixture is
-// a MIXED environment (sbx + keys present, ollama absent, no MCP) so all three
-// states appear: ok (providers/memory), todo (models/gog CLI), info (empty mcp).
+// check's ok|todo|info|warn state (not merely that it is valid JSON). The
+// fixture is a MIXED environment (sbx + keys present, ollama up but the embed
+// model missing, gog absent, no MCP) so the states appear: ok (providers/
+// memory), todo (the missing embed model — a verified failure), info
+// (not-configured gog CLI / empty mcp).
 func TestDoctorJSONView(t *testing.T) {
 	f := fakeEnv{
-		present: map[string]bool{"sbx": true}, // ollama + gog absent -> TODOs
+		present: map[string]bool{"sbx": true, "ollama": true}, // gog absent
 		output: map[string]string{
 			"sbx secret ls": "anthropic openai google github",
 			"sbx mcp ls":    "gog\n",
+			"ollama list":   "gemma4:latest\n", // embed model missing -> verified TODO
 		},
-		ports: map[int]bool{11435: true}, // memory up -> an OK check
+		ports: map[int]bool{11434: true, 11435: true}, // memory up -> an OK check
 	}
 	cfg := defaultCfg()
 	r := runDoctor(cfg, f.env())
@@ -350,7 +353,7 @@ func TestDoctorJSONView(t *testing.T) {
 		for _, c := range g.Checks {
 			nChecks++
 			switch c.State {
-			case "ok", "todo", "info":
+			case "ok", "todo", "info", "warn":
 				seen[c.State] = true
 			default:
 				t.Errorf("check %q has invalid state %q", c.Label, c.State)

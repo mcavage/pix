@@ -156,8 +156,11 @@ func TestDoctor_AllGreen(t *testing.T) {
 	}
 }
 
-// TestDoctor_SbxAbsent: inside the sandbox sbx is gone -> must still run, emit
-// provider TODOs, and note sbx is unavailable. This is the acceptance case.
+// TestDoctor_SbxAbsent: inside the sandbox sbx is gone -> must still run and
+// note sbx is unavailable. R1-03: unverifiable provider checks render ⚠ with
+// no repair TODO (doctor can't confirm anything about the keys from here);
+// the only verified failure in this env is the enabled-but-down memory
+// service. R1-05: ollama absent is not-configured (·), not a ✗.
 func TestDoctor_SbxAbsent(t *testing.T) {
 	f := fakeEnv{
 		present: map[string]bool{}, // nothing installed
@@ -168,21 +171,17 @@ func TestDoctor_SbxAbsent(t *testing.T) {
 	if !r.sbxAbsent {
 		t.Error("expected sbxAbsent to be true when sbx not on PATH")
 	}
-	todos := r.todos()
-	if len(todos) == 0 {
-		t.Fatal("expected TODOs when nothing is set up")
+	if r.sbxProbeFailed {
+		t.Error("sbx absent is not a probe failure — sbxProbeFailed must be false")
 	}
-	// Provider TODOs must be present with the exact command grammar.
-	joined := strings.Join(todos, "\n")
-	for _, want := range []string{
-		"sbx secret set -g anthropic",
-		"sbx secret set -g github",
-		"ollama pull gemma4",
-		"ollama pull nomic-embed-text",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("expected TODO %q in %v", want, todos)
-		}
+	todos := r.todos()
+	// The only VERIFIED failure: memory is in configured services and :11435 is
+	// down. Unverifiable providers and not-installed ollama contribute nothing.
+	if len(todos) != 1 || todos[0] != "pi-stack serve" {
+		t.Fatalf("expected exactly the memory-service TODO, got %v", todos)
+	}
+	if r.blocking() {
+		t.Error("sandbox-without-sbx must never block")
 	}
 
 	var buf bytes.Buffer
@@ -195,8 +194,16 @@ func TestDoctor_SbxAbsent(t *testing.T) {
 	if !strings.Contains(out, "sbx not on PATH") {
 		t.Errorf("expected sbx-absent note, got:\n%s", out)
 	}
-	if !strings.Contains(out, "TODO: sbx secret set -g anthropic") {
-		t.Errorf("expected copy-pasteable provider TODO, got:\n%s", out)
+	// Unverifiable providers must render ⚠, never ✗, and never emit the
+	// secret-set repair command.
+	if strings.Contains(out, "✗ anthropic") || strings.Contains(out, "✗ model keys") {
+		t.Errorf("unverifiable provider checks must not render ✗, got:\n%s", out)
+	}
+	if !strings.Contains(out, "⚠ model keys") {
+		t.Errorf("expected an unverifiable ⚠ model-keys line, got:\n%s", out)
+	}
+	if strings.Contains(out, "TODO: sbx secret set") {
+		t.Errorf("unverifiable provider checks must not surface repair TODOs, got:\n%s", out)
 	}
 }
 
@@ -246,8 +253,8 @@ func TestDoctor_OllamaListFails_Unverifiable(t *testing.T) {
 			if c.evidence != EvidenceUnverifiable {
 				t.Errorf("%s: evidence = %q, want unverifiable", c.label, c.evidence)
 			}
-			if c.state != stateWarn {
-				t.Errorf("%s: state = %v, want stateWarn", c.label, c.state)
+			if c.state() != stateWarn {
+				t.Errorf("%s: state = %v, want stateWarn", c.label, c.state())
 			}
 			if c.todo != "" {
 				t.Errorf("%s: unverifiable must not carry a TODO, got %q", c.label, c.todo)
@@ -291,10 +298,10 @@ func TestDoctor_GogHeadlessTrap(t *testing.T) {
 	}
 	var acctOK, headTODO bool
 	for _, c := range gog.checks {
-		if c.label == "account" && c.state == stateOK {
+		if c.label == "account" && c.state() == stateOK {
 			acctOK = true
 		}
-		if c.label == "headless spawn" && c.state == stateTODO &&
+		if c.label == "headless spawn" && c.state() == stateTODO &&
 			strings.Contains(c.todo, "GOG_KEYRING_BACKEND=file") {
 			headTODO = true
 		}
@@ -307,8 +314,10 @@ func TestDoctor_GogHeadlessTrap(t *testing.T) {
 	}
 }
 
-// TestDoctor_GogAccountUnset: gog installed but GOG_ACCOUNT unset -> a TODO to
-// set it, and no crash (the account/headless probes are skipped).
+// TestDoctor_GogAccountUnset: gog installed but GOG_ACCOUNT unset. R1-03: an
+// unset account is NOT-CONFIGURED (expected absence) — no ✗, no repair TODO —
+// but doctor must not report green either: the account check carries the
+// "cannot verify" detail plus the setup command, and no probes run.
 func TestDoctor_GogAccountUnset(t *testing.T) {
 	f := fakeEnv{
 		present: map[string]bool{"gog": true},
@@ -317,17 +326,35 @@ func TestDoctor_GogAccountUnset(t *testing.T) {
 		ports:   map[int]bool{},
 	}
 	r := runDoctor(defaultCfg(), f.env())
-	joined := strings.Join(r.todos(), "\n")
-	if !strings.Contains(joined, "set gog_account") {
-		t.Errorf("expected a gog_account TODO, got %v", r.todos())
+	var acct *check
+	for gi := range r.groups {
+		if !strings.HasPrefix(r.groups[gi].title, "gog") {
+			continue
+		}
+		for ci := range r.groups[gi].checks {
+			if r.groups[gi].checks[ci].label == "account" {
+				acct = &r.groups[gi].checks[ci]
+			}
+		}
 	}
-	// It must NOT report green: the account check carries the "cannot verify"
-	// detail and stays a TODO (not stateOK).
+	if acct == nil {
+		t.Fatalf("expected an account check, groups=%+v", r.groups)
+	}
+	if acct.evidence != EvidenceNotConfigured || acct.state() == stateOK {
+		t.Errorf("unset account must be not-configured and never green, got %+v", acct)
+	}
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, nil
 	r.render(&buf, true)
 	if !strings.Contains(buf.String(), "cannot verify (gog_account unset in config.toml/env)") {
 		t.Errorf("expected a 'cannot verify' account detail, got:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "pi-stack gog setup") {
+		t.Errorf("expected the setup command in the detail, got:\n%s", buf.String())
+	}
+	// Not-configured never contributes a repair TODO (R1-03).
+	if joined := strings.Join(r.todos(), "\n"); strings.Contains(joined, "gog_account") {
+		t.Errorf("an unset gog_account must not surface a repair TODO, got %v", r.todos())
 	}
 }
 
@@ -533,8 +560,8 @@ func TestDoctor_SecretsGroupShortLiteralFlagged(t *testing.T) {
 			t.Errorf("secrets group LEAKED the literal value: %q", c.detail)
 		}
 		if c.label == "SLACK_TOKEN" {
-			if c.state != stateTODO {
-				t.Errorf("SLACK_TOKEN state = %v, want stateTODO", c.state)
+			if c.state() != stateTODO {
+				t.Errorf("SLACK_TOKEN state = %v, want stateTODO", c.state())
 			}
 			if !strings.Contains(c.detail, "not an op:// ref") {
 				t.Errorf("SLACK_TOKEN detail should flag refs-only: %q", c.detail)
@@ -584,7 +611,7 @@ func TestDoctor_GogRegisteredCommand(t *testing.T) {
 				t.Errorf("registered command detail must not echo the account verbatim: %q", c.detail)
 			}
 		}
-		if c.label == "headless spawn" && c.state == stateOK {
+		if c.label == "headless spawn" && c.state() == stateOK {
 			headOK = true
 		}
 	}
@@ -638,8 +665,8 @@ func TestDoctor_GogFallbackUnconfirmedIsWarn(t *testing.T) {
 	if headWarn == nil {
 		t.Fatalf("expected a headless spawn check, groups=%+v", r.groups)
 	}
-	if headWarn.state != stateWarn {
-		t.Errorf("expected stateWarn (never ✗), got state=%v detail=%q", headWarn.state, headWarn.detail)
+	if headWarn.state() != stateWarn {
+		t.Errorf("expected stateWarn (never ✗), got state=%v detail=%q", headWarn.state(), headWarn.detail)
 	}
 	if headWarn.todo != "" {
 		t.Errorf("a best-effort-success/unconfirmed result must carry no TODO, got %q", headWarn.todo)
@@ -690,7 +717,7 @@ func TestDoctor_GogRegisteredCommandLineFallsThrough(t *testing.T) {
 			continue
 		}
 		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state == stateOK {
+			if c.label == "headless spawn" && c.state() == stateOK {
 				headOK = true
 			}
 		}
@@ -721,7 +748,7 @@ func TestDoctor_GogRegisteredCommandJSON(t *testing.T) {
 			continue
 		}
 		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state == stateOK {
+			if c.label == "headless spawn" && c.state() == stateOK {
 				headOK = true
 			}
 		}
@@ -768,7 +795,7 @@ func TestDoctor_GogBareRegisteredCommand(t *testing.T) {
 				t.Errorf("registered command detail must not echo the account verbatim: %q", c.detail)
 			}
 		}
-		if c.label == "headless spawn" && c.state == stateOK {
+		if c.label == "headless spawn" && c.state() == stateOK {
 			headOK = true
 		}
 	}
@@ -809,7 +836,7 @@ func TestDoctor_GogBareRegisteredCommandJSON(t *testing.T) {
 			continue
 		}
 		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state == stateOK {
+			if c.label == "headless spawn" && c.state() == stateOK {
 				headOK = true
 			}
 		}
@@ -860,7 +887,7 @@ func TestDoctor_GogRegistration(t *testing.T) {
 			continue
 		}
 		for _, c := range g.checks {
-			if c.label == "gog" && c.state == stateTODO {
+			if c.label == "gog" && c.state() == stateTODO {
 				found = true
 			}
 		}
@@ -886,7 +913,7 @@ func TestDoctor_MCPRegistration(t *testing.T) {
 	r := runDoctor(cfg, f.env())
 	found := false
 	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state == stateTODO {
+		if c.label == "slack" && c.state() == stateTODO {
 			found = true
 		}
 	}
@@ -898,7 +925,7 @@ func TestDoctor_MCPRegistration(t *testing.T) {
 	f.output["sbx mcp ls"] = "notion\nslack\n"
 	r = runDoctor(cfg, f.env())
 	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state == stateTODO {
+		if c.label == "slack" && c.state() == stateTODO {
 			t.Errorf("registered slack should not be a TODO")
 		}
 	}
@@ -927,7 +954,7 @@ func TestDoctor_MCPToolProbe(t *testing.T) {
 	// The generic mcp group is last; slack must read as a real tool count.
 	var found bool
 	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state == stateOK && strings.Contains(c.detail, "spawns 3 tools") {
+		if c.label == "slack" && c.state() == stateOK && strings.Contains(c.detail, "spawns 3 tools") {
 			found = true
 		}
 	}
@@ -956,7 +983,7 @@ func TestDoctor_MCPToolProbeZero(t *testing.T) {
 	r := runDoctor(cfg, f.env())
 	var todo bool
 	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state == stateTODO && strings.Contains(c.detail, "0 tools") {
+		if c.label == "slack" && c.state() == stateTODO && strings.Contains(c.detail, "0 tools") {
 			todo = true
 		}
 	}
@@ -967,10 +994,10 @@ func TestDoctor_MCPToolProbeZero(t *testing.T) {
 
 // TestDoctor_MCPUnrecognizedCommand is the probe-safety gate: a registered
 // server whose command is NOT a recognized shape (not gog, not an absolute
-// `pi-stack-host mcp <name>`) must NOT be exec'd. The check reports a confirmed
-// registration with an explicit "probe skipped: unrecognized command" note, and
-// the fake run PANICS if doctor ever tries to exec the untrusted command —
-// proving it was never run.
+// `pi-stack-host mcp <name>`) must NOT be exec'd. R1-01/R1-03: an untrusted
+// command is UNVERIFIABLE (⚠, no TODO) — doctor saw the registration but
+// could not (and must not) verify the spawn — and the fake run FAILS the test
+// if doctor ever tries to exec the untrusted command, proving it never ran.
 func TestDoctor_MCPUnrecognizedCommand(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"evil"}
@@ -996,13 +1023,16 @@ func TestDoctor_MCPUnrecognizedCommand(t *testing.T) {
 	r := runDoctor(cfg, env)
 	var found bool
 	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "evil" && c.state == stateOK &&
-			strings.Contains(c.detail, "probe skipped: unrecognized command") {
+		if c.label == "evil" && c.state() == stateWarn && c.evidence == EvidenceUnverifiable &&
+			strings.Contains(c.detail, "probe skipped: unrecognized/untrusted command") {
+			if c.todo != "" {
+				t.Errorf("an unverifiable skipped probe must carry no TODO, got %q", c.todo)
+			}
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("expected evil to report a skipped probe, group=%+v", r.groups[len(r.groups)-1])
+		t.Errorf("expected evil to report a skipped probe (unverifiable ⚠), group=%+v", r.groups[len(r.groups)-1])
 	}
 }
 
@@ -1044,8 +1074,8 @@ func TestDoctor_GogTodoOnce(t *testing.T) {
 // while preserving first-occurrence order.
 func TestDoctorTodosDedup(t *testing.T) {
 	r := &report{groups: []group{
-		{checks: []check{{state: stateTODO, todo: "a"}, {state: stateTODO, todo: "b"}}},
-		{checks: []check{{state: stateTODO, todo: "a"}, {state: stateTODO, todo: "c"}}},
+		{checks: []check{{evidence: EvidenceFailed, todo: "a"}, {evidence: EvidenceFailed, todo: "b"}}},
+		{checks: []check{{evidence: EvidenceFailed, todo: "a"}, {evidence: EvidenceFailed, todo: "c"}}},
 	}}
 	got := r.todos()
 	want := []string{"a", "b", "c"}
@@ -1110,7 +1140,7 @@ func TestDoctor_SecretsGroup_GogOnlyNotNeeded(t *testing.T) {
 		t.Errorf("gog-only config should say 1Password not needed, got %+v", g.checks)
 	}
 	for _, c := range g.checks {
-		if c.state == stateTODO {
+		if c.state() == stateTODO {
 			t.Errorf("gog-only config must raise no Secrets TODO, got %+v", c)
 		}
 	}
@@ -1128,7 +1158,7 @@ func TestDoctor_SecretsGroup_SlackOnly(t *testing.T) {
 	g := secretsGroupFor(t, []string{"slack"}, f)
 	var sawRef bool
 	for _, c := range g.checks {
-		if c.label == "SLACK_TOKEN" && c.state == stateOK {
+		if c.label == "SLACK_TOKEN" && c.state() == stateOK {
 			sawRef = true
 		}
 	}
@@ -1152,7 +1182,7 @@ func TestDoctor_SecretsGroup_PermsFinding(t *testing.T) {
 			perms = &g.checks[i]
 		}
 	}
-	if perms == nil || perms.state != stateTODO || !strings.Contains(perms.todo, "chmod 600") {
+	if perms == nil || perms.state() != stateTODO || !strings.Contains(perms.todo, "chmod 600") {
 		t.Errorf("0644 op-refs.env should raise a chmod 600 perms TODO, got %+v", g.checks)
 	}
 }
@@ -1233,9 +1263,10 @@ func TestDoctorCmd_SandboxWithoutSbxExitsZero(t *testing.T) {
 }
 
 // TestDoctorCmd_VerifiedCoreFailureExitsOne is the other half of AC-05: sbx IS
-// present and `sbx secret ls` succeeds but is CONFIRMED missing a core
-// provider key (anthropic) — a verified core failure — so the real
-// runDoctorCmd (defaultShellEnv, no faking) must exit 1.
+// present and `sbx secret ls` succeeds but is CONFIRMED missing ALL THREE
+// model-provider keys (R1-04: at least one of anthropic/openai/google is
+// required) — a verified core failure — so the real runDoctorCmd
+// (defaultShellEnv, no faking) must exit 1.
 func TestDoctorCmd_VerifiedCoreFailureExitsOne(t *testing.T) {
 	if os.Getenv("PI_STACK_DOCTOR_HELPER") == "1" {
 		runDoctorCmd(nil)
@@ -1246,10 +1277,10 @@ func TestDoctorCmd_VerifiedCoreFailureExitsOne(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// A fake `sbx` on PATH: `secret ls` reports openai/google/github but NOT
-	// anthropic (a confirmed, verified core-key gap); `mcp ls` succeeds empty.
+	// A fake `sbx` on PATH: `secret ls` reports ONLY github — zero of the three
+	// model-provider keys (a confirmed, verified core gap); `mcp ls` succeeds empty.
 	fakeSbx := "#!/bin/sh\n" +
-		"if [ \"$1\" = secret ] && [ \"$2\" = ls ]; then echo openai; echo google; echo github; exit 0; fi\n" +
+		"if [ \"$1\" = secret ] && [ \"$2\" = ls ]; then echo github; exit 0; fi\n" +
 		"if [ \"$1\" = mcp ] && [ \"$2\" = ls ]; then exit 0; fi\n" +
 		"exit 1\n"
 	if err := os.WriteFile(filepath.Join(binDir, "sbx"), []byte(fakeSbx), 0o755); err != nil {

@@ -178,9 +178,9 @@ func TestGogSetupDoctorAgreement(t *testing.T) {
 
 	r := runDoctor(cfg, g.env())
 	headless := findGogCheck(t, r, "headless spawn")
-	if headless.evidence != EvidenceHealthy || headless.state != stateOK {
+	if headless.evidence != EvidenceHealthy || headless.state() != stateOK {
 		t.Errorf("expected doctor's headless spawn to agree with gogSetup's healthy verification: evidence=%q state=%v detail=%q",
-			headless.evidence, headless.state, headless.detail)
+			headless.evidence, headless.state(), headless.detail)
 	}
 	if !strings.Contains(headless.detail, "exposes tools") {
 		t.Errorf("expected doctor's honest-path healthy detail, got %q", headless.detail)
@@ -217,9 +217,9 @@ func TestGogSetupDoctorAgreement(t *testing.T) {
 	}
 	r2 := runDoctor(cfg2, g.env())
 	headless2 := findGogCheck(t, r2, "headless spawn")
-	if headless2.evidence != EvidenceFailed || headless2.state != stateTODO {
+	if headless2.evidence != EvidenceFailed || headless2.state() != stateTODO {
 		t.Errorf("expected doctor's headless spawn to agree with gogSetup's failure: evidence=%q state=%v detail=%q",
-			headless2.evidence, headless2.state, headless2.detail)
+			headless2.evidence, headless2.state(), headless2.detail)
 	}
 	if !strings.Contains(headless2.detail, "0 tools") {
 		t.Errorf("expected doctor's zero-tools wording, got %q", headless2.detail)

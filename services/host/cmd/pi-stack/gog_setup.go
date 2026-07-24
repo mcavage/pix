@@ -290,10 +290,13 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		return fmt.Errorf("credentials file not found (must be a regular file): %s", credentials)
 	}
 
-	helpOut, _ := env.run("gog", "auth", "--help")
+	// R1-14: every noninteractive gog probe here (help/version/auth check) runs
+	// through the BOUNDED probe machinery (timeout + output cap), so a hung gog
+	// can never wedge setup. Tests without env.probe fall back to env.run.
+	helpOut, _, _ := probeRun(env, "gog", "auth", "--help")
 	route, ok := chooseGogAuthRoute(helpOut)
 	if !ok {
-		verOut, _ := env.run("gog", "--version")
+		verOut, _, _ := probeRun(env, "gog", "--version")
 		fmt.Fprintln(out, "installed gog does not advertise a supported auth import/authorize surface")
 		fmt.Fprintln(out, "  (looked for: auth setup | auth credentials+add | auth add-client+login)")
 		fmt.Fprintf(out, "  installed version: %s\n", strings.TrimSpace(verOut))
@@ -318,9 +321,12 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		}
 	}
 
-	if _, err := env.run("gog", "--account", account, "auth", "doctor", "--check"); err != nil {
+	if _, timedOut, err := probeRun(env, "gog", "--account", account, "auth", "doctor", "--check"); timedOut || err != nil {
 		fmt.Fprintln(out, "authorization did not verify:")
 		fmt.Fprintf(out, "  gog --account %s auth doctor --check\n", account)
+		if timedOut {
+			return fmt.Errorf("gog auth doctor --check timed out for %s", account)
+		}
 		return fmt.Errorf("gog auth doctor --check failed for %s: %w", account, err)
 	}
 	fmt.Fprintf(out, "interactive auth OK for %s\n", account)

@@ -306,9 +306,10 @@ and
 .B blocking
 flag on top of every existing field.  Exit status is
 .B core\-only:
-only a VERIFIED core requirement failure (e.g. a provider key confirmed unset)
-exits 1; any optional gap and any unverifiable check \(em including every
-provider check when run inside the sandbox with
+only a VERIFIED core requirement failure (e.g. NONE of the three
+model\-provider keys \(em anthropic/openai/google \(em confirmed set; any one
+is enough) exits 1; any optional gap and any unverifiable check \(em including
+every provider check when run inside the sandbox with
 .B sbx
 absent \(em exits 0.  A usage error exits 2.
 .SS run

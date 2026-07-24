@@ -268,8 +268,9 @@ Diagnose host + sandbox health (provider keys, ollama/models, memory, gog, mcp),
 leading with a one-line verdict and copy-pasteable TODO commands. Default output
 is concise: healthy checks collapse to one summary line per group.
 
-Exits 1 only on a VERIFIED core failure (e.g. a provider key confirmed unset);
-unverifiable checks (including running inside the sandbox with sbx absent) and
+Exits 1 only on a VERIFIED core failure (e.g. NO model-provider key set — at
+least one of anthropic/openai/google is required; any one is enough).
+Unverifiable checks (including running inside the sandbox with sbx absent) and
 any optional gap always exit 0. A usage error exits 2.
 
 flags:

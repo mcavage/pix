@@ -38,8 +38,8 @@ func TestReadiness_Blocking(t *testing.T) {
 func TestReport_Blocking(t *testing.T) {
 	allGreen := &report{groups: []group{
 		{checks: []check{
-			{label: "anthropic", state: stateOK, requirement: RequirementCore, evidence: EvidenceHealthy},
-			{label: "github", state: stateTODO, todo: "x", requirement: RequirementConfiguredOptional, evidence: EvidenceFailed},
+			{label: "anthropic", requirement: RequirementCore, evidence: EvidenceHealthy},
+			{label: "github", todo: "x", requirement: RequirementConfiguredOptional, evidence: EvidenceFailed},
 		}},
 	}}
 	if allGreen.blocking() {
@@ -48,7 +48,7 @@ func TestReport_Blocking(t *testing.T) {
 
 	sandboxed := &report{groups: []group{
 		{checks: []check{
-			{label: "anthropic", state: stateTODO, todo: "x", requirement: RequirementCore, evidence: EvidenceUnverifiable},
+			{label: "anthropic", todo: "x", requirement: RequirementCore, evidence: EvidenceUnverifiable},
 		}},
 	}}
 	if sandboxed.blocking() {
@@ -57,7 +57,7 @@ func TestReport_Blocking(t *testing.T) {
 
 	broken := &report{groups: []group{
 		{checks: []check{
-			{label: "anthropic", state: stateTODO, todo: "x", requirement: RequirementCore, evidence: EvidenceFailed},
+			{label: "anthropic", todo: "x", requirement: RequirementCore, evidence: EvidenceFailed},
 		}},
 	}}
 	if !broken.blocking() {

@@ -173,7 +173,7 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		return dial(p)
 	}
 	keyOK := func(name string) bool {
-		return secretCheck(name, name, sbxSecretsOut, sbxOK, RequirementCore).state == stateOK
+		return secretCheck(name, name, sbxSecretsOut, sbxOK, sbxOK, RequirementCore).evidence == EvidenceHealthy
 	}
 	if keysSource == "" {
 		keysSource = "sbx"
