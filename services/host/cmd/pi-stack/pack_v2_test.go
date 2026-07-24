@@ -715,3 +715,29 @@ func TestPackCapabilitiesJSON_LoadedAndMounted(t *testing.T) {
 		t.Errorf("mounted capabilities.json mismatch:\n got: %s\nwant: %s", got, caps)
 	}
 }
+
+// TestSynthesizePackKit_EgressAllow: a sandbox [[proxy]] with egress emits
+// caps.network.allow into the synthesized mixin kit, so the wrapper can reach
+// its host endpoint (else the sbx egress proxy 403s host.docker.internal).
+func TestSynthesizePackKit_EgressAllow(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bin", "snow"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := &packInfo{Root: root, Manifest: packManifest{
+		Name:    "work",
+		Proxies: []packProxy{{Name: "snow", Egress: []string{"host.docker.internal:11442"}}},
+	}}
+	kit, err := synthesizePackKit(p)
+	if err != nil || kit == "" {
+		t.Fatalf("kit=%q err=%v", kit, err)
+	}
+	b, _ := os.ReadFile(filepath.Join(kit, "spec.yaml"))
+	if !strings.Contains(string(b), "caps:") || !strings.Contains(string(b), "host.docker.internal:11442") {
+		t.Fatalf("proxy egress not folded into caps.network.allow:\n%s", b)
+	}
+}
