@@ -190,7 +190,9 @@ func TestRenderStatusMonitorJSON(t *testing.T) {
 }
 
 // TestGatherStatusMCP: cfg.MCP servers get a registration + attach-on-run state
-// parsed from `sbx mcp ls`; gog is registered, slack is not.
+// parsed from `sbx mcp ls`; gog is registered, slack is not. Neither is pinned
+// via mcp_static, so BOTH are default-dynamic (not attach-on-run) -- this is
+// the tri-state fix: cfg.MCP membership alone must never imply eager attach.
 func TestGatherStatusMCP(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"gog", "slack"}}
 	st := gatherStatus(cfg, "default", fakeStatusEnv())
@@ -208,9 +210,66 @@ func TestGatherStatusMCP(t *testing.T) {
 		t.Errorf("slack should NOT be registered: %+v", byName["slack"])
 	}
 	for _, m := range st.MCPServers {
-		if !m.Attach {
-			t.Errorf("%s should be attach-on-run (it's in cfg.MCP)", m.Name)
+		if m.Attach {
+			t.Errorf("%s should be default-dynamic, not attach-on-run (no mcp_static pin): %+v", m.Name, m)
 		}
+	}
+}
+
+// TestGatherStatusMCPStaticPin: a server pinned via cfg.MCPStatic renders
+// attach-on-run/eager, using the exact resolveStaticMCP semantics run.go uses
+// for launch -- status must never invent its own eager/lazy rule.
+func TestGatherStatusMCPStaticPin(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"gog", "slack"}, MCPStatic: []string{"gog"}}
+	st := gatherStatus(cfg, "default", fakeStatusEnv())
+	byName := map[string]mcpStatusLine{}
+	for _, m := range st.MCPServers {
+		byName[m.Name] = m
+	}
+	if !byName["gog"].Attach {
+		t.Errorf("gog is in mcp_static, should be attach-on-run: %+v", byName["gog"])
+	}
+	if byName["slack"].Attach {
+		t.Errorf("slack has no mcp_static pin, should be default-dynamic: %+v", byName["slack"])
+	}
+}
+
+// TestGatherStatusMCPDynamicOverride: mcp_dynamic wins over mcp_static (same
+// precedence as resolveStaticMCP/resolveStaticMCPForRun) -- a server in BOTH
+// lists stays dynamic, never attach-on-run.
+func TestGatherStatusMCPDynamicOverride(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"gog"}, MCPStatic: []string{"gog"}, MCPDynamic: []string{"gog"}}
+	st := gatherStatus(cfg, "default", fakeStatusEnv())
+	if len(st.MCPServers) != 1 || st.MCPServers[0].Attach {
+		t.Errorf("mcp_dynamic must win over mcp_static, got %+v", st.MCPServers)
+	}
+}
+
+// TestRenderStatusMCPDynamicLabel: a default-dynamic registered server renders
+// as dynamically discoverable, never with the attach-on-run wording or a ✗
+// glyph (it isn't a failure -- it's the default, working-as-intended state).
+func TestRenderStatusMCPDynamicLabel(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"gog"}}
+	var out bytes.Buffer
+	renderStatus(cfg, "default", fakeStatusEnv(), &out, false)
+	s := out.String()
+	if !strings.Contains(s, "dynamically discoverable") {
+		t.Errorf("expected dynamically discoverable label for default-dynamic gog, got:\n%s", s)
+	}
+	if strings.Contains(s, "✗ attach-on-run") {
+		t.Errorf("must never render a ✗ attach-on-run for a default-dynamic server, got:\n%s", s)
+	}
+}
+
+// TestRenderStatusMCPStaticLabel: an mcp_static-pinned server renders the
+// attach-on-run/eager wording.
+func TestRenderStatusMCPStaticLabel(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"gog"}, MCPStatic: []string{"gog"}}
+	var out bytes.Buffer
+	renderStatus(cfg, "default", fakeStatusEnv(), &out, false)
+	s := out.String()
+	if !strings.Contains(s, "attach-on-run") {
+		t.Errorf("expected attach-on-run label for mcp_static-pinned gog, got:\n%s", s)
 	}
 }
 
@@ -226,17 +285,28 @@ func TestGatherStatusMCPSbxAbsent(t *testing.T) {
 	}
 }
 
-// TestRenderStatusMCPJSON: --json carries the mcp_servers registration state.
+// TestRenderStatusMCPJSON: --json carries the mcp_servers registration state,
+// and Attach reflects resolveStaticMCP (mcp_static-pinned only).
 func TestRenderStatusMCPJSON(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog", "slack"}}
+	cfg := &config.Config{MCP: []string{"gog", "slack"}, MCPStatic: []string{"gog"}}
 	var out bytes.Buffer
 	renderStatus(cfg, "default", fakeStatusEnv(), &out, true)
 	var st statusReport
 	if err := json.Unmarshal(out.Bytes(), &st); err != nil {
 		t.Fatalf("status --json invalid: %v\n%s", err, out.String())
 	}
-	if len(st.MCPServers) != 2 || !st.MCPServers[0].Attach {
-		t.Errorf("json mcp_servers = %+v, want 2 attach-on-run entries", st.MCPServers)
+	if len(st.MCPServers) != 2 {
+		t.Fatalf("json mcp_servers = %+v, want 2 entries", st.MCPServers)
+	}
+	byName := map[string]mcpStatusLine{}
+	for _, m := range st.MCPServers {
+		byName[m.Name] = m
+	}
+	if !byName["gog"].Attach {
+		t.Errorf("json gog should be attach-on-run (mcp_static-pinned): %+v", st.MCPServers)
+	}
+	if byName["slack"].Attach {
+		t.Errorf("json slack should be default-dynamic (not pinned): %+v", st.MCPServers)
 	}
 }
 
@@ -394,6 +464,101 @@ func TestStatusSbxProbeFailedTodo(t *testing.T) {
 	renderStatus(cfg, "default", env, &out, false)
 	if strings.Contains(out.String(), "all systems go") {
 		t.Errorf("verdict must not be green when the key probe failed, got:\n%s", out.String())
+	}
+}
+
+// TestStatusSbxAbsentProvidersUnverifiable is the tri-state fix: with sbx off
+// PATH, every provider must be reported EvidenceUnverifiable (not a confirmed
+// EvidenceFailed), and the human/JSON render must use the unverifiable glyph
+// (⚠), never a bare ✗ that reads as "confirmed missing key".
+func TestStatusSbxAbsentProvidersUnverifiable(t *testing.T) {
+	cfg := &config.Config{}
+	env := shellEnv{
+		lookPath: func(string) (string, error) { return "", fmt.Errorf("not found") },
+		dial:     func(int) bool { return false },
+		statFile: func(string) bool { return false },
+	}
+	st := gatherStatus(cfg, "default", env)
+	for _, key := range []string{"anthropic", "openai", "google", "github"} {
+		if st.ProviderEvidence[key] != EvidenceUnverifiable {
+			t.Errorf("provider_evidence[%s] = %q, want %q", key, st.ProviderEvidence[key], EvidenceUnverifiable)
+		}
+		// JSON compatibility: the bool map stays false (never a confirmed
+		// present), it just isn't the SOLE signal anymore.
+		if st.Providers[key] {
+			t.Errorf("providers[%s] = true, want false when unverifiable", key)
+		}
+	}
+	var out bytes.Buffer
+	renderStatus(cfg, "default", env, &out, false)
+	s := out.String()
+	if !strings.Contains(s, "⚠") {
+		t.Errorf("expected the unverifiable glyph (⚠) in provider render, got:\n%s", s)
+	}
+	if strings.Contains(s, "anthropic ✗") || strings.Contains(s, "openai ✗") || strings.Contains(s, "google ✗") || strings.Contains(s, "github ✗") {
+		t.Errorf("must not render a confirmed-missing ✗ glyph for an unverifiable provider, got:\n%s", s)
+	}
+
+	// --json carries the same tri-state.
+	var jout bytes.Buffer
+	renderStatus(cfg, "default", env, &jout, true)
+	var jst statusReport
+	if err := json.Unmarshal(jout.Bytes(), &jst); err != nil {
+		t.Fatalf("status --json invalid: %v\n%s", err, jout.String())
+	}
+	for _, key := range []string{"anthropic", "openai", "google", "github"} {
+		if jst.ProviderEvidence[key] != EvidenceUnverifiable {
+			t.Errorf("json provider_evidence[%s] = %q, want %q", key, jst.ProviderEvidence[key], EvidenceUnverifiable)
+		}
+	}
+}
+
+// TestStatusSbxProbeFailedProvidersUnverifiable: sbx IS on PATH but `sbx
+// secret ls` fails -- same tri-state as sbx-absent (unverifiable, not
+// confirmed-failed), since the probe never actually ran.
+func TestStatusSbxProbeFailedProvidersUnverifiable(t *testing.T) {
+	cfg := &config.Config{}
+	env := shellEnv{
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+				return "", fmt.Errorf("sbx secret ls boom")
+			}
+			return "", nil
+		},
+		dial:     func(int) bool { return false },
+		statFile: func(string) bool { return false },
+	}
+	st := gatherStatus(cfg, "default", env)
+	for _, key := range []string{"anthropic", "openai", "google", "github"} {
+		if st.ProviderEvidence[key] != EvidenceUnverifiable {
+			t.Errorf("provider_evidence[%s] = %q, want %q when the secret-ls probe fails", key, st.ProviderEvidence[key], EvidenceUnverifiable)
+		}
+	}
+}
+
+// TestStatusProvidersHealthyAndFailedEvidence: a successful probe still
+// distinguishes a confirmed-set key (healthy) from a confirmed-absent one
+// (failed) -- the tri-state fix only changes the UNVERIFIABLE case.
+func TestStatusProvidersHealthyAndFailedEvidence(t *testing.T) {
+	cfg := &config.Config{}
+	env := shellEnv{
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+				return "anthropic\n", nil
+			}
+			return "", nil
+		},
+		dial:     func(int) bool { return false },
+		statFile: func(string) bool { return false },
+	}
+	st := gatherStatus(cfg, "default", env)
+	if st.ProviderEvidence["anthropic"] != EvidenceHealthy {
+		t.Errorf("anthropic evidence = %q, want healthy", st.ProviderEvidence["anthropic"])
+	}
+	if st.ProviderEvidence["openai"] != EvidenceFailed {
+		t.Errorf("openai evidence = %q, want failed (confirmed absent)", st.ProviderEvidence["openai"])
 	}
 }
 

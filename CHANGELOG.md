@@ -39,6 +39,26 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`pi-stack status` no longer renders a confirmed-missing `✗` for provider
+  keys it never actually checked.** When `sbx` was absent or `sbx secret ls`
+  failed, every provider (`anthropic`/`openai`/`google`/`github`) rendered a
+  plain `✗` in both the human output and `--json`, indistinguishable from a
+  verified-absent key. `statusReport` gains an authoritative
+  `provider_evidence` map (the same `healthy`/`failed`/`unverifiable` axis
+  `doctor` already uses); the human render now shows `⚠` for an unverifiable
+  key instead of a false `✗`, and `--json` carries the same tri-state. The
+  existing `providers` bool map is unchanged (JSON-compatible) and TODOs are
+  unchanged (they already never claimed a specific missing key).
+- **`pi-stack status` no longer claims every configured MCP server is
+  `attach-on-run`.** It used to hardcode `attach_on_run: true` for any server
+  in `cfg.MCP`, even though the DEFAULT attach mode is dynamic (discovered on
+  demand) unless a server is pinned eager via `mcp_static`. `status` now
+  resolves eager/dynamic with the exact same `resolveStaticMCP` semantics
+  (including `mcp_dynamic` precedence) `pi-stack run` uses at launch: a
+  default-dynamic registered server renders "dynamically discoverable", and
+  only an `mcp_static`-pinned one renders `✓ attach-on-run`. The registration
+  TODO (`pi-stack mcp register` for an unregistered configured server) is
+  unchanged.
 - **`pi-stack gog setup -h` now reaches its own detailed usage (Phase-10
   product/DX review, DX-1).** `pi-stack gog setup -h`/`--help` used to be
   intercepted by the `gog` noun dispatcher's blanket help gate (it scanned the

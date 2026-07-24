@@ -77,21 +77,33 @@ type statusReport struct {
 	Knowledge  bool            `json:"knowledge_up"`
 	Monitor    bool            `json:"monitor_up"`
 	Providers  map[string]bool `json:"providers"`
-	Bundles    []bundleStatus  `json:"knowledge_bundles"`
-	MCP        []string        `json:"mcp"`
-	MCPServers []mcpStatusLine `json:"mcp_servers"`
-	Sandboxes  []sandboxLine   `json:"sandboxes"`
-	Tasks      int             `json:"tasks"`
-	ArtifactB  int64           `json:"artifact_bytes"`
-	Todos      []string        `json:"todos"`
-	GogAccount string          `json:"gog_account,omitempty"`
-	GogAuthed  bool            `json:"gog_authed,omitempty"`
+	// ProviderEvidence is the AUTHORITATIVE tri-state behind Providers (same
+	// Evidence axis doctor uses): healthy (confirmed set), failed (confirmed
+	// absent, sbx probe succeeded), or unverifiable (sbx off PATH or `sbx
+	// secret ls` failed -- status could not check, so it must not claim ✗).
+	// Providers stays a plain bool map for JSON back-compat (true only on a
+	// confirmed-healthy key); a consumer that wants to tell "verified missing"
+	// from "unverifiable" reads ProviderEvidence.
+	ProviderEvidence map[string]Evidence `json:"provider_evidence"`
+	Bundles          []bundleStatus      `json:"knowledge_bundles"`
+	MCP              []string            `json:"mcp"`
+	MCPServers       []mcpStatusLine     `json:"mcp_servers"`
+	Sandboxes        []sandboxLine       `json:"sandboxes"`
+	Tasks            int                 `json:"tasks"`
+	ArtifactB        int64               `json:"artifact_bytes"`
+	Todos            []string            `json:"todos"`
+	GogAccount       string              `json:"gog_account,omitempty"`
+	GogAuthed        bool                `json:"gog_authed,omitempty"`
 }
 
 // mcpStatusLine is the per-server MCP status: registered with the sbx gateway
-// (from `sbx mcp ls`) and attach-on-run (it's in the resolved profile's mcp
-// list, so `pi-stack run --mcp <name>` attaches it). Empty when sbx is
-// unavailable, so status degrades to the bare MCP names.
+// (from `sbx mcp ls`) and Attach -- whether it is EAGER (attach-on-run: --static-mcp
+// at sandbox create) as resolved by the exact same resolveStaticMCP semantics
+// (mcp_static/mcp_dynamic precedence) run.go uses for launch. The DEFAULT is
+// dynamic for every registered server regardless of cfg.MCP membership --
+// Attach is only true when mcp_static pins it (and mcp_dynamic doesn't win
+// back). Empty when sbx is unavailable, so status degrades to the bare MCP
+// names.
 type mcpStatusLine struct {
 	Name       string `json:"name"`
 	Registered bool   `json:"registered"`
@@ -111,11 +123,12 @@ type sandboxLine struct {
 func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport {
 	memPort, knPort := memoryClient().Port, knowledgeClient().Port
 	st := statusReport{
-		Version:    version,
-		ConfigPath: config.Path(),
-		Profile:    profile,
-		Providers:  map[string]bool{},
-		MCP:        cfg.MCP,
+		Version:          version,
+		ConfigPath:       config.Path(),
+		Profile:          profile,
+		Providers:        map[string]bool{},
+		ProviderEvidence: map[string]Evidence{},
+		MCP:              cfg.MCP,
 	}
 	if env.dial != nil {
 		st.Memory = env.dial(memPort)
@@ -148,23 +161,42 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	// alternative is present; only ALL THREE missing is a genuine gap, worth
 	// exactly one aggregate todo (never one per missing key). GitHub is always
 	// optional and must never add a todo, mirroring doctor's secretCheck.
+	// Evidence is the AUTHORITATIVE tri-state (R1-03, mirrors doctor's
+	// secretCheck/modelProviderKeyCheck): !sbxOK means the probe never ran, so
+	// every key is unverifiable -- NOT a confirmed-absent failure. Only when
+	// sbxOK is true does an absent key become a verified EvidenceFailed.
 	modelKeysPresent := 0
 	for _, key := range []string{"anthropic", "openai", "google"} {
 		set := sbxOK && grepWord(sbxOut, key)
 		st.Providers[key] = set
-		if set {
+		switch {
+		case !sbxOK:
+			st.ProviderEvidence[key] = EvidenceUnverifiable
+		case set:
+			st.ProviderEvidence[key] = EvidenceHealthy
 			modelKeysPresent++
+		default:
+			st.ProviderEvidence[key] = EvidenceFailed
 		}
 	}
-	st.Providers["github"] = sbxOK && grepWord(sbxOut, "github")
+	githubSet := sbxOK && grepWord(sbxOut, "github")
+	st.Providers["github"] = githubSet
+	switch {
+	case !sbxOK:
+		st.ProviderEvidence["github"] = EvidenceUnverifiable
+	case githubSet:
+		st.ProviderEvidence["github"] = EvidenceHealthy
+	default:
+		st.ProviderEvidence["github"] = EvidenceFailed
+	}
 	if sbxOK && modelKeysPresent == 0 {
 		st.Todos = append(st.Todos, "sbx secret set -g anthropic")
 	}
-	// When sbx could NOT verify keys every provider renders ✗ but no per-key TODO
-	// is added — so without an outstanding item the verdict would be falsely "all
-	// systems go". Distinguish the two failure modes: sbx not installed at all vs
-	// installed-but-the-probe-failed. Not emitted when sbxOK is true (the per-key
-	// TODOs cover that case).
+	// When sbx could NOT verify keys every provider renders ⚠ unverifiable (never
+	// a confirmed ✗) but no per-key TODO is added -- so without an outstanding
+	// item the verdict would be falsely "all systems go". Distinguish the two
+	// failure modes: sbx not installed at all vs installed-but-the-probe-failed.
+	// Not emitted when sbxOK is true (the per-key TODOs cover that case).
 	//
 	// DX-2: sbx being entirely absent from PATH is the SAME ambiguous signal
 	// doctor sees (`sbxUnverifiableDetail`/the sbxAbsent note in doctor.go's
@@ -189,20 +221,27 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 		st.Bundles = append(st.Bundles, bundleStatus{Path: b, Git: bundleGitStatus(env, b)})
 	}
 
-	// MCP registration state: `sbx mcp ls` once, best-effort. Each configured
-	// server is attach-on-run (it's in cfg.MCP, so `run --mcp <name>` attaches it)
-	// and shows whether it is currently registered with the gateway. When sbx is
-	// unavailable MCPServers stays nil and render falls back to the bare names.
+	// MCP registration state: `sbx mcp ls` once, best-effort. Attach is resolved
+	// via resolveStaticMCP -- the SAME eager-vs-lazy semantics (mcp_static/
+	// mcp_dynamic precedence) run.go uses at launch, never re-derived from bare
+	// cfg.MCP membership (the DEFAULT is dynamic for every registered server).
+	// Each entry also shows whether it is currently registered with the gateway.
+	// When sbx is unavailable MCPServers stays nil and render falls back to the
+	// bare names.
 	if len(cfg.MCP) > 0 && env.lookPath != nil {
 		if _, err := env.lookPath("sbx"); err == nil && env.run != nil {
 			if o, err := env.run("sbx", "mcp", "ls"); err == nil {
+				eager := map[string]bool{}
+				for _, n := range resolveStaticMCP(cfg.MCP, cfg) {
+					eager[n] = true
+				}
 				anyUnregistered := false
 				for _, m := range cfg.MCP {
 					reg := grepWord(o, m)
 					st.MCPServers = append(st.MCPServers, mcpStatusLine{
 						Name:       m,
 						Registered: reg,
-						Attach:     true,
+						Attach:     eager[m],
 					})
 					if !reg {
 						anyUnregistered = true
@@ -259,7 +298,7 @@ func (st statusReport) render(out io.Writer) {
 
 	var prov []string
 	for _, k := range []string{"anthropic", "openai", "google", "github"} {
-		prov = append(prov, fmt.Sprintf("%s %s", k, okGlyph(st.Providers[k])))
+		prov = append(prov, fmt.Sprintf("%s %s", k, evidenceGlyph(st.ProviderEvidence[k])))
 	}
 	fmt.Fprintf(out, "  providers   %s\n", strings.Join(prov, "  "))
 
@@ -294,7 +333,15 @@ func (st statusReport) render(out io.Writer) {
 			if !m.Registered {
 				reg = okGlyph(false) + " not registered"
 			}
-			fmt.Fprintf(out, "  %-9s   %-8s %s  %s attach-on-run\n", label, m.Name, reg, okGlyph(m.Attach))
+			// Attach mirrors resolveStaticMCP: eager (mcp_static-pinned) renders
+			// attach-on-run; the DEFAULT dynamic renders as dynamically
+			// discoverable -- never a ✗, since lazy is the working-as-intended
+			// default, not a failure.
+			attach := "dynamically discoverable (mcp-find/mcp-exec on demand)"
+			if m.Attach {
+				attach = okGlyph(true) + " attach-on-run (eager, pinned via mcp_static)"
+			}
+			fmt.Fprintf(out, "  %-9s   %-8s %s  %s\n", label, m.Name, reg, attach)
 		}
 	}
 
@@ -342,6 +389,22 @@ func okGlyph(ok bool) string {
 		return "✓"
 	}
 	return "✗"
+}
+
+// evidenceGlyph renders a provider's Evidence tri-state (R1-03, same axis as
+// doctor's check.state): healthy -> ✓, a verified failure -> ✗, unverifiable
+// -> ⚠ (never ✗ -- that would misreport "could not check" as "confirmed
+// missing"). Any other/unset value degrades to the unverifiable glyph rather
+// than a false ✗.
+func evidenceGlyph(ev Evidence) string {
+	switch ev {
+	case EvidenceHealthy:
+		return "✓"
+	case EvidenceFailed:
+		return "✗"
+	default: // EvidenceUnverifiable, EvidenceNotConfigured, or unset
+		return "⚠"
+	}
 }
 
 // bundleGitStatus returns a short git-drift summary for a bundle dir: "clean",
