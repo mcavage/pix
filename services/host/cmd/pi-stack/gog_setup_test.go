@@ -54,6 +54,108 @@ Available Commands:
   status       report auth status
 `
 
+// The following are the SUBCOMMAND-level `gog auth <verb> --help` outputs
+// gogAuthRouteCapable probes (R1-02/R1-12): each step's OWN help text, not
+// just the top-level `gog auth --help` listing. The "Readonly" variants
+// advertise every flag gogSetup requires (including "--readonly" on any step
+// that performs an OAuth grant); the "NoReadonly" variants are missing it, to
+// exercise the capability-probe failure path.
+const gogAuthSetupHelpReadonly = `usage: gog auth setup <account> [flags]
+
+Register credentials, authorize, and log in, in one step.
+
+Flags:
+      --credentials string   path to your OAuth Desktop client JSON
+      --login                authorize interactively after registering
+      --readonly              request read-only OAuth scopes
+`
+
+const gogAuthSetupHelpNoReadonly = `usage: gog auth setup <account> [flags]
+
+Flags:
+      --credentials string   path to your OAuth Desktop client JSON
+      --login                authorize interactively after registering
+`
+
+const gogAuthCredentialsHelp = `usage: gog auth credentials <path>
+
+Register an OAuth Desktop client.
+`
+
+const gogAuthAddHelpReadonly = `usage: gog auth add <account> [flags]
+
+Flags:
+      --readonly   request read-only OAuth scopes
+`
+
+const gogAuthAddHelpNoReadonly = `usage: gog auth add <account> [flags]
+
+(no flags)
+`
+
+const gogAuthAddClientHelp = `usage: gog auth add-client <path>
+
+Register an OAuth Desktop client.
+`
+
+const gogAuthLoginHelpReadonly = `usage: gog auth login [flags]
+
+Flags:
+      --readonly   request read-only OAuth scopes
+`
+
+const gogAuthLoginHelpNoReadonly = `usage: gog auth login [flags]
+
+(no flags)
+`
+
+// gogAuthCapabilityFixtures returns the exact `gog auth <verb> --help` output
+// entries needed for gogAuthRouteCapable to accept the named route, keyed
+// exactly as gogTestEnv.output expects ("gog auth <verb> --help"). readonly
+// selects between the flag-complete and flag-missing variant of every step
+// that performs an OAuth grant.
+func gogAuthCapabilityFixtures(route string, readonly bool) map[string]string {
+	switch route {
+	case "setup":
+		if readonly {
+			return map[string]string{"gog auth setup --help": gogAuthSetupHelpReadonly}
+		}
+		return map[string]string{"gog auth setup --help": gogAuthSetupHelpNoReadonly}
+	case "credentials+add":
+		addHelp := gogAuthAddHelpReadonly
+		if !readonly {
+			addHelp = gogAuthAddHelpNoReadonly
+		}
+		return map[string]string{
+			"gog auth credentials --help": gogAuthCredentialsHelp,
+			"gog auth add --help":         addHelp,
+		}
+	case "add-client+login (legacy)":
+		loginHelp := gogAuthLoginHelpReadonly
+		if !readonly {
+			loginHelp = gogAuthLoginHelpNoReadonly
+		}
+		return map[string]string{
+			"gog auth add-client --help": gogAuthAddClientHelp,
+			"gog auth login --help":      loginHelp,
+		}
+	}
+	return nil
+}
+
+// mergeOutputs shallow-merges any number of "cmd" -> output maps into one, so
+// tests can compose a route's capability-help fixtures with its other faked
+// output without repeating every entry by hand.
+func mergeOutputs(maps ...map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, m := range maps {
+		for k, v := range m {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // gogTestEnv builds a hermetic shellEnv + a recorder of every "interactive"
 // command gogSetup would otherwise hand real stdio to (the browser-opening
 // auth steps), so tests never touch a real gog binary or terminal.
@@ -64,6 +166,27 @@ type gogTestEnv struct {
 	statFile   map[string]bool
 	interCalls *[][]string // recorded runInteractive invocations
 	interErr   error       // error runInteractive returns (nil = success)
+	// sbxRegisterOK makes an otherwise-unfixtured `sbx mcp add <name> ...` call
+	// (registerServers' actual registration exec) succeed by default, so a test
+	// that only cares about gogSetup's OWN verification logic doesn't need to
+	// hand-construct the exact addArgs argv just to let registration through. A
+	// test that WANTS to exercise a registration failure (e.g.
+	// TestGogSetup_RegistrationFailureReported) leaves this false.
+	sbxRegisterOK bool
+}
+
+// gogBareHeadlessKey is the exact bare (no op wrapper) hardened headless probe
+// key gogTestEnv's canonical "/usr/bin/gog" lookPath answer produces (R1-06):
+// the same hardened invocation mcp.go registers, plus "--list-tools".
+func gogBareHeadlessKey(acct string) string {
+	return strings.Join(gogHardenedArgv("/usr/bin/gog", acct), " ") + " --list-tools"
+}
+
+// gogBareHeadlessFixture is a one-entry output map making the bare headless
+// probe (R1-06, when op/op-refs are unavailable) report a healthy, non-empty
+// tool list for acct.
+func gogBareHeadlessFixture(acct string) map[string]string {
+	return map[string]string{gogBareHeadlessKey(acct): "gmail_search\ncalendar_events\n"}
 }
 
 func (g gogTestEnv) env() shellEnv {
@@ -85,6 +208,9 @@ func (g gogTestEnv) env() shellEnv {
 			}
 			if out, ok := g.output[key]; ok {
 				return out, nil
+			}
+			if g.sbxRegisterOK && name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "add" {
+				return "", nil
 			}
 			return "", fmt.Errorf("no fake output for %q", key)
 		},
@@ -120,13 +246,14 @@ func TestGogSetup_CurrentOneShotRoute(t *testing.T) {
 	cred := gogCredFile(t)
 	var calls [][]string
 	ge := gogTestEnv{
-		present: map[string]bool{"gog": true, "op": true},
-		output: map[string]string{
+		present: map[string]bool{"gog": true, "op": true, "sbx": true},
+		output: mergeOutputs(gogAuthCapabilityFixtures("setup", true), gogBareHeadlessFixture("you@example.com"), map[string]string{
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",
-		},
-		statFile:   map[string]bool{cred: true},
-		interCalls: &calls,
+		}),
+		statFile:      map[string]bool{cred: true},
+		interCalls:    &calls,
+		sbxRegisterOK: true,
 	}
 	var out bytes.Buffer
 	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
@@ -136,7 +263,8 @@ func TestGogSetup_CurrentOneShotRoute(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("expected 1 interactive call (one-shot setup), got %d: %v", len(calls), calls)
 	}
-	want := []string{"gog", "auth", "setup", "you@example.com", "--credentials", cred, "--login"}
+	// R1-02: the OAuth-granting step always carries --readonly.
+	want := []string{"gog", "auth", "setup", "you@example.com", "--credentials", cred, "--login", "--readonly"}
 	if strings.Join(calls[0], " ") != strings.Join(want, " ") {
 		t.Errorf("interactive call = %v, want %v", calls[0], want)
 	}
@@ -166,13 +294,14 @@ func TestGogSetup_CurrentTwoStepRoute(t *testing.T) {
 	cred := gogCredFile(t)
 	var calls [][]string
 	ge := gogTestEnv{
-		present: map[string]bool{"gog": true},
-		output: map[string]string{
+		present: map[string]bool{"gog": true, "sbx": true},
+		output: mergeOutputs(gogAuthCapabilityFixtures("credentials+add", true), gogBareHeadlessFixture("you@example.com"), map[string]string{
 			"gog auth --help": gogAuthHelpCurrentTwoStep,
 			"gog --account you@example.com auth doctor --check": "ok",
-		},
-		statFile:   map[string]bool{cred: true},
-		interCalls: &calls,
+		}),
+		statFile:      map[string]bool{cred: true},
+		interCalls:    &calls,
+		sbxRegisterOK: true,
 	}
 	var out bytes.Buffer
 	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
@@ -185,7 +314,8 @@ func TestGogSetup_CurrentTwoStepRoute(t *testing.T) {
 	if strings.Join(calls[0], " ") != "gog auth credentials "+cred {
 		t.Errorf("call[0] = %v", calls[0])
 	}
-	if strings.Join(calls[1], " ") != "gog auth add you@example.com" {
+	// R1-02: the OAuth-granting `auth add` step always carries --readonly.
+	if strings.Join(calls[1], " ") != "gog auth add you@example.com --readonly" {
 		t.Errorf("call[1] = %v", calls[1])
 	}
 }
@@ -195,13 +325,14 @@ func TestGogSetup_LegacyFallbackRoute(t *testing.T) {
 	cred := gogCredFile(t)
 	var calls [][]string
 	ge := gogTestEnv{
-		present: map[string]bool{"gog": true},
-		output: map[string]string{
+		present: map[string]bool{"gog": true, "sbx": true},
+		output: mergeOutputs(gogAuthCapabilityFixtures("add-client+login (legacy)", true), gogBareHeadlessFixture("you@example.com"), map[string]string{
 			"gog auth --help": gogAuthHelpLegacy,
 			"gog --account you@example.com auth doctor --check": "ok",
-		},
-		statFile:   map[string]bool{cred: true},
-		interCalls: &calls,
+		}),
+		statFile:      map[string]bool{cred: true},
+		interCalls:    &calls,
+		sbxRegisterOK: true,
 	}
 	var out bytes.Buffer
 	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
@@ -214,7 +345,8 @@ func TestGogSetup_LegacyFallbackRoute(t *testing.T) {
 	if strings.Join(calls[0], " ") != "gog auth add-client "+cred {
 		t.Errorf("call[0] = %v", calls[0])
 	}
-	if strings.Join(calls[1], " ") != "gog --account you@example.com auth login" {
+	// R1-02: the OAuth-granting `auth login` step always carries --readonly.
+	if strings.Join(calls[1], " ") != "gog --account you@example.com auth login --readonly" {
 		t.Errorf("call[1] = %v", calls[1])
 	}
 }
@@ -322,13 +454,13 @@ func TestGogSetup_ZeroHeadlessToolsFailsWithGuidance(t *testing.T) {
 	}
 	ge := gogTestEnv{
 		present: map[string]bool{"gog": true, "op": true},
-		output: map[string]string{
+		output: mergeOutputs(gogAuthCapabilityFixtures("setup", true), map[string]string{
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",
 			// headless probe (op run --env-file=... -- gog ... mcp --list-tools)
 			// returns EMPTY output => zero tools.
 			"op run --env-file=" + refs + " -- gog --account you@example.com mcp --list-tools": "",
-		},
+		}),
 		statFile: map[string]bool{cred: true, refs: true},
 	}
 	var out bytes.Buffer
@@ -370,12 +502,13 @@ func TestGogSetup_IdempotentAddMCPWhenAccountUnchanged(t *testing.T) {
 	}
 
 	ge := gogTestEnv{
-		present: map[string]bool{"gog": true},
-		output: map[string]string{
+		present: map[string]bool{"gog": true, "sbx": true},
+		output: mergeOutputs(gogAuthCapabilityFixtures("setup", true), gogBareHeadlessFixture("you@example.com"), map[string]string{
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",
-		},
-		statFile: map[string]bool{cred: true},
+		}),
+		statFile:      map[string]bool{cred: true},
+		sbxRegisterOK: true,
 	}
 	var out bytes.Buffer
 	opts := gogSetupOpts{account: "you@example.com", credentials: cred}
@@ -424,12 +557,13 @@ func TestGogSetup_NoCredentialContentReads(t *testing.T) {
 	cred := gogCredFile(t)
 	readFileCalled := false
 	ge := gogTestEnv{
-		present: map[string]bool{"gog": true},
-		output: map[string]string{
+		present: map[string]bool{"gog": true, "sbx": true},
+		output: mergeOutputs(gogAuthCapabilityFixtures("setup", true), gogBareHeadlessFixture("you@example.com"), map[string]string{
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",
-		},
-		statFile: map[string]bool{cred: true},
+		}),
+		statFile:      map[string]bool{cred: true},
+		sbxRegisterOK: true,
 	}
 	env := ge.env()
 	env.readFile = func(path string) (string, error) {
@@ -450,12 +584,13 @@ func TestGogSetup_PromptsOnTTYForMissingAccountAndCredentials(t *testing.T) {
 	gogSetupTestCfg(t)
 	cred := gogCredFile(t)
 	ge := gogTestEnv{
-		present: map[string]bool{"gog": true},
-		output: map[string]string{
+		present: map[string]bool{"gog": true, "sbx": true},
+		output: mergeOutputs(gogAuthCapabilityFixtures("setup", true), gogBareHeadlessFixture("you@example.com"), map[string]string{
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",
-		},
-		statFile: map[string]bool{cred: true},
+		}),
+		statFile:      map[string]bool{cred: true},
+		sbxRegisterOK: true,
 	}
 	var out bytes.Buffer
 	in := strings.NewReader("you@example.com\n" + cred + "\n")
@@ -490,13 +625,14 @@ func TestGogSetup_BufferedReaderDeliversBothPromptedValues(t *testing.T) {
 	cred := gogCredFile(t)
 	var calls [][]string
 	ge := gogTestEnv{
-		present: map[string]bool{"gog": true},
-		output: map[string]string{
+		present: map[string]bool{"gog": true, "sbx": true},
+		output: mergeOutputs(gogAuthCapabilityFixtures("setup", true), gogBareHeadlessFixture("you@example.com"), map[string]string{
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",
-		},
-		statFile:   map[string]bool{cred: true},
-		interCalls: &calls,
+		}),
+		statFile:      map[string]bool{cred: true},
+		interCalls:    &calls,
+		sbxRegisterOK: true,
 	}
 	var out bytes.Buffer
 	// ONE fully-buffered io.Reader carrying BOTH answers: a real strings.Reader
@@ -537,12 +673,13 @@ func TestGogSetup_PrintsAttachModeGuidance(t *testing.T) {
 	gogSetupTestCfg(t)
 	cred := gogCredFile(t)
 	ge := gogTestEnv{
-		present: map[string]bool{"gog": true},
-		output: map[string]string{
+		present: map[string]bool{"gog": true, "sbx": true},
+		output: mergeOutputs(gogAuthCapabilityFixtures("setup", true), gogBareHeadlessFixture("you@example.com"), map[string]string{
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",
-		},
-		statFile: map[string]bool{cred: true},
+		}),
+		statFile:      map[string]bool{cred: true},
+		sbxRegisterOK: true,
 	}
 	var out bytes.Buffer
 	opts := gogSetupOpts{account: "you@example.com", credentials: cred}

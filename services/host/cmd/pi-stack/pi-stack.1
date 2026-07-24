@@ -818,15 +818,29 @@ Bring your own OAuth client — no organization credentials are bundled.
 .BR "pi-stack gog setup" " [" \-\-account " " email "] [" \-\-credentials " " path "] [" \-\-yes "]"
 Checks the
 .B gog
-CLI is installed, imports your Desktop OAuth client JSON by invoking
+CLI AND
+.B sbx
+are both installed (a missing
+.B sbx
+fails the command — never a silent "would register" success), imports your
+Desktop OAuth client JSON by invoking
 .B gog
-itself (never reading or printing its contents), authorizes the account
-(may open a browser; inherits this terminal), verifies interactive AND
-headless auth the same way the sbx gateway will spawn it, then saves
-.B gog_account ,
-enables
+itself (never reading or printing its contents), probes the selected auth
+route's own subcommand flags and requests READ-ONLY OAUTH SCOPES at grant
+time (gog's
+.B \-\-readonly
+flag on the OAuth-granting command; refuses to proceed if the installed
 .B gog
-in the configured MCP set, and registers it with the sbx gateway.
+can't advertise it), authorizes the account (may open a browser; inherits
+this terminal), verifies interactive AND headless auth the same way the sbx
+gateway will spawn it — bare when 1Password isn't set up, never skipped —
+then registers gog with the sbx gateway FIRST and only then saves
+.B gog_account
+and enables
+.B gog
+in the configured MCP set (a registration failure never touches the
+persisted config; a save failure after a successful registration rolls the
+registration back).
 Idempotent.
 .SS pack
 A pack is a git-backed context bundle (skills + knowledge + reference-only

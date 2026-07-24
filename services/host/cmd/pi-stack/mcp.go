@@ -178,21 +178,30 @@ type mcpRegistrar struct {
 	hostBin string // absolute pi-stack-host (for slack + other host subcommands)
 }
 
+// gogHardenedArgv builds the EXACT hardened gog invocation used both when
+// registering gog with the sbx gateway (mcpRegistrar.serverCmd) and when
+// probing it directly (gog_setup.go's bare headless probe, R1-06) — a single
+// definition so a direct probe can never silently drift from what actually
+// gets registered. gogBin is normally the canonical PATH-resolved gog binary.
+func gogHardenedArgv(gogBin, account string) []string {
+	return []string{
+		gogBin,
+		"--account", account,
+		"--gmail-no-send",
+		"--wrap-untrusted",
+		"--readonly",
+		"mcp",
+		"--allow-tool", "read",
+	}
+}
+
 // serverCmd is the bare command+args the gateway must ultimately spawn for one
 // server (before any op-run wrapping): gog with its hardened flags, or a
 // pi-stack-host subcommand (slack + friends).
 func (m mcpRegistrar) serverCmd(name string) []string {
 	switch name {
 	case "gog":
-		return []string{
-			m.gog,
-			"--account", m.account,
-			"--gmail-no-send",
-			"--wrap-untrusted",
-			"--readonly",
-			"mcp",
-			"--allow-tool", "read",
-		}
+		return gogHardenedArgv(m.gog, m.account)
 	default:
 		// slack + any other local stdio server is a pi-stack-host subcommand.
 		return []string{m.hostBin, "mcp", name}
@@ -228,6 +237,22 @@ func (m mcpRegistrar) addArgs(name string) []string {
 		"--args", "--",
 	}
 	for _, c := range cmd {
+		args = append(args, "--args", c)
+	}
+	return args
+}
+
+// rawAddArgs builds a literal `sbx mcp add <name> --command <argv[0]> --args
+// <argv[1]> ...` argv from an already-resolved command line (e.g. one read
+// back via `sbx mcp get`). Used by gog_setup.go's registration rollback
+// (R1-08) to re-register a PRIOR command exactly as it was, without having to
+// reconstruct it from config.
+func rawAddArgs(name string, argv []string) []string {
+	if len(argv) == 0 {
+		return []string{"mcp", "add", name}
+	}
+	args := []string{"mcp", "add", name, "--command", argv[0]}
+	for _, c := range argv[1:] {
 		args = append(args, "--args", c)
 	}
 	return args

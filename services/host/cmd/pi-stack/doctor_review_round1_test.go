@@ -624,12 +624,17 @@ func TestGogSetup_R114_ProbesBounded(t *testing.T) {
 	cred := dir + "/client.json"
 	helpKey := "gog auth --help"
 	authKey := "gog --account " + acct + " auth doctor --check"
+	setupHelpKey := "gog auth setup --help"
+	headlessKey := strings.Join(gogHardenedArgv("/usr/bin/gog", acct), " ") + " --list-tools"
 
 	var probed []string
 	env := shellEnv{
 		lookPath: func(name string) (string, error) {
 			if name == "gog" {
 				return "/usr/bin/gog", nil
+			}
+			if name == "sbx" {
+				return "/usr/bin/sbx", nil
 			}
 			return "", fmt.Errorf("exec: %q not found", name)
 		},
@@ -641,15 +646,22 @@ func TestGogSetup_R114_ProbesBounded(t *testing.T) {
 			switch key {
 			case helpKey:
 				return gogAuthHelpCurrentSetup, false, nil
+			case setupHelpKey:
+				return gogAuthSetupHelpReadonly, false, nil
 			case authKey:
 				return "ok", false, nil
+			case headlessKey:
+				return "gmail_search\n", false, nil
 			}
 			return "", false, fmt.Errorf("no fake probe output for %q", key)
 		},
 		run: func(name string, args ...string) (string, error) {
 			key := strings.Join(append([]string{name}, args...), " ")
-			if key == helpKey || key == authKey {
+			if key == helpKey || key == authKey || key == setupHelpKey || key == headlessKey {
 				t.Fatalf("gog setup probe %q must go through the bounded probe, not raw run", key)
+			}
+			if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "add" {
+				return "", nil
 			}
 			return "", fmt.Errorf("no fake output for %q", key)
 		},

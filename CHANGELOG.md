@@ -31,6 +31,48 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   spawns), and only then saves the account, enables `gog` in the configured
   MCP set, and registers it. See `docs/gog-setup.md`.
 
+### Fixed
+
+- **`pi-stack gog setup` now enforces read-only OAuth authorization at grant
+  time, not just at MCP runtime.** Every supported auth route always passes
+  gog's `--readonly` flag on whichever step actually performs the OAuth
+  grant, gated on a capability probe of that SELECTED route's own
+  subcommand help (not just the top-level `gog auth --help` names) for
+  every flag it needs. If the installed `gog` cannot advertise `--readonly`
+  for the selected route, the command fails with upgrade guidance instead of
+  authorizing without it or falling back to an older, unguarded route.
+  `gog` exposes no stable, parseable scope-inspection surface, so this is
+  documented precisely as what it is: a guaranteed read-only REQUEST at
+  grant time, backed by gog's own runtime write-blocking flags
+  (`--gmail-no-send --wrap-untrusted --readonly --allow-tool read`) — not an
+  independently-verified inspection of granted scopes.
+- `pi-stack gog setup` no longer skips headless verification when
+  1Password/`op-refs.env` aren't set up (previously treated as a fine-on-
+  macOS no-op): it now probes the bare hardened gog command directly, the
+  same hardened invocation the sbx gateway registers, bounded the same way
+  as every other probe. A clean zero-tools result still fails with the
+  keyring fix; a timeout or exec error is unverifiable and is never reported
+  as success.
+- `pi-stack gog setup` now requires `sbx`: a missing `sbx` binary, or a
+  failed `sbx mcp add`, is a hard failure — it no longer reports a silent
+  "would register" success. Registration is also required to succeed
+  BEFORE config is saved (previously config was saved first): a
+  registration failure now leaves the persisted config completely
+  unchanged, and a config-save failure after a successful registration
+  rolls the sbx-side registration back (restoring whatever was registered
+  before, or removing the new one) instead of leaving config and the
+  gateway to drift apart.
+- `pi-stack gog setup`'s version-awareness now probes the exact subcommand
+  help + flags for the SELECTED route, not only the top-level subcommand
+  names — a `gog` release that changed a subcommand's flags under an
+  unchanged name is caught with installed-version guidance before any auth
+  command runs, instead of failing as an opaque exec error mid-flow.
+- Every noninteractive `gog setup` probe (subcommand-help/capability,
+  version, auth-doctor, and the new bare headless probe) runs through the
+  same bounded timeout + output-cap machinery `doctor` uses; only the
+  interactive, browser-opening auth commands keep inherited stdio and stay
+  user-cancellable.
+
 ### Changed
 
 - `pi-stack doctor` now exits **1** on a VERIFIED core requirement failure

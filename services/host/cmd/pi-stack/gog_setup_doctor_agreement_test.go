@@ -98,6 +98,11 @@ func (g *gogPipelineFake) env() shellEnv {
 				return "", nil
 			case name == "gog" && joined == "auth --help":
 				return gogAuthHelpCurrentSetup, nil
+			// R1-02/R1-12: gogAuthRouteCapable probes the SELECTED route's own
+			// subcommand help for its required flags (here, the one-shot "setup"
+			// route's --credentials/--login/--readonly) before ever running it.
+			case name == "gog" && joined == "auth setup --help":
+				return gogAuthSetupHelpReadonly, nil
 			case name == "gog" && joined == "--account "+g.acct+" auth doctor --check":
 				return "ok", nil
 			// Both gogSetup's own light headless verification (name="op", a bare
