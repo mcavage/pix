@@ -168,7 +168,7 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	// even apply from here.
 	switch {
 	case !sbxOnPath:
-		st.Todos = append(st.Todos, "can't verify provider keys here (sbx not on PATH, likely inside a sandbox) — run `pi-stack doctor` on the host")
+		st.Todos = append(st.Todos, "can't verify provider keys here (sbx not on PATH, likely inside a sandbox); run `pi-stack doctor` on the host")
 	case !sbxOK:
 		st.Todos = append(st.Todos, "could not verify provider keys (sbx secret ls failed); check sbx")
 	}
@@ -253,7 +253,7 @@ func (st statusReport) render(out io.Writer) {
 	fmt.Fprintf(out, "  providers   %s\n", strings.Join(prov, "  "))
 
 	if len(st.Bundles) == 0 {
-		fmt.Fprintln(out, "  knowledge   (no bundle) — `pi-stack knowledge init`")
+		fmt.Fprintln(out, "  knowledge   (no bundle): `pi-stack knowledge init`")
 	} else {
 		for i, b := range st.Bundles {
 			label := "knowledge"

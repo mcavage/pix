@@ -106,13 +106,13 @@ pi-stack setup
 Setup requires a signed-in 1Password CLI (`op`): it validates references for
 Anthropic, OpenAI, and Google, reconciles them into `sbx`, creates the default
 pack, and launches one upfront onboarding tour. It stores references, never
-resolved keys. 1Password is the ONLY provider-key source — there is no
+resolved keys. 1Password is the ONLY provider-key source: there is no
 "trust existing sbx keys" shortcut; without `op` installed and signed in,
 setup fails with the exact fix. `pi-stack onboard` never provisions provider
 keys at all. After setup, `pi-stack run` launches or reattaches without
 replaying onboarding.
 
-`pi-stack setup` is the opposite: it *actually sets you up* — provisions model
+`pi-stack setup` is the opposite: it *actually sets you up*, provisions model
 keys from 1Password (wiring both the sandbox and host mode's `hostmode.env`),
 creates your default pack, then hands off to a one-shot upfront guide that names
 the exact workflows, explains memory and packs, reports grounded setup gaps, and
@@ -120,7 +120,7 @@ asks for your real task. Repeat it any time: the host phase reconciles
 keys/config again; an existing sandbox is left alone (reattach with `pi-stack
 run`, or recreate it with your current settings *and* get the tour via `pi-stack
 setup --replace`). Host mode (the unsandboxed escape hatch) is **not** set up by
-setup — it's opt-in and needs `pi` on the host; enable it only if you need it
+setup; it's opt-in and needs `pi` on the host; enable it only if you need it
 with a single command, `pi-stack host setup` (it provisions **and** enables host
 mode when provisioning succeeds). It reaches cloud models through the same
 `op://` refs in `hostmode.env` that setup wrote, resolved via `op run` at each
@@ -135,7 +135,7 @@ role needs it and that the download can be large, so nothing downloads by
 accident; pass `--pull-models` to force every missing tag now with no prompt
 (CI-safe); a non-interactive run (or a bare `--yes`) never downloads and
 instead prints the exact `ollama pull <tag>` command to run yourself. A pull
-failure is reported plainly and setup keeps going — it never claims a model is
+failure is reported plainly and setup keeps going: it never claims a model is
 ready when it isn't.
 
 `pi-stack doctor` is concise by default: a healthy group collapses to one
@@ -148,7 +148,7 @@ inside the sandbox itself, where `sbx` isn't reachable to confirm anything).
 Want Google Workspace? `pi-stack gog setup --account you@example.com
 --credentials ~/path/to/oauth-client.json` walks you through OAuth import,
 authorization, headless verification, and MCP registration in one guided
-command — see [docs/gog-setup.md](docs/gog-setup.md).
+command; see [docs/gog-setup.md](docs/gog-setup.md).
 
 You don't babysit the services daemon: `pi-stack run` / `memory` / `knowledge
 query` lazily auto-start a detached `pi-stack-host serve` when its ports are
@@ -156,7 +156,7 @@ down (opt out with `PI_STACK_NO_AUTOSERVE=1` or `pi-stack config set
 host.autoserve false`; log at `~/.local/state/pi-stack/serve.log`). Prefer an
 always-on login service? `pi-stack serve install` registers it with launchd
 (macOS) or systemd --user (Linux); `pi-stack serve uninstall` removes it. The
-managed service logs to the SAME `~/.local/state/pi-stack/serve.log` — one
+managed service logs to the SAME `~/.local/state/pi-stack/serve.log`, one
 log file regardless of how serve was started.
 
 Bare `pi-stack` (no args) prints a status dashboard; it never launches a sandbox.
@@ -164,7 +164,7 @@ Use `pi-stack run [DIR]` to launch. This is deliberate: launching is always
 explicit.
 
 `pi-stack run` matches sbx's own lifecycle: if no sandbox by that name exists
-yet, it creates one; if one already exists — running or stopped — it
+yet, it creates one; if one already exists (running or stopped), it
 RE-ATTACHES to it as-is instead of refusing or recreating (sbx reads the agent
 from the sandbox's own spec, so `--kit`/`--mcp`/create-only flags don't apply on
 a re-attach). Pass `--replace` to force a recreate (`sbx rm -f` then create)
@@ -292,7 +292,7 @@ commands when something is missing.
 
 ### Expert: `pi-stack host` (unsandboxed, gated off)
 
-`pi-stack host [DIR]` runs pi **directly on your machine** — no sandbox, no
+`pi-stack host [DIR]` runs pi **directly on your machine**: no sandbox, no
 network fence, real credentials. It exists for one narrow case: developing
 pi-stack itself, which needs the host's Docker/`sbx`/`make` that the VM
 structurally cannot reach. It's opt-in (not touched by `pi-stack setup`): run
@@ -303,8 +303,8 @@ Cloud keys come from op:// refs in `hostmode.env` next to `config.toml`,
 resolved just-in-time by `op run` and never persisted; without that file the
 session is Ollama-only.
 
-Host mode ships guardrails — a guard extension, workspace refusals
-(`$HOME`/`/`/`/etc`/secret dirs), disabled subagents — but they protect against
+Host mode ships guardrails: a guard extension, workspace refusals
+(`$HOME`/`/`/`/etc`/secret dirs), and disabled subagents, but they protect against
 **accidents, not attacks**. They are guardrails, not a security boundary. For
 anything you wouldn't hand a shell to, use `pi-stack run`. Full threat model:
 [docs/design/host-mode.md](docs/design/host-mode.md).
@@ -345,7 +345,7 @@ make pull-models
 ### Local Ollama models
 
 The stack uses local Ollama models in three roles. All three are `pi-stack config`
-settings on the host — you never hand-edit sandbox env. Pull them with
+settings on the host; you never hand-edit sandbox env. Pull them with
 `make pull-models` (or `ollama pull <tag>`); whatever tag you set must be pulled
 or the call 404s.
 
@@ -365,11 +365,11 @@ From a repo-less install, `pi-stack setup --pull-models` does the same pull
 non-interactively (CI-safe). A plain `pi-stack setup` on a real terminal offers
 a default-No prompt per missing model instead of downloading anything
 unasked, and a non-interactive/`--yes` run without `--pull-models` never
-downloads — it prints the exact `ollama pull <tag>` command instead.
+downloads; it prints the exact `ollama pull <tag>` command instead.
 
 How the sandbox picks up `ollama_bridge_model`: `pi-stack run` writes the
 configured tag into `<workspace>/.pi-stack/ollama-bridge.model`, and the
-`ollama-bridge` extension reads it at startup — so a `pi-stack config set` +
+`ollama-bridge` extension reads it at startup, so a `pi-stack config set` +
 next `pi-stack run` is all it takes. No `/etc/sandbox-persistent.sh` editing, and
 you set ONE value (the display label is derived from the tag; an
 `OLLAMA_BRIDGE_MODEL` env var still overrides for power users, and
@@ -391,7 +391,7 @@ pi-stack knowledge init
 
 Both commands wire the config AND propagate it: a managed or lazily-started
 daemon is restarted automatically so the bundle gets indexed; a foreground
-`pi-stack serve` is never killed — you're told to restart it (and if nothing is
+`pi-stack serve` is never killed; you're told to restart it (and if nothing is
 running, the change simply applies on the next start).
 
 Google Workspace is read-only by default. One guided command handles OAuth
@@ -404,7 +404,7 @@ pi-stack gog setup --account you@example.com --credentials ~/path/to/oauth-clien
 `gog setup` prompts for anything you omit on a real terminal, drives whichever
 auth flow your installed `gog` CLI supports (it probes `gog auth --help` and
 picks the current one), and refuses to register until it verifies headless
-tools actually return results — not just an interactive login. See
+tools actually return results, not just an interactive login. See
 [docs/gog-setup.md](docs/gog-setup.md) for the full walkthrough, including the
 one keyring trap that silently yields zero tools in the sandbox.
 

@@ -122,9 +122,9 @@ func runRun(argv []string) {
 				if o.LocalImageTag != "" {
 					note = " (local image :" + o.LocalImageTag + ")"
 				}
-				fmt.Fprintf(os.Stderr, "pi-stack: unreleased build %q — using local checkout kit %s%s\n", version, o.LocalKit, note)
+				fmt.Fprintf(os.Stderr, "pi-stack: unreleased build %q, using local checkout kit %s%s\n", version, o.LocalKit, note)
 			} else {
-				fmt.Fprintf(os.Stderr, "pi-stack: unreleased build %q and no pi-stack checkout found — "+
+				fmt.Fprintf(os.Stderr, "pi-stack: unreleased build %q and no pi-stack checkout found, "+
 					"kit tracks #ref=main (may not match this binary). Use `pi-stack run --dev` from a "+
 					"checkout or `pi-stack run --kit <path-or-git-url>` to override.\n", version)
 			}
@@ -398,9 +398,9 @@ func stalePackReattachWarning(cfg *config.Config, o runOpts, reattaching bool) s
 		return ""
 	}
 	if active == "" {
-		return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q (since detached); its mcp/bin/skills are still attached until you recreate: %s", created, runReplaceCommand(o.Workspace))
+		return fmt.Sprintf("pi-stack: re-attaching without --replace: this sandbox was created with pack %q (since detached); its mcp/bin/skills are still attached until you recreate: %s", created, runReplaceCommand(o.Workspace))
 	}
-	return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q, not the active pack %q; the active pack's mcp/bin/skills won't attach until you recreate: %s", created, active, runReplaceCommand(o.Workspace))
+	return fmt.Sprintf("pi-stack: re-attaching without --replace: this sandbox was created with pack %q, not the active pack %q; the active pack's mcp/bin/skills won't attach until you recreate: %s", created, active, runReplaceCommand(o.Workspace))
 }
 
 // runReplaceCommand returns the exact `pi-stack run [WORKSPACE] --replace`

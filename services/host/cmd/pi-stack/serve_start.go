@@ -152,7 +152,7 @@ type ensureServeOpts struct {
 // errAutoserveDisabled is returned when serve is down and auto-start is opted
 // out (env or config); callers degrade exactly as before this feature existed.
 var errAutoserveDisabled = fmt.Errorf(
-	"serve not running and auto-start is disabled (%s / host.autoserve=false) — run `pi-stack serve`", autoserveEnvVar)
+	"serve not running and auto-start is disabled (%s / host.autoserve=false), run `pi-stack serve`", autoserveEnvVar)
 
 // ensureServe makes the required services reachable, auto-starting a detached
 // `pi-stack-host serve` if needed. Returns nil when the required ports answer
@@ -234,7 +234,7 @@ func ensureServe(st serveStarter, cfg *config.Config, opts ensureServeOpts) erro
 		// lock releasing as if cleanup had succeeded.
 		if err := st.recordPid(handle.pid); err != nil {
 			if killErr := handle.kill(); killErr != nil {
-				return fmt.Errorf("spawned pi-stack services (pid %d) but could not record its pidfile (%v), AND could not kill it to avoid a double-spawn race (%v) — a second daemon must not be started until pid %d is confirmed dead", handle.pid, err, killErr, handle.pid)
+				return fmt.Errorf("spawned pi-stack services (pid %d) but could not record its pidfile (%v), AND could not kill it to avoid a double-spawn race (%v); a second daemon must not be started until pid %d is confirmed dead", handle.pid, err, killErr, handle.pid)
 			}
 			_ = handle.wait() // reap: not yet released, so this is a real wait on our own child
 			return fmt.Errorf("spawned pi-stack services (pid %d) but could not record its pidfile, so it was killed and reaped to avoid a double-spawn race: %v", handle.pid, err)

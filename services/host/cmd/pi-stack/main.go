@@ -316,7 +316,7 @@ DIR defaults to the current directory. Everything after -- is passed to pi.
 Set PI_STACK_DEBUG=1 to print the composed sbx command.
 `
 
-const helpText = `pi-stack — a personal, multi-model pi coding agent in a Docker sandbox.
+const helpText = `pi-stack: a personal, multi-model pi coding agent in a Docker sandbox.
 
 Usage:  pi-stack <command> [args]
 

@@ -202,7 +202,7 @@ func validatePackFacets(root string, m *packManifest) error {
 			return fmt.Errorf("pack %s: [[bin]] name %q is invalid (letters, digits, -, _, . only; no path separators)", root, b.Name)
 		}
 		if strings.TrimSpace(b.SHA) == "" {
-			return fmt.Errorf("pack %s: [[bin]] %q has no sha — external binaries must be SHA-pinned (fail closed)", root, b.Name)
+			return fmt.Errorf("pack %s: [[bin]] %q has no sha: external binaries must be SHA-pinned (fail closed)", root, b.Name)
 		}
 		if err := validateRepoRelativePath(root, b.Path); err != nil {
 			return fmt.Errorf("pack %s: [[bin]] %q: %w", root, b.Name, err)
@@ -436,7 +436,7 @@ func migrateLegacyPackDirLocked(oldDir, newDir string) error {
 		aliasCanon := canonicalizePackRoot(alias)
 		if aliasCanon != oldCanon {
 			if resolved, rerr := filepath.EvalSymlinks(alias); rerr == nil && canonicalizePackRoot(resolved) == oldCanon {
-				return fmt.Errorf("cfg.pack %q is a symlink alias resolving to %s, but its own path does not match — refusing to migrate (would leave the alias dangling); repoint cfg.pack directly at %s first, or remove the alias", alias, oldDir, oldDir)
+				return fmt.Errorf("cfg.pack %q is a symlink alias resolving to %s, but its own path does not match: refusing to migrate (would leave the alias dangling); repoint cfg.pack directly at %s first, or remove the alias", alias, oldDir, oldDir)
 			}
 		}
 	}
@@ -451,7 +451,7 @@ func migrateLegacyPackDirLocked(oldDir, newDir string) error {
 	prevName, merr := renamePackManifestToDefault(newDir)
 	if merr != nil {
 		if back := rollbackDir(); back != nil {
-			return fmt.Errorf("renamed %s to %s but could not update its manifest (%v), AND the directory rollback failed (%v) — fix manually", oldDir, newDir, merr, back)
+			return fmt.Errorf("renamed %s to %s but could not update its manifest (%v), AND the directory rollback failed (%v); fix manually", oldDir, newDir, merr, back)
 		}
 		return fmt.Errorf("could not rename pack manifest to %q (%v); migration rolled back, %s left in place", "default", merr, oldDir)
 	}
@@ -869,7 +869,7 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, er
 			// cfg.Pack must not brick every launch. The pack did NOT apply, so
 			// the effective root is "" — the caller must not mark this launch
 			// as having this pack.
-			fmt.Fprintf(os.Stderr, "pi-stack: active pack unavailable (%v); launching without it — `pi-stack pack use <path>` to re-point it or `pi-stack pack rm` to detach\n", err)
+			fmt.Fprintf(os.Stderr, "pi-stack: active pack unavailable (%v); launching without it: `pi-stack pack use <path>` to re-point it or `pi-stack pack rm` to detach\n", err)
 			return "", nil
 		}
 		// The pack EXISTS but won't load (symlink injected, validation/parse
@@ -901,7 +901,7 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, er
 	}
 	for _, ig := range p.Manifest.Integrations {
 		if ig.Env != "" && !opRefFilled(env, ig.Env) {
-			fmt.Fprintf(os.Stderr, "pi-stack: pack integration %q needs a credential — set it: pi-stack secret set %s op://vault/item/field\n", ig.Name, ig.Env)
+			fmt.Fprintf(os.Stderr, "pi-stack: pack integration %q needs a credential: set it: pi-stack secret set %s op://vault/item/field\n", ig.Name, ig.Env)
 		}
 	}
 	// Fold the pack's EAGER-declared MCP servers (integration `static = true`)
@@ -1072,15 +1072,15 @@ func sweepStaleKitTemps(parent, base string) {
 // (0755): a bash shim the pack author fills in.
 func proxyShimTemplate(name string) string {
 	return "#!/usr/bin/env bash\n" +
-		"# " + name + " — pack proxy wrapper (scaffolded by `pi-stack pack add proxy`).\n" +
+		"# " + name + ": pack proxy wrapper (scaffolded by `pi-stack pack add proxy`).\n" +
 		"#\n" +
 		"# Runs IN THE SANDBOX, fenced by the net allowlist (F2: in-sandbox, safe by\n" +
-		"# default). Edit this to wrap the real CLI/API call — e.g. curl a REST\n" +
+		"# default). Edit this to wrap the real CLI/API call: e.g. curl a REST\n" +
 		"# endpoint, or exec a real binary already on PATH under a different name.\n" +
 		"# Declare any domains it needs in pack.toml's [[proxy]] egress = [...] so\n" +
 		"# the sbx kit allowlist can be updated to match.\n" +
 		"set -euo pipefail\n" +
-		"echo \"" + name + ": TODO — implement this wrapper\" >&2\n" +
+		"echo \"" + name + ": TODO: implement this wrapper\" >&2\n" +
 		"exit 1\n"
 }
 
@@ -1222,10 +1222,10 @@ func commitPackActivation(cfg *config.Config, store *packTrustStore, root string
 	if priorErr != nil && !os.IsNotExist(priorErr) {
 		// Can't snapshot the prior lock, so a Save-failure rollback would be
 		// impossible: abort BEFORE writing anything (nothing is committed).
-		return fmt.Errorf("reading prior pack.lock for %s: %v — aborting without saving config (nothing was committed; fix the pack directory and re-run)", root, priorErr)
+		return fmt.Errorf("reading prior pack.lock for %s: %v; aborting without saving config (nothing was committed; fix the pack directory and re-run)", root, priorErr)
 	}
 	if err := writePackLock(root, lock); err != nil {
-		return fmt.Errorf("writing pack.lock for %s: %v — aborting without saving config (nothing was committed; fix the pack directory and re-run)", root, err)
+		return fmt.Errorf("writing pack.lock for %s: %v; aborting without saving config (nothing was committed; fix the pack directory and re-run)", root, err)
 	}
 	restoreLock := func() error {
 		if priorExists {
@@ -1237,17 +1237,17 @@ func commitPackActivation(cfg *config.Config, store *packTrustStore, root string
 		fresh, lerr := loadPackTrustStore()
 		if lerr != nil {
 			if rerr := restoreLock(); rerr != nil {
-				return fmt.Errorf("pack trust state unreadable: %v (and restoring the prior pack.lock failed: %v) — aborting without saving config (nothing was committed)", lerr, rerr)
+				return fmt.Errorf("pack trust state unreadable: %v (and restoring the prior pack.lock failed: %v); aborting without saving config (nothing was committed)", lerr, rerr)
 			}
-			return fmt.Errorf("pack trust state unreadable: %v — aborting without saving config (nothing was committed; fix %s and re-run)", lerr, packTrustStorePath())
+			return fmt.Errorf("pack trust state unreadable: %v; aborting without saving config (nothing was committed; fix %s and re-run)", lerr, packTrustStorePath())
 		}
 		priorActivation := fresh.Activation
 		fresh.setActivation(root, lock)
 		if err := fresh.save(); err != nil {
 			if rerr := restoreLock(); rerr != nil {
-				return fmt.Errorf("recording activation in pack trust state: %v (and restoring the prior pack.lock failed: %v) — aborting without saving config (nothing was committed)", err, rerr)
+				return fmt.Errorf("recording activation in pack trust state: %v (and restoring the prior pack.lock failed: %v); aborting without saving config (nothing was committed)", err, rerr)
 			}
-			return fmt.Errorf("recording activation in pack trust state: %v — aborting without saving config (nothing was committed; fix %s and re-run)", err, packTrustStorePath())
+			return fmt.Errorf("recording activation in pack trust state: %v; aborting without saving config (nothing was committed; fix %s and re-run)", err, packTrustStorePath())
 		}
 		if err := cfg.Save(); err != nil {
 			// Roll BOTH the store record and the lock back so they match the
@@ -1256,7 +1256,7 @@ func commitPackActivation(cfg *config.Config, store *packTrustStore, root string
 			serr := fresh.save()
 			rerr := restoreLock()
 			if serr != nil || rerr != nil {
-				return fmt.Errorf("saving config: %v (rollback incomplete — trust store: %v, pack.lock: %v — the activation record may over-claim this activation's contributions; harmless, but re-run `pack use` once the config is writable)", err, serr, rerr)
+				return fmt.Errorf("saving config: %v (rollback incomplete: trust store: %v, pack.lock: %v; the activation record may over-claim this activation's contributions; harmless, but re-run `pack use` once the config is writable)", err, serr, rerr)
 			}
 			return fmt.Errorf("saving config: %v (activation record rolled back; nothing was committed)", err)
 		}
@@ -1703,7 +1703,7 @@ func runPackNew(env shellEnv, out io.Writer, rest []string) {
 	}
 	if !isRepo && env.run != nil {
 		if _, err := env.run("git", "-C", root, "init"); err != nil {
-			fmt.Fprintf(out, "  note: `git init` failed (%v) — the pack still works; init it yourself\n", err)
+			fmt.Fprintf(out, "  note: `git init` failed (%v); the pack still works; init it yourself\n", err)
 		} else {
 			isRepo = true
 		}
@@ -2137,7 +2137,7 @@ func runPackShow(out io.Writer, rest []string) {
 				fmt.Fprintf(out, " (mcp: %s)", ig.MCP)
 			}
 			if cred != "" {
-				fmt.Fprintf(out, " — %s", cred)
+				fmt.Fprintf(out, ": %s", cred)
 			}
 			fmt.Fprintln(out)
 		}
@@ -2665,7 +2665,7 @@ func runPackRm(out io.Writer, rest []string) {
 			removedWrappers = append([]string(nil), store.Installed.Wrappers...)
 			if cerr := clearInstalledHostPackWrappersLocked(out, store); cerr != nil {
 				removedWrappers = nil
-				return fmt.Errorf("host wrappers could not be removed: %v — nothing detached; fix that and re-run (a `pi-stack host` launch refuses until they are cleared)", cerr)
+				return fmt.Errorf("host wrappers could not be removed: %v; nothing detached; fix that and re-run (a `pi-stack host` launch refuses until they are cleared)", cerr)
 			}
 		}
 		removedMCP, removedKnowledge = revertPackPriorContribution(cfg, store.activationFor(old))
@@ -2857,7 +2857,7 @@ func clonePack(env shellEnv, out io.Writer, raw string) (string, error) {
 		if freshClone {
 			_ = os.RemoveAll(dest)
 		}
-		return "", fmt.Errorf("cloned %s but it has no %s — not a pack", url, packManifestName)
+		return "", fmt.Errorf("cloned %s but it has no %s: not a pack", url, packManifestName)
 	}
 	// pack.lock is LOCAL GENERATED activation state (ADR-1) and must NEVER come
 	// from the remote (round-3 S1, CRITICAL): a malicious pack could commit it

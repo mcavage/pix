@@ -219,7 +219,7 @@ func runSetupHandoff(dir, name string, state sbxState, replace bool, out io.Writ
 	// in-VM onboarding agent via an initial message. A --replace here is
 	// harmless (the create path ignores it).
 	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "Launching sandbox — pi will introduce itself, show you how it works,")
+	fmt.Fprintln(out, "Launching sandbox: pi will introduce itself, show you how it works,")
 	fmt.Fprintln(out, "and get you into a real task. (You can quit any time; just run `pi-stack run`.)")
 	runFn(kickoffArgs())
 	return nil
@@ -270,7 +270,7 @@ func setupInteractivePrompts(tty, assumeYes bool) bool {
 }
 
 func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, tty bool) error {
-	fmt.Fprintln(out, "pi-stack setup — configuring the host")
+	fmt.Fprintln(out, "pi-stack setup: configuring the host")
 	fmt.Fprintln(out, "")
 
 	cfg, err := config.Load()
@@ -325,7 +325,7 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	// reconciles sbx to match. It prints exactly what's wrong on failure; abort
 	// setup rather than hand off to a session that can't talk to a model.
 	if !setupProvisionKeysFn(env, in, out, interactive, opts.assumeYes) {
-		return fmt.Errorf("provider keys not fully configured — follow the fix printed above")
+		return fmt.Errorf("provider keys not fully configured: follow the fix printed above")
 	}
 
 	changes, err := applyOnboardingResult(r, cfg, env, out, func(c *config.Config) error { return c.Save() })
@@ -354,7 +354,7 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	fmt.Fprintln(out, "")
 	fmt.Fprintf(out, "memory service: enabled (:%d)\n", memoryPortDefault)
 	if len(changes) == 0 {
-		fmt.Fprintln(out, "knowledge:      (none) — add later with `pi-stack knowledge init` / `use`")
+		fmt.Fprintln(out, "knowledge:      (none); add later with `pi-stack knowledge init` / `use`")
 	} else {
 		for _, c := range changes {
 			fmt.Fprintf(out, "  + %s\n", c)
@@ -396,7 +396,7 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	// normal sandbox-only user won't have. Point at the dedicated command instead of
 	// running (and noisily half-failing) it on every `pi-stack setup`.
 	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "host mode (optional, UNSANDBOXED — runs `pi` directly on the host): not enabled.")
+	fmt.Fprintln(out, "host mode (optional, UNSANDBOXED: runs `pi` directly on the host): not enabled.")
 	fmt.Fprintln(out, "  set it up only if you need it:  pi-stack host setup")
 	return nil
 }
@@ -477,7 +477,7 @@ func runStrictProviderKeyFlow(env shellEnv, sc *bufio.Scanner, out io.Writer, in
 		ok = strictProviderKeyFlowLocked(env, sc, out, interactive, assumeYes)
 		return nil
 	}); lerr != nil {
-		fmt.Fprintf(out, "  \u2717 could not lock provider refs (%s): %v — another pi-stack credential operation may hold it; fix that and re-run the same setup command.\n", providerRefsLockPath(env), lerr)
+		fmt.Fprintf(out, "  ✗ could not lock provider refs (%s): %v; another pi-stack credential operation may hold it; fix that and re-run the same setup command.\n", providerRefsLockPath(env), lerr)
 		return false
 	}
 	return ok
@@ -587,7 +587,7 @@ func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer,
 	case sbxSecretsAbsent:
 		return true
 	case sbxSecretsError:
-		fmt.Fprintln(out, "  \u2717 could not verify sbx has all three provider keys (`sbx secret ls` failed) \u2014 check sbx and re-run the same setup command")
+		fmt.Fprintln(out, "  \u2717 could not verify sbx has all three provider keys (`sbx secret ls` failed); check sbx and re-run the same setup command")
 		return false
 	}
 	return allPresent
@@ -604,26 +604,26 @@ func promptProviderRef(env shellEnv, sc *bufio.Scanner, out io.Writer, p struct{
 		fmt.Fprintf(out, "  %s: paste a 1Password ref (op://Vault/Item/field): ", p.name)
 		if !sc.Scan() {
 			fmt.Fprintln(out, "")
-			fmt.Fprintf(out, "  %s: no input — a 1Password ref is required; setup cannot continue.\n", p.name)
+			fmt.Fprintf(out, "  %s: no input: a 1Password ref is required; setup cannot continue.\n", p.name)
 			return "", "", false
 		}
 		ref = normalizeOpRef(sc.Text())
 		if ref == "" {
-			fmt.Fprintf(out, "    a ref is required for %s (it is not optional) — try again.\n", p.name)
+			fmt.Fprintf(out, "    a ref is required for %s (it is not optional); try again.\n", p.name)
 			continue
 		}
 		if !validOpRefSyntax(ref) {
-			fmt.Fprintln(out, "    not a valid op:// ref (want op://Vault/Item/field) — try again.")
+			fmt.Fprintln(out, "    not a valid op:// ref (want op://Vault/Item/field); try again.")
 			continue
 		}
 		val, resolves := opReadNonEmpty(env, ref)
 		if !resolves {
-			fmt.Fprintf(out, "    could not resolve that ref for %s via `op read` (check the vault/item/field) — try again.\n", p.name)
+			fmt.Fprintf(out, "    could not resolve that ref for %s via `op read` (check the vault/item/field); try again.\n", p.name)
 			continue
 		}
 		return ref, val, true
 	}
-	fmt.Fprintf(out, "  %s: too many invalid attempts — aborting setup.\n", p.name)
+	fmt.Fprintf(out, "  %s: too many invalid attempts; aborting setup.\n", p.name)
 	return "", "", false
 }
 
@@ -771,14 +771,14 @@ func flagTakesValue(a string) bool {
 const setupUsage = `usage: pi-stack setup [DIR] [host-config flags]
 
 Actually sets you up (use 'pi-stack run' if you just want to start working):
-  1. host   — resolve model keys from 1Password and reconcile them into sbx
+  1. host   : resolve model keys from 1Password and reconcile them into sbx
               (op is REQUIRED), wiring BOTH the sandbox and host mode's
               hostmode.env; ensure memory; create your default pack
   2. agent  - launch a sandbox and hand off to a ONE-SHOT upfront guide that
               names the exact workflows, explains memory and packs, reports
               grounded setup gaps, then asks for your real task
 
-Provider keys come from 1Password only — the ` + "`op`" + ` CLI must be installed and
+Provider keys come from 1Password only: the ` + "`op`" + ` CLI must be installed and
 signed in, or setup fails with the exact fix. There is no "trust existing sbx
 keys" shortcut. Host mode (pi UNSANDBOXED) is NOT set up here; it's opt-in via
 'pi-stack host setup' (which provisions AND enables it in one step).
@@ -791,7 +791,7 @@ session) and prints your choices: 'pi-stack run [DIR]' to reattach, or
 'pi-stack setup [DIR] --replace' to recreate it with your current settings and
 get the tour. Only a POSITIVELY absent sandbox gets the first-launch handoff;
 if the sandbox state cannot be determined at all (sbx errored), setup fails
-closed after the host phase — fix sbx and re-run.
+closed after the host phase; fix sbx and re-run.
 
 Setup flags:
   --replace                recreate an existing sandbox for DIR (sbx rm -f +
@@ -882,9 +882,9 @@ func setupModelReceipt(env shellEnv, out io.Writer, in io.Reader, cfg *config.Co
 	unverifiable := computeUnverifiableModels(readinesses)
 	if len(unverifiable) > 0 {
 		fmt.Fprintln(out, "")
-		fmt.Fprintf(out, "%s could not be verified — %s: %s\n",
+		fmt.Fprintf(out, "%s could not be verified: %s: %s\n",
 			plural(len(unverifiable), "model"), ollamaVerifyFailureReason(p), describeMissingModels(unverifiable))
-		fmt.Fprintln(out, "Not offering to pull these — they may already be installed; this is not a confirmed gap.")
+		fmt.Fprintln(out, "Not offering to pull these; they may already be installed; this is not a confirmed gap.")
 	}
 
 	missing := computeMissingModels(readinesses)
@@ -898,7 +898,7 @@ func setupModelReceipt(env shellEnv, out io.Writer, in io.Reader, cfg *config.Co
 	case interactive:
 		fmt.Fprintln(out, "")
 		fmt.Fprintf(out, "%s missing: %s\n", plural(len(missing), "model"), describeMissingModels(missing))
-		fmt.Fprintln(out, "These are optional — they back memory's fact capture/semantic recall and the")
+		fmt.Fprintln(out, "These are optional; they back memory's fact capture/semantic recall and the")
 		fmt.Fprintln(out, "in-sandbox local chat bridge. Pulling downloads the model now; depending on")
 		fmt.Fprintln(out, "the model this can be a large download (easily multiple GB) and take a")
 		fmt.Fprintln(out, "while. Declining leaves the exact command(s) below to run whenever you like.")
@@ -918,7 +918,7 @@ func setupModelReceipt(env shellEnv, out io.Writer, in io.Reader, cfg *config.Co
 // failed are different problems with different fixes.
 func ollamaVerifyFailureReason(p ollamaProbe) string {
 	if !p.daemonUp {
-		return "daemon not running (:11434 down) — start it: `ollama serve`, then re-run"
+		return "daemon not running (:11434 down); start it: `ollama serve`, then re-run"
 	}
 	return "`ollama list` failed"
 }
@@ -945,13 +945,13 @@ func modelReadinessGlyphState(ev Evidence) checkState {
 func modelReadinessDetail(m ModelReadiness) string {
 	switch m.Evidence {
 	case EvidenceHealthy:
-		return "pulled — " + m.Purpose
+		return "pulled: " + m.Purpose
 	case EvidenceNotConfigured:
-		return m.Purpose + " — needs ollama installed"
+		return m.Purpose + ": needs ollama installed"
 	case EvidenceUnverifiable:
-		return m.Purpose + " — could not verify (ollama list unavailable)"
+		return m.Purpose + ": could not verify (ollama list unavailable)"
 	default: // EvidenceFailed
-		return m.Purpose + " — not pulled"
+		return m.Purpose + ": not pulled"
 	}
 }
 
@@ -985,11 +985,11 @@ func pullMissingModels(env shellEnv, out io.Writer, missing []missingModel) {
 	for _, m := range missing {
 		fmt.Fprintf(out, "  pulling %s (%s)...\n", m.tag, strings.Join(m.roles, "+"))
 		if env.run == nil {
-			fmt.Fprintf(out, "  \u2717 %s: no runner available — pull it manually: ollama pull %s\n", m.tag, m.tag)
+			fmt.Fprintf(out, "  ✗ %s: no runner available; pull it manually: ollama pull %s\n", m.tag, m.tag)
 			continue
 		}
 		if _, err := env.run("ollama", "pull", m.tag); err != nil {
-			fmt.Fprintf(out, "  \u2717 %s: pull failed: %v — continuing; run `ollama pull %s` manually later\n", m.tag, err, m.tag)
+			fmt.Fprintf(out, "  ✗ %s: pull failed: %v; continuing; run `ollama pull %s` manually later\n", m.tag, err, m.tag)
 			continue
 		}
 		fmt.Fprintf(out, "  \u2713 %s: pulled\n", m.tag)

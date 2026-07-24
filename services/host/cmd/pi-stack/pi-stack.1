@@ -44,7 +44,7 @@ It creates and runs the sandbox and injects provider keys through its network
 proxy.
 .TP
 .BR op (1)
-Guided setup requires the 1Password CLI, signed in — it is the ONLY
+Guided setup requires the 1Password CLI, signed in: it is the ONLY
 provider-key source.  It validates one
 .B op://
 reference per provider (Anthropic, OpenAI, Google), stores only those
@@ -89,7 +89,7 @@ ONE-SHOT guided tour up front, not a progressive teach-as-you-go flow (say
 time).  Setup's host phase seeds your identity (read from git's global
 config) into the trusted host-state payload injected directly into the
 launcher-generated kickoff prompt, deterministically, and best-effort into
-the memory service — setup reports honestly which of the two actually
+the memory service: setup reports honestly which of the two actually
 happened.  The in-session tour reads that trusted payload (never a workspace
 file) and tells you the exact HOST command for anything not yet configured;
 it does not write host config on your behalf.  (Separately, if a
@@ -98,7 +98,7 @@ proposal file exists in the workspace, the host validates it against an
 allowlist and applies it under a confirmation gate on the next run.)
 .PP
 .B pi-stack run
-on its own NEVER onboards and never forces it — its only concession is
+on its own NEVER onboards and never forces it: its only concession is
 bootstrapping a model key when none is set at all (resolving your 1Password
 refs into sbx, steering you to 1Password on a TTY).  Provider keys,
 .BR serve ,
@@ -123,12 +123,12 @@ ref per provider, mirrors the refs into
 .B op-refs.env
 (sandbox) and
 .B hostmode.env
-(host mode), and reconciles the sbx secrets to match — 1Password is the
+(host mode), and reconciles the sbx secrets to match: 1Password is the
 source of truth, sbx is where the proxy reads from.  Key values never appear
 in a configuration file or inside the sandbox.  You can still set an sbx
 secret by hand, but a later
 .B pi-stack setup
-will reconcile it against your 1Password refs — there is no shortcut that
+will reconcile it against your 1Password refs: there is no shortcut that
 skips 1Password.  Host mode stays local/Ollama-only until
 .B op://
 refs are configured in
@@ -184,7 +184,7 @@ keeps one (e.g. the box you are in).
 Host-side onboarding: the deterministic HOST configuration and the flag-driven
 path for automation and CI, with NO agent handoff.
 .B pi-stack run
-never auto-onboards on its own — it stays out of your way (it only auto-
+never auto-onboards on its own: it stays out of your way (it only auto-
 provisions a bare-minimum model key when none is set at all). Use
 .B pi-stack setup
 for the guided, in-session flow, or say "onboard me" to the agent inside a
@@ -244,7 +244,7 @@ answer acts: a confirmed-ABSENT sandbox gets a fresh launch handed off to a
 ONE-SHOT guided tour (not progressive/teach-as-you-go); a confirmed-EXISTING
 sandbox without
 .B \-\-replace
-is left alone — never force-removed, never replayed into a live session —
+is left alone (never force-removed, never replayed into a live session)
 and setup instead prints
 .B "pi-stack run [DIR]"
 (reattach as-is; the sandbox keeps its create-time pack/MCP/skills) or
@@ -256,7 +256,7 @@ setup relaunches through
 carrying the tour kickoff, so the recreated sandbox actually gets it
 (\-\-replace is harmless when the sandbox is absent).  If the sandbox state
 cannot be determined at all (sbx errored or is missing), setup FAILS CLOSED
-after the host phase — it never launches blind — and tells you to fix sbx
+after the host phase; it never launches blind, and tells you to fix sbx
 and re-run.
 .PP
 Before handoff, setup always prints a local-model readiness receipt for the
@@ -324,9 +324,9 @@ are passed to
 .PP
 Lifecycle matches sbx's own re-attach model.  When no sandbox of the resolved
 name exists, it is created and the flags below apply.  When one already
-exists — running
+exists (running
 .B or
-stopped —
+stopped),
 .B run
 RE-ATTACHES to it as-is instead of refusing or recreating: sbx reads the agent
 from the existing sandbox's own spec, so
@@ -560,7 +560,7 @@ and
 Store a fact with source
 .BR cli .
 Memory is a single shared store across packs (the in-store scope column is
-retained but dormant — packs no longer partition memory).
+retained but dormant; packs no longer partition memory).
 .TP
 .BR "pi-stack memory forget" " " id " [" \-\-json "]"
 Delete the fact matching an ID or ID prefix.  The
@@ -595,7 +595,7 @@ the
 (format version 2, recording a note of each configured knowledge bundle's
 path and git remote; a legacy
 .B profiles
-array is kept empty for old-archive compatibility — profiles were removed,
+array is kept empty for old-archive compatibility; profiles were removed,
 see
 .B pack
 below) into a gzip tar archive.  Knowledge
@@ -718,10 +718,9 @@ loopback-only).  Linux hosts watching a real sandbox may need
 .BR "\-\-bind 0.0.0.0" ", since"
 .B host.docker.internal
 maps to the bridge gateway there rather than to loopback (unlike Docker
-Desktop on macOS/Windows).  A non-loopback bind exposes the monitor hub —
-with
-.B no authentication
-— serving the sandbox's full agent context and tool output to your local
+Desktop on macOS/Windows).  A non-loopback bind exposes the monitor hub, with
+.B no authentication,
+serving the sandbox's full agent context and tool output to your local
 network.
 .SS agent
 Manage subagents as first-class objects.  An agent stores an
@@ -812,7 +811,7 @@ Guided, public onboarding for Google Workspace via the
 .B gog
 host MCP server.  See
 .B docs/gog-setup.md .
-Bring your own OAuth client — no organization credentials are bundled.
+Bring your own OAuth client; no organization credentials are bundled.
 .TP
 .BR "pi-stack gog setup" " [" \-\-account " " email "] [" \-\-credentials " " path "] [" \-\-yes "]"
 Checks the
@@ -821,7 +820,7 @@ CLI AND
 .B sbx
 are both installed (a missing
 .B sbx
-fails the command — never a silent "would register" success), imports your
+fails the command (never a silent "would register" success), imports your
 Desktop OAuth client JSON by invoking
 .B gog
 itself (never reading or printing its contents), probes the selected auth
@@ -832,7 +831,7 @@ flag on the OAuth-granting command; refuses to proceed if the installed
 .B gog
 can't advertise it), authorizes the account (may open a browser; inherits
 this terminal), verifies interactive AND headless auth the same way the sbx
-gateway will spawn it — bare when 1Password isn't set up, never skipped —
+gateway will spawn it: bare when 1Password isn't set up, never skipped,
 then registers gog with the sbx gateway FIRST and only then saves
 .B gog_account
 and enables
@@ -951,7 +950,7 @@ Keys are
 .BR host.autonomy ,
 and
 .BR host.autoserve .
-There is no per-key profile scoping — profiles were removed; per-workspace
+There is no per-key profile scoping; profiles were removed; per-workspace
 context now comes from the active
 .B pack
 (see

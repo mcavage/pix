@@ -289,7 +289,7 @@ func moveFileWithSidecars(fsys resetFS, b backupTarget, ts int64, moved map[stri
 		case errors.Is(err, errNotExist):
 			// sidecar (or file) absent — nothing to move for this suffix.
 		case err != nil:
-			fmt.Fprintf(out, "  ✗ %s: could not move %s — %v\n", b.Label, src, err)
+			fmt.Fprintf(out, "  ✗ %s: could not move %s: %v\n", b.Label, src, err)
 			errs = append(errs, fmt.Errorf("move %s: %w", src, err))
 		default:
 			moved[src] = true
@@ -299,7 +299,7 @@ func moveFileWithSidecars(fsys resetFS, b backupTarget, ts int64, moved map[stri
 		}
 	}
 	if !anyMoved && len(errs) == 0 {
-		fmt.Fprintf(out, "  · %s: %s — nothing to move\n", b.Label, b.Path)
+		fmt.Fprintf(out, "  · %s: %s: nothing to move\n", b.Label, b.Path)
 	}
 	return created, errs
 }
@@ -446,7 +446,7 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 	dataBlocked := false
 	if !a.Force && serveStillUp(env) {
 		dataBlocked = true
-		msg := "serve is still running after the stop attempt — refusing to move the data directory (a live sqlite writer would be split from its db/wal); stop it with 'pi-stack serve stop' or re-run with --force"
+		msg := "serve is still running after the stop attempt; refusing to move the data directory (a live sqlite writer would be split from its db/wal); stop it with 'pi-stack serve stop' or re-run with --force"
 		fmt.Fprintf(out, "  ✗ %s\n", msg)
 		errs = append(errs, errors.New(msg))
 	}
@@ -474,7 +474,7 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 	fmt.Fprintln(out, "Backing up state (moved aside, not deleted):")
 	for _, b := range a.Backups {
 		if b.Dangerous && dataBlocked {
-			fmt.Fprintf(out, "  · %s: %s — SKIPPED (serve still up)\n", b.Label, b.Path)
+			fmt.Fprintf(out, "  · %s: %s: SKIPPED (serve still up)\n", b.Label, b.Path)
 			continue
 		}
 		if b.WithSidecars {
@@ -487,9 +487,9 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 		dest, err := moveAside(fsys, b.Path, ts)
 		switch {
 		case errors.Is(err, errNotExist):
-			fmt.Fprintf(out, "  · %s: %s — nothing to move\n", b.Label, b.Path)
+			fmt.Fprintf(out, "  · %s: %s: nothing to move\n", b.Label, b.Path)
 		case err != nil:
-			fmt.Fprintf(out, "  ✗ %s: could not move %s — %v\n", b.Label, b.Path, err)
+			fmt.Fprintf(out, "  ✗ %s: could not move %s: %v\n", b.Label, b.Path, err)
 			errs = append(errs, fmt.Errorf("move %s: %w", b.Path, err))
 		default:
 			moved[b.Path] = true
@@ -534,7 +534,7 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 		if rdErr != nil && !os.IsNotExist(rdErr) {
 			// A real read failure (permissions, IO) MUST surface — do not report
 			// preservation/success over a directory we could not even scan.
-			fmt.Fprintf(out, "  ✗ could not read data dir %s — %v\n", a.DataRoot, rdErr)
+			fmt.Fprintf(out, "  ✗ could not read data dir %s: %v\n", a.DataRoot, rdErr)
 			errs = append(errs, fmt.Errorf("read data dir %s: %w", a.DataRoot, rdErr))
 		} else {
 			for _, e := range entries {
@@ -549,7 +549,7 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 				dest, mErr := moveAside(fsys, p, ts)
 				if mErr != nil {
 					if !errors.Is(mErr, errNotExist) {
-						fmt.Fprintf(out, "  ✗ could not move %s — %v\n", p, mErr)
+						fmt.Fprintf(out, "  ✗ could not move %s: %v\n", p, mErr)
 						errs = append(errs, fmt.Errorf("move %s: %w", p, mErr))
 					}
 					continue
@@ -569,7 +569,7 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 	if !dataBlocked {
 		for _, p := range a.RuntimeFiles {
 			if err := fsys.remove(p); err != nil && !os.IsNotExist(err) {
-				fmt.Fprintf(out, "  · could not clear runtime file %s — %v\n", p, err)
+				fmt.Fprintf(out, "  · could not clear runtime file %s: %v\n", p, err)
 			}
 		}
 	}
@@ -589,7 +589,7 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 	if wasUp && !dataBlocked {
 		fmt.Fprintln(out, "Restarting host services on the clean slate:")
 		if err := restartServeForReset(out); err != nil {
-			fmt.Fprintf(out, "  · could not restart services (%v) — `pi-stack run` will start them\n", err)
+			fmt.Fprintf(out, "  · could not restart services (%v); `pi-stack run` will start them\n", err)
 		} else {
 			fmt.Fprintln(out, "  ✓ host services restarted")
 		}
@@ -627,7 +627,7 @@ var stopServeForReset = func(out io.Writer) (bool, error) {
 func stopHostServices(_ shellEnv, out io.Writer) {
 	fmt.Fprintln(out, "Stopping host services:")
 	if _, err := stopServeForReset(out); err != nil {
-		fmt.Fprintf(out, "  · could not stop 'pi-stack-host serve' (%v) — stop it yourself if running\n", err)
+		fmt.Fprintf(out, "  · could not stop 'pi-stack-host serve' (%v); stop it yourself if running\n", err)
 	}
 }
 
@@ -642,7 +642,7 @@ func executeSbxReset(a resetActions, env shellEnv, out io.Writer) {
 		haveSbx = err == nil
 	}
 	if !haveSbx {
-		fmt.Fprintln(out, "  · sbx not found — run these on your host:")
+		fmt.Fprintln(out, "  · sbx not found; run these on your host:")
 		fmt.Fprintln(out, "      sbx ls   # then: sbx rm -f <each pi-stack-* sandbox>")
 		for _, name := range a.MCPRemove {
 			fmt.Fprintf(out, "      sbx mcp rm %s\n", name)
@@ -657,20 +657,20 @@ func executeSbxReset(a resetActions, env shellEnv, out io.Writer) {
 		}
 		for _, sb := range boxes {
 			if _, err := env.run("sbx", "rm", "-f", sb.Name); err != nil {
-				fmt.Fprintf(out, "  ✗ sbx rm -f %s — %v\n", sb.Name, err)
+				fmt.Fprintf(out, "  ✗ sbx rm -f %s: %v\n", sb.Name, err)
 			} else {
 				fmt.Fprintf(out, "  ✓ removed sandbox %s\n", sb.Name)
 			}
 		}
 	} else {
-		fmt.Fprintf(out, "  ✗ sbx ls failed — %v\n", err)
+		fmt.Fprintf(out, "  ✗ sbx ls failed: %v\n", err)
 	}
 	// Unregister the configured local MCP servers. The remove verb couldn't be
 	// confirmed from inside a sandbox (no sbx there); `sbx mcp rm <name>` is the
 	// expected form — if your sbx differs, run the printed command by hand.
 	for _, name := range a.MCPRemove {
 		if _, err := env.run("sbx", "mcp", "rm", name); err != nil {
-			fmt.Fprintf(out, "  ✗ sbx mcp rm %s — %v (run it yourself if the verb differs)\n", name, err)
+			fmt.Fprintf(out, "  ✗ sbx mcp rm %s: %v (run it yourself if the verb differs)\n", name, err)
 		} else {
 			fmt.Fprintf(out, "  ✓ unregistered MCP %s\n", name)
 		}
@@ -722,7 +722,7 @@ func printResetSummary(created []string, out io.Writer) {
 		fmt.Fprintln(out, "  delete them once you're sure:  rm -rf <path>.bak-*")
 		fmt.Fprintln(out, "  to restore one: `pi-stack serve stop`, rename it back, then `pi-stack run`.")
 	} else {
-		fmt.Fprintln(out, "Nothing to back up — the stack was already clean.")
+		fmt.Fprintln(out, "Nothing to back up; the stack was already clean.")
 	}
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Next: pi-stack setup")
@@ -746,7 +746,7 @@ func runResetCore(cfg *config.Config, paths resetPaths, opts resetOpts,
 		}
 		ans := strings.ToLower(promptLine(rio, "Proceed? [y/N]: "))
 		if ans != "y" && ans != "yes" {
-			fmt.Fprintln(rio.out, "Aborted — nothing changed.")
+			fmt.Fprintln(rio.out, "Aborted; nothing changed.")
 			return nil
 		}
 	}
@@ -840,29 +840,29 @@ func removeBinSymlinks(bins []string, fsys resetFS, out io.Writer) {
 		fi, err := fsys.lstat(p)
 		if err != nil {
 			if os.IsNotExist(err) {
-				fmt.Fprintf(out, "  · %s — not installed\n", p)
+				fmt.Fprintf(out, "  · %s: not installed\n", p)
 			} else {
-				fmt.Fprintf(out, "  ✗ %s — %v\n", p, err)
+				fmt.Fprintf(out, "  ✗ %s: %v\n", p, err)
 			}
 			continue
 		}
 		if fi.Mode()&os.ModeSymlink == 0 {
-			fmt.Fprintf(out, "  · %s — not a symlink (not ours), left in place\n", p)
+			fmt.Fprintf(out, "  · %s: not a symlink (not ours), left in place\n", p)
 			continue
 		}
 		// Only remove a symlink that actually points at OUR binary — an unrelated
 		// symlink that happens to sit in a bin slot is left alone + reported.
 		target, lerr := fsys.readlink(p)
 		if lerr != nil {
-			fmt.Fprintf(out, "  ✗ %s — could not read symlink target: %v\n", p, lerr)
+			fmt.Fprintf(out, "  ✗ %s: could not read symlink target: %v\n", p, lerr)
 			continue
 		}
 		if !isOurBinTarget(target) {
-			fmt.Fprintf(out, "  · %s -> %s — not a pi-stack binary, left in place\n", p, target)
+			fmt.Fprintf(out, "  · %s -> %s: not a pi-stack binary, left in place\n", p, target)
 			continue
 		}
 		if err := fsys.remove(p); err != nil {
-			fmt.Fprintf(out, "  ✗ %s — could not remove: %v\n", p, err)
+			fmt.Fprintf(out, "  ✗ %s: could not remove: %v\n", p, err)
 		} else {
 			fmt.Fprintf(out, "  ✓ removed symlink %s\n", p)
 		}
@@ -896,7 +896,7 @@ func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts 
 	// opt-in that moves them aside too (added to the plan above).
 	if !opts.purgeData && paths.artifactRoot != "" {
 		if _, size := artifactDirSize(paths.artifactRoot); size > 0 {
-			fmt.Fprintf(rio.out, "Keeping harvested task artifacts (%s) at %s — pass --purge-data to remove them too.\n",
+			fmt.Fprintf(rio.out, "Keeping harvested task artifacts (%s) at %s; pass --purge-data to remove them too.\n",
 				humanBytes(size), paths.artifactRoot)
 		}
 	}
@@ -908,7 +908,7 @@ func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts 
 		}
 		ans := strings.ToLower(promptLine(rio, "Proceed? [y/N]: "))
 		if ans != "y" && ans != "yes" {
-			fmt.Fprintln(rio.out, "Aborted — nothing changed.")
+			fmt.Fprintln(rio.out, "Aborted; nothing changed.")
 			return nil
 		}
 	}
@@ -918,7 +918,7 @@ func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts 
 		// The state backup failed (or was blocked) — do NOT remove the bin symlinks.
 		// Stranding the user with no binaries after a failed backup is the worst
 		// outcome; leave the working install in place so they can retry.
-		fmt.Fprintln(rio.out, "Reset backup failed — leaving the pi-stack + pi-stack-host bin symlinks in place (not uninstalling).")
+		fmt.Fprintln(rio.out, "Reset backup failed; leaving the pi-stack + pi-stack-host bin symlinks in place (not uninstalling).")
 		printResetSummary(created, rio.out)
 		return execErr
 	}
@@ -940,12 +940,12 @@ func removeInstalledManPage(env shellEnv, fsys resetFS, out io.Writer) {
 	p := filepath.Join(home, ".local", "share", "man", "man1", "pi-stack.1")
 	if _, err := fsys.lstat(p); err != nil {
 		if !os.IsNotExist(err) {
-			fmt.Fprintf(out, "  ✗ %s — %v\n", p, err)
+			fmt.Fprintf(out, "  ✗ %s: %v\n", p, err)
 		}
 		return
 	}
 	if err := fsys.remove(p); err != nil {
-		fmt.Fprintf(out, "  ✗ %s — could not remove: %v\n", p, err)
+		fmt.Fprintf(out, "  ✗ %s: could not remove: %v\n", p, err)
 		return
 	}
 	fmt.Fprintf(out, "  ✓ removed man page %s\n", p)

@@ -1406,7 +1406,7 @@ func TestDoctor_VerboseVsConcise(t *testing.T) {
 
 	var concise bytes.Buffer
 	r.render(&concise, false)
-	if strings.Contains(concise.String(), "pulled — fact capture") {
+	if strings.Contains(concise.String(), "pulled: fact capture") {
 		t.Errorf("concise output should collapse healthy model detail, got:\n%s", concise.String())
 	}
 	if !strings.Contains(concise.String(), "all checks pass") {
@@ -1415,7 +1415,7 @@ func TestDoctor_VerboseVsConcise(t *testing.T) {
 
 	var verbose bytes.Buffer
 	r.render(&verbose, true)
-	if !strings.Contains(verbose.String(), "pulled — fact capture") {
+	if !strings.Contains(verbose.String(), "pulled: fact capture") {
 		t.Errorf("verbose output should retain the healthy model detail, got:\n%s", verbose.String())
 	}
 }

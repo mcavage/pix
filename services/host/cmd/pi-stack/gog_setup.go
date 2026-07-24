@@ -76,7 +76,7 @@ const gogSetupUsage = `usage: pi-stack gog setup [--account <email>] [--credenti
 Guides Google Workspace (gog) onboarding end to end:
   1. checks the gog CLI is installed (exact install guidance if not), then
      validates your credentials path is a true regular file and imports it
-     by invoking gog itself — this command never reads or prints its
+     by invoking gog itself: this command never reads or prints its
      contents, and never copies it into pi-stack config
   2. probes the selected auth route's OWN subcommand help/flags for the
      read-only capability it needs at grant time (see step 3)
@@ -84,18 +84,18 @@ Guides Google Workspace (gog) onboarding end to end:
      authorization happens: sbx must be installed (it registers gog with
      the gateway; a missing sbx fails this command, it never reports a
      silent "would register"), config must load cleanly, and whatever gog
-     registration already exists must be CONFIRMED — absent, or present
+     registration already exists must be CONFIRMED, absent, or present
      with a readable command. An unreadable/unlistable prior registration
      (or a transiently unavailable sbx listing) aborts HERE, before any
      authorization runs and before config is touched, rather than risking
      that registration on a same-run rollback later
   4. authorizes <email> REQUESTING READ-ONLY OAUTH SCOPES at grant time
-     (gog's --readonly flag on the OAuth-granting command) — if the
+     (gog's --readonly flag on the OAuth-granting command); if the
      installed gog cannot advertise --readonly for the selected route, this
      fails with upgrade guidance rather than authorizing without it (may
      open a browser; inherits this terminal)
   5. verifies interactive auth, THEN verifies headless tools the same way
-     the sbx gateway will actually spawn gog — direct and bare when
+     the sbx gateway will actually spawn gog: direct and bare when
      1Password isn't set up, through the same op wrapper when it is. A
      healthy interactive auth with zero headless tools is a documented trap
      (see docs/gog-setup.md) and FAILS this command with the exact fix,
@@ -103,7 +103,7 @@ Guides Google Workspace (gog) onboarding end to end:
      is never reported as success either
   6. on success: registers gog with the sbx gateway FIRST, and only once
      that succeeds saves gog_account + enables gog in the configured MCP
-     set — a registration failure never touches the persisted config, and a
+     set: a registration failure never touches the persisted config, and a
      save failure after a successful registration rolls the registration
      back (to exactly the step 3 snapshot) rather than leaving config and
      the gateway out of sync
@@ -117,12 +117,12 @@ On a real terminal, a missing --account/--credentials is prompted for.
 Idempotent: re-running a healthy setup is safe and re-registers gog.
 
 pi-stack does not independently inspect the OAuth scopes gog actually grants
-(no stable scope-inspection surface exists to check against) — this command
+(no stable scope-inspection surface exists to check against); this command
 guarantees the grant REQUESTS read-only scopes; gog's own runtime flags
 (--gmail-no-send --wrap-untrusted --readonly --allow-tool read) are the
 backstop that blocks writes regardless of what was granted.
 
-No organization OAuth client is bundled or referenced here — bring your own.
+No organization OAuth client is bundled or referenced here; bring your own.
 `
 
 // runGogCmd is the `pi-stack gog` verb tree. Today it has one subcommand,
@@ -478,7 +478,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// returns before a single runInteractive call and before config is touched,
 	// so a botched preflight can never leave OAuth half-run or config mutated.
 	if _, err := env.lookPath("sbx"); err != nil {
-		return fmt.Errorf("sbx not found — pi-stack gog setup requires sbx to register the MCP server " +
+		return fmt.Errorf("sbx not found: pi-stack gog setup requires sbx to register the MCP server " +
 			"(install: https://docs.docker.com/ai/sandboxes); install it, then re-run pi-stack gog setup")
 	}
 	// R1-08: load the candidate config change IN MEMORY only — cfg.Save() must
@@ -498,7 +498,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// to a same-run rollback.
 	snap := snapshotGogRegistration(env)
 	if snap.state == gogRegUnknown {
-		return fmt.Errorf("could not confirm the prior gog registration (sbx mcp ls/get did not resolve cleanly) — " +
+		return fmt.Errorf("could not confirm the prior gog registration (sbx mcp ls/get did not resolve cleanly): " +
 			"refusing to authorize or overwrite it until this is readable; check the sbx daemon (sbx mcp status), " +
 			"then re-run pi-stack gog setup")
 	}
@@ -556,10 +556,10 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		fmt.Fprintln(out, "  this is the documented trap: the gateway spawns gog in a bare, non-interactive")
 		fmt.Fprintln(out, "  env and can't unlock the keyring without help.")
 		fmt.Fprintf(out, "  add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to %s\n", defaultOpRefsPath(env))
-		return fmt.Errorf("headless verification failed for %s — not registering until this is fixed", account)
+		return fmt.Errorf("headless verification failed for %s: not registering until this is fixed", account)
 	default: // probeTimedOut or probeError — unverifiable, never claimed as success
-		fmt.Fprintf(out, "headless verification could not be confirmed (%s) — not registering until this is fixed\n", head.detail)
-		return fmt.Errorf("headless verification unverifiable for %s (%s) — not registering until this is fixed", account, head.detail)
+		fmt.Fprintf(out, "headless verification could not be confirmed (%s): not registering until this is fixed\n", head.detail)
+		return fmt.Errorf("headless verification unverifiable for %s (%s): not registering until this is fixed", account, head.detail)
 	}
 
 	// R1-08/R2-04: sbx presence, config.Load(), and the prior registration
@@ -589,16 +589,16 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		// registration entirely. Any rollback failure is folded into the
 		// returned error explicitly rather than swallowed.
 		if rerr := gogSetupRollbackRegistration(env, snap); rerr != nil {
-			return fmt.Errorf("saving config: %w; additionally, rollback of the gog registration failed: %v — fix by hand (sbx mcp get gog / sbx mcp rm gog)", err, rerr)
+			return fmt.Errorf("saving config: %w; additionally, rollback of the gog registration failed: %v; fix by hand (sbx mcp get gog / sbx mcp rm gog)", err, rerr)
 		}
 		return fmt.Errorf("saving config: %w (gog registration rolled back so config and the gateway stay in sync)", err)
 	}
 
 	fmt.Fprintln(out, "")
 	if len(resolveStaticMCP([]string{"gog"}, cfg)) > 0 {
-		fmt.Fprintln(out, "gog is EAGERLY attached (in mcp_static) — a fresh sandbox creation will have it in context from the start.")
+		fmt.Fprintln(out, "gog is EAGERLY attached (in mcp_static): a fresh sandbox creation will have it in context from the start.")
 	} else {
-		fmt.Fprintln(out, "gog is dynamically discoverable by default (lean context) — the in-VM agent finds + calls it on demand.")
+		fmt.Fprintln(out, "gog is dynamically discoverable by default (lean context): the in-VM agent finds + calls it on demand.")
 	}
 	fmt.Fprintln(out, "Existing sandbox? attach it live: pi-stack mcp load gog")
 	return nil

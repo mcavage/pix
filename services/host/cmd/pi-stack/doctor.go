@@ -312,7 +312,7 @@ func todoDedupKey(todo string) string {
 // data-plane one (always available, no SBX_MCP_URL), so a failed listing means
 // the sbx daemon/gateway is unhealthy, not "gateway off". This is NOT "sbx
 // unavailable": the CLI is here, only the MCP-registration listing failed.
-const gatewayDownDetail = "sbx present but couldn't list MCP registrations — check the sbx daemon (sbx mcp status; sbx daemon status)"
+const gatewayDownDetail = "sbx present but couldn't list MCP registrations: check the sbx daemon (sbx mcp status; sbx daemon status)"
 
 // sbxUnverifiableDetail is the per-check wording when provider/MCP state
 // couldn't be read from sbx: it distinguishes the binary being absent (likely
@@ -320,7 +320,7 @@ const gatewayDownDetail = "sbx present but couldn't list MCP registrations — c
 // the host sbx probe/gateway being unavailable (R1-11).
 func sbxUnverifiableDetail(sbxPresent bool) string {
 	if sbxPresent {
-		return "sbx present but `sbx secret ls` failed — host sbx probe/gateway unavailable (try `sbx daemon status`)"
+		return "sbx present but `sbx secret ls` failed: host sbx probe/gateway unavailable (try `sbx daemon status`)"
 	}
 	return "sbx unavailable here (verify on the host: sbx secret ls)"
 }
@@ -422,7 +422,7 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	default:
 		ollama.checks = append(ollama.checks, check{
 			label:       "ollama",
-			detail:      "not installed — install: https://ollama.com",
+			detail:      "not installed; install: https://ollama.com",
 			requirement: ollamaReq,
 			evidence:    EvidenceNotConfigured,
 		})
@@ -488,7 +488,7 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 		mcp := group{title: "Other MCP servers (local stdio, run by the sbx gateway)"}
 		mcp.checks = append(mcp.checks, check{
 			label:       "other servers",
-			detail:      "no other MCP servers configured — add one with `pi-stack config set mcp <server>`",
+			detail:      "no other MCP servers configured; add one with `pi-stack config set mcp <server>`",
 			requirement: RequirementUnconfiguredOptional,
 			evidence:    EvidenceNotConfigured,
 		})
@@ -528,7 +528,7 @@ func modelProviderKeyCheck(key, sbxOut string, sbxOK, sbxPresent bool) check {
 	if grepWord(sbxOut, key) {
 		return check{label: key, detail: "set", requirement: RequirementConfiguredOptional, evidence: EvidenceHealthy}
 	}
-	return check{label: key, detail: "not set (optional — any one model-provider key is enough)",
+	return check{label: key, detail: "not set (optional; any one model-provider key is enough)",
 		requirement: RequirementUnconfiguredOptional, evidence: EvidenceNotConfigured}
 }
 
@@ -543,7 +543,7 @@ func modelProviderAggregateCheck(present int, sbxOK, sbxPresent bool) check {
 	}
 	if present > 0 {
 		return check{label: label,
-			detail:      fmt.Sprintf("%d of 3 set — at least one of anthropic/openai/google is required", present),
+			detail:      fmt.Sprintf("%d of 3 set: at least one of anthropic/openai/google is required", present),
 			requirement: RequirementCore, evidence: EvidenceHealthy}
 	}
 	return check{label: label,
@@ -551,7 +551,7 @@ func modelProviderAggregateCheck(present int, sbxOK, sbxPresent bool) check {
 		// parenthetical) — the any-one-of-three alternative + caveat live in
 		// detail instead, where they read as context rather than breaking a
 		// straight paste of the fix-it line.
-		detail:      "NONE of anthropic/openai/google set — at least one model-provider key is required (any one of the three is enough; e.g. `sbx secret set -g openai` or `-g google` work just as well)",
+		detail:      "NONE of anthropic/openai/google set: at least one model-provider key is required (any one of the three is enough; e.g. `sbx secret set -g openai` or `-g google` work just as well)",
 		todo:        "sbx secret set -g anthropic",
 		requirement: RequirementCore, evidence: EvidenceFailed}
 }
@@ -567,15 +567,15 @@ func modelCheck(m ModelReadiness) check {
 	detail := m.Purpose + " [" + m.Model + "]"
 	switch m.Evidence {
 	case EvidenceHealthy:
-		return check{label: label, detail: "pulled — " + detail, requirement: m.Requirement, evidence: m.Evidence}
+		return check{label: label, detail: "pulled: " + detail, requirement: m.Requirement, evidence: m.Evidence}
 	case EvidenceNotConfigured:
-		return check{label: label, detail: detail + " — needs ollama (then: " + m.PullCmd + ")",
+		return check{label: label, detail: detail + "; needs ollama (then: " + m.PullCmd + ")",
 			requirement: m.Requirement, evidence: m.Evidence}
 	case EvidenceUnverifiable:
-		return check{label: label, detail: detail + " — could not verify (ollama list unavailable)",
+		return check{label: label, detail: detail + "; could not verify (ollama list unavailable)",
 			requirement: m.Requirement, evidence: m.Evidence}
 	default: // EvidenceFailed
-		return check{label: label, detail: detail + " — not pulled", todo: m.PullCmd,
+		return check{label: label, detail: detail + "; not pulled", todo: m.PullCmd,
 			requirement: m.Requirement, evidence: m.Evidence}
 	}
 }
@@ -643,9 +643,9 @@ func memCaptureCheck() check {
 	// Prefer the daemon's own live reason (e.g. a watcher inference timeout while
 	// Ollama is wedged) over the generic "unavailable" text — that's the whole
 	// point of surfacing captureReason.
-	detail := fmt.Sprintf("OFF — watcher %q unavailable (recall still works)", m)
+	detail := fmt.Sprintf("OFF: watcher %q unavailable (recall still works)", m)
 	if parsed.Result.CaptureReason != "" {
-		detail = fmt.Sprintf("OFF — %s (recall still works)", parsed.Result.CaptureReason)
+		detail = fmt.Sprintf("OFF: %s (recall still works)", parsed.Result.CaptureReason)
 	}
 	return check{
 		label:       "fact capture",
@@ -716,7 +716,7 @@ func mcpProbeCheck(env shellEnv, name, mcpOut string, mcpOK, sbxPresent bool) ch
 	// the registered spelling.
 	trustedArgv, ok := recognizedMCPArgv(env, argv, name)
 	if !ok {
-		return check{label: name, detail: "registered (probe skipped: unrecognized/untrusted command — never executed)",
+		return check{label: name, detail: "registered (probe skipped: unrecognized/untrusted command, never executed)",
 			requirement: req, evidence: EvidenceUnverifiable}
 	}
 	res := probeListTools(env, trustedArgv)
@@ -725,14 +725,14 @@ func mcpProbeCheck(env shellEnv, name, mcpOut string, mcpOK, sbxPresent bool) ch
 		return check{label: name, detail: fmt.Sprintf("registered, spawns %s", plural(res.tools, "tool")), requirement: req, evidence: EvidenceHealthy}
 	case probeNoTools:
 		return check{label: name,
-			detail:      "registered but the spawned command returns 0 tools — headless creds/keyring",
+			detail:      "registered but the spawned command returns 0 tools; headless creds/keyring",
 			todo:        "review the registered command: sbx mcp get " + name,
 			requirement: req, evidence: EvidenceFailed}
 	case probeTimedOut:
-		return check{label: name, detail: "registered but the tool probe " + res.detail + " — could not verify",
+		return check{label: name, detail: "registered but the tool probe " + res.detail + "; could not verify",
 			requirement: req, evidence: EvidenceUnverifiable}
 	default: // probeError
-		return check{label: name, detail: "registered but the tool probe " + res.detail + " — could not verify",
+		return check{label: name, detail: "registered but the tool probe " + res.detail + "; could not verify",
 			requirement: req, evidence: EvidenceUnverifiable}
 	}
 }
@@ -1203,7 +1203,7 @@ func gogHeadlessOK(env shellEnv, acct, opRefs string) bool {
 // Every probe degrades to a TODO rather than crashing, so this runs cleanly
 // in-sandbox (gog/sbx/op all absent).
 func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent bool) group {
-	g := group{title: "gog (Google Workspace via host MCP — read-only)"}
+	g := group{title: "gog (Google Workspace via host MCP, read-only)"}
 	// gog is UNCONFIGURED-optional by default (nobody has opted in); it becomes
 	// configured-optional once an account is set or it's in the configured MCP
 	// set. Either way it is never core, so nothing in this group can block
@@ -1227,7 +1227,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 		trustedArgv, trusted := trustedGogSpawn(env, argv)
 		if !trusted {
 			g.checks = append(g.checks, check{label: "headless spawn",
-				detail:      "probe skipped: the registered command's gog/op executable does not match the PATH-resolved binary (inspect: sbx mcp get gog) — never executed",
+				detail:      "probe skipped: the registered command's gog/op executable does not match the PATH-resolved binary (inspect: sbx mcp get gog); never executed",
 				requirement: req, evidence: EvidenceUnverifiable})
 			g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent, req))
 			g.checks = append(g.checks, gogAttachCheck(cfg))
@@ -1240,21 +1240,21 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 			// bare green never implies 1Password creds were involved.
 			detail := "registered command exposes tools (verified as-registered, via op run)"
 			if !gogSpawnIsOpWrapped(argv) {
-				detail = "registered command exposes tools (verified as-registered) — spawned BARE (no op-refs involved)"
+				detail = "registered command exposes tools (verified as-registered); spawned BARE (no op-refs involved)"
 			}
 			g.checks = append(g.checks, check{label: "headless spawn",
 				detail: detail, requirement: req, evidence: EvidenceHealthy})
 		case probeNoTools:
 			// A CLEAN empty tool list is the verified keyring/headless-creds trap.
 			g.checks = append(g.checks, check{label: "headless spawn",
-				detail:      "the registered command returns 0 tools — keyring not headless",
+				detail:      "the registered command returns 0 tools; keyring not headless",
 				todo:        "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to " + defaultOpRefsPath(env),
 				requirement: req, evidence: EvidenceFailed})
 		default:
 			// R1-07: a timeout or exec error is NOT a keyring failure — doctor
 			// doesn't know, so it says exactly what happened and stays ⚠.
 			g.checks = append(g.checks, check{label: "headless spawn",
-				detail:      "probe of the registered command " + res.detail + " — could not verify (inspect: sbx mcp get gog)",
+				detail:      "probe of the registered command " + res.detail + "; could not verify (inspect: sbx mcp get gog)",
 				requirement: req, evidence: EvidenceUnverifiable})
 		}
 		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent, req))
@@ -1265,7 +1265,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 	// 1. gog CLI installed (the reconstruction probe uses it).
 	if _, err := env.lookPath("gog"); err != nil {
 		g.checks = append(g.checks, check{label: "gog CLI",
-			detail: "not found — install: brew install gog", requirement: req, evidence: EvidenceNotConfigured})
+			detail: "not found; install: brew install gog", requirement: req, evidence: EvidenceNotConfigured})
 		return g
 	}
 	g.checks = append(g.checks, check{label: "gog CLI", detail: "installed", requirement: req, evidence: EvidenceHealthy})
@@ -1290,11 +1290,11 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 	// it "sbx unavailable" when sbx is actually absent (in the sandbox).
 	fallbackWhy := "best-effort (sbx unavailable)"
 	if sbxPresent {
-		fallbackWhy = "best-effort (couldn't read sbx MCP registrations — check the sbx daemon: sbx mcp status)"
+		fallbackWhy = "best-effort (couldn't read sbx MCP registrations; check the sbx daemon: sbx mcp status)"
 	}
 	g.checks = append(g.checks,
 		check{label: "verifying", note: true,
-			detail:      fallbackWhy + " — verifies " + acctShown + " via " + refsShown,
+			detail:      fallbackWhy + "; verifies " + acctShown + " via " + refsShown,
 			requirement: req, evidence: EvidenceUnverifiable},
 		// AC-03: no more `make mcp-register` language — name the registration
 		// itself, not a specific make target that may not even be how it was run.
@@ -1307,7 +1307,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 		// confirmed failure, just genuinely not set up: NotConfigured, not Failed
 		// (so no ✗ and no repair TODO — the setup command lives in the detail).
 		g.checks = append(g.checks, check{label: "account",
-			detail:      "cannot verify (gog_account unset in config.toml/env) — set up: pi-stack gog setup (or: pi-stack config set gog_account <you@example.com>)",
+			detail:      "cannot verify (gog_account unset in config.toml/env); set up: pi-stack gog setup (or: pi-stack config set gog_account <you@example.com>)",
 			requirement: req, evidence: EvidenceNotConfigured})
 		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent, req))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
@@ -1325,7 +1325,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 			check{label: "account", detail: acct + " set (unconfirmed vs registration)",
 				requirement: req, evidence: EvidenceUnverifiable},
 			check{label: "op-refs",
-				detail:      "op-refs.env not found — only needed if the gateway can't unlock gog's keyring headlessly",
+				detail:      "op-refs.env not found; only needed if the gateway can't unlock gog's keyring headlessly",
 				requirement: req, evidence: EvidenceNotConfigured})
 		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent, req))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
@@ -1342,7 +1342,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 	case interTimedOut:
 		// A timed-out auth check is UNVERIFIABLE, not "not authorized" (R1-07/14).
 		g.checks = append(g.checks, check{label: "account",
-			detail:      acct + " — `gog auth doctor --check` timed out; could not verify",
+			detail:      acct + "; `gog auth doctor --check` timed out; could not verify",
 			requirement: req, evidence: EvidenceUnverifiable})
 	case interErr != nil:
 		// Auth itself isn't set up — don't double-report the keyring below.
@@ -1357,7 +1357,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 			check{label: "account", detail: acct + " authorized (interactive)",
 				requirement: req, evidence: EvidenceHealthy},
 			check{label: "headless spawn",
-				detail:      "can't verify the gateway spawn — op (1Password CLI) not found; install it so doctor can probe the real headless path",
+				detail:      "can't verify the gateway spawn: op (1Password CLI) not found; install it so doctor can probe the real headless path",
 				requirement: req, evidence: EvidenceUnverifiable})
 	case head.status == probeNoTools:
 		// THE TRAP: interactive passes, the headless gateway spawn gets 0 tools.
@@ -1367,7 +1367,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 			check{label: "account", detail: acct + " authorized (interactive)",
 				requirement: req, evidence: EvidenceHealthy},
 			check{label: "headless spawn",
-				detail:      "auth OK in your shell but the gateway spawn gets 0 tools — keyring not headless",
+				detail:      "auth OK in your shell but the gateway spawn gets 0 tools; keyring not headless",
 				todo:        "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to " + defaultOpRefsPath(env),
 				requirement: req, evidence: EvidenceFailed})
 	case head.status != probeToolsOK:
@@ -1377,7 +1377,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 			check{label: "account", detail: acct + " authorized (interactive)",
 				requirement: req, evidence: EvidenceHealthy},
 			check{label: "headless spawn",
-				detail:      "headless probe " + head.detail + " — could not verify",
+				detail:      "headless probe " + head.detail + "; could not verify",
 				requirement: req, evidence: EvidenceUnverifiable})
 	default:
 		// AC-01: best-effort success — this account authenticates headlessly, but
@@ -1391,7 +1391,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 			check{label: "account", detail: acct + " authorized (best-effort, unconfirmed vs registration)",
 				requirement: req, evidence: EvidenceUnverifiable},
 			check{label: "headless spawn",
-				detail:      "best-effort headless spawn succeeded, but the sbx-registered command could not be confirmed — unverifiable, not a failure",
+				detail:      "best-effort headless spawn succeeded, but the sbx-registered command could not be confirmed; unverifiable, not a failure",
 				requirement: req, evidence: EvidenceUnverifiable})
 	}
 
@@ -1430,7 +1430,7 @@ func secretsGroup(cfg *config.Config, env shellEnv) group {
 
 	if !anyOpWrappedServer(cfg) {
 		g.checks = append(g.checks, check{label: "1Password",
-			detail:      "no credentialed host MCP servers configured — 1Password not needed",
+			detail:      "no credentialed host MCP servers configured; 1Password not needed",
 			requirement: RequirementUnconfiguredOptional, evidence: EvidenceNotConfigured})
 		return g
 	}
@@ -1440,17 +1440,17 @@ func secretsGroup(cfg *config.Config, env shellEnv) group {
 		g.checks = append(g.checks, check{label: "op CLI", detail: "installed", requirement: req, evidence: EvidenceHealthy})
 		if opSignedIn(env) {
 			g.checks = append(g.checks, check{label: "account configured",
-				detail:      "op account list ok (advisory — not a proof of an unlocked session)",
+				detail:      "op account list ok (advisory; not a proof of an unlocked session)",
 				requirement: req, evidence: EvidenceHealthy})
 		} else {
 			g.checks = append(g.checks, check{label: "account configured",
-				detail:      "no account configured (advisory) — run: op signin",
+				detail:      "no account configured (advisory); run: op signin",
 				requirement: req, evidence: EvidenceUnverifiable})
 		}
 	} else {
 		g.checks = append(g.checks, check{label: "op CLI",
 			detail: "not installed",
-			todo:   "install the 1Password CLI (op) — https://developer.1password.com/docs/cli",
+			todo:   "install the 1Password CLI (op): https://developer.1password.com/docs/cli",
 			// A credentialed host MCP server IS configured, so a missing op is a
 			// confirmed gap for it — a verified failure, not mere absence.
 			requirement: req, evidence: EvidenceFailed})
@@ -1479,13 +1479,13 @@ func secretsGroup(cfg *config.Config, env shellEnv) group {
 	if env.fileMode != nil {
 		if m, ok := env.fileMode(path); ok && m.Perm()&0o077 != 0 {
 			g.checks = append(g.checks, check{label: "perms",
-				detail: fmt.Sprintf("op-refs.env is %04o — group/other accessible", m.Perm()),
+				detail: fmt.Sprintf("op-refs.env is %04o: group/other accessible", m.Perm()),
 				todo:   "chmod 600 " + path, requirement: req, evidence: EvidenceFailed})
 		}
 		dir := filepath.Dir(path)
 		if m, ok := env.fileMode(dir); ok && m.Perm()&0o077 != 0 {
 			g.checks = append(g.checks, check{label: "dir perms",
-				detail: fmt.Sprintf("%s is %04o — group/other accessible", dir, m.Perm()),
+				detail: fmt.Sprintf("%s is %04o: group/other accessible", dir, m.Perm()),
 				todo:   "chmod 700 " + dir, requirement: req, evidence: EvidenceFailed})
 		}
 	}
@@ -1498,25 +1498,25 @@ func secretsGroup(cfg *config.Config, env shellEnv) group {
 				requirement: req, evidence: EvidenceHealthy})
 		case rf.isRef && rf.placeholder:
 			g.checks = append(g.checks, check{label: rf.key,
-				detail: "unfilled placeholder — set the op:// ref",
+				detail: "unfilled placeholder; set the op:// ref",
 				todo:   "pi-stack secret set <ENV_VAR> op://vault/item/field", requirement: req, evidence: EvidenceFailed})
 		case rf.isRef:
 			g.checks = append(g.checks, check{label: rf.key, detail: "op:// ref filled", requirement: req, evidence: EvidenceHealthy})
 		case rf.placeholder:
 			// A non-ref value still carrying an unfilled <...> placeholder.
 			g.checks = append(g.checks, check{label: rf.key,
-				detail: "unfilled placeholder — set the op:// ref",
+				detail: "unfilled placeholder; set the op:// ref",
 				todo:   "pi-stack secret set <ENV_VAR> op://vault/item/field", requirement: req, evidence: EvidenceFailed})
 		case looksSecretShaped(rf.key, rf.value):
 			// MEDIUM finding — a pasted secret. NEVER echo the value.
 			g.checks = append(g.checks, check{label: rf.key,
-				detail: "possible pasted secret — replace with op://vault/item/field",
+				detail: "possible pasted secret; replace with op://vault/item/field",
 				todo:   "pi-stack secret set <ENV_VAR> op://vault/item/field", requirement: req, evidence: EvidenceFailed})
 		default:
 			// Refs-only policy: ANY other non-ref, non-allowlisted value is flagged.
 			// NEVER echo the value.
 			g.checks = append(g.checks, check{label: rf.key,
-				detail: "not an op:// ref — this file is refs-only; use op://vault/item/field or move it to the non-secret allowlist",
+				detail: "not an op:// ref; this file is refs-only; use op://vault/item/field or move it to the non-secret allowlist",
 				todo:   "pi-stack secret set <ENV_VAR> op://vault/item/field", requirement: req, evidence: EvidenceFailed})
 		}
 	}
@@ -1731,7 +1731,7 @@ func gogAttachCheck(cfg *config.Config) check {
 	// eager-vs-lazy (mcp_static/mcp_dynamic), not implied by cfg.MCP membership.
 	if len(resolveStaticMCP([]string{"gog"}, cfg)) > 0 {
 		return check{label: "attached",
-			detail:      "registered; eager (pinned via mcp_static — tools in context from create)",
+			detail:      "registered; eager (pinned via mcp_static; tools in context from create)",
 			requirement: req, evidence: EvidenceHealthy}
 	}
 	return check{label: "attached",
@@ -1755,20 +1755,20 @@ func (r *report) render(w io.Writer, verbose bool) {
 	unvCore := r.unverifiedCore()
 	switch {
 	case r.blocking():
-		fmt.Fprintf(w, "✗ pi-stack: a verified core check is failing — see below (exit 1).\n")
+		fmt.Fprintf(w, "✗ pi-stack: a verified core check is failing; see below (exit 1).\n")
 	case len(todos) > 0:
-		fmt.Fprintf(w, "⚠ pi-stack: %s outstanding — see the TODOs below.\n", plural(len(todos), "item"))
+		fmt.Fprintf(w, "⚠ pi-stack: %s outstanding; see the TODOs below.\n", plural(len(todos), "item"))
 	case unvCore > 0:
 		fmt.Fprintf(w, "⚠ pi-stack: no verified failures, but %s could not be verified from here.\n", plural(unvCore, "core check"))
 	default:
-		fmt.Fprintln(w, "✓ pi-stack: all checks pass — you're ready to `pi-stack serve` + `pi-stack`.")
+		fmt.Fprintln(w, "✓ pi-stack: all checks pass; you're ready to `pi-stack serve` + `pi-stack`.")
 	}
 	if r.sbxAbsent {
-		fmt.Fprintln(w, "  note: sbx not on PATH (you're likely inside the sandbox) — provider/MCP")
+		fmt.Fprintln(w, "  note: sbx not on PATH (you're likely inside the sandbox); provider/MCP")
 		fmt.Fprintln(w, "        checks can't be verified here; run `pi-stack doctor` on the host.")
 	}
 	if r.sbxProbeFailed {
-		fmt.Fprintln(w, "  note: sbx is on PATH but probing it failed (`sbx secret ls`) — the host sbx")
+		fmt.Fprintln(w, "  note: sbx is on PATH but probing it failed (`sbx secret ls`); the host sbx")
 		fmt.Fprintln(w, "        probe/gateway is unavailable; try `sbx daemon status`, then re-run doctor.")
 	}
 	fmt.Fprintln(w)
@@ -1807,7 +1807,7 @@ func (r *report) render(w io.Writer, verbose bool) {
 	// actually hid a healthy detail line; otherwise --verbose would show
 	// nothing new and the hint is noise.
 	if !verbose && collapsedAny {
-		fmt.Fprintln(w, "(concise output — run `pi-stack doctor --verbose` for full group detail)")
+		fmt.Fprintln(w, "(concise output; run `pi-stack doctor --verbose` for full group detail)")
 	}
 }
 

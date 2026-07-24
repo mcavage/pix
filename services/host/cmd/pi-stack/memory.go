@@ -487,7 +487,7 @@ func exitFromErr(ctx string, err error) {
 	var exit *exec.ExitError
 	switch {
 	case err == errServiceDown:
-		fmt.Fprintf(os.Stderr, "pi-stack %s: service unreachable — start it with `pi-stack serve`\n", ctx)
+		fmt.Fprintf(os.Stderr, "pi-stack %s: service unreachable, start it with `pi-stack serve`\n", ctx)
 		os.Exit(exitServiceDown)
 	case isUsage(err):
 		fmt.Fprintln(os.Stderr, err.Error())
