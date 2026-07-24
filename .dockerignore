@@ -44,6 +44,7 @@ skills/*
 !skills/design-system
 !skills/docs-standards
 !skills/docs-sync
+!skills/draft-email
 !skills/enrich
 !skills/git-conventions
 !skills/gtm-launch
@@ -59,9 +60,11 @@ skills/*
 !skills/peer-review
 !skills/onboarding
 !skills/ship
+!skills/slide-deck
 !skills/tdd
 !skills/plan
 !skills/verify
+!skills/weekly-wrap
 !skills/writing-voice
 !skills/one-pager
 
