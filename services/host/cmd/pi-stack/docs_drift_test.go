@@ -178,3 +178,26 @@ func TestHistoricalDesignDocsAreBannered(t *testing.T) {
 		}
 	}
 }
+
+// TestCliRedesignDocIsBannered (R1-13) guards docs/design/cli-redesign.md:
+// the doc labels itself IMPLEMENTED, but its body still contains removed
+// `--profile`/`profile` examples and the obsolete direct `gog auth login`
+// flow. The narrow, safe fix is a prominent top banner marking those parts
+// historical/superseded and pointing at the current docs, not a rewrite of
+// the historical body — so this test checks ONLY for the banner and its
+// links to the current docs (README.md, `pi-stack help`, docs/gog-setup.md),
+// and deliberately never scans the historical body below the banner for
+// `--profile`/`gog auth login` (those terms are EXPECTED there, as labeled
+// historical illustrations of the shape being proposed).
+func TestCliRedesignDocIsBannered(t *testing.T) {
+	const rel = "docs/design/cli-redesign.md"
+	page := readRepoFile(t, rel)
+	if !strings.Contains(page, "Historical, superseded") {
+		t.Errorf("%s is missing a prominent historical/superseded banner", rel)
+	}
+	assertAll(t, rel, page,
+		"README.md",
+		"pi-stack help",
+		"docs/gog-setup.md",
+	)
+}

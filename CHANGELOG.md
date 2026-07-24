@@ -10,11 +10,17 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
-- `pi-stack doctor --json` gains a top-level `schema_version` (currently `2`)
+- `pi-stack doctor --json` gains a top-level `schema_version` (currently `3`)
   and a `blocking` flag, and every check now carries a `requirement`
   (`core` | `configured-optional` | `unconfigured-optional`) and an `evidence`
   state (`healthy` | `failed` | `unverifiable` | `not-configured`). All v1
-  fields are unchanged; this is additive.
+  fields are unchanged; this is additive. v3 (review round 1) made check
+  state fully derived from requirement + evidence (never independently
+  stored), added an aggregate core `model keys` check under `providers` (at
+  least one of anthropic/openai/google confirmed set is enough; zero of
+  three verified is the only provider-key core failure), and added
+  `sbx_probe_failed` to distinguish a present-but-unhealthy `sbx` from an
+  absent one.
 - `pi-stack doctor --verbose` shows full per-check group detail; the new
   default is concise (a healthy group collapses to one summary line).
 - `pi-stack setup --pull-models` force-pulls any missing watcher/embed/bridge

@@ -1,5 +1,16 @@
 # pi-stack CLI redesign — make it usable by a new human
 
+> **Historical, superseded (partially).** This proposal's CLI SHAPE shipped
+> (the tiered `help`, the `state` grouping noun, staged `setup`), but its
+> example transcripts and body text still show two things that are GONE from
+> current pi-stack: the **`--profile` flag / `profile` command** (profiles
+> were removed entirely — packs replaced them, see `pi-stack pack`) and the
+> **direct `gog auth login` flow** (Google Workspace setup is now the guided
+> `pi-stack gog setup`, see `docs/gog-setup.md`). Do not follow any
+> `--profile`/`profile`/`gog auth login` example below as a current command.
+> For accurate, current behavior see `README.md`, `pi-stack help` (or
+> `pi-stack help --all`), and `docs/gog-setup.md`.
+
 Status: IMPLEMENTED (Shape B shipped — `state` grouping noun, tiered `help` / `help --all` with per-noun `help <verb>`, staged `setup`; all legacy verb spellings retained as aliases)
 Authors: pi + crew (dx-consultant, product-manager, architect, ux-copywriter), reviewed by cross-vendor `review`
 
