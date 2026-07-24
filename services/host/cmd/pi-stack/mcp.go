@@ -254,6 +254,57 @@ func gogRegisteredArgv(gogBin, opBin, opRefs, account string) []string {
 	return mcpRegistrar{gog: gogBin, account: account, op: opBin, opRefs: opRefs}.execArgv("gog")
 }
 
+// gogBareRegistrationNote is the ONE shared message printed whenever gog is
+// registered without an op-refs.env wrapper (1Password not configured): gog
+// authenticates via its own OAuth flow, never op-refs, so this points at the
+// guided `pi-stack gog setup` recovery path — never the raw `gog auth login`
+// recipe (finding #2) — rather than the (irrelevant, for gog) op-refs seed.
+func gogBareRegistrationNote(out io.Writer) {
+	fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via its own OAuth flow — "+
+		"if it ever needs re-authorizing, run: pi-stack gog setup")
+}
+
+// buildGogRegistrar resolves op + op-refs EXACTLY ONCE and pairs them with the
+// already-resolved gogPath/account into an IMMUTABLE mcpRegistrar snapshot
+// (R3, finding #1). gogSetup calls this a single time, before its headless
+// verification probe; the returned reg is then used, UNCHANGED, both to build
+// the probe's argv (reg.execArgv("gog")) and to register it
+// (registerGogRegistrar -> reg.addArgs("gog")) — no re-resolution of
+// op/op-refs/gog happens between the two, so a PATH or op-refs.env mutation in
+// that window can never register a different command than the one that was
+// just proven healthy.
+func buildGogRegistrar(env shellEnv, gogPath, account string) mcpRegistrar {
+	lookPath := env.lookPath
+	if lookPath == nil {
+		lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	}
+	reg := mcpRegistrar{gog: gogPath, account: account}
+	opPath, opErr := lookPath("op")
+	opRefs := resolveOpRefs(env)
+	if opErr == nil && opRefs != "" {
+		reg.op = opPath
+		reg.opRefs = opRefs
+	}
+	return reg
+}
+
+// registerGogRegistrar registers gog with the sbx gateway using the EXACT,
+// already-resolved reg snapshot gogSetup built via buildGogRegistrar and
+// probed against — no independent re-resolution here (R3, finding #1). It
+// funnels into the same runRegistrationLoop the generic registerServers path
+// uses, so the actual `sbx mcp add` execution/error handling never drifts
+// between the two callers.
+func registerGogRegistrar(reg mcpRegistrar, env shellEnv, out io.Writer) error {
+	if reg.opRefs == "" {
+		gogBareRegistrationNote(out)
+	}
+	lookPath := env.lookPath
+	if lookPath == nil {
+		lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	}
+	return runRegistrationLoop(reg, []string{"gog"}, env, out, lookPath)
+}
+
 // rawAddArgs builds a literal `sbx mcp add <name> --command <argv[0]> --args
 // <argv[1]> ...` argv from an already-resolved command line (e.g. one read
 // back via `sbx mcp get`). Used by gog_setup.go's registration rollback
@@ -390,9 +441,9 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 				"add creds to %s if a server needs them\n",
 				strings.Join(finalNames, ", "), refsPath)
 		} else {
-			// gog-only: gog authenticates via OAuth (gog auth login), never op-refs,
-			// so do NOT seed op-refs.env or mention it. Register bare.
-			fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via OAuth (gog auth login)")
+			// gog-only: gog authenticates via its own OAuth flow, never op-refs, so
+			// do NOT seed op-refs.env or mention it. Register bare.
+			gogBareRegistrationNote(out)
 		}
 	}
 
@@ -418,16 +469,32 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 		reg.hostBin = hb
 	}
 
+	if regErr := runRegistrationLoop(reg, finalNames, env, out, lookPath); regErr != nil {
+		return errors.Join(regErr, skippedErr)
+	}
+	return skippedErr
+}
+
+// runRegistrationLoop runs `sbx mcp add <name> ...` for every name in names,
+// using the given, ALREADY fully-resolved reg — it never re-resolves op/gog/
+// hostBin itself. This is the one execution path both registerServers (which
+// resolves reg fresh, per generic call) and gogSetup's dedicated
+// registerGogRegistrar (which resolves reg exactly once, before probing, to
+// close the TOCTOU where re-resolving after the probe could register a
+// different command — R3, finding #1) funnel into, so the actual `sbx mcp
+// add` execution/error handling/messaging never drifts between the two.
+func runRegistrationLoop(reg mcpRegistrar, names []string, env shellEnv, out io.Writer, lookPath func(string) (string, error)) error {
 	_, sbxErr := lookPath("sbx")
 	sbxOK := sbxErr == nil
 	if !sbxOK {
 		fmt.Fprintln(out, "sbx not on PATH — here is what WOULD be registered (run these on the host):")
 	}
 
-	// Accumulate per-server failures so `pi-stack mcp register` exits non-zero on
-	// ANY failure, while still attempting every server and printing each result.
+	// Accumulate per-server failures so a caller (`pi-stack mcp register`, or
+	// gogSetup) exits non-zero on ANY failure, while still attempting every
+	// server and printing each result.
 	var regErrs []error
-	for _, n := range finalNames {
+	for _, n := range names {
 		args := reg.addArgs(n)
 		if !sbxOK {
 			fmt.Fprintf(out, "  sbx %s\n", strings.Join(args, " "))
@@ -449,9 +516,9 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 		fmt.Fprintln(out, "note: install Docker Sandboxes (sbx) to register — https://docs.docker.com/ai/sandboxes")
 	}
 	if len(regErrs) > 0 {
-		return errors.Join(fmt.Errorf("%d server(s) failed to register: %w", len(regErrs), errors.Join(regErrs...)), skippedErr)
+		return fmt.Errorf("%d server(s) failed to register: %w", len(regErrs), errors.Join(regErrs...))
 	}
-	return skippedErr
+	return nil
 }
 
 // resolveStaticMCP returns, order-preserving and de-duplicated, the subset of

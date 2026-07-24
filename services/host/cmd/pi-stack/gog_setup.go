@@ -415,7 +415,11 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	if env.lookPath == nil {
 		return fmt.Errorf("internal: shellEnv.lookPath not wired")
 	}
-	if _, err := env.lookPath("gog"); err != nil {
+	// gogPath is captured HERE and never re-resolved: it feeds the immutable
+	// registrar snapshot built below (buildGogRegistrar), the single source for
+	// both the headless probe and the eventual registration (R3, finding #1).
+	gogPath, gogErr := env.lookPath("gog")
+	if gogErr != nil {
 		fmt.Fprintln(out, "gog CLI not found.")
 		fmt.Fprintln(out, "  install it:  brew install gog   (or see https://gogcli.sh/install.html)")
 		return fmt.Errorf("gog is not installed")
@@ -529,23 +533,31 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	}
 	fmt.Fprintf(out, "interactive auth OK for %s\n", account)
 
+	// R3 TOCTOU fix (finding #1): resolve the registrar snapshot EXACTLY ONCE,
+	// right here — op, op-refs, and gogPath are captured into ONE immutable
+	// mcpRegistrar and never re-resolved after this point. The exact same reg
+	// feeds BOTH the headless probe below (reg.execArgv, byte-for-byte what
+	// gogRegisteredArgv/gogHeadlessProbe would build from these same inputs) and
+	// the eventual registration (registerGogRegistrar -> reg.addArgs), so a
+	// concurrent PATH or op-refs.env mutation between probe and registration can
+	// never cause a DIFFERENT command to be registered than the one that was
+	// just proven healthy (previously: registerServers independently re-resolved
+	// op/op-refs/gog after this probe, opening exactly that window).
+	//
 	// Verify headless tools the SAME host-side path doctor uses — and the SAME
-	// exact argv/flags/op-wrapper that registration is about to register
-	// (gogHeadlessProbe -> gogRegisteredArgv is the ONE canonical builder, finding
-	// #2: this can never silently probe a lighter command than what gets
-	// registered below). This is the documented gws-style trap: interactive auth
-	// in a logged-in shell proves nothing about the bare env the sbx gateway
-	// spawns gog in.
+	// exact argv/flags/op-wrapper that registration is about to register. This
+	// is the documented gws-style trap: interactive auth in a logged-in shell
+	// proves nothing about the bare env the sbx gateway spawns gog in.
 	//
 	// R1-06: when op/op-refs are unavailable this MUST NOT skip verification —
-	// gogHeadlessProbe falls back to the bare hardened invocation (minus the op
-	// wrapper), bounded by the same probeListTools machinery. "macOS system
-	// keychain" is not an excuse to skip the test: a clean zero-tools result
-	// still fails, and an exec/timeout result is unverifiable and must never be
-	// reported as success. Nothing here mutates config/registration yet — that
-	// only happens after `head` is confirmed healthy, below.
-	opRefs := resolveOpRefs(env)
-	head := gogHeadlessProbe(env, account, opRefs)
+	// reg falls back to the bare hardened invocation (minus the op wrapper),
+	// bounded by the same probeListTools machinery. "macOS system keychain" is
+	// not an excuse to skip the test: a clean zero-tools result still fails, and
+	// an exec/timeout result is unverifiable and must never be reported as
+	// success. Nothing here mutates config/registration yet — that only happens
+	// after `head` is confirmed healthy, below.
+	reg := buildGogRegistrar(env, gogPath, account)
+	head := probeListTools(env, reg.execArgv("gog"))
 	switch head.status {
 	case probeToolsOK:
 		fmt.Fprintln(out, "headless tools OK (verified the same host-side path the sbx gateway/doctor use)")
@@ -570,12 +582,13 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// mirrors).
 	cfg.AddMCP("gog")
 
-	// R1-08: REGISTER FIRST, save second. registerServers actually runs `sbx mcp
-	// add gog ...`; only once that has genuinely succeeded do we persist
+	// R1-08/R3: REGISTER FIRST, save second. registerGogRegistrar runs `sbx mcp
+	// add gog ...` using the EXACT reg snapshot resolved above (no re-resolution
+	// — the TOCTOU fix); only once that has genuinely succeeded do we persist
 	// gog_account/mcp to disk. A registration failure here returns before
 	// cfg.Save() is ever called, so the persisted config is left byte-for-byte
 	// unchanged — there is no config/registration drift to roll back from.
-	if err := registerServers(cfg, env, out, []string{"gog"}, hostBinaryResolver); err != nil {
+	if err := registerGogRegistrar(reg, env, out); err != nil {
 		return fmt.Errorf("registering gog with the sbx gateway: %w (finish later: pi-stack mcp register gog)", err)
 	}
 

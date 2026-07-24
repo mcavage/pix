@@ -78,7 +78,13 @@ func TestGoStringLiteralsHaveNoEmDash(t *testing.T) {
 func TestShippingGoStringsHaveNoRepoOnlyRecoveryCommands(t *testing.T) {
 	root := repoRoot(t)
 	hostRoot := filepath.Join(root, "services", "host")
-	stale := []string{"make serve", "make install", "make mcp-register"}
+	// "gog auth login" (finding #2, ship-review round 3): mcp.go used to print
+	// this raw legacy recovery recipe as a shipping string when it registered
+	// gog bare (no op-refs). Every other guided-recovery guard in this repo
+	// (status.go's TODOs, doctor.go's account check) already points users at
+	// `pi-stack gog setup` instead; this closes the last shipping string that
+	// still surfaced the obsolete raw command.
+	stale := []string{"make serve", "make install", "make mcp-register", "gog auth login"}
 
 	err := filepath.WalkDir(hostRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {

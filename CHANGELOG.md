@@ -202,6 +202,25 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   only ever a gap when ALL THREE are missing (a single aggregate TODO, as
   before), and a missing GitHub key never adds a TODO or counts as
   outstanding.
+- **`pi-stack gog setup` now resolves op/op-refs/gog into ONE immutable
+  snapshot before probing, closing a TOCTOU between probe and registration
+  (ship-gate review round 2, finding #1).** It used to probe the headless
+  path with one resolution of `gog`/`op`/op-refs.env, then hand off to the
+  generic `registerServers`, which independently RE-RESOLVED all three when
+  it actually ran `sbx mcp add` — a window in which another process mutating
+  PATH or op-refs.env could make the REGISTERED command differ from the one
+  that was just proven healthy. `buildGogRegistrar` now resolves
+  `gog`/`op`/op-refs exactly once, and the same immutable `mcpRegistrar` is
+  reused, unchanged, for both the probe and the registration
+  (`registerGogRegistrar`) — there is no second resolution to drift.
+- **`pi-stack mcp register`'s bare-gog note no longer prints the raw legacy
+  `gog auth login` recipe (ship-gate review round 2, finding #2).** It used
+  to say "gog authenticates via OAuth (gog auth login)" when registering gog
+  without an op-refs.env wrapper — the last shipping string still pointing
+  at the bypassed legacy recipe (see finding #3 above). It now points at the
+  guided `pi-stack gog setup` flow instead, and a source-string anti-drift
+  test (`TestShippingGoStringsHaveNoRepoOnlyRecoveryCommands`) now rejects
+  `"gog auth login"` in any shipping Go string, so this can't regress.
 
 ### Changed
 
