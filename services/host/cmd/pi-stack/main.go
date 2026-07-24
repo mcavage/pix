@@ -87,6 +87,8 @@ func main() {
 		runSetupCmd(args[1:])
 	case "mcp":
 		runMcpCmd(args[1:])
+	case "gog":
+		runGogCmd(args[1:])
 	case "pack":
 		runPackCmd(args[1:])
 	case "secret":

@@ -759,6 +759,26 @@ Authorize remote OAuth servers via the hosted control plane
 Register the shipped public catalog bundle (notion/atlassian/granola) in one
 step; other args forward to
 .BR "sbx mcp bundle" .
+.SS gog
+Guided, public onboarding for Google Workspace via the
+.B gog
+host MCP server.  See
+.B docs/gog-setup.md .
+Bring your own OAuth client — no organization credentials are bundled.
+.TP
+.BR "pi-stack gog setup" " [" \-\-account " " email "] [" \-\-credentials " " path "] [" \-\-yes "]"
+Checks the
+.B gog
+CLI is installed, imports your Desktop OAuth client JSON by invoking
+.B gog
+itself (never reading or printing its contents), authorizes the account
+(may open a browser; inherits this terminal), verifies interactive AND
+headless auth the same way the sbx gateway will spawn it, then saves
+.B gog_account ,
+enables
+.B gog
+in the configured MCP set, and registers it with the sbx gateway.
+Idempotent.
 .SS pack
 A pack is a git-backed context bundle (skills + knowledge + reference-only
 integrations + config).  See

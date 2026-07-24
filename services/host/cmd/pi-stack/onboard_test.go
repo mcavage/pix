@@ -73,6 +73,38 @@ func TestApplyOnboarding_Idempotent(t *testing.T) {
 	}
 }
 
+// TestApplyOnboarding_AddsMCPEvenWhenAccountUnchanged locks in the fix for the
+// idempotency bug: an account that already matches cfg.GogAccount must NOT
+// short-circuit adding gog to cfg.MCP. Before the fix, applyOnboardingResult
+// only called cfg.AddMCP("gog") inside the `acct != cfg.GogAccount` branch, so
+// a config with the account already set but gog missing from cfg.MCP (e.g. a
+// user who removed it, or a prior run that hit this exact bug) stayed broken
+// on every re-run.
+func TestApplyOnboarding_AddsMCPEvenWhenAccountUnchanged(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.SetGogAccount("me@x.com") // account ALREADY matches; gog NOT in cfg.MCP
+	env := fakeEnv{present: map[string]bool{}}.env()
+	r := &onboardingResult{Version: 1, GogAccount: "me@x.com", MCP: nil}
+
+	var saved *config.Config
+	changes, err := applyOnboardingResult(r, cfg, env, &bytes.Buffer{}, captureSave(&saved))
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !containsStr(cfg.MCP, "gog") {
+		t.Errorf("cfg.MCP = %v, want gog added even though the account was unchanged", cfg.MCP)
+	}
+	found := false
+	for _, c := range changes {
+		if strings.Contains(c, "gog") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("changes = %v, want a gog mcp change reported", changes)
+	}
+}
+
 func TestApplyOnboarding_AppliesFields(t *testing.T) {
 	cfg := defaultCfg()
 	env := fakeEnv{present: map[string]bool{}}.env()

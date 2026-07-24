@@ -56,6 +56,13 @@ type shellEnv struct {
 	// returns (output, timedOut, err). Nil in tests, which fall back to run so
 	// they stay hermetic; defaultShellEnv wires runWithTimeout.
 	probe func(name string, args ...string) (out string, timedOut bool, err error)
+	// runInteractive execs a command that may need a REAL terminal/browser (gog's
+	// OAuth authorization steps): stdin/stdout/stderr are inherited from the
+	// current process rather than captured, so a browser can open and a device
+	// code/prompt can render. Nil in tests, which supply a fake that records the
+	// call instead of touching a real terminal; defaultShellEnv wires the real
+	// inherited-stdio exec. See gog_setup.go.
+	runInteractive func(name string, args ...string) error
 }
 
 // probeTimeout bounds every registered-command probe so doctor can never wedge
@@ -160,6 +167,13 @@ func defaultShellEnv() shellEnv {
 		},
 		flock: withFlock,
 		probe: runWithTimeout,
+		runInteractive: func(name string, args ...string) error {
+			cmd := exec.Command(name, args...)
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			return cmd.Run()
+		},
 	}
 }
 

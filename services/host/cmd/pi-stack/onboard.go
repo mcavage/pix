@@ -112,12 +112,19 @@ func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env shell
 func applyOnboardingResult(r *onboardingResult, cfg *config.Config, env shellEnv, out io.Writer, save func(*config.Config) error) ([]string, error) {
 	var changes []string
 
-	if acct := strings.TrimSpace(r.GogAccount); acct != "" && acct != cfg.GogAccount {
-		cfg.SetGogAccount(acct)
+	if acct := strings.TrimSpace(r.GogAccount); acct != "" {
+		// The account SET is applied unconditionally, but the message and the
+		// mcp-set fix below are independent: an account that already matches
+		// cfg.GogAccount must NOT short-circuit adding gog to cfg.MCP (the
+		// idempotency bug this fixes — a re-run with an unchanged account used
+		// to leave gog un-added if it wasn't already there).
+		if acct != cfg.GogAccount {
+			cfg.SetGogAccount(acct)
+			changes = append(changes, "gog_account = "+acct)
+		}
 		if cfg.AddMCP("gog") {
 			changes = append(changes, "enabled gog (mcp)")
 		}
-		changes = append(changes, "gog_account = "+acct)
 	}
 	for _, m := range r.MCP {
 		if cfg.AddMCP(strings.TrimSpace(m)) {

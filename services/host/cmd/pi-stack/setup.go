@@ -366,6 +366,17 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 		}
 	}
 
+	// AC-08/09: setup NEVER runs gog's browser/OAuth flow itself (that's the
+	// dedicated `pi-stack gog setup`, which may open a browser and needs an
+	// inherited terminal). If --account was given, tell the user plainly
+	// whether OAuth/headless health is already confirmed, and point at the
+	// guided command when it is not — never silently claim ready.
+	if acct := strings.TrimSpace(opts.account); acct != "" && !gogSetupAccountHealthy(env, acct) {
+		fmt.Fprintln(out, "")
+		fmt.Fprintf(out, "gog account set (%s), but OAuth/headless health is not confirmed.\n", acct)
+		fmt.Fprintf(out, "  run the guided flow:  pi-stack gog setup --account %s --credentials <path-to-oauth-client.json>\n", acct)
+	}
+
 	// AC-06/07: always name configured watcher/embed/bridge Ollama model
 	// readiness before handoff, using the SAME shared probe+vocabulary doctor's
 	// Ollama group uses (modelreadiness.go) — never gated on whether the memory
