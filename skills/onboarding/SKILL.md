@@ -161,24 +161,37 @@ exist, keep the top 3 by this order and drop the rest.
 3. **`knowledge.bundles` is empty**: optional, phrase it conditionally, don't
    call it broken. If this repo has durable docs or team conventions worth
    indexing: `pi-stack knowledge init`.
-4. **`gog.enabled` is false**: optional. If they want Gmail, Calendar, or
-   Drive access: `pi-stack config set gog_account you@example.com` (their
-   real address, never invent one, use that literal placeholder only if you
-   don't know it), then `pi-stack config set mcp gog`, then `pi-stack mcp
-   register`, then run `pi-stack run --replace`.
-5. **`mcp.enabled` is false and they need some other external tool** (not
+4. **Local Ollama models** (offline/local-model questions, or anything about
+   the watcher/bridge model): the payload's `models.watcher`/`models.embed`
+   are only the CONFIGURED tag names, not whether they're actually pulled —
+   never claim a model is ready or missing from those alone. Point to
+   `pi-stack doctor` for the real readiness receipt, and `pi-stack setup
+   --pull-models` to force any missing pull without a prompt.
+5. **`gog.enabled` is false**: optional. If they want Gmail, Calendar, or
+   Drive access: `pi-stack gog setup --account you@example.com --credentials
+   <path-to-oauth-client.json>` (their real address, never invent one, use
+   that literal placeholder only if you don't know it). One guided command
+   handles OAuth import, authorization, headless verification, and
+   registration — no separate `config set` + `mcp register` steps, and no
+   sandbox recreate needed (gog is dynamically discoverable by default; the
+   in-VM agent finds and calls it on demand, or attach it to THIS running
+   sandbox live with `pi-stack mcp load gog`).
+6. **`mcp.enabled` is false and they need some other external tool** (not
    gog, don't duplicate that line): configure the MCP provider they need,
-   then `pi-stack mcp register`, then `pi-stack run --replace`.
-6. **Host mode**, only when they mention a device or system-level install
+   then `pi-stack mcp register`. No recreate is needed either — a registered
+   server is dynamically discoverable by default; `pi-stack mcp load <name>`
+   attaches it to THIS running sandbox live if they want it immediately.
+7. **Host mode**, only when they mention a device or system-level install
    (not general dev work), and only the step that is actually missing. Use
    `host.provisioned` and `host.enabled` separately, never just `host.ready`:
-   - `host.provisioned` false: `pi-stack host setup`, then
-     `pi-stack config set host.enabled true`.
-   - `host.provisioned` true but `host.enabled` false:
-     `pi-stack config set host.enabled true` (already provisioned; don't
-     re-run host setup).
+   - `host.provisioned` false: `pi-stack host setup` — ONE command that
+     provisions the host agent AND enables the gate; don't tack on a
+     separate `config set host.enabled true` after it.
+   - `host.provisioned` true but `host.enabled` false (they turned it off
+     deliberately): `pi-stack config set host.enabled true` turns it back
+     on; don't re-run host setup.
    - `host.ready` true: skip this line entirely, nothing to do.
-7. **`pack.active` is false**: if `pack.exists` is true, the default pack
+8. **`pack.active` is false**: if `pack.exists` is true, the default pack
    just isn't active — `pi-stack pack use default` activates it. If
    `pack.exists` is false, `pi-stack setup` (or `pi-stack pack new <path>`)
    creates one. If **`pack.active` is true but `pack.git_initialized` is

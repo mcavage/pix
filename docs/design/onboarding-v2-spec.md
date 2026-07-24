@@ -10,7 +10,8 @@
 > `<workspace>/.pi-stack/host-state.json` file design is ITSELF superseded —
 > the shipped mechanism builds the same fields in memory and injects them
 > directly into the launcher-generated initial prompt (never a workspace
-> file); see `skills/onboarding/SKILL.md` and `hoststate.go`.
+> file); see `skills/onboarding/SKILL.md`, `services/host/cmd/pi-stack/hoststate.go`,
+> or run `pi-stack help setup` for the current, implemented behavior.
 
 Status: DRAFT for owner review. Not implemented. Supersedes the in-session
 identity-Q&A flow in `skills/onboarding/SKILL.md` and extends (does not replace)

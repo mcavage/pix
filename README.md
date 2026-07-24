@@ -128,6 +128,28 @@ launch. For
 scripted/CI hosts, `pi-stack onboard --account … --knowledge … --yes` writes
 `~/.config/pi-stack/config.toml` non-interactively (host config only, no handoff).
 
+Setup also gives you a straight read on local models before it hands off.
+It always prints a receipt for the three Ollama roles (watcher, embed, bridge):
+on a real terminal, a missing model gets a **default-No** prompt naming which
+role needs it and that the download can be large, so nothing downloads by
+accident; pass `--pull-models` to force every missing tag now with no prompt
+(CI-safe); a non-interactive run (or a bare `--yes`) never downloads and
+instead prints the exact `ollama pull <tag>` command to run yourself. A pull
+failure is reported plainly and setup keeps going — it never claims a model is
+ready when it isn't.
+
+`pi-stack doctor` is concise by default: a healthy group collapses to one
+summary line, and `--verbose` shows full per-check detail. Its exit code is
+**core-only**: it returns 1 only when a required provider key is confirmed
+missing or broken, never for an optional gap (Ollama, gog, memory, other MCP
+servers) and never for a check it couldn't verify (for example, running
+inside the sandbox itself, where `sbx` isn't reachable to confirm anything).
+
+Want Google Workspace? `pi-stack gog setup --account you@example.com
+--credentials ~/path/to/oauth-client.json` walks you through OAuth import,
+authorization, headless verification, and MCP registration in one guided
+command — see [docs/gog-setup.md](docs/gog-setup.md).
+
 You don't babysit the services daemon: `pi-stack run` / `memory` / `knowledge
 query` lazily auto-start a detached `pi-stack-host serve` when its ports are
 down (opt out with `PI_STACK_NO_AUTOSERVE=1` or `pi-stack config set
@@ -310,7 +332,7 @@ pi-stack doctor           # check keys, services, models, gog, and MCP state
 | `gh` | `github` | `gh auth token \| sbx secret set -g github` | sbx proxy injection |
 | memory | semantic recall | local Ollama watcher and embed models | host service on `:11435` |
 | knowledge | OKF retrieval | `pi-stack knowledge init` or `pi-stack knowledge use <path>` | host service on `:11436` |
-| Google Workspace | `gworkspace` | `gog auth login`, config account, MCP register | host `gog` MCP through sbx gateway |
+| Google Workspace | `gworkspace` | `pi-stack gog setup --account ... --credentials ...` | host `gog` MCP through sbx gateway |
 | Slack | `chat` | `config/op-refs.env`, 1Password CLI, MCP register | host stdio MCP through sbx gateway |
 | gateway catalog | `issues`, `docs`, etc. | `sbx mcp add` | sbx gateway |
 
@@ -339,6 +361,12 @@ pi-stack config set ollama_bridge_model  qwen3.5:9b   # local chat/router model
 make pull-models                                      # pull all three
 ```
 
+From a repo-less install, `pi-stack setup --pull-models` does the same pull
+non-interactively (CI-safe). A plain `pi-stack setup` on a real terminal offers
+a default-No prompt per missing model instead of downloading anything
+unasked, and a non-interactive/`--yes` run without `--pull-models` never
+downloads — it prints the exact `ollama pull <tag>` command instead.
+
 How the sandbox picks up `ollama_bridge_model`: `pi-stack run` writes the
 configured tag into `<workspace>/.pi-stack/ollama-bridge.model`, and the
 `ollama-bridge` extension reads it at startup — so a `pi-stack config set` +
@@ -366,17 +394,19 @@ daemon is restarted automatically so the bundle gets indexed; a foreground
 `pi-stack serve` is never killed — you're told to restart it (and if nothing is
 running, the change simply applies on the next start).
 
-Google Workspace is read-only by default. Authorize once on the host, then point
-pi-stack at the account:
+Google Workspace is read-only by default. One guided command handles OAuth
+import, account authorization, headless verification, and MCP registration:
 
 ```bash
-gog auth login
-pi-stack config set gog_account you@example.com
-pi-stack config set mcp gog
-pi-stack mcp register
+pi-stack gog setup --account you@example.com --credentials ~/path/to/oauth-client.json
 ```
 
-See [docs/gog-setup.md](docs/gog-setup.md) for the full walkthrough.
+`gog setup` prompts for anything you omit on a real terminal, drives whichever
+auth flow your installed `gog` CLI supports (it probes `gog auth --help` and
+picks the current one), and refuses to register until it verifies headless
+tools actually return results — not just an interactive login. See
+[docs/gog-setup.md](docs/gog-setup.md) for the full walkthrough, including the
+one keyring trap that silently yields zero tools in the sandbox.
 
 ## Skills and Overlays
 

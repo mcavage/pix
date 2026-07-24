@@ -1,84 +1,150 @@
-# Google Workspace via `gog` (host MCP) — setup + migration
+# Google Workspace via `gog` (host MCP)
 
-`gws` is gone. Google Workspace now runs as **`gog mcp`, a host-side MCP server**
-the sbx gateway spawns (like `slack`). Your OAuth creds stay in `GOG_HOME` on the
-host; only typed, read-only tool results cross into the sandbox. No token service,
-no in-VM wrapper, no bearer forwarding.
+Google Workspace runs as **`gog`, a host-side MCP server** the sbx gateway
+spawns on demand, the same pattern as `slack`. Your OAuth credentials stay in
+`GOG_HOME` on the host; only typed, read-only tool results cross into the
+sandbox. There is no token service, no in-VM wrapper, no bearer forwarding.
 
-## The one trap (read this first)
-`gog auth` working in your Terminal proves **nothing** about the gateway. The
-gateway spawns `gog mcp` with a bare, non-interactive env. If the keyring
-password isn't in the env it inherits, the server starts and returns **zero tools,
-silently** — the gws-style hours-in-circles trap. On macOS with the system
-keychain, `gog` can unlock the stored token without a password and step 3 is
-skipped; on other setups (file keyring, headless CI) step 3 is not optional.
-`pi-stack doctor` probes the real headless path, not just `gog auth doctor`.
+`pi-stack gog setup` is the guided path: one command checks `gog` is
+installed, imports your OAuth client, authorizes your account, verifies the
+gateway can actually call it headlessly, and registers it. It is an
+**orchestrator**, never a credential store — it never reads or prints your
+OAuth client JSON's contents, and no organization client is bundled here;
+bring your own.
 
-> **Note:** the sbx Cloud MCP Gateway (`SBX_MCP_URL`) is not yet publicly
-> released. `gog` runs through it; without gateway access the `gworkspace`
-> capability is unavailable regardless of gog setup.
+## Quickstart
 
-## Host quickstart (6 steps, macOS)
 ```bash
-# 1. Install
-brew install gog                       # or see https://gogcli.sh/install.html
-
-# 2. Register your OAuth client + authorize YOUR account (browser, once).
-#    Use minimal READ-ONLY scopes (gmail.readonly, calendar.readonly, drive.readonly…).
-gog auth add-client ~/Downloads/gog-oauth-client.json
-gog --account you@example.com auth login
-
-# 3. THE STEP EVERYONE SKIPS (file-keyring or headless setups only).
-#    macOS system keychain users can skip this — gog unlocks the stored OAuth
-#    token without a password. If you use a file keyring or need 1Password to
-#    supply the keyring password, create the env-file at the XDG config path:
-mkdir -p ~/.config/pi-stack
-cat >> ~/.config/pi-stack/op-refs.env <<'EOF'
-GOG_ACCOUNT=you@example.com
-GOG_HOME=/Users/you/.config/gog
-GOG_KEYRING_BACKEND=file
-GOG_KEYRING_PASSWORD=op://Private/gog-keyring/password
-EOF
-#    (make-based flow uses config/op-refs.env in the repo instead of this path)
-
-# 4. Prove it the way the gateway will — MUST print a non-empty tool list.
-#    With op-refs: use op run. Without op-refs (system keychain), run directly.
-op run --env-file=~/.config/pi-stack/op-refs.env -- gog --account you@example.com mcp --list-tools
-# or (system keychain, no op):  gog --account you@example.com mcp --list-tools
-
-# 5. Enable + register.
-pi-stack config set gog_account you@example.com   # writes to ~/.config/pi-stack/config.toml
-pi-stack config set mcp gog                       # adds gog to the mcp list in config.toml
-pi-stack mcp register                              # registers the hardened read-only server
-# The make-based flow reads the SAME config.toml (via pi-stack config get), so
-# the two commands above configure make mcp-register too.
-
-# 6. Launch with gog attached, then confirm.
-make run          # attaches gog per the mcp list in config.toml; or: pi-stack run
-pi-stack doctor   # gog group should be all green
+pi-stack gog setup --account you@example.com --credentials ~/Downloads/gog-oauth-client.json
 ```
 
-The registered server is locked down by default:
-`gog --account <you> --gmail-no-send --wrap-untrusted --readonly mcp --allow-tool read`
-— read-only, can't send mail, returned Gmail/Doc bodies are fenced as untrusted
-data. Add write tools later, per surface, only when you want them
-(`--allow-write --allow-tool 'docs.*'`).
+On a real terminal, omit either flag and you'll be prompted for it. Add
+`--yes` to fail instead of prompting (CI). Re-running a healthy setup is safe
+and idempotent — it re-verifies and re-registers deterministically.
 
-## Migrating off gws (teardown)
-Do steps 1–5 above, then tear down the old path:
-- `gws auth logout` on the host; stop anything on `:11441`.
-- Remove any `GWS_TOKEN_AUTH` from your environment/secrets (the bearer is gone).
-- `sbx rm -f pi-stack-pi-stack && make run` to recreate on the gws-free image
-  (needs `make load` first to rebuild).
+## What it does
 
-Four moving parts (token service + wrapper + bearer forwarding + Google allowlist)
-collapse to one MCP registration authed entirely on the host.
+1. Checks the `gog` CLI is installed. If not, it prints the install command
+   (`brew install gog`, or see https://gogcli.sh/install.html) and stops.
+2. Validates `--credentials` points at a regular file. The contents are never
+   read or printed — only the path is passed to `gog` as an argument.
+3. Probes `gog auth --help` once and picks the **first supported route** for
+   the installed version (see below), then imports the client and authorizes
+   `--account` by running that route interactively — it inherits this
+   terminal's stdin/stdout/stderr, so a browser or device-code flow works
+   normally.
+4. Verifies interactive auth (`gog --account <you> auth doctor --check`),
+   **then** verifies the headless path the sbx gateway will actually use (see
+   "the one trap" below). A healthy interactive login with zero headless
+   tools **fails the command** with the exact fix, rather than claiming
+   you're ready.
+5. On success: saves `gog_account`, adds `gog` to your configured MCP set,
+   and registers it with the sbx gateway.
+
+### Current and fallback `gog` CLI routes
+
+Different `gog` releases expose different auth subcommands. `pi-stack gog
+setup` probes `gog auth --help` and uses the first of these it finds, in
+order:
+
+1. **current, one-shot:** `gog auth setup <account> --credentials <path> --login`
+2. **current, two-step:** `gog auth credentials <path>` then `gog auth add <account>`
+3. **older, legacy:** `gog auth add-client <path>` then `gog --account <account> auth login`
+
+If your installed `gog` advertises none of these, the command prints the
+installed version and an upgrade hint (`brew upgrade gog`) instead of
+guessing at an obsolete command. You never need to know which route applies —
+this is exactly what the version probe is for.
+
+### Expected output
+
+A healthy run looks like:
+
+```
+Importing your OAuth client + authorizing you@example.com (gog auth route: setup)...
+This may open a browser for you to sign in.
+  running: gog auth setup you@example.com --credentials /path/to/client.json --login
+interactive auth OK for you@example.com
+headless tools OK (verified the same host-side path the sbx gateway/doctor use)
+
+gog is dynamically discoverable by default (lean context) — the in-VM agent finds + calls it on demand.
+Existing sandbox? attach it live: pi-stack mcp load gog
+```
+
+## The one trap (read this first)
+
+`gog auth doctor` working in your interactive shell proves **nothing** about
+the gateway. The sbx gateway spawns `gog` headless, in a bare,
+non-interactive environment. If the keyring password isn't in the env the
+gateway gives it, the server starts and returns **zero tools, silently** — the
+classic hours-in-circles trap.
+
+On macOS with the system keychain, `gog` usually unlocks the stored token
+without a password, so this never bites. On a file keyring or a headless/CI
+host, it does — you need to supply the keyring password via 1Password
+references in your `op-refs.env`:
+
+```bash
+pi-stack config path op-refs   # prints the exact file to edit
+```
+
+Add (or let `pi-stack secret set` add) these keys — they're on the documented
+non-secret allowlist except the password itself:
+
+```
+GOG_ACCOUNT=you@example.com
+GOG_HOME=/home/you/.config/gog
+GOG_KEYRING_BACKEND=file
+GOG_KEYRING_PASSWORD=op://Private/gog-keyring/password
+```
+
+`pi-stack gog setup` and `pi-stack doctor` both probe the **real** headless
+path (`op run --env-file=<op-refs.env> -- gog --account <you> mcp
+--list-tools`), not just `gog auth doctor` — so a pass from either command
+means the gateway will actually get tools, not just that your login worked.
+
+## Verification
+
+Run `pi-stack doctor` any time — its gog group probes the exact command the
+sbx gateway registered (account, op-refs path, and binaries as-registered),
+not a reconstruction, whenever sbx can report it. A green gog group means the
+gateway will get tools; a `⚠` means unverifiable (for example, no `op`
+installed to check with) — never a silent false pass. `pi-stack gog setup`
+run again is the same check, plus it re-registers if anything changed.
+
+## Dynamic discovery vs. eager attach
+
+By default, `gog` is registered but **dynamically discoverable**: it isn't in
+a fresh sandbox's context at creation, and the in-VM agent finds and calls it
+on demand (mcp-find/mcp-exec). Pin it eager instead with:
+
+```bash
+pi-stack config set mcp_static gog
+```
+
+so a freshly created sandbox has it in context from the start. Either way,
+attach it to an **already-running** sandbox live, no recreate needed:
+
+```bash
+pi-stack mcp load gog
+```
 
 ## Security posture (why this is safe for full-auto)
-Runs as **your** account (a throwaway account would be useless), but hardened:
-minimal read-only OAuth scopes + gog `--readonly`/`--gmail-no-send`/
-`--wrap-untrusted` + a revocable OAuth client. Residual risks to know: a
-prompt-injected agent can still *read* your Google data and try to exfiltrate it
-through some other channel (read-only stops writes, not reads); and the keyring
-password in the gateway's process env unlocks standing OAuth — keep `GOG_HOME`
-0700, the keyring 0600, single-user host, and rotate if exposed.
+
+Runs as **your** account (a throwaway account would be useless to you), but
+hardened: minimal read-only OAuth scopes plus gog's own
+`--gmail-no-send --wrap-untrusted --readonly --allow-tool read`, and a
+revocable OAuth client. Residual risks worth knowing: a prompt-injected agent
+can still *read* your Google data and try to exfiltrate it through some other
+channel (read-only stops writes, not reads), and the keyring password in the
+gateway's process env unlocks standing OAuth — keep `GOG_HOME` at `0700`, the
+keyring file at `0600`, this a single-user host, and rotate the client if it's
+ever exposed.
+
+## Already authorized `gog` yourself?
+
+`pi-stack gog setup` is safe to run even if you've already authorized the
+account by hand: it re-runs the auth route's commands (safe to repeat — `gog
+auth setup`/`auth login` refresh, not duplicate, an existing grant), then
+verifies and registers exactly as a first run does. You don't need a separate
+manual path — the guided command IS the supported one.

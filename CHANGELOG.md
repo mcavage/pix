@@ -8,6 +8,60 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## Unreleased
 
+### Added
+
+- `pi-stack doctor --json` gains a top-level `schema_version` (currently `2`)
+  and a `blocking` flag, and every check now carries a `requirement`
+  (`core` | `configured-optional` | `unconfigured-optional`) and an `evidence`
+  state (`healthy` | `failed` | `unverifiable` | `not-configured`). All v1
+  fields are unchanged; this is additive.
+- `pi-stack doctor --verbose` shows full per-check group detail; the new
+  default is concise (a healthy group collapses to one summary line).
+- `pi-stack setup --pull-models` force-pulls any missing watcher/embed/bridge
+  Ollama model with no prompt (CI-safe). Without it, an interactive terminal
+  offers a default-No prompt per missing model naming which role needs it;
+  non-interactive/`--yes` never downloads and prints the exact deferred
+  `ollama pull <tag>` command instead. Setup always prints a local-model
+  readiness receipt before handoff, regardless of `services` membership.
+- `pi-stack gog setup [--account <email>] [--credentials <path>]` is the new
+  guided, public path to wiring up Google Workspace: it checks `gog` is
+  installed, imports your OAuth client and authorizes the account through
+  whichever auth surface the installed `gog` supports, verifies BOTH
+  interactive and headless auth (the same path the sbx gateway actually
+  spawns), and only then saves the account, enables `gog` in the configured
+  MCP set, and registers it. See `docs/gog-setup.md`.
+
+### Changed
+
+- `pi-stack doctor` now exits **1** on a VERIFIED core requirement failure
+  (e.g. a provider key confirmed unset) instead of only on a usage error.
+  Everything else — optional gaps and any check that couldn't be verified,
+  including every provider check when running inside the sandbox with `sbx`
+  absent — still exits 0. A usage error still exits 2.
+- Rewrote `docs/gog-setup.md` as a current task guide for `pi-stack gog
+  setup`: dropped the obsolete `SBX_MCP_URL`/unreleased-gateway framing (the
+  sbx local data-plane gateway is generally available), the repo-relative
+  `config/op-refs.env` path, and `make mcp-register` as the consumer path.
+- Reconciled `services/host/cmd/pi-stack/pi-stack.1` with current behavior:
+  removed the contradictory `--use-sbx-keys` claims (that flag was removed;
+  1Password is the only provider-key source), the retired `--profile`
+  flag/`active_profile`/`profiles.*` config, the stale `%20`-encoding claim
+  for op-refs (refs are stored with literal spaces), the stale `gemma3:4b`
+  watcher-model default (now `qwen3.5:9b`), and added `doctor --verbose`,
+  `setup --pull-models`, and the `gog` verb.
+- README's first-run and local-model sections now describe setup's
+  default-No model-pull prompt, `--pull-models`, `doctor`'s concise-by-default
+  output with `--verbose`, its core-only exit semantics, and `pi-stack gog
+  setup` as the Google Workspace entry point.
+- `skills/onboarding/SKILL.md`: the gog and other-MCP setup gaps now point at
+  `pi-stack gog setup` / dynamic discovery instead of a `config set` +
+  `mcp register` + `run --replace` recipe (a registered server no longer
+  needs a sandbox recreate to be usable); host-mode guidance no longer tacks
+  on a redundant `config set host.enabled true` after `pi-stack host setup`
+  (one command already does both); local-model questions now point at
+  `pi-stack doctor` instead of inferring readiness from the host-state
+  payload's configured model names.
+
 ### Fixed
 
 - `pi-stack host` now launches its interactive session under `op run

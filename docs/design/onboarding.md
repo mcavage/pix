@@ -1,5 +1,13 @@
 # Onboarding redesign
 
+> **Historical, superseded.** This is the original design proposal; it predates
+> the shipped two-phase `pi-stack setup` (host reconciliation, then a one-shot
+> guided tour) and the current `skills/onboarding/SKILL.md`. Read it for
+> background on the trust-plane problem, not as a description of current
+> behavior. For what onboarding actually does today, see
+> `skills/onboarding/SKILL.md`, `services/host/cmd/pi-stack/setup.go`, or run
+> `pi-stack help setup` / `pi-stack help onboard`.
+
 Status: PROPOSED (awaiting owner gate before the teardown)
 Supersedes: `pi-stack setup` (the 4-step host TTY wizard) and the `onboard` skill.
 
