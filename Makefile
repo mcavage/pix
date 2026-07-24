@@ -14,28 +14,15 @@ LAUNCHER_VERSION ?= $(VERSION)+local
 IMAGE       ?= docker.io/$(DOCKER_USER)/pi-stack:$(VERSION)
 LATEST      ?= docker.io/$(DOCKER_USER)/pi-stack:latest
 KIT         ?= ./pi-kit
-# Private overlay — its OWN peer repo (not in this tree). It contributes two halves
-# (see docs/OVERLAY.md): kit/ (a mixin kit: company skills, full capabilities.json,
-# in-sandbox wrappers — `make run` stacks it) and host/overlay_*.go (host plugins —
-# `make serve` symlinks them into services/host/ so they compile into the binary).
-# Override OVERLAY on the command line or in the environment (e.g.
-# `make run OVERLAY=../my-overlay`) if your peer repo lives elsewhere.
-OVERLAY     ?= ../pi-stack-work
-OVERLAY_KIT_FLAG = $(if $(wildcard $(OVERLAY)/kit/spec.yaml),--kit $(OVERLAY)/kit,)
-# Also mount the overlay's kit/ as a writable extra workspace, so skills/config the
-# agent improves mid-session can be saved to the real source (then `make load` bakes
-# them). Without this, in-sandbox edits land on the read-only kit-delivered copy and
-# die with the sandbox. Scoped to kit/ (not the repo root), so host/*.go and .git
-# stay out of the VM. See AGENTS.md "Writing skills".
-OVERLAY_WS = $(if $(wildcard $(OVERLAY)/kit/spec.yaml),$(OVERLAY)/kit,)
 # Dev mode (Mode B): `make run` launches from the repo, so load skills LIVE from the
 # host tree instead of the copies baked into the image — edit a SKILL.md, /reload in
-# pi, and it's live, no rebuild. `--no-skills` turns off baked discovery; each
-# `--skill <root>` recurses for SKILL.md, so we point at the public repo's skills and
-# (if present) the overlay's. Paths are absolute = the in-sandbox mount paths (sbx
-# mounts each workspace at its host path). Consumers who `sbx run --kit git+...` never
-# hit this target, so they get the baked set (Mode A). See AGENTS.md.
-DEV_SKILLS = --no-skills --skill $(CURDIR)/skills$(if $(OVERLAY_WS), --skill $(abspath $(OVERLAY))/kit/files/home/.pi/agent/skills,)
+# pi, and it's live, no rebuild. `--no-skills` turns off baked discovery; `--skill
+# <root>` recurses for SKILL.md. Company/private context is NO LONGER an overlay —
+# it's a pack (`pi-stack pack use <path>`, used with the installed binary), and
+# host-executing integrations ship as containers the sbx gateway runs (see the
+# pix-docker-integrations repo). Consumers who `sbx run --kit git+...` never hit this
+# target, so they get the baked set (Mode A). See AGENTS.md.
+DEV_SKILLS = --no-skills --skill $(CURDIR)/skills
 # Runtime config — the SINGLE source of truth is ~/.config/pi-stack/config.toml,
 # managed by `pi-stack config set` and read here via `pi-stack config get`
 # (profile-aware, list keys space-separated). The `?=` assignments are DEFERRED:
@@ -57,8 +44,8 @@ MCP         ?= $(shell "$(PI_STACK_BIN)" config get mcp 2>/dev/null)
 MCP_FLAGS   = $(foreach server,$(MCP),--static-mcp $(server))
 # The local stdio MCP servers `make mcp-register` can register (the ones you
 # actually use — i.e. those listed in MCP). `slack` is a pi-stack-host subcommand;
-# `gog` is the host-side Google Workspace CLI's MCP mode. A private overlay
-# (config/overlay.mk) can append more (e.g. bamboohr).
+# `gog` is the host-side Google Workspace CLI's MCP mode. Additional integrations
+# are packs, not overlays: remote catalog servers, or containers the gateway runs.
 LOCAL_STDIO_MCP = slack gog
 REGISTER        = $(filter $(LOCAL_STDIO_MCP),$(MCP))
 
@@ -80,10 +67,6 @@ GOG_BIN := $(shell command -v gog 2>/dev/null)
 # here). Passed to `gog --account` when `make mcp-register` registers gog with
 # the gateway.
 GOG_ACCOUNT ?= $(shell "$(PI_STACK_BIN)" config get gog_account 2>/dev/null)
-
-# The private overlay's make targets (gitignored peer repo) — company-specific
-# integrations (Snowflake/BambooHR targets, vars, extra MCP).
--include $(OVERLAY)/overlay.mk
 
 # Local-model deps for the self-learning memory (host Ollama). The watcher model
 # turns your messages into durable facts (capture); the embed model powers
@@ -107,13 +90,11 @@ OLLAMA_BRIDGE_MODEL ?= $(shell "$(PI_STACK_BIN)" config get ollama_bridge_model 
 SERVICES ?= $(shell "$(PI_STACK_BIN)" config get services 2>/dev/null)
 
 # SERVE_ENV: extra `KEY=VALUE` pairs injected into the environment of the host
-# services `make serve` starts. The public stack sets nothing here; a private
-# overlay (config/overlay.mk) appends the vars its own services need so no
-# company-specific env leaks into the public tree. Values are expanded into the
-# shell UNQUOTED, so each entry must be a single shell token: no spaces or shell
-# metacharacters. For a value that needs them (e.g. a connection string with
-# `&` or spaces), have the overlay service read an env FILE instead of passing
-# it here. See docs/OVERLAY.md.
+# services `make serve` starts. The stack sets nothing here by default. Values are
+# expanded into the shell UNQUOTED, so each entry must be a single shell token: no
+# spaces or shell metacharacters. For a value that needs them (e.g. a connection
+# string with `&` or spaces), have the service read an env FILE instead of passing
+# it here.
 # VALIDATION NOTE: SERVE_ENV is passed unquoted and untested — the Makefile
 # cannot validate its content. Ensure each entry is a safe shell token before
 # setting it (e.g. `SERVE_ENV="KEY=value"` where value has no spaces or &).
@@ -125,7 +106,7 @@ SERVE_ENV ?=
 # at parse time so every target can rely on it.
 $(shell mkdir -p out)
 
-.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean link-overlay launcher route require-launcher doctor-overlay
+.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean launcher route require-launcher
 
 # Guard for every target that sources runtime config (SERVICES/MCP/GOG_ACCOUNT/
 # models) from config.toml: the launcher binary MUST exist, and `config get`
@@ -142,17 +123,6 @@ require-launcher:
 		echo "       Run 'pi-stack config show' to diagnose (bad profile? corrupt config.toml?)."; \
 		exit 1; }
 
-# Symlink the private overlay's host plugins ($(OVERLAY)/host/overlay_*.go) into
-# services/host/ so they compile into pi-stack-host and self-register. No-op in a
-# public clone (the overlay peer repo isn't there) — the binary builds clean.
-# The symlinks are gitignored (services/host/overlay_*.go).
-link-overlay:
-	@rm -f services/host/overlay_*.go
-	@if [ -d "$(OVERLAY)/host" ]; then \
-		for f in $(OVERLAY)/host/overlay_*.go; do \
-			[ -e "$$f" ] && ln -sf "$$(cd "$$(dirname "$$f")" && pwd)/$$(basename "$$f")" services/host/; \
-		done; \
-	fi
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -219,7 +189,7 @@ run: require-launcher ## Launch a pi-stack sandbox NAME. If NAME is stopped it's
 	TAG=$$(cat out/.local-image-tag 2>/dev/null || true); \
 	[ -n "$$TAG" ] && echo "(new sandbox $(NAME), local build :$$TAG)" || echo "(new sandbox $(NAME), kit-pinned image)"; \
 	mkdir -p .pi-stack && echo "$(OLLAMA_BRIDGE_MODEL)" > .pi-stack/ollama-bridge.model; \
-	exec sbx run pi-stack --name $(NAME) $${TAG:+--template docker.io/$(DOCKER_USER)/pi-stack:$$TAG} --kit $(KIT) $(OVERLAY_KIT_FLAG) $(MCP_FLAGS) . $(OVERLAY_WS) -- $(DEV_SKILLS)
+	exec sbx run pi-stack --name $(NAME) $${TAG:+--template docker.io/$(DOCKER_USER)/pi-stack:$$TAG} --kit $(KIT) $(MCP_FLAGS) . -- $(DEV_SKILLS)
 
 # Run the latest PUBLISHED image straight off the git-hosted kit — the true
 # consumer path, no local repo needed. Every push to main auto-publishes a NEW
@@ -240,7 +210,7 @@ launcher: ## Build BOTH host binaries (out/pi-stack launcher + out/pi-stack-host
 	@echo "Built out/pi-stack + out/pi-stack-host (version $(LAUNCHER_VERSION))."
 	@echo "Install both: ln -sf $(CURDIR)/out/pi-stack ~/.local/bin/pi-stack && ln -sf $(CURDIR)/out/pi-stack-host ~/.local/bin/pi-stack-host"
 
-memory-serve: link-overlay ## Build + run just the memory service (JSON-RPC :11435) from pi-stack-host
+memory-serve: ## Build + run just the memory service (JSON-RPC :11435) from pi-stack-host
 	(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) && exec ./out/pi-stack-host memory
 
 mcp-auth: ## (Re)authorize the remote OAuth MCP servers (opine/granola/notion/atlassian). Run this when standup/refresh reports them "not in the gateway" — sbx's hosted MCP OAuth creds do NOT persist reliably across sessions/daemon restarts (they silently drop to "Not Found"), so re-establishing them is a recurring chore until sbx fixes it. Opens a browser per server.
@@ -256,7 +226,7 @@ mcp-auth: ## (Re)authorize the remote OAuth MCP servers (opine/granola/notion/at
 	@echo "  pi-stack mcp load <server>   # or: sbx mcp load <server> --sandbox pi-stack-pi-stack"
 	@echo "A fresh 'make run' also picks them up."
 
-mcp-register: require-launcher link-overlay ## Register the local stdio MCP servers you use (the mcp list in config.toml) with sbx's local data-plane gateway (no SBX_MCP_URL needed). The gateway runs each as `op run --no-masking --env-file=config/op-refs.env -- pi-stack-host <name>`, so creds come from 1Password at spawn (nothing stored in the registration). Needs op + config/op-refs.env.
+mcp-register: require-launcher ## Register the local stdio MCP servers you use (the mcp list in config.toml) with sbx's local data-plane gateway (no SBX_MCP_URL needed). The gateway runs each as `op run --no-masking --env-file=config/op-refs.env -- pi-stack-host <name>`, so creds come from 1Password at spawn (nothing stored in the registration). Needs op + config/op-refs.env.
 	@command -v sbx >/dev/null 2>&1 || { echo "ERROR: sbx not found"; exit 1; }
 	@[ -n "$(strip $(REGISTER))" ] || { echo "Nothing to register: no local stdio servers ($(LOCAL_STDIO_MCP)) are in MCP. Run: pi-stack config set mcp <name>."; exit 0; }
 	@[ -n "$(OP_BIN)" ] || { echo "ERROR: 1Password CLI 'op' not found on PATH."; exit 1; }
@@ -286,7 +256,7 @@ mcp-register: require-launcher link-overlay ## Register the local stdio MCP serv
 	@echo "        To attach one to an ALREADY-RUNNING sandbox live (no recreate): pi-stack mcp load <name>"
 	@echo "Note: each server resolves its creds from config/op-refs.env via op run when the gateway spawns it — make sure those refs are filled + valid."
 
-serve: require-launcher link-overlay ## Start the host services named in SERVICES (config.toml `services`): memory :11435. MCP servers (slack, gog) are run by the sbx gateway — see `make mcp-register`. Ctrl-C stops all.
+serve: require-launcher ## Start the host services named in SERVICES (config.toml `services`): memory :11435. MCP servers (slack, gog) are run by the sbx gateway — see `make mcp-register`. Ctrl-C stops all.
 	@echo "Host services [$(SERVICES)] — sandboxes reach these on host.docker.internal. Ctrl-C stops all."
 	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) || { echo "go build failed (pi-stack-host)"; exit 1; }
 	@exec env $(SERVE_ENV) MEMORY_WATCHER_MODEL=$(MEMORY_WATCHER_MODEL) MEMORY_EMBED_MODEL=$(MEMORY_EMBED_MODEL) out/pi-stack-host serve $(SERVICES)
@@ -338,7 +308,6 @@ doctor: require-launcher ## Show models + each optional integration: set up? ser
 	echo "  gateway catalog (atlassian/notion/granola/linear/...): sbx mcp add … then pi-stack config set mcp <name>"; \
 	echo ""; \
 	echo "All of the above is configured in ~/.config/pi-stack/config.toml (pi-stack config set). Start it: make serve (host) + make run (sandbox)."
-	@$(MAKE) -s doctor-overlay 2>/dev/null || true
 
 pack: ## Package the kit as a distributable zip
 	sbx kit pack $(KIT) -o out/pi-stack-kit.zip

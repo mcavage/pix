@@ -110,6 +110,16 @@ type packIntegration struct {
 	// server is registered + discoverable, and the agent pulls it via mcp-find on
 	// demand. A user `mcp_dynamic <name>` still overrides this back to dynamic.
 	Static bool `toml:"static,omitempty"`
+	// Manifest, when set, makes this a CONTAINER integration: an OCI-packaged
+	// stdio MCP server the sbx gateway runs on the host via Docker. The value is a
+	// server-manifest URL (server.json/server.yaml, e.g. a GitHub raw or internal
+	// HTTP URL) or a registry ref that `sbx mcp add --local --url <manifest>`
+	// accepts. Registration uses that form (NOT the host `--command` path), so no
+	// pi-stack-host recompile or private build is needed; the container's
+	// credentials are provided Docker-side (declared in its server.json), not via
+	// the op-run wrapper. Leave empty for a host-provided server (slack, gog) or a
+	// remote gateway-catalog server.
+	Manifest string `toml:"manifest,omitempty"`
 }
 
 // packInfo is a resolved pack on disk.
@@ -119,6 +129,11 @@ type packInfo struct {
 	SkillsDir    string // <root>/skills if it exists, else ""
 	KnowledgeDir string // <root>/knowledge if it exists, else ""
 	BinDir       string // <root>/bin if it exists, else "" (F2/F3 proxy wrapper scripts)
+	// CapabilitiesFile is <root>/capabilities.json if it exists (a regular file),
+	// else "". Mounted into the sandbox at ~/.pi/agent/capabilities.json via the
+	// synthesized mixin kit so a pack carries its own capability->provider routing
+	// (what used to require the private overlay kit).
+	CapabilitiesFile string
 }
 
 const packManifestName = "pack.toml"
@@ -175,6 +190,12 @@ func loadPack(root string) (*packInfo, error) {
 			return nil, fmt.Errorf("pack %s: bin/ contains a symlink (%s); packs must not use symlinks, refusing to mount", root, bad)
 		}
 		p.BinDir = d
+	}
+	if f := filepath.Join(root, "capabilities.json"); fileExists(f) {
+		if isSymlinkPath(f) {
+			return nil, fmt.Errorf("pack %s: capabilities.json is a symlink; refusing to mount", root)
+		}
+		p.CapabilitiesFile = f
 	}
 	if err := validatePackFacets(root, &m); err != nil {
 		return nil, err
@@ -900,7 +921,10 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, er
 		o.PackKits = append(o.PackKits, kit)
 	}
 	for _, ig := range p.Manifest.Integrations {
-		if ig.Env != "" && !opRefFilled(env, ig.Env) {
+		// CONTAINER integrations (Manifest set) get their credentials Docker-side,
+		// not from op-refs — so an op-ref warning would be misleading noise. Only
+		// warn for op-run-wrapped (host-provided/remote) integrations.
+		if ig.Env != "" && ig.Manifest == "" && !opRefFilled(env, ig.Env) {
 			fmt.Fprintf(os.Stderr, "pi-stack: pack integration %q needs a credential — set it: pi-stack secret set %s op://vault/item/field\n", ig.Name, ig.Env)
 		}
 	}
@@ -929,6 +953,38 @@ func packStaticMcpNames(p *packInfo) []string {
 		}
 	}
 	return names
+}
+
+// packContainerMCP returns {integration.mcp: manifest} for a pack's CONTAINER
+// integrations (those with a Manifest ref) — the servers `pi-stack mcp register`
+// must add via `sbx mcp add <name> --local --url <manifest>` rather than as a
+// host `--command`. Returns nil when the pack declares none.
+func packContainerMCP(p *packInfo) map[string]string {
+	out := map[string]string{}
+	for _, ig := range p.Manifest.Integrations {
+		if ig.MCP != "" && strings.TrimSpace(ig.Manifest) != "" {
+			out[ig.MCP] = strings.TrimSpace(ig.Manifest)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// activeContainerMCP resolves packContainerMCP for the active pack. Returns nil
+// when there is no active pack or it won't load (registration of the other
+// servers proceeds regardless).
+func activeContainerMCP(cfg *config.Config) map[string]string {
+	root := activePackRoot(cfg.Pack, "")
+	if root == "" {
+		return nil
+	}
+	p, err := loadPack(root)
+	if err != nil {
+		return nil
+	}
+	return packContainerMCP(p)
 }
 
 // packMcpNames returns the de-duplicated `integration.mcp` names a pack
@@ -994,9 +1050,10 @@ func synthesizePackKit(p *packInfo) (string, error) {
 	base := packKitDir(p.Root)
 	parent := filepath.Dir(base)
 	sweepStaleKitTemps(parent, filepath.Base(base))
-	if len(sandboxProxies) == 0 {
-		// No sandbox proxies: nothing to mount. A previous launch's kit dir is
-		// inert (nothing references it) and the sweep above cleans it up.
+	if len(sandboxProxies) == 0 && p.CapabilitiesFile == "" {
+		// No sandbox proxies and no capabilities.json: nothing to mount. A previous
+		// launch's kit dir is inert (nothing references it) and the sweep above
+		// cleans it up.
 		return "", nil
 	}
 	if err := os.MkdirAll(parent, 0o755); err != nil {
@@ -1011,23 +1068,41 @@ func synthesizePackKit(p *packInfo) (string, error) {
 		return "", fmt.Errorf(format, a...)
 	}
 	_ = os.Chmod(dir, 0o755) // MkdirTemp creates 0700; the kit is a mounted tree
-	binOut := filepath.Join(dir, "files", "usr", "local", "bin")
-	if err := os.MkdirAll(binOut, 0o755); err != nil {
-		return fail("pack kit for %s: %v", p.Manifest.Name, err)
-	}
 	if err := os.WriteFile(filepath.Join(dir, "spec.yaml"), []byte("kind: mixin\n"), 0o644); err != nil {
 		return fail("pack kit for %s: %v", p.Manifest.Name, err)
 	}
-	for _, pr := range sandboxProxies {
-		src := filepath.Join(p.Root, "bin", pr.Name)
-		b, err := os.ReadFile(src)
-		if err != nil {
-			// Fail closed: never launch with a partial kit because one declared
-			// wrapper couldn't be read.
-			return fail("pack proxy %q: %v (refusing to build the pack kit)", pr.Name, err)
+	if len(sandboxProxies) > 0 {
+		binOut := filepath.Join(dir, "files", "usr", "local", "bin")
+		if err := os.MkdirAll(binOut, 0o755); err != nil {
+			return fail("pack kit for %s: %v", p.Manifest.Name, err)
 		}
-		if err := os.WriteFile(filepath.Join(binOut, pr.Name), b, 0o755); err != nil {
-			return fail("pack proxy %q: %v (refusing to build the pack kit)", pr.Name, err)
+		for _, pr := range sandboxProxies {
+			src := filepath.Join(p.Root, "bin", pr.Name)
+			b, err := os.ReadFile(src)
+			if err != nil {
+				// Fail closed: never launch with a partial kit because one declared
+				// wrapper couldn't be read.
+				return fail("pack proxy %q: %v (refusing to build the pack kit)", pr.Name, err)
+			}
+			if err := os.WriteFile(filepath.Join(binOut, pr.Name), b, 0o755); err != nil {
+				return fail("pack proxy %q: %v (refusing to build the pack kit)", pr.Name, err)
+			}
+		}
+	}
+	// A pack's capabilities.json travels into ~/.pi/agent so its capability
+	// routing overrides the base image's generic one (what the private overlay
+	// kit used to do). Fail closed if it's declared but unreadable.
+	if p.CapabilitiesFile != "" {
+		agentOut := filepath.Join(dir, "files", "home", ".pi", "agent")
+		if err := os.MkdirAll(agentOut, 0o755); err != nil {
+			return fail("pack kit for %s: %v", p.Manifest.Name, err)
+		}
+		b, err := os.ReadFile(p.CapabilitiesFile)
+		if err != nil {
+			return fail("pack capabilities.json: %v (refusing to build the pack kit)", err)
+		}
+		if err := os.WriteFile(filepath.Join(agentOut, "capabilities.json"), b, 0o644); err != nil {
+			return fail("pack capabilities.json: %v (refusing to build the pack kit)", err)
 		}
 	}
 	return dir, nil
@@ -2039,7 +2114,7 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 			// cfg.MCP (added == false) — it is idempotent, and a retry after a
 			// failed gateway registration must actually re-register instead of
 			// silently doing nothing.
-			if err := registerServers(cfg, env, out, []string{name}, findHostBinary); err != nil {
+			if err := registerServers(cfg, env, out, []string{name}, findHostBinary, packContainerMCP(p)); err != nil {
 				fmt.Fprintf(out, "note: mcp registration: %v\n", err)
 			}
 			solicitPackCredentials(env, os.Stdin, out, isTTY(os.Stdin), p)
@@ -2091,6 +2166,9 @@ func runPackShow(out io.Writer, rest []string) {
 	fmt.Fprintf(out, "root:      %s\n", p.Root)
 	fmt.Fprintf(out, "skills:    %s\n", present(p.SkillsDir))
 	fmt.Fprintf(out, "knowledge: %s\n", present(p.KnowledgeDir))
+	if p.CapabilitiesFile != "" {
+		fmt.Fprintln(out, "capabilities: yes (mounts to ~/.pi/agent/capabilities.json)")
+	}
 	if p.Manifest.OllamaBridgeModel != "" {
 		fmt.Fprintf(out, "ollama:    %s\n", p.Manifest.OllamaBridgeModel)
 	}
@@ -2124,20 +2202,20 @@ func runPackShow(out io.Writer, rest []string) {
 		env := defaultShellEnv()
 		fmt.Fprintln(out, "integrations:")
 		for _, ig := range p.Manifest.Integrations {
-			cred := ""
-			if ig.Env != "" {
-				if opRefFilled(env, ig.Env) {
-					cred = ig.Env + " ✓"
-				} else {
-					cred = ig.Env + " ✗ (run: pi-stack secret set " + ig.Env + " op://vault/item/field)"
-				}
-			}
 			fmt.Fprintf(out, "  - %s", ig.Name)
 			if ig.MCP != "" {
 				fmt.Fprintf(out, " (mcp: %s)", ig.MCP)
 			}
-			if cred != "" {
-				fmt.Fprintf(out, " — %s", cred)
+			switch {
+			case ig.Manifest != "":
+				// Container integration: creds are Docker-side, not op-refs.
+				fmt.Fprintf(out, " — container: %s (creds Docker-side)", ig.Manifest)
+			case ig.Env != "":
+				if opRefFilled(env, ig.Env) {
+					fmt.Fprintf(out, " — %s ✓", ig.Env)
+				} else {
+					fmt.Fprintf(out, " — %s ✗ (run: pi-stack secret set %s op://vault/item/field)", ig.Env, ig.Env)
+				}
 			}
 			fmt.Fprintln(out)
 		}
@@ -2566,7 +2644,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// false) and must still re-register, and a pack changing gog_account while
 	// redeclaring an existing `gog` server must re-register the new account.
 	if all := packMcpNames(p); len(all) > 0 {
-		if err := registerServers(cfg, env, out, all, findHostBinary); err != nil {
+		if err := registerServers(cfg, env, out, all, findHostBinary, packContainerMCP(p)); err != nil {
 			fmt.Fprintf(out, "note: mcp registration: %v\n", err)
 		}
 	}

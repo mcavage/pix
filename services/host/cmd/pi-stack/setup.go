@@ -353,7 +353,7 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 		}
 	}
 	if len(cfg.MCP) > 0 {
-		if err := registerServers(cfg, env, out, nil, hostBinaryResolver); err != nil {
+		if err := registerServers(cfg, env, out, nil, hostBinaryResolver, activeContainerMCP(cfg)); err != nil {
 			fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pi-stack mcp register)\n", err)
 		}
 	}

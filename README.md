@@ -31,7 +31,7 @@ pi-stack ships the reusable parts of that setup:
 - a host-side memory service with sqlite, FTS5, embeddings, and local capture
 - an optional OKF knowledge service and CLI for indexed private corpora
 - host-side data tools that keep credentials out of the sandbox
-- an overlay model for private company integrations
+- a pack model for private company context + integrations
 
 ## Status
 
@@ -161,7 +161,7 @@ different model check it.
 | Providers | multi | Claude + GPT + Gemini + local Ollama | mostly single-vendor |
 | Review | you | a *different* vendor reviews the diff | you |
 | Memory | none | host sqlite + FTS5 + vectors, survives sessions | limited |
-| Private integrations | none | overlay repo, credentials stay on the host | plugins |
+| Private integrations | none | a pack + container MCP servers, credentials stay off the sandbox | plugins |
 | Reproducibility | your machine | pinned image + kit | your machine |
 
 The cross-vendor review is the part that pays off in practice: a second Claude
@@ -199,22 +199,26 @@ directories and serves retrieval over JSON-RPC. `pi-stack knowledge init`
 scaffolds a spec-correct bundle, `pi-stack knowledge use` points the service at
 an existing bundle, and `pi-stack knowledge ls` reports config plus daemon health.
 Public pi-stack ships the engine, not a corpus. Private teams can mount their own
-bundles through config or an overlay.
+bundles through config or a pack.
 
 **Host-side credentials.** GitHub uses sbx proxy injection. Google Workspace,
-Slack, and overlay connectors run as host-side MCP servers spawned by the sbx
-gateway, so the sandbox talks to a gateway instead of holding tokens. Slack-style
-secrets can come from 1Password via `op run`.
+Slack, and pack connectors run as host-side MCP servers spawned by the sbx
+gateway — a host `--command` (op-run wrapped), a container the gateway runs, or a
+remote endpoint — so the sandbox talks to a gateway instead of holding tokens.
+Slack-style secrets can come from 1Password via `op run`.
 
 **Skills and role agents.** The public image includes generic development,
 writing, review, QA, and harness skills plus role presets like `architect`,
 `security-lead`, `sre-lead`, and `qa-lead`. Inside the sandbox, `/help` shows the
 live skill, agent, and capability map.
 
-**Private overlays.** The public repo contains the reusable harness. Private
-skills, capability routing, credentials, and company connectors live in a separate
-overlay repo. That keeps the open-source tree clean while still letting the same
-skills run against real work systems when an overlay is present.
+**Private packs.** The public repo contains the reusable harness. Private skills,
+capability routing (`capabilities.json`), credentials, and company connectors
+live in a **pack** (a git-backed bundle you `pi-stack pack use`), and any
+host-executing integration ships as a **container** the sbx gateway runs (or a
+host daemon when it can't containerize). That keeps the open-source tree clean —
+nothing private is compiled in — while the same skills run against real work
+systems when a pack is active.
 
 **Parallel work with `task`.** `pi-stack task new` spins up an isolated clone plus
 sandbox for a branch of work, so several agents can run at once without stepping
@@ -418,15 +422,19 @@ pattern works for prompts, extensions, environment, and network rules. Docker's
 kit format is documented in the
 [sbx kit docs](https://docs.docker.com/ai/sandboxes/customize/kits/).
 
-The private overlay is a peer repo with two halves:
+Private company context is a **pack**, not a build-time overlay:
 
-- `kit/`: private skills, full `capabilities.json`, in-sandbox wrappers, prompts,
-  extensions, and network rules
-- `host/overlay_*.go`: host plugins that self-register into `pi-stack-host`
+- **skills, `capabilities.json` routing, `[[proxy]]` wrappers, knowledge** — all
+  in the pack; `pi-stack pack use <path>` mounts them at runtime, no rebuild.
+- **host-executing MCP servers** — shipped as an OCI image and referenced from a
+  pack `[[integrations]]` `manifest`; the sbx gateway runs the container on the
+  host (`sbx mcp add <name> --local --url <manifest>`). No private Go is compiled
+  into `pi-stack`.
+- **host-only services** (browser OAuth, host-cached creds) — a standalone host
+  daemon + installer, with a thin in-sandbox `[[proxy]]` wrapper in the pack.
 
-When the overlay exists, `make run` stacks the kit and `make serve` compiles the
-host plugins. Public code never imports overlay files. See [docs/OVERLAY.md](docs/OVERLAY.md)
-and the scaffold in [examples/overlay](examples/overlay).
+See [docs/OVERLAY.md](docs/OVERLAY.md) (the migration note) and
+[design/packs.md](docs/design/packs.md).
 
 ## Build from Source
 

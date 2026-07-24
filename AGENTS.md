@@ -22,10 +22,10 @@ read it before changing things, and keep it current as you learn.
 | `extensions/*.ts` | local TypeScript extensions (`status.ts`, `timestamps.ts`, `compaction-continuation.ts`, and the rest of the harness) |
 | `services/host/` | **`pi-stack-host`** — the single compiled **Go** binary for everything that runs on the HOST. Subcommands: `memory` (:11435, JSON-RPC), `mcp <name>` (stdio MCP bridge for the sbx gateway), `slack` (alias for `mcp slack`), `plugin <kind>` (go-plugin self-exec: `memory\|knowledge\|broker\|mcp`), `serve` (supervisor for the long-running HTTP services: memory :11435, knowledge :11436 when enabled). Also `route` (model router: pick\|compile\|show\|models), backed by the dependency-light `services/host/routing/` subpackage (registry + scorecard + resolver, embedded defaults; scores are hand-maintained in scorecard.json). Knowledge is NOT a top-level subcommand; it runs under `serve` and via `plugin knowledge` (self-exec). Private overlay subcommands self-register via `init()` when present. Note: `gog` is the **external `gog` CLI** — NOT a pi-stack-host subcommand. |
 | `services/host/cmd/pi-stack/` | **`pi-stack` launcher** — the user-facing binary. Install without cloning the repo (`make install` builds + symlinks both `out/pi-stack` and `out/pi-stack-host`). Verb tree: `run [DIR]` (default), `serve`, `doctor`, `setup`, `config show\|path\|set\|unset`, `mcp register\|ls`, `state <backup\|restore\|reset\|uninstall>`, `version`, tiered `help [--all]`. Runtime config: `~/.config/pi-stack/config.toml`, managed by `pi-stack config set <key> <value>` — never hand-edit. |
-| `~/.config/pi-stack/config.toml` | the **single runtime config** (managed by `pi-stack config set`/`get` — never hand-edit). Declares `services`, `mcp`, `gog_account`, and the Ollama model names. The Makefile's operational targets (`run`, `serve`, `mcp-register`, `pull-models`, `doctor`) source these values by shelling out to `pi-stack config get`, so make and the launcher can never drift. The overlay peer repo's `overlay.mk` adds private make targets. |
+| `~/.config/pi-stack/config.toml` | the **single runtime config** (managed by `pi-stack config set`/`get` — never hand-edit). Declares `services`, `mcp`, `gog_account`, and the Ollama model names. The Makefile's operational targets (`run`, `serve`, `mcp-register`, `pull-models`, `doctor`) source these values by shelling out to `pi-stack config get`, so make and the launcher can never drift. |
 | `services/host/{slack,memory}.go` | the former `mcp/*` servers, now `pi-stack-host` subcommands. `slack` is a **stdio MCP server** registered with sbx (`make mcp-register`) and run by the MCP gateway — NOT in `mcp.json`, NOT in `make serve`. `memory` (JSON-RPC :11435, sqlite+FTS5+vectors via Ollama) is a plain host service backing the recall extension. None are baked into the image. |
 | `themes/*.json` | `dracula` (default), `pi-stack` |
-| `docs/OVERLAY.md` | how to build a private company overlay (peer repo: mixin kit + host plugins) |
+| `docs/OVERLAY.md` | migration note: the peer-repo overlay is retired — private context is a **pack**, host-executing integrations are **containers** the sbx gateway runs (see `design/packs.md`) |
 
 ## Build → load → run (read this before iterating)
 
@@ -33,7 +33,7 @@ read it before changing things, and keep it current as you learn.
   - **The image tag MUST be pinned (never `:latest`).** Docker re-pulls `:latest` on every run even when the image is already loaded, so `make load` gets ignored and you keep downloading. A pinned tag (`VERSION` in the Makefile = `image:` in `pi-kit/spec.yaml` = `version` in package.json) gets IfNotPresent semantics: use the loaded build if present, else pull once.
   - **You (the agent) CANNOT run `make load` / `make run` from inside a pi-stack sandbox** — they need the **host's** Docker + `sbx` CLI, which the VM has no access to. Don't offer to. Edit the baked files, sync them into the live `~/.pi/agent/...` dir + `/reload` for the current session, and tell the **user** to run `make load` on their host to bake it for future sandboxes.
 - **Kit only** (`pi-kit/spec.yaml`) → just `make run` a fresh sandbox. `--kit` applies at sandbox **creation** only — no rebuild needed.
-- **Skills load in one of two modes, decided by the entry point.** `make run` and `pi-stack run --dev` are **Mode B (dev):** skills load LIVE from the host tree (`--no-skills --skill <repo>/skills --skill <overlay>/kit/files/home/.pi/agent/skills`), so editing a `SKILL.md` on the host + `/reload` (or a fresh `make run`) is instant — **no `make load`, no image rebuild.** A consumer's `sbx run --kit git+…` (or `pi-stack` without `--dev`) is **Mode A (baked):** the skills compiled into the image. So for your own skill iteration, edit the mounted source and `/reload`; `make load` is only for baking your skills into the image for *consumers*/publish.
+- **Skills load in one of two modes, decided by the entry point.** `make run` and `pi-stack run --dev` are **Mode B (dev):** skills load LIVE from the host tree (`--no-skills --skill <repo>/skills`; a pack adds its own `skills/` on top via `pi-stack pack use`), so editing a `SKILL.md` on the host + `/reload` (or a fresh `make run`) is instant — **no `make load`, no image rebuild.** A consumer's `sbx run --kit git+…` (or `pi-stack` without `--dev`) is **Mode A (baked):** the skills compiled into the image. So for your own skill iteration, edit the mounted source and `/reload`; `make load` is only for baking your skills into the image for *consumers*/publish.
 - **This file** (`AGENTS.md`) and other workspace files are read live from the mount — no rebuild.
 - A running sandbox keeps its **creation-time image**; recreate (`sbx rm -f … && make run`) to pick up image changes.
 - **Testing:** never create/remove a sandbox named `pi-stack-pi-stack` — that's what `make run` uses, so you'll collide and strand sbx state. Use `--name pi-stack-test`.
@@ -121,21 +121,15 @@ A skill is **pure mechanism** — never bake one person's specifics (their chann
 accounts, names, thresholds) into a SKILL.md. Those are per-user and live in
 **memory** (the skill reads them at runtime); the skill only knows the *shape*.
 
-**Improving an overlay skill: edit the mounted source, not the delivered copy.**
-`make run` mounts the overlay's `kit/` into the sandbox as a writable workspace (at
-its host path, `$(OVERLAY)/kit` = `../pi-stack-work/kit`). There are two copies of
-every overlay skill in the sandbox:
-
-- `~/.pi/agent/skills/<name>/SKILL.md` — what pi loaded this session, but a **read-only
-  kit-delivered copy that dies with the sandbox**. Editing it here is lost.
-- `../pi-stack-work/kit/files/home/.pi/agent/skills/<name>/SKILL.md` — the **real
-  source on the mounted repo. Edit HERE; it persists.**
-
-So when you improve an overlay skill mid-session, write the change to the mounted
-source, then tell the user to `make load` on the host to bake it into future
-sandboxes (a mounted edit persists to the repo but does not go live until rebuilt).
-If the overlay isn't mounted (no `../pi-stack-work/kit`), fall back to handing the
-user a diff.
+**Improving a pack skill: edit the pack's source on the host.** A pack's `skills/`
+dir lives in the pack repo on the host (e.g. `~/dev/gm-pix-pack/skills/<name>/`)
+and is mounted at runtime by `pi-stack pack use` — no image bake, no rebuild. The
+copy pi loaded this session (`~/.pi/agent/skills/<name>/SKILL.md`) is a read-only
+delivery that dies with the sandbox; edits there are lost. So when you improve a
+pack skill mid-session, write the change to the **pack repo's** source on the
+host; it's live on the next `/reload` or fresh run (packs mount at launch, so
+there is nothing to `make load`). From inside a sandbox you can't reach the host
+pack repo — hand the user the diff to apply.
 
 ## Models & subagents
 

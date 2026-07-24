@@ -207,7 +207,7 @@ func reconcileOnboarding(workspace string, env shellEnv, in io.Reader, out io.Wr
 		return
 	}
 	if len(cfg.MCP) > 0 {
-		if err := registerServers(cfg, env, out, nil, hostBinaryResolver); err != nil {
+		if err := registerServers(cfg, env, out, nil, hostBinaryResolver, activeContainerMCP(cfg)); err != nil {
 			fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pi-stack mcp register)\n", err)
 		}
 	}
@@ -356,7 +356,7 @@ func runOnboardCmd(argv []string) {
 		}
 	}
 	if len(cfg.MCP) > 0 {
-		if err := registerServers(cfg, env, os.Stdout, nil, hostBinaryResolver); err != nil {
+		if err := registerServers(cfg, env, os.Stdout, nil, hostBinaryResolver, activeContainerMCP(cfg)); err != nil {
 			fmt.Printf("  mcp register skipped: %v (finish later: pi-stack mcp register)\n", err)
 		}
 	}

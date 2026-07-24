@@ -668,3 +668,41 @@ func TestBuildSbxArgs_PackKits_NeverSuppressesBaseKit(t *testing.T) {
 		t.Errorf("pack kit missing from %v", args)
 	}
 }
+
+// TestPackCapabilitiesJSON_LoadedAndMounted: a pack's capabilities.json is
+// discovered by loadPack and mounted by synthesizePackKit into the sandbox at
+// files/home/.pi/agent/capabilities.json — even with no [[proxy]] entries. This
+// is what lets a pack carry its own capability routing (killing the overlay kit).
+func TestPackCapabilitiesJSON_LoadedAndMounted(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	root := filepath.Join(dir, "pack")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte("name = \"work\"\nschema = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	caps := `{"profile":"work","capabilities":{}}`
+	if err := os.WriteFile(filepath.Join(root, "capabilities.json"), []byte(caps), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := loadPack(root)
+	if err != nil {
+		t.Fatalf("loadPack: %v", err)
+	}
+	if p.CapabilitiesFile == "" {
+		t.Fatal("loadPack did not set CapabilitiesFile for a pack with capabilities.json")
+	}
+	kit, err := synthesizePackKit(p)
+	if err != nil || kit == "" {
+		t.Fatalf("expected a kit for a capabilities-only pack, got %q err=%v", kit, err)
+	}
+	got, err := os.ReadFile(filepath.Join(kit, "files", "home", ".pi", "agent", "capabilities.json"))
+	if err != nil {
+		t.Fatalf("capabilities.json not mounted into the kit: %v", err)
+	}
+	if string(got) != caps {
+		t.Errorf("mounted capabilities.json mismatch:\n got: %s\nwant: %s", got, caps)
+	}
+}

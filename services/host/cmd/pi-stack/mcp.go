@@ -161,7 +161,7 @@ func runMcpRegister(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack mcp register: loading config: %v\n", err)
 		os.Exit(1)
 	}
-	if err := registerServers(cfg, defaultShellEnv(), os.Stdout, argv, findHostBinary); err != nil {
+	if err := registerServers(cfg, defaultShellEnv(), os.Stdout, argv, findHostBinary, activeContainerMCP(cfg)); err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack mcp register: %v\n", err)
 		os.Exit(1)
 	}
@@ -176,6 +176,10 @@ type mcpRegistrar struct {
 	gog     string // absolute gog (only needed to register gog)
 	account string // gog --account value
 	hostBin string // absolute pi-stack-host (for slack + other host subcommands)
+	// containers maps a server name to its `--local --url` manifest ref (pack
+	// CONTAINER integrations). A name present here registers as an OCI container
+	// the sbx gateway runs, NOT as a host --command, and is never op-run wrapped.
+	containers map[string]string
 }
 
 // serverCmd is the bare command+args the gateway must ultimately spawn for one
@@ -209,6 +213,12 @@ func (m mcpRegistrar) serverCmd(name string) []string {
 // creds until an op-refs.env is added (harmless: the op-run wrapper is a no-op
 // for a server that needs no creds).
 func (m mcpRegistrar) addArgs(name string) []string {
+	// Container integration: register the OCI server by manifest, run locally by
+	// the gateway via Docker. No op-run wrap — its creds are provided Docker-side
+	// (declared in the server's server.json), never through op-refs.
+	if manifest := m.containers[name]; manifest != "" {
+		return []string{"mcp", "add", name, "--local", "--url", manifest}
+	}
 	cmd := m.serverCmd(name)
 	if m.opRefs == "" {
 		// Bare registration: --command <cmd[0]> --args <cmd[1]> ...
@@ -242,7 +252,7 @@ func (m mcpRegistrar) addArgs(name string) []string {
 // crashing. hostResolver locates pi-stack-host (injected so tests stay
 // hermetic).
 func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
-	requested []string, hostResolver func() (string, error)) error {
+	requested []string, hostResolver func() (string, error), containers map[string]string) error {
 
 	names := requested
 	if len(names) == 0 {
@@ -274,11 +284,16 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	localSet, localKnown := localMCPNames(env, hostResolver)
 	wantGog := false
 	var localServers []string
-	var skippedUnknown []string // non-gog names skipped because the local set is unknown
+	var containerServers []string // pack CONTAINER integrations (--local --url manifest)
+	var skippedUnknown []string   // non-gog names skipped because the local set is unknown
 	for _, n := range names {
 		switch {
 		case n == "gog":
 			wantGog = true
+		case containers[n] != "":
+			// A pack container integration: registered by manifest, not as a host
+			// --command, so it doesn't depend on the pi-stack-host local-name set.
+			containerServers = append(containerServers, n)
 		case !localKnown:
 			// FAIL CLOSED: the local-name list could NOT be established
 			// (pi-stack-host unresolved or `mcp --list` failed). We must NOT assume
@@ -308,9 +323,11 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			strings.Join(skippedUnknown, ", "))
 	}
 
-	// The final registration order: local servers, then gog (if requested).
+	// The final registration order: local servers, then container servers, then
+	// gog (if requested).
 	var finalNames []string
 	finalNames = append(finalNames, localServers...)
+	finalNames = append(finalNames, containerServers...)
 	if wantGog {
 		finalNames = append(finalNames, "gog")
 	}
@@ -331,7 +348,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	opRefs := resolveOpRefs(env)
 	opReady := opErr == nil && opRefs != ""
 
-	reg := mcpRegistrar{}
+	reg := mcpRegistrar{containers: containers}
 	if opReady {
 		reg.op = opPath
 		reg.opRefs = opRefs
@@ -352,11 +369,12 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			fmt.Fprintf(out, "note: no op-refs.env found; registered %s directly (bare, no 1Password) — "+
 				"add creds to %s if a server needs them\n",
 				strings.Join(finalNames, ", "), refsPath)
-		} else {
+		} else if wantGog {
 			// gog-only: gog authenticates via OAuth (gog auth login), never op-refs,
 			// so do NOT seed op-refs.env or mention it. Register bare.
 			fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via OAuth (gog auth login)")
 		}
+		// container-only: nothing to seed — container creds are Docker-side, not op-refs.
 	}
 
 	if wantGog {
