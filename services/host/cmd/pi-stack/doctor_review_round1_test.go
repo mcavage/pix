@@ -150,7 +150,9 @@ func TestDoctor_R101_MCPFakeOpNeverExecuted(t *testing.T) {
 	cfg.MCP = []string{"slack"}
 	regCmd := "/tmp/op run --env-file=/x -- /usr/local/bin/pi-stack-host mcp slack"
 	f := gogConfirmed(fakeEnv{
-		present: map[string]bool{"sbx": true, "op": true},
+		present:    map[string]bool{"sbx": true, "op": true},
+		hostBinary: localHostBinary,
+		localMCP:   []string{"slack"},
 		output: map[string]string{
 			"sbx secret ls":     "anthropic openai google github",
 			"sbx mcp ls":        "gog\nslack\n",
@@ -513,6 +515,7 @@ func TestDoctor_R107_MCPProbeExecErrorUnverifiable(t *testing.T) {
 	f := gogConfirmed(fakeEnv{
 		present:    map[string]bool{"sbx": true, "op": true},
 		hostBinary: "/usr/local/bin/pi-stack-host",
+		localMCP:   []string{"slack"},
 		output: map[string]string{
 			"sbx secret ls":     "anthropic openai google github",
 			"sbx mcp ls":        "gog\nslack\n",

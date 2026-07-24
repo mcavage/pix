@@ -31,9 +31,28 @@ type fakeEnv struct {
 	// means "unresolved": the trust gate must fail closed, never trust a
 	// registered pi-stack-host argv with no canonical answer to compare against.
 	hostBinary string
+	// localMCP marks names as CONFIRMED LOCAL for localMCPNames classification
+	// (finding #1): when set, it stubs "<hostBinary> mcp --list" to list these
+	// names, mirroring what a real pi-stack-host build reports. Leaving both
+	// hostBinary and localMCP unset means the classification is UNKNOWN (the
+	// same fail-closed posture registerServers already has) — used deliberately
+	// by fixtures that test that degrade path.
+	localMCP []string
 }
 
 func (f fakeEnv) env() shellEnv {
+	// localMCP stubs "<hostBinary> mcp --list" so localMCPNames' classification
+	// resolves the way this fixture wants, without every caller having to hand-
+	// build that key. Cloned rather than mutating f.output so the fakeEnv value
+	// stays reusable across calls.
+	output := f.output
+	if len(f.localMCP) > 0 {
+		output = map[string]string{}
+		for k, v := range f.output {
+			output[k] = v
+		}
+		output[f.hostBinary+" mcp --list"] = strings.Join(f.localMCP, "\n")
+	}
 	return shellEnv{
 		lookPath: func(name string) (string, error) {
 			if f.present[name] {
@@ -43,7 +62,7 @@ func (f fakeEnv) env() shellEnv {
 		},
 		run: func(name string, args ...string) (string, error) {
 			key := strings.Join(append([]string{name}, args...), " ")
-			if out, ok := f.output[key]; ok {
+			if out, ok := output[key]; ok {
 				return out, nil
 			}
 			return "", fmt.Errorf("no fake output for %q", key)
@@ -72,6 +91,13 @@ func (f fakeEnv) env() shellEnv {
 		},
 	}
 }
+
+// localHostBinary is a shared canonical pi-stack-host path fixtures use when
+// they need localMCPNames classification confirmed local (paired with
+// fakeEnv.localMCP). It matches what R201/R201b's `canonical` locals already
+// use, so classification and the R2-01 trust-gate compare against the same
+// answer.
+const localHostBinary = "/usr/local/bin/pi-stack-host"
 
 const gogAcct = "you@example.com"
 
@@ -969,7 +995,9 @@ func TestDoctor_MCPRegistration(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"slack"}
 	f := gogGreen(fakeEnv{
-		present: map[string]bool{"sbx": true, "ollama": true},
+		present:    map[string]bool{"sbx": true, "ollama": true},
+		hostBinary: localHostBinary,
+		localMCP:   []string{"slack"},
 		output: map[string]string{
 			"sbx secret ls": "anthropic openai google github",
 			"ollama list":   "gemma4\nnomic-embed-text\n",
@@ -1009,6 +1037,7 @@ func TestDoctor_MCPToolProbe(t *testing.T) {
 	f := gogGreen(fakeEnv{
 		present:    map[string]bool{"sbx": true, "ollama": true},
 		hostBinary: "/usr/local/bin/pi-stack-host",
+		localMCP:   []string{"slack"},
 		output: map[string]string{
 			"sbx secret ls":          "anthropic openai google github",
 			"ollama list":            "gemma4:latest\nnomic-embed-text:latest\n",
@@ -1040,6 +1069,7 @@ func TestDoctor_MCPToolProbeZero(t *testing.T) {
 	f := gogGreen(fakeEnv{
 		present:    map[string]bool{"sbx": true, "ollama": true},
 		hostBinary: "/usr/local/bin/pi-stack-host",
+		localMCP:   []string{"slack"},
 		output: map[string]string{
 			"sbx secret ls":          "anthropic openai google github",
 			"ollama list":            "gemma4:latest\nnomic-embed-text:latest\n",
@@ -1071,7 +1101,9 @@ func TestDoctor_MCPUnrecognizedCommand(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"evil"}
 	f := gogConfirmed(fakeEnv{
-		present: map[string]bool{"sbx": true, "ollama": true},
+		present:    map[string]bool{"sbx": true, "ollama": true},
+		hostBinary: localHostBinary,
+		localMCP:   []string{"evil"},
 		output: map[string]string{
 			"sbx secret ls":    "anthropic openai google github",
 			"ollama list":      "gemma4:latest\nnomic-embed-text:latest\n",

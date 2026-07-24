@@ -64,6 +64,7 @@ func TestDoctor_R201b_SwapHook_AlternateHostBinaryPathNeverExecuted(t *testing.T
 	f := gogConfirmed(fakeEnv{
 		present:    map[string]bool{"sbx": true, "op": true},
 		hostBinary: canonical,
+		localMCP:   []string{"slack"},
 		output: map[string]string{
 			"sbx secret ls":          "anthropic openai google github",
 			"sbx mcp ls":             "gog\nslack\n",
@@ -127,6 +128,7 @@ func TestDoctor_R201b_ExecsResolverTokenOnly_HostBinary(t *testing.T) {
 	f := gogConfirmed(fakeEnv{
 		present:    map[string]bool{"sbx": true, "op": true},
 		hostBinary: canonical,
+		localMCP:   []string{"slack"},
 		output: map[string]string{
 			"sbx secret ls":     "anthropic openai google github",
 			"sbx mcp ls":        "gog\nslack\n",
@@ -208,6 +210,7 @@ func TestDoctor_R202_NoRawRunInDiscovery(t *testing.T) {
 		regSlack + " --list-tools": "slack_search\n",
 		"ollama list":              "gemma4:latest\nnomic-embed-text:latest\n",
 		"op account list":          "my.1password.com " + gogAcct,
+		canonical + " mcp --list":  "slack",
 	}
 	f := fakeEnv{
 		present:    map[string]bool{"sbx": true, "ollama": true, "gog": true, "op": true},
@@ -264,14 +267,18 @@ func TestDoctor_R202_McpLsHangClassifies(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"slack"}
 	f := fakeEnv{
-		present: map[string]bool{"sbx": true},
+		present:    map[string]bool{"sbx": true},
+		hostBinary: localHostBinary,
 		output: map[string]string{
 			"sbx secret ls": "anthropic openai google github",
 			"sbx mcp ls":    "gog\nslack\n", // raw run would succeed
 		},
 		ports: map[int]bool{11435: true},
 	}
-	fixtures := map[string]string{"sbx secret ls": "anthropic openai google github"}
+	fixtures := map[string]string{
+		"sbx secret ls":                 "anthropic openai google github",
+		localHostBinary + " mcp --list": "slack",
+	}
 	env := r202probe(f.env(), fixtures, map[string]bool{"sbx mcp ls": true})
 	r := runDoctor(cfg, env)
 	c := findCheck(r, "Other MCP servers", "slack")
@@ -290,7 +297,8 @@ func TestDoctor_R202_McpGetHangClassifies(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"slack"}
 	f := fakeEnv{
-		present: map[string]bool{"sbx": true},
+		present:    map[string]bool{"sbx": true},
+		hostBinary: localHostBinary,
 		output: map[string]string{
 			// Raw run would return a probe-able registration — classification
 			// must come from the bounded seam instead.
@@ -301,8 +309,9 @@ func TestDoctor_R202_McpGetHangClassifies(t *testing.T) {
 		ports: map[int]bool{11435: true},
 	}
 	fixtures := map[string]string{
-		"sbx secret ls": "anthropic openai google github",
-		"sbx mcp ls":    "gog\nslack\n",
+		"sbx secret ls":                 "anthropic openai google github",
+		"sbx mcp ls":                    "gog\nslack\n",
+		localHostBinary + " mcp --list": "slack",
 	}
 	env := r202probe(f.env(), fixtures, map[string]bool{
 		"sbx mcp get slack":  true,

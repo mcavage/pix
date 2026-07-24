@@ -616,17 +616,20 @@ func resolveStaticMCPForRun(configServers, explicit []string, cfg *config.Config
 // A missing binary or a failed call returns (nil,false); the caller then FAILS
 // CLOSED — it registers only gog (a known special case) and SKIPS every other
 // requested name rather than risk registering a remote gateway-catalog name as a
-// local pi-stack-host subcommand.
+// local pi-stack-host subcommand. The call goes through probeRun (bounded,
+// falls back to env.run when env.probe is nil) so a doctor/status caller that
+// wires a real timeout never wedges on this either (R2-02's every-discovery-
+// subprocess-is-bounded posture).
 func localMCPNames(env shellEnv, hostResolver func() (string, error)) (map[string]bool, bool) {
-	if env.run == nil || hostResolver == nil {
+	if hostResolver == nil {
 		return nil, false
 	}
 	hb, err := hostResolver()
 	if err != nil || hb == "" {
 		return nil, false
 	}
-	out, err := env.run(hb, "mcp", "--list")
-	if err != nil {
+	out, timedOut, err := probeRun(env, hb, "mcp", "--list")
+	if err != nil || timedOut {
 		return nil, false
 	}
 	set := map[string]bool{}
@@ -636,6 +639,79 @@ func localMCPNames(env shellEnv, hostResolver func() (string, error)) (map[strin
 		}
 	}
 	return set, true
+}
+
+// mcpClass is the local-vs-remote-vs-unknown partition a configured MCP name
+// (besides gog, which is a special local case handled separately — see
+// registerServers' doc comment) falls into, as established by localMCPNames.
+type mcpClass int
+
+const (
+	// mcpClassUnknown means localMCPNames itself could not be established
+	// (pi-stack-host unresolved or `mcp --list` failed/timed out) — the caller
+	// must NOT guess either way: no local probe/exec, no remote-catalog
+	// registration guidance, evidence stays unverifiable.
+	mcpClassUnknown mcpClass = iota
+	// mcpClassLocal means the name is in the CONFIRMED local set (`pi-stack-host
+	// mcp --list`): honest to probe/exec (mcpProbeCheck) and to recommend
+	// `pi-stack mcp register` for.
+	mcpClassLocal
+	// mcpClassRemote means the local set is known and does NOT contain the
+	// name: a confirmed remote gateway-catalog server (notion/atlassian/…). It
+	// must never be probed/exec'd as a local command, and its registration
+	// guidance is `pi-stack mcp bundle`, never `pi-stack mcp register`.
+	mcpClassRemote
+)
+
+// classifyMCP applies the local/remote/unknown partition to one configured
+// name, given the (localSet, localKnown) pair localMCPNames returned. Callers
+// exclude gog before reaching this — it is a special local case with its own
+// dedicated check, never remote-catalog.
+func classifyMCP(name string, localSet map[string]bool, localKnown bool) mcpClass {
+	if !localKnown {
+		return mcpClassUnknown
+	}
+	if localSet[name] {
+		return mcpClassLocal
+	}
+	return mcpClassRemote
+}
+
+// mcpAuthResult is the outcome mcpAuthStatus classifies a `sbx mcp auth
+// status <name>` probe into. authUnknown covers output doctor/status cannot
+// confidently parse as either a pass or a fail — it must never guess (a
+// misread failure would recommend a repair command that doesn't apply, and a
+// misread success would silently hide a real auth gap).
+type mcpAuthResult int
+
+const (
+	mcpAuthUnknown mcpAuthResult = iota
+	mcpAuthOK
+	mcpAuthFailed
+)
+
+// mcpAuthStatus parses `sbx mcp auth status <name>` output (name-scoped: sbx
+// prints only this server's state) into the tri-state above. It is
+// deliberately lenient about exact wording (this is a passthrough to sbx, not
+// a format pi-stack controls — see runMcpAuth) but conservative about
+// ambiguity: a negative phrase anywhere wins over a positive one, and neither
+// present at all is unknown rather than a guess.
+func mcpAuthStatus(out string) mcpAuthResult {
+	lower := strings.ToLower(out)
+	for _, neg := range []string{"not authenticated", "unauthenticated", "not authorized", "unauthorized", "needs auth", "not logged in", "expired", "no token"} {
+		if strings.Contains(lower, neg) {
+			return mcpAuthFailed
+		}
+	}
+	for _, pos := range []string{"authenticated", "authorized", "logged in", " ok", "\tok"} {
+		if strings.Contains(lower, pos) {
+			return mcpAuthOK
+		}
+	}
+	if strings.TrimSpace(lower) == "ok" {
+		return mcpAuthOK
+	}
+	return mcpAuthUnknown
 }
 
 // defaultOpRefsPath computes the absolute XDG op-refs.env path from the injected

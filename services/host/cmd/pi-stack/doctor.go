@@ -479,9 +479,25 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	}
 	switch {
 	case len(others) > 0:
+		// R1-01/finding-#1: gog aside, a configured name is EITHER a local stdio
+		// server this host can spawn (probe/exec it — mcpProbeCheck) OR a remote
+		// gateway-catalog server (notion/atlassian/… — never locally probed or
+		// exec'd; mcpRemoteCheck). localMCPNames (`pi-stack-host mcp --list`) is
+		// the SAME source of truth registerServers already uses to decide how to
+		// register a name; reusing it here means doctor's classification can never
+		// drift from what registration actually does. When the classification
+		// itself can't be established, doctor must not guess either way.
+		localSet, localKnown := localMCPNames(env, env.hostBinary)
 		mcp := group{title: "Other MCP servers (local stdio, run by the sbx gateway)"}
 		for _, m := range others {
-			mcp.checks = append(mcp.checks, mcpProbeCheck(env, m, mcpOut, mcpOK, sbxOK))
+			switch classifyMCP(m, localSet, localKnown) {
+			case mcpClassLocal:
+				mcp.checks = append(mcp.checks, mcpProbeCheck(env, m, mcpOut, mcpOK, sbxOK))
+			case mcpClassRemote:
+				mcp.checks = append(mcp.checks, mcpRemoteCheck(env, m, mcpOut, mcpOK, sbxOK))
+			default: // mcpClassUnknown
+				mcp.checks = append(mcp.checks, mcpUnknownClassificationCheck(m))
+			}
 		}
 		r.groups = append(r.groups, mcp)
 	case len(cfg.MCP) == 0:
@@ -742,6 +758,73 @@ func mcpProbeCheck(env shellEnv, name, mcpOut string, mcpOK, sbxPresent bool) ch
 			requirement: req, evidence: EvidenceUnverifiable}
 	default: // probeError
 		return check{label: name, detail: "registered but the tool probe " + res.detail + "; could not verify",
+			requirement: req, evidence: EvidenceUnverifiable}
+	}
+}
+
+// mcpUnknownClassificationCheck is the finding-#1 honest degrade: when
+// localMCPNames itself could not be established, doctor genuinely does not
+// know whether name is a local stdio server or a remote gateway-catalog one.
+// It must not guess — guessing local risks probing/exec'ing a command that
+// doesn't exist as a local subcommand; guessing remote risks recommending
+// `pi-stack mcp bundle` for something that was actually meant to be a local
+// server (or vice versa). So this renders unverifiable with NO todo at all:
+// there is no repair command that is safe to recommend without knowing which
+// kind of server this is.
+func mcpUnknownClassificationCheck(name string) check {
+	return check{
+		label: name,
+		detail: "could not determine whether this is a local stdio server or a remote " +
+			"gateway-catalog server (pi-stack-host mcp --list unavailable); no repair command " +
+			"can be safely recommended: build/resolve pi-stack-host, then re-run",
+		requirement: RequirementConfiguredOptional,
+		evidence:    EvidenceUnverifiable,
+	}
+}
+
+// mcpRemoteCheck is the HONEST check for a CONFIRMED remote gateway-catalog
+// MCP server (notion/atlassian/granola/…): unlike mcpProbeCheck it NEVER
+// reads or execs a local command for these — there is no local spawn to
+// probe, and doing so (or recommending `pi-stack mcp register`, which only
+// knows local stdio servers) would be actively wrong. It verifies
+// registration from the already-fetched `sbx mcp ls` output (mcpOut/mcpOK,
+// same as mcpProbeCheck), then boundedly inspects native auth status via
+// `sbx mcp auth status <name>` — the exact syntax runMcpAuth already forwards
+// verbatim (mcp.go). Missing registration recommends `pi-stack mcp bundle`
+// (the remote-catalog registration path); an auth failure recommends
+// `pi-stack mcp auth <name>`.
+func mcpRemoteCheck(env shellEnv, name, mcpOut string, mcpOK, sbxPresent bool) check {
+	const req = RequirementConfiguredOptional
+	if !mcpOK {
+		if sbxPresent {
+			return check{label: name, detail: gatewayDownDetail,
+				requirement: req, evidence: EvidenceUnverifiable}
+		}
+		return check{label: name, detail: "sbx unavailable here (register on the host: pi-stack mcp bundle)",
+			requirement: req, evidence: EvidenceUnverifiable}
+	}
+	if !grepWord(mcpOut, name) {
+		return check{label: name, detail: "not registered (remote gateway-catalog server)",
+			todo: "pi-stack mcp bundle", requirement: req, evidence: EvidenceFailed}
+	}
+	// Registered — bounded native auth-status probe. R2-02: goes through
+	// probeRun, never a raw exec, so a slow/hung control-plane round trip
+	// degrades to unverifiable rather than wedging doctor.
+	out, timedOut, err := probeRun(env, "sbx", "mcp", "auth", "status", name)
+	if timedOut || err != nil {
+		return check{label: name,
+			detail:      "registered; auth status could not be verified (sbx mcp auth status " + name + ")",
+			requirement: req, evidence: EvidenceUnverifiable}
+	}
+	switch mcpAuthStatus(out) {
+	case mcpAuthOK:
+		return check{label: name, detail: "registered, authenticated", requirement: req, evidence: EvidenceHealthy}
+	case mcpAuthFailed:
+		return check{label: name, detail: "registered but not authenticated",
+			todo: "pi-stack mcp auth " + name, requirement: req, evidence: EvidenceFailed}
+	default: // mcpAuthUnknown
+		return check{label: name,
+			detail:      "registered; auth status unclear (sbx mcp auth status " + name + "); could not verify",
 			requirement: req, evidence: EvidenceUnverifiable}
 	}
 }

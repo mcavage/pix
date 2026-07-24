@@ -13,6 +13,12 @@ import (
 
 // fakeStatusEnv builds a shellEnv where memory is up, knowledge down, sbx lists
 // two boxes and reports two secrets set.
+// statusHostBinary is the canonical pi-stack-host path fakeStatusEnv resolves
+// env.hostBinary() to, so localMCPNames classification can confirm "slack" is
+// a LOCAL stdio server (mirroring a real `pi-stack-host mcp --list`) rather
+// than degrading to unknown classification in every MCP-related status test.
+const statusHostBinary = "/usr/local/bin/pi-stack-host"
+
 func fakeStatusEnv() shellEnv {
 	return shellEnv{
 		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
@@ -26,10 +32,14 @@ func fakeStatusEnv() shellEnv {
 			if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 				return "gog\nnotion\n", nil
 			}
+			if name == statusHostBinary && len(args) >= 2 && args[0] == "mcp" && args[1] == "--list" {
+				return "slack", nil
+			}
 			return "", nil
 		},
-		dial:     func(port int) bool { return port == memoryPortDefault },
-		statFile: func(string) bool { return false },
+		hostBinary: func() (string, error) { return statusHostBinary, nil },
+		dial:       func(port int) bool { return port == memoryPortDefault },
+		statFile:   func(string) bool { return false },
 	}
 }
 

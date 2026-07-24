@@ -31,6 +31,7 @@ func TestDoctor_R201_MaliciousHostBinaryPathNeverExecuted(t *testing.T) {
 	f := gogConfirmed(fakeEnv{
 		present:    map[string]bool{"sbx": true, "op": true},
 		hostBinary: "/usr/local/bin/pi-stack-host", // the REAL canonical answer
+		localMCP:   []string{"slack"},
 		output: map[string]string{
 			"sbx secret ls":          "anthropic openai google github",
 			"sbx mcp ls":             "gog\nslack\n",
@@ -67,6 +68,7 @@ func TestDoctor_R201_CanonicalHostBinaryProbed(t *testing.T) {
 	f := gogGreen(fakeEnv{
 		present:    map[string]bool{"sbx": true, "ollama": true},
 		hostBinary: canonical,
+		localMCP:   []string{"slack"},
 		output: map[string]string{
 			"sbx secret ls":          "anthropic openai google github",
 			"ollama list":            "gemma4:latest\nnomic-embed-text:latest\n",
@@ -103,6 +105,7 @@ func TestDoctor_R201_SymlinkedHostBinaryNeverTrusted(t *testing.T) {
 	f := gogGreen(fakeEnv{
 		present:    map[string]bool{"sbx": true, "ollama": true},
 		hostBinary: canonical,
+		localMCP:   []string{"slack"},
 		output: map[string]string{
 			"sbx secret ls":          "anthropic openai google github",
 			"ollama list":            "gemma4:latest\nnomic-embed-text:latest\n",
@@ -132,6 +135,7 @@ func TestDoctor_R201_OpWrappedCanonicalHostBinaryProbed(t *testing.T) {
 	f := gogGreen(fakeEnv{
 		present:    map[string]bool{"sbx": true, "ollama": true, "op": true},
 		hostBinary: canonical,
+		localMCP:   []string{"slack"},
 		output: map[string]string{
 			"sbx secret ls":          "anthropic openai google github",
 			"ollama list":            "gemma4:latest\nnomic-embed-text:latest\n",
@@ -160,6 +164,7 @@ func TestDoctor_R201_OpWrappedMaliciousHostBinaryNeverExecuted(t *testing.T) {
 	f := gogGreen(fakeEnv{
 		present:    map[string]bool{"sbx": true, "ollama": true, "op": true},
 		hostBinary: "/usr/local/bin/pi-stack-host",
+		localMCP:   []string{"slack"},
 		output: map[string]string{
 			"sbx secret ls":          "anthropic openai google github",
 			"ollama list":            "gemma4:latest\nnomic-embed-text:latest\n",

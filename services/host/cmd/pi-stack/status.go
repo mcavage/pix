@@ -120,6 +120,37 @@ type sandboxLine struct {
 	State string `json:"state"`
 }
 
+// statusResolveStaticMCP computes the eager/attach-on-run set for status's MCP
+// section using the EXACT same fold applyPackToLaunch (pack.go) applies at
+// launch time — the active pack's `integration.mcp` names declared with
+// `static = true` count as eager too, not just cfg.MCPStatic — WITHOUT any of
+// applyPackToLaunch's host side effects (no skills mount, no kit synth, no
+// credential warning, no cfg mutation). It loads the configured active pack
+// READ-ONLY via loadPack, folds packStaticMcpNames into a SHALLOW COPY of
+// cfg.MCPStatic (the real cfg.MCPStatic slice is never appended to), and lets
+// resolveStaticMCP apply the same mcp_dynamic override precedence launch uses.
+// A pack that fails to load (broken, symlink-rejected, genuinely absent, or a
+// stale cfg.Pack pointing nowhere) degrades to cfg's OWN mcp_static/
+// mcp_dynamic only — status must never falsely claim attach-on-run for an
+// integration whose pack it could not actually read.
+func statusResolveStaticMCP(cfg *config.Config, servers []string) []string {
+	cfgCopy := *cfg
+	cfgCopy.MCPStatic = append([]string(nil), cfg.MCPStatic...)
+	if root := activePackRoot(cfg.Pack, ""); root != "" {
+		if p, err := loadPack(root); err == nil {
+			for _, n := range packStaticMcpNames(p) {
+				if !containsStr(cfgCopy.MCPStatic, n) {
+					cfgCopy.MCPStatic = append(cfgCopy.MCPStatic, n)
+				}
+			}
+		}
+		// A load failure (of any kind) degrades silently here: statusResolveStaticMCP
+		// is a read-only best-effort render, not a launch gate — it must not error
+		// out or invent an eager attach it can't back up.
+	}
+	return resolveStaticMCP(servers, &cfgCopy)
+}
+
 func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport {
 	memPort, knPort := memoryClient().Port, knowledgeClient().Port
 	st := statusReport{
@@ -232,10 +263,22 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 		if _, err := env.lookPath("sbx"); err == nil && env.run != nil {
 			if o, err := env.run("sbx", "mcp", "ls"); err == nil {
 				eager := map[string]bool{}
-				for _, n := range resolveStaticMCP(cfg.MCP, cfg) {
+				for _, n := range statusResolveStaticMCP(cfg, cfg.MCP) {
 					eager[n] = true
 				}
-				anyUnregistered := false
+				// finding #1: an unregistered server's fix-it command depends on
+				// what KIND of server it is (mirrors doctor's classifyMCP) — a
+				// confirmed LOCAL stdio server needs `pi-stack mcp register`; a
+				// confirmed REMOTE gateway-catalog server needs `pi-stack mcp
+				// bundle` instead (register only knows local servers); gog is
+				// always the local special case (see mcp.go); and when the
+				// classification itself is unknown, status must not guess — no
+				// todo for that name at all, same posture as doctor's
+				// mcpUnknownClassificationCheck.
+				localSet, localKnown := localMCPNames(env, env.hostBinary)
+				anyUnregisteredLocal := false
+				var remoteTodos []string
+				seenRemoteTodo := map[string]bool{}
 				for _, m := range cfg.MCP {
 					reg := grepWord(o, m)
 					st.MCPServers = append(st.MCPServers, mcpStatusLine{
@@ -243,17 +286,33 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 						Registered: reg,
 						Attach:     eager[m],
 					})
-					if !reg {
-						anyUnregistered = true
+					if reg {
+						continue
+					}
+					switch {
+					case m == "gog":
+						anyUnregisteredLocal = true
+					case classifyMCP(m, localSet, localKnown) == mcpClassLocal:
+						anyUnregisteredLocal = true
+					case classifyMCP(m, localSet, localKnown) == mcpClassRemote:
+						const cmd = "pi-stack mcp bundle"
+						if !seenRemoteTodo[cmd] {
+							seenRemoteTodo[cmd] = true
+							remoteTodos = append(remoteTodos, cmd)
+						}
+						// default (mcpClassUnknown): genuinely can't tell — no todo,
+						// same as doctor's unknown-classification degrade.
 					}
 				}
 				// A configured server that isn't registered means `run` would attach a
 				// server the gateway can't spawn — an outstanding item, so status can't
-				// claim "all systems go". One deduped TODO covers all of them. Only
-				// emitted when sbx is reachable (otherwise registration is unknowable).
-				if anyUnregistered {
+				// claim "all systems go". One deduped TODO per kind covers all of them.
+				// Only emitted when sbx is reachable (otherwise registration is
+				// unknowable).
+				if anyUnregisteredLocal {
 					st.Todos = append(st.Todos, "pi-stack mcp register")
 				}
+				st.Todos = append(st.Todos, remoteTodos...)
 			}
 		}
 	}

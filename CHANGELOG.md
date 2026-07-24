@@ -39,6 +39,38 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`pi-stack doctor` and `pi-stack status` no longer probe/exec a local
+  command, or recommend `pi-stack mcp register`, for a REMOTE gateway-catalog
+  MCP server (notion/atlassian/granola/etc).** A non-gog configured server
+  used to get the same local stdio treatment (`mcpProbeCheck`: read the sbx
+  registration, exec it with `--list-tools`) regardless of whether it was
+  actually a local pi-stack-host subcommand or a remote server attached
+  through the gateway's hosted control plane: a confirmed remote server
+  could be exec'd as if it were local, and an unregistered one was always
+  told to `pi-stack mcp register` even though that command only knows local
+  servers. Both now classify each configured name via `localMCPNames`
+  (`pi-stack-host mcp --list`, the same source of truth `pi-stack mcp
+  register` already uses) before deciding how to check it: a CONFIRMED local
+  server keeps the existing probe + `pi-stack mcp register`; a CONFIRMED
+  remote server is never locally probed/exec'd, and instead gets its sbx
+  registration checked plus a bounded native `sbx mcp auth status <name>`
+  probe: an unregistered remote server recommends `pi-stack mcp bundle`, and
+  a registered-but-unauthenticated one recommends `pi-stack mcp auth
+  <name>`; when the classification itself can't be established, evidence is
+  unverifiable and NO repair command is recommended (never a guess that
+  could be wrong for the actual kind of server).
+- **`pi-stack status` now folds the active pack's eager MCP integrations
+  into its attach-on-run rendering.** A pack's `[[integrations]]` entry
+  declared `static = true` is folded into the eager set at launch
+  (`applyPackToLaunch`), but `status` previously only consulted cfg's own
+  `mcp_static`/`mcp_dynamic`, so a pack-pinned integration rendered
+  (incorrectly) as dynamically discoverable. `status` now loads the
+  configured active pack READ-ONLY (`loadPack`, no skills mount, no kit
+  synth, no credential warning, no cfg mutation) and folds its declared
+  static integrations into a shallow copy of `cfg.MCPStatic` before applying
+  the same `mcp_dynamic` override precedence `resolveStaticMCP` already
+  uses. A broken or unreadable active pack degrades honestly (cfg's own
+  static/dynamic pins only), never a false attach-on-run claim.
 - **`pi-stack status` no longer renders a confirmed-missing `✗` for provider
   keys it never actually checked.** When `sbx` was absent or `sbx secret ls`
   failed, every provider (`anthropic`/`openai`/`google`/`github`) rendered a
