@@ -181,7 +181,7 @@ func TestPackAdd_Proxy_Host_NoRecreateLine(t *testing.T) {
 }
 
 // TestSynthesizePackKit_SandboxOnly: the ephemeral mixin kit carries only the
-// NON-host proxy wrappers, copied (not symlinked) into files/usr/local/bin/.
+// NON-host proxy wrappers, copied (not symlinked) into files/home/.local/bin/.
 func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
@@ -209,10 +209,10 @@ func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(kit, "spec.yaml")); err != nil {
 		t.Errorf("spec.yaml missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(kit, "files", "usr", "local", "bin", "snowflake")); err != nil {
+	if _, err := os.Stat(filepath.Join(kit, "files", "home", ".local", "bin", "snowflake")); err != nil {
 		t.Errorf("snowflake wrapper not copied: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(kit, "files", "usr", "local", "bin", "platformio")); err == nil {
+	if _, err := os.Stat(filepath.Join(kit, "files", "home", ".local", "bin", "platformio")); err == nil {
 		t.Error("a host=true proxy must NOT be copied into the sandbox kit")
 	}
 }

@@ -324,7 +324,7 @@ func TestSynthesizePackKit_RebuildRemovesStaleWrapper(t *testing.T) {
 	if err != nil || kit1 == "" {
 		t.Fatalf("expected a kit dir, got %q, err=%v", kit1, err)
 	}
-	if _, err := os.Stat(filepath.Join(kit1, "files", "usr", "local", "bin", "b")); err != nil {
+	if _, err := os.Stat(filepath.Join(kit1, "files", "home", ".local", "bin", "b")); err != nil {
 		t.Fatalf("wrapper b should exist after the first synth: %v", err)
 	}
 
@@ -337,10 +337,10 @@ func TestSynthesizePackKit_RebuildRemovesStaleWrapper(t *testing.T) {
 	if kit2 == kit1 {
 		t.Fatalf("round-3 R2: each launch must synthesize into its OWN unique dir, got %q twice", kit1)
 	}
-	if _, err := os.Stat(filepath.Join(kit2, "files", "usr", "local", "bin", "b")); err == nil {
+	if _, err := os.Stat(filepath.Join(kit2, "files", "home", ".local", "bin", "b")); err == nil {
 		t.Error("finding #6: a removed proxy's wrapper must NOT survive a rebuild")
 	}
-	if _, err := os.Stat(filepath.Join(kit2, "files", "usr", "local", "bin", "a")); err != nil {
+	if _, err := os.Stat(filepath.Join(kit2, "files", "home", ".local", "bin", "a")); err != nil {
 		t.Errorf("wrapper a should still exist: %v", err)
 	}
 }
@@ -376,7 +376,7 @@ func TestSynthesizePackKit_FailsClosedOnUnreadableWrapper(t *testing.T) {
 		t.Errorf("expected a refusal message, got: %v", badErr)
 	}
 	// The previously-good kit must be untouched (still has "a").
-	if _, err := os.Stat(filepath.Join(kitGood, "files", "usr", "local", "bin", "a")); err != nil {
+	if _, err := os.Stat(filepath.Join(kitGood, "files", "home", ".local", "bin", "a")); err != nil {
 		t.Errorf("a failed synth must not corrupt the existing kit: %v", err)
 	}
 }

@@ -1051,9 +1051,9 @@ func packKitDir(root string) string {
 
 // synthesizePackKit builds the ephemeral mixin kit that puts a pack's non-host
 // bin/ wrappers on the sandbox PATH (F2/ADR-2): a minimal `kind: mixin`
-// spec.yaml, plus files/usr/local/bin/<name> (0755) for each [[proxy]] with
-// Host unset/false — /usr/local/bin is already on the DHI image's PATH, so the
-// wrapper needs no in-VM shim. Returns (dir, nil) on success, ("", nil) when
+// spec.yaml, plus files/home/.local/bin/<name> (0755) for each [[proxy]] with
+// Host unset/false — ~/.local/bin is on the sandbox PATH and (unlike /usr/local)
+// is reached by the runtime mixin-kit mount. Returns (dir, nil) on success, ("", nil) when
 // the pack has no sandbox proxies (nothing to mount — the caller must not
 // stack an empty kit), and ("", err) when the pack DECLARES a sandbox proxy
 // but the kit can't be built — the caller must fail the launch closed
@@ -1108,7 +1108,10 @@ func synthesizePackKit(p *packInfo) (string, error) {
 		return fail("pack kit for %s: %v", p.Manifest.Name, err)
 	}
 	if len(sandboxProxies) > 0 {
-		binOut := filepath.Join(dir, "files", "usr", "local", "bin")
+		// Proxy wrappers go under files/home/.local/bin (→ ~/.local/bin, on PATH):
+		// the sbx runtime mixin-kit mount honors files/home/** (into $HOME) but NOT
+		// files/usr/local/**, so a wrapper written to usr/local/bin never lands.
+		binOut := filepath.Join(dir, "files", "home", ".local", "bin")
 		if err := os.MkdirAll(binOut, 0o755); err != nil {
 			return fail("pack kit for %s: %v", p.Manifest.Name, err)
 		}

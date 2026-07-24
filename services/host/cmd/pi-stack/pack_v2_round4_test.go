@@ -232,7 +232,7 @@ func TestApplyPackToLaunch_FailsClosedOnBrokenDeclaredProxy(t *testing.T) {
 	if len(o.PackKits) != 1 {
 		t.Fatalf("expected exactly one stacked pack kit, got %v", o.PackKits)
 	}
-	if _, err := os.Stat(filepath.Join(o.PackKits[0], "files", "usr", "local", "bin", "snowflake")); err != nil {
+	if _, err := os.Stat(filepath.Join(o.PackKits[0], "files", "home", ".local", "bin", "snowflake")); err != nil {
 		t.Errorf("stacked kit is missing the wrapper: %v", err)
 	}
 }

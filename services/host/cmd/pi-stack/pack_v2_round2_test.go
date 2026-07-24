@@ -412,7 +412,7 @@ func TestSynthesizePackKit_ResynthOverExistingKit(t *testing.T) {
 	// BOTH kits are complete and valid — the second synth never mutated or
 	// displaced the first (a concurrent launch may still be reading it).
 	for _, kit := range []string{kit1, kit2} {
-		for _, f := range []string{"spec.yaml", "files/usr/local/bin/a", "files/usr/local/bin/b"} {
+		for _, f := range []string{"spec.yaml", "files/home/.local/bin/a", "files/home/.local/bin/b"} {
 			if _, err := os.Stat(filepath.Join(kit, f)); err != nil {
 				t.Errorf("kit %s incomplete, missing %s: %v", kit, f, err)
 			}
