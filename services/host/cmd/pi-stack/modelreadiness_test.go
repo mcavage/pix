@@ -136,14 +136,56 @@ func TestComputeMissingModels_HealthyExcluded(t *testing.T) {
 	}
 }
 
-func TestComputeMissingModels_UnverifiableIncluded(t *testing.T) {
-	// Unverifiable is not proven healthy — it must still surface so setup
-	// never silently claims readiness it couldn't confirm.
+func TestComputeMissingModels_UnverifiableExcluded(t *testing.T) {
+	// R1-09: unverifiable is NOT a confirmed gap — it must never enter the
+	// missing/pull set (that would prompt/force-pull a model that may already
+	// be installed, just unverifiable because the daemon is down or `ollama
+	// list` failed).
 	readinesses := []ModelReadiness{
 		{Role: "watcher", Model: "qwen3.5:9b", Evidence: EvidenceUnverifiable},
 	}
 	missing := computeMissingModels(readinesses)
-	if len(missing) != 1 {
-		t.Errorf("expected the unverifiable model to be listed as missing, got %+v", missing)
+	if len(missing) != 0 {
+		t.Errorf("expected unverifiable models excluded from missing, got %+v", missing)
+	}
+}
+
+func TestComputeMissingModels_MixedStates_OnlyConfirmedFailedIncluded(t *testing.T) {
+	readinesses := []ModelReadiness{
+		{Role: "watcher", Model: "qwen3.5:9b", Evidence: EvidenceFailed},
+		{Role: "embed", Model: "nomic-embed-text", Evidence: EvidenceUnverifiable},
+		{Role: "bridge", Model: "gemma4", Evidence: EvidenceHealthy},
+	}
+	missing := computeMissingModels(readinesses)
+	if len(missing) != 1 || missing[0].tag != "qwen3.5:9b" {
+		t.Errorf("expected only the confirmed-failed model, got %+v", missing)
+	}
+}
+
+// --- computeUnverifiableModels: the R1-09 counterpart — surfaces unverifiable
+// tags separately from confirmed missing, same dedup/order contract. ---
+
+func TestComputeUnverifiableModels_IncludesOnlyUnverifiable(t *testing.T) {
+	readinesses := []ModelReadiness{
+		{Role: "watcher", Model: "qwen3.5:9b", Evidence: EvidenceUnverifiable},
+		{Role: "embed", Model: "nomic-embed-text", Evidence: EvidenceFailed},
+		{Role: "bridge", Model: "qwen3.5:9b", Evidence: EvidenceUnverifiable},
+	}
+	unverifiable := computeUnverifiableModels(readinesses)
+	if len(unverifiable) != 1 || unverifiable[0].tag != "qwen3.5:9b" {
+		t.Fatalf("expected exactly one deduped unverifiable model, got %+v", unverifiable)
+	}
+	if len(unverifiable[0].roles) != 2 || unverifiable[0].roles[0] != "watcher" || unverifiable[0].roles[1] != "bridge" {
+		t.Errorf("roles = %v, want [watcher bridge]", unverifiable[0].roles)
+	}
+}
+
+func TestComputeUnverifiableModels_EmptyWhenNoneUnverifiable(t *testing.T) {
+	readinesses := []ModelReadiness{
+		{Role: "watcher", Model: "qwen3.5:9b", Evidence: EvidenceHealthy},
+		{Role: "embed", Model: "nomic-embed-text", Evidence: EvidenceFailed},
+	}
+	if got := computeUnverifiableModels(readinesses); len(got) != 0 {
+		t.Errorf("expected no unverifiable models, got %+v", got)
 	}
 }

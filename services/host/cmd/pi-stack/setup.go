@@ -834,17 +834,27 @@ func extractPullModelsFlag(flags []string) (pull bool, rest []string) {
 // setupModelReceipt is setup's AC-06/07 final local-model readiness receipt:
 // it names watcher/embed/bridge readiness from ONE shared probeOllama call
 // (never gated on cfg.Services membership — AC-07, that is a different,
-// operational question setup does not ask), then handles exactly one of three
-// mutually exclusive pull modes:
+// operational question setup does not ask), then handles the CONFIRMED-
+// missing tags (computeMissingModels) through exactly one of three mutually
+// exclusive pull modes:
 //
-//   - forcePull (--pull-models): pulls every distinct missing tag now, no
-//     prompt — the CI-safe forced path.
+//   - forcePull (--pull-models): pulls every distinct confirmed-missing tag
+//     now, no prompt — the CI-safe forced path.
 //   - interactive (TTY, no --yes): offers a default-No pull, explaining which
 //     roles depend on each tag and that pulling can be a large download
 //     (no invented size — the code does not know one). Declining, or any
 //     non-"yes" answer, prints the exact deferred commands instead.
 //   - otherwise (non-interactive / --yes, no --pull-models): NEVER downloads;
-//     prints the exact deferred `ollama pull <tag>` command per missing tag.
+//     prints the exact deferred `ollama pull <tag>` command per confirmed-
+//     missing tag.
+//
+// R1-09: unverifiable tags (daemon down, or `ollama list` itself failed) are
+// a SEPARATE, disjoint set (computeUnverifiableModels) — they never enter any
+// of the three modes above, never prompt, never get force-pulled. A stopped
+// daemon proves nothing about whether the tag is actually pulled, so treating
+// it as "missing" would contradict the evidence and risk repulling an
+// already-installed model. They are receipted with one accurate diagnostic
+// line naming why they couldn't be checked, then left alone.
 //
 // A pull failure is receipted clearly and setup CONTINUES — it never claims
 // success for a model that didn't pull, and never aborts setup over it.
@@ -863,8 +873,18 @@ func setupModelReceipt(env shellEnv, out io.Writer, in io.Reader, cfg *config.Co
 	}
 
 	if !p.installed {
+		// The runner itself is absent — nothing (prompt or --pull-models) can
+		// reasonably attempt a pull with no `ollama` binary to run.
 		fmt.Fprintln(out, "  install ollama to enable local models: https://ollama.com")
 		return
+	}
+
+	unverifiable := computeUnverifiableModels(readinesses)
+	if len(unverifiable) > 0 {
+		fmt.Fprintln(out, "")
+		fmt.Fprintf(out, "%s could not be verified — %s: %s\n",
+			plural(len(unverifiable), "model"), ollamaVerifyFailureReason(p), describeMissingModels(unverifiable))
+		fmt.Fprintln(out, "Not offering to pull these — they may already be installed; this is not a confirmed gap.")
 	}
 
 	missing := computeMissingModels(readinesses)
@@ -890,6 +910,17 @@ func setupModelReceipt(env shellEnv, out io.Writer, in io.Reader, cfg *config.Co
 	default:
 		printDeferredPulls(out, missing)
 	}
+}
+
+// ollamaVerifyFailureReason names WHY a model tag could not be verified, so
+// setup's diagnostic is accurate rather than a generic "something's wrong":
+// a down daemon and a daemon that's up but whose `ollama list` call itself
+// failed are different problems with different fixes.
+func ollamaVerifyFailureReason(p ollamaProbe) string {
+	if !p.daemonUp {
+		return "daemon not running (:11434 down) — start it: `ollama serve`, then re-run"
+	}
+	return "`ollama list` failed"
 }
 
 // modelReadinessGlyphState maps a shared Evidence to the doctor glyph vocabulary

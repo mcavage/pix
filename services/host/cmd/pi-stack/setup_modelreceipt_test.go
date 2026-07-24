@@ -92,6 +92,28 @@ func TestSetupModelReceipt_OllamaNotInstalled_NoPromptNoCrash(t *testing.T) {
 	}
 }
 
+// TestSetupModelReceipt_ForcePull_OllamaNotInstalled_NoPullAttempt: the
+// runner (ollama binary) is absent entirely — --pull-models must not
+// attempt anything; there is nothing it could reasonably pull with.
+func TestSetupModelReceipt_ForcePull_OllamaNotInstalled_NoPullAttempt(t *testing.T) {
+	pullCalls := 0
+	env := shellEnv{
+		lookPath: func(string) (string, error) { return "", fmt.Errorf("not found") },
+		run: func(name string, args ...string) (string, error) {
+			pullCalls++
+			return "", nil
+		},
+	}
+	var out bytes.Buffer
+	setupModelReceipt(env, &out, strings.NewReader(""), modelReceiptCfg(), false, true)
+	if pullCalls != 0 {
+		t.Errorf("--pull-models with ollama not installed must never attempt a pull, got %d calls", pullCalls)
+	}
+	if !strings.Contains(out.String(), "install ollama") {
+		t.Errorf("expected an install-ollama note, got:\n%s", out.String())
+	}
+}
+
 // TestSetupModelReceipt_NonInteractive_DeferredCommandsOnly: no TTY / --yes,
 // no --pull-models -> NEVER downloads; prints the exact deferred commands.
 func TestSetupModelReceipt_NonInteractive_DeferredCommandsOnly(t *testing.T) {
@@ -206,6 +228,112 @@ func TestSetupModelReceipt_ForcePull_NoPromptEvenWithEmptyReader(t *testing.T) {
 	setupModelReceipt(env, &out, strings.NewReader(""), modelReceiptCfg(), false, true)
 	if pulled["qwen3.5:9b"] != 1 || pulled["nomic-embed-text"] != 1 {
 		t.Errorf("expected --pull-models to force both tags pulled once each, got %v", pulled)
+	}
+}
+
+// --- R1-09: unverifiable (daemon down / `ollama list` failed) must never
+// enter the missing/pull set, never prompt, never force-pull. ---
+
+// TestSetupModelReceipt_DaemonDown_UnverifiableNoPullPrompt: ollama installed
+// but the daemon is down (`ollama list` fails) — every model is unverifiable,
+// none confirmed missing. Must render as unverifiable with a diagnostic,
+// never "missing", never a pull prompt, even when interactive.
+func TestSetupModelReceipt_DaemonDown_UnverifiableNoPullPrompt(t *testing.T) {
+	pullCalls := 0
+	env := shellEnv{
+		lookPath: func(string) (string, error) { return "/usr/bin/ollama", nil },
+		dial:     func(int) bool { return false },
+		run: func(name string, args ...string) (string, error) {
+			if len(args) >= 1 && args[0] == "list" {
+				return "", fmt.Errorf("connection refused")
+			}
+			pullCalls++
+			return "", nil
+		},
+	}
+	var out bytes.Buffer
+	// interactive=true with an EMPTY reader: if this tried to prompt, it would
+	// read EOF and treat it as a decline — but it must never prompt at all.
+	setupModelReceipt(env, &out, strings.NewReader(""), modelReceiptCfg(), true, false)
+	if pullCalls != 0 {
+		t.Errorf("daemon-down setup must never pull, got %d pull calls", pullCalls)
+	}
+	got := out.String()
+	if strings.Contains(got, "not pulled") {
+		t.Errorf("unverifiable models must never render as 'not pulled' (missing), got:\n%s", got)
+	}
+	if strings.Contains(got, "Pull missing") {
+		t.Errorf("unverifiable models must never trigger a pull prompt, got:\n%s", got)
+	}
+	if !strings.Contains(got, "could not be verified") {
+		t.Errorf("expected an unverifiable diagnostic, got:\n%s", got)
+	}
+	if !strings.Contains(got, "daemon") {
+		t.Errorf("expected the diagnostic to name the daemon as the reason, got:\n%s", got)
+	}
+}
+
+// TestSetupModelReceipt_ListFailure_UnverifiableAccurateDiagnostic: daemon
+// reachable (dial ok) but `ollama list` itself errors — the diagnostic must
+// name the list failure, not claim the daemon is down (accurate, not just
+// "something's wrong").
+func TestSetupModelReceipt_ListFailure_UnverifiableAccurateDiagnostic(t *testing.T) {
+	env := shellEnv{
+		lookPath: func(string) (string, error) { return "/usr/bin/ollama", nil },
+		dial:     func(int) bool { return true },
+		run: func(name string, args ...string) (string, error) {
+			return "", fmt.Errorf("exit status 1")
+		},
+	}
+	var out bytes.Buffer
+	setupModelReceipt(env, &out, strings.NewReader(""), modelReceiptCfg(), false, false)
+	got := out.String()
+	if !strings.Contains(got, "could not be verified") {
+		t.Errorf("expected an unverifiable diagnostic, got:\n%s", got)
+	}
+	if strings.Contains(got, "daemon not running") {
+		t.Errorf("daemon IS up here (dial succeeded) — diagnostic must not blame the daemon, got:\n%s", got)
+	}
+}
+
+// TestSetupModelReceipt_MixedConfirmedAndUnverifiable_OnlyConfirmedPulled:
+// one tag confirmed missing (list ran, tag absent), another unverifiable
+// (shares a daemon-down-partial scenario is impossible per-probe, so use two
+// separate models via distinct list output vs an unverifiable role achieved
+// by only one model actually depending on ollama list succeeding) — prompt
+// and pull ONLY the confirmed one; the unverifiable one gets a receipt, no
+// pull attempt ever.
+func TestSetupModelReceipt_MixedConfirmedAndUnverifiable_OnlyConfirmedPulled(t *testing.T) {
+	// `ollama list` succeeds (installed+reachable) but simply omits
+	// nomic-embed-text -> CONFIRMED missing for embed. qwen3.5:9b (watcher+
+	// bridge) is present -> healthy. To also exercise the unverifiable branch
+	// in the SAME receipt we can't get both from one probe (list either
+	// succeeds or it doesn't) — so this test asserts the confirmed-missing
+	// side pulls, and a companion daemon-down test above asserts the
+	// unverifiable side never does. Combined they prove "prompt/pull only
+	// confirmed missing".
+	pulled := map[string]int{}
+	env := shellEnv{
+		lookPath: func(string) (string, error) { return "/usr/bin/ollama", nil },
+		dial:     func(int) bool { return true },
+		run: func(name string, args ...string) (string, error) {
+			if len(args) >= 1 && args[0] == "list" {
+				return "NAME\nqwen3.5:9b:latest\n", nil
+			}
+			if len(args) == 2 && args[0] == "pull" {
+				pulled[args[1]]++
+				return "success", nil
+			}
+			return "", nil
+		},
+	}
+	var out bytes.Buffer
+	setupModelReceipt(env, &out, strings.NewReader(""), modelReceiptCfg(), false, true)
+	if pulled["nomic-embed-text"] != 1 {
+		t.Errorf("expected the confirmed-missing embed model pulled, got %v", pulled)
+	}
+	if pulled["qwen3.5:9b"] != 0 {
+		t.Errorf("qwen3.5:9b is healthy (in list output) — must never be pulled, got %v", pulled)
 	}
 }
 

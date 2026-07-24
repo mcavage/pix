@@ -81,23 +81,25 @@ func modelReadiness(role, model, purpose string, p ollamaProbe, req Requirement)
 	return m
 }
 
-// missingModel is one Ollama tag that is not confirmed healthy, plus every
-// role that depends on it (e.g. qwen3.5:9b is watcher+bridge by default).
+// missingModel is one Ollama tag, plus every role that depends on it (e.g.
+// qwen3.5:9b is watcher+bridge by default). Used both for CONFIRMED-missing
+// tags (computeMissingModels) and for unverifiable tags (
+// computeUnverifiableModels) — same (tag, roles) shape, two disjoint sets.
 type missingModel struct {
 	tag   string
 	roles []string
 }
 
-// computeMissingModels reduces a set of ModelReadiness to the distinct tags
-// that are not confirmed healthy (failed or unverifiable both count — only a
-// confirmed pull satisfies readiness), deduping identical tags across roles
-// so a shared model is named once, with every dependent role listed, in
-// first-seen order.
-func computeMissingModels(readinesses []ModelReadiness) []missingModel {
+// filterModelsByEvidence reduces readinesses to the distinct tags whose
+// Evidence satisfies match, deduping identical tags across roles so a shared
+// model is named once, with every dependent role listed, in first-seen
+// order. Shared by computeMissingModels and computeUnverifiableModels so the
+// two never drift into different dedup/order behavior.
+func filterModelsByEvidence(readinesses []ModelReadiness, match func(Evidence) bool) []missingModel {
 	var out []missingModel
 	index := make(map[string]int, len(readinesses))
 	for _, m := range readinesses {
-		if m.Evidence == EvidenceHealthy || m.Model == "" {
+		if m.Model == "" || !match(m.Evidence) {
 			continue
 		}
 		if i, ok := index[m.Model]; ok {
@@ -108,4 +110,25 @@ func computeMissingModels(readinesses []ModelReadiness) []missingModel {
 		out = append(out, missingModel{tag: m.Model, roles: []string{m.Role}})
 	}
 	return out
+}
+
+// computeMissingModels reduces a set of ModelReadiness to the distinct tags
+// that are CONFIRMED missing (EvidenceFailed only — `ollama list` ran fine
+// and simply does not list the tag). R1-09: EvidenceUnverifiable must NEVER
+// enter this set — a stopped daemon or a failed `ollama list` proves nothing
+// about whether the tag is actually pulled, so treating it as "missing" would
+// contradict the evidence and could force-repull an already-installed model.
+// See computeUnverifiableModels for the disjoint unverifiable set.
+func computeMissingModels(readinesses []ModelReadiness) []missingModel {
+	return filterModelsByEvidence(readinesses, func(e Evidence) bool { return e == EvidenceFailed })
+}
+
+// computeUnverifiableModels reduces a set of ModelReadiness to the distinct
+// tags that could not be verified one way or the other (ollama installed but
+// the daemon was down or `ollama list` itself failed). These are reported
+// separately from computeMissingModels: never offered for pull, never called
+// "missing" — only receipted with an accurate diagnostic of why they
+// couldn't be checked.
+func computeUnverifiableModels(readinesses []ModelReadiness) []missingModel {
+	return filterModelsByEvidence(readinesses, func(e Evidence) bool { return e == EvidenceUnverifiable })
 }
