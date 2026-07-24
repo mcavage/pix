@@ -23,6 +23,19 @@ These are the tools you use. All are **read** operations:
 - `sheets_read_range` — read a cell range from a Sheet.
 - `calendar_events` — list calendar events in a window.
 
+## Data disclosure
+
+Anything a tool call above returns — an email body, a Doc's text, a Sheet
+range, a calendar event — is **not private from the model provider.** It goes
+straight into this session's prompt/context, the same as any other tool
+result, and is sent to whichever model is active: Claude, OpenAI, Gemini, or
+a local Ollama model. Only the OAuth token and the network call to Google
+stay host-side (see [gog-setup.md](../../docs/gog-setup.md#data-disclosure));
+the content itself is visible to your cloud provider like anything else you
+type into this session. If the user's org has enterprise data-handling terms
+with the model provider, those govern what happens to it — this skill makes
+no compliance claim beyond that.
+
 ## Read-only by default
 
 `gog` runs **read-only** by default, and Gmail sending is off (`--gmail-no-send`).

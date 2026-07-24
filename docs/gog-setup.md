@@ -12,6 +12,24 @@ gateway can actually call it headlessly, and registers it. It is an
 OAuth client JSON's contents, and no organization client is bundled here;
 bring your own.
 
+## Data disclosure
+
+Gmail, Drive, Docs, Sheets, and Calendar content that `gog` returns is **not
+private from your model provider.** Once a tool call fetches a message, a doc,
+or an event, its text goes into the prompt/context sent to whichever model is
+active for this session — Claude, OpenAI, Gemini, or a local Ollama model.
+This is the same disclosure as [memory](memory.md#the-shape): only the OAuth
+tokens and the network call stay host-side; the *content* a tool returns is
+visible to your cloud provider like any other context. **Never point `gog` at
+an account whose email you wouldn't want summarized, quoted, or reasoned
+about by that provider.**
+
+If your organization has enterprise/zero-data-retention terms with a model
+provider, that governs what the provider does with prompts it receives —
+pi-stack makes no compliance claim of its own and does not verify your
+provider agreement. Check your provider contract before pointing `gog` at
+regulated or sensitive mailboxes.
+
 ## Quickstart
 
 ```bash
@@ -106,6 +124,44 @@ gog is dynamically discoverable by default (lean context) — the in-VM agent fi
 Existing sandbox? attach it live: pi-stack mcp load gog
 ```
 
+## Google OAuth caveats
+
+`gog` authorizes through a **Desktop-app OAuth client** you create yourself in
+Google Cloud Console (bring your own — no org-wide client is bundled here).
+A few things about that client and the consent screen are worth knowing
+before you run `pi-stack gog setup`, because they are Google's rules, not
+pi-stack's, and they can change:
+
+- **Internal vs External consent screen.** If your Google Cloud project is on
+  a Google Workspace organization, you can usually set the OAuth consent
+  screen to **Internal**, which skips Google's verification review entirely
+  for accounts inside that org. A personal Gmail account, or an External
+  consent screen, does not get that exemption.
+- **Testing / unverified apps.** An External consent screen normally starts
+  in **Testing** status: it only works for test users you explicitly list in
+  Cloud Console, and Google shows an "unverified app" warning that the user
+  has to click through (Advanced -> Go to app). The number of test users
+  allowed, and exactly when Google requires verification, are **Google
+  policy details that change over time** — pi-stack does not hardcode or
+  guarantee a specific cap here. Check the current limits in [Google Cloud
+  Console](https://console.cloud.google.com/apis/credentials/consent) and
+  [Google's OAuth verification
+  guidance](https://support.google.com/cloud/answer/9110914) before relying
+  on a number you read somewhere else, including this doc.
+- **Gmail readonly is a restricted scope.** `https://www.googleapis.com/auth/gmail.readonly`
+  (what `--readonly` requests) is one of Google's **restricted scopes**. For a
+  personal/test setup this is fine as-is. Rolling this out to an entire
+  Workspace organization, or moving the consent screen out of Testing, may
+  require Google's **app verification and, for restricted scopes, a
+  security assessment** — a real process with real lead time. Don't promise a
+  team-wide rollout timeline without checking Google's current requirements
+  for your case first.
+- **This is a caveat list, not a compliance claim.** pi-stack does not verify
+  your Cloud project's consent-screen status, verification state, or scope
+  grants on your behalf; `pi-stack doctor` and `gog setup` verify that the
+  headless path actually returns tools, which is a functional check, not a
+  policy one.
+
 ## The one trap (read this first)
 
 `gog auth doctor` working in your interactive shell proves **nothing** about
@@ -196,6 +252,45 @@ exfiltrate it through some other channel (read-only stops writes, not
 reads), and the keyring password in the gateway's process env unlocks
 standing OAuth — keep `GOG_HOME` at `0700`, the keyring file at `0600`, this
 a single-user host, and rotate the client if it's ever exposed.
+
+## Rotation and revocation
+
+`gog` grants are host-side and long-lived by design (that's what makes
+headless calls work at all), so know how to shut one off before you need to.
+There is a **named owner** for this: whoever controls the Google account
+`--account` names, and whoever has access to the Google Cloud project the
+OAuth client lives in. On a shared host, write down who that is.
+
+If a grant, client, or keyring password may have leaked (lost laptop,
+committed `client.json`, leaked keyring password), do all of these, in
+order:
+
+1. **Revoke the user's OAuth grant.** In the Google account that ran
+   `--account`, go to [Google Account security → Third-party
+   access](https://myaccount.google.com/permissions) and remove the OAuth
+   client's access. This kills the standing refresh token immediately,
+   independent of anything below.
+2. **Rotate/replace the OAuth client in Google Cloud Console.** Don't just
+   delete-and-recreate a client with the same name; go to APIs & Services →
+   Credentials, delete the compromised Desktop client, and create a fresh
+   one with a new client ID/secret. A leaked `client.json` is a leaked
+   client secret — revoking the user grant (step 1) stops it from acting as
+   *you*, but the old client credentials themselves stay valid for issuing
+   NEW grants until you delete the client.
+3. **Rerun the guided setup with the new client:** `pi-stack gog setup
+   --account you@example.com --credentials <path-to-new-client.json>`. This
+   re-imports the client, re-authorizes, re-verifies the headless path, and
+   re-registers with the gateway in one step — don't hand-edit config or the
+   sbx registration to swap the client in.
+4. **Rotate the keyring password too, if it was ever exposed** (checked into
+   git, pasted somewhere, shared over a channel you don't fully trust): pick
+   a new value, update it in 1Password (`GOG_KEYRING_PASSWORD` op:// ref),
+   and re-run `pi-stack gog setup` so the new password is what the headless
+   probe actually verifies against.
+5. **Verify with `pi-stack doctor`.** Its gog group probes the exact command
+   the gateway will run, with the new client/grant/password in place — a
+   green result is your evidence rotation actually worked, not just that you
+   ran the commands.
 
 ## Already authorized `gog` yourself?
 

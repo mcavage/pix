@@ -194,6 +194,59 @@ func TestHistoricalDesignDocsAreBannered(t *testing.T) {
 // and deliberately never scans the historical body below the banner for
 // `--profile`/`gog auth login` (those terms are EXPECTED there, as labeled
 // historical illustrations of the shape being proposed).
+// TestGogSetupGuideHasLegalDisclosures (Phase-10 legal/privacy) guards
+// docs/gog-setup.md for the three findings: a data-disclosure section saying
+// returned content becomes model prompt/context sent to the active provider,
+// Google OAuth caveats (Desktop client, Internal vs External, unverified/
+// testing warning, Gmail readonly as a restricted scope, org verification/
+// security assessment), and full rotation/revocation mechanics with a named
+// owner and a doctor verification step.
+func TestGogSetupGuideHasLegalDisclosures(t *testing.T) {
+	page := readRepoFile(t, "docs/gog-setup.md")
+	assertAll(t, "docs/gog-setup.md", page,
+		// data disclosure
+		"Data disclosure",
+		"prompt/context sent to whichever model is",
+		// OAuth caveats
+		"Internal vs External",
+		"unverified app",
+		"restricted scope",
+		"security assessment",
+		"console.cloud.google.com",
+		// rotation/revocation
+		"Rotation and revocation",
+		"named owner",
+		"myaccount.google.com/permissions",
+		"Rotate/replace the OAuth client",
+		"Rotate the keyring password",
+		"Verify with `pi-stack doctor`",
+	)
+}
+
+// TestGworkspaceSkillHasDataDisclosure (Phase-10 legal/privacy) guards
+// skills/gworkspace/SKILL.md: Gmail/Drive/Docs/Calendar content the skill
+// reads must be disclosed as becoming model prompt/context sent to the
+// active provider, the same as the memory disclosure.
+func TestGworkspaceSkillHasDataDisclosure(t *testing.T) {
+	page := readRepoFile(t, "skills/gworkspace/SKILL.md")
+	assertAll(t, "skills/gworkspace/SKILL.md", page,
+		"Data disclosure",
+		"not private from the model provider",
+		"sent to whichever model is active",
+	)
+}
+
+// TestSecurityMdHasGogDisclosure (Phase-10 legal/privacy) guards SECURITY.md:
+// the "what the sandbox does NOT protect" section must disclose that gog
+// content is sent to the model provider, mirroring the memory disclosure.
+func TestSecurityMdHasGogDisclosure(t *testing.T) {
+	page := readRepoFile(t, "SECURITY.md")
+	assertAll(t, "SECURITY.md", page,
+		"not private from your model",
+		"docs/gog-setup.md",
+	)
+}
+
 func TestCliRedesignDocIsBannered(t *testing.T) {
 	const rel = "docs/design/cli-redesign.md"
 	page := readRepoFile(t, rel)

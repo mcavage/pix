@@ -52,9 +52,15 @@ type hostStateKnowledge struct {
 	ServiceUp bool     `json:"service_up"`
 }
 
+// hostStateGog carries ONLY whether gog is wired, never the configured
+// account email. `enabled` is sufficient for onboarding to say "Gmail/Drive
+// isn't set up yet" or "it's on" — the email address is real PII with no
+// onboarding use that justifies putting it in every session's prompt. The
+// account still lives in cfg.GogAccount (host config, doctor, `gog setup`
+// re-registration) — it is just never copied into this model-visible
+// payload. Same rationale as hostStateIdentity dropping email.
 type hostStateGog struct {
-	Enabled bool   `json:"enabled"`
-	Account string `json:"account"`
+	Enabled bool `json:"enabled"`
 }
 
 type hostStateMCP struct {
@@ -205,7 +211,7 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		Keys:      keys,
 		Memory:    hostStateSvc{Up: dialer(memoryPortDefault), Port: memoryPortDefault},
 		Knowledge: hostStateKnowledge{Bundles: bundles, Seeded: len(bundles) > 0, ServiceUp: dialer(knowledgePortDefault)},
-		Gog:       hostStateGog{Enabled: gogEnabled, Account: cfg.GogAccount},
+		Gog:       hostStateGog{Enabled: gogEnabled},
 		MCP:       hostStateMCP{Enabled: len(mcpServers) > 0, Servers: mcpServers},
 		Overlay:   hostStateOverlay{Kit: overlayKit},
 		Models:    hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},
