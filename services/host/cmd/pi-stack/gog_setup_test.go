@@ -465,6 +465,63 @@ func TestGogSetup_PromptsOnTTYForMissingAccountAndCredentials(t *testing.T) {
 	}
 }
 
+// TestGogSetup_BufferedReaderDeliversBothPromptedValues is QA finding #3: feed
+// BOTH the account and credentials lines through one fully-buffered io.Reader
+// (TTY=true, no flags), and verify BOTH prompted values actually reach the
+// selected auth command's argv — not merely that gogSetup returns no error.
+//
+// This targets a previously unguarded integration:
+// TestGogSetup_PromptsOnTTYForMissingAccountAndCredentials (above) already
+// prompts for both values on a fully-buffered strings.Reader, but it never
+// wires gogTestEnv.interCalls, so it could not have caught a regression where
+// gogSetup silently ran the auth command with a wrong/empty credentials path
+// (any error from a wrong account WOULD have failed that test via the
+// `sbx`-shaped exact-string run() map, but a wrong/empty CREDENTIALS value
+// only shows up in the recorded runInteractive argv, which no prior test
+// captured). gogSetup deliberately shares ONE bufio.Reader across both
+// prompts for exactly this reason (see its doc comment): promptLine's
+// per-call `bufio.NewReader(sio.in)` would silently drop the second answer
+// here, because the first call's internal read-ahead can consume the whole
+// buffered input (including the credentials line) from the underlying
+// strings.Reader, leaving nothing for a second, freshly-constructed
+// bufio.Reader to read.
+func TestGogSetup_BufferedReaderDeliversBothPromptedValues(t *testing.T) {
+	gogSetupTestCfg(t)
+	cred := gogCredFile(t)
+	var calls [][]string
+	ge := gogTestEnv{
+		present: map[string]bool{"gog": true},
+		output: map[string]string{
+			"gog auth --help": gogAuthHelpCurrentSetup,
+			"gog --account you@example.com auth doctor --check": "ok",
+		},
+		statFile:   map[string]bool{cred: true},
+		interCalls: &calls,
+	}
+	var out bytes.Buffer
+	// ONE fully-buffered io.Reader carrying BOTH answers: a real strings.Reader
+	// delivers its entire contents on the first Read, exactly the shape that
+	// exposes the per-call-bufio.Reader bug (a second bufio.NewReader wrapping
+	// the same, now-drained, underlying reader would see EOF).
+	in := strings.NewReader("you@example.com\n" + cred + "\n")
+	opts := gogSetupOpts{} // no flags — both values MUST come from the reader
+	if err := gogSetup(ge.env(), opts, in, &out, true); err != nil {
+		t.Fatalf("gogSetup: %v\n--- output ---\n%s", err, out.String())
+	}
+	if len(calls) == 0 {
+		t.Fatal("expected at least one runInteractive (auth) call to be recorded")
+	}
+	// The selected route's FIRST command carries the auth argv gogSetup built
+	// from the two prompted values — assert both landed in it correctly.
+	got := strings.Join(calls[0], " ")
+	if !strings.Contains(got, "you@example.com") {
+		t.Errorf("expected the prompted account to reach the auth command, got %q", got)
+	}
+	if !strings.Contains(got, cred) {
+		t.Errorf("expected the prompted credentials path to reach the auth command, got %q", got)
+	}
+}
+
 func TestGogSetup_NonInteractiveMissingAccountFails(t *testing.T) {
 	gogSetupTestCfg(t)
 	cred := gogCredFile(t)
