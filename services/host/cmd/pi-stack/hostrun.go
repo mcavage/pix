@@ -147,7 +147,7 @@ var hostHarnessDirs = []string{"skills", "agents", "extensions", "prompts", "the
 // "install pi" hints tell the user to match the image's version, so they must
 // name the ACTUAL pinned version, not an unversioned latest. When you bump the
 // Dockerfile ARG, bump this in the same commit (a test cross-checks the two).
-const hostPinnedPiPackage = "@earendil-works/pi-coding-agent@0.81.1"
+const hostPinnedPiPackage = "@earendil-works/pi-coding-agent@0.82.0"
 
 // hostPiPackages mirrors the Dockerfile's curated `pi install` loop (the PINNED
 // set — see the Dockerfile comment on why these must be version-locked to the
@@ -156,10 +156,10 @@ var hostPiPackages = []string{
 	"pi-plan@0.1.1",
 	"pi-mcp-adapter@2.11.0",
 	"pi-manage-todo-list@0.4.0",
-	"pi-simplify@0.2.2",
+	"pi-simplify@0.2.3",
 	"pi-web-access@0.13.0",
-	"@juanibiapina/pi-extension-settings@0.8.0",
-	"pi-usage@0.2.1",
+	"@juanibiapina/pi-extension-settings@0.9.1",
+	"pi-usage@0.3.0",
 }
 
 // hostPiExtensionsLockFile records the EXACT hostPiPackages set successfully

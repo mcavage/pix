@@ -1,113 +1,35 @@
-diff --git a/packages/tui/src/tui.ts b/packages/tui/src/tui.ts
-index a705488..703829e 100644
 --- a/packages/tui/src/tui.ts
 +++ b/packages/tui/src/tui.ts
-@@ -1458,6 +1458,72 @@ export class TUI extends Container {
+@@ -1463,6 +1463,21 @@
  			return;
  		}
  
-+		// Bottom-block pin: a bottom-anchored buffer SHRINK that reaches this point
-+		// (the changed region is within the visible window, so neither the
-+		// deleted-tail branch nor the `firstChanged < prevViewportTop` guard above
-+		// fired) would otherwise have the differential loop below re-emit the
-+		// unchanged bottom block (editor / widgets / footer) one or more rows higher,
-+		// because that loop renders relative to the un-re-anchored viewportTop. The
-+		// input box + any belowEditor widgets then visibly jump up while streaming
-+		// (markdown re-wrap, the hidden "Thinking..." spacer toggling, tool rows
-+		// collapsing). Re-anchor to the new bottom and repaint the whole visible
-+		// window in place: lines that scrolled just out of view above are pulled back
-+		// down to fill the freed rows, so the bottom block keeps its exact screen
-+		// rows — no jump, no full-screen clear.
-+		//
-+		// Scoped to the genuine jitter case only: bottom-anchored before AND after
-+		// the shrink, no overlays, and no kitty images in the visible window (those
-+		// need the reservation path in the differential loop). The deliberate
-+		// full-redraw-on-shrink behaviours (deleted-tail moving the viewport up;
-+		// stale content from an inflated maxLinesRendered) return via the guards
-+		// ABOVE this point and are unaffected.
++		// A bottom-anchored shrink must rebuild the terminal buffer. Repainting the
++		// newly visible top row in place leaves its old copy in immutable terminal
++		// scrollback, producing adjacent duplicates after later output scrolls.
 +		if (
 +			this.overlayStack.length === 0 &&
 +			prevViewportTop > 0 &&
 +			prevViewportTop === this.previousLines.length - height &&
 +			newLines.length < this.previousLines.length &&
-+			newLines.length >= height &&
-+			this.previousKittyImageIds.size === 0
++			newLines.length >= height
 +		) {
-+			const newViewportTop = newLines.length - height;
-+			let visibleImage = false;
-+			for (let r = 0; r < height; r++) {
-+				if (isImageLine(newLines[newViewportTop + r] ?? "")) {
-+					visibleImage = true;
-+					break;
-+				}
-+			}
-+			if (!visibleImage) {
-+				logRedraw(`bottom-anchored shrink pin (viewportTop ${prevViewportTop} -> ${newViewportTop})`);
-+				let pinBuffer = "\x1b[?2026h"; // Begin synchronized output
-+				// Move the hardware cursor to the top row of the visible screen.
-+				const screenCursorRow = Math.max(0, Math.min(height - 1, hardwareCursorRow - prevViewportTop));
-+				if (screenCursorRow > 0) {
-+					pinBuffer += `\x1b[${screenCursorRow}A`;
-+				}
-+				pinBuffer += "\r";
-+				// Repaint every visible row with bottom-anchored content.
-+				for (let r = 0; r < height; r++) {
-+					if (r > 0) pinBuffer += "\r\n";
-+					pinBuffer += "\x1b[2K";
-+					pinBuffer += newLines[newViewportTop + r] ?? "";
-+				}
-+				pinBuffer += "\x1b[?2026l"; // End synchronized output
-+				this.terminal.write(pinBuffer);
-+				// Cursor now sits on the last visible row = end of content.
-+				this.cursorRow = newLines.length - 1;
-+				this.hardwareCursorRow = newLines.length - 1;
-+				this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
-+				this.previousViewportTop = newViewportTop;
-+				this.positionHardwareCursor(cursorPos, newLines.length);
-+				this.previousLines = newLines;
-+				this.previousKittyImageIds = this.collectKittyImageIds(newLines);
-+				this.previousWidth = width;
-+				this.previousHeight = height;
-+				return;
-+			}
++			logRedraw(`bottom-anchored shrink redraw (viewportTop ${prevViewportTop} -> ${newLines.length - height})`);
++			fullRender(true);
++			return;
 +		}
 +
  		// Render from first changed line to end
  		// Build buffer with all updates wrapped in synchronized output
  		let buffer = "\x1b[?2026h"; // Begin synchronized output
-diff --git a/packages/tui/test/tui-render.test.ts b/packages/tui/test/tui-render.test.ts
-index ab038ac..659cd4c 100644
 --- a/packages/tui/test/tui-render.test.ts
 +++ b/packages/tui/test/tui-render.test.ts
-@@ -734,13 +734,15 @@ describe("TUI differential rendering", () => {
- 		tui.requestRender();
- 		await terminal.waitForRender();
- 
--		const redrawsBeforeSwitch = tui.fullRedraws;
- 		chat.lines = shortChat;
- 		tui.requestRender();
- 		await terminal.waitForRender();
- 
--		assert.ok(tui.fullRedraws > redrawsBeforeSwitch, "Branch switch should trigger a full redraw");
--
-+		// Note: this no longer requires a full redraw here. The bottom-anchored
-+		// shrink pin (see doRender) clears the inflated/stale rows in place as it
-+		// re-anchors the viewport, so stale content never survives to need a full
-+		// screen clear. The real contract — no stale rows, correct bottom-anchored
-+		// viewport — is asserted below.
- 		const viewport = terminal.getViewport();
- 		for (let i = 0; i < 10; i++) {
- 			const line = viewport[i] ?? "";
-@@ -764,4 +766,55 @@ describe("TUI differential rendering", () => {
+@@ -789,4 +789,36 @@
  
  		tui.stop();
  	});
 +
-+	it("pins the bottom block in place on a small bottom-anchored shrink (no jump, no full redraw)", async () => {
-+		// Regression for the streaming jitter: when chat content above the editor
-+		// shrinks by a line (markdown re-wrap, "Thinking..." spacer, tool-row
-+		// collapse), the editor / footer below it must keep their exact screen rows
-+		// instead of drifting up, and it must do so smoothly (no full screen clear).
++	it("pins a bottom-anchored shrink without duplicating the new viewport top in scrollback", async () => {
 +		const terminal = new VirtualTerminal(40, 10);
 +		const tui = new TUI(terminal);
 +		const chat = new TestComponent();
@@ -122,31 +44,16 @@ index ab038ac..659cd4c 100644
 +
 +		const before = terminal.getViewport();
 +		const editorRowBefore = before.indexOf("Editor 0");
-+		assert.strictEqual(before[9], "Editor 1", "editor pinned to bottom row initially");
 +		const redrawsBefore = tui.fullRedraws;
 +
-+		// Chat shrinks by one line; the bottom block is unchanged.
 +		chat.lines = Array.from({ length: 11 }, (_, i) => `Chat ${i}`);
 +		tui.requestRender();
 +		await terminal.waitForRender();
 +
-+		const after = terminal.getViewport();
-+		assert.strictEqual(
-+			after.indexOf("Editor 0"),
-+			editorRowBefore,
-+			"editor stayed on the same screen row across the shrink",
-+		);
-+		assert.strictEqual(after[9], "Editor 1", "editor still pinned to the bottom row");
-+		assert.strictEqual(tui.fullRedraws, redrawsBefore, "pin is smooth (no full redraw)");
-+		assert.deepStrictEqual(after, [
-+			"Chat 3",
-+			"Chat 4",
-+			"Chat 5",
-+			"Chat 6",
-+			"Chat 7",
-+			"Chat 8",
-+			"Chat 9",
-+			"Chat 10",
++		assert.strictEqual(terminal.getViewport().indexOf("Editor 0"), editorRowBefore);
++		assert.strictEqual(tui.fullRedraws, redrawsBefore + 1);
++		assert.deepStrictEqual(terminal.getScrollBuffer(), [
++			...Array.from({ length: 11 }, (_, i) => `Chat ${i}`),
 +			"Editor 0",
 +			"Editor 1",
 +		]);

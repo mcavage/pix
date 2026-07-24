@@ -1,72 +1,31 @@
---- /tmp/pi-patch-backup/tui.js.orig	2026-06-21 09:24:37.340168675 -0700
-+++ /usr/local/share/npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/tui.js	2026-06-21 11:38:43.429082011 -0700
-@@ -1171,6 +1171,71 @@
+--- a/dist/tui.js
++++ b/dist/tui.js
+@@ -1176,6 +1176,30 @@
              fullRender(true);
              return;
          }
 +        // Bottom-block pin: a bottom-anchored buffer SHRINK that reaches this point
-+        // (the changed region is within the visible window, so neither the
-+        // deleted-tail branch nor the `firstChanged < prevViewportTop` guard above
-+        // fired) would otherwise have the differential loop below re-emit the
-+        // unchanged bottom block (editor / widgets / footer) one or more rows higher,
-+        // because that loop renders relative to the un-re-anchored viewportTop. The
-+        // input box + any belowEditor widgets then visibly jump up while streaming
-+        // (markdown re-wrap, the hidden "Thinking..." spacer toggling, tool rows
-+        // collapsing). Re-anchor to the new bottom and repaint the whole visible
-+        // window in place: lines that scrolled just out of view above are pulled back
-+        // down to fill the freed rows, so the bottom block keeps its exact screen
-+        // rows — no jump, no full-screen clear.
++        // would otherwise repaint changed rows against the old viewportTop, moving
++        // the editor/footer up. Repainting the newly visible top row in place is
++        // not safe: that row still exists in immutable terminal scrollback, so the
++        // repaint leaves two adjacent copies once it scrolls off-screen. Clear and
++        // rebuild the terminal buffer instead. Synchronized output keeps the redraw
++        // atomic in terminals that support it, while the full render preserves one
++        // physical row per logical row and handles inline images through its normal
++        // reservation path.
 +        //
-+        // Scoped to the genuine jitter case only: bottom-anchored before AND after
-+        // the shrink, no overlays, and no kitty images in the visible window (those
-+        // need the reservation path in the differential loop). The deliberate
-+        // full-redraw-on-shrink behaviours (deleted-tail moving the viewport up;
-+        // stale content from an inflated maxLinesRendered) return via the guards
-+        // ABOVE this point and are unaffected.
++        // Keep this below the existing deleted-tail and above-viewport guards so
++        // their established redraw paths remain unchanged. Scope it to content that
++        // was and remains bottom-anchored; a buffer that now fits on screen should
++        // return naturally to top anchoring.
 +        if (this.overlayStack.length === 0 &&
 +            prevViewportTop > 0 &&
 +            prevViewportTop === this.previousLines.length - height &&
 +            newLines.length < this.previousLines.length &&
-+            newLines.length >= height &&
-+            this.previousKittyImageIds.size === 0) {
-+            const newViewportTop = newLines.length - height;
-+            let visibleImage = false;
-+            for (let r = 0; r < height; r++) {
-+                if (isImageLine(newLines[newViewportTop + r] ?? "")) {
-+                    visibleImage = true;
-+                    break;
-+                }
-+            }
-+            if (!visibleImage) {
-+                logRedraw(`bottom-anchored shrink pin (viewportTop ${prevViewportTop} -> ${newViewportTop})`);
-+                let pinBuffer = "\x1b[?2026h"; // Begin synchronized output
-+                // Move the hardware cursor to the top row of the visible screen.
-+                const screenCursorRow = Math.max(0, Math.min(height - 1, hardwareCursorRow - prevViewportTop));
-+                if (screenCursorRow > 0) {
-+                    pinBuffer += `\x1b[${screenCursorRow}A`;
-+                }
-+                pinBuffer += "\r";
-+                // Repaint every visible row with bottom-anchored content.
-+                for (let r = 0; r < height; r++) {
-+                    if (r > 0)
-+                        pinBuffer += "\r\n";
-+                    pinBuffer += "\x1b[2K";
-+                    pinBuffer += newLines[newViewportTop + r] ?? "";
-+                }
-+                pinBuffer += "\x1b[?2026l"; // End synchronized output
-+                this.terminal.write(pinBuffer);
-+                // Cursor now sits on the last visible row = end of content.
-+                this.cursorRow = newLines.length - 1;
-+                this.hardwareCursorRow = newLines.length - 1;
-+                this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
-+                this.previousViewportTop = newViewportTop;
-+                this.positionHardwareCursor(cursorPos, newLines.length);
-+                this.previousLines = newLines;
-+                this.previousKittyImageIds = this.collectKittyImageIds(newLines);
-+                this.previousWidth = width;
-+                this.previousHeight = height;
-+                return;
-+            }
++            newLines.length >= height) {
++            logRedraw(`bottom-anchored shrink redraw (viewportTop ${prevViewportTop} -> ${newLines.length - height})`);
++            fullRender(true);
++            return;
 +        }
 +
          // Render from first changed line to end

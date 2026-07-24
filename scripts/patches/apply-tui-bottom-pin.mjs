@@ -9,7 +9,7 @@
 // an upstream release. See docs/upstream/tui-bottom-pin.md for the full writeup.
 //
 // This script INSERTS a self-contained branch into doRender(), right before the
-// "// Find first and last changed lines" anchor. It is:
+// "// Render from first changed line to end" anchor. It is:
 //   • idempotent  — no-ops if the marker is already present;
 //   • non-fatal   — if pi's layout changed (anchor missing / already-different),
 //     it prints a loud warning and exits 0 so the image still builds (you just
@@ -30,6 +30,15 @@ const MARKER = "Bottom-block pin";
 // pinned. (Earlier revisions anchored on "// Find first and last changed lines",
 // before those guards — that over-reached and changed full-redraw behaviour.)
 const ANCHOR = "// Render from first changed line to end";
+const BEFORE_ANCHOR = `        if (firstChanged < prevViewportTop) {
+            logRedraw(\`firstChanged < viewportTop (\${firstChanged} < \${prevViewportTop})\`);
+            fullRender(true);
+            return;
+        }
+`;
+const AFTER_ANCHOR = `${ANCHOR}
+        // Build buffer with all updates wrapped in synchronized output
+        let buffer = "\\x1b[?2026h"; // Begin synchronized output`;
 const here = dirname(fileURLToPath(import.meta.url));
 const BLOCK_FILE = join(here, "tui-bottom-pin.block.txt");
 
@@ -86,17 +95,25 @@ function main() {
 	const block = readFileSync(BLOCK_FILE, "utf8").replace(/\s*$/, "");
 
 	const idx = src.indexOf(ANCHOR);
-	if (idx === -1) {
+	const lineStart = idx === -1 ? -1 : src.lastIndexOf("\n", idx) + 1;
+	if (
+		idx === -1 ||
+		!src
+			.slice(Math.max(0, lineStart - BEFORE_ANCHOR.length), lineStart)
+			.endsWith(BEFORE_ANCHOR) ||
+		!src
+			.slice(lineStart, lineStart + 8 + AFTER_ANCHOR.length)
+			.startsWith(`        ${AFTER_ANCHOR}`)
+	) {
 		warn(
-			`anchor "${ANCHOR}" not found in ${tuiPath} — pi's renderer changed; ` +
-				`refresh scripts/patches/ for this pi version. Leaving file unpatched.`,
+			`expected renderer context around "${ANCHOR}" not found in ${tuiPath} — ` +
+				`pi's renderer changed; refresh scripts/patches/ for this version. Leaving file unpatched.`,
 		);
 		return; // non-fatal
 	}
 
 	// Insert the block (plus a blank separating line) immediately before the line
 	// that contains the anchor, preserving that line's leading indentation.
-	const lineStart = src.lastIndexOf("\n", idx) + 1;
 	const patched =
 		src.slice(0, lineStart) + block + "\n\n" + src.slice(lineStart);
 

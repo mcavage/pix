@@ -4,8 +4,11 @@
 // screen row of editor/powerbar/footer sentinels before and after a chat
 // shrink. Bottom block must NOT move on shrink.
 
-import { TUI, CURSOR_MARKER } from "/usr/local/share/npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.js";
+import { pathToFileURL } from "node:url";
 import { TerminalEmulator } from "./emulator.mjs";
+
+const tuiIndex = process.env.PI_TUI_INDEX ?? "/usr/local/share/npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.js";
+const { TUI, CURSOR_MARKER } = await import(pathToFileURL(tuiIndex).href);
 
 const COLUMNS = 80;
 const ROWS = 12; // visible height -> buffer (19 lines) is taller -> bottom-anchored
@@ -91,6 +94,7 @@ check(a.footer === ROWS - 1, `footer pinned to bottom row (${a.footer} === ${ROW
 check(a.powerbar === ROWS - 2 && a.editor === ROWS - 3, "editor/powerbar above footer, contiguous");
 
 // Frame B: SHRINK — chat reflows one line shorter (drop CHAT_07 from the middle)
+const fullBeforeB = tui.fullRedraws;
 src.lines = buildBuffer(chat(15, 7));
 tui.doRender();
 const b = measure(emu);
@@ -99,6 +103,11 @@ console.log("  bottom block rows:", b, "| viewportTop=", tui.previousViewportTop
 check(b.editor === a.editor, `EDITOR_ROW stayed put (before=${a.editor} after=${b.editor})`);
 check(b.powerbar === a.powerbar, `POWERBAR_ROW stayed put (before=${a.powerbar} after=${b.powerbar})`);
 check(b.footer === a.footer, `FOOTER_ROW stayed put (before=${a.footer} after=${b.footer})`);
+check(tui.fullRedraws === fullBeforeB + 1, "shrink rebuilt the terminal buffer once");
+check(
+	emu.lines.filter((line) => line.includes("CHAT_05")).length === 1,
+	"new viewport-top line has one physical copy (no duplicate left in scrollback)",
+);
 
 // Frame C: GROW back — chat returns to 15 lines (no regression, no spurious clear)
 const fullBefore = tui.fullRedraws;
