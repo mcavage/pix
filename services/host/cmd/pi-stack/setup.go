@@ -252,9 +252,11 @@ func shellQuoteArg(s string) string {
 }
 
 // setupHostPhase does the deterministic host configuration and reports what is
-// (and is not) ready. The only interactive step is pasting op:// refs for
-// providers missing one (TTY + op installed); with flags OR no TTY it is fully
-// non-interactive (the CI path).
+// (and is not) ready. The interactive steps are pasting op:// refs for
+// providers missing one, and (AC-06) an optional default-No offer to pull any
+// missing local Ollama model (TTY + op installed); with flags OR no TTY it is
+// fully non-interactive (the CI path) and never downloads unless
+// --pull-models forced it.
 // setupInteractivePrompts decides whether setup's key-collection/overwrite
 // prompts fire: a real TTY, unless the caller explicitly opted out with
 // --yes/-y/--non-interactive. Deliberately does NOT take the parsed flag list
@@ -275,6 +277,12 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
+
+	// --pull-models is a SETUP-only flag (forces missing local-model pulls
+	// without a prompt, for CI) with no meaning to `pi-stack onboard` — strip it
+	// before the shared onboard flag parser ever sees it, mirroring how
+	// runSetupCmd already strips its OWN --replace before building hostArgs.
+	pullModels, flags := extractPullModelsFlag(flags)
 
 	opts, perr := parseOnboardArgs(flags)
 	if perr != nil {
@@ -357,6 +365,15 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 			fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pi-stack mcp register)\n", err)
 		}
 	}
+
+	// AC-06/07: always name configured watcher/embed/bridge Ollama model
+	// readiness before handoff, using the SAME shared probe+vocabulary doctor's
+	// Ollama group uses (modelreadiness.go) — never gated on whether the memory
+	// SERVICE is enabled (that would be service-membership operational
+	// readiness, which setup deliberately does not call). Interactive TTY offers
+	// a default-No pull; non-interactive/--yes never downloads unless
+	// --pull-models forced it.
+	setupModelReceipt(env, out, in, cfg, interactive, pullModels)
 
 	// Identity: read it from the HOST's git config (the sandbox can't see
 	// ~/.gitconfig) and seed it so onboarding can greet by name. The generated
@@ -769,6 +786,9 @@ Setup flags:
   --replace                recreate an existing sandbox for DIR (sbx rm -f +
                            create) so it picks up current pack/MCP/skills and
                            receives the guided tour; harmless when absent
+  --pull-models            force-pull any missing watcher/embed/bridge Ollama
+                           model without prompting (CI-safe); a bare --yes
+                           alone NEVER downloads
 
 Host-config flags (all optional):
   --account <email>        set the Google Workspace (gog) account + enable gog
@@ -782,3 +802,154 @@ Host-config flags (all optional):
 
 For scripted host config with NO agent handoff, use ` + "`pi-stack onboard`" + ` instead.
 `
+
+// extractPullModelsFlag pulls --pull-models out of flags BEFORE they reach
+// parseOnboardArgs: it forces missing local-model pulls without a prompt (for
+// CI) and has no meaning to `pi-stack onboard`, so it is never routed through
+// the shared onboard flag parser — the same reason runSetupCmd strips its own
+// --replace before assembling hostArgs. A bare token, no value: there is
+// nothing ambiguous to reject.
+func extractPullModelsFlag(flags []string) (pull bool, rest []string) {
+	for _, f := range flags {
+		if f == "--pull-models" {
+			pull = true
+			continue
+		}
+		rest = append(rest, f)
+	}
+	return pull, rest
+}
+
+// setupModelReceipt is setup's AC-06/07 final local-model readiness receipt:
+// it names watcher/embed/bridge readiness from ONE shared probeOllama call
+// (never gated on cfg.Services membership — AC-07, that is a different,
+// operational question setup does not ask), then handles exactly one of three
+// mutually exclusive pull modes:
+//
+//   - forcePull (--pull-models): pulls every distinct missing tag now, no
+//     prompt — the CI-safe forced path.
+//   - interactive (TTY, no --yes): offers a default-No pull, explaining which
+//     roles depend on each tag and that pulling can be a large download
+//     (no invented size — the code does not know one). Declining, or any
+//     non-"yes" answer, prints the exact deferred commands instead.
+//   - otherwise (non-interactive / --yes, no --pull-models): NEVER downloads;
+//     prints the exact deferred `ollama pull <tag>` command per missing tag.
+//
+// A pull failure is receipted clearly and setup CONTINUES — it never claims
+// success for a model that didn't pull, and never aborts setup over it.
+func setupModelReceipt(env shellEnv, out io.Writer, in io.Reader, cfg *config.Config, interactive, forcePull bool) {
+	p := probeOllama(env)
+	readinesses := []ModelReadiness{
+		modelReadiness("watcher", cfg.MemoryWatcherModel, "fact capture (memory watcher)", p, RequirementUnconfiguredOptional),
+		modelReadiness("embed", cfg.MemoryEmbedModel, "semantic recall (memory embed)", p, RequirementUnconfiguredOptional),
+		modelReadiness("bridge", cfg.OllamaBridgeModel, "in-sandbox local chat model (ollama-bridge)", p, RequirementUnconfiguredOptional),
+	}
+
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Local models (Ollama):")
+	for _, m := range readinesses {
+		fmt.Fprintf(out, "  %s %-8s %-20s %s\n", glyph(modelReadinessGlyphState(m.Evidence)), m.Role, m.Model, modelReadinessDetail(m))
+	}
+
+	if !p.installed {
+		fmt.Fprintln(out, "  install ollama to enable local models: https://ollama.com")
+		return
+	}
+
+	missing := computeMissingModels(readinesses)
+	if len(missing) == 0 {
+		return
+	}
+
+	switch {
+	case forcePull:
+		pullMissingModels(env, out, missing)
+	case interactive:
+		fmt.Fprintln(out, "")
+		fmt.Fprintf(out, "%s missing: %s\n", plural(len(missing), "model"), describeMissingModels(missing))
+		fmt.Fprintln(out, "These are optional — they back memory's fact capture/semantic recall and the")
+		fmt.Fprintln(out, "in-sandbox local chat bridge. Pulling downloads the model now; depending on")
+		fmt.Fprintln(out, "the model this can be a large download (easily multiple GB) and take a")
+		fmt.Fprintln(out, "while. Declining leaves the exact command(s) below to run whenever you like.")
+		if confirmYN(in, out, "Pull missing model(s) now? [y/N]: ", false) {
+			pullMissingModels(env, out, missing)
+		} else {
+			printDeferredPulls(out, missing)
+		}
+	default:
+		printDeferredPulls(out, missing)
+	}
+}
+
+// modelReadinessGlyphState maps a shared Evidence to the doctor glyph vocabulary
+// (✓/✗/⚠) so setup's receipt renders with the exact same symbols doctor uses
+// for the exact same evidence — one shared vocabulary, not a second one.
+func modelReadinessGlyphState(ev Evidence) checkState {
+	switch ev {
+	case EvidenceHealthy:
+		return stateOK
+	case EvidenceUnverifiable:
+		return stateWarn
+	case EvidenceNotConfigured:
+		return stateInfo
+	default: // EvidenceFailed
+		return stateTODO
+	}
+}
+
+// modelReadinessDetail renders one ModelReadiness's human-readable detail,
+// mirroring doctor's modelCheck wording so the two receipts never describe
+// the same state differently.
+func modelReadinessDetail(m ModelReadiness) string {
+	switch m.Evidence {
+	case EvidenceHealthy:
+		return "pulled — " + m.Purpose
+	case EvidenceNotConfigured:
+		return m.Purpose + " — needs ollama installed"
+	case EvidenceUnverifiable:
+		return m.Purpose + " — could not verify (ollama list unavailable)"
+	default: // EvidenceFailed
+		return m.Purpose + " — not pulled"
+	}
+}
+
+// describeMissingModels renders "tag (role+role), tag (role)" for the pull
+// prompt, so the operator sees exactly which roles a download serves before
+// deciding.
+func describeMissingModels(missing []missingModel) string {
+	parts := make([]string, len(missing))
+	for i, m := range missing {
+		parts[i] = fmt.Sprintf("%s (%s)", m.tag, strings.Join(m.roles, "+"))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// printDeferredPulls prints the exact copy-pasteable `ollama pull <tag>`
+// command for each distinct missing tag — the non-interactive/--yes default
+// and the interactive decline path both land here, so pi-stack never invents
+// a second phrasing for "here's what you'd run".
+func printDeferredPulls(out io.Writer, missing []missingModel) {
+	fmt.Fprintln(out, "Not pulled automatically. Run when ready:")
+	for _, m := range missing {
+		fmt.Fprintf(out, "  ollama pull %s   # %s\n", m.tag, strings.Join(m.roles, "+"))
+	}
+}
+
+// pullMissingModels pulls each distinct missing tag ONCE (already deduped by
+// computeMissingModels, so qwen3.5:9b backing both watcher and bridge is only
+// pulled once) and receipts each outcome. A failure is reported clearly and
+// does NOT stop the loop or fail setup — pulls are optional, per AC-06.
+func pullMissingModels(env shellEnv, out io.Writer, missing []missingModel) {
+	for _, m := range missing {
+		fmt.Fprintf(out, "  pulling %s (%s)...\n", m.tag, strings.Join(m.roles, "+"))
+		if env.run == nil {
+			fmt.Fprintf(out, "  \u2717 %s: no runner available — pull it manually: ollama pull %s\n", m.tag, m.tag)
+			continue
+		}
+		if _, err := env.run("ollama", "pull", m.tag); err != nil {
+			fmt.Fprintf(out, "  \u2717 %s: pull failed: %v — continuing; run `ollama pull %s` manually later\n", m.tag, err, m.tag)
+			continue
+		}
+		fmt.Fprintf(out, "  \u2713 %s: pulled\n", m.tag)
+	}
+}

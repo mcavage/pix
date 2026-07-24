@@ -307,19 +307,20 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	if memoryEnabled {
 		ollamaReq = RequirementConfiguredOptional
 	}
+	// probeOllama runs lookPath + a daemon dial + `ollama list` exactly ONCE
+	// (modelreadiness.go); the watcher/embed checks below derive from this same
+	// probe rather than each re-execing `ollama list`.
 	ollama := group{title: "Ollama / local models (optional: fact capture + semantic recall)"}
-	ollamaInstalled := false
-	if _, err := env.lookPath("ollama"); err == nil {
-		ollamaInstalled = true
-		up := env.dial(11434)
+	p := probeOllama(env)
+	if p.installed {
 		ev := EvidenceHealthy
-		if !up {
+		if !p.daemonUp {
 			ev = EvidenceFailed
 		}
 		ollama.checks = append(ollama.checks, check{
 			label:       "ollama",
 			state:       stateOK,
-			detail:      "installed, :11434 " + upDown(up),
+			detail:      "installed, :11434 " + upDown(p.daemonUp),
 			requirement: ollamaReq,
 			evidence:    ev,
 		})
@@ -333,16 +334,9 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 			evidence:    EvidenceNotConfigured,
 		})
 	}
-	// List models once, reuse for both watcher + embed.
-	modelOut, modelOK := "", false
-	if ollamaInstalled {
-		if out, err := env.run("ollama", "list"); err == nil {
-			modelOut, modelOK = out, true
-		}
-	}
 	ollama.checks = append(ollama.checks,
-		modelCheck("watcher", cfg.MemoryWatcherModel, "fact capture", ollamaInstalled, modelOut, modelOK, ollamaReq),
-		modelCheck("embed", cfg.MemoryEmbedModel, "semantic recall", ollamaInstalled, modelOut, modelOK, ollamaReq),
+		modelCheck(modelReadiness("watcher", cfg.MemoryWatcherModel, "fact capture", p, ollamaReq)),
+		modelCheck(modelReadiness("embed", cfg.MemoryEmbedModel, "semantic recall", p, ollamaReq)),
 	)
 	r.groups = append(r.groups, ollama)
 
@@ -431,20 +425,28 @@ func secretCheck(label, key, sbxOut string, sbxOK bool, req Requirement) check {
 		requirement: req, evidence: EvidenceFailed}
 }
 
-// modelCheck reports whether an ollama model is pulled.
-func modelCheck(role, model, purpose string, ollamaInstalled bool, listOut string, listOK bool, req Requirement) check {
-	label := "  " + role
-	detail := purpose + " [" + model + "]"
-	cmd := "ollama pull " + model
-	if !ollamaInstalled {
-		return check{label: label, state: stateTODO, detail: detail + " — needs ollama", todo: cmd,
-			requirement: req, evidence: EvidenceNotConfigured}
+// modelCheck renders a shared ModelReadiness (modelreadiness.go) as a doctor
+// check. healthy/not-configured/failed keep the EXACT wording doctor has
+// always used (U1 regression guard); unverifiable (ollama installed but
+// `ollama list` itself could not be confirmed) is new: it renders as stateWarn
+// with NO todo, same convention as every other unverifiable check (AC-01) —
+// doctor must never claim a confirmed "not pulled" it didn't actually see.
+func modelCheck(m ModelReadiness) check {
+	label := "  " + m.Role
+	detail := m.Purpose + " [" + m.Model + "]"
+	switch m.Evidence {
+	case EvidenceHealthy:
+		return check{label: label, state: stateOK, detail: "pulled — " + detail, requirement: m.Requirement, evidence: m.Evidence}
+	case EvidenceNotConfigured:
+		return check{label: label, state: stateTODO, detail: detail + " — needs ollama", todo: m.PullCmd,
+			requirement: m.Requirement, evidence: m.Evidence}
+	case EvidenceUnverifiable:
+		return check{label: label, state: stateWarn, detail: detail + " — could not verify (ollama list unavailable)",
+			requirement: m.Requirement, evidence: m.Evidence}
+	default: // EvidenceFailed
+		return check{label: label, state: stateTODO, detail: detail + " — not pulled", todo: m.PullCmd,
+			requirement: m.Requirement, evidence: m.Evidence}
 	}
-	if listOK && modelPulled(listOut, model) {
-		return check{label: label, state: stateOK, detail: "pulled — " + detail, requirement: req, evidence: EvidenceHealthy}
-	}
-	return check{label: label, state: stateTODO, detail: detail + " — not pulled", todo: cmd,
-		requirement: req, evidence: EvidenceFailed}
 }
 
 // serviceCheck reports a host service's port state. A down service that is in

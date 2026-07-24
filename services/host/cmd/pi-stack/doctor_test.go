@@ -219,6 +219,51 @@ func TestDoctor_PartialModels(t *testing.T) {
 	}
 }
 
+// TestDoctor_OllamaListFails_Unverifiable: ollama is on PATH but `ollama
+// list` itself errors (e.g. daemon unreachable) -> the watcher/embed model
+// checks must render UNVERIFIABLE (stateWarn, no TODO), not a confirmed
+// "not pulled" failure — doctor doesn't actually know either way.
+func TestDoctor_OllamaListFails_Unverifiable(t *testing.T) {
+	f := gogConfirmed(fakeEnv{
+		present: map[string]bool{"sbx": true, "ollama": true},
+		output: map[string]string{
+			"sbx secret ls": "anthropic openai google github",
+			"sbx mcp ls":    "gog\n",
+			// deliberately no "ollama list" fixture -> env.run errors for it.
+		},
+		ports: map[int]bool{11435: true},
+	})
+	r := runDoctor(defaultCfg(), f.env())
+	var ollama group
+	for _, g := range r.groups {
+		if strings.HasPrefix(g.title, "Ollama") {
+			ollama = g
+		}
+	}
+	var sawUnverifiable int
+	for _, c := range ollama.checks {
+		if c.label == "  watcher" || c.label == "  embed" {
+			if c.evidence != EvidenceUnverifiable {
+				t.Errorf("%s: evidence = %q, want unverifiable", c.label, c.evidence)
+			}
+			if c.state != stateWarn {
+				t.Errorf("%s: state = %v, want stateWarn", c.label, c.state)
+			}
+			if c.todo != "" {
+				t.Errorf("%s: unverifiable must not carry a TODO, got %q", c.label, c.todo)
+			}
+			sawUnverifiable++
+		}
+	}
+	if sawUnverifiable != 2 {
+		t.Fatalf("expected watcher+embed both unverifiable, group=%+v", ollama)
+	}
+	// Unverifiable never blocks doctor's exit code (AC-05).
+	if r.blocking() {
+		t.Error("unverifiable model checks must never make doctor exit 1")
+	}
+}
+
 // TestDoctor_GogHeadlessTrap is THE footgun: interactive `gog auth doctor`
 // passes but the gateway-equivalent headless op-run probe returns 0 tools. The
 // account check must stay green while a distinct "headless spawn" TODO names the
