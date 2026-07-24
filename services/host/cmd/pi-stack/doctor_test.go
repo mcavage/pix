@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -144,7 +146,7 @@ func TestDoctor_AllGreen(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, nil
-	r.render(&buf)
+	r.render(&buf, true)
 	out := buf.String()
 	if !strings.Contains(out, "all checks pass") {
 		t.Errorf("expected all-pass verdict, got:\n%s", out)
@@ -185,7 +187,7 @@ func TestDoctor_SbxAbsent(t *testing.T) {
 
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, nil
-	r.render(&buf)
+	r.render(&buf, true)
 	out := buf.String()
 	if !strings.Contains(out, "outstanding") {
 		t.Errorf("expected outstanding verdict, got:\n%s", out)
@@ -278,7 +280,7 @@ func TestDoctor_GogAccountUnset(t *testing.T) {
 	// detail and stays a TODO (not stateOK).
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, nil
-	r.render(&buf)
+	r.render(&buf, true)
 	if !strings.Contains(buf.String(), "cannot verify (gog_account unset in config.toml/env)") {
 		t.Errorf("expected a 'cannot verify' account detail, got:\n%s", buf.String())
 	}
@@ -325,13 +327,18 @@ func TestDoctor_GogTransparency(t *testing.T) {
 	r := runDoctor(defaultCfg(), f.env())
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, []string{"gog"}
-	r.render(&buf)
+	r.render(&buf, true)
 	out := buf.String()
 	if !strings.Contains(out, "verifying") || !strings.Contains(out, gogAcct) || !strings.Contains(out, gogOpRefs) {
 		t.Errorf("expected a transparency line naming account+op-refs, got:\n%s", out)
 	}
-	if !strings.Contains(out, "must match your `make mcp-register`") {
+	// AC-03: no more `make mcp-register` language — name the sbx registration
+	// itself instead of a specific make target.
+	if !strings.Contains(out, "must match the sbx-registered gog command") {
 		t.Errorf("expected the must-match note, got:\n%s", out)
+	}
+	if strings.Contains(out, "make mcp-register") {
+		t.Errorf("doctor output must not mention the stale `make mcp-register`, got:\n%s", out)
 	}
 	// The fallback (sbx exposes no registered command) must be labeled best-effort
 	// so a pass can't masquerade as a confirmed registration. Here sbx IS present
@@ -386,7 +393,7 @@ func TestDoctor_SbxPresentMcpListFailed(t *testing.T) {
 	// "register on the host".
 	var buf bytes.Buffer
 	r.services, r.mcp = cfg.Services, cfg.MCP
-	r.render(&buf)
+	r.render(&buf, true)
 	out := buf.String()
 	if !strings.Contains(out, "sbx mcp status") && !strings.Contains(out, "sbx daemon") {
 		t.Errorf("expected sbx daemon/gateway guidance, got:\n%s", out)
@@ -550,12 +557,14 @@ func TestDoctor_GogRegisteredCommand(t *testing.T) {
 	}
 }
 
-// TestDoctor_GogFallbackUnconfirmedIsTODO: sbx lists gog but `get` is
+// TestDoctor_GogFallbackUnconfirmedIsWarn is AC-01: sbx lists gog but `get` is
 // partial/unsupported (command with no op-run tail) and `ls -o json` is
-// unparseable, so doctor CANNOT confirm the registered command. Even though the
-// reconstructed best-effort probe would pass (gogGreen), the gog headless result
-// MUST be a TODO (verdict NOT all-clear), never a silent green.
-func TestDoctor_GogFallbackUnconfirmedIsTODO(t *testing.T) {
+// unparseable, so doctor CANNOT confirm the registered command. The
+// reconstructed best-effort probe DOES pass (gogGreen) — that is a best-effort
+// SUCCESS with unreadable sbx registration arguments, which must render as
+// unverifiable/warning (⚠), carry NO todo, and never render as ✗. It also must
+// not block the exit code (it is gog — optional either way).
+func TestDoctor_GogFallbackUnconfirmedIsWarn(t *testing.T) {
 	f := gogGreen(fakeEnv{
 		present: map[string]bool{"sbx": true, "ollama": true},
 		output: map[string]string{
@@ -568,32 +577,48 @@ func TestDoctor_GogFallbackUnconfirmedIsTODO(t *testing.T) {
 		ports: map[int]bool{11434: true, 11435: true},
 	})
 	r := runDoctor(defaultCfg(), f.env())
-	// The headless spawn must be a TODO whose detail says it could not confirm.
-	var headTODO bool
+	// The headless spawn must be a WARN with no todo, evidence unverifiable, and
+	// a requirement that is never core (gog stays optional).
+	var headWarn *check
 	for _, g := range r.groups {
 		if !strings.HasPrefix(g.title, "gog") {
 			continue
 		}
-		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state == stateTODO &&
-				strings.Contains(c.detail, "could not confirm the sbx-registered command") {
-				headTODO = true
+		for i := range g.checks {
+			if g.checks[i].label == "headless spawn" {
+				headWarn = &g.checks[i]
 			}
 		}
 	}
-	if !headTODO {
-		t.Fatalf("expected an unconfirmed-fallback headless TODO, groups=%+v", r.groups)
+	if headWarn == nil {
+		t.Fatalf("expected a headless spawn check, groups=%+v", r.groups)
 	}
-	// Verdict must NOT be all-clear.
+	if headWarn.state != stateWarn {
+		t.Errorf("expected stateWarn (never ✗), got state=%v detail=%q", headWarn.state, headWarn.detail)
+	}
+	if headWarn.todo != "" {
+		t.Errorf("a best-effort-success/unconfirmed result must carry no TODO, got %q", headWarn.todo)
+	}
+	if headWarn.evidence != EvidenceUnverifiable {
+		t.Errorf("expected EvidenceUnverifiable, got %v", headWarn.evidence)
+	}
+	if headWarn.requirement == RequirementCore {
+		t.Errorf("gog must never be core")
+	}
+	// Rendered output must show the warning glyph, never ✗, for this check.
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, []string{"gog"}
-	r.render(&buf)
+	r.render(&buf, true)
 	out := buf.String()
-	if strings.Contains(out, "all checks pass") {
-		t.Errorf("unconfirmed fallback must not report all-clear, got:\n%s", out)
+	if !strings.Contains(out, "⚠ headless spawn") {
+		t.Errorf("expected a ⚠ glyph on headless spawn, got:\n%s", out)
 	}
-	if !strings.Contains(out, "TODO: confirm the registered gog command") {
-		t.Errorf("expected a copy-pasteable confirm-command TODO, got:\n%s", out)
+	if strings.Contains(out, "confirm the registered gog command") {
+		t.Errorf("unconfirmed-but-successful best-effort must carry no fix-it TODO, got:\n%s", out)
+	}
+	// It must never block the exit code.
+	if r.blocking() {
+		t.Errorf("an unverifiable optional gog check must never block")
 	}
 }
 
@@ -1110,5 +1135,238 @@ func TestDoctor_SecretsGroup_LintNoLeak(t *testing.T) {
 	}
 	if !flagged {
 		t.Errorf("a pasted secret should be flagged, got %+v", g.checks)
+	}
+}
+
+// TestDoctorCmd_UsageErrorExitsTwo covers AC-05's third leg: an unrecognized
+// flag is a usage error, exit 2, regardless of anything else.
+func TestDoctorCmd_UsageErrorExitsTwo(t *testing.T) {
+	if os.Getenv("PI_STACK_DOCTOR_HELPER") == "1" {
+		runDoctorCmd([]string{"--bogus"})
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run", "TestDoctorCmd_UsageErrorExitsTwo")
+	cmd.Env = append(os.Environ(), "PI_STACK_DOCTOR_HELPER=1")
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("expected an ExitError, got %v", err)
+	}
+	if ee.ExitCode() != 2 {
+		t.Errorf("doctor --bogus exit code = %d, want 2", ee.ExitCode())
+	}
+}
+
+// TestDoctorCmd_SandboxWithoutSbxExitsZero is the literal AC-05 sandbox case:
+// running with NOTHING configured and sbx entirely absent from PATH (the real
+// in-sandbox condition) must still exit 0 — every provider check is
+// unverifiable, never a verified failure, so nothing blocks. This drives the
+// REAL runDoctorCmd end-to-end (defaultShellEnv, a from-scratch config path),
+// not a faked shellEnv, so it proves the wiring, not just the unit logic.
+func TestDoctorCmd_SandboxWithoutSbxExitsZero(t *testing.T) {
+	if os.Getenv("PI_STACK_DOCTOR_HELPER") == "1" {
+		runDoctorCmd(nil)
+		return
+	}
+	dir := t.TempDir()
+	// A PATH with no sbx/ollama on it, mirroring the in-sandbox condition.
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run", "TestDoctorCmd_SandboxWithoutSbxExitsZero")
+	cmd.Env = append(os.Environ(),
+		"PI_STACK_DOCTOR_HELPER=1",
+		"PI_STACK_CONFIG="+filepath.Join(dir, "config.toml"),
+		"HOME="+dir,
+		"PATH="+binDir,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("expected exit 0 (sandbox-without-sbx never blocks), got err=%v output:\n%s", err, out)
+	}
+}
+
+// TestDoctorCmd_VerifiedCoreFailureExitsOne is the other half of AC-05: sbx IS
+// present and `sbx secret ls` succeeds but is CONFIRMED missing a core
+// provider key (anthropic) — a verified core failure — so the real
+// runDoctorCmd (defaultShellEnv, no faking) must exit 1.
+func TestDoctorCmd_VerifiedCoreFailureExitsOne(t *testing.T) {
+	if os.Getenv("PI_STACK_DOCTOR_HELPER") == "1" {
+		runDoctorCmd(nil)
+		return
+	}
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A fake `sbx` on PATH: `secret ls` reports openai/google/github but NOT
+	// anthropic (a confirmed, verified core-key gap); `mcp ls` succeeds empty.
+	fakeSbx := "#!/bin/sh\n" +
+		"if [ \"$1\" = secret ] && [ \"$2\" = ls ]; then echo openai; echo google; echo github; exit 0; fi\n" +
+		"if [ \"$1\" = mcp ] && [ \"$2\" = ls ]; then exit 0; fi\n" +
+		"exit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "sbx"), []byte(fakeSbx), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run", "TestDoctorCmd_VerifiedCoreFailureExitsOne")
+	cmd.Env = append(os.Environ(),
+		"PI_STACK_DOCTOR_HELPER=1",
+		"PI_STACK_CONFIG="+filepath.Join(dir, "config.toml"),
+		"HOME="+dir,
+		"PATH="+binDir,
+	)
+	out, err := cmd.CombinedOutput()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("expected an ExitError (verified core failure -> exit 1), got err=%v output:\n%s", err, out)
+	}
+	if ee.ExitCode() != 1 {
+		t.Errorf("exit code = %d, want 1; output:\n%s", ee.ExitCode(), out)
+	}
+}
+
+// TestDoctor_MCPGroupOmittedWhenOnlyGogConfigured covers AC-02: with
+// cfg.MCP=[gog] the report must never render "(none configured)" for the
+// generic MCP section, and must not carry a group whose only content is that
+// misleading label.
+func TestDoctor_MCPGroupOmittedWhenOnlyGogConfigured(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.MCP = []string{"gog"}
+	f := gogGreen(fakeEnv{
+		present: map[string]bool{"sbx": true},
+		output: map[string]string{
+			"sbx secret ls": "anthropic openai google github",
+			"sbx mcp ls":    "gog\n",
+		},
+		ports: map[int]bool{11435: true},
+	})
+	r := runDoctor(cfg, f.env())
+	var buf bytes.Buffer
+	r.services, r.mcp = cfg.Services, cfg.MCP
+	r.render(&buf, true)
+	out := buf.String()
+	if strings.Contains(out, "(none configured)") {
+		t.Errorf("doctor must never render '(none configured)' when gog is configured, got:\n%s", out)
+	}
+	for _, g := range r.groups {
+		if strings.HasPrefix(g.title, "Other MCP servers") {
+			t.Errorf("the other-MCP-servers group should be omitted when only gog is configured, got group %+v", g)
+		}
+	}
+}
+
+// TestDoctor_MCPGroupNeverSaysNoneConfigured: even with NO MCP servers at all,
+// the generic section must still avoid the literal "(none configured)" phrase.
+func TestDoctor_MCPGroupNeverSaysNoneConfigured(t *testing.T) {
+	r := runDoctor(defaultCfg(), fakeEnv{present: map[string]bool{}}.env())
+	var buf bytes.Buffer
+	r.services, r.mcp = defaultCfg().Services, nil
+	r.render(&buf, true)
+	if strings.Contains(buf.String(), "(none configured)") {
+		t.Errorf("doctor must never render the literal '(none configured)', got:\n%s", buf.String())
+	}
+}
+
+// TestDoctor_NoMakeMcpRegisterLanguage covers AC-03: doctor's rendered output
+// must never mention the stale `make mcp-register` target, and gog's
+// "attached" line must describe registered/dynamically-discoverable state
+// rather than the old "auto-attached on run (--mcp gog)" wording.
+func TestDoctor_NoMakeMcpRegisterLanguage(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.MCP = []string{"gog"}
+	r := runDoctor(cfg, gogConfirmed(fakeEnv{
+		present: map[string]bool{"sbx": true},
+		output: map[string]string{
+			"sbx secret ls": "anthropic openai google github",
+			"sbx mcp ls":    "gog\n",
+		},
+		ports: map[int]bool{11435: true},
+	}).env())
+	var buf bytes.Buffer
+	r.services, r.mcp = cfg.Services, cfg.MCP
+	r.render(&buf, true)
+	out := buf.String()
+	if strings.Contains(out, "make mcp-register") {
+		t.Errorf("doctor output must not mention `make mcp-register`, got:\n%s", out)
+	}
+	if strings.Contains(out, "auto-attached on run") {
+		t.Errorf("doctor output must not use the stale auto-attached wording, got:\n%s", out)
+	}
+	if !strings.Contains(out, "registered; dynamically discoverable") {
+		t.Errorf("expected gog's attach state described as registered/dynamically discoverable, got:\n%s", out)
+	}
+}
+
+// TestDoctor_VerboseVsConcise covers the --verbose contract: default (concise)
+// collapses a healthy group to one summary line; verbose keeps full detail.
+func TestDoctor_VerboseVsConcise(t *testing.T) {
+	f := gogConfirmed(fakeEnv{
+		present: map[string]bool{"sbx": true, "ollama": true},
+		output: map[string]string{
+			"sbx secret ls": "anthropic\nopenai\ngoogle\ngithub\n",
+			"ollama list":   "NAME\ngemma4:latest\nnomic-embed-text:latest\n",
+			"sbx mcp ls":    "gog\n",
+		},
+		ports: map[int]bool{11434: true, 11435: true},
+	})
+	r := runDoctor(defaultCfg(), f.env())
+	r.services, r.mcp = defaultCfg().Services, nil
+
+	var concise bytes.Buffer
+	r.render(&concise, false)
+	if strings.Contains(concise.String(), "pulled — fact capture") {
+		t.Errorf("concise output should collapse healthy model detail, got:\n%s", concise.String())
+	}
+	if !strings.Contains(concise.String(), "all checks pass") {
+		t.Errorf("expected the all-pass verdict in concise mode, got:\n%s", concise.String())
+	}
+
+	var verbose bytes.Buffer
+	r.render(&verbose, true)
+	if !strings.Contains(verbose.String(), "pulled — fact capture") {
+		t.Errorf("verbose output should retain the healthy model detail, got:\n%s", verbose.String())
+	}
+}
+
+// TestDoctor_JSONSchemaVersionAndReadinessFields covers AC-04: the JSON view
+// keeps every existing top-level field, adds schema_version, and every check
+// carries requirement + evidence.
+func TestDoctor_JSONSchemaVersionAndReadinessFields(t *testing.T) {
+	f := fakeEnv{present: map[string]bool{}}
+	cfg := defaultCfg()
+	r := runDoctor(cfg, f.env())
+	r.services, r.mcp = cfg.Services, cfg.MCP
+	v := r.jsonView("default")
+
+	if v.SchemaVersion == 0 {
+		t.Errorf("expected a non-zero schema_version")
+	}
+	// Pre-existing v1 fields must still be present/populated (compatibility).
+	if v.Verdict == "" || v.Profile != "default" || v.Services == nil {
+		t.Errorf("v1 fields must be preserved: %+v", v)
+	}
+	sawCore, sawOptional := false, false
+	for _, g := range v.Groups {
+		for _, c := range g.Checks {
+			if c.Requirement == "" || c.Evidence == "" {
+				t.Errorf("check %q missing requirement/evidence: %+v", c.Label, c)
+			}
+			switch Requirement(c.Requirement) {
+			case RequirementCore:
+				sawCore = true
+			case RequirementConfiguredOptional, RequirementUnconfiguredOptional:
+				sawOptional = true
+			default:
+				t.Errorf("check %q has unknown requirement %q", c.Label, c.Requirement)
+			}
+		}
+	}
+	if !sawCore {
+		t.Error("expected at least one core-requirement check (provider keys)")
+	}
+	if !sawOptional {
+		t.Error("expected at least one optional-requirement check")
 	}
 }

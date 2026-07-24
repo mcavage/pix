@@ -375,7 +375,7 @@ func onboardReportReadiness(env shellEnv, out io.Writer) {
 	if sbxOK {
 		anyKey := false
 		for _, key := range []string{"anthropic", "openai", "google"} {
-			if secretCheck(key, key, sbxOut, sbxOK).state == stateOK {
+			if secretCheck(key, key, sbxOut, sbxOK, RequirementCore).state == stateOK {
 				anyKey = true
 			}
 		}

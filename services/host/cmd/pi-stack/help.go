@@ -259,13 +259,19 @@ flags:
   --json   emit the machine-readable status snapshot
 `
 
-const doctorUsage = `usage: pi-stack doctor [--json]
+const doctorUsage = `usage: pi-stack doctor [--json] [--verbose]
 
 Diagnose host + sandbox health (provider keys, ollama/models, memory, gog, mcp),
-leading with a one-line verdict and copy-pasteable TODO commands.
+leading with a one-line verdict and copy-pasteable TODO commands. Default output
+is concise: healthy checks collapse to one summary line per group.
+
+Exits 1 only on a VERIFIED core failure (e.g. a provider key confirmed unset);
+unverifiable checks (including running inside the sandbox with sbx absent) and
+any optional gap always exit 0. A usage error exits 2.
 
 flags:
-  --json   emit the machine-readable report
+  --json      emit the machine-readable report
+  --verbose   show full per-check group detail instead of the concise summary
 `
 
 const configUsage = `usage: pi-stack config <show|path|get|set|unset> [args]
