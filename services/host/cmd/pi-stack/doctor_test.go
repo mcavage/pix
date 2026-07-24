@@ -25,6 +25,17 @@ type fakeEnv struct {
 	files    map[string]string      // file contents (for readFile)
 	modes    map[string]os.FileMode // path -> mode bits (for fileMode)
 	home     string                 // fake home dir
+	// hostBinary is the CANONICAL pi-stack-host path env.hostBinary() resolves
+	// to in this fixture — the hermetic stand-in for hostBinaryResolver
+	// (findHostBinary), which mcp.go registration ACTUALLY uses (R2-01). Empty
+	// means "unresolved": the trust gate must fail closed, never trust a
+	// registered pi-stack-host argv with no canonical answer to compare against.
+	hostBinary string
+	// symlinks maps a path to what filepath.EvalSymlinks would resolve it to,
+	// so a test can prove a symlinked-but-legitimate pi-stack-host install is
+	// still trusted. A path with no entry resolves to itself (the identity
+	// default filepath.EvalSymlinks gives a non-symlinked path).
+	symlinks map[string]string
 }
 
 func (f fakeEnv) env() shellEnv {
@@ -57,6 +68,18 @@ func (f fakeEnv) env() shellEnv {
 				return m, true
 			}
 			return 0, false
+		},
+		hostBinary: func() (string, error) {
+			if f.hostBinary == "" {
+				return "", fmt.Errorf("no fake pi-stack-host binary configured")
+			}
+			return f.hostBinary, nil
+		},
+		evalSymlinks: func(path string) (string, error) {
+			if r, ok := f.symlinks[path]; ok {
+				return r, nil
+			}
+			return path, nil
 		},
 	}
 }
@@ -940,7 +963,8 @@ func TestDoctor_MCPToolProbe(t *testing.T) {
 	cfg.MCP = []string{"slack"}
 	regCmd := "/usr/local/bin/pi-stack-host mcp slack"
 	f := gogGreen(fakeEnv{
-		present: map[string]bool{"sbx": true, "ollama": true},
+		present:    map[string]bool{"sbx": true, "ollama": true},
+		hostBinary: "/usr/local/bin/pi-stack-host",
 		output: map[string]string{
 			"sbx secret ls":          "anthropic openai google github",
 			"ollama list":            "gemma4:latest\nnomic-embed-text:latest\n",
@@ -970,7 +994,8 @@ func TestDoctor_MCPToolProbeZero(t *testing.T) {
 	cfg.MCP = []string{"slack"}
 	regCmd := "/usr/local/bin/pi-stack-host mcp slack"
 	f := gogGreen(fakeEnv{
-		present: map[string]bool{"sbx": true, "ollama": true},
+		present:    map[string]bool{"sbx": true, "ollama": true},
+		hostBinary: "/usr/local/bin/pi-stack-host",
 		output: map[string]string{
 			"sbx secret ls":          "anthropic openai google github",
 			"ollama list":            "gemma4:latest\nnomic-embed-text:latest\n",

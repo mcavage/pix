@@ -39,11 +39,21 @@ type shellEnv struct {
 	// only; defaultShellEnv wires the real resolver.
 	evalSymlinks func(path string) (string, error)
 	run          func(name string, args ...string) (string, error)
-	getenv       func(name string) string
-	dial         func(port int) bool
-	statFile     func(path string) bool            // does a regular file exist at path?
-	readFile     func(path string) (string, error) // read a file's contents
-	homeDir      func() string                     // the user's home directory ($HOME)
+	// hostBinary resolves the CANONICAL pi-stack-host binary path — the same
+	// injected/hermetic seam mcp.go registration actually uses
+	// (hostBinaryResolver/findHostBinary: sibling-to-launcher first, PATH
+	// fallback, never a bare name). recognizedMCPArgv's pi-stack-host trust
+	// gate (R2-01) compares a registered argv[0] against THIS answer rather
+	// than trusting an absolute path's basename alone — basename-only trust
+	// let a malicious `/tmp/malicious/pi-stack-host mcp slack` pass. Nil in
+	// tests that don't exercise the mcp probe path; defaultShellEnv wires
+	// hostBinaryResolver.
+	hostBinary func() (string, error)
+	getenv     func(name string) string
+	dial       func(port int) bool
+	statFile   func(path string) bool            // does a regular file exist at path?
+	readFile   func(path string) (string, error) // read a file's contents
+	homeDir    func() string                     // the user's home directory ($HOME)
 	// fileMode returns a path's mode bits + whether it exists (file OR dir). The
 	// Secrets group's perms check uses it to flag a group/other-accessible
 	// op-refs.env or its dir. Nil in tests that don't exercise perms.
@@ -126,6 +136,11 @@ func defaultShellEnv() shellEnv {
 	return shellEnv{
 		lookPath:     exec.LookPath,
 		evalSymlinks: filepath.EvalSymlinks,
+		// hostBinaryResolver (findHostBinary) is the SAME resolver mcp.go
+		// registration uses — wrapped in a closure (not bound directly) so a
+		// test that swaps the package var mid-run (pack_v2_trust_*_test.go) is
+		// still honored by any defaultShellEnv() created before the swap.
+		hostBinary: func() (string, error) { return hostBinaryResolver() },
 		run: func(name string, args ...string) (string, error) {
 			out, err := exec.Command(name, args...).CombinedOutput()
 			return string(out), err
@@ -807,10 +822,53 @@ func recognizedMCPArgv(env shellEnv, argv []string, name string) bool {
 	if len(cmd) < 3 {
 		return false
 	}
-	if !filepath.IsAbs(cmd[0]) || filepath.Base(cmd[0]) != "pi-stack-host" {
+	// R2-01: basename alone ("pi-stack-host") is NOT enough — an absolute path
+	// anywhere on disk with that basename (e.g. /tmp/malicious/pi-stack-host)
+	// satisfied the old check. Require the CANONICAL binary registration
+	// actually uses.
+	if !trustedHostBinaryExecPath(env, cmd[0]) {
 		return false
 	}
 	return cmd[1] == "mcp" && cmd[2] == name
+}
+
+// trustedHostBinaryExecPath is the R2-01 canonical-pi-stack-host gate: mcp.go
+// registration (registerServers/serverCmd) ALWAYS spawns the ABSOLUTE path
+// hostBinaryResolver (findHostBinary) resolves — sibling-to-launcher first,
+// PATH fallback — never a bare name. Trusting an absolute path's basename
+// alone let a malicious `/tmp/malicious/pi-stack-host mcp slack` registration
+// pass. env.hostBinary is the injected/hermetic trust seam mirroring
+// hostBinaryResolver so this compares against the SAME canonical answer the
+// real registration used, without doctor ever re-deriving install-path logic
+// of its own (a second, drifting implementation would be its own bug class).
+// tok must be absolute AND either byte-equal (cleaned) to the resolved
+// binary, or — when env.evalSymlinks is wired — resolve to the same real file
+// (a versioned-release symlink install). An unresolvable canonical answer
+// (env.hostBinary nil or erroring) fails CLOSED: never fall back to trusting
+// basename alone.
+func trustedHostBinaryExecPath(env shellEnv, tok string) bool {
+	if filepath.Base(tok) != "pi-stack-host" {
+		return false
+	}
+	if !filepath.IsAbs(tok) {
+		return false // never trust a bare/relative name for pi-stack-host
+	}
+	if env.hostBinary == nil {
+		return false
+	}
+	canonical, err := env.hostBinary()
+	if err != nil || canonical == "" || !filepath.IsAbs(canonical) {
+		return false
+	}
+	if filepath.Clean(tok) == filepath.Clean(canonical) {
+		return true
+	}
+	if env.evalSymlinks != nil {
+		r1, e1 := env.evalSymlinks(filepath.Clean(tok))
+		r2, e2 := env.evalSymlinks(filepath.Clean(canonical))
+		return e1 == nil && e2 == nil && r1 == r2
+	}
+	return false
 }
 
 // trustedExecPath is the R1-01 canonical-executable gate: a registered

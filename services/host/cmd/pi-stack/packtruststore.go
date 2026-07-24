@@ -186,14 +186,15 @@ type packTrustStore struct {
 // host, nothing accepted). Unreadable/unparsable → an ERROR, never a partial
 // decode: callers fail closed (the gate re-prompts; a strict host launch
 // refuses) rather than trusting half a store.
+//
+// R2-02: the read goes through readPackTrustStoreFile (packtruststore_unix.go /
+// packtruststore_other.go) rather than a Lstat-then-ReadFile pair here — the
+// old two-step check left a TOCTOU window where an attacker racing a symlink
+// in between the Lstat and the ReadFile could make this follow an arbitrary
+// file. On unix the open itself refuses via O_NOFOLLOW, closing the window
+// atomically; there is no separate check left to race.
 func loadPackTrustStore() (*packTrustStore, error) {
-	// Lstat-REFUSE a symlinked store file on READ too (write already does): a
-	// pack-trust.json symlinked at an attacker-readable/-writable file must
-	// never supply crafted acceptance records. Fail closed, never follow.
-	if fi, lerr := os.Lstat(packTrustStorePath()); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("%s is a symlink; refusing to read through it", packTrustStorePath())
-	}
-	b, err := os.ReadFile(packTrustStorePath())
+	b, err := readPackTrustStoreFile(packTrustStorePath())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &packTrustStore{Version: 1}, nil
@@ -211,6 +212,18 @@ func loadPackTrustStore() (*packTrustStore, error) {
 // writePackLockBytes): Lstat-REFUSE a symlinked destination, then a same-dir
 // temp + rename via atomicWriteInDir. The config dir is host-owned, but the
 // consistency costs nothing and the class fix stays uniform.
+//
+// R2-02 (proving, not just asserting, the save half is safe): the Lstat
+// check and the eventual os.Rename (inside atomicWriteInDir) are not one
+// atomic operation, but the class of attack the read-side TOCTOU enabled
+// (follow a symlink into an attacker-chosen file) cannot happen here even if
+// a symlink is raced in between the two: os.Rename REPLACES the destination
+// directory entry rather than opening/dereferencing it, so a symlink that
+// appears in the race window is simply clobbered by the incoming file, never
+// written through to its target. packTrustSaveRaceHook is the injectable seam
+// tests use to actually exercise that window (plant the symlink AFTER the
+// Lstat check has already run) rather than just take the argument on faith;
+// it is nil (a no-op) in production.
 func (s *packTrustStore) save() error {
 	dir := filepath.Dir(config.Path())
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -220,6 +233,9 @@ func (s *packTrustStore) save() error {
 	if fi, err := os.Lstat(dest); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%s is a symlink; refusing to write through it", dest)
 	}
+	if packTrustSaveRaceHook != nil {
+		packTrustSaveRaceHook(dest)
+	}
 	s.Version = 1
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
@@ -227,6 +243,14 @@ func (s *packTrustStore) save() error {
 	}
 	return atomicWriteInDir(dir, packTrustStoreName, append(b, '\n'), 0o644)
 }
+
+// packTrustSaveRaceHook, when non-nil, runs in save() immediately after the
+// symlink-refusal Lstat check and before the atomic write — the exact window
+// an attacker would need to race a symlink into place after the check saw a
+// clean (non-symlink) destination. Tests use it to PROVE atomicWriteInDir's
+// rename still never writes through a symlink introduced in that window;
+// nil (a no-op) always in production.
+var packTrustSaveRaceHook func(dest string)
 
 // trustKey resolves a pack's identity for trust-store lookup: launcher-recorded
 // clone provenance ("remote:<url>" — STABLE across commits, round-3 #5) when
