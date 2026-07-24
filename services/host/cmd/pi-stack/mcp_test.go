@@ -246,6 +246,39 @@ func TestRegisterServers_RemoteSkipped(t *testing.T) {
 	}
 }
 
+// TestRegisterServers_RemoteWithURLRegistered: a remote gateway-catalog name that
+// the pack carries a URL for (containers[name].RemoteURL set) is NOT skipped — it
+// is registered via `sbx mcp add <name> --url <url>`, with no --local and no
+// op-run wrapper. This is the pack-self-registers-remotes path; it fails if the
+// RemoteURL branch is dropped and opine/notion/etc. fall back to the skip line.
+func TestRegisterServers_RemoteWithURLRegistered(t *testing.T) {
+	f := fakeEnv{
+		present: map[string]bool{"op": true}, // no sbx -> would-run printed
+		output: map[string]string{
+			"/usr/bin/pi-stack-host mcp --list": "slack\n", // opine is NOT a local server
+		},
+		envVars:  map[string]string{"PI_STACK_CONFIG": "/fake/config/config.toml"},
+		statFile: map[string]bool{"/fake/config/op-refs.env": true},
+	}
+	cfg := defaultCfg()
+	cfg.MCP = []string{"opine"}
+	containers := map[string]packContainer{"opine": {RemoteURL: "https://app.tryopine.com/mcp"}}
+	var buf bytes.Buffer
+	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pi-stack-host", nil), containers); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "sbx mcp add opine --url https://app.tryopine.com/mcp") {
+		t.Errorf("expected opine registered via --url, got:\n%s", out)
+	}
+	if strings.Contains(out, "gateway-catalog server, not locally registered") {
+		t.Errorf("opine with a pack URL must NOT be skipped, got:\n%s", out)
+	}
+	if strings.Contains(out, "--local") || strings.Contains(out, "--command") {
+		t.Errorf("remote-url server must not use --local/--command, got:\n%s", out)
+	}
+}
+
 // TestRegisterServers_LocalSetUnknownFailClosed: when the local-name list can't
 // be established (pi-stack-host unresolved / `mcp --list` fails), a non-gog name
 // must FAIL CLOSED — NOT be registered as a local pi-stack-host subcommand — and
@@ -431,6 +464,7 @@ func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 		containers: map[string]packContainer{
 			"notion-ish": {Manifest: "https://example.com/mcp/x/server.json"},
 			"bamboohr":   {Image: "bamboohr-mcp:0.0.1", EnvKeys: []string{"BAMBOOHR_API_KEY", "BAMBOOHR_COMPANY_DOMAIN"}},
+			"opine":      {RemoteURL: "https://app.tryopine.com/mcp"},
 		},
 	}
 
@@ -439,6 +473,16 @@ func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 	want := "mcp add notion-ish --local --url https://example.com/mcp/x/server.json"
 	if got != want {
 		t.Fatalf("manifest addArgs:\n got: %s\nwant: %s", got, want)
+	}
+
+	// Remote container: --url (remote endpoint), NO --local and NOT op-run wrapped
+	// (OAuth is handled host-side by the gateway).
+	rem := strings.Join(reg.addArgs("opine"), " ")
+	if rem != "mcp add opine --url https://app.tryopine.com/mcp" {
+		t.Fatalf("remote-url addArgs:\n got: %s\nwant: mcp add opine --url https://app.tryopine.com/mcp", rem)
+	}
+	if strings.Contains(rem, "--local") || strings.Contains(rem, "--command") {
+		t.Fatalf("remote-url container must not use --local/--command, got:\n%s", rem)
 	}
 
 	// Image container: op-run-wrapped `docker run -i --rm -e KEY… <image>`.

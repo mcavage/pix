@@ -131,16 +131,26 @@ type packIntegration struct {
 	// Image container via `-e <KEY>` (e.g. BAMBOOHR_COMPANY_DOMAIN). The primary
 	// op-refs-backed secret goes in Env (also forwarded, and warned about if unset).
 	EnvKeys []string `toml:"env_keys,omitempty"`
+	// URL, when set, makes this a REMOTE integration the pack registers ITSELF:
+	// `pack use` runs `sbx mcp add <mcp> --url <url>` so the pack's remote
+	// gateway-catalog servers (opine, notion, atlassian, granola) are wired without
+	// a manual `pi-stack mcp bundle` + `sbx mcp add`. The URL is a remote MCP
+	// endpoint (https://host/mcp); OAuth is discovered + handled host-side by the
+	// gateway on first use (no credential in the pack). Mutually exclusive with
+	// Manifest/Image. Leave empty for a server the user registers out-of-band.
+	URL string `toml:"url,omitempty"`
 }
 
-// packContainer is a resolved pack CONTAINER integration: either a Manifest
-// (`sbx mcp add --local --url`, gateway resolves the OCI image; creds Docker-side)
-// or an Image ref (`docker run <image>`, op-run wrapped; creds from op-refs
-// forwarded via EnvKeys). Exactly one of Manifest/Image is set.
+// packContainer is a resolved pack CONTAINER/REMOTE integration: a Manifest
+// (`sbx mcp add --local --url`, gateway resolves the OCI image; creds Docker-side),
+// an Image ref (`docker run <image>`, op-run wrapped; creds from op-refs forwarded
+// via EnvKeys), or a RemoteURL (`sbx mcp add --url`, a remote MCP endpoint the
+// gateway OAuths host-side). Exactly one of Manifest/Image/RemoteURL is set.
 type packContainer struct {
-	Manifest string
-	Image    string
-	EnvKeys  []string // env var names to forward into an Image container (-e KEY)
+	Manifest  string
+	Image     string
+	EnvKeys   []string // env var names to forward into an Image container (-e KEY)
+	RemoteURL string   // remote MCP endpoint URL (`sbx mcp add <name> --url <url>`)
 }
 
 // packInfo is a resolved pack on disk.
@@ -977,8 +987,9 @@ func packStaticMcpNames(p *packInfo) []string {
 }
 
 // packContainerMCP returns {integration.mcp: packContainer} for a pack's
-// CONTAINER integrations — Manifest servers (`sbx mcp add <name> --local --url`)
-// and Image servers (`docker run <image>`, op-run wrapped). These are what
+// CONTAINER/REMOTE integrations — Manifest servers (`sbx mcp add <name> --local
+// --url`), Image servers (`docker run <image>`, op-run wrapped), and remote URL
+// servers (`sbx mcp add <name> --url`, OAuth'd host-side). These are what
 // `pi-stack mcp register` adds specially rather than as a plain host subcommand.
 // Returns nil when the pack declares none.
 func packContainerMCP(p *packInfo) map[string]packContainer {
@@ -997,6 +1008,8 @@ func packContainerMCP(p *packInfo) map[string]packContainer {
 			}
 			keys = append(keys, ig.EnvKeys...)
 			out[ig.MCP] = packContainer{Image: strings.TrimSpace(ig.Image), EnvKeys: keys}
+		case strings.TrimSpace(ig.URL) != "":
+			out[ig.MCP] = packContainer{RemoteURL: strings.TrimSpace(ig.URL)}
 		}
 	}
 	if len(out) == 0 {
@@ -2285,6 +2298,9 @@ func runPackShow(out io.Writer, rest []string) {
 				fmt.Fprintf(out, " — manifest: %s (creds Docker-side)", ig.Manifest)
 			case ig.Image != "":
 				fmt.Fprintf(out, " — image: %s", ig.Image)
+			case ig.URL != "":
+				// Remote endpoint: OAuth'd host-side by the gateway, no op-refs.
+				fmt.Fprintf(out, " — url: %s (OAuth host-side)", ig.URL)
 			}
 			// Image + host/remote integrations resolve their secret from op-refs
 			// (Manifest containers don't — those are Docker-side).

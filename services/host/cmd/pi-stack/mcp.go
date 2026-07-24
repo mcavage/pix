@@ -176,11 +176,13 @@ type mcpRegistrar struct {
 	gog     string // absolute gog (only needed to register gog)
 	account string // gog --account value
 	hostBin string // absolute pi-stack-host (for slack + other host subcommands)
-	// containers maps a server name to its pack CONTAINER spec (Manifest or Image).
-	// A Manifest name registers via `--local --url` (gateway resolves the OCI
-	// image; creds Docker-side; never op-run wrapped). An Image name registers as
-	// an op-run-wrapped `docker run <image>` (creds from op-refs forwarded via -e),
-	// exactly like a local stdio server otherwise.
+	// containers maps a server name to its pack CONTAINER/REMOTE spec (Manifest,
+	// Image, or RemoteURL). A Manifest name registers via `--local --url` (gateway
+	// resolves the OCI image; creds Docker-side; never op-run wrapped). An Image
+	// name registers as an op-run-wrapped `docker run <image>` (creds from op-refs
+	// forwarded via -e), exactly like a local stdio server otherwise. A RemoteURL
+	// name registers via `--url` (a remote MCP endpoint the gateway OAuths
+	// host-side; no op-run wrap).
 	containers map[string]packContainer
 }
 
@@ -231,6 +233,12 @@ func (m mcpRegistrar) addArgs(name string) []string {
 	// containers fall through to serverCmd + the op-run wrapper below.)
 	if c := m.containers[name]; c.Manifest != "" {
 		return []string{"mcp", "add", name, "--local", "--url", c.Manifest}
+	}
+	// Remote container: register the remote MCP endpoint by URL. No --local (it's a
+	// remote HTTP server, not an OCI image the gateway runs) and no op-run wrap —
+	// OAuth is discovered + handled host-side by the gateway on first use.
+	if c := m.containers[name]; c.RemoteURL != "" {
+		return []string{"mcp", "add", name, "--url", c.RemoteURL}
 	}
 	cmd := m.serverCmd(name)
 	if m.opRefs == "" {
@@ -297,7 +305,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	localSet, localKnown := localMCPNames(env, hostResolver)
 	wantGog := false
 	var localServers []string
-	var containerServers []string // pack CONTAINER integrations (--local --url manifest)
+	var containerServers []string // pack CONTAINER/REMOTE integrations (--local --url manifest, or --url remote)
 	var skippedUnknown []string   // non-gog names skipped because the local set is unknown
 	for _, n := range names {
 		switch {
@@ -306,6 +314,11 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 		case containers[n].Manifest != "":
 			// Manifest container: registered by --local --url, not a host --command,
 			// so it doesn't depend on the pi-stack-host local-name set.
+			containerServers = append(containerServers, n)
+		case containers[n].RemoteURL != "":
+			// Remote container: the pack carries the endpoint URL, so we register it
+			// ourselves via `sbx mcp add --url` (OAuth'd host-side). Previously these
+			// gateway-catalog names were SKIPPED — the pack now wires them directly.
 			containerServers = append(containerServers, n)
 		case containers[n].Image != "":
 			// Image container: an op-run-wrapped `docker run` — behaves like a local
