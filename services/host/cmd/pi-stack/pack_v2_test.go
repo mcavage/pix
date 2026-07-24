@@ -737,7 +737,9 @@ func TestSynthesizePackKit_EgressAllow(t *testing.T) {
 		t.Fatalf("kit=%q err=%v", kit, err)
 	}
 	b, _ := os.ReadFile(filepath.Join(kit, "spec.yaml"))
-	if !strings.Contains(string(b), "caps:") || !strings.Contains(string(b), "host.docker.internal:11442") {
-		t.Fatalf("proxy egress not folded into caps.network.allow:\n%s", b)
+	for _, want := range []string{"caps:", "host.docker.internal:11442", "localhost:11442"} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("proxy egress missing %q in caps.network.allow:\n%s", want, b)
+		}
 	}
 }

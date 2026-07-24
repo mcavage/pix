@@ -1110,11 +1110,25 @@ func synthesizePackKit(p *packInfo) (string, error) {
 	// stacking unions this with the base kit's allowlist.
 	var egress []string
 	egSeen := map[string]bool{}
+	addEgress := func(e string) {
+		if e == "" || egSeen[e] {
+			return
+		}
+		egSeen[e] = true
+		egress = append(egress, e)
+	}
 	for _, pr := range sandboxProxies {
 		for _, e := range pr.Egress {
-			if e = strings.TrimSpace(e); e != "" && !egSeen[e] {
-				egSeen[e] = true
-				egress = append(egress, e)
+			e = strings.TrimSpace(e)
+			addEgress(e)
+			// The sbx egress proxy matches host.docker.internal and localhost as
+			// DISTINCT rules (it resolves the former to the latter), so a
+			// host-loopback egress must allow BOTH forms — mirrors the base kit,
+			// which lists host.docker.internal:PORT and localhost:PORT together.
+			if h := strings.TrimPrefix(e, "host.docker.internal:"); h != e {
+				addEgress("localhost:" + h)
+			} else if l := strings.TrimPrefix(e, "localhost:"); l != e {
+				addEgress("host.docker.internal:" + l)
 			}
 		}
 	}
