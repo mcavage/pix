@@ -104,6 +104,12 @@ type packIntegration struct {
 	Name string `toml:"name"`          // human label
 	Env  string `toml:"env,omitempty"` // op-refs.env ENV VAR the credential lives under
 	MCP  string `toml:"mcp,omitempty"` // MCP server name to attach (host-provided)
+	// Static requests EAGER attach for this integration's MCP server: it's added
+	// to the sandbox's --static-mcp set at create so the pack's skills have its
+	// tools in context without a discovery step. Default (false) is dynamic — the
+	// server is registered + discoverable, and the agent pulls it via mcp-find on
+	// demand. A user `mcp_dynamic <name>` still overrides this back to dynamic.
+	Static bool `toml:"static,omitempty"`
 }
 
 // packInfo is a resolved pack on disk.
@@ -898,7 +904,31 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, er
 			fmt.Fprintf(os.Stderr, "pi-stack: pack integration %q needs a credential — set it: pi-stack secret set %s op://vault/item/field\n", ig.Name, ig.Env)
 		}
 	}
+	// Fold the pack's EAGER-declared MCP servers (integration `static = true`)
+	// into cfg.MCPStatic IN MEMORY (never saved — the manifest is the source of
+	// truth, re-read each launch), so resolveStaticMCP attaches them via
+	// --static-mcp. A user `mcp_dynamic <name>` still wins (resolveStaticMCP
+	// removes MCPDynamic entries from the eager set after this).
+	for _, n := range packStaticMcpNames(p) {
+		if !containsStr(cfg.MCPStatic, n) {
+			cfg.MCPStatic = append(cfg.MCPStatic, n)
+		}
+	}
 	return packRoot, nil
+}
+
+// packStaticMcpNames returns the de-duplicated `integration.mcp` names a pack
+// declares with `static = true` (eager attach), in manifest order.
+func packStaticMcpNames(p *packInfo) []string {
+	var names []string
+	seen := map[string]bool{}
+	for _, ig := range p.Manifest.Integrations {
+		if ig.Static && ig.MCP != "" && !seen[ig.MCP] {
+			seen[ig.MCP] = true
+			names = append(names, ig.MCP)
+		}
+	}
+	return names
 }
 
 // packMcpNames returns the de-duplicated `integration.mcp` names a pack

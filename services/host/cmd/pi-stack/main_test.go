@@ -267,6 +267,29 @@ func TestResolveStaticMCP(t *testing.T) {
 	}
 }
 
+// A pack integration with static=true folds into cfg.MCPStatic (eager); a user
+// mcp_dynamic still overrides it back to lazy.
+func TestPackStaticMcpNames_AndOverride(t *testing.T) {
+	p := &packInfo{Manifest: packManifest{Integrations: []packIntegration{
+		{Name: "Fastmail", MCP: "fastmail", Static: true}, // eager
+		{Name: "Notion", MCP: "notion"},                   // default dynamic
+		{Name: "NoServer"},                                // no mcp -> ignored
+	}}}
+	if got := packStaticMcpNames(p); len(got) != 1 || got[0] != "fastmail" {
+		t.Fatalf("packStaticMcpNames = %v, want [fastmail]", got)
+	}
+	// Folded into cfg.MCPStatic, fastmail is eager...
+	cfgStatic := &config.Config{MCPStatic: []string{"fastmail"}}
+	if got := resolveStaticMCP([]string{"fastmail", "notion"}, cfgStatic); len(got) != 1 || got[0] != "fastmail" {
+		t.Errorf("pack-static fastmail must be eager, got %v", got)
+	}
+	// ...unless the user forces it dynamic.
+	cfgOverride := &config.Config{MCPStatic: []string{"fastmail"}, MCPDynamic: []string{"fastmail"}}
+	if got := resolveStaticMCP([]string{"fastmail", "notion"}, cfgOverride); len(got) != 0 {
+		t.Errorf("mcp_dynamic must override pack-static, got %v", got)
+	}
+}
+
 func TestBuildSbxArgs_DevBranch(t *testing.T) {
 	cfg := &config.Config{}
 	args := buildSbxArgs(cfg, runOpts{Workspace: ".", Dev: true, DevRoot: "/repo", LocalKit: "/repo/pi-kit"}, "0.0.99")
