@@ -23,7 +23,7 @@ CLI reference of its own.
 | `knowledge` (`kb`) | OKF bundles: init/use/ls/query/sync/remote | §6 |
 | `pack` | the portable capability context: new/add/ls/show/use/rm | §5, `docs/design/packs-v2.md` |
 | `mcp` | register/list/load MCP servers through the sbx gateway | §8 |
-| `gworkspace` | Google Workspace (Gmail/Drive/Docs/Sheets/Calendar) | `docs/gog-setup.md` |
+| `gworkspace` | Google Workspace (Gmail/Drive/Docs/Sheets/Calendar) | `docs/gworkspace.md` |
 | `secret` | manage the 1Password `op://` refs (never the values) | §8 |
 | `config` | `show`/`path`/`get`/`set`/`unset` the single runtime config | §1 |
 | `host` | the unsandboxed escape hatch, off by default | §7, `docs/design/host-mode.md` |

@@ -67,13 +67,24 @@ by default.
 
 **Revoking and rotating access.** An OAuth grant (Google Workspace, a remote
 catalog server) is revoked from that provider's own account security page,
-not from pix; `pix gog setup` re-authorizes cleanly afterward if you
+not from pix; `pix gworkspace setup` re-authorizes cleanly afterward if you
 need the integration back. A 1Password-backed MCP credential (a Slack token,
 a keyring password) is rotated in 1Password itself; the gateway only resolves
 an `op://` ref at spawn time, so the new value takes effect once you
 re-register the server (`pix mcp register`), which triggers a fresh
 spawn. `pix secret sync` is the equivalent for the cloud model provider
 keys (Anthropic/OpenAI/Google), not MCP credentials.
+
+## Provider-key process exposure
+
+Docker Sandboxes currently accepts provider secret values through `sbx secret
+set -t`. During `pix setup`, a resolved value therefore exists briefly in the
+`sbx` child process argument vector and may be visible to same-user process
+inspection or endpoint audit tooling. Pix never logs or persists that value and
+scrubs it from subprocess errors, but it cannot remove the argv exposure until
+`sbx` provides a stdin or file-descriptor input mode. Treat hosts with untrusted
+same-user processes as outside the supported credential boundary. This is an
+accepted upstream limitation, not a claim that the value never enters argv.
 
 ## Reporting a vulnerability
 

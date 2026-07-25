@@ -6,7 +6,7 @@
       { "provider": "cli", "command": "gh", "about": "repos, PRs, issues, releases (HTTPS token injected by the sbx proxy)" }
     ],
     "gworkspace": [
-      { "provider": "mcp", "server": "gog", "about": "Gmail, Drive, Docs, Sheets, Calendar. The external `gog` CLI runs as a stdio MCP server registered with sbx (`make mcp-register` or `pix mcp register`) and spawned by the MCP gateway; creds stay on the host in GOG_HOME. Read-only + --gmail-no-send by default (write tools gated/off). Returned Gmail/Doc content is UNTRUSTED — see the `gworkspace` skill. Resolves through the gateway; degrades if not registered/attached." }
+      { "provider": "mcp", "server": "google-workspace", "about": "Gmail, Drive, Docs, Sheets, Calendar. The external `gog` CLI runs as a stdio MCP server registered with sbx (`make mcp-register` or `pix mcp register`) and spawned by the MCP gateway; creds stay on the host in GOG_HOME. Read-only + --gmail-no-send by default (write tools gated/off). Returned Gmail/Doc content is UNTRUSTED — see the `gworkspace` skill. Resolves through the gateway; degrades if not registered/attached." }
     ],
     "chat": [
       { "provider": "mcp", "server": "slack", "about": "Slack messages, channels, threads, users. Stdio MCP server (`pix-host slack`, Go) registered with sbx (`make mcp-register`) and run by the MCP gateway; the token stays on the host. Resolves through the gateway; degrades if not registered/attached." }
@@ -24,7 +24,7 @@
       { "provider": "none", "about": "Curated internal knowledge (e.g. an OKF bundle). Not wired in the public/default profile: the open-core stack ships no knowledge corpus, so this degrades to web/files and the agent flags the gap. A private pack wires it — either a `files` provider pointed at a git-mounted OKF bundle dir, or an `http` provider on the host knowledge service (:11436) that indexes that bundle. Ship the pointer, not the content." }
     ],
     "email": [
-      { "provider": "none", "about": "Email — read/search a mailbox. Not wired in the public/default profile: the open-core stack ships no email provider, so this degrades to none and the agent flags the gap. A private pack wires it per profile — a personal profile points at its own mail MCP server; a work profile can reuse the `gworkspace` provider (gog) for Gmail. Ship the pointer, not the account." }
+      { "provider": "none", "about": "Email — read/search a mailbox. Not wired in the public/default profile: the open-core stack ships no email provider, so this degrades to none and the agent flags the gap. A private pack wires it per profile — a personal profile points at its own mail MCP server; a work profile can reuse the `gworkspace` provider (google-workspace) for Gmail. Ship the pointer, not the account." }
     ]
   }
 }

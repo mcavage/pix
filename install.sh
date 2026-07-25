@@ -162,10 +162,12 @@ do_install() {
 	check_required_prereqs
 
 	if [ -x "${PREFIX}/pix" ] && [ -x "${PREFIX}/pix-host" ]; then
-		current="$(${PREFIX}/pix version 2>/dev/null || true)"
-		case "$current" in
-			*"${ver}"*) log "install: Pix ${ver} is already current at ${PREFIX}"; return 0 ;;
-		esac
+		current="$("${PREFIX}/pix" version 2>/dev/null || true)"
+		current_ver="$(printf '%s\n' "$current" | awk '{print $NF}' | sed 's/^v//')"
+		if [ "$current_ver" = "$ver" ]; then
+			log "install: Pix ${ver} is already current at ${PREFIX}"
+			return 0
+		fi
 	fi
 
 	[ -n "$DL" ] || die "need curl or wget on PATH"
@@ -236,24 +238,35 @@ report() {
 	fi
 
 
+	assert_installed_resolution
 	log ""
 	log "Next:"
 	info "pix setup"
 }
 
 preflight_collision() {
-	found="$(command -v pix 2>/dev/null || true)"
-	[ -z "$found" ] && return 0
-	case "$found" in
-		"${PREFIX}/pix") return 0 ;;
-	esac
-	[ "${PIX_FORCE_INSTALL:-0}" = "1" ] && return 0
-	if [ -t 0 ] && [ -t 1 ]; then
-		printf 'install: an existing pix command resolves to %s; continue? [y/N] ' "$found"
-		read -r answer
-		case "$answer" in y|Y|yes|YES) return 0 ;; esac
-	fi
-	die "existing pix command at ${found}; set PIX_FORCE_INSTALL=1 to replace intentionally"
+	for binary in pix pix-host; do
+		found="$(command -v "$binary" 2>/dev/null || true)"
+		[ -z "$found" ] && continue
+		[ "$found" = "${PREFIX}/${binary}" ] && continue
+		[ "${PIX_FORCE_INSTALL:-0}" = "1" ] && continue
+		if [ -t 0 ] && [ -t 1 ]; then
+			printf 'install: an existing %s command resolves to %s; continue? [y/N] ' "$binary" "$found"
+			read -r answer
+			case "$answer" in y|Y|yes|YES) continue ;; esac
+		fi
+		die "existing ${binary} command at ${found}; set PIX_FORCE_INSTALL=1 to replace intentionally"
+	done
+}
+
+assert_installed_resolution() {
+	for binary in pix pix-host; do
+		found="$(command -v "$binary" 2>/dev/null || true)"
+		[ -z "$found" ] && continue
+		if [ "$found" != "${PREFIX}/${binary}" ]; then
+			die "installed ${binary} at ${PREFIX}/${binary}, but PATH resolves ${found}; put ${PREFIX} before the shadowing directory"
+		fi
+	done
 }
 
 check_required_prereqs() {

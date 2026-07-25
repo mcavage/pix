@@ -5,7 +5,7 @@ harness, [AGENTS.md](../AGENTS.md). This folder holds the deeper references.
 
 ## For adopters
 
-- [gog-setup.md](gog-setup.md) — set up the host-side Google Workspace (`gog`)
+- [gworkspace.md](gworkspace.md) — set up the host-side Google Workspace (`gog`)
   MCP server, read-only by default.
 - [design/packs.md](design/packs.md) — the pack design: private company context
   ships as a **pack** (plus container/host MCP integrations), never a

@@ -162,7 +162,7 @@ exist, keep the top 3 by this order and drop the rest.
    call it broken. If this repo has durable docs or team conventions worth
    indexing: `pix knowledge init`.
 4. **`gog.enabled` is false**: optional. If they want Gmail, Calendar, or
-   Drive access: `pix gog setup` (guided: installs check, OAuth import,
+   Drive access: `pix gworkspace setup` (guided: installs check, OAuth import,
    read-only authorization, and gateway registration in one command), then
    `pix run --replace` to attach it to a running sandbox.
 5. **`mcp.enabled` is false and they need some other external tool** (not

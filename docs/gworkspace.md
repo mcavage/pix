@@ -15,14 +15,14 @@ order, each gated on the last one succeeding.
 ```bash
 brew install gog   # or see https://gogcli.sh/install.html
 
-pix gog setup --account you@example.com --credentials ~/Downloads/gog-oauth-client.json
+pix gworkspace setup --account you@example.com --credentials ~/Downloads/gog-oauth-client.json
 ```
 
 Omit either flag on a real terminal and it prompts for it. It never
 authorizes without requesting read-only OAuth scopes, never registers a
 server it hasn't just verified returns real tools, and never touches
 `config.toml` until sbx registration has already succeeded. Run
-`pix gog setup -h` for exactly what each step checks and why.
+`pix gworkspace setup -h` for exactly what each step checks and why.
 
 Confirm it worked:
 
@@ -40,7 +40,7 @@ pix run       # or: pix run --replace, to attach gog to a fresh sandbox
 A `gog auth` command working in your terminal proves nothing about the
 gateway. The gateway spawns `gog mcp` with a bare, non-interactive
 environment: if the keyring password isn't in the env it inherits, the server
-starts and returns **zero tools, silently**. `pix gog setup` probes the
+starts and returns **zero tools, silently**. `pix gworkspace setup` probes the
 real headless path, with the exact hardened flags the gateway will use, not
 just `gog auth doctor`. On macOS with the system keychain, `gog` can unlock
 the stored token without a password and this never bites you. On a file
@@ -48,12 +48,12 @@ keyring or headless host, it's the whole reason step 3 below exists.
 
 ## What the guided command automates (for troubleshooting)
 
-If `pix gog setup` fails, or you're diagnosing an existing setup, here's
+If `pix gworkspace setup` fails, or you're diagnosing an existing setup, here's
 what it does under the hood.
 
 1. **Install gog and authorize your account.** Minimal read-only scopes
    (`gmail.readonly`, `calendar.readonly`, `drive.readonly`, ...). The exact
-   gog subcommands vary by installed version; `pix gog setup` detects
+   gog subcommands vary by installed version; `pix gworkspace setup` detects
    and uses whichever your version supports.
 
 2. **Supply the keyring password, if you need one.** Skip this on macOS with
@@ -70,7 +70,7 @@ what it does under the hood.
    EOF
    ```
 
-3. **Verify the headless path directly**, the same probe `pix gog setup`
+3. **Verify the headless path directly**, the same probe `pix gworkspace setup`
    and `pix doctor` run. It must print a non-empty tool list:
 
    ```bash
@@ -80,7 +80,7 @@ what it does under the hood.
    ```
 
 4. **Register with the gateway and enable it in config**, exactly what
-   `pix gog setup` does on success:
+   `pix gworkspace setup` does on success:
 
    ```bash
    pix config set gog_account you@example.com
@@ -119,7 +119,7 @@ client. Two residual risks worth knowing:
 
 To revoke or rotate access: revoke the grant from your Google Account's
 [third-party access page](https://myaccount.google.com/permissions), then
-either delete and recreate the OAuth client, or run `pix gog setup`
+either delete and recreate the OAuth client, or run `pix gworkspace setup`
 again with a new credentials file. Rotating the keyring password means
 updating `GOG_KEYRING_PASSWORD` in 1Password (or your op-refs file) and
 re-running `pix mcp register` so the gateway picks up the change on its

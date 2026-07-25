@@ -139,16 +139,16 @@ apply_tokens_to_file() { # FILE
 	while IFS=$'\t' read -r tok form; do
 		[ -n "$tok" ] || continue
 		repl="$(form_replacement "$form")"
-		sed_args+=(-e "s/$(sed_escape "$tok")/$(sed_escape "$repl")/g")
+		sed_args+=(-e "s/$(sed_pattern_escape "$tok")/$(sed_replacement_escape "$repl")/g")
 	done <<<"$TOKEN_TABLE"
 	sed "${sed_args[@]}" "$f" >"$tmp" && mv "$tmp" "$f"
 }
 
-# sed_escape STR -> STR safe to drop into a sed s/…/…/ pattern OR replacement.
-# The token table only ever contains letters, digits, hyphen, underscore and
-# space, so this is a defensive no-op today; it exists so a future token
-# containing a sed metacharacter fails safely instead of corrupting a file.
-sed_escape() { printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'; }
+# Escape the two sides independently. BRE patterns and sed replacements have
+# different metacharacters; treating them alike can turn a future literal token
+# into a wildcard and rewrite unrelated content.
+sed_pattern_escape() { printf '%s' "$1" | sed 's/[][\\.^$*\/]/\\&/g'; }
+sed_replacement_escape() { printf '%s' "$1" | sed 's/[\\&\/]/\\&/g'; }
 
 # DEFERRED_MOVE_DIRS: directories where 148+ individually-`pathmv`-tagged
 # files share ONE package/dir identity that has to move as a single atomic
