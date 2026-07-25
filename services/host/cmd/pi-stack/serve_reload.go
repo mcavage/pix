@@ -19,8 +19,8 @@ import (
 
 // daemonAffectingKeys are the config keys the daemon reads at startup and never
 // re-reads: changing one requires a serve restart to take effect. Everything
-// else (gog_account, mcp, ollama_bridge_model, host.*, active_profile) is read
-// by the launcher or the gateway, NOT by serve — and must trigger NOTHING.
+// else (gog_account, mcp, ollama_bridge_model, host.*, pack) is read by the
+// launcher or the gateway, NOT by serve — and must trigger NOTHING.
 var daemonAffectingKeys = map[string]bool{
 	"services":             true,
 	"memory_watcher_model": true,
@@ -29,8 +29,9 @@ var daemonAffectingKeys = map[string]bool{
 }
 
 // isDaemonAffecting reports whether a config key change requires a serve
-// restart. Note: a --profile knowledge_bundles change IS daemon-affecting —
-// serve indexes the UNION across profiles (AllKnowledgeBundles).
+// restart. knowledge_bundles is included because serve indexes it at startup
+// via AllKnowledgeBundles (now just the single deduped list; profiles, which
+// it used to union across, were removed).
 func isDaemonAffecting(key string) bool { return daemonAffectingKeys[key] }
 
 // serveMode is the detected lifecycle mode of the running (or not) daemon.

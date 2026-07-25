@@ -70,11 +70,11 @@ func runConfig(argv []string) {
 
 // runConfigGet prints ONE resolved config value to stdout with no decoration —
 // the machine-readable accessor the Makefile shells out to (`$(shell pi-stack
-// config get mcp)`). It is profile-aware: the value comes from the ACTIVE
-// profile's resolved config (via config.Resolve), honoring --profile /
-// PI_STACK_PROFILE / active_profile exactly like every other read path. List
-// keys (mcp, services, knowledge_bundles) print space-separated. An unknown key
-// is a loud error on stderr + exit 2, never a silent empty value.
+// config get mcp)`). The value comes straight from config.Load() (profiles were
+// removed; the active PACK is now the unit of context, see
+// docs/design/packs.md). List keys (mcp, services, knowledge_bundles) print
+// space-separated. An unknown key is a loud error on stderr + exit 2, never a
+// silent empty value.
 func runConfigGet(argv []string) {
 	if wantsHelp(argv) {
 		fmt.Print(configUsage)
@@ -97,21 +97,15 @@ func runConfigGet(argv []string) {
 	fmt.Println(val)
 }
 
-// configValue resolves one key against an already-RESOLVED (flat) config and
-// renders it for machine consumption: scalars verbatim, lists space-separated.
-// Pure + testable; the key set mirrors configKeysHelp (plus active_profile,
-// which reads the raw base field — it is what selects a profile, so it is never
-// itself overridden by one).
+// configValue resolves one key against the loaded config and renders it for
+// machine consumption: scalars verbatim, lists space-separated. Pure +
+// testable; the key set mirrors configKeysHelp exactly.
 func configValue(cfg *config.Config, key string) (string, error) {
 	switch key {
 	case "gog_account":
 		return cfg.GogAccount, nil
 	case "mcp":
 		return strings.Join(cfg.MCP, " "), nil
-	case "mcp_static":
-		return strings.Join(cfg.MCPStatic, " "), nil
-	case "mcp_dynamic":
-		return strings.Join(cfg.MCPDynamic, " "), nil
 	case "services":
 		return strings.Join(cfg.Services, " "), nil
 	case "knowledge_bundles":
@@ -136,11 +130,10 @@ func configValue(cfg *config.Config, key string) (string, error) {
 }
 
 // runConfigWrite loads the config, applies a set/unset, Save()s it, and prints
-// the new value + path so the user sees the effect without opening the file. A
-// `--profile <name>` flag (parsed out of argv, or inherited from the global
-// --profile main already extracted) targets a [profiles.<name>] table instead of
-// the base config, so per-profile config is never hand-edited (AGENTS.md forbids
-// it). An unknown profile name is scaffolded on first write.
+// the new value + path so the user sees the effect without opening the file.
+// There is a single config.toml (profiles were removed; the active PACK is the
+// unit of context) and this is the only mutation path — it is never hand-edited
+// (AGENTS.md forbids it).
 func runConfigWrite(unset bool, argv []string) {
 	verb := "set"
 	if unset {
@@ -182,10 +175,8 @@ func runConfigWrite(unset bool, argv []string) {
 // configKeysHelp lists the supported keys for set/unset.
 const configKeysHelp = `keys:
   gog_account <email>       Google Workspace account for the gog MCP server
-  mcp <server>              add/remove an MCP server in the mcp list
-  mcp_static <server>       pin a server EAGER: attach at create (--static-mcp)
-  mcp_dynamic <server>      keep a server dynamic (agent pulls on demand); this is
-                            the DEFAULT for every server, and wins over mcp_static
+  mcp <server>              add/remove an MCP server in the mcp list; every
+                            configured server preloads at sandbox create
   services <name>           add/remove a host service in the services list
   knowledge_bundles <dir>   add/remove an OKF knowledge bundle dir (set also
                             enables the knowledge service)
@@ -232,28 +223,6 @@ func applyConfigChange(cfg *config.Config, unset bool, key string, args []string
 			cfg.AddMCP(args[0])
 		}
 		return fmt.Sprintf("mcp = %v", cfg.MCP), nil
-
-	case "mcp_static":
-		if len(args) != 1 {
-			return "", fmt.Errorf("config %s mcp_static <server>: needs a server name", verb)
-		}
-		if unset {
-			cfg.RemoveMCPStatic(args[0])
-		} else {
-			cfg.AddMCPStatic(args[0])
-		}
-		return fmt.Sprintf("mcp_static = %v", cfg.MCPStatic), nil
-
-	case "mcp_dynamic":
-		if len(args) != 1 {
-			return "", fmt.Errorf("config %s mcp_dynamic <server>: needs a server name", verb)
-		}
-		if unset {
-			cfg.RemoveMCPDynamic(args[0])
-		} else {
-			cfg.AddMCPDynamic(args[0])
-		}
-		return fmt.Sprintf("mcp_dynamic = %v", cfg.MCPDynamic), nil
 
 	case "services":
 		if len(args) != 1 {

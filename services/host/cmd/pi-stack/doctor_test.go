@@ -23,6 +23,7 @@ type fakeEnv struct {
 	files    map[string]string      // file contents (for readFile)
 	modes    map[string]os.FileMode // path -> mode bits (for fileMode)
 	home     string                 // fake home dir
+	hostBin  string                 // canonical pi-stack-host path ("" = unresolvable)
 }
 
 func (f fakeEnv) env() shellEnv {
@@ -56,6 +57,12 @@ func (f fakeEnv) env() shellEnv {
 			}
 			return 0, false
 		},
+		hostBinary: func() (string, error) {
+			if f.hostBin != "" {
+				return f.hostBin, nil
+			}
+			return "", fmt.Errorf("pi-stack-host not found")
+		},
 	}
 }
 
@@ -78,7 +85,15 @@ func bareGog(acct string) string {
 		" --gmail-no-send --wrap-untrusted --readonly mcp --allow-tool read"
 }
 func opWrappedGog(refs, acct string) string {
-	return "op run --env-file=" + refs + " -- " + bareGog(acct)
+	return "op run --no-masking --env-file=" + refs + " -- " + bareGog(acct)
+}
+
+// reconstructedGogProbe is the EXACT best-effort headless probe command the
+// gog group runs when sbx exposes no registered command: gogRegisteredArgv
+// with the fakeEnv's lookPath-resolved paths (/usr/bin/…) — the same hardened
+// argv + op wrapper registration would produce, plus --list-tools.
+func reconstructedGogProbe(refs, acct string) string {
+	return strings.Join(append(gogRegisteredArgv("/usr/bin/gog", "/usr/bin/op", refs, acct), "--list-tools"), " ")
 }
 
 // gogGreen adds the fixtures that make the whole gog group green: gog + op on
@@ -97,7 +112,7 @@ func gogGreen(f fakeEnv) fakeEnv {
 	f.envVars["PI_STACK_CONFIG"] = gogCfgFile // makes resolveOpRefs -> gogOpRefs
 	f.statFile[gogOpRefs] = true
 	f.output["gog --account "+gogAcct+" auth doctor --check"] = "ok"
-	f.output["op run --env-file="+gogOpRefs+" -- gog --account "+gogAcct+" mcp --list-tools"] =
+	f.output[reconstructedGogProbe(gogOpRefs, gogAcct)] =
 		"gmail_search\ncalendar_events\ndocs_get\n"
 	return f
 }
@@ -144,7 +159,7 @@ func TestDoctor_AllGreen(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, nil
-	r.render(&buf)
+	r.render(&buf, false)
 	out := buf.String()
 	if !strings.Contains(out, "all checks pass") {
 		t.Errorf("expected all-pass verdict, got:\n%s", out)
@@ -170,31 +185,46 @@ func TestDoctor_SbxAbsent(t *testing.T) {
 	if len(todos) == 0 {
 		t.Fatal("expected TODOs when nothing is set up")
 	}
-	// Provider TODOs must be present with the exact command grammar.
+	// The provider group can no longer VERIFY anything with sbx absent, so it
+	// must not surface a provider fix command — only the still-verifiable
+	// ollama TODOs remain.
 	joined := strings.Join(todos, "\n")
 	for _, want := range []string{
-		"sbx secret set -g anthropic",
-		"sbx secret set -g github",
-		"ollama pull gemma4",
-		"ollama pull nomic-embed-text",
+		"install ollama",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("expected TODO %q in %v", want, todos)
 		}
 	}
+	if strings.Contains(joined, "sbx secret set -g") {
+		t.Errorf("provider check must not claim a verified failure when sbx is absent, got %v", todos)
+	}
+	if strings.Contains(joined, "ollama pull") {
+		t.Errorf("no pull TODO may be offered while ollama itself is absent, got %v", todos)
+	}
+
+	// The provider group's core check must degrade to unverifiable, not block.
+	prov := r.groups[0]
+	if prov.title != "Providers / keys (proxy-injected, never in the VM)" {
+		t.Fatalf("expected the providers group first, got %q", prov.title)
+	}
+	core := prov.checks[0]
+	if core.label != "model key" || core.req() != requirementCore || core.result() != verdictUnverifiable {
+		t.Errorf("expected an unverifiable core model-key check, got %+v", core)
+	}
+	if r.blocking() {
+		t.Error("an unverifiable core check must never block")
+	}
 
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, nil
-	r.render(&buf)
+	r.render(&buf, false)
 	out := buf.String()
 	if !strings.Contains(out, "outstanding") {
 		t.Errorf("expected outstanding verdict, got:\n%s", out)
 	}
 	if !strings.Contains(out, "sbx not on PATH") {
 		t.Errorf("expected sbx-absent note, got:\n%s", out)
-	}
-	if !strings.Contains(out, "TODO: sbx secret set -g anthropic") {
-		t.Errorf("expected copy-pasteable provider TODO, got:\n%s", out)
 	}
 }
 
@@ -228,8 +258,9 @@ func TestDoctor_GogHeadlessTrap(t *testing.T) {
 			"sbx secret ls": "anthropic openai google github",
 			"sbx mcp ls":    "gog\n",
 			"gog --account " + gogAcct + " auth doctor --check": "ok",
-			// headless probe returns an empty tool list -> the trap.
-			"op run --env-file=" + gogOpRefs + " -- gog --account " + gogAcct + " mcp --list-tools": "",
+			// headless probe exits CLEANLY with an empty tool list -> the trap
+			// (a probe ERROR would be unverifiable, not this verified todo).
+			reconstructedGogProbe(gogOpRefs, gogAcct): "",
 		},
 		envVars:  map[string]string{"GOG_ACCOUNT": gogAcct, "PI_STACK_CONFIG": gogCfgFile},
 		statFile: map[string]bool{gogOpRefs: true},
@@ -244,10 +275,10 @@ func TestDoctor_GogHeadlessTrap(t *testing.T) {
 	}
 	var acctOK, headTODO bool
 	for _, c := range gog.checks {
-		if c.label == "account" && c.state == stateOK {
+		if c.label == "account" && c.state() == stateOK {
 			acctOK = true
 		}
-		if c.label == "headless spawn" && c.state == stateTODO &&
+		if c.label == "headless spawn" && c.state() == stateTODO &&
 			strings.Contains(c.todo, "GOG_KEYRING_BACKEND=file") {
 			headTODO = true
 		}
@@ -260,8 +291,10 @@ func TestDoctor_GogHeadlessTrap(t *testing.T) {
 	}
 }
 
-// TestDoctor_GogAccountUnset: gog installed but GOG_ACCOUNT unset -> a TODO to
-// set it, and no crash (the account/headless probes are skipped).
+// TestDoctor_GogAccountUnset: gog installed but GOG_ACCOUNT unset is
+// optional-NOT-CONFIGURED — a note pointing at the guided setup, never a
+// verified failure/TODO (absence of an optional integration is expected), and
+// no crash (the account/headless probes are skipped).
 func TestDoctor_GogAccountUnset(t *testing.T) {
 	f := fakeEnv{
 		present: map[string]bool{"gog": true},
@@ -271,16 +304,62 @@ func TestDoctor_GogAccountUnset(t *testing.T) {
 	}
 	r := runDoctor(defaultCfg(), f.env())
 	joined := strings.Join(r.todos(), "\n")
-	if !strings.Contains(joined, "set gog_account") {
-		t.Errorf("expected a gog_account TODO, got %v", r.todos())
+	if strings.Contains(joined, "gog_account") || strings.Contains(joined, "gog setup") {
+		t.Errorf("an unset gog account is not-configured, never a TODO, got %v", r.todos())
 	}
-	// It must NOT report green: the account check carries the "cannot verify"
-	// detail and stays a TODO (not stateOK).
+	// It must NOT report green either: the account line is a note that says
+	// it is not configured and names the guided setup command.
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, nil
-	r.render(&buf)
-	if !strings.Contains(buf.String(), "cannot verify (gog_account unset in config.toml/env)") {
-		t.Errorf("expected a 'cannot verify' account detail, got:\n%s", buf.String())
+	r.render(&buf, false)
+	if !strings.Contains(buf.String(), "not configured (gog_account unset) — set up: pi-stack gog setup") {
+		t.Errorf("expected a not-configured account note naming pi-stack gog setup, got:\n%s", buf.String())
+	}
+	// And never the raw legacy auth recipe.
+	if strings.Contains(buf.String(), "gog auth login") {
+		t.Errorf("raw `gog auth login` guidance is banned, got:\n%s", buf.String())
+	}
+}
+
+// TestDoctor_GogAttachDespiteMissingExecutable pins closure finding #2:
+// receipt-backed attachment reporting must never be skipped just because the
+// gog executable is missing from PATH (and sbx exposes no readable
+// registered command). The registration check and gogAttachCheck must still
+// be emitted — and read ready off a valid preload receipt — even though the
+// executable/hardened/tools checks short-circuit on their own.
+func TestDoctor_GogAttachDespiteMissingExecutable(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.MCP = []string{"gog"}
+	const ws = "/home/u/proj"
+	const box = "pi-stack-proj"
+	f := fakeEnv{
+		present: map[string]bool{"sbx": true}, // gog NOT on PATH
+		output: map[string]string{
+			"sbx ls": box + "  running\n",
+			// no `sbx mcp get gog` / `sbx mcp ls -o json` fixture -> registeredGogCommand
+			// returns (nil,false): the registered command is unreadable.
+		},
+	}
+	env := f.env()
+	env.getwd = func() (string, error) { return ws, nil }
+	stateDir := t.TempDir()
+	env.stateDir = func() (string, error) { return stateDir, nil }
+	if err := writeCreateReceipt(stateDir, box, ws, []string{"gog"}, receiptClock); err != nil {
+		t.Fatal(err)
+	}
+	ctx := resolveMCPSandboxContext(env)
+	if ctx.mode != mcpAttachReceipt {
+		t.Fatalf("expected a receipt sandbox context, got mode=%v", ctx.mode)
+	}
+	g := gogGroup(cfg, env, "gog\n", true, true, ctx)
+
+	reg := findCheck(t, g, "gog")
+	if reg.result() != verdictReady {
+		t.Errorf("registration check must still be emitted and ready: %+v", reg)
+	}
+	attach := findCheck(t, g, "gog attachment")
+	if attach.result() != verdictReady || !strings.Contains(attach.evidence, "preloaded by pi-stack at create") {
+		t.Errorf("attach check must be emitted and ready despite the missing gog executable: %+v", attach)
 	}
 }
 
@@ -325,12 +404,12 @@ func TestDoctor_GogTransparency(t *testing.T) {
 	r := runDoctor(defaultCfg(), f.env())
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, []string{"gog"}
-	r.render(&buf)
+	r.render(&buf, false)
 	out := buf.String()
 	if !strings.Contains(out, "verifying") || !strings.Contains(out, gogAcct) || !strings.Contains(out, gogOpRefs) {
 		t.Errorf("expected a transparency line naming account+op-refs, got:\n%s", out)
 	}
-	if !strings.Contains(out, "must match your `make mcp-register`") {
+	if !strings.Contains(out, "must match the sbx-registered gog command") {
 		t.Errorf("expected the must-match note, got:\n%s", out)
 	}
 	// The fallback (sbx exposes no registered command) must be labeled best-effort
@@ -386,7 +465,7 @@ func TestDoctor_SbxPresentMcpListFailed(t *testing.T) {
 	// "register on the host".
 	var buf bytes.Buffer
 	r.services, r.mcp = cfg.Services, cfg.MCP
-	r.render(&buf)
+	r.render(&buf, false)
 	out := buf.String()
 	if !strings.Contains(out, "sbx mcp status") && !strings.Contains(out, "sbx daemon") {
 		t.Errorf("expected sbx daemon/gateway guidance, got:\n%s", out)
@@ -481,8 +560,8 @@ func TestDoctor_SecretsGroupShortLiteralFlagged(t *testing.T) {
 			t.Errorf("secrets group LEAKED the literal value: %q", c.detail)
 		}
 		if c.label == "SLACK_TOKEN" {
-			if c.state != stateTODO {
-				t.Errorf("SLACK_TOKEN state = %v, want stateTODO", c.state)
+			if c.state() != stateTODO {
+				t.Errorf("SLACK_TOKEN state = %v, want stateTODO", c.state())
 			}
 			if !strings.Contains(c.detail, "not an op:// ref") {
 				t.Errorf("SLACK_TOKEN detail should flag refs-only: %q", c.detail)
@@ -498,12 +577,16 @@ func TestDoctor_SecretsGroupShortLiteralFlagged(t *testing.T) {
 // TestDoctor_GogRegisteredCommand is the HONEST path: sbx exposes the ACTUAL
 // registered gog command, so doctor probes THAT exact command (with
 // --list-tools) rather than reconstructing it from config. A non-empty tool
-// list reads as a confirmed-green headless spawn.
+// list reads as a confirmed-green headless spawn. The registered wrapper is
+// the exact launcher grammar against the RESOLVED op-refs path (gogOpRefs via
+// PI_STACK_CONFIG) — doctor refuses to probe anything else.
 func TestDoctor_GogRegisteredCommand(t *testing.T) {
-	regCmd := opWrappedGog("/abs/config/op-refs.env", gogAcct)
+	regCmd := opWrappedGog(gogOpRefs, gogAcct)
 	probeKey := regCmd + " --list-tools"
 	f := fakeEnv{
-		present: map[string]bool{"sbx": true, "op": true},
+		present:  map[string]bool{"sbx": true, "op": true},
+		envVars:  map[string]string{"PI_STACK_CONFIG": gogCfgFile},
+		statFile: map[string]bool{gogOpRefs: true},
 		output: map[string]string{
 			"sbx secret ls":   "anthropic openai google github",
 			"sbx mcp ls":      "gog\n",
@@ -524,7 +607,7 @@ func TestDoctor_GogRegisteredCommand(t *testing.T) {
 		if c.label == "registration" {
 			// The registered command is shown REDACTED: recognizable skeleton (op
 			// run/env-file/gog/mcp), but the account value scrubbed to ‹redacted›.
-			if strings.Contains(c.detail, "op run --env-file=… -- gog --account ‹redacted›") &&
+			if strings.Contains(c.detail, "op run --no-masking --env-file=… -- gog --account ‹redacted›") &&
 				strings.Contains(c.detail, "mcp") {
 				regShown = true
 			}
@@ -532,7 +615,7 @@ func TestDoctor_GogRegisteredCommand(t *testing.T) {
 				t.Errorf("registered command detail must not echo the account verbatim: %q", c.detail)
 			}
 		}
-		if c.label == "headless spawn" && c.state == stateOK {
+		if c.label == "headless spawn" && c.state() == stateOK {
 			headOK = true
 		}
 	}
@@ -568,32 +651,40 @@ func TestDoctor_GogFallbackUnconfirmedIsTODO(t *testing.T) {
 		ports: map[int]bool{11434: true, 11435: true},
 	})
 	r := runDoctor(defaultCfg(), f.env())
-	// The headless spawn must be a TODO whose detail says it could not confirm.
-	var headTODO bool
+	// The headless spawn must be UNVERIFIABLE (⚠) — doctor genuinely does not
+	// know whether the best-effort pass matches the real registration — and it
+	// must carry NO repair TODO (nothing is confirmed broken to fix).
+	var headWarn bool
 	for _, g := range r.groups {
 		if !strings.HasPrefix(g.title, "gog") {
 			continue
 		}
 		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state == stateTODO &&
-				strings.Contains(c.detail, "could not confirm the sbx-registered command") {
-				headTODO = true
+			if c.label == "headless spawn" {
+				if c.state() == stateWarn &&
+					strings.Contains(c.detail, "could not be confirmed") {
+					headWarn = true
+				}
+				if c.todo != "" {
+					t.Errorf("an unverifiable best-effort pass must not carry a TODO, got %q", c.todo)
+				}
 			}
 		}
 	}
-	if !headTODO {
-		t.Fatalf("expected an unconfirmed-fallback headless TODO, groups=%+v", r.groups)
+	if !headWarn {
+		t.Fatalf("expected an unconfirmed-fallback headless ⚠, groups=%+v", r.groups)
 	}
-	// Verdict must NOT be all-clear.
+	// Verdict must NOT be all-clear: the headline calls out the unverified
+	// checks instead.
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, []string{"gog"}
-	r.render(&buf)
+	r.render(&buf, false)
 	out := buf.String()
 	if strings.Contains(out, "all checks pass") {
 		t.Errorf("unconfirmed fallback must not report all-clear, got:\n%s", out)
 	}
-	if !strings.Contains(out, "TODO: confirm the registered gog command") {
-		t.Errorf("expected a copy-pasteable confirm-command TODO, got:\n%s", out)
+	if !strings.Contains(out, "could not be verified") {
+		t.Errorf("expected the could-not-verify headline, got:\n%s", out)
 	}
 }
 
@@ -601,14 +692,16 @@ func TestDoctor_GogFallbackUnconfirmedIsTODO(t *testing.T) {
 // a partial `command:` line (no `-- <cmd>` tail), so the line parser must FALL
 // THROUGH to the JSON form, which carries the full argv and confirms green.
 func TestDoctor_GogRegisteredCommandLineFallsThrough(t *testing.T) {
-	probeKey := opWrappedGog("/abs/config/op-refs.env", gogAcct) + " --list-tools"
+	probeKey := opWrappedGog(gogOpRefs, gogAcct) + " --list-tools"
 	f := fakeEnv{
-		present: map[string]bool{"sbx": true},
+		present:  map[string]bool{"sbx": true},
+		envVars:  map[string]string{"PI_STACK_CONFIG": gogCfgFile},
+		statFile: map[string]bool{gogOpRefs: true},
 		output: map[string]string{
 			"sbx secret ls":      "anthropic openai google github",
 			"sbx mcp ls":         "gog\n",
 			"sbx mcp get gog":    "name: gog\ncommand: op\n", // partial line -> fall through
-			"sbx mcp ls -o json": `[{"name":"gog","command":"op","args":["run","--env-file=/abs/config/op-refs.env","--","gog","--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
+			"sbx mcp ls -o json": `[{"name":"gog","command":"op","args":["run","--no-masking","--env-file=` + gogOpRefs + `","--","gog","--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
 			probeKey:             "gmail_search\n",
 		},
 		ports: map[int]bool{11435: true},
@@ -620,7 +713,7 @@ func TestDoctor_GogRegisteredCommandLineFallsThrough(t *testing.T) {
 			continue
 		}
 		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state == stateOK {
+			if c.label == "headless spawn" && c.state() == stateOK {
 				headOK = true
 			}
 		}
@@ -633,13 +726,15 @@ func TestDoctor_GogRegisteredCommandLineFallsThrough(t *testing.T) {
 // TestDoctor_GogRegisteredCommandJSON: sbx exposes the registration only via
 // `sbx mcp ls -o json`; doctor parses command+args and probes it.
 func TestDoctor_GogRegisteredCommandJSON(t *testing.T) {
-	probeKey := opWrappedGog("/abs/config/op-refs.env", gogAcct) + " --list-tools"
+	probeKey := opWrappedGog(gogOpRefs, gogAcct) + " --list-tools"
 	f := fakeEnv{
-		present: map[string]bool{"sbx": true},
+		present:  map[string]bool{"sbx": true},
+		envVars:  map[string]string{"PI_STACK_CONFIG": gogCfgFile},
+		statFile: map[string]bool{gogOpRefs: true},
 		output: map[string]string{
 			"sbx secret ls":      "anthropic openai google github",
 			"sbx mcp ls":         "gog\n",
-			"sbx mcp ls -o json": `[{"name":"gog","command":"op","args":["run","--env-file=/abs/config/op-refs.env","--","gog","--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
+			"sbx mcp ls -o json": `[{"name":"gog","command":"op","args":["run","--no-masking","--env-file=` + gogOpRefs + `","--","gog","--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
 			probeKey:             "gmail_search\n",
 		},
 		ports: map[int]bool{11435: true},
@@ -651,7 +746,7 @@ func TestDoctor_GogRegisteredCommandJSON(t *testing.T) {
 			continue
 		}
 		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state == stateOK {
+			if c.label == "headless spawn" && c.state() == stateOK {
 				headOK = true
 			}
 		}
@@ -698,7 +793,7 @@ func TestDoctor_GogBareRegisteredCommand(t *testing.T) {
 				t.Errorf("registered command detail must not echo the account verbatim: %q", c.detail)
 			}
 		}
-		if c.label == "headless spawn" && c.state == stateOK {
+		if c.label == "headless spawn" && c.state() == stateOK {
 			headOK = true
 		}
 	}
@@ -739,7 +834,7 @@ func TestDoctor_GogBareRegisteredCommandJSON(t *testing.T) {
 			continue
 		}
 		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state == stateOK {
+			if c.label == "headless spawn" && c.state() == stateOK {
 				headOK = true
 			}
 		}
@@ -790,7 +885,7 @@ func TestDoctor_GogRegistration(t *testing.T) {
 			continue
 		}
 		for _, c := range g.checks {
-			if c.label == "gog" && c.state == stateTODO {
+			if c.label == "gog" && c.state() == stateTODO {
 				found = true
 			}
 		}
@@ -806,17 +901,19 @@ func TestDoctor_MCPRegistration(t *testing.T) {
 	cfg.MCP = []string{"slack"}
 	f := gogGreen(fakeEnv{
 		present: map[string]bool{"sbx": true, "ollama": true},
+		hostBin: "/usr/local/bin/pi-stack-host",
 		output: map[string]string{
 			"sbx secret ls": "anthropic openai google github",
 			"ollama list":   "gemma4\nnomic-embed-text\n",
 			"sbx mcp ls":    "notion\ngog\n", // slack missing
+			"/usr/local/bin/pi-stack-host mcp --list": "slack\n",
 		},
 		ports: map[int]bool{11435: true},
 	})
 	r := runDoctor(cfg, f.env())
 	found := false
 	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state == stateTODO {
+		if c.label == "slack" && c.state() == stateTODO {
 			found = true
 		}
 	}
@@ -828,7 +925,7 @@ func TestDoctor_MCPRegistration(t *testing.T) {
 	f.output["sbx mcp ls"] = "notion\nslack\n"
 	r = runDoctor(cfg, f.env())
 	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state == stateTODO {
+		if c.label == "slack" && c.state() == stateTODO {
 			t.Errorf("registered slack should not be a TODO")
 		}
 	}
@@ -844,12 +941,14 @@ func TestDoctor_MCPToolProbe(t *testing.T) {
 	regCmd := "/usr/local/bin/pi-stack-host mcp slack"
 	f := gogGreen(fakeEnv{
 		present: map[string]bool{"sbx": true, "ollama": true},
+		hostBin: "/usr/local/bin/pi-stack-host",
 		output: map[string]string{
 			"sbx secret ls":          "anthropic openai google github",
 			"ollama list":            "gemma4:latest\nnomic-embed-text:latest\n",
 			"sbx mcp ls":             "gog\nslack\n",
 			"sbx mcp get slack":      "name: slack\ncommand: " + regCmd + "\n",
 			regCmd + " --list-tools": "slack_search\nslack_post\nslack_channels\n",
+			"/usr/local/bin/pi-stack-host mcp --list": "slack\n",
 		},
 		ports: map[int]bool{11434: true, 11435: true},
 	})
@@ -857,7 +956,7 @@ func TestDoctor_MCPToolProbe(t *testing.T) {
 	// The generic mcp group is last; slack must read as a real tool count.
 	var found bool
 	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state == stateOK && strings.Contains(c.detail, "spawns 3 tools") {
+		if c.label == "slack" && c.state() == stateOK && strings.Contains(c.detail, "spawns 3 tools") {
 			found = true
 		}
 	}
@@ -874,19 +973,21 @@ func TestDoctor_MCPToolProbeZero(t *testing.T) {
 	regCmd := "/usr/local/bin/pi-stack-host mcp slack"
 	f := gogGreen(fakeEnv{
 		present: map[string]bool{"sbx": true, "ollama": true},
+		hostBin: "/usr/local/bin/pi-stack-host",
 		output: map[string]string{
 			"sbx secret ls":          "anthropic openai google github",
 			"ollama list":            "gemma4:latest\nnomic-embed-text:latest\n",
 			"sbx mcp ls":             "gog\nslack\n",
 			"sbx mcp get slack":      "name: slack\ncommand: " + regCmd + "\n",
 			regCmd + " --list-tools": "", // spawns but returns 0 tools
+			"/usr/local/bin/pi-stack-host mcp --list": "slack\n",
 		},
 		ports: map[int]bool{11434: true, 11435: true},
 	})
 	r := runDoctor(cfg, f.env())
 	var todo bool
 	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state == stateTODO && strings.Contains(c.detail, "0 tools") {
+		if c.label == "slack" && c.state() == stateTODO && strings.Contains(c.detail, "0 tools") {
 			todo = true
 		}
 	}
@@ -896,21 +997,23 @@ func TestDoctor_MCPToolProbeZero(t *testing.T) {
 }
 
 // TestDoctor_MCPUnrecognizedCommand is the probe-safety gate: a registered
-// server whose command is NOT a recognized shape (not gog, not an absolute
-// `pi-stack-host mcp <name>`) must NOT be exec'd. The check reports a confirmed
-// registration with an explicit "probe skipped: unrecognized command" note, and
-// the fake run PANICS if doctor ever tries to exec the untrusted command —
-// proving it was never run.
+// server whose command is NOT a recognized shape (not gog, not the canonical
+// `pi-stack-host mcp <name>`) must NOT be exec'd. The check reports the
+// confirmed registration but stays UNVERIFIABLE (no false health claim) with
+// an explicit "never executed" note, and the fake run PANICS if doctor ever
+// tries to exec the untrusted command — proving it was never run.
 func TestDoctor_MCPUnrecognizedCommand(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"evil"}
 	f := gogConfirmed(fakeEnv{
 		present: map[string]bool{"sbx": true, "ollama": true},
+		hostBin: "/usr/local/bin/pi-stack-host",
 		output: map[string]string{
 			"sbx secret ls":    "anthropic openai google github",
 			"ollama list":      "gemma4:latest\nnomic-embed-text:latest\n",
 			"sbx mcp ls":       "gog\nevil\n",
 			"sbx mcp get evil": "name: evil\ncommand: /bin/rm -rf /\n",
+			"/usr/local/bin/pi-stack-host mcp --list": "evil\n",
 		},
 		ports: map[int]bool{11434: true, 11435: true},
 	})
@@ -926,8 +1029,8 @@ func TestDoctor_MCPUnrecognizedCommand(t *testing.T) {
 	r := runDoctor(cfg, env)
 	var found bool
 	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "evil" && c.state == stateOK &&
-			strings.Contains(c.detail, "probe skipped: unrecognized command") {
+		if c.label == "evil" && c.state() == stateWarn &&
+			strings.Contains(c.detail, "never executed") {
 			found = true
 		}
 	}
@@ -974,8 +1077,8 @@ func TestDoctor_GogTodoOnce(t *testing.T) {
 // while preserving first-occurrence order.
 func TestDoctorTodosDedup(t *testing.T) {
 	r := &report{groups: []group{
-		{checks: []check{{state: stateTODO, todo: "a"}, {state: stateTODO, todo: "b"}}},
-		{checks: []check{{state: stateTODO, todo: "a"}, {state: stateTODO, todo: "c"}}},
+		{checks: []check{{verdict: verdictTodo, todo: "a"}, {verdict: verdictTodo, todo: "b"}}},
+		{checks: []check{{verdict: verdictTodo, todo: "a"}, {verdict: verdictTodo, todo: "c"}}},
 	}}
 	got := r.todos()
 	want := []string{"a", "b", "c"}
@@ -1040,7 +1143,7 @@ func TestDoctor_SecretsGroup_GogOnlyNotNeeded(t *testing.T) {
 		t.Errorf("gog-only config should say 1Password not needed, got %+v", g.checks)
 	}
 	for _, c := range g.checks {
-		if c.state == stateTODO {
+		if c.state() == stateTODO {
 			t.Errorf("gog-only config must raise no Secrets TODO, got %+v", c)
 		}
 	}
@@ -1058,7 +1161,7 @@ func TestDoctor_SecretsGroup_SlackOnly(t *testing.T) {
 	g := secretsGroupFor(t, []string{"slack"}, f)
 	var sawRef bool
 	for _, c := range g.checks {
-		if c.label == "SLACK_TOKEN" && c.state == stateOK {
+		if c.label == "SLACK_TOKEN" && c.state() == stateOK {
 			sawRef = true
 		}
 	}
@@ -1082,7 +1185,7 @@ func TestDoctor_SecretsGroup_PermsFinding(t *testing.T) {
 			perms = &g.checks[i]
 		}
 	}
-	if perms == nil || perms.state != stateTODO || !strings.Contains(perms.todo, "chmod 600") {
+	if perms == nil || perms.state() != stateTODO || !strings.Contains(perms.todo, "chmod 600") {
 		t.Errorf("0644 op-refs.env should raise a chmod 600 perms TODO, got %+v", g.checks)
 	}
 }

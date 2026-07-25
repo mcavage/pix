@@ -49,9 +49,11 @@ func TestGatherStatus(t *testing.T) {
 	if st.Providers["google"] || st.Providers["github"] {
 		t.Errorf("providers = %v, want google+github unset", st.Providers)
 	}
-	// google + github missing -> two todos.
-	if len(st.Todos) != 2 {
-		t.Errorf("todos = %v, want 2 (google, github)", st.Todos)
+	// anthropic alone already satisfies the core model-readiness check (finding
+	// #3): a missing alternate (google) is never itself outstanding, and github
+	// is optional informational, never outstanding either -> zero todos.
+	if len(st.Todos) != 0 {
+		t.Errorf("todos = %v, want 0 (one core provider present, github is informational)", st.Todos)
 	}
 	// Only pi-stack-* sandboxes, "other-box" filtered out.
 	if len(st.Sandboxes) != 2 {
@@ -69,7 +71,15 @@ func TestRenderStatusHuman(t *testing.T) {
 	var out bytes.Buffer
 	renderStatus(cfg, "default", fakeStatusEnv(), &out, false)
 	s := out.String()
-	for _, want := range []string{"pi-stack", "services", "memory ✓", "knowledge ✗", "outstanding"} {
+	// anthropic+openai present already satisfies core model readiness (finding
+	// #3), so this fixture has nothing OUTSTANDING — but its sandboxes' MCP
+	// rows are unverifiable (no receipt state dir in the fake env), and an
+	// unverifiable row must prevent the "all systems go" headline without
+	// becoming a false TODO (redrive finding 5).
+	if strings.Contains(s, "all systems go") {
+		t.Errorf("unverifiable mcp rows must prevent the all-systems-go headline:\n%s", s)
+	}
+	for _, want := range []string{"pi-stack", "services", "memory ✓", "knowledge ✗", "nothing outstanding, but", "unverifiable (not failed"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("status output missing %q:\n%s", want, s)
 		}
@@ -121,8 +131,9 @@ func TestRenderStatusMonitorJSON(t *testing.T) {
 	}
 }
 
-// TestGatherStatusMCP: cfg.MCP servers get a registration + attach-on-run state
-// parsed from `sbx mcp ls`; gog is registered, slack is not.
+// TestGatherStatusMCP: cfg.MCP servers get a registration state parsed from
+// `sbx mcp ls` (host-global summary: registration + preload intent only);
+// gog is registered, slack is not.
 func TestGatherStatusMCP(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"gog", "slack"}}
 	st := gatherStatus(cfg, "default", fakeStatusEnv())
@@ -139,15 +150,11 @@ func TestGatherStatusMCP(t *testing.T) {
 	if byName["slack"].Registered {
 		t.Errorf("slack should NOT be registered: %+v", byName["slack"])
 	}
-	for _, m := range st.MCPServers {
-		if !m.Attach {
-			t.Errorf("%s should be attach-on-run (it's in cfg.MCP)", m.Name)
-		}
-	}
 }
 
-// TestGatherStatusMCPSbxAbsent: with sbx off PATH, MCPServers is empty so render
-// degrades to the bare names.
+// TestGatherStatusMCPSbxAbsent: with sbx off PATH, MCPServers is empty (render
+// degrades to the bare names) — but the per-sandbox rows must render
+// UNVERIFIABLE (discovery unavailable), never a false "no sandboxes".
 func TestGatherStatusMCPSbxAbsent(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"gog"}}
 	env := fakeStatusEnv()
@@ -155,6 +162,16 @@ func TestGatherStatusMCPSbxAbsent(t *testing.T) {
 	st := gatherStatus(cfg, "default", env)
 	if len(st.MCPServers) != 0 {
 		t.Errorf("MCPServers = %+v, want empty when sbx absent", st.MCPServers)
+	}
+	if len(st.MCPRows) != 1 {
+		t.Fatalf("MCPRows = %+v, want 1 unverifiable row (discovery unavailable)", st.MCPRows)
+	}
+	r := st.MCPRows[0]
+	if r.State != mcpJoinUnverifiable || r.Registered != "unknown" || r.Sandbox != "" {
+		t.Errorf("row = %+v, want unverifiable/unknown with no sandbox claim", r)
+	}
+	if !strings.Contains(r.Evidence, "sandbox discovery unavailable") {
+		t.Errorf("evidence should name the discovery gap: %q", r.Evidence)
 	}
 }
 
@@ -167,8 +184,8 @@ func TestRenderStatusMCPJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &st); err != nil {
 		t.Fatalf("status --json invalid: %v\n%s", err, out.String())
 	}
-	if len(st.MCPServers) != 2 || !st.MCPServers[0].Attach {
-		t.Errorf("json mcp_servers = %+v, want 2 attach-on-run entries", st.MCPServers)
+	if len(st.MCPServers) != 2 || !st.MCPServers[0].Registered || st.MCPServers[1].Registered {
+		t.Errorf("json mcp_servers = %+v, want gog registered + slack not", st.MCPServers)
 	}
 }
 
@@ -186,19 +203,53 @@ func TestRenderStatusJSON(t *testing.T) {
 }
 
 // TestStatusRegisterTodo: with sbx reachable and a configured server NOT
-// registered (slack), status appends exactly one `pi-stack mcp register` TODO so
-// it can't claim "all systems go" while a server is unregistered.
+// registered (slack, classified local via pi-stack-host mcp --list), status
+// appends exactly one TYPE-CORRECT register TODO so it can't claim "all
+// systems go" while a server is unregistered.
 func TestStatusRegisterTodo(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"gog", "slack"}}
-	st := gatherStatus(cfg, "default", fakeStatusEnv()) // sbx mcp ls -> gog,notion
+	env := fakeStatusEnv() // sbx mcp ls -> gog,notion
+	env.hostBinary = func() (string, error) { return "/usr/local/bin/pi-stack-host", nil }
+	// probe answers the `pi-stack-host mcp --list` classification call; the
+	// sbx probes (secret ls / mcp ls / sbx ls also route through probeRun now)
+	// fall back to the canned env.run outputs.
+	run := env.run
+	env.probe = func(name string, args ...string) (string, bool, error) {
+		if name == "/usr/local/bin/pi-stack-host" && len(args) == 2 && args[0] == "mcp" && args[1] == "--list" {
+			return "slack\n", false, nil
+		}
+		out, err := run(name, args...)
+		return out, false, err
+	}
+	st := gatherStatus(cfg, "default", env)
 	n := 0
 	for _, tdo := range st.Todos {
-		if tdo == "pi-stack mcp register" {
+		if tdo == "pi-stack mcp register slack" {
 			n++
 		}
 	}
 	if n != 1 {
-		t.Errorf("expected one `pi-stack mcp register` TODO (slack unregistered), got %d: %v", n, st.Todos)
+		t.Errorf("expected one type-correct `pi-stack mcp register slack` TODO, got %d: %v", n, st.Todos)
+	}
+}
+
+// TestStatusRegisterTodoUnclassifiable: a verified registration gap whose kind
+// can't be established (pi-stack-host mcp --list unavailable) still surfaces
+// an outstanding item, but never invents a possibly-wrong repair command.
+func TestStatusRegisterTodoUnclassifiable(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"slack"}}
+	st := gatherStatus(cfg, "default", fakeStatusEnv()) // no hostBinary seam -> kind unknown
+	found := false
+	for _, tdo := range st.Todos {
+		if strings.Contains(tdo, "slack") && strings.Contains(tdo, "pi-stack doctor") {
+			found = true
+		}
+		if strings.HasPrefix(tdo, "pi-stack mcp register") || strings.HasPrefix(tdo, "pi-stack mcp bundle") || strings.HasPrefix(tdo, "sbx mcp add") {
+			t.Errorf("unclassifiable server must not get a guessed repair command: %q", tdo)
+		}
+	}
+	if !found {
+		t.Errorf("expected an outstanding item pointing at doctor: %v", st.Todos)
 	}
 }
 
@@ -208,7 +259,7 @@ func TestStatusNoRegisterTodoWhenRegistered(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"gog", "notion"}} // both in `sbx mcp ls`
 	st := gatherStatus(cfg, "default", fakeStatusEnv())
 	for _, tdo := range st.Todos {
-		if tdo == "pi-stack mcp register" {
+		if strings.Contains(tdo, "mcp register") || strings.Contains(tdo, "mcp bundle") {
 			t.Errorf("did not expect a register TODO when all servers registered: %v", st.Todos)
 		}
 	}
@@ -222,7 +273,7 @@ func TestStatusNoRegisterTodoWhenSbxAbsent(t *testing.T) {
 	env.lookPath = func(name string) (string, error) { return "", fmt.Errorf("not found") }
 	st := gatherStatus(cfg, "default", env)
 	for _, tdo := range st.Todos {
-		if tdo == "pi-stack mcp register" {
+		if strings.Contains(tdo, "mcp register") || strings.Contains(tdo, "mcp bundle") {
 			t.Errorf("did not expect a register TODO when sbx absent: %v", st.Todos)
 		}
 	}
@@ -250,9 +301,9 @@ func TestStatusSbxAbsentNotAllGreen(t *testing.T) {
 }
 
 // TestStatusGogNeedsAuthTodoNotAllGreen: a configured gog account that is NOT
-// authenticated is an outstanding item — status appends a `gog auth login` TODO
-// and the verdict must not be falsely "all systems go", even when every provider
-// key is set.
+// authenticated is an outstanding item — status appends a `pi-stack gog setup`
+// TODO and the verdict must not be falsely "all systems go", even when every
+// provider key is set.
 func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
 	cfg := &config.Config{GogAccount: "me@x.com"}
 	env := shellEnv{
@@ -272,12 +323,12 @@ func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
 	st := gatherStatus(cfg, "default", env)
 	var gogTodo bool
 	for _, tdo := range st.Todos {
-		if tdo == "gog auth login" {
+		if tdo == gogSetupHint {
 			gogTodo = true
 		}
 	}
 	if !gogTodo {
-		t.Errorf("expected a `gog auth login` TODO for an unauthed account, got %v", st.Todos)
+		t.Errorf("expected a `%s` TODO for an unauthed account, got %v", gogSetupHint, st.Todos)
 	}
 	var out bytes.Buffer
 	renderStatus(cfg, "default", env, &out, false)
@@ -326,7 +377,7 @@ func TestStatusSbxProbeFailedTodo(t *testing.T) {
 }
 
 // TestStatusGogNeedsAuth: with a gog account set but no usable auth, the human
-// render shows the "needs auth (run gog auth login)" integrations line.
+// render shows the "needs auth (run pi-stack gog setup)" integrations line.
 func TestStatusGogNeedsAuth(t *testing.T) {
 	cfg := &config.Config{GogAccount: "me@x.com"}
 	env := shellEnv{
@@ -343,8 +394,209 @@ func TestStatusGogNeedsAuth(t *testing.T) {
 	var out bytes.Buffer
 	renderStatus(cfg, "default", env, &out, false)
 	s := out.String()
-	if !strings.Contains(s, "gog") || !strings.Contains(s, "needs auth (run gog auth login)") {
+	if !strings.Contains(s, "gog") || !strings.Contains(s, "needs auth (run "+gogSetupHint+")") {
 		t.Errorf("expected gog needs-auth integrations line, got:\n%s", s)
+	}
+}
+
+// TestStatusOpenAIOnlyAllSystemsGo pins finding #3: with ONLY openai present
+// (anthropic/google unset), status must still read all-systems-go — core
+// model readiness needs just one of the three, and the missing alternates
+// (plus an absent github) are informational, never outstanding.
+func TestStatusOpenAIOnlyAllSystemsGo(t *testing.T) {
+	cfg := &config.Config{}
+	env := shellEnv{
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+				return "openai\n", nil
+			}
+			return "", nil
+		},
+		dial:     func(int) bool { return false },
+		statFile: func(string) bool { return false },
+	}
+	st := gatherStatus(cfg, "default", env)
+	if len(st.Todos) != 0 {
+		t.Errorf("todos = %v, want none (openai alone satisfies core readiness)", st.Todos)
+	}
+	var out bytes.Buffer
+	renderStatus(cfg, "default", env, &out, false)
+	if !strings.Contains(out.String(), "all systems go") {
+		t.Errorf("want all-systems-go with only openai present, got:\n%s", out.String())
+	}
+}
+
+// TestStatusZeroModelKeysOneTodo pins finding #3's other half: POSITIVELY
+// zero model-provider keys confirmed -> exactly ONE core fix TODO (never a
+// per-key TODO per missing provider), and the verdict is not falsely green.
+func TestStatusZeroModelKeysOneTodo(t *testing.T) {
+	cfg := &config.Config{}
+	env := shellEnv{
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+				return "", nil // sbx reachable, nothing set at all
+			}
+			return "", nil
+		},
+		dial:     func(int) bool { return false },
+		statFile: func(string) bool { return false },
+	}
+	st := gatherStatus(cfg, "default", env)
+	if len(st.Todos) != 1 || st.Todos[0] != modelKeyFixCmd {
+		t.Errorf("todos = %v, want exactly [%q]", st.Todos, modelKeyFixCmd)
+	}
+	var out bytes.Buffer
+	renderStatus(cfg, "default", env, &out, false)
+	if strings.Contains(out.String(), "all systems go") {
+		t.Errorf("verdict must not be green with zero confirmed keys, got:\n%s", out.String())
+	}
+}
+
+// TestStatusProbeFailureNoProviderTodo pins finding #3: when the key probe
+// itself is unavailable (sbx absent, or `sbx secret ls` failed), status must
+// never invent a provider/model-key TODO — it does not KNOW keys are
+// missing. The distinct "can't verify" TODO still fires (covered by
+// TestStatusSbxAbsentNotAllGreen / TestStatusSbxProbeFailedTodo); this test
+// pins the NEGATIVE: no core or per-key provider command leaks in either case.
+func TestStatusProbeFailureNoProviderTodo(t *testing.T) {
+	assertNoProviderTodo := func(t *testing.T, st statusReport) {
+		t.Helper()
+		for _, tdo := range st.Todos {
+			if tdo == modelKeyFixCmd || strings.HasPrefix(tdo, "sbx secret set -g ") {
+				t.Errorf("must not invent a provider-key TODO when the probe is unavailable, got %q in %v", tdo, st.Todos)
+			}
+		}
+	}
+
+	t.Run("sbx absent", func(t *testing.T) {
+		cfg := &config.Config{}
+		env := shellEnv{
+			lookPath: func(string) (string, error) { return "", fmt.Errorf("not found") },
+			dial:     func(int) bool { return false },
+			statFile: func(string) bool { return false },
+		}
+		assertNoProviderTodo(t, gatherStatus(cfg, "default", env))
+	})
+
+	t.Run("sbx present, secret ls failed", func(t *testing.T) {
+		cfg := &config.Config{}
+		env := shellEnv{
+			lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+			run: func(name string, args ...string) (string, error) {
+				if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+					return "", fmt.Errorf("sbx secret ls boom")
+				}
+				return "", nil
+			},
+			dial:     func(int) bool { return false },
+			statFile: func(string) bool { return false },
+		}
+		assertNoProviderTodo(t, gatherStatus(cfg, "default", env))
+	})
+}
+
+// TestStatusMCPRegistrationUnverifiableBlocksAllGreen pins closure finding
+// #1: configured/current-intent MCP names exist, sbx is present and
+// provider keys ARE ready, but `sbx mcp ls` fails, and `sbx ls` succeeds
+// with ZERO pi-stack sandboxes. Registration cannot be verified — the
+// verdict must not read "all systems go" even though nothing else is
+// outstanding and there are no sandboxes/rows to render unverifiable.
+func TestStatusMCPRegistrationUnverifiableBlocksAllGreen(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"gog"}}
+	env := shellEnv{
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+				return "anthropic\n", nil // provider-ready
+			}
+			if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
+				return "", fmt.Errorf("mcp ls boom") // registration probe fails
+			}
+			if name == "sbx" && len(args) >= 1 && args[0] == "ls" {
+				return "NAME STATUS\n", nil // zero pi-stack sandboxes
+			}
+			return "", nil
+		},
+		dial:     func(int) bool { return false },
+		statFile: func(string) bool { return false },
+	}
+	st := gatherStatus(cfg, "default", env)
+	if len(st.Todos) != 0 {
+		t.Errorf("todos = %v, want none (a failed registration probe is unverifiable, never a false TODO)", st.Todos)
+	}
+	foundUnverifiable := false
+	for _, m := range st.MCPServers {
+		if m.Name == "gog" && m.Unverifiable {
+			foundUnverifiable = true
+		}
+	}
+	if !foundUnverifiable {
+		t.Errorf("MCPServers = %+v, want a gog entry flagged unverifiable", st.MCPServers)
+	}
+	var out bytes.Buffer
+	renderStatus(cfg, "default", env, &out, false)
+	if strings.Contains(out.String(), "all systems go") {
+		t.Errorf("verdict must not read all-systems-go with unverifiable registration and zero sandboxes, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "unverifiable (not failed") {
+		t.Errorf("expected the unverifiable-not-failed headline, got:\n%s", out.String())
+	}
+
+	var jout bytes.Buffer
+	renderStatus(cfg, "default", env, &jout, true)
+	var jst statusReport
+	if err := json.Unmarshal(jout.Bytes(), &jst); err != nil {
+		t.Fatalf("status --json invalid: %v\n%s", err, jout.String())
+	}
+	found := false
+	for _, m := range jst.MCPServers {
+		if m.Name == "gog" && m.Unverifiable {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("json mcp_servers = %+v, want a gog entry with unverifiable:true", jst.MCPServers)
+	}
+}
+
+// TestStatusMCPLoadTodoQuotesWorkspace pins closure finding #3: the mcp/box
+// registered-not-attached repair command status prints shell-quotes both the
+// server name and the workspace, so a path with spaces, an apostrophe, and a
+// shell metacharacter round-trips safely when copy-pasted.
+func TestStatusMCPLoadTodoQuotesWorkspace(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"slack"}}
+	const ws = "/home/u/my repo's proj; touch pwned"
+	const box = "pi-stack-proj"
+	env := fakeStatusEnv()
+	stateDir := t.TempDir()
+	env.stateDir = func() (string, error) { return stateDir, nil }
+	env.run = func(name string, args ...string) (string, error) {
+		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+			return "anthropic\n", nil
+		}
+		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
+			return "slack\n", nil
+		}
+		if name == "sbx" && len(args) >= 1 && args[0] == "ls" {
+			return "NAME STATUS\n" + box + " running\n", nil
+		}
+		return "", nil
+	}
+	if err := writeCreateReceipt(stateDir, box, ws, []string{"notion"}, receiptClock); err != nil {
+		t.Fatal(err)
+	}
+	st := gatherStatus(cfg, "default", env)
+	var td string
+	for _, tdo := range st.Todos {
+		if strings.HasPrefix(tdo, "pi-stack mcp load") {
+			td = tdo
+		}
+	}
+	want := "pi-stack mcp load " + shellQuoteArg("slack") + " " + shellQuoteArg(ws)
+	if td != want {
+		t.Errorf("todo = %q, want %q", td, want)
 	}
 }
 

@@ -57,7 +57,7 @@ func TestAddArgs_Slack(t *testing.T) {
 }
 
 // TestAddArgs_LocalServer builds the pi-stack-host subcommand form for an
-// arbitrary (overlay) local stdio server like "pio": it registers as
+// arbitrary local stdio server like "pio": it registers as
 // `pi-stack-host mcp pio`, exactly like slack, via the serverCmd default.
 func TestAddArgs_LocalServer(t *testing.T) {
 	args := gogRegistrar().addArgs("pio")
@@ -96,8 +96,8 @@ func TestAddArgs_GogBare(t *testing.T) {
 
 // TestRegisterServers_GogNoOpRefsBare: gateway on, op + op-refs ABSENT, gog
 // present + account set -> gog registers DIRECTLY (bare command, no op wrapper)
-// with the OAuth note. gog uses OAuth (gog auth login), never op-refs, so the
-// note must NOT mention op-refs.
+// with the OAuth note. gog uses guided OAuth (`pi-stack gog setup`), never
+// op-refs, so the note must NOT mention op-refs.
 func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 	f := fakeEnv{
 		present: map[string]bool{"gog": true}, // no op, no sbx
@@ -108,8 +108,8 @@ func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil); !errors.Is(err, errSbxUnavailable) {
+		t.Fatalf("expected errSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
 	if !strings.Contains(out, "registered gog directly") {
@@ -126,8 +126,9 @@ func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 
 // TestRegisterServers_GogOnlyNoSeed (R5-1/R5-2): a gog-only clean state with op
 // NOT resolvable must NOT create op-refs.env at the XDG path and must NOT print a
-// "seeded" line. gog authenticates via OAuth (gog auth login), never op-refs, so
-// seeding one contradicts setup Step 4's "No file is created" copy.
+// "seeded" line. gog authenticates via guided OAuth (`pi-stack gog setup`),
+// never op-refs, so seeding one contradicts setup Step 4's "No file is
+// created" copy.
 func TestRegisterServers_GogOnlyNoSeed(t *testing.T) {
 	home := t.TempDir()
 	env := (fakeEnv{
@@ -140,8 +141,8 @@ func TestRegisterServers_GogOnlyNoSeed(t *testing.T) {
 	cfg.MCP = []string{"gog"}
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	if err := registerServers(cfg, env, &buf, nil, hostStub("/usr/bin/pi-stack-host", nil), nil); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := registerServers(cfg, env, &buf, nil, hostStub("/usr/bin/pi-stack-host", nil), nil); !errors.Is(err, errSbxUnavailable) {
+		t.Fatalf("expected errSbxUnavailable, got: %v", err)
 	}
 	seeded := filepath.Join(home, ".config", "pi-stack", "op-refs.env")
 	if _, err := os.Stat(seeded); !os.IsNotExist(err) {
@@ -168,8 +169,8 @@ func TestRegisterServers_SlackNoOpRefsBare(t *testing.T) {
 	}
 	cfg := defaultCfg()
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, []string{"slack"}, hostStub("/usr/bin/pi-stack-host", nil), nil); err != nil {
-		t.Fatalf("unexpected error (slack should register bare, not fail): %v", err)
+	if err := registerServers(cfg, f.env(), &buf, []string{"slack"}, hostStub("/usr/bin/pi-stack-host", nil), nil); !errors.Is(err, errSbxUnavailable) {
+		t.Fatalf("expected errSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
 	if !strings.Contains(out, "registered slack directly (bare, no 1Password)") {
@@ -197,8 +198,8 @@ func TestRegisterServers_SlackOpRefsAbsentSeeds(t *testing.T) {
 	}).env()
 	cfg := defaultCfg()
 	var buf bytes.Buffer
-	if err := registerServers(cfg, env, &buf, []string{"slack"}, hostStub("/usr/bin/pi-stack-host", nil), nil); err != nil {
-		t.Fatalf("unexpected error (slack should register bare, not fail): %v", err)
+	if err := registerServers(cfg, env, &buf, []string{"slack"}, hostStub("/usr/bin/pi-stack-host", nil), nil); !errors.Is(err, errSbxUnavailable) {
+		t.Fatalf("expected errSbxUnavailable, got: %v", err)
 	}
 	seeded := filepath.Join(home, ".config", "pi-stack", "op-refs.env")
 	info, err := os.Stat(seeded)
@@ -231,8 +232,8 @@ func TestRegisterServers_RemoteSkipped(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"slack", "notion"}
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pi-stack-host", nil), nil); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pi-stack-host", nil), nil); !errors.Is(err, errSbxUnavailable) {
+		t.Fatalf("expected errSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
 	if !strings.Contains(out, "notion: gateway-catalog server, not locally registered") {
@@ -264,8 +265,8 @@ func TestRegisterServers_RemoteWithURLRegistered(t *testing.T) {
 	cfg.MCP = []string{"opine"}
 	containers := map[string]packContainer{"opine": {RemoteURL: "https://app.tryopine.com/mcp"}}
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pi-stack-host", nil), containers); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pi-stack-host", nil), containers); !errors.Is(err, errSbxUnavailable) {
+		t.Fatalf("expected errSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
 	if !strings.Contains(out, "sbx mcp add opine --url https://app.tryopine.com/mcp") {
@@ -379,8 +380,8 @@ func TestRegisterServers_SbxAbsentPrintsWouldRun(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil); !errors.Is(err, errSbxUnavailable) {
+		t.Fatalf("expected errSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
 	if !strings.Contains(out, "sbx mcp add gog") || !strings.Contains(out, "me@x.com") {
@@ -425,10 +426,10 @@ func TestRegisterServers_DefaultsToConfigMCP(t *testing.T) {
 		statFile: map[string]bool{"/fake/config/op-refs.env": true},
 	}
 	cfg := defaultCfg()
-	cfg.MCP = []string{"pio"} // an overlay local stdio server
+	cfg.MCP = []string{"pio"} // an arbitrary local stdio server
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pi-stack-host", nil), nil); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pi-stack-host", nil), nil); !errors.Is(err, errSbxUnavailable) {
+		t.Fatalf("expected errSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
 	if !strings.Contains(out, "sbx mcp add pio") ||

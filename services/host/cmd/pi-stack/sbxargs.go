@@ -44,8 +44,8 @@ type runOpts struct {
 	LocalImageTag string   // contents of <repo>/out/.local-image-tag; pins --template to the locally loaded image when set (caller reads it)
 	Skills        []string // --skills DIR: extra live skill trees
 	Kits          []string // --kit K: escape-hatch kit(s). When present they REPLACE the auto git/local pin (a user override), then config stack applies.
-	MCP           []string // --mcp M: extra MCP servers on top of config.MCP (fed into StaticMCP resolution by the caller)
-	StaticMCP     []string // RESOLVED set to attach at create (emitted as --static-mcp); the caller computes it from cfg.MCP+MCP via resolveStaticMCP (local stdio static, remote dynamic, per-server overrides)
+	MCP           []string // --mcp M: extra MCP servers on top of config.MCP (folded into StaticMCP by the caller)
+	StaticMCP     []string // RESOLVED set to attach at create (emitted as --static-mcp); the caller computes it from cfg.MCP+MCP via allPreloadedMCP — S01: every configured/pack server preloads, no eager/lazy split
 	Name          string   // --name N: sandbox name
 	Model         string   // --model M: active pi model (passed through to pi)
 	Intent        string   // --intent NAME: resolve the session model via the router (unless --model overrides)
@@ -59,10 +59,11 @@ type runOpts struct {
 	// own unconditional --kit loop.
 	PackKits    []string
 	Passthrough []string // args after `--`, handed straight to pi
-	// Token is the credential bearer for an OPTIONAL overlay broker. The default
-	// path leaves it empty and forwards no bearer (gog authenticates host-side in
-	// the gateway-spawned MCP server). Reserved for the dormant generic broker
-	// seam; never emitted on argv (it would go via the sbx child env, like run.go).
+	// Token is the credential bearer for an OPTIONAL external credential broker
+	// plugin. The default path leaves it empty and forwards no bearer (gog
+	// authenticates host-side in the gateway-spawned MCP server). Reserved for
+	// the dormant generic broker seam; never emitted on argv (it would go via
+	// the sbx child env, like run.go).
 	Token string
 }
 
@@ -141,25 +142,24 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 	for _, k := range o.PackKits {
 		args = append(args, "--kit", k)
 	}
-	// Config/overlay stack always applies on top of the base.
+	// Config-stacked kits always apply on top of the base.
 	for _, k := range cfg.Kits.Stack {
 		args = append(args, "--kit", k)
 	}
 
-	// MCP servers: emit --static-mcp for the RESOLVED static set (o.StaticMCP,
-	// computed by the caller via resolveStaticMCP — local stdio static, remote
-	// dynamic, per-server overrides). sbx's flag is --static-mcp (the fixed set
-	// chosen at CREATE; can't change on re-attach). The local data-plane gateway
-	// serves them with no SBX_MCP_URL. Dynamic servers are intentionally omitted —
-	// the in-VM agent pulls them on demand; attach one to a RUNNING sandbox with
-	// `pi-stack mcp load`.
+	// MCP servers: emit --static-mcp for every preloaded server (o.StaticMCP,
+	// computed by the caller via allPreloadedMCP — S01: all configured/pack
+	// servers preload, no eager/lazy split). sbx's flag is --static-mcp (the
+	// fixed set chosen at CREATE; can't change on re-attach). The local
+	// data-plane gateway serves them with no SBX_MCP_URL. Attach one to an
+	// ALREADY-RUNNING sandbox live (no recreate) with `pi-stack mcp load`.
 	for _, m := range o.StaticMCP {
 		args = append(args, "--static-mcp", m)
 	}
 
 	// The default path forwards NO credential bearer: gog authenticates on the
 	// host inside the gateway-spawned MCP server, so nothing needs injecting. If a
-	// future overlay broker sets o.Token, it goes via the sbx CHILD PROCESS ENV
+	// future external credential broker plugin sets o.Token, it goes via the sbx CHILD PROCESS ENV
 	// (never argv, which `ps`/EDR can read) — keep this arg builder token-free.
 
 	// Workspace (first non-flag positional).
@@ -292,7 +292,7 @@ func definitelyCreating(state sbxState, replace bool) bool {
 
 // buildReattachArgs composes the argv for RE-ATTACHING to an existing sandbox:
 // `run --name <name>`, deliberately WITHOUT any create-only flag
-// (--kit/--template/--mcp, the overlay-kit stack, or the --dev/--skills live
+// (--kit/--template/--mcp, the config-stacked kits, or the --dev/--skills live
 // trees) — sbx reads the agent from the existing sandbox's own spec, so
 // reapplying them would be a no-op at best and a lie about what's running at
 // worst. --model/--intent are NOT create-only, though: they are pi RUNTIME args

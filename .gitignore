@@ -42,7 +42,7 @@ out/
 
 
 # --- Open-core boundary: skills (MUST mirror .dockerignore) ---------------------
-# DEFAULT-DENY so `git add -A` can never stage a company/overlay skill (one that
+# DEFAULT-DENY so `git add -A` can never stage a company/private-pack skill (one that
 # carries proprietary schema or figures) into the public repo. Only the generic
 # CORE skills below are tracked; everything else stays local.
 # Keep this list in sync with the !skills/... allowlist in .dockerignore.
@@ -110,13 +110,6 @@ agents/*
 !agents/security-lead.md
 !agents/sre-lead.md
 !agents/ux-copywriter.md
-
-# --- Private overlay (see docs/OVERLAY.md) ------------------------------------
-# The overlay is its OWN peer repo (default ../pi-stack-work), not in this tree.
-# `make serve` symlinks its host plugins into services/host/ as overlay_*.go so they
-# compile into pi-stack-host; the symlinks are gitignored and the public binary
-# builds identically without them.
-services/host/overlay_*.go
 
 # Compiled pi-stack-host binary (build artifact from `make serve` / `go build`).
 services/host/host

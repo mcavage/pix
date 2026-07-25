@@ -1,6 +1,6 @@
 // hoststate.go builds the host-visible facts the fenced in-VM agent CANNOT see
 // for itself (keys resolved, services up, knowledge bundles, gog/mcp state,
-// models, overlay/provisioned) ENTIRELY IN MEMORY — it is never written to a
+// models, pack/provisioned) ENTIRELY IN MEMORY — it is never written to a
 // workspace file. run.go injects the resulting JSON directly into the
 // launcher-generated initial prompt (the one message carrying
 // generatedInputMarker), so the onboarding skill reads trusted facts from that
@@ -52,18 +52,20 @@ type hostStateKnowledge struct {
 	ServiceUp bool     `json:"service_up"`
 }
 
+// hostStateGog carries ONLY whether gog is wired, never the configured
+// account email. `enabled` is sufficient for onboarding to say "Gmail/Drive
+// isn't set up yet" or "it's on" — the email address is real PII with no
+// onboarding use that justifies putting it in every session's prompt. The
+// account still lives in cfg.GogAccount (host config, doctor, `gog setup`
+// re-registration) — it is just never copied into this model-visible
+// payload. Same rationale as hostStateIdentity dropping email.
 type hostStateGog struct {
-	Enabled bool   `json:"enabled"`
-	Account string `json:"account"`
+	Enabled bool `json:"enabled"`
 }
 
 type hostStateMCP struct {
 	Enabled bool     `json:"enabled"`
 	Servers []string `json:"servers"`
-}
-
-type hostStateOverlay struct {
-	Kit string `json:"kit"`
 }
 
 type hostStateModels struct {
@@ -94,7 +96,6 @@ type hostState struct {
 	Knowledge   hostStateKnowledge `json:"knowledge"`
 	Gog         hostStateGog       `json:"gog"`
 	MCP         hostStateMCP       `json:"mcp"`
-	Overlay     hostStateOverlay   `json:"overlay"`
 	Models      hostStateModels    `json:"models"`
 	Pack        hostStatePack      `json:"pack"`
 	Host        hostStateHost      `json:"host"`
@@ -172,7 +173,7 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		}
 		return dial(p)
 	}
-	keyOK := func(name string) bool { return secretCheck(name, name, sbxSecretsOut, sbxOK).state == stateOK }
+	keyOK := func(name string) bool { return secretCheck(name, name, sbxSecretsOut, sbxOK).state() == stateOK }
 	if keysSource == "" {
 		keysSource = "sbx"
 	}
@@ -186,10 +187,6 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 	keys.Resolved = keys.Anthropic || keys.OpenAI || keys.Google
 
 	bundles := append([]string(nil), cfg.KnowledgeBundles...)
-	overlayKit := ""
-	if stack := cfg.Kits.Stack; len(stack) > 0 {
-		overlayKit = filepath.Base(strings.TrimSpace(stack[0]))
-	}
 
 	mcpServers := append([]string(nil), cfg.MCP...)
 	gogEnabled := false
@@ -203,17 +200,16 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		Keys:      keys,
 		Memory:    hostStateSvc{Up: dialer(memoryPortDefault), Port: memoryPortDefault},
 		Knowledge: hostStateKnowledge{Bundles: bundles, Seeded: len(bundles) > 0, ServiceUp: dialer(knowledgePortDefault)},
-		Gog:       hostStateGog{Enabled: gogEnabled, Account: cfg.GogAccount},
+		Gog:       hostStateGog{Enabled: gogEnabled},
 		MCP:       hostStateMCP{Enabled: len(mcpServers) > 0, Servers: mcpServers},
-		Overlay:   hostStateOverlay{Kit: overlayKit},
 		Models:    hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},
 		Pack:      pack,
 		Host:      buildHostStateHost(cfg),
 	}
 	// Provisioned: an inherited, fully set-up environment that must NOT be
-	// re-onboarded — keys resolved AND a knowledge bundle already seeded AND an
-	// overlay kit stacked. Onboarding short-circuits to "you're set up" on true.
-	hs.Provisioned = keys.Resolved && hs.Knowledge.Seeded && overlayKit != ""
+	// re-onboarded — keys resolved AND a knowledge bundle already seeded AND a
+	// pack actually active. Onboarding short-circuits to "you're set up" on true.
+	hs.Provisioned = keys.Resolved && hs.Knowledge.Seeded && hs.Pack.Active
 	return hs
 }
 
@@ -301,8 +297,10 @@ func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
 func buildTrustedHostState(cfg *config.Config, env shellEnv, packOverride string) hostState {
 	sbxOut, sbxOK := "", false
 	if env.lookPath != nil {
-		if _, err := env.lookPath("sbx"); err == nil && env.run != nil {
-			if o, rerr := env.run("sbx", "secret", "ls"); rerr == nil {
+		if _, err := env.lookPath("sbx"); err == nil {
+			// BOUNDED (probeRun): a hung `sbx secret ls` leaves sbxOK=false —
+			// keys stay unverified, and setup's payload build never wedges.
+			if o, timedOut, rerr := probeRun(env, "sbx", "secret", "ls"); rerr == nil && !timedOut {
 				sbxOut, sbxOK = o, true
 			}
 		}

@@ -79,8 +79,9 @@ func runLs(argv []string) {
 			fatalSbx(fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to list sandboxes"))
 		}
 	}
-	out, err := env.run("sbx", "ls")
-	if err != nil {
+	// BOUNDED (probeRun): a hung `sbx ls` fails with a message, never wedges.
+	out, timedOut, err := probeRun(env, "sbx", "ls")
+	if timedOut || err != nil {
 		fatalSbx(fmt.Errorf("sbx ls failed: %v", err))
 	}
 	boxes := parsePiStackBoxes(out)
@@ -142,8 +143,11 @@ func runRm(argv []string) {
 	}
 
 	if all {
-		out, err := env.run("sbx", "ls")
-		if err != nil {
+		// BOUNDED (probeRun): the --all discovery listing is read-only; a hung
+		// sbx fails with a message rather than wedging (the `sbx rm -f` calls
+		// below are mutating lifecycle commands and stay on env.run).
+		out, timedOut, err := probeRun(env, "sbx", "ls")
+		if timedOut || err != nil {
 			fatalSbx(fmt.Errorf("sbx ls failed: %v", err))
 		}
 		keepSet := map[string]bool{}
@@ -168,7 +172,7 @@ func runRm(argv []string) {
 			rc = 1
 			continue
 		}
-		if _, err := env.run("sbx", "rm", "-f", n); err != nil {
+		if err := removePiStackSandbox(env, n); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to remove %s: %v\n", n, err)
 			rc = 1
 			continue
@@ -178,6 +182,23 @@ func runRm(argv []string) {
 	if rc != 0 {
 		os.Exit(rc)
 	}
+}
+
+// removePiStackSandbox force-removes name via env and, on SUCCESS, clears the
+// launcher's per-sandbox MCP receipt — a removed sandbox's receipt describes
+// a dead lifetime. A failed rm returns the error and RETAINS the receipt: an
+// unknown removal outcome must keep the evidence, never discard it on a
+// guess. The receipt clear itself is best-effort (warn, don't fail the rm —
+// the removal DID succeed, and the next launcher create's pre-create clear is
+// the correctness backstop).
+func removePiStackSandbox(env shellEnv, name string) error {
+	if _, err := env.run("sbx", "rm", "-f", name); err != nil {
+		return err
+	}
+	if err := clearRemovedSandboxReceipt(name); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: removed %s but could not clear its mcp receipt: %v\n", name, err)
+	}
+	return nil
 }
 
 const lsUsage = `usage: pi-stack ls [--json]

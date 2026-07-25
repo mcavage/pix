@@ -674,11 +674,15 @@ func executeTaskTeardown(env shellEnv, w io.Writer, meta taskMeta, co, name, rec
 		// failure aborts BEFORE deleting the checkout.
 		if out, err := env.run("sbx", "rm", "-f", meta.Sandbox); err != nil {
 			if probeTaskSandbox(env, meta.Sandbox) == sbxAbsent {
-				return 0 // rm -f failed only because there was nothing to remove.
+				// rm -f failed only because there was nothing to remove — the
+				// lifetime is positively over, so the receipt goes too.
+				clearTaskSandboxReceipt(w, meta.Sandbox)
+				return 0
 			}
 			fmt.Fprintf(w, "pi-stack task rm: `sbx rm -f %s` failed; leaving clone intact at %s: %v\n%s", meta.Sandbox, co, err, out)
 			return 1
 		}
+		clearTaskSandboxReceipt(w, meta.Sandbox)
 		return 0
 	}
 	// NON-FORCE: ALWAYS route through `sbx rm` WITHOUT -f — even when the fresh
@@ -696,6 +700,8 @@ func executeTaskTeardown(env shellEnv, w io.Writer, meta taskMeta, co, name, rec
 			// The rm failed because the sandbox was not present; nothing was
 			// removed and nothing live can be relying on the clone. Proceed.
 		case sbxUnknown:
+			// NOTE: every ABORT path below (unknown/running/stopped) RETAINS the
+			// MCP receipt — the sandbox was not positively removed.
 			fmt.Fprintf(w, "pi-stack task rm: `sbx rm %s` failed and the sandbox state can no longer be determined (sbx ls failed); leaving clone intact at %s: %v\n%s", meta.Sandbox, co, err, out)
 			fmt.Fprintln(w, "Resolve (check `sbx ls`), then retry.")
 			return 1
@@ -705,7 +711,20 @@ func executeTaskTeardown(env shellEnv, w io.Writer, meta taskMeta, co, name, rec
 			return 1
 		}
 	}
+	// Removal succeeded (or the sandbox was positively confirmed gone): the
+	// lifetime is over, so its MCP receipt is stale evidence — clear it (E).
+	clearTaskSandboxReceipt(w, meta.Sandbox)
 	return 0
+}
+
+// clearTaskSandboxReceipt clears the launcher MCP receipt after a task path
+// POSITIVELY removed (or confirmed gone) its sandbox. Best-effort with a
+// warning to w: the removal itself already succeeded, and the next launcher
+// create's pre-create clear is the correctness backstop.
+func clearTaskSandboxReceipt(w io.Writer, sandbox string) {
+	if err := clearRemovedSandboxReceipt(sandbox); err != nil {
+		fmt.Fprintf(w, "pi-stack task rm: warning: could not clear the mcp receipt for removed sandbox %s: %v\n", sandbox, err)
+	}
 }
 
 // gatherTaskState collects the four guard facts via the shellEnv seam (real git
@@ -792,11 +811,10 @@ func parseCount(s string) int {
 // is the DISPLAY-only accessor used by `task ls`; destructive decisions use the
 // tri-state probeTaskSandbox instead, which never conflates errored with absent.
 func taskSandboxStatus(env shellEnv, name string) string {
-	if env.run == nil {
-		return ""
-	}
-	out, err := env.run("sbx", "ls")
-	if err != nil {
+	// BOUNDED (probeRun): a hung `sbx ls` yields "" (no display status), it
+	// never wedges `task ls`.
+	out, timedOut, err := probeRun(env, "sbx", "ls")
+	if timedOut || err != nil {
 		return ""
 	}
 	for _, line := range strings.Split(out, "\n") {
@@ -827,13 +845,11 @@ const (
 // probeTaskSandbox classifies name from `sbx ls` via the seam into one of
 // {running, stopped, absent, unknown}. A non-zero/errored sbx invocation (or a
 // missing runner) is UNKNOWN, never absent, so a failed probe can never be read
-// as "the sandbox was never created".
+// as "the sandbox was never created". BOUNDED (probeRun): a hung sbx times out
+// to UNKNOWN — run/setup/task preflights degrade honestly instead of wedging.
 func probeTaskSandbox(env shellEnv, name string) sbxState {
-	if env.run == nil {
-		return sbxUnknown
-	}
-	out, err := env.run("sbx", "ls")
-	if err != nil {
+	out, timedOut, err := probeRun(env, "sbx", "ls")
+	if timedOut || err != nil {
 		return sbxUnknown
 	}
 	for _, line := range strings.Split(out, "\n") {
@@ -1121,6 +1137,9 @@ func prepareTaskLaunchSandbox(env shellEnv, name string) error {
 			return fmt.Errorf("could not remove the stopped sandbox %q; it may be running. "+
 				"Stop it (sbx stop %s) or remove it, then retry: %v\n%s", name, name, err, strings.TrimRight(out, "\n"))
 		}
+		// Launcher-side removal succeeded: the old lifetime's MCP receipt is
+		// dead — clear it (E). Best-effort; the new create clears again anyway.
+		clearTaskSandboxReceipt(os.Stderr, name)
 		return nil
 	}
 }
@@ -1205,9 +1224,10 @@ func launchTask(o runOpts) error {
 	writePackContextFiles(cfg, o, effectivePack)
 	writeSandboxPackMarker(o.Workspace, effectivePack)
 
-	// Resolve the eager (--static-mcp) set; default dynamic, only mcp_static pins
-	// eager. A task is always a fresh create, so it's always needed.
-	o.StaticMCP = resolveStaticMCP(append(append([]string(nil), cfg.MCP...), o.MCP...), cfg)
+	// Resolve every configured MCP server to attach at create (--static-mcp).
+	// S01: all of them preload. A task is always a fresh create, so it's always
+	// needed.
+	o.StaticMCP = allPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
 
 	args := buildSbxArgs(cfg, o, version)
 	if os.Getenv("PI_STACK_DEBUG") != "" {
@@ -1218,7 +1238,13 @@ func launchTask(o runOpts) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
-	return cmd.Run()
+	// A task is ALWAYS a fresh create, so it runs the same corrected create
+	// lifecycle as `pi-stack run` (run.go): pre-create receipt clear, Start,
+	// creation-evidence poll, mid-session receipt commit for o.StaticMCP, Wait.
+	// A *receiptRecordError here reaches `task new`'s error report as-is — the
+	// sandbox probe there reads running/stopped, so the clone is kept and the
+	// honest "created but unrecorded" message is printed, never a rollback.
+	return execSbxRunAndRecordCreate(cmd, true, o.Name, canonicalWorkspacePath(o.Workspace), o.StaticMCP)
 }
 
 // ---------------------------------------------------------------------------

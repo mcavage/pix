@@ -206,8 +206,8 @@ type KnowledgeHealth struct {
 //
 // The "keep the long-lived credential on the host, mint a short-lived one, run
 // the real CLI in the VM" pattern as one interface any provider can implement.
-// The public tree ships no built-in broker (the seam is dormant, for overlays);
-// a warehouse/CRM broker would honour Audience and scopes.
+// The public tree ships no built-in broker (the seam is dormant); an external
+// warehouse/CRM broker plugin would honour Audience and scopes.
 
 type CredentialBroker interface {
 	Mint(audience string, scopes []string) (Token, error)

@@ -51,13 +51,15 @@ type onboardKnowledge struct {
 // agent and consumed by the host on the next run.
 const onboardingFileName = "onboarding.json"
 
-// onboardMCPCatalogAllow is the curated set of remote gateway-catalog MCP names
-// the onboarding file may enable in addition to gog and the locally-known
-// servers. Kept deliberately small; anything else is configured with
-// `pi-stack mcp` directly, not via an untrusted onboarding file.
-var onboardMCPCatalogAllow = map[string]bool{
-	"notion": true, "atlassian": true, "granola": true, "linear": true,
-}
+// onboardMCPCatalogAllow is the set of remote gateway-catalog MCP names the
+// onboarding file may enable in addition to gog and the locally-known servers.
+// It IS mcpCatalogNames — the single source of truth for what `pi-stack mcp
+// bundle` actually registers — never an independent copy that can drift (the
+// old hand-written list had grown a "linear" that no pi-stack command could
+// register, so accepting it silently persisted a server that could never
+// come up). Anything else is configured with `pi-stack mcp` directly, not via
+// an untrusted onboarding file.
+var onboardMCPCatalogAllow = mcpCatalogNames
 
 // validateOnboardingResult rejects anything outside the allowlist BEFORE it
 // touches config. env/hostResolver resolve the locally-known MCP set; when that
@@ -173,6 +175,14 @@ func reconcileOnboarding(workspace string, env shellEnv, in io.Reader, out io.Wr
 		fmt.Fprintln(out, "  Inspect and remove it by hand if it is not what you intended.")
 		return
 	}
+	// A shipped-catalog remote in the proposal must be registered AND
+	// auth-ready BEFORE anything is persisted — never applied on the promise
+	// that someone will run bundle/auth later.
+	if err := verifyCatalogMCPReady(env, r.MCP); err != nil {
+		fmt.Fprintf(out, "pi-stack: refusing onboarding proposal in %s: %v\n", path, err)
+		fmt.Fprintln(out, "  Nothing was applied; the file was left in place.")
+		return
+	}
 
 	// Preview: apply against a COPY to compute the diff without committing.
 	preview := *cfg
@@ -247,7 +257,12 @@ type onboardOpts struct {
 	model     string
 	apply     bool
 	assumeYes bool
-	help      bool
+	// pullModels is `pi-stack setup`'s explicit local-model download consent
+	// (S08). Parsed here because setup shares this parser; `pi-stack onboard`
+	// itself REJECTS it — onboard is the scripted host-config path and never
+	// downloads models.
+	pullModels bool
+	help       bool
 }
 
 func parseOnboardArgs(argv []string) (onboardOpts, error) {
@@ -274,6 +289,8 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 			return o, fmt.Errorf("--use-1password has been removed: 1Password is now the only provider-key source, so `pi-stack setup` always uses it")
 		case a == "--yes" || a == "-y" || a == "--non-interactive":
 			o.assumeYes = true
+		case a == "--pull-models":
+			o.pullModels = true
 		case a == "--account":
 			o.account, err = next()
 		case strings.HasPrefix(a, "--account="):
@@ -316,6 +333,10 @@ func runOnboardCmd(argv []string) {
 		fmt.Print(onboardUsage)
 		return
 	}
+	if opts.pullModels {
+		fmt.Fprintln(os.Stderr, "pi-stack onboard: --pull-models belongs to `pi-stack setup` (onboard never downloads models)")
+		os.Exit(2)
+	}
 	env := defaultShellEnv()
 
 	if opts.apply {
@@ -343,6 +364,13 @@ func runOnboardCmd(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack onboard: %v\n", err)
 		os.Exit(2)
 	}
+	// Catalog remotes must be registered + auth-ready BEFORE the config save:
+	// onboard never persists a server that cannot come up, and never opens an
+	// OAuth flow itself (it prints the exact commands instead).
+	if err := verifyCatalogMCPReady(env, r.MCP); err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack onboard: %v\n", err)
+		os.Exit(1)
+	}
 	changes, err := applyOnboardingResult(r, cfg, env, os.Stdout, func(c *config.Config) error { return c.Save() })
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack onboard: %v\n", err)
@@ -368,14 +396,16 @@ func runOnboardCmd(argv []string) {
 func onboardReportReadiness(env shellEnv, out io.Writer) {
 	sbxOut, sbxOK := "", false
 	if _, err := env.lookPath("sbx"); err == nil {
-		if o, err := env.run("sbx", "secret", "ls"); err == nil {
+		// BOUNDED (probeRun): a hung `sbx secret ls` leaves sbxOK=false — the
+		// report degrades to no key claims and never wedges onboard.
+		if o, timedOut, err := probeRun(env, "sbx", "secret", "ls"); err == nil && !timedOut {
 			sbxOut, sbxOK = o, true
 		}
 	}
 	if sbxOK {
 		anyKey := false
 		for _, key := range []string{"anthropic", "openai", "google"} {
-			if secretCheck(key, key, sbxOut, sbxOK).state == stateOK {
+			if secretCheck(key, key, sbxOut, sbxOK).state() == stateOK {
 				anyKey = true
 			}
 		}

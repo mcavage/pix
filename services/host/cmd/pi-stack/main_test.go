@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -195,7 +197,7 @@ func TestBuildSbxArgs_DevVersionTracksMain(t *testing.T) {
 
 func TestBuildSbxArgs_KitStacking(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Kits.Stack = []string{"/overlay/kit", "git+https://example.com/other#dir=kit"}
+	cfg.Kits.Stack = []string{"/mixin/kit", "git+https://example.com/other#dir=kit"}
 	args := buildSbxArgs(cfg, runOpts{Workspace: ".", Kits: []string{"/flag/kit"}}, "0.0.99")
 
 	// --kit override (1 flag kit, base) + 2 config stack = 3 --kit total. The
@@ -203,7 +205,7 @@ func TestBuildSbxArgs_KitStacking(t *testing.T) {
 	if got := countFlag(args, "--kit"); got != 3 {
 		t.Errorf("expected 3 --kit flags, got %d in %v", got, args)
 	}
-	if !contains(args, []string{"--kit", "/overlay/kit"}) {
+	if !contains(args, []string{"--kit", "/mixin/kit"}) {
 		t.Errorf("config stack kit missing from %v", args)
 	}
 	if !contains(args, []string{"--kit", "/flag/kit"}) {
@@ -217,7 +219,7 @@ func TestBuildSbxArgs_KitStacking(t *testing.T) {
 
 func TestBuildSbxArgs_StackWithoutOverride(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Kits.Stack = []string{"/overlay/kit"}
+	cfg.Kits.Stack = []string{"/mixin/kit"}
 	args := buildSbxArgs(cfg, runOpts{Workspace: "."}, "0.0.99")
 	// Released base git kit + 1 config stack = 2.
 	if got := countFlag(args, "--kit"); got != 2 {
@@ -230,9 +232,9 @@ func TestBuildSbxArgs_StackWithoutOverride(t *testing.T) {
 
 func TestBuildSbxArgs_MCPExpansion(t *testing.T) {
 	cfg := &config.Config{}
-	// buildSbxArgs emits --static-mcp for the RESOLVED static set (o.StaticMCP);
-	// the caller computes it via resolveStaticMCP. The sbx local gateway serves
-	// them, no SBX_MCP_URL.
+	// buildSbxArgs emits --static-mcp for the PRELOADED set (o.StaticMCP); the
+	// caller computes it via allPreloadedMCP. The sbx local gateway serves them,
+	// no SBX_MCP_URL.
 	args := buildSbxArgs(cfg, runOpts{Workspace: ".", StaticMCP: []string{"slack", "notion", "linear"}}, "0.0.99")
 
 	if got := countFlag(args, "--static-mcp"); got != 3 {
@@ -248,45 +250,68 @@ func TestBuildSbxArgs_MCPExpansion(t *testing.T) {
 	}
 }
 
-// resolveStaticMCP: default dynamic for every server; only mcp_static pins eager;
-// mcp_dynamic wins if a server is in both.
-func TestResolveStaticMCP(t *testing.T) {
-	// Default: nothing configured -> nothing static (all dynamic), local or remote.
-	if got := resolveStaticMCP([]string{"slack", "notion", "gog"}, &config.Config{}); len(got) != 0 {
-		t.Errorf("default must be all-dynamic (empty static set), got %v", got)
+// allPreloadedMCP: S01 — every configured server preloads, no eager/lazy
+// split. It is pure list hygiene: dedupe + drop empties, order preserved.
+func TestAllPreloadedMCP(t *testing.T) {
+	if got := allPreloadedMCP(nil); len(got) != 0 {
+		t.Errorf("allPreloadedMCP(nil) = %v, want none", got)
 	}
-	// mcp_static pins eager; mcp_dynamic wins over mcp_static; order preserved.
-	cfg := &config.Config{
-		MCPStatic:  []string{"slack", "notion"},
-		MCPDynamic: []string{"notion"}, // overrides its own static entry
+	got := allPreloadedMCP([]string{"gog", "slack", "notion", "slack", "", "atlassian"})
+	want := []string{"gog", "slack", "notion", "atlassian"}
+	if len(got) != len(want) {
+		t.Fatalf("allPreloadedMCP = %v, want %v", got, want)
 	}
-	got := resolveStaticMCP([]string{"gog", "slack", "notion", "atlassian"}, cfg)
-	// slack: static. notion: static-but-dynamic-override -> dropped. gog/atlassian: default dynamic.
-	if len(got) != 1 || got[0] != "slack" {
-		t.Errorf("resolveStaticMCP = %v, want [slack]", got)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("allPreloadedMCP = %v, want %v", got, want)
+		}
 	}
 }
 
-// A pack integration with static=true folds into cfg.MCPStatic (eager); a user
-// mcp_dynamic still overrides it back to lazy.
-func TestPackStaticMcpNames_AndOverride(t *testing.T) {
-	p := &packInfo{Manifest: packManifest{Integrations: []packIntegration{
-		{Name: "Fastmail", MCP: "fastmail", Static: true}, // eager
-		{Name: "Notion", MCP: "notion"},                   // default dynamic
-		{Name: "NoServer"},                                // no mcp -> ignored
-	}}}
-	if got := packStaticMcpNames(p); len(got) != 1 || got[0] != "fastmail" {
-		t.Fatalf("packStaticMcpNames = %v, want [fastmail]", got)
+// TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded: S01 removed the
+// per-integration `static` field — every pack integration's MCP server is now
+// in the preload set unconditionally. A --pack OVERRIDE (never `pack use`d, so
+// its integration is not yet in cfg.MCP) still gets folded in, in memory only,
+// for this launch.
+func TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "override-pack")
+	mustWritePack(t, root, packManifest{Name: "override", Schema: 1, Integrations: []packIntegration{
+		{Name: "Fastmail", MCP: "fastmail"},
+		{Name: "Notion", MCP: "notion"},
+		{Name: "NoServer"}, // no mcp -> ignored
+	}})
+
+	cfgPath := filepath.Join(dir, "config.toml")
+	const before = "mcp = [\"existing\"]\n"
+	if err := os.WriteFile(cfgPath, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	// Folded into cfg.MCPStatic, fastmail is eager...
-	cfgStatic := &config.Config{MCPStatic: []string{"fastmail"}}
-	if got := resolveStaticMCP([]string{"fastmail", "notion"}, cfgStatic); len(got) != 1 || got[0] != "fastmail" {
-		t.Errorf("pack-static fastmail must be eager, got %v", got)
+	t.Setenv("PI_STACK_CONFIG", cfgPath)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
 	}
-	// ...unless the user forces it dynamic.
-	cfgOverride := &config.Config{MCPStatic: []string{"fastmail"}, MCPDynamic: []string{"fastmail"}}
-	if got := resolveStaticMCP([]string{"fastmail", "notion"}, cfgOverride); len(got) != 0 {
-		t.Errorf("mcp_dynamic must override pack-static, got %v", got)
+	o := runOpts{Pack: root}
+	if _, err := applyPackToLaunch(cfg, &o, fakeGitEnv(nil)); err != nil {
+		t.Fatalf("applyPackToLaunch: %v", err)
+	}
+	if !containsStr(cfg.MCP, "fastmail") || !containsStr(cfg.MCP, "notion") {
+		t.Errorf("cfg.MCP = %v, want it to contain both integration servers (every pack integration preloads)", cfg.MCP)
+	}
+	if got := allPreloadedMCP(cfg.MCP); len(got) != len(cfg.MCP) {
+		t.Errorf("every entry in cfg.MCP should be in the preload set, got %v vs %v", got, cfg.MCP)
+	}
+
+	// Never persisted: applyPackToLaunch must not itself write config.toml —
+	// run.go/task.go never call cfg.Save() after it, so a --pack override's
+	// integration names must not have reached disk.
+	onDisk, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(onDisk) != before {
+		t.Errorf("config.toml changed on disk after applyPackToLaunch, want unchanged %q, got %q", before, onDisk)
 	}
 }
 

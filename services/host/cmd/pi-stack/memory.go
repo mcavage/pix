@@ -45,10 +45,10 @@ func runMemory(argv []string) {
 
 // runMemoryCore is the testable core of runMemory. It dispatches the memory
 // subcommand, resolving config LAZILY so a -h/--help request prints usage even
-// when config is broken or names an unknown profile (help must be
-// config-independent). load + client are injected so tests can feed a failing
-// loader and prove help still works. It returns an error (nil on success/help)
-// instead of calling os.Exit; runMemory classifies the error into an exit code.
+// when config is broken (help must be config-independent). load + client are
+// injected so tests can feed a failing loader and prove help still works. It
+// returns an error (nil on success/help) instead of calling os.Exit; runMemory
+// classifies the error into an exit code.
 func runMemoryCore(argv []string, load func() (*config.Config, string, error), client func() rpcClient, out io.Writer) error {
 	if len(argv) == 0 {
 		return usageErr(memoryUsage)
@@ -65,11 +65,11 @@ func runMemoryCore(argv []string, load func() (*config.Config, string, error), c
 	if wantsHelp(rest) {
 		return dispatchMemory(sub, rest, rpcClient{}, out, "")
 	}
-	// Resolve the active profile so host-side memory ops are scoped the same way
-	// the in-VM extensions are (recall sees {profile}∪{default}; captures stamp
-	// the active profile). FAIL LOUD on a config/profile error: silently falling
-	// back to "default" would store a `--profile wrok` fact in the shared default
-	// bucket (and recall/forget the wrong bucket). Never RPC with a fallback.
+	// Load config to surface a config error up front rather than proceeding with a
+	// fallback (config.Load() can still fail on malformed TOML). The second return
+	// is always "" now — profiles were removed; the memory daemon's scope column
+	// is retained but dormant — threaded through unchanged so dispatchMemory's
+	// signature stays stable.
 	_, profile, err := load()
 	if err != nil {
 		return err

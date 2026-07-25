@@ -4,13 +4,14 @@
 > real task first, no upfront tour" shape (§3-§4). The current, shipped design
 > is the opposite: ONE thorough, hyper-opinionated upfront message that names
 > the exact workflow for the situation, then a single direct question, see
-> `skills/onboarding/SKILL.md`. Read this doc for the host-state FIELD SCHEMA
-> (§6, still accurate) and the keys/MCP-gating background, not for the
-> onboarding flow shape, and NOT for the delivery mechanism: §6's
-> `<workspace>/.pi-stack/host-state.json` file design is ITSELF superseded —
-> the shipped mechanism builds the same fields in memory and injects them
-> directly into the launcher-generated initial prompt (never a workspace
-> file); see `skills/onboarding/SKILL.md` and `hoststate.go`.
+> `skills/onboarding/SKILL.md`. Read this doc for the keys/MCP-gating
+> background, not for the host-state FIELD SCHEMA (`provisioned` now
+> derives from `keys.resolved && knowledge.seeded && pack.active`, see
+> `hoststate.go`), not for the onboarding flow shape, and NOT for the delivery
+> mechanism: §6's `<workspace>/.pi-stack/host-state.json` file design is ITSELF
+> superseded — the shipped mechanism builds the same fields in memory and
+> injects them directly into the launcher-generated initial prompt (never a
+> workspace file); see `skills/onboarding/SKILL.md` and `hoststate.go`.
 
 Status: DRAFT for owner review. Not implemented. Supersedes the in-session
 identity-Q&A flow in `skills/onboarding/SKILL.md` and extends (does not replace)
@@ -127,7 +128,7 @@ short-circuit (§9).
   "knowledge": { "bundles": ["/path/acme-kb"], "seeded": true, "service_up": true },
   "gog":       { "enabled": false, "account": "" },
   "mcp":       { "enabled": false, "servers": [] },
-  "overlay":   { "kit": "acme", "skills": 7, "tools": ["snow"] },
+  "pack":      { "active": true, "exists": true, "skills": true, "knowledge": true },
   "models":    { "watcher": "osmosis-structure:0.6b", "embed": "nomic-embed-text" }
 }
 ```
@@ -178,9 +179,9 @@ arbitrary command-proxy tools (e.g. `snow`). A user who inherits a complete pack
 must NOT be re-onboarded from scratch (the impatient reviewer's provisioned-user
 BAIL).
 
-- The pack (recorded in the truth file's `overlay` + `provisioned` fields — the
-  host-state field keeps its historical name) marks the env as provisioned: keys
-  resolved, KB seeded, skills present, tools wired.
+- The pack (recorded in the truth file's `pack` + `provisioned` fields) marks
+  the env as provisioned: keys resolved, KB seeded, skills present, tools
+  wired.
 - **Provisioned => onboarding collapses to one line + first task.** No menu, no
   identity ask, no KB-seed offer for an already-seeded bundle. The pack owner
   already paid the setup cost.

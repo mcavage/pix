@@ -1,84 +1,126 @@
-# Google Workspace via `gog` (host MCP) — setup + migration
+# Google Workspace via `gog` (host MCP)
 
-`gws` is gone. Google Workspace now runs as **`gog mcp`, a host-side MCP server**
-the sbx gateway spawns (like `slack`). Your OAuth creds stay in `GOG_HOME` on the
-host; only typed, read-only tool results cross into the sandbox. No token service,
-no in-VM wrapper, no bearer forwarding.
+Google Workspace runs as **`gog mcp`, a host-side MCP server** the sbx gateway
+spawns, the same way it spawns `slack`. Your OAuth creds stay in `GOG_HOME` on
+the host; only typed, read-only tool results cross into the sandbox. No token
+service, no in-VM wrapper, no bearer forwarding.
 
-## The one trap (read this first)
-`gog auth` working in your Terminal proves **nothing** about the gateway. The
-gateway spawns `gog mcp` with a bare, non-interactive env. If the keyring
-password isn't in the env it inherits, the server starts and returns **zero tools,
-silently** — the gws-style hours-in-circles trap. On macOS with the system
-keychain, `gog` can unlock the stored token without a password and step 3 is
-skipped; on other setups (file keyring, headless CI) step 3 is not optional.
-`pi-stack doctor` probes the real headless path, not just `gog auth doctor`.
+## Guided setup (recommended)
 
-> **Note:** the sbx Cloud MCP Gateway (`SBX_MCP_URL`) is not yet publicly
-> released. `gog` runs through it; without gateway access the `gworkspace`
-> capability is unavailable regardless of gog setup.
+One command drives the whole flow: installed-CLI check, OAuth client import,
+read-only account authorization, headless verification against the exact
+command the gateway will spawn, and gateway registration plus config, in that
+order, each gated on the last one succeeding.
 
-## Host quickstart (6 steps, macOS)
 ```bash
-# 1. Install
-brew install gog                       # or see https://gogcli.sh/install.html
+brew install gog   # or see https://gogcli.sh/install.html
 
-# 2. Register your OAuth client + authorize YOUR account (browser, once).
-#    Use minimal READ-ONLY scopes (gmail.readonly, calendar.readonly, drive.readonly…).
-gog auth add-client ~/Downloads/gog-oauth-client.json
-gog --account you@example.com auth login
-
-# 3. THE STEP EVERYONE SKIPS (file-keyring or headless setups only).
-#    macOS system keychain users can skip this — gog unlocks the stored OAuth
-#    token without a password. If you use a file keyring or need 1Password to
-#    supply the keyring password, create the env-file at the XDG config path:
-mkdir -p ~/.config/pi-stack
-cat >> ~/.config/pi-stack/op-refs.env <<'EOF'
-GOG_ACCOUNT=you@example.com
-GOG_HOME=/Users/you/.config/gog
-GOG_KEYRING_BACKEND=file
-GOG_KEYRING_PASSWORD=op://Private/gog-keyring/password
-EOF
-#    (make-based flow uses config/op-refs.env in the repo instead of this path)
-
-# 4. Prove it the way the gateway will — MUST print a non-empty tool list.
-#    With op-refs: use op run. Without op-refs (system keychain), run directly.
-op run --env-file=~/.config/pi-stack/op-refs.env -- gog --account you@example.com mcp --list-tools
-# or (system keychain, no op):  gog --account you@example.com mcp --list-tools
-
-# 5. Enable + register.
-pi-stack config set gog_account you@example.com   # writes to ~/.config/pi-stack/config.toml
-pi-stack config set mcp gog                       # adds gog to the mcp list in config.toml
-pi-stack mcp register                              # registers the hardened read-only server
-# The make-based flow reads the SAME config.toml (via pi-stack config get), so
-# the two commands above configure make mcp-register too.
-
-# 6. Launch with gog attached, then confirm.
-make run          # attaches gog per the mcp list in config.toml; or: pi-stack run
-pi-stack doctor   # gog group should be all green
+pi-stack gog setup --account you@example.com --credentials ~/Downloads/gog-oauth-client.json
 ```
 
+Omit either flag on a real terminal and it prompts for it. It never
+authorizes without requesting read-only OAuth scopes, never registers a
+server it hasn't just verified returns real tools, and never touches
+`config.toml` until sbx registration has already succeeded. Run
+`pi-stack gog setup -h` for exactly what each step checks and why.
+
+Confirm it worked:
+
+```bash
+pi-stack doctor    # gog group should read ready
+pi-stack run       # or: pi-stack run --replace, to attach gog to a fresh sandbox
+```
+
+> **Note:** the sbx Cloud MCP Gateway is not yet publicly released. `gog` runs
+> through it, so without gateway access the `gworkspace` capability is
+> unavailable regardless of gog setup.
+
+## The one trap the guided command exists to catch
+
+A `gog auth` command working in your terminal proves nothing about the
+gateway. The gateway spawns `gog mcp` with a bare, non-interactive
+environment: if the keyring password isn't in the env it inherits, the server
+starts and returns **zero tools, silently**. `pi-stack gog setup` probes the
+real headless path, with the exact hardened flags the gateway will use, not
+just `gog auth doctor`. On macOS with the system keychain, `gog` can unlock
+the stored token without a password and this never bites you. On a file
+keyring or headless host, it's the whole reason step 3 below exists.
+
+## What the guided command automates (for troubleshooting)
+
+If `pi-stack gog setup` fails, or you're diagnosing an existing setup, here's
+what it does under the hood.
+
+1. **Install gog and authorize your account.** Minimal read-only scopes
+   (`gmail.readonly`, `calendar.readonly`, `drive.readonly`, ...). The exact
+   gog subcommands vary by installed version; `pi-stack gog setup` detects
+   and uses whichever your version supports.
+
+2. **Supply the keyring password, if you need one.** Skip this on macOS with
+   the system keychain. On a file keyring, or when 1Password should hold the
+   password, add it to your op-refs file at the XDG config path:
+
+   ```bash
+   mkdir -p ~/.config/pi-stack
+   cat >> ~/.config/pi-stack/op-refs.env <<'EOF'
+   GOG_ACCOUNT=you@example.com
+   GOG_HOME=/Users/you/.config/gog
+   GOG_KEYRING_BACKEND=file
+   GOG_KEYRING_PASSWORD=op://Private/gog-keyring/password
+   EOF
+   ```
+
+3. **Verify the headless path directly**, the same probe `pi-stack gog setup`
+   and `pi-stack doctor` run. It must print a non-empty tool list:
+
+   ```bash
+   op run --env-file=~/.config/pi-stack/op-refs.env -- gog --account you@example.com mcp --list-tools
+   # system keychain, no op-refs needed:
+   gog --account you@example.com mcp --list-tools
+   ```
+
+4. **Register with the gateway and enable it in config**, exactly what
+   `pi-stack gog setup` does on success:
+
+   ```bash
+   pi-stack config set gog_account you@example.com
+   pi-stack config set mcp gog
+   pi-stack mcp register
+   ```
+
 The registered server is locked down by default:
-`gog --account <you> --gmail-no-send --wrap-untrusted --readonly mcp --allow-tool read`
-— read-only, can't send mail, returned Gmail/Doc bodies are fenced as untrusted
-data. Add write tools later, per surface, only when you want them
-(`--allow-write --allow-tool 'docs.*'`).
 
-## Migrating off gws (teardown)
-Do steps 1–5 above, then tear down the old path:
-- `gws auth logout` on the host; stop anything on `:11441`.
-- Remove any `GWS_TOKEN_AUTH` from your environment/secrets (the bearer is gone).
-- `sbx rm -f pi-stack-pi-stack && make run` to recreate on the gws-free image
-  (needs `make load` first to rebuild).
+```
+gog --account <you> --gmail-no-send --wrap-untrusted --readonly mcp --allow-tool read
+```
 
-Four moving parts (token service + wrapper + bearer forwarding + Google allowlist)
-collapse to one MCP registration authed entirely on the host.
+Read-only, can't send mail, and returned Gmail/Doc bodies are fenced as
+untrusted data. Add write tools later, per surface, only when you actually
+want them (`--allow-write --allow-tool 'docs.*'`), by registering gog again
+with the flags you want.
 
 ## Security posture (why this is safe for full-auto)
-Runs as **your** account (a throwaway account would be useless), but hardened:
-minimal read-only OAuth scopes + gog `--readonly`/`--gmail-no-send`/
-`--wrap-untrusted` + a revocable OAuth client. Residual risks to know: a
-prompt-injected agent can still *read* your Google data and try to exfiltrate it
-through some other channel (read-only stops writes, not reads); and the keyring
-password in the gateway's process env unlocks standing OAuth — keep `GOG_HOME`
-0700, the keyring 0600, single-user host, and rotate if exposed.
+
+Runs as **your** account (a throwaway account would be useless), hardened
+with minimal read-only OAuth scopes plus gog's
+`--readonly`/`--gmail-no-send`/`--wrap-untrusted` flags and a revocable OAuth
+client. Two residual risks worth knowing:
+
+- **Prompt injection through returned content.** A prompt-injected agent can
+  still *read* your Google data and try to exfiltrate it through some other
+  channel. Read-only stops writes, not reads. `--wrap-untrusted` fences
+  returned Gmail/Doc bodies so the agent treats them as data, not
+  instructions, but that's a mitigation, not a guarantee.
+- **Data transit to model providers.** Returned Google content is sent to the configured/selected model provider as part of the conversation. While OAuth credentials remain strictly host-side in `GOG_HOME` and tool access is limited to read-only, any retrieved Google content is sent to the external model provider to be processed as part of the LLM context.
+- **The keyring password in the gateway's process env unlocks standing
+  OAuth.** Keep `GOG_HOME` at `0700`, the keyring file at `0600`, and the host
+  single-user. If that password or `GOG_HOME` is ever exposed, treat the
+  OAuth grant as compromised.
+
+To revoke or rotate access: revoke the grant from your Google Account's
+[third-party access page](https://myaccount.google.com/permissions), then
+either delete and recreate the OAuth client, or run `pi-stack gog setup`
+again with a new credentials file. Rotating the keyring password means
+updating `GOG_KEYRING_PASSWORD` in 1Password (or your op-refs file) and
+re-running `pi-stack mcp register` so the gateway picks up the change on its
+next spawn.

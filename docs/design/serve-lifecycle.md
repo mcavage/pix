@@ -370,7 +370,7 @@ NOT daemon-affecting (must NOT trigger a restart): `gog_account` (host MCP
 server, not `serve`), `host.enabled` / `host.autonomy` (gate `pi-stack host`),
 `ollama_bridge_model` (a per-run workspace file written at `run` time, read by
 the in-VM bridge — the daemon never sees it), `mcp` (gateway registration),
-`active_profile`, `kit`. Encode the affecting set as a single predicate:
+`pack`, `kit`. Encode the affecting set as a single predicate:
 
 ```go
 var daemonAffectingKeys = map[string]bool{
@@ -380,13 +380,10 @@ var daemonAffectingKeys = map[string]bool{
 func isDaemonAffecting(key string) bool { return daemonAffectingKeys[key] }
 ```
 
-Note: a `--profile` write of `knowledge_bundles` is per-profile and does NOT
-change what the single shared `serve` indexes at the base level — BUT `serve`
-indexes the UNION across profiles (`AllKnowledgeBundles`), so a per-profile
-bundle add IS daemon-affecting. Keep it simple: any set/unset of an affecting
-key, base or profile, triggers propagation. (The exception `applyProfileConfigChange`
-already rejects `services`/`memory_*` for `--profile`, so only `knowledge_bundles`
-reaches here per-profile — and it genuinely affects the union.)
+Note: profiles were removed — `knowledge_bundles` is a single base-config list
+now, and `serve` indexes it directly (`AllKnowledgeBundles` just dedupes the
+base list, no cross-profile union). Keep it simple: any set/unset of an
+affecting key triggers propagation.
 
 ### Where it hooks
 
@@ -625,9 +622,9 @@ above describe the original intent and stand except where amended here.
 `services` has a NON-EMPTY default, so a plain `[]string` + omitempty could not
 distinguish "unset → default" from "explicitly empty → stays empty":
 `config unset services memory` reported `[]` but reload silently restored
-`["memory"]`. The config schema now carries the presence bit the same way the
-per-profile slices do: `Config.Services` (`toml:"-"`) is the resolved runtime
-field every consumer reads, and `Config.ServicesRaw *[]string`
+`["memory"]`. The config schema now carries the presence bit: `Config.Services`
+(`toml:"-"`) is the resolved runtime field every consumer reads, and
+`Config.ServicesRaw *[]string`
 (`toml:"services,omitempty"`) is the TOML image — nil = absent (default),
 present-empty = `services = []` (stays empty). A list that becomes empty only
 through removed-service filtering (stale `["gws"]`) still falls back to the

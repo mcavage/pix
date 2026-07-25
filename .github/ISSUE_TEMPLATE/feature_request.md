@@ -22,4 +22,4 @@ Anything you tried or considered.
 ## Scope
 
 - [ ] This is generic (belongs in the public tree)
-- [ ] This is company-specific (belongs in a private overlay; see docs/OVERLAY.md)
+- [ ] This is company-specific (belongs in a private pack; see docs/design/packs.md)

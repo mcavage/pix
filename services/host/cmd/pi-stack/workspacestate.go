@@ -2,7 +2,7 @@
 // launcher's per-workspace state files (<workspace>/.pi-stack/*: sandbox.pack,
 // profile, ollama-bridge.model, knowledge.scope, knowledge, onboarding.json).
 //
-// Trusted host-state facts (keys/services/knowledge/gog/mcp/models/overlay/
+// Trusted host-state facts (keys/services/knowledge/gog/mcp/models/pack/
 // identity) are deliberately NOT among these: they are built in memory and
 // injected directly into the launcher-generated initial prompt (see
 // hoststate.go's injectTrustedHostState), never written as a workspace file.

@@ -42,7 +42,7 @@ Terraform, Vagrant, Packer, Ghostty share a shape:
 - The bare `pi-stack` command stays read-only status, never launches. Correct
   and Hashimoto-consistent; keep it.
 - Every mechanic: idempotent config writes, `--json` shapes, exit codes (2 usage,
-  3 daemon-down), reversible `reset`, `--profile`/`--man` globals, ports.
+  3 daemon-down), reversible `reset`, the `--man` global, ports.
 - **Full back-compat.** Every one of the ~19 current verb spellings keeps
   working as an alias. This is a *visibility* reclassification, not a removal.
   A back-compat test invokes all legacy spellings and expects success.
@@ -98,7 +98,7 @@ foreground process, so "just run it" is friction (see Open decision 2). Keep it
 visible until there is a background/service-manager mode.
 
 ### Occasional (shown in `help --all` / `help <noun>`)
-`memory`, `knowledge`, `config`, `profile`, `backup` (routine data safety, not
+`memory`, `knowledge`, `config`, `pack`, `backup` (routine data safety, not
 expert), and integration setup.
 
 ### Rare / expert (hidden from default help; `help --all` only)
@@ -108,7 +108,7 @@ expert), and integration setup.
 ## Command tree (target)
 
 **Recommendation: adopt Shape B as the baseline.** All example copy in this doc
-uses Shape B spellings (`secret`, `profile`, `state` top-level). Shape A is
+uses Shape B spellings (`secret`, `pack`, `state` top-level). Shape A is
 recorded below as a possible future, but the review flagged real problems with it
 (P1-8), so it is NOT the default and its moves should only be revisited after B
 lands and proves out. **Both keep every old verb as an alias.**
@@ -116,7 +116,7 @@ lands and proves out. **Both keep every old verb as an alias.**
 ### Shape B (recommended baseline) — conservative grouping (~13 nouns)
 Keep the six existing nouns as-is. Add exactly one new grouping noun, `state`,
 for `backup|restore|reset|uninstall` (these all move the stack's on-disk state).
-Fold `man` into `help --man`. `secret` and `profile` stay top-level but drop out
+Fold `man` into `help --man`. `secret` and `pack` stay top-level but drop out
 of the default help listing into the expert/occasional tiers. This is the
 lowest-risk structural change: it touches the test suite's one real tripwire
 (the man-page 1:1 invariant) the least, and it avoids the semantic problems of
@@ -125,18 +125,18 @@ under `state` it keeps a clear standalone description.
 
 ### Shape A (deferred / not recommended) — aggressive grouping (8 nouns)
 Review objections (P1-8): `mcp secret` forces a day-one user through undefined
-jargon (`mcp`, `secret`) to reach credentials; `config profile` buries a runtime
-context switch (profiles affect run, status, memory, and knowledge) under
-"config"; `state uninstall` is misleading because uninstall removes binaries, not
-state. If pursued later, prefer user-facing concepts (e.g. `integrations
-credentials`) over protocol names, and keep `profile` and `uninstall` where a
-user expects them.
+jargon (`mcp`, `secret`) to reach credentials; `config pack` buries a runtime
+context switch (the active pack affects run, status, memory, and knowledge)
+under "config"; `state uninstall` is misleading because uninstall removes
+binaries, not state. If pursued later, prefer user-facing concepts (e.g.
+`integrations credentials`) over protocol names, and keep `pack` and
+`uninstall` where a user expects them.
 
 ## Redesigned screens (copy)
 
 ### Bare `pi-stack` (status, ends with Next)
 ```
-pi-stack 0.0.16 · profile: default
+pi-stack 0.0.16    config: ~/.config/pi-stack/config.toml
 
 Host services
   memory      up    :11435
@@ -146,7 +146,7 @@ Provider keys (sbx proxy)
   anthropic ok   openai ok   google ok   github ok
 
 Integrations
-  gog (Google Workspace)   account set, needs auth  (run `gog auth login`)
+  gog (Google Workspace)   account set, needs auth  (run `pi-stack gog setup`)
   slack                    not configured
 
 Sandboxes
@@ -162,7 +162,7 @@ Everything ok? run `pi-stack doctor`.   Full command list: `pi-stack help`.
 ```
 pi-stack — a personal, multi-model pi coding agent in a Docker sandbox.
 
-Usage:  pi-stack [--profile NAME] <command> [args]
+Usage:  pi-stack <command> [args]
 
 New here?   pi-stack setup      one-time guided setup (a few minutes, resumable)
 
@@ -183,7 +183,7 @@ More
   config, mcp, state, version, man     (see `pi-stack help --all`)
 
 Learn a command:  pi-stack help run     ·     pi-stack <command> -h
-Global flag:      --profile NAME        run/read a named context (work, personal)
+Switch context:   pi-stack pack use <path>   run a different pack (work, personal, ...)
 ```
 
 ### First-run prompt (names what pi-stack is before asking)
@@ -277,7 +277,7 @@ keychain instead).
 Done. Saved ~/.config/pi-stack/config.toml.
 
   Configured:  memory
-  Needs auth:  gog (Google Workspace) - run `gog auth login`
+  Needs auth:  gog (Google Workspace) - run `pi-stack gog setup`
   Deferred:    knowledge base, slack
 
 You are NOT fully ready yet: no provider key is set. Set one, then run:
@@ -320,9 +320,10 @@ Optional, set up later when you need them:
       Give the agent a searchable corpus. Off by default.
       When you want it:  pi-stack help knowledge
 
-  Work vs personal profiles
-      Run separate contexts from one host. You do not need this yet.
-      When you want it:  pi-stack help profile
+  Work vs personal packs
+      Switch your whole context (skills, MCP, knowledge, memory scope) with
+      one command. You do not need this yet.
+      When you want it:  pi-stack help pack
 
 Nothing above is required. `pi-stack run` works right now.
 ```
@@ -351,7 +352,7 @@ need credentials (Google Workspace, Slack). You only need it if you use one.
 Add a ref:  pi-stack secret set <ENV_VAR> op://vault/item/field
 ```
 
-(All example copy uses Shape B spellings: `secret`, `profile`, `state`. If Shape
+(All example copy uses Shape B spellings: `secret`, `pack`, `state`. If Shape
 A is ever adopted, regenerate every example against that tree in one pass. The
 review flagged a copy inconsistency here as P1-9; fixed by standardizing on B.)
 
@@ -397,7 +398,8 @@ with existing tests bound to the old behavior. Split these out, each with tests:
   after it. The recovery path must include `pi-stack mcp register`.
 - **gog is "needs auth", not "configured", until a real auth probe passes** (P0-4):
   setting an email does not complete OAuth. Detect usable auth; otherwise label
-  it deferred and print the `gog auth login` next step.
+  it deferred and print the `pi-stack gog setup` next step, the one guided
+  path (**shipped**: see CHANGELOG).
 - `help --all` branch (P0-2): **shipped** — tiered help shows Core by default and
   reveals the rest with `--all` (and per-noun `help <verb>`).
 
@@ -423,7 +425,7 @@ with existing tests bound to the old behavior. Split these out, each with tests:
 
 1. **Shape A vs B** — how aggressively to group. Recommendation: ship Phase 0
    immediately, then do Shape B (add only `state`). Shape A is not recommended
-   (review P1-8: `mcp secret` fronts jargon, `config profile` hides a runtime
+   (review P1-8: `mcp secret` fronts jargon, `config pack` hides a runtime
    switch, `state uninstall` is misleading).
 2. **Does `setup` start `serve` on yes, or just print the command?**
    Recommendation (revised by review P0-5): **just print the command.** `serve`

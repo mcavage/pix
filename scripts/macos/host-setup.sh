@@ -94,9 +94,5 @@ info "  - 'gog auth' on the host, fill config/op-refs.env, then 'make mcp-regist
 info "  - run 'pi-stack config set mcp gog' so 'make run' / 'pi-stack run' attaches it"
 info "Full walkthrough: docs/gog-setup.md"
 
-bold "\n[7] Optional: private overlay for work"
-info "snow/warehouse broker + private memory/OKF live in your overlay peer repo (not this one)."
-info "Wire them as SHA-pinned [plugins.*] overrides in ~/.config/pi-stack/config.toml — docs/OVERLAY.md §4."
-
 bold "\nDone."
 echo "Merge the PR when you're happy; CI tags v0.0.<run>, builds the image, and uploads release binaries."

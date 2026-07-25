@@ -392,8 +392,8 @@ func agentNew(args []string) {
 		fatalLauncher(err)
 	}
 
-	fmt.Printf("created agent %q\n  %s\n\nNext:\n  1. Edit the role brief in %s\n  2. If %q needs a new task_type, hand-add its scores to\n     services/host/routing/defaults/scorecard.json\n  3. pi-stack route compile                     # route it\nOr run `pi-stack agent new %s --interactive` to author it conversationally.\n",
-		name, path, path, intent, name)
+	fmt.Printf("created agent %q\n  %s\n\nNext:\n  1. Edit the role brief in %s\n  2. If %q needs a new task_type, hand-add its scores to\n     %s\n  3. pi-stack route compile                     # route it\nOr run `pi-stack agent new %s --interactive` to author it conversationally.\n",
+		name, path, path, intent, routing.ScorecardPath(), name)
 }
 
 func agentEdit(args []string) {
@@ -495,7 +495,7 @@ func agentReassess(args []string) {
 
 	if model != "" {
 		fmt.Fprintf(os.Stderr, "note: automated eval measurement was removed. Add/edit %q's scores by\n", model)
-		fmt.Fprintln(os.Stderr, "  hand in services/host/routing/defaults/scorecard.json, then re-run")
+		fmt.Fprintf(os.Stderr, "  hand in %s, then re-run\n", routing.ScorecardPath())
 		fmt.Fprintln(os.Stderr, "  `pi-stack agent reassess` (no --model) to re-resolve + recompile.")
 		os.Exit(2)
 	}

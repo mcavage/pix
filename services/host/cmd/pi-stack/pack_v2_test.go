@@ -672,7 +672,7 @@ func TestBuildSbxArgs_PackKits_NeverSuppressesBaseKit(t *testing.T) {
 // TestPackCapabilitiesJSON_LoadedAndMounted: a pack's capabilities.json is
 // discovered by loadPack and mounted by synthesizePackKit into the sandbox at
 // files/home/.pi/agent/capabilities.json — even with no [[proxy]] entries. This
-// is what lets a pack carry its own capability routing (killing the overlay kit).
+// is what lets a pack carry its own capability routing.
 func TestPackCapabilitiesJSON_LoadedAndMounted(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))

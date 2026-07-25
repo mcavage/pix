@@ -46,17 +46,24 @@ func TestBuildHostState(t *testing.T) {
 	if !hs.Knowledge.Seeded || len(hs.Knowledge.Bundles) != 1 {
 		t.Errorf("knowledge should be seeded: %+v", hs.Knowledge)
 	}
-	if !hs.Gog.Enabled || hs.Gog.Account != "me@acme.com" {
+	if !hs.Gog.Enabled {
 		t.Errorf("gog wrong: %+v", hs.Gog)
+	}
+	// The configured account email must NEVER be copied into the model-visible
+	// payload: hostStateGog carries only `enabled`. Assert this both at the Go
+	// struct level and by round-tripping through the actual encoder, so a
+	// future field re-added to the struct without updating this test still
+	// gets caught by the JSON-content check below.
+	if b, err := json.Marshal(hs); err != nil {
+		t.Fatalf("marshal hostState: %v", err)
+	} else if strings.Contains(string(b), "me@acme.com") {
+		t.Errorf("host-state JSON must never contain the configured gog account email, got: %s", b)
 	}
 	if !hs.MCP.Enabled || len(hs.MCP.Servers) != 1 {
 		t.Errorf("mcp wrong: %+v", hs.MCP)
 	}
-	if hs.Overlay.Kit != "kit" {
-		t.Errorf("overlay kit basename wrong: %q", hs.Overlay.Kit)
-	}
 	if !hs.Provisioned {
-		t.Error("keys+knowledge+overlay present => provisioned")
+		t.Error("keys+knowledge+active pack present => provisioned")
 	}
 	if hs.Models.Watcher != "gemma4:e4b-mlx" {
 		t.Errorf("watcher model wrong: %q", hs.Models.Watcher)
@@ -303,8 +310,35 @@ func TestBuildTrustedHostState_MatchesBuildHostStateShape(t *testing.T) {
 	if !hs.Memory.Up {
 		t.Error("dial stub says up; buildTrustedHostState must reflect it")
 	}
-	if !hs.Gog.Enabled || hs.Gog.Account != "me@acme.com" {
+	if !hs.Gog.Enabled {
 		t.Errorf("gog config must carry through: %+v", hs.Gog)
+	}
+	b, err := encodeTrustedHostState(hs)
+	if err != nil {
+		t.Fatalf("encodeTrustedHostState: %v", err)
+	}
+	if strings.Contains(string(b), "me@acme.com") {
+		t.Errorf("trusted host-state JSON must never contain the configured gog account email, got: %s", b)
+	}
+}
+
+// The configured gog account email must never appear ANYWHERE in the actual
+// injected prompt arg — the end-to-end path a real launch takes, not just the
+// in-memory hostState struct. gog.enabled is sufficient for onboarding; the
+// email is PII with no onboarding use.
+func TestInjectTrustedHostState_NeverLeaksGogAccountEmail(t *testing.T) {
+	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y", MCP: []string{"gog"}, GogAccount: "secret-owner@acme.com"}
+	env := shellEnv{lookPath: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}
+	args := []string{"run", "pi-stack", ".", "--", generatedInputMarker + "hi"}
+	out, err := injectTrustedHostState(args, cfg, env, "")
+	if err != nil {
+		t.Fatalf("injectTrustedHostState: %v", err)
+	}
+	if !strings.Contains(out[4], `"gog":{"enabled":true}`) {
+		t.Errorf("gog.enabled must still be reported, got %q", out[4])
+	}
+	if strings.Contains(out[4], "secret-owner@acme.com") || strings.Contains(out[4], "acme.com") {
+		t.Errorf("the configured gog account email must never be injected into the prompt, got %q", out[4])
 	}
 }
 

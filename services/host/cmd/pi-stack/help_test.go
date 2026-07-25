@@ -274,13 +274,16 @@ func TestParseStatusArgs(t *testing.T) {
 }
 
 func TestParseDoctorArgs(t *testing.T) {
-	if j, err := parseDoctorArgs([]string{"--json"}); err != nil || !j {
-		t.Errorf("--json = (%v,%v), want (true,nil)", j, err)
+	if j, v, err := parseDoctorArgs([]string{"--json"}); err != nil || !j || v {
+		t.Errorf("--json = (%v,%v,%v), want (true,false,nil)", j, v, err)
 	}
-	if _, err := parseDoctorArgs([]string{"--help"}); err != errHelpRequested {
+	if j, v, err := parseDoctorArgs([]string{"--verbose"}); err != nil || j || !v {
+		t.Errorf("--verbose = (%v,%v,%v), want (false,true,nil)", j, v, err)
+	}
+	if _, _, err := parseDoctorArgs([]string{"--help"}); err != errHelpRequested {
 		t.Errorf("--help err = %v, want errHelpRequested", err)
 	}
-	if _, err := parseDoctorArgs([]string{"--bogus"}); err == nil {
+	if _, _, err := parseDoctorArgs([]string{"--bogus"}); err == nil {
 		t.Error("--bogus should be a usage error")
 	}
 }
@@ -392,5 +395,12 @@ func TestRunVerb_HelpPrintsUsage(t *testing.T) {
 		if !strings.Contains(buf.String(), "usage: pi-stack run") {
 			t.Errorf("runVerb(%v) = %q, want run usage", argv, buf.String())
 		}
+	}
+}
+
+func TestMCPUsageListsEverySubcommand(t *testing.T) {
+	const want = "usage: pi-stack mcp <register|ls|load|auth|bundle> [args]"
+	if !strings.Contains(mcpUsage, want) {
+		t.Fatalf("mcp usage synopsis missing subcommands: %q", mcpUsage)
 	}
 }

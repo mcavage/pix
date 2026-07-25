@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -90,7 +91,7 @@ func runRun(argv []string) {
 
 	// Mirror sbx's own model: an existing sandbox (running OR stopped) RE-ATTACHES
 	// instead of refusing/recreating — the create-only flags (--kit/--template/
-	// --mcp/overlay-kit/--dev/dev-skills) only apply to a fresh create, so they are
+	// --mcp/config-stacked-kits/--dev/dev-skills) only apply to a fresh create, so they are
 	// simply not sent (and, per willCreate below, not even RESOLVED) on re-attach.
 	// --replace forces the old implicit-recreate behavior (rm -f then create) for
 	// either state, so changed kit/mcp/create-only flags take effect.
@@ -174,12 +175,11 @@ func runRun(argv []string) {
 		}
 	}
 
-	// Resolve which configured MCP servers attach EAGERLY at create (--static-mcp).
-	// Default is dynamic for every server (the in-VM agent discovers them via
-	// mcp-find on demand); only mcp_static pins one eager. Only needed on a
+	// Resolve every configured MCP server to attach at create (--static-mcp).
+	// S01: all of them preload — no more eager/lazy split. Only needed on a
 	// create — a re-attach never sends --static-mcp.
 	if willCreate(state, o.Replace) {
-		o.StaticMCP = resolveStaticMCP(append(append([]string(nil), cfg.MCP...), o.MCP...), cfg)
+		o.StaticMCP = allPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
 	}
 
 	plan := planSandboxLaunch(state, o.Replace, cfg, o, version)
@@ -204,6 +204,14 @@ func runRun(argv []string) {
 	// --replace. Surface that explicitly rather than silently reattaching to a
 	// stale facet set.
 	if msg := stalePackReattachWarning(cfg, o, plan.Reattach); msg != "" {
+		fmt.Fprintln(os.Stderr, msg)
+	}
+	// Product gap #2: reattach honesty. Separate from stalePackReattachWarning
+	// (which only speaks to skills/bin drift from a pack switch). This checks
+	// MCP attachment PRECISELY, via the launcher's own receipt, regardless of
+	// WHY a desired server might not be attached (config change, pack change,
+	// explicit --mcp, or no receipt at all). Never auto-loads, only reports.
+	if msg := mcpReattachWarning(cfg, o, plan.Reattach); msg != "" {
 		fmt.Fprintln(os.Stderr, msg)
 	}
 	if plan.RmFirst {
@@ -257,7 +265,7 @@ func runRun(argv []string) {
 	}
 
 	// Trusted host state: the host-visible facts the fenced agent can't see for
-	// itself (keys/services/knowledge/gog/mcp/models/overlay/identity). This
+	// itself (keys/services/knowledge/gog/mcp/models/pack/identity). This
 	// travels ONLY inside the launcher-generated initial prompt (the pi
 	// passthrough arg carrying generatedInputMarker, e.g. onboardingKickoff) —
 	// never as a workspace file, which a cloned repo could plant or leave stale.
@@ -291,10 +299,26 @@ func runRun(argv []string) {
 	cmd.Stderr = os.Stderr
 	// The default path injects no credential bearer: gog authenticates on the host
 	// inside the gateway-spawned MCP server, so the sandbox never sees a Google
-	// token. A future overlay credential broker would set its own bearer through
+	// token. A future external credential broker plugin would set its own bearer through
 	// the retained generic seam and own that plumbing itself.
 	cmd.Env = os.Environ()
-	if err := cmd.Run(); err != nil {
+	// S03: on a DEFINITE create (definitelyCreating — the same predicate that
+	// gates the sandbox.pack marker above, for the identical reason: an
+	// sbxUnknown probe may still have sbx reattach the OLD sandbox, and a plain
+	// re-attach must never write a fresh create receipt over one), record the
+	// create receipt ONLY after this exact `sbx run` exec has itself succeeded
+	// — never before, never on failure, never on reattach.
+	if err := execSbxRunAndRecordCreate(cmd, definitelyCreating(state, o.Replace), o.Name, canonicalWorkspacePath(o.Workspace), o.StaticMCP); err != nil {
+		var rerr *receiptRecordError
+		if errors.As(err, &rerr) {
+			// The sandbox itself WAS created successfully — only the local
+			// receipt failed. Say so honestly rather than implying the launch
+			// failed, but still exit non-zero: doctor/status must not be told
+			// this sandbox's MCP set is recorded when it isn't.
+			fmt.Fprintf(os.Stderr, "pi-stack run: %v\n", rerr)
+			fmt.Fprintln(os.Stderr, "the sandbox itself launched fine; only pi-stack's local record of its preloaded MCP set failed to write. Check state-dir permissions and re-run `pi-stack doctor`.")
+			os.Exit(1)
+		}
 		if exit, ok := err.(*exec.ExitError); ok {
 			// If we pinned a git #ref kit and sbx bailed (classically git exit 128
 			// "Remote branch not found"), the raw error is opaque — replace it with
@@ -317,6 +341,150 @@ func runRun(argv []string) {
 	}
 }
 
+// Creation-evidence poll seams. After `sbx run` is STARTED (not waited), the
+// create path polls for the named sandbox to become visible through
+// sandboxAppearProbeFn, records the create receipt the moment it is, and only
+// then settles into Wait — so status/doctor can render preload provenance
+// WHILE the interactive session is alive, not hours later when it exits.
+// Injectable so tests never shell out or sleep for real; production polls
+// `sbx ls` via probeTaskSandbox. The timeout is deliberately generous: a
+// first create may pull the image for minutes before the sandbox exists, and
+// the poll only runs while `sbx run` itself is still alive, so a large bound
+// costs the happy path nothing.
+var (
+	sandboxAppearProbeFn = func(name string) sbxState {
+		return probeTaskSandbox(defaultShellEnv(), name)
+	}
+	sandboxAppearPollInterval = 500 * time.Millisecond
+	sandboxAppearPollTimeout  = 15 * time.Minute
+)
+
+// sandboxAppeared reports whether st is POSITIVE existence evidence: the name
+// is present in `sbx ls`, running or not. Absent keeps polling; unknown (a
+// failed probe) proves nothing and also keeps polling — never record a create
+// receipt on an indeterminate read.
+func sandboxAppeared(st sbxState) bool { return st == sbxRunning || st == sbxStopped }
+
+// recordCreateReceipt commits the create receipt for sandbox — called ONLY by
+// execSbxRunAndRecordCreate, once its creation-evidence poll has positively
+// seen run.go's OWN `sbx run` create appear. preloaded is the EXACT
+// --static-mcp set that launch emitted (o.StaticMCP:
+// allPreloadedMCP(cfg.MCP+o.MCP), which already folds in every
+// active/transient pack integration's MCP server — applyPackToLaunch runs
+// before this set is computed), so a receipt read later never disagrees with
+// what create actually requested. merge=true (the normal path: the
+// pre-create clear succeeded) preserves loads a concurrent `pi-stack mcp
+// load` appended during the create window; merge=false (the clear could not
+// be proven) replaces outright so a prior lifetime's loads can never survive.
+// workspace is the CANONICAL workspace path the create was for
+// (canonicalWorkspacePath) — the receipt's workspace->sandbox identity that
+// resolveWorkspaceSandbox reads back for custom-named sandboxes.
+func recordCreateReceipt(sandbox, workspace string, preloaded []string, merge bool) error {
+	dir, err := sandboxMCPStateDirFn()
+	if err != nil {
+		return &receiptRecordError{op: "create", sandbox: sandbox, err: fmt.Errorf("resolving pi-stack state dir: %w", err)}
+	}
+	var werr error
+	if merge {
+		werr = commitCreateReceipt(dir, sandbox, workspace, preloaded, nil)
+	} else {
+		werr = writeCreateReceipt(dir, sandbox, workspace, preloaded, nil)
+	}
+	if werr != nil {
+		return &receiptRecordError{op: "create", sandbox: sandbox, err: werr}
+	}
+	return nil
+}
+
+// execSbxRunAndRecordCreate runs cmd (the already-composed `sbx run ...`
+// invocation, stdio already wired by the caller — Start/Wait preserve it) and
+// owns the create-receipt lifecycle around it:
+//
+//   - writeReceipt=false (a plain re-attach, or an inconclusive sbxUnknown
+//     probe — see definitelyCreating): cmd.Run() and nothing else. A re-attach
+//     writes nothing, clears nothing.
+//   - writeReceipt=true (a definite create/replace): any stale receipt from a
+//     prior same-name lifetime is CLEARED under the per-sandbox lock BEFORE
+//     the create starts; then cmd is STARTED and the sandbox's appearance is
+//     polled (sandboxAppearProbeFn, bounded by sandboxAppearPollTimeout).
+//     The moment it appears the receipt is committed — while the interactive
+//     session is still alive — merging any loads recorded since the clear;
+//     then we Wait for the session.
+//
+// Outcome contract: if the process exits BEFORE creation evidence, its error
+// is returned and no receipt is written (a final probe on a CLEAN exit still
+// records — evidence found at exit is evidence). If the receipt cannot be
+// recorded after the sandbox positively appeared (or the poll timed out with
+// the session still running), the session is still waited to completion and
+// the failure surfaces as *receiptRecordError — the caller reports
+// "launched/attached, but state unrecorded" and exits non-zero, never a
+// silent success and never confused with a launch failure. The Wait goroutine
+// always terminates when the process exits and its result is always drained
+// — no goroutine leaks on any path.
+func execSbxRunAndRecordCreate(cmd *exec.Cmd, writeReceipt bool, sandbox, workspace string, preloaded []string) error {
+	if !writeReceipt {
+		return cmd.Run()
+	}
+
+	// Pre-create clear (B): under the same per-sandbox lock the writers use,
+	// drop any receipt from a previous incarnation of this name so its load
+	// history can never leak into the new lifetime. merge stays false unless
+	// the clear POSITIVELY succeeded — the commit then merges only loads
+	// appended after this point; an unproven clear degrades to a plain
+	// replace, which cannot resurrect old loads.
+	merge := false
+	if stateDir, err := sandboxMCPStateDirFn(); err == nil {
+		if err := clearSandboxMCPReceipt(stateDir, sandbox); err == nil {
+			merge = true
+		}
+	}
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+
+	var recErr error
+	deadline := time.Now().Add(sandboxAppearPollTimeout)
+	ticker := time.NewTicker(sandboxAppearPollInterval)
+	defer ticker.Stop()
+poll:
+	for {
+		if sandboxAppeared(sandboxAppearProbeFn(sandbox)) {
+			recErr = recordCreateReceipt(sandbox, workspace, preloaded, merge)
+			break poll
+		}
+		if time.Now().After(deadline) {
+			recErr = &receiptRecordError{op: "create", sandbox: sandbox,
+				err: fmt.Errorf("timed out after %s waiting for the sandbox to appear in `sbx ls`; its preloaded MCP set was not recorded", sandboxAppearPollTimeout)}
+			break poll
+		}
+		select {
+		case werr := <-waitCh:
+			// The process exited before creation evidence. A failed exec
+			// surfaces its OWN error, receiptless. A clean exit gets ONE final
+			// probe (the sandbox may have appeared exactly as it exited, e.g. a
+			// detached create); still no evidence means honestly no receipt.
+			if werr != nil {
+				return werr
+			}
+			if sandboxAppeared(sandboxAppearProbeFn(sandbox)) {
+				return recordCreateReceipt(sandbox, workspace, preloaded, merge)
+			}
+			return nil
+		case <-ticker.C:
+		}
+	}
+	// Receipt outcome decided (recorded, failed, or timed out) — now hand the
+	// terminal back to the session and wait it out. Its own failure dominates
+	// the report; a receipt failure surfaces only on a clean session exit.
+	if werr := <-waitCh; werr != nil {
+		return werr
+	}
+	return recErr
+}
+
 // applyReplaceRm runs the plan's RmFirst step (`sbx rm -f <name>`) via env when
 // required, and MUST be checked by the caller: a failed rm means the old
 // sandbox may still exist under that name, and proceeding to create against it
@@ -329,6 +497,12 @@ func applyReplaceRm(env shellEnv, plan runLaunchPlan, name string) error {
 	}
 	if _, err := env.run("sbx", "rm", "-f", name); err != nil {
 		return fmt.Errorf("could not remove existing sandbox %q to replace it: %w", name, err)
+	}
+	// The launcher itself removed this sandbox, so its MCP receipt describes a
+	// dead lifetime — clear it (E). Best-effort with a warning: the pre-create
+	// clear in execSbxRunAndRecordCreate is the correctness backstop.
+	if err := clearRemovedSandboxReceipt(name); err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack: warning: removed sandbox %q but could not clear its mcp receipt: %v\n", name, err)
 	}
 	return nil
 }
@@ -377,11 +551,18 @@ func readSandboxPackMarker(workspace string) string {
 //   - no false warning when the sandbox already carries the current pack
 //     (marker == active pack), and
 //   - a warning after `pack rm` (marker set, active empty): the old sandbox
-//     still has the removed pack's create-time mcp/bin/skills baked in.
+//     still has the removed pack's create-time bin/skills baked in.
 //
 // No marker => no warning: a sandbox created before markers existed (or
 // pack-less) gives us nothing to compare, and guessing from the active pack
 // alone is exactly what produced the old false positives.
+//
+// Deliberately says nothing about MCP: mcpReattachWarning (product gap #2)
+// owns that claim PRECISELY, via the launcher's own receipt, for every
+// desired server regardless of whether a pack changed. Folding a vaguer
+// "mcp may be stale" guess in here would duplicate that check and could
+// contradict it (e.g. this warning firing on pack drift while the receipt
+// proves every MCP server is in fact already attached).
 func stalePackReattachWarning(cfg *config.Config, o runOpts, reattaching bool) string {
 	if !reattaching || o.Replace {
 		return ""
@@ -398,9 +579,106 @@ func stalePackReattachWarning(cfg *config.Config, o runOpts, reattaching bool) s
 		return ""
 	}
 	if active == "" {
-		return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q (since detached); its mcp/bin/skills are still attached until you recreate: %s", created, runReplaceCommand(o.Workspace))
+		return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q (since detached); its bin/skills are still attached until you recreate: %s", created, runReplaceCommand(o.Workspace))
 	}
-	return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q, not the active pack %q; the active pack's mcp/bin/skills won't attach until you recreate: %s", created, active, runReplaceCommand(o.Workspace))
+	return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q, not the active pack %q; the active pack's bin/skills won't attach until you recreate: %s", created, active, runReplaceCommand(o.Workspace))
+}
+
+// desiredMCPUniverse computes the FULL set of MCP server names this
+// invocation would preload at CREATE: cfg.MCP, the active/transient pack's
+// integration servers (packMcpNames), and any explicit --mcp, deduped via
+// allPreloadedMCP. It is the read-only twin of applyPackToLaunch's pack-fold
+// step (pack.go) used ONLY for this comparison: a re-attach never mounts a
+// pack (skills/bin/knowledge are create-time only) and must never trigger
+// applyPackToLaunch's mount/kit-synthesis side effects just to answer "what
+// would this invocation want". A pack that fails to load degrades to
+// cfg.MCP+o.MCP alone here (the same as it always did before packs existed)
+// rather than blocking a reattach comparison on a broken pack.
+func desiredMCPUniverse(cfg *config.Config, o runOpts) []string {
+	names := append([]string(nil), cfg.MCP...)
+	if root := activePackRoot(cfg.Pack, o.Pack); root != "" {
+		if p, err := loadPack(root); err == nil {
+			names = append(names, packMcpNames(p)...)
+		}
+	}
+	names = append(names, o.MCP...)
+	return allPreloadedMCP(names)
+}
+
+// mcpLoadCommand returns the exact `pi-stack mcp load NAME [WORKSPACE]`
+// command for name, workspace-qualified the same way runReplaceCommand is
+// (bare for ".", quoted otherwise) so the two recovery commands read
+// consistently. Both name and workspace are shell-quoted via the shared
+// shellQuoteArg (closure finding #3) — a server name is ordinarily a plain
+// token, but quoting it too costs nothing and keeps every generated
+// copy-paste command uniformly safe.
+func mcpLoadCommand(name, workspace string) string {
+	if workspace == "" || workspace == "." {
+		return "pi-stack mcp load " + shellQuoteArg(name)
+	}
+	return "pi-stack mcp load " + shellQuoteArg(name) + " " + shellQuoteArg(workspace)
+}
+
+// mcpLoadHints joins one mcpLoadCommand per name (mcp load only ever attaches
+// one server at a time, so N missing names need N commands).
+func mcpLoadHints(names []string, workspace string) string {
+	cmds := make([]string, 0, len(names))
+	for _, n := range names {
+		cmds = append(cmds, mcpLoadCommand(n, workspace))
+	}
+	return strings.Join(cmds, "; ")
+}
+
+// mcpReattachWarning is `pi-stack run`'s reattach honesty check (product gap
+// #2): on a RE-ATTACH (not a create, not --replace) it compares the DESIRED
+// MCP universe for THIS invocation (desiredMCPUniverse) against the
+// sandbox's own launcher receipt (sandboxmcpstate.go) and warns, BEFORE
+// reattaching, about any desired name the receipt cannot PROVE is attached
+// (a positive preloaded/loaded claim in a valid receipt is proof, anything
+// else is a gap). It never auto-loads, only reports, and always offers
+// BOTH exact remediation paths: a live `pi-stack mcp load NAME <workspace>`
+// per missing name, or `pi-stack run <workspace> --replace` to recreate with
+// the current context. A receipt entry for a name that is no longer desired
+// (dropped from config since create) is legitimate history and is never
+// mentioned; only desired names are ever checked.
+//
+// No desired servers at all -> nothing to check, silent. An unresolvable
+// state dir, an absent receipt, or an unverifiable one (corrupt / wrong
+// schema / wrong sandbox identity) all mean the SAME honest thing for every
+// desired name: attachment cannot be verified from here.
+func mcpReattachWarning(cfg *config.Config, o runOpts, reattaching bool) string {
+	if !reattaching || o.Replace {
+		return ""
+	}
+	desired := desiredMCPUniverse(cfg, o)
+	if len(desired) == 0 {
+		return ""
+	}
+	stateDir, err := sandboxMCPStateDirFn()
+	if err != nil {
+		return fmt.Sprintf("pi-stack: re-attaching without --replace: could not resolve local state (%v), so attachment for %s cannot be verified. Attach live: %s. Or recreate with current context: %s",
+			err, strings.Join(desired, ", "), mcpLoadHints(desired, o.Workspace), runReplaceCommand(o.Workspace))
+	}
+	receipt, rstatus, _ := readSandboxMCPReceipt(stateDir, o.Name)
+	if rstatus.Unverifiable() {
+		return fmt.Sprintf("pi-stack: re-attaching without --replace: this sandbox's MCP receipt is %s, so attachment for %s cannot be verified. Attach live: %s. Or recreate with current context: %s",
+			rstatus.String(), strings.Join(desired, ", "), mcpLoadHints(desired, o.Workspace), runReplaceCommand(o.Workspace))
+	}
+	if rstatus == sandboxMCPStateAbsent {
+		return fmt.Sprintf("pi-stack: re-attaching without --replace: no MCP receipt for this sandbox, so attachment for %s cannot be verified. Attach live: %s. Or recreate with current context: %s",
+			strings.Join(desired, ", "), mcpLoadHints(desired, o.Workspace), runReplaceCommand(o.Workspace))
+	}
+	var missing []string
+	for _, name := range desired {
+		if receiptClaim(receipt, rstatus, name) == "" {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("pi-stack: re-attaching without --replace: %s not proven attached to this sandbox (no receipted preload or load). Attach live: %s. Or recreate with current context: %s",
+		strings.Join(missing, ", "), mcpLoadHints(missing, o.Workspace), runReplaceCommand(o.Workspace))
 }
 
 // runReplaceCommand returns the exact `pi-stack run [WORKSPACE] --replace`
@@ -622,7 +900,7 @@ func repoFromBinary() (string, bool) {
 // match can't collide with anything else. It fails OPEN (returns true) only when
 // there's NO signal to judge from: no sbx, an ls error, or empty output.
 func localImageLoaded(env shellEnv, tag string) bool {
-	if tag == "" || env.run == nil {
+	if tag == "" || (env.run == nil && env.probe == nil) {
 		return true
 	}
 	if env.lookPath != nil {
@@ -630,8 +908,10 @@ func localImageLoaded(env shellEnv, tag string) bool {
 			return true
 		}
 	}
-	out, err := env.run("sbx", "template", "ls")
-	if err != nil || strings.TrimSpace(out) == "" {
+	// BOUNDED (probeRun): a hung `sbx template ls` is a timeout, which is the
+	// same "no signal" as an error — fail open, never wedge the launch.
+	out, timedOut, err := probeRun(env, "sbx", "template", "ls")
+	if timedOut || err != nil || strings.TrimSpace(out) == "" {
 		return true // no signal -> don't block
 	}
 	return strings.Contains(out, tag)

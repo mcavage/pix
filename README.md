@@ -106,13 +106,13 @@ pi-stack setup
 Setup requires a signed-in 1Password CLI (`op`): it validates references for
 Anthropic, OpenAI, and Google, reconciles them into `sbx`, creates the default
 pack, and launches one upfront onboarding tour. It stores references, never
-resolved keys. 1Password is the ONLY provider-key source — there is no
+resolved keys. 1Password is the ONLY provider-key source: there is no
 "trust existing sbx keys" shortcut; without `op` installed and signed in,
 setup fails with the exact fix. `pi-stack onboard` never provisions provider
 keys at all. After setup, `pi-stack run` launches or reattaches without
 replaying onboarding.
 
-`pi-stack setup` is the opposite: it *actually sets you up* — provisions model
+`pi-stack setup` is the opposite: it *actually sets you up*. It provisions model
 keys from 1Password (wiring both the sandbox and host mode's `hostmode.env`),
 creates your default pack, then hands off to a one-shot upfront guide that names
 the exact workflows, explains memory and packs, reports grounded setup gaps, and
@@ -120,7 +120,7 @@ asks for your real task. Repeat it any time: the host phase reconciles
 keys/config again; an existing sandbox is left alone (reattach with `pi-stack
 run`, or recreate it with your current settings *and* get the tour via `pi-stack
 setup --replace`). Host mode (the unsandboxed escape hatch) is **not** set up by
-setup — it's opt-in and needs `pi` on the host; enable it only if you need it
+setup. It's opt-in and needs `pi` on the host; enable it only if you need it,
 with a single command, `pi-stack host setup` (it provisions **and** enables host
 mode when provisioning succeeds). It reaches cloud models through the same
 `op://` refs in `hostmode.env` that setup wrote, resolved via `op run` at each
@@ -134,7 +134,7 @@ down (opt out with `PI_STACK_NO_AUTOSERVE=1` or `pi-stack config set
 host.autoserve false`; log at `~/.local/state/pi-stack/serve.log`). Prefer an
 always-on login service? `pi-stack serve install` registers it with launchd
 (macOS) or systemd --user (Linux); `pi-stack serve uninstall` removes it. The
-managed service logs to the SAME `~/.local/state/pi-stack/serve.log` — one
+managed service logs to the SAME `~/.local/state/pi-stack/serve.log`, one
 log file regardless of how serve was started.
 
 Bare `pi-stack` (no args) prints a status dashboard; it never launches a sandbox.
@@ -142,11 +142,16 @@ Use `pi-stack run [DIR]` to launch. This is deliberate: launching is always
 explicit.
 
 `pi-stack run` matches sbx's own lifecycle: if no sandbox by that name exists
-yet, it creates one; if one already exists — running or stopped — it
+yet, it creates one; if one already exists, running or stopped, it
 RE-ATTACHES to it as-is instead of refusing or recreating (sbx reads the agent
 from the sandbox's own spec, so `--kit`/`--mcp`/create-only flags don't apply on
 a re-attach). Pass `--replace` to force a recreate (`sbx rm -f` then create)
 when you've changed the kit, MCP servers, or another create-only flag.
+
+Setup never downloads local models on its own: an interactive `pi-stack setup`
+asks once, default No, before pulling anything; a non-interactive setup pulls
+nothing unless you pass `--pull-models`, and a model it can't positively
+verify as missing is never pulled either way.
 
 ## Why pi-stack?
 
@@ -203,8 +208,8 @@ bundles through config or a pack.
 
 **Host-side credentials.** GitHub uses sbx proxy injection. Google Workspace,
 Slack, and pack connectors run as host-side MCP servers spawned by the sbx
-gateway — a host `--command` (op-run wrapped), a container the gateway runs, or a
-remote endpoint — so the sandbox talks to a gateway instead of holding tokens.
+gateway: a host `--command` (op-run wrapped), a container the gateway runs, or a
+remote endpoint, so the sandbox talks to a gateway instead of holding tokens.
 Slack-style secrets can come from 1Password via `op run`.
 
 **Skills and role agents.** The public image includes generic development,
@@ -216,8 +221,8 @@ live skill, agent, and capability map.
 capability routing (`capabilities.json`), credentials, and company connectors
 live in a **pack** (a git-backed bundle you `pi-stack pack use`), and any
 host-executing integration ships as a **container** the sbx gateway runs (or a
-host daemon when it can't containerize). That keeps the open-source tree clean —
-nothing private is compiled in — while the same skills run against real work
+host daemon when it can't containerize). That keeps the open-source tree clean,
+nothing private is compiled in, while the same skills run against real work
 systems when a pack is active.
 
 **Parallel work with `task`.** `pi-stack task new` spins up an isolated clone plus
@@ -274,7 +279,7 @@ commands when something is missing.
 
 ### Expert: `pi-stack host` (unsandboxed, gated off)
 
-`pi-stack host [DIR]` runs pi **directly on your machine** — no sandbox, no
+`pi-stack host [DIR]` runs pi **directly on your machine**: no sandbox, no
 network fence, real credentials. It exists for one narrow case: developing
 pi-stack itself, which needs the host's Docker/`sbx`/`make` that the VM
 structurally cannot reach. It's opt-in (not touched by `pi-stack setup`): run
@@ -285,8 +290,8 @@ Cloud keys come from op:// refs in `hostmode.env` next to `config.toml`,
 resolved just-in-time by `op run` and never persisted; without that file the
 session is Ollama-only.
 
-Host mode ships guardrails — a guard extension, workspace refusals
-(`$HOME`/`/`/`/etc`/secret dirs), disabled subagents — but they protect against
+Host mode ships guardrails (a guard extension, workspace refusals for
+`$HOME`/`/`/`/etc`/secret dirs, disabled subagents), but they protect against
 **accidents, not attacks**. They are guardrails, not a security boundary. For
 anything you wouldn't hand a shell to, use `pi-stack run`. Full threat model:
 [docs/design/host-mode.md](docs/design/host-mode.md).
@@ -301,6 +306,12 @@ These are independent. Use the ones you need and skip the rest.
 > with `pi-stack mcp bundle` then `pi-stack mcp auth --all`. Attach one to a running
 > sandbox live with `pi-stack mcp load <name>`. External users can use the sandboxed
 > agent, GitHub, memory, and OKF knowledge with no MCP setup at all.
+>
+> Registering a server only makes it known to the gateway. Every configured
+> server, and every active pack integration, is passed to sbx as `--static-mcp`
+> at sandbox CREATE, so tools show up from launch. A server added after that
+> needs either `pi-stack mcp load <name>` (live, no recreate) or
+> `pi-stack run --replace`.
 
 ```bash
 pi-stack serve            # memory (:11435), knowledge (:11436 if enabled), broker if configured
@@ -309,12 +320,23 @@ pi-stack mcp register     # register local stdio MCP servers with the sbx gatewa
 pi-stack doctor           # check keys, services, models, gog, and MCP state
 ```
 
+`pi-stack doctor` leads with one verdict per check: **ready**, **todo** (a
+verified gap with the exact fix command), **unverifiable** (couldn't probe it,
+never treated as broken), or **denied** (an explicit policy refusal). Only a
+verified **todo** on something pi-stack actually requires (a resolved key for
+any one of Anthropic, OpenAI, or Google; a loadable config file) exits
+non-zero; everything optional or unverifiable exits 0. `pi-stack status` shows
+the same MCP truth per running sandbox, from the launcher's own receipts, not a
+live gateway poll: `preloaded`, `loaded`, `registered-not-attached`,
+`not-registered`, or `unverifiable` for a sandbox pi-stack has no receipt for
+(an old run, or one created outside pi-stack).
+
 | tool | capability | setup | reaches the sandbox via |
 | --- | --- | --- | --- |
 | `gh` | `github` | `gh auth token \| sbx secret set -g github` | sbx proxy injection |
 | memory | semantic recall | local Ollama watcher and embed models | host service on `:11435` |
 | knowledge | OKF retrieval | `pi-stack knowledge init` or `pi-stack knowledge use <path>` | host service on `:11436` |
-| Google Workspace | `gworkspace` | `gog auth login`, config account, MCP register | host `gog` MCP through sbx gateway |
+| Google Workspace | `gworkspace` | `pi-stack gog setup` | host `gog` MCP through sbx gateway |
 | Slack | `chat` | `config/op-refs.env`, 1Password CLI, MCP register | host stdio MCP through sbx gateway |
 | gateway catalog | `issues`, `docs`, etc. | `sbx mcp add` | sbx gateway |
 
@@ -327,7 +349,7 @@ make pull-models
 ### Local Ollama models
 
 The stack uses local Ollama models in three roles. All three are `pi-stack config`
-settings on the host — you never hand-edit sandbox env. Pull them with
+settings on the host, you never hand-edit sandbox env. Pull them with
 `make pull-models` (or `ollama pull <tag>`); whatever tag you set must be pulled
 or the call 404s.
 
@@ -345,7 +367,7 @@ make pull-models                                      # pull all three
 
 How the sandbox picks up `ollama_bridge_model`: `pi-stack run` writes the
 configured tag into `<workspace>/.pi-stack/ollama-bridge.model`, and the
-`ollama-bridge` extension reads it at startup — so a `pi-stack config set` +
+`ollama-bridge` extension reads it at startup, so a `pi-stack config set` +
 next `pi-stack run` is all it takes. No `/etc/sandbox-persistent.sh` editing, and
 you set ONE value (the display label is derived from the tag; an
 `OLLAMA_BRIDGE_MODEL` env var still overrides for power users, and
@@ -367,20 +389,19 @@ pi-stack knowledge init
 
 Both commands wire the config AND propagate it: a managed or lazily-started
 daemon is restarted automatically so the bundle gets indexed; a foreground
-`pi-stack serve` is never killed — you're told to restart it (and if nothing is
+`pi-stack serve` is never killed; you're told to restart it (and if nothing is
 running, the change simply applies on the next start).
 
-Google Workspace is read-only by default. Authorize once on the host, then point
-pi-stack at the account:
+Google Workspace is read-only by default. One guided command wires the CLI
+check, OAuth import, account authorization, headless verification, and
+gateway registration:
 
 ```bash
-gog auth login
-pi-stack config set gog_account you@example.com
-pi-stack config set mcp gog
-pi-stack mcp register
+pi-stack gog setup --account you@example.com --credentials ~/Downloads/gog-oauth-client.json
 ```
 
-See [docs/gog-setup.md](docs/gog-setup.md) for the full walkthrough.
+See [docs/gog-setup.md](docs/gog-setup.md) for the full walkthrough and the
+manual path it automates.
 
 ## Skills and Packs
 
@@ -422,19 +443,18 @@ pattern works for prompts, extensions, environment, and network rules. Docker's
 kit format is documented in the
 [sbx kit docs](https://docs.docker.com/ai/sandboxes/customize/kits/).
 
-Private company context is a **pack**, not a build-time overlay:
+Private company context is a **pack**:
 
-- **skills, `capabilities.json` routing, `[[proxy]]` wrappers, knowledge** — all
+- **skills, `capabilities.json` routing, `[[proxy]]` wrappers, knowledge**, all
   in the pack; `pi-stack pack use <path>` mounts them at runtime, no rebuild.
-- **host-executing MCP servers** — shipped as an OCI image and referenced from a
+- **host-executing MCP servers**, shipped as an OCI image and referenced from a
   pack `[[integrations]]` `manifest`; the sbx gateway runs the container on the
   host (`sbx mcp add <name> --local --url <manifest>`). No private Go is compiled
   into `pi-stack`.
-- **host-only services** (browser OAuth, host-cached creds) — a standalone host
+- **host-only services** (browser OAuth, host-cached creds): a standalone host
   daemon + installer, with a thin in-sandbox `[[proxy]]` wrapper in the pack.
 
-See [docs/OVERLAY.md](docs/OVERLAY.md) (the migration note) and
-[design/packs.md](docs/design/packs.md).
+See [design/packs.md](docs/design/packs.md) for the full design.
 
 ## Build from Source
 

@@ -10,9 +10,31 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Custom sandbox names survive `mcp load` and `doctor`.** The create receipt
+  now records the canonical workspace it was created for (additive schema
+  field), and a hardened workspace→sandbox resolver lets `pi-stack mcp load
+  NAME [DIR]` and doctor's workspace context find a `run --name pi-stack-demo`
+  box again instead of deriving `pi-stack-<basename>` and missing it. A
+  positively-clean "no mapping" scan still falls back to the derived default
+  (old sandboxes), while an ambiguous or corrupt/tampered mapping refuses
+  (`mcp load`) or renders unverifiable (doctor) — never targets an arbitrary
+  box. `pi-stack reset --sbx` now clears each positively-removed sandbox's
+  receipt through the same hardened helper (a failed removal retains it).
+- **gog attachment is no longer claimed from config membership.** Doctor's gog
+  "attached" check now reads the same receipt-backed join row as every other
+  MCP server: a sandbox created before gog was configured reads
+  registered-not-attached (with the exact `pi-stack mcp load gog <workspace>`
+  command), not ready. Without a sandbox context, config membership renders as
+  intent, never attachment.
+- **`status` headline honesty:** an unverifiable per-sandbox MCP row (corrupt
+  or absent receipt, failed listing) no longer reads "all systems go" — status
+  says some checks are unverifiable without inventing a false TODO. Doctor's
+  verified registered-not-attached gap is now an optional TODO with the exact
+  load command, consistent with status.
+
 - `pi-stack host` now launches its interactive session under `op run
   --no-masking`. op's default output masking pipes pi's stdout/stderr through a
-  filter, which makes them non-TTYs — pi's TUI then saw no terminal and exited
+  filter, which makes them non-TTYs, so pi's TUI then saw no terminal and exited
   immediately (banner, then straight back to the shell, exit 0). Non-interactive
   paths were unaffected, which is why it looked like a silent failure. (The
   mcp-gateway op-run path already used `--no-masking`.)
@@ -22,6 +44,42 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   1Password item whose name has a space (very common) failed to resolve and
   `pi-stack setup` aborted. Existing encoded refs self-heal: they're decoded on
   read and rewritten literal on the next write.
+
+### Added
+
+- **`pi-stack doctor` now reports four verdicts, not two**: `ready`, `todo` (a
+  verified, fixable gap with the exact command), `unverifiable` (a probe
+  timed out or the tool needed to check isn't available; never counted as
+  broken), and `denied` (an explicit policy/permission refusal). Exit codes
+  follow: `2` on a usage error, `1` only for a positively verified core
+  failure (a resolved key for any one of Anthropic/OpenAI/Google, or the
+  config itself failing to load), `0` for everything else, including every
+  optional or unverifiable gap. `doctor --json` gained `schema_version` (now
+  `2`) so a script can tell the shape apart from an older run.
+- **`pi-stack gog setup`**: guided, version-aware Google Workspace onboarding.
+  It detects which auth subcommands your installed `gog` supports, imports
+  your OAuth client, authorizes your account with explicit read-only scopes,
+  verifies the exact headless command the sbx gateway will spawn (not just
+  interactive auth), and only then registers gog with the gateway and saves
+  config, rolling the registration back if the config write fails. Replaces
+  hand-running the raw auth + manual `config set`/`mcp register` steps as the
+  documented path; `doctor` and `status` now point here for any gog gap.
+- **Per-sandbox MCP status, backed by launcher receipts.** `pi-stack status`
+  and `pi-stack doctor` now report one of five states per configured server
+  per running sandbox: `preloaded` (shipped at create), `loaded` (attached
+  live via `pi-stack mcp load`), `registered-not-attached` (known to the
+  gateway, but no receipt for this sandbox), `not-registered`, or
+  `unverifiable` (an old or externally created sandbox pi-stack has no
+  receipt for). Both read from the same shared join of registration evidence
+  and receipts, never a live gateway poll, so the two commands can't tell
+  different stories from the same facts.
+- **`pi-stack setup` never downloads local models without consent.**
+  Interactive setup asks once, defaulting to No, before pulling any
+  confirmed-missing configured Ollama model; non-interactive setup pulls
+  nothing unless you pass `--pull-models`, the only consent it honors (a
+  broad `--yes` never downloads). A model setup couldn't positively verify as
+  missing is never a pull candidate either way, and setup never installs
+  Ollama itself.
 
 ### Changed
 
@@ -42,7 +100,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   gone.
 - `pi-stack setup` no longer prints the redundant up-front sbx provider-key
   status block; the 1Password flow reports each provider's ref + sync itself.
-- Identity seeded from git config is now **first name only** — no surname, no
+- Identity seeded from git config is now **first name only**: no surname, no
   email. It's recalled into every session, so it carries the minimum to greet.
   (`readGitIdentity` no longer reads `user.email`; memory stores one first-name
   fact instead of name + email.)
@@ -51,28 +109,31 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 - **MCP migrated to sbx's nightly gateway.** The sandbox flag is now
   `--static-mcp` (sbx removed `--mcp`), and MCP runs through sbx's **local
-  data-plane gateway** — always available, **no `SBX_MCP_URL`** needed (dropped
+  data-plane gateway**: always available, **no `SBX_MCP_URL`** needed (dropped
   the old SBX_MCP_URL gate + "gateway off" warning; `pi-stack mcp register` no
   longer requires it). pi-stack's own `pi-stack run --mcp M` CLI flag is unchanged.
-  **Per-server attach mode:** a configured server is attached eagerly at create
-  (`--static-mcp`, tools always in context) or left dynamic (the in-VM agent
-  discovers + calls it on demand via mcp-find/mcp-exec/code-mode; the daemon
-  spawns local stdio servers host-side, so local and remote behave the same). The
-  **default is dynamic for every registered server** — keeps heavy tool schemas
-  out of context until needed. Pin a server eager with the new `mcp_static` list
-  (`mcp_dynamic` is the explicit opposite, and wins if a server is in both). A
-  **pack** can request eager attach for its own integrations with
-  `[[integrations]] static = true` (folded into the eager set at launch; a user
-  `mcp_dynamic` still overrides). New:
-  - `pi-stack mcp load <name> [DIR]` — attach an already-registered server to a
-    RUNNING sandbox live, no recreate (`sbx mcp load`).
-  - `pi-stack mcp auth [args…]` — hosted-control-plane OAuth for remote servers
+  **Every configured server preloads at create.** Registering a server
+  (`sbx mcp add`, `pi-stack mcp register`) only makes it known to the gateway;
+  it does not attach it to any session. Every server in the resolved `mcp`
+  list, and every integration an active or transient pack carries, is passed
+  to sbx as `--static-mcp <name>` when the sandbox is created, so its tools
+  are in context from the start. There is no dynamic discovery and no
+  attach-on-run. New:
+  - `pi-stack mcp load <name> [DIR]`: attach an already-registered server to a
+    RUNNING sandbox live, no recreate (`sbx mcp load`), recording a receipt so
+    `status`/`doctor` can report it as `loaded`.
+  - `pi-stack mcp auth [args...]`: hosted-control-plane OAuth for remote servers
     (`sbx mcp auth`; e.g. `auth --all`).
-  - `pi-stack mcp bundle` — register the shipped public catalog
+  - `pi-stack mcp bundle`: register the shipped public catalog
     (notion/atlassian/granola, `config/mcp-catalog.bundle.json`) in one step.
   `make mcp-auth` already used native `sbx mcp auth`; its tail now points at
   `pi-stack mcp load` instead of a recreate. `doctor` guidance no longer mentions
-  `SBX_MCP_URL` (a failed `sbx mcp ls` now points at the sbx daemon).
+  `SBX_MCP_URL` (a failed `sbx mcp ls` now points at the sbx daemon). An
+  earlier draft of this change introduced `mcp_static`/`mcp_dynamic` config
+  keys for an eager-vs-lazy attach split; those keys never shipped in a
+  release and are gone before this reaches one, superseded by the
+  always-preload-at-create model above (`doctor` flags either key as a
+  retired config key if it's still in an existing `config.toml`).
 
 - **Kit migrated to kit-spec v2** (`pi-kit/spec.yaml`, `schemaVersion: "2"`).
   Credentials are now a `credentials[]` list of `service` + `apiKey`
@@ -80,7 +141,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   `network.serviceDomains`/`serviceAuth`/`allowedDomains` + `credentials.sources`
   + `environment.proxyManaged`. Injection is unchanged (proxy-managed sentinels;
   all four providers verified). **Requires a recent `sbx` nightly** (v0.37+); the
-  per-credential `service:` is mandatory or `sbx run` panics. Overlay/mixin kits
+  per-credential `service:` is mandatory or `sbx run` panics. Mixin kits
   should move their network rules to `caps.network.allow` too.
 - **1Password is now the only provider-key source; the `op` CLI is required.**
   Removed `pi-stack setup --use-sbx-keys` / `--use-1password` (both now error),
@@ -123,7 +184,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   once a ref exists. `--yes` alone does NOT imply the skip.
   Whichever source succeeds is PERSISTED as `provider_key_mode` (`sbx` or
   `1password`) in `config.toml`, so a repeat `pi-stack setup` with no flags
-  reuses that exact choice with no prompt — a persisted `sbx` mode still
+  reuses that exact choice with no prompt; a persisted `sbx` mode still
   re-runs the exact all-three probe every time (never a cached bypass), an
   explicit flag always overrides the persisted choice for that one run, and a
   mode-save failure fails setup honestly rather than reporting success while
@@ -135,7 +196,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   should-not-happen message. Host-mode/setup copy also no longer overclaims
   cloud keys as "wired": it says keys were "validated this run" only after
   the strict 1Password flow actually resolved them, and "configured (not
-  verified this run)" when a run used existing sbx keys instead — real
+  verified this run)" when a run used existing sbx keys instead. Real
   validation still happens at every `pi-stack host` launch via `op run`.
   `pi-stack secret set` for a provider key now mirrors the ref into
   `hostmode.env` as well as `op-refs.env` in one step, so three `secret set`
@@ -151,7 +212,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   then compile + verify. Baked into the public image.
 - `pi-stack agent ls` WHY column is now actionable: it shows the intent, the
   objective, the chosen model's accuracy/per-task-$/latency, and either what it
-  beat or that a constraint left a `sole fit` — plus a legend. Previously it said
+  beat or that a constraint left a `sole fit`, plus a legend. Previously it said
   only `intent <name>`, which explained nothing.
 - `pi-stack agent ls` flags an explicit `model:` pin that is not in the registry
   (`pinned (UNKNOWN ...)`) instead of silently resolving to a model that fails at
@@ -180,7 +241,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 - **The memory watcher defaults to `qwen3.5:9b`, the same model the ollama-bridge
   uses.** Two defaults previously disagreed (the daemon fell back to `gemma3:4b`,
   the launcher config to `qwen3.5:4b`), and neither matched the model already
-  resident for the bridge/router — so a fresh install ran capture on a model that
+  resident for the bridge/router, so a fresh install ran capture on a model that
   usually was not pulled, and capture silently did nothing. Now capture reuses the
   one local model already loaded, so it works out of the box for anyone running
   the bridge. Override with `pi-stack config set memory_watcher_model <model>` on
@@ -191,11 +252,11 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   matching the memory watcher, so Ollama keeps a single model resident for both
   capture and local inference. Set it with `pi-stack config set ollama_bridge_model
   <tag>`; `pi-stack run` writes it into `<workspace>/.pi-stack/ollama-bridge.model`
-  and the `ollama-bridge` extension reads it — no more hand-editing
+  and the `ollama-bridge` extension reads it, no more hand-editing
   `/etc/sandbox-persistent.sh`. The bridge display label is now derived from the
   tag, so `OLLAMA_BRIDGE_MODEL_NAME` is optional (you set one value, not two).
   `make pull-models` pulls the local models. NOTE: the host memory service uses the
-  watcher + embed models; it does NOT use the bridge/router local model — those
+  watcher + embed models; it does NOT use the bridge/router local model, those
   are separate roles.
 - **Routing redesign: a real tiered, multi-vendor crew instead of a monoculture,
   grounded in live model data.** Previously 13 of 18 agents collapsed onto one
@@ -218,9 +279,10 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 - **`evals` is no longer a command.** The automated eval harness was removed (see
   Removed); the `evals` verb is gone from the launcher, help, and man page.
 - Removed company-specific wiring from the public tree: the `SNOW_CONN` env in
-  `make serve` (now a generic overlay-populated `SERVE_ENV`), the `snow` probe in
-  the `healthcheck` skill (now a generic `EXTRA_CLIS` hook), and the overlay-only
-  `:11442` port from the public kit allowlist. Overlays add these themselves.
+  `make serve` (now a generic pack-populated `SERVE_ENV`), the `snow` probe in
+  the `healthcheck` skill (now a generic `EXTRA_CLIS` hook), and the
+  company-only `:11442` port from the public kit allowlist. A pack adds these
+  itself.
 - Pruned stale docs: two `HANDOFF` snapshots, a superseded migration guide, a
   review artifact, and an upstream issue draft.
 - README reworked to lead with the outcome, fix the launch command
@@ -231,7 +293,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 - **Tore out the automated eval harness** (`evals/`, `pi-stack-host evals`,
   `make evals`, `pi-stack agent reassess --model`'s auto-measure path). The
   router never needed it: it only ever reads `scorecard.json`, regardless of
-  how the numbers got there. Scores are now hand-maintained — edit
+  how the numbers got there. Scores are now hand-maintained: edit
   `services/host/routing/defaults/scorecard.json` directly (seeded from
   published benchmarks/pricing; see the `model-refresh` skill), then
   `pi-stack route compile`. `pi-stack agent new`'s starter eval-suite
@@ -242,7 +304,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 - **Automatic fact capture could be silently dead.** The watcher-availability
   check was one-shot at startup and latched: once it marked the watcher
   unavailable, `observe` short-circuited and never retried, so capture stayed off
-  until a full daemon restart even after the model was pulled — and the client
+  until a full daemon restart even after the model was pulled, and the client
   swallowed the failure reason, so nothing surfaced. Added a throttled live
   re-probe (capture recovers within 30s of the model appearing, no restart), a
   one-time client warning when capture is off, and a `pi-stack doctor` line that

@@ -7,18 +7,85 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"pi-stack/host/config"
 )
 
+// mcpCatalogNames is the SINGLE public source of truth for the shipped MCP
+// catalog bundle (config/mcp-catalog.bundle.json): exactly the servers
+// `pi-stack mcp bundle` registers. classifyMCPServer's remote-vs-custom split
+// reuses this set, so a plausible-looking but unshipped name (e.g. "linear")
+// can never be treated as a confirmed catalog server — that would recommend
+// `pi-stack mcp bundle` as a repair command that silently can't register it.
+var mcpCatalogNames = map[string]bool{
+	"notion":    true,
+	"atlassian": true,
+	"granola":   true,
+}
+
+// mcpCatalogSummary renders mcpCatalogNames as a stable, sorted,
+// human-readable list (e.g. "atlassian/granola/notion") for help/detail text,
+// so a doc string never has to hand-enumerate the catalog and risk drifting
+// from it.
+func mcpCatalogSummary() string {
+	names := make([]string, 0, len(mcpCatalogNames))
+	for n := range mcpCatalogNames {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return strings.Join(names, "/")
+}
+
+// errSbxUnavailable is the sentinel every mcp subcommand that PROMISES an
+// operation (register/load/auth/bundle) returns when sbx isn't on PATH,
+// instead of silently exiting 0 after only printing what it would have run.
+// It maps to exitServiceDown (3) — the same "evidence/dependency unavailable"
+// code `pi-stack memory`/`secret` use — never a bare exit 0. `pi-stack mcp ls`
+// is read-only but is deliberately held to the SAME contract (documented
+// here, the one place this policy is decided): the caller asked for gateway
+// state and got none, so a truthful exit code beats a quiet success that
+// implies "zero servers registered."
+var errSbxUnavailable = fmt.Errorf("sbx not on PATH")
+
+// mcpWouldRun prints the exact host command a user can run manually (the
+// recovery path every mutating mcp subcommand must preserve verbatim) and
+// returns errSbxUnavailable so the caller exits non-zero. Centralized so
+// register/ls/load/auth/bundle can never phrase or exit-code this differently
+// from one another.
+func mcpWouldRun(out io.Writer, args ...string) error {
+	fmt.Fprintf(out, "sbx not on PATH; would run: sbx %s (run it on the host)\n", strings.Join(args, " "))
+	return errSbxUnavailable
+}
+
+// exitMcpVerb is the shared exit dispatcher for the mcp subcommands that were
+// refactored to return an error instead of calling os.Exit deep inside their
+// logic (so tests can drive the core hermetically and only the outer wrapper
+// touches the process). errSbxUnavailable -> exitServiceDown (3); a captured
+// child exit code is propagated as-is; anything else is a generic failure (1)
+// with the error printed once.
+func exitMcpVerb(ctx string, err error) {
+	if err == nil {
+		return
+	}
+	if errors.Is(err, errSbxUnavailable) {
+		os.Exit(exitServiceDown)
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		os.Exit(exit.ExitCode())
+	}
+	fmt.Fprintf(os.Stderr, "pi-stack %s: %v\n", ctx, err)
+	os.Exit(1)
+}
+
 // A name in the resolved profile's mcp list is registered with the sbx gateway
 // ONLY if it is a LOCAL stdio server this host can serve. gog is a special local
 // case (its serverCmd is the external Google Workspace CLI in MCP mode). Every
-// other local name — slack, and any overlay server like `pio` or `fastmail` —
-// registers as `pi-stack-host mcp <name>` (the serverCmd default). The set of
-// local names is the SOURCE OF TRUTH from `pi-stack-host mcp --list`, so an
-// overlay adds a private MCP server just by having its bridge listed there. A
+// other local name — slack, and any other locally-servable name — registers as
+// `pi-stack-host mcp <name>` (the serverCmd default). The set of local names is
+// the SOURCE OF TRUTH from `pi-stack-host mcp --list`. A
 // name in cfg.MCP that is NEITHER gog NOR local is a remote gateway-catalog
 // server (notion/atlassian/…): it is attached a different way, so registration
 // SKIPS it with an info line rather than wrongly registering it as local.
@@ -65,19 +132,20 @@ func runMcpBundle(argv []string) {
 	} else {
 		sbxArgs = append([]string{"mcp", "bundle"}, argv...)
 	}
-	if _, err := exec.LookPath("sbx"); err != nil {
-		fmt.Printf("sbx not on PATH — would run: sbx %s (run it on the host)\n", strings.Join(sbxArgs, " "))
-		return
+	exitMcpVerb("mcp bundle", runMcpBundleCore(exec.LookPath, os.Stdout, os.Stdin, os.Stderr, sbxArgs))
+}
+
+// runMcpBundleCore is runMcpBundle's testable core: lookPath is injected so a
+// test can force the sbx-absent branch hermetically (no PATH manipulation, no
+// subprocess) and assert errSbxUnavailable + the printed recovery command
+// without ever exec'ing anything.
+func runMcpBundleCore(lookPath func(string) (string, error), out io.Writer, in io.Reader, errW io.Writer, sbxArgs []string) error {
+	if _, err := lookPath("sbx"); err != nil {
+		return mcpWouldRun(out, sbxArgs...)
 	}
 	cmd := exec.Command("sbx", sbxArgs...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			os.Exit(exit.ExitCode())
-		}
-		fmt.Fprintf(os.Stderr, "pi-stack mcp bundle: %v\n", err)
-		os.Exit(1)
-	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errW
+	return cmd.Run()
 }
 
 // runMcpAuth is a thin passthrough to `sbx mcp auth <args...>` — the native
@@ -86,19 +154,18 @@ func runMcpBundle(argv []string) {
 // verbatim: `pi-stack mcp auth --all`, `pi-stack mcp auth notion`,
 // `pi-stack mcp auth status --all`, `pi-stack mcp auth rm notion`.
 func runMcpAuth(argv []string) {
-	if _, err := exec.LookPath("sbx"); err != nil {
-		fmt.Printf("sbx not on PATH — would run: sbx mcp auth %s (run it on the host)\n", strings.Join(argv, " "))
-		return
+	exitMcpVerb("mcp auth", runMcpAuthCore(exec.LookPath, os.Stdout, os.Stdin, os.Stderr, argv))
+}
+
+// runMcpAuthCore is runMcpAuth's testable core (see runMcpBundleCore).
+func runMcpAuthCore(lookPath func(string) (string, error), out io.Writer, in io.Reader, errW io.Writer, argv []string) error {
+	args := append([]string{"mcp", "auth"}, argv...)
+	if _, err := lookPath("sbx"); err != nil {
+		return mcpWouldRun(out, args...)
 	}
-	cmd := exec.Command("sbx", append([]string{"mcp", "auth"}, argv...)...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			os.Exit(exit.ExitCode())
-		}
-		fmt.Fprintf(os.Stderr, "pi-stack mcp auth: %v\n", err)
-		os.Exit(1)
-	}
+	cmd := exec.Command("sbx", args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errW
+	return cmd.Run()
 }
 
 // runMcpLoad attaches an ALREADY-REGISTERED MCP server to the RUNNING sandbox
@@ -107,23 +174,50 @@ func runMcpAuth(argv []string) {
 // the nightly gateway's live-attach that the old --mcp-at-create model couldn't
 // do. Register first with `pi-stack mcp register` (or `sbx mcp add`).
 func runMcpLoad(argv []string) {
-	if len(argv) == 0 || wantsHelp(argv) {
-		fmt.Fprint(os.Stderr, mcpUsage)
+	if wantsHelp(argv) {
+		fmt.Print(mcpUsage)
+		return
+	}
+	name, ws, err := parseMcpLoadArgs(argv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack mcp load: %v\n\n%s", err, mcpUsage)
 		os.Exit(2)
 	}
-	name := argv[0]
-	ws := "."
-	if len(argv) > 1 {
-		ws = argv[1]
+	// The sandbox name is resolved ONLY from a validated workspace: a usage
+	// error above exits before anything is resolved, exec'd, or receipted.
+	// Resolution goes through the hardened workspace->sandbox resolver so a
+	// sandbox created with a CUSTOM name (`pi-stack run --name pi-stack-demo`)
+	// is loaded into, not a same-named stranger; an ambiguous or untrustworthy
+	// mapping REFUSES (exit 2) rather than targeting an arbitrary box.
+	sandbox, rerr := resolveMcpLoadSandbox(ws)
+	if rerr != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack mcp load: %v\n", rerr)
+		os.Exit(2)
 	}
-	sandbox := deriveSandboxName(ws)
 	if _, err := exec.LookPath("sbx"); err != nil {
-		fmt.Printf("sbx not on PATH — would run: sbx mcp load %s --sandbox %s (run it on the host)\n", name, sandbox)
-		return
+		// A command that promises to attach a server must not exit 0 having
+		// done nothing — see errSbxUnavailable. mcpWouldRun preserves the
+		// exact recovery command; execSbxMcpLoadAndRecord (and hence the load
+		// receipt) is never reached on this path.
+		_ = mcpWouldRun(os.Stdout, "mcp", "load", name, "--sandbox", sandbox)
+		os.Exit(exitServiceDown)
 	}
 	cmd := exec.Command("sbx", "mcp", "load", name, "--sandbox", sandbox)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
+	// S03: append the load receipt ONLY after this exact `sbx mcp load` exec has
+	// itself succeeded — never before, never on a failed load. A missing sbx
+	// (the would-run branch above) never reaches this call at all.
+	if err := execSbxMcpLoadAndRecord(cmd, sandbox, name); err != nil {
+		var rerr *receiptRecordError
+		if errors.As(err, &rerr) {
+			// The attach itself succeeded — only the local receipt failed.
+			// Report that distinctly (never a plain success) and exit non-zero
+			// so doctor/status degrade honestly instead of trusting a record
+			// that was never written.
+			fmt.Fprintf(os.Stderr, "pi-stack mcp load: %v\n", rerr)
+			fmt.Fprintln(os.Stderr, "the server IS attached to the running sandbox; only pi-stack's local record of it failed to write; retry `pi-stack mcp load`, or check state-dir permissions.")
+			os.Exit(1)
+		}
 		if exit, ok := err.(*exec.ExitError); ok {
 			os.Exit(exit.ExitCode())
 		}
@@ -132,24 +226,110 @@ func runMcpLoad(argv []string) {
 	}
 }
 
+// parseMcpLoadArgs enforces `pi-stack mcp load NAME [DIR]` EXACTLY: NAME is
+// required, non-blank, and never flag-shaped (load takes no flags); at most
+// one DIR may follow, and it must exist and be a directory —
+// validateRunWorkspace, the SAME helper `pi-stack run` uses, so load and run
+// can never disagree about what counts as a workspace. Any violation is a
+// usage error (exit 2 in the caller) BEFORE a sandbox name is derived or any
+// sbx command runs, so a failed usage can never attach anything or write a
+// receipt.
+func parseMcpLoadArgs(argv []string) (name, ws string, err error) {
+	const want = "want: pi-stack mcp load NAME [DIR]"
+	if len(argv) == 0 {
+		return "", "", fmt.Errorf("missing server NAME (%s)", want)
+	}
+	if len(argv) > 2 {
+		return "", "", fmt.Errorf("unexpected argument %q (%s)", argv[2], want)
+	}
+	name = strings.TrimSpace(argv[0])
+	if name == "" {
+		return "", "", fmt.Errorf("server NAME must not be blank (%s)", want)
+	}
+	if strings.HasPrefix(name, "-") {
+		return "", "", fmt.Errorf("unknown flag %q — mcp load takes no flags (%s)", name, want)
+	}
+	ws = "."
+	if len(argv) == 2 {
+		ws = argv[1]
+		if strings.TrimSpace(ws) == "" || strings.HasPrefix(ws, "-") {
+			return "", "", fmt.Errorf("invalid DIR %q — mcp load takes no flags (%s)", ws, want)
+		}
+	}
+	if verr := validateRunWorkspace(ws); verr != nil {
+		return "", "", verr
+	}
+	return name, ws, nil
+}
+
+// resolveMcpLoadSandbox resolves the sandbox `mcp load` targets for a
+// VALIDATED workspace via the hardened workspace->sandbox resolver
+// (workspaceresolve.go): a unique trustworthy receipt mapping wins (custom
+// `run --name` sandboxes), a positively-clean "no mapping" scan falls back to
+// the derived default name (an old sandbox predating the Workspace field),
+// and anything else — an ambiguous mapping, an untrustworthy receipt store,
+// or an unresolvable state dir — returns an error so the caller REFUSES
+// instead of attaching a server to an arbitrary box.
+func resolveMcpLoadSandbox(ws string) (string, error) {
+	dir, err := sandboxMCPStateDirFn()
+	if err != nil {
+		return "", fmt.Errorf("resolving pi-stack state dir: %w", err)
+	}
+	res := resolveWorkspaceSandbox(dir, ws)
+	switch res.Outcome {
+	case workspaceSandboxMapped, workspaceSandboxDefault:
+		return res.Sandbox, nil
+	default: // ambiguous / untrusted — never target an arbitrary box
+		return "", fmt.Errorf("cannot resolve which sandbox belongs to %s: %s", ws, res.Detail)
+	}
+}
+
+// recordMcpLoadReceipt appends the load receipt for name on sandbox — called
+// ONLY by execSbxMcpLoadAndRecord, after mcp.go's OWN `sbx mcp load` has
+// already exec'd successfully.
+func recordMcpLoadReceipt(sandbox, name string) error {
+	dir, err := sandboxMCPStateDirFn()
+	if err != nil {
+		return &receiptRecordError{op: "mcp load", sandbox: sandbox, name: name, err: fmt.Errorf("resolving pi-stack state dir: %w", err)}
+	}
+	if err := appendLoadReceipt(dir, sandbox, name, nil); err != nil {
+		return &receiptRecordError{op: "mcp load", sandbox: sandbox, name: name, err: err}
+	}
+	return nil
+}
+
+// execSbxMcpLoadAndRecord runs cmd (the already-composed `sbx mcp load ...`
+// invocation) and — ONLY when the exec itself succeeds — appends the load
+// receipt for sandbox/name. Mirrors execSbxRunAndRecordCreate's ordering
+// contract (run.go): a failed exec returns before any receipt write is
+// attempted, and a writeCreateReceipt-equivalent failure here surfaces as
+// *receiptRecordError so the caller reports "attached, but state unrecorded"
+// rather than a plain success or a plain failure.
+func execSbxMcpLoadAndRecord(cmd *exec.Cmd, sandbox, name string) error {
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return recordMcpLoadReceipt(sandbox, name)
+}
+
 // runMcpLs shells `sbx mcp ls`, degrading cleanly when sbx is absent (e.g.
 // inside the sandbox).
 func runMcpLs() {
-	if _, err := exec.LookPath("sbx"); err != nil {
-		fmt.Println("sbx not on PATH — would run: sbx mcp ls (run it on the host)")
-		return
+	exitMcpVerb("mcp ls", runMcpLsCore(exec.LookPath, os.Stdout, os.Stdin, os.Stderr))
+}
+
+// runMcpLsCore is runMcpLs's testable core (see runMcpBundleCore). `mcp ls` is
+// read-only, but per the errSbxUnavailable policy above it still exits 3 when
+// evidence (the gateway's registered-server list) is unavailable rather than
+// exiting 0 with nothing printed — a caller cannot tell "zero servers" from
+// "couldn't ask" otherwise.
+func runMcpLsCore(lookPath func(string) (string, error), out io.Writer, in io.Reader, errW io.Writer) error {
+	if _, err := lookPath("sbx"); err != nil {
+		return mcpWouldRun(out, "mcp", "ls")
 	}
 	cmd := exec.Command("sbx", "mcp", "ls")
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			os.Exit(exit.ExitCode())
-		}
-		fmt.Fprintf(os.Stderr, "pi-stack mcp ls: %v\n", err)
-		os.Exit(1)
-	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errW
+	return cmd.Run()
 }
 
 // runMcpRegister is the CLI entry point: it registers the requested local stdio
@@ -163,6 +343,9 @@ func runMcpRegister(argv []string) {
 	}
 	if err := registerServers(cfg, defaultShellEnv(), os.Stdout, argv, findHostBinary, activeContainerMCP(cfg)); err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack mcp register: %v\n", err)
+		if errors.Is(err, errSbxUnavailable) {
+			os.Exit(exitServiceDown)
+		}
 		os.Exit(1)
 	}
 }
@@ -186,6 +369,24 @@ type mcpRegistrar struct {
 	containers map[string]packContainer
 }
 
+// gogHardenedArgv builds the EXACT hardened gog invocation used both when
+// registering gog with the sbx gateway (mcpRegistrar.serverCmd) and when
+// probing it directly (gog_setup.go's headless verification, doctor's
+// best-effort reconstruction) — a single definition so a direct probe can
+// never silently drift from what actually gets registered. gogBin is normally
+// the canonical PATH-resolved gog binary.
+func gogHardenedArgv(gogBin, account string) []string {
+	return []string{
+		gogBin,
+		"--account", account,
+		"--gmail-no-send",
+		"--wrap-untrusted",
+		"--readonly",
+		"mcp",
+		"--allow-tool", "read",
+	}
+}
+
 // serverCmd is the bare command+args the gateway must ultimately spawn for one
 // server (before any op-run wrapping): gog with its hardened flags, or a
 // pi-stack-host subcommand (slack + friends).
@@ -202,15 +403,7 @@ func (m mcpRegistrar) serverCmd(name string) []string {
 	}
 	switch name {
 	case "gog":
-		return []string{
-			m.gog,
-			"--account", m.account,
-			"--gmail-no-send",
-			"--wrap-untrusted",
-			"--readonly",
-			"mcp",
-			"--allow-tool", "read",
-		}
+		return gogHardenedArgv(m.gog, m.account)
 	default:
 		// slack + any other local stdio server is a pi-stack-host subcommand.
 		return []string{m.hostBin, "mcp", name}
@@ -240,28 +433,115 @@ func (m mcpRegistrar) addArgs(name string) []string {
 	if c := m.containers[name]; c.RemoteURL != "" {
 		return []string{"mcp", "add", name, "--url", c.RemoteURL}
 	}
+	return rawAddArgs(name, m.execArgv(name))
+}
+
+// execArgv returns the EXACT, literal command line the sbx gateway will exec to
+// spawn server `name` — serverCmd's bare invocation, wrapped in
+// `op run --no-masking --env-file=<refs> -- <cmd…>` when m.opRefs is present so
+// creds resolve from 1Password at gateway spawn time, or returned bare when
+// m.opRefs is empty (1Password is optional). This is the single source of
+// truth for "what will actually run": addArgs re-encodes it into sbx's
+// --command/--args form, and gogRegisteredArgv calls it directly so a probe of
+// the real headless path can never drift from what gets registered. Container
+// (manifest/remote) servers never route through here — addArgs short-circuits
+// them above.
+func (m mcpRegistrar) execArgv(name string) []string {
 	cmd := m.serverCmd(name)
 	if m.opRefs == "" {
-		// Bare registration: --command <cmd[0]> --args <cmd[1]> ...
-		args := []string{"mcp", "add", name, "--command", cmd[0]}
-		for _, c := range cmd[1:] {
-			args = append(args, "--args", c)
-		}
-		return args
+		return cmd
 	}
-	// op-run wrapper: --command <op> --args run … --args -- --args <cmd...>
-	args := []string{
-		"mcp", "add", name,
-		"--command", m.op,
-		"--args", "run",
-		"--args", "--no-masking",
-		"--args", "--env-file=" + m.opRefs,
-		"--args", "--",
+	return append(opRunWrapPrefix(m.op, m.opRefs), cmd...)
+}
+
+// opRunWrapPrefix is the ONE op-run wrapper grammar the launcher ever
+// generates: `<op> run --no-masking --env-file=<refs> --`. It is shared
+// between the generator (execArgv above) and the recognizer (doctor.go's
+// unwrapOpRun), so what doctor trusts to unwrap can never drift from what
+// registration actually writes — any other op subcommand, option set,
+// ordering, or env file is by definition not launcher-generated.
+func opRunWrapPrefix(op, refs string) []string {
+	return []string{op, "run", "--no-masking", "--env-file=" + refs, "--"}
+}
+
+// rawAddArgs builds a literal `sbx mcp add <name> --command <argv[0]> --args
+// <argv[1]> ...` argv from an already-resolved command line (e.g. one read
+// back via `sbx mcp get`). Used both by addArgs above and by gog_setup.go's
+// registration rollback, which must re-register a PRIOR command exactly as it
+// was without reconstructing it from config.
+func rawAddArgs(name string, argv []string) []string {
+	if len(argv) == 0 {
+		return []string{"mcp", "add", name}
 	}
-	for _, c := range cmd {
+	args := []string{"mcp", "add", name, "--command", argv[0]}
+	for _, c := range argv[1:] {
 		args = append(args, "--args", c)
 	}
 	return args
+}
+
+// gogRegisteredArgv returns the EXACT argv the sbx gateway will exec for gog,
+// given resolved binaries/refs/account — literally mcpRegistrar{…}.execArgv
+// ("gog") for the same inputs registerServers would use. gog_setup.go's
+// pre-commit headless verification and doctor's best-effort reconstruction
+// fallback (when sbx's own registration can't be read) both call THIS, so
+// neither can silently probe lighter flags/wrapper than what registration will
+// actually run. Pass opBin/opRefs both "" for a bare (no 1Password) probe —
+// mirrors registerServers' opReady gate, where op and op-refs are only ever
+// used together.
+func gogRegisteredArgv(gogBin, opBin, opRefs, account string) []string {
+	return mcpRegistrar{gog: gogBin, account: account, op: opBin, opRefs: opRefs}.execArgv("gog")
+}
+
+// gogBareRegistrationNote is the ONE shared message printed whenever gog is
+// registered without an op-refs.env wrapper (1Password not configured): gog
+// authenticates via its own OAuth flow, never op-refs, so this points at the
+// guided `pi-stack gog setup` recovery path — never a raw legacy direct-login
+// recipe.
+func gogBareRegistrationNote(out io.Writer) {
+	fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via its own OAuth flow — "+
+		"if it ever needs re-authorizing, run: pi-stack gog setup")
+}
+
+// buildGogRegistrar resolves op + op-refs EXACTLY ONCE and pairs them with the
+// already-resolved gogPath/account into an IMMUTABLE mcpRegistrar snapshot.
+// gogSetup calls this a single time, before its headless verification probe;
+// the returned reg is then used, UNCHANGED, both to build the probe's argv
+// (reg.execArgv("gog")) and to register it (registerGogRegistrar ->
+// reg.addArgs("gog")) — no re-resolution of op/op-refs/gog happens between the
+// two, so a PATH or op-refs.env mutation in that window can never register a
+// different command than the one that was just proven healthy.
+func buildGogRegistrar(env shellEnv, gogPath, account string) mcpRegistrar {
+	lookPath := env.lookPath
+	if lookPath == nil {
+		lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	}
+	reg := mcpRegistrar{gog: gogPath, account: account}
+	opPath, opErr := lookPath("op")
+	opRefs := resolveOpRefs(env)
+	if opErr == nil && opRefs != "" {
+		reg.op = opPath
+		reg.opRefs = opRefs
+	}
+	return reg
+}
+
+// registerGogRegistrar registers gog with the sbx gateway using the EXACT,
+// already-resolved reg snapshot gogSetup built via buildGogRegistrar and
+// probed against — no independent re-resolution here, so the registered
+// command is byte-for-byte the one that was just verified.
+func registerGogRegistrar(reg mcpRegistrar, env shellEnv, out io.Writer) error {
+	if env.run == nil {
+		return fmt.Errorf("internal: shellEnv.run not wired")
+	}
+	if reg.opRefs == "" {
+		gogBareRegistrationNote(out)
+	}
+	if _, err := env.run("sbx", reg.addArgs("gog")...); err != nil {
+		return fmt.Errorf("sbx mcp add gog: %w", err)
+	}
+	fmt.Fprintln(out, "  registered: gog")
+	return nil
 }
 
 // registerServers resolves + guards + builds + runs the `sbx mcp add` commands
@@ -331,7 +611,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			// (e.g. notion) as `pi-stack-host mcp notion`. Skip every non-gog name
 			// with an actionable warning and fail the command below.
 			fmt.Fprintf(out, "  %s: cannot determine local MCP servers "+
-				"(pi-stack-host mcp --list failed); skipping %s — re-run after building pi-stack-host\n", n, n)
+				"(pi-stack-host mcp --list failed); skipping %s; re-run after building pi-stack-host\n", n, n)
 			skippedUnknown = append(skippedUnknown, n)
 		case !localSet[n]:
 			// Not gog and not a local stdio server -> a remote gateway-catalog
@@ -349,7 +629,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	var skippedErr error
 	if len(skippedUnknown) > 0 {
 		skippedErr = fmt.Errorf("could not determine local MCP servers "+
-			"(pi-stack-host mcp --list failed); skipped %s — build pi-stack-host, then re-run",
+			"(pi-stack-host mcp --list failed); skipped %s; build pi-stack-host, then re-run",
 			strings.Join(skippedUnknown, ", "))
 	}
 
@@ -386,8 +666,8 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 
 	if !opReady {
 		if len(localServers) > 0 {
-			// A confirmed non-gog local stdio server (slack, an overlay `pio`, ...)
-			// can actually use op-refs. Best-effort: seed a template op-refs.env at
+			// A confirmed non-gog local stdio server (slack, or another registered
+			// local name) can actually use op-refs. Best-effort: seed a template op-refs.env at
 			// the absolute XDG path so the user has a concrete file to fill in later,
 			// and note that we registered bare rather than failing.
 			refsPath := defaultOpRefsPath(env)
@@ -396,13 +676,16 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			if created, err := config.SeedOpRefsAt(refsPath); err == nil && created {
 				fmt.Fprintf(out, "seeded a template op-refs.env at %s\n", refsPath)
 			}
-			fmt.Fprintf(out, "note: no op-refs.env found; registered %s directly (bare, no 1Password) — "+
+			fmt.Fprintf(out, "note: no op-refs.env found; registered %s directly (bare, no 1Password); "+
 				"add creds to %s if a server needs them\n",
 				strings.Join(finalNames, ", "), refsPath)
 		} else if wantGog {
-			// gog-only: gog authenticates via OAuth (gog auth login), never op-refs,
-			// so do NOT seed op-refs.env or mention it. Register bare.
-			fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via OAuth (gog auth login)")
+			// gog-only: gog authenticates via its own OAuth grant, never op-refs, so
+			// do NOT seed op-refs.env or mention it. Register bare. The grant
+			// guidance is the GUIDED command only — gog is a LOCAL stdio MCP, so
+			// neither native `sbx mcp auth` (remote catalog OAuth) nor a raw legacy
+			// direct-login recipe is ever printed.
+			fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via OAuth — wire it: pi-stack gog setup")
 		}
 		// container-only: nothing to seed — container creds are Docker-side, not op-refs.
 	}
@@ -432,7 +715,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	_, sbxErr := lookPath("sbx")
 	sbxOK := sbxErr == nil
 	if !sbxOK {
-		fmt.Fprintln(out, "sbx not on PATH — here is what WOULD be registered (run these on the host):")
+		fmt.Fprintln(out, "sbx not on PATH; here is what WOULD be registered (run these on the host):")
 	}
 
 	// Accumulate per-server failures so `pi-stack mcp register` exits non-zero on
@@ -457,37 +740,34 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			fmt.Fprintf(out, "Each wrapped server resolves its creds from %s via op run at gateway spawn.\n", reg.opRefs)
 		}
 	} else {
-		fmt.Fprintln(out, "note: install Docker Sandboxes (sbx) to register — https://docs.docker.com/ai/sandboxes")
+		fmt.Fprintln(out, "note: install Docker Sandboxes (sbx) to register: https://docs.docker.com/ai/sandboxes")
 	}
 	if len(regErrs) > 0 {
 		return errors.Join(fmt.Errorf("%d server(s) failed to register: %w", len(regErrs), errors.Join(regErrs...)), skippedErr)
 	}
+	if !sbxOK {
+		// `register` PROMISED to register these servers and did not (nothing was
+		// exec'd, nothing is registered with the gateway) — exit non-zero
+		// (errSbxUnavailable -> exitServiceDown) rather than a silent success
+		// just because the would-run lines above printed cleanly.
+		return errors.Join(errSbxUnavailable, skippedErr)
+	}
 	return skippedErr
 }
 
-// resolveStaticMCP returns, order-preserving and de-duplicated, the subset of
-// `servers` to attach EAGERLY at create (emitted to sbx as --static-mcp; their
-// tools sit in context from the start).
+// allPreloadedMCP returns, order-preserving and de-duplicated, every non-empty
+// name in `servers` — the full set to attach EAGERLY at create (emitted to sbx
+// as --static-mcp; their tools sit in context from the start).
 //
-// The DEFAULT is DYNAMIC for every registered server, regardless of kind: once a
-// server is registered (`pi-stack mcp register` / `sbx mcp add`) it's behind the
-// local gateway, and the in-VM agent discovers + calls it on demand via
-// mcp-find/mcp-exec/code-mode — the daemon spawns local stdio servers host-side
-// (with their op-run creds) exactly as it serves remotes, so local vs remote is
-// irrelevant here. This keeps heavy tool schemas out of context until needed.
-//
-// Two per-server override knobs (see cfg.MCPStatic/MCPDynamic): a server in
-// MCPStatic is pinned eager; MCPDynamic wins if a server is somehow in both
-// (explicit lazy beats explicit eager). No env/host probe needed — this is a
-// pure eager-vs-lazy choice, not a local-vs-remote one.
-func resolveStaticMCP(servers []string, cfg *config.Config) []string {
-	static := map[string]bool{}
-	for _, n := range cfg.MCPStatic {
-		static[n] = true
-	}
-	for _, n := range cfg.MCPDynamic {
-		delete(static, n) // MCPDynamic wins over MCPStatic
-	}
+// S01: there is no eager/lazy split any more. Every configured server (plus
+// every pack integration's server — see applyPackToLaunch) preloads at CREATE,
+// regardless of kind (local stdio or remote gateway-catalog): once a server is
+// registered (`pi-stack mcp register` / `sbx mcp add`) it's behind the local
+// gateway, so local vs remote was never the axis here — the retired
+// mcp_static/mcp_dynamic knobs were the only thing that ever kept a server out
+// of this set, and they're gone (see config.RetiredKeys). This function is now
+// pure list hygiene: dedupe + drop empties, order preserved.
+func allPreloadedMCP(servers []string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, n := range servers {
@@ -495,9 +775,7 @@ func resolveStaticMCP(servers []string, cfg *config.Config) []string {
 			continue
 		}
 		seen[n] = true
-		if static[n] {
-			out = append(out, n)
-		}
+		out = append(out, n)
 	}
 	return out
 }
@@ -517,8 +795,10 @@ func localMCPNames(env shellEnv, hostResolver func() (string, error)) (map[strin
 	if err != nil || hb == "" {
 		return nil, false
 	}
-	out, err := env.run(hb, "mcp", "--list")
-	if err != nil {
+	// BOUNDED: a hung `pi-stack-host mcp --list` degrades to an unknown local
+	// set (callers fail closed), never a wedged caller.
+	out, timedOut, err := probeRun(env, hb, "mcp", "--list")
+	if err != nil || timedOut {
 		return nil, false
 	}
 	set := map[string]bool{}

@@ -42,7 +42,7 @@ memory_embed_model = "custom-embed"
 gog_account = "you@example.com"
 
 [kits]
-stack = ["overlay-a", "overlay-b"]
+stack = ["mixin-a", "mixin-b"]
 
 [skills]
 paths = ["/tmp/skills"]
@@ -79,7 +79,7 @@ port = 9000
 	if c.GogAccount != "you@example.com" {
 		t.Errorf("GogAccount = %q, want you@example.com", c.GogAccount)
 	}
-	if len(c.Kits.Stack) != 2 || c.Kits.Stack[1] != "overlay-b" {
+	if len(c.Kits.Stack) != 2 || c.Kits.Stack[1] != "mixin-b" {
 		t.Errorf("Kits.Stack = %v", c.Kits.Stack)
 	}
 	if len(c.Skills.Paths) != 1 || c.Skills.Paths[0] != "/tmp/skills" {
@@ -223,6 +223,99 @@ func TestOpRefsTemplateHasNoActiveRefs(t *testing.T) {
 		if strings.IndexByte(trimmed, '=') > 0 {
 			t.Errorf("OpRefsTemplate has an active (uncommented) entry: %q", ln)
 		}
+	}
+}
+
+// TestRetiredKeysReportedAndNeverReemitted covers S01: mcp_static/mcp_dynamic
+// were retired (all configured/pack MCP servers now preload at sandbox
+// CREATE — no more eager/lazy split), but a config.toml written by an older
+// pi-stack still has them. Load must not hard-fail, must surface them via
+// RetiredKeys (not silently swallow them into UnknownKeys, which would read
+// as "you made a typo"), and Save must never re-emit them — there is no
+// field for them to round-trip through.
+func TestRetiredKeysReportedAndNeverReemitted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	src := `
+mcp = ["slack"]
+mcp_static = ["slack"]
+mcp_dynamic = ["notion"]
+`
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if got, want := c.RetiredKeys(), []string{"mcp_dynamic", "mcp_static"}; !stringSlicesEqual(got, want) {
+		t.Errorf("RetiredKeys() = %v, want %v", got, want)
+	}
+	if got := c.UnknownKeys(); len(got) != 0 {
+		t.Errorf("UnknownKeys() = %v, want none (retired keys are not unknown)", got)
+	}
+	if len(c.MCP) != 1 || c.MCP[0] != "slack" {
+		t.Errorf("MCP = %v, want [slack] (live key still decodes)", c.MCP)
+	}
+
+	t.Setenv("PI_STACK_CONFIG", path)
+	if err := c.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(saved), "mcp_static") || strings.Contains(string(saved), "mcp_dynamic") {
+		t.Errorf("saved config still contains a retired key:\n%s", saved)
+	}
+	// Reloading the saved file reports no retired keys — the migration is
+	// one-shot.
+	reloaded, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.RetiredKeys(); len(got) != 0 {
+		t.Errorf("reloaded RetiredKeys() = %v, want none", got)
+	}
+}
+
+// TestUnknownKeysSeparateFromRetired: a genuinely unrecognized key (typo or a
+// field from a future version) is reported via UnknownKeys, not RetiredKeys —
+// the two must never be conflated.
+func TestUnknownKeysSeparateFromRetired(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	src := `
+mcp_static = ["slack"]
+totally_made_up_key = "oops"
+`
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if got, want := c.RetiredKeys(), []string{"mcp_static"}; !stringSlicesEqual(got, want) {
+		t.Errorf("RetiredKeys() = %v, want %v", got, want)
+	}
+	if got, want := c.UnknownKeys(), []string{"totally_made_up_key"}; !stringSlicesEqual(got, want) {
+		t.Errorf("UnknownKeys() = %v, want %v", got, want)
+	}
+}
+
+// TestLoadAbsentReportsNoRetiredOrUnknownKeys: a fresh install (no file) has
+// nothing undecoded to report.
+func TestLoadAbsentReportsNoRetiredOrUnknownKeys(t *testing.T) {
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "nope.toml"))
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.RetiredKeys(); len(got) != 0 {
+		t.Errorf("RetiredKeys() = %v, want none", got)
+	}
+	if got := c.UnknownKeys(); len(got) != 0 {
+		t.Errorf("UnknownKeys() = %v, want none", got)
 	}
 }
 

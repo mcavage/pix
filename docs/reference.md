@@ -283,7 +283,7 @@ runtime.
 
 `pi-stack setup` sources cloud keys from 1Password, and it's mandatory: the
 `op` CLI must be installed and signed in, or setup fails with the exact fix.
-1Password is the only provider-key source — the old `--use-sbx-keys` /
+1Password is the only provider-key source. The old `--use-sbx-keys` /
 `--use-1password` flags and the persisted `provider_key_mode` are gone (both
 flags now error). setup validates one `op://` ref per provider, mirrors them
 into `hostmode.env`, and reconciles them into `sbx`. `pi-stack onboard` never
@@ -301,8 +301,7 @@ everyday driver, that's the failure mode the design explicitly warns against.
 ## 8. MCP and capabilities
 
 External tools and data (Slack, GitHub, Google Workspace, a company wiki) wire
-in as MCP servers, registered with the sbx Cloud MCP Gateway and either
-pre-active in a session or discoverable on demand.
+in as MCP servers, run through the sbx gateway.
 
 ```
 pi-stack config set mcp <name>     # add a local stdio server to the launch set
@@ -317,19 +316,67 @@ concrete provider: an `mcp` server, a `cli` on PATH, an `http` service, a
 every skill that reads that capability retargets at once. See the
 `capability-routing` skill for the resolution and fan-out rules.
 
-**Attach mode.** Each registered server is either *eager* (`--static-mcp`, tools
-always in context) or *dynamic* (the in-VM agent discovers + calls it on demand
-via mcp-find/mcp-exec/code-mode). This is eager-vs-lazy, not local-vs-remote:
-once a server is registered it sits behind the local gateway, and mcp-find
-surfaces local stdio servers (the daemon spawns them host-side with their creds)
-exactly like remotes. The **default is dynamic** for every server, so large tool
-schemas stay out of context until needed. Pin one eager with `pi-stack config set
-mcp_static <name>` (`mcp_dynamic <name>` is the explicit opposite and wins if a
-server is in both). To attach one to an ALREADY-RUNNING sandbox without
-recreating, use `pi-stack mcp load <name>`; a full recreate (`pi-stack run
---replace`) also picks up changes.
+**Registration is not the same as being usable.** `sbx mcp add` (or `pi-stack
+mcp register`) makes a server known to the gateway. It does not put that
+server's tools in front of any running session. A native server is added one
+of three ways: `--command`/`--args` (a local process the gateway spawns
+host-side), `--url` (a remote endpoint, OAuth'd host-side), or `--local --url
+<manifest>` (a container the gateway runs from an OCI manifest). `sbx mcp get
+<name>` shows you exactly what's registered.
 
-## 9. Your first hour
+**Static preload, or explicit load, nothing else.** Every server in your
+configured `mcp` list, and every integration an active or transient pack
+carries, is passed to sbx as `--static-mcp <name>` when the sandbox is
+CREATED, so its tools are in context from the start. There is no dynamic
+discovery and no on-demand attach: a server you add or register after a
+sandbox exists is not visible to it until you either recreate
+(`pi-stack run --replace`, which re-sends the full `--static-mcp` set) or
+attach it live:
+
+```
+pi-stack mcp load <name> [DIR]      # attach an already-registered server to the
+                                    # RUNNING sandbox for DIR (default cwd), no recreate
+pi-stack mcp auth [args...]         # hosted-control-plane OAuth for remote catalog
+                                    # servers (auth --all, auth status --all, auth rm)
+pi-stack mcp bundle                 # register the shipped catalog (notion/
+                                    # atlassian/granola) in one step
+```
+
+`pi-stack mcp load` resolves to `sbx mcp load <name> --sandbox <box>` and
+records a receipt only after that attach succeeds; `pi-stack status` and
+`pi-stack doctor` read that receipt back, they do not poll the gateway live
+(see §9).
+
+## 9. Status and doctor
+
+`pi-stack status` is a fast, read-only dashboard: services, provider keys,
+knowledge bundles, and, per configured MCP server per running sandbox, one of
+five states drawn from launcher receipts, not a live gateway probe:
+
+- **preloaded**: the sandbox's create receipt says this server shipped as
+  `--static-mcp`, and it's still registered
+- **loaded**: a later `pi-stack mcp load` receipt attached it, and it's
+  still registered
+- **registered-not-attached**: registered, but neither receipt covers this
+  sandbox; the fix is `pi-stack mcp load <name> <dir>`
+- **not-registered**: `sbx mcp ls` positively lacks the server
+- **unverifiable**: an old or externally created sandbox with no launcher
+  receipt, or the registration/sandbox listing itself failed; status never
+  guesses a state it can't back with a receipt
+
+`pi-stack doctor` runs the same evidence through four verdicts per check:
+**ready** (verified working), **todo** (a verified, fixable gap, with the
+exact command), **unverifiable** (a probe timed out or the tool needed to
+check isn't available; never treated as broken), and **denied** (an explicit
+policy or permission refusal, distinct from a setup gap). `doctor --json`
+emits `schema_version` so a script can tell the shape apart from an older
+run. Exit codes: **2** on a usage error, **1** only when a core requirement
+(a model provider key, or the config file itself) is a positively verified
+failure, **0** otherwise, including every optional or unverifiable gap. A
+single resolved key for any one of Anthropic, OpenAI, or Google satisfies the
+provider check; you don't need all three.
+
+## 10. Your first hour
 
 1. `pi-stack run` in a real project directory. Not a toy repo, the thing you
    actually need to get done today.

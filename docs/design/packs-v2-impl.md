@@ -147,10 +147,10 @@ memory_scope = "work"                # → .pi-stack/profile; default = pack nam
   name   = "Fastmail"
   mcp    = "fastmail"            # MCP server name to attach (registered host-side)
   env    = "FASTMAIL_TOKEN"      # op:// ref var name solicited at adoption; value NEVER in pack
-  static = true                  # optional: EAGER attach (--static-mcp) so the pack's
-                                 # skills have its tools in context. Default false =
-                                 # dynamic (agent pulls via mcp-find on demand). A
-                                 # user `mcp_dynamic <name>` overrides back to dynamic.
+  static = true                  # preloaded at sandbox CREATE (--static-mcp) so the pack's
+                                 # skills have its tools in context from turn one. A server not
+                                 # preloaded is reachable via `pi-stack mcp load <name>` on an
+                                 # existing sandbox, or by recreating with `run --replace`.
 
 # ── F2 in-sandbox proxy wrappers (bin/, fenced) ──
 [[proxy]]
@@ -280,7 +280,7 @@ it is Tier-0 for the pack (nothing pack-authored executes) even though a remote 
 **Schema:** `[[proxy]]` with `host` unset/false. `pack add proxy <name>` scaffolds `bin/<name>`
 (0755, a `#!/usr/bin/env bash` shim template) and appends the `[[proxy]]` entry.
 
-**Mechanism — reuse the proven mixin-kit `files/` mount (from the retired overlay), made first-class.** A pack's `bin/` is
+**Mechanism — reuse the proven mixin-kit `files/` mount, made first-class.** A pack's `bin/` is
 not itself a kit, and mounting it as a bare workspace would not put it on PATH. So synthesize an
 **ephemeral mixin kit** at launch that drops the sandbox wrappers into the image's existing PATH
 dir:
