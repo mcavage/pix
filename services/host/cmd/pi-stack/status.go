@@ -80,6 +80,7 @@ type statusReport struct {
 	Bundles    []bundleStatus  `json:"knowledge_bundles"`
 	MCP        []string        `json:"mcp"`
 	MCPServers []mcpStatusLine `json:"mcp_servers"`
+	MCPRows    []mcpSandboxRow `json:"mcp_sandbox_rows,omitempty"`
 	Sandboxes  []sandboxLine   `json:"sandboxes"`
 	Tasks      int             `json:"tasks"`
 	ArtifactB  int64           `json:"artifact_bytes"`
@@ -88,14 +89,29 @@ type statusReport struct {
 	GogAuthed  bool            `json:"gog_authed,omitempty"`
 }
 
-// mcpStatusLine is the per-server MCP status: registered with the sbx gateway
-// (from `sbx mcp ls`) and attach-on-run (it's in the resolved profile's mcp
-// list, so `pi-stack run --mcp <name>` attaches it). Empty when sbx is
+// mcpStatusLine is the per-server HOST-GLOBAL MCP summary: registered with
+// the sbx gateway (from `sbx mcp ls`), plus the standing intent that every
+// configured server preloads at sandbox create. It says NOTHING about any
+// sandbox's current attachment — that is the per-sandbox join rows' job
+// (mcpSandboxRow below), backed by the launcher receipt. Empty when sbx is
 // unavailable, so status degrades to the bare MCP names.
 type mcpStatusLine struct {
 	Name       string `json:"name"`
 	Registered bool   `json:"registered"`
-	Attach     bool   `json:"attach_on_run"`
+}
+
+// mcpSandboxRow is one (server, sandbox) truth row from the shared join path
+// (joinMCPSandboxRow, mcpjoin.go — the same path doctor renders from):
+// registered is the tri-state host registration evidence (yes|no|unknown),
+// state one of preloaded|loaded|registered-not-attached|not-registered|
+// unverifiable, evidence the concrete proof or degrade reason. Sandbox is
+// empty when sandbox discovery itself was unavailable (state unverifiable).
+type mcpSandboxRow struct {
+	Name       string `json:"name"`
+	Registered string `json:"registered"`
+	Sandbox    string `json:"sandbox"`
+	State      string `json:"state"`
+	Evidence   string `json:"evidence"`
 }
 
 type bundleStatus struct {
@@ -166,32 +182,38 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 		st.Bundles = append(st.Bundles, bundleStatus{Path: b, Git: bundleGitStatus(env, b)})
 	}
 
-	// MCP registration state: `sbx mcp ls` once, best-effort. Each configured
-	// server is attach-on-run (it's in cfg.MCP, so `run --mcp <name>` attaches it)
-	// and shows whether it is currently registered with the gateway. When sbx is
-	// unavailable MCPServers stays nil and render falls back to the bare names.
-	if len(cfg.MCP) > 0 && env.lookPath != nil {
-		if _, err := env.lookPath("sbx"); err == nil && env.run != nil {
-			if o, err := env.run("sbx", "mcp", "ls"); err == nil {
-				anyUnregistered := false
-				for _, m := range cfg.MCP {
-					reg := grepWord(o, m)
-					st.MCPServers = append(st.MCPServers, mcpStatusLine{
-						Name:       m,
-						Registered: reg,
-						Attach:     true,
-					})
-					if !reg {
-						anyUnregistered = true
-					}
-				}
-				// A configured server that isn't registered means `run` would attach a
-				// server the gateway can't spawn — an outstanding item, so status can't
-				// claim "all systems go". One deduped TODO covers all of them. Only
-				// emitted when sbx is reachable (otherwise registration is unknowable).
-				if anyUnregistered {
-					st.Todos = append(st.Todos, "pi-stack mcp register")
-				}
+	// MCP registration evidence: ONE bounded `sbx mcp ls`, best-effort. The
+	// host-global summary reports configured-to-preload intent + registration
+	// only — NEVER any sandbox's current attachment (registration is a host
+	// fact; `sbx mcp get <name>` inspects the registered definition and sbx has
+	// no per-sandbox inspect API). When the listing is unavailable MCPServers
+	// stays nil and render falls back to the bare names.
+	mcpLsOut, mcpLsOK := "", false
+	if len(cfg.MCP) > 0 && sbxOnPath && env.run != nil {
+		if o, err := env.run("sbx", "mcp", "ls"); err == nil {
+			mcpLsOut, mcpLsOK = o, true
+		}
+	}
+	regOf := func(name string) mcpRegEvidence {
+		if !mcpLsOK {
+			return mcpRegUnknown
+		}
+		if grepWord(mcpLsOut, name) {
+			return mcpRegYes
+		}
+		return mcpRegNo
+	}
+	if mcpLsOK {
+		registerTodoFor := statusRegisterTodoFn(cfg, env)
+		for _, m := range cfg.MCP {
+			reg := regOf(m) == mcpRegYes
+			st.MCPServers = append(st.MCPServers, mcpStatusLine{Name: m, Registered: reg})
+			// A POSITIVELY unregistered server can't be spawned by the gateway — an
+			// outstanding item with the TYPE-CORRECT repair (the same classifier +
+			// command table doctor uses). Only emitted when the listing succeeded
+			// (otherwise registration is unknowable and no TODO is honest).
+			if !reg {
+				st.Todos = append(st.Todos, registerTodoFor(m))
 			}
 		}
 	}
@@ -208,11 +230,53 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 		}
 	}
 
-	// Sandboxes: filter `sbx ls` to pi-stack-* boxes.
-	if env.lookPath != nil {
-		if _, err := env.lookPath("sbx"); err == nil && env.run != nil {
-			if o, err := env.run("sbx", "ls"); err == nil {
-				st.Sandboxes = parseSandboxes(o)
+	// Sandboxes: ONE `sbx ls`, filtered to pi-stack-* boxes. Discovery success
+	// is tracked separately from emptiness: a failed listing must never render
+	// as "no sandboxes".
+	sbxLsOK := false
+	var boxes []sbxBox
+	if sbxOnPath && env.run != nil {
+		if o, err := env.run("sbx", "ls"); err == nil {
+			sbxLsOK = true
+			st.Sandboxes = parseSandboxes(o)
+			boxes = parsePiStackBoxes(o)
+		}
+	}
+
+	// Per-sandbox MCP truth rows via the SHARED join path (mcpjoin.go — the
+	// same one doctor renders from): each discovered pi-stack sandbox's rows
+	// come from its launcher receipt joined with the registration evidence
+	// above. Discovery unavailable -> one unverifiable row per configured
+	// server (sandbox unknown), never a false "no sandboxes".
+	if len(cfg.MCP) > 0 {
+		if !sbxLsOK {
+			for _, m := range cfg.MCP {
+				st.MCPRows = append(st.MCPRows, mcpSandboxRow{
+					Name: m, Registered: regOf(m).String(), Sandbox: "",
+					State:    mcpJoinUnverifiable,
+					Evidence: "sandbox discovery unavailable (`sbx ls`) — cannot enumerate pi-stack sandboxes",
+				})
+			}
+		} else {
+			for _, b := range boxes {
+				receipt, rstatus := statusSandboxReceipt(env, b.Name)
+				for _, row := range joinMCPSandboxRows(cfg.MCP, regOf, b.Name, receipt, rstatus) {
+					st.MCPRows = append(st.MCPRows, mcpSandboxRow{
+						Name: row.Name, Registered: row.Registered.String(),
+						Sandbox: row.Sandbox, State: row.State, Evidence: row.Evidence,
+					})
+					// registered-not-attached is a POSITIVE gap (a valid receipt
+					// lacks the entry): the exact live-attach command is the TODO.
+					// Unverifiable rows get guidance in their evidence only — status
+					// does not KNOW they are unattached, so no repair claim.
+					if row.State == mcpJoinRegisteredNotAttached {
+						td := "pi-stack mcp load " + row.Name + " [DIR]"
+						if b.Dir != "" {
+							td = "pi-stack mcp load " + row.Name + " " + b.Dir
+						}
+						st.Todos = append(st.Todos, td)
+					}
+				}
 			}
 		}
 	}
@@ -262,6 +326,8 @@ func (st statusReport) render(out io.Writer) {
 		// sbx unavailable (e.g. inside the sandbox): degrade to the bare names.
 		fmt.Fprintf(out, "  mcp         %s\n", strings.Join(st.MCP, ", "))
 	} else {
+		// Host-global summary: registration + preload intent only — a sandbox's
+		// current attachment is the per-sandbox rows' job below.
 		for i, m := range st.MCPServers {
 			label := "mcp"
 			if i > 0 {
@@ -271,8 +337,21 @@ func (st statusReport) render(out io.Writer) {
 			if !m.Registered {
 				reg = okGlyph(false) + " not registered"
 			}
-			fmt.Fprintf(out, "  %-9s   %-8s %s  %s attach-on-run\n", label, m.Name, reg, okGlyph(m.Attach))
+			fmt.Fprintf(out, "  %-9s   %-8s %s · preloads at sandbox create\n", label, m.Name, reg)
 		}
+	}
+
+	// Per-sandbox MCP truth rows (receipt-backed, from the shared join path).
+	for i, r := range st.MCPRows {
+		label := "mcp/box"
+		if i > 0 {
+			label = "       "
+		}
+		box := r.Sandbox
+		if box == "" {
+			box = "(sandboxes unknown)"
+		}
+		fmt.Fprintf(out, "  %-9s   %-24s %-8s %s\n", label, box, r.Name, mcpRowText(r))
 	}
 
 	if st.GogAccount != "" {
@@ -311,6 +390,65 @@ func (st statusReport) render(out io.Writer) {
 	fmt.Fprintln(out, "       pi-stack run       launch a sandbox and start working")
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Everything ok? run `pi-stack doctor`.   Full command list: `pi-stack help`.")
+}
+
+// statusRegisterTodoFn returns a memoized picker for the TYPE-CORRECT
+// registration repair of a positively-unregistered configured server, reusing
+// doctor's classifier + command table (classifyMCPServer / mcpRegisterTodo)
+// so the two verbs can never recommend different commands. The classification
+// inputs (pack integrations, the bounded `pi-stack-host mcp --list` probe)
+// are resolved at most ONCE, on first use — status never pays them when every
+// server is registered. When classification itself is unavailable NO command
+// is safe to recommend — the TODO points at doctor instead of guessing one.
+func statusRegisterTodoFn(cfg *config.Config, env shellEnv) func(name string) string {
+	var (
+		resolved   bool
+		containers map[string]packContainer
+		localSet   map[string]bool
+		localKnown bool
+	)
+	return func(name string) string {
+		if !resolved {
+			resolved = true
+			containers = activeContainerMCP(cfg)
+			localSet, localKnown = localMCPNames(env, env.hostBinary)
+		}
+		kind := classifyMCPServer(name, containers, localSet, localKnown)
+		if td := mcpRegisterTodo(name, kind); td != "" {
+			return td
+		}
+		return "mcp " + name + " is not registered but could not be classified — run `pi-stack doctor`"
+	}
+}
+
+// statusSandboxReceipt reads one discovered sandbox's launcher MCP receipt
+// through the stateDir seam. An unresolvable state dir yields
+// sandboxMCPStateUnreadable so the join renders UNVERIFIABLE — never a
+// guessed empty receipt.
+func statusSandboxReceipt(env shellEnv, sandbox string) (*sandboxMCPReceipt, sandboxMCPStateStatus) {
+	if env.stateDir == nil {
+		return nil, sandboxMCPStateUnreadable
+	}
+	sd, err := env.stateDir()
+	if err != nil || strings.TrimSpace(sd) == "" {
+		return nil, sandboxMCPStateUnreadable
+	}
+	receipt, rstatus, _ := readSandboxMCPReceipt(sd, sandbox)
+	return receipt, rstatus
+}
+
+// mcpRowText renders one per-sandbox join row for humans: a glyph class per
+// state plus the row's evidence (which already carries the exact commands for
+// the states that have one).
+func mcpRowText(r mcpSandboxRow) string {
+	switch r.State {
+	case mcpJoinPreloaded, mcpJoinLoaded:
+		return "✓ " + r.State + " (" + r.Evidence + ")"
+	case mcpJoinNotRegistered, mcpJoinRegisteredNotAttached:
+		return "✗ " + r.State + " — " + r.Evidence
+	default: // unverifiable
+		return "? " + r.State + " — " + r.Evidence
+	}
 }
 
 // glyph renders a bool as the shared ✓/✗ status glyphs.

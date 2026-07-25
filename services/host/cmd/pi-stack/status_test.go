@@ -121,8 +121,9 @@ func TestRenderStatusMonitorJSON(t *testing.T) {
 	}
 }
 
-// TestGatherStatusMCP: cfg.MCP servers get a registration + attach-on-run state
-// parsed from `sbx mcp ls`; gog is registered, slack is not.
+// TestGatherStatusMCP: cfg.MCP servers get a registration state parsed from
+// `sbx mcp ls` (host-global summary: registration + preload intent only);
+// gog is registered, slack is not.
 func TestGatherStatusMCP(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"gog", "slack"}}
 	st := gatherStatus(cfg, "default", fakeStatusEnv())
@@ -139,15 +140,11 @@ func TestGatherStatusMCP(t *testing.T) {
 	if byName["slack"].Registered {
 		t.Errorf("slack should NOT be registered: %+v", byName["slack"])
 	}
-	for _, m := range st.MCPServers {
-		if !m.Attach {
-			t.Errorf("%s should be attach-on-run (it's in cfg.MCP)", m.Name)
-		}
-	}
 }
 
-// TestGatherStatusMCPSbxAbsent: with sbx off PATH, MCPServers is empty so render
-// degrades to the bare names.
+// TestGatherStatusMCPSbxAbsent: with sbx off PATH, MCPServers is empty (render
+// degrades to the bare names) — but the per-sandbox rows must render
+// UNVERIFIABLE (discovery unavailable), never a false "no sandboxes".
 func TestGatherStatusMCPSbxAbsent(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"gog"}}
 	env := fakeStatusEnv()
@@ -155,6 +152,16 @@ func TestGatherStatusMCPSbxAbsent(t *testing.T) {
 	st := gatherStatus(cfg, "default", env)
 	if len(st.MCPServers) != 0 {
 		t.Errorf("MCPServers = %+v, want empty when sbx absent", st.MCPServers)
+	}
+	if len(st.MCPRows) != 1 {
+		t.Fatalf("MCPRows = %+v, want 1 unverifiable row (discovery unavailable)", st.MCPRows)
+	}
+	r := st.MCPRows[0]
+	if r.State != mcpJoinUnverifiable || r.Registered != "unknown" || r.Sandbox != "" {
+		t.Errorf("row = %+v, want unverifiable/unknown with no sandbox claim", r)
+	}
+	if !strings.Contains(r.Evidence, "sandbox discovery unavailable") {
+		t.Errorf("evidence should name the discovery gap: %q", r.Evidence)
 	}
 }
 
@@ -167,8 +174,8 @@ func TestRenderStatusMCPJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &st); err != nil {
 		t.Fatalf("status --json invalid: %v\n%s", err, out.String())
 	}
-	if len(st.MCPServers) != 2 || !st.MCPServers[0].Attach {
-		t.Errorf("json mcp_servers = %+v, want 2 attach-on-run entries", st.MCPServers)
+	if len(st.MCPServers) != 2 || !st.MCPServers[0].Registered || st.MCPServers[1].Registered {
+		t.Errorf("json mcp_servers = %+v, want gog registered + slack not", st.MCPServers)
 	}
 }
 
@@ -186,19 +193,48 @@ func TestRenderStatusJSON(t *testing.T) {
 }
 
 // TestStatusRegisterTodo: with sbx reachable and a configured server NOT
-// registered (slack), status appends exactly one `pi-stack mcp register` TODO so
-// it can't claim "all systems go" while a server is unregistered.
+// registered (slack, classified local via pi-stack-host mcp --list), status
+// appends exactly one TYPE-CORRECT register TODO so it can't claim "all
+// systems go" while a server is unregistered.
 func TestStatusRegisterTodo(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"gog", "slack"}}
-	st := gatherStatus(cfg, "default", fakeStatusEnv()) // sbx mcp ls -> gog,notion
+	env := fakeStatusEnv() // sbx mcp ls -> gog,notion
+	env.hostBinary = func() (string, error) { return "/usr/local/bin/pi-stack-host", nil }
+	env.probe = func(name string, args ...string) (string, bool, error) {
+		if name == "/usr/local/bin/pi-stack-host" && len(args) == 2 && args[0] == "mcp" && args[1] == "--list" {
+			return "slack\n", false, nil
+		}
+		return "", false, fmt.Errorf("unexpected probe %s %v", name, args)
+	}
+	st := gatherStatus(cfg, "default", env)
 	n := 0
 	for _, tdo := range st.Todos {
-		if tdo == "pi-stack mcp register" {
+		if tdo == "pi-stack mcp register slack" {
 			n++
 		}
 	}
 	if n != 1 {
-		t.Errorf("expected one `pi-stack mcp register` TODO (slack unregistered), got %d: %v", n, st.Todos)
+		t.Errorf("expected one type-correct `pi-stack mcp register slack` TODO, got %d: %v", n, st.Todos)
+	}
+}
+
+// TestStatusRegisterTodoUnclassifiable: a verified registration gap whose kind
+// can't be established (pi-stack-host mcp --list unavailable) still surfaces
+// an outstanding item, but never invents a possibly-wrong repair command.
+func TestStatusRegisterTodoUnclassifiable(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"slack"}}
+	st := gatherStatus(cfg, "default", fakeStatusEnv()) // no hostBinary seam -> kind unknown
+	found := false
+	for _, tdo := range st.Todos {
+		if strings.Contains(tdo, "slack") && strings.Contains(tdo, "pi-stack doctor") {
+			found = true
+		}
+		if strings.HasPrefix(tdo, "pi-stack mcp register") || strings.HasPrefix(tdo, "pi-stack mcp bundle") || strings.HasPrefix(tdo, "sbx mcp add") {
+			t.Errorf("unclassifiable server must not get a guessed repair command: %q", tdo)
+		}
+	}
+	if !found {
+		t.Errorf("expected an outstanding item pointing at doctor: %v", st.Todos)
 	}
 }
 
@@ -208,7 +244,7 @@ func TestStatusNoRegisterTodoWhenRegistered(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"gog", "notion"}} // both in `sbx mcp ls`
 	st := gatherStatus(cfg, "default", fakeStatusEnv())
 	for _, tdo := range st.Todos {
-		if tdo == "pi-stack mcp register" {
+		if strings.Contains(tdo, "mcp register") || strings.Contains(tdo, "mcp bundle") {
 			t.Errorf("did not expect a register TODO when all servers registered: %v", st.Todos)
 		}
 	}
@@ -222,7 +258,7 @@ func TestStatusNoRegisterTodoWhenSbxAbsent(t *testing.T) {
 	env.lookPath = func(name string) (string, error) { return "", fmt.Errorf("not found") }
 	st := gatherStatus(cfg, "default", env)
 	for _, tdo := range st.Todos {
-		if tdo == "pi-stack mcp register" {
+		if strings.Contains(tdo, "mcp register") || strings.Contains(tdo, "mcp bundle") {
 			t.Errorf("did not expect a register TODO when sbx absent: %v", st.Todos)
 		}
 	}
