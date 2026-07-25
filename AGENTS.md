@@ -163,10 +163,9 @@ pack repo — hand the user the diff to apply.
   `config/mcp-catalog.bundle.json` set in one step, then `pi-stack mcp auth --all`
   does the hosted-control-plane OAuth. **Every configured MCP server, and every
   active or transient pack integration, is emitted as `--static-mcp <name>` at
-  sandbox CREATE** (`--mcp` is gone; sbx rejects it). There is no dynamic
-  discovery, no `mcp-find`, and no attach-on-run: registering a server
-  (`sbx mcp add`) makes it known to the gateway, but a session only sees its
-  tools once it was preloaded at create or explicitly loaded. Servers come from
+  sandbox CREATE** (`--mcp` is gone; sbx rejects it). Registering a server
+  (`sbx mcp add`) only makes it known to the gateway; a session sees its tools
+  only once it was preloaded at create or explicitly loaded. Servers come from
   the `mcp` list in `~/.config/pi-stack/config.toml` (via `pi-stack config get
   mcp`, which also drives `serve`/`mcp-register`/`doctor`/`pull-models`).
   Attach a server to an ALREADY-RUNNING sandbox with `pi-stack mcp load <name>

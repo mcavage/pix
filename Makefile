@@ -17,8 +17,8 @@ KIT         ?= ./pi-kit
 # Dev mode (Mode B): `make run` launches from the repo, so load skills LIVE from the
 # host tree instead of the copies baked into the image — edit a SKILL.md, /reload in
 # pi, and it's live, no rebuild. `--no-skills` turns off baked discovery; `--skill
-# <root>` recurses for SKILL.md. Company/private context is NOT a build-time overlay —
-# it's a pack (`pi-stack pack use <path>`, used with the installed binary), and
+# <root>` recurses for SKILL.md. Company/private context is NOT compiled into
+# the image — it's a pack (`pi-stack pack use <path>`, used with the installed binary), and
 # host-executing integrations ship as containers the sbx gateway runs (see the
 # pix-docker-integrations repo). Consumers who `sbx run --kit git+...` never hit this
 # target, so they get the baked set (Mode A). See AGENTS.md.
@@ -46,7 +46,7 @@ MCP_FLAGS   = $(foreach server,$(MCP),--static-mcp $(server))
 # The local stdio MCP servers `make mcp-register` can register (the ones you
 # actually use — i.e. those listed in MCP). `slack` is a pi-stack-host subcommand;
 # `gog` is the host-side Google Workspace CLI's MCP mode. Additional integrations
-# are packs, not a build-time overlay: remote catalog servers, or containers the gateway runs.
+# are packs: remote catalog servers, or containers the gateway runs.
 LOCAL_STDIO_MCP = slack gog
 REGISTER        = $(filter $(LOCAL_STDIO_MCP),$(MCP))
 

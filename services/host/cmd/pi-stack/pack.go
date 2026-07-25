@@ -156,8 +156,7 @@ type packInfo struct {
 	BinDir       string // <root>/bin if it exists, else "" (F2/F3 proxy wrapper scripts)
 	// CapabilitiesFile is <root>/capabilities.json if it exists (a regular file),
 	// else "". Mounted into the sandbox at ~/.pi/agent/capabilities.json via the
-	// synthesized mixin kit so a pack carries its own capability->provider routing
-	// (what used to require a private, compile-time overlay).
+	// synthesized mixin kit so a pack carries its own capability->provider routing.
 	CapabilitiesFile string
 }
 
@@ -1159,8 +1158,8 @@ func synthesizePackKit(p *packInfo) (string, error) {
 		}
 	}
 	// A pack's capabilities.json travels into ~/.pi/agent so its capability
-	// routing overrides the base image's generic one (what a private,
-	// compile-time overlay used to do). Fail closed if it's declared but unreadable.
+	// routing overrides the base image's generic one. Fail closed if it's
+	// declared but unreadable.
 	if p.CapabilitiesFile != "" {
 		agentOut := filepath.Join(dir, "files", "home", ".pi", "agent")
 		if err := os.MkdirAll(agentOut, 0o755); err != nil {

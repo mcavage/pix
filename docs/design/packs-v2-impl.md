@@ -148,10 +148,9 @@ memory_scope = "work"                # → .pi-stack/profile; default = pack nam
   mcp    = "fastmail"            # MCP server name to attach (registered host-side)
   env    = "FASTMAIL_TOKEN"      # op:// ref var name solicited at adoption; value NEVER in pack
   static = true                  # preloaded at sandbox CREATE (--static-mcp) so the pack's
-                                 # skills have its tools in context from turn one. There is no
-                                 # agent-side dynamic discovery: a server not preloaded is only
-                                 # reachable via `pi-stack mcp load <name>` on an existing
-                                 # sandbox, or by recreating with `run --replace`.
+                                 # skills have its tools in context from turn one. A server not
+                                 # preloaded is reachable via `pi-stack mcp load <name>` on an
+                                 # existing sandbox, or by recreating with `run --replace`.
 
 # ── F2 in-sandbox proxy wrappers (bin/, fenced) ──
 [[proxy]]

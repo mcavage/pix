@@ -62,9 +62,10 @@ host's `~/.config/pi-stack/config.toml`.
   `memory-recall.ts` / `memory-capture.ts` channel). No new mechanism, applies
   immediately, so the same session benefits.
 - **Control plane (host config):** `gog_account`, `knowledge_bundles`, `mcp`,
-  `active_profile`, `ollama_bridge_model`, `memory_watcher_model`. These govern
-  HOST code execution (MCP subprocess spawns, kit stacking), so they must NOT
-  be a live write surface from a fenced VM.
+  `ollama_bridge_model`, `memory_watcher_model`. These govern HOST code
+  execution (MCP subprocess spawns, kit stacking), so they must NOT be a live
+  write surface from a fenced VM. Switching the active pack is a separate,
+  explicit command (`pi-stack pack use`), not a field this file proposes.
 
 ### Write-back mechanism: declarative file, host-applied after exit
 
@@ -98,16 +99,14 @@ knowledge one session later is fine (those need a fresh sandbox created with
   "mcp": ["gog", "slack"],              // allowlisted names ONLY
   "knowledge": {"action": "scaffold|use|skip", "source": "<path|git-url>"},
   "ollama_bridge_model": "qwen3.5:9b",
-  "memory_watcher_model": "qwen3.5:9b",
-  "active_profile": "work"              // must already exist
+  "memory_watcher_model": "qwen3.5:9b"
 }
 ```
 
 Identity is deliberately absent (it is memory data). Validation rejects: unknown
 `mcp` names (only `gog` + known catalog + pack-registered locals pass, so the
 file can never make the host spawn an attacker-chosen command); any
-`host.enabled`, `plugins.*`, `kits.stack`, or arbitrary `services`; a
-non-existent `active_profile`.
+`host.enabled`, `plugins.*`, `kits.stack`, or arbitrary `services`.
 
 ## First-run detection without a host gate
 
@@ -144,7 +143,7 @@ Added:
   `onboarding.json` before launch.
 
 Config keys touched: `gog_account`, `mcp`, `knowledge_bundles` (+ `services`
-knowledge), `ollama_bridge_model`, `memory_watcher_model`, `active_profile`.
+knowledge), `ollama_bridge_model`, `memory_watcher_model`.
 
 ## Fitness functions (tests that must stay green)
 
@@ -175,9 +174,10 @@ knowledge), `ollama_bridge_model`, `memory_watcher_model`, `active_profile`.
 - O1: first-run offer default on bare Enter. Recommend default-Yes on a real
   TTY (a keyed, config-less user who typed `run` wants help); one keystroke to
   skip. Acceptable to flip to default-skip to honor "never forced" maximally.
-- O2: multi-profile onboarding depends on memory profile-tagging that does not
-  exist yet (documented v2 gap: the memory store is shared across profiles).
-  Ship with the caveat, or block on tagging? Recommend ship with caveat.
+- O2: multi-pack onboarding depends on memory scope-tagging that does not
+  exist yet (documented v2 gap: the memory store is shared across packs, the
+  in-store scope column stays dormant). Ship with the caveat, or block on
+  tagging? Recommend ship with caveat.
 - O3: control-plane changes landing next-session (not in the onboarding
   session). Acceptable? Recommend yes; the alternative is the rejected live
   endpoint.

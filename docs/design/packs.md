@@ -125,9 +125,9 @@ keys. Everything that makes up "which context am I in" lives in the pack:
 `gog_account`, mcp/integration refs, knowledge, routing + model prefs (§8a),
 and the memory scope.
 
-A pack **binds a memory scope tag** (written to `.pi-stack/memory.scope`,
+A pack **binds a memory scope tag** (written to `.pi-stack/profile`,
 wire-compatible with the `Profile` field in `plugin/interfaces.go`), so
-switching packs switches memory scope. `active_pack` is the config key that
+switching packs switches memory scope. `pack` is the config key that
 tracks which pack is active.
 
 ## 8a. What "context config" in a pack means (routing vs model prefs)

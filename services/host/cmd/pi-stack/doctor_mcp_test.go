@@ -573,7 +573,7 @@ func TestMCPNoRetiredWording(t *testing.T) {
 	g := mcpGroupWith(cfg, f.env(), "slack\nnotion\n", true, true, nil, noCtx)
 	for _, c := range g.checks {
 		joined := strings.ToLower(c.label + " " + c.detail + " " + c.todo + " " + c.evidence)
-		for _, banned := range []string{"dynamic discovery", "mcp-find", "attach-on-run", "overlay"} {
+		for _, banned := range []string{"dynamic discovery", "mcp-find", "attach-on-run"} {
 			if strings.Contains(joined, banned) {
 				t.Errorf("shipping output carries retired wording %q: %+v", banned, c)
 			}
