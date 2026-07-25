@@ -286,9 +286,9 @@ func TestStatusSbxAbsentNotAllGreen(t *testing.T) {
 }
 
 // TestStatusGogNeedsAuthTodoNotAllGreen: a configured gog account that is NOT
-// authenticated is an outstanding item — status appends a `gog auth login` TODO
-// and the verdict must not be falsely "all systems go", even when every provider
-// key is set.
+// authenticated is an outstanding item — status appends a `pi-stack gog setup`
+// TODO and the verdict must not be falsely "all systems go", even when every
+// provider key is set.
 func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
 	cfg := &config.Config{GogAccount: "me@x.com"}
 	env := shellEnv{
@@ -308,12 +308,12 @@ func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
 	st := gatherStatus(cfg, "default", env)
 	var gogTodo bool
 	for _, tdo := range st.Todos {
-		if tdo == "gog auth login" {
+		if tdo == gogSetupHint {
 			gogTodo = true
 		}
 	}
 	if !gogTodo {
-		t.Errorf("expected a `gog auth login` TODO for an unauthed account, got %v", st.Todos)
+		t.Errorf("expected a `%s` TODO for an unauthed account, got %v", gogSetupHint, st.Todos)
 	}
 	var out bytes.Buffer
 	renderStatus(cfg, "default", env, &out, false)
@@ -362,7 +362,7 @@ func TestStatusSbxProbeFailedTodo(t *testing.T) {
 }
 
 // TestStatusGogNeedsAuth: with a gog account set but no usable auth, the human
-// render shows the "needs auth (run gog auth login)" integrations line.
+// render shows the "needs auth (run pi-stack gog setup)" integrations line.
 func TestStatusGogNeedsAuth(t *testing.T) {
 	cfg := &config.Config{GogAccount: "me@x.com"}
 	env := shellEnv{
@@ -379,7 +379,7 @@ func TestStatusGogNeedsAuth(t *testing.T) {
 	var out bytes.Buffer
 	renderStatus(cfg, "default", env, &out, false)
 	s := out.String()
-	if !strings.Contains(s, "gog") || !strings.Contains(s, "needs auth (run gog auth login)") {
+	if !strings.Contains(s, "gog") || !strings.Contains(s, "needs auth (run "+gogSetupHint+")") {
 		t.Errorf("expected gog needs-auth integrations line, got:\n%s", s)
 	}
 }

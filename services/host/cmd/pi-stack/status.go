@@ -226,7 +226,7 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 		// An account set but not authed is an outstanding item: setting an email is
 		// not completed OAuth, so the verdict must not read "all systems go".
 		if !st.GogAuthed {
-			st.Todos = append(st.Todos, "gog auth login")
+			st.Todos = append(st.Todos, gogSetupHint)
 		}
 	}
 
@@ -355,7 +355,7 @@ func (st statusReport) render(out io.Writer) {
 	}
 
 	if st.GogAccount != "" {
-		label := "account set, needs auth (run gog auth login)"
+		label := "account set, needs auth (run " + gogSetupHint + ")"
 		if st.GogAuthed {
 			label = "authed"
 		}

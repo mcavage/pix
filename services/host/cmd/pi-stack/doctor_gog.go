@@ -106,7 +106,7 @@ func gogHeadlessOK(env shellEnv, acct, opRefs string) bool {
 }
 
 // gogSetupHint is the ONE guided recovery command doctor ever points at for
-// gog auth/registration gaps — never a raw legacy `gog auth login` recipe.
+// gog auth/registration gaps — never a raw legacy direct-login recipe.
 const gogSetupHint = "pi-stack gog setup"
 
 // spawnCheck builds the "headless spawn" check from a structured probe result.

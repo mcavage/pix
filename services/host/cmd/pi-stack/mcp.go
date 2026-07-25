@@ -370,7 +370,7 @@ func gogRegisteredArgv(gogBin, opBin, opRefs, account string) []string {
 // gogBareRegistrationNote is the ONE shared message printed whenever gog is
 // registered without an op-refs.env wrapper (1Password not configured): gog
 // authenticates via its own OAuth flow, never op-refs, so this points at the
-// guided `pi-stack gog setup` recovery path — never a raw `gog auth login`
+// guided `pi-stack gog setup` recovery path — never a raw legacy direct-login
 // recipe.
 func gogBareRegistrationNote(out io.Writer) {
 	fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via its own OAuth flow — "+
@@ -557,8 +557,8 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			// gog-only: gog authenticates via its own OAuth grant, never op-refs, so
 			// do NOT seed op-refs.env or mention it. Register bare. The grant
 			// guidance is the GUIDED command only — gog is a LOCAL stdio MCP, so
-			// neither native `sbx mcp auth` (remote catalog OAuth) nor a raw
-			// `gog auth login` recipe is ever printed.
+			// neither native `sbx mcp auth` (remote catalog OAuth) nor a raw legacy
+			// direct-login recipe is ever printed.
 			fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via OAuth — wire it: pi-stack gog setup")
 		}
 		// container-only: nothing to seed — container creds are Docker-side, not op-refs.
