@@ -90,8 +90,8 @@ type statusReport struct {
 }
 
 // mcpStatusLine is the per-server HOST-GLOBAL MCP summary: registered with
-// the sbx gateway (from `sbx mcp ls`), plus the standing intent that every
-// configured server preloads at sandbox create. It says NOTHING about any
+// the sbx gateway (from `sbx mcp ls`), which makes it available to the
+// gateway's dynamic find/exec tools. It says NOTHING about any
 // sandbox's current attachment — that is the per-sandbox join rows' job
 // (mcpSandboxRow below), backed by the launcher receipt. Empty when sbx is
 // unavailable, so status degrades to the bare MCP names.
@@ -376,7 +376,7 @@ func (st statusReport) render(out io.Writer) {
 		// sbx unavailable (e.g. inside the sandbox): degrade to the bare names.
 		fmt.Fprintf(out, "  mcp         %s\n", strings.Join(st.MCP, ", "))
 	} else {
-		// Host-global summary: registration + preload intent only — a sandbox's
+		// Host-global summary: registration + dynamic availability only — a sandbox's
 		// current attachment is the per-sandbox rows' job below.
 		for i, m := range st.MCPServers {
 			label := "mcp"
@@ -394,7 +394,7 @@ func (st statusReport) render(out io.Writer) {
 			default:
 				reg = okGlyph(false) + " not registered"
 			}
-			fmt.Fprintf(out, "  %-9s   %-8s %s · preloads at sandbox create\n", label, m.Name, reg)
+			fmt.Fprintf(out, "  %-9s   %-8s %s · available on demand\n", label, m.Name, reg)
 		}
 	}
 

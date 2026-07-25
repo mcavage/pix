@@ -155,15 +155,17 @@ func TestJoinPositiveReceiptSurvivesUnknownRegistration(t *testing.T) {
 	}
 }
 
-// TestJoinUnverifiableCarriesRepairGuidance: an unverifiable receipt row
-// carries the exact evidence-producing commands (`pi-stack mcp load` /
-// `pi-stack run --replace`) — guidance, never a claim.
-func TestJoinUnverifiableCarriesRepairGuidance(t *testing.T) {
+// TestJoinRegisteredIgnoresLegacyReceiptGaps: dynamic gateway discovery does
+// not depend on the legacy sandbox preload receipt. A registered server stays
+// available on demand whether that receipt is absent or corrupt.
+func TestJoinRegisteredIgnoresLegacyReceiptGaps(t *testing.T) {
 	for _, rstatus := range []sandboxMCPStateStatus{sandboxMCPStateAbsent, sandboxMCPStateCorrupt} {
 		row := joinMCPSandboxRow("slack", mcpRegYes, "pi-stack-proj", nil, rstatus)
-		if !strings.Contains(row.Evidence, "pi-stack mcp load slack") ||
-			!strings.Contains(row.Evidence, "pi-stack run --replace") {
-			t.Errorf("%s: evidence missing repair guidance: %q", rstatus, row.Evidence)
+		if row.State != mcpJoinAvailableOnDemand {
+			t.Errorf("%s: state = %q, want %q", rstatus, row.State, mcpJoinAvailableOnDemand)
+		}
+		if strings.Contains(row.Evidence, "pi-stack mcp load") || strings.Contains(row.Evidence, "pi-stack run --replace") {
+			t.Errorf("%s: dynamic discovery must not prescribe preload repair: %q", rstatus, row.Evidence)
 		}
 	}
 }

@@ -330,7 +330,7 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	// a later step fails. UNKNOWN keys are a different thing (cfg.UnknownKeys —
 	// doctor flags those) and are never swept into this notice as "retired".
 	if retired := cfg.RetiredKeys(); len(retired) > 0 {
-		fmt.Fprintf(out, "note: dropping retired config key(s) %s on save (no longer read); every configured MCP server preloads at sandbox create\n", strings.Join(retired, ", "))
+		fmt.Fprintf(out, "note: dropping retired config key(s) %s on save (no longer read); registered MCP servers are available on demand\n", strings.Join(retired, ", "))
 		if err := cfg.Save(); err != nil {
 			return fmt.Errorf("dropping retired config keys: %w", err)
 		}

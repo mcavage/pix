@@ -252,7 +252,7 @@ func TestStatusMCPDiscoveryUnavailableNotNoSandboxes(t *testing.T) {
 }
 
 // TestStatusHostGlobalNoAttachmentClaim: with no pi-stack sandbox discovered,
-// the host-global MCP summary states registration + preload intent only —
+// the host-global MCP summary states registration + dynamic availability only —
 // no attachment vocabulary anywhere.
 func TestStatusHostGlobalNoAttachmentClaim(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"gog"}}
@@ -264,8 +264,8 @@ func TestStatusHostGlobalNoAttachmentClaim(t *testing.T) {
 	var out bytes.Buffer
 	st.render(&out)
 	s := out.String()
-	if !strings.Contains(s, "preloads at sandbox create") {
-		t.Errorf("host-global summary must state the preload intent:\n%s", s)
+	if !strings.Contains(s, "available on demand") {
+		t.Errorf("host-global summary must state dynamic availability:\n%s", s)
 	}
 	for _, banned := range []string{"attach", "Attach"} {
 		if strings.Contains(s, banned) {
