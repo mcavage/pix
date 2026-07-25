@@ -110,8 +110,13 @@ func receiptClaim(receipt *sandboxMCPReceipt, rstatus sandboxMCPStateStatus, nam
 //     unreadable) or NO receipt at all -> unverifiable, with the exact
 //     commands that would make attachment true (and receipted).
 //  4. Registered + valid receipt entry -> preloaded / loaded.
-//  5. Registered + valid receipt WITHOUT an entry -> registered-not-attached:
-//     pi-stack positively has no record of attaching it to this sandbox.
+//  5. Registered + valid PARTIAL receipt (IsPartial: load-only, no create
+//     record) WITHOUT an entry -> unverifiable: a partial receipt proves only
+//     the loads it lists; the create-time preload set is unknown, so "no
+//     entry" is not "positively never attached".
+//  6. Registered + valid FULL receipt WITHOUT an entry ->
+//     registered-not-attached: pi-stack positively has no record of attaching
+//     it to this sandbox.
 func joinMCPSandboxRow(name string, reg mcpRegEvidence, sandbox string, receipt *sandboxMCPReceipt, rstatus sandboxMCPStateStatus) mcpJoinRow {
 	row := mcpJoinRow{Name: name, Registered: reg, Sandbox: sandbox}
 	claim := receiptClaim(receipt, rstatus, name)
@@ -150,6 +155,11 @@ func joinMCPSandboxRow(name string, reg mcpRegEvidence, sandbox string, receipt 
 		row.State = mcpJoinLoaded
 		row.Evidence = "loaded by pi-stack"
 	default:
+		if receipt.IsPartial() {
+			row.State = mcpJoinUnverifiable
+			row.Evidence = "receipt is partial (load-only, no create record) — preload state unknown; " + mcpAttachGuidance(name)
+			return row
+		}
 		row.State = mcpJoinRegisteredNotAttached
 		row.Evidence = "no receipt entry; " + mcpAttachGuidance(name)
 	}
