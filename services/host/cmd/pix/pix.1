@@ -1249,8 +1249,9 @@ failure.
 Invalid command, option, argument, or other usage error.
 .TP
 .B 3
-A required host service or secret-check dependency is unreachable.  Memory and
-knowledge RPC commands use this status for a down daemon.
+A required or explicitly requested readiness check cannot be verified from the
+current environment; no failure was positively observed.  Memory and knowledge
+RPC commands also use this status when their daemon cannot be reached.
 .PP
 Commands that execute
 .BR sbx ,

@@ -173,8 +173,7 @@ do_install() {
 	[ -n "$DL" ] || die "need curl or wget on PATH"
 
 	tmp="$(mktemp -d "${TMPDIR:-/tmp}/pix-install.XXXXXX")"
-	# shellcheck disable=SC2064
-	trap "rm -rf '$tmp'" EXIT INT TERM
+	trap 'rm -rf "$tmp"' EXIT INT TERM
 
 	# Verify-all-then-install-all: a partial install (new pix + stale
 	# pix-host, or vice versa) is a mismatched pair that can misbehave subtly.

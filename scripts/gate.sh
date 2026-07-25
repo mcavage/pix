@@ -36,7 +36,7 @@
 # Env knobs:
 #   GATE_BUDGET_MS  absolute hard-fail ceiling in ms (default 12000; 0 = off)
 #   GATE_TARGET_MS  soft warn line in ms (default 10000)
-#   GATE_SLOW_MS    per-test / per-file "reviewable finding" line (default 1000)
+#   GATE_SLOW_MS    per-test "reviewable finding" line (default 1000)
 #   GATE_OUT_DIR    where the timing artifact is written (default out/gate)
 set -uo pipefail
 
@@ -169,10 +169,13 @@ go_test() { (cd services/host && go test -count=1 -v ./...); }
 
 NODE_JUNIT="$LOG_DIR/node-test.junit.xml"
 node_test() {
-	# A single reporter avoids Node waiting forever for the `finish` event on
-	# process.stdout when multiple reporter destinations run under redirection.
-	# tee preserves the JUnit artifact and gives run_segment failure output.
-	node --test --test-reporter=junit tests/*.test.mjs | tee "$NODE_JUNIT"
+	# Node 25's JUnit reporter can wait forever for its destination stream to
+	# finish under redirected CI output. The default spec reporter exits cleanly;
+	# the segment wall time remains the enforced budget metric.
+	rm -f "$NODE_JUNIT"
+	# Bound worker fan-out: Node 25 can strand child test processes when this
+	# suite uses the machine-wide default under redirected output.
+	node --test --test-concurrency=4 tests/*.test.mjs
 }
 typecheck() { npx --no-install tsc --noEmit; }
 open_core() { bash scripts/check-open-core.sh; }
@@ -221,37 +224,21 @@ done < <(awk -v slow="$GATE_SLOW_MS" '
 		}
 	}' "$LOG_DIR/go-test.log" 2>/dev/null | sort -rn)
 
-# node runs one process per file, so per-file wall time is not reported by the
-# runner; the junit reporter gives per-TEST time, which we print directly and
-# also sum per file (in-test time, excludes module load).
-if [ -s "$NODE_JUNIT" ]; then
-	echo ""
-	echo "node test files (summed in-test time):"
-	awk '
-		/<testcase/ {
-			t = 0; f = "(unknown)"
-			if (match($0, /time="[0-9.]+"/)) t = substr($0, RSTART + 6, RLENGTH - 7)
-			if (match($0, /file="[^"]*"/)) {
-				f = substr($0, RSTART + 6, RLENGTH - 7)
-				sub(/.*\//, "", f)
-			}
-			ms[f] += t * 1000; n[f]++
-		}
-		END { for (f in ms) printf "%d\t%s\t%d\n", ms[f], f, n[f] }
-	' "$NODE_JUNIT" | sort -rn | while IFS=$'\t' read -r ms f n; do
-		printf '  %-34s %8s  %s tests\n' "$f" "$(fmt_ms "$ms")" "$n"
-	done
-
-	while IFS=$'\t' read -r ms name; do
-		[ -n "${name:-}" ] && record_slow "node-test" "$ms" "$name"
-	done < <(awk -v slow="$GATE_SLOW_MS" '
-		/<testcase/ {
-			t = 0; nm = "(unnamed)"
-			if (match($0, /time="[0-9.]+"/)) t = substr($0, RSTART + 6, RLENGTH - 7)
-			if (match($0, /name="[^"]*"/)) nm = substr($0, RSTART + 6, RLENGTH - 7)
-			if (t * 1000 >= slow) printf "%d\t%s\n", t * 1000, nm
-		}' "$NODE_JUNIT" | sort -rn)
-fi
+# Parse slow individual tests from the default spec reporter without enabling
+# Node's hanging JUnit destination path. File-level wall time is represented by
+# the node-test segment above; this list is diagnostic only.
+while IFS=$'\t' read -r ms name; do
+	[ -n "${name:-}" ] && record_slow "node-test" "$ms" "$name"
+done < <(awk -v slow="$GATE_SLOW_MS" '
+	match($0, / \(([0-9.]+)(ms|s)\)$/) {
+		tail = substr($0, RSTART + 2, RLENGTH - 3)
+		unit = tail ~ /ms$/ ? "ms" : "s"
+		sub(/(ms|s)$/, "", tail)
+		ms = tail * (unit == "s" ? 1000 : 1)
+		name = substr($0, 1, RSTART - 1)
+		sub(/^[^[:alnum:]]+/, "", name)
+		if (ms >= slow) printf "%d\t%s\n", ms, name
+	}' "$LOG_DIR/node-test.log" 2>/dev/null | sort -rn)
 
 # --- failures ----------------------------------------------------------------
 if [ "$FAILED" -ne 0 ]; then

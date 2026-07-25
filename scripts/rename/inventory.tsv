@@ -14,9 +14,10 @@
 #
 # columns: path  disposition  occurrences  frozen  pathmv  note
 #
-# totals: 12 files, 163 occurrences
-#   rename 0 | manual 1 | keep 6 | keep-historical 5 | unclassified 0
+# totals: 13 files, 177 occurrences
+#   rename 0 | manual 1 | keep 6 | keep-historical 6 | unclassified 0
 CHANGELOG.md	keep-historical	48	0	no	released history: entries describe versions published under the old name, including their asset URLs
+docs/design/pix-migration.md	keep-historical	14	1	no	the pre-cutover audited plan records the original and target names as historical evidence
 docs/upstream/pi-subagents-hang-pi-0.80.md	keep-historical	2	0	no	upstream bug reports as filed: the text was sent to another project under the old name
 docs/upstream/sbx-0.34-custom-kit-credentials.md	keep-historical	4	0	no	upstream bug reports as filed: the text was sent to another project under the old name
 docs/upstream/sbx-version-box.md	keep-historical	2	0	no	upstream bug reports as filed: the text was sent to another project under the old name

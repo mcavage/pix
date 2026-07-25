@@ -94,18 +94,21 @@ run with no sandbox handoff, use `pix setup --no-agent --yes`.
 pix doctor
 ```
 
-Read the four verdicts literally:
+The output is grouped by subsystem. These are literal examples of its rendered
+shapes across healthy and unhealthy hosts:
 
 ```text
-✓ provider keys: ready
-⚠ local models: needs setup (optional)
-? sandbox MCP: can't check from here
-✗ Docker Sandboxes: blocked
+✓ model key    3 provider keys verified
+✗ ollama       not installed (the configured memory service needs it for capture + recall)
+? google-workspace sbx unavailable here; registration cannot be verified (check from the host)
+⊘ google-workspace access denied by organization policy
+⚠ pix: 2 items outstanding (optional, nothing blocking) — see the TODOs below.
 ```
 
-`✓` is verified. `⚠` is optional work and does not block normal use. `?` means
-Pix lacks enough evidence and names the condition needed to check it. `✗` is a
-required failure and includes an exact fix command. `pix doctor --json` provides
+`✓` is verified and ready. `✗` needs setup and includes a copy-paste fix. `?`
+means Pix cannot check from the current environment and names where to retry.
+`⊘` is a positive policy or permission block. The `⚠` headline means only
+optional work remains, so normal use can continue. `pix doctor --json` provides
 the same checks and exit verdict for automation.
 
 ### 9. Start Pix in a repository

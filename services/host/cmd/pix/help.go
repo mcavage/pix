@@ -143,7 +143,7 @@ Parallel work
   task <cmd>          new | ls | path | rm | gc | harvest: parallel task clones of one repo
 
 Integrations & credentials
-  gworkspace <cmd>    setup | status: Google Workspace (Gmail/Drive/Docs) access
+  gworkspace <cmd>    setup | status | disable: Google Workspace access
   mcp <cmd>           register|ls|load|auth|bundle MCP servers (sbx gateway)
   secret <cmd>        ls|set|rm|check the 1Password op-refs (host MCP creds)
 

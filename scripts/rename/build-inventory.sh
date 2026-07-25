@@ -87,7 +87,7 @@ TOKENS=(
 #
 # literal <TAB> expected occurrences in the tracked tree <TAB> why
 FROZEN=(
-	$'pi-stack-todo-cleared\t7\tpersisted customType in .pi-sessions/ (PIX-ADR-0007, AC-P0-409): renaming it silently resurrects cleared todos after compaction or resume'
+	$'pi-stack-todo-cleared\t8\tpersisted customType in .pi-sessions/ (PIX-ADR-0007, AC-P0-409): renaming it silently resurrects cleared todos after compaction or resume'
 	$'pi-stack-compaction-continuation\t3\tpersisted customType in .pi-sessions/ (PIX-ADR-0007, AC-P0-409): already written into session transcripts on disk'
 )
 
@@ -138,6 +138,7 @@ RULES=(
 
 	# --- keep-historical: the past is not renamed ----------------------------
 	$'^CHANGELOG\\.md$\tkeep-historical\treleased history: entries describe versions published under the old name, including their asset URLs'
+	$'^docs/design/pix-migration\\.md$\tkeep-historical\tthe pre-cutover audited plan records the original and target names as historical evidence'
 	$'^docs/upstream/\tkeep-historical\tupstream bug reports as filed: the text was sent to another project under the old name'
 
 	# --- manual: computed runtime identity, read line by line in U-W3.09 -----
