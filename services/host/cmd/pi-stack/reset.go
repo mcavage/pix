@@ -649,8 +649,11 @@ func executeSbxReset(a resetActions, env shellEnv, out io.Writer) {
 		}
 		return
 	}
-	// Remove each pi-stack-* sandbox parsed from `sbx ls`.
-	if lsOut, err := env.run("sbx", "ls"); err == nil {
+	// Remove each pi-stack-* sandbox parsed from `sbx ls`. The LISTING is a
+	// read-only probe and BOUNDED (probeRun) — a hung sbx degrades to the
+	// failed-listing message; the `sbx rm -f` removals below are mutating
+	// lifecycle commands and stay on env.run.
+	if lsOut, timedOut, err := probeRun(env, "sbx", "ls"); err == nil && !timedOut {
 		boxes := parseSandboxes(lsOut)
 		if len(boxes) == 0 {
 			fmt.Fprintln(out, "  · no pi-stack-* sandboxes to remove")

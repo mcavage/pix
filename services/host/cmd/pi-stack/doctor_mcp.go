@@ -560,10 +560,11 @@ func recognizedMCPArgv(env shellEnv, argv []string, name string) ([]string, bool
 	if norm, ok := trustedGogSpawn(env, argv); ok {
 		return norm, true
 	}
-	// Unwrap ONLY a trusted `op run … -- <cmd…>` prefix. A `--` behind any other
-	// argv[0] is rejected: the probe execs the wrapper token, so unwrapping a
-	// prefix like `/tmp/evil -- pi-stack-host mcp slack` would exec /tmp/evil.
-	cmd, ok := unwrapOpRun(argv)
+	// Unwrap ONLY the exact launcher-generated `op run --no-masking
+	// --env-file=<refs> --` wrapper grammar (unwrapOpRun). A `--` behind any
+	// other prefix — a foreign argv[0], another op subcommand, an alternate
+	// env file, extra options — is rejected: the probe execs these tokens.
+	cmd, ok := unwrapOpRun(env, argv)
 	if !ok {
 		return nil, false
 	}

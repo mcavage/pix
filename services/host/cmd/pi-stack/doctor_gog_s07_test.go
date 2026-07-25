@@ -205,8 +205,16 @@ func registeredGogProbeEnv(probeFn func() (string, bool, error)) shellEnv {
 			}
 			return "", false, fmt.Errorf("no fake probe output for %q", key)
 		},
-		getenv: func(string) string { return "" },
-		dial:   func(int) bool { return false },
+		// resolveOpRefs must answer gogOpRefs so the launcher-grammar wrapper
+		// in the registered command is recognized (and probed) at all.
+		getenv: func(k string) string {
+			if k == "PI_STACK_CONFIG" {
+				return gogCfgFile
+			}
+			return ""
+		},
+		statFile: func(p string) bool { return p == gogOpRefs },
+		dial:     func(int) bool { return false },
 	}
 }
 

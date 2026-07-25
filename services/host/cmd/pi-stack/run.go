@@ -785,7 +785,7 @@ func repoFromBinary() (string, bool) {
 // match can't collide with anything else. It fails OPEN (returns true) only when
 // there's NO signal to judge from: no sbx, an ls error, or empty output.
 func localImageLoaded(env shellEnv, tag string) bool {
-	if tag == "" || env.run == nil {
+	if tag == "" || (env.run == nil && env.probe == nil) {
 		return true
 	}
 	if env.lookPath != nil {
@@ -793,8 +793,10 @@ func localImageLoaded(env shellEnv, tag string) bool {
 			return true
 		}
 	}
-	out, err := env.run("sbx", "template", "ls")
-	if err != nil || strings.TrimSpace(out) == "" {
+	// BOUNDED (probeRun): a hung `sbx template ls` is a timeout, which is the
+	// same "no signal" as an error — fail open, never wedge the launch.
+	out, timedOut, err := probeRun(env, "sbx", "template", "ls")
+	if timedOut || err != nil || strings.TrimSpace(out) == "" {
 		return true // no signal -> don't block
 	}
 	return strings.Contains(out, tag)

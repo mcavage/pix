@@ -85,7 +85,7 @@ func bareGog(acct string) string {
 		" --gmail-no-send --wrap-untrusted --readonly mcp --allow-tool read"
 }
 func opWrappedGog(refs, acct string) string {
-	return "op run --env-file=" + refs + " -- " + bareGog(acct)
+	return "op run --no-masking --env-file=" + refs + " -- " + bareGog(acct)
 }
 
 // reconstructedGogProbe is the EXACT best-effort headless probe command the
@@ -535,12 +535,16 @@ func TestDoctor_SecretsGroupShortLiteralFlagged(t *testing.T) {
 // TestDoctor_GogRegisteredCommand is the HONEST path: sbx exposes the ACTUAL
 // registered gog command, so doctor probes THAT exact command (with
 // --list-tools) rather than reconstructing it from config. A non-empty tool
-// list reads as a confirmed-green headless spawn.
+// list reads as a confirmed-green headless spawn. The registered wrapper is
+// the exact launcher grammar against the RESOLVED op-refs path (gogOpRefs via
+// PI_STACK_CONFIG) — doctor refuses to probe anything else.
 func TestDoctor_GogRegisteredCommand(t *testing.T) {
-	regCmd := opWrappedGog("/abs/config/op-refs.env", gogAcct)
+	regCmd := opWrappedGog(gogOpRefs, gogAcct)
 	probeKey := regCmd + " --list-tools"
 	f := fakeEnv{
-		present: map[string]bool{"sbx": true, "op": true},
+		present:  map[string]bool{"sbx": true, "op": true},
+		envVars:  map[string]string{"PI_STACK_CONFIG": gogCfgFile},
+		statFile: map[string]bool{gogOpRefs: true},
 		output: map[string]string{
 			"sbx secret ls":   "anthropic openai google github",
 			"sbx mcp ls":      "gog\n",
@@ -561,7 +565,7 @@ func TestDoctor_GogRegisteredCommand(t *testing.T) {
 		if c.label == "registration" {
 			// The registered command is shown REDACTED: recognizable skeleton (op
 			// run/env-file/gog/mcp), but the account value scrubbed to ‹redacted›.
-			if strings.Contains(c.detail, "op run --env-file=… -- gog --account ‹redacted›") &&
+			if strings.Contains(c.detail, "op run --no-masking --env-file=… -- gog --account ‹redacted›") &&
 				strings.Contains(c.detail, "mcp") {
 				regShown = true
 			}
@@ -646,14 +650,16 @@ func TestDoctor_GogFallbackUnconfirmedIsTODO(t *testing.T) {
 // a partial `command:` line (no `-- <cmd>` tail), so the line parser must FALL
 // THROUGH to the JSON form, which carries the full argv and confirms green.
 func TestDoctor_GogRegisteredCommandLineFallsThrough(t *testing.T) {
-	probeKey := opWrappedGog("/abs/config/op-refs.env", gogAcct) + " --list-tools"
+	probeKey := opWrappedGog(gogOpRefs, gogAcct) + " --list-tools"
 	f := fakeEnv{
-		present: map[string]bool{"sbx": true},
+		present:  map[string]bool{"sbx": true},
+		envVars:  map[string]string{"PI_STACK_CONFIG": gogCfgFile},
+		statFile: map[string]bool{gogOpRefs: true},
 		output: map[string]string{
 			"sbx secret ls":      "anthropic openai google github",
 			"sbx mcp ls":         "gog\n",
 			"sbx mcp get gog":    "name: gog\ncommand: op\n", // partial line -> fall through
-			"sbx mcp ls -o json": `[{"name":"gog","command":"op","args":["run","--env-file=/abs/config/op-refs.env","--","gog","--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
+			"sbx mcp ls -o json": `[{"name":"gog","command":"op","args":["run","--no-masking","--env-file=` + gogOpRefs + `","--","gog","--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
 			probeKey:             "gmail_search\n",
 		},
 		ports: map[int]bool{11435: true},
@@ -678,13 +684,15 @@ func TestDoctor_GogRegisteredCommandLineFallsThrough(t *testing.T) {
 // TestDoctor_GogRegisteredCommandJSON: sbx exposes the registration only via
 // `sbx mcp ls -o json`; doctor parses command+args and probes it.
 func TestDoctor_GogRegisteredCommandJSON(t *testing.T) {
-	probeKey := opWrappedGog("/abs/config/op-refs.env", gogAcct) + " --list-tools"
+	probeKey := opWrappedGog(gogOpRefs, gogAcct) + " --list-tools"
 	f := fakeEnv{
-		present: map[string]bool{"sbx": true},
+		present:  map[string]bool{"sbx": true},
+		envVars:  map[string]string{"PI_STACK_CONFIG": gogCfgFile},
+		statFile: map[string]bool{gogOpRefs: true},
 		output: map[string]string{
 			"sbx secret ls":      "anthropic openai google github",
 			"sbx mcp ls":         "gog\n",
-			"sbx mcp ls -o json": `[{"name":"gog","command":"op","args":["run","--env-file=/abs/config/op-refs.env","--","gog","--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
+			"sbx mcp ls -o json": `[{"name":"gog","command":"op","args":["run","--no-masking","--env-file=` + gogOpRefs + `","--","gog","--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
 			probeKey:             "gmail_search\n",
 		},
 		ports: map[int]bool{11435: true},
