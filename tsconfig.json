@@ -15,5 +15,5 @@
     "esModuleInterop": true,
     "allowJs": true
   },
-  "include": ["extensions/**/*.ts", "types/**/*.d.ts"]
+  "include": ["extensions/**/*.ts", "lib/**/*.ts", "types/**/*.d.ts"]
 }
