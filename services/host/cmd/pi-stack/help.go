@@ -294,7 +294,7 @@ const configUsage = `usage: pi-stack config <show|path|get|set|unset> [args]
 
 ` + configKeysHelp
 
-const mcpUsage = `usage: pi-stack mcp <register|ls|load> [args]
+const mcpUsage = `usage: pi-stack mcp <register|ls|load|auth|bundle> [args]
 
   register [name...]   register local stdio MCP servers with the sbx gateway
                        (no names = every local server in the resolved mcp list)

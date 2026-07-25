@@ -397,3 +397,10 @@ func TestRunVerb_HelpPrintsUsage(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPUsageListsEverySubcommand(t *testing.T) {
+	const want = "usage: pi-stack mcp <register|ls|load|auth|bundle> [args]"
+	if !strings.Contains(mcpUsage, want) {
+		t.Fatalf("mcp usage synopsis missing subcommands: %q", mcpUsage)
+	}
+}
