@@ -10,6 +10,28 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Custom sandbox names survive `mcp load` and `doctor`.** The create receipt
+  now records the canonical workspace it was created for (additive schema
+  field), and a hardened workspace→sandbox resolver lets `pi-stack mcp load
+  NAME [DIR]` and doctor's workspace context find a `run --name pi-stack-demo`
+  box again instead of deriving `pi-stack-<basename>` and missing it. A
+  positively-clean "no mapping" scan still falls back to the derived default
+  (old sandboxes), while an ambiguous or corrupt/tampered mapping refuses
+  (`mcp load`) or renders unverifiable (doctor) — never targets an arbitrary
+  box. `pi-stack reset --sbx` now clears each positively-removed sandbox's
+  receipt through the same hardened helper (a failed removal retains it).
+- **gog attachment is no longer claimed from config membership.** Doctor's gog
+  "attached" check now reads the same receipt-backed join row as every other
+  MCP server: a sandbox created before gog was configured reads
+  registered-not-attached (with the exact `pi-stack mcp load gog <workspace>`
+  command), not ready. Without a sandbox context, config membership renders as
+  intent, never attachment.
+- **`status` headline honesty:** an unverifiable per-sandbox MCP row (corrupt
+  or absent receipt, failed listing) no longer reads "all systems go" — status
+  says some checks are unverifiable without inventing a false TODO. Doctor's
+  verified registered-not-attached gap is now an optional TODO with the exact
+  load command, consistent with status.
+
 - `pi-stack host` now launches its interactive session under `op run
   --no-masking`. op's default output masking pipes pi's stdout/stderr through a
   filter, which makes them non-TTYs, so pi's TUI then saw no terminal and exited

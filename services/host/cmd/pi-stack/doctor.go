@@ -407,15 +407,19 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	r.groups = append(r.groups, ollamaGroup(cfg, env))
 	// (c) memory service on :11435.
 	r.groups = append(r.groups, memoryGroup(cfg, env))
+	// The ONE workspace-sandbox context (hardened resolver + receipt read),
+	// shared by the gog and MCP groups so both render attachment truth from
+	// the SAME receipt-backed join rows — never two different stories.
+	sandboxCtx := resolveMCPSandboxContext(env)
 	// (d) gog: Google Workspace via a host-side stdio MCP server the sbx gateway
 	// spawns (the slack pattern). Passed sbxOnPath (not sbxOK) as its "sbx
 	// present" signal so a secret-probe failure never masquerades as sbx
 	// being off PATH.
-	r.groups = append(r.groups, gogGroup(cfg, env, mcpOut, mcpOK, sbxOnPath))
+	r.groups = append(r.groups, gogGroup(cfg, env, mcpOut, mcpOK, sbxOnPath, sandboxCtx))
 	// (d2) Secrets (1Password) — its OWN top-level group, honest and separate.
 	r.groups = append(r.groups, secretsGroup(cfg, env))
 	// (e) MCP servers registered with sbx. Same sbxOnPath signal as gog.
-	r.groups = append(r.groups, mcpGroup(cfg, env, mcpOut, mcpOK, sbxOnPath))
+	r.groups = append(r.groups, mcpGroup(cfg, env, mcpOut, mcpOK, sbxOnPath, sandboxCtx))
 
 	return r
 }

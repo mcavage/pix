@@ -149,12 +149,21 @@ const (
 )
 
 // mcpSandboxContext is the resolved workspace-sandbox context the attachment
-// checks read. sandbox is derived with deriveSandboxName — the SAME canonical
-// helper `pi-stack run` and `pi-stack mcp load` use, so doctor can never
-// report on a differently-named sandbox than the one those verbs act on.
+// checks read. sandbox comes from the SAME hardened workspace->sandbox
+// resolver `pi-stack mcp load` uses (resolveWorkspaceSandbox: a unique
+// trustworthy receipt mapping wins, else the derived default name), so doctor
+// can never report on a differently-named sandbox than the one that verb acts
+// on — including a custom-named `run --name pi-stack-demo` box.
 type mcpSandboxContext struct {
 	mode    mcpAttachMode
 	sandbox string
+	// workspace is the canonical workspace path the context was resolved for —
+	// what the exact `pi-stack mcp load <name> <workspace>` repair command
+	// carries. Empty when no workspace resolved (mcpAttachNone).
+	workspace string
+	// note carries the reason attachment could not be resolved at all (an
+	// ambiguous workspace->sandbox mapping) for the group's attachment note.
+	note    string
 	receipt *sandboxMCPReceipt
 	status  sandboxMCPStateStatus
 }
@@ -175,7 +184,29 @@ func resolveMCPSandboxContext(env shellEnv) mcpSandboxContext {
 	if err != nil || strings.TrimSpace(ws) == "" {
 		return mcpSandboxContext{mode: mcpAttachNone}
 	}
-	name := deriveSandboxName(ws)
+	sd, err := env.stateDir()
+	if err != nil || strings.TrimSpace(sd) == "" {
+		return mcpSandboxContext{mode: mcpAttachNone}
+	}
+	canonWS := canonicalWorkspacePath(ws)
+	// The hardened workspace->sandbox resolver — the SAME one `mcp load` uses.
+	// A unique trustworthy receipt mapping names the box (custom `run --name`);
+	// a clean no-mapping scan falls back to the derived default; an AMBIGUOUS
+	// mapping resolves nothing (never report on an arbitrary box). An
+	// UNTRUSTED store falls back to the derived name for read-only reporting —
+	// that box's own receipt state still governs rendering (a corrupt receipt
+	// there renders unverifiable, never trusted).
+	res := resolveWorkspaceSandbox(sd, ws)
+	var name string
+	switch res.Outcome {
+	case workspaceSandboxMapped, workspaceSandboxDefault:
+		name = res.Sandbox
+	case workspaceSandboxAmbiguous:
+		return mcpSandboxContext{mode: mcpAttachNone, workspace: canonWS,
+			note: "workspace->sandbox mapping unresolvable: " + res.Detail}
+	default: // workspaceSandboxUntrusted
+		name = deriveSandboxName(ws)
+	}
 	// Bounded existence probe. Only a SUCCESSFUL listing may conclude "absent";
 	// a failed or timed-out one proves nothing and must not erase the receipt
 	// context.
@@ -188,15 +219,21 @@ func resolveMCPSandboxContext(env shellEnv) mcpSandboxContext {
 			}
 		}
 		if !found {
-			return mcpSandboxContext{mode: mcpAttachSandboxAbsent, sandbox: name}
+			return mcpSandboxContext{mode: mcpAttachSandboxAbsent, sandbox: name, workspace: canonWS}
 		}
 	}
-	sd, err := env.stateDir()
-	if err != nil || strings.TrimSpace(sd) == "" {
-		return mcpSandboxContext{mode: mcpAttachNone}
-	}
 	receipt, status, _ := readSandboxMCPReceipt(sd, name)
-	return mcpSandboxContext{mode: mcpAttachReceipt, sandbox: name, receipt: receipt, status: status}
+	return mcpSandboxContext{mode: mcpAttachReceipt, sandbox: name, workspace: canonWS, receipt: receipt, status: status}
+}
+
+// mcpLoadTodoCommand is the exact, copy-pasteable live-attach command for a
+// VERIFIED registered-not-attached gap: the same `pi-stack mcp load NAME DIR`
+// spelling status emits, carrying the canonical workspace when known.
+func mcpLoadTodoCommand(name, workspace string) string {
+	if strings.TrimSpace(workspace) == "" {
+		return "pi-stack mcp load " + name
+	}
+	return "pi-stack mcp load " + name + " " + workspace
 }
 
 // mcpAttachGuidance is the exact, copy-pasteable pair of commands that would
@@ -234,8 +271,13 @@ func mcpAttachCheck(name string, ctx mcpSandboxContext, reg mcpRegEvidence) chec
 			detail:   "loaded by pi-stack (pi-stack mcp load, sandbox " + ctx.sandbox + ")",
 			evidence: row.Evidence}
 	case mcpJoinRegisteredNotAttached:
-		return check{label: label, verdict: verdictUnverifiable,
-			detail:   fmt.Sprintf("registered, but pi-stack has no record of attaching it to %s — %s", ctx.sandbox, guidance),
+		// A POSITIVE, verified gap (registration confirmed + a COMPLETE valid
+		// receipt with no entry): a verified OPTIONAL todo with the exact
+		// live-attach command — consistent with status's row todo. Partial or
+		// absent receipts never reach this state (they stay unverifiable).
+		return check{label: label, verdict: verdictTodo,
+			detail:   fmt.Sprintf("registered, but pi-stack has no record of attaching it to %s — attach live, or recreate with `pi-stack run --replace`", ctx.sandbox),
+			todo:     mcpLoadTodoCommand(name, ctx.workspace),
 			evidence: row.Evidence}
 	case mcpJoinNotRegistered:
 		return check{label: label, verdict: verdictUnverifiable,
@@ -679,9 +721,9 @@ func mcpAuthStatus(out string) mcpAuthResult {
 // every active-pack integration server. gog is DELIBERATELY skipped — the
 // dedicated gog group already owns its registration check + TODO, so probing
 // it again would emit a duplicate `pi-stack mcp register`.
-func mcpGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent bool) group {
+func mcpGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) group {
 	return mcpGroupWith(cfg, env, mcpOut, mcpOK, sbxPresent,
-		activeContainerMCP(cfg), resolveMCPSandboxContext(env))
+		activeContainerMCP(cfg), ctx)
 }
 
 // mcpGroupWith is mcpGroup with the pack-integration set and the sandbox
@@ -739,6 +781,8 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 			det := "no workspace sandbox context here — reporting registration/auth only; configured servers preload at sandbox create"
 			if ctx.mode == mcpAttachSandboxAbsent {
 				det = "sandbox " + ctx.sandbox + " not created yet — configured servers preload at `pi-stack run` create"
+			} else if ctx.note != "" {
+				det = ctx.note + " — reporting registration/auth only"
 			}
 			mcp.checks = append(mcp.checks, check{label: "attachment", note: true, verdict: verdictUnverifiable, detail: det})
 		}

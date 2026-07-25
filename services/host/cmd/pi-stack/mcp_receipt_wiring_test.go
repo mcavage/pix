@@ -65,7 +65,7 @@ func TestExecSbxRunAndRecordCreate_FailedExecWritesNoReceipt(t *testing.T) {
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
 	withCreatePollSeams(t, probeAlways(sbxAbsent), time.Millisecond, 5*time.Second)
 
-	err := execSbxRunAndRecordCreate(falseCmd(t), true, "pi-stack-fail", []string{"slack"})
+	err := execSbxRunAndRecordCreate(falseCmd(t), true, "pi-stack-fail", "", []string{"slack"})
 	if err == nil {
 		t.Fatal("want an error propagated from the failed exec")
 	}
@@ -84,7 +84,7 @@ func TestExecSbxRunAndRecordCreate_ReattachWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
 
-	if err := execSbxRunAndRecordCreate(trueCmd(t), false, "pi-stack-reattach", []string{"slack"}); err != nil {
+	if err := execSbxRunAndRecordCreate(trueCmd(t), false, "pi-stack-reattach", "", []string{"slack"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, status, _ := readSandboxMCPReceipt(dir, "pi-stack-reattach"); status != sandboxMCPStateAbsent {
@@ -100,7 +100,7 @@ func TestExecSbxRunAndRecordCreate_CreateWritesExactPreloadedSet(t *testing.T) {
 	withCreatePollSeams(t, probeAlways(sbxRunning), time.Millisecond, 5*time.Second)
 
 	preloaded := []string{"slack", "gog", "notion"}
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, "pi-stack-create", preloaded); err != nil {
+	if err := execSbxRunAndRecordCreate(trueCmd(t), true, "pi-stack-create", "", preloaded); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	r, status, err := readSandboxMCPReceipt(dir, "pi-stack-create")
@@ -130,7 +130,7 @@ func TestExecSbxRunAndRecordCreate_ReplaceRewritesAndClearsLoads(t *testing.T) {
 	withCreatePollSeams(t, probeAlways(sbxRunning), time.Millisecond, 5*time.Second)
 
 	sandbox := "pi-stack-replace-wire"
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, []string{"slack"}); err != nil {
+	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{"slack"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := appendLoadReceipt(dir, sandbox, "notion", nil); err != nil {
@@ -138,7 +138,7 @@ func TestExecSbxRunAndRecordCreate_ReplaceRewritesAndClearsLoads(t *testing.T) {
 	}
 	// A --replace re-run: definitelyCreating is true again (state doesn't
 	// matter to the wrapper — the caller already decided), new preloaded set.
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, []string{"gog"}); err != nil {
+	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{"gog"}); err != nil {
 		t.Fatal(err)
 	}
 	r, status, err := readSandboxMCPReceipt(dir, sandbox)
@@ -160,7 +160,7 @@ func TestExecSbxRunAndRecordCreate_ReceiptWriteFailureIsDistinctError(t *testing
 	withSandboxMCPStateDirFn(t, func() (string, error) { return "", errors.New("boom: state dir unresolvable") })
 	withCreatePollSeams(t, probeAlways(sbxRunning), time.Millisecond, 5*time.Second)
 
-	err := execSbxRunAndRecordCreate(trueCmd(t), true, "pi-stack-recerr", []string{"slack"})
+	err := execSbxRunAndRecordCreate(trueCmd(t), true, "pi-stack-recerr", "", []string{"slack"})
 	if err == nil {
 		t.Fatal("want an error when the receipt write fails")
 	}
@@ -203,7 +203,7 @@ func TestCreateReceiptGate_MirrorsDefinitelyCreating(t *testing.T) {
 		withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
 		sandbox := "pi-stack-gate"
 		// Seed an existing receipt so a non-write case is verifiably untouched.
-		if err := writeCreateReceipt(dir, sandbox, []string{"existing"}, nil); err != nil {
+		if err := writeCreateReceipt(dir, sandbox, "", []string{"existing"}, nil); err != nil {
 			t.Fatal(err)
 		}
 
@@ -211,7 +211,7 @@ func TestCreateReceiptGate_MirrorsDefinitelyCreating(t *testing.T) {
 		if writeReceipt != tc.want {
 			t.Fatalf("definitelyCreating(%v,%v) = %v, want %v", tc.state, tc.replace, writeReceipt, tc.want)
 		}
-		if err := execSbxRunAndRecordCreate(trueCmd(t), writeReceipt, sandbox, []string{"fresh"}); err != nil {
+		if err := execSbxRunAndRecordCreate(trueCmd(t), writeReceipt, sandbox, "", []string{"fresh"}); err != nil {
 			t.Fatal(err)
 		}
 		r, _, err := readSandboxMCPReceipt(dir, sandbox)
@@ -241,7 +241,7 @@ func TestRecordCreateReceipt_ExactStateDirPath(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", xdg)
 
-	if err := recordCreateReceipt("pi-stack-pathcheck", []string{"slack"}, true); err != nil {
+	if err := recordCreateReceipt("pi-stack-pathcheck", "", []string{"slack"}, true); err != nil {
 		t.Fatalf("recordCreateReceipt: %v", err)
 	}
 	want := filepath.Join(xdg, "pi-stack", "sandboxes", "pi-stack-pathcheck", "mcp.json")
@@ -447,7 +447,7 @@ func TestPackIntegrations_FoldIntoStaticSetAndReceipt(t *testing.T) {
 	// The receipt, once written, carries the SAME set byte-for-byte.
 	stateDir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return stateDir, nil })
-	if err := recordCreateReceipt("pi-stack-packfold", o.StaticMCP, true); err != nil {
+	if err := recordCreateReceipt("pi-stack-packfold", "", o.StaticMCP, true); err != nil {
 		t.Fatal(err)
 	}
 	r, status, err := readSandboxMCPReceipt(stateDir, "pi-stack-packfold")
@@ -474,8 +474,8 @@ func TestPackIntegrations_FoldIntoStaticSetAndReceipt(t *testing.T) {
 // (an "automatic load" on session start, a background watcher, ...) fails this
 // test rather than being discovered later via a wrong doctor/status report.
 func TestMCPReceiptCallSitesAreGuarded(t *testing.T) {
-	assertOnlyCalledFrom(t, "writeCreateReceipt(", []string{"run.go", "sandboxmcpstate.go"})
-	assertOnlyCalledFrom(t, "commitCreateReceipt(", []string{"run.go", "sandboxmcpstate.go"})
+	assertOnlyCalledFrom(t, "writeCreateReceipt(", []string{"run.go", "", "sandboxmcpstate.go"})
+	assertOnlyCalledFrom(t, "commitCreateReceipt(", []string{"run.go", "", "sandboxmcpstate.go"})
 	assertOnlyCalledFrom(t, "appendLoadReceipt(", []string{"mcp.go", "sandboxmcpstate.go"})
 	// The create LIFECYCLE (pre-clear + start + evidence poll + commit + wait)
 	// has exactly two owners: run.go (pi-stack run) and task.go (task new) —
@@ -485,8 +485,9 @@ func TestMCPReceiptCallSitesAreGuarded(t *testing.T) {
 	assertOnlyCalledFrom(t, "clearSandboxMCPReceipt(", []string{"run.go", "sandboxmcpstate.go"})
 	// Receipt removal is tied to LAUNCHER sandbox removal only: pi-stack rm
 	// (sandbox.go), replace pre-remove (run.go), task teardown/prepare
-	// (task.go).
-	assertOnlyCalledFrom(t, "clearRemovedSandboxReceipt(", []string{"run.go", "sandbox.go", "task.go", "sandboxmcpstate.go"})
+	// (task.go), and `pi-stack reset --sbx`'s positive per-sandbox removals
+	// (reset.go).
+	assertOnlyCalledFrom(t, "clearRemovedSandboxReceipt(", []string{"run.go", "sandbox.go", "task.go", "reset.go", "sandboxmcpstate.go"})
 }
 
 // C: task.go must actually route its create through the shared lifecycle (not
@@ -496,8 +497,8 @@ func TestTaskLaunchUsesSharedCreateLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "execSbxRunAndRecordCreate(cmd, true, o.Name, o.StaticMCP)") {
-		t.Fatal("launchTask (task.go) must launch via execSbxRunAndRecordCreate(cmd, true, o.Name, o.StaticMCP) so task sandboxes get the same create-receipt lifecycle as `pi-stack run`")
+	if !strings.Contains(string(b), "execSbxRunAndRecordCreate(cmd, true, o.Name, canonicalWorkspacePath(o.Workspace), o.StaticMCP)") {
+		t.Fatal("launchTask (task.go) must launch via execSbxRunAndRecordCreate(cmd, true, o.Name, canonicalWorkspacePath(o.Workspace), o.StaticMCP) so task sandboxes get the same create-receipt lifecycle as `pi-stack run`")
 	}
 }
 

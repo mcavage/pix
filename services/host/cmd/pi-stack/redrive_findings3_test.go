@@ -35,7 +35,7 @@ import (
 func TestStatusMCPRowsEmptyCfgReceiptPreloaded(t *testing.T) {
 	cfg := &config.Config{} // empty cfg.MCP, no pack — currentIntent is empty
 	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "notion\n")
-	if err := writeCreateReceipt(stateDir, "pi-stack-proj", []string{"notion"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", []string{"notion"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	st := gatherStatus(cfg, "default", env)

@@ -183,9 +183,17 @@ func runMcpLoad(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack mcp load: %v\n\n%s", err, mcpUsage)
 		os.Exit(2)
 	}
-	// The sandbox name is derived ONLY from a validated workspace: a usage
-	// error above exits before anything is derived, exec'd, or receipted.
-	sandbox := deriveSandboxName(ws)
+	// The sandbox name is resolved ONLY from a validated workspace: a usage
+	// error above exits before anything is resolved, exec'd, or receipted.
+	// Resolution goes through the hardened workspace->sandbox resolver so a
+	// sandbox created with a CUSTOM name (`pi-stack run --name pi-stack-demo`)
+	// is loaded into, not a same-named stranger; an ambiguous or untrustworthy
+	// mapping REFUSES (exit 2) rather than targeting an arbitrary box.
+	sandbox, rerr := resolveMcpLoadSandbox(ws)
+	if rerr != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack mcp load: %v\n", rerr)
+		os.Exit(2)
+	}
 	if _, err := exec.LookPath("sbx"); err != nil {
 		// A command that promises to attach a server must not exit 0 having
 		// done nothing — see errSbxUnavailable. mcpWouldRun preserves the
@@ -252,6 +260,28 @@ func parseMcpLoadArgs(argv []string) (name, ws string, err error) {
 		return "", "", verr
 	}
 	return name, ws, nil
+}
+
+// resolveMcpLoadSandbox resolves the sandbox `mcp load` targets for a
+// VALIDATED workspace via the hardened workspace->sandbox resolver
+// (workspaceresolve.go): a unique trustworthy receipt mapping wins (custom
+// `run --name` sandboxes), a positively-clean "no mapping" scan falls back to
+// the derived default name (an old sandbox predating the Workspace field),
+// and anything else — an ambiguous mapping, an untrustworthy receipt store,
+// or an unresolvable state dir — returns an error so the caller REFUSES
+// instead of attaching a server to an arbitrary box.
+func resolveMcpLoadSandbox(ws string) (string, error) {
+	dir, err := sandboxMCPStateDirFn()
+	if err != nil {
+		return "", fmt.Errorf("resolving pi-stack state dir: %w", err)
+	}
+	res := resolveWorkspaceSandbox(dir, ws)
+	switch res.Outcome {
+	case workspaceSandboxMapped, workspaceSandboxDefault:
+		return res.Sandbox, nil
+	default: // ambiguous / untrusted — never target an arbitrary box
+		return "", fmt.Errorf("cannot resolve which sandbox belongs to %s: %s", ws, res.Detail)
+	}
 }
 
 // recordMcpLoadReceipt appends the load receipt for name on sandbox — called

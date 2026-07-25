@@ -140,8 +140,12 @@ func gogSpawnCheck(env shellEnv, res probeResult, readyDetail, noToolsDetail str
 // (or exposes no command) does it fall back to a best-effort reconstruction
 // from config — clearly labeled, and never a confirmed green. Every probe
 // degrades cleanly, so this runs in-sandbox (gog/sbx/op all absent) too.
-func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent bool) group {
+func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) group {
 	g := group{title: "gog (Google Workspace via host MCP — read-only)"}
+	// gog's attachment truth comes from the SAME receipt-backed join row every
+	// other MCP server uses (mcpjoin.go, via the shared workspace-sandbox
+	// context) — config membership alone is an intent, never an attachment.
+	gogReg := mcpRegEvidenceFrom(mcpOut, mcpOK, "gog")
 
 	// HONEST PATH: probe the command sbx ACTUALLY registered for gog. This is the
 	// only check that proves the real registration — account, op-refs path, and
@@ -176,7 +180,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 				detail:   "probe skipped: the registered command's gog/op executable does not match the PATH-resolved binary (inspect: sbx mcp get gog) — never executed",
 				evidence: "registered executable token not canonical; probe not executed"})
 			g.checks = append(g.checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
-			g.checks = append(g.checks, gogAttachCheck(cfg))
+			g.checks = append(g.checks, gogAttachCheck(cfg, ctx, gogReg))
 			return g
 		}
 		readyDetail := "registered command exposes tools (verified as-registered, via op run)"
@@ -187,7 +191,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 			readyDetail,
 			"the registered command returns 0 tools — keyring not headless"))
 		g.checks = append(g.checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
-		g.checks = append(g.checks, gogAttachCheck(cfg))
+		g.checks = append(g.checks, gogAttachCheck(cfg, ctx, gogReg))
 		return g
 	}
 
@@ -235,7 +239,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 		g.checks = append(g.checks, check{label: "account", note: true, verdict: verdictUnverifiable,
 			detail: "not configured (gog_account unset) — set up: " + gogSetupHint})
 		g.checks = append(g.checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
-		g.checks = append(g.checks, gogAttachCheck(cfg))
+		g.checks = append(g.checks, gogAttachCheck(cfg, ctx, gogReg))
 		return g
 	}
 
@@ -249,7 +253,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 			check{label: "op-refs", note: true, verdict: verdictUnverifiable,
 				detail: "op-refs.env not found — only needed if the gateway can't unlock gog's keyring headlessly"})
 		g.checks = append(g.checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
-		g.checks = append(g.checks, gogAttachCheck(cfg))
+		g.checks = append(g.checks, gogAttachCheck(cfg, ctx, gogReg))
 		return g
 	}
 
@@ -298,7 +302,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 
 	// 4. registered with the gateway. 5. in the configured MCP set?
 	g.checks = append(g.checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
-	g.checks = append(g.checks, gogAttachCheck(cfg))
+	g.checks = append(g.checks, gogAttachCheck(cfg, ctx, gogReg))
 	return g
 }
 
@@ -490,11 +494,27 @@ func parseGogCommandJSON(env shellEnv, out string) ([]string, bool) {
 	return nil, false
 }
 
-// gogAttachCheck is the informational check 5: is gog in the configured MCP set,
-// so `pi-stack run` preloads it at sandbox create?
-func gogAttachCheck(cfg *config.Config) check {
+// gogAttachCheck is check 5: gog's sandbox attachment. With a workspace
+// sandbox context it is the SAME receipt-backed join row every other MCP
+// server gets (mcpAttachCheck -> joinMCPSandboxRow): preloaded/loaded receipt
+// claims render ready; a registered server a COMPLETE valid receipt has no
+// entry for is a verified registered-not-attached TODO (a sandbox created
+// BEFORE gog was configured is NOT attached just because cfg now names it);
+// everything else stays unverifiable. Without a sandbox context, config
+// membership is stated as INTENT (preloads at the next create) — an
+// informational note, never a ready attachment claim.
+func gogAttachCheck(cfg *config.Config, ctx mcpSandboxContext, reg mcpRegEvidence) check {
+	if ctx.mode == mcpAttachReceipt {
+		return mcpAttachCheck("gog", ctx, reg)
+	}
 	if mcpConfigured(cfg, "gog") {
-		return check{label: "attached", note: true, verdict: verdictReady, detail: "in the configured MCP set — preloaded at sandbox create"}
+		det := "in the configured MCP set — preloads at sandbox create (intent, not attachment)"
+		if ctx.mode == mcpAttachSandboxAbsent {
+			det = "sandbox " + ctx.sandbox + " not created yet — gog preloads at `pi-stack run` create"
+		} else if ctx.note != "" {
+			det = ctx.note + " — attachment cannot be reported"
+		}
+		return check{label: "attached", note: true, verdict: verdictUnverifiable, detail: det}
 	}
 	return check{label: "attached", note: true, verdict: verdictUnverifiable,
 		detail: "run `pi-stack config set mcp gog` to attach it"}

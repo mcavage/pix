@@ -72,8 +72,14 @@ func TestRenderStatusHuman(t *testing.T) {
 	renderStatus(cfg, "default", fakeStatusEnv(), &out, false)
 	s := out.String()
 	// anthropic+openai present already satisfies core model readiness (finding
-	// #3), so this fixture has nothing outstanding -> "all systems go".
-	for _, want := range []string{"pi-stack", "services", "memory ✓", "knowledge ✗", "all systems go"} {
+	// #3), so this fixture has nothing OUTSTANDING — but its sandboxes' MCP
+	// rows are unverifiable (no receipt state dir in the fake env), and an
+	// unverifiable row must prevent the "all systems go" headline without
+	// becoming a false TODO (redrive finding 5).
+	if strings.Contains(s, "all systems go") {
+		t.Errorf("unverifiable mcp rows must prevent the all-systems-go headline:\n%s", s)
+	}
+	for _, want := range []string{"pi-stack", "services", "memory ✓", "knowledge ✗", "nothing outstanding — but", "unverifiable (not failed"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("status output missing %q:\n%s", want, s)
 		}

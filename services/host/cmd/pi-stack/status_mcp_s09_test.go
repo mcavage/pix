@@ -62,7 +62,7 @@ func TestStatusMCPRowsAllFiveStates(t *testing.T) {
 	env, stateDir := statusMCPEnv(t,
 		"NAME STATE DIR\npi-stack-proj running /home/u/proj\npi-stack-bad running /home/u/bad\n",
 		"gog\nslack\nnotion\n") // linear positively not registered
-	if err := writeCreateReceipt(stateDir, "pi-stack-proj", []string{"gog"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", []string{"gog"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	if err := appendLoadReceipt(stateDir, "pi-stack-proj", "slack", receiptClock); err != nil {
@@ -153,7 +153,7 @@ func TestStatusMCPPositiveReceiptDominatesDeregistration(t *testing.T) {
 		out, err := run(name, args...)
 		return out, false, err
 	}
-	if err := writeCreateReceipt(stateDir, "pi-stack-proj", []string{"slack"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	st := gatherStatus(cfg, "default", env)
@@ -180,7 +180,7 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 
 	t.Run("dir known", func(t *testing.T) {
 		env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "notion\n")
-		if err := writeCreateReceipt(stateDir, "pi-stack-proj", nil, receiptClock); err != nil {
+		if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", nil, receiptClock); err != nil {
 			t.Fatal(err)
 		}
 		st := gatherStatus(cfg, "default", env)
@@ -191,7 +191,7 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 
 	t.Run("dir unknown", func(t *testing.T) {
 		env, stateDir := statusMCPEnv(t, "pi-stack-proj running\n", "notion\n")
-		if err := writeCreateReceipt(stateDir, "pi-stack-proj", nil, receiptClock); err != nil {
+		if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", nil, receiptClock); err != nil {
 			t.Fatal(err)
 		}
 		st := gatherStatus(cfg, "default", env)
@@ -288,7 +288,7 @@ func TestStatusHostGlobalNoAttachmentClaim(t *testing.T) {
 func TestStatusMCPReceiptOnlyNameVisible(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"gog"}} // current intent: gog only
 	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "gog\nnotion\n")
-	if err := writeCreateReceipt(stateDir, "pi-stack-proj", []string{"gog", "notion"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", []string{"gog", "notion"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	st := gatherStatus(cfg, "default", env)
@@ -326,7 +326,7 @@ func TestStatusMCPReceiptOnlyNameVisible(t *testing.T) {
 func TestStatusMCPRowsJSONGolden(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"gog", "slack", "notion", "linear"}}
 	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "gog\nslack\nnotion\n")
-	if err := writeCreateReceipt(stateDir, "pi-stack-proj", []string{"gog"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", []string{"gog"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	if err := appendLoadReceipt(stateDir, "pi-stack-proj", "slack", receiptClock); err != nil {
@@ -391,7 +391,7 @@ func TestStatusNoRetiredMCPVocabulary(t *testing.T) {
 	}
 	cfg := &config.Config{MCP: []string{"gog", "slack", "notion", "linear"}}
 	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "gog\nslack\nnotion\n")
-	if err := writeCreateReceipt(stateDir, "pi-stack-proj", []string{"gog"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", []string{"gog"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	for _, jsonOut := range []bool{false, true} {

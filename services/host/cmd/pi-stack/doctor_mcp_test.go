@@ -162,7 +162,7 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 
 	t.Run("preloaded at create -> ready with receipt evidence", func(t *testing.T) {
 		env, stateDir := receiptEnv(t, base, ws)
-		if err := writeCreateReceipt(stateDir, box, []string{"slack"}, receiptClock); err != nil {
+		if err := writeCreateReceipt(stateDir, box, "", []string{"slack"}, receiptClock); err != nil {
 			t.Fatal(err)
 		}
 		g := mcpGroupWith(cfg, env, regOut, true, true, nil, resolveMCPSandboxContext(env))
@@ -174,7 +174,7 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 
 	t.Run("live load receipt -> ready `loaded by pi-stack`", func(t *testing.T) {
 		env, stateDir := receiptEnv(t, base, ws)
-		if err := writeCreateReceipt(stateDir, box, nil, receiptClock); err != nil {
+		if err := writeCreateReceipt(stateDir, box, "", nil, receiptClock); err != nil {
 			t.Fatal(err)
 		}
 		if err := appendLoadReceipt(stateDir, box, "slack", receiptClock); err != nil {
@@ -187,21 +187,26 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 		}
 	})
 
-	t.Run("receipt exists but no entry for the server -> unverifiable + exact guidance", func(t *testing.T) {
+	t.Run("complete receipt, no entry -> verified registered-not-attached TODO", func(t *testing.T) {
+		// Redrive finding 3: registration confirmed + a COMPLETE valid receipt
+		// positively lacking the entry is a VERIFIED optional gap — a todo with
+		// the exact `pi-stack mcp load NAME <workspace>` command, consistent
+		// with status's row todo. (Partial/absent receipts stay unverifiable —
+		// covered below.)
 		env, stateDir := receiptEnv(t, base, ws)
-		if err := writeCreateReceipt(stateDir, box, []string{"notion"}, receiptClock); err != nil {
+		if err := writeCreateReceipt(stateDir, box, "", []string{"notion"}, receiptClock); err != nil {
 			t.Fatal(err)
 		}
 		g := mcpGroupWith(cfg, env, regOut, true, true, nil, resolveMCPSandboxContext(env))
 		c := findCheck(t, g, "slack attachment")
-		if c.result() != verdictUnverifiable {
-			t.Errorf("no-entry attach must be unverifiable (config is not attachment), got %+v", c)
+		if c.result() != verdictTodo {
+			t.Errorf("no-entry attach with a complete receipt must be a verified todo, got %+v", c)
 		}
-		if !strings.Contains(c.detail, "pi-stack mcp load slack") || !strings.Contains(c.detail, "pi-stack run --replace") {
-			t.Errorf("guidance must carry the exact commands: %q", c.detail)
+		if want := "pi-stack mcp load slack " + ws; c.todo != want {
+			t.Errorf("todo = %q, want the exact command %q", c.todo, want)
 		}
-		if c.todo != "" {
-			t.Errorf("unverifiable attachment must not surface a repair TODO: %q", c.todo)
+		if !strings.Contains(c.detail, "pi-stack run --replace") {
+			t.Errorf("detail should keep the recreate alternative: %q", c.detail)
 		}
 	})
 
@@ -255,7 +260,7 @@ func TestMCPAttachmentSurvivesDeregistration(t *testing.T) {
 	base := mcpFake()
 	base.output["sbx ls"] = box + "  running  " + ws + "\n"
 	env, stateDir := receiptEnv(t, base, ws)
-	if err := writeCreateReceipt(stateDir, box, []string{"slack"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(stateDir, box, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	// slack is now DEREGISTERED (the `sbx mcp ls` output lacks it).
@@ -284,7 +289,7 @@ func TestMCPAttachmentSurvivesUnknownRegistration(t *testing.T) {
 	base := mcpFake()
 	base.output["sbx ls"] = box + "  running  " + ws + "\n"
 	env, stateDir := receiptEnv(t, base, ws)
-	if err := writeCreateReceipt(stateDir, box, []string{"slack"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(stateDir, box, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	// mcpOK=false: the registration listing itself failed — unknown, not "no".
@@ -313,7 +318,7 @@ func TestMCPGroupIncludesReceiptOnlyName(t *testing.T) {
 	env, stateDir := receiptEnv(t, base, ws)
 	// The receipt preloaded BOTH slack (current intent) and notion (no longer
 	// configured).
-	if err := writeCreateReceipt(stateDir, box, []string{"slack", "notion"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(stateDir, box, "", []string{"slack", "notion"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	g := mcpGroupWith(cfg, env, "slack\nnotion\n", true, true, nil, resolveMCPSandboxContext(env))
@@ -350,7 +355,7 @@ func TestMCPGroupSwitchedPackKeepsOldIntegrationVisible(t *testing.T) {
 	base := mcpFake()
 	base.output["sbx ls"] = box + "  running  " + ws + "\n"
 	env, stateDir := receiptEnv(t, base, ws)
-	if err := writeCreateReceipt(stateDir, box, []string{"acme-remote"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(stateDir, box, "", []string{"acme-remote"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	newContainers := map[string]packContainer{"newco": {RemoteURL: "https://mcp.newco.example/sse"}}

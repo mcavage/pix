@@ -115,9 +115,18 @@ type sandboxMCPLoadReceipt struct {
 // partial receipt synthesized by appendLoadReceipt for a pre-existing
 // sandbox; Loads accumulates via appendLoadReceipt, deduped by name.
 type sandboxMCPReceipt struct {
-	Schema    int                     `json:"schema"`
-	Sandbox   string                  `json:"sandbox"`
-	CreatedAt string                  `json:"created_at,omitempty"`
+	Schema    int    `json:"schema"`
+	Sandbox   string `json:"sandbox"`
+	CreatedAt string `json:"created_at,omitempty"`
+	// Workspace is the canonical workspace directory the sandbox was created
+	// FOR (canonicalWorkspacePath at create time) — the launcher-owned
+	// workspace->sandbox identity that lets a custom-named sandbox
+	// (`run --name pi-stack-demo`) be found again by verbs that only know the
+	// DIR (resolveWorkspaceSandbox). ADDITIVE to schema 1: a receipt written
+	// before this field simply has it empty (an "old sandbox" — the resolver
+	// falls back to the derived default name), and an older binary decoding a
+	// newer receipt ignores it.
+	Workspace string                  `json:"workspace,omitempty"`
 	Preloaded []string                `json:"preloaded,omitempty"`
 	Loads     []sandboxMCPLoadReceipt `json:"loads,omitempty"`
 }
@@ -390,7 +399,7 @@ func readSandboxMCPReceipt(stateDir, sandbox string) (*sandboxMCPReceipt, sandbo
 //
 // now defaults to time.Now when nil (production callers may still pass it
 // explicitly for consistency; tests always inject a fixed clock).
-func writeCreateReceipt(stateDir, sandbox string, preloaded []string, now func() time.Time) error {
+func writeCreateReceipt(stateDir, sandbox, workspace string, preloaded []string, now func() time.Time) error {
 	if now == nil {
 		now = time.Now
 	}
@@ -399,6 +408,7 @@ func writeCreateReceipt(stateDir, sandbox string, preloaded []string, now func()
 			Schema:    sandboxMCPStateSchema,
 			Sandbox:   sandbox,
 			CreatedAt: now().UTC().Format(time.RFC3339),
+			Workspace: workspace,
 			Preloaded: append([]string(nil), preloaded...),
 		}
 		return writeSandboxMCPReceiptFile(dir, r)
@@ -416,7 +426,7 @@ func writeCreateReceipt(stateDir, sandbox string, preloaded []string, now func()
 // not a valid OK receipt (absent, corrupt, wrong schema/identity) is
 // replaced outright: the caller positively owns this lifetime's start, so
 // only its own valid appends may merge.
-func commitCreateReceipt(stateDir, sandbox string, preloaded []string, now func() time.Time) error {
+func commitCreateReceipt(stateDir, sandbox, workspace string, preloaded []string, now func() time.Time) error {
 	if now == nil {
 		now = time.Now
 	}
@@ -425,6 +435,7 @@ func commitCreateReceipt(stateDir, sandbox string, preloaded []string, now func(
 			Schema:    sandboxMCPStateSchema,
 			Sandbox:   sandbox,
 			CreatedAt: now().UTC().Format(time.RFC3339),
+			Workspace: workspace,
 			Preloaded: append([]string(nil), preloaded...),
 		}
 		if r, status, _ := readSandboxMCPReceiptFile(dir, sandbox); status == sandboxMCPStateOK {

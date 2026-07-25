@@ -308,7 +308,7 @@ func runRun(argv []string) {
 	// re-attach must never write a fresh create receipt over one), record the
 	// create receipt ONLY after this exact `sbx run` exec has itself succeeded
 	// — never before, never on failure, never on reattach.
-	if err := execSbxRunAndRecordCreate(cmd, definitelyCreating(state, o.Replace), o.Name, o.StaticMCP); err != nil {
+	if err := execSbxRunAndRecordCreate(cmd, definitelyCreating(state, o.Replace), o.Name, canonicalWorkspacePath(o.Workspace), o.StaticMCP); err != nil {
 		var rerr *receiptRecordError
 		if errors.As(err, &rerr) {
 			// The sandbox itself WAS created successfully — only the local
@@ -376,16 +376,19 @@ func sandboxAppeared(st sbxState) bool { return st == sbxRunning || st == sbxSto
 // pre-create clear succeeded) preserves loads a concurrent `pi-stack mcp
 // load` appended during the create window; merge=false (the clear could not
 // be proven) replaces outright so a prior lifetime's loads can never survive.
-func recordCreateReceipt(sandbox string, preloaded []string, merge bool) error {
+// workspace is the CANONICAL workspace path the create was for
+// (canonicalWorkspacePath) — the receipt's workspace->sandbox identity that
+// resolveWorkspaceSandbox reads back for custom-named sandboxes.
+func recordCreateReceipt(sandbox, workspace string, preloaded []string, merge bool) error {
 	dir, err := sandboxMCPStateDirFn()
 	if err != nil {
 		return &receiptRecordError{op: "create", sandbox: sandbox, err: fmt.Errorf("resolving pi-stack state dir: %w", err)}
 	}
 	var werr error
 	if merge {
-		werr = commitCreateReceipt(dir, sandbox, preloaded, nil)
+		werr = commitCreateReceipt(dir, sandbox, workspace, preloaded, nil)
 	} else {
-		werr = writeCreateReceipt(dir, sandbox, preloaded, nil)
+		werr = writeCreateReceipt(dir, sandbox, workspace, preloaded, nil)
 	}
 	if werr != nil {
 		return &receiptRecordError{op: "create", sandbox: sandbox, err: werr}
@@ -418,7 +421,7 @@ func recordCreateReceipt(sandbox string, preloaded []string, merge bool) error {
 // silent success and never confused with a launch failure. The Wait goroutine
 // always terminates when the process exits and its result is always drained
 // — no goroutine leaks on any path.
-func execSbxRunAndRecordCreate(cmd *exec.Cmd, writeReceipt bool, sandbox string, preloaded []string) error {
+func execSbxRunAndRecordCreate(cmd *exec.Cmd, writeReceipt bool, sandbox, workspace string, preloaded []string) error {
 	if !writeReceipt {
 		return cmd.Run()
 	}
@@ -449,7 +452,7 @@ func execSbxRunAndRecordCreate(cmd *exec.Cmd, writeReceipt bool, sandbox string,
 poll:
 	for {
 		if sandboxAppeared(sandboxAppearProbeFn(sandbox)) {
-			recErr = recordCreateReceipt(sandbox, preloaded, merge)
+			recErr = recordCreateReceipt(sandbox, workspace, preloaded, merge)
 			break poll
 		}
 		if time.Now().After(deadline) {
@@ -467,7 +470,7 @@ poll:
 				return werr
 			}
 			if sandboxAppeared(sandboxAppearProbeFn(sandbox)) {
-				return recordCreateReceipt(sandbox, preloaded, merge)
+				return recordCreateReceipt(sandbox, workspace, preloaded, merge)
 			}
 			return nil
 		case <-ticker.C:

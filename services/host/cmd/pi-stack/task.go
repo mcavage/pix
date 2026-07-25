@@ -1244,7 +1244,7 @@ func launchTask(o runOpts) error {
 	// A *receiptRecordError here reaches `task new`'s error report as-is — the
 	// sandbox probe there reads running/stopped, so the clone is kept and the
 	// honest "created but unrecorded" message is printed, never a rollback.
-	return execSbxRunAndRecordCreate(cmd, true, o.Name, o.StaticMCP)
+	return execSbxRunAndRecordCreate(cmd, true, o.Name, canonicalWorkspacePath(o.Workspace), o.StaticMCP)
 }
 
 // ---------------------------------------------------------------------------

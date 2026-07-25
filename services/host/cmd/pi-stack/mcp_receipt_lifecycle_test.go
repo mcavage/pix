@@ -54,7 +54,7 @@ func TestCreateReceipt_RecordedWhileSessionAlive(t *testing.T) {
 
 	cmd, release := blockingCmd(t)
 	done := make(chan error, 1)
-	go func() { done <- execSbxRunAndRecordCreate(cmd, true, "pi-stack-live", []string{"slack"}) }()
+	go func() { done <- execSbxRunAndRecordCreate(cmd, true, "pi-stack-live", "", []string{"slack"}) }()
 
 	// The receipt must become readable while the session is still running.
 	deadline := time.Now().Add(5 * time.Second)
@@ -100,7 +100,7 @@ func TestCreateReceipt_MergesConcurrentLoadDropsPriorLifetime(t *testing.T) {
 	sandbox := "pi-stack-merge"
 
 	// Prior lifetime: a create receipt with a load that must NOT survive.
-	if err := writeCreateReceipt(dir, sandbox, []string{"old"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(dir, sandbox, "", []string{"old"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	if err := appendLoadReceipt(dir, sandbox, "stale", receiptClock); err != nil {
@@ -117,7 +117,7 @@ func TestCreateReceipt_MergesConcurrentLoadDropsPriorLifetime(t *testing.T) {
 	}
 	withCreatePollSeams(t, probe, time.Millisecond, 5*time.Second)
 
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, []string{"gog"}); err != nil {
+	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{"gog"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -142,7 +142,7 @@ func TestCreateReceipt_CleanExitWithoutEvidenceWritesNothing(t *testing.T) {
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
 	withCreatePollSeams(t, probeAlways(sbxAbsent), time.Millisecond, 5*time.Second)
 
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, "pi-stack-noev", []string{"slack"}); err != nil {
+	if err := execSbxRunAndRecordCreate(trueCmd(t), true, "pi-stack-noev", "", []string{"slack"}); err != nil {
 		t.Fatalf("clean exit must surface the process's own nil result, got %v", err)
 	}
 	if _, status, _ := readSandboxMCPReceipt(dir, "pi-stack-noev"); status != sandboxMCPStateAbsent {
@@ -164,7 +164,7 @@ func TestCreateReceipt_EvidenceAtExitStillRecorded(t *testing.T) {
 	}
 	withCreatePollSeams(t, probe, time.Millisecond, 5*time.Second)
 
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, "pi-stack-lateev", []string{"slack"}); err != nil {
+	if err := execSbxRunAndRecordCreate(trueCmd(t), true, "pi-stack-lateev", "", []string{"slack"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, status, _ := readSandboxMCPReceipt(dir, "pi-stack-lateev"); status != sandboxMCPStateOK {
@@ -184,7 +184,7 @@ func TestCreateReceipt_PollTimeoutReportsUnrecorded(t *testing.T) {
 	withCreatePollSeams(t, probeAlways(sbxAbsent), time.Millisecond, 30*time.Millisecond)
 
 	start := time.Now()
-	err := execSbxRunAndRecordCreate(exec.Command("sleep", "0.4"), true, "pi-stack-timeout", []string{"slack"})
+	err := execSbxRunAndRecordCreate(exec.Command("sleep", "0.4"), true, "pi-stack-timeout", "", []string{"slack"})
 	var rerr *receiptRecordError
 	if !errors.As(err, &rerr) {
 		t.Fatalf("want a *receiptRecordError on poll timeout, got %T: %v", err, err)
@@ -208,7 +208,7 @@ func TestApplyReplaceRm_ClearsReceiptOnSuccessRetainsOnFailure(t *testing.T) {
 	sandbox := "pi-stack-replaceclear"
 	plan := runLaunchPlan{RmFirst: true}
 
-	if err := writeCreateReceipt(dir, sandbox, []string{"slack"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	ok := shellEnv{run: func(string, ...string) (string, error) { return "", nil }}
@@ -219,7 +219,7 @@ func TestApplyReplaceRm_ClearsReceiptOnSuccessRetainsOnFailure(t *testing.T) {
 		t.Fatalf("status = %v, want absent after a successful replace pre-remove", status)
 	}
 
-	if err := writeCreateReceipt(dir, sandbox, []string{"slack"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	bad := shellEnv{run: func(string, ...string) (string, error) { return "", errors.New("rm failed") }}
@@ -236,7 +236,7 @@ func TestRemovePiStackSandbox_ClearsReceiptOnSuccessRetainsOnFailure(t *testing.
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
 	sandbox := "pi-stack-rmclear"
 
-	if err := writeCreateReceipt(dir, sandbox, []string{"slack"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	ok := shellEnv{run: func(string, ...string) (string, error) { return "", nil }}
@@ -247,7 +247,7 @@ func TestRemovePiStackSandbox_ClearsReceiptOnSuccessRetainsOnFailure(t *testing.
 		t.Fatalf("status = %v, want absent after `pi-stack rm` succeeded", status)
 	}
 
-	if err := writeCreateReceipt(dir, sandbox, []string{"slack"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	bad := shellEnv{run: func(string, ...string) (string, error) { return "", errors.New("rm failed") }}
@@ -268,7 +268,7 @@ func TestExecuteTaskTeardown_ClearsReceiptOnRemovalRetainsOnAbort(t *testing.T) 
 	m := taskMeta{Name: "work", Sandbox: sandbox, Mainroot: t.TempDir(), Branch: "pi-stack/work"}
 
 	// Success: git snapshot ok, `sbx ls` reads absent, `sbx rm -f` succeeds.
-	if err := writeCreateReceipt(dir, sandbox, []string{"slack"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	ok := shellEnv{run: func(string, ...string) (string, error) { return "", nil }}
@@ -282,7 +282,7 @@ func TestExecuteTaskTeardown_ClearsReceiptOnRemovalRetainsOnAbort(t *testing.T) 
 
 	// Abort: non-force with the sandbox running — teardown refuses before any
 	// rm, so the receipt (a live lifetime's evidence) must survive.
-	if err := writeCreateReceipt(dir, sandbox, []string{"slack"}, receiptClock); err != nil {
+	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	running := shellEnv{run: func(name string, args ...string) (string, error) {
@@ -319,7 +319,7 @@ func TestReceiptIsPartial(t *testing.T) {
 	}
 
 	// A committed create makes it full — even with an empty preload set.
-	if err := commitCreateReceipt(dir, sandbox, nil, receiptClock); err != nil {
+	if err := commitCreateReceipt(dir, sandbox, "", nil, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	r, _, _ = readSandboxMCPReceipt(dir, sandbox)
@@ -358,7 +358,7 @@ func TestCreateCommitRacesLoads(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		errs[loaders] = commitCreateReceipt(dir, sandbox, []string{"gog"}, receiptClock)
+		errs[loaders] = commitCreateReceipt(dir, sandbox, "", []string{"gog"}, receiptClock)
 	}()
 	wg.Wait()
 	for i, err := range errs {

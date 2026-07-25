@@ -29,7 +29,7 @@ func fixedClock(ts string) func() time.Time {
 
 func TestWriteCreateReceiptRoundtrip(t *testing.T) {
 	dir := t.TempDir()
-	if err := writeCreateReceipt(dir, "pi-stack-work", []string{"slack", "gog"}, fixedClock("2024-01-02T03:04:05Z")); err != nil {
+	if err := writeCreateReceipt(dir, "pi-stack-work", "", []string{"slack", "gog"}, fixedClock("2024-01-02T03:04:05Z")); err != nil {
 		t.Fatalf("writeCreateReceipt: %v", err)
 	}
 	r, status, err := readSandboxMCPReceipt(dir, "pi-stack-work")
@@ -68,7 +68,7 @@ func TestWriteCreateReceiptRoundtrip(t *testing.T) {
 
 func TestAppendLoadReceiptRoundtrip(t *testing.T) {
 	dir := t.TempDir()
-	if err := writeCreateReceipt(dir, "pi-stack-work", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := writeCreateReceipt(dir, "pi-stack-work", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatalf("writeCreateReceipt: %v", err)
 	}
 	if err := appendLoadReceipt(dir, "pi-stack-work", "gog", fixedClock("2024-01-01T01:00:00Z")); err != nil {
@@ -92,7 +92,7 @@ func TestAppendLoadReceiptRoundtrip(t *testing.T) {
 func TestAppendLoadReceiptOrderAndDedupe(t *testing.T) {
 	dir := t.TempDir()
 	sandbox := "pi-stack-order"
-	if err := writeCreateReceipt(dir, sandbox, nil, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := writeCreateReceipt(dir, sandbox, "", nil, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 	if err := appendLoadReceipt(dir, sandbox, "slack", fixedClock("2024-01-01T01:00:00Z")); err != nil {
@@ -125,7 +125,7 @@ func TestAppendLoadReceiptOrderAndDedupe(t *testing.T) {
 func TestWriteCreateReceiptReplaceResetsLoads(t *testing.T) {
 	dir := t.TempDir()
 	sandbox := "pi-stack-replace"
-	if err := writeCreateReceipt(dir, sandbox, []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 	if err := appendLoadReceipt(dir, sandbox, "slack", fixedClock("2024-01-01T01:00:00Z")); err != nil {
@@ -135,7 +135,7 @@ func TestWriteCreateReceiptReplaceResetsLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Recreate (e.g. `sbx rm -f` + fresh create) with a different preload set.
-	if err := writeCreateReceipt(dir, sandbox, []string{"gog"}, fixedClock("2024-02-01T00:00:00Z")); err != nil {
+	if err := writeCreateReceipt(dir, sandbox, "", []string{"gog"}, fixedClock("2024-02-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 	r, status, err := readSandboxMCPReceipt(dir, sandbox)
@@ -302,7 +302,7 @@ func TestSandboxNameTraversalRejected(t *testing.T) {
 	dir := t.TempDir()
 	bad := []string{"", ".", "..", "../escape", "a/../../b", "foo/bar", "foo\\bar", "/etc/passwd"}
 	for _, name := range bad {
-		if err := writeCreateReceipt(dir, name, nil, fixedClock("2024-01-01T00:00:00Z")); err == nil {
+		if err := writeCreateReceipt(dir, name, "", nil, fixedClock("2024-01-01T00:00:00Z")); err == nil {
 			t.Errorf("writeCreateReceipt(%q): want error, got nil", name)
 		}
 		if err := appendLoadReceipt(dir, name, "slack", fixedClock("2024-01-01T00:00:00Z")); err == nil {
@@ -332,7 +332,7 @@ func TestWriteCreateReceiptRefusesSymlinkedSandboxDir(t *testing.T) {
 	outside := t.TempDir()
 	requireSymlink(t, outside, filepath.Join(root, "pi-stack-sym"))
 
-	if err := writeCreateReceipt(dir, "pi-stack-sym", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err == nil {
+	if err := writeCreateReceipt(dir, "pi-stack-sym", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err == nil {
 		t.Fatal("want an error writing through a symlinked sandbox directory")
 	}
 	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
@@ -348,7 +348,7 @@ func TestWriteCreateReceiptRefusesSymlinkedStateRoot(t *testing.T) {
 	outside := t.TempDir()
 	requireSymlink(t, outside, filepath.Join(dir, "sandboxes"))
 
-	if err := writeCreateReceipt(dir, "pi-stack-x", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err == nil {
+	if err := writeCreateReceipt(dir, "pi-stack-x", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err == nil {
 		t.Fatal("want an error creating through a symlinked state root")
 	}
 	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
@@ -374,7 +374,7 @@ func TestWriteCreateReceiptReplacesSymlinkedDestinationFile(t *testing.T) {
 	}
 	requireSymlink(t, victim, filepath.Join(sdir, "mcp.json"))
 
-	if err := writeCreateReceipt(dir, sandbox, []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatalf("writeCreateReceipt: %v", err)
 	}
 	// The victim file must be untouched...
@@ -433,7 +433,7 @@ func TestReadSandboxMCPReceiptRefusesSymlinkedDestinationFile(t *testing.T) {
 func TestAppendLoadReceiptConcurrentAppendsDoNotLoseUpdates(t *testing.T) {
 	dir := t.TempDir()
 	sandbox := "pi-stack-concurrent"
-	if err := writeCreateReceipt(dir, sandbox, nil, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := writeCreateReceipt(dir, sandbox, "", nil, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 	names := make([]string, 0, 20)
@@ -484,7 +484,7 @@ func TestSandboxMCPStatePermissions(t *testing.T) {
 	}
 	dir := t.TempDir()
 	sandbox := "pi-stack-perm"
-	if err := writeCreateReceipt(dir, sandbox, []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 	root := sandboxMCPStateRoot(dir)
@@ -519,7 +519,7 @@ func TestAppendLoadReceiptRejectsEmptyName(t *testing.T) {
 func TestWriteAndAppendDefaultClock(t *testing.T) {
 	dir := t.TempDir()
 	before := time.Now().Add(-time.Second)
-	if err := writeCreateReceipt(dir, "pi-stack-defclock", nil, nil); err != nil {
+	if err := writeCreateReceipt(dir, "pi-stack-defclock", "", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := appendLoadReceipt(dir, "pi-stack-defclock", "slack", nil); err != nil {

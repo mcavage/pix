@@ -310,7 +310,12 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 				// does not KNOW they are unattached, so no repair claim.
 				if row.State == mcpJoinRegisteredNotAttached {
 					td := "pi-stack mcp load " + row.Name + " [DIR]"
-					if b.Dir != "" {
+					switch {
+					case receipt != nil && strings.TrimSpace(receipt.Workspace) != "":
+						// The receipt's own canonical workspace is the most exact
+						// DIR (a custom-named box may not match sbx's dir column).
+						td = "pi-stack mcp load " + row.Name + " " + receipt.Workspace
+					case b.Dir != "":
 						td = "pi-stack mcp load " + row.Name + " " + b.Dir
 					}
 					st.Todos = append(st.Todos, td)
@@ -418,9 +423,23 @@ func (st statusReport) render(out io.Writer) {
 	}
 
 	fmt.Fprintln(out)
-	if len(st.Todos) > 0 {
+	// Headline honesty: an UNVERIFIABLE MCP row (corrupt/absent receipt, a
+	// failed listing) is not a verified failure — it earns no TODO — but it
+	// also means status does NOT know everything is fine, so it must never
+	// read "all systems go" over it. The JSON rows above stay the row truth.
+	unverifiable := 0
+	for _, r := range st.MCPRows {
+		if r.State == mcpJoinUnverifiable {
+			unverifiable++
+		}
+	}
+	switch {
+	case len(st.Todos) > 0:
 		fmt.Fprintf(out, "  ⚠ %s outstanding.   `pi-stack doctor` for fix commands.\n", plural(len(st.Todos), "item"))
-	} else {
+	case unverifiable > 0:
+		fmt.Fprintf(out, "  ✓ nothing outstanding — but %s unverifiable (not failed; see the mcp/box rows or `pi-stack doctor`).\n",
+			plural(unverifiable, "check"))
+	default:
 		fmt.Fprintln(out, "  ✓ all systems go.")
 	}
 	fmt.Fprintln(out)
