@@ -7,10 +7,36 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"pi-stack/host/config"
 )
+
+// mcpCatalogNames is the SINGLE public source of truth for the shipped MCP
+// catalog bundle (config/mcp-catalog.bundle.json): exactly the servers
+// `pi-stack mcp bundle` registers. classifyMCPServer's remote-vs-custom split
+// reuses this set, so a plausible-looking but unshipped name (e.g. "linear")
+// can never be treated as a confirmed catalog server — that would recommend
+// `pi-stack mcp bundle` as a repair command that silently can't register it.
+var mcpCatalogNames = map[string]bool{
+	"notion":    true,
+	"atlassian": true,
+	"granola":   true,
+}
+
+// mcpCatalogSummary renders mcpCatalogNames as a stable, sorted,
+// human-readable list (e.g. "atlassian/granola/notion") for help/detail text,
+// so a doc string never has to hand-enumerate the catalog and risk drifting
+// from it.
+func mcpCatalogSummary() string {
+	names := make([]string, 0, len(mcpCatalogNames))
+	for n := range mcpCatalogNames {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return strings.Join(names, "/")
+}
 
 // A name in the resolved profile's mcp list is registered with the sbx gateway
 // ONLY if it is a LOCAL stdio server this host can serve. gog is a special local
@@ -545,8 +571,10 @@ func localMCPNames(env shellEnv, hostResolver func() (string, error)) (map[strin
 	if err != nil || hb == "" {
 		return nil, false
 	}
-	out, err := env.run(hb, "mcp", "--list")
-	if err != nil {
+	// BOUNDED: a hung `pi-stack-host mcp --list` degrades to an unknown local
+	// set (callers fail closed), never a wedged caller.
+	out, timedOut, err := probeRun(env, hb, "mcp", "--list")
+	if err != nil || timedOut {
 		return nil, false
 	}
 	set := map[string]bool{}
