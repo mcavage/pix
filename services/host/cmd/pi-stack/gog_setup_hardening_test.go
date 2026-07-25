@@ -236,7 +236,7 @@ func TestGogSetup_R106_BareProbe_ZeroTools_Fails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error when the bare headless probe returns zero tools")
 	}
-	if !strings.Contains(err.Error(), "headless verification failed") {
+	if !strings.Contains(err.Error(), "authorization succeeded but the headless tool listing returned 0 tools; nothing was registered") {
 		t.Errorf("expected the zero-tools failure wording, got %q", err)
 	}
 	if !strings.Contains(out.String(), "GOG_KEYRING_PASSWORD") {
@@ -560,7 +560,7 @@ func TestGogSetup_R114_CapabilityAndBareHeadlessProbesAreBounded(t *testing.T) {
 	var probed []string
 	env := shellEnv{
 		lookPath: func(name string) (string, error) {
-			if name == gwServerName || name == "sbx" {
+			if name == "gog" || name == "sbx" {
 				return "/usr/bin/" + name, nil
 			}
 			return "", fmt.Errorf("exec: %q not found", name)
@@ -677,8 +677,8 @@ func TestSnapshotGogRegistration_ListedButUnreadable_Unknown(t *testing.T) {
 	env := gogSnapEnv("google-workspace\n", false, nil, map[string]string{
 		// A shell-quoted command line: parseGogCommandLine explicitly refuses
 		// to split this (ambiguous under strings.Fields).
-		"sbx mcp get google-workspace":    `name: gog` + "\n" + `command: /usr/bin/op run --env-file="/x/op refs.env" -- gog mcp` + "\n",
-		"sbx mcp ls -o json": "not json at all",
+		"sbx mcp get google-workspace": `name: gog` + "\n" + `command: /usr/bin/op run --env-file="/x/op refs.env" -- gog mcp` + "\n",
+		"sbx mcp ls -o json":           "not json at all",
 	}, nil)
 	snap := snapshotGogRegistration(env)
 	if snap.state != gogRegUnknown {
@@ -713,8 +713,8 @@ func TestSnapshotGogRegistration_ListingProbeTimesOut_Unknown(t *testing.T) {
 // present, unreadable command -> gogRegUnknown.
 func TestSnapshotGogRegistration_GetAndJSONTransientErrors_Unknown(t *testing.T) {
 	env := gogSnapEnv("google-workspace\n", false, nil, nil, map[string]bool{
-		"sbx mcp get google-workspace":    true,
-		"sbx mcp ls -o json": true,
+		"sbx mcp get google-workspace": true,
+		"sbx mcp ls -o json":           true,
 	})
 	snap := snapshotGogRegistration(env)
 	if snap.state != gogRegUnknown {

@@ -552,5 +552,5 @@ func gogAttachCheck(cfg *config.Config, ctx mcpSandboxContext, reg mcpRegEvidenc
 		return check{label: "attached", note: true, verdict: verdictUnverifiable, detail: det}
 	}
 	return check{label: "attached", note: true, verdict: verdictUnverifiable,
-		detail: "run `pi-stack config set mcp "+gwServerName+"` to attach it"}
+		detail: "run `pi-stack config set mcp " + gwServerName + "` to attach it"}
 }

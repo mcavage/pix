@@ -191,7 +191,7 @@ func TestJoinMCPSandboxRowsOrderAndFanout(t *testing.T) {
 		}
 		return mcpRegYes
 	}
-	rows := joinMCPSandboxRows([]string{"gog", "slack", "notion", "linear"}, reg, box, receipt, sandboxMCPStateOK)
+	rows := joinMCPSandboxRows([]string{gwServerName, "slack", "notion", "linear"}, reg, box, receipt, sandboxMCPStateOK)
 	want := []string{mcpJoinPreloaded, mcpJoinLoaded, mcpJoinRegisteredNotAttached, mcpJoinNotRegistered}
 	if len(rows) != len(want) {
 		t.Fatalf("rows = %+v, want %d", rows, len(want))

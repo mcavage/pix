@@ -239,8 +239,11 @@ func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GogAccount != "me@x.com" {
-		t.Errorf("cfg.GogAccount = %q, want the value round-tripped from the marker", cfg.GogAccount)
+	// onboarding has deliberately NO account writer (Google Workspace
+	// authorization needs a browser); the marker's mcp entry is what should
+	// round-trip into config.
+	if !containsStr(cfg.MCP, gwServerName) {
+		t.Errorf("cfg.MCP = %v, want %s round-tripped from the marker", cfg.MCP, gwServerName)
 	}
 }
 

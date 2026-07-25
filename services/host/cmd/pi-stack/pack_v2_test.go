@@ -18,7 +18,7 @@ func TestLoadPack_ParsesV2Facets(t *testing.T) {
 	toml := `name = "work"
 schema = 1
 ollama_bridge_model = "qwen3.5:9b"
-google_workspace_account = "me@company.com"
+gog_account = "me@company.com"
 memory_scope = "work"
 
 [routing]

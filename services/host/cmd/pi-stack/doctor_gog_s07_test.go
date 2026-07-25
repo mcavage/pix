@@ -71,10 +71,10 @@ func TestDoctorGog_MissingReadOnlyFlagsIsTodo(t *testing.T) {
 	f := gogGreen(fakeEnv{
 		present: map[string]bool{"sbx": true},
 		output: map[string]string{
-			"sbx secret ls":              "anthropic openai google github",
-			"sbx mcp ls":                 "google-workspace\n",
-			"sbx mcp get google-workspace":            "name: gog\ncommand: " + unhardened + "\n",
-			unhardened + " --list-tools": "gmail_search\n",
+			"sbx secret ls":                "anthropic openai google github",
+			"sbx mcp ls":                   "google-workspace\n",
+			"sbx mcp get google-workspace": "name: gog\ncommand: " + unhardened + "\n",
+			unhardened + " --list-tools":   "gmail_search\n",
 		},
 		ports: map[int]bool{11435: true},
 	})
@@ -110,8 +110,8 @@ func TestDoctorGog_NonCanonicalRegisteredPathNeverExecuted(t *testing.T) {
 	f := fakeEnv{
 		present: map[string]bool{"sbx": true, "gog": true, "op": true},
 		output: map[string]string{
-			"sbx secret ls":   "anthropic openai google github",
-			"sbx mcp ls":      "google-workspace\n",
+			"sbx secret ls":                "anthropic openai google github",
+			"sbx mcp ls":                   "google-workspace\n",
 			"sbx mcp get google-workspace": "name: gog\ncommand: " + evil + "\n",
 			// If doctor ever executed the registered spelling, this fixture
 			// would answer and the probe would "succeed".
@@ -176,8 +176,8 @@ func TestDoctorGog_ZeroToolsCleanExitIsTodo(t *testing.T) {
 func registeredGogProbeEnv(probeFn func() (string, bool, error)) shellEnv {
 	regCmd := opWrappedGog(gogOpRefs, gogAcct)
 	fixtures := map[string]string{
-		"sbx secret ls":   "anthropic openai google github",
-		"sbx mcp ls":      "google-workspace\n",
+		"sbx secret ls":                "anthropic openai google github",
+		"sbx mcp ls":                   "google-workspace\n",
 		"sbx mcp get google-workspace": "name: gog\ncommand: " + regCmd + "\n",
 	}
 	return shellEnv{

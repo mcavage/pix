@@ -100,7 +100,7 @@ func reconstructedGogProbe(refs, acct string) string {
 // PATH, GOG_ACCOUNT set, interactive auth passing, the headless op-run probe
 // returning a non-empty tool list, and gog registered with the gateway.
 func gogGreen(f fakeEnv) fakeEnv {
-	f.present[gwServerName] = true
+	f.present["gog"] = true
 	f.present["op"] = true
 	if f.envVars == nil {
 		f.envVars = map[string]string{}
@@ -357,7 +357,7 @@ func TestDoctor_GogAttachDespiteMissingExecutable(t *testing.T) {
 	if reg.result() != verdictReady {
 		t.Errorf("registration check must still be emitted and ready: %+v", reg)
 	}
-	attach := findCheck(t, g, "gog attachment")
+	attach := findCheck(t, g, gwServerName+" attachment")
 	if attach.result() != verdictReady || !strings.Contains(attach.evidence, "preloaded by pi-stack at create") {
 		t.Errorf("attach check must be emitted and ready despite the missing gog executable: %+v", attach)
 	}
@@ -525,8 +525,8 @@ func TestDoctor_RegisteredCommandNeverLeaksSecret(t *testing.T) {
 	f := fakeEnv{
 		present: map[string]bool{"sbx": true, "gog": true},
 		output: map[string]string{
-			"sbx secret ls":   "anthropic openai google github",
-			"sbx mcp ls":      "google-workspace\n",
+			"sbx secret ls":                "anthropic openai google github",
+			"sbx mcp ls":                   "google-workspace\n",
 			"sbx mcp get google-workspace": "name: gog\ncommand: " + regCmd + "\n",
 		},
 		ports: map[int]bool{11435: true},
@@ -588,10 +588,10 @@ func TestDoctor_GogRegisteredCommand(t *testing.T) {
 		envVars:  map[string]string{"PI_STACK_CONFIG": gogCfgFile},
 		statFile: map[string]bool{gogOpRefs: true},
 		output: map[string]string{
-			"sbx secret ls":   "anthropic openai google github",
-			"sbx mcp ls":      "google-workspace\n",
+			"sbx secret ls":                "anthropic openai google github",
+			"sbx mcp ls":                   "google-workspace\n",
 			"sbx mcp get google-workspace": "name: gog\ncommand: " + regCmd + "\n",
-			probeKey:          "gmail_search\ncalendar_events\ndocs_get\n",
+			probeKey:                       "gmail_search\ncalendar_events\ndocs_get\n",
 		},
 		ports: map[int]bool{11435: true},
 	}
@@ -642,11 +642,11 @@ func TestDoctor_GogFallbackUnconfirmedIsTODO(t *testing.T) {
 	f := gogGreen(fakeEnv{
 		present: map[string]bool{"sbx": true, "ollama": true},
 		output: map[string]string{
-			"sbx secret ls":      "anthropic openai google github",
-			"ollama list":        "gemma4:latest\nnomic-embed-text:latest\n",
-			"sbx mcp ls":         "google-workspace\n",
-			"sbx mcp get google-workspace":    "name: gog\ncommand: op\n", // partial: no `-- <cmd>` tail
-			"sbx mcp ls -o json": "not json{",                // unparseable
+			"sbx secret ls":                "anthropic openai google github",
+			"ollama list":                  "gemma4:latest\nnomic-embed-text:latest\n",
+			"sbx mcp ls":                   "google-workspace\n",
+			"sbx mcp get google-workspace": "name: gog\ncommand: op\n", // partial: no `-- <cmd>` tail
+			"sbx mcp ls -o json":           "not json{",                // unparseable
 		},
 		ports: map[int]bool{11434: true, 11435: true},
 	})
@@ -698,11 +698,11 @@ func TestDoctor_GogRegisteredCommandLineFallsThrough(t *testing.T) {
 		envVars:  map[string]string{"PI_STACK_CONFIG": gogCfgFile},
 		statFile: map[string]bool{gogOpRefs: true},
 		output: map[string]string{
-			"sbx secret ls":      "anthropic openai google github",
-			"sbx mcp ls":         "google-workspace\n",
-			"sbx mcp get google-workspace":    "name: gog\ncommand: op\n", // partial line -> fall through
-			"sbx mcp ls -o json": `[{"name":"gog","command":"op","args":["run","--no-masking","--env-file=` + gogOpRefs + `","--","gog","--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
-			probeKey:             "gmail_search\n",
+			"sbx secret ls":                "anthropic openai google github",
+			"sbx mcp ls":                   "google-workspace\n",
+			"sbx mcp get google-workspace": "name: gog\ncommand: op\n", // partial line -> fall through
+			"sbx mcp ls -o json":           `[{"name":"google-workspace","command":"op","args":["run","--no-masking","--env-file=` + gogOpRefs + `","--","gog","--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
+			probeKey:                       "gmail_search\n",
 		},
 		ports: map[int]bool{11435: true},
 	}
@@ -762,7 +762,7 @@ func TestDoctor_GogRegisteredCommandJSON(t *testing.T) {
 		output: map[string]string{
 			"sbx secret ls":      "anthropic openai google github",
 			"sbx mcp ls":         "google-workspace\n",
-			"sbx mcp ls -o json": `[{"name":"gog","command":"op","args":["run","--no-masking","--env-file=` + gogOpRefs + `","--","gog","--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
+			"sbx mcp ls -o json": `[{"name":"google-workspace","command":"op","args":["run","--no-masking","--env-file=` + gogOpRefs + `","--","gog","--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
 			probeKey:             "gmail_search\n",
 		},
 		ports: map[int]bool{11435: true},
@@ -795,10 +795,10 @@ func TestDoctor_GogBareRegisteredCommand(t *testing.T) {
 	f := fakeEnv{
 		present: map[string]bool{"sbx": true, "gog": true},
 		output: map[string]string{
-			"sbx secret ls":   "anthropic openai google github",
-			"sbx mcp ls":      "google-workspace\n",
+			"sbx secret ls":                "anthropic openai google github",
+			"sbx mcp ls":                   "google-workspace\n",
 			"sbx mcp get google-workspace": "name: gog\ncommand: " + regCmd + "\n",
-			probeKey:          "gmail_search\ncalendar_events\ndocs_get\n",
+			probeKey:                       "gmail_search\ncalendar_events\ndocs_get\n",
 		},
 		ports: map[int]bool{11435: true},
 	}
@@ -850,7 +850,7 @@ func TestDoctor_GogBareRegisteredCommandJSON(t *testing.T) {
 		output: map[string]string{
 			"sbx secret ls":      "anthropic openai google github",
 			"sbx mcp ls":         "google-workspace\n",
-			"sbx mcp ls -o json": `[{"name":"gog","command":"gog","args":["--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
+			"sbx mcp ls -o json": `[{"name":"google-workspace","command":"gog","args":["--account","you@example.com","--gmail-no-send","--wrap-untrusted","--readonly","mcp","--allow-tool","read"]}]`,
 			probeKey:             "gmail_search\n",
 		},
 		ports: map[int]bool{11435: true},

@@ -334,7 +334,7 @@ func TestInjectTrustedHostState_NeverLeaksGogAccountEmail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("injectTrustedHostState: %v", err)
 	}
-	if !strings.Contains(out[4], `gwServerName:{"enabled":true}`) {
+	if !strings.Contains(out[4], `"gog":{"enabled":true}`) {
 		t.Errorf("gog.enabled must still be reported, got %q", out[4])
 	}
 	if strings.Contains(out[4], "secret-owner@acme.com") || strings.Contains(out[4], "acme.com") {

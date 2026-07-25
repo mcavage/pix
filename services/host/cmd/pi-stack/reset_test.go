@@ -90,8 +90,8 @@ func TestResetPlan_Sbx(t *testing.T) {
 	if !with.RemoveSandboxes {
 		t.Error("--sbx must set RemoveSandboxes")
 	}
-	if strings.Join(with.MCPRemove, ",") != "gog,slack" {
-		t.Errorf("MCPRemove = %v, want [gog slack]", with.MCPRemove)
+	if strings.Join(with.MCPRemove, ",") != gwServerName+",slack" {
+		t.Errorf("MCPRemove = %v, want [%s slack]", with.MCPRemove, gwServerName)
 	}
 
 	without := resetPlan(resetCfg(), p, resetOpts{})

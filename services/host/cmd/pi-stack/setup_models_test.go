@@ -107,7 +107,7 @@ func modelsSetupEnv(t *testing.T, w *ollamaWorld) shellEnv {
 					return "", nil
 				}
 			}
-			if name == gwServerName && w.gogAuthErr {
+			if name == "gog" && w.gogAuthErr {
 				return "", fmt.Errorf("not authed")
 			}
 			return "", nil
@@ -365,12 +365,14 @@ func TestSetupModels_ExactSummary(t *testing.T) {
 	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
+	// Google Workspace is OPTIONAL and ABSENT from the default path
+	// (AC-P0-319): with no opt-in, the summary says nothing about it at all —
+	// no `workspace`/`gog` row here.
 	want := "Setup summary:\n" +
 		fmt.Sprintf("  %s %-12s %s\n", "✓", "keys", "anthropic, google, openai — one provider key is enough to launch") +
 		fmt.Sprintf("  %s %-12s %s\n", "✗", "knowledge", "no bundle configured — add one: pi-stack knowledge init") +
 		fmt.Sprintf("  %s %-12s %s\n", "✗", "pack", "active but empty ("+defaultPackRoot()+") — add a skill: pi-stack pack add skill <name>") +
 		fmt.Sprintf("  %s %-12s %s\n", "✓", "local models", "pulled: nomic-embed-text, qwen3.5:9b") +
-		fmt.Sprintf("  %s %-12s %s\n", "·", "gog", "optional — not configured; wire it later: pi-stack gworkspace setup") +
 		"Core provisioned (keys + knowledge + pack): not yet — finish the ✗ items above.\n"
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("summary mismatch.\nwant block:\n%s\ngot output:\n%s", want, out.String())
@@ -429,7 +431,7 @@ func TestSetupModels_GogGuidanceIsGogSetupOnly(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(cfgPath, []byte("google_workspace_account = \"me@example.com\"\nmcp = [\"gog\"]\n"), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("google_workspace_account = \"me@example.com\"\nmcp = [\""+gwServerName+"\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -437,7 +439,7 @@ func TestSetupModels_GogGuidanceIsGogSetupOnly(t *testing.T) {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
 	s := out.String()
-	if !strings.Contains(s, "✗ gog") || !strings.Contains(s, "pi-stack gworkspace setup") {
+	if !strings.Contains(s, "✗ workspace") || !strings.Contains(s, "pi-stack gworkspace setup") {
 		t.Errorf("an unhealthy configured gog must point at `pi-stack gworkspace setup`, got:\n%s", s)
 	}
 	if strings.Contains(s, "gog auth login") || strings.Contains(s, "sbx mcp auth") {

@@ -82,17 +82,17 @@ func TestStatusMCPRowsAllFiveStates(t *testing.T) {
 	}
 	proj := rowsFor(st, "pi-stack-proj")
 	for name, want := range map[string]string{
-		gwServerName:    mcpJoinPreloaded,
-		"slack":  mcpJoinLoaded,
-		"notion": mcpJoinRegisteredNotAttached,
-		"linear": mcpJoinNotRegistered,
+		gwServerName: mcpJoinPreloaded,
+		"slack":      mcpJoinLoaded,
+		"notion":     mcpJoinRegisteredNotAttached,
+		"linear":     mcpJoinNotRegistered,
 	} {
 		if proj[name].State != want {
 			t.Errorf("pi-stack-proj %s state = %q, want %q", name, proj[name].State, want)
 		}
 	}
 	bad := rowsFor(st, "pi-stack-bad")
-	for _, name := range []string{"gog", "slack", "notion"} {
+	for _, name := range []string{gwServerName, "slack", "notion"} {
 		r := bad[name]
 		if r.State != mcpJoinUnverifiable || !strings.Contains(r.Evidence, "receipt corrupt") {
 			t.Errorf("pi-stack-bad %s = %+v, want unverifiable on a corrupt receipt", name, r)
@@ -339,7 +339,7 @@ func TestStatusMCPRowsJSONGolden(t *testing.T) {
 	}
 	golden := `[
   {
-    "name": gwServerName,
+    "name": "` + gwServerName + `",
     "registered": "yes",
     "sandbox": "pi-stack-proj",
     "state": "preloaded",

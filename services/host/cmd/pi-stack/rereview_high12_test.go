@@ -242,7 +242,7 @@ func f2Env() shellEnv {
 			switch name {
 			case "op":
 				return f2Op, nil
-			case gwServerName:
+			case "gog":
 				return f2Gog, nil
 			case "sbx":
 				return "/usr/bin/sbx", nil

@@ -329,7 +329,7 @@ func TestRegisterServers_FailuresReturnError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "failed to register") || !strings.Contains(err.Error(), gwServerName) {
 		t.Errorf("expected a joined registration error mentioning gog, got %v", err)
 	}
-	if !strings.Contains(buf.String(), "FAILED to register: gog") {
+	if !strings.Contains(buf.String(), "FAILED to register: "+gwServerName) {
 		t.Errorf("expected the per-server failure line, got:\n%s", buf.String())
 	}
 }

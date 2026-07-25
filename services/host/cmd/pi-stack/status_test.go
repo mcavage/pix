@@ -309,7 +309,7 @@ func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
 	env := shellEnv{
 		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
 		run: func(name string, args ...string) (string, error) {
-			if name == gwServerName {
+			if name == "gog" {
 				return "", fmt.Errorf("not authed")
 			}
 			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
@@ -383,7 +383,7 @@ func TestStatusGogNeedsAuth(t *testing.T) {
 	env := shellEnv{
 		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
 		run: func(name string, args ...string) (string, error) {
-			if name == gwServerName {
+			if name == "gog" {
 				return "", fmt.Errorf("not authed")
 			}
 			return "", nil
@@ -394,7 +394,7 @@ func TestStatusGogNeedsAuth(t *testing.T) {
 	var out bytes.Buffer
 	renderStatus(cfg, "default", env, &out, false)
 	s := out.String()
-	if !strings.Contains(s, "gog") || !strings.Contains(s, "needs auth (run "+gogSetupHint+")") {
+	if !strings.Contains(s, "workspace") || !strings.Contains(s, "needs auth (run "+gogSetupHint+")") {
 		t.Errorf("expected gog needs-auth integrations line, got:\n%s", s)
 	}
 }

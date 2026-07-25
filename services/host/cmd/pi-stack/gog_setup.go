@@ -359,8 +359,8 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// same-run rollback.
 	snap := snapshotGogRegistration(env)
 	if snap.state == gogRegUnknown {
-		return fmt.Errorf("could not confirm the prior "+gwServerName+" registration (sbx mcp ls/get did not resolve cleanly): "+
-			"refusing to authorize or overwrite it until this is readable; check the sbx daemon (sbx mcp status), "+
+		return fmt.Errorf("could not confirm the prior " + gwServerName + " registration (sbx mcp ls/get did not resolve cleanly): " +
+			"refusing to authorize or overwrite it until this is readable; check the sbx daemon (sbx mcp status), " +
 			"then re-run pi-stack gworkspace setup")
 	}
 

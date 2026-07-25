@@ -435,7 +435,7 @@ func TestGogSetup_MissingGogCLI(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error when gog is not installed")
 	}
-	if !strings.Contains(out.String(), "brew install gog") && !strings.Contains(out.String(), "gogcli.sh") {
+	if !strings.Contains(out.String(), gwInstallCmd) {
 		t.Errorf("expected exact install guidance, got %q", out.String())
 	}
 }
