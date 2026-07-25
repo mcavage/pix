@@ -206,6 +206,14 @@ func runRun(argv []string) {
 	if msg := stalePackReattachWarning(cfg, o, plan.Reattach); msg != "" {
 		fmt.Fprintln(os.Stderr, msg)
 	}
+	// Product gap #2: reattach honesty. Separate from stalePackReattachWarning
+	// (which only speaks to skills/bin drift from a pack switch). This checks
+	// MCP attachment PRECISELY, via the launcher's own receipt, regardless of
+	// WHY a desired server might not be attached (config change, pack change,
+	// explicit --mcp, or no receipt at all). Never auto-loads, only reports.
+	if msg := mcpReattachWarning(cfg, o, plan.Reattach); msg != "" {
+		fmt.Fprintln(os.Stderr, msg)
+	}
 	if plan.RmFirst {
 		if err := applyReplaceRm(defaultShellEnv(), plan, o.Name); err != nil {
 			fmt.Fprintf(os.Stderr, "pi-stack run: %v\n", err)
@@ -540,11 +548,18 @@ func readSandboxPackMarker(workspace string) string {
 //   - no false warning when the sandbox already carries the current pack
 //     (marker == active pack), and
 //   - a warning after `pack rm` (marker set, active empty): the old sandbox
-//     still has the removed pack's create-time mcp/bin/skills baked in.
+//     still has the removed pack's create-time bin/skills baked in.
 //
 // No marker => no warning: a sandbox created before markers existed (or
 // pack-less) gives us nothing to compare, and guessing from the active pack
 // alone is exactly what produced the old false positives.
+//
+// Deliberately says nothing about MCP: mcpReattachWarning (product gap #2)
+// owns that claim PRECISELY, via the launcher's own receipt, for every
+// desired server regardless of whether a pack changed. Folding a vaguer
+// "mcp may be stale" guess in here would duplicate that check and could
+// contradict it (e.g. this warning firing on pack drift while the receipt
+// proves every MCP server is in fact already attached).
 func stalePackReattachWarning(cfg *config.Config, o runOpts, reattaching bool) string {
 	if !reattaching || o.Replace {
 		return ""
@@ -561,9 +576,103 @@ func stalePackReattachWarning(cfg *config.Config, o runOpts, reattaching bool) s
 		return ""
 	}
 	if active == "" {
-		return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q (since detached); its mcp/bin/skills are still attached until you recreate: %s", created, runReplaceCommand(o.Workspace))
+		return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q (since detached); its bin/skills are still attached until you recreate: %s", created, runReplaceCommand(o.Workspace))
 	}
-	return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q, not the active pack %q; the active pack's mcp/bin/skills won't attach until you recreate: %s", created, active, runReplaceCommand(o.Workspace))
+	return fmt.Sprintf("pi-stack: re-attaching without --replace — this sandbox was created with pack %q, not the active pack %q; the active pack's bin/skills won't attach until you recreate: %s", created, active, runReplaceCommand(o.Workspace))
+}
+
+// desiredMCPUniverse computes the FULL set of MCP server names this
+// invocation would preload at CREATE: cfg.MCP, the active/transient pack's
+// integration servers (packMcpNames), and any explicit --mcp, deduped via
+// allPreloadedMCP. It is the read-only twin of applyPackToLaunch's pack-fold
+// step (pack.go) used ONLY for this comparison: a re-attach never mounts a
+// pack (skills/bin/knowledge are create-time only) and must never trigger
+// applyPackToLaunch's mount/kit-synthesis side effects just to answer "what
+// would this invocation want". A pack that fails to load degrades to
+// cfg.MCP+o.MCP alone here (the same as it always did before packs existed)
+// rather than blocking a reattach comparison on a broken pack.
+func desiredMCPUniverse(cfg *config.Config, o runOpts) []string {
+	names := append([]string(nil), cfg.MCP...)
+	if root := activePackRoot(cfg.Pack, o.Pack); root != "" {
+		if p, err := loadPack(root); err == nil {
+			names = append(names, packMcpNames(p)...)
+		}
+	}
+	names = append(names, o.MCP...)
+	return allPreloadedMCP(names)
+}
+
+// mcpLoadCommand returns the exact `pi-stack mcp load NAME [WORKSPACE]`
+// command for name, workspace-qualified the same way runReplaceCommand is
+// (bare for ".", quoted otherwise) so the two recovery commands read
+// consistently.
+func mcpLoadCommand(name, workspace string) string {
+	if workspace == "" || workspace == "." {
+		return "pi-stack mcp load " + name
+	}
+	return "pi-stack mcp load " + name + " " + shellQuoteArg(workspace)
+}
+
+// mcpLoadHints joins one mcpLoadCommand per name (mcp load only ever attaches
+// one server at a time, so N missing names need N commands).
+func mcpLoadHints(names []string, workspace string) string {
+	cmds := make([]string, 0, len(names))
+	for _, n := range names {
+		cmds = append(cmds, mcpLoadCommand(n, workspace))
+	}
+	return strings.Join(cmds, "; ")
+}
+
+// mcpReattachWarning is `pi-stack run`'s reattach honesty check (product gap
+// #2): on a RE-ATTACH (not a create, not --replace) it compares the DESIRED
+// MCP universe for THIS invocation (desiredMCPUniverse) against the
+// sandbox's own launcher receipt (sandboxmcpstate.go) and warns, BEFORE
+// reattaching, about any desired name the receipt cannot PROVE is attached
+// (a positive preloaded/loaded claim in a valid receipt is proof, anything
+// else is a gap). It never auto-loads, only reports, and always offers
+// BOTH exact remediation paths: a live `pi-stack mcp load NAME <workspace>`
+// per missing name, or `pi-stack run <workspace> --replace` to recreate with
+// the current context. A receipt entry for a name that is no longer desired
+// (dropped from config since create) is legitimate history and is never
+// mentioned; only desired names are ever checked.
+//
+// No desired servers at all -> nothing to check, silent. An unresolvable
+// state dir, an absent receipt, or an unverifiable one (corrupt / wrong
+// schema / wrong sandbox identity) all mean the SAME honest thing for every
+// desired name: attachment cannot be verified from here.
+func mcpReattachWarning(cfg *config.Config, o runOpts, reattaching bool) string {
+	if !reattaching || o.Replace {
+		return ""
+	}
+	desired := desiredMCPUniverse(cfg, o)
+	if len(desired) == 0 {
+		return ""
+	}
+	stateDir, err := sandboxMCPStateDirFn()
+	if err != nil {
+		return fmt.Sprintf("pi-stack: re-attaching without --replace: could not resolve local state (%v), so attachment for %s cannot be verified. Attach live: %s. Or recreate with current context: %s",
+			err, strings.Join(desired, ", "), mcpLoadHints(desired, o.Workspace), runReplaceCommand(o.Workspace))
+	}
+	receipt, rstatus, _ := readSandboxMCPReceipt(stateDir, o.Name)
+	if rstatus.Unverifiable() {
+		return fmt.Sprintf("pi-stack: re-attaching without --replace: this sandbox's MCP receipt is %s, so attachment for %s cannot be verified. Attach live: %s. Or recreate with current context: %s",
+			rstatus.String(), strings.Join(desired, ", "), mcpLoadHints(desired, o.Workspace), runReplaceCommand(o.Workspace))
+	}
+	if rstatus == sandboxMCPStateAbsent {
+		return fmt.Sprintf("pi-stack: re-attaching without --replace: no MCP receipt for this sandbox, so attachment for %s cannot be verified. Attach live: %s. Or recreate with current context: %s",
+			strings.Join(desired, ", "), mcpLoadHints(desired, o.Workspace), runReplaceCommand(o.Workspace))
+	}
+	var missing []string
+	for _, name := range desired {
+		if receiptClaim(receipt, rstatus, name) == "" {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("pi-stack: re-attaching without --replace: %s not proven attached to this sandbox (no receipted preload or load). Attach live: %s. Or recreate with current context: %s",
+		strings.Join(missing, ", "), mcpLoadHints(missing, o.Workspace), runReplaceCommand(o.Workspace))
 }
 
 // runReplaceCommand returns the exact `pi-stack run [WORKSPACE] --replace`

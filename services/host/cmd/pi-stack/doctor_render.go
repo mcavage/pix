@@ -72,7 +72,21 @@ func (r *report) render(w io.Writer, verbose bool) {
 	if !verbose && collapsedAny {
 		fmt.Fprintln(w, "(concise output; run `pi-stack doctor --verbose` for full group detail)")
 	}
+	// Security disclosure, printed only when there is something to disclose
+	// (at least one MCP server configured) so a bare/no-MCP report stays
+	// notice-free. Concise on purpose: full detail lives in SECURITY.md, this
+	// is the reminder at the one place a user checks MCP health.
+	if len(r.mcp) > 0 {
+		fmt.Fprintln(w, mcpHostTrustNotice)
+	}
 }
+
+// mcpHostTrustNotice is the two-fact disclosure for local command/container
+// MCP servers: they run on the host, outside sandbox isolation, with your
+// host-user privileges, and anything they return can end up in the
+// conversation sent to your model provider. Shared verbatim by doctor's
+// footer and setup's completion summary so the two surfaces never drift.
+const mcpHostTrustNotice = "Note: local/container MCP servers run on the host, outside the sandbox, with your host-user privileges. Content they return can be included in the conversation sent to your model provider. Details: SECURITY.md."
 
 // cfgServices / cfgMCP are filled by runDoctorCmd; keep them on the report so
 // render stays config-free. Stored at build time.

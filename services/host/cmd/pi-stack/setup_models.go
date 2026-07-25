@@ -393,6 +393,14 @@ func printSetupSummary(cfg *config.Config, env shellEnv, out io.Writer, models s
 	} else {
 		fmt.Fprintln(out, "Core provisioned (keys + knowledge + pack): not yet — finish the ✗ items above.")
 	}
+
+	// Same two-fact disclosure doctor's footer prints, gated the same way (only
+	// when at least one MCP server is configured) so a bare setup stays
+	// notice-free. Kept as ONE shared constant (mcpHostTrustNotice,
+	// doctor_render.go) so the two surfaces can never say different things.
+	if len(cfg.MCP) > 0 {
+		fmt.Fprintln(out, mcpHostTrustNotice)
+	}
 }
 
 // isValidOllamaTag rejects malformed, empty, leading-dash, path-separator,
