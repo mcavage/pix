@@ -1,12 +1,10 @@
 package main
 
-// release_convention_test.go — pins the RELEASE CONVENTION: versions are
-// stamped by CI (.github/workflows/publish.yml computes 0.0.<run_number> on
-// every push to main, stamps Makefile/package.json/pi-kit/spec.yaml, and
-// commits the bump back). A feature branch therefore NEVER hand-bumps those
-// files — they must stay mutually consistent at the base version, and the
-// workflow must keep stamping all three, or a consumer's pinned-tag invariant
-// (Makefile VERSION == package.json version == spec.yaml image tag) breaks.
+// release_convention_test.go pins the release convention: CI starts from the
+// committed semver, selects the next patch whose v<version> tag is unused,
+// stamps Makefile/package.json/pi-kit/spec.yaml, and commits the published
+// version back. The three files must remain mutually consistent so a consumer's
+// pinned image and kit tag always identify the same release.
 
 import (
 	"os"
@@ -46,15 +44,24 @@ func mustReadRepoFile(t *testing.T, root string, rel ...string) string {
 	return string(b)
 }
 
-// TestPublishWorkflowStampsVersions proves the CI workflow is the ONE place
-// versions come from: it computes the version from the run number and stamps
-// (then commits back) all three version-bearing files.
+// TestPublishWorkflowStampsVersions proves CI starts at the committed version,
+// never overwrites an existing release tag, and stamps all lockstep files.
 func TestPublishWorkflowStampsVersions(t *testing.T) {
 	root := repoRootForRelease(t)
 	wf := mustReadRepoFile(t, root, ".github", "workflows", "publish.yml")
 
-	if !strings.Contains(wf, "0.0.${{ github.run_number }}") {
-		t.Error("publish.yml must compute the version from github.run_number (0.0.<run_number>)")
+	for _, selector := range []string{
+		`require('./package.json').version`,
+		`refs/tags/v${version}`,
+		`patch=$((patch + 1))`,
+		`fetch-depth: 0`,
+	} {
+		if !strings.Contains(wf, selector) {
+			t.Errorf("publish.yml missing version-selection invariant %q", selector)
+		}
+	}
+	if strings.Contains(wf, "0.0.${{ github.run_number }}") {
+		t.Error("publish.yml must not reset Pix releases to 0.0.<run_number>")
 	}
 	for _, stamp := range []string{
 		"Makefile",         // sed on VERSION ?=
@@ -72,8 +79,7 @@ func TestPublishWorkflowStampsVersions(t *testing.T) {
 
 // TestVersionFilesAgreeAtBase pins the pinned-tag invariant on the WORKING
 // TREE: the three version-bearing files always carry the SAME version (the
-// last CI stamp) — a feature branch hand-bumping any one of them (or all
-// three) would either desync them or collide with CI's next run_number stamp.
+// last CI stamp) — changing only one would desync the release identity.
 func TestVersionFilesAgreeAtBase(t *testing.T) {
 	root := repoRootForRelease(t)
 

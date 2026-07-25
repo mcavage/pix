@@ -1,17 +1,15 @@
 name: publish
 
-# Every push to main auto-publishes a NEW immutable version. CI stamps
-# 0.0.<run_number> into the tree, builds multi-arch (amd64 + arm64), pushes
-# :<version> + :latest, then commits the bumped version files back to main
-# ([skip ci] so the bump doesn't retrigger this workflow).
+# Every push to main auto-publishes a NEW immutable version. CI starts with the
+# version committed in package.json (0.1.0 for the first Pix release), then
+# increments its patch component until it finds an unused v<version> git tag.
+# It builds multi-arch (amd64 + arm64), pushes :<version> + :latest, then commits
+# the selected version into all lockstep files ([skip ci] prevents recursion).
 #
 # Why: sbx caches materialized templates PER TAG NAME and won't re-pull a tag it
 # already has. A moving tag (:edge/:latest) therefore goes stale until you evict
-# it by hand. A brand-new version tag every push sidesteps that entirely — sbx
-# has never seen :0.0.N, so `sbx run pix --kit git+...` (which reads the
-# pinned image out of pi-kit/spec.yaml on main) always pulls a fresh image with
-# NO --template flag and NO `sbx template rm`. spec.yaml on main always points at
-# the latest published version because the bump job commits it back.
+# it by hand. A brand-new version tag every push sidesteps that entirely. The
+# committed spec.yaml always points at the latest successfully published image.
 #
 # Multi-arch native runners (no QEMU) — the image is chromium-heavy. Each arch is
 # pushed by digest, then merged into one multi-arch tag.
@@ -46,10 +44,28 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
-      # run_number is monotonic per workflow and never resets → a clean, unique,
-      # always-increasing patch number with no state to track.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
       - id: v
-        run: echo "version=0.0.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+        name: Select the next unused patch version
+        run: |
+          set -euo pipefail
+          base="$(node -p "require('./package.json').version")"
+          if ! [[ "$base" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "package.json version is not semver: $base" >&2
+            exit 1
+          fi
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          patch="${BASH_REMATCH[3]}"
+          version="$base"
+          while git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; do
+            patch=$((patch + 1))
+            version="${major}.${minor}.${patch}"
+          done
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing Pix $version (base: $base)"
 
   # Real npm-resolution smoke for the two vendored runtime patches
   # (scripts/patches/*.mjs). tests/pi-patches.test.mjs (the PR gate) proves the
