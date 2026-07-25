@@ -51,6 +51,19 @@ type shellEnv struct {
 	// returns (output, timedOut, err). Nil in tests, which fall back to run so
 	// they stay hermetic; defaultShellEnv wires runWithTimeout.
 	probe func(name string, args ...string) (out string, timedOut bool, err error)
+	// hostBinary resolves the canonical pi-stack-host path — the SAME answer
+	// registration (registerServers/findHostBinary) uses — so the MCP probe's
+	// canonical-executable gate compares against it (trustedHostBinaryExecPath)
+	// and classification reads the same `mcp --list` source of truth. Nil in
+	// tests that don't exercise it; those paths fail CLOSED.
+	hostBinary func() (string, error)
+	// getwd returns the workspace directory doctor derives the current
+	// sandbox name from (deriveSandboxName — the same canonical helper run/
+	// mcp load use). Nil = no workspace sandbox context.
+	getwd func() (string, error)
+	// stateDir resolves the launcher state root holding the per-sandbox MCP
+	// receipts (config.StateDir). Nil = no receipt context.
+	stateDir func() (string, error)
 }
 
 // probeTimeout bounds every registered-command probe so doctor can never wedge
@@ -155,6 +168,12 @@ func defaultShellEnv() shellEnv {
 		},
 		flock: withFlock,
 		probe: runWithTimeout,
+		// Late-bound through the package var so a test that swaps
+		// hostBinaryResolver is still honored by any defaultShellEnv() created
+		// before the swap.
+		hostBinary: func() (string, error) { return hostBinaryResolver() },
+		getwd:      os.Getwd,
+		stateDir:   config.StateDir,
 	}
 }
 
