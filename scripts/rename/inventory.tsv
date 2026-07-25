@@ -14,8 +14,8 @@
 #
 # columns: path  disposition  occurrences  frozen  pathmv  note
 #
-# totals: 287 files, 4693 occurrences
-#   rename 200 | manual 76 | keep 6 | keep-historical 5 | unclassified 0
+# totals: 288 files, 4709 occurrences
+#   rename 200 | manual 77 | keep 6 | keep-historical 5 | unclassified 0
 .dockerignore	rename	1	0	no	build and packaging metadata
 .github/ISSUE_TEMPLATE/bug_report.md	rename	3	0	no	CI workflows and issue templates
 .github/ISSUE_TEMPLATE/config.yml	rename	2	0	no	CI workflows and issue templates
@@ -193,6 +193,7 @@ services/host/cmd/pi-stack/sandbox.go	manual	40	0	yes	identity: the pi-stack-* p
 services/host/cmd/pi-stack/sandbox_test.go	manual	20	0	yes	identity: composes the task sandbox name (AC-P0-406)
 services/host/cmd/pi-stack/sandboxmcpstate.go	manual	24	0	yes	identity: validates and joins sandbox names in the MCP receipt store
 services/host/cmd/pi-stack/sandboxmcpstate_test.go	manual	31	0	yes	identity: composes the task sandbox name (AC-P0-406)
+services/host/cmd/pi-stack/sandboxname_test.go	manual	8	0	yes	the identity pins themselves (AC-P0-406): composed names and the truncation threshold are updated DELIBERATELY in U-W3.09, never by the driver
 services/host/cmd/pi-stack/sbxargs.go	rename	16	0	yes	Go source: import paths, message prose and test literals; compiler- and test-backstopped
 services/host/cmd/pi-stack/secret.go	rename	30	0	yes	Go source: import paths, message prose and test literals; compiler- and test-backstopped
 services/host/cmd/pi-stack/secret_sync.go	rename	15	0	yes	Go source: import paths, message prose and test literals; compiler- and test-backstopped
@@ -225,7 +226,7 @@ services/host/cmd/pi-stack/status_test.go	manual	29	0	yes	identity: composes or 
 services/host/cmd/pi-stack/syncedrefs.go	rename	2	0	yes	Go source: import paths, message prose and test literals; compiler- and test-backstopped
 services/host/cmd/pi-stack/syncedrefs_test.go	rename	8	0	yes	Go source: import paths, message prose and test literals; compiler- and test-backstopped
 services/host/cmd/pi-stack/task.go	manual	110	0	yes	identity: task sandbox name (pi-stack-t-), branch prefix (pi-stack/), per-repo state dirs (AC-P0-406/407/408)
-services/host/cmd/pi-stack/task_test.go	manual	118	0	yes	identity: composes the task sandbox name (AC-P0-406)
+services/host/cmd/pi-stack/task_test.go	manual	126	0	yes	identity: composes the task sandbox name (AC-P0-406)
 services/host/cmd/pi-stack/task_ux_test.go	manual	27	0	yes	identity: constructs the .pi-stack/ workspace marker path (Go/TS boundary, FF10)
 services/host/cmd/pi-stack/templates/com.pi-stack.serve.plist.tmpl	manual	7	0	yes	identity: the launchd label and systemd unit name themselves; the file NAMES also move
 services/host/cmd/pi-stack/templates/pi-stack-serve.service.tmpl	manual	6	0	yes	identity: the launchd label and systemd unit name themselves; the file NAMES also move
