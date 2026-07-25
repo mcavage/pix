@@ -210,43 +210,43 @@ func mcpAttachGuidance(name string) string {
 }
 
 // mcpAttachCheck renders one registered server's sandbox-attachment evidence
-// from the launcher receipt. The receipt records SUCCESSFUL pi-stack actions
-// (writeCreateReceipt after a create, appendLoadReceipt after a live load) —
-// that is the ONLY thing that may claim ready here. Config membership is never
-// attachment. Anything the receipt cannot vouch for (no entry, no receipt, or
-// a receipt that is corrupt / wrong schema / wrong sandbox identity) is
-// UNVERIFIABLE with the exact repair commands in the evidence — never a false
-// claim in either direction.
+// from the launcher receipt, via the SHARED join row (joinMCPSandboxRow,
+// mcpjoin.go) so doctor and status derive attachment truth from ONE path.
+// The receipt records SUCCESSFUL pi-stack actions (writeCreateReceipt after a
+// create, appendLoadReceipt after a live load) — that is the ONLY thing that
+// may claim ready here. Config membership is never attachment. Anything the
+// receipt cannot vouch for (no entry, no receipt, or a receipt that is
+// corrupt / wrong schema / wrong sandbox identity) is UNVERIFIABLE with the
+// exact repair commands in the evidence — never a false claim in either
+// direction. Registration is already confirmed by the caller (mcpRegYes).
 func mcpAttachCheck(name string, ctx mcpSandboxContext) check {
 	label := name + " attachment"
 	guidance := mcpAttachGuidance(name)
-	if ctx.status.Unverifiable() {
-		det := fmt.Sprintf("launcher receipt for sandbox %s is %s — not trusting it; %s",
-			ctx.sandbox, ctx.status, guidance)
-		return check{label: label, verdict: verdictUnverifiable, detail: det,
-			evidence: "receipt " + ctx.status.String() + "; " + guidance}
-	}
-	if ctx.status == sandboxMCPStateOK && ctx.receipt != nil {
-		if containsStr(ctx.receipt.Preloaded, name) {
-			return check{label: label, verdict: verdictReady,
-				detail:   "preloaded by pi-stack at create (sandbox " + ctx.sandbox + ")",
-				evidence: "preloaded by pi-stack at create"}
-		}
-		for _, l := range ctx.receipt.Loads {
-			if l.Name == name {
-				return check{label: label, verdict: verdictReady,
-					detail:   "loaded by pi-stack (pi-stack mcp load, sandbox " + ctx.sandbox + ")",
-					evidence: "loaded by pi-stack"}
-			}
-		}
+	row := joinMCPSandboxRow(name, mcpRegYes, ctx.sandbox, ctx.receipt, ctx.status)
+	switch row.State {
+	case mcpJoinPreloaded:
+		return check{label: label, verdict: verdictReady,
+			detail:   "preloaded by pi-stack at create (sandbox " + ctx.sandbox + ")",
+			evidence: row.Evidence}
+	case mcpJoinLoaded:
+		return check{label: label, verdict: verdictReady,
+			detail:   "loaded by pi-stack (pi-stack mcp load, sandbox " + ctx.sandbox + ")",
+			evidence: row.Evidence}
+	case mcpJoinRegisteredNotAttached:
 		return check{label: label, verdict: verdictUnverifiable,
 			detail:   fmt.Sprintf("registered, but pi-stack has no record of attaching it to %s — %s", ctx.sandbox, guidance),
-			evidence: "no receipt entry; " + guidance}
+			evidence: row.Evidence}
 	}
-	// sandboxMCPStateAbsent: nothing recorded for this sandbox at all.
+	// mcpJoinUnverifiable: the receipt itself is absent or untrustworthy.
+	if ctx.status == sandboxMCPStateAbsent {
+		return check{label: label, verdict: verdictUnverifiable,
+			detail:   fmt.Sprintf("no launcher receipt for sandbox %s — attachment unverified; %s", ctx.sandbox, guidance),
+			evidence: row.Evidence}
+	}
 	return check{label: label, verdict: verdictUnverifiable,
-		detail:   fmt.Sprintf("no launcher receipt for sandbox %s — attachment unverified; %s", ctx.sandbox, guidance),
-		evidence: "receipt absent; " + guidance}
+		detail: fmt.Sprintf("launcher receipt for sandbox %s is %s — not trusting it; %s",
+			ctx.sandbox, ctx.status, guidance),
+		evidence: row.Evidence}
 }
 
 // mcpRegisteredIn reports registration truth from the bounded `sbx mcp ls`
