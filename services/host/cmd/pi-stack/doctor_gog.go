@@ -147,7 +147,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 	// only check that proves the real registration — account, op-refs path, and
 	// op/gog binaries all exactly as the gateway will spawn them.
 	if argv, ok := registeredGogCommand(env); ok {
-		g.checks = append(g.checks, check{label: "registration", note: true,
+		g.checks = append(g.checks, check{label: "registration", note: true, verdict: verdictUnverifiable,
 			detail: "probing the sbx-registered command: " + redactRegisteredCommand(argv)})
 
 		// Read-only hardening as EVIDENCE: the registered argv must carry the
@@ -194,7 +194,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 	// 1. gog CLI installed (the reconstruction probe uses it). Not installed is
 	// optional-NOT-CONFIGURED: an expected absence (a note), never a failure.
 	if _, err := env.lookPath("gog"); err != nil {
-		g.checks = append(g.checks, check{label: "gog CLI", note: true,
+		g.checks = append(g.checks, check{label: "gog CLI", note: true, verdict: verdictUnverifiable,
 			detail: "not installed — optional; set up Google Workspace with: " + gogSetupHint})
 		return g
 	}
@@ -223,16 +223,16 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 		fallbackWhy = "best-effort (couldn't read sbx MCP registrations — check the sbx daemon: sbx mcp status)"
 	}
 	g.checks = append(g.checks,
-		check{label: "verifying", note: true,
+		check{label: "verifying", note: true, verdict: verdictUnverifiable,
 			detail: fallbackWhy + " — verifies " + acctShown + " via " + refsShown},
-		check{label: "note", note: true,
+		check{label: "note", note: true, verdict: verdictUnverifiable,
 			detail: "must match the sbx-registered gog command (config.toml gog_account + op-refs.env)"})
 
 	if acct == "" {
 		// 2'. No account configured — optional-NOT-CONFIGURED: an expected
 		// absence, a note (no ✗, no repair TODO — the setup command lives in the
 		// detail for whoever wants to opt in).
-		g.checks = append(g.checks, check{label: "account", note: true,
+		g.checks = append(g.checks, check{label: "account", note: true, verdict: verdictUnverifiable,
 			detail: "not configured (gog_account unset) — set up: " + gogSetupHint})
 		g.checks = append(g.checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
@@ -246,7 +246,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 		g.checks = append(g.checks,
 			check{label: "account", verdict: verdictUnverifiable,
 				detail: acct + " set (unconfirmed vs registration)"},
-			check{label: "op-refs", note: true,
+			check{label: "op-refs", note: true, verdict: verdictUnverifiable,
 				detail: "op-refs.env not found — only needed if the gateway can't unlock gog's keyring headlessly"})
 		g.checks = append(g.checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
@@ -494,8 +494,8 @@ func parseGogCommandJSON(env shellEnv, out string) ([]string, bool) {
 // so `pi-stack run` preloads it at sandbox create?
 func gogAttachCheck(cfg *config.Config) check {
 	if mcpConfigured(cfg, "gog") {
-		return check{label: "attached", note: true, detail: "in the configured MCP set — preloaded at sandbox create"}
+		return check{label: "attached", note: true, verdict: verdictReady, detail: "in the configured MCP set — preloaded at sandbox create"}
 	}
-	return check{label: "attached", note: true,
+	return check{label: "attached", note: true, verdict: verdictUnverifiable,
 		detail: "run `pi-stack config set mcp gog` to attach it"}
 }

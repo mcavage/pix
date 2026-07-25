@@ -22,7 +22,7 @@ func serviceCheck(label string, port int, up bool, startCmd string, isEnabled bo
 	if isEnabled {
 		return check{label: label, verdict: verdictTodo, detail: fmt.Sprintf(":%d down", port), todo: startCmd}
 	}
-	return check{label: label, note: true, detail: fmt.Sprintf(":%d down (not in configured services)", port)}
+	return check{label: label, note: true, verdict: verdictUnverifiable, detail: fmt.Sprintf(":%d down (not in configured services)", port)}
 }
 
 // memCaptureCheck asks the running memory daemon (:11435) whether automatic fact
@@ -35,12 +35,12 @@ func memCaptureCheck() check {
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://127.0.0.1:11435", bytes.NewReader(body))
 	if err != nil {
-		return check{label: "fact capture", note: true, detail: "could not query daemon health"}
+		return check{label: "fact capture", note: true, verdict: verdictUnverifiable, detail: "could not query daemon health"}
 	}
 	req.Header.Set("content-type", "application/json")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return check{label: "fact capture", note: true, detail: "could not query daemon health"}
+		return check{label: "fact capture", note: true, verdict: verdictUnverifiable, detail: "could not query daemon health"}
 	}
 	defer res.Body.Close()
 	var parsed struct {
@@ -51,7 +51,7 @@ func memCaptureCheck() check {
 		} `json:"result"`
 	}
 	if json.NewDecoder(io.LimitReader(res.Body, 1<<16)).Decode(&parsed) != nil {
-		return check{label: "fact capture", note: true, detail: "could not read daemon health"}
+		return check{label: "fact capture", note: true, verdict: verdictUnverifiable, detail: "could not read daemon health"}
 	}
 	m := parsed.Result.WatcherModel
 	if parsed.Result.Capture {

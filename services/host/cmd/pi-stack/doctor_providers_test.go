@@ -173,8 +173,12 @@ func TestProvidersGroup_JSON(t *testing.T) {
 	if core.Requirement != "core" || core.Verdict != "ready" || core.Todo != "" {
 		t.Errorf("model key JSON = %+v", core)
 	}
+	// openai is a not-configured informational note: it stays a note (never
+	// blocks/counts as outstanding) but its VERDICT must be truthful —
+	// unverifiable, not a blanket ready, since "not configured" is not a
+	// verified-working claim (DX JSON finding 2).
 	openai := byLabel["openai"]
-	if !openai.Note || openai.Verdict != "ready" || openai.Todo != "" {
+	if !openai.Note || openai.Verdict != "unverifiable" || openai.Todo != "" || openai.State != "info" {
 		t.Errorf("openai JSON (note) = %+v", openai)
 	}
 	if openai.Detail != "not configured" {

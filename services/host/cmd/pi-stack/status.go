@@ -207,8 +207,15 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	// fact; `sbx mcp get <name>` inspects the registered definition and sbx has
 	// no per-sandbox inspect API). When the listing is unavailable MCPServers
 	// stays nil and render falls back to the bare names.
+	//
+	// Probed whenever sbx is on PATH — NOT gated on currentIntent being
+	// non-empty (finding #3): a discovered sandbox's own receipt can name a
+	// server that current cfg/pack intent no longer does (a transient `run
+	// --pack` mix-in, or a since-switched pack's historical MCP), and that
+	// receipt-only name still needs registration evidence for its per-sandbox
+	// row below even when the host-global summary has nothing to show.
 	mcpLsOut, mcpLsOK := "", false
-	if len(currentIntent) > 0 && sbxOnPath {
+	if sbxOnPath {
 		// BOUNDED (probeRun): timeout/failure -> registration unknowable
 		// (mcpRegUnknown everywhere below), never a hang or a false "no".
 		if o, timedOut, err := probeRun(env, "sbx", "mcp", "ls"); err == nil && !timedOut {
@@ -262,46 +269,51 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	// same one doctor renders from): each discovered pi-stack sandbox's rows
 	// come from its launcher receipt joined with the registration evidence
 	// above. Discovery unavailable -> one unverifiable row per configured
-	// server (sandbox unknown), never a false "no sandboxes".
-	if len(currentIntent) > 0 {
-		if !sbxLsOK {
-			for _, m := range currentIntent {
+	// server (sandbox unknown), never a false "no sandboxes". NOT gated on
+	// currentIntent being non-empty (finding #3): with nothing configured and
+	// discovery unavailable the loop below is simply a no-op (nothing to
+	// render as unverifiable), but with discovery AVAILABLE every discovered
+	// box's own receipt is still consulted — a receipt-only name surfaces even
+	// when current cfg/pack intent is empty.
+	if !sbxLsOK {
+		for _, m := range currentIntent {
+			st.MCPRows = append(st.MCPRows, mcpSandboxRow{
+				Name: m, Registered: regOf(m).String(), Sandbox: "",
+				State:    mcpJoinUnverifiable,
+				Evidence: "sandbox discovery unavailable (`sbx ls`) — cannot enumerate pi-stack sandboxes",
+			})
+		}
+	} else {
+		for _, b := range boxes {
+			receipt, rstatus := statusSandboxReceipt(env, b.Name)
+			// Per-sandbox universe (finding #2): currentIntent extended with
+			// any name THIS sandbox's own receipt independently proves
+			// provenance for — a transient `run --pack` mix-in or a
+			// since-switched pack's historical MCP stays visible here even
+			// after cfg.MCP/the active pack moved on (including when
+			// currentIntent itself is EMPTY — finding #3). receiptOnly names
+			// are labeled in evidence as sandbox provenance, never current
+			// intent.
+			names, receiptOnly := mcpConfiguredUniverse(currentIntent, receipt, nil)
+			for _, row := range joinMCPSandboxRows(names, regOf, b.Name, receipt, rstatus) {
+				evidence := row.Evidence
+				if receiptOnly[row.Name] {
+					evidence += "; sandbox provenance only (from this sandbox's receipt) — " + row.Name + " is not part of the current cfg.MCP/pack"
+				}
 				st.MCPRows = append(st.MCPRows, mcpSandboxRow{
-					Name: m, Registered: regOf(m).String(), Sandbox: "",
-					State:    mcpJoinUnverifiable,
-					Evidence: "sandbox discovery unavailable (`sbx ls`) — cannot enumerate pi-stack sandboxes",
+					Name: row.Name, Registered: row.Registered.String(),
+					Sandbox: row.Sandbox, State: row.State, Evidence: evidence,
 				})
-			}
-		} else {
-			for _, b := range boxes {
-				receipt, rstatus := statusSandboxReceipt(env, b.Name)
-				// Per-sandbox universe (finding #2): currentIntent extended with
-				// any name THIS sandbox's own receipt independently proves
-				// provenance for — a transient `run --pack` mix-in or a
-				// since-switched pack's historical MCP stays visible here even
-				// after cfg.MCP/the active pack moved on. receiptOnly names are
-				// labeled in evidence as sandbox provenance, never current intent.
-				names, receiptOnly := mcpConfiguredUniverse(currentIntent, receipt, nil)
-				for _, row := range joinMCPSandboxRows(names, regOf, b.Name, receipt, rstatus) {
-					evidence := row.Evidence
-					if receiptOnly[row.Name] {
-						evidence += "; sandbox provenance only (from this sandbox's receipt) — " + row.Name + " is not part of the current cfg.MCP/pack"
+				// registered-not-attached is a POSITIVE gap (a valid receipt
+				// lacks the entry): the exact live-attach command is the TODO.
+				// Unverifiable rows get guidance in their evidence only — status
+				// does not KNOW they are unattached, so no repair claim.
+				if row.State == mcpJoinRegisteredNotAttached {
+					td := "pi-stack mcp load " + row.Name + " [DIR]"
+					if b.Dir != "" {
+						td = "pi-stack mcp load " + row.Name + " " + b.Dir
 					}
-					st.MCPRows = append(st.MCPRows, mcpSandboxRow{
-						Name: row.Name, Registered: row.Registered.String(),
-						Sandbox: row.Sandbox, State: row.State, Evidence: evidence,
-					})
-					// registered-not-attached is a POSITIVE gap (a valid receipt
-					// lacks the entry): the exact live-attach command is the TODO.
-					// Unverifiable rows get guidance in their evidence only — status
-					// does not KNOW they are unattached, so no repair claim.
-					if row.State == mcpJoinRegisteredNotAttached {
-						td := "pi-stack mcp load " + row.Name + " [DIR]"
-						if b.Dir != "" {
-							td = "pi-stack mcp load " + row.Name + " " + b.Dir
-						}
-						st.Todos = append(st.Todos, td)
-					}
+					st.Todos = append(st.Todos, td)
 				}
 			}
 		}

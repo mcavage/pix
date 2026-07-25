@@ -378,14 +378,20 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	// timing out is a different, diagnosable host state (sbxSecretsError) and
 	// must not render the "you're likely inside the sandbox" note.
 	r.sbxAbsent = sbxState == sbxSecretsAbsent
+	// sbxOnPath is tracked INDEPENDENTLY of sbxOK (finding #4): sbx being on
+	// PATH but `sbx secret ls` failing/timing out (sbxSecretsError) is a
+	// DIFFERENT state from sbx being entirely absent, and the MCP/gog groups
+	// must still get to try their OWN probe (`sbx mcp ls`) rather than being
+	// falsely gated off by an unrelated secret-probe failure.
+	sbxOnPath := !r.sbxAbsent
 
 	// MCP registrations (`sbx mcp ls`), listed once and reused by the gog group
-	// (its gateway registration) and the MCP group below. sbxOK (sbx PRESENT +
-	// `sbx secret ls` ok) is tracked SEPARATELY from mcpOK (`sbx mcp ls` ok): on
-	// the host the CLI is present but the MCP listing can fail (gateway off), and
-	// that must not be reported as "sbx unavailable".
+	// (its gateway registration) and the MCP group below. Gated on sbxOnPath,
+	// NOT sbxOK: `sbx secret ls` failing must never prevent this independent
+	// probe from running — on the host the CLI can be present with the
+	// secret listing erroring while the MCP gateway is perfectly reachable.
 	mcpOut, mcpOK := "", false
-	if sbxOK {
+	if sbxOnPath {
 		// BOUNDED (probeRun): a hung `sbx mcp ls` degrades to mcpOK=false —
 		// every dependent check renders unverifiable — never a wedged doctor.
 		if out, timedOut, err := probeRun(env, "sbx", "mcp", "ls"); err == nil && !timedOut {
@@ -393,19 +399,23 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 		}
 	}
 
-	// (a) provider secrets — proxy-injected, never in the VM.
+	// (a) provider secrets — proxy-injected, never in the VM. Genuinely gated
+	// on sbxOK: this group's OWN probe (`sbx secret ls`) is the one that
+	// failed, so it stays unverifiable regardless of sbxOnPath/mcpOK.
 	r.groups = append(r.groups, providersGroup(sbxOut, sbxOK))
 	// (b) ollama + the configured watcher/embed models.
 	r.groups = append(r.groups, ollamaGroup(cfg, env))
 	// (c) memory service on :11435.
 	r.groups = append(r.groups, memoryGroup(cfg, env))
 	// (d) gog: Google Workspace via a host-side stdio MCP server the sbx gateway
-	// spawns (the slack pattern).
-	r.groups = append(r.groups, gogGroup(cfg, env, mcpOut, mcpOK, sbxOK))
+	// spawns (the slack pattern). Passed sbxOnPath (not sbxOK) as its "sbx
+	// present" signal so a secret-probe failure never masquerades as sbx
+	// being off PATH.
+	r.groups = append(r.groups, gogGroup(cfg, env, mcpOut, mcpOK, sbxOnPath))
 	// (d2) Secrets (1Password) — its OWN top-level group, honest and separate.
 	r.groups = append(r.groups, secretsGroup(cfg, env))
-	// (e) MCP servers registered with sbx.
-	r.groups = append(r.groups, mcpGroup(cfg, env, mcpOut, mcpOK, sbxOK))
+	// (e) MCP servers registered with sbx. Same sbxOnPath signal as gog.
+	r.groups = append(r.groups, mcpGroup(cfg, env, mcpOut, mcpOK, sbxOnPath))
 
 	return r
 }

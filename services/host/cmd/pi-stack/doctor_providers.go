@@ -108,10 +108,10 @@ func presentModelProviders(sbxOut string) string {
 // itself a gap once the core check above is satisfied.
 func providerInfoCheck(key string, sbxOut string, sbxOK bool) check {
 	if !sbxOK {
-		return check{label: key, note: true, detail: "cannot verify (sbx unavailable here)"}
+		return check{label: key, note: true, verdict: verdictUnverifiable, detail: "cannot verify (sbx unavailable here)"}
 	}
 	if grepWord(sbxOut, key) {
-		return check{label: key, note: true, detail: "set"}
+		return check{label: key, note: true, verdict: verdictReady, detail: "set"}
 	}
-	return check{label: key, note: true, detail: "not configured"}
+	return check{label: key, note: true, verdict: verdictUnverifiable, detail: "not configured"}
 }
