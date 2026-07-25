@@ -24,12 +24,21 @@ func sbxModelKeyState(env shellEnv) (present, probeOK bool) {
 	if err != nil {
 		return false, false
 	}
+	return anyModelKeyInOutput(out), true
+}
+
+// anyModelKeyInOutput reports whether out (the text of `sbx secret ls`) shows
+// any of the model provider keys set. Pure — the SINGLE definition of "what
+// counts as a present model key", shared by sbxModelKeyState (which owns the
+// live sbx probe) and doctor's providers group (which reuses an
+// already-fetched probe result) so the two can never diverge.
+func anyModelKeyInOutput(out string) bool {
 	for _, k := range modelProviders {
 		if grepWord(out, k) {
-			return true, true
+			return true
 		}
 	}
-	return false, true
+	return false
 }
 
 // sbxSecretsProbeState distinguishes WHY `sbx secret ls` couldn't answer, so

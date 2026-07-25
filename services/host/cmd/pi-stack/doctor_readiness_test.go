@@ -289,14 +289,17 @@ func TestDoctorJSON_NonBlockingVerdicts(t *testing.T) {
 	}
 }
 
-// TestRunDoctor_NothingBlocksYet pins the S04 compatibility contract: until
-// later stories classify checks as core, a full doctor run — even a cold one
-// with everything missing — never blocks (exit stays 0, as before).
+// TestRunDoctor_NothingBlocksYet pins the S04 compatibility contract for a
+// COLD run (sbx absent, nothing installed): it never blocks (exit stays 0, as
+// before). S04 kept every check optional; S06 adds the providers group's ONE
+// core check ("model key"), but with sbx absent that check degrades to
+// unverifiable — positively-confirmed-zero (the only thing that would block
+// it) requires sbx to actually answer, which a cold run by definition cannot.
 func TestRunDoctor_NothingBlocksYet(t *testing.T) {
 	f := fakeEnv{present: map[string]bool{}, output: map[string]string{}, ports: map[int]bool{}}
 	r := runDoctor(defaultCfg(), f.env())
 	if r.blocking() {
-		t.Error("no group is classified core yet; a cold run must not block")
+		t.Error("a cold (sbx-absent) run must never block")
 	}
 	if len(r.todos()) == 0 {
 		t.Error("a cold run should still surface todos")
@@ -307,11 +310,24 @@ func TestRunDoctor_NothingBlocksYet(t *testing.T) {
 	}
 	for _, g := range v.Groups {
 		for _, c := range g.Checks {
-			if c.Requirement != "optional" {
-				t.Errorf("check %q requirement = %q; S04 keeps every existing check optional", c.Label, c.Requirement)
+			// The providers group's "model key" check is the one deliberate
+			// exception (S06): it is core, but sbx-absent makes it unverifiable,
+			// which never blocks — exercised directly below.
+			if c.Requirement != "optional" && !(g.Title == "Providers / keys (proxy-injected, never in the VM)" && c.Label == "model key") {
+				t.Errorf("check %q requirement = %q; only the S06 model-key check is core", c.Label, c.Requirement)
 			}
 			if c.Evidence == "" && !c.Note {
 				t.Errorf("check %q has empty evidence", c.Label)
+			}
+		}
+	}
+	for _, g := range v.Groups {
+		if g.Title != "Providers / keys (proxy-injected, never in the VM)" {
+			continue
+		}
+		for _, c := range g.Checks {
+			if c.Label == "model key" && c.Verdict != "unverifiable" {
+				t.Errorf("cold run's model-key check verdict = %q, want unverifiable", c.Verdict)
 			}
 		}
 	}
