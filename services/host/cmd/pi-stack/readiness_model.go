@@ -16,23 +16,28 @@ type ollamaProbe struct {
 	daemonUp  bool
 	listOut   string
 	listOK    bool
+	// endpoint is the resolved Ollama endpoint the dial actually targeted, so
+	// every derived check can name it (effectiveOllamaEndpoint is the only
+	// place that resolution happens).
+	endpoint ollamaEndpoint
 }
 
-// probeOllama runs lookPath, a :11434 daemon dial, and `ollama list` — daemon
+// probeOllamaAt runs lookPath, a daemon dial at the RESOLVED endpoint, and
+// `ollama list` — daemon
 // dial and list are skipped entirely when ollama isn't even on PATH, so a
 // host with no Ollama pays for exactly one failed lookPath call. The
 // `ollama list` exec is BOUNDED (probeRun: hard timeout + output cap), so a
 // wedged ollama classifies as list-unverified rather than hanging the caller.
-func probeOllama(env shellEnv) ollamaProbe {
+func probeOllamaAt(env shellEnv, ep ollamaEndpoint) ollamaProbe {
 	if env.lookPath == nil {
 		return ollamaProbe{}
 	}
 	if _, err := env.lookPath("ollama"); err != nil {
 		return ollamaProbe{}
 	}
-	p := ollamaProbe{installed: true}
+	p := ollamaProbe{installed: true, endpoint: ep}
 	if env.dial != nil {
-		p.daemonUp = env.dial(11434)
+		p.daemonUp = env.dial(ep.Port)
 	}
 	if out, timedOut, err := probeRun(env, "ollama", "list"); err == nil && !timedOut {
 		p.listOut, p.listOK = out, true
@@ -149,7 +154,7 @@ func computeUnverifiableModels(readinesses []ModelReadiness) []missingModel {
 // `ollama list` call itself failed.
 func ollamaVerifyFailureReason(p ollamaProbe) string {
 	if !p.daemonUp {
-		return "the Ollama daemon is not running (:11434 down)"
+		return "the Ollama daemon is not answering at " + p.endpoint.String()
 	}
 	return "`ollama list` did not succeed"
 }

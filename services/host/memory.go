@@ -861,7 +861,11 @@ func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 			}
 			return jsonObj{"ok": true, "vector": hasEmb, "capture": capture, "captureReason": reason, "watcherModel": memWatcherModel()}, nil
 		},
-		"stats": func(p jsonObj) (any, error) { return store.stats(profileFromParams(p)), nil },
+		// identity is the APPLICATION-LEVEL readiness probe: it proves the
+		// process holding this port is ours, at this version, over this db.
+		// A bare dial proves none of that (see identity.go).
+		"identity": func(jsonObj) (any, error) { return memoryIdentity(hasEmb).obj(), nil },
+		"stats":    func(p jsonObj) (any, error) { return store.stats(profileFromParams(p)), nil },
 		"recall": func(p jsonObj) (any, error) {
 			hits, err := store.recall(getStr(p, "query"), clampInt(p["limit"], 0, 0, 1000),
 				clampInt(p["charBudget"], 0, 0, 1000000), getStr(p, "kind"), getStr(p, "project"), profileFromParams(p))

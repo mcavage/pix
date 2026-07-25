@@ -1,5 +1,7 @@
 package main
 
+import "strings"
+
 // doctorSchemaVersion is bumped whenever the JSON shape gains/changes fields a
 // machine consumer might depend on. v1 (implicit — no schema_version field)
 // carried verdict/profile/todos/groups/services/mcp/sbx_absent with per-check
@@ -7,7 +9,10 @@ package main
 // blocking flag, and the structured per-check readiness fields
 // (group/requirement/verdict/evidence, plus note); the v1 fields are all
 // RETAINED unchanged for compatibility.
-const doctorSchemaVersion = 2
+// v3 adds the flat readiness `checks` array (axis/requirement/verdict/
+// evidence/fix/duration_ms/endpoint) and the `exit` sibling that equals the
+// process exit code. Additive only: every v1/v2 key keeps its name.
+const doctorSchemaVersion = 3
 
 // doctorJSON is the machine-readable doctor report (behind --json).
 type doctorJSON struct {
@@ -25,6 +30,72 @@ type doctorJSON struct {
 	Services  []string          `json:"services"`
 	MCP       []string          `json:"mcp"`
 	SbxAbsent bool              `json:"sbx_absent"`
+	// Checks is the flat, axis-keyed readiness array every readiness command
+	// emits identically, and Exit is the process exit code this same data
+	// produced. A consumer reading `exit` and a consumer reading the rows can
+	// never reach different conclusions.
+	Checks []readinessCheckJSON `json:"checks"`
+	Exit   int                  `json:"exit"`
+}
+
+// readinessCheckJSON is the shared per-check JSON row. It is emitted by every
+// readiness command's --json (doctor, status), so one parser reads them all.
+type readinessCheckJSON struct {
+	Axis        string   `json:"axis"`
+	Label       string   `json:"label"`
+	Requirement string   `json:"requirement"`
+	Verdict     string   `json:"verdict"`
+	Evidence    string   `json:"evidence"`
+	Fix         []string `json:"fix"`
+	DurationMS  int64    `json:"duration_ms"`
+	Endpoint    string   `json:"endpoint,omitempty"`
+	Note        bool     `json:"note,omitempty"`
+}
+
+// readinessChecksJSON renders any set of checks into the shared array. Only a
+// VERIFIED failure carries a fix, mirroring report.todos().
+func readinessChecksJSON(checks []check) []readinessCheckJSON {
+	out := make([]readinessCheckJSON, 0, len(checks))
+	for _, c := range checks {
+		row := readinessCheckJSON{
+			Axis:        string(c.axisOf()),
+			Label:       strings.TrimSpace(c.label),
+			Requirement: string(c.req()),
+			Verdict:     string(c.result()),
+			Evidence:    c.evidenceString(),
+			Fix:         []string{},
+			DurationMS:  c.duration.Milliseconds(),
+			Endpoint:    c.endpoint,
+			Note:        c.note,
+		}
+		if v := c.result(); (v == verdictTodo || v == verdictDenied) && c.todo != "" {
+			row.Fix = []string{c.todo}
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// snapshot projects the report onto the shared Snapshot: every check inherits
+// its group's axis unless it carries its own (the Ollama and service groups
+// already stamp per-check axes). This is what lets doctor derive its exit code
+// from the SAME function status and setup use.
+func (r *report) snapshot() Snapshot {
+	s := Snapshot{checks: map[Axis][]check{}}
+	for _, g := range r.groups {
+		for _, c := range g.checks {
+			a := c.axisOf()
+			if a == "" {
+				a = g.axis
+			}
+			c.axis = a
+			if _, seen := s.checks[a]; !seen {
+				s.order = append(s.order, a)
+			}
+			s.checks[a] = append(s.checks[a], c)
+		}
+	}
+	return s
 }
 
 type doctorGroupJSON struct {
@@ -79,6 +150,9 @@ func (r *report) jsonView(profile string) doctorJSON {
 		MCP:           r.mcp,
 		SbxAbsent:     r.sbxAbsent,
 	}
+	snap := r.snapshot()
+	v.Checks = readinessChecksJSON(snap.All())
+	v.Exit = snap.ExitCode()
 	for _, g := range r.groups {
 		gj := doctorGroupJSON{Title: g.title}
 		for _, c := range g.checks {

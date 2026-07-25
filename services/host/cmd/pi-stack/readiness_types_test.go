@@ -218,9 +218,11 @@ func TestRenderGlyphs(t *testing.T) {
 	}
 }
 
-// TestDoctorJSONSchemaV2 asserts the exact v2 contract: schema_version 2, the
-// top-level blocking flag, and per-check group/label/requirement/verdict/
-// evidence/todo alongside the retained v1 state/detail compatibility fields.
+// TestDoctorJSONSchemaV2 asserts the exact v2 contract fields still hold at
+// the current schema version (now 3, which is purely additive over v2: the
+// `checks`/`exit` fields): the top-level blocking flag, and per-check
+// group/label/requirement/verdict/evidence/todo alongside the retained v1
+// state/detail compatibility fields.
 func TestDoctorJSONSchemaV2(t *testing.T) {
 	r := &report{
 		groups: []group{{title: "G1", checks: []check{
@@ -232,8 +234,8 @@ func TestDoctorJSONSchemaV2(t *testing.T) {
 		services: []string{"memory"},
 	}
 	v := r.jsonView("")
-	if v.SchemaVersion != 2 {
-		t.Fatalf("schema_version = %d, want 2", v.SchemaVersion)
+	if v.SchemaVersion != 3 {
+		t.Fatalf("schema_version = %d, want 3", v.SchemaVersion)
 	}
 	if !v.Blocking || v.Verdict != "blocked" {
 		t.Errorf("core denied -> (blocking=%v, verdict=%q), want (true, blocked)", v.Blocking, v.Verdict)
@@ -271,7 +273,7 @@ func TestDoctorJSONSchemaV2(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	for _, want := range []string{
-		`"schema_version":2`, `"blocking":true`, `"group":"G1"`,
+		`"schema_version":3`, `"blocking":true`, `"group":"G1"`,
 		`"requirement":"core"`, `"verdict":"denied"`, `"evidence":"probe: fine"`,
 		`"state":"ok"`, `"detail":"fine"`,
 	} {

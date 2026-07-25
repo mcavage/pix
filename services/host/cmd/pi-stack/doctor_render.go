@@ -98,18 +98,21 @@ func (r *report) cfgMCP() string {
 	return strings.Join(r.mcp, " ")
 }
 
-// glyph maps a rendered checkState to its marker: ✓ verified ready, ✗ a
-// verified todo/denied, ⚠ unverifiable, · an annotation.
+// glyph maps a rendered checkState to its marker. It is a thin adapter over
+// the shared vocabulary in readiness_render.go: doctor renders core-weight
+// glyphs (its ✗ historically covered every verified failure), so the mapping
+// goes through verdictGlyph with a core requirement rather than spelling the
+// markers a second time.
 func glyph(s checkState) string {
 	switch s {
 	case stateOK:
-		return "✓"
+		return verdictGlyph(requirementCore, verdictReady, false)
 	case stateTODO:
-		return "✗"
+		return verdictGlyph(requirementCore, verdictTodo, false)
 	case stateWarn:
-		return "⚠"
+		return glyphTodoOptional
 	default:
-		return "·"
+		return verdictGlyph(requirementCore, verdictReady, true)
 	}
 }
 

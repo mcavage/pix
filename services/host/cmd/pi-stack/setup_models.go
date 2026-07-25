@@ -87,7 +87,7 @@ func runOllamaPull(env shellEnv, tag string) error {
 // computeMissingModels), verify once, and return the truthful outcome. It
 // never installs Ollama and never pulls without consent.
 func setupLocalModels(cfg *config.Config, env shellEnv, in io.Reader, out io.Writer, interactive, pullFlag bool) setupModelsOutcome {
-	p := probeOllama(env)
+	p := probeOllamaAt(env, effectiveOllamaEndpoint(cfg, env))
 	rs := []ModelReadiness{
 		modelReadiness("watcher", cfg.MemoryWatcherModel, "fact capture", p, requirementOptional),
 		modelReadiness("embed", cfg.MemoryEmbedModel, "semantic recall", p, requirementOptional),
@@ -171,7 +171,7 @@ func setupLocalModels(cfg *config.Config, env shellEnv, in io.Reader, out io.Wri
 	}
 	if len(attempted) > 0 {
 		// Verify ONCE after all pulls, never per tag.
-		p2 := probeOllama(env)
+		p2 := probeOllamaAt(env, effectiveOllamaEndpoint(cfg, env))
 		for _, tag := range attempted {
 			switch {
 			case p2.listOK && modelPulled(p2.listOut, tag):

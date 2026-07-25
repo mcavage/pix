@@ -277,7 +277,10 @@ func TestDoctorCmd_RealExitCodes(t *testing.T) {
 		{name: "one_key_present", sbxOut: "anthropic\n", sbxExit: 0, wantExit: 0},
 		{name: "zero_keys_confirmed", sbxOut: "", sbxExit: 0, wantExit: 1},
 		{name: "usage_error", argv: []string{"--bogus"}, wantExit: 2},
-		{name: "probe_failed", sbxExit: 7, wantExit: 0},
+		// A failed `sbx secret ls` leaves the CORE model-key axis
+		// unverifiable, which is exit 3 under the shared contract
+		// (AC-P0-207): doctor no longer collapses "could not check" into 0.
+		{name: "probe_failed", sbxExit: 7, wantExit: 3},
 	}
 
 	for _, tc := range cases {

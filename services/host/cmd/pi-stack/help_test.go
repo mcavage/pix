@@ -347,7 +347,10 @@ func TestDoctorJSONView(t *testing.T) {
 		for _, c := range g.Checks {
 			nChecks++
 			switch c.State {
-			case "ok", "todo", "info":
+			case "ok", "todo", "info", "warn":
+				// warn is additive over v1 (doctor_json.go's stateName): an
+				// unverifiable axis (e.g. "ollama in sandbox" with no sandbox
+				// yet) renders warn, never a silent ok/todo/info substitute.
 				seen[c.State] = true
 			default:
 				t.Errorf("check %q has invalid state %q", c.Label, c.State)

@@ -552,9 +552,9 @@ func mcpRowText(r mcpSandboxRow) string {
 // glyph renders a bool as the shared ✓/✗ status glyphs.
 func okGlyph(ok bool) string {
 	if ok {
-		return "✓"
+		return verdictGlyph(requirementCore, verdictReady, false)
 	}
-	return "✗"
+	return verdictGlyph(requirementCore, verdictTodo, false)
 }
 
 // bundleGitStatus returns a short git-drift summary for a bundle dir: "clean",
