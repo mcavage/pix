@@ -443,7 +443,7 @@ pattern works for prompts, extensions, environment, and network rules. Docker's
 kit format is documented in the
 [sbx kit docs](https://docs.docker.com/ai/sandboxes/customize/kits/).
 
-Private company context is a **pack**, not a build-time overlay:
+Private company context is a **pack**:
 
 - **skills, `capabilities.json` routing, `[[proxy]]` wrappers, knowledge**, all
   in the pack; `pi-stack pack use <path>` mounts them at runtime, no rebuild.

@@ -146,7 +146,7 @@ Provider keys (sbx proxy)
   anthropic ok   openai ok   google ok   github ok
 
 Integrations
-  gog (Google Workspace)   account set, needs auth  (run `gog auth login`)
+  gog (Google Workspace)   account set, needs auth  (run `pi-stack gog setup`)
   slack                    not configured
 
 Sandboxes
@@ -277,7 +277,7 @@ keychain instead).
 Done. Saved ~/.config/pi-stack/config.toml.
 
   Configured:  memory
-  Needs auth:  gog (Google Workspace) - run `gog auth login`
+  Needs auth:  gog (Google Workspace) - run `pi-stack gog setup`
   Deferred:    knowledge base, slack
 
 You are NOT fully ready yet: no provider key is set. Set one, then run:
@@ -397,7 +397,8 @@ with existing tests bound to the old behavior. Split these out, each with tests:
   after it. The recovery path must include `pi-stack mcp register`.
 - **gog is "needs auth", not "configured", until a real auth probe passes** (P0-4):
   setting an email does not complete OAuth. Detect usable auth; otherwise label
-  it deferred and print the `gog auth login` next step.
+  it deferred and print the `pi-stack gog setup` next step (the guided path;
+  never a raw `gog auth login` recipe).
 - `help --all` branch (P0-2): **shipped** — tiered help shows Core by default and
   reveals the rest with `--all` (and per-noun `help <verb>`).
 

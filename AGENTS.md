@@ -78,11 +78,11 @@ Verb tree (confirmed in `cmd/pi-stack/main.go`):
 - `pi-stack help [--all] [verb]` — tiered help: Core sections by default, `--all` (or per-noun `help <verb>`) reveals the rest; `pi-stack help --man` renders the man page (`man` still works as an alias).
 - `pi-stack version` — print the stamped version
 
-Shared JSON-RPC client is `cmd/pi-stack/rpcclient.go`. (The global `--profile` flag and the `profile` verb were REMOVED — the active pack is the context now.)
+Shared JSON-RPC client is `cmd/pi-stack/rpcclient.go`. The active pack is the context — there is no separate profile flag or verb.
 
 Runtime config lives at `~/.config/pi-stack/config.toml` (or `$PI_STACK_CONFIG`, `$XDG_CONFIG_HOME/pi-stack/config.toml`). It is the SINGLE source of truth, managed by `pi-stack config set <key> <value>` — never hand-edit it. Save() persists ONLY explicit deviations from defaults (sparse encode + omitempty) so a future default change reaches users — never petrifies resolved defaults into the file. Keys: `gog_account`, `mcp`, `services`, `memory_watcher_model`, `memory_embed_model`, `ollama_bridge_model` (the local model the sandbox bridge exposes + the router's local option; `pi-stack run` writes it to `<workspace>/.pi-stack/ollama-bridge.model` for the in-VM `ollama-bridge` to read — no sandbox env editing), `pack` (active pack dir). `pi-stack config get <key>` is the machine-readable read half (lists space-separated) — it is how the Makefile's operational targets source these same values, so there is no second config file to drift.
 
-**Profiles are REMOVED — the active pack is the context.** The old `profile` concept (config `[profiles.*]` override tables, `active_profile`, the `--profile` flag, `PI_STACK_PROFILE`, `config.Resolve`, the `profile` verb) is deleted. Switching work<->personal is switching the active pack (`pi-stack pack use`); v2 swaps ALL facets (MCP/bin/config/knowledge/memory scope), not just skills. Memory (:11435) stays a single shared store (the in-store scope column is retained, dormant); knowledge scoping is per-workspace via `.pi-stack/knowledge.scope`. `docs/design/profiles.md` is historical; `docs/design/packs.md` + `packs-v2.md` + `packs-v2-impl.md` are current.
+**The active pack is the context.** Switching work<->personal is switching the active pack (`pi-stack pack use`) — it swaps ALL facets (MCP/bin/config/knowledge/memory scope), not just skills. Memory (:11435) stays a single shared store (the in-store scope column is retained, dormant); knowledge scoping is per-workspace via `.pi-stack/knowledge.scope`. See `docs/design/packs.md` + `packs-v2.md` + `packs-v2-impl.md` for the current design.
 
 ## go-plugin host architecture
 
