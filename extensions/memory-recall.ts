@@ -20,10 +20,17 @@ import { request as httpsRequest } from "node:https";
 import { Type } from "typebox";
 
 const MEMORY_URL = process.env.MEMORY_URL ?? "http://host.docker.internal:11435";
-const TIMEOUT_MS = Number(process.env.MEMORY_TIMEOUT_MS ?? 2000);
+// Named, exported defaults are the timeout/clock seam: production always runs
+// on these unless MEMORY_TIMEOUT_MS/MEMORY_COMMAND_TIMEOUT_MS override them, and
+// tests can assert the real production defaults instantly (no waiting) while
+// separately exercising the timeout *behavior* with tiny injected values via
+// the same env vars, instead of sleeping through the real default magnitudes.
+export const DEFAULT_MEMORY_TIMEOUT_MS = 2000;
+export const DEFAULT_MEMORY_COMMAND_TIMEOUT_MS = 10000;
+const TIMEOUT_MS = Number(process.env.MEMORY_TIMEOUT_MS ?? DEFAULT_MEMORY_TIMEOUT_MS);
 // /recall is a user-invoked command, not a per-turn hook, it can afford to wait
 // longer than the silent auto-recall without slowing anything down.
-const COMMAND_TIMEOUT_MS = Number(process.env.MEMORY_COMMAND_TIMEOUT_MS ?? 10000);
+const COMMAND_TIMEOUT_MS = Number(process.env.MEMORY_COMMAND_TIMEOUT_MS ?? DEFAULT_MEMORY_COMMAND_TIMEOUT_MS);
 
 const safe = async <T>(fn: () => Promise<T>): Promise<T | undefined> => {
 	try {

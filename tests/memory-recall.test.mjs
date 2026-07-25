@@ -238,19 +238,23 @@ test("a JSON-RPC error surfaces a visible error instead of '(nothing)'", async (
 	assert.match(notes[0].msg, /database unavailable/);
 });
 
+// The command-timeout MAGNITUDE (200ms here vs. the real 10s production
+// default) is the timeout/clock seam: MEMORY_COMMAND_TIMEOUT_MS already lets a
+// test swap in a tiny value instead of waiting out the real default, so this
+// stays a genuine client-side timeout without a multi-second real-time wait.
 test("a slow daemon past the command timeout surfaces a visible error, not a hang", async (t) => {
 	const server = http.createServer((req, res) => {
 		// Never respond, forces the client-side timeout to fire.
 	});
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
-	const mod = await loadWithEnv({ MEMORY_URL, MEMORY_COMMAND_TIMEOUT_MS: "200" });
+	const mod = await loadWithEnv({ MEMORY_URL, MEMORY_COMMAND_TIMEOUT_MS: "20" });
 	const handler = getRecallHandler(mod);
 	const notes = [];
 	const start = Date.now();
 	await handler("anything", fakeCtx(notes));
 	const elapsed = Date.now() - start;
-	assert.ok(elapsed < 5000, `expected the 200ms command timeout to fire quickly, took ${elapsed}ms`);
+	assert.ok(elapsed < 2000, `expected the 20ms command timeout to fire quickly, took ${elapsed}ms`);
 	assert.equal(notes.length, 1);
 	assert.equal(notes[0].level, "error");
 	assert.match(notes[0].msg, /\/recall failed/i);
@@ -259,7 +263,23 @@ test("a slow daemon past the command timeout surfaces a visible error, not a han
 // ── (4) /recall uses the higher command timeout, independent of the 2s ─────
 // per-turn auto-recall timeout; a slow daemon that /recall tolerates must not
 // silently change the before_agent_start hook's budget.
-test("/recall survives a delay well past the default 2s auto-recall timeout", async (t) => {
+//
+// Production always ships with a 2s auto-recall default and a 10s command
+// default (asserted directly below, no waiting required); this behavioral
+// test only needs the *ratio* between the two timeouts and the daemon delay,
+// so it uses the MEMORY_TIMEOUT_MS/MEMORY_COMMAND_TIMEOUT_MS seam to shrink
+// all three proportionally instead of sleeping through the real 3s+ it would
+// take to prove the same thing against the actual production magnitudes.
+test("the real production timeout defaults are unchanged", async () => {
+	const mod = await loadWithEnv({ MEMORY_URL: "http://127.0.0.1:1" });
+	assert.equal(mod.DEFAULT_MEMORY_TIMEOUT_MS, 2000, "auto-recall default must stay 2000ms");
+	assert.equal(mod.DEFAULT_MEMORY_COMMAND_TIMEOUT_MS, 10000, "command default must stay 10000ms");
+});
+
+test("/recall survives a delay well past the (shrunk) auto-recall timeout", async (t) => {
+	const AUTO_RECALL_TIMEOUT_MS = 10; // stands in for production's 2000ms default
+	const COMMAND_TIMEOUT_MS = 100; // stands in for production's 10000ms default
+	const DAEMON_DELAY_MS = 25; // > AUTO_RECALL_TIMEOUT_MS, well under COMMAND_TIMEOUT_MS
 	const server = http.createServer((req, res) => {
 		let body = "";
 		req.on("data", (c) => (body += c));
@@ -268,14 +288,16 @@ test("/recall survives a delay well past the default 2s auto-recall timeout", as
 			setTimeout(() => {
 				res.writeHead(200, { "content-type": "application/json" });
 				res.end(JSON.stringify({ jsonrpc: "2.0", id: parsed.id, result: { hits: [] } }));
-			}, 3000); // longer than the 2000ms auto-recall default
+			}, DAEMON_DELAY_MS);
 		});
 	});
 	t.after(() => server.close());
 	const MEMORY_URL = await listen(server);
-	// MEMORY_TIMEOUT_MS left at its 2000ms default; only the command path
-	// should be able to outlast the 3s delay.
-	const mod = await loadWithEnv({ MEMORY_URL, MEMORY_COMMAND_TIMEOUT_MS: "8000" });
+	const mod = await loadWithEnv({
+		MEMORY_URL,
+		MEMORY_TIMEOUT_MS: String(AUTO_RECALL_TIMEOUT_MS),
+		MEMORY_COMMAND_TIMEOUT_MS: String(COMMAND_TIMEOUT_MS),
+	});
 	const handler = getRecallHandler(mod);
 	const notes = [];
 	await handler("anything", fakeCtx(notes));
