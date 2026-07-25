@@ -34,12 +34,13 @@ PI_STACK_BIN ?= $(CURDIR)/out/pi-stack
 
 # MCP enablement for `make run` (config.toml `mcp`, `pi-stack config set mcp
 # <name>`). NOTE: `make run` execs `sbx run` DIRECTLY, so MCP_FLAGS attaches every
-# listed server STATICALLY (`--static-mcp <name>`) — the dev flow gets all tools.
-# The per-server static/dynamic resolution (default local stdio static, remote
-# catalog dynamic; overridable via `mcp_static`/`mcp_dynamic`) lives in the
-# `pi-stack run` launcher, which is what consumers use. sbx's local data-plane
-# gateway serves them (no SBX_MCP_URL). Attach one to an ALREADY-RUNNING sandbox
-# with `pi-stack mcp load <name>`. `MCP=all` = everything registered.
+# listed server STATICALLY (`--static-mcp <name>`) at sandbox CREATE — the dev
+# flow gets all tools. Every configured server preloads this way, with no
+# eager/lazy or static/dynamic split (the retired `mcp_static`/`mcp_dynamic`
+# knobs are gone): the `pi-stack run` launcher resolves the exact same set via
+# allPreloadedMCP, which is what consumers use. sbx's local data-plane gateway
+# serves them (no SBX_MCP_URL). Attach one to an ALREADY-RUNNING sandbox with
+# `pi-stack mcp load <name>`. `MCP=all` = everything registered.
 MCP         ?= $(shell "$(PI_STACK_BIN)" config get mcp 2>/dev/null)
 MCP_FLAGS   = $(foreach server,$(MCP),--static-mcp $(server))
 # The local stdio MCP servers `make mcp-register` can register (the ones you
@@ -286,7 +287,7 @@ doctor: require-launcher ## Show models + each optional integration: set up? ser
 	model() { command -v ollama >/dev/null 2>&1 && ollama list 2>/dev/null | grep -q "^$$1\b" && echo "pulled" || echo "TODO: ollama pull $$1 (or make pull-models)"; }; \
 	echo "Config (config.toml via 'pi-stack config get' — the single source of truth):"; \
 	printf "  %-9s %s\n" "SERVICES" "$(SERVICES)   (make serve runs these)"; \
-	printf "  %-9s %s\n" "MCP"      "$(if $(strip $(MCP)),$(MCP),<empty: dynamic discovery only>)   (make run attaches these)"; \
+	printf "  %-9s %s\n" "MCP"      "$(if $(strip $(MCP)),$(MCP),<empty: none configured>)   (configured MCPs preload at sandbox creation via make run)"; \
 	echo ""; \
 	echo "Models / providers (proxy-injected, never in the VM):"; \
 	printf "  %-9s %s\n" "anthropic" "$$(sset anthropic)"; \

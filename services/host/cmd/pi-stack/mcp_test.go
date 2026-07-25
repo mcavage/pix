@@ -96,8 +96,8 @@ func TestAddArgs_GogBare(t *testing.T) {
 
 // TestRegisterServers_GogNoOpRefsBare: gateway on, op + op-refs ABSENT, gog
 // present + account set -> gog registers DIRECTLY (bare command, no op wrapper)
-// with the OAuth note. gog uses OAuth (gog auth login), never op-refs, so the
-// note must NOT mention op-refs.
+// with the OAuth note. gog uses guided OAuth (`pi-stack gog setup`), never
+// op-refs, so the note must NOT mention op-refs.
 func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 	f := fakeEnv{
 		present: map[string]bool{"gog": true}, // no op, no sbx
@@ -126,8 +126,9 @@ func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 
 // TestRegisterServers_GogOnlyNoSeed (R5-1/R5-2): a gog-only clean state with op
 // NOT resolvable must NOT create op-refs.env at the XDG path and must NOT print a
-// "seeded" line. gog authenticates via OAuth (gog auth login), never op-refs, so
-// seeding one contradicts setup Step 4's "No file is created" copy.
+// "seeded" line. gog authenticates via guided OAuth (`pi-stack gog setup`),
+// never op-refs, so seeding one contradicts setup Step 4's "No file is
+// created" copy.
 func TestRegisterServers_GogOnlyNoSeed(t *testing.T) {
 	home := t.TempDir()
 	env := (fakeEnv{
