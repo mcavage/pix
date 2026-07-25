@@ -99,11 +99,9 @@ bootstrapping a model key when none is set at all (resolving your 1Password
 refs into sbx, steering you to 1Password on a TTY).  Provider keys,
 .BR serve ,
 and the memory service are host-side prerequisites.  For automation and CI,
-.B pi-stack onboard
-applies deterministic host config from flags without a sandbox or a prompt and
-without the agent handoff
-.B pi-stack setup
-does.
+.B "pi-stack setup \-\-no\-agent"
+applies deterministic host config from flags without a sandbox, a prompt, or
+the agent handoff.
 .SH CREDENTIAL MODEL
 There are two distinct kinds of secret, and they live in different places.
 .PP
@@ -168,39 +166,10 @@ names.
 removes every pi-stack sandbox;
 .B \-\-except
 keeps one (e.g. the box you are in).
-.SS onboard
-.TP
-.BR "pi-stack onboard" " [" \-\-account " " email "] [" \-\-knowledge " " path-or-url "] [" \-\-mcp " " name "] [" \-\-model " " ollama-model "] [" \-\-apply "] [" \-\-yes "]"
-Host-side onboarding: the deterministic HOST configuration and the flag-driven
-path for automation and CI, with NO agent handoff.
-.B pi-stack run
-never auto-onboards on its own.  It stays out of your way (it only auto-
-provisions a bare-minimum model key when none is set at all). Use
-.B pi-stack setup
-for the guided, in-session flow, or say "onboard me" to the agent inside a
-running sandbox.
-.B \-\-account
-sets the Google Workspace account; valid only with \fB\-\-google\-workspace\fR.
-.B \-\-knowledge
-scaffolds or selects the global OKF bundle.
-.B \-\-mcp
-enables an allowlisted MCP server (repeatable).
-.B \-\-model
-sets the ollama-bridge model.
-.B \-\-apply
-applies a pending
-.B .pi-stack/onboarding.json
-in the current directory (the control-plane proposal the in-sandbox onboarding
-agent writes), under a confirmation gate.
-.B \-\-yes
-(alias
-.BR \-\-non-interactive )
-never prompts.
 .SS setup
 .TP
-.BR "pi-stack setup" " [" DIR "] [" \-\-replace "] [" \-\-pull\-models "] [" \-\-account " " email "] [" \-\-knowledge " " path-or-url "] [" \-\-mcp " " name "] [" \-\-model " " ollama-model "] [" \-\-yes "]"
-Actually sets you up: a real, two-phase command, not a deprecated alias for
-.BR "pi-stack onboard" .
+.BR "pi-stack setup" " [" DIR "] [" \-\-no\-agent "] [" \-\-apply "] [" \-\-replace "] [" \-\-pull\-models "] [" \-\-account " " email "] [" \-\-knowledge " " path-or-url "] [" \-\-mcp " " name "] [" \-\-model " " ollama-model "] [" \-\-yes "]"
+Actually sets you up: a real, two-phase command.
 Phase 1 (host) ALWAYS runs first, even on a repeat invocation: it sources
 model-provider keys, PREFERRING 1Password (wiring both the sandbox and host
 mode; see
@@ -232,6 +201,36 @@ never downloads without
 and an unverifiable
 .B "ollama list"
 is never treated as missing.  Setup never installs Ollama itself.
+.PP
+pi-stack setup \-\-pull\-models with Ollama down exits 1.
+pi-stack setup with the same Ollama down exits 0 with an optional ⚠ row.
+Stale optional config never blocks unrelated repair.
+.PP
+Setup runs as a numbered transcript of eight phases \(em parse, inventory,
+gate, mutate, consent, verify, report, handoff \(em and prints each phase
+header BEFORE that phase does its work, so a run that hangs names the phase it
+hung in.  It asks at most two questions (model-pull consent, the Google
+Workspace route) and never prompts at all without a TTY.  Mutations run in a
+fixed order with the riskiest last (keys, config, pack, MCP, knowledge,
+identity, Google Workspace, model pulls); each is individually idempotent, so
+an interrupted run is resumed by re-running the same command \(em setup
+re-probes what is actually there rather than reading back a journal of what it
+once intended.
+.PP
+.B \-\-no\-agent
+runs the HOST phase only: no sandbox, no handoff.  It is the scripted/CI path
+and replaces the removed
+.B onboard
+verb;
+.B \-\-yes
+and
+.B \-\-non-interactive
+stay orthogonal to it.
+.B \-\-apply
+applies a pending
+.B .pi-stack/onboarding.json
+in DIR (the control-plane proposal an in-sandbox onboarding agent writes),
+under a confirmation gate.
 .PP
 Setup validates one
 .B op://
@@ -1264,7 +1263,7 @@ in-session via
 .PP
 .nf
 .RS
-pi-stack onboard --account you@example.com --yes
+pi-stack setup --no-agent --knowledge ~/knowledge --yes
 .RE
 .fi
 .PP

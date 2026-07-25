@@ -321,7 +321,7 @@ runtime.
 1Password is the only provider-key source. The old `--use-sbx-keys` /
 `--use-1password` flags and the persisted `provider_key_mode` are gone (both
 flags now error). setup validates one `op://` ref per provider, mirrors them
-into `hostmode.env`, and reconciles them into `sbx`. `pi-stack onboard` never
+into `hostmode.env`, and reconciles them into `sbx`. `pi-stack setup --no-agent` never
 provisions provider keys.
 
 Host mode reaches cloud models through the same `op://` refs in `hostmode.env`

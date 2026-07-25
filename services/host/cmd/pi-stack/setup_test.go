@@ -674,3 +674,191 @@ func TestSeedIdentity_DaemonDownNoClaim(t *testing.T) {
 		t.Errorf("daemon down must make no memory claim, got:\n%s", out.String())
 	}
 }
+
+// --- U-W2.01: the setup phase machine ---------------------------------------
+
+// AC-P0-301: the transcript is numbered, in the fixed order, and every phase
+// header is printed BEFORE that phase's work — so a run that hangs names the
+// phase it hung in instead of showing a blank terminal.
+func TestSetupPhases_NumberedHeadersInFixedOrder(t *testing.T) {
+	want := []string{"parse", "inventory", "gate", "mutate", "consent", "verify", "report", "handoff"}
+	if len(setupPhaseOrder) != len(want) {
+		t.Fatalf("setupPhaseOrder has %d phases, want %d", len(setupPhaseOrder), len(want))
+	}
+	for i, w := range want {
+		if setupPhaseOrder[i].name != w {
+			t.Errorf("phase %d = %q, want %q", i+1, setupPhaseOrder[i].name, w)
+		}
+	}
+	w := &ollamaWorld{}
+	env := modelsSetupEnv(t, w)
+	stubProvisionKeysOK(t)
+	var out bytes.Buffer
+	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
+		t.Fatalf("setup failed: %v\n%s", err, out.String())
+	}
+	got := out.String()
+	at := -1
+	for i, p := range want[:7] { // the host phase owns 1..7; handoff is the caller's
+		marker := fmt.Sprintf("[%d/8] %s —", i+1, p)
+		j := strings.Index(got, marker)
+		if j < 0 {
+			t.Fatalf("missing phase header %q in:\n%s", marker, got)
+		}
+		if j <= at {
+			t.Errorf("phase %q header is out of order in:\n%s", p, got)
+		}
+		at = j
+	}
+	// The header must precede the work: the report's first verdict line can
+	// only appear AFTER the report header.
+	if strings.Index(got, "[7/8] report") > strings.Index(got, "Setup summary:") {
+		t.Errorf("the report header must be printed before the report, got:\n%s", got)
+	}
+}
+
+// AC-P0-303: the mutation order is a value, fixed, riskiest last. The two
+// consenting steps are last, and model pulls (the only step that can cost
+// gigabytes) are dead last.
+func TestSetupMutationOrder_FixedRiskiestLast(t *testing.T) {
+	want := "keys,config,pack,mcp,knowledge,identity,gworkspace,models"
+	if got := strings.Join(setupMutationOrder, ","); got != want {
+		t.Errorf("setupMutationOrder = %s, want %s", got, want)
+	}
+	env := modelsSetupEnv(t, &ollamaWorld{})
+	opts, err := parseOnboardArgs([]string{"--yes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := takeSetupInventory(env, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var models setupModelsOutcome
+	steps := setupMutationSteps(env, inv, opts, strings.NewReader(""), io.Discard, false, &models, &setupPromptBudget{})
+	var names []string
+	for _, s := range steps {
+		names = append(names, s.name)
+	}
+	if got := strings.Join(names, ","); got != want {
+		t.Errorf("the step table runs %s, want %s", got, want)
+	}
+}
+
+// AC-P0-302: the mutate phase returns touched AXES, not prose. Stub every
+// mutation to fail and no ✓ may be printed for those axes — the report is a
+// pure function of post-mutation evidence, so a failed mutation has no way to
+// print a success glyph.
+func TestSetupMutations_StubbedToFail_PrintNoSuccessGlyph(t *testing.T) {
+	var out bytes.Buffer
+	steps := []setupMutationStep{
+		{name: "keys", axes: []Axis{axisProviders}, run: func() error { return fmt.Errorf("boom") }},
+		{name: "pack", axes: []Axis{axisPack}, run: func() error { return fmt.Errorf("boom") }},
+	}
+	for _, s := range steps {
+		_ = s.run()
+	}
+	touched, err := runSetupMutations(steps)
+	if err == nil {
+		t.Fatal("a failing mutation must report an error")
+	}
+	if len(touched) != 2 {
+		t.Errorf("mutate must return the touched axes, got %v", touched)
+	}
+	if strings.Contains(out.String(), "✓") {
+		t.Errorf("the mutate phase must print no success glyph, got:\n%s", out.String())
+	}
+}
+
+// A fatal step stops the table; a non-fatal one records its failure and lets
+// the run reach the report, which then shows the axis as not ready.
+func TestRunSetupMutations_FatalStopsNonFatalContinues(t *testing.T) {
+	var ran []string
+	steps := []setupMutationStep{
+		{name: "a", run: func() error { ran = append(ran, "a"); return fmt.Errorf("soft") }},
+		{name: "b", run: func() error { ran = append(ran, "b"); return nil }},
+	}
+	if _, err := runSetupMutations(steps); err == nil || strings.Join(ran, ",") != "a,b" {
+		t.Errorf("a non-fatal failure must not stop the table: ran=%v err=%v", ran, err)
+	}
+	ran = nil
+	steps[0].fatal = true
+	if _, err := runSetupMutations(steps); err == nil || strings.Join(ran, ",") != "a" {
+		t.Errorf("a fatal failure must stop the table: ran=%v err=%v", ran, err)
+	}
+}
+
+// AC-P0-307: at most two interactive prompts per run; AC-P0-306: a
+// non-interactive run gets none at all.
+func TestSetupPromptBudget_AtMostTwoAndNoneWithoutATTY(t *testing.T) {
+	b := &setupPromptBudget{interactive: true}
+	if !b.reserve("model pull consent") || !b.reserve("google workspace route") {
+		t.Fatal("the two named prompts must both fit in the budget")
+	}
+	if b.reserve("a third question") {
+		t.Errorf("setup must never ask a third question, asked: %v", b.asked)
+	}
+	if b.spent != setupMaxPrompts {
+		t.Errorf("budget spent = %d, want %d", b.spent, setupMaxPrompts)
+	}
+	quiet := &setupPromptBudget{interactive: false}
+	if quiet.reserve("anything") {
+		t.Error("a non-interactive run must never be granted a prompt slot")
+	}
+	var nilBudget *setupPromptBudget
+	if nilBudget.reserve("anything") {
+		t.Error("a nil budget must never grant a prompt slot")
+	}
+}
+
+// AC-P0-302, the grep that IS the review: the render path must not read the
+// inventory. A report that consults pre-mutation state is a report that can
+// print what setup INTENDED rather than what it achieved, so the source itself
+// is asserted — printSetupSummary and its helpers neither take a
+// setupInventory nor name one.
+func TestSetupReport_NeverReadsInventory(t *testing.T) {
+	for _, file := range []string{"setup_models.go", "setup.go"} {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(b)
+		for _, fn := range []string{"func printSetupSummary(", "func setupProvidersAxis(", "func setupPackAxis(", "func setupGworkspaceAxis("} {
+			i := strings.Index(src, fn)
+			if i < 0 {
+				continue
+			}
+			body := src[i:]
+			if j := strings.Index(body, "\n}\n"); j > 0 {
+				body = body[:j]
+			}
+			if strings.Contains(body, "setupInventory") || strings.Contains(body, "inv.") {
+				t.Errorf("%s: %s reads the inventory; the report must be a pure function of post-mutation evidence", file, fn)
+			}
+		}
+	}
+}
+
+// AC-P0-308: `--no-agent` is setup's own flag and is never forwarded to the
+// host-config parser (which would reject it as unknown).
+func TestSetupNoAgent_IsSetupsOwnFlag(t *testing.T) {
+	if _, err := parseOnboardArgs([]string{"--no-agent"}); err == nil {
+		t.Error("--no-agent must be consumed by setup itself, not the host-config parser")
+	}
+	if !strings.Contains(setupUsage, "--no-agent") {
+		t.Error("setup usage must document --no-agent")
+	}
+	if knownVerbs["onboard"] {
+		t.Error("the `onboard` verb is deleted with no alias; it must not be a known verb")
+	}
+	if _, ok := verbUsage("onboard"); ok {
+		t.Error("`pi-stack help onboard` must not resolve to a usage page for a deleted verb")
+	}
+	if s, ok := suggestVerb("onboard"); !ok || s != "setup --no-agent" {
+		t.Errorf("an `onboard` argv must take the unknown-verb path suggesting `setup`, got %q (%v)", s, ok)
+	}
+	msg, launch := classifyBareArg("onboard")
+	if launch || !strings.Contains(msg, `Did you mean "setup --no-agent"?`) {
+		t.Errorf("`pi-stack onboard` must print a did-you-mean and exit 2, got %q (launch=%v)", msg, launch)
+	}
+}

@@ -108,7 +108,7 @@ Anthropic, OpenAI, and Google, reconciles them into `sbx`, creates the default
 pack, and launches one upfront onboarding tour. It stores references, never
 resolved keys. 1Password is the ONLY provider-key source: there is no
 "trust existing sbx keys" shortcut; without `op` installed and signed in,
-setup fails with the exact fix. `pi-stack onboard` never provisions provider
+setup fails with the exact fix. `pi-stack setup --no-agent` never provisions provider
 keys at all. After setup, `pi-stack run` launches or reattaches without
 replaying onboarding.
 
@@ -125,7 +125,7 @@ with a single command, `pi-stack host setup` (it provisions **and** enables host
 mode when provisioning succeeds). It reaches cloud models through the same
 `op://` refs in `hostmode.env` that setup wrote, resolved via `op run` at each
 launch. For
-scripted/CI hosts, `pi-stack onboard --account … --knowledge … --yes` writes
+scripted/CI hosts, `pi-stack setup --no-agent --knowledge … --yes` writes
 `~/.config/pi-stack/config.toml` non-interactively (host config only, no handoff).
 
 You don't babysit the services daemon: `pi-stack run` / `memory` / `knowledge
@@ -242,7 +242,7 @@ pi-stack run --replace        # recreate instead of re-attaching (picks up chang
 pi-stack ls                  # list your pi-stack sandboxes (name, state, dir)
 pi-stack rm <name>           # remove a sandbox (--all [--except <name>])
 pi-stack status              # fast read-only control panel (alias: st)
-pi-stack onboard             # host-side/CI config (guided onboarding is in-session via `pi-stack setup`)
+pi-stack setup --no-agent    # host-side/CI config only: no sandbox, no agent handoff
 pi-stack serve               # run enabled host services (auto-started lazily; install/uninstall for a login service)
 pi-stack doctor              # diagnose host and sandbox prerequisites
 pi-stack config show|path|set|unset  # inspect or update config (never hand-edit toml)
@@ -273,7 +273,7 @@ from a repo checkout (`make route`). Scores live in a hand-maintained
 required); edit it, then `pi-stack route compile`. Consumers get the compiled
 `routing.json` baked into the image.
 
-Do not hand-edit `config.toml`. `pi-stack onboard` and `pi-stack config set/unset`
+Do not hand-edit `config.toml`. `pi-stack setup` and `pi-stack config set/unset`
 are the supported writers, and `pi-stack doctor` prints copy-pasteable repair
 commands when something is missing.
 
