@@ -108,10 +108,6 @@ func configValue(cfg *config.Config, key string) (string, error) {
 		return cfg.GogAccount, nil
 	case "mcp":
 		return strings.Join(cfg.MCP, " "), nil
-	case "mcp_static":
-		return strings.Join(cfg.MCPStatic, " "), nil
-	case "mcp_dynamic":
-		return strings.Join(cfg.MCPDynamic, " "), nil
 	case "services":
 		return strings.Join(cfg.Services, " "), nil
 	case "knowledge_bundles":
@@ -182,10 +178,8 @@ func runConfigWrite(unset bool, argv []string) {
 // configKeysHelp lists the supported keys for set/unset.
 const configKeysHelp = `keys:
   gog_account <email>       Google Workspace account for the gog MCP server
-  mcp <server>              add/remove an MCP server in the mcp list
-  mcp_static <server>       pin a server EAGER: attach at create (--static-mcp)
-  mcp_dynamic <server>      keep a server dynamic (agent pulls on demand); this is
-                            the DEFAULT for every server, and wins over mcp_static
+  mcp <server>              add/remove an MCP server in the mcp list; every
+                            configured server preloads at sandbox create
   services <name>           add/remove a host service in the services list
   knowledge_bundles <dir>   add/remove an OKF knowledge bundle dir (set also
                             enables the knowledge service)
@@ -232,28 +226,6 @@ func applyConfigChange(cfg *config.Config, unset bool, key string, args []string
 			cfg.AddMCP(args[0])
 		}
 		return fmt.Sprintf("mcp = %v", cfg.MCP), nil
-
-	case "mcp_static":
-		if len(args) != 1 {
-			return "", fmt.Errorf("config %s mcp_static <server>: needs a server name", verb)
-		}
-		if unset {
-			cfg.RemoveMCPStatic(args[0])
-		} else {
-			cfg.AddMCPStatic(args[0])
-		}
-		return fmt.Sprintf("mcp_static = %v", cfg.MCPStatic), nil
-
-	case "mcp_dynamic":
-		if len(args) != 1 {
-			return "", fmt.Errorf("config %s mcp_dynamic <server>: needs a server name", verb)
-		}
-		if unset {
-			cfg.RemoveMCPDynamic(args[0])
-		} else {
-			cfg.AddMCPDynamic(args[0])
-		}
-		return fmt.Sprintf("mcp_dynamic = %v", cfg.MCPDynamic), nil
 
 	case "services":
 		if len(args) != 1 {
