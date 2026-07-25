@@ -196,6 +196,39 @@ func defaultSandboxMCPStateDir() (string, error) {
 	return config.StateDir()
 }
 
+// sandboxMCPStateDirFn is the ONE seam run.go's recordCreateReceipt and
+// mcp.go's recordMcpLoadReceipt resolve the state root through — production
+// wiring never calls defaultSandboxMCPStateDir (nor config.StateDir())
+// directly. Tests override it to a t.TempDir()-backed stub so a wiring test
+// never touches the real XDG state dir; a test that wants to exercise the
+// REAL path contract (config.StateDir()'s XDG_STATE_HOME/pi-stack join, no
+// doubled "pi-stack") sets $XDG_STATE_HOME instead and leaves this seam at
+// its default.
+var sandboxMCPStateDirFn = defaultSandboxMCPStateDir
+
+// receiptRecordError wraps a failure to durably record an otherwise-successful
+// pi-stack operation (a sandbox create, or an `mcp load` attach) in the
+// per-sandbox MCP receipt. It is kept as a DISTINCT typed error — never folded
+// into the underlying operation's own error — so run.go/mcp.go can report the
+// honest, narrower truth: the operation itself worked; only the local
+// bookkeeping didn't, so doctor/status must not be told it succeeded cleanly,
+// and the caller must never print a plain success line over this failure.
+type receiptRecordError struct {
+	op      string // "create" or "mcp load"
+	sandbox string
+	name    string // mcp server name; set only for a load receipt
+	err     error
+}
+
+func (e *receiptRecordError) Error() string {
+	if e.name != "" {
+		return fmt.Sprintf("%s %q on sandbox %q succeeded, but recording it in local state failed: %v", e.op, e.name, e.sandbox, e.err)
+	}
+	return fmt.Sprintf("%s of sandbox %q succeeded, but recording it in local state failed: %v", e.op, e.sandbox, e.err)
+}
+
+func (e *receiptRecordError) Unwrap() error { return e.err }
+
 // sandboxMCPStateRoot is <stateDir>/sandboxes, the parent of every
 // per-sandbox receipt directory.
 func sandboxMCPStateRoot(stateDir string) string {
