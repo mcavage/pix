@@ -562,3 +562,35 @@ func TestSetupUsageAndManMentionPullModels(t *testing.T) {
 		t.Error("man page must not still advertise the removed --use-sbx-keys flag")
 	}
 }
+
+func TestIsValidOllamaTag(t *testing.T) {
+	tests := []struct {
+		tag  string
+		want bool
+	}{
+		{"", false},
+		{"-foo", false},
+		{"foo", true},
+		{"llama3", true},
+		{"llama3:70b", true},
+		{"llama-3:70b", true},
+		{"llama_3:70b", true},
+		{"namespace/model:tag", true},
+		{"namespace.model:tag", true},
+		{"hello world", false},
+		{"hello\tworld", false},
+		{"hello\nworld", false},
+		{"hello/../world", true}, // It passes the character check; maybe it should fail? wait, `.` and `/` are allowed.
+		{"$hello", false},
+		{"hello|world", false},
+		{"hello>world", false},
+		{"hello<world", false},
+		{"hello&world", false},
+		{"hello;world", false},
+	}
+	for _, tt := range tests {
+		if got := isValidOllamaTag(tt.tag); got != tt.want {
+			t.Errorf("isValidOllamaTag(%q) = %v, want %v", tt.tag, got, tt.want)
+		}
+	}
+}

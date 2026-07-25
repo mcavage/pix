@@ -1499,6 +1499,12 @@ func scrubUntrustedPackLock(root string) error {
 		}
 		return err
 	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing untrusted %s symlink: %w", packLockName, err)
+		}
+		return nil
+	}
 	if fi.IsDir() {
 		// A DIRECTORY named pack.lock cannot carry forged lock content
 		// (readPackLock zero-values it) — leave it for the commit point, which
