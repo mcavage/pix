@@ -32,7 +32,7 @@ test("pinned pi accepts the vendored runtime patches", { timeout: 120_000 }, asy
 	assert.ok(dockerPackagesBlock, "Dockerfile must contain the curated pi package loop");
 	const dockerPackages = dockerPackagesBlock.replaceAll("\\", "").trim().split(/\s+/);
 	const todoPackage = dockerPackages.find((entry) => entry.startsWith("pi-manage-todo-list@"));
-	assert.equal(piPackage, "@earendil-works/pi-coding-agent@0.82.0");
+	assert.equal(piPackage, "@earendil-works/pi-coding-agent@0.82.1");
 	assert.ok(todoPackage, "Dockerfile must pin pi-manage-todo-list");
 
 	const hostRun = fs.readFileSync(

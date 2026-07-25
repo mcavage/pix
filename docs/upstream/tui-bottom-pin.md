@@ -1,7 +1,7 @@
 # pi-tui: bottom jitter and duplicate scrollback lines during streaming
 
 **Repo:** `earendil-works/pi` · **Package:** `packages/tui` (`@earendil-works/pi-tui`)
-**Affected:** `0.79.8` through `0.82.0` (`0.82.0` reverified) · **Type:** rendering
+**Affected:** `0.79.8` through `0.82.1` (`0.82.1` reverified) · **Type:** rendering
 bug + fix (tested)
 
 > 0.79.9 fixes two *related but distinct* chat-component things — Markdown streaming
@@ -61,7 +61,7 @@ Full patch (renderer + tests): **`tui-bottom-pin/tui-src.patch`** (`git apply` f
 The vendored patch is also tested against the exact `PI_PACKAGE` pin in CI. The
 check installs pi, applies the patch twice to prove idempotence, and runs the
 headless regression, edge, and integrity harnesses against the installed
-renderer. Pi `0.82.0` passes all three harnesses.
+renderer. Pi `0.82.1` passes all three harnesses.
 
 The patched upstream source passes `packages/tui/test/tui-render.test.ts`: **25 / 25**.
 `biome check` also passes for the renderer and test file.

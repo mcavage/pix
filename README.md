@@ -285,7 +285,11 @@ pi-stack itself, which needs the host's Docker/`sbx`/`make` that the VM
 structurally cannot reach. It's opt-in (not touched by `pi-stack setup`): run
 `pi-stack host setup`, which provisions `~/.local/state/pi-stack/host-agent`
 **and** enables the gate in one step (the gate stays off unless provisioning
-succeeds). Disable it any time with `pi-stack config set host.enabled false`.
+succeeds). Setup and launch require the same pinned pi version as the sandbox
+image; launch also requires the matching curated extension set from `host
+setup`. A stale core prints the exact install command, while stale extensions
+point back to `pi-stack host setup`. Disable it any time with `pi-stack config
+set host.enabled false`.
 Cloud keys come from op:// refs in `hostmode.env` next to `config.toml`,
 resolved just-in-time by `op run` and never persisted; without that file the
 session is Ollama-only.

@@ -271,6 +271,11 @@ pi-stack host setup   # provisions the host agent dir AND enables the gate (off 
 pi-stack host [DIR]   # launch; disable again with: pi-stack config set host.enabled false
 ```
 
+Setup and launch require the same pinned pi version as the sandbox image, and
+launch requires the matching curated extensions installed by `host setup`. A
+missing or stale core is rejected with the exact `npm install -g` command;
+stale extensions point back to `pi-stack host setup`.
+
 **Say this plainly: host mode is not a security boundary.** pi has no
 built-in sandbox or permission prompts of its own; the sandbox *is* pi-stack's
 safety model, and host mode steps outside it. What you get instead is a set

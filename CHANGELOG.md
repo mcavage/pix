@@ -10,6 +10,11 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`pi-stack gog setup` now reads current sbx registration tables.** Newer sbx
+  builds expose local MCP commands in the plain `sbx mcp ls` table while
+  omitting the older `mcp get` and JSON detail forms. Gog setup now parses that
+  complete local command as a final bounded fallback, so an existing readable
+  gog registration no longer blocks OAuth preflight as "unverifiable."
 - **Custom sandbox names survive `mcp load` and `doctor`.** The create receipt
   now records the canonical workspace it was created for (additive schema
   field), and a hardened workspace→sandbox resolver lets `pi-stack mcp load
@@ -83,10 +88,12 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
-- The sandbox and opt-in host mode now use pi `0.82.0`. Curated pi
-  extensions were re-pinned to the newest versions published by the 0.82.0
+- The sandbox and opt-in host mode now use pi `0.82.1`. Curated pi
+  extensions were re-pinned to the newest versions published by the 0.82.1
   release, and CI now checks both vendored runtime patches against the exact pi
-  and todo-list package pins.
+  and todo-list package pins. Host setup and launch now reject a missing or
+  stale pi core before loading extensions, with the exact pinned install command;
+  readiness and launch also require the matching curated-extension lock marker.
 - Fixed intermittent adjacent duplicate lines in terminal scrollback. The
   bottom-pin patch had repainted a row copied from immutable scrollback, leaving
   both physical copies behind. Bottom-anchored shrinks now rebuild the terminal
