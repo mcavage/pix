@@ -468,7 +468,7 @@ gog_account = ""
 # add "knowledge" to the services list above to run it.
 knowledge_bundles = []
 
-# Kits stacked onto the sandbox (overlay mixin kits, etc).
+# Kits stacked onto the sandbox (mixin kits, etc).
 [kits]
 stack = []
 

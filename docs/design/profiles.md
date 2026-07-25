@@ -86,7 +86,7 @@ knowledge scope-file mechanism). Deferred to keep the MVP to config + resolution
 > **(Superseded — the build-time overlay is retired; there are no more compiled-in
 > `overlay_*.go` host plugins, and no `pi-stack-host` recompile is ever needed.
 > Host-executing integrations now ship as containers or host daemons referenced by
-> a pack. See [../OVERLAY.md](../OVERLAY.md). Kept for the reasoning it records.)**
+> a pack. See [packs.md](packs.md). Kept for the reasoning it records.)**
 
 Overlay **host** plugins (`overlay_*.go`) are symlinked into `services/host/` and
 compiled **into the single `pi-stack-host` binary** at build time. A runtime

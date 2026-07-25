@@ -57,7 +57,7 @@ func TestAddArgs_Slack(t *testing.T) {
 }
 
 // TestAddArgs_LocalServer builds the pi-stack-host subcommand form for an
-// arbitrary (overlay) local stdio server like "pio": it registers as
+// arbitrary local stdio server like "pio": it registers as
 // `pi-stack-host mcp pio`, exactly like slack, via the serverCmd default.
 func TestAddArgs_LocalServer(t *testing.T) {
 	args := gogRegistrar().addArgs("pio")
@@ -425,7 +425,7 @@ func TestRegisterServers_DefaultsToConfigMCP(t *testing.T) {
 		statFile: map[string]bool{"/fake/config/op-refs.env": true},
 	}
 	cfg := defaultCfg()
-	cfg.MCP = []string{"pio"} // an overlay local stdio server
+	cfg.MCP = []string{"pio"} // an arbitrary local stdio server
 	var buf bytes.Buffer
 	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pi-stack-host", nil), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)

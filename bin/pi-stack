@@ -11,7 +11,7 @@
 # who `sbx run --kit git+...` gets). `--dev` mounts your host skill trees and tells pi
 # to load THEM instead (--no-skills + --skill roots), so you edit a SKILL.md, /reload
 # in pi, and it's live — no `make load`, no rebuild. Same split as `make run` (which is
-# always Mode B). Resolves the repo + overlay relative to this script, so it works from
+# always Mode B). Resolves the repo relative to this script, so it works from
 # anywhere on PATH.
 set -euo pipefail
 
@@ -23,7 +23,6 @@ while [ -h "$src" ]; do
 done
 ROOT="$(cd -P "$(dirname "$src")/.." && pwd)"
 KIT="$ROOT/pi-kit"
-OVERLAY="${OVERLAY:-$ROOT/../pi-stack-work}"
 
 # --dev (Mode B) must come first, before the workspace.
 dev=0
@@ -37,7 +36,6 @@ fi
 [ "${1:-}" = "--" ] && shift
 
 kits=( --kit "$KIT" )
-[ -f "$OVERLAY/kit/spec.yaml" ] && kits+=( --kit "$OVERLAY/kit" )
 
 # NOTE: this launcher forwards NO credential. The default path mints/exports
 # nothing — the host-side Google Workspace path is the `gog` MCP server run by
@@ -50,11 +48,6 @@ if [ "$dev" = 1 ]; then
   # Mount host skill trees (writable) + load them live, replacing the baked set.
   extra_ws+=( "$ROOT/skills" )
   pi_args=( --no-skills --skill "$ROOT/skills" )
-  ov_skills="$OVERLAY/kit/files/home/.pi/agent/skills"
-  if [ -d "$ov_skills" ]; then
-    extra_ws+=( "$ov_skills" )
-    pi_args+=( --skill "$ov_skills" )
-  fi
 fi
 
 cmd=( sbx run pi-stack "${kits[@]}" "$workspace" ${extra_ws[@]+"${extra_ws[@]}"} )

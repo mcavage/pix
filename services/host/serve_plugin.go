@@ -11,8 +11,8 @@
 // supervisor owns that listener and adapts it to the plugin's typed interface.
 //
 // The CredentialBroker seam (brokerProxyMux / servePluginBroker below) is
-// DORMANT: the public tree ships no built-in broker, but an overlay broker
-// (external binary or extraBrokerFactory) plugs into exactly this shim.
+// DORMANT: the public tree ships no built-in broker, but an external broker
+// binary (SHA-pinned via [plugins.broker]) plugs into exactly this shim.
 
 package main
 
@@ -73,8 +73,8 @@ type supervisor struct {
 
 // launch spawns the plugin for a slot once at startup and starts its watchdog.
 // extraEnv is a small set of KEY=VALUE vars granted to THIS plugin's subprocess
-// only (on top of the filtered base env; see pluginEnv) — e.g. an overlay
-// broker's PI_STACK_BROKER_AUTH bearer, which no other plugin may see (F2).
+// only (on top of the filtered base env; see pluginEnv) — e.g. an external
+// broker plugin's PI_STACK_BROKER_AUTH bearer, which no other plugin may see (F2).
 func (s *supervisor) launch(name, kind string, spec config.PluginSpec, selfPath string, extraEnv []string) (*pluginHolder, error) {
 	h := &pluginHolder{}
 	if err := s.spawn(h, name, kind, spec, selfPath, extraEnv); err != nil {
@@ -115,7 +115,7 @@ var pluginEnvAllowlist = map[string]bool{
 	"KNOWLEDGE_BUNDLES": true,
 	// Shared Ollama endpoint
 	"OLLAMA_HOST": true,
-	// Dynamic linker paths for CGO-built overlay plugins that link shared libraries.
+	// Dynamic linker paths for CGO-built external plugins that link shared libraries.
 	"LD_LIBRARY_PATH":   true, // Linux
 	"DYLD_LIBRARY_PATH": true, // macOS
 	// Port vars the supervisor communicates to plugins
@@ -588,7 +588,7 @@ type brokerToken struct {
 // brokerProxyMux serves a /token surface that mints via the dispensed
 // CredentialBroker client. auth is the required bearer. This is the DORMANT
 // broker seam: no built-in broker constructs it in the public tree, but an
-// overlay broker plugs into exactly this shim. FAIL CLOSED: an empty bearer
+// external broker plugin plugs into exactly this shim. FAIL CLOSED: an empty bearer
 // rejects every request rather than serving /token unauthenticated (brokerService
 // already refuses to start in that state; this is defense in depth).
 func brokerProxyMux(h *pluginHolder, auth string) http.Handler {
@@ -617,16 +617,15 @@ func brokerProxyMux(h *pluginHolder, auth string) http.Handler {
 	return mux
 }
 
-// servePluginBroker runs a built-in CredentialBroker as a go-plugin self-exec
-// entry (`pi-stack-host plugin broker`). The public tree registers no built-in
-// broker — the seam is overlay-only and dormant — so this exits cleanly unless
-// an overlay wired one via extraBrokerFactory. An EXTERNAL overlay broker binary
-// (see examples/broker-example) ships its own main() and does not use this path.
-// name is the plugin map key the supervisor dispenses under (e.g. "broker").
+// servePluginBroker is the self-exec entry `pi-stack-host plugin broker` would
+// serve a built-in CredentialBroker from. The public tree ships no built-in
+// broker — the seam is permanently dormant — so this always exits cleanly. An
+// external broker plugin (see examples/broker-example) ships its own main()
+// and never reaches this path: supervisor.spawn execs it directly whenever
+// config sets a path+sha, and only falls back to this self-exec entry when no
+// path is set (i.e. never, for broker, in the public tree).
+// name is the plugin map key the supervisor would dispense under (e.g. "broker").
 func servePluginBroker(name string) {
-	if extraBrokerFactory == nil {
-		fmt.Fprintln(os.Stderr, "pi-stack-host plugin broker: no built-in broker registered (overlay-only seam)")
-		os.Exit(2)
-	}
-	plugin.Serve(map[string]goplugin.Plugin{name: &plugin.BrokerPlugin{Impl: extraBrokerFactory()}})
+	fmt.Fprintf(os.Stderr, "pi-stack-host plugin %s: no built-in broker registered (set [plugins.broker] path+sha to an external plugin binary)\n", name)
+	os.Exit(2)
 }

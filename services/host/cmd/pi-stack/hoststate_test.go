@@ -52,11 +52,8 @@ func TestBuildHostState(t *testing.T) {
 	if !hs.MCP.Enabled || len(hs.MCP.Servers) != 1 {
 		t.Errorf("mcp wrong: %+v", hs.MCP)
 	}
-	if hs.Overlay.Kit != "kit" {
-		t.Errorf("overlay kit basename wrong: %q", hs.Overlay.Kit)
-	}
 	if !hs.Provisioned {
-		t.Error("keys+knowledge+overlay present => provisioned")
+		t.Error("keys+knowledge+active pack present => provisioned")
 	}
 	if hs.Models.Watcher != "gemma4:e4b-mlx" {
 		t.Errorf("watcher model wrong: %q", hs.Models.Watcher)

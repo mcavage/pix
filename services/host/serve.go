@@ -1,5 +1,5 @@
 // `serve` is the plugin supervisor. It runs the long-running HTTP host services
-// (memory :11435, knowledge :11436, plus any overlay services), resolving each
+// (memory :11435, knowledge :11436, plus the dormant broker slot), resolving each
 // capability slot from config: a "builtin" impl runs IN-PROCESS exactly as
 // before (memoryMux()); a non-builtin impl is launched ONCE at
 // startup as a go-plugin subprocess and the HTTP shim proxies to it. Plugins
@@ -35,8 +35,8 @@ type hostService struct {
 
 // runServe starts the long-running HTTP host services. `enabled` is the list
 // from `services` in config.toml (config-friendly aliases: memory, knowledge,
-// plus any overlay registers); empty means "all". The MCP servers (e.g. slack) are
-// stdio commands run by the sbx gateway via `sbx mcp add`, not HTTP daemons.
+// broker); empty means "all". The MCP servers (e.g. slack) are stdio commands
+// run by the sbx gateway via `sbx mcp add`, not HTTP daemons.
 func runServe(enabled []string) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -56,9 +56,9 @@ func runServe(enabled []string) {
 
 	// The default path has NO built-in credential broker and mints NO bearer
 	// (memory/knowledge need no auth). The generic broker seam is dormant: a
-	// broker materializes only when an overlay registers one (via
-	// extraServiceFactories), and that overlay owns its own bearer through the
-	// retained plugin path — never the process-global env (see pluginEnv, F2).
+	// broker materializes only when an operator configures an external
+	// [plugins.broker] binary, which owns its own bearer through the retained
+	// plugin path — never the process-global env (see pluginEnv, F2).
 	selfPath, err := os.Executable()
 	if err != nil {
 		fatalf("locate self: %v", err)
@@ -68,17 +68,11 @@ func runServe(enabled []string) {
 	// else empty == "all". Only enabled services are constructed, launched, and
 	// preflighted below — so `serve memory` never launches or preflights knowledge.
 	effective := resolveServices(enabled, cfg.Services)
-	// config-friendly aliases -> internal service name. Built-ins, plus any
-	// overlay-registered aliases (extraServiceAliases) and their identity name —
-	// so the public tree never hardcodes an overlay name.
+	// config-friendly aliases -> internal service name.
 	alias := map[string]string{
 		"memory":    "memory",
 		"knowledge": "knowledge",
 		"broker":    "broker",
-	}
-	for k, v := range extraServiceAliases {
-		alias[k] = v
-		alias[v] = v
 	}
 	valid := make([]string, 0, len(alias))
 	for k := range alias {
@@ -126,7 +120,7 @@ func runServe(enabled []string) {
 			memLockRelease = lockMemoryStoreOrFatal(fatalf)
 			// Build the store with error handling and route a failure through fatalf
 			// (F3): a bare log.Fatalf here would skip sup.shutdown() and orphan an
-			// already-launched plugin (e.g. an overlay broker or service subprocess).
+			// already-launched external plugin subprocess.
 			store, hasEmb, berr := buildMemStore()
 			if berr != nil {
 				fatalf("%v", berr)
@@ -185,13 +179,13 @@ func runServe(enabled []string) {
 		all = append(all, knSvc)
 	}
 
-	// broker: the OVERLAY-ONLY credential-broker slot. DORMANT in the public tree —
-	// there is NO built-in broker, so with the default builtin impl this starts
-	// NOTHING (brokerService returns nil). It only materializes when an overlay
-	// configures an external broker ([plugins.broker] with impl != builtin): then it
-	// is launched ONCE through the shared supervisor (sha-verified + env-isolated,
-	// F2), the dispensed CredentialBroker backs the stable /token shim, and it
-	// participates in shutdown — mirroring the memory/knowledge non-builtin path.
+	// broker: the DORMANT credential-broker slot. There is NO built-in broker, so
+	// with the default builtin impl this starts NOTHING (brokerService returns
+	// nil). It only materializes when an operator configures an external broker
+	// ([plugins.broker] with impl != builtin): then it is launched ONCE through the
+	// shared supervisor (sha-verified + env-isolated, F2), the dispensed
+	// CredentialBroker backs the stable /token shim, and it participates in
+	// shutdown — mirroring the memory/knowledge non-builtin path.
 	if enabledSvc("broker") {
 		brSvc, berr := brokerService(cfg, sup, selfPath)
 		if berr != nil {
@@ -199,14 +193,6 @@ func runServe(enabled []string) {
 		}
 		if brSvc != nil {
 			all = append(all, *brSvc)
-		}
-	}
-
-	// Overlay services (e.g. a warehouse proxy) self-register via init() when
-	// present. Only the enabled ones are kept (the public tree has none).
-	for _, f := range extraServiceFactories {
-		if svc := f(); enabledSvc(svc.name) {
-			all = append(all, svc)
 		}
 	}
 
@@ -332,9 +318,9 @@ func removeServeLazyMarker() {
 	}
 }
 
-// brokerService builds the OVERLAY-ONLY credential-broker slot. It returns
+// brokerService builds the DORMANT credential-broker slot. It returns
 // (nil, nil) when the broker impl is builtin — the default PUBLIC case, where NO
-// built-in broker exists, so nothing starts. When an overlay configures an
+// built-in broker exists, so nothing starts. When an operator configures an
 // external broker ([plugins.broker] with impl != builtin), it launches that
 // binary ONCE through the shared supervisor (goplugin.NewClient + verifyPluginSHA
 // + pluginEnv isolation), dispenses the CredentialBroker, and returns a

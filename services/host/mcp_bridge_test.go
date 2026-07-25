@@ -93,35 +93,12 @@ func TestSlackAdapterCallToolRouting(t *testing.T) {
 	}
 }
 
-// fakeMcpServer is a stand-in an overlay would register via extraMcpServers.
-type fakeMcpServer struct{ name string }
-
-func (f fakeMcpServer) Info() (plugin.ServerInfo, error) {
-	return plugin.ServerInfo{Name: f.name, ProtocolVersion: "2025-06-18"}, nil
-}
-func (fakeMcpServer) ListTools() ([]plugin.ToolSpec, error) { return nil, nil }
-func (fakeMcpServer) CallTool(string, json.RawMessage) (json.RawMessage, error) {
-	return nil, nil
-}
-
-// TestBuiltinMcpServerForSeam proves the extraMcpServers seam an overlay uses:
-// a factory registered under a NEW name resolves through builtinMcpServerFor,
-// while unknown names still error and the built-in slack case still resolves.
-func TestBuiltinMcpServerForSeam(t *testing.T) {
-	// Overlay registers a private server via init(); simulate + restore.
-	extraMcpServers["pio"] = func() plugin.McpServer { return fakeMcpServer{name: "pio"} }
-	t.Cleanup(func() { delete(extraMcpServers, "pio") })
-
-	srv, err := builtinMcpServerFor("pio")
-	if err != nil {
-		t.Fatalf("builtinMcpServerFor(pio) = %v, want the seam factory", err)
-	}
-	if f, ok := srv.(fakeMcpServer); !ok || f.name != "pio" {
-		t.Errorf("builtinMcpServerFor(pio) returned %T, want the registered fakeMcpServer", srv)
-	}
-
-	// The built-in slack case still works.
-	srv, err = builtinMcpServerFor("slack")
+// TestBuiltinMcpServerFor proves the built-in switch: slack resolves to the
+// built-in adapter, and an unregistered name errors. The public tree has
+// exactly one built-in MCP server; anything else is either a container the
+// sbx gateway runs or a [plugins.mcp] external-process override.
+func TestBuiltinMcpServerFor(t *testing.T) {
+	srv, err := builtinMcpServerFor("slack")
 	if err != nil {
 		t.Fatalf("builtinMcpServerFor(slack) = %v, want the built-in adapter", err)
 	}
@@ -129,37 +106,16 @@ func TestBuiltinMcpServerForSeam(t *testing.T) {
 		t.Errorf("builtinMcpServerFor(slack) returned %T, want slackMcpAdapter", srv)
 	}
 
-	// An unknown, unregistered name still errors.
+	// An unknown name errors.
 	if _, err := builtinMcpServerFor("nope"); err == nil {
 		t.Error("builtinMcpServerFor(nope) should error for an unregistered name")
 	}
 }
 
-// TestBuiltinMcpServerForBuiltinWins proves an overlay CANNOT silently shadow a
-// public built-in: even when extraMcpServers registers a `slack` factory, the
-// built-in slackMcpAdapter is served. This gate fails if the switch is not
-// consulted before the seam (#7).
-func TestBuiltinMcpServerForBuiltinWins(t *testing.T) {
-	extraMcpServers["slack"] = func() plugin.McpServer { return fakeMcpServer{name: "impostor"} }
-	t.Cleanup(func() { delete(extraMcpServers, "slack") })
-
-	srv, err := builtinMcpServerFor("slack")
-	if err != nil {
-		t.Fatalf("builtinMcpServerFor(slack) = %v", err)
-	}
-	if _, ok := srv.(slackMcpAdapter); !ok {
-		t.Errorf("builtinMcpServerFor(slack) returned %T, want the built-in slackMcpAdapter (overlay must not shadow it)", srv)
-	}
-}
-
-// TestBuiltinMcpNames proves the local-server source of truth: slack is always
-// listed, an overlay seam name appears, gog is NEVER listed (external CLI, not
-// bridged), and the result is sorted + deduped.
+// TestBuiltinMcpNames proves the local-server source of truth: only slack is
+// listed, gog is NEVER listed (external CLI, not bridged), and the result is
+// sorted.
 func TestBuiltinMcpNames(t *testing.T) {
-	extraMcpServers["pio"] = func() plugin.McpServer { return fakeMcpServer{name: "pio"} }
-	extraMcpServers["gog"] = func() plugin.McpServer { return fakeMcpServer{name: "gog"} }
-	t.Cleanup(func() { delete(extraMcpServers, "pio"); delete(extraMcpServers, "gog") })
-
 	names := builtinMcpNames()
 	got := map[string]bool{}
 	for _, n := range names {
@@ -168,8 +124,8 @@ func TestBuiltinMcpNames(t *testing.T) {
 	if !got["slack"] {
 		t.Errorf("builtinMcpNames() = %v, want slack present", names)
 	}
-	if !got["pio"] {
-		t.Errorf("builtinMcpNames() = %v, want overlay pio present", names)
+	if len(names) != 1 {
+		t.Errorf("builtinMcpNames() = %v, want exactly [slack]", names)
 	}
 	if got["gog"] {
 		t.Errorf("builtinMcpNames() = %v, must NOT list gog (external CLI)", names)

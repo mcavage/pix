@@ -17,7 +17,7 @@ import (
 )
 
 // buildExampleBroker compiles examples/broker-example to a temp binary and
-// returns its path + sha256. This is the artifact a private overlay would ship
+// returns its path + sha256. This is the artifact an operator would ship
 // and pin in config.toml's [plugins.broker].
 func buildExampleBroker(t *testing.T) (bin, sha string) {
 	t.Helper()
@@ -42,7 +42,7 @@ func buildExampleBroker(t *testing.T) (bin, sha string) {
 func TestExternalBrokerOverrideEndToEnd(t *testing.T) {
 	bin, sha := buildExampleBroker(t)
 
-	// A config a user would write to plug in an overlay broker (the dormant seam).
+	// A config a user would write to plug in an external broker (the dormant seam).
 	spec := config.PluginSpec{Impl: "example", Path: bin, SHA: sha}
 
 	sup := &supervisor{}

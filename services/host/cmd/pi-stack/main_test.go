@@ -195,7 +195,7 @@ func TestBuildSbxArgs_DevVersionTracksMain(t *testing.T) {
 
 func TestBuildSbxArgs_KitStacking(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Kits.Stack = []string{"/overlay/kit", "git+https://example.com/other#dir=kit"}
+	cfg.Kits.Stack = []string{"/mixin/kit", "git+https://example.com/other#dir=kit"}
 	args := buildSbxArgs(cfg, runOpts{Workspace: ".", Kits: []string{"/flag/kit"}}, "0.0.99")
 
 	// --kit override (1 flag kit, base) + 2 config stack = 3 --kit total. The
@@ -203,7 +203,7 @@ func TestBuildSbxArgs_KitStacking(t *testing.T) {
 	if got := countFlag(args, "--kit"); got != 3 {
 		t.Errorf("expected 3 --kit flags, got %d in %v", got, args)
 	}
-	if !contains(args, []string{"--kit", "/overlay/kit"}) {
+	if !contains(args, []string{"--kit", "/mixin/kit"}) {
 		t.Errorf("config stack kit missing from %v", args)
 	}
 	if !contains(args, []string{"--kit", "/flag/kit"}) {
@@ -217,7 +217,7 @@ func TestBuildSbxArgs_KitStacking(t *testing.T) {
 
 func TestBuildSbxArgs_StackWithoutOverride(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Kits.Stack = []string{"/overlay/kit"}
+	cfg.Kits.Stack = []string{"/mixin/kit"}
 	args := buildSbxArgs(cfg, runOpts{Workspace: "."}, "0.0.99")
 	// Released base git kit + 1 config stack = 2.
 	if got := countFlag(args, "--kit"); got != 2 {

@@ -471,7 +471,7 @@ func mcpCheck(name, mcpOut string, mcpOK, sbxPresent bool) check {
 }
 
 // mcpProbeCheck is the HONEST, generalized MCP check: for every configured local
-// stdio server (slack, an overlay `pio`/`fastmail`, …), not just gog, it reports
+// stdio server (slack, or another registered local name), not just gog, it reports
 // registered -> spawns -> returns N tools. It reads the command sbx ACTUALLY
 // registered for <name> and probes THAT (the same honest path the gog group
 // uses), so a pass proves the real gateway spawn, not a config reconstruction.

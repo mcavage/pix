@@ -1,11 +1,10 @@
 // Package plugin is the go-plugin FOUNDATION for pi-stack's host binary.
 //
-// Today the host (`pi-stack-host`, module pi-stack/host) is one statically
-// linked binary whose only extension seam is compile-time init() registration
-// (see ../main.go's extraCommands / extraServiceFactories). We are moving that
-// seam from link time to process-launch time using hashicorp/go-plugin, so a
-// third party can OVERRIDE a host capability with their own out-of-process
-// plugin binary without ever linking into the public tree.
+// The host (`pi-stack-host`, module pi-stack/host) is one statically linked
+// binary. Its extension seam runs at process-launch time, not link time,
+// using hashicorp/go-plugin: a third party can OVERRIDE a host capability with
+// their own out-of-process plugin binary (SHA-pinned via config's [plugins.*])
+// without ever linking into the public tree.
 //
 // This package is intentionally ADDITIVE: it defines the shared handshake, the
 // three capability interfaces (MemoryStore, CredentialBroker, McpServer) derived

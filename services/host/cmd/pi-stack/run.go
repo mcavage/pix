@@ -90,7 +90,7 @@ func runRun(argv []string) {
 
 	// Mirror sbx's own model: an existing sandbox (running OR stopped) RE-ATTACHES
 	// instead of refusing/recreating — the create-only flags (--kit/--template/
-	// --mcp/overlay-kit/--dev/dev-skills) only apply to a fresh create, so they are
+	// --mcp/config-stacked-kits/--dev/dev-skills) only apply to a fresh create, so they are
 	// simply not sent (and, per willCreate below, not even RESOLVED) on re-attach.
 	// --replace forces the old implicit-recreate behavior (rm -f then create) for
 	// either state, so changed kit/mcp/create-only flags take effect.
@@ -257,7 +257,7 @@ func runRun(argv []string) {
 	}
 
 	// Trusted host state: the host-visible facts the fenced agent can't see for
-	// itself (keys/services/knowledge/gog/mcp/models/overlay/identity). This
+	// itself (keys/services/knowledge/gog/mcp/models/pack/identity). This
 	// travels ONLY inside the launcher-generated initial prompt (the pi
 	// passthrough arg carrying generatedInputMarker, e.g. onboardingKickoff) —
 	// never as a workspace file, which a cloned repo could plant or leave stale.
@@ -291,7 +291,7 @@ func runRun(argv []string) {
 	cmd.Stderr = os.Stderr
 	// The default path injects no credential bearer: gog authenticates on the host
 	// inside the gateway-spawned MCP server, so the sandbox never sees a Google
-	// token. A future overlay credential broker would set its own bearer through
+	// token. A future external credential broker plugin would set its own bearer through
 	// the retained generic seam and own that plumbing itself.
 	cmd.Env = os.Environ()
 	if err := cmd.Run(); err != nil {

@@ -42,7 +42,7 @@ memory_embed_model = "custom-embed"
 gog_account = "you@example.com"
 
 [kits]
-stack = ["overlay-a", "overlay-b"]
+stack = ["mixin-a", "mixin-b"]
 
 [skills]
 paths = ["/tmp/skills"]
@@ -79,7 +79,7 @@ port = 9000
 	if c.GogAccount != "you@example.com" {
 		t.Errorf("GogAccount = %q, want you@example.com", c.GogAccount)
 	}
-	if len(c.Kits.Stack) != 2 || c.Kits.Stack[1] != "overlay-b" {
+	if len(c.Kits.Stack) != 2 || c.Kits.Stack[1] != "mixin-b" {
 		t.Errorf("Kits.Stack = %v", c.Kits.Stack)
 	}
 	if len(c.Skills.Paths) != 1 || c.Skills.Paths[0] != "/tmp/skills" {

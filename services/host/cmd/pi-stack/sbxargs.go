@@ -59,10 +59,11 @@ type runOpts struct {
 	// own unconditional --kit loop.
 	PackKits    []string
 	Passthrough []string // args after `--`, handed straight to pi
-	// Token is the credential bearer for an OPTIONAL overlay broker. The default
-	// path leaves it empty and forwards no bearer (gog authenticates host-side in
-	// the gateway-spawned MCP server). Reserved for the dormant generic broker
-	// seam; never emitted on argv (it would go via the sbx child env, like run.go).
+	// Token is the credential bearer for an OPTIONAL external credential broker
+	// plugin. The default path leaves it empty and forwards no bearer (gog
+	// authenticates host-side in the gateway-spawned MCP server). Reserved for
+	// the dormant generic broker seam; never emitted on argv (it would go via
+	// the sbx child env, like run.go).
 	Token string
 }
 
@@ -141,7 +142,7 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 	for _, k := range o.PackKits {
 		args = append(args, "--kit", k)
 	}
-	// Config/overlay stack always applies on top of the base.
+	// Config-stacked kits always apply on top of the base.
 	for _, k := range cfg.Kits.Stack {
 		args = append(args, "--kit", k)
 	}
@@ -159,7 +160,7 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 
 	// The default path forwards NO credential bearer: gog authenticates on the
 	// host inside the gateway-spawned MCP server, so nothing needs injecting. If a
-	// future overlay broker sets o.Token, it goes via the sbx CHILD PROCESS ENV
+	// future external credential broker plugin sets o.Token, it goes via the sbx CHILD PROCESS ENV
 	// (never argv, which `ps`/EDR can read) — keep this arg builder token-free.
 
 	// Workspace (first non-flag positional).
@@ -292,7 +293,7 @@ func definitelyCreating(state sbxState, replace bool) bool {
 
 // buildReattachArgs composes the argv for RE-ATTACHING to an existing sandbox:
 // `run --name <name>`, deliberately WITHOUT any create-only flag
-// (--kit/--template/--mcp, the overlay-kit stack, or the --dev/--skills live
+// (--kit/--template/--mcp, the config-stacked kits, or the --dev/--skills live
 // trees) — sbx reads the agent from the existing sandbox's own spec, so
 // reapplying them would be a no-op at best and a lie about what's running at
 // worst. --model/--intent are NOT create-only, though: they are pi RUNTIME args

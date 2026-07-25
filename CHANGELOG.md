@@ -80,7 +80,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   `network.serviceDomains`/`serviceAuth`/`allowedDomains` + `credentials.sources`
   + `environment.proxyManaged`. Injection is unchanged (proxy-managed sentinels;
   all four providers verified). **Requires a recent `sbx` nightly** (v0.37+); the
-  per-credential `service:` is mandatory or `sbx run` panics. Overlay/mixin kits
+  per-credential `service:` is mandatory or `sbx run` panics. Mixin kits
   should move their network rules to `caps.network.allow` too.
 - **1Password is now the only provider-key source; the `op` CLI is required.**
   Removed `pi-stack setup --use-sbx-keys` / `--use-1password` (both now error),
@@ -218,9 +218,10 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 - **`evals` is no longer a command.** The automated eval harness was removed (see
   Removed); the `evals` verb is gone from the launcher, help, and man page.
 - Removed company-specific wiring from the public tree: the `SNOW_CONN` env in
-  `make serve` (now a generic overlay-populated `SERVE_ENV`), the `snow` probe in
-  the `healthcheck` skill (now a generic `EXTRA_CLIS` hook), and the overlay-only
-  `:11442` port from the public kit allowlist. Overlays add these themselves.
+  `make serve` (now a generic pack-populated `SERVE_ENV`), the `snow` probe in
+  the `healthcheck` skill (now a generic `EXTRA_CLIS` hook), and the
+  company-only `:11442` port from the public kit allowlist. A pack adds these
+  itself.
 - Pruned stale docs: two `HANDOFF` snapshots, a superseded migration guide, a
   review artifact, and an upstream issue draft.
 - README reworked to lead with the outcome, fix the launch command

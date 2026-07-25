@@ -15,10 +15,9 @@ import (
 // A name in the resolved profile's mcp list is registered with the sbx gateway
 // ONLY if it is a LOCAL stdio server this host can serve. gog is a special local
 // case (its serverCmd is the external Google Workspace CLI in MCP mode). Every
-// other local name — slack, and any overlay server like `pio` or `fastmail` —
-// registers as `pi-stack-host mcp <name>` (the serverCmd default). The set of
-// local names is the SOURCE OF TRUTH from `pi-stack-host mcp --list`, so an
-// overlay adds a private MCP server just by having its bridge listed there. A
+// other local name — slack, and any other locally-servable name — registers as
+// `pi-stack-host mcp <name>` (the serverCmd default). The set of local names is
+// the SOURCE OF TRUTH from `pi-stack-host mcp --list`. A
 // name in cfg.MCP that is NEITHER gog NOR local is a remote gateway-catalog
 // server (notion/atlassian/…): it is attached a different way, so registration
 // SKIPS it with an info line rather than wrongly registering it as local.
@@ -386,8 +385,8 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 
 	if !opReady {
 		if len(localServers) > 0 {
-			// A confirmed non-gog local stdio server (slack, an overlay `pio`, ...)
-			// can actually use op-refs. Best-effort: seed a template op-refs.env at
+			// A confirmed non-gog local stdio server (slack, or another registered
+			// local name) can actually use op-refs. Best-effort: seed a template op-refs.env at
 			// the absolute XDG path so the user has a concrete file to fill in later,
 			// and note that we registered bare rather than failing.
 			refsPath := defaultOpRefsPath(env)
