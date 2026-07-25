@@ -144,7 +144,7 @@ func TestDoctor_AllGreen(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, nil
-	r.render(&buf)
+	r.render(&buf, false)
 	out := buf.String()
 	if !strings.Contains(out, "all checks pass") {
 		t.Errorf("expected all-pass verdict, got:\n%s", out)
@@ -185,7 +185,7 @@ func TestDoctor_SbxAbsent(t *testing.T) {
 
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, nil
-	r.render(&buf)
+	r.render(&buf, false)
 	out := buf.String()
 	if !strings.Contains(out, "outstanding") {
 		t.Errorf("expected outstanding verdict, got:\n%s", out)
@@ -244,10 +244,10 @@ func TestDoctor_GogHeadlessTrap(t *testing.T) {
 	}
 	var acctOK, headTODO bool
 	for _, c := range gog.checks {
-		if c.label == "account" && c.state == stateOK {
+		if c.label == "account" && c.state() == stateOK {
 			acctOK = true
 		}
-		if c.label == "headless spawn" && c.state == stateTODO &&
+		if c.label == "headless spawn" && c.state() == stateTODO &&
 			strings.Contains(c.todo, "GOG_KEYRING_BACKEND=file") {
 			headTODO = true
 		}
@@ -278,7 +278,7 @@ func TestDoctor_GogAccountUnset(t *testing.T) {
 	// detail and stays a TODO (not stateOK).
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, nil
-	r.render(&buf)
+	r.render(&buf, false)
 	if !strings.Contains(buf.String(), "cannot verify (gog_account unset in config.toml/env)") {
 		t.Errorf("expected a 'cannot verify' account detail, got:\n%s", buf.String())
 	}
@@ -325,7 +325,7 @@ func TestDoctor_GogTransparency(t *testing.T) {
 	r := runDoctor(defaultCfg(), f.env())
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, []string{"gog"}
-	r.render(&buf)
+	r.render(&buf, false)
 	out := buf.String()
 	if !strings.Contains(out, "verifying") || !strings.Contains(out, gogAcct) || !strings.Contains(out, gogOpRefs) {
 		t.Errorf("expected a transparency line naming account+op-refs, got:\n%s", out)
@@ -386,7 +386,7 @@ func TestDoctor_SbxPresentMcpListFailed(t *testing.T) {
 	// "register on the host".
 	var buf bytes.Buffer
 	r.services, r.mcp = cfg.Services, cfg.MCP
-	r.render(&buf)
+	r.render(&buf, false)
 	out := buf.String()
 	if !strings.Contains(out, "sbx mcp status") && !strings.Contains(out, "sbx daemon") {
 		t.Errorf("expected sbx daemon/gateway guidance, got:\n%s", out)
@@ -481,8 +481,8 @@ func TestDoctor_SecretsGroupShortLiteralFlagged(t *testing.T) {
 			t.Errorf("secrets group LEAKED the literal value: %q", c.detail)
 		}
 		if c.label == "SLACK_TOKEN" {
-			if c.state != stateTODO {
-				t.Errorf("SLACK_TOKEN state = %v, want stateTODO", c.state)
+			if c.state() != stateTODO {
+				t.Errorf("SLACK_TOKEN state = %v, want stateTODO", c.state())
 			}
 			if !strings.Contains(c.detail, "not an op:// ref") {
 				t.Errorf("SLACK_TOKEN detail should flag refs-only: %q", c.detail)
@@ -532,7 +532,7 @@ func TestDoctor_GogRegisteredCommand(t *testing.T) {
 				t.Errorf("registered command detail must not echo the account verbatim: %q", c.detail)
 			}
 		}
-		if c.label == "headless spawn" && c.state == stateOK {
+		if c.label == "headless spawn" && c.state() == stateOK {
 			headOK = true
 		}
 	}
@@ -575,7 +575,7 @@ func TestDoctor_GogFallbackUnconfirmedIsTODO(t *testing.T) {
 			continue
 		}
 		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state == stateTODO &&
+			if c.label == "headless spawn" && c.state() == stateTODO &&
 				strings.Contains(c.detail, "could not confirm the sbx-registered command") {
 				headTODO = true
 			}
@@ -587,7 +587,7 @@ func TestDoctor_GogFallbackUnconfirmedIsTODO(t *testing.T) {
 	// Verdict must NOT be all-clear.
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, []string{"gog"}
-	r.render(&buf)
+	r.render(&buf, false)
 	out := buf.String()
 	if strings.Contains(out, "all checks pass") {
 		t.Errorf("unconfirmed fallback must not report all-clear, got:\n%s", out)
@@ -620,7 +620,7 @@ func TestDoctor_GogRegisteredCommandLineFallsThrough(t *testing.T) {
 			continue
 		}
 		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state == stateOK {
+			if c.label == "headless spawn" && c.state() == stateOK {
 				headOK = true
 			}
 		}
@@ -651,7 +651,7 @@ func TestDoctor_GogRegisteredCommandJSON(t *testing.T) {
 			continue
 		}
 		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state == stateOK {
+			if c.label == "headless spawn" && c.state() == stateOK {
 				headOK = true
 			}
 		}
@@ -698,7 +698,7 @@ func TestDoctor_GogBareRegisteredCommand(t *testing.T) {
 				t.Errorf("registered command detail must not echo the account verbatim: %q", c.detail)
 			}
 		}
-		if c.label == "headless spawn" && c.state == stateOK {
+		if c.label == "headless spawn" && c.state() == stateOK {
 			headOK = true
 		}
 	}
@@ -739,7 +739,7 @@ func TestDoctor_GogBareRegisteredCommandJSON(t *testing.T) {
 			continue
 		}
 		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state == stateOK {
+			if c.label == "headless spawn" && c.state() == stateOK {
 				headOK = true
 			}
 		}
@@ -790,7 +790,7 @@ func TestDoctor_GogRegistration(t *testing.T) {
 			continue
 		}
 		for _, c := range g.checks {
-			if c.label == "gog" && c.state == stateTODO {
+			if c.label == "gog" && c.state() == stateTODO {
 				found = true
 			}
 		}
@@ -816,7 +816,7 @@ func TestDoctor_MCPRegistration(t *testing.T) {
 	r := runDoctor(cfg, f.env())
 	found := false
 	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state == stateTODO {
+		if c.label == "slack" && c.state() == stateTODO {
 			found = true
 		}
 	}
@@ -828,7 +828,7 @@ func TestDoctor_MCPRegistration(t *testing.T) {
 	f.output["sbx mcp ls"] = "notion\nslack\n"
 	r = runDoctor(cfg, f.env())
 	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state == stateTODO {
+		if c.label == "slack" && c.state() == stateTODO {
 			t.Errorf("registered slack should not be a TODO")
 		}
 	}
@@ -857,7 +857,7 @@ func TestDoctor_MCPToolProbe(t *testing.T) {
 	// The generic mcp group is last; slack must read as a real tool count.
 	var found bool
 	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state == stateOK && strings.Contains(c.detail, "spawns 3 tools") {
+		if c.label == "slack" && c.state() == stateOK && strings.Contains(c.detail, "spawns 3 tools") {
 			found = true
 		}
 	}
@@ -886,7 +886,7 @@ func TestDoctor_MCPToolProbeZero(t *testing.T) {
 	r := runDoctor(cfg, f.env())
 	var todo bool
 	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state == stateTODO && strings.Contains(c.detail, "0 tools") {
+		if c.label == "slack" && c.state() == stateTODO && strings.Contains(c.detail, "0 tools") {
 			todo = true
 		}
 	}
@@ -926,7 +926,7 @@ func TestDoctor_MCPUnrecognizedCommand(t *testing.T) {
 	r := runDoctor(cfg, env)
 	var found bool
 	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "evil" && c.state == stateOK &&
+		if c.label == "evil" && c.state() == stateOK &&
 			strings.Contains(c.detail, "probe skipped: unrecognized command") {
 			found = true
 		}
@@ -974,8 +974,8 @@ func TestDoctor_GogTodoOnce(t *testing.T) {
 // while preserving first-occurrence order.
 func TestDoctorTodosDedup(t *testing.T) {
 	r := &report{groups: []group{
-		{checks: []check{{state: stateTODO, todo: "a"}, {state: stateTODO, todo: "b"}}},
-		{checks: []check{{state: stateTODO, todo: "a"}, {state: stateTODO, todo: "c"}}},
+		{checks: []check{{verdict: verdictTodo, todo: "a"}, {verdict: verdictTodo, todo: "b"}}},
+		{checks: []check{{verdict: verdictTodo, todo: "a"}, {verdict: verdictTodo, todo: "c"}}},
 	}}
 	got := r.todos()
 	want := []string{"a", "b", "c"}
@@ -1040,7 +1040,7 @@ func TestDoctor_SecretsGroup_GogOnlyNotNeeded(t *testing.T) {
 		t.Errorf("gog-only config should say 1Password not needed, got %+v", g.checks)
 	}
 	for _, c := range g.checks {
-		if c.state == stateTODO {
+		if c.state() == stateTODO {
 			t.Errorf("gog-only config must raise no Secrets TODO, got %+v", c)
 		}
 	}
@@ -1058,7 +1058,7 @@ func TestDoctor_SecretsGroup_SlackOnly(t *testing.T) {
 	g := secretsGroupFor(t, []string{"slack"}, f)
 	var sawRef bool
 	for _, c := range g.checks {
-		if c.label == "SLACK_TOKEN" && c.state == stateOK {
+		if c.label == "SLACK_TOKEN" && c.state() == stateOK {
 			sawRef = true
 		}
 	}
@@ -1082,7 +1082,7 @@ func TestDoctor_SecretsGroup_PermsFinding(t *testing.T) {
 			perms = &g.checks[i]
 		}
 	}
-	if perms == nil || perms.state != stateTODO || !strings.Contains(perms.todo, "chmod 600") {
+	if perms == nil || perms.state() != stateTODO || !strings.Contains(perms.todo, "chmod 600") {
 		t.Errorf("0644 op-refs.env should raise a chmod 600 perms TODO, got %+v", g.checks)
 	}
 }

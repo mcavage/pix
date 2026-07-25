@@ -262,13 +262,22 @@ flags:
   --json   emit the machine-readable status snapshot
 `
 
-const doctorUsage = `usage: pi-stack doctor [--json]
+const doctorUsage = `usage: pi-stack doctor [--json] [--verbose]
 
 Diagnose host + sandbox health (provider keys, ollama/models, memory, gog, mcp),
-leading with a one-line verdict and copy-pasteable TODO commands.
+leading with a one-line verdict and copy-pasteable TODO commands. The default
+output is concise (verified-ready checks collapse per group); --verbose shows
+every check.
 
 flags:
-  --json   emit the machine-readable report
+  --json      emit the machine-readable report (schema_version 2)
+  --verbose   show every check, including verified-ready detail
+
+exit codes:
+  0  ready, or only optional/unverifiable gaps (nothing verified-broken that
+     pi-stack requires)
+  1  a positively verified core failure (or the config failed to load)
+  2  usage error
 `
 
 const configUsage = `usage: pi-stack config <show|path|get|set|unset> [args]
