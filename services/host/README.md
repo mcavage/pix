@@ -47,11 +47,16 @@ pi-stack-host slack         Slack read/search MCP
   registration or the VM. Reads `SLACK_TOKEN`/`SLACK_TEAM_ID` at startup; declare
   the refs in `config/op-refs.env`.
 
-**Private overlay.** Company-specific subcommands (e.g. a warehouse exec-proxy, an
-HR-directory MCP) live in gitignored `services/host/*.go` files that **self-register**
-into the binary via `init()` (`extraCommands` / `extraServiceFactories` in
-`main.go`). The binary builds and runs identically with or without them; the public
-tree ships none.
+**Private integrations.** Company-specific connectors are NOT compiled in and are
+never in the public tree. A host-executing MCP server (e.g. an HR-directory MCP)
+ships as a **container** (OCI image + `server.json`), referenced by a pack
+`[[integrations]] manifest` and run on the HOST by the sbx gateway; a host-only
+service (e.g. a warehouse exec-proxy) ships as a standalone **host daemon** with a
+thin in-sandbox `[[proxy]]` wrapper in the pack. **No `pi-stack-host` recompile is
+ever needed** — the old compile-in overlay path (gitignored `overlay_*.go`
+self-registering via `init()` into `extraCommands` / `extraServiceFactories`) is
+retired; see `../../docs/OVERLAY.md`. The `init()` seams remain only as a dormant
+maintainer-only extension point.
 
 The MCP stdio transport is newline-delimited JSON (what the gateway speaks);
 `mcpStdio` also tolerates Content-Length framing on input.

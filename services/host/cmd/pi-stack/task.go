@@ -1174,8 +1174,6 @@ func launchTask(o runOpts) error {
 			o.LocalImageTag = readLocalImageTag(root)
 		}
 	}
-	o.MCPEnabled = strings.TrimSpace(os.Getenv("SBX_MCP_URL")) != ""
-
 	// Same local-image preflight as `pi-stack run`: a task pins --template to the
 	// local-<ts> tag, so a stale tag (pruned template) would make sbx pull a
 	// never-published image and stall on a prompt. Refuse fast with `make load`.
@@ -1199,19 +1197,17 @@ func launchTask(o runOpts) error {
 	// above only updates cfg/o with the pack's overrides, it does not write the
 	// per-launch workspace files that carry that context INTO the sandbox. Without
 	// these a task sandbox silently loses the active pack's memory scope, its
-	// ollama-bridge model, the MCP-gateway-off warning, and the stale-pack marker
-	// run.go relies on. A task is always a fresh create, so writeMemoryScope and
-	// writeSandboxPackMarker run unconditionally (no willCreate/definitelyCreating
-	// gating needed — that only exists in run.go to distinguish create from
-	// re-attach, and a task never re-attaches).
-	if !o.MCPEnabled {
-		configured := append(append([]string(nil), cfg.MCP...), o.MCP...)
-		if msg := mcpGatewayOffWarning(configured); msg != "" {
-			fmt.Fprintln(os.Stderr, msg)
-		}
-	}
+	// ollama-bridge model, and the stale-pack marker run.go relies on. A task is
+	// always a fresh create, so writeMemoryScope and writeSandboxPackMarker run
+	// unconditionally (no willCreate/definitelyCreating gating needed — that only
+	// exists in run.go to distinguish create from re-attach, and a task never
+	// re-attaches).
 	writePackContextFiles(cfg, o, effectivePack)
 	writeSandboxPackMarker(o.Workspace, effectivePack)
+
+	// Resolve the eager (--static-mcp) set; default dynamic, only mcp_static pins
+	// eager. A task is always a fresh create, so it's always needed.
+	o.StaticMCP = resolveStaticMCP(append(append([]string(nil), cfg.MCP...), o.MCP...), cfg)
 
 	args := buildSbxArgs(cfg, o, version)
 	if os.Getenv("PI_STACK_DEBUG") != "" {

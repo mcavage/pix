@@ -169,7 +169,7 @@ func TestSetupHostPhase_InvalidFlags_NeverInvokesProviderKeyFlow(t *testing.T) {
 func TestHostStateHostReadiness(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y"}
 	cfg.Host.Enabled = true
-	hs := buildHostState(cfg, "", false, func(int) bool { return false }, false, "", hostStatePack{})
+	hs := buildHostState(cfg, "", false, func(int) bool { return false }, "", hostStatePack{})
 	if !hs.Host.Enabled {
 		t.Error("host.enabled should reflect config")
 	}

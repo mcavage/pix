@@ -17,13 +17,14 @@ worth not repeating.
   Python service. See AGENTS.md for why.
 - **Keep the open-core boundary clean.** Nothing company-specific belongs in this
   repo: no channel names, account emails, internal hostnames, connector-specific
-  env, or private skills. Those live in a private overlay repo. `make serve`
-  compiles overlay plugins locally, but they are never committed here.
-  `scripts/check-open-core.sh` runs in CI and fails if an overlay file or an
-  internal marker is ever tracked.
+  env, or private skills. Those live in a private **pack** (git-backed, mounted at
+  runtime with `pi-stack pack use`) and, for host-executing integrations, in a
+  separate container/host-daemon repo — never compiled into the public tree.
+  `scripts/check-open-core.sh` runs in CI and fails if a company-specific file or
+  an internal marker is ever tracked.
 - **A skill is pure mechanism.** Never bake one person's specifics (their
   channels, accounts, thresholds) into a `SKILL.md`. Read those from memory or
-  the overlay at runtime; the skill only knows the shape.
+  a pack at runtime; the skill only knows the shape.
 - **Write like a human.** Direct, concrete, no em-dashes, no AI filler. See the
   `anti-slop` and `writing-voice` skills.
 

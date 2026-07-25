@@ -7,8 +7,9 @@ harness, [AGENTS.md](../AGENTS.md). This folder holds the deeper references.
 
 - [gog-setup.md](gog-setup.md) — set up the host-side Google Workspace (`gog`)
   MCP server, read-only by default.
-- [OVERLAY.md](OVERLAY.md) — build a private company overlay (a mixin kit plus
-  host plugins) without forking the public tree.
+- [OVERLAY.md](OVERLAY.md) — migration note: the build-time overlay is retired;
+  private company context now ships as a **pack** (plus container/host MCP
+  integrations), not a forked/recompiled tree.
 - [memory.md](memory.md) — the memory service: what it stores, how recall and
   capture work, the commands, and the trust model.
 - [../SECURITY.md](../SECURITY.md) — the trust boundary, what the sandbox does

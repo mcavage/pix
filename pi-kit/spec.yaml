@@ -167,6 +167,16 @@ commands:
     - command: 'mkdir -p /usr/local/share/ca-certificates && printf "%s" "$PROXY_CA_CERT_B64" | base64 -d > /usr/local/share/ca-certificates/proxy-ca.crt && update-ca-certificates'
       user: "0"
       description: Trust the sandbox proxy's TLS-intercepting CA
+    # Register the sandbox MCP gateway with pi. pi isn't a native sbx agent
+    # integration, so nothing auto-wires the gateway — the pi-mcp-adapter reads
+    # ~/.pi/agent/mcp.json, so we write the gateway there (HTTP StreamableHTTP +
+    # the sentinel bearer the egress proxy swaps for the real token). Without this
+    # pi sees ZERO MCP — not even the primordial mcp-find/mcp-exec/code-mode tools.
+    # Guarded on MCP_GATEWAY_URL so a non-Docker host (no gateway) stays MCP-empty.
+    # (Mirrors the claude/codex/gemini/kiro/opencode kits — see the sandboxes repo
+    # docs/runbooks/mcp-gateway-registration.md.)
+    - command: '[ -n "$MCP_GATEWAY_URL" ] || exit 0; mkdir -p "$HOME/.pi/agent"; printf ''{"mcpServers":{"mcp-gateway":{"url":"%s","headers":{"Authorization":"Bearer %s"}}}}\n'' "$MCP_GATEWAY_URL" "$MCP_SENTINEL_TOKEN_NAME" > "$HOME/.pi/agent/mcp.json"'
+      description: Register the sbx MCP gateway with pi (pi-mcp-adapter)
 
 agentContext: |
   # pi-stack

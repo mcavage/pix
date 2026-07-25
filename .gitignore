@@ -48,6 +48,7 @@ out/
 # Keep this list in sync with the !skills/... allowlist in .dockerignore.
 skills/*
 !skills/agent-new/
+!skills/analyze/
 !skills/anti-slop/
 !skills/api-conventions/
 !skills/brainstorm/
@@ -64,8 +65,10 @@ skills/*
 !skills/design-system/
 !skills/docs-standards/
 !skills/docs-sync/
+!skills/draft-email/
 !skills/enrich/
 !skills/git-conventions/
+!skills/gtm-launch/
 !skills/guard/
 !skills/gworkspace/
 !skills/healthcheck/
@@ -79,8 +82,10 @@ skills/*
 !skills/promote/
 !skills/qa/
 !skills/ship/
+!skills/slide-deck/
 !skills/tdd/
 !skills/verify/
+!skills/weekly-wrap/
 !skills/writing-voice/
 
 # --- Open-core boundary: agents (MUST mirror .dockerignore) ---------------------

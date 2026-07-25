@@ -94,19 +94,6 @@ func TestAddArgs_GogBare(t *testing.T) {
 	}
 }
 
-// TestRegisterServers_GatewayOff: SBX_MCP_URL unset -> a clear up-front guard
-// naming the export, before any registration is attempted.
-func TestRegisterServers_GatewayOff(t *testing.T) {
-	f := fakeEnv{present: map[string]bool{"op": true, "gog": true}, output: map[string]string{}}
-	cfg := defaultCfg()
-	cfg.GogAccount = "me@x.com"
-	var buf bytes.Buffer
-	err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil))
-	if err == nil || !strings.Contains(err.Error(), "SBX_MCP_URL=https://gateway.docker.com") {
-		t.Errorf("expected an SBX_MCP_URL gateway guard, got %v", err)
-	}
-}
-
 // TestRegisterServers_GogNoOpRefsBare: gateway on, op + op-refs ABSENT, gog
 // present + account set -> gog registers DIRECTLY (bare command, no op wrapper)
 // with the OAuth note. gog uses OAuth (gog auth login), never op-refs, so the
@@ -121,7 +108,7 @@ func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil)); err != nil {
+	if err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	out := buf.String()
@@ -153,7 +140,7 @@ func TestRegisterServers_GogOnlyNoSeed(t *testing.T) {
 	cfg.MCP = []string{"gog"}
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	if err := registerServers(cfg, env, &buf, nil, hostStub("/usr/bin/pi-stack-host", nil)); err != nil {
+	if err := registerServers(cfg, env, &buf, nil, hostStub("/usr/bin/pi-stack-host", nil), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	seeded := filepath.Join(home, ".config", "pi-stack", "op-refs.env")
@@ -181,7 +168,7 @@ func TestRegisterServers_SlackNoOpRefsBare(t *testing.T) {
 	}
 	cfg := defaultCfg()
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, []string{"slack"}, hostStub("/usr/bin/pi-stack-host", nil)); err != nil {
+	if err := registerServers(cfg, f.env(), &buf, []string{"slack"}, hostStub("/usr/bin/pi-stack-host", nil), nil); err != nil {
 		t.Fatalf("unexpected error (slack should register bare, not fail): %v", err)
 	}
 	out := buf.String()
@@ -210,7 +197,7 @@ func TestRegisterServers_SlackOpRefsAbsentSeeds(t *testing.T) {
 	}).env()
 	cfg := defaultCfg()
 	var buf bytes.Buffer
-	if err := registerServers(cfg, env, &buf, []string{"slack"}, hostStub("/usr/bin/pi-stack-host", nil)); err != nil {
+	if err := registerServers(cfg, env, &buf, []string{"slack"}, hostStub("/usr/bin/pi-stack-host", nil), nil); err != nil {
 		t.Fatalf("unexpected error (slack should register bare, not fail): %v", err)
 	}
 	seeded := filepath.Join(home, ".config", "pi-stack", "op-refs.env")
@@ -244,7 +231,7 @@ func TestRegisterServers_RemoteSkipped(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"slack", "notion"}
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pi-stack-host", nil)); err != nil {
+	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pi-stack-host", nil), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	out := buf.String()
@@ -256,6 +243,39 @@ func TestRegisterServers_RemoteSkipped(t *testing.T) {
 	}
 	if !strings.Contains(out, "sbx mcp add slack") {
 		t.Errorf("slack (local) should still be registered, got:\n%s", out)
+	}
+}
+
+// TestRegisterServers_RemoteWithURLRegistered: a remote gateway-catalog name that
+// the pack carries a URL for (containers[name].RemoteURL set) is NOT skipped — it
+// is registered via `sbx mcp add <name> --url <url>`, with no --local and no
+// op-run wrapper. This is the pack-self-registers-remotes path; it fails if the
+// RemoteURL branch is dropped and opine/notion/etc. fall back to the skip line.
+func TestRegisterServers_RemoteWithURLRegistered(t *testing.T) {
+	f := fakeEnv{
+		present: map[string]bool{"op": true}, // no sbx -> would-run printed
+		output: map[string]string{
+			"/usr/bin/pi-stack-host mcp --list": "slack\n", // opine is NOT a local server
+		},
+		envVars:  map[string]string{"PI_STACK_CONFIG": "/fake/config/config.toml"},
+		statFile: map[string]bool{"/fake/config/op-refs.env": true},
+	}
+	cfg := defaultCfg()
+	cfg.MCP = []string{"opine"}
+	containers := map[string]packContainer{"opine": {RemoteURL: "https://app.tryopine.com/mcp"}}
+	var buf bytes.Buffer
+	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pi-stack-host", nil), containers); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "sbx mcp add opine --url https://app.tryopine.com/mcp") {
+		t.Errorf("expected opine registered via --url, got:\n%s", out)
+	}
+	if strings.Contains(out, "gateway-catalog server, not locally registered") {
+		t.Errorf("opine with a pack URL must NOT be skipped, got:\n%s", out)
+	}
+	if strings.Contains(out, "--local") || strings.Contains(out, "--command") {
+		t.Errorf("remote-url server must not use --local/--command, got:\n%s", out)
 	}
 }
 
@@ -275,7 +295,7 @@ func TestRegisterServers_LocalSetUnknownFailClosed(t *testing.T) {
 	cfg.MCP = []string{"notion"} // a gateway-catalog name, NOT a local server
 	var buf bytes.Buffer
 	// hostStub fails: pi-stack-host cannot be resolved, so the local set is unknown.
-	err := registerServers(cfg, f.env(), &buf, nil, hostStub("", errors.New("pi-stack-host not found")))
+	err := registerServers(cfg, f.env(), &buf, nil, hostStub("", errors.New("pi-stack-host not found")), nil)
 	if err == nil {
 		t.Fatal("expected a non-nil error when the local set is unknown, got nil (silent success)")
 	}
@@ -304,7 +324,7 @@ func TestRegisterServers_FailuresReturnError(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil))
+	err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil)
 	if err == nil || !strings.Contains(err.Error(), "failed to register") || !strings.Contains(err.Error(), "gog") {
 		t.Errorf("expected a joined registration error mentioning gog, got %v", err)
 	}
@@ -324,7 +344,7 @@ func TestRegisterServers_GogNotFound(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil))
+	err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil)
 	if err == nil || !strings.Contains(err.Error(), "brew install gog") {
 		t.Errorf("expected a gog-not-found guard, got %v", err)
 	}
@@ -341,7 +361,7 @@ func TestRegisterServers_GogAccountUnset(t *testing.T) {
 	}
 	cfg := defaultCfg() // GogAccount empty
 	var buf bytes.Buffer
-	err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil))
+	err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil)
 	if err == nil || !strings.Contains(err.Error(), "pi-stack config set gog_account") {
 		t.Errorf("expected the config-set gog_account guide, got %v", err)
 	}
@@ -359,7 +379,7 @@ func TestRegisterServers_SbxAbsentPrintsWouldRun(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil)); err != nil {
+	if err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	out := buf.String()
@@ -386,7 +406,7 @@ func TestRegisterServers_Registers(t *testing.T) {
 	key := strings.Join(append([]string{"sbx"}, reg.addArgs("gog")...), " ")
 	f.output[key] = "ok"
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil)); err != nil {
+	if err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(buf.String(), "registered: gog") {
@@ -407,7 +427,7 @@ func TestRegisterServers_DefaultsToConfigMCP(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"pio"} // an overlay local stdio server
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pi-stack-host", nil)); err != nil {
+	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pi-stack-host", nil), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	out := buf.String()
@@ -424,10 +444,70 @@ func TestRegisterServers_EmptyConfig(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = nil
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("", nil)); err != nil {
+	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("", nil), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(buf.String(), "Nothing to register") {
 		t.Errorf("expected nothing-to-register for an empty mcp set, got:\n%s", buf.String())
+	}
+}
+
+// TestMcpRegistrar_ContainerAddArgs pins the pack CONTAINER integration path:
+// a name with a manifest registers via `--local --url <manifest>` and is NOT
+// op-run wrapped (its creds are Docker-side), while a normal local server still
+// gets the op-run wrapper when op-refs is present.
+func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
+	reg := mcpRegistrar{
+		op:      "/usr/bin/op",
+		opRefs:  "/abs/op-refs.env",
+		hostBin: "/usr/local/bin/pi-stack-host",
+		containers: map[string]packContainer{
+			"notion-ish": {Manifest: "https://example.com/mcp/x/server.json"},
+			"bamboohr":   {Image: "bamboohr-mcp:0.0.1", EnvKeys: []string{"BAMBOOHR_API_KEY", "BAMBOOHR_COMPANY_DOMAIN"}},
+			"opine":      {RemoteURL: "https://app.tryopine.com/mcp"},
+		},
+	}
+
+	// Manifest container: --local --url, NOT op-run wrapped.
+	got := strings.Join(reg.addArgs("notion-ish"), " ")
+	want := "mcp add notion-ish --local --url https://example.com/mcp/x/server.json"
+	if got != want {
+		t.Fatalf("manifest addArgs:\n got: %s\nwant: %s", got, want)
+	}
+
+	// Remote container: --url (remote endpoint), NO --local and NOT op-run wrapped
+	// (OAuth is handled host-side by the gateway).
+	rem := strings.Join(reg.addArgs("opine"), " ")
+	if rem != "mcp add opine --url https://app.tryopine.com/mcp" {
+		t.Fatalf("remote-url addArgs:\n got: %s\nwant: mcp add opine --url https://app.tryopine.com/mcp", rem)
+	}
+	if strings.Contains(rem, "--local") || strings.Contains(rem, "--command") {
+		t.Fatalf("remote-url container must not use --local/--command, got:\n%s", rem)
+	}
+
+	// Image container: op-run-wrapped `docker run -i --rm -e KEY… <image>`.
+	img := strings.Join(reg.addArgs("bamboohr"), " ")
+	for _, must := range []string{
+		"mcp add bamboohr --command /usr/bin/op",
+		"--args run", "--args --env-file=/abs/op-refs.env", "--args --",
+		"--args docker --args run --args -i --args --rm",
+		"--args -e --args BAMBOOHR_API_KEY --args -e --args BAMBOOHR_COMPANY_DOMAIN",
+		"--args bamboohr-mcp:0.0.1",
+	} {
+		if !strings.Contains(img, must) {
+			t.Fatalf("image addArgs missing %q in:\n%s", must, img)
+		}
+	}
+	if strings.Contains(img, "--local") {
+		t.Fatalf("image container must not use --local, got:\n%s", img)
+	}
+
+	// A non-container name (slack) must still be op-run wrapped, not --local.
+	slack := reg.addArgs("slack")
+	if len(slack) < 5 || slack[3] != "--command" || slack[4] != "/usr/bin/op" {
+		t.Fatalf("non-container server must be op-run wrapped, got: %v", slack)
+	}
+	if strings.Contains(strings.Join(slack, " "), "--local") {
+		t.Fatalf("non-container server must not use --local, got: %v", slack)
 	}
 }

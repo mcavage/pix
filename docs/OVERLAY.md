@@ -1,171 +1,43 @@
-# Building a private overlay
+# Private integrations (the overlay is retired)
 
-pi-stack is open-core: the public repo and image ship a generic coding stack, and
-anything company-specific (proprietary skills, a CRM/warehouse/HR connector, an
-internal `capabilities.json`) lives in a **private overlay**. The overlay is its
-own **peer repo** — a sibling directory you keep private, never a subdirectory of
-pi-stack. pi-stack references it by path (`OVERLAY`, default `../pi-stack-work`).
+> **The peer-repo "overlay" model has been removed.** It required building
+> `pi-stack-host` with private Go symlinked in (`make ... OVERLAY=..`), which is
+> exactly the coupling packs were meant to kill. Private company context now
+> lives in a **pack**, and host-executing integrations ship as **containers** the
+> sbx gateway runs (or, when host-only, a small host daemon). Nothing private is
+> compiled into `pi-stack` anymore.
 
-An overlay has two halves, because pi-stack runs in two places:
+## Where each piece went
 
-| half | runs | mechanism |
-|---|---|---|
-| **sandbox** | inside the disposable VM | a **mixin kit** (`kit/`) stacked with `--kit` |
-| **host** | on your host (outside the VM) | **`host/overlay_*.go` plugins**, symlinked into `pi-stack/services/host/` at build |
+| Old overlay half | New home |
+| --- | --- |
+| `kit/files/.../skills/` (company skills) | the pack's `skills/` |
+| `kit/.../capabilities.json` (routing) | the pack's `capabilities.json` (mounts to `~/.pi/agent/`) |
+| in-sandbox `bin/` wrappers | the pack's `[[proxy]]` bin/ |
+| `host/overlay_*.go` (host MCP servers) | a **container** MCP server, referenced by a pack `[[integrations]]` `image` (`docker run <ref>`, op-run wrapped) or `manifest` (`sbx mcp add --local --url`) |
+| a host service that can't containerize (browser OAuth, host-only creds) | a standalone host daemon + installer, in a separate repo |
 
-A copyable scaffold lives in [`examples/overlay/`](../examples/overlay). The layout:
+## How to add a private integration now
 
-```
-../my-overlay/                 # a peer repo (sibling of pi-stack), kept private
-  kit/
-    spec.yaml                  # kind: mixin
-    files/                       # `home/` maps to $HOME (/home/agent), NOT /home —
-      home/.pi/agent/            # so it's files/home/.pi/..., not files/home/agent/.pi/...
-        skills/<your-skill>/SKILL.md     # private skills
-        capabilities.json                # overwrites the public generic one
-      home/.local/bin/<wrapper>          # in-sandbox CLI wrappers (on PATH; sbx
-                                         # only delivers files under home/ + workspace/)
-  host/
-    overlay_<name>.go          # host plugins (Go, package main)
-  overlay.mk                   # private make targets
-```
+1. **Skills / routing / knowledge:** put them in a pack (`pi-stack pack new`,
+   then `pi-stack pack use <path>`). Routing is a `capabilities.json` at the pack
+   root. See [design/packs.md](design/packs.md).
+2. **A remote MCP server:** `pi-stack config set mcp <name>` (gateway-catalog), or
+   a pack `[[integrations]]` with `mcp = "<name>"`.
+3. **A host-executing MCP server:** package it as an OCI image, then reference it
+   from a pack `[[integrations]]` one of two ways:
+   - `image = "<ref>"` (simplest) → pi-stack registers `docker run <ref>`, op-run
+     wrapped like slack, forwarding `env`/`env_keys` into the container via `-e`.
+     A locally-built image tag works — no registry or manifest hosting; push to a
+     registry only to share it. Creds stay in 1Password (op-refs).
+   - `manifest = "<server.json URL>"` → pi-stack registers
+     `sbx mcp add <name> --local --url <manifest>`; the gateway resolves the image
+     and runs it, with credentials provided Docker-side (declared in `server.json`).
+   Either way, nothing private is compiled into `pi-stack`.
+4. **A host-only service** (needs a browser/OAuth or host-cached creds that can't
+   run in a container): ship a standalone host daemon + installer, and have the
+   pack carry a thin in-sandbox `[[proxy]]` wrapper that forwards to it.
 
-pi-stack looks for it at `../pi-stack-work` by default. If your peer repo lives
-elsewhere, pass `OVERLAY` to make (or export it in your shell):
-
-```bash
-make run OVERLAY=../my-overlay
-```
-
-## 1. Sandbox half — the mixin kit (`kit/`)
-
-A mixin kit is a directory with a `spec.yaml` (`kind: mixin`) and a `files/` tree
-that maps directly into the sandbox filesystem. `make run` stacks it automatically
-when `$(OVERLAY)/kit/spec.yaml` exists:
-
-```bash
-sbx run pi-stack --kit ./pi-kit --kit ../my-overlay/kit --mcp ... .
-```
-
-- **Skills** under `files/home/.pi/agent/skills/` are added to the agent's
-  skill set (additive — they don't touch the baked public skills).
-- **`capabilities.json`** overwrites the public generic one, so your skills can ask
-  for `crm`/`warehouse`/etc. and resolve to your real providers. Write
-  capabilities, not vendors (see the `capability-routing` skill).
-- **Wrappers** under `files/usr/local/bin/` are thin in-sandbox shims that forward
-  to a host service, so credentials/SSO stay on the host (see half 2).
-
-## 2. Host half — `host/overlay_*.go` plugins
-
-A mixin kit can't ship host binary code, so host-side services (a warehouse exec
-proxy, an extra MCP server) are Go files that compile into `pi-stack-host`. Put
-them in your overlay's `host/` named `overlay_*.go`. `make serve` / `make
-mcp-register` (via the `link-overlay` target) **symlink** them into
-`pi-stack/services/host/` before building — the symlinks are gitignored there, so
-your private code never enters the public tree, and a public clone (no overlay)
-builds clean.
-
-Each plugin **self-registers** via `init()`:
-
-```go
-package main
-
-func init() {
-    extraCommands["my-svc"] = runMySvc
-    extraUsage = append(extraUsage, "  my-svc       my private host service  [overlay]")
-
-    // optional long-running service started by `make serve` (add "my-svc" to SERVICES):
-    extraServiceFactories = append(extraServiceFactories, func() hostService {
-        return hostService{"my-svc", env("MY_SVC_BIND", "127.0.0.1") + ":12000", myMux()}
-    })
-}
-
-func runMySvc() { /* ... */ }
-```
-
-`extraCommands`/`extraUsage`/`extraServiceFactories` are declared (empty) in
-pi-stack's `main.go`; your plugin populates them only when present. The public
-binary builds and runs identically without it. Plugins are `package main` and use
-pi-stack-host's helpers (`env`, `writeJSON`, `mcpStdio`, `hostService`, …), so they
-compile only when symlinked in — edit them in your overlay, build from pi-stack.
-
-Reach the host service from the sandbox over `host.docker.internal:<port>` via the
-in-sandbox wrapper from half 1. Add the port to your overlay kit's network rules
-(`caps.network.allow: host.docker.internal:<port>` + `localhost:<port>`) — the public
-kit deliberately allows no overlay ports, so the overlay grants its own.
-
-## 3. Make targets — `overlay.mk`
-
-Put private make targets (auth helpers, a `doctor-overlay` readout) in your
-overlay's `overlay.mk`; pi-stack's Makefile `-include`s `$(OVERLAY)/overlay.mk`.
-`make doctor` calls `doctor-overlay` automatically, so your private integrations
-show up in the status readout for you but not for a public cloner. Targets that
-build the binary should depend on `link-overlay`.
-
-## 4. Host plugin overrides — `[plugins.*]` in `config.toml`
-
-The `overlay_*.go` route in half 2 compiles your service *into* `pi-stack-host`.
-The plugin-override route does the opposite: it keeps your code in a **separate
-binary** the public host launcher never links, and points at it from config. Use
-this when a host capability is private end to end (a credential broker for an
-internal data warehouse, a company memory/OKF backend) and you don't want it in
-the build at all.
-
-`pi-stack serve` reads `~/.config/pi-stack/config.toml` at startup. It supervises
-three pluggable capability slots — `memory` (the recall backend, :11435),
-`knowledge` (the OKF knowledge backend, :11436), and `broker` (the credential
-broker, dormant by default). A fourth slot, `mcp` (extra MCP servers), is
-**separate**: it is NOT supervised by `serve` — it is consulted by the
-`pi-stack-host mcp <name>` stdio bridge that the sbx gateway spawns on demand, and
-launched once at bridge startup. If a slot has a `[plugins.<slot>]` table, that
-plugin binary is launched once in place of the built-in; otherwise the built-in
-runs. Each entry pins up to four fields:
-
-```toml
-# ~/.config/pi-stack/config.toml
-[plugins.broker]
-impl = "warehouse-broker"                      # a name, for logs and doctor
-path = "/opt/acme/bin/warehouse-broker"        # the go-plugin binary to launch
-sha  = "sha256:1f3a…"                          # required; serve refuses a mismatch
-port = 12010                                   # port the external plugin listens on
-
-[plugins.knowledge]
-impl = "okf-knowledge"
-path = "/opt/acme/bin/okf-knowledge"
-sha  = "sha256:9c02…"
-port = 11436
-```
-
-- **`impl`** is a label only (shows up in `pi-stack doctor` and logs).
-- **`path`** is the plugin binary. Ship it however you like (your overlay's build,
-  an internal artifact store); the public repo never sees it.
-- **`sha`** is mandatory and SHA-pinned: `serve` hashes the file at `path` and
-  refuses to launch it if the digest doesn't match, so a swapped or tampered binary
-  fails closed instead of running.
-- **`port`** is the port the external plugin binary listens on (the built-in slots
-  default to memory :11435 / knowledge :11436).
-
-The plugin is a `go-plugin` binary: `pi-stack serve` starts it once, speaks to it
-over the plugin protocol for the life of the process, and shuts it down on exit.
-
-This is the seam a company uses to plug private host infrastructure into pi-stack
-**without a fork**: point `[plugins.broker]` at your internal warehouse credential
-broker (the `snow`/warehouse examples elsewhere in this repo are illustrative
-only — substitute your real one), or point `[plugins.knowledge]` at a company OKF /
-knowledge backend, and the public launcher drives it unchanged. Nothing
-company-specific lands in the public tree — the config lives under your `$HOME`,
-the binary lives wherever you built it, and the public `pi-stack-host` keeps its
-generic built-ins as the default.
-
-Two routes, one decision: compile a service into the binary (half 2, `overlay_*.go`)
-when it's an *additive* host service you're fine building from the pi-stack tree;
-ship a separate plugin and override a slot here when the capability is private
-end to end and must stay out of the build.
-
-## What keeps the public repo clean
-
-`.gitignore` ignores `services/host/overlay_*.go` (the symlinks), and
-`scripts/check-open-core.sh` (run in CI) fails if any overlay symlink or known
-internal marker is ever tracked, and asserts the skills/agents allowlists mirror.
-The public image is verified to bake only allowlisted skills + agents. So you can
-develop your overlay right next to pi-stack without risk of leaking it.
+The Docker-employee reference implementation of (3) and (4) — BambooHR (container)
+and the Snowflake exec proxy (host daemon) — lives in the private
+`pix-docker-integrations` repo, referenced by the `gm-pix-pack` pack.

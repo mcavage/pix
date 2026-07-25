@@ -229,33 +229,64 @@ func TestBuildSbxArgs_StackWithoutOverride(t *testing.T) {
 }
 
 func TestBuildSbxArgs_MCPExpansion(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"slack", "notion"}}
-	// Gateway enabled: --mcp flags are emitted.
-	args := buildSbxArgs(cfg, runOpts{Workspace: ".", MCP: []string{"linear"}, MCPEnabled: true}, "0.0.99")
+	cfg := &config.Config{}
+	// buildSbxArgs emits --static-mcp for the RESOLVED static set (o.StaticMCP);
+	// the caller computes it via resolveStaticMCP. The sbx local gateway serves
+	// them, no SBX_MCP_URL.
+	args := buildSbxArgs(cfg, runOpts{Workspace: ".", StaticMCP: []string{"slack", "notion", "linear"}}, "0.0.99")
 
-	if got := countFlag(args, "--mcp"); got != 3 {
-		t.Errorf("expected 3 --mcp flags, got %d in %v", got, args)
+	if got := countFlag(args, "--static-mcp"); got != 3 {
+		t.Errorf("expected 3 --static-mcp flags, got %d in %v", got, args)
+	}
+	if got := countFlag(args, "--mcp"); got != 0 {
+		t.Errorf("must emit --static-mcp, never the removed --mcp; got %d in %v", got, args)
 	}
 	for _, m := range []string{"slack", "notion", "linear"} {
-		if !contains(args, []string{"--mcp", m}) {
-			t.Errorf("--mcp %s missing from %v", m, args)
+		if !contains(args, []string{"--static-mcp", m}) {
+			t.Errorf("--static-mcp %s missing from %v", m, args)
 		}
 	}
 }
 
-// TestBuildSbxArgs_MCPGatewayOff: when the gateway is OFF (MCPEnabled false), no
-// --mcp flag is emitted even with servers configured — sbx would reject it with
-// `unknown flag: --mcp`, so the sandbox must still launch without them.
-func TestBuildSbxArgs_MCPGatewayOff(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog", "slack"}}
-	args := buildSbxArgs(cfg, runOpts{Workspace: ".", MCP: []string{"linear"}, MCPEnabled: false}, "0.0.99")
-	if got := countFlag(args, "--mcp"); got != 0 {
-		t.Errorf("expected 0 --mcp flags when gateway off, got %d in %v", got, args)
+// resolveStaticMCP: default dynamic for every server; only mcp_static pins eager;
+// mcp_dynamic wins if a server is in both.
+func TestResolveStaticMCP(t *testing.T) {
+	// Default: nothing configured -> nothing static (all dynamic), local or remote.
+	if got := resolveStaticMCP([]string{"slack", "notion", "gog"}, &config.Config{}); len(got) != 0 {
+		t.Errorf("default must be all-dynamic (empty static set), got %v", got)
 	}
-	// The warning helper reports the configured servers for the stderr note.
-	msg := mcpGatewayOffWarning([]string{"gog", "slack", "linear"})
-	if !strings.Contains(msg, "SBX_MCP_URL unset") || !strings.Contains(msg, "gog/slack/linear") {
-		t.Errorf("expected a gateway-off warning naming servers, got %q", msg)
+	// mcp_static pins eager; mcp_dynamic wins over mcp_static; order preserved.
+	cfg := &config.Config{
+		MCPStatic:  []string{"slack", "notion"},
+		MCPDynamic: []string{"notion"}, // overrides its own static entry
+	}
+	got := resolveStaticMCP([]string{"gog", "slack", "notion", "atlassian"}, cfg)
+	// slack: static. notion: static-but-dynamic-override -> dropped. gog/atlassian: default dynamic.
+	if len(got) != 1 || got[0] != "slack" {
+		t.Errorf("resolveStaticMCP = %v, want [slack]", got)
+	}
+}
+
+// A pack integration with static=true folds into cfg.MCPStatic (eager); a user
+// mcp_dynamic still overrides it back to lazy.
+func TestPackStaticMcpNames_AndOverride(t *testing.T) {
+	p := &packInfo{Manifest: packManifest{Integrations: []packIntegration{
+		{Name: "Fastmail", MCP: "fastmail", Static: true}, // eager
+		{Name: "Notion", MCP: "notion"},                   // default dynamic
+		{Name: "NoServer"},                                // no mcp -> ignored
+	}}}
+	if got := packStaticMcpNames(p); len(got) != 1 || got[0] != "fastmail" {
+		t.Fatalf("packStaticMcpNames = %v, want [fastmail]", got)
+	}
+	// Folded into cfg.MCPStatic, fastmail is eager...
+	cfgStatic := &config.Config{MCPStatic: []string{"fastmail"}}
+	if got := resolveStaticMCP([]string{"fastmail", "notion"}, cfgStatic); len(got) != 1 || got[0] != "fastmail" {
+		t.Errorf("pack-static fastmail must be eager, got %v", got)
+	}
+	// ...unless the user forces it dynamic.
+	cfgOverride := &config.Config{MCPStatic: []string{"fastmail"}, MCPDynamic: []string{"fastmail"}}
+	if got := resolveStaticMCP([]string{"fastmail", "notion"}, cfgOverride); len(got) != 0 {
+		t.Errorf("mcp_dynamic must override pack-static, got %v", got)
 	}
 }
 

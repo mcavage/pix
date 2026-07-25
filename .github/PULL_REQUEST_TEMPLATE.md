@@ -14,7 +14,7 @@ cd services/host && go build ./... && go test ./... && go vet ./...
 
 - [ ] Host code builds and tests pass (`go build ./... && go test ./...`)
 - [ ] No company-specific data (channels, accounts, hosts, connector env) added to
-      the public tree; that belongs in a private overlay
+      the public tree; that belongs in a private pack
 - [ ] Skills/agents stay pure mechanism (no one person's specifics baked in)
 - [ ] Docs updated if behavior or commands changed (README / AGENTS.md / docs/)
 - [ ] `CHANGELOG.md` updated under Unreleased if user-facing

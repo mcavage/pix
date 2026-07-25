@@ -317,11 +317,17 @@ concrete provider: an `mcp` server, a `cli` on PATH, an `http` service, a
 every skill that reads that capability retargets at once. See the
 `capability-routing` skill for the resolution and fan-out rules.
 
-**Limits.** Registering a stdio MCP server with the gateway is not the same
-as attaching it to a running sandbox; like packs, a new MCP needs a sandbox
-recreate to show up. Local stdio servers aren't surfaced by the gateway's
-dynamic discovery tool, only servers your sandbox was created with `--mcp`
-show up.
+**Attach mode.** Each registered server is either *eager* (`--static-mcp`, tools
+always in context) or *dynamic* (the in-VM agent discovers + calls it on demand
+via mcp-find/mcp-exec/code-mode). This is eager-vs-lazy, not local-vs-remote:
+once a server is registered it sits behind the local gateway, and mcp-find
+surfaces local stdio servers (the daemon spawns them host-side with their creds)
+exactly like remotes. The **default is dynamic** for every server, so large tool
+schemas stay out of context until needed. Pin one eager with `pi-stack config set
+mcp_static <name>` (`mcp_dynamic <name>` is the explicit opposite and wins if a
+server is in both). To attach one to an ALREADY-RUNNING sandbox without
+recreating, use `pi-stack mcp load <name>`; a full recreate (`pi-stack run
+--replace`) also picks up changes.
 
 ## 9. Your first hour
 

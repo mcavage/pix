@@ -18,9 +18,10 @@ What the sandbox protects:
   model responses. GitHub uses the same proxy injection.
 - **The network.** Egress is limited to the allowlist in `pi-kit/spec.yaml`. A
   new external host has to be added there explicitly.
-- **Host data tools.** Google Workspace, Slack, and overlay connectors run as
-  host-side MCP servers reached through the sbx gateway. Tokens stay on the host;
-  the sandbox talks to a gateway, not to the service.
+- **Host data tools.** Google Workspace, Slack, and pack-provided connectors
+  (containerized MCP servers or host daemons) run host-side, reached through the
+  sbx gateway. Tokens stay on the host; the sandbox talks to a gateway, not to the
+  service.
 
 ## What the sandbox does NOT protect
 

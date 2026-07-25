@@ -28,6 +28,7 @@ services/host/pi-stack-host
 # "!skills/<name>" line. Anything not listed is excluded by default (safe).
 skills/*
 !skills/agent-new
+!skills/analyze
 !skills/anti-slop
 !skills/api-conventions
 !skills/brainstorm
@@ -43,8 +44,10 @@ skills/*
 !skills/design-system
 !skills/docs-standards
 !skills/docs-sync
+!skills/draft-email
 !skills/enrich
 !skills/git-conventions
+!skills/gtm-launch
 !skills/guard
 !skills/gworkspace
 !skills/healthcheck
@@ -57,9 +60,11 @@ skills/*
 !skills/peer-review
 !skills/onboarding
 !skills/ship
+!skills/slide-deck
 !skills/tdd
 !skills/plan
 !skills/verify
+!skills/weekly-wrap
 !skills/writing-voice
 !skills/one-pager
 

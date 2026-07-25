@@ -24,7 +24,7 @@ Verified end-to-end in a real sbx sandbox: recall returns seeded facts to the mo
 
 ## The problem, with evidence
 
-The prior overlay's loop ran on the model's discretion. Capture, recall, and synthesis
+The prior loop ran on the model's discretion. Capture, recall, and synthesis
 all wait for the model to choose to call a `memory_*` tool, and it mostly
 doesn't. A full read of the system turned up about a dozen failure modes, all the
 same shape: the model skips the tool call and the knowledge is gone.

@@ -8,7 +8,7 @@ a **work** one — that differ in:
 - the Google Workspace account `gog` serves,
 - which MCP servers are attached,
 - which OKF knowledge bundle(s) recall draws from,
-- which overlay mixin kit is stacked onto the sandbox.
+- which private pack (mixin kit) is stacked onto the sandbox.
 
 Before this change the only isolation seam was the `PI_STACK_CONFIG` env var (a
 whole separate config file) and a single make-time `OVERLAY`. There was no
@@ -33,7 +33,7 @@ gog_account = "me@work.com"
 mcp = ["gog", "slack"]
 knowledge_bundles = ["/kb/work"]
 [profiles.work.kits]
-stack = ["../work-overlay/kit"]
+stack = ["../work-pack/kit"]
 ```
 
 **Override semantics:** a slice field that is *present* (even empty `[]`)
@@ -82,6 +82,11 @@ memory row with the capturing profile and filter recall by it (mirrors the
 knowledge scope-file mechanism). Deferred to keep the MVP to config + resolution.
 
 ## Overlay host plugins can't be per-profile
+
+> **(Superseded — the build-time overlay is retired; there are no more compiled-in
+> `overlay_*.go` host plugins, and no `pi-stack-host` recompile is ever needed.
+> Host-executing integrations now ship as containers or host daemons referenced by
+> a pack. See [../OVERLAY.md](../OVERLAY.md). Kept for the reasoning it records.)**
 
 Overlay **host** plugins (`overlay_*.go`) are symlinked into `services/host/` and
 compiled **into the single `pi-stack-host` binary** at build time. A runtime

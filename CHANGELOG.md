@@ -49,6 +49,31 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed (breaking)
 
+- **MCP migrated to sbx's nightly gateway.** The sandbox flag is now
+  `--static-mcp` (sbx removed `--mcp`), and MCP runs through sbx's **local
+  data-plane gateway** — always available, **no `SBX_MCP_URL`** needed (dropped
+  the old SBX_MCP_URL gate + "gateway off" warning; `pi-stack mcp register` no
+  longer requires it). pi-stack's own `pi-stack run --mcp M` CLI flag is unchanged.
+  **Per-server attach mode:** a configured server is attached eagerly at create
+  (`--static-mcp`, tools always in context) or left dynamic (the in-VM agent
+  discovers + calls it on demand via mcp-find/mcp-exec/code-mode; the daemon
+  spawns local stdio servers host-side, so local and remote behave the same). The
+  **default is dynamic for every registered server** — keeps heavy tool schemas
+  out of context until needed. Pin a server eager with the new `mcp_static` list
+  (`mcp_dynamic` is the explicit opposite, and wins if a server is in both). A
+  **pack** can request eager attach for its own integrations with
+  `[[integrations]] static = true` (folded into the eager set at launch; a user
+  `mcp_dynamic` still overrides). New:
+  - `pi-stack mcp load <name> [DIR]` — attach an already-registered server to a
+    RUNNING sandbox live, no recreate (`sbx mcp load`).
+  - `pi-stack mcp auth [args…]` — hosted-control-plane OAuth for remote servers
+    (`sbx mcp auth`; e.g. `auth --all`).
+  - `pi-stack mcp bundle` — register the shipped public catalog
+    (notion/atlassian/granola, `config/mcp-catalog.bundle.json`) in one step.
+  `make mcp-auth` already used native `sbx mcp auth`; its tail now points at
+  `pi-stack mcp load` instead of a recreate. `doctor` guidance no longer mentions
+  `SBX_MCP_URL` (a failed `sbx mcp ls` now points at the sbx daemon).
+
 - **Kit migrated to kit-spec v2** (`pi-kit/spec.yaml`, `schemaVersion: "2"`).
   Credentials are now a `credentials[]` list of `service` + `apiKey`
   (name/proxyManaged/inject[]); egress is `caps.network.allow`. Replaces the v1

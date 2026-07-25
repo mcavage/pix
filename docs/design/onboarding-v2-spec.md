@@ -171,22 +171,23 @@ Fix: **MCP is opt-in, default OFF.**
 - §4-P8 ("never demo what fails") is enforced here specifically: a fresh install
   never shows an MCP error during the aha.
 
-## 9. Overlay kits + pre-provisioned short-circuit (owner comment 3)
+## 9. Packs + pre-provisioned short-circuit (owner comment 3)
 
-An overlay kit can ship a fully-configured environment: skills, MCP servers, and
-arbitrary command-proxy tools (e.g. `snow`). A user who inherits a complete kit
-must NOT be re-onboarded from scratch (the impatient reviewer's overlay-user
+A pack can ship a fully-configured environment: skills, MCP servers, and
+arbitrary command-proxy tools (e.g. `snow`). A user who inherits a complete pack
+must NOT be re-onboarded from scratch (the impatient reviewer's provisioned-user
 BAIL).
 
-- The kit (or the truth file's `overlay` + `provisioned` fields) marks the env as
-  provisioned: keys resolved, KB seeded, skills present, tools wired.
+- The pack (recorded in the truth file's `overlay` + `provisioned` fields — the
+  host-state field keeps its historical name) marks the env as provisioned: keys
+  resolved, KB seeded, skills present, tools wired.
 - **Provisioned => onboarding collapses to one line + first task.** No menu, no
-  identity ask, no KB-seed offer for an already-seeded bundle. The overlay owner
+  identity ask, no KB-seed offer for an already-seeded bundle. The pack owner
   already paid the setup cost.
-- Onboarding must treat overlay-provided skills/MCP/tools as first-class present
+- Onboarding must treat pack-provided skills/MCP/tools as first-class present
   (read from the truth file), not re-propose them.
-- Spec dependency: define how a kit declares "provisioned" and how the host
-  reflects overlay-shipped skills/tools into the truth file.
+- Spec dependency: define how a pack declares "provisioned" and how the host
+  reflects pack-shipped skills/tools into the truth file.
 
 ## 10. Success metrics (rev 2)
 
@@ -243,7 +244,7 @@ constrained) to make the watcher reliable regardless of model.
    best-effort; host-state reports `keys.source`. Live `op` run is a host test
    (op is a host tool; the sandbox can't reach 1Password).
 3. MCP opt-in (default off, no startup error) (§8).
-4. Overlay "provisioned" marker + reflecting overlay skills/tools into the truth
+4. Pack "provisioned" marker + reflecting pack skills/tools into the truth
    file (§9).
 5. Personal skills dir `~/.local/share/pi-stack/skills` wiring (Q1).
 6. Watcher model default -> `gemma4:e4b-mlx` (Apple Silicon) + warm-on-start +

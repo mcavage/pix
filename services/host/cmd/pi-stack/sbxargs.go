@@ -44,8 +44,8 @@ type runOpts struct {
 	LocalImageTag string   // contents of <repo>/out/.local-image-tag; pins --template to the locally loaded image when set (caller reads it)
 	Skills        []string // --skills DIR: extra live skill trees
 	Kits          []string // --kit K: escape-hatch kit(s). When present they REPLACE the auto git/local pin (a user override), then config stack applies.
-	MCP           []string // --mcp M: extra MCP servers on top of config.MCP
-	MCPEnabled    bool     // sbx MCP gateway is on (caller sets from os.Getenv("SBX_MCP_URL")!=""). --mcp is only a valid sbx flag when the gateway is enabled, so we omit --mcp entirely when this is false.
+	MCP           []string // --mcp M: extra MCP servers on top of config.MCP (fed into StaticMCP resolution by the caller)
+	StaticMCP     []string // RESOLVED set to attach at create (emitted as --static-mcp); the caller computes it from cfg.MCP+MCP via resolveStaticMCP (local stdio static, remote dynamic, per-server overrides)
 	Name          string   // --name N: sandbox name
 	Model         string   // --model M: active pi model (passed through to pi)
 	Intent        string   // --intent NAME: resolve the session model via the router (unless --model overrides)
@@ -86,6 +86,18 @@ func gitKitURL(version string) string {
 // localImageRef is the --template ref for a locally loaded image tag.
 func localImageRef(tag string) string {
 	return dockerImageRepo + ":" + tag
+}
+
+// mcpCatalogBundleName is the bundle name `pi-stack mcp bundle` registers the
+// public catalog under, so `sbx mcp bundle rm pi-stack-catalog` removes the set.
+const mcpCatalogBundleName = "pi-stack-catalog"
+
+// mcpCatalogBundleURL is the raw-GitHub URL of the shipped public MCP catalog
+// bundle (notion/atlassian/granola), pinned to THIS build's ref exactly like the
+// kit (a released build → v<version>, an unreleased build → main), so a consumer
+// registers the remote set that matches their launcher with one command.
+func mcpCatalogBundleURL(version string) string {
+	return "https://raw.githubusercontent.com/mcavage/pi-stack/" + kitRef(version) + "/config/mcp-catalog.bundle.json"
 }
 
 // buildSbxArgs composes the full argv for `sbx <args...>` (i.e. it returns
@@ -134,18 +146,15 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 		args = append(args, "--kit", k)
 	}
 
-	// MCP servers: config first, then --mcp flags. sbx only accepts --mcp when the
-	// gateway is enabled (SBX_MCP_URL set); passing it otherwise makes sbx bail with
-	// `unknown flag: --mcp`, so we omit --mcp entirely when the gateway is off (the
-	// caller warns on stderr). buildSbxArgs stays pure — it reads o.MCPEnabled, not
-	// the environment.
-	if o.MCPEnabled {
-		for _, m := range cfg.MCP {
-			args = append(args, "--mcp", m)
-		}
-		for _, m := range o.MCP {
-			args = append(args, "--mcp", m)
-		}
+	// MCP servers: emit --static-mcp for the RESOLVED static set (o.StaticMCP,
+	// computed by the caller via resolveStaticMCP — local stdio static, remote
+	// dynamic, per-server overrides). sbx's flag is --static-mcp (the fixed set
+	// chosen at CREATE; can't change on re-attach). The local data-plane gateway
+	// serves them with no SBX_MCP_URL. Dynamic servers are intentionally omitted —
+	// the in-VM agent pulls them on demand; attach one to a RUNNING sandbox with
+	// `pi-stack mcp load`.
+	for _, m := range o.StaticMCP {
+		args = append(args, "--static-mcp", m)
 	}
 
 	// The default path forwards NO credential bearer: gog authenticates on the
@@ -304,18 +313,6 @@ func buildReattachArgs(o runOpts) []string {
 		args = append(args, piArgs...)
 	}
 	return args
-}
-
-// mcpGatewayOffWarning returns the one-line stderr note printed when MCP servers
-// are configured but the sbx gateway is off (SBX_MCP_URL unset), so `sbx run`
-// wouldn't accept --mcp. Returns "" when there's nothing to warn about. Pure +
-// testable; run.go decides whether to print it.
-func mcpGatewayOffWarning(servers []string) string {
-	if len(servers) == 0 {
-		return ""
-	}
-	return "note: " + strings.Join(servers, "/") + " configured but the sbx MCP gateway is off " +
-		"(SBX_MCP_URL unset) — not attaching them; enable with: export SBX_MCP_URL=https://gateway.docker.com"
 }
 
 // pinnedGitKit returns the launcher's own pinned git kit URL if it appears in

@@ -181,7 +181,7 @@ func TestPackAdd_Proxy_Host_NoRecreateLine(t *testing.T) {
 }
 
 // TestSynthesizePackKit_SandboxOnly: the ephemeral mixin kit carries only the
-// NON-host proxy wrappers, copied (not symlinked) into files/usr/local/bin/.
+// NON-host proxy wrappers, copied (not symlinked) into files/home/.local/bin/.
 func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
@@ -209,10 +209,10 @@ func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(kit, "spec.yaml")); err != nil {
 		t.Errorf("spec.yaml missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(kit, "files", "usr", "local", "bin", "snowflake")); err != nil {
+	if _, err := os.Stat(filepath.Join(kit, "files", "home", ".local", "bin", "snowflake")); err != nil {
 		t.Errorf("snowflake wrapper not copied: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(kit, "files", "usr", "local", "bin", "platformio")); err == nil {
+	if _, err := os.Stat(filepath.Join(kit, "files", "home", ".local", "bin", "platformio")); err == nil {
 		t.Error("a host=true proxy must NOT be copied into the sandbox kit")
 	}
 }
@@ -666,5 +666,80 @@ func TestBuildSbxArgs_PackKits_NeverSuppressesBaseKit(t *testing.T) {
 	}
 	if !contains(args, []string{"--kit", "/pack/kit"}) {
 		t.Errorf("pack kit missing from %v", args)
+	}
+}
+
+// TestPackCapabilitiesJSON_LoadedAndMounted: a pack's capabilities.json is
+// discovered by loadPack and mounted by synthesizePackKit into the sandbox at
+// files/home/.pi/agent/capabilities.json — even with no [[proxy]] entries. This
+// is what lets a pack carry its own capability routing (killing the overlay kit).
+func TestPackCapabilitiesJSON_LoadedAndMounted(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	root := filepath.Join(dir, "pack")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte("name = \"work\"\nschema = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	caps := `{"profile":"work","capabilities":{}}`
+	if err := os.WriteFile(filepath.Join(root, "capabilities.json"), []byte(caps), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := loadPack(root)
+	if err != nil {
+		t.Fatalf("loadPack: %v", err)
+	}
+	if p.CapabilitiesFile == "" {
+		t.Fatal("loadPack did not set CapabilitiesFile for a pack with capabilities.json")
+	}
+	kit, err := synthesizePackKit(p)
+	if err != nil || kit == "" {
+		t.Fatalf("expected a kit for a capabilities-only pack, got %q err=%v", kit, err)
+	}
+	// The synthesized kit's manifest MUST carry schemaVersion — the sbx kit loader
+	// rejects a manifest without it ("schemaVersion is required").
+	spec, err := os.ReadFile(filepath.Join(kit, "spec.yaml"))
+	if err != nil {
+		t.Fatalf("kit spec.yaml missing: %v", err)
+	}
+	if !strings.Contains(string(spec), "schemaVersion:") || !strings.Contains(string(spec), "kind: mixin") {
+		t.Fatalf("synthesized kit spec.yaml must declare schemaVersion + kind: mixin, got:\n%s", spec)
+	}
+	got, err := os.ReadFile(filepath.Join(kit, "files", "home", ".pi", "agent", "capabilities.json"))
+	if err != nil {
+		t.Fatalf("capabilities.json not mounted into the kit: %v", err)
+	}
+	if string(got) != caps {
+		t.Errorf("mounted capabilities.json mismatch:\n got: %s\nwant: %s", got, caps)
+	}
+}
+
+// TestSynthesizePackKit_EgressAllow: a sandbox [[proxy]] with egress emits
+// caps.network.allow into the synthesized mixin kit, so the wrapper can reach
+// its host endpoint (else the sbx egress proxy 403s host.docker.internal).
+func TestSynthesizePackKit_EgressAllow(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bin", "snow"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := &packInfo{Root: root, Manifest: packManifest{
+		Name:    "work",
+		Proxies: []packProxy{{Name: "snow", Egress: []string{"host.docker.internal:11442"}}},
+	}}
+	kit, err := synthesizePackKit(p)
+	if err != nil || kit == "" {
+		t.Fatalf("kit=%q err=%v", kit, err)
+	}
+	b, _ := os.ReadFile(filepath.Join(kit, "spec.yaml"))
+	for _, want := range []string{"caps:", "host.docker.internal:11442", "localhost:11442"} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("proxy egress missing %q in caps.network.allow:\n%s", want, b)
+		}
 	}
 }

@@ -104,7 +104,7 @@ knowledge one session later is fine (those need a fresh sandbox created with
 ```
 
 Identity is deliberately absent (it is memory data). Validation rejects: unknown
-`mcp` names (only `gog` + known catalog + overlay-registered locals pass, so the
+`mcp` names (only `gog` + known catalog + pack-registered locals pass, so the
 file can never make the host spawn an attacker-chosen command); any
 `host.enabled`, `plugins.*`, `kits.stack`, or arbitrary `services`; a
 non-existent `active_profile`.

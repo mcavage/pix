@@ -165,7 +165,7 @@ func sanitizeIdentity(s string) string {
 // buildHostState gathers the host-visible facts. Pure w.r.t. its inputs so it is
 // unit-testable: sbxSecretsOut is the raw `sbx secret ls` output (sbxOK false
 // when sbx couldn't be run), dial probes a local port.
-func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, mcpGatewayOn bool, keysSource string, pack hostStatePack) hostState {
+func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial func(int) bool, keysSource string, pack hostStatePack) hostState {
 	dialer := func(p int) bool {
 		if dial == nil {
 			return false
@@ -204,7 +204,7 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		Memory:    hostStateSvc{Up: dialer(memoryPortDefault), Port: memoryPortDefault},
 		Knowledge: hostStateKnowledge{Bundles: bundles, Seeded: len(bundles) > 0, ServiceUp: dialer(knowledgePortDefault)},
 		Gog:       hostStateGog{Enabled: gogEnabled, Account: cfg.GogAccount},
-		MCP:       hostStateMCP{Enabled: mcpGatewayOn && len(mcpServers) > 0, Servers: mcpServers},
+		MCP:       hostStateMCP{Enabled: len(mcpServers) > 0, Servers: mcpServers},
 		Overlay:   hostStateOverlay{Kit: overlayKit},
 		Models:    hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},
 		Pack:      pack,
@@ -298,7 +298,7 @@ func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
 // pack resolution, git identity) writeHostStateFile used to run before it
 // wrote them to a file. Pure w.r.t. env/cfg (all I/O goes through the shellEnv
 // seam), so it is unit-testable without touching disk.
-func buildTrustedHostState(cfg *config.Config, env shellEnv, mcpGatewayOn bool, packOverride string) hostState {
+func buildTrustedHostState(cfg *config.Config, env shellEnv, packOverride string) hostState {
 	sbxOut, sbxOK := "", false
 	if env.lookPath != nil {
 		if _, err := env.lookPath("sbx"); err == nil && env.run != nil {
@@ -315,7 +315,7 @@ func buildTrustedHostState(cfg *config.Config, env shellEnv, mcpGatewayOn bool, 
 	if providerKeyRefsPresent(env) {
 		source = "1password"
 	}
-	hs := buildHostState(cfg, sbxOut, sbxOK, dial, mcpGatewayOn, source, resolveHostStatePack(cfg, packOverride))
+	hs := buildHostState(cfg, sbxOut, sbxOK, dial, source, resolveHostStatePack(cfg, packOverride))
 	hs.Identity = readGitIdentity(env)
 	return hs
 }
@@ -366,7 +366,7 @@ const (
 // must abort BEFORE exec'ing sbx (the caller in run.go checks the returned
 // error) rather than hand the onboarding agent a generated prompt with no
 // trusted facts, or — worse — let it fall back to reading something else.
-func injectTrustedHostState(args []string, cfg *config.Config, env shellEnv, mcpGatewayOn bool, packOverride string) ([]string, error) {
+func injectTrustedHostState(args []string, cfg *config.Config, env shellEnv, packOverride string) ([]string, error) {
 	idx := -1
 	for i, a := range args {
 		if strings.HasPrefix(a, generatedInputMarker) {
@@ -378,7 +378,7 @@ func injectTrustedHostState(args []string, cfg *config.Config, env shellEnv, mcp
 	if idx < 0 {
 		return out, nil
 	}
-	hs := buildTrustedHostState(cfg, env, mcpGatewayOn, packOverride)
+	hs := buildTrustedHostState(cfg, env, packOverride)
 	b, err := encodeTrustedHostState(hs)
 	if err != nil {
 		return nil, err

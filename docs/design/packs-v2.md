@@ -36,8 +36,8 @@ the one command to recreate. Creds are solicited as `op://` refs at adoption.
 
 ### F2 — In-sandbox CLI-proxy wrappers (`bin/`)
 `pi-stack pack add proxy <name>` scaffolds a wrapper under the pack's `bin/`. On
-launch, the active pack's `bin/` is mounted onto PATH in the sandbox (the overlay
-`files/` mechanism, made first-class). This covers the `snowflake` wrapper
+launch, the active pack's `bin/` is mounted onto PATH in the sandbox (the proven
+mixin-kit `files/` mechanism, made first-class). This covers the `snowflake` wrapper
 (network-only, runs fenced in the sandbox — §9 "in-sandbox, safe by default").
 
 ### F3 — Host-mode CLI wrappers (the platformio case) — IN SCOPE
@@ -98,8 +98,9 @@ simplest "shared, travels-in-the-repo" case. `pack add knowledge <name> [--ref
 
 Registry/marketplace; signing PKI; multi-pack composition beyond additive
 stacking; pack-to-pack dependency resolution; a `pack publish` verb (git is the
-sync); a GUI. Compile-into-`pi-stack-host` (`overlay_*.go`) stays a maintainer
-concern, off the pack path.
+sync); a GUI. Compiling into `pi-stack-host` stays a maintainer concern, off the
+pack path (the old `overlay_*.go` compile-in path is retired — host-executing
+integrations ship as containers or host daemons; see `../OVERLAY.md`).
 
 ## Phasing (owner: "whatever you want, not using it until done")
 
