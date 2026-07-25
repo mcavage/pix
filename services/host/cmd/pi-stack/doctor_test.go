@@ -24,6 +24,12 @@ type fakeEnv struct {
 	modes    map[string]os.FileMode // path -> mode bits (for fileMode)
 	home     string                 // fake home dir
 	hostBin  string                 // canonical pi-stack-host path ("" = unresolvable)
+	// identityProbe fakes the memory/knowledge `identity` JSON-RPC answer a
+	// service axis needs before it may render ready (readiness_service.go).
+	// Nil by default: a fixture that dials a service port "up" without also
+	// faking its identity gets an honest unverifiable, never a real network
+	// call and never a false ready. See identityFake / memGreen.
+	identityProbe identityProber
 }
 
 func (f fakeEnv) env() shellEnv {
@@ -63,7 +69,32 @@ func (f fakeEnv) env() shellEnv {
 			}
 			return "", fmt.Errorf("pi-stack-host not found")
 		},
+		identityProbe: f.identityProbe,
 	}
+}
+
+// identityFake builds an identityProber from a fixed port->result map: any
+// port not in the map answers with an error, matching a real daemon that
+// simply isn't there. Ready results default Version to "" so fixtures never
+// have to track the launcher's build-time version string.
+func identityFake(results map[int]serviceIdentityResult) identityProber {
+	return func(port int) (serviceIdentityResult, error) {
+		if r, ok := results[port]; ok {
+			return r, nil
+		}
+		return serviceIdentityResult{}, fmt.Errorf("no fake identity for port %d", port)
+	}
+}
+
+// memGreen fakes a healthy, correctly-identified memory daemon on :11435 —
+// the identity-probe counterpart to dialing the port "up": without this, a
+// fixture that merely opens the port renders memory unverifiable, never
+// ready (readiness_service.go never derives ready from a dial alone).
+func memGreen(f fakeEnv) fakeEnv {
+	f.identityProbe = identityFake(map[int]serviceIdentityResult{
+		11435: {Name: identityMemoryName, Ready: true},
+	})
+	return f
 }
 
 const gogAcct = "you@example.com"
@@ -144,7 +175,7 @@ func defaultCfg() *config.Config {
 // The gog group must take the confirmed-registered-command path (gogConfirmed):
 // a best-effort fallback pass is no longer a green.
 func TestDoctor_AllGreen(t *testing.T) {
-	f := gogConfirmed(fakeEnv{
+	f := memGreen(gogConfirmed(fakeEnv{
 		present: map[string]bool{"sbx": true, "ollama": true},
 		output: map[string]string{
 			"sbx secret ls": "anthropic\nopenai\ngoogle\ngithub\n",
@@ -152,7 +183,7 @@ func TestDoctor_AllGreen(t *testing.T) {
 			"sbx mcp ls":    "gog\n",
 		},
 		ports: map[int]bool{11434: true, 11435: true},
-	})
+	}))
 	r := runDoctor(defaultCfg(), f.env())
 	if got := len(r.todos()); got != 0 {
 		t.Fatalf("expected 0 todos, got %d: %v", got, r.todos())
@@ -231,7 +262,7 @@ func TestDoctor_SbxAbsent(t *testing.T) {
 // TestDoctor_PartialModels: sbx keys set, ollama installed but only watcher
 // pulled -> exactly one model TODO (embed), no provider/gog TODOs.
 func TestDoctor_PartialModels(t *testing.T) {
-	f := gogConfirmed(fakeEnv{
+	f := memGreen(gogConfirmed(fakeEnv{
 		present: map[string]bool{"sbx": true, "ollama": true},
 		output: map[string]string{
 			"sbx secret ls": "anthropic openai google github",
@@ -239,7 +270,7 @@ func TestDoctor_PartialModels(t *testing.T) {
 			"sbx mcp ls":    "gog\n",
 		},
 		ports: map[int]bool{11435: true},
-	})
+	}))
 	r := runDoctor(defaultCfg(), f.env())
 	todos := r.todos()
 	if len(todos) != 1 || !strings.Contains(todos[0], "ollama pull nomic-embed-text") {

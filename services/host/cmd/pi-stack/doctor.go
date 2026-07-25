@@ -58,6 +58,13 @@ type shellEnv struct {
 	stateDir func() (string, error)
 	// runInteractive inherits the terminal for browser-based OAuth steps.
 	runInteractive func(name string, args ...string) error
+	// identityProbe answers the memory/knowledge `identity` JSON-RPC method
+	// (readiness_service.go, services/host/identity.go) — the APPLICATION-
+	// LEVEL proof a service axis needs before it may render ready. Nil in
+	// tests that don't fake it, which is deliberate: a service axis with a
+	// listening port but no identity prober renders unverifiable, NEVER a
+	// silent real network call and never a false ready.
+	identityProbe identityProber
 }
 
 // probeTimeout bounds every registered-command probe so doctor can never wedge
@@ -173,6 +180,7 @@ func defaultShellEnv() shellEnv {
 			cmd.Stderr = os.Stderr
 			return cmd.Run()
 		},
+		identityProbe: rpcIdentityProbe,
 	}
 }
 
@@ -425,10 +433,10 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 }
 
 // runDoctorCmd is the CLI entry point wired into main's dispatch. Exit codes
-// are part of the contract: 0 = nothing verified-broken that pi-stack REQUIRES
-// (optional gaps and unverifiable checks never block), 1 = a POSITIVELY
-// VERIFIED core failure (verdict todo/denied on a core requirement) or a
-// config-load error, 2 = usage error.
+// are part of the shared contract (Snapshot.ExitCode): 0 = every core and
+// requested axis is ready, 1 = a POSITIVELY VERIFIED core/requested failure
+// (verdict todo/denied) or a config-load error, 2 = usage error, 3 = a
+// core/requested axis could not be verified from here.
 func runDoctorCmd(argv []string) {
 	jsonOut, verbose, err := parseDoctorArgs(argv)
 	if err != nil {
@@ -452,11 +460,13 @@ func runDoctorCmd(argv []string) {
 	} else {
 		r.render(os.Stdout, verbose)
 	}
-	// Only a POSITIVELY VERIFIED core failure exits 1. Optional failures —
-	// configured or not — and anything merely unverifiable exit 0. Usage
-	// errors above already exit 2.
-	if r.blocking() {
-		os.Exit(1)
+	// The exit code is derived by the SHARED contract (Snapshot.ExitCode):
+	// 0 ready, 1 a verified core/requested failure, 3 core/requested axes
+	// that could not be verified from here. Usage errors above already exit 2.
+	// Doctor used to collapse 3 into 0; two exit contracts over one snapshot
+	// would reintroduce exactly the disagreement this wave removes.
+	if code := r.snapshot().ExitCode(); code != exitReady {
+		os.Exit(code)
 	}
 }
 

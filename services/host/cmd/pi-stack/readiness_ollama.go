@@ -181,10 +181,15 @@ func ollamaSandboxAxis(env shellEnv, ep ollamaEndpoint, p ollamaProbe, sandbox s
 			c.detail += " (it is bound to " + ep.Host + ", which is loopback-only)"
 		}
 	case sandbox == "":
+		// Expected absence, not a surprising probe failure: most hosts run
+		// `pi-stack doctor` before their first `pi-stack run`. A note keeps
+		// this ubiquitous case from perpetually blocking "all checks pass".
+		c.note = true
 		c.verdict = verdictUnverifiable
 		c.detail = "no sandbox exists yet — verified on the next `pi-stack run`"
 		c.evidence = "no sandbox for this workspace; diagnostics never create one. Verifiable once a sandbox exists: `pi-stack run`"
 	default:
+		c.note = true
 		c.verdict = verdictUnverifiable
 		c.detail = "sandbox " + sandbox + " exists but was not probed from here"
 		c.evidence = "sandbox " + sandbox + " was not probed; diagnostics never exec into a sandbox. Verifiable on the next `pi-stack run`"

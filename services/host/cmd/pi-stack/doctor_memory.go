@@ -75,9 +75,18 @@ func memCaptureCheck() check {
 // memoryGroup builds the memory-service cluster: the :11435 daemon plus (when
 // it is up) the live fact-capture flag read from its health endpoint.
 func memoryGroup(cfg *config.Config, env shellEnv) group {
-	memory := group{title: "Memory service (recall + capture)"}
-	memUp := env.dial(11435)
-	memory.checks = append(memory.checks, serviceCheck("memory", 11435, memUp, "pi-stack serve", enabled(cfg, "memory")))
+	memory := group{title: "Memory service (recall + capture)", axis: axisServiceMemory}
+	// Readiness comes from the APPLICATION-LEVEL identity probe, never from a
+	// dial: a port held by a foreign process renders "unidentified", not ✓.
+	s := buildSnapshot(
+		Request{Axes: []Axis{axisServiceMemory, axisServiceKnowledge}},
+		serviceReadinessAxes(env, enabled(cfg, "memory"), enabled(cfg, "knowledge"), env.identityProbe),
+	)
+	memory.checks = append(memory.checks, s.All()...)
+	memUp := false
+	if c, ok := s.Checks(axisServiceMemory); ok && c[0].result() == verdictReady {
+		memUp = true
+	}
 	// Live capture status straight from the daemon's health, not just "is the
 	// model in ollama": this is the flag that decides whether observe() actually
 	// stores anything. A latched-off watcher (daemon booted before the model was

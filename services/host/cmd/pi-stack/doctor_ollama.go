@@ -21,6 +21,15 @@ import (
 func modelCheck(m ModelReadiness) check {
 	label := "  " + m.Role
 	detail := m.Purpose + " [" + m.Model + "]"
+	if strings.TrimSpace(m.Model) == "" {
+		// No tag configured for this role at all (e.g. the bridge model before
+		// any `pi-stack run` has written one) — an expected absence, never a
+		// confirmed-missing todo. modelReadiness still computes a PullCmd of
+		// "ollama pull " for an empty tag; this branch is what keeps that
+		// meaningless command from ever reaching a renderer.
+		return check{label: label, note: true, verdict: verdictUnverifiable,
+			detail: m.Purpose + " — no model configured for this role"}
+	}
 	if !m.Installed {
 		// Not configured: ollama itself is absent, so no claim about the tag.
 		return check{label: label, note: true, verdict: verdictUnverifiable,
@@ -97,4 +106,3 @@ func ollamaReadinessAxes(cfg *config.Config, env shellEnv, sandbox string, sandb
 	}
 	return builders
 }
-

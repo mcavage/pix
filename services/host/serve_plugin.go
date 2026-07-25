@@ -303,6 +303,19 @@ func memoryProxyMux(h *pluginHolder) http.Handler {
 		return s, nil
 	}
 	methods := map[string]func(jsonObj) (any, error){
+		// Same application-level identity the built-in path serves, so a
+		// plugin-backed :11435 is identifiable by exactly the same probe.
+		"identity": func(jsonObj) (any, error) {
+			s, err := store()
+			if err != nil {
+				return nil, err
+			}
+			r, err := s.Health()
+			if err != nil {
+				return nil, err
+			}
+			return memoryIdentity(r.Vector).obj(), nil
+		},
 		"health": func(jsonObj) (any, error) {
 			s, err := store()
 			if err != nil {
@@ -470,6 +483,12 @@ func knowledgeMethods(store func() (plugin.KnowledgeStore, error)) map[string]fu
 				return nil, err
 			}
 			return jsonObj{"indexed": r.Indexed, "bundles": strSliceOrEmpty(r.Bundles)}, nil
+		},
+		"identity": func(jsonObj) (any, error) {
+			if _, err := store(); err != nil {
+				return nil, err
+			}
+			return knowledgeIdentity().obj(), nil
 		},
 		"health": func(jsonObj) (any, error) {
 			s, err := store()
