@@ -83,8 +83,12 @@ type check struct {
 	// Empty falls back to detail so the JSON payload is never blank.
 	evidence string
 	// note marks a pure annotation line (transparency/context, e.g. "probing
-	// the sbx-registered command: …"): it renders as · and makes no health
-	// claim of its own, so it never counts toward any tally.
+	// the sbx-registered command: …"): it ALWAYS renders as · (see state())
+	// and NEVER counts toward outstanding/blocking (outstanding() and
+	// blockingCheck both exclude notes explicitly), regardless of its verdict.
+	// The verdict field itself must still be TRUTHFUL — see result()'s doc
+	// comment — so a JSON consumer reading verdict=ready can trust it means
+	// verified working, even on a note-only line.
 	note bool
 }
 
@@ -96,13 +100,20 @@ func (c check) req() requirement {
 	return requirementOptional
 }
 
-// result returns the effective verdict. A note is presentational only and
-// reads as ready; an UNSET verdict on a non-note check reads as unverifiable —
-// the fail-safe direction (never a false green, never a false block).
+// result returns the effective verdict. It NEVER special-cases note: a
+// note-only check's constructor is required to set an EXPLICIT, truthful
+// verdict (ready for a confirmed positive fact, unverifiable for "cannot
+// verify"/"not configured"/anything else — see providerInfoCheck and the
+// other note builders) — result() must not silently override that with a
+// blanket ready just because note is set (the bug this fixes: a note whose
+// evidence said "cannot verify"/"not configured" still serialized verdict=
+// ready to JSON, breaking the invariant that ready means verified working).
+// An UNSET verdict (the zero value, on any check, note or not) reads as
+// unverifiable — the fail-safe direction (never a false green, never a false
+// block). Note that outstanding()/blockingCheck() still exclude notes
+// explicitly, so a note's verdict — whatever it truthfully is — never counts
+// toward either tally.
 func (c check) result() verdict {
-	if c.note {
-		return verdictReady
-	}
 	switch c.verdict {
 	case verdictReady, verdictTodo, verdictUnverifiable, verdictDenied:
 		return c.verdict

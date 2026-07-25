@@ -21,7 +21,9 @@ func secretsGroup(cfg *config.Config, env shellEnv) group {
 	g := group{title: "Secrets (1Password, host MCP creds via op-refs.env)"}
 
 	if !anyOpWrappedServer(cfg) {
-		g.checks = append(g.checks, check{label: "1Password", note: true,
+		// Positive info: verified there is nothing 1Password-dependent configured,
+		// so there is genuinely nothing to set up here.
+		g.checks = append(g.checks, check{label: "1Password", note: true, verdict: verdictReady,
 			detail: "no credentialed host MCP servers configured — 1Password not needed"})
 		return g
 	}
@@ -33,7 +35,7 @@ func secretsGroup(cfg *config.Config, env shellEnv) group {
 			g.checks = append(g.checks, check{label: "account configured", verdict: verdictReady,
 				detail: "op account list ok (advisory — not a proof of an unlocked session)"})
 		} else {
-			g.checks = append(g.checks, check{label: "account configured", note: true,
+			g.checks = append(g.checks, check{label: "account configured", note: true, verdict: verdictUnverifiable,
 				detail: "no account configured (advisory) — run: op signin"})
 		}
 	} else {
@@ -56,7 +58,7 @@ func secretsGroup(cfg *config.Config, env shellEnv) group {
 			todo:   "pi-stack secret set <ENV_VAR> op://vault/item/field"})
 		return g
 	}
-	g.checks = append(g.checks, check{label: "op-refs.env", note: true, detail: path})
+	g.checks = append(g.checks, check{label: "op-refs.env", note: true, verdict: verdictReady, detail: path})
 
 	// Perms: the file AND its dir must not be group/other-accessible.
 	if env.fileMode != nil {
@@ -77,7 +79,7 @@ func secretsGroup(cfg *config.Config, env shellEnv) group {
 	for _, rf := range parseOpRefs(content) {
 		switch {
 		case rf.nonSecret:
-			g.checks = append(g.checks, check{label: rf.key, note: true, detail: "non-secret env (allowed literal)"})
+			g.checks = append(g.checks, check{label: rf.key, note: true, verdict: verdictReady, detail: "non-secret env (allowed literal)"})
 		case rf.isRef && rf.placeholder:
 			g.checks = append(g.checks, check{label: rf.key, verdict: verdictTodo,
 				detail: "unfilled placeholder — set the op:// ref",

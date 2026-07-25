@@ -49,10 +49,19 @@ func TestCheckZeroValuesFailSafe(t *testing.T) {
 	if blockingCheck(c.req(), c.result()) {
 		t.Error("zero-value check must never block")
 	}
-	// A note makes no claim: it renders · and reads ready for the tallies.
+	// A note ALWAYS renders · regardless of its verdict (state() special-cases
+	// note), but result() reads its verdict truthfully like any other check: an
+	// unset verdict on a note still reads unverifiable (fail-safe), NOT a
+	// blanket ready — result() must not override an explicit/absent verdict
+	// merely because note is set.
 	n := check{label: "n", detail: "annotation", note: true}
-	if n.state() != stateInfo || n.result() != verdictReady {
-		t.Errorf("note = (state %v, result %q), want (stateInfo, ready)", n.state(), n.result())
+	if n.state() != stateInfo || n.result() != verdictUnverifiable {
+		t.Errorf("note with unset verdict = (state %v, result %q), want (stateInfo, unverifiable)", n.state(), n.result())
+	}
+	// A note with an EXPLICIT truthful verdict carries it through unchanged.
+	readyNote := check{label: "n2", detail: "set", note: true, verdict: verdictReady}
+	if readyNote.state() != stateInfo || readyNote.result() != verdictReady {
+		t.Errorf("note with explicit verdictReady = (state %v, result %q), want (stateInfo, ready)", readyNote.state(), readyNote.result())
 	}
 	// Evidence falls back to detail so JSON is never blank.
 	if c.evidenceString() != "d" {

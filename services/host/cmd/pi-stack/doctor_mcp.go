@@ -708,9 +708,10 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 
 	if len(names) == 0 {
 		mcp.checks = append(mcp.checks, check{
-			label:  "(none configured)",
-			note:   true,
-			detail: "add servers with `pi-stack config set mcp <server>`",
+			label:   "(none configured)",
+			note:    true,
+			verdict: verdictUnverifiable,
+			detail:  "add servers with `pi-stack config set mcp <server>`",
 		})
 	} else {
 		// Classification source of truth: the same `pi-stack-host mcp --list`
@@ -738,7 +739,7 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 			if ctx.mode == mcpAttachSandboxAbsent {
 				det = "sandbox " + ctx.sandbox + " not created yet — configured servers preload at `pi-stack run` create"
 			}
-			mcp.checks = append(mcp.checks, check{label: "attachment", note: true, detail: det})
+			mcp.checks = append(mcp.checks, check{label: "attachment", note: true, verdict: verdictUnverifiable, detail: det})
 		}
 	}
 

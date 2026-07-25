@@ -23,7 +23,7 @@ func modelCheck(m ModelReadiness) check {
 	detail := m.Purpose + " [" + m.Model + "]"
 	if !m.Installed {
 		// Not configured: ollama itself is absent, so no claim about the tag.
-		return check{label: label, note: true,
+		return check{label: label, note: true, verdict: verdictUnverifiable,
 			detail: detail + " — needs ollama (then: " + m.PullCmd + ")"}
 	}
 	switch m.Verdict {
@@ -101,9 +101,10 @@ func ollamaGroup(cfg *config.Config, env shellEnv) group {
 	default:
 		// Nothing configured depends on it: absence is expected, not a gap.
 		ollama.checks = append(ollama.checks, check{
-			label:  "ollama",
-			note:   true,
-			detail: "not installed — optional; install: https://ollama.com",
+			label:   "ollama",
+			note:    true,
+			verdict: verdictUnverifiable,
+			detail:  "not installed — optional; install: https://ollama.com",
 		})
 	}
 	ollama.checks = append(ollama.checks,
