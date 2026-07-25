@@ -26,6 +26,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"pi-stack/host/routing"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=0.0.x". An
@@ -110,7 +112,7 @@ func main() {
 		// an evals/ dir is present) so a bare `evals` gets a clear message instead
 		// of a confusing "no such directory".
 		fmt.Fprintln(os.Stderr, "pi-stack: evals were removed. Model scores are hand-maintained in")
-		fmt.Fprintln(os.Stderr, "  services/host/routing/defaults/scorecard.json; run `pi-stack route compile`")
+		fmt.Fprintf(os.Stderr, "  %s; run `pi-stack route compile`\n", routing.ScorecardPath())
 		fmt.Fprintln(os.Stderr, "  after editing.")
 		os.Exit(2)
 	case "agent":

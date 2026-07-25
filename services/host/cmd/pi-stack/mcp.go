@@ -38,6 +38,48 @@ func mcpCatalogSummary() string {
 	return strings.Join(names, "/")
 }
 
+// errSbxUnavailable is the sentinel every mcp subcommand that PROMISES an
+// operation (register/load/auth/bundle) returns when sbx isn't on PATH,
+// instead of silently exiting 0 after only printing what it would have run.
+// It maps to exitServiceDown (3) — the same "evidence/dependency unavailable"
+// code `pi-stack memory`/`secret` use — never a bare exit 0. `pi-stack mcp ls`
+// is read-only but is deliberately held to the SAME contract (documented
+// here, the one place this policy is decided): the caller asked for gateway
+// state and got none, so a truthful exit code beats a quiet success that
+// implies "zero servers registered."
+var errSbxUnavailable = fmt.Errorf("sbx not on PATH")
+
+// mcpWouldRun prints the exact host command a user can run manually (the
+// recovery path every mutating mcp subcommand must preserve verbatim) and
+// returns errSbxUnavailable so the caller exits non-zero. Centralized so
+// register/ls/load/auth/bundle can never phrase or exit-code this differently
+// from one another.
+func mcpWouldRun(out io.Writer, args ...string) error {
+	fmt.Fprintf(out, "sbx not on PATH — would run: sbx %s (run it on the host)\n", strings.Join(args, " "))
+	return errSbxUnavailable
+}
+
+// exitMcpVerb is the shared exit dispatcher for the mcp subcommands that were
+// refactored to return an error instead of calling os.Exit deep inside their
+// logic (so tests can drive the core hermetically and only the outer wrapper
+// touches the process). errSbxUnavailable -> exitServiceDown (3); a captured
+// child exit code is propagated as-is; anything else is a generic failure (1)
+// with the error printed once.
+func exitMcpVerb(ctx string, err error) {
+	if err == nil {
+		return
+	}
+	if errors.Is(err, errSbxUnavailable) {
+		os.Exit(exitServiceDown)
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		os.Exit(exit.ExitCode())
+	}
+	fmt.Fprintf(os.Stderr, "pi-stack %s: %v\n", ctx, err)
+	os.Exit(1)
+}
+
 // A name in the resolved profile's mcp list is registered with the sbx gateway
 // ONLY if it is a LOCAL stdio server this host can serve. gog is a special local
 // case (its serverCmd is the external Google Workspace CLI in MCP mode). Every
@@ -90,19 +132,20 @@ func runMcpBundle(argv []string) {
 	} else {
 		sbxArgs = append([]string{"mcp", "bundle"}, argv...)
 	}
-	if _, err := exec.LookPath("sbx"); err != nil {
-		fmt.Printf("sbx not on PATH — would run: sbx %s (run it on the host)\n", strings.Join(sbxArgs, " "))
-		return
+	exitMcpVerb("mcp bundle", runMcpBundleCore(exec.LookPath, os.Stdout, os.Stdin, os.Stderr, sbxArgs))
+}
+
+// runMcpBundleCore is runMcpBundle's testable core: lookPath is injected so a
+// test can force the sbx-absent branch hermetically (no PATH manipulation, no
+// subprocess) and assert errSbxUnavailable + the printed recovery command
+// without ever exec'ing anything.
+func runMcpBundleCore(lookPath func(string) (string, error), out io.Writer, in io.Reader, errW io.Writer, sbxArgs []string) error {
+	if _, err := lookPath("sbx"); err != nil {
+		return mcpWouldRun(out, sbxArgs...)
 	}
 	cmd := exec.Command("sbx", sbxArgs...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			os.Exit(exit.ExitCode())
-		}
-		fmt.Fprintf(os.Stderr, "pi-stack mcp bundle: %v\n", err)
-		os.Exit(1)
-	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errW
+	return cmd.Run()
 }
 
 // runMcpAuth is a thin passthrough to `sbx mcp auth <args...>` — the native
@@ -111,19 +154,18 @@ func runMcpBundle(argv []string) {
 // verbatim: `pi-stack mcp auth --all`, `pi-stack mcp auth notion`,
 // `pi-stack mcp auth status --all`, `pi-stack mcp auth rm notion`.
 func runMcpAuth(argv []string) {
-	if _, err := exec.LookPath("sbx"); err != nil {
-		fmt.Printf("sbx not on PATH — would run: sbx mcp auth %s (run it on the host)\n", strings.Join(argv, " "))
-		return
+	exitMcpVerb("mcp auth", runMcpAuthCore(exec.LookPath, os.Stdout, os.Stdin, os.Stderr, argv))
+}
+
+// runMcpAuthCore is runMcpAuth's testable core (see runMcpBundleCore).
+func runMcpAuthCore(lookPath func(string) (string, error), out io.Writer, in io.Reader, errW io.Writer, argv []string) error {
+	args := append([]string{"mcp", "auth"}, argv...)
+	if _, err := lookPath("sbx"); err != nil {
+		return mcpWouldRun(out, args...)
 	}
-	cmd := exec.Command("sbx", append([]string{"mcp", "auth"}, argv...)...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			os.Exit(exit.ExitCode())
-		}
-		fmt.Fprintf(os.Stderr, "pi-stack mcp auth: %v\n", err)
-		os.Exit(1)
-	}
+	cmd := exec.Command("sbx", args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errW
+	return cmd.Run()
 }
 
 // runMcpLoad attaches an ALREADY-REGISTERED MCP server to the RUNNING sandbox
@@ -145,8 +187,12 @@ func runMcpLoad(argv []string) {
 	// error above exits before anything is derived, exec'd, or receipted.
 	sandbox := deriveSandboxName(ws)
 	if _, err := exec.LookPath("sbx"); err != nil {
-		fmt.Printf("sbx not on PATH — would run: sbx mcp load %s --sandbox %s (run it on the host)\n", name, sandbox)
-		return
+		// A command that promises to attach a server must not exit 0 having
+		// done nothing — see errSbxUnavailable. mcpWouldRun preserves the
+		// exact recovery command; execSbxMcpLoadAndRecord (and hence the load
+		// receipt) is never reached on this path.
+		_ = mcpWouldRun(os.Stdout, "mcp", "load", name, "--sandbox", sandbox)
+		os.Exit(exitServiceDown)
 	}
 	cmd := exec.Command("sbx", "mcp", "load", name, "--sandbox", sandbox)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -239,21 +285,21 @@ func execSbxMcpLoadAndRecord(cmd *exec.Cmd, sandbox, name string) error {
 // runMcpLs shells `sbx mcp ls`, degrading cleanly when sbx is absent (e.g.
 // inside the sandbox).
 func runMcpLs() {
-	if _, err := exec.LookPath("sbx"); err != nil {
-		fmt.Println("sbx not on PATH — would run: sbx mcp ls (run it on the host)")
-		return
+	exitMcpVerb("mcp ls", runMcpLsCore(exec.LookPath, os.Stdout, os.Stdin, os.Stderr))
+}
+
+// runMcpLsCore is runMcpLs's testable core (see runMcpBundleCore). `mcp ls` is
+// read-only, but per the errSbxUnavailable policy above it still exits 3 when
+// evidence (the gateway's registered-server list) is unavailable rather than
+// exiting 0 with nothing printed — a caller cannot tell "zero servers" from
+// "couldn't ask" otherwise.
+func runMcpLsCore(lookPath func(string) (string, error), out io.Writer, in io.Reader, errW io.Writer) error {
+	if _, err := lookPath("sbx"); err != nil {
+		return mcpWouldRun(out, "mcp", "ls")
 	}
 	cmd := exec.Command("sbx", "mcp", "ls")
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			os.Exit(exit.ExitCode())
-		}
-		fmt.Fprintf(os.Stderr, "pi-stack mcp ls: %v\n", err)
-		os.Exit(1)
-	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errW
+	return cmd.Run()
 }
 
 // runMcpRegister is the CLI entry point: it registers the requested local stdio
@@ -267,6 +313,9 @@ func runMcpRegister(argv []string) {
 	}
 	if err := registerServers(cfg, defaultShellEnv(), os.Stdout, argv, findHostBinary, activeContainerMCP(cfg)); err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack mcp register: %v\n", err)
+		if errors.Is(err, errSbxUnavailable) {
+			os.Exit(exitServiceDown)
+		}
 		os.Exit(1)
 	}
 }
@@ -665,6 +714,13 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	}
 	if len(regErrs) > 0 {
 		return errors.Join(fmt.Errorf("%d server(s) failed to register: %w", len(regErrs), errors.Join(regErrs...)), skippedErr)
+	}
+	if !sbxOK {
+		// `register` PROMISED to register these servers and did not (nothing was
+		// exec'd, nothing is registered with the gateway) — exit non-zero
+		// (errSbxUnavailable -> exitServiceDown) rather than a silent success
+		// just because the would-run lines above printed cleanly.
+		return errors.Join(errSbxUnavailable, skippedErr)
 	}
 	return skippedErr
 }

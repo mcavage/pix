@@ -208,7 +208,7 @@ func verbUsage(verb string) (string, bool) {
 	case "host":
 		return hostUsage, true
 	case "route":
-		return routeUsage, true
+		return routeUsage(), true
 	case "agent":
 		return agentUsage, true
 	}

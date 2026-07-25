@@ -64,13 +64,18 @@ func execHost(verb string, argv []string) {
 
 func runRoute(argv []string) {
 	if len(argv) > 0 && (argv[0] == "-h" || argv[0] == "--help") {
-		fmt.Print(routeUsage)
+		fmt.Print(routeUsage())
 		return
 	}
 	execHost("route", argv)
 }
 
-const routeUsage = `usage: pi-stack route <command>
+// routeUsage is a func (not a const) so the override paths it prints are the
+// REAL resolved paths (honoring $ROUTING_DIR / $XDG_DATA_HOME), never a
+// hardcoded guess — and never the repo's embedded default source, which only
+// exists in a pi-stack checkout and means nothing on a consumer's machine.
+func routeUsage() string {
+	return `usage: pi-stack route <command>
 
 The model router: turn a declared INTENT (a hard cost/latency/accuracy
 constraint) into a concrete model, from a registry of models + a measured
@@ -78,13 +83,18 @@ scorecard. Replaces hand-pinning a model on every agent.
 
 commands:
   pick <intent> [--json]   resolve one intent to a model (+ rationale)
-  compile [--out PATH]      write the intent->model map (routing.json).
-                            Use --out ./routing.json to update the baked file,
-                            then ` + "`make load`" + ` to bake it into the image.
+  compile [--out PATH]      write the intent->model map (routing.json), read
+                            by the sandbox. With no --out it writes into the
+                            override dir below; --out PATH targets a specific
+                            file (a pi-stack checkout uses --out ./routing.json,
+                            then ` + "`make load`" + ` to bake it into the image — maintainer-only).
   show [--json]             registry + scorecard + resolved table
   models [--json]           list the model registry
 
-Add a model: one entry in ~/.local/share/pi-stack/routing/models.json, hand-edit its scores
-into scorecard.json (services/host/routing/defaults/scorecard.json), then run
+Add a model: one entry in ` + routing.ModelsPath() + `.
+Hand-edit its scores into ` + routing.ScorecardPath() + `, then run
 ` + "`pi-stack route compile`" + `.
+(Maintaining pi-stack itself, not a personal override? The shipped defaults
+live in services/host/routing/defaults/*.json in the pi-stack repo checkout.)
 `
+}
