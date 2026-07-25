@@ -2,6 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -9,15 +12,26 @@ import (
 	"pi-stack/host/config"
 )
 
+// doctor_gog.go builds doctor's gog (Google Workspace) group on the S04
+// readiness axes. gog is ALWAYS optional (never core, so nothing here can
+// block doctor's exit code); a missing gog CLI or an unset account is
+// optional-NOT-CONFIGURED (a note, not a failure). The honest path reads the
+// command sbx ACTUALLY registered for gog, verifies its hardened read-only
+// flags as EVIDENCE, trust-gates the executables against the PATH-resolved
+// canonical binaries (never exec an attacker-controlled registered path or a
+// symlink-swapped spelling), and probes THAT: non-empty tools = ready, a clean
+// zero-tool list = a verified todo, a timeout/transport failure =
+// unverifiable, and an explicit policy denial = denied.
+
 // gogAccount resolves the Google Workspace account the best-effort fallback
 // probe runs against. config.toml's `gog_account` is the SINGLE source of truth
 // (it is what `make mcp-register` / `pi-stack mcp register` hand the gateway,
 // both sourced via `pi-stack config get gog_account`):
-//  1. config.toml's `gog_account` (cfg.GogAccount, profile-resolved),
+//  1. config.toml's `gog_account` (cfg.GogAccount),
 //  2. the $GOG_ACCOUNT env var.
 //
-// NEVER a hardcoded address. Empty means "not configured" and the caller emits a
-// "cannot verify" TODO rather than reporting green.
+// NEVER a hardcoded address. Empty means "not configured" and the caller emits
+// a not-configured note rather than reporting green.
 func gogAccount(cfg *config.Config, env shellEnv) string {
 	if cfg != nil {
 		if a := strings.TrimSpace(cfg.GogAccount); a != "" {
@@ -32,32 +46,228 @@ func gogAccount(cfg *config.Config, env shellEnv) string {
 	return ""
 }
 
-// gogHeadlessOK runs the gateway-EQUIVALENT probe — list gog's tools the exact
-// way the sbx gateway spawns it: headless, in a bare env, through the same
-// `op run --env-file=config/op-refs.env` wrapper mcp-register uses — and reports
-// whether it yields a NON-EMPTY tool list. This is the ONLY check that proves
-// the real path; `gog auth doctor` in a logged-in shell passes and lies. It
-// degrades cleanly (returns false, never crashes) when gog/op/account are
-// absent. shellEnv keeps it unit-testable.
+// probeStatus/probeResult are the STRUCTURED outcome of a `--list-tools` probe:
+// a clean non-empty list is healthy; a clean EMPTY list is a verified
+// zero-tools failure (the headless creds/keyring trap); a timeout or exec
+// error is unverifiable — doctor doesn't know, so it must never mislabel those
+// as a keyring failure; and an EXPLICIT policy denial in a failed probe's
+// output is a positive refusal (verdict denied), not a setup gap.
+type probeStatus int
+
+const (
+	probeToolsOK        probeStatus = iota // clean exit, non-empty tool list
+	probeNoTools                           // clean exit, ZERO tools — a verified failure
+	probeTimedOut                          // hit the probe deadline — unverifiable
+	probeError                             // exec failure / non-zero exit / missing binary — unverifiable
+	probeDeniedByPolicy                    // failed with an EXPLICIT policy/permission denial
+)
+
+type probeResult struct {
+	status probeStatus
+	detail string // short, value-free diagnostic for timeout/error outcomes
+	tools  int    // tool-line count on a clean exit
+}
+
+// probeListTools runs argv with `--list-tools` appended, BOUNDED by probeRun's
+// timeout + output cap, and classifies the outcome. A failed probe's output is
+// run through classifyProbeFailure so an EXPLICIT policy denial classifies as
+// probeDenied rather than a generic error. The diagnostic is deliberately
+// generic (never raw error text), so a registered command's tokens — which may
+// carry pasted secrets — can never leak through an error message.
+func probeListTools(env shellEnv, argv []string) probeResult {
+	if len(argv) == 0 {
+		return probeResult{status: probeError, detail: "has no command to run"}
+	}
+	full := append(append([]string{}, argv...), "--list-tools")
+	out, timedOut, err := probeRun(env, full[0], full[1:]...)
+	if timedOut {
+		return probeResult{status: probeTimedOut, detail: fmt.Sprintf("timed out after %s", probeTimeout)}
+	}
+	if err != nil {
+		if classifyProbeFailure(out, err) == probeDenied {
+			return probeResult{status: probeDeniedByPolicy, detail: "positively refused by policy/permission"}
+		}
+		return probeResult{status: probeError, detail: classifyProbeErr(err)}
+	}
+	n := 0
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.TrimSpace(ln) != "" {
+			n++
+		}
+	}
+	if n == 0 {
+		return probeResult{status: probeNoTools}
+	}
+	return probeResult{status: probeToolsOK, tools: n}
+}
+
+// classifyProbeErr maps a probe error to a short, value-free diagnostic: it
+// distinguishes a missing/non-executable binary from a non-zero exit without
+// ever echoing raw error text (which could embed registered-command tokens).
+func classifyProbeErr(err error) string {
+	var xe *exec.Error
+	if errors.As(err, &xe) {
+		return "could not run (binary not found or not executable)"
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return fmt.Sprintf("exited non-zero (%s)", ee.ProcessState)
+	}
+	return "could not be run"
+}
+
+// trustedExecPath is the canonical-executable gate: it returns the exec token
+// doctor may run for base, and whether the registered token is trusted. A bare
+// name (no path separator) is trusted as-is — exec resolves it through PATH at
+// spawn time, which IS lookPath's answer; there is no recorded path for an
+// attacker to swap. A path-carrying token must be byte-equal (cleaned) to the
+// PATH-resolved binary — STRICT equality only, with symlink resolution
+// deliberately NOT consulted (a check-time symlink bless followed by exec of
+// the registered path is a race the attacker wins by swapping the link). On
+// success the returned token is the RESOLVER's canonical path, never the
+// registered spelling, so the exec'd token is the trusted one by construction.
+// Anything else (a look-alike /tmp/gog, a fake op) is untrusted and never
+// executed.
+func trustedExecPath(env shellEnv, tok, base string) (string, bool) {
+	if filepath.Base(tok) != base {
+		return "", false
+	}
+	if !strings.ContainsAny(tok, `/\`) {
+		return tok, true // bare name: exec resolves via PATH = lookPath's answer
+	}
+	if env.lookPath == nil {
+		return "", false
+	}
+	canonical, err := env.lookPath(base)
+	if err != nil || canonical == "" {
+		return "", false
+	}
+	if filepath.Clean(tok) != filepath.Clean(canonical) {
+		return "", false
+	}
+	return filepath.Clean(canonical), true
+}
+
+// trustedGogSpawn reports whether a registered gog command is BOTH the
+// recognized gog shape (gogSpawnArgv) AND built from canonical executables:
+// the inner gog binary must match env.lookPath("gog"), and — when op-wrapped —
+// the op binary must match env.lookPath("op"). On success it returns the
+// NORMALIZED argv: the gog/op executable tokens replaced with the resolvers'
+// canonical paths, so the caller execs the TRUSTED tokens, never the
+// registered spelling. Only that normalized spawn is ever executed as a probe.
+func trustedGogSpawn(env shellEnv, argv []string) ([]string, bool) {
+	inner, ok := gogSpawnArgv(argv)
+	if !ok {
+		return nil, false
+	}
+	gogTok, gogOK := trustedExecPath(env, inner[0], "gog")
+	if !gogOK {
+		return nil, false
+	}
+	norm := append([]string(nil), argv...)
+	// inner is the suffix gogSpawnArgv/unwrapOpRun peeled off argv, so the
+	// inner executable sits at len(argv)-len(inner); >0 means op-wrapped.
+	innerStart := len(argv) - len(inner)
+	norm[innerStart] = gogTok
+	if innerStart > 0 {
+		opTok, opOK := trustedExecPath(env, argv[0], "op")
+		if !opOK {
+			return nil, false
+		}
+		norm[0] = opTok
+	}
+	return norm, true
+}
+
+// gogHardenedFlags are the read-only runtime flags a healthy gog registration
+// MUST carry (mcp.go's gogHardenedArgv). Doctor verifies their presence in the
+// registered argv and reports them as evidence — a registration missing any of
+// them is a verified gap (writes would not be blocked at runtime).
+var gogHardenedFlags = []string{"--gmail-no-send", "--wrap-untrusted", "--readonly"}
+
+// gogMissingHardenedFlags returns the hardened read-only flags absent from the
+// registered gog spawn's INNER argv (after unwrapping any op-run prefix).
+func gogMissingHardenedFlags(argv []string) []string {
+	inner, ok := gogSpawnArgv(argv)
+	if !ok {
+		return append([]string(nil), gogHardenedFlags...)
+	}
+	present := map[string]bool{}
+	for _, a := range inner[1:] {
+		present[a] = true
+	}
+	var missing []string
+	for _, f := range gogHardenedFlags {
+		if !present[f] {
+			missing = append(missing, f)
+		}
+	}
+	return missing
+}
+
+// gogHeadlessProbe probes the RECONSTRUCTED headless spawn (the exact argv
+// registration would produce for these inputs — gogRegisteredArgv, so the
+// probe can never drift lighter than what registration runs): op-wrapped when
+// op + op-refs resolve, bare otherwise.
+func gogHeadlessProbe(env shellEnv, acct, opRefs string) probeResult {
+	if acct == "" {
+		return probeResult{status: probeError, detail: "could not run (account unresolved)"}
+	}
+	if env.lookPath == nil {
+		return probeResult{status: probeError, detail: "could not run (no lookPath)"}
+	}
+	gogPath, err := env.lookPath("gog")
+	if err != nil {
+		return probeResult{status: probeError, detail: "could not run (gog not found)"}
+	}
+	opPath, opErr := env.lookPath("op")
+	if opErr != nil || opRefs == "" {
+		opPath, opRefs = "", ""
+	}
+	return probeListTools(env, gogRegisteredArgv(gogPath, opPath, opRefs, acct))
+}
+
+// gogHeadlessOK is gogHeadlessProbe collapsed to a bool for callers that only
+// need pass/fail (gog setup's follow-up gate).
 func gogHeadlessOK(env shellEnv, acct, opRefs string) bool {
-	if acct == "" || opRefs == "" {
-		return false
+	return gogHeadlessProbe(env, acct, opRefs).status == probeToolsOK
+}
+
+// gogSetupHint is the ONE guided recovery command doctor ever points at for
+// gog auth/registration gaps — never a raw legacy `gog auth login` recipe.
+const gogSetupHint = "pi-stack gog setup"
+
+// spawnCheck builds the "headless spawn" check from a structured probe result.
+// Shared by the honest (registered-command) path and the best-effort
+// reconstruction fallback, with per-path ready/zero-tools wording.
+func gogSpawnCheck(env shellEnv, res probeResult, readyDetail, noToolsDetail string) check {
+	switch res.status {
+	case probeToolsOK:
+		return check{label: "headless spawn", verdict: verdictReady,
+			detail:   readyDetail,
+			evidence: fmt.Sprintf("--list-tools returned %s", plural(res.tools, "tool"))}
+	case probeNoTools:
+		return check{label: "headless spawn", verdict: verdictTodo,
+			detail:   noToolsDetail,
+			evidence: "--list-tools exited cleanly with an empty tool list",
+			todo:     "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to " + defaultOpRefsPath(env)}
+	case probeDeniedByPolicy:
+		return check{label: "headless spawn", verdict: verdictDenied,
+			detail:   "the spawn was positively refused by policy/permission — an organizational denial, not a setup gap",
+			evidence: "probe output carried an explicit policy denial"}
+	default: // probeTimedOut / probeError — unverifiable, never a keyring claim
+		return check{label: "headless spawn", verdict: verdictUnverifiable,
+			detail:   "probe " + res.detail + " — could not verify (inspect: sbx mcp get gog)",
+			evidence: "probe " + res.detail}
 	}
-	if _, err := env.lookPath("op"); err != nil {
-		return false
-	}
-	out, timedOut, err := probeRun(env, "op", "run", "--env-file="+opRefs, "--",
-		"gog", "--account", acct, "mcp", "--list-tools")
-	return !timedOut && err == nil && strings.TrimSpace(out) != ""
 }
 
 // gogGroup builds the gog check cluster. The HONEST path reads the ACTUAL
-// command the sbx gateway registered for gog and probes THAT (so it verifies
-// the registered account, op-refs path, and op/gog binaries as-registered). Only
-// when sbx is absent (or exposes no command) does it fall back to a best-effort
-// reconstruction from config — clearly labeled, and never a confirmed green.
-// Every probe degrades to a TODO rather than crashing, so this runs cleanly
-// in-sandbox (gog/sbx/op all absent).
+// command the sbx gateway registered for gog, verifies its hardened read-only
+// flags, trust-gates its executables, and probes THAT. Only when sbx is absent
+// (or exposes no command) does it fall back to a best-effort reconstruction
+// from config — clearly labeled, and never a confirmed green. Every probe
+// degrades cleanly, so this runs in-sandbox (gog/sbx/op all absent) too.
 func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent bool) group {
 	g := group{title: "gog (Google Workspace via host MCP — read-only)"}
 
@@ -67,29 +277,53 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 	if argv, ok := registeredGogCommand(env); ok {
 		g.checks = append(g.checks, check{label: "registration", note: true,
 			detail: "probing the sbx-registered command: " + redactRegisteredCommand(argv)})
-		if probeRegisteredGog(env, argv) {
-			// Distinguish the op-wrapped path (op-refs resolved) from a BARE spawn so a
-			// bare green never implies 1Password creds were involved.
-			detail := "registered command exposes tools (verified as-registered, via op run)"
-			if !gogSpawnIsOpWrapped(argv) {
-				detail = "registered command exposes tools (verified as-registered) — spawned BARE (no op-refs involved)"
-			}
-			g.checks = append(g.checks, check{label: "headless spawn", verdict: verdictReady,
-				detail: detail})
+
+		// Read-only hardening as EVIDENCE: the registered argv must carry the
+		// exact runtime flags that block writes. Their absence is a VERIFIED gap
+		// (the runtime backstop is off), fixed by re-registering the hardened
+		// command — via the guided setup, never a raw recipe.
+		if missing := gogMissingHardenedFlags(argv); len(missing) > 0 {
+			g.checks = append(g.checks, check{label: "read-only", verdict: verdictTodo,
+				detail:   "registered command is missing hardened read-only flags: " + strings.Join(missing, " "),
+				evidence: "registered argv lacks " + strings.Join(missing, " "),
+				todo:     gogSetupHint + "  (re-registers gog with the hardened read-only flags)"})
 		} else {
-			g.checks = append(g.checks, check{label: "headless spawn", verdict: verdictTodo,
-				detail: "the registered command returns 0 tools — keyring not headless",
-				todo:   "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to " + defaultOpRefsPath(env)})
+			g.checks = append(g.checks, check{label: "read-only", verdict: verdictReady,
+				detail:   "registered command carries the hardened read-only flags",
+				evidence: strings.Join(gogHardenedFlags, " ") + " present in the registered argv"})
 		}
+
+		// TRUST GATE: NEVER exec a registered command whose gog/op executable is
+		// not the canonical PATH-resolved binary — a look-alike /tmp/gog, a fake
+		// op, or a symlink-swapped spelling is skipped (unverifiable), not probed.
+		// On trust, exec the NORMALIZED argv (canonical executable tokens), never
+		// the registered spelling.
+		trustedArgv, trusted := trustedGogSpawn(env, argv)
+		if !trusted {
+			g.checks = append(g.checks, check{label: "headless spawn", verdict: verdictUnverifiable,
+				detail:   "probe skipped: the registered command's gog/op executable does not match the PATH-resolved binary (inspect: sbx mcp get gog) — never executed",
+				evidence: "registered executable token not canonical; probe not executed"})
+			g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
+			g.checks = append(g.checks, gogAttachCheck(cfg))
+			return g
+		}
+		readyDetail := "registered command exposes tools (verified as-registered, via op run)"
+		if !gogSpawnIsOpWrapped(argv) {
+			readyDetail = "registered command exposes tools (verified as-registered) — spawned BARE (no op-refs involved)"
+		}
+		g.checks = append(g.checks, gogSpawnCheck(env, probeListTools(env, trustedArgv),
+			readyDetail,
+			"the registered command returns 0 tools — keyring not headless"))
 		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
 		return g
 	}
 
-	// 1. gog CLI installed (the reconstruction probe uses it).
+	// 1. gog CLI installed (the reconstruction probe uses it). Not installed is
+	// optional-NOT-CONFIGURED: an expected absence (a note), never a failure.
 	if _, err := env.lookPath("gog"); err != nil {
-		g.checks = append(g.checks, check{label: "gog CLI", verdict: verdictTodo,
-			detail: "not found", todo: "brew install gog"})
+		g.checks = append(g.checks, check{label: "gog CLI", note: true,
+			detail: "not installed — optional; set up Google Workspace with: " + gogSetupHint})
 		return g
 	}
 	g.checks = append(g.checks, check{label: "gog CLI", verdict: verdictReady, detail: "installed"})
@@ -120,28 +354,26 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 		check{label: "verifying", note: true,
 			detail: fallbackWhy + " — verifies " + acctShown + " via " + refsShown},
 		check{label: "note", note: true,
-			detail: "must match your `make mcp-register` (config.toml gog_account + config/op-refs.env)"})
+			detail: "must match the sbx-registered gog command (config.toml gog_account + op-refs.env)"})
 
 	if acct == "" {
-		// 2'. No account configured — can't probe auth or the headless path, so we
-		// must NOT report green: say we cannot verify and name the two sources.
-		g.checks = append(g.checks, check{label: "account", verdict: verdictTodo,
-			detail: "cannot verify (gog_account unset in config.toml/env)",
-			todo:   "pi-stack config set gog_account <you@example.com>"})
+		// 2'. No account configured — optional-NOT-CONFIGURED: an expected
+		// absence, a note (no ✗, no repair TODO — the setup command lives in the
+		// detail for whoever wants to opt in).
+		g.checks = append(g.checks, check{label: "account", note: true,
+			detail: "not configured (gog_account unset) — set up: " + gogSetupHint})
 		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
 		return g
 	}
 
 	if opRefs == "" {
-		// Can't run the gateway-equivalent headless probe without op-refs.env. But
-		// op-refs is OPTIONAL for gog: it authenticates via OAuth (gog auth login),
-		// and only needs op-refs to inject a headless keyring PASSWORD when the
-		// gateway can't unlock its keyring otherwise. So this is an info line, not a
-		// TODO — and it is self-contained (a gog-only config renders no Secrets
-		// group, so we must not point at one).
+		// Can't run the op-wrapped headless probe without op-refs.env. op-refs is
+		// OPTIONAL for gog (it authenticates via OAuth; op-refs only injects a
+		// headless keyring password when needed), so this is informational.
 		g.checks = append(g.checks,
-			check{label: "account", note: true, detail: acct + " set (unconfirmed vs registration)"},
+			check{label: "account", verdict: verdictUnverifiable,
+				detail: acct + " set (unconfirmed vs registration)"},
 			check{label: "op-refs", note: true,
 				detail: "op-refs.env not found — only needed if the gateway can't unlock gog's keyring headlessly"})
 		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
@@ -149,46 +381,50 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 		return g
 	}
 
-	// 2. account authorized (interactive). 3. THE GOTCHA — headless spawn.
-	_, interErr := env.run("gog", "--account", acct, "auth", "doctor", "--check")
+	// 2. account authorized (interactive). 3. THE GOTCHA — headless spawn. The
+	// auth check runs through the BOUNDED probe machinery so a hung `gog auth
+	// doctor --check` can never wedge doctor.
+	_, interTimedOut, interErr := probeRun(env, "gog", "--account", acct, "auth", "doctor", "--check")
 	_, opErr := env.lookPath("op")
-	headOK := gogHeadlessOK(env, acct, opRefs)
+	head := gogHeadlessProbe(env, acct, opRefs)
 	switch {
+	case interTimedOut:
+		// A timed-out auth check is UNVERIFIABLE, not "not authorized".
+		g.checks = append(g.checks, check{label: "account", verdict: verdictUnverifiable,
+			detail: acct + " — `gog auth doctor --check` timed out; could not verify"})
 	case interErr != nil:
-		// Auth itself isn't set up — don't double-report the keyring below.
+		// Auth itself isn't set up — don't double-report the keyring below. Point
+		// at the guided command, never the raw legacy auth recipe.
 		g.checks = append(g.checks, check{label: "account", verdict: verdictTodo,
 			detail: acct + " not authorized",
-			todo:   "gog auth add-client <client.json> && gog --account " + acct + " auth login"})
+			todo:   gogSetupHint})
 	case opErr != nil:
-		// Interactive auth OK, but op is absent so we can't run the gateway-
-		// equivalent probe. Say so rather than blaming the keyring.
+		// Interactive auth OK, but op is absent so we can't run the op-wrapped
+		// probe. Say so rather than blaming the keyring.
 		g.checks = append(g.checks,
 			check{label: "account", verdict: verdictReady, detail: acct + " authorized (interactive)"},
-			check{label: "headless spawn", verdict: verdictTodo,
-				detail: "can't verify the gateway spawn — op (1Password CLI) not found",
-				todo:   "install the 1Password CLI (op) so doctor can probe the real headless path"})
-	case !headOK:
-		// THE TRAP: interactive passes, the headless gateway spawn gets 0 tools.
-		g.checks = append(g.checks,
-			check{label: "account", verdict: verdictReady, detail: acct + " authorized (interactive)"},
-			check{label: "headless spawn", verdict: verdictTodo,
-				detail: "auth OK in your shell but the gateway spawn gets 0 tools — keyring not headless",
-				todo:   "add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to " + defaultOpRefsPath(env)})
-	default:
+			check{label: "headless spawn", verdict: verdictUnverifiable,
+				detail: "can't verify the gateway spawn — op (1Password CLI) not found; install it so doctor can probe the real headless path"})
+	case head.status == probeToolsOK:
 		// Best-effort success: this account authenticates headlessly, but we could
-		// NOT confirm it is the one the sbx gateway actually registered — so this
-		// MUST count as an outstanding item (a TODO), never a silent green. A
-		// reconstructed probe that happens to pass could still be a different
-		// account/op-refs than the gateway got. Only the honest path above
-		// (registered command read + probed) earns a confirmed ✓.
+		// NOT confirm it is the command the sbx gateway actually registered. That
+		// is UNVERIFIABLE, not a failure: doctor genuinely does not know whether
+		// it matches the real registration, so it renders as ⚠, never ✗, and
+		// carries no fix-it TODO. Only the honest path above earns a confirmed ✓.
 		g.checks = append(g.checks,
-			check{label: "account", note: true, detail: acct + " authorized (best-effort, unconfirmed vs registration)"},
-			check{label: "headless spawn", verdict: verdictTodo,
-				detail: "best-effort OK, but could not confirm the sbx-registered command",
-				todo:   "confirm the registered gog command: `sbx mcp get gog` (or `sbx mcp ls`)"})
+			check{label: "account", verdict: verdictUnverifiable,
+				detail: acct + " authorized (best-effort, unconfirmed vs registration)"},
+			check{label: "headless spawn", verdict: verdictUnverifiable,
+				detail: "best-effort headless spawn succeeded, but the sbx-registered command could not be confirmed"})
+	default:
+		g.checks = append(g.checks,
+			check{label: "account", verdict: verdictReady, detail: acct + " authorized (interactive)"},
+			gogSpawnCheck(env, head,
+				"", // unreachable: probeToolsOK handled above
+				"auth OK in your shell but the gateway spawn gets 0 tools — keyring not headless"))
 	}
 
-	// 4. registered with the gateway. 5. attached on run?
+	// 4. registered with the gateway. 5. in the configured MCP set?
 	g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
 	g.checks = append(g.checks, gogAttachCheck(cfg))
 	return g
@@ -213,7 +449,7 @@ func redactRegisteredCommand(argv []string) string {
 		// flag NAMES (their VALUES are still redacted)
 		"--list-tools": true, "--account": true, "--env-file": true, "--check": true,
 		"--gmail-no-send": true, "--wrap-untrusted": true, "--readonly": true,
-		"--allow-tool": true,
+		"--allow-tool": true, "--no-masking": true,
 	}
 	out := make([]string, 0, len(argv))
 	for i, tok := range argv {
@@ -255,20 +491,22 @@ func gogSpawnIsOpWrapped(argv []string) bool {
 // reconstruction that may have drifted from what `make mcp-register` wired up.
 // It tries, in order, `sbx mcp get gog`, then `sbx mcp ls -o json`, returning
 // the parsed argv. Returns (nil,false) when sbx is absent or exposes no command
-// — the caller then falls back to the best-effort reconstruction.
+// — the caller then falls back to the best-effort reconstruction. Both
+// discovery subprocesses are BOUNDED (probeRun) so a hung sbx can never wedge
+// the caller.
 func registeredGogCommand(env shellEnv) ([]string, bool) {
-	if env.lookPath == nil || env.run == nil {
+	if env.lookPath == nil || (env.run == nil && env.probe == nil) {
 		return nil, false
 	}
 	if _, err := env.lookPath("sbx"); err != nil {
 		return nil, false
 	}
-	if out, err := env.run("sbx", "mcp", "get", "gog"); err == nil {
+	if out, timedOut, err := probeRun(env, "sbx", "mcp", "get", "gog"); err == nil && !timedOut {
 		if argv, ok := parseGogCommandLine(out); ok {
 			return argv, true
 		}
 	}
-	if out, err := env.run("sbx", "mcp", "ls", "-o", "json"); err == nil {
+	if out, timedOut, err := probeRun(env, "sbx", "mcp", "ls", "-o", "json"); err == nil && !timedOut {
 		if argv, ok := parseGogCommandJSON(out); ok {
 			return argv, true
 		}
@@ -377,27 +615,11 @@ func parseGogCommandJSON(out string) ([]string, bool) {
 	return nil, false
 }
 
-// probeRegisteredGog runs the EXACT registered command with `--list-tools`
-// appended and reports whether it yields a non-empty tool list — verifying the
-// real gateway spawn (account, op-refs, op/gog binaries) all as-registered.
-// This works for BOTH registration forms unchanged: the op-wrapped form runs
-// `op run … -- gog … mcp … --list-tools`, and the bare form runs
-// `gog … mcp … --list-tools` (argv[0] is gog itself). It degrades cleanly
-// (returns false, never crashes) on any error.
-func probeRegisteredGog(env shellEnv, argv []string) bool {
-	if len(argv) == 0 {
-		return false
-	}
-	full := append(append([]string{}, argv...), "--list-tools")
-	out, timedOut, err := probeRun(env, full[0], full[1:]...)
-	return !timedOut && err == nil && strings.TrimSpace(out) != ""
-}
-
 // gogAttachCheck is the informational check 5: is gog in the configured MCP set,
-// so `pi-stack run` auto-attaches it (--mcp gog)?
+// so `pi-stack run` preloads it at sandbox create?
 func gogAttachCheck(cfg *config.Config) check {
 	if mcpConfigured(cfg, "gog") {
-		return check{label: "attached", note: true, detail: "auto-attached on run (--mcp gog)"}
+		return check{label: "attached", note: true, detail: "in the configured MCP set — preloaded at sandbox create"}
 	}
 	return check{label: "attached", note: true,
 		detail: "run `pi-stack config set mcp gog` to attach it"}

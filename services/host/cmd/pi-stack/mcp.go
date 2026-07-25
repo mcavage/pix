@@ -185,6 +185,24 @@ type mcpRegistrar struct {
 	containers map[string]packContainer
 }
 
+// gogHardenedArgv builds the EXACT hardened gog invocation used both when
+// registering gog with the sbx gateway (mcpRegistrar.serverCmd) and when
+// probing it directly (gog_setup.go's headless verification, doctor's
+// best-effort reconstruction) — a single definition so a direct probe can
+// never silently drift from what actually gets registered. gogBin is normally
+// the canonical PATH-resolved gog binary.
+func gogHardenedArgv(gogBin, account string) []string {
+	return []string{
+		gogBin,
+		"--account", account,
+		"--gmail-no-send",
+		"--wrap-untrusted",
+		"--readonly",
+		"mcp",
+		"--allow-tool", "read",
+	}
+}
+
 // serverCmd is the bare command+args the gateway must ultimately spawn for one
 // server (before any op-run wrapping): gog with its hardened flags, or a
 // pi-stack-host subcommand (slack + friends).
@@ -201,15 +219,7 @@ func (m mcpRegistrar) serverCmd(name string) []string {
 	}
 	switch name {
 	case "gog":
-		return []string{
-			m.gog,
-			"--account", m.account,
-			"--gmail-no-send",
-			"--wrap-untrusted",
-			"--readonly",
-			"mcp",
-			"--allow-tool", "read",
-		}
+		return gogHardenedArgv(m.gog, m.account)
 	default:
 		// slack + any other local stdio server is a pi-stack-host subcommand.
 		return []string{m.hostBin, "mcp", name}
@@ -239,28 +249,106 @@ func (m mcpRegistrar) addArgs(name string) []string {
 	if c := m.containers[name]; c.RemoteURL != "" {
 		return []string{"mcp", "add", name, "--url", c.RemoteURL}
 	}
+	return rawAddArgs(name, m.execArgv(name))
+}
+
+// execArgv returns the EXACT, literal command line the sbx gateway will exec to
+// spawn server `name` — serverCmd's bare invocation, wrapped in
+// `op run --no-masking --env-file=<refs> -- <cmd…>` when m.opRefs is present so
+// creds resolve from 1Password at gateway spawn time, or returned bare when
+// m.opRefs is empty (1Password is optional). This is the single source of
+// truth for "what will actually run": addArgs re-encodes it into sbx's
+// --command/--args form, and gogRegisteredArgv calls it directly so a probe of
+// the real headless path can never drift from what gets registered. Container
+// (manifest/remote) servers never route through here — addArgs short-circuits
+// them above.
+func (m mcpRegistrar) execArgv(name string) []string {
 	cmd := m.serverCmd(name)
 	if m.opRefs == "" {
-		// Bare registration: --command <cmd[0]> --args <cmd[1]> ...
-		args := []string{"mcp", "add", name, "--command", cmd[0]}
-		for _, c := range cmd[1:] {
-			args = append(args, "--args", c)
-		}
-		return args
+		return cmd
 	}
-	// op-run wrapper: --command <op> --args run … --args -- --args <cmd...>
-	args := []string{
-		"mcp", "add", name,
-		"--command", m.op,
-		"--args", "run",
-		"--args", "--no-masking",
-		"--args", "--env-file=" + m.opRefs,
-		"--args", "--",
+	wrapped := []string{m.op, "run", "--no-masking", "--env-file=" + m.opRefs, "--"}
+	return append(wrapped, cmd...)
+}
+
+// rawAddArgs builds a literal `sbx mcp add <name> --command <argv[0]> --args
+// <argv[1]> ...` argv from an already-resolved command line (e.g. one read
+// back via `sbx mcp get`). Used both by addArgs above and by gog_setup.go's
+// registration rollback, which must re-register a PRIOR command exactly as it
+// was without reconstructing it from config.
+func rawAddArgs(name string, argv []string) []string {
+	if len(argv) == 0 {
+		return []string{"mcp", "add", name}
 	}
-	for _, c := range cmd {
+	args := []string{"mcp", "add", name, "--command", argv[0]}
+	for _, c := range argv[1:] {
 		args = append(args, "--args", c)
 	}
 	return args
+}
+
+// gogRegisteredArgv returns the EXACT argv the sbx gateway will exec for gog,
+// given resolved binaries/refs/account — literally mcpRegistrar{…}.execArgv
+// ("gog") for the same inputs registerServers would use. gog_setup.go's
+// pre-commit headless verification and doctor's best-effort reconstruction
+// fallback (when sbx's own registration can't be read) both call THIS, so
+// neither can silently probe lighter flags/wrapper than what registration will
+// actually run. Pass opBin/opRefs both "" for a bare (no 1Password) probe —
+// mirrors registerServers' opReady gate, where op and op-refs are only ever
+// used together.
+func gogRegisteredArgv(gogBin, opBin, opRefs, account string) []string {
+	return mcpRegistrar{gog: gogBin, account: account, op: opBin, opRefs: opRefs}.execArgv("gog")
+}
+
+// gogBareRegistrationNote is the ONE shared message printed whenever gog is
+// registered without an op-refs.env wrapper (1Password not configured): gog
+// authenticates via its own OAuth flow, never op-refs, so this points at the
+// guided `pi-stack gog setup` recovery path — never a raw `gog auth login`
+// recipe.
+func gogBareRegistrationNote(out io.Writer) {
+	fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via its own OAuth flow — "+
+		"if it ever needs re-authorizing, run: pi-stack gog setup")
+}
+
+// buildGogRegistrar resolves op + op-refs EXACTLY ONCE and pairs them with the
+// already-resolved gogPath/account into an IMMUTABLE mcpRegistrar snapshot.
+// gogSetup calls this a single time, before its headless verification probe;
+// the returned reg is then used, UNCHANGED, both to build the probe's argv
+// (reg.execArgv("gog")) and to register it (registerGogRegistrar ->
+// reg.addArgs("gog")) — no re-resolution of op/op-refs/gog happens between the
+// two, so a PATH or op-refs.env mutation in that window can never register a
+// different command than the one that was just proven healthy.
+func buildGogRegistrar(env shellEnv, gogPath, account string) mcpRegistrar {
+	lookPath := env.lookPath
+	if lookPath == nil {
+		lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	}
+	reg := mcpRegistrar{gog: gogPath, account: account}
+	opPath, opErr := lookPath("op")
+	opRefs := resolveOpRefs(env)
+	if opErr == nil && opRefs != "" {
+		reg.op = opPath
+		reg.opRefs = opRefs
+	}
+	return reg
+}
+
+// registerGogRegistrar registers gog with the sbx gateway using the EXACT,
+// already-resolved reg snapshot gogSetup built via buildGogRegistrar and
+// probed against — no independent re-resolution here, so the registered
+// command is byte-for-byte the one that was just verified.
+func registerGogRegistrar(reg mcpRegistrar, env shellEnv, out io.Writer) error {
+	if env.run == nil {
+		return fmt.Errorf("internal: shellEnv.run not wired")
+	}
+	if reg.opRefs == "" {
+		gogBareRegistrationNote(out)
+	}
+	if _, err := env.run("sbx", reg.addArgs("gog")...); err != nil {
+		return fmt.Errorf("sbx mcp add gog: %w", err)
+	}
+	fmt.Fprintln(out, "  registered: gog")
+	return nil
 }
 
 // registerServers resolves + guards + builds + runs the `sbx mcp add` commands

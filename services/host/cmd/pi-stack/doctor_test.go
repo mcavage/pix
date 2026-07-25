@@ -81,6 +81,14 @@ func opWrappedGog(refs, acct string) string {
 	return "op run --env-file=" + refs + " -- " + bareGog(acct)
 }
 
+// reconstructedGogProbe is the EXACT best-effort headless probe command the
+// gog group runs when sbx exposes no registered command: gogRegisteredArgv
+// with the fakeEnv's lookPath-resolved paths (/usr/bin/…) — the same hardened
+// argv + op wrapper registration would produce, plus --list-tools.
+func reconstructedGogProbe(refs, acct string) string {
+	return strings.Join(append(gogRegisteredArgv("/usr/bin/gog", "/usr/bin/op", refs, acct), "--list-tools"), " ")
+}
+
 // gogGreen adds the fixtures that make the whole gog group green: gog + op on
 // PATH, GOG_ACCOUNT set, interactive auth passing, the headless op-run probe
 // returning a non-empty tool list, and gog registered with the gateway.
@@ -97,7 +105,7 @@ func gogGreen(f fakeEnv) fakeEnv {
 	f.envVars["PI_STACK_CONFIG"] = gogCfgFile // makes resolveOpRefs -> gogOpRefs
 	f.statFile[gogOpRefs] = true
 	f.output["gog --account "+gogAcct+" auth doctor --check"] = "ok"
-	f.output["op run --env-file="+gogOpRefs+" -- gog --account "+gogAcct+" mcp --list-tools"] =
+	f.output[reconstructedGogProbe(gogOpRefs, gogAcct)] =
 		"gmail_search\ncalendar_events\ndocs_get\n"
 	return f
 }
@@ -175,12 +183,17 @@ func TestDoctor_SbxAbsent(t *testing.T) {
 	for _, want := range []string{
 		"sbx secret set -g anthropic",
 		"sbx secret set -g github",
-		"ollama pull gemma4",
-		"ollama pull nomic-embed-text",
+		// ollama absent + the memory service configured: the actionable gap is
+		// INSTALLING ollama; the per-model lines are not-configured notes and
+		// must NOT surface pull TODOs (nothing to pull into).
+		"install ollama",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("expected TODO %q in %v", want, todos)
 		}
+	}
+	if strings.Contains(joined, "ollama pull") {
+		t.Errorf("no pull TODO may be offered while ollama itself is absent, got %v", todos)
 	}
 
 	var buf bytes.Buffer
@@ -228,8 +241,9 @@ func TestDoctor_GogHeadlessTrap(t *testing.T) {
 			"sbx secret ls": "anthropic openai google github",
 			"sbx mcp ls":    "gog\n",
 			"gog --account " + gogAcct + " auth doctor --check": "ok",
-			// headless probe returns an empty tool list -> the trap.
-			"op run --env-file=" + gogOpRefs + " -- gog --account " + gogAcct + " mcp --list-tools": "",
+			// headless probe exits CLEANLY with an empty tool list -> the trap
+			// (a probe ERROR would be unverifiable, not this verified todo).
+			reconstructedGogProbe(gogOpRefs, gogAcct): "",
 		},
 		envVars:  map[string]string{"GOG_ACCOUNT": gogAcct, "PI_STACK_CONFIG": gogCfgFile},
 		statFile: map[string]bool{gogOpRefs: true},
@@ -260,8 +274,10 @@ func TestDoctor_GogHeadlessTrap(t *testing.T) {
 	}
 }
 
-// TestDoctor_GogAccountUnset: gog installed but GOG_ACCOUNT unset -> a TODO to
-// set it, and no crash (the account/headless probes are skipped).
+// TestDoctor_GogAccountUnset: gog installed but GOG_ACCOUNT unset is
+// optional-NOT-CONFIGURED — a note pointing at the guided setup, never a
+// verified failure/TODO (absence of an optional integration is expected), and
+// no crash (the account/headless probes are skipped).
 func TestDoctor_GogAccountUnset(t *testing.T) {
 	f := fakeEnv{
 		present: map[string]bool{"gog": true},
@@ -271,16 +287,20 @@ func TestDoctor_GogAccountUnset(t *testing.T) {
 	}
 	r := runDoctor(defaultCfg(), f.env())
 	joined := strings.Join(r.todos(), "\n")
-	if !strings.Contains(joined, "set gog_account") {
-		t.Errorf("expected a gog_account TODO, got %v", r.todos())
+	if strings.Contains(joined, "gog_account") || strings.Contains(joined, "gog setup") {
+		t.Errorf("an unset gog account is not-configured, never a TODO, got %v", r.todos())
 	}
-	// It must NOT report green: the account check carries the "cannot verify"
-	// detail and stays a TODO (not stateOK).
+	// It must NOT report green either: the account line is a note that says
+	// it is not configured and names the guided setup command.
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, nil
 	r.render(&buf, false)
-	if !strings.Contains(buf.String(), "cannot verify (gog_account unset in config.toml/env)") {
-		t.Errorf("expected a 'cannot verify' account detail, got:\n%s", buf.String())
+	if !strings.Contains(buf.String(), "not configured (gog_account unset) — set up: pi-stack gog setup") {
+		t.Errorf("expected a not-configured account note naming pi-stack gog setup, got:\n%s", buf.String())
+	}
+	// And never the raw legacy auth recipe.
+	if strings.Contains(buf.String(), "gog auth login") {
+		t.Errorf("raw `gog auth login` guidance is banned, got:\n%s", buf.String())
 	}
 }
 
@@ -330,7 +350,7 @@ func TestDoctor_GogTransparency(t *testing.T) {
 	if !strings.Contains(out, "verifying") || !strings.Contains(out, gogAcct) || !strings.Contains(out, gogOpRefs) {
 		t.Errorf("expected a transparency line naming account+op-refs, got:\n%s", out)
 	}
-	if !strings.Contains(out, "must match your `make mcp-register`") {
+	if !strings.Contains(out, "must match the sbx-registered gog command") {
 		t.Errorf("expected the must-match note, got:\n%s", out)
 	}
 	// The fallback (sbx exposes no registered command) must be labeled best-effort
@@ -568,23 +588,31 @@ func TestDoctor_GogFallbackUnconfirmedIsTODO(t *testing.T) {
 		ports: map[int]bool{11434: true, 11435: true},
 	})
 	r := runDoctor(defaultCfg(), f.env())
-	// The headless spawn must be a TODO whose detail says it could not confirm.
-	var headTODO bool
+	// The headless spawn must be UNVERIFIABLE (⚠) — doctor genuinely does not
+	// know whether the best-effort pass matches the real registration — and it
+	// must carry NO repair TODO (nothing is confirmed broken to fix).
+	var headWarn bool
 	for _, g := range r.groups {
 		if !strings.HasPrefix(g.title, "gog") {
 			continue
 		}
 		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state() == stateTODO &&
-				strings.Contains(c.detail, "could not confirm the sbx-registered command") {
-				headTODO = true
+			if c.label == "headless spawn" {
+				if c.state() == stateWarn &&
+					strings.Contains(c.detail, "could not be confirmed") {
+					headWarn = true
+				}
+				if c.todo != "" {
+					t.Errorf("an unverifiable best-effort pass must not carry a TODO, got %q", c.todo)
+				}
 			}
 		}
 	}
-	if !headTODO {
-		t.Fatalf("expected an unconfirmed-fallback headless TODO, groups=%+v", r.groups)
+	if !headWarn {
+		t.Fatalf("expected an unconfirmed-fallback headless ⚠, groups=%+v", r.groups)
 	}
-	// Verdict must NOT be all-clear.
+	// Verdict must NOT be all-clear: the headline calls out the unverified
+	// checks instead.
 	var buf bytes.Buffer
 	r.services, r.mcp = defaultCfg().Services, []string{"gog"}
 	r.render(&buf, false)
@@ -592,8 +620,8 @@ func TestDoctor_GogFallbackUnconfirmedIsTODO(t *testing.T) {
 	if strings.Contains(out, "all checks pass") {
 		t.Errorf("unconfirmed fallback must not report all-clear, got:\n%s", out)
 	}
-	if !strings.Contains(out, "TODO: confirm the registered gog command") {
-		t.Errorf("expected a copy-pasteable confirm-command TODO, got:\n%s", out)
+	if !strings.Contains(out, "could not be verified") {
+		t.Errorf("expected the could-not-verify headline, got:\n%s", out)
 	}
 }
 
