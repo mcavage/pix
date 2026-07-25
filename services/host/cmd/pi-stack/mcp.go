@@ -122,13 +122,54 @@ func runMcpLoad(argv []string) {
 	}
 	cmd := exec.Command("sbx", "mcp", "load", name, "--sandbox", sandbox)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
+	// S03: append the load receipt ONLY after this exact `sbx mcp load` exec has
+	// itself succeeded — never before, never on a failed load. A missing sbx
+	// (the would-run branch above) never reaches this call at all.
+	if err := execSbxMcpLoadAndRecord(cmd, sandbox, name); err != nil {
+		var rerr *receiptRecordError
+		if errors.As(err, &rerr) {
+			// The attach itself succeeded — only the local receipt failed.
+			// Report that distinctly (never a plain success) and exit non-zero
+			// so doctor/status degrade honestly instead of trusting a record
+			// that was never written.
+			fmt.Fprintf(os.Stderr, "pi-stack mcp load: %v\n", rerr)
+			fmt.Fprintln(os.Stderr, "the server IS attached to the running sandbox; only pi-stack's local record of it failed to write — retry `pi-stack mcp load`, or check state-dir permissions.")
+			os.Exit(1)
+		}
 		if exit, ok := err.(*exec.ExitError); ok {
 			os.Exit(exit.ExitCode())
 		}
 		fmt.Fprintf(os.Stderr, "pi-stack mcp load: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// recordMcpLoadReceipt appends the load receipt for name on sandbox — called
+// ONLY by execSbxMcpLoadAndRecord, after mcp.go's OWN `sbx mcp load` has
+// already exec'd successfully.
+func recordMcpLoadReceipt(sandbox, name string) error {
+	dir, err := sandboxMCPStateDirFn()
+	if err != nil {
+		return &receiptRecordError{op: "mcp load", sandbox: sandbox, name: name, err: fmt.Errorf("resolving pi-stack state dir: %w", err)}
+	}
+	if err := appendLoadReceipt(dir, sandbox, name, nil); err != nil {
+		return &receiptRecordError{op: "mcp load", sandbox: sandbox, name: name, err: err}
+	}
+	return nil
+}
+
+// execSbxMcpLoadAndRecord runs cmd (the already-composed `sbx mcp load ...`
+// invocation) and — ONLY when the exec itself succeeds — appends the load
+// receipt for sandbox/name. Mirrors execSbxRunAndRecordCreate's ordering
+// contract (run.go): a failed exec returns before any receipt write is
+// attempted, and a writeCreateReceipt-equivalent failure here surfaces as
+// *receiptRecordError so the caller reports "attached, but state unrecorded"
+// rather than a plain success or a plain failure.
+func execSbxMcpLoadAndRecord(cmd *exec.Cmd, sandbox, name string) error {
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return recordMcpLoadReceipt(sandbox, name)
 }
 
 // runMcpLs shells `sbx mcp ls`, degrading cleanly when sbx is absent (e.g.

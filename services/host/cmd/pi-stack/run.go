@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -293,7 +294,23 @@ func runRun(argv []string) {
 	// token. A future external credential broker plugin would set its own bearer through
 	// the retained generic seam and own that plumbing itself.
 	cmd.Env = os.Environ()
-	if err := cmd.Run(); err != nil {
+	// S03: on a DEFINITE create (definitelyCreating — the same predicate that
+	// gates the sandbox.pack marker above, for the identical reason: an
+	// sbxUnknown probe may still have sbx reattach the OLD sandbox, and a plain
+	// re-attach must never write a fresh create receipt over one), record the
+	// create receipt ONLY after this exact `sbx run` exec has itself succeeded
+	// — never before, never on failure, never on reattach.
+	if err := execSbxRunAndRecordCreate(cmd, definitelyCreating(state, o.Replace), o.Name, o.StaticMCP); err != nil {
+		var rerr *receiptRecordError
+		if errors.As(err, &rerr) {
+			// The sandbox itself WAS created successfully — only the local
+			// receipt failed. Say so honestly rather than implying the launch
+			// failed, but still exit non-zero: doctor/status must not be told
+			// this sandbox's MCP set is recorded when it isn't.
+			fmt.Fprintf(os.Stderr, "pi-stack run: %v\n", rerr)
+			fmt.Fprintln(os.Stderr, "the sandbox itself launched fine; only pi-stack's local record of its preloaded MCP set failed to write. Check state-dir permissions and re-run `pi-stack doctor`.")
+			os.Exit(1)
+		}
 		if exit, ok := err.(*exec.ExitError); ok {
 			// If we pinned a git #ref kit and sbx bailed (classically git exit 128
 			// "Remote branch not found"), the raw error is opaque — replace it with
@@ -314,6 +331,46 @@ func runRun(argv []string) {
 		}
 		os.Exit(1)
 	}
+}
+
+// recordCreateReceipt writes the create receipt for sandbox — called ONLY by
+// execSbxRunAndRecordCreate, after run.go's OWN `sbx run` create has already
+// exec'd successfully. preloaded is the EXACT --static-mcp set that launch
+// emitted (o.StaticMCP: allPreloadedMCP(cfg.MCP+o.MCP), which already folds in
+// every active/transient pack integration's MCP server — applyPackToLaunch
+// runs before this set is computed), so a receipt read later never disagrees
+// with what create actually requested.
+func recordCreateReceipt(sandbox string, preloaded []string) error {
+	dir, err := sandboxMCPStateDirFn()
+	if err != nil {
+		return &receiptRecordError{op: "create", sandbox: sandbox, err: fmt.Errorf("resolving pi-stack state dir: %w", err)}
+	}
+	if err := writeCreateReceipt(dir, sandbox, preloaded, nil); err != nil {
+		return &receiptRecordError{op: "create", sandbox: sandbox, err: err}
+	}
+	return nil
+}
+
+// execSbxRunAndRecordCreate runs cmd (the already-composed `sbx run ...`
+// invocation, stdio already wired by the caller) and — ONLY when the exec
+// itself succeeds AND writeReceipt is true — writes the create receipt for
+// sandbox/preloaded. This function IS the ordering contract S03 item 1
+// requires: a failed exec returns before any receipt write is even attempted
+// (never write before success), and writeReceipt=false (a plain re-attach, or
+// an inconclusive sbxUnknown probe — see definitelyCreating) never writes one
+// regardless of the exec's own outcome (a re-attach writes nothing). A
+// writeCreateReceipt failure surfaces as *receiptRecordError so the caller can
+// tell "the launch itself failed" apart from "it succeeded but couldn't be
+// recorded" and report each honestly — never claiming success outright, and
+// never silently swallowing a failed record.
+func execSbxRunAndRecordCreate(cmd *exec.Cmd, writeReceipt bool, sandbox string, preloaded []string) error {
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	if !writeReceipt {
+		return nil
+	}
+	return recordCreateReceipt(sandbox, preloaded)
 }
 
 // applyReplaceRm runs the plan's RmFirst step (`sbx rm -f <name>`) via env when
