@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"pi-stack/host/config"
@@ -76,13 +77,16 @@ func TestClassifyMCP_CatalogNameIsRemote_NonCatalogIsCustom(t *testing.T) {
 	}
 }
 
-// TestDoctor_MCPCustom_UnverifiableNoBundleTodo: a confirmed non-local,
-// non-catalog server (linear) must never recommend `pi-stack mcp bundle`
-// (broken -- the bundle doesn't carry it) nor `pi-stack mcp register` (that's
-// for local stdio servers); it renders unverifiable with no repair command,
-// while a real catalog name (notion) in the same run still gets the remote
-// bundle guidance.
-func TestDoctor_MCPCustom_UnverifiableNoBundleTodo(t *testing.T) {
+// TestDoctor_MCPCustom_ConfirmedAbsentIsFailureNoBundleTodo: a confirmed
+// non-local, non-catalog server (linear) must never recommend `pi-stack mcp
+// bundle` (broken -- the bundle doesn't carry it) nor `pi-stack mcp register`
+// (that's for local stdio servers). The FINAL false-green regression this
+// guards: a confirmed-ABSENT custom server (sbx mcp ls plainly doesn't list
+// it) must be a VERIFIED failure with native `sbx mcp add` guidance, not a
+// silent unverifiable that lets doctor claim a clean bill of health -- while
+// a real catalog name (notion) in the same run still gets the remote bundle
+// guidance.
+func TestDoctor_MCPCustom_ConfirmedAbsentIsFailureNoBundleTodo(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"linear", "notion"}
 	f := remoteEnv(fakeEnv{
@@ -100,11 +104,14 @@ func TestDoctor_MCPCustom_UnverifiableNoBundleTodo(t *testing.T) {
 	if linear == nil {
 		t.Fatalf("expected a linear check, groups=%+v", r.groups)
 	}
-	if linear.evidence != EvidenceUnverifiable {
-		t.Errorf("linear (custom, non-catalog) must be unverifiable, got %+v", linear)
+	if linear.evidence != EvidenceFailed {
+		t.Errorf("a confirmed-absent custom server must be a VERIFIED failure (no false-green), got %+v", linear)
 	}
-	if linear.todo != "" {
-		t.Errorf("linear must carry no repair command (bundle would be broken for it), got %q", linear.todo)
+	if linear.todo == "" || !strings.Contains(linear.todo, "sbx mcp add") || !strings.Contains(linear.todo, "linear") {
+		t.Errorf("linear must carry a native `sbx mcp add linear ...` repair command, got %q", linear.todo)
+	}
+	if strings.Contains(linear.todo, "pi-stack mcp bundle") || strings.Contains(linear.todo, "pi-stack mcp register") {
+		t.Errorf("linear must never carry the broken bundle/register repair, got %q", linear.todo)
 	}
 
 	notion := findCheck(r, "Other MCP servers", "notion")
@@ -115,11 +122,14 @@ func TestDoctor_MCPCustom_UnverifiableNoBundleTodo(t *testing.T) {
 
 // TestStatus_MCPCustom_NoBundleTodo mirrors the doctor test on the status
 // side: an unregistered custom (non-catalog) server must not add the broken
-// `pi-stack mcp bundle` todo, while a real catalog name still does.
+// `pi-stack mcp bundle` todo (a real catalog name still does), but it DOES
+// add its own native `sbx mcp add` outstanding item -- the final false-green
+// regression: status must not read "all systems go" over a confirmed-missing
+// custom server just because neither existing repair command applies to it.
 func TestStatus_MCPCustom_NoBundleTodo(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"linear", "notion"}}
 	st := gatherStatus(cfg, "default", statusRemoteEnv("gog\n")) // neither registered
-	var sawBundle, sawRegister int
+	var sawBundle, sawRegister, sawLinear int
 	for _, tdo := range st.Todos {
 		if tdo == "pi-stack mcp bundle" {
 			sawBundle++
@@ -127,11 +137,20 @@ func TestStatus_MCPCustom_NoBundleTodo(t *testing.T) {
 		if tdo == "pi-stack mcp register" {
 			sawRegister++
 		}
+		if strings.Contains(tdo, "linear") {
+			sawLinear++
+			if !strings.Contains(tdo, "sbx mcp add") {
+				t.Errorf("expected native `sbx mcp add` guidance for linear, got %q", tdo)
+			}
+		}
 	}
 	if sawBundle != 1 {
 		t.Errorf("expected exactly one deduped `pi-stack mcp bundle` todo (for notion only), got %d in %v", sawBundle, st.Todos)
 	}
 	if sawRegister != 0 {
 		t.Errorf("must never recommend `pi-stack mcp register` here, got %v", st.Todos)
+	}
+	if sawLinear != 1 {
+		t.Errorf("expected exactly one native linear repair todo, got %d in %v", sawLinear, st.Todos)
 	}
 }

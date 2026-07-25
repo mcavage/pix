@@ -274,10 +274,17 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 				// always the local special case (see mcp.go); and when the
 				// classification itself is unknown, status must not guess — no
 				// todo for that name at all, same posture as doctor's
-				// mcpUnknownClassificationCheck.
+				// mcpUnknownClassificationCheck. A confirmed CUSTOM name (non-local,
+				// also outside the shipped catalog) gets its OWN honest guidance:
+				// neither `pi-stack mcp register` nor `pi-stack mcp bundle` can
+				// register it (the final false-green regression -- a
+				// confirmed-missing custom server must still be an outstanding item,
+				// pointed at native `sbx mcp add` with the server's OWN url/transport,
+				// never a guessed URL or unsafe placeholder command).
 				localSet, localKnown := localMCPNames(env, env.hostBinary)
 				anyUnregisteredLocal := false
 				var remoteTodos []string
+				var customTodos []string
 				seenRemoteTodo := map[string]bool{}
 				for _, m := range cfg.MCP {
 					reg := grepWord(o, m)
@@ -300,12 +307,19 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 							seenRemoteTodo[cmd] = true
 							remoteTodos = append(remoteTodos, cmd)
 						}
-						// default (mcpClassUnknown or mcpClassCustom): genuinely can't
-						// tell how to register — unknown, classification itself
-						// failed; custom, a confirmed non-local name OUTSIDE the
-						// shipped catalog (mcpCatalogNames), where `pi-stack mcp
-						// bundle` would silently no-op (a broken repair) — no todo
-						// for either.
+					case classifyMCP(m, localSet, localKnown) == mcpClassCustom:
+						// Confirmed non-local AND outside the shipped catalog: `pi-stack
+						// mcp bundle` only registers mcpCatalogNames (a silent no-op here)
+						// and `pi-stack mcp register` only knows local stdio servers, so
+						// neither applies -- but this is still a CONFIRMED absence, so it
+						// must still be an outstanding item (never a false "all systems
+						// go"). The guidance names native `sbx mcp add` with the
+						// server's OWN url/transport rather than inventing one.
+						customTodos = append(customTodos,
+							"sbx mcp add "+m+" --url <the server's own URL> --transport <its transport>")
+						// default (mcpClassUnknown): classification itself failed --
+						// genuinely can't tell how to register, so no todo at all, same
+						// posture as doctor's mcpUnknownClassificationCheck.
 					}
 				}
 				// A configured server that isn't registered means `run` would attach a
@@ -317,6 +331,7 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 					st.Todos = append(st.Todos, "pi-stack mcp register")
 				}
 				st.Todos = append(st.Todos, remoteTodos...)
+				st.Todos = append(st.Todos, customTodos...)
 			}
 		}
 	}

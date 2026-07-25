@@ -496,7 +496,7 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 			case mcpClassRemote:
 				mcp.checks = append(mcp.checks, mcpRemoteCheck(env, m, mcpOut, mcpOK, sbxOK))
 			case mcpClassCustom:
-				mcp.checks = append(mcp.checks, mcpCustomCheck(m))
+				mcp.checks = append(mcp.checks, mcpCustomCheck(m, mcpOut, mcpOK, sbxOK))
 			default: // mcpClassUnknown
 				mcp.checks = append(mcp.checks, mcpUnknownClassificationCheck(m))
 			}
@@ -789,18 +789,53 @@ func mcpUnknownClassificationCheck(name string) check {
 // plausible-looking gateway-catalog name the shipped bundle simply doesn't
 // carry. It must never recommend `pi-stack mcp bundle` (that only registers
 // mcpCatalogNames and would silently no-op for this name — a broken repair)
-// nor `pi-stack mcp register` (that is for local stdio servers). There is
-// genuinely no host-known repair command for a name outside both known sets,
-// so this renders unverifiable with no todo, mirroring
-// mcpUnknownClassificationCheck's honesty about not guessing.
-func mcpCustomCheck(name string) check {
+// nor `pi-stack mcp register` (that is for local stdio servers): neither
+// command can register a custom name, so recommending either is a broken
+// repair that quietly fails.
+//
+// The final false-green regression this closes: a custom name whose `sbx mcp
+// ls` output CONFIRMS it is absent must be a VERIFIED failure (evidence=
+// Failed), not "unverifiable" -- an unverifiable result never surfaces a TODO
+// (see report.todos), so a confirmed-missing custom server was silently
+// making doctor/status claim a clean bill of health. There genuinely is no
+// host-known command that can register an arbitrary custom server (its own
+// URL/transport are unknown to pi-stack), so the honest repair is pointing at
+// native `sbx mcp add` and telling the user to supply ITS OWN url/transport --
+// never a guessed/invented URL and never a fabricated placeholder that looks
+// runnable as-is.
+//
+// When the name IS confirmed registered, custom auth/tool health still can't
+// be verified (no local command to probe, no catalog-native auth-status
+// support) -- that stays unverifiable with no todo, so a registered custom
+// server never becomes outstanding.
+//
+// When registration itself couldn't be confirmed (mcpOK false), classification
+// is already known (custom) but registration is not -- unverifiable, same
+// posture as every other MCP check's degrade.
+func mcpCustomCheck(name, mcpOut string, mcpOK, sbxPresent bool) check {
+	const req = RequirementConfiguredOptional
+	catalogNote := "confirmed non-local and not in the shipped public catalog (" + mcpCatalogSummary() + ")"
+	if !mcpOK {
+		if sbxPresent {
+			return check{label: name, detail: catalogNote + "; " + gatewayDownDetail,
+				requirement: req, evidence: EvidenceUnverifiable}
+		}
+		return check{label: name, detail: catalogNote + "; sbx unavailable here to confirm registration",
+			requirement: req, evidence: EvidenceUnverifiable}
+	}
+	if grepWord(mcpOut, name) {
+		return check{label: name,
+			detail:      catalogNote + "; registered, but custom auth/tool health cannot be verified here",
+			requirement: req, evidence: EvidenceUnverifiable}
+	}
 	return check{
 		label: name,
-		detail: "confirmed non-local and not in the shipped public catalog (" + mcpCatalogSummary() +
-			"); if this is a remote server, register/authorize it directly (sbx mcp add / sbx mcp auth) " +
-			"rather than `pi-stack mcp bundle`, which only knows the shipped catalog names",
-		requirement: RequirementConfiguredOptional,
-		evidence:    EvidenceUnverifiable,
+		detail: catalogNote + "; not registered. This is a custom server pi-stack does not know how to " +
+			"register for you -- neither `pi-stack mcp bundle` (shipped catalog only) nor `pi-stack mcp " +
+			"register` (local stdio only) applies. Register it natively with ITS OWN url/transport: " +
+			"`sbx mcp add " + name + " --url <the server's own URL> --transport <its transport>`",
+		todo:        "sbx mcp add " + name + " --url <the server's own URL> --transport <its transport>",
+		requirement: req, evidence: EvidenceFailed,
 	}
 }
 
