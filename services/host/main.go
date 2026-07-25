@@ -40,9 +40,9 @@ import (
 	"strings"
 )
 
-// version is stamped at build time via -ldflags "-X main.version=..." for the
-// launcher; the host binary is currently built unstamped, so it reports "dev".
-// Used in the backup manifest (pix_version).
+// version is stamped at build time via -ldflags "-X main.version=..." for both
+// release and local builds. Used for launcher/host compatibility checks and in
+// the backup manifest (pix_version).
 var version = "dev"
 
 func main() {
@@ -51,6 +51,8 @@ func main() {
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "version", "--version", "-v":
+		fmt.Println(version)
 	case "slack":
 		// Back-compat alias: the Slack MCP is now served through the generic
 		// stdio bridge (behaviourally identical to the old runSlack()).
@@ -111,6 +113,7 @@ func usage() {
 usage: pix-host <subcommand>
 
 subcommands:
+  version        print the stamped host-binary version
   memory         self-learning memory store, JSON-RPC (:11435)
   backup         hot FULL backup (memory + config + op-refs) -> tar.gz
   restore        restore a FULL backup tar.gz (safe swap)

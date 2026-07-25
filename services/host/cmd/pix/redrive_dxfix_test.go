@@ -293,7 +293,7 @@ func TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation(t *testing.T) 
 		t.Fatal(err)
 	}
 	fakeHost := filepath.Join(binDir, "pix-host")
-	script := "#!/bin/sh\nif [ \"$1\" = \"mcp\" ] && [ \"$2\" = \"--list\" ]; then echo slack; exit 0; fi\nexit 1\n"
+	script := "#!/bin/sh\nif [ \"$1\" = version ]; then echo dev; exit 0; fi\nif [ \"$1\" = \"mcp\" ] && [ \"$2\" = \"--list\" ]; then echo slack; exit 0; fi\nexit 1\n"
 	if err := os.WriteFile(fakeHost, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -207,12 +207,12 @@ run-no-mcp: ## Launch with NO MCP servers attached (debugging MCP setup failures
 
 launcher: ## Build BOTH host binaries (out/pix launcher + out/pix-host services), version-stamped (local builds stamp $(VERSION)+local so the launcher uses the local kit, not a nonexistent v$(VERSION) tag)
 	(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix ./cmd/pix)
-	(cd services/host && go build -o $(CURDIR)/out/pix-host .)
+	(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .)
 	@echo "Built out/pix + out/pix-host (version $(LAUNCHER_VERSION))."
 	@echo "Install both: ln -sf $(CURDIR)/out/pix ~/.local/bin/pix && ln -sf $(CURDIR)/out/pix-host ~/.local/bin/pix-host"
 
 memory-serve: ## Build + run just the memory service (JSON-RPC :11435) from pix-host
-	(cd services/host && go build -o $(CURDIR)/out/pix-host .) && exec ./out/pix-host memory
+	(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .) && exec ./out/pix-host memory
 
 mcp-auth: ## (Re)authorize the remote OAuth MCP servers (opine/granola/notion/atlassian). Run this when standup/refresh reports them "not in the gateway" — sbx's hosted MCP OAuth creds do NOT persist reliably across sessions/daemon restarts (they silently drop to "Not Found"), so re-establishing them is a recurring chore until sbx fixes it. Opens a browser per server.
 	@command -v sbx >/dev/null 2>&1 || { echo "ERROR: sbx not found"; exit 1; }
@@ -232,7 +232,7 @@ mcp-register: require-launcher ## Register the local stdio MCP servers you use (
 	@[ -n "$(strip $(REGISTER))" ] || { echo "Nothing to register: no local stdio servers ($(LOCAL_STDIO_MCP)) are in MCP. Run: pix config set mcp <name>."; exit 0; }
 	@[ -n "$(OP_BIN)" ] || { echo "ERROR: 1Password CLI 'op' not found on PATH."; exit 1; }
 	@[ -f "$(OP_REFS)" ] || { echo "ERROR: $(OP_REFS) missing. Create it:  cp config/op-refs.env.example config/op-refs.env  then fill in your refs."; exit 1; }
-	@(cd services/host && go build -o $(CURDIR)/out/pix-host .)
+	@(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .)
 	@BIN="$(CURDIR)/out/pix-host"; \
 	for s in $(REGISTER); do \
 		case "$$s" in \
@@ -254,7 +254,7 @@ mcp-register: require-launcher ## Register the local stdio MCP servers you use (
 
 serve: require-launcher ## Start the host services named in SERVICES (config.toml `services`): memory :11435. MCP servers (slack, google-workspace) are run by the sbx gateway — see `make mcp-register`. Ctrl-C stops all.
 	@echo "Host services [$(SERVICES)] — sandboxes reach these on host.docker.internal. Ctrl-C stops all."
-	@(cd services/host && go build -o $(CURDIR)/out/pix-host .) || { echo "go build failed (pix-host)"; exit 1; }
+	@(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .) || { echo "go build failed (pix-host)"; exit 1; }
 	@exec env $(SERVE_ENV) MEMORY_WATCHER_MODEL=$(MEMORY_WATCHER_MODEL) MEMORY_EMBED_MODEL=$(MEMORY_EMBED_MODEL) out/pix-host serve $(SERVICES)
 
 # route is MAINTAINER tooling for the model router, run from the repo (it reads
@@ -267,7 +267,7 @@ serve: require-launcher ## Start the host services named in SERVICES (config.tom
 # Bare `make route` defaults to the safe, read-only `show` (the scorecard /
 # resolved table) so it never errors without ARGS.
 route: ## Model router (maintainer): make route ARGS="show" | "models" | "compile" | "pick <intent>"
-	@(cd services/host && go build -o $(CURDIR)/out/pix-host .) && ./out/pix-host route $(if $(strip $(ARGS)),$(ARGS),show)
+	@(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .) && ./out/pix-host route $(if $(strip $(ARGS)),$(ARGS),show)
 
 pull-models: require-launcher ## Pull the local Ollama models the stack uses (memory watcher + embed, and the bridge/router local model)
 	@command -v ollama >/dev/null 2>&1 || { echo "ollama not installed — see https://ollama.com (optional: enables semantic recall + fact capture + the local model)"; exit 1; }

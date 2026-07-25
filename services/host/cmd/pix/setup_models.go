@@ -176,7 +176,7 @@ func setupLocalModels(cfg *config.Config, env shellEnv, in io.Reader, out io.Wri
 			switch {
 			case p2.listOK && modelPulled(p2.listOut, tag):
 				o.pulled = append(o.pulled, tag)
-				fmt.Fprintf(out, "  ✓ %s pulled and verified\n", tag)
+				// Success is rendered only from the post-mutation readiness report.
 			case p2.listOK:
 				o.failed = append(o.failed, tag)
 				fmt.Fprintf(out, "  ✗ %s: pull reported success but `ollama list` does not show it\n", tag)

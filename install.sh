@@ -161,15 +161,6 @@ do_install() {
 	preflight_collision
 	check_required_prereqs
 
-	if [ -x "${PREFIX}/pix" ] && [ -x "${PREFIX}/pix-host" ]; then
-		current="$("${PREFIX}/pix" version 2>/dev/null || true)"
-		current_ver="$(printf '%s\n' "$current" | awk '{print $NF}' | sed 's/^v//')"
-		if [ "$current_ver" = "$ver" ]; then
-			log "install: Pix ${ver} is already current at ${PREFIX}"
-			return 0
-		fi
-	fi
-
 	[ -n "$DL" ] || die "need curl or wget on PATH"
 
 	tmp="$(mktemp -d "${TMPDIR:-/tmp}/pix-install.XXXXXX")"
@@ -191,6 +182,18 @@ do_install() {
 		verify "${tmp}/${b}" "$asset" "${tmp}/SHA256SUMS"
 		chmod +x "${tmp}/${b}"
 	done
+
+	# Compare verified bytes, never execute an existing untrusted installation.
+	all_current=1
+	for b in $BINARIES; do
+		if [ ! -f "${PREFIX}/${b}" ] || [ "$(sha256_of "${PREFIX}/${b}")" != "$(sha256_of "${tmp}/${b}")" ]; then
+			all_current=0
+		fi
+	done
+	if [ "$all_current" -eq 1 ]; then
+		log "install: Pix ${ver} is already current at ${PREFIX}"
+		return 0
+	fi
 
 	# Everything verified — now install. These moves are the only writes to
 	# ${PREFIX}; they happen last so a failed/mismatched download never lands.

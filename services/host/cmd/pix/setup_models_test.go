@@ -230,6 +230,9 @@ func TestSetupModels_InteractiveYesPulls(t *testing.T) {
 	if n := w.count("ollama pull"); n != 2 {
 		t.Errorf("prompt-approved setup pulled %d times, want 2:\n%v", n, w.calls)
 	}
+	if strings.Contains(out.String(), "✓ qwen3.5:9b pulled and verified") || strings.Contains(out.String(), "✓ nomic-embed-text pulled and verified") {
+		t.Errorf("the model mutation must not print success; success comes from post-mutation probes:\n%s", out.String())
+	}
 }
 
 // --- requirement 2: unverifiable is never missing ----------------------------

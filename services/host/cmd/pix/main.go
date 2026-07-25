@@ -261,17 +261,30 @@ func runServe(argv []string) {
 // responder when exercising the local-vs-remote MCP partition in setup.
 var hostBinaryResolver = findHostBinary
 
-// findHostBinary locates pix-host next to argv[0] first (the common
-// install layout), then falls back to PATH.
+// findHostBinary locates pix-host next to argv[0] first (the common install
+// layout), then falls back to PATH. A located binary is usable only when its
+// stamped version exactly matches the launcher, preventing silent mixed-release
+// RPC and flag behavior.
 func findHostBinary() (string, error) {
+	verify := func(path string) (string, error) {
+		out, err := exec.Command(path, "version").CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("pix-host at %s cannot report its version: %v", path, err)
+		}
+		hostVersion := strings.TrimSpace(string(out))
+		if hostVersion != version {
+			return "", fmt.Errorf("pix-host version %q at %s does not match pix version %q; reinstall both binaries together", hostVersion, path, version)
+		}
+		return path, nil
+	}
 	if self, err := os.Executable(); err == nil {
 		sibling := filepath.Join(filepath.Dir(self), "pix-host")
 		if fi, err := os.Stat(sibling); err == nil && !fi.IsDir() {
-			return sibling, nil
+			return verify(sibling)
 		}
 	}
 	if p, err := exec.LookPath("pix-host"); err == nil {
-		return p, nil
+		return verify(p)
 	}
 	return "", fmt.Errorf("pix-host not found next to this binary or on PATH")
 }
