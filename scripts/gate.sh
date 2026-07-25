@@ -169,10 +169,10 @@ go_test() { (cd services/host && go test -count=1 -v ./...); }
 
 NODE_JUNIT="$LOG_DIR/node-test.junit.xml"
 node_test() {
-	node --test \
-		--test-reporter=spec --test-reporter-destination=stdout \
-		--test-reporter=junit --test-reporter-destination="$NODE_JUNIT" \
-		tests/*.test.mjs
+	# A single reporter avoids Node waiting forever for the `finish` event on
+	# process.stdout when multiple reporter destinations run under redirection.
+	# tee preserves the JUnit artifact and gives run_segment failure output.
+	node --test --test-reporter=junit tests/*.test.mjs | tee "$NODE_JUNIT"
 }
 typecheck() { npx --no-install tsc --noEmit; }
 open_core() { bash scripts/check-open-core.sh; }
