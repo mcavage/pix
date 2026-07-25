@@ -39,6 +39,39 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **A transient `pi-stack run --pack PATH` (a pack never activated via `pack
+  use`) now actually attaches its MCP integrations.** `applyPackToLaunch`
+  folded a `static = true` integration's name into `cfg.MCPStatic` (the
+  eager-override set) but never into `cfg.MCP` (the servers list itself) --
+  `resolveStaticMCPForRun` computes the eager set from `cfg.MCP` intersected
+  with `cfg.MCPStatic`, so a name only in `MCPStatic` was never even a
+  candidate and silently never got `--static-mcp`; a dynamic integration was
+  never discoverable via mcp-find at all. `applyPackToLaunch` now folds
+  EVERY declared integration name into `cfg.MCP` in memory (never saved --
+  the pack manifest is re-read every launch), in addition to the existing
+  eager-subset fold into `cfg.MCPStatic`. A user's `mcp_dynamic` pin still
+  overrides a pack's `static = true`.
+- **The onboarding MCP allowlist no longer accepts `linear`, a catalog name
+  the shipped bundle never actually carries.** `config/mcp-catalog.bundle.json`
+  ships only `notion`/`atlassian`/`granola`; `linear` was allowlisted in
+  `onboardMCPCatalogAllow` and `classifyMCP` treated any confirmed non-local
+  name as a remote-catalog server, so a `linear` (or any other bespoke)
+  configuration got told to run `pi-stack mcp bundle` -- a repair that
+  silently no-ops for a name outside the bundle. There is now ONE public
+  catalog set, `mcpCatalogNames` (mcp.go), matching the shipped bundle
+  exactly (an anti-drift test parses the bundle JSON itself against it);
+  onboarding validation and `classifyMCP` both reuse it. `classifyMCP` gains
+  a fourth partition, `mcpClassCustom`, for a name confirmed non-local but
+  NOT in the catalog: `doctor`/`status` render it unverifiable with no
+  repair command (never the broken `pi-stack mcp bundle` guess), while a
+  real catalog name (`notion`) still gets the remote bundle guidance.
+- **`pi-stack mcp -h` synopsis was missing two of its five subcommands.** The
+  usage line read `pi-stack mcp <register|ls|load>`, silently omitting `auth`
+  and `bundle` even though both were fully implemented and documented in the
+  body below. It now reads `pi-stack mcp <register|ls|load|auth|bundle>`; the
+  bundle description's catalog names are generated from `mcpCatalogNames`
+  (`mcpCatalogSummary`) rather than a hand-typed literal, so it cannot drift
+  from the shipped bundle either.
 - **`pi-stack doctor` and `pi-stack status` no longer probe/exec a local
   command, or recommend `pi-stack mcp register`, for a REMOTE gateway-catalog
   MCP server (notion/atlassian/granola/etc).** A non-gog configured server

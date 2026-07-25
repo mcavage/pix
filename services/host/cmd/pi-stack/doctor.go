@@ -495,6 +495,8 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 				mcp.checks = append(mcp.checks, mcpProbeCheck(env, m, mcpOut, mcpOK, sbxOK))
 			case mcpClassRemote:
 				mcp.checks = append(mcp.checks, mcpRemoteCheck(env, m, mcpOut, mcpOK, sbxOK))
+			case mcpClassCustom:
+				mcp.checks = append(mcp.checks, mcpCustomCheck(m))
 			default: // mcpClassUnknown
 				mcp.checks = append(mcp.checks, mcpUnknownClassificationCheck(m))
 			}
@@ -777,6 +779,26 @@ func mcpUnknownClassificationCheck(name string) check {
 		detail: "could not determine whether this is a local stdio server or a remote " +
 			"gateway-catalog server (pi-stack-host mcp --list unavailable); no repair command " +
 			"can be safely recommended: build/resolve pi-stack-host, then re-run",
+		requirement: RequirementConfiguredOptional,
+		evidence:    EvidenceUnverifiable,
+	}
+}
+
+// mcpCustomCheck is the check for a name confirmed NON-local but ALSO not in
+// mcpCatalogNames — e.g. "linear", or a bespoke overlay remote server: a
+// plausible-looking gateway-catalog name the shipped bundle simply doesn't
+// carry. It must never recommend `pi-stack mcp bundle` (that only registers
+// mcpCatalogNames and would silently no-op for this name — a broken repair)
+// nor `pi-stack mcp register` (that is for local stdio servers). There is
+// genuinely no host-known repair command for a name outside both known sets,
+// so this renders unverifiable with no todo, mirroring
+// mcpUnknownClassificationCheck's honesty about not guessing.
+func mcpCustomCheck(name string) check {
+	return check{
+		label: name,
+		detail: "confirmed non-local and not in the shipped public catalog (" + mcpCatalogSummary() +
+			"); if this is a remote server, register/authorize it directly (sbx mcp add / sbx mcp auth) " +
+			"rather than `pi-stack mcp bundle`, which only knows the shipped catalog names",
 		requirement: RequirementConfiguredOptional,
 		evidence:    EvidenceUnverifiable,
 	}

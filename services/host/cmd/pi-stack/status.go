@@ -300,8 +300,12 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 							seenRemoteTodo[cmd] = true
 							remoteTodos = append(remoteTodos, cmd)
 						}
-						// default (mcpClassUnknown): genuinely can't tell — no todo,
-						// same as doctor's unknown-classification degrade.
+						// default (mcpClassUnknown or mcpClassCustom): genuinely can't
+						// tell how to register — unknown, classification itself
+						// failed; custom, a confirmed non-local name OUTSIDE the
+						// shipped catalog (mcpCatalogNames), where `pi-stack mcp
+						// bundle` would silently no-op (a broken repair) — no todo
+						// for either.
 					}
 				}
 				// A configured server that isn't registered means `run` would attach a

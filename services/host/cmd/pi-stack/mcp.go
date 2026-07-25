@@ -7,10 +7,40 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"pi-stack/host/config"
 )
+
+// mcpCatalogNames is the SINGLE public source of truth for the shipped MCP
+// catalog bundle (config/mcp-catalog.bundle.json): exactly the servers
+// `pi-stack mcp bundle` registers. Both onboarding's mcp allowlist
+// (validateOnboardingResult) and classifyMCP's remote-vs-custom split reuse
+// this set, so a plausible-looking but unshipped name (e.g. "linear") can
+// never be treated as a confirmed remote-catalog server -- that would
+// recommend `pi-stack mcp bundle` as a repair command that silently can't
+// register it. mcp_catalog_test.go anti-drift-parses the bundle JSON itself
+// against this map, so it can never silently diverge from what the bundle
+// actually ships.
+var mcpCatalogNames = map[string]bool{
+	"notion":    true,
+	"atlassian": true,
+	"granola":   true,
+}
+
+// mcpCatalogSummary renders mcpCatalogNames as a stable, sorted,
+// human-readable list (e.g. "atlassian, granola, notion") for help/detail
+// text, so a doc string never has to hand-enumerate the catalog and risk
+// drifting from it.
+func mcpCatalogSummary() string {
+	names := make([]string, 0, len(mcpCatalogNames))
+	for n := range mcpCatalogNames {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return strings.Join(names, "/")
+}
 
 // A name in the resolved profile's mcp list is registered with the sbx gateway
 // ONLY if it is a LOCAL stdio server this host can serve. gog is a special local
@@ -657,16 +687,25 @@ const (
 	// `pi-stack mcp register` for.
 	mcpClassLocal
 	// mcpClassRemote means the local set is known and does NOT contain the
-	// name: a confirmed remote gateway-catalog server (notion/atlassian/…). It
-	// must never be probed/exec'd as a local command, and its registration
-	// guidance is `pi-stack mcp bundle`, never `pi-stack mcp register`.
+	// name, AND the name IS in mcpCatalogNames (the shipped public catalog
+	// bundle: notion/atlassian/granola). It must never be probed/exec'd as a
+	// local command, and its registration guidance is `pi-stack mcp bundle`,
+	// never `pi-stack mcp register` — that command actually registers this name.
 	mcpClassRemote
+	// mcpClassCustom means the name is confirmed NON-local but is also NOT in
+	// mcpCatalogNames (e.g. "linear", or a bespoke overlay remote server): a
+	// plausible-looking gateway-catalog name that the shipped bundle simply
+	// doesn't carry. It must never be probed/exec'd as local (same as remote),
+	// but it ALSO must never recommend `pi-stack mcp bundle` — that command
+	// only registers mcpCatalogNames and would silently no-op for this name,
+	// a broken repair. There is no host-known repair command for it at all.
+	mcpClassCustom
 )
 
-// classifyMCP applies the local/remote/unknown partition to one configured
-// name, given the (localSet, localKnown) pair localMCPNames returned. Callers
-// exclude gog before reaching this — it is a special local case with its own
-// dedicated check, never remote-catalog.
+// classifyMCP applies the local/remote/custom/unknown partition to one
+// configured name, given the (localSet, localKnown) pair localMCPNames
+// returned. Callers exclude gog before reaching this — it is a special local
+// case with its own dedicated check, never remote-catalog.
 func classifyMCP(name string, localSet map[string]bool, localKnown bool) mcpClass {
 	if !localKnown {
 		return mcpClassUnknown
@@ -674,7 +713,10 @@ func classifyMCP(name string, localSet map[string]bool, localKnown bool) mcpClas
 	if localSet[name] {
 		return mcpClassLocal
 	}
-	return mcpClassRemote
+	if mcpCatalogNames[name] {
+		return mcpClassRemote
+	}
+	return mcpClassCustom
 }
 
 // mcpAuthResult is the outcome mcpAuthStatus classifies a `sbx mcp auth

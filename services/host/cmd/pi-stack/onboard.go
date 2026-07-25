@@ -51,14 +51,6 @@ type onboardKnowledge struct {
 // agent and consumed by the host on the next run.
 const onboardingFileName = "onboarding.json"
 
-// onboardMCPCatalogAllow is the curated set of remote gateway-catalog MCP names
-// the onboarding file may enable in addition to gog and the locally-known
-// servers. Kept deliberately small; anything else is configured with
-// `pi-stack mcp` directly, not via an untrusted onboarding file.
-var onboardMCPCatalogAllow = map[string]bool{
-	"notion": true, "atlassian": true, "granola": true, "linear": true,
-}
-
 // validateOnboardingResult rejects anything outside the allowlist BEFORE it
 // touches config. env/hostResolver resolve the locally-known MCP set; when that
 // probe fails we fail CLOSED on any non-gog/non-catalog mcp name rather than
@@ -74,7 +66,11 @@ func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env shell
 		if m == "" {
 			return fmt.Errorf("empty mcp name")
 		}
-		if m == "gog" || onboardMCPCatalogAllow[m] {
+		// mcpCatalogNames (mcp.go) is the SAME shipped-catalog source of truth
+		// `pi-stack mcp bundle` registers -- reusing it here means an onboarding
+		// proposal can never allowlist a plausible-looking name (e.g. "linear")
+		// that the bundle doesn't actually carry.
+		if m == "gog" || mcpCatalogNames[m] {
 			continue
 		}
 		if known && localSet[m] {

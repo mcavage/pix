@@ -290,7 +290,11 @@ const configUsage = `usage: pi-stack config <show|path|get|set|unset> [args]
 
 ` + configKeysHelp
 
-const mcpUsage = `usage: pi-stack mcp <register|ls|load> [args]
+// mcpUsage's bundle line names the catalog via mcpCatalogSummary() (mcp.go)
+// rather than a hand-typed "notion/atlassian/granola" literal, so it can never
+// drift from mcpCatalogNames — the same set `pi-stack mcp bundle` actually
+// registers (see mcp_dispatch_help_test.go's anti-drift guard).
+var mcpUsage = `usage: pi-stack mcp <register|ls|load|auth|bundle> [args]
 
   register [name...]   register local stdio MCP servers with the sbx gateway
                        (no names = every local server in the resolved mcp list)
@@ -300,7 +304,7 @@ const mcpUsage = `usage: pi-stack mcp <register|ls|load> [args]
   auth [args...]       authorize remote OAuth servers via the hosted control
                        plane (sbx mcp auth; e.g. auth --all, auth status --all)
   bundle [ls|rm ...]   register the shipped public catalog bundle
-                       (notion/atlassian/granola) in one step; ls/rm forward to
+                       (` + mcpCatalogSummary() + `) in one step; ls/rm forward to
                        sbx mcp bundle. Then: pi-stack mcp auth --all
 `
 

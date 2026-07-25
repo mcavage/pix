@@ -904,11 +904,25 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, er
 			fmt.Fprintf(os.Stderr, "pi-stack: pack integration %q needs a credential: set it: pi-stack secret set %s op://vault/item/field\n", ig.Name, ig.Env)
 		}
 	}
-	// Fold the pack's EAGER-declared MCP servers (integration `static = true`)
-	// into cfg.MCPStatic IN MEMORY (never saved — the manifest is the source of
-	// truth, re-read each launch), so resolveStaticMCP attaches them via
-	// --static-mcp. A user `mcp_dynamic <name>` still wins (resolveStaticMCP
-	// removes MCPDynamic entries from the eager set after this).
+	// Fold EVERY integration's mcp name into cfg.MCP IN MEMORY (never saved —
+	// the manifest is the source of truth, re-read each launch): this is what
+	// makes a PREVIOUSLY INACTIVE pack (a transient `run --pack PATH`, cfg.Pack
+	// never set/persisted) actually launch with its integrations at all.
+	// resolveStaticMCPForRun computes the eager set from cfg.MCP (the servers
+	// list) intersected with cfg.MCPStatic (the eager override) — a name that is
+	// only in MCPStatic and absent from cfg.MCP is never even a candidate, so
+	// folding into MCPStatic alone (the old behavior) silently dropped an
+	// inactive pack's static integration from --static-mcp, and its dynamic
+	// integration was never discoverable via mcp-find/mcp-exec either. Then fold
+	// the EAGER-declared subset (integration `static = true`) into cfg.MCPStatic
+	// so resolveStaticMCP/resolveStaticMCPForRun attach them via --static-mcp. A
+	// user `mcp_dynamic <name>` still wins (both resolvers remove MCPDynamic
+	// entries from the eager set after this).
+	for _, n := range packMcpNames(p) {
+		if !containsStr(cfg.MCP, n) {
+			cfg.MCP = append(cfg.MCP, n)
+		}
+	}
 	for _, n := range packStaticMcpNames(p) {
 		if !containsStr(cfg.MCPStatic, n) {
 			cfg.MCPStatic = append(cfg.MCPStatic, n)

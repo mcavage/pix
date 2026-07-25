@@ -26,7 +26,7 @@ func TestValidateOnboarding_Allowlist(t *testing.T) {
 
 	ok := []*onboardingResult{
 		{Version: 1, GogAccount: "me@x.com", MCP: []string{"gog"}},
-		{Version: 1, MCP: []string{"notion", "linear"}},
+		{Version: 1, MCP: []string{"notion", "atlassian", "granola"}},
 		{Version: 1, Knowledge: &onboardKnowledge{Action: "skip"}},
 	}
 	for i, r := range ok {
@@ -36,11 +36,16 @@ func TestValidateOnboarding_Allowlist(t *testing.T) {
 	}
 
 	bad := map[string]*onboardingResult{
-		"bad version":       {Version: 2},
-		"unknown mcp":       {Version: 1, MCP: []string{"evil-server"}},
-		"bad kb action":     {Version: 1, Knowledge: &onboardKnowledge{Action: "nuke", Source: "/x"}},
-		"kb missing source": {Version: 1, Knowledge: &onboardKnowledge{Action: "use"}},
-		"model whitespace":  {Version: 1, OllamaBridgeModel: "bad model"},
+		"bad version": {Version: 2},
+		"unknown mcp": {Version: 1, MCP: []string{"evil-server"}},
+		// linear is a plausible-looking catalog name but is NOT in the shipped
+		// bundle (config/mcp-catalog.bundle.json only carries notion/atlassian/
+		// granola) -- it must be rejected here rather than silently allowed
+		// through to a `pi-stack mcp bundle` that can never actually register it.
+		"non-bundle catalog name": {Version: 1, MCP: []string{"linear"}},
+		"bad kb action":           {Version: 1, Knowledge: &onboardKnowledge{Action: "nuke", Source: "/x"}},
+		"kb missing source":       {Version: 1, Knowledge: &onboardKnowledge{Action: "use"}},
+		"model whitespace":        {Version: 1, OllamaBridgeModel: "bad model"},
 	}
 	for name, r := range bad {
 		if err := validateOnboardingResult(r, cfg, env, noHostResolver); err == nil {
