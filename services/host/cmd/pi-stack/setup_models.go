@@ -110,10 +110,18 @@ func setupLocalModels(cfg *config.Config, env shellEnv, in io.Reader, out io.Wri
 	o.missing = computeMissingModels(rs)
 	o.unverifiable = computeUnverifiableModels(rs)
 	if len(o.unverifiable) > 0 {
-		// One probe means the verdicts are uniform: an unverifiable list makes
-		// EVERY tag unverifiable. Never a pull candidate, never called anything
-		// stronger than "could not verify".
-		o.unverifiableReason = ollamaVerifyFailureReason(p)
+		// Differentiate between invalid tags and probe failure
+		var invalidTags []string
+		for _, m := range o.unverifiable {
+			if !isValidOllamaTag(m.tag) {
+				invalidTags = append(invalidTags, m.tag)
+			}
+		}
+		if len(invalidTags) == len(o.unverifiable) {
+			o.unverifiableReason = "invalid tag format (config TODO)"
+		} else {
+			o.unverifiableReason = ollamaVerifyFailureReason(p)
+		}
 		fmt.Fprintln(out, "")
 		fmt.Fprintf(out, "local models: could not verify %s (%s) — nothing will be pulled; an unverified tag is never treated as absent.\n",
 			strings.Join(modelTags(o.unverifiable), ", "), o.unverifiableReason)
@@ -385,4 +393,28 @@ func printSetupSummary(cfg *config.Config, env shellEnv, out io.Writer, models s
 	} else {
 		fmt.Fprintln(out, "Core provisioned (keys + knowledge + pack): not yet — finish the ✗ items above.")
 	}
+}
+
+// isValidOllamaTag rejects malformed, empty, leading-dash, path-separator,
+// or shell-metacharacter model tags. Since exec.Command already prevents shell
+// injection, this guards against argv option confusion (`-f`, `--help`) and
+// nonsensical values that could confuse parsers or probes. Valid:
+// `namespace/model:tag`, letters, numbers, dots, dashes (internal), underscores.
+func isValidOllamaTag(tag string) bool {
+	if tag == "" || tag[0] == '-' {
+		return false
+	}
+	for _, r := range tag {
+		if r <= 32 || r >= 127 {
+			return false // whitespace and control chars
+		}
+		if r == '/' || r == ':' || r == '.' || r == '-' || r == '_' {
+			continue
+		}
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }

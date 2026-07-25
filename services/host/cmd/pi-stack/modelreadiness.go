@@ -1,9 +1,10 @@
+package main
 // modelreadiness.go is the SHARED, presentation-free local-model readiness
 // vocabulary. `pi-stack doctor` (doctor_ollama.go) derives every per-model
 // (watcher/embed/bridge) check from ONE ollamaProbe + modelReadiness, and a
 // future `pi-stack setup` receipt (S08) consumes the SAME seam — so the two
 // commands can never disagree about what is pulled.
-package main
+
 
 // ollamaProbe is the single snapshot of the local Ollama installation: is the
 // binary on PATH, does its daemon answer on :11434, and (only meaningful when
@@ -72,6 +73,8 @@ func modelReadiness(role, model, purpose string, p ollamaProbe, req requirement)
 		// Not configured: no verdict is claimed. Leave the zero verdict, which
 		// the framework reads fail-safe (unverifiable) if anyone consults it —
 		// but Installed=false is the authoritative signal.
+	case model != "" && !isValidOllamaTag(model):
+		m.Verdict = verdictUnverifiable
 	case p.listOK && modelPulled(p.listOut, model):
 		m.Verdict = verdictReady
 	case p.listOK:
@@ -150,3 +153,5 @@ func ollamaVerifyFailureReason(p ollamaProbe) string {
 	}
 	return "`ollama list` did not succeed"
 }
+
+

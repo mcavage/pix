@@ -424,16 +424,9 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		fmt.Fprintln(out, "gog CLI not found.")
 		fmt.Fprintln(out, "  install it:  brew install gog   (or see https://gogcli.sh/install.html)")
 		return fmt.Errorf("gog is not installed")
-	}
-
-	// Validate the credentials path BEFORE ever handing it to gog: must be a
+	} // Validate the credentials path BEFORE ever handing it to gog: must be a
 	// TRUE regular file — Mode().IsRegular(), not merely "exists and isn't a
 	// directory" (which a FIFO, socket, or device would also satisfy).
-	// env.fileMode wraps os.Stat (not os.Lstat), so a symlink POINTING AT a
-	// regular file is allowed (Stat reports the TARGET's mode), while a FIFO,
-	// socket, device, or a symlink to any of those is rejected. This command
-	// never opens/reads its contents — only checks the mode and passes the path
-	// through as an argv token.
 	if env.fileMode == nil {
 		return fmt.Errorf("internal: shellEnv.fileMode not wired")
 	}
@@ -441,6 +434,13 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	if !credOK || !credMode.IsRegular() {
 		return fmt.Errorf("credentials file not found (must be a regular file): %s", credentials)
 	}
+
+	snapshotPath, cleanup, err := snapshotGogCredentials(credentials)
+	if err != nil {
+		return fmt.Errorf("snapshotting credentials: %w", err)
+	}
+	defer cleanup()
+	credentials = snapshotPath // use the snapshot path for all gog steps
 
 	// Every noninteractive gog probe here (help/version/auth check) runs
 	// through the BOUNDED probe machinery (timeout + output cap), so a hung gog

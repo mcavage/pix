@@ -305,7 +305,11 @@ func TestGogSetup_CurrentOneShotRoute(t *testing.T) {
 	}
 	// R1-02: the OAuth-granting step always carries --readonly.
 	want := []string{"gog", "auth", "setup", "you@example.com", "--credentials", cred, "--login", "--readonly"}
-	if strings.Join(calls[0], " ") != strings.Join(want, " ") {
+	gotCall := calls[len(calls)-1]
+	if len(gotCall) == len(want) && len(gotCall) > 5 && strings.Contains(gotCall[5], "pi-stack-gog-") {
+		want[5] = gotCall[5]
+	}
+	if strings.Join(gotCall, " ") != strings.Join(want, " ") {
 		t.Errorf("interactive call = %v, want %v", calls[0], want)
 	}
 	if strings.Contains(out.String(), `"client_id"`) || strings.Contains(out.String(), "fake") {
@@ -351,7 +355,7 @@ func TestGogSetup_CurrentTwoStepRoute(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("expected 2 interactive calls (credentials + add), got %d: %v", len(calls), calls)
 	}
-	if strings.Join(calls[0], " ") != "gog auth credentials "+cred {
+	if !strings.HasPrefix(strings.Join(calls[0], " "), "gog auth credentials /tmp/pi-stack-gog-") {
 		t.Errorf("call[0] = %v", calls[0])
 	}
 	// R1-02: the OAuth-granting `auth add` step always carries --readonly.
@@ -382,7 +386,7 @@ func TestGogSetup_LegacyFallbackRoute(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("expected 2 interactive calls (add-client + login), got %d: %v", len(calls), calls)
 	}
-	if strings.Join(calls[0], " ") != "gog auth add-client "+cred {
+	if !strings.HasPrefix(strings.Join(calls[0], " "), "gog auth add-client /tmp/pi-stack-gog-") {
 		t.Errorf("call[0] = %v", calls[0])
 	}
 	// R1-02: the OAuth-granting `auth login` step always carries --readonly.
@@ -697,7 +701,7 @@ func TestGogSetup_BufferedReaderDeliversBothPromptedValues(t *testing.T) {
 	if !strings.Contains(got, "you@example.com") {
 		t.Errorf("expected the prompted account to reach the auth command, got %q", got)
 	}
-	if !strings.Contains(got, cred) {
+	if !strings.Contains(got, "--credentials") || !strings.Contains(got, "pi-stack-gog-") {
 		t.Errorf("expected the prompted credentials path to reach the auth command, got %q", got)
 	}
 }
