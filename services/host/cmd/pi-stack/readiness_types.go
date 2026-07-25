@@ -185,9 +185,12 @@ func blockingCheck(req requirement, v verdict) bool {
 	return blocksExit(req) && (v == verdictTodo || v == verdictDenied)
 }
 
-// group is a titled cluster of checks in dependency order.
+// group is a titled cluster of checks in dependency order. axis names the
+// readiness axis the group reports on, so the report can be projected onto a
+// Snapshot without re-deriving anything from the human title.
 type group struct {
 	title  string
+	axis   Axis
 	checks []check
 }
 

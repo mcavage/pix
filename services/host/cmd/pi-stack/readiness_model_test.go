@@ -119,7 +119,7 @@ func TestProbeOllama_Bounded(t *testing.T) {
 			return "", nil
 		},
 	}
-	p := probeOllama(env)
+	p := probeOllamaAt(env, effectiveOllamaEndpoint(&config.Config{}, env))
 	if !p.installed || p.listOK {
 		t.Fatalf("expected installed with an unverified list, got %+v", p)
 	}
@@ -132,7 +132,7 @@ func TestProbeOllama_Bounded(t *testing.T) {
 // that answered but whose `ollama list` call itself failed — the receipt
 // diagnostic setup (S08) will print for unverifiable tags.
 func TestOllamaVerifyFailureReason(t *testing.T) {
-	if got := ollamaVerifyFailureReason(ollamaProbe{installed: true, daemonUp: false}); !strings.Contains(got, ":11434 down") {
+	if got := ollamaVerifyFailureReason(ollamaProbe{installed: true, daemonUp: false}); !strings.Contains(got, "not answering at http://127.0.0.1:11434") {
 		t.Errorf("down daemon reason wrong: %q", got)
 	}
 	if got := ollamaVerifyFailureReason(ollamaProbe{installed: true, daemonUp: true}); !strings.Contains(got, "ollama list") {
