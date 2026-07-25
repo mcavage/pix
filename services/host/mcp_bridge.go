@@ -31,40 +31,28 @@ import (
 // (servePluginMcp), which must serve the built-in impl WITHOUT re-consulting
 // config (config selection is decided by the supervisor, not the servant).
 //
-// The built-in switch is consulted FIRST, so an overlay's extraMcpServers entry
-// can NEVER silently shadow a public built-in (e.g. `slack`). Only NEW names —
-// ones the built-in switch does not know — fall through to the extraMcpServers
-// seam, where an overlay registers a private McpServer (e.g. `pio`, `fastmail`)
-// via init() exactly as it adds an extraCommands subcommand. The public binary
-// populates no extras. This runs on BOTH the in-process bridge (runMcpBridge)
-// and the self-exec plugin path (servePluginMcp), since both route through here.
+// The public tree ships exactly one built-in: slack. Any OTHER local stdio
+// server (a pack-provided integration, say) does not extend this switch — it
+// either registers as a container the sbx gateway runs, or overrides this slot
+// entirely via the generic [plugins.mcp] SHA-pinned external-process mechanism
+// (mcpServerFor, consulted first in that path). This runs on BOTH the
+// in-process bridge (runMcpBridge) and the self-exec plugin path (servePluginMcp),
+// since both route through here.
 func builtinMcpServerFor(name string) (plugin.McpServer, error) {
 	switch name {
 	case "slack":
 		return slackMcpAdapter{}, nil
 	}
-	if f := extraMcpServers[name]; f != nil {
-		return f(), nil
-	}
 	return nil, fmt.Errorf("no built-in MCP server named %q", name)
 }
 
 // builtinMcpNames returns the sorted names this binary can serve locally as a
-// `pi-stack-host mcp <name>` stdio bridge: the built-in switch names (slack)
-// plus every extraMcpServers key an overlay registered. gog is DELIBERATELY
-// excluded — it is the external Google Workspace CLI, not served by this bridge.
-// This is the source of truth for "is <name> a local stdio server" that the
-// launcher (`pi-stack mcp register`) and doctor consult via `mcp --list`.
+// `pi-stack-host mcp <name>` stdio bridge: today just "slack". gog is
+// DELIBERATELY excluded — it is the external Google Workspace CLI, not served by
+// this bridge. This is the source of truth for "is <name> a local stdio server"
+// that the launcher (`pi-stack mcp register`) and doctor consult via `mcp --list`.
 func builtinMcpNames() []string {
-	seen := map[string]bool{"slack": true}
 	names := []string{"slack"}
-	for k := range extraMcpServers {
-		if k == "gog" || seen[k] {
-			continue
-		}
-		seen[k] = true
-		names = append(names, k)
-	}
 	sort.Strings(names)
 	return names
 }

@@ -1,5 +1,5 @@
 // Command broker-example is a REFERENCE example of an external credential
-// broker: how a private overlay ships its OWN out-of-process broker binary that
+// broker: how an operator ships their OWN out-of-process broker binary that
 // provides a credential broker without ever linking into the public tree. The
 // public tree ships NO built-in broker (the seam is dormant); this is the
 // artifact that fills it.

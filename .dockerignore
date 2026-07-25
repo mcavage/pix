@@ -1,5 +1,5 @@
-# Build context for the PUBLIC image. Keep it tight, and — critically — keep the
-# company/overlay content OUT of the published image.
+# Build context for the PUBLIC image. Keep it tight, and — critically — keep
+# company/private-pack content OUT of the published image.
 
 .git
 .gitignore
@@ -23,7 +23,7 @@ services/host/pi-stack-host
 # sales / HR / finance / Docker-internal-data / connector-specific skills
 # (account-*, deal-review, financial-model, cso, snowflake, google-workspace,
 # find-internal, plan-gm-review, …) are intentionally NOT baked into the public
-# image — they live in the working tree / a private overlay kit only.
+# image — they live in the working tree / a private pack only.
 # Review this allowlist before every public build. To publish a skill, add a
 # "!skills/<name>" line. Anything not listed is excluded by default (safe).
 skills/*

@@ -98,9 +98,9 @@ simplest "shared, travels-in-the-repo" case. `pack add knowledge <name> [--ref
 
 Registry/marketplace; signing PKI; multi-pack composition beyond additive
 stacking; pack-to-pack dependency resolution; a `pack publish` verb (git is the
-sync); a GUI. Compiling into `pi-stack-host` stays a maintainer concern, off the
-pack path (the old `overlay_*.go` compile-in path is retired — host-executing
-integrations ship as containers or host daemons; see `../OVERLAY.md`).
+sync); a GUI. The old `overlay_*.go` compile-in path is retired outright —
+host-executing integrations ship as containers or host daemons; see
+`packs.md`.
 
 ## Phasing (owner: "whatever you want, not using it until done")
 

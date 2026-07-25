@@ -5,12 +5,13 @@ crew (architect, product-manager, dx-consultant, security-lead, devrel) + the
 `dx-impatient` reviewer. Goes hand in hand with `docs/design/onboarding-v2-spec.md`.
 
 > **Update:** packs shipped (v2 — see `docs/design/packs-v2*.md`), and the
-> build-time **overlay is now fully retired** — including the host-plugin half.
-> Host-executing integrations ship as **containers** (a pack `[[integrations]]`
-> `manifest`, run on the host by the sbx gateway) or as **host daemons**; **no
-> `pi-stack-host` recompile is ever needed.** Where this doc calls the overlay the
-> live "before" state or says the host-plugin half "stays distinct," read it as the
-> design-time record. See [../OVERLAY.md](../OVERLAY.md).
+> build-time overlay this doc was written against is now fully retired —
+> including the host-plugin half. Host-executing integrations ship as
+> **containers** (a pack `[[integrations]]` `manifest`, run on the host by the
+> sbx gateway) or as **host daemons**; **no `pi-stack-host` recompile is ever
+> needed.** Where this doc calls the overlay the live "before" state or says the
+> host-plugin half "stays distinct," read it as the design-time record only —
+> the overlay itself no longer exists in any form.
 
 Locked: name = `pack`; `profile` DELETED (active pack = context); single active
 pack (no multi-pack) in v1; packs are 100% runtime (no compile-in); v1 is
@@ -73,7 +74,7 @@ my-pack/
   knowledge/         # OKF bundle (what `knowledge init` scaffolds today)
   bin/               # CLI-proxy wrapper scripts
   capabilities.json  # capability routing FRAGMENT (colocated with what it routes)
-  kit/files/…        # raw escape hatch for anything the schema can't express (100% overlay back-compat)
+  kit/files/…        # raw escape hatch for anything the schema can't express
   pack.lock          # generated: resolved refs + plugin SHAs
 ```
 
@@ -112,12 +113,14 @@ Packs are runtime-swappable for the common cases, NO recompile:
   (memory/knowledge/broker/mcp) — `serve` hashes-and-refuses on mismatch, fail
   closed, `sha` mandatory (the mechanism already exists in `services/host/plugin`).
 
-For a PACK AUTHOR this means: **packs are 100% runtime, no build, ever.** The one
-thing that still needs a compile — a Go plugin **compiled into** `pi-stack-host`
-(`overlay_*.go`) — only extends pi-stack-host's OWN binary (a new subcommand or a
-deeply-wired host service) and is a pi-stack-maintainer concern, not something a
-pack does. So it is off the pack path entirely; don't mention it in pack docs
-except to say packs never need it.
+For a PACK AUTHOR this means: **packs are 100% runtime, no build, ever.** At the
+time this was written, the one thing that still needed a compile was a Go
+plugin compiled into `pi-stack-host` (`overlay_*.go`) extending pi-stack-host's
+OWN binary (a new subcommand or a deeply-wired host service) as a
+pi-stack-maintainer concern, off the pack path entirely. That compile-in seam
+was later removed outright — today there is no compile-in extension point at
+all, only the generic, SHA-pinned `[plugins.*]` external-process mechanism
+(also off the pack path; packs never need it).
 
 ## 8. Profile is DELETED (owner decision)
 
@@ -225,12 +228,15 @@ exists); §12 Q1 resolves — that path IS the personal pack root and "wiring" m
 ## 12. Migration (zero-touch)
 
 Absent packs -> an implicit anonymous pack byte-identical to today (guarded by an
-open-core fitness test extending `check-open-core.sh`). `OVERLAY=… make run`
-keeps working with no `pack.toml`. The overlay's **sandbox half is superseded by
-packs**; only the **host-plugin half** (`overlay_*.go`, compiled-in Go) stays
-distinct (packs are runtime-loaded; those are compile-time). `pi-stack pack
-migrate` proposes a diff from today's overlay + `knowledge_bundles` +
-personal-skills-dir into a pack under a `[Y/n]` gate.
+open-core fitness test extending `check-open-core.sh`). At the time this was
+written, `OVERLAY=… make run` still worked with no `pack.toml`, and the plan was
+for the overlay's **sandbox half to be superseded by packs** while its
+**host-plugin half** (`overlay_*.go`, compiled-in Go) stayed distinct (packs are
+runtime-loaded; that was compile-time). `pi-stack pack migrate` proposed a diff
+from the overlay + `knowledge_bundles` + personal-skills-dir into a pack under a
+`[Y/n]` gate. **This entire migration is now moot: the overlay (both halves) was
+subsequently retired outright** rather than kept as a distinct host-plugin path;
+there is nothing left to migrate FROM.
 
 ## 13. v1 scope vs deferred (revised per the `dx-impatient` review)
 
@@ -290,9 +296,12 @@ Two v1 correctness must-fixes the reviewer flagged regardless of scope:
 5. **Name is `pack`.** Retire user-facing "kit"/"bundle" overlap (kit = sbx
    sandbox image config; a pack *contains* an OKF bundle).
 6. **Compile-into-`pi-stack-host` is NOT a pack concern** — packs are 100%
-   runtime (external subprocess / stdio MCP / in-sandbox wrapper). Compile-in
-   (`overlay_*.go`) only extends pi-stack-host's own binary and stays a
-   maintainer/advanced concern, off the pack path entirely.
+   runtime (external subprocess / stdio MCP / in-sandbox wrapper). At the time
+   this was written, compile-in (`overlay_*.go`) extended pi-stack-host's own
+   binary as a maintainer/advanced concern off the pack path; that compile-in
+   seam was later removed entirely (no `overlay_*.go`, no `init()`-registered
+   extras) — the only host-side extension point today is the generic,
+   SHA-pinned `[plugins.*]` external-process mechanism.
 
 ## 15. Prior art (borrow / avoid)
 

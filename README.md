@@ -433,8 +433,7 @@ Private company context is a **pack**, not a build-time overlay:
 - **host-only services** (browser OAuth, host-cached creds) — a standalone host
   daemon + installer, with a thin in-sandbox `[[proxy]]` wrapper in the pack.
 
-See [docs/OVERLAY.md](docs/OVERLAY.md) (the migration note) and
-[design/packs.md](docs/design/packs.md).
+See [design/packs.md](docs/design/packs.md) for the full design.
 
 ## Build from Source
 

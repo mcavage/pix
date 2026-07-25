@@ -15,7 +15,7 @@ import (
 )
 
 // buildExampleMcp compiles examples/mcp-example to a temp binary and returns its
-// path + sha256 — the artifact a private overlay would ship and pin in
+// path + sha256 — the artifact an operator would ship and pin in
 // config.toml's [plugins.mcp].
 func buildExampleMcp(t *testing.T) (bin, sha string) {
 	t.Helper()

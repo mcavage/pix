@@ -1,5 +1,5 @@
 // Command mcp-example is a REFERENCE example of an external MCP server plugin:
-// how a private overlay ships its OWN out-of-process MCP binary that OVERRIDES
+// how an operator ships their OWN out-of-process MCP binary that OVERRIDES
 // the built-in bridge without ever linking into the public tree.
 //
 // It is NOT wired into the bridge by default. To use it, a user points

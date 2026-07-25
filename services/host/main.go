@@ -23,8 +23,12 @@
 // by hand (go-plugin refuses without the handshake cookie).
 //
 // Company-specific integrations (a data-warehouse exec proxy, an HR-directory MCP)
-// live in a private overlay: when their source files are present in the build they
-// self-register here via init(); the public tree ships without them.
+// are never compiled into this binary. They ship as a **pack** (skills/knowledge/
+// config), a **container** MCP server the sbx gateway runs, or a standalone host
+// daemon — see docs/design/packs.md. The only host-side extension point that
+// remains is the generic, SHA-pinned [plugins.*] external-process mechanism
+// (serve_plugin.go): an operator points a capability slot at an external binary
+// (path + sha256), and the supervisor launches it as a go-plugin subprocess.
 
 package main
 
@@ -34,32 +38,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-
-	"pi-stack/host/plugin"
-)
-
-// Overlay subcommands/services self-register here via init() when their (private,
-// gitignored) source files are present in the build. Empty in the public tree.
-var (
-	extraCommands         = map[string]func(){}
-	extraUsage            []string
-	extraServiceFactories []func() hostService
-	// extraServiceAliases maps a config-friendly SERVICES name to the internal
-	// service name a factory registers (e.g. a short "warehouse" -> "warehouse-proxy").
-	// Overlay plugins add their own here so the public tree never names one.
-	extraServiceAliases = map[string]string{}
-	// extraMcpServers lets an overlay add a BUILT-IN McpServer (e.g. a private
-	// `pio` or `fastmail` bridge) served through `pi-stack-host mcp <name>`, exactly
-	// as extraCommands adds a subcommand. builtinMcpServerFor consults this map
-	// FIRST, so an overlay registers via init() (like extraCommands); the public
-	// binary ships none.
-	extraMcpServers = map[string]func() plugin.McpServer{}
-	// extraBrokerFactory lets an overlay register a BUILT-IN CredentialBroker
-	// served over the `plugin broker` self-exec path. nil in the public tree —
-	// there is no built-in broker (the built-in Google broker was removed), so the broker slot is
-	// overlay-only and the seam stays dormant. An external overlay broker binary
-	// (see examples/broker-example) ships its own main() and does not use this.
-	extraBrokerFactory func() plugin.CredentialBroker
 )
 
 // version is stamped at build time via -ldflags "-X main.version=..." for the
@@ -94,10 +72,6 @@ func main() {
 	case "-h", "--help", "help":
 		usage()
 	default:
-		if fn := extraCommands[os.Args[1]]; fn != nil {
-			fn()
-			return
-		}
 		fmt.Fprintf(os.Stderr, "pi-stack-host: unknown subcommand %q\n\n", os.Args[1])
 		usage()
 		os.Exit(2)
@@ -146,9 +120,6 @@ subcommands:
   plugin <kind>  built-in go-plugin server, self-exec (memory|knowledge|broker|mcp)
   serve          run the long-running HTTP services (memory, knowledge)
 `)
-	for _, line := range extraUsage {
-		fmt.Fprintln(os.Stderr, line)
-	}
 }
 
 // --- small shared helpers ----------------------------------------------------

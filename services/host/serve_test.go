@@ -46,7 +46,7 @@ func TestResolveServices(t *testing.T) {
 
 // --- F2: the broker slot is reachable through `serve` ------------------------
 
-// TestServeBrokerSlot proves serve's OVERLAY-ONLY broker slot: with the default
+// TestServeBrokerSlot proves serve's DORMANT broker slot: with the default
 // builtin impl NOTHING starts (no built-in broker in the public tree); with
 // [plugins.broker] pointing at the sha-pinned example broker binary, the slot
 // launches it through the shared supervisor and serves the stable /token shim.

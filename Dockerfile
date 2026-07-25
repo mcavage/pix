@@ -169,8 +169,8 @@ COPY --chown=agent:agent extensions/   /home/agent/.pi/agent/extensions/
 COPY --chown=agent:agent agents/       /home/agent/.pi/agent/agents/
 COPY --chown=agent:agent themes/       /home/agent/.pi/agent/themes/
 # Note: company tooling (e.g. a `snow` wrapper) is NOT in the public image. Such
-# in-sandbox wrappers are delivered by a private overlay mixin kit at run time
-# (`--kit ./pi-kit-work`); see docs/OVERLAY.md.
+# in-sandbox wrappers are delivered by a pack's `[[proxy]]` bin/ at run time; see
+# docs/design/packs.md.
 
 # --- memory (self-learning loop) ----------------------------------------------
 # The recall extension baked above is a thin client. The store itself runs on the
