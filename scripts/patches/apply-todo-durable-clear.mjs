@@ -7,15 +7,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const root = path.join(
-	os.homedir(),
-	".pi",
-	"agent",
-	"npm",
-	"node_modules",
-	"pi-manage-todo-list",
-	"dist",
-);
+// Release smoke installs into an isolated HOME and persists the exact dist
+// path between workflow steps. Prefer that explicit target over rediscovery.
+const root = process.env.TODO_DIST ||
+	path.join(
+		os.homedir(),
+		".pi",
+		"agent",
+		"npm",
+		"node_modules",
+		"pi-manage-todo-list",
+		"dist",
+	);
 const indexPath = path.join(root, "index.js");
 const statePath = path.join(root, "state-manager.js");
 const marker = "pix-todo-cleared";
