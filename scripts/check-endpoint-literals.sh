@@ -2,7 +2,7 @@
 # check-endpoint-literals.sh — one resolver owns the Ollama endpoint.
 #
 # Every Go readiness path must name the Ollama endpoint through
-# effectiveOllamaEndpoint (services/host/cmd/pi-stack/readiness_ollama.go), so
+# effectiveOllamaEndpoint (services/host/cmd/pix/readiness_ollama.go), so
 # doctor, status, setup and run can never report on an endpoint the daemon does
 # not actually use. This guard fails the build on any 127.0.0.1:11434 or
 # localhost:11434 literal in Go source outside the allowlisted files.

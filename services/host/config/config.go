@@ -1,9 +1,9 @@
-// Package config is the pi-stack config schema + loader, shared by the host
-// binary (pi-stack-host) AND the launcher binary. Deliberately dependency-light:
+// Package config is the pix config schema + loader, shared by the host
+// binary (pix-host) AND the launcher binary. Deliberately dependency-light:
 // only a TOML decoder — NO sqlite, NO go-plugin — so the launcher stays tiny.
 //
-// Config lives at $PI_STACK_CONFIG, else $XDG_CONFIG_HOME/pi-stack/config.toml,
-// else ~/.config/pi-stack/config.toml. Absence is not an error: Load() returns a
+// Config lives at $PIX_CONFIG, else $XDG_CONFIG_HOME/pix/config.toml,
+// else ~/.config/pix/config.toml. Absence is not an error: Load() returns a
 // Config populated with sane defaults so a fresh install works with no file.
 package config
 
@@ -25,7 +25,7 @@ const (
 	// output on every extraction, so auto-capture silently stored nothing. A capable
 	// instruct model that honors ollama structured outputs is required; qwen3.5:9b
 	// works. warm-on-start (memWatcherWarm) keeps the first capture fast. Override
-	// via `pi-stack config set memory_watcher_model <model>` if you have a smaller
+	// via `pix config set memory_watcher_model <model>` if you have a smaller
 	// model that reliably does structured extraction on your hardware.
 	DefaultMemoryWatcherModel = "qwen3.5:9b"
 	DefaultMemoryEmbedModel   = "nomic-embed-text"
@@ -38,9 +38,9 @@ const (
 	// (the "overlord") resolves to when the user pins neither --model nor --intent.
 	// The stack ships "overlord" -> GPT-5.6 Sol: the orchestrator is pinned OFF
 	// Anthropic on purpose (Claude is the weak writer/communicator, and a same-vendor
-	// orchestrator shares its authors' blind spots). Change it with `pi-stack config
+	// orchestrator shares its authors' blind spots). Change it with `pix config
 	// set run_intent <intent>` (e.g. `strategy` for Opus, or any intent from
-	// `pi-stack route show`). NOTE: this default assumes an OpenAI key is present; an
+	// `pix route show`). NOTE: this default assumes an OpenAI key is present; an
 	// Anthropic-only host should point run_intent at an Anthropic intent.
 	DefaultRunIntent = "overlord"
 	// BuiltinImpl is the default plugin impl: compiled into the host binary
@@ -61,19 +61,19 @@ type PluginSpec struct {
 	ExtraEnv []string `toml:"extra_env"` // additional env vars granted to this plugin subprocess
 }
 
-// HostMode gates `pi-stack host` — running pi DIRECTLY on this machine with
+// HostMode gates `pix host` — running pi DIRECTLY on this machine with
 // no sandbox, no network fence, and real credentials. Enabled is default-OFF
-// on purpose: the friction of `pi-stack config set host.enabled true` is the
+// on purpose: the friction of `pix config set host.enabled true` is the
 // deliberate opt-in (see docs/design/host-mode.md). Autonomy is RESERVED for a
 // future knob on the host-guard extension's strictness; Phase 1 stores it but
 // nothing reads it yet.
 type HostMode struct {
 	Enabled  bool   `toml:"enabled"`
 	Autonomy string `toml:"autonomy,omitempty"`
-	// Autoserve gates the launcher's LAZY AUTO-START of `pi-stack-host serve`
+	// Autoserve gates the launcher's LAZY AUTO-START of `pix-host serve`
 	// (docs/design/serve-lifecycle.md §1). nil = default TRUE (auto-start on).
 	// A pointer so "unset" (inherit the default, follow future default changes)
-	// is distinguishable from an explicit `false`. The PI_STACK_NO_AUTOSERVE env
+	// is distinguishable from an explicit `false`. The PIX_NO_AUTOSERVE env
 	// var wins over this flag.
 	Autoserve *bool `toml:"autoserve,omitempty"`
 }
@@ -83,7 +83,7 @@ func (c *Config) AutoserveEnabled() bool {
 	return c.Host.Autoserve == nil || *c.Host.Autoserve
 }
 
-// Config is the pi-stack configuration, decoded from TOML.
+// Config is the pix configuration, decoded from TOML.
 type Config struct {
 	VersionPin string `toml:"version_pin"`
 
@@ -108,7 +108,7 @@ type Config struct {
 	// more — every configured server (plus every pack integration's server)
 	// preloads at sandbox CREATE (`--static-mcp`). The retired mcp_static/
 	// mcp_dynamic per-server override lists are gone; see retiredConfigKeys,
-	// RetiredKeys, and cmd/pi-stack's allPreloadedMCP.
+	// RetiredKeys, and cmd/pix's allPreloadedMCP.
 	MCP []string `toml:"mcp,omitempty"`
 
 	MemoryWatcherModel string `toml:"memory_watcher_model,omitempty"`
@@ -117,17 +117,17 @@ type Config struct {
 
 	// RunIntent is the routing intent for the top-level interactive session (the
 	// "overlord" that orchestrates the subagent crew). When neither --model nor
-	// --intent is passed, `pi-stack run` resolves this intent through the router to
+	// --intent is passed, `pix run` resolves this intent through the router to
 	// pick the session model. Defaults to DefaultRunIntent ("overlord" -> GPT-5.6
 	// Sol); a bad value degrades to pi's own default rather than blocking launch.
-	// Change it with `pi-stack config set run_intent <intent>` (e.g. `strategy` for
+	// Change it with `pix config set run_intent <intent>` (e.g. `strategy` for
 	// Opus on an Anthropic-only host); `unset` restores the "overlord" default.
 	// Sparse-saved: omitted from the file when it equals the default.
 	RunIntent string `toml:"run_intent,omitempty"`
 
 	// GogAccount is the Google Workspace account the gog host-MCP server serves.
 	// It is THE source of truth: doctor probes against it, and `make mcp-register`
-	// sources it via `pi-stack config get gog_account` when registering with the
+	// sources it via `pix config get gog_account` when registering with the
 	// gateway. doctor falls back to the GOG_ACCOUNT env var when this is empty.
 	// The Go identifier keeps the dependency binary's short name; the KEY on
 	// disk is the public one.
@@ -147,7 +147,7 @@ type Config struct {
 	} `toml:"skills"`
 
 	// Pack is the active pack: a git-backed directory carrying skills + knowledge
-	// (+ later mcp/proxies/routing/config). Empty = no active pack. `pi-stack pack
+	// (+ later mcp/proxies/routing/config). Empty = no active pack. `pix pack
 	// use <path>` sets it; `run` mounts the pack's skills + knowledge. This is the
 	// unifying successor to the loose skills-dir + knowledge_bundles + (eventually)
 	// profile. See docs/design/packs.md.
@@ -155,7 +155,7 @@ type Config struct {
 
 	Plugins map[string]PluginSpec `toml:"plugins"`
 
-	// Host gates + configures `pi-stack host` (the unsandboxed escape hatch).
+	// Host gates + configures `pix host` (the unsandboxed escape hatch).
 	// GLOBAL, never per-profile: leaving the sandbox is a machine-level decision.
 	Host HostMode `toml:"host,omitempty"`
 
@@ -164,7 +164,7 @@ type Config struct {
 	// MetaData.Undecoded()). retiredKeys is the subset in retiredConfigKeys —
 	// a key that once meant something and is now silently accepted-and-dropped
 	// so an older config.toml never hard-fails Load; unknownKeys is everything
-	// else (a genuine typo, or a field from a newer pi-stack). Unexported: never
+	// else (a genuine typo, or a field from a newer pix). Unexported: never
 	// (de)serialized, and untouched by an absent-file Load (nothing to report).
 	// See RetiredKeys / UnknownKeys.
 	retiredKeys []string
@@ -191,7 +191,7 @@ func (c *Config) RetiredKeys() []string { return append([]string(nil), c.retired
 
 // UnknownKeys returns the top-level (or dotted, for a nested table) config keys
 // found in the loaded file that are NEITHER a live Config field NOR a retired
-// key — most likely a typo, or a field only a newer pi-stack understands. Load
+// key — most likely a typo, or a field only a newer pix understands. Load
 // tolerates them (never a hard error, matching the package's documented
 // "unknown keys are tolerated" contract); a caller can surface UnknownKeys to
 // warn the user. A copy: callers cannot mutate the Config's internal state
@@ -227,26 +227,26 @@ func partitionUndecoded(keys []toml.Key) (retired, unknown []string) {
 }
 
 // configDir resolves the directory that holds config.toml and the broker token.
-// It honors $PI_STACK_CONFIG's parent when set, then $XDG_CONFIG_HOME/pi-stack,
-// then ~/.config/pi-stack.
+// It honors $PIX_CONFIG's parent when set, then $XDG_CONFIG_HOME/pix,
+// then ~/.config/pix.
 func configDir() (string, error) {
-	if p := os.Getenv("PI_STACK_CONFIG"); p != "" {
+	if p := os.Getenv("PIX_CONFIG"); p != "" {
 		return filepath.Dir(p), nil
 	}
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "pi-stack"), nil
+		return filepath.Join(xdg, "pix"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".config", "pi-stack"), nil
+	return filepath.Join(home, ".config", "pix"), nil
 }
 
-// Path resolves the config file path: $PI_STACK_CONFIG override, else
+// Path resolves the config file path: $PIX_CONFIG override, else
 // <config-dir>/config.toml.
 func Path() string {
-	if p := os.Getenv("PI_STACK_CONFIG"); p != "" {
+	if p := os.Getenv("PIX_CONFIG"); p != "" {
 		return p
 	}
 	dir, err := configDir()
@@ -259,11 +259,11 @@ func Path() string {
 }
 
 // ServePidPath resolves the absolute path of serve.pid — the pidfile
-// `pi-stack-host serve` writes on startup so the launcher's `serve stop` /
+// `pix-host serve` writes on startup so the launcher's `serve stop` /
 // `serve status` can find and signal the running supervisor SAFELY (instead of a
 // blind `pkill -f`). It lives in the STATE dir (<state-dir>/serve.pid), NOT the
 // config dir: it is ephemeral runtime state (like serve.log), not user config.
-// Keeping it out of the config dir also means `pi-stack reset` (which moves the
+// Keeping it out of the config dir also means `pix reset` (which moves the
 // config dir aside) never orphans a running daemon from its pidfile. Both the
 // host (writer) and the launcher (readers) call this so the two always agree.
 func ServePidPath() string {
@@ -276,7 +276,7 @@ func ServePidPath() string {
 
 // ServeSpawnLockPath is the flock file the launcher's lazy auto-start takes
 // around its spawn decision (double-checked locking against a concurrent
-// `pi-stack run`). Ephemeral runtime state — a sibling of the pidfile in the
+// `pix run`). Ephemeral runtime state — a sibling of the pidfile in the
 // STATE dir.
 func ServeSpawnLockPath() string {
 	dir, err := StateDir()
@@ -287,7 +287,7 @@ func ServeSpawnLockPath() string {
 }
 
 // ServeLazyMarkerPath is the marker file the launcher writes after a successful
-// LAZY detached spawn of `pi-stack-host serve`, so config propagation can tell
+// LAZY detached spawn of `pix-host serve`, so config propagation can tell
 // a lazy daemon (safe to stop-and-restart) from a FOREGROUND one the user is
 // watching (never killed, only advised). Cleared by `serve stop` and by the
 // daemon's graceful shutdown; a stale marker is harmless because mode detection
@@ -301,28 +301,28 @@ func ServeLazyMarkerPath() string {
 	return filepath.Join(dir, "serve.lazy")
 }
 
-// StateDir resolves the per-user state dir: $XDG_STATE_HOME/pi-stack, else
-// ~/.local/state/pi-stack. Used for logs (NOT config): serve.log lives here on
+// StateDir resolves the per-user state dir: $XDG_STATE_HOME/pix, else
+// ~/.local/state/pix. Used for logs (NOT config): serve.log lives here on
 // BOTH macOS and Linux, and every launch mode writes to it — the lazy
 // auto-start, the managed launchd LaunchAgent (StandardOutPath/
 // StandardErrorPath), and the managed systemd --user unit (StandardOutput=/
 // StandardError=append:) all point at the SAME file (ServeLogPath()), so
 // there is exactly one place to look regardless of how serve was started.
-// Only a FOREGROUND `pi-stack serve` is different — that one is interactive
+// Only a FOREGROUND `pix serve` is different — that one is interactive
 // and goes to its own terminal, not this file.
 func StateDir() (string, error) {
 	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
-		return filepath.Join(xdg, "pi-stack"), nil
+		return filepath.Join(xdg, "pix"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".local", "state", "pi-stack"), nil
+	return filepath.Join(home, ".local", "state", "pix"), nil
 }
 
 // ServeLogPath is <state-dir>/serve.log — where a lazily auto-started
-// `pi-stack-host serve` writes its stdout/stderr.
+// `pix-host serve` writes its stdout/stderr.
 func ServeLogPath() string {
 	dir, err := StateDir()
 	if err != nil {
@@ -331,30 +331,30 @@ func ServeLogPath() string {
 	return filepath.Join(dir, "serve.log")
 }
 
-// DataDir resolves the per-user DATA dir: $XDG_DATA_HOME/pi-stack, else
-// ~/.local/share/pi-stack. This is the durable data root — the captured memory
+// DataDir resolves the per-user DATA dir: $XDG_DATA_HOME/pix, else
+// ~/.local/share/pix. This is the durable data root — the captured memory
 // store, the knowledge index, backups, and routing overrides all live under it,
 // as distinct from StateDir (ephemeral: logs, pidfiles) and configDir
 // (config.toml). It is the single source of truth for the data root; every
 // default below is derived from it so there is no second copy to drift.
 func DataDir() (string, error) {
 	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
-		return filepath.Join(xdg, "pi-stack"), nil
+		return filepath.Join(xdg, "pix"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".local", "share", "pi-stack"), nil
+	return filepath.Join(home, ".local", "share", "pix"), nil
 }
 
-// PackDir is the per-user DEFAULT PACK root: $XDG_DATA_HOME/pi-stack/default,
-// else ~/.local/share/pi-stack/default. A proper pack (pack.toml + skills/ +
+// PackDir is the per-user DEFAULT PACK root: $XDG_DATA_HOME/pix/default,
+// else ~/.local/share/pix/default. A proper pack (pack.toml + skills/ +
 // knowledge/), git-initialized, the default home for what you author for
 // yourself — named "default" (the pack's name derives from the dir basename)
 // so the auto-created pack and its messaging ("created pack ...", "active pack
 // -> this (default) pack") are coherent. The active pack (config `pack`)
-// overrides it; `pi-stack reset` moves it aside (it's a git working copy — the
+// overrides it; `pix reset` moves it aside (it's a git working copy — the
 // user pushes it to their own remote). See docs/design/packs.md.
 //
 // The basename has been renamed twice: originally "pack", then briefly
@@ -365,16 +365,16 @@ func DataDir() (string, error) {
 func PackDir() string { return filepath.Join(dataDirOr(), "default") }
 
 // PacksDir is where adopted REMOTE packs are cloned:
-// $XDG_DATA_HOME/pi-stack/packs, else ~/.local/share/pi-stack/packs. Each lives
+// $XDG_DATA_HOME/pix/packs, else ~/.local/share/pix/packs. Each lives
 // at <PacksDir>/<name>. Distinct from PackDir (the single default pack).
 func PacksDir() string { return filepath.Join(dataDirOr(), "packs") }
 
 // dataDirOr returns DataDir() or, if HOME cannot be resolved, a relative
-// "pi-stack" so path builders never panic on an empty base.
+// "pix" so path builders never panic on an empty base.
 func dataDirOr() string {
 	d, err := DataDir()
 	if err != nil {
-		return "pi-stack"
+		return "pix"
 	}
 	return d
 }
@@ -400,7 +400,7 @@ func KnowledgeDBPath() string {
 }
 
 // BackupsDir is <data-dir>/backups — the default destination for
-// `pi-stack state backup` archives.
+// `pix state backup` archives.
 func BackupsDir() string {
 	return filepath.Join(dataDirOr(), "backups")
 }
@@ -528,9 +528,9 @@ func (c *Config) Plugin(slot string) PluginSpec {
 }
 
 // defaultConfigTOML is the commented template Seed writes.
-const defaultConfigTOML = `# pi-stack config. All fields optional; delete anything you don't override.
+const defaultConfigTOML = `# pix config. All fields optional; delete anything you don't override.
 
-# Pin the pi-stack image/version the launcher runs (empty = latest baked).
+# Pin the pix image/version the launcher runs (empty = latest baked).
 version_pin = ""
 
 # Host services ` + "`make serve`" + ` runs.
@@ -545,8 +545,8 @@ memory_embed_model = "nomic-embed-text"
 ollama_bridge_model = "qwen3.5:9b"
 
 # Google Workspace account the google-workspace host-MCP server serves. This is the single
-# source of truth: pi-stack doctor probes against it, and make mcp-register
-# sources it via pi-stack config get google_workspace_account. Empty falls back to the
+# source of truth: pix doctor probes against it, and make mcp-register
+# sources it via pix config get google_workspace_account. Empty falls back to the
 # GOG_ACCOUNT env var.
 google_workspace_account = ""
 
@@ -560,7 +560,7 @@ knowledge_bundles = []
 stack = []
 
 # Active pack (git-backed context bundle: skills + knowledge + integrations).
-# Usually set via ` + "`pi-stack pack use <path|git-url>`" + `.
+# Usually set via ` + "`pix pack use <path|git-url>`" + `.
 # pack = ""
 
 # Extra skill directories loaded live (dev mode).
@@ -577,7 +577,7 @@ paths = []
 `
 
 // Save writes the config back to Path() as TOML. It is the write half of the
-// repo-less workflow: the CLI (`pi-stack config set`, `pi-stack setup`) mutates a
+// repo-less workflow: the CLI (`pix config set`, `pix setup`) mutates a
 // loaded Config in memory and calls Save() so the user NEVER hand-edits the file.
 // The file is machine-managed (0600, dir 0700); the commented template Seed
 // writes is only a first-touch convenience, so losing comments on a rewrite is
@@ -749,7 +749,7 @@ func (c *Config) RemoveKnowledgeBundle(path string) bool {
 // canonicalizeBundlePath normalizes a bundle path to the SAME canonical id every
 // other writer produces. It MUST match the knowledge store's canonicalizeBundle
 // (services/host/knowledge.go) and the launcher's canonicalizeKnowledgeBundle
-// (cmd/pi-stack/knowledge.go) byte-for-byte in behavior — otherwise a symlink
+// (cmd/pix/knowledge.go) byte-for-byte in behavior — otherwise a symlink
 // spelling vs the real path yields two config entries and remove-by-real-path
 // can't drop a symlink entry (F6). The algorithm: trim, then abs ->
 // EvalSymlinks -> Clean, with a cleaned-abs fallback when the path doesn't exist
@@ -815,7 +815,7 @@ func OpRefsPath() string {
 }
 
 // HostRefsPath resolves the absolute XDG path of hostmode.env — the OPTIONAL
-// 1Password refs file `pi-stack host` resolves via `op run --env-file` for
+// 1Password refs file `pix host` resolves via `op run --env-file` for
 // host-mode provider keys (e.g. ANTHROPIC_API_KEY=op://vault/item/field). Same
 // mental model as op-refs.env: refs only, never a value on disk. Absent file =
 // Ollama-only host mode (valid, no cloud key).
@@ -828,7 +828,7 @@ func HostRefsPath() string {
 }
 
 // OpRefsMentalModel is the ≤4-line plain explanation of what op-refs.env is and
-// how the gateway uses it. Reused VERBATIM in `pi-stack setup`, the `secret`
+// how the gateway uses it. Reused VERBATIM in `pix setup`, the `secret`
 // help, and the template header so the concept is described identically
 // everywhere. Keep it in sync if you change any copy.
 const OpRefsMentalModel = `op-refs.env maps ENV_VAR = op://vault/item/field. When the gateway spawns a
@@ -853,7 +853,7 @@ var NonSecretOpRefsKeys = map[string]bool{
 // active entries — the user uncomments (or adds) a line only when wiring a
 // server. Kept in sync with the repo's config/op-refs.env.example (which the
 // make path uses). Its header repeats OpRefsMentalModel verbatim.
-const OpRefsTemplate = `# pi-stack op-refs.env — 1Password refs the sbx gateway resolves via
+const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway resolves via
 # ` + "`op run --env-file`" + ` when it spawns each host MCP server.
 #
 # ` + OpRefsMentalModel + `
@@ -885,7 +885,7 @@ const OpRefsTemplate = `# pi-stack op-refs.env — 1Password refs the sbx gatewa
 // file is absent, creating the config dir (0700) as needed. It returns the
 // resolved path, whether it created the file (false if it already existed), and
 // any error. It never clobbers an existing op-refs.env. It is the ONE seeder:
-// setup and `pi-stack mcp register` both route through it (via SeedOpRefsAt) so
+// setup and `pix mcp register` both route through it (via SeedOpRefsAt) so
 // the template + 0700/0600 perms + no-clobber rule live in a single place.
 func SeedOpRefs() (path string, created bool, err error) {
 	path = OpRefsPath()

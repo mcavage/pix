@@ -1,4 +1,4 @@
-// pi-stack — subagents: delegate work to isolated child pi processes.
+// pix — subagents: delegate work to isolated child pi processes.
 //
 // A first-party replacement for the off-the-shelf subagent extensions, which
 // all freeze in this stack. Two root causes, two fixes (see
@@ -117,7 +117,7 @@ const VALID_THINKING = new Set([
 ]);
 
 // ─── Model routing (intent → model, compiled by the host) ────────────────────
-// The host (`pi-stack-host route compile`) resolves each INTENT to a concrete
+// The host (`pix-host route compile`) resolves each INTENT to a concrete
 // model against the measured cost/latency/accuracy scorecard and writes
 // routing.json next to capabilities.json. We read it ONCE, offline — the sandbox
 // never calls the host at spawn time (that path can hang a subagent). An agent
@@ -180,7 +180,7 @@ function resolveIntentModel(intent: string): string {
 	return isQualifiedModelId(m) ? m : "";
 }
 
-// ─── Agent discovery (pi-stack convention: filename = name) ──────────────────
+// ─── Agent discovery (pix convention: filename = name) ──────────────────
 type AgentScope = "user" | "project" | "both";
 interface AgentConfig {
 	name: string;
@@ -237,7 +237,7 @@ function loadAgentsFromDir(
 		} catch {
 			/* treat as bodyonly */
 		}
-		// Name = frontmatter.name if present, else filename (pi-stack + skills style).
+		// Name = frontmatter.name if present, else filename (pix + skills style).
 		const name = (frontmatter.name || path.basename(entry.name, ".md")).trim();
 		if (!name) continue;
 		const description = (frontmatter.description || "").trim();
@@ -263,7 +263,7 @@ function loadAgentsFromDir(
 				model = routed;
 			} else {
 				warnings.push(
-					`intent "${intent}" not found in routing.json — inheriting the parent model. Run \`pi-stack route compile\` on the host (then \`make load\`).`,
+					`intent "${intent}" not found in routing.json — inheriting the parent model. Run \`pix route compile\` on the host (then \`make load\`).`,
 				);
 			}
 		}

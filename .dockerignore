@@ -15,7 +15,7 @@ node_modules/
 .DS_Store
 **/*.db
 **/*.db-*
-services/host/pi-stack-host
+services/host/pix-host
 
 # --- Open-core boundary: skills -------------------------------------------------
 # DEFAULT-DENY. The Dockerfile COPYs skills/ wholesale, so we exclude every skill

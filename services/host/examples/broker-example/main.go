@@ -5,7 +5,7 @@
 // artifact that fills it.
 //
 // It is NOT wired into `serve` by default. To use it, a user points
-// ~/.config/pi-stack/config.toml's [plugins.broker] at this binary:
+// ~/.config/pix/config.toml's [plugins.broker] at this binary:
 //
 //	[plugins.broker]
 //	impl = "example"
@@ -21,7 +21,7 @@ package main
 import (
 	goplugin "github.com/hashicorp/go-plugin"
 
-	"pi-stack/host/plugin"
+	"pix/host/plugin"
 )
 
 // exampleBroker is a trivial CredentialBroker: Mint returns a fake short-lived

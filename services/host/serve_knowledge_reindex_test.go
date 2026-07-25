@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"pi-stack/host/config"
-	"pi-stack/host/plugin"
+	"pix/host/config"
+	"pix/host/plugin"
 )
 
 // recordingKnowledge is a stub plugin.KnowledgeStore that records the bundle

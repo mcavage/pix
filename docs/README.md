@@ -1,4 +1,4 @@
-# pi-stack docs
+# pix docs
 
 Start with the [top-level README](../README.md) and, if you are extending the
 harness, [AGENTS.md](../AGENTS.md). This folder holds the deeper references.
@@ -30,13 +30,13 @@ tutorials.
   live tracker for running subagents.
 - [self-learning-loop.md](design/self-learning-loop.md) — the memory capture and
   recall loop.
-- [serve-lifecycle.md](design/serve-lifecycle.md) — the `pi-stack serve` daemon
+- [serve-lifecycle.md](design/serve-lifecycle.md) — the `pix serve` daemon
   lifecycle: lazy auto-start, the managed login service, and the hardening addendum.
-- [host-mode.md](design/host-mode.md) — `pi-stack host`, the unsandboxed escape
-  hatch for developing pi-stack itself (Phase 1 built, gated off by default).
+- [host-mode.md](design/host-mode.md) — `pix host`, the unsandboxed escape
+  hatch for developing pix itself (Phase 1 built, gated off by default).
   Its guardrails reduce accidents; they are NOT a security boundary.
 - [worktree-tasks.md](design/worktree-tasks.md) and
-  [task-ux-decisions.md](design/task-ux-decisions.md) — the `pi-stack task`
+  [task-ux-decisions.md](design/task-ux-decisions.md) — the `pix task`
   parallel-work workflow.
 - [cli-redesign.md](design/cli-redesign.md) — the launcher verb tree.
 

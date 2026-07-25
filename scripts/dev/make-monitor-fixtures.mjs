@@ -32,7 +32,7 @@ import { sha256Hex, stringifyContent, summarizeRequest, inferTurnTrigger } from 
 const outDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../tests/fixtures/monitor");
 
 const SYSTEM_PROMPT = [
-	"You are pi, running inside the pi-stack sandbox.",
+	"You are pi, running inside the pix sandbox.",
 	"## Repo layout",
 	"AGENTS.md, extensions/, skills/, services/host/.",
 	"## Skills",

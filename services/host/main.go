@@ -1,4 +1,4 @@
-// pi-stack-host — the single compiled binary for everything that runs on the
+// pix-host — the single compiled binary for everything that runs on the
 // HOST (outside the sandbox). Convention: host code is Go (one static binary, no
 // interpreter spawning child processes — the shape EDR trusts); in-sandbox code
 // (pi extensions, in-box MCP) is TypeScript.
@@ -42,7 +42,7 @@ import (
 
 // version is stamped at build time via -ldflags "-X main.version=..." for the
 // launcher; the host binary is currently built unstamped, so it reports "dev".
-// Used in the backup manifest (pi_stack_version).
+// Used in the backup manifest (pix_version).
 var version = "dev"
 
 func main() {
@@ -72,7 +72,7 @@ func main() {
 	case "-h", "--help", "help":
 		usage()
 	default:
-		fmt.Fprintf(os.Stderr, "pi-stack-host: unknown subcommand %q\n\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "pix-host: unknown subcommand %q\n\n", os.Args[1])
 		usage()
 		os.Exit(2)
 	}
@@ -83,7 +83,7 @@ func main() {
 // shared handshake. kind is memory|knowledge|broker|mcp (mcp also needs a <name>).
 func runPlugin(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "pi-stack-host plugin: missing <kind> (memory|knowledge|broker|mcp)")
+		fmt.Fprintln(os.Stderr, "pix-host plugin: missing <kind> (memory|knowledge|broker|mcp)")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -95,20 +95,20 @@ func runPlugin(args []string) {
 		servePluginBroker("broker")
 	case "mcp":
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "pi-stack-host plugin mcp: missing <name>")
+			fmt.Fprintln(os.Stderr, "pix-host plugin mcp: missing <name>")
 			os.Exit(2)
 		}
 		servePluginMcp(args[1])
 	default:
-		fmt.Fprintf(os.Stderr, "pi-stack-host plugin: unknown kind %q (memory|knowledge|broker|mcp)\n", args[0])
+		fmt.Fprintf(os.Stderr, "pix-host plugin: unknown kind %q (memory|knowledge|broker|mcp)\n", args[0])
 		os.Exit(2)
 	}
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `pi-stack-host — host-side services for pi-stack
+	fmt.Fprint(os.Stderr, `pix-host — host-side services for pix
 
-usage: pi-stack-host <subcommand>
+usage: pix-host <subcommand>
 
 subcommands:
   memory         self-learning memory store, JSON-RPC (:11435)

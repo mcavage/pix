@@ -22,8 +22,8 @@ import (
 	"syscall"
 	"time"
 
-	"pi-stack/host/config"
-	"pi-stack/host/plugin"
+	"pix/host/config"
+	"pix/host/plugin"
 )
 
 type hostService struct {
@@ -197,7 +197,7 @@ func runServe(enabled []string) {
 	}
 
 	if len(all) == 0 {
-		fatalf("no services enabled (run: pi-stack config set services memory)")
+		fatalf("no services enabled (run: pix config set services memory)")
 	}
 
 	// Preflight: every enabled service validates its host dependency UP FRONT, and
@@ -325,7 +325,7 @@ func removeServeLazyMarker() {
 // binary ONCE through the shared supervisor (goplugin.NewClient + verifyPluginSHA
 // + pluginEnv isolation), dispenses the CredentialBroker, and returns a
 // hostService that serves the stable /token shim (brokerProxyMux). The broker is
-// the ONLY plugin granted the bearer back (pluginEnv strips PI_STACK_BROKER_AUTH
+// the ONLY plugin granted the bearer back (pluginEnv strips PIX_BROKER_AUTH
 // from every other subprocess; F2), and the same bearer gates the /token shim.
 func brokerService(cfg *config.Config, sup *supervisor, selfPath string) (*hostService, error) {
 	spec := cfg.Plugin("broker")
@@ -337,11 +337,11 @@ func brokerService(cfg *config.Config, sup *supervisor, selfPath string) (*hostS
 	// bearer would serve /token unauthenticated (mint a real access token to any
 	// process that can reach the listener — and BROKER_BIND can widen that past
 	// localhost). Refuse to start rather than expose an open token endpoint.
-	bearer := os.Getenv("PI_STACK_BROKER_AUTH")
+	bearer := os.Getenv("PIX_BROKER_AUTH")
 	if bearer == "" {
-		return nil, fmt.Errorf("broker plugin is enabled but PI_STACK_BROKER_AUTH is empty: refusing to serve an unauthenticated /token endpoint")
+		return nil, fmt.Errorf("broker plugin is enabled but PIX_BROKER_AUTH is empty: refusing to serve an unauthenticated /token endpoint")
 	}
-	grant := []string{"PI_STACK_BROKER_AUTH=" + bearer}
+	grant := []string{"PIX_BROKER_AUTH=" + bearer}
 	// Append any per-plugin extra env vars from config (ExtraEnv is wired here so
 	// an operator's [plugins.broker] extra_env entries are actually passed through).
 	grant = append(grant, spec.ExtraEnv...)

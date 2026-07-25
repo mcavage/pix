@@ -81,7 +81,7 @@ func TestLockMemoryStoreOrFatal(t *testing.T) {
 }
 
 // TestServingEntryPointsRefuseWhenLockHeld is the mutual-exclusion gate for EVERY
-// live-serving entry point: `pi-stack-host memory` (the bare daemon), `plugin
+// live-serving entry point: `pix-host memory` (the bare daemon), `plugin
 // memory` (the plugin self-exec), and `serve memory` (the built-in supervisor
 // branch). With the shared store lock already held (as a running daemon or a
 // `restore` would hold it), each MUST refuse — exit non-zero with the one-holder
@@ -194,7 +194,7 @@ func TestRestoreRefusesWhenLockHeld(t *testing.T) {
 	if err := os.WriteFile(srcOp, []byte("FOO=op://vault/restored/field\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(t.TempDir(), "pi-stack-backup-20260715-120000.tar.gz")
+	archive := filepath.Join(t.TempDir(), "pix-backup-20260715-120000.tar.gz")
 	if _, err := memoryBackup(backupParams{
 		DBPath: dbPath, OutPath: archive, Keep: 7, Version: "test",
 		ConfigPath: srcCfg, OpRefsPath: srcOp, Now: time.Now(),
@@ -236,8 +236,8 @@ func TestRestoreRefusesWhenLockHeld(t *testing.T) {
 	if err == nil {
 		t.Fatal("restore succeeded while the store lock was held; want refusal")
 	}
-	if !strings.Contains(err.Error(), "pi-stack serve stop") {
-		t.Errorf("refusal message = %q, want it to mention 'pi-stack serve stop'", err.Error())
+	if !strings.Contains(err.Error(), "pix serve stop") {
+		t.Errorf("refusal message = %q, want it to mention 'pix serve stop'", err.Error())
 	}
 
 	after, err := os.ReadFile(dbPath)
@@ -283,7 +283,7 @@ func TestRestoreLockPrecedesPlainFileMutation(t *testing.T) {
 	if err := os.WriteFile(srcCfg, []byte("gog_account = \"restored@example.com\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(t.TempDir(), "pi-stack-backup-20260715-120000.tar.gz")
+	archive := filepath.Join(t.TempDir(), "pix-backup-20260715-120000.tar.gz")
 	if _, err := memoryBackup(backupParams{
 		DBPath: dbPath, OutPath: archive, Keep: 7, Version: "test",
 		ConfigPath: srcCfg, Now: time.Now(),
@@ -384,7 +384,7 @@ func TestRestoreRefusalRollsBackPlainFilesWhenLockHeld(t *testing.T) {
 	if err := os.WriteFile(srcCfg, []byte("gog_account = \"restored@example.com\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(t.TempDir(), "pi-stack-backup-20260715-120000.tar.gz")
+	archive := filepath.Join(t.TempDir(), "pix-backup-20260715-120000.tar.gz")
 	if _, err := memoryBackup(backupParams{
 		DBPath: dbPath, OutPath: archive, Keep: 7, Version: "test",
 		ConfigPath: srcCfg, Now: time.Now(),

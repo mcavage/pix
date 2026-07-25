@@ -8,7 +8,7 @@ nobody toggles models by hand.
 
 **v2 reshape (agent lifecycle).** v1 shipped the engine but read as "a
 router." v2 reframes it as what it is for: **agents are first-class objects
-you create and manage** (`pi-stack agent ls|new|edit|rm|reassess`), and routing
+you create and manage** (`pix agent ls|new|edit|rm|reassess`), and routing
 is the engine that makes each one pick its model. The concrete change from v1:
 an `agent` CLI makes the default-with-override behavior legible (`agent ls`
 shows each agent's resolved model and why). The resolver, data model, and
@@ -31,13 +31,13 @@ release, a local `gpt-oss`) except hand-editing eighteen files.
 ## The posture today
 
 The policy is not "pick the single best model." It is a deliberate **tiered,
-multi-vendor crew**, encoded in `policy.json` (see `pi-stack agent ls` for the
+multi-vendor crew**, encoded in `policy.json` (see `pix agent ls` for the
 live map):
 
 - **Orchestrator** — `overlord` (the top-level interactive session) → OpenAI
   GPT-5.6 Sol. Pinned OFF Anthropic on purpose: Claude is the weak writer, and a
   same-vendor orchestrator shares its authors' blind spots. Opt-in per host via
-  the shipped `run_intent` default (`pi-stack config set run_intent <intent>` to
+  the shipped `run_intent` default (`pix config set run_intent <intent>` to
   change it, e.g. `strategy` for Opus on an Anthropic-only host; `none` opts out
   to pi's own default model).
 - **Frontier** — `strategy` (`architect`, `product-manager`) and `max-accuracy`
@@ -70,7 +70,7 @@ the leverage of the role — not a wall of one model. Vendor spread after the
 code/strategy/advisory/security, **Google** does review/writing/verify/breadth. The registry/scorecard are
 seeded from LIVE model cards + pricing (see the `model-refresh` skill), not from
 training-data guesses; retarget any of it by editing `policy.json`/`scorecard.json`
-and re-running `route compile`; no agent files change. `pi-stack agent ls` prints
+and re-running `route compile`; no agent files change. `pix agent ls` prints
 a WHY for each pick (objective, the winner's accuracy/$/latency, and what it beat
 or whether a constraint left a sole fit).
 
@@ -100,7 +100,7 @@ HOST (Go, tested, owns the truth)            SANDBOX (TS, reads one file)
 
 The sandbox never calls the host at spawn time (that path can hang a subagent).
 It reads a precompiled `routing.json` — deterministic, offline, auditable. The
-host regenerates that file with `pi-stack route compile`, and the user bakes it
+host regenerates that file with `pix route compile`, and the user bakes it
 (`make load`) on a new-model release. This matches the "on new model release,
 manual, easy to plug a model in" cadence the feature was scoped to.
 
@@ -149,14 +149,14 @@ model cards rather than training-data guesses). This replaced an earlier harness
 that called every candidate model to re-measure scores automatically — useful
 in principle, but a fragile external host dependency for a router that only
 ever reads the scorecard, never the harness that produced it. After editing
-`scorecard.json`, run `pi-stack route compile` to bake the change into
+`scorecard.json`, run `pix route compile` to bake the change into
 `routing.json`.
 
 ## CLI
 
-Host (`pi-stack-host`): `route pick <intent>`, `route compile`, `route show`,
+Host (`pix-host`): `route pick <intent>`, `route compile`, `route show`,
 `models`.
-Launcher (`pi-stack`): `agent ls|new|edit|rm|reassess`, `route` (passthrough to
+Launcher (`pix`): `agent ls|new|edit|rm|reassess`, `route` (passthrough to
 the host binary), and `run --intent <name>` resolves the interactive session
 model.
 
@@ -194,7 +194,7 @@ is baked at `~/.pi/agent/routing.json` next to `capabilities.json`.
 1. Add one entry to `models.json` (`id`, `provider`, prices, `available:true`).
 2. Hand-add its scores to `scorecard.json` (from published benchmarks/model
    cards).
-3. `pi-stack route compile` and `make load`.
+3. `pix route compile` and `make load`.
 
 No agent files change. The router reconsiders every intent against the new model
 automatically.

@@ -24,16 +24,16 @@
 import { createServer, request } from "node:http";
 import { readFileSync } from "node:fs";
 
-// The bridge model is configured on the HOST (`pi-stack config set
-// ollama_bridge_model <tag>`); `pi-stack run` writes the resolved value into
-// <workspace>/.pi-stack/ollama-bridge.model, and pi runs with the workspace as
+// The bridge model is configured on the HOST (`pix config set
+// ollama_bridge_model <tag>`); `pix run` writes the resolved value into
+// <workspace>/.pix/ollama-bridge.model, and pi runs with the workspace as
 // cwd, so we read it here — the same host-writes-file / VM-reads-file seam the
 // profile + knowledge-scope files use. This is why you do NOT hand-edit sandbox
-// env: set it once with `pi-stack config set` and every `pi-stack run` picks it
+// env: set it once with `pix config set` and every `pix run` picks it
 // up. A literal OLLAMA_BRIDGE_MODEL env var still wins (power-user override).
 function bridgeModelFromWorkspace(): string | undefined {
 	try {
-		const raw = readFileSync(".pi-stack/ollama-bridge.model", "utf8").trim();
+		const raw = readFileSync(".pix/ollama-bridge.model", "utf8").trim();
 		return raw || undefined;
 	} catch {
 		return undefined; // absent (e.g. `make run` / consumer `sbx run`) -> use the default
@@ -44,7 +44,7 @@ const LISTEN_PORT = Number(process.env.OLLAMA_BRIDGE_PORT ?? 11434);
 const HOST = process.env.OLLAMA_BRIDGE_HOST ?? "host.docker.internal";
 const HOST_PORT = Number(process.env.OLLAMA_BRIDGE_HOST_PORT ?? 11434);
 
-// HOST MODE (pi-stack host, docs/design/host-mode.md): the Go launcher sets
+// HOST MODE (pix host, docs/design/host-mode.md): the Go launcher sets
 // OLLAMA_HOSTMODE=1 + OLLAMA_URL. There the bridge's whole reason to exist —
 // dodge the sbx proxy by listening on localhost and forwarding to
 // host.docker.internal — is moot (there is no proxy, no VM). Worse, starting

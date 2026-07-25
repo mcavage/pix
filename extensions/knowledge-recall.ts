@@ -1,4 +1,4 @@
-// pi-stack — knowledge-base injector (client side).
+// pix — knowledge-base injector (client side).
 //
 // Sibling of extensions/memory-recall.ts, but a different source of truth. Memory
 // is soft, per-user, "context, may be stale". The knowledge base is curated and
@@ -19,12 +19,12 @@
 //
 // SCOPE CONTRACT (per-workspace bundle filter). The shared host store indexes
 // every bundle it has ever seen (global + every project), so an un-scoped query
-// bleeds concepts across projects. The launcher (pi-stack run) resolves the
+// bleeds concepts across projects. The launcher (pix run) resolves the
 // bundle set for THIS workspace — {global, this-project} — and communicates it
 // to us one of two ways, which we resolve in this order:
 //
 //   1. env  KNOWLEDGE_SCOPE          comma- or newline-separated bundle ids
-//   2. file <cwd>/.pi-stack/knowledge.scope   comma- or newline-separated ids
+//   2. file <cwd>/.pix/knowledge.scope   comma- or newline-separated ids
 //
 // Whichever is found first wins; entries are trimmed and blanks dropped. The ids
 // are daemon-supplied identifiers (the exact strings in the store's `bundle`
@@ -107,7 +107,7 @@ function parseScope(raw: string): string[] {
 }
 
 // Resolve the per-workspace bundle scope (see SCOPE CONTRACT at the top). Env
-// KNOWLEDGE_SCOPE first, then <cwd>/.pi-stack/knowledge.scope. Returns [] when
+// KNOWLEDGE_SCOPE first, then <cwd>/.pix/knowledge.scope. Returns [] when
 // neither is present/non-empty, in which case the caller sends NO `bundles`.
 // File read is defensive: a missing/unreadable file is the normal case.
 function resolveScope(): string[] {
@@ -117,7 +117,7 @@ function resolveScope(): string[] {
 		if (fromEnv.length) return fromEnv;
 	}
 	try {
-		const raw = readFileSync(join(process.cwd(), ".pi-stack", "knowledge.scope"), "utf8");
+		const raw = readFileSync(join(process.cwd(), ".pix", "knowledge.scope"), "utf8");
 		return parseScope(raw);
 	} catch {
 		return []; // missing/unreadable file is normal — no scope, query all

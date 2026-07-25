@@ -8,7 +8,7 @@ no discrimination, no personal attacks.
 ## Scope
 
 This applies to all project spaces: issues, pull requests, discussions, and any
-other channel where you are acting as part of the pi-stack community.
+other channel where you are acting as part of the pix community.
 
 ## Standards
 

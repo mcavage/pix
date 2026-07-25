@@ -1,6 +1,6 @@
 // U-W0b.08 (AC-P0-114) — AGENTS.md is always-on prompt content, so every byte
 // in it is paid for on every turn of every session. The ~15 KB launcher CLI
-// reference that used to live in it duplicated `pi-stack help --all` and
+// reference that used to live in it duplicated `pix help --all` and
 // docs/reference.md, both of which are generated or maintained closer to the
 // code and therefore cannot drift the way a hand-copied verb list does.
 //
@@ -36,12 +36,12 @@ const AGENTS_MD_CEILING_BYTES = 40 * 1024;
 const SAFETY_INVARIANTS = [
 	{
 		id: "config-never-hand-edit",
-		invariant: "config.toml is the single runtime config, managed by `pi-stack config set` — never hand-edited.",
+		invariant: "config.toml is the single runtime config, managed by `pix config set` — never hand-edited.",
 		phrases: ["config.toml", "never hand-edit", "config set"],
 	},
 	{
 		id: "bare-invocation-never-launches",
-		invariant: "`pi-stack` with no args prints status and never launches a sandbox.",
+		invariant: "`pix` with no args prints status and never launches a sandbox.",
 		phrases: ["no args never launches a sandbox"],
 	},
 	{
@@ -77,23 +77,23 @@ const SAFETY_INVARIANTS = [
 	},
 	{
 		id: "host-mode-off-by-default",
-		invariant: "Host mode is off by default behind `host.enabled` and is never enabled by `pi-stack setup`.",
+		invariant: "Host mode is off by default behind `host.enabled` and is never enabled by `pix setup`.",
 		phrases: ["host.enabled", "OFF by default", "host setup"],
 	},
 	{
 		id: "secret-never-writes-values",
-		invariant: "`pi-stack secret` never writes a secret value to disk.",
+		invariant: "`pix secret` never writes a secret value to disk.",
 		phrases: ["never writes a secret value to disk"],
 	},
 	{
 		id: "monitor-loopback-default",
-		invariant: "`pi-stack monitor` binds loopback by default; LAN exposure is an explicit opt-in.",
+		invariant: "`pix monitor` binds loopback by default; LAN exposure is an explicit opt-in.",
 		phrases: ["binds loopback by default", "--bind 0.0.0.0"],
 	},
 	{
-		id: "rm-scoped-to-pi-stack",
-		invariant: "`pi-stack rm` only ever removes `pi-stack-*` sandboxes.",
-		phrases: ["scoped to `pi-stack-*` sandboxes"],
+		id: "rm-scoped-to-pix",
+		invariant: "`pix rm` only ever removes `pix-*` sandboxes.",
+		phrases: ["scoped to `pix-*` sandboxes"],
 	},
 	{
 		id: "success-words-are-probed",
@@ -120,16 +120,16 @@ test("the invariant enumeration itself is not silently shrunk", () => {
 });
 
 test("AGENTS.md carries no CLI reference block", () => {
-	const launcher = section(agents, "## `pi-stack` launcher");
-	assert.ok(launcher, "AGENTS.md must keep a `pi-stack` launcher section (the pointers live there)");
+	const launcher = section(agents, "## `pix` launcher");
+	assert.ok(launcher, "AGENTS.md must keep a `pix` launcher section (the pointers live there)");
 
 	// The deleted block was a verb catalogue: one bulleted entry per verb, each
-	// leading with a `pi-stack <verb> …` code span. Three or more of those in one
+	// leading with a `pix <verb> …` code span. Three or more of those in one
 	// section means the reference is growing back.
-	const verbBullets = launcher.split("\n").filter((l) => /^\s*[-*]\s+\*{0,2}`pi-stack [a-z]/.test(l));
+	const verbBullets = launcher.split("\n").filter((l) => /^\s*[-*]\s+\*{0,2}`pix [a-z]/.test(l));
 	assert.ok(
 		verbBullets.length < 3,
-		`the launcher section is turning back into a verb reference (${verbBullets.length} verb bullets); it belongs in \`pi-stack help --all\` and docs/reference.md:\n${verbBullets.join("\n")}`,
+		`the launcher section is turning back into a verb reference (${verbBullets.length} verb bullets); it belongs in \`pix help --all\` and docs/reference.md:\n${verbBullets.join("\n")}`,
 	);
 
 	// Flag tables are the other shape the reference took.
@@ -146,7 +146,7 @@ test("AGENTS.md is under its non-regression size ceiling", () => {
 });
 
 test("the pointers AGENTS.md offers instead of the reference all resolve", () => {
-	const launcher = section(agents, "## `pi-stack` launcher");
+	const launcher = section(agents, "## `pix` launcher");
 	const docPaths = [...launcher.matchAll(/`(docs\/[A-Za-z0-9._\/-]+\.md)`/g)].map((m) => m[1]);
 	// `serve-lifecycle.md`-style bare names are relative to the `docs/design/` named alongside them.
 	const bare = [...launcher.matchAll(/`([a-z0-9-]+\.md)`/g)].map((m) => m[1]);
@@ -158,7 +158,7 @@ test("the pointers AGENTS.md offers instead of the reference all resolve", () =>
 	for (const p of docPaths) if (!fs.existsSync(path.join(repoRoot, p))) missing.push(p);
 	for (const b of bare) if (!fs.existsSync(path.join(repoRoot, "docs/design", b))) missing.push(`docs/design/${b}`);
 	assert.deepEqual(missing, [], `AGENTS.md points at doc(s) that do not exist: ${missing.join(", ")}`);
-	assert.ok(launcher.includes("pi-stack help --all"), "AGENTS.md must point at the generated verb tree");
+	assert.ok(launcher.includes("pix help --all"), "AGENTS.md must point at the generated verb tree");
 	assert.ok(docPaths.includes("docs/reference.md"), "AGENTS.md must point at docs/reference.md");
 });
 

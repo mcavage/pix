@@ -33,8 +33,8 @@ import (
 
 	goplugin "github.com/hashicorp/go-plugin"
 
-	"pi-stack/host/config"
-	"pi-stack/host/plugin"
+	"pix/host/config"
+	"pix/host/plugin"
 )
 
 // pluginHolder holds the currently-dispensed client for one slot. The watchdog
@@ -74,7 +74,7 @@ type supervisor struct {
 // launch spawns the plugin for a slot once at startup and starts its watchdog.
 // extraEnv is a small set of KEY=VALUE vars granted to THIS plugin's subprocess
 // only (on top of the filtered base env; see pluginEnv) — e.g. an external
-// broker plugin's PI_STACK_BROKER_AUTH bearer, which no other plugin may see (F2).
+// broker plugin's PIX_BROKER_AUTH bearer, which no other plugin may see (F2).
 func (s *supervisor) launch(name, kind string, spec config.PluginSpec, selfPath string, extraEnv []string) (*pluginHolder, error) {
 	h := &pluginHolder{}
 	if err := s.spawn(h, name, kind, spec, selfPath, extraEnv); err != nil {
@@ -87,7 +87,7 @@ func (s *supervisor) launch(name, kind string, spec config.PluginSpec, selfPath 
 // pluginEnvAllowlist is the set of environment variable names that plugin
 // subprocesses may inherit from the parent process. An allowlist approach
 // prevents plugins from picking up sensitive secrets (cloud credentials, API
-// keys, SSH agent sockets, etc.) the parent may carry. PI_STACK_BROKER_AUTH is
+// keys, SSH agent sockets, etc.) the parent may carry. PIX_BROKER_AUTH is
 // deliberately absent — the broker gets its bearer exclusively via extraEnv in
 // brokerService(), and no other plugin may receive it (F2).
 var pluginEnvAllowlist = map[string]bool{
@@ -95,7 +95,7 @@ var pluginEnvAllowlist = map[string]bool{
 	"PATH": true, "HOME": true, "USER": true,
 	"TMPDIR": true, "TEMP": true, "TMP": true,
 	// Config locations
-	"PI_STACK_CONFIG": true,
+	"PIX_CONFIG":      true,
 	"XDG_CONFIG_HOME": true,
 	"XDG_DATA_HOME":   true,
 	"XDG_STATE_HOME":  true,
@@ -119,15 +119,15 @@ var pluginEnvAllowlist = map[string]bool{
 	"LD_LIBRARY_PATH":   true, // Linux
 	"DYLD_LIBRARY_PATH": true, // macOS
 	// Port vars the supervisor communicates to plugins
-	"PI_STACK_MEMORY_PORT":    true,
-	"PI_STACK_KNOWLEDGE_PORT": true,
-	"PI_STACK_BROKER_PORT":    true,
+	"PIX_MEMORY_PORT":    true,
+	"PIX_KNOWLEDGE_PORT": true,
+	"PIX_BROKER_PORT":    true,
 }
 
 // pluginEnv builds the environment for a plugin subprocess using an allowlist
 // approach: only variables in pluginEnvAllowlist are inherited from the parent
 // process, preventing plugins from picking up sensitive secrets (F2). The
-// broker's PI_STACK_BROKER_AUTH is absent from the allowlist and is passed
+// broker's PIX_BROKER_AUTH is absent from the allowlist and is passed
 // exclusively via the extraEnv argument (only the broker gets it back).
 func pluginEnv(extra []string) []string {
 	base := os.Environ()
@@ -173,7 +173,7 @@ func verifyPluginSHA(spec config.PluginSpec) error {
 // spawn launches one go-plugin subprocess and dispenses its client. An external
 // binary (spec.Path) is preferred — and its pinned SHA is enforced first;
 // otherwise the host binary re-execs itself as the built-in plugin server
-// (`pi-stack-host plugin <kind>`). The subprocess env is always filtered (F2).
+// (`pix-host plugin <kind>`). The subprocess env is always filtered (F2).
 func (s *supervisor) spawn(h *pluginHolder, name, kind string, spec config.PluginSpec, selfPath string, extraEnv []string) error {
 	var cmd *exec.Cmd
 	if spec.Path != "" {
@@ -636,7 +636,7 @@ func brokerProxyMux(h *pluginHolder, auth string) http.Handler {
 	return mux
 }
 
-// servePluginBroker is the self-exec entry `pi-stack-host plugin broker` would
+// servePluginBroker is the self-exec entry `pix-host plugin broker` would
 // serve a built-in CredentialBroker from. The public tree ships no built-in
 // broker — the seam is permanently dormant — so this always exits cleanly. An
 // external broker plugin (see examples/broker-example) ships its own main()
@@ -645,6 +645,6 @@ func brokerProxyMux(h *pluginHolder, auth string) http.Handler {
 // path is set (i.e. never, for broker, in the public tree).
 // name is the plugin map key the supervisor would dispense under (e.g. "broker").
 func servePluginBroker(name string) {
-	fmt.Fprintf(os.Stderr, "pi-stack-host plugin %s: no built-in broker registered (set [plugins.broker] path+sha to an external plugin binary)\n", name)
+	fmt.Fprintf(os.Stderr, "pix-host plugin %s: no built-in broker registered (set [plugins.broker] path+sha to an external plugin binary)\n", name)
 	os.Exit(2)
 }

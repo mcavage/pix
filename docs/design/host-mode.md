@@ -1,9 +1,9 @@
-# Host mode — running pi-stack outside the sandbox
+# Host mode — running pix outside the sandbox
 
-Status: Phase 1 IMPLEMENTED, gated off by default (`pi-stack config set
-host.enabled true`). The Go launch path (`pi-stack host [DIR]` + `pi-stack host
+Status: Phase 1 IMPLEMENTED, gated off by default (`pix config set
+host.enabled true`). The Go launch path (`pix host [DIR]` + `pix host
 setup`, hostrun.go/hostargs.go) is built: default-off gate, host agent dir at
-$XDG_STATE_HOME/pi-stack/host-agent, EvalSymlinks workspace refusals
+$XDG_STATE_HOME/pix/host-agent, EvalSymlinks workspace refusals
 ($HOME///etc/secret dirs — secret dirs canonicalized too, and nested entries
 like .config/gcloud caught when the workspace sits at $HOME/.config), subagents
 disabled (PI_SUBAGENT_DISABLED=1, strict "1" match, enforced centrally in
@@ -27,16 +27,16 @@ Crew: architect · security-lead · engineer · dx-consultant (+ cross-vendor re
 
 ## The ask
 
-> "It would help a lot to have a way to run pi-stack outside the sandbox, for the
+> "It would help a lot to have a way to run pix outside the sandbox, for the
 > specific times I need host things. One case is platformio for serial port,
-> another is to literally work on pi-stack itself."
+> another is to literally work on pix itself."
 
 Two concrete needs, both fundamentally host operations a network-fenced Docker
 sandbox cannot serve:
 
 1. **Self-development (the primary case)** — you can't `make load` / `sbx` /
-   rebuild the pi-stack image from inside a pi-stack sandbox (the VM has no host
-   Docker or `sbx`). Working on pi-stack itself is inherently a host operation.
+   rebuild the pix image from inside a pix sandbox (the VM has no host
+   Docker or `sbx`). Working on pix itself is inherently a host operation.
 2. **Hardware access (secondary, likely a different solution)** — platformio
    flashing/monitoring needs a real `/dev/tty*` USB-serial device the sandbox
    can't see. On reflection this wants a *narrow* capability, not full host
@@ -46,7 +46,7 @@ sandbox cannot serve:
 
 ## Recommendation
 
-Add a **new sibling verb `pi-stack host [DIR]`** that execs the host-installed
+Add a **new sibling verb `pix host [DIR]`** that execs the host-installed
 `pi` directly (no `sbx`, no VM), reusing the launcher's config/profile/knowledge
 /memory-scope machinery but with its own arg builder and a **fundamentally
 different safety posture**: credentials sourced just-in-time and never persisted,
@@ -58,7 +58,7 @@ guardrails against accidents, **not** a security boundary (see Safety posture).
 Frame it as a **narrow, deliberate escape hatch for exactly the two cases above**
 — never the default, never a fallback when `sbx` is missing, never claiming
 parity with the sandbox. The moment it reads as "a second runtime," people reach
-for it by default, which defeats the entire safety model pi-stack is built on.
+for it by default, which defeats the entire safety model pix is built on.
 
 This was the unanimous conclusion across all four lenses. The disagreements were
 narrow (see "Open decisions").
@@ -70,10 +70,10 @@ narrow (see "Open decisions").
   invariant is welded to it (`run.go` header, `buildSbxArgs`,
   `modelProviderPreflight`). A `--no-sandbox` flag is a double-negative on the
   safe verb that surfaces in tab-completion right next to muscle-memory
-  `pi-stack run`, and inverts credentials + autonomy + boundary all at once with
+  `pix run`, and inverts credentials + autonomy + boundary all at once with
   no signal. A different safety model deserves a different verb. (Naming caveat:
-  `pi-stack host` is the agent-on-host; `pi-stack-host` is the Go daemon binary
-  and `pi-stack serve` runs host services — call out the distinction in `man`.)
+  `pix host` is the agent-on-host; `pix-host` is the Go daemon binary
+  and `pix serve` runs host services — call out the distinction in `man`.)
 - **Not a second entrypoint binary.** Duplicates config loading and breaks the
   "one launcher binary" story (`main.go`).
 - **Preserves HOST=Go / SANDBOX=TS.** The launcher stays one Go binary (`host` is
@@ -89,7 +89,7 @@ pi is a plain npm package — `Dockerfile` installs it with a vanilla
 it depends on sbx or Docker. On the host it's the same install. Setup and launch enforce the **same version**
 as the Dockerfile `ARG PI_PACKAGE`; a missing or stale copy is rejected before
 extensions load, with the exact pinned install command. Launch also requires the
-curated-extension lock marker written by `pi-stack host setup`, so upgrading the
+curated-extension lock marker written by `pix host setup`, so upgrading the
 core alone cannot load an extension set pinned for an older release.
 
 The clean lever the engineer found: **`PI_CODING_AGENT_DIR`** (pi's config-dir
@@ -111,17 +111,17 @@ dir** that symlinks `skills/extensions/agents/prompts/themes` → repo and holds
 its own `npm/node_modules` (the curated packages installed once, mirroring the
 Dockerfile RUN loop), with `--session-dir` pointed away from the checkout.
 
-**Where that dir lives:** under the existing pi-stack **state** home, not a new
-dotdir. pi-stack already uses three XDG homes — `~/.config/pi-stack` (config),
-`$XDG_DATA_HOME/pi-stack` (default `~/.local/share/pi-stack`, precious *data*:
-memory + knowledge DBs, what `pi-stack backup` archives), and
-`$XDG_STATE_HOME/pi-stack` (default `~/.local/state/pi-stack`,
+**Where that dir lives:** under the existing pix **state** home, not a new
+dotdir. pix already uses three XDG homes — `~/.config/pix` (config),
+`$XDG_DATA_HOME/pix` (default `~/.local/share/pix`, precious *data*:
+memory + knowledge DBs, what `pix backup` archives), and
+`$XDG_STATE_HOME/pix` (default `~/.local/state/pix`,
 rebuildable *state*: per-task clones under `tasks/`, `task.go`). The host-agent
 dir is exactly state-flavored — fully rebuildable (symlinks + `pi install`), never
 precious — so it belongs beside `tasks/`:
 
 ```
-$XDG_STATE_HOME/pi-stack/            (default ~/.local/state/pi-stack)
+$XDG_STATE_HOME/pix/            (default ~/.local/state/pix)
 ├── tasks/                            # existing: per-task clones
 └── host-agent/                       # PI_CODING_AGENT_DIR for host mode
     ├── {skills,agents,extensions,prompts,themes} -> <checkout>/...
@@ -130,15 +130,15 @@ $XDG_STATE_HOME/pi-stack/            (default ~/.local/state/pi-stack)
     └── sessions/                     # --session-dir, out of the git tree
 ```
 
-Putting it here (not the data home) keeps it out of `pi-stack backup` and lets
-`pi-stack state reset` nuke it freely — it's disposable, unlike memory. Honor
+Putting it here (not the data home) keeps it out of `pix backup` and lets
+`pix state reset` nuke it freely — it's disposable, unlike memory. Honor
 `XDG_STATE_HOME` the same way `task.go` does.
 
 Resulting invocation (illustrative — **not** copy-paste ready; the ollama line
 self-loops without the bypass, see the extensions table):
 
 ```
-PI_CODING_AGENT_DIR=~/.local/state/pi-stack/host-agent \
+PI_CODING_AGENT_DIR=~/.local/state/pix/host-agent \
 MEMORY_URL=http://127.0.0.1:11435 \
 KNOWLEDGE_URL=http://127.0.0.1:11436 \
 <ollama: real :11434 provider only after the host-mode bypass ships> \
@@ -166,7 +166,7 @@ env-overridable and best-effort.
 
 | Extension | Host behavior | Action |
 |---|---|---|
-| `memory-recall.ts` / `memory-capture.ts` | default `host.docker.internal:11435` (doesn't resolve on host); every call is `safe()`-wrapped → silently skips | set `MEMORY_URL=http://127.0.0.1:11435`; the service already runs natively there under `pi-stack serve`. Works, no code change. |
+| `memory-recall.ts` / `memory-capture.ts` | default `host.docker.internal:11435` (doesn't resolve on host); every call is `safe()`-wrapped → silently skips | set `MEMORY_URL=http://127.0.0.1:11435`; the service already runs natively there under `pix serve`. Works, no code change. |
 | `knowledge-recall.ts` | default `host.docker.internal:11436`; reads `KNOWLEDGE_SCOPE` (already written by `wireKnowledgeScope`) | set `KNOWLEDGE_URL=http://127.0.0.1:11436`. Works, no code change. |
 | `ollama-bridge.ts` | its job is the proxy-dodge (listen `:11434` → forward to `host.docker.internal:11434`); on host that's redundant | **Needs a real fix, and the bypass MUST ship before the invocation above is documented.** Review confirmed: `OLLAMA_BRIDGE_HOST=127.0.0.1` is a genuine self-loop — the bridge listens on `127.0.0.1:11434` and forwards to the same host:port, so if ollama is *absent* the bridge binds successfully and recursively proxies to itself until exhaustion. EADDRINUSE is harmless only when real ollama already owns the port (not guaranteed). Fix: a host-mode bypass that registers the provider pointed straight at `http://127.0.0.1:11434/v1` and skips the reverse proxy entirely. |
 | `subagents.ts` | spawns `pi --no-extensions -e <self>`, env-inherited; `getAgentDir()` respects the config dir | works — **but children MUST inherit the host-mode safety posture** (see security). Set `PI_SUBAGENT_PI_COMMAND` if host `pi` isn't the default resolution. |
@@ -215,7 +215,7 @@ it's contained. This directly motivates the sandboxed alternative below.
 
 ### Credentials — reuse op://, never persist, never read sbx secrets
 
-- **`sbx secret` appears write-only from pi-stack's side** (the tree only ever
+- **`sbx secret` appears write-only from pix's side** (the tree only ever
   calls `sbx secret set` and `sbx secret ls` — names, not values). Verify against
   the installed sbx CLI before treating "no reveal verb" as an invariant. Either
   way, **do not** add a path that reveals secrets to a host process — it would
@@ -223,7 +223,7 @@ it's contained. This directly motivates the sandboxed alternative below.
 - **Reuse the existing op:// pattern.** The repo already resolves MCP creds via
   1Password `op run --env-file` with op:// refs (`config/op-refs.env.example`,
   `config.go` `OpRefsTemplate`, `doctor.go` op-ref validation). Host mode fits the
-  same model: `op run --env-file=~/.config/pi-stack/hostmode.env -- pi …`, refs
+  same model: `op run --env-file=~/.config/pix/hostmode.env -- pi …`, refs
   file holds `ANTHROPIC_API_KEY=op://vault/item/field`, never a value.
 - **Env only, scoped to the child, short-lived.** Inject via the child `cmd.Env`
   (like `run.go:157`), never `export` into the shell, never write to
@@ -296,11 +296,11 @@ the self-dev case it costs more than it's worth:
   Docker login/VM — and driving Docker is the whole point of self-dev, so this
   friction is unavoidable *and* central.
 - User-switching (fast-switch / `su -`, separate Keychain + `gh` auth) is far too
-  heavy for a "dip in for ten minutes to fix pi-stack" workflow — the cost lands
+  heavy for a "dip in for ten minutes to fix pix" workflow — the cost lands
   squarely on the ergonomics that make host mode worth having.
 
 And guardrails are *sufficient here*, not just a resigned compromise: **the
-self-dev work product is the pi-stack repo, which is in git.** The blast radius
+self-dev work product is the pix repo, which is in git.** The blast radius
 that matters most is version-controlled and revertible, so the `tool_call` guard
 (accidents) + op:// creds never persisted (the one thing git doesn't protect) +
 refuse-to-launch-in-`$HOME` is the right ceiling. The separate-account option
@@ -314,7 +314,7 @@ ceremony without a real boundary (it *would* fit the narrower platformio case).
 Layer the signals; don't rely on one:
 
 1. **One-time config gate** (deliberate opt-in), mirroring how services/mcp are
-   gated: `pi-stack config set host.enabled true`. First invocation with the gate
+   gated: `pix config set host.enabled true`. First invocation with the gate
    off prints *why* it's dangerous and the exact enable command — friction is the
    feature here.
 2. **Per-launch banner** (stderr, red): `⚠ HOST MODE — commands run on YOUR
@@ -327,18 +327,18 @@ Layer the signals; don't rely on one:
 
 **Help / config / anti-drift wiring:**
 - `host` goes in the expert help tier (`helpAllText` + man page) **only** — never
-  in Core `helpText`. Keeping it off `pi-stack help` keeps it off the easy path.
+  in Core `helpText`. Keeping it off `pix help` keeps it off the easy path.
 - Add `host` to `knownVerbs` (`help.go`) and a man entry, or
   `TestManPageDocumentsEveryKnownVerb` (`man_test.go`) fails — a feature: it
   forces documentation. Also wires `suggestVerb` ("did you mean host?").
-- Namespace config: `host.enabled`, reserve `host.autonomy` (`pi-stack config
+- Namespace config: `host.enabled`, reserve `host.autonomy` (`pix config
   set`; never hand-edit `config.toml`).
 - **Profile:** keep profile resolution for skill/knowledge/memory scoping; the
   sandbox-name namespacing half (`o.Name += "-" + profile`) is meaningless with no
   sandbox — document that host mode ignores it.
 
 **Self-dev loop ergonomics (case 2):**
-- When `pi-stack host` is launched from a pi-stack checkout (`isRepoRoot`, already
+- When `pix host` is launched from a pix checkout (`isRepoRoot`, already
   in `run.go`), print a tailored footer: skill/extension/agent edits are live on
   next `/reload`; Dockerfile / pi-kit / baked-file edits need `make load` (host
   only, ~1GB tar) + a fresh sandbox to reach consumers. Surface the Mode-A/B rule
@@ -352,20 +352,20 @@ Layer the signals; don't rely on one:
 ## Feasibility
 
 **Verdict: SMALL–MEDIUM.** The launch mechanism is small (pi is a plain binary;
-extensions already degrade off-proxy; `pi-stack serve` already provides
+extensions already degrade off-proxy; `pix serve` already provides
 memory/knowledge on `127.0.0.1`). It's "medium" only because two *design*
 decisions gate it — where host keys come from, and how much autonomy with the
 sandbox gone — not because of code volume.
 
 Rough sizing (engineer):
-- New `host` launch path (`services/host/cmd/pi-stack/hostrun.go` + `hostargs.go`):
+- New `host` launch path (`services/host/cmd/pix/hostrun.go` + `hostargs.go`):
   reuse `resolveRepoRoot`, `loadResolvedConfig`, `writeProfileFile`,
   `wireKnowledgeScope`; skip `buildSbxArgs`; exec `pi` not `sbx`. ~120–200 LOC Go.
-- Host config-dir provisioning (`pi-stack host setup`): symlink harness dirs +
+- Host config-dir provisioning (`pix host setup`): symlink harness dirs +
   `pi install` the pinned extension list. **Review flags the ~30–60 LOC estimate
   as not credible** for release-installed users: `install.sh` ships only two Go
   binaries — no checkout, no Node, no `pi` runtime, no TUI patch, no curated
-  extension set. For the platformio case (a normal user, not a pi-stack dev), host
+  extension set. For the platformio case (a normal user, not a pix dev), host
   mode needs a real install/update/uninstall/version-drift story, since the image
   pins Node/DHI + seven extension packages + a TUI patch that a bare npm install
   does not reproduce. Treat this as its own medium-sized workstream, and note it
@@ -410,8 +410,8 @@ status-quo baseline any proposal must beat.
 3. Pick the guard-extension coverage bar and the exact "not a boundary" wording.
 
 **Phase 1 — minimal, safe hatch:**
-- `pi-stack host [DIR]` verb behind `host.enabled` gate.
-- Host config dir provisioning at `$XDG_STATE_HOME/pi-stack/host-agent`.
+- `pix host [DIR]` verb behind `host.enabled` gate.
+- Host config dir provisioning at `$XDG_STATE_HOME/pix/host-agent`.
 - Host preflight (env-based), host-service URL wiring, ollama-bridge bypass.
 - `tool_call` guard extension (best-effort); write-jail to workspace (via
   `EvalSymlinks`); refuse launching at `$HOME`/`/`/`/etc`; subagents disabled.
@@ -445,20 +445,20 @@ boundary.
    Verify empirically; a small bypass is cheap insurance either way.
 3. **Credential source** — op:// refs (recommended) vs. plain env vars the user
    exports (simpler, but weaker: persisted plaintext, agent can read).
-4. **Verb name** — `pi-stack host` (recommended) and the `pi-stack-host` /
-   `pi-stack serve` naming-collision note for `man`.
+4. **Verb name** — `pix host` (recommended) and the `pix-host` /
+   `pix serve` naming-collision note for `man`.
 
 ## Files this touches (map for the build)
 
-- `services/host/cmd/pi-stack/main.go` — dispatch `case "host":`, help text.
-- `services/host/cmd/pi-stack/{hostrun.go,hostargs.go}` (new) — the host launch
+- `services/host/cmd/pix/main.go` — dispatch `case "host":`, help text.
+- `services/host/cmd/pix/{hostrun.go,hostargs.go}` (new) — the host launch
   path; reuse `run.go` helpers, replace `buildSbxArgs`/`modelProviderPreflight`.
-  Note: `host` needs its **own subcommand parser** so `pi-stack host setup` and
-  `pi-stack host [DIR]` don't collide (a bare `setup` would otherwise parse as a
+  Note: `host` needs its **own subcommand parser** so `pix host setup` and
+  `pix host [DIR]` don't collide (a bare `setup` would otherwise parse as a
   workspace and be rejected as a non-directory).
-- `services/host/cmd/pi-stack/{help.go,man.go,pi-stack.1}` — `knownVerbs`, expert
+- `services/host/cmd/pix/{help.go,man.go,pix.1}` — `knownVerbs`, expert
   tier, man entry (`man_test.go` enforces).
-- `services/host/cmd/pi-stack/config.go` — `host.*` keys; reuse `OpRefsTemplate`.
+- `services/host/cmd/pix/config.go` — `host.*` keys; reuse `OpRefsTemplate`.
 - `extensions/ollama-bridge.ts` — optional host-mode bypass.
 - `extensions/status.ts` — persistent `HOST` badge.
 - `themes/` — red-tinted `host` theme.

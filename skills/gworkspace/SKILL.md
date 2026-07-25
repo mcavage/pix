@@ -6,8 +6,8 @@ description: Read Google Workspace — Gmail, Drive, Docs, Sheets, Calendar via 
 
 Google Workspace is reached through the **`gog` MCP server** — the external `gog`
 CLI, run host-side as a stdio MCP server spawned by the sbx gateway (registered via
-`pi-stack mcp register` / `make mcp-register`), exactly like `slack`. It is **not** a
-`pi-stack-host` subcommand — it is a separate binary. Creds never enter the sandbox:
+`pix mcp register` / `make mcp-register`), exactly like `slack`. It is **not** a
+`pix-host` subcommand — it is a separate binary. Creds never enter the sandbox:
 they live on the host in `GOG_HOME`. Resolve it through `capability-routing` (the
 `gworkspace` capability → `mcp` provider `gog`).
 

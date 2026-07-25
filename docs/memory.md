@@ -1,6 +1,6 @@
 # Memory
 
-pi-stack remembers things across sessions. A durable fact you state once ("I
+pix remembers things across sessions. A durable fact you state once ("I
 deploy from `main`, never a release branch") is recalled into a later session's
 context automatically, so you don't re-teach the agent every time you open a new
 sandbox.
@@ -10,9 +10,9 @@ behaves, and where it stops.
 
 ## The shape
 
-- **A host service.** `pi-stack-host serve` runs the memory daemon on
+- **A host service.** `pix-host serve` runs the memory daemon on
   `127.0.0.1:11435`, speaking JSON-RPC 2.0 over HTTP. It stores rows in a
-  pure-Go SQLite database (`~/.local/share/pi-stack/memory/memory.db`) with an FTS5
+  pure-Go SQLite database (`~/.local/share/pix/memory/memory.db`) with an FTS5
   full-text index and a vector embedding per row.
 - **Reached from the sandbox over `host.docker.internal`.** The VM never holds
   the store; it makes RPC calls to the host. The kit network allowlist permits
@@ -92,7 +92,7 @@ Two precision guards run before anything is stored:
 
 **The agent itself has direct, typed tools**, `memory_recall` and
 `memory_stats`, that call the host daemon directly (never by shelling out to
-`pi-stack` or `curl`). It uses `memory_recall` when you ask what's
+`pix` or `curl`). It uses `memory_recall` when you ask what's
 remembered, how memory works, or whether it can see something (up to 100
 rows, not the unbounded store, see the truncation note above);
 `memory_stats` when you ask how much is stored. **This tool surface is
@@ -119,18 +119,18 @@ Inside the sandbox, the write/delete operations are available as slash commands:
 From the host, without launching a sandbox:
 
 ```bash
-pi-stack memory recall "<query>"
-pi-stack memory remember "<fact>"
-pi-stack memory forget "<query>"
-pi-stack memory learnings
-pi-stack memory stats
+pix memory recall "<query>"
+pix memory remember "<fact>"
+pix memory forget "<query>"
+pix memory learnings
+pix memory stats
 ```
 
 If the daemon is down, the host commands and the agent's tools/slash commands
 all surface a clear error, they do not fail silently. Only the silent
 per-turn auto-injection degrades quietly (a dead daemon just means no memory
 gets injected that turn, so a stalled service never blocks the conversation).
-Start the daemon with `pi-stack serve`.
+Start the daemon with `pix serve`.
 
 ## Without Ollama
 
@@ -138,7 +138,7 @@ Memory still works, degraded. Recall falls back to FTS5 keyword search (no vecto
 ranking), and automatic capture is disabled (there is no watcher model to extract
 facts). `/remember` still works, because that is an explicit store, not an
 extraction. Install Ollama and set the embed and watcher models
-(`pi-stack config set memory_embed_model ...`, `memory_watcher_model ...`) to get
+(`pix config set memory_embed_model ...`, `memory_watcher_model ...`) to get
 the full loop.
 
 ### When semantic recall is silently keyword-only
@@ -152,25 +152,25 @@ the embed model, then restart the daemon so it re-probes at startup:
 
 ```bash
 ollama pull nomic-embed-text          # or whatever MEMORY_EMBED_MODEL names
-pi-stack serve stop && pi-stack serve  # restart so the embedder re-probes
+pix serve stop && pix serve  # restart so the embedder re-probes
 ```
 
-A daemon-affecting `pi-stack config set` (e.g. `memory_embed_model`) already
-restarts a managed or lazy daemon for you; only a foreground `pi-stack serve` must
+A daemon-affecting `pix config set` (e.g. `memory_embed_model`) already
+restarts a managed or lazy daemon for you; only a foreground `pix serve` must
 be restarted by hand.
 
 ## Memory scope (packs)
 
 Memory is **one shared store by default**, every sandbox reads and writes the
 same rows. There is no standalone "profiles" feature; scoping is a property of
-the active **pack** (see `pi-stack pack`). A pack's `memory_scope` in its
+the active **pack** (see `pix pack`). A pack's `memory_scope` in its
 manifest controls it:
 
 - **No explicit `memory_scope`** (the common case, including a bare pack name):
   memory stays the shared default. Adopting a pack does not silently wall off
   your memory.
-- **An explicit `memory_scope = "work"`**: `pi-stack run` writes it to
-  `<workspace>/.pi-stack/profile`, and recall/capture in that sandbox scope to
+- **An explicit `memory_scope = "work"`**: `pix run` writes it to
+  `<workspace>/.pix/profile`, and recall/capture in that sandbox scope to
   `{that scope} ∪ {default}`, a scoped session sees its own rows plus the
   shared ones, but a different scope's rows stay invisible.
 
@@ -210,7 +210,7 @@ lands, rely on the loopback bind (and an auth proxy for shared hosts), and treat
 | --- | --- | --- |
 | `MEMORY_PORT` | `11435` | daemon port |
 | `MEMORY_BIND` | `127.0.0.1` | bind address (keep it loopback) |
-| `MEMORY_DB` | `~/.local/share/pi-stack/memory/memory.db` | store path |
+| `MEMORY_DB` | `~/.local/share/pix/memory/memory.db` | store path |
 | `MEMORY_EMBED_MODEL` | (config) | Ollama embedding model for recall ranking |
 | `MEMORY_WATCHER_MODEL` | (config) | Ollama model for capture extraction |
 | `OLLAMA_HOST` | Ollama default | where the daemon reaches Ollama |

@@ -86,7 +86,7 @@ test("Dockerfile and host pin the same pi + curated packages", () => {
 	assert.ok(todoPackage, "Dockerfile must pin pi-manage-todo-list");
 
 	const hostRun = fs.readFileSync(
-		path.join(repoRoot, "services/host/cmd/pi-stack/hostrun.go"),
+		path.join(repoRoot, "services/host/cmd/pix/hostrun.go"),
 		"utf8",
 	);
 	const hostPackagesBlock = hostRun.match(/var hostPiPackages = \[\]string\{([\s\S]*?)\n\}/)?.[1];
@@ -96,7 +96,7 @@ test("Dockerfile and host pin the same pi + curated packages", () => {
 });
 
 test("tui bottom-pin patch applies to a fixture pi-tui and passes the render harness", (t) => {
-	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-stack-patches-tui-"));
+	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pix-patches-tui-"));
 	t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
 
 	const npmPrefix = path.join(temp, "npm-global");
@@ -129,7 +129,7 @@ test("tui bottom-pin patch applies to a fixture pi-tui and passes the render har
 });
 
 test("tui bottom-pin patch catches upstream drift instead of silently applying", (t) => {
-	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-stack-patches-tui-broken-"));
+	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pix-patches-tui-broken-"));
 	t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
 
 	const npmPrefix = path.join(temp, "npm-global");
@@ -164,7 +164,7 @@ test("tui bottom-pin patch catches upstream drift instead of silently applying",
 });
 
 test("todo durable-clear patch applies to a fixture pi-manage-todo-list", async (t) => {
-	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-stack-patches-todo-"));
+	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pix-patches-todo-"));
 	t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
 
 	const home = path.join(temp, "home");
@@ -177,8 +177,8 @@ test("todo durable-clear patch applies to a fixture pi-manage-todo-list", async 
 	assert.match(run(process.execPath, [todoPatch], env), /already patched/);
 	const indexPath = path.join(todoRoot, "dist/index.js");
 	const stateManagerPath = path.join(todoRoot, "dist/state-manager.js");
-	assert.equal(markerCount(indexPath, "pi-stack-todo-cleared"), 1);
-	assert.equal(markerCount(stateManagerPath, "pi-stack-todo-cleared"), 1);
+	assert.equal(markerCount(indexPath, "pix-todo-cleared"), 1);
+	assert.equal(markerCount(stateManagerPath, "pix-todo-cleared"), 1);
 	run(process.execPath, ["--check", indexPath], env);
 	run(process.execPath, ["--check", stateManagerPath], env);
 
@@ -192,7 +192,7 @@ test("todo durable-clear patch applies to a fixture pi-manage-todo-list", async 
 			details: { todos: [todo(title)] },
 		},
 	});
-	const clear = { type: "custom", customType: "pi-stack-todo-cleared" };
+	const clear = { type: "custom", customType: "pix-todo-cleared" };
 	const manager = new TodoStateManager();
 	manager.loadFromSession({ sessionManager: { getBranch: () => [result("stale"), clear] } });
 	assert.deepEqual(manager.read(), []);
@@ -203,7 +203,7 @@ test("todo durable-clear patch applies to a fixture pi-manage-todo-list", async 
 });
 
 test("todo durable-clear patch catches upstream drift instead of silently applying", (t) => {
-	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-stack-patches-todo-broken-"));
+	const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pix-patches-todo-broken-"));
 	t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
 
 	const home = path.join(temp, "home");

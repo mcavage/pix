@@ -537,7 +537,7 @@ test("every memory tool description states direct-daemon access and never shelli
 	const { tools } = capturePi(mod);
 	for (const name of ["memory_recall", "memory_stats"]) {
 		const d = tools.get(name).description;
-		assert.match(d, /never shell out to `pi-stack` or `curl`/, `${name} description`);
+		assert.match(d, /never shell out to `pix` or `curl`/, `${name} description`);
 		assert.match(d, /durable memories have no automatic expiry/i, `${name} description`);
 		assert.match(d, /perishable and expire after 7 days/i, `${name} description`);
 	}

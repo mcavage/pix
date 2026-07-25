@@ -1,8 +1,8 @@
-// pi-stack — live wiretap mirror for `pi-stack monitor` (client side / Unit D).
+// pix — live wiretap mirror for `pix monitor` (client side / Unit D).
 //
 // Taps pi's turn/tool/model hooks, summarizes each provider request/response
 // and tool call (never the raw text — hashes + short previews + byte counts),
-// and ships NDJSON events to a host-side `pi-stack monitor` process over
+// and ships NDJSON events to a host-side `pix monitor` process over
 // node:http. Pure debug mirror: when the host process isn't running, sends
 // fail fast, back off, and the agent is never blocked or slowed down.
 //
@@ -10,8 +10,8 @@
 // (frozen; Go source of truth is `services/host/monitor/event.go`). This file
 // owns nothing else — it knows the JSON shape, never the Go types.
 //
-//   PI_STACK_MONITOR_URL   default http://host.docker.internal:11437
-//   PI_STACK_MONITOR       "0" disables the extension entirely
+//   PIX_MONITOR_URL   default http://host.docker.internal:11437
+//   PIX_MONITOR       "0" disables the extension entirely
 //
 // pi hook payload field names for `before_provider_request` are intentionally
 // `unknown` in pi's own types (it's the provider-specific wire body, which
@@ -30,8 +30,8 @@ import { request as httpRequest, type ClientRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const MONITOR_URL = process.env.PI_STACK_MONITOR_URL ?? "http://host.docker.internal:11437";
-const MONITOR_ENABLED = process.env.PI_STACK_MONITOR !== "0";
+const MONITOR_URL = process.env.PIX_MONITOR_URL ?? "http://host.docker.internal:11437";
+const MONITOR_ENABLED = process.env.PIX_MONITOR !== "0";
 const SANDBOX_ID = process.env.SANDBOX_VM_ID ?? "";
 
 const MAX_QUEUE = 500; // bounded in-VM queue; backpressure drops OLDEST, never blocks the agent
@@ -135,18 +135,18 @@ export function estimateTokens(bytes: number): number {
 	return Math.max(0, Math.round(bytes / 4));
 }
 
-// Matches a `pi` or `pi-stack` COMMAND TOKEN — anchored at the start of the
+// Matches a `pi` or `pix` COMMAND TOKEN — anchored at the start of the
 // string or right after a shell separator (whitespace, `;`, `&`, `|`, `(`),
 // and followed by whitespace/quote/end — so it never substring-matches
 // inside another word (`pip`, `api`, `spider`, `--provider`). A literal
 // newline (multi-line bash, e.g. a `for ... do pi --print ...; done` loop) is
 // a separator too: \s covers \n. Mirrors `piInvocationRe` in
-// `services/host/cmd/pi-stack/monitor_tui.go` (`toolInvokesPi`) — keep the
+// `services/host/cmd/pix/monitor_tui.go` (`toolInvokesPi`) — keep the
 // two in sync if either changes.
-const PI_INVOCATION_RE = /(^|[\s;&|(])(pi|pi-stack)([\s"']|$)/i;
+const PI_INVOCATION_RE = /(^|[\s;&|(])(pi|pix)([\s"']|$)/i;
 
 /**
- * True when `cmd` actually RUNS `pi`/`pi-stack` as a command (as opposed to
+ * True when `cmd` actually RUNS `pi`/`pix` as a command (as opposed to
  * merely mentioning something that contains those letters as a substring).
  * Computed against the FULL, untruncated command text — never against
  * `truncatePreview`'s 200-char-capped `argsSummary` — so a long multi-line
@@ -289,7 +289,7 @@ export function extractToolDefs(payload: any): Array<{ name: string }> {
 // the `<server>__<tool>` double-underscore namespacing convention used by
 // several MCP bridges. It is deliberately NOT trusted as the sole signal
 // (see `classifyToolSource`/`isMcpSourceInfo` below): real sbx-gateway tools
-// registered by pi-stack (`slack_post`, `gmail_search`, `drive_get` — see
+// registered by pix (`slack_post`, `gmail_search`, `drive_get` — see
 // AGENTS.md "MCP host servers go through the sbx gateway") use a single
 // underscore and don't match this regex at all, so live tool metadata is
 // checked first whenever it's available.
@@ -851,7 +851,7 @@ function httpPostRaw(urlStr: string, bodyText: string, timeoutMs: number, onRequ
 
 export default function (pi: ExtensionAPI) {
 	safe(() => {
-		if (!MONITOR_ENABLED) return; // PI_STACK_MONITOR=0: cheap no-op, register nothing
+		if (!MONITOR_ENABLED) return; // PIX_MONITOR=0: cheap no-op, register nothing
 
 		// Captured once per instance so a mid-session swap can't half-apply.
 		const clock = activeRetryClock;

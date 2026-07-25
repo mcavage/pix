@@ -8,7 +8,7 @@ name: publish
 # Why: sbx caches materialized templates PER TAG NAME and won't re-pull a tag it
 # already has. A moving tag (:edge/:latest) therefore goes stale until you evict
 # it by hand. A brand-new version tag every push sidesteps that entirely — sbx
-# has never seen :0.0.N, so `sbx run pi-stack --kit git+...` (which reads the
+# has never seen :0.0.N, so `sbx run pix --kit git+...` (which reads the
 # pinned image out of pi-kit/spec.yaml on main) always pulls a fresh image with
 # NO --template flag and NO `sbx template rm`. spec.yaml on main always points at
 # the latest published version because the bump job commits it back.
@@ -37,7 +37,7 @@ permissions:
   contents: write # the bump job commits the version bump back to main
 
 env:
-  IMAGE: docker.io/${{ vars.DOCKER_USER || 'mcavage' }}/pi-stack
+  IMAGE: docker.io/${{ vars.DOCKER_USER || 'mcavage' }}/pix
 
 jobs:
   version:
@@ -160,12 +160,12 @@ jobs:
           V="${{ needs.version.outputs.version }}"
           sed -i -E "s/^VERSION[[:space:]]*\?=.*/VERSION     ?= $V/" Makefile
           sed -i -E "s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*\"/\1$V\"/" package.json
-          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pi-stack:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
+          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pix:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       # One Docker Hub PAT authenticates both registries (DHI is gated by your
-      # Docker account). dhi.io = pull the base; docker.io = push pi-stack.
+      # Docker account). dhi.io = pull the base; docker.io = push pix.
       - name: Log in to DHI (pull the hardened base)
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
@@ -241,7 +241,7 @@ jobs:
           V="${{ needs.version.outputs.version }}"
           sed -i -E "s/^VERSION[[:space:]]*\?=.*/VERSION     ?= $V/" Makefile
           sed -i -E "s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*\"/\1$V\"/" package.json
-          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pi-stack:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
+          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pix:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
           if git diff --quiet; then echo "no version change — nothing to commit"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -249,7 +249,7 @@ jobs:
           git commit -m "chore: publish $V [skip ci]"
           git push
 
-      # Tag the stamped commit so the launcher's kit pin resolves. The `pi-stack`
+      # Tag the stamped commit so the launcher's kit pin resolves. The `pix`
       # launcher pins the kit to its own release via
       # `--kit "git+...#ref=v<version>&dir=pi-kit"`, so every published version
       # needs a matching annotated tag `v<version>` on the commit that carries the
@@ -265,10 +265,10 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "v$V" -m "pi-stack v$V"
+          git tag -a "v$V" -m "pix v$V"
           git push origin "v$V"
 
-  # Cross-compile the two HOST binaries (pi-stack launcher + pi-stack-host) for
+  # Cross-compile the two HOST binaries (pix launcher + pix-host) for
   # darwin/linux × amd64/arm64 and attach them, plus a SHA256SUMS, to the v<VER>
   # GitHub Release. This is the repo-less install path: `install.sh` fetches these
   # assets so a consumer never clones. Pure Go toolchain — no Docker, no DHI base.
@@ -294,7 +294,7 @@ jobs:
       # -X main.version stamps the launcher (its `var version`); the host binary has
       # no such symbol, so the linker silently ignores the flag there — harmless, and
       # keeps one build recipe for both. Output names match install.sh's URL pattern:
-      # pi-stack-<os>-<arch> and pi-stack-host-<os>-<arch>.
+      # pix-<os>-<arch> and pix-host-<os>-<arch>.
       - name: Cross-compile both binaries
         working-directory: services/host
         env:
@@ -307,22 +307,22 @@ jobs:
             echo "building $os/$arch"
             GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
               go build -ldflags "-X main.version=$V" \
-              -o "$GITHUB_WORKSPACE/dist/pi-stack-$os-$arch" ./cmd/pi-stack
+              -o "$GITHUB_WORKSPACE/dist/pix-$os-$arch" ./cmd/pix
             GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
               go build -ldflags "-X main.version=$V" \
-              -o "$GITHUB_WORKSPACE/dist/pi-stack-host-$os-$arch" ./
+              -o "$GITHUB_WORKSPACE/dist/pix-host-$os-$arch" ./
           done
 
       - name: Generate SHA256SUMS
         working-directory: dist
-        run: sha256sum pi-stack-* > SHA256SUMS && cat SHA256SUMS
+        run: sha256sum pix-* > SHA256SUMS && cat SHA256SUMS
 
       - name: Upload assets to the v<version> release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: v${{ needs.version.outputs.version }}
-          name: pi-stack v${{ needs.version.outputs.version }}
+          name: pix v${{ needs.version.outputs.version }}
           files: |
-            dist/pi-stack-*
+            dist/pix-*
             dist/SHA256SUMS
           fail_on_unmatched_files: true

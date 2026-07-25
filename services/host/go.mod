@@ -1,4 +1,4 @@
-module pi-stack/host
+module pix/host
 
 go 1.26
 

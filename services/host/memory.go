@@ -1,4 +1,4 @@
-// pi-stack memory service (host side). Port of mcp/memory/{server,store,embeddings,
+// pix memory service (host side). Port of mcp/memory/{server,store,embeddings,
 // watcher}.ts. JSON-RPC 2.0 over HTTP; pure-Go sqlite (modernc) with FTS5 + a
 // JSON-stored embedding per row; embeddings + the capture "watcher" run against
 // the host's Ollama. One global store every sandbox talks to over
@@ -12,7 +12,7 @@
 // on a shared host without putting an auth proxy in front.
 //
 // Env: MEMORY_PORT (11435), MEMORY_BIND (127.0.0.1), MEMORY_DB
-// (~/.local/share/pi-stack/memory/memory.db), OLLAMA_HOST, MEMORY_EMBED_MODEL,
+// (~/.local/share/pix/memory/memory.db), OLLAMA_HOST, MEMORY_EMBED_MODEL,
 // MEMORY_WATCHER_MODEL, MEMORY_SYNTH_MS.
 
 package main
@@ -38,7 +38,7 @@ import (
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
-	"pi-stack/host/config"
+	"pix/host/config"
 )
 
 const (
@@ -161,7 +161,7 @@ func newMemStore(path string, embedder func(string) []float64) (*memStore, error
 		return nil, err
 	}
 	if curVersion > 1 {
-		return nil, fmt.Errorf("database schema v%d is newer than this binary supports (1), upgrade pi-stack", curVersion)
+		return nil, fmt.Errorf("database schema v%d is newer than this binary supports (1), upgrade pix", curVersion)
 	}
 	if _, err := db.Exec(memSchema); err != nil {
 		return nil, err
@@ -435,7 +435,7 @@ func (s *memStore) recall(query string, limit, charBudget int, kind, project, pr
 	// Explicit, deterministic "list everything" semantics: the literal query "*"
 	// (trimmed) bypasses FTS and embedding relevance entirely and just returns the
 	// newest memories visible to the requested profile/project, respecting limit
-	// and charBudget. This is what `pi-stack memory recall '*'` and a blank
+	// and charBudget. This is what `pix memory recall '*'` and a blank
 	// sandbox /recall both send, and it must work even with no FTS match and no
 	// embedder configured (keyword-only store, or Ollama down), a relevance-
 	// scored query can legitimately return nothing in that case, but "show me
@@ -853,7 +853,7 @@ func newMemoryMux(store *memStore, hasEmb bool) http.Handler {
 	methods := map[string]func(jsonObj) (any, error){
 		"health": func(jsonObj) (any, error) {
 			// watcherCaptureAvailable re-probes (throttled) so health reflects a live
-			// recovery after `ollama pull`, and so `pi-stack doctor` reads the truth.
+			// recovery after `ollama pull`, and so `pix doctor` reads the truth.
 			capture := watcherCaptureAvailable()
 			reason := ""
 			if !capture {

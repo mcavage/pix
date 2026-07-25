@@ -1,4 +1,4 @@
-// pi-stack, auto-recall injector (client side).
+// pix, auto-recall injector (client side).
 //
 // Before every turn, ask the host memory service for a small high-signal working
 // set for what you're about to do, and APPEND it to the message list. No
@@ -91,7 +91,7 @@ async function rpc(method: string, params: any, timeoutMs: number = TIMEOUT_MS):
 }
 
 // The active profile scopes recall/capture (recall sees {profile}∪{default};
-// captures stamp it). The launcher writes it to <cwd>/.pi-stack/profile per run,
+// captures stamp it). The launcher writes it to <cwd>/.pix/profile per run,
 // mirroring knowledge-recall.ts's scope file. Absent => "default" (the shared
 // bucket), so an un-launched sandbox keeps the backward-compatible behavior.
 //
@@ -100,7 +100,7 @@ async function rpc(method: string, params: any, timeoutMs: number = TIMEOUT_MS):
 // NOT diverge onto different profiles. Never throws at load (try/catch).
 const ACTIVE_PROFILE: string = (() => {
 	try {
-		const raw = readFileSync(join(process.cwd(), ".pi-stack", "profile"), "utf8").trim();
+		const raw = readFileSync(join(process.cwd(), ".pix", "profile"), "utf8").trim();
 		return raw || "default";
 	} catch {
 		return "default"; // missing file is the normal, un-scoped case
@@ -223,7 +223,7 @@ export async function buildRecallBlock(
 // POST directly to the daemon. It only says this specific tool surface (the
 // two tools below) is read-only by design.
 const MEMORY_TOOL_SEMANTICS =
-	"Reaches the host memory daemon directly over host.docker.internal, never shell out to `pi-stack` or `curl`. " +
+	"Reaches the host memory daemon directly over host.docker.internal, never shell out to `pix` or `curl`. " +
 	"Only a small relevance-filtered subset of memory is silently injected into context each turn; this tool can return up to 100 rows visible to the active profile, not the whole store. " +
 	"Durable memories have no automatic expiry. Watcher-captured events are perishable and expire after 7 days. " +
 	"This tool surface is read-only: it can inspect memory but cannot store or delete it. Writing (`/remember`) and deleting (`/forget`) are human-driven slash commands, not agent tools, " +
@@ -307,7 +307,7 @@ export default function (pi: any) {
 			MEMORY_CAPTURE_HONESTY_GUIDELINE,
 		],
 		description: [
-			"Query the memory store for what pi-stack remembers. Use this when the user asks what is remembered, asks about memory semantics or what's currently stored, or asks whether the agent can see memory, do not guess or answer from context alone.",
+			"Query the memory store for what pix remembers. Use this when the user asks what is remembered, asks about memory semantics or what's currently stored, or asks whether the agent can see memory, do not guess or answer from context alone.",
 			MEMORY_TOOL_SEMANTICS,
 		].join(" "),
 		parameters: MemoryRecallParams as any,
@@ -353,7 +353,7 @@ export default function (pi: any) {
 		description: "Show what memory would recall for a query (blank = show all, up to 100)",
 		handler: async (args: any, ctx: any) => {
 			// A bare `/recall` means "show everything", matching the host CLI's
-			// `pi-stack memory recall '*'`, not an empty (and therefore useless) query.
+			// `pix memory recall '*'`, not an empty (and therefore useless) query.
 			const query = String(args ?? "").trim() || "*";
 			const isAll = query === "*";
 			// Deliberately NOT wrapped in safe(): this is a user-invoked command, so a

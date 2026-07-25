@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 ###############################################################################
-# pi-stack — multi-model pi coding agent on a Docker Hardened (DHI) Debian base
+# pix — multi-model pi coding agent on a Docker Hardened (DHI) Debian base
 #
 # Mirrors the conventions sbx expects of a sandbox image (reverse-engineered
 # from docker/sandbox-templates:shell):
@@ -54,8 +54,8 @@ RUN npm install -g --ignore-scripts "${PI_PACKAGE}" \
 # installed renderer at build time. The script is idempotent and NON-FATAL: if a
 # future pi version moves the anchor it warns and leaves the file unpatched
 # rather than failing the build. Full writeup: docs/upstream/tui-bottom-pin.md.
-COPY scripts/patches/ /usr/local/share/pi-stack/patches/
-RUN node /usr/local/share/pi-stack/patches/apply-tui-bottom-pin.mjs
+COPY scripts/patches/ /usr/local/share/pix/patches/
+RUN node /usr/local/share/pix/patches/apply-tui-bottom-pin.mjs
 
 # --- build toolchain (native npm modules + dev typecheck) ---------------------
 # build-essential + python3 so native npm modules (node-pty etc.) compile;
@@ -106,8 +106,8 @@ RUN set -eux; \
     fd --version
 
 # --- Go toolchain via the official tarball -------------------------------------
-# HOST code is Go (services/host -> pi-stack-host); baking the toolchain lets you
-# build + test it FROM INSIDE a sandbox when hacking on pi-stack itself. NOT from
+# HOST code is Go (services/host -> pix-host); baking the toolchain lets you
+# build + test it FROM INSIDE a sandbox when hacking on pix itself. NOT from
 # apt: Debian trixie ships golang ~1.24, but services/host/go.mod requires `go
 # 1.26`, so an older apt Go would force a per-build GOTOOLCHAIN network download
 # (or fail). Pinning the tarball to match go.mod is deterministic and offline
@@ -160,7 +160,7 @@ COPY --chown=agent:agent mcp.json          /home/agent/.pi/agent/mcp.json
 COPY --chown=agent:agent capabilities.json /home/agent/.pi/agent/capabilities.json
 # routing.json is the model router's compiled intent->model map (same swap-one-file
 # pattern as capabilities.json, but for MODELS). Agents declare an `intent:` and
-# subagents.ts resolves it here. Regenerate on the host with `pi-stack route
+# subagents.ts resolves it here. Regenerate on the host with `pix route
 # compile` after editing services/host/routing/scorecard.json. See
 # docs/design/routing.md.
 COPY --chown=agent:agent routing.json      /home/agent/.pi/agent/routing.json
@@ -188,7 +188,7 @@ ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16,host.docker.internal \
 RUN touch /etc/sandbox-persistent.sh && chmod 0644 /etc/sandbox-persistent.sh
 
 LABEL com.docker.sandboxes="kit" \
-      org.opencontainers.image.title="pi-stack" \
+      org.opencontainers.image.title="pix" \
       org.opencontainers.image.description="Multi-model pi coding agent on a DHI Debian base"
 
 USER agent
@@ -228,13 +228,13 @@ RUN set -eux; for p in \
 
 # `/todos clear` in pi-manage-todo-list 0.4.0 clears only live memory. Persist
 # the clear marker so session resume and compaction continuation respect it.
-RUN node /usr/local/share/pi-stack/patches/apply-todo-durable-clear.mjs
+RUN node /usr/local/share/pix/patches/apply-todo-durable-clear.mjs
 
 # Bound the subagent result-wait so a dead subagent can't park the event loop
 # (Esc-proof hang). Idempotent + non-fatal. DISABLED alongside pi-subagents above
 # (nothing to patch); it also proved insufficient — on 0.80.x the wait isn't the
 # `await` this patches, so it never fired. Re-enable with the extension.
-# RUN node /usr/local/share/pi-stack/patches/apply-subagent-timeout.mjs
+# RUN node /usr/local/share/pix/patches/apply-subagent-timeout.mjs
 
 WORKDIR /home/agent/workspace
 CMD ["pi"]

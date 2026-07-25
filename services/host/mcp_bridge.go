@@ -1,4 +1,4 @@
-// The `pi-stack-host mcp <name>` bridge: a compiled stdio MCP server that the
+// The `pix-host mcp <name>` bridge: a compiled stdio MCP server that the
 // sbx gateway spawns and that forwards every tools/list + tools/call to a
 // plugin.McpServer implementation.
 //
@@ -22,8 +22,8 @@ import (
 	"os"
 	"sort"
 
-	"pi-stack/host/config"
-	"pi-stack/host/plugin"
+	"pix/host/config"
+	"pix/host/plugin"
 )
 
 // builtinMcpServerFor resolves a bridge name to its IN-PROCESS built-in McpServer
@@ -47,10 +47,10 @@ func builtinMcpServerFor(name string) (plugin.McpServer, error) {
 }
 
 // builtinMcpNames returns the sorted names this binary can serve locally as a
-// `pi-stack-host mcp <name>` stdio bridge: today just "slack". gog is
+// `pix-host mcp <name>` stdio bridge: today just "slack". gog is
 // DELIBERATELY excluded — it is the external Google Workspace CLI, not served by
 // this bridge. This is the source of truth for "is <name> a local stdio server"
-// that the launcher (`pi-stack mcp register`) and doctor consult via `mcp --list`.
+// that the launcher (`pix mcp register`) and doctor consult via `mcp --list`.
 func builtinMcpNames() []string {
 	names := []string{"slack"}
 	sort.Strings(names)
@@ -59,7 +59,7 @@ func builtinMcpNames() []string {
 
 // runMcpList prints, one per line, the MCP server names this binary can serve
 // locally (builtinMcpNames). Exit 0. It is the introspection mode
-// `pi-stack-host mcp --list` / `mcp list`.
+// `pix-host mcp --list` / `mcp list`.
 func runMcpList() {
 	for _, n := range builtinMcpNames() {
 		fmt.Println(n)
@@ -68,18 +68,18 @@ func runMcpList() {
 
 // runMcpListTools resolves the named built-in server and prints its tool names,
 // one per line, then EXITS — it never enters the stdio loop. This is the
-// bounded, fast, network-free introspection mode `pi-stack-host mcp <name>
+// bounded, fast, network-free introspection mode `pix-host mcp <name>
 // --list-tools`, used by doctor to probe a registration without a hanging
 // gateway handshake. An unknown name is a non-zero exit with a stderr message.
 func runMcpListTools(name string) {
 	srv, err := builtinMcpServerFor(name)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "pi-stack-host mcp: "+err.Error())
+		fmt.Fprintln(os.Stderr, "pix-host mcp: "+err.Error())
 		os.Exit(2)
 	}
 	tools, err := srv.ListTools()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "pi-stack-host mcp: "+err.Error())
+		fmt.Fprintln(os.Stderr, "pix-host mcp: "+err.Error())
 		os.Exit(1)
 	}
 	for _, t := range tools {
@@ -222,7 +222,7 @@ func toolSpecToMcpTool(sp plugin.ToolSpec) mcpTool {
 	return t
 }
 
-// runMcpSubcommand dispatches the `pi-stack-host mcp ...` argv across the three
+// runMcpSubcommand dispatches the `pix-host mcp ...` argv across the three
 // modes: `--list`/`list` (print servable names), `<name> --list-tools`
 // (introspect a server's tools and exit), and the default `<name>` stdio bridge.
 // The introspection modes are bounded + network-free so callers (the launcher,
@@ -230,7 +230,7 @@ func toolSpecToMcpTool(sp plugin.ToolSpec) mcpTool {
 // without spawning a hanging gateway handshake.
 func runMcpSubcommand(argv []string) {
 	if len(argv) == 0 {
-		fmt.Fprintln(os.Stderr, "pi-stack-host mcp: missing <name> (or --list)")
+		fmt.Fprintln(os.Stderr, "pix-host mcp: missing <name> (or --list)")
 		os.Exit(2)
 	}
 	if argv[0] == "--list" || argv[0] == "list" {
@@ -247,7 +247,7 @@ func runMcpSubcommand(argv []string) {
 	runMcpBridge(name)
 }
 
-// runMcpBridge is the body for the `pi-stack-host mcp <name>` subcommand. It
+// runMcpBridge is the body for the `pix-host mcp <name>` subcommand. It
 // resolves the McpServer, builds a dispatcher that proxies to it, and serves it
 // over the newline-delimited-JSON stdio transport the gateway speaks.
 //
@@ -259,14 +259,14 @@ func runMcpSubcommand(argv []string) {
 func runMcpBridge(name string) {
 	srv, cleanup, err := mcpServerFor(name)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "pi-stack-host mcp: "+err.Error())
+		fmt.Fprintln(os.Stderr, "pix-host mcp: "+err.Error())
 		cleanup()
 		os.Exit(2)
 	}
 	defer cleanup()
 	serverName, tools, handlers, err := bridgeFromMcpServer(srv)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "pi-stack-host mcp: "+err.Error())
+		fmt.Fprintln(os.Stderr, "pix-host mcp: "+err.Error())
 		cleanup()
 		os.Exit(1)
 	}

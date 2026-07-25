@@ -1,36 +1,37 @@
 #!/bin/sh
-# pi-stack installer — fetches the two host binaries (pi-stack + pi-stack-host)
+# pix installer — fetches the two host binaries (pix + pix-host)
 # from a GitHub release and drops them in ~/.local/bin. No repo checkout, no sudo.
 #
-#   curl -fsSL https://raw.githubusercontent.com/mcavage/pi-stack/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/mcavage/pix/main/install.sh | sh
 #
 # Inspect before you pipe to a shell — the source is right here:
-#   https://github.com/mcavage/pi-stack/blob/main/install.sh
+#   https://github.com/mcavage/pix/blob/main/install.sh
 #
 # What it does:
 #   - detects your OS (darwin/linux) + arch (amd64/arm64)
-#   - resolves the latest release (or PI_STACK_VERSION if you set one)
-#   - downloads pi-stack-<os>-<arch>, pi-stack-host-<os>-<arch>, and SHA256SUMS
+#   - resolves the latest release (or PIX_VERSION if you set one)
+#   - downloads pix-<os>-<arch>, pix-host-<os>-<arch>, and SHA256SUMS
 #   - verifies each binary's sha256 against SHA256SUMS (aborts on mismatch)
 #   - installs both to ~/.local/bin (chmod +x), never touching an existing config
 #
 # Env knobs:
-#   PI_STACK_VERSION   pin a version (e.g. 0.0.42); default resolves 'latest'
-#   PI_STACK_PREFIX    install dir (default: ~/.local/bin)
-#   PI_STACK_DRYRUN=1  print the resolved URLs + paths, download nothing
+#   PIX_VERSION   pin a version (e.g. 0.0.42); default resolves 'latest'
+#   PIX_PREFIX    install dir (default: ~/.local/bin)
+#   PIX_DRYRUN=1       print the resolved URLs + paths, download nothing
+#   PIX_FORCE_INSTALL=1 override an existing unrelated `pix` command
 #
 # Uninstall:
 #   curl -fsSL .../install.sh | sh -s -- --uninstall
 set -eu
 
-REPO="mcavage/pi-stack"
+REPO="mcavage/pix"
 GH="https://github.com/${REPO}"
-PREFIX="${PI_STACK_PREFIX:-${HOME}/.local/bin}"
-CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/pi-stack"
+PREFIX="${PIX_PREFIX:-${HOME}/.local/bin}"
+CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/pix"
 CONFIG_FILE="${CONFIG_DIR}/config.toml"
 SOURCE_URL="${GH}/blob/main/install.sh"
 
-BINARIES="pi-stack pi-stack-host"
+BINARIES="pix pix-host"
 
 log()  { printf '%s\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
@@ -129,11 +130,11 @@ do_install() {
 	os="${platform% *}"
 	arch="${platform#* }"
 
-	if [ -n "${PI_STACK_VERSION:-}" ]; then
-		ver="$PI_STACK_VERSION"
-	elif [ "${PI_STACK_DRYRUN:-}" = "1" ]; then
+	if [ -n "${PIX_VERSION:-}" ]; then
+		ver="$PIX_VERSION"
+	elif [ "${PIX_DRYRUN:-}" = "1" ]; then
 		# Don't hit the network in a dry run; show a placeholder.
-		ver="${PI_STACK_VERSION:-<latest>}"
+		ver="${PIX_VERSION:-<latest>}"
 	else
 		log "Resolving latest release..."
 		ver="$(resolve_latest)"
@@ -142,7 +143,7 @@ do_install() {
 	base="${GH}/releases/download/v${ver}"
 	sums_url="${base}/SHA256SUMS"
 
-	if [ "${PI_STACK_DRYRUN:-}" = "1" ]; then
+	if [ "${PIX_DRYRUN:-}" = "1" ]; then
 		log "DRY RUN — nothing will be downloaded or written."
 		log "Source: ${SOURCE_URL}"
 		log "Platform: ${os}/${arch}"
@@ -153,18 +154,28 @@ do_install() {
 			log "Download:  ${base}/${asset}"
 			log "Install:   ${PREFIX}/${b}"
 		done
-		log "Config:    ${CONFIG_FILE} (seeded by 'pi-stack setup', left untouched here)"
+		log "Config:    ${CONFIG_FILE} (seeded by 'pix setup', left untouched here)"
 		return 0
+	fi
+
+	preflight_collision
+	check_required_prereqs
+
+	if [ -x "${PREFIX}/pix" ] && [ -x "${PREFIX}/pix-host" ]; then
+		current="$(${PREFIX}/pix version 2>/dev/null || true)"
+		case "$current" in
+			*"${ver}"*) log "install: Pix ${ver} is already current at ${PREFIX}"; return 0 ;;
+		esac
 	fi
 
 	[ -n "$DL" ] || die "need curl or wget on PATH"
 
-	tmp="$(mktemp -d "${TMPDIR:-/tmp}/pi-stack-install.XXXXXX")"
+	tmp="$(mktemp -d "${TMPDIR:-/tmp}/pix-install.XXXXXX")"
 	# shellcheck disable=SC2064
 	trap "rm -rf '$tmp'" EXIT INT TERM
 
-	# Verify-all-then-install-all: a partial install (new pi-stack + stale
-	# pi-stack-host, or vice versa) is a mismatched pair that can misbehave subtly.
+	# Verify-all-then-install-all: a partial install (new pix + stale
+	# pix-host, or vice versa) is a mismatched pair that can misbehave subtly.
 	# So stage EVERYTHING in the temp dir and verify EVERY checksum first; only
 	# once all binaries are downloaded, verified, and made executable do we move
 	# any into place. Any failure before that point installs nothing (the temp dir
@@ -194,7 +205,7 @@ do_install() {
 report() {
 	os="$1"; arch="$2"; ver="$3"
 	log ""
-	log "Installed pi-stack v${ver} (${os}/${arch}):"
+	log "Installed pix v${ver} (${os}/${arch}):"
 	for b in $BINARIES; do
 		info "${PREFIX}/${b}"
 	done
@@ -206,8 +217,16 @@ report() {
 			;;
 		*)
 			log ""
-			log "${PREFIX} is NOT on your PATH. Add it (then restart your shell):"
+			shell_name="$(basename "${SHELL:-sh}")"
+			case "$shell_name" in
+				zsh) rc="${HOME}/.zshrc" ;;
+				bash) rc="${HOME}/.bashrc" ;;
+				*) rc="${HOME}/.profile" ;;
+			esac
+			log "Add Pix to PATH in ${rc}:"
 			info "export PATH=\"${PREFIX}:\$PATH\""
+			log "Then reload the named shell:"
+			info "exec \"${SHELL:-/bin/sh}\" -l"
 			;;
 	esac
 
@@ -216,42 +235,45 @@ report() {
 		log "Existing config left untouched: ${CONFIG_FILE}"
 	fi
 
-	check_prereqs
 
 	log ""
 	log "Next:"
-	info "pi-stack setup"
+	info "pix setup"
 }
 
-# check_prereqs warns (never installs, never fails) about the two host tools
-# pi-stack requires: the 1Password CLI `op` (the ONLY provider-key source — setup
-# resolves op:// refs into sbx and refuses without it) and `sbx` (Docker
-# Sandboxes; the credential/kit model needs a recent nightly). We only guide;
-# installing software is the user's call.
-check_prereqs() {
-	if ! have op; then
-		log ""
-		log "REQUIRED: the 1Password CLI 'op' is not on your PATH."
-		info "pi-stack sources all model keys from 1Password; 'pi-stack setup' needs it."
-		info "Install:  https://developer.1password.com/docs/cli/get-started/  (macOS: brew install 1password-cli)"
-		info "Then:     op signin"
-	elif ! op whoami >/dev/null 2>&1; then
-		log ""
-		log "NOTE: 'op' is installed but no 1Password account is signed in."
-		info "Run: op signin   (setup resolves your op:// refs from it)"
+preflight_collision() {
+	found="$(command -v pix 2>/dev/null || true)"
+	[ -z "$found" ] && return 0
+	case "$found" in
+		"${PREFIX}/pix") return 0 ;;
+	esac
+	[ "${PIX_FORCE_INSTALL:-0}" = "1" ] && return 0
+	if [ -t 0 ] && [ -t 1 ]; then
+		printf 'install: an existing pix command resolves to %s; continue? [y/N] ' "$found"
+		read -r answer
+		case "$answer" in y|Y|yes|YES) return 0 ;; esac
 	fi
+	die "existing pix command at ${found}; set PIX_FORCE_INSTALL=1 to replace intentionally"
+}
 
-	if ! have sbx; then
-		log ""
-		log "REQUIRED: Docker Sandboxes 'sbx' is not on your PATH."
-		info "pi-stack runs the agent inside an sbx sandbox; a recent nightly is needed for kit-spec v2 credentials."
-		info "Install:  https://docs.docker.com/ai/sandboxes/"
+check_required_prereqs() {
+	missing=0
+	if ! have op; then
+		err "missing required dependency: op"
+		err "  fix: brew install 1password-cli"
+		missing=1
 	fi
+	if ! have sbx; then
+		err "missing required dependency: sbx"
+		err "  fix: brew install docker/tap/sbx@nightly"
+		missing=1
+	fi
+	[ "$missing" -eq 0 ] || die "install required dependencies, then run the installer again"
 }
 
 # --- uninstall --------------------------------------------------------------
 do_uninstall() {
-	log "Removing pi-stack binaries from ${PREFIX}:"
+	log "Removing pix binaries from ${PREFIX}:"
 	for b in $BINARIES; do
 		if [ -e "${PREFIX}/${b}" ]; then
 			rm -f "${PREFIX}/${b}"

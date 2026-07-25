@@ -1,7 +1,7 @@
 // Ambient shims for the pi runtime packages.
 //
 // pi loads extensions with jiti and resolves these from its OWN node_modules at
-// runtime (verified), but the pi-stack repo has no local install of them, so
+// runtime (verified), but the pix repo has no local install of them, so
 // tsserver/pi-lens would report "Cannot find module". These declarations make
 // the editor resolve the imports (typed loosely as any) without adding real
 // dependencies. They do NOT affect runtime — jiti uses the real modules.

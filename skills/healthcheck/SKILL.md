@@ -10,7 +10,7 @@ Run after a build or config change, when something feels off, or before shipping
 Two parts. Run the one the user asked for; run both for a full check ("is
 everything healthy?"). Lead with a one-line verdict per part, then the detail.
 
-- **Part A, Harness health:** is *pi-stack itself* working?
+- **Part A, Harness health:** is *pix itself* working?
 - **Part B, Code health:** is *this repo's code* in good shape?
 
 ---
@@ -39,7 +39,7 @@ This raw curl is an explicit **harness diagnostic**, it hits the daemon directly
 to verify the service itself is up, separate from whether any memory has been
 captured yet. It is NOT how a normal agent workflow reads memory; that's the
 `memory_recall`/`memory_stats` tools (or `/recall`/`/learnings` in the
-sandbox, `pi-stack memory stats` on the host), which is the path to point
+sandbox, `pix memory stats` on the host), which is the path to point
 someone at for actually using memory.
 ```bash
 curl -s -m3 -X POST "${MEMORY_URL:-http://host.docker.internal:11435}" \
@@ -47,7 +47,7 @@ curl -s -m3 -X POST "${MEMORY_URL:-http://host.docker.internal:11435}" \
 ```
 Reads as `{"ok":true,"vector":<bool>,"capture":<bool>,"captureReason":"<string>","watcherModel":"<name>"}`.
 `ok` means the daemon answered at all, "no memory service" (a failed curl)
-means the host hasn't started it (`make memory-serve` / `pi-stack serve` on the
+means the host hasn't started it (`make memory-serve` / `pix serve` on the
 host); the harness still works, recall is just empty. Given `ok`, report the
 other fields as **daemon-reported state**, not proof of a live inference:
 `vector:true` means the startup embedding probe succeeded, but a later failure
@@ -90,7 +90,7 @@ sandbox it is), and the gateway exposes its tools in A3 (group the gateway tool
 list for a `gog_*`/`gmail_*` prefix and call one cheap read-only tool, e.g. a
 `gmail_search`/`drive_search` with a tiny limit). Registered-but-0-tools IS a
 failure, it usually means the headless keyring/op-refs setup is off (run
-`pi-stack doctor` on the host, which probes the exact gateway spawn).
+`pix doctor` on the host, which probes the exact gateway spawn).
 
 ### A5. Agent roster
 ```bash

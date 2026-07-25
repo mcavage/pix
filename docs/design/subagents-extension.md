@@ -1,4 +1,4 @@
-# pi-stack subagents extension
+# pix subagents extension
 
 **Status: IMPLEMENTED** — shipped as `extensions/subagents.ts`; `/subagents doctor`
 passes. This document is the original design; the watchdog defaults and the
@@ -20,7 +20,7 @@ unstable in this stack:
   ever passes; the only recovery is killing pi from the host.
 - **pi's stock `subagent` example** spawns a child `pi --mode json` per task —
   robust in principle — but has two fatal gaps *in this sandbox*:
-  1. It spawns the child with the **full extension set** loaded. In pi-stack the
+  1. It spawns the child with the **full extension set** loaded. In pix the
      child re-loads `ollama-bridge` and the memory extensions, which
      `await new Promise(resolve => server.listen(port, resolve))`. The parent pi
      already holds those ports, so the child's `listen` emits `EADDRINUSE`, the
@@ -30,7 +30,7 @@ unstable in this stack:
   2. **No timeout of any kind.** pi has no client read timeout, so a dead SSE
      stream (a known failure mode here) spins a child forever and the parent tool
      call never returns.
-- It also **skips every pi-stack agent preset**: its discovery requires a
+- It also **skips every pix agent preset**: its discovery requires a
   `name:` frontmatter field, but our 17 agents use filename-as-name plus
   `thinking` / `max_turns`, so `discoverAgents` finds none of them.
 
@@ -75,7 +75,7 @@ final output.
 
 ## MVP scope
 
-- One self-contained file: `extensions/subagents.ts` (matches pi-stack's flat
+- One self-contained file: `extensions/subagents.ts` (matches pix's flat
   `extensions/*.ts` convention; no multi-file symlink dance).
 - Tool `subagent` with modes: single `{agent, task}`, parallel `{tasks:[...]}`,
   chain `{chain:[...]}` with `{previous}` substitution.

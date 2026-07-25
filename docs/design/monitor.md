@@ -1,4 +1,4 @@
-# pi-stack monitor — live wiretap of the agent's back-and-forth
+# pix monitor — live wiretap of the agent's back-and-forth
 
 Status: shipped (MVP). Owner: Mark.
 
@@ -9,7 +9,7 @@ before anything crosses the sandbox boundary. From the host you currently can't
 see the assembled result: what context actually got built, what the model was
 sent, what it sent back, which tools/MCPs fired with what args and results.
 
-We want `pi-stack monitor` on the host: a live, one-way mirror into a running
+We want `pix monitor` on the host: a live, one-way mirror into a running
 sandbox showing the real traffic between the agent and everything outside it.
 
 Goal is **debugging / observability**, not security audit. We tap what *pi*
@@ -50,7 +50,7 @@ sandbox: extensions/monitor.ts
    computes per-turn SUMMARIES in-VM, content-addresses big blobs by hash
    → ships NDJSON events to host.docker.internal:11437  (node:http, NO_PROXY-safe)
 
-host: pi-stack monitor   (launcher verb; hub + TUI in one process for the MVP)
+host: pix monitor   (launcher verb; hub + TUI in one process for the MVP)
    binds :11437, keeps a bounded in-memory ring + blob cache (no sqlite, no serve)
    renders the live delta view with per-stream toggles + full-payload-on-demand
 ```
@@ -63,14 +63,14 @@ proven by `extensions/memory-recall.ts` and `knowledge-recall.ts` (must use
 ### Why single-process for the MVP
 
 Live-follow only, no durable store, so no `serve` integration and no daemon.
-`pi-stack monitor` binds the port and runs the TUI. The in-VM extension connects
+`pix monitor` binds the port and runs the TUI. The in-VM extension connects
 to `host.docker.internal:11437`; if nothing is listening it silently no-ops and
 retries occasionally (best-effort, never blocks or throws — per the extension
 gotchas in AGENTS.md). Start the TUI = wiretap on; quit = wiretap off. Zero
 config.
 
 Every event carries `sandboxId` (`$SANDBOX_VM_ID`) + `sessionId` so one hub can
-host several sandboxes; `pi-stack monitor [name]` filters to one.
+host several sandboxes; `pix monitor [name]` filters to one.
 
 ## Event model (delta-first)
 
@@ -130,20 +130,20 @@ result.
 1. `extensions/monitor.ts`: tap the four hook families, build summaries + blob
    hashes in-VM, ship NDJSON over `node:http` to `:11437`. Best-effort,
    bounded queue, never blocks the agent, guarded at load.
-2. `pi-stack monitor` (Go, `cmd/pi-stack`): hub on `:11437` (POST ingest / event
+2. `pix monitor` (Go, `cmd/pix`): hub on `:11437` (POST ingest / event
    stream + blob-by-hash fetch) with a bounded ring + blob cache, plus the TUI.
 3. Toggles + delta rendering + full-payload-on-demand.
-4. Multi-sandbox filter (`pi-stack monitor [name]`).
+4. Multi-sandbox filter (`pix monitor [name]`).
 
 MVP is 1 + 2 with summaries only; toggles land in 3.
 
 ## Resolved decisions
 
 - **TUI stack:** bubbletea. Shipped as a real TUI in the host module
-  (`services/host/cmd/pi-stack/monitor_tui.go`), not a plain ANSI scroll
+  (`services/host/cmd/pix/monitor_tui.go`), not a plain ANSI scroll
   renderer.
 - **Process shape:** single-process hub + TUI in one binary, wired as the
-  `pi-stack monitor` launcher verb. No `serve` integration, no daemon, no
+  `pix monitor` launcher verb. No `serve` integration, no daemon, no
   sqlite. Start the TUI = wiretap on; quit = wiretap off.
 - **Event model:** delta-first summaries. The extension content-addresses big
   blobs (system prompt, tool schemas, messages) by hash and sends each blob

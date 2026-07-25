@@ -1,6 +1,6 @@
 //go:build !unix
 
-// lock_windows.go keeps pi-stack-host compiling on non-unix platforms (the
+// lock_windows.go keeps pix-host compiling on non-unix platforms (the
 // launcher's cross-compile gate builds the whole module). There is no
 // syscall.Flock there, so advisory locking degrades to a LOUD no-op: sqlite's
 // own file locking still protects db integrity, but the daemon-vs-restore
@@ -14,7 +14,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"pi-stack/host/config"
+	"pix/host/config"
 )
 
 // acquireLock (non-unix): no advisory flock available. Create the lock file

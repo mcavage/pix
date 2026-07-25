@@ -14,13 +14,13 @@ import (
 
 	goplugin "github.com/hashicorp/go-plugin"
 
-	"pi-stack/host/plugin"
+	"pix/host/plugin"
 )
 
 // These mirror the values runSlack()'s dispatcher reports at initialize (see
 // mcpDispatcher in util.go), so the plugin surface matches the stdio surface.
 const (
-	slackMcpServerName = "pi-stack-slack"
+	slackMcpServerName = "pix-slack"
 	slackMcpVersion    = "0.0.1"
 	slackMcpProtocol   = "2025-06-18"
 )
@@ -87,7 +87,7 @@ func (slackMcpAdapter) CallTool(name string, args json.RawMessage) (json.RawMess
 func servePluginMcp(name string) {
 	srv, err := builtinMcpServerFor(name)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "pi-stack-host plugin mcp: "+err.Error())
+		fmt.Fprintln(os.Stderr, "pix-host plugin mcp: "+err.Error())
 		os.Exit(2)
 	}
 	plugin.Serve(map[string]goplugin.Plugin{"mcp": &plugin.McpPlugin{Impl: srv}})

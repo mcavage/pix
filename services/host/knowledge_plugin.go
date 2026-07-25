@@ -21,7 +21,7 @@ package main
 import (
 	"log"
 
-	"pi-stack/host/plugin"
+	"pix/host/plugin"
 
 	goplugin "github.com/hashicorp/go-plugin"
 )

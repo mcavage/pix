@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"pi-stack/host/config"
-	"pi-stack/host/plugin"
+	"pix/host/config"
+	"pix/host/plugin"
 )
 
 // buildExampleMcp compiles examples/mcp-example to a temp binary and returns its
@@ -109,13 +109,13 @@ func TestMcpServerForUsesOverrideEvenForSlack(t *testing.T) {
 	bin, sha := buildExampleMcp(t)
 
 	// Point [plugins.mcp] at the external example binary via a temp config the
-	// loader picks up through PI_STACK_CONFIG.
+	// loader picks up through PIX_CONFIG.
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cfg := "[plugins.mcp]\nimpl = \"example\"\npath = \"" + bin + "\"\nsha = \"" + sha + "\"\n"
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PI_STACK_CONFIG", cfgPath)
+	t.Setenv("PIX_CONFIG", cfgPath)
 
 	srv, cleanup, err := mcpServerFor("slack")
 	if err != nil {

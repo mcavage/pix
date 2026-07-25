@@ -1,4 +1,4 @@
-// pi-stack-host route — the model router CLI (host side). Resolves a declared
+// pix-host route — the model router CLI (host side). Resolves a declared
 // INTENT to a concrete model from the registry + scorecard (route pick),
 // compiles the full intent->model map the sandbox reads (route compile), and
 // prints the current tables (route show / models). See docs/design/routing.md.
@@ -12,7 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"pi-stack/host/routing"
+	"pix/host/routing"
 )
 
 func runRouteHost(args []string) {
@@ -39,7 +39,7 @@ func runRouteHost(args []string) {
 }
 
 func routeUsage() {
-	fmt.Fprint(os.Stderr, `pi-stack-host route: model router
+	fmt.Fprint(os.Stderr, `pix-host route: model router
 
 usage:
   route pick <intent> [--json]   resolve one intent to a model (+ rationale)

@@ -1,4 +1,4 @@
-# pi-stack-host
+# pix-host
 
 The single compiled **Go** binary for everything that runs on the **host** (outside
 the sandbox).
@@ -13,14 +13,14 @@ flags exactly that. A compiled Go binary doing the same work runs unflagged.
 
 ```
 # non-MCP host HTTP services (run by `make serve`, reached over host.docker.internal):
-pi-stack-host memory        memory store, JSON-RPC         (:11435)
-pi-stack-host serve         run the enabled services together (SERVICES) —
+pix-host memory        memory store, JSON-RPC         (:11435)
+pix-host serve         run the enabled services together (SERVICES) —
                             supervises memory (:11435) + knowledge (:11436 when enabled)
 
 # MCP servers (stdio, run by the sbx gateway via `sbx mcp add` / `make mcp-register`):
-pi-stack-host slack         Slack read/search MCP
+pix-host slack         Slack read/search MCP
 # NB: Google Workspace (`gog`) is the EXTERNAL `gog` CLI registered as a host MCP
-#     server — NOT a pi-stack-host subcommand. See the gog bullet below.
+#     server — NOT a pix-host subcommand. See the gog bullet below.
 ```
 
 - **memory** — the self-learning store: JSON-RPC over HTTP, pure-Go sqlite + FTS5,
@@ -30,7 +30,7 @@ pi-stack-host slack         Slack read/search MCP
   `knowledge_bundles`. NOT a top-level subcommand — it runs under `serve` (and via
   `plugin knowledge`) when `knowledge` is in the enabled services set.
 - **gog** — Google Workspace read MCP. This is the **external `gog` CLI**, NOT a
-  `pi-stack-host` subcommand: it is registered as a host MCP server (via `pi-stack
+  `pix-host` subcommand: it is registered as a host MCP server (via `pix
   mcp register` / `make mcp-register`) and the sbx gateway runs it on the host once
   registered — like `slack`, but a separate binary. NOT an HTTP daemon, NOT in
   `make serve`. Creds stay on the host in `GOG_HOME` (never in the VM). **Read-only
@@ -42,7 +42,7 @@ pi-stack-host slack         Slack read/search MCP
 - **slack** — stdio MCP server. NOT an HTTP daemon, NOT in `make serve`; the MCP
   gateway runs it on the host once registered. `sbx mcp add` (local stdio) has no
   `--env`, so creds come from 1Password: the registered command is
-  `op run --env-file=config/op-refs.env -- pi-stack-host slack` (see
+  `op run --env-file=config/op-refs.env -- pix-host slack` (see
   `make mcp-register`), and `op` resolves the refs at spawn time — nothing in the
   registration or the VM. Reads `SLACK_TOKEN`/`SLACK_TEAM_ID` at startup; declare
   the refs in `config/op-refs.env`.
@@ -52,7 +52,7 @@ never in the public tree. A host-executing MCP server (e.g. an HR-directory MCP)
 ships as a **container** (OCI image + `server.json`), referenced by a pack
 `[[integrations]] manifest` and run on the HOST by the sbx gateway; a host-only
 service (e.g. a warehouse exec-proxy) ships as a standalone **host daemon** with a
-thin in-sandbox `[[proxy]]` wrapper in the pack. **No `pi-stack-host` recompile is
+thin in-sandbox `[[proxy]]` wrapper in the pack. **No `pix-host` recompile is
 ever needed** — the only host-side extension point is the generic, SHA-pinned
 `[plugins.*]` external-process mechanism (`serve_plugin.go`): an operator points a
 capability slot at an external binary (path + sha256), and the supervisor
@@ -65,9 +65,9 @@ The MCP stdio transport is newline-delimited JSON (what the gateway speaks);
 ## Build / run
 
 ```bash
-make serve            # builds pi-stack-host + runs `serve` (the `services` list from config.toml)
+make serve            # builds pix-host + runs `serve` (the `services` list from config.toml)
 # or directly:
-cd services/host && go build -o pi-stack-host . && ./pi-stack-host serve
+cd services/host && go build -o pix-host . && ./pix-host serve
 ```
 
 Deps: `modernc.org/sqlite` (pure-Go sqlite + FTS5, so the binary stays single and

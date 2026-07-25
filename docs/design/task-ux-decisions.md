@@ -1,6 +1,6 @@
-# pi-stack `task`: three UX decisions
+# pix `task`: three UX decisions
 
-Status: **accepted** (user decisions folded in 2025). Scope: `services/host/cmd/pi-stack/task.go`
+Status: **accepted** (user decisions folded in 2025). Scope: `services/host/cmd/pix/task.go`
 (+ `status.go`, `config/config.go`). Audience: the engineer who implements this. All three
 recommendations are approved; open cross-cutting calls are now resolved (see the decisions log at
 the end).
@@ -24,7 +24,7 @@ Ground truth read: `task.go` (`taskRepoKey`, `taskSandboxName`, `taskPaths`, `ta
 `runTaskLs`), `task_test.go`, the knowledge/OKF flow in `knowledge.go`, `run.go:deriveSandboxName`.
 
 Note on artifact location: the task clone (`co`) lives on the HOST at
-`$XDG_STATE_HOME/pi-stack/tasks/<key>/co/<name>`. The sandbox mounts it, so files written in
+`$XDG_STATE_HOME/pix/tasks/<key>/co/<name>`. The sandbox mounts it, so files written in
 the sandbox already land on the host clone. "Getting artifacts out" is therefore not about
 crossing the sandbox boundary; it is about surviving `task rm` when the file is not in git.
 
@@ -41,11 +41,11 @@ on-disk path, and `task ls`. Keep the hash; it is the collision guarantee.
   git-common-dir, or the bare repo name minus `.git`), capped at **12 chars**. Overflow is a
   plain truncation (no hash tag needed — the label is a hint, the repokey already guarantees
   uniqueness).
-- Sandbox name becomes `pi-stack-t-<repolabel>-<repokey>-<name>[-<profile>]`. The hash stays: two
+- Sandbox name becomes `pix-t-<repolabel>-<repokey>-<name>[-<profile>]`. The hash stays: two
   repos that both basename to `api` (`~/work/api`, `~/personal/api`) still differ by their
   repokey, so they never collide. The label is legibility; the hash is correctness.
 - Per-repo state dir becomes `<repolabel>-<repokey>` instead of bare `<repokey>`, so browsing
-  `$STATE/pi-stack/tasks/` is readable.
+  `$STATE/pix/tasks/` is readable.
 - `task ls` prints a header line naming the repo (`Tasks for api (~/work/api):`) and the sandbox
   column already shows the full name, now legible.
 
@@ -58,7 +58,7 @@ stays unique), then label (cosmetic), never the repokey (correctness).
 never enforced a total, so 63 is the safe conservative constant). Budget with a 12-char label:
 
 ```
-pi-stack-t-   11
+pix-t-   11
 <repolabel>-  13   (12 cap + dash, cosmetic — trimmed second)
 <repokey>-     9   (8 hex + dash — NEVER trimmed)
 = subtotal    33   → 30 left for <name>, or ~17 once a profile is appended
@@ -101,7 +101,7 @@ its callers in `runTaskLs`/`runTaskRm` (new dir + legacy fallback) · `taskMeta.
 
 No auto-clean on exit. Add `task gc`, run from inside a repo, that removes only over-age tasks
 that fully pass the existing removal guard. Surface buildup passively in `task ls` and
-`pi-stack status`. No cron, no serve hook.
+`pix status`. No cron, no serve hook.
 
 - `task gc [--days N] [--dry-run] [--no-harvest]`, default `--days 7`. For each task in the
   current repo: compute age, run the exact `gatherTaskState` + `taskRemoveGuard` used by `rm`, and:
@@ -118,13 +118,13 @@ that fully pass the existing removal guard. Surface buildup passively in `task l
   task you are actively using looks stale. Stat- timestamping the checkout is schema-light and
   reflects real activity.
 - Passive surfacing: `task ls` appends a nudge when candidates exist ("2 tasks are clean and
-  older than 7d; `task gc` to prune"). `pi-stack status` gains a one-line tasks summary (total,
+  older than 7d; `task gc` to prune"). `pix status` gains a one-line tasks summary (total,
   how many GC-eligible) so the user SEES the pile without any automatic deletion.
 
 ### Why not the other models
 
 - **Auto-clean on sandbox exit — rejected.** It destroys the feature's value. Task workspaces
-  are meant to outlive a session so you can reattach (`pi-stack run <co>`), push later, or review.
+  are meant to outlive a session so you can reattach (`pix run <co>`), push later, or review.
   "Exit" is also ambiguous (done vs crash vs disconnect). Deleting a clone because a pi process
   ended is the opposite of durable parallel workspaces.
 - **Automatic serve/cron GC — rejected (with a caveat below).** The safety model re-derives
@@ -188,8 +188,8 @@ same timestamp is a no-op.
 
 **Home: `XDG_DATA_HOME`, NOT `XDG_STATE_HOME`** (see decision #5). Harvested docs are the only
 surviving copy of un-git'd user work, so they must sit OUTSIDE the tree `state reset`/`uninstall`
-wipe. Destination: `$XDG_DATA_HOME/pi-stack/artifacts/<repolabel>-<repokey>/<name>/<timestamp>/`
-(defaults to `~/.local/share/pi-stack/artifacts/...`). This is a deliberate split from the task
+wipe. Destination: `$XDG_DATA_HOME/pix/artifacts/<repolabel>-<repokey>/<name>/<timestamp>/`
+(defaults to `~/.local/share/pix/artifacts/...`). This is a deliberate split from the task
 CLONES, which stay in `XDG_STATE_HOME` (expendable, `rm`/`gc`/`reset` may delete them).
 
 **Naming is load-bearing** — the whole point is finding a doc "god knows when, 6 months down the
@@ -199,12 +199,12 @@ name, and the date right in the path. Alongside the copied files, write a
 of each file) so a stray artifacts dir is always traceable back to what produced it.
 
 - "Artifact" = a file matching a narrow, configurable doc globset (`*.md`, `docs/**`, `notes/**`,
-  `*.prd`, and a convention dir `.pi-stack/artifacts/**`) that is **untracked or ignored** in the
+  `*.prd`, and a convention dir `.pix/artifacts/**`) that is **untracked or ignored** in the
   clone. Tracked+committed files are excluded; they already leave via git, and the ref snapshot
   covers them. This deliberately mirrors the existing split: the guard snapshots committed refs;
   harvest rescues the uncommitted file half.
 - `task harvest <name> [--to DIR]` copies matching files to
-  `$XDG_DATA_HOME/pi-stack/artifacts/<repolabel>-<repokey>/<name>/<timestamp>/` (host, durable,
+  `$XDG_DATA_HOME/pix/artifacts/<repolabel>-<repokey>/<name>/<timestamp>/` (host, durable,
   outside both the `co` dir that `rm` deletes AND the `XDG_STATE_HOME` tree `reset` wipes), writes
   `manifest.json` beside them, and prints the path.
 - Inside `runTaskRm`, after a successful teardown and **before** `removeTaskArtifacts` deletes the
@@ -216,7 +216,7 @@ of each file) so a stray artifacts dir is always traceable back to what produced
   Default keeps shared truth clean.
 - **Retention (required, per SRE).** An unbounded artifacts dir grows forever. `task gc` prunes
   artifact snapshots older than `--artifact-days` (default **30**, distinct from the 7-day clone
-  age), honoring `--dry-run`. `pi-stack status` reports total artifacts-dir size so growth is
+  age), honoring `--dry-run`. `pix status` reports total artifacts-dir size so growth is
   visible without digging. Pruning artifacts is pure deletion (they were already the rescue copy),
   so it is gated only by age, never by the clone guard.
 - **`uninstall` (per SRE + PM).** Lists the artifacts path and size and SKIPS it by default. The
@@ -243,7 +243,7 @@ next `rm` with no metadata change.
 ### Sketch
 
 New `taskArtifactRoot()` (mirrors `taskStateRoot()` but rooted at `XDG_DATA_HOME`, falling back to
-`~/.local/share/pi-stack/artifacts`). New `runTaskHarvest` + `parseTaskHarvestArgs`, dispatched
+`~/.local/share/pix/artifacts`). New `runTaskHarvest` + `parseTaskHarvestArgs`, dispatched
 from `runTask`. New `harvestArtifacts(co, dest, globs) ([]string, error)` (enumerate
 untracked/ignored matches via `git -C co status --porcelain --ignored` + globset filter, copy out,
 write `manifest.json`). Call it in `runTaskRm` between the `rc == 0` teardown success and
@@ -268,13 +268,13 @@ adds the artifacts-dir size line. `reset.go` stays untouched (it never reached `
    self-describing path + `manifest.json` for long-term findability. OKF promotion stays a
    deliberate `enrich` act (Problem 3).
 
-5. **Harvest home → `XDG_DATA_HOME` (`~/.local/share/pi-stack/artifacts/`), not `XDG_STATE_HOME`.**
+5. **Harvest home → `XDG_DATA_HOME` (`~/.local/share/pix/artifacts/`), not `XDG_STATE_HOME`.**
    Harvested docs are user work product, not stack state, so they must survive `state reset` and
    `uninstall`. `reset` never touches them (pure operational reset). `uninstall` leaves them by
    default and prints the path; add an explicit `--purge-data` opt-in for the rare "burn it all"
    case. Rationale: putting the data-loss safety net inside the thing `reset` wipes defeats the
    safety net (Problem 3).
-6. **Retention → `task gc --artifact-days` (default 30) + size in `pi-stack status`.** The
+6. **Retention → `task gc --artifact-days` (default 30) + size in `pix status`.** The
    artifacts dir is unbounded otherwise; pruning is age-gated pure deletion (the rescue copy has
    already served its purpose), and `status` surfaces total size so growth stays visible
    (Problem 3, per SRE).

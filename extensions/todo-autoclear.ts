@@ -1,4 +1,4 @@
-// pi-stack — auto-dismiss the todo widget once every item is complete.
+// pix — auto-dismiss the todo widget once every item is complete.
 //
 // The `pi-manage-todo-list` package pins a widget via ctx.ui.setWidget("todo-list", …)
 // and RE-RENDERS it on every `turn_end` from its own (private) state. It only ever

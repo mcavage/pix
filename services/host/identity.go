@@ -4,7 +4,7 @@ import (
 	"os"
 	"strconv"
 
-	"pi-stack/host/config"
+	"pix/host/config"
 )
 
 // identity.go is the APPLICATION-LEVEL readiness surface of the host services.
@@ -24,8 +24,8 @@ const (
 	// EXACTLY by the launcher, so they are part of the compatibility surface:
 	// change one and every readiness verdict for that service turns into
 	// "unidentified process" until both sides ship together.
-	identityMemory    = "pi-stack-memory"
-	identityKnowledge = "pi-stack-knowledge"
+	identityMemory    = "pix-memory"
+	identityKnowledge = "pix-knowledge"
 )
 
 // serviceIdentity is the payload of the `identity` JSON-RPC method.

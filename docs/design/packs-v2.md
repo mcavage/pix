@@ -27,7 +27,7 @@ right MCPs + wrappers + knowledge live, it is not done.
 Everything here is defined in packs.md; v1 punted it. This delivers it.
 
 ### F1 — MCP facet that ATTACHES (not just declares)
-`pi-stack pack add mcp <name>` records an MCP the pack needs + the ENV VAR names
+`pix pack add mcp <name>` records an MCP the pack needs + the ENV VAR names
 (never values). On `pack use` / `run --pack`, its MCPs are registered with the
 sbx gateway and enabled for the sandbox. Because registration ≠ in-session attach
 (AGENTS.md), any add/switch that changes the MCP set prints "recreate the sandbox
@@ -35,7 +35,7 @@ to attach" in the same breath, and `pack use` on an active sandbox tells the use
 the one command to recreate. Creds are solicited as `op://` refs at adoption.
 
 ### F2 — In-sandbox CLI-proxy wrappers (`bin/`)
-`pi-stack pack add proxy <name>` scaffolds a wrapper under the pack's `bin/`. On
+`pix pack add proxy <name>` scaffolds a wrapper under the pack's `bin/`. On
 launch, the active pack's `bin/` is mounted onto PATH in the sandbox (the proven
 mixin-kit `files/` mechanism, made first-class). This covers the `snowflake` wrapper
 (network-only, runs fenced in the sandbox — §9 "in-sandbox, safe by default").
@@ -44,12 +44,12 @@ mixin-kit `files/` mechanism, made first-class). This covers the `snowflake` wra
 `platformio` needs a real device (`/dev/tty*`), which the sandbox structurally
 cannot reach, so an in-sandbox `bin/` wrapper can't serve it. A pack therefore
 carries a distinct **host-mode wrapper** facet: wrappers marked host-only are
-installed into the host agent dir and put on PATH for `pi-stack host` (never the
+installed into the host agent dir and put on PATH for `pix host` (never the
 sandbox). This is host execution, so it is gated (see F5). `pack add proxy
 <name> --host` marks a wrapper host-only.
 
 ### F4 — Work/personal switch swaps ALL facets
-A single active pack IS the context (profiles are already deleted). `pi-stack pack
+A single active pack IS the context (profiles are already deleted). `pix pack
 use work|personal` (and `run --pack`) must swap, together: MCP set, `bin/`
 wrappers (sandbox + host), config (gog_account, routing/model prefs), knowledge
 scope, and the memory scope tag. Switching is one command. `pack ls` shows which
@@ -81,10 +81,10 @@ simplest "shared, travels-in-the-repo" case. `pack add knowledge <name> [--ref
 
 ## Acceptance criteria (the owner's 5/5)
 
-1. `pi-stack pack use work` → in a fresh sandbox: the `snowflake` wrapper is on
-   PATH and the work MCPs are attached. `pi-stack pack use personal` → the
+1. `pix pack use work` → in a fresh sandbox: the `snowflake` wrapper is on
+   PATH and the work MCPs are attached. `pix pack use personal` → the
    Fastmail MCP is attached and `platformio` is usable in host mode
-   (`pi-stack host`). One command flips between them.
+   (`pix host`). One command flips between them.
 2. Add any capability with one command + one file of record:
    `pack add mcp|proxy|skill|knowledge <name>`.
 3. Every credential is an `op://` ref, never a value on disk or in the VM.
@@ -109,7 +109,7 @@ never a compiled-in Go extension; see `packs.md`.
   + both MCP sets + the work/personal flip all work in-sandbox.
 - **Phase 2 — host execution:** F3 (host-mode wrappers → platformio) + F5 (Tier-1
   trust gate + SHA-pin + BoM screen). DoD after P2: platformio usable via
-  `pi-stack host --pack personal`; adopting a host-exec pack is gated.
+  `pix host --pack personal`; adopting a host-exec pack is gated.
 
 ## Parallel, separate tracks (not packs, but owed)
 

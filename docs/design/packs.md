@@ -12,7 +12,7 @@ signing shipped in v2; personal pack is local-only by default.
 ## 1. The idea
 
 > A **pack** is the one folder, in git, that makes your setup yours and
-> portable: the skills you taught pi-stack, the knowledge it uses, the tools
+> portable: the skills you taught pix, the knowledge it uses, the tools
 > it's wired to, and the context config, all versioned like code instead of
 > trapped in one sandbox.
 
@@ -23,7 +23,7 @@ memory scope). A pack unifies them into ONE portable, git-backed unit.
 
 ## 2. The three-way split (keep these distinct)
 
-- **Memory** — what pi-stack *learns by watching*. Live, personal, never in
+- **Memory** — what pix *learns by watching*. Live, personal, never in
   git. You don't edit it; you correct it by acting differently. Stays
   separate.
 - **Pack** — what you *deliberately taught it*. Versioned, shareable, a git
@@ -70,7 +70,7 @@ my-pack/
   pack.lock          # generated: resolved refs + plugin SHAs
 ```
 
-**Pack creation adopts an existing repo OR inits a fresh one.** `pi-stack
+**Pack creation adopts an existing repo OR inits a fresh one.** `pix
 pack new [PATH]` (and the onboarding lazy-create) resolves the target this
 way:
 - PATH is already a git repo (or already has a `pack.toml`) -> USE it in
@@ -78,11 +78,11 @@ way:
   history.
 - PATH exists but is not a repo -> `git init` it, add `pack.toml`.
 - PATH absent -> create the dir, `git init`, add `pack.toml`.
-- No PATH -> the personal-pack root (`~/.local/share/pi-stack/skills`), same
+- No PATH -> the personal-pack root (`~/.local/share/pix/skills`), same
   rules. So a user who already keeps a skills/dotfiles repo points setup at
   it and it becomes their pack; everyone else gets one initialized for them.
 
-`pi-stack pack add <kind> <name>` is the one authoring verb (kind =
+`pix pack add <kind> <name>` is the one authoring verb (kind =
 `skill|mcp|proxy|knowledge`). It creates `pack.toml` implicitly on first use
 (one-line stderr notice), writes the one file, and registers it — including
 its routing entry in the SAME place, so removing the pack removes its
@@ -109,11 +109,11 @@ Packs are runtime-swappable for the common cases, NO recompile:
   `services/host/plugin`).
 
 For a PACK AUTHOR this means: **packs are 100% runtime, no build, ever.**
-The only host-side extension point in `pi-stack-host` is the generic,
+The only host-side extension point in `pix-host` is the generic,
 SHA-pinned `[plugins.*]` external-process mechanism, and it is entirely off
 the pack path — packs never need it. There is no compile-in extension seam
-of any kind: extending `pi-stack-host`'s own binary (a new subcommand or a
-deeply-wired host service) is a pi-stack-maintainer concern handled by
+of any kind: extending `pix-host`'s own binary (a new subcommand or a
+deeply-wired host service) is a pix-maintainer concern handled by
 editing `services/host/` directly and shipping a new release, not something
 a pack can carry.
 
@@ -125,7 +125,7 @@ keys. Everything that makes up "which context am I in" lives in the pack:
 `gog_account`, mcp/integration refs, knowledge, routing + model prefs (§8a),
 and the memory scope.
 
-A pack **binds a memory scope tag** (written to `.pi-stack/profile`,
+A pack **binds a memory scope tag** (written to `.pix/profile`,
 wire-compatible with the `Profile` field in `plugin/interfaces.go`), so
 switching packs switches memory scope. `pack` is the config key that
 tracks which pack is active.
@@ -148,7 +148,7 @@ The common pack case is NOT shipping a custom binary. It is **referencing an
 integration** (a remote gateway-catalog MCP server, gog, Slack) and
 **declaring a credential need**. That ships NO executable code: the pack
 manifest lists the capability + the ENV VAR names it needs, and
-adoption/onboarding solicits the user's `op://` refs (`pi-stack secret set
+adoption/onboarding solicits the user's `op://` refs (`pix secret set
 SLACK_TOKEN op://vault/item/field`). Values stay in 1Password; nothing
 pack-authored runs. This is **v1-safe** and is the primary
 credential-solicitation hook onboarding uses.
@@ -170,7 +170,7 @@ Safeguards:
 2. **Mandatory SHA-pin** for any external host binary; `serve` re-hashes
    before every launch and refuses on mismatch.
 3. **1Password credential boundary.** A pack declares only ENV VAR *names*,
-   never values; adoption prompts `pi-stack secret set <VAR> op://…`; `op
+   never values; adoption prompts `pix secret set <VAR> op://…`; `op
    run` resolves at launch. The pack never carries secrets; the VM never
    sees them.
 4. **Typed allowlist.** Host execution only through the typed schema
@@ -187,12 +187,12 @@ Adoption tiers (progressive disclosure of trust):
 
 ## 10. Verbs
 
-- `pi-stack pack add <skill|mcp|proxy|knowledge> <name>` — author (implicit
+- `pix pack add <skill|mcp|proxy|knowledge> <name>` — author (implicit
   create).
-- `pi-stack pack use <path|git-url>` — adopt (Tier gate); writes `packs =
+- `pix pack use <path|git-url>` — adopt (Tier gate); writes `packs =
   [...]` (sparse-diff config, like every other key).
-- `pi-stack pack ls | show` — list / inspect (incl. host BoM).
-- `pi-stack pack rm <name>` — unregister (keep the clone, like sandbox
+- `pix pack ls | show` — list / inspect (incl. host BoM).
+- `pix pack rm <name>` — unregister (keep the clone, like sandbox
   re-attach).
 - **No `pack sync`/`push`** — a pack is a git repo; `git` is the sync,
   unmediated. `knowledge init/use/sync` are subsets of `pack` (a pack
@@ -231,7 +231,7 @@ staged-not-committed if `user.email` is unset — never fails mid-onboarding);
 a single active pack is your whole context (memory scoped per pack); and
 **reference-only integrations + credential solicitation** — a pack declares
 a capability it uses (remote/existing MCP, gog) + the ENV VAR names it
-needs, and adoption/onboarding walks the user through `pi-stack secret set
+needs, and adoption/onboarding walks the user through `pix secret set
 <VAR> op://…` (no pack code runs, so this was v1-safe).
 
 **v2 (shipped, see `packs-v2.md` / `packs-v2-impl.md`):** an MCP facet that
@@ -254,7 +254,7 @@ publish` verb (git is the sync); a GUI.
    install` from a GitHub URL. Host-executing packs get the Tier-1 gate
    (§9) now; signing is future hardening on top of that.
 3. **Personal pack is local; the user pushes to git themselves.**
-   pi-stack's involvement ends at `git init` — it never adds a remote,
+   pix's involvement ends at `git init` — it never adds a remote,
    never pushes, and never even OFFERS to. Remotes, cross-machine sync, and
    backup are the user's own git workflow, unmediated (matches "skills
    belong in git, the user checks them in").
@@ -262,7 +262,7 @@ publish` verb (git is the sync); a GUI.
    sandbox image config; a pack *contains* an OKF bundle).
 5. **The only host-side extension point is the generic, SHA-pinned
    `[plugins.*]` external-process mechanism** (§7) — packs never need it,
-   and extending `pi-stack-host`'s own binary is a maintainer concern
+   and extending `pix-host`'s own binary is a maintainer concern
    outside the pack path entirely.
 
 ## 14. Prior art (borrow / avoid)

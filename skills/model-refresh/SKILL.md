@@ -10,7 +10,7 @@ fast, and the model you "remember" is usually a version or two behind and priced
 wrong. **Always pull live data first.** If you skip step 1, you are guessing.
 
 The router has three source-of-truth files in `services/host/routing/defaults/`
-(override at `~/.local/share/pi-stack/routing/`):
+(override at `~/.local/share/pix/routing/`):
 
 - `models.json` — the registry: every callable model + real `provider/id` + real
   `$/Mtok` in/out. Adding a model is one entry.
@@ -56,7 +56,7 @@ One entry per model you want routable. Rules:
 
 - `id` MUST be the exact, fully-qualified API string (`anthropic/claude-sonnet-5`,
   not a guess like `anthropic/sonnet-5`). A wrong id fails at spawn, not at
-  compile. `pi-stack agent ls` flags a pin that is not in the registry.
+  compile. `pix agent ls` flags a pin that is not in the registry.
 - Prices are the real list `$/Mtok`. Keep them current — `cost_usd` in the
   scorecard is a hand-computed per-task estimate (tokens x price), so a stale
   price silently poisons every cost-objective route.
@@ -97,9 +97,9 @@ in agents; let the intent resolve.
 
 ```bash
 cd <repo>
-pi-stack route compile --out routing.json     # or pi-stack-host route compile --out routing.json
-pi-stack route show                            # registry + resolved intents
-pi-stack agent ls                              # each agent's resolved model + WHY
+pix route compile --out routing.json     # or pix-host route compile --out routing.json
+pix route show                            # registry + resolved intents
+pix agent ls                              # each agent's resolved model + WHY
 ```
 
 Read the output like a reviewer, do not just run it:
@@ -113,7 +113,7 @@ Read the output like a reviewer, do not just run it:
 
 There is no eval harness to keep in sync — `scorecard.json` is the single
 source of truth and it is hand-maintained. If a card price/benchmark changes
-later, come back and hand-edit the row, then re-run `pi-stack route compile`.
+later, come back and hand-edit the row, then re-run `pix route compile`.
 
 ## 6. Ship
 

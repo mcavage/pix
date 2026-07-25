@@ -43,7 +43,7 @@ earns its keep by keeping many workers busy in parallel, not by grinding one tas
 - **Escalation.** Max 2 retries per stage. On the third failure, stop and surface
   the blocker to the user; don't keep looping.
 
-## Subagent types (pi-stack)
+## Subagent types (pix)
 
 Invoke with the `subagent` tool, `agent=<name>` (NOT the old `Agent` tool with
 `subagent_type=`, which is not present here).

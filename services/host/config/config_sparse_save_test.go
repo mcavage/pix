@@ -8,16 +8,16 @@ import (
 )
 
 // These tests are the regression guard for config-default PETRIFICATION: the
-// first `pi-stack config set <anything>` used to freeze the then-current
+// first `pix config set <anything>` used to freeze the then-current
 // defaults (applied in memory by Load/applyDefaults) into config.toml forever,
 // so a future default change (e.g. a new memory_watcher_model) never reached
 // users. Save must persist ONLY explicit deviations from defaults.
 
-// tempConfig points PI_STACK_CONFIG at a fresh temp file and returns its path.
+// tempConfig points PIX_CONFIG at a fresh temp file and returns its path.
 func tempConfig(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.toml")
-	t.Setenv("PI_STACK_CONFIG", path)
+	t.Setenv("PIX_CONFIG", path)
 	return path
 }
 

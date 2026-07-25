@@ -61,8 +61,8 @@ func TestHandshakeProtocolVersion(t *testing.T) {
 	if Handshake.ProtocolVersion != 1 {
 		t.Fatalf("Handshake.ProtocolVersion = %d, want 1", Handshake.ProtocolVersion)
 	}
-	if Handshake.MagicCookieKey != "PI_STACK_PLUGIN" {
-		t.Fatalf("MagicCookieKey = %q, want PI_STACK_PLUGIN", Handshake.MagicCookieKey)
+	if Handshake.MagicCookieKey != "PIX_PLUGIN" {
+		t.Fatalf("MagicCookieKey = %q, want PIX_PLUGIN", Handshake.MagicCookieKey)
 	}
 	if Handshake.MagicCookieValue == "" {
 		t.Fatal("MagicCookieValue must not be empty (skew/random-exec guard)")

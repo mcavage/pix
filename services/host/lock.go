@@ -1,6 +1,6 @@
 //go:build unix
 
-// Advisory file locking (unix: linux + darwin, the only hosts pi-stack-host runs
+// Advisory file locking (unix: linux + darwin, the only hosts pix-host runs
 // on). acquireLock is the correctness primitive that makes the memory daemon and
 // `restore` mutually exclusive around the sqlite store: both take an EXCLUSIVE
 // flock on the SAME lock file (config.MemoryLockPath()), so restore can never
@@ -18,7 +18,7 @@ import (
 	"sync"
 	"syscall"
 
-	"pi-stack/host/config"
+	"pix/host/config"
 )
 
 // acquireLock takes an EXCLUSIVE, NON-BLOCKING advisory flock on path (creating

@@ -452,7 +452,7 @@ test("a provider_request whose newest new message is a tool result carries trigg
 // ─── BUG 1: commandInvokesPi must see the FULL command, not the 200-char
 // truncated argsSummary ─────────────────────────────────────────────────────
 // The TUI correlates a spawned child pi session to the bash tool that
-// launched it partly by checking the tool actually invokes `pi`/`pi-stack`.
+// launched it partly by checking the tool actually invokes `pi`/`pix`.
 // A long multi-line for-loop command (several quoted model specs, then a
 // `pi --print ...` invocation) can push that invocation well past char 200,
 // past where truncatePreview(argsText, 200) cuts argsSummary off — so
@@ -482,9 +482,9 @@ test("commandInvokesPi: false for curl/grep commands that merely contain \"pi\"-
 	assert.equal(commandInvokesPi("pip install requests"), false);
 });
 
-test("commandInvokesPi: true for a bare `pi` or `pi-stack` command token in various positions", () => {
+test("commandInvokesPi: true for a bare `pi` or `pix` command token in various positions", () => {
 	assert.equal(commandInvokesPi('pi --print --model "x"'), true);
-	assert.equal(commandInvokesPi("cd /tmp && pi-stack run"), true);
+	assert.equal(commandInvokesPi("cd /tmp && pix run"), true);
 	assert.equal(commandInvokesPi('echo hi; pi "do a thing"'), true);
 	assert.equal(commandInvokesPi(""), false);
 });
@@ -538,10 +538,10 @@ function startServer() {
 }
 
 async function loadMonitorAgainst(port, clockOverrides) {
-	const prevUrl = process.env.PI_STACK_MONITOR_URL;
-	const prevEnabled = process.env.PI_STACK_MONITOR;
-	process.env.PI_STACK_MONITOR_URL = `http://127.0.0.1:${port}`;
-	process.env.PI_STACK_MONITOR = "1";
+	const prevUrl = process.env.PIX_MONITOR_URL;
+	const prevEnabled = process.env.PIX_MONITOR;
+	process.env.PIX_MONITOR_URL = `http://127.0.0.1:${port}`;
+	process.env.PIX_MONITOR = "1";
 	try {
 		// Bust the module cache with a unique query string so each test gets a
 		// fresh closure (module-level seqCounter aside, which is harmless here).
@@ -552,10 +552,10 @@ async function loadMonitorAgainst(port, clockOverrides) {
 		if (clockOverrides) mod.setRetryClock(clockOverrides);
 		return mod.default;
 	} finally {
-		if (prevUrl === undefined) delete process.env.PI_STACK_MONITOR_URL;
-		else process.env.PI_STACK_MONITOR_URL = prevUrl;
-		if (prevEnabled === undefined) delete process.env.PI_STACK_MONITOR;
-		else process.env.PI_STACK_MONITOR = prevEnabled;
+		if (prevUrl === undefined) delete process.env.PIX_MONITOR_URL;
+		else process.env.PIX_MONITOR_URL = prevUrl;
+		if (prevEnabled === undefined) delete process.env.PIX_MONITOR;
+		else process.env.PIX_MONITOR = prevEnabled;
 	}
 }
 
@@ -784,7 +784,7 @@ test("R6-1: Gemini parts[] shape — untagged text part plus functionCall part",
 	// Gemini's raw parts have no "type" tag at all: {text} or {functionCall:{name}}.
 	const message = {
 		role: "assistant",
-		parts: [{ text: "Looking that up." }, { functionCall: { name: "lookup", args: { q: "pi-stack" } } }],
+		parts: [{ text: "Looking that up." }, { functionCall: { name: "lookup", args: { q: "pix" } } }],
 	};
 	const { text, toolCalls } = extractAssistantOutput(message);
 	assert.equal(text, "Looking that up.");

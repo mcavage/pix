@@ -1,5 +1,5 @@
 {
-  "_note": "Model registry: every callable model + its economics. Prices are USD per 1M tokens, taken from the vendors' LIVE July 2026 pricing pages (Anthropic/OpenAI/Google), NOT guessed. ADDING A MODEL IS ONE ENTRY (id must be fully qualified provider/id). Keep prices current. local=true means unmetered (Ollama). available=false hides a model from routing without deleting it. Override at ~/.local/share/pi-stack/routing/models.json.",
+  "_note": "Model registry: every callable model + its economics. Prices are USD per 1M tokens, taken from the vendors' LIVE July 2026 pricing pages (Anthropic/OpenAI/Google), NOT guessed. ADDING A MODEL IS ONE ENTRY (id must be fully qualified provider/id). Keep prices current. local=true means unmetered (Ollama). available=false hides a model from routing without deleting it. Override at ~/.local/share/pix/routing/models.json.",
   "models": [
     {
       "id": "anthropic/claude-opus-5",

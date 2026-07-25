@@ -1,4 +1,4 @@
-// pi-stack knowledge store (host side). A BUILT-IN retrieval index over OKF
+// pix knowledge store (host side). A BUILT-IN retrieval index over OKF
 // knowledge bundles, reusing the memory service's sqlite + FTS5 + embedding
 // infrastructure (memFtsQuery / memEmbed / memCosine, all in the same package).
 //
@@ -8,7 +8,7 @@
 // optional — if the host Ollama / embed model is unavailable, embeddings are
 // skipped and query() degrades to keyword-only FTS ranking.
 //
-// Env: KNOWLEDGE_DB (~/.local/share/pi-stack/knowledge/knowledge.db). Embeddings reuse the
+// Env: KNOWLEDGE_DB (~/.local/share/pix/knowledge/knowledge.db). Embeddings reuse the
 // memory service's OLLAMA_HOST / MEMORY_EMBED_MODEL knobs via memEmbed.
 
 package main
@@ -25,9 +25,9 @@ import (
 	"strings"
 	"sync"
 
-	"pi-stack/host/config"
-	"pi-stack/host/okf"
-	"pi-stack/host/plugin"
+	"pix/host/config"
+	"pix/host/okf"
+	"pix/host/plugin"
 )
 
 const knowledgeSchema = `

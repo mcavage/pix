@@ -77,7 +77,7 @@ func TestMemoryBackupRoundtrip(t *testing.T) {
 	if err := os.WriteFile(opPath, []byte("FOO=op://vault/item/field\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	outPath := filepath.Join(outDir, "pi-stack-backup-20260715-120000.tar.gz")
+	outPath := filepath.Join(outDir, "pix-backup-20260715-120000.tar.gz")
 
 	res, err := memoryBackup(backupParams{
 		DBPath:     dbPath,
@@ -142,8 +142,8 @@ func TestMemoryBackupRoundtrip(t *testing.T) {
 	if m.FormatVersion != backupFormatVersion {
 		t.Errorf("manifest FormatVersion = %d, want %d", m.FormatVersion, backupFormatVersion)
 	}
-	if m.PiStackVersion != "9.9.9-test" {
-		t.Errorf("manifest PiStackVersion = %q, want 9.9.9-test", m.PiStackVersion)
+	if m.PixVersion != "9.9.9-test" {
+		t.Errorf("manifest PixVersion = %q, want 9.9.9-test", m.PixVersion)
 	}
 	if m.SqliteUserVersion != 1 {
 		t.Errorf("manifest SqliteUserVersion = %d, want 1", m.SqliteUserVersion)
@@ -170,7 +170,7 @@ func TestMemoryBackupOmitsMissingOptionalFiles(t *testing.T) {
 	st, dbPath := seedMemDB(t, 1)
 	defer st.db.Close()
 	outDir := t.TempDir()
-	outPath := filepath.Join(outDir, "pi-stack-backup-20260715-130000.tar.gz")
+	outPath := filepath.Join(outDir, "pix-backup-20260715-130000.tar.gz")
 
 	if _, err := memoryBackup(backupParams{
 		DBPath: dbPath, OutPath: outPath, Keep: 7, Version: "dev",
@@ -204,7 +204,7 @@ func TestMemoryBackupRetention(t *testing.T) {
 	base := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < keep+2; i++ {
 		ts := base.Add(time.Duration(i) * time.Minute)
-		name := "pi-stack-backup-" + ts.Format("20060102-150405") + ".tar.gz"
+		name := "pix-backup-" + ts.Format("20060102-150405") + ".tar.gz"
 		if _, err := memoryBackup(backupParams{
 			DBPath: dbPath, OutPath: filepath.Join(outDir, name), Keep: keep, Now: ts,
 		}); err != nil {
@@ -212,7 +212,7 @@ func TestMemoryBackupRetention(t *testing.T) {
 		}
 	}
 
-	matches, _ := filepath.Glob(filepath.Join(outDir, "pi-stack-backup-*.tar.gz"))
+	matches, _ := filepath.Glob(filepath.Join(outDir, "pix-backup-*.tar.gz"))
 	if len(matches) != keep {
 		t.Fatalf("retention left %d backups, want %d", len(matches), keep)
 	}
@@ -239,8 +239,8 @@ func TestMemoryBackupRetentionByMtimeNotName(t *testing.T) {
 
 	ts := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
 	// Newer-written archive gets the lexically SMALLER suffix; older gets the larger.
-	older := filepath.Join(outDir, "pi-stack-backup-20260715-120000-ffffffff.tar.gz")
-	newer := filepath.Join(outDir, "pi-stack-backup-20260715-120000-00000000.tar.gz")
+	older := filepath.Join(outDir, "pix-backup-20260715-120000-ffffffff.tar.gz")
+	newer := filepath.Join(outDir, "pix-backup-20260715-120000-00000000.tar.gz")
 	// Keep:0 so memoryBackup itself does not prune; we drive pruneBackups directly.
 	if _, err := memoryBackup(backupParams{DBPath: dbPath, OutPath: older, Keep: 0, Now: ts}); err != nil {
 		t.Fatalf("backup older: %v", err)
@@ -284,8 +284,8 @@ func TestMemoryBackupRetentionNeverPrunesFreshArchive(t *testing.T) {
 	ts := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
 	// The fresh archive gets the lexically SMALLEST suffix so a name tie-break would
 	// single it out for pruning; the older one gets the larger suffix.
-	older := filepath.Join(outDir, "pi-stack-backup-20260715-120000-ffffffff.tar.gz")
-	fresh := filepath.Join(outDir, "pi-stack-backup-20260715-120000-00000000.tar.gz")
+	older := filepath.Join(outDir, "pix-backup-20260715-120000-ffffffff.tar.gz")
+	fresh := filepath.Join(outDir, "pix-backup-20260715-120000-00000000.tar.gz")
 	// Keep:0 so memoryBackup itself does not prune; we drive pruneBackups directly
 	// after forcing the identical mtime.
 	if _, err := memoryBackup(backupParams{DBPath: dbPath, OutPath: older, Keep: 0, Now: ts}); err != nil {
@@ -325,7 +325,7 @@ func TestMemoryBackupWhileServeHoldsDB(t *testing.T) {
 	st, dbPath := seedMemDB(t, 2)
 	defer st.db.Close() // kept OPEN across the backup on purpose
 
-	outPath := filepath.Join(t.TempDir(), "pi-stack-backup-20260715-140000.tar.gz")
+	outPath := filepath.Join(t.TempDir(), "pix-backup-20260715-140000.tar.gz")
 	res, err := memoryBackup(backupParams{DBPath: dbPath, OutPath: outPath, Keep: 7, Now: time.Now()})
 	if err != nil {
 		t.Fatalf("backup while db held open: %v", err)
@@ -417,7 +417,7 @@ func TestMemoryBackupRetentionSparesNonMatching(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Also a differently-shaped name that must NOT match the strict regexp.
-	other := filepath.Join(outDir, "pi-stack-backup-nope.tar.gz")
+	other := filepath.Join(outDir, "pix-backup-nope.tar.gz")
 	if err := os.WriteFile(other, []byte("also not ours"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +426,7 @@ func TestMemoryBackupRetentionSparesNonMatching(t *testing.T) {
 	base := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < keep+2; i++ {
 		ts := base.Add(time.Duration(i) * time.Minute)
-		name := "pi-stack-backup-" + ts.Format("20060102-150405") + ".tar.gz"
+		name := "pix-backup-" + ts.Format("20060102-150405") + ".tar.gz"
 		if _, err := memoryBackup(backupParams{
 			DBPath: dbPath, OutPath: filepath.Join(outDir, name), Keep: keep, Now: ts,
 		}); err != nil {
@@ -438,9 +438,9 @@ func TestMemoryBackupRetentionSparesNonMatching(t *testing.T) {
 		t.Errorf("retention deleted non-matching keepme.tar.gz: %v", err)
 	}
 	if _, err := os.Stat(other); err != nil {
-		t.Errorf("retention deleted non-matching pi-stack-backup-nope.tar.gz: %v", err)
+		t.Errorf("retention deleted non-matching pix-backup-nope.tar.gz: %v", err)
 	}
-	matches, _ := filepath.Glob(filepath.Join(outDir, "pi-stack-backup-2026*.tar.gz"))
+	matches, _ := filepath.Glob(filepath.Join(outDir, "pix-backup-2026*.tar.gz"))
 	if len(matches) != keep {
 		t.Errorf("retention left %d generated backups, want %d", len(matches), keep)
 	}
@@ -451,7 +451,7 @@ func TestMemoryBackupRetentionSparesNonMatching(t *testing.T) {
 // leftover .tmp in the dir, and a successful write leaves no temp behind either.
 func TestWriteBackupArchiveAtomic(t *testing.T) {
 	dir := t.TempDir()
-	outPath := filepath.Join(dir, "pi-stack-backup-20260715-120000.tar.gz")
+	outPath := filepath.Join(dir, "pix-backup-20260715-120000.tar.gz")
 
 	// Failure path: snapPath does not exist -> tarAddFile fails mid-write.
 	err := writeBackupArchive(outPath, filepath.Join(dir, "does-not-exist.db"), "", "",
@@ -486,7 +486,7 @@ func assertNoTempLeft(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".pi-stack-backup-") && strings.HasSuffix(e.Name(), ".tmp") {
+		if strings.HasPrefix(e.Name(), ".pix-backup-") && strings.HasSuffix(e.Name(), ".tmp") {
 			t.Errorf("leftover temp archive %q; write must clean up its temp", e.Name())
 		}
 	}

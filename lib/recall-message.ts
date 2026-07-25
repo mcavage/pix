@@ -1,4 +1,4 @@
-// pi-stack — the shared recall MESSAGE channel (transport, not policy).
+// pix — the shared recall MESSAGE channel (transport, not policy).
 //
 // WHY THIS FILE EXISTS, AND WHY IT IS NOT UNDER extensions/
 // ---------------------------------------------------------

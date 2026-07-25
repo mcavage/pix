@@ -1,11 +1,11 @@
-# pi-stack CLI redesign — make it usable by a new human
+# pix CLI redesign — make it usable by a new human
 
 Status: IMPLEMENTED (Shape B shipped — `state` grouping noun, tiered `help` / `help --all` with per-noun `help <verb>`, staged `setup`; all legacy verb spellings retained as aliases)
 Authors: pi + crew (dx-consultant, product-manager, architect, ux-copywriter), reviewed by cross-vendor `review`
 
 ## The problem
 
-The `pi-stack` launcher has grown to ~19 top-level verbs in a flat namespace.
+The `pix` launcher has grown to ~19 top-level verbs in a flat namespace.
 The complaint, verbatim intent:
 
 - "It's a monstrosity, a zillion commands."
@@ -34,12 +34,12 @@ Terraform, Vagrant, Packer, Ghostty share a shape:
 4. **Opinionated defaults, explicit escape hatches.** Optional things are
    clearly optional and deferrable, never blocking.
 5. **No surprises.** The bare command is safe and read-only; destructive things
-   are explicit and reversible. (pi-stack already gets this right.)
+   are explicit and reversible. (pix already gets this right.)
 6. **Jargon is defined the first time it appears, or hidden until needed.**
 
 ## What does NOT change
 
-- The bare `pi-stack` command stays read-only status, never launches. Correct
+- The bare `pix` command stays read-only status, never launches. Correct
   and Hashimoto-consistent; keep it.
 - Every mechanic: idempotent config writes, `--json` shapes, exit codes (2 usage,
   3 daemon-down), reversible `reset`, the `--man` global, ports.
@@ -53,10 +53,10 @@ A new human should reach a working agent with as few steps as possible, reading
 no docs:
 
 ```
-1. curl -fsSL https://raw.githubusercontent.com/mcavage/pi-stack/main/install.sh | sh
-2. pi-stack setup      # narrates; checks keys + sbx; offers to skip the rest
+1. curl -fsSL https://raw.githubusercontent.com/mcavage/pix/main/install.sh | sh
+2. pix setup      # narrates; checks keys + sbx; offers to skip the rest
 3. sbx secret set -g anthropic -t "sk-..."   # only if setup found no key
-4. pi-stack run        # launches the sandbox; you are in the agent
+4. pix run        # launches the sandbox; you are in the agent
 ```
 
 **Honesty about step 3 (review finding, P0).** `setup` does NOT set provider
@@ -74,8 +74,8 @@ Everything not on this path is deferred or hidden.
 
 ## Command tiers
 
-Default `pi-stack help` shows the **Core** tier only. `pi-stack help --all`
-(and teachable per-noun `pi-stack help <noun>`) reveals the rest. Every verb
+Default `pix help` shows the **Core** tier only. `pix help --all`
+(and teachable per-noun `pix help <noun>`) reveals the rest. Every verb
 stays fully working and self-documenting regardless of tier.
 
 The tier name is **Core**, not "daily" (review finding P1-7): `setup` is
@@ -134,37 +134,37 @@ binaries, not state. If pursued later, prefer user-facing concepts (e.g.
 
 ## Redesigned screens (copy)
 
-### Bare `pi-stack` (status, ends with Next)
+### Bare `pix` (status, ends with Next)
 ```
-pi-stack 0.0.16    config: ~/.config/pi-stack/config.toml
+pix 0.0.16    config: ~/.config/pix/config.toml
 
 Host services
   memory      up    :11435
-  knowledge   down  :11436   (enabled; start with `pi-stack serve`)
+  knowledge   down  :11436   (enabled; start with `pix serve`)
 
 Provider keys (sbx proxy)
   anthropic ok   openai ok   google ok   github ok
 
 Integrations
-  gog (Google Workspace)   account set, needs auth  (run `pi-stack gog setup`)
+  gog (Google Workspace)   account set, needs auth  (run `pix gog setup`)
   slack                    not configured
 
 Sandboxes
   (none running)
 
-Next:  pi-stack serve     start the knowledge service
-       pi-stack run       launch a sandbox and start working
+Next:  pix serve     start the knowledge service
+       pix run       launch a sandbox and start working
 
-Everything ok? run `pi-stack doctor`.   Full command list: `pi-stack help`.
+Everything ok? run `pix doctor`.   Full command list: `pix help`.
 ```
 
-### `pi-stack help` (named sections, one-line intent, no flag dump)
+### `pix help` (named sections, one-line intent, no flag dump)
 ```
-pi-stack — a personal, multi-model pi coding agent in a Docker sandbox.
+pix — a personal, multi-model pi coding agent in a Docker sandbox.
 
-Usage:  pi-stack <command> [args]
+Usage:  pix <command> [args]
 
-New here?   pi-stack setup      one-time guided setup (a few minutes, resumable)
+New here?   pix setup      one-time guided setup (a few minutes, resumable)
 
 Workflow
   run [DIR]        launch the sandbox in DIR (default: .). This is the main one.
@@ -180,17 +180,17 @@ Data
   knowledge        init | use | ls | query | sync | remote
 
 More
-  config, mcp, state, version, man     (see `pi-stack help --all`)
+  config, mcp, state, version, man     (see `pix help --all`)
 
-Learn a command:  pi-stack help run     ·     pi-stack <command> -h
-Switch context:   pi-stack pack use <path>   run a different pack (work, personal, ...)
+Learn a command:  pix help run     ·     pix <command> -h
+Switch context:   pix pack use <path>   run a different pack (work, personal, ...)
 ```
 
-### First-run prompt (names what pi-stack is before asking)
+### First-run prompt (names what pix is before asking)
 ```
-pi-stack: no config file found.
+pix: no config file found.
 
-pi-stack runs a coding agent inside an isolated Docker container called a sandbox.
+pix runs a coding agent inside an isolated Docker container called a sandbox.
 Setup takes about a minute. It checks your API keys and writes a config file.
 You can re-run or resume it anytime, and nothing here is destructive.
 
@@ -198,16 +198,16 @@ Run setup now? [Y/n]:
 ```
 Decline:
 ```
-OK. Run `pi-stack setup` whenever you are ready.
+OK. Run `pix setup` whenever you are ready.
 ```
 
-### `pi-stack setup` (staged plan, each step labeled, stop anytime)
+### `pix setup` (staged plan, each step labeled, stop anytime)
 ```
-pi-stack setup
+pix setup
 Configures the stack for first use. Safe to re-run; only changes what is missing.
 
 I will walk through 4 steps. Only the first is required. You can stop after any
-step and re-run `pi-stack setup` later.
+step and re-run `pix setup` later.
 
 --------------------------------------------------------------------------------
 Step 1 of 4 — Provider API keys        (required)
@@ -234,16 +234,16 @@ sandbox reaches them across the host bridge, not its own localhost):
 
   memory enabled.
   Set up a knowledge base now?
-    [Enter]  scaffold a fresh one at ~/.config/pi-stack/knowledge
+    [Enter]  scaffold a fresh one at ~/.config/pix/knowledge
     <path>   use an existing folder or a git URL
-    skip     do it later with `pi-stack knowledge init`
+    skip     do it later with `pix knowledge init`
   >
 
 --------------------------------------------------------------------------------
 Step 3 of 4 — Integrations              (optional; skip if unsure)
 
 Connect the agent to outside tools: Google Workspace (read-only Gmail, Drive,
-Docs, Sheets, Calendar), Slack, and others. `pi-stack run` works without any of
+Docs, Sheets, Calendar), Slack, and others. `pix run` works without any of
 this. Skip if you do not need it yet.
 
   Google Workspace account (email, or Enter to skip):
@@ -253,44 +253,44 @@ this. Skip if you do not need it yet.
 Step 4 of 4 — Integration credentials   (only if you added one that needs a password)
 
 Some integrations (Slack, some Google setups) need a password or token. If you
-use 1Password (an optional password manager), pi-stack can read the secret from
+use 1Password (an optional password manager), pix can read the secret from
 it at startup so the secret never touches disk. This whole step is optional and
 not all integrations need it (for example, gog on macOS can use the system
 keychain instead).
 
   If you use 1Password, it works like this:
   1. You keep the secret in 1Password.
-  2. You point pi-stack at it with one line in a file:
+  2. You point pix at it with one line in a file:
          SLACK_TOKEN = op://Private/Slack/token
                        (vault)   (item) (field)
-  3. When pi-stack starts that integration, it reads the value from 1Password
+  3. When pix starts that integration, it reads the value from 1Password
      and passes it in as an environment variable. The secret never touches disk
      or the sandbox.
 
   You added no integrations that need a password. Skipping. (No file is created
   until you actually add one.)
-  When you do:  `pi-stack secret set <ENV_VAR> op://vault/item/field`, then
-  `pi-stack secret check` to verify, then `pi-stack mcp register` so the
+  When you do:  `pix secret set <ENV_VAR> op://vault/item/field`, then
+  `pix secret check` to verify, then `pix mcp register` so the
   integration picks up the credentials.
 
 --------------------------------------------------------------------------------
-Done. Saved ~/.config/pi-stack/config.toml.
+Done. Saved ~/.config/pix/config.toml.
 
   Configured:  memory
-  Needs auth:  gog (Google Workspace) - run `pi-stack gog setup`
+  Needs auth:  gog (Google Workspace) - run `pix gog setup`
   Deferred:    knowledge base, slack
 
 You are NOT fully ready yet: no provider key is set. Set one, then run:
   sbx secret set -g anthropic -t "sk-..."
 
 Next:
-  pi-stack serve     start the services you set up
-  pi-stack run       launch a sandbox and start working
-  pi-stack doctor    re-check everything, anytime
+  pix serve     start the services you set up
+  pix run       launch a sandbox and start working
+  pix doctor    re-check everything, anytime
 ```
 
 (When a provider key IS present and sbx is on PATH, the "NOT fully ready" block
-is replaced by a plain "You are ready. Run: pi-stack run".)
+is replaced by a plain "You are ready. Run: pix run".)
 
 Key behavior changes vs today:
 - A stated plan up front ("4 steps, only the first is required"). This is the
@@ -308,48 +308,48 @@ Key behavior changes vs today:
 
 ### Deferral block (when the user skips the optional tiers)
 ```
-You are ready. Run:  pi-stack run
+You are ready. Run:  pix run
 
 Optional, set up later when you need them:
 
   Google Workspace / Slack in the agent
       Lets the agent read your mail, calendar, and Slack. May need a credential
-      (1Password or system keychain). When you want it:  pi-stack help mcp
+      (1Password or system keychain). When you want it:  pix help mcp
 
   Team knowledge base
       Give the agent a searchable corpus. Off by default.
-      When you want it:  pi-stack help knowledge
+      When you want it:  pix help knowledge
 
   Work vs personal packs
       Switch your whole context (skills, MCP, knowledge, memory scope) with
       one command. You do not need this yet.
-      When you want it:  pi-stack help pack
+      When you want it:  pix help pack
 
-Nothing above is required. `pi-stack run` works right now.
+Nothing above is required. `pix run` works right now.
 ```
 
 ### Error messages (what happened + what to do)
 ```
 # unknown command
-pi-stack: no command named "memoyr".
+pix: no command named "memoyr".
 Did you mean "memory"?
-Run `pi-stack help` to see all commands.
+Run `pix help` to see all commands.
 
 # memory service down
 Memory service is not running.
-Start it with:  pi-stack serve
-(runs in the foreground; use a second terminal or `pi-stack serve &`)
+Start it with:  pix serve
+(runs in the foreground; use a second terminal or `pix serve &`)
 
 # sbx missing
-pi-stack run: `sbx` not found on PATH.
-sbx is the Docker Sandboxes CLI pi-stack uses to launch sandboxes.
+pix run: `sbx` not found on PATH.
+sbx is the Docker Sandboxes CLI pix uses to launch sandboxes.
 Install it: https://docs.docker.com/sandboxes/
 
 # secret check with no op-refs.env
-No op-refs.env at ~/.config/pi-stack/op-refs.env.
+No op-refs.env at ~/.config/pix/op-refs.env.
 This file maps environment variables to 1Password paths, for integrations that
 need credentials (Google Workspace, Slack). You only need it if you use one.
-Add a ref:  pi-stack secret set <ENV_VAR> op://vault/item/field
+Add a ref:  pix secret set <ENV_VAR> op://vault/item/field
 ```
 
 (All example copy uses Shape B spellings: `secret`, `pack`, `state`. If Shape
@@ -358,13 +358,13 @@ review flagged a copy inconsistency here as P1-9; fixed by standardizing on B.)
 
 ## Implementation plan (phased; test suite is a hard gate)
 
-The launcher has a 232-test suite in `services/host/cmd/pi-stack/`. Tests bind
+The launcher has a 232-test suite in `services/host/cmd/pix/`. Tests bind
 to internal symbol names (`parseRunArgs`, `buildSbxArgs`, `dispatchMemory`,
 `runBackup`, `runReset`, `verbUsage`, `knownVerbs`) — do NOT rename them. The one
 structural tripwire is `man_test.go`: it enforces a strict 1:1 between
-`knownVerbs` (`help.go`) and the `pi-stack <verb>` synopsis lines in
-`pi-stack.1` (regex keys on the first word after `pi-stack `). Treat `knownVerbs`
-+ `pi-stack.1` as a single edit unit.
+`knownVerbs` (`help.go`) and the `pix <verb>` synopsis lines in
+`pix.1` (regex keys on the first word after `pix `). Treat `knownVerbs`
++ `pix.1` as a single edit unit.
 
 **Phase 0 — copy + man page. Ship first (lowest risk).**
 No test asserts the body of `helpText`, the setup prose, or the man page text, so
@@ -395,10 +395,10 @@ with existing tests bound to the old behavior. Split these out, each with tests:
   today setup registers gog/slack even with an empty `op-refs.env`, so the server
   starts without its token and filling the file later does not re-register it.
   Either defer registration until `secret check` passes, or auto re-register
-  after it. The recovery path must include `pi-stack mcp register`.
+  after it. The recovery path must include `pix mcp register`.
 - **gog is "needs auth", not "configured", until a real auth probe passes** (P0-4):
   setting an email does not complete OAuth. Detect usable auth; otherwise label
-  it deferred and print the `pi-stack gog setup` next step, the one guided
+  it deferred and print the `pix gog setup` next step, the one guided
   path (**shipped**: see CHANGELOG).
 - `help --all` branch (P0-2): **shipped** — tiered help shows Core by default and
   reveals the rest with `--all` (and per-noun `help <verb>`).
@@ -430,7 +430,7 @@ with existing tests bound to the old behavior. Split these out, each with tests:
 2. **Does `setup` start `serve` on yes, or just print the command?**
    Recommendation (revised by review P0-5): **just print the command.** `serve`
    is a foreground process today, so auto-starting it from `setup` would block
-   and never return to `pi-stack run`. Auto-start only becomes viable once there
+   and never return to `pix run`. Auto-start only becomes viable once there
    is a real background/service-manager mode for `serve`.
 3. **Keep `man`?** Recommendation: keep it AND rewrite it in Phase 0 (a stale man
    page is the actual complaint). Fold the invocation into `help --man`; keep

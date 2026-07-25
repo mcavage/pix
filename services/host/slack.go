@@ -1,7 +1,7 @@
 // Slack MCP server (host side, stdio). Port of the former mcp/slack/server.ts.
 //
 // A stdio MCP server registered with sbx (`sbx mcp add slack --command
-// pi-stack-host --args slack --env SLACK_TOKEN=…`); the Docker MCP gateway runs it
+// pix-host --args slack --env SLACK_TOKEN=…`); the Docker MCP gateway runs it
 // on the host and exposes it to the agent, so the Slack user token never enters
 // the VM. Talks to the Slack Web API directly. No local cache.
 //

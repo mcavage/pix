@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# pix — launch the pix sandbox in any directory.
+#
+#   cd ~/dev/anything && pix          # baked skills — matches the shipped image
+#   pix --dev                         # Mode B: skills load LIVE from your host repos
+#   pix ~/dev/other                   # run in a specific dir
+#   pix --dev ~/dev/other             # dev mode in a specific dir
+#   pix -- --model openai/gpt-5.5     # pass args through to pi
+#
+# Two modes. Plain `pix` uses the skills baked into the image (what a consumer
+# who `sbx run --kit git+...` gets). `--dev` mounts your host skill trees and tells pi
+# to load THEM instead (--no-skills + --skill roots), so you edit a SKILL.md, /reload
+# in pi, and it's live — no `make load`, no rebuild. Same split as `make run` (which is
+# always Mode B). Resolves the repo relative to this script, so it works from
+# anywhere on PATH.
+set -euo pipefail
+
+src="${BASH_SOURCE[0]}"
+while [ -h "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [[ "$src" != /* ]] && src="$dir/$src"
+done
+ROOT="$(cd -P "$(dirname "$src")/.." && pwd)"
+KIT="$ROOT/pi-kit"
+
+# --dev (Mode B) must come first, before the workspace.
+dev=0
+if [ "${1:-}" = "--dev" ]; then dev=1; shift; fi
+
+# Workspace = first non-flag arg, else cwd. Remaining args after `--` go to pi.
+workspace="."
+if [ "${1:-}" != "" ] && [ "${1:-}" != "--" ]; then
+  workspace="$1"; shift
+fi
+[ "${1:-}" = "--" ] && shift
+
+kits=( --kit "$KIT" )
+
+# NOTE: this launcher forwards NO credential. The default path mints/exports
+# nothing — the host-side Google Workspace path is the `gog` MCP server run by
+# the sbx gateway (see `make mcp-register`), not a bearer smuggled into the VM.
+# The old broker-token/bearer plumbing was removed with the Google Workspace port to gog.
+
+extra_ws=()
+pi_args=()
+if [ "$dev" = 1 ]; then
+  # Mount host skill trees (writable) + load them live, replacing the baked set.
+  extra_ws+=( "$ROOT/skills" )
+  pi_args=( --no-skills --skill "$ROOT/skills" )
+fi
+
+cmd=( sbx run pix "${kits[@]}" "$workspace" ${extra_ws[@]+"${extra_ws[@]}"} )
+if [ "${#pi_args[@]}" -gt 0 ] || [ "$#" -gt 0 ]; then
+  cmd+=( -- ${pi_args[@]+"${pi_args[@]}"} "$@" )
+fi
+exec "${cmd[@]}"

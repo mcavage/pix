@@ -3,7 +3,7 @@
 // the built-in bridge without ever linking into the public tree.
 //
 // It is NOT wired into the bridge by default. To use it, a user points
-// ~/.config/pi-stack/config.toml's [plugins.mcp] at this binary:
+// ~/.config/pix/config.toml's [plugins.mcp] at this binary:
 //
 //	[plugins.mcp]
 //	impl = "example"
@@ -21,7 +21,7 @@ import (
 
 	goplugin "github.com/hashicorp/go-plugin"
 
-	"pi-stack/host/plugin"
+	"pix/host/plugin"
 )
 
 // exampleMcp is a trivial McpServer: it advertises one "echo" tool and returns a

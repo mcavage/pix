@@ -1,6 +1,6 @@
-// Package plugin is the go-plugin FOUNDATION for pi-stack's host binary.
+// Package plugin is the go-plugin FOUNDATION for pix's host binary.
 //
-// The host (`pi-stack-host`, module pi-stack/host) is one statically linked
+// The host (`pix-host`, module pix/host) is one statically linked
 // binary. Its extension seam runs at process-launch time, not link time,
 // using hashicorp/go-plugin: a third party can OVERRIDE a host capability with
 // their own out-of-process plugin binary (SHA-pinned via config's [plugins.*])
@@ -25,17 +25,17 @@ import goplugin "github.com/hashicorp/go-plugin"
 // with a clear error instead of failing mysteriously at call time.
 const ProtocolVersion = 1
 
-// Handshake is the single shared handshake for every pi-stack plugin kind.
+// Handshake is the single shared handshake for every pix plugin kind.
 //
 // The MagicCookie is a cheap "is this actually one of our plugins" guard: a
-// binary launched as a plugin must have PI_STACK_PLUGIN set to the expected
+// binary launched as a plugin must have PIX_PLUGIN set to the expected
 // value in its environment, or go-plugin refuses to treat it as a plugin (this
 // stops a random exec being mistaken for one). The ProtocolVersion is the real
 // compatibility gate.
 var Handshake = goplugin.HandshakeConfig{
 	ProtocolVersion:  ProtocolVersion,
-	MagicCookieKey:   "PI_STACK_PLUGIN",
-	MagicCookieValue: "pi-stack.v1",
+	MagicCookieKey:   "PIX_PLUGIN",
+	MagicCookieValue: "pix.v1",
 }
 
 // PluginMap maps a capability name to the plugin.Plugin used on the CLIENT side

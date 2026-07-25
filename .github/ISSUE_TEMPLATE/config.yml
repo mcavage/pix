@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/mcavage/pi-stack/blob/main/SECURITY.md
+    url: https://github.com/mcavage/pix/blob/main/SECURITY.md
     about: Do not open a public issue. Follow the disclosure process in SECURITY.md.
   - name: Question or idea
-    url: https://github.com/mcavage/pi-stack/discussions
+    url: https://github.com/mcavage/pix/discussions
     about: Open-ended questions and ideas belong in Discussions.

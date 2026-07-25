@@ -1,21 +1,21 @@
 // U-W0b.05: cross-boundary workspace marker round-trip coverage, TS side.
 // Run: node --test tests/
 //
-// services/host/cmd/pi-stack/workspacemarkers_roundtrip_test.go pins the EXACT
-// bytes each Go writer emits into <workspace>/.pi-stack/<marker>. This file is
+// services/host/cmd/pix/workspacemarkers_roundtrip_test.go pins the EXACT
+// bytes each Go writer emits into <workspace>/.pix/<marker>. This file is
 // the other half of the contract: it hand-plants a fixture with that exact
 // byte shape (comment on each fixture cross-references the Go test/writer
 // that produces it) and proves the TS reader in the corresponding extension
 // parses it correctly. Together the two files prove the round trip without
 // either language having to shell out to the other.
 //
-// Covers every marker a TS extension actually reads today: .pi-stack/profile
-// (memory-recall.ts, memory-capture.ts), .pi-stack/knowledge.scope
-// (knowledge-recall.ts), .pi-stack/ollama-bridge.model (ollama-bridge.ts).
-// .pi-stack/sandbox.pack, .pi-stack/knowledge, and .pi-stack/onboarding.json
+// Covers every marker a TS extension actually reads today: .pix/profile
+// (memory-recall.ts, memory-capture.ts), .pix/knowledge.scope
+// (knowledge-recall.ts), .pix/ollama-bridge.model (ollama-bridge.ts).
+// .pix/sandbox.pack, .pix/knowledge, and .pix/onboarding.json
 // have no TS reader (Go writes+reads sandbox.pack/knowledge; the in-sandbox
 // AGENT — not a TS extension — writes onboarding.json), so they are only
-// covered on the Go side. .pi-stack/host-state.json is never a file on either
+// covered on the Go side. .pix/host-state.json is never a file on either
 // side (see the Go test's negative control); routing/artifacts/
 // custom-memory.db are host data-root paths, never workspace markers at all
 // (see the Go test's boundary check). See workspacemarkers_roundtrip_test.go's
@@ -54,20 +54,20 @@ async function listen(server) {
 	return `http://127.0.0.1:${port}`;
 }
 
-// Builds a temp workspace with a .pi-stack/<name> marker containing EXACTLY
+// Builds a temp workspace with a .pix/<name> marker containing EXACTLY
 // `content` (byte-for-byte — callers pass the literal string the Go writer
 // under test produces, trailing newline included).
 function makeWorkspace(name, content) {
-	const dir = mkdtempSync(join(tmpdir(), "pi-stack-marker-"));
-	mkdirSync(join(dir, ".pi-stack"), { recursive: true });
-	if (name) writeFileSync(join(dir, ".pi-stack", name), content);
+	const dir = mkdtempSync(join(tmpdir(), "pix-marker-"));
+	mkdirSync(join(dir, ".pix"), { recursive: true });
+	if (name) writeFileSync(join(dir, ".pix", name), content);
 	return dir;
 }
 
 let seq = 0;
 // Import a FRESH extension module instance with process.cwd() pointed at
 // `workspace` for the module-load-time readFileSync calls (memory-recall.ts,
-// memory-capture.ts both read .pi-stack/profile exactly once at import), and
+// memory-capture.ts both read .pix/profile exactly once at import), and
 // with `env` applied/restored around the import (MEMORY_URL/KNOWLEDGE_URL are
 // also read once at module load).
 async function importFromWorkspace(specifier, workspace, env = {}) {
@@ -131,10 +131,10 @@ function capturePi(mod) {
 
 const toolText = (r) => r.content?.map((c) => c.text ?? "").join("\n") ?? "";
 
-// ── .pi-stack/profile → memory-recall.ts (matches pack.go's writeMemoryScope
+// ── .pix/profile → memory-recall.ts (matches pack.go's writeMemoryScope
 // output: "<scope>\n", see TestMarkerRoundTrip_Profile) ─────────────────────
 
-test("memory-recall.ts resolves ACTIVE_PROFILE from the exact .pi-stack/profile bytes writeMemoryScope produces", async (t) => {
+test("memory-recall.ts resolves ACTIVE_PROFILE from the exact .pix/profile bytes writeMemoryScope produces", async (t) => {
 	const workspace = makeWorkspace("profile", "work\n");
 	const { server, requests } = makeFakeDaemon(() => ({ hits: [] }));
 	t.after(() => server.close());
@@ -148,7 +148,7 @@ test("memory-recall.ts resolves ACTIVE_PROFILE from the exact .pi-stack/profile 
 	assert.equal(requests[0].params.profile, "work", "profile must be the exact scope Go wrote, not 'work\\n' or 'default'");
 });
 
-test("memory-recall.ts falls back to 'default' when .pi-stack/profile is absent (the un-scoped, backward-compatible case)", async (t) => {
+test("memory-recall.ts falls back to 'default' when .pix/profile is absent (the un-scoped, backward-compatible case)", async (t) => {
 	const workspace = makeWorkspace(null, "");
 	const { server, requests } = makeFakeDaemon(() => ({ hits: [] }));
 	t.after(() => server.close());
@@ -161,11 +161,11 @@ test("memory-recall.ts falls back to 'default' when .pi-stack/profile is absent 
 	assert.equal(requests[0].params.profile, "default");
 });
 
-// ── .pi-stack/profile → memory-capture.ts (the SAME file, read by a SEPARATE
+// ── .pix/profile → memory-capture.ts (the SAME file, read by a SEPARATE
 // module — both must resolve the identical profile so recall and capture
 // never diverge) ────────────────────────────────────────────────────────────
 
-test("memory-capture.ts stamps captured exchanges with the SAME .pi-stack/profile marker memory-recall.ts reads", async (t) => {
+test("memory-capture.ts stamps captured exchanges with the SAME .pix/profile marker memory-recall.ts reads", async (t) => {
 	const workspace = makeWorkspace("profile", "work\n");
 	const { server, requests } = makeFakeDaemon(() => ({ result: { accepted: true } }));
 	t.after(() => server.close());
@@ -196,11 +196,11 @@ test("memory-capture.ts stamps captured exchanges with the SAME .pi-stack/profil
 	assert.equal(requests[0].params.profile, "work", "capture must stamp the same profile recall queries, or the two silently diverge");
 });
 
-// ── .pi-stack/knowledge.scope → knowledge-recall.ts (matches run.go's
+// ── .pix/knowledge.scope → knowledge-recall.ts (matches run.go's
 // writeKnowledgeScope output: one canonical id per line + trailing newline,
 // see TestMarkerRoundTrip_KnowledgeScope) ───────────────────────────────────
 
-test("knowledge-recall.ts resolves bundle scope from the exact .pi-stack/knowledge.scope bytes writeKnowledgeScope produces", async (t) => {
+test("knowledge-recall.ts resolves bundle scope from the exact .pix/knowledge.scope bytes writeKnowledgeScope produces", async (t) => {
 	const workspace = makeWorkspace("knowledge.scope", "/global/bundle\n/project/bundle\n");
 	const { server, requests } = makeFakeDaemon(() => ({ concepts: [] }));
 	t.after(() => server.close());
@@ -213,7 +213,7 @@ test("knowledge-recall.ts resolves bundle scope from the exact .pi-stack/knowled
 	assert.deepEqual(requests[0].params.bundles, ["/global/bundle", "/project/bundle"], "must forward BOTH lines, trimmed, in order, as the bundles filter");
 });
 
-test("knowledge-recall.ts sends no bundles filter when .pi-stack/knowledge.scope is absent (query-all back-compat)", async (t) => {
+test("knowledge-recall.ts sends no bundles filter when .pix/knowledge.scope is absent (query-all back-compat)", async (t) => {
 	const workspace = makeWorkspace(null, "");
 	const { server, requests } = makeFakeDaemon(() => ({ concepts: [] }));
 	t.after(() => server.close());
@@ -225,13 +225,13 @@ test("knowledge-recall.ts sends no bundles filter when .pi-stack/knowledge.scope
 	assert.equal(requests[0].params.bundles, undefined, "absent scope file must omit `bundles` entirely, not send an empty array");
 });
 
-// ── .pi-stack/ollama-bridge.model → ollama-bridge.ts (matches run.go's
+// ── .pix/ollama-bridge.model → ollama-bridge.ts (matches run.go's
 // writeOllamaBridgeFile output: "<model>\n", see
 // TestMarkerRoundTrip_OllamaBridgeModel). OLLAMA_HOSTMODE=1 is the documented
 // seam that skips binding the reverse-proxy listener, so this stays a pure,
 // side-effect-free read of the marker. ──────────────────────────────────────
 
-test("ollama-bridge.ts registers the model id from the exact .pi-stack/ollama-bridge.model bytes writeOllamaBridgeFile produces", async (t) => {
+test("ollama-bridge.ts registers the model id from the exact .pix/ollama-bridge.model bytes writeOllamaBridgeFile produces", async (t) => {
 	const workspace = makeWorkspace("ollama-bridge.model", "qwen3.5:9b\n");
 	const mod = await importFromWorkspace("../extensions/ollama-bridge.ts", workspace, {
 		OLLAMA_HOSTMODE: "1",
@@ -250,7 +250,7 @@ test("ollama-bridge.ts registers the model id from the exact .pi-stack/ollama-br
 	assert.equal(provider.models[0].id, "qwen3.5:9b", "registered model id must be the exact tag Go wrote, not padded/quoted");
 });
 
-test("ollama-bridge.ts falls back to its own default model when .pi-stack/ollama-bridge.model is absent", async (t) => {
+test("ollama-bridge.ts falls back to its own default model when .pix/ollama-bridge.model is absent", async (t) => {
 	const workspace = makeWorkspace(null, "");
 	const mod = await importFromWorkspace("../extensions/ollama-bridge.ts", workspace, {
 		OLLAMA_HOSTMODE: "1",
@@ -268,7 +268,7 @@ test("ollama-bridge.ts falls back to its own default model when .pi-stack/ollama
 
 // ── boundary sanity: no marker reader here ever touches host-state.json ────
 
-test("none of these fixtures require or read .pi-stack/host-state.json", async (t) => {
+test("none of these fixtures require or read .pix/host-state.json", async (t) => {
 	const workspace = makeWorkspace("profile", "work\n");
-	assert.ok(!existsSync(join(workspace, ".pi-stack", "host-state.json")), "host-state.json must never be planted or expected by any TS reader");
+	assert.ok(!existsSync(join(workspace, ".pix", "host-state.json")), "host-state.json must never be planted or expected by any TS reader");
 });

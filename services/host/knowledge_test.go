@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"pi-stack/host/plugin"
+	"pix/host/plugin"
 )
 
 // Compile-time guarantee the adapter satisfies the plugin interface.

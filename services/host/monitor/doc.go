@@ -1,8 +1,8 @@
-// Package monitor is the host-side half of `pi-stack monitor`: a live wiretap
+// Package monitor is the host-side half of `pix monitor`: a live wiretap
 // of a running sandbox's out-of-sandbox traffic (model requests/responses,
 // tool + MCP calls, context/control events).
 //
-// It is pure library + net/http — no bubbletea, no cmd/pi-stack import — so it
+// It is pure library + net/http — no bubbletea, no cmd/pix import — so it
 // can be built and tested (`go test ./monitor/...`) on its own. The wire
 // protocol (event kinds, JSON field names) is frozen by
 // .pi-agent/deliver/monitor/architecture.md Section 2 and MUST match the

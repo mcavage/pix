@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"pi-stack/host/config"
-	"pi-stack/host/plugin"
+	"pix/host/config"
+	"pix/host/plugin"
 )
 
 // buildExampleBroker compiles examples/broker-example to a temp binary and

@@ -1,6 +1,6 @@
-# Rename pi-stack to Pix and fix first-run reliability
+# Rename pix to Pix and fix first-run reliability
 
-This proposal turns `pi-stack` into `pix`, shortens the local feedback loop, and makes setup produce evidence instead of optimistic configuration.
+This proposal turns `pix` into `pix`, shortens the local feedback loop, and makes setup produce evidence instead of optimistic configuration.
 
 **Status:** proposed  
 **Branch:** `pix/rename-and-onboarding-audit`  
@@ -34,9 +34,9 @@ Two naming risks are accepted, not ignored:
 
 On the `v0.0.47` baseline:
 
-- 268 tracked files contain `pi-stack` or `PI_STACK`;
-- there are about 4,004 lowercase `pi-stack` occurrences;
-- there are about 443 `PI_STACK` occurrences;
+- 268 tracked files contain `pix` or `PIX`;
+- there are about 4,004 lowercase `pix` occurrences;
+- there are about 443 `PIX` occurrences;
 - user-visible names appear in Go packages, binaries, the man page, help, installer, image metadata, kit metadata, sandbox names, task refs, launchd/systemd units, MCP registrations, extensions, tests, and docs.
 
 This is not one blind replacement. Historical records and the external `gog` executable keep their real names; active Pix runtime surfaces do not.
@@ -53,7 +53,7 @@ normal local total                  52.483s
 
 The dominant causes are specific and fixable:
 
-- `services/host/cmd/pi-stack/redrive_findings2_test.go` creates `sleep` through a shell without `exec`. Killing the shell leaves the child holding output pipes open, so each timeout pays a two-second `exec.Cmd.WaitDelay`. Nineteen tests account for about 40 seconds.
+- `services/host/cmd/pix/redrive_findings2_test.go` creates `sleep` through a shell without `exec`. Killing the shell leaves the child holding output pipes open, so each timeout pays a two-second `exec.Cmd.WaitDelay`. Nineteen tests account for about 40 seconds.
 - `tests/pi-patches.test.mjs` performs real npm installs and takes about 9.6 seconds.
 - `tests/monitor.test.mjs` uses wall-clock retry sleeps.
 - `tests/memory-recall.test.mjs` waits three seconds to test a two-second threshold.
@@ -100,8 +100,8 @@ The problem is the product flow, not the local OAuth JSON filename. Pix should m
 The reported messages are a current-code regression, not damaged legacy metadata:
 
 ```text
-pi-stack task ls: skipping modelchange.json: metadata for "modelchange" has no profile
-pi-stack task ls: skipping pixrename.json: metadata for "pixrename" has no profile
+pix task ls: skipping modelchange.json: metadata for "modelchange" has no profile
+pix task ls: skipping pixrename.json: metadata for "pixrename" has no profile
 No tasks for this repo.
 ```
 
@@ -131,15 +131,15 @@ No tasks for this repo.
 - skill, agent, capability, and model-intent names;
 - `.pi-sessions/`;
 - `pi-kit/` as the repository directory, because old version-pinned kit URLs reference it;
-- persisted custom message types such as `pi-stack-todo-cleared` unless both names can be read safely.
+- persisted custom message types such as `pix-todo-cleared` unless both names can be read safely.
 
 ### Clean cutover policy
 
 Before switching the repository and release artifacts:
 
 1. stop and uninstall the current host service;
-2. remove current pi-stack sandboxes and task sandboxes;
-3. keep a final `pi-stack state backup` only as an emergency archive;
+2. remove current pix sandboxes and task sandboxes;
+3. keep a final `pix state backup` only as an emergency archive;
 4. remove the old launcher binaries and old config/state/data directories;
 5. rename the repository and publish Pix from a clean host state.
 
@@ -366,7 +366,7 @@ Do not add a `context_lookup` tool in the first pass. The compiled pointer index
 5. Add CI timing output and record the new baseline.
 6. Move dynamic recall out of the changing system prompt and prove prompt-hash stability.
 7. Trim skill descriptions and project `AGENTS.md`, then add context segment reporting and byte-budget tests.
-8. Add `pi-stack context compile` before rename work begins, then rename the command mechanically to `pix context compile`. This avoids rewriting tens of kilobytes of always-on reference prose that will be removed immediately afterward.
+8. Add `pix context compile` before rename work begins, then rename the command mechanically to `pix context compile`. This avoids rewriting tens of kilobytes of always-on reference prose that will be removed immediately afterward.
 
 **Gate:** all existing tests pass; `task new` followed by `task ls` lists the task without warnings; local Go plus Node tests complete under 10 seconds; project-owned always-on context is at most 18 KB; the cold-turn target is at most 48 KB; system-prompt hash stays stable across a recorded multi-turn recall scenario.
 
@@ -396,7 +396,7 @@ Do not add a `context_lookup` tool in the first pass. The compiled pointer index
 ### Wave 3: perform the hard rename
 
 1. Rename the Go module and imports.
-2. Move `cmd/pi-stack` to `cmd/pix`, including embedded templates and man page.
+2. Move `cmd/pix` to `cmd/pix`, including embedded templates and man page.
 3. Rename binaries, config/state/data paths, workspace state, sandbox names, task refs, service identities, release assets, type shims, themes, package metadata, OCI labels, and in-image paths.
 4. Update exact process invocation detection in both TypeScript and Go.
 5. Rename all public Google Workspace surfaces while retaining `gog` only where code invokes the external dependency.
