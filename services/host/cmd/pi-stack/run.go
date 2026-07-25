@@ -333,44 +333,145 @@ func runRun(argv []string) {
 	}
 }
 
-// recordCreateReceipt writes the create receipt for sandbox — called ONLY by
-// execSbxRunAndRecordCreate, after run.go's OWN `sbx run` create has already
-// exec'd successfully. preloaded is the EXACT --static-mcp set that launch
-// emitted (o.StaticMCP: allPreloadedMCP(cfg.MCP+o.MCP), which already folds in
-// every active/transient pack integration's MCP server — applyPackToLaunch
-// runs before this set is computed), so a receipt read later never disagrees
-// with what create actually requested.
-func recordCreateReceipt(sandbox string, preloaded []string) error {
+// Creation-evidence poll seams. After `sbx run` is STARTED (not waited), the
+// create path polls for the named sandbox to become visible through
+// sandboxAppearProbeFn, records the create receipt the moment it is, and only
+// then settles into Wait — so status/doctor can render preload provenance
+// WHILE the interactive session is alive, not hours later when it exits.
+// Injectable so tests never shell out or sleep for real; production polls
+// `sbx ls` via probeTaskSandbox. The timeout is deliberately generous: a
+// first create may pull the image for minutes before the sandbox exists, and
+// the poll only runs while `sbx run` itself is still alive, so a large bound
+// costs the happy path nothing.
+var (
+	sandboxAppearProbeFn = func(name string) sbxState {
+		return probeTaskSandbox(defaultShellEnv(), name)
+	}
+	sandboxAppearPollInterval = 500 * time.Millisecond
+	sandboxAppearPollTimeout  = 15 * time.Minute
+)
+
+// sandboxAppeared reports whether st is POSITIVE existence evidence: the name
+// is present in `sbx ls`, running or not. Absent keeps polling; unknown (a
+// failed probe) proves nothing and also keeps polling — never record a create
+// receipt on an indeterminate read.
+func sandboxAppeared(st sbxState) bool { return st == sbxRunning || st == sbxStopped }
+
+// recordCreateReceipt commits the create receipt for sandbox — called ONLY by
+// execSbxRunAndRecordCreate, once its creation-evidence poll has positively
+// seen run.go's OWN `sbx run` create appear. preloaded is the EXACT
+// --static-mcp set that launch emitted (o.StaticMCP:
+// allPreloadedMCP(cfg.MCP+o.MCP), which already folds in every
+// active/transient pack integration's MCP server — applyPackToLaunch runs
+// before this set is computed), so a receipt read later never disagrees with
+// what create actually requested. merge=true (the normal path: the
+// pre-create clear succeeded) preserves loads a concurrent `pi-stack mcp
+// load` appended during the create window; merge=false (the clear could not
+// be proven) replaces outright so a prior lifetime's loads can never survive.
+func recordCreateReceipt(sandbox string, preloaded []string, merge bool) error {
 	dir, err := sandboxMCPStateDirFn()
 	if err != nil {
 		return &receiptRecordError{op: "create", sandbox: sandbox, err: fmt.Errorf("resolving pi-stack state dir: %w", err)}
 	}
-	if err := writeCreateReceipt(dir, sandbox, preloaded, nil); err != nil {
-		return &receiptRecordError{op: "create", sandbox: sandbox, err: err}
+	var werr error
+	if merge {
+		werr = commitCreateReceipt(dir, sandbox, preloaded, nil)
+	} else {
+		werr = writeCreateReceipt(dir, sandbox, preloaded, nil)
+	}
+	if werr != nil {
+		return &receiptRecordError{op: "create", sandbox: sandbox, err: werr}
 	}
 	return nil
 }
 
 // execSbxRunAndRecordCreate runs cmd (the already-composed `sbx run ...`
-// invocation, stdio already wired by the caller) and — ONLY when the exec
-// itself succeeds AND writeReceipt is true — writes the create receipt for
-// sandbox/preloaded. This function IS the ordering contract S03 item 1
-// requires: a failed exec returns before any receipt write is even attempted
-// (never write before success), and writeReceipt=false (a plain re-attach, or
-// an inconclusive sbxUnknown probe — see definitelyCreating) never writes one
-// regardless of the exec's own outcome (a re-attach writes nothing). A
-// writeCreateReceipt failure surfaces as *receiptRecordError so the caller can
-// tell "the launch itself failed" apart from "it succeeded but couldn't be
-// recorded" and report each honestly — never claiming success outright, and
-// never silently swallowing a failed record.
+// invocation, stdio already wired by the caller — Start/Wait preserve it) and
+// owns the create-receipt lifecycle around it:
+//
+//   - writeReceipt=false (a plain re-attach, or an inconclusive sbxUnknown
+//     probe — see definitelyCreating): cmd.Run() and nothing else. A re-attach
+//     writes nothing, clears nothing.
+//   - writeReceipt=true (a definite create/replace): any stale receipt from a
+//     prior same-name lifetime is CLEARED under the per-sandbox lock BEFORE
+//     the create starts; then cmd is STARTED and the sandbox's appearance is
+//     polled (sandboxAppearProbeFn, bounded by sandboxAppearPollTimeout).
+//     The moment it appears the receipt is committed — while the interactive
+//     session is still alive — merging any loads recorded since the clear;
+//     then we Wait for the session.
+//
+// Outcome contract: if the process exits BEFORE creation evidence, its error
+// is returned and no receipt is written (a final probe on a CLEAN exit still
+// records — evidence found at exit is evidence). If the receipt cannot be
+// recorded after the sandbox positively appeared (or the poll timed out with
+// the session still running), the session is still waited to completion and
+// the failure surfaces as *receiptRecordError — the caller reports
+// "launched/attached, but state unrecorded" and exits non-zero, never a
+// silent success and never confused with a launch failure. The Wait goroutine
+// always terminates when the process exits and its result is always drained
+// — no goroutine leaks on any path.
 func execSbxRunAndRecordCreate(cmd *exec.Cmd, writeReceipt bool, sandbox string, preloaded []string) error {
-	if err := cmd.Run(); err != nil {
+	if !writeReceipt {
+		return cmd.Run()
+	}
+
+	// Pre-create clear (B): under the same per-sandbox lock the writers use,
+	// drop any receipt from a previous incarnation of this name so its load
+	// history can never leak into the new lifetime. merge stays false unless
+	// the clear POSITIVELY succeeded — the commit then merges only loads
+	// appended after this point; an unproven clear degrades to a plain
+	// replace, which cannot resurrect old loads.
+	merge := false
+	if stateDir, err := sandboxMCPStateDirFn(); err == nil {
+		if err := clearSandboxMCPReceipt(stateDir, sandbox); err == nil {
+			merge = true
+		}
+	}
+
+	if err := cmd.Start(); err != nil {
 		return err
 	}
-	if !writeReceipt {
-		return nil
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+
+	var recErr error
+	deadline := time.Now().Add(sandboxAppearPollTimeout)
+	ticker := time.NewTicker(sandboxAppearPollInterval)
+	defer ticker.Stop()
+poll:
+	for {
+		if sandboxAppeared(sandboxAppearProbeFn(sandbox)) {
+			recErr = recordCreateReceipt(sandbox, preloaded, merge)
+			break poll
+		}
+		if time.Now().After(deadline) {
+			recErr = &receiptRecordError{op: "create", sandbox: sandbox,
+				err: fmt.Errorf("timed out after %s waiting for the sandbox to appear in `sbx ls`; its preloaded MCP set was not recorded", sandboxAppearPollTimeout)}
+			break poll
+		}
+		select {
+		case werr := <-waitCh:
+			// The process exited before creation evidence. A failed exec
+			// surfaces its OWN error, receiptless. A clean exit gets ONE final
+			// probe (the sandbox may have appeared exactly as it exited, e.g. a
+			// detached create); still no evidence means honestly no receipt.
+			if werr != nil {
+				return werr
+			}
+			if sandboxAppeared(sandboxAppearProbeFn(sandbox)) {
+				return recordCreateReceipt(sandbox, preloaded, merge)
+			}
+			return nil
+		case <-ticker.C:
+		}
 	}
-	return recordCreateReceipt(sandbox, preloaded)
+	// Receipt outcome decided (recorded, failed, or timed out) — now hand the
+	// terminal back to the session and wait it out. Its own failure dominates
+	// the report; a receipt failure surfaces only on a clean session exit.
+	if werr := <-waitCh; werr != nil {
+		return werr
+	}
+	return recErr
 }
 
 // applyReplaceRm runs the plan's RmFirst step (`sbx rm -f <name>`) via env when
@@ -385,6 +486,12 @@ func applyReplaceRm(env shellEnv, plan runLaunchPlan, name string) error {
 	}
 	if _, err := env.run("sbx", "rm", "-f", name); err != nil {
 		return fmt.Errorf("could not remove existing sandbox %q to replace it: %w", name, err)
+	}
+	// The launcher itself removed this sandbox, so its MCP receipt describes a
+	// dead lifetime — clear it (E). Best-effort with a warning: the pre-create
+	// clear in execSbxRunAndRecordCreate is the correctness backstop.
+	if err := clearRemovedSandboxReceipt(name); err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack: warning: removed sandbox %q but could not clear its mcp receipt: %v\n", name, err)
 	}
 	return nil
 }

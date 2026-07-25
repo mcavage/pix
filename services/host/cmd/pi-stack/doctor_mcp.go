@@ -237,7 +237,15 @@ func mcpAttachCheck(name string, ctx mcpSandboxContext) check {
 			detail:   fmt.Sprintf("registered, but pi-stack has no record of attaching it to %s — %s", ctx.sandbox, guidance),
 			evidence: row.Evidence}
 	}
-	// mcpJoinUnverifiable: the receipt itself is absent or untrustworthy.
+	// mcpJoinUnverifiable: the receipt is absent, untrustworthy, or PARTIAL
+	// (valid but load-only — it proves only the loads it lists, so a name it
+	// doesn't list is unverifiable, never "positively not attached").
+	if ctx.status == sandboxMCPStateOK && ctx.receipt.IsPartial() {
+		return check{label: label, verdict: verdictUnverifiable,
+			detail: fmt.Sprintf("launcher receipt for sandbox %s is partial (load-only, no create record) — preload state unknown; %s",
+				ctx.sandbox, guidance),
+			evidence: row.Evidence}
+	}
 	if ctx.status == sandboxMCPStateAbsent {
 		return check{label: label, verdict: verdictUnverifiable,
 			detail:   fmt.Sprintf("no launcher receipt for sandbox %s — attachment unverified; %s", ctx.sandbox, guidance),

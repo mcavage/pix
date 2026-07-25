@@ -15,21 +15,41 @@
 //
 // SCOPE (schema 1): Sandbox (identity the receipt is FOR — checked on every
 // read so a reused/renamed directory can never silently supply someone
-// else's receipt), CreatedAt + Preloaded (written once by writeCreateReceipt
-// right after the caller's OWN successful sandbox create — the static-MCP set
-// requested at create time), and Loads (appended by appendLoadReceipt right
-// after the caller's OWN successful `mcp load`, one entry per server name,
-// FIRST-success timestamp preserved — a receipt answers "has this ever
-// worked", not "when did it last run").
+// else's receipt), CreatedAt + Preloaded (committed once per lifetime by
+// commitCreateReceipt, as soon as the caller's OWN `sbx run` create is
+// observably done — the static-MCP set requested at create time), and Loads
+// (appended by appendLoadReceipt right after the caller's OWN successful
+// `mcp load`, one entry per server name, FIRST-success timestamp preserved —
+// a receipt answers "has this ever worked", not "when did it last run").
 //
-// LIFECYCLE: a receipt is valid for the sandbox's LIFETIME. Recreating a
-// sandbox (same name, fresh `sbx run` create) calls writeCreateReceipt again,
-// which REPLACES the whole file (fresh CreatedAt/Preloaded, Loads reset to
-// none) — a stale load history from the previous incarnation of the name must
-// never leak into the new one. Appending a load to a sandbox that predates
-// this feature (no receipt on disk yet) synthesizes a PARTIAL receipt with no
-// CreatedAt/Preloaded — evidence starts from the first thing pi-stack could
-// actually observe, never backfilled with a guess.
+// LIFECYCLE: a receipt is scoped to ONE lifetime of a sandbox NAME, bounded
+// by pi-stack's own operations. A definite create/replace (run.go's
+// execSbxRunAndRecordCreate) first CLEARS any stale receipt under the
+// per-sandbox lock (clearSandboxMCPReceipt) — a load history from a previous
+// incarnation of the name must never leak into the new one — then, once the
+// freshly-created sandbox is observably present (the creation-evidence poll,
+// while the interactive session is still ALIVE, so status/doctor can render
+// preload provenance mid-session), COMMITS the create receipt
+// (commitCreateReceipt): fresh CreatedAt/Preloaded, merging ONLY loads
+// appended after the clear — a concurrent `pi-stack mcp load` racing the
+// create is preserved, a prior lifetime's loads are not. Every successful
+// launcher-side removal (`pi-stack rm`, task rm/gc, the --replace pre-remove)
+// clears the receipt via clearRemovedSandboxReceipt; a FAILED or unknowable
+// removal RETAINS it — evidence is discarded only on positive proof the
+// lifetime ended. Appending a load to a sandbox that predates this feature
+// (no receipt on disk yet) synthesizes a PARTIAL receipt (IsPartial — no
+// CreatedAt/Preloaded): it proves ONLY the loads it lists, never the
+// create-time preload set; evidence starts from the first thing pi-stack
+// could actually observe, never backfilled with a guess.
+//
+// HONEST LIMITATION: sbx exposes no immutable per-sandbox ID, so a sandbox
+// removed and recreated under the SAME NAME entirely outside the launcher
+// (raw `sbx rm` + `sbx run`) cannot be distinguished from the lifetime this
+// receipt describes — the receipt is keyed by name only, and we do not
+// invent an identity sbx doesn't provide. The exposure is bounded, not
+// eliminated: any LAUNCHER removal clears the receipt, and the next launcher
+// create clears again before writing, so stale evidence survives only an
+// external same-name churn with no launcher operation in between.
 //
 // TRUST: every read REJECTS rather than silently degrades — schema mismatch,
 // malformed JSON, and sandbox-identity mismatch are all distinct typed
@@ -100,6 +120,16 @@ type sandboxMCPReceipt struct {
 	CreatedAt string                  `json:"created_at,omitempty"`
 	Preloaded []string                `json:"preloaded,omitempty"`
 	Loads     []sandboxMCPLoadReceipt `json:"loads,omitempty"`
+}
+
+// IsPartial reports whether r is a PARTIAL receipt: one synthesized by
+// appendLoadReceipt for a sandbox whose creation pi-stack never observed
+// (empty CreatedAt). A partial receipt proves ONLY the loads it lists — it
+// says nothing about the create-time preload set, so a consumer must never
+// read "no entry" in it as "positively never attached"; for every other name
+// the honest answer is unverifiable.
+func (r *sandboxMCPReceipt) IsPartial() bool {
+	return r != nil && r.CreatedAt == ""
 }
 
 // sandboxMCPStateStatus is the typed outcome of reading a receipt — the
@@ -350,13 +380,13 @@ func readSandboxMCPReceipt(stateDir, sandbox string) (*sandboxMCPReceipt, sandbo
 	return readSandboxMCPReceiptFile(dir, sandbox)
 }
 
-// writeCreateReceipt records a successful sandbox CREATE: called by the
-// caller only AFTER its own create succeeded. It always REPLACES the whole
-// receipt — fresh CreatedAt (now(), UTC RFC3339) and Preloaded (a copy of the
-// requested static-MCP set), Loads reset to none. This is deliberate: a
-// recreated sandbox (same name, e.g. after `sbx rm -f` + a fresh create) must
-// never carry forward the previous incarnation's load history, which would
-// misreport a server as already-loaded on a sandbox that has never seen it.
+// writeCreateReceipt is the plain-REPLACE create record: fresh CreatedAt
+// (now(), UTC RFC3339) and Preloaded (a copy of the requested static-MCP
+// set), Loads reset to none, whatever was on disk discarded. It is the
+// DEGRADED create commit — used only when the pre-create clear could not be
+// proven (clearSandboxMCPReceipt failed), where merging would risk
+// resurrecting a prior lifetime's loads; the normal path is
+// commitCreateReceipt, which preserves loads recorded since the clear.
 //
 // now defaults to time.Now when nil (production callers may still pass it
 // explicitly for consistency; tests always inject a fixed clock).
@@ -373,6 +403,75 @@ func writeCreateReceipt(stateDir, sandbox string, preloaded []string, now func()
 		}
 		return writeSandboxMCPReceiptFile(dir, r)
 	})
+}
+
+// commitCreateReceipt records creation evidence for a sandbox the caller has
+// JUST created (the creation-evidence poll saw it appear): under the
+// per-sandbox lock it writes fresh CreatedAt/Preloaded while PRESERVING the
+// Loads of a VALID receipt already on disk. The caller cleared the receipt
+// (clearSandboxMCPReceipt) before starting the create, so any loads present
+// now were appended by a concurrent `pi-stack mcp load` DURING this create
+// window — this lifetime's own evidence, which a plain replace would erase
+// (the lost-update the old post-exit write had). Anything on disk that is
+// not a valid OK receipt (absent, corrupt, wrong schema/identity) is
+// replaced outright: the caller positively owns this lifetime's start, so
+// only its own valid appends may merge.
+func commitCreateReceipt(stateDir, sandbox string, preloaded []string, now func() time.Time) error {
+	if now == nil {
+		now = time.Now
+	}
+	return withSandboxMCPStateLock(stateDir, sandbox, func(dir string) error {
+		fresh := &sandboxMCPReceipt{
+			Schema:    sandboxMCPStateSchema,
+			Sandbox:   sandbox,
+			CreatedAt: now().UTC().Format(time.RFC3339),
+			Preloaded: append([]string(nil), preloaded...),
+		}
+		if r, status, _ := readSandboxMCPReceiptFile(dir, sandbox); status == sandboxMCPStateOK {
+			fresh.Loads = r.Loads
+		}
+		return writeSandboxMCPReceiptFile(dir, fresh)
+	})
+}
+
+// clearSandboxMCPReceipt removes the receipt file for sandbox under the SAME
+// per-sandbox lock every writer uses, so a clear can never interleave with a
+// concurrent load's read-modify-write. Symlink-safe: the per-sandbox
+// directory is refused if symlinked (withSandboxMCPStateLock), and os.Remove
+// on the receipt file removes a planted symlink itself, never what it points
+// to. A missing directory or file is a clean no-op — clearing an
+// already-empty lifetime is not an error.
+func clearSandboxMCPReceipt(stateDir, sandbox string) error {
+	if err := validateSandboxStateName(sandbox); err != nil {
+		return err
+	}
+	// Don't materialize a state directory just to clear nothing.
+	if _, err := os.Lstat(filepath.Join(sandboxMCPStateRoot(stateDir), sandbox)); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return withSandboxMCPStateLock(stateDir, sandbox, func(dir string) error {
+		if err := os.Remove(filepath.Join(dir, sandboxMCPStateFileName)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	})
+}
+
+// clearRemovedSandboxReceipt clears the receipt for a sandbox the LAUNCHER
+// ITSELF just successfully removed (`pi-stack rm`, task rm/gc teardown, the
+// --replace pre-remove) — the receipt now describes a dead lifetime. Callers
+// must invoke it ONLY on positive removal success; a failed or unknowable
+// removal retains the receipt (evidence is discarded only on proof). Resolves
+// the state root through the same sandboxMCPStateDirFn seam as the writers.
+func clearRemovedSandboxReceipt(sandbox string) error {
+	dir, err := sandboxMCPStateDirFn()
+	if err != nil {
+		return fmt.Errorf("resolving pi-stack state dir: %w", err)
+	}
+	return clearSandboxMCPReceipt(dir, sandbox)
 }
 
 // appendLoadReceipt records a successful `pi-stack mcp load <name>`: called by

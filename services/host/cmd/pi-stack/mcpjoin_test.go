@@ -5,14 +5,62 @@ import (
 	"testing"
 )
 
-// okReceipt builds a valid schema-1 receipt for sandbox with the given
-// preloaded set and load entries.
+// okReceipt builds a valid FULL schema-1 receipt (CreatedAt set — a create
+// pi-stack observed) for sandbox with the given preloaded set and load
+// entries. See partialReceipt for the load-only variant.
 func okReceipt(sandbox string, preloaded []string, loads ...string) *sandboxMCPReceipt {
-	r := &sandboxMCPReceipt{Schema: sandboxMCPStateSchema, Sandbox: sandbox, Preloaded: preloaded}
+	r := &sandboxMCPReceipt{Schema: sandboxMCPStateSchema, Sandbox: sandbox,
+		CreatedAt: "2026-01-02T03:04:05Z", Preloaded: preloaded}
 	for _, n := range loads {
 		r.Loads = append(r.Loads, sandboxMCPLoadReceipt{Name: n, At: "2026-01-02T03:04:05Z"})
 	}
 	return r
+}
+
+// partialReceipt builds a PARTIAL (load-only, no CreatedAt/Preloaded) receipt
+// — what appendLoadReceipt synthesizes for a sandbox whose creation pi-stack
+// never observed.
+func partialReceipt(sandbox string, loads ...string) *sandboxMCPReceipt {
+	r := &sandboxMCPReceipt{Schema: sandboxMCPStateSchema, Sandbox: sandbox}
+	for _, n := range loads {
+		r.Loads = append(r.Loads, sandboxMCPLoadReceipt{Name: n, At: "2026-01-02T03:04:05Z"})
+	}
+	return r
+}
+
+// TestJoinMCPSandboxRow_PartialReceipt pins D: a partial receipt proves ONLY
+// the entries in Loads. A load it lists renders loaded; EVERY other name
+// renders unverifiable — never registered-not-attached, because the
+// create-time preload set is unknown, so "no entry" is not "positively never
+// attached".
+func TestJoinMCPSandboxRow_PartialReceipt(t *testing.T) {
+	const box = "pi-stack-proj"
+	r := partialReceipt(box, "slack")
+	if !r.IsPartial() {
+		t.Fatal("precondition: a load-only receipt (empty CreatedAt) must be IsPartial")
+	}
+
+	loaded := joinMCPSandboxRow("slack", mcpRegYes, box, r, sandboxMCPStateOK)
+	if loaded.State != mcpJoinLoaded {
+		t.Errorf("listed load: state = %q, want %q", loaded.State, mcpJoinLoaded)
+	}
+
+	other := joinMCPSandboxRow("gog", mcpRegYes, box, r, sandboxMCPStateOK)
+	if other.State != mcpJoinUnverifiable {
+		t.Errorf("unlisted name on a partial receipt: state = %q, want %q", other.State, mcpJoinUnverifiable)
+	}
+	if !strings.Contains(other.Evidence, "partial") {
+		t.Errorf("evidence should say the receipt is partial, got %q", other.Evidence)
+	}
+	if !strings.Contains(other.Evidence, "pi-stack mcp load gog") {
+		t.Errorf("evidence should carry the attach guidance, got %q", other.Evidence)
+	}
+
+	// A FULL receipt keeps the positive registered-not-attached answer.
+	full := joinMCPSandboxRow("gog", mcpRegYes, box, okReceipt(box, nil, "slack"), sandboxMCPStateOK)
+	if full.State != mcpJoinRegisteredNotAttached {
+		t.Errorf("unlisted name on a full receipt: state = %q, want %q", full.State, mcpJoinRegisteredNotAttached)
+	}
 }
 
 // TestJoinMCPSandboxRowStates covers all five join states from the single
