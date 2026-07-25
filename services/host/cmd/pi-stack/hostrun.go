@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"pi-stack/host/config"
 )
@@ -147,14 +149,35 @@ var hostHarnessDirs = []string{"skills", "agents", "extensions", "prompts", "the
 // "install pi" hints tell the user to match the image's version, so they must
 // name the ACTUAL pinned version, not an unversioned latest. When you bump the
 // Dockerfile ARG, bump this in the same commit (a test cross-checks the two).
-const hostPinnedPiPackage = "@earendil-works/pi-coding-agent@0.82.0"
+const hostPinnedPiPackage = "@earendil-works/pi-coding-agent@0.82.1"
+const hostPiVersionProbeTimeout = 2 * time.Second
+
+func checkHostPiVersion(piBin string) error {
+	want := strings.TrimPrefix(hostPinnedPiPackage, "@earendil-works/pi-coding-agent@")
+	ctx, cancel := context.WithTimeout(context.Background(), hostPiVersionProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, piBin, "--version")
+	cmd.WaitDelay = 250 * time.Millisecond
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("`pi --version` timed out after %s", hostPiVersionProbeTimeout)
+	}
+	if err != nil {
+		return fmt.Errorf("could not read `pi --version`: %w", err)
+	}
+	got := strings.TrimSpace(string(out))
+	if got != want {
+		return fmt.Errorf("found pi %q, need %q", got, want)
+	}
+	return nil
+}
 
 // hostPiPackages mirrors the Dockerfile's curated `pi install` loop (the PINNED
 // set — see the Dockerfile comment on why these must be version-locked to the
 // PI_PACKAGE release). When you re-pin the Dockerfile list, re-pin this one.
 var hostPiPackages = []string{
 	"pi-plan@0.1.1",
-	"pi-mcp-adapter@2.11.0",
+	"pi-mcp-adapter@2.13.0",
 	"pi-manage-todo-list@0.4.0",
 	"pi-simplify@0.2.3",
 	"pi-web-access@0.13.0",
@@ -216,6 +239,11 @@ func installHostPiExtensions(errw io.Writer, dir string) []string {
 	piBin, lookErr := exec.LookPath("pi")
 	if lookErr != nil {
 		fmt.Fprintln(errw, "pi-stack host setup: `pi` not found on PATH — install the image's pinned version:")
+		fmt.Fprintln(errw, "  npm install -g "+hostPinnedPiPackage)
+		return hostPiPackages
+	}
+	if err := checkHostPiVersion(piBin); err != nil {
+		fmt.Fprintf(errw, "pi-stack host setup: incompatible `pi`: %v\n", err)
 		fmt.Fprintln(errw, "  npm install -g "+hostPinnedPiPackage)
 		return hostPiPackages
 	}
@@ -599,6 +627,22 @@ func runHostLaunch(o hostOpts) {
 		fmt.Fprintln(os.Stderr, "extensions/host-guard.ts) and re-run `pi-stack host setup`.")
 		os.Exit(1)
 	}
+	piBin, err := exec.LookPath("pi")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "pi-stack host: `pi` not found on PATH. Install the same version the image pins:")
+		fmt.Fprintln(os.Stderr, "  npm install -g "+hostPinnedPiPackage)
+		os.Exit(1)
+	}
+	if err := checkHostPiVersion(piBin); err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack host: incompatible `pi`: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  npm install -g "+hostPinnedPiPackage)
+		os.Exit(1)
+	}
+	if !hostPiExtensionsInstalled(agentDir) {
+		fmt.Fprintln(os.Stderr, "pi-stack host: curated pi extensions are missing or stale.")
+		fmt.Fprintln(os.Stderr, "  pi-stack host setup")
+		os.Exit(1)
+	}
 
 	// Refresh the host preamble (the checkout may have shipped new wording) and
 	// read it back for --append-system-prompt. A launch without the host context
@@ -655,13 +699,6 @@ func runHostLaunch(o hostOpts) {
 		}
 	} else {
 		fmt.Fprintf(os.Stderr, "pi-stack host: no cloud keys (Ollama-only). To add them, put op:// refs in\n  %s\n(e.g. ANTHROPIC_API_KEY=op://vault/item/field) — resolved at launch, never stored.\n", refs)
-	}
-
-	piBin, err := exec.LookPath("pi")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "pi-stack host: `pi` not found on PATH. Install the same version the image pins:")
-		fmt.Fprintln(os.Stderr, "  npm install -g "+hostPinnedPiPackage)
-		os.Exit(1)
 	}
 
 	piArgs := buildHostArgs(agentDir, string(preamble), o)

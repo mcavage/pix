@@ -723,6 +723,34 @@ func TestDoctor_GogRegisteredCommandLineFallsThrough(t *testing.T) {
 	}
 }
 
+func TestRegisteredGogCommand_CurrentSbxPlainTable(t *testing.T) {
+	regCmd := opWrappedGog(gogOpRefs, gogAcct)
+	f := fakeEnv{
+		present:  map[string]bool{"sbx": true, "op": true, "gog": true},
+		envVars:  map[string]string{"PI_STACK_CONFIG": gogCfgFile},
+		statFile: map[string]bool{gogOpRefs: true},
+		output: map[string]string{
+			"sbx mcp ls": "NAME  TYPE   URL/COMMAND\n" +
+				"gog   local  " + regCmd + "\n",
+		},
+	}
+	env := f.env()
+	argv, ok := registeredGogCommand(env)
+	if !ok {
+		t.Fatal("current sbx plain table carries the complete command and must be readable")
+	}
+	if got := strings.Join(argv, " "); got != regCmd {
+		t.Fatalf("registered argv = %q, want %q", got, regCmd)
+	}
+	snap := snapshotGogRegistration(env)
+	if snap.state != gogRegPresent {
+		t.Fatalf("gog setup snapshot state = %v, want present", snap.state)
+	}
+	if got := strings.Join(snap.argv, " "); got != regCmd {
+		t.Fatalf("snapshot argv = %q, want %q", got, regCmd)
+	}
+}
+
 // TestDoctor_GogRegisteredCommandJSON: sbx exposes the registration only via
 // `sbx mcp ls -o json`; doctor parses command+args and probes it.
 func TestDoctor_GogRegisteredCommandJSON(t *testing.T) {

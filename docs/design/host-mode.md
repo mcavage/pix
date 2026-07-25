@@ -86,8 +86,11 @@ narrow (see "Open decisions").
 
 pi is a plain npm package — `Dockerfile` installs it with a vanilla
 `npm install -g @earendil-works/pi-coding-agent@<PI_PACKAGE>` and nothing about
-it depends on sbx or Docker. On the host it's the same install (pin the **same
-version** as the Dockerfile `ARG PI_PACKAGE` so behavior matches).
+it depends on sbx or Docker. On the host it's the same install. Setup and launch enforce the **same version**
+as the Dockerfile `ARG PI_PACKAGE`; a missing or stale copy is rejected before
+extensions load, with the exact pinned install command. Launch also requires the
+curated-extension lock marker written by `pi-stack host setup`, so upgrading the
+core alone cannot load an extension set pinned for an older release.
 
 The clean lever the engineer found: **`PI_CODING_AGENT_DIR`** (pi's config-dir
 env, default `~/.pi/agent`). The repo root layout is identical to `~/.pi/agent`

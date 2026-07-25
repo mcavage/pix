@@ -236,10 +236,10 @@ func buildHostStateHost(cfg *config.Config) hostStateHost {
 	return hostStateHost{Enabled: cfg.Host.Enabled, Provisioned: prov, Ready: cfg.Host.Enabled && prov}
 }
 
-// hostProvisioned reports whether host mode is actually installed (the agent dir
-// has settings.json AND the host-guard extension), mirroring runHostLaunch's own
-// launch preconditions — so host-state never claims "ready" for a bare
-// host.enabled flag with nothing behind it.
+// hostProvisioned reports whether host mode is actually installed: harness
+// files, the exact pinned pi core, and the matching curated-extension marker.
+// It mirrors runHostLaunch's preconditions so host-state never claims "ready"
+// for a bare host.enabled flag or a partially upgraded installation.
 func hostProvisioned() bool {
 	dir := hostAgentDir()
 	if _, err := os.Stat(filepath.Join(dir, "settings.json")); err != nil {
@@ -250,10 +250,11 @@ func hostProvisioned() bool {
 	}
 	// host mode launches `pi` DIRECTLY on the host; without it, host mode can't
 	// run, so it isn't truly provisioned (don't let host-state claim "ready").
-	if _, err := exec.LookPath("pi"); err != nil {
+	piBin, err := exec.LookPath("pi")
+	if err != nil || checkHostPiVersion(piBin) != nil {
 		return false
 	}
-	return true
+	return hostPiExtensionsInstalled(dir)
 }
 
 // resolveHostStatePack reports pack truth for the in-VM onboarding agent, so

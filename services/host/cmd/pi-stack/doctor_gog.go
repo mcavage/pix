@@ -372,11 +372,11 @@ func gogSpawnIsOpWrapped(argv []string) bool {
 // registeredGogCommand asks sbx what command it ACTUALLY registered for the gog
 // MCP server, so doctor can probe the real registration instead of a config
 // reconstruction that may have drifted from what `make mcp-register` wired up.
-// It tries, in order, `sbx mcp get gog`, then `sbx mcp ls -o json`, returning
-// the parsed argv. Returns (nil,false) when sbx is absent or exposes no command
-// — the caller then falls back to the best-effort reconstruction. Both
-// discovery subprocesses are BOUNDED (probeRun) so a hung sbx can never wedge
-// the caller.
+// It tries, in order, `sbx mcp get gog`, `sbx mcp ls -o json`, then the current
+// `sbx mcp ls` plain table, returning the parsed argv. Returns (nil,false) when
+// sbx is absent or exposes no complete command; the caller then falls back to
+// the best-effort reconstruction. Every discovery subprocess is BOUNDED
+// (probeRun) so a hung sbx can never wedge the caller.
 func registeredGogCommand(env shellEnv) ([]string, bool) {
 	if env.lookPath == nil || (env.run == nil && env.probe == nil) {
 		return nil, false
@@ -391,6 +391,11 @@ func registeredGogCommand(env shellEnv) ([]string, bool) {
 	}
 	if out, timedOut, err := probeRun(env, "sbx", "mcp", "ls", "-o", "json"); err == nil && !timedOut {
 		if argv, ok := parseGogCommandJSON(env, out); ok {
+			return argv, true
+		}
+	}
+	if out, timedOut, err := probeRun(env, "sbx", "mcp", "ls"); err == nil && !timedOut {
+		if argv, ok := parseGogCommandTable(env, out); ok {
 			return argv, true
 		}
 	}
@@ -469,6 +474,29 @@ func gogSpawnArgv(env shellEnv, argv []string) ([]string, bool) {
 		if a == "mcp" {
 			return cmd, true
 		}
+	}
+	return nil, false
+}
+
+// parseGogCommandTable extracts gog's argv from the current sbx plain table:
+// NAME TYPE URL/COMMAND. Local command rows are whitespace-delimited today;
+// quoted tokens are rejected because strings.Fields cannot recover them
+// unambiguously. Completeness and wrapper validation use the same strict gate
+// as the text and JSON readers.
+func parseGogCommandTable(env shellEnv, out string) ([]string, bool) {
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[0] != "gog" || fields[1] != "local" {
+			continue
+		}
+		if strings.ContainsAny(line, "\"'") {
+			return nil, false
+		}
+		argv := fields[2:]
+		if !gogCommandComplete(env, argv) {
+			return nil, false
+		}
+		return argv, true
 	}
 	return nil, false
 }

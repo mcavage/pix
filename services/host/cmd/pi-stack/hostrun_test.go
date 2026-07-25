@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"pi-stack/host/config"
 )
@@ -431,6 +432,35 @@ func TestHostPinnedPiPackage_MatchesDockerfile(t *testing.T) {
 	t.Skip("no Dockerfile found (not running in a checkout)")
 }
 
+func TestHostProvisioned_RequiresPinnedPiVersion(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	dir := hostAgentDir()
+	if err := os.MkdirAll(filepath.Join(dir, "extensions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"settings.json", filepath.Join("extensions", "host-guard.ts")} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fakePiBin(t)
+	if hostProvisioned() {
+		t.Error("host mode must not be provisioned without the curated extension marker")
+	}
+	if err := os.WriteFile(filepath.Join(dir, hostPiExtensionsLockFile), []byte(hostPiExtensionsMarker()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fakePiBinVersion(t, "0.0.0")
+	if hostProvisioned() {
+		t.Error("host mode must not be provisioned with a stale pi core")
+	}
+	fakePiBin(t)
+	if !hostProvisioned() {
+		t.Error("host mode must be provisioned when harness files, curated extensions, and pinned pi exist")
+	}
+}
+
 // TestBuildHostArgs: the guard extension and host preamble are ALWAYS on the
 // argv (Phase-1 blockers), sessions live outside the checkout, and model +
 // passthrough ride along.
@@ -513,6 +543,11 @@ func TestHostInHelpTiers(t *testing.T) {
 // package names whose install exits non-zero.
 func fakePiBin(t *testing.T, failOn ...string) (logPath string) {
 	t.Helper()
+	return fakePiBinVersion(t, strings.TrimPrefix(hostPinnedPiPackage, "@earendil-works/pi-coding-agent@"), failOn...)
+}
+
+func fakePiBinVersion(t *testing.T, version string, failOn ...string) (logPath string) {
+	t.Helper()
 	dir := t.TempDir()
 	logPath = filepath.Join(dir, "calls.log")
 	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
@@ -520,6 +555,7 @@ func fakePiBin(t *testing.T, failOn ...string) (logPath string) {
 	}
 	var script strings.Builder
 	script.WriteString("#!/bin/sh\n")
+	script.WriteString("if [ \"$1\" = \"--version\" ]; then echo " + version + "; exit 0; fi\n")
 	script.WriteString("echo \"$@\" >> " + logPath + "\n")
 	for _, f := range failOn {
 		script.WriteString("case \"$2\" in *" + f + "*) echo boom >&2; exit 1;; esac\n")
@@ -628,6 +664,46 @@ func TestInstallHostPiExtensions_FailureReportedMarkerNotWritten(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, hostPiExtensionsLockFile)); err == nil {
 		t.Error("marker must NOT be written when any package failed to install")
+	}
+}
+
+// A stale core pi is rejected before extension installs can create a
+// core/extension compatibility mismatch. The error includes the exact upgrade.
+func TestInstallHostPiExtensions_RejectsStalePi(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, hostPiExtensionsLockFile), []byte(hostPiExtensionsMarker()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	logPath := fakePiBinVersion(t, "0.0.0")
+	var out strings.Builder
+	failed := installHostPiExtensions(&out, dir)
+	if len(failed) != len(hostPiPackages) {
+		t.Fatalf("want all %d packages reported failed, got %d: %v", len(hostPiPackages), len(failed), failed)
+	}
+	wantVersion := strings.TrimPrefix(hostPinnedPiPackage, "@earendil-works/pi-coding-agent@")
+	if !strings.Contains(out.String(), "found pi \"0.0.0\", need \""+wantVersion+"\"") || !strings.Contains(out.String(), "npm install -g "+hostPinnedPiPackage) {
+		t.Errorf("must explain the stale core and exact upgrade, got:\n%s", out.String())
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil || len(logged) != 0 {
+		t.Errorf("stale pi must not install extensions, log: %q, err=%v", string(logged), err)
+	}
+}
+
+func TestCheckHostPiVersion_TimesOut(t *testing.T) {
+	dir := t.TempDir()
+	pi := filepath.Join(dir, "pi")
+	if err := os.WriteFile(pi, []byte("#!/bin/sh\nsleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	err := checkHostPiVersion(pi)
+	elapsed := time.Since(started)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("hanging pi error = %v, want bounded timeout", err)
+	}
+	if elapsed > hostPiVersionProbeTimeout+2*time.Second {
+		t.Fatalf("hanging pi probe took %s, want near %s", elapsed, hostPiVersionProbeTimeout)
 	}
 }
 
