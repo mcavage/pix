@@ -27,6 +27,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"pi-stack/host/config"
 )
 
 // --- finding 1: bounded sbx state probes ------------------------------------
@@ -213,7 +215,7 @@ func TestOnboardReportReadiness_HangingSbxBounded(t *testing.T) {
 	}
 	var out bytes.Buffer
 	start := time.Now()
-	onboardReportReadiness(env, &out)
+	onboardReportReadiness(&config.Config{}, env, &out)
 	if el := time.Since(start); el > 10*time.Second {
 		t.Fatalf("onboardReportReadiness took %s — unbounded", el)
 	}

@@ -354,32 +354,13 @@ func gworkspaceStatus(cfg *config.Config, env shellEnv, out io.Writer, now time.
 	checks = append(checks, gworkspaceTokenAgeCheck(env, now))
 
 	for _, c := range checks {
-		fmt.Fprintf(out, "  %s %-15s %s\n", gworkspaceGlyph(c), c.label, c.detail)
+		fmt.Fprintf(out, "  %s %-15s %s\n", checkGlyph(c), c.label, c.detail)
 		if c.todo != "" {
 			fmt.Fprintf(out, "      fix: %s\n", c.todo)
 		}
 	}
 	fmt.Fprintln(out, "  publication: confirm the app is published at "+gwAudienceURL)
 	return gworkspaceExit(checks)
-}
-
-// gworkspaceGlyph is the local verdict glyph. Wave 1 replaces this with the
-// single shared mapper; keeping it one function here means there is exactly
-// one place to delete.
-func gworkspaceGlyph(c check) string {
-	switch c.verdict {
-	case verdictReady:
-		return "✓"
-	case verdictTodo:
-		if c.note {
-			return "⚠"
-		}
-		return "✗"
-	case verdictDenied:
-		return "⊘"
-	default:
-		return "?"
-	}
 }
 
 // gworkspaceTokenAgeCheck reports how old the stored OAuth credentials are,

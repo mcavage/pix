@@ -86,6 +86,10 @@ func readinessFooter(surface string, s Snapshot) string {
 		return "pi-stack run"
 	case "setup":
 		return "pi-stack run"
+	case "run", "onboard":
+		// The daily surfaces show at most a handful of rows; the full list,
+		// with every fix command, is doctor's job.
+		return "pi-stack doctor"
 	default:
 		return "pi-stack doctor"
 	}

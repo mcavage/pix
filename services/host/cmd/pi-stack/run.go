@@ -86,10 +86,16 @@ func runRun(argv []string) {
 	// already present this is a cheap no-op. Then refuse ONLY when we can POSITIVELY
 	// confirm no key (tri-state): sbx absent OR its control plane unprobeable =
 	// can't verify = proceed, never a false refusal on a transient failure.
+	//
+	// The probe result is KEPT (keyEvidence) and handed to the readiness
+	// snapshot further down, so rendering readiness costs `run` no second
+	// `sbx secret ls`.
+	var keyEvidence sbxKeyEvidence
 	if _, err := defaultShellEnv().lookPath("sbx"); err == nil {
 		env := defaultShellEnv()
 		bootstrapProviderKeys(env, os.Stdin, os.Stderr, isTTY(os.Stdin))
-		if present, probeOK := sbxModelKeyState(env); probeOK && !present {
+		keyEvidence = probeSbxKeyEvidence(env)
+		if keyEvidence.ok() && !anyModelKeyInOutput(keyEvidence.out) {
 			fmt.Fprint(os.Stderr, modelKeyMissingMessage(env))
 			os.Exit(1)
 		}
@@ -269,6 +275,17 @@ func runRun(argv []string) {
 	// (recall/knowledge degrade in-VM exactly as before). ensureServe prints its
 	// own progress/failure lines.
 	ensureServeUp(nil, ensureServeRunTimeout)
+
+	// Readiness, rendered from the SHARED lazy snapshot (readiness_launch.go)
+	// and reusing the key evidence the launch gate above already paid for. Two
+	// rules, both deliberate:
+	//   - AT MOST launchWarningLimit rows, then a single count pointing at
+	//     doctor. `run` is the daily command; a wall of readiness text here is
+	//     how a user learns to skip readiness output entirely.
+	//   - It NEVER blocks. The only launch-stopping condition is the missing
+	//     provider key handled above, because that is the only gap that makes
+	//     the session useless rather than degraded.
+	renderReadinessWarnings(os.Stderr, fastReadinessSnapshot(cfg, defaultShellEnv(), keyEvidence), launchWarningLimit)
 
 	// Knowledge scope: resolve this workspace's bundle set (global config bundles
 	// + the project's .pi-stack/knowledge pointer), lazily reindex the project

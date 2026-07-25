@@ -401,30 +401,20 @@ func runOnboardCmd(argv []string) {
 			fmt.Printf("  mcp register skipped: %v (finish later: pi-stack mcp register)\n", err)
 		}
 	}
-	onboardReportReadiness(env, os.Stdout)
+	onboardReportReadiness(cfg, env, os.Stdout)
 }
 
-// onboardReportReadiness prints the outstanding host prerequisites (missing
-// model keys, gog auth) without prompting, then the next step.
-func onboardReportReadiness(env shellEnv, out io.Writer) {
-	sbxOut, sbxOK := "", false
-	if _, err := env.lookPath("sbx"); err == nil {
-		// BOUNDED (probeRun): a hung `sbx secret ls` leaves sbxOK=false — the
-		// report degrades to no key claims and never wedges onboard.
-		if o, timedOut, err := probeRun(env, "sbx", "secret", "ls"); err == nil && !timedOut {
-			sbxOut, sbxOK = o, true
-		}
-	}
-	if sbxOK {
-		anyKey := false
-		for _, key := range []string{"anthropic", "openai", "google"} {
-			if secretCheck(key, key, sbxOut, sbxOK).state() == stateOK {
-				anyKey = true
-			}
-		}
-		if !anyKey {
-			fmt.Fprintln(out, `No model provider key set. Set one:  sbx secret set -g anthropic -t "sk-..."`)
-		}
+// onboardReportReadiness prints the outstanding host prerequisites without
+// prompting, then the next step. It renders the SAME shared lazy snapshot
+// `run` and `status` render (readiness_launch.go) through the SAME verdict
+// vocabulary, so onboarding's closing report cannot tell a different story
+// about the same host than the next command the user types. A hung or absent
+// sbx leaves the providers axis unverifiable, which prints "can't check from
+// here" and never a false "no key" claim.
+func onboardReportReadiness(cfg *config.Config, env shellEnv, out io.Writer) {
+	s := fastReadinessSnapshot(cfg, env, probeSbxKeyEvidence(env))
+	if renderReadinessWarnings(out, s, launchWarningLimit) == 0 {
+		fmt.Fprintf(out, "  %s host readiness: %s\n", verdictGlyph(requirementCore, verdictReady, false), verdictWord(verdictReady))
 	}
 	fmt.Fprintln(out, "Next:  pi-stack run   to start working, or  pi-stack setup  for the guided agent handoff.")
 }

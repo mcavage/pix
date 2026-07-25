@@ -36,7 +36,16 @@ func runStatusCmd(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack status: %v\n", err)
 		os.Exit(1)
 	}
-	renderStatus(cfg, name, defaultShellEnv(), os.Stdout, jsonOut)
+	// ONE exit contract (Snapshot.ExitCode), with the 3 arm suppressed: status
+	// is the landing screen and a JSON-scraping script must never fail merely
+	// because a fact could not be checked from here (inside the sandbox, sbx is
+	// absent and half the axes are unverifiable by construction). A POSITIVELY
+	// verified core failure still exits 1, and the same integer is published as
+	// the JSON `exit` sibling, so a reader of the rows and a reader of $? can
+	// never disagree.
+	if code := renderStatus(cfg, name, defaultShellEnv(), os.Stdout, jsonOut); code != exitReady {
+		os.Exit(code)
+	}
 }
 
 // parseStatusArgs validates status flags: -h/--help returns errHelpRequested,
@@ -59,13 +68,14 @@ func parseStatusArgs(argv []string) (jsonOut bool, err error) {
 // renderStatus is the testable core: it probes the environment via env and
 // renders to out. Everything is best-effort and short-timeout so status never
 // hangs on a down daemon.
-func renderStatus(cfg *config.Config, profile string, env shellEnv, out io.Writer, jsonOut bool) {
+func renderStatus(cfg *config.Config, profile string, env shellEnv, out io.Writer, jsonOut bool) int {
 	st := gatherStatus(cfg, profile, env)
 	if jsonOut {
 		_ = writeJSONOut(out, st)
-		return
+		return st.Exit
 	}
 	st.render(out)
+	return st.Exit
 }
 
 // statusReport is the machine-readable status snapshot (also drives --json).
@@ -87,6 +97,16 @@ type statusReport struct {
 	Todos      []string        `json:"todos"`
 	GogAccount string          `json:"gog_account,omitempty"`
 	GogAuthed  bool            `json:"gog_authed,omitempty"`
+	// Checks is the shared, flat readiness array (the SAME row type doctor
+	// --json emits: axis/requirement/verdict/evidence/fix/duration_ms/
+	// endpoint), and Exit is the process exit code this same data produced.
+	// Both are ADDITIVE: every key above keeps its name and meaning.
+	Checks []readinessCheckJSON `json:"checks"`
+	Exit   int                  `json:"exit"`
+	// Unverifiable is how many readiness checks could not be checked from
+	// here. It never blocks (see Exit, which suppresses the 3 arm) but it does
+	// stop the headline from claiming everything is fine.
+	Unverifiable int `json:"unverifiable_checks"`
 }
 
 // mcpStatusLine is the per-server HOST-GLOBAL MCP summary: registered with
@@ -132,7 +152,6 @@ type sandboxLine struct {
 }
 
 func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport {
-	memPort, knPort := memoryClient().Port, knowledgeClient().Port
 	// currentIntent is the "current config/pack" universe — cfg.MCP plus any
 	// active-pack integration name not already there — the host-global
 	// baseline BOTH the summary list and the per-sandbox rows start from
@@ -148,30 +167,34 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 		MCP:        currentIntent,
 	}
 	if env.dial != nil {
-		st.Memory = env.dial(memPort)
-		st.Knowledge = env.dial(knPort)
 		// monitor is an on-demand tool (`pi-stack monitor`), not a background
 		// serve service, so its up/down state is reported but never feeds the
-		// "serve: up/down" label or an outstanding-item TODO below.
+		// "serve: up/down" label or an outstanding-item TODO below. It is the
+		// only remaining bare dial here: memory and knowledge come from the
+		// identity-verified readiness axes below, because a held port is not
+		// proof that the process holding it is ours.
 		st.Monitor = env.dial(monitor.DefaultPort)
 	}
 
-	// Providers: probe `sbx secret ls` once (proxy-injected keys; never in VM).
-	// Track PATH-presence (sbxOnPath) separately from probe success (sbxOK): sbx
-	// being installed but `sbx secret ls` failing is a DIFFERENT state from sbx
-	// missing entirely, and the two warrant different guidance.
-	sbxOut, sbxOK := "", false
-	sbxOnPath := false
-	if env.lookPath != nil {
-		if _, err := env.lookPath("sbx"); err == nil {
-			sbxOnPath = true
-			// BOUNDED (probeRun): a hung `sbx secret ls` degrades to "could not
-			// verify provider keys" — never a wedged status.
-			if o, timedOut, err := probeRun(env, "sbx", "secret", "ls"); err == nil && !timedOut {
-				sbxOut, sbxOK = o, true
-			}
-		}
-	}
+	// Providers: probe `sbx secret ls` ONCE (proxy-injected keys; never in VM)
+	// and reuse that one result for the per-provider booleans below AND for the
+	// shared readiness snapshot, which re-probes nothing. Track PATH-presence
+	// (sbxOnPath) separately from probe success (sbxOK): sbx being installed but
+	// `sbx secret ls` failing is a DIFFERENT state from sbx missing entirely,
+	// and the two warrant different guidance.
+	keyEvidence := probeSbxKeyEvidence(env)
+	sbxOut, sbxOK := keyEvidence.out, keyEvidence.ok()
+	sbxOnPath := keyEvidence.state != sbxSecretsAbsent
+
+	// The SHARED lazy snapshot (readiness_launch.go): the one core launch
+	// requirement plus the two host services, identity-verified. status renders
+	// the same rows, in the same words, that doctor and run do.
+	snap := fastReadinessSnapshot(cfg, env, keyEvidence)
+	st.Memory = axisReady(snap, axisServiceMemory)
+	st.Knowledge = axisReady(snap, axisServiceKnowledge)
+	st.Checks = readinessChecksJSON(snap.All())
+	st.Exit = snap.ExitCodeSuppressingUnverifiable()
+	unverifiableAxes := snap.UnverifiableCount()
 	// Providers: doctor/launch parity (finding #3) — ONE core model-readiness
 	// TODO, never a per-key TODO for a missing alternate. pi-stack only needs
 	// ONE of anthropic/openai/google to launch a model (anyModelKeyInOutput,
@@ -188,8 +211,17 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	for _, key := range []string{"anthropic", "openai", "google", "github"} {
 		st.Providers[key] = sbxOK && grepWord(sbxOut, key)
 	}
-	if sbxOK && !anyModelKeyInOutput(sbxOut) {
-		st.Todos = append(st.Todos, modelKeyFixCmd)
+	// Every repair the snapshot's axes verified is taken FROM the snapshot, so
+	// status can never print a different fix command than doctor for the same
+	// fact. Unverifiable axes contribute no TODO by construction (a repair we
+	// cannot prove is needed is a guess), and are counted separately below.
+	for _, c := range snap.All() {
+		if c.note {
+			continue
+		}
+		if v := c.result(); (v == verdictTodo || v == verdictDenied) && c.todo != "" {
+			st.Todos = append(st.Todos, c.todo)
+		}
 	}
 	// When sbx could NOT verify keys, no per-key/core TODO above fires — so
 	// without an outstanding item the verdict would be falsely "all systems
@@ -352,6 +384,7 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	// Tasks + harvested artifacts: global, repo-agnostic counts so the pile is
 	// visible without any per-repo git probing.
 	st.Tasks, st.ArtifactB = taskStateSummary()
+	st.Unverifiable = unverifiableAxes
 	return st
 }
 
@@ -406,7 +439,7 @@ func (st statusReport) render(out io.Writer) {
 			case m.Unverifiable:
 				// sbx present but `sbx mcp ls` itself failed/timed out: registration
 				// is genuinely unknown, never rendered as a false "not registered".
-				reg = "? registration unverifiable (sbx mcp ls unavailable/failed)"
+				reg = verdictGlyph(requirementCore, verdictUnverifiable, false) + " registration unverifiable (sbx mcp ls unavailable/failed)"
 			case m.Registered:
 				reg = okGlyph(true) + " registered"
 			default:
@@ -459,7 +492,10 @@ func (st statusReport) render(out io.Writer) {
 	// failed listing) is not a verified failure — it earns no TODO — but it
 	// also means status does NOT know everything is fine, so it must never
 	// read "all systems go" over it. The JSON rows above stay the row truth.
-	unverifiable := 0
+	// The shared snapshot's own unverifiable axes count first: inside the
+	// sandbox (no sbx) the provider axis is unverifiable, and the headline must
+	// say so rather than claim everything is fine.
+	unverifiable := st.Unverifiable
 	for _, r := range st.MCPRows {
 		if r.State == mcpJoinUnverifiable {
 			unverifiable++
@@ -476,12 +512,13 @@ func (st statusReport) render(out io.Writer) {
 	}
 	switch {
 	case len(st.Todos) > 0:
-		fmt.Fprintf(out, "  ⚠ %s outstanding.   `pi-stack doctor` for fix commands.\n", plural(len(st.Todos), "item"))
+		fmt.Fprintf(out, "  %s %s outstanding.   `%s` for fix commands.\n",
+			verdictGlyph(requirementOptional, verdictTodo, false), plural(len(st.Todos), "item"), readinessFooter("status", Snapshot{}))
 	case unverifiable > 0:
-		fmt.Fprintf(out, "  ✓ nothing outstanding, but %s unverifiable (not failed; see the mcp/box rows or `pi-stack doctor`).\n",
-			plural(unverifiable, "check"))
+		fmt.Fprintf(out, "  %s nothing outstanding, but %s unverifiable (not failed; see the mcp/box rows or `%s`).\n",
+			verdictGlyph(requirementCore, verdictReady, false), plural(unverifiable, "check"), readinessFooter("status", Snapshot{}))
 	default:
-		fmt.Fprintln(out, "  ✓ all systems go.")
+		fmt.Fprintf(out, "  %s all systems go.\n", verdictGlyph(requirementCore, verdictReady, false))
 	}
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Next:  pi-stack serve     start the knowledge service")
@@ -541,11 +578,11 @@ func statusSandboxReceipt(env shellEnv, sandbox string) (*sandboxMCPReceipt, san
 func mcpRowText(r mcpSandboxRow) string {
 	switch r.State {
 	case mcpJoinPreloaded, mcpJoinLoaded:
-		return "✓ " + r.State + " (" + r.Evidence + ")"
+		return verdictGlyph(requirementCore, verdictReady, false) + " " + r.State + " (" + r.Evidence + ")"
 	case mcpJoinNotRegistered, mcpJoinRegisteredNotAttached:
-		return "✗ " + r.State + ": " + r.Evidence
+		return verdictGlyph(requirementCore, verdictTodo, false) + " " + r.State + ": " + r.Evidence
 	default: // unverifiable
-		return "? " + r.State + ": " + r.Evidence
+		return verdictGlyph(requirementCore, verdictUnverifiable, false) + " " + r.State + ": " + r.Evidence
 	}
 }
 
