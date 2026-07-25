@@ -23,13 +23,17 @@ func (r *report) render(w io.Writer, verbose bool) {
 	unv := r.unverifiableCount()
 	switch {
 	case r.blocking():
-		fmt.Fprintln(w, "✗ pi-stack: a required core check is verified failing — fix it and re-run (doctor exits 1).")
+		fmt.Fprintf(w, "%s pi-stack: a required core check is verified failing — fix it and re-run (doctor exits 1).\n",
+			verdictGlyph(requirementCore, verdictTodo, false))
 	case r.outstanding() > 0:
-		fmt.Fprintf(w, "⚠ pi-stack: %s outstanding (optional, nothing blocking) — see the TODOs below.\n", plural(r.outstanding(), "item"))
+		fmt.Fprintf(w, "%s pi-stack: %s outstanding (optional, nothing blocking) — see the TODOs below.\n",
+			verdictGlyph(requirementOptional, verdictTodo, false), plural(r.outstanding(), "item"))
 	case unv > 0:
-		fmt.Fprintf(w, "⚠ pi-stack: no verified failures, but %s could not be verified from here.\n", plural(unv, "check"))
+		fmt.Fprintf(w, "%s pi-stack: no verified failures, but %s could not be verified from here.\n",
+			verdictGlyph(requirementOptional, verdictTodo, false), plural(unv, "check"))
 	default:
-		fmt.Fprintln(w, "✓ pi-stack: all checks pass — you're ready to `pi-stack serve` + `pi-stack`.")
+		fmt.Fprintf(w, "%s pi-stack: all checks pass — you're ready to `pi-stack serve` + `pi-stack`.\n",
+			verdictGlyph(requirementCore, verdictReady, false))
 	}
 	if r.sbxAbsent {
 		fmt.Fprintln(w, "  note: sbx not on PATH (you're likely inside the sandbox) — provider/MCP")
@@ -53,7 +57,7 @@ func (r *report) render(w io.Writer, verbose bool) {
 			shown++
 		}
 		if !verbose && shown == 0 {
-			fmt.Fprintf(w, "  ✓ all %s ready\n", plural(len(g.checks), "check"))
+			fmt.Fprintf(w, "  %s all %s ready\n", verdictGlyph(requirementCore, verdictReady, false), plural(len(g.checks), "check"))
 		}
 		fmt.Fprintln(w)
 	}
@@ -110,7 +114,9 @@ func glyph(s checkState) string {
 	case stateTODO:
 		return verdictGlyph(requirementCore, verdictTodo, false)
 	case stateWarn:
-		return glyphTodoOptional
+		// An unverifiable check renders as the shared "can't check from here"
+		// marker, never as a failure glyph.
+		return verdictGlyph(requirementCore, verdictUnverifiable, false)
 	default:
 		return verdictGlyph(requirementCore, verdictReady, true)
 	}

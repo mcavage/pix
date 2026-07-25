@@ -27,6 +27,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"pi-stack/host/config"
 )
 
 // --- finding 1: bounded sbx state probes ------------------------------------
@@ -196,6 +198,32 @@ func TestBuildTrustedHostState_HangingSbxBounded(t *testing.T) {
 	}
 	if hs.Keys.Anthropic || hs.Keys.OpenAI || hs.Keys.Google {
 		t.Errorf("a hung `sbx secret ls` must never claim a provider key is present: %+v", hs.Keys)
+	}
+}
+
+// TestOnboardReportReadiness_HangingSbxBounded: onboard's readiness report is
+// read-only; a hanging sbx must degrade silently (no false key claims) and
+// still print the next step, quickly.
+func TestOnboardReportReadiness_HangingSbxBounded(t *testing.T) {
+	env := shellEnv{
+		lookPath: sbxOnlyLookPath,
+		run: func(name string, args ...string) (string, error) {
+			t.Fatalf("onboard readiness must use the bounded probe seam, not env.run: %s %v", name, args)
+			return "", nil
+		},
+		probe: hangingProbe(t, 100*time.Millisecond),
+	}
+	var out bytes.Buffer
+	start := time.Now()
+	onboardReportReadiness(&config.Config{}, env, &out)
+	if el := time.Since(start); el > 10*time.Second {
+		t.Fatalf("onboardReportReadiness took %s — unbounded", el)
+	}
+	if strings.Contains(out.String(), "No model provider key set") {
+		t.Errorf("an unverifiable sbx read must not claim keys are missing, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "Next:") {
+		t.Errorf("readiness must still print the next step, got:\n%s", out.String())
 	}
 }
 

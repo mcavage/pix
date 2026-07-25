@@ -203,11 +203,14 @@ func TestRenderConcise_NoHintWhenNothingHidden(t *testing.T) {
 	}
 }
 
-// TestRenderGlyphs: verdict is authoritative for the glyph — ⚠ for
-// unverifiable, ✗ for verified todo/denied, ✓ ready, · note.
+// TestRenderGlyphs: verdict is authoritative for the glyph, in the ONE shared
+// vocabulary (readiness_render.go) — ✓ ready, ✗ verified core todo/denied,
+// ? unverifiable ("can't check from here"), · note. ⚠ is reserved for a
+// verified failure of an OPTIONAL axis, which is a different fact from "we
+// could not check", so doctor no longer spends it on unverifiable rows.
 func TestRenderGlyphs(t *testing.T) {
 	for want, s := range map[string]checkState{
-		"✓": stateOK, "✗": stateTODO, "·": stateInfo, "⚠": stateWarn,
+		"✓": stateOK, "✗": stateTODO, "·": stateInfo, "?": stateWarn,
 	} {
 		if got := glyph(s); got != want {
 			t.Errorf("glyph(%v) = %q, want %q", s, got, want)

@@ -199,7 +199,7 @@ func reconcileOnboarding(workspace string, env shellEnv, in io.Reader, out io.Wr
 	}
 	if !assumeYes {
 		if !tty {
-			fmt.Fprintf(out, "Not a terminal; leaving %s for review. Apply with: pi-stack setup --apply --yes\n", path)
+			fmt.Fprintf(out, "Not a terminal; leaving %s for review. Apply with: pi-stack onboard --apply --yes\n", path)
 			return
 		}
 		if !confirmYN(in, out, "Apply these changes? [Y/n]: ", true) {
@@ -222,12 +222,30 @@ func reconcileOnboarding(workspace string, env shellEnv, in io.Reader, out io.Wr
 	fmt.Fprintf(out, "Applied %d onboarding change(s) to %s.\n", len(applied), config.Path())
 }
 
-// onboardOpts is the parsed host-config flag set. The `pi-stack onboard` VERB
-// is gone (AC-P0-308: `pi-stack setup --no-agent` replaced it); the onboarding
-// MACHINERY in this file — the schema, its allowlist validation, the applier
-// and the reconcile-on-next-run path — is what `run` and `setup` both depend
-// on, and it stays exactly where it was. This parser is the flag surface both
-// the host phase and the --apply path share.
+const onboardUsage = `usage: pi-stack onboard [flags]
+
+Host-side onboarding (deterministic HOST config only; NO agent handoff). For the
+guided flow that configures the host AND hands off to an agent to finish, use
+` + "`pi-stack setup`" + `. This command is the flag-driven path for automation/CI.
+You can also say "onboard me" to a running agent at any time.
+
+  --knowledge <path|url>   scaffold/point the global knowledge base
+  --mcp <name>             enable an MCP server (repeatable; allowlisted)
+  --model <ollama-model>   set the ollama-bridge model
+  --apply                  apply a pending .pi-stack/onboarding.json in this dir
+  --yes | --non-interactive  never prompt (CI); apply what is given
+  -h | --help              this help
+
+Provider keys come from 1Password via ` + "`pi-stack setup`" + ` (op is required);
+onboard never provisions them. The removed --use-sbx-keys / --use-1password
+flags now error.
+
+Always ensures the memory service is enabled. Idempotent; safe to re-run.
+Provider keys are sbx secrets (proxy-injected, seeded from 1Password) and are
+only reported here, never entered.
+`
+
+// onboardOpts is the parsed onboard flag set.
 type onboardOpts struct {
 	account   string
 	knowledge string
@@ -309,6 +327,96 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 		}
 	}
 	return o, nil
+}
+
+// runOnboardCmd is the `pi-stack onboard` entry (and the `setup` deprecation
+// alias). With --apply it reconciles a pending onboarding.json; otherwise it
+// applies the flag-driven host config and reports what still needs doing.
+func runOnboardCmd(argv []string) {
+	opts, err := parseOnboardArgs(argv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack onboard: %v\n\n%s", err, onboardUsage)
+		os.Exit(2)
+	}
+	if opts.help {
+		fmt.Print(onboardUsage)
+		return
+	}
+	if opts.googleWorkspace || strings.TrimSpace(opts.credentials) != "" || strings.TrimSpace(opts.account) != "" {
+		fmt.Fprintln(os.Stderr, "pi-stack onboard: Google Workspace cannot be set up here; authorization needs a browser")
+		fmt.Fprintln(os.Stderr, "  fix: pi-stack gworkspace setup --account <email> --credentials <path>")
+		os.Exit(2)
+	}
+	if opts.pullModels {
+		fmt.Fprintln(os.Stderr, "pi-stack onboard: --pull-models belongs to `pi-stack setup` (onboard never downloads models)")
+		os.Exit(2)
+	}
+	env := defaultShellEnv()
+
+	if opts.apply {
+		cwd, _ := os.Getwd()
+		reconcileOnboarding(cwd, env, os.Stdin, os.Stdout, opts.assumeYes, isTTY(os.Stdin))
+		return
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack onboard: loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	r := &onboardingResult{
+		Version:           1,
+		MCP:               opts.mcp,
+		OllamaBridgeModel: strings.TrimSpace(opts.model),
+	}
+	if k := strings.TrimSpace(opts.knowledge); k != "" {
+		r.Knowledge = &onboardKnowledge{Action: "use", Source: k}
+	}
+	if err := validateOnboardingResult(r, cfg, env, hostBinaryResolver); err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack onboard: %v\n", err)
+		os.Exit(2)
+	}
+	// Catalog remotes must be registered + auth-ready BEFORE the config save:
+	// onboard never persists a server that cannot come up, and never opens an
+	// OAuth flow itself (it prints the exact commands instead).
+	if err := verifyCatalogMCPReady(env, r.MCP); err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack onboard: %v\n", err)
+		os.Exit(1)
+	}
+	changes, err := applyOnboardingResult(r, cfg, env, os.Stdout, func(c *config.Config) error { return c.Save() })
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack onboard: %v\n", err)
+		os.Exit(1)
+	}
+	if len(changes) == 0 {
+		fmt.Println("onboard: memory ensured; nothing else to change.")
+	} else {
+		for _, c := range changes {
+			fmt.Printf("  + %s\n", c)
+		}
+	}
+	if len(cfg.MCP) > 0 {
+		if err := registerServers(cfg, env, os.Stdout, nil, hostBinaryResolver, activeContainerMCP(cfg)); err != nil {
+			fmt.Printf("  mcp register skipped: %v (finish later: pi-stack mcp register)\n", err)
+		}
+	}
+	onboardReportReadiness(cfg, env, os.Stdout)
+}
+
+// onboardReportReadiness prints the outstanding host prerequisites without
+// prompting, then the next step. It renders the SAME shared lazy snapshot
+// `run` and `status` render (readiness_launch.go) through the SAME verdict
+// vocabulary, so onboarding's closing report cannot tell a different story
+// about the same host than the next command the user types. A hung or absent
+// sbx leaves the providers axis unverifiable, which prints "can't check from
+// here" and never a false "no key" claim.
+func onboardReportReadiness(cfg *config.Config, env shellEnv, out io.Writer) {
+	s := fastReadinessSnapshot(cfg, env, probeSbxKeyEvidence(env))
+	if renderReadinessWarnings(out, s, launchWarningLimit) == 0 {
+		fmt.Fprintf(out, "  %s host readiness: %s\n", verdictGlyph(requirementCore, verdictReady, false), verdictWord(verdictReady))
+	}
+	fmt.Fprintln(out, "Next:  pi-stack run   to start working, or  pi-stack setup  for the guided agent handoff.")
 }
 
 // confirmYN reads a [Y/n] answer. def is the answer for a bare Enter.

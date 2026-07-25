@@ -30,6 +30,13 @@ func fakeStatusEnv() shellEnv {
 		},
 		dial:     func(port int) bool { return port == memoryPortDefault },
 		statFile: func(string) bool { return false },
+		// status renders memory/knowledge from the identity-verified readiness
+		// axes, never from a bare dial (readiness_service.go): a fixture that
+		// only opens the port renders unverifiable, so the healthy-memory
+		// fixture has to answer identity too.
+		identityProbe: identityFake(map[int]serviceIdentityResult{
+			memoryPortDefault: {Name: identityMemoryName, Ready: true},
+		}),
 	}
 }
 
