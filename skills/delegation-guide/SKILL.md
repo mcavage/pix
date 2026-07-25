@@ -57,18 +57,30 @@ Invoke with the `subagent` tool, `agent=<name>` (NOT the old `Agent` tool with
 
 ## Wave execution pattern
 
-Plans group work into waves by dependency. Within a wave, all units run in
-parallel (one `deep` or `fanout` subagent per unit). You orchestrate waves; you
-do not execute units yourself.
+Plans group work into waves by dependency. Independent units are PARALLEL BY
+DEFAULT, through isolated git worktrees — a shared working tree is never a
+reason to run them one at a time. Within a wave, all units run in parallel (one
+`deep`, `fanout`, or `engineer` subagent per unit, each in its own worktree).
+You orchestrate waves; you do not execute units yourself.
 
-1. Identify units and their dependencies.
-2. Group into waves (units with no unmet deps go in the current wave).
-3. Launch the WHOLE wave in one parallel `{tasks:[...]}` call (up to 8 run at once;
-   split a wider wave into back-to-back parallel calls). Mirror the wave in the
-   todo list: mark every unit in the wave `in-progress` at dispatch, `completed`
-   as each returns (the todo tool allows many in-progress at once for exactly
-   this). Collect results before starting the next wave.
-4. Gate with `code-review` (cross-vendor `review` subagent) before any wave that
+1. Identify units and their full dependency DAG: not just wave order, but which
+   unit's output actually feeds which other unit's input, and which pairs would
+   touch the same file.
+2. Group into waves (units with no unmet dependency or file-conflict edge to
+   each other go in the current wave, regardless of how many share a working
+   tree today). Create one isolated git worktree per concurrent unit in the
+   wave (`git worktree add`) so each subagent edits its own tree.
+3. Launch the whole ready wave in one parallel `{tasks:[...]}` call (up to 8 run
+   at once; split a wider wave into back-to-back parallel calls). Mirror the
+   wave in the todo list: mark every unit in the wave `in-progress` at dispatch,
+   `completed` as each returns (the todo tool allows many in-progress at once
+   for exactly this).
+4. Collect results, then merge reviewed commits after collecting results
+   (`--no-ff`) and remove each unit's worktree before starting the next wave.
+5. Serialize ONLY units joined by a real dependency edge or file-conflict edge
+   (one consumes the other's output, or both must edit the same file) — never
+   because they happen to share a working tree.
+6. Gate with `code-review` (cross-vendor `review` subagent) before any wave that
    produces code that will ship. Gate with `verify` before marking a unit done.
 
 ## Quality gates
