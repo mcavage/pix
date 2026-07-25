@@ -226,12 +226,7 @@ func resolveMCPSandboxContext(env shellEnv) mcpSandboxContext {
 	return mcpSandboxContext{mode: mcpAttachReceipt, sandbox: name, workspace: canonWS, receipt: receipt, status: status}
 }
 
-// mcpLoadTodoCommand is the exact, copy-pasteable live-attach command for a
-// VERIFIED registered-not-attached gap: the same `pi-stack mcp load NAME DIR`
-// spelling status emits, carrying the canonical workspace when known. It
-// delegates to run.go's mcpLoadCommand (shell-quoting name and workspace via
-// shellQuoteArg, closure finding #3) so doctor and status can never drift on
-// how the repair command is quoted.
+// mcpLoadTodoCommand is retained for explicit legacy attachment diagnostics.
 func mcpLoadTodoCommand(name, workspace string) string {
 	return mcpLoadCommand(name, workspace)
 }
@@ -261,7 +256,6 @@ func mcpAttachGuidance(name string) string {
 // evidence — never a false claim in either direction.
 func mcpAttachCheck(name string, ctx mcpSandboxContext, reg mcpRegEvidence) check {
 	label := name + " attachment"
-	guidance := mcpAttachGuidance(name)
 	row := joinMCPSandboxRow(name, reg, ctx.sandbox, ctx.receipt, ctx.status)
 	switch row.State {
 	case mcpJoinPreloaded:
@@ -272,16 +266,8 @@ func mcpAttachCheck(name string, ctx mcpSandboxContext, reg mcpRegEvidence) chec
 		return check{label: label, verdict: verdictReady,
 			detail:   "loaded by pi-stack (pi-stack mcp load, sandbox " + ctx.sandbox + ")",
 			evidence: row.Evidence}
-	case mcpJoinRegisteredNotAttached:
-		// A POSITIVE, verified gap (registration confirmed + a COMPLETE valid
-		// receipt with no entry): a verified OPTIONAL todo with the exact
-		// live-attach command — consistent with status's row todo. Partial or
-		// absent receipts never reach this state (they stay unverifiable).
-		return check{label: label, verdict: verdictTodo,
-			detail:   fmt.Sprintf("registered, but pi-stack has no record of attaching it to %s; attach live, or recreate with `pi-stack run --replace`", ctx.sandbox),
-			todo:     mcpLoadTodoCommand(name, ctx.workspace),
-			evidence: row.Evidence}
 	case mcpJoinNotRegistered:
+		guidance := mcpAttachGuidance(name)
 		return check{label: label, verdict: verdictUnverifiable,
 			detail:   fmt.Sprintf("not currently registered, and the receipt has no positive claim for it either; attachment cannot be claimed for %s; %s", ctx.sandbox, guidance),
 			evidence: row.Evidence}
@@ -291,16 +277,19 @@ func mcpAttachCheck(name string, ctx mcpSandboxContext, reg mcpRegEvidence) chec
 	// doesn't list is unverifiable, never "positively not attached"), or
 	// registration itself is unknowable.
 	if ctx.status == sandboxMCPStateOK && ctx.receipt.IsPartial() {
+		guidance := mcpAttachGuidance(name)
 		return check{label: label, verdict: verdictUnverifiable,
 			detail: fmt.Sprintf("launcher receipt for sandbox %s is partial (load-only, no create record); preload state unknown; %s",
 				ctx.sandbox, guidance),
 			evidence: row.Evidence}
 	}
 	if ctx.status == sandboxMCPStateAbsent {
+		guidance := mcpAttachGuidance(name)
 		return check{label: label, verdict: verdictUnverifiable,
 			detail:   fmt.Sprintf("no launcher receipt for sandbox %s; attachment unverified; %s", ctx.sandbox, guidance),
 			evidence: row.Evidence}
 	}
+	guidance := mcpAttachGuidance(name)
 	if reg == mcpRegUnknown {
 		return check{label: label, verdict: verdictUnverifiable,
 			detail:   fmt.Sprintf("registration listing unavailable for sandbox %s; attachment unverified; %s", ctx.sandbox, guidance),
@@ -461,7 +450,11 @@ func mcpRemoteAuthCheck(env shellEnv, name string) check {
 func mcpServerChecks(env shellEnv, name string, kind mcpKind, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) []check {
 	reg := mcpRegEvidenceFrom(mcpOut, mcpOK, name)
 	attach := func(cks []check) []check {
-		if ctx.mode == mcpAttachReceipt {
+		// An absent attachment is the desired gateway-native state: registered
+		// backends are discovered/executed on demand without expanding pi's tool
+		// table. Surface attachment only when legacy/explicit receipt evidence
+		// proves a backend really was expanded into this sandbox.
+		if ctx.mode == mcpAttachReceipt && receiptClaim(ctx.receipt, ctx.status, name) != "" {
 			cks = append(cks, mcpAttachCheck(name, ctx, reg))
 		}
 		return cks
@@ -501,7 +494,7 @@ func retiredKeyCheck(key string) check {
 	return check{
 		label:   "config " + key,
 		verdict: verdictTodo,
-		detail: "retired config key; ignored (every configured MCP server now preloads at sandbox create); " +
+		detail: "retired config key; ignored (registered MCP backends are discovered on demand); " +
 			"the next `pi-stack config set`/`unset` rewrite drops it from config.toml",
 		evidence: "retired key present in config.toml",
 	}
@@ -777,12 +770,11 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 			}
 		}
 		// Without a workspace sandbox context doctor reports registration/auth
-		// only — plus the honest statement of what pi-stack WILL do (preload at
-		// create), which is intent, never attachment.
+		// plus the gateway-native on-demand execution model.
 		if anyRegistered && ctx.mode != mcpAttachReceipt {
-			det := "no workspace sandbox context here; reporting registration/auth only; configured servers preload at sandbox create"
+			det := "no workspace sandbox context here; registered backends are discovered/executed on demand"
 			if ctx.mode == mcpAttachSandboxAbsent {
-				det = "sandbox " + ctx.sandbox + " not created yet; configured servers preload at `pi-stack run` create"
+				det = "sandbox " + ctx.sandbox + " not created yet; registered backends will remain behind gateway discovery"
 			} else if ctx.note != "" {
 				det = ctx.note + "; reporting registration/auth only"
 			}

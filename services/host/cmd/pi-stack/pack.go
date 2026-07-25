@@ -1734,7 +1734,7 @@ func writePackContextFiles(cfg *config.Config, o runOpts, effectivePack string) 
 // wrappers) MUST print this, because --mcp/--kit are create-only — a running
 // sandbox cannot pick either up without a recreate (packs.md §13 must-fix).
 func printPackRecreateLine(out io.Writer) {
-	fmt.Fprintln(out, "MCP attach + sandbox bin/ wrappers + pack skills only take effect on a sandbox CREATE.")
+	fmt.Fprintln(out, "MCP backends stay behind gateway discovery; sandbox bin/ wrappers + pack skills require a sandbox CREATE.")
 	fmt.Fprintln(out, "Recreate to pick them up:  pi-stack run --replace")
 }
 

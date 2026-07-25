@@ -603,8 +603,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	}
 
 	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "gog is in the configured MCP set: a fresh sandbox creation preloads it (tools in context from the start).")
-	fmt.Fprintln(out, "Existing sandbox? attach it live: pi-stack mcp load gog")
+	fmt.Fprintln(out, "gog is registered behind the gateway for on-demand discovery and execution.")
 	return nil
 }
 

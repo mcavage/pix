@@ -588,15 +588,10 @@ func TestStatusMCPLoadTodoQuotesWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := gatherStatus(cfg, "default", env)
-	var td string
 	for _, tdo := range st.Todos {
 		if strings.HasPrefix(tdo, "pi-stack mcp load") {
-			td = tdo
+			t.Errorf("available-on-demand backend must not produce load TODO: %q", tdo)
 		}
-	}
-	want := "pi-stack mcp load " + shellQuoteArg("slack") + " " + shellQuoteArg(ws)
-	if td != want {
-		t.Errorf("todo = %q, want %q", td, want)
 	}
 }
 

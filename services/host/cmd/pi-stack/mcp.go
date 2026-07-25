@@ -755,9 +755,8 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	return skippedErr
 }
 
-// allPreloadedMCP returns, order-preserving and de-duplicated, every non-empty
-// name in `servers` — the full set to attach EAGERLY at create (emitted to sbx
-// as --static-mcp; their tools sit in context from the start).
+// desiredMCPNames returns every non-empty server name, order-preserving and
+// de-duplicated. The resulting set is attached dynamically with `sbx mcp load`.
 //
 // S01: there is no eager/lazy split any more. Every configured server (plus
 // every pack integration's server — see applyPackToLaunch) preloads at CREATE,
@@ -767,7 +766,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 // mcp_static/mcp_dynamic knobs were the only thing that ever kept a server out
 // of this set, and they're gone (see config.RetiredKeys). This function is now
 // pure list hygiene: dedupe + drop empties, order preserved.
-func allPreloadedMCP(servers []string) []string {
+func desiredMCPNames(servers []string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, n := range servers {

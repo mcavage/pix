@@ -182,12 +182,13 @@ sandbox. `pack add mcp fastmail --env FASTMAIL_TOKEN` declares an MCP server
 the pack needs plus the env var name it'll ask you to fill via 1Password;
 the value never touches the pack or the VM.
 
-**MCP servers and `bin/` wrappers attach at sandbox CREATE, not live.** If you
-switch packs or add an MCP inside a running sandbox, it's registered on the
-host but the running sandbox doesn't have it yet:
+**MCP backends remain behind the gateway; `bin/` wrappers are create-time.** Pi
+sees the compact gateway discovery/execution surface and calls registered
+backend tools on demand. A pack switch still needs recreation for its skills,
+kit, and `bin/` wrappers:
 
 ```
-pi-stack run --replace     # recreate the sandbox to pick up the new MCP/bin set
+pi-stack run --replace     # recreate for pack skills/bin/kit changes
 ```
 
 **Host-mode wrappers** (`pack add proxy platformio --host`) are for tools that
@@ -329,14 +330,11 @@ host-side), `--url` (a remote endpoint, OAuth'd host-side), or `--local --url
 <manifest>` (a container the gateway runs from an OCI manifest). `sbx mcp get
 <name>` shows you exactly what's registered.
 
-**Static preload, or explicit load, nothing else.** Every server in your
-configured `mcp` list, and every integration an active or transient pack
-carries, is passed to sbx as `--static-mcp <name>` when the sandbox is
-CREATED, so its tools are in context from the start. There is no dynamic
-discovery and no on-demand attach: a server you add or register after a
-sandbox exists is not visible to it until you either recreate
-(`pi-stack run --replace`, which re-sends the full `--static-mcp` set) or
-attach it live:
+**Gateway-native dynamic discovery.** Normal launches attach no backend server.
+Pi sees only the gateway's small meta-tool set and uses `mcp-find` plus
+`mcp-exec` to discover and call registered tools on demand. This keeps hundreds
+of unrelated schemas out of model context. Explicit live attachment remains a
+debugging/compatibility escape hatch:
 
 ```
 pi-stack mcp load <name> [DIR]      # attach an already-registered server to the
@@ -358,12 +356,12 @@ records a receipt only after that attach succeeds; `pi-stack status` and
 knowledge bundles, and, per configured MCP server per running sandbox, one of
 five states drawn from launcher receipts, not a live gateway probe:
 
-- **preloaded**: the sandbox's create receipt says this server shipped as
-  `--static-mcp`, and it's still registered
+- **preloaded**: legacy evidence from a sandbox created by an older pi-stack;
+  treated as attached for compatibility
 - **loaded**: a later `pi-stack mcp load` receipt attached it, and it's
   still registered
-- **registered-not-attached**: registered, but neither receipt covers this
-  sandbox; the fix is `pi-stack mcp load <name> <dir>`
+- **available-on-demand**: registered behind the gateway and intentionally not
+  expanded into pi's direct tool table; reached via `mcp-find`/`mcp-exec`
 - **not-registered**: `sbx mcp ls` positively lacks the server
 - **unverifiable**: an old or externally created sandbox with no launcher
   receipt, or the registration/sandbox listing itself failed; status never

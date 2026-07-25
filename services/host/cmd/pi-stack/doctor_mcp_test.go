@@ -187,35 +187,22 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 		}
 	})
 
-	t.Run("complete receipt, no entry -> verified registered-not-attached TODO", func(t *testing.T) {
-		// Redrive finding 3: registration confirmed + a COMPLETE valid receipt
-		// positively lacking the entry is a VERIFIED optional gap — a todo with
-		// the exact `pi-stack mcp load NAME <workspace>` command, consistent
-		// with status's row todo. (Partial/absent receipts stay unverifiable —
-		// covered below.)
+	t.Run("complete receipt, no entry -> desired on-demand state", func(t *testing.T) {
 		env, stateDir := receiptEnv(t, base, ws)
 		if err := writeCreateReceipt(stateDir, box, "", []string{"notion"}, receiptClock); err != nil {
 			t.Fatal(err)
 		}
 		g := mcpGroupWith(cfg, env, regOut, true, true, nil, resolveMCPSandboxContext(env))
-		c := findCheck(t, g, "slack attachment")
-		if c.result() != verdictTodo {
-			t.Errorf("no-entry attach with a complete receipt must be a verified todo, got %+v", c)
-		}
-		if want := "pi-stack mcp load slack " + ws; c.todo != want {
-			t.Errorf("todo = %q, want the exact command %q", c.todo, want)
-		}
-		if !strings.Contains(c.detail, "pi-stack run --replace") {
-			t.Errorf("detail should keep the recreate alternative: %q", c.detail)
+		if hasCheck(g, "slack attachment") {
+			t.Errorf("unattached registered backend is the desired compact-context state: %+v", g)
 		}
 	})
 
-	t.Run("no receipt at all -> unverifiable, never a claim", func(t *testing.T) {
+	t.Run("no receipt at all -> no attachment warning", func(t *testing.T) {
 		env, _ := receiptEnv(t, base, ws)
 		g := mcpGroupWith(cfg, env, regOut, true, true, nil, resolveMCPSandboxContext(env))
-		c := findCheck(t, g, "slack attachment")
-		if c.result() != verdictUnverifiable || !strings.Contains(c.detail, "pi-stack mcp load slack") {
-			t.Errorf("absent-receipt attach = %+v, want unverifiable + load guidance", c)
+		if hasCheck(g, "slack attachment") {
+			t.Errorf("absent attachment must not be treated as a gap: %+v", g)
 		}
 	})
 
@@ -224,7 +211,7 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 		"schema-mismatch":   `{"schema":99,"sandbox":"` + box + `","preloaded":["slack"]}`,
 		"identity-mismatch": `{"schema":1,"sandbox":"someone-else","preloaded":["slack"]}`,
 	} {
-		t.Run(name+" receipt -> unverifiable, never trusted", func(t *testing.T) {
+		t.Run(name+" receipt -> no fabricated attachment", func(t *testing.T) {
 			env, stateDir := receiptEnv(t, base, ws)
 			dir := filepath.Join(stateDir, "sandboxes", box)
 			if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -234,22 +221,14 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 				t.Fatal(err)
 			}
 			g := mcpGroupWith(cfg, env, regOut, true, true, nil, resolveMCPSandboxContext(env))
-			c := findCheck(t, g, "slack attachment")
-			if c.result() != verdictUnverifiable {
-				t.Errorf("%s receipt = %+v, want unverifiable — a bad receipt must never claim attachment", name, c)
-			}
-			if !strings.Contains(c.detail, name) {
-				t.Errorf("detail should name the receipt state %q: %q", name, c.detail)
+			if hasCheck(g, "slack attachment") {
+				t.Errorf("%s receipt must not fabricate attachment: %+v", name, g)
 			}
 		})
 	}
 }
 
-// TestMCPAttachmentTodoQuotesWorkspace pins closure finding #3: the exact
-// registered-not-attached repair command shell-quotes both the server name
-// and the workspace via shellQuoteArg, so a workspace with spaces, an
-// apostrophe, and a shell metacharacter round-trips safely when copy-pasted.
-func TestMCPAttachmentTodoQuotesWorkspace(t *testing.T) {
+func TestMCPUnattachedNeedsNoLoadTodo(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"slack"}
 	// The workspace's PARENT segments carry the spaces/apostrophe/shell
@@ -266,13 +245,8 @@ func TestMCPAttachmentTodoQuotesWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := mcpGroupWith(cfg, env, "slack\n", true, true, nil, resolveMCPSandboxContext(env))
-	c := findCheck(t, g, "slack attachment")
-	if c.result() != verdictTodo {
-		t.Fatalf("expected a verified registered-not-attached todo, got %+v", c)
-	}
-	want := "pi-stack mcp load " + shellQuoteArg("slack") + " " + shellQuoteArg(ws)
-	if c.todo != want {
-		t.Errorf("todo = %q, want %q", c.todo, want)
+	if hasCheck(g, "slack attachment") {
+		t.Fatalf("registered backend should remain available on demand without attachment: %+v", g)
 	}
 }
 
@@ -404,19 +378,19 @@ func TestMCPGroupSwitchedPackKeepsOldIntegrationVisible(t *testing.T) {
 }
 
 // TestMCPHostGlobalContext: without a workspace sandbox context doctor reports
-// registration/auth plus configured-to-preload — never attachment.
+// registration/auth plus configured-to-load-live — never attachment.
 func TestMCPHostGlobalContext(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"slack"}
 
-	t.Run("no context -> no attachment checks, preload note", func(t *testing.T) {
+	t.Run("no context -> no attachment checks, on-demand note", func(t *testing.T) {
 		g := mcpGroupWith(cfg, mcpFake().env(), "slack\n", true, true, nil, noCtx)
 		if hasCheck(g, "slack attachment") {
 			t.Errorf("host-global must not emit an attachment check: %+v", g)
 		}
 		c := findCheck(t, g, "attachment")
-		if !c.note || !strings.Contains(c.detail, "preload at sandbox create") {
-			t.Errorf("host-global note = %+v, want a preload-at-create statement", c)
+		if !c.note || !strings.Contains(c.detail, "discovered/executed on demand") {
+			t.Errorf("host-global note = %+v, want an on-demand statement", c)
 		}
 	})
 

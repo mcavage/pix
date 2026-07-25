@@ -291,7 +291,7 @@ flags:
                    e.g. docker.io/mcavage/pi-stack:local-1234567890). Works from ANY
                    directory — no checkout needed — so you can point at one worktree's
                    build while sitting in another. Orthogonal to --kit.
-  --mcp M          attach an MCP server at creation (repeatable)
+  --mcp M          declare an MCP server for this run (repeatable)
   --pack P         active pack for this run (path or git-url); mounts its skills +
                    knowledge, overriding the configured active pack
   --name N         sandbox name

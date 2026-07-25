@@ -110,7 +110,7 @@ type mcpStatusLine struct {
 // mcpSandboxRow is one (server, sandbox) truth row from the shared join path
 // (joinMCPSandboxRow, mcpjoin.go — the same path doctor renders from):
 // registered is the tri-state host registration evidence (yes|no|unknown),
-// state one of preloaded|loaded|registered-not-attached|not-registered|
+// state one of preloaded|loaded|available-on-demand|not-registered|
 // unverifiable, evidence the concrete proof or degrade reason. Sandbox is
 // empty when sandbox discovery itself was unavailable (state unverifiable).
 type mcpSandboxRow struct {
@@ -325,26 +325,8 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 					Name: row.Name, Registered: row.Registered.String(),
 					Sandbox: row.Sandbox, State: row.State, Evidence: evidence,
 				})
-				// registered-not-attached is a POSITIVE gap (a valid receipt
-				// lacks the entry): the exact live-attach command is the TODO.
-				// Unverifiable rows get guidance in their evidence only — status
-				// does not KNOW they are unattached, so no repair claim.
-				if row.State == mcpJoinRegisteredNotAttached {
-					// mcpLoadCommand shell-quotes both name and workspace via
-					// shellQuoteArg (closure finding #3), so this repair command
-					// round-trips a workspace with spaces/apostrophe/shell
-					// metacharacters safely when copy-pasted.
-					td := "pi-stack mcp load " + shellQuoteArg(row.Name) + " [DIR]"
-					switch {
-					case receipt != nil && strings.TrimSpace(receipt.Workspace) != "":
-						// The receipt's own canonical workspace is the most exact
-						// DIR (a custom-named box may not match sbx's dir column).
-						td = mcpLoadCommand(row.Name, receipt.Workspace)
-					case b.Dir != "":
-						td = mcpLoadCommand(row.Name, b.Dir)
-					}
-					st.Todos = append(st.Todos, td)
-				}
+				// Registered-but-unattached is the desired compact-context state.
+				// Explicit mcp load remains available, but is never a setup TODO.
 			}
 		}
 	}
@@ -540,9 +522,9 @@ func statusSandboxReceipt(env shellEnv, sandbox string) (*sandboxMCPReceipt, san
 // the states that have one).
 func mcpRowText(r mcpSandboxRow) string {
 	switch r.State {
-	case mcpJoinPreloaded, mcpJoinLoaded:
+	case mcpJoinPreloaded, mcpJoinLoaded, mcpJoinAvailableOnDemand:
 		return "✓ " + r.State + " (" + r.Evidence + ")"
-	case mcpJoinNotRegistered, mcpJoinRegisteredNotAttached:
+	case mcpJoinNotRegistered:
 		return "✗ " + r.State + ": " + r.Evidence
 	default: // unverifiable
 		return "? " + r.State + ": " + r.Evidence

@@ -403,7 +403,7 @@ func TestRecordMcpLoadReceipt_ExactSandboxDerivation(t *testing.T) {
 	}
 }
 
-// --- pack integrations fold into the emitted static set AND the receipt ----
+// --- pack integrations fold into the desired live set ----------------------
 
 // S03 item 4: an active pack's integration MCP servers already fold into
 // cfg.MCP via applyPackToLaunch (S01); this pins that the run.go COMPUTATION
@@ -411,7 +411,7 @@ func TestRecordMcpLoadReceipt_ExactSandboxDerivation(t *testing.T) {
 // emitted as --static-mcp by buildSbxArgs) and the CREATE RECEIPT agree
 // exactly on that same set, for both a persisted (`pack use`d) integration and
 // a transient --pack override never persisted to cfg.MCP.
-func TestPackIntegrations_FoldIntoStaticSetAndReceipt(t *testing.T) {
+func TestPackIntegrations_DoNotExpandCreateToolSet(t *testing.T) {
 	dir := t.TempDir()
 	root := filepath.Join(dir, "transient-pack")
 	mustWritePack(t, root, packManifest{Name: "transient", Schema: 1, Integrations: []packIntegration{
@@ -428,39 +428,10 @@ func TestPackIntegrations_FoldIntoStaticSetAndReceipt(t *testing.T) {
 
 	// The exact computation run.go performs before building sbx args / writing
 	// the receipt.
-	o.StaticMCP = allPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
-
-	for _, want := range []string{"slack", "fastmail", "notion"} {
-		if !containsStr(o.StaticMCP, want) {
-			t.Errorf("o.StaticMCP = %v, want it to contain %q", o.StaticMCP, want)
-		}
-	}
-
-	// Emitted --static-mcp flags mirror o.StaticMCP exactly.
+	// Registered/declared pack servers do not expand pi's direct tool table.
 	args := buildSbxArgs(cfg, o, "0.0.99")
-	for _, want := range o.StaticMCP {
-		if !contains(args, []string{"--static-mcp", want}) {
-			t.Errorf("buildSbxArgs args %v missing --static-mcp %s", args, want)
-		}
-	}
-
-	// The receipt, once written, carries the SAME set byte-for-byte.
-	stateDir := t.TempDir()
-	withSandboxMCPStateDirFn(t, func() (string, error) { return stateDir, nil })
-	if err := recordCreateReceipt("pi-stack-packfold", "", o.StaticMCP, true); err != nil {
-		t.Fatal(err)
-	}
-	r, status, err := readSandboxMCPReceipt(stateDir, "pi-stack-packfold")
-	if err != nil || status != sandboxMCPStateOK {
-		t.Fatalf("status=%v err=%v", status, err)
-	}
-	if len(r.Preloaded) != len(o.StaticMCP) {
-		t.Fatalf("Preloaded = %v, want exactly %v", r.Preloaded, o.StaticMCP)
-	}
-	for i, name := range o.StaticMCP {
-		if r.Preloaded[i] != name {
-			t.Fatalf("Preloaded = %v, want exactly %v (order preserved)", r.Preloaded, o.StaticMCP)
-		}
+	if countFlag(args, "--static-mcp") != 0 {
+		t.Fatalf("buildSbxArgs emitted static MCP: %v", args)
 	}
 }
 
@@ -497,8 +468,8 @@ func TestTaskLaunchUsesSharedCreateLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "execSbxRunAndRecordCreate(cmd, true, o.Name, canonicalWorkspacePath(o.Workspace), o.StaticMCP)") {
-		t.Fatal("launchTask (task.go) must launch via execSbxRunAndRecordCreate(cmd, true, o.Name, canonicalWorkspacePath(o.Workspace), o.StaticMCP) so task sandboxes get the same create-receipt lifecycle as `pi-stack run`")
+	if !strings.Contains(string(b), "execSbxRunAndRecordCreate(cmd, true, o.Name, canonicalWorkspacePath(o.Workspace), nil)") {
+		t.Fatal("launchTask must use the shared empty-static-set lifecycle")
 	}
 }
 

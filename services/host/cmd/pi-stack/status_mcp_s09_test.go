@@ -54,9 +54,8 @@ func rowsFor(st statusReport, sandbox string) map[string]mcpSandboxRow {
 	return out
 }
 
-// TestStatusMCPRowsAllFiveStates: one status snapshot exercises every join
-// state across two sandboxes with DISTINCT receipts — preloaded, loaded,
-// registered-not-attached, not-registered, and unverifiable (corrupt receipt).
+// One snapshot exercises legacy/explicit attachments plus the normal
+// available-on-demand state.
 func TestStatusMCPRowsAllFiveStates(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"gog", "slack", "notion", "linear"}}
 	env, stateDir := statusMCPEnv(t,
@@ -84,7 +83,7 @@ func TestStatusMCPRowsAllFiveStates(t *testing.T) {
 	for name, want := range map[string]string{
 		"gog":    mcpJoinPreloaded,
 		"slack":  mcpJoinLoaded,
-		"notion": mcpJoinRegisteredNotAttached,
+		"notion": mcpJoinAvailableOnDemand,
 		"linear": mcpJoinNotRegistered,
 	} {
 		if proj[name].State != want {
@@ -94,8 +93,8 @@ func TestStatusMCPRowsAllFiveStates(t *testing.T) {
 	bad := rowsFor(st, "pi-stack-bad")
 	for _, name := range []string{"gog", "slack", "notion"} {
 		r := bad[name]
-		if r.State != mcpJoinUnverifiable || !strings.Contains(r.Evidence, "receipt corrupt") {
-			t.Errorf("pi-stack-bad %s = %+v, want unverifiable on a corrupt receipt", name, r)
+		if r.State != mcpJoinAvailableOnDemand {
+			t.Errorf("pi-stack-bad %s = %+v, want registration-backed on-demand availability", name, r)
 		}
 	}
 	// A distinct receipt per sandbox: proj's loaded slack must NOT leak into bad.
@@ -109,7 +108,8 @@ func TestStatusMCPRowsAllFiveStates(t *testing.T) {
 }
 
 // TestStatusMCPRowsIdentityMismatch: a receipt for a DIFFERENT sandbox in this
-// sandbox's directory is never trusted — unverifiable, not attached.
+// sandbox's directory is never trusted as attachment evidence; registration
+// still proves on-demand availability.
 func TestStatusMCPRowsIdentityMismatch(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"slack"}}
 	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "slack\n")
@@ -126,8 +126,8 @@ func TestStatusMCPRowsIdentityMismatch(t *testing.T) {
 		t.Fatalf("MCPRows = %+v, want 1", st.MCPRows)
 	}
 	r := st.MCPRows[0]
-	if r.State != mcpJoinUnverifiable || !strings.Contains(r.Evidence, "identity-mismatch") {
-		t.Errorf("row = %+v, want unverifiable naming identity-mismatch", r)
+	if r.State != mcpJoinAvailableOnDemand {
+		t.Errorf("row = %+v, want registration-backed on-demand availability", r)
 	}
 }
 
@@ -172,10 +172,7 @@ func TestStatusMCPPositiveReceiptDominatesDeregistration(t *testing.T) {
 	}
 }
 
-// TestStatusMCPLoadTodoExactCommand: a registered-not-attached row gets the
-// exact live-attach command — with the sandbox's dir when `sbx ls` showed it,
-// the [DIR] placeholder otherwise.
-func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
+func TestStatusMCPAvailableOnDemandNeedsNoLoadTodo(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"notion"}}
 
 	t.Run("dir known", func(t *testing.T) {
@@ -184,8 +181,8 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 		st := gatherStatus(cfg, "default", env)
-		if !containsStr(st.Todos, "pi-stack mcp load notion /home/u/proj") {
-			t.Errorf("want exact `pi-stack mcp load notion /home/u/proj` TODO, got %v", st.Todos)
+		if len(st.Todos) != 0 || st.MCPRows[0].State != mcpJoinAvailableOnDemand {
+			t.Errorf("want available-on-demand with no TODO, got rows=%+v todos=%v", st.MCPRows, st.Todos)
 		}
 	})
 
@@ -195,8 +192,8 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 		st := gatherStatus(cfg, "default", env)
-		if !containsStr(st.Todos, "pi-stack mcp load notion [DIR]") {
-			t.Errorf("want `pi-stack mcp load notion [DIR]` TODO, got %v", st.Todos)
+		if len(st.Todos) != 0 || st.MCPRows[0].State != mcpJoinAvailableOnDemand {
+			t.Errorf("want available-on-demand with no TODO, got rows=%+v todos=%v", st.MCPRows, st.Todos)
 		}
 	})
 
@@ -209,10 +206,8 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 			}
 		}
 		r := st.MCPRows[0]
-		if r.State != mcpJoinUnverifiable ||
-			!strings.Contains(r.Evidence, "pi-stack mcp load notion") ||
-			!strings.Contains(r.Evidence, "pi-stack run --replace") {
-			t.Errorf("row = %+v, want unverifiable with load/--replace guidance as EVIDENCE", r)
+		if r.State != mcpJoinAvailableOnDemand || !strings.Contains(r.Evidence, "mcp-find/mcp-exec") {
+			t.Errorf("row = %+v, want available-on-demand gateway evidence", r)
 		}
 	})
 }
@@ -356,8 +351,8 @@ func TestStatusMCPRowsJSONGolden(t *testing.T) {
     "name": "notion",
     "registered": "yes",
     "sandbox": "pi-stack-proj",
-    "state": "registered-not-attached",
-    "evidence": "no receipt entry; attach live with ` + "`pi-stack mcp load notion`" + ` or recreate with ` + "`pi-stack run --replace`" + `"
+    "state": "available-on-demand",
+    "evidence": "registered behind gateway; discover/execute with mcp-find/mcp-exec"
   },
   {
     "name": "linear",
@@ -373,10 +368,10 @@ func TestStatusMCPRowsJSONGolden(t *testing.T) {
 }
 
 // TestStatusNoRetiredMCPVocabulary is the grep guard: neither the status/join
-// SOURCE nor a representative rendered output may resurrect the retired
-// attach-on-run / dynamic-discovery / mcp-find vocabulary.
+// SOURCE nor a representative rendered output may resurrect retired
+// attach-on-run configuration vocabulary.
 func TestStatusNoRetiredMCPVocabulary(t *testing.T) {
-	banned := []string{"attach_on_run", "attach-on-run", "mcp-find", "dynamic"}
+	banned := []string{"attach_on_run", "attach-on-run"}
 	for _, src := range []string{"status.go", "mcpjoin.go"} {
 		b, err := os.ReadFile(src)
 		if err != nil {
