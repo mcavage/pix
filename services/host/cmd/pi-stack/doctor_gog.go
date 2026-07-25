@@ -175,7 +175,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 			g.checks = append(g.checks, check{label: "headless spawn", verdict: verdictUnverifiable,
 				detail:   "probe skipped: the registered command's gog/op executable does not match the PATH-resolved binary (inspect: sbx mcp get gog) — never executed",
 				evidence: "registered executable token not canonical; probe not executed"})
-			g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
+			g.checks = append(g.checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
 			g.checks = append(g.checks, gogAttachCheck(cfg))
 			return g
 		}
@@ -186,7 +186,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 		g.checks = append(g.checks, gogSpawnCheck(env, probeListTools(env, trustedArgv),
 			readyDetail,
 			"the registered command returns 0 tools — keyring not headless"))
-		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
+		g.checks = append(g.checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
 		return g
 	}
@@ -234,7 +234,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 		// detail for whoever wants to opt in).
 		g.checks = append(g.checks, check{label: "account", note: true,
 			detail: "not configured (gog_account unset) — set up: " + gogSetupHint})
-		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
+		g.checks = append(g.checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
 		return g
 	}
@@ -248,7 +248,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 				detail: acct + " set (unconfirmed vs registration)"},
 			check{label: "op-refs", note: true,
 				detail: "op-refs.env not found — only needed if the gateway can't unlock gog's keyring headlessly"})
-		g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
+		g.checks = append(g.checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
 		g.checks = append(g.checks, gogAttachCheck(cfg))
 		return g
 	}
@@ -297,7 +297,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 	}
 
 	// 4. registered with the gateway. 5. in the configured MCP set?
-	g.checks = append(g.checks, mcpCheck("gog", mcpOut, mcpOK, sbxPresent))
+	g.checks = append(g.checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
 	g.checks = append(g.checks, gogAttachCheck(cfg))
 	return g
 }

@@ -132,15 +132,17 @@ func runMcpAuth(argv []string) {
 // the nightly gateway's live-attach that the old --mcp-at-create model couldn't
 // do. Register first with `pi-stack mcp register` (or `sbx mcp add`).
 func runMcpLoad(argv []string) {
-	if len(argv) == 0 || wantsHelp(argv) {
-		fmt.Fprint(os.Stderr, mcpUsage)
+	if wantsHelp(argv) {
+		fmt.Print(mcpUsage)
+		return
+	}
+	name, ws, err := parseMcpLoadArgs(argv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack mcp load: %v\n\n%s", err, mcpUsage)
 		os.Exit(2)
 	}
-	name := argv[0]
-	ws := "."
-	if len(argv) > 1 {
-		ws = argv[1]
-	}
+	// The sandbox name is derived ONLY from a validated workspace: a usage
+	// error above exits before anything is derived, exec'd, or receipted.
 	sandbox := deriveSandboxName(ws)
 	if _, err := exec.LookPath("sbx"); err != nil {
 		fmt.Printf("sbx not on PATH — would run: sbx mcp load %s --sandbox %s (run it on the host)\n", name, sandbox)
@@ -168,6 +170,42 @@ func runMcpLoad(argv []string) {
 		fmt.Fprintf(os.Stderr, "pi-stack mcp load: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// parseMcpLoadArgs enforces `pi-stack mcp load NAME [DIR]` EXACTLY: NAME is
+// required, non-blank, and never flag-shaped (load takes no flags); at most
+// one DIR may follow, and it must exist and be a directory —
+// validateRunWorkspace, the SAME helper `pi-stack run` uses, so load and run
+// can never disagree about what counts as a workspace. Any violation is a
+// usage error (exit 2 in the caller) BEFORE a sandbox name is derived or any
+// sbx command runs, so a failed usage can never attach anything or write a
+// receipt.
+func parseMcpLoadArgs(argv []string) (name, ws string, err error) {
+	const want = "want: pi-stack mcp load NAME [DIR]"
+	if len(argv) == 0 {
+		return "", "", fmt.Errorf("missing server NAME (%s)", want)
+	}
+	if len(argv) > 2 {
+		return "", "", fmt.Errorf("unexpected argument %q (%s)", argv[2], want)
+	}
+	name = strings.TrimSpace(argv[0])
+	if name == "" {
+		return "", "", fmt.Errorf("server NAME must not be blank (%s)", want)
+	}
+	if strings.HasPrefix(name, "-") {
+		return "", "", fmt.Errorf("unknown flag %q — mcp load takes no flags (%s)", name, want)
+	}
+	ws = "."
+	if len(argv) == 2 {
+		ws = argv[1]
+		if strings.TrimSpace(ws) == "" || strings.HasPrefix(ws, "-") {
+			return "", "", fmt.Errorf("invalid DIR %q — mcp load takes no flags (%s)", ws, want)
+		}
+	}
+	if verr := validateRunWorkspace(ws); verr != nil {
+		return "", "", verr
+	}
+	return name, ws, nil
 }
 
 // recordMcpLoadReceipt appends the load receipt for name on sandbox — called

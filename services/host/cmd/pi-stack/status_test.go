@@ -204,11 +204,16 @@ func TestStatusRegisterTodo(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"gog", "slack"}}
 	env := fakeStatusEnv() // sbx mcp ls -> gog,notion
 	env.hostBinary = func() (string, error) { return "/usr/local/bin/pi-stack-host", nil }
+	// probe answers the `pi-stack-host mcp --list` classification call; the
+	// sbx probes (secret ls / mcp ls / sbx ls also route through probeRun now)
+	// fall back to the canned env.run outputs.
+	run := env.run
 	env.probe = func(name string, args ...string) (string, bool, error) {
 		if name == "/usr/local/bin/pi-stack-host" && len(args) == 2 && args[0] == "mcp" && args[1] == "--list" {
 			return "slack\n", false, nil
 		}
-		return "", false, fmt.Errorf("unexpected probe %s %v", name, args)
+		out, err := run(name, args...)
+		return out, false, err
 	}
 	st := gatherStatus(cfg, "default", env)
 	n := 0

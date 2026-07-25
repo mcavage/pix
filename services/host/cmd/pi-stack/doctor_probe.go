@@ -17,10 +17,8 @@ import (
 // canonical-executable trust gate). doctor_gog.go's copy had grown one extra
 // outcome — probeDeniedByPolicy, an EXPLICIT policy/permission refusal
 // distinguished from a generic probe error — so that is the superset kept
-// here; every existing caller (mcpLocalCheck's status switch has no
-// probeDeniedByPolicy case and falls through its `default:` to unverifiable,
-// exactly as it already treated an unclassified failure) keeps its prior
-// behavior unchanged.
+// here; both callers (gogSpawnCheck and mcpLocalCheck) map it to
+// verdictDenied, and every other unclassified failure stays unverifiable.
 
 // probeStatus/probeResult are the STRUCTURED outcome of a `--list-tools`
 // probe: a clean non-empty list is healthy; a clean EMPTY list is a verified

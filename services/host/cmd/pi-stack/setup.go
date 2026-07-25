@@ -310,6 +310,20 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 		return err
 	}
 
+	// Shipped-catalog remotes (mcpCatalogNames) must be registered AND
+	// auth-ready BEFORE setup saves config or hands off to a launch — setup
+	// must never claim success for a server the gateway cannot spawn or that
+	// 401s on first use. The gate covers both the new --mcp proposal and any
+	// catalog name already persisted in cfg.MCP (the handoff would preload it
+	// too). It probes with bounded native checks only and never opens an OAuth
+	// flow (`pi-stack mcp auth <name>` stays the user's explicit command), so
+	// a non-interactive setup can't trigger a browser grant. Explicit policy
+	// denial fails with a denied error; a probe failure fails unverifiable
+	// with a retry path. Local stdio servers keep the registerServers path.
+	if err := verifyCatalogMCPReady(env, append(append([]string{}, r.MCP...), cfg.MCP...)); err != nil {
+		return err
+	}
+
 	// Retired config keys (mcp_static/mcp_dynamic) are dropped by the sparse
 	// encode whenever the config is saved. Announce the drop ONCE, concisely,
 	// and perform the save right here so the migration is deterministic even if

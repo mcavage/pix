@@ -14,14 +14,17 @@ import (
 // we could actually check. probeOK is false when sbx is absent OR `sbx secret ls`
 // errors (control plane down) — the caller must NOT treat that as "no key".
 func sbxModelKeyState(env shellEnv) (present, probeOK bool) {
-	if env.lookPath == nil || env.run == nil {
+	if env.lookPath == nil || (env.run == nil && env.probe == nil) {
 		return false, false
 	}
 	if _, err := env.lookPath("sbx"); err != nil {
 		return false, false
 	}
-	out, err := env.run("sbx", "secret", "ls")
-	if err != nil {
+	// BOUNDED (probeRun): a hung `sbx secret ls` degrades to probeOK=false —
+	// under run's tri-state rule that PROCEEDS (unknown never blocks a launch;
+	// only a positively confirmed missing key does) — never a wedged preflight.
+	out, timedOut, err := probeRun(env, "sbx", "secret", "ls")
+	if err != nil || timedOut {
 		return false, false
 	}
 	return anyModelKeyInOutput(out), true
@@ -61,14 +64,17 @@ const (
 // probeSbxSecrets runs `sbx secret ls` and classifies the result into
 // sbxSecretsProbeState. out is only meaningful when state == sbxSecretsOK.
 func probeSbxSecrets(env shellEnv) (out string, state sbxSecretsProbeState) {
-	if env.lookPath == nil || env.run == nil {
+	if env.lookPath == nil || (env.run == nil && env.probe == nil) {
 		return "", sbxSecretsAbsent
 	}
 	if _, err := env.lookPath("sbx"); err != nil {
 		return "", sbxSecretsAbsent
 	}
-	o, err := env.run("sbx", "secret", "ls")
-	if err != nil {
+	// BOUNDED (probeRun): a hung `sbx secret ls` classifies as sbxSecretsError
+	// (sbx IS on PATH — a real, diagnosable problem, never "absent") instead of
+	// hanging the caller forever.
+	o, timedOut, err := probeRun(env, "sbx", "secret", "ls")
+	if err != nil || timedOut {
 		return "", sbxSecretsError
 	}
 	return o, sbxSecretsOK

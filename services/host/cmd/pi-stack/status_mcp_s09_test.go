@@ -142,7 +142,17 @@ func TestStatusMCPPositiveReceiptDominatesDeregistration(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"slack"}}
 	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "gog\n") // slack deregistered
 	env.hostBinary = func() (string, error) { return "/usr/local/bin/pi-stack-host", nil }
-	env.probe = func(name string, args ...string) (string, bool, error) { return "slack\n", false, nil }
+	// probe answers ONLY the `pi-stack-host mcp --list` classification call;
+	// every other bounded probe (sbx secret ls / mcp ls / sbx ls now route
+	// through probeRun too) falls back to the canned env.run outputs.
+	run := env.run
+	env.probe = func(name string, args ...string) (string, bool, error) {
+		if name == "/usr/local/bin/pi-stack-host" {
+			return "slack\n", false, nil
+		}
+		out, err := run(name, args...)
+		return out, false, err
+	}
 	if err := writeCreateReceipt(stateDir, "pi-stack-proj", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}

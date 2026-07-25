@@ -158,10 +158,10 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	if env.lookPath != nil {
 		if _, err := env.lookPath("sbx"); err == nil {
 			sbxOnPath = true
-			if env.run != nil {
-				if o, err := env.run("sbx", "secret", "ls"); err == nil {
-					sbxOut, sbxOK = o, true
-				}
+			// BOUNDED (probeRun): a hung `sbx secret ls` degrades to "could not
+			// verify provider keys" — never a wedged status.
+			if o, timedOut, err := probeRun(env, "sbx", "secret", "ls"); err == nil && !timedOut {
+				sbxOut, sbxOK = o, true
 			}
 		}
 	}
@@ -208,8 +208,10 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	// no per-sandbox inspect API). When the listing is unavailable MCPServers
 	// stays nil and render falls back to the bare names.
 	mcpLsOut, mcpLsOK := "", false
-	if len(currentIntent) > 0 && sbxOnPath && env.run != nil {
-		if o, err := env.run("sbx", "mcp", "ls"); err == nil {
+	if len(currentIntent) > 0 && sbxOnPath {
+		// BOUNDED (probeRun): timeout/failure -> registration unknowable
+		// (mcpRegUnknown everywhere below), never a hang or a false "no".
+		if o, timedOut, err := probeRun(env, "sbx", "mcp", "ls"); err == nil && !timedOut {
 			mcpLsOut, mcpLsOK = o, true
 		}
 	}
@@ -246,8 +248,10 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	// as "no sandboxes".
 	sbxLsOK := false
 	var boxes []sbxBox
-	if sbxOnPath && env.run != nil {
-		if o, err := env.run("sbx", "ls"); err == nil {
+	if sbxOnPath {
+		// BOUNDED (probeRun): a hung `sbx ls` leaves discovery unavailable —
+		// the rows below render unverifiable, never a false "no sandboxes".
+		if o, timedOut, err := probeRun(env, "sbx", "ls"); err == nil && !timedOut {
 			sbxLsOK = true
 			st.Sandboxes = parseSandboxes(o)
 			boxes = parsePiStackBoxes(o)

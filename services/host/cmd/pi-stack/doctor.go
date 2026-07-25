@@ -328,7 +328,11 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	// check.
 	sbxOut, sbxState := probeSbxSecrets(env)
 	sbxOK := sbxState == sbxSecretsOK
-	r.sbxAbsent = !sbxOK
+	// sbxAbsent means POSITIVELY absent (lookPath could not find sbx) — never
+	// a generic probe failure: sbx present with `sbx secret ls` erroring or
+	// timing out is a different, diagnosable host state (sbxSecretsError) and
+	// must not render the "you're likely inside the sandbox" note.
+	r.sbxAbsent = sbxState == sbxSecretsAbsent
 
 	// MCP registrations (`sbx mcp ls`), listed once and reused by the gog group
 	// (its gateway registration) and the MCP group below. sbxOK (sbx PRESENT +
@@ -337,7 +341,9 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	// that must not be reported as "sbx unavailable".
 	mcpOut, mcpOK := "", false
 	if sbxOK {
-		if out, err := env.run("sbx", "mcp", "ls"); err == nil {
+		// BOUNDED (probeRun): a hung `sbx mcp ls` degrades to mcpOK=false —
+		// every dependent check renders unverifiable — never a wedged doctor.
+		if out, timedOut, err := probeRun(env, "sbx", "mcp", "ls"); err == nil && !timedOut {
 			mcpOut, mcpOK = out, true
 		}
 	}

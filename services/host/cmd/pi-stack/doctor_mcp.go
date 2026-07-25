@@ -29,26 +29,24 @@ import (
 // the local data-plane one (always available, no SBX_MCP_URL), so a failed
 // listing means the sbx daemon/gateway is unhealthy, not "gateway off". This is
 // NOT "sbx unavailable": the CLI is here, only the MCP-registration listing failed.
-const (
-	gatewayDownDetail = "sbx present but couldn't list MCP registrations — check the sbx daemon (sbx mcp status; sbx daemon status)"
-	gatewayTODO       = "check the sbx MCP gateway: run `sbx mcp status` and `sbx daemon status`, then re-run doctor"
-)
+const gatewayDownDetail = "sbx present but couldn't list MCP registrations — check the sbx daemon (sbx mcp status; sbx daemon status)"
 
-// mcpCheck reports whether an MCP server is registered with sbx. When the
-// sandbox — a register-on-the-host TODO) from sbx being PRESENT but the listing
-// having failed (host, sbx daemon/gateway likely unhealthy — a check-the-daemon TODO).
-func mcpCheck(name, mcpOut string, mcpOK, sbxPresent bool) check {
-	cmd := "pi-stack mcp register"
-	if !mcpOK {
-		if sbxPresent {
-			return check{label: name, verdict: verdictTodo, detail: gatewayDownDetail, todo: gatewayTODO}
-		}
-		return check{label: name, verdict: verdictTodo, detail: "sbx unavailable here (register on the host)", todo: cmd}
+// gogRegistrationCheck reports gog's sbx-gateway registration on the SAME
+// tri-state evidence every other MCP server uses (mcpRegEvidenceFrom): a
+// successful `sbx mcp ls` positively lacking gog is a verified register TODO;
+// gog present is ready; a failed/absent listing is UNVERIFIABLE — never a
+// false outstanding item invented from a probe that answered nothing. This
+// replaces the legacy binary mcpCheck, which rendered every listing failure
+// as a TODO.
+func gogRegistrationCheck(mcpOut string, mcpOK, sbxPresent bool) check {
+	switch mcpRegEvidenceFrom(mcpOut, mcpOK, "gog") {
+	case mcpRegYes:
+		return check{label: "gog", verdict: verdictReady, detail: "registered", evidence: "sbx mcp ls"}
+	case mcpRegNo:
+		return check{label: "gog", verdict: verdictTodo, detail: "not registered", todo: "pi-stack mcp register"}
+	default: // mcpRegUnknown: sbx absent, or present with the listing failing
+		return mcpUnavailableCheck("gog", sbxPresent)
 	}
-	if grepWord(mcpOut, name) {
-		return check{label: name, verdict: verdictReady, detail: "registered"}
-	}
-	return check{label: name, verdict: verdictTodo, detail: "not registered", todo: cmd}
 }
 
 // mcpKind is the classification of one configured (or pack-declared) MCP name.
@@ -353,6 +351,12 @@ func mcpLocalCheck(env shellEnv, name, mcpOut string) check {
 		return check{label: name, verdict: verdictTodo,
 			detail: "registered but the spawned command returns 0 tools — headless creds/keyring",
 			todo:   "review the registered command: sbx mcp get " + name}
+	case probeDeniedByPolicy:
+		// An EXPLICIT policy/permission refusal is a positive denial — an org
+		// decision, not a setup gap, and never collapsed into unverifiable.
+		return check{label: name, verdict: verdictDenied,
+			detail:   "registered, but the spawn is positively refused by policy/permission (sbx mcp get " + name + ")",
+			evidence: "denied"}
 	default: // probeTimedOut / probeError
 		return check{label: name, verdict: verdictUnverifiable,
 			detail: "registered but the tool probe " + res.detail + "; could not verify"}
@@ -628,10 +632,10 @@ func trustedHostBinaryExecPath(env shellEnv, tok string) (string, bool) {
 
 // trustedExecPath, trustedGogSpawn, probeStatus/probeResult, probeListTools,
 // and classifyProbeErr are SHARED with doctor_gog.go — see doctor_probe.go,
-// which owns the single implementation. mcpLocalCheck's switch below has no
-// case for the shared probeDeniedByPolicy outcome and falls through its
-// `default:` to unverifiable, exactly as it already treated any unclassified
-// probe failure before consolidation.
+// which owns the single implementation. mcpLocalCheck maps the shared
+// probeDeniedByPolicy outcome to verdictDenied (an explicit policy refusal is
+// a positive denial, same as the remote auth axis), and everything else
+// unclassified to unverifiable.
 
 // mcpAuthResult is the outcome mcpAuthStatus classifies a `sbx mcp auth
 // status <name>` probe into. mcpAuthUnknown covers output doctor cannot

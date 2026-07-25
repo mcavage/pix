@@ -51,13 +51,15 @@ type onboardKnowledge struct {
 // agent and consumed by the host on the next run.
 const onboardingFileName = "onboarding.json"
 
-// onboardMCPCatalogAllow is the curated set of remote gateway-catalog MCP names
-// the onboarding file may enable in addition to gog and the locally-known
-// servers. Kept deliberately small; anything else is configured with
-// `pi-stack mcp` directly, not via an untrusted onboarding file.
-var onboardMCPCatalogAllow = map[string]bool{
-	"notion": true, "atlassian": true, "granola": true, "linear": true,
-}
+// onboardMCPCatalogAllow is the set of remote gateway-catalog MCP names the
+// onboarding file may enable in addition to gog and the locally-known servers.
+// It IS mcpCatalogNames — the single source of truth for what `pi-stack mcp
+// bundle` actually registers — never an independent copy that can drift (the
+// old hand-written list had grown a "linear" that no pi-stack command could
+// register, so accepting it silently persisted a server that could never
+// come up). Anything else is configured with `pi-stack mcp` directly, not via
+// an untrusted onboarding file.
+var onboardMCPCatalogAllow = mcpCatalogNames
 
 // validateOnboardingResult rejects anything outside the allowlist BEFORE it
 // touches config. env/hostResolver resolve the locally-known MCP set; when that
@@ -171,6 +173,14 @@ func reconcileOnboarding(workspace string, env shellEnv, in io.Reader, out io.Wr
 	if err := validateOnboardingResult(&r, cfg, env, hostBinaryResolver); err != nil {
 		fmt.Fprintf(out, "pi-stack: refusing onboarding proposal in %s: %v\n", path, err)
 		fmt.Fprintln(out, "  Inspect and remove it by hand if it is not what you intended.")
+		return
+	}
+	// A shipped-catalog remote in the proposal must be registered AND
+	// auth-ready BEFORE anything is persisted — never applied on the promise
+	// that someone will run bundle/auth later.
+	if err := verifyCatalogMCPReady(env, r.MCP); err != nil {
+		fmt.Fprintf(out, "pi-stack: refusing onboarding proposal in %s: %v\n", path, err)
+		fmt.Fprintln(out, "  Nothing was applied; the file was left in place.")
 		return
 	}
 
@@ -353,6 +363,13 @@ func runOnboardCmd(argv []string) {
 	if err := validateOnboardingResult(r, cfg, env, hostBinaryResolver); err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack onboard: %v\n", err)
 		os.Exit(2)
+	}
+	// Catalog remotes must be registered + auth-ready BEFORE the config save:
+	// onboard never persists a server that cannot come up, and never opens an
+	// OAuth flow itself (it prints the exact commands instead).
+	if err := verifyCatalogMCPReady(env, r.MCP); err != nil {
+		fmt.Fprintf(os.Stderr, "pi-stack onboard: %v\n", err)
+		os.Exit(1)
 	}
 	changes, err := applyOnboardingResult(r, cfg, env, os.Stdout, func(c *config.Config) error { return c.Save() })
 	if err != nil {
