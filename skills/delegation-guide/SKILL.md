@@ -4,8 +4,11 @@ description: Context-passing and delegation rules for multi-stage subagent workf
 ---
 # delegation-guide
 
-Subagents do not share state. You are the orchestrator: you pass all context,
-collect results, and move the pipeline forward.
+Subagents do not share state. You are the **overlord**: the top-level orchestrator.
+Your job is to DIRECT the crew, not to do the units yourself. You pass all context,
+collect results, and move the pipeline forward. If you catch yourself writing the
+code / doc / analysis a subagent should own, stop and delegate it. The overlord
+earns its keep by keeping many workers busy in parallel, not by grinding one task.
 
 ## Context-passing rules
 
@@ -27,8 +30,12 @@ collect results, and move the pipeline forward.
 - **No open-ended prompts.** If a subagent returns a clarifying question instead
   of output, that is a delegation failure. Rewrite the prompt with the missing
   context and retry.
-- **Parallelize aggressively.** Launch independent subagents in parallel (Agent
-  tool). Serialize only when there is a real data dependency.
+- **Parallelize aggressively.** Launch independent subagents in ONE parallel call:
+  the `subagent` tool with `{tasks:[...]}`. Up to 16 tasks per call, 8 run at once
+  (`PI_SUBAGENT_MAX_PARALLEL` / `_MAX_CONCURRENCY`). Prefer `{tasks:[...]}` over
+  `{chain:[...]}` — use `chain` ONLY when stage N literally consumes stage N-1's
+  output (the `{previous}` placeholder). Independent work in a chain is throughput
+  left on the table. Serialize only on a real data dependency.
 - **File discipline.** Every subagent prompt must include: "Do NOT create any
   files unless explicitly required. Do all work in memory and return results in
   your response. If you must write a file, use only `/tmp/` or a project scratch
@@ -38,11 +45,15 @@ collect results, and move the pipeline forward.
 
 ## Subagent types (pi-stack)
 
-| Type | subagent agent | Use for |
-|---|---|---|
-| `fanout` | `agent=fanout` | Parallel investigation, data gathering, parallel coding units |
-| `deep` | `agent=deep` | Single complex task needing a full context window (a whole story, deep analysis) |
-| `review` | `agent=review` | Cross-vendor adversarial pass: code review, peer review, fact-check |
+Invoke with the `subagent` tool, `agent=<name>` (NOT the old `Agent` tool with
+`subagent_type=`, which is not present here).
+
+| Type | subagent agent | Resolves to | Use for |
+|---|---|---|---|
+| `fanout` | `agent=fanout` | Gemini Flash-Lite | Parallel investigation, data gathering, cheap breadth |
+| `deep` | `agent=deep` | Opus 5 | Single hard task needing a full context window (a whole story, deep analysis) |
+| `review` | `agent=review` | Gemini Pro | Cross-vendor adversarial pass: code review, peer review, fact-check |
+| `engineer` | `agent=engineer` | Sonnet 5 | The workhorse for ordinary code units in a wave |
 
 ## Wave execution pattern
 
@@ -52,7 +63,11 @@ do not execute units yourself.
 
 1. Identify units and their dependencies.
 2. Group into waves (units with no unmet deps go in the current wave).
-3. Launch the wave in parallel. Collect results before starting the next wave.
+3. Launch the WHOLE wave in one parallel `{tasks:[...]}` call (up to 8 run at once;
+   split a wider wave into back-to-back parallel calls). Mirror the wave in the
+   todo list: mark every unit in the wave `in-progress` at dispatch, `completed`
+   as each returns (the todo tool allows many in-progress at once for exactly
+   this). Collect results before starting the next wave.
 4. Gate with `code-review` (cross-vendor `review` subagent) before any wave that
    produces code that will ship. Gate with `verify` before marking a unit done.
 

@@ -283,9 +283,14 @@ flags:
                    (needs a checkout; resolves $PI_STACK_DEV_ROOT, the cwd, or
                    the launcher's own location)
   --skills DIR     mount an extra skill tree and load it live (repeatable)
-  --kit K          override the kit (escape hatch): replaces the auto git/local
-                   pin, so you can work around an unresolvable release tag
-                   (repeatable; a path or git+URL)
+  --kit K          override the KIT — the whole sandbox spec (image + entrypoint +
+                   creds + egress + skills): replaces the auto git/local pin, so you
+                   can work around an unresolvable release tag (repeatable; path or
+                   git+URL). To just swap the IMAGE, use --template instead.
+  --template REF   override only the IMAGE sbx boots (the ref 'make load' prints,
+                   e.g. docker.io/mcavage/pi-stack:local-1234567890). Works from ANY
+                   directory — no checkout needed — so you can point at one worktree's
+                   build while sitting in another. Orthogonal to --kit.
   --mcp M          attach an MCP server at creation (repeatable)
   --pack P         active pack for this run (path or git-url); mounts its skills +
                    knowledge, overriding the configured active pack

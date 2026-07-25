@@ -1,13 +1,14 @@
 {
-  "_note": "Routing policy: the INTENTS an agent/task declares instead of a hard-coded model. Each intent is a hard-constraint problem — filter models by the ceilings/floor + provider allowlist, then optimize the objective. This is the ONE file you tune to change the cost/latency/accuracy posture of the whole crew. Posture: TIER by leverage (Fable 5 for the one genuinely-hard problem; Opus for accuracy-critical strategy; Sonnet 5 as the workhorse for code + advice; Haiku/Gemini-Flash-Lite for volume) and deliberately go CROSS-VENDOR for the roles whose job is to independently check Claude-authored work (review -> OpenAI GPT, red-team -> Google Gemini), so their blind spots differ from the author's AND from each other. Provider allowlists encode that vendor diversity on purpose. Cost caps below are per-task USD at ~20k in + 6k out. Override at ~/.pi-stack/routing/policy.json.",
+  "_note": "Routing policy: the INTENTS an agent/task declares instead of a hard-coded model. Each intent is a hard-constraint problem — filter models by the ceilings/floor + provider allowlist, then optimize the objective. This is the ONE file you tune to change the cost/latency/accuracy posture of the whole crew. Posture (reshaped 2026-07-24 for Opus 5): OPUS 5 is the insta-upgrade flagship for accuracy-critical strategy + advisory; SONNET 5 stays the code workhorse; FABLE 5 is reserved for the ONE frontier role that earns it, adversarial security (red-team); the TOP-LEVEL session (overlord) + all PROSE (writing) go cross-vendor OFF Anthropic on purpose (overlord -> OpenAI GPT, writing -> Google Gemini) because Claude is the weak writer and a same-vendor orchestrator/author has the same blind spots; peer REVIEW -> Google Gemini Pro, a third vendor from both the GPT orchestrator and the Claude authors. Vendor spread is now: orchestrate=OpenAI, code/strategy/advisory/security=Anthropic, review/writing/verify/breadth=Google. Provider allowlists encode that on purpose. Cost caps below are per-task USD at ~20k in + 6k out. Override at ~/.pi-stack/routing/policy.json.",
   "default_fallback": "anthropic/claude-sonnet-5",
   "intents": [
     {
-      "name": "max-accuracy",
-      "task_type": "code",
+      "name": "overlord",
+      "task_type": "reasoning",
       "objective": "accuracy",
-      "fallback": "anthropic/claude-fable-5",
-      "about": "One genuinely hard problem, no cost ceiling: the 'even Opus falls short' tier. -> the strongest model overall (Fable 5)."
+      "providers": ["openai"],
+      "fallback": "openai/gpt-5.6-sol",
+      "about": "The TOP-LEVEL interactive orchestrator (the 'overlord' that directs the whole subagent crew and does little itself). Pinned OFF Anthropic on purpose: Claude is the weak writer/communicator and a same-vendor orchestrator shares its authors' blind spots. Best OpenAI reasoner. -> GPT-5.6 Sol."
     },
     {
       "name": "strategy",
@@ -15,8 +16,17 @@
       "objective": "accuracy",
       "max_cost_usd": 0.30,
       "providers": ["anthropic"],
-      "fallback": "anthropic/claude-opus-4-8",
-      "about": "Accuracy-critical judgment/synthesis where a wrong call is expensive and hard to detect: architecture, product strategy. Best Anthropic reasoner under an Opus-tier cap (excludes the Fable frontier). -> Opus."
+      "fallback": "anthropic/claude-opus-5",
+      "about": "Accuracy-critical judgment/synthesis where a wrong call is expensive and hard to detect: architecture, product strategy. Best Anthropic reasoner under an Opus-tier cost cap (the cap excludes the Fable frontier, now reserved for security). -> Opus 5 (insta-upgrade from Opus 4.8)."
+    },
+    {
+      "name": "max-accuracy",
+      "task_type": "code",
+      "objective": "accuracy",
+      "max_cost_usd": 0.30,
+      "providers": ["anthropic"],
+      "fallback": "anthropic/claude-opus-5",
+      "about": "The one genuinely-hard sub-problem or whole-story implementation that needs the strongest reasoning and a big context (the `deep` worker). Post-Opus-5 the frontier tier for HARD WORK is Opus 5, not Fable (Fable is reserved for security red-team); the cost cap excludes Fable so this resolves to Opus 5. -> Opus 5."
     },
     {
       "name": "code",
@@ -31,12 +41,12 @@
     {
       "name": "advisory",
       "task_type": "reasoning",
-      "objective": "balanced",
-      "max_cost_usd": 0.18,
+      "objective": "accuracy",
+      "max_cost_usd": 0.30,
       "min_accuracy": 0.80,
       "providers": ["anthropic"],
-      "fallback": "anthropic/claude-sonnet-5",
-      "about": "The specialist advisor crew (finance, legal, sre, dx, devrel, growth, ux, enterprise-admin, enrich): strong, cost-effective reasoning + writing. -> the Sonnet 5 workhorse."
+      "fallback": "anthropic/claude-opus-5",
+      "about": "The specialist ADVISOR crew (finance, legal, sre, dx-consultant, enterprise-admin): high-leverage judgment where a wrong recommendation is expensive. The prose specialists (devrel, growth, ux, enrich) moved to the `writing` intent. Best Anthropic reasoner under an Opus-tier cap. -> Opus 5. (Toggle to cross-vendor by setting providers:[openai] -> GPT-5.6 Sol.)"
     },
     {
       "name": "reasoning",
@@ -50,17 +60,17 @@
       "name": "review",
       "task_type": "reasoning",
       "objective": "accuracy",
-      "providers": ["openai", "ollama"],
-      "fallback": "openai/gpt-5.6-sol",
-      "about": "Adversarial second opinion on Claude-authored work. Allowlist EXCLUDES Anthropic (and Google, reserved for red-team) so review is a distinct vendor from both author and red-team. -> GPT-5.6 Sol."
+      "providers": ["google"],
+      "fallback": "google/gemini-3.1-pro-preview",
+      "about": "Adversarial second opinion / peer review. Pinned to Google: a THIRD vendor, distinct from both the OpenAI orchestrator and the Anthropic authors (code/strategy) whose work it checks, so its blind spots genuinely differ. Opus would be same-vendor as the authors and is the wrong reviewer. -> Gemini 3.1 Pro (reasoning/GPQA leader)."
     },
     {
       "name": "red-team",
       "task_type": "reasoning",
       "objective": "accuracy",
-      "providers": ["google"],
-      "fallback": "google/gemini-3.1-pro-preview",
-      "about": "A SECOND, independent cross-vendor voice for adversarial scrutiny (e.g. security review). Pinned to a THIRD vendor so it is independent of both the author (Claude) and the reviewer (GPT). -> Gemini 3.1 Pro (reasoning/GPQA leader)."
+      "providers": ["anthropic"],
+      "fallback": "anthropic/claude-fable-5",
+      "about": "Adversarial security scrutiny (STRIDE/OWASP/supply-chain). This is the ONE frontier role that earns Fable 5: getting a security review wrong is the most expensive miss in the crew, so it gets the strongest model regardless of cost, no ceiling. -> Fable 5."
     },
     {
       "name": "authoring",
@@ -68,8 +78,8 @@
       "objective": "accuracy",
       "max_cost_usd": 0.30,
       "providers": ["anthropic"],
-      "fallback": "anthropic/claude-opus-4-8",
-      "about": "Powers the agentic `agent new` flow that drafts prompts + writes eval cases. Needs strong judgment + valid structured output. -> Opus (best Anthropic reasoner under an Opus-tier cap)."
+      "fallback": "anthropic/claude-opus-5",
+      "about": "Powers the agentic `agent new` flow that drafts prompts + writes eval cases. Needs strong judgment + valid structured output. -> Opus 5 (best Anthropic reasoner under an Opus-tier cap)."
     },
     {
       "name": "breadth",
@@ -84,11 +94,12 @@
       "name": "verify",
       "task_type": "qa",
       "objective": "accuracy",
-      "max_cost_usd": 0.06,
+      "max_cost_usd": 0.10,
       "max_latency_ms": 20000,
-      "min_accuracy": 0.65,
-      "fallback": "anthropic/claude-haiku-4-5",
-      "about": "Test/QA passes: best accuracy within the cheap AND fast tier (tight cost + latency caps, so a free-but-slow local model can't win a high-volume role). -> Haiku 4.5."
+      "min_accuracy": 0.70,
+      "providers": ["google"],
+      "fallback": "google/gemini-3.6-flash",
+      "about": "Test/QA passes: fast + cheap, but Haiku was the dumb pick for it. Pinned to Google for the best fast QA model (Pro excluded on the 20s latency cap, Flash-Lite on the accuracy floor). -> Gemini 3.6 Flash."
     },
     {
       "name": "fast-balanced",
@@ -96,8 +107,17 @@
       "objective": "balanced",
       "max_latency_ms": 10000,
       "min_accuracy": 0.65,
-      "fallback": "anthropic/claude-haiku-4-5",
-      "about": "Snappy interactive work that wants more smarts than the volume floor but can't wait on a frontier model: balanced accuracy/cost/latency within a hard sub-10s tier (excludes Pro/Sol/Terra/Sonnet on latency) above a 0.65 accuracy floor (excludes Flash-Lite). -> Gemini 3.5 Flash (fast, mid-accuracy, beats Haiku on the blend)."
+      "fallback": "google/gemini-3.6-flash",
+      "about": "Snappy interactive work that wants more smarts than the volume floor but can't wait on a frontier model: balanced accuracy/cost/latency within a hard sub-10s tier (excludes Pro/Sol/Terra/Sonnet on latency) above a 0.65 accuracy floor (excludes Flash-Lite). -> Gemini 3.6 Flash (fast, mid-accuracy, beats Haiku on the blend)."
+    },
+    {
+      "name": "writing",
+      "task_type": "reasoning",
+      "objective": "cost",
+      "min_accuracy": 0.70,
+      "providers": ["google"],
+      "fallback": "google/gemini-3.6-flash",
+      "about": "PROSE: product copy, docs, tutorials, marketing, knowledge writeups (ux-copywriter, devrel, growth-marketing, enrich). Pinned OFF Anthropic because Claude is the weak writer; cheapest Google model clearing a 0.70 quality floor. -> Gemini 3.6 Flash. (Bump to Gemini 3.1 Pro for higher-stakes prose by setting objective:accuracy.)"
     }
   ]
 }

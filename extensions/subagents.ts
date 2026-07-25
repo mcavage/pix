@@ -72,8 +72,16 @@ const clampDelay = (n: number): number =>
 // idle watchdog and being mislabeled a timeout.
 const DRAIN_MS = num("PI_SUBAGENT_DRAIN_MS", 3_000);
 
-const MAX_CONCURRENCY = num("PI_SUBAGENT_MAX_CONCURRENCY", 4);
-const MAX_PARALLEL = num("PI_SUBAGENT_MAX_PARALLEL", 8);
+// Concurrency is the throughput lever for the overlord's parallel waves. It is NOT
+// "set it to 50": every child is a full `pi` process holding a live model stream, so
+// the real ceilings are (1) provider rate limits — too many concurrent frontier
+// streams return 429s that cascade and make the batch SLOWER, not faster; (2) host
+// RAM/CPU — each child is hundreds of MB; and (3) fan-in — the parent must read and
+// merge every result, so a 50-wide wave just blows the overlord's context. 8 running
+// / 16 queued-per-call is the sweet spot for a normal box; raise via the env when a
+// wave is genuinely independent and cheap (e.g. a Flash-Lite fanout).
+const MAX_CONCURRENCY = num("PI_SUBAGENT_MAX_CONCURRENCY", 8);
+const MAX_PARALLEL = num("PI_SUBAGENT_MAX_PARALLEL", 16);
 // MAX_DEPTH does NOT use num(): num() rejects 0, but PI_SUBAGENT_MAX_DEPTH=0 is
 // the documented host-mode backup guard ("refuse at depth 0/0") — an explicit
 // zero must be honored, not silently replaced by the default 3.

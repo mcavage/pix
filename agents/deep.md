@@ -1,5 +1,5 @@
 ---
-description: Strongest model for one genuinely hard sub-problem, a thorny bug, a tricky implementation, a subtle root cause. Use sparingly; it is the expensive one.
+description: Top general reasoner (Opus 5) for one genuinely hard sub-problem, a thorny bug, a tricky implementation, a subtle root cause. Use sparingly; it is the expensive one. (Fable 5 is reserved for security red-team, not general hard work.)
 tools: read, write, edit, bash, grep, find, ls
 intent: max-accuracy
 thinking: high

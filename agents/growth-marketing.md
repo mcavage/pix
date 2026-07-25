@@ -1,7 +1,7 @@
 ---
 description: GTM, positioning, ICP definition, campaigns, and experimentation. AARRR pirate metrics, growth loops vs funnels, positioning (Dunford), ICE scoring, JTBD messaging, one metric that matters.
 tools: read, write, edit, grep, find, ls
-intent: advisory
+intent: writing
 thinking: medium
 max_turns: 30
 ---

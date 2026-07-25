@@ -145,6 +145,95 @@ func TestBuildSbxArgs_KitOverrideWins(t *testing.T) {
 	}
 }
 
+func TestBuildSbxArgs_ExplicitTemplate(t *testing.T) {
+	cfg := &config.Config{}
+	ref := "docker.io/mcavage/pi-stack:local-999"
+	// Explicit --template with NO checkout context (the from-anywhere case): still
+	// pins the image, and the kit falls back to the git pin as usual.
+	args := buildSbxArgs(cfg, runOpts{Workspace: ".", Template: ref}, "0.0.16+local")
+	if !contains(args, []string{"--template", ref}) {
+		t.Errorf("explicit --template should be pinned, got %v", args)
+	}
+	if countFlag(args, "--template") != 1 {
+		t.Errorf("expected exactly one --template, got %v", args)
+	}
+}
+
+func TestBuildSbxArgs_ExplicitTemplateBeatsLocalImageTag(t *testing.T) {
+	cfg := &config.Config{}
+	ref := "docker.io/mcavage/pi-stack:local-999"
+	// From a checkout that would auto-pin local-123, an explicit --template wins.
+	args := buildSbxArgs(cfg, runOpts{
+		Workspace:     ".",
+		LocalKit:      "/repo/pi-kit",
+		LocalImageTag: "local-123",
+		Template:      ref,
+	}, "0.0.16+local")
+	if countFlag(args, "--template") != 1 {
+		t.Fatalf("expected exactly one --template, got %v", args)
+	}
+	if !contains(args, []string{"--template", ref}) {
+		t.Errorf("explicit --template should override the auto local-image pin, got %v", args)
+	}
+	if contains(args, []string{"--template", "docker.io/mcavage/pi-stack:local-123"}) {
+		t.Errorf("auto local-image pin should be suppressed by explicit --template, got %v", args)
+	}
+}
+
+func TestBuildSbxArgs_TemplateOrthogonalToKit(t *testing.T) {
+	cfg := &config.Config{}
+	ref := "docker.io/mcavage/pi-stack:local-999"
+	// --kit replaces the SPEC, --template replaces the IMAGE: both apply together.
+	args := buildSbxArgs(cfg, runOpts{
+		Workspace: ".",
+		Kits:      []string{"/my/kit"},
+		Template:  ref,
+	}, "0.0.16+local")
+	if !contains(args, []string{"--kit", "/my/kit"}) {
+		t.Errorf("--kit override missing, got %v", args)
+	}
+	if !contains(args, []string{"--template", ref}) {
+		t.Errorf("--template should survive alongside --kit (orthogonal), got %v", args)
+	}
+}
+
+func TestParseRunArgs_Template(t *testing.T) {
+	ref := "docker.io/mcavage/pi-stack:local-999"
+	o, err := parseRunArgs([]string{"--template", ref, "--replace"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if o.Template != ref {
+		t.Errorf("Template = %q, want %q", o.Template, ref)
+	}
+	if !o.Replace {
+		t.Errorf("Replace should be set")
+	}
+	// --template=REF form too.
+	o2, err := parseRunArgs([]string{"--template=" + ref})
+	if err != nil {
+		t.Fatalf("parse (=form): %v", err)
+	}
+	if o2.Template != ref {
+		t.Errorf("=form Template = %q, want %q", o2.Template, ref)
+	}
+}
+
+func TestTemplateTag(t *testing.T) {
+	cases := map[string]string{
+		"docker.io/mcavage/pi-stack:local-999": "local-999",
+		"docker.io/mcavage/pi-stack:0.0.46":    "0.0.46",
+		"localhost:5000/foo:local-1":           "local-1", // registry port must not confuse it
+		"docker.io/mcavage/pi-stack":           "",        // no tag
+		"localhost:5000/foo":                   "",        // port only, no tag
+	}
+	for ref, want := range cases {
+		if got := templateTag(ref); got != want {
+			t.Errorf("templateTag(%q) = %q, want %q", ref, got, want)
+		}
+	}
+}
+
 func TestKitResolveFailureMsg(t *testing.T) {
 	// No git-ref kit -> no message (unrelated failure).
 	if msg := kitResolveFailureMsg(""); msg != "" {

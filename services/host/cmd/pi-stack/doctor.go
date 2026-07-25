@@ -402,7 +402,7 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	// (a) provider secrets — proxy-injected, never in the VM. Genuinely gated
 	// on sbxOK: this group's OWN probe (`sbx secret ls`) is the one that
 	// failed, so it stays unverifiable regardless of sbxOnPath/mcpOK.
-	r.groups = append(r.groups, providersGroup(sbxOut, sbxOK))
+	r.groups = append(r.groups, providersGroup(cfg, sbxOut, sbxOK))
 	// (b) ollama + the configured watcher/embed models.
 	r.groups = append(r.groups, ollamaGroup(cfg, env))
 	// (c) memory service on :11435.
