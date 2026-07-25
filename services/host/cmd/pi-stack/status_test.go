@@ -497,6 +497,109 @@ func TestStatusProbeFailureNoProviderTodo(t *testing.T) {
 	})
 }
 
+// TestStatusMCPRegistrationUnverifiableBlocksAllGreen pins closure finding
+// #1: configured/current-intent MCP names exist, sbx is present and
+// provider keys ARE ready, but `sbx mcp ls` fails, and `sbx ls` succeeds
+// with ZERO pi-stack sandboxes. Registration cannot be verified — the
+// verdict must not read "all systems go" even though nothing else is
+// outstanding and there are no sandboxes/rows to render unverifiable.
+func TestStatusMCPRegistrationUnverifiableBlocksAllGreen(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"gog"}}
+	env := shellEnv{
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+				return "anthropic\n", nil // provider-ready
+			}
+			if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
+				return "", fmt.Errorf("mcp ls boom") // registration probe fails
+			}
+			if name == "sbx" && len(args) >= 1 && args[0] == "ls" {
+				return "NAME STATUS\n", nil // zero pi-stack sandboxes
+			}
+			return "", nil
+		},
+		dial:     func(int) bool { return false },
+		statFile: func(string) bool { return false },
+	}
+	st := gatherStatus(cfg, "default", env)
+	if len(st.Todos) != 0 {
+		t.Errorf("todos = %v, want none (a failed registration probe is unverifiable, never a false TODO)", st.Todos)
+	}
+	foundUnverifiable := false
+	for _, m := range st.MCPServers {
+		if m.Name == "gog" && m.Unverifiable {
+			foundUnverifiable = true
+		}
+	}
+	if !foundUnverifiable {
+		t.Errorf("MCPServers = %+v, want a gog entry flagged unverifiable", st.MCPServers)
+	}
+	var out bytes.Buffer
+	renderStatus(cfg, "default", env, &out, false)
+	if strings.Contains(out.String(), "all systems go") {
+		t.Errorf("verdict must not read all-systems-go with unverifiable registration and zero sandboxes, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "unverifiable (not failed") {
+		t.Errorf("expected the unverifiable-not-failed headline, got:\n%s", out.String())
+	}
+
+	var jout bytes.Buffer
+	renderStatus(cfg, "default", env, &jout, true)
+	var jst statusReport
+	if err := json.Unmarshal(jout.Bytes(), &jst); err != nil {
+		t.Fatalf("status --json invalid: %v\n%s", err, jout.String())
+	}
+	found := false
+	for _, m := range jst.MCPServers {
+		if m.Name == "gog" && m.Unverifiable {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("json mcp_servers = %+v, want a gog entry with unverifiable:true", jst.MCPServers)
+	}
+}
+
+// TestStatusMCPLoadTodoQuotesWorkspace pins closure finding #3: the mcp/box
+// registered-not-attached repair command status prints shell-quotes both the
+// server name and the workspace, so a path with spaces, an apostrophe, and a
+// shell metacharacter round-trips safely when copy-pasted.
+func TestStatusMCPLoadTodoQuotesWorkspace(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"slack"}}
+	const ws = "/home/u/my repo's proj; touch pwned"
+	const box = "pi-stack-proj"
+	env := fakeStatusEnv()
+	stateDir := t.TempDir()
+	env.stateDir = func() (string, error) { return stateDir, nil }
+	env.run = func(name string, args ...string) (string, error) {
+		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+			return "anthropic\n", nil
+		}
+		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
+			return "slack\n", nil
+		}
+		if name == "sbx" && len(args) >= 1 && args[0] == "ls" {
+			return "NAME STATUS\n" + box + " running\n", nil
+		}
+		return "", nil
+	}
+	if err := writeCreateReceipt(stateDir, box, ws, []string{"notion"}, receiptClock); err != nil {
+		t.Fatal(err)
+	}
+	st := gatherStatus(cfg, "default", env)
+	var td string
+	for _, tdo := range st.Todos {
+		if strings.HasPrefix(tdo, "pi-stack mcp load") {
+			td = tdo
+		}
+	}
+	want := "pi-stack mcp load " + shellQuoteArg("slack") + " " + shellQuoteArg(ws)
+	if td != want {
+		t.Errorf("todo = %q, want %q", td, want)
+	}
+}
+
 func TestParseSandboxes(t *testing.T) {
 	out := parseSandboxes("NAME STATUS\npi-stack-a running\nfoo bar\npi-stack-b stopped\n")
 	if len(out) != 2 {

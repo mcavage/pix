@@ -198,8 +198,27 @@ func TestRunReplaceCommand_QuotesUnsafeWorkspace(t *testing.T) {
 	if got != want {
 		t.Errorf("runReplaceCommand(%q) = %q, want %q", ws, got, want)
 	}
-	if !strings.Contains(got, `'`) {
-		t.Errorf("an unsafe workspace path must be quoted, got: %q", got)
+}
+
+// TestMcpLoadCommand_QuotesWorkspaceAndName pins closure finding #3: every
+// generated copy-paste `mcp load` repair command shell-quotes BOTH the
+// server name and the workspace via the shared shellQuoteArg, so a workspace
+// with spaces/apostrophe/shell metacharacters round-trips safely.
+func TestMcpLoadCommand_QuotesWorkspaceAndName(t *testing.T) {
+	for _, ws := range []string{
+		"/home/mark/my repo's checkout",
+		"/tmp/a;b",
+		"/tmp/$HOME/proj",
+	} {
+		got := mcpLoadCommand("slack", ws)
+		want := "pi-stack mcp load " + shellQuoteArg("slack") + " " + shellQuoteArg(ws)
+		if got != want {
+			t.Errorf("mcpLoadCommand(%q) = %q, want %q", ws, got, want)
+		}
+	}
+	// Bare form (no workspace) still quotes the name.
+	if got := mcpLoadCommand("slack", ""); got != "pi-stack mcp load slack" {
+		t.Errorf("mcpLoadCommand bare = %q, want %q", got, "pi-stack mcp load slack")
 	}
 }
 

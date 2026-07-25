@@ -245,6 +245,37 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 	}
 }
 
+// TestMCPAttachmentTodoQuotesWorkspace pins closure finding #3: the exact
+// registered-not-attached repair command shell-quotes both the server name
+// and the workspace via shellQuoteArg, so a workspace with spaces, an
+// apostrophe, and a shell metacharacter round-trips safely when copy-pasted.
+func TestMCPAttachmentTodoQuotesWorkspace(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.MCP = []string{"slack"}
+	// The workspace's PARENT segments carry the spaces/apostrophe/shell
+	// metacharacter (the reason the repair command needs quoting); the final
+	// path segment stays a plain sandbox-name-safe token, matching how
+	// deriveSandboxName ("pi-stack-" + the final segment) actually derives a
+	// sandbox name in production.
+	const ws = "/home/u/my repo's proj; touch pwned/repo"
+	box := deriveSandboxName(ws)
+	base := mcpFake()
+	base.output["sbx ls"] = box + "  running\n"
+	env, stateDir := receiptEnv(t, base, ws)
+	if err := writeCreateReceipt(stateDir, box, "", []string{"notion"}, receiptClock); err != nil {
+		t.Fatal(err)
+	}
+	g := mcpGroupWith(cfg, env, "slack\n", true, true, nil, resolveMCPSandboxContext(env))
+	c := findCheck(t, g, "slack attachment")
+	if c.result() != verdictTodo {
+		t.Fatalf("expected a verified registered-not-attached todo, got %+v", c)
+	}
+	want := "pi-stack mcp load " + shellQuoteArg("slack") + " " + shellQuoteArg(ws)
+	if c.todo != want {
+		t.Errorf("todo = %q, want %q", c.todo, want)
+	}
+}
+
 // TestMCPAttachmentSurvivesDeregistration pins finding #1 at the doctor
 // layer: a valid preload receipt still renders READY even though the server
 // is now positively deregistered (`sbx mcp ls` lacks it) — registration is a

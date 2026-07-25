@@ -98,6 +98,13 @@ type statusReport struct {
 type mcpStatusLine struct {
 	Name       string `json:"name"`
 	Registered bool   `json:"registered"`
+	// Unverifiable is set when sbx is present but the bounded `sbx mcp ls`
+	// listing itself failed/timed out (closure finding #1): registration is
+	// genuinely UNKNOWN for this name, never a false "not registered", and
+	// this entry must count toward the headline's unverifiable total so the
+	// verdict can never read "all systems go" over unknown registration —
+	// even with zero sandboxes/rows to otherwise carry that signal.
+	Unverifiable bool `json:"unverifiable,omitempty"`
 }
 
 // mcpSandboxRow is one (server, sandbox) truth row from the shared join path
@@ -223,7 +230,8 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 		}
 	}
 	regOf := func(name string) mcpRegEvidence { return mcpRegEvidenceFrom(mcpLsOut, mcpLsOK, name) }
-	if mcpLsOK {
+	switch {
+	case mcpLsOK:
 		registerTodoFor := statusRegisterTodoFn(cfg, env)
 		for _, m := range currentIntent {
 			reg := regOf(m) == mcpRegYes
@@ -235,6 +243,19 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 			if !reg {
 				st.Todos = append(st.Todos, registerTodoFor(m))
 			}
+		}
+	case sbxOnPath && len(currentIntent) > 0:
+		// Closure finding #1: sbx IS present (the listing was attempted) but
+		// `sbx mcp ls` failed/timed out — registration is UNKNOWN for every
+		// current-intent name, never a false "not registered" and never a
+		// TODO (doctor/status never invent a repair from a probe that answered
+		// nothing). Tracked here so the headline can't read "all systems go"
+		// over unknown registration, even with zero sandboxes/rows below. When
+		// sbx is off PATH entirely, this stays empty on purpose — that case
+		// already surfaces via the per-sandbox MCPRows discovery-unavailable
+		// path (TestGatherStatusMCPSbxAbsent).
+		for _, m := range currentIntent {
+			st.MCPServers = append(st.MCPServers, mcpStatusLine{Name: m, Unverifiable: true})
 		}
 	}
 
@@ -309,14 +330,18 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 				// Unverifiable rows get guidance in their evidence only — status
 				// does not KNOW they are unattached, so no repair claim.
 				if row.State == mcpJoinRegisteredNotAttached {
-					td := "pi-stack mcp load " + row.Name + " [DIR]"
+					// mcpLoadCommand shell-quotes both name and workspace via
+					// shellQuoteArg (closure finding #3), so this repair command
+					// round-trips a workspace with spaces/apostrophe/shell
+					// metacharacters safely when copy-pasted.
+					td := "pi-stack mcp load " + shellQuoteArg(row.Name) + " [DIR]"
 					switch {
 					case receipt != nil && strings.TrimSpace(receipt.Workspace) != "":
 						// The receipt's own canonical workspace is the most exact
 						// DIR (a custom-named box may not match sbx's dir column).
-						td = "pi-stack mcp load " + row.Name + " " + receipt.Workspace
+						td = mcpLoadCommand(row.Name, receipt.Workspace)
 					case b.Dir != "":
-						td = "pi-stack mcp load " + row.Name + " " + b.Dir
+						td = mcpLoadCommand(row.Name, b.Dir)
 					}
 					st.Todos = append(st.Todos, td)
 				}
@@ -376,8 +401,15 @@ func (st statusReport) render(out io.Writer) {
 			if i > 0 {
 				label = "   "
 			}
-			reg := okGlyph(m.Registered) + " registered"
-			if !m.Registered {
+			var reg string
+			switch {
+			case m.Unverifiable:
+				// sbx present but `sbx mcp ls` itself failed/timed out: registration
+				// is genuinely unknown, never rendered as a false "not registered".
+				reg = "? registration unverifiable (sbx mcp ls unavailable/failed)"
+			case m.Registered:
+				reg = okGlyph(true) + " registered"
+			default:
 				reg = okGlyph(false) + " not registered"
 			}
 			fmt.Fprintf(out, "  %-9s   %-8s %s · preloads at sandbox create\n", label, m.Name, reg)
@@ -430,6 +462,15 @@ func (st statusReport) render(out io.Writer) {
 	unverifiable := 0
 	for _, r := range st.MCPRows {
 		if r.State == mcpJoinUnverifiable {
+			unverifiable++
+		}
+	}
+	// Closure finding #1: a failed host-global registration listing is its own
+	// unverifiable signal — independent of any per-sandbox row — so it must
+	// count toward the headline even with zero sandboxes/rows to otherwise
+	// carry it.
+	for _, m := range st.MCPServers {
+		if m.Unverifiable {
 			unverifiable++
 		}
 	}

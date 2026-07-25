@@ -321,6 +321,48 @@ func TestDoctor_GogAccountUnset(t *testing.T) {
 	}
 }
 
+// TestDoctor_GogAttachDespiteMissingExecutable pins closure finding #2:
+// receipt-backed attachment reporting must never be skipped just because the
+// gog executable is missing from PATH (and sbx exposes no readable
+// registered command). The registration check and gogAttachCheck must still
+// be emitted — and read ready off a valid preload receipt — even though the
+// executable/hardened/tools checks short-circuit on their own.
+func TestDoctor_GogAttachDespiteMissingExecutable(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.MCP = []string{"gog"}
+	const ws = "/home/u/proj"
+	const box = "pi-stack-proj"
+	f := fakeEnv{
+		present: map[string]bool{"sbx": true}, // gog NOT on PATH
+		output: map[string]string{
+			"sbx ls": box + "  running\n",
+			// no `sbx mcp get gog` / `sbx mcp ls -o json` fixture -> registeredGogCommand
+			// returns (nil,false): the registered command is unreadable.
+		},
+	}
+	env := f.env()
+	env.getwd = func() (string, error) { return ws, nil }
+	stateDir := t.TempDir()
+	env.stateDir = func() (string, error) { return stateDir, nil }
+	if err := writeCreateReceipt(stateDir, box, ws, []string{"gog"}, receiptClock); err != nil {
+		t.Fatal(err)
+	}
+	ctx := resolveMCPSandboxContext(env)
+	if ctx.mode != mcpAttachReceipt {
+		t.Fatalf("expected a receipt sandbox context, got mode=%v", ctx.mode)
+	}
+	g := gogGroup(cfg, env, "gog\n", true, true, ctx)
+
+	reg := findCheck(t, g, "gog")
+	if reg.result() != verdictReady {
+		t.Errorf("registration check must still be emitted and ready: %+v", reg)
+	}
+	attach := findCheck(t, g, "gog attachment")
+	if attach.result() != verdictReady || !strings.Contains(attach.evidence, "preloaded by pi-stack at create") {
+		t.Errorf("attach check must be emitted and ready despite the missing gog executable: %+v", attach)
+	}
+}
+
 // TestResolveOpRefs: the op-refs path resolves to an ABSOLUTE, canonical
 // location (here from $PI_STACK_CONFIG's dir) so doctor probes the same file the
 // gateway registration uses, never a cwd-relative one.

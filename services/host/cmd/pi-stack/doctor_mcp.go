@@ -228,20 +228,22 @@ func resolveMCPSandboxContext(env shellEnv) mcpSandboxContext {
 
 // mcpLoadTodoCommand is the exact, copy-pasteable live-attach command for a
 // VERIFIED registered-not-attached gap: the same `pi-stack mcp load NAME DIR`
-// spelling status emits, carrying the canonical workspace when known.
+// spelling status emits, carrying the canonical workspace when known. It
+// delegates to run.go's mcpLoadCommand (shell-quoting name and workspace via
+// shellQuoteArg, closure finding #3) so doctor and status can never drift on
+// how the repair command is quoted.
 func mcpLoadTodoCommand(name, workspace string) string {
-	if strings.TrimSpace(workspace) == "" {
-		return "pi-stack mcp load " + name
-	}
-	return "pi-stack mcp load " + name + " " + workspace
+	return mcpLoadCommand(name, workspace)
 }
 
 // mcpAttachGuidance is the exact, copy-pasteable pair of commands that would
 // MAKE attachment true (and receipted). It lives in the detail/evidence of an
 // unverifiable attachment check — never as a todo, because unverifiable means
-// doctor does not KNOW the server is unattached.
+// doctor does not KNOW the server is unattached. name is shell-quoted via
+// shellQuoteArg (closure finding #3), consistent with every other generated
+// mcp load command.
 func mcpAttachGuidance(name string) string {
-	return "attach live with `pi-stack mcp load " + name + "` or recreate with `pi-stack run --replace`"
+	return "attach live with `pi-stack mcp load " + shellQuoteArg(name) + "` or recreate with `pi-stack run --replace`"
 }
 
 // mcpAttachCheck renders one server's sandbox-attachment evidence from the

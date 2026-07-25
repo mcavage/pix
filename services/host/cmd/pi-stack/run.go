@@ -608,12 +608,15 @@ func desiredMCPUniverse(cfg *config.Config, o runOpts) []string {
 // mcpLoadCommand returns the exact `pi-stack mcp load NAME [WORKSPACE]`
 // command for name, workspace-qualified the same way runReplaceCommand is
 // (bare for ".", quoted otherwise) so the two recovery commands read
-// consistently.
+// consistently. Both name and workspace are shell-quoted via the shared
+// shellQuoteArg (closure finding #3) — a server name is ordinarily a plain
+// token, but quoting it too costs nothing and keeps every generated
+// copy-paste command uniformly safe.
 func mcpLoadCommand(name, workspace string) string {
 	if workspace == "" || workspace == "." {
-		return "pi-stack mcp load " + name
+		return "pi-stack mcp load " + shellQuoteArg(name)
 	}
-	return "pi-stack mcp load " + name + " " + shellQuoteArg(workspace)
+	return "pi-stack mcp load " + shellQuoteArg(name) + " " + shellQuoteArg(workspace)
 }
 
 // mcpLoadHints joins one mcpLoadCommand per name (mcp load only ever attaches

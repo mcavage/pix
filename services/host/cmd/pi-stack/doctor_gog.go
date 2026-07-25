@@ -197,9 +197,16 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 
 	// 1. gog CLI installed (the reconstruction probe uses it). Not installed is
 	// optional-NOT-CONFIGURED: an expected absence (a note), never a failure.
+	// The registration + attachment checks are ALWAYS emitted regardless
+	// (closure finding #2): a missing local gog executable says nothing about
+	// whether the gateway already has gog registered, or whether a sandbox's
+	// receipt already proves it attached — dropping those checks here would
+	// silently hide real, independently-verifiable evidence.
 	if _, err := env.lookPath("gog"); err != nil {
 		g.checks = append(g.checks, check{label: "gog CLI", note: true, verdict: verdictUnverifiable,
 			detail: "not installed — optional; set up Google Workspace with: " + gogSetupHint})
+		g.checks = append(g.checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
+		g.checks = append(g.checks, gogAttachCheck(cfg, ctx, gogReg))
 		return g
 	}
 	g.checks = append(g.checks, check{label: "gog CLI", verdict: verdictReady, detail: "installed"})
