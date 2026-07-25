@@ -92,6 +92,52 @@ func TestTaskSandboxName(t *testing.T) {
 	}
 }
 
+// U-W3.06 (AC-P0-406): pin the PRE-LABEL legacy formula exactly, alongside
+// the current one above, before the rename changes the "pi-stack-t-"
+// prefix both derive from (see sandboxname_test.go's header for why exact
+// pins, not just "it still composes something", matter here). This formula
+// is deleted outright in U-W3.09 (not renamed -- legacyTaskSandboxName
+// reconstructs a namespace that never had legacy tasks under the new name),
+// so this pin is also the record of exactly what gets deleted.
+func TestLegacyTaskSandboxName_ExactComposition(t *testing.T) {
+	if got := legacyTaskSandboxName("abcd1234", "fix-login", "default"); got != "pi-stack-t-abcd1234-fix-login" {
+		t.Errorf("got %q, want %q", got, "pi-stack-t-abcd1234-fix-login")
+	}
+	// No label segment at all (the pre-label formula never had one) -- this is
+	// the exact structural difference from taskSandboxName's output for the
+	// SAME (repokey, name): one fewer "-<label>" segment.
+	newer := taskSandboxName("myrepo", "abcd1234", "fix-login", "")
+	legacy := legacyTaskSandboxName("abcd1234", "fix-login", "")
+	if newer == legacy {
+		t.Errorf("new-layout and legacy formulas produced the SAME name (%q); they must differ by the label segment", newer)
+	}
+	if legacy != "pi-stack-t-abcd1234-fix-login" {
+		t.Errorf("legacy formula got %q, want %q", legacy, "pi-stack-t-abcd1234-fix-login")
+	}
+	// Profile arg is ignored here too (retained for call-site stability only).
+	if got := legacyTaskSandboxName("abcd1234", "fix-login", "work"); got != legacy {
+		t.Errorf("profile arg must be ignored: got %q, want %q", got, legacy)
+	}
+}
+
+// U-W3.06: pin the per-repo state-DIR segment ("<label>-<repokey>", browsed
+// under $STATE/pi-stack/tasks/) separately from the sandbox-name formula --
+// they share the label+repokey but compose them in the OPPOSITE order and
+// with no "pi-stack-t-" prefix at all, which is easy to conflate.
+func TestTaskRepoDir_ExactComposition(t *testing.T) {
+	dir := t.TempDir()
+	got := taskRepoDir(dir)
+	label := taskRepoLabel(dir)
+	key := taskRepoKey(dir)
+	want := label + "-" + key
+	if got != want {
+		t.Errorf("taskRepoDir(%q) = %q, want %q (label-then-repokey, no prefix)", dir, got, want)
+	}
+	if strings.HasPrefix(got, "pi-stack") {
+		t.Errorf("taskRepoDir must never carry the sandbox-name prefix (it names a DIRECTORY, not a sandbox): got %q", got)
+	}
+}
+
 // --- guard table ------------------------------------------------------------
 
 func TestTaskRemoveGuard(t *testing.T) {
