@@ -14,8 +14,8 @@
 #
 # columns: path  disposition  occurrences  frozen  pathmv  note
 #
-# totals: 286 files, 4653 occurrences
-#   rename 200 | manual 76 | keep 5 | keep-historical 5 | unclassified 0
+# totals: 287 files, 4693 occurrences
+#   rename 200 | manual 76 | keep 6 | keep-historical 5 | unclassified 0
 .dockerignore	rename	1	0	no	build and packaging metadata
 .github/ISSUE_TEMPLATE/bug_report.md	rename	3	0	no	CI workflows and issue templates
 .github/ISSUE_TEMPLATE/config.yml	rename	2	0	no	CI workflows and issue templates
@@ -80,6 +80,7 @@ scripts/dev/make-monitor-fixtures.mjs	rename	1	0	no	dev and patch scripts
 scripts/macos/host-setup.sh	manual	33	0	no	identity: launchd label and ~/Library/Logs paths
 scripts/patches/apply-subagent-timeout.mjs	rename	1	0	no	dev and patch scripts
 scripts/patches/apply-todo-durable-clear.mjs	manual	2	1	no	mixed file: holds a frozen literal alongside rewritable text, so the driver must not sweep it blind
+scripts/rename/apply.sh	keep	40	0	no	rename tooling: the token table and the inventory name the legacy identifier by definition
 scripts/rename/build-inventory.sh	keep	56	2	no	rename tooling: the token table and the inventory name the legacy identifier by definition
 services/host/README.md	rename	12	0	no	host data and docs
 services/host/broker_override_test.go	rename	2	0	no	Go source: import paths, message prose and test literals; compiler- and test-backstopped
