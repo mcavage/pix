@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import extension, {
+	latestAssistantStoppedAtLength,
 	latestTodoSnapshot,
 	shouldContinueAfterCompaction,
 } from "../extensions/compaction-continuation.ts";
@@ -34,11 +35,36 @@ test("durable todo clear supersedes an older active snapshot", () => {
 	assert.deepEqual(latestTodoSnapshot(entries), []);
 });
 
-test("continuation requires threshold compaction and in-progress work", () => {
+test("latestAssistantStoppedAtLength reads the newest assistant result", () => {
+	assert.equal(
+		latestAssistantStoppedAtLength([
+			{ type: "message", message: { role: "assistant", stopReason: "stop" } },
+			{ type: "message", message: { role: "toolResult" } },
+			{ type: "message", message: { role: "assistant", stopReason: "length" } },
+		]),
+		true,
+	);
+	assert.equal(
+		latestAssistantStoppedAtLength([
+			{ type: "message", message: { role: "assistant", stopReason: "length" } },
+			{ type: "message", message: { role: "assistant", stopReason: "stop" } },
+		]),
+		false,
+	);
+});
+
+test("continuation requires threshold compaction and unfinished work", () => {
 	const active = [todoResult([{ status: "in-progress" }, { status: "not-started" }])];
 	assert.equal(shouldContinueAfterCompaction({ reason: "threshold", willRetry: false }, active), true);
 	assert.equal(shouldContinueAfterCompaction({ reason: "manual", willRetry: false }, active), false);
 	assert.equal(shouldContinueAfterCompaction({ reason: "overflow", willRetry: true }, active), false);
+	assert.equal(
+		shouldContinueAfterCompaction(
+			{ reason: "threshold", willRetry: false },
+			[{ type: "message", message: { role: "assistant", stopReason: "length" } }],
+		),
+		true,
+	);
 	assert.equal(
 		shouldContinueAfterCompaction(
 			{ reason: "threshold", willRetry: false },
@@ -79,6 +105,32 @@ test("extension queues one private follow-up for a compacted active task", () =>
 	assert.equal(sent.length, 1);
 	assert.equal(sent[0].message.display, false);
 	assert.equal(sent[0].message.customType, "pi-stack-compaction-continuation");
+	assert.deepEqual(sent[0].options, { deliverAs: "followUp", triggerTurn: true });
+});
+
+test("extension resumes output-limit compaction without requiring a todo", () => {
+	const handlers = new Map();
+	const sent = [];
+	const pi = {
+		on: (name, handler) => handlers.set(name, handler),
+		sendMessage: (message, options) => sent.push({ message, options }),
+	};
+	extension(pi);
+	const ctx = {
+		isIdle: () => false,
+		hasPendingMessages: () => false,
+		sessionManager: {
+			getBranch: () => [
+				{ type: "message", message: { role: "assistant", stopReason: "length" } },
+			],
+		},
+	};
+	handlers.get("session_compact")(
+		{ reason: "threshold", willRetry: false, compactionEntry: { id: "length-stop" } },
+		ctx,
+	);
+	assert.equal(sent.length, 1);
+	assert.match(sent[0].message.content, /output-token limit/);
 	assert.deepEqual(sent[0].options, { deliverAs: "followUp", triggerTurn: true });
 });
 

@@ -106,7 +106,11 @@ test("tui bottom-pin patch applies to a fixture pi-tui and passes the render har
 	);
 	copyTuiFixture(path.join(fixturesRoot, "pi-tui"), tuiRoot);
 	const tuiPath = path.join(tuiRoot, "dist/tui.js");
-	const env = { ...process.env, NPM_CONFIG_PREFIX: npmPrefix };
+	const env = {
+		...process.env,
+		TUI_JS: tuiPath,
+		NPM_CONFIG_PREFIX: path.join(temp, "deliberately-wrong-prefix"),
+	};
 
 	const tuiPatch = path.join(repoRoot, "scripts/patches/apply-tui-bottom-pin.mjs");
 	assert.match(run(process.execPath, [tuiPatch], env), /\[apply-tui-bottom-pin\] patched/);
@@ -147,7 +151,11 @@ test("tui bottom-pin patch catches upstream drift instead of silently applying",
 	);
 	const tuiPath = path.join(tuiRoot, "dist/tui.js");
 	const before = fs.readFileSync(tuiPath, "utf8");
-	const env = { ...process.env, NPM_CONFIG_PREFIX: npmPrefix };
+	const env = {
+		...process.env,
+		TUI_JS: tuiPath,
+		NPM_CONFIG_PREFIX: path.join(temp, "deliberately-wrong-prefix"),
+	};
 
 	const tuiPatch = path.join(repoRoot, "scripts/patches/apply-tui-bottom-pin.mjs");
 	// Non-fatal by design (image build must still succeed), but LOUD: the
@@ -170,7 +178,11 @@ test("todo durable-clear patch applies to a fixture pi-manage-todo-list", async 
 	const home = path.join(temp, "home");
 	const todoRoot = path.join(home, ".pi/agent/npm/node_modules/pi-manage-todo-list");
 	copyDir(path.join(fixturesRoot, "pi-manage-todo-list"), todoRoot);
-	const env = { ...process.env, HOME: home };
+	const env = {
+		...process.env,
+		HOME: path.join(temp, "deliberately-wrong-home"),
+		TODO_DIST: path.join(todoRoot, "dist"),
+	};
 
 	const todoPatch = path.join(repoRoot, "scripts/patches/apply-todo-durable-clear.mjs");
 	assert.match(run(process.execPath, [todoPatch], env), /patched/);
@@ -209,7 +221,11 @@ test("todo durable-clear patch catches upstream drift instead of silently applyi
 	const home = path.join(temp, "home");
 	const todoRoot = path.join(home, ".pi/agent/npm/node_modules/pi-manage-todo-list");
 	copyDir(path.join(fixturesRoot, "pi-manage-todo-list-broken"), todoRoot);
-	const env = { ...process.env, HOME: home };
+	const env = {
+		...process.env,
+		HOME: path.join(temp, "deliberately-wrong-home"),
+		TODO_DIST: path.join(todoRoot, "dist"),
+	};
 
 	const todoPatch = path.join(repoRoot, "scripts/patches/apply-todo-durable-clear.mjs");
 	// This patch has no non-fatal fallback — a context mismatch throws, so a

@@ -46,6 +46,11 @@ const warn = (msg) => console.warn(`[apply-tui-bottom-pin] ⚠ ${msg}`);
 const info = (msg) => console.log(`[apply-tui-bottom-pin] ${msg}`);
 
 function findTuiJs() {
+	// Release smoke installs into an isolated prefix and persists the exact path
+	// between workflow steps. Prefer that explicit target over rediscovery.
+	if (process.env.TUI_JS) {
+		return existsSync(process.env.TUI_JS) ? process.env.TUI_JS : null;
+	}
 	const prefix =
 		process.env.NPM_CONFIG_PREFIX ||
 		(() => {
