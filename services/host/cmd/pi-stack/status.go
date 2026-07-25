@@ -313,10 +313,9 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 						// and `pi-stack mcp register` only knows local stdio servers, so
 						// neither applies -- but this is still a CONFIRMED absence, so it
 						// must still be an outstanding item (never a false "all systems
-						// go"). The guidance names native `sbx mcp add` with the
-						// server's OWN url/transport rather than inventing one.
-						customTodos = append(customTodos,
-							"sbx mcp add "+m+" --url <the server's own URL> --transport <its transport>")
+						// go"). The exact TODO opens native help; the detail line already
+						// names the custom server, while pi-stack never invents its URL.
+						customTodos = append(customTodos, "sbx mcp add --help")
 						// default (mcpClassUnknown): classification itself failed --
 						// genuinely can't tell how to register, so no todo at all, same
 						// posture as doctor's mcpUnknownClassificationCheck.

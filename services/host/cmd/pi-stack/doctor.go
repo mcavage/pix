@@ -831,10 +831,9 @@ func mcpCustomCheck(name, mcpOut string, mcpOK, sbxPresent bool) check {
 	return check{
 		label: name,
 		detail: catalogNote + "; not registered. This is a custom server pi-stack does not know how to " +
-			"register for you -- neither `pi-stack mcp bundle` (shipped catalog only) nor `pi-stack mcp " +
-			"register` (local stdio only) applies. Register it natively with ITS OWN url/transport: " +
-			"`sbx mcp add " + name + " --url <the server's own URL> --transport <its transport>`",
-		todo:        "sbx mcp add " + name + " --url <the server's own URL> --transport <its transport>",
+			"register for you. Neither `pi-stack mcp bundle` (shipped catalog only) nor `pi-stack mcp " +
+			"register` (local stdio only) applies. Use the server's own URL and transport with native `sbx mcp add`.",
+		todo:        "sbx mcp add --help",
 		requirement: req, evidence: EvidenceFailed,
 	}
 }

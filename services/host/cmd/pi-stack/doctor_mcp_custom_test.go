@@ -15,8 +15,9 @@ import (
 // doctor could print "all checks pass" with a custom server that plainly
 // isn't registered. It also must never recommend `pi-stack mcp bundle`
 // (shipped catalog only, a silent no-op for a custom name) or `pi-stack mcp
-// register` (local stdio only) -- the only honest repair is native
-// `sbx mcp add` with the SERVER'S OWN url/transport, never an invented URL.
+// register` (local stdio only). The honest exact TODO opens native
+// `sbx mcp add --help`; the detail tells the user to supply the server's own
+// URL and transport without inventing either value.
 
 // customEnv builds a fakeEnv where "linear" is CONFIRMED custom: hostBinary
 // resolves and localMCP lists some OTHER local name, and "linear" is not in
@@ -57,8 +58,11 @@ func TestDoctor_MCPCustom_ConfirmedAbsent_IsVerifiedFailure(t *testing.T) {
 	if strings.Contains(c.todo, "pi-stack mcp bundle") || strings.Contains(c.todo, "pi-stack mcp register") {
 		t.Errorf("must never prescribe `pi-stack mcp bundle` or `pi-stack mcp register` for a custom server, got %q", c.todo)
 	}
-	if !strings.Contains(c.todo, "sbx mcp add") || !strings.Contains(c.todo, "linear") {
-		t.Errorf("expected native `sbx mcp add linear ...` guidance, got %q", c.todo)
+	if c.todo != "sbx mcp add --help" {
+		t.Errorf("expected exact native help command, got %q", c.todo)
+	}
+	if !strings.Contains(c.detail, "server's own URL") {
+		t.Errorf("detail must require the custom server's own URL, got %q", c.detail)
 	}
 	// detail may EXPLAIN why bundle/register don't apply (the existing pattern
 	// mcpUnknownClassificationCheck's predecessor also used), but the TODO field
@@ -70,12 +74,12 @@ func TestDoctor_MCPCustom_ConfirmedAbsent_IsVerifiedFailure(t *testing.T) {
 	todos := r.todos()
 	found := false
 	for _, tdo := range todos {
-		if strings.Contains(tdo, "sbx mcp add") && strings.Contains(tdo, "linear") {
+		if tdo == "sbx mcp add --help" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("expected r.todos() to include the linear repair command, got %v", todos)
+		t.Errorf("expected r.todos() to include native add help, got %v", todos)
 	}
 }
 

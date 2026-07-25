@@ -82,7 +82,7 @@ func TestClassifyMCP_CatalogNameIsRemote_NonCatalogIsCustom(t *testing.T) {
 // bundle` (broken -- the bundle doesn't carry it) nor `pi-stack mcp register`
 // (that's for local stdio servers). The FINAL false-green regression this
 // guards: a confirmed-ABSENT custom server (sbx mcp ls plainly doesn't list
-// it) must be a VERIFIED failure with native `sbx mcp add` guidance, not a
+// it) must be a VERIFIED failure with exact native `sbx mcp add --help` guidance, not a
 // silent unverifiable that lets doctor claim a clean bill of health -- while
 // a real catalog name (notion) in the same run still gets the remote bundle
 // guidance.
@@ -107,8 +107,8 @@ func TestDoctor_MCPCustom_ConfirmedAbsentIsFailureNoBundleTodo(t *testing.T) {
 	if linear.evidence != EvidenceFailed {
 		t.Errorf("a confirmed-absent custom server must be a VERIFIED failure (no false-green), got %+v", linear)
 	}
-	if linear.todo == "" || !strings.Contains(linear.todo, "sbx mcp add") || !strings.Contains(linear.todo, "linear") {
-		t.Errorf("linear must carry a native `sbx mcp add linear ...` repair command, got %q", linear.todo)
+	if linear.todo != "sbx mcp add --help" {
+		t.Errorf("linear must carry the exact native help command, got %q", linear.todo)
 	}
 	if strings.Contains(linear.todo, "pi-stack mcp bundle") || strings.Contains(linear.todo, "pi-stack mcp register") {
 		t.Errorf("linear must never carry the broken bundle/register repair, got %q", linear.todo)
@@ -123,7 +123,7 @@ func TestDoctor_MCPCustom_ConfirmedAbsentIsFailureNoBundleTodo(t *testing.T) {
 // TestStatus_MCPCustom_NoBundleTodo mirrors the doctor test on the status
 // side: an unregistered custom (non-catalog) server must not add the broken
 // `pi-stack mcp bundle` todo (a real catalog name still does), but it DOES
-// add its own native `sbx mcp add` outstanding item -- the final false-green
+// add its own native `sbx mcp add --help` outstanding item -- the final false-green
 // regression: status must not read "all systems go" over a confirmed-missing
 // custom server just because neither existing repair command applies to it.
 func TestStatus_MCPCustom_NoBundleTodo(t *testing.T) {
@@ -137,11 +137,8 @@ func TestStatus_MCPCustom_NoBundleTodo(t *testing.T) {
 		if tdo == "pi-stack mcp register" {
 			sawRegister++
 		}
-		if strings.Contains(tdo, "linear") {
+		if tdo == "sbx mcp add --help" {
 			sawLinear++
-			if !strings.Contains(tdo, "sbx mcp add") {
-				t.Errorf("expected native `sbx mcp add` guidance for linear, got %q", tdo)
-			}
 		}
 	}
 	if sawBundle != 1 {
@@ -151,6 +148,6 @@ func TestStatus_MCPCustom_NoBundleTodo(t *testing.T) {
 		t.Errorf("must never recommend `pi-stack mcp register` here, got %v", st.Todos)
 	}
 	if sawLinear != 1 {
-		t.Errorf("expected exactly one native linear repair todo, got %d in %v", sawLinear, st.Todos)
+		t.Errorf("expected exactly one native add-help todo, got %d in %v", sawLinear, st.Todos)
 	}
 }

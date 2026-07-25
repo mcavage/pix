@@ -11,8 +11,8 @@ import (
 // custom-MCP false-green regression: a confirmed-unregistered custom server
 // (mcpClassCustom -- non-local, outside the shipped catalog) must add an
 // outstanding TODO so status cannot print "all systems go" over it. The
-// guidance must be native `sbx mcp add` with the server's own url/transport,
-// never `pi-stack mcp bundle` (shipped catalog only) or `pi-stack mcp
+// guidance must be the exact native `sbx mcp add --help` command, never
+// `pi-stack mcp bundle` (shipped catalog only) or `pi-stack mcp
 // register` (local stdio only). A confirmed-REGISTERED custom server must
 // add no todo at all.
 
@@ -43,8 +43,8 @@ func statusCustomEnv(mcpLs string) shellEnv {
 // TestStatus_CustomUnregistered_AddsOutstandingNativeGuidance: a confirmed
 // custom server that `sbx mcp ls` shows is absent must add an outstanding
 // TODO (so the verdict can't read "all systems go"), pointed at native
-// `sbx mcp add`, never `pi-stack mcp bundle`/`pi-stack mcp register`, and
-// never an invented URL.
+// `sbx mcp add --help`, never `pi-stack mcp bundle`/`pi-stack mcp register`,
+// and never an invented URL.
 func TestStatus_CustomUnregistered_AddsOutstandingNativeGuidance(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"linear"}}
 	st := gatherStatus(cfg, "default", statusCustomEnv("gog\n")) // linear not registered
@@ -53,7 +53,7 @@ func TestStatus_CustomUnregistered_AddsOutstandingNativeGuidance(t *testing.T) {
 	}
 	var found string
 	for _, tdo := range st.Todos {
-		if strings.Contains(tdo, "linear") {
+		if tdo == "sbx mcp add --help" {
 			found = tdo
 		}
 		if tdo == "pi-stack mcp bundle" {
@@ -64,10 +64,7 @@ func TestStatus_CustomUnregistered_AddsOutstandingNativeGuidance(t *testing.T) {
 		}
 	}
 	if found == "" {
-		t.Fatalf("expected a linear-specific todo, got %v", st.Todos)
-	}
-	if !strings.Contains(found, "sbx mcp add") {
-		t.Errorf("expected native `sbx mcp add` guidance, got %q", found)
+		t.Fatalf("expected native add help todo, got %v", st.Todos)
 	}
 	if strings.Contains(found, "https://") || strings.Contains(found, "http://") {
 		t.Errorf("must never invent a URL for a custom server, got %q", found)
@@ -80,7 +77,7 @@ func TestStatus_CustomRegistered_NoTodo(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"linear"}}
 	st := gatherStatus(cfg, "default", statusCustomEnv("gog\nlinear\n"))
 	for _, tdo := range st.Todos {
-		if strings.Contains(tdo, "linear") {
+		if tdo == "sbx mcp add --help" {
 			t.Errorf("a registered custom server should add no todo, got %v", st.Todos)
 		}
 	}
