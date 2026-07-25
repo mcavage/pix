@@ -1,8 +1,8 @@
 // Auto-compaction happens after an agent run. Pi resumes automatically only
-// when a retry or queued message exists. If the model ended a long turn while
-// structured work is still explicitly in progress, queue one private follow-up
-// so the compacted session keeps moving without waiting for the user to type
-// "continue".
+// when a retry or queued message exists. If the model hit its output-token
+// limit, or structured work is still explicitly in progress, queue one private
+// follow-up so the compacted session keeps moving without waiting for the user
+// to type "continue".
 
 const TODO_TOOL = "manage_todo_list";
 const TODO_CLEARED_ENTRY = "pi-stack-todo-cleared";
@@ -30,9 +30,21 @@ export function latestTodoSnapshot(entries: any[]): TodoSnapshot {
 	return latest;
 }
 
+export function latestAssistantStoppedAtLength(entries: any[]): boolean {
+	for (let i = (entries?.length ?? 0) - 1; i >= 0; i--) {
+		const entry = entries[i];
+		if (entry?.type !== "message" || entry.message?.role !== "assistant") continue;
+		return entry.message.stopReason === "length";
+	}
+	return false;
+}
+
 export function shouldContinueAfterCompaction(event: any, entries: any[]): boolean {
 	if (event?.reason !== "threshold" || event?.willRetry) return false;
-	return latestTodoSnapshot(entries).some((todo) => todo?.status === "in-progress");
+	return (
+		latestAssistantStoppedAtLength(entries) ||
+		latestTodoSnapshot(entries).some((todo) => todo?.status === "in-progress")
+	);
 }
 
 export default function (pi: any) {
@@ -68,7 +80,7 @@ export default function (pi: any) {
 			{
 				customType: CONTINUATION_TYPE,
 				content:
-					"Context was compacted while the structured todo list still has work in progress. Continue the current task autonomously from the compaction summary. Do not wait for the user to prompt you to resume.",
+					"Context was compacted before the current task finished. Continue autonomously from the compaction summary. If the previous response hit its output-token limit, resume exactly where it stopped. Do not wait for the user to prompt you.",
 				display: false,
 			},
 			{ deliverAs: "followUp", triggerTurn: true },
