@@ -4,6 +4,36 @@ This is the capability reference. Onboarding teaches you the first task and
 gets out of the way; it doesn't walk you through everything pi-stack can do.
 This doc does. Read the section you need, run the command, move on.
 
+## 0. Command map
+
+The authoritative verb/flag list is `pi-stack help --all` (and `pi-stack help
+<verb>`, `pi-stack help --man`) — it is generated from the dispatch tree, so it
+cannot drift. This table says what each verb is FOR and where the reasoning
+lives. It is the pointer target for `AGENTS.md`, which deliberately carries no
+CLI reference of its own.
+
+| Verb | For | Detail |
+| --- | --- | --- |
+| `run [DIR]` | launch (or re-attach to) the sandbox for a directory | §1, `docs/design/cli-redesign.md` |
+| `status` / `ls` / `rm` | read-only control panel; list and remove `pi-stack-*` sandboxes | §9 |
+| `doctor` | probe host + sandbox health and print exact fixes | §9 |
+| `setup` | the guided host+agent setup path (keys, memory, pack, identity) | `docs/design/onboarding.md` |
+| `serve` | the long-running host services (memory :11435, knowledge :11436) | `docs/design/serve-lifecycle.md` |
+| `memory` (`mem`) | recall/remember/forget/learnings/stats from the host | §2, `docs/memory.md` |
+| `knowledge` (`kb`) | OKF bundles: init/use/ls/query/sync/remote | §6 |
+| `pack` | the portable capability context: new/add/ls/show/use/rm | §5, `docs/design/packs-v2.md` |
+| `mcp` | register/list/load MCP servers through the sbx gateway | §8 |
+| `gworkspace` | Google Workspace (Gmail/Drive/Docs/Sheets/Calendar) | `docs/gog-setup.md` |
+| `secret` | manage the 1Password `op://` refs (never the values) | §8 |
+| `config` | `show`/`path`/`get`/`set`/`unset` the single runtime config | §1 |
+| `host` | the unsandboxed escape hatch, off by default | §7, `docs/design/host-mode.md` |
+| `task` | isolated parallel-work clones + sandboxes | `docs/design/worktree-tasks.md` |
+| `monitor` | live-follow a sandbox's out-of-sandbox traffic | `docs/design/monitor.md` |
+| `route` | the model router: pick/compile/show/models | `docs/design/routing.md` |
+| `agent` | the subagent roster: ls/new/edit/rm/reassess | §4 |
+| `state` | backup/restore/reset/uninstall on-disk state | §9 |
+| `version`, `help` | stamped version; tiered help | — |
+
 ## 1. What pi-stack is
 
 pi-stack is a multi-model coding agent (Claude, GPT, Gemini, plus local Ollama)
