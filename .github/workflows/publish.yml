@@ -51,9 +51,98 @@ jobs:
       - id: v
         run: echo "version=0.0.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
+  # Real npm-resolution smoke for the two vendored runtime patches
+  # (scripts/patches/*.mjs). tests/pi-patches.test.mjs (the PR gate) proves the
+  # patch logic against LOCAL fixtures — zero network, fast on every push/PR.
+  # This job is the other half of AC-P0-006: install the ACTUAL pinned npm
+  # packages from the registry and patch them for real, so a registry-side
+  # change (a repack, a version drift) that no local fixture could see still
+  # gates the release. It also proves the smoke ISN'T a no-op by deliberately
+  # breaking each patch's anchor context first and asserting that failure mode
+  # fires — a smoke nobody runs (or that can't fail) is worse than none.
+  patch-smoke:
+    name: patch smoke (real npm install)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "25.9.0"
+
+      - name: Resolve pinned packages from the Dockerfile
+        id: pins
+        run: |
+          set -euo pipefail
+          PI_PACKAGE="$(grep -oP '^ARG PI_PACKAGE=\K\S+' Dockerfile)"
+          TODO_PACKAGE="$(grep -oP 'pi-manage-todo-list@\S+' Dockerfile | head -1)"
+          test -n "$PI_PACKAGE" && test -n "$TODO_PACKAGE"
+          echo "pi_package=$PI_PACKAGE" >> "$GITHUB_OUTPUT"
+          echo "todo_package=$TODO_PACKAGE" >> "$GITHUB_OUTPUT"
+
+      - name: npm install (real registry resolution) — pi + pi-manage-todo-list
+        env:
+          PI_PACKAGE: ${{ steps.pins.outputs.pi_package }}
+          TODO_PACKAGE: ${{ steps.pins.outputs.todo_package }}
+        run: |
+          set -euxo pipefail
+          export HOME="$RUNNER_TEMP/patch-smoke-home"
+          export NPM_CONFIG_PREFIX="$RUNNER_TEMP/patch-smoke-npm"
+          mkdir -p "$HOME" "$HOME/.pi/agent/npm"
+          npm install --global --ignore-scripts "$PI_PACKAGE"
+          npm install --prefix "$HOME/.pi/agent/npm" --ignore-scripts "$TODO_PACKAGE"
+          {
+            echo "TUI_JS=$NPM_CONFIG_PREFIX/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/tui.js"
+            echo "TUI_INDEX=$NPM_CONFIG_PREFIX/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.js"
+            echo "TODO_DIST=$HOME/.pi/agent/npm/node_modules/pi-manage-todo-list/dist"
+          } >> "$GITHUB_ENV"
+
+      - name: Prove BOTH patches FAIL loud on a deliberately broken anchor (before patching)
+        run: |
+          set -euxo pipefail
+          cp "$TUI_JS" "$TUI_JS.orig"
+          cp "$TODO_DIST/state-manager.js" "$TODO_DIST/state-manager.js.orig"
+
+          # tui-bottom-pin is non-fatal by design (an image build must still
+          # succeed on drift) — it must warn loudly and leave the file untouched.
+          sed -i 's/if (firstChanged < prevViewportTop) {/if (firstChanged <= prevViewportTop) { \/\/ deliberately broken for the release smoke/' "$TUI_JS"
+          out="$(node scripts/patches/apply-tui-bottom-pin.mjs 2>&1)"
+          echo "$out"
+          echo "$out" | grep -q 'not found' || { echo "::error::broken tui anchor was NOT detected — patch smoke is not proving anything"; exit 1; }
+          diff -q "$TUI_JS" <(sed 's/if (firstChanged < prevViewportTop) {/if (firstChanged <= prevViewportTop) { \/\/ deliberately broken for the release smoke/' "$TUI_JS.orig") \
+            || { echo "::error::broken tui file was modified despite the anchor mismatch"; exit 1; }
+          cp "$TUI_JS.orig" "$TUI_JS"
+
+          # apply-todo-durable-clear.mjs has no non-fatal fallback — a context
+          # mismatch must throw and exit nonzero.
+          sed -i 's/if (entry.type !== "message")/if (entry.type !== "message" \&\& entry.type !== "custom") \/\/ deliberately broken for the release smoke/' "$TODO_DIST/state-manager.js"
+          if node scripts/patches/apply-todo-durable-clear.mjs 2> /tmp/todo-broken.err; then
+            echo "::error::apply-todo-durable-clear.mjs was expected to fail on a broken anchor — it exited 0"; exit 1
+          fi
+          grep -q 'anchor not found' /tmp/todo-broken.err || { echo "::error::todo patch failed for the wrong reason: $(cat /tmp/todo-broken.err)"; exit 1; }
+          cp "$TODO_DIST/state-manager.js.orig" "$TODO_DIST/state-manager.js"
+
+      - name: Apply both patches for real, assert idempotent, run the render harness
+        run: |
+          set -euxo pipefail
+          node scripts/patches/apply-tui-bottom-pin.mjs | tee /tmp/tui-1.log
+          grep -q '\[apply-tui-bottom-pin\] patched' /tmp/tui-1.log
+          node scripts/patches/apply-tui-bottom-pin.mjs | tee /tmp/tui-2.log
+          grep -q 'already patched' /tmp/tui-2.log
+          node --check "$TUI_JS"
+          PI_TUI_INDEX="$TUI_INDEX" node docs/upstream/tui-bottom-pin/test.mjs
+          PI_TUI_INDEX="$TUI_INDEX" node docs/upstream/tui-bottom-pin/edge.mjs
+          PI_TUI_INDEX="$TUI_INDEX" node docs/upstream/tui-bottom-pin/integrity.mjs
+
+          node scripts/patches/apply-todo-durable-clear.mjs | tee /tmp/todo-1.log
+          grep -q 'patched' /tmp/todo-1.log
+          node scripts/patches/apply-todo-durable-clear.mjs | tee /tmp/todo-2.log
+          grep -q 'already patched' /tmp/todo-2.log
+          node --check "$TODO_DIST/index.js"
+          node --check "$TODO_DIST/state-manager.js"
+
   build:
     name: build ${{ matrix.arch }}
-    needs: version
+    needs: [version, patch-smoke]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
