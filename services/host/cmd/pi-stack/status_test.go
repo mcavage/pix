@@ -24,7 +24,7 @@ func fakeStatusEnv() shellEnv {
 				return "NAME STATUS\npi-stack-myrepo running\npi-stack-scratch stopped\nother-box running\n", nil
 			}
 			if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
-				return "gog\nnotion\n", nil
+				return "google-workspace\nnotion\n", nil
 			}
 			return "", nil
 		},
@@ -34,7 +34,7 @@ func fakeStatusEnv() shellEnv {
 }
 
 func TestGatherStatus(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog"}, KnowledgeBundles: []string{"/kb"}}
+	cfg := &config.Config{MCP: []string{gwServerName}, KnowledgeBundles: []string{"/kb"}}
 	st := gatherStatus(cfg, "default", fakeStatusEnv())
 
 	if !st.Memory {
@@ -67,7 +67,7 @@ func TestGatherStatus(t *testing.T) {
 }
 
 func TestRenderStatusHuman(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog"}, KnowledgeBundles: []string{"/kb"}}
+	cfg := &config.Config{MCP: []string{gwServerName}, KnowledgeBundles: []string{"/kb"}}
 	var out bytes.Buffer
 	renderStatus(cfg, "default", fakeStatusEnv(), &out, false)
 	s := out.String()
@@ -135,7 +135,7 @@ func TestRenderStatusMonitorJSON(t *testing.T) {
 // `sbx mcp ls` (host-global summary: registration + preload intent only);
 // gog is registered, slack is not.
 func TestGatherStatusMCP(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog", "slack"}}
+	cfg := &config.Config{MCP: []string{gwServerName, "slack"}}
 	st := gatherStatus(cfg, "default", fakeStatusEnv())
 	if len(st.MCPServers) != 2 {
 		t.Fatalf("MCPServers = %+v, want 2 entries", st.MCPServers)
@@ -144,8 +144,8 @@ func TestGatherStatusMCP(t *testing.T) {
 	for _, m := range st.MCPServers {
 		byName[m.Name] = m
 	}
-	if !byName["gog"].Registered {
-		t.Errorf("gog should be registered: %+v", byName["gog"])
+	if !byName[gwServerName].Registered {
+		t.Errorf("gog should be registered: %+v", byName[gwServerName])
 	}
 	if byName["slack"].Registered {
 		t.Errorf("slack should NOT be registered: %+v", byName["slack"])
@@ -156,7 +156,7 @@ func TestGatherStatusMCP(t *testing.T) {
 // degrades to the bare names) — but the per-sandbox rows must render
 // UNVERIFIABLE (discovery unavailable), never a false "no sandboxes".
 func TestGatherStatusMCPSbxAbsent(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog"}}
+	cfg := &config.Config{MCP: []string{gwServerName}}
 	env := fakeStatusEnv()
 	env.lookPath = func(name string) (string, error) { return "", fmt.Errorf("not found") }
 	st := gatherStatus(cfg, "default", env)
@@ -177,7 +177,7 @@ func TestGatherStatusMCPSbxAbsent(t *testing.T) {
 
 // TestRenderStatusMCPJSON: --json carries the mcp_servers registration state.
 func TestRenderStatusMCPJSON(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog", "slack"}}
+	cfg := &config.Config{MCP: []string{gwServerName, "slack"}}
 	var out bytes.Buffer
 	renderStatus(cfg, "default", fakeStatusEnv(), &out, true)
 	var st statusReport
@@ -190,7 +190,7 @@ func TestRenderStatusMCPJSON(t *testing.T) {
 }
 
 func TestRenderStatusJSON(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog"}}
+	cfg := &config.Config{MCP: []string{gwServerName}}
 	var out bytes.Buffer
 	renderStatus(cfg, "default", fakeStatusEnv(), &out, true)
 	var st statusReport
@@ -207,7 +207,7 @@ func TestRenderStatusJSON(t *testing.T) {
 // appends exactly one TYPE-CORRECT register TODO so it can't claim "all
 // systems go" while a server is unregistered.
 func TestStatusRegisterTodo(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog", "slack"}}
+	cfg := &config.Config{MCP: []string{gwServerName, "slack"}}
 	env := fakeStatusEnv() // sbx mcp ls -> gog,notion
 	env.hostBinary = func() (string, error) { return "/usr/local/bin/pi-stack-host", nil }
 	// probe answers the `pi-stack-host mcp --list` classification call; the
@@ -256,7 +256,7 @@ func TestStatusRegisterTodoUnclassifiable(t *testing.T) {
 // TestStatusNoRegisterTodoWhenRegistered: every configured server registered ->
 // no register TODO.
 func TestStatusNoRegisterTodoWhenRegistered(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog", "notion"}} // both in `sbx mcp ls`
+	cfg := &config.Config{MCP: []string{gwServerName, "notion"}} // both in `sbx mcp ls`
 	st := gatherStatus(cfg, "default", fakeStatusEnv())
 	for _, tdo := range st.Todos {
 		if strings.Contains(tdo, "mcp register") || strings.Contains(tdo, "mcp bundle") {
@@ -268,7 +268,7 @@ func TestStatusNoRegisterTodoWhenRegistered(t *testing.T) {
 // TestStatusNoRegisterTodoWhenSbxAbsent: sbx off PATH -> registration is
 // unknowable, so status must NOT invent a register TODO.
 func TestStatusNoRegisterTodoWhenSbxAbsent(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog", "slack"}}
+	cfg := &config.Config{MCP: []string{gwServerName, "slack"}}
 	env := fakeStatusEnv()
 	env.lookPath = func(name string) (string, error) { return "", fmt.Errorf("not found") }
 	st := gatherStatus(cfg, "default", env)
@@ -301,7 +301,7 @@ func TestStatusSbxAbsentNotAllGreen(t *testing.T) {
 }
 
 // TestStatusGogNeedsAuthTodoNotAllGreen: a configured gog account that is NOT
-// authenticated is an outstanding item — status appends a `pi-stack gog setup`
+// authenticated is an outstanding item — status appends a `pi-stack gworkspace setup`
 // TODO and the verdict must not be falsely "all systems go", even when every
 // provider key is set.
 func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
@@ -309,7 +309,7 @@ func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
 	env := shellEnv{
 		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
 		run: func(name string, args ...string) (string, error) {
-			if name == "gog" {
+			if name == gwServerName {
 				return "", fmt.Errorf("not authed")
 			}
 			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
@@ -377,13 +377,13 @@ func TestStatusSbxProbeFailedTodo(t *testing.T) {
 }
 
 // TestStatusGogNeedsAuth: with a gog account set but no usable auth, the human
-// render shows the "needs auth (run pi-stack gog setup)" integrations line.
+// render shows the "needs auth (run pi-stack gworkspace setup)" integrations line.
 func TestStatusGogNeedsAuth(t *testing.T) {
 	cfg := &config.Config{GogAccount: "me@x.com"}
 	env := shellEnv{
 		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
 		run: func(name string, args ...string) (string, error) {
-			if name == "gog" {
+			if name == gwServerName {
 				return "", fmt.Errorf("not authed")
 			}
 			return "", nil
@@ -504,7 +504,7 @@ func TestStatusProbeFailureNoProviderTodo(t *testing.T) {
 // verdict must not read "all systems go" even though nothing else is
 // outstanding and there are no sandboxes/rows to render unverifiable.
 func TestStatusMCPRegistrationUnverifiableBlocksAllGreen(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog"}}
+	cfg := &config.Config{MCP: []string{gwServerName}}
 	env := shellEnv{
 		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
 		run: func(name string, args ...string) (string, error) {
@@ -528,7 +528,7 @@ func TestStatusMCPRegistrationUnverifiableBlocksAllGreen(t *testing.T) {
 	}
 	foundUnverifiable := false
 	for _, m := range st.MCPServers {
-		if m.Name == "gog" && m.Unverifiable {
+		if m.Name == gwServerName && m.Unverifiable {
 			foundUnverifiable = true
 		}
 	}
@@ -552,7 +552,7 @@ func TestStatusMCPRegistrationUnverifiableBlocksAllGreen(t *testing.T) {
 	}
 	found := false
 	for _, m := range jst.MCPServers {
-		if m.Name == "gog" && m.Unverifiable {
+		if m.Name == gwServerName && m.Unverifiable {
 			found = true
 		}
 	}

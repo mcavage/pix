@@ -24,7 +24,7 @@ func TestConfigValue(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{key: "gog_account", want: "me@x.com"},
+		{key: "google_workspace_account", want: "me@x.com"},
 		{key: "mcp", want: "gog slack"},
 		{key: "services", want: "memory knowledge"},
 		{key: "knowledge_bundles", want: "/kb/a /kb/b"},

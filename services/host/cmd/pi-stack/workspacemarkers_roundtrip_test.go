@@ -218,7 +218,7 @@ func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	proposal := onboardingResult{Version: 1, GogAccount: "me@x.com", MCP: []string{"gog"}}
+	proposal := onboardingResult{Version: 1, MCP: []string{gwServerName}}
 	data, err := json.Marshal(proposal)
 	if err != nil {
 		t.Fatal(err)

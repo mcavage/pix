@@ -138,14 +138,14 @@ func TestExecSbxRunAndRecordCreate_ReplaceRewritesAndClearsLoads(t *testing.T) {
 	}
 	// A --replace re-run: definitelyCreating is true again (state doesn't
 	// matter to the wrapper — the caller already decided), new preloaded set.
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{"gog"}); err != nil {
+	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{gwServerName}); err != nil {
 		t.Fatal(err)
 	}
 	r, status, err := readSandboxMCPReceipt(dir, sandbox)
 	if err != nil || status != sandboxMCPStateOK {
 		t.Fatalf("status=%v err=%v", status, err)
 	}
-	if len(r.Preloaded) != 1 || r.Preloaded[0] != "gog" {
+	if len(r.Preloaded) != 1 || r.Preloaded[0] != gwServerName {
 		t.Errorf("Preloaded = %v, want [gog] after replace", r.Preloaded)
 	}
 	if len(r.Loads) != 0 {

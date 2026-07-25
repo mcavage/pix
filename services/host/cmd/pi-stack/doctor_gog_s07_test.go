@@ -19,7 +19,7 @@ import (
 func gogCheckByLabel(t *testing.T, r *report, label string) (check, bool) {
 	t.Helper()
 	for _, g := range r.groups {
-		if !strings.HasPrefix(g.title, "gog") {
+		if !strings.HasPrefix(g.title, "Google Workspace") {
 			continue
 		}
 		for _, c := range g.checks {
@@ -40,7 +40,7 @@ func TestDoctorGog_ReadOnlyFlagsAsEvidence(t *testing.T) {
 		output: map[string]string{
 			"sbx secret ls": "anthropic openai google github",
 			"ollama list":   "gemma4:latest\nnomic-embed-text:latest\n",
-			"sbx mcp ls":    "gog\n",
+			"sbx mcp ls":    "google-workspace\n",
 		},
 		ports: map[int]bool{11434: true, 11435: true},
 	})
@@ -72,8 +72,8 @@ func TestDoctorGog_MissingReadOnlyFlagsIsTodo(t *testing.T) {
 		present: map[string]bool{"sbx": true},
 		output: map[string]string{
 			"sbx secret ls":              "anthropic openai google github",
-			"sbx mcp ls":                 "gog\n",
-			"sbx mcp get gog":            "name: gog\ncommand: " + unhardened + "\n",
+			"sbx mcp ls":                 "google-workspace\n",
+			"sbx mcp get google-workspace":            "name: gog\ncommand: " + unhardened + "\n",
 			unhardened + " --list-tools": "gmail_search\n",
 		},
 		ports: map[int]bool{11435: true},
@@ -86,7 +86,7 @@ func TestDoctorGog_MissingReadOnlyFlagsIsTodo(t *testing.T) {
 	if ro.result() != verdictTodo {
 		t.Fatalf("missing hardened flags must be a verified todo, got %+v", ro)
 	}
-	if !strings.Contains(ro.todo, "pi-stack gog setup") {
+	if !strings.Contains(ro.todo, "pi-stack gworkspace setup") {
 		t.Errorf("the fix must be the guided setup, got %q", ro.todo)
 	}
 	if strings.Contains(ro.todo, "gog auth login") {
@@ -111,8 +111,8 @@ func TestDoctorGog_NonCanonicalRegisteredPathNeverExecuted(t *testing.T) {
 		present: map[string]bool{"sbx": true, "gog": true, "op": true},
 		output: map[string]string{
 			"sbx secret ls":   "anthropic openai google github",
-			"sbx mcp ls":      "gog\n",
-			"sbx mcp get gog": "name: gog\ncommand: " + evil + "\n",
+			"sbx mcp ls":      "google-workspace\n",
+			"sbx mcp get google-workspace": "name: gog\ncommand: " + evil + "\n",
 			// If doctor ever executed the registered spelling, this fixture
 			// would answer and the probe would "succeed".
 			evil + " --list-tools": "gmail_search\n",
@@ -154,7 +154,7 @@ func TestDoctorGog_ZeroToolsCleanExitIsTodo(t *testing.T) {
 		present: map[string]bool{"sbx": true},
 		output: map[string]string{
 			"sbx secret ls": "anthropic openai google github",
-			"sbx mcp ls":    "gog\n",
+			"sbx mcp ls":    "google-workspace\n",
 		},
 		ports: map[int]bool{11435: true},
 	})
@@ -177,8 +177,8 @@ func registeredGogProbeEnv(probeFn func() (string, bool, error)) shellEnv {
 	regCmd := opWrappedGog(gogOpRefs, gogAcct)
 	fixtures := map[string]string{
 		"sbx secret ls":   "anthropic openai google github",
-		"sbx mcp ls":      "gog\n",
-		"sbx mcp get gog": "name: gog\ncommand: " + regCmd + "\n",
+		"sbx mcp ls":      "google-workspace\n",
+		"sbx mcp get google-workspace": "name: gog\ncommand: " + regCmd + "\n",
 	}
 	return shellEnv{
 		lookPath: func(name string) (string, error) {
@@ -281,14 +281,14 @@ func TestDoctorGog_GenericProbeErrorIsUnverifiable(t *testing.T) {
 func TestDoctorGog_MissingCLIIsNotConfiguredNote(t *testing.T) {
 	f := fakeEnv{present: map[string]bool{}, output: map[string]string{}, ports: map[int]bool{}}
 	r := runDoctor(defaultCfg(), f.env())
-	cli, ok := gogCheckByLabel(t, r, "gog CLI")
+	cli, ok := gogCheckByLabel(t, r, "dependency CLI")
 	if !ok {
-		t.Fatalf("expected a gog CLI line, groups=%+v", r.groups)
+		t.Fatalf("expected a dependency CLI line, groups=%+v", r.groups)
 	}
 	if !cli.note {
 		t.Errorf("a missing gog CLI is optional-not-configured (a note), got %+v", cli)
 	}
-	if !strings.Contains(cli.detail, "pi-stack gog setup") {
+	if !strings.Contains(cli.detail, "pi-stack gworkspace setup") {
 		t.Errorf("the note must point at the guided setup, got %q", cli.detail)
 	}
 	joined := strings.Join(r.todos(), "\n")

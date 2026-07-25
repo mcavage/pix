@@ -376,16 +376,20 @@ func printSetupSummary(cfg *config.Config, env shellEnv, out io.Writer, models s
 	mg, md := models.summaryLine()
 	line(mg, "local models", md)
 
+	// Google Workspace is OPTIONAL and ABSENT from the default path
+	// (AC-P0-319): when it was never asked for, this summary says nothing at
+	// all about it. A row appears only once the user opted in, and then only
+	// from a probe.
 	acct := strings.TrimSpace(cfg.GogAccount)
 	switch {
-	case acct == "" && !containsStr(cfg.MCP, "gog"):
-		line("·", "gog", "optional — not configured; wire it later: pi-stack gog setup")
+	case acct == "" && !containsStr(cfg.MCP, gwServerName):
+		// absent by default: no row.
 	case acct == "":
-		line("✗", "gog", "enabled but no account authorized — run: pi-stack gog setup")
+		line("✗", "workspace", "enabled but no account authorized — run: pi-stack gworkspace setup")
 	case gogSetupAccountHealthy(env, acct):
-		line("✓", "gog", acct+" authorized (read-only)")
+		line("✓", "workspace", acct+" authorized (read-only)")
 	default:
-		line("✗", "gog", acct+" not verified — run: pi-stack gog setup")
+		line("✗", "workspace", acct+" not verified — run: pi-stack gworkspace setup")
 	}
 
 	if keysReady && knowledgeReady && packReady {

@@ -94,7 +94,7 @@ func localMCPClassifier(env shellEnv, hostResolver func() (string, error)) func(
 	set, known := localMCPNames(env, hostResolver)
 	return func(name string) bool {
 		if !known {
-			return name != "gog" // fail closed: unknown ⇒ gate (except gog)
+			return name != gwServerName // fail closed: unknown ⇒ gate (except Google Workspace)
 		}
 		return set[name]
 	}
@@ -143,7 +143,7 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 	if isLocalMCP == nil {
 		// No partition available at all: same fail-closed posture as an
 		// unknown probe (round-3 #3) — gate every non-gog name.
-		isLocalMCP = func(name string) bool { return name != "gog" }
+		isLocalMCP = func(name string) bool { return name != gwServerName }
 	}
 	for _, name := range packMcpNames(p) {
 		if !isLocalMCP(name) {

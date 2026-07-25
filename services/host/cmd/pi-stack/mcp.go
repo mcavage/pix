@@ -402,7 +402,7 @@ func (m mcpRegistrar) serverCmd(name string) []string {
 		return append(argv, c.Image)
 	}
 	switch name {
-	case "gog":
+	case gwServerName:
 		return gogHardenedArgv(m.gog, m.account)
 	default:
 		// slack + any other local stdio server is a pi-stack-host subcommand.
@@ -490,7 +490,7 @@ func rawAddArgs(name string, argv []string) []string {
 // mirrors registerServers' opReady gate, where op and op-refs are only ever
 // used together.
 func gogRegisteredArgv(gogBin, opBin, opRefs, account string) []string {
-	return mcpRegistrar{gog: gogBin, account: account, op: opBin, opRefs: opRefs}.execArgv("gog")
+	return mcpRegistrar{gog: gogBin, account: account, op: opBin, opRefs: opRefs}.execArgv(gwServerName)
 }
 
 // gogBareRegistrationNote is the ONE shared message printed whenever gog is
@@ -537,10 +537,10 @@ func registerGogRegistrar(reg mcpRegistrar, env shellEnv, out io.Writer) error {
 	if reg.opRefs == "" {
 		gogBareRegistrationNote(out)
 	}
-	if _, err := env.run("sbx", reg.addArgs("gog")...); err != nil {
-		return fmt.Errorf("sbx mcp add gog: %w", err)
+	if _, err := env.run("sbx", reg.addArgs(gwServerName)...); err != nil {
+		return fmt.Errorf("sbx mcp add %s: %w", gwServerName, err)
 	}
-	fmt.Fprintln(out, "  registered: gog")
+	fmt.Fprintln(out, "  registered: "+gwServerName)
 	return nil
 }
 
@@ -561,7 +561,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	}
 	if len(names) == 0 {
 		fmt.Fprintln(out, "Nothing to register: no local stdio servers requested or in config mcp.")
-		fmt.Fprintln(out, "Enable one first, e.g.:  pi-stack config set mcp gog")
+		fmt.Fprintln(out, "Enable one first, e.g.:  pi-stack config set mcp "+gwServerName)
 		return nil
 	}
 
@@ -589,7 +589,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	var skippedUnknown []string   // non-gog names skipped because the local set is unknown
 	for _, n := range names {
 		switch {
-		case n == "gog":
+		case n == gwServerName:
 			wantGog = true
 		case containers[n].Manifest != "":
 			// Manifest container: registered by --local --url, not a host --command,
@@ -639,7 +639,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	finalNames = append(finalNames, localServers...)
 	finalNames = append(finalNames, containerServers...)
 	if wantGog {
-		finalNames = append(finalNames, "gog")
+		finalNames = append(finalNames, gwServerName)
 	}
 	if len(finalNames) == 0 {
 		if skippedErr != nil {

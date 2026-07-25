@@ -247,7 +247,7 @@ func TestMcpLocalCheck_PolicyDeniedVerdict(t *testing.T) {
 
 func TestGogRegistrationCheck_TriState(t *testing.T) {
 	// Present in a successful listing -> ready.
-	if c := gogRegistrationCheck("gog\nslack\n", true, true); c.result() != verdictReady {
+	if c := gogRegistrationCheck("google-workspace\nslack\n", true, true); c.result() != verdictReady {
 		t.Errorf("registered gog = %+v, want ready", c)
 	}
 	// Positively missing from a successful listing -> verified register TODO.

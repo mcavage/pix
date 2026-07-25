@@ -58,11 +58,11 @@ func rowsFor(st statusReport, sandbox string) map[string]mcpSandboxRow {
 // state across two sandboxes with DISTINCT receipts — preloaded, loaded,
 // registered-not-attached, not-registered, and unverifiable (corrupt receipt).
 func TestStatusMCPRowsAllFiveStates(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog", "slack", "notion", "linear"}}
+	cfg := &config.Config{MCP: []string{gwServerName, "slack", "notion", "linear"}}
 	env, stateDir := statusMCPEnv(t,
 		"NAME STATE DIR\npi-stack-proj running /home/u/proj\npi-stack-bad running /home/u/bad\n",
-		"gog\nslack\nnotion\n") // linear positively not registered
-	if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", []string{"gog"}, receiptClock); err != nil {
+		"google-workspace\nslack\nnotion\n") // linear positively not registered
+	if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", []string{gwServerName}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	if err := appendLoadReceipt(stateDir, "pi-stack-proj", "slack", receiptClock); err != nil {
@@ -82,7 +82,7 @@ func TestStatusMCPRowsAllFiveStates(t *testing.T) {
 	}
 	proj := rowsFor(st, "pi-stack-proj")
 	for name, want := range map[string]string{
-		"gog":    mcpJoinPreloaded,
+		gwServerName:    mcpJoinPreloaded,
 		"slack":  mcpJoinLoaded,
 		"notion": mcpJoinRegisteredNotAttached,
 		"linear": mcpJoinNotRegistered,
@@ -103,8 +103,8 @@ func TestStatusMCPRowsAllFiveStates(t *testing.T) {
 		t.Errorf("pi-stack-bad slack = %+v — leaked pi-stack-proj's receipt", bad["slack"])
 	}
 	// Registration tri-state carried on every row.
-	if proj["linear"].Registered != "no" || proj["gog"].Registered != "yes" {
-		t.Errorf("registered tri-state wrong: linear=%q gog=%q", proj["linear"].Registered, proj["gog"].Registered)
+	if proj["linear"].Registered != "no" || proj[gwServerName].Registered != "yes" {
+		t.Errorf("registered tri-state wrong: linear=%q gog=%q", proj["linear"].Registered, proj[gwServerName].Registered)
 	}
 }
 
@@ -140,7 +140,7 @@ func TestStatusMCPRowsIdentityMismatch(t *testing.T) {
 // still be re-registered even though this sandbox's own attach is intact).
 func TestStatusMCPPositiveReceiptDominatesDeregistration(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"slack"}}
-	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "gog\n") // slack deregistered
+	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "google-workspace\n") // slack deregistered
 	env.hostBinary = func() (string, error) { return "/usr/local/bin/pi-stack-host", nil }
 	// probe answers ONLY the `pi-stack-host mcp --list` classification call;
 	// every other bounded probe (sbx secret ls / mcp ls / sbx ls now route
@@ -221,8 +221,8 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 // failing must render unverifiable rows — never as if there were zero
 // sandboxes (and never a receipt-backed claim without a discovered sandbox).
 func TestStatusMCPDiscoveryUnavailableNotNoSandboxes(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog", "slack"}}
-	env, _ := statusMCPEnv(t, "", "gog\nslack\n")
+	cfg := &config.Config{MCP: []string{gwServerName, "slack"}}
+	env, _ := statusMCPEnv(t, "", "google-workspace\nslack\n")
 	inner := env.run
 	env.run = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) == 1 && args[0] == "ls" {
@@ -260,8 +260,8 @@ func TestStatusMCPDiscoveryUnavailableNotNoSandboxes(t *testing.T) {
 // the host-global MCP summary states registration + preload intent only —
 // no attachment vocabulary anywhere.
 func TestStatusHostGlobalNoAttachmentClaim(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog"}}
-	env, _ := statusMCPEnv(t, "other-box running\n", "gog\n") // zero pi-stack boxes
+	cfg := &config.Config{MCP: []string{gwServerName}}
+	env, _ := statusMCPEnv(t, "other-box running\n", "google-workspace\n") // zero pi-stack boxes
 	st := gatherStatus(cfg, "default", env)
 	if len(st.MCPRows) != 0 {
 		t.Fatalf("MCPRows = %+v, want none (discovery succeeded, zero pi-stack sandboxes)", st.MCPRows)
@@ -286,9 +286,9 @@ func TestStatusHostGlobalNoAttachmentClaim(t *testing.T) {
 // sandbox provenance rather than current preload intent — while a name that
 // IS part of current intent carries no such label.
 func TestStatusMCPReceiptOnlyNameVisible(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog"}} // current intent: gog only
-	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "gog\nnotion\n")
-	if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", []string{"gog", "notion"}, receiptClock); err != nil {
+	cfg := &config.Config{MCP: []string{gwServerName}} // current intent: gog only
+	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "google-workspace\nnotion\n")
+	if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", []string{gwServerName, "notion"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	st := gatherStatus(cfg, "default", env)
@@ -303,8 +303,8 @@ func TestStatusMCPReceiptOnlyNameVisible(t *testing.T) {
 	if !strings.Contains(notion.Evidence, "sandbox provenance only") {
 		t.Errorf("notion evidence should be labeled sandbox provenance: %q", notion.Evidence)
 	}
-	if strings.Contains(rows["gog"].Evidence, "sandbox provenance only") {
-		t.Errorf("gog (current intent) must not carry the receipt-only label: %+v", rows["gog"])
+	if strings.Contains(rows[gwServerName].Evidence, "sandbox provenance only") {
+		t.Errorf("gog (current intent) must not carry the receipt-only label: %+v", rows[gwServerName])
 	}
 	var human bytes.Buffer
 	st.render(&human)
@@ -324,9 +324,9 @@ func TestStatusMCPReceiptOnlyNameVisible(t *testing.T) {
 // {name,registered,sandbox,state,evidence} with the registration tri-state as
 // a string. A schema drift breaks this golden on purpose.
 func TestStatusMCPRowsJSONGolden(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog", "slack", "notion", "linear"}}
-	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "gog\nslack\nnotion\n")
-	if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", []string{"gog"}, receiptClock); err != nil {
+	cfg := &config.Config{MCP: []string{gwServerName, "slack", "notion", "linear"}}
+	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "google-workspace\nslack\nnotion\n")
+	if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", []string{gwServerName}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	if err := appendLoadReceipt(stateDir, "pi-stack-proj", "slack", receiptClock); err != nil {
@@ -339,7 +339,7 @@ func TestStatusMCPRowsJSONGolden(t *testing.T) {
 	}
 	golden := `[
   {
-    "name": "gog",
+    "name": gwServerName,
     "registered": "yes",
     "sandbox": "pi-stack-proj",
     "state": "preloaded",
@@ -389,9 +389,9 @@ func TestStatusNoRetiredMCPVocabulary(t *testing.T) {
 			}
 		}
 	}
-	cfg := &config.Config{MCP: []string{"gog", "slack", "notion", "linear"}}
-	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "gog\nslack\nnotion\n")
-	if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", []string{"gog"}, receiptClock); err != nil {
+	cfg := &config.Config{MCP: []string{gwServerName, "slack", "notion", "linear"}}
+	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "google-workspace\nslack\nnotion\n")
+	if err := writeCreateReceipt(stateDir, "pi-stack-proj", "", []string{gwServerName}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	for _, jsonOut := range []bool{false, true} {

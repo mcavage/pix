@@ -156,19 +156,19 @@ func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 
-	// The user already has "gog" configured, BEFORE any pack use.
+	// The user already has gwServerName configured, BEFORE any pack use.
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.AddMCP("gog")
+	cfg.AddMCP(gwServerName)
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
 
 	rootA := filepath.Join(dir, "a")
 	mustWritePack(t, rootA, packManifest{Name: "a", Schema: 1, Integrations: []packIntegration{
-		{Name: "Gog", MCP: "gog"}, // overlapping name the pack merely re-declares
+		{Name: "Gog", MCP: gwServerName}, // overlapping name the pack merely re-declares
 	}})
 	rootB := filepath.Join(dir, "b")
 	mustWritePack(t, rootB, packManifest{Name: "b", Schema: 1})
@@ -178,7 +178,7 @@ func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"})
 
 	lockA := readPackLock(rootA)
-	if containsStr(lockA.MCP, "gog") {
+	if containsStr(lockA.MCP, gwServerName) {
 		t.Fatalf("pack.lock must not claim a pre-existing mcp as its own contribution, lock.MCP = %v", lockA.MCP)
 	}
 
@@ -189,7 +189,7 @@ func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfgAfterB.MCP, "gog") {
+	if !containsStr(cfgAfterB.MCP, gwServerName) {
 		t.Errorf("switching away from A must NOT remove the user's pre-existing gog mcp, cfg.MCP = %v", cfgAfterB.MCP)
 	}
 }

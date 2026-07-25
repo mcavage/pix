@@ -45,9 +45,9 @@ MCP         ?= $(shell "$(PI_STACK_BIN)" config get mcp 2>/dev/null)
 MCP_FLAGS   = $(foreach server,$(MCP),--static-mcp $(server))
 # The local stdio MCP servers `make mcp-register` can register (the ones you
 # actually use — i.e. those listed in MCP). `slack` is a pi-stack-host subcommand;
-# `gog` is the host-side Google Workspace CLI's MCP mode. Additional integrations
+# `google-workspace` is the host-side Google Workspace CLI's MCP mode. Additional integrations
 # are packs: remote catalog servers, or containers the gateway runs.
-LOCAL_STDIO_MCP = slack gog
+LOCAL_STDIO_MCP = slack google-workspace
 REGISTER        = $(filter $(LOCAL_STDIO_MCP),$(MCP))
 
 # Host MCP server credentials all come from 1Password via one file of op:// refs
@@ -56,18 +56,6 @@ REGISTER        = $(filter $(LOCAL_STDIO_MCP),$(MCP))
 OP_REFS := $(CURDIR)/config/op-refs.env
 OP_BIN  := $(shell command -v op 2>/dev/null)
 
-# Absolute path to the host-side `gog` (Google Workspace) binary. Same rationale
-# as OP_BIN: the sbx gateway daemon's PATH may not include it, so we resolve it
-# here and register the server with the absolute path. NO literal fallback: if
-# `gog` isn't on the make PATH this stays empty and the mcp-register guard trips
-# (registering a bare `gog` the gateway daemon can't exec is a silent footgun).
-GOG_BIN := $(shell command -v gog 2>/dev/null)
-
-# The Google account the host-side `gog` MCP server runs as (config.toml
-# `gog_account`, `pi-stack config set gog_account <email>` — never hardcoded
-# here). Passed to `gog --account` when `make mcp-register` registers gog with
-# the gateway.
-GOG_ACCOUNT ?= $(shell "$(PI_STACK_BIN)" config get gog_account 2>/dev/null)
 
 # Local-model deps for the self-learning memory (host Ollama). The watcher model
 # turns your messages into durable facts (capture); the embed model powers
@@ -109,7 +97,7 @@ $(shell mkdir -p out)
 
 .PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean launcher route require-launcher gate
 
-# Guard for every target that sources runtime config (SERVICES/MCP/GOG_ACCOUNT/
+# Guard for every target that sources runtime config (SERVICES/MCP/
 # models) from config.toml: the launcher binary MUST exist, and `config get`
 # MUST work — otherwise the $(shell …) sourcing above yields silently-empty
 # values. Fail loudly instead.
@@ -244,19 +232,14 @@ mcp-register: require-launcher ## Register the local stdio MCP servers you use (
 	@[ -n "$(strip $(REGISTER))" ] || { echo "Nothing to register: no local stdio servers ($(LOCAL_STDIO_MCP)) are in MCP. Run: pi-stack config set mcp <name>."; exit 0; }
 	@[ -n "$(OP_BIN)" ] || { echo "ERROR: 1Password CLI 'op' not found on PATH."; exit 1; }
 	@[ -f "$(OP_REFS)" ] || { echo "ERROR: $(OP_REFS) missing. Create it:  cp config/op-refs.env.example config/op-refs.env  then fill in your refs."; exit 1; }
-	@[ -z "$(filter gog,$(REGISTER))" ] || [ -n "$(GOG_ACCOUNT)" ] || { echo "ERROR: gog is in MCP but gog_account is unset. Run: pi-stack config set gog_account <you@example.com>."; exit 1; }
-	@[ -z "$(filter gog,$(REGISTER))" ] || [ -n "$(GOG_BIN)" ] || { echo 'ERROR: gog not found on PATH — brew install gog'; exit 1; }
 	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .)
 	@BIN="$(CURDIR)/out/pi-stack-host"; \
 	for s in $(REGISTER); do \
 		case "$$s" in \
-		gog) \
-			: 'HARDENED registration (security-lead): read-only by default —'; \
-			: '--gmail-no-send + --wrap-untrusted + --readonly + `mcp --allow-tool read`.'; \
-			: 'Creds resolve from config/op-refs.env via op run at gateway spawn.'; \
-			: 'Absolute op path ($(OP_BIN)) + resolved gog ($(GOG_BIN)) so the gateway daemon PATH need not include them.'; \
-			sbx mcp add gog --command "$(OP_BIN)" --args run --args --no-masking --args "--env-file=$(OP_REFS)" --args -- --args "$(GOG_BIN)" --args --account --args $(GOG_ACCOUNT) --args --gmail-no-send --args --wrap-untrusted --args --readonly --args mcp --args --allow-tool --args read \
-				&& echo "  registered: gog" || echo "  FAILED to register: gog" ;; \
+		google-workspace) \
+			: 'Google Workspace has ONE writer: the launcher transaction. It authorizes,'; \
+			: 'proves the headless spawn, then registers. Never hand-rolled here.'; \
+			echo "  google-workspace: run 'pi-stack gworkspace setup' (it registers after proving the spawn)" ;; \
 		*) \
 			sbx mcp add $$s --command "$(OP_BIN)" \
 				--args run --args --no-masking --args "--env-file=$(OP_REFS)" --args -- --args "$$BIN" --args mcp --args "$$s" \
@@ -269,7 +252,7 @@ mcp-register: require-launcher ## Register the local stdio MCP servers you use (
 	@echo "        To attach one to an ALREADY-RUNNING sandbox live (no recreate): pi-stack mcp load <name>"
 	@echo "Note: each server resolves its creds from config/op-refs.env via op run when the gateway spawns it — make sure those refs are filled + valid."
 
-serve: require-launcher ## Start the host services named in SERVICES (config.toml `services`): memory :11435. MCP servers (slack, gog) are run by the sbx gateway — see `make mcp-register`. Ctrl-C stops all.
+serve: require-launcher ## Start the host services named in SERVICES (config.toml `services`): memory :11435. MCP servers (slack, google-workspace) are run by the sbx gateway — see `make mcp-register`. Ctrl-C stops all.
 	@echo "Host services [$(SERVICES)] — sandboxes reach these on host.docker.internal. Ctrl-C stops all."
 	@(cd services/host && go build -o $(CURDIR)/out/pi-stack-host .) || { echo "go build failed (pi-stack-host)"; exit 1; }
 	@exec env $(SERVE_ENV) MEMORY_WATCHER_MODEL=$(MEMORY_WATCHER_MODEL) MEMORY_EMBED_MODEL=$(MEMORY_EMBED_MODEL) out/pi-stack-host serve $(SERVICES)
@@ -311,13 +294,13 @@ doctor: require-launcher ## Show models + each optional integration: set up? ser
 	echo ""; \
 	echo "Data tools (host side):"; \
 	printf "  %-7s setup: %-30s serving: %s\n" "gh"    "$$(sset github)" "proxy-injected (no service)"; \
-	printf "  %-7s setup: %-30s serving: %s\n" "gog"   "$$(command -v gog >/dev/null 2>&1 && echo 'CLI installed' || echo 'TODO: brew install gog + gog auth')" "MCP via gateway (register: make mcp-register)"; \
+	printf "  %-7s setup: %-30s serving: %s\n" "gwork" "$$(command -v gog >/dev/null 2>&1 && echo 'dependency installed' || echo 'TODO: pi-stack gworkspace setup')" "MCP via gateway (pi-stack gworkspace setup)"; \
 	printf "  %-7s setup: %-30s serving: %s\n" "memory" "watcher+embed above" ":11435 $$(port 11435) (capture needs the watcher model)"; \
 	echo ""; \
 	echo "MCP servers (local stdio, run by the sbx gateway — register with 'make mcp-register', attach with 'make run'):"; \
 	reg() { sbx mcp ls 2>/dev/null | grep -qw "$$1" && echo "registered" || echo "TODO: make mcp-register"; }; \
 	printf "  %-7s %-14s %s\n" "slack"  "$$(reg slack)"    "$(if $(filter slack,$(MCP)),auto-attached on make run,NOT in MCP — 'pi-stack config set mcp slack' to use)"; \
-	printf "  %-7s %-14s %s\n" "gog"    "$$(reg gog)"      "$(if $(filter gog,$(MCP)),auto-attached on make run,NOT in MCP — 'pi-stack config set mcp gog' to use)"; \
+	printf "  %-7s %-14s %s\n" "gwork" "$$(reg google-workspace)" "$(if $(filter google-workspace,$(MCP)),auto-attached on make run,NOT set up — 'pi-stack gworkspace setup' to use)"; \
 	echo "  gateway catalog (atlassian/notion/granola/linear/...): sbx mcp add … then pi-stack config set mcp <name>"; \
 	echo ""; \
 	echo "All of the above is configured in ~/.config/pi-stack/config.toml (pi-stack config set). Start it: make serve (host) + make run (sandbox)."

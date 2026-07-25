@@ -29,7 +29,7 @@ func fixedClock(ts string) func() time.Time {
 
 func TestWriteCreateReceiptRoundtrip(t *testing.T) {
 	dir := t.TempDir()
-	if err := writeCreateReceipt(dir, "pi-stack-work", "", []string{"slack", "gog"}, fixedClock("2024-01-02T03:04:05Z")); err != nil {
+	if err := writeCreateReceipt(dir, "pi-stack-work", "", []string{"slack", gwServerName}, fixedClock("2024-01-02T03:04:05Z")); err != nil {
 		t.Fatalf("writeCreateReceipt: %v", err)
 	}
 	r, status, err := readSandboxMCPReceipt(dir, "pi-stack-work")
@@ -45,7 +45,7 @@ func TestWriteCreateReceiptRoundtrip(t *testing.T) {
 	if r.CreatedAt != "2024-01-02T03:04:05Z" {
 		t.Errorf("CreatedAt = %q", r.CreatedAt)
 	}
-	if len(r.Preloaded) != 2 || r.Preloaded[0] != "slack" || r.Preloaded[1] != "gog" {
+	if len(r.Preloaded) != 2 || r.Preloaded[0] != "slack" || r.Preloaded[1] != gwServerName {
 		t.Errorf("Preloaded = %v", r.Preloaded)
 	}
 	if len(r.Loads) != 0 {
@@ -71,14 +71,14 @@ func TestAppendLoadReceiptRoundtrip(t *testing.T) {
 	if err := writeCreateReceipt(dir, "pi-stack-work", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatalf("writeCreateReceipt: %v", err)
 	}
-	if err := appendLoadReceipt(dir, "pi-stack-work", "gog", fixedClock("2024-01-01T01:00:00Z")); err != nil {
+	if err := appendLoadReceipt(dir, "pi-stack-work", gwServerName, fixedClock("2024-01-01T01:00:00Z")); err != nil {
 		t.Fatalf("appendLoadReceipt: %v", err)
 	}
 	r, status, err := readSandboxMCPReceipt(dir, "pi-stack-work")
 	if err != nil || status != sandboxMCPStateOK {
 		t.Fatalf("read: status=%v err=%v", status, err)
 	}
-	if len(r.Loads) != 1 || r.Loads[0].Name != "gog" || r.Loads[0].At != "2024-01-01T01:00:00Z" {
+	if len(r.Loads) != 1 || r.Loads[0].Name != gwServerName || r.Loads[0].At != "2024-01-01T01:00:00Z" {
 		t.Fatalf("Loads = %+v", r.Loads)
 	}
 	// Preloaded/CreatedAt from the create receipt untouched by the append.
@@ -135,7 +135,7 @@ func TestWriteCreateReceiptReplaceResetsLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Recreate (e.g. `sbx rm -f` + fresh create) with a different preload set.
-	if err := writeCreateReceipt(dir, sandbox, "", []string{"gog"}, fixedClock("2024-02-01T00:00:00Z")); err != nil {
+	if err := writeCreateReceipt(dir, sandbox, "", []string{gwServerName}, fixedClock("2024-02-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 	r, status, err := readSandboxMCPReceipt(dir, sandbox)
@@ -145,7 +145,7 @@ func TestWriteCreateReceiptReplaceResetsLoads(t *testing.T) {
 	if r.CreatedAt != "2024-02-01T00:00:00Z" {
 		t.Errorf("CreatedAt = %q, want the fresh create time", r.CreatedAt)
 	}
-	if len(r.Preloaded) != 1 || r.Preloaded[0] != "gog" {
+	if len(r.Preloaded) != 1 || r.Preloaded[0] != gwServerName {
 		t.Errorf("Preloaded = %v, want [gog]", r.Preloaded)
 	}
 	if len(r.Loads) != 0 {

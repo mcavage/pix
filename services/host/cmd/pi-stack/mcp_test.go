@@ -28,8 +28,8 @@ func gogRegistrar() mcpRegistrar {
 // TestAddArgs_Gog builds the hardened gog `sbx mcp add` command (mirrors the
 // Makefile mcp-register line).
 func TestAddArgs_Gog(t *testing.T) {
-	args := gogRegistrar().addArgs("gog")
-	if !contains(args, []string{"mcp", "add", "gog", "--command", "/usr/bin/op"}) {
+	args := gogRegistrar().addArgs(gwServerName)
+	if !contains(args, []string{"mcp", "add", gwServerName, "--command", "/usr/bin/op"}) {
 		t.Errorf("missing add-command prefix in %v", args)
 	}
 	// op-run wrapper.
@@ -74,8 +74,8 @@ func TestAddArgs_LocalServer(t *testing.T) {
 func TestAddArgs_GogBare(t *testing.T) {
 	reg := gogRegistrar()
 	reg.opRefs = "" // no op-refs -> bare
-	args := reg.addArgs("gog")
-	if !contains(args, []string{"mcp", "add", "gog", "--command", "/usr/bin/gog"}) {
+	args := reg.addArgs(gwServerName)
+	if !contains(args, []string{"mcp", "add", gwServerName, "--command", "/usr/bin/gog"}) {
 		t.Errorf("bare gog should register --command /usr/bin/gog, got %v", args)
 	}
 	for _, a := range args {
@@ -96,7 +96,7 @@ func TestAddArgs_GogBare(t *testing.T) {
 
 // TestRegisterServers_GogNoOpRefsBare: gateway on, op + op-refs ABSENT, gog
 // present + account set -> gog registers DIRECTLY (bare command, no op wrapper)
-// with the OAuth note. gog uses guided OAuth (`pi-stack gog setup`), never
+// with the OAuth note. gog uses guided OAuth (`pi-stack gworkspace setup`), never
 // op-refs, so the note must NOT mention op-refs.
 func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 	f := fakeEnv{
@@ -108,7 +108,7 @@ func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil); !errors.Is(err, errSbxUnavailable) {
+	if err := registerServers(cfg, f.env(), &buf, []string{gwServerName}, hostStub("", nil), nil); !errors.Is(err, errSbxUnavailable) {
 		t.Fatalf("expected errSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
@@ -119,14 +119,14 @@ func TestRegisterServers_GogNoOpRefsBare(t *testing.T) {
 		t.Errorf("gog-only note must NOT mention op-refs (gog uses OAuth), got:\n%s", out)
 	}
 	// The would-run command must be the bare gog command, not an op wrapper.
-	if !strings.Contains(out, "sbx mcp add gog --command /usr/bin/gog") {
+	if !strings.Contains(out, "sbx mcp add google-workspace --command /usr/bin/gog") {
 		t.Errorf("expected a bare gog would-run command, got:\n%s", out)
 	}
 }
 
 // TestRegisterServers_GogOnlyNoSeed (R5-1/R5-2): a gog-only clean state with op
 // NOT resolvable must NOT create op-refs.env at the XDG path and must NOT print a
-// "seeded" line. gog authenticates via guided OAuth (`pi-stack gog setup`),
+// "seeded" line. gog authenticates via guided OAuth (`pi-stack gworkspace setup`),
 // never op-refs, so seeding one contradicts setup Step 4's "No file is
 // created" copy.
 func TestRegisterServers_GogOnlyNoSeed(t *testing.T) {
@@ -138,7 +138,7 @@ func TestRegisterServers_GogOnlyNoSeed(t *testing.T) {
 		home:    home,
 	}).env()
 	cfg := defaultCfg()
-	cfg.MCP = []string{"gog"}
+	cfg.MCP = []string{gwServerName}
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
 	if err := registerServers(cfg, env, &buf, nil, hostStub("/usr/bin/pi-stack-host", nil), nil); !errors.Is(err, errSbxUnavailable) {
@@ -325,8 +325,8 @@ func TestRegisterServers_FailuresReturnError(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil)
-	if err == nil || !strings.Contains(err.Error(), "failed to register") || !strings.Contains(err.Error(), "gog") {
+	err := registerServers(cfg, f.env(), &buf, []string{gwServerName}, hostStub("", nil), nil)
+	if err == nil || !strings.Contains(err.Error(), "failed to register") || !strings.Contains(err.Error(), gwServerName) {
 		t.Errorf("expected a joined registration error mentioning gog, got %v", err)
 	}
 	if !strings.Contains(buf.String(), "FAILED to register: gog") {
@@ -345,7 +345,7 @@ func TestRegisterServers_GogNotFound(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil)
+	err := registerServers(cfg, f.env(), &buf, []string{gwServerName}, hostStub("", nil), nil)
 	if err == nil || !strings.Contains(err.Error(), "brew install gog") {
 		t.Errorf("expected a gog-not-found guard, got %v", err)
 	}
@@ -362,7 +362,7 @@ func TestRegisterServers_GogAccountUnset(t *testing.T) {
 	}
 	cfg := defaultCfg() // GogAccount empty
 	var buf bytes.Buffer
-	err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil)
+	err := registerServers(cfg, f.env(), &buf, []string{gwServerName}, hostStub("", nil), nil)
 	if err == nil || !strings.Contains(err.Error(), "pi-stack config set gog_account") {
 		t.Errorf("expected the config-set gog_account guide, got %v", err)
 	}
@@ -380,11 +380,11 @@ func TestRegisterServers_SbxAbsentPrintsWouldRun(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil); !errors.Is(err, errSbxUnavailable) {
+	if err := registerServers(cfg, f.env(), &buf, []string{gwServerName}, hostStub("", nil), nil); !errors.Is(err, errSbxUnavailable) {
 		t.Fatalf("expected errSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "sbx mcp add gog") || !strings.Contains(out, "me@x.com") {
+	if !strings.Contains(out, "sbx mcp add google-workspace") || !strings.Contains(out, "me@x.com") {
 		t.Errorf("expected a would-run command, got:\n%s", out)
 	}
 	if !strings.Contains(out, "install Docker Sandboxes") {
@@ -404,14 +404,14 @@ func TestRegisterServers_Registers(t *testing.T) {
 	cfg.GogAccount = "me@x.com"
 	// Provide success output for the exact sbx call the registrar builds.
 	reg := mcpRegistrar{op: "/usr/bin/op", opRefs: "/fake/config/op-refs.env", gog: "/usr/bin/gog", account: "me@x.com"}
-	key := strings.Join(append([]string{"sbx"}, reg.addArgs("gog")...), " ")
+	key := strings.Join(append([]string{"sbx"}, reg.addArgs(gwServerName)...), " ")
 	f.output[key] = "ok"
 	var buf bytes.Buffer
-	if err := registerServers(cfg, f.env(), &buf, []string{"gog"}, hostStub("", nil), nil); err != nil {
+	if err := registerServers(cfg, f.env(), &buf, []string{gwServerName}, hostStub("", nil), nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(buf.String(), "registered: gog") {
-		t.Errorf("expected registered: gog, got:\n%s", buf.String())
+	if !strings.Contains(buf.String(), "registered: google-workspace") {
+		t.Errorf("expected registered: google-workspace, got:\n%s", buf.String())
 	}
 }
 

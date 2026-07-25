@@ -13,7 +13,7 @@ import (
 // *.go file that is NOT a _test.go file) for the raw legacy `gog auth login`
 // phrase and fails the build if it ever reappears — in a string literal OR a
 // comment. The one guided recovery command status/doctor/mcp ever print or
-// write about is `pi-stack gog setup` (gogSetupHint); the direct legacy
+// write about is `pi-stack gworkspace setup` (gogSetupHint); the direct legacy
 // command must never regress into a TODO, a rendered label, or guidance prose
 // again (that regression is exactly what S11 shipped and this guard catches
 // mechanically instead of relying on review to notice it a second time).
@@ -54,7 +54,7 @@ func TestNoRawGogAuthLoginInProductionSource(t *testing.T) {
 		}
 	}
 	if len(hits) > 0 {
-		t.Errorf("raw legacy `%s` guidance is banned from production source (use gogSetupHint / \"pi-stack gog setup\" instead), found:\n%s",
+		t.Errorf("raw legacy `%s` guidance is banned from production source (use gogSetupHint / \"pi-stack gworkspace setup\" instead), found:\n%s",
 			banned, strings.Join(hits, "\n"))
 	}
 }

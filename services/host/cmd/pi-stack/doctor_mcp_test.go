@@ -60,7 +60,7 @@ func TestMCPRegistrationStates(t *testing.T) {
 	t.Run("local not registered -> register TODO", func(t *testing.T) {
 		cfg := defaultCfg()
 		cfg.MCP = []string{"slack"}
-		g := mcpGroupWith(cfg, mcpFake().env(), "gog\n", true, true, nil, noCtx)
+		g := mcpGroupWith(cfg, mcpFake().env(), "google-workspace\n", true, true, nil, noCtx)
 		c := findCheck(t, g, "slack")
 		if c.result() != verdictTodo || c.todo != "pi-stack mcp register slack" {
 			t.Errorf("local not-registered = %+v, want todo `pi-stack mcp register slack`", c)
@@ -69,7 +69,7 @@ func TestMCPRegistrationStates(t *testing.T) {
 
 	t.Run("catalog not registered -> bundle TODO", func(t *testing.T) {
 		cfg.MCP = []string{"notion"}
-		g := mcpGroupWith(cfg, mcpFake().env(), "gog\n", true, true, nil, noCtx)
+		g := mcpGroupWith(cfg, mcpFake().env(), "google-workspace\n", true, true, nil, noCtx)
 		c := findCheck(t, g, "notion")
 		if c.result() != verdictTodo || c.todo != "pi-stack mcp bundle" {
 			t.Errorf("catalog not-registered = %+v, want todo `pi-stack mcp bundle`", c)
@@ -82,7 +82,7 @@ func TestMCPRegistrationStates(t *testing.T) {
 	t.Run("pack remote not registered -> register TODO", func(t *testing.T) {
 		cfg.MCP = nil
 		containers := map[string]packContainer{"acme": {RemoteURL: "https://mcp.acme.example/sse"}}
-		g := mcpGroupWith(cfg, mcpFake().env(), "gog\n", true, true, containers, noCtx)
+		g := mcpGroupWith(cfg, mcpFake().env(), "google-workspace\n", true, true, containers, noCtx)
 		c := findCheck(t, g, "acme")
 		if c.result() != verdictTodo || c.todo != "pi-stack mcp register acme" {
 			t.Errorf("pack-remote not-registered = %+v, want todo `pi-stack mcp register acme`", c)
@@ -91,7 +91,7 @@ func TestMCPRegistrationStates(t *testing.T) {
 
 	t.Run("custom not registered -> native sbx guidance, never bundle/register", func(t *testing.T) {
 		cfg.MCP = []string{"linear"}
-		g := mcpGroupWith(cfg, mcpFake().env(), "gog\n", true, true, nil, noCtx)
+		g := mcpGroupWith(cfg, mcpFake().env(), "google-workspace\n", true, true, nil, noCtx)
 		c := findCheck(t, g, "linear")
 		if c.result() != verdictTodo {
 			t.Errorf("confirmed-missing custom server must be a verified todo, got %+v", c)
@@ -295,7 +295,7 @@ func TestMCPAttachmentSurvivesDeregistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	// slack is now DEREGISTERED (the `sbx mcp ls` output lacks it).
-	g := mcpGroupWith(cfg, env, "gog\n", true, true, nil, resolveMCPSandboxContext(env))
+	g := mcpGroupWith(cfg, env, "google-workspace\n", true, true, nil, resolveMCPSandboxContext(env))
 	c := findCheck(t, g, "slack attachment")
 	if c.result() != verdictReady || !strings.Contains(c.evidence, "preloaded by pi-stack at create") {
 		t.Errorf("attach = %+v, want ready — the receipt dominates deregistration", c)

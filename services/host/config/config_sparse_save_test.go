@@ -31,7 +31,7 @@ func rawFile(t *testing.T, path string) string {
 }
 
 // (a) Setting an UNRELATED key must not petrify untouched defaults: after
-// `config set gog_account x` the raw file contains gog_account but NOT the
+// `config set google_workspace_account x` the raw file contains google_workspace_account but NOT the
 // resolved memory_watcher_model / memory_embed_model / ollama_bridge_model /
 // services defaults.
 func TestSaveDoesNotPetrifyUntouchedDefaults(t *testing.T) {
@@ -47,8 +47,8 @@ func TestSaveDoesNotPetrifyUntouchedDefaults(t *testing.T) {
 	}
 
 	raw := rawFile(t, path)
-	if !strings.Contains(raw, `gog_account = "x@example.com"`) {
-		t.Errorf("raw file missing the explicit gog_account:\n%s", raw)
+	if !strings.Contains(raw, `google_workspace_account = "x@example.com"`) {
+		t.Errorf("raw file missing the explicit google_workspace_account:\n%s", raw)
 	}
 	for _, key := range []string{"memory_watcher_model", "memory_embed_model", "ollama_bridge_model"} {
 		if strings.Contains(raw, key) {
@@ -147,7 +147,7 @@ func TestSaveValueEqualToDefaultIsOmittedButResolves(t *testing.T) {
 // future default bumps propagate to saved configs.
 func TestLoadResolvesCurrentDefaultWhenKeyAbsent(t *testing.T) {
 	path := tempConfig(t)
-	if err := os.WriteFile(path, []byte("gog_account = \"y@example.com\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("google_workspace_account = \"y@example.com\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
