@@ -32,7 +32,7 @@ func wantsHelp(argv []string) bool {
 var knownVerbs = map[string]bool{
 	"help": true, "serve": true, "doctor": true, "onboard": true, "setup": true, "status": true,
 	"ls": true, "rm": true,
-	"config": true, "mcp": true, "memory": true, "monitor": true, "knowledge": true,
+	"config": true, "mcp": true, "gog": true, "memory": true, "monitor": true, "knowledge": true,
 	"pack": true, "version": true, "run": true, "secret": true,
 	"reset": true, "uninstall": true, "man": true,
 	"backup": true, "restore": true, "state": true,
@@ -177,6 +177,8 @@ func verbUsage(verb string) (string, bool) {
 		return configUsage, true
 	case "mcp":
 		return mcpUsage, true
+	case "gog":
+		return gogUsage, true
 	case "pack":
 		return packUsage, true
 	case "memory", "mem":

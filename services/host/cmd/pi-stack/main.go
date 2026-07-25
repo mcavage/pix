@@ -85,6 +85,8 @@ func main() {
 		// (`pi-stack run` never onboards on its own; `pi-stack onboard` is the
 		// host-only, no-handoff path for CI.)
 		runSetupCmd(args[1:])
+	case "gog":
+		runGogCmd(args[1:])
 	case "mcp":
 		runMcpCmd(args[1:])
 	case "pack":
