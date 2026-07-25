@@ -184,8 +184,12 @@ func TestSetupProvisionKeys_RefsPresent_ConfirmedNotRepastedNoResync(t *testing.
 	if strings.Contains(out.String(), "paste a 1Password ref") {
 		t.Errorf("an already-configured ref must never be re-pasted, got:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "1Password ref configured") {
-		t.Errorf("must confirm each existing ref, got:\n%s", out.String())
+	// No success line is asserted here on purpose (AC-P0-302): the keys step
+	// runs in setup's mutate phase, which prints no ✓ at all. What proves the
+	// ref was accepted is the op read below plus the keys row the REPORT
+	// renders from a post-mutation read of hostmode.env.
+	if strings.Contains(out.String(), "✓") {
+		t.Errorf("the keys mutation must print no success glyph, got:\n%s", out.String())
 	}
 	joined := strings.Join(*calls, "\n")
 	if countOccurrences(joined, "op read") != 3 {

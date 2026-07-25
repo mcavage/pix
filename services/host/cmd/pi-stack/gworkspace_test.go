@@ -412,28 +412,6 @@ func TestCheckGoogleWorkspaceFlags_RequireOptIn(t *testing.T) {
 	}
 }
 
-// TestOnboard_RejectsGoogleWorkspaceFlags: `pi-stack onboard` (the headless,
-// no-browser path) must reject --google-workspace/--credentials/--account
-// outright rather than silently ignoring them or, worse, persisting an
-// account without completing OAuth (the exact defect this design replaced).
-// Re-execs the test binary (runOnboardCmd calls os.Exit on this path).
-func TestOnboard_RejectsGoogleWorkspaceFlags(t *testing.T) {
-	if os.Getenv("PI_STACK_TEST_ONBOARD_GW") == "1" {
-		runOnboardCmd([]string{"--google-workspace", "--account", "a@b.com"})
-		return
-	}
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestOnboard_RejectsGoogleWorkspaceFlags$")
-	cmd.Env = append(os.Environ(), "PI_STACK_TEST_ONBOARD_GW=1")
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("onboard must refuse Google Workspace flags, output:\n%s", out)
-	}
-	if !strings.Contains(string(out), "authorization needs a browser") ||
-		!strings.Contains(string(out), "pi-stack gworkspace setup") {
-		t.Errorf("expected the browser-needed refusal naming `pi-stack gworkspace setup`, got:\n%s", out)
-	}
-}
-
 // --- naming-leak: the façade's own strings hold the public contract -------
 
 // TestGworkspaceUsage_NamingContract pins gworkspace.go's own naming rule: the

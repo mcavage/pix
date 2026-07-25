@@ -21,6 +21,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -72,11 +73,20 @@ func runSetupCmd(argv []string) {
 	dir := "."
 	dirSet := false
 	replace := false
+	noAgent := false
 	var hostArgs []string
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		if a == "--replace" {
 			replace = true
+			continue
+		}
+		// --no-agent is SETUP'S OWN flag (AC-P0-308): run the host phase and
+		// stop there — no sandbox, no handoff. It replaces the deleted
+		// `pi-stack onboard` verb, so it is consumed here and never forwarded
+		// to the host-config parser.
+		if a == "--no-agent" {
+			noAgent = true
 			continue
 		}
 		if len(a) > 0 && a[0] != '-' {
@@ -95,6 +105,26 @@ func runSetupCmd(argv []string) {
 	}
 
 	env := defaultShellEnv()
+
+	// `--apply` is the surviving half of the deleted `pi-stack onboard`: reconcile
+	// a pending <DIR>/.pi-stack/onboarding.json (the control-plane proposal an
+	// in-sandbox onboarding agent wrote) and stop. It is deliberately NOT part of
+	// the phase machine — it applies a proposal the user already reviewed rather
+	// than provisioning a host — so it validates DIR, reconciles, and returns
+	// without touching keys, packs, or the sandbox.
+	if containsStr(hostArgs, "--apply") {
+		if err := validateRunWorkspace(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "pi-stack setup: %v\n", err)
+			os.Exit(2)
+		}
+		opts, perr := parseOnboardArgs(hostArgs)
+		if perr != nil {
+			fmt.Fprintf(os.Stderr, "pi-stack setup: %v\n\n%s", perr, setupUsage)
+			os.Exit(2)
+		}
+		reconcileOnboarding(dir, env, os.Stdin, os.Stdout, opts.assumeYes, isTTY(os.Stdin))
+		return
+	}
 
 	// Phase 1: host config — source keys from 1Password, ensure memory, create the
 	// pack, seed identity, provision+enable host mode (see setupHostPhase). This
@@ -119,6 +149,16 @@ func runSetupCmd(argv []string) {
 		}
 		os.Exit(1)
 	}
+
+	// --no-agent stops here: the host phase is the whole command. The phase
+	// header is still printed so the transcript is complete and a reader can
+	// see that the handoff was skipped by request, not silently dropped.
+	if noAgent {
+		setupPhaseHeader(os.Stdout, setupPhaseHandoff, "skipped (--no-agent): host phase only, no sandbox")
+		return
+	}
+
+	setupPhaseHeader(os.Stdout, setupPhaseHandoff, "")
 
 	// Phase 2 decision: probe the sandbox for dir and branch on the POSITIVE
 	// state. Existing without --replace is left alone — setup never
@@ -272,26 +312,388 @@ func setupInteractivePrompts(tty, assumeYes bool) bool {
 	return tty && !assumeYes
 }
 
-func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, tty bool) error {
-	fmt.Fprintln(out, "pi-stack setup — configuring the host")
-	fmt.Fprintln(out, "")
+// ---------------------------------------------------------------------------
+// The setup phase machine (AC-P0-301).
+//
+// `pi-stack setup` runs as a NUMBERED TRANSCRIPT of eight phases, and each
+// phase header is printed BEFORE that phase does any work — so a run that
+// hangs names the phase it hung in instead of leaving the user staring at a
+// blank terminal.
+//
+//	parse      read flags; argument mistakes exit 2 before any probe
+//	inventory  read the current host state; NOTHING is written
+//	gate       preconditions that must hold before the first mutation
+//	mutate     the fixed-order, individually idempotent writes
+//	consent    the (at most two) interactive questions + what they authorize
+//	verify     re-probe what was just changed
+//	report     render, purely from the post-mutation evidence
+//	handoff    launch the sandbox (skipped by --no-agent)
+//
+// Two invariants make the transcript trustworthy and are worth stating
+// separately, because both were bugs before:
+//
+//   - The MUTATE phase returns no user-facing success strings at all — only
+//     the set of readiness axes it touched (AC-P0-302). Every ✓ the user reads
+//     comes from the report, which renders post-mutation probes. A mutation
+//     that fails therefore cannot print a ✓ for its axis, because it never had
+//     the ability to print one.
+//   - Mutations run in a FIXED order with the riskiest last (AC-P0-303):
+//     keys → config → pack → MCP → knowledge → identity → Google Workspace →
+//     model pulls. Each step is individually idempotent, so an interrupted run
+//     is resumed by simply re-running setup: the next run re-probes and
+//     re-applies, and no journal file is consulted (a journal is state that
+//     can itself be stale — trusting recorded over observed state is the exact
+//     defect this command exists to remove).
+const (
+	setupPhaseParse     = "parse"
+	setupPhaseInventory = "inventory"
+	setupPhaseGate      = "gate"
+	setupPhaseMutate    = "mutate"
+	setupPhaseConsent   = "consent"
+	setupPhaseVerify    = "verify"
+	setupPhaseReport    = "report"
+	setupPhaseHandoff   = "handoff"
+)
 
+// setupPhaseOrder is the transcript, in order. The index in this slice is the
+// number the header prints, so the phases can never be renumbered by accident.
+var setupPhaseOrder = []struct{ name, what string }{
+	{setupPhaseParse, "reading flags"},
+	{setupPhaseInventory, "reading the current host state (nothing is written yet)"},
+	{setupPhaseGate, "checking preconditions before anything is written"},
+	{setupPhaseMutate, "applying host configuration"},
+	{setupPhaseConsent, "the things that cost you something"},
+	{setupPhaseVerify, "re-probing what changed"},
+	{setupPhaseReport, "what is actually ready"},
+	{setupPhaseHandoff, "launching the sandbox"},
+}
+
+// setupPhaseHeader prints `[n/8] <phase> — <what>` BEFORE the phase runs.
+// Pass a non-empty override to say something more specific than the default
+// (e.g. that the handoff was skipped on purpose).
+func setupPhaseHeader(out io.Writer, name, override string) {
+	for i, p := range setupPhaseOrder {
+		if p.name != name {
+			continue
+		}
+		what := p.what
+		if override != "" {
+			what = override
+		}
+		fmt.Fprintf(out, "\n[%d/%d] %s — %s\n", i+1, len(setupPhaseOrder), p.name, what)
+		return
+	}
+}
+
+// setupMaxPrompts is the hard cap on interactive questions ONE setup run may
+// ask (AC-P0-307). There are exactly two: model-pull consent and the Google
+// Workspace route. Pasting a 1Password ref in the keys step is not counted —
+// it is not a question with a default, it is the mandatory input to a hard
+// precondition, and a run that reaches it has already failed closed without it.
+const setupMaxPrompts = 2
+
+// setupPromptBudget enforces the cap. Every setup-owned prompt site must take
+// its slot from here BEFORE prompting; a site that cannot get one falls back to
+// its non-interactive behavior (which is always the safe default: don't pull,
+// don't authorize). Non-interactive runs hand out no slots at all, which is how
+// "non-TTY never prompts" (AC-P0-306) is enforced in one place instead of at
+// each call site.
+type setupPromptBudget struct {
+	interactive bool
+	spent       int
+	asked       []string
+}
+
+// reserve claims one prompt slot for what, reporting whether the caller may
+// prompt. It is deliberately EAGER (claimed when the site is reached, not when
+// the question is finally printed) so the budget is a static property of the
+// run rather than something that depends on probe results.
+func (b *setupPromptBudget) reserve(what string) bool {
+	if b == nil || !b.interactive || b.spent >= setupMaxPrompts {
+		return false
+	}
+	b.spent++
+	b.asked = append(b.asked, what)
+	return true
+}
+
+// setupInventory is the PRE-mutation read of the host: what setup found before
+// it changed anything. It is consumed by the gate and by the mutation steps —
+// and NEVER by the report, which is a pure function of post-mutation evidence
+// (AC-P0-302, guarded by TestSetupReport_NeverReadsInventory).
+type setupInventory struct {
+	cfg      *config.Config
+	proposal *onboardingResult
+	retired  []string
+}
+
+// takeSetupInventory reads current state. It writes NOTHING: every call in
+// here is a load, a parse, or a bounded probe.
+func takeSetupInventory(env shellEnv, opts onboardOpts) (setupInventory, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return setupInventory{}, fmt.Errorf("loading config: %w", err)
 	}
+	inv := setupInventory{
+		cfg:     cfg,
+		retired: cfg.RetiredKeys(),
+		proposal: &onboardingResult{
+			Version:           1,
+			MCP:               opts.mcp,
+			OllamaBridgeModel: strings.TrimSpace(opts.model),
+		},
+	}
+	if k := strings.TrimSpace(opts.knowledge); k != "" {
+		inv.proposal.Knowledge = &onboardKnowledge{Action: "use", Source: k}
+	}
+	return inv, nil
+}
 
+// setupGate is every precondition that must hold BEFORE the first mutation.
+// Each failure names the exact command that fixes it and returns an error, so
+// nothing is half-written when a run cannot succeed:
+//
+//   - an invalid --mcp/--knowledge/--model is an argument mistake and fails
+//     first, before any probe runs;
+//   - a shipped-catalog MCP remote that is not registered AND auth-ready fails
+//     here rather than being persisted on the promise of a later fix;
+//
+// The 1Password preconditions (op installed, op signed in, every provider ref
+// resolvable, and the non-interactive "this needs a human" refusal) are NOT
+// duplicated here: they belong to the keys step, which is the FIRST mutation
+// and fails closed before it writes anything, so a gate copy would be a second
+// implementation of the same rule that could drift from it.
+func setupGate(env shellEnv, inv setupInventory, out io.Writer, interactive bool) error {
+	if err := validateOnboardingResult(inv.proposal, inv.cfg, env, hostBinaryResolver); err != nil {
+		return err
+	}
+	// Shipped-catalog remotes (mcpCatalogNames) must be registered AND
+	// auth-ready BEFORE setup writes anything — setup must never claim success
+	// for a server the gateway cannot spawn or that 401s on first use. The gate
+	// covers both the new --mcp proposal and any catalog name already persisted
+	// in cfg.MCP (the handoff would preload it too). It probes with bounded
+	// native checks only and never opens an OAuth flow, so a non-interactive
+	// setup can't trigger a browser grant.
+	if err := verifyCatalogMCPReady(env, append(append([]string{}, inv.proposal.MCP...), inv.cfg.MCP...)); err != nil {
+		return err
+	}
+	return nil
+}
+
+// setupMutationStep is one idempotent write, named for the transcript and
+// tagged with the readiness axes it touches. run() returns an error or nil and
+// writes NO success prose (see setupMutationOut).
+type setupMutationStep struct {
+	name string
+	axes []Axis
+	// fatal marks a step whose failure aborts setup. A non-fatal step reports
+	// its own failure and lets the run continue to the report, which will show
+	// the axis as not ready — the failure is never swallowed, it just is not
+	// worth throwing away the rest of a working host over.
+	fatal bool
+	run   func() error
+}
+
+// setupMutationOrder is the FIXED order (AC-P0-303), riskiest last, named
+// here so the order is a value a test can assert on rather than a property of
+// the control flow. gworkspace and models sit at the end because they are the
+// only two steps that can ask the user a question, and model pulls are last
+// because they are the only step that can cost gigabytes.
+var setupMutationOrder = []string{"keys", "config", "pack", "mcp", "knowledge", "identity", "gworkspace", "models"}
+
+// runSetupMutations executes steps in order and returns the axes it touched.
+// It returns NO user-facing strings (AC-P0-302): the report is rendered from
+// post-mutation probes, so a stubbed-to-fail mutation cannot print a ✓ for its
+// axis. Steps that must talk to the user (the keys step's ref prompt, a
+// non-fatal step's failure line) write diagnostics, never success claims.
+func runSetupMutations(steps []setupMutationStep) (touched []Axis, err error) {
+	for _, s := range steps {
+		if e := s.run(); e != nil {
+			if s.fatal {
+				return touched, e
+			}
+			err = e
+		}
+		touched = append(touched, s.axes...)
+	}
+	return touched, err
+}
+
+// setupMutationSteps builds the ordered step table. Every closure here writes
+// to io.Discard unless it is reporting a failure or collecting mandatory input.
+func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in io.Reader, out io.Writer, interactive bool, models *setupModelsOutcome, prompts *setupPromptBudget) []setupMutationStep {
+	cfg := inv.cfg
+	return []setupMutationStep{{
+		name:  "keys",
+		axes:  []Axis{axisProviders, axisSecrets},
+		fatal: true,
+		run: func() error {
+			// The ONLY mutation that may write to the real terminal: on a TTY
+			// it collects the mandatory op:// refs, and on failure it prints
+			// exactly what is wrong. It prints no ✓ — the keys row in the
+			// report comes from hostModeProviderKeys AFTER this ran.
+			if !setupProvisionKeysFn(env, in, out, interactive, opts.assumeYes) {
+				return fmt.Errorf("provider keys not fully configured — follow the fix printed above")
+			}
+			return nil
+		},
+	}, {
+		name:  "config",
+		fatal: true,
+		run: func() error {
+			// Retired config keys (mcp_static/mcp_dynamic) are dropped by the
+			// sparse encode whenever the config is saved; do it here so the
+			// migration is deterministic even if a later step fails.
+			if len(inv.retired) > 0 {
+				if err := cfg.Save(); err != nil {
+					return fmt.Errorf("dropping retired config keys: %w", err)
+				}
+			}
+			// Config only: the knowledge half of the proposal is its own,
+			// later step so the fixed order is real and not an illusion of one
+			// combined call.
+			cfgOnly := *inv.proposal
+			cfgOnly.Knowledge = nil
+			_, err := applyOnboardingResult(&cfgOnly, cfg, env, io.Discard, func(c *config.Config) error { return c.Save() })
+			return err
+		},
+	}, {
+		name:  "pack",
+		axes:  []Axis{axisPack},
+		fatal: true,
+		run: func() error {
+			// Ensure a default pack exists (git-init'd) AND is ACTIVE whenever
+			// cfg.Pack is empty — including a pack that already exists (a
+			// migrated legacy dir, or one created by an earlier interrupted
+			// run whose activation never landed). runPackNew handles both
+			// creation and activation for the fresh case; the already-exists
+			// branch must activate explicitly. Does NOT override an explicitly
+			// active alternate pack.
+			defaultRoot := defaultPackRoot() // runs the legacy pack/personal -> default migration
+			if _, err := os.Stat(filepath.Join(defaultRoot, packManifestName)); err != nil {
+				runPackNew(env, io.Discard, []string{defaultRoot})
+				return nil
+			}
+			if err := activateDefaultPack(defaultRoot); err != nil {
+				return fmt.Errorf("ensuring default pack is active: %w", err)
+			}
+			return nil
+		},
+	}, {
+		name: "mcp",
+		axes: mcpAxes(cfg.MCP),
+		run: func() error {
+			if len(cfg.MCP) == 0 {
+				return nil
+			}
+			var buf bytes.Buffer
+			if err := registerServers(cfg, env, &buf, nil, hostBinaryResolver, activeContainerMCP(cfg)); err != nil {
+				fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pi-stack mcp register)\n", err)
+				return err
+			}
+			return nil
+		},
+	}, {
+		name:  "knowledge",
+		axes:  []Axis{axisServiceKnowledge},
+		fatal: true,
+		run: func() error {
+			if inv.proposal.Knowledge == nil {
+				return nil
+			}
+			only := &onboardingResult{Version: 1, Knowledge: inv.proposal.Knowledge}
+			_, err := applyOnboardingResult(only, cfg, env, io.Discard, func(c *config.Config) error { return c.Save() })
+			return err
+		},
+	}, {
+		name: "identity",
+		run: func() error {
+			// Read the user's first name from the HOST's git config (the
+			// sandbox cannot see ~/.gitconfig) and seed it into memory so
+			// onboarding can greet by name. Best-effort and SILENT: the report
+			// re-reads git config itself, so nothing here needs to claim
+			// anything.
+			seedIdentity(env, io.Discard)
+			return nil
+		},
+	}, {
+		name: "gworkspace",
+		axes: []Axis{axisGworkspace},
+		run: func() error {
+			// Google Workspace is OFF unless --google-workspace. It runs the
+			// SAME transaction `pi-stack gworkspace setup` runs, through the
+			// same façade, so there is exactly one writer. It returns no
+			// success text: the row in the report is rendered from a
+			// post-mutation probe, so a half-finished authorization can never
+			// print a ✓.
+			if !opts.googleWorkspace {
+				return nil
+			}
+			ask := prompts.reserve("google workspace route")
+			if err := setupGoogleWorkspaceFn(env, gogSetupOpts{
+				account:     strings.TrimSpace(opts.account),
+				credentials: strings.TrimSpace(opts.credentials),
+				assumeYes:   opts.assumeYes,
+			}, in, out, ask); err != nil {
+				return fmt.Errorf("google workspace: %w", err)
+			}
+			return nil
+		},
+	}, {
+		name: "models",
+		axes: []Axis{axisModelWatcher, axisModelEmbed, axisModelBridge},
+		run: func() error {
+			// The riskiest step, therefore last: probe Ollama once, classify on
+			// the shared ModelReadiness axes, pull confirmed-missing tags only
+			// under explicit consent (--pull-models, or the one default-No
+			// prompt), verify once after the pulls, receipt the outcome. Never
+			// installs Ollama; never pulls a tag it could not positively verify
+			// as missing.
+			ask := opts.pullModels || prompts.reserve("local model pull consent")
+			*models = setupLocalModels(cfg, env, in, out, ask && interactive, opts.pullModels)
+			receiptSetupModels(env, out, *models)
+			return nil
+		},
+	}}
+}
+
+// mcpAxes maps configured server names to their readiness axes.
+func mcpAxes(servers []string) []Axis {
+	var out []Axis
+	for _, s := range servers {
+		if strings.TrimSpace(s) == "" {
+			continue
+		}
+		out = append(out, mcpAxis(s))
+	}
+	return out
+}
+
+// setupHostPhase runs the host half of `pi-stack setup` as the eight-phase
+// transcript documented above. The only interactive steps are the mandatory
+// op:// ref collection (TTY + op installed) and the at most two consent
+// questions; with --yes/--non-interactive or no TTY it is fully
+// non-interactive (the CI path).
+func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, tty bool) error {
+	fmt.Fprintln(out, "pi-stack setup — configuring the host")
+
+	// PHASE 1 — parse. Argument mistakes are caught here, before any probe or
+	// mutation, and map to exit 2 at the call site.
+	setupPhaseHeader(out, setupPhaseParse, "")
 	opts, perr := parseOnboardArgs(flags)
 	if perr != nil {
-		return perr
-	}
-	if opts.apply {
-		return fmt.Errorf("--apply belongs to `pi-stack onboard --apply`; setup does not apply workspace proposals")
+		return errUsage{perr}
 	}
 	// --account/--credentials are Google Workspace inputs and are meaningless
 	// without the opt-in. Rejecting them here deletes the old ability to set an
 	// account without completing OAuth: there is no path that writes
 	// google_workspace_account except the transaction itself.
+	if opts.apply {
+		// --apply is intercepted by runSetupCmd (it reconciles a pending
+		// onboarding.json and stops). Reaching the host phase with it set means
+		// a caller bypassed that route, which would silently ignore the flag.
+		return errUsage{fmt.Errorf("--apply is handled before the host phase; run `pi-stack setup [DIR] --apply`")}
+	}
 	if err := checkGoogleWorkspaceFlags(opts); err != nil {
 		return err
 	}
@@ -302,141 +704,59 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	// mere presence must NOT silently suppress the key-collection/overwrite
 	// prompts — only an explicit non-interactive opt-out does.
 	interactive := setupInteractivePrompts(tty, opts.assumeYes)
+	prompts := &setupPromptBudget{interactive: interactive}
 
-	// Build + VALIDATE the onboarding proposal from the flags BEFORE anything
-	// touches provider keys or host state. An invalid --mcp/--knowledge/--model
-	// must fail setup immediately, with NOTHING done yet — no 1Password
-	// prompts, no ref writes to op-refs.env/hostmode.env, no sbx reconciliation
-	// — rather than running the entire (expensive, side-effecting) provider-key
-	// flow first only to reject the very flags that drove this run afterward.
-	r := &onboardingResult{
-		Version:           1,
-		MCP:               opts.mcp,
-		OllamaBridgeModel: strings.TrimSpace(opts.model),
-	}
-	if k := strings.TrimSpace(opts.knowledge); k != "" {
-		r.Knowledge = &onboardKnowledge{Action: "use", Source: k}
-	}
-	if err := validateOnboardingResult(r, cfg, env, hostBinaryResolver); err != nil {
-		return err
-	}
-
-	// Shipped-catalog remotes (mcpCatalogNames) must be registered AND
-	// auth-ready BEFORE setup saves config or hands off to a launch — setup
-	// must never claim success for a server the gateway cannot spawn or that
-	// 401s on first use. The gate covers both the new --mcp proposal and any
-	// catalog name already persisted in cfg.MCP (the handoff would preload it
-	// too). It probes with bounded native checks only and never opens an OAuth
-	// flow (`pi-stack mcp auth <name>` stays the user's explicit command), so
-	// a non-interactive setup can't trigger a browser grant. Explicit policy
-	// denial fails with a denied error; a probe failure fails unverifiable
-	// with a retry path. Local stdio servers keep the registerServers path.
-	if err := verifyCatalogMCPReady(env, append(append([]string{}, r.MCP...), cfg.MCP...)); err != nil {
-		return err
-	}
-
-	// Retired config keys (mcp_static/mcp_dynamic) are dropped by the sparse
-	// encode whenever the config is saved. Announce the drop ONCE, concisely,
-	// and perform the save right here so the migration is deterministic even if
-	// a later step fails. UNKNOWN keys are a different thing (cfg.UnknownKeys —
-	// doctor flags those) and are never swept into this notice as "retired".
-	if retired := cfg.RetiredKeys(); len(retired) > 0 {
-		fmt.Fprintf(out, "note: dropping retired config key(s) %s on save (no longer read); every configured MCP server preloads at sandbox create\n", strings.Join(retired, ", "))
-		if err := cfg.Save(); err != nil {
-			return fmt.Errorf("dropping retired config keys: %w", err)
-		}
-	}
-
-	// Provider keys come from 1Password, the only source: setupProvisionKeysFn
-	// requires `op` installed + signed in, collects+validates an op:// ref for
-	// every provider (prompting once each on a TTY; printing exact `pi-stack
-	// secret set` commands otherwise), mirrors them into hostmode.env, and
-	// reconciles sbx to match. It prints exactly what's wrong on failure; abort
-	// setup rather than hand off to a session that can't talk to a model.
-	if !setupProvisionKeysFn(env, in, out, interactive, opts.assumeYes) {
-		return fmt.Errorf("provider keys not fully configured — follow the fix printed above")
-	}
-
-	changes, err := applyOnboardingResult(r, cfg, env, out, func(c *config.Config) error { return c.Save() })
+	// PHASE 2 — inventory. Reads only.
+	setupPhaseHeader(out, setupPhaseInventory, "")
+	inv, err := takeSetupInventory(env, opts)
 	if err != nil {
 		return err
 	}
-
-	// Ensure a default pack exists (git-init'd) so authored skills + captured
-	// knowledge have a durable, versioned home the onboarding agent can point at,
-	// AND that it is ACTIVE (cfg.Pack) whenever cfg.Pack is currently empty —
-	// including a pack that already exists (a migrated legacy dir, or one
-	// discovered/created by an earlier run whose activation never landed), not
-	// only a brand-new one. runPackNew handles both creation AND activation for
-	// the fresh case; the already-exists branch must activate explicitly, since
-	// runPackNew is never called there. A real activation failure (cfg.Save
-	// error) FAILS setup — it must never report success while cfg.Pack still
-	// points nowhere. Does NOT override an explicitly active alternate pack
-	// (activateDefaultPack no-ops when cfg.Pack != "").
-	defaultRoot := defaultPackRoot() // runs the legacy pack/personal -> default migration
-	if _, err := os.Stat(filepath.Join(defaultRoot, packManifestName)); err != nil {
-		runPackNew(env, out, []string{defaultRoot})
-	} else if err := activateDefaultPack(defaultRoot); err != nil {
-		return fmt.Errorf("ensuring default pack is active: %w", err)
+	if len(inv.retired) > 0 {
+		fmt.Fprintf(out, "note: dropping retired config key(s) %s on save (no longer read); every configured MCP server preloads at sandbox create\n", strings.Join(inv.retired, ", "))
 	}
 
-	fmt.Fprintln(out, "")
-	fmt.Fprintf(out, "memory service: enabled (:%d)\n", memoryPortDefault)
-	if len(changes) == 0 {
-		fmt.Fprintln(out, "knowledge:      (none); add later with `pi-stack knowledge init` / `use`")
-	} else {
-		for _, c := range changes {
-			fmt.Fprintf(out, "  + %s\n", c)
-		}
-	}
-	if len(cfg.MCP) > 0 {
-		if err := registerServers(cfg, env, out, nil, hostBinaryResolver, activeContainerMCP(cfg)); err != nil {
-			fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pi-stack mcp register)\n", err)
-		}
+	// PHASE 3 — gate. Nothing has been written yet; a failure here leaves the
+	// host exactly as it was found.
+	setupPhaseHeader(out, setupPhaseGate, "")
+	if err := setupGate(env, inv, out, interactive); err != nil {
+		return err
 	}
 
-	// Google Workspace (optional, OFF unless --google-workspace): the SAME
-	// transaction `pi-stack gworkspace setup` runs, reached through the same
-	// façade so there is exactly one writer. It sits after the MCP step and
-	// before the model pulls, matching the fixed mutation order. It returns NO
-	// success text of its own here: the row in printSetupSummary below is
-	// rendered from a post-mutation probe (gogSetupAccountHealthy), so a failed
-	// or half-finished authorization can never print a ✓.
-	if opts.googleWorkspace {
-		if err := setupGoogleWorkspaceFn(env, gogSetupOpts{
-			account:     strings.TrimSpace(opts.account),
-			credentials: strings.TrimSpace(opts.credentials),
-			assumeYes:   opts.assumeYes,
-		}, in, out, interactive); err != nil {
-			return fmt.Errorf("google workspace: %w", err)
-		}
+	// PHASE 4 — mutate, and PHASE 5 — consent. One ordered step table
+	// (setupMutationOrder), split at the point where the steps start asking
+	// permission: the first six are unattended, the last two are the consented,
+	// riskiest-last pair.
+	var models setupModelsOutcome
+	steps := setupMutationSteps(env, inv, opts, in, out, interactive, &models, prompts)
+	split := len(steps) - 2
+	setupPhaseHeader(out, setupPhaseMutate, "")
+	if _, err := runSetupMutations(steps[:split]); err != nil {
+		return err
+	}
+	setupPhaseHeader(out, setupPhaseConsent, "")
+	if _, err := runSetupMutations(steps[split:]); err != nil {
+		return err
 	}
 
-	// Local models (optional): probe Ollama ONCE, classify on the shared
-	// ModelReadiness axes, pull confirmed-missing tags only under explicit
-	// consent (--pull-models, or the interactive default-No prompt), verify
-	// once after the pulls, and receipt the outcome into launcher state. Never
-	// installs Ollama; a partial pull failure fails setup below, AFTER the
-	// truthful summary has printed.
-	models := setupLocalModels(cfg, env, in, out, interactive, opts.pullModels)
-	receiptSetupModels(env, out, models)
+	// PHASE 6 — verify. Re-probe, from scratch, everything the mutations
+	// touched. Nothing recorded by the mutate phase is trusted here.
+	setupPhaseHeader(out, setupPhaseVerify, "")
+	postCfg, cerr := config.Load()
+	if cerr != nil {
+		postCfg = inv.cfg
+	}
+	req := requestAll(postCfg.MCP, setupRequestedAxes(opts)...)
+	snap := buildSnapshot(req, setupReadinessAxes(postCfg, env, models))
 
-	// Identity: read it from the HOST's git config (the sandbox can't see
-	// ~/.gitconfig) and seed it so onboarding can greet by name. The generated
-	// kickoff carries it deterministically; memory writes remain best-effort.
-	seedIdentity(env, out)
+	// PHASE 7 — report. A pure function of the post-mutation snapshot: it
+	// takes no inventory, no mutation log, and no "what we meant to do".
+	setupPhaseHeader(out, setupPhaseReport, "")
+	printSetupSummary(postCfg, env, out, models)
 
-	// Host mode (the UNSANDBOXED escape hatch) is NOT set up here — it's opt-in and
-	// only relevant to some users, and provisioning it needs `pi` on PATH, which a
-	// normal sandbox-only user won't have. Point at the dedicated command instead of
-	// running (and noisily half-failing) it on every `pi-stack setup`.
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "host mode (optional, UNSANDBOXED: runs `pi` directly on the host): not enabled.")
 	fmt.Fprintln(out, "  set it up only if you need it:  pi-stack host setup")
-
-	// Completion summary: keys / knowledge / pack / local models / gog on
-	// separate readiness axes, then the core-provisioned line.
-	printSetupSummary(cfg, env, out, models)
 
 	// A partial pull failure is a real, verified gap the user consented to
 	// closing: fail setup (non-zero) with the exact retry commands. The summary
@@ -445,7 +765,128 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 		return fmt.Errorf("local model pull failed for %s — retry by hand: ollama pull %s, then re-run pi-stack setup",
 			strings.Join(models.failed, ", "), strings.Join(models.failed, "; ollama pull "))
 	}
+	// An axis the user explicitly ASKED for on this invocation and that did not
+	// end ready is a failed request, not a shrug: exit 1 (AC-P0-210). Stale
+	// optional config never blocks unrelated repair, because only the axes this
+	// invocation's flags promoted are consulted.
+	if short := snap.RequestedShortfall(req); len(short) > 0 {
+		return fmt.Errorf("%s — see the rows above; nothing else was left half-done", requestedShortfallMessage(short, snap))
+	}
 	return nil
+}
+
+// setupRequestedAxes maps THIS invocation's flags to the axes they promote from
+// optional to blocking (AC-P0-209). Promotion itself lives in the readiness
+// type (buildSnapshot); this is only the flag→axis mapping, so no command
+// re-implements the rule.
+//
+// `--mcp X` promotes `mcp:X`, which setup additionally enforces in the gate
+// (verifyCatalogMCPReady) — a requested server that cannot come up fails before
+// anything is written, which is strictly earlier than an exit code.
+func setupRequestedAxes(opts onboardOpts) []Axis {
+	var out []Axis
+	if opts.pullModels {
+		out = append(out, axisOllamaHost, axisModelWatcher, axisModelEmbed, axisModelBridge)
+	}
+	if opts.googleWorkspace {
+		out = append(out, axisGworkspace)
+	}
+	out = append(out, mcpAxes(opts.mcp)...)
+	return out
+}
+
+// requestedShortfallMessage names the requested axes that did not end ready,
+// in snapshot order, with the verdict word for each — so the exit-1 line says
+// which request failed and how, never just "setup failed".
+func requestedShortfallMessage(short []Axis, s Snapshot) string {
+	parts := make([]string, 0, len(short))
+	for _, a := range short {
+		_, v, ok := s.AxisVerdict(a)
+		if !ok {
+			continue
+		}
+		parts = append(parts, string(a)+": "+verdictWord(v))
+	}
+	return "you asked for " + strings.Join(parts, ", ")
+}
+
+// setupReadinessAxes is the builder set for setup's VERIFY phase: the shared
+// Ollama/model and service builders doctor uses (so setup and doctor can never
+// disagree), plus the three axes only setup's own post-mutation reads can speak
+// to. Every builder here probes; none reads the inventory.
+func setupReadinessAxes(cfg *config.Config, env shellEnv, models setupModelsOutcome) map[Axis]axisBuilder {
+	builders := map[Axis]axisBuilder{}
+	for a, b := range ollamaReadinessAxes(cfg, env, "", nil) {
+		builders[a] = b
+	}
+	if env.identityProbe != nil {
+		for a, b := range serviceReadinessAxes(env, enabled(cfg, "memory"), enabled(cfg, "knowledge"), env.identityProbe) {
+			builders[a] = b
+		}
+	}
+	builders[axisProviders] = func() []check { return setupProvidersAxis(env) }
+	builders[axisPack] = func() []check { return setupPackAxis(cfg) }
+	if strings.TrimSpace(cfg.GogAccount) != "" || containsStr(cfg.MCP, gwServerName) {
+		// Absent by default (AC-P0-319): with no opt-in there is no axis at
+		// all, so the report says nothing about Google Workspace.
+		builders[axisGworkspace] = func() []check { return setupGworkspaceAxis(cfg, env) }
+	}
+	return builders
+}
+
+// setupProvidersAxis is the post-mutation provider-key fact: ready when at
+// least one model-provider ref resolves (any one key launches a sandbox).
+func setupProvidersAxis(env shellEnv) []check {
+	names, err := hostModeProviderKeys(env)
+	switch {
+	case err != nil:
+		return []check{{label: "provider keys", requirement: requirementCore, verdict: verdictUnverifiable,
+			detail: "could not read hostmode.env (" + err.Error() + ")", evidence: "hostmode.env unreadable: " + err.Error()}}
+	case len(names) == 0:
+		return []check{{label: "provider keys", requirement: requirementCore, verdict: verdictTodo,
+			detail: "no provider key configured", evidence: "hostmode.env lists no provider key",
+			todo: "pi-stack secret set ANTHROPIC_API_KEY op://Vault/Item/field"}}
+	default:
+		return []check{{label: "provider keys", requirement: requirementCore, verdict: verdictReady,
+			detail: strings.Join(names, ", "), evidence: "hostmode.env lists " + strings.Join(names, ", ")}}
+	}
+}
+
+// setupPackAxis is the post-mutation pack fact: an ACTIVE but EMPTY pack is a
+// TODO, never green.
+func setupPackAxis(cfg *config.Config) []check {
+	p := resolveHostStatePack(cfg, "")
+	switch {
+	case p.Active && p.Exists && (p.Skills || p.Knowledge):
+		return []check{{label: "pack", requirement: requirementCore, verdict: verdictReady,
+			detail: p.Path + " (active)", evidence: "active pack " + p.Path + " has content"}}
+	case p.Active && p.Exists:
+		return []check{{label: "pack", requirement: requirementCore, verdict: verdictTodo,
+			detail: "active but empty (" + p.Path + ")", evidence: "active pack " + p.Path + " has no skills or knowledge",
+			todo: "pi-stack pack add skill <name>"}}
+	default:
+		return []check{{label: "pack", requirement: requirementCore, verdict: verdictTodo,
+			detail: "no active pack", evidence: "no pack is active", todo: "pi-stack pack new"}}
+	}
+}
+
+// setupGworkspaceAxis is the post-mutation Google Workspace fact, probed the
+// same way `pi-stack gworkspace status` probes it.
+func setupGworkspaceAxis(cfg *config.Config, env shellEnv) []check {
+	acct := strings.TrimSpace(cfg.GogAccount)
+	switch {
+	case acct == "":
+		return []check{{label: "google workspace", requirement: requirementOptional, verdict: verdictTodo,
+			detail: "enabled but no account authorized", evidence: "google_workspace_account is empty",
+			todo: "pi-stack gworkspace setup"}}
+	case gogSetupAccountHealthy(env, acct):
+		return []check{{label: "google workspace", requirement: requirementOptional, verdict: verdictReady,
+			detail: acct + " authorized (read-only)", evidence: "authorization probe passed for " + acct}}
+	default:
+		return []check{{label: "google workspace", requirement: requirementOptional, verdict: verdictTodo,
+			detail: acct + " not verified", evidence: "authorization probe failed for " + acct,
+			todo: "pi-stack gworkspace setup"}}
+	}
 }
 
 // providerKeyPromptAttempts caps how many times setupProvisionKeys reprompts
@@ -506,12 +947,14 @@ func runStrictProviderKeyFlow(env shellEnv, sc *bufio.Scanner, out io.Writer, in
 
 	if !opInstalled(env) {
 		fmt.Fprintln(out, "1Password provider setup requires the `op` CLI, but it isn't installed.")
-		fmt.Fprintln(out, "Install it (https://developer.1password.com/docs/cli/) and re-run the same setup command.")
+		fmt.Fprintln(out, "  fix: brew install 1password-cli   (or https://developer.1password.com/docs/cli/)")
+		fmt.Fprintln(out, "then re-run the same setup command.")
 		return false
 	}
 	if !opSignedIn(env) {
 		fmt.Fprintln(out, "`op` is installed but no 1Password account is configured.")
-		fmt.Fprintln(out, "Run `op signin` (or add an account in the 1Password app) and re-run the same setup command.")
+		fmt.Fprintln(out, "  fix: op signin   (or add an account in the 1Password app)")
+		fmt.Fprintln(out, "then re-run the same setup command.")
 		return false
 	}
 
@@ -566,7 +1009,11 @@ func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer,
 				fmt.Fprintf(out, "  %s \u2717 could not write ref to hostmode.env: %v\n", p.name, err)
 				return false
 			}
-			fmt.Fprintf(out, "  %s \u2713 1Password ref configured\n", p.name)
+			// No ✓ here on purpose (AC-P0-302): the keys step runs in the
+			// mutate phase, which prints no success claims. The keys row in
+			// setup's report is rendered from a post-mutation read of
+			// hostmode.env, so a run whose key writes fail cannot have
+			// printed a green line for them earlier.
 			refs[p.envVar] = ref
 			resolved[p.envVar] = val
 		case interactive:
@@ -582,7 +1029,6 @@ func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer,
 				fmt.Fprintf(out, "  %s \u2717 could not save host-mode ref: %v\n", p.name, err)
 				return false
 			}
-			fmt.Fprintf(out, "  %s \u2713 saved\n", p.name)
 			refs[p.envVar] = ref
 			resolved[p.envVar] = val
 		default:
@@ -841,6 +1287,13 @@ if the sandbox state cannot be determined at all (sbx errored), setup fails
 closed after the host phase — fix sbx and re-run.
 
 Setup flags:
+  --no-agent               run the HOST phase only: no sandbox, no handoff.
+                           This is the scripted/CI path (it replaces the
+                           removed ` + "`pi-stack onboard`" + ` verb); --yes and
+                           --non-interactive stay orthogonal to it
+  --apply                  apply a pending .pi-stack/onboarding.json in DIR
+                           (the control-plane proposal an in-sandbox onboarding
+                           agent wrote), under a confirmation gate
   --replace                recreate an existing sandbox for DIR (sbx rm -f +
                            create) so it picks up current pack/MCP/skills and
                            receives the guided tour; harmless when absent
@@ -851,6 +1304,10 @@ Setup flags:
                            asks once, defaulting to No. Setup never installs
                            Ollama itself, and never pulls a tag it could not
                            positively verify as missing.
+                           pi-stack setup --pull-models with Ollama down exits
+                           1. pi-stack setup with the same Ollama down exits 0
+                           with an optional ⚠ row. Stale optional config never
+                           blocks unrelated repair.
 
 Host-config flags (all optional):
   --google-workspace       opt in to Google Workspace (absent otherwise): runs
@@ -869,7 +1326,15 @@ Host-config flags (all optional):
                            exact 'pi-stack secret set' command for any missing)
   -h | --help              this help
 
-For scripted host config with NO agent handoff, use ` + "`pi-stack onboard`" + ` instead.
+Setup runs as a numbered transcript of eight phases — parse, inventory, gate,
+mutate, consent, verify, report, handoff — and prints each phase header BEFORE
+that phase does its work, so a run that hangs names the phase it hung in. It
+asks at most two questions (model-pull consent, the Google Workspace route) and
+never prompts at all without a TTY. Mutations run in a fixed order with the
+riskiest last (keys, config, pack, MCP, knowledge, identity, Google Workspace,
+model pulls) and each one is individually idempotent, so an interrupted run is
+resumed by re-running the same command: setup re-probes what is actually there
+rather than reading back a journal of what it once intended.
 `
 
 // checkGoogleWorkspaceFlags enforces AC-P0-312: --account and --credentials are

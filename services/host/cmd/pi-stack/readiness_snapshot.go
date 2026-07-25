@@ -313,6 +313,35 @@ func (s Snapshot) ExitCode() int {
 	}
 }
 
+// RequestedShortfall returns the axes this invocation explicitly REQUESTED
+// that did not end `ready`, in snapshot order.
+//
+// This is the promotion rule's other half (AC-P0-209/210). `requested` already
+// makes an optional axis block like core through blocksExit, but that only
+// covers a VERIFIED failure: an axis the user asked for and that could not be
+// checked at all (`ollama` down, so nothing can be pulled or proven) is exit 3
+// under the general contract, which is the right answer for a diagnostic and
+// the wrong one for a request. When the user says `--pull-models`, "I could not
+// check" is a failed request, not a shrug — so a command that ASKED for an axis
+// consults this and exits 1.
+//
+// A requested axis with no builder (nothing in this process can speak to it) is
+// ABSENT from the snapshot and is NOT reported here: absence is not evidence of
+// failure, and inventing one would be the exact false verdict the snapshot model
+// exists to prevent.
+func (s Snapshot) RequestedShortfall(req Request) []Axis {
+	var out []Axis
+	for _, a := range s.order {
+		if !req.promoted(a) {
+			continue
+		}
+		if _, v, ok := s.AxisVerdict(a); ok && v != verdictReady {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 // ExitCodeSuppressingUnverifiable is the contract with the 3 arm suppressed,
 // for the two commands where an unverifiable axis must not fail the process:
 // `status` (a script fetching JSON must never fail on "can't check from here")

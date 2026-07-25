@@ -29,7 +29,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -168,8 +167,12 @@ func TestSetupModels_ExplicitPullModels_PullsDeduped(t *testing.T) {
 	if n := w.count("ollama pull"); n != 2 {
 		t.Errorf("total pulls = %d, want 2 distinct tags:\n%v", n, w.calls)
 	}
-	if n := w.count("ollama list"); n != 2 {
-		t.Errorf("`ollama list` ran %d times, want exactly 2 (one probe up front, one verify after pulls):\n%v", n, w.calls)
+	// Three: setupLocalModels probes once up front and verifies once after the
+	// pulls, and setup's VERIFY phase then re-probes from scratch because the
+	// report is a pure function of post-mutation evidence (AC-P0-302) and may
+	// not read back what the mutation believed it did.
+	if n := w.count("ollama list"); n != 3 {
+		t.Errorf("`ollama list` ran %d times, want exactly 3 (probe, post-pull verify, verify phase):\n%v", n, w.calls)
 	}
 	if !strings.Contains(out.String(), "✓ local models") {
 		t.Errorf("summary must report local models ready after verified pulls, got:\n%s", out.String())
@@ -239,8 +242,16 @@ func TestSetupModels_UnverifiableNeverPulled(t *testing.T) {
 	env := modelsSetupEnv(t, w)
 	stubProvisionKeysOK(t)
 	var out bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false); err != nil {
-		t.Fatalf("unverifiable must not fail setup: %v\n%s", err, out.String())
+	// --pull-models is an explicit REQUEST for the model axes, so a run that
+	// cannot verify them has positively failed that request: exit 1
+	// (AC-P0-210). The unverifiable tags are still never pulled, and nothing
+	// is ever called "missing".
+	err := setupHostPhase(env, []string{"--yes", "--pull-models"}, strings.NewReader(""), &out, false)
+	if err == nil {
+		t.Fatalf("--pull-models with Ollama down must fail setup:\n%s", out.String())
+	}
+	if !strings.Contains(err.Error(), "model.watcher") {
+		t.Errorf("the error must name the requested axes that did not end ready, got: %v", err)
 	}
 	if n := w.count("ollama pull"); n != 0 {
 		t.Errorf("unverifiable tags must NEVER be pulled, got %d pulls:\n%v", n, w.calls)
@@ -527,24 +538,6 @@ func TestParseOnboardArgs_PullModels(t *testing.T) {
 	}
 	if !o.pullModels {
 		t.Error("--pull-models must parse")
-	}
-}
-
-// `pi-stack onboard --pull-models` is rejected (exit 2): only setup pulls.
-func TestOnboardRejectsPullModels(t *testing.T) {
-	if os.Getenv("PI_STACK_TEST_ONBOARD_PULL") == "1" {
-		runOnboardCmd([]string{"--pull-models", "--yes"})
-		return
-	}
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestOnboardRejectsPullModels$")
-	cmd.Env = append(os.Environ(), "PI_STACK_TEST_ONBOARD_PULL=1")
-	out, err := cmd.CombinedOutput()
-	ee, ok := err.(*exec.ExitError)
-	if !ok || ee.ExitCode() != 2 {
-		t.Fatalf("want exit 2, got err=%v out=%s", err, out)
-	}
-	if !strings.Contains(string(out), "pi-stack setup") {
-		t.Errorf("rejection must point at `pi-stack setup`, got: %s", out)
 	}
 }
 

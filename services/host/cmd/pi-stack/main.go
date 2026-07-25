@@ -80,12 +80,12 @@ func main() {
 		runServe(args[1:])
 	case "doctor":
 		runDoctorCmd(args[1:])
-	case "onboard":
-		runOnboardCmd(args[1:])
 	case "setup":
-		// Explicit guided onboarding: host phase, then hand off to the in-VM agent.
-		// (`pi-stack run` never onboards on its own; `pi-stack onboard` is the
-		// host-only, no-handoff path for CI.)
+		// Explicit guided onboarding: host phase, then hand off to the in-VM
+		// agent. (`pi-stack run` never onboards on its own; `pi-stack setup
+		// --no-agent` is the host-only, no-handoff path for CI — the `onboard`
+		// verb it replaced is deleted, with no alias: an `onboard` argv takes
+		// the standard unknown-verb path, which suggests `setup` and exits 2.)
 		runSetupCmd(args[1:])
 	case "gworkspace":
 		runGworkspaceCmd(args[1:])

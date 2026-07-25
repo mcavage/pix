@@ -30,7 +30,7 @@ func wantsHelp(argv []string) bool {
 // knownVerbs is the set of top-level verbs, used to suggest a fix when a bare
 // positional (a would-be run DIR) is actually a mistyped verb.
 var knownVerbs = map[string]bool{
-	"help": true, "serve": true, "doctor": true, "onboard": true, "setup": true, "status": true,
+	"help": true, "serve": true, "doctor": true, "setup": true, "status": true,
 	"ls": true, "rm": true,
 	"config": true, "mcp": true, "gworkspace": true, "memory": true, "monitor": true, "knowledge": true,
 	"pack": true, "version": true, "run": true, "secret": true,
@@ -40,9 +40,24 @@ var knownVerbs = map[string]bool{
 	"host": true,
 }
 
-// suggestVerb returns the closest known verb to input within edit distance 2,
-// used to power the did-you-mean hint on an unknown command.
+// retiredVerbs maps a DELETED verb to the command that replaced it. Edit
+// distance cannot find these — `onboard` is nowhere near `setup` — but a user
+// (or a shell history, or a CI script) who types the old name deserves the new
+// one rather than a bare "no command named". The verb itself stays deleted:
+// this is a suggestion on the standard unknown-verb path (exit 2), NOT an
+// alias that keeps the old door open.
+var retiredVerbs = map[string]string{
+	// AC-P0-308: `pi-stack onboard` became `pi-stack setup --no-agent`.
+	"onboard": "setup --no-agent",
+}
+
+// suggestVerb returns the replacement for a retired verb, or else the closest
+// known verb to input within edit distance 2 — the did-you-mean hint on an
+// unknown command.
 func suggestVerb(input string) (string, bool) {
+	if r, ok := retiredVerbs[input]; ok {
+		return r, true
+	}
 	best, bestD := "", 3
 	for v := range knownVerbs {
 		if d := levenshtein(input, v); d < bestD {
@@ -104,7 +119,7 @@ Workflow
 
 Setup & health
   setup               guided onboarding: host config, then agent handoff for a guided tour
-  onboard             host-side config only (flags/CI); no agent handoff
+  setup --no-agent    host-side config only (flags/CI); no sandbox, no handoff
   doctor              diagnose host + sandbox health, print the fix commands
 
 Data
@@ -169,8 +184,6 @@ func verbUsage(verb string) (string, bool) {
 		return rmUsage, true
 	case "doctor":
 		return doctorUsage, true
-	case "onboard":
-		return onboardUsage, true
 	case "setup":
 		return setupUsage, true
 	case "config":
