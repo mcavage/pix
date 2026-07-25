@@ -32,17 +32,10 @@ DEV_SKILLS = --no-skills --skill $(CURDIR)/skills
 # $(PI_STACK_BIN) isn't built — never silently runs with empty config.
 PI_STACK_BIN ?= $(CURDIR)/out/pi-stack
 
-# MCP enablement for `make run` (config.toml `mcp`, `pi-stack config set mcp
-# <name>`). NOTE: `make run` execs `sbx run` DIRECTLY, so MCP_FLAGS attaches every
-# listed server STATICALLY (`--static-mcp <name>`) at sandbox CREATE — the dev
-# flow gets all tools. Every configured server preloads this way, with no
-# eager/lazy or static/dynamic split (the retired `mcp_static`/`mcp_dynamic`
-# knobs are gone): the `pi-stack run` launcher resolves the exact same set via
-# allPreloadedMCP, which is what consumers use. sbx's local data-plane gateway
-# serves them (no SBX_MCP_URL). Attach one to an ALREADY-RUNNING sandbox with
-# `pi-stack mcp load <name>`. `MCP=all` = everything registered.
+# MCP enablement for `make run` comes from config.toml. The target delegates to
+# `pi-stack run --dev`, which leaves registered backends unattached so pi sees
+# only the gateway's compact discovery/execution tools. No static set.
 MCP         ?= $(shell "$(PI_STACK_BIN)" config get mcp 2>/dev/null)
-MCP_FLAGS   = $(foreach server,$(MCP),--static-mcp $(server))
 # The local stdio MCP servers `make mcp-register` can register (the ones you
 # actually use — i.e. those listed in MCP). `slack` is a pi-stack-host subcommand;
 # `gog` is the host-side Google Workspace CLI's MCP mode. Additional integrations
@@ -192,10 +185,7 @@ run: require-launcher ## Launch a pi-stack sandbox NAME. If NAME is stopped it's
 		echo "(sandbox $(NAME) exists [$$status] — recreating; workspace + .pi-sessions persist on the host)"; \
 		sbx rm -f $(NAME) >/dev/null 2>&1 || true; \
 	fi; \
-	TAG=$$(cat out/.local-image-tag 2>/dev/null || true); \
-	[ -n "$$TAG" ] && echo "(new sandbox $(NAME), local build :$$TAG)" || echo "(new sandbox $(NAME), kit-pinned image)"; \
-	mkdir -p .pi-stack && echo "$(OLLAMA_BRIDGE_MODEL)" > .pi-stack/ollama-bridge.model; \
-	exec sbx run pi-stack --name $(NAME) $${TAG:+--template docker.io/$(DOCKER_USER)/pi-stack:$$TAG} --kit $(KIT) $(MCP_FLAGS) . -- $(DEV_SKILLS)
+	exec "$(PI_STACK_BIN)" run . --dev --name "$(NAME)"
 
 # Run the latest PUBLISHED image straight off the git-hosted kit — the true
 # consumer path, no local repo needed. Every push to main auto-publishes a NEW
@@ -257,8 +247,8 @@ mcp-register: require-launcher ## Register the local stdio MCP servers you use (
 		esac; \
 	done
 	@echo "Verify: sbx mcp ls"
-	@echo "Attach: registration is NOT enough — a sandbox gets a server at CREATE via --static-mcp."
-	@echo "        \`make run\` does this for you (MCP=$(MCP) from config.toml, passing --static-mcp for each)."
+	@echo "Runtime: registered backends stay behind the gateway and are discovered/executed on demand."
+	@echo "         \`make run\` exposes only the compact gateway meta-tool surface."
 	@echo "        To attach one to an ALREADY-RUNNING sandbox live (no recreate): pi-stack mcp load <name>"
 	@echo "Note: each server resolves its creds from config/op-refs.env via op run when the gateway spawns it — make sure those refs are filled + valid."
 
@@ -292,7 +282,7 @@ doctor: require-launcher ## Show models + each optional integration: set up? ser
 	model() { command -v ollama >/dev/null 2>&1 && ollama list 2>/dev/null | grep -q "^$$1\b" && echo "pulled" || echo "TODO: ollama pull $$1 (or make pull-models)"; }; \
 	echo "Config (config.toml via 'pi-stack config get' — the single source of truth):"; \
 	printf "  %-9s %s\n" "SERVICES" "$(SERVICES)   (make serve runs these)"; \
-	printf "  %-9s %s\n" "MCP"      "$(if $(strip $(MCP)),$(MCP),<empty: none configured>)   (configured MCPs preload at sandbox creation via make run)"; \
+	printf "  %-9s %s\n" "MCP"      "$(if $(strip $(MCP)),$(MCP),<empty: none configured>)   (registered; gateway discovers/executes on demand)"; \
 	echo ""; \
 	echo "Models / providers (proxy-injected, never in the VM):"; \
 	printf "  %-9s %s\n" "anthropic" "$$(sset anthropic)"; \

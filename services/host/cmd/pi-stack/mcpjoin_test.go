@@ -46,20 +46,14 @@ func TestJoinMCPSandboxRow_PartialReceipt(t *testing.T) {
 	}
 
 	other := joinMCPSandboxRow("gog", mcpRegYes, box, r, sandboxMCPStateOK)
-	if other.State != mcpJoinUnverifiable {
-		t.Errorf("unlisted name on a partial receipt: state = %q, want %q", other.State, mcpJoinUnverifiable)
-	}
-	if !strings.Contains(other.Evidence, "partial") {
-		t.Errorf("evidence should say the receipt is partial, got %q", other.Evidence)
-	}
-	if !strings.Contains(other.Evidence, "pi-stack mcp load gog") {
-		t.Errorf("evidence should carry the attach guidance, got %q", other.Evidence)
+	if other.State != mcpJoinAvailableOnDemand {
+		t.Errorf("unlisted name on a partial receipt: state = %q, want %q", other.State, mcpJoinAvailableOnDemand)
 	}
 
-	// A FULL receipt keeps the positive registered-not-attached answer.
+	// A FULL receipt also leaves the backend available on demand.
 	full := joinMCPSandboxRow("gog", mcpRegYes, box, okReceipt(box, nil, "slack"), sandboxMCPStateOK)
-	if full.State != mcpJoinRegisteredNotAttached {
-		t.Errorf("unlisted name on a full receipt: state = %q, want %q", full.State, mcpJoinRegisteredNotAttached)
+	if full.State != mcpJoinAvailableOnDemand {
+		t.Errorf("unlisted name on a full receipt: state = %q, want %q", full.State, mcpJoinAvailableOnDemand)
 	}
 }
 
@@ -79,20 +73,14 @@ func TestJoinMCPSandboxRowStates(t *testing.T) {
 			mcpJoinPreloaded, "preloaded by pi-stack at create"},
 		{"loaded", mcpRegYes, okReceipt(box, nil, "slack"), sandboxMCPStateOK,
 			mcpJoinLoaded, "loaded by pi-stack"},
-		{"registered-not-attached", mcpRegYes, okReceipt(box, []string{"notion"}), sandboxMCPStateOK,
-			mcpJoinRegisteredNotAttached, "no receipt entry"},
+		{"available-on-demand", mcpRegYes, okReceipt(box, []string{"notion"}), sandboxMCPStateOK,
+			mcpJoinAvailableOnDemand, "mcp-find/mcp-exec"},
 		{"not-registered", mcpRegNo, okReceipt(box, nil), sandboxMCPStateOK,
 			mcpJoinNotRegistered, "not in `sbx mcp ls`"},
-		{"unverifiable: receipt absent", mcpRegYes, nil, sandboxMCPStateAbsent,
-			mcpJoinUnverifiable, "receipt absent"},
-		{"unverifiable: receipt corrupt", mcpRegYes, nil, sandboxMCPStateCorrupt,
-			mcpJoinUnverifiable, "receipt corrupt"},
-		{"unverifiable: schema mismatch", mcpRegYes, nil, sandboxMCPStateSchemaMismatch,
-			mcpJoinUnverifiable, "receipt schema-mismatch"},
-		{"unverifiable: identity mismatch", mcpRegYes, nil, sandboxMCPStateIdentityMismatch,
-			mcpJoinUnverifiable, "receipt identity-mismatch"},
-		{"unverifiable: receipt unreadable", mcpRegYes, nil, sandboxMCPStateUnreadable,
-			mcpJoinUnverifiable, "receipt unreadable"},
+		{"available: receipt absent", mcpRegYes, nil, sandboxMCPStateAbsent,
+			mcpJoinAvailableOnDemand, "mcp-find/mcp-exec"},
+		{"available: receipt corrupt", mcpRegYes, nil, sandboxMCPStateCorrupt,
+			mcpJoinAvailableOnDemand, "mcp-find/mcp-exec"},
 		{"unverifiable: registration listing unavailable", mcpRegUnknown, okReceipt(box, nil), sandboxMCPStateOK,
 			mcpJoinUnverifiable, "registration listing unavailable"},
 	}
@@ -167,15 +155,17 @@ func TestJoinPositiveReceiptSurvivesUnknownRegistration(t *testing.T) {
 	}
 }
 
-// TestJoinUnverifiableCarriesRepairGuidance: an unverifiable receipt row
-// carries the exact evidence-producing commands (`pi-stack mcp load` /
-// `pi-stack run --replace`) — guidance, never a claim.
-func TestJoinUnverifiableCarriesRepairGuidance(t *testing.T) {
+// TestJoinRegisteredIgnoresLegacyReceiptGaps: dynamic gateway discovery does
+// not depend on the legacy sandbox preload receipt. A registered server stays
+// available on demand whether that receipt is absent or corrupt.
+func TestJoinRegisteredIgnoresLegacyReceiptGaps(t *testing.T) {
 	for _, rstatus := range []sandboxMCPStateStatus{sandboxMCPStateAbsent, sandboxMCPStateCorrupt} {
 		row := joinMCPSandboxRow("slack", mcpRegYes, "pi-stack-proj", nil, rstatus)
-		if !strings.Contains(row.Evidence, "pi-stack mcp load slack") ||
-			!strings.Contains(row.Evidence, "pi-stack run --replace") {
-			t.Errorf("%s: evidence missing repair guidance: %q", rstatus, row.Evidence)
+		if row.State != mcpJoinAvailableOnDemand {
+			t.Errorf("%s: state = %q, want %q", rstatus, row.State, mcpJoinAvailableOnDemand)
+		}
+		if strings.Contains(row.Evidence, "pi-stack mcp load") || strings.Contains(row.Evidence, "pi-stack run --replace") {
+			t.Errorf("%s: dynamic discovery must not prescribe preload repair: %q", rstatus, row.Evidence)
 		}
 	}
 }
@@ -192,7 +182,7 @@ func TestJoinMCPSandboxRowsOrderAndFanout(t *testing.T) {
 		return mcpRegYes
 	}
 	rows := joinMCPSandboxRows([]string{"gog", "slack", "notion", "linear"}, reg, box, receipt, sandboxMCPStateOK)
-	want := []string{mcpJoinPreloaded, mcpJoinLoaded, mcpJoinRegisteredNotAttached, mcpJoinNotRegistered}
+	want := []string{mcpJoinPreloaded, mcpJoinLoaded, mcpJoinAvailableOnDemand, mcpJoinNotRegistered}
 	if len(rows) != len(want) {
 		t.Fatalf("rows = %+v, want %d", rows, len(want))
 	}

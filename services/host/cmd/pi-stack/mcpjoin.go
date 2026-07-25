@@ -81,10 +81,10 @@ const (
 	// (appendLoadReceipt). A positive receipt claim; same precedence as
 	// mcpJoinPreloaded.
 	mcpJoinLoaded = "loaded"
-	// mcpJoinRegisteredNotAttached: registered with the gateway, and a VALID
-	// receipt for this sandbox exists but has no entry for this server —
-	// pi-stack positively has no record of ever attaching it here.
-	mcpJoinRegisteredNotAttached = "registered-not-attached"
+	// mcpJoinAvailableOnDemand is the normal compact-context state: the
+	// backend is registered with the gateway but its schemas are not expanded
+	// into pi's direct tool table. mcp-find/mcp-exec reach it on demand.
+	mcpJoinAvailableOnDemand = "available-on-demand"
 	// mcpJoinNotRegistered: a successful `sbx mcp ls` positively lacks the
 	// name, AND the receipt has no positive claim for it either. A stale
 	// receipt whose Preloaded/Loads DOES name it never reaches this state —
@@ -190,25 +190,11 @@ func joinMCPSandboxRow(name string, reg mcpRegEvidence, sandbox string, receipt 
 		row.Evidence = "registration listing unavailable (`sbx mcp ls`)"
 		return row
 	}
-	// Registered (mcpRegYes), no positive claim. Attachment provenance may
-	// come ONLY from a valid receipt.
-	if rstatus.Unverifiable() {
-		row.State = mcpJoinUnverifiable
-		row.Evidence = "receipt " + rstatus.String() + "; " + mcpAttachGuidance(name)
-		return row
-	}
-	if rstatus == sandboxMCPStateAbsent {
-		row.State = mcpJoinUnverifiable
-		row.Evidence = "receipt absent; " + mcpAttachGuidance(name)
-		return row
-	}
-	if receipt.IsPartial() {
-		row.State = mcpJoinUnverifiable
-		row.Evidence = "receipt is partial (load-only, no create record) — preload state unknown; " + mcpAttachGuidance(name)
-		return row
-	}
-	row.State = mcpJoinRegisteredNotAttached
-	row.Evidence = "no receipt entry; " + mcpAttachGuidance(name)
+	// Registered with no positive attachment claim is the desired state. The
+	// receipt's absence/shape is irrelevant because we are proving registration,
+	// not trying to prove a direct attachment that should not exist.
+	row.State = mcpJoinAvailableOnDemand
+	row.Evidence = "registered behind gateway; discover/execute with mcp-find/mcp-exec"
 	return row
 }
 

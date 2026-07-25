@@ -49,23 +49,19 @@ Never pull from only the first provider and stop. The point of the list is bread
 
 ## Resolving an `mcp` capability
 
-1. **Is the tool already in your session?** Every configured MCP server is
-   preloaded at sandbox CREATE (`--static-mcp`), so a wired capability's tools
-   are normally already live. If so, just call them.
-2. **If not present, you cannot discover or attach it yourself.** There is no
-   agent-side MCP discovery or dynamic add — a session only ever sees the
-   servers preloaded at create, or explicitly loaded into it. Report the gap
-   plainly ("the `<name>` MCP server isn't attached to this sandbox") and give
-   the user the exact fix:
-   - **Existing sandbox:** `pi-stack mcp load <name> [DIR]` attaches it live.
-   - **Fresh/preloaded context:** `pi-stack run --replace` recreates the
-     sandbox with the configured pack/MCP set preloaded.
-   Do not claim you can load or discover it yourself, and do not guess at a
-   server name that isn't in the registry.
-3. **Bootstrap from the server's own guide** when one exists (some servers expose a
+1. **Keep backend tools out of the direct session table.** A normal pi-stack
+   session exposes the gateway's compact `mcp-find`/`mcp-exec` surface, not all
+   tools from every registered backend.
+2. **Discover on demand.** Use `mcp-find` for the requested capability, then
+   invoke the selected operation with `mcp-exec`. Do not ask the user to load a
+   whole backend merely to call one tool.
+3. **If discovery finds nothing**, report that the capability is not registered
+   or permitted. Host-side registration remains `pi-stack mcp register`,
+   `pi-stack mcp bundle`, or the relevant pack setup.
+4. **Bootstrap from the server's own guide** when one exists (some servers expose a
    `*__get-usage-guide` tool). Call it once before a complex pull so you use the
    right tools with the right arguments.
-4. **Call the tools.** Use `mcp-exec` for tools not in your static list (including
+5. **Call the tools.** Use `mcp-exec` for backend tools (including
    anything `code-mode` created).
 
 ## Joins and multi-tool pulls: use `code-mode`

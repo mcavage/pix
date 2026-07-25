@@ -178,7 +178,7 @@ func runConfigWrite(unset bool, argv []string) {
 const configKeysHelp = `keys:
   gog_account <email>       Google Workspace account for the gog MCP server
   mcp <server>              add/remove an MCP server in the mcp list; every
-                            configured server preloads at sandbox create
+                            registered server is available on demand
   services <name>           add/remove a host service in the services list
   knowledge_bundles <dir>   add/remove an OKF knowledge bundle dir (set also
                             enables the knowledge service)

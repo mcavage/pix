@@ -172,8 +172,8 @@ commands:
     # integration, so nothing auto-wires the gateway — the pi-mcp-adapter reads
     # ~/.pi/agent/mcp.json, so we write the gateway there (HTTP StreamableHTTP +
     # the sentinel bearer the egress proxy swaps for the real token). Without this
-    # pi sees ZERO MCP: no MCP tools until configured servers are statically
-    # preloaded (at sandbox create) or explicitly loaded (`pi-stack mcp load`).
+    # With no static/live-loaded backends, pi sees only the gateway's compact
+    # discovery/execution meta-tools and reaches registered servers on demand.
     # Guarded on MCP_GATEWAY_URL so a non-Docker host (no gateway) stays MCP-empty.
     # (Mirrors the claude/codex/gemini/kiro/opencode kits — see the sandboxes repo
     # docs/runbooks/mcp-gateway-registration.md.)

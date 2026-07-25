@@ -529,28 +529,25 @@ func parseGogCommandJSON(env shellEnv, out string) ([]string, bool) {
 	return nil, false
 }
 
-// gogAttachCheck is check 5: gog's sandbox attachment. With a workspace
-// sandbox context it is the SAME receipt-backed join row every other MCP
-// server gets (mcpAttachCheck -> joinMCPSandboxRow): preloaded/loaded receipt
-// claims render ready; a registered server a COMPLETE valid receipt has no
-// entry for is a verified registered-not-attached TODO (a sandbox created
-// BEFORE gog was configured is NOT attached just because cfg now names it);
-// everything else stays unverifiable. Without a sandbox context, config
-// membership is stated as INTENT (preloads at the next create) — an
-// informational note, never a ready attachment claim.
+// gogAttachCheck reports a legacy/explicit direct attachment when receipted;
+// otherwise registration is the desired on-demand state.
 func gogAttachCheck(cfg *config.Config, ctx mcpSandboxContext, reg mcpRegEvidence) check {
-	if ctx.mode == mcpAttachReceipt {
+	if ctx.mode == mcpAttachReceipt && receiptClaim(ctx.receipt, ctx.status, "gog") != "" {
 		return mcpAttachCheck("gog", ctx, reg)
 	}
 	if mcpConfigured(cfg, "gog") {
-		det := "in the configured MCP set — preloads at sandbox create (intent, not attachment)"
-		if ctx.mode == mcpAttachSandboxAbsent {
-			det = "sandbox " + ctx.sandbox + " not created yet — gog preloads at `pi-stack run` create"
-		} else if ctx.note != "" {
-			det = ctx.note + " — attachment cannot be reported"
+		switch reg {
+		case mcpRegYes:
+			return check{label: "gateway", verdict: verdictReady,
+				detail: "registered; available on demand via mcp-find/mcp-exec"}
+		case mcpRegNo:
+			return check{label: "gateway", verdict: verdictUnverifiable,
+				detail: "configured but not registered; registration check above has the repair"}
+		default:
+			return check{label: "gateway", verdict: verdictUnverifiable,
+				detail: "registration unavailable; on-demand availability unverified"}
 		}
-		return check{label: "attached", note: true, verdict: verdictUnverifiable, detail: det}
 	}
-	return check{label: "attached", note: true, verdict: verdictUnverifiable,
-		detail: "run `pi-stack config set mcp gog` to attach it"}
+	return check{label: "gateway", note: true, verdict: verdictUnverifiable,
+		detail: "run `pi-stack config set mcp gog` to enable on-demand discovery"}
 }

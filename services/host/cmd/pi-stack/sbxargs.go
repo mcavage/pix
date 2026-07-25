@@ -45,8 +45,8 @@ type runOpts struct {
 	Template      string   // --template REF: explicit image override (e.g. the full ref `make load` prints). Works from ANY directory — no checkout needed — and takes precedence over the auto LocalImageTag pin.
 	Skills        []string // --skills DIR: extra live skill trees
 	Kits          []string // --kit K: escape-hatch kit(s). When present they REPLACE the auto git/local pin (a user override), then config stack applies.
-	MCP           []string // --mcp M: extra MCP servers on top of config.MCP (folded into StaticMCP by the caller)
-	StaticMCP     []string // RESOLVED set to attach at create (emitted as --static-mcp); the caller computes it from cfg.MCP+MCP via allPreloadedMCP — S01: every configured/pack server preloads, no eager/lazy split
+	MCP           []string // --mcp M: extra declared server intent on top of config.MCP
+	StaticMCP     []string // legacy test/input field; intentionally never emitted
 	Name          string   // --name N: sandbox name
 	Model         string   // --model M: active pi model (passed through to pi)
 	Intent        string   // --intent NAME: resolve the session model via the router (unless --model overrides)
@@ -164,15 +164,9 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 		args = append(args, "--kit", k)
 	}
 
-	// MCP servers: emit --static-mcp for every preloaded server (o.StaticMCP,
-	// computed by the caller via allPreloadedMCP — S01: all configured/pack
-	// servers preload, no eager/lazy split). sbx's flag is --static-mcp (the
-	// fixed set chosen at CREATE; can't change on re-attach). The local
-	// data-plane gateway serves them with no SBX_MCP_URL. Attach one to an
-	// ALREADY-RUNNING sandbox live (no recreate) with `pi-stack mcp load`.
-	for _, m := range o.StaticMCP {
-		args = append(args, "--static-mcp", m)
-	}
+	// MCP servers are intentionally not attached at creation. The mcp.json
+	// connection exposes only the gateway's compact discovery/execution surface;
+	// the agent reaches registered backends on demand through mcp-find/mcp-exec.
 
 	// The default path forwards NO credential bearer: gog authenticates on the
 	// host inside the gateway-spawned MCP server, so nothing needs injecting. If a

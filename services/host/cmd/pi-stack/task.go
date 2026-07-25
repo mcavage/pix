@@ -1224,11 +1224,6 @@ func launchTask(o runOpts) error {
 	writePackContextFiles(cfg, o, effectivePack)
 	writeSandboxPackMarker(o.Workspace, effectivePack)
 
-	// Resolve every configured MCP server to attach at create (--static-mcp).
-	// S01: all of them preload. A task is always a fresh create, so it's always
-	// needed.
-	o.StaticMCP = allPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
-
 	args := buildSbxArgs(cfg, o, version)
 	if os.Getenv("PI_STACK_DEBUG") != "" {
 		fmt.Fprintln(os.Stderr, "+ sbx "+strings.Join(args, " "))
@@ -1244,7 +1239,7 @@ func launchTask(o runOpts) error {
 	// A *receiptRecordError here reaches `task new`'s error report as-is — the
 	// sandbox probe there reads running/stopped, so the clone is kept and the
 	// honest "created but unrecorded" message is printed, never a rollback.
-	return execSbxRunAndRecordCreate(cmd, true, o.Name, canonicalWorkspacePath(o.Workspace), o.StaticMCP)
+	return execSbxRunAndRecordCreate(cmd, true, o.Name, canonicalWorkspacePath(o.Workspace), nil)
 }
 
 // ---------------------------------------------------------------------------

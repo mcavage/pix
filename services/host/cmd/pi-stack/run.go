@@ -216,13 +216,6 @@ func runRun(argv []string) {
 		}
 	}
 
-	// Resolve every configured MCP server to attach at create (--static-mcp).
-	// S01: all of them preload — no more eager/lazy split. Only needed on a
-	// create — a re-attach never sends --static-mcp.
-	if willCreate(state, o.Replace) {
-		o.StaticMCP = allPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
-	}
-
 	plan := planSandboxLaunch(state, o.Replace, cfg, o, version)
 	if plan.Err != nil {
 		// Fail closed BEFORE any output claims a replace/create/reattach is
@@ -247,14 +240,9 @@ func runRun(argv []string) {
 	if msg := stalePackReattachWarning(cfg, o, plan.Reattach); msg != "" {
 		fmt.Fprintln(os.Stderr, msg)
 	}
-	// Product gap #2: reattach honesty. Separate from stalePackReattachWarning
-	// (which only speaks to skills/bin drift from a pack switch). This checks
-	// MCP attachment PRECISELY, via the launcher's own receipt, regardless of
-	// WHY a desired server might not be attached (config change, pack change,
-	// explicit --mcp, or no receipt at all). Never auto-loads, only reports.
-	if msg := mcpReattachWarning(cfg, o, plan.Reattach); msg != "" {
-		fmt.Fprintln(os.Stderr, msg)
-	}
+	// MCP backends remain registered but unattached; the in-session gateway
+	// meta-tools discover and execute them on demand. Pack skills, bin wrappers,
+	// and kits remain create-time facets and retain their warning.
 	if plan.RmFirst {
 		if err := applyReplaceRm(defaultShellEnv(), plan, o.Name); err != nil {
 			fmt.Fprintf(os.Stderr, "pi-stack run: %v\n", err)
@@ -349,7 +337,7 @@ func runRun(argv []string) {
 	// re-attach must never write a fresh create receipt over one), record the
 	// create receipt ONLY after this exact `sbx run` exec has itself succeeded
 	// — never before, never on failure, never on reattach.
-	if err := execSbxRunAndRecordCreate(cmd, definitelyCreating(state, o.Replace), o.Name, canonicalWorkspacePath(o.Workspace), o.StaticMCP); err != nil {
+	if err := execSbxRunAndRecordCreate(cmd, definitelyCreating(state, o.Replace), o.Name, canonicalWorkspacePath(o.Workspace), nil); err != nil {
 		var rerr *receiptRecordError
 		if errors.As(err, &rerr) {
 			// The sandbox itself WAS created successfully — only the local
@@ -357,7 +345,7 @@ func runRun(argv []string) {
 			// failed, but still exit non-zero: doctor/status must not be told
 			// this sandbox's MCP set is recorded when it isn't.
 			fmt.Fprintf(os.Stderr, "pi-stack run: %v\n", rerr)
-			fmt.Fprintln(os.Stderr, "the sandbox itself launched fine; only pi-stack's local record of its preloaded MCP set failed to write. Check state-dir permissions and re-run `pi-stack doctor`.")
+			fmt.Fprintln(os.Stderr, "the sandbox itself launched fine; an MCP attachment receipt failed to write. Check state-dir permissions and re-run `pi-stack doctor`.")
 			os.Exit(1)
 		}
 		if exit, ok := err.(*exec.ExitError); ok {
@@ -408,12 +396,9 @@ func sandboxAppeared(st sbxState) bool { return st == sbxRunning || st == sbxSto
 
 // recordCreateReceipt commits the create receipt for sandbox — called ONLY by
 // execSbxRunAndRecordCreate, once its creation-evidence poll has positively
-// seen run.go's OWN `sbx run` create appear. preloaded is the EXACT
-// --static-mcp set that launch emitted (o.StaticMCP:
-// allPreloadedMCP(cfg.MCP+o.MCP), which already folds in every
-// active/transient pack integration's MCP server — applyPackToLaunch runs
-// before this set is computed), so a receipt read later never disagrees with
-// what create actually requested. merge=true (the normal path: the
+// seen run.go's OWN `sbx run` create appear. New launches pass an empty
+// preloaded set; the field remains only for compatibility with receipts from
+// older static-preload launches. merge=true (the normal path: the
 // pre-create clear succeeded) preserves loads a concurrent `pi-stack mcp
 // load` appended during the create window; merge=false (the clear could not
 // be proven) replaces outright so a prior lifetime's loads can never survive.
@@ -643,7 +628,7 @@ func desiredMCPUniverse(cfg *config.Config, o runOpts) []string {
 		}
 	}
 	names = append(names, o.MCP...)
-	return allPreloadedMCP(names)
+	return desiredMCPNames(names)
 }
 
 // mcpLoadCommand returns the exact `pi-stack mcp load NAME [WORKSPACE]`

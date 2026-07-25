@@ -303,16 +303,10 @@ func TestGogAttachCheckUsesReceiptJoin(t *testing.T) {
 		return mcpSandboxContext{mode: mcpAttachReceipt, sandbox: box, workspace: ws, receipt: receipt, status: status}
 	}
 
-	t.Run("configured AFTER create -> registered-not-attached TODO, never ready", func(t *testing.T) {
-		// The sandbox's complete valid receipt has NO gog entry: cfg naming
-		// gog is intent, not attachment — a verified optional TODO with the
-		// exact live-attach command.
+	t.Run("configured after create -> available on demand", func(t *testing.T) {
 		c := gogAttachCheck(cfg, receiptCtx(t, []string{"slack"}), mcpRegYes)
-		if c.result() != verdictTodo {
-			t.Fatalf("check = %+v, want a verified registered-not-attached todo", c)
-		}
-		if want := "pi-stack mcp load gog " + ws; c.todo != want {
-			t.Fatalf("todo = %q, want %q", c.todo, want)
+		if c.result() != verdictReady || !strings.Contains(c.detail, "available on demand") {
+			t.Fatalf("check = %+v, want registration-backed on-demand readiness", c)
 		}
 	})
 
@@ -323,13 +317,10 @@ func TestGogAttachCheckUsesReceiptJoin(t *testing.T) {
 		}
 	})
 
-	t.Run("no sandbox context -> config membership is intent, never ready", func(t *testing.T) {
+	t.Run("no sandbox context -> registration proves on-demand readiness", func(t *testing.T) {
 		c := gogAttachCheck(cfg, noCtx, mcpRegYes)
-		if c.result() == verdictReady {
-			t.Fatalf("check = %+v — config membership alone must never render ready", c)
-		}
-		if !c.note || !strings.Contains(c.detail, "intent") {
-			t.Fatalf("check = %+v, want an intent-labeled note", c)
+		if c.result() != verdictReady || !strings.Contains(c.detail, "available on demand") {
+			t.Fatalf("check = %+v, want registration-backed on-demand readiness", c)
 		}
 	})
 }
@@ -422,32 +413,30 @@ func TestStatusHeadlineUnverifiableRows(t *testing.T) {
 		},
 		"absent receipt": func(t *testing.T, stateDir string) { /* nothing recorded */ },
 	} {
-		t.Run(name+" -> unverifiable row blocks all-systems-go without a false TODO", func(t *testing.T) {
+		t.Run(name+" -> registration still proves on-demand availability", func(t *testing.T) {
 			stateDir := t.TempDir()
 			plant(t, stateDir)
 			env := statusReceiptEnv(t, stateDir)
 			st := gatherStatus(cfg, "default", env)
 			if len(st.Todos) != 0 {
-				t.Fatalf("an unverifiable row must not fabricate a TODO, got %v", st.Todos)
+				t.Fatalf("on-demand availability must not fabricate a TODO, got %v", st.Todos)
 			}
-			// JSON stays the row truth: the row itself reads unverifiable.
+			// Receipt quality cannot negate current host registration when direct
+			// attachment is neither required nor desired.
 			found := false
 			for _, r := range st.MCPRows {
-				if r.Name == "gog" && r.Sandbox == "pi-stack-proj" && r.State == mcpJoinUnverifiable {
+				if r.Name == "gog" && r.Sandbox == "pi-stack-proj" && r.State == mcpJoinAvailableOnDemand {
 					found = true
 				}
 			}
 			if !found {
-				t.Fatalf("expected an unverifiable gog row, got %+v", st.MCPRows)
+				t.Fatalf("expected an available-on-demand gog row, got %+v", st.MCPRows)
 			}
 			var out bytes.Buffer
 			renderStatus(cfg, "default", env, &out, false)
 			s := out.String()
-			if strings.Contains(s, "all systems go") {
-				t.Errorf("unverifiable rows must prevent the all-systems-go headline:\n%s", s)
-			}
-			if !strings.Contains(s, "unverifiable") || !strings.Contains(s, "nothing outstanding") {
-				t.Errorf("headline should say some checks are unverifiable without calling them failed:\n%s", s)
+			if !strings.Contains(s, "all systems go") {
+				t.Errorf("registered on-demand backend should keep the green headline:\n%s", s)
 			}
 		})
 	}

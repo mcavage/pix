@@ -321,38 +321,30 @@ func TestBuildSbxArgs_StackWithoutOverride(t *testing.T) {
 
 func TestBuildSbxArgs_MCPExpansion(t *testing.T) {
 	cfg := &config.Config{}
-	// buildSbxArgs emits --static-mcp for the PRELOADED set (o.StaticMCP); the
-	// caller computes it via allPreloadedMCP. The sbx local gateway serves them,
-	// no SBX_MCP_URL.
-	args := buildSbxArgs(cfg, runOpts{Workspace: ".", StaticMCP: []string{"slack", "notion", "linear"}}, "0.0.99")
+	args := buildSbxArgs(cfg, runOpts{Workspace: ".", MCP: []string{"slack", "notion", "linear"}}, "0.0.99")
 
-	if got := countFlag(args, "--static-mcp"); got != 3 {
-		t.Errorf("expected 3 --static-mcp flags, got %d in %v", got, args)
+	if got := countFlag(args, "--static-mcp"); got != 0 {
+		t.Errorf("dynamic MCP must emit no --static-mcp flags, got %d in %v", got, args)
 	}
 	if got := countFlag(args, "--mcp"); got != 0 {
 		t.Errorf("must emit --static-mcp, never the removed --mcp; got %d in %v", got, args)
-	}
-	for _, m := range []string{"slack", "notion", "linear"} {
-		if !contains(args, []string{"--static-mcp", m}) {
-			t.Errorf("--static-mcp %s missing from %v", m, args)
-		}
 	}
 }
 
 // allPreloadedMCP: S01 — every configured server preloads, no eager/lazy
 // split. It is pure list hygiene: dedupe + drop empties, order preserved.
-func TestAllPreloadedMCP(t *testing.T) {
-	if got := allPreloadedMCP(nil); len(got) != 0 {
-		t.Errorf("allPreloadedMCP(nil) = %v, want none", got)
+func TestDesiredMCPNames(t *testing.T) {
+	if got := desiredMCPNames(nil); len(got) != 0 {
+		t.Errorf("desiredMCPNames(nil) = %v, want none", got)
 	}
-	got := allPreloadedMCP([]string{"gog", "slack", "notion", "slack", "", "atlassian"})
+	got := desiredMCPNames([]string{"gog", "slack", "notion", "slack", "", "atlassian"})
 	want := []string{"gog", "slack", "notion", "atlassian"}
 	if len(got) != len(want) {
-		t.Fatalf("allPreloadedMCP = %v, want %v", got, want)
+		t.Fatalf("desiredMCPNames = %v, want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Errorf("allPreloadedMCP = %v, want %v", got, want)
+			t.Errorf("desiredMCPNames = %v, want %v", got, want)
 		}
 	}
 }
@@ -388,7 +380,7 @@ func TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded(t *testing.T) {
 	if !containsStr(cfg.MCP, "fastmail") || !containsStr(cfg.MCP, "notion") {
 		t.Errorf("cfg.MCP = %v, want it to contain both integration servers (every pack integration preloads)", cfg.MCP)
 	}
-	if got := allPreloadedMCP(cfg.MCP); len(got) != len(cfg.MCP) {
+	if got := desiredMCPNames(cfg.MCP); len(got) != len(cfg.MCP) {
 		t.Errorf("every entry in cfg.MCP should be in the preload set, got %v vs %v", got, cfg.MCP)
 	}
 

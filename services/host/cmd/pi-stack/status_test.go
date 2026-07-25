@@ -71,15 +71,12 @@ func TestRenderStatusHuman(t *testing.T) {
 	var out bytes.Buffer
 	renderStatus(cfg, "default", fakeStatusEnv(), &out, false)
 	s := out.String()
-	// anthropic+openai present already satisfies core model readiness (finding
-	// #3), so this fixture has nothing OUTSTANDING — but its sandboxes' MCP
-	// rows are unverifiable (no receipt state dir in the fake env), and an
-	// unverifiable row must prevent the "all systems go" headline without
-	// becoming a false TODO (redrive finding 5).
-	if strings.Contains(s, "all systems go") {
-		t.Errorf("unverifiable mcp rows must prevent the all-systems-go headline:\n%s", s)
+	// Registered MCP servers are available through dynamic gateway discovery;
+	// no legacy preload receipt is required for readiness.
+	if !strings.Contains(s, "all systems go") {
+		t.Errorf("dynamic MCP availability should permit the all-systems-go headline:\n%s", s)
 	}
-	for _, want := range []string{"pi-stack", "services", "memory ✓", "knowledge ✗", "nothing outstanding, but", "unverifiable (not failed"} {
+	for _, want := range []string{"pi-stack", "services", "memory ✓", "knowledge ✗", "available on demand"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("status output missing %q:\n%s", want, s)
 		}
@@ -588,15 +585,10 @@ func TestStatusMCPLoadTodoQuotesWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := gatherStatus(cfg, "default", env)
-	var td string
 	for _, tdo := range st.Todos {
 		if strings.HasPrefix(tdo, "pi-stack mcp load") {
-			td = tdo
+			t.Errorf("available-on-demand backend must not produce load TODO: %q", tdo)
 		}
-	}
-	want := "pi-stack mcp load " + shellQuoteArg("slack") + " " + shellQuoteArg(ws)
-	if td != want {
-		t.Errorf("todo = %q, want %q", td, want)
 	}
 }
 

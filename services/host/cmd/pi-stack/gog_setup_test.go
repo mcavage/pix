@@ -717,9 +717,8 @@ func TestGogSetup_NonInteractiveMissingAccountFails(t *testing.T) {
 	}
 }
 
-// (S07: every configured MCP server preloads at sandbox CREATE — there is no
-// static/dynamic attach split any more, so the guidance names the preload +
-// the live `mcp load` path.)
+// Every configured MCP server loads dynamically during pi-stack run; explicit
+// `mcp load` remains the immediate manual path.
 func TestGogSetup_PrintsAttachModeGuidance(t *testing.T) {
 	gogSetupTestCfg(t)
 	cred := gogCredFile(t)
@@ -737,11 +736,11 @@ func TestGogSetup_PrintsAttachModeGuidance(t *testing.T) {
 	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("gogSetup: %v", err)
 	}
-	if !strings.Contains(out.String(), "preloads it") {
-		t.Errorf("expected the preload-at-create note, got %q", out.String())
+	if !strings.Contains(out.String(), "on-demand discovery and execution") {
+		t.Errorf("expected the on-demand gateway note, got %q", out.String())
 	}
-	if !strings.Contains(out.String(), "pi-stack mcp load gog") {
-		t.Errorf("expected the mcp load follow-up, got %q", out.String())
+	if strings.Contains(out.String(), "pi-stack mcp load gog") {
+		t.Errorf("setup must not recommend expanding gog into the direct tool table: %q", out.String())
 	}
 }
 
