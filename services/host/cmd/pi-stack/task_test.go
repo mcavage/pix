@@ -823,8 +823,9 @@ func TestGatherTaskState_StatusFailIsUnknown(t *testing.T) {
 // stored profile is INVALID (no current-profile fallback) ---------------------
 
 func TestHardenTaskMeta_UsesStoredProfileNotCurrent(t *testing.T) {
-	// A task created under profile "work" must keep targeting its -work sandbox
-	// even when the currently active profile has since switched to default.
+	// A task created under an old, named profile "work" must still harden cleanly
+	// (an OLDER meta may carry a real profile name); hardenTaskMeta never reads it
+	// back off the current environment.
 	m := taskMeta{Name: "work", Profile: "work"}
 	hardened, err := hardenTaskMeta(m, "/main", "abcd1234", false, "work")
 	if err != nil {
@@ -837,14 +838,17 @@ func TestHardenTaskMeta_UsesStoredProfileNotCurrent(t *testing.T) {
 	if !strings.HasSuffix(hardened.Sandbox, "-work") {
 		t.Errorf("sandbox %q lost its -work profile suffix", hardened.Sandbox)
 	}
-	// A meta with no stored profile is INVALID: guessing the current profile could
-	// mis-target the sandbox (rm dropping a clone while its real sandbox lives on),
-	// so harden refuses rather than derive a name.
-	old := taskMeta{Name: "work"}
-	if _, err := hardenTaskMeta(old, "/main", "abcd1234", false, "work"); err == nil {
-		t.Error("a meta with no stored profile must be rejected as invalid, not fall back")
-	} else if !strings.Contains(err.Error(), "no profile") {
-		t.Errorf("error = %q, want a no-profile explanation", err)
+	// AC-P0-008: a meta with NO stored profile (what the current writer always
+	// produces, since profiles were removed) must harden cleanly too, not be
+	// rejected as invalid — that rejection was the actual bug, hiding every task
+	// the real writer creates.
+	current := taskMeta{Name: "work"}
+	hardened, err = hardenTaskMeta(current, "/main", "abcd1234", false, "work")
+	if err != nil {
+		t.Fatalf("harden of an empty-profile meta must succeed, got: %v", err)
+	}
+	if hardened.Sandbox == "" {
+		t.Error("empty-profile meta hardened to an empty sandbox name")
 	}
 }
 
@@ -895,6 +899,128 @@ func TestRunTaskLs_UnknownStateSurfaced(t *testing.T) {
 	js := captureStdout(t, func() { runTaskLs(env, []string{"--json"}) })
 	if !strings.Contains(js, "\"unknown\": true") {
 		t.Errorf("json ls did not serialize unknown:true:\n%s", js)
+	}
+}
+
+// captureStderr runs fn with os.Stderr swapped for a pipe and returns whatever
+// fn wrote, mirroring captureStdout (state_test.go).
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	rp, wp, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = wp
+	fn()
+	_ = wp.Close()
+	os.Stderr = old
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(rp)
+	return buf.String()
+}
+
+// --- AC-P0-008/009: `task ls` must never hide a row because the real writer's
+// own metadata disagrees with what the harden guard expects. Profiles were
+// removed (loadResolvedConfig always returns "" now, see profile.go), so every
+// task the CURRENT `task new` writes stores an empty profile; hardenTaskMeta
+// used to reject exactly that, which meant `task ls` hid every task on a fresh
+// checkout. This test drives the real writer end to end — a hand-built
+// taskMeta fixture would not have caught the bug, because the fixture and the
+// writer could quietly drift apart (which is exactly what happened). ---------
+
+func TestTaskNewLs_RoundTrip_EmptyProfileMetadataListed(t *testing.T) {
+	main := newMainRepo(t)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	t.Setenv("PI_STACK_PROFILE", "")
+	t.Chdir(main)
+
+	orig := taskLaunch
+	taskLaunch = func(o runOpts) error { return nil }
+	t.Cleanup(func() { taskLaunch = orig })
+
+	env := gitEnv(t, "", nil)
+	runTaskNew(env, []string{"roundtrip"})
+
+	// Confirm this reproduces the actual bug: the real writer stores an empty
+	// profile today, on disk, not a value this test invented.
+	mainroot, err := resolveMainroot(env, main)
+	if err != nil {
+		t.Fatalf("resolveMainroot: %v", err)
+	}
+	_, metaPath := taskPaths(taskRepoDir(mainroot), "roundtrip")
+	metaBytes, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("reading the written meta.json: %v", err)
+	}
+	if !strings.Contains(string(metaBytes), `"profile": ""`) {
+		t.Fatalf("expected the real writer to store an empty profile (reproducing the bug), got:\n%s", metaBytes)
+	}
+	// Evidence for uat/w0-task-roundtrip.log: the exact on-disk empty-profile
+	// JSON the real writer produced (printed under -v so the artifact can quote
+	// it verbatim, not a hand-typed stand-in).
+	t.Logf("on-disk meta.json (%s):\n%s", metaPath, metaBytes)
+
+	var stderr string
+	stdout := captureStdout(t, func() {
+		stderr = captureStderr(t, func() { runTaskLs(env, nil) })
+	})
+
+	if !strings.Contains(stdout, "roundtrip") {
+		t.Errorf("task ls did not list the task it just created:\n%s", stdout)
+	}
+	if strings.Contains(stderr, "skipping") {
+		t.Errorf("task ls emitted a skipping warning for the writer's own metadata:\n%s", stderr)
+	}
+	if strings.Contains(stdout, taskMetaUnreadableStatus) {
+		t.Errorf("a valid empty-profile task must not render as unreadable:\n%s", stdout)
+	}
+
+	// --json must not hide it either.
+	jsonOut := captureStdout(t, func() { runTaskLs(env, []string{"--json"}) })
+	if !strings.Contains(jsonOut, `"name": "roundtrip"`) {
+		t.Errorf("json ls did not list the task:\n%s", jsonOut)
+	}
+}
+
+func TestRunTaskLs_UnreadableMetadataStillAppearsAsADegradedRow(t *testing.T) {
+	main := newMainRepo(t)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	t.Setenv("PI_STACK_PROFILE", "")
+	t.Chdir(main)
+
+	env := gitEnv(t, "", nil)
+	mainroot, err := resolveMainroot(env, main)
+	if err != nil {
+		t.Fatalf("resolveMainroot: %v", err)
+	}
+	_, metaPath := taskPaths(taskRepoDir(mainroot), "broken")
+	if err := os.MkdirAll(filepath.Dir(metaPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Genuinely corrupt on-disk bytes — not a hand-built taskMeta value. This is
+	// what "unreadable" means: a torn write, a hand edit, or disk corruption, none
+	// of which json.Unmarshal can parse.
+	if err := os.WriteFile(metaPath, []byte("{ not valid json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	human := captureStdout(t, func() { runTaskLs(env, nil) })
+	if !strings.Contains(human, "broken") {
+		t.Errorf("unreadable metadata omitted the task entirely from human output:\n%s", human)
+	}
+	if !strings.Contains(human, taskMetaUnreadableStatus) {
+		t.Errorf("unreadable metadata did not render the degraded marker:\n%s", human)
+	}
+
+	js := captureStdout(t, func() { runTaskLs(env, []string{"--json"}) })
+	if !strings.Contains(js, `"unreadable": true`) {
+		t.Errorf("json ls did not mark the row unreadable:\n%s", js)
+	}
+	if !strings.Contains(js, `"name": "broken"`) {
+		t.Errorf("json ls omitted the unreadable task:\n%s", js)
 	}
 }
 

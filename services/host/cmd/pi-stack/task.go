@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const taskUsage = `usage: pi-stack task <new|ls|rm|gc|harvest> [args]
+const taskUsage = `usage: pi-stack task <new|ls|path|rm|gc|harvest> [args]
 
 Run parallel tasks on one repo. Each task is a local clone with its own branch
 and sandbox, so tasks never collide. Commits land in the task's clone on this
@@ -488,20 +488,19 @@ func stripURLUserinfo(raw string) string {
 // name without the .json suffix; the stored name MUST sanitize back to it,
 // otherwise the file was renamed or hand-edited and we refuse to trust it.
 //
-// The sandbox name is derived from the profile STORED at create time (validated
-// + sanitized here, so the M2 tamper guarantee still holds), NOT the currently
-// active profile: a task created under `work` must keep targeting its `-work`
-// sandbox even after the host switches back to `default`, or rm/ls would point
-// at a non-existent sandbox. The Profile field is REQUIRED: falling back to the
-// current profile would mis-target the sandbox (rm could tear down a clone while
-// leaving the real sandbox live), so a meta without it is treated as invalid.
+// The Profile field is a HOLDOVER from when profiles namespaced the sandbox
+// name (see taskSandboxName/legacyTaskSandboxName, which now ignore it — the
+// active PACK is the unit of context, see docs/design/packs.md). Every task
+// written by the current `task new` stores it as "" (loadResolvedConfig always
+// returns "" now), and an OLDER meta may carry a real profile name like
+// "work": both are accepted here without requiring either. Rejecting an empty
+// Profile was the actual bug (AC-P0-008): it hid EVERY task the current writer
+// creates, because the writer and this guard disagreed about what "no profile"
+// means.
 func hardenTaskMeta(m taskMeta, mainroot, repokey string, legacy bool, fileBase string) (taskMeta, error) {
 	sane := sanitizeTaskName(m.Name)
 	if sane != fileBase {
 		return m, fmt.Errorf("metadata name %q does not match its file %q.json", m.Name, fileBase)
-	}
-	if strings.TrimSpace(m.Profile) == "" {
-		return m, fmt.Errorf("metadata for %q has no profile; cannot determine which sandbox it owns", m.Name)
 	}
 	label := taskRepoLabel(mainroot)
 	m.Mainroot = mainroot
@@ -1260,7 +1259,19 @@ type taskListRow struct {
 	Unpushed int    `json:"unpushed"`
 	Unknown  bool   `json:"unknown"`
 	Clone    string `json:"clone"`
+	// Unreadable marks a row built from metadata that could not be read or
+	// trusted (AC-P0-009): the row is degraded, never omitted. Omission is
+	// unrecoverable (the task silently vanishes from `task ls`); a visibly
+	// broken row is recoverable (the operator knows the file, can inspect or
+	// remove it).
+	Unreadable bool `json:"unreadable,omitempty"`
 }
+
+// taskMetaUnreadableStatus is the fixed marker rendered in place of a normal
+// status/git line when a task's meta.json could not be read or trusted. It is
+// asserted verbatim by tests, so keep it a literal constant rather than a
+// format string that could drift.
+const taskMetaUnreadableStatus = "\u2298 unreadable metadata"
 
 func runTaskLs(env shellEnv, argv []string) {
 	if wantsHelp(argv) {
@@ -1295,16 +1306,28 @@ func runTaskLs(env shellEnv, argv []string) {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 				continue
 			}
-			m, err := readTaskMeta(filepath.Join(metaDir, e.Name()))
-			if err != nil {
-				continue
-			}
-			// Never trust stored branch/sandbox/mainroot for building refs or argv;
-			// re-derive them from the validated name + trusted layout. Skip an invalid meta.
 			fileBase := strings.TrimSuffix(e.Name(), ".json")
-			m, err = hardenTaskMeta(m, mainroot, repokey, lay.legacy, fileBase)
+			m, err := readTaskMeta(filepath.Join(metaDir, e.Name()))
+			if err == nil {
+				// Never trust stored branch/sandbox/mainroot for building refs or argv;
+				// re-derive them from the validated name + trusted layout.
+				m, err = hardenTaskMeta(m, mainroot, repokey, lay.legacy, fileBase)
+			}
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "pi-stack task ls: skipping %s: %v\n", e.Name(), err)
+				// AC-P0-009: never hide a row. Genuinely unreadable or untrustworthy
+				// metadata still gets a place in the list, degraded rather than
+				// silently skipped — the operator needs to know the file exists and
+				// is broken, not have it vanish. The full error still goes to stderr
+				// under PI_STACK_DEBUG so it stays diagnosable without spamming
+				// normal output.
+				if os.Getenv("PI_STACK_DEBUG") != "" {
+					fmt.Fprintf(os.Stderr, "pi-stack task ls: unreadable metadata %s: %v\n", e.Name(), err)
+				}
+				rows = append(rows, taskListRow{
+					Name:       fileBase,
+					Status:     taskMetaUnreadableStatus,
+					Unreadable: true,
+				})
 				continue
 			}
 			co, _ := taskPaths(lay.dir, sanitizeTaskName(m.Name))
@@ -1344,6 +1367,10 @@ func runTaskLs(env shellEnv, argv []string) {
 	fmt.Printf("Tasks for %s (%s):\n", taskRepoLabel(mainroot), mainroot)
 	fmt.Printf("%-20s %-24s %-10s %s\n", "NAME", "BRANCH", "SANDBOX", "GIT")
 	for _, r := range rows {
+		if r.Unreadable {
+			fmt.Printf("%-20s %-24s %-10s %s\n", r.Name, "-", "-", taskMetaUnreadableStatus)
+			continue
+		}
 		status := r.Status
 		if status == "" {
 			status = "-"
