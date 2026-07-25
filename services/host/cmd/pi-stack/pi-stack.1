@@ -44,18 +44,14 @@ It creates and runs the sandbox and injects provider keys through its network
 proxy.
 .TP
 .BR op (1)
-Guided setup prefers the 1Password CLI, signed in.  It validates references
-for Anthropic, OpenAI, and Google, stores only those references in pi-stack,
-and reconciles the resolved values into host-managed
+Guided setup requires the 1Password CLI, signed in — it is the ONLY
+provider-key source.  Setup validates references for Anthropic, OpenAI, and
+Google, stores only those references in pi-stack, and reconciles the resolved
+values into host-managed
 .B sbx
 secrets.  Resolved keys are never written to pi-stack configuration or shown
-in its output.  When sbx already has all three provider keys, setup can
-instead trust them for a run and skip 1Password entirely; see
-.B \-\-use\-sbx\-keys
-under
-.B setup
-below.  A working sbx is enough to start; 1Password stays the recommended
-path for a durable, portable credential source.
+in its output.  There is no "trust existing sbx keys" shortcut (the removed
+flags for it are hard errors).
 .SH QUICK START
 The shortest path from nothing to a fully configured agent:
 .PP
@@ -67,10 +63,8 @@ pi-stack setup
 .fi
 .PP
 .B setup
-configures the host, sources the three provider keys (preferring 1Password;
-accepting a complete existing sbx key set via
-.B \-\-use\-sbx\-keys
-or a one-time prompt instead; see
+configures the host, sources the three provider keys from 1Password (the
+only source; see
 .B setup
 below), and creates the
 default pack every time.  On a fresh machine (no sandbox exists yet) it also
@@ -130,15 +124,8 @@ source of truth, sbx is where the proxy reads from.  Key values never appear
 in a configuration file or inside the sandbox.  You can still set an sbx
 secret by hand, but a later
 .B pi-stack setup
-will reconcile it against your 1Password refs unless you skip that with
-.B \-\-use\-sbx\-keys
-(or accept the one-time prompt offered when sbx already has all three keys
-and no ref is configured yet).  Skipping 1Password wires the sandbox from the
-existing sbx keys as-is; it never deletes a ref or synced record, it just
-doesn't use one this run, and host mode stays local/Ollama-only until
-.B op://
-refs are configured in
-.BR hostmode.env .
+will reconcile it against your 1Password refs — 1Password is always the
+source of truth (the removed skip-1Password shortcut flags are hard errors).
 .PP
 Integration credentials (for host MCP servers such as Slack) are 1Password
 references kept in
@@ -211,7 +198,7 @@ agent writes), under a confirmation gate.
 never prompts.
 .SS setup
 .TP
-.BR "pi-stack setup" " [" DIR "] [" \-\-replace "] [" \-\-use\-sbx\-keys "] [" \-\-account " " email "] [" \-\-knowledge " " path-or-url "] [" \-\-mcp " " name "] [" \-\-model " " ollama-model "] [" \-\-yes "]"
+.BR "pi-stack setup" " [" DIR "] [" \-\-replace "] [" \-\-pull\-models "] [" \-\-account " " email "] [" \-\-knowledge " " path-or-url "] [" \-\-mcp " " name "] [" \-\-model " " ollama-model "] [" \-\-yes "]"
 Actually sets you up: a real, two-phase command, not a deprecated alias for
 .BR "pi-stack onboard" .
 Phase 1 (host) ALWAYS runs first, even on a repeat invocation: it sources
@@ -232,6 +219,19 @@ does NOT suppress the interactive key prompts; only
 (alias
 .BR \-\-non-interactive )
 does.
+.PP
+Local Ollama models (watcher/embed/bridge) are probed once and reported on
+their own readiness axis in the completion summary.  Setup only downloads a
+CONFIRMED-missing tag with explicit consent:
+.B \-\-pull\-models
+in any mode, or a single default-No interactive prompt.  A non-interactive
+setup (including
+.BR \-\-yes )
+never downloads without
+.BR \-\-pull\-models ,
+and an unverifiable
+.B "ollama list"
+is never treated as missing.  Setup never installs Ollama itself.
 .PP
 Setup validates one
 .B op://

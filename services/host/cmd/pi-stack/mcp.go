@@ -554,9 +554,12 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 				"add creds to %s if a server needs them\n",
 				strings.Join(finalNames, ", "), refsPath)
 		} else if wantGog {
-			// gog-only: gog authenticates via OAuth (gog auth login), never op-refs,
-			// so do NOT seed op-refs.env or mention it. Register bare.
-			fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via OAuth (gog auth login)")
+			// gog-only: gog authenticates via its own OAuth grant, never op-refs, so
+			// do NOT seed op-refs.env or mention it. Register bare. The grant
+			// guidance is the GUIDED command only — gog is a LOCAL stdio MCP, so
+			// neither native `sbx mcp auth` (remote catalog OAuth) nor a raw
+			// `gog auth login` recipe is ever printed.
+			fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via OAuth — wire it: pi-stack gog setup")
 		}
 		// container-only: nothing to seed — container creds are Docker-side, not op-refs.
 	}
