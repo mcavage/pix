@@ -324,12 +324,11 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 
 	// sbx presence gates the provider + mcp checks (they read `sbx secret ls` /
 	// `sbx mcp ls`). Inside the sandbox sbx is absent — say so, don't crash.
-	sbxOut, sbxOK := "", false
-	if _, err := env.lookPath("sbx"); err == nil {
-		if out, err := env.run("sbx", "secret", "ls"); err == nil {
-			sbxOut, sbxOK = out, true
-		}
-	}
+	// probeSbxSecrets is the ONE shared probe (bootstrap.go's tri-state helpers
+	// use it too) so this never reimplements a divergent "is sbx reachable"
+	// check.
+	sbxOut, sbxState := probeSbxSecrets(env)
+	sbxOK := sbxState == sbxSecretsOK
 	r.sbxAbsent = !sbxOK
 
 	// MCP registrations (`sbx mcp ls`), listed once and reused by the gog group

@@ -177,17 +177,34 @@ func TestDoctor_SbxAbsent(t *testing.T) {
 	if len(todos) == 0 {
 		t.Fatal("expected TODOs when nothing is set up")
 	}
-	// Provider TODOs must be present with the exact command grammar.
+	// The provider group can no longer VERIFY anything with sbx absent, so it
+	// must not surface a provider fix command — only the still-verifiable
+	// ollama TODOs remain.
 	joined := strings.Join(todos, "\n")
 	for _, want := range []string{
-		"sbx secret set -g anthropic",
-		"sbx secret set -g github",
 		"ollama pull gemma4",
 		"ollama pull nomic-embed-text",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("expected TODO %q in %v", want, todos)
 		}
+	}
+	if strings.Contains(joined, "sbx secret set -g") {
+		t.Errorf("provider check must not claim a verified failure when sbx is absent, got %v", todos)
+	}
+
+	// The provider group's core check must degrade to unverifiable, not a
+	// false TODO, and must not block the exit code.
+	prov := r.groups[0]
+	if prov.title != "Providers / keys (proxy-injected, never in the VM)" {
+		t.Fatalf("expected the providers group first, got %q", prov.title)
+	}
+	core := prov.checks[0]
+	if core.label != "model key" || core.req() != requirementCore || core.result() != verdictUnverifiable {
+		t.Errorf("expected an unverifiable core model-key check, got %+v", core)
+	}
+	if r.blocking() {
+		t.Error("an unverifiable core check must never block")
 	}
 
 	var buf bytes.Buffer
@@ -199,9 +216,6 @@ func TestDoctor_SbxAbsent(t *testing.T) {
 	}
 	if !strings.Contains(out, "sbx not on PATH") {
 		t.Errorf("expected sbx-absent note, got:\n%s", out)
-	}
-	if !strings.Contains(out, "TODO: sbx secret set -g anthropic") {
-		t.Errorf("expected copy-pasteable provider TODO, got:\n%s", out)
 	}
 }
 
