@@ -199,7 +199,7 @@ func reconcileOnboarding(workspace string, env shellEnv, in io.Reader, out io.Wr
 	}
 	if !assumeYes {
 		if !tty {
-			fmt.Fprintf(out, "Not a terminal; leaving %s for review. Apply with: pi-stack onboard --apply --yes\n", path)
+			fmt.Fprintf(out, "Not a terminal; leaving %s for review. Apply with: pi-stack setup --apply --yes\n", path)
 			return
 		}
 		if !confirmYN(in, out, "Apply these changes? [Y/n]: ", true) {
