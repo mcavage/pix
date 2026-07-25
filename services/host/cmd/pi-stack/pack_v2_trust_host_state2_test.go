@@ -1,10 +1,12 @@
 package main
+
 import (
 	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
 func TestPackUse_ForgedDirectorySymlinkLockScrubbedNotFollowed(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
