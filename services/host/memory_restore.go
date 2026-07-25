@@ -889,9 +889,8 @@ func runRestoreCLI(args []string) {
 	printRestoreReport(os.Stdout, res)
 }
 
-// printRestoreReport prints the full restore outcome: memory, config (+ the
-// profiles now present), op-refs, and the knowledge-bundle notes from the
-// manifest, ending with the start hint.
+// printRestoreReport prints the full restore outcome: memory, config, op-refs,
+// and the knowledge-bundle notes from the manifest, ending with the start hint.
 func printRestoreReport(w io.Writer, res restoreResult) {
 	fmt.Fprintf(w, "restored %d memory rows to %s\n", res.RowCount, res.LivePath)
 	if res.BackupPath != "" {

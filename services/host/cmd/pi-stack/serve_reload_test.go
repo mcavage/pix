@@ -22,7 +22,7 @@ func TestIsDaemonAffecting(t *testing.T) {
 			t.Errorf("isDaemonAffecting(%q) = false, want true", k)
 		}
 	}
-	notAffecting := []string{"gog_account", "ollama_bridge_model", "mcp", "active_profile", "host.enabled", "host.autonomy", "host.autoserve", "kit"}
+	notAffecting := []string{"gog_account", "ollama_bridge_model", "mcp", "pack", "host.enabled", "host.autonomy", "host.autoserve"}
 	for _, k := range notAffecting {
 		if isDaemonAffecting(k) {
 			t.Errorf("isDaemonAffecting(%q) = true, want false (must trigger NOTHING)", k)

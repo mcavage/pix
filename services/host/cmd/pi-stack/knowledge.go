@@ -270,8 +270,8 @@ func resolveSyncBundle(bundleFlag string) (string, error) {
 		}
 		return abs, nil
 	}
-	// Use the ACTIVE PROFILE's bundles so `--profile work knowledge sync` targets
-	// the work bundle, never the base/personal one.
+	// Fall back to the configured bundle(s) (profiles were removed; there is a
+	// single knowledge_bundles list).
 	cfg, _, err := loadResolvedConfig()
 	if err != nil {
 		return "", err

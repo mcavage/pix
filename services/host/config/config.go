@@ -456,9 +456,9 @@ func Load() (*Config, error) {
 
 // LoadFrom reads and decodes a config.toml at an EXPLICIT path (rather than the
 // resolved Path()). It is used by callers that must inspect a config file which
-// is not the active one — e.g. `restore` reading the config.toml just written
-// back from a backup archive to report the profiles it now carries. Absence is
-// not an error: it returns defaults, matching Load().
+// is not the active one — e.g. `restore` validating that an archived
+// config.toml parses as TOML before installing it. Absence is not an error: it
+// returns defaults, matching Load().
 func LoadFrom(path string) (*Config, error) {
 	c := &Config{}
 	if _, err := os.Stat(path); err != nil {

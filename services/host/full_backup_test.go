@@ -15,16 +15,17 @@ import (
 )
 
 // TestFullBackupIncludesConfigOpRefsAndManifest proves the promoted FULL backup
-// packs config.toml + op-refs.env + memory.db and records a populated `profiles`
-// list (from a config seeded with [profiles.work]) plus a knowledge note when a
-// bundle is configured.
+// packs config.toml + op-refs.env + memory.db verbatim, and that a populated
+// `profiles` list on backupParams (kept only for legacy-archive compat; a
+// current backup never sets it) round-trips into the manifest, plus a
+// knowledge note when a bundle is configured.
 func TestFullBackupIncludesConfigOpRefsAndManifest(t *testing.T) {
 	st, dbPath := seedMemDB(t, 2)
 	defer st.db.Close()
 
 	outDir := t.TempDir()
 	cfgPath := filepath.Join(outDir, "config.toml")
-	if err := os.WriteFile(cfgPath, []byte("gog_account = \"x\"\n[profiles.work]\ngog_account = \"work@example.com\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("gog_account = \"x\"\npack = \"/home/u/work-pack\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	opPath := filepath.Join(outDir, "op-refs.env")
@@ -73,14 +74,14 @@ func TestFullBackupIncludesConfigOpRefsAndManifest(t *testing.T) {
 
 // TestFullRestoreAppliesConfigOpRefsAndMemory proves a FULL restore swaps the
 // memory db in AND restores config.toml + op-refs.env (moving the current ones
-// to .bak), with the restored config's profiles reported back.
+// to .bak), with the manifest's legacy `profiles` list reported back verbatim.
 func TestFullRestoreAppliesConfigOpRefsAndMemory(t *testing.T) {
 	st, dbPath := seedMemDB(t, 3)
 
-	// Seed a backup that carries a config with [profiles.work] + an op-refs file.
+	// Seed a backup that carries a config.toml + an op-refs file.
 	srcDir := t.TempDir()
 	srcCfg := filepath.Join(srcDir, "config.toml")
-	if err := os.WriteFile(srcCfg, []byte("gog_account = \"x\"\n[profiles.work]\ngog_account = \"work@example.com\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(srcCfg, []byte("gog_account = \"x\"\npack = \"/home/u/work-pack\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	srcOp := filepath.Join(srcDir, "op-refs.env")
@@ -143,11 +144,11 @@ func TestFullRestoreAppliesConfigOpRefsAndMemory(t *testing.T) {
 		t.Errorf("ConfigBak content = %q, want the old config", string(old))
 	}
 	got, _ := os.ReadFile(destCfg)
-	if !strings.Contains(string(got), "work@example.com") {
-		t.Errorf("restored config = %q, want the archived one with the work profile", string(got))
+	if !strings.Contains(string(got), "work-pack") {
+		t.Errorf("restored config = %q, want the archived one with the pack key", string(got))
 	}
 
-	// Profiles reported back include the work profile.
+	// The legacy `profiles` list from the manifest is reported back verbatim.
 	if strings.Join(res.Profiles, ",") != "default,work" {
 		t.Errorf("restored Profiles = %v, want [default work]", res.Profiles)
 	}
