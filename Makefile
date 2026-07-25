@@ -150,7 +150,12 @@ load: build ## Build + load the image into sbx under a UNIQUE tag, so `make run`
 	sbx template load out/pi-stack.tar; \
 	rm -f out/pi-stack.tar; docker rmi "$$T" >/dev/null 2>&1 || true; \
 	echo "$$TS" > out/.local-image-tag; \
-	echo "Loaded as :$$TS. To use it: sbx rm -f pi-stack-pi-stack && make run"
+	REF="docker.io/$(DOCKER_USER)/pi-stack:$$TS"; \
+	echo "Loaded image:  $$REF"; \
+	echo ""; \
+	echo "Run this exact build (recreates the sandbox so the new image takes effect):"; \
+	echo "  pi-stack run --replace --template $$REF     # from ANY directory (5-worktree friendly)"; \
+	echo "  sbx rm -f $(NAME) && make run               # dev flow from this checkout (live skills + MCP)"
 
 publish: build ## Push the built image to the registry as :$(VERSION) and :latest (run `docker login` first)
 	docker push $(IMAGE)

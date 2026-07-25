@@ -149,7 +149,7 @@ Meta
   man                 render the embedded man page (no MANPATH needed; also --man)
   help [verb]         print this help (or a verb's usage)
 
-run flags:    --dev --skills DIR --kit K --mcp M --name N --model M -- pi-args...
+run flags:    --dev --skills DIR --kit K --template REF --mcp M --name N --model M -- pi-args...
 `
 
 // verbUsage maps a verb (including its aliases) to its usage text, so

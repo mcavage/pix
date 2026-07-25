@@ -42,6 +42,7 @@ type runOpts struct {
 	DevRoot       string   // resolved repo root when Dev is set (caller resolves)
 	LocalKit      string   // resolved local checkout kit dir (<repo>/pi-kit); set for --dev and for an unreleased build with a resolvable checkout. Replaces the git pin.
 	LocalImageTag string   // contents of <repo>/out/.local-image-tag; pins --template to the locally loaded image when set (caller reads it)
+	Template      string   // --template REF: explicit image override (e.g. the full ref `make load` prints). Works from ANY directory — no checkout needed — and takes precedence over the auto LocalImageTag pin.
 	Skills        []string // --skills DIR: extra live skill trees
 	Kits          []string // --kit K: escape-hatch kit(s). When present they REPLACE the auto git/local pin (a user override), then config stack applies.
 	MCP           []string // --mcp M: extra MCP servers on top of config.MCP (folded into StaticMCP by the caller)
@@ -89,6 +90,17 @@ func localImageRef(tag string) string {
 	return dockerImageRepo + ":" + tag
 }
 
+// templateTag returns the tag portion of a --template image ref (everything after
+// the final ':'), or "" if the ref carries no tag. It splits on the LAST colon so
+// a registry port (e.g. localhost:5000/foo:tag) doesn't confuse it.
+func templateTag(ref string) string {
+	i := strings.LastIndexByte(ref, ':')
+	if i < 0 || strings.IndexByte(ref[i:], '/') >= 0 {
+		return ""
+	}
+	return ref[i+1:]
+}
+
 // mcpCatalogBundleName is the bundle name `pi-stack mcp bundle` registers the
 // public catalog under, so `sbx mcp bundle rm pi-stack-catalog` removes the set.
 const mcpCatalogBundleName = "pi-stack-catalog"
@@ -118,9 +130,14 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 	// kit for this build's version.
 	kitOverride := len(o.Kits) > 0
 
-	// Pin a locally loaded image (mirrors `make run`) when we resolved a local
-	// checkout that carries out/.local-image-tag. Skipped when --kit overrides.
-	if !kitOverride && o.LocalKit != "" && o.LocalImageTag != "" {
+	// Image pin. An explicit --template REF wins over everything: it works from any
+	// directory (no checkout needed) and is orthogonal to kit selection, so it is
+	// NOT gated on kitOverride. Otherwise, mirror `make run`: pin the locally loaded
+	// image when we resolved a local checkout that carries out/.local-image-tag
+	// (skipped when --kit overrides the whole spec).
+	if o.Template != "" {
+		args = append(args, "--template", o.Template)
+	} else if !kitOverride && o.LocalKit != "" && o.LocalImageTag != "" {
 		args = append(args, "--template", localImageRef(o.LocalImageTag))
 	}
 
