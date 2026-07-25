@@ -23,7 +23,7 @@ addendum is authoritative (the sections below are the pre-review design intent):
   ever read from the payload. The store is `<config-dir>/pack-trust.json`
   (`packtruststore.go`): symlink-refused on read AND write, atomic, and every
   read-modify-write is serialized by a cross-process **flock** (so `pack use`
-  racing `pi-stack host` can't clobber state or orphan a host wrapper). `pack.lock`
+  racing `pix host` can't clobber state or orphan a host wrapper). `pack.lock`
   remains only a local hint, never trusted; a pack-supplied one is scrubbed on
   adoption; a one-time migration lifts a NON-adopted (local/authored) Phase-1
   `pack.lock` activation into the store.
@@ -42,8 +42,8 @@ addendum is authoritative (the sections below are the pre-review design intent):
 - **Local-vs-remote MCP classification fails CLOSED:** an unknown/unprobeable
   classification is treated as host-exec (Tier-1, gated), never silently Tier-0.
   A remote gateway-catalog reference (and gog) stays Tier-0.
-- **All `<workspace>/.pi-stack/*` writes AND removes are symlink-safe**
-  (`workspacestate.go`): refuse a symlinked `.pi-stack` dir, atomic temp+rename
+- **All `<workspace>/.pix/*` writes AND removes are symlink-safe**
+  (`workspacestate.go`): refuse a symlinked `.pix` dir, atomic temp+rename
   that replaces a symlinked destination rather than following it.
 - **Known residual (deliberate):** a hard kill (SIGKILL) in the tiny window
   between the atomic activation-store write and the atomic `cfg.Save` can
@@ -69,8 +69,8 @@ v1 shipped the Tier-0 slice. These are the seams v2 extends, not replaces:
 | `AddKnowledgeBundle` / `RemoveKnowledgeBundle` | `config.go` | pack knowledge swap already uses these |
 | `verifyPluginSHA(spec)` | `serve_plugin.go` | the SHA-pin + re-hash primitive for F5 |
 | `hostAgentDir` / `provisionHostAgentDir` / `runHostSetup` / `hostChildEnv` | `hostrun.go` | F3 host wrapper install + PATH |
-| `.pi-stack/profile` scope file | `memory-recall.ts` L82, `memory-capture.ts` | the memory scope tag mechanism (F4) — already read in-VM; run.go currently deletes it |
-| `.pi-stack/knowledge.scope` | `run.go` `wireKnowledgeScope` | knowledge scope, unchanged |
+| `.pix/profile` scope file | `memory-recall.ts` L82, `memory-capture.ts` | the memory scope tag mechanism (F4) — already read in-VM; run.go currently deletes it |
+| `.pix/knowledge.scope` | `run.go` `wireKnowledgeScope` | knowledge scope, unchanged |
 | sparse `Save()` | `config.go` | every new config key MUST default-omit |
 
 Two facts that shape everything:
@@ -80,7 +80,7 @@ Two facts that shape everything:
    This is not a bug to fix; it is the sbx model. Every facet that lands in the sandbox
    is therefore "recreate to attach."
 2. **The memory scope tag already works in-VM.** `memory-recall.ts` reads
-   `<cwd>/.pi-stack/profile`; the only reason switching packs doesn't switch memory scope
+   `<cwd>/.pix/profile`; the only reason switching packs doesn't switch memory scope
    today is that `run.go` *deletes* that file. F4 is mostly "write it again, keyed on the pack."
 
 ---
@@ -88,7 +88,7 @@ Two facts that shape everything:
 ## 1. Component sketch (C4 level 3 — the switch path)
 
 ```
-                       pi-stack pack use <path|git-url>
+                       pix pack use <path|git-url>
                                    │
               ┌────────────────────┼───────────────────────────────┐
               ▼                    ▼                                ▼
@@ -109,12 +109,12 @@ Two facts that shape everything:
               │                              │                         │
               ▼                              ▼                         ▼
    registerServers(cfg, pack.mcp)   propagateServeConfig       "recreate the sandbox
-   (sbx mcp add … op run)           (reindex knowledge)         to attach: pi-stack run
+   (sbx mcp add … op run)           (reindex knowledge)         to attach: pix run
    HOST, best-effort                 daemon restart              --replace" (create-only facets)
 
-                       next `pi-stack run` (create):
+                       next `pix run` (create):
    buildSbxArgs → --kit <pack-kit>(bin/) --mcp <pack.mcp…> --skill <pack/skills>
-   run.go → write .pi-stack/profile (memory scope) + .pi-stack/knowledge.scope
+   run.go → write .pix/profile (memory scope) + .pix/knowledge.scope
 ```
 
 The **commit point for host-side facets** (config, gateway registration, knowledge index,
@@ -137,7 +137,7 @@ ollama_bridge_model = "qwen3.5:9b"   # v1, unchanged
 
 # ── F4 context config (all optional, layered when the pack is active) ──
 gog_account = "you@company.com"      # swapped into cfg.GogAccount on `pack use`
-memory_scope = "work"                # → .pi-stack/profile; default = pack name; "default" = shared
+memory_scope = "work"                # → .pix/profile; default = pack name; "default" = shared
 [routing]                            # optional pack-level model routing override (P2/stretch)
   policy    = "routing/policy.json"      # repo-relative; recompiled to routing.json when active
   scorecard = "routing/scorecard.json"
@@ -149,7 +149,7 @@ memory_scope = "work"                # → .pi-stack/profile; default = pack nam
   env    = "FASTMAIL_TOKEN"      # op:// ref var name solicited at adoption; value NEVER in pack
   static = true                  # preloaded at sandbox CREATE (--static-mcp) so the pack's
                                  # skills have its tools in context from turn one. A server not
-                                 # preloaded is reachable via `pi-stack mcp load <name>` on an
+                                 # preloaded is reachable via `pix mcp load <name>` on an
                                  # existing sandbox, or by recreating with `run --replace`.
 
 # ── F2 in-sandbox proxy wrappers (bin/, fenced) ──
@@ -161,7 +161,7 @@ memory_scope = "work"                # → .pi-stack/profile; default = pack nam
 # ── F3 host-mode wrappers (host exec, gated) ──
 [[proxy]]
   name = "platformio"
-  host = true                   # installed into the host agent dir; on PATH for `pi-stack host` ONLY
+  host = true                   # installed into the host agent dir; on PATH for `pix host` ONLY
   # egress = []                 # host wrappers still declare egress for the BoM
 
 # ── external host binary (Tier-1, SHA-pinned; rare, P2) ──
@@ -253,7 +253,7 @@ already give a single unambiguous selection surface. Adding parallel keys would 
    op-installed-gated, already writes only refs. **No change.**
 4. Print the recreate line **in the same breath** (PRD F1 + packs.md §13 must-fix):
    > pack `work` attached 2 MCP server(s) to the gateway. They attach to a sandbox at CREATE
-   > only — recreate to pick them up:  `pi-stack run --replace`
+   > only — recreate to pick them up:  `pix run --replace`
 
 **`applyPackToLaunch` change.** Today it only *warns* about `integration.mcp` (it deliberately
 does not auto-enable). In v2 the enabling happened at `pack use` (into `cfg.MCP`), so
@@ -285,7 +285,7 @@ not itself a kit, and mounting it as a bare workspace would not put it on PATH. 
 **ephemeral mixin kit** at launch that drops the sandbox wrappers into the image's existing PATH
 dir:
 
-- New `packKitDir(pack) string` = `<StateDir>/pi-stack/pack-kits/<pack-name-hash>/`.
+- New `packKitDir(pack) string` = `<StateDir>/pix/pack-kits/<pack-name-hash>/`.
 - New `synthesizePackKit(pack)`:
   - writes `spec.yaml` (`kind: mixin`),
   - for each non-host `[[proxy]]`, copies `bin/<name>` → `files/usr/local/bin/<name>` (0755).
@@ -324,7 +324,7 @@ the sbx `network.allowedDomains` is kit-level and still requires a deliberate al
 **Schema:** `[[proxy]]` with `host = true` (a wrapper script under `bin/`) or `[[bin]]` with
 `sha` (an external binary). `pack add proxy <name> --host` sets `host = true`.
 
-**Mechanism — install into the host agent dir, on PATH for `pi-stack host` only.**
+**Mechanism — install into the host agent dir, on PATH for `pix host` only.**
 
 - New `hostPackBinDir()` = `filepath.Join(hostAgentDir(), "bin")` (state-flavored, rebuildable —
   matches the existing symlink posture in `provisionHostAgentDir`).
@@ -337,7 +337,7 @@ the sbx `network.allowedDomains` is kit-level and still requires a deliberate al
 - `runHostLaunch` (`hostrun.go`) prepends `hostPackBinDir()` to `PATH` in the child env. Add to
   `hostChildEnv` (or just before exec): `"PATH=" + hostPackBinDir() + ":" + os.Getenv("PATH")`.
   This is the *only* place the host wrapper reaches PATH — never the sandbox, never the login shell.
-- Wire the install into `runHostSetup` (so `pi-stack host setup` lays them down) **and** re-run it
+- Wire the install into `runHostSetup` (so `pix host setup` lays them down) **and** re-run it
   on `runHostLaunch` from the active pack (so a `pack use` since last setup takes effect without a
   re-setup). Keep it idempotent, exactly like `provisionHostAgentDir`.
 
@@ -369,10 +369,10 @@ just install) via the `verifyPluginSHA` primitive — a swapped binary refuses t
 | active pack | `cfg.Pack = root` | `cfg.Save()` | live |
 | MCP set | remove old `pack.lock.mcp`, add new; `registerServers` | `cfg.Save()` + gateway | **recreate** (attach is create-only) |
 | sandbox `bin/` | synthesized pack kit | next create | **recreate** |
-| host `bin/` | `installHostPackWrappers` (clear old, install new) | immediately | live (next `pi-stack host`) |
+| host `bin/` | `installHostPackWrappers` (clear old, install new) | immediately | live (next `pix host`) |
 | config (`gog_account`, `ollama_bridge_model`, routing) | overwrite from pack | `cfg.Save()` | live for host-side; recreate for in-VM ollama model file |
 | knowledge scope | `RemoveKnowledgeBundle(old)` + `AddKnowledgeBundle(new)`; `[[knowledge]]` refs | `cfg.Save()` + `propagateServeConfig` | live (daemon reindexes) |
-| memory scope tag | `pack.memory_scope` (default = pack name) → written to `.pi-stack/profile` at run/host launch | next run | live in-VM once written |
+| memory scope tag | `pack.memory_scope` (default = pack name) → written to `.pix/profile` at run/host launch | next run | live in-VM once written |
 
 **Implementation.** `runPackUse` becomes a single transaction:
 
@@ -386,7 +386,7 @@ just install) via the `verifyPluginSHA` primitive — a swapped binary refuses t
 6. Print the recreate line for the create-only facets.
 
 **Memory scope tag — the smallest real change.** `run.go` currently *deletes*
-`<workspace>/.pi-stack/profile` (leftover from profile removal). Replace that deletion with a
+`<workspace>/.pix/profile` (leftover from profile removal). Replace that deletion with a
 write of the active pack's `memory_scope` (default: pack name; empty pack or `"default"` → the
 shared scope). `memory-recall.ts` and `memory-capture.ts` already read this file — **no extension
 change**. Do the same in `runHostLaunch` (it already calls the shared launcher machinery). The
@@ -424,7 +424,7 @@ Tier-1 (any host-exec facet) → the BoM screen.
 ```
 This pack runs code on your host (not just in the sandbox):
 
-  MCP servers (host):   fastmail   → op run -- pi-stack-host mcp fastmail
+  MCP servers (host):   fastmail   → op run -- pix-host mcp fastmail
   Host wrappers:        platformio (bin/platformio)
   External binaries:    fastmail-mcp  sha256:9f2c…  [re-hashed before every launch]
   Network egress:       api.fastmail.com
@@ -433,7 +433,7 @@ This pack runs code on your host (not just in the sandbox):
 Adopt this pack and allow the above to run on your machine? [y/N]
 ```
 
-- `[y/N]` default No. Non-TTY: **fail closed** unless `--yes` (mirror `pi-stack onboard --yes`).
+- `[y/N]` default No. Non-TTY: **fail closed** unless `--yes` (mirror `pix onboard --yes`).
 - SHA-pin: `[[bin]]` with empty `sha` fails `loadPack` (never reaches the gate). At install and at
   every launch, re-hash via the `verifyPluginSHA` primitive (extract the hashing core from
   `serve_plugin.go` into a shared helper, or duplicate the ~10 lines — the launcher is a separate
@@ -468,7 +468,7 @@ no arbitrary-shell field a malicious `pack.toml` could smuggle a command through
 **Standalone-ness.** `knowledge_bundles` in config is already pack-independent; the daemon indexes
 whatever is listed. `pack use` adds the pack's resolved bundles; switching removes the previous
 pack's (via `pack.lock`), exactly as `runPackUse` already does for the embedded `KnowledgeDir`.
-`pi-stack knowledge` verbs keep working on bundles with or without a pack — no change.
+`pix knowledge` verbs keep working on bundles with or without a pack — no change.
 
 **What travels on share vs stays local.** Travels: `pack.toml`, `skills/`, embedded `knowledge/`,
 `bin/`, `capabilities.json`, `[[knowledge]] shared=true` references (the URL, not the content —
@@ -524,7 +524,7 @@ because `--mcp`/`--kit` are create-only.
 violates the re-attach model in `planSandboxLaunch`). (b) Pretend it is all live (the "tool lies"
 risk packs.md §13 calls out). (c) Commit host-side immediately, print the exact recreate command
 for the rest, let the user choose when.
-**Decision: (c).** Matches the existing `pi-stack run` re-attach lifecycle (`--replace` is the
+**Decision: (c).** Matches the existing `pix run` re-attach lifecycle (`--replace` is the
 recreate). The recreate line is printed by `pack use`, `pack add mcp`, and `pack add proxy` in the
 same breath as the change. **Rejected (a)** as too destructive; **(b)** as dishonest.
 
@@ -554,10 +554,10 @@ identically to plugins.
   scope follow.
 
 **Phase 2 — host execution:**
-- F3 host-mode wrappers → platformio on PATH for `pi-stack host` only.
+- F3 host-mode wrappers → platformio on PATH for `pix host` only.
 - F5 Tier-1 trust gate: BoM screen, `[y/N]`, non-TTY fail-closed `--yes`, SHA-pin + re-hash for
   `[[bin]]`, provenance in `pack.lock`.
-- **DoD:** platformio usable via `pi-stack host --pack personal`; adopting a host-exec pack is
+- **DoD:** platformio usable via `pix host --pack personal`; adopting a host-exec pack is
   gated; a tampered external bin refuses to launch.
 
 Note on F1's tier: a pack that only *references* a host-provided MCP (`integration.mcp` +
@@ -577,7 +577,7 @@ Note on F1's tier: a pack that only *references* a host-provided MCP (`integrati
    adopter).
 3. **No secret on disk / in VM.** Test: after `pack use` with credentials solicited, `op-refs.env`
    holds only `op://` refs (reuse the existing op-refs parser assertions); the pack repo contains
-   no value; no facet writes a token to `.pi-stack/*`.
+   no value; no facet writes a token to `.pix/*`.
 4. **SHA-pin fail-closed.** Test: `[[bin]]` with empty sha fails `loadPack`; a mismatched sha
    refuses at both install and launch (mirror `TestExternalMcpRefusesOnSHAMismatch`).
 5. **Trust gate fail-closed on non-TTY.** Test: Tier-1 `pack use` on a non-TTY without `--yes`
@@ -597,8 +597,8 @@ Note on F1's tier: a pack that only *references* a host-provided MCP (`integrati
   *previous* pack's live `pack.toml` — but that breaks if the previous pack's manifest changed
   between activations. `pack.lock` is the robust choice; it is git-ignored by default.
 - **Ephemeral pack-kit dir lifecycle.** Synthesized kits accumulate under
-  `<StateDir>/pi-stack/pack-kits/`. Add a `pack gc` step or clean-on-switch (cheap: keyed by pack
-  name hash, overwrite in place). Recommend overwrite-in-place + a `pi-stack state reset` sweep.
+  `<StateDir>/pix/pack-kits/`. Add a `pack gc` step or clean-on-switch (cheap: keyed by pack
+  name hash, overwrite in place). Recommend overwrite-in-place + a `pix state reset` sweep.
 - **Host PATH prepend ordering.** Prepending the pack `bin/` in host mode means a pack wrapper
   shadows a real host tool of the same name. That is the intent (a wrapped `snowflake`), but it is a
   footgun for a careless pack. The BoM screen names every host wrapper so the user sees the shadow
@@ -618,7 +618,7 @@ Note on F1's tier: a pack that only *references* a host-provided MCP (`integrati
   config rename during a switch/reactivation: the new (narrower) lock lands beside the old config,
   so an MCP/bundle the fresh lock no longer attributes stays in config *with no attribution* — a
   later `pack use`/`pack rm` will NOT remove it (removal is deliberately scoped to lock
-  attribution ONLY), so it stays until removed by hand (`pi-stack config`). That scoping is the
+  attribution ONLY), so it stays until removed by hand (`pix config`). That scoping is the
   chosen safe side of the lock-only-removal design — it can never remove a user's manually-added
   entry (the worse bug, finding #2). Manifest-based reconciliation would reopen that.
   Over-retention is safe (an extra entry, never a lost one) and recoverable; do NOT add
@@ -631,13 +631,13 @@ Note on F1's tier: a pack that only *references* a host-provided MCP (`integrati
 | File | Change | Phase |
 | --- | --- | --- |
 | `pack.go` | schema structs (`packProxy/packBin/packKnowledge/packRouting`, fields on `packManifest`); `loadPack` facet parse + hardening; `runPackAdd` gains `proxy` (+`--host`) and `knowledge --ref/--private`; `runPackUse` becomes the atomic swap + `pack.lock` I/O + recreate line; `synthesizePackKit`/`packKitDir`; `computeHostBoM` + Tier-1 gate + `--yes`; `packMcpNames` helper | P1 (schema, F1/F2/F4/F6), P2 (F5 gate, host facets) |
-| `run.go` | replace the `.pi-stack/profile` *delete* with `writeMemoryScope(workspace, pack)`; `applyPackToLaunch` appends the synthesized pack kit to `o.Kits` (create-only guard already present) | P1 |
+| `run.go` | replace the `.pix/profile` *delete* with `writeMemoryScope(workspace, pack)`; `applyPackToLaunch` appends the synthesized pack kit to `o.Kits` (create-only guard already present) | P1 |
 | `hostrun.go` | `hostPackBinDir`, `installHostPackWrappers` (clear-old + SHA-check + copy), PATH prepend in `hostChildEnv`/`runHostLaunch`, call from `runHostSetup`; write memory scope on host launch | P2 |
 | `config.go` | none required for keys (facets project into existing `pack`/`mcp`/`knowledge_bundles`/`gog_account`/`ollama_bridge_model`); optionally a `hashFileSHA256` is *not* here (launcher pkg) | — |
 | `serve_plugin.go` | optionally extract `hashFileSHA256` from `verifyPluginSHA` for reuse | P2 |
 | `mcp.go` | none (reused) | — |
 | `knowledge.go` | none (`resolveBundleRef` reused) | — |
-| `extensions/memory-recall.ts`, `memory-capture.ts` | none (already read `.pi-stack/profile`) | — |
+| `extensions/memory-recall.ts`, `memory-capture.ts` | none (already read `.pix/profile`) | — |
 | `scripts/check-open-core.sh` | extend for pack fixtures + private-knowledge guard | P1 |
 
 No new config.toml keys, no new in-VM extension, no new MCP registration code, no second checksum

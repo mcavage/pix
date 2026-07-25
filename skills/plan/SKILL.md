@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Take a concrete idea to an eng-ready plan with the crew — discovery, PR/FAQ, PRD, design, architecture, DX, and peer review, with a user gate at the PR/FAQ. Runs a lighter auto-gated review for smaller work. Use for "plan this", "plan this feature", "review everything before we build", "write a PRD", or "take this from idea to eng-ready". Pairs with brainstorm (before) and build (after).
+description: Take a concrete idea to an eng-ready plan with the crew — discovery, PR/FAQ, PRD, design, architecture, DX, peer review, gated at PR/FAQ. Use for "plan this" or "write a PRD".
 ---
 # plan
 

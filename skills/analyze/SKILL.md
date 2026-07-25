@@ -1,6 +1,6 @@
 ---
 name: analyze
-description: Strategic analysis workflow covering financial model, legal review, market sizing, build/buy/partner decision, pricing decision, or decision one-pager. Routes to finance, legal, and research roles, with parallel subagents for high-stakes investment calls. Use for "model the economics of X", "review this contract", "what's the TAM for X", "should we build or buy X", "how should we price X", or "write a decision doc on X".
+description: Strategic analysis — financial model, legal review, market sizing, build/buy/partner, pricing, or decision one-pager. Use for "model the economics of X", "review this contract", or "build vs buy X".
 ---
 # analyze
 

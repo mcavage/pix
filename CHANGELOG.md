@@ -1,12 +1,36 @@
 # Changelog
 
-All notable changes to pi-stack are recorded here. CI publishes versioned images
+All notable changes to Pix are recorded here. CI publishes versioned images
 from `main` and stamps the tag into `pi-kit/spec.yaml`; this file is the
 human-readable summary of what changed and whether an upgrade is breaking.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
-## Unreleased
+## 0.1.0 - 2026-07-25
+
+### Breaking
+
+- Renamed the product, CLI, host binary, image, Go module, sandbox namespace,
+  runtime paths, workspace markers, environment variables, services, and public
+  documentation to Pix. This is a clean pre-launch cutover with no legacy-path
+  discovery or compatibility aliases.
+
+### Added
+
+- Added one evidence-backed readiness model shared by setup, doctor, status,
+  run, onboarding, Ollama checks, MCP checks, and JSON output.
+- Added transactional, resumable setup and optional Google Workspace commands:
+  `pix gworkspace setup|status|disable`.
+- Moved dynamic memory and knowledge recall to append-only messages, preserving
+  provider input-prefix caching with deterministic deduplication and byte caps.
+- Added a prescriptive installation path, installer collision checks, absolute
+  test timing budgets, workspace marker round trips, and rename guards.
+
+### Changed
+
+- Reduced the warm non-race gate from roughly 42 seconds to under 10 seconds.
+- Made isolated worktree parallelism the default orchestration policy for
+  independent delivery units.
 
 ### Fixed
 

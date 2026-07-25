@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Take the working tree from "done" to "PR open" with a quality gate, rebase, run tests + lint, code-review the diff, bump version + changelog, commit, push a branch, open a PR. Stops at PR creation (never auto-merges). Use for "ship", "make a PR", "open a PR", or when the work is ready to land.
+description: Take the working tree from "done" to "PR open" — quality gate, rebase, tests + lint, code-review, bump version + changelog, commit, push, open a PR. Use for "ship" or "make a PR".
 ---
 # ship
 
@@ -30,7 +30,7 @@ never force-push, never push to `main`/`master`.
    hit. **Prefer a test over vigilance:** where the surface is enumerable (a verb
    table, a config-key list), add or extend an anti-drift test that fails when
    code and docs diverge (see `conventions` → "Docs travel with code"; e.g.
-   pi-stack's `man_test.go` gates every verb AND every config key). If you had to
+   pix's `man_test.go` gates every verb AND every config key). If you had to
    fix drift by hand and no such test exists, add one now so it can't recur.
 8. **Version + changelog.** If the repo has a `VERSION` file and/or
    `CHANGELOG.md`, bump the patch version and add a one-line entry.

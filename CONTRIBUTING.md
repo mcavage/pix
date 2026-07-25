@@ -1,6 +1,6 @@
-# Contributing to pi-stack
+# Contributing to pix
 
-Thanks for looking. pi-stack is an opinionated distribution of the
+Thanks for looking. pix is an opinionated distribution of the
 [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) coding agent, so most contributions
 are skills, agents, extensions, docs, or host-service code, not changes to pi
 itself.
@@ -12,13 +12,13 @@ worth not repeating.
 ## Ground rules
 
 - **Two languages, one convention.** Everything that runs on the HOST is Go
-  (`services/host/`, compiled into `pi-stack-host`). Everything that runs INSIDE
+  (`services/host/`, compiled into `pix-host`). Everything that runs INSIDE
   the sandbox is TypeScript (`extensions/`). Do not add a host-side Node or
   Python service. See AGENTS.md for why.
 - **Keep the open-core boundary clean.** Nothing company-specific belongs in this
   repo: no channel names, account emails, internal hostnames, connector-specific
   env, or private skills. Those live in a private **pack** (git-backed, mounted at
-  runtime with `pi-stack pack use`) and, for host-executing integrations, in a
+  runtime with `pix pack use`) and, for host-executing integrations, in a
   separate container/host-daemon repo — never compiled into the public tree.
   `scripts/check-open-core.sh` runs in CI and fails if a company-specific file or
   an internal marker is ever tracked.
@@ -35,8 +35,8 @@ the Docker image needs a DHI-entitled Docker account; the hosted `sbx run` path
 does not.
 
 ```bash
-git clone https://github.com/mcavage/pi-stack
-cd pi-stack
+git clone https://github.com/mcavage/pix
+cd pix
 cd services/host && go build ./... && go test ./...   # host code
 ```
 
@@ -49,7 +49,7 @@ cd services/host && go build ./... && go test ./...   # host code
   load live from the tree, so `/reload` picks up edits with no rebuild.
 - **Agents:** edit `agents/<name>.md`. Declare an `intent:`, not a pinned
   `model:`; the router resolves it. If you must pin, use a fully-qualified id that
-  exists in `services/host/routing/defaults/models.json` (`pi-stack agent ls`
+  exists in `services/host/routing/defaults/models.json` (`pix agent ls`
   flags an unknown pin).
 - **Extensions (TypeScript):** edit `extensions/*.ts`. An extension that throws
   at load breaks pi startup, so guard defensively. Never put a `.d.ts` in

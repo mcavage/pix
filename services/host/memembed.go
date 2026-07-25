@@ -136,7 +136,7 @@ func memWatcherModel() string {
 	if v := os.Getenv("MEMORY_WATCHER_MODEL"); v != "" {
 		return v
 	}
-	// A small, extraction-grade model dedicated to capture. `pi-stack serve`
+	// A small, extraction-grade model dedicated to capture. `pix serve`
 	// normally passes the resolved config value (config.DefaultMemoryWatcherModel);
 	// this fallback only applies when the daemon runs with MEMORY_WATCHER_MODEL
 	// unset. Keep in sync with config.DefaultMemoryWatcherModel.

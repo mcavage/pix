@@ -1,5 +1,5 @@
-// pi-stack-host `restore` — the safety-critical counterpart to `backup`
-// (memory_backup.go). It takes a backup tar.gz and restores the FULL pi-stack
+// pix-host `restore` — the safety-critical counterpart to `backup`
+// (memory_backup.go). It takes a backup tar.gz and restores the FULL pix
 // state WITHOUT ever corrupting or silently clobbering what is already there:
 //
 //   - MEMORY (the safety-critical part): swaps the archived memory.db in as the
@@ -34,8 +34,8 @@
 //  6. Report the row count + the .bak path of the previous db. The FTS index
 //     travels inside memory.db (content table) — no rebuild needed.
 //
-// This lives in pi-stack-host (it needs the sqlite driver); the launcher
-// `pi-stack memory restore` execs it. The core is split into pure/logic steps
+// This lives in pix-host (it needs the sqlite driver); the launcher
+// `pix memory restore` execs it. The core is split into pure/logic steps
 // (manifest + version gate) and fs/db steps so tests can drive each in isolation
 // and inject the "serve running?" probe.
 
@@ -57,7 +57,7 @@ import (
 	"strings"
 	"time"
 
-	"pi-stack/host/config"
+	"pix/host/config"
 
 	_ "modernc.org/sqlite"
 )
@@ -73,7 +73,7 @@ const (
 
 // restoreSchemaVersion is the memory schema (PRAGMA user_version) this binary
 // understands. An archive whose sqlite_user_version is newer than this was
-// written by a newer pi-stack and cannot be safely restored here.
+// written by a newer pix and cannot be safely restored here.
 const restoreSchemaVersion = 1
 
 // restoreParams are the fully-resolved inputs to the restore core, so it stays
@@ -135,13 +135,13 @@ func validateRestoreManifest(m backupManifest) error {
 	// Accept any format from v1 up to the version this binary writes. A v1 archive
 	// (memory-only manifest, no profiles/knowledge) still restores memory (and its
 	// config/op-refs) fine — the new fields simply default to empty. Only a format
-	// NEWER than ours (written by a newer pi-stack) is refused.
+	// NEWER than ours (written by a newer pix) is refused.
 	if m.FormatVersion < 1 || m.FormatVersion > backupFormatVersion {
 		return fmt.Errorf("archive format_version %d is not understood (this binary handles 1..%d)",
 			m.FormatVersion, backupFormatVersion)
 	}
 	if m.SqliteUserVersion > restoreSchemaVersion {
-		return fmt.Errorf("archive sqlite schema version %d is newer than this binary's (%d); upgrade pi-stack before restoring",
+		return fmt.Errorf("archive sqlite schema version %d is newer than this binary's (%d); upgrade pix before restoring",
 			m.SqliteUserVersion, restoreSchemaVersion)
 	}
 	return nil
@@ -168,12 +168,12 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 	// 1. REFUSE if a serve daemon is up — it would write to the db while we swap
 	// the file underneath it, which corrupts both.
 	if p.ServeProbe != nil && p.ServeProbe() {
-		return restoreResult{}, fmt.Errorf("memory serve is running; stop it first: pi-stack serve stop")
+		return restoreResult{}, fmt.Errorf("memory serve is running; stop it first: pix serve stop")
 	}
 
 	// 2a. Extract the archive to a private temp dir (with tar-bomb guards) and read
 	// the manifest.
-	tmpDir, err := os.MkdirTemp("", "pi-stack-restore-")
+	tmpDir, err := os.MkdirTemp("", "pix-restore-")
 	if err != nil {
 		return restoreResult{}, fmt.Errorf("temp dir: %w", err)
 	}
@@ -204,7 +204,7 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 		return restoreResult{}, fmt.Errorf("read archived schema version: %w", err)
 	}
 	if realVersion > restoreSchemaVersion {
-		return restoreResult{}, fmt.Errorf("archived db schema version %d is newer than this binary's (%d); upgrade pi-stack before restoring",
+		return restoreResult{}, fmt.Errorf("archived db schema version %d is newer than this binary's (%d); upgrade pix before restoring",
 			realVersion, restoreSchemaVersion)
 	}
 	if realVersion != manifest.SqliteUserVersion {
@@ -237,7 +237,7 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 	// 4b. VALIDATE the archived plain files BEFORE committing ANYTHING. A
 	// config.toml that does not parse as TOML must abort the whole restore now,
 	// while the live state is still fully intact — never install a config that
-	// pi-stack cannot then load. op-refs.env carries no parse contract, so it is
+	// pix cannot then load. op-refs.env carries no parse contract, so it is
 	// only validated by being written atomically below.
 	stamp := now.Format("20060102-150405")
 	archivedConfig := filepath.Join(tmpDir, "config.toml")
@@ -269,7 +269,7 @@ func memoryRestore(p restoreParams) (restoreResult, error) {
 	}
 	releaseLock, lockErr := acquire(lockPath)
 	if lockErr != nil {
-		return restoreResult{}, fmt.Errorf("the memory service (or another restore) is using the database — stop it first: pi-stack serve stop")
+		return restoreResult{}, fmt.Errorf("the memory service (or another restore) is using the database — stop it first: pix serve stop")
 	}
 	defer releaseLock()
 
@@ -537,7 +537,7 @@ func installPlainFile(src, dest, stamp string, tightenDir bool,
 // created 0600, chmod'd to mode, fsynced, then renamed into place.
 func atomicWriteFile(dest string, data []byte, mode os.FileMode) (err error) {
 	dir := filepath.Dir(dest)
-	tmp, err := os.CreateTemp(dir, ".pi-stack-restore-*.tmp")
+	tmp, err := os.CreateTemp(dir, ".pix-restore-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temp: %w", err)
 	}
@@ -842,16 +842,16 @@ func serveIsUp() bool {
 
 // --- CLI wiring --------------------------------------------------------------
 
-const restoreUsage = `usage: pi-stack-host restore <archive> [--force]
+const restoreUsage = `usage: pix-host restore <archive> [--force]
 
-  Restore a FULL pi-stack backup tar.gz produced by 'backup': memory.db (honors
+  Restore a FULL pix backup tar.gz produced by 'backup': memory.db (honors
   MEMORY_DB), config.toml (profiles), and op-refs.env. Refuses to run while
   'serve' holds the db, and refuses to overwrite an existing live db unless
   --force is given (in which case the current db is moved aside to a .bak-<ts>
   first, never deleted). config.toml/op-refs.env are always moved aside to a
   .bak-<ts> before the archived versions are written (reversible).
 
-  <archive>    path to the pi-stack-backup-<ts>.tar.gz to restore
+  <archive>    path to the pix-backup-<ts>.tar.gz to restore
   --force      overwrite an existing live db (current db kept as .bak-<ts>)`
 
 func runRestoreCLI(args []string) {
@@ -866,24 +866,24 @@ func runRestoreCLI(args []string) {
 		case a == "--force" || a == "-f":
 			force = true
 		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(os.Stderr, "pi-stack-host restore: unknown flag %q\n%s\n", a, restoreUsage)
+			fmt.Fprintf(os.Stderr, "pix-host restore: unknown flag %q\n%s\n", a, restoreUsage)
 			os.Exit(2)
 		default:
 			if archive != "" {
-				fmt.Fprintf(os.Stderr, "pi-stack-host restore: unexpected argument %q\n%s\n", a, restoreUsage)
+				fmt.Fprintf(os.Stderr, "pix-host restore: unexpected argument %q\n%s\n", a, restoreUsage)
 				os.Exit(2)
 			}
 			archive = a
 		}
 	}
 	if archive == "" {
-		fmt.Fprintf(os.Stderr, "pi-stack-host restore: missing <archive>\n%s\n", restoreUsage)
+		fmt.Fprintf(os.Stderr, "pix-host restore: missing <archive>\n%s\n", restoreUsage)
 		os.Exit(2)
 	}
 
 	res, err := memoryRestore(resolveRestoreParams(archive, force, time.Now()))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack-host restore: %v\n", err)
+		fmt.Fprintf(os.Stderr, "pix-host restore: %v\n", err)
 		os.Exit(1)
 	}
 	printRestoreReport(os.Stdout, res)
@@ -912,12 +912,12 @@ func printRestoreReport(w io.Writer, res restoreResult) {
 	}
 	for _, k := range res.Knowledge {
 		if k.Remote != "" {
-			fmt.Fprintf(w, "your knowledge bundle lives at %s (git remote %s) — restore it with git clone / pi-stack knowledge use\n", k.Path, k.Remote)
+			fmt.Fprintf(w, "your knowledge bundle lives at %s (git remote %s) — restore it with git clone / pix knowledge use\n", k.Path, k.Remote)
 		} else {
-			fmt.Fprintf(w, "your knowledge bundle lives at %s — restore it with git clone / pi-stack knowledge use\n", k.Path)
+			fmt.Fprintf(w, "your knowledge bundle lives at %s — restore it with git clone / pix knowledge use\n", k.Path)
 		}
 	}
-	fmt.Fprintln(w, "start it: pi-stack serve")
+	fmt.Fprintln(w, "start it: pix serve")
 }
 
 // resolveRestoreParams fills restoreParams from the environment/home, so

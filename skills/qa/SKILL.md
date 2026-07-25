@@ -1,6 +1,6 @@
 ---
 name: qa
-description: Systematically QA-test a running web app with the browser, then report (and optionally fix) bugs with screenshot evidence. Use for "qa", "test this site/app", "find bugs", "does this work", or after a UI change. The app must be reachable (localhost in the sandbox, or a URL).
+description: Systematically QA-test a running web app with the browser, then report (and optionally fix) bugs with screenshot evidence. Use for "qa", "test this site/app", "find bugs", or after a UI change.
 ---
 # qa
 

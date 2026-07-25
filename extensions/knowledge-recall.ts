@@ -1,11 +1,11 @@
-// pi-stack — knowledge-base injector (client side).
+// pix — knowledge-base injector (client side).
 //
 // Sibling of extensions/memory-recall.ts, but a different source of truth. Memory
 // is soft, per-user, "context, may be stale". The knowledge base is curated and
 // authoritative: before every turn we ask the host knowledge service for the
-// concepts most relevant to what you're about to do, and slip them into the
-// system prompt UNDER A DISTINCT HEADING that says "cite the path". So the model
-// treats memory as background and knowledge as ground truth it should reference.
+// concepts most relevant to what you're about to do, and APPEND them under a
+// DISTINCT HEADING that says "cite the path". So the model treats memory as
+// background and knowledge as ground truth it should reference.
 //
 // The store lives on the host (:11436, JSON-RPC, same shape as memory :11435);
 // this extension only calls it over node:http via host.docker.internal.
@@ -19,12 +19,12 @@
 //
 // SCOPE CONTRACT (per-workspace bundle filter). The shared host store indexes
 // every bundle it has ever seen (global + every project), so an un-scoped query
-// bleeds concepts across projects. The launcher (pi-stack run) resolves the
+// bleeds concepts across projects. The launcher (pix run) resolves the
 // bundle set for THIS workspace — {global, this-project} — and communicates it
 // to us one of two ways, which we resolve in this order:
 //
 //   1. env  KNOWLEDGE_SCOPE          comma- or newline-separated bundle ids
-//   2. file <cwd>/.pi-stack/knowledge.scope   comma- or newline-separated ids
+//   2. file <cwd>/.pix/knowledge.scope   comma- or newline-separated ids
 //
 // Whichever is found first wins; entries are trimmed and blanks dropped. The ids
 // are daemon-supplied identifiers (the exact strings in the store's `bundle`
@@ -40,6 +40,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { RECALL_BYTE_CAP, createRecallChannel } from "../lib/recall-message.ts";
 
 const KNOWLEDGE_URL = process.env.KNOWLEDGE_URL ?? "http://host.docker.internal:11436";
 const TIMEOUT_MS = Number(process.env.KNOWLEDGE_TIMEOUT_MS ?? 2000);
@@ -106,7 +107,7 @@ function parseScope(raw: string): string[] {
 }
 
 // Resolve the per-workspace bundle scope (see SCOPE CONTRACT at the top). Env
-// KNOWLEDGE_SCOPE first, then <cwd>/.pi-stack/knowledge.scope. Returns [] when
+// KNOWLEDGE_SCOPE first, then <cwd>/.pix/knowledge.scope. Returns [] when
 // neither is present/non-empty, in which case the caller sends NO `bundles`.
 // File read is defensive: a missing/unreadable file is the normal case.
 function resolveScope(): string[] {
@@ -116,7 +117,7 @@ function resolveScope(): string[] {
 		if (fromEnv.length) return fromEnv;
 	}
 	try {
-		const raw = readFileSync(join(process.cwd(), ".pi-stack", "knowledge.scope"), "utf8");
+		const raw = readFileSync(join(process.cwd(), ".pix", "knowledge.scope"), "utf8");
 		return parseScope(raw);
 	} catch {
 		return []; // missing/unreadable file is normal — no scope, query all
@@ -159,61 +160,59 @@ function formatConcept(c: any): string {
 	return line;
 }
 
-// Truncate s to at most max characters, marking the cut with an ellipsis. Used
-// so a single concept with a huge description/citation list can never blow the
-// budget. Defensive on tiny/zero max.
-function truncate(s: string, max: number): string {
-	if (max <= 0) return "";
-	if (s.length <= max) return s;
-	if (max === 1) return "…";
-	return s.slice(0, max - 1).trimEnd() + "…";
+// The block header, verbatim. The "authoritative, cite the path" framing is the
+// provenance label that separates this from memory's "context, may be stale";
+// it is emitted byte-for-byte and charged against the cap, never shortened to
+// fit one more concept (AC-P0-107).
+export const KNOWLEDGE_HEADER = [
+	"## From the knowledge base (authoritative, cite the path)",
+	"Curated, authoritative concepts for this task, most relevant first. Prefer these over memory when they conflict, and cite the path when you rely on one.",
+];
+
+// Knowledge keeps its OWN budget so it never starves memory (or gets starved by
+// it) — each channel runs its own window. KNOWLEDGE_CHAR_BUDGET can only ever
+// LOWER it: the 1 KB per-turn cap is the ceiling either way (AC-P0-106).
+const CAP = Math.min(RECALL_BYTE_CAP, CHAR_BUDGET);
+
+// A concept, as a row the shared recall helper can dedupe and cut at a boundary.
+// Identity is the concept id, then its path: a concept has no `content` field,
+// so leaving it to the helper's sha256(content) fallback would alias every
+// concept onto the same key and inject exactly one of them per session.
+function conceptRow(c: any): { id?: string; content: string } {
+	const id = String(c?.id ?? c?.path ?? "").trim();
+	return id ? { id, content: formatConcept(c) } : { content: formatConcept(c) };
 }
 
-// Pack concepts into the block, respecting the OWN char budget so knowledge never
-// starves memory (or gets starved by it) — each runs its own ~1000-char window.
-// The budget is enforced from the FIRST line onward: every concept line is capped
-// to the remaining budget (ellipsized if needed) and the running total never
-// exceeds CHAR_BUDGET, so even one concept with a giant description or citation
-// list cannot inject an oversized block.
-function formatBlock(concepts: any[]): string | null {
-	if (!concepts?.length) return null;
-	const header = [
-		"## From the knowledge base (authoritative, cite the path)",
-		"Curated, authoritative concepts for this task, most relevant first. Prefer these over memory when they conflict, and cite the path when you rely on one.",
-	];
-	const lines: string[] = [];
-	let used = 0;
-	for (const c of concepts) {
-		if (used >= CHAR_BUDGET) break;
-		// Reserve one char per line for the joining newline in the accounting.
-		const remaining = CHAR_BUDGET - used - 1;
-		if (remaining <= 0) break;
-		const full = formatConcept(c);
-		const line = truncate(full, remaining);
-		if (!line) break;
-		lines.push(line);
-		used += line.length + 1;
-		if (line !== full) break; // truncated => budget is spent
-	}
-	if (!lines.length) return null;
-	return [...header, ...lines].join("\n");
-}
-
-// Pure-ish and testable: prompt in, injected block out (or null). Concepts come
-// from the host knowledge service.
-export async function buildKnowledgeBlock(prompt: string): Promise<string | null> {
-	if (!prompt || !prompt.trim()) return null;
+// Pure-ish and testable: prompt in, concept rows out. Concepts come from the
+// host knowledge service.
+export async function fetchKnowledgeRows(prompt: string): Promise<{ id?: string; content: string }[]> {
+	if (!prompt || !prompt.trim()) return [];
 	const r = await rpc("query", queryParams(prompt));
-	return formatBlock(r?.concepts ?? []);
+	return (r?.concepts ?? []).map(conceptRow);
+}
+
+// Prompt in, injected block out (or null), with a throwaway dedup set — the
+// per-session set lives on the extension's channel below.
+export async function buildKnowledgeBlock(prompt: string): Promise<string | null> {
+	const rows = await fetchKnowledgeRows(prompt);
+	const built = createRecallChannel({ header: KNOWLEDGE_HEADER, renderRow: (r: any) => r.content, cap: CAP }).build(rows);
+	return built ? built.message.content : null;
 }
 
 export default function (pi: any) {
+	// One channel per pi session: the same concept recalled on three turns is
+	// appended once (AC-P0-105).
+	const channel = createRecallChannel({ header: KNOWLEDGE_HEADER, renderRow: (r: any) => r.content, cap: CAP });
+
+	// APPEND-ONLY. This hook must never return `systemPrompt` — see the same note
+	// in memory-recall.ts and scripts/check-recall-transport.sh (AC-P0-102).
 	pi.on("before_agent_start", async (event: any, ctx: any) =>
 		safe(async () => {
 			const prompt = extractPrompt(event, ctx);
-			const block = await buildKnowledgeBlock(prompt);
-			if (!block) return undefined;
-			return { systemPrompt: (event?.systemPrompt ?? "") + "\n\n" + block };
+			const rows = await fetchKnowledgeRows(prompt);
+			const built = channel.build(rows);
+			if (!built) return undefined;
+			return { message: built.message };
 		}),
 	);
 

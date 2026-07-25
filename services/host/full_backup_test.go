@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"pi-stack/host/config"
+	"pix/host/config"
 )
 
 // TestFullBackupIncludesConfigOpRefsAndManifest proves the promoted FULL backup
@@ -32,7 +32,7 @@ func TestFullBackupIncludesConfigOpRefsAndManifest(t *testing.T) {
 	if err := os.WriteFile(opPath, []byte("FOO=op://vault/item/field\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	outPath := filepath.Join(outDir, "pi-stack-backup-20260715-120000.tar.gz")
+	outPath := filepath.Join(outDir, "pix-backup-20260715-120000.tar.gz")
 
 	res, err := memoryBackup(backupParams{
 		DBPath:     dbPath,
@@ -88,7 +88,7 @@ func TestFullRestoreAppliesConfigOpRefsAndMemory(t *testing.T) {
 	if err := os.WriteFile(srcOp, []byte("ARCHIVED=op://vault/item/field\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(t.TempDir(), "pi-stack-backup-20260715-120000.tar.gz")
+	archive := filepath.Join(t.TempDir(), "pix-backup-20260715-120000.tar.gz")
 	if _, err := memoryBackup(backupParams{
 		DBPath: dbPath, OutPath: archive, Keep: 7, Version: "test",
 		ConfigPath: srcCfg, OpRefsPath: srcOp,
@@ -260,7 +260,7 @@ func TestFullBackupRefusesOverwritingExistingArchive(t *testing.T) {
 	defer st.db.Close()
 
 	outDir := t.TempDir()
-	outPath := filepath.Join(outDir, "pi-stack-backup-20260715-120000.tar.gz")
+	outPath := filepath.Join(outDir, "pix-backup-20260715-120000.tar.gz")
 	// Pre-create a file at the --out path; its exact bytes must survive.
 	sentinel := []byte("PRECIOUS previous backup \x00\x01 bytes that must not be lost")
 	if err := os.WriteFile(outPath, sentinel, 0o600); err != nil {
@@ -285,12 +285,12 @@ func TestFullBackupRefusesOverwritingExistingArchive(t *testing.T) {
 // TestFullBackupResolvesCanonicalConfigPaths is the B2 gate: resolveBackupParams
 // must derive ConfigPath from config.Path() and OpRefsPath from
 // config.OpRefsPath() (the XDG config dir), NOT a CWD-relative config/op-refs.env.
-// With PI_STACK_CONFIG set to a temp config.toml, both must land under that temp
+// With PIX_CONFIG set to a temp config.toml, both must land under that temp
 // config dir. A revert to the old CWD-relative default would break both asserts.
 func TestFullBackupResolvesCanonicalConfigPaths(t *testing.T) {
 	cfgDir := t.TempDir()
 	cfgPath := filepath.Join(cfgDir, "config.toml")
-	t.Setenv("PI_STACK_CONFIG", cfgPath)
+	t.Setenv("PIX_CONFIG", cfgPath)
 	t.Setenv("HOME", t.TempDir()) // isolate MEMORY_DB default too
 
 	bp := resolveBackupParams("", 7, time.Now())
@@ -328,7 +328,7 @@ func TestFullRestoreRefusesMalformedArchivedConfigBeforeCommit(t *testing.T) {
 	if err := os.WriteFile(srcCfg, []byte("this = = broken\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(t.TempDir(), "pi-stack-backup-20260715-120000.tar.gz")
+	archive := filepath.Join(t.TempDir(), "pix-backup-20260715-120000.tar.gz")
 	if _, err := memoryBackup(backupParams{
 		DBPath: dbPath, OutPath: archive, Keep: 7, Version: "test",
 		ConfigPath: srcCfg, Now: time.Now(),
@@ -393,7 +393,7 @@ func TestFullRestoreRollsBackConfigOnMemoryMoveFailure(t *testing.T) {
 	if err := os.WriteFile(srcOp, []byte("ARCHIVED=op://v/i/f\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(t.TempDir(), "pi-stack-backup-20260715-120000.tar.gz")
+	archive := filepath.Join(t.TempDir(), "pix-backup-20260715-120000.tar.gz")
 	if _, err := memoryBackup(backupParams{
 		DBPath: dbPath, OutPath: archive, Keep: 7, Version: "test",
 		ConfigPath: srcCfg, OpRefsPath: srcOp, Now: time.Now(),
@@ -479,7 +479,7 @@ func TestFullBackupManifestRedactsRemoteToken(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte("knowledge_bundles = [\""+kb+"\"]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PI_STACK_CONFIG", cfgPath)
+	t.Setenv("PIX_CONFIG", cfgPath)
 	t.Setenv("HOME", t.TempDir())
 
 	// Seed a live db and point MEMORY_DB at it so resolveBackupParams finds it.
@@ -490,7 +490,7 @@ func TestFullBackupManifestRedactsRemoteToken(t *testing.T) {
 	// Resolve params (this is where RedactURL is applied) then actually WRITE the
 	// archive so we can inspect the real manifest.json bytes.
 	bp := resolveBackupParams("", 7, time.Now())
-	bp.OutPath = filepath.Join(t.TempDir(), "pi-stack-backup-20260715-120000.tar.gz")
+	bp.OutPath = filepath.Join(t.TempDir(), "pix-backup-20260715-120000.tar.gz")
 	if _, err := memoryBackup(bp); err != nil {
 		t.Fatalf("memoryBackup: %v", err)
 	}

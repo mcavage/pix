@@ -1,17 +1,15 @@
 name: publish
 
-# Every push to main auto-publishes a NEW immutable version. CI stamps
-# 0.0.<run_number> into the tree, builds multi-arch (amd64 + arm64), pushes
-# :<version> + :latest, then commits the bumped version files back to main
-# ([skip ci] so the bump doesn't retrigger this workflow).
+# Every push to main auto-publishes a NEW immutable version. CI starts with the
+# version committed in package.json (0.1.0 for the first Pix release), then
+# increments its patch component until it finds an unused v<version> git tag.
+# It builds multi-arch (amd64 + arm64), pushes :<version> + :latest, then commits
+# the selected version into all lockstep files ([skip ci] prevents recursion).
 #
 # Why: sbx caches materialized templates PER TAG NAME and won't re-pull a tag it
 # already has. A moving tag (:edge/:latest) therefore goes stale until you evict
-# it by hand. A brand-new version tag every push sidesteps that entirely — sbx
-# has never seen :0.0.N, so `sbx run pi-stack --kit git+...` (which reads the
-# pinned image out of pi-kit/spec.yaml on main) always pulls a fresh image with
-# NO --template flag and NO `sbx template rm`. spec.yaml on main always points at
-# the latest published version because the bump job commits it back.
+# it by hand. A brand-new version tag every push sidesteps that entirely. The
+# committed spec.yaml always points at the latest successfully published image.
 #
 # Multi-arch native runners (no QEMU) — the image is chromium-heavy. Each arch is
 # pushed by digest, then merged into one multi-arch tag.
@@ -37,7 +35,7 @@ permissions:
   contents: write # the bump job commits the version bump back to main
 
 env:
-  IMAGE: docker.io/${{ vars.DOCKER_USER || 'mcavage' }}/pi-stack
+  IMAGE: docker.io/${{ vars.DOCKER_USER || 'mcavage' }}/pix
 
 jobs:
   version:
@@ -46,14 +44,121 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
-      # run_number is monotonic per workflow and never resets → a clean, unique,
-      # always-increasing patch number with no state to track.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
       - id: v
-        run: echo "version=0.0.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+        name: Select the next unused patch version
+        run: |
+          set -euo pipefail
+          base="$(node -p "require('./package.json').version")"
+          if ! [[ "$base" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "package.json version is not semver: $base" >&2
+            exit 1
+          fi
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          patch="${BASH_REMATCH[3]}"
+          version="$base"
+          while git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; do
+            patch=$((patch + 1))
+            version="${major}.${minor}.${patch}"
+          done
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing Pix $version (base: $base)"
+
+  # Real npm-resolution smoke for the two vendored runtime patches
+  # (scripts/patches/*.mjs). tests/pi-patches.test.mjs (the PR gate) proves the
+  # patch logic against LOCAL fixtures — zero network, fast on every push/PR.
+  # This job is the other half of AC-P0-006: install the ACTUAL pinned npm
+  # packages from the registry and patch them for real, so a registry-side
+  # change (a repack, a version drift) that no local fixture could see still
+  # gates the release. It also proves the smoke ISN'T a no-op by deliberately
+  # breaking each patch's anchor context first and asserting that failure mode
+  # fires — a smoke nobody runs (or that can't fail) is worse than none.
+  patch-smoke:
+    name: patch smoke (real npm install)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "25.9.0"
+
+      - name: Resolve pinned packages from the Dockerfile
+        id: pins
+        run: |
+          set -euo pipefail
+          PI_PACKAGE="$(grep -oP '^ARG PI_PACKAGE=\K\S+' Dockerfile)"
+          TODO_PACKAGE="$(grep -oP 'pi-manage-todo-list@\S+' Dockerfile | head -1)"
+          test -n "$PI_PACKAGE" && test -n "$TODO_PACKAGE"
+          echo "pi_package=$PI_PACKAGE" >> "$GITHUB_OUTPUT"
+          echo "todo_package=$TODO_PACKAGE" >> "$GITHUB_OUTPUT"
+
+      - name: npm install (real registry resolution) — pi + pi-manage-todo-list
+        env:
+          PI_PACKAGE: ${{ steps.pins.outputs.pi_package }}
+          TODO_PACKAGE: ${{ steps.pins.outputs.todo_package }}
+        run: |
+          set -euxo pipefail
+          export HOME="$RUNNER_TEMP/patch-smoke-home"
+          export NPM_CONFIG_PREFIX="$RUNNER_TEMP/patch-smoke-npm"
+          mkdir -p "$HOME" "$HOME/.pi/agent/npm"
+          npm install --global --ignore-scripts "$PI_PACKAGE"
+          npm install --prefix "$HOME/.pi/agent/npm" --ignore-scripts "$TODO_PACKAGE"
+          {
+            echo "TUI_JS=$NPM_CONFIG_PREFIX/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/tui.js"
+            echo "TUI_INDEX=$NPM_CONFIG_PREFIX/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.js"
+            echo "TODO_DIST=$HOME/.pi/agent/npm/node_modules/pi-manage-todo-list/dist"
+          } >> "$GITHUB_ENV"
+
+      - name: Prove BOTH patches FAIL loud on a deliberately broken anchor (before patching)
+        run: |
+          set -euxo pipefail
+          cp "$TUI_JS" "$TUI_JS.orig"
+          cp "$TODO_DIST/state-manager.js" "$TODO_DIST/state-manager.js.orig"
+
+          # tui-bottom-pin is non-fatal by design (an image build must still
+          # succeed on drift) — it must warn loudly and leave the file untouched.
+          sed -i 's/if (firstChanged < prevViewportTop) {/if (firstChanged <= prevViewportTop) { \/\/ deliberately broken for the release smoke/' "$TUI_JS"
+          out="$(node scripts/patches/apply-tui-bottom-pin.mjs 2>&1)"
+          echo "$out"
+          echo "$out" | grep -q 'not found' || { echo "::error::broken tui anchor was NOT detected — patch smoke is not proving anything"; exit 1; }
+          diff -q "$TUI_JS" <(sed 's/if (firstChanged < prevViewportTop) {/if (firstChanged <= prevViewportTop) { \/\/ deliberately broken for the release smoke/' "$TUI_JS.orig") \
+            || { echo "::error::broken tui file was modified despite the anchor mismatch"; exit 1; }
+          cp "$TUI_JS.orig" "$TUI_JS"
+
+          # apply-todo-durable-clear.mjs has no non-fatal fallback — a context
+          # mismatch must throw and exit nonzero.
+          sed -i 's/if (entry.type !== "message")/if (entry.type !== "message" \&\& entry.type !== "custom") \/\/ deliberately broken for the release smoke/' "$TODO_DIST/state-manager.js"
+          if node scripts/patches/apply-todo-durable-clear.mjs 2> /tmp/todo-broken.err; then
+            echo "::error::apply-todo-durable-clear.mjs was expected to fail on a broken anchor — it exited 0"; exit 1
+          fi
+          grep -q 'anchor not found' /tmp/todo-broken.err || { echo "::error::todo patch failed for the wrong reason: $(cat /tmp/todo-broken.err)"; exit 1; }
+          cp "$TODO_DIST/state-manager.js.orig" "$TODO_DIST/state-manager.js"
+
+      - name: Apply both patches for real, assert idempotent, run the render harness
+        run: |
+          set -euxo pipefail
+          node scripts/patches/apply-tui-bottom-pin.mjs | tee /tmp/tui-1.log
+          grep -q '\[apply-tui-bottom-pin\] patched' /tmp/tui-1.log
+          node scripts/patches/apply-tui-bottom-pin.mjs | tee /tmp/tui-2.log
+          grep -q 'already patched' /tmp/tui-2.log
+          node --check "$TUI_JS"
+          PI_TUI_INDEX="$TUI_INDEX" node docs/upstream/tui-bottom-pin/test.mjs
+          PI_TUI_INDEX="$TUI_INDEX" node docs/upstream/tui-bottom-pin/edge.mjs
+          PI_TUI_INDEX="$TUI_INDEX" node docs/upstream/tui-bottom-pin/integrity.mjs
+
+          node scripts/patches/apply-todo-durable-clear.mjs | tee /tmp/todo-1.log
+          grep -q 'patched' /tmp/todo-1.log
+          node scripts/patches/apply-todo-durable-clear.mjs | tee /tmp/todo-2.log
+          grep -q 'already patched' /tmp/todo-2.log
+          node --check "$TODO_DIST/index.js"
+          node --check "$TODO_DIST/state-manager.js"
 
   build:
     name: build ${{ matrix.arch }}
-    needs: version
+    needs: [version, patch-smoke]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -71,12 +176,12 @@ jobs:
           V="${{ needs.version.outputs.version }}"
           sed -i -E "s/^VERSION[[:space:]]*\?=.*/VERSION     ?= $V/" Makefile
           sed -i -E "s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*\"/\1$V\"/" package.json
-          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pi-stack:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
+          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pix:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       # One Docker Hub PAT authenticates both registries (DHI is gated by your
-      # Docker account). dhi.io = pull the base; docker.io = push pi-stack.
+      # Docker account). dhi.io = pull the base; docker.io = push pix.
       - name: Log in to DHI (pull the hardened base)
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
@@ -152,7 +257,7 @@ jobs:
           V="${{ needs.version.outputs.version }}"
           sed -i -E "s/^VERSION[[:space:]]*\?=.*/VERSION     ?= $V/" Makefile
           sed -i -E "s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*\"/\1$V\"/" package.json
-          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pi-stack:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
+          sed -i -E "s#(image:[[:space:]]*\"docker.io/.*/pix:)[^\"]*\"#\1$V\"#" pi-kit/spec.yaml
           if git diff --quiet; then echo "no version change — nothing to commit"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -160,7 +265,7 @@ jobs:
           git commit -m "chore: publish $V [skip ci]"
           git push
 
-      # Tag the stamped commit so the launcher's kit pin resolves. The `pi-stack`
+      # Tag the stamped commit so the launcher's kit pin resolves. The `pix`
       # launcher pins the kit to its own release via
       # `--kit "git+...#ref=v<version>&dir=pi-kit"`, so every published version
       # needs a matching annotated tag `v<version>` on the commit that carries the
@@ -176,10 +281,10 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "v$V" -m "pi-stack v$V"
+          git tag -a "v$V" -m "pix v$V"
           git push origin "v$V"
 
-  # Cross-compile the two HOST binaries (pi-stack launcher + pi-stack-host) for
+  # Cross-compile the two HOST binaries (pix launcher + pix-host) for
   # darwin/linux × amd64/arm64 and attach them, plus a SHA256SUMS, to the v<VER>
   # GitHub Release. This is the repo-less install path: `install.sh` fetches these
   # assets so a consumer never clones. Pure Go toolchain — no Docker, no DHI base.
@@ -205,7 +310,7 @@ jobs:
       # -X main.version stamps the launcher (its `var version`); the host binary has
       # no such symbol, so the linker silently ignores the flag there — harmless, and
       # keeps one build recipe for both. Output names match install.sh's URL pattern:
-      # pi-stack-<os>-<arch> and pi-stack-host-<os>-<arch>.
+      # pix-<os>-<arch> and pix-host-<os>-<arch>.
       - name: Cross-compile both binaries
         working-directory: services/host
         env:
@@ -218,22 +323,22 @@ jobs:
             echo "building $os/$arch"
             GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
               go build -ldflags "-X main.version=$V" \
-              -o "$GITHUB_WORKSPACE/dist/pi-stack-$os-$arch" ./cmd/pi-stack
+              -o "$GITHUB_WORKSPACE/dist/pix-$os-$arch" ./cmd/pix
             GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
               go build -ldflags "-X main.version=$V" \
-              -o "$GITHUB_WORKSPACE/dist/pi-stack-host-$os-$arch" ./
+              -o "$GITHUB_WORKSPACE/dist/pix-host-$os-$arch" ./
           done
 
       - name: Generate SHA256SUMS
         working-directory: dist
-        run: sha256sum pi-stack-* > SHA256SUMS && cat SHA256SUMS
+        run: sha256sum pix-* > SHA256SUMS && cat SHA256SUMS
 
       - name: Upload assets to the v<version> release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: v${{ needs.version.outputs.version }}
-          name: pi-stack v${{ needs.version.outputs.version }}
+          name: pix v${{ needs.version.outputs.version }}
           files: |
-            dist/pi-stack-*
+            dist/pix-*
             dist/SHA256SUMS
           fail_on_unmatched_files: true

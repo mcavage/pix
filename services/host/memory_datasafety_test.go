@@ -18,7 +18,7 @@ func TestBackupRefusesExistingOut(t *testing.T) {
 	defer st.db.Close()
 
 	outDir := t.TempDir()
-	outPath := filepath.Join(outDir, "pi-stack-backup-20260715-120000.tar.gz")
+	outPath := filepath.Join(outDir, "pix-backup-20260715-120000.tar.gz")
 	// A pre-existing archive (its bytes must survive a refused backup).
 	sentinel := []byte("a precious previous backup that must not be destroyed")
 	if err := os.WriteFile(outPath, sentinel, 0o600); err != nil {
@@ -41,7 +41,7 @@ func TestBackupRefusesExistingOut(t *testing.T) {
 }
 
 // TestBackupDefaultNameHasRandomSuffix is the B1 gate for the collision-proof
-// default name: with no --out, the derived path is pi-stack-backup-<ts>-<rand>.tar.gz
+// default name: with no --out, the derived path is pix-backup-<ts>-<rand>.tar.gz
 // so two backups in the same second cannot collide.
 func TestBackupDefaultNameHasRandomSuffix(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -52,7 +52,7 @@ func TestBackupDefaultNameHasRandomSuffix(t *testing.T) {
 	if !backupNameRe.MatchString(base) {
 		t.Errorf("default name %q does not match the backup name pattern", base)
 	}
-	prefix := "pi-stack-backup-20260715-120000-"
+	prefix := "pix-backup-20260715-120000-"
 	if !strings.HasPrefix(base, prefix) || !strings.HasSuffix(base, ".tar.gz") {
 		t.Errorf("default name %q lacks the <ts>-<rand> shape", base)
 	}
@@ -61,13 +61,13 @@ func TestBackupDefaultNameHasRandomSuffix(t *testing.T) {
 	}
 }
 
-// TestResolveBackupParamsUsesCanonicalPaths is the B2 gate: with PI_STACK_CONFIG
+// TestResolveBackupParamsUsesCanonicalPaths is the B2 gate: with PIX_CONFIG
 // set, both backup and restore derive config.toml + op-refs.env from the config
 // DIR (XDG sibling), never a CWD-relative config/op-refs.env.
 func TestResolveBackupParamsUsesCanonicalPaths(t *testing.T) {
 	cfgDir := t.TempDir()
 	cfgPath := filepath.Join(cfgDir, "config.toml")
-	t.Setenv("PI_STACK_CONFIG", cfgPath)
+	t.Setenv("PIX_CONFIG", cfgPath)
 	t.Setenv("HOME", t.TempDir())
 
 	bp := resolveBackupParams("", 7, time.Now())
@@ -104,7 +104,7 @@ func TestResolveBackupParamsDerivesManifestNotes(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PI_STACK_CONFIG", cfgPath)
+	t.Setenv("PIX_CONFIG", cfgPath)
 	t.Setenv("HOME", t.TempDir())
 
 	bp := resolveBackupParams("", 7, time.Now())
@@ -146,7 +146,7 @@ func TestResolveBackupParamsRedactsRemote(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PI_STACK_CONFIG", cfgPath)
+	t.Setenv("PIX_CONFIG", cfgPath)
 	t.Setenv("HOME", t.TempDir())
 
 	bp := resolveBackupParams("", 7, time.Now())
@@ -196,7 +196,7 @@ func TestRestoreRefusesMalformedConfig(t *testing.T) {
 	if err := os.WriteFile(srcCfg, []byte("this is = not valid toml = at all ][\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(t.TempDir(), "pi-stack-backup-20260715-120000.tar.gz")
+	archive := filepath.Join(t.TempDir(), "pix-backup-20260715-120000.tar.gz")
 	if _, err := memoryBackup(backupParams{
 		DBPath: dbPath, OutPath: archive, Keep: 7, Version: "test",
 		ConfigPath: srcCfg, Now: time.Now(),
@@ -253,7 +253,7 @@ func TestRestoreRollsBackConfigOnMemorySwapFailure(t *testing.T) {
 	if err := os.WriteFile(srcOp, []byte("ARCHIVED=op://v/i/f\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(t.TempDir(), "pi-stack-backup-20260715-120000.tar.gz")
+	archive := filepath.Join(t.TempDir(), "pix-backup-20260715-120000.tar.gz")
 	if _, err := memoryBackup(backupParams{
 		DBPath: dbPath, OutPath: archive, Keep: 7, Version: "test",
 		ConfigPath: srcCfg, OpRefsPath: srcOp, Now: time.Now(),
@@ -318,7 +318,7 @@ func TestRestoreOrderingRollsBackConfigOnOpRefsFailure(t *testing.T) {
 	if err := os.WriteFile(srcOp, []byte("ARCHIVED=op://v/i/f\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(t.TempDir(), "pi-stack-backup-20260715-120000.tar.gz")
+	archive := filepath.Join(t.TempDir(), "pix-backup-20260715-120000.tar.gz")
 	if _, err := memoryBackup(backupParams{
 		DBPath: dbPath, OutPath: archive, Keep: 7, Version: "test",
 		ConfigPath: srcCfg, OpRefsPath: srcOp, Now: time.Now(),
@@ -377,7 +377,7 @@ func TestRestoreOpRefsPermsAndDir(t *testing.T) {
 	if err := os.WriteFile(srcOp, []byte("ARCHIVED=op://v/i/f\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(t.TempDir(), "pi-stack-backup-20260715-120000.tar.gz")
+	archive := filepath.Join(t.TempDir(), "pix-backup-20260715-120000.tar.gz")
 	if _, err := memoryBackup(backupParams{
 		DBPath: dbPath, OutPath: archive, Keep: 7, Version: "test",
 		OpRefsPath: srcOp, Now: time.Now(),

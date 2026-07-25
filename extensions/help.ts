@@ -1,4 +1,4 @@
-// pi-stack — a LIVE map of the harness (`/help`) plus a warm first-run tour
+// pix — a LIVE map of the harness (`/help`) plus a warm first-run tour
 // and a one-time first-turn nudge (points at /help).
 //
 // The whole point is that it never goes stale: `/help` enumerates the skills,
@@ -72,7 +72,7 @@ const KNOWN_COMMANDS = [
 	"/help",
 ];
 
-const NUDGE_MARKER = ".pi-stack-help-nudged";
+const NUDGE_MARKER = ".pix-help-nudged";
 
 // Mirror pi's getAgentDir(): $PI_CODING_AGENT_DIR or ~/.pi/agent.
 function agentDir(): string {
@@ -301,7 +301,7 @@ function buildHelp(pi: any, ctx: any): string {
 	// Assign each visible skill to a group; anything unmatched -> OTHER.
 	const assigned = new Set<SkillInfo>();
 	const L: string[] = [];
-	L.push(p.head("pi-stack — what's loaded right now"));
+	L.push(p.head("pix — what's loaded right now"));
 	L.push(p.desc("Tip: /help <name> for the detail on one skill, agent, or command."));
 	L.push("");
 	L.push(p.head("SKILLS") + p.desc("  (run /skill:<name>, or just describe the task)"));

@@ -8,7 +8,7 @@
 > background, not for the host-state FIELD SCHEMA (`provisioned` now
 > derives from `keys.resolved && knowledge.seeded && pack.active`, see
 > `hoststate.go`), not for the onboarding flow shape, and NOT for the delivery
-> mechanism: §6's `<workspace>/.pi-stack/host-state.json` file design is ITSELF
+> mechanism: §6's `<workspace>/.pix/host-state.json` file design is ITSELF
 > superseded — the shipped mechanism builds the same fields in memory and
 > injects them directly into the launcher-generated initial prompt (never a
 > workspace file); see `skills/onboarding/SKILL.md` and `hoststate.go`.
@@ -35,7 +35,7 @@ only when the moment is real.
 
 Rev 1 targeted "5-8 min to first task" and metered "artifacts per onboarding".
 Both were wrong — they reward a guided march. The bar is the **Stripe bar:
-under 60 seconds from `pi-stack setup` to a real, useful result.**
+under 60 seconds from `pix setup` to a real, useful result.**
 
 - North star: **time-to-first-real-verb** (target <60s) and **did the user run a
   second command unprompted** (retention).
@@ -51,7 +51,7 @@ relevant track, and the autonomy dial appear at the moment they become real, or
 never. This is the single change that clears most of the bar.
 
 Consequences (what rev 1 got wrong, now cut):
-- No opening "what pi-stack is" paragraph. Nobody reads it. Teach by doing.
+- No opening "what pix is" paragraph. Nobody reads it. Teach by doing.
 - No up-front track menu. A menu of abstract nouns punts the design onto the
   user. Offer AT MOST ONE context-picked track, after the aha.
 - No identity form up front. Derive name/email from git/gh; let the watcher learn
@@ -82,22 +82,22 @@ Consequences (what rev 1 got wrong, now cut):
 ## 5. Host secrets and keys (owner comment 1)
 
 Today the host phase only checks that sbx has secrets set and moves on. That is
-wrong: it can pass while pi-stack has no usable key, so the first task 401s and
+wrong: it can pass while pix has no usable key, so the first task 401s and
 the tool has taught the user it lies (the impatient reviewer's unforgivable
 finding).
 
-Decision (owner): **1Password holds the secret VALUES; pi-stack owns the
-`op://` REFERENCES, never the secrets.** At launch pi-stack resolves the refs via
-`op` and injects them; values never touch pi-stack's config or the VM.
+Decision (owner): **1Password holds the secret VALUES; pix owns the
+`op://` REFERENCES, never the secrets.** At launch pix resolves the refs via
+`op` and injects them; values never touch pix's config or the VM.
 
 - This is NOT new infra — it is the exact pattern the repo already uses for MCP
   credentials: `config/op-refs.env` + `op run --env-file=... -- ...`, managed by
-  `pi-stack secret status|edit|check`. v2 EXTENDS that same mechanism to the
+  `pix secret status|edit|check`. v2 EXTENDS that same mechanism to the
   provider keys (anthropic/openai/google), so there is one credential model for
   everything, and 1Password stays the single store.
 - The keys gate resolves the refs (can `op` read them?) instead of checking
   "does sbx have some secret". This closes the false-pass -> post-gate 401 hole.
-  On a miss, the blocking error points at `pi-stack secret edit` with the missing
+  On a miss, the blocking error points at `pix secret edit` with the missing
   ref named. "Check sbx has secrets and move on" is deleted.
 - 1Password is the first provider; the ref-resolution seam stays pluggable for a
   future secrets backend. Injection target (proxy vs sbx secret vs direct) is an
@@ -106,7 +106,7 @@ Decision (owner): **1Password holds the secret VALUES; pi-stack owns the
 ## 6. Host->agent truth (SUPERSEDED delivery mechanism, fields still accurate)
 
 > **Superseded:** this section originally specified a written
-> `<workspace>/.pi-stack/host-state.json` file. That mechanism shipped, then was
+> `<workspace>/.pix/host-state.json` file. That mechanism shipped, then was
 > replaced: a workspace is attacker-influenced (a cloned repo), so a file there
 > can never be the trust boundary for facts the agent treats as ground truth —
 > it is racy (stale/planted content) and reads like any other untrusted
@@ -137,7 +137,7 @@ Net-new host work, on the critical path. Generalizable: any skill can read it.
 
 ## 7. First-run journey (rev 2)
 
-`pi-stack setup` -> host phase (non-interactive: resolve keys via §5, ensure
+`pix setup` -> host phase (non-interactive: resolve keys via §5, ensure
 memory, opt-in MCP off by default, write the truth file) -> launch. Then:
 
 1. **If provisioned (§9): one line + first task. Done.** No onboarding.
@@ -156,7 +156,7 @@ memory, opt-in MCP off by default, write the truth file) -> launch. Then:
 5. **Autonomy dial:** default `review` silently; surfaced on first "just build
    it".
 6. **MCP / proxies:** never in first-run; a one-line default-no offer to explain
-   the "why" later, naming `gworkspace` + `pi-stack doctor`.
+   the "why" later, naming `gworkspace` + `pix doctor`.
 7. **Close:** a one-line receipt of anything written, then straight into work.
 
 ## 8. MCP opt-in (owner comment 2)
@@ -167,8 +167,8 @@ Fix: **MCP is opt-in, default OFF.**
 - When MCP is off: no `--mcp`, no gateway registration, no gateway-connect
   attempt, and NO startup error. The truth file carries `mcp.enabled=false`,
   `servers=[]`.
-- Enable explicitly (`pi-stack config set mcp.enabled true` or a `setup --mcp`
-  flag). Only then does pi-stack wire the gateway + servers.
+- Enable explicitly (`pix config set mcp.enabled true` or a `setup --mcp`
+  flag). Only then does pix wire the gateway + servers.
 - §4-P8 ("never demo what fails") is enforced here specifically: a fresh install
   never shows an MCP error during the aha.
 
@@ -223,15 +223,15 @@ constrained) to make the watcher reliable regardless of model.
 
 - **Q1 (where authored skills live): SUPERSEDED by packs.** Skills live in the
   active pack's `skills/`; the personal-pack root is the
-  `~/.local/share/pi-stack/skills` path, now a git repo (`git init` + first
+  `~/.local/share/pix/skills` path, now a git repo (`git init` + first
   commit, guarded if `user.email` is unset). Team-shared skills live in a work
   pack. See `docs/design/packs.md`.
 - **Q2 (default autonomy mode): `review`.**
 - **Q3 (guided path skippable): yes** — and rev 2 makes it <60s to value, not
   5-8 min.
 - **Q4 (build truth file first): yes.**
-- **Q5 (key model): DECIDED — 1Password holds values, pi-stack owns the `op://`
-  references** (extend the existing `op-refs.env` / `pi-stack secret` mechanism to
+- **Q5 (key model): DECIDED — 1Password holds values, pix owns the `op://`
+  references** (extend the existing `op-refs.env` / `pix secret` mechanism to
   provider keys). See §5.
 
 ## 13. Net-new work this depends on
@@ -239,15 +239,15 @@ constrained) to make the watcher reliable regardless of model.
 1. In-memory host-state builder (host) + prompt-injected payload reader
    (skill). Critical path. (Originally shipped as a `host-state.json` writer;
    superseded per §6 — the file mechanism was replaced with prompt injection.)
-2. DONE. `pi-stack secret sync` resolves provider-key `op://` refs -> sbx
+2. DONE. `pix secret sync` resolves provider-key `op://` refs -> sbx
    secrets (sandbox proxy store); host mode already resolves them via `op run
-   --env-file`. Keys gate points at `pi-stack secret sync`; setup runs it
+   --env-file`. Keys gate points at `pix secret sync`; setup runs it
    best-effort; host-state reports `keys.source`. Live `op` run is a host test
    (op is a host tool; the sandbox can't reach 1Password).
 3. MCP opt-in (default off, no startup error) (§8).
 4. Pack "provisioned" marker + reflecting pack skills/tools into the truth
    file (§9).
-5. Personal skills dir `~/.local/share/pi-stack/skills` wiring (Q1).
+5. Personal skills dir `~/.local/share/pix/skills` wiring (Q1).
 6. Watcher model default -> `gemma4:e4b-mlx` (Apple Silicon) + warm-on-start +
    longer cold budget + Ollama structured outputs.
 

@@ -1,6 +1,6 @@
 ---
 name: docs-sync
-description: Post-ship documentation sync. After code ships, compare the release diff to the repo's doc set, draft all required updates, and present them as a single batch for approval before writing anything. Use for "update the docs", "sync docs to release", "docs are stale", or after running ship.
+description: Post-ship documentation sync — compare the release diff to the doc set, draft required updates, present as one batch for approval before writing. Use for "update the docs" or after `ship`.
 ---
 # docs-sync
 

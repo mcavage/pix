@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"pi-stack/host/config"
-	"pi-stack/host/plugin"
+	"pix/host/config"
+	"pix/host/plugin"
 )
 
 // --- in-process knowledgeMux over a real temp-indexed store (FTS-only) --------
@@ -211,7 +211,7 @@ func TestResolveServicesIncludesKnowledge(t *testing.T) {
 // to empty (absence is not an error, no bundles).
 func TestConfigKnowledgeBundles(t *testing.T) {
 	// Absent file -> empty bundles, existing defaults intact.
-	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "nope.toml"))
+	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "nope.toml"))
 	c, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load absent: %v", err)
@@ -226,7 +226,7 @@ func TestConfigKnowledgeBundles(t *testing.T) {
 	if err := os.WriteFile(path, []byte("knowledge_bundles = [\"/kb/a\", \"/kb/b\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PI_STACK_CONFIG", path)
+	t.Setenv("PIX_CONFIG", path)
 	c2, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load decode: %v", err)

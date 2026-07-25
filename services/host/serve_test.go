@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"pi-stack/host/config"
-	"pi-stack/host/plugin"
+	"pix/host/config"
+	"pix/host/plugin"
 )
 
 // --- F1: enabled-set resolution honors cfg.Services and CLI override ---------
@@ -70,14 +70,14 @@ func TestServeBrokerSlot(t *testing.T) {
 
 	// FAIL CLOSED: an enabled broker with no bearer must be refused, not served
 	// unauthenticated.
-	t.Setenv("PI_STACK_BROKER_AUTH", "")
+	t.Setenv("PIX_BROKER_AUTH", "")
 	supNoAuth := &supervisor{}
 	defer supNoAuth.shutdown()
 	if _, err := brokerService(cfg, supNoAuth, ""); err == nil {
 		t.Fatal("brokerService(external, empty bearer) must refuse to start")
 	}
 
-	t.Setenv("PI_STACK_BROKER_AUTH", "shim-secret")
+	t.Setenv("PIX_BROKER_AUTH", "shim-secret")
 	sup2 := &supervisor{}
 	defer sup2.shutdown()
 	svc2, err := brokerService(cfg, sup2, "")
@@ -187,11 +187,11 @@ func TestLaunchRefusesOnSHAMismatch(t *testing.T) {
 // --- F2: a plugin subprocess env never contains the broker bearer ------------
 
 func TestPluginEnvStripsBearer(t *testing.T) {
-	t.Setenv("PI_STACK_BROKER_AUTH", "super-secret-bearer")
+	t.Setenv("PIX_BROKER_AUTH", "super-secret-bearer")
 
 	// A generic plugin (memory/mcp): the bearer must be gone.
 	for _, kv := range pluginEnv(nil) {
-		if strings.HasPrefix(kv, "PI_STACK_BROKER_AUTH=") {
+		if strings.HasPrefix(kv, "PIX_BROKER_AUTH=") {
 			t.Fatalf("pluginEnv(nil) leaked the broker bearer: %q", kv)
 		}
 	}
@@ -199,12 +199,12 @@ func TestPluginEnvStripsBearer(t *testing.T) {
 	// The broker gets its bearer back — and ONLY the granted value, never the
 	// stripped process-global one.
 	got := ""
-	for _, kv := range pluginEnv([]string{"PI_STACK_BROKER_AUTH=broker-only"}) {
-		if strings.HasPrefix(kv, "PI_STACK_BROKER_AUTH=") {
+	for _, kv := range pluginEnv([]string{"PIX_BROKER_AUTH=broker-only"}) {
+		if strings.HasPrefix(kv, "PIX_BROKER_AUTH=") {
 			got = kv
 		}
 	}
-	if got != "PI_STACK_BROKER_AUTH=broker-only" {
+	if got != "PIX_BROKER_AUTH=broker-only" {
 		t.Fatalf("broker env = %q, want the explicitly-granted value only", got)
 	}
 }

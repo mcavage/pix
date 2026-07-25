@@ -1,6 +1,6 @@
 ---
 name: ingest
-description: Ingest a document into persistent memory with provenance. Reads the doc, extracts key facts, stores them with source tracking and staleness classification. Use for "ingest this doc", "read and remember this", "index this document", or when another skill needs to feed a document into memory.
+description: Ingest a document into persistent memory with provenance — extract key facts, store with source tracking and staleness classification. Use for "ingest this doc" or "read and remember this".
 ---
 # ingest
 

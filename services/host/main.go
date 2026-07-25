@@ -1,4 +1,4 @@
-// pi-stack-host — the single compiled binary for everything that runs on the
+// pix-host — the single compiled binary for everything that runs on the
 // HOST (outside the sandbox). Convention: host code is Go (one static binary, no
 // interpreter spawning child processes — the shape EDR trusts); in-sandbox code
 // (pi extensions, in-box MCP) is TypeScript.
@@ -40,9 +40,9 @@ import (
 	"strings"
 )
 
-// version is stamped at build time via -ldflags "-X main.version=..." for the
-// launcher; the host binary is currently built unstamped, so it reports "dev".
-// Used in the backup manifest (pi_stack_version).
+// version is stamped at build time via -ldflags "-X main.version=..." for both
+// release and local builds. Used for launcher/host compatibility checks and in
+// the backup manifest (pix_version).
 var version = "dev"
 
 func main() {
@@ -51,6 +51,8 @@ func main() {
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "version", "--version", "-v":
+		fmt.Println(version)
 	case "slack":
 		// Back-compat alias: the Slack MCP is now served through the generic
 		// stdio bridge (behaviourally identical to the old runSlack()).
@@ -72,7 +74,7 @@ func main() {
 	case "-h", "--help", "help":
 		usage()
 	default:
-		fmt.Fprintf(os.Stderr, "pi-stack-host: unknown subcommand %q\n\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "pix-host: unknown subcommand %q\n\n", os.Args[1])
 		usage()
 		os.Exit(2)
 	}
@@ -83,7 +85,7 @@ func main() {
 // shared handshake. kind is memory|knowledge|broker|mcp (mcp also needs a <name>).
 func runPlugin(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "pi-stack-host plugin: missing <kind> (memory|knowledge|broker|mcp)")
+		fmt.Fprintln(os.Stderr, "pix-host plugin: missing <kind> (memory|knowledge|broker|mcp)")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -95,22 +97,23 @@ func runPlugin(args []string) {
 		servePluginBroker("broker")
 	case "mcp":
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "pi-stack-host plugin mcp: missing <name>")
+			fmt.Fprintln(os.Stderr, "pix-host plugin mcp: missing <name>")
 			os.Exit(2)
 		}
 		servePluginMcp(args[1])
 	default:
-		fmt.Fprintf(os.Stderr, "pi-stack-host plugin: unknown kind %q (memory|knowledge|broker|mcp)\n", args[0])
+		fmt.Fprintf(os.Stderr, "pix-host plugin: unknown kind %q (memory|knowledge|broker|mcp)\n", args[0])
 		os.Exit(2)
 	}
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `pi-stack-host — host-side services for pi-stack
+	fmt.Fprint(os.Stderr, `pix-host — host-side services for pix
 
-usage: pi-stack-host <subcommand>
+usage: pix-host <subcommand>
 
 subcommands:
+  version        print the stamped host-binary version
   memory         self-learning memory store, JSON-RPC (:11435)
   backup         hot FULL backup (memory + config + op-refs) -> tar.gz
   restore        restore a FULL backup tar.gz (safe swap)

@@ -2,7 +2,7 @@
 // deterministic list-all semantics: newest-first, respecting kind/project/
 // profile visibility, limit, and charBudget, with normal hit fields/scores —
 // and it must work with NO FTS match and NO embedder (keyword-only store),
-// which is exactly why `pi-stack memory recall '*'` and a blank sandbox
+// which is exactly why `pix memory recall '*'` and a blank sandbox
 // /recall need their own explicit path rather than falling through to the
 // relevance scorer (which can legitimately return nothing for "*").
 package main

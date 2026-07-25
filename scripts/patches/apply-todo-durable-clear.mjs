@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // pi-manage-todo-list 0.4.0 clears only in-memory state for `/todos clear`.
-// Persist a launcher-owned clear marker so resumed sessions and pi-stack's
+// Persist a launcher-owned clear marker so resumed sessions and pix's
 // compaction continuation do not resurrect work the user explicitly cleared.
 
 import fs from "node:fs";
@@ -18,7 +18,7 @@ const root = path.join(
 );
 const indexPath = path.join(root, "index.js");
 const statePath = path.join(root, "state-manager.js");
-const marker = "pi-stack-todo-cleared";
+const marker = "pix-todo-cleared";
 
 function patch(file, before, after) {
 	const current = fs.readFileSync(file, "utf8");

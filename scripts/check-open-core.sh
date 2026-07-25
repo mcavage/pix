@@ -5,7 +5,7 @@
 #      mirror each other, checked below (skills/agents);
 #   2. nothing company-specific being git-tracked outside them (the generic
 #      marker guard, below);
-#   3. `pi-stack-host` having exactly ONE host-side extension point — the
+#   3. `pix-host` having exactly ONE host-side extension point — the
 #      generic, SHA-pinned `[plugins.*]` external-process mechanism — and no
 #      other compile-in extension seam ever quietly reappearing (the
 #      compile-in guard, below). Private context ships as a runtime **pack**
@@ -29,7 +29,7 @@ allow() { # $1=file $2=prefix(skills|agents)
 
 # --- Host compile-in extension boundary guard -------------------------------
 #
-# pi-stack-host has exactly one host-side extension point: the generic,
+# pix-host has exactly one host-side extension point: the generic,
 # SHA-pinned `[plugins.*]` external-process mechanism (services/host/plugin).
 # There is no compile-in extension seam — no private Go source symlinked into
 # services/host, and no init()-registered "extra*" factory hooks wiring extra

@@ -1,6 +1,6 @@
 ---
 name: slide-deck
-description: Build a Marp-compatible presentation deck with intentional messaging strategy. Use for "make a deck", "create slides", "put together a presentation", or any request to turn a doc, spec, or idea into a slide deck.
+description: Build a Marp-compatible presentation deck with intentional messaging strategy. Use for "make a deck", "create slides", "put together a presentation", or turning a doc/spec into a slide deck.
 ---
 # slide-deck
 

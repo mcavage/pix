@@ -1,4 +1,4 @@
-// pi-stack — live agent status.
+// pix — live agent status.
 //
 // Replaces the opaque "working..." indicator with what the agent is ACTUALLY
 // doing: model · phase (awaiting model vs running <tool>) · elapsed · a stall
@@ -8,7 +8,7 @@
 // Defensive by design: every pi API touch is guarded so a payload/shape
 // mismatch degrades gracefully and never breaks startup.
 // HOST MODE (docs/design/host-mode.md): the Go launcher sets OLLAMA_HOSTMODE=1
-// ONLY for `pi-stack host` sessions (never in the sandbox). When set, this
+// ONLY for `pix host` sessions (never in the sandbox). When set, this
 // extension pins a permanent, unmissable HOST badge for the whole session —
 // the persistent in-session signal the design doc calls for (a banner scrolls
 // away; this doesn't). Detected once at load so it can't flap mid-session.

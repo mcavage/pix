@@ -1,26 +1,26 @@
 # Onboarding redesign
 
 Status: PROPOSED (awaiting owner gate before the teardown)
-Supersedes: `pi-stack setup` (the 4-step host TTY wizard) and the `onboard` skill.
+Supersedes: `pix setup` (the 4-step host TTY wizard) and the `onboard` skill.
 
 ## Problem
 
 Onboarding today is two disjoint things that never hand off to each other:
 
-1. `pi-stack setup` (`services/host/cmd/pi-stack/setup.go`): a host-side 4-step
+1. `pix setup` (`services/host/cmd/pix/setup.go`): a host-side 4-step
    TTY wizard (keys, memory/knowledge, integrations, credentials). It writes
    host config but knows nothing about *you*, and reads like `apt-get` output.
 2. The `onboard` skill (`skills/onboard/SKILL.md`): a conversational identity
    seed into the memory service, run *inside* a sandbox. It knows you but can't
    persist host state, and nothing tells you it exists.
 
-First run nudges you to the wizard from bare `pi-stack` (the one command that
-never launches). `pi-stack run` (the command you actually type) has no
+First run nudges you to the wizard from bare `pix` (the one command that
+never launches). `pix run` (the command you actually type) has no
 onboarding awareness at all. The result is a broken *shape*, not broken code.
 
 ## Constraints (owner-fixed, not up for debate)
 
-- `pi-stack run` just launches the agent. Onboarding is OPT-IN, never forced.
+- `pix run` just launches the agent. Onboarding is OPT-IN, never forced.
 - Provider keys, `serve`, and the memory service are HOST-side prerequisites.
 - The interactive `setup` wizard AND the `onboard` skill are deleted.
 - A flag-driven non-interactive path stays for CI/automation.
@@ -29,11 +29,11 @@ onboarding awareness at all. The result is a broken *shape*, not broken code.
 
 ## Shape (the load-bearing decision)
 
-Onboarding is something the **agent does inside a normal `pi-stack run`
+Onboarding is something the **agent does inside a normal `pix run`
 session**, not a second top-level host command. The offer lives where you
 actually type.
 
-- `pi-stack run` launches as it does today (host preflight = key check only; no
+- `pix run` launches as it does today (host preflight = key check only; no
   onboarding gate). Constraint 4a honored literally: `runVerb` never onboards.
 - On a first run, the in-sandbox agent's FIRST turn is an opt-in offer:
   "First time here. Want two minutes to set up how I work with you? [Y/n]".
@@ -41,11 +41,11 @@ actually type.
   conversation, then you land in the same session on a real first task.
 - Re-onboard later by telling the agent "onboard me" (skill trigger). No host
   verb to remember.
-- `pi-stack setup` survives ONLY as the headless automation path (renamed to
-  `pi-stack onboard --non-interactive` with `setup` kept as a deprecated
+- `pix setup` survives ONLY as the headless automation path (renamed to
+  `pix onboard --non-interactive` with `setup` kept as a deprecated
   alias): deterministic host config from flags, no prompts, safe in CI.
 
-Rejected alternative: a top-level `pi-stack onboard` command that launches and
+Rejected alternative: a top-level `pix onboard` command that launches and
 owns the lifecycle. It adds a second thing to remember for one concept and
 reintroduces a host-side step in front of the session, which cuts against "one
 contiguous experience." The lifecycle it wanted to own (bootstrap, reconcile)
@@ -55,7 +55,7 @@ still happens, just folded into `run` + the in-session flow (below).
 
 The in-sandbox onboarding agent produces two kinds of output that persist very
 differently. The sandbox is network-fenced and non-root; it CANNOT write the
-host's `~/.config/pi-stack/config.toml`.
+host's `~/.config/pix/config.toml`.
 
 - **Data plane (identity):** name, tone, pet peeves, values. Written LIVE via
   the memory service (`:11435` over `host.docker.internal`, the existing
@@ -65,13 +65,13 @@ host's `~/.config/pi-stack/config.toml`.
   `ollama_bridge_model`, `memory_watcher_model`. These govern HOST code
   execution (MCP subprocess spawns, kit stacking), so they must NOT be a live
   write surface from a fenced VM. Switching the active pack is a separate,
-  explicit command (`pi-stack pack use`), not a field this file proposes.
+  explicit command (`pix pack use`), not a field this file proposes.
 
 ### Write-back mechanism: declarative file, host-applied after exit
 
-The agent writes `<workspace>/.pi-stack/onboarding.json` (ordinary file tools,
+The agent writes `<workspace>/.pix/onboarding.json` (ordinary file tools,
 no new capability) describing the control-plane changes it proposes. On the
-NEXT `pi-stack run` for that workspace, the host reads it, VALIDATES against a
+NEXT `pix run` for that workspace, the host reads it, VALIDATES against a
 fixed allowlist schema, shows a diff, applies under a `[Y/n]` confirm gate
 (`--yes` for CI), then deletes it.
 
@@ -80,7 +80,7 @@ rejected): a loopback listener that mutates config and can enable an `mcp`
 entry (making the host spawn a subprocess) from a fenced VM is exactly the
 backdoor shape AGENTS.md forbids. The memory endpoint is fine because it writes
 data ROWS; a config endpoint has a code-execution blast radius. The declarative
-file adds zero new listener and reuses the one-directional `.pi-stack/` seam
+file adds zero new listener and reuses the one-directional `.pix/` seam
 `run.go` already owns, in reverse. Worst case a hostile VM can only PROPOSE
 config within a fixed schema that the host declines at the gate.
 
@@ -113,10 +113,10 @@ file can never make the host spawn an attacker-chosen command); any
 The host must NOT gate `run` on onboarding, but the in-sandbox agent needs to
 know it is a first run. `run` writes a one-shot marker into the mounted
 workspace when `!configExists()` AND no identity is recalled:
-`<workspace>/.pi-stack/onboarding.offer`. A tiny `extensions/onboarding.ts`
+`<workspace>/.pix/onboarding.offer`. A tiny `extensions/onboarding.ts`
 reads it on session start and, ONLY on an interactive TTY (never under `-p` /
 non-interactive), injects the first-turn offer (`deliverAs:"nextTurn"`, stripped
-in the `context` hook, the `timestamps.ts` pattern). CI and `pi-stack run -- -p
+in the `context` hook, the `timestamps.ts` pattern). CI and `pix run -- -p
 "..."` never see a prompt. The marker is deleted once handled so it offers once.
 
 ## Files
@@ -128,13 +128,13 @@ Removed:
   `credentialDetermination`, `gogAuthed`, `opRefsResolvable`, `setupKnowledge`,
   `registerServers`) move to `onboard_apply.go`.
 - `firstRunHook()` call is already absent from `runVerb`; keep it that way.
-- The bare-`pi-stack` first-run nudge retargets from `setup` to a one-line hint
-  that `pi-stack run` will offer setup in-session.
+- The bare-`pix` first-run nudge retargets from `setup` to a one-line hint
+  that `pix run` will offer setup in-session.
 
 Added:
 - `skills/onboarding/SKILL.md`: the salvaged `onboard` flow (single probe, one
   batched question, confirm-before-write) plus a terminal step that `/remember`s
-  identity (data plane) and writes `.pi-stack/onboarding.json` (control plane),
+  identity (data plane) and writes `.pix/onboarding.json` (control plane),
   then runs one real first task.
 - `extensions/onboarding.ts`: first-turn offer injector (TTY-gated).
 - `onboard.go`: `runOnboardNonInteractive` (the CI path), `onboardingResult`,
@@ -160,12 +160,12 @@ knowledge), `ollama_bridge_model`, `memory_watcher_model`.
 ## Phased plan
 
 - P0: refactor reusable helpers out of `setup.go` into `onboard_apply.go`; add
-  `pi-stack onboard --non-interactive` + `setup` deprecation alias. No behavior
+  `pix onboard --non-interactive` + `setup` deprecation alias. No behavior
   change yet.
 - P1: schema + `applyOnboardingResult` + validation + CI path. Fitness 2, 3.
 - P2: `skills/onboarding/SKILL.md` + `extensions/onboarding.ts` + the
   `run.go` marker/reconcile wiring. Fitness 1, 4, 5. Manual e2e in a
-  `pi-stack-test` sandbox.
+  `pix-test` sandbox.
 - P3: delete the wizard core + `skills/onboard/`; update help/man/README/AGENTS;
   open-core guard.
 

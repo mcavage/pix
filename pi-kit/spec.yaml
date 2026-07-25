@@ -1,7 +1,7 @@
 schemaVersion: "2"
 kind: sandbox
-name: pi-stack
-displayName: Pi Stack
+name: pix
+displayName: Pix
 description: "Multi-model pi coding agent on a Docker Hardened (DHI) Debian base"
 
 sandbox:
@@ -14,7 +14,7 @@ sandbox:
   # run even when the image is already loaded, defeating `make load`. A pinned
   # tag means "use the loaded build if present, else pull once." Keep in sync
   # with VERSION in the Makefile and `version` in package.json.
-  image: "docker.io/mcavage/pi-stack:0.0.47"
+  image: "docker.io/mcavage/pix:0.1.0"
   aiFilename: AGENTS.md
   entrypoint:
     # --session-dir persists sessions on the host-mounted workspace so they
@@ -32,8 +32,8 @@ sandbox:
 # Provider keys are read by the host proxy and swapped into the outbound auth
 # header — the agent inside the VM only ever sees the "proxy-managed" sentinel
 # (credentials[].apiKey.proxyManaged below). The real key never enters the VM:
-# the proxy holds it, sourced from the sbx secret store, which pi-stack seeds
-# from 1Password (`pi-stack setup`; op is required). See docs/CREDENTIALS.md.
+# the proxy holds it, sourced from the sbx secret store, which pix seeds
+# from 1Password (`pix setup`; op is required). See docs/CREDENTIALS.md.
 #
 # kit-spec v2. Each credential is a `service` (the sbx secret-store identifier)
 # plus an apiKey block: apiKey.name is the in-VM env var (set to the sentinel),
@@ -93,8 +93,8 @@ caps:
       # in-sandbox monitor extension POSTs NDJSON events (model requests/
       # responses, tool + MCP calls) and blob bodies to it over plain HTTP.
       # Host-internal, bypasses the proxy MITM; the extension no-ops if the hub
-      # isn't running (monitor IS the service, started on demand by `pi-stack
-      # monitor`, not by `pi-stack serve`).
+      # isn't running (monitor IS the service, started on demand by `pix
+      # monitor`, not by `pix serve`).
       - host.docker.internal:11437
       - localhost:11437
       # A pack that needs a host service (e.g. a CLI exec-proxy) adds its own
@@ -102,11 +102,11 @@ caps:
       # public kit stays free of company-specific host services. See
       # docs/design/packs.md.
       # Note: local stdio MCP servers (e.g. slack) are NOT here. They're registered
-      # with sbx (`sbx mcp add … --command pi-stack-host --args slack`), run by the
+      # with sbx (`sbx mcp add … --command pix-host --args slack`), run by the
       # MCP gateway and reached through it — not over host.docker.internal — so they
       # need no allowlist entry.
 
-# Each provider key: `service` is the sbx secret-store identifier (pi-stack seeds
+# Each provider key: `service` is the sbx secret-store identifier (pix seeds
 # it from 1Password); apiKey.name is the in-VM env var, set to the proxy-managed
 # sentinel; inject[] rewrites the auth header on the listed outbound domains.
 credentials:
@@ -173,7 +173,7 @@ commands:
     # ~/.pi/agent/mcp.json, so we write the gateway there (HTTP StreamableHTTP +
     # the sentinel bearer the egress proxy swaps for the real token). Without this
     # pi sees ZERO MCP: no MCP tools until configured servers are statically
-    # preloaded (at sandbox create) or explicitly loaded (`pi-stack mcp load`).
+    # preloaded (at sandbox create) or explicitly loaded (`pix mcp load`).
     # Guarded on MCP_GATEWAY_URL so a non-Docker host (no gateway) stays MCP-empty.
     # (Mirrors the claude/codex/gemini/kiro/opencode kits — see the sandboxes repo
     # docs/runbooks/mcp-gateway-registration.md.)
@@ -181,8 +181,8 @@ commands:
       description: Register the sbx MCP gateway with pi (pi-mcp-adapter)
 
 agentContext: |
-  # pi-stack
-  You are pi, running inside the pi-stack sandbox: a Docker Hardened (DHI) Debian
+  # pix
+  You are pi, running inside the pix sandbox: a Docker Hardened (DHI) Debian
   base, isolated by Docker Sandboxes. The environment is disposable. Work
   directly and commit often.
 
@@ -190,7 +190,7 @@ agentContext: |
   minimal and ships none). You cannot install system packages (`apt-get` needs
   root), so do not try, and do not tell the user to `sudo`. Anything that needs a
   system-level install or a real device (e.g. platformio + `/dev/tty*`) is a HOST
-  operation the sandbox structurally cannot do; that is what `pi-stack host` (the
+  operation the sandbox structurally cannot do; that is what `pix host` (the
   unsandboxed escape hatch) or a host-side capability MCP is for. Use pip
   `--user`, language-local package managers, or prebuilt static binaries when you
   need a tool in-VM.
@@ -199,7 +199,7 @@ agentContext: |
   A host memory service recalls relevant facts into your context before every
   turn, and quietly captures durable facts and corrections after. You never call
   it. To see or steer it: /recall, /remember, /forget, /learnings. If recall is
-  empty, the user needs to run `make serve` (or `pi-stack serve`) on the host.
+  empty, the user needs to run `make serve` (or `pix serve`) on the host.
 
   ## Multi-model
   Four providers in the cycle: Claude, GPT, and Gemini (cloud, keys injected by the

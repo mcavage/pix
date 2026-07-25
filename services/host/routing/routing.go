@@ -210,7 +210,7 @@ func Validate(reg *Registry, sc *Scorecard, pol *Policy) error {
 // ── paths ────────────────────────────────────────────────────────────────────
 
 // Dir is the on-disk routing dir: $ROUTING_DIR, else
-// $XDG_DATA_HOME/pi-stack/routing, else ~/.local/share/pi-stack/routing.
+// $XDG_DATA_HOME/pix/routing, else ~/.local/share/pix/routing.
 // Overrides for models/scorecard/policy live here; hand-edit scorecard.json here.
 // (This mirrors config.DataDir()'s resolution but stays inlined so the routing
 // subpackage keeps its dependency-light, config-free layering.)
@@ -219,10 +219,10 @@ func Dir() string {
 		return d
 	}
 	if xdg := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); xdg != "" {
-		return filepath.Join(xdg, "pi-stack", "routing")
+		return filepath.Join(xdg, "pix", "routing")
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "pi-stack", "routing")
+	return filepath.Join(home, ".local", "share", "pix", "routing")
 }
 
 func ModelsPath() string    { return filepath.Join(Dir(), "models.json") }

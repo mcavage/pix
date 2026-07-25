@@ -7,19 +7,19 @@ import (
 	"testing"
 )
 
-// buildHostBinary compiles pi-stack-host to a temp binary so we can exercise the
+// buildHostBinary compiles pix-host to a temp binary so we can exercise the
 // real process exit codes (os.Exit is not observable in-process).
 func buildHostBinary(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "pi-stack-host")
+	bin := filepath.Join(t.TempDir(), "pix-host")
 	out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput()
 	if err != nil {
-		t.Fatalf("go build pi-stack-host failed: %v\n%s", err, out)
+		t.Fatalf("go build pix-host failed: %v\n%s", err, out)
 	}
 	return bin
 }
 
-// TestMemoryHostUnknownSubExits2 is the gate: `pi-stack-host memory bogus` must
+// TestMemoryHostUnknownSubExits2 is the gate: `pix-host memory bogus` must
 // print usage and exit 2, NOT fall through to starting the daemon (which would
 // block forever on ListenAndServe).
 func TestMemoryHostUnknownSubExits2(t *testing.T) {

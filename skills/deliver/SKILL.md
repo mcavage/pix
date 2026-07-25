@@ -1,6 +1,6 @@
 ---
 name: deliver
-description: 'Autonomous full-rigor delivery loop. Runs the WHOLE crew (product first, then engineering), driving a request from intent to proven, committed, review-clean without returning to the user mid-flight. Starts with the product crew (PM plus role-appropriate specialists: GTM, finance, design, DX, legal), produces a spec, then delegates build to subagents, runs full UAT with real evidence, and runs the cross-vendor review subagent at least twice, fixing every finding. Use for "cook and deliver", "cook this", "take this all the way", "do it properly", "don''t stop", "full send", "run the crew", "full UAT and review", "don''t come back until it''s done", "address all the findings", or any time the user is about to hand-write delivery rigor.'
+description: Autonomous full-rigor delivery loop — product crew first, then engineering, spec to proven, committed, review-clean code without returning mid-flight. Use for "cook and deliver" or "full send".
 ---
 # deliver
 
@@ -227,12 +227,18 @@ remembered result or a subagent's "done" report is a violation.
    build/plan skip-table shortcut), shard into units to delegate.
 
 2. DELEGATE
-   For each unit in dependency order:
-     - Parallel (disjoint files): set up worktrees; fire one `engineer` subagent
-       per unit IN THE SAME TURN.
-     - Sequential: one `engineer` or `deep` subagent each.
-   The top-level agent MUST NOT write the implementation. Collect results, merge
-   branches (--no-ff), clean up worktrees.
+   Identify the full dependency DAG across units: which unit's output feeds
+   which other unit's input, and which pairs would touch the same file.
+   Independent units are PARALLEL BY DEFAULT, through isolated git worktrees —
+   a shared working tree is never a reason to serialize. Create one isolated
+   git worktree per concurrent unit in the wave and launch the whole ready wave
+   in one parallel `{tasks:[...]}` call, one `engineer` subagent per unit, IN
+   THE SAME TURN. Serialize ONLY units joined by a real dependency edge or
+   file-conflict edge (one consumes the other's output, or both must edit the
+   same file) — one `engineer` or `deep` subagent at a time, in dependency order.
+   The top-level agent MUST NOT write the implementation. Collect results, then
+   merge reviewed commits after collecting results (--no-ff) and remove each
+   unit's worktree.
    GATE: full build + tests must pass. Red here is a fix-loop input, NOT a stop;
    loop back to DELEGATE. Max 2 real attempts per unit (see Attempt Definition),
    then escalate.
@@ -542,7 +548,7 @@ All security findings go in the same findings_ledger[].
 | First-question bail | Return when anything is unclear | Decide mechanical questions; surface only true user-only calls |
 | Partial handoff | Return with gates pending | Acceptance bar is all-or-nothing |
 | Silent give-up | "Mostly working" after two tries | Escalate with full attempts ledger |
-| Serial-when-parallel | Disjoint units run one at a time | Fan out in the same turn |
+| Serial-when-parallel | Independent units run one at a time because the tree is shared | Parallel by default: one worktree per unit, fan out the whole ready wave in the same turn; serialize only a real dependency/file-conflict edge |
 | Stopping for context | Pausing because the session is long | Save to disk; continue |
 
 ## Crew selection

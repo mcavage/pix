@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"pi-stack/host/plugin"
+	"pix/host/plugin"
 )
 
 // Compile-time proof the adapter satisfies the go-plugin capability interface.

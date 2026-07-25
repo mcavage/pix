@@ -1,49 +1,86 @@
-# Gate the host Go binary on every push/PR: format, vet, and tests must pass.
-# (The publish workflow only runs on version tags; this is the always-on check.)
+# Always-on checks for PRs and main. Feature-branch pushes are covered by the
+# pull_request event, so they do not launch an identical second workflow.
+#
+# TWO JOBS, TWO DIFFERENT DEALS — the split is explicit on purpose:
+#
+#   gate  — the FAST gate: build, go vet, NON-race `go test`, node --test,
+#           tsc --noEmit, the open-core boundary, and (once it exists) the
+#           rename guard. This job IS TIMED: scripts/gate.sh enforces an
+#           local `make gate` keeps the ABSOLUTE 12 s ceiling (10 s target).
+#           GitHub's shared x86 runner is measured separately with a fixed 75 s
+#           ceiling because the same uncached Go suite takes ~44 s there. Both
+#           are absolute, reviewable budgets, never "last run x 2".
+#
+#   race  — gofmt + `go test -race ./...`. NO TIMING BUDGET APPLIES HERE, at
+#           all. The race detector multiplies wall time by design, so timing it
+#           would either make the 12 s number meaningless or make the job
+#           flaky. It is a correctness job; it takes as long as it takes.
+#
+# So: if CI is red on "budget", the fast gate got slower and that is the
+# finding. If CI is red on `race`, something is actually broken.
 name: test
 
 on:
   push:
+    branches: ["main"]
   pull_request:
 
 jobs:
-  go:
-    name: go vet + test (services/host)
+  gate:
+    name: fast gate (CI, 75s budget)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
+          cache-dependency-path: services/host/go.sum
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "25.9.0"
+          cache: npm
+      # Dependency install and a cold-cache compile are CI infrastructure cost,
+      # not test-suite cost, so they happen BEFORE the timed gate. The budget
+      # measures the steady-state loop a developer actually waits on.
+      - name: install node deps (untimed)
+        run: npm ci --ignore-scripts
+      - name: warm the Go build cache (untimed)
+        working-directory: services/host
+        run: go build ./... && go vet ./...
+      - name: gate
+        run: bash scripts/gate.sh
+        env:
+          # Local steady-state remains 12s/10s. GitHub's shared x86 runner
+          # takes ~42s for the uncached Go suite despite a warmed build cache.
+          GATE_BUDGET_MS: "75000"
+          GATE_TARGET_MS: "60000"
+          GATE_SLOW_MS: "1000"
+      # The total (plus every segment and every slow-test finding) is kept as a
+      # build artifact even when the gate fails — that is the run you most want
+      # the numbers from.
+      - name: upload timing artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gate-timing
+          path: out/gate/
+          if-no-files-found: warn
+          retention-days: 14
+
+  race:
+    name: gofmt + go test -race (untimed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26"
+          cache-dependency-path: services/host/go.sum
       - name: gofmt
         working-directory: services/host
         run: |
           unformatted="$(gofmt -l .)"
           if [ -n "$unformatted" ]; then echo "gofmt needed on:"; echo "$unformatted"; exit 1; fi
-      - name: vet
-        working-directory: services/host
-        run: go vet ./...
-      - name: test
+      - name: test (race detector — no timing budget)
         working-directory: services/host
         run: go test -race ./...
-
-  extensions:
-    name: extension types + tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "25.9.0"
-          cache: npm
-      - run: npm ci --ignore-scripts
-      - run: npx --no-install tsc --noEmit
-      - run: node --test tests/*.test.mjs
-
-  open-core:
-    name: open-core boundary (no company/private-pack leak)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: check allowlists + tracked tree
-        run: bash scripts/check-open-core.sh

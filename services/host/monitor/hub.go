@@ -45,7 +45,7 @@ const (
 	// host.docker.internal forwards into the host's loopback interface),
 	// also works for watching a real sandbox. Only Linux hosts — where
 	// host.docker.internal resolves to the bridge gateway, not loopback —
-	// need to opt in to a wider bind (see cmd/pi-stack/monitor.go --bind).
+	// need to opt in to a wider bind (see cmd/pix/monitor.go --bind).
 	DefaultBindAddr = "127.0.0.1"
 )
 
@@ -88,7 +88,7 @@ type HubConfig struct {
 	Filter    string // sandbox name/id substring filter; "" = all
 }
 
-// Hub is the host-side process for `pi-stack monitor`: an HTTP server that
+// Hub is the host-side process for `pix monitor`: an HTTP server that
 // ingests NDJSON events from the in-VM extension, keeps a bounded ring +
 // blob cache, and fans events out to subscribers (the TUI in-process, or
 // GET /stream for external/synthetic consumers).

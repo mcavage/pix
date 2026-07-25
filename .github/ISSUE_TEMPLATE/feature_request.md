@@ -8,7 +8,7 @@ assignees: ""
 
 ## The problem
 
-What are you trying to do that pi-stack makes hard or impossible today?
+What are you trying to do that pix makes hard or impossible today?
 
 ## The idea
 

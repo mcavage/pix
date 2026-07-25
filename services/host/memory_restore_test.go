@@ -17,7 +17,7 @@ import (
 // path. Shared by the restore tests; mirrors what `memory backup` writes.
 func backupSeeded(t *testing.T, dbPath string) string {
 	t.Helper()
-	outPath := filepath.Join(t.TempDir(), "pi-stack-backup-20260715-120000.tar.gz")
+	outPath := filepath.Join(t.TempDir(), "pix-backup-20260715-120000.tar.gz")
 	if _, err := memoryBackup(backupParams{
 		DBPath: dbPath, OutPath: outPath, Keep: 7, Version: "test", Now: time.Now(),
 	}); err != nil {

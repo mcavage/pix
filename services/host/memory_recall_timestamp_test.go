@@ -1,6 +1,6 @@
 // memory_recall_timestamp_test.go — FIX 3: every recall hit carries the
 // row's created_at timestamp (RFC3339, via memNowIso), all the way out to the
-// JSON-RPC response, so `pi-stack memory recall` can print it.
+// JSON-RPC response, so `pix memory recall` can print it.
 package main
 
 import (

@@ -10,7 +10,7 @@ import (
 
 func TestLoadAbsentReturnsDefaults(t *testing.T) {
 	// Point at a path that does not exist.
-	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "nope.toml"))
+	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "nope.toml"))
 
 	c, err := Load()
 	if err != nil {
@@ -39,7 +39,7 @@ services = ["memory", "warehouse"]
 mcp = ["slack"]
 memory_watcher_model = "custom-watcher"
 memory_embed_model = "custom-embed"
-gog_account = "you@example.com"
+google_workspace_account = "you@example.com"
 
 [kits]
 stack = ["mixin-a", "mixin-b"]
@@ -58,7 +58,7 @@ port = 9000
 	if err := os.WriteFile(path, []byte(toml), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PI_STACK_CONFIG", path)
+	t.Setenv("PIX_CONFIG", path)
 
 	c, err := Load()
 	if err != nil {
@@ -124,7 +124,7 @@ func TestSeedCreatesThenRefuses(t *testing.T) {
 	}
 
 	// The seeded file must decode cleanly.
-	t.Setenv("PI_STACK_CONFIG", path)
+	t.Setenv("PIX_CONFIG", path)
 	if _, err := Load(); err != nil {
 		t.Errorf("Load() seeded file: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestOpRefsTemplateHasNoActiveRefs(t *testing.T) {
 // TestRetiredKeysReportedAndNeverReemitted covers S01: mcp_static/mcp_dynamic
 // were retired (all configured/pack MCP servers now preload at sandbox
 // CREATE — no more eager/lazy split), but a config.toml written by an older
-// pi-stack still has them. Load must not hard-fail, must surface them via
+// pix still has them. Load must not hard-fail, must surface them via
 // RetiredKeys (not silently swallow them into UnknownKeys, which would read
 // as "you made a typo"), and Save must never re-emit them — there is no
 // field for them to round-trip through.
@@ -257,7 +257,7 @@ mcp_dynamic = ["notion"]
 		t.Errorf("MCP = %v, want [slack] (live key still decodes)", c.MCP)
 	}
 
-	t.Setenv("PI_STACK_CONFIG", path)
+	t.Setenv("PIX_CONFIG", path)
 	if err := c.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -306,7 +306,7 @@ totally_made_up_key = "oops"
 // TestLoadAbsentReportsNoRetiredOrUnknownKeys: a fresh install (no file) has
 // nothing undecoded to report.
 func TestLoadAbsentReportsNoRetiredOrUnknownKeys(t *testing.T) {
-	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "nope.toml"))
+	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "nope.toml"))
 	c, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -328,7 +328,7 @@ func TestLoadAbsentReportsNoRetiredOrUnknownKeys(t *testing.T) {
 func TestSaveAtomic_WriteFailureLeavesPriorFileIntact(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	t.Setenv("PI_STACK_CONFIG", path)
+	t.Setenv("PIX_CONFIG", path)
 
 	c, err := Load()
 	if err != nil {
@@ -376,7 +376,7 @@ func TestSaveAtomic_WriteFailureLeavesPriorFileIntact(t *testing.T) {
 
 func TestSaveAndMutators(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "config.toml")
-	t.Setenv("PI_STACK_CONFIG", path)
+	t.Setenv("PIX_CONFIG", path)
 
 	c, err := Load()
 	if err != nil {
@@ -436,7 +436,7 @@ func TestSaveAndMutators(t *testing.T) {
 // canonicalized to an absolute path, and preserved across a Save/Load round-trip.
 func TestKnowledgeBundleMutators(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "config.toml")
-	t.Setenv("PI_STACK_CONFIG", path)
+	t.Setenv("PIX_CONFIG", path)
 
 	c, err := Load()
 	if err != nil {
@@ -497,7 +497,7 @@ func TestKnowledgeBundleMutators(t *testing.T) {
 // real path (abs -> EvalSymlinks -> Clean), so a bundle added via a symlink
 // dedupes against the real path and can be removed by either spelling.
 func TestKnowledgeBundleCanonicalizationMatchesStore(t *testing.T) {
-	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "link-to-bundle")
@@ -551,8 +551,8 @@ func contains(list []string, s string) bool {
 
 func TestEnsureToken(t *testing.T) {
 	dir := t.TempDir()
-	// TokenPath derives from configDir; PI_STACK_CONFIG's parent is the dir.
-	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
+	// TokenPath derives from configDir; PIX_CONFIG's parent is the dir.
+	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 
 	tok1, err := EnsureToken()
 	if err != nil {
@@ -594,7 +594,7 @@ func TestEnsureToken(t *testing.T) {
 // value and the last writer would win, so the host and the VM could end up with
 // different tokens and auth would fail.
 func TestEnsureTokenConcurrent(t *testing.T) {
-	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 
 	const n = 32
 	var wg sync.WaitGroup
@@ -638,7 +638,7 @@ func TestEnsureTokenConcurrent(t *testing.T) {
 }
 
 func TestReadTokenAbsent(t *testing.T) {
-	t.Setenv("PI_STACK_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	if _, err := ReadToken(); err == nil {
 		t.Error("ReadToken() absent: got nil err, want error")
 	}
@@ -646,12 +646,12 @@ func TestReadTokenAbsent(t *testing.T) {
 
 // TestServePidPath resolves serve.pid under the STATE dir (ephemeral runtime
 // state, a sibling of serve.log), honoring $XDG_STATE_HOME, so the host writer
-// and the launcher reader always agree on the location — and so `pi-stack reset`
+// and the launcher reader always agree on the location — and so `pix reset`
 // (which moves the CONFIG dir aside) never orphans a running daemon's pidfile.
 func TestServePidPath(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", xdg)
-	want := filepath.Join(xdg, "pi-stack", "serve.pid")
+	want := filepath.Join(xdg, "pix", "serve.pid")
 	if got := ServePidPath(); got != want {
 		t.Errorf("ServePidPath() = %q, want %q", got, want)
 	}
@@ -665,7 +665,7 @@ func TestServePidPath(t *testing.T) {
 }
 
 // TestDataDirLayout locks the XDG data-root resolution: $XDG_DATA_HOME wins,
-// else ~/.local/share/pi-stack, and every durable default derives from it.
+// else ~/.local/share/pix, and every durable default derives from it.
 func TestDataDirLayout(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", xdg)
@@ -676,16 +676,16 @@ func TestDataDirLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DataDir: %v", err)
 	}
-	if want := filepath.Join(xdg, "pi-stack"); d != want {
+	if want := filepath.Join(xdg, "pix"); d != want {
 		t.Errorf("DataDir = %q, want %q", d, want)
 	}
-	if got, want := MemoryDBPath(), filepath.Join(xdg, "pi-stack", "memory", "memory.db"); got != want {
+	if got, want := MemoryDBPath(), filepath.Join(xdg, "pix", "memory", "memory.db"); got != want {
 		t.Errorf("MemoryDBPath = %q, want %q", got, want)
 	}
-	if got, want := KnowledgeDBPath(), filepath.Join(xdg, "pi-stack", "knowledge", "knowledge.db"); got != want {
+	if got, want := KnowledgeDBPath(), filepath.Join(xdg, "pix", "knowledge", "knowledge.db"); got != want {
 		t.Errorf("KnowledgeDBPath = %q, want %q", got, want)
 	}
-	if got, want := BackupsDir(), filepath.Join(xdg, "pi-stack", "backups"); got != want {
+	if got, want := BackupsDir(), filepath.Join(xdg, "pix", "backups"); got != want {
 		t.Errorf("BackupsDir = %q, want %q", got, want)
 	}
 
@@ -696,7 +696,7 @@ func TestDataDirLayout(t *testing.T) {
 	}
 }
 
-// TestDataDirDefaultHome checks the ~/.local/share/pi-stack fallback when
+// TestDataDirDefaultHome checks the ~/.local/share/pix fallback when
 // XDG_DATA_HOME is unset (uses HOME).
 func TestDataDirDefaultHome(t *testing.T) {
 	home := t.TempDir()
@@ -706,7 +706,7 @@ func TestDataDirDefaultHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DataDir: %v", err)
 	}
-	if want := filepath.Join(home, ".local", "share", "pi-stack"); d != want {
+	if want := filepath.Join(home, ".local", "share", "pix"); d != want {
 		t.Errorf("DataDir = %q, want %q", d, want)
 	}
 }

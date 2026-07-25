@@ -56,7 +56,7 @@ the whole doc set and reconcile every hit before you commit.
 Vigilance is not a mechanism. Where a surface is ENUMERABLE (a verb table, a
 config-key list, a set of env vars), back it with an **anti-drift test** that
 fails when code and docs diverge, so the next person can't forget. The canonical
-pattern: pi-stack's `services/host/cmd/pi-stack/man_test.go` parses the man page
+pattern: pix's `services/host/cmd/pix/man_test.go` parses the man page
 and asserts it documents every entry in `knownVerbs` AND every key the CLI's own
 help lists, failing CI on any gap. If you fix doc drift by hand and no such test
 exists for that surface, add one as part of the fix, that is what stops it

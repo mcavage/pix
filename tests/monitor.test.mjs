@@ -8,12 +8,21 @@
 // captures the real hook handlers and a tiny local HTTP server stands in for
 // the host monitor process, letting the test observe request counts across a
 // simulated session_shutdown instead of reaching into private state.
+//
+// Timing: nothing here sleeps past a real backoff. The retry/backoff timing
+// goes through monitor.ts's injectable RetryClock (`setRetryClock`), so the
+// shutdown tests install a manually-pumped clock and assert on the SCHEDULE
+// (armed? disarmed? what delay?) directly, and everything else waits on an
+// observable condition (`waitFor`) instead of a fixed sleep. Production
+// defaults are unchanged and asserted below.
 import assert from "node:assert";
 import * as http from "node:http";
 import { test } from "node:test";
 
 const monitor = await import("../extensions/monitor.ts");
 const {
+	PRODUCTION_RETRY_CLOCK,
+	setRetryClock,
 	classifyToolSource,
 	isMcpSourceInfo,
 	mcpServerFromSourceInfo,
@@ -25,6 +34,114 @@ const {
 	commandInvokesPi,
 	truncatePreview,
 } = monitor;
+
+// ─── Timing helpers ────────────────────────────────────────────────────────
+
+/** Poll until `predicate()` holds. Throws (naming what it waited for) on timeout. */
+async function waitFor(predicate, what, timeoutMs = 2000) {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		if (predicate()) return;
+		if (Date.now() >= deadline) throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`);
+		await new Promise((r) => setTimeout(r, 1));
+	}
+}
+
+/**
+ * Give a (buggy) extra POST a chance to actually reach the server before
+ * asserting an ABSENCE. Absence can't be polled for, but it also doesn't need
+ * a backoff-length wait: a loopback round trip is ~1-2ms, so a handful of
+ * event-loop turns is an order of magnitude more headroom than required.
+ */
+function settle(ms = 10) {
+	return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Drop lingering keep-alive sockets so the run doesn't wait out server.keepAliveTimeout (5s) at exit. */
+function closeServer(server) {
+	server.closeAllConnections?.();
+	server.close();
+}
+
+/**
+ * A RetryClock whose timers only ever fire when the test says so, and whose
+ * `now()` only advances with them — the retry timer, its backoff delay and the
+ * `disabledUntil` window all become assertable values instead of wall time.
+ */
+function makeManualClock(overrides = {}) {
+	let nowMs = 1_000_000;
+	const timers = [];
+	const clock = {
+		now: () => nowMs,
+		setTimer(fn, delayMs) {
+			const handle = { fn, delayMs, state: "armed" };
+			timers.push(handle);
+			return handle;
+		},
+		clearTimer(handle) {
+			if (handle && handle.state === "armed") handle.state = "disarmed";
+		},
+		// The quit-flush poll only needs to yield to the event loop, not to wall time.
+		sleep: () => new Promise((r) => setImmediate(r)),
+		...overrides,
+	};
+	return {
+		clock,
+		timers,
+		armed: () => timers.filter((h) => h.state === "armed"),
+		/**
+		 * Fire pending timers exactly as the real clock would: advance `now` past
+		 * the delay first (so drain()'s `disabledUntil` window has genuinely
+		 * elapsed), then invoke the callback. `includeDisarmed` fires even a
+		 * cleared handle — the "the timer already escaped clearTimeout" race that
+		 * R2-1's shuttingDown guard, not the clear, has to survive.
+		 */
+		fireAll({ includeDisarmed = false } = {}) {
+			for (const h of [...timers]) {
+				if (h.state === "fired") continue;
+				if (h.state !== "armed" && !includeDisarmed) continue;
+				h.state = "fired";
+				nowMs += h.delayMs;
+				h.fn();
+			}
+		},
+	};
+}
+
+/**
+ * Real timers, tiny delays. Used where the code under test genuinely has to
+ * poll/await real I/O (the quit-flush drain): the code path is identical to
+ * production, only the durations shrink.
+ */
+const FAST_CLOCK = { baseBackoffMs: 5, maxBackoffMs: 20, quitFlushTimeoutMs: 250, quitFlushPollMs: 1 };
+
+test("retry clock seam: production defaults are the shipped constants and setRetryClock() restores them", () => {
+	assert.deepEqual(
+		{
+			postTimeoutMs: PRODUCTION_RETRY_CLOCK.postTimeoutMs,
+			baseBackoffMs: PRODUCTION_RETRY_CLOCK.baseBackoffMs,
+			maxBackoffMs: PRODUCTION_RETRY_CLOCK.maxBackoffMs,
+			quitFlushTimeoutMs: PRODUCTION_RETRY_CLOCK.quitFlushTimeoutMs,
+			quitFlushPollMs: PRODUCTION_RETRY_CLOCK.quitFlushPollMs,
+		},
+		{ postTimeoutMs: 2000, baseBackoffMs: 500, maxBackoffMs: 30_000, quitFlushTimeoutMs: 1500, quitFlushPollMs: 20 },
+		"the seam must not change any shipped timing default",
+	);
+
+	// A partial override leaves every unnamed field at its production value...
+	const overridden = setRetryClock({ baseBackoffMs: 1 });
+	assert.equal(overridden.baseBackoffMs, 1);
+	assert.equal(overridden.maxBackoffMs, PRODUCTION_RETRY_CLOCK.maxBackoffMs);
+	assert.equal(overridden.setTimer, PRODUCTION_RETRY_CLOCK.setTimer);
+	// ...and resetting restores the production clock itself, not a copy.
+	assert.equal(setRetryClock(), PRODUCTION_RETRY_CLOCK);
+
+	// The production timer pair round-trips (arm then disarm without throwing).
+	const handle = PRODUCTION_RETRY_CLOCK.setTimer(() => {
+		throw new Error("production retry timer must have been cleared");
+	}, 5_000);
+	PRODUCTION_RETRY_CLOCK.clearTimer(handle);
+});
 
 // ─── R2-3: MCP classification fallback ──────────────────────────────────────
 
@@ -231,7 +348,7 @@ function assistantMessage(text) {
 
 test("two turns emit provider_request/provider_response in the same order, per turn", async (t) => {
 	const { server, port, lines } = await startRecordingServer();
-	t.after(() => server.close());
+	t.after(() => closeServer(server));
 
 	const factory = await loadMonitorAgainst(port);
 	const { pi, handlers } = makeStubPi();
@@ -248,7 +365,10 @@ test("two turns emit provider_request/provider_response in the same order, per t
 	);
 	handlers.get("message_end")?.({ message: assistantMessage("reply two") }, {});
 
-	await new Promise((r) => setTimeout(r, 100));
+	await waitFor(
+		() => lines.filter((l) => l.kind === "provider_request" || l.kind === "provider_response").length === 4,
+		"both turns' request+response to be posted",
+	);
 
 	const kinds = lines.filter((l) => l.kind === "provider_request" || l.kind === "provider_response").map((l) => l.kind);
 	assert.deepEqual(
@@ -263,7 +383,7 @@ test("two turns emit provider_request/provider_response in the same order, per t
 
 test("a fresh user prompt: turn_start and provider_request both carry trigger=user", async (t) => {
 	const { server, port, lines } = await startRecordingServer();
-	t.after(() => server.close());
+	t.after(() => closeServer(server));
 
 	const factory = await loadMonitorAgainst(port);
 	const { pi, handlers } = makeStubPi();
@@ -273,7 +393,10 @@ test("a fresh user prompt: turn_start and provider_request both carry trigger=us
 	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "hi" }] } }, {});
 	handlers.get("message_end")?.({ message: assistantMessage("reply") }, {});
 
-	await new Promise((r) => setTimeout(r, 100));
+	await waitFor(
+		() => lines.some((l) => l.kind === "turn_start") && lines.some((l) => l.kind === "provider_request"),
+		"turn_start and provider_request to be posted",
+	);
 
 	const ts = lines.find((l) => l.kind === "turn_start");
 	const pr = lines.find((l) => l.kind === "provider_request");
@@ -284,7 +407,7 @@ test("a fresh user prompt: turn_start and provider_request both carry trigger=us
 
 test("a provider_request whose newest new message is a tool result carries trigger=tool_result on both events", async (t) => {
 	const { server, port, lines } = await startRecordingServer();
-	t.after(() => server.close());
+	t.after(() => closeServer(server));
 
 	const factory = await loadMonitorAgainst(port);
 	const { pi, handlers } = makeStubPi();
@@ -311,7 +434,12 @@ test("a provider_request whose newest new message is a tool result carries trigg
 	);
 	handlers.get("message_end")?.({ message: assistantMessage("done") }, {});
 
-	await new Promise((r) => setTimeout(r, 100));
+	await waitFor(
+		() =>
+			lines.filter((l) => l.kind === "turn_start").length === 2 &&
+			lines.filter((l) => l.kind === "provider_request").length === 2,
+		"both turns' turn_start+provider_request to be posted",
+	);
 
 	const turnStarts = lines.filter((l) => l.kind === "turn_start");
 	const requests = lines.filter((l) => l.kind === "provider_request");
@@ -324,7 +452,7 @@ test("a provider_request whose newest new message is a tool result carries trigg
 // ─── BUG 1: commandInvokesPi must see the FULL command, not the 200-char
 // truncated argsSummary ─────────────────────────────────────────────────────
 // The TUI correlates a spawned child pi session to the bash tool that
-// launched it partly by checking the tool actually invokes `pi`/`pi-stack`.
+// launched it partly by checking the tool actually invokes `pi`/`pix`.
 // A long multi-line for-loop command (several quoted model specs, then a
 // `pi --print ...` invocation) can push that invocation well past char 200,
 // past where truncatePreview(argsText, 200) cuts argsSummary off — so
@@ -354,9 +482,9 @@ test("commandInvokesPi: false for curl/grep commands that merely contain \"pi\"-
 	assert.equal(commandInvokesPi("pip install requests"), false);
 });
 
-test("commandInvokesPi: true for a bare `pi` or `pi-stack` command token in various positions", () => {
+test("commandInvokesPi: true for a bare `pi` or `pix` command token in various positions", () => {
 	assert.equal(commandInvokesPi('pi --print --model "x"'), true);
-	assert.equal(commandInvokesPi("cd /tmp && pi-stack run"), true);
+	assert.equal(commandInvokesPi("cd /tmp && pix run"), true);
 	assert.equal(commandInvokesPi('echo hi; pi "do a thing"'), true);
 	assert.equal(commandInvokesPi(""), false);
 });
@@ -370,7 +498,7 @@ test("commandInvokesPi: a literal newline separator counts (\\s covers newlines)
 
 test("tool_start event carries invokesPi computed from the FULL command", async (t) => {
 	const { server, port, lines } = await startRecordingServer();
-	t.after(() => server.close());
+	t.after(() => closeServer(server));
 
 	const factory = await loadMonitorAgainst(port);
 	const { pi, handlers } = makeStubPi();
@@ -382,7 +510,7 @@ test("tool_start event carries invokesPi computed from the FULL command", async 
 	handlers.get("tool_execution_start")?.({ toolCallId: "t-long", toolName: "bash", args: { command: longCmd } });
 	handlers.get("tool_execution_start")?.({ toolCallId: "t-curl", toolName: "bash", args: { command: "curl -s https://example.com | grep pip" } });
 
-	await new Promise((r) => setTimeout(r, 100));
+	await waitFor(() => lines.filter((l) => l.kind === "tool_start").length === 2, "both tool_start events to be posted");
 
 	const starts = lines.filter((l) => l.kind === "tool_start");
 	const longStart = starts.find((l) => l.toolId === "t-long");
@@ -409,21 +537,25 @@ function startServer() {
 	});
 }
 
-async function loadMonitorAgainst(port) {
-	const prevUrl = process.env.PI_STACK_MONITOR_URL;
-	const prevEnabled = process.env.PI_STACK_MONITOR;
-	process.env.PI_STACK_MONITOR_URL = `http://127.0.0.1:${port}`;
-	process.env.PI_STACK_MONITOR = "1";
+async function loadMonitorAgainst(port, clockOverrides) {
+	const prevUrl = process.env.PIX_MONITOR_URL;
+	const prevEnabled = process.env.PIX_MONITOR;
+	process.env.PIX_MONITOR_URL = `http://127.0.0.1:${port}`;
+	process.env.PIX_MONITOR = "1";
 	try {
 		// Bust the module cache with a unique query string so each test gets a
 		// fresh closure (module-level seqCounter aside, which is harmless here).
 		const mod = await import(`../extensions/monitor.ts?t=${Date.now()}-${Math.random()}`);
+		// Fresh module instance per test, so the clock swap is scoped to this
+		// instance and needs no teardown. It must happen BEFORE the factory runs:
+		// the clock is captured once, at instantiation.
+		if (clockOverrides) mod.setRetryClock(clockOverrides);
 		return mod.default;
 	} finally {
-		if (prevUrl === undefined) delete process.env.PI_STACK_MONITOR_URL;
-		else process.env.PI_STACK_MONITOR_URL = prevUrl;
-		if (prevEnabled === undefined) delete process.env.PI_STACK_MONITOR;
-		else process.env.PI_STACK_MONITOR = prevEnabled;
+		if (prevUrl === undefined) delete process.env.PIX_MONITOR_URL;
+		else process.env.PIX_MONITOR_URL = prevUrl;
+		if (prevEnabled === undefined) delete process.env.PIX_MONITOR;
+		else process.env.PIX_MONITOR = prevEnabled;
 	}
 }
 
@@ -444,33 +576,40 @@ function makeStubPi() {
 
 test("R2-1: session_shutdown stops further retries after a failed in-flight send", async (t) => {
 	const { server, port, count } = await startServer();
-	t.after(() => server.close());
+	t.after(() => closeServer(server));
 
-	const factory = await loadMonitorAgainst(port);
+	// Manual clock: the retry schedule is asserted directly, so this test never
+	// waits out a real 500ms backoff (and the assertions get sharper for it).
+	const manual = makeManualClock();
+	const factory = await loadMonitorAgainst(port, manual.clock);
 	const { pi, handlers } = makeStubPi();
 	factory(pi);
 
 	handlers.get("session_start")?.({}, {});
 	// Trigger one event -> enqueue -> POST -> server returns 500 -> drain()'s
-	// failure branch requeues + schedules a retry (BASE_BACKOFF_MS ~500ms).
+	// failure branch requeues + schedules a retry (baseBackoffMs).
 	handlers.get("before_provider_request")?.({ payload: { messages: [{ role: "user", content: "hi" }] } }, {});
 
-	// Let the first (failing) send complete and the retry timer get armed.
-	await new Promise((r) => setTimeout(r, 100));
-	assert.equal(count(), 1, "exactly one send attempted before shutdown");
+	// The failed send is observable two ways, neither of them a wall-clock
+	// guess: the server counted it, and a retry got armed on our clock.
+	await waitFor(() => count() === 1 && manual.armed().length === 1, "the first send to fail and arm a retry");
+	assert.equal(manual.armed()[0].delayMs, PRODUCTION_RETRY_CLOCK.baseBackoffMs, "first retry waits the base backoff");
 
 	// Shut down while the retry timer is pending.
 	handlers.get("session_shutdown")?.();
+	assert.equal(manual.armed().length, 0, "session_shutdown must disarm the pending retry timer");
 
-	// Wait past what would have been the retry delay. Without the fix, the
-	// armed timer fires kick()->drain() and the server sees a 2nd (and more)
-	// request; with the fix, shuttingDown cancels it and nothing more is sent.
-	await new Promise((r) => setTimeout(r, 800));
+	// Fire it anyway, advancing the clock past disabledUntil exactly as a real
+	// timer that escaped clearTimeout would. Without the fix, this kick()s
+	// drain() and the server sees a 2nd (and more) request; with the fix,
+	// shuttingDown short-circuits it and nothing more is sent.
+	manual.fireAll({ includeDisarmed: true });
+	await settle();
 	assert.equal(count(), 1, "no further POSTs after session_shutdown");
 
 	// And new events after shutdown are no-ops too (enqueue guards on shuttingDown).
 	handlers.get("model_select")?.({ model: { provider: "x", id: "y" } });
-	await new Promise((r) => setTimeout(r, 100));
+	await settle();
 	assert.equal(count(), 1, "events emitted after shutdown are dropped, not sent");
 });
 
@@ -490,9 +629,10 @@ test("R2-1: aborting an in-flight send on shutdown does not requeue or reschedul
 	});
 	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 	const port = server.address().port;
-	t.after(() => server.close());
+	t.after(() => closeServer(server));
 
-	const factory = await loadMonitorAgainst(port);
+	const manual = makeManualClock();
+	const factory = await loadMonitorAgainst(port, manual.clock);
 	const { pi, handlers } = makeStubPi();
 	factory(pi);
 
@@ -507,11 +647,14 @@ test("R2-1: aborting an in-flight send on shutdown does not requeue or reschedul
 	// rejects httpPostRaw's promise and lands in drain()'s failure branch.
 	handlers.get("session_shutdown")?.();
 
-	// Give the abort's rejection time to propagate through drain(). If R2-1's
-	// guard were missing, the failure branch would requeue the item and
-	// schedule a retry, which would produce a second request against the
-	// server well within this window.
-	await new Promise((r) => setTimeout(r, 800));
+	// Let the abort's rejection propagate through drain(). If R2-1's guard were
+	// missing, the failure branch would requeue the item and schedule a retry —
+	// now directly observable on the clock instead of inferred from a wall-clock
+	// wait longer than the backoff.
+	await settle();
+	assert.equal(manual.timers.length, 0, "the aborted send must not schedule a retry at all");
+	manual.fireAll({ includeDisarmed: true }); // no-op unless something latent was armed
+	await settle();
 	assert.equal(count, 1, "the aborted send must not be requeued or retried");
 });
 
@@ -523,9 +666,10 @@ test("R2-1: aborting an in-flight send on shutdown does not requeue or reschedul
 
 test('BUG 2: session_shutdown reason="quit" flushes a queued provider_response before teardown', async (t) => {
 	const { server, port, lines } = await startRecordingServer();
-	t.after(() => server.close());
+	t.after(() => closeServer(server));
 
-	const factory = await loadMonitorAgainst(port);
+	// Real timers (drainAll genuinely polls real I/O here), just short ones.
+	const factory = await loadMonitorAgainst(port, FAST_CLOCK);
 	const { pi, handlers } = makeStubPi();
 	factory(pi);
 
@@ -544,9 +688,9 @@ test('BUG 2: session_shutdown reason="quit" flushes a queued provider_response b
 
 test('BUG 2: session_shutdown reason="reload" still drops a queued provider_response (unchanged R2-1 behavior)', async (t) => {
 	const { server, port, lines } = await startRecordingServer();
-	t.after(() => server.close());
+	t.after(() => closeServer(server));
 
-	const factory = await loadMonitorAgainst(port);
+	const factory = await loadMonitorAgainst(port, FAST_CLOCK);
 	const { pi, handlers } = makeStubPi();
 	factory(pi);
 
@@ -555,7 +699,7 @@ test('BUG 2: session_shutdown reason="reload" still drops a queued provider_resp
 	await handlers.get("session_shutdown")?.({ reason: "reload" });
 
 	// Give any (incorrectly) in-flight send time to land, if the fix ever regressed.
-	await new Promise((r) => setTimeout(r, 200));
+	await settle();
 
 	const responses = lines.filter((l) => l.kind === "provider_response");
 	assert.equal(responses.length, 0, "reason=reload must keep dropping the queue, never posting it");
@@ -565,9 +709,9 @@ test("BUG 2: session_shutdown with no reason (undefined) keeps the strict R2-1 d
 	// Existing callers (e.g. a bare `session_shutdown` event with no reason
 	// field at all) must not accidentally fall into the new flush path.
 	const { server, port, lines } = await startRecordingServer();
-	t.after(() => server.close());
+	t.after(() => closeServer(server));
 
-	const factory = await loadMonitorAgainst(port);
+	const factory = await loadMonitorAgainst(port, FAST_CLOCK);
 	const { pi, handlers } = makeStubPi();
 	factory(pi);
 
@@ -575,7 +719,7 @@ test("BUG 2: session_shutdown with no reason (undefined) keeps the strict R2-1 d
 	handlers.get("message_end")?.({ message: assistantMessage("final reply") }, {});
 	await handlers.get("session_shutdown")?.();
 
-	await new Promise((r) => setTimeout(r, 200));
+	await settle();
 	const responses = lines.filter((l) => l.kind === "provider_response");
 	assert.equal(responses.length, 0, "an undefined/missing reason must not be treated as quit");
 });
@@ -640,7 +784,7 @@ test("R6-1: Gemini parts[] shape — untagged text part plus functionCall part",
 	// Gemini's raw parts have no "type" tag at all: {text} or {functionCall:{name}}.
 	const message = {
 		role: "assistant",
-		parts: [{ text: "Looking that up." }, { functionCall: { name: "lookup", args: { q: "pi-stack" } } }],
+		parts: [{ text: "Looking that up." }, { functionCall: { name: "lookup", args: { q: "pix" } } }],
 	};
 	const { text, toolCalls } = extractAssistantOutput(message);
 	assert.equal(text, "Looking that up.");

@@ -1,6 +1,6 @@
 ---
 name: docs-standards
-description: Documentation writing standards for tutorials, API references, and READMEs. Use for "write docs", "add a tutorial", "document this API", "update the README", or any prose aimed at readers rather than the compiler.
+description: Documentation writing standards for tutorials, API references, and READMEs. Use for "write docs", "add a tutorial", "document this API", or prose aimed at readers, not the compiler.
 ---
 # docs-standards
 

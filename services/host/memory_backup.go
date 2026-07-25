@@ -1,7 +1,7 @@
-// pi-stack-host `backup` — a HOT, consistent snapshot of the FULL pi-stack state
+// pix-host `backup` — a HOT, consistent snapshot of the FULL pix state
 // that is safe to take WITHOUT stopping `serve`:
 //
-//   - the precious artifact: ~/.local/share/pi-stack/memory/memory.db (the captured facts)
+//   - the precious artifact: ~/.local/share/pix/memory/memory.db (the captured facts)
 //   - config.toml (profiles + all runtime settings)
 //   - op-refs.env (1Password REFS only — no secret values ever touch disk)
 //   - a manifest.json describing the backup, including the profile names it
@@ -17,8 +17,8 @@
 // snapshot). The snapshot is then verified (`PRAGMA integrity_check` must be
 // "ok") before it is packed.
 //
-// This lives in pi-stack-host (not the dependency-light launcher) because it
-// needs the sqlite driver. The launcher `pi-stack backup` execs this.
+// This lives in pix-host (not the dependency-light launcher) because it
+// needs the sqlite driver. The launcher `pix backup` execs this.
 
 package main
 
@@ -37,7 +37,7 @@ import (
 	"strings"
 	"time"
 
-	"pi-stack/host/config"
+	"pix/host/config"
 
 	_ "modernc.org/sqlite"
 )
@@ -63,7 +63,7 @@ type knowledgeNote struct {
 // which profiles + knowledge bundles the backup covered.
 type backupManifest struct {
 	FormatVersion     int             `json:"format_version"`
-	PiStackVersion    string          `json:"pi_stack_version"`
+	PixVersion        string          `json:"pix_version"`
 	SqliteUserVersion int             `json:"sqlite_user_version"`
 	CreatedAt         string          `json:"created_at"`
 	Hostname          string          `json:"hostname"`
@@ -79,8 +79,8 @@ type backupManifest struct {
 type backupParams struct {
 	DBPath     string          // source live memory.db
 	OutPath    string          // full archive path to write
-	Keep       int             // retention: keep newest N pi-stack-backup-*.tar.gz in OutPath's dir
-	Version    string          // pi_stack_version for the manifest
+	Keep       int             // retention: keep newest N pix-backup-*.tar.gz in OutPath's dir
+	Version    string          // pix_version for the manifest
 	EmbedModel string          // memory_embed_model for the manifest
 	ConfigPath string          // config.toml to include if it exists ("" to skip)
 	OpRefsPath string          // op-refs.env to include if it exists ("" to skip)
@@ -131,7 +131,7 @@ func memoryBackup(p backupParams) (backupResult, error) {
 
 	// 1. HOT snapshot via VACUUM INTO into a private temp dir. VACUUM INTO refuses
 	// to overwrite an existing target, so a fresh temp dir guarantees a clean path.
-	tmpDir, err := os.MkdirTemp("", "pi-stack-backup-")
+	tmpDir, err := os.MkdirTemp("", "pix-backup-")
 	if err != nil {
 		return backupResult{}, fmt.Errorf("temp dir: %w", err)
 	}
@@ -151,7 +151,7 @@ func memoryBackup(p backupParams) (backupResult, error) {
 	// 3. Assemble the archive.
 	manifest := backupManifest{
 		FormatVersion:     backupFormatVersion,
-		PiStackVersion:    orDefault(p.Version, "dev"),
+		PixVersion:        orDefault(p.Version, "dev"),
 		SqliteUserVersion: userVersion,
 		CreatedAt:         now.UTC().Format(time.RFC3339),
 		Hostname:          backupHostname(),
@@ -182,7 +182,7 @@ func memoryBackup(p backupParams) (backupResult, error) {
 		return backupResult{}, err
 	}
 
-	// 4. Retention: keep the newest N pi-stack-backup-*.tar.gz in the out dir. Pass
+	// 4. Retention: keep the newest N pix-backup-*.tar.gz in the out dir. Pass
 	// the archive we just wrote so retention NEVER prunes it (see pruneBackups).
 	if err := pruneBackups(filepath.Dir(p.OutPath), p.Keep, p.OutPath); err != nil {
 		return backupResult{}, err
@@ -297,7 +297,7 @@ func verifySnapshot(path string) (userVersion, rowCount int, err error) {
 // and a re-run cannot destroy an existing backup.
 func writeBackupArchive(outPath, snapPath, configPath, opRefsPath string, manifest backupManifest) (err error) {
 	dir := filepath.Dir(outPath)
-	tmp, err := os.CreateTemp(dir, ".pi-stack-backup-*.tmp")
+	tmp, err := os.CreateTemp(dir, ".pix-backup-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temp archive: %w", err)
 	}
@@ -388,11 +388,11 @@ func tarAddBytes(tw *tar.Writer, name string, data []byte) error {
 }
 
 // backupNameRe matches ONLY the filenames memoryBackup generates:
-// pi-stack-backup-<8 digits>-<6 digits>[-<hex rand>].tar.gz. The random suffix is
+// pix-backup-<8 digits>-<6 digits>[-<hex rand>].tar.gz. The random suffix is
 // OPTIONAL so v1 (no-suffix) names still prune. Retention uses this strict match
 // so a hand-placed file (e.g. keepme.tar.gz, or a backup from another tool) is
 // NEVER deleted — a loose *.tar.gz glob would have swept those away.
-var backupNameRe = regexp.MustCompile(`^pi-stack-backup-\d{8}-\d{6}(-[0-9a-f]+)?\.tar\.gz$`)
+var backupNameRe = regexp.MustCompile(`^pix-backup-\d{8}-\d{6}(-[0-9a-f]+)?\.tar\.gz$`)
 
 // pruneBackups deletes the oldest of OUR backups in dir beyond keep. It matches
 // only files whose name is exactly the generated pattern; anything else is left
@@ -489,14 +489,14 @@ func backupHostname() string {
 
 // --- CLI wiring --------------------------------------------------------------
 
-const memoryHostUsage = `usage: pi-stack-host memory
+const memoryHostUsage = `usage: pix-host memory
 
   (no subcommand)   run the memory daemon (:11435, JSON-RPC)
 
 The backup/restore commands are now TOP-LEVEL verbs (they cover config + op-refs
-+ memory, not memory alone): pi-stack-host backup|restore.`
++ memory, not memory alone): pix-host backup|restore.`
 
-// runMemoryHost dispatches `pi-stack-host memory`. Bare `pi-stack-host memory`
+// runMemoryHost dispatches `pix-host memory`. Bare `pix-host memory`
 // (no args) runs the daemon, preserving back-compat with the service entry.
 // backup/restore were PROMOTED to top-level verbs (they cover config + op-refs +
 // memory now, not memory alone), so they are no longer memory subcommands. An
@@ -511,19 +511,19 @@ func runMemoryHost(args []string) {
 	case "-h", "--help":
 		fmt.Println(memoryHostUsage)
 	default:
-		fmt.Fprintf(os.Stderr, "pi-stack-host memory: unknown subcommand %q\n%s\n", args[0], memoryHostUsage)
+		fmt.Fprintf(os.Stderr, "pix-host memory: unknown subcommand %q\n%s\n", args[0], memoryHostUsage)
 		os.Exit(2)
 	}
 }
 
-const backupUsage = `usage: pi-stack-host backup [--out PATH] [--keep N]
+const backupUsage = `usage: pix-host backup [--out PATH] [--keep N]
 
   Take a hot, consistent FULL backup; safe while serve holds the db open. Packs
-  a VACUUM INTO snapshot of ~/.local/share/pi-stack/memory/memory.db (honors MEMORY_DB),
+  a VACUUM INTO snapshot of ~/.local/share/pix/memory/memory.db (honors MEMORY_DB),
   config.toml, op-refs.env (refs only), and a manifest.json (profiles +
   knowledge-bundle notes) into a tar.gz.
 
-  --out PATH   archive path (default ~/.local/share/pi-stack/backups/pi-stack-backup-<ts>.tar.gz)
+  --out PATH   archive path (default ~/.local/share/pix/backups/pix-backup-<ts>.tar.gz)
   --keep N     keep only the newest N backups in the out dir (default 7)`
 
 func runBackupCLI(args []string) {
@@ -537,7 +537,7 @@ func runBackupCLI(args []string) {
 			return
 		case a == "--out" || a == "-o":
 			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "pi-stack-host backup: --out needs a value")
+				fmt.Fprintln(os.Stderr, "pix-host backup: --out needs a value")
 				os.Exit(2)
 			}
 			i++
@@ -546,32 +546,32 @@ func runBackupCLI(args []string) {
 			outPath = strings.TrimPrefix(a, "--out=")
 		case a == "--keep":
 			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "pi-stack-host backup: --keep needs a value")
+				fmt.Fprintln(os.Stderr, "pix-host backup: --keep needs a value")
 				os.Exit(2)
 			}
 			i++
 			n, err := strconv.Atoi(args[i])
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "pi-stack-host backup: --keep needs an integer, got %q\n", args[i])
+				fmt.Fprintf(os.Stderr, "pix-host backup: --keep needs an integer, got %q\n", args[i])
 				os.Exit(2)
 			}
 			keep = n
 		case strings.HasPrefix(a, "--keep="):
 			n, err := strconv.Atoi(strings.TrimPrefix(a, "--keep="))
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "pi-stack-host backup: --keep needs an integer\n")
+				fmt.Fprintf(os.Stderr, "pix-host backup: --keep needs an integer\n")
 				os.Exit(2)
 			}
 			keep = n
 		default:
-			fmt.Fprintf(os.Stderr, "pi-stack-host backup: unknown argument %q\n%s\n", a, backupUsage)
+			fmt.Fprintf(os.Stderr, "pix-host backup: unknown argument %q\n%s\n", a, backupUsage)
 			os.Exit(2)
 		}
 	}
 
 	res, err := memoryBackup(resolveBackupParams(outPath, keep, time.Now()))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack-host backup: %v\n", err)
+		fmt.Fprintf(os.Stderr, "pix-host backup: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("backup: %s (%d rows, %s)\n", res.Path, res.RowCount, humanSize(res.Size))
@@ -591,7 +591,7 @@ func resolveBackupParams(outPath string, keep int, now time.Time) backupParams {
 		// A short random suffix makes the default name collision-proof: two backups
 		// in the same second (the timestamp's resolution) get distinct names instead
 		// of the second destroying the first.
-		name := "pi-stack-backup-" + now.Format("20060102-150405")
+		name := "pix-backup-" + now.Format("20060102-150405")
 		if tok, err := restoreToken(); err == nil {
 			name += "-" + tok
 		}

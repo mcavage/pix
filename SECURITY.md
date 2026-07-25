@@ -1,6 +1,6 @@
 # Security
 
-pi-stack's whole premise is running an autonomous agent without a stream of
+pix's whole premise is running an autonomous agent without a stream of
 approval prompts, so the trust boundary matters more than usual. Read this before
 you rely on it.
 
@@ -46,12 +46,12 @@ Be clear-eyed about these:
 
 A local-command MCP server (Slack, `gog`, a pack's host wrapper) is a process
 the sbx gateway spawns on your **host**, not inside the sandbox. Registering
-one (`sbx mcp add`, `pi-stack mcp register`) is a host-level trust decision:
+one (`sbx mcp add`, `pix mcp register`) is a host-level trust decision:
 the command you register runs with whatever access the gateway's spawn
 environment has, resolved credentials included. Review a server's registered
 command before trusting it (`sbx mcp get <name>`), and treat a pack that ships
 a host-executing integration as running code on your machine, not just in the
-sandbox; `pi-stack pack use` gates that with an explicit bill-of-materials
+sandbox; `pix pack use` gates that with an explicit bill-of-materials
 prompt before adoption. A remote MCP server (notion/atlassian/granola-style,
 added by URL) authenticates through hosted OAuth handled entirely host-side by
 the gateway; the sandbox never sees the token.
@@ -67,13 +67,24 @@ by default.
 
 **Revoking and rotating access.** An OAuth grant (Google Workspace, a remote
 catalog server) is revoked from that provider's own account security page,
-not from pi-stack; `pi-stack gog setup` re-authorizes cleanly afterward if you
+not from pix; `pix gworkspace setup` re-authorizes cleanly afterward if you
 need the integration back. A 1Password-backed MCP credential (a Slack token,
 a keyring password) is rotated in 1Password itself; the gateway only resolves
 an `op://` ref at spawn time, so the new value takes effect once you
-re-register the server (`pi-stack mcp register`), which triggers a fresh
-spawn. `pi-stack secret sync` is the equivalent for the cloud model provider
+re-register the server (`pix mcp register`), which triggers a fresh
+spawn. `pix secret sync` is the equivalent for the cloud model provider
 keys (Anthropic/OpenAI/Google), not MCP credentials.
+
+## Provider-key process exposure
+
+Docker Sandboxes currently accepts provider secret values through `sbx secret
+set -t`. During `pix setup`, a resolved value therefore exists briefly in the
+`sbx` child process argument vector and may be visible to same-user process
+inspection or endpoint audit tooling. Pix never logs or persists that value and
+scrubs it from subprocess errors, but it cannot remove the argv exposure until
+`sbx` provides a stdin or file-descriptor input mode. Treat hosts with untrusted
+same-user processes as outside the supported credential boundary. This is an
+accepted upstream limitation, not a claim that the value never enters argv.
 
 ## Reporting a vulnerability
 

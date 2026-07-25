@@ -1,4 +1,4 @@
-// pi-stack — reply timestamp as a powerbar segment.
+// pix — reply timestamp as a powerbar segment.
 //
 // Shows the time of the agent's most recent reply as a compact segment in the
 // LEFT group of the powerbar, right after `tokens` (the token/cost readout),
@@ -28,7 +28,7 @@
 const SEGMENT_ID = "reply-ts";
 const POWERBAR_EXT = "powerbar";
 const DEFAULT_LEFT = "git-branch,tokens,context-usage";
-// Intentionally omits sub-hourly/sub-weekly: in a proxy-managed pi-stack the API
+// Intentionally omits sub-hourly/sub-weekly: in a proxy-managed pix the API
 // keys are injected by the proxy, so those subscription-usage windows are empty
 // and only waste bar width. Dropping them here keeps them gone on fresh sandboxes
 // too (this extension is what seeds the powerbar segment lists on first run).

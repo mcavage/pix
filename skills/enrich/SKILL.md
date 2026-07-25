@@ -1,6 +1,6 @@
 ---
 name: enrich
-description: Write knowledge BACK into the OKF (Open Knowledge Format) bundle as a gated, PR-based flow. Use for "enrich the knowledge base", "write this up as a concept", "document this in the OKF bundle", "add this to OKF", or when promoting a recurring learning that is shared domain truth rather than a personal fact. The OKF-writing cousin of `promote` (which graduates personal-memory learnings); this one writes shared concepts.
+description: Write knowledge BACK into the OKF bundle as a gated, PR-based flow. Use for "enrich the knowledge base", "document this in OKF", or promoting a learning that is shared domain truth, not personal.
 ---
 # enrich
 

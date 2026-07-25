@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Something in pi-stack does not work as documented
+about: Something in pix does not work as documented
 title: ""
 labels: bug
 assignees: ""
@@ -24,7 +24,7 @@ Exact steps or commands. The smaller the repro, the faster the fix.
 
 ## Environment
 
-- pi-stack version: <!-- `pi-stack version` -->
+- pix version: <!-- `pix version` -->
 - pi version: <!-- from the image, or `pi --version` in the sandbox -->
 - sbx version: <!-- `sbx version` -->
 - OS / arch:

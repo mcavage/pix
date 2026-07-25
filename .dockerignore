@@ -15,7 +15,7 @@ node_modules/
 .DS_Store
 **/*.db
 **/*.db-*
-services/host/pi-stack-host
+services/host/pix-host
 
 # --- Open-core boundary: skills -------------------------------------------------
 # DEFAULT-DENY. The Dockerfile COPYs skills/ wholesale, so we exclude every skill
@@ -27,7 +27,6 @@ services/host/pi-stack-host
 # Review this allowlist before every public build. To publish a skill, add a
 # "!skills/<name>" line. Anything not listed is excluded by default (safe).
 skills/*
-!skills/agent-new
 !skills/analyze
 !skills/anti-slop
 !skills/api-conventions

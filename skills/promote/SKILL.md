@@ -1,6 +1,6 @@
 ---
 name: promote
-description: Review the lessons the memory watcher has captured repeatedly and graduate the recurring ones into a real skill or convention edit (gated by the user). Use for "review learnings", "what keeps coming up", "promote learnings", or a periodic system-improvement pass.
+description: Review the lessons the memory watcher captured repeatedly and graduate the recurring ones into a real skill or convention edit. Use for "review learnings" or "promote learnings".
 ---
 # promote
 

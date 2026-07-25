@@ -26,7 +26,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const MARKER = "pi-stack-bounded-wait";
+const MARKER = "pix-bounded-wait";
 const warn = (m) => console.warn(`[apply-subagent-timeout] ⚠ ${m}`);
 const info = (m) => console.log(`[apply-subagent-timeout] ${m}`);
 

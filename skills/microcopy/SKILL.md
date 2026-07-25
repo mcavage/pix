@@ -1,6 +1,6 @@
 ---
 name: microcopy
-description: Standard UI copy patterns for buttons, errors, empty states, confirmations, tooltips, status messages, and form labels. Use for "write the copy for X", "review this UI text", "how should this button read", or before running design-review or qa.
+description: Standard UI copy patterns for buttons, errors, empty states, confirmations, tooltips, status messages, and form labels. Use for "write the copy for X" or before running design-review or qa.
 ---
 # microcopy
 

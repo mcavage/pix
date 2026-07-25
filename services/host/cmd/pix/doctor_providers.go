@@ -1,0 +1,173 @@
+package main
+
+import (
+	"strings"
+
+	"pix/host/config"
+)
+
+// secretCheck reports whether a provider secret is set. When sbx is
+// unreachable (e.g. inside the sandbox) it emits a TODO rather than a false OK.
+// Kept for hoststate.go/onboard.go's per-provider booleans (a DIFFERENT need
+// from doctor's readiness axes below: they just want a plain ok/not-ok per
+// key, not the core-vs-informational split doctor renders).
+func secretCheck(label, key, sbxOut string, sbxOK bool) check {
+	cmd := "sbx secret set -g " + key
+	if !sbxOK {
+		return check{label: label, verdict: verdictTodo, detail: "sbx unavailable here (set on the host)", todo: cmd}
+	}
+	if grepWord(sbxOut, key) {
+		return check{label: label, verdict: verdictReady, detail: "set"}
+	}
+	return check{label: label, verdict: verdictTodo, detail: "not set", todo: cmd}
+}
+
+// providersGroup builds the provider-secrets cluster: the model/github keys
+// injected proxy-side (never visible in the VM), read via `sbx secret ls`.
+//
+// pix only needs ONE of anthropic/openai/google to launch a model, so the
+// group leads with a SINGLE core check on that disjunction \u2014 the only line
+// here that can make `pix doctor` exit 1:
+//   - at least one present                -> ready
+//   - sbx reachable, POSITIVELY zero set  -> todo, with ONE copy-pasteable fix
+//     command (the other providers are named in evidence, never in the
+//     command itself)
+//   - sbx absent / `sbx secret ls` failed -> unverifiable (never denied, never
+//     blocking \u2014 doctor does not know, so it must not claim a failure)
+//
+// Everything below the core check is purely informational (note: true \u2014
+// never blocks, never counts as outstanding or unverifiable): naming which
+// INDIVIDUAL provider is set is a convenience, not a second requirement \u2014 a
+// missing alternate is expected once one provider exists, and github merely
+// authorizes git operations (not the model), so it is never itself
+// outstanding.
+func providersGroup(cfg *config.Config, sbxOut string, sbxOK bool) group {
+	g := group{title: "Providers / keys (proxy-injected, never in the VM)"}
+	g.checks = append(g.checks, modelKeyCoreCheck(sbxOut, sbxOK))
+	for _, p := range []string{"anthropic", "openai", "google", "github"} {
+		g.checks = append(g.checks, providerInfoCheck(p, sbxOut, sbxOK))
+	}
+	g.checks = append(g.checks, runIntentKeyCheck(cfg, sbxOut, sbxOK))
+	return g
+}
+
+// runIntentKeyCheck warns when the top-level session intent (config.run_intent,
+// the "overlord") resolves to a provider whose key is NOT set. This is the
+// specific trap of the baked overlord -> GPT-5.6 Sol default: a host with only an
+// Anthropic key launches fine (the core check is green) but every INTERACTIVE
+// turn 401s because the session model is OpenAI. It is INFORMATIONAL (note: true
+// — never blocks, never counts as outstanding): the fix is a config change, not
+// a missing requirement, and the core "at least one key" gate already stands.
+func runIntentKeyCheck(cfg *config.Config, sbxOut string, sbxOK bool) check {
+	intent := config.DefaultRunIntent
+	if cfg != nil && strings.TrimSpace(cfg.RunIntent) != "" {
+		intent = strings.TrimSpace(cfg.RunIntent)
+	}
+	label := "session model (run_intent=" + intent + ")"
+	// "none"/"off" is the explicit opt-out (run.go): pi picks its own default model,
+	// which needs no specific provider key beyond the core "at least one" gate.
+	if strings.EqualFold(intent, "none") || strings.EqualFold(intent, "off") {
+		return check{label: label, note: true, verdict: verdictReady, detail: "opt-out: pi's own default model"}
+	}
+	model, err := resolveSessionModel(intent)
+	if err != nil || model == "" {
+		// A bad run_intent degrades to pi's own default at launch (run.go), so this
+		// is a soft note, not a failure.
+		return check{label: label, note: true, verdict: verdictUnverifiable,
+			detail: "run_intent does not resolve to a model — launch will use pi's default; fix with `pix config set run_intent <intent>`"}
+	}
+	provider := model
+	if i := strings.IndexByte(model, '/'); i > 0 {
+		provider = model[:i]
+	}
+	if !sbxOK {
+		return check{label: label, note: true, verdict: verdictUnverifiable,
+			detail: "-> " + model + " (cannot verify " + provider + " key: sbx unavailable here)"}
+	}
+	// Only the model providers carry a launch-relevant key here; a local (ollama)
+	// model needs none.
+	if provider == "ollama" || grepWord(sbxOut, provider) {
+		return check{label: label, note: true, verdict: verdictReady, detail: "-> " + model + " (" + provider + " key set)"}
+	}
+	// If NO model key is set at all, the core "at least one key" check already owns
+	// the fix — don't double up a second secret-set todo here. This check earns its
+	// keep in the SPECIFIC trap: you HAVE a key, just not the session model's
+	// provider (e.g. Anthropic-only host + baked overlord -> OpenAI).
+	if !anyModelKeyInOutput(sbxOut) {
+		return check{label: label, note: true, verdict: verdictUnverifiable,
+			detail: "-> " + model + " (needs a " + provider + " key; set a model key first — see the core check above)"}
+	}
+	return check{label: label, note: true, verdict: verdictTodo,
+		detail: "-> " + model + " but the " + provider + " key is NOT set: interactive turns will fail. Set " + provider + "'s key, or point run_intent at a provider you have (or `none` for pi's default)",
+		todo:   "pix secret set " + strings.ToUpper(provider) + "_API_KEY op://vault/item/field && pix secret sync"}
+}
+
+// modelKeyFixCmd is the ONE copy-pasteable command surfaced when doctor has
+// POSITIVELY confirmed zero model-provider keys are set. It fixes any one
+// provider (anthropic, chosen as the example); the other two are named in the
+// core check's evidence, not repeated here as alternative commands.
+const modelKeyFixCmd = "pix secret set ANTHROPIC_API_KEY op://vault/item/field && pix secret sync"
+
+// modelKeyCoreCheck is the sole core launch-readiness check in this group: does
+// pix have AT LEAST ONE usable model-provider key. It reuses
+// anyModelKeyInOutput \u2014 the exact same "what counts as present" definition
+// sbxModelKeyState uses for `run`'s launch gate \u2014 so doctor and the launch
+// gate can never disagree about what "a key is present" means.
+func modelKeyCoreCheck(sbxOut string, sbxOK bool) check {
+	names := strings.Join(modelProviders, "/")
+	if !sbxOK {
+		return check{
+			label:       "model key",
+			requirement: requirementCore,
+			verdict:     verdictUnverifiable,
+			detail:      "cannot verify (sbx unavailable here) \u2014 re-run `pix doctor` on the host",
+			evidence:    "sbx secret ls: unavailable",
+		}
+	}
+	if anyModelKeyInOutput(sbxOut) {
+		return check{
+			label:       "model key",
+			requirement: requirementCore,
+			verdict:     verdictReady,
+			detail:      "at least one of " + names + " is set",
+			evidence:    "sbx secret ls: " + presentModelProviders(sbxOut) + " set",
+		}
+	}
+	return check{
+		label:       "model key",
+		requirement: requirementCore,
+		verdict:     verdictTodo,
+		detail:      "none of " + names + " is set \u2014 pix cannot launch a model",
+		todo:        modelKeyFixCmd,
+		evidence:    "sbx secret ls: none of " + strings.Join(modelProviders, ", ") + " present",
+	}
+}
+
+// presentModelProviders lists which of modelProviders sbxOut shows as set, for
+// the core check's evidence string (alternatives belong in evidence, never in
+// the fix command).
+func presentModelProviders(sbxOut string) string {
+	var got []string
+	for _, k := range modelProviders {
+		if grepWord(sbxOut, k) {
+			got = append(got, k)
+		}
+	}
+	return strings.Join(got, ", ")
+}
+
+// providerInfoCheck is a per-provider INFORMATIONAL annotation (note: true \u2014
+// see providersGroup's doc comment): ready/not-configured/unverifiable, purely
+// for transparency. It never blocks and never counts toward outstanding, so an
+// unset alternate provider (or an unset github, which is optional
+// infrastructure that authorizes git operations, not the model) is never
+// itself a gap once the core check above is satisfied.
+func providerInfoCheck(key string, sbxOut string, sbxOK bool) check {
+	if !sbxOK {
+		return check{label: key, note: true, verdict: verdictUnverifiable, detail: "cannot verify (sbx unavailable here)"}
+	}
+	if grepWord(sbxOut, key) {
+		return check{label: key, note: true, verdict: verdictReady, detail: "set"}
+	}
+	return check{label: key, note: true, verdict: verdictUnverifiable, detail: "not configured"}
+}

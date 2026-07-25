@@ -1,6 +1,6 @@
 ---
 name: challenge
-description: Adversarial decision gate. Challenges premises, surfaces assumptions, forces alternatives, and runs a pre-mortem before any major decision or build. Use for "challenge this", "poke holes in this", "stress test this idea", "should we do X", or any choice with significant cost, irreversibility, or risk.
+description: Adversarial decision gate — challenges premises, surfaces assumptions, forces alternatives, runs a pre-mortem before any major decision. Use for "challenge this" or "stress test this idea".
 ---
 # challenge
 

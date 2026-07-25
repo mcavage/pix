@@ -1,6 +1,6 @@
 ---
 name: brainstorm
-description: Shape a fuzzy idea or feature into a concrete, buildable design doc (builder mode for side projects, hackathons, OSS, and learning). Design-thinking, NOT a startup pitch screen. Use for "brainstorm this", "I have an idea", "help me think through this", or "is this worth building" on a personal/builder project.
+description: Shape a fuzzy idea into a concrete, buildable design doc (builder mode — side projects, hackathons, OSS, learning). Use for "brainstorm this" or "is this worth building" on a personal project.
 ---
 # brainstorm
 
