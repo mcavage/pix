@@ -100,11 +100,11 @@ func TestMcpReattachWarning_AllAttachedSilent(t *testing.T) {
 	if err := writeCreateReceipt(sd, "pi-stack-t", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendLoadReceipt(sd, "pi-stack-t", "gog", fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := appendLoadReceipt(sd, "pi-stack-t", gwServerName, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 
-	cfg := &config.Config{MCP: []string{"slack", "gog"}}
+	cfg := &config.Config{MCP: []string{"slack", gwServerName}}
 	o := runOpts{Workspace: "/repo", Name: "pi-stack-t"}
 	if msg := mcpReattachWarning(cfg, o, true); msg != "" {
 		t.Errorf("expected silence when every desired server is receipted, got: %q", msg)
@@ -135,7 +135,7 @@ func TestMcpReattachWarning_AbsentReceipt(t *testing.T) {
 	sd := t.TempDir() // never written to
 	withSandboxMCPStateDirFn(t, func() (string, error) { return sd, nil })
 
-	cfg := &config.Config{MCP: []string{"gog"}}
+	cfg := &config.Config{MCP: []string{gwServerName}}
 	o := runOpts{Workspace: "/repo", Name: "pi-stack-t"}
 	msg := mcpReattachWarning(cfg, o, true)
 	if msg == "" {
@@ -144,10 +144,10 @@ func TestMcpReattachWarning_AbsentReceipt(t *testing.T) {
 	if !strings.Contains(msg, "cannot be verified") {
 		t.Errorf("expected an honest cannot-be-verified message, got: %q", msg)
 	}
-	if !strings.Contains(msg, "gog") {
+	if !strings.Contains(msg, gwServerName) {
 		t.Errorf("expected the desired name named, got: %q", msg)
 	}
-	if !strings.Contains(msg, "pi-stack mcp load gog") || !strings.Contains(msg, "--replace") {
+	if !strings.Contains(msg, "pi-stack mcp load google-workspace") || !strings.Contains(msg, "--replace") {
 		t.Errorf("expected both fix paths offered, got: %q", msg)
 	}
 }
@@ -166,13 +166,13 @@ func TestMcpReattachWarning_CorruptReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := &config.Config{MCP: []string{"gog"}}
+	cfg := &config.Config{MCP: []string{gwServerName}}
 	o := runOpts{Workspace: "/repo", Name: "pi-stack-t"}
 	msg := mcpReattachWarning(cfg, o, true)
 	if msg == "" || !strings.Contains(msg, "cannot be verified") {
 		t.Errorf("expected a cannot-be-verified warning for a corrupt receipt, got: %q", msg)
 	}
-	if !strings.Contains(msg, "gog") {
+	if !strings.Contains(msg, gwServerName) {
 		t.Errorf("expected the desired name named, got: %q", msg)
 	}
 }
@@ -183,7 +183,7 @@ func TestMcpReattachWarning_CorruptReceipt(t *testing.T) {
 func TestMcpReattachWarning_SilentOnCreateOrReplace(t *testing.T) {
 	sd := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return sd, nil })
-	cfg := &config.Config{MCP: []string{"gog"}}
+	cfg := &config.Config{MCP: []string{gwServerName}}
 	o := runOpts{Workspace: "/repo", Name: "pi-stack-t"}
 
 	if msg := mcpReattachWarning(cfg, o, false); msg != "" {
@@ -218,7 +218,7 @@ func TestMcpReattachWarning_FiresOnBothRunningAndStopped(t *testing.T) {
 	if err := writeCreateReceipt(sd, "pi-stack-t", "", nil, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	cfg := &config.Config{MCP: []string{"gog"}}
+	cfg := &config.Config{MCP: []string{gwServerName}}
 	o := runOpts{Workspace: "/repo", Name: "pi-stack-t"}
 
 	for _, state := range []sbxState{sbxRunning, sbxStopped} {

@@ -21,6 +21,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -112,6 +113,10 @@ func runSetupCmd(argv []string) {
 	// os.Exit.
 	if err := runSetupCore(env, dir, hostArgs, os.Stdin, os.Stdout, isTTY(os.Stdin), setupHostPhase); err != nil {
 		fmt.Fprintf(os.Stderr, "pi-stack setup: %v\n", err)
+		var usage errUsage
+		if errors.As(err, &usage) {
+			os.Exit(2) // an argument mistake, caught before any probe or mutation
+		}
 		os.Exit(1)
 	}
 
@@ -283,6 +288,13 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	if opts.apply {
 		return fmt.Errorf("--apply belongs to `pi-stack onboard --apply`; setup does not apply workspace proposals")
 	}
+	// --account/--credentials are Google Workspace inputs and are meaningless
+	// without the opt-in. Rejecting them here deletes the old ability to set an
+	// account without completing OAuth: there is no path that writes
+	// google_workspace_account except the transaction itself.
+	if err := checkGoogleWorkspaceFlags(opts); err != nil {
+		return err
+	}
 	// Interactive prompts fire on any real TTY unless the caller explicitly opted
 	// out with --yes/-y/--non-interactive (opts.assumeYes). Ordinary VALUE flags
 	// (--account/--knowledge/--mcp/--model) configure host settings; they say
@@ -299,7 +311,6 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	// flow first only to reject the very flags that drove this run afterward.
 	r := &onboardingResult{
 		Version:           1,
-		GogAccount:        strings.TrimSpace(opts.account),
 		MCP:               opts.mcp,
 		OllamaBridgeModel: strings.TrimSpace(opts.model),
 	}
@@ -381,6 +392,23 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	if len(cfg.MCP) > 0 {
 		if err := registerServers(cfg, env, out, nil, hostBinaryResolver, activeContainerMCP(cfg)); err != nil {
 			fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pi-stack mcp register)\n", err)
+		}
+	}
+
+	// Google Workspace (optional, OFF unless --google-workspace): the SAME
+	// transaction `pi-stack gworkspace setup` runs, reached through the same
+	// façade so there is exactly one writer. It sits after the MCP step and
+	// before the model pulls, matching the fixed mutation order. It returns NO
+	// success text of its own here: the row in printSetupSummary below is
+	// rendered from a post-mutation probe (gogSetupAccountHealthy), so a failed
+	// or half-finished authorization can never print a ✓.
+	if opts.googleWorkspace {
+		if err := setupGoogleWorkspaceFn(env, gogSetupOpts{
+			account:     strings.TrimSpace(opts.account),
+			credentials: strings.TrimSpace(opts.credentials),
+			assumeYes:   opts.assumeYes,
+		}, in, out, interactive); err != nil {
+			return fmt.Errorf("google workspace: %w", err)
 		}
 	}
 
@@ -781,7 +809,7 @@ func setupSandboxName(dir string) (string, bool) {
 // (only the space-separated form; `--flag=value` is self-contained).
 func flagTakesValue(a string) bool {
 	switch a {
-	case "--account", "--knowledge", "--mcp", "--model":
+	case "--account", "--credentials", "--knowledge", "--mcp", "--model":
 		return true
 	}
 	return false
@@ -825,7 +853,14 @@ Setup flags:
                            positively verify as missing.
 
 Host-config flags (all optional):
-  --account <email>        set the Google Workspace (gog) account + enable gog
+  --google-workspace       opt in to Google Workspace (absent otherwise): runs
+                           the same transaction as 'pi-stack gworkspace setup'
+                           (may open a browser). Requires --account, and
+                           --credentials unless the client was already imported
+  --account <email>        the Google Workspace account to authorize; valid
+                           ONLY with --google-workspace
+  --credentials <path>     your Desktop OAuth client JSON; valid ONLY with
+                           --google-workspace
   --knowledge <path|url>   scaffold/point the global knowledge base
   --mcp <name>             enable an MCP server (repeatable; allowlisted)
   --model <ollama-model>   set the ollama-bridge model
@@ -836,3 +871,31 @@ Host-config flags (all optional):
 
 For scripted host config with NO agent handoff, use ` + "`pi-stack onboard`" + ` instead.
 `
+
+// checkGoogleWorkspaceFlags enforces AC-P0-312: --account and --credentials are
+// Google Workspace inputs, valid ONLY alongside --google-workspace. The error
+// is deliberately in the standard grammar (invoked path, lowercase, no trailing
+// period) and maps to exit 2 at the call site, because it is an argument
+// mistake, not a failed probe.
+func checkGoogleWorkspaceFlags(opts onboardOpts) error {
+	if opts.googleWorkspace {
+		return nil
+	}
+	if strings.TrimSpace(opts.account) != "" {
+		return errUsage{fmt.Errorf("--account requires --google-workspace")}
+	}
+	if strings.TrimSpace(opts.credentials) != "" {
+		return errUsage{fmt.Errorf("--credentials requires --google-workspace")}
+	}
+	return nil
+}
+
+// errUsage marks an argument error, which exits 2 rather than 1.
+type errUsage struct{ error }
+
+// setupGoogleWorkspaceFn is the seam tests stub so setup's phases can be
+// exercised without a browser or an installed dependency CLI. Production wires
+// the real façade over the unchanged transaction.
+var setupGoogleWorkspaceFn = func(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, interactive bool) error {
+	return gworkspaceSetup(env, opts, in, out, interactive)
+}

@@ -43,7 +43,7 @@ func TestMcpHostTrustNotice_StatesBothFacts(t *testing.T) {
 // must print the disclosure when at least one MCP server is configured.
 func TestDoctorRender_DisclosesHostMCPTrust_WhenMCPConfigured(t *testing.T) {
 	r := runDoctor(defaultCfg(), fakeEnv{}.env())
-	r.services, r.mcp = defaultCfg().Services, []string{"gog"}
+	r.services, r.mcp = defaultCfg().Services, []string{gwServerName}
 	var buf bytes.Buffer
 	r.render(&buf, false)
 	out := buf.String()
@@ -84,7 +84,7 @@ func hostTrustSummaryEnv(t *testing.T) shellEnv {
 func TestPrintSetupSummary_DisclosesHostMCPTrust_WhenMCPConfigured(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PI_STACK_CONFIG", filepath.Join(dir, "config.toml"))
-	cfg := &config.Config{MCP: []string{"gog"}}
+	cfg := &config.Config{MCP: []string{gwServerName}}
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}

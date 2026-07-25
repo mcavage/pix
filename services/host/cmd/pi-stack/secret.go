@@ -612,7 +612,7 @@ func indent(s string) string {
 // counts (mirrors setup's hasNonGogMCP).
 func anyOpWrappedServer(cfg *config.Config) bool {
 	for _, m := range cfg.MCP {
-		if m != "gog" {
+		if m != gwServerName {
 			return true
 		}
 	}

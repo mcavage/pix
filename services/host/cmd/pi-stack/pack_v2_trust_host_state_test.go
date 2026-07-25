@@ -90,11 +90,11 @@ func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.AddMCP("gog")
+	cfg.AddMCP(gwServerName)
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
-	// A Tier-0 pack (no gate) shipping a forged lock claiming "gog".
+	// A Tier-0 pack (no gate) shipping a forged lock claiming gwServerName.
 	root := filepath.Join(dir, "evil")
 	mustWritePack(t, root, packManifest{Name: "evil", Schema: 1})
 	if err := os.WriteFile(packLockPath(root), []byte("mcp = [\"gog\"]\n"), 0o644); err != nil {
@@ -105,7 +105,7 @@ func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
 
 	var out bytes.Buffer
 	runPackUse(fakeGitEnv(nil), &out, []string{root})
-	if l := readPackLock(root); containsStr(l.MCP, "gog") {
+	if l := readPackLock(root); containsStr(l.MCP, gwServerName) {
 		t.Fatalf("forged attribution survived adoption: %+v (must be scrubbed + regenerated fresh)", l)
 	}
 	// Switch away: the user's own MCP must survive.
@@ -115,7 +115,7 @@ func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfg2.MCP, "gog") {
+	if !containsStr(cfg2.MCP, gwServerName) {
 		t.Errorf("CRITICAL: switching away removed the user's own MCP (forged attribution honored); cfg.MCP=%v", cfg2.MCP)
 	}
 }
@@ -158,17 +158,17 @@ func TestPackUse_ForgedSymlinkLockScrubbedNotFollowed(t *testing.T) {
 func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	if os.Getenv("PI_STACK_TEST_TRUST") == "gog-regate" {
 		hostBinaryResolver = func() (string, error) { return "pi-stack-host", nil }
-		runPackUse(localMCPEnv("gog"), os.Stdout, []string{os.Getenv("PI_STACK_TEST_PACK_ROOT")})
+		runPackUse(localMCPEnv(gwServerName), os.Stdout, []string{os.Getenv("PI_STACK_TEST_PACK_ROOT")})
 		return
 	}
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
 	t.Setenv("PI_STACK_CONFIG", cfgPath)
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	pinLocalMCP(t, "gog")
+	pinLocalMCP(t, gwServerName)
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packManifest{Name: "work", Schema: 1,
-		Integrations: []packIntegration{{Name: "Gog", MCP: "gog"}}})
+		Integrations: []packIntegration{{Name: "Gog", MCP: gwServerName}}})
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -179,11 +179,11 @@ func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackUse(localMCPEnv("gog"), &out, []string{root, "--yes"}) // accept with a@
+	runPackUse(localMCPEnv(gwServerName), &out, []string{root, "--yes"}) // accept with a@
 	// Same account: re-activation must NOT re-prompt (in-process; a misfiring
 	// gate would os.Exit and fail the test binary).
 	out.Reset()
-	runPackUse(localMCPEnv("gog"), &out, []string{root})
+	runPackUse(localMCPEnv(gwServerName), &out, []string{root})
 	if strings.Contains(out.String(), "runs code on your host") {
 		t.Errorf("unchanged surface must not re-gate:\n%s", out.String())
 	}

@@ -507,7 +507,7 @@ func TestMigrateLegacyPackDir_MigratesTrustPathState(t *testing.T) {
 		Installed: &packInstalledSet{Owner: "path:" + oldCanon, Wrappers: []string{"w1", "w2"}},
 		Activation: &packActivationRecord{
 			Owner: "path:" + oldCanon, Path: oldCanon,
-			MCP: []string{"gog"}, Knowledge: []string{"kb"}, GogAccount: "a@b.c",
+			MCP: []string{gwServerName}, Knowledge: []string{"kb"}, GogAccount: "a@b.c",
 		},
 	}
 	if err := store.save(); err != nil {
@@ -554,7 +554,7 @@ func TestMigrateLegacyPackDir_MigratesTrustPathState(t *testing.T) {
 	if a == nil || a.Owner != "path:"+newCanon || a.Path != newCanon {
 		t.Fatalf("activation = %+v, want owner/path migrated", a)
 	}
-	if len(a.MCP) != 1 || a.MCP[0] != "gog" || len(a.Knowledge) != 1 || a.GogAccount != "a@b.c" {
+	if len(a.MCP) != 1 || a.MCP[0] != gwServerName || len(a.Knowledge) != 1 || a.GogAccount != "a@b.c" {
 		t.Errorf("activation contribution set must be preserved, got %+v", a)
 	}
 }
@@ -635,7 +635,7 @@ func TestRepairStaleLegacyPackState(t *testing.T) {
 	store := &packTrustStore{
 		Version:    1,
 		Accepted:   map[string]packTrustRecord{"path:" + oldCanon: {Path: oldCanon, Fingerprint: "fp"}},
-		Activation: &packActivationRecord{Owner: "path:" + oldCanon, Path: oldCanon, MCP: []string{"gog"}},
+		Activation: &packActivationRecord{Owner: "path:" + oldCanon, Path: oldCanon, MCP: []string{gwServerName}},
 	}
 	if err := store.save(); err != nil {
 		t.Fatal(err)
@@ -672,7 +672,7 @@ func TestRepairStaleLegacyPackState(t *testing.T) {
 	if s.Activation == nil || s.Activation.Path != newCanon || s.Activation.Owner != "path:"+newCanon {
 		t.Errorf("stale activation must be migrated, got %+v", s.Activation)
 	}
-	if s.Activation != nil && (len(s.Activation.MCP) != 1 || s.Activation.MCP[0] != "gog") {
+	if s.Activation != nil && (len(s.Activation.MCP) != 1 || s.Activation.MCP[0] != gwServerName) {
 		t.Errorf("activation contribution must be preserved, got %+v", s.Activation)
 	}
 }

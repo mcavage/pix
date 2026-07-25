@@ -117,7 +117,7 @@ func TestCreateReceipt_MergesConcurrentLoadDropsPriorLifetime(t *testing.T) {
 	}
 	withCreatePollSeams(t, probe, time.Millisecond, 5*time.Second)
 
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{"gog"}); err != nil {
+	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{gwServerName}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -125,7 +125,7 @@ func TestCreateReceipt_MergesConcurrentLoadDropsPriorLifetime(t *testing.T) {
 	if err != nil || status != sandboxMCPStateOK {
 		t.Fatalf("status=%v err=%v", status, err)
 	}
-	if r.CreatedAt == "" || len(r.Preloaded) != 1 || r.Preloaded[0] != "gog" {
+	if r.CreatedAt == "" || len(r.Preloaded) != 1 || r.Preloaded[0] != gwServerName {
 		t.Errorf("create commit = created_at %q, preloaded %v; want a fresh create with [gog]", r.CreatedAt, r.Preloaded)
 	}
 	if len(r.Loads) != 1 || r.Loads[0].Name != "fresh" {
@@ -358,7 +358,7 @@ func TestCreateCommitRacesLoads(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		errs[loaders] = commitCreateReceipt(dir, sandbox, "", []string{"gog"}, receiptClock)
+		errs[loaders] = commitCreateReceipt(dir, sandbox, "", []string{gwServerName}, receiptClock)
 	}()
 	wg.Wait()
 	for i, err := range errs {
@@ -374,7 +374,7 @@ func TestCreateCommitRacesLoads(t *testing.T) {
 	if err != nil || status != sandboxMCPStateOK {
 		t.Fatalf("status=%v err=%v", status, err)
 	}
-	if r.CreatedAt == "" || len(r.Preloaded) != 1 || r.Preloaded[0] != "gog" {
+	if r.CreatedAt == "" || len(r.Preloaded) != 1 || r.Preloaded[0] != gwServerName {
 		t.Errorf("create commit lost: created_at %q, preloaded %v", r.CreatedAt, r.Preloaded)
 	}
 	if len(r.Loads) != loaders {

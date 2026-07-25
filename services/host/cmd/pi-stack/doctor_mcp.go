@@ -39,13 +39,13 @@ const gatewayDownDetail = "sbx present but couldn't list MCP registrations — c
 // replaces the legacy binary mcpCheck, which rendered every listing failure
 // as a TODO.
 func gogRegistrationCheck(mcpOut string, mcpOK, sbxPresent bool) check {
-	switch mcpRegEvidenceFrom(mcpOut, mcpOK, "gog") {
+	switch mcpRegEvidenceFrom(mcpOut, mcpOK, gwServerName) {
 	case mcpRegYes:
-		return check{label: "gog", verdict: verdictReady, detail: "registered", evidence: "sbx mcp ls"}
+		return check{label: gwServerName, verdict: verdictReady, detail: "registered", evidence: "sbx mcp ls"}
 	case mcpRegNo:
-		return check{label: "gog", verdict: verdictTodo, detail: "not registered", todo: "pi-stack mcp register"}
+		return check{label: gwServerName, verdict: verdictTodo, detail: "not registered", todo: "pi-stack mcp register"}
 	default: // mcpRegUnknown: sbx absent, or present with the listing failing
-		return mcpUnavailableCheck("gog", sbxPresent)
+		return mcpUnavailableCheck(gwServerName, sbxPresent)
 	}
 }
 
@@ -743,7 +743,7 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 	// `run --pack` mix-in or a since-switched pack's historical MCP
 	// provenance visible on THIS sandbox. gog is excluded throughout (owned
 	// by its own dedicated group).
-	exclude := map[string]bool{"gog": true}
+	exclude := map[string]bool{gwServerName: true}
 	currentIntent := mcpCurrentIntentNames(cfg.MCP, containers, exclude)
 	var receipt *sandboxMCPReceipt
 	if ctx.mode == mcpAttachReceipt {

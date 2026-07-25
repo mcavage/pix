@@ -91,7 +91,7 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.AddMCP("gog")
+	cfg.AddMCP(gwServerName)
 	cfg.AddKnowledgeBundle(userBundle)
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfg2.MCP, "gog") || !containsStr(cfg2.KnowledgeBundles, userBundleID) {
+	if !containsStr(cfg2.MCP, gwServerName) || !containsStr(cfg2.KnowledgeBundles, userBundleID) {
 		t.Fatalf("CRITICAL: same-pack reactivation honored a forged pack.lock; mcp=%v knowledge=%v", cfg2.MCP, cfg2.KnowledgeBundles)
 	}
 
@@ -134,7 +134,7 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfg3.MCP, "gog") || !containsStr(cfg3.KnowledgeBundles, userBundleID) {
+	if !containsStr(cfg3.MCP, gwServerName) || !containsStr(cfg3.KnowledgeBundles, userBundleID) {
 		t.Fatalf("CRITICAL: switch-away honored a forged pack.lock; mcp=%v knowledge=%v", cfg3.MCP, cfg3.KnowledgeBundles)
 	}
 }
@@ -358,7 +358,7 @@ func TestPackUse_GogReferenceStaysTier0(t *testing.T) {
 	pinLocalMCP(t) // empty local set — gog is never listed
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packManifest{Name: "personal", Schema: 1,
-		Integrations: []packIntegration{{Name: "Gog", MCP: "gog", Env: "GOG_KEYRING"}}})
+		Integrations: []packIntegration{{Name: "Gog", MCP: gwServerName, Env: "GOG_KEYRING"}}})
 
 	var out bytes.Buffer
 	runPackUse(localMCPEnv(), &out, []string{root}) // no --yes, non-TTY
@@ -369,7 +369,7 @@ func TestPackUse_GogReferenceStaysTier0(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfg.MCP, "gog") {
+	if !containsStr(cfg.MCP, gwServerName) {
 		t.Errorf("gog must still attach, mcp=%v", cfg.MCP)
 	}
 }

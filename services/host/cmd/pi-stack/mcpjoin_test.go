@@ -45,19 +45,19 @@ func TestJoinMCPSandboxRow_PartialReceipt(t *testing.T) {
 		t.Errorf("listed load: state = %q, want %q", loaded.State, mcpJoinLoaded)
 	}
 
-	other := joinMCPSandboxRow("gog", mcpRegYes, box, r, sandboxMCPStateOK)
+	other := joinMCPSandboxRow(gwServerName, mcpRegYes, box, r, sandboxMCPStateOK)
 	if other.State != mcpJoinUnverifiable {
 		t.Errorf("unlisted name on a partial receipt: state = %q, want %q", other.State, mcpJoinUnverifiable)
 	}
 	if !strings.Contains(other.Evidence, "partial") {
 		t.Errorf("evidence should say the receipt is partial, got %q", other.Evidence)
 	}
-	if !strings.Contains(other.Evidence, "pi-stack mcp load gog") {
+	if !strings.Contains(other.Evidence, "pi-stack mcp load google-workspace") {
 		t.Errorf("evidence should carry the attach guidance, got %q", other.Evidence)
 	}
 
 	// A FULL receipt keeps the positive registered-not-attached answer.
-	full := joinMCPSandboxRow("gog", mcpRegYes, box, okReceipt(box, nil, "slack"), sandboxMCPStateOK)
+	full := joinMCPSandboxRow(gwServerName, mcpRegYes, box, okReceipt(box, nil, "slack"), sandboxMCPStateOK)
 	if full.State != mcpJoinRegisteredNotAttached {
 		t.Errorf("unlisted name on a full receipt: state = %q, want %q", full.State, mcpJoinRegisteredNotAttached)
 	}
@@ -184,14 +184,14 @@ func TestJoinUnverifiableCarriesRepairGuidance(t *testing.T) {
 // order and applies each name's own registration tri-state.
 func TestJoinMCPSandboxRowsOrderAndFanout(t *testing.T) {
 	const box = "pi-stack-proj"
-	receipt := okReceipt(box, []string{"gog"}, "slack")
+	receipt := okReceipt(box, []string{gwServerName}, "slack")
 	reg := func(name string) mcpRegEvidence {
 		if name == "linear" {
 			return mcpRegNo
 		}
 		return mcpRegYes
 	}
-	rows := joinMCPSandboxRows([]string{"gog", "slack", "notion", "linear"}, reg, box, receipt, sandboxMCPStateOK)
+	rows := joinMCPSandboxRows([]string{gwServerName, "slack", "notion", "linear"}, reg, box, receipt, sandboxMCPStateOK)
 	want := []string{mcpJoinPreloaded, mcpJoinLoaded, mcpJoinRegisteredNotAttached, mcpJoinNotRegistered}
 	if len(rows) != len(want) {
 		t.Fatalf("rows = %+v, want %d", rows, len(want))

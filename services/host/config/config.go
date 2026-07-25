@@ -129,7 +129,9 @@ type Config struct {
 	// It is THE source of truth: doctor probes against it, and `make mcp-register`
 	// sources it via `pi-stack config get gog_account` when registering with the
 	// gateway. doctor falls back to the GOG_ACCOUNT env var when this is empty.
-	GogAccount string `toml:"gog_account"`
+	// The Go identifier keeps the dependency binary's short name; the KEY on
+	// disk is the public one.
+	GogAccount string `toml:"google_workspace_account"`
 
 	// KnowledgeBundles are the git-mounted OKF bundle directory path(s) the
 	// knowledge service (:11436) indexes at startup. Empty (the default) means no
@@ -542,11 +544,11 @@ memory_watcher_model = "qwen3.5:9b"
 memory_embed_model = "nomic-embed-text"
 ollama_bridge_model = "qwen3.5:9b"
 
-# Google Workspace account the gog host-MCP server serves. This is the single
+# Google Workspace account the google-workspace host-MCP server serves. This is the single
 # source of truth: pi-stack doctor probes against it, and make mcp-register
-# sources it via pi-stack config get gog_account. Empty falls back to the
+# sources it via pi-stack config get google_workspace_account. Empty falls back to the
 # GOG_ACCOUNT env var.
-gog_account = ""
+google_workspace_account = ""
 
 # OKF knowledge bundle directories the knowledge service (:11436) indexes.
 # Empty = no bundles (index served empty). The knowledge service is opt-in:

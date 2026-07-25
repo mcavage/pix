@@ -102,7 +102,7 @@ func runConfigGet(argv []string) {
 // testable; the key set mirrors configKeysHelp exactly.
 func configValue(cfg *config.Config, key string) (string, error) {
 	switch key {
-	case "gog_account":
+	case "google_workspace_account":
 		return cfg.GogAccount, nil
 	case "mcp":
 		return strings.Join(cfg.MCP, " "), nil
@@ -176,7 +176,8 @@ func runConfigWrite(unset bool, argv []string) {
 
 // configKeysHelp lists the supported keys for set/unset.
 const configKeysHelp = `keys:
-  gog_account <email>       Google Workspace account for the gog MCP server
+  google_workspace_account <email>
+                           Google Workspace account for the google-workspace MCP server
   mcp <server>              add/remove an MCP server in the mcp list; every
                             configured server preloads at sandbox create
   services <name>           add/remove a host service in the services list
@@ -208,20 +209,20 @@ func applyConfigChange(cfg *config.Config, unset bool, key string, args []string
 		verb = "unset"
 	}
 	switch key {
-	case "gog_account":
+	case "google_workspace_account":
 		if unset {
 			cfg.SetGogAccount("")
 		} else {
 			if len(args) != 1 {
-				return "", fmt.Errorf("config set gog_account <email>: needs exactly one value")
+				return "", fmt.Errorf("config set google_workspace_account <email>: needs exactly one value")
 			}
 			cfg.SetGogAccount(args[0])
 		}
-		return fmt.Sprintf("gog_account = %q", cfg.GogAccount), nil
+		return fmt.Sprintf("google_workspace_account = %q", cfg.GogAccount), nil
 
 	case "mcp":
 		if len(args) != 1 {
-			return "", fmt.Errorf("config %s mcp <server>: needs a server name (e.g. gog, slack)", verb)
+			return "", fmt.Errorf("config %s mcp <server>: needs a server name (e.g. google-workspace, slack)", verb)
 		}
 		if unset {
 			cfg.RemoveMCP(args[0])

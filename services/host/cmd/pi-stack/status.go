@@ -259,7 +259,7 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 		}
 	}
 
-	// Integrations: gog is "account set, needs auth" until a real `gog auth status`
+	// Integrations: Google Workspace is "account set, needs auth" until a real auth
 	// probe passes (an email alone is not completed OAuth). Best-effort.
 	st.GogAccount = cfg.GogAccount
 	if cfg.GogAccount != "" {
@@ -434,7 +434,7 @@ func (st statusReport) render(out io.Writer) {
 		if st.GogAuthed {
 			label = "authed"
 		}
-		fmt.Fprintf(out, "  integrations  gog %s\n", label)
+		fmt.Fprintf(out, "  integrations  workspace %s\n", label)
 	}
 
 	if len(st.Sandboxes) > 0 {

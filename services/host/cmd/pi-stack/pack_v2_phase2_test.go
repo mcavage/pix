@@ -66,7 +66,7 @@ func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 		Name: "work",
 		Integrations: []packIntegration{
 			{Name: "Fastmail", MCP: "fastmail", Env: "FASTMAIL_TOKEN"},
-			{Name: "Gog", MCP: "gog", Env: "GOG_KEYRING"},
+			{Name: "Gog", MCP: gwServerName, Env: "GOG_KEYRING"},
 		},
 		Proxies: []packProxy{
 			{Name: "platformio", Host: true, Egress: []string{"api.registry.platformio.org"}},
@@ -78,7 +78,7 @@ func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 	if !b.tier1() {
 		t.Fatal("a pack with mcp + host proxy + bin must be Tier-1")
 	}
-	if len(b.MCP) != 2 || b.MCP[0].Name != "fastmail" || b.MCP[1].Name != "gog" {
+	if len(b.MCP) != 2 || b.MCP[0].Name != "fastmail" || b.MCP[1].Name != gwServerName {
 		t.Errorf("BoM mcp = %+v", b.MCP)
 	}
 	if got := strings.Join(b.MCP[0].Argv, " "); got != "pi-stack-host mcp fastmail" {
@@ -164,7 +164,7 @@ func TestHostExecFingerprint(t *testing.T) {
 	}
 	base := packManifest{
 		Name:         "work",
-		Integrations: []packIntegration{{Name: "Gog", MCP: "gog", Env: "GOG_KEYRING"}},
+		Integrations: []packIntegration{{Name: "Gog", MCP: gwServerName, Env: "GOG_KEYRING"}},
 		Proxies:      []packProxy{{Name: "platformio", Host: true, Egress: []string{"api.registry.platformio.org"}}},
 		Bins:         []packBin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: true}},
 	}

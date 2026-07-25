@@ -314,7 +314,7 @@ func TestUnwrapOpRun_AcceptsOnlyLauncherGrammar(t *testing.T) {
 func TestUnwrapOpRun_MatchesExecArgvGrammar(t *testing.T) {
 	env := f2Env()
 	reg := mcpRegistrar{op: f2Op, opRefs: f2Refs, hostBin: f2Host, gog: f2Gog, account: "you@example.com"}
-	for _, name := range []string{"slack", "gog"} {
+	for _, name := range []string{"slack", gwServerName} {
 		wrapped := reg.execArgv(name)
 		want := reg.serverCmd(name)
 		got, ok := unwrapOpRun(env, wrapped)

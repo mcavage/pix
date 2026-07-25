@@ -11,21 +11,21 @@ import (
 // TestApplyConfigChange_GogAccount: set writes the value, unset clears it.
 func TestApplyConfigChange_GogAccount(t *testing.T) {
 	cfg := defaultCfg()
-	sum, err := applyConfigChange(cfg, false, "gog_account", []string{"me@x.com"})
+	sum, err := applyConfigChange(cfg, false, "google_workspace_account", []string{"me@x.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.GogAccount != "me@x.com" || !strings.Contains(sum, "me@x.com") {
 		t.Errorf("set gog_account: cfg=%q summary=%q", cfg.GogAccount, sum)
 	}
-	if _, err := applyConfigChange(cfg, true, "gog_account", nil); err != nil {
+	if _, err := applyConfigChange(cfg, true, "google_workspace_account", nil); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.GogAccount != "" {
 		t.Errorf("unset gog_account: cfg=%q, want empty", cfg.GogAccount)
 	}
 	// set with the wrong arity errors.
-	if _, err := applyConfigChange(cfg, false, "gog_account", nil); err == nil {
+	if _, err := applyConfigChange(cfg, false, "google_workspace_account", nil); err == nil {
 		t.Error("expected an arity error for set gog_account with no value")
 	}
 }
@@ -33,21 +33,21 @@ func TestApplyConfigChange_GogAccount(t *testing.T) {
 // TestApplyConfigChange_MCP: set adds (idempotent), unset removes.
 func TestApplyConfigChange_MCP(t *testing.T) {
 	cfg := defaultCfg()
-	if _, err := applyConfigChange(cfg, false, "mcp", []string{"gog"}); err != nil {
+	if _, err := applyConfigChange(cfg, false, "mcp", []string{gwServerName}); err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfg.MCP, "gog") {
+	if !containsStr(cfg.MCP, gwServerName) {
 		t.Errorf("MCP = %v, want gog added", cfg.MCP)
 	}
 	// Adding again is a no-op (no duplicate).
-	_, _ = applyConfigChange(cfg, false, "mcp", []string{"gog"})
-	if n := countStr(cfg.MCP, "gog"); n != 1 {
+	_, _ = applyConfigChange(cfg, false, "mcp", []string{gwServerName})
+	if n := countStr(cfg.MCP, gwServerName); n != 1 {
 		t.Errorf("MCP should contain gog exactly once, got %d in %v", n, cfg.MCP)
 	}
-	if _, err := applyConfigChange(cfg, true, "mcp", []string{"gog"}); err != nil {
+	if _, err := applyConfigChange(cfg, true, "mcp", []string{gwServerName}); err != nil {
 		t.Fatal(err)
 	}
-	if containsStr(cfg.MCP, "gog") {
+	if containsStr(cfg.MCP, gwServerName) {
 		t.Errorf("MCP = %v, want gog removed", cfg.MCP)
 	}
 	if _, err := applyConfigChange(cfg, false, "mcp", nil); err == nil {
@@ -170,10 +170,10 @@ func TestConfigSaveRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := applyConfigChange(cfg, false, "gog_account", []string{"round@trip.com"}); err != nil {
+	if _, err := applyConfigChange(cfg, false, "google_workspace_account", []string{"round@trip.com"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := applyConfigChange(cfg, false, "mcp", []string{"gog"}); err != nil {
+	if _, err := applyConfigChange(cfg, false, "mcp", []string{gwServerName}); err != nil {
 		t.Fatal(err)
 	}
 	if err := cfg.Save(); err != nil {
@@ -183,7 +183,7 @@ func TestConfigSaveRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.GogAccount != "round@trip.com" || !containsStr(got.MCP, "gog") {
+	if got.GogAccount != "round@trip.com" || !containsStr(got.MCP, gwServerName) {
 		t.Errorf("round-trip lost data: %+v", got)
 	}
 }

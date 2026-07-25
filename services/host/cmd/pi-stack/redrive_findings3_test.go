@@ -119,7 +119,7 @@ func TestRunDoctor_SecretFailureMcpSuccess(t *testing.T) {
 			// "sbx secret ls" deliberately ABSENT -> probeRun/run errors.
 			"sbx mcp ls":                 "notion\n",
 			"sbx mcp auth status notion": "notion: authorized\n",
-			hostBin + " mcp --list":      "gog\n", // notion is not local
+			hostBin + " mcp --list":      "google-workspace\n", // notion is not local
 		},
 	}
 	r := runDoctor(cfg, f.env())
@@ -285,7 +285,7 @@ func TestDoctorInvariant_NoReadyEvidenceClaimsUnverified(t *testing.T) {
 		output: map[string]string{
 			"sbx mcp ls":                              "notion\n",
 			"sbx mcp auth status notion":              "notion: authorized\n",
-			"/usr/local/bin/pi-stack-host mcp --list": "gog\n",
+			"/usr/local/bin/pi-stack-host mcp --list": "google-workspace\n",
 		},
 	}.env()))
 

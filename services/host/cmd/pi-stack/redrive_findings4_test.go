@@ -288,7 +288,7 @@ func TestDoctorContextAmbiguousMappingIsUnverifiable(t *testing.T) {
 // --- finding 2: gog attachment is the shared receipt-backed join row --------
 
 func TestGogAttachCheckUsesReceiptJoin(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog"}}
+	cfg := &config.Config{MCP: []string{gwServerName}}
 	const box = "pi-stack-proj"
 	const ws = "/home/u/proj"
 
@@ -311,13 +311,13 @@ func TestGogAttachCheckUsesReceiptJoin(t *testing.T) {
 		if c.result() != verdictTodo {
 			t.Fatalf("check = %+v, want a verified registered-not-attached todo", c)
 		}
-		if want := "pi-stack mcp load gog " + ws; c.todo != want {
+		if want := "pi-stack mcp load google-workspace " + ws; c.todo != want {
 			t.Fatalf("todo = %q, want %q", c.todo, want)
 		}
 	})
 
 	t.Run("receipted preload -> ready", func(t *testing.T) {
-		c := gogAttachCheck(cfg, receiptCtx(t, []string{"gog"}), mcpRegYes)
+		c := gogAttachCheck(cfg, receiptCtx(t, []string{gwServerName}), mcpRegYes)
 		if c.result() != verdictReady || !strings.Contains(c.detail, "preloaded by pi-stack at create") {
 			t.Fatalf("check = %+v, want ready from the receipt's preload claim", c)
 		}
@@ -385,7 +385,7 @@ func statusReceiptEnv(t *testing.T, stateDir string) shellEnv {
 			return "NAME STATUS\npi-stack-proj running\n", nil
 		}
 		if key == "sbx mcp ls" {
-			return "gog\n", nil
+			return "google-workspace\n", nil
 		}
 		return base(name, args...)
 	}
@@ -393,11 +393,11 @@ func statusReceiptEnv(t *testing.T, stateDir string) shellEnv {
 }
 
 func TestStatusHeadlineUnverifiableRows(t *testing.T) {
-	cfg := &config.Config{MCP: []string{"gog"}}
+	cfg := &config.Config{MCP: []string{gwServerName}}
 
 	t.Run("provider-ready + valid preload receipt -> all systems go", func(t *testing.T) {
 		stateDir := t.TempDir()
-		mustCreateReceipt(t, stateDir, "pi-stack-proj", "/w/proj", []string{"gog"})
+		mustCreateReceipt(t, stateDir, "pi-stack-proj", "/w/proj", []string{gwServerName})
 		env := statusReceiptEnv(t, stateDir)
 		st := gatherStatus(cfg, "default", env)
 		if len(st.Todos) != 0 {
@@ -433,7 +433,7 @@ func TestStatusHeadlineUnverifiableRows(t *testing.T) {
 			// JSON stays the row truth: the row itself reads unverifiable.
 			found := false
 			for _, r := range st.MCPRows {
-				if r.Name == "gog" && r.Sandbox == "pi-stack-proj" && r.State == mcpJoinUnverifiable {
+				if r.Name == gwServerName && r.Sandbox == "pi-stack-proj" && r.State == mcpJoinUnverifiable {
 					found = true
 				}
 			}

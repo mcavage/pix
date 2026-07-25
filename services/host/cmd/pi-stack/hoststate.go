@@ -191,7 +191,7 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 	mcpServers := append([]string(nil), cfg.MCP...)
 	gogEnabled := false
 	for _, m := range mcpServers {
-		if strings.TrimSpace(m) == "gog" {
+		if strings.TrimSpace(m) == gwServerName {
 			gogEnabled = true
 		}
 	}

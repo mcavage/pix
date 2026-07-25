@@ -39,7 +39,7 @@ services = ["memory", "warehouse"]
 mcp = ["slack"]
 memory_watcher_model = "custom-watcher"
 memory_embed_model = "custom-embed"
-gog_account = "you@example.com"
+google_workspace_account = "you@example.com"
 
 [kits]
 stack = ["mixin-a", "mixin-b"]
