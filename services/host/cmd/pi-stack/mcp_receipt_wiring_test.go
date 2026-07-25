@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"os/exec"
@@ -308,19 +309,65 @@ func TestExecSbxMcpLoadAndRecord_ReceiptWriteFailureIsDistinctError(t *testing.T
 
 // runMcpLoad's "sbx absent" branch returns before constructing any *exec.Cmd
 // at all, so it never reaches execSbxMcpLoadAndRecord — no receipt is ever
-// written, and it never calls os.Exit (safe to call in-process).
-func TestRunMcpLoad_AbsentSbxWritesNoReceiptAndDoesNotExit(t *testing.T) {
-	dir := t.TempDir()
-	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
-	t.Setenv("PATH", t.TempDir()) // nothing on PATH, including no sbx
-
+// written. A command that PROMISES an attach must not exit 0 having done
+// nothing (finding: no-sbx behavior), so this now exits exitServiceDown (3)
+// instead of returning — proven in a subprocess since runMcpLoad calls
+// os.Exit on this path.
+func TestRunMcpLoad_AbsentSbxExitsServiceDownWritesNoReceipt(t *testing.T) {
+	stateHome := t.TempDir()
 	ws := t.TempDir()
-	runMcpLoad([]string{"slack", ws}) // must return, not exit
 
-	sandbox := deriveSandboxName(ws)
-	if _, status, _ := readSandboxMCPReceipt(dir, sandbox); status != sandboxMCPStateAbsent {
-		t.Fatalf("status = %v, want absent (sbx-absent branch must write nothing)", status)
+	if os.Getenv("PI_STACK_MCP_LOAD_ABSENT_SBX") == "1" {
+		runMcpLoad([]string{"slack", ws})
+		return
 	}
+
+	cmd := exec.Command(os.Args[0], "-test.run", "TestRunMcpLoad_AbsentSbxExitsServiceDownWritesNoReceipt")
+	cmd.Env = append(envWithout(os.Environ(), "PATH"),
+		"PI_STACK_MCP_LOAD_ABSENT_SBX=1",
+		"XDG_STATE_HOME="+stateHome,
+		"PATH="+t.TempDir(), // nothing on PATH, including no sbx
+	)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	runErr := cmd.Run()
+
+	var ee *exec.ExitError
+	if !errors.As(runErr, &ee) {
+		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
+	}
+	if ee.ExitCode() != exitServiceDown {
+		t.Errorf("exit code = %d, want %d (exitServiceDown); output:\n%s", ee.ExitCode(), exitServiceDown, out.String())
+	}
+	sandbox := deriveSandboxName(ws)
+	want := "would run: sbx mcp load slack --sandbox " + sandbox
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("expected the exact recovery command %q, got:\n%s", want, out.String())
+	}
+
+	stateDir := filepath.Join(stateHome, "pi-stack")
+	if _, status, _ := readSandboxMCPReceipt(stateDir, sandbox); status != sandboxMCPStateAbsent {
+		t.Fatalf("status = %v, want absent (sbx-absent branch must write no receipt)", status)
+	}
+}
+
+// envWithout drops the named keys from an environment slice (os.Environ()
+// shape), so a subprocess test can override PATH exactly once instead of
+// relying on duplicate-key resolution order, which differs by platform.
+func envWithout(base []string, keys ...string) []string {
+	drop := map[string]bool{}
+	for _, k := range keys {
+		drop[k] = true
+	}
+	out := make([]string, 0, len(base))
+	for _, kv := range base {
+		if i := strings.IndexByte(kv, '='); i >= 0 && drop[kv[:i]] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // --- exact sandbox derivation ------------------------------------------------
