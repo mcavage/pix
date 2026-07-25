@@ -25,7 +25,7 @@ func TestValidateOnboarding_Allowlist(t *testing.T) {
 	env := fakeEnv{present: map[string]bool{}}.env()
 
 	ok := []*onboardingResult{
-		{Version: 1, GogAccount: "me@x.com", MCP: []string{"gog"}},
+		{Version: 1, MCP: []string{gwServerName}},
 		{Version: 1, MCP: []string{"notion", "atlassian", "granola"}},
 		{Version: 1, Knowledge: &onboardKnowledge{Action: "skip"}},
 	}
@@ -57,7 +57,7 @@ func TestValidateOnboarding_Allowlist(t *testing.T) {
 func TestApplyOnboarding_Idempotent(t *testing.T) {
 	cfg := defaultCfg()
 	env := fakeEnv{present: map[string]bool{}}.env()
-	r := &onboardingResult{Version: 1, GogAccount: "me@x.com", MCP: []string{"gog"}, OllamaBridgeModel: "qwen3.5:9b"}
+	r := &onboardingResult{Version: 1, MCP: []string{gwServerName}, OllamaBridgeModel: "qwen3.5:9b"}
 
 	var saved *config.Config
 	first, err := applyOnboardingResult(r, cfg, env, &bytes.Buffer{}, captureSave(&saved))
@@ -80,7 +80,7 @@ func TestApplyOnboarding_AppliesFields(t *testing.T) {
 	cfg := defaultCfg()
 	env := fakeEnv{present: map[string]bool{}}.env()
 	r := &onboardingResult{
-		Version: 1, GogAccount: "me@x.com", MCP: []string{"gog", "notion"},
+		Version: 1, MCP: []string{gwServerName, "notion"},
 		OllamaBridgeModel: "qwen3.5:9b", MemoryWatcherModel: "qwen3.5:9b",
 	}
 	var saved *config.Config
@@ -88,9 +88,9 @@ func TestApplyOnboarding_AppliesFields(t *testing.T) {
 		t.Fatalf("apply: %v", err)
 	}
 	if cfg.GogAccount != "me@x.com" {
-		t.Errorf("gog_account = %q", cfg.GogAccount)
+		t.Errorf("google_workspace_account = %q", cfg.GogAccount)
 	}
-	if !containsStr(cfg.MCP, "gog") || !containsStr(cfg.MCP, "notion") {
+	if !containsStr(cfg.MCP, gwServerName) || !containsStr(cfg.MCP, "notion") {
 		t.Errorf("mcp = %v", cfg.MCP)
 	}
 	if !containsStr(cfg.Services, "memory") {
@@ -112,7 +112,7 @@ func TestParseOnboardArgs(t *testing.T) {
 	if o.account != "a@b.com" || o.model != "m" || !o.assumeYes {
 		t.Errorf("parsed = %+v", o)
 	}
-	if !containsStr(o.mcp, "gog") || !containsStr(o.mcp, "notion") {
+	if !containsStr(o.mcp, gwServerName) || !containsStr(o.mcp, "notion") {
 		t.Errorf("mcp = %v", o.mcp)
 	}
 	if _, err := parseOnboardArgs([]string{"--account"}); err == nil {
@@ -155,7 +155,7 @@ func TestReconcileOnboarding_AppliesFromFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := filepath.Join(dir, "onboarding.json")
-	if err := os.WriteFile(fp, []byte(`{"version":1,"gog_account":"me@x.com","mcp":["gog"]}`), 0o644); err != nil {
+	if err := os.WriteFile(fp, []byte(`{"version":1,"google_workspace_account":"me@x.com","mcp":[gwServerName]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	env := fakeEnv{present: map[string]bool{}}.env()
@@ -170,7 +170,7 @@ func TestReconcileOnboarding_AppliesFromFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GogAccount != "me@x.com" || !containsStr(cfg.MCP, "gog") {
+	if cfg.GogAccount != "me@x.com" || !containsStr(cfg.MCP, gwServerName) {
 		t.Errorf("config not applied: gog=%q mcp=%v", cfg.GogAccount, cfg.MCP)
 	}
 }
@@ -186,7 +186,7 @@ func TestReconcileOnboarding_NonTTYLeavesFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := filepath.Join(dir, "onboarding.json")
-	if err := os.WriteFile(fp, []byte(`{"version":1,"gog_account":"me@x.com"}`), 0o644); err != nil {
+	if err := os.WriteFile(fp, []byte(`{"version":1,"google_workspace_account":"me@x.com"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	env := fakeEnv{present: map[string]bool{}}.env()

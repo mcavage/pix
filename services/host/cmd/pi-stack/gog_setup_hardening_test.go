@@ -1,7 +1,7 @@
 package main
 
 // gog_setup_hardening_test.go ports the prior branch's review-round guards
-// for `pi-stack gog setup` onto the S07 integrated framework: read-only OAuth
+// for `pi-stack gworkspace setup` onto the S07 integrated framework: read-only OAuth
 // enforced at grant time (no unsafe route fallback), the selected route's OWN
 // subcommand flags verified before exec, the bare headless probe when
 // op/op-refs are unavailable (zero tools fails; timeout/exec-error are
@@ -281,7 +281,7 @@ func TestGogSetup_R106_BareProbe_Timeout_UnverifiableNeverSuccess(t *testing.T) 
 	cfg, _ := config.Load()
 	if cfg != nil {
 		for _, m := range cfg.MCP {
-			if m == "gog" {
+			if m == gwServerName {
 				t.Errorf("must not register gog when headless verification is unverifiable")
 			}
 		}
@@ -393,7 +393,7 @@ func TestGogSetup_R108_SbxMissing_FailsAndConfigUnchanged(t *testing.T) {
 }
 
 // TestGogSetup_R108_RegistrationFails_ConfigUnchanged: sbx IS present, but
-// the actual `sbx mcp add gog ...` call fails — config must still be left
+// the actual `sbx mcp add google-workspace ...` call fails — config must still be left
 // completely unchanged (registration is required BEFORE config is saved).
 func TestGogSetup_R108_RegistrationFails_ConfigUnchanged(t *testing.T) {
 	gogSetupTestCfg(t)
@@ -416,7 +416,7 @@ func TestGogSetup_R108_RegistrationFails_ConfigUnchanged(t *testing.T) {
 		output: mergeOutputs(gogAuthCapabilityFixtures("setup", true), gogBareHeadlessFixture("you@example.com"), map[string]string{
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",
-			// deliberately NO "sbx mcp add gog ..." fixture and sbxRegisterOK
+			// deliberately NO "sbx mcp add google-workspace ..." fixture and sbxRegisterOK
 			// left false, so registerServers' env.run call for it errors.
 		}),
 		statFile: map[string]bool{cred: true},
@@ -462,9 +462,9 @@ func gogR108RollbackEnv(t *testing.T, priorRegistered bool) (env shellEnv, cred 
 	if priorRegistered {
 		// R2-03: snapshotGogRegistration confirms presence via the bounded PLAIN
 		// `sbx mcp ls` listing FIRST, independent of whether the detailed `sbx
-		// mcp get gog` command parses — both must agree gog is registered.
-		fixtures["sbx mcp ls"] = "gog\n"
-		fixtures["sbx mcp get gog"] = "name: gog\ncommand: " + strings.Join(priorArgv, " ") + "\n"
+		// mcp get google-workspace` command parses — both must agree gog is registered.
+		fixtures["sbx mcp ls"] = "google-workspace\n"
+		fixtures["sbx mcp get google-workspace"] = "name: gog\ncommand: " + strings.Join(priorArgv, " ") + "\n"
 	}
 	ge := gogTestEnv{
 		present:  map[string]bool{"gog": true, "sbx": true},
@@ -521,7 +521,7 @@ func TestGogSetup_R108_SaveFailure_RestoresPriorRegistration(t *testing.T) {
 
 // TestGogSetup_R108_SaveFailure_RemovesNewRegistrationWhenNoPrior: same as
 // above, but there was NO prior gog registration — rollback must REMOVE the
-// just-added registration (`sbx mcp rm gog`), not try to restore nothing.
+// just-added registration (`sbx mcp rm google-workspace`), not try to restore nothing.
 func TestGogSetup_R108_SaveFailure_RemovesNewRegistrationWhenNoPrior(t *testing.T) {
 	env, cred, addCalls, rmCalls := gogR108RollbackEnv(t, false)
 	var out bytes.Buffer
@@ -536,8 +536,8 @@ func TestGogSetup_R108_SaveFailure_RemovesNewRegistrationWhenNoPrior(t *testing.
 	if len(*addCalls) != 1 {
 		t.Fatalf("expected exactly 1 `sbx mcp add` call (the new registration), got %d: %v", len(*addCalls), *addCalls)
 	}
-	if len(*rmCalls) != 1 || len((*rmCalls)[0]) < 3 || (*rmCalls)[0][2] != "gog" {
-		t.Fatalf("expected a rollback `sbx mcp rm gog` call, got %v", *rmCalls)
+	if len(*rmCalls) != 1 || len((*rmCalls)[0]) < 3 || (*rmCalls)[0][2] != gwServerName {
+		t.Fatalf("expected a rollback `sbx mcp rm google-workspace` call, got %v", *rmCalls)
 	}
 }
 
@@ -560,7 +560,7 @@ func TestGogSetup_R114_CapabilityAndBareHeadlessProbesAreBounded(t *testing.T) {
 	var probed []string
 	env := shellEnv{
 		lookPath: func(name string) (string, error) {
-			if name == "gog" || name == "sbx" {
+			if name == gwServerName || name == "sbx" {
 				return "/usr/bin/" + name, nil
 			}
 			return "", fmt.Errorf("exec: %q not found", name)
@@ -656,8 +656,8 @@ func TestSnapshotGogRegistration_ConfirmedAbsent(t *testing.T) {
 }
 
 func TestSnapshotGogRegistration_ConfirmedPresent_RestorableArgv(t *testing.T) {
-	env := gogSnapEnv("gog\nslack\n", false, nil, map[string]string{
-		"sbx mcp get gog": "name: gog\ncommand: /usr/bin/gog --account you@example.com mcp\n",
+	env := gogSnapEnv("google-workspace\nslack\n", false, nil, map[string]string{
+		"sbx mcp get google-workspace": "name: gog\ncommand: /usr/bin/gog --account you@example.com mcp\n",
 	}, nil)
 	snap := snapshotGogRegistration(env)
 	if snap.state != gogRegPresent {
@@ -671,13 +671,13 @@ func TestSnapshotGogRegistration_ConfirmedPresent_RestorableArgv(t *testing.T) {
 
 // TestSnapshotGogRegistration_ListedButUnreadable_Unknown: the bounded
 // listing confirms gog IS registered, but BOTH detailed readers
-// (registeredGogCommand's `sbx mcp get gog` and `sbx mcp ls -o json`) come up
+// (registeredGogCommand's `sbx mcp get google-workspace` and `sbx mcp ls -o json`) come up
 // with a quoted/unparseable command — must be gogRegUnknown, never absent.
 func TestSnapshotGogRegistration_ListedButUnreadable_Unknown(t *testing.T) {
-	env := gogSnapEnv("gog\n", false, nil, map[string]string{
+	env := gogSnapEnv("google-workspace\n", false, nil, map[string]string{
 		// A shell-quoted command line: parseGogCommandLine explicitly refuses
 		// to split this (ambiguous under strings.Fields).
-		"sbx mcp get gog":    `name: gog` + "\n" + `command: /usr/bin/op run --env-file="/x/op refs.env" -- gog mcp` + "\n",
+		"sbx mcp get google-workspace":    `name: gog` + "\n" + `command: /usr/bin/op run --env-file="/x/op refs.env" -- gog mcp` + "\n",
 		"sbx mcp ls -o json": "not json at all",
 	}, nil)
 	snap := snapshotGogRegistration(env)
@@ -700,7 +700,7 @@ func TestSnapshotGogRegistration_ListingProbeFails_Unknown(t *testing.T) {
 // TestSnapshotGogRegistration_ListingProbeTimesOut_Unknown: same, but the
 // listing probe times out rather than erroring outright.
 func TestSnapshotGogRegistration_ListingProbeTimesOut_Unknown(t *testing.T) {
-	env := gogSnapEnv("gog\n", true, nil, nil, nil) // out would say "present", but timedOut=true wins
+	env := gogSnapEnv("google-workspace\n", true, nil, nil, nil) // out would say "present", but timedOut=true wins
 	snap := snapshotGogRegistration(env)
 	if snap.state != gogRegUnknown {
 		t.Fatalf("expected gogRegUnknown on a listing probe timeout, got state=%v", snap.state)
@@ -709,11 +709,11 @@ func TestSnapshotGogRegistration_ListingProbeTimesOut_Unknown(t *testing.T) {
 
 // TestSnapshotGogRegistration_GetAndJSONTransientErrors_Unknown: the bounded
 // listing confirms presence, but BOTH of registeredGogCommand's own readers
-// (`sbx mcp get gog`, `sbx mcp ls -o json`) transiently error — confirmed
+// (`sbx mcp get google-workspace`, `sbx mcp ls -o json`) transiently error — confirmed
 // present, unreadable command -> gogRegUnknown.
 func TestSnapshotGogRegistration_GetAndJSONTransientErrors_Unknown(t *testing.T) {
-	env := gogSnapEnv("gog\n", false, nil, nil, map[string]bool{
-		"sbx mcp get gog":    true,
+	env := gogSnapEnv("google-workspace\n", false, nil, nil, map[string]bool{
+		"sbx mcp get google-workspace":    true,
 		"sbx mcp ls -o json": true,
 	})
 	snap := snapshotGogRegistration(env)
@@ -736,7 +736,7 @@ func TestSnapshotGogRegistration_SbxAbsent_Unknown(t *testing.T) {
 // gogR203PreflightEnv builds a healthy-up-to-registration gogSetup
 // environment (mirrors gogR108RollbackEnv's shape) so tests can isolate just
 // the prior-registration snapshot behavior. lsFixture/lsErr drive the bounded
-// `sbx mcp ls` presence probe; getFixture (optional) drives `sbx mcp get gog`.
+// `sbx mcp ls` presence probe; getFixture (optional) drives `sbx mcp get google-workspace`.
 func gogR203PreflightEnv(t *testing.T, lsFixture string, lsErrs bool, getFixture string) (env shellEnv, cred string) {
 	t.Helper()
 	gogSetupTestCfg(t)
@@ -747,7 +747,7 @@ func gogR203PreflightEnv(t *testing.T, lsFixture string, lsErrs bool, getFixture
 		"sbx mcp ls": lsFixture,
 	}
 	if getFixture != "" {
-		fixtures["sbx mcp get gog"] = getFixture
+		fixtures["sbx mcp get google-workspace"] = getFixture
 	}
 	outputErr := map[string]bool{}
 	if lsErrs {
@@ -769,12 +769,12 @@ func gogR203PreflightEnv(t *testing.T, lsFixture string, lsErrs bool, getFixture
 // interactive commands, and leave config untouched. This proves an
 // unreadable prior registration is never silently clobbered.
 func TestGogSetup_R203_UnreadablePriorRegistration_AbortsBeforeOAuth(t *testing.T) {
-	// gog IS listed ("sbx mcp ls" -> "gog\n"), but its `sbx mcp get gog`
+	// gog IS listed ("sbx mcp ls" -> "google-workspace\n"), but its `sbx mcp get google-workspace`
 	// command is shell-quoted (parseGogCommandLine refuses to split it), and
 	// there is deliberately NO `sbx mcp ls -o json` fixture either, so
 	// registeredGogCommand's fallback reader also comes up empty — confirmed
 	// present, unreadable command.
-	env, cred := gogR203PreflightEnv(t, "gog\n", false,
+	env, cred := gogR203PreflightEnv(t, "google-workspace\n", false,
 		`name: gog`+"\n"+`command: /usr/bin/op run --env-file="/x/op refs.env" -- gog mcp`+"\n")
 
 	var calls [][]string
@@ -954,16 +954,16 @@ func TestGogSetup_R204_SbxMissing_ZeroInteractiveCalls(t *testing.T) {
 // file implements: sbx/config/registration-snapshot preflight is named
 // explicitly, before the authorization step.
 func TestGogSetup_R204_HelpTextMatchesPreflightBehavior(t *testing.T) {
-	if !strings.Contains(gogSetupUsage, "preflights EVERY remaining predictable hard requirement BEFORE any\n     authorization happens") {
-		t.Error("gogSetupUsage must describe the preflight-before-authorization sequence")
+	if !strings.Contains(gworkspaceSetupUsage, "preflights EVERY remaining predictable hard requirement BEFORE any\n     authorization happens") {
+		t.Error("gworkspaceSetupUsage must describe the preflight-before-authorization sequence")
 	}
-	if !strings.Contains(gogSetupUsage, "sbx must be installed") {
-		t.Error("gogSetupUsage must name the sbx preflight")
+	if !strings.Contains(gworkspaceSetupUsage, "sbx must be installed") {
+		t.Error("gworkspaceSetupUsage must name the sbx preflight")
 	}
-	if !strings.Contains(gogSetupUsage, "config must load cleanly") {
-		t.Error("gogSetupUsage must name the config-load preflight")
+	if !strings.Contains(gworkspaceSetupUsage, "config must load cleanly") {
+		t.Error("gworkspaceSetupUsage must name the config-load preflight")
 	}
-	if !strings.Contains(gogSetupUsage, "CONFIRMED") {
-		t.Error("gogSetupUsage must name the tri-state registration-confirmation requirement")
+	if !strings.Contains(gworkspaceSetupUsage, "CONFIRMED") {
+		t.Error("gworkspaceSetupUsage must name the tri-state registration-confirmation requirement")
 	}
 }

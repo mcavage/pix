@@ -35,7 +35,6 @@ import (
 // host config.
 type onboardingResult struct {
 	Version            int               `json:"version"`
-	GogAccount         string            `json:"gog_account,omitempty"`
 	MCP                []string          `json:"mcp,omitempty"`
 	Knowledge          *onboardKnowledge `json:"knowledge,omitempty"`
 	OllamaBridgeModel  string            `json:"ollama_bridge_model,omitempty"`
@@ -76,7 +75,7 @@ func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env shell
 		if m == "" {
 			return fmt.Errorf("empty mcp name")
 		}
-		if m == "gog" || onboardMCPCatalogAllow[m] {
+		if m == gwServerName || onboardMCPCatalogAllow[m] {
 			continue
 		}
 		if known && localSet[m] {
@@ -114,13 +113,11 @@ func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env shell
 func applyOnboardingResult(r *onboardingResult, cfg *config.Config, env shellEnv, out io.Writer, save func(*config.Config) error) ([]string, error) {
 	var changes []string
 
-	if acct := strings.TrimSpace(r.GogAccount); acct != "" && acct != cfg.GogAccount {
-		cfg.SetGogAccount(acct)
-		if cfg.AddMCP("gog") {
-			changes = append(changes, "enabled gog (mcp)")
-		}
-		changes = append(changes, "gog_account = "+acct)
-	}
+	// There is deliberately NO account writer here. Setting
+	// google_workspace_account without completing OAuth is what produced a
+	// config that claimed Google Workspace while nothing worked; the only
+	// writer is the gworkspace transaction (gog_setup.go), reached via
+	// `pi-stack gworkspace setup` or `pi-stack setup --google-workspace`.
 	for _, m := range r.MCP {
 		if cfg.AddMCP(strings.TrimSpace(m)) {
 			changes = append(changes, "enabled "+strings.TrimSpace(m)+" (mcp)")
@@ -232,7 +229,6 @@ guided flow that configures the host AND hands off to an agent to finish, use
 ` + "`pi-stack setup`" + `. This command is the flag-driven path for automation/CI.
 You can also say "onboard me" to a running agent at any time.
 
-  --account <email>        set the Google Workspace (gog) account + enable gog
   --knowledge <path|url>   scaffold/point the global knowledge base
   --mcp <name>             enable an MCP server (repeatable; allowlisted)
   --model <ollama-model>   set the ollama-bridge model
@@ -262,7 +258,14 @@ type onboardOpts struct {
 	// itself REJECTS it — onboard is the scripted host-config path and never
 	// downloads models.
 	pullModels bool
-	help       bool
+	// googleWorkspace is `pi-stack setup --google-workspace`: the OPT-IN that
+	// routes setup through the Google Workspace transaction. Google Workspace
+	// is absent unless this is passed. credentials is its OAuth client path.
+	// Both are parsed here because setup shares this parser; `pi-stack
+	// onboard` REJECTS them (authorization needs a browser).
+	googleWorkspace bool
+	credentials     string
+	help            bool
 }
 
 func parseOnboardArgs(argv []string) (onboardOpts, error) {
@@ -291,6 +294,12 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 			o.assumeYes = true
 		case a == "--pull-models":
 			o.pullModels = true
+		case a == "--google-workspace":
+			o.googleWorkspace = true
+		case a == "--credentials":
+			o.credentials, err = next()
+		case strings.HasPrefix(a, "--credentials="):
+			o.credentials = strings.TrimPrefix(a, "--credentials=")
 		case a == "--account":
 			o.account, err = next()
 		case strings.HasPrefix(a, "--account="):
@@ -333,6 +342,11 @@ func runOnboardCmd(argv []string) {
 		fmt.Print(onboardUsage)
 		return
 	}
+	if opts.googleWorkspace || strings.TrimSpace(opts.credentials) != "" || strings.TrimSpace(opts.account) != "" {
+		fmt.Fprintln(os.Stderr, "pi-stack onboard: Google Workspace cannot be set up here; authorization needs a browser")
+		fmt.Fprintln(os.Stderr, "  fix: pi-stack gworkspace setup --account <email> --credentials <path>")
+		os.Exit(2)
+	}
 	if opts.pullModels {
 		fmt.Fprintln(os.Stderr, "pi-stack onboard: --pull-models belongs to `pi-stack setup` (onboard never downloads models)")
 		os.Exit(2)
@@ -353,7 +367,6 @@ func runOnboardCmd(argv []string) {
 
 	r := &onboardingResult{
 		Version:           1,
-		GogAccount:        strings.TrimSpace(opts.account),
 		MCP:               opts.mcp,
 		OllamaBridgeModel: strings.TrimSpace(opts.model),
 	}

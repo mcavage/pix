@@ -308,7 +308,7 @@ func TestDoctorJSONView(t *testing.T) {
 		present: map[string]bool{"sbx": true}, // ollama + gog absent -> TODOs
 		output: map[string]string{
 			"sbx secret ls": "anthropic openai google github",
-			"sbx mcp ls":    "gog\n",
+			"sbx mcp ls":    "google-workspace\n",
 		},
 		ports: map[int]bool{11435: true}, // memory up -> an OK check
 	}

@@ -180,7 +180,7 @@ provisions a bare-minimum model key when none is set at all). Use
 for the guided, in-session flow, or say "onboard me" to the agent inside a
 running sandbox.
 .B \-\-account
-sets the Google Workspace account and enables gog.
+sets the Google Workspace account; valid only with \fB\-\-google\-workspace\fR.
 .B \-\-knowledge
 scaffolds or selects the global OKF bundle.
 .B \-\-mcp
@@ -760,16 +760,16 @@ Authorize remote OAuth servers via the hosted control plane
 Register the shipped public catalog bundle (notion/atlassian/granola) in one
 step; other args forward to
 .BR "sbx mcp bundle" .
-.SS gog
-Google Workspace via the host-run gog MCP server (a LOCAL stdio server the sbx
+.SS gworkspace
+Google Workspace via the host-run google-workspace MCP server (a LOCAL stdio server the sbx
 gateway spawns on the host; sbx's native
 .B "mcp auth"
 does not apply to its Google grant).
 .TP
-.BR "pi-stack gog setup" " [" \-\-account " " email "] [" \-\-credentials " " path "] [" \-\-yes "]"
-Guided Google Workspace onboarding: checks the installed gog CLI, imports your
-own Desktop OAuth client JSON via gog itself, authorizes the account
-REQUESTING READ-ONLY OAUTH SCOPES at grant time (fails if the installed gog
+.BR "pi-stack gworkspace setup|status|disable" " [" \-\-account " " email "] [" \-\-credentials " " path "] [" \-\-yes "]"
+Guided Google Workspace onboarding: checks the installed dependency CLI, imports your
+own Desktop OAuth client JSON via that CLI itself, authorizes the account
+REQUESTING READ-ONLY OAUTH SCOPES at grant time (fails if the installed dependency
 cannot advertise \-\-readonly for the selected auth route), verifies the exact
 hardened headless command the gateway will spawn, registers it with the sbx
 gateway, and only then saves config.  Idempotent; requires sbx.
@@ -863,7 +863,7 @@ Clear or reset a scalar key, or remove
 from a list key.
 .PP
 Base keys are
-.BR gog_account ,
+.BR google_workspace_account ,
 .BR mcp ,
 .BR services ,
 .BR knowledge_bundles ,
@@ -908,7 +908,7 @@ the
 .B PI_STACK_NO_AUTOSERVE
 environment variable also disables it and wins over the config flag.
 Keys are
-.BR gog_account ,
+.BR google_workspace_account ,
 .BR mcp ,
 .BR knowledge_bundles ,
 .BR kit
@@ -1114,7 +1114,7 @@ Schema fields are
 .BR mcp ,
 .BR memory_watcher_model ,
 .BR memory_embed_model ,
-.BR gog_account ,
+.BR google_workspace_account ,
 .BR knowledge_bundles ,
 .BR kits.stack ,
 .BR skills.paths ,

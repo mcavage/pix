@@ -60,166 +60,23 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"pi-stack/host/config"
 )
 
-const gogUsage = `usage: pi-stack gog <setup> [args]
+// The `gog` verb layer that used to live here (gogUsage, gogSetupUsage,
+// runGogCmd, parseGogSetupArgs, runGogSetupCmd) is DELETED, not renamed: the
+// public surface is `pi-stack gworkspace setup|status|disable` (gworkspace.go)
+// and `pi-stack setup --google-workspace`, which are façades over this file's
+// unchanged transaction. There is exactly one writer.
 
-  setup   guided Google Workspace (gog) onboarding: CLI check, OAuth client
-          import, read-only account authorization, headless verification,
-          gateway registration + config
-
-Run 'pi-stack gog setup -h' for its flags.
-`
-
-const gogSetupUsage = `usage: pi-stack gog setup [--account <email>] [--credentials <path>] [--yes]
-
-Guides Google Workspace (gog) onboarding end to end:
-  1. checks the gog CLI is installed (exact install guidance if not), then
-     validates your credentials path is a true regular file and imports it
-     by invoking gog itself: this command never reads or prints its
-     contents, and never copies it into pi-stack config
-  2. probes the selected auth route's OWN subcommand help/flags for the
-     read-only capability it needs at grant time (see step 3)
-  3. preflights EVERY remaining predictable hard requirement BEFORE any
-     authorization happens: sbx must be installed (it registers gog with
-     the gateway; a missing sbx fails this command, it never reports a
-     silent "would register"), config must load cleanly, and whatever gog
-     registration already exists must be CONFIRMED absent, or present
-     with a readable command. An unreadable/unlistable prior registration
-     (or a transiently unavailable sbx listing) aborts HERE, before any
-     authorization runs and before config is touched, rather than risking
-     that registration on a same-run rollback later
-  4. authorizes <email> REQUESTING READ-ONLY OAUTH SCOPES at grant time
-     (gog's --readonly flag on the OAuth-granting command); if the
-     installed gog cannot advertise --readonly for the selected route, this
-     fails with upgrade guidance rather than authorizing without it (may
-     open a browser; inherits this terminal)
-  5. verifies interactive auth, THEN verifies headless tools with the EXACT
-     hardened command the sbx gateway will actually spawn: direct and bare
-     when 1Password isn't set up, through the same op wrapper when it is. A
-     healthy interactive auth with zero headless tools is a documented trap
-     and FAILS this command with the exact fix, rather than claiming ready;
-     an unverifiable probe (timeout/exec error) is never reported as
-     success either
-  6. on success: registers gog with the sbx gateway FIRST — using the SAME
-     captured command snapshot that was just verified — and only once that
-     succeeds saves gog_account + enables gog in the configured MCP set: a
-     registration failure never touches the persisted config, and a save
-     failure after a successful registration rolls the registration back
-     (to exactly the step 3 snapshot) rather than leaving config and the
-     gateway out of sync
-
-flags:
-  --account <email>      the Google Workspace account to authorize
-  --credentials <path>   path to your Desktop OAuth client JSON (regular file)
-  --yes                  never prompt (fails instead of asking on a TTY)
-
-On a real terminal, a missing --account/--credentials is prompted for.
-Idempotent: re-running a healthy setup is safe and re-registers gog.
-
-pi-stack does not independently inspect the OAuth scopes gog actually grants
-(no stable scope-inspection surface exists to check against); this command
-guarantees the grant REQUESTS read-only scopes; gog's own runtime flags
-(--gmail-no-send --wrap-untrusted --readonly --allow-tool read) are the
-backstop that blocks writes regardless of what was granted.
-
-No organization OAuth client is bundled or referenced here; bring your own.
-`
-
-// runGogCmd is the `pi-stack gog` verb tree. Today it has one subcommand,
-// `setup`; the tree exists so a later addition (e.g. `gog status`) has a home.
-//
-// The help gate is checked ONLY for the no-subcommand case (`gog -h` /
-// `gog --help`) — it must NOT blanket-scan the whole argv the way wantsHelp
-// does for a plain flag verb: that would catch `gog setup -h` too and print
-// the noun-level gogUsage instead of ever reaching runGogSetupCmd, which owns
-// the detailed gogSetupUsage. Once a subcommand token is present, dispatch to
-// it first and let it parse/handle its OWN -h/--help.
-func runGogCmd(argv []string) {
-	if len(argv) == 0 {
-		fmt.Fprint(os.Stderr, gogUsage)
-		os.Exit(2)
-	}
-	if wantsHelp(argv[:1]) {
-		fmt.Print(gogUsage)
-		return
-	}
-	switch argv[0] {
-	case "setup":
-		runGogSetupCmd(argv[1:])
-	default:
-		fmt.Fprintf(os.Stderr, "pi-stack gog: unknown subcommand %q (want: setup)\n", argv[0])
-		os.Exit(2)
-	}
-}
-
-// gogSetupOpts is the parsed `gog setup` flag set.
+// gogSetupOpts is the parsed Google Workspace setup flag set, shared by both
+// public doors (`gworkspace setup` and `setup --google-workspace`).
 type gogSetupOpts struct {
 	account     string
 	credentials string
 	assumeYes   bool
-}
-
-func parseGogSetupArgs(argv []string) (gogSetupOpts, error) {
-	var o gogSetupOpts
-	for i := 0; i < len(argv); i++ {
-		a := argv[i]
-		next := func() (string, error) {
-			if i+1 >= len(argv) {
-				return "", fmt.Errorf("%s needs a value", a)
-			}
-			i++
-			return argv[i], nil
-		}
-		switch a {
-		case "--account":
-			v, err := next()
-			if err != nil {
-				return o, err
-			}
-			o.account = v
-		case "--credentials":
-			v, err := next()
-			if err != nil {
-				return o, err
-			}
-			o.credentials = v
-		case "--yes", "-y", "--non-interactive":
-			o.assumeYes = true
-		case "-h", "--help":
-			return o, errHelpRequested
-		default:
-			return o, fmt.Errorf("unknown flag %q (see: pi-stack gog setup -h)", a)
-		}
-	}
-	return o, nil
-}
-
-// runGogSetupCmd is the real `pi-stack gog setup` entry: parses flags, wires
-// the real shellEnv (browser-opening auth steps inherit THIS process's stdio),
-// and runs gogSetup.
-func runGogSetupCmd(argv []string) {
-	opts, err := parseGogSetupArgs(argv)
-	if err != nil {
-		if err == errHelpRequested {
-			fmt.Print(gogSetupUsage)
-			return
-		}
-		fmt.Fprintf(os.Stderr, "pi-stack gog setup: %v\n\n%s", err, gogSetupUsage)
-		os.Exit(2)
-	}
-	tty := isTTY(os.Stdin)
-	if opts.assumeYes {
-		tty = false // --yes means "never prompt", even on a real terminal
-	}
-	if err := gogSetup(defaultShellEnv(), opts, os.Stdin, os.Stdout, tty); err != nil {
-		fmt.Fprintf(os.Stderr, "pi-stack gog setup: %v\n", err)
-		os.Exit(1)
-	}
 }
 
 // gogAuthStep is one command in a gogAuthRoute. help is the argv (after
@@ -421,9 +278,9 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// both the headless probe and the eventual registration.
 	gogPath, gogErr := env.lookPath("gog")
 	if gogErr != nil {
-		fmt.Fprintln(out, "gog CLI not found.")
-		fmt.Fprintln(out, "  install it:  brew install gog   (or see https://gogcli.sh/install.html)")
-		return fmt.Errorf("gog is not installed")
+		fmt.Fprintln(out, "the Google Workspace dependency CLI is not installed.")
+		fmt.Fprintln(out, "  install it:  "+gwInstallCmd)
+		return fmt.Errorf("the Google Workspace dependency CLI is not installed (%s)", gwInstallCmd)
 	} // Validate the credentials path BEFORE ever handing it to gog: must be a
 	// TRUE regular file — Mode().IsRegular(), not merely "exists and isn't a
 	// directory" (which a FIFO, socket, or device would also satisfy).
@@ -449,12 +306,12 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	route, ok := chooseGogAuthRoute(helpOut)
 	if !ok {
 		verOut, _, _ := probeRun(env, "gog", "--version")
-		fmt.Fprintln(out, "installed gog does not advertise a supported auth import/authorize surface")
+		fmt.Fprintln(out, "the installed Google Workspace dependency CLI does not advertise a supported auth surface")
 		fmt.Fprintln(out, "  (looked for: auth setup | auth credentials+add | auth add-client+login)")
 		fmt.Fprintf(out, "  installed version: %s\n", strings.TrimSpace(verOut))
-		fmt.Fprintln(out, "  upgrade: brew upgrade gog   (or see https://gogcli.sh/install.html)")
-		fmt.Fprintln(out, "  then re-run: pi-stack gog setup")
-		return fmt.Errorf("no supported gog auth route for the installed gog version")
+		fmt.Fprintln(out, "  upgrade: "+gwUpgradeCmd)
+		fmt.Fprintln(out, "  then re-run: pi-stack gworkspace setup")
+		return fmt.Errorf("no supported auth route for the installed gog version")
 	}
 
 	// Probe the SELECTED route's own subcommand help (not just the top-level
@@ -466,13 +323,13 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// scopes at grant time.
 	if capable, detail := gogAuthRouteCapable(env, route); !capable {
 		verOut, _, _ := probeRun(env, "gog", "--version")
-		fmt.Fprintf(out, "installed gog cannot guarantee read-only OAuth authorization for the %q route:\n", route.name)
+		fmt.Fprintf(out, "the installed Google Workspace dependency CLI cannot guarantee read-only OAuth authorization for the %q route:\n", route.name)
 		fmt.Fprintf(out, "  %s\n", detail)
 		fmt.Fprintf(out, "  installed version: %s\n", strings.TrimSpace(verOut))
-		fmt.Fprintln(out, "  upgrade: brew upgrade gog   (or see https://gogcli.sh/install.html)")
-		fmt.Fprintln(out, "  then re-run: pi-stack gog setup")
+		fmt.Fprintln(out, "  upgrade: "+gwUpgradeCmd)
+		fmt.Fprintln(out, "  then re-run: pi-stack gworkspace setup")
 		fmt.Fprintln(out, "  pi-stack never falls back to an auth route it cannot confirm requests read-only scopes.")
-		return fmt.Errorf("installed gog cannot guarantee read-only OAuth authorization (route: %s): %s", route.name, detail)
+		return fmt.Errorf("the installed Google Workspace dependency CLI cannot guarantee read-only OAuth authorization (route: %s): %s", route.name, detail)
 	}
 
 	// Preflight every remaining PREDICTABLE hard requirement here, BEFORE the
@@ -482,8 +339,8 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// returns before a single runInteractive call and before config is touched,
 	// so a botched preflight can never leave OAuth half-run or config mutated.
 	if _, err := env.lookPath("sbx"); err != nil {
-		return fmt.Errorf("sbx not found: pi-stack gog setup requires sbx to register the MCP server " +
-			"(install: https://docs.docker.com/ai/sandboxes); install it, then re-run pi-stack gog setup")
+		return fmt.Errorf("sbx not found: pi-stack gworkspace setup requires sbx to register the MCP server " +
+			"(install: https://docs.docker.com/ai/sandboxes); install it, then re-run pi-stack gworkspace setup")
 	}
 	// Load the candidate config change IN MEMORY only — cfg.Save() must never
 	// run before the sbx registration it describes actually succeeds, or a
@@ -502,9 +359,9 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// same-run rollback.
 	snap := snapshotGogRegistration(env)
 	if snap.state == gogRegUnknown {
-		return fmt.Errorf("could not confirm the prior gog registration (sbx mcp ls/get did not resolve cleanly): " +
-			"refusing to authorize or overwrite it until this is readable; check the sbx daemon (sbx mcp status), " +
-			"then re-run pi-stack gog setup")
+		return fmt.Errorf("could not confirm the prior "+gwServerName+" registration (sbx mcp ls/get did not resolve cleanly): "+
+			"refusing to authorize or overwrite it until this is readable; check the sbx daemon (sbx mcp status), "+
+			"then re-run pi-stack gworkspace setup")
 	}
 
 	runInteractive := env.runInteractive
@@ -555,7 +412,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// success. Nothing here mutates config/registration yet — that only happens
 	// after `head` is confirmed healthy, below.
 	reg := buildGogRegistrar(env, gogPath, account)
-	head := probeListTools(env, reg.execArgv("gog"))
+	head := probeListTools(env, reg.execArgv(gwServerName))
 	switch head.status {
 	case probeToolsOK:
 		fmt.Fprintln(out, "headless tools OK (verified the same host-side path the sbx gateway/doctor use)")
@@ -564,7 +421,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		fmt.Fprintln(out, "  this is the documented trap: the gateway spawns gog in a bare, non-interactive")
 		fmt.Fprintln(out, "  env and can't unlock the keyring without help.")
 		fmt.Fprintf(out, "  add GOG_KEYRING_BACKEND=file + GOG_KEYRING_PASSWORD + GOG_ACCOUNT + GOG_HOME to %s\n", defaultOpRefsPath(env))
-		return fmt.Errorf("headless verification failed for %s: not registering until this is fixed", account)
+		return fmt.Errorf("authorization succeeded but the headless tool listing returned 0 tools; nothing was registered (account %s)", account)
 	default: // probeTimedOut, probeError, probeDeniedByPolicy — never claimed as success
 		fmt.Fprintf(out, "headless verification could not be confirmed (%s): not registering until this is fixed\n", head.detail)
 		return fmt.Errorf("headless verification unverifiable for %s (%s): not registering until this is fixed", account, head.detail)
@@ -577,7 +434,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// Idempotency: ALWAYS ensure gog is in the configured MCP set, even when
 	// the account already matched (a healthy re-run must still leave gog
 	// attached/registered deterministically).
-	cfg.AddMCP("gog")
+	cfg.AddMCP(gwServerName)
 
 	// REGISTER FIRST, save second. registerGogRegistrar runs `sbx mcp add gog
 	// ...` using the EXACT reg snapshot resolved above (no re-resolution — the
@@ -586,7 +443,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// cfg.Save() is ever called, so the persisted config is left byte-for-byte
 	// unchanged — there is no config/registration drift to roll back from.
 	if err := registerGogRegistrar(reg, env, out); err != nil {
-		return fmt.Errorf("registering gog with the sbx gateway: %w (finish later: pi-stack mcp register gog)", err)
+		return fmt.Errorf("registering %s with the sbx gateway: %w (finish later: pi-stack mcp register %s)", gwServerName, err, gwServerName)
 	}
 
 	if err := cfg.Save(); err != nil {
@@ -603,8 +460,8 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	}
 
 	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "gog is in the configured MCP set: a fresh sandbox creation preloads it (tools in context from the start).")
-	fmt.Fprintln(out, "Existing sandbox? attach it live: pi-stack mcp load gog")
+	fmt.Fprintln(out, gwServerName+" is in the configured MCP set: a fresh sandbox creation preloads it (tools in context from the start).")
+	fmt.Fprintln(out, "Existing sandbox? attach it live: pi-stack mcp load "+gwServerName)
 	return nil
 }
 
@@ -626,13 +483,13 @@ func gogSetupRollbackRegistration(env shellEnv, snap gogRegSnapshot) error {
 		return fmt.Errorf("internal: shellEnv.run not wired")
 	}
 	if snap.state == gogRegPresent {
-		args := rawAddArgs("gog", snap.argv)
+		args := rawAddArgs(gwServerName, snap.argv)
 		if _, err := env.run("sbx", args...); err != nil {
 			return fmt.Errorf("could not restore the prior gog registration: %w", err)
 		}
 		return nil
 	}
-	if _, err := env.run("sbx", "mcp", "rm", "gog"); err != nil {
+	if _, err := env.run("sbx", "mcp", "rm", gwServerName); err != nil {
 		return fmt.Errorf("could not remove the new gog registration: %w", err)
 	}
 	return nil
@@ -700,7 +557,7 @@ func snapshotGogRegistration(env shellEnv) gogRegSnapshot {
 	if err != nil || timedOut {
 		return gogRegSnapshot{state: gogRegUnknown}
 	}
-	if !grepWord(listOut, "gog") {
+	if !grepWord(listOut, gwServerName) {
 		return gogRegSnapshot{state: gogRegAbsent}
 	}
 	if argv, ok := registeredGogCommand(env); ok {

@@ -324,12 +324,12 @@ func TestGogSetup_CurrentOneShotRoute(t *testing.T) {
 	}
 	found := false
 	for _, m := range cfg.MCP {
-		if m == "gog" {
+		if m == gwServerName {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("cfg.MCP = %v, want gog present", cfg.MCP)
+		t.Errorf("cfg.MCP = %v, want google-workspace present", cfg.MCP)
 	}
 }
 
@@ -524,7 +524,7 @@ func TestGogSetup_ZeroHeadlessToolsFailsWithGuidance(t *testing.T) {
 	if cfg != nil {
 		found := false
 		for _, m := range cfg.MCP {
-			if m == "gog" {
+			if m == gwServerName {
 				found = true
 			}
 		}
@@ -569,7 +569,7 @@ func TestGogSetup_IdempotentAddMCPWhenAccountUnchanged(t *testing.T) {
 	}
 	found := false
 	for _, m := range got.MCP {
-		if m == "gog" {
+		if m == gwServerName {
 			found = true
 		}
 	}
@@ -586,7 +586,7 @@ func TestGogSetup_RegistrationFailureReported(t *testing.T) {
 		output: map[string]string{
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",
-			// no fake "sbx mcp add gog ..." output => registerServers' env.run
+			// no fake "sbx mcp add google-workspace ..." output => registerServers' env.run
 			// call for it returns an error, exercising the registration-failure
 			// path end to end.
 		},
@@ -740,7 +740,7 @@ func TestGogSetup_PrintsAttachModeGuidance(t *testing.T) {
 	if !strings.Contains(out.String(), "preloads it") {
 		t.Errorf("expected the preload-at-create note, got %q", out.String())
 	}
-	if !strings.Contains(out.String(), "pi-stack mcp load gog") {
+	if !strings.Contains(out.String(), "pi-stack mcp load google-workspace") {
 		t.Errorf("expected the mcp load follow-up, got %q", out.String())
 	}
 }
@@ -751,26 +751,26 @@ func TestRunGogCmd_HelpAndUnknownSubcommand(t *testing.T) {
 	if !wantsHelp([]string{"-h"}) {
 		t.Fatal("sanity")
 	}
-	if _, ok := verbUsage("gog"); !ok {
+	if _, ok := verbUsage("gworkspace"); !ok {
 		t.Error("verbUsage(gog) should be known")
 	}
-	if !knownVerbs["gog"] {
-		t.Error(`knownVerbs["gog"] should be true`)
+	if !knownVerbs["gworkspace"] {
+		t.Error(`knownVerbs["gworkspace"] should be true`)
 	}
 }
 
 func TestParseGogSetupArgs(t *testing.T) {
-	opts, err := parseGogSetupArgs([]string{"--account", "you@example.com", "--credentials", "/tmp/c.json", "--yes"})
+	opts, err := parseGworkspaceSetupArgs([]string{"--account", "you@example.com", "--credentials", "/tmp/c.json", "--yes"})
 	if err != nil {
-		t.Fatalf("parseGogSetupArgs: %v", err)
+		t.Fatalf("parseGworkspaceSetupArgs: %v", err)
 	}
 	if opts.account != "you@example.com" || opts.credentials != "/tmp/c.json" || !opts.assumeYes {
 		t.Errorf("parsed = %+v", opts)
 	}
-	if _, err := parseGogSetupArgs([]string{"--account"}); err == nil {
+	if _, err := parseGworkspaceSetupArgs([]string{"--account"}); err == nil {
 		t.Error("expected error for --account with no value")
 	}
-	if _, err := parseGogSetupArgs([]string{"--bogus"}); err == nil {
+	if _, err := parseGworkspaceSetupArgs([]string{"--bogus"}); err == nil {
 		t.Error("expected error for unknown flag")
 	}
 }
