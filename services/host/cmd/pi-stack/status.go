@@ -280,7 +280,7 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 			st.MCPRows = append(st.MCPRows, mcpSandboxRow{
 				Name: m, Registered: regOf(m).String(), Sandbox: "",
 				State:    mcpJoinUnverifiable,
-				Evidence: "sandbox discovery unavailable (`sbx ls`) — cannot enumerate pi-stack sandboxes",
+				Evidence: "sandbox discovery unavailable (`sbx ls`); cannot enumerate pi-stack sandboxes",
 			})
 		}
 	} else {
@@ -298,7 +298,7 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 			for _, row := range joinMCPSandboxRows(names, regOf, b.Name, receipt, rstatus) {
 				evidence := row.Evidence
 				if receiptOnly[row.Name] {
-					evidence += "; sandbox provenance only (from this sandbox's receipt) — " + row.Name + " is not part of the current cfg.MCP/pack"
+					evidence += "; sandbox provenance only (from this sandbox's receipt); " + row.Name + " is not part of the current cfg.MCP/pack"
 				}
 				st.MCPRows = append(st.MCPRows, mcpSandboxRow{
 					Name: row.Name, Registered: row.Registered.String(),
@@ -348,7 +348,7 @@ func (st statusReport) render(out io.Writer) {
 	fmt.Fprintf(out, "  providers   %s\n", strings.Join(prov, "  "))
 
 	if len(st.Bundles) == 0 {
-		fmt.Fprintln(out, "  knowledge   (no bundle) — `pi-stack knowledge init`")
+		fmt.Fprintln(out, "  knowledge   (no bundle); `pi-stack knowledge init`")
 	} else {
 		for i, b := range st.Bundles {
 			label := "knowledge"
@@ -437,7 +437,7 @@ func (st statusReport) render(out io.Writer) {
 	case len(st.Todos) > 0:
 		fmt.Fprintf(out, "  ⚠ %s outstanding.   `pi-stack doctor` for fix commands.\n", plural(len(st.Todos), "item"))
 	case unverifiable > 0:
-		fmt.Fprintf(out, "  ✓ nothing outstanding — but %s unverifiable (not failed; see the mcp/box rows or `pi-stack doctor`).\n",
+		fmt.Fprintf(out, "  ✓ nothing outstanding, but %s unverifiable (not failed; see the mcp/box rows or `pi-stack doctor`).\n",
 			plural(unverifiable, "check"))
 	default:
 		fmt.Fprintln(out, "  ✓ all systems go.")
@@ -474,7 +474,7 @@ func statusRegisterTodoFn(cfg *config.Config, env shellEnv) func(name string) st
 		if td := mcpRegisterTodo(name, kind); td != "" {
 			return td
 		}
-		return "mcp " + name + " is not registered but could not be classified — run `pi-stack doctor`"
+		return "mcp " + name + " is not registered but could not be classified; run `pi-stack doctor`"
 	}
 }
 
@@ -502,9 +502,9 @@ func mcpRowText(r mcpSandboxRow) string {
 	case mcpJoinPreloaded, mcpJoinLoaded:
 		return "✓ " + r.State + " (" + r.Evidence + ")"
 	case mcpJoinNotRegistered, mcpJoinRegisteredNotAttached:
-		return "✗ " + r.State + " — " + r.Evidence
+		return "✗ " + r.State + ": " + r.Evidence
 	default: // unverifiable
-		return "? " + r.State + " — " + r.Evidence
+		return "? " + r.State + ": " + r.Evidence
 	}
 }
 

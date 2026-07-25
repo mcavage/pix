@@ -234,7 +234,7 @@ func stopServeByDiscovery(ctl serveCtl, out io.Writer) (bool, error) {
 	}
 	anyStopped := false
 	for _, pid := range ours {
-		fmt.Fprintf(out, "no pidfile, but found a running 'pi-stack-host serve' (pid %d) — stopping it\n", pid)
+		fmt.Fprintf(out, "no pidfile, but found a running 'pi-stack-host serve' (pid %d); stopping it\n", pid)
 		s, e := signalServeToExit(ctl, pid, "", out)
 		if e != nil {
 			return anyStopped, e
@@ -308,7 +308,7 @@ func serveOwnershipRefused(ctl serveCtl, pid int, path, when string, out io.Writ
 	}
 	switch {
 	case known && !ours:
-		fmt.Fprintf(out, "refusing to stop pid %d — %s.%s\n", pid, when, rmHint)
+		fmt.Fprintf(out, "refusing to stop pid %d; %s.%s\n", pid, when, rmHint)
 		return true
 	case !known:
 		fmt.Fprintf(out, "cannot verify pid %d is 'pi-stack-host serve' (%s); refusing to signal%s\n", pid, when, certainHint)
@@ -403,7 +403,7 @@ func printServeStatus(st serveState, out io.Writer, jsonOut bool) {
 	if st.Running {
 		fmt.Fprintf(out, "serve: running (pid %d)\n", st.PID)
 	} else if st.Detail != "" {
-		fmt.Fprintf(out, "serve: not running — %s\n", st.Detail)
+		fmt.Fprintf(out, "serve: not running: %s\n", st.Detail)
 	} else {
 		fmt.Fprintln(out, "serve: not running")
 	}

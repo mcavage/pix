@@ -89,7 +89,7 @@ func min3(a, b, c int) int {
 // helpAllText is the full command listing revealed by `pi-stack help --all`. It
 // names every verb across all tiers (Core / occasional / rare + expert) so a
 // power user can see the whole surface, not just the curated Core view.
-const helpAllText = `pi-stack — a personal, multi-model pi coding agent in a Docker sandbox.
+const helpAllText = `pi-stack: a personal, multi-model pi coding agent in a Docker sandbox.
 
 Usage:  pi-stack <command> [args]
 
@@ -138,7 +138,7 @@ State (on-disk lifecycle)
   reset [flags]       move stack state aside (reversible)   [--keep-memory --sbx --yes]
   uninstall [flags]   reset, then remove the bin symlinks    [--keep-memory --yes]
 
-Expert (dangerous — read the man page first)
+Expert (dangerous; read the man page first)
   host [DIR]          run pi DIRECTLY on this machine: no sandbox, no network
                       fence, real credentials. Gated off by default; enable with
                       'host setup' (provisions AND enables it in one step).
@@ -241,7 +241,7 @@ subcommands:
                     left after 'pi-stack reset' moved the config dir).
   status [--json]   report whether serve is running (pid) and which service
                     ports (:11435 / :11436) are up
-  start             alias for 'install' — (re)start the managed service, picking
+  start             alias for 'install'; (re)start the managed service, picking
                     up a freshly-rebuilt binary. The partner to 'stop'.
   install           install serve as a managed login service (launchd on macOS,
                     systemd --user on Linux): starts at login, auto-restarts.
@@ -257,7 +257,7 @@ subcommands:
 
 const statusUsage = `usage: pi-stack status [--json]
 
-Fast, read-only control panel — services, provider keys, knowledge bundles,
+Fast, read-only control panel: services, provider keys, knowledge bundles,
 MCP registration, and running pi-stack-* sandboxes. Launches nothing.
 
 flags:
@@ -287,7 +287,7 @@ const configUsage = `usage: pi-stack config <show|path|get|set|unset> [args]
   show                     print the resolved config path + contents
   path [op-refs]           print the config file path (or the op-refs.env path)
   get K                    print ONE resolved value, no decoration (lists are
-                            space-separated) — for scripts/make to source
+                            space-separated); for scripts/make to source
   set K V                   set a config key (never hand-edit the toml)
   unset K [V]               reset/clear a scalar key, or remove value V from a
                             list key (mcp/services/knowledge_bundles)
@@ -300,7 +300,7 @@ const mcpUsage = `usage: pi-stack mcp <register|ls|load|auth|bundle> [args]
                        (no names = every local server in the resolved mcp list)
   ls                   list servers registered with the gateway (sbx mcp ls)
   load <name> [DIR]    attach an already-registered server to the RUNNING sandbox
-                       for DIR (default cwd) — live, no recreate (sbx mcp load)
+                       for DIR (default cwd); live, no recreate (sbx mcp load)
   auth [args...]       authorize remote OAuth servers via the hosted control
                        plane (sbx mcp auth; e.g. auth --all, auth status --all)
   bundle [ls|rm ...]   register the shipped public catalog bundle
@@ -333,7 +333,7 @@ const secretUsage = `usage: pi-stack secret <ls|set|rm|check|sync>
 
 Manage the 1Password refs (op-refs.env) the sbx gateway resolves for host MCP
 servers AND the cloud model provider keys. Values live in 1Password, never on
-disk — this verb only reads, writes, and reports REFS (op://vault/item/field
+disk; this verb only reads, writes, and reports REFS (op://vault/item/field
 lines). It never writes a resolved secret.
 
 ` + config.OpRefsMentalModel + `
@@ -361,7 +361,7 @@ Print the stamped launcher version.
 
 const resetUsage = `usage: pi-stack reset [--keep-memory] [--sbx] [--yes] [--force]
 
-Reset the stack to a clean slate — REVERSIBLE. Nothing is hard-deleted: state is
+Reset the stack to a clean slate (REVERSIBLE). Nothing is hard-deleted: state is
 moved aside to a timestamped <path>.bak-<unixts> sibling you can rename back.
 
 Moves aside the config dir (~/.config/pi-stack) and the data dir (~/.local/share/pi-stack:
@@ -384,7 +384,7 @@ On a non-TTY it refuses unless --yes is given.
 const uninstallUsage = `usage: pi-stack uninstall [--keep-memory] [--purge-data] [--yes] [--force]
 
 Run the full reset (see 'pi-stack reset'), THEN remove the installed pi-stack +
-pi-stack-host bin symlinks (~/.local/bin). Only symlinks are removed — a real
+pi-stack-host bin symlinks (~/.local/bin). Only symlinks are removed; a real
 file there is left untouched. State is moved aside, never hard-deleted.
 
 Harvested task artifacts (~/.local/share/pi-stack/artifacts) are user work

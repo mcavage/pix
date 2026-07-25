@@ -39,7 +39,7 @@ func runRouteHost(args []string) {
 }
 
 func routeUsage() {
-	fmt.Fprint(os.Stderr, `pi-stack-host route — model router
+	fmt.Fprint(os.Stderr, `pi-stack-host route: model router
 
 usage:
   route pick <intent> [--json]   resolve one intent to a model (+ rationale)
@@ -121,7 +121,7 @@ func routePick(args []string) {
 	}
 	flag := ""
 	if !d.ConstraintsMet {
-		flag = "  [constraints not met — fallback]"
+		flag = "  [constraints not met; fallback]"
 	}
 	fmt.Printf("%s -> %s%s\n", d.Intent, d.Model, flag)
 	fmt.Printf("  %s\n", d.Reason)

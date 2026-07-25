@@ -156,7 +156,7 @@ func runServe(enabled []string) {
 			}
 			bundles := knowledgeBundles(cfg)
 			if len(bundles) == 0 {
-				log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES) — serving an empty index")
+				log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES); serving an empty index")
 			} else if n, indexed, rerr := store.reindex(bundles); rerr != nil {
 				log.Printf("knowledge: reindex failed (serving whatever was already indexed): %v", rerr)
 			} else {
@@ -396,7 +396,7 @@ func reindexKnowledgePlugin(store plugin.KnowledgeStore, bundles []string) {
 		return
 	}
 	if len(bundles) == 0 {
-		log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES) — serving an empty index")
+		log.Print("knowledge: no bundles configured (set knowledge_bundles in config or KNOWLEDGE_BUNDLES); serving an empty index")
 		return
 	}
 	if res, err := store.Reindex(plugin.ReindexArgs{BundlePaths: bundles}); err != nil {

@@ -518,7 +518,7 @@ func runMemoryHost(args []string) {
 
 const backupUsage = `usage: pi-stack-host backup [--out PATH] [--keep N]
 
-  Take a hot, consistent FULL backup — safe while serve holds the db open. Packs
+  Take a hot, consistent FULL backup; safe while serve holds the db open. Packs
   a VACUUM INTO snapshot of ~/.local/share/pi-stack/memory/memory.db (honors MEMORY_DB),
   config.toml, op-refs.env (refs only), and a manifest.json (profiles +
   knowledge-bundle notes) into a tar.gz.

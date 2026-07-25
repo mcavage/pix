@@ -55,7 +55,7 @@ var errSbxUnavailable = fmt.Errorf("sbx not on PATH")
 // register/ls/load/auth/bundle can never phrase or exit-code this differently
 // from one another.
 func mcpWouldRun(out io.Writer, args ...string) error {
-	fmt.Fprintf(out, "sbx not on PATH — would run: sbx %s (run it on the host)\n", strings.Join(args, " "))
+	fmt.Fprintf(out, "sbx not on PATH; would run: sbx %s (run it on the host)\n", strings.Join(args, " "))
 	return errSbxUnavailable
 }
 
@@ -215,7 +215,7 @@ func runMcpLoad(argv []string) {
 			// so doctor/status degrade honestly instead of trusting a record
 			// that was never written.
 			fmt.Fprintf(os.Stderr, "pi-stack mcp load: %v\n", rerr)
-			fmt.Fprintln(os.Stderr, "the server IS attached to the running sandbox; only pi-stack's local record of it failed to write — retry `pi-stack mcp load`, or check state-dir permissions.")
+			fmt.Fprintln(os.Stderr, "the server IS attached to the running sandbox; only pi-stack's local record of it failed to write; retry `pi-stack mcp load`, or check state-dir permissions.")
 			os.Exit(1)
 		}
 		if exit, ok := err.(*exec.ExitError); ok {
@@ -611,7 +611,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			// (e.g. notion) as `pi-stack-host mcp notion`. Skip every non-gog name
 			// with an actionable warning and fail the command below.
 			fmt.Fprintf(out, "  %s: cannot determine local MCP servers "+
-				"(pi-stack-host mcp --list failed); skipping %s — re-run after building pi-stack-host\n", n, n)
+				"(pi-stack-host mcp --list failed); skipping %s; re-run after building pi-stack-host\n", n, n)
 			skippedUnknown = append(skippedUnknown, n)
 		case !localSet[n]:
 			// Not gog and not a local stdio server -> a remote gateway-catalog
@@ -629,7 +629,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	var skippedErr error
 	if len(skippedUnknown) > 0 {
 		skippedErr = fmt.Errorf("could not determine local MCP servers "+
-			"(pi-stack-host mcp --list failed); skipped %s — build pi-stack-host, then re-run",
+			"(pi-stack-host mcp --list failed); skipped %s; build pi-stack-host, then re-run",
 			strings.Join(skippedUnknown, ", "))
 	}
 
@@ -676,7 +676,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			if created, err := config.SeedOpRefsAt(refsPath); err == nil && created {
 				fmt.Fprintf(out, "seeded a template op-refs.env at %s\n", refsPath)
 			}
-			fmt.Fprintf(out, "note: no op-refs.env found; registered %s directly (bare, no 1Password) — "+
+			fmt.Fprintf(out, "note: no op-refs.env found; registered %s directly (bare, no 1Password); "+
 				"add creds to %s if a server needs them\n",
 				strings.Join(finalNames, ", "), refsPath)
 		} else if wantGog {
@@ -715,7 +715,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	_, sbxErr := lookPath("sbx")
 	sbxOK := sbxErr == nil
 	if !sbxOK {
-		fmt.Fprintln(out, "sbx not on PATH — here is what WOULD be registered (run these on the host):")
+		fmt.Fprintln(out, "sbx not on PATH; here is what WOULD be registered (run these on the host):")
 	}
 
 	// Accumulate per-server failures so `pi-stack mcp register` exits non-zero on
@@ -740,7 +740,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			fmt.Fprintf(out, "Each wrapped server resolves its creds from %s via op run at gateway spawn.\n", reg.opRefs)
 		}
 	} else {
-		fmt.Fprintln(out, "note: install Docker Sandboxes (sbx) to register — https://docs.docker.com/ai/sandboxes")
+		fmt.Fprintln(out, "note: install Docker Sandboxes (sbx) to register: https://docs.docker.com/ai/sandboxes")
 	}
 	if len(regErrs) > 0 {
 		return errors.Join(fmt.Errorf("%d server(s) failed to register: %w", len(regErrs), errors.Join(regErrs...)), skippedErr)

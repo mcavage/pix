@@ -219,7 +219,7 @@ func runSetupHandoff(dir, name string, state sbxState, replace bool, out io.Writ
 	// in-VM onboarding agent via an initial message. A --replace here is
 	// harmless (the create path ignores it).
 	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "Launching sandbox — pi will introduce itself, show you how it works,")
+	fmt.Fprintln(out, "Launching sandbox: pi will introduce itself, show you how it works,")
 	fmt.Fprintln(out, "and get you into a real task. (You can quit any time; just run `pi-stack run`.)")
 	runFn(kickoffArgs())
 	return nil
@@ -330,7 +330,7 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	// a later step fails. UNKNOWN keys are a different thing (cfg.UnknownKeys —
 	// doctor flags those) and are never swept into this notice as "retired".
 	if retired := cfg.RetiredKeys(); len(retired) > 0 {
-		fmt.Fprintf(out, "note: dropping retired config key(s) %s on save — no longer read; every configured MCP server preloads at sandbox create\n", strings.Join(retired, ", "))
+		fmt.Fprintf(out, "note: dropping retired config key(s) %s on save (no longer read); every configured MCP server preloads at sandbox create\n", strings.Join(retired, ", "))
 		if err := cfg.Save(); err != nil {
 			return fmt.Errorf("dropping retired config keys: %w", err)
 		}
@@ -372,7 +372,7 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	fmt.Fprintln(out, "")
 	fmt.Fprintf(out, "memory service: enabled (:%d)\n", memoryPortDefault)
 	if len(changes) == 0 {
-		fmt.Fprintln(out, "knowledge:      (none) — add later with `pi-stack knowledge init` / `use`")
+		fmt.Fprintln(out, "knowledge:      (none); add later with `pi-stack knowledge init` / `use`")
 	} else {
 		for _, c := range changes {
 			fmt.Fprintf(out, "  + %s\n", c)
@@ -403,7 +403,7 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	// normal sandbox-only user won't have. Point at the dedicated command instead of
 	// running (and noisily half-failing) it on every `pi-stack setup`.
 	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "host mode (optional, UNSANDBOXED — runs `pi` directly on the host): not enabled.")
+	fmt.Fprintln(out, "host mode (optional, UNSANDBOXED: runs `pi` directly on the host): not enabled.")
 	fmt.Fprintln(out, "  set it up only if you need it:  pi-stack host setup")
 
 	// Completion summary: keys / knowledge / pack / local models / gog on
@@ -790,14 +790,14 @@ func flagTakesValue(a string) bool {
 const setupUsage = `usage: pi-stack setup [DIR] [host-config flags]
 
 Actually sets you up (use 'pi-stack run' if you just want to start working):
-  1. host   — resolve model keys from 1Password and reconcile them into sbx
+  1. host   - resolve model keys from 1Password and reconcile them into sbx
               (op is REQUIRED), wiring BOTH the sandbox and host mode's
               hostmode.env; ensure memory; create your default pack
   2. agent  - launch a sandbox and hand off to a ONE-SHOT upfront guide that
               names the exact workflows, explains memory and packs, reports
               grounded setup gaps, then asks for your real task
 
-Provider keys come from 1Password only — the ` + "`op`" + ` CLI must be installed and
+Provider keys come from 1Password only: the ` + "`op`" + ` CLI must be installed and
 signed in, or setup fails with the exact fix. There is no "trust existing sbx
 keys" shortcut. Host mode (pi UNSANDBOXED) is NOT set up here; it's opt-in via
 'pi-stack host setup' (which provisions AND enables it in one step).
@@ -817,7 +817,7 @@ Setup flags:
                            create) so it picks up current pack/MCP/skills and
                            receives the guided tour; harmless when absent
   --pull-models            pull any CONFIRMED-missing configured local Ollama
-                           models (watcher/embed/bridge, deduplicated) — the
+                           models (watcher/embed/bridge, deduplicated); the
                            ONLY consent a non-interactive setup honors (a broad
                            --yes never downloads). Interactive setup without it
                            asks once, defaulting to No. Setup never installs

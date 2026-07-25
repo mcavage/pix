@@ -111,6 +111,7 @@ client. Two residual risks worth knowing:
   channel. Read-only stops writes, not reads. `--wrap-untrusted` fences
   returned Gmail/Doc bodies so the agent treats them as data, not
   instructions, but that's a mitigation, not a guarantee.
+- **Data transit to model providers.** Returned Google content is sent to the configured/selected model provider as part of the conversation. While OAuth credentials remain strictly host-side in `GOG_HOME` and tool access is limited to read-only, any retrieved Google content is sent to the external model provider to be processed as part of the LLM context.
 - **The keyring password in the gateway's process env unlocks standing
   OAuth.** Keep `GOG_HOME` at `0700`, the keyring file at `0600`, and the host
   single-user. If that password or `GOG_HOME` is ever exposed, treat the

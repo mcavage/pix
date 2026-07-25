@@ -79,7 +79,7 @@ func TestRenderStatusHuman(t *testing.T) {
 	if strings.Contains(s, "all systems go") {
 		t.Errorf("unverifiable mcp rows must prevent the all-systems-go headline:\n%s", s)
 	}
-	for _, want := range []string{"pi-stack", "services", "memory ✓", "knowledge ✗", "nothing outstanding — but", "unverifiable (not failed"} {
+	for _, want := range []string{"pi-stack", "services", "memory ✓", "knowledge ✗", "nothing outstanding, but", "unverifiable (not failed"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("status output missing %q:\n%s", want, s)
 		}

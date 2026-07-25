@@ -276,12 +276,12 @@ func mcpAttachCheck(name string, ctx mcpSandboxContext, reg mcpRegEvidence) chec
 		// live-attach command — consistent with status's row todo. Partial or
 		// absent receipts never reach this state (they stay unverifiable).
 		return check{label: label, verdict: verdictTodo,
-			detail:   fmt.Sprintf("registered, but pi-stack has no record of attaching it to %s — attach live, or recreate with `pi-stack run --replace`", ctx.sandbox),
+			detail:   fmt.Sprintf("registered, but pi-stack has no record of attaching it to %s; attach live, or recreate with `pi-stack run --replace`", ctx.sandbox),
 			todo:     mcpLoadTodoCommand(name, ctx.workspace),
 			evidence: row.Evidence}
 	case mcpJoinNotRegistered:
 		return check{label: label, verdict: verdictUnverifiable,
-			detail:   fmt.Sprintf("not currently registered, and the receipt has no positive claim for it either — attachment cannot be claimed for %s; %s", ctx.sandbox, guidance),
+			detail:   fmt.Sprintf("not currently registered, and the receipt has no positive claim for it either; attachment cannot be claimed for %s; %s", ctx.sandbox, guidance),
 			evidence: row.Evidence}
 	}
 	// mcpJoinUnverifiable: the receipt is absent, untrustworthy, or PARTIAL
@@ -290,22 +290,22 @@ func mcpAttachCheck(name string, ctx mcpSandboxContext, reg mcpRegEvidence) chec
 	// registration itself is unknowable.
 	if ctx.status == sandboxMCPStateOK && ctx.receipt.IsPartial() {
 		return check{label: label, verdict: verdictUnverifiable,
-			detail: fmt.Sprintf("launcher receipt for sandbox %s is partial (load-only, no create record) — preload state unknown; %s",
+			detail: fmt.Sprintf("launcher receipt for sandbox %s is partial (load-only, no create record); preload state unknown; %s",
 				ctx.sandbox, guidance),
 			evidence: row.Evidence}
 	}
 	if ctx.status == sandboxMCPStateAbsent {
 		return check{label: label, verdict: verdictUnverifiable,
-			detail:   fmt.Sprintf("no launcher receipt for sandbox %s — attachment unverified; %s", ctx.sandbox, guidance),
+			detail:   fmt.Sprintf("no launcher receipt for sandbox %s; attachment unverified; %s", ctx.sandbox, guidance),
 			evidence: row.Evidence}
 	}
 	if reg == mcpRegUnknown {
 		return check{label: label, verdict: verdictUnverifiable,
-			detail:   fmt.Sprintf("registration listing unavailable for sandbox %s — attachment unverified; %s", ctx.sandbox, guidance),
+			detail:   fmt.Sprintf("registration listing unavailable for sandbox %s; attachment unverified; %s", ctx.sandbox, guidance),
 			evidence: row.Evidence}
 	}
 	return check{label: label, verdict: verdictUnverifiable,
-		detail: fmt.Sprintf("launcher receipt for sandbox %s is %s — not trusting it; %s",
+		detail: fmt.Sprintf("launcher receipt for sandbox %s is %s; not trusting it; %s",
 			ctx.sandbox, ctx.status, guidance),
 		evidence: row.Evidence}
 }
@@ -325,7 +325,7 @@ func mcpUnavailableCheck(name string, sbxPresent bool) check {
 		return check{label: name, verdict: verdictUnverifiable, detail: gatewayDownDetail}
 	}
 	return check{label: name, verdict: verdictUnverifiable,
-		detail: "sbx unavailable here — registration cannot be verified (check from the host)"}
+		detail: "sbx unavailable here; registration cannot be verified (check from the host)"}
 }
 
 // mcpNotRegisteredCheck is a POSITIVELY VERIFIED registration gap (the bounded
@@ -339,7 +339,7 @@ func mcpNotRegisteredCheck(name string, kind mcpKind) check {
 	case mcpKindPackRemote, mcpKindPackContainer:
 		detail = "not registered (pack integration: register with `pi-stack mcp register " + name + "`)"
 	case mcpKindCustom:
-		detail = "not registered — a custom server pi-stack cannot register for you " +
+		detail = "not registered; a custom server pi-stack cannot register for you " +
 			"(`pi-stack mcp register` is local-stdio-only; `pi-stack mcp bundle` covers only " +
 			mcpCatalogSummary() + "). Register it natively with its own URL/transport: sbx mcp add"
 	}
@@ -355,7 +355,7 @@ func mcpUnknownKindCheck(name, mcpOut string, mcpOK, sbxPresent bool) check {
 		return mcpUnavailableCheck(name, sbxPresent)
 	}
 	det := "could not determine whether this is a local stdio server or a remote one " +
-		"(pi-stack-host mcp --list unavailable); no repair command can be safely recommended — " +
+		"(pi-stack-host mcp --list unavailable); no repair command can be safely recommended; " +
 		"build/resolve pi-stack-host, then re-run"
 	if mcpRegisteredIn(mcpOut, name) {
 		det = "registered; " + det
@@ -418,7 +418,7 @@ func mcpRemoteAuthCheck(env shellEnv, name string) check {
 	out, timedOut, err := probeRun(env, "sbx", "mcp", "auth", "status", name)
 	if timedOut {
 		return check{label: name, verdict: verdictUnverifiable,
-			detail: "registered; auth status timed out (sbx mcp auth status " + name + ") — could not verify"}
+			detail: "registered; auth status timed out (sbx mcp auth status " + name + "); could not verify"}
 	}
 	// EXPLICIT denial signals win regardless of exit code: a policy denial is
 	// a positive refusal, not a credential gap.
@@ -444,7 +444,7 @@ func mcpRemoteAuthCheck(env shellEnv, name string) check {
 			detail: "registered but not authorized", todo: "pi-stack mcp auth " + name}
 	default: // mcpAuthUnknown
 		return check{label: name, verdict: verdictUnverifiable,
-			detail: "registered; auth status unclear (sbx mcp auth status " + name + ") — could not verify"}
+			detail: "registered; auth status unclear (sbx mcp auth status " + name + "); could not verify"}
 	}
 }
 
@@ -499,7 +499,7 @@ func retiredKeyCheck(key string) check {
 	return check{
 		label:   "config " + key,
 		verdict: verdictTodo,
-		detail: "retired config key — ignored (every configured MCP server now preloads at sandbox create); " +
+		detail: "retired config key; ignored (every configured MCP server now preloads at sandbox create); " +
 			"the next `pi-stack config set`/`unset` rewrite drops it from config.toml",
 		evidence: "retired key present in config.toml",
 	}
@@ -512,7 +512,7 @@ func unknownKeyCheck(key string) check {
 	return check{
 		label:    "config " + key,
 		verdict:  verdictUnverifiable,
-		detail:   "unknown config key — ignored (a typo, or a key only a newer pi-stack understands)",
+		detail:   "unknown config key; ignored (a typo, or a key only a newer pi-stack understands)",
 		evidence: "unknown key present in config.toml",
 	}
 }
@@ -778,11 +778,11 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 		// only — plus the honest statement of what pi-stack WILL do (preload at
 		// create), which is intent, never attachment.
 		if anyRegistered && ctx.mode != mcpAttachReceipt {
-			det := "no workspace sandbox context here — reporting registration/auth only; configured servers preload at sandbox create"
+			det := "no workspace sandbox context here; reporting registration/auth only; configured servers preload at sandbox create"
 			if ctx.mode == mcpAttachSandboxAbsent {
-				det = "sandbox " + ctx.sandbox + " not created yet — configured servers preload at `pi-stack run` create"
+				det = "sandbox " + ctx.sandbox + " not created yet; configured servers preload at `pi-stack run` create"
 			} else if ctx.note != "" {
-				det = ctx.note + " — reporting registration/auth only"
+				det = ctx.note + "; reporting registration/auth only"
 			}
 			mcp.checks = append(mcp.checks, check{label: "attachment", note: true, verdict: verdictUnverifiable, detail: det})
 		}
@@ -805,7 +805,7 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 // PROVENANCE, never current preload intent. Evidence-only: it never changes
 // verdict, label, or todo.
 func annotateReceiptOnlyCheck(c check, name string) check {
-	note := "sandbox provenance only (from this sandbox's receipt) — " + name + " is not part of the current cfg.MCP/pack"
+	note := "sandbox provenance only (from this sandbox's receipt); " + name + " is not part of the current cfg.MCP/pack"
 	c.evidence = c.evidenceString() + "; " + note
 	return c
 }
