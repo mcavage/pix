@@ -209,20 +209,23 @@ func mcpAttachGuidance(name string) string {
 	return "attach live with `pi-stack mcp load " + name + "` or recreate with `pi-stack run --replace`"
 }
 
-// mcpAttachCheck renders one registered server's sandbox-attachment evidence
-// from the launcher receipt, via the SHARED join row (joinMCPSandboxRow,
-// mcpjoin.go) so doctor and status derive attachment truth from ONE path.
-// The receipt records SUCCESSFUL pi-stack actions (writeCreateReceipt after a
-// create, appendLoadReceipt after a live load) — that is the ONLY thing that
-// may claim ready here. Config membership is never attachment. Anything the
-// receipt cannot vouch for (no entry, no receipt, or a receipt that is
-// corrupt / wrong schema / wrong sandbox identity) is UNVERIFIABLE with the
-// exact repair commands in the evidence — never a false claim in either
-// direction. Registration is already confirmed by the caller (mcpRegYes).
-func mcpAttachCheck(name string, ctx mcpSandboxContext) check {
+// mcpAttachCheck renders one server's sandbox-attachment evidence from the
+// launcher receipt, via the SHARED join row (joinMCPSandboxRow, mcpjoin.go)
+// so doctor and status derive attachment truth from ONE path. The receipt
+// records SUCCESSFUL pi-stack actions (writeCreateReceipt after a create,
+// appendLoadReceipt after a live load) — that is the ONLY thing that may
+// claim ready here. Config membership is never attachment. reg is the
+// CURRENT registration tri-state (mcpRegEvidenceFrom) — a positive receipt
+// claim renders ready REGARDLESS of reg (see mcpjoin.go's PRECEDENCE doc):
+// registration is a separate, present-tense fact that cannot prove a
+// sandbox was ever unloaded. Anything the receipt cannot vouch for (no
+// entry, no receipt, or a receipt that is corrupt / wrong schema / wrong
+// sandbox identity) is UNVERIFIABLE with the exact repair commands in the
+// evidence — never a false claim in either direction.
+func mcpAttachCheck(name string, ctx mcpSandboxContext, reg mcpRegEvidence) check {
 	label := name + " attachment"
 	guidance := mcpAttachGuidance(name)
-	row := joinMCPSandboxRow(name, mcpRegYes, ctx.sandbox, ctx.receipt, ctx.status)
+	row := joinMCPSandboxRow(name, reg, ctx.sandbox, ctx.receipt, ctx.status)
 	switch row.State {
 	case mcpJoinPreloaded:
 		return check{label: label, verdict: verdictReady,
@@ -236,10 +239,15 @@ func mcpAttachCheck(name string, ctx mcpSandboxContext) check {
 		return check{label: label, verdict: verdictUnverifiable,
 			detail:   fmt.Sprintf("registered, but pi-stack has no record of attaching it to %s — %s", ctx.sandbox, guidance),
 			evidence: row.Evidence}
+	case mcpJoinNotRegistered:
+		return check{label: label, verdict: verdictUnverifiable,
+			detail:   fmt.Sprintf("not currently registered, and the receipt has no positive claim for it either — attachment cannot be claimed for %s; %s", ctx.sandbox, guidance),
+			evidence: row.Evidence}
 	}
 	// mcpJoinUnverifiable: the receipt is absent, untrustworthy, or PARTIAL
 	// (valid but load-only — it proves only the loads it lists, so a name it
-	// doesn't list is unverifiable, never "positively not attached").
+	// doesn't list is unverifiable, never "positively not attached"), or
+	// registration itself is unknowable.
 	if ctx.status == sandboxMCPStateOK && ctx.receipt.IsPartial() {
 		return check{label: label, verdict: verdictUnverifiable,
 			detail: fmt.Sprintf("launcher receipt for sandbox %s is partial (load-only, no create record) — preload state unknown; %s",
@@ -249,6 +257,11 @@ func mcpAttachCheck(name string, ctx mcpSandboxContext) check {
 	if ctx.status == sandboxMCPStateAbsent {
 		return check{label: label, verdict: verdictUnverifiable,
 			detail:   fmt.Sprintf("no launcher receipt for sandbox %s — attachment unverified; %s", ctx.sandbox, guidance),
+			evidence: row.Evidence}
+	}
+	if reg == mcpRegUnknown {
+		return check{label: label, verdict: verdictUnverifiable,
+			detail:   fmt.Sprintf("registration listing unavailable for sandbox %s — attachment unverified; %s", ctx.sandbox, guidance),
 			evidence: row.Evidence}
 	}
 	return check{label: label, verdict: verdictUnverifiable,
@@ -390,19 +403,31 @@ func mcpRemoteAuthCheck(env shellEnv, name string) check {
 }
 
 // mcpServerChecks builds the check line(s) for one configured/pack server:
-// the registration+health line, plus (when registered and a sandbox context
-// exists) the receipt-backed attachment line.
+// the registration+health line, plus (whenever a sandbox receipt context
+// exists) the receipt-backed attachment line — the attachment line is added
+// REGARDLESS of the registration outcome above it, because a valid receipt's
+// positive claim must remain visible even when the server reads as currently
+// unregistered or unclassifiable (mcpjoin.go's PRECEDENCE): registration
+// truth is a separate, present-tense fact that never proves the sandbox was
+// unloaded.
 func mcpServerChecks(env shellEnv, name string, kind mcpKind, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) []check {
+	reg := mcpRegEvidenceFrom(mcpOut, mcpOK, name)
+	attach := func(cks []check) []check {
+		if ctx.mode == mcpAttachReceipt {
+			cks = append(cks, mcpAttachCheck(name, ctx, reg))
+		}
+		return cks
+	}
 	if kind == mcpKindUnknown {
 		// Fail closed BEFORE any probing: unknown classification never reads or
 		// execs the registered definition and never picks a repair command.
-		return []check{mcpUnknownKindCheck(name, mcpOut, mcpOK, sbxPresent)}
+		return attach([]check{mcpUnknownKindCheck(name, mcpOut, mcpOK, sbxPresent)})
 	}
 	if !mcpOK {
-		return []check{mcpUnavailableCheck(name, sbxPresent)}
+		return attach([]check{mcpUnavailableCheck(name, sbxPresent)})
 	}
 	if !mcpRegisteredIn(mcpOut, name) {
-		return []check{mcpNotRegisteredCheck(name, kind)}
+		return attach([]check{mcpNotRegisteredCheck(name, kind)})
 	}
 	var out []check
 	switch kind {
@@ -416,10 +441,7 @@ func mcpServerChecks(env shellEnv, name string, kind mcpKind, mcpOut string, mcp
 		out = append(out, check{label: name, verdict: verdictReady, detail: "registered",
 			evidence: "sbx mcp ls"})
 	}
-	if ctx.mode == mcpAttachReceipt {
-		out = append(out, mcpAttachCheck(name, ctx))
-	}
-	return out
+	return attach(out)
 }
 
 // retiredKeyCheck surfaces a stale retired config key (mcp_static/mcp_dynamic,
@@ -665,17 +687,20 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 	mcp := group{title: "MCP servers (via the sbx gateway)"}
 
 	// The server set: configured servers first (order preserved), then any
-	// pack-declared integration servers not already configured, deduped. gog
-	// is excluded (owned by its own group).
-	var names []string
-	seen := map[string]bool{"gog": true}
-	for _, m := range append(append([]string(nil), cfg.MCP...), packContainerNames(containers)...) {
-		if m == "" || seen[m] {
-			continue
-		}
-		seen[m] = true
-		names = append(names, m)
+	// pack-declared integration servers not already configured, then — when a
+	// sandbox receipt context exists — any name the receipt independently
+	// proves provenance for that current intent doesn't already name
+	// (Preloaded, then Loads; receipt order; deduped). This keeps a transient
+	// `run --pack` mix-in or a since-switched pack's historical MCP
+	// provenance visible on THIS sandbox. gog is excluded throughout (owned
+	// by its own dedicated group).
+	exclude := map[string]bool{"gog": true}
+	currentIntent := mcpCurrentIntentNames(cfg.MCP, containers, exclude)
+	var receipt *sandboxMCPReceipt
+	if ctx.mode == mcpAttachReceipt {
+		receipt = ctx.receipt
 	}
+	names, receiptOnly := mcpConfiguredUniverse(currentIntent, receipt, exclude)
 
 	if len(names) == 0 {
 		mcp.checks = append(mcp.checks, check{
@@ -690,7 +715,13 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 		anyRegistered := false
 		for _, m := range names {
 			kind := classifyMCPServer(m, containers, localSet, localKnown)
-			mcp.checks = append(mcp.checks, mcpServerChecks(env, m, kind, mcpOut, mcpOK, sbxPresent, ctx)...)
+			cks := mcpServerChecks(env, m, kind, mcpOut, mcpOK, sbxPresent, ctx)
+			if receiptOnly[m] {
+				for i := range cks {
+					cks[i] = annotateReceiptOnlyCheck(cks[i], m)
+				}
+			}
+			mcp.checks = append(mcp.checks, cks...)
 			if mcpOK && kind != mcpKindUnknown && mcpRegisteredIn(mcpOut, m) {
 				anyRegistered = true
 			}
@@ -716,6 +747,17 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 		mcp.checks = append(mcp.checks, unknownKeyCheck(k))
 	}
 	return mcp
+}
+
+// annotateReceiptOnlyCheck labels a check for a name that is NOT part of the
+// current cfg.MCP/pack-integration intent but appears solely because this
+// sandbox's own receipt proves it was preloaded or loaded here — sandbox
+// PROVENANCE, never current preload intent. Evidence-only: it never changes
+// verdict, label, or todo.
+func annotateReceiptOnlyCheck(c check, name string) check {
+	note := "sandbox provenance only (from this sandbox's receipt) — " + name + " is not part of the current cfg.MCP/pack"
+	c.evidence = c.evidenceString() + "; " + note
+	return c
 }
 
 // packContainerNames returns the pack-integration server names in a stable

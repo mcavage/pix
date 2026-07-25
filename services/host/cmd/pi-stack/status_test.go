@@ -49,9 +49,11 @@ func TestGatherStatus(t *testing.T) {
 	if st.Providers["google"] || st.Providers["github"] {
 		t.Errorf("providers = %v, want google+github unset", st.Providers)
 	}
-	// google + github missing -> two todos.
-	if len(st.Todos) != 2 {
-		t.Errorf("todos = %v, want 2 (google, github)", st.Todos)
+	// anthropic alone already satisfies the core model-readiness check (finding
+	// #3): a missing alternate (google) is never itself outstanding, and github
+	// is optional informational, never outstanding either -> zero todos.
+	if len(st.Todos) != 0 {
+		t.Errorf("todos = %v, want 0 (one core provider present, github is informational)", st.Todos)
 	}
 	// Only pi-stack-* sandboxes, "other-box" filtered out.
 	if len(st.Sandboxes) != 2 {
@@ -69,7 +71,9 @@ func TestRenderStatusHuman(t *testing.T) {
 	var out bytes.Buffer
 	renderStatus(cfg, "default", fakeStatusEnv(), &out, false)
 	s := out.String()
-	for _, want := range []string{"pi-stack", "services", "memory ✓", "knowledge ✗", "outstanding"} {
+	// anthropic+openai present already satisfies core model readiness (finding
+	// #3), so this fixture has nothing outstanding -> "all systems go".
+	for _, want := range []string{"pi-stack", "services", "memory ✓", "knowledge ✗", "all systems go"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("status output missing %q:\n%s", want, s)
 		}
@@ -382,6 +386,104 @@ func TestStatusGogNeedsAuth(t *testing.T) {
 	if !strings.Contains(s, "gog") || !strings.Contains(s, "needs auth (run "+gogSetupHint+")") {
 		t.Errorf("expected gog needs-auth integrations line, got:\n%s", s)
 	}
+}
+
+// TestStatusOpenAIOnlyAllSystemsGo pins finding #3: with ONLY openai present
+// (anthropic/google unset), status must still read all-systems-go — core
+// model readiness needs just one of the three, and the missing alternates
+// (plus an absent github) are informational, never outstanding.
+func TestStatusOpenAIOnlyAllSystemsGo(t *testing.T) {
+	cfg := &config.Config{}
+	env := shellEnv{
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+				return "openai\n", nil
+			}
+			return "", nil
+		},
+		dial:     func(int) bool { return false },
+		statFile: func(string) bool { return false },
+	}
+	st := gatherStatus(cfg, "default", env)
+	if len(st.Todos) != 0 {
+		t.Errorf("todos = %v, want none (openai alone satisfies core readiness)", st.Todos)
+	}
+	var out bytes.Buffer
+	renderStatus(cfg, "default", env, &out, false)
+	if !strings.Contains(out.String(), "all systems go") {
+		t.Errorf("want all-systems-go with only openai present, got:\n%s", out.String())
+	}
+}
+
+// TestStatusZeroModelKeysOneTodo pins finding #3's other half: POSITIVELY
+// zero model-provider keys confirmed -> exactly ONE core fix TODO (never a
+// per-key TODO per missing provider), and the verdict is not falsely green.
+func TestStatusZeroModelKeysOneTodo(t *testing.T) {
+	cfg := &config.Config{}
+	env := shellEnv{
+		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+				return "", nil // sbx reachable, nothing set at all
+			}
+			return "", nil
+		},
+		dial:     func(int) bool { return false },
+		statFile: func(string) bool { return false },
+	}
+	st := gatherStatus(cfg, "default", env)
+	if len(st.Todos) != 1 || st.Todos[0] != modelKeyFixCmd {
+		t.Errorf("todos = %v, want exactly [%q]", st.Todos, modelKeyFixCmd)
+	}
+	var out bytes.Buffer
+	renderStatus(cfg, "default", env, &out, false)
+	if strings.Contains(out.String(), "all systems go") {
+		t.Errorf("verdict must not be green with zero confirmed keys, got:\n%s", out.String())
+	}
+}
+
+// TestStatusProbeFailureNoProviderTodo pins finding #3: when the key probe
+// itself is unavailable (sbx absent, or `sbx secret ls` failed), status must
+// never invent a provider/model-key TODO — it does not KNOW keys are
+// missing. The distinct "can't verify" TODO still fires (covered by
+// TestStatusSbxAbsentNotAllGreen / TestStatusSbxProbeFailedTodo); this test
+// pins the NEGATIVE: no core or per-key provider command leaks in either case.
+func TestStatusProbeFailureNoProviderTodo(t *testing.T) {
+	assertNoProviderTodo := func(t *testing.T, st statusReport) {
+		t.Helper()
+		for _, tdo := range st.Todos {
+			if tdo == modelKeyFixCmd || strings.HasPrefix(tdo, "sbx secret set -g ") {
+				t.Errorf("must not invent a provider-key TODO when the probe is unavailable, got %q in %v", tdo, st.Todos)
+			}
+		}
+	}
+
+	t.Run("sbx absent", func(t *testing.T) {
+		cfg := &config.Config{}
+		env := shellEnv{
+			lookPath: func(string) (string, error) { return "", fmt.Errorf("not found") },
+			dial:     func(int) bool { return false },
+			statFile: func(string) bool { return false },
+		}
+		assertNoProviderTodo(t, gatherStatus(cfg, "default", env))
+	})
+
+	t.Run("sbx present, secret ls failed", func(t *testing.T) {
+		cfg := &config.Config{}
+		env := shellEnv{
+			lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+			run: func(name string, args ...string) (string, error) {
+				if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+					return "", fmt.Errorf("sbx secret ls boom")
+				}
+				return "", nil
+			},
+			dial:     func(int) bool { return false },
+			statFile: func(string) bool { return false },
+		}
+		assertNoProviderTodo(t, gatherStatus(cfg, "default", env))
+	})
 }
 
 func TestParseSandboxes(t *testing.T) {

@@ -126,12 +126,19 @@ type sandboxLine struct {
 
 func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport {
 	memPort, knPort := memoryClient().Port, knowledgeClient().Port
+	// currentIntent is the "current config/pack" universe — cfg.MCP plus any
+	// active-pack integration name not already there — the host-global
+	// baseline BOTH the summary list and the per-sandbox rows start from
+	// before a sandbox's own receipt extends the latter (mcpConfiguredUniverse
+	// below). Without a sandbox receipt, status/doctor stay current
+	// config/pack only.
+	currentIntent := mcpCurrentIntentNames(cfg.MCP, activeContainerMCP(cfg), nil)
 	st := statusReport{
 		Version:    version,
 		ConfigPath: config.Path(),
 		Profile:    profile,
 		Providers:  map[string]bool{},
-		MCP:        cfg.MCP,
+		MCP:        currentIntent,
 	}
 	if env.dial != nil {
 		st.Memory = env.dial(memPort)
@@ -158,18 +165,30 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 			}
 		}
 	}
+	// Providers: doctor/launch parity (finding #3) — ONE core model-readiness
+	// TODO, never a per-key TODO for a missing alternate. pi-stack only needs
+	// ONE of anthropic/openai/google to launch a model (anyModelKeyInOutput,
+	// the exact same tri-state definition doctor's modelKeyCoreCheck and
+	// run's launch gate use), so:
+	//   - sbxOK and at least one present -> ready, no core TODO (a missing
+	//     alternate is expected, never itself outstanding);
+	//   - sbxOK and POSITIVELY zero present -> exactly ONE exact fix command;
+	//   - !sbxOK -> unverifiable, no false core TODO (the sbx-reachability
+	//     TODO below already covers "status can't verify anything here").
+	// github is optional infrastructure (authorizes git ops, not the model)
+	// and is NEVER itself outstanding, whether set, absent, or unverifiable.
+	// Per-provider booleans are still populated for informational display.
 	for _, key := range []string{"anthropic", "openai", "google", "github"} {
-		set := sbxOK && grepWord(sbxOut, key)
-		st.Providers[key] = set
-		if sbxOK && !set {
-			st.Todos = append(st.Todos, "sbx secret set -g "+key)
-		}
+		st.Providers[key] = sbxOK && grepWord(sbxOut, key)
 	}
-	// When sbx could NOT verify keys every provider renders ✗ but no per-key TODO
-	// is added — so without an outstanding item the verdict would be falsely "all
-	// systems go". Distinguish the two failure modes: sbx not installed at all vs
-	// installed-but-the-probe-failed. Not emitted when sbxOK is true (the per-key
-	// TODOs cover that case).
+	if sbxOK && !anyModelKeyInOutput(sbxOut) {
+		st.Todos = append(st.Todos, modelKeyFixCmd)
+	}
+	// When sbx could NOT verify keys, no per-key/core TODO above fires — so
+	// without an outstanding item the verdict would be falsely "all systems
+	// go". Distinguish the two failure modes: sbx not installed at all vs
+	// installed-but-the-probe-failed. Not emitted when sbxOK is true (the core
+	// TODO above covers that case).
 	switch {
 	case !sbxOnPath:
 		st.Todos = append(st.Todos, "install the Docker Sandboxes CLI (sbx) to verify provider keys")
@@ -189,23 +208,15 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	// no per-sandbox inspect API). When the listing is unavailable MCPServers
 	// stays nil and render falls back to the bare names.
 	mcpLsOut, mcpLsOK := "", false
-	if len(cfg.MCP) > 0 && sbxOnPath && env.run != nil {
+	if len(currentIntent) > 0 && sbxOnPath && env.run != nil {
 		if o, err := env.run("sbx", "mcp", "ls"); err == nil {
 			mcpLsOut, mcpLsOK = o, true
 		}
 	}
-	regOf := func(name string) mcpRegEvidence {
-		if !mcpLsOK {
-			return mcpRegUnknown
-		}
-		if grepWord(mcpLsOut, name) {
-			return mcpRegYes
-		}
-		return mcpRegNo
-	}
+	regOf := func(name string) mcpRegEvidence { return mcpRegEvidenceFrom(mcpLsOut, mcpLsOK, name) }
 	if mcpLsOK {
 		registerTodoFor := statusRegisterTodoFn(cfg, env)
-		for _, m := range cfg.MCP {
+		for _, m := range currentIntent {
 			reg := regOf(m) == mcpRegYes
 			st.MCPServers = append(st.MCPServers, mcpStatusLine{Name: m, Registered: reg})
 			// A POSITIVELY unregistered server can't be spawned by the gateway — an
@@ -248,9 +259,9 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	// come from its launcher receipt joined with the registration evidence
 	// above. Discovery unavailable -> one unverifiable row per configured
 	// server (sandbox unknown), never a false "no sandboxes".
-	if len(cfg.MCP) > 0 {
+	if len(currentIntent) > 0 {
 		if !sbxLsOK {
-			for _, m := range cfg.MCP {
+			for _, m := range currentIntent {
 				st.MCPRows = append(st.MCPRows, mcpSandboxRow{
 					Name: m, Registered: regOf(m).String(), Sandbox: "",
 					State:    mcpJoinUnverifiable,
@@ -260,10 +271,21 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 		} else {
 			for _, b := range boxes {
 				receipt, rstatus := statusSandboxReceipt(env, b.Name)
-				for _, row := range joinMCPSandboxRows(cfg.MCP, regOf, b.Name, receipt, rstatus) {
+				// Per-sandbox universe (finding #2): currentIntent extended with
+				// any name THIS sandbox's own receipt independently proves
+				// provenance for — a transient `run --pack` mix-in or a
+				// since-switched pack's historical MCP stays visible here even
+				// after cfg.MCP/the active pack moved on. receiptOnly names are
+				// labeled in evidence as sandbox provenance, never current intent.
+				names, receiptOnly := mcpConfiguredUniverse(currentIntent, receipt, nil)
+				for _, row := range joinMCPSandboxRows(names, regOf, b.Name, receipt, rstatus) {
+					evidence := row.Evidence
+					if receiptOnly[row.Name] {
+						evidence += "; sandbox provenance only (from this sandbox's receipt) — " + row.Name + " is not part of the current cfg.MCP/pack"
+					}
 					st.MCPRows = append(st.MCPRows, mcpSandboxRow{
 						Name: row.Name, Registered: row.Registered.String(),
-						Sandbox: row.Sandbox, State: row.State, Evidence: row.Evidence,
+						Sandbox: row.Sandbox, State: row.State, Evidence: evidence,
 					})
 					// registered-not-attached is a POSITIVE gap (a valid receipt
 					// lacks the entry): the exact live-attach command is the TODO.

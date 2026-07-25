@@ -131,10 +131,14 @@ func TestStatusMCPRowsIdentityMismatch(t *testing.T) {
 	}
 }
 
-// TestStatusMCPNotRegisteredDominatesStaleReceipt: a valid preload receipt for
-// a server the gateway no longer registers renders not-registered (with the
-// stale claim as evidence) plus the type-correct register guidance TODO.
-func TestStatusMCPNotRegisteredDominatesStaleReceipt(t *testing.T) {
+// TestStatusMCPPositiveReceiptDominatesDeregistration pins finding #1 at the
+// status layer: a valid preload receipt for a server the gateway no longer
+// registers still renders PRELOADED — registration is a separate,
+// present-tense fact and does not prove the sandbox was ever unloaded. The
+// current "not registered" reading is carried as evidence context, and the
+// type-correct register guidance TODO still fires (an integration should
+// still be re-registered even though this sandbox's own attach is intact).
+func TestStatusMCPPositiveReceiptDominatesDeregistration(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"slack"}}
 	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "gog\n") // slack deregistered
 	env.hostBinary = func() (string, error) { return "/usr/local/bin/pi-stack-host", nil }
@@ -144,8 +148,8 @@ func TestStatusMCPNotRegisteredDominatesStaleReceipt(t *testing.T) {
 	}
 	st := gatherStatus(cfg, "default", env)
 	r := st.MCPRows[0]
-	if r.State != mcpJoinNotRegistered || !strings.Contains(r.Evidence, "stale receipt claims preloaded") {
-		t.Errorf("row = %+v, want not-registered dominating the stale receipt", r)
+	if r.State != mcpJoinPreloaded || !strings.Contains(r.Evidence, "currently not registered") {
+		t.Errorf("row = %+v, want preloaded (receipt dominates) with the dereg reading as evidence", r)
 	}
 	found := false
 	for _, tdo := range st.Todos {
@@ -262,6 +266,47 @@ func TestStatusHostGlobalNoAttachmentClaim(t *testing.T) {
 		if strings.Contains(s, banned) {
 			t.Errorf("host-global output must never claim attachment (%q):\n%s", banned, s)
 		}
+	}
+}
+
+// TestStatusMCPReceiptOnlyNameVisible pins finding #2: a sandbox's receipt
+// names a server that is NOT part of current cfg.MCP/pack (a transient `run
+// --pack` mix-in, or a since-switched pack's historical integration). It
+// must still surface in both human and --json output, evidence labeled as
+// sandbox provenance rather than current preload intent — while a name that
+// IS part of current intent carries no such label.
+func TestStatusMCPReceiptOnlyNameVisible(t *testing.T) {
+	cfg := &config.Config{MCP: []string{"gog"}} // current intent: gog only
+	env, stateDir := statusMCPEnv(t, "pi-stack-proj running /home/u/proj\n", "gog\nnotion\n")
+	if err := writeCreateReceipt(stateDir, "pi-stack-proj", []string{"gog", "notion"}, receiptClock); err != nil {
+		t.Fatal(err)
+	}
+	st := gatherStatus(cfg, "default", env)
+	rows := rowsFor(st, "pi-stack-proj")
+	notion, ok := rows["notion"]
+	if !ok {
+		t.Fatalf("expected a notion row even though it's not in cfg.MCP: %+v", st.MCPRows)
+	}
+	if notion.State != mcpJoinPreloaded {
+		t.Errorf("notion state = %q, want preloaded", notion.State)
+	}
+	if !strings.Contains(notion.Evidence, "sandbox provenance only") {
+		t.Errorf("notion evidence should be labeled sandbox provenance: %q", notion.Evidence)
+	}
+	if strings.Contains(rows["gog"].Evidence, "sandbox provenance only") {
+		t.Errorf("gog (current intent) must not carry the receipt-only label: %+v", rows["gog"])
+	}
+	var human bytes.Buffer
+	st.render(&human)
+	if !strings.Contains(human.String(), "notion") {
+		t.Errorf("human render should show notion:\n%s", human.String())
+	}
+	got, err := json.Marshal(st.MCPRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), `"notion"`) {
+		t.Errorf("json mcp_sandbox_rows should carry notion: %s", got)
 	}
 }
 

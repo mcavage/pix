@@ -240,6 +240,133 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 	}
 }
 
+// TestMCPAttachmentSurvivesDeregistration pins finding #1 at the doctor
+// layer: a valid preload receipt still renders READY even though the server
+// is now positively deregistered (`sbx mcp ls` lacks it) — registration is a
+// separate, present-tense fact and never proves the sandbox was unloaded.
+// The registration LINE itself still correctly flags the deregistration with
+// its own type-correct repair TODO; only the attachment line is dominated by
+// the receipt.
+func TestMCPAttachmentSurvivesDeregistration(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.MCP = []string{"slack"}
+	const ws = "/home/u/proj"
+	const box = "pi-stack-proj"
+	base := mcpFake()
+	base.output["sbx ls"] = box + "  running  " + ws + "\n"
+	env, stateDir := receiptEnv(t, base, ws)
+	if err := writeCreateReceipt(stateDir, box, []string{"slack"}, receiptClock); err != nil {
+		t.Fatal(err)
+	}
+	// slack is now DEREGISTERED (the `sbx mcp ls` output lacks it).
+	g := mcpGroupWith(cfg, env, "gog\n", true, true, nil, resolveMCPSandboxContext(env))
+	c := findCheck(t, g, "slack attachment")
+	if c.result() != verdictReady || !strings.Contains(c.evidence, "preloaded by pi-stack at create") {
+		t.Errorf("attach = %+v, want ready — the receipt dominates deregistration", c)
+	}
+	if !strings.Contains(c.evidence, "currently not registered") {
+		t.Errorf("evidence should still name the current dereg reading: %q", c.evidence)
+	}
+	reg := findCheck(t, g, "slack")
+	if reg.result() != verdictTodo || reg.todo != "pi-stack mcp register slack" {
+		t.Errorf("registration line = %+v, want its own register TODO (deregistration is still real)", reg)
+	}
+}
+
+// TestMCPAttachmentSurvivesUnknownRegistration: same precedence, the other
+// axis — an UNKNOWN current registration reading (the `sbx mcp ls` listing
+// itself failed) must not block a valid receipt's positive claim either.
+func TestMCPAttachmentSurvivesUnknownRegistration(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.MCP = []string{"slack"}
+	const ws = "/home/u/proj"
+	const box = "pi-stack-proj"
+	base := mcpFake()
+	base.output["sbx ls"] = box + "  running  " + ws + "\n"
+	env, stateDir := receiptEnv(t, base, ws)
+	if err := writeCreateReceipt(stateDir, box, []string{"slack"}, receiptClock); err != nil {
+		t.Fatal(err)
+	}
+	// mcpOK=false: the registration listing itself failed — unknown, not "no".
+	g := mcpGroupWith(cfg, env, "", false, true, nil, resolveMCPSandboxContext(env))
+	c := findCheck(t, g, "slack attachment")
+	if c.result() != verdictReady || !strings.Contains(c.evidence, "preloaded by pi-stack at create") {
+		t.Errorf("attach = %+v, want ready — the receipt survives an unknown registration reading", c)
+	}
+	if !strings.Contains(c.evidence, "registration unknown") {
+		t.Errorf("evidence should name the registration-unknown fact: %q", c.evidence)
+	}
+}
+
+// TestMCPGroupIncludesReceiptOnlyName pins finding #2 at the doctor layer: a
+// sandbox's own receipt names a server that is NOT part of the current
+// cfg.MCP/pack-integration intent (a transient `run --pack` mix-in, or a
+// since-switched pack's historical integration) — it must still surface,
+// evidence LABELED as sandbox provenance rather than current preload intent.
+func TestMCPGroupIncludesReceiptOnlyName(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.MCP = []string{"slack"} // current intent: slack only
+	const ws = "/home/u/proj"
+	const box = "pi-stack-proj"
+	base := mcpFake()
+	base.output["sbx ls"] = box + "  running  " + ws + "\n"
+	env, stateDir := receiptEnv(t, base, ws)
+	// The receipt preloaded BOTH slack (current intent) and notion (no longer
+	// configured).
+	if err := writeCreateReceipt(stateDir, box, []string{"slack", "notion"}, receiptClock); err != nil {
+		t.Fatal(err)
+	}
+	g := mcpGroupWith(cfg, env, "slack\nnotion\n", true, true, nil, resolveMCPSandboxContext(env))
+	if !hasCheck(g, "notion attachment") {
+		t.Fatalf("expected notion's attachment even though it's not in cfg.MCP: %+v", g)
+	}
+	attach := findCheck(t, g, "notion attachment")
+	if attach.result() != verdictReady {
+		t.Errorf("notion attach = %+v, want ready (preloaded)", attach)
+	}
+	if !strings.Contains(attach.evidence, "sandbox provenance only") {
+		t.Errorf("notion attach evidence should be labeled sandbox provenance: %q", attach.evidence)
+	}
+	reg := findCheck(t, g, "notion")
+	if !strings.Contains(reg.evidence, "sandbox provenance only") {
+		t.Errorf("notion registration-line evidence = %q, want the sandbox-provenance label", reg.evidence)
+	}
+	// slack (current intent) must NOT carry the receipt-only label.
+	slackReg := findCheck(t, g, "slack")
+	if strings.Contains(slackReg.evidence, "sandbox provenance only") {
+		t.Errorf("slack (current intent) must not carry the receipt-only label: %q", slackReg.evidence)
+	}
+}
+
+// TestMCPGroupSwitchedPackKeepsOldIntegrationVisible: the active pack has
+// SWITCHED (the current containers no longer name the old integration), but
+// this sandbox's own receipt still preloaded it — it must remain visible,
+// labeled as sandbox provenance, alongside the NEW pack's own integration.
+func TestMCPGroupSwitchedPackKeepsOldIntegrationVisible(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.MCP = nil // the old pack's integration was never persisted to cfg.MCP
+	const ws = "/home/u/proj"
+	const box = "pi-stack-proj"
+	base := mcpFake()
+	base.output["sbx ls"] = box + "  running  " + ws + "\n"
+	env, stateDir := receiptEnv(t, base, ws)
+	if err := writeCreateReceipt(stateDir, box, []string{"acme-remote"}, receiptClock); err != nil {
+		t.Fatal(err)
+	}
+	newContainers := map[string]packContainer{"newco": {RemoteURL: "https://mcp.newco.example/sse"}}
+	g := mcpGroupWith(cfg, env, "newco\n", true, true, newContainers, resolveMCPSandboxContext(env))
+	if !hasCheck(g, "acme-remote attachment") {
+		t.Fatalf("switched-pack historical MCP provenance must remain visible: %+v", g)
+	}
+	c := findCheck(t, g, "acme-remote attachment")
+	if c.result() != verdictReady || !strings.Contains(c.evidence, "sandbox provenance only") {
+		t.Errorf("acme-remote attach = %+v, want ready + sandbox-provenance label", c)
+	}
+	if !hasCheck(g, "newco") {
+		t.Errorf("expected the new pack's own integration present too: %+v", g)
+	}
+}
+
 // TestMCPHostGlobalContext: without a workspace sandbox context doctor reports
 // registration/auth plus configured-to-preload — never attachment.
 func TestMCPHostGlobalContext(t *testing.T) {

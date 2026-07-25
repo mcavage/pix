@@ -93,7 +93,7 @@ func TestJoinMCPSandboxRowStates(t *testing.T) {
 			mcpJoinUnverifiable, "receipt identity-mismatch"},
 		{"unverifiable: receipt unreadable", mcpRegYes, nil, sandboxMCPStateUnreadable,
 			mcpJoinUnverifiable, "receipt unreadable"},
-		{"unverifiable: registration listing unavailable", mcpRegUnknown, okReceipt(box, []string{"slack"}), sandboxMCPStateOK,
+		{"unverifiable: registration listing unavailable", mcpRegUnknown, okReceipt(box, nil), sandboxMCPStateOK,
 			mcpJoinUnverifiable, "registration listing unavailable"},
 	}
 	for _, tc := range cases {
@@ -112,31 +112,58 @@ func TestJoinMCPSandboxRowStates(t *testing.T) {
 	}
 }
 
-// TestJoinNotRegisteredDominatesStaleReceipt: a receipt claim never survives
-// positive deregistration — the state is not-registered, and the stale claim
-// is surfaced only as evidence.
-func TestJoinNotRegisteredDominatesStaleReceipt(t *testing.T) {
+// TestJoinNotRegisteredWhenNoPositiveClaim: with NO positive claim for the
+// name (the receipt is silent on it), a positively-confirmed deregistration
+// still wins — not-registered.
+func TestJoinNotRegisteredWhenNoPositiveClaim(t *testing.T) {
 	const box = "pi-stack-proj"
-	row := joinMCPSandboxRow("slack", mcpRegNo, box, okReceipt(box, []string{"slack"}), sandboxMCPStateOK)
+	row := joinMCPSandboxRow("slack", mcpRegNo, box, okReceipt(box, nil), sandboxMCPStateOK)
 	if row.State != mcpJoinNotRegistered {
-		t.Fatalf("state = %q, want not-registered even with a preload receipt (row %+v)", row.State, row)
-	}
-	if !strings.Contains(row.Evidence, "stale receipt claims preloaded") {
-		t.Errorf("evidence should surface the stale receipt claim: %q", row.Evidence)
+		t.Fatalf("state = %q, want not-registered when the receipt has no claim for this name (row %+v)", row.State, row)
 	}
 }
 
-// TestJoinUnknownRegistrationNeverClaimsAttached: with the listing down,
-// even a valid preload receipt yields unverifiable — provenance is stated as
-// evidence, never promoted to an attached state.
-func TestJoinUnknownRegistrationNeverClaimsAttached(t *testing.T) {
+// TestJoinPositiveReceiptDominatesDeregistration pins finding #1: a valid
+// receipt's POSITIVE claim (preloaded/loaded) determines state FIRST,
+// regardless of the current registration reading — registration is a
+// separate, present-tense fact and does not prove the sandbox was ever
+// unloaded. A confirmed "not registered right now" reading is surfaced only
+// as evidence context, never promoted over an already-observed attach.
+func TestJoinPositiveReceiptDominatesDeregistration(t *testing.T) {
+	const box = "pi-stack-proj"
+
+	preloaded := joinMCPSandboxRow("slack", mcpRegNo, box, okReceipt(box, []string{"slack"}), sandboxMCPStateOK)
+	if preloaded.State != mcpJoinPreloaded {
+		t.Fatalf("state = %q, want preloaded even though currently deregistered (row %+v)", preloaded.State, preloaded)
+	}
+	if !strings.Contains(preloaded.Evidence, "preloaded by pi-stack at create") {
+		t.Errorf("evidence should carry the receipt provenance: %q", preloaded.Evidence)
+	}
+	if !strings.Contains(preloaded.Evidence, "currently not registered") {
+		t.Errorf("evidence should still name the current registration reading: %q", preloaded.Evidence)
+	}
+
+	loaded := joinMCPSandboxRow("slack", mcpRegNo, box, okReceipt(box, nil, "slack"), sandboxMCPStateOK)
+	if loaded.State != mcpJoinLoaded {
+		t.Fatalf("state = %q, want loaded even though currently deregistered (row %+v)", loaded.State, loaded)
+	}
+}
+
+// TestJoinPositiveReceiptSurvivesUnknownRegistration pins finding #1's other
+// half: an UNKNOWN current registration reading (the listing is down) must
+// not block a valid receipt's positive claim either — the state is still
+// preloaded/loaded, with the registration-unknown fact carried as evidence.
+func TestJoinPositiveReceiptSurvivesUnknownRegistration(t *testing.T) {
 	const box = "pi-stack-proj"
 	row := joinMCPSandboxRow("slack", mcpRegUnknown, box, okReceipt(box, []string{"slack"}), sandboxMCPStateOK)
-	if row.State != mcpJoinUnverifiable {
-		t.Fatalf("state = %q, want unverifiable when registration is unknowable", row.State)
+	if row.State != mcpJoinPreloaded {
+		t.Fatalf("state = %q, want preloaded when registration is merely unknowable", row.State)
 	}
-	if !strings.Contains(row.Evidence, "receipt records preloaded by pi-stack") {
+	if !strings.Contains(row.Evidence, "preloaded by pi-stack at create") {
 		t.Errorf("evidence should carry the receipt provenance: %q", row.Evidence)
+	}
+	if !strings.Contains(row.Evidence, "registration unknown") {
+		t.Errorf("evidence should name the registration-unknown fact: %q", row.Evidence)
 	}
 }
 
