@@ -7,8 +7,8 @@
 #           tsc --noEmit, the open-core boundary, and (once it exists) the
 #           rename guard. This job IS TIMED: scripts/gate.sh enforces an
 #           local `make gate` keeps the ABSOLUTE 12 s ceiling (10 s target).
-#           GitHub's shared x86 runner is measured separately with a fixed 60 s
-#           ceiling because the same uncached Go suite takes ~42 s there. Both
+#           GitHub's shared x86 runner is measured separately with a fixed 75 s
+#           ceiling because the same uncached Go suite takes ~44 s there. Both
 #           are absolute, reviewable budgets, never "last run x 2".
 #
 #   race  — gofmt + `go test -race ./...`. NO TIMING BUDGET APPLIES HERE, at
@@ -27,13 +27,14 @@ on:
 
 jobs:
   gate:
-    name: fast gate (CI, 60s budget)
+    name: fast gate (CI, 75s budget)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
+          cache-dependency-path: services/host/go.sum
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "25.9.0"
@@ -51,8 +52,8 @@ jobs:
         env:
           # Local steady-state remains 12s/10s. GitHub's shared x86 runner
           # takes ~42s for the uncached Go suite despite a warmed build cache.
-          GATE_BUDGET_MS: "60000"
-          GATE_TARGET_MS: "50000"
+          GATE_BUDGET_MS: "75000"
+          GATE_TARGET_MS: "60000"
           GATE_SLOW_MS: "1000"
       # The total (plus every segment and every slow-test finding) is kept as a
       # build artifact even when the gate fails — that is the run you most want
@@ -74,6 +75,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
+          cache-dependency-path: services/host/go.sum
       - name: gofmt
         working-directory: services/host
         run: |

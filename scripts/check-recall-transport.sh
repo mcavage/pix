@@ -64,7 +64,9 @@ check_tree() { # <root>
 			note "$f touches systemPrompt. Recall is append-only: return { message } from before_agent_start, never { systemPrompt }."
 			strip_comments "$root/$f" | grep -nE '\bsystemPrompt\b' | sed 's/^/    /' >&2
 		fi
-		if ! strip_comments "$root/$f" | grep -qE 'return \{ message:'; then
+		# Do not use grep -q here: with pipefail it exits after the first match,
+		# the producer can receive SIGPIPE on CI, and a valid file looks absent.
+		if ! strip_comments "$root/$f" | grep -E 'return \{ message:' >/dev/null; then
 			note "$f does not return { message: … } from before_agent_start; recall is not being delivered on the message channel."
 		fi
 	done
