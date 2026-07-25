@@ -9,7 +9,7 @@ harness, [AGENTS.md](../AGENTS.md). This folder holds the deeper references.
   MCP server, read-only by default.
 - [design/packs.md](design/packs.md) — the pack design: private company context
   ships as a **pack** (plus container/host MCP integrations), never a
-  forked/recompiled tree. The build-time overlay this replaced is retired.
+  forked/recompiled tree.
 - [memory.md](memory.md) — the memory service: what it stores, how recall and
   capture work, the commands, and the trust model.
 - [../SECURITY.md](../SECURITY.md) — the trust boundary, what the sandbox does
@@ -32,8 +32,6 @@ tutorials.
   recall loop.
 - [serve-lifecycle.md](design/serve-lifecycle.md) — the `pi-stack serve` daemon
   lifecycle: lazy auto-start, the managed login service, and the hardening addendum.
-- [profiles.md](design/profiles.md) — work / personal / default profiles from one
-  host.
 - [host-mode.md](design/host-mode.md) — `pi-stack host`, the unsandboxed escape
   hatch for developing pi-stack itself (Phase 1 built, gated off by default).
   Its guardrails reduce accidents; they are NOT a security boundary.

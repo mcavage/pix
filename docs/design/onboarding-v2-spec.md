@@ -5,8 +5,7 @@
 > is the opposite: ONE thorough, hyper-opinionated upfront message that names
 > the exact workflow for the situation, then a single direct question, see
 > `skills/onboarding/SKILL.md`. Read this doc for the keys/MCP-gating
-> background, not for the host-state FIELD SCHEMA (§6's `overlay` field is
-> gone — the build-time overlay it named was retired; `provisioned` now
+> background, not for the host-state FIELD SCHEMA (`provisioned` now
 > derives from `keys.resolved && knowledge.seeded && pack.active`, see
 > `hoststate.go`), not for the onboarding flow shape, and NOT for the delivery
 > mechanism: §6's `<workspace>/.pi-stack/host-state.json` file design is ITSELF

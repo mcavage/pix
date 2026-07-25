@@ -40,7 +40,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   verifies the exact headless command the sbx gateway will spawn (not just
   interactive auth), and only then registers gog with the gateway and saves
   config, rolling the registration back if the config write fails. Replaces
-  hand-run `gog auth login` plus manual `config set`/`mcp register` as the
+  hand-running the raw auth + manual `config set`/`mcp register` steps as the
   documented path; `doctor` and `status` now point here for any gog gap.
 - **Per-sandbox MCP status, backed by launcher receipts.** `pi-stack status`
   and `pi-stack doctor` now report one of five states per configured server
