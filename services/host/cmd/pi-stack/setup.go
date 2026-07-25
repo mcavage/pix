@@ -310,6 +310,18 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 		return err
 	}
 
+	// Retired config keys (mcp_static/mcp_dynamic) are dropped by the sparse
+	// encode whenever the config is saved. Announce the drop ONCE, concisely,
+	// and perform the save right here so the migration is deterministic even if
+	// a later step fails. UNKNOWN keys are a different thing (cfg.UnknownKeys —
+	// doctor flags those) and are never swept into this notice as "retired".
+	if retired := cfg.RetiredKeys(); len(retired) > 0 {
+		fmt.Fprintf(out, "note: dropping retired config key(s) %s on save — no longer read; every configured MCP server preloads at sandbox create\n", strings.Join(retired, ", "))
+		if err := cfg.Save(); err != nil {
+			return fmt.Errorf("dropping retired config keys: %w", err)
+		}
+	}
+
 	// Provider keys come from 1Password, the only source: setupProvisionKeysFn
 	// requires `op` installed + signed in, collects+validates an op:// ref for
 	// every provider (prompting once each on a TTY; printing exact `pi-stack
@@ -358,6 +370,15 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 		}
 	}
 
+	// Local models (optional): probe Ollama ONCE, classify on the shared
+	// ModelReadiness axes, pull confirmed-missing tags only under explicit
+	// consent (--pull-models, or the interactive default-No prompt), verify
+	// once after the pulls, and receipt the outcome into launcher state. Never
+	// installs Ollama; a partial pull failure fails setup below, AFTER the
+	// truthful summary has printed.
+	models := setupLocalModels(cfg, env, in, out, interactive, opts.pullModels)
+	receiptSetupModels(env, out, models)
+
 	// Identity: read it from the HOST's git config (the sandbox can't see
 	// ~/.gitconfig) and seed it so onboarding can greet by name. The generated
 	// kickoff carries it deterministically; memory writes remain best-effort.
@@ -370,6 +391,18 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "host mode (optional, UNSANDBOXED — runs `pi` directly on the host): not enabled.")
 	fmt.Fprintln(out, "  set it up only if you need it:  pi-stack host setup")
+
+	// Completion summary: keys / knowledge / pack / local models / gog on
+	// separate readiness axes, then the core-provisioned line.
+	printSetupSummary(cfg, env, out, models)
+
+	// A partial pull failure is a real, verified gap the user consented to
+	// closing: fail setup (non-zero) with the exact retry commands. The summary
+	// above already reported it truthfully.
+	if len(models.failed) > 0 {
+		return fmt.Errorf("local model pull failed for %s — retry by hand: ollama pull %s, then re-run pi-stack setup",
+			strings.Join(models.failed, ", "), strings.Join(models.failed, "; ollama pull "))
+	}
 	return nil
 }
 
@@ -769,6 +802,13 @@ Setup flags:
   --replace                recreate an existing sandbox for DIR (sbx rm -f +
                            create) so it picks up current pack/MCP/skills and
                            receives the guided tour; harmless when absent
+  --pull-models            pull any CONFIRMED-missing configured local Ollama
+                           models (watcher/embed/bridge, deduplicated) — the
+                           ONLY consent a non-interactive setup honors (a broad
+                           --yes never downloads). Interactive setup without it
+                           asks once, defaulting to No. Setup never installs
+                           Ollama itself, and never pulls a tag it could not
+                           positively verify as missing.
 
 Host-config flags (all optional):
   --account <email>        set the Google Workspace (gog) account + enable gog

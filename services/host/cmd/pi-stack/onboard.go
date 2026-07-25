@@ -247,7 +247,12 @@ type onboardOpts struct {
 	model     string
 	apply     bool
 	assumeYes bool
-	help      bool
+	// pullModels is `pi-stack setup`'s explicit local-model download consent
+	// (S08). Parsed here because setup shares this parser; `pi-stack onboard`
+	// itself REJECTS it — onboard is the scripted host-config path and never
+	// downloads models.
+	pullModels bool
+	help       bool
 }
 
 func parseOnboardArgs(argv []string) (onboardOpts, error) {
@@ -274,6 +279,8 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 			return o, fmt.Errorf("--use-1password has been removed: 1Password is now the only provider-key source, so `pi-stack setup` always uses it")
 		case a == "--yes" || a == "-y" || a == "--non-interactive":
 			o.assumeYes = true
+		case a == "--pull-models":
+			o.pullModels = true
 		case a == "--account":
 			o.account, err = next()
 		case strings.HasPrefix(a, "--account="):
@@ -315,6 +322,10 @@ func runOnboardCmd(argv []string) {
 	if opts.help {
 		fmt.Print(onboardUsage)
 		return
+	}
+	if opts.pullModels {
+		fmt.Fprintln(os.Stderr, "pi-stack onboard: --pull-models belongs to `pi-stack setup` (onboard never downloads models)")
+		os.Exit(2)
 	}
 	env := defaultShellEnv()
 
