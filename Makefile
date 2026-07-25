@@ -107,7 +107,7 @@ SERVE_ENV ?=
 # at parse time so every target can rely on it.
 $(shell mkdir -p out)
 
-.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean launcher route require-launcher
+.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean launcher route require-launcher gate
 
 # Guard for every target that sources runtime config (SERVICES/MCP/GOG_ACCOUNT/
 # models) from config.toml: the launcher binary MUST exist, and `config get`
@@ -165,6 +165,13 @@ publish: build ## Push the built image to the registry as :$(VERSION) and :lates
 	@echo "  Discoverability tag: $(LATEST) (for manual docker pull / Hub browsing)."
 	@echo "  Kit pins :$(VERSION), so consumers + local runs resolve the version (no re-pull)."
 	@echo "  Consumers: sbx run pi-stack --kit \"git+https://github.com/$(DOCKER_USER)/pi-stack.git#dir=pi-kit\""
+
+# The SAME gate CI runs (.github/workflows/test.yml, job `gate`) — build, vet,
+# NON-race go test, node --test, tsc, open-core, and the rename guard once it
+# exists — with per-segment + per-test timings and an absolute 12s ceiling.
+# `go test -race` is deliberately NOT here: it is CI's separate untimed job.
+gate: ## Run the fast PR gate locally (timed, 12s absolute budget) — same script CI runs
+	@bash scripts/gate.sh
 
 validate: ## Validate the sandbox kit
 	sbx kit validate $(KIT)
