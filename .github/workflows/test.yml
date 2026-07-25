@@ -1,15 +1,15 @@
-# Always-on checks for every push/PR. (The publish workflow only runs on tags.)
+# Always-on checks for PRs and main. Feature-branch pushes are covered by the
+# pull_request event, so they do not launch an identical second workflow.
 #
 # TWO JOBS, TWO DIFFERENT DEALS — the split is explicit on purpose:
 #
 #   gate  — the FAST gate: build, go vet, NON-race `go test`, node --test,
 #           tsc --noEmit, the open-core boundary, and (once it exists) the
 #           rename guard. This job IS TIMED: scripts/gate.sh enforces an
-#           ABSOLUTE 12 s wall-clock ceiling (10 s soft target) over all of
-#           those segments, and prints per-package + per-test timings. The
-#           ceiling is a fixed number derived from a recorded baseline, never
-#           "last run x 2" — see the rationale block at the top of gate.sh.
-#           This is the same command a developer runs locally: `make gate`.
+#           local `make gate` keeps the ABSOLUTE 12 s ceiling (10 s target).
+#           GitHub's shared x86 runner is measured separately with a fixed 60 s
+#           ceiling because the same uncached Go suite takes ~42 s there. Both
+#           are absolute, reviewable budgets, never "last run x 2".
 #
 #   race  — gofmt + `go test -race ./...`. NO TIMING BUDGET APPLIES HERE, at
 #           all. The race detector multiplies wall time by design, so timing it
@@ -22,11 +22,12 @@ name: test
 
 on:
   push:
+    branches: ["main"]
   pull_request:
 
 jobs:
   gate:
-    name: fast gate (timed, 12s budget)
+    name: fast gate (CI, 60s budget)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -48,8 +49,10 @@ jobs:
       - name: gate
         run: bash scripts/gate.sh
         env:
-          GATE_BUDGET_MS: "12000"
-          GATE_TARGET_MS: "10000"
+          # Local steady-state remains 12s/10s. GitHub's shared x86 runner
+          # takes ~42s for the uncached Go suite despite a warmed build cache.
+          GATE_BUDGET_MS: "60000"
+          GATE_TARGET_MS: "50000"
           GATE_SLOW_MS: "1000"
       # The total (plus every segment and every slow-test finding) is kept as a
       # build artifact even when the gate fails — that is the run you most want

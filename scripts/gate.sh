@@ -175,7 +175,10 @@ node_test() {
 	rm -f "$NODE_JUNIT"
 	# Bound worker fan-out: Node 25 can strand child test processes when this
 	# suite uses the machine-wide default under redirected output.
-	node --test --test-concurrency=4 tests/*.test.mjs
+	# Some extension fixtures intentionally create timers/listeners. Node 25 can
+	# leave their worker handles alive for minutes on GitHub runners even after
+	# every test completed; force-exit terminates only after the runner's result.
+	node --test --test-force-exit --test-concurrency=4 tests/*.test.mjs
 }
 typecheck() { npx --no-install tsc --noEmit; }
 open_core() { bash scripts/check-open-core.sh; }
