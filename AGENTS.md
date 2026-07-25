@@ -97,6 +97,7 @@ The public image bakes 33 verb-named skills. Key action verbs: `plan`, `build`, 
 - `extensions/status.ts` is the canonical defensive pattern (live working-line + `/status` + stall watchdog).
 - **Never put `.d.ts` (or any non-extension `.ts`) in `extensions/`** — pi tries to load *every* `.ts` there as an extension factory and **crashes pi startup** on a declaration file (`does not export a valid factory function`). Put ambient types in `types/` (covered by `tsconfig` `include`); Node globals come from `@types/node`.
 - **Display-only injected messages:** `pi.sendMessage` defaults to `deliverAs:"steer"`, which **triggers an LLM call to deliver the message**. Fired from an idle hook (e.g. `agent_end`) it ends the conversation on an assistant turn, and reasoning models (`claude-opus-4-8`) **400 with "assistant prefill not supported"**. For pure display annotations use `deliverAs:"nextTurn"` ("does not interrupt or trigger anything") and strip them in the `context` hook by `customType`. See `extensions/timestamps.ts`.
+  - **Exception, and it is load-bearing: never strip `pix-recalled-context`.** Recall is delivered as an append-only `before_agent_start` message (`lib/recall-message.ts`), and removing an already-sent message moves the provider's prefix-cache divergence point BACKWARDS — strictly worse than the system-prompt rewrite it replaced. Enforced by `scripts/check-recall-transport.sh` and `tests/recall-context-hook.test.mjs`.
 
 ## Writing skills (`skills/<name>/SKILL.md`)
 
