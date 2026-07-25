@@ -396,7 +396,9 @@ func runOnboardCmd(argv []string) {
 func onboardReportReadiness(env shellEnv, out io.Writer) {
 	sbxOut, sbxOK := "", false
 	if _, err := env.lookPath("sbx"); err == nil {
-		if o, err := env.run("sbx", "secret", "ls"); err == nil {
+		// BOUNDED (probeRun): a hung `sbx secret ls` leaves sbxOK=false — the
+		// report degrades to no key claims and never wedges onboard.
+		if o, timedOut, err := probeRun(env, "sbx", "secret", "ls"); err == nil && !timedOut {
 			sbxOut, sbxOK = o, true
 		}
 	}

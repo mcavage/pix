@@ -79,8 +79,9 @@ func runLs(argv []string) {
 			fatalSbx(fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to list sandboxes"))
 		}
 	}
-	out, err := env.run("sbx", "ls")
-	if err != nil {
+	// BOUNDED (probeRun): a hung `sbx ls` fails with a message, never wedges.
+	out, timedOut, err := probeRun(env, "sbx", "ls")
+	if timedOut || err != nil {
 		fatalSbx(fmt.Errorf("sbx ls failed: %v", err))
 	}
 	boxes := parsePiStackBoxes(out)
@@ -142,8 +143,11 @@ func runRm(argv []string) {
 	}
 
 	if all {
-		out, err := env.run("sbx", "ls")
-		if err != nil {
+		// BOUNDED (probeRun): the --all discovery listing is read-only; a hung
+		// sbx fails with a message rather than wedging (the `sbx rm -f` calls
+		// below are mutating lifecycle commands and stay on env.run).
+		out, timedOut, err := probeRun(env, "sbx", "ls")
+		if timedOut || err != nil {
 			fatalSbx(fmt.Errorf("sbx ls failed: %v", err))
 		}
 		keepSet := map[string]bool{}

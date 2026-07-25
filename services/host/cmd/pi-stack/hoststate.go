@@ -297,8 +297,10 @@ func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
 func buildTrustedHostState(cfg *config.Config, env shellEnv, packOverride string) hostState {
 	sbxOut, sbxOK := "", false
 	if env.lookPath != nil {
-		if _, err := env.lookPath("sbx"); err == nil && env.run != nil {
-			if o, rerr := env.run("sbx", "secret", "ls"); rerr == nil {
+		if _, err := env.lookPath("sbx"); err == nil {
+			// BOUNDED (probeRun): a hung `sbx secret ls` leaves sbxOK=false —
+			// keys stay unverified, and setup's payload build never wedges.
+			if o, timedOut, rerr := probeRun(env, "sbx", "secret", "ls"); rerr == nil && !timedOut {
 				sbxOut, sbxOK = o, true
 			}
 		}

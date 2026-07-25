@@ -130,7 +130,7 @@ func trustedExecPath(env shellEnv, tok, base string) (string, bool) {
 // canonical paths, so the caller execs the TRUSTED tokens, never the
 // registered spelling. Only that normalized spawn is ever executed as a probe.
 func trustedGogSpawn(env shellEnv, argv []string) ([]string, bool) {
-	inner, ok := gogSpawnArgv(argv)
+	inner, ok := gogSpawnArgv(env, argv)
 	if !ok {
 		return nil, false
 	}

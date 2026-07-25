@@ -59,8 +59,8 @@ var gogHardenedFlags = []string{"--gmail-no-send", "--wrap-untrusted", "--readon
 
 // gogMissingHardenedFlags returns the hardened read-only flags absent from the
 // registered gog spawn's INNER argv (after unwrapping any op-run prefix).
-func gogMissingHardenedFlags(argv []string) []string {
-	inner, ok := gogSpawnArgv(argv)
+func gogMissingHardenedFlags(env shellEnv, argv []string) []string {
+	inner, ok := gogSpawnArgv(env, argv)
 	if !ok {
 		return append([]string(nil), gogHardenedFlags...)
 	}
@@ -154,7 +154,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 		// exact runtime flags that block writes. Their absence is a VERIFIED gap
 		// (the runtime backstop is off), fixed by re-registering the hardened
 		// command — via the guided setup, never a raw recipe.
-		if missing := gogMissingHardenedFlags(argv); len(missing) > 0 {
+		if missing := gogMissingHardenedFlags(env, argv); len(missing) > 0 {
 			g.checks = append(g.checks, check{label: "read-only", verdict: verdictTodo,
 				detail:   "registered command is missing hardened read-only flags: " + strings.Join(missing, " "),
 				evidence: "registered argv lacks " + strings.Join(missing, " "),
@@ -374,12 +374,12 @@ func registeredGogCommand(env shellEnv) ([]string, bool) {
 		return nil, false
 	}
 	if out, timedOut, err := probeRun(env, "sbx", "mcp", "get", "gog"); err == nil && !timedOut {
-		if argv, ok := parseGogCommandLine(out); ok {
+		if argv, ok := parseGogCommandLine(env, out); ok {
 			return argv, true
 		}
 	}
 	if out, timedOut, err := probeRun(env, "sbx", "mcp", "ls", "-o", "json"); err == nil && !timedOut {
-		if argv, ok := parseGogCommandJSON(out); ok {
+		if argv, ok := parseGogCommandJSON(env, out); ok {
 			return argv, true
 		}
 	}
@@ -397,7 +397,7 @@ var gogCommandLineRe = regexp.MustCompile(`(?im)^\s*command\s*[:=]\s*(.+?)\s*$`)
 // `op`, `op run`, or the command line when the args landed on a separate line —
 // returns (nil,false) so registeredGogCommand falls through to the structured
 // JSON parser rather than probing a truncated/wrong argv.
-func parseGogCommandLine(out string) ([]string, bool) {
+func parseGogCommandLine(env shellEnv, out string) ([]string, bool) {
 	m := gogCommandLineRe.FindStringSubmatch(out)
 	if len(m) < 2 {
 		return nil, false
@@ -411,7 +411,7 @@ func parseGogCommandLine(out string) ([]string, bool) {
 		return nil, false
 	}
 	fields := strings.Fields(cmd)
-	if !gogCommandComplete(fields) {
+	if !gogCommandComplete(env, fields) {
 		return nil, false
 	}
 	return fields, true
@@ -421,12 +421,14 @@ func parseGogCommandLine(out string) ([]string, bool) {
 // can be registered TWO ways (see mcp.go serverCmd/addArgs): op-wrapped
 // (`op run --env-file=… -- gog … mcp …`, when op-refs is present) or BARE
 // (`gog … mcp …`, when op-refs is absent — 1Password is optional for gog). A
-// command is complete in EITHER form: it resolves (unwrapping any `op run … --`
-// prefix) to a binary whose basename is `gog` and whose args carry the `mcp`
-// subcommand. A partial capture (`op`, `op run`, args on a separate line) does
-// not, so the caller keeps looking rather than probe a truncated command.
-func gogCommandComplete(argv []string) bool {
-	_, ok := gogSpawnArgv(argv)
+// command is complete in EITHER form: it resolves (unwrapping ONLY the exact
+// launcher-generated `op run --no-masking --env-file=<refs> --` prefix — see
+// unwrapOpRun) to a binary whose basename is `gog` and whose args carry the
+// `mcp` subcommand. A partial capture (`op`, `op run`, args on a separate
+// line) or a wrapper that deviates from the launcher grammar does not, so the
+// caller keeps looking rather than probe a truncated or drifted command.
+func gogCommandComplete(env shellEnv, argv []string) bool {
+	_, ok := gogSpawnArgv(env, argv)
 	return ok
 }
 
@@ -435,13 +437,14 @@ func gogCommandComplete(argv []string) bool {
 // form (`gog … mcp …`). It returns (cmd,true) when the resolved binary's
 // basename is `gog` and its args contain the `mcp` subcommand; (nil,false)
 // otherwise. Guards against index-out-of-range on short/empty argv.
-func gogSpawnArgv(argv []string) ([]string, bool) {
+func gogSpawnArgv(env shellEnv, argv []string) ([]string, bool) {
 	if len(argv) == 0 {
 		return nil, false
 	}
-	// Unwrap ONLY a trusted `op run … -- <cmd…>` prefix; a `--` behind a non-op
-	// argv[0] is rejected (the probe execs argv[0] verbatim).
-	cmd, ok := unwrapOpRun(argv)
+	// Unwrap ONLY the exact launcher-generated `op run … --` wrapper grammar;
+	// anything else (foreign argv[0], other op subcommands, alternate env
+	// files, extra options) is rejected — the probe execs these tokens.
+	cmd, ok := unwrapOpRun(env, argv)
 	if !ok {
 		return nil, false
 	}
@@ -462,7 +465,7 @@ func gogSpawnArgv(argv []string) ([]string, bool) {
 // parseGogCommandJSON extracts the registered argv from `sbx mcp ls -o json`
 // (an array of {name, command, args}). Returns (nil,false) when there is no gog
 // entry or the JSON doesn't parse.
-func parseGogCommandJSON(out string) ([]string, bool) {
+func parseGogCommandJSON(env shellEnv, out string) ([]string, bool) {
 	var servers []struct {
 		Name    string   `json:"name"`
 		Command string   `json:"command"`
@@ -479,7 +482,7 @@ func parseGogCommandJSON(out string) ([]string, bool) {
 		// Same completeness bar as the line form: a JSON entry that does not resolve
 		// to a `gog … mcp …` spawn (op-wrapped or bare) is not a confident command,
 		// so return not-found and let doctor take the honest best-effort fallback.
-		if !gogCommandComplete(argv) {
+		if !gogCommandComplete(env, argv) {
 			return nil, false
 		}
 		return argv, true

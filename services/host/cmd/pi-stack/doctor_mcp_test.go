@@ -650,7 +650,11 @@ func TestMCPCanonicalExecutableGate(t *testing.T) {
 	t.Run("op-wrapped canonical spawn execs the canonical op token", func(t *testing.T) {
 		f := mcpFake()
 		f.present["op"] = true
-		reg := "/usr/bin/op run --env-file=/x -- /usr/local/bin/pi-stack-host mcp slack"
+		// The wrapper must be the exact launcher grammar against the RESOLVED
+		// op-refs path (PI_STACK_CONFIG's dir) — anything else is rejected.
+		f.envVars = map[string]string{"PI_STACK_CONFIG": "/x/config.toml"}
+		f.statFile = map[string]bool{"/x/op-refs.env": true}
+		reg := "/usr/bin/op run --no-masking --env-file=/x/op-refs.env -- /usr/local/bin/pi-stack-host mcp slack"
 		f.output["sbx mcp get slack"] = "name: slack\ncommand: " + reg + "\n"
 		var execd string
 		env := f.env()

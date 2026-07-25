@@ -372,8 +372,17 @@ func (m mcpRegistrar) execArgv(name string) []string {
 	if m.opRefs == "" {
 		return cmd
 	}
-	wrapped := []string{m.op, "run", "--no-masking", "--env-file=" + m.opRefs, "--"}
-	return append(wrapped, cmd...)
+	return append(opRunWrapPrefix(m.op, m.opRefs), cmd...)
+}
+
+// opRunWrapPrefix is the ONE op-run wrapper grammar the launcher ever
+// generates: `<op> run --no-masking --env-file=<refs> --`. It is shared
+// between the generator (execArgv above) and the recognizer (doctor.go's
+// unwrapOpRun), so what doctor trusts to unwrap can never drift from what
+// registration actually writes — any other op subcommand, option set,
+// ordering, or env file is by definition not launcher-generated.
+func opRunWrapPrefix(op, refs string) []string {
+	return []string{op, "run", "--no-masking", "--env-file=" + refs, "--"}
 }
 
 // rawAddArgs builds a literal `sbx mcp add <name> --command <argv[0]> --args

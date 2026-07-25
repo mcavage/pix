@@ -811,11 +811,10 @@ func parseCount(s string) int {
 // is the DISPLAY-only accessor used by `task ls`; destructive decisions use the
 // tri-state probeTaskSandbox instead, which never conflates errored with absent.
 func taskSandboxStatus(env shellEnv, name string) string {
-	if env.run == nil {
-		return ""
-	}
-	out, err := env.run("sbx", "ls")
-	if err != nil {
+	// BOUNDED (probeRun): a hung `sbx ls` yields "" (no display status), it
+	// never wedges `task ls`.
+	out, timedOut, err := probeRun(env, "sbx", "ls")
+	if timedOut || err != nil {
 		return ""
 	}
 	for _, line := range strings.Split(out, "\n") {
@@ -846,13 +845,11 @@ const (
 // probeTaskSandbox classifies name from `sbx ls` via the seam into one of
 // {running, stopped, absent, unknown}. A non-zero/errored sbx invocation (or a
 // missing runner) is UNKNOWN, never absent, so a failed probe can never be read
-// as "the sandbox was never created".
+// as "the sandbox was never created". BOUNDED (probeRun): a hung sbx times out
+// to UNKNOWN — run/setup/task preflights degrade honestly instead of wedging.
 func probeTaskSandbox(env shellEnv, name string) sbxState {
-	if env.run == nil {
-		return sbxUnknown
-	}
-	out, err := env.run("sbx", "ls")
-	if err != nil {
+	out, timedOut, err := probeRun(env, "sbx", "ls")
+	if timedOut || err != nil {
 		return sbxUnknown
 	}
 	for _, line := range strings.Split(out, "\n") {

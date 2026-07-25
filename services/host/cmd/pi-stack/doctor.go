@@ -176,36 +176,81 @@ func defaultShellEnv() shellEnv {
 	}
 }
 
-// unwrapOpRun returns the effective command doctor would trust to exec. With no
-// `--` it is argv itself (a bare command). With a `--`, it unwraps the prefix
-// ONLY when argv[0] is an absolute `op` binary (the real command runs via op,
-// which is trusted); a `--` behind any other argv[0] returns ok=false so a
-// hostile prefix is never exec'd.
-func unwrapOpRun(argv []string) ([]string, bool) {
+// unwrapOpRun returns the effective command doctor would trust to exec. With
+// no `--` it is argv itself (a bare command). With a `--`, it unwraps ONLY the
+// EXACT wrapper grammar the launcher generates (mcpRegistrar.execArgv via the
+// shared opRunWrapPrefix):
+//
+//	<canonical op> run --no-masking --env-file=<launcher op-refs.env> -- <cmd…>
+//
+// token for token: a canonical op executable (trustedExecPath — a bare `op`
+// or lookPath's exact answer, never a look-alike path), the literal `run`
+// subcommand (never signin/plugin/anything else), the exact generated option
+// set in the generated order (no missing/extra/reordered options; the
+// --env-file value must Clean-equal resolveOpRefs' answer — the same file
+// registration wires — and the launcher only ever emits the one-token
+// `--env-file=<refs>` form, so the two-token form is rejected), EXACTLY one
+// `--`, and a non-empty inner command. Anything else returns ok=false so a
+// hostile or drifted prefix is never exec'd — the caller reports the
+// registration unverifiable instead of probing it.
+func unwrapOpRun(env shellEnv, argv []string) ([]string, bool) {
 	if len(argv) == 0 {
 		return nil, false
 	}
 	sep := -1
 	for i, a := range argv {
-		if a == "--" {
-			sep = i
-			break
+		if a != "--" {
+			continue
 		}
+		if sep >= 0 {
+			return nil, false // multiple separators: never launcher-generated
+		}
+		sep = i
 	}
 	if sep < 0 {
-		return argv, true
+		return argv, true // bare command, nothing to unwrap
 	}
-	// Only a `op run … -- <cmd>` wrapper is trusted to be unwrapped: the probe
-	// execs argv[0] verbatim, so a `--` behind a FOREIGN argv[0] (e.g.
-	// `/tmp/evil -- pi-stack-host mcp slack`) would run /tmp/evil. Requiring
-	// basename "op" blocks that. (Residual, accepted: a registration whose argv[0]
-	// is a binary literally named `op` on the exec path would pass — but that
-	// presupposes an attacker who can already write arbitrary sbx registrations,
-	// i.e. owns the gateway, which is outside doctor's threat model.)
-	if filepath.Base(argv[0]) != "op" {
+	inner := argv[sep+1:]
+	if len(inner) == 0 {
 		return nil, false
 	}
-	return argv[sep+1:], true
+	// The wrapper must run the SAME op binary env.lookPath resolves — a
+	// foreign argv[0] (`/tmp/evil -- …`) or a look-alike `/tmp/op` is never
+	// unwrapped, because the probe would exec that token verbatim.
+	opTok, ok := trustedExecPath(env, argv[0], "op")
+	if !ok {
+		return nil, false
+	}
+	// No resolvable launcher refs file means no legitimate op-run wrapper can
+	// exist for this host — fail closed rather than bless an unknown env file.
+	refs := resolveOpRefs(env)
+	if refs == "" {
+		return nil, false
+	}
+	want := opRunWrapPrefix(opTok, refs)
+	prefix := argv[:sep+1]
+	if len(prefix) != len(want) {
+		return nil, false
+	}
+	const envFileOpt = "--env-file="
+	for i, tok := range prefix {
+		switch {
+		case i == 0:
+			// argv[0] already vetted canonical above.
+		case strings.HasPrefix(want[i], envFileOpt):
+			// Compare the env-file PATH cleaned, so a `/a//b` spelling can
+			// neither dodge nor spuriously fail the equality.
+			val, cut := strings.CutPrefix(tok, envFileOpt)
+			if !cut || filepath.Clean(val) != filepath.Clean(refs) {
+				return nil, false
+			}
+		default:
+			if tok != want[i] {
+				return nil, false
+			}
+		}
+	}
+	return inner, true
 }
 
 // enabled reports whether a service name is in the configured SERVICES set.

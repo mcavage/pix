@@ -397,8 +397,10 @@ func ensureProviderKeysFromRefsLocked(env shellEnv, out io.Writer) {
 	if !exists {
 		return
 	}
-	sbxOut, err := env.run("sbx", "secret", "ls")
-	if err != nil {
+	// BOUNDED (probeRun): a hung `sbx secret ls` times out and aborts the sync
+	// — can't tell what's set, don't guess, never touch op or `sbx secret set`.
+	sbxOut, timedOut, err := probeRun(env, "sbx", "secret", "ls")
+	if timedOut || err != nil {
 		return // can't tell what's set; don't guess
 	}
 	firstRefs := firstProviderKeyRefs(content)
