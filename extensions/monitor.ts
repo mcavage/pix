@@ -46,6 +46,64 @@ const MAX_BACKOFF_MS = 30_000; // cap ~30s per architecture.md 3.D
 const QUIT_FLUSH_TIMEOUT_MS = 1500;
 const QUIT_FLUSH_POLL_MS = 20;
 
+// ─── Retry clock seam ──────────────────────────────────────────────────────
+// Every time-dependent decision in the send path — the backoff schedule, the
+// retry timer, the `disabledUntil` window, the socket timeout and the
+// quit-flush poll/deadline — goes through ONE injectable object instead of
+// reaching for Date.now()/setTimeout directly. Production installs
+// PRODUCTION_RETRY_CLOCK, which is exactly the constants above driving real
+// timers with the same ref/unref semantics as before (the retry timer is
+// ref'd, so a pending retry still holds the process; `sleep` is unref'd, so
+// the quit-flush poll never keeps it alive on its own) — runtime behavior is
+// unchanged. A test installs a manually-pumped clock instead and asserts on
+// the SCHEDULE itself (was a retry armed? was it disarmed on shutdown?)
+// rather than sleeping past a real 500ms backoff.
+export interface RetryClock {
+	/** Wall clock; only feeds the `disabledUntil` backoff window. */
+	now(): number;
+	/** Arms the retry timer. Ref'd in production: a pending retry keeps the queue alive. */
+	setTimer(fn: () => void, ms: number): unknown;
+	/** Disarms a handle returned by setTimer. Must tolerate a stale/fired handle. */
+	clearTimer(handle: unknown): void;
+	/** Unref'd delay used by the quit-flush poll + deadline. */
+	sleep(ms: number): Promise<void>;
+	postTimeoutMs: number;
+	baseBackoffMs: number;
+	maxBackoffMs: number;
+	quitFlushTimeoutMs: number;
+	quitFlushPollMs: number;
+}
+
+export const PRODUCTION_RETRY_CLOCK: RetryClock = Object.freeze({
+	now: () => Date.now(),
+	setTimer: (fn: () => void, ms: number) => setTimeout(fn, ms),
+	clearTimer: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+	sleep: (ms: number) =>
+		new Promise<void>((resolve) => {
+			const t = setTimeout(resolve, ms);
+			t.unref?.(); // never keep the process alive on its own
+		}),
+	postTimeoutMs: POST_TIMEOUT_MS,
+	baseBackoffMs: BASE_BACKOFF_MS,
+	maxBackoffMs: MAX_BACKOFF_MS,
+	quitFlushTimeoutMs: QUIT_FLUSH_TIMEOUT_MS,
+	quitFlushPollMs: QUIT_FLUSH_POLL_MS,
+});
+
+let activeRetryClock: RetryClock = PRODUCTION_RETRY_CLOCK;
+
+/**
+ * Swap the retry clock (test seam). Any field left out keeps its production
+ * value, and calling it with nothing (or null) restores the production clock
+ * wholesale. The active clock is captured ONCE per extension instantiation,
+ * so a swap must happen BEFORE the default export is called — an already-
+ * running instance keeps the clock it was built with.
+ */
+export function setRetryClock(clock?: Partial<RetryClock> | null): RetryClock {
+	activeRetryClock = clock ? { ...PRODUCTION_RETRY_CLOCK, ...clock } : PRODUCTION_RETRY_CLOCK;
+	return activeRetryClock;
+}
+
 // Module-level: shared across every extension instance in this process. A
 // session switch resets sessionId/turnId/etc via session_start, but seq keeps
 // climbing per architecture.md 3.D — "seq = module-level counter per event".
@@ -795,6 +853,9 @@ export default function (pi: ExtensionAPI) {
 	safe(() => {
 		if (!MONITOR_ENABLED) return; // PI_STACK_MONITOR=0: cheap no-op, register nothing
 
+		// Captured once per instance so a mid-session swap can't half-apply.
+		const clock = activeRetryClock;
+
 		let sessionId = "";
 		let turnSeqCounter = 0;
 		let currentTurnId = "";
@@ -822,8 +883,8 @@ export default function (pi: ExtensionAPI) {
 		const queue: QueueItem[] = [];
 		let flushing = false;
 		let disabledUntil = 0;
-		let backoffMs = BASE_BACKOFF_MS;
-		let retryTimer: ReturnType<typeof setTimeout> | null = null;
+		let backoffMs = clock.baseBackoffMs;
+		let retryTimer: unknown = null;
 		let inFlightReq: ClientRequest | null = null;
 		// R2-1: set by session_shutdown, BEFORE the timer is cleared / the
 		// in-flight request is aborted. Every entry point that could keep this
@@ -842,8 +903,8 @@ export default function (pi: ExtensionAPI) {
 		let shuttingDown = false;
 
 		function clearRetryTimer() {
-			if (retryTimer) {
-				clearTimeout(retryTimer);
+			if (retryTimer !== null) {
+				clock.clearTimer(retryTimer);
 				retryTimer = null;
 			}
 		}
@@ -851,7 +912,7 @@ export default function (pi: ExtensionAPI) {
 		function scheduleRetry(delayMs: number) {
 			if (shuttingDown) return; // R2-1: no more retries once torn down.
 			clearRetryTimer();
-			retryTimer = setTimeout(() => {
+			retryTimer = clock.setTimer(() => {
 				retryTimer = null;
 				kick();
 			}, Math.max(0, delayMs));
@@ -870,12 +931,7 @@ export default function (pi: ExtensionAPI) {
 			void drain();
 		}
 
-		function sleep(ms: number): Promise<void> {
-			return new Promise((resolve) => {
-				const t = setTimeout(resolve, ms);
-				t.unref?.(); // never keep the process alive on its own
-			});
-		}
+		const sleep = (ms: number): Promise<void> => clock.sleep(ms);
 
 		/**
 		 * Waits (polling) for the queue to fully drain AND nothing to be
@@ -892,14 +948,14 @@ export default function (pi: ExtensionAPI) {
 		async function drainAll(): Promise<void> {
 			while (queue.length > 0 || flushing) {
 				if (!flushing) kick();
-				await sleep(QUIT_FLUSH_POLL_MS);
+				await sleep(clock.quitFlushPollMs);
 			}
 		}
 
 		async function drain() {
 			try {
 				while (true) {
-					if (Date.now() < disabledUntil) return; // host TUI likely not running; skip cheaply, no I/O
+					if (clock.now() < disabledUntil) return; // host TUI likely not running; skip cheaply, no I/O
 					const item = queue[0];
 					if (!item) return;
 					// Reserve the item for the duration of the send by removing it from
@@ -910,7 +966,7 @@ export default function (pi: ExtensionAPI) {
 					queue.shift();
 					let ok = false;
 					try {
-						await httpPostRaw(`${MONITOR_URL}${item.path}`, item.text, POST_TIMEOUT_MS, (req) => {
+						await httpPostRaw(`${MONITOR_URL}${item.path}`, item.text, clock.postTimeoutMs, (req) => {
 							inFlightReq = req;
 						});
 						ok = true;
@@ -920,7 +976,7 @@ export default function (pi: ExtensionAPI) {
 						inFlightReq = null;
 					}
 					if (ok) {
-						backoffMs = BASE_BACKOFF_MS; // reset backoff on success
+						backoffMs = clock.baseBackoffMs; // reset backoff on success
 						safe(() => item.onSent?.());
 					} else {
 						// R2-1: a failure observed AFTER session_shutdown (the abort below
@@ -936,12 +992,12 @@ export default function (pi: ExtensionAPI) {
 						// the one retry logic is trying to protect.
 						queue.unshift(item);
 						if (queue.length > MAX_QUEUE) queue.pop();
-						disabledUntil = Date.now() + backoffMs;
-						backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+						disabledUntil = clock.now() + backoffMs;
+						backoffMs = Math.min(backoffMs * 2, clock.maxBackoffMs);
 						// A quiet agent (no new events) would otherwise never call kick()
 						// again, so backoff needs its own timer to actually retry later
 						// instead of just sitting disabled forever (R1-6).
-						scheduleRetry(disabledUntil - Date.now());
+						scheduleRetry(disabledUntil - clock.now());
 						return;
 					}
 				}
@@ -1255,7 +1311,7 @@ export default function (pi: ExtensionAPI) {
 					// provider_response just queued for this exact hook) to finish
 					// sending. Bounded so an unreachable monitor host can never hang
 					// process exit.
-					await Promise.race([drainAll(), sleep(QUIT_FLUSH_TIMEOUT_MS)]);
+					await Promise.race([drainAll(), sleep(clock.quitFlushTimeoutMs)]);
 				} else {
 					// R2-1: set shuttingDown FIRST, before clearing the timer or
 					// aborting the in-flight request — enqueue/kick/scheduleRetry and
