@@ -1,7 +1,7 @@
 ---
 description: Developer docs, tutorials, and sample code that actually runs. Discover-evaluate-adopt-advocate funnel, developer journey mapping, docs as the front door, sample-first, principle of least surprise, meet developers where they are.
 tools: read, write, edit, bash, grep, find, ls
-intent: advisory
+intent: writing
 thinking: high
 max_turns: 30
 ---

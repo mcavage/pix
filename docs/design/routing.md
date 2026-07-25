@@ -34,23 +34,40 @@ The policy is not "pick the single best model." It is a deliberate **tiered,
 multi-vendor crew**, encoded in `policy.json` (see `pi-stack agent ls` for the
 live map):
 
-- **Frontier** — `max-accuracy` (`deep`) → Claude Fable 5 (the one genuinely-hard
-  problem, no cap); `strategy` (`architect`, `product-manager`) → Claude Opus 4.8
-  (accuracy-critical judgment under an Opus-tier cap).
-- **Workhorse (Sonnet 5)** — `code` (`engineer`, `designer`) and `advisory` (the
-  specialist crew: sre, dx, finance, legal, devrel, growth, ux, enterprise-admin,
-  enrich): strong, cost-effective, kept on the primary production vendor.
-- **Cross-vendor adversaries** — `review` → OpenAI GPT-5.6 Sol and `red-team`
-  (`security-lead`) → Google Gemini 3.1 Pro. Their job is to independently check
-  Claude-authored work, so they are pinned OFF Anthropic (and off each other's
-  vendor) via `providers:` allowlists, so their blind spots genuinely differ.
+- **Orchestrator** — `overlord` (the top-level interactive session) → OpenAI
+  GPT-5.6 Sol. Pinned OFF Anthropic on purpose: Claude is the weak writer, and a
+  same-vendor orchestrator shares its authors' blind spots. Opt-in per host via
+  the shipped `run_intent` default (`pi-stack config set run_intent <intent>` to
+  change it, e.g. `strategy` for Opus on an Anthropic-only host; `none` opts out
+  to pi's own default model).
+- **Frontier** — `strategy` (`architect`, `product-manager`) and `max-accuracy`
+  (`deep`) → Claude Opus 5 (the 2026-07-24 insta-upgrade from Opus 4.8; an Opus-tier
+  cost cap keeps the pricier Fable out of both). Fable 5 is no longer a general
+  frontier pick — it is reserved for the one role that earns it (security, below).
+- **Workhorse (Sonnet 5)** — `code` (`engineer`, `designer`): the production code
+  vendor, best value under a per-task cap.
+- **Advisors (Opus 5)** — `advisory` (finance, legal, sre, dx-consultant,
+  enterprise-admin): high-leverage judgment where a wrong recommendation is
+  expensive, so the Anthropic flagship, not the workhorse.
+- **Prose (Gemini)** — `writing` (`ux-copywriter`, `devrel`, `growth-marketing`,
+  `enrich`) → Gemini 3.6 Flash. Pinned OFF Anthropic because Claude is the weak
+  writer; cheapest Google model over a quality floor (bump to Gemini 3.1 Pro for
+  higher-stakes prose).
+- **Cross-vendor reviewer** — `review` (`review`, `dx-impatient`) → Google
+  Gemini 3.1 Pro. A THIRD vendor, distinct from both the OpenAI orchestrator and
+  the Anthropic authors it checks, so its blind spots genuinely differ.
+- **Security frontier** — `red-team` (`security-lead`) → Claude Fable 5. The one
+  role that earns the frontier model regardless of cost: getting a security review
+  wrong is the most expensive miss in the crew.
 - **Cheap / high-volume** — `breadth` (`fanout`) → Gemini 3.1 Flash-Lite and
-  `verify` (`qa-lead`) → Claude Haiku 4.5.
+  `verify` (`qa-lead`) → Gemini 3.6 Flash (Haiku was the dumb pick for fast QA).
 - **Local** — `ollama/qwen3.5:9b` is registered and evaluable: a current Apache-2.0 all-rounder that fits a 16GB machine (~6.6GB), free + private,
   but slower, so it wins nothing by default and serves as an offline fallback.
 
 A crew task fans out across three cloud vendors plus a local option, matched to
-the leverage of the role — not a wall of one model. The registry/scorecard are
+the leverage of the role — not a wall of one model. Vendor spread after the
+2026-07-24 Opus 5 reshape: **OpenAI** orchestrates (overlord), **Anthropic** does
+code/strategy/advisory/security, **Google** does review/writing/verify/breadth. The registry/scorecard are
 seeded from LIVE model cards + pricing (see the `model-refresh` skill), not from
 training-data guesses; retarget any of it by editing `policy.json`/`scorecard.json`
 and re-running `route compile`; no agent files change. `pi-stack agent ls` prints

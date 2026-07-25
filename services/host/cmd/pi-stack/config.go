@@ -116,6 +116,8 @@ func configValue(cfg *config.Config, key string) (string, error) {
 		return cfg.MemoryEmbedModel, nil
 	case "ollama_bridge_model":
 		return cfg.OllamaBridgeModel, nil
+	case "run_intent":
+		return cfg.RunIntent, nil
 	case "pack":
 		return cfg.Pack, nil
 	case "host.enabled":
@@ -183,6 +185,10 @@ const configKeysHelp = `keys:
   memory_watcher_model <m>  ollama model for fact capture (host, resident)
   memory_embed_model <m>    ollama model for semantic recall (host)
   ollama_bridge_model <m>   local model the sandbox exposes to pi + the router
+  run_intent <intent>       default routing intent for the top-level interactive
+                            session (the "overlord"); resolves the session model
+                            when neither --model nor --intent is passed. Use
+                            'none' to opt out to pi's own default model
   pack <path>               active pack dir (run mounts its skills + knowledge);
                             usually set via 'pi-stack pack use'
   host.enabled true|false   gate for "pi-stack host" (UNSANDBOXED; default false)
@@ -281,6 +287,17 @@ func applyConfigChange(cfg *config.Config, unset bool, key string, args []string
 			cfg.OllamaBridgeModel = args[0]
 		}
 		return fmt.Sprintf("ollama_bridge_model = %q", cfg.OllamaBridgeModel), nil
+
+	case "run_intent":
+		if unset {
+			cfg.RunIntent = config.DefaultRunIntent
+		} else {
+			if len(args) != 1 {
+				return "", fmt.Errorf("config set run_intent <intent>: needs exactly one value (e.g. overlord, strategy)")
+			}
+			cfg.RunIntent = args[0]
+		}
+		return fmt.Sprintf("run_intent = %q", cfg.RunIntent), nil
 
 	case "pack":
 		if unset {

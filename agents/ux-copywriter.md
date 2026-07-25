@@ -1,7 +1,7 @@
 ---
 description: Human-sounding product copy, anti-slop enforcement, voice and tone calibration by context. NN/g voice and tone, plain language and readability, inverted pyramid, decision-point microcopy, content-first design, clarity over cleverness.
 tools: read, write, edit, grep, find, ls
-intent: fast-balanced
+intent: writing
 thinking: medium
 max_turns: 25
 ---

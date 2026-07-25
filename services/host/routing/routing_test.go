@@ -69,8 +69,9 @@ func TestEmbeddedDefaultsLoad(t *testing.T) {
 func TestEmbeddedFastBalancedRoutesToFlash(t *testing.T) {
 	// fast-balanced exists to give a fast, mid-accuracy model a home: a sub-10s
 	// latency cap (drops Pro/Sol/Terra/Sonnet) above a 0.65 accuracy floor (drops
-	// Flash-Lite). It must resolve to gemini-3.5-flash; if a scorecard/price edit
-	// silently moves it, that is a routing regression worth catching here.
+	// Flash-Lite). It must resolve to gemini-3.6-flash (the 2026-07 insta-upgrade
+	// from 3.5 Flash); if a scorecard/price edit silently moves it, that is a
+	// routing regression worth catching here.
 	t.Setenv("ROUTING_DIR", t.TempDir()) // force embedded defaults
 	reg, sc, pol := mustLoadAll(t)
 	var intent *Intent
@@ -86,8 +87,8 @@ func TestEmbeddedFastBalancedRoutesToFlash(t *testing.T) {
 	if !d.ConstraintsMet {
 		t.Fatalf("fast-balanced fell back (%s): %s", d.Model, d.Reason)
 	}
-	if d.Model != "google/gemini-3.5-flash" {
-		t.Fatalf("fast-balanced = %q, want google/gemini-3.5-flash (%s)", d.Model, d.Reason)
+	if d.Model != "google/gemini-3.6-flash" {
+		t.Fatalf("fast-balanced = %q, want google/gemini-3.6-flash (%s)", d.Model, d.Reason)
 	}
 }
 

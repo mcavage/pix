@@ -34,6 +34,15 @@ const (
 	// It loads on demand (not resident), so it can be bigger than the watcher;
 	// qwen3.5:9b (~6.6GB) is the current all-rounder that still fits a 16GB box.
 	DefaultOllamaBridgeModel = "qwen3.5:9b"
+	// DefaultRunIntent is the routing intent the top-level interactive session
+	// (the "overlord") resolves to when the user pins neither --model nor --intent.
+	// The stack ships "overlord" -> GPT-5.6 Sol: the orchestrator is pinned OFF
+	// Anthropic on purpose (Claude is the weak writer/communicator, and a same-vendor
+	// orchestrator shares its authors' blind spots). Change it with `pi-stack config
+	// set run_intent <intent>` (e.g. `strategy` for Opus, or any intent from
+	// `pi-stack route show`). NOTE: this default assumes an OpenAI key is present; an
+	// Anthropic-only host should point run_intent at an Anthropic intent.
+	DefaultRunIntent = "overlord"
 	// BuiltinImpl is the default plugin impl: compiled into the host binary
 	// rather than run as an external sub-process.
 	BuiltinImpl = "builtin"
@@ -105,6 +114,16 @@ type Config struct {
 	MemoryWatcherModel string `toml:"memory_watcher_model,omitempty"`
 	MemoryEmbedModel   string `toml:"memory_embed_model,omitempty"`
 	OllamaBridgeModel  string `toml:"ollama_bridge_model,omitempty"`
+
+	// RunIntent is the routing intent for the top-level interactive session (the
+	// "overlord" that orchestrates the subagent crew). When neither --model nor
+	// --intent is passed, `pi-stack run` resolves this intent through the router to
+	// pick the session model. Defaults to DefaultRunIntent ("overlord" -> GPT-5.6
+	// Sol); a bad value degrades to pi's own default rather than blocking launch.
+	// Change it with `pi-stack config set run_intent <intent>` (e.g. `strategy` for
+	// Opus on an Anthropic-only host); `unset` restores the "overlord" default.
+	// Sparse-saved: omitted from the file when it equals the default.
+	RunIntent string `toml:"run_intent,omitempty"`
 
 	// GogAccount is the Google Workspace account the gog host-MCP server serves.
 	// It is THE source of truth: doctor probes against it, and `make mcp-register`
@@ -433,6 +452,9 @@ func (c *Config) applyDefaults() {
 	if c.OllamaBridgeModel == "" {
 		c.OllamaBridgeModel = DefaultOllamaBridgeModel
 	}
+	if c.RunIntent == "" {
+		c.RunIntent = DefaultRunIntent
+	}
 	if c.MemoryEmbedModel == "" {
 		c.MemoryEmbedModel = DefaultMemoryEmbedModel
 	}
@@ -663,6 +685,9 @@ func (c *Config) sparseForSave() *Config {
 	}
 	if sp.OllamaBridgeModel == DefaultOllamaBridgeModel {
 		sp.OllamaBridgeModel = ""
+	}
+	if sp.RunIntent == DefaultRunIntent {
+		sp.RunIntent = ""
 	}
 	// applyDefaults allocates an empty Plugins map (and fills Impl=builtin) so
 	// readers never nil-check; don't petrify that resolution either.

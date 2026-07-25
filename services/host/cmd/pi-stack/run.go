@@ -37,17 +37,46 @@ func runRun(argv []string) {
 		os.Exit(2)
 	}
 
+	// Default the session intent from config (run_intent, the "overlord") when the
+	// user pinned neither --model nor --intent. This is what flips the top-level
+	// interactive orchestrator to its configured vendor (the stack ships
+	// run_intent=overlord -> GPT-5.6 Sol). Track that it came from config, not a
+	// flag: a bad config-sourced intent must NOT brick the launch the way an
+	// explicit --intent typo does.
+	intentFromConfig := false
+	if o.Intent == "" && o.Model == "" {
+		if cfg, cerr := config.Load(); cerr == nil && strings.TrimSpace(cfg.RunIntent) != "" {
+			o.Intent = strings.TrimSpace(cfg.RunIntent)
+			intentFromConfig = true
+		}
+	}
+
+	// "none"/"off" is the explicit opt-out: use pi's own default model, no router
+	// (honored for both --intent and run_intent). Kept here so a user who does not
+	// want the overlord default has a first-class, documented escape.
+	if o.Model == "" && (strings.EqualFold(o.Intent, "none") || strings.EqualFold(o.Intent, "off")) {
+		o.Intent = ""
+	}
+
 	// Resolve --intent to a concrete session model via the router (unless --model
 	// already pinned one, which wins). This makes the INTERACTIVE session use the
 	// same cost/latency/accuracy routing the subagent crew uses.
 	if o.Intent != "" && o.Model == "" {
 		m, rerr := resolveSessionModel(o.Intent)
 		if rerr != nil {
-			fmt.Fprintf(os.Stderr, "pi-stack run: --intent %q: %v\n", o.Intent, rerr)
-			os.Exit(2)
+			if intentFromConfig {
+				// Degrade to pi's own default model rather than block a launch on a
+				// misconfigured run_intent. Loud, non-fatal.
+				fmt.Fprintf(os.Stderr, "pi-stack: run_intent %q did not resolve (%v); using pi's default model. Fix with `pi-stack config set run_intent <intent>`.\n", o.Intent, rerr)
+				o.Intent = ""
+			} else {
+				fmt.Fprintf(os.Stderr, "pi-stack run: --intent %q: %v\n", o.Intent, rerr)
+				os.Exit(2)
+			}
+		} else {
+			o.Model = m
+			fmt.Fprintf(os.Stderr, "pi-stack: intent %q -> model %s\n", o.Intent, m)
 		}
-		o.Model = m
-		fmt.Fprintf(os.Stderr, "pi-stack: intent %q -> model %s\n", o.Intent, m)
 	}
 
 	// Bare-minimum key bootstrap: a pi session needs at least one model provider
@@ -165,12 +194,24 @@ func runRun(argv []string) {
 	// so the user gets a confusing interactive "pull? use cached?" prompt and a slow
 	// hang. Refuse fast with the real fix instead. (Only on create; a re-attach
 	// reads the sandbox's own spec and doesn't re-pin --template.)
-	if willCreate(state, o.Replace) && o.LocalImageTag != "" && len(o.Kits) == 0 && o.LocalKit != "" {
+	if willCreate(state, o.Replace) && o.LocalImageTag != "" && len(o.Kits) == 0 && o.LocalKit != "" && o.Template == "" {
 		if !localImageLoaded(defaultShellEnv(), o.LocalImageTag) {
 			fmt.Fprintf(os.Stderr, "pi-stack: local image %s:%s is not loaded in sbx.\n", dockerImageRepo, o.LocalImageTag)
 			fmt.Fprintln(os.Stderr, "It's a local build (never published), so sbx would try to pull it and stall on a prompt.")
 			fmt.Fprintln(os.Stderr, "Load this build into sbx first, from your pi-stack checkout:")
 			fmt.Fprintln(os.Stderr, "  make load")
+			os.Exit(1)
+		}
+	}
+
+	// Same preflight for an explicit --template that names a local-* build: it's
+	// never published, so an unloaded ref would make sbx stall on a pull prompt.
+	// Only local-* tags get this guard — a published ref is legitimately pullable.
+	if willCreate(state, o.Replace) && o.Template != "" {
+		if tag := templateTag(o.Template); strings.HasPrefix(tag, "local-") && !localImageLoaded(defaultShellEnv(), tag) {
+			fmt.Fprintf(os.Stderr, "pi-stack: --template %s is not loaded in sbx.\n", o.Template)
+			fmt.Fprintln(os.Stderr, "It's a local build (never published), so sbx would try to pull it and stall on a prompt.")
+			fmt.Fprintln(os.Stderr, "Load it first, from the checkout that built it:  make load")
 			os.Exit(1)
 		}
 	}
@@ -791,6 +832,12 @@ func parseRunArgs(argv []string) (runOpts, error) {
 				return o, err
 			}
 			o.Kits = append(o.Kits, v)
+		case name == "--template":
+			v, err := valueOf(a, &i)
+			if err != nil {
+				return o, err
+			}
+			o.Template = v
 		case name == "--pack":
 			v, err := valueOf(a, &i)
 			if err != nil {

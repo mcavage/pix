@@ -1,6 +1,10 @@
 package main
 
-import "strings"
+import (
+	"strings"
+
+	"pi-stack/host/config"
+)
 
 // secretCheck reports whether a provider secret is set. When sbx is
 // unreachable (e.g. inside the sandbox) it emits a TODO rather than a false OK.
@@ -37,13 +41,65 @@ func secretCheck(label, key, sbxOut string, sbxOK bool) check {
 // missing alternate is expected once one provider exists, and github merely
 // authorizes git operations (not the model), so it is never itself
 // outstanding.
-func providersGroup(sbxOut string, sbxOK bool) group {
+func providersGroup(cfg *config.Config, sbxOut string, sbxOK bool) group {
 	g := group{title: "Providers / keys (proxy-injected, never in the VM)"}
 	g.checks = append(g.checks, modelKeyCoreCheck(sbxOut, sbxOK))
 	for _, p := range []string{"anthropic", "openai", "google", "github"} {
 		g.checks = append(g.checks, providerInfoCheck(p, sbxOut, sbxOK))
 	}
+	g.checks = append(g.checks, runIntentKeyCheck(cfg, sbxOut, sbxOK))
 	return g
+}
+
+// runIntentKeyCheck warns when the top-level session intent (config.run_intent,
+// the "overlord") resolves to a provider whose key is NOT set. This is the
+// specific trap of the baked overlord -> GPT-5.6 Sol default: a host with only an
+// Anthropic key launches fine (the core check is green) but every INTERACTIVE
+// turn 401s because the session model is OpenAI. It is INFORMATIONAL (note: true
+// — never blocks, never counts as outstanding): the fix is a config change, not
+// a missing requirement, and the core "at least one key" gate already stands.
+func runIntentKeyCheck(cfg *config.Config, sbxOut string, sbxOK bool) check {
+	intent := config.DefaultRunIntent
+	if cfg != nil && strings.TrimSpace(cfg.RunIntent) != "" {
+		intent = strings.TrimSpace(cfg.RunIntent)
+	}
+	label := "session model (run_intent=" + intent + ")"
+	// "none"/"off" is the explicit opt-out (run.go): pi picks its own default model,
+	// which needs no specific provider key beyond the core "at least one" gate.
+	if strings.EqualFold(intent, "none") || strings.EqualFold(intent, "off") {
+		return check{label: label, note: true, verdict: verdictReady, detail: "opt-out: pi's own default model"}
+	}
+	model, err := resolveSessionModel(intent)
+	if err != nil || model == "" {
+		// A bad run_intent degrades to pi's own default at launch (run.go), so this
+		// is a soft note, not a failure.
+		return check{label: label, note: true, verdict: verdictUnverifiable,
+			detail: "run_intent does not resolve to a model — launch will use pi's default; fix with `pi-stack config set run_intent <intent>`"}
+	}
+	provider := model
+	if i := strings.IndexByte(model, '/'); i > 0 {
+		provider = model[:i]
+	}
+	if !sbxOK {
+		return check{label: label, note: true, verdict: verdictUnverifiable,
+			detail: "-> " + model + " (cannot verify " + provider + " key: sbx unavailable here)"}
+	}
+	// Only the model providers carry a launch-relevant key here; a local (ollama)
+	// model needs none.
+	if provider == "ollama" || grepWord(sbxOut, provider) {
+		return check{label: label, note: true, verdict: verdictReady, detail: "-> " + model + " (" + provider + " key set)"}
+	}
+	// If NO model key is set at all, the core "at least one key" check already owns
+	// the fix — don't double up a second secret-set todo here. This check earns its
+	// keep in the SPECIFIC trap: you HAVE a key, just not the session model's
+	// provider (e.g. Anthropic-only host + baked overlord -> OpenAI).
+	if !anyModelKeyInOutput(sbxOut) {
+		return check{label: label, note: true, verdict: verdictUnverifiable,
+			detail: "-> " + model + " (needs a " + provider + " key; set a model key first — see the core check above)"}
+	}
+	return check{label: label, note: true, verdict: verdictTodo,
+		detail: "-> " + model + " but the " + provider + " key is NOT set: interactive turns will fail. Set " + provider + "'s key, or point run_intent at a provider you have (or `none` for pi's default)",
+		todo:   "pi-stack secret set " + strings.ToUpper(provider) + "_API_KEY op://vault/item/field && pi-stack secret sync"}
 }
 
 // modelKeyFixCmd is the ONE copy-pasteable command surfaced when doctor has

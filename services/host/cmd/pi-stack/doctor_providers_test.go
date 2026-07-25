@@ -14,7 +14,7 @@ import (
 // TestProvidersGroup_OneKeyReady: any ONE of anthropic/openai/google present
 // makes the core "model key" check ready \u2014 core, no todo, never blocking.
 func TestProvidersGroup_OneKeyReady(t *testing.T) {
-	g := providersGroup("anthropic\ngithub\n", true)
+	g := providersGroup(nil, "anthropic\ngithub\n", true)
 	core := g.checks[0]
 	if core.label != "model key" {
 		t.Fatalf("expected the core check first, got %q", core.label)
@@ -38,7 +38,7 @@ func TestProvidersGroup_OneKeyReady(t *testing.T) {
 // copy-pasteable command (the other providers are named in evidence, not the
 // command).
 func TestProvidersGroup_ZeroConfirmed_OneCopyPasteableCommand(t *testing.T) {
-	g := providersGroup("github\n", true) // github set, but no MODEL key
+	g := providersGroup(nil, "github\n", true) // github set, but no MODEL key
 	core := g.checks[0]
 	if core.req() != requirementCore {
 		t.Fatalf("model key requirement = %q, want core", core.req())
@@ -66,7 +66,7 @@ func TestProvidersGroup_ZeroConfirmed_OneCopyPasteableCommand(t *testing.T) {
 // TestProvidersGroup_SbxAbsentUnverifiable: sbx absent -> unverifiable, never
 // denied, never blocking, and carries no todo command.
 func TestProvidersGroup_SbxAbsentUnverifiable(t *testing.T) {
-	g := providersGroup("", false)
+	g := providersGroup(nil, "", false)
 	core := g.checks[0]
 	if core.result() != verdictUnverifiable {
 		t.Fatalf("model key verdict = %q, want unverifiable", core.result())
@@ -86,7 +86,7 @@ func TestProvidersGroup_SbxAbsentUnverifiable(t *testing.T) {
 // for the OTHER unverifiable cause: sbx present but `sbx secret ls` errored
 // (control plane down). Same tri-state sbxOK=false path as sbxModelKeyState.
 func TestProvidersGroup_SecretLsFailure_Unverifiable(t *testing.T) {
-	g := providersGroup("", false) // sbxOK=false covers both "absent" and "errored"
+	g := providersGroup(nil, "", false) // sbxOK=false covers both "absent" and "errored"
 	core := g.checks[0]
 	if core.result() != verdictUnverifiable {
 		t.Fatalf("verdict = %q, want unverifiable", core.result())
@@ -97,18 +97,26 @@ func TestProvidersGroup_SecretLsFailure_Unverifiable(t *testing.T) {
 // confirmed present, the still-missing alternates are informational only \u2014
 // they never count as outstanding.
 func TestProvidersGroup_AlternateMissingNotOutstanding(t *testing.T) {
-	g := providersGroup("anthropic\n", true) // openai/google/github all unset
+	// anthropic set, openai/google/github unset. The baked overlord default
+	// (run_intent -> openai/gpt-5.6-sol) makes the run_intent check advise
+	// repointing run_intent, but that is a NOTE (never outstanding): a wrong
+	// session-model vendor is a config fix, not a blocking gap, and the core
+	// "at least one key" gate is satisfied.
+	g := providersGroup(nil, "anthropic\n", true)
 	r := &report{groups: []group{g}}
 	if got := r.outstanding(); got != 0 {
-		t.Errorf("outstanding = %d, want 0 (missing alternates are informational)", got)
-	}
-	if len(r.todos()) != 0 {
-		t.Errorf("todos = %v, want none", r.todos())
+		t.Errorf("outstanding = %d, want 0 (missing alternates + the run_intent advisory are informational)", got)
 	}
 	for _, c := range g.checks[1:] {
 		if !c.note {
 			t.Errorf("per-provider check %q must be a note (informational), got %+v", c.label, c)
 		}
+	}
+	// The one todo present is the session-model advisory (set the missing session
+	// provider's key), not a blocking item: anthropic is set (core satisfied), but
+	// the baked overlord -> openai needs an openai key.
+	if td := r.todos(); len(td) != 1 || !strings.Contains(td[0], "OPENAI_API_KEY") {
+		t.Errorf("todos = %v, want exactly the session-model key advisory (OPENAI_API_KEY)", td)
 	}
 }
 
@@ -116,7 +124,7 @@ func TestProvidersGroup_AlternateMissingNotOutstanding(t *testing.T) {
 // not-configured/info \u2014 never outstanding \u2014 even when zero MODEL keys are
 // set (the model-key core todo is the only outstanding item).
 func TestProvidersGroup_GithubOptional_NoOutstanding(t *testing.T) {
-	g := providersGroup("", true) // sbx reachable, nothing set at all
+	g := providersGroup(nil, "", true) // sbx reachable, nothing set at all
 	r := &report{groups: []group{g}}
 	if got := r.outstanding(); got != 1 {
 		t.Errorf("outstanding = %d, want 1 (only the core model-key todo)", got)
@@ -142,7 +150,7 @@ func TestProvidersGroup_GithubOptional_NoOutstanding(t *testing.T) {
 // TestProvidersGroup_GithubProbeFailure_Unverifiable: sbx absent/errored ->
 // github's info line reads unverifiable (via detail text), not a false claim.
 func TestProvidersGroup_GithubProbeFailure_Unverifiable(t *testing.T) {
-	g := providersGroup("", false)
+	g := providersGroup(nil, "", false)
 	var github check
 	for _, c := range g.checks {
 		if c.label == "github" {
@@ -160,7 +168,7 @@ func TestProvidersGroup_GithubProbeFailure_Unverifiable(t *testing.T) {
 // TestProvidersGroup_JSON: exact JSON contract for the core check and the
 // per-provider info lines.
 func TestProvidersGroup_JSON(t *testing.T) {
-	r := &report{groups: []group{providersGroup("anthropic\n", true)}}
+	r := &report{groups: []group{providersGroup(nil, "anthropic\n", true)}}
 	v := r.jsonView("")
 	if v.Blocking {
 		t.Error("one confirmed key must not block")
@@ -189,7 +197,7 @@ func TestProvidersGroup_JSON(t *testing.T) {
 // TestProvidersGroup_JSON_ZeroConfirmed: the blocked-JSON shape when zero keys
 // are confirmed.
 func TestProvidersGroup_JSON_ZeroConfirmed(t *testing.T) {
-	r := &report{groups: []group{providersGroup("", true)}}
+	r := &report{groups: []group{providersGroup(nil, "", true)}}
 	v := r.jsonView("")
 	if !v.Blocking || v.Verdict != "blocked" {
 		t.Errorf("zero confirmed -> (blocking=%v, verdict=%q), want (true, blocked)", v.Blocking, v.Verdict)
@@ -203,7 +211,7 @@ func TestProvidersGroup_JSON_ZeroConfirmed(t *testing.T) {
 // TestProvidersGroup_RenderConcise: concise mode collapses the ready per-key
 // notes/checks but still shows the group is all-ready when a key is present.
 func TestProvidersGroup_RenderConcise(t *testing.T) {
-	r := &report{groups: []group{providersGroup("anthropic\n", true)}}
+	r := &report{groups: []group{providersGroup(nil, "anthropic\nopenai\ngoogle\ngithub\n", true)}}
 	var buf bytes.Buffer
 	r.render(&buf, false)
 	out := buf.String()
@@ -218,7 +226,7 @@ func TestProvidersGroup_RenderConcise(t *testing.T) {
 // TestProvidersGroup_RenderVerbose: verbose mode shows every per-provider
 // info line, not just the collapsed core summary.
 func TestProvidersGroup_RenderVerbose(t *testing.T) {
-	r := &report{groups: []group{providersGroup("anthropic\n", true)}}
+	r := &report{groups: []group{providersGroup(nil, "anthropic\n", true)}}
 	var buf bytes.Buffer
 	r.render(&buf, true)
 	out := buf.String()
@@ -232,7 +240,7 @@ func TestProvidersGroup_RenderVerbose(t *testing.T) {
 // TestProvidersGroup_RenderZeroConfirmed_OneTodoLine: the concise render must
 // surface exactly the one fix command, in the TODO section.
 func TestProvidersGroup_RenderZeroConfirmed_OneTodoLine(t *testing.T) {
-	r := &report{groups: []group{providersGroup("", true)}}
+	r := &report{groups: []group{providersGroup(nil, "", true)}}
 	var buf bytes.Buffer
 	r.render(&buf, false)
 	out := buf.String()

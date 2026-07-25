@@ -886,6 +886,16 @@ instead.
 .B ollama_bridge_model
 is the local model the sandbox exposes to pi and the router's local option;
 by default the memory watcher shares it.
+.B run_intent
+is the default routing intent for the top-level interactive session (the
+overlord that orchestrates the subagent crew); when neither
+.B \-\-model
+nor
+.B \-\-intent
+is passed,
+.B "pi-stack run"
+resolves it through the router to pick the session model (the stack ships
+run_intent=overlord, which resolves to GPT-5.6 Sol).
 .B host.enabled
 gates the unsandboxed
 .B "pi-stack host"

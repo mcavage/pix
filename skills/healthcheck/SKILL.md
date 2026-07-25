@@ -100,9 +100,9 @@ Expect the presets (fanout, deep, review) plus the specialists (architect,
 engineer, designer, product-manager, qa-lead, security-lead, sre-lead, devrel,
 dx-consultant, legal, finance-analyst, growth-marketing, ux-copywriter,
 enterprise-admin). Then smoke-test one agent per model tier in parallel via the
-`subagent` tool (`{tasks:[{agent, task}, …]}`, a trivial task each): a haiku-tier
-role (`qa-lead`/`fanout`), an opus-tier role (`architect`/`deep`), and the
-cross-vendor `review`. Report each: role, model, ok/slow/fail. Three proves every
+`subagent` tool (`{tasks:[{agent, task}, …]}`, a trivial task each): a cheap/fast
+tier role (`qa-lead`→Gemini Flash / `fanout`→Flash-Lite), an Opus-5 tier role
+(`architect`/`deep`), and the cross-vendor `review` (→Gemini Pro). Report each: role, model, ok/slow/fail. Three proves every
 model family and the dispatch path.
 
 ### A6. Skills + tool routing

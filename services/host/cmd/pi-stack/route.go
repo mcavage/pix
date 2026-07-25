@@ -32,7 +32,12 @@ func resolveSessionModel(intent string) (string, error) {
 	}
 	it, ok := pol.Intent(intent)
 	if !ok {
-		it = routing.Intent{Name: intent, TaskType: intent, Objective: "accuracy"}
+		// An unknown intent must NOT silently fabricate a task type and fall back to
+		// the policy default (that hid a bad --intent/run_intent behind a Sonnet
+		// launch). Error instead: run.go exits on an explicit --intent typo and
+		// degrades to pi's default on a bad config-sourced run_intent; doctor renders
+		// "does not resolve".
+		return "", fmt.Errorf("unknown intent %q (see `pi-stack route show` for the intent list)", intent)
 	}
 	d := routing.Resolve(reg, sc, pol, it)
 	if d.Model == "" {
