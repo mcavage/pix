@@ -465,29 +465,19 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	return skippedErr
 }
 
-// resolveStaticMCP returns, order-preserving and de-duplicated, the subset of
-// `servers` to attach EAGERLY at create (emitted to sbx as --static-mcp; their
-// tools sit in context from the start).
+// allPreloadedMCP returns, order-preserving and de-duplicated, every non-empty
+// name in `servers` — the full set to attach EAGERLY at create (emitted to sbx
+// as --static-mcp; their tools sit in context from the start).
 //
-// The DEFAULT is DYNAMIC for every registered server, regardless of kind: once a
-// server is registered (`pi-stack mcp register` / `sbx mcp add`) it's behind the
-// local gateway, and the in-VM agent discovers + calls it on demand via
-// mcp-find/mcp-exec/code-mode — the daemon spawns local stdio servers host-side
-// (with their op-run creds) exactly as it serves remotes, so local vs remote is
-// irrelevant here. This keeps heavy tool schemas out of context until needed.
-//
-// Two per-server override knobs (see cfg.MCPStatic/MCPDynamic): a server in
-// MCPStatic is pinned eager; MCPDynamic wins if a server is somehow in both
-// (explicit lazy beats explicit eager). No env/host probe needed — this is a
-// pure eager-vs-lazy choice, not a local-vs-remote one.
-func resolveStaticMCP(servers []string, cfg *config.Config) []string {
-	static := map[string]bool{}
-	for _, n := range cfg.MCPStatic {
-		static[n] = true
-	}
-	for _, n := range cfg.MCPDynamic {
-		delete(static, n) // MCPDynamic wins over MCPStatic
-	}
+// S01: there is no eager/lazy split any more. Every configured server (plus
+// every pack integration's server — see applyPackToLaunch) preloads at CREATE,
+// regardless of kind (local stdio or remote gateway-catalog): once a server is
+// registered (`pi-stack mcp register` / `sbx mcp add`) it's behind the local
+// gateway, so local vs remote was never the axis here — the retired
+// mcp_static/mcp_dynamic knobs were the only thing that ever kept a server out
+// of this set, and they're gone (see config.RetiredKeys). This function is now
+// pure list hygiene: dedupe + drop empties, order preserved.
+func allPreloadedMCP(servers []string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, n := range servers {
@@ -495,9 +485,7 @@ func resolveStaticMCP(servers []string, cfg *config.Config) []string {
 			continue
 		}
 		seen[n] = true
-		if static[n] {
-			out = append(out, n)
-		}
+		out = append(out, n)
 	}
 	return out
 }

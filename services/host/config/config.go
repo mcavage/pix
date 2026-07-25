@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -94,18 +95,12 @@ type Config struct {
 	// empty). Do not read it outside applyDefaults/sparseForSave; read Services.
 	ServicesRaw *[]string `toml:"services,omitempty"`
 
+	// MCP is every configured MCP server. S01: there is no eager/lazy split any
+	// more — every configured server (plus every pack integration's server)
+	// preloads at sandbox CREATE (`--static-mcp`). The retired mcp_static/
+	// mcp_dynamic per-server override lists are gone; see retiredConfigKeys,
+	// RetiredKeys, and cmd/pi-stack's allPreloadedMCP.
 	MCP []string `toml:"mcp,omitempty"`
-
-	// MCPStatic / MCPDynamic set a server's attach mode. The DEFAULT is dynamic
-	// for every registered server (local stdio or remote): it sits behind the
-	// local gateway and the in-VM agent pulls it on demand via mcp-find/code-mode,
-	// keeping its tool schema out of context until needed. A server in MCPStatic
-	// is instead attached EAGERLY at CREATE (`--static-mcp`, tools always in
-	// context). MCPDynamic is the explicit opposite (already the default) and wins
-	// if a server is somehow in both. Type-independent: eager vs lazy, not
-	// local vs remote.
-	MCPStatic  []string `toml:"mcp_static,omitempty"`
-	MCPDynamic []string `toml:"mcp_dynamic,omitempty"`
 
 	MemoryWatcherModel string `toml:"memory_watcher_model,omitempty"`
 	MemoryEmbedModel   string `toml:"memory_embed_model,omitempty"`
@@ -142,6 +137,72 @@ type Config struct {
 	// Host gates + configures `pi-stack host` (the unsandboxed escape hatch).
 	// GLOBAL, never per-profile: leaving the sandbox is a machine-level decision.
 	Host HostMode `toml:"host,omitempty"`
+
+	// retiredKeys / unknownKeys capture the top-level TOML keys Load/LoadFrom
+	// found in the file that don't map to any field above (BurntSushi's
+	// MetaData.Undecoded()). retiredKeys is the subset in retiredConfigKeys —
+	// a key that once meant something and is now silently accepted-and-dropped
+	// so an older config.toml never hard-fails Load; unknownKeys is everything
+	// else (a genuine typo, or a field from a newer pi-stack). Unexported: never
+	// (de)serialized, and untouched by an absent-file Load (nothing to report).
+	// See RetiredKeys / UnknownKeys.
+	retiredKeys []string
+	unknownKeys []string
+}
+
+// retiredConfigKeys is the allowlist of top-level config keys that once had
+// meaning but were retired: mcp_static / mcp_dynamic, the per-server eager/lazy
+// attach override S01 removed when every configured/pack MCP server started
+// preloading at sandbox CREATE unconditionally. Load tolerates them (no error);
+// RetiredKeys reports them so a caller (`config show`, `doctor`) can tell the
+// user "this key no longer does anything" instead of "you made a typo" (which
+// is what an unrecognized key normally means — see UnknownKeys).
+var retiredConfigKeys = map[string]bool{
+	"mcp_static":  true,
+	"mcp_dynamic": true,
+}
+
+// RetiredKeys returns the retired top-level config keys (see retiredConfigKeys)
+// found in the loaded file, sorted, deduplicated. Empty when the file has none
+// — including when no file was loaded at all. A copy: callers cannot mutate the
+// Config's internal state through the returned slice.
+func (c *Config) RetiredKeys() []string { return append([]string(nil), c.retiredKeys...) }
+
+// UnknownKeys returns the top-level (or dotted, for a nested table) config keys
+// found in the loaded file that are NEITHER a live Config field NOR a retired
+// key — most likely a typo, or a field only a newer pi-stack understands. Load
+// tolerates them (never a hard error, matching the package's documented
+// "unknown keys are tolerated" contract); a caller can surface UnknownKeys to
+// warn the user. A copy: callers cannot mutate the Config's internal state
+// through the returned slice.
+func (c *Config) UnknownKeys() []string { return append([]string(nil), c.unknownKeys...) }
+
+// partitionUndecoded splits BurntSushi's MetaData.Undecoded() keys into the
+// retired subset (retiredConfigKeys) and everything else (unknown), both sorted
+// + deduplicated. A toml.Key's String() joins its path with dots, so a
+// top-level scalar/list key (mcp_static) renders as itself and a nested unknown
+// key (some_table.some_field) renders dotted — retiredConfigKeys only ever
+// matches top-level names, so a same-named nested key is never misclassified.
+func partitionUndecoded(keys []toml.Key) (retired, unknown []string) {
+	retiredSeen := map[string]bool{}
+	unknownSeen := map[string]bool{}
+	for _, k := range keys {
+		s := k.String()
+		if retiredConfigKeys[s] {
+			if !retiredSeen[s] {
+				retiredSeen[s] = true
+				retired = append(retired, s)
+			}
+			continue
+		}
+		if !unknownSeen[s] {
+			unknownSeen[s] = true
+			unknown = append(unknown, s)
+		}
+	}
+	sort.Strings(retired)
+	sort.Strings(unknown)
+	return retired, unknown
 }
 
 // configDir resolves the directory that holds config.toml and the broker token.
@@ -407,9 +468,11 @@ func LoadFrom(path string) (*Config, error) {
 		}
 		return nil, err
 	}
-	if _, err := toml.DecodeFile(path, c); err != nil {
+	md, err := toml.DecodeFile(path, c)
+	if err != nil {
 		return nil, err
 	}
+	c.retiredKeys, c.unknownKeys = partitionUndecoded(md.Undecoded())
 	c.applyDefaults()
 	return c, nil
 }
@@ -631,13 +694,6 @@ func (c *Config) AddMCP(name string) bool { return addUnique(&c.MCP, name) }
 
 // RemoveMCP removes name from the MCP set, returning true when it changed.
 func (c *Config) RemoveMCP(name string) bool { return removeValue(&c.MCP, name) }
-
-// AddMCPStatic/RemoveMCPStatic and AddMCPDynamic/RemoveMCPDynamic manage the
-// per-server attach-mode override lists (see MCPStatic/MCPDynamic).
-func (c *Config) AddMCPStatic(name string) bool     { return addUnique(&c.MCPStatic, name) }
-func (c *Config) RemoveMCPStatic(name string) bool  { return removeValue(&c.MCPStatic, name) }
-func (c *Config) AddMCPDynamic(name string) bool    { return addUnique(&c.MCPDynamic, name) }
-func (c *Config) RemoveMCPDynamic(name string) bool { return removeValue(&c.MCPDynamic, name) }
 
 // AddService adds name to the Services set if absent, returning true when it
 // changed.

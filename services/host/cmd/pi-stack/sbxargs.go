@@ -44,8 +44,8 @@ type runOpts struct {
 	LocalImageTag string   // contents of <repo>/out/.local-image-tag; pins --template to the locally loaded image when set (caller reads it)
 	Skills        []string // --skills DIR: extra live skill trees
 	Kits          []string // --kit K: escape-hatch kit(s). When present they REPLACE the auto git/local pin (a user override), then config stack applies.
-	MCP           []string // --mcp M: extra MCP servers on top of config.MCP (fed into StaticMCP resolution by the caller)
-	StaticMCP     []string // RESOLVED set to attach at create (emitted as --static-mcp); the caller computes it from cfg.MCP+MCP via resolveStaticMCP (local stdio static, remote dynamic, per-server overrides)
+	MCP           []string // --mcp M: extra MCP servers on top of config.MCP (folded into StaticMCP by the caller)
+	StaticMCP     []string // RESOLVED set to attach at create (emitted as --static-mcp); the caller computes it from cfg.MCP+MCP via allPreloadedMCP — S01: every configured/pack server preloads, no eager/lazy split
 	Name          string   // --name N: sandbox name
 	Model         string   // --model M: active pi model (passed through to pi)
 	Intent        string   // --intent NAME: resolve the session model via the router (unless --model overrides)
@@ -146,13 +146,12 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 		args = append(args, "--kit", k)
 	}
 
-	// MCP servers: emit --static-mcp for the RESOLVED static set (o.StaticMCP,
-	// computed by the caller via resolveStaticMCP — local stdio static, remote
-	// dynamic, per-server overrides). sbx's flag is --static-mcp (the fixed set
-	// chosen at CREATE; can't change on re-attach). The local data-plane gateway
-	// serves them with no SBX_MCP_URL. Dynamic servers are intentionally omitted —
-	// the in-VM agent pulls them on demand; attach one to a RUNNING sandbox with
-	// `pi-stack mcp load`.
+	// MCP servers: emit --static-mcp for every preloaded server (o.StaticMCP,
+	// computed by the caller via allPreloadedMCP — S01: all configured/pack
+	// servers preload, no eager/lazy split). sbx's flag is --static-mcp (the
+	// fixed set chosen at CREATE; can't change on re-attach). The local
+	// data-plane gateway serves them with no SBX_MCP_URL. Attach one to an
+	// ALREADY-RUNNING sandbox live (no recreate) with `pi-stack mcp load`.
 	for _, m := range o.StaticMCP {
 		args = append(args, "--static-mcp", m)
 	}
