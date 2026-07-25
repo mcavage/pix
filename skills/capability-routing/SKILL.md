@@ -1,6 +1,6 @@
 ---
 name: capability-routing
-description: Resolve an abstract capability (chat, docs, issues, github, meeting-notes...) to a concrete provider and pull the data, then degrade cleanly when a capability is not wired. Other skills reference this instead of hardcoding a vendor or tool name. Auto-loads whenever a skill needs external data.
+description: Resolve an abstract capability (chat, docs, issues, github, meeting-notes...) to a concrete provider, degrading cleanly when unwired. Other skills use this instead of hardcoding a vendor.
 ---
 # capability-routing
 

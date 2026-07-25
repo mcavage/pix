@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Prove a claim before you make it. No "done", "fixed", "tests pass", or "should work" without running the command and reading the output first. Auto-loads before any completion claim, commit, PR, or handoff.
+description: Prove a claim before you make it. No "done", "fixed", or "tests pass" without running the command and reading the output first. Auto-loads before any completion claim, commit, PR, or handoff.
 ---
 # verify
 

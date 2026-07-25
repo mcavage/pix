@@ -1,6 +1,6 @@
 ---
 name: peer-review
-description: Cross-model peer review for NON-code deliverables (docs, plans, decisions, proposals). Use for "review this doc", "peer review", "gate this before sending", or as a quality checkpoint in any workflow. Distinct from code-review, which reviews diffs.
+description: Cross-model peer review for NON-code deliverables (docs, plans, decisions, proposals). Use for "review this doc" or "peer review". Distinct from code-review, which reviews diffs.
 ---
 # peer-review
 

@@ -1,6 +1,6 @@
 ---
 name: writing-voice
-description: The house writing voice, direct, opinionated, concrete, honest about risk. Auto-loads on any writing, editing, or content task. Use for drafting docs, Slack messages, board updates, LinkedIn posts, talk tracks, or editing anything you will put your name on.
+description: The house writing voice — direct, opinionated, concrete, honest about risk. Auto-loads on any writing task. Use for drafting docs, Slack messages, board updates, LinkedIn posts, or talk tracks.
 ---
 # writing-voice
 

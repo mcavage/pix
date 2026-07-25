@@ -1,6 +1,6 @@
 ---
 name: guard
-description: Session-level guardrails for destructive commands and edit scope restrictions. Use for "guard", "warn before deletes", "restrict edits to src/", or whenever working near production or irreversible operations.
+description: Session-level guardrails for destructive commands and edit scope restrictions. Use for "guard", "warn before deletes", "restrict edits to src/", or working near production or irreversible operations.
 ---
 # guard
 

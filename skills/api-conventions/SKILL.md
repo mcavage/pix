@@ -1,6 +1,6 @@
 ---
 name: api-conventions
-description: REST API design and review patterns. Use when designing, building, or reviewing a REST API, or when asked "how should this endpoint work", "what status code", "how do I paginate", "review my API design", or "does this follow conventions".
+description: REST API design and review patterns. Use when designing or reviewing a REST API, or asked "how should this endpoint work", "what status code", "how do I paginate", or "review my API design".
 ---
 # api-conventions
 

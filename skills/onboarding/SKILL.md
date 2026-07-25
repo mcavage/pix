@@ -1,6 +1,6 @@
 ---
 name: onboarding
-description: "First-run onboarding: one thorough, opinionated upfront message that tells the user exactly which workflow to invoke for their situation, states only grounded setup gaps from the trusted host-state payload in this prompt, then hands the wheel back with one direct question. Use on first run, 'onboard me', 'set me up', or after a fresh install."
+description: First-run onboarding — one thorough, opinionated message naming the right workflow, stating only grounded setup gaps, then handing the wheel back. Use on first run or "onboard me".
 ---
 # onboarding
 

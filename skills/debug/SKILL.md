@@ -1,6 +1,6 @@
 ---
 name: debug
-description: Root-cause-first debugging. Reproduce, investigate, form a falsifiable hypothesis, verify it, THEN fix. Never patch a symptom without a confirmed root cause. Use for "debug this", "why is X broken", "fix this bug", error reports / stack traces, or "it worked yesterday".
+description: Root-cause-first debugging — reproduce, investigate, form a falsifiable hypothesis, verify it, THEN fix. Use for "debug this", "why is X broken", error reports/stack traces, or "it worked yesterday".
 ---
 # debug
 

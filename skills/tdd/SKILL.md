@@ -1,6 +1,6 @@
 ---
 name: tdd
-description: Test-driven development. Write a failing test first, watch it fail, write the minimal code to pass, watch it pass, refactor. Use when writing or fixing logic. If you didn't watch the test fail, you don't know it tests anything.
+description: Test-driven development — write a failing test first, watch it fail, write minimal code to pass, watch it pass, refactor. Use when writing or fixing logic and you need proof it tests anything.
 ---
 # tdd
 

@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Review the current diff for correctness and safety, then get a cross-vendor second opinion from the `review` subagent (a different model vendor than yours, so its blind spots differ). Use for "review", "code review", "check my diff", or as a gate before shipping.
+description: Review the current diff for correctness and safety, then get a cross-vendor second opinion from the `review` subagent. Use for "review", "code review", "check my diff", or as a gate before shipping.
 ---
 # code-review
 

@@ -1,6 +1,6 @@
 ---
 name: deliver
-description: 'Autonomous full-rigor delivery loop. Runs the WHOLE crew (product first, then engineering), driving a request from intent to proven, committed, review-clean without returning to the user mid-flight. Starts with the product crew (PM plus role-appropriate specialists: GTM, finance, design, DX, legal), produces a spec, then delegates build to subagents, runs full UAT with real evidence, and runs the cross-vendor review subagent at least twice, fixing every finding. Use for "cook and deliver", "cook this", "take this all the way", "do it properly", "don''t stop", "full send", "run the crew", "full UAT and review", "don''t come back until it''s done", "address all the findings", or any time the user is about to hand-write delivery rigor.'
+description: Autonomous full-rigor delivery loop — product crew first, then engineering, spec to proven, committed, review-clean code without returning mid-flight. Use for "cook and deliver" or "full send".
 ---
 # deliver
 

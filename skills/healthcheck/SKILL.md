@@ -1,6 +1,6 @@
 ---
 name: healthcheck
-description: Is everything healthy? Two checks in one. HARNESS health confirms pi-stack itself works (keys, memory service, MCP backends, CLIs, agent roster, skills, tool routing). CODE health scores the repo's quality (tests, types, lint, dead code) with trends and ranked fixes. Use for "healthcheck", "is everything working", "how's the code quality", after a build or config change, or before `ship`.
+description: Two checks in one — HARNESS health (keys, memory, MCP, CLIs, agent roster, skills, routing) and CODE health (tests, types, lint, dead code, ranked fixes). Use for "healthcheck" or before `ship`.
 ---
 # healthcheck
 

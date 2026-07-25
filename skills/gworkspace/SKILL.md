@@ -1,6 +1,6 @@
 ---
 name: gworkspace
-description: Read Google Workspace — Gmail, Drive, Docs, Sheets, Calendar — via the host-run `gog` MCP server. Use for "read my email", "search Gmail", "what's on my calendar", "find that doc in Drive", "read this Google Doc", "check my inbox", or any Gmail/Drive/Docs/Sheets/Calendar lookup.
+description: Read Google Workspace — Gmail, Drive, Docs, Sheets, Calendar via the host-run `gog` MCP server. Use for "read my email", "search Gmail", "what's on my calendar", or "find that doc in Drive".
 ---
 # gworkspace
 

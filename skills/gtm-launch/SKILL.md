@@ -1,6 +1,6 @@
 ---
 name: gtm-launch
-description: Take a built thing to a launched thing with the crew — positioning, competitive intel, content, enablement, developer content, campaign plan, and launch readiness, with a user gate at positioning. Use for "launch this feature", "GTM workflow", "write a campaign plan", "plan the launch", or "take this from built to shipped". Names capabilities (crm, warehouse, calls, docs), not vendors, so it degrades cleanly to public research and the user's own files when a source is not wired. Pairs with plan (before) and ship (after).
+description: Take a built thing to a launched thing with the crew — positioning, competitive intel, content, enablement, campaign plan, launch readiness, gated at positioning. Use for "launch this feature".
 ---
 # gtm-launch
 

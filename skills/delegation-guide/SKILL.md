@@ -1,6 +1,6 @@
 ---
 name: delegation-guide
-description: Context-passing and delegation rules for multi-stage subagent workflows. Use when orchestrating fanout/deep/review subagents, planning wave execution, or any time you are the orchestrator handing work off to subagents.
+description: Context-passing and delegation rules for multi-stage subagent workflows. Use when orchestrating fanout/deep/review subagents, planning wave execution, or handing work off to subagents.
 ---
 # delegation-guide
 

@@ -1,6 +1,6 @@
 ---
 name: model-refresh
-description: 'Refresh the model router (registry + scorecard + policy) from LIVE model cards and pricing, not training data. Use when a new model ships, when `pi-stack route show` / `agent ls` names stale or wrong models, when someone says "the models are ancient", "re-level the crew", "update the model registry", "which models should we use", or when onboarding the stack to a new provider lineup.'
+description: Refresh the model router (registry + scorecard + policy) from LIVE model cards and pricing, not training data. Use when a new model ships or `route show`/`agent ls` names stale models.
 ---
 # model-refresh
 
