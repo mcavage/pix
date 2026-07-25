@@ -284,7 +284,7 @@ func hangingExe(t *testing.T) string {
 		t.Skip("shell-script fake executable; unix-only test")
 	}
 	p := filepath.Join(t.TempDir(), "hang")
-	if err := os.WriteFile(p, []byte("#!/bin/sh\nsleep 60\n"), 0o755); err != nil {
+	if err := os.WriteFile(p, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return p

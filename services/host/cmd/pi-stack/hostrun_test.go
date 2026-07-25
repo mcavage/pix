@@ -693,7 +693,7 @@ func TestInstallHostPiExtensions_RejectsStalePi(t *testing.T) {
 func TestCheckHostPiVersion_TimesOut(t *testing.T) {
 	dir := t.TempDir()
 	pi := filepath.Join(dir, "pi")
-	if err := os.WriteFile(pi, []byte("#!/bin/sh\nsleep 30\n"), 0o755); err != nil {
+	if err := os.WriteFile(pi, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	started := time.Now()
