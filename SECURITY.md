@@ -42,6 +42,39 @@ Be clear-eyed about these:
 - **Local models run on your machine.** Ollama models the memory loop uses run on
   the host, outside the VM boundary.
 
+## Host-side MCP servers run with your trust, not the sandbox's
+
+A local-command MCP server (Slack, `gog`, a pack's host wrapper) is a process
+the sbx gateway spawns on your **host**, not inside the sandbox. Registering
+one (`sbx mcp add`, `pi-stack mcp register`) is a host-level trust decision:
+the command you register runs with whatever access the gateway's spawn
+environment has, resolved credentials included. Review a server's registered
+command before trusting it (`sbx mcp get <name>`), and treat a pack that ships
+a host-executing integration as running code on your machine, not just in the
+sandbox; `pi-stack pack use` gates that with an explicit bill-of-materials
+prompt before adoption. A remote MCP server (notion/atlassian/granola-style,
+added by URL) authenticates through hosted OAuth handled entirely host-side by
+the gateway; the sandbox never sees the token.
+
+**Remote content is untrusted content.** Anything a capability reads back
+from the outside world, an email body, a Slack message, a doc, a wiki
+page, becomes part of the prompt sent to your model provider once it's
+recalled or returned. A server that fences its results as untrusted (`gog`'s
+`--wrap-untrusted`, Slack's message guard) reduces the odds the agent treats
+that text as an instruction, but it is a mitigation, not a guarantee: assume
+fetched content can attempt prompt injection and keep write-capable tools off
+by default.
+
+**Revoking and rotating access.** An OAuth grant (Google Workspace, a remote
+catalog server) is revoked from that provider's own account security page,
+not from pi-stack; `pi-stack gog setup` re-authorizes cleanly afterward if you
+need the integration back. A 1Password-backed MCP credential (a Slack token,
+a keyring password) is rotated in 1Password itself; the gateway only resolves
+an `op://` ref at spawn time, so the new value takes effect once you
+re-register the server (`pi-stack mcp register`), which triggers a fresh
+spawn. `pi-stack secret sync` is the equivalent for the cloud model provider
+keys (Anthropic/OpenAI/Google), not MCP credentials.
+
 ## Reporting a vulnerability
 
 Do not open a public issue for a security problem.

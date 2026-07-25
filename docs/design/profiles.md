@@ -1,5 +1,12 @@
 # Profiles: running work + personal contexts from one host
 
+> **Historical, superseded.** Profiles were removed. The `--profile` flag,
+> `active_profile`, and `[profiles.*]` config were deleted; switching
+> work/personal contexts is switching the active **pack**
+> (`pi-stack pack use`), which swaps the whole facet set (skills, knowledge,
+> MCP, bin wrappers, config), not just the pieces this doc proposed. See
+> `docs/design/packs.md` and `docs/design/packs-v2.md` for the current design.
+
 ## Problem
 
 A solo power-user runs pi-stack in more than one context — a **personal** one and

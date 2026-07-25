@@ -44,7 +44,7 @@ It creates and runs the sandbox and injects provider keys through its network
 proxy.
 .TP
 .BR op (1)
-Guided setup requires the 1Password CLI, signed in — it is the ONLY
+Guided setup requires the 1Password CLI, signed in.  It is the ONLY
 provider-key source.  Setup validates references for Anthropic, OpenAI, and
 Google, stores only those references in pi-stack, and reconciles the resolved
 values into host-managed
@@ -85,7 +85,7 @@ ONE-SHOT guided tour up front, not a progressive teach-as-you-go flow (say
 time).  Setup's host phase seeds your identity (read from git's global
 config) into the trusted host-state payload injected directly into the
 launcher-generated kickoff prompt, deterministically, and best-effort into
-the memory service — setup reports honestly which of the two actually
+the memory service.  Setup reports honestly which of the two actually
 happened.  The in-session tour reads that trusted payload (never a workspace
 file) and tells you the exact HOST command for anything not yet configured;
 it does not write host config on your behalf.  (Separately, if a
@@ -94,7 +94,7 @@ proposal file exists in the workspace, the host validates it against an
 allowlist and applies it under a confirmation gate on the next run.)
 .PP
 .B pi-stack run
-on its own NEVER onboards and never forces it — its only concession is
+on its own NEVER onboards and never forces it.  Its only concession is
 bootstrapping a model key when none is set at all (resolving your 1Password
 refs into sbx, steering you to 1Password on a TTY).  Provider keys,
 .BR serve ,
@@ -119,12 +119,12 @@ ref per provider, mirrors the refs into
 .B op-refs.env
 (sandbox) and
 .B hostmode.env
-(host mode), and reconciles the sbx secrets to match — 1Password is the
+(host mode), and reconciles the sbx secrets to match.  1Password is the
 source of truth, sbx is where the proxy reads from.  Key values never appear
 in a configuration file or inside the sandbox.  You can still set an sbx
 secret by hand, but a later
 .B pi-stack setup
-will reconcile it against your 1Password refs — 1Password is always the
+will reconcile it against your 1Password refs.  1Password is always the
 source of truth (the removed skip-1Password shortcut flags are hard errors).
 .PP
 Integration credentials (for host MCP servers such as Slack) are 1Password
@@ -144,7 +144,7 @@ refs template with
 .TP
 .BR "pi-stack status" " [" \-\-json "]"
 Show a read-only snapshot of services, provider keys, knowledge bundles, MCP
-registration, the active profile, and running
+registration, the active pack, and running
 .B pi-stack-*
 sandboxes.  The
 .B \-\-json
@@ -174,7 +174,7 @@ keeps one (e.g. the box you are in).
 Host-side onboarding: the deterministic HOST configuration and the flag-driven
 path for automation and CI, with NO agent handoff.
 .B pi-stack run
-never auto-onboards on its own — it stays out of your way (it only auto-
+never auto-onboards on its own.  It stays out of your way (it only auto-
 provisions a bare-minimum model key when none is set at all). Use
 .B pi-stack setup
 for the guided, in-session flow, or say "onboard me" to the agent inside a
@@ -248,7 +248,7 @@ answer acts: a confirmed-ABSENT sandbox gets a fresh launch handed off to a
 ONE-SHOT guided tour (not progressive/teach-as-you-go); a confirmed-EXISTING
 sandbox without
 .B \-\-replace
-is left alone — never force-removed, never replayed into a live session —
+is left alone (never force-removed, never replayed into a live session)
 and setup instead prints
 .B "pi-stack run [DIR]"
 (reattach as-is; the sandbox keeps its create-time pack/MCP/skills) or
@@ -260,7 +260,7 @@ setup relaunches through
 carrying the tour kickoff, so the recreated sandbox actually gets it
 (\-\-replace is harmless when the sandbox is absent).  If the sandbox state
 cannot be determined at all (sbx errored or is missing), setup FAILS CLOSED
-after the host phase — it never launches blind — and tells you to fix sbx
+after the host phase (it never launches blind) and tells you to fix sbx
 and re-run.
 .SS doctor
 .TP
@@ -282,9 +282,7 @@ are passed to
 .PP
 Lifecycle matches sbx's own re-attach model.  When no sandbox of the resolved
 name exists, it is created and the flags below apply.  When one already
-exists — running
-.B or
-stopped —
+exists, running or stopped,
 .B run
 RE-ATTACHES to it as-is instead of refusing or recreating: sbx reads the agent
 from the existing sandbox's own spec, so
@@ -326,8 +324,7 @@ needed).  Repeatable; create-only (attach to a running sandbox with
 Use
 .I N
 as the sandbox name.  Otherwise the launcher derives
-.BI pi-stack- workspace
-and appends a non-default profile name.
+.BI pi-stack- workspace .
 .TP
 .BI \-\-model " M"
 Pass
@@ -522,11 +519,10 @@ and
 .TP
 .BR "pi-stack memory remember" " " text... " [" \-\-json "]"
 Store a fact with source
-.B cli
-in the active profile.
+.B cli .
 .TP
 .BR "pi-stack memory forget" " " id " [" \-\-json "]"
-Delete the fact matching an ID or ID prefix in the active profile.  The
+Delete the fact matching an ID or ID prefix.  The
 .B \-\-json
 option emits the raw result.
 .TP
@@ -534,7 +530,7 @@ option emits the raw result.
 List recurring, promotable learnings.  The default minimum frequency is 3.
 .TP
 .BR "pi-stack memory stats" " [" \-\-json "]"
-Print counts by kind and durability for the active profile.
+Print counts by kind and durability.
 .PP
 Memory RPC commands return status 3 when the memory daemon cannot be reached.
 Full backup and restore are now the top-level
@@ -550,12 +546,12 @@ Create a hot, verified FULL backup, safe while
 holds the database.  It packages a SQLite
 .B "VACUUM INTO"
 snapshot of the memory database, the
-.B config.toml
-(profiles), the
+.B config.toml ,
+the
 .B op-refs.env
 (references only), and a
 .B manifest.json
-(format version 2, recording the profile names and a note of each configured
+(recording a note of each configured
 knowledge bundle's path and git remote) into a gzip tar archive.  Knowledge
 bundle contents are NOT archived: a bundle is a git repository and git is its
 backup; the manifest records only where it lives.  The default output is
@@ -583,10 +579,10 @@ and
 .B op-refs.env
 are always moved aside to a timestamped
 .B .bak
-file before the archived versions are written, so profiles come back and the
-change is reversible.  A format-version-1 (memory-only manifest) archive still
-restores.  The command reports the restored memory rows, the config profiles now
-present, and the recorded knowledge-bundle locations, then execes the sibling
+file before the archived versions are written, so the change is reversible.  A
+format-version-1 (memory-only manifest) archive still restores.  The command
+reports the restored memory rows and the recorded knowledge-bundle locations,
+then execes the sibling
 .B pi-stack-host
 binary and propagates its status.
 .SS knowledge
@@ -623,12 +619,12 @@ under
 (default current directory) without changing global configuration.
 .TP
 .BR "pi-stack knowledge ls" " [" \-\-json "]"
-List the active profile's configured bundles, service state, and any project
+List the configured bundles, service state, and any project
 pointer.  JSON output is selected with
 .BR \-\-json .
 .TP
 .BR "pi-stack knowledge query" " " text... " [" \-\-limit " " N "] [" \-\-json "]"
-Search the daemon within the active profile's bundles.  The default limit is 5;
+Search the daemon within the configured bundles.  The default limit is 5;
 .B \-n
 is an alias for
 .BR \-\-limit .
@@ -637,7 +633,7 @@ An unreachable daemon returns status 3.
 .BR "pi-stack knowledge sync" " [" \-m " " MSG "] [" \-\-bundle " " D "] [" \-\-allow-main "]"
 Commit and push a bundle.  Without
 .BR \-\-bundle ,
-exactly one bundle must be configured for the active profile.  The default
+exactly one bundle must be configured.  The default
 commit message contains a UTC timestamp.  By default, create and push a
 .B knowledge/sync-*
 review branch and print a
@@ -676,10 +672,9 @@ loopback-only).  Linux hosts watching a real sandbox may need
 .BR "\-\-bind 0.0.0.0" ", since"
 .B host.docker.internal
 maps to the bridge gateway there rather than to loopback (unlike Docker
-Desktop on macOS/Windows).  A non-loopback bind exposes the monitor hub —
-with
-.B no authentication
-— serving the sandbox's full agent context and tool output to your local
+Desktop on macOS/Windows).  A non-loopback bind exposes the monitor hub, with
+.B no authentication ,
+serving the sandbox's full agent context and tool output to your local
 network.
 .SS agent
 Manage subagents as first-class objects.  An agent stores an
@@ -741,7 +736,7 @@ MCP runs through sbx's local data-plane gateway (always available, no
 .TP
 .BR "pi-stack mcp register" " [" name... "]"
 Register named local stdio MCP servers with the sbx gateway.  With no names,
-use the active profile's configured MCP list.  Remote gateway-catalog names are
+use the configured MCP list.  Remote gateway-catalog names are
 skipped (register those with
 .BR "pi-stack mcp bundle" ).
 .TP
@@ -855,15 +850,14 @@ or, with
 the path to
 .BR op-refs.env .
 .TP
-.BR "pi-stack config get" " [" \-\-profile " " N "] " key
+.BR "pi-stack config get" " " key
 Print one resolved value with no decoration for scripts to source (list keys
-print space-separated).  The value is profile-aware, resolved through the
-active profile.  Unknown keys fail with a nonzero exit.
+print space-separated).  Unknown keys fail with a nonzero exit.
 .TP
-.BR "pi-stack config set" " [" \-\-profile " " N "] " key " " value
+.BR "pi-stack config set" " " key " " value
 Set a scalar key or add a value to a list key, then save the configuration.
 .TP
-.BR "pi-stack config unset" " [" \-\-profile " " N "] " key " [" value "]"
+.BR "pi-stack config unset" " " key " [" value "]"
 Clear or reset a scalar key, or remove
 .I value
 from a list key.
@@ -871,8 +865,6 @@ from a list key.
 Base keys are
 .BR gog_account ,
 .BR mcp ,
-.BR mcp_static ,
-.BR mcp_dynamic ,
 .BR services ,
 .BR knowledge_bundles ,
 .BR memory_watcher_model ,
@@ -882,23 +874,15 @@ Base keys are
 .BR host.autonomy ,
 and
 .BR host.autoserve .
-.B mcp_static
-and
-.B mcp_dynamic
-override a server's attach mode: a server in
-.B mcp_static
-is always attached at sandbox create
-.RB ( \-\-static\-mcp );
-one in
-.B mcp_dynamic
-is never statically attached (the in-VM agent pulls it via mcp-find/code-mode,
-or attach it live with
-.BR "pi-stack mcp load" ).
-The default is dynamic for every registered server (local or remote):
-.B mcp_static
-pins one eager, and
-.B mcp_dynamic
-wins if a server is in both.
+Every server in
+.B mcp
+is passed to sbx as
+.B \-\-static\-mcp
+when the sandbox is created, so its tools are in context from the start.
+There is no per-server eager/lazy split to configure: attach a server to an
+already-running sandbox with
+.B "pi-stack mcp load"
+instead.
 .B ollama_bridge_model
 is the local model the sandbox exposes to pi and the router's local option;
 by default the memory watcher shares it.
@@ -913,15 +897,14 @@ is reserved for the host-guard strictness.
 the
 .B PI_STACK_NO_AUTOSERVE
 environment variable also disables it and wins over the config flag.
-Per-profile keys are
+Keys are
 .BR gog_account ,
 .BR mcp ,
 .BR knowledge_bundles ,
-and
 .BR kit
 (the alias
 .B kits
-is accepted).  Profile writes create the named profile if absent.
+is accepted),
 .BR services ,
 .BR memory_watcher_model ,
 .BR memory_embed_model ,
@@ -929,14 +912,13 @@ is accepted).  Profile writes create the named profile if absent.
 .BR host.enabled ,
 .BR host.autonomy ,
 and
-.B host.autoserve
-are global and reject
-.BR \-\-profile .
-Setting base
+.BR host.autoserve .
+Setting
 .B knowledge_bundles
-enables the knowledge service.  A per-profile write does not; enable the global
-.B knowledge
-service separately.
+enables the knowledge service.  Switching the active pack
+.RB ( "pi-stack pack use" )
+swaps the whole config facet set at once, not just skills; see
+.BR "pi-stack pack" .
 .SS task
 Run parallel tasks on one repository.  Each task is a
 .B git clone --local
@@ -1120,14 +1102,13 @@ Schema fields are
 .BR version_pin ,
 .BR services ,
 .BR mcp ,
-.BR active_profile ,
 .BR memory_watcher_model ,
 .BR memory_embed_model ,
 .BR gog_account ,
 .BR knowledge_bundles ,
 .BR kits.stack ,
 .BR skills.paths ,
-.BR profiles.* ,
+.BR pack ,
 and
 .BR plugins.* .
 .TP
@@ -1241,7 +1222,7 @@ configuration default is
 .TP
 .B KNOWLEDGE_BUNDLES
 Comma- or platform path-list-separated bundle paths used by the host supervisor
-only when configured knowledge bundles, including profile bundles, are empty.
+only when configured knowledge bundles are empty.
 .TP
 .B SBX_MCP_URL
 Optional cloud/SaaS MCP gateway URL.  No longer required: sbx's local
@@ -1277,12 +1258,13 @@ pi-stack onboard --account you@example.com --yes
 .RE
 .fi
 .PP
-Launch the current directory, then launch a project under the work profile:
+Launch the current directory, then launch a project under a different pack:
 .PP
 .nf
 .RS
 pi-stack run
-pi-stack --profile work run ~/src/project
+pi-stack pack use work
+pi-stack run ~/src/project
 .RE
 .fi
 .PP
