@@ -24,7 +24,7 @@ host.
 
 ```bash
 brew install docker/tap/sbx@nightly
-sbx version
+sbx login
 ```
 
 Pix targets the nightly `sbx` CLI because its custom kit and MCP gateway support
@@ -70,6 +70,7 @@ Git operations inside Pix use HTTPS. The sandbox proxy injects this credential;
 ### 6. Install Pix
 
 ```bash
+sbx settings set kit.allowedSources '["docker.io/","github.com/mcavage/"]'
 curl -fsSL https://raw.githubusercontent.com/mcavage/pix/main/install.sh | sh
 exec "$SHELL" -l
 pix version
