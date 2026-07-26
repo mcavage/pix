@@ -143,7 +143,14 @@ func hostAgentDir() string {
 // hostHarnessDirs are the repo harness dirs symlinked into the host agent dir.
 // Only dirs that EXIST in the checkout are linked (e.g. prompts/ was removed
 // from the tree; a missing dir is skipped, never an error).
-var hostHarnessDirs = []string{"skills", "agents", "extensions", "prompts", "themes"}
+//
+// lib/ is not a pi discovery root — it is here because extensions/ imports out
+// of it (`../lib/recall-message.ts`). Today that resolves anyway, since the
+// extensions symlink points back at the checkout and Node resolves relative
+// imports from the realpath. Linking it explicitly means host mode does not
+// quietly depend on that, and keeps it in step with the image, which COPYs both.
+// scripts/check-recall-transport.sh (R4) enforces the pairing on both paths.
+var hostHarnessDirs = []string{"skills", "agents", "extensions", "lib", "prompts", "themes"}
 
 // hostPinnedPiPackage mirrors the Dockerfile's `ARG PI_PACKAGE` pin. The
 // "install pi" hints tell the user to match the image's version, so they must

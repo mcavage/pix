@@ -62,10 +62,26 @@ RUN node /usr/local/share/pix/patches/apply-tui-bottom-pin.mjs
 # typescript gives `tsc` for type-checking the baked extensions during dev.
 # (The clangd + node LSP servers were only here to feed pi-lens inline
 # diagnostics; removed with pi-lens.)
+#
+# xxd + the python trio are here because agents reach for them constantly and a
+# sandbox that lacks them turns a one-liner into an apt detour:
+#   xxd           hexdump/patch a binary, eyeball an encoding bug
+#   python3-pip   `pip install <anything>`
+#   python3-venv  `python3 -m venv` (Debian splits ensurepip out of the stdlib)
+#   python3-dev   headers, so a pip package with a C extension actually builds
+# All four straight from apt — DHI patches them like everything else here.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      build-essential python3 \
+      build-essential xxd \
+      python3 python3-pip python3-venv python3-dev \
  && rm -rf /var/lib/apt/lists/*
+
+# Debian marks the system interpreter "externally managed" (PEP 668), so a bare
+# `pip install x` dies with an error telling you to make a venv. That is right for
+# a laptop and wrong for a disposable sandbox: the container IS the environment,
+# and the agent hitting this mid-task just burns a turn working around it. Opt out
+# globally; `python3 -m venv` is still installed for anyone who wants isolation.
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 RUN npm install -g --ignore-scripts typescript \
  && npm cache clean --force
 # ruff (Python lint/format) via official static binary.
@@ -166,6 +182,12 @@ COPY --chown=agent:agent capabilities.json /home/agent/.pi/agent/capabilities.js
 COPY --chown=agent:agent routing.json      /home/agent/.pi/agent/routing.json
 COPY --chown=agent:agent skills/       /home/agent/.pi/agent/skills/
 COPY --chown=agent:agent extensions/   /home/agent/.pi/agent/extensions/
+# lib/ holds code SHARED by extensions but deliberately not loadable as one (pi
+# treats every .ts under extensions/ as an extension factory and dies on a file
+# that is not). The recall extensions `import … from "../lib/recall-message.ts"`,
+# so the directory has to sit next to extensions/ in the image too — leave it out
+# and pi fails to load both recall extensions and the agent exits 1 at startup.
+COPY --chown=agent:agent lib/          /home/agent/.pi/agent/lib/
 COPY --chown=agent:agent agents/       /home/agent/.pi/agent/agents/
 COPY --chown=agent:agent themes/       /home/agent/.pi/agent/themes/
 # Note: company tooling (e.g. a `snow` wrapper) is NOT in the public image. Such

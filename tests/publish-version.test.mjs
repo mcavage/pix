@@ -5,8 +5,13 @@ import test from "node:test";
 const workflow = fs.readFileSync(new URL("../.github/workflows/publish.yml", import.meta.url), "utf8");
 const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
-test("the first Pix publish starts from the committed 0.1.0 version", () => {
-	assert.equal(pkg.version, "0.1.0");
+// The point of this test is the SOURCE of the version, not its value: CI must
+// start from what package.json commits and must not go back to deriving it from
+// github.run_number. Pinning the literal "0.1.0" here asserted the opposite —
+// the publish job's own bump job commits the new version back to main, so the
+// assertion started failing the moment the first release landed (it did: 0.1.1).
+test("the publish version comes from committed package.json, not the run number", () => {
+	assert.match(pkg.version, /^\d+\.\d+\.\d+$/, `package.json version ${pkg.version} is not plain semver`);
 	assert.match(workflow, /require\('\.\/package\.json'\)\.version/);
 	assert.doesNotMatch(workflow, /version=0\.0\.\$\{\{\s*github\.run_number/);
 });
