@@ -552,6 +552,43 @@ func TestHarvestToDir_RejectsCheckoutItself(t *testing.T) {
 	}
 }
 
+// TestHarvestToDir_RejectsNestedDirUnderSymlinkedAncestor: the nesting guard
+// must hold when the checkout is reached through a SYMLINKED ANCESTOR.
+//
+// harvestToDir EvalSymlinks's the checkout but --to may not exist yet, and
+// EvalSymlinks fails outright on a missing path — so a merely Abs+Clean'd dest
+// compared /real/link/co/sub against /real/target/co and concluded "not nested",
+// copying straight into the checkout it was supposed to refuse.
+//
+// TestHarvestToDir_RejectsCheckoutItself only caught this where the PLATFORM
+// temp root is itself a symlink (macOS /var -> /private/var). On Linux it passed
+// with the bug present, so the guard could regress on CI unnoticed. This plants
+// the symlink explicitly and therefore fails everywhere.
+func TestHarvestToDir_RejectsNestedDirUnderSymlinkedAncestor(t *testing.T) {
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	main := newMainRepo(t)
+	co := filepath.Join(link, "co") // the checkout, reached VIA the symlink
+	makeTaskClone(t, main, co, "pix/x", "HEAD")
+	writeFile(t, filepath.Join(co, "keep.md"), "precious\n")
+	env := gitEnv(t, "", nil)
+
+	nested := filepath.Join(co, "sub") // does not exist yet
+	if rc := harvestToDir(env, co, nested, "x"); rc == 0 {
+		t.Error("harvestToDir into a nested dir reached through a symlinked ancestor should fail")
+	}
+	if _, err := os.Stat(nested); err == nil {
+		t.Error("the refused harvest still created the nested dir inside the checkout")
+	}
+	if b, _ := os.ReadFile(filepath.Join(co, "keep.md")); string(b) != "precious\n" {
+		t.Error("source doc was clobbered")
+	}
+}
+
 func TestBoundSandboxName_LongProfileStaysBounded(t *testing.T) {
 	got := boundSandboxName("api", "abcd1234", strings.Repeat("z", 50), strings.Repeat("p", 50))
 	if len(got) > maxSandboxNameLen {

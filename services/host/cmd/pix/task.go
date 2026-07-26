@@ -2038,11 +2038,14 @@ func harvestToDir(env shellEnv, co, to, name string) int {
 		fmt.Fprintf(os.Stderr, "pix task harvest: %v\n", err)
 		return 1
 	}
-	// If --to already exists, resolve symlinks so a symlinked dest can't alias the
-	// checkout. If it does not exist yet, its cleaned abs path is enough.
-	if r, err := filepath.EvalSymlinks(toAbs); err == nil {
-		toAbs = r
-	}
+	// Resolve symlinks so a symlinked dest can't alias the checkout. This has to
+	// canonicalize a --to that does NOT exist yet too: coAbs is EvalSymlinks'd
+	// above, so leaving a not-yet-created dest merely Abs+Clean'd compares
+	// /var/…/co/sub against /private/var/…/co and the nesting check fails OPEN —
+	// harvest then copies into the checkout it was meant to refuse. Any symlinked
+	// ancestor does this (macOS /var, a symlinked $HOME, /home -> /mnt/home), not
+	// just the dest itself.
+	toAbs = resolveThroughMissing(toAbs)
 	if toAbs == coAbs || strings.HasPrefix(toAbs+string(os.PathSeparator), coAbs+string(os.PathSeparator)) {
 		fmt.Fprintf(os.Stderr, "pix task harvest: --to %q is the checkout itself (or nested inside it); choose a dir outside the clone.\n", to)
 		return 1
@@ -2074,6 +2077,30 @@ func harvestToDir(env shellEnv, co, to, name string) int {
 	}
 	fmt.Printf("Harvested %s to %s\n", plural(copied, "doc"), toAbs)
 	return 0
+}
+
+// resolveThroughMissing canonicalizes a path that may not exist yet, so it is
+// comparable byte-for-byte with an absResolve'd sibling. EvalSymlinks fails
+// outright on a missing path, so walk up to the deepest ancestor that DOES
+// exist, resolve that, and re-append the segments below it. A path with no
+// resolvable ancestor at all falls back to its cleaned absolute form.
+func resolveThroughMissing(abs string) string {
+	cur := filepath.Clean(abs)
+	rest := ""
+	for {
+		if r, err := filepath.EvalSymlinks(cur); err == nil {
+			if rest == "" {
+				return r
+			}
+			return filepath.Join(r, rest)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return filepath.Clean(abs)
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
 }
 
 // absResolve returns the absolute, symlink-resolved path.

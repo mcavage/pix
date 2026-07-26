@@ -1000,6 +1000,61 @@ func TestMigrateLegacyPackDir_CfgPackSymlinkAlias_RefusesBeforeAnyMutation(t *te
 	}
 }
 
+// TestMigrateLegacyPackDir_CfgPackSymlinkAlias_LegacyUnderSymlinkedAncestor:
+// the alias guard must hold when the LEGACY DIR ITSELF is reached through a
+// symlinked ancestor.
+//
+// The guard EvalSymlinks'd the alias but compared it against oldCanon, which is
+// Abs+Clean only. With a symlinked ancestor the alias resolves to
+// /target/pix/personal while oldCanon stays /link/pix/personal — the strings
+// differ, the guard falls through, and the migration renames the legacy dir out
+// from under the alias: precisely the corruption it exists to prevent.
+//
+// The sibling test above only caught this where the PLATFORM temp root is a
+// symlink (macOS /var -> /private/var); on Linux it passed with the bug present.
+// Planting the symlink explicitly makes the regression visible everywhere.
+func TestMigrateLegacyPackDir_CfgPackSymlinkAlias_LegacyUnderSymlinkedAncestor(t *testing.T) {
+	target := t.TempDir()
+	data := filepath.Join(t.TempDir(), "data-link")
+	if err := os.Symlink(target, data); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	cfgDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", data) // every pack path now runs through the symlink
+	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(cfgDir, "state"))
+	legacy := filepath.Join(data, "pix", "personal")
+	def := filepath.Join(data, "pix", "default")
+	writeLegacyPack(t, legacy)
+
+	alias := legacy + "-alias"
+	if err := os.Symlink(legacy, alias); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Pack = alias
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if root := defaultPackRoot(); root != legacy {
+		t.Errorf("defaultPackRoot() must fall back to the untouched legacy dir %q, got %q", legacy, root)
+	}
+	if _, err := os.Stat(def); !os.IsNotExist(err) {
+		t.Errorf("the default dir must NOT be created when migration is refused, stat err = %v", err)
+	}
+	p, err := loadPack(legacy)
+	if err != nil {
+		t.Fatalf("legacy pack must still load untouched: %v", err)
+	}
+	if p.Manifest.Name != "personal" {
+		t.Errorf("legacy manifest must be untouched, got name = %q", p.Manifest.Name)
+	}
+}
+
 // --- item 8: repairStaleLegacyPackState is transactional (trust+config) ---
 
 // TestRepairStaleLegacyPackState_ConfigSaveFailure_RollsBackTrust: when the

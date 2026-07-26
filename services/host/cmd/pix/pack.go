@@ -477,10 +477,22 @@ func migrateLegacyPackDirLocked(oldDir, newDir string) error {
 	// trust-store change, no config write. defaultPackRoot's caller already
 	// falls back to the legacy path on any migration error, which is exactly
 	// right here (the alias's target keeps its original name).
+	//
+	// Both sides must be EvalSymlinks'd for that comparison. Resolving only the
+	// alias and matching it against oldCanon (Abs+Clean) fails open whenever
+	// oldDir ITSELF sits under a symlinked ancestor — /var -> /private/var on
+	// macOS, a symlinked $HOME, /home -> /mnt/home. The alias resolves to
+	// /private/var/…/personal, oldCanon stays /var/…/personal, the strings differ,
+	// and the migration proceeds — doing exactly the damage this guard exists to
+	// prevent. Resolve oldDir the same way and compare like with like.
 	if alias := strings.TrimSpace(cfg.Pack); alias != "" {
 		aliasCanon := canonicalizePackRoot(alias)
 		if aliasCanon != oldCanon {
-			if resolved, rerr := filepath.EvalSymlinks(alias); rerr == nil && canonicalizePackRoot(resolved) == oldCanon {
+			oldResolved := oldCanon
+			if r, rerr := filepath.EvalSymlinks(oldDir); rerr == nil {
+				oldResolved = canonicalizePackRoot(r)
+			}
+			if resolved, rerr := filepath.EvalSymlinks(alias); rerr == nil && canonicalizePackRoot(resolved) == oldResolved {
 				return fmt.Errorf("cfg.pack %q is a symlink alias resolving to %s, but its own path does not match — refusing to migrate (would leave the alias dangling); repoint cfg.pack directly at %s first, or remove the alias", alias, oldDir, oldDir)
 			}
 		}

@@ -268,8 +268,13 @@ func TestKnowledgeHealthAndIdempotentReindex(t *testing.T) {
 	if h.Concepts != 2 {
 		t.Fatalf("health.Concepts = %d, want 2", h.Concepts)
 	}
-	if len(h.Bundles) != 1 || h.Bundles[0] != dir {
-		t.Fatalf("health.Bundles = %v, want [%s]", h.Bundles, dir)
+	// reindex stores the CANONICAL bundle id (canonicalizeBundle: Abs +
+	// EvalSymlinks), so compare against that, not the raw t.TempDir() spelling —
+	// under a symlinked temp root (macOS /var -> /private/var) they differ, and
+	// the byte-for-byte agreement those ids depend on is exactly what this asserts.
+	wantBundle := canonicalizeBundle(dir)
+	if len(h.Bundles) != 1 || h.Bundles[0] != wantBundle {
+		t.Fatalf("health.Bundles = %v, want [%s]", h.Bundles, wantBundle)
 	}
 
 	// Re-running the reindex must not duplicate concepts.

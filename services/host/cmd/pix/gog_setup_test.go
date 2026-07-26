@@ -271,6 +271,20 @@ func gogSetupTestCfg(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 }
 
+// isGogSnapshotCall asserts a call is `<verb> <path>` where the path is the
+// short-lived credentials snapshot (os.MkdirTemp "pix-gog-*"). It checks the
+// snapshot MARKER, not a literal "/tmp" prefix: os.MkdirTemp honours the
+// platform temp root, which is /var/folders/… on macOS, so a hardcoded /tmp
+// only ever passed on Linux.
+func isGogSnapshotCall(call []string, verb string) bool {
+	joined := strings.Join(call, " ")
+	if !strings.HasPrefix(joined, verb+" ") {
+		return false
+	}
+	path := strings.TrimPrefix(joined, verb+" ")
+	return filepath.IsAbs(path) && strings.Contains(path, "pix-gog-")
+}
+
 func gogCredFile(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -355,8 +369,8 @@ func TestGogSetup_CurrentTwoStepRoute(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("expected 2 interactive calls (credentials + add), got %d: %v", len(calls), calls)
 	}
-	if !strings.HasPrefix(strings.Join(calls[0], " "), "gog auth credentials /tmp/pix-gog-") {
-		t.Errorf("call[0] = %v", calls[0])
+	if !isGogSnapshotCall(calls[0], "gog auth credentials") {
+		t.Errorf("call[0] = %v, want `gog auth credentials <pix-gog-* snapshot>`", calls[0])
 	}
 	// R1-02: the OAuth-granting `auth add` step always carries --readonly.
 	if strings.Join(calls[1], " ") != "gog auth add you@example.com --readonly" {
@@ -386,8 +400,8 @@ func TestGogSetup_LegacyFallbackRoute(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("expected 2 interactive calls (add-client + login), got %d: %v", len(calls), calls)
 	}
-	if !strings.HasPrefix(strings.Join(calls[0], " "), "gog auth add-client /tmp/pix-gog-") {
-		t.Errorf("call[0] = %v", calls[0])
+	if !isGogSnapshotCall(calls[0], "gog auth add-client") {
+		t.Errorf("call[0] = %v, want `gog auth add-client <pix-gog-* snapshot>`", calls[0])
 	}
 	// R1-02: the OAuth-granting `auth login` step always carries --readonly.
 	if strings.Join(calls[1], " ") != "gog --account you@example.com auth login --readonly" {

@@ -27,7 +27,29 @@ import (
 // tmpPath scrubs the per-subtest temp root out of a transcript: each cut point
 // gets its own hermetic host, so the absolute pack path legitimately differs
 // while the VERDICT it carries must not.
-var tmpPath = regexp.MustCompile(`/tmp/[^ )\n]+`)
+//
+// Built from os.TempDir() rather than a literal "/tmp" — t.TempDir() lives under
+// $TMPDIR, which is /var/folders/… on macOS, so a hardcoded /tmp scrubbed
+// nothing there and every subtest diffed its own temp path against the
+// baseline's. Both the raw root and its symlink-resolved form are matched, since
+// a rendered path may have been canonicalized on its way out.
+var tmpPath = regexp.MustCompile(strings.Join(tmpRootPatterns(), "|"))
+
+func tmpRootPatterns() []string {
+	seen := map[string]bool{}
+	var pats []string
+	for _, root := range []string{os.TempDir(), "/tmp"} {
+		root = strings.TrimSuffix(filepath.Clean(root), string(os.PathSeparator))
+		for _, r := range []string{root, resolveThroughMissing(root)} {
+			if r == "" || seen[r] {
+				continue
+			}
+			seen[r] = true
+			pats = append(pats, regexp.QuoteMeta(r)+`/[^ )\n]+`)
+		}
+	}
+	return pats
+}
 
 func scrubbed(s string) string { return tmpPath.ReplaceAllString(s, "<tmp>") }
 

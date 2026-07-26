@@ -79,7 +79,7 @@ func TestKnowledgeInit_Scaffold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	absDir, _ := filepath.Abs(dir)
+	absDir := canonicalizeKnowledgeBundle(dir)
 	if !containsStr(got.KnowledgeBundles, absDir) {
 		t.Errorf("knowledge_bundles = %v, want %q", got.KnowledgeBundles, absDir)
 	}
@@ -111,7 +111,7 @@ func TestKnowledgeInit_Idempotent(t *testing.T) {
 	if got := readFile(t, concept); !strings.Contains(got, "MINE") {
 		t.Errorf("re-init clobbered hand-authored concept: %q", got)
 	}
-	absDir, _ := filepath.Abs(dir)
+	absDir := canonicalizeKnowledgeBundle(dir)
 	if n := countStr(cfg2.KnowledgeBundles, absDir); n != 1 {
 		t.Errorf("knowledge_bundles has %q %d times, want 1: %v", absDir, n, cfg2.KnowledgeBundles)
 	}
@@ -176,7 +176,7 @@ func TestKnowledgeUse_LocalPath(t *testing.T) {
 	if err := knowledgeUse(cfg, bundle, new(bytes.Buffer)); err != nil {
 		t.Fatalf("knowledgeUse: %v", err)
 	}
-	absDir, _ := filepath.Abs(bundle)
+	absDir := canonicalizeKnowledgeBundle(bundle)
 	if !containsStr(cfg.KnowledgeBundles, absDir) {
 		t.Errorf("knowledge_bundles = %v, want %q", cfg.KnowledgeBundles, absDir)
 	}
