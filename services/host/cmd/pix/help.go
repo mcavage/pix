@@ -121,6 +121,9 @@ Setup & health
   setup               guided onboarding: host config, then agent handoff for a guided tour
   setup --no-agent    host-side config only (flags/CI); no sandbox, no handoff
   doctor              diagnose host + sandbox health, print the fix commands
+  upgrade [flags]     replace the pix + pix-host binaries with a published
+                      release (sha256-verified). run already tracks the latest
+                      kit/image itself.            [--check --version X.Y.Z --force]
 
 Data
   memory <cmd>        recall | remember | forget | learnings | stats   (:11435)
@@ -209,6 +212,8 @@ func verbUsage(verb string) (string, bool) {
 		return secretUsage, true
 	case "version":
 		return versionUsage, true
+	case "upgrade":
+		return upgradeUsage, true
 	case "man":
 		return manUsage, true
 	case "reset":

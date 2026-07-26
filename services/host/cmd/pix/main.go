@@ -121,6 +121,8 @@ func main() {
 		runMan(args[1:])
 	case "reset":
 		runReset(args[1:])
+	case "upgrade":
+		runUpgrade(args[1:])
 	case "uninstall":
 		runUninstall(args[1:])
 	case "state":
@@ -367,6 +369,8 @@ Workflow
 Setup & health
   setup            guided setup: keys, memory, pack (knowledge/integrations optional)
   doctor           diagnose problems and print the exact fix commands
+  upgrade          update the pix binaries (` + "`--check`" + ` just reports; run tracks the
+                   latest kit/image on its own)
   monitor [name]   live-follow a sandbox's out-of-sandbox traffic (:11437)
 
 Data
