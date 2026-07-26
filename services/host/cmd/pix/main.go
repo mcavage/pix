@@ -300,6 +300,10 @@ flags:
                    creds + egress + skills): replaces the auto git/local pin, so you
                    can work around an unresolvable release tag (repeatable; path or
                    git+URL). To just swap the IMAGE, use --template instead.
+  --kit-ref REF    pin the auto kit to a specific git ref (e.g. v0.1.0, main)
+                   instead of the latest stable release. Steers the automatic
+                   pin rather than replacing it, so the image still comes from
+                   that ref's kit. Persist it with version_pin in config.toml.
   --template REF   override only the IMAGE sbx boots (the ref 'make load' prints,
                    e.g. docker.io/mcavage/pix:local-1234567890). Works from ANY
                    directory — no checkout needed — so you can point at one worktree's
@@ -329,11 +333,20 @@ lifecycle (matches sbx's own re-attach model):
                                  session on a re-attach too.
 
 released vs local:
-  A RELEASED launcher (clean version like 0.0.16) pins the matching kit tag
-  (git+...#ref=v0.0.16). An UNRELEASED/local build (version with +local, a dev
-  build, or non-semver) never pins a nonexistent v<version> tag: it uses your
-  local checkout kit when one is resolvable (also pinning the locally loaded
-  image via --template), otherwise it falls back to #ref=main with a warning.
+  A RELEASED launcher (clean version like 0.0.16) tracks the LATEST STABLE
+  release: it resolves the newest published tag (cached 24h) and pins that, so a
+  launcher you installed months ago still boots today's kit + image. The tag is
+  always concrete, never a moving ':latest'. If the lookup cannot run — offline,
+  GitHub unreachable — it silently falls back to this build's own version, which
+  is the old lockstep behaviour; a run is never blocked or failed by it.
+  Precedence: --kit-ref, then version_pin in config.toml, then latest stable,
+  then this build's version.
+
+  An UNRELEASED/local build (version with +local, a dev build, or non-semver)
+  never pins a nonexistent v<version> tag and never auto-tracks a release: it
+  uses your local checkout kit when one is resolvable (also pinning the locally
+  loaded image via --template), otherwise it falls back to #ref=main with a
+  warning.
 
 DIR defaults to the current directory. Everything after -- is passed to pi.
 Set PIX_DEBUG=1 to print the composed sbx command.

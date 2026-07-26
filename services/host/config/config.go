@@ -530,7 +530,10 @@ func (c *Config) Plugin(slot string) PluginSpec {
 // defaultConfigTOML is the commented template Seed writes.
 const defaultConfigTOML = `# pix config. All fields optional; delete anything you don't override.
 
-# Pin the pix image/version the launcher runs (empty = latest baked).
+# Pin the kit/image release the launcher runs. Empty (the default) tracks the
+# LATEST STABLE release, so an installed launcher keeps picking up fixes. Set a
+# version ("0.1.0") or any git ref ("main") to freeze it instead. Override for a
+# single run with: pix run --kit-ref REF
 version_pin = ""
 
 # Host services ` + "`make serve`" + ` runs.

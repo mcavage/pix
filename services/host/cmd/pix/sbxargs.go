@@ -45,13 +45,19 @@ type runOpts struct {
 	Template      string   // --template REF: explicit image override (e.g. the full ref `make load` prints). Works from ANY directory — no checkout needed — and takes precedence over the auto LocalImageTag pin.
 	Skills        []string // --skills DIR: extra live skill trees
 	Kits          []string // --kit K: escape-hatch kit(s). When present they REPLACE the auto git/local pin (a user override), then config stack applies.
-	MCP           []string // --mcp M: extra MCP servers on top of config.MCP (folded into StaticMCP by the caller)
-	StaticMCP     []string // RESOLVED set to attach at create (emitted as --static-mcp); the caller computes it from cfg.MCP+MCP via allPreloadedMCP — S01: every configured/pack server preloads, no eager/lazy split
-	Name          string   // --name N: sandbox name
-	Model         string   // --model M: active pi model (passed through to pi)
-	Intent        string   // --intent NAME: resolve the session model via the router (unless --model overrides)
-	Replace       bool     // --replace: force a recreate (rm -f then create) instead of re-attaching to an existing sandbox
-	Pack          string   // --pack PATH: active pack for this run (overrides config.Pack); mounts its skills + knowledge
+	// KitRef overrides the git ref the auto-pinned kit resolves (e.g. "v0.1.2",
+	// "main"). Resolved by the caller via resolveKitRef — see kitref.go for the
+	// precedence chain. Empty means "use this build's stamped version", the
+	// original lockstep behaviour. Distinct from Kits: this steers the AUTO pin
+	// rather than replacing it, so --dev / local-checkout selection still wins.
+	KitRef    string
+	MCP       []string // --mcp M: extra MCP servers on top of config.MCP (folded into StaticMCP by the caller)
+	StaticMCP []string // RESOLVED set to attach at create (emitted as --static-mcp); the caller computes it from cfg.MCP+MCP via allPreloadedMCP — S01: every configured/pack server preloads, no eager/lazy split
+	Name      string   // --name N: sandbox name
+	Model     string   // --model M: active pi model (passed through to pi)
+	Intent    string   // --intent NAME: resolve the session model via the router (unless --model overrides)
+	Replace   bool     // --replace: force a recreate (rm -f then create) instead of re-attaching to an existing sandbox
+	Pack      string   // --pack PATH: active pack for this run (overrides config.Pack); mounts its skills + knowledge
 	// PackKits are ephemeral mixin kit dir(s) synthesized from the active pack's
 	// bin/ wrappers (F2, see synthesizePackKit). Deliberately SEPARATE from Kits:
 	// Kits non-empty is the --kit ESCAPE HATCH that replaces the auto git/local
@@ -82,7 +88,22 @@ func kitRef(version string) string {
 // gitKitURL is the full --kit URL for a repo-less consumer run, pinned to the
 // stamped version (or main for an unreleased build).
 func gitKitURL(version string) string {
-	return kitRepo + "#ref=" + kitRef(version) + "&dir=pi-kit"
+	return gitKitURLRef(kitRef(version))
+}
+
+// gitKitURLRef is gitKitURL for an ALREADY-RESOLVED ref (see kitref.go), which
+// may be a release tag this binary was not stamped with.
+func gitKitURLRef(ref string) string {
+	return kitRepo + "#ref=" + ref + "&dir=pi-kit"
+}
+
+// refOrStamped falls back to this build's own ref when nothing overrode it, so
+// every failure path in the resolver lands on the original lockstep behaviour.
+func refOrStamped(ref, version string) string {
+	if ref != "" {
+		return ref
+	}
+	return kitRef(version)
 }
 
 // localImageRef is the --template ref for a locally loaded image tag.
@@ -145,7 +166,7 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 		if o.LocalKit != "" {
 			args = append(args, "--kit", o.LocalKit)
 		} else {
-			args = append(args, "--kit", gitKitURL(version))
+			args = append(args, "--kit", gitKitURLRef(refOrStamped(o.KitRef, version)))
 		}
 	}
 	// User --kit flags are the base when present (escape hatch).
@@ -360,16 +381,21 @@ func kitResolveFailureMsg(pinnedKit string) string {
 		}
 		ref = rest
 	}
-	var lead string
-	if strings.HasPrefix(ref, "v") {
-		lead = fmt.Sprintf("sbx could not resolve the pinned kit (release %s may not be published yet).", ref)
-	} else {
-		lead = fmt.Sprintf("sbx could not resolve the kit at ref %q.", ref)
-	}
+	// This fires on ANY `sbx run` failure that had a git-ref kit pinned — it has
+	// NOT inspected why. So it must not assert a cause. It used to lead with
+	// "release <ref> may not be published yet", which reads as a diagnosis and
+	// sent at least one person hunting a release problem when the real error,
+	// printed directly above it, was git refusing to start in a deleted cwd.
+	lead := fmt.Sprintf("sbx could not resolve the kit at ref %q.", ref)
 	return "pix: " + lead + `
+Check the error above first — it is the actual failure. Common causes:
+  - the shell's working directory no longer exists (git cannot start there):
+    "fatal: Unable to read current working directory" — cd somewhere real
+  - no network / GitHub unreachable
+  - the ref genuinely is not published yet
 Options:
+  - pick another ref:                          pix run --kit-ref <tag-or-branch>
   - run a local build from your pix checkout:  pix run --dev
-  - override the kit:                               pix run --kit <path-or-git-url>
-  - install a published release
+  - override the kit entirely:                 pix run --kit <path-or-git-url>
 See ` + "`pix help run`" + ` for the released-vs-local behavior.`
 }

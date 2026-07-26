@@ -139,6 +139,23 @@ func runRun(argv []string) {
 		released := isReleased(version)
 		kitOverride := len(o.Kits) > 0
 
+		// Which RELEASE does the auto pin resolve to? By default the newest
+		// published one rather than this binary's own, so an installed launcher
+		// picks up kit/image fixes instead of being frozen at the version it was
+		// installed at. Every failure (offline, GitHub down, junk response) yields
+		// "" and falls back to the stamped pin. See kitref.go.
+		if !o.Dev && !kitOverride {
+			latest := ""
+			if released && o.KitRef == "" && strings.TrimSpace(cfg.VersionPin) == "" {
+				latest = resolveLatestRelease(&http.Client{Timeout: latestReleaseTimeout}, time.Now())
+			}
+			ref, src := resolveKitRef(version, o.KitRef, cfg.VersionPin, latest)
+			o.KitRef = ref
+			if msg := kitRefNotice(version, ref, src); msg != "" {
+				fmt.Fprintln(os.Stderr, msg)
+			}
+		}
+
 		if o.Dev {
 			// --dev needs a resolvable repo checkout; fail loud otherwise. --dev is
 			// create/replace-only (this branch), so it is a no-op on a plain re-attach.
@@ -849,6 +866,12 @@ func parseRunArgs(argv []string) (runOpts, error) {
 				return o, err
 			}
 			o.Kits = append(o.Kits, v)
+		case name == "--kit-ref":
+			v, err := valueOf(a, &i)
+			if err != nil {
+				return o, err
+			}
+			o.KitRef = normalizeKitRef(v)
 		case name == "--template":
 			v, err := valueOf(a, &i)
 			if err != nil {
