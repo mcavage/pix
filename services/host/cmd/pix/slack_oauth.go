@@ -130,6 +130,13 @@ type slackOAuthDeps struct {
 	// timeout overrides slackOAuthTimeout. Zero means the production default;
 	// tests set a short one so a deliberately-uncompleted flow fails fast.
 	timeout time.Duration
+	// revoke calls Slack's auth.revoke with a live bearer token and reports
+	// whether Slack CONFIRMED revocation — never just that the HTTP call
+	// succeeded. Production: liveSlackAuthRevoke. Used for the BEST-EFFORT
+	// cleanup of a freshly minted grant when setup fails after Exchange but
+	// before the 1Password document is durably written (see
+	// slackOAuthBestEffortRevoke) — never logs the token.
+	revoke func(token string) (revoked bool, err error)
 }
 
 // defaultSlackOAuthDeps returns the production wiring: a real (non-blocking)
@@ -140,6 +147,7 @@ func defaultSlackOAuthDeps() slackOAuthDeps {
 		runner:      slackoauth.ExecRunner{},
 		doer:        http.DefaultClient,
 		clock:       slackoauth.SystemClock{},
+		revoke:      liveSlackAuthRevoke,
 	}
 }
 
@@ -268,19 +276,23 @@ func slackServeCallback(ln net.Listener, path, wantState string, timeout time.Du
 		}
 		if r.Header.Get("Origin") != "" {
 			// A same-navigation top-level GET never legitimately carries an
-			// Origin header; treat one as a CSRF-shaped probe and end the
-			// attempt rather than keep waiting.
+			// Origin header; treat one as a CSRF-shaped probe: answer 4xx and
+			// discard it, but do NOT end the wait — a genuine callback may still
+			// arrive (e.g. a browser extension or proxy fired an extra probe
+			// request first), so this behaves exactly like the wrong-path/
+			// wrong-method cases below rather than failing the whole attempt.
 			w.WriteHeader(http.StatusForbidden)
 			fmt.Fprint(w, "forbidden")
-			deliver("", errors.New("rejected an OAuth callback that carried an Origin header"))
 			return
 		}
 		q := r.URL.Query()
 		gotState := q.Get("state")
 		if subtle.ConstantTimeCompare([]byte(gotState), []byte(wantState)) != 1 {
+			// Same reasoning as the Origin check above: answer 4xx and discard,
+			// but keep waiting for the genuine callback rather than failing the
+			// attempt on a stray/stale/mismatched request.
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprint(w, "state mismatch")
-			deliver("", errors.New("OAuth callback state did not match the expected value; discarding (possible CSRF or a stale attempt)"))
 			return
 		}
 		if errParam := q.Get("error"); errParam != "" {
@@ -330,6 +342,36 @@ func slackVerifyRotatingIdentity(id slackIdentity, blob slackoauth.Blob) error {
 			id.teamID, id.userID, blob.TeamID, blob.UserID)
 	}
 	return nil
+}
+
+// slackOAuthBestEffortRevoke performs a best-effort revoke of a freshly
+// minted rotating grant's access token and returns a note describing the
+// outcome, meant to be appended to any error (or printed alongside an abort)
+// returned AFTER Client.Exchange succeeded but BEFORE the 1Password document
+// was durably written (store.Write). A grant that only ever existed for a
+// few seconds before this process decided to give up on it (a failed
+// auth.test, an identity mismatch, a declined/non-TTY confirmation, or the
+// 1Password write itself failing) should not be left live at Slack with
+// nothing telling the operator so — but a revoke failing here is reported IN
+// the note, never propagated as the primary error, since the caller already
+// has a more important one to report. Once the document is persisted, this
+// is NEVER called again for a later failure (see slackSetupPKCE) — from that
+// point on the credential is real and recoverable (slackOAuthOrphanNote),
+// not something to auto-revoke.
+func slackOAuthBestEffortRevoke(deps slackOAuthDeps, accessToken string) string {
+	revoke := deps.revoke
+	if revoke == nil {
+		revoke = liveSlackAuthRevoke
+	}
+	revoked, err := revoke(accessToken)
+	if err != nil || !revoked {
+		if err == nil {
+			err = errors.New("Slack did not confirm the token was revoked")
+		}
+		return fmt.Sprintf("attempted to revoke the freshly minted OAuth grant but that failed too (%v); "+
+			"it may remain active at Slack until you revoke it yourself (Slack's Apps management page)", err)
+	}
+	return "the freshly minted OAuth grant was revoked; nothing was persisted"
 }
 
 // slackOAuthOrphanNote builds the recovery text appended to every error that
@@ -524,19 +566,52 @@ func slackSetupPKCE(env shellEnv, cfg *config.Config, opts slackSetupOpts, deps 
 	}
 	id, err := env.slackAuthTest(blob.AccessToken)
 	if err != nil {
-		return fmt.Errorf("Slack auth.test failed on the newly issued token: %w (the exchange succeeded but the token did not authenticate)", err)
+		note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
+		return fmt.Errorf("Slack auth.test failed on the newly issued token: %w (the exchange succeeded but the token did not authenticate); %s", err, note)
 	}
 	if err := slackVerifyRotatingIdentity(id, blob); err != nil {
-		return err
+		note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
+		return fmt.Errorf("%w; %s", err, note)
 	}
 	fmt.Fprintf(out, "Slack identity: %s (user %s) on team %s (%s)\n", id.user, id.userID, id.team, id.teamID)
 
+	// A DIFFERENT identity than whatever was already pinned (SLACK_TEAM_ID/
+	// SLACK_USER_ID) must never be silently re-pinned: under --yes that is a
+	// hard refusal (a script that expected to reauthorize the SAME person
+	// must not accidentally re-pin to someone else's identity), and
+	// interactively it needs its own explicit confirmation, distinct from the
+	// ordinary "wire up Slack" prompt below. --allow-identity-change (or
+	// --yes with it set) skips this gate entirely.
+	_, existingRefsContent, _ := opRefsContent(env)
+	pinTeam, pinUser := slackIdentityPins(existingRefsContent)
+	identityChanged := (pinTeam != "" || pinUser != "") && (pinTeam != id.teamID || pinUser != id.userID)
+	if identityChanged && !opts.allowIdentityChange {
+		if opts.assumeYes {
+			note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
+			return fmt.Errorf("the existing identity pin (team %s / user %s) does not match this OAuth identity (team %s / user %s); "+
+				"refusing under --yes to avoid silently re-pinning to a different person — rerun interactively to confirm, or pass --allow-identity-change; %s",
+				pinTeam, pinUser, id.teamID, id.userID, note)
+		}
+		if !tty {
+			note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
+			return fmt.Errorf("refusing to wire up Slack non-interactively without --yes; %s", note)
+		}
+		if !confirmYN(in, out, fmt.Sprintf("The pinned Slack identity differs (was %s / %s; this OAuth grant resolves to %s / %s). Replace the pin? [y/N]: ",
+			pinTeam, pinUser, id.teamID, id.userID), false) {
+			note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
+			fmt.Fprintf(out, "aborted; %s\n", note)
+			return nil
+		}
+	}
+
 	if !opts.assumeYes {
 		if !tty {
-			return fmt.Errorf("refusing to wire up Slack non-interactively without --yes")
+			note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
+			return fmt.Errorf("refusing to wire up Slack non-interactively without --yes; %s", note)
 		}
 		if !confirmYN(in, out, fmt.Sprintf("Wire up Slack as %s on %s via OAuth? [y/N]: ", id.user, id.team), false) {
-			fmt.Fprintln(out, "aborted; nothing written")
+			note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
+			fmt.Fprintf(out, "aborted; %s\n", note)
 			return nil
 		}
 	}
@@ -551,7 +626,8 @@ func slackSetupPKCE(env shellEnv, cfg *config.Config, opts slackSetupOpts, deps 
 	opCtx, opCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer opCancel()
 	if err := store.Write(opCtx, blob); err != nil {
-		return fmt.Errorf("writing the Slack credential to 1Password: %w", err)
+		note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
+		return fmt.Errorf("writing the Slack credential to 1Password: %w; %s", err, note)
 	}
 	itemID, vaultID := store.ItemID(), store.VaultID()
 	orphan := slackOAuthOrphanNote(itemID, vaultID)
@@ -660,29 +736,31 @@ func defaultSlackOAuthRuntimeDeps() slackOAuthRuntimeDeps {
 // an unrelated test.
 var slackOAuthRuntimeDepsFn = defaultSlackOAuthRuntimeDeps
 
-// slackOAuthInProcessLocker is the fallback Locker used only when the state
-// dir cannot be resolved — never in production (config.StateDir only fails
-// when $HOME cannot be determined at all). It serializes within THIS
-// process only; it deliberately does not claim cross-process safety the way
-// the production slackoauth.FileLock does.
-type slackOAuthInProcessLocker struct{ mu sync.Mutex }
-
-func (l *slackOAuthInProcessLocker) Lock(context.Context) (func(), error) {
-	l.mu.Lock()
-	return l.mu.Unlock, nil
-}
-
 // slackOAuthRuntime builds the SAME kind of slackoauth.Manager/OPStore
 // services/host/slack.go's slackOAuthManagerFromConfig builds for the
 // running MCP server: an OPStore over cfg's vault/document (item pre-filled,
 // so a Read never needs a Title), a Client carrying the exact shared
-// read-only scope set (slackoauth.RequiredUserScopes), and — whenever the
-// state dir resolves — a FileLock at the SAME path the server uses, so a
-// refresh triggered from this CLI is serialized with a concurrently running
-// gateway process sharing the same credential, not just with itself. ok is
-// false when cfg does not carry a complete OAuth wiring.
+// read-only scope set (slackoauth.RequiredUserScopes), and a FileLock at the
+// SAME path the server uses, so a refresh triggered from this CLI is
+// serialized with a concurrently running gateway process sharing the same
+// credential, not just with itself. ok is false when cfg does not carry a
+// complete OAuth wiring, OR when the shared state dir cannot be resolved —
+// this FAILS CLOSED rather than fall back to a process-local Locker: an
+// in-process-only lock would not actually serialize anything against a
+// concurrently running gateway process sharing the same 1Password document
+// (the entire reason this Locker exists), so pretending it were safe would
+// be a silent refresh race, strictly worse than refusing to proceed. In
+// production config.StateDir only fails when $HOME cannot be determined at
+// all, so this should never actually trigger outside a broken environment.
 func slackOAuthRuntime(cfg *config.Config, env shellEnv, deps slackOAuthRuntimeDeps) (*slackoauth.Manager, *slackoauth.OPStore, bool) {
 	if !slackOAuthConfigComplete(cfg) {
+		return nil, nil, false
+	}
+	if env.stateDir == nil {
+		return nil, nil, false
+	}
+	sd, err := env.stateDir()
+	if err != nil || strings.TrimSpace(sd) == "" {
 		return nil, nil, false
 	}
 	runner := deps.runner
@@ -698,15 +776,7 @@ func slackOAuthRuntime(cfg *config.Config, env shellEnv, deps slackOAuthRuntimeD
 	if clock == nil {
 		clock = slackoauth.SystemClock{}
 	}
-	var locker slackoauth.Locker
-	if env.stateDir != nil {
-		if sd, err := env.stateDir(); err == nil && strings.TrimSpace(sd) != "" {
-			locker = &slackoauth.FileLock{Path: filepath.Join(sd, "slack-oauth.lock")}
-		}
-	}
-	if locker == nil {
-		locker = &slackOAuthInProcessLocker{}
-	}
+	locker := &slackoauth.FileLock{Path: filepath.Join(sd, "slack-oauth.lock")}
 	return &slackoauth.Manager{Store: store, Client: client, Locker: locker, Clock: clock}, store, true
 }
 
@@ -819,7 +889,7 @@ func slackOAuthStatusChecks(cfg *config.Config, env shellEnv, now time.Time) []c
 	mgr, _, ok := slackOAuthRuntime(cfg, env, slackOAuthRuntimeDepsFn())
 	if !ok {
 		checks = append(checks, check{label: "access", verdict: verdictUnverifiable,
-			detail: "internal: could not build the OAuth runtime source"})
+			detail: "could not build the OAuth runtime source (the shared 1Password-credential lock's state directory could not be resolved)"})
 		return checks
 	}
 	_, content, _ := opRefsContent(env)
@@ -839,8 +909,15 @@ func slackOAuthStatusChecks(cfg *config.Config, env shellEnv, now time.Time) []c
 //     foreign, non-canonical registration)
 //  2. obtain a live bearer through the runtime manager and revoke it at
 //     Slack; a failure here (including a response that doesn't CONFIRM
-//     revocation) stops immediately with NOTHING removed
-//  3. only once revoke is confirmed, archive the 1Password document
+//     revocation) stops immediately with NOTHING removed — UNLESS the
+//     failure itself proves the credential is already dead (an expired
+//     30-day grant, a dead refresh chain, or Slack's own invalid_auth/
+//     token_revoked/invalid_refresh_token), in which case there is simply
+//     nothing left to revoke and cleanup continues (this is what makes a
+//     manually- or previously-revoked credential's disable retryable rather
+//     than permanently stuck on step 2); any other error (a network/op
+//     failure) still aborts here
+//  3. only once revoke is confirmed (or proven unnecessary), archive the 1Password document
 //     (op document delete --archive; item/vault ids only, no secret ever on
 //     argv); a failure here is reported as revoked-but-local-cleanup-
 //     incomplete — everything from here on is left in place, and re-running
@@ -863,28 +940,46 @@ func slackDisableOAuth(cfg *config.Config, env shellEnv, out io.Writer, deps sla
 
 	mgr, store, ok := slackOAuthRuntime(cfg, env, deps)
 	if !ok {
-		return fmt.Errorf("internal: OAuth config reported complete but the runtime source could not be built")
+		return fmt.Errorf("internal: OAuth config reported complete but the runtime source could not be built " +
+			"(the shared 1Password-credential lock's state directory could not be resolved); nothing was removed")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), slackOAuthRuntimeTimeout)
 	defer cancel()
+	liveRevokePerformed := false
 	tok, err := mgr.Token(ctx)
 	if err != nil {
-		return fmt.Errorf("could not obtain a valid OAuth access token to revoke: %w; nothing was removed", err)
-	}
-
-	revoke := deps.revoke
-	if revoke == nil {
-		revoke = liveSlackAuthRevoke
-	}
-	revoked, rerr := revoke(tok)
-	if rerr != nil || !revoked {
-		if rerr == nil {
-			rerr = fmt.Errorf("Slack did not confirm the token was revoked")
+		if !slackoauth.IsDeadCredential(err) {
+			return fmt.Errorf("could not obtain a valid OAuth access token to revoke: %w; nothing was removed", err)
 		}
-		return fmt.Errorf("Slack auth.revoke failed: %w; nothing was removed (the credential in 1Password and the sbx registration are untouched)", rerr)
+		// The credential is already provably dead (an expired grant, or a dead
+		// refresh chain Slack itself rejected as invalid_refresh_token/
+		// token_revoked) — there is nothing live left to revoke. This is what
+		// makes disable retryable after a manual/prior revocation rather than
+		// permanently stuck trying to obtain a token that will never come back.
+		fmt.Fprintf(out, "  the OAuth credential was already invalid (%v); skipping the live revoke\n", err)
+	} else {
+		revoke := deps.revoke
+		if revoke == nil {
+			revoke = liveSlackAuthRevoke
+		}
+		revoked, rerr := revoke(tok)
+		switch {
+		case rerr != nil && slackoauth.IsDeadCredential(rerr):
+			// Slack itself says the token is already dead (invalid_auth or
+			// token_revoked — e.g. someone revoked it by hand, or a prior
+			// disable already revoked it but failed before archiving). Nothing
+			// left to revoke; continue exactly as above.
+			fmt.Fprintf(out, "  Slack reports the token was already invalid/revoked (%v); skipping the live revoke\n", rerr)
+		case rerr != nil:
+			return fmt.Errorf("Slack auth.revoke failed: %w; nothing was removed (the credential in 1Password and the sbx registration are untouched)", rerr)
+		case !revoked:
+			return fmt.Errorf("Slack auth.revoke failed: Slack did not confirm the token was revoked; nothing was removed (the credential in 1Password and the sbx registration are untouched)")
+		default:
+			fmt.Fprintln(out, "  revoked the Slack OAuth token")
+			liveRevokePerformed = true
+		}
 	}
-	fmt.Fprintln(out, "  revoked the Slack OAuth token")
 
 	if derr := store.Delete(ctx); derr != nil {
 		return fmt.Errorf("the Slack token was revoked, but deleting the 1Password document failed: %w; "+
@@ -916,7 +1011,11 @@ func slackDisableOAuth(cfg *config.Config, env shellEnv, out io.Writer, deps sla
 		}
 	}
 
-	fmt.Fprintln(out, "Slack OAuth is off here. The token was revoked at Slack and the 1Password")
+	if liveRevokePerformed {
+		fmt.Fprintln(out, "Slack OAuth is off here. The token was revoked at Slack and the 1Password")
+	} else {
+		fmt.Fprintln(out, "Slack OAuth is off here. The credential was already invalid/revoked, and the 1Password")
+	}
 	fmt.Fprintln(out, "document holding it was archived. Re-run pix slack setup (no --token-ref) to")
 	fmt.Fprintln(out, "reauthorize — your client_id and redirect_uri are still configured.")
 	return nil

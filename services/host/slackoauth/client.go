@@ -212,7 +212,7 @@ func (c *Client) call(ctx context.Context, form url.Values) (Blob, error) {
 		if e == "" {
 			e = "unknown_error"
 		}
-		return Blob{}, fmt.Errorf("slackoauth: oauth.v2.access failed: %s", e)
+		return Blob{}, ClassifyAPIError("slackoauth: oauth.v2.access failed", e)
 	}
 	if raw.AuthedUser == nil {
 		return Blob{}, errors.New("slackoauth: response has no authed_user credentials")

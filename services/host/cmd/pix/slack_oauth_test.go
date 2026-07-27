@@ -238,7 +238,61 @@ func TestSlackCallbackHappyPath(t *testing.T) {
 	}
 }
 
-func TestSlackCallbackStateMismatchRejected(t *testing.T) {
+// TestSlackCallbackStateMismatchDoesNotEndTheWait proves a state-mismatched
+// request gets a 400 and is discarded, but the callback wait KEEPS LISTENING
+// (docs/design/slack-setup.md's callback hardening): a genuine callback
+// arriving afterward still succeeds, exactly like the wrong-path/wrong-method
+// cases. A separate timeout test below covers what happens when no genuine
+// callback ever arrives.
+func TestSlackCallbackStateMismatchDoesNotEndTheWait(t *testing.T) {
+	port := freeLocalPort(t)
+	ln, err := slackBindCallbackListener(port)
+	if err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	defer ln.Close()
+
+	resultCh := make(chan struct {
+		code string
+		err  error
+	}, 1)
+	go func() {
+		code, err := slackServeCallback(ln, slackOAuthCallbackPath, "expected-state", 5*time.Second)
+		resultCh <- struct {
+			code string
+			err  error
+		}{code, err}
+	}()
+
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d%s?code=abc123&state=WRONG", port, slackOAuthCallbackPath))
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+
+	// The genuine callback, sent right after: must still succeed.
+	resp2, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d%s?code=real-code&state=expected-state", port, slackOAuthCallbackPath))
+	if err != nil {
+		t.Fatalf("GET real callback: %v", err)
+	}
+	resp2.Body.Close()
+
+	res := <-resultCh
+	if res.err != nil {
+		t.Fatalf("slackServeCallback: %v (a state mismatch must not end the wait)", res.err)
+	}
+	if res.code != "real-code" {
+		t.Errorf("code = %q, want real-code", res.code)
+	}
+}
+
+// TestSlackCallbackAllStateMismatchesTimeOut proves that when NO genuine
+// callback ever arrives, an all-mismatched attempt still eventually times
+// out rather than waiting forever.
+func TestSlackCallbackAllStateMismatchesTimeOut(t *testing.T) {
 	port := freeLocalPort(t)
 	ln, err := slackBindCallbackListener(port)
 	if err != nil {
@@ -248,7 +302,7 @@ func TestSlackCallbackStateMismatchRejected(t *testing.T) {
 
 	resultCh := make(chan error, 1)
 	go func() {
-		_, err := slackServeCallback(ln, slackOAuthCallbackPath, "expected-state", 5*time.Second)
+		_, err := slackServeCallback(ln, slackOAuthCallbackPath, "expected-state", 100*time.Millisecond)
 		resultCh <- err
 	}()
 
@@ -256,16 +310,19 @@ func TestSlackCallbackStateMismatchRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", resp.StatusCode)
-	}
-	if err := <-resultCh; err == nil {
-		t.Fatal("a state mismatch must fail the callback wait")
+	resp.Body.Close()
+
+	err = <-resultCh
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected a timeout error when no genuine callback ever arrives, got %v", err)
 	}
 }
 
-func TestSlackCallbackRejectsOriginHeader(t *testing.T) {
+// TestSlackCallbackOriginHeaderDoesNotEndTheWait proves a request carrying an
+// Origin header gets a 403 and is discarded, but the callback wait KEEPS
+// LISTENING: a genuine callback (no Origin header) arriving afterward still
+// succeeds.
+func TestSlackCallbackOriginHeaderDoesNotEndTheWait(t *testing.T) {
 	port := freeLocalPort(t)
 	ln, err := slackBindCallbackListener(port)
 	if err != nil {
@@ -273,10 +330,16 @@ func TestSlackCallbackRejectsOriginHeader(t *testing.T) {
 	}
 	defer ln.Close()
 
-	resultCh := make(chan error, 1)
+	resultCh := make(chan struct {
+		code string
+		err  error
+	}, 1)
 	go func() {
-		_, err := slackServeCallback(ln, slackOAuthCallbackPath, "expected-state", 5*time.Second)
-		resultCh <- err
+		code, err := slackServeCallback(ln, slackOAuthCallbackPath, "expected-state", 5*time.Second)
+		resultCh <- struct {
+			code string
+			err  error
+		}{code, err}
 	}()
 
 	req, _ := http.NewRequest(http.MethodGet,
@@ -286,12 +349,24 @@ func TestSlackCallbackRejectsOriginHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer resp.Body.Close()
+	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", resp.StatusCode)
 	}
-	if err := <-resultCh; err == nil {
-		t.Fatal("a callback carrying an Origin header must fail the wait")
+
+	// The genuine callback, with no Origin header: must still succeed.
+	resp2, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d%s?code=real-code&state=expected-state", port, slackOAuthCallbackPath))
+	if err != nil {
+		t.Fatalf("GET real callback: %v", err)
+	}
+	resp2.Body.Close()
+
+	res := <-resultCh
+	if res.err != nil {
+		t.Fatalf("slackServeCallback: %v (an Origin-header probe must not end the wait)", res.err)
+	}
+	if res.code != "real-code" {
+		t.Errorf("code = %q, want real-code", res.code)
 	}
 }
 
@@ -430,6 +505,10 @@ type fakeOPRunner struct {
 	}
 	itemID  string
 	vaultID string
+	// writeErr, when set, is returned by every Run call instead of the
+	// scripted success response — simulates a failed `op document create/edit`
+	// (e.g. a locked vault) for slackSetupPKCE's store.Write failure path.
+	writeErr error
 }
 
 func (f *fakeOPRunner) Run(_ context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
@@ -440,6 +519,9 @@ func (f *fakeOPRunner) Run(_ context.Context, stdin []byte, name string, args ..
 		args  []string
 		stdin []byte
 	}{name, append([]string(nil), args...), append([]byte(nil), stdin...)})
+	if f.writeErr != nil {
+		return nil, f.writeErr
+	}
 	return []byte(fmt.Sprintf(`{"id":%q,"vault":{"id":%q}}`, f.itemID, f.vaultID)), nil
 }
 
@@ -664,5 +746,315 @@ func TestSlackSetupDispatchesToPKCEWithoutTokenRef(t *testing.T) {
 	err := slackSetup(f.env(), slackSetupOpts{assumeYes: true, vault: "Private"}, strings.NewReader(""), &out, false, fakeHostResolver)
 	if err == nil || !strings.Contains(err.Error(), "client id") {
 		t.Fatalf("expected the PKCE path's missing-client-id error, got %v", err)
+	}
+}
+
+// --- best-effort revoke of a minted-but-unpersisted grant -------------------
+
+// slackOAuthRevokeFixture builds a slackSetupPKCE fixture that drives a
+// SUCCESSFUL browser callback + Slack code exchange (minting a real rotating
+// grant, testRotatingAccessToken/testRotatingRefreshToken), so a test can
+// then fail a LATER step and prove the freshly minted grant gets a
+// best-effort revoke via the injected deps.revoke seam. revokedTokens
+// records every token passed to revoke, in order.
+func slackOAuthRevokeFixture(t *testing.T, authTest func(token string) (slackIdentity, error)) (deps slackOAuthDeps, opts slackSetupOpts, env shellEnv, cfg *config.Config, revokedTokens *[]string) {
+	t.Helper()
+	slackTestCfg(t)
+	port := freeLocalPort(t)
+	redirectURI := fmt.Sprintf("http://localhost:%d/slack/callback", port)
+
+	doer := &fakeOAuthDoer{respBody: slackOAuthTestExchangeBody("T123", "U456")}
+	runner := &fakeOPRunner{itemID: "item-abc", vaultID: "vault-xyz"}
+	var tokens []string
+	deps = slackOAuthDeps{
+		openBrowser: func(authURL string) error {
+			u, err := url.Parse(authURL)
+			if err != nil {
+				return err
+			}
+			q := u.Query()
+			cbURL := fmt.Sprintf("%s?code=test-auth-code&state=%s", q.Get("redirect_uri"), q.Get("state"))
+			go func() {
+				resp, err := http.Get(cbURL)
+				if err == nil {
+					resp.Body.Close()
+				}
+			}()
+			return nil
+		},
+		runner:  runner,
+		doer:    doer,
+		clock:   fixedTestClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)),
+		timeout: 5 * time.Second,
+		revoke: func(tok string) (bool, error) {
+			tokens = append(tokens, tok)
+			return true, nil
+		},
+	}
+
+	f := &slackTestEnv{sbxPresent: true, authTest: authTest}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	opts = slackSetupOpts{
+		assumeYes:     true,
+		clientID:      "C0PKCE",
+		redirectURI:   redirectURI,
+		vault:         "Private",
+		vaultExplicit: true,
+	}
+	return deps, opts, f.env(), cfg, &tokens
+}
+
+// TestSlackSetupPKCERevokesOnAuthTestFailure proves a failed auth.test on the
+// freshly exchanged token (grant minted, but never usable) triggers a
+// best-effort revoke, and the error names the outcome rather than just
+// reporting "nothing written".
+func TestSlackSetupPKCERevokesOnAuthTestFailure(t *testing.T) {
+	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
+		return slackIdentity{}, fmt.Errorf("auth.test: invalid_auth")
+	})
+	var out bytes.Buffer
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	if err == nil {
+		t.Fatal("expected an error when auth.test fails on the newly issued token")
+	}
+	if !strings.Contains(err.Error(), "revoked") {
+		t.Errorf("error must say whether the minted grant was revoked, got: %v", err)
+	}
+	if len(*revoked) != 1 || (*revoked)[0] != testRotatingAccessToken {
+		t.Errorf("revoked tokens = %v, want exactly [%s]", *revoked, testRotatingAccessToken)
+	}
+}
+
+// TestSlackSetupPKCERevokesOnIdentityMismatch proves the same for the
+// exchange-vs-auth.test identity mismatch gate.
+func TestSlackSetupPKCERevokesOnIdentityMismatch(t *testing.T) {
+	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
+		return slackIdentity{team: "Other", teamID: "T_OTHER", user: "eve", userID: "U_OTHER"}, nil
+	})
+	var out bytes.Buffer
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("expected an identity mismatch error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "revoked") {
+		t.Errorf("error must say whether the minted grant was revoked, got: %v", err)
+	}
+	if len(*revoked) != 1 || (*revoked)[0] != testRotatingAccessToken {
+		t.Errorf("revoked tokens = %v, want exactly [%s]", *revoked, testRotatingAccessToken)
+	}
+}
+
+// TestSlackSetupPKCERevokesOnDeclinedConfirmation proves a declined confirm
+// prompt revokes the minted grant and reports it, never just "nothing
+// written" (which would be misleading: SOMETHING was minted, even though
+// nothing was PERSISTED).
+func TestSlackSetupPKCERevokesOnDeclinedConfirmation(t *testing.T) {
+	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
+		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+	})
+	opts.assumeYes = false
+	var out bytes.Buffer
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader("n\n"), &out, true, fakeHostResolver)
+	if err != nil {
+		t.Fatalf("a declined confirmation must not itself be an error, got %v", err)
+	}
+	if !strings.Contains(out.String(), "aborted") {
+		t.Errorf("output must say aborted, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "aborted; nothing written") {
+		t.Errorf("output must not claim plain 'nothing written' — a grant WAS minted; got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "revoked") {
+		t.Errorf("output must say whether the minted grant was revoked, got:\n%s", out.String())
+	}
+	if len(*revoked) != 1 || (*revoked)[0] != testRotatingAccessToken {
+		t.Errorf("revoked tokens = %v, want exactly [%s]", *revoked, testRotatingAccessToken)
+	}
+}
+
+// TestSlackSetupPKCERevokesOnNonInteractiveWithoutYes proves the non-TTY,
+// no --yes refusal ALSO revokes the minted grant (this path only reaches
+// here once a real code exchange already minted a live credential).
+func TestSlackSetupPKCERevokesOnNonInteractiveWithoutYes(t *testing.T) {
+	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
+		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+	})
+	opts.assumeYes = false
+	var out bytes.Buffer
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	if err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("expected the non-interactive refusal, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "revoked") {
+		t.Errorf("error must say whether the minted grant was revoked, got: %v", err)
+	}
+	if len(*revoked) != 1 || (*revoked)[0] != testRotatingAccessToken {
+		t.Errorf("revoked tokens = %v, want exactly [%s]", *revoked, testRotatingAccessToken)
+	}
+}
+
+// TestSlackSetupPKCERevokesOnStoreWriteFailure proves a failed 1Password
+// write (the grant minted, but never durably persisted) ALSO triggers the
+// best-effort revoke.
+func TestSlackSetupPKCERevokesOnStoreWriteFailure(t *testing.T) {
+	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
+		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+	})
+	deps.runner.(*fakeOPRunner).writeErr = fmt.Errorf("op: vault locked")
+	var out bytes.Buffer
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	if err == nil || !strings.Contains(err.Error(), "writing the Slack credential to 1Password") {
+		t.Fatalf("expected the 1Password write failure, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "revoked") {
+		t.Errorf("error must say whether the minted grant was revoked, got: %v", err)
+	}
+	if len(*revoked) != 1 || (*revoked)[0] != testRotatingAccessToken {
+		t.Errorf("revoked tokens = %v, want exactly [%s]", *revoked, testRotatingAccessToken)
+	}
+}
+
+// --- identity-pin-change gate ------------------------------------------
+
+// TestSlackSetupPKCERefusesDifferentIdentityUnderYes proves that an existing
+// SLACK_TEAM_ID/SLACK_USER_ID pin plus a NEW, DIFFERENT OAuth identity is
+// refused under --yes, rather than silently re-pinning to someone else. The
+// freshly minted grant must be best-effort revoked.
+func TestSlackSetupPKCERefusesDifferentIdentityUnderYes(t *testing.T) {
+	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
+		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+	})
+	opRefsWith(t, "SLACK_TEAM_ID=T_OLD", "SLACK_USER_ID=U_OLD")
+	var out bytes.Buffer
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	if err == nil || !strings.Contains(err.Error(), "does not match this OAuth identity") {
+		t.Fatalf("expected an identity-pin-change refusal under --yes, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "--allow-identity-change") {
+		t.Errorf("error must name the override flag, got: %v", err)
+	}
+	if len(*revoked) != 1 || (*revoked)[0] != testRotatingAccessToken {
+		t.Errorf("revoked tokens = %v, want exactly [%s]", *revoked, testRotatingAccessToken)
+	}
+	for _, r := range parseOpRefs(opRefsFileContent(t)) {
+		if r.key == "SLACK_TEAM_ID" && r.value != "T_OLD" {
+			t.Errorf("the OLD pin must be untouched on refusal, got %s=%s", r.key, r.value)
+		}
+	}
+}
+
+// TestSlackSetupPKCEAllowsDifferentIdentityInteractivelyOnConfirm proves an
+// interactive user CAN confirm past the identity-pin-change gate, and the
+// new identity is then pinned as normal.
+func TestSlackSetupPKCEAllowsDifferentIdentityInteractivelyOnConfirm(t *testing.T) {
+	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
+		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+	})
+	opts.assumeYes = false
+	opRefsWith(t, "SLACK_TEAM_ID=T_OLD", "SLACK_USER_ID=U_OLD")
+	// Two prompts now: "replace the pin?" then "wire up Slack?" — both answered y.
+	var out bytes.Buffer
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader("y\ny\n"), &out, true, fakeHostResolver)
+	if err != nil {
+		t.Fatalf("slackSetupPKCE: %v\n--- output ---\n%s", err, out.String())
+	}
+	if len(*revoked) != 0 {
+		t.Errorf("a confirmed identity change must not revoke anything, got: %v", *revoked)
+	}
+	for _, r := range parseOpRefs(opRefsFileContent(t)) {
+		if r.key == "SLACK_TEAM_ID" && r.value != "T123" {
+			t.Errorf("the pin must be replaced with the new identity, got %s=%s", r.key, r.value)
+		}
+	}
+}
+
+// TestSlackSetupPKCEDeclinesDifferentIdentityInteractively proves declining
+// the identity-change prompt aborts (revoking the minted grant) WITHOUT
+// reaching the ordinary wire-up confirmation at all.
+func TestSlackSetupPKCEDeclinesDifferentIdentityInteractively(t *testing.T) {
+	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
+		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+	})
+	opts.assumeYes = false
+	opRefsWith(t, "SLACK_TEAM_ID=T_OLD", "SLACK_USER_ID=U_OLD")
+	var out bytes.Buffer
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader("n\n"), &out, true, fakeHostResolver)
+	if err != nil {
+		t.Fatalf("a declined confirmation must not itself be an error, got %v", err)
+	}
+	if !strings.Contains(out.String(), "aborted") {
+		t.Errorf("output must say aborted, got:\n%s", out.String())
+	}
+	if len(*revoked) != 1 || (*revoked)[0] != testRotatingAccessToken {
+		t.Errorf("revoked tokens = %v, want exactly [%s]", *revoked, testRotatingAccessToken)
+	}
+	for _, r := range parseOpRefs(opRefsFileContent(t)) {
+		if r.key == "SLACK_TEAM_ID" && r.value != "T_OLD" {
+			t.Errorf("the OLD pin must be untouched, got %s=%s", r.key, r.value)
+		}
+	}
+}
+
+// TestSlackSetupPKCEAllowIdentityChangeSkipsGateUnderYes proves
+// --allow-identity-change lets --yes proceed past a different identity
+// without any extra prompt.
+func TestSlackSetupPKCEAllowIdentityChangeSkipsGateUnderYes(t *testing.T) {
+	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
+		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+	})
+	opts.allowIdentityChange = true
+	opRefsWith(t, "SLACK_TEAM_ID=T_OLD", "SLACK_USER_ID=U_OLD")
+	var out bytes.Buffer
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	if err != nil {
+		t.Fatalf("slackSetupPKCE: %v\n--- output ---\n%s", err, out.String())
+	}
+	if len(*revoked) != 0 {
+		t.Errorf("an allowed identity change must not revoke anything, got: %v", *revoked)
+	}
+}
+
+// TestSlackSetupPKCESameIdentityNeverTriggersTheGate proves a re-run against
+// the SAME already-pinned identity never even reaches the extra prompt (only
+// the ordinary wire-up confirmation).
+func TestSlackSetupPKCESameIdentityNeverTriggersTheGate(t *testing.T) {
+	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
+		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+	})
+	opRefsWith(t, "SLACK_TEAM_ID=T123", "SLACK_USER_ID=U456")
+	var out bytes.Buffer
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	if err != nil {
+		t.Fatalf("slackSetupPKCE: %v\n--- output ---\n%s", err, out.String())
+	}
+	if len(*revoked) != 0 {
+		t.Errorf("the same identity must never revoke anything, got: %v", *revoked)
+	}
+}
+
+// TestSlackSetupPKCEDoesNotRevokeAfterDocumentPersisted proves that ONCE the
+// 1Password document is durably written, a LATER failure (here: the
+// provider-refs lock cannot be acquired, failing the SLACK_TEAM_ID ref write)
+// never triggers an auto-revoke — the credential is real and recoverable
+// from this point on (slackOAuthOrphanNote), not something to tear down
+// automatically.
+func TestSlackSetupPKCEDoesNotRevokeAfterDocumentPersisted(t *testing.T) {
+	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
+		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+	})
+	env.flock = func(string, func() error) error { return fmt.Errorf("lock busy") }
+	var out bytes.Buffer
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	if err == nil || !strings.Contains(err.Error(), "writing SLACK_TEAM_ID") {
+		t.Fatalf("expected the SLACK_TEAM_ID ref write to fail, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "1Password document") {
+		t.Errorf("error must carry the orphan-document note once persisted, got: %v", err)
+	}
+	if len(*revoked) != 0 {
+		t.Errorf("revoke must NOT be called once the document was already persisted, but got calls: %v", *revoked)
 	}
 }

@@ -93,6 +93,27 @@ func TestParseSlackSetupArgsPKCEFlags(t *testing.T) {
 	}
 }
 
+// TestParseSlackSetupArgsRejectsMixedStaticAndPKCEFlags proves --token-ref
+// combined with any PKCE-only flag is refused up front, rather than silently
+// picking one path — a user who passes both almost certainly meant only one.
+func TestParseSlackSetupArgsRejectsMixedStaticAndPKCEFlags(t *testing.T) {
+	cases := [][]string{
+		{"--token-ref", "op://v/i/f", "--client-id", "C123"},
+		{"--token-ref", "op://v/i/f", "--redirect-uri", "http://localhost:9/slack/callback"},
+		{"--token-ref", "op://v/i/f", "--vault", "Shared"},
+		{"--token-ref", "op://v/i/f", "--allow-identity-change"},
+	}
+	for _, argv := range cases {
+		if _, err := parseSlackSetupArgs(argv); err == nil {
+			t.Errorf("argv %v: expected a mixed-flags refusal, got success", argv)
+		}
+	}
+	// A PKCE-only combination (no --token-ref) must still parse fine.
+	if _, err := parseSlackSetupArgs([]string{"--client-id", "C123", "--allow-identity-change"}); err != nil {
+		t.Errorf("PKCE-only flags should parse cleanly, got %v", err)
+	}
+}
+
 // --- slackSetup hermetic harness ----------------------------------------
 
 // slackTestEnv builds a shellEnv over a real (but temp-dir-scoped) config +
@@ -379,6 +400,37 @@ func TestSlackSetupHappyPath(t *testing.T) {
 	}
 	if !mcpConfigured(cfg, slackServerName) {
 		t.Error("slack must be added to the configured mcp set")
+	}
+}
+
+// TestSlackSetupStaticRefusesWhenOAuthConfigured proves --token-ref refuses
+// outright once a COMPLETE [slack] OAuth wiring already exists — writing
+// SLACK_TOKEN would be silently shadowed by OAuth (slackDefaultTokenSource in
+// services/host/slack.go always prefers OAuth), so the static path must
+// refuse and point at `pix slack disable` rather than let that trap exist.
+// Nothing should be written.
+func TestSlackSetupStaticRefusesWhenOAuthConfigured(t *testing.T) {
+	slackTestCfg(t)
+	cfg := slackOAuthTestConfig(t, time.Now().Add(20*24*time.Hour))
+	_ = cfg
+
+	f := &slackTestEnv{
+		opOK: true, opToken: "xoxp-real-looking-token", sbxPresent: true,
+		authTest: func(string) (slackIdentity, error) {
+			return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+		},
+	}
+	var out bytes.Buffer
+	err := slackSetup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential", assumeYes: true},
+		strings.NewReader(""), &out, false, fakeHostResolver)
+	if err == nil || !strings.Contains(err.Error(), "pix slack disable") {
+		t.Fatalf("expected a refusal naming `pix slack disable`, got %v", err)
+	}
+	if got := opRefsFileContent(t); strings.Contains(got, "SLACK_TOKEN=op://Private/Slack/credential") {
+		t.Errorf("nothing should be written when refusing, got:\n%s", got)
+	}
+	if f.ranSbxAdd() {
+		t.Error("slack must not be registered when the static setup refuses")
 	}
 }
 
