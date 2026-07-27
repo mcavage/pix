@@ -44,6 +44,19 @@ func TestReadmeHasOnePrimaryPath(t *testing.T) {
 	}
 }
 
+func TestReadmeDocumentsSbxWithoutRequiringDockerDesktop(t *testing.T) {
+	body := strings.ToLower(primaryReadmePath(t))
+	if strings.Contains(body, "install docker desktop") {
+		t.Fatal("README must not require Docker Desktop; sbx runs without it")
+	}
+	if !strings.Contains(body, "docker desktop is not required") {
+		t.Fatal("README must state that Docker Desktop is not required")
+	}
+	if !strings.Contains(body, "brew install docker/tap/sbx@nightly") {
+		t.Fatal("README must install the supported nightly Docker Sandboxes CLI")
+	}
+}
+
 func TestReadmePrimaryPathCommandsExist(t *testing.T) {
 	body := primaryReadmePath(t)
 	known := map[string]bool{

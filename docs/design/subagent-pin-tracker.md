@@ -103,13 +103,17 @@ chain, and tree all funnel in with no per-mode wiring:
   depth: CURRENT_DEPTH + 1, step })`. `registerRun` creates the entry with
   `status: "running"`, `startedAt: Date.now()`, then `ensureTicker()` and
   `renderWidget()`.
-- UPDATE: inside the existing `emit()` closure (which already fires on every
-  `message_end` / `tool_result_end`), also call `updateRun(runId, { turns:
-  result.usage.turns, tokens: result.usage.input + result.usage.output, cost:
-  result.usage.cost, model: result.model, lastTool: lastToolNameFrom(result.messages) })`.
-  `emit()` is the sanctioned live hook named in the brief. No new event
-  subscription. `lastToolNameFrom` is a tiny helper that reads the last
-  `toolCall` part from `result.messages` (reuse `displayItems`).
+- UPDATE: inside the existing `emit()` closure (which fires on every
+  `message_end` and metered `compaction_end`), also call `updateRun(runId, {
+  turns: result.usage.turns, tokens: result.usage.input + result.usage.output,
+  cost: result.usage.cost, model: result.model, lastTool:
+  lastToolNameFrom(result.messages) })`. Tool results arrive as `message_end`
+  events with `role: "toolResult"`; there is no `tool_result_end` event. Include
+  their optional usage so nested subagent work appears in the live tracker.
+  Include `compaction_end.result.usage` as well. `emit()` is the sanctioned live
+  hook named in the brief. No new event subscription. `lastToolNameFrom` is a
+  tiny helper that reads the last `toolCall` part from `result.messages` (reuse
+  `displayItems`).
 - FINALIZE: in the `finally` block that already does tmp cleanup (or immediately
   before each `return result`), call `finalizeRun(runId, result)`. It maps the
   outcome to a status (`isFailed(r)` plus `r.timedOut` / `r.stopReason ===
@@ -121,6 +125,12 @@ chain, and tree all funnel in with no per-mode wiring:
 Because registration is keyed to `runSingle`, the doctor canary also shows up
 briefly; that is acceptable (it is a real run) and self-expires. If undesired,
 gate it with a flag threaded from the `/subagents doctor` path.
+
+The final subagent tool result also returns a top-level `usage` aggregate. Pi
+persists that on the parent `ToolResultMessage`, so delegated work contributes
+to the session footer and cost breakdown instead of living only in tool
+`details`. The aggregate includes each child's assistant messages, nested
+subagent tool-result usage, and child compaction usage exactly once.
 
 ## (4) The 1s ticker (elapsed timers, no leak)
 

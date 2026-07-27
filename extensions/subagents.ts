@@ -43,6 +43,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import {
+	aggregateSubagentUsage,
+	hiddenUsageFromChildEvent,
+} from "../lib/subagent-usage.ts";
 
 // ─── Config (all env-tunable) ────────────────────────────────────────────────
 const num = (name: string, dflt: number): number => {
@@ -452,6 +456,14 @@ const zeroUsage = (): UsageStats => ({
 	contextTokens: 0,
 	turns: 0,
 });
+function addUsage(target: UsageStats, usage: any): void {
+	if (!usage) return;
+	target.input += usage.input || 0;
+	target.output += usage.output || 0;
+	target.cacheRead += usage.cacheRead || 0;
+	target.cacheWrite += usage.cacheWrite || 0;
+	target.cost += usage.cost?.total || 0;
+}
 
 interface SingleResult {
 	agent: string;
@@ -461,6 +473,8 @@ interface SingleResult {
 	messages: any[];
 	stderr: string;
 	usage: UsageStats;
+	// Metered child work not represented by messages, currently compaction.
+	meteredUsage?: any[];
 	model?: string;
 	stopReason?: string;
 	errorMessage?: string;
@@ -1242,6 +1256,7 @@ async function runSingle(
 		messages: [],
 		stderr: "",
 		usage: zeroUsage(),
+		meteredUsage: [],
 		model: agent.model,
 		idleMs: effIdleMs,
 		wallMs: effWallMs,
@@ -1413,23 +1428,26 @@ async function runSingle(
 					if (msg.role === "assistant") {
 						result.usage.turns++;
 						const u = msg.usage;
-						if (u) {
-							result.usage.input += u.input || 0;
-							result.usage.output += u.output || 0;
-							result.usage.cacheRead += u.cacheRead || 0;
-							result.usage.cacheWrite += u.cacheWrite || 0;
-							result.usage.cost += u.cost?.total || 0;
+						addUsage(result.usage, u);
+						if (u)
 							result.usage.contextTokens =
 								u.totalTokens || result.usage.contextTokens;
-						}
 						if (!result.model && msg.model) result.model = msg.model;
 						if (msg.stopReason) result.stopReason = msg.stopReason;
 						if (msg.errorMessage) result.errorMessage = msg.errorMessage;
+					} else {
+						// Tool results arrive as message_end events. A nested subagent's
+						// full subtree usage is attached here.
+						addUsage(result.usage, hiddenUsageFromChildEvent(event));
 					}
 					emit();
-				} else if (event.type === "tool_result_end" && event.message) {
-					result.messages.push(event.message);
-					emit();
+				} else if (event.type === "compaction_end") {
+					const usage = hiddenUsageFromChildEvent(event);
+					if (usage) {
+						result.meteredUsage?.push(usage);
+						addUsage(result.usage, usage);
+						emit();
+					}
 				} else if (event.type === "agent_settled") {
 					// Turn is done and its output is captured. Retire the idle + wall
 					// watchdogs (they exist to catch a child stuck DURING work, not one
@@ -1698,6 +1716,7 @@ export default function (pi: ExtensionAPI) {
 									},
 								],
 								details: md(results),
+								usage: aggregateSubagentUsage(results),
 								isError: true,
 							};
 						}
@@ -1712,6 +1731,7 @@ export default function (pi: ExtensionAPI) {
 							},
 						],
 						details: md(results),
+						usage: aggregateSubagentUsage(results),
 					};
 				}
 
@@ -1805,6 +1825,7 @@ export default function (pi: ExtensionAPI) {
 							},
 						],
 						details: md(results),
+						usage: aggregateSubagentUsage(results),
 						isError: ok === 0,
 					};
 				}
@@ -1832,6 +1853,7 @@ export default function (pi: ExtensionAPI) {
 							},
 						],
 						details: md([r]),
+						usage: aggregateSubagentUsage([r]),
 						isError: true,
 					};
 				}
@@ -1840,6 +1862,7 @@ export default function (pi: ExtensionAPI) {
 						{ type: "text", text: finalText(r.messages) || "(no output)" },
 					],
 					details: md([r]),
+					usage: aggregateSubagentUsage([r]),
 				};
 			},
 

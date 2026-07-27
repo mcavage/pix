@@ -247,15 +247,14 @@ The README should have one primary path and push raw `sbx run` usage into an adv
 
 The opening path should be:
 
-1. Install Docker Desktop.
-2. Install Docker Sandboxes nightly using the command published by `docker/sbx-releases`:
+1. Install Docker Sandboxes nightly using the command published by `docker/sbx-releases` (Docker Desktop is not required):
 
    ```bash
    brew install docker/tap/sbx@nightly
    sbx version
    ```
 
-3. Install and authenticate 1Password CLI:
+2. Install and authenticate 1Password CLI:
 
    ```bash
    brew install 1password-cli
@@ -263,7 +262,7 @@ The opening path should be:
    op whoami
    ```
 
-4. Install Ollama and the configured defaults:
+3. Install Ollama and the configured defaults:
 
    ```bash
    brew install ollama
@@ -275,7 +274,7 @@ The opening path should be:
 
    The single `qwen3.5:9b` pull satisfies both watcher and bridge roles on a fresh install. An anti-drift test must compare these documented tags with `config.DefaultMemoryWatcherModel`, `config.DefaultMemoryEmbedModel`, and `config.DefaultOllamaBridgeModel`.
 
-5. Install GitHub CLI and wire its host token into sbx for push and PR workflows:
+4. Install GitHub CLI and wire its host token into sbx for push and PR workflows:
 
    ```bash
    brew install gh
@@ -283,12 +282,12 @@ The opening path should be:
    sbx secret set -g github -t "$(gh auth token)"
    ```
 
-6. Install Pix and ensure `~/.local/bin` is on `PATH`.
-7. Run `pix setup`.
-8. Run `pix doctor` and show literal expected output for core checks, plus how optional and unverifiable axes appear.
-9. Run `pix run` in a project.
-10. Put Google Workspace in an optional advanced section that explains how to obtain a Desktop OAuth client before showing `pix gworkspace setup`.
-11. Explain daily conventions: status, run/reattach, replace after create-time changes, plan/build/deliver, model switching, memory commands, task workspaces, update, backup, and troubleshooting.
+5. Install Pix and ensure `~/.local/bin` is on `PATH`.
+6. Run `pix setup`.
+7. Run `pix doctor` and show literal expected output for core checks, plus how optional and unverifiable axes appear.
+8. Run `pix run` in a project.
+9. Put Google Workspace in an optional advanced section that explains how to obtain a Desktop OAuth client before showing `pix gworkspace setup`.
+10. Explain daily conventions: status, run/reattach, replace after create-time changes, plan/build/deliver, model switching, memory commands, task workspaces, update, backup, and troubleshooting.
 
 Do not tell curl-installed users to run Makefile targets. Commands in the primary path must work without a repository checkout.
 
