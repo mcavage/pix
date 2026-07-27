@@ -14,23 +14,18 @@ The following is the supported first-run path on macOS. Run it in order.
 
 <!-- PIX_PRIMARY_PATH_START -->
 
-### 1. Install Docker Desktop
-
-Install and start [Docker Desktop](https://www.docker.com/products/docker-desktop/).
-Pix uses Docker Sandboxes rather than running the coding agent directly on your
-host.
-
-### 2. Install the nightly Docker Sandboxes CLI
+### 1. Install the nightly Docker Sandboxes CLI
 
 ```bash
 brew install docker/tap/sbx@nightly
 sbx login
 ```
 
-Pix targets the nightly `sbx` CLI because its custom kit and MCP gateway support
-are newer than the stable channel.
+Pix runs through Docker Sandboxes; Docker Desktop is not required. Pix targets
+the nightly `sbx` CLI because its custom kit and MCP gateway support are newer
+than the stable channel.
 
-### 3. Install Ollama and the default local models
+### 2. Install Ollama and the default local models
 
 ```bash
 brew install ollama
@@ -42,7 +37,7 @@ ollama pull nomic-embed-text
 `qwen3.5:9b` powers local memory capture and the optional in-sandbox local model.
 `nomic-embed-text` creates memory embeddings.
 
-### 4. Install and sign in to 1Password CLI
+### 3. Install and sign in to 1Password CLI
 
 ```bash
 brew install 1password-cli
@@ -53,7 +48,7 @@ Pix stores `op://` references, not resolved provider keys. `pix setup` requires
 1Password CLI and reconciles Anthropic, OpenAI, and Google model credentials into
 Docker Sandboxes.
 
-### 5. Configure GitHub credentials for sandboxes
+### 4. Configure GitHub credentials for sandboxes
 
 Install and authenticate GitHub CLI, then copy its token into the sandbox secret
 store:
@@ -67,7 +62,7 @@ sbx secret set -g github -t "$(gh auth token)"
 Git operations inside Pix use HTTPS. The sandbox proxy injects this credential;
 `gh auth status` inside a sandbox may still say it is not logged in.
 
-### 6. Install Pix
+### 5. Install Pix
 
 ```bash
 sbx settings set kit.allowedSources '["docker.io/","github.com/mcavage/"]'
@@ -78,7 +73,7 @@ pix version
 
 The installer places `pix` and `pix-host` in `~/.local/bin` without `sudo`.
 
-### 7. Run setup
+### 6. Run setup
 
 ```bash
 pix setup
@@ -89,7 +84,7 @@ credentials, creates the default pack, verifies the result, and starts the
 one-time agent onboarding handoff. It is safe to run again. For a host-only or CI
 run with no sandbox handoff, use `pix setup --no-agent --yes`.
 
-### 8. Verify readiness
+### 7. Verify readiness
 
 ```bash
 pix doctor
@@ -112,7 +107,7 @@ means Pix cannot check from the current environment and names where to retry.
 optional work remains, so normal use can continue. `pix doctor --json` provides
 the same checks and exit verdict for automation.
 
-### 9. Start Pix in a repository
+### 8. Start Pix in a repository
 
 ```bash
 cd /path/to/repository
@@ -122,7 +117,7 @@ pix run
 `pix run` creates a named sandbox on first use and reattaches to it later. Use
 `pix run --replace` when changing create-time kit or MCP settings.
 
-### 10. Learn the workflows
+### 9. Learn the workflows
 
 Inside Pix, use `/help` for the capability map. On the host, use:
 
