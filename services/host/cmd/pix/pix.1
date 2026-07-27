@@ -1158,6 +1158,17 @@ Committed per-project knowledge bundle pointer.
 .TP
 .B .pix/knowledge.scope
 Launcher-generated canonical bundle scope for the current run.
+.PP
+.B pix run
+and
+.B pix task new
+add generated
+.B .pix
+workspace state to the repository's local
+.B .git/info/exclude
+file. The
+.B .pix/knowledge
+pointer remains trackable.
 .TP
 .B ~/.local/bin/pix
 Installed launcher symlink removed by

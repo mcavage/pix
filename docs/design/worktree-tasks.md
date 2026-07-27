@@ -140,8 +140,9 @@ Task clones live OUTSIDE the repo at `$XDG_STATE_HOME/pix/tasks/<repokey>/`
 (`meta/<name>.json`, `co/<name>/`). So no file under the repo's `.pix/` is
 created, the tracked `.pix/knowledge` pointer is untouched, no blanket
 `.gitignore *` is needed, and nested-worktree hazards do not exist. Each clone
-carries its own fresh untracked `.pix/` (knowledge.scope / profile) — per-
-task isolation for free.
+carries its own `.pix/` (knowledge.scope / profile), ignored through that
+clone's `.git/info/exclude`, for per-task isolation without changing tracked
+repository files.
 
 ## Implementation footprint (least churn; no bound symbol renamed)
 
