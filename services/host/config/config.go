@@ -194,8 +194,8 @@ type Config struct {
 	Host HostMode `toml:"host,omitempty"`
 
 	// Slack configures the generic Slack rotating-PKCE OAuth app wiring. See
-	// SlackOAuth. Empty (the default): no OAuth app configured, matching
-	// today's op://-ref-only `pix slack setup` (docs/design/slack-setup.md).
+	// SlackOAuth. Empty (the default): no OAuth app configured (uses the static
+	// `--token-ref` path for pre-issued tokens; see docs/design/slack-setup.md).
 	Slack SlackOAuth `toml:"slack,omitempty"`
 
 	// retiredKeys / unknownKeys capture the top-level TOML keys Load/LoadFrom
@@ -978,14 +978,12 @@ const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway res
 # Verify:  op read "op://<vault>/<item>/<field>" >/dev/null && echo OK
 # Tip:     1Password app -> right-click a field -> "Copy Secret Reference".
 
-# slack MCP server. Run 'pix slack setup --token-ref op://<vault>/<item>/<field>'
-# instead of hand-editing these lines — it resolves the ref, requires an xoxp-
-# PERSONAL user token (every Slack call the server makes acts AS the token's
-# owner; auth.test proves the identity live), and writes both lines below
-# itself. It is per-user and must never be a shared "employee"/team/bot token,
-# and never handed to a second person to reuse — each user runs their own
-# pix slack setup instead. See docs/design/slack-setup.md for how to obtain a
-# token, minimal scopes, and revocation.
+# slack MCP server. Run 'pix slack setup' (or 'pix slack setup --token-ref ...'
+# for static tokens) instead of hand-editing these lines — it verifies identity
+# live (auth.test) and writes the identity pins below. It is per-user and must
+# never be a shared "employee"/team/bot token, and never handed to a second
+# person to reuse — each user runs their own pix slack setup instead. See
+# docs/design/slack-setup.md for PKCE OAuth options, minimal scopes, and revocation.
 # SLACK_TOKEN=op://<vault>/<item>/<field>
 # SLACK_TEAM_ID=<team id auth.test resolved at setup>
 # SLACK_USER_ID=<user id auth.test resolved at setup>
