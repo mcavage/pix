@@ -7,28 +7,46 @@
 // spawn time — see mcpRegistrar.execArgv in cmd/pix/mcp.go). The Docker MCP
 // gateway runs the wrapped command on the host and exposes it to the agent,
 // so the Slack user token never enters the VM. Talks to the Slack Web API
-// directly. No local cache.
+// directly. No local data cache.
+//
+// Two credential sources feed slackCall, chosen once per process by
+// slackDefaultTokenSource (see slackTokenSource below): a static env token
+// (SLACK_TOKEN, legacy fallbacks retained) when config.toml has no complete
+// [slack] OAuth wiring, or a slackoauth.Manager-backed rotating credential
+// (`pix slack setup`'s no---token-ref PKCE path, cmd/pix/slack_oauth.go) when
+// it does — OAuth always wins over a stale static env value once configured.
 //
 // `pix slack setup|status|disable` (cmd/pix/slack.go) is the guided CLI that
 // writes SLACK_TOKEN (plus the SLACK_TEAM_ID/SLACK_USER_ID identity pins) and
 // registers this server; see docs/design/slack-setup.md.
 //
-// Env: SLACK_TOKEN (personal user token xoxp-; legacy SLACK_USER_TOKEN/
-// SLACK_BOT_TOKEN lookup fallbacks are retained, but non-xoxp tokens are
-// rejected), SLACK_TEAM_ID/SLACK_USER_ID (optional identity pins).
+// Env: SLACK_TOKEN (personal user token xoxp-, or a rotating xoxe.xoxp- token
+// if pasted directly rather than via the OAuth path; legacy SLACK_USER_TOKEN/
+// SLACK_BOT_TOKEN lookup fallbacks are retained, but neither prefix nor any
+// bot token is accepted), SLACK_TEAM_ID/SLACK_USER_ID (optional identity
+// pins).
 
 package main
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
+
+	"pix/host/config"
+	"pix/host/slackoauth"
 )
 
-const slackAPI = "https://slack.com/api"
+// slackAPI is the Slack Web API base URL. A var (not const) so tests can
+// point it at an httptest.Server instead of the real network.
+var slackAPI = "https://slack.com/api"
 
 func slackToken() (string, error) {
 	for _, k := range []string{"SLACK_TOKEN", "SLACK_USER_TOKEN", "SLACK_BOT_TOKEN"} {
@@ -39,25 +57,258 @@ func slackToken() (string, error) {
 	return "", errors.New("SLACK_TOKEN environment variable is not set")
 }
 
+// slackTokenLooksPersonal reports whether tok has the shape of a personal
+// Slack user token: either the STATIC xoxp- form (`pix slack setup
+// --token-ref`, or a hand-set SLACK_TOKEN) or the ROTATING xoxe.xoxp- form
+// slackoauth.Client mints. Any other prefix — including any bot token — is
+// rejected outright, before the value is ever sent to Slack.
+func slackTokenLooksPersonal(tok string) bool {
+	return strings.HasPrefix(tok, "xoxp-") || strings.HasPrefix(tok, "xoxe.xoxp-")
+}
+
+// --- credential source -------------------------------------------------------
+
+// slackTokenSource abstracts where slackCall's bearer token comes from, so
+// the call path is identical regardless of which credential backs it:
+//
+//   - staticSlackTokenSource wraps the legacy SLACK_TOKEN (or a fallback
+//     name) env lookup. Its token never rotates and Invalidate is a no-op —
+//     there is nothing to refresh into.
+//   - oauthSlackTokenSource wraps a slackoauth.Manager: Token serves an
+//     in-process cached access token (refreshing under a cross-process
+//     FileLock only once it nears expiry), and Invalidate drops that cache
+//     so the next Token call is forced back through a fresh read/refresh.
+//
+// slackAuthorizedCall keys its retry behavior off IsOAuth(): only an OAuth
+// source gets the invalidate-and-retry-once treatment on a
+// token_expired/invalid_auth response, since a static token has nothing to
+// refresh into and any other error is never worth retrying blindly.
+type slackTokenSource interface {
+	Token(ctx context.Context) (string, error)
+	Invalidate()
+	IsOAuth() bool
+}
+
+// staticSlackTokenSource is the legacy env-configured credential.
+type staticSlackTokenSource struct{}
+
+func (staticSlackTokenSource) Token(context.Context) (string, error) { return slackToken() }
+func (staticSlackTokenSource) Invalidate()                           {}
+func (staticSlackTokenSource) IsOAuth() bool                         { return false }
+
+// oauthSlackTokenSourceTimeout bounds every slackoauth.Manager.Token call
+// (which may exec `op document get`/`op document edit`, or hit Slack's
+// oauth.v2.access endpoint) so a hung 1Password CLI or network call can
+// never wedge a Slack tool call forever. Matches the 30s timeout the PKCE
+// setup flow (cmd/pix/slack_oauth.go) already uses for the same operations.
+const oauthSlackTokenSourceTimeout = 30 * time.Second
+
+// oauthSlackTokenSource adapts a slackoauth.Manager to slackTokenSource.
+type oauthSlackTokenSource struct {
+	mgr *slackoauth.Manager
+}
+
+func (s *oauthSlackTokenSource) Token(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, oauthSlackTokenSourceTimeout)
+	defer cancel()
+	return s.mgr.Token(ctx)
+}
+
+func (s *oauthSlackTokenSource) Invalidate()   { s.mgr.Invalidate() }
+func (s *oauthSlackTokenSource) IsOAuth() bool { return true }
+
+// slackNewTokenSource is the seam both production wiring and tests go
+// through to build this process's Slack credential source. Production
+// leaves it at slackDefaultTokenSource; a test that overrides it MUST call
+// resetSlackTokenSourceForTest in cleanup, so a fake (or a memoized real)
+// source can never leak into an unrelated test — this is what keeps every
+// test hermetic against the real on-disk config.toml and the real
+// 1Password/Slack round trip.
+var slackNewTokenSource = slackDefaultTokenSource
+
+var (
+	slackSourceMu    sync.Mutex
+	slackSourceCache slackTokenSource
+)
+
+// slackGetTokenSource returns the process-lifetime memoized credential
+// source, building it via slackNewTokenSource on first use. Memoizing
+// matters beyond avoiding a repeated config load: an OAuth source's value IS
+// the slackoauth.Manager, and the Manager's in-process token cache — the
+// whole point of this feature — only helps across calls if the SAME Manager
+// instance backs every slackCall in this process.
+func slackGetTokenSource() slackTokenSource {
+	slackSourceMu.Lock()
+	defer slackSourceMu.Unlock()
+	if slackSourceCache == nil {
+		slackSourceCache = slackNewTokenSource()
+	}
+	return slackSourceCache
+}
+
+// resetSlackTokenSourceForTest drops the memoized source and restores the
+// production factory. Called from t.Cleanup by every test that overrides
+// slackNewTokenSource.
+func resetSlackTokenSourceForTest() {
+	slackSourceMu.Lock()
+	defer slackSourceMu.Unlock()
+	slackSourceCache = nil
+	slackNewTokenSource = slackDefaultTokenSource
+}
+
+// slackDefaultTokenSource is the production factory: OAuth wins over the
+// static env fallback whenever config.toml carries a COMPLETE [slack] OAuth
+// wiring (client id AND both 1Password locators) — a leftover/stale
+// SLACK_TOKEN env value must never shadow a configured OAuth grant. Anything
+// short of a complete wiring (a missing client id, or either 1Password
+// locator, or config failing to load at all) falls back to the static env
+// path unchanged.
+func slackDefaultTokenSource() slackTokenSource {
+	cfg, err := config.Load()
+	if err == nil {
+		if mgr, ok := slackOAuthManagerFromConfig(cfg); ok {
+			return &oauthSlackTokenSource{mgr: mgr}
+		}
+	}
+	return staticSlackTokenSource{}
+}
+
+// slackOAuthManagerFromConfig builds the runtime slackoauth.Manager from
+// config.Slack, wired exactly like `pix slack setup`'s PKCE flow: an OPStore
+// over the real `op` CLI (slackoauth.ExecRunner — stdin only, never argv), a
+// Client carrying the EXACT shared read-only scope set
+// (slackoauth.RequiredUserScopes, never a locally duplicated copy that could
+// drift), and a FileLock under the state dir so a refresh is serialized
+// across every process on this host sharing the credential, not merely
+// goroutines within this one. ok is false when the config does not carry a
+// complete OAuth wiring, or the state dir cannot be resolved.
+func slackOAuthManagerFromConfig(cfg *config.Config) (*slackoauth.Manager, bool) {
+	if cfg == nil {
+		return nil, false
+	}
+	clientID := strings.TrimSpace(cfg.Slack.ClientID)
+	vaultID := strings.TrimSpace(cfg.Slack.OAuthVaultID)
+	docID := strings.TrimSpace(cfg.Slack.OAuthDocumentID)
+	if clientID == "" || vaultID == "" || docID == "" {
+		return nil, false
+	}
+	stateDir, err := config.StateDir()
+	if err != nil {
+		return nil, false
+	}
+	store := slackoauth.NewOPStore(slackoauth.ExecRunner{}, vaultID, "", docID)
+	client := &slackoauth.Client{
+		ClientID:       clientID,
+		RequiredScopes: append([]string(nil), slackoauth.RequiredUserScopes...),
+	}
+	lock := &slackoauth.FileLock{Path: filepath.Join(stateDir, "slack-oauth.lock")}
+	return &slackoauth.Manager{Store: store, Client: client, Locker: lock}, true
+}
+
+// slackAPIError is a typed Slack Web API failure (obj["ok"] == false),
+// carrying the raw error code so callers can recognize a specific code
+// (token_expired, invalid_auth) without string-matching the rendered
+// message.
+type slackAPIError struct {
+	method string
+	code   string
+}
+
+func (e *slackAPIError) Error() string {
+	return "Slack " + e.method + " failed: " + e.code
+}
+
+// slackIsExpiredOAuthError reports whether err is a Slack API failure whose
+// code means "this specific token no longer works" (token_expired,
+// invalid_auth) — the only two codes that justify invalidating an OAuth
+// source's cache and retrying once with a freshly refreshed token. Any other
+// error (a network failure, a different API error code, a store/refresh
+// failure) is never retried.
+func slackIsExpiredOAuthError(err error) bool {
+	var apiErr *slackAPIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.code == "token_expired" || apiErr.code == "invalid_auth"
+}
+
+// slackFriendlyOAuthError appends a "run pix slack setup" hint to an OAuth
+// source's TERMINAL failure — an expired 30-day grant
+// (slackoauth.ErrGrantExpired) or a token_expired/invalid_auth response that
+// survived the one retry slackAuthorizedCall already attempted — without
+// ever including a token or any other secret (the base error, from
+// slackoauth or Slack's own API error code, never embeds one either). Any
+// other error (a transient network failure, a store I/O error) is returned
+// unchanged: it isn't necessarily "you need to reauthorize".
+func slackFriendlyOAuthError(err error, source slackTokenSource) error {
+	if err == nil || !source.IsOAuth() {
+		return err
+	}
+	if errors.Is(err, slackoauth.ErrGrantExpired) || slackIsExpiredOAuthError(err) {
+		return fmt.Errorf("%w; run pix slack setup to reauthorize", err)
+	}
+	return err
+}
+
+// slackAuthorizedCall obtains a bearer token from source and invokes fn with
+// it. For an OAuth source, a token_expired/invalid_auth response invalidates
+// the source's cache and retries fn EXACTLY ONCE with a freshly obtained
+// token — never for any other error, and never for a static source (there
+// is nothing to refresh). Every token handed to fn is checked against
+// slackTokenLooksPersonal first, so a malformed or bot-shaped token is
+// refused before it ever reaches the network.
+func slackAuthorizedCall(ctx context.Context, source slackTokenSource, fn func(tok string) (jsonObj, error)) (jsonObj, error) {
+	tok, err := source.Token(ctx)
+	if err != nil {
+		return nil, slackFriendlyOAuthError(err, source)
+	}
+	if !slackTokenLooksPersonal(tok) {
+		return nil, errors.New("Slack token is not a personal xoxp- user token")
+	}
+
+	obj, err := fn(tok)
+	if err == nil {
+		return obj, nil
+	}
+	if !source.IsOAuth() || !slackIsExpiredOAuthError(err) {
+		return nil, slackFriendlyOAuthError(err, source)
+	}
+
+	// Exactly one retry: invalidate the (apparently wrong) cache, fetch a
+	// fresh token, and try once more. Whatever this second attempt returns —
+	// success or failure — is final; it is never retried again.
+	source.Invalidate()
+	tok2, terr := source.Token(ctx)
+	if terr != nil {
+		return nil, slackFriendlyOAuthError(terr, source)
+	}
+	if !slackTokenLooksPersonal(tok2) {
+		return nil, errors.New("Slack token is not a personal xoxp- user token")
+	}
+	obj, err = fn(tok2)
+	if err != nil {
+		return nil, slackFriendlyOAuthError(err, source)
+	}
+	return obj, nil
+}
+
 // slackCall posts application/x-www-form-urlencoded with the bearer and checks
 // both the API result and the identity pins written by `pix slack setup`.
 // Identity is verified once per host process before any data-bearing method is
 // allowed to run. This turns SLACK_TEAM_ID/SLACK_USER_ID into an enforcement
 // control, not merely a warning shown when a human remembers to run status.
 func slackCall(method string, params map[string]string) (jsonObj, error) {
-	tok, err := slackToken()
-	if err != nil {
-		return nil, err
-	}
-	if !strings.HasPrefix(tok, "xoxp-") {
-		return nil, errors.New("Slack token is not a personal xoxp- user token")
-	}
+	ctx := context.Background()
+	source := slackGetTokenSource()
+
 	if method != "auth.test" {
-		if err := slackVerifyExpectedIdentity(tok); err != nil {
+		if err := slackVerifyExpectedIdentity(ctx, source); err != nil {
 			return nil, err
 		}
 	}
-	obj, err := slackCallRaw(method, tok, params)
+	obj, err := slackAuthorizedCall(ctx, source, func(tok string) (jsonObj, error) {
+		return slackCallRaw(method, tok, params)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -99,31 +350,59 @@ func slackCallRaw(method, tok string, params map[string]string) (jsonObj, error)
 		if e == "" {
 			e = "unknown_error"
 		}
-		return nil, errors.New("Slack " + method + " failed: " + e)
+		return nil, &slackAPIError{method: method, code: e}
 	}
 	return obj, nil
 }
 
+// slackIdentityMu guards slackIdentityChecked/slackIdentityErr below. A plain
+// sync.Once would cache whatever the FIRST call happened to observe FOREVER —
+// including a purely transient auth.test failure (a network blip, a rate
+// limit, 1Password/Slack being briefly unreachable through an OAuth source's
+// Token call). That would wedge every later tool call behind a stale error
+// for the rest of the process's life, long after the transient condition
+// cleared. Only a DEFINITIVE result — auth.test actually answered, so either
+// the identity matches (nil) or a real pin mismatch was proven — is cached;
+// anything else is retried on the next call.
 var (
-	slackIdentityOnce sync.Once
-	slackIdentityErr  error
+	slackIdentityMu      sync.Mutex
+	slackIdentityChecked bool
+	slackIdentityErr     error
 )
 
-func slackVerifyExpectedIdentity(tok string) error {
+func slackVerifyExpectedIdentity(ctx context.Context, source slackTokenSource) error {
 	wantTeam := strings.TrimSpace(envRaw("SLACK_TEAM_ID"))
 	wantUser := strings.TrimSpace(envRaw("SLACK_USER_ID"))
 	if wantTeam == "" && wantUser == "" { // legacy manual wiring has no pin
 		return nil
 	}
-	slackIdentityOnce.Do(func() {
-		obj, err := slackCallRaw("auth.test", tok, nil)
-		if err != nil {
-			slackIdentityErr = err
-			return
-		}
-		slackIdentityErr = slackCheckExpectedIdentity(obj)
+
+	slackIdentityMu.Lock()
+	if slackIdentityChecked {
+		err := slackIdentityErr
+		slackIdentityMu.Unlock()
+		return err
+	}
+	slackIdentityMu.Unlock()
+
+	obj, callErr := slackAuthorizedCall(ctx, source, func(tok string) (jsonObj, error) {
+		return slackCallRaw("auth.test", tok, nil)
 	})
-	return slackIdentityErr
+	if callErr != nil {
+		// auth.test itself did not answer (network/auth-source failure): this is
+		// never definitive, so it is never cached — the next call gets a fresh
+		// attempt rather than an error frozen in from this one.
+		return callErr
+	}
+
+	// auth.test answered: the identity match (or a proven mismatch) is now
+	// definitive and safe to cache for the rest of this process's life.
+	checkErr := slackCheckExpectedIdentity(obj)
+	slackIdentityMu.Lock()
+	slackIdentityChecked = true
+	slackIdentityErr = checkErr
+	slackIdentityMu.Unlock()
+	return checkErr
 }
 
 func slackCheckExpectedIdentity(obj jsonObj) error {

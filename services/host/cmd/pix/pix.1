@@ -779,35 +779,30 @@ spawns on the host).  SLACK_TOKEN is always a single named person's
 user token, never a shared team/bot token
 .RB ( docs/design/slack\-setup.md ).
 .TP
+.BR "pix slack setup" " [" \-\-client\-id " " ID "] [" \-\-redirect\-uri " " URI "] [" \-\-vault " " NAME "] [" \-\-yes "]"
+Runs the primary localhost PKCE OAuth flow, verifies and pins the Slack
+identity, stores the rotating credential in 1Password, and registers the host
+MCP server.  No client secret is required.  Twelve\-hour access tokens refresh
+automatically on use.
+.TP
+.BR "pix slack auth" " [" \-\-client\-id " " ID "] [" \-\-redirect\-uri " " URI "] [" \-\-vault " " NAME "] [" \-\-yes "]"
+Authorizes or reauthorizes the browser PKCE grant.  This is needed for initial
+consent and the roughly monthly grant renewal, not every 12 hours.
+.TP
 .BR "pix slack setup" " " \-\-token\-ref " " op://vault/item/field " [" \-\-yes "]"
-Wires up an EXISTING personal token: never accepts or prints a raw token, only
-an
-.B op://
-reference.  Resolves it, requires it start with
-.BR xoxp\- ,
-verifies it LIVE via Slack's
-.BR auth.test ,
-prints the resolved team/user, and (unless
-.BR \-\-yes )
-asks you to confirm before writing SLACK_TOKEN plus the non\-secret
-SLACK_TEAM_ID/SLACK_USER_ID identity pins, registering with the sbx gateway,
-and saving config.  Does NOT perform the OAuth grant that produces the token
-itself \- see
-.BR docs/design/slack\-setup.md .
-Requires sbx.
+Static fallback for an existing personal
+.B xoxp\-
+token.  Never accepts or prints a raw token; verifies the live identity before
+writing the 1Password reference and identity pins.
 .TP
 .B "pix slack status"
-Reports the token ref, the identity it resolves to RIGHT NOW via
-.BR auth.test ,
-whether that still matches the SLACK_TEAM_ID/SLACK_USER_ID pin, and gateway
-registration \- separately from sandbox attachment.
+Reports credential mode, live identity and pin match, OAuth expiry when
+applicable, and gateway registration separately from sandbox attachment.
 .TP
 .B "pix slack disable"
-Removes the sbx gateway registration, the
-.B slack
-config entry, and the SLACK_TOKEN/SLACK_TEAM_ID/SLACK_USER_ID refs.  Does NOT
-revoke the token at Slack \- do that yourself; a running gateway\-managed
-process may keep using a token it already resolved.
+Removes the Pix\-owned registration and local configuration.  In OAuth mode it
+first revokes the grant at Slack and archives the 1Password document.  In
+static mode it does not revoke the externally issued token.
 .SS pack
 A pack is a git-backed context bundle (skills + knowledge + reference-only
 integrations + config).  See
@@ -950,6 +945,35 @@ is reserved for the host-guard strictness.
 the
 .B PIX_NO_AUTOSERVE
 environment variable also disables it and wins over the config flag.
+.B slack.client_id
+is the Slack app's PUBLIC OAuth client id (no secret) used by
+.BR "pix slack setup" ;
+unsetting it also clears
+.BR slack.oauth_vault_id ,
+.BR slack.oauth_document_id ,
+and
+.B slack.oauth_grant_expires_at
+so a stale locator can never point at a credential minted under a different
+client id.
+.B slack.redirect_uri
+is the registered OAuth callback URL; unsetting it restores the built-in
+default when a client id is configured, else clears it.
+.BR slack.oauth_vault_id ,
+.BR slack.oauth_document_id ,
+and
+.B slack.oauth_grant_expires_at
+are managed state written only by
+.BR "pix slack setup" :
+.B "pix config get"
+reads them for diagnostics, but
+.B set
+and
+.B unset
+refuse them directly (use
+.B "pix slack setup"
+to reauthorize, or
+.B "pix config unset slack.client_id"
+to clear the whole group).
 Keys are
 .BR google_workspace_account ,
 .BR mcp ,
@@ -964,8 +988,13 @@ is accepted),
 .BR ollama_bridge_model ,
 .BR host.enabled ,
 .BR host.autonomy ,
+.BR host.autoserve ,
+.BR slack.client_id ,
+.BR slack.redirect_uri ,
+.BR slack.oauth_vault_id ,
+.BR slack.oauth_document_id ,
 and
-.BR host.autoserve .
+.BR slack.oauth_grant_expires_at .
 Setting
 .B knowledge_bundles
 enables the knowledge service.  Switching the active pack
