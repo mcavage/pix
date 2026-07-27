@@ -164,7 +164,7 @@ Then run guided setup to authorize access via local PKCE OAuth (public client, n
 pix slack setup
 ```
 
-This opens the OAuth grant in your browser, verifies your identity, and stores the rotating credential in a 1Password document (`Private` vault by default). Access tokens rotate automatically, and the 30-day grant can be reauthorized by re-running `pix slack setup`. Verify health with `pix slack status` and revoke access with `pix slack disable`. A static fallback (`pix slack setup --token-ref op://...`) is also available for pre-issued tokens.
+This opens the OAuth grant in your browser, verifies your identity, and stores the rotating credential in a 1Password document (`Private` vault by default). Twelve-hour access tokens refresh automatically on use; you do not authorize every 12 hours. Renew the roughly monthly interactive grant with `pix slack auth`. Verify health with `pix slack status` and revoke access with `pix slack disable`. A static fallback (`pix slack setup --token-ref op://...`) is also available for pre-issued tokens.
 
 ## Daily use
 

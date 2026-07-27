@@ -346,8 +346,9 @@ token's owner. `pix slack setup` supports a local PKCE OAuth flow (`pix config
 set slack.client_id <id>`, public client with no client secret) as well as a
 static `--token-ref` fallback. The PKCE flow stores the rotating credential
 document in 1Password (`Private` vault by default), refreshes rotating 12-hour
-access tokens automatically, and requires re-authorization before the 30-day
-grant expires. `pix slack status` verifies live access/identity through
+access tokens automatically without an interactive command. The roughly
+monthly browser grant is renewed with `pix slack auth` before it expires.
+`pix slack status` verifies live access/identity through
 `auth.test` and checks gateway registration. `pix slack disable` revokes the
 token at Slack, archives the 1Password document, and clears registration.
 See `docs/design/slack-setup.md`.

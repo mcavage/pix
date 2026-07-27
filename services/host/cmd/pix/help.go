@@ -152,7 +152,7 @@ Parallel work
 
 Integrations & credentials
   gworkspace <cmd>    setup | status | disable: Google Workspace access
-  slack <cmd>         setup | status | disable: Slack access (personal token)
+  slack <cmd>         setup | auth | status | disable: Slack OAuth and access
   mcp <cmd>           register|ls|load|auth|bundle MCP servers (sbx gateway)
   secret <cmd>        ls|set|rm|check the 1Password op-refs (host MCP creds)
 

@@ -106,7 +106,7 @@ Pix validates shape and identity where the provider supports it. For Slack, `xox
 
 Use one Docker-owned Slack app with the minimal user scopes documented in `docs/design/slack-setup.md`. A controlled HTTPS callback service holds the app client secret and exchanges each employee's authorization code. Employees do not receive the client secret. Each employee stores only their own returned token in their own 1Password vault.
 
-Future `pix slack setup|status|disable` must:
+`pix slack setup|auth|status|disable` must:
 
 - launch or link to the approved user authorization flow;
 - write only the employee's `op://` reference;

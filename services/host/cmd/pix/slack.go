@@ -1,4 +1,4 @@
-// slack.go is the `pix slack setup|status|disable` CLI: the guided path for
+// slack.go is the `pix slack setup|auth|status|disable` CLI: the guided path for
 // wiring up the slack MCP server (services/host/slack.go). It has TWO ways to
 // get a Slack credential:
 //
@@ -21,6 +21,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -136,13 +137,16 @@ func liveSlackAuthRevoke(token string) (bool, error) {
 	return true, nil
 }
 
-const slackUsage = `usage: pix slack <setup|status|disable> [args]
+const slackUsage = `usage: pix slack <setup|auth|status|disable> [args]
 
   setup     wire up Slack access, EITHER of two ways: an EXISTING personal
             token (--token-ref: verify it live, pin its identity) OR a local
             PKCE OAuth grant (no --token-ref: mints and stores a rotating
             credential itself) — either path registers the server and saves
             config the same way
+  auth      authorize or reauthorize the PKCE OAuth grant. Twelve-hour access
+            tokens refresh automatically; this command is only for the initial
+            browser grant or its roughly monthly interactive renewal
   status    the credential mode, the live identity it resolves to, whether
             that matches the pinned identity, gateway registration, and (OAuth
             mode only) a grant-expiry countdown
@@ -155,11 +159,29 @@ const slackUsage = `usage: pix slack <setup|status|disable> [args]
 Slack is OPTIONAL and absent unless you set it up. SLACK_TOKEN is always a
 single named person's xoxp- user token, never a shared team/bot token — see
 docs/design/slack-setup.md.
-Run 'pix slack setup -h' for its flags.
+Run 'pix slack setup -h' or 'pix slack auth -h' for flags.
+`
+
+const slackAuthUsage = `usage: pix slack auth [--client-id ID] [--redirect-uri URI] [--vault NAME]
+                            [--allow-identity-change] [--yes]
+
+Authorize or reauthorize Slack through the localhost PKCE browser flow.
+The rotating access token is refreshed automatically by the Slack MCP server
+when it has less than ten minutes left; this command is NOT required every 12
+hours. Run it when first connecting Slack or when the roughly monthly OAuth
+grant needs fresh interactive consent.
+
+flags:
+  --client-id <id>          Slack app's public OAuth client id
+  --redirect-uri <uri>      fixed localhost callback registered on that app
+  --vault <name-or-id>      1Password vault (default: configured vault, then Private)
+  --allow-identity-change   permit changing the pinned Slack team/user
+  --yes                     never prompt (fails where confirmation is required)
 `
 
 const slackSetupUsage = `usage: pix slack setup --token-ref op://vault/item/field [--yes]
-       pix slack setup [--client-id ID] [--redirect-uri URI] [--vault NAME] [--yes]
+       pix slack setup [--client-id ID] [--redirect-uri URI] [--vault NAME]
+                       [--allow-identity-change] [--yes]
 
 With --token-ref: wires up a Slack token you already hold in 1Password:
   1. requires --token-ref to be an op://vault/item/field reference — a pasted
@@ -200,9 +222,9 @@ which mode config.toml's [slack] carries:
     - whether SLACK_TOKEN is a filled op:// ref (in op-refs.env)
     - the identity it resolves to RIGHT NOW (auth.test), not just "a token is set"
     - whether that identity still matches SLACK_TEAM_ID/SLACK_USER_ID, the pin
-      recorded the last time 'pix slack setup' ran
+      recorded the last time 'pix slack auth/setup' ran
 
-  OAuth (pix slack setup with no --token-ref):
+  OAuth (pix slack auth, or pix slack setup with no --token-ref):
     - OAuth mode, and the 1Password vault/document ids holding the credential
       (non-secret identifiers only — never the credential itself)
     - a grant-expiry countdown from the cached expiry, with NO live 1Password
@@ -241,7 +263,7 @@ config.toml's [slack] carries:
     that already resolved the old token at spawn may keep using it until it
     is restarted, regardless of what this removes.
 
-  OAuth (pix slack setup with no --token-ref):
+  OAuth (pix slack auth, or pix slack setup with no --token-ref):
     - calls Slack's auth.revoke on the current rotating token FIRST, and
       requires Slack confirm the revocation before anything else happens —
       a failed or unconfirmed revoke stops here with NOTHING removed
@@ -273,12 +295,14 @@ func runSlackCmd(argv []string) {
 	switch argv[0] {
 	case "setup":
 		runSlackSetupCmd(argv[1:])
+	case "auth":
+		runSlackAuthCmd(argv[1:])
 	case "status":
 		runSlackStatusCmd(argv[1:])
 	case "disable":
 		runSlackDisableCmd(argv[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "pix slack: unknown subcommand %q (want: setup, status, disable)\n", argv[0])
+		fmt.Fprintf(os.Stderr, "pix slack: unknown subcommand %q (want: setup, auth, status, disable)\n", argv[0])
 		os.Exit(2)
 	}
 }
@@ -370,6 +394,34 @@ func parseSlackSetupArgs(argv []string) (slackSetupOpts, error) {
 			"pick one setup path (see: pix slack setup -h)")
 	}
 	return o, nil
+}
+
+func parseSlackAuthArgs(argv []string) (slackSetupOpts, error) {
+	opts, err := parseSlackSetupArgs(argv)
+	if err == nil && strings.TrimSpace(opts.tokenRef) != "" {
+		err = errors.New("--token-ref is the static fallback and belongs to `pix slack setup`; `pix slack auth` is OAuth-only")
+	}
+	return opts, err
+}
+
+func runSlackAuthCmd(argv []string) {
+	opts, err := parseSlackAuthArgs(argv)
+	if err != nil {
+		if err == errHelpRequested {
+			fmt.Print(slackAuthUsage)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "pix slack auth: %v\n\n%s", err, slackAuthUsage)
+		os.Exit(2)
+	}
+	tty := isTTY(os.Stdin)
+	if opts.assumeYes {
+		tty = false
+	}
+	if err := slackSetup(defaultShellEnv(), opts, os.Stdin, os.Stdout, tty, hostBinaryResolver); err != nil {
+		fmt.Fprintf(os.Stderr, "pix slack auth: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func runSlackSetupCmd(argv []string) {

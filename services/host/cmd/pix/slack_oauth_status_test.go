@@ -238,8 +238,8 @@ func TestSlackStatusOAuthGrantExpiredIsTodoAndExit1(t *testing.T) {
 	if !strings.Contains(text, "expired") {
 		t.Errorf("status must report the grant as expired, got:\n%s", text)
 	}
-	if !strings.Contains(text, "pix slack setup") {
-		t.Errorf("status must name pix slack setup as the fix, got:\n%s", text)
+	if !strings.Contains(text, "pix slack auth") {
+		t.Errorf("status must name pix slack auth as the fix, got:\n%s", text)
 	}
 }
 

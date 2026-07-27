@@ -1,7 +1,7 @@
 # Slack credential model, and PKCE OAuth setup
 
 Status: the credential model below is the accepted design, AND
-`pix slack setup|status|disable` (`services/host/cmd/pix/slack.go`) is
+`pix slack setup|auth|status|disable` (`services/host/cmd/pix/slack.go`) is
 IMPLEMENTED on top of it. Scope: `services/host/slack.go`,
 `services/host/cmd/pix/slack.go`, `services/host/cmd/pix/slack_oauth.go`,
 `services/host/slackoauth/`, `config/op-refs.env.example`,
@@ -9,7 +9,7 @@ IMPLEMENTED on top of it. Scope: `services/host/slack.go`,
 
 ## Overview and credential model
 
-`pix slack setup|status|disable` provides guided setup for the `slack` MCP
+`pix slack setup|auth|status|disable` provides guided setup for the `slack` MCP
 server (`services/host/slack.go`). It supports two setup paths:
 
 1. **Local PKCE OAuth grant (`pix slack setup`, no `--token-ref`)**: The
@@ -108,8 +108,14 @@ Set configuration in `~/.config/pix/config.toml` via `pix config set`:
   token.
 - **Monthly grant expiry (30 days)**: The underlying OAuth grant expires after
   30 days (`grant_expires_at`).
-- **Reauthorization**: When the grant expires, re-run `pix slack setup` to
-  execute a fresh PKCE grant and update the 1Password document.
+- **Automatic access-token refresh**: The Slack MCP runtime refreshes the
+  12-hour access token when less than ten minutes remain. No interactive
+  command or always-running Pix daemon is needed; the next Slack request runs
+  the locked refresh and atomically replaces the 1Password document.
+- **Reauthorization**: When the roughly monthly PKCE grant expires, run
+  `pix slack auth` to execute a fresh browser grant and update the 1Password
+  document. This is the interactive consent boundary, not the 12-hour token
+  rotation.
 
 ## Static fallback setup (`pix slack setup --token-ref`)
 

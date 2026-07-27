@@ -1,4 +1,4 @@
-// slack_test.go covers the `pix slack setup|status|disable` CLI (slack.go):
+// slack_test.go covers the `pix slack setup|auth|status|disable` CLI (slack.go):
 // argument parsing, the pasted-token/non-xoxp- rejections (and that neither
 // ever leaks into output), that an auth.test failure writes and registers
 // nothing, status's identity-pin mismatch + registered-vs-attachment
@@ -51,6 +51,19 @@ func TestParseSlackSetupArgs(t *testing.T) {
 	}
 	if _, err := parseSlackSetupArgs([]string{"--token-ref", "op://x/y/z", "--help"}); err != errHelpRequested {
 		t.Error("--help should return the errHelpRequested sentinel even after other flags")
+	}
+}
+
+func TestParseSlackAuthArgsIsOAuthOnly(t *testing.T) {
+	o, err := parseSlackAuthArgs([]string{"--client-id", "C123", "--vault", "Private"})
+	if err != nil {
+		t.Fatalf("parseSlackAuthArgs OAuth flags: %v", err)
+	}
+	if o.clientID != "C123" || o.vault != "Private" {
+		t.Errorf("parsed opts = %+v, want OAuth client/vault", o)
+	}
+	if _, err := parseSlackAuthArgs([]string{"--token-ref", "op://Private/Slack/token"}); err == nil || !strings.Contains(err.Error(), "OAuth-only") {
+		t.Fatalf("auth accepted static --token-ref or returned an unclear error: %v", err)
 	}
 }
 
@@ -734,7 +747,7 @@ func TestSlackDisableNoopWhenNothingConfigured(t *testing.T) {
 // TestSlackVerbDiscoverable is a focused sibling of the generic
 // TestHelpListsEveryTopLevelVerb/TestManPageDocumentsEveryKnownVerb checks
 // (verbcoverage_test.go, man_test.go), which already cover `slack` because
-// they read the dispatch switch / knownVerbs live. This pins the three
+// they read the dispatch switch / knownVerbs live. This pins the four
 // subcommands specifically, so a future edit that drops one from slackUsage
 // fails locally in this file too.
 func TestSlackVerbDiscoverable(t *testing.T) {
@@ -745,7 +758,7 @@ func TestSlackVerbDiscoverable(t *testing.T) {
 	if !ok {
 		t.Fatal(`verbUsage("slack") must resolve`)
 	}
-	for _, sub := range []string{"setup", "status", "disable"} {
+	for _, sub := range []string{"setup", "auth", "status", "disable"} {
 		if !strings.Contains(usage, sub) {
 			t.Errorf("pix slack usage is missing subcommand %q:\n%s", sub, usage)
 		}

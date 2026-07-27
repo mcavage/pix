@@ -1,4 +1,4 @@
-// slack_oauth.go is `pix slack setup`'s SECOND path: a localhost PKCE OAuth
+// slack_oauth.go backs `pix slack auth` and `pix slack setup`'s OAuth path: a localhost PKCE OAuth
 // grant, used whenever --token-ref is absent. Unlike the static-ref flow in
 // slack.go (which only ever accepts a token minted somewhere else), this path
 // DOES talk to Slack's authorize endpoint — but it is still a public PKCE
@@ -99,8 +99,9 @@ secret is ever held or requested):
      SLACK_TEAM_ID/SLACK_USER_ID, removes any legacy SLACK_TOKEN ref, and
      registers + saves config exactly like the --token-ref path above
 
-The rotating grant expires monthly (30 days) — re-run this command before
-then to reauthorize; that is a separate step from sandbox attachment.
+Twelve-hour access tokens refresh automatically on use. The interactive grant
+expires roughly monthly (30 days); run pix slack auth before then to renew it.
+That is a separate step from sandbox attachment.
 
 flags (PKCE path only):
   --client-id <id>        Slack app client id (else config.toml's [slack] client_id)
@@ -108,6 +109,7 @@ flags (PKCE path only):
                           (else config.toml's [slack] redirect_uri, else the
                           built-in default)
   --vault <name-or-id>    1Password vault for the OAuth document (default: Private)
+  --allow-identity-change permit changing the pinned Slack team/user
 `
 
 // slackOAuthDeps bundles the PKCE flow's injected seams. Every field has a
@@ -382,7 +384,7 @@ func slackOAuthBestEffortRevoke(deps slackOAuthDeps, accessToken string) string 
 func slackOAuthOrphanNote(itemID, vaultID string) string {
 	return fmt.Sprintf("the 1Password document (item %s, vault %s) was already created and holds a valid Slack credential, "+
 		"but this run failed before config.toml was updated to reference it. Either delete that 1Password item and re-run "+
-		"`pix slack setup`, or fix the error above and re-run `pix slack setup` again (a rerun creates/edits its own document; "+
+		"`pix slack auth`, or fix the error above and run `pix slack auth` again (a rerun creates/edits its own document; "+
 		"it will not automatically resume this one unless config already points at it)",
 		itemID, vaultID)
 }
@@ -659,8 +661,9 @@ func slackSetupPKCE(env shellEnv, cfg *config.Config, opts slackSetupOpts, deps 
 		return err
 	}
 
-	fmt.Fprintf(out, "Slack OAuth is set up. This rotating grant expires %s (~monthly) — re-run "+
-		"`pix slack setup` before then to reauthorize.\n", blob.GrantExpiresAt.Format("2006-01-02"))
+	fmt.Fprintf(out, "Slack OAuth is set up. Twelve-hour access tokens refresh automatically.\n")
+	fmt.Fprintf(out, "Interactive grant renewal is due %s (~monthly) — run `pix slack auth` before then.\n",
+		blob.GrantExpiresAt.Format("2006-01-02"))
 	slackPrintAttachmentNote(out)
 	return nil
 }
@@ -683,7 +686,7 @@ const slackOAuthRuntimeTimeout = 30 * time.Second
 
 // slackOAuthGrantExpiryWarning is how much remaining grant lifetime turns the
 // status countdown from a plain fact into a call-it-out warning: seven days
-// is enough runway to act (re-run pix slack setup) before the 30-day rotating
+// is enough runway to act (run pix slack auth) before the 30-day rotating
 // grant actually expires and OAuth-mode Slack access goes dark.
 const slackOAuthGrantExpiryWarning = 7 * 24 * time.Hour
 
@@ -789,7 +792,7 @@ func slackOAuthRuntime(cfg *config.Config, env shellEnv, deps slackOAuthRuntimeD
 // is advisory (SlackOAuth's doc comment), and a countdown display is exactly
 // what it exists for. An already-expired grant is a VERIFIED todo (blocks
 // exit 1): no refresh can revive a dead grant, only a full re-authorization
-// (pix slack setup). Seven days or fewer remaining is a non-blocking warning
+// (pix slack auth). Seven days or fewer remaining is a non-blocking warning
 // — still reported ready, called out so it is not missed until it actually
 // breaks.
 func slackOAuthGrantExpiryCheck(cfg *config.Config, now time.Time) check {
@@ -803,13 +806,13 @@ func slackOAuthGrantExpiryCheck(cfg *config.Config, now time.Time) check {
 		agoDays := int((-remaining).Hours() / 24)
 		return check{label: "grant expiry", verdict: verdictTodo,
 			detail: fmt.Sprintf("OAuth grant expired %s ago", plural(agoDays, "day")),
-			todo:   "pix slack setup"}
+			todo:   "pix slack auth"}
 	}
 	days := int(remaining.Hours() / 24)
 	if remaining <= slackOAuthGrantExpiryWarning {
 		return check{label: "grant expiry", verdict: verdictReady,
 			detail: fmt.Sprintf("\u26a0 expires in %s — renew soon", plural(days, "day")),
-			todo:   "pix slack setup (reauthorize before it expires)"}
+			todo:   "pix slack auth (reauthorize before it expires)"}
 	}
 	return check{label: "grant expiry", verdict: verdictReady,
 		detail: fmt.Sprintf("expires in %s", plural(days, "day"))}
@@ -833,7 +836,7 @@ func slackOAuthAccessChecks(env shellEnv, mgr *slackoauth.Manager, pinTeam, pinU
 		v := verdictUnverifiable
 		todo := ""
 		if errors.Is(err, slackoauth.ErrGrantExpired) {
-			v, todo = verdictTodo, "pix slack setup"
+			v, todo = verdictTodo, "pix slack auth"
 		}
 		checks = append(checks, check{label: "access", verdict: v,
 			detail: "could not obtain a valid OAuth access token: " + err.Error(), todo: todo})
@@ -852,7 +855,7 @@ func slackOAuthAccessChecks(env shellEnv, mgr *slackoauth.Manager, pinTeam, pinU
 	id, aerr := env.slackAuthTest(tok)
 	if aerr != nil {
 		checks = append(checks, check{label: "identity", verdict: verdictTodo,
-			detail: "auth.test failed: " + aerr.Error(), todo: "pix slack setup"})
+			detail: "auth.test failed: " + aerr.Error(), todo: "pix slack auth"})
 		return checks
 	}
 	checks = append(checks, check{label: "identity", verdict: verdictReady,
@@ -861,16 +864,16 @@ func slackOAuthAccessChecks(env shellEnv, mgr *slackoauth.Manager, pinTeam, pinU
 	switch {
 	case pinTeam == "" && pinUser == "":
 		checks = append(checks, check{label: "identity pin", note: true, verdict: verdictUnverifiable,
-			detail: "no SLACK_TEAM_ID/SLACK_USER_ID pin recorded yet (set by pix slack setup)"})
+			detail: "no SLACK_TEAM_ID/SLACK_USER_ID pin recorded yet (set by pix slack auth/setup)"})
 	case pinTeam == id.teamID && pinUser == id.userID:
 		checks = append(checks, check{label: "identity pin", verdict: verdictReady,
 			detail: "matches the identity pinned at setup"})
 	default:
 		checks = append(checks, check{label: "identity pin", verdict: verdictTodo,
 			detail: fmt.Sprintf("live identity (team %s / user %s) does not match the pin (team %s / user %s) — "+
-				"the token was likely swapped; re-run pix slack setup if this is expected",
+				"the token was likely swapped; run pix slack auth if this is expected",
 				id.teamID, id.userID, pinTeam, pinUser),
-			todo: "pix slack setup"})
+			todo: "pix slack auth"})
 	}
 	return checks
 }
