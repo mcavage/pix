@@ -53,6 +53,45 @@ func TestParseSlackSetupArgs(t *testing.T) {
 	}
 }
 
+// TestParseSlackSetupArgsPKCEFlags proves --client-id/--redirect-uri/--vault
+// parse in both "space" and "=" forms, and that --vault defaults to "Private"
+// when omitted (vaultExplicit false) but is tracked as explicit when passed.
+func TestParseSlackSetupArgsPKCEFlags(t *testing.T) {
+	o, err := parseSlackSetupArgs(nil)
+	if err != nil {
+		t.Fatalf("parse empty argv: %v", err)
+	}
+	if o.vault != "Private" || o.vaultExplicit {
+		t.Errorf("default vault = %q explicit=%v, want Private/false", o.vault, o.vaultExplicit)
+	}
+
+	o2, err := parseSlackSetupArgs([]string{"--client-id", "C123", "--redirect-uri", "http://localhost:9/slack/callback", "--vault", "Shared"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if o2.clientID != "C123" || o2.redirectURI != "http://localhost:9/slack/callback" || o2.vault != "Shared" || !o2.vaultExplicit {
+		t.Errorf("parsed = %+v", o2)
+	}
+
+	o3, err := parseSlackSetupArgs([]string{"--client-id=C456", "--redirect-uri=http://localhost:9/slack/callback", "--vault=Shared2"})
+	if err != nil {
+		t.Fatalf("parse (= form): %v", err)
+	}
+	if o3.clientID != "C456" || o3.redirectURI != "http://localhost:9/slack/callback" || o3.vault != "Shared2" || !o3.vaultExplicit {
+		t.Errorf("parsed (= form) = %+v", o3)
+	}
+
+	if _, err := parseSlackSetupArgs([]string{"--client-id"}); err == nil {
+		t.Error("--client-id without a value should error")
+	}
+	if _, err := parseSlackSetupArgs([]string{"--redirect-uri"}); err == nil {
+		t.Error("--redirect-uri without a value should error")
+	}
+	if _, err := parseSlackSetupArgs([]string{"--vault"}); err == nil {
+		t.Error("--vault without a value should error")
+	}
+}
+
 // --- slackSetup hermetic harness ----------------------------------------
 
 // slackTestEnv builds a shellEnv over a real (but temp-dir-scoped) config +

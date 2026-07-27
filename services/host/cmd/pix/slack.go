@@ -1,18 +1,22 @@
 // slack.go is the `pix slack setup|status|disable` CLI: the guided path for
-// wiring up the slack MCP server (services/host/slack.go) with a token you
-// already hold, never a token this command mints.
+// wiring up the slack MCP server (services/host/slack.go). It has TWO ways to
+// get a Slack credential:
 //
-// This is deliberately NOT an OAuth implementation. `pix slack setup` never
-// talks to Slack's authorize endpoint and never asks for a client secret —
-// obtaining the xoxp- token in the first place (your own Slack app's OAuth
-// grant, or an org-owned callback/exchange service) is out of scope and
-// documented in docs/design/slack-setup.md. What this command DOES do: take
-// an op://vault/item/field reference to a token you (or that service) already
-// put in 1Password, resolve it, verify LIVE that it authenticates and prove
-// whose identity it is (Slack's auth.test), pin that identity
+//   - `--token-ref op://vault/item/field` (this file, slackSetupStatic): take
+//     a token you (or an org-owned exchange service) already put in
+//     1Password, resolve it, verify LIVE that it authenticates and prove
+//     whose identity it is (Slack's auth.test). It never talks to Slack's
+//     authorize endpoint and never asks for a client secret — a raw token is
+//     never accepted as a flag value, never written to disk by this command,
+//     and never printed.
+//   - no --token-ref (slack_oauth.go, slackSetupPKCE): run a LOCAL PKCE OAuth
+//     grant (still no client secret, ever — PKCE is a PUBLIC client) against
+//     a Slack app's client_id, storing the resulting rotating credential in a
+//     1Password document.
+//
+// Both paths end the same way: pin the verified identity
 // (SLACK_TEAM_ID/SLACK_USER_ID) so a later silent token swap is detectable,
-// register the server, and save config. A raw token is never accepted as a
-// flag value, never written to disk by this command, and never printed.
+// register the server, and save config. See docs/design/slack-setup.md.
 package main
 
 import (
@@ -97,8 +101,9 @@ Run 'pix slack setup -h' for its flags.
 `
 
 const slackSetupUsage = `usage: pix slack setup --token-ref op://vault/item/field [--yes]
+       pix slack setup [--client-id ID] [--redirect-uri URI] [--vault NAME] [--yes]
 
-Wires up a Slack token you already hold in 1Password:
+With --token-ref: wires up a Slack token you already hold in 1Password:
   1. requires --token-ref to be an op://vault/item/field reference — a pasted
      token is refused outright, and is never echoed back in the refusal
   2. resolves it via op read, and requires the resolved value start with
@@ -113,12 +118,12 @@ Wires up a Slack token you already hold in 1Password:
      leaves the refs written but nothing else changed; a save failure after a
      successful registration rolls the registration back.
 
-This command does NOT perform the OAuth grant that produces the token in the
-first place — no fake OAuth here. Obtaining an xoxp- token still needs either
-your own Slack app, or an org-owned callback/exchange service so a second
-person never needs the app's client secret (Slack's own hosted remote MCP
-server needs a preregistered OAuth client the same way). See
-docs/design/slack-setup.md for that flow, minimal scopes, and revocation.
+This --token-ref path does NOT itself perform the OAuth grant that produces
+the token — it accepts a token minted elsewhere and verifies it. Obtaining an
+xoxp- token still needs either your own Slack app (see the PKCE path below,
+with no --token-ref), or an org-owned callback/exchange service so a second
+person never needs the app's client secret directly. See
+docs/design/slack-setup.md for minimal scopes and revocation.
 
 flags:
   --token-ref <ref>   op://vault/item/field pointing at your xoxp- token
@@ -126,7 +131,7 @@ flags:
 
 Idempotent: re-running with the same (or a rotated) token re-verifies and
 re-registers.
-`
+` + slackOAuthPKCESetupUsage
 
 const slackStatusUsage = `usage: pix slack status
 
@@ -189,10 +194,19 @@ func runSlackCmd(argv []string) {
 type slackSetupOpts struct {
 	tokenRef  string
 	assumeYes bool
+
+	// clientID/redirectURI/vault configure the PKCE path (used when tokenRef
+	// is empty). vaultExplicit distinguishes an explicit --vault from the
+	// "Private" default, so a rerun can prefer an already-configured
+	// Slack.OAuthVaultID instead of silently switching vaults.
+	clientID      string
+	redirectURI   string
+	vault         string
+	vaultExplicit bool
 }
 
 func parseSlackSetupArgs(argv []string) (slackSetupOpts, error) {
-	var o slackSetupOpts
+	o := slackSetupOpts{vault: "Private"}
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		next := func() (string, error) {
@@ -213,6 +227,30 @@ func parseSlackSetupArgs(argv []string) (slackSetupOpts, error) {
 			o.tokenRef = strings.TrimPrefix(a, "--token-ref=")
 		case a == "--yes", a == "-y", a == "--non-interactive":
 			o.assumeYes = true
+		case a == "--client-id":
+			v, err := next()
+			if err != nil {
+				return o, err
+			}
+			o.clientID = v
+		case strings.HasPrefix(a, "--client-id="):
+			o.clientID = strings.TrimPrefix(a, "--client-id=")
+		case a == "--redirect-uri":
+			v, err := next()
+			if err != nil {
+				return o, err
+			}
+			o.redirectURI = v
+		case strings.HasPrefix(a, "--redirect-uri="):
+			o.redirectURI = strings.TrimPrefix(a, "--redirect-uri=")
+		case a == "--vault":
+			v, err := next()
+			if err != nil {
+				return o, err
+			}
+			o.vault, o.vaultExplicit = v, true
+		case strings.HasPrefix(a, "--vault="):
+			o.vault, o.vaultExplicit = strings.TrimPrefix(a, "--vault="), true
 		case a == "-h", a == "--help":
 			return o, errHelpRequested
 		default:
@@ -246,12 +284,27 @@ func runSlackSetupCmd(argv []string) {
 	}
 }
 
-// slackSetup is the hermetically-testable core of `pix slack setup`. Every
-// early-return path below runs BEFORE anything is written or registered, so
-// a rejected ref, an unresolved ref, a non-xoxp- token, a failed live
-// auth.test, or a declined confirmation all leave op-refs.env, the sbx
-// gateway, and config.toml completely untouched.
+// slackSetup is `pix slack setup`'s dispatcher: --token-ref runs the static
+// (already-issued token) path, and its absence runs the localhost PKCE OAuth
+// path (slack_oauth.go). Both share the same preflight/register/rollback
+// helpers so their observable failure discipline matches.
 func slackSetup(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Writer, tty bool, hostResolver func() (string, error)) error {
+	if strings.TrimSpace(opts.tokenRef) != "" {
+		return slackSetupStatic(env, opts, in, out, tty, hostResolver)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	return slackSetupPKCE(env, cfg, opts, defaultSlackOAuthDeps(), in, out, tty, hostResolver)
+}
+
+// slackSetupStatic is the hermetically-testable core of the --token-ref path.
+// Every early-return path below runs BEFORE anything is written or
+// registered, so a rejected ref, an unresolved ref, a non-xoxp- token, a
+// failed live auth.test, or a declined confirmation all leave op-refs.env,
+// the sbx gateway, and config.toml completely untouched.
+func slackSetupStatic(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Writer, tty bool, hostResolver func() (string, error)) error {
 	ref := normalizeOpRef(strings.TrimSpace(opts.tokenRef))
 	if !strings.HasPrefix(ref, "op://") {
 		return fmt.Errorf("--token-ref must be an op://vault/item/field reference — " +
@@ -263,26 +316,11 @@ func slackSetup(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Writer, 
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	if env.run == nil {
-		return fmt.Errorf("internal: shellEnv.run not wired")
-	}
-	if env.lookPath == nil {
-		return fmt.Errorf("internal: shellEnv.lookPath not wired")
-	}
-	if _, err := env.lookPath("sbx"); err != nil {
-		return fmt.Errorf("sbx not found: pix slack setup requires sbx to register the MCP server; install it, then re-run this command")
-	}
 	// Snapshot gateway state before touching refs. Never bless or overwrite an
 	// arbitrary command that merely happens to be registered as "slack".
-	wasRegistered, err := slackRegistrationPresence(env)
+	wasRegistered, err := slackRegistrationPreflight(env)
 	if err != nil {
 		return err
-	}
-	if wasRegistered {
-		argv, ok := registeredMCPCommand(env, slackServerName)
-		if _, trusted := recognizedMCPArgv(env, argv, slackServerName); !ok || !trusted {
-			return fmt.Errorf("the existing slack registration is not the canonical Pix host command; refusing to overwrite it (inspect: sbx mcp get slack)")
-		}
 	}
 	token, ok := opReadNonEmpty(env, ref)
 	if !ok {
@@ -328,27 +366,12 @@ func slackSetup(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Writer, 
 	// registerServers itself hard-fails (errSbxUnavailable) when sbx is
 	// absent rather than silently reporting a no-op success; a failure here
 	// returns before cfg.AddMCP/Save ever runs.
-	if err := registerServers(cfg, env, out, []string{slackServerName}, hostResolver, nil); err != nil {
-		return fmt.Errorf("registering %s with the sbx gateway: %w (re-run this pix slack setup command after fixing sbx)",
-			slackServerName, err)
+	if err := slackRegisterAndSave(cfg, env, out, hostResolver, wasRegistered, ""); err != nil {
+		return err
 	}
 
-	cfg.AddMCP(slackServerName)
-	if err := cfg.Save(); err != nil {
-		// A rerun does not own a registration that existed before this command.
-		if wasRegistered {
-			return fmt.Errorf("saving config: %w (the pre-existing slack registration was left in place)", err)
-		}
-		if _, rerr := env.run("sbx", "mcp", "rm", slackServerName); rerr != nil {
-			return fmt.Errorf("saving config: %w; additionally, rollback of the %s registration failed: %v; "+
-				"fix by hand (sbx mcp rm %s)", err, slackServerName, rerr, slackServerName)
-		}
-		return fmt.Errorf("saving config: %w (the just-created registration was rolled back)", err)
-	}
-
-	fmt.Fprintln(out, "Slack is set up. Registration and sandbox attachment are separate:")
-	fmt.Fprintln(out, "  a sandbox already running does not see it until recreated (pix run --replace)")
-	fmt.Fprintln(out, "  or attached live (pix mcp load slack).")
+	fmt.Fprintln(out, "Slack is set up.")
+	slackPrintAttachmentNote(out)
 	return nil
 }
 

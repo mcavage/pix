@@ -55,7 +55,7 @@ const authedUserOKBody = `{
   "authed_user": {
     "id": "U0123",
     "scope": "channels:read,chat:write",
-    "access_token": "xoxp-personal-token",
+    "access_token": "xoxe.xoxp-personal-token",
     "token_type": "user",
     "refresh_token": "xoxe-refresh-token",
     "expires_in": 3600
@@ -153,7 +153,7 @@ func TestExchangeSelectsOnlyAuthedUserCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}
-	if b.AccessToken != "xoxp-personal-token" {
+	if b.AccessToken != "xoxe.xoxp-personal-token" {
 		t.Errorf("AccessToken = %q, want the authed_user token, not the top-level bot token", b.AccessToken)
 	}
 	if b.RefreshToken != "xoxe-refresh-token" {
@@ -181,13 +181,13 @@ func TestExchangeRejectsNonPersonalTokenType(t *testing.T) {
 // TestExchangeRejectsMissingXoxpPrefix proves the access_token must carry the
 // personal user token prefix, independent of the declared token_type.
 func TestExchangeRejectsMissingXoxpPrefix(t *testing.T) {
-	body := strings.Replace(authedUserOKBody, "xoxp-personal-token", "xoxa-not-a-user-token", 1)
+	body := strings.Replace(authedUserOKBody, "xoxe.xoxp-personal-token", "xoxa-not-a-user-token", 1)
 	doer := &fakeDoer{resp: jsonResponse(200, body)}
 	c := newTestClient(doer, &fakeClock{now: time.Now()})
 	if _, err := c.Exchange(context.Background(), ExchangeParams{
 		Code: "c", CodeVerifier: "v", RedirectURI: "https://example.com/cb",
 	}); err == nil {
-		t.Fatal("Exchange succeeded with a non xoxp- access_token; want a rejection")
+		t.Fatal("Exchange succeeded with a non xoxe.xoxp- rotating user access_token; want a rejection")
 	}
 }
 
@@ -357,7 +357,7 @@ func (f doerFunc) Do(req *http.Request) (*http.Response, error) { return f(req) 
 // token in scope (scope mismatch, wrong prefix).
 func TestErrorsNeverContainTokenSecrets(t *testing.T) {
 	secret := "xoxp-super-secret-should-never-leak"
-	body := strings.Replace(authedUserOKBody, "xoxp-personal-token", secret, 1)
+	body := strings.Replace(authedUserOKBody, "xoxe.xoxp-personal-token", secret, 1)
 	body = strings.Replace(body, "channels:read,chat:write", "channels:read", 1) // force scope mismatch too
 	doer := &fakeDoer{resp: jsonResponse(200, body)}
 	c := newTestClient(doer, &fakeClock{now: time.Now()})

@@ -22,7 +22,7 @@ const (
 	maxResponseBytes = 1 << 20
 
 	requiredTokenType   = "user"
-	requiredTokenPrefix = "xoxp-"
+	requiredTokenPrefix = "xoxe.xoxp-"
 )
 
 // GrantWindow is the fixed lifetime Slack grants a rotating refresh token

@@ -142,6 +142,25 @@ func TestOPStoreWriteEditsWhenItemKnown(t *testing.T) {
 	}
 }
 
+// TestOPStoreVaultIDCapturedFromWriteResponse proves Write captures the
+// ACTUAL vault id `op document create|edit --format json` returns — even
+// when Vault was configured as a vault NAME rather than an id — so a caller
+// (the PKCE setup flow) can persist the resolved vault id into config
+// without a second round trip.
+func TestOPStoreVaultIDCapturedFromWriteResponse(t *testing.T) {
+	r := &fakeRunner{outputs: [][]byte{[]byte(`{"id":"new-item-id","vault":{"id":"vault-id-1"}}`)}}
+	s := NewOPStore(r, "MyVault", "pix-slack-oauth", "")
+	if got := s.VaultID(); got != "" {
+		t.Errorf("VaultID() before any Write = %q, want empty", got)
+	}
+	if err := s.Write(context.Background(), validBlob()); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if got := s.VaultID(); got != "vault-id-1" {
+		t.Errorf("VaultID() = %q, want vault-id-1", got)
+	}
+}
+
 // TestOPStoreWriteNeverPutsBlobOnArgv proves the credential JSON appears
 // ONLY in stdin, never anywhere in argv, on both create and edit paths.
 func TestOPStoreWriteNeverPutsBlobOnArgv(t *testing.T) {
