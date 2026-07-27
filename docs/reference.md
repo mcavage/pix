@@ -22,7 +22,7 @@ CLI reference of its own.
 | `memory` (`mem`) | recall/remember/forget/learnings/stats from the host | §2, `docs/memory.md` |
 | `knowledge` (`kb`) | OKF bundles: init/use/ls/query/sync/remote | §6 |
 | `pack` | the portable capability context: new/add/ls/show/use/rm | §5, `docs/design/packs-v2.md` |
-| `mcp` | register/list/load MCP servers through the sbx gateway | §8 |
+| `mcp` | register/list/load MCP servers through the sbx gateway | §8, `docs/design/slack-setup.md` (Slack credential model) |
 | `gworkspace` | Google Workspace (Gmail/Drive/Docs/Sheets/Calendar) | `docs/gworkspace.md` |
 | `secret` | manage the 1Password `op://` refs (never the values) | §8 |
 | `config` | `show`/`path`/`get`/`set`/`unset` the single runtime config | §1 |
@@ -337,6 +337,13 @@ everyday driver, that's the failure mode the design explicitly warns against.
 
 External tools and data (Slack, GitHub, Google Workspace, a company wiki) wire
 in as MCP servers, run through the sbx gateway.
+
+**Slack's `SLACK_TOKEN` is always a single named person's `xoxp-` user
+token** — never a shared "employee"/team/bot token, and never handed to a
+second person to reuse. Every call the `slack` server makes runs AS that
+token's owner; `pix slack` (`setup`/`status`/`disable`) is proposed future
+work for a per-user OAuth grant, so a second user never needs the app's
+client secret. See `docs/design/slack-setup.md`.
 
 ```
 pix config set mcp <name>     # add a local stdio server to the launch set

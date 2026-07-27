@@ -872,7 +872,13 @@ const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway res
 # Verify:  op read "op://<vault>/<item>/<field>" >/dev/null && echo OK
 # Tip:     1Password app -> right-click a field -> "Copy Secret Reference".
 
-# slack MCP server (its bot/user token). Required to register slack.
+# slack MCP server. SLACK_TOKEN is an xoxp- PERSONAL user token: every Slack
+# call the server makes acts AS the token's owner (auth.test proves the
+# identity). It is per-user and must never be a shared "employee"/team/bot
+# token, and never handed to a second person to reuse — each user gets their
+# own OAuth grant instead. See docs/design/slack-setup.md for the
+# authorization flow, minimal scopes, and revocation. Required to register
+# slack.
 # SLACK_TOKEN=op://<vault>/<item>/<field>
 
 # gog (Google Workspace) MCP server. gog only needs op to inject a headless
