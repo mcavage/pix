@@ -323,7 +323,7 @@ func setupReceiptStateDir(env shellEnv) (string, error) {
 // key launches a sandbox); an ACTIVE but EMPTY pack is a TODO, never green.
 //
 // gog is a LOCAL stdio MCP server: its Google grant runs through the
-// installed gog CLI via `pix gog setup` — the ONLY guidance ever printed
+// installed gog CLI via `pix gworkspace setup` — the ONLY guidance ever printed
 // here. Native `sbx mcp auth` is for remote catalog servers and raw `gog auth
 // ...` commands are the guided command's internals; neither belongs in this
 // summary.

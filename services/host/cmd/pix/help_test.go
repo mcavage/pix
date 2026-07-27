@@ -256,6 +256,28 @@ func TestSuggestVerb(t *testing.T) {
 	}
 }
 
+// TestSuggestVerb_RetiredGog: the DELETED `gog` verb tree (6b39a69) must
+// yield a did-you-mean pointing at its replacement, `gworkspace` — never a
+// silent alias, and never "no suggestion" (edit distance between "gog" and
+// "gworkspace" is far larger than suggestVerb's levenshtein-2 window, so this
+// only works because retiredVerbs carries it explicitly).
+func TestSuggestVerb_RetiredGog(t *testing.T) {
+	if knownVerbs["gog"] {
+		t.Error("the `gog` verb is deleted with no alias; it must not be a known verb")
+	}
+	if _, ok := verbUsage("gog"); ok {
+		t.Error("`pix help gog` must not resolve to a usage page for a deleted verb")
+	}
+	s, ok := suggestVerb("gog")
+	if !ok || s != "gworkspace" {
+		t.Errorf("suggestVerb(gog) = %q,%v, want gworkspace,true", s, ok)
+	}
+	msg, launch := classifyBareArg("gog")
+	if launch || !strings.Contains(msg, `Did you mean "gworkspace"?`) {
+		t.Errorf("`pix gog ...` must print a did-you-mean and exit 2, got %q (launch=%v)", msg, launch)
+	}
+}
+
 // --- S2: status + doctor flag validation ---
 
 func TestParseStatusArgs(t *testing.T) {

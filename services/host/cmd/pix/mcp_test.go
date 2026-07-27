@@ -346,7 +346,7 @@ func TestRegisterServers_GogNotFound(t *testing.T) {
 	cfg.GogAccount = "me@x.com"
 	var buf bytes.Buffer
 	err := registerServers(cfg, f.env(), &buf, []string{gwServerName}, hostStub("", nil), nil)
-	if err == nil || !strings.Contains(err.Error(), "brew install gog") {
+	if err == nil || !strings.Contains(err.Error(), "brew install openclaw/tap/gogcli") {
 		t.Errorf("expected a gog-not-found guard, got %v", err)
 	}
 }
@@ -363,8 +363,8 @@ func TestRegisterServers_GogAccountUnset(t *testing.T) {
 	cfg := defaultCfg() // GogAccount empty
 	var buf bytes.Buffer
 	err := registerServers(cfg, f.env(), &buf, []string{gwServerName}, hostStub("", nil), nil)
-	if err == nil || !strings.Contains(err.Error(), "pix config set gog_account") {
-		t.Errorf("expected the config-set gog_account guide, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "pix config set google_workspace_account") {
+		t.Errorf("expected the config-set google_workspace_account guide, got %v", err)
 	}
 }
 

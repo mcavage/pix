@@ -53,7 +53,7 @@ func (r *report) render(w io.Writer, verbose bool) {
 				collapsedAny = true
 				continue // concise: collapse verified-ready detail
 			}
-			fmt.Fprintf(w, "  %s %-12s %s\n", glyph(c.state()), c.label, c.detail)
+			fmt.Fprintf(w, "  %s %-12s %s\n", checkGlyph(c), c.label, c.detail)
 			shown++
 		}
 		if !verbose && shown == 0 {
@@ -100,26 +100,6 @@ func (r *report) cfgMCP() string {
 		return "<none>"
 	}
 	return strings.Join(r.mcp, " ")
-}
-
-// glyph maps a rendered checkState to its marker. It is a thin adapter over
-// the shared vocabulary in readiness_render.go: doctor renders core-weight
-// glyphs (its ✗ historically covered every verified failure), so the mapping
-// goes through verdictGlyph with a core requirement rather than spelling the
-// markers a second time.
-func glyph(s checkState) string {
-	switch s {
-	case stateOK:
-		return verdictGlyph(requirementCore, verdictReady, false)
-	case stateTODO:
-		return verdictGlyph(requirementCore, verdictTodo, false)
-	case stateWarn:
-		// An unverifiable check renders as the shared "can't check from here"
-		// marker, never as a failure glyph.
-		return verdictGlyph(requirementCore, verdictUnverifiable, false)
-	default:
-		return verdictGlyph(requirementCore, verdictReady, true)
-	}
 }
 
 func upDown(up bool) string {

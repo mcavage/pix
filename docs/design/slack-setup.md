@@ -50,9 +50,8 @@ that exchange themselves, either the client secret is copied out to every
 laptop (defeats the whole point) or authorization never gets easier than "ask
 the token owner to paste theirs."
 
-The fix is the same shape pix already uses for gog's Google OAuth: put the
-step that needs the secret behind a service the user calls over HTTPS, and
-never let the secret itself leave that service.
+The fix is an org-owned HTTPS callback and exchange service. Put the step that
+needs the secret behind that service and never let the secret itself leave it.
 
 ```
  end user                         org-owned callback/exchange service        Slack
@@ -163,12 +162,12 @@ If a token is compromised, shared by mistake, or the person leaves:
    leaves a still-valid token sitting in whatever cached env a running
    sandbox already resolved it into.
 2. **Remove the ref**: `pix secret rm SLACK_TOKEN` (or delete the 1Password
-   item directly) so no future sandbox creation or `mcp register` picks it
-   back up.
-3. **Recreate any sandbox that already has `slack` attached** so it drops
-   the now-dead token from its environment (`pix run --replace`); a running
-   sandbox holds whatever it resolved at spawn until it's recreated.
-4. **Re-verify with `health`/`auth.test`** — after rotation, confirm the new
+   item directly) so a future host-side Slack MCP process cannot resolve it.
+3. **Restart the Slack MCP process or recreate the sandbox if needed.** The
+   token stays on the host and never enters the sandbox, but a gateway-managed
+   Slack process that is already running may retain the bearer it resolved at
+   spawn. Revocation in step 1 is the immediate security boundary.
+4. **Re-verify with `health`/`auth.test`**: after rotation, confirm the new
    token resolves to the right identity before trusting it.
 
 ### Minimal scopes actually used

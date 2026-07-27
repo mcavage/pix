@@ -207,7 +207,12 @@ type report struct {
 // with duplicate commands dropped (so e.g. a `pix mcp register` that two
 // groups both surface only appears once). Only a VERIFIED failure (verdict
 // todo/denied) may surface a repair command: unverifiable checks never do,
-// even if a constructor left a suggestion in the todo field. Dedup is
+// even if a constructor left a suggestion in the todo field. A note-only
+// check is excluded outright, mirroring outstanding()/unverifiableCount(): a
+// note asserts nothing actionable by construction (it never counts toward the
+// headline's outstanding tally), so it must never be able to generate a
+// copy-pasteable TODO either — otherwise a green "all checks pass" headline
+// could still print an actionable TODO command underneath it. Dedup is
 // normalized via todoDedupKey so two commands that differ only in a trailing
 // parenthetical collapse. Order is preserved: the first occurrence's full
 // string wins.
@@ -216,6 +221,9 @@ func (r *report) todos() []string {
 	seen := map[string]bool{}
 	for _, g := range r.groups {
 		for _, c := range g.checks {
+			if c.note {
+				continue
+			}
 			if v := c.result(); v != verdictTodo && v != verdictDenied {
 				continue
 			}

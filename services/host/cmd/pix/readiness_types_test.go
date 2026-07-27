@@ -75,7 +75,13 @@ func TestCheckZeroValuesFailSafe(t *testing.T) {
 
 // TestReportTallies_UnverifiableNeverTodo: an unverifiable check never
 // surfaces its todo suggestion and never counts as outstanding, while denied
-// counts as outstanding and blocks when core.
+// counts as outstanding and blocks when core. A note-only check with an
+// explicit verdictTodo + a populated todo field (e.g. an informational
+// annotation that happens to carry a suggestion string) must ALSO never
+// surface in todos() — mirroring outstanding()/unverifiableCount(), which
+// already exclude notes. Without that exclusion a green headline (nothing
+// outstanding) could still print an actionable TODO command generated purely
+// by an informational note.
 func TestReportTallies_UnverifiableNeverTodo(t *testing.T) {
 	r := &report{groups: []group{{
 		title: "g",
@@ -85,13 +91,14 @@ func TestReportTallies_UnverifiableNeverTodo(t *testing.T) {
 			{label: "c", verdict: verdictDenied, todo: "escalate-c"},
 			{label: "d", verdict: verdictReady},
 			{label: "e", note: true},
+			{label: "f", note: true, verdict: verdictTodo, todo: "note-should-not-appear"},
 		},
 	}}}
 	if got := strings.Join(r.todos(), ","); got != "fix-b,escalate-c" {
-		t.Errorf("todos() = %q, want fix-b,escalate-c", got)
+		t.Errorf("todos() = %q, want fix-b,escalate-c (a note-only check must never contribute a TODO)", got)
 	}
 	if r.outstanding() != 2 {
-		t.Errorf("outstanding() = %d, want 2 (todo + denied)", r.outstanding())
+		t.Errorf("outstanding() = %d, want 2 (todo + denied; the note-only check f must not count)", r.outstanding())
 	}
 	if r.unverifiableCount() != 1 {
 		t.Errorf("unverifiableCount() = %d, want 1", r.unverifiableCount())
@@ -204,20 +211,50 @@ func TestRenderConcise_NoHintWhenNothingHidden(t *testing.T) {
 }
 
 // TestRenderGlyphs: verdict is authoritative for the glyph, in the ONE shared
-// vocabulary (readiness_render.go) — ✓ ready, ✗ verified core todo/denied,
-// ? unverifiable ("can't check from here"), · note. ⚠ is reserved for a
-// verified failure of an OPTIONAL axis, which is a different fact from "we
-// could not check", so doctor no longer spends it on unverifiable rows.
+// vocabulary (readiness_render.go) — ✓ ready, ✗ verified CORE todo/denied,
+// ⚠ verified OPTIONAL todo/denied, ? unverifiable ("can't check from here"),
+// · note. doctor's row renderer must go through checkGlyph(c) (which reads
+// the check's OWN requirement + note), never a bare state-only mapping that
+// hardcodes a single requirement — that bug rendered every optional TODO as
+// the core ✗ instead of the optional ⚠.
 func TestRenderGlyphs(t *testing.T) {
-	for want, s := range map[string]checkState{
-		"✓": stateOK, "✗": stateTODO, "·": stateInfo, "?": stateWarn,
-	} {
-		if got := glyph(s); got != want {
-			t.Errorf("glyph(%v) = %q, want %q", s, got, want)
+	cases := []struct {
+		name string
+		c    check
+		want string
+	}{
+		{"ready", check{verdict: verdictReady}, "✓"},
+		{"core todo", check{verdict: verdictTodo, requirement: requirementCore}, "✗"},
+		{"optional todo", check{verdict: verdictTodo, requirement: requirementOptional}, "⚠"},
+		{"unset requirement todo (defaults optional)", check{verdict: verdictTodo}, "⚠"},
+		{"unverifiable", check{verdict: verdictUnverifiable}, "?"},
+		{"note", check{verdict: verdictTodo, requirement: requirementCore, note: true}, "·"},
+	}
+	for _, tc := range cases {
+		if got := checkGlyph(tc.c); got != tc.want {
+			t.Errorf("%s: checkGlyph = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 	if (check{verdict: verdictDenied}).state() != stateTODO {
 		t.Error("denied must render the verified-failure glyph class")
+	}
+}
+
+// TestDoctorRender_OptionalTodoRendersWarnGlyph: an end-to-end check through
+// report.render (not just checkGlyph directly) — an OPTIONAL verified todo row
+// must print ⚠, never the core ✗, confirming the render loop itself calls
+// checkGlyph(c) rather than a requirement-blind glyph(c.state()).
+func TestDoctorRender_OptionalTodoRendersWarnGlyph(t *testing.T) {
+	r := &report{groups: []group{{title: "g", checks: []check{
+		{label: "opt", detail: "needs setup", todo: "fix-it", verdict: verdictTodo, requirement: requirementOptional},
+	}}}}
+	var buf bytes.Buffer
+	r.render(&buf, true)
+	if !strings.Contains(buf.String(), "⚠ opt") {
+		t.Errorf("an optional verified-todo row must render ⚠, got:\n%s", buf.String())
+	}
+	if strings.Contains(buf.String(), "✗ opt") {
+		t.Errorf("an optional verified-todo row must NOT render the core ✗, got:\n%s", buf.String())
 	}
 }
 

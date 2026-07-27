@@ -1,5 +1,7 @@
-// gog_setup.go implements `pix gog setup` — the guided, PUBLIC path to
-// wiring up Google Workspace via the `gog` host MCP server. gog is a LOCAL
+// gog_setup.go implements `pix gworkspace setup` (this file's historical name
+// predates the gworkspace rename) — the guided, PUBLIC path to wiring up
+// Google Workspace via the `google-workspace` host MCP server. The `gog`
+// binary is a LOCAL
 // stdio MCP server the sbx gateway spawns on the HOST, so sbx's native
 // `sbx mcp auth` (hosted-control-plane OAuth for REMOTE catalog servers) does
 // NOT apply to its Google grant: the grant runs through the installed gog CLI
@@ -33,7 +35,7 @@
 // --allow-tool read`, set at MCP-serve time in mcp.go's gogHardenedArgv)
 // blocks writes regardless.
 //
-// `pix gog setup` requires sbx: a missing sbx binary, or a failed `sbx
+// `pix gworkspace setup` requires sbx: a missing sbx binary, or a failed `sbx
 // mcp add`, is a hard failure — never a silent "would register" success. Its
 // config write is also ordered to prevent drift: the account/MCP change is
 // built in memory, actual sbx registration must succeed FIRST, and only then
@@ -222,9 +224,9 @@ func gogAuthRouteCapable(env shellEnv, route gogAuthRoute) (bool, string) {
 // path can actually be probed (op installed + an op-refs.env resolves) —
 // headless tools are also non-empty. When headless can't be probed at all it
 // is NOT counted against health here (macOS system keychain setups skip that
-// step entirely); `pix gog setup`/doctor still surface that gap on their
-// own. The seam a future `pix setup --account` follow-up (S08) uses to
-// decide whether to print the `pix gog setup` hint — it never runs the
+// step entirely); `pix gworkspace setup`/doctor still surface that gap on
+// their own. The seam a future `pix setup --account` follow-up (S08) uses to
+// decide whether to print the `pix gworkspace setup` hint — it never runs the
 // OAuth flow itself.
 func gogSetupAccountHealthy(env shellEnv, acct string) bool {
 	if !gogAuthed(env, acct) {
@@ -237,7 +239,7 @@ func gogSetupAccountHealthy(env shellEnv, acct string) bool {
 	return gogHeadlessOK(env, acct, opRefs)
 }
 
-// gogSetup is the hermetically-testable core of `pix gog setup`. All OS
+// gogSetup is the hermetically-testable core of `pix gworkspace setup`. All OS
 // contact (lookPath/run/statFile/runInteractive) goes through env; account/
 // credentials prompting is gated on tty (never on a bare non-TTY run, never
 // when --yes was given).

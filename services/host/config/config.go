@@ -877,8 +877,8 @@ const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway res
 # identity). It is per-user and must never be a shared "employee"/team/bot
 # token, and never handed to a second person to reuse — each user gets their
 # own OAuth grant instead. See docs/design/slack-setup.md for the
-# authorization flow, minimal scopes, and revocation. Required to register
-# slack.
+# authorization flow, minimal scopes, and revocation. Required for Slack API
+# calls; registration alone can succeed without it but the tools cannot.
 # SLACK_TOKEN=op://<vault>/<item>/<field>
 
 # gog (Google Workspace) MCP server. gog only needs op to inject a headless

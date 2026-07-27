@@ -112,11 +112,25 @@ func TestProvidersGroup_AlternateMissingNotOutstanding(t *testing.T) {
 			t.Errorf("per-provider check %q must be a note (informational), got %+v", c.label, c)
 		}
 	}
-	// The one todo present is the session-model advisory (set the missing session
-	// provider's key), not a blocking item: anthropic is set (core satisfied), but
-	// the baked overlord -> openai needs an openai key.
-	if td := r.todos(); len(td) != 1 || !strings.Contains(td[0], "OPENAI_API_KEY") {
-		t.Errorf("todos = %v, want exactly the session-model key advisory (OPENAI_API_KEY)", td)
+	// The session-model advisory is a NOTE (asserted above), so it must NOT
+	// surface in the aggregate copy-paste TODO list — that list is reserved for
+	// VERIFIED, non-informational failures (report.todos() excludes every note,
+	// same as outstanding()/unverifiableCount()); a green headline must never
+	// carry an actionable TODO generated purely by an informational note.
+	if td := r.todos(); len(td) != 0 {
+		t.Errorf("todos = %v, want none — the session-model advisory is a note and must not appear in the aggregate TODO list", td)
+	}
+	// The check itself still carries the OPENAI_API_KEY command in its OWN
+	// .todo field (surfaced per-check in JSON's Fix, not the aggregate list) so
+	// a consumer that reads the individual row loses no information.
+	var sessionCheck *check
+	for i := range g.checks {
+		if strings.HasPrefix(g.checks[i].label, "session model") {
+			sessionCheck = &g.checks[i]
+		}
+	}
+	if sessionCheck == nil || !strings.Contains(sessionCheck.todo, "OPENAI_API_KEY") {
+		t.Errorf("expected the session model check's own .todo to name OPENAI_API_KEY, got %+v", sessionCheck)
 	}
 }
 

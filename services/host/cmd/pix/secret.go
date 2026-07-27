@@ -226,8 +226,10 @@ func runSecretLs(env shellEnv, out io.Writer) {
 // runSecretSet is the ONE authoring primitive: it upserts ENV_VAR=value into
 // op-refs.env, no editor involved. It enforces the refs-only policy — value
 // must be an op:// ref unless ENV_VAR is on config.NonSecretOpRefsKeys — and
-// URL-encodes a raw space in a ref (a spaced 1Password field name, e.g. "api
-// key") so `op run --env-file` can parse the line. It seeds the file (via the
+// normalizes any %20 in a ref to a literal space (op read/op run --env-file
+// both require a literal space and reject a percent-encoded one) so a spaced
+// 1Password field name, e.g. "api key", is stored the way op actually parses
+// it. It seeds the file (via the
 // ONE seeder, config.SeedOpRefs) if absent, so the header/mental-model comment
 // is always present, then upserts preserving every other line untouched. It
 // prints the REF it stored (never a resolved secret — a ref is safe to echo).
@@ -301,6 +303,15 @@ func runSecretSet(env shellEnv, out io.Writer, key, value string) error {
 // provider-refs lock; every failure returns an error (never os.Exit) so the
 // lock is always released.
 func runSecretSetLocked(env shellEnv, out io.Writer, key, value string) error {
+	// Normalize %20 to a literal space BEFORE writing op-refs.env: op 2.35.0's
+	// `op read` AND `op run --env-file` both require a literal space in a ref
+	// (a spaced 1Password field name, e.g. "Anthropic API Key") and reject a
+	// percent-encoded one outright. writeOpRefFileQuietLocked (the hostmode.env
+	// mirror below, and the standalone entry point) already self-heals %20 on
+	// write; without this normalization here, a %20 value would land literally
+	// in op-refs.env while the mirror decoded it, leaving the two files
+	// permanently out of sync for the very key that matters most.
+	value = strings.ReplaceAll(value, "%20", " ")
 	path := defaultOpRefsPath(env)
 	content := ""
 	exists := false
@@ -600,7 +611,7 @@ func indent(s string) string {
 
 // anyOpWrappedServer reports whether any configured MCP server makes the Secrets
 // (1Password) group relevant: a NON-gog server. gog is deliberately excluded —
-// it authenticates via guided OAuth (`pix gog setup`), never an op-refs
+// it authenticates via guided OAuth (`pix gworkspace setup`), never an op-refs
 // token, so a gog-only config needs no op-refs.env (mcp-register registers
 // gog BARE for exactly this reason, and setup's Step 4 skips it via
 // hasNonGogMCP). gog's ONE conditional op-refs need — a headless keyring

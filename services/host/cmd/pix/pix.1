@@ -816,7 +816,15 @@ Rejects a value that is not an
 reference unless
 .I ENV_VAR
 is on the documented non-secret allowlist.  A raw space in the ref (a spaced
-1Password field name) is URL-encoded to
+1Password field name, e.g.
+.IR "api key" ,
+not
+.IR api%20key )
+is kept as a literal space:
+.B op read
+and
+.B "op run --env-file"
+both reject a percent-encoded
 .B %20 .
 .TP
 .BI "pix secret rm " ENV_VAR

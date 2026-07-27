@@ -13,7 +13,7 @@ command the gateway will spawn, and gateway registration plus config, in that
 order, each gated on the last one succeeding.
 
 ```bash
-brew install gog   # or see https://gogcli.sh/install.html
+brew install openclaw/tap/gogcli   # or see https://gogcli.sh/install.html
 
 pix gworkspace setup --account you@example.com --credentials ~/Downloads/gog-oauth-client.json
 ```
@@ -27,8 +27,8 @@ server it hasn't just verified returns real tools, and never touches
 Confirm it worked:
 
 ```bash
-pix doctor    # gog group should read ready
-pix run       # or: pix run --replace, to attach gog to a fresh sandbox
+pix doctor    # Google Workspace group should read ready
+pix run       # or: pix run --replace, to attach google-workspace to a fresh sandbox
 ```
 
 > **Note:** the sbx Cloud MCP Gateway is not yet publicly released. `gog` runs
@@ -83,8 +83,8 @@ what it does under the hood.
    `pix gworkspace setup` does on success:
 
    ```bash
-   pix config set gog_account you@example.com
-   pix config set mcp gog
+   pix config set google_workspace_account you@example.com
+   pix config set mcp google-workspace
    pix mcp register
    ```
 
