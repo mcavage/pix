@@ -23,6 +23,7 @@ type ExecRunner struct{}
 // standard output.
 func (ExecRunner) Run(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	configureCommandCancellation(cmd)
 	if len(stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}

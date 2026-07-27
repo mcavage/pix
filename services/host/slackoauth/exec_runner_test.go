@@ -44,7 +44,10 @@ func TestExecRunnerContextTimeoutKillsChild(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := r.Run(ctx, nil, "sh", "-c", "sleep 5")
+	// Force a descendant to inherit stdout/stderr. Killing only the shell leaves
+	// that descendant holding the capture pipes open, which made Cmd.Wait block
+	// for the full five seconds on GitHub's Ubuntu runner.
+	_, err := r.Run(ctx, nil, "sh", "-c", "sleep 5 & wait")
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("Run succeeded despite context timeout; want an error")
