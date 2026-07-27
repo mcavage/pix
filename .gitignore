@@ -5,6 +5,11 @@ node_modules/
 .pi-sessions/
 .pi-lens/
 
+# Pix workspace runtime state is machine-local. Keep the optional knowledge
+# pointer trackable while ignoring every other generated .pix entry.
+**/.pix/*
+!**/.pix/knowledge
+
 # Launcher-generated per-run knowledge scope (canonical HOST paths). The
 # .pix/knowledge POINTER stays trackable; only the .scope file is ignored.
 **/.pix/knowledge.scope

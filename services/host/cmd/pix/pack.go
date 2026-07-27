@@ -1731,6 +1731,9 @@ func writeMemoryScope(workspace string, p *packInfo) {
 // degraded (errNotAPack), effectivePack is "" and memory stays unscoped, even
 // though cfg.Pack/o.Pack still name the (unavailable) configured pack.
 func writePackContextFiles(cfg *config.Config, o runOpts, effectivePack string) {
+	if _, err := ensurePixGitExclude(o.Workspace); err != nil {
+		fmt.Fprintf(os.Stderr, "pix: could not add .pix workspace state to git excludes: %v\n", err)
+	}
 	writeOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
 	var activePack *packInfo
 	if effectivePack != "" {

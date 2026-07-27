@@ -167,6 +167,10 @@ Host services start lazily when needed. Install them as a login service with
 `pix serve install`; remove that service with `pix serve uninstall`. Runtime
 config is managed by `pix config`, not by hand-editing TOML files.
 
+`pix run` and `pix task new` add Pix workspace state to the repository's local
+`.git/info/exclude`, so generated `.pix` files stay out of `git status` in every
+repository Pix touches. The optional `.pix/knowledge` pointer remains trackable.
+
 ## How it works
 
 - **Isolation:** pi runs in a disposable, network-limited Docker Sandbox.
