@@ -150,6 +150,22 @@ pix gworkspace disable
 
 Your Google OAuth credentials are left untouched.
 
+## Optional: Slack
+
+Slack integration is optional and absent by default. Configure your Slack App's Client ID with:
+
+```bash
+pix config set slack.client_id <client_id>
+```
+
+Then run guided setup to authorize access via local PKCE OAuth (public client, no client secret required):
+
+```bash
+pix slack setup
+```
+
+This opens the OAuth grant in your browser, verifies your identity, and stores the rotating credential in a 1Password document (`Private` vault by default). Access tokens rotate automatically, and the 30-day grant can be reauthorized by re-running `pix slack setup`. Verify health with `pix slack status` and revoke access with `pix slack disable`. A static fallback (`pix slack setup --token-ref op://...`) is also available for pre-issued tokens.
+
 ## Daily use
 
 ```bash
