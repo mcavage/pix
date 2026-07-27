@@ -242,9 +242,9 @@ func slackBindCallbackListener(port int) (net.Listener, error) {
 // slackServeCallback serves exactly one successful GET to path on ln,
 // returning the authorization code once state has been verified. Every other
 // request (wrong method, wrong path, an Origin header, a state mismatch) is
-// answered and discarded WITHOUT ending the wait, except an Origin header or
-// a state mismatch — both end the attempt immediately as a security event
-// (rather than let a client keep guessing). The response is always static:
+// answered and discarded WITHOUT ending the wait. The random state makes
+// guessing infeasible, while continuing to listen prevents a stray local probe
+// from denying the genuine callback. The response is always static:
 // no-store, no-referrer, and it never echoes back any part of the request.
 // The raw query string is never logged or included in any returned error.
 func slackServeCallback(ln net.Listener, path, wantState string, timeout time.Duration) (string, error) {
