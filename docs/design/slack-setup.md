@@ -56,7 +56,7 @@ needs the secret behind that service and never let the secret itself leave it.
 ```
  end user                         org-owned callback/exchange service        Slack
  --------                         ------------------------------------       -----
- 1. opens authorize URL  -------->                                            
+ 1. opens authorize URL  -------->
                                     (this IS the Slack authorize endpoint,
                                      browser goes straight to Slack)   ------> 2. user approves scopes
                                                                         <----- 3. redirect to the
