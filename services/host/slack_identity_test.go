@@ -14,6 +14,10 @@ func resetSlackIdentityCheckForTest() {
 func TestSlackCallRejectsNonPersonalTokenBeforeNetwork(t *testing.T) {
 	resetSlackIdentityCheckForTest()
 	t.Cleanup(resetSlackIdentityCheckForTest)
+	// Force the static source regardless of whatever this host's real
+	// config.toml happens to carry, so this test never depends on
+	// on-disk state (see slack_oauth_source_test.go).
+	useStaticTokenSourceForTest(t)
 	t.Setenv("SLACK_TOKEN", "xoxb-not-a-personal-token")
 	if _, err := slackCall("auth.test", nil); err == nil || !strings.Contains(err.Error(), "personal xoxp-") {
 		t.Fatalf("slackCall with bot token error = %v, want personal-token rejection", err)

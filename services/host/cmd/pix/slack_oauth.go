@@ -74,16 +74,10 @@ const (
 
 // slackOAuthUserScopes is the EXACT read-only Slack user_scope set
 // services/host/slack.go's tool handlers call (docs/design/slack-setup.md's
-// scope table) — kept in ONE place so the authorize URL and the post-exchange
-// RequiredScopes check can never drift out of sync with each other.
-var slackOAuthUserScopes = []string{
-	"search:read",
-	"channels:read", "channels:history",
-	"groups:read", "groups:history",
-	"im:read", "im:history",
-	"mpim:read", "mpim:history",
-	"users:read", "users:read.email",
-}
+// scope table). It is an alias for slackoauth.RequiredUserScopes — the
+// package-level export both this authorize URL builder and the host
+// runtime's credential source reference — so the two can never drift apart.
+var slackOAuthUserScopes = slackoauth.RequiredUserScopes
 
 // slackOAuthPKCESetupUsage documents the no---token-ref path; appended to
 // slackSetupUsage.
