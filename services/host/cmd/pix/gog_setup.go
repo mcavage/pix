@@ -62,6 +62,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	"pix/host/config"
@@ -270,6 +271,20 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	}
 	if credentials == "" {
 		return fmt.Errorf("--credentials <path> is required (non-interactive, or no answer given)")
+	}
+	// Interactive prompts do not pass through a shell, so a leading ~/ would
+	// otherwise be statted literally. Expand only the current user's home form;
+	// do not perform environment-variable, command, glob, or ~other expansion.
+	if credentials == "~" || strings.HasPrefix(credentials, "~/") {
+		if env.homeDir == nil || strings.TrimSpace(env.homeDir()) == "" {
+			return fmt.Errorf("cannot expand credentials path %q: user home directory is unavailable", credentials)
+		}
+		home := strings.TrimSpace(env.homeDir())
+		if credentials == "~" {
+			credentials = home
+		} else {
+			credentials = filepath.Join(home, strings.TrimPrefix(credentials, "~/"))
+		}
 	}
 
 	if env.lookPath == nil {

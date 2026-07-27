@@ -662,6 +662,34 @@ func TestGogSetup_PromptsOnTTYForMissingAccountAndCredentials(t *testing.T) {
 	}
 }
 
+func TestGogSetup_ExpandsPromptedHomeCredentialsPath(t *testing.T) {
+	gogSetupTestCfg(t)
+	home := t.TempDir()
+	cred := filepath.Join(home, ".config", "pix", "credentials", "gog.json")
+	if err := os.MkdirAll(filepath.Dir(cred), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cred, []byte(`{"installed":{"client_id":"fake"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ge := gogTestEnv{
+		present: map[string]bool{"gog": true, "sbx": true},
+		output: mergeOutputs(gogAuthCapabilityFixtures("setup", true), gogBareHeadlessFixture("you@example.com"), map[string]string{
+			"gog auth --help": gogAuthHelpCurrentSetup,
+			"gog --account you@example.com auth doctor --check": "ok",
+		}),
+		statFile:      map[string]bool{cred: true},
+		sbxRegisterOK: true,
+	}
+	env := ge.env()
+	env.homeDir = func() string { return home }
+	var out bytes.Buffer
+	in := strings.NewReader("you@example.com\n~/.config/pix/credentials/gog.json\n")
+	if err := gogSetup(env, gogSetupOpts{}, in, &out, true); err != nil {
+		t.Fatalf("gogSetup with ~/ credentials: %v\n--- output ---\n%s", err, out.String())
+	}
+}
+
 // TestGogSetup_BufferedReaderDeliversBothPromptedValues is QA finding #3: feed
 // BOTH the account and credentials lines through one fully-buffered io.Reader
 // (TTY=true, no flags), and verify BOTH prompted values actually reach the
