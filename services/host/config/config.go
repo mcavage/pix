@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -48,6 +49,15 @@ const (
 	BuiltinImpl = "builtin"
 )
 
+// DefaultSlackOAuthRedirectURI is the local HTTP callback the generic Slack
+// rotating-PKCE OAuth flow (services/host/slackoauth, docs/design/
+// slack-setup.md) uses when a client id is configured but no redirect uri was
+// set explicitly. It ONLY ever applies once SlackOAuth.ClientID is non-empty
+// (see applyDefaults) — there is deliberately NO baked-in default client id
+// (no shared/"Docker" OAuth app ships in core; see SlackOAuth.ClientID), so an
+// unconfigured install resolves neither a client id nor a redirect uri.
+const DefaultSlackOAuthRedirectURI = "http://localhost:17373/slack/callback"
+
 // DefaultServices is the service set a fresh install runs.
 var DefaultServices = []string{"memory"}
 
@@ -81,6 +91,30 @@ type HostMode struct {
 // AutoserveEnabled reports whether lazy auto-start is enabled (default true).
 func (c *Config) AutoserveEnabled() bool {
 	return c.Host.Autoserve == nil || *c.Host.Autoserve
+}
+
+// SlackOAuth configures the generic Slack rotating-PKCE OAuth app wiring (see
+// the slackoauth package and the org-owned-callback-service design in
+// docs/design/slack-setup.md): the PUBLIC client id Slack issued the app, the
+// registered redirect uri a local callback listens on, and WHERE the
+// resulting credential blob lives in 1Password (a vault + document id —
+// never the blob itself, which is the whole point of slackoauth.OPStore).
+// OAuthGrantExpiresAt is a CACHED mirror of slackoauth.Blob.GrantExpiresAt so
+// a status check can report "needs re-auth soon" without a live `op document
+// get` round trip; it is advisory only — the 1Password document remains the
+// source of truth, and a stale or missing cache here never blocks reading the
+// real blob.
+//
+// Every field here is PUBLIC (an app id, a callback URL, a 1Password
+// location, a cached timestamp) — none of it is a credential. The
+// access_token/refresh_token never touch config.toml; they live only in the
+// 1Password document identified by OAuthVaultID + OAuthDocumentID.
+type SlackOAuth struct {
+	ClientID            string    `toml:"client_id,omitempty"`
+	RedirectURI         string    `toml:"redirect_uri,omitempty"`
+	OAuthVaultID        string    `toml:"oauth_vault_id,omitempty"`
+	OAuthDocumentID     string    `toml:"oauth_document_id,omitempty"`
+	OAuthGrantExpiresAt time.Time `toml:"oauth_grant_expires_at,omitempty"`
 }
 
 // Config is the pix configuration, decoded from TOML.
@@ -158,6 +192,11 @@ type Config struct {
 	// Host gates + configures `pix host` (the unsandboxed escape hatch).
 	// GLOBAL, never per-profile: leaving the sandbox is a machine-level decision.
 	Host HostMode `toml:"host,omitempty"`
+
+	// Slack configures the generic Slack rotating-PKCE OAuth app wiring. See
+	// SlackOAuth. Empty (the default): no OAuth app configured, matching
+	// today's op://-ref-only `pix slack setup` (docs/design/slack-setup.md).
+	Slack SlackOAuth `toml:"slack,omitempty"`
 
 	// retiredKeys / unknownKeys capture the top-level TOML keys Load/LoadFrom
 	// found in the file that don't map to any field above (BurntSushi's
@@ -469,6 +508,11 @@ func (c *Config) applyDefaults() {
 			c.Plugins[slot] = spec
 		}
 	}
+	// The redirect uri only ever defaults once a client id is configured — an
+	// install with no OAuth app has neither (see DefaultSlackOAuthRedirectURI).
+	if c.Slack.ClientID != "" && c.Slack.RedirectURI == "" {
+		c.Slack.RedirectURI = DefaultSlackOAuthRedirectURI
+	}
 }
 
 // Load reads and decodes Path(). If the file is absent it returns a Config
@@ -577,6 +621,16 @@ paths = []
 # path = ""
 # sha  = ""
 # port = 0
+
+# Generic Slack rotating-PKCE OAuth app wiring (public fields only — the
+# credential blob itself lives in 1Password, never here). No client_id ships
+# by default; set one to configure your own Slack app.
+# [slack]
+# client_id = ""
+# redirect_uri = ""
+# oauth_vault_id = ""
+# oauth_document_id = ""
+# oauth_grant_expires_at = ""
 `
 
 // Save writes the config back to Path() as TOML. It is the write half of the
@@ -699,6 +753,12 @@ func (c *Config) sparseForSave() *Config {
 	if len(sp.Plugins) == 0 {
 		sp.Plugins = nil
 	}
+	// Same tradeoff as every other defaultable field: a redirect uri that
+	// equals the resolved default is omitted rather than pinned, so a future
+	// default change still reaches an install that only ever set a client id.
+	if sp.Slack.RedirectURI == DefaultSlackOAuthRedirectURI {
+		sp.Slack.RedirectURI = ""
+	}
 	return &sp
 }
 
@@ -718,6 +778,32 @@ func stringSlicesEqual(a, b []string) bool {
 // SetGogAccount sets the Google Workspace account (trimmed). An empty value
 // clears it.
 func (c *Config) SetGogAccount(account string) { c.GogAccount = strings.TrimSpace(account) }
+
+// SetSlackClientID sets the Slack app's public OAuth client id (trimmed). An
+// empty value clears it — and, since RedirectURI only ever defaults off a
+// non-empty ClientID, also stops a future Load from resolving a default
+// redirect uri.
+func (c *Config) SetSlackClientID(id string) { c.Slack.ClientID = strings.TrimSpace(id) }
+
+// SetSlackRedirectURI sets the registered OAuth redirect uri (trimmed). An
+// empty value clears the explicit override; applyDefaults then resolves
+// DefaultSlackOAuthRedirectURI on the next Load if a ClientID is set.
+func (c *Config) SetSlackRedirectURI(uri string) { c.Slack.RedirectURI = strings.TrimSpace(uri) }
+
+// SetSlackOAuthVaultID sets the 1Password vault (name or id) holding the
+// rotating credential document (trimmed). An empty value clears it.
+func (c *Config) SetSlackOAuthVaultID(id string) { c.Slack.OAuthVaultID = strings.TrimSpace(id) }
+
+// SetSlackOAuthDocumentID sets the 1Password document (item) id holding the
+// rotating credential blob (trimmed). An empty value clears it.
+func (c *Config) SetSlackOAuthDocumentID(id string) {
+	c.Slack.OAuthDocumentID = strings.TrimSpace(id)
+}
+
+// SetSlackOAuthGrantExpiresAt sets the cached grant expiry mirrored from
+// slackoauth.Blob.GrantExpiresAt (see SlackOAuth's doc for why this is only
+// advisory). A zero time clears it.
+func (c *Config) SetSlackOAuthGrantExpiresAt(t time.Time) { c.Slack.OAuthGrantExpiresAt = t }
 
 // AddMCP adds name to the MCP set if absent, returning true when it changed.
 func (c *Config) AddMCP(name string) bool { return addUnique(&c.MCP, name) }

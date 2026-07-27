@@ -16,6 +16,24 @@ func TestRedactURL_Userinfo(t *testing.T) {
 	}
 }
 
+// TestLooksSecretShapedDoesNotFlagSlackPublicIDs: a Slack OAuth app's public
+// client_id and the 1Password vault/document ids that locate (but never
+// contain) the rotating credential blob must never be misjudged as
+// secret-shaped — they are public wiring, not tokens, and no code should ever
+// hide them from a `config show`/`doctor` listing.
+func TestLooksSecretShapedDoesNotFlagSlackPublicIDs(t *testing.T) {
+	cases := map[string]string{
+		"client_id":         "1234567890.1234567890123",
+		"oauth_vault_id":    "Private",
+		"oauth_document_id": "item123",
+	}
+	for key, val := range cases {
+		if LooksSecretShaped(key, val) {
+			t.Errorf("LooksSecretShaped(%q, %q) = true, want false (public id, not a secret)", key, val)
+		}
+	}
+}
+
 // TestRedactURL_QueryToken is the regression: a credential in the query string
 // (no userinfo '@') must be masked, not passed through verbatim.
 func TestRedactURL_QueryToken(t *testing.T) {
