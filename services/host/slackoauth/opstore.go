@@ -133,18 +133,46 @@ func (s *OPStore) Write(ctx context.Context, b Blob) error {
 		}
 	}
 
-	var meta opDocumentMeta
-	if err := json.Unmarshal(out, &meta); err != nil {
-		return fmt.Errorf("slackoauth: decode op document response: %w", err)
+	meta, metaErr := decodeOPDocumentMeta(out)
+	if item == "" && (metaErr != nil || meta.ID == "") {
+		// Some op CLI versions successfully create a stdin-backed Document but
+		// return the document content, rather than item metadata, even with
+		// --format json. Resolve the non-secret metadata by the unique title.
+		// This second call carries no credential bytes on stdin or argv.
+		lookupOut, lookupErr := s.Runner.Run(ctx, nil, "op", "item", "get", s.Title, "--vault", s.Vault, "--format", "json")
+		if lookupErr != nil {
+			return fmt.Errorf("slackoauth: op document was created but its item metadata could not be resolved: %w", lookupErr)
+		}
+		meta, metaErr = decodeOPDocumentMeta(lookupOut)
+	}
+	if metaErr != nil {
+		return metaErr
+	}
+	if meta.ID == "" {
+		// On edit the item identifier is already authoritative; op's response
+		// shape is not allowed to make a successful durable rotation look like
+		// a failed write. Creates must always resolve an assigned identifier.
+		meta.ID = item
 	}
 	if meta.ID == "" {
 		return errors.New("slackoauth: op document response is missing the item id")
+	}
+	if meta.Vault.ID == "" {
+		meta.Vault.ID = s.Vault
 	}
 	s.mu.Lock()
 	s.item = meta.ID
 	s.vaultID = meta.Vault.ID
 	s.mu.Unlock()
 	return nil
+}
+
+func decodeOPDocumentMeta(out []byte) (opDocumentMeta, error) {
+	var meta opDocumentMeta
+	if err := json.Unmarshal(out, &meta); err != nil {
+		return opDocumentMeta{}, fmt.Errorf("slackoauth: decode op document response: %w", err)
+	}
+	return meta, nil
 }
 
 // Delete archives (soft-deletes) the store's 1Password document via `op

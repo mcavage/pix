@@ -125,6 +125,40 @@ func TestOPStoreWriteCreatesWhenNoItemYet(t *testing.T) {
 	}
 }
 
+// TestOPStoreWriteResolvesMetadataAfterCreate proves compatibility with op
+// versions that successfully create the document but do not return item
+// metadata from `document create --format json`. The store must resolve the
+// non-secret item metadata by its unique title instead of treating a durable
+// credential write as a total failure.
+func TestOPStoreWriteResolvesMetadataAfterCreate(t *testing.T) {
+	r := &fakeRunner{outputs: [][]byte{
+		[]byte(`{}`),
+		[]byte(`{"id":"resolved-item-id","vault":{"id":"resolved-vault-id"}}`),
+	}}
+	s := NewOPStore(r, "Private", "pix-slack-oauth-unique", "")
+
+	if err := s.Write(context.Background(), validBlob()); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if len(r.calls) != 2 {
+		t.Fatalf("calls = %d, want create + metadata lookup", len(r.calls))
+	}
+	lookup := r.calls[1]
+	wantArgs := []string{"item", "get", "pix-slack-oauth-unique", "--vault", "Private", "--format", "json"}
+	if lookup.name != "op" || strings.Join(lookup.args, " ") != strings.Join(wantArgs, " ") {
+		t.Errorf("metadata lookup = %s %v, want op %v", lookup.name, lookup.args, wantArgs)
+	}
+	if len(lookup.stdin) != 0 {
+		t.Errorf("metadata lookup sent stdin %q; want none", lookup.stdin)
+	}
+	if got := s.ItemID(); got != "resolved-item-id" {
+		t.Errorf("ItemID() = %q, want resolved-item-id", got)
+	}
+	if got := s.VaultID(); got != "resolved-vault-id" {
+		t.Errorf("VaultID() = %q, want resolved-vault-id", got)
+	}
+}
+
 // TestOPStoreWriteEditsWhenItemKnown proves a Write after the item is known
 // (whether from construction or a prior create) shells out to `op document
 // edit ITEM - --vault VAULT --format json` instead of create.

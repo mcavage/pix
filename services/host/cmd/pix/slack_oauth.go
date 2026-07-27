@@ -621,7 +621,10 @@ func slackSetupPKCE(env shellEnv, cfg *config.Config, opts slackSetupOpts, deps 
 		vault = cfg.Slack.OAuthVaultID
 	}
 	item := strings.TrimSpace(cfg.Slack.OAuthDocumentID)
-	title := fmt.Sprintf("Pix Slack OAuth - %s", id.user)
+	// Include a non-secret suffix from this flow's random OAuth state so the
+	// title is unique. If op requires a post-create metadata lookup, resolving
+	// by title cannot select an orphan from an earlier failed attempt.
+	title := fmt.Sprintf("Pix Slack OAuth - %s - %s", id.user, state[:8])
 	store := slackoauth.NewOPStore(runner, vault, title, item)
 	opCtx, opCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer opCancel()
