@@ -950,6 +950,35 @@ is reserved for the host-guard strictness.
 the
 .B PIX_NO_AUTOSERVE
 environment variable also disables it and wins over the config flag.
+.B slack.client_id
+is the Slack app's PUBLIC OAuth client id (no secret) used by
+.BR "pix slack setup" ;
+unsetting it also clears
+.BR slack.oauth_vault_id ,
+.BR slack.oauth_document_id ,
+and
+.B slack.oauth_grant_expires_at
+so a stale locator can never point at a credential minted under a different
+client id.
+.B slack.redirect_uri
+is the registered OAuth callback URL; unsetting it restores the built-in
+default when a client id is configured, else clears it.
+.BR slack.oauth_vault_id ,
+.BR slack.oauth_document_id ,
+and
+.B slack.oauth_grant_expires_at
+are managed state written only by
+.BR "pix slack setup" :
+.B "pix config get"
+reads them for diagnostics, but
+.B set
+and
+.B unset
+refuse them directly (use
+.B "pix slack setup"
+to reauthorize, or
+.B "pix config unset slack.client_id"
+to clear the whole group).
 Keys are
 .BR google_workspace_account ,
 .BR mcp ,
@@ -964,8 +993,13 @@ is accepted),
 .BR ollama_bridge_model ,
 .BR host.enabled ,
 .BR host.autonomy ,
+.BR host.autoserve ,
+.BR slack.client_id ,
+.BR slack.redirect_uri ,
+.BR slack.oauth_vault_id ,
+.BR slack.oauth_document_id ,
 and
-.BR host.autoserve .
+.BR slack.oauth_grant_expires_at .
 Setting
 .B knowledge_bundles
 enables the knowledge service.  Switching the active pack
