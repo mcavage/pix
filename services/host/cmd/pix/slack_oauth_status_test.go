@@ -118,11 +118,17 @@ func withSlackOAuthRuntimeDeps(t *testing.T, deps slackOAuthRuntimeDeps) {
 // slackOAuthRegisteredEnv returns a shellEnv wired so the sbx registration
 // reads back as the canonical, trusted Pix host command — i.e. the
 // registration/attachment checks in status render ready, and disable's
-// preflight recognizes it as safe to remove.
-func slackOAuthRegisteredEnv(f *slackTestEnv, calls *[][]string, mu *sync.Mutex) shellEnv {
+// preflight recognizes it as safe to remove. stateDir resolves to a fresh
+// per-test temp dir (never a real host state dir, and never an error —
+// slackOAuthRuntime now FAILS CLOSED when stateDir is unresolvable, so a
+// hermetic test needs a real, working, isolated one, not the in-process
+// fallback this used to lean on).
+func slackOAuthRegisteredEnv(t *testing.T, f *slackTestEnv, calls *[][]string, mu *sync.Mutex) shellEnv {
+	t.Helper()
+	stateDir := t.TempDir()
 	e := f.env()
 	e.hostBinary = func() (string, error) { return "/fake/bin/pix-host", nil }
-	e.stateDir = func() (string, error) { return "", fmt.Errorf("no state dir in test") }
+	e.stateDir = func() (string, error) { return stateDir, nil }
 	e.run = func(name string, args ...string) (string, error) {
 		if mu != nil {
 			mu.Lock()
@@ -160,7 +166,7 @@ func TestSlackStatusOAuthHappyPathNoSlackToken(t *testing.T) {
 	}}
 	var calls [][]string
 	var mu sync.Mutex
-	e := slackOAuthRegisteredEnv(f, &calls, &mu)
+	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
 
 	var out bytes.Buffer
 	exit := slackStatus(cfg, e, &out, time.Now())
@@ -195,7 +201,7 @@ func TestSlackStatusOAuthGrantExpiryWarningWithin7Days(t *testing.T) {
 	}}
 	var calls [][]string
 	var mu sync.Mutex
-	e := slackOAuthRegisteredEnv(f, &calls, &mu)
+	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
 
 	var out bytes.Buffer
 	exit := slackStatus(cfg, e, &out, time.Now())
@@ -221,7 +227,7 @@ func TestSlackStatusOAuthGrantExpiredIsTodoAndExit1(t *testing.T) {
 	f := &slackTestEnv{sbxPresent: true}
 	var calls [][]string
 	var mu sync.Mutex
-	e := slackOAuthRegisteredEnv(f, &calls, &mu)
+	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
 
 	var out bytes.Buffer
 	exit := slackStatus(cfg, e, &out, time.Now())
@@ -271,7 +277,7 @@ func TestSlackDisableOAuthOrdering(t *testing.T) {
 
 	f := &slackTestEnv{sbxPresent: true}
 	var calls [][]string
-	e := slackOAuthRegisteredEnv(f, &calls, &mu)
+	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
 	// Wrap env.run so its calls land in the SAME order log as revoke/op calls.
 	inner := e.run
 	e.run = func(name string, args ...string) (string, error) {
@@ -307,6 +313,12 @@ func TestSlackDisableOAuthOrdering(t *testing.T) {
 
 // --- disable: revoke failure leaves everything untouched -------------------
 
+// TestSlackDisableOAuthRevokeFailureLeavesLocalWiringUntouched proves an
+// ARBITRARY (non-Slack-typed) revoke failure — a transient network/op
+// problem, not a proof the credential is already dead — still aborts with
+// nothing removed. Contrast with TestSlackDisableOAuthContinuesWhenRevoke
+// ReportsAlreadyDead below, where a TYPED invalid_auth/token_revoked response
+// continues cleanup instead.
 func TestSlackDisableOAuthRevokeFailureLeavesLocalWiringUntouched(t *testing.T) {
 	slackTestCfg(t)
 	cfg := slackOAuthTestConfig(t, time.Now().Add(20*24*time.Hour))
@@ -317,13 +329,13 @@ func TestSlackDisableOAuthRevokeFailureLeavesLocalWiringUntouched(t *testing.T) 
 	}
 	deps := slackOAuthRuntimeDeps{
 		runner: runner, clock: slackoauth.SystemClock{},
-		revoke: func(string) (bool, error) { return false, fmt.Errorf("invalid_auth") },
+		revoke: func(string) (bool, error) { return false, fmt.Errorf("network timeout calling slack") },
 	}
 
 	f := &slackTestEnv{sbxPresent: true}
 	var calls [][]string
 	var mu sync.Mutex
-	e := slackOAuthRegisteredEnv(f, &calls, &mu)
+	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
 
 	var out bytes.Buffer
 	err := slackDisableOAuth(cfg, e, &out, deps)
@@ -384,7 +396,7 @@ func TestSlackDisableOAuthArchiveFailureReportsIncomplete(t *testing.T) {
 	f := &slackTestEnv{sbxPresent: true}
 	var calls [][]string
 	var mu sync.Mutex
-	e := slackOAuthRegisteredEnv(f, &calls, &mu)
+	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
 
 	var out bytes.Buffer
 	err := slackDisableOAuth(cfg, e, &out, deps)
@@ -430,7 +442,7 @@ func TestSlackDisableOAuthDocumentArchiveArgv(t *testing.T) {
 	f := &slackTestEnv{sbxPresent: true}
 	var calls [][]string
 	var mu sync.Mutex
-	e := slackOAuthRegisteredEnv(f, &calls, &mu)
+	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
 
 	var out bytes.Buffer
 	if err := slackDisableOAuth(cfg, e, &out, deps); err != nil {
@@ -485,7 +497,7 @@ func TestSlackDisableOAuthConfigClearRetainsClientID(t *testing.T) {
 	f := &slackTestEnv{sbxPresent: true}
 	var calls [][]string
 	var mu sync.Mutex
-	e := slackOAuthRegisteredEnv(f, &calls, &mu)
+	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
 
 	var out bytes.Buffer
 	if err := slackDisable(cfg, e, &out); err != nil {
@@ -551,5 +563,145 @@ func TestSlackDisableOAuthNeverRemovesForeignRegistration(t *testing.T) {
 	}
 	if revokeCalled {
 		t.Error("revoke must never be called before the registration preflight passes")
+	}
+}
+
+// --- disable: retryable after a manual/prior revocation or dead grant ------
+
+// TestSlackDisableOAuthContinuesWhenTokenObtainFailsWithDeadCredential proves
+// that when the runtime manager cannot obtain ANY token because the
+// credential is already provably dead (an expired grant, or a refresh chain
+// Slack itself rejected as invalid_refresh_token/token_revoked), disable
+// treats that as "nothing left to revoke" and continues the archive/local
+// cleanup, rather than aborting forever on a credential that can never come
+// back to life.
+func TestSlackDisableOAuthContinuesWhenTokenObtainFailsWithDeadCredential(t *testing.T) {
+	slackTestCfg(t)
+	cfg := slackOAuthTestConfig(t, time.Now().Add(-2*24*time.Hour))
+	opRefsWith(t, "SLACK_TEAM_ID=T123", "SLACK_USER_ID=U456")
+
+	runner := &slackOAuthRuntimeFakeRunner{getErr: slackoauth.ErrGrantExpired}
+	revokeCalled := false
+	deps := slackOAuthRuntimeDeps{
+		runner: runner, clock: slackoauth.SystemClock{},
+		revoke: func(string) (bool, error) { revokeCalled = true; return true, nil },
+	}
+
+	f := &slackTestEnv{sbxPresent: true}
+	var calls [][]string
+	var mu sync.Mutex
+	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
+
+	var out bytes.Buffer
+	if err := slackDisableOAuth(cfg, e, &out, deps); err != nil {
+		t.Fatalf("slackDisableOAuth: %v\n--- output ---\n%s", err, out.String())
+	}
+	if revokeCalled {
+		t.Error("live revoke must never be attempted once the grant is already expired")
+	}
+	if !strings.Contains(out.String(), "already invalid") {
+		t.Errorf("output must explain the credential was already dead, got:\n%s", out.String())
+	}
+
+	runner.mu.Lock()
+	deleteCalled := false
+	for _, c := range runner.calls {
+		if len(c) >= 3 && c[0] == "op" && c[1] == "document" && c[2] == "delete" {
+			deleteCalled = true
+		}
+	}
+	runner.mu.Unlock()
+	if !deleteCalled {
+		t.Error("local cleanup (archiving the 1Password document) must still proceed")
+	}
+}
+
+// TestSlackDisableOAuthContinuesWhenRevokeReportsAlreadyDead proves that when
+// a live token WAS obtained but Slack's own auth.revoke says it is already
+// dead (invalid_auth or token_revoked \u2014 e.g. a human revoked it by hand, or
+// a prior disable run revoked it but failed before archiving), disable
+// continues cleanup instead of aborting.
+func TestSlackDisableOAuthContinuesWhenRevokeReportsAlreadyDead(t *testing.T) {
+	slackTestCfg(t)
+	cfg := slackOAuthTestConfig(t, time.Now().Add(20*24*time.Hour))
+	opRefsWith(t, "SLACK_TEAM_ID=T123", "SLACK_USER_ID=U456")
+
+	runner := &slackOAuthRuntimeFakeRunner{
+		getBlob: slackOAuthTestBlob("T123", "U456", time.Now().Add(time.Hour), time.Now().Add(20*24*time.Hour)),
+	}
+	deps := slackOAuthRuntimeDeps{
+		runner: runner, clock: slackoauth.SystemClock{},
+		revoke: func(string) (bool, error) {
+			return false, slackoauth.ClassifyAPIError("auth.revoke", "invalid_auth")
+		},
+	}
+
+	f := &slackTestEnv{sbxPresent: true}
+	var calls [][]string
+	var mu sync.Mutex
+	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
+
+	var out bytes.Buffer
+	if err := slackDisableOAuth(cfg, e, &out, deps); err != nil {
+		t.Fatalf("slackDisableOAuth: %v\n--- output ---\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "already invalid/revoked") {
+		t.Errorf("output must explain Slack already reports it dead, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "revoked the Slack OAuth token") {
+		t.Errorf("output must not claim a live revoke happened when none did, got:\n%s", out.String())
+	}
+
+	runner.mu.Lock()
+	deleteCalled := false
+	for _, c := range runner.calls {
+		if len(c) >= 3 && c[0] == "op" && c[1] == "document" && c[2] == "delete" {
+			deleteCalled = true
+		}
+	}
+	runner.mu.Unlock()
+	if !deleteCalled {
+		t.Error("local cleanup (archiving the 1Password document) must still proceed")
+	}
+}
+
+// --- runtime: fail closed when the shared state dir can't be resolved -----
+
+// TestSlackOAuthRuntimeFailsClosedWithoutStateDir proves slackOAuthRuntime
+// refuses (ok=false) rather than silently falling back to a process-local
+// Locker when the shared state dir cannot be resolved \u2014 that fallback used
+// to exist and would NOT actually serialize a refresh against a concurrently
+// running gateway process sharing the same 1Password document (the entire
+// point of the FileLock), a silent race this must fail closed against
+// instead.
+func TestSlackOAuthRuntimeFailsClosedWithoutStateDir(t *testing.T) {
+	slackTestCfg(t)
+	cfg := slackOAuthTestConfig(t, time.Now().Add(20*24*time.Hour))
+
+	f := &slackTestEnv{sbxPresent: true}
+	e := f.env()
+	e.stateDir = func() (string, error) { return "", fmt.Errorf("$HOME could not be determined") }
+
+	_, _, ok := slackOAuthRuntime(cfg, e, slackOAuthRuntimeDeps{runner: &slackOAuthRuntimeFakeRunner{}, clock: slackoauth.SystemClock{}})
+	if ok {
+		t.Fatal("slackOAuthRuntime must fail closed (ok=false) when the state dir cannot be resolved")
+	}
+
+	// Both status and disable must surface this as a real failure, never a
+	// silent skip.
+	checks := slackOAuthStatusChecks(cfg, e, time.Now())
+	foundUnverifiableAccess := false
+	for _, c := range checks {
+		if c.label == "access" && c.verdict == verdictUnverifiable {
+			foundUnverifiableAccess = true
+		}
+	}
+	if !foundUnverifiableAccess {
+		t.Errorf("status must report an unverifiable access check when the runtime can't be built, got: %+v", checks)
+	}
+
+	var out bytes.Buffer
+	if err := slackDisableOAuth(cfg, e, &out, slackOAuthRuntimeDeps{}); err == nil {
+		t.Fatal("slackDisableOAuth must fail when the runtime cannot be built")
 	}
 }

@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/slackoauth"
 )
 
 // slackServerName is the MCP registration + display name, matching
@@ -127,7 +128,7 @@ func liveSlackAuthRevoke(token string) (bool, error) {
 		if e == "" {
 			e = "unknown_error"
 		}
-		return false, fmt.Errorf("auth.revoke: %s", e)
+		return false, slackoauth.ClassifyAPIError("auth.revoke", e)
 	}
 	if !body.Revoked {
 		return false, fmt.Errorf("auth.revoke: Slack responded ok but did not confirm revocation")
@@ -137,12 +138,19 @@ func liveSlackAuthRevoke(token string) (bool, error) {
 
 const slackUsage = `usage: pix slack <setup|status|disable> [args]
 
-  setup     wire up an EXISTING personal Slack token: verify it live, pin its
-            identity, register it, save config
-  status    the token ref, the live identity it resolves to, whether that
-            matches the pinned identity, and gateway registration
-  disable   remove the Pix-owned registration + config + refs (does NOT
-            revoke the token at Slack)
+  setup     wire up Slack access, EITHER of two ways: an EXISTING personal
+            token (--token-ref: verify it live, pin its identity) OR a local
+            PKCE OAuth grant (no --token-ref: mints and stores a rotating
+            credential itself) — either path registers the server and saves
+            config the same way
+  status    the credential mode, the live identity it resolves to, whether
+            that matches the pinned identity, gateway registration, and (OAuth
+            mode only) a grant-expiry countdown
+  disable   remove the Pix-owned registration + config + refs; in OAuth mode
+            this ALSO revokes the credential at Slack FIRST (auth.revoke,
+            confirmed before anything local is touched) — the static
+            (--token-ref) path never revokes, since pix never held a client
+            secret of its own for it
 
 Slack is OPTIONAL and absent unless you set it up. SLACK_TOKEN is always a
 single named person's xoxp- user token, never a shared team/bot token — see
@@ -291,6 +299,12 @@ type slackSetupOpts struct {
 	redirectURI   string
 	vault         string
 	vaultExplicit bool
+	// allowIdentityChange permits the PKCE path to re-pin SLACK_TEAM_ID/
+	// SLACK_USER_ID to a DIFFERENT identity than whatever was already pinned,
+	// without the extra interactive confirmation that would otherwise be
+	// required (and without which --yes refuses outright). See
+	// slackSetupPKCE's identity-change gate.
+	allowIdentityChange bool
 }
 
 func parseSlackSetupArgs(argv []string) (slackSetupOpts, error) {
@@ -339,6 +353,8 @@ func parseSlackSetupArgs(argv []string) (slackSetupOpts, error) {
 			o.vault, o.vaultExplicit = v, true
 		case strings.HasPrefix(a, "--vault="):
 			o.vault, o.vaultExplicit = strings.TrimPrefix(a, "--vault="), true
+		case a == "--allow-identity-change":
+			o.allowIdentityChange = true
 		case a == "-h", a == "--help":
 			return o, errHelpRequested
 		default:
@@ -348,6 +364,10 @@ func parseSlackSetupArgs(argv []string) (slackSetupOpts, error) {
 			}
 			return o, fmt.Errorf("unknown flag %q (see: pix slack setup -h)", a)
 		}
+	}
+	if strings.TrimSpace(o.tokenRef) != "" && (o.clientID != "" || o.redirectURI != "" || o.vaultExplicit || o.allowIdentityChange) {
+		return o, fmt.Errorf("--token-ref cannot be combined with the PKCE-only flags (--client-id/--redirect-uri/--vault/--allow-identity-change); " +
+			"pick one setup path (see: pix slack setup -h)")
 	}
 	return o, nil
 }
@@ -402,6 +422,16 @@ func slackSetupStatic(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Wr
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+
+	// A complete [slack] OAuth wiring always wins over a static SLACK_TOKEN
+	// (slackDefaultTokenSource in services/host/slack.go), so writing one here
+	// would be silently shadowed — never used by the running server, yet
+	// looking "set up" to a human reading op-refs.env. Refuse outright rather
+	// than let that trap exist; the fix is explicit: disable OAuth first.
+	if slackOAuthConfigComplete(cfg) {
+		return fmt.Errorf("Slack OAuth is already configured (client id + 1Password vault/document); a static --token-ref " +
+			"would be shadowed by it and never used by the running server — run `pix slack disable` first if you want to switch to a static token")
 	}
 
 	// Snapshot gateway state before touching refs. Never bless or overwrite an

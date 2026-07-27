@@ -355,9 +355,19 @@ func slackCallRaw(method, tok string, params map[string]string) (jsonObj, error)
 	return obj, nil
 }
 
+// slackIdentityMu guards slackIdentityChecked/slackIdentityErr below. A plain
+// sync.Once would cache whatever the FIRST call happened to observe FOREVER —
+// including a purely transient auth.test failure (a network blip, a rate
+// limit, 1Password/Slack being briefly unreachable through an OAuth source's
+// Token call). That would wedge every later tool call behind a stale error
+// for the rest of the process's life, long after the transient condition
+// cleared. Only a DEFINITIVE result — auth.test actually answered, so either
+// the identity matches (nil) or a real pin mismatch was proven — is cached;
+// anything else is retried on the next call.
 var (
-	slackIdentityOnce sync.Once
-	slackIdentityErr  error
+	slackIdentityMu      sync.Mutex
+	slackIdentityChecked bool
+	slackIdentityErr     error
 )
 
 func slackVerifyExpectedIdentity(ctx context.Context, source slackTokenSource) error {
@@ -366,17 +376,33 @@ func slackVerifyExpectedIdentity(ctx context.Context, source slackTokenSource) e
 	if wantTeam == "" && wantUser == "" { // legacy manual wiring has no pin
 		return nil
 	}
-	slackIdentityOnce.Do(func() {
-		obj, err := slackAuthorizedCall(ctx, source, func(tok string) (jsonObj, error) {
-			return slackCallRaw("auth.test", tok, nil)
-		})
-		if err != nil {
-			slackIdentityErr = err
-			return
-		}
-		slackIdentityErr = slackCheckExpectedIdentity(obj)
+
+	slackIdentityMu.Lock()
+	if slackIdentityChecked {
+		err := slackIdentityErr
+		slackIdentityMu.Unlock()
+		return err
+	}
+	slackIdentityMu.Unlock()
+
+	obj, callErr := slackAuthorizedCall(ctx, source, func(tok string) (jsonObj, error) {
+		return slackCallRaw("auth.test", tok, nil)
 	})
-	return slackIdentityErr
+	if callErr != nil {
+		// auth.test itself did not answer (network/auth-source failure): this is
+		// never definitive, so it is never cached — the next call gets a fresh
+		// attempt rather than an error frozen in from this one.
+		return callErr
+	}
+
+	// auth.test answered: the identity match (or a proven mismatch) is now
+	// definitive and safe to cache for the rest of this process's life.
+	checkErr := slackCheckExpectedIdentity(obj)
+	slackIdentityMu.Lock()
+	slackIdentityChecked = true
+	slackIdentityErr = checkErr
+	slackIdentityMu.Unlock()
+	return checkErr
 }
 
 func slackCheckExpectedIdentity(obj jsonObj) error {
