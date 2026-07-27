@@ -43,6 +43,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -582,5 +583,341 @@ func slackSetupPKCE(env shellEnv, cfg *config.Config, opts slackSetupOpts, deps 
 	fmt.Fprintf(out, "Slack OAuth is set up. This rotating grant expires %s (~monthly) — re-run "+
 		"`pix slack setup` before then to reauthorize.\n", blob.GrantExpiresAt.Format("2006-01-02"))
 	slackPrintAttachmentNote(out)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// runtime (status/disable): the SAME kind of manager/source the running MCP
+// server (services/host/slack.go's slackOAuthManagerFromConfig) uses to
+// read/refresh the 1Password document. That function lives in a DIFFERENT
+// binary (pix-host, not pix) so it can't be imported directly; the three-
+// field completeness gate and the Manager/OPStore/Client wiring below are
+// deliberately kept in lockstep with it rather than derived from it.
+// ---------------------------------------------------------------------------
+
+// slackOAuthRuntimeTimeout bounds every call `pix slack status`/`disable`
+// makes through the OAuth runtime (a Manager.Token, which may exec `op
+// document get/edit`, or hit Slack's oauth.v2.access/auth.revoke endpoints),
+// so a hung 1Password CLI or network call can never wedge the CLI forever.
+// Matches oauthSlackTokenSourceTimeout's rationale in services/host/slack.go.
+const slackOAuthRuntimeTimeout = 30 * time.Second
+
+// slackOAuthGrantExpiryWarning is how much remaining grant lifetime turns the
+// status countdown from a plain fact into a call-it-out warning: seven days
+// is enough runway to act (re-run pix slack setup) before the 30-day rotating
+// grant actually expires and OAuth-mode Slack access goes dark.
+const slackOAuthGrantExpiryWarning = 7 * 24 * time.Hour
+
+// slackOAuthConfigComplete reports whether cfg carries a COMPLETE [slack]
+// OAuth wiring: a client id AND both 1Password locators. This is the same
+// three-field gate slackOAuthManagerFromConfig uses in services/host/slack.go
+// (a different binary, so it can't be called directly) to decide whether the
+// running MCP server itself uses OAuth or falls back to static SLACK_TOKEN —
+// status/disable must agree with the server about which mode is active, or a
+// status/disable run could report on (or tear down) the wrong credential.
+func slackOAuthConfigComplete(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	return strings.TrimSpace(cfg.Slack.ClientID) != "" &&
+		strings.TrimSpace(cfg.Slack.OAuthVaultID) != "" &&
+		strings.TrimSpace(cfg.Slack.OAuthDocumentID) != ""
+}
+
+// slackOAuthRuntimeDeps bundles the seams `pix slack status`/`disable` use to
+// read/refresh/revoke the OAuth-mode credential, mirroring slackOAuthDeps's
+// injection discipline for the setup flow: production uses the real `op` CLI
+// and real HTTP; tests inject fakes so nothing ever shells out or hits the
+// network.
+type slackOAuthRuntimeDeps struct {
+	// runner is the slackoauth.CommandRunner used to read/edit/delete the
+	// 1Password document. Production: slackoauth.ExecRunner{}.
+	runner slackoauth.CommandRunner
+	// clock supplies "now" for the Manager's freshness/expiry comparisons.
+	clock slackoauth.Clock
+	// revoke calls Slack's auth.revoke with a live bearer token and reports
+	// whether Slack CONFIRMED revocation — never just that the HTTP call
+	// succeeded. Production: liveSlackAuthRevoke. Never logs the token.
+	revoke func(token string) (revoked bool, err error)
+}
+
+// defaultSlackOAuthRuntimeDeps returns the production wiring.
+func defaultSlackOAuthRuntimeDeps() slackOAuthRuntimeDeps {
+	return slackOAuthRuntimeDeps{
+		runner: slackoauth.ExecRunner{},
+		clock:  slackoauth.SystemClock{},
+		revoke: liveSlackAuthRevoke,
+	}
+}
+
+// slackOAuthRuntimeDepsFn is the seam slackStatus/slackDisable use to build
+// their OAuth runtime dependencies. Production leaves it at
+// defaultSlackOAuthRuntimeDeps; a test overrides it for the duration of one
+// call (there is nothing process-lifetime cached here, unlike the running
+// MCP server's slackGetTokenSource memoization) to inject a fake
+// CommandRunner/clock/revoke without ever shelling out or hitting the
+// network. Tests MUST restore it via t.Cleanup so a fake can never leak into
+// an unrelated test.
+var slackOAuthRuntimeDepsFn = defaultSlackOAuthRuntimeDeps
+
+// slackOAuthInProcessLocker is the fallback Locker used only when the state
+// dir cannot be resolved — never in production (config.StateDir only fails
+// when $HOME cannot be determined at all). It serializes within THIS
+// process only; it deliberately does not claim cross-process safety the way
+// the production slackoauth.FileLock does.
+type slackOAuthInProcessLocker struct{ mu sync.Mutex }
+
+func (l *slackOAuthInProcessLocker) Lock(context.Context) (func(), error) {
+	l.mu.Lock()
+	return l.mu.Unlock, nil
+}
+
+// slackOAuthRuntime builds the SAME kind of slackoauth.Manager/OPStore
+// services/host/slack.go's slackOAuthManagerFromConfig builds for the
+// running MCP server: an OPStore over cfg's vault/document (item pre-filled,
+// so a Read never needs a Title), a Client carrying the exact shared
+// read-only scope set (slackoauth.RequiredUserScopes), and — whenever the
+// state dir resolves — a FileLock at the SAME path the server uses, so a
+// refresh triggered from this CLI is serialized with a concurrently running
+// gateway process sharing the same credential, not just with itself. ok is
+// false when cfg does not carry a complete OAuth wiring.
+func slackOAuthRuntime(cfg *config.Config, env shellEnv, deps slackOAuthRuntimeDeps) (*slackoauth.Manager, *slackoauth.OPStore, bool) {
+	if !slackOAuthConfigComplete(cfg) {
+		return nil, nil, false
+	}
+	runner := deps.runner
+	if runner == nil {
+		runner = slackoauth.ExecRunner{}
+	}
+	store := slackoauth.NewOPStore(runner, cfg.Slack.OAuthVaultID, "", cfg.Slack.OAuthDocumentID)
+	client := &slackoauth.Client{
+		ClientID:       cfg.Slack.ClientID,
+		RequiredScopes: append([]string(nil), slackoauth.RequiredUserScopes...),
+	}
+	clock := deps.clock
+	if clock == nil {
+		clock = slackoauth.SystemClock{}
+	}
+	var locker slackoauth.Locker
+	if env.stateDir != nil {
+		if sd, err := env.stateDir(); err == nil && strings.TrimSpace(sd) != "" {
+			locker = &slackoauth.FileLock{Path: filepath.Join(sd, "slack-oauth.lock")}
+		}
+	}
+	if locker == nil {
+		locker = &slackOAuthInProcessLocker{}
+	}
+	return &slackoauth.Manager{Store: store, Client: client, Locker: locker, Clock: clock}, store, true
+}
+
+// slackOAuthGrantExpiryCheck reports the cached rotating-grant countdown
+// (cfg.Slack.OAuthGrantExpiresAt, mirrored from slackoauth.Blob.GrantExpiresAt
+// at the last setup/refresh) WITHOUT a live 1Password round trip — the cache
+// is advisory (SlackOAuth's doc comment), and a countdown display is exactly
+// what it exists for. An already-expired grant is a VERIFIED todo (blocks
+// exit 1): no refresh can revive a dead grant, only a full re-authorization
+// (pix slack setup). Seven days or fewer remaining is a non-blocking warning
+// — still reported ready, called out so it is not missed until it actually
+// breaks.
+func slackOAuthGrantExpiryCheck(cfg *config.Config, now time.Time) check {
+	exp := cfg.Slack.OAuthGrantExpiresAt
+	if exp.IsZero() {
+		return check{label: "grant expiry", verdict: verdictUnverifiable,
+			detail: "no cached grant expiry recorded (set by pix slack setup)"}
+	}
+	remaining := exp.Sub(now)
+	if remaining <= 0 {
+		agoDays := int((-remaining).Hours() / 24)
+		return check{label: "grant expiry", verdict: verdictTodo,
+			detail: fmt.Sprintf("OAuth grant expired %s ago", plural(agoDays, "day")),
+			todo:   "pix slack setup"}
+	}
+	days := int(remaining.Hours() / 24)
+	if remaining <= slackOAuthGrantExpiryWarning {
+		return check{label: "grant expiry", verdict: verdictReady,
+			detail: fmt.Sprintf("\u26a0 expires in %s — renew soon", plural(days, "day")),
+			todo:   "pix slack setup (reauthorize before it expires)"}
+	}
+	return check{label: "grant expiry", verdict: verdictReady,
+		detail: fmt.Sprintf("expires in %s", plural(days, "day"))}
+}
+
+// slackOAuthAccessChecks obtains a live access token through mgr (reading,
+// and refreshing if needed, the 1Password document — the SAME operation the
+// running MCP server performs on every call), calls auth.test on it, and
+// compares the resulting identity against the SLACK_TEAM_ID/SLACK_USER_ID
+// pin exactly like the static status path does. A failure to obtain a token
+// is reported as a verified todo ONLY when the grant itself has expired
+// (slackoauth.ErrGrantExpired — nothing else can be done from here but
+// re-authorize); any other read/refresh failure is unverifiable, since it
+// may be a transient 1Password/network problem rather than a proven gap.
+func slackOAuthAccessChecks(env shellEnv, mgr *slackoauth.Manager, pinTeam, pinUser string) []check {
+	var checks []check
+	ctx, cancel := context.WithTimeout(context.Background(), slackOAuthRuntimeTimeout)
+	defer cancel()
+	tok, err := mgr.Token(ctx)
+	if err != nil {
+		v := verdictUnverifiable
+		todo := ""
+		if errors.Is(err, slackoauth.ErrGrantExpired) {
+			v, todo = verdictTodo, "pix slack setup"
+		}
+		checks = append(checks, check{label: "access", verdict: v,
+			detail: "could not obtain a valid OAuth access token: " + err.Error(), todo: todo})
+		checks = append(checks, check{label: "identity", verdict: verdictUnverifiable,
+			detail: "cannot verify live identity (no access token available)"})
+		return checks
+	}
+	checks = append(checks, check{label: "access", verdict: verdictReady,
+		detail: "obtained a valid OAuth access token from 1Password"})
+
+	if env.slackAuthTest == nil {
+		checks = append(checks, check{label: "identity", verdict: verdictUnverifiable,
+			detail: "cannot verify live identity (no auth.test probe wired here)"})
+		return checks
+	}
+	id, aerr := env.slackAuthTest(tok)
+	if aerr != nil {
+		checks = append(checks, check{label: "identity", verdict: verdictTodo,
+			detail: "auth.test failed: " + aerr.Error(), todo: "pix slack setup"})
+		return checks
+	}
+	checks = append(checks, check{label: "identity", verdict: verdictReady,
+		detail: fmt.Sprintf("%s (user %s) on %s (%s)", id.user, id.userID, id.team, id.teamID)})
+
+	switch {
+	case pinTeam == "" && pinUser == "":
+		checks = append(checks, check{label: "identity pin", note: true, verdict: verdictUnverifiable,
+			detail: "no SLACK_TEAM_ID/SLACK_USER_ID pin recorded yet (set by pix slack setup)"})
+	case pinTeam == id.teamID && pinUser == id.userID:
+		checks = append(checks, check{label: "identity pin", verdict: verdictReady,
+			detail: "matches the identity pinned at setup"})
+	default:
+		checks = append(checks, check{label: "identity pin", verdict: verdictTodo,
+			detail: fmt.Sprintf("live identity (team %s / user %s) does not match the pin (team %s / user %s) — "+
+				"the token was likely swapped; re-run pix slack setup if this is expected",
+				id.teamID, id.userID, pinTeam, pinUser),
+			todo: "pix slack setup"})
+	}
+	return checks
+}
+
+// slackOAuthStatusChecks is `pix slack status`'s OAuth-mode surface: it
+// reports the mode itself, the non-secret 1Password vault/document ids, the
+// cached grant-expiry countdown, and then (through the same kind of runtime
+// manager the MCP server uses) live access + identity + identity-pin checks.
+// It never reads or reports SLACK_TOKEN — that variable plays no role in
+// this mode.
+func slackOAuthStatusChecks(cfg *config.Config, env shellEnv, now time.Time) []check {
+	var checks []check
+	checks = append(checks, check{label: "mode", verdict: verdictReady,
+		detail: "OAuth (rotating PKCE credential in 1Password)"})
+	checks = append(checks, check{label: "1Password doc", verdict: verdictReady,
+		detail: fmt.Sprintf("vault %s, document %s", cfg.Slack.OAuthVaultID, cfg.Slack.OAuthDocumentID)})
+	checks = append(checks, slackOAuthGrantExpiryCheck(cfg, now))
+
+	mgr, _, ok := slackOAuthRuntime(cfg, env, slackOAuthRuntimeDepsFn())
+	if !ok {
+		checks = append(checks, check{label: "access", verdict: verdictUnverifiable,
+			detail: "internal: could not build the OAuth runtime source"})
+		return checks
+	}
+	_, content, _ := opRefsContent(env)
+	pinTeam, pinUser := slackIdentityPins(content)
+	checks = append(checks, slackOAuthAccessChecks(env, mgr, pinTeam, pinUser)...)
+	return checks
+}
+
+// slackDisableOAuth is `pix slack disable`'s OAuth-mode path. Unlike the
+// static path (which only ever removes local wiring, since it never held a
+// revocable client credential of its own), OAuth mode DOES call Slack's own
+// auth.revoke before touching anything local — pix minted this credential
+// via its own PKCE client, so it both can and must kill it at the source.
+// The order is fixed and each step gates the next:
+//
+//  1. preflight the registration exactly like the static path (never touch a
+//     foreign, non-canonical registration)
+//  2. obtain a live bearer through the runtime manager and revoke it at
+//     Slack; a failure here (including a response that doesn't CONFIRM
+//     revocation) stops immediately with NOTHING removed
+//  3. only once revoke is confirmed, archive the 1Password document
+//     (op document delete --archive; item/vault ids only, no secret ever on
+//     argv); a failure here is reported as revoked-but-local-cleanup-
+//     incomplete — everything from here on is left in place, and re-running
+//     disable (which will simply fail to find a live token to revoke again)
+//     is how the cleanup finishes, never a repeat live revoke
+//  4. only once archived, remove the sbx registration, clear the OAuth
+//     vault/document/expiry from config (keeping client_id/redirect_uri so a
+//     later setup is one step), and remove the identity pin refs
+func slackDisableOAuth(cfg *config.Config, env shellEnv, out io.Writer, deps slackOAuthRuntimeDeps) error {
+	registered, err := slackRegistrationPresence(env)
+	if err != nil {
+		return err
+	}
+	if registered {
+		argv, ok := registeredMCPCommand(env, slackServerName)
+		if _, trusted := recognizedMCPArgv(env, argv, slackServerName); !ok || !trusted {
+			return fmt.Errorf("a server named slack is registered, but it is not the canonical Pix host command; refusing to remove it (inspect: sbx mcp get slack)")
+		}
+	}
+
+	mgr, store, ok := slackOAuthRuntime(cfg, env, deps)
+	if !ok {
+		return fmt.Errorf("internal: OAuth config reported complete but the runtime source could not be built")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), slackOAuthRuntimeTimeout)
+	defer cancel()
+	tok, err := mgr.Token(ctx)
+	if err != nil {
+		return fmt.Errorf("could not obtain a valid OAuth access token to revoke: %w; nothing was removed", err)
+	}
+
+	revoke := deps.revoke
+	if revoke == nil {
+		revoke = liveSlackAuthRevoke
+	}
+	revoked, rerr := revoke(tok)
+	if rerr != nil || !revoked {
+		if rerr == nil {
+			rerr = fmt.Errorf("Slack did not confirm the token was revoked")
+		}
+		return fmt.Errorf("Slack auth.revoke failed: %w; nothing was removed (the credential in 1Password and the sbx registration are untouched)", rerr)
+	}
+	fmt.Fprintln(out, "  revoked the Slack OAuth token")
+
+	if derr := store.Delete(ctx); derr != nil {
+		return fmt.Errorf("the Slack token was revoked, but deleting the 1Password document failed: %w; "+
+			"local cleanup is incomplete (registration, config, refs left in place) — re-run pix slack disable to retry", derr)
+	}
+	fmt.Fprintln(out, "  archived the 1Password document")
+
+	if registered {
+		if env.run == nil {
+			return fmt.Errorf("internal: shellEnv.run not wired")
+		}
+		if _, err := env.run("sbx", "mcp", "rm", slackServerName); err != nil {
+			return fmt.Errorf("removing the %s registration: %w (the token was revoked and the 1Password document archived; remove the registration by hand: sbx mcp rm %s)",
+				slackServerName, err, slackServerName)
+		}
+		fmt.Fprintln(out, "  removed registration: "+slackServerName)
+	}
+
+	cfg.RemoveMCP(slackServerName)
+	cfg.ClearSlackOAuthManaged()
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("saving config: %w (the token was revoked and the 1Password document was already archived; the sbx registration was already removed)", err)
+	}
+	fmt.Fprintln(out, "  cleared config: mcp "+slackServerName+", OAuth vault/document (client_id and redirect_uri kept for re-setup)")
+
+	for _, key := range []string{"SLACK_TEAM_ID", "SLACK_USER_ID", "SLACK_TOKEN"} {
+		if err := runSecretRm(env, out, key); err != nil {
+			return fmt.Errorf("removing %s: %w", key, err)
+		}
+	}
+
+	fmt.Fprintln(out, "Slack OAuth is off here. The token was revoked at Slack and the 1Password")
+	fmt.Fprintln(out, "document holding it was archived. Re-run pix slack setup (no --token-ref) to")
+	fmt.Fprintln(out, "reauthorize — your client_id and redirect_uri are still configured.")
 	return nil
 }

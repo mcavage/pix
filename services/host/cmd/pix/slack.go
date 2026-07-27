@@ -85,6 +85,56 @@ func liveSlackAuthTest(token string) (slackIdentity, error) {
 	return slackIdentity{team: body.Team, teamID: body.TeamID, user: body.User, userID: body.UserID}, nil
 }
 
+// slackAuthRevokeURL is Slack's Web API method to kill a token. `pix slack
+// disable`'s OAuth-mode path calls this BEFORE anything local is touched
+// (docs/design/slack-setup.md#rollback-and-revocation): pix minted the
+// rotating credential via its own PKCE client, so unlike the static
+// (--token-ref) path it both CAN and MUST revoke it at the source.
+const slackAuthRevokeURL = "https://slack.com/api/auth.revoke"
+
+// liveSlackAuthRevoke is the real (non-hermetic) implementation wired by
+// defaultShellEnv: a bare HTTPS POST to auth.revoke with token as a bearer.
+// It never logs the token, and it requires Slack's own "ok":true AND
+// "revoked":true — a bare HTTP 200 or ok:true-but-revoked:false is treated as
+// a failure, never as a silent success, so a caller can never remove local
+// wiring on the strength of a response that didn't actually confirm
+// revocation.
+func liveSlackAuthRevoke(token string) (bool, error) {
+	req, err := http.NewRequest(http.MethodPost, slackAuthRevokeURL, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("Slack auth.revoke HTTP %s", resp.Status)
+	}
+	var body struct {
+		OK      bool   `json:"ok"`
+		Revoked bool   `json:"revoked"`
+		Error   string `json:"error"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
+		return false, fmt.Errorf("decoding Slack auth.revoke response: %w", err)
+	}
+	if !body.OK {
+		e := body.Error
+		if e == "" {
+			e = "unknown_error"
+		}
+		return false, fmt.Errorf("auth.revoke: %s", e)
+	}
+	if !body.Revoked {
+		return false, fmt.Errorf("auth.revoke: Slack responded ok but did not confirm revocation")
+	}
+	return true, nil
+}
+
 const slackUsage = `usage: pix slack <setup|status|disable> [args]
 
   setup     wire up an EXISTING personal Slack token: verify it live, pin its
@@ -135,33 +185,71 @@ re-registers.
 
 const slackStatusUsage = `usage: pix slack status
 
-Reports, from probes rather than config claims:
-  - whether SLACK_TOKEN is a filled op:// ref (in op-refs.env)
-  - the identity it resolves to RIGHT NOW (auth.test), not just "a token is set"
-  - whether that identity still matches SLACK_TEAM_ID/SLACK_USER_ID, the pin
-    recorded the last time 'pix slack setup' ran
-  - whether ` + slackServerName + ` is registered with the sbx gateway
+Reports, from probes rather than config claims. What is checked depends on
+which mode config.toml's [slack] carries:
+
+  static (--token-ref):
+    - whether SLACK_TOKEN is a filled op:// ref (in op-refs.env)
+    - the identity it resolves to RIGHT NOW (auth.test), not just "a token is set"
+    - whether that identity still matches SLACK_TEAM_ID/SLACK_USER_ID, the pin
+      recorded the last time 'pix slack setup' ran
+
+  OAuth (pix slack setup with no --token-ref):
+    - OAuth mode, and the 1Password vault/document ids holding the credential
+      (non-secret identifiers only — never the credential itself)
+    - a grant-expiry countdown from the cached expiry, with NO live 1Password
+      round trip needed just to show it: a warning inside 7 days, a verified
+      TODO (exit 1) once the grant has actually expired — SLACK_TOKEN is
+      never demanded or even looked at in this mode
+    - a live access token obtained through the SAME runtime manager the MCP
+      server itself uses (reading/refreshing the 1Password document), then
+      auth.test on it, then the SLACK_TEAM_ID/SLACK_USER_ID pin comparison —
+      exactly like the static path, just fed by a different credential source
+
+  Common to both:
+    - whether ` + slackServerName + ` is registered with the sbx gateway
 
 Registration is NOT the same as sandbox attachment: a sandbox already
 running does not see slack until it is recreated (pix run --replace) or
 attached live (pix mcp load slack) — status says so explicitly rather than
 collapsing the two into one boolean.
 
-exit: 0 ready · 1 needs setup · 3 could not be verified from here
+exit: 0 ready · 1 needs setup (or the OAuth grant has expired) · 3 could not be verified from here
 `
 
 const slackDisableUsage = `usage: pix slack disable
 
-Removes ONLY the Pix-owned pieces:
-  - the ` + slackServerName + ` registration in the sbx gateway
-  - the ` + slackServerName + ` entry in config.toml's mcp list
-  - the SLACK_TOKEN, SLACK_TEAM_ID, and SLACK_USER_ID refs in op-refs.env
+Removes ONLY the Pix-owned pieces. What that means depends on which mode
+config.toml's [slack] carries:
 
-This does NOT revoke the token at Slack. Revoke it yourself (Slack's "Apps"
-management page, or an org service's auth.revoke) if that's what you want —
-a gateway-managed slack process that already resolved the old token at spawn
-may keep using it until it is restarted, regardless of what this removes.
-A clean no-op (exit 0) when nothing is configured.
+  static (--token-ref):
+    - the ` + slackServerName + ` registration in the sbx gateway
+    - the ` + slackServerName + ` entry in config.toml's mcp list
+    - the SLACK_TOKEN, SLACK_TEAM_ID, and SLACK_USER_ID refs in op-refs.env
+    This does NOT revoke the token at Slack — pix never held a client secret
+    of its own for this path, so it cannot mint a revocation on your behalf.
+    Revoke it yourself (Slack's "Apps" management page, or an org service's
+    auth.revoke) if that's what you want — a gateway-managed slack process
+    that already resolved the old token at spawn may keep using it until it
+    is restarted, regardless of what this removes.
+
+  OAuth (pix slack setup with no --token-ref):
+    - calls Slack's auth.revoke on the current rotating token FIRST, and
+      requires Slack confirm the revocation before anything else happens —
+      a failed or unconfirmed revoke stops here with NOTHING removed
+    - only once revoked, archives the 1Password document holding the
+      credential (op document delete --archive; item/vault ids only, never a
+      secret on argv) — an archive failure after a confirmed revoke is
+      reported as revoked-but-local-cleanup-incomplete, and re-running this
+      command is what finishes the cleanup, not a repeat live revoke
+    - only once archived, removes the sbx registration, the mcp config
+      entry, and the SLACK_TEAM_ID/SLACK_USER_ID refs, and clears the OAuth
+      vault/document wiring from config.toml — client_id and redirect_uri
+      are KEPT so a later pix slack setup re-authorization is one step
+
+A foreign (non-Pix) registration named slack is never touched in either mode.
+A clean no-op (exit 0) when nothing is configured (static mode only — a
+configured OAuth document always has something real to revoke).
 `
 
 // runSlackCmd is the `pix slack` verb tree.
@@ -408,7 +496,12 @@ func runSlackStatusCmd(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix slack status: unexpected argument %q\n\n%s", argv[0], slackStatusUsage)
 		os.Exit(2)
 	}
-	os.Exit(slackStatus(defaultShellEnv(), os.Stdout))
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pix slack status: loading config: %v\n", err)
+		os.Exit(1)
+	}
+	os.Exit(slackStatus(cfg, defaultShellEnv(), os.Stdout, time.Now()))
 }
 
 // slackIdentityPins reads the literal (non-ref) SLACK_TEAM_ID/SLACK_USER_ID
@@ -429,9 +522,39 @@ func slackIdentityPins(content string) (teamID, userID string) {
 // slackStatus renders the Slack surface and returns the process exit code.
 // Every green here comes from a probe: a ref being present is never conflated
 // with the token it points at actually resolving to the identity it claims.
-func slackStatus(env shellEnv, out io.Writer) int {
+// Which credential surface is probed depends entirely on cfg: a COMPLETE
+// [slack] OAuth wiring (slackOAuthConfigComplete) runs the OAuth-mode checks
+// (slackOAuthStatusChecks) and never so much as looks at SLACK_TOKEN;
+// anything short of that runs the original static SLACK_TOKEN checks
+// unchanged (slackStaticStatusChecks). Registration and sandbox attachment
+// are reported identically either way — they are properties of the sbx
+// gateway, not of which credential mode backs the server.
+func slackStatus(cfg *config.Config, env shellEnv, out io.Writer, now time.Time) int {
 	fmt.Fprintln(out, "Slack (optional, personal xoxp- user token, via the host MCP gateway)")
 
+	var checks []check
+	if slackOAuthConfigComplete(cfg) {
+		checks = append(checks, slackOAuthStatusChecks(cfg, env, now)...)
+	} else {
+		checks = append(checks, slackStaticStatusChecks(env)...)
+	}
+	checks = append(checks, slackRegistrationAndAttachmentChecks(env)...)
+
+	for _, c := range checks {
+		fmt.Fprintf(out, "  %s %-13s %s\n", checkGlyph(c), c.label, c.detail)
+		if c.todo != "" {
+			fmt.Fprintf(out, "      fix: %s\n", c.todo)
+		}
+	}
+	return slackExit(checks)
+}
+
+// slackStaticStatusChecks is the original --token-ref (SLACK_TOKEN) status
+// surface, unchanged: the ref, its live auth.test resolution, and the
+// identity pin comparison. Never runs in OAuth mode (slackStatus branches
+// before calling it), so it can never demand SLACK_TOKEN when OAuth is what
+// is actually configured.
+func slackStaticStatusChecks(env shellEnv) []check {
 	path, content, exists := opRefsContent(env)
 	var ref string
 	var refFilled bool
@@ -503,7 +626,15 @@ func slackStatus(env shellEnv, out io.Writer) int {
 				id.teamID, id.userID, pinTeam, pinUser),
 			todo: "pix slack setup --token-ref op://vault/item/field"})
 	}
+	return checks
+}
 
+// slackRegistrationAndAttachmentChecks reports the sbx gateway registration
+// and the registration-is-not-attachment reminder — identical regardless of
+// which credential mode backs the server, since both are properties of the
+// gateway, not the credential.
+func slackRegistrationAndAttachmentChecks(env shellEnv) []check {
+	var checks []check
 	registeredArgv, registrationExists := registeredMCPCommand(env, slackServerName)
 	_, registrationTrusted := recognizedMCPArgv(env, registeredArgv, slackServerName)
 	switch {
@@ -530,14 +661,7 @@ func slackStatus(env shellEnv, out io.Writer) int {
 	checks = append(checks, check{label: "attachment", note: true, verdict: verdictUnverifiable,
 		detail: "registration is NOT the same as attachment: a sandbox already running won't see slack " +
 			"until it's recreated (pix run --replace) or attached live (pix mcp load slack)"})
-
-	for _, c := range checks {
-		fmt.Fprintf(out, "  %s %-13s %s\n", checkGlyph(c), c.label, c.detail)
-		if c.todo != "" {
-			fmt.Fprintf(out, "      fix: %s\n", c.todo)
-		}
-	}
-	return slackExit(checks)
+	return checks
 }
 
 // ---------------------------------------------------------------------------
@@ -587,10 +711,24 @@ func slackRegistrationPresence(env shellEnv) (present bool, err error) {
 	return mcpRegisteredIn(out, slackServerName), nil
 }
 
-// slackDisable removes ONLY the pieces pix owns: the gateway registration,
-// the mcp config entry, and the SLACK_TOKEN/SLACK_TEAM_ID/SLACK_USER_ID refs.
-// It never revokes the token at Slack — see the printed notice at the end.
+// slackDisable is `pix slack disable`'s dispatcher: a COMPLETE [slack] OAuth
+// wiring (slackOAuthConfigComplete) runs slackDisableOAuth, which revokes
+// the credential at Slack FIRST and only then removes local wiring; anything
+// short of that runs slackDisableStatic, unchanged — it never revokes
+// (pix never holds a client secret of its own for the static path, so it
+// cannot mint a revocation on the user's behalf).
 func slackDisable(cfg *config.Config, env shellEnv, out io.Writer) error {
+	if slackOAuthConfigComplete(cfg) {
+		return slackDisableOAuth(cfg, env, out, slackOAuthRuntimeDepsFn())
+	}
+	return slackDisableStatic(cfg, env, out)
+}
+
+// slackDisableStatic removes ONLY the pieces pix owns: the gateway
+// registration, the mcp config entry, and the
+// SLACK_TOKEN/SLACK_TEAM_ID/SLACK_USER_ID refs. It never revokes the token
+// at Slack — see the printed notice at the end.
+func slackDisableStatic(cfg *config.Config, env shellEnv, out io.Writer) error {
 	_, content, exists := opRefsContent(env)
 	hasManagedRef := false
 	if exists {

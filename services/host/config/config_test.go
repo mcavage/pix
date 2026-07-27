@@ -203,6 +203,38 @@ func TestSlackOAuthSetters(t *testing.T) {
 	}
 }
 
+// TestClearSlackOAuthManaged proves disable's OAuth-mode cleanup clears
+// exactly the fields a rotating grant OWNS (the 1Password locators and the
+// cached expiry) while RETAINING the public client_id/redirect_uri, so a
+// later `pix slack setup` re-authorization is a one-step operation instead
+// of asking for the app's client id all over again.
+func TestClearSlackOAuthManaged(t *testing.T) {
+	c := &Config{}
+	c.SetSlackClientID("abc.def")
+	c.SetSlackRedirectURI("http://localhost:17373/slack/callback")
+	c.SetSlackOAuthVaultID("vault-xyz")
+	c.SetSlackOAuthDocumentID("item-abc")
+	c.SetSlackOAuthGrantExpiresAt(time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC))
+
+	c.ClearSlackOAuthManaged()
+
+	if c.Slack.ClientID != "abc.def" {
+		t.Errorf("ClientID = %q, want retained", c.Slack.ClientID)
+	}
+	if c.Slack.RedirectURI != "http://localhost:17373/slack/callback" {
+		t.Errorf("RedirectURI = %q, want retained", c.Slack.RedirectURI)
+	}
+	if c.Slack.OAuthVaultID != "" {
+		t.Errorf("OAuthVaultID = %q, want cleared", c.Slack.OAuthVaultID)
+	}
+	if c.Slack.OAuthDocumentID != "" {
+		t.Errorf("OAuthDocumentID = %q, want cleared", c.Slack.OAuthDocumentID)
+	}
+	if !c.Slack.OAuthGrantExpiresAt.IsZero() {
+		t.Errorf("OAuthGrantExpiresAt = %v, want cleared", c.Slack.OAuthGrantExpiresAt)
+	}
+}
+
 func TestSeedCreatesThenRefuses(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "config.toml")
 
