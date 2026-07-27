@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestLoadAbsentReturnsDefaults(t *testing.T) {
@@ -92,6 +93,113 @@ port = 9000
 	// A slot with no impl set defaults to builtin.
 	if got := c.Plugin("slack"); got.Impl != BuiltinImpl {
 		t.Errorf("Plugin(slack).Impl = %q, want %q", got.Impl, BuiltinImpl)
+	}
+}
+
+// TestSlackOAuthAbsentHasNoDefaults: with no client_id configured, neither the
+// client id nor the redirect uri resolve to anything — there is deliberately
+// NO baked-in default client id (no "Docker" client id shipped in core), and
+// the redirect uri default only ever kicks in once a client id IS set.
+func TestSlackOAuthAbsentHasNoDefaults(t *testing.T) {
+	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "nope.toml"))
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Slack.ClientID != "" {
+		t.Errorf("Slack.ClientID = %q, want empty (no baked-in default)", c.Slack.ClientID)
+	}
+	if c.Slack.RedirectURI != "" {
+		t.Errorf("Slack.RedirectURI = %q, want empty when no client id is set", c.Slack.RedirectURI)
+	}
+	if c.Slack.OAuthVaultID != "" || c.Slack.OAuthDocumentID != "" {
+		t.Errorf("Slack oauth vault/document = %q/%q, want empty", c.Slack.OAuthVaultID, c.Slack.OAuthDocumentID)
+	}
+	if !c.Slack.OAuthGrantExpiresAt.IsZero() {
+		t.Errorf("Slack.OAuthGrantExpiresAt = %v, want zero", c.Slack.OAuthGrantExpiresAt)
+	}
+}
+
+// TestSlackOAuthRedirectDefaultsOnlyWhenClientIDSet: a configured client_id
+// with no explicit redirect_uri resolves to DefaultSlackOAuthRedirectURI.
+func TestSlackOAuthRedirectDefaultsOnlyWhenClientIDSet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	const toml = "[slack]\nclient_id = \"123.456\"\n"
+	if err := os.WriteFile(path, []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if c.Slack.ClientID != "123.456" {
+		t.Errorf("Slack.ClientID = %q, want 123.456", c.Slack.ClientID)
+	}
+	if c.Slack.RedirectURI != DefaultSlackOAuthRedirectURI {
+		t.Errorf("Slack.RedirectURI = %q, want default %q", c.Slack.RedirectURI, DefaultSlackOAuthRedirectURI)
+	}
+}
+
+// TestSlackOAuthExplicitRedirectPreserved: an explicit redirect_uri in the
+// file is never overridden by the default, even with a client_id set.
+func TestSlackOAuthExplicitRedirectPreserved(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	const toml = "[slack]\nclient_id = \"123.456\"\nredirect_uri = \"https://example.com/cb\"\noauth_vault_id = \"Private\"\noauth_document_id = \"itemid123\"\noauth_grant_expires_at = 2025-06-01T00:00:00Z\n"
+	if err := os.WriteFile(path, []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if c.Slack.RedirectURI != "https://example.com/cb" {
+		t.Errorf("Slack.RedirectURI = %q, want the explicit value", c.Slack.RedirectURI)
+	}
+	if c.Slack.OAuthVaultID != "Private" || c.Slack.OAuthDocumentID != "itemid123" {
+		t.Errorf("Slack oauth vault/document = %q/%q", c.Slack.OAuthVaultID, c.Slack.OAuthDocumentID)
+	}
+	want := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
+	if !c.Slack.OAuthGrantExpiresAt.Equal(want) {
+		t.Errorf("Slack.OAuthGrantExpiresAt = %v, want %v", c.Slack.OAuthGrantExpiresAt, want)
+	}
+}
+
+// TestSlackOAuthSetters exercises the mutators the launcher/runtime call,
+// including the trim-on-set behavior shared with SetGogAccount et al.
+func TestSlackOAuthSetters(t *testing.T) {
+	c := &Config{}
+	c.SetSlackClientID("  abc.def  ")
+	c.SetSlackRedirectURI("  https://example.com/cb  ")
+	c.SetSlackOAuthVaultID("  Private  ")
+	c.SetSlackOAuthDocumentID("  itemid123  ")
+	if c.Slack.ClientID != "abc.def" {
+		t.Errorf("ClientID = %q, want trimmed abc.def", c.Slack.ClientID)
+	}
+	if c.Slack.RedirectURI != "https://example.com/cb" {
+		t.Errorf("RedirectURI = %q, want trimmed", c.Slack.RedirectURI)
+	}
+	if c.Slack.OAuthVaultID != "Private" {
+		t.Errorf("OAuthVaultID = %q, want trimmed Private", c.Slack.OAuthVaultID)
+	}
+	if c.Slack.OAuthDocumentID != "itemid123" {
+		t.Errorf("OAuthDocumentID = %q, want trimmed itemid123", c.Slack.OAuthDocumentID)
+	}
+
+	stamp := time.Date(2025, 7, 1, 12, 0, 0, 0, time.UTC)
+	c.SetSlackOAuthGrantExpiresAt(stamp)
+	if !c.Slack.OAuthGrantExpiresAt.Equal(stamp) {
+		t.Errorf("OAuthGrantExpiresAt = %v, want %v", c.Slack.OAuthGrantExpiresAt, stamp)
+	}
+	c.SetSlackOAuthGrantExpiresAt(time.Time{})
+	if !c.Slack.OAuthGrantExpiresAt.IsZero() {
+		t.Errorf("OAuthGrantExpiresAt after clear = %v, want zero", c.Slack.OAuthGrantExpiresAt)
+	}
+
+	// Clearing ClientID also clears whatever RedirectURI a prior default
+	// resolution had set, so a subsequent Load never resurrects a stale one.
+	c.SetSlackClientID("")
+	if c.Slack.ClientID != "" {
+		t.Errorf("ClientID after clear = %q, want empty", c.Slack.ClientID)
 	}
 }
 
