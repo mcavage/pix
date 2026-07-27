@@ -805,6 +805,20 @@ func (c *Config) SetSlackOAuthDocumentID(id string) {
 // advisory). A zero time clears it.
 func (c *Config) SetSlackOAuthGrantExpiresAt(t time.Time) { c.Slack.OAuthGrantExpiresAt = t }
 
+// ClearSlackOAuthManaged clears exactly the fields a rotating OAuth grant
+// owns (the 1Password vault/document locators and the cached grant expiry)
+// while RETAINING ClientID and RedirectURI. `pix slack disable`'s OAuth-mode
+// path calls this after the grant has been revoked at Slack and its
+// 1Password document deleted, so config never claims a document that no
+// longer exists — but the public app wiring stays put, making a later `pix
+// slack setup` re-authorization a one-step operation rather than asking for
+// the client id and redirect uri all over again.
+func (c *Config) ClearSlackOAuthManaged() {
+	c.Slack.OAuthVaultID = ""
+	c.Slack.OAuthDocumentID = ""
+	c.Slack.OAuthGrantExpiresAt = time.Time{}
+}
+
 // AddMCP adds name to the MCP set if absent, returning true when it changed.
 func (c *Config) AddMCP(name string) bool { return addUnique(&c.MCP, name) }
 

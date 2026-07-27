@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"pix/host/config"
 )
@@ -430,8 +431,12 @@ func TestSlackStatusIdentityPinMismatch(t *testing.T) {
 			return slackIdentity{team: "Acme", teamID: "T_NEW", user: "jane", userID: "U_NEW"}, nil
 		},
 	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
 	var out bytes.Buffer
-	exit := slackStatus(f.env(), &out)
+	exit := slackStatus(cfg, f.env(), &out, time.Now())
 	if exit != 1 {
 		t.Errorf("exit = %d, want 1 (a verified mismatch)", exit)
 	}
@@ -453,11 +458,15 @@ func TestSlackStatusIdentityPinMatch(t *testing.T) {
 			return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
 		},
 	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
 	var out bytes.Buffer
 	// registration is still not-registered in this fixture (no `sbx mcp get`
 	// stub wired), so the OVERALL exit still reflects that separate gap; this
 	// test only asserts the identity pin line itself reads as matched.
-	slackStatus(f.env(), &out)
+	slackStatus(cfg, f.env(), &out, time.Now())
 	if !strings.Contains(out.String(), "matches the identity pinned at setup") {
 		t.Errorf("status must report a matching pin as matched, got:\n%s", out.String())
 	}
@@ -477,8 +486,12 @@ func TestSlackStatusRejectsForeignRegistration(t *testing.T) {
 		}
 		return "", nil
 	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
 	var out bytes.Buffer
-	if exit := slackStatus(e, &out); exit != 1 {
+	if exit := slackStatus(cfg, e, &out, time.Now()); exit != 1 {
 		t.Errorf("foreign registration exit = %d, want 1", exit)
 	}
 	if !strings.Contains(out.String(), "not the canonical Pix host command") {
@@ -489,8 +502,12 @@ func TestSlackStatusRejectsForeignRegistration(t *testing.T) {
 func TestSlackStatusRegisteredVsAttachmentWording(t *testing.T) {
 	slackTestCfg(t)
 	f := &slackTestEnv{sbxPresent: true}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
 	var out bytes.Buffer
-	slackStatus(f.env(), &out)
+	slackStatus(cfg, f.env(), &out, time.Now())
 	text := out.String()
 	if !strings.Contains(text, "registration") {
 		t.Errorf("status must have a distinct 'registration' line, got:\n%s", text)

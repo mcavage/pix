@@ -226,3 +226,54 @@ func TestOPStoreErrorsDoNotLeakSecrets(t *testing.T) {
 type opFakeErr struct{ msg string }
 
 func (e *opFakeErr) Error() string { return e.msg }
+
+// TestOPStoreDeleteRequiresExistingItem proves Delete refuses cleanly when
+// the store has no item yet, instead of running a doomed `op document
+// delete` with an empty identifier.
+func TestOPStoreDeleteRequiresExistingItem(t *testing.T) {
+	r := &fakeRunner{}
+	s := NewOPStore(r, "MyVault", "pix-slack-oauth", "")
+	if err := s.Delete(context.Background()); err == nil {
+		t.Fatal("Delete succeeded with no item configured; want a refusal")
+	}
+	if len(r.calls) != 0 {
+		t.Errorf("Delete invoked the runner with no item; want zero calls, got %d", len(r.calls))
+	}
+}
+
+// TestOPStoreDeleteInvokesOpDocumentDeleteArchive proves Delete shells out
+// to exactly `op document delete ITEM --vault VAULT --archive` with no
+// stdin — the item and vault are non-secret identifiers, so this call never
+// needs to carry anything on stdin, and it must never carry a credential on
+// argv either (there is none to carry, but the shape is asserted anyway).
+func TestOPStoreDeleteInvokesOpDocumentDeleteArchive(t *testing.T) {
+	r := &fakeRunner{outputs: [][]byte{nil}}
+	s := NewOPStore(r, "MyVault", "pix-slack-oauth", "item123")
+	if err := s.Delete(context.Background()); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if len(r.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(r.calls))
+	}
+	call := r.calls[0]
+	if call.name != "op" {
+		t.Errorf("name = %q, want op", call.name)
+	}
+	wantArgs := []string{"document", "delete", "item123", "--vault", "MyVault", "--archive"}
+	if strings.Join(call.args, " ") != strings.Join(wantArgs, " ") {
+		t.Errorf("args = %v, want %v", call.args, wantArgs)
+	}
+	if len(call.stdin) != 0 {
+		t.Errorf("Delete sent stdin %q; want none", call.stdin)
+	}
+}
+
+// TestOPStoreDeletePropagatesRunnerError proves a runner failure on delete
+// propagates rather than being swallowed as a false success.
+func TestOPStoreDeletePropagatesRunnerError(t *testing.T) {
+	r := &fakeRunner{errs: []error{&opFakeErr{"op: some diagnostic"}}}
+	s := NewOPStore(r, "MyVault", "pix-slack-oauth", "item123")
+	if err := s.Delete(context.Background()); err == nil {
+		t.Fatal("Delete succeeded despite a runner error; want it to propagate")
+	}
+}

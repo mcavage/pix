@@ -146,3 +146,31 @@ func (s *OPStore) Write(ctx context.Context, b Blob) error {
 	s.mu.Unlock()
 	return nil
 }
+
+// Delete archives (soft-deletes) the store's 1Password document via `op
+// document delete ITEM --vault VAULT --archive`. This is what `pix slack
+// disable`'s OAuth-mode path calls AFTER Slack itself has confirmed the
+// credential is revoked (auth.revoke), so the document holding a now-dead
+// token doesn't linger in 1Password either. Both arguments (item, vault) are
+// non-secret identifiers, so this call needs no stdin and never puts a
+// credential on argv. It refuses cleanly when no item is known yet (nothing
+// has ever been written, so there is nothing to delete) rather than running
+// a doomed command with an empty identifier.
+func (s *OPStore) Delete(ctx context.Context) error {
+	if s.Runner == nil {
+		return errors.New("slackoauth: OPStore.Runner is required")
+	}
+	if s.Vault == "" {
+		return errors.New("slackoauth: OPStore.Vault is required")
+	}
+	s.mu.Lock()
+	item := s.item
+	s.mu.Unlock()
+	if item == "" {
+		return errOPStoreNoItem
+	}
+	if _, err := s.Runner.Run(ctx, nil, "op", "document", "delete", item, "--vault", s.Vault, "--archive"); err != nil {
+		return fmt.Errorf("slackoauth: op document delete: %w", err)
+	}
+	return nil
+}
