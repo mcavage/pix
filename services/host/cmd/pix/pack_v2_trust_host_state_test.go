@@ -184,7 +184,7 @@ func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	// gate would os.Exit and fail the test binary).
 	out.Reset()
 	runPackUse(localMCPEnv(gwServerName), &out, []string{root})
-	if strings.Contains(out.String(), "runs code on your host") {
+	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("unchanged surface must not re-gate:\n%s", out.String())
 	}
 
@@ -266,7 +266,7 @@ func TestHostLaunch_MutatedProxyScriptRefusesUntilReaccepted(t *testing.T) {
 	// Re-accept: the gate fires again and, once accepted, launch works.
 	out.Reset()
 	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"})
-	if !strings.Contains(out.String(), "runs code on your host") {
+	if !strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("the mutated script must have re-fired the gate:\n%s", out.String())
 	}
 	if _, rerr := refreshHostPackWrappers(&out, cfg, true); rerr != nil {
@@ -294,7 +294,7 @@ func TestPackSwitch_BetweenAcceptedPacksNoReprompt(t *testing.T) {
 	runPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"})
 	out.Reset()
 	runPackUse(fakeGitEnv(nil), &out, []string{rootA}) // no --yes, non-TTY
-	if strings.Contains(out.String(), "runs code on your host") {
+	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("switching back to an accepted pack must not re-prompt:\n%s", out.String())
 	}
 	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "a-tool")); err != nil {

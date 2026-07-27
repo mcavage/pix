@@ -237,6 +237,30 @@ func loadPack(root string) (*packInfo, error) {
 // deliberately NOT root-scoped: a shared=false reference pointing OUTSIDE the
 // pack (e.g. ~/notes/okf) is the entire point of a private reference (F6).
 func validatePackFacets(root string, m *packManifest) error {
+	seenMCP := map[string]bool{}
+	for _, ig := range m.Integrations {
+		name := strings.TrimSpace(ig.MCP)
+		if name == "" {
+			continue
+		}
+		if seenMCP[name] {
+			return fmt.Errorf("pack %s: duplicate [[integrations]] mcp %q; each server name must be declared exactly once", root, name)
+		}
+		seenMCP[name] = true
+		kinds := 0
+		for _, value := range []string{ig.Manifest, ig.Image, ig.URL} {
+			if strings.TrimSpace(value) != "" {
+				kinds++
+			}
+		}
+		if kinds > 1 {
+			return fmt.Errorf("pack %s: integration %q sets more than one of manifest, image, and url; choose exactly one", root, name)
+		}
+		if (strings.TrimSpace(ig.Manifest) != "" || strings.TrimSpace(ig.URL) != "") &&
+			(strings.TrimSpace(ig.Env) != "" || len(ig.EnvKeys) > 0) {
+			return fmt.Errorf("pack %s: integration %q cannot use env/env_keys with manifest or url; those registration modes do not forward pack environment variables", root, name)
+		}
+	}
 	for _, p := range m.Proxies {
 		if !safeArtifactName(p.Name) {
 			return fmt.Errorf("pack %s: [[proxy]] name %q is invalid (letters, digits, -, _, . only; no path separators)", root, p.Name)
