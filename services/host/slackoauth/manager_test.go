@@ -237,3 +237,60 @@ func TestConcurrentTokenCallsRefreshExactlyOnce(t *testing.T) {
 		t.Errorf("refresh calls = %d, want exactly 1", got)
 	}
 }
+
+// TestTokenServesFromInProcessCacheWithoutStoreRead proves that once Token
+// has observed a fresh blob, a subsequent call within the freshness window
+// is served entirely from the in-process cache — no additional Store.Read at
+// all, not merely a cheap one.
+func TestTokenServesFromInProcessCacheWithoutStoreRead(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	store := newMemStore(freshBlob(now, 20*time.Minute))
+	refresher := &countingRefresher{fn: func(context.Context, string) (Blob, error) {
+		t.Fatal("Refresh must not be called when the cached token is fresh")
+		return Blob{}, nil
+	}}
+	m := &Manager{Store: store, Client: refresher, Locker: &mutexLocker{}, Clock: &fakeClock{now: now}}
+
+	for i := 0; i < 5; i++ {
+		tok, err := m.Token(context.Background())
+		if err != nil {
+			t.Fatalf("call %d: Token: %v", i, err)
+		}
+		if tok != store.blob.AccessToken {
+			t.Errorf("call %d: token = %q, want the cached access token", i, tok)
+		}
+	}
+	if got := atomic.LoadInt32(&store.reads); got != 1 {
+		t.Errorf("store reads = %d, want exactly 1 (every call after the first must be served from the in-process cache)", got)
+	}
+}
+
+// TestInvalidateClearsInProcessCache proves Invalidate forces the next Token
+// call back through Store.Read even though the cached blob still looks
+// fresh — the escape hatch a caller uses after direct evidence (e.g. the
+// Slack API itself rejecting the token) that the cache is wrong.
+func TestInvalidateClearsInProcessCache(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	store := newMemStore(freshBlob(now, 20*time.Minute))
+	refresher := &countingRefresher{fn: func(context.Context, string) (Blob, error) {
+		t.Fatal("Refresh must not be called; the store blob is still fresh after Invalidate")
+		return Blob{}, nil
+	}}
+	m := &Manager{Store: store, Client: refresher, Locker: &mutexLocker{}, Clock: &fakeClock{now: now}}
+
+	if _, err := m.Token(context.Background()); err != nil {
+		t.Fatalf("first Token: %v", err)
+	}
+	if got := atomic.LoadInt32(&store.reads); got != 1 {
+		t.Fatalf("store reads after first call = %d, want 1", got)
+	}
+
+	m.Invalidate()
+
+	if _, err := m.Token(context.Background()); err != nil {
+		t.Fatalf("second Token (post-invalidate): %v", err)
+	}
+	if got := atomic.LoadInt32(&store.reads); got != 2 {
+		t.Errorf("store reads after Invalidate + second call = %d, want 2 (cache must have been dropped)", got)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -46,6 +47,17 @@ var ErrGrantExpired = errors.New("slackoauth: refresh grant has expired; a full 
 // It NEVER returns a token that was not durably written first — if the write
 // fails, Token returns an error and an empty string, never the token that
 // only exists in memory.
+// Manager caches the last-known-good Blob IN PROCESS (protected by mu) so a
+// hot path (many tool calls in a row, all within the freshness window) never
+// touches Store.Read at all — not just "cheaply", but not at ALL, since a
+// 1Password read is a real subprocess exec (OPStore -> `op document get`)
+// and this is called on every Slack API call. The cache is populated any
+// time Token observes a fresh blob (from the initial read, a reread under
+// the lock, or a fresh refresh), and Invalidate drops it so the very next
+// Token call is forced back through Store.Read (and, if still stale, the
+// lock+reread+refresh path) — used after the caller sees a token_expired/
+// invalid_auth response that proves the cached token is no longer good
+// despite looking unexpired locally.
 type Manager struct {
 	Store  Store
 	Client RefreshClient
@@ -55,6 +67,45 @@ type Manager struct {
 	// FreshWindow overrides the default 10-minute freshness window. Zero
 	// means the default.
 	FreshWindow time.Duration
+
+	mu         sync.Mutex
+	cached     Blob
+	haveCached bool
+}
+
+// cachedFreshToken returns the in-process cached token when it is still
+// fresh, without ever touching Store. The second return is false when there
+// is no cache yet or the cached blob has fallen inside the freshness window.
+func (m *Manager) cachedFreshToken() (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.haveCached || !m.fresh(m.cached) {
+		return "", false
+	}
+	return m.cached.AccessToken, true
+}
+
+// setCached records b as the in-process cache. Called any time Token
+// observes a blob it is about to hand back (fresh from a read, from a
+// reread, or freshly refreshed).
+func (m *Manager) setCached(b Blob) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cached = b
+	m.haveCached = true
+}
+
+// Invalidate drops the in-process cache, forcing the next Token call back
+// through Store.Read (and the lock+reread+refresh path if that read is
+// still stale). It does not touch Store or Client — it only forgets what
+// this Manager currently believes is true, for a caller that has direct
+// evidence the cached token no longer works (e.g. the Slack API itself
+// rejected it as expired) even though it looks unexpired locally.
+func (m *Manager) Invalidate() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.haveCached = false
+	m.cached = Blob{}
 }
 
 func (m *Manager) freshWindow() time.Duration {
@@ -80,14 +131,24 @@ func (m *Manager) fresh(b Blob) bool {
 	return m.clock().Now().Add(m.freshWindow()).Before(b.AccessExpiresAt)
 }
 
-// Token returns a currently-valid Slack access token, refreshing it (under
-// the lock, exactly once per stale window) when necessary.
+// Token returns a currently-valid Slack access token. The fast path serves
+// the in-process cache with NO Store.Read at all while it has more than
+// FreshWindow left; only a missing or stale cache falls through to
+// Store.Read and, if that is also stale, the lock+reread+refresh path
+// (serializing at most one refresh per staleness window across every
+// caller, in this process and — with the production FileLock — every other
+// process sharing the same credential).
 func (m *Manager) Token(ctx context.Context) (string, error) {
+	if tok, ok := m.cachedFreshToken(); ok {
+		return tok, nil
+	}
+
 	blob, err := m.Store.Read(ctx)
 	if err != nil {
 		return "", fmt.Errorf("slackoauth: read credential store: %w", err)
 	}
 	if m.fresh(blob) {
+		m.setCached(blob)
 		return blob.AccessToken, nil
 	}
 
@@ -105,6 +166,7 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("slackoauth: reread credential store: %w", err)
 	}
 	if m.fresh(blob) {
+		m.setCached(blob)
 		return blob.AccessToken, nil
 	}
 
@@ -131,5 +193,6 @@ func (m *Manager) Token(ctx context.Context) (string, error) {
 	if err := m.Store.Write(ctx, refreshed); err != nil {
 		return "", fmt.Errorf("slackoauth: write refreshed credentials: %w", err)
 	}
+	m.setCached(refreshed)
 	return refreshed.AccessToken, nil
 }
