@@ -772,6 +772,42 @@ REQUESTING READ-ONLY OAUTH SCOPES at grant time (fails if the installed dependen
 cannot advertise \-\-readonly for the selected auth route), verifies the exact
 hardened headless command the gateway will spawn, registers it with the sbx
 gateway, and only then saves config.  Idempotent; requires sbx.
+.SS slack
+Slack via the host-run slack MCP server (a LOCAL stdio server the sbx gateway
+spawns on the host).  SLACK_TOKEN is always a single named person's
+.B xoxp\-
+user token, never a shared team/bot token
+.RB ( docs/design/slack\-setup.md ).
+.TP
+.BR "pix slack setup" " " \-\-token\-ref " " op://vault/item/field " [" \-\-yes "]"
+Wires up an EXISTING personal token: never accepts or prints a raw token, only
+an
+.B op://
+reference.  Resolves it, requires it start with
+.BR xoxp\- ,
+verifies it LIVE via Slack's
+.BR auth.test ,
+prints the resolved team/user, and (unless
+.BR \-\-yes )
+asks you to confirm before writing SLACK_TOKEN plus the non\-secret
+SLACK_TEAM_ID/SLACK_USER_ID identity pins, registering with the sbx gateway,
+and saving config.  Does NOT perform the OAuth grant that produces the token
+itself \- see
+.BR docs/design/slack\-setup.md .
+Requires sbx.
+.TP
+.B "pix slack status"
+Reports the token ref, the identity it resolves to RIGHT NOW via
+.BR auth.test ,
+whether that still matches the SLACK_TEAM_ID/SLACK_USER_ID pin, and gateway
+registration \- separately from sandbox attachment.
+.TP
+.B "pix slack disable"
+Removes the sbx gateway registration, the
+.B slack
+config entry, and the SLACK_TOKEN/SLACK_TEAM_ID/SLACK_USER_ID refs.  Does NOT
+revoke the token at Slack \- do that yourself; a running gateway\-managed
+process may keep using a token it already resolved.
 .SS pack
 A pack is a git-backed context bundle (skills + knowledge + reference-only
 integrations + config).  See

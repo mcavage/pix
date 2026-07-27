@@ -32,7 +32,7 @@ func wantsHelp(argv []string) bool {
 var knownVerbs = map[string]bool{
 	"help": true, "serve": true, "doctor": true, "setup": true, "status": true,
 	"ls": true, "rm": true,
-	"config": true, "mcp": true, "gworkspace": true, "memory": true, "monitor": true, "knowledge": true,
+	"config": true, "mcp": true, "gworkspace": true, "slack": true, "memory": true, "monitor": true, "knowledge": true,
 	"pack": true, "version": true, "run": true, "secret": true,
 	"reset": true, "uninstall": true, "man": true,
 	"backup": true, "restore": true, "state": true,
@@ -152,6 +152,7 @@ Parallel work
 
 Integrations & credentials
   gworkspace <cmd>    setup | status | disable: Google Workspace access
+  slack <cmd>         setup | status | disable: Slack access (personal token)
   mcp <cmd>           register|ls|load|auth|bundle MCP servers (sbx gateway)
   secret <cmd>        ls|set|rm|check the 1Password op-refs (host MCP creds)
 
@@ -201,6 +202,8 @@ func verbUsage(verb string) (string, bool) {
 		return mcpUsage, true
 	case "gworkspace":
 		return gworkspaceUsage, true
+	case "slack":
+		return slackUsage, true
 	case "pack":
 		return packUsage, true
 	case "memory", "mem":

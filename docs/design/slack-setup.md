@@ -1,9 +1,24 @@
 # Slack credential model, and a safe onboarding path
 
-Status: DESIGN DECISION for the credential model (accepted, no code change).
-`pix slack setup|status|disable` is PROPOSED future work — NOT implemented by
-this doc. Scope: `services/host/slack.go`, `config/op-refs.env.example`,
-`services/host/config/config.go`. Audience: whoever builds the guided CLI next.
+Status: the credential model below is the accepted design, AND
+`pix slack setup|status|disable` (`services/host/cmd/pix/slack.go`) is now
+IMPLEMENTED on top of it — the "Future work" section further down describes
+what actually shipped, not a proposal. Scope: `services/host/slack.go`,
+`services/host/cmd/pix/slack.go`, `config/op-refs.env.example`,
+`services/host/config/config.go`.
+
+**What `pix slack setup` does NOT do, and why that still matters:** it never
+implements the OAuth authorize/exchange dance itself — no fake OAuth. It
+takes an `op://vault/item/field` reference to an `xoxp-` token you (or an
+org-owned exchange service, below) already put in 1Password, verifies it
+LIVE against Slack's `auth.test`, and wires it up. Obtaining that token in
+the first place still needs one of the two paths this doc specifies: your own
+Slack app's OAuth grant, or the org-owned callback/exchange service described
+below. There is no shortcut around registering a Slack app and holding its
+client secret somewhere — that is also true of Slack's own hosted remote MCP
+server, which likewise needs a preregistered OAuth client before anyone can
+authorize against it. `pix slack setup` only removes the NEED to hand that
+client secret to every user; it does not remove the need for the app itself.
 
 ## The problem
 
@@ -191,11 +206,37 @@ No write scopes (`chat:write`, `channels:write`, …) appear anywhere in
 `slack.go` — the server is read-only by construction, the same posture as
 gog's Gmail/Drive read tools.
 
-## Future work: `pix slack setup|status|disable`
+## `pix slack setup|status|disable` (implemented)
 
-Not built by this doc. When it lands, it should follow the shape `pix
-gworkspace setup|status|disable` already established, and the two invariants
-that shape depends on:
+Implemented in `services/host/cmd/pix/slack.go`, following the shape `pix
+gworkspace setup|status|disable` already established:
+
+- **`pix slack setup --token-ref op://vault/item/field [--yes]`** takes an
+  EXISTING token (never a pasted one — a non-`op://` value is rejected
+  outright, without ever echoing it back), resolves it via `op read`,
+  requires the resolved value start with `xoxp-`, and verifies it LIVE via
+  `auth.test` before anything is written. It prints the resolved team/user
+  and asks for confirmation (skipped with `--yes`). Only after that does it
+  write `SLACK_TOKEN` (through the existing `pix secret set` primitive) plus
+  the non-secret `SLACK_TEAM_ID`/`SLACK_USER_ID` identity pins, register
+  `slack` with the sbx gateway (via the existing `registerServers`, which
+  hard-fails if `sbx` is absent rather than silently reporting success), and
+  save config. A registration failure or a save failure after a successful
+  registration leaves things exactly as documented below in "Rollback".
+- **`pix slack status`** reports, from probes: whether `SLACK_TOKEN` is a
+  filled ref, the identity a fresh `auth.test` resolves it to RIGHT NOW,
+  whether that still matches the `SLACK_TEAM_ID`/`SLACK_USER_ID` pin recorded
+  at setup (a mismatch means the token was swapped underneath the pin, which
+  is exactly the silent-drift case this doc opened with), and whether `slack`
+  is registered with the sbx gateway — reported as a separate line from
+  attachment, per the invariant below.
+- **`pix slack disable`** removes the gateway registration, the `slack` mcp
+  config entry, and the `SLACK_TOKEN`/`SLACK_TEAM_ID`/`SLACK_USER_ID` refs. It
+  says explicitly that this does NOT revoke the token at Slack, and that a
+  gateway-managed process that already resolved the old token at spawn may
+  keep using it until restarted — see "Rollback and revocation" above.
+
+The two invariants this shape depends on:
 
 - **Registration is not the same as attachment.** `pix slack setup` running
   the OAuth dance and writing `SLACK_TOKEN` to `op-refs.env` only makes the
@@ -216,15 +257,22 @@ that shape depends on:
   rollback step 2 above); it does not by itself recreate running sandboxes,
   and should say so.
 
-## What this doc deliberately does not do
+## What `pix slack setup|status|disable` deliberately does not do
 
-- It does not implement `pix slack setup|status|disable` — that is a
-  separate, future change.
-- It does not change `services/host/slack.go`'s behavior. The
-  `SLACK_USER_TOKEN`/`SLACK_BOT_TOKEN` env fallbacks stay as-is; this doc
-  only tightens what's written and said about `SLACK_TOKEN` itself.
+- It does not implement the OAuth authorize/exchange dance. It accepts an
+  already-issued token (as an `op://` ref) and verifies it live; it never
+  talks to Slack's authorize endpoint, never holds a `client_id`/
+  `client_secret`, and never mints a token itself. No fake OAuth.
+- It does not add write tools or broaden `services/host/slack.go`'s API
+  surface. The runtime now requires the resolved credential to be an `xoxp-`
+  personal token and, when `SLACK_TEAM_ID`/`SLACK_USER_ID` pins are present,
+  calls `auth.test` once at process startup and refuses data-bearing calls on
+  a mismatch. The legacy `SLACK_USER_TOKEN`/`SLACK_BOT_TOKEN` env lookup
+  fallbacks remain, but a bot token is rejected by the personal-token check.
 - It does not stand up the org-owned callback/exchange service. That's
   infrastructure a specific org provisions; this doc specifies the contract
   it must satisfy (holds the client secret, validates `state`, hands back a
-  personal token) so `pix slack setup` has something well-defined to talk
-  to once it exists.
+  personal token) so `pix slack setup --token-ref` has a token to point at
+  once it exists. The same is true of Slack's own hosted remote MCP server:
+  it also needs a preregistered OAuth client before anyone can authorize
+  against it — there is no path that skips app registration entirely.

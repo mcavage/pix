@@ -70,6 +70,13 @@ type shellEnv struct {
 	// listening port but no identity prober renders unverifiable, NEVER a
 	// silent real network call and never a false ready.
 	identityProbe identityProber
+	// slackAuthTest performs a live Slack `auth.test` call with the given
+	// bearer token and returns the resolved identity (team/user). `pix slack
+	// setup`/`status` use this EXCLUSIVELY for live verification — the token
+	// itself is never logged, persisted, or echoed by any caller. Nil in tests
+	// that don't exercise Slack setup/status; defaultShellEnv wires the real
+	// HTTPS call (slack.go's liveSlackAuthTest).
+	slackAuthTest func(token string) (slackIdentity, error)
 }
 
 // probeTimeout bounds every registered-command probe so doctor can never wedge
@@ -193,6 +200,7 @@ func defaultShellEnv() shellEnv {
 			return cmd.Run()
 		},
 		identityProbe: rpcIdentityProbe,
+		slackAuthTest: liveSlackAuthTest,
 	}
 }
 

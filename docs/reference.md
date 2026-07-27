@@ -24,6 +24,7 @@ CLI reference of its own.
 | `pack` | the portable capability context: new/add/ls/show/use/rm | §5, `docs/design/packs-v2.md` |
 | `mcp` | register/list/load MCP servers through the sbx gateway | §8, `docs/design/slack-setup.md` (Slack credential model) |
 | `gworkspace` | Google Workspace (Gmail/Drive/Docs/Sheets/Calendar) | `docs/gworkspace.md` |
+| `slack` | Slack (search/read messages, channels, users) via a personal `xoxp-` token | `docs/design/slack-setup.md` |
 | `secret` | manage the 1Password `op://` refs (never the values) | §8 |
 | `config` | `show`/`path`/`get`/`set`/`unset` the single runtime config | §1 |
 | `host` | the unsandboxed escape hatch, off by default | §7, `docs/design/host-mode.md` |
@@ -341,9 +342,16 @@ in as MCP servers, run through the sbx gateway.
 **Slack's `SLACK_TOKEN` is always a single named person's `xoxp-` user
 token** — never a shared "employee"/team/bot token, and never handed to a
 second person to reuse. Every call the `slack` server makes runs AS that
-token's owner; `pix slack` (`setup`/`status`/`disable`) is proposed future
-work for a per-user OAuth grant, so a second user never needs the app's
-client secret. See `docs/design/slack-setup.md`.
+token's owner. `pix slack setup|status|disable` wires up an EXISTING
+personal token — it never performs the OAuth grant itself (no fake OAuth),
+and never accepts or prints a raw token: resolve an `op://` ref, verify it
+LIVE via `auth.test`, pin the resolved identity (`SLACK_TEAM_ID`/
+`SLACK_USER_ID`) so a later silent token swap is detectable, register with
+the sbx gateway, save config. Obtaining the token in the first place — the
+OAuth grant — still needs either your own Slack app, or an org-owned
+callback/exchange service so a second person never needs the app's client
+secret (Slack's own hosted remote MCP server needs a preregistered OAuth
+client the same way). See `docs/design/slack-setup.md`.
 
 ```
 pix config set mcp <name>     # add a local stdio server to the launch set
