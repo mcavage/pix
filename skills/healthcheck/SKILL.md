@@ -83,14 +83,15 @@ present-but-erroring on its cheapest read-only probe IS a failure. Wrapper CLIs
 often reject `--help`/`--version`, so probe a real read-only subcommand, not the
 flag.
 
-Google Workspace is NOT a CLI anymore, it's the read-only `gog` MCP server the
-sbx gateway spawns (there is no Workspace binary to probe). Confirm it two ways:
-`sbx mcp ls` lists `gog` as registered (skip if `sbx` is absent, inside the
-sandbox it is), and the gateway exposes its tools in A3 (group the gateway tool
-list for a `gog_*`/`gmail_*` prefix and call one cheap read-only tool, e.g. a
-`gmail_search`/`drive_search` with a tiny limit). Registered-but-0-tools IS a
-failure, it usually means the headless keyring/op-refs setup is off (run
-`pix doctor` on the host, which probes the exact gateway spawn).
+Google Workspace uses the read-only `google-workspace` MCP server, whose
+external `gog` CLI implementation the sbx gateway spawns. Confirm it two ways:
+`sbx mcp ls` lists `google-workspace` as registered (skip this host-only check
+when `sbx` is absent), and the gateway exposes Gmail/Drive tools in A3. Call one
+cheap read-only tool, such as `gmail_search` or `drive_search`, with a tiny
+limit. Registered-but-0-tools is a failure; it usually means attachment or the
+headless OAuth/keyring setup is wrong. Run `pix doctor` on the host, then use
+`pix mcp load google-workspace [DIR]` or `pix run --replace` when registration
+is healthy but the current sandbox lacks the tools.
 
 ### A5. Agent roster
 ```bash

@@ -19,6 +19,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -84,6 +85,37 @@ func TestGworkspaceNaming_NoRetiredPhrasesInProductionSource(t *testing.T) {
 		})
 		for _, cg := range node.Comments {
 			check(cg.Text(), "comment")
+		}
+	}
+}
+
+// TestGworkspaceNaming_NoRetiredServerNameInAgentDocs covers the runtime files
+// outside this Go package that teach the agent how to diagnose and repair the
+// integration. These are easy to miss in a CLI-only rename and directly affect
+// the commands the agent gives users.
+func TestGworkspaceNaming_NoRetiredServerNameInAgentDocs(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "..")
+	files := []string{
+		"capabilities.json",
+		filepath.Join("skills", "capability-routing", "SKILL.md"),
+		filepath.Join("skills", "gworkspace", "SKILL.md"),
+		filepath.Join("skills", "healthcheck", "SKILL.md"),
+	}
+	for _, rel := range files {
+		b, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		text := string(b)
+		for _, phrase := range []string{
+			`"server": "gog"`,
+			"pix mcp load gog",
+			"lists `gog` as registered",
+			"`pix-host gog`",
+		} {
+			if strings.Contains(text, phrase) {
+				t.Errorf("%s contains retired Google Workspace server guidance %q", rel, phrase)
+			}
 		}
 	}
 }
