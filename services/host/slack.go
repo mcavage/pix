@@ -1,12 +1,21 @@
 // Slack MCP server (host side, stdio). Port of the former mcp/slack/server.ts.
 //
-// A stdio MCP server registered with sbx (`sbx mcp add slack --command
-// pix-host --args slack --env SLACK_TOKEN=…`); the Docker MCP gateway runs it
-// on the host and exposes it to the agent, so the Slack user token never enters
-// the VM. Talks to the Slack Web API directly. No local cache.
+// A stdio MCP server registered with sbx as `pix-host mcp slack` (there is no
+// `sbx mcp add --env`; SLACK_TOKEN reaches this process because the launcher
+// wraps the registered command in `op run --env-file=<op-refs.env> --`, which
+// resolves SLACK_TOKEN from 1Password and injects it as an env var at gateway
+// spawn time — see mcpRegistrar.execArgv in cmd/pix/mcp.go). The Docker MCP
+// gateway runs the wrapped command on the host and exposes it to the agent,
+// so the Slack user token never enters the VM. Talks to the Slack Web API
+// directly. No local cache.
 //
-// Env: SLACK_TOKEN (user token xoxp-; SLACK_USER_TOKEN/SLACK_BOT_TOKEN fallbacks),
-// SLACK_TEAM_ID (optional).
+// `pix slack setup|status|disable` (cmd/pix/slack.go) is the guided CLI that
+// writes SLACK_TOKEN (plus the SLACK_TEAM_ID/SLACK_USER_ID identity pins) and
+// registers this server; see docs/design/slack-setup.md.
+//
+// Env: SLACK_TOKEN (personal user token xoxp-; legacy SLACK_USER_TOKEN/
+// SLACK_BOT_TOKEN lookup fallbacks are retained, but non-xoxp tokens are
+// rejected), SLACK_TEAM_ID/SLACK_USER_ID (optional identity pins).
 
 package main
 
@@ -30,12 +39,39 @@ func slackToken() (string, error) {
 	return "", errors.New("SLACK_TOKEN environment variable is not set")
 }
 
-// slackCall posts application/x-www-form-urlencoded with the bearer; checks ok.
+// slackCall posts application/x-www-form-urlencoded with the bearer and checks
+// both the API result and the identity pins written by `pix slack setup`.
+// Identity is verified once per host process before any data-bearing method is
+// allowed to run. This turns SLACK_TEAM_ID/SLACK_USER_ID into an enforcement
+// control, not merely a warning shown when a human remembers to run status.
 func slackCall(method string, params map[string]string) (jsonObj, error) {
 	tok, err := slackToken()
 	if err != nil {
 		return nil, err
 	}
+	if !strings.HasPrefix(tok, "xoxp-") {
+		return nil, errors.New("Slack token is not a personal xoxp- user token")
+	}
+	if method != "auth.test" {
+		if err := slackVerifyExpectedIdentity(tok); err != nil {
+			return nil, err
+		}
+	}
+	obj, err := slackCallRaw(method, tok, params)
+	if err != nil {
+		return nil, err
+	}
+	if method == "auth.test" {
+		if err := slackCheckExpectedIdentity(obj); err != nil {
+			return nil, err
+		}
+	}
+	return obj, nil
+}
+
+// slackCallRaw performs one API call without invoking identity verification;
+// slackVerifyExpectedIdentity uses it for auth.test to avoid recursion.
+func slackCallRaw(method, tok string, params map[string]string) (jsonObj, error) {
 	form := url.Values{}
 	if t := strings.TrimSpace(envRaw("SLACK_TEAM_ID")); t != "" {
 		if _, ok := params["team_id"]; !ok {
@@ -66,6 +102,42 @@ func slackCall(method string, params map[string]string) (jsonObj, error) {
 		return nil, errors.New("Slack " + method + " failed: " + e)
 	}
 	return obj, nil
+}
+
+var (
+	slackIdentityOnce sync.Once
+	slackIdentityErr  error
+)
+
+func slackVerifyExpectedIdentity(tok string) error {
+	wantTeam := strings.TrimSpace(envRaw("SLACK_TEAM_ID"))
+	wantUser := strings.TrimSpace(envRaw("SLACK_USER_ID"))
+	if wantTeam == "" && wantUser == "" { // legacy manual wiring has no pin
+		return nil
+	}
+	slackIdentityOnce.Do(func() {
+		obj, err := slackCallRaw("auth.test", tok, nil)
+		if err != nil {
+			slackIdentityErr = err
+			return
+		}
+		slackIdentityErr = slackCheckExpectedIdentity(obj)
+	})
+	return slackIdentityErr
+}
+
+func slackCheckExpectedIdentity(obj jsonObj) error {
+	wantTeam := strings.TrimSpace(envRaw("SLACK_TEAM_ID"))
+	wantUser := strings.TrimSpace(envRaw("SLACK_USER_ID"))
+	gotTeam := getStr(obj, "team_id")
+	gotUser := getStr(obj, "user_id")
+	if wantTeam != "" && gotTeam != wantTeam {
+		return errors.New("Slack identity mismatch: authenticated team does not match SLACK_TEAM_ID; run pix slack status")
+	}
+	if wantUser != "" && gotUser != wantUser {
+		return errors.New("Slack identity mismatch: authenticated user does not match SLACK_USER_ID; run pix slack status")
+	}
+	return nil
 }
 
 // --- user-name cache ---------------------------------------------------------

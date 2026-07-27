@@ -22,6 +22,10 @@ harness, [AGENTS.md](../AGENTS.md). This folder holds the deeper references.
 These document the reasoning behind subsystems. They are reference, not
 tutorials.
 
+- [onboarding-v3.md](design/onboarding-v3.md) — the proposed one-path setup,
+  dependency, OAuth, pack, doctor, and provider-routing design.
+- [slack-setup.md](design/slack-setup.md) — the accepted per-user Slack
+  credential model and proposed guided setup flow.
 - [routing.md](design/routing.md) — the model router: registry, scorecard,
   policy, and how `route compile` bakes `routing.json`.
 - [subagents-extension.md](design/subagents-extension.md) — the `subagent` tool

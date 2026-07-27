@@ -5,11 +5,11 @@ description: Read Gmail, Drive, Docs, Sheets, and Calendar through the `google-w
 # gworkspace
 
 Google Workspace is reached through the **`google-workspace` MCP server**. Its
-external `gog` CLI implementation runs host-side as a stdio process spawned by the sbx gateway (registered via
-`pix mcp register` / `make mcp-register`), exactly like `slack`. It is **not** a
-`pix-host` subcommand — it is a separate binary. Creds never enter the sandbox:
-they live on the host in `GOG_HOME`. Resolve it through `capability-routing` (the
-`gworkspace` capability → `mcp` provider `google-workspace`).
+external `gog` CLI implementation runs host-side as a stdio process spawned by
+the sbx gateway and configured with `pix gworkspace setup`. It is **not** a
+`pix-host` subcommand. Credentials never enter the sandbox; they live on the
+host in `GOG_HOME`. Resolve it through `capability-routing` (the `gworkspace`
+capability → `mcp` provider `google-workspace`).
 
 ## Read tools
 

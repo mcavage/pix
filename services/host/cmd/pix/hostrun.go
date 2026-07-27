@@ -752,7 +752,7 @@ func runHostLaunch(o hostOpts) {
 				// command) without printing the resolved key values into the terminal /
 				// scrollback / CI logs, which `printenv <KEY>` would have done.
 				fmt.Fprintf(os.Stderr, "Reproduce op's own error (without printing your keys):  op run --env-file=%s -- true\n", refs)
-				fmt.Fprintln(os.Stderr, "Common causes: 1Password locked / not signed in; or a bad op:// ref — a field name with a space must be URL-encoded (op://Vault/Item/api%20key). Delete the file to run Ollama-only.")
+				fmt.Fprintln(os.Stderr, "Common causes: 1Password locked / not signed in; or a bad op:// ref — a field name with a space must be a literal space, not URL-encoded (op://Vault/Item/api key). Delete the file to run Ollama-only.")
 			} else {
 				fmt.Fprintf(os.Stderr, "\npix host: pi exited with code %d.\n", code)
 			}

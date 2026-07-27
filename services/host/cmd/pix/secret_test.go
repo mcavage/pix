@@ -411,6 +411,44 @@ func TestSecretSetKeepsLiteralSpacedField(t *testing.T) {
 	}
 }
 
+// Regression: `pix secret set` given a %20-encoded ref (the value the OLD
+// help/man/hostrun guidance told users to type) must normalize it to a
+// literal space in op-refs.env, matching what writeOpRefFileQuietLocked
+// already self-heals on the hostmode.env mirror. Before this fix,
+// runSecretSetLocked wrote the %20 unchanged, so a provider key's op-refs.env
+// entry and its hostmode.env mirror permanently disagreed on the same ref.
+func TestSecretSetNormalizesPercentEncodedSpaceToLiteral(t *testing.T) {
+	files := map[string]string{fakeRefsPath: ""}
+	env := memEnv(files)
+	var out bytes.Buffer
+	runSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://Vault/Item/api%20key")
+
+	opRefs := files[fakeRefsPath]
+	if !strings.Contains(opRefs, "ANTHROPIC_API_KEY=op://Vault/Item/api key") {
+		t.Errorf("op-refs.env = %q, want the %%20 normalized to a literal space", opRefs)
+	}
+	if strings.Contains(opRefs, "api%20key") {
+		t.Errorf("op-refs.env = %q, must NOT keep the percent-encoded space", opRefs)
+	}
+
+	hostMode, err := env.readFile(hostModeRefsPath(env))
+	if err != nil {
+		t.Fatalf("read hostmode.env: %v", err)
+	}
+	if !strings.Contains(hostMode, "ANTHROPIC_API_KEY=op://Vault/Item/api key") {
+		t.Errorf("hostmode.env = %q, want the %%20 normalized to a literal space", hostMode)
+	}
+	if strings.Contains(hostMode, "api%20key") {
+		t.Errorf("hostmode.env = %q, must NOT keep the percent-encoded space", hostMode)
+	}
+
+	// op-refs.env and its hostmode.env mirror must agree on the SAME literal
+	// value — the bug this regression guards was the two files diverging.
+	if !strings.Contains(opRefs, "api key") || !strings.Contains(hostMode, "api key") {
+		t.Errorf("op-refs.env and hostmode.env must both store the literal space: op-refs=%q hostmode=%q", opRefs, hostMode)
+	}
+}
+
 // item 7: `pix secret set` for a provider key mirrors it into
 // hostmode.env too, not just op-refs.env, so a single `secret set` per
 // provider is really enough to wire BOTH the sandbox and host mode.

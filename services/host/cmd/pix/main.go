@@ -89,6 +89,8 @@ func main() {
 		runSetupCmd(args[1:])
 	case "gworkspace":
 		runGworkspaceCmd(args[1:])
+	case "slack":
+		runSlackCmd(args[1:])
 	case "mcp":
 		runMcpCmd(args[1:])
 	case "pack":

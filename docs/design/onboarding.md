@@ -1,6 +1,24 @@
 # Onboarding redesign
 
-Status: PROPOSED (awaiting owner gate before the teardown)
+> **Historical, superseded.** This doc's concrete write-back mechanism (the
+> in-sandbox agent writing `<workspace>/.pix/onboarding.json`, `onboard.go`'s
+> `runOnboardNonInteractive`/`applyOnboardingResult`, and `setup.go` being torn
+> down in favor of it) was never shipped: `pix setup` is still the live host
+> wizard (`services/host/cmd/pix/setup.go`), onboarding conversation lives in
+> `skills/onboarding/SKILL.md` + `hoststate.go`, and there is no
+> `.pix/onboarding.json` file anywhere in the tree. Read this doc ONLY for the
+> data-plane/control-plane split background (still true), NOT for the schema,
+> the file mechanism, or the `Files`/`Fitness functions` sections below, which
+> describe a design that was not built.
+>
+> It also predates the `gog` -> `gworkspace` rename: every `gog_account` /
+> `mcp "gog"` reference below is the OLD naming. The shipped config key is
+> `google_workspace_account`, the shipped MCP server name is `google-workspace`,
+> and the shipped CLI is `pix gworkspace setup|status|disable`
+> (`services/host/cmd/pix/gworkspace.go`).
+
+Status: PROPOSED (awaiting owner gate before the teardown) — the gate never
+happened; see the historical notice above.
 Supersedes: `pix setup` (the 4-step host TTY wizard) and the `onboard` skill.
 
 ## Problem

@@ -99,6 +99,7 @@ func TestEveryDispatchedSubcommandAppearsInItsUsage(t *testing.T) {
 	for verb, subs := range map[string][]string{
 		"config":    {"show", "path", "get", "set", "unset"},
 		"mcp":       {"register", "ls", "load", "auth", "bundle"},
+		"slack":     {"setup", "status", "disable"},
 		"knowledge": {"init", "use", "ls", "query", "sync", "remote"},
 		"secret":    {"ls", "set", "rm", "check", "sync"},
 	} {

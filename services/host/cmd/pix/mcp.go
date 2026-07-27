@@ -104,11 +104,11 @@ func runMcpCmd(argv []string) {
 	case "register":
 		runMcpRegister(argv[1:])
 	case "ls":
-		if len(argv) > 1 {
-			fmt.Fprintf(os.Stderr, "pix mcp ls: unexpected argument %q\n\n%s", argv[1], mcpUsage)
-			os.Exit(2)
-		}
-		runMcpLs()
+		// Any extra args are forwarded verbatim to `sbx mcp ls` (e.g. a future
+		// machine-readable format flag) rather than rejected — the plain-text
+		// attachment note is skipped whenever args are present, so a script
+		// parsing structured output never has to filter out prose.
+		runMcpLs(argv[1:]...)
 	case "load":
 		runMcpLoad(argv[1:])
 	case "auth":
@@ -313,9 +313,9 @@ func execSbxMcpLoadAndRecord(cmd *exec.Cmd, sandbox, name string) error {
 }
 
 // runMcpLs shells `sbx mcp ls`, degrading cleanly when sbx is absent (e.g.
-// inside the sandbox).
-func runMcpLs() {
-	exitMcpVerb("mcp ls", runMcpLsCore(exec.LookPath, os.Stdout, os.Stdin, os.Stderr))
+// inside the sandbox). extraArgs (if any) forward verbatim to `sbx mcp ls`.
+func runMcpLs(extraArgs ...string) {
+	exitMcpVerb("mcp ls", runMcpLsCore(exec.LookPath, os.Stdout, os.Stdin, os.Stderr, extraArgs...))
 }
 
 // runMcpLsCore is runMcpLs's testable core (see runMcpBundleCore). `mcp ls` is
@@ -323,14 +323,40 @@ func runMcpLs() {
 // evidence (the gateway's registered-server list) is unavailable rather than
 // exiting 0 with nothing printed — a caller cannot tell "zero servers" from
 // "couldn't ask" otherwise.
-func runMcpLsCore(lookPath func(string) (string, error), out io.Writer, in io.Reader, errW io.Writer) error {
+//
+// `sbx mcp ls` output is HOST registration only — it says nothing about
+// whether a registered server is actually attached to the sandbox you are
+// running right now (registration and attachment are different moments: a
+// server registered after a sandbox was created never retroactively appears
+// in it). mcpLsAttachmentNote is appended after a plain-text listing to make
+// that distinction explicit and name the next command; it is skipped for a
+// machine-readable format (any `pix mcp ls` args, e.g. a future `-o json`)
+// so a script parsing the output never has to filter out prose.
+func runMcpLsCore(lookPath func(string) (string, error), out io.Writer, in io.Reader, errW io.Writer, extraArgs ...string) error {
 	if _, err := lookPath("sbx"); err != nil {
-		return mcpWouldRun(out, "mcp", "ls")
+		return mcpWouldRun(out, append([]string{"mcp", "ls"}, extraArgs...)...)
 	}
-	cmd := exec.Command("sbx", "mcp", "ls")
+	cmd := exec.Command("sbx", append([]string{"mcp", "ls"}, extraArgs...)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errW
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	if len(extraArgs) == 0 {
+		fmt.Fprint(out, mcpLsAttachmentNote)
+	}
+	return nil
 }
+
+// mcpLsAttachmentNote is the plain-text disclaimer `pix mcp ls` prints after a
+// successful listing: the gateway's registration table, not a report of what
+// the CURRENT sandbox has loaded. `pix status`/`pix doctor` are the surfaces
+// that actually probe a live sandbox; `pix mcp load` attaches a registered
+// server to one that's already running, and `pix run --replace` recreates it
+// with everything in the resolved mcp list preloaded.
+const mcpLsAttachmentNote = "\nNote: this is the gateway's HOST registration list, not what's attached to\n" +
+	"your current sandbox. See `pix status` / `pix doctor` for what's live,\n" +
+	"`pix mcp load <name>` to attach a registered server to a running sandbox,\n" +
+	"or `pix run --replace` to recreate it with everything preloaded.\n"
 
 // runMcpRegister is the CLI entry point: it registers the requested local stdio
 // servers (or, with no args, the local ones in cfg.MCP) with the sbx gateway,
@@ -496,11 +522,11 @@ func gogRegisteredArgv(gogBin, opBin, opRefs, account string) []string {
 // gogBareRegistrationNote is the ONE shared message printed whenever gog is
 // registered without an op-refs.env wrapper (1Password not configured): gog
 // authenticates via its own OAuth flow, never op-refs, so this points at the
-// guided `pix gog setup` recovery path — never a raw legacy direct-login
+// guided `pix gworkspace setup` recovery path — never a raw legacy direct-login
 // recipe.
 func gogBareRegistrationNote(out io.Writer) {
 	fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via its own OAuth flow — "+
-		"if it ever needs re-authorizing, run: pix gog setup")
+		"if it ever needs re-authorizing, run: pix gworkspace setup")
 }
 
 // buildGogRegistrar resolves op + op-refs EXACTLY ONCE and pairs them with the
@@ -685,7 +711,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			// guidance is the GUIDED command only — gog is a LOCAL stdio MCP, so
 			// neither native `sbx mcp auth` (remote catalog OAuth) nor a raw legacy
 			// direct-login recipe is ever printed.
-			fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via OAuth — wire it: pix gog setup")
+			fmt.Fprintln(out, "note: registered gog directly (bare); gog authenticates via OAuth — wire it: pix gworkspace setup")
 		}
 		// container-only: nothing to seed — container creds are Docker-side, not op-refs.
 	}
@@ -693,12 +719,12 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	if wantGog {
 		gogPath, err := lookPath("gog")
 		if err != nil {
-			return fmt.Errorf("gog is requested but gog not found — brew install gog")
+			return fmt.Errorf("gog is requested but gog not found — " + gwInstallCmd)
 		}
 		account := strings.TrimSpace(cfg.GogAccount)
 		if account == "" {
 			return fmt.Errorf("gog is requested but no account is set — " +
-				"run: pix config set gog_account <you@example.com>")
+				"run: pix config set google_workspace_account <you@example.com>")
 		}
 		reg.gog = gogPath
 		reg.account = account

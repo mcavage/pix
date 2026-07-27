@@ -841,13 +841,19 @@ vars — the secret never touches disk or the sandbox. A server with no creds
 
 // NonSecretOpRefsKeys is the documented allowlist of NON-secret env vars that may
 // appear in op-refs.env with a literal value; everything else must be an op://
-// vault/item/field REFERENCE. These configure gog's headless keyring +
-// account/home; the keyring PASSWORD is a secret and must still be an op:// ref,
-// so it is DELIBERATELY not listed here.
+// vault/item/field REFERENCE. GOG_ACCOUNT/GOG_HOME/GOG_KEYRING_BACKEND configure
+// gog's headless keyring + account/home; the keyring PASSWORD is a secret and
+// must still be an op:// ref, so it is DELIBERATELY not listed here.
+// SLACK_TEAM_ID/SLACK_USER_ID are `pix slack setup`'s identity pins: the
+// team/user id its live auth.test resolved AT setup time, written as plain
+// literals so `pix slack status` can flag SLACK_TOKEN silently resolving to a
+// DIFFERENT identity later. Neither value is a credential on its own.
 var NonSecretOpRefsKeys = map[string]bool{
 	"GOG_ACCOUNT":         true,
 	"GOG_HOME":            true,
 	"GOG_KEYRING_BACKEND": true,
+	"SLACK_TEAM_ID":       true,
+	"SLACK_USER_ID":       true,
 }
 
 // OpRefsTemplate is the seed content for a fresh op-refs.env: op:// references
@@ -862,9 +868,9 @@ const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway res
 # ` + OpRefsMentalModel + `
 #
 # This file holds op://vault/item/field REFERENCES only, plus the documented
-# non-secret env allowlist (GOG_ACCOUNT, GOG_HOME, GOG_KEYRING_BACKEND).
-# Everything secret (tokens, keyring passwords) is an op:// ref resolved from
-# 1Password at spawn time — never a pasted secret.
+# non-secret env allowlist (GOG_ACCOUNT, GOG_HOME, GOG_KEYRING_BACKEND,
+# SLACK_TEAM_ID, SLACK_USER_ID). Everything secret (tokens, keyring passwords)
+# is an op:// ref resolved from 1Password at spawn time — never a pasted secret.
 #
 # Every line below is COMMENTED OUT: a freshly-seeded file has zero active
 # entries. Uncomment + fill in a line only when you wire that server.
@@ -872,8 +878,17 @@ const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway res
 # Verify:  op read "op://<vault>/<item>/<field>" >/dev/null && echo OK
 # Tip:     1Password app -> right-click a field -> "Copy Secret Reference".
 
-# slack MCP server (its bot/user token). Required to register slack.
+# slack MCP server. Run 'pix slack setup --token-ref op://<vault>/<item>/<field>'
+# instead of hand-editing these lines — it resolves the ref, requires an xoxp-
+# PERSONAL user token (every Slack call the server makes acts AS the token's
+# owner; auth.test proves the identity live), and writes both lines below
+# itself. It is per-user and must never be a shared "employee"/team/bot token,
+# and never handed to a second person to reuse — each user runs their own
+# pix slack setup instead. See docs/design/slack-setup.md for how to obtain a
+# token, minimal scopes, and revocation.
 # SLACK_TOKEN=op://<vault>/<item>/<field>
+# SLACK_TEAM_ID=<team id auth.test resolved at setup>
+# SLACK_USER_ID=<user id auth.test resolved at setup>
 
 # gog (Google Workspace) MCP server. gog only needs op to inject a headless
 # keyring password; a keyring reachable without a password does not need this.

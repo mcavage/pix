@@ -32,7 +32,7 @@ func wantsHelp(argv []string) bool {
 var knownVerbs = map[string]bool{
 	"help": true, "serve": true, "doctor": true, "setup": true, "status": true,
 	"ls": true, "rm": true,
-	"config": true, "mcp": true, "gworkspace": true, "memory": true, "monitor": true, "knowledge": true,
+	"config": true, "mcp": true, "gworkspace": true, "slack": true, "memory": true, "monitor": true, "knowledge": true,
 	"pack": true, "version": true, "run": true, "secret": true,
 	"reset": true, "uninstall": true, "man": true,
 	"backup": true, "restore": true, "state": true,
@@ -49,6 +49,11 @@ var knownVerbs = map[string]bool{
 var retiredVerbs = map[string]string{
 	// AC-P0-308: `pix onboard` became `pix setup --no-agent`.
 	"onboard": "setup --no-agent",
+	// The `gog` verb tree is DELETED, not renamed (6b39a69): the public surface
+	// is `pix gworkspace setup|status|disable`. `gog` and `gworkspace` are not
+	// within edit distance 2, so this is a retired-verb entry, not something
+	// suggestVerb's levenshtein search would ever find on its own.
+	"gog": "gworkspace",
 }
 
 // suggestVerb returns the replacement for a retired verb, or else the closest
@@ -147,6 +152,7 @@ Parallel work
 
 Integrations & credentials
   gworkspace <cmd>    setup | status | disable: Google Workspace access
+  slack <cmd>         setup | status | disable: Slack access (personal token)
   mcp <cmd>           register|ls|load|auth|bundle MCP servers (sbx gateway)
   secret <cmd>        ls|set|rm|check the 1Password op-refs (host MCP creds)
 
@@ -196,6 +202,8 @@ func verbUsage(verb string) (string, bool) {
 		return mcpUsage, true
 	case "gworkspace":
 		return gworkspaceUsage, true
+	case "slack":
+		return slackUsage, true
 	case "pack":
 		return packUsage, true
 	case "memory", "mem":
@@ -317,7 +325,11 @@ const mcpUsage = `usage: pix mcp <register|ls|load|auth|bundle> [args]
 
   register [name...]   register local stdio MCP servers with the sbx gateway
                        (no names = every local server in the resolved mcp list)
-  ls                   list servers registered with the gateway (sbx mcp ls)
+  ls                   list servers registered with the gateway (sbx mcp ls).
+                       HOST registration only, not what's attached to your
+                       current sandbox; see 'pix status'/'pix doctor' for
+                       what's live, 'pix mcp load' to attach one now, or
+                       'pix run --replace' to recreate with everything preloaded
   load <name> [DIR]    attach an already-registered server to the RUNNING sandbox
                        for DIR (default cwd); live, no recreate (sbx mcp load)
   auth [args...]       authorize remote OAuth servers via the hosted control
@@ -360,7 +372,8 @@ lines). It never writes a resolved secret.
   ls                       op installed? signed in? which refs are filled vs
                            placeholder (the default; prints no secret values)
   set ENV_VAR op://ref     upsert a ref (seeds op-refs.env if absent); a raw
-                           space in the ref is URL-encoded to %20
+                           space in the ref (a field name like "api key") is
+                           kept as a literal space (op read/op run reject %20)
   rm ENV_VAR               remove a ref (a no-op if it isn't set)
   check                    resolve each op:// ref with "op read" and report
                            OK/FAIL per key (never prints the resolved value)
