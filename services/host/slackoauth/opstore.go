@@ -29,8 +29,9 @@ type OPStore struct {
 	Vault  string // 1Password vault name or ID
 	Title  string // document title used the first time Write creates the item
 
-	mu   sync.Mutex
-	item string // 1Password item identifier used for get/edit; empty until known
+	mu      sync.Mutex
+	item    string // 1Password item identifier used for get/edit; empty until known
+	vaultID string // vault id CAPTURED from the last successful Write's response; empty until known
 }
 
 // NewOPStore constructs an OPStore. item is the 1Password item identifier
@@ -46,6 +47,18 @@ func (s *OPStore) ItemID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.item
+}
+
+// VaultID returns the 1Password vault id CAPTURED from the most recent
+// successful Write's `op document create|edit --format json` response. This
+// is the resolved id even when Vault was configured as a vault NAME rather
+// than an id, so a caller (e.g. the Slack PKCE setup flow) can persist the
+// exact vault the document lives in without a second lookup. Empty until a
+// Write has succeeded.
+func (s *OPStore) VaultID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.vaultID
 }
 
 var errOPStoreNoItem = errors.New("slackoauth: OPStore has no item yet; nothing has been written")
@@ -129,6 +142,7 @@ func (s *OPStore) Write(ctx context.Context, b Blob) error {
 	}
 	s.mu.Lock()
 	s.item = meta.ID
+	s.vaultID = meta.Vault.ID
 	s.mu.Unlock()
 	return nil
 }
