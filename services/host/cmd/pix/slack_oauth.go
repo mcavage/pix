@@ -421,7 +421,7 @@ func slackRegistrationPreflight(env shellEnv) (wasRegistered bool, err error) {
 	if wasRegistered {
 		argv, ok := registeredMCPCommand(env, slackServerName)
 		if _, trusted := recognizedMCPArgv(env, argv, slackServerName); !ok || !trusted {
-			return false, fmt.Errorf("the existing slack registration is not the canonical Pix host command; refusing to overwrite it (inspect: sbx mcp get slack)")
+			return false, fmt.Errorf("the existing slack registration is not the canonical Pix host command; refusing to overwrite it (inspect: sbx mcp inspect slack)")
 		}
 	}
 	return wasRegistered, nil
@@ -940,7 +940,7 @@ func slackDisableOAuth(cfg *config.Config, env shellEnv, out io.Writer, deps sla
 	if registered {
 		argv, ok := registeredMCPCommand(env, slackServerName)
 		if _, trusted := recognizedMCPArgv(env, argv, slackServerName); !ok || !trusted {
-			return fmt.Errorf("a server named slack is registered, but it is not the canonical Pix host command; refusing to remove it (inspect: sbx mcp get slack)")
+			return fmt.Errorf("a server named slack is registered, but it is not the canonical Pix host command; refusing to remove it (inspect: sbx mcp inspect slack)")
 		}
 	}
 
