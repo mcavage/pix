@@ -307,10 +307,9 @@ jobs:
           go-version-file: services/host/go.mod
           cache-dependency-path: services/host/go.sum
 
-      # -X main.version stamps the launcher (its `var version`); the host binary has
-      # no such symbol, so the linker silently ignores the flag there — harmless, and
-      # keeps one build recipe for both. Output names match install.sh's URL pattern:
-      # pix-<os>-<arch> and pix-host-<os>-<arch>.
+      # -X main.version stamps both package-main binaries: the launcher and
+      # pix-host each define the same symbol. Output names match install.sh's
+      # existing loose-asset URL pattern.
       - name: Cross-compile both binaries
         working-directory: services/host
         env:
@@ -329,9 +328,26 @@ jobs:
               -o "$GITHUB_WORKSPACE/dist/pix-host-$os-$arch" ./
           done
 
+      - name: Build combined Darwin tarballs for Homebrew
+        working-directory: dist
+        env:
+          V: ${{ needs.version.outputs.version }}
+        run: |
+          set -eu
+          for arch in amd64 arm64; do
+            stage="$(mktemp -d)"
+            cp "pix-darwin-$arch" "$stage/pix"
+            cp "pix-host-darwin-$arch" "$stage/pix-host"
+            cp "$GITHUB_WORKSPACE/services/host/cmd/pix/pix.1" "$stage/pix.1"
+            chmod 0755 "$stage/pix" "$stage/pix-host"
+            tar -C "$stage" -czf "pix_${V}_darwin_${arch}.tar.gz" pix pix-host pix.1
+            rm -rf "$stage"
+          done
+          ls -la pix_*.tar.gz
+
       - name: Generate SHA256SUMS
         working-directory: dist
-        run: sha256sum pix-* > SHA256SUMS && cat SHA256SUMS
+        run: sha256sum pix-* pix_*.tar.gz > SHA256SUMS && cat SHA256SUMS
 
       - name: Upload assets to the v<version> release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
@@ -340,5 +356,6 @@ jobs:
           name: pix v${{ needs.version.outputs.version }}
           files: |
             dist/pix-*
+            dist/pix_*.tar.gz
             dist/SHA256SUMS
           fail_on_unmatched_files: true

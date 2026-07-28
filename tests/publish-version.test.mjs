@@ -21,3 +21,12 @@ test("later publishes select an unused patch tag without overwriting a release",
 	assert.match(workflow, /refs\/tags\/v\$\{version\}/);
 	assert.match(workflow, /patch=\$\(\(patch \+ 1\)\)/);
 });
+
+test("Homebrew archives are additive and contain both binaries plus the manpage", () => {
+	assert.match(workflow, /pix_\$\{V\}_darwin_\$\{arch\}\.tar\.gz/);
+	assert.match(workflow, /tar -C "\$stage" -czf .* pix pix-host pix\.1/);
+	assert.match(workflow, /sha256sum pix-\* pix_\*\.tar\.gz/);
+	assert.match(workflow, /dist\/pix_\*\.tar\.gz/);
+	assert.match(workflow, /-o "\$GITHUB_WORKSPACE\/dist\/pix-\$os-\$arch"/);
+	assert.doesNotMatch(workflow, /host binary has\s+no such symbol/);
+});
