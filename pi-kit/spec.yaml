@@ -14,7 +14,7 @@ sandbox:
   # run even when the image is already loaded, defeating `make load`. A pinned
   # tag means "use the loaded build if present, else pull once." Keep in sync
   # with VERSION in the Makefile and `version` in package.json.
-  image: "docker.io/mcavage/pix:0.1.11"
+  image: "docker.io/mcavage/pix:0.1.12"
   aiFilename: AGENTS.md
   entrypoint:
     # --session-dir persists sessions on the host-mounted workspace so they
