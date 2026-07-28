@@ -350,7 +350,7 @@ func TestUninstall_RemovesBinSymlinks(t *testing.T) {
 	writeFile(t, notOurs, "hand-placed")
 
 	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
-	err := runUninstallCore(resetCfg(), p, []string{link, notOurs}, resetOpts{assumeYes: true},
+	err := runUninstallCore(resetCfg(), p, []string{link, notOurs}, resetOpts{assumeYes: true}, provenance{Channel: channelInstaller},
 		defaultResetFS(), noToolEnv(), rio, fixedNow)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -373,12 +373,39 @@ func TestUninstall_NonTTYNoYesRefuses(t *testing.T) {
 	link := filepath.Join(root, "pix")
 	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
 
-	err := runUninstallCore(resetCfg(), p, []string{link}, resetOpts{}, defaultResetFS(), noToolEnv(), rio, fixedNow)
+	err := runUninstallCore(resetCfg(), p, []string{link}, resetOpts{}, provenance{Channel: channelInstaller}, defaultResetFS(), noToolEnv(), rio, fixedNow)
 	if !errors.Is(err, errResetNeedsYes) {
 		t.Fatalf("want errResetNeedsYes, got %v", err)
 	}
 	if !exists(p.configDir) {
 		t.Error("a refused uninstall must not move anything")
+	}
+}
+
+func TestRunUninstallHomebrewDoesNotRemoveOwnedOrDuplicateBinaries(t *testing.T) {
+	stubStopServe(t)
+	root := t.TempDir()
+	p := tempPaths(t, root)
+	localPix := filepath.Join(root, "bin", "pix")
+	if err := os.MkdirAll(filepath.Dir(localPix), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, localPix, "curl-installed copy")
+
+	var out bytes.Buffer
+	rio := setupIO{in: strings.NewReader(""), out: &out, isTTY: false}
+	err := runUninstallCore(resetCfg(), p, []string{localPix}, resetOpts{assumeYes: true}, provenance{Channel: channelHomebrew},
+		defaultResetFS(), noToolEnv(), rio, fixedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists(localPix) {
+		t.Fatal("Homebrew uninstall path must not remove any binary directly")
+	}
+	for _, want := range []string{"owned by Homebrew", "brew uninstall mcavage/tap/pix", "next launch"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output %q missing %q", out.String(), want)
+		}
 	}
 }
 
@@ -456,7 +483,7 @@ func TestUninstall_BackupFailureKeepsSymlinks(t *testing.T) {
 	fsys.rename = func(_, _ string) error { return errors.New("backup failed") }
 
 	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
-	err := runUninstallCore(resetCfg(), p, []string{link}, resetOpts{assumeYes: true},
+	err := runUninstallCore(resetCfg(), p, []string{link}, resetOpts{assumeYes: true}, provenance{Channel: channelInstaller},
 		fsys, noToolEnv(), rio, fixedNow)
 	if err == nil {
 		t.Fatal("uninstall must return the backup error")
@@ -659,7 +686,7 @@ func TestUninstall_LeavesUnrelatedSymlinks(t *testing.T) {
 	}
 
 	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
-	if err := runUninstallCore(resetCfg(), p, []string{linkA, linkB}, resetOpts{assumeYes: true},
+	if err := runUninstallCore(resetCfg(), p, []string{linkA, linkB}, resetOpts{assumeYes: true}, provenance{Channel: channelInstaller},
 		defaultResetFS(), noToolEnv(), rio, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

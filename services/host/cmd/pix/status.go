@@ -80,23 +80,24 @@ func renderStatus(cfg *config.Config, profile string, env shellEnv, out io.Write
 
 // statusReport is the machine-readable status snapshot (also drives --json).
 type statusReport struct {
-	Version    string          `json:"version"`
-	ConfigPath string          `json:"config_path"`
-	Profile    string          `json:"profile"`
-	Memory     bool            `json:"memory_up"`
-	Knowledge  bool            `json:"knowledge_up"`
-	Monitor    bool            `json:"monitor_up"`
-	Providers  map[string]bool `json:"providers"`
-	Bundles    []bundleStatus  `json:"knowledge_bundles"`
-	MCP        []string        `json:"mcp"`
-	MCPServers []mcpStatusLine `json:"mcp_servers"`
-	MCPRows    []mcpSandboxRow `json:"mcp_sandbox_rows,omitempty"`
-	Sandboxes  []sandboxLine   `json:"sandboxes"`
-	Tasks      int             `json:"tasks"`
-	ArtifactB  int64           `json:"artifact_bytes"`
-	Todos      []string        `json:"todos"`
-	GogAccount string          `json:"gog_account,omitempty"`
-	GogAuthed  bool            `json:"gog_authed,omitempty"`
+	Version         string          `json:"version"`
+	ConfigPath      string          `json:"config_path"`
+	Profile         string          `json:"profile"`
+	Memory          bool            `json:"memory_up"`
+	Knowledge       bool            `json:"knowledge_up"`
+	Monitor         bool            `json:"monitor_up"`
+	Providers       map[string]bool `json:"providers"`
+	Bundles         []bundleStatus  `json:"knowledge_bundles"`
+	MCP             []string        `json:"mcp"`
+	MCPServers      []mcpStatusLine `json:"mcp_servers"`
+	MCPRows         []mcpSandboxRow `json:"mcp_sandbox_rows,omitempty"`
+	Sandboxes       []sandboxLine   `json:"sandboxes"`
+	Tasks           int             `json:"tasks"`
+	ArtifactB       int64           `json:"artifact_bytes"`
+	Todos           []string        `json:"todos"`
+	GogAccount      string          `json:"gog_account,omitempty"`
+	GogAuthed       bool            `json:"gog_authed,omitempty"`
+	InstallWarnings []string        `json:"install_warnings,omitempty"`
 	// Checks is the shared, flat readiness array (the SAME row type doctor
 	// --json emits: axis/requirement/verdict/evidence/fix/duration_ms/
 	// endpoint), and Exit is the process exit code this same data produced.
@@ -165,6 +166,22 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 		Profile:    profile,
 		Providers:  map[string]bool{},
 		MCP:        currentIntent,
+	}
+	if env.executable != nil && env.getenv != nil {
+		self, err := env.executable()
+		if err == nil {
+			if warning := pathShadowIssue("pix", self, env.getenv); warning != "" {
+				st.InstallWarnings = append(st.InstallWarnings, warning)
+			}
+			if env.hostBinary != nil {
+				host, err := env.hostBinary()
+				if err == nil {
+					if warning := pathShadowIssue("pix-host", host, env.getenv); warning != "" {
+						st.InstallWarnings = append(st.InstallWarnings, warning)
+					}
+				}
+			}
+		}
 	}
 	if env.dial != nil {
 		// monitor is an on-demand tool (`pix monitor`), not a background
@@ -389,6 +406,9 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 }
 
 func (st statusReport) render(out io.Writer) {
+	for _, warning := range st.InstallWarnings {
+		fmt.Fprintf(out, "  ⚠ install     %s\n", strings.ReplaceAll(warning, "\n", "\n                "))
+	}
 	fmt.Fprintf(out, "pix %s    config: %s\n\n", st.Version, st.ConfigPath)
 
 	serve := "down"

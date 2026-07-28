@@ -4,6 +4,7 @@ package main
 // use one detector so upgrade, doctor, status, and uninstall agree.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,4 +96,90 @@ func pathWithin(path, dir string) bool {
 
 func installChannelNow() provenance {
 	return detectInstallChannel(os.Executable, filepath.EvalSymlinks, os.Getenv)
+}
+
+// allOnPath returns every distinct path spelling for name in PATH order. PATH
+// itself may repeat directories, so exact duplicates are suppressed.
+func allOnPath(name string, getenv func(string) string) []string {
+	var found []string
+	seen := map[string]bool{}
+	for _, dir := range filepath.SplitList(getenv("PATH")) {
+		if dir == "" {
+			dir = "."
+		}
+		path := filepath.Join(dir, name)
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() || seen[path] {
+			continue
+		}
+		seen[path] = true
+		found = append(found, path)
+	}
+	return found
+}
+
+// pathShadowIssue reports multiple distinct installations and true shadows.
+// It is read-only: the suggested fix is explicit and never executed here.
+func pathShadowIssue(name, self string, getenv func(string) string) string {
+	paths := allOnPath(name, getenv)
+	if len(paths) == 0 {
+		return ""
+	}
+
+	resolved := make([]string, 0, len(paths))
+	seen := map[string]bool{}
+	for _, path := range paths {
+		real, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			real = path
+		}
+		if seen[real] {
+			continue
+		}
+		seen[real] = true
+		resolved = append(resolved, path)
+	}
+	if len(resolved) < 2 {
+		return ""
+	}
+
+	selfReal, err := filepath.EvalSymlinks(self)
+	if err != nil {
+		selfReal = self
+	}
+	firstReal, err := filepath.EvalSymlinks(resolved[0])
+	if err != nil {
+		firstReal = resolved[0]
+	}
+
+	var message string
+	if firstReal != selfReal {
+		message = fmt.Sprintf("%s on PATH resolves to %s, not the running binary (%s).", name, resolved[0], self)
+	} else {
+		message = fmt.Sprintf("multiple %s installations are on PATH; the active one is %s.", name, resolved[0])
+	}
+	message += "\n  also found: " + strings.Join(resolved[1:], ", ")
+	message += "\n  fix: put the intended install first on PATH, or remove the stale copy explicitly."
+	return message
+}
+
+func installDuplicatesGroup(env shellEnv) group {
+	g := group{title: "Installation"}
+	if env.executable == nil || env.getenv == nil {
+		return g
+	}
+	self, err := env.executable()
+	if err == nil {
+		if warning := pathShadowIssue("pix", self, env.getenv); warning != "" {
+			g.checks = append(g.checks, check{label: "pix PATH", detail: warning, evidence: warning, verdict: verdictTodo})
+		}
+	}
+	if env.hostBinary != nil {
+		if host, err := env.hostBinary(); err == nil {
+			if warning := pathShadowIssue("pix-host", host, env.getenv); warning != "" {
+				g.checks = append(g.checks, check{label: "host PATH", detail: warning, evidence: warning, verdict: verdictTodo})
+			}
+		}
+	}
+	return g
 }
