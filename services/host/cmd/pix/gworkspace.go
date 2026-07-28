@@ -344,7 +344,7 @@ func gworkspaceStatus(cfg *config.Config, env shellEnv, out io.Writer, now time.
 	} else {
 		checks = append(checks, check{label: "registration", verdict: verdictUnverifiable,
 			detail:   "could not read the " + gwServerName + " registration from sbx",
-			evidence: "sbx mcp get " + gwServerName + " did not resolve a command",
+			evidence: "sbx mcp inspect " + gwServerName + " did not resolve a command",
 			todo:     "sbx mcp status"})
 	}
 

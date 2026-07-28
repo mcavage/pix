@@ -722,11 +722,11 @@ func slackRegistrationAndAttachmentChecks(env shellEnv) []check {
 	switch {
 	case registrationExists && registrationTrusted:
 		checks = append(checks, check{label: "registration", verdict: verdictReady,
-			detail: "canonical Pix host command registered with the sbx gateway", evidence: "sbx mcp get " + slackServerName})
+			detail: "canonical Pix host command registered with the sbx gateway", evidence: "sbx mcp inspect " + slackServerName})
 	case registrationExists:
 		checks = append(checks, check{label: "registration", verdict: verdictTodo,
 			detail: "a server named slack is registered, but it is not the canonical Pix host command",
-			todo:   "inspect it with: sbx mcp get slack"})
+			todo:   "inspect it with: sbx mcp inspect slack"})
 	case env.lookPath == nil:
 		checks = append(checks, check{label: "registration", verdict: verdictUnverifiable,
 			detail: "sbx unavailable here; registration cannot be verified"})
@@ -736,7 +736,7 @@ func slackRegistrationAndAttachmentChecks(env shellEnv) []check {
 				detail: "sbx unavailable here; registration cannot be verified"})
 		} else {
 			checks = append(checks, check{label: "registration", verdict: verdictTodo,
-				detail: "not registered with the sbx gateway", todo: "pix slack setup --token-ref op://vault/item/field"})
+				detail: "not registered with the sbx gateway", todo: "pix mcp register slack"})
 		}
 	}
 
@@ -830,7 +830,7 @@ func slackDisableStatic(cfg *config.Config, env shellEnv, out io.Writer) error {
 	if registered {
 		argv, ok := registeredMCPCommand(env, slackServerName)
 		if _, trusted := recognizedMCPArgv(env, argv, slackServerName); !ok || !trusted {
-			return fmt.Errorf("a server named slack is registered, but it is not the canonical Pix host command; refusing to remove it (inspect: sbx mcp get slack)")
+			return fmt.Errorf("a server named slack is registered, but it is not the canonical Pix host command; refusing to remove it (inspect: sbx mcp inspect slack)")
 		}
 	}
 

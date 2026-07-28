@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -384,7 +385,7 @@ func mcpLocalCheck(env shellEnv, name, mcpOut string) check {
 	trusted, ok := recognizedMCPArgv(env, argv, name)
 	if !ok {
 		return check{label: name, verdict: verdictUnverifiable,
-			detail: "registered (probe skipped: unrecognized/untrusted command, never executed; inspect: sbx mcp get " + name + ")"}
+			detail: "registered (probe skipped: unrecognized/untrusted command, never executed; inspect: sbx mcp inspect " + name + ")"}
 	}
 	res := probeListTools(env, trusted)
 	switch res.status {
@@ -394,12 +395,12 @@ func mcpLocalCheck(env shellEnv, name, mcpOut string) check {
 	case probeNoTools:
 		return check{label: name, verdict: verdictTodo,
 			detail: "registered but the spawned command returns 0 tools — headless creds/keyring",
-			todo:   "review the registered command: sbx mcp get " + name}
+			todo:   "review the registered command: sbx mcp inspect " + name}
 	case probeDeniedByPolicy:
 		// An EXPLICIT policy/permission refusal is a positive denial — an org
 		// decision, not a setup gap, and never collapsed into unverifiable.
 		return check{label: name, verdict: verdictDenied,
-			detail:   "registered, but the spawn is positively refused by policy/permission (sbx mcp get " + name + ")",
+			detail:   "registered, but the spawn is positively refused by policy/permission (sbx mcp inspect " + name + ")",
 			evidence: "denied"}
 	default: // probeTimedOut / probeError
 		return check{label: name, verdict: verdictUnverifiable,
@@ -523,7 +524,8 @@ func unknownKeyCheck(key string) check {
 // <name> — the argv the gateway would spawn — so doctor can probe the real
 // registration for a local stdio server. Definition inspection ONLY: nothing
 // here says anything about sandbox attachment (that is the receipt's job).
-// It tries `sbx mcp get <name>` then `sbx mcp ls -o json`, both BOUNDED via
+// It tries the current `sbx mcp inspect <name>`, then the legacy `get` form,
+// then `sbx mcp ls -o json`, all BOUNDED via
 // probeRun so a hung sbx degrades to "couldn't read the registered command",
 // never a wedged doctor. Returns (nil,false) when sbx is absent or exposes no
 // command.
@@ -534,6 +536,12 @@ func registeredMCPCommand(env shellEnv, name string) ([]string, bool) {
 	if _, err := env.lookPath("sbx"); err != nil {
 		return nil, false
 	}
+	if out, timedOut, err := probeRun(env, "sbx", "mcp", "inspect", name); err == nil && !timedOut {
+		if argv, ok := parseMCPCommandLine(out); ok {
+			return argv, true
+		}
+	}
+	// Compatibility with older sbx releases that called this command `get`.
 	if out, timedOut, err := probeRun(env, "sbx", "mcp", "get", name); err == nil && !timedOut {
 		if argv, ok := parseMCPCommandLine(out); ok {
 			return argv, true
@@ -547,7 +555,8 @@ func registeredMCPCommand(env shellEnv, name string) ([]string, bool) {
 	return nil, false
 }
 
-// parseMCPCommandLine extracts a registered argv from a `sbx mcp get <name>`
+// parseMCPCommandLine extracts a registered argv from `sbx mcp inspect <name>`
+// (or the legacy `get` equivalent)
 // text dump: the `command:` line split into fields. A shell-quoted line (which
 // strings.Fields cannot split reliably) or an empty command returns (nil,false)
 // so registeredMCPCommand falls through to the structured JSON parser.
@@ -669,7 +678,26 @@ func trustedHostBinaryExecPath(env shellEnv, tok string) (string, bool) {
 	if err != nil || canonical == "" || !filepath.IsAbs(canonical) {
 		return "", false
 	}
-	if filepath.Clean(tok) != filepath.Clean(canonical) {
+	if filepath.Clean(tok) == filepath.Clean(canonical) {
+		return filepath.Clean(canonical), true
+	}
+	// `make install` exposes the PATH-resolved pix-host as a symlink to the
+	// checkout's out/pix-host. os.Executable may resolve the launcher symlink
+	// while sbx keeps the installed spelling. Accept that alternate spelling
+	// only when it is EXACTLY the pix-host this process resolves from PATH and
+	// both paths currently identify the same file. This deliberately rejects
+	// arbitrary lookalike symlinks (for example /tmp/pix-host -> canonical),
+	// which could otherwise be retargeted after this check.
+	if env.lookPath == nil {
+		return "", false
+	}
+	pathHost, pathErr := env.lookPath("pix-host")
+	if pathErr != nil || !filepath.IsAbs(pathHost) || filepath.Clean(tok) != filepath.Clean(pathHost) {
+		return "", false
+	}
+	registeredInfo, registeredErr := os.Stat(tok)
+	canonicalInfo, canonicalErr := os.Stat(canonical)
+	if registeredErr != nil || canonicalErr != nil || !os.SameFile(registeredInfo, canonicalInfo) {
 		return "", false
 	}
 	return filepath.Clean(canonical), true
