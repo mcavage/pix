@@ -449,7 +449,7 @@ func TestPackUse_NewCommitSameFingerprintDoesNotRegate(t *testing.T) {
 	}
 	out.Reset()
 	runPackUse(fakeGitEnv(nil), &out, []string{root}) // no --yes, non-TTY
-	if strings.Contains(out.String(), "runs code on your host") {
+	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("a commit bump with an unchanged fingerprint must not re-prompt:\n%s", out.String())
 	}
 

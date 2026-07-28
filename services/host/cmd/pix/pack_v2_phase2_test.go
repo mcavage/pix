@@ -102,6 +102,57 @@ func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 	}
 }
 
+func TestValidatePackFacetsRejectsAmbiguousIntegrationExecution(t *testing.T) {
+	cases := []struct {
+		name         string
+		integrations []packIntegration
+	}{
+		{"duplicate MCP", []packIntegration{{MCP: "sneaky", Image: "safe"}, {MCP: "sneaky", Manifest: "https://evil.invalid/server.json"}}},
+		{"multiple execution kinds", []packIntegration{{MCP: "sneaky", Image: "safe", Manifest: "https://evil.invalid/server.json"}}},
+		{"manifest with ignored env", []packIntegration{{MCP: "sneaky", Manifest: "https://example.invalid/server.json", Env: "TOKEN"}}},
+		{"remote URL with ignored env keys", []packIntegration{{MCP: "sneaky", URL: "https://example.invalid/mcp", EnvKeys: []string{"TOKEN"}}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &packManifest{Integrations: tc.integrations}
+			if err := validatePackFacets(t.TempDir(), m); err == nil {
+				t.Fatal("ambiguous integration passed validation; trust rendering and execution could disagree")
+			}
+		})
+	}
+}
+
+func TestComputeHostBoM_DisclosesContainerAndRemoteIntegrations(t *testing.T) {
+	p := &packInfo{Root: "/p", Manifest: packManifest{
+		Name: "docker-work",
+		Integrations: []packIntegration{
+			{Name: "BambooHR", MCP: "bamboohr", Image: "bamboohr-mcp:0.0.1", Env: "BAMBOOHR_API_KEY", EnvKeys: []string{"BAMBOOHR_COMPANY_DOMAIN"}},
+			{Name: "Opine", MCP: "opine", URL: "https://app.tryopine.com/mcp"},
+		},
+	}}
+	b := computeHostBoM(p, "", func(string) bool { return false })
+	if !b.tier1() {
+		t.Fatal("a host-run MCP container must require the adoption gate")
+	}
+	if len(b.Containers) != 1 || b.Containers[0].Name != "bamboohr" || b.Containers[0].Image != "bamboohr-mcp:0.0.1" {
+		t.Fatalf("container disclosure = %+v", b.Containers)
+	}
+	if got := strings.Join(b.Containers[0].EnvKeys, ","); got != "BAMBOOHR_API_KEY,BAMBOOHR_COMPANY_DOMAIN" {
+		t.Errorf("container env disclosure = %q", got)
+	}
+	if len(b.RemoteMCP) != 1 || b.RemoteMCP[0].Name != "opine" || b.RemoteMCP[0].URL != "https://app.tryopine.com/mcp" {
+		t.Fatalf("remote disclosure = %+v", b.RemoteMCP)
+	}
+	var out bytes.Buffer
+	renderHostBoM(&out, b)
+	text := out.String()
+	for _, want := range []string{"BambooHR", "bamboohr-mcp:0.0.1", "BAMBOOHR_API_KEY", "Opine", "https://app.tryopine.com/mcp"} {
+		if !strings.Contains(strings.ToLower(text), strings.ToLower(want)) {
+			t.Errorf("trust screen omitted %q:\n%s", want, text)
+		}
+	}
+}
+
 // TestComputeHostBoM_Tier0: skills/knowledge/sandbox-proxy-only packs have no
 // host-exec facet — egress and creds alone never raise the tier.
 func TestComputeHostBoM_Tier0(t *testing.T) {
@@ -282,7 +333,7 @@ func TestPackUse_Tier0StillSilent(t *testing.T) {
 	}
 	var out bytes.Buffer
 	runPackUse(fakeGitEnv(nil), &out, []string{root}) // NO --yes, no TTY: must succeed
-	if strings.Contains(out.String(), "[y/N]") || strings.Contains(out.String(), "runs code on your host") {
+	if strings.Contains(out.String(), "[y/N]") || strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("Tier-0 must adopt silently, got:\n%s", out.String())
 	}
 	cfg, _ := config.Load()
@@ -322,7 +373,7 @@ func TestPackUse_AcceptanceSticksAcrossReactivation(t *testing.T) {
 	// os.Exit(1) here and fail the whole test binary.
 	out.Reset()
 	runPackUse(localMCPEnv("fastmail"), &out, []string{root})
-	if strings.Contains(out.String(), "runs code on your host") {
+	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("covered BoM must not re-render the gate screen:\n%s", out.String())
 	}
 }

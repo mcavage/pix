@@ -335,7 +335,7 @@ func TestPackUse_RemoteMCPReferenceStaysTier0(t *testing.T) {
 
 	var out bytes.Buffer
 	runPackUse(localMCPEnv("fastmail"), &out, []string{root}) // no --yes, non-TTY
-	if strings.Contains(out.String(), "runs code on your host") || strings.Contains(out.String(), "[y/N]") {
+	if strings.Contains(out.String(), "adds these integrations to Pix") || strings.Contains(out.String(), "[y/N]") {
 		t.Errorf("a reference-only remote MCP must adopt silently (Tier-0), got:\n%s", out.String())
 	}
 	cfg, err := config.Load()
@@ -362,7 +362,7 @@ func TestPackUse_GogReferenceStaysTier0(t *testing.T) {
 
 	var out bytes.Buffer
 	runPackUse(localMCPEnv(), &out, []string{root}) // no --yes, non-TTY
-	if strings.Contains(out.String(), "runs code on your host") {
+	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("a gog reference must adopt silently (Tier-0), got:\n%s", out.String())
 	}
 	cfg, err := config.Load()
