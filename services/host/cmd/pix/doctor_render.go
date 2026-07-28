@@ -38,6 +38,7 @@ func (r *report) render(w io.Writer, verbose bool) {
 	if r.sbxAbsent {
 		fmt.Fprintln(w, "  note: sbx not on PATH (you're likely inside the sandbox) — provider/MCP")
 		fmt.Fprintln(w, "        checks can't be verified here; run `pix doctor` on the host.")
+		fmt.Fprintln(w, "        On a macOS host, install it with: "+sbxInstallHint)
 	}
 	fmt.Fprintln(w)
 
