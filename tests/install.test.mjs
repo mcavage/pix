@@ -19,4 +19,7 @@ test("installer checks both public binaries for PATH collisions and shadowing", 
 	assert.match(src, /for binary in pix pix-host/);
 	assert.match(src, /assert_installed_resolution/);
 	assert.match(src, /PIX_FORCE_INSTALL/);
+	assert.match(src, /guard_homebrew_prefix/);
+	assert.match(src, /brew install mcavage\/tap\/pix/);
+	assert.match(src, /Nothing was written\./);
 });
