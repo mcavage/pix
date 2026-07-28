@@ -1,11 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -47,97 +44,34 @@ func TestParseLatestReleaseLocation(t *testing.T) {
 
 func TestResolveKitRef_Precedence(t *testing.T) {
 	cases := []struct {
-		name                            string
-		version, flag, pin, latest, ref string
-		src                             kitRefSource
+		name                    string
+		version, flag, pin, ref string
+		src                     kitRefSource
 	}{
-		{"flag beats everything", "0.1.0", "main", "0.9.9", "0.1.2", "main", kitRefFlag},
-		{"config pin beats latest", "0.1.0", "", "0.1.0", "0.1.2", "v0.1.0", kitRefConfigPin},
-		{"config pin accepts a v prefix", "0.1.0", "", "v0.1.0", "0.1.2", "v0.1.0", kitRefConfigPin},
-		{"config pin passes a branch through", "0.1.0", "", "main", "0.1.2", "main", kitRefConfigPin},
-		{"latest stable wins by default", "0.1.0", "", "", "0.1.2", "v0.1.2", kitRefLatest},
-		{"already latest stays stamped", "0.1.2", "", "", "0.1.2", "", kitRefStamped},
-		{"no latest resolved falls back", "0.1.0", "", "", "", "", kitRefStamped},
-		{"unreleased build never auto-tracks", "0.1.0+local", "", "", "0.1.2", "", kitRefUnreleased},
-		{"dev build never auto-tracks", "dev", "", "", "0.1.2", "", kitRefUnreleased},
+		{"flag beats everything", "0.1.0", "main", "0.9.9", "main", kitRefFlag},
+		{"config pin becomes a tag", "0.1.0", "", "0.1.2", "v0.1.2", kitRefConfigPin},
+		{"config pin accepts a v prefix", "0.1.0", "", "v0.1.0", "v0.1.0", kitRefConfigPin},
+		{"config pin passes a branch through", "0.1.0", "", "main", "main", kitRefConfigPin},
+		{"released default stays stamped", "0.1.2", "", "", "", kitRefStamped},
+		{"unreleased build uses local handling", "0.1.0+local", "", "", "", kitRefUnreleased},
+		{"dev build uses local handling", "dev", "", "", "", kitRefUnreleased},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			ref, src := resolveKitRef(c.version, c.flag, c.pin, c.latest)
+			ref, src := resolveKitRef(c.version, c.flag, c.pin)
 			if ref != c.ref || src != c.src {
-				t.Errorf("resolveKitRef(%q,%q,%q,%q) = (%q,%v), want (%q,%v)",
-					c.version, c.flag, c.pin, c.latest, ref, src, c.ref, c.src)
+				t.Errorf("resolveKitRef(%q,%q,%q) = (%q,%v), want (%q,%v)",
+					c.version, c.flag, c.pin, ref, src, c.ref, c.src)
 			}
 		})
 	}
 }
 
-// An unreleased build must not be pointed at a release tag even when one
-// resolves: its argv may not match that kit. Belt-and-braces on the table above.
-func TestResolveKitRef_UnreleasedIgnoresLatest(t *testing.T) {
+func TestResolveKitRef_UnreleasedUsesLocalHandling(t *testing.T) {
 	for _, v := range []string{"dev", "0.1.0+local", "", "not-semver", "0.1"} {
-		if ref, src := resolveKitRef(v, "", "", "0.9.9"); ref != "" || src != kitRefUnreleased {
+		if ref, src := resolveKitRef(v, "", ""); ref != "" || src != kitRefUnreleased {
 			t.Errorf("version %q: got (%q,%v), want (\"\",kitRefUnreleased)", v, ref, src)
 		}
-	}
-}
-
-func TestLatestReleaseCache_RoundTrip(t *testing.T) {
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	path := latestReleaseCachePath()
-	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-
-	if got := readLatestReleaseCache(path, now); got != "" {
-		t.Errorf("empty cache returned %q", got)
-	}
-	writeLatestReleaseCache(path, "0.1.2", now)
-	if got := readLatestReleaseCache(path, now); got != "0.1.2" {
-		t.Errorf("warm cache = %q, want 0.1.2", got)
-	}
-	// Inside the TTL.
-	if got := readLatestReleaseCache(path, now.Add(latestReleaseTTL-time.Minute)); got != "0.1.2" {
-		t.Errorf("cache just inside the TTL = %q, want 0.1.2", got)
-	}
-	// Expired.
-	if got := readLatestReleaseCache(path, now.Add(latestReleaseTTL+time.Minute)); got != "" {
-		t.Errorf("expired cache = %q, want \"\"", got)
-	}
-	// A CheckedAt in the future (clock skew / restored backup) must not pin that
-	// version until the clock catches up.
-	if got := readLatestReleaseCache(path, now.Add(-time.Hour)); got != "" {
-		t.Errorf("future-dated cache = %q, want \"\"", got)
-	}
-}
-
-func TestLatestReleaseCache_CorruptIsIndistinguishableFromMissing(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", dir)
-	path := latestReleaseCachePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now()
-	for _, body := range []string{
-		"",
-		"{",
-		"null",
-		`{"version":"","checked_at":"2026-07-26T12:00:00Z"}`,
-		`{"version":"nightly","checked_at":"2026-07-26T12:00:00Z"}`,
-		`{"version":"0.1.2-rc1","checked_at":"2026-07-26T12:00:00Z"}`,
-	} {
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if got := readLatestReleaseCache(path, now); got != "" {
-			t.Errorf("corrupt cache %q returned %q, want \"\"", body, got)
-		}
-	}
-	// A garbage version is never written in the first place.
-	writeLatestReleaseCache(path, "not-a-version", now)
-	b, _ := os.ReadFile(path)
-	var c latestReleaseCache
-	if json.Unmarshal(b, &c) == nil && c.Version == "not-a-version" {
-		t.Error("writeLatestReleaseCache persisted a non-semver version")
 	}
 }
 
@@ -192,13 +126,6 @@ func TestFetchLatestRelease_FailuresYieldEmpty(t *testing.T) {
 }
 
 func TestKitRefNotice(t *testing.T) {
-	// Tracking a newer release is stated, with the way to pin it back.
-	msg := kitRefNotice("0.1.0", "v0.1.2", kitRefLatest)
-	for _, want := range []string{"v0.1.2", "0.1.0", "--kit-ref"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("latest notice %q missing %q", msg, want)
-		}
-	}
 	if msg := kitRefNotice("0.1.0", "v0.1.0", kitRefConfigPin); !strings.Contains(msg, "version_pin") {
 		t.Errorf("config-pin notice should name version_pin, got %q", msg)
 	}

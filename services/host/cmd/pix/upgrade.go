@@ -223,9 +223,6 @@ func runUpgrade(argv []string) {
 	latest := o.Version
 	if latest == "" {
 		latest = fetchLatestRelease(&http.Client{Timeout: upgradeLookupTimeout}, releasesLatestURL)
-		if latest != "" {
-			writeLatestReleaseCache(latestReleaseCachePath(), latest, time.Now())
-		}
 	}
 
 	plan := planUpgrade(version, latest, o)
@@ -344,6 +341,42 @@ func probeInstalledVersion() (string, error) {
 // upgradeLookupTimeout is longer than the one `pix run` uses: an explicit
 // upgrade can afford to wait for a slow network, where a run cannot.
 const upgradeLookupTimeout = 10 * time.Second
+
+const releasesLatestURL = "https://github.com/mcavage/pix/releases/latest"
+
+func parseLatestReleaseLocation(loc string) string {
+	i := strings.LastIndex(loc, "/tag/")
+	if i < 0 {
+		return ""
+	}
+	v := strings.TrimSpace(loc[i+len("/tag/"):])
+	if j := strings.IndexAny(v, "?#"); j >= 0 {
+		v = v[:j]
+	}
+	v = strings.TrimPrefix(v, "v")
+	if !isReleased(v) {
+		return ""
+	}
+	return v
+}
+
+func fetchLatestRelease(client *http.Client, url string) string {
+	req, err := http.NewRequest(http.MethodHead, url, nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if loc := resp.Request.URL.String(); loc != "" {
+		if v := parseLatestReleaseLocation(loc); v != "" {
+			return v
+		}
+	}
+	return parseLatestReleaseLocation(resp.Header.Get("Location"))
+}
 
 // execInstaller downloads install.sh for the target release and runs it. The
 // script does the download, the sha256 verification, and the staged install; it
