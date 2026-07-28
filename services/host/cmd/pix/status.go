@@ -407,7 +407,9 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 
 func (st statusReport) render(out io.Writer) {
 	for _, warning := range st.InstallWarnings {
-		fmt.Fprintf(out, "  ⚠ install     %s\n", strings.ReplaceAll(warning, "\n", "\n                "))
+		fmt.Fprintf(out, "  %s install     %s\n",
+			verdictGlyph(requirementOptional, verdictTodo, false),
+			strings.ReplaceAll(warning, "\n", "\n                "))
 	}
 	fmt.Fprintf(out, "pix %s    config: %s\n\n", st.Version, st.ConfigPath)
 
