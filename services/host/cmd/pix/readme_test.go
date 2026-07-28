@@ -6,8 +6,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"pix/host/config"
 )
 
 func readRepoFile(t *testing.T, name string) string {
@@ -44,16 +42,14 @@ func TestReadmeHasOnePrimaryPath(t *testing.T) {
 	}
 }
 
-func TestReadmeDocumentsSbxWithoutRequiringDockerDesktop(t *testing.T) {
-	body := strings.ToLower(primaryReadmePath(t))
-	if strings.Contains(body, "install docker desktop") {
-		t.Fatal("README must not require Docker Desktop; sbx runs without it")
+func TestReadmePrimaryPathUsesHomebrew(t *testing.T) {
+	body := primaryReadmePath(t)
+	want := "brew install mcavage/tap/pix\npix setup\npix run"
+	if !strings.Contains(body, want) {
+		t.Fatalf("README primary path must be the three-command Homebrew flow:\n%s", want)
 	}
-	if !strings.Contains(body, "docker desktop is not required") {
-		t.Fatal("README must state that Docker Desktop is not required")
-	}
-	if !strings.Contains(body, "brew install docker/tap/sbx@nightly") {
-		t.Fatal("README must install the supported nightly Docker Sandboxes CLI")
+	if strings.Contains(body, "curl ") {
+		t.Fatal("README primary path must keep the curl installer in the fallback section")
 	}
 }
 
@@ -72,18 +68,9 @@ func TestReadmePrimaryPathCommandsExist(t *testing.T) {
 			t.Errorf("README primary path documents unknown Pix verb %q", m[1])
 		}
 	}
-	for _, required := range []string{"pix setup", "pix doctor", "pix run", "pix help"} {
+	for _, required := range []string{"pix setup", "pix run"} {
 		if !strings.Contains(body, required) {
 			t.Errorf("README primary path missing %q", required)
-		}
-	}
-}
-
-func TestReadmeModelTagsMatchDefaults(t *testing.T) {
-	s := readRepoFile(t, "README.md")
-	for _, model := range []string{config.DefaultMemoryWatcherModel, config.DefaultMemoryEmbedModel, config.DefaultOllamaBridgeModel} {
-		if !strings.Contains(s, model) {
-			t.Errorf("README does not name configured default model %q", model)
 		}
 	}
 }

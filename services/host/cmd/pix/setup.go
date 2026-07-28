@@ -241,7 +241,7 @@ func runSetupHandoff(dir, name string, state sbxState, replace bool, out io.Writ
 		if name == "" {
 			which = fmt.Sprintf("the sandbox for %s", dir)
 		}
-		return fmt.Errorf("cannot determine the state of %s (`sbx ls` failed or sbx is unavailable). Host setup completed; fix sbx and retry with: pix setup%s", which, retryArg)
+		return fmt.Errorf("cannot determine the state of %s (`sbx ls` failed or sbx is unavailable). Host setup completed; install or fix sbx (`%s`) and retry with: pix setup%s", which, sbxInstallHint, retryArg)
 	case sbxRunning, sbxStopped:
 		if replace {
 			fmt.Fprintln(out, "")

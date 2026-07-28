@@ -32,14 +32,20 @@ The first release fixes truthfulness before adding automation:
 
 ## 3. Product decision
 
-Make Homebrew the primary macOS distribution. Keep the signed release installer as a fallback.
+Homebrew is the primary and only supported macOS distribution. The curl
+installer (`install.sh`) is a fallback for Linux or a machine without Homebrew;
+there is no signed-release path.
 
-The Homebrew formula owns binaries and ordinary package dependencies. `pix setup` owns stateful work: authentication, configuration, model selection, service lifecycle, pack activation, and verification. Do not turn the shell downloader into a second setup engine.
+The Homebrew formula owns only the `pix` and `pix-host` binaries and the manpage.
+It deliberately declares no dependencies. `pix setup` owns prerequisite
+installation plus stateful work: authentication, configuration, model selection,
+service lifecycle, pack activation, and verification. Do not turn the shell
+downloader into a second setup engine.
 
 The supported path becomes:
 
 ```bash
-brew install docker/tap/pix
+brew install mcavage/tap/pix
 pix setup --pack docker/gm-pix-pack
 pix run
 ```

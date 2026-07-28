@@ -402,6 +402,9 @@ func runRun(argv []string) {
 			os.Exit(exit.ExitCode())
 		}
 		fmt.Fprintf(os.Stderr, "pix run: exec sbx: %v\n", err)
+		if errors.Is(err, exec.ErrNotFound) {
+			fmt.Fprintln(os.Stderr, "install sbx with: "+sbxInstallHint)
+		}
 		if plan.Reattach {
 			fmt.Fprintf(os.Stderr, "pix run: re-attach failed; recreate it with: %s\n", runReplaceCommand(o.Workspace))
 		}

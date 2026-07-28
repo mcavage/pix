@@ -10,122 +10,32 @@ pull request without asking for approval before every shell command.
 
 ## Install and run
 
-The following is the supported first-run path on macOS. Run it in order.
-
 <!-- PIX_PRIMARY_PATH_START -->
 
-### 1. Install the nightly Docker Sandboxes CLI
-
 ```bash
-brew install docker/tap/sbx@nightly
-sbx login
-```
-
-Pix runs through Docker Sandboxes; Docker Desktop is not required. Pix targets
-the nightly `sbx` CLI because its custom kit and MCP gateway support are newer
-than the stable channel.
-
-### 2. Install Ollama and the default local models
-
-```bash
-brew install ollama
-brew services start ollama
-ollama pull qwen3.5:9b
-ollama pull nomic-embed-text
-```
-
-`qwen3.5:9b` powers local memory capture and the optional in-sandbox local model.
-`nomic-embed-text` creates memory embeddings.
-
-### 3. Install and sign in to 1Password CLI
-
-```bash
-brew install 1password-cli
-op signin
-```
-
-Pix stores `op://` references, not resolved provider keys. `pix setup` requires
-1Password CLI and reconciles Anthropic, OpenAI, and Google model credentials into
-Docker Sandboxes.
-
-### 4. Configure GitHub credentials for sandboxes
-
-Install and authenticate GitHub CLI, then copy its token into the sandbox secret
-store:
-
-```bash
-brew install gh
-gh auth login
-sbx secret set -g github -t "$(gh auth token)"
-```
-
-Git operations inside Pix use HTTPS. The sandbox proxy injects this credential;
-`gh auth status` inside a sandbox may still say it is not logged in.
-
-### 5. Install Pix
-
-```bash
-sbx settings set kit.allowedSources '["docker.io/","github.com/mcavage/"]'
-curl -fsSL https://raw.githubusercontent.com/mcavage/pix/main/install.sh | sh
-exec "$SHELL" -l
-pix version
-```
-
-The installer places `pix` and `pix-host` in `~/.local/bin` without `sudo`.
-
-### 6. Run setup
-
-```bash
+brew install mcavage/tap/pix
 pix setup
-```
-
-Setup inventories the host, verifies 1Password references, reconciles sandbox
-credentials, creates the default pack, verifies the result, and starts the
-one-time agent onboarding handoff. It is safe to run again. For a host-only or CI
-run with no sandbox handoff, use `pix setup --no-agent --yes`.
-
-### 7. Verify readiness
-
-```bash
-pix doctor
-```
-
-The output is grouped by subsystem. These are literal examples of its rendered
-shapes across healthy and unhealthy hosts:
-
-```text
-✓ model key    3 provider keys verified
-✗ ollama       not installed (the configured memory service needs it for capture + recall)
-? google-workspace sbx unavailable here; registration cannot be verified (check from the host)
-⊘ google-workspace access denied by organization policy
-⚠ pix: 2 items outstanding (optional, nothing blocking) — see the TODOs below.
-```
-
-`✓` is verified and ready. `✗` needs setup and includes a copy-paste fix. `?`
-means Pix cannot check from the current environment and names where to retry.
-`⊘` is a positive policy or permission block. The `⚠` headline means only
-optional work remains, so normal use can continue. `pix doctor --json` provides
-the same checks and exit verdict for automation.
-
-### 8. Start Pix in a repository
-
-```bash
-cd /path/to/repository
 pix run
 ```
 
-`pix run` creates a named sandbox on first use and reattaches to it later. Use
-`pix run --replace` when changing create-time kit or MCP settings.
-
-### 9. Learn the workflows
-
-Inside Pix, use `/help` for the capability map. On the host, use:
-
-```bash
-pix help
-```
+`pix setup` installs prerequisites (`sbx`, `op`, `ollama`, `gh`) and walks
+through onboarding. Do not use the bare `brew install pix`: Homebrew does not
+know a formula by that name and may suggest `pixi` instead. The `mcavage/tap/`
+qualifier is required.
 
 <!-- PIX_PRIMARY_PATH_END -->
+
+<details>
+<summary>Alternative: curl installer (Linux, or no Homebrew)</summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mcavage/pix/main/install.sh | sh
+```
+
+This is the fallback path. On macOS, prefer Homebrew. `pix upgrade` on a
+curl-installed Mac requires manually rerunning this script. On a
+Homebrew-installed Mac, it directs you to `brew upgrade mcavage/tap/pix`.
+</details>
 
 ## Optional: Google Workspace
 
