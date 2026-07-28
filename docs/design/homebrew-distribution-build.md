@@ -109,6 +109,29 @@ into Step 4's acceptance criteria, and P5's observed behavior is copied into
 Step 7's caveats text. Do not proceed to Step 1 with an assumption from this
 section still unverified.
 
+### Prototype observations (2026-07-27)
+
+- P1 passed on Apple Silicon: Homebrew selected the arm64 archive, neither
+  binary had `com.apple.quarantine`, Go's linker-provided ad-hoc signature was
+  present, both binaries ran without a Gatekeeper prompt, and the Homebrew man
+  page rendered. Intel remains for tap CI or a physical Intel Mac.
+- P2 passed. Darwin's `os.Executable()` returned the invoked symlink path and
+  Homebrew linked both binaries into the same prefix `bin` directory, so the
+  sibling lookup found `pix-host`.
+- P3 passed. The existing installer downloaded and verified the loose
+  `pix-darwin-arm64` and `pix-host-darwin-arm64` assets after combined archives
+  were added to the same release.
+- P4 reproduced the shadow: bare `pix` resolved to `~/.local/bin/pix` at
+  version 0.1.7 while `/opt/homebrew/bin/pix` reported 0.1.8. Homebrew itself
+  warned that both `pix` and `pix-host` were shadowed and named the earlier
+  paths.
+- P5 corrected one assumption. Removing the keg does not kill an already
+  running `pix-host`; launchd continued to report that process as running and
+  no immediate error reached `serve.log`. The failure is latent: the next
+  launch after logout, crash, or service restart cannot execute the missing
+  Cellar path. Caveats must require `pix state uninstall` first, but must not
+  claim that an immediate visible respawn loop was observed.
+
 ---
 
 ## Step 1 - provenance detector
