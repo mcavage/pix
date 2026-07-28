@@ -392,7 +392,7 @@ jobs:
           token: ${{ secrets.TAP_PUSH_TOKEN }}
           path: tap
 
-      - name: Update only release URLs and hashes
+      - name: Update formula version, release URLs, and hashes
         env:
           V: ${{ needs.version.outputs.version }}
           ARM_SHA: ${{ steps.sha.outputs.arm64 }}
@@ -407,6 +407,15 @@ jobs:
           path = Path("tap/Formula/pix.rb")
           body = path.read_text()
           version = os.environ["V"]
+          body, count = re.subn(
+              r'(^\s*version ")[^"]+("\s*$)',
+              rf'\g<1>{version}\g<2>',
+              body,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          if count != 1:
+              raise SystemExit(f"expected one explicit version, replaced {count}")
           replacements = (
               ("arm", os.environ["ARM_SHA"]),
               ("intel", os.environ["AMD_SHA"]),
@@ -424,6 +433,7 @@ jobs:
       - name: Assert formula hashes came from SHA256SUMS
         run: |
           set -euo pipefail
+          grep -q 'version "${{ needs.version.outputs.version }}"' tap/Formula/pix.rb
           grep -q '${{ steps.sha.outputs.arm64 }}' tap/Formula/pix.rb
           grep -q '${{ steps.sha.outputs.amd64 }}' tap/Formula/pix.rb
 
