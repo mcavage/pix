@@ -1,11 +1,9 @@
 package main
 
-// upgrade.go — `pix upgrade`: replace the installed launcher binaries.
+// upgrade.go — `pix upgrade`: route upgrades through the install owner.
 //
-// `pix run` tracks the latest stable KIT and IMAGE on its own (kitref.go), so
-// most fixes reach you without touching the binaries. The two host binaries are
-// the part that cannot update themselves, and until now the only way to move
-// them was to remember the curl|sh line from the README.
+// Homebrew owns its keg, so a Homebrew install is upgraded only by Homebrew.
+// Installer and local-development channels retain the tagged install.sh path.
 //
 // This deliberately does NOT reimplement the install. It downloads install.sh
 // and runs it, because that script already does the security-relevant work:
@@ -208,6 +206,16 @@ func runUpgrade(argv []string) {
 		os.Exit(2)
 	}
 
+	prov := installChannelNow()
+	if prov.Channel == channelHomebrew {
+		err := runUpgradeHomebrew(o, prov, os.Stdin, os.Stdout, isTTY(os.Stdin), runBrewUpgrade, probeInstalledVersion)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "pix upgrade: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// An explicit `pix upgrade` always asks GitHub directly: the 24h memo exists
 	// so `pix run` is not a network call, but someone typing "upgrade" wants
 	// today's answer, not yesterday's. Refresh the memo while we are here so the
@@ -245,6 +253,92 @@ func runUpgrade(argv []string) {
 		fmt.Fprintf(os.Stderr, "Nothing was replaced. Install by hand:\n  curl -fsSL %s | sh\n", upgradeInstallerURL(plan.Target))
 		os.Exit(1)
 	}
+}
+
+const homebrewUpgradeCommand = "brew upgrade mcavage/tap/pix"
+
+// runUpgradeHomebrew never writes into the keg itself. isTerminal and the two
+// function arguments are seams so tests can prove that non-interactive runs do
+// not prompt or invoke brew and that success requires a post-mutation probe.
+func runUpgradeHomebrew(
+	o upgradeOpts,
+	prov provenance,
+	stdin io.Reader,
+	stdout io.Writer,
+	isTerminal bool,
+	runBrew func(io.Reader, io.Writer) error,
+	probe func() (string, error),
+) error {
+	if o.Version != "" {
+		return fmt.Errorf("this is a Homebrew install; --version cannot write into a brew keg. Use brew pin or a versioned formula")
+	}
+	if o.Force {
+		return fmt.Errorf("--force has no effect on a Homebrew install; run `%s` if you mean to upgrade it", homebrewUpgradeCommand)
+	}
+	if o.Check {
+		fmt.Fprintf(stdout, "pix %s is installed via Homebrew.\n  check:    brew outdated mcavage/tap/pix\n  upgrade:  %s\n", version, homebrewUpgradeCommand)
+		return nil
+	}
+
+	fmt.Fprintf(stdout, "pix %s is installed via Homebrew.\n  %s\n", version, homebrewUpgradeCommand)
+	if prov.Evidence != "" {
+		fmt.Fprintf(stdout, "  detected: %s\n", prov.Evidence)
+	}
+	if !isTerminal {
+		return nil
+	}
+
+	fmt.Fprint(stdout, "Run it now? [y/N] ")
+	var answer string
+	_, _ = fmt.Fscanln(stdin, &answer)
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	if answer != "y" && answer != "yes" {
+		return nil
+	}
+	if err := runBrew(stdin, stdout); err != nil {
+		return fmt.Errorf("brew upgrade failed: %w", err)
+	}
+	newVersion, err := probe()
+	if err != nil {
+		return fmt.Errorf("brew upgrade exited 0 but the result could not be verified: %w", err)
+	}
+	fmt.Fprintf(stdout, "verified: pix %s\n", newVersion)
+	return nil
+}
+
+func runBrewUpgrade(stdin io.Reader, output io.Writer) error {
+	cmd := exec.Command("brew", "upgrade", "mcavage/tap/pix")
+	cmd.Stdin = stdin
+	cmd.Stdout = output
+	cmd.Stderr = output
+	return cmd.Run()
+}
+
+// probeInstalledVersion checks the pix a new shell would find, not this
+// process's stale in-memory version. It also requires that PATH now resolves to
+// a Cellar installation, preventing a shadowed installer copy from earning a
+// false Homebrew verification.
+func probeInstalledVersion() (string, error) {
+	path, err := exec.LookPath("pix")
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	if !hasPathSequence(resolved, "Cellar", "pix") {
+		return "", fmt.Errorf("pix on PATH resolves to %s, not the Homebrew Cellar", resolved)
+	}
+	out, err := exec.Command(path, "version").Output()
+	if err != nil {
+		return "", err
+	}
+	v := strings.TrimSpace(string(out))
+	if !isReleased(v) {
+		return "", fmt.Errorf("%s version returned %q", path, v)
+	}
+	return v, nil
 }
 
 // upgradeLookupTimeout is longer than the one `pix run` uses: an explicit
@@ -306,7 +400,7 @@ func execInstallerFrom(url, target, prefix string, stdout, stderr io.Writer) err
 
 const upgradeUsage = `usage: pix upgrade [--check] [--version X.Y.Z] [--force]
 
-Replace the installed pix + pix-host binaries with a published release.
+Upgrade pix through the tool that owns the current installation.
 
 ` + "`pix run`" + ` already tracks the latest stable KIT and IMAGE by itself, so most
 fixes reach you without upgrading. This is for the two host binaries, which
@@ -318,7 +412,8 @@ flags:
                    (also how you downgrade)
   --force          upgrade from a local/dev build, or reinstall the same version
 
-Under the hood it runs the official install.sh for the target release, which
+Homebrew installs run ` + "`brew upgrade mcavage/tap/pix`" + `. Other installs run
+the official install.sh for the target release, which
 verifies every binary's sha256 against the published SHA256SUMS and installs
 only once ALL of them verify. It installs into the directory the running pix
 lives in (override with PIX_PREFIX), and does nothing when the bytes already
