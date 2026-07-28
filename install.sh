@@ -62,6 +62,40 @@ detect_platform() {
 # --- HTTP helpers -----------------------------------------------------------
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Refuse any prefix owned by Homebrew. Writing real binaries there would
+# replace brew's symlinks and corrupt the keg's ownership model.
+guard_homebrew_prefix() {
+	brew_prefix=""
+	if have brew; then
+		brew_prefix="$(brew --prefix 2>/dev/null || true)"
+	fi
+
+	managed=""
+	if [ -n "$brew_prefix" ]; then
+		case "$PREFIX" in
+			"$brew_prefix" | "$brew_prefix"/*) managed="$brew_prefix" ;;
+		esac
+	fi
+	if [ -z "$managed" ]; then
+		case "$PREFIX" in
+			/opt/homebrew | /opt/homebrew/* | /usr/local/Homebrew | /usr/local/Homebrew/*) managed="$PREFIX" ;;
+		esac
+	fi
+	[ -z "$managed" ] || {
+		err "PIX_PREFIX ($PREFIX) is a Homebrew-managed prefix."
+		err "Installing pix's real binaries there would conflict with Homebrew's"
+		err "symlinks during the next 'brew upgrade' or 'brew uninstall'."
+		err ""
+		err "Use Homebrew instead:"
+		err "  brew install mcavage/tap/pix"
+		err "Or pick a different PIX_PREFIX, for example:"
+		err "  PIX_PREFIX=\$HOME/.local/bin sh install.sh"
+		err ""
+		err "Nothing was written."
+		exit 1
+	}
+}
+
 # Pick a downloader once so the rest of the script is tool-agnostic.
 if have curl; then
 	DL="curl"
@@ -332,6 +366,7 @@ main() {
 			*) die "unknown argument '$arg' (try --uninstall or --help)" ;;
 		esac
 	done
+	guard_homebrew_prefix
 
 	case "$action" in
 		install) do_install ;;

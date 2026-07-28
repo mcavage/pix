@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +11,78 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestRunUpgradeHomebrewNonTTYPrintsAndExits(t *testing.T) {
+	var out bytes.Buffer
+	called := false
+	err := runUpgradeHomebrew(upgradeOpts{}, provenance{Channel: channelHomebrew}, strings.NewReader("yes\n"), &out, false,
+		func(io.Reader, io.Writer) error { called = true; return nil },
+		func() (string, error) { t.Fatal("probe called"); return "", nil },
+	)
+	if err != nil || called {
+		t.Fatalf("err=%v brewCalled=%v", err, called)
+	}
+	if got := out.String(); !strings.Contains(got, homebrewUpgradeCommand) || strings.Contains(got, "Run it now?") {
+		t.Fatalf("non-TTY output = %q", got)
+	}
+}
+
+func TestRunUpgradeHomebrewForceRefuses(t *testing.T) {
+	err := runUpgradeHomebrew(upgradeOpts{Force: true}, provenance{}, strings.NewReader(""), &bytes.Buffer{}, true,
+		func(io.Reader, io.Writer) error { t.Fatal("brew called"); return nil },
+		func() (string, error) { t.Fatal("probe called"); return "", nil },
+	)
+	if err == nil || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunUpgradeHomebrewVersionFlagRefuses(t *testing.T) {
+	err := runUpgradeHomebrew(upgradeOpts{Version: "0.1.7"}, provenance{}, strings.NewReader(""), &bytes.Buffer{}, true,
+		func(io.Reader, io.Writer) error { t.Fatal("brew called"); return nil },
+		func() (string, error) { t.Fatal("probe called"); return "", nil },
+	)
+	if err == nil || !strings.Contains(err.Error(), "--version") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunUpgradeHomebrewCheckMatchesOtherChannels(t *testing.T) {
+	var out bytes.Buffer
+	err := runUpgradeHomebrew(upgradeOpts{Check: true}, provenance{}, strings.NewReader(""), &out, true,
+		func(io.Reader, io.Writer) error { t.Fatal("brew called"); return nil },
+		func() (string, error) { t.Fatal("probe called"); return "", nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"installed", "check:", "upgrade:", homebrewUpgradeCommand} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output %q missing %q", out.String(), want)
+		}
+	}
+}
+
+func TestRunUpgradeHomebrewVerifiesAfterBrew(t *testing.T) {
+	var out bytes.Buffer
+	brewCalled := false
+	err := runUpgradeHomebrew(upgradeOpts{}, provenance{}, strings.NewReader("yes\n"), &out, true,
+		func(io.Reader, io.Writer) error { brewCalled = true; return nil },
+		func() (string, error) { return "0.1.9", nil },
+	)
+	if err != nil || !brewCalled || !strings.Contains(out.String(), "verified: pix 0.1.9") {
+		t.Fatalf("err=%v brewCalled=%v output=%q", err, brewCalled, out.String())
+	}
+
+	out.Reset()
+	err = runUpgradeHomebrew(upgradeOpts{}, provenance{}, strings.NewReader("y\n"), &out, true,
+		func(io.Reader, io.Writer) error { return nil },
+		func() (string, error) { return "", errors.New("shadowed") },
+	)
+	if err == nil || strings.Contains(out.String(), "verified:") {
+		t.Fatalf("failed probe err=%v output=%q", err, out.String())
+	}
+}
 
 func TestParseUpgradeArgs(t *testing.T) {
 	o, err := parseUpgradeArgs(nil)

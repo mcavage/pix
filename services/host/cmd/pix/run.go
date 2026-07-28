@@ -139,17 +139,10 @@ func runRun(argv []string) {
 		released := isReleased(version)
 		kitOverride := len(o.Kits) > 0
 
-		// Which RELEASE does the auto pin resolve to? By default the newest
-		// published one rather than this binary's own, so an installed launcher
-		// picks up kit/image fixes instead of being frozen at the version it was
-		// installed at. Every failure (offline, GitHub down, junk response) yields
-		// "" and falls back to the stamped pin. See kitref.go.
+		// Released launchers pin the kit and image to their own stamped version.
+		// Only explicit --kit-ref and version_pin overrides move that pin.
 		if !o.Dev && !kitOverride {
-			latest := ""
-			if released && o.KitRef == "" && strings.TrimSpace(cfg.VersionPin) == "" {
-				latest = resolveLatestRelease(&http.Client{Timeout: latestReleaseTimeout}, time.Now())
-			}
-			ref, src := resolveKitRef(version, o.KitRef, cfg.VersionPin, latest)
+			ref, src := resolveKitRef(version, o.KitRef, cfg.VersionPin)
 			o.KitRef = ref
 			if msg := kitRefNotice(version, ref, src); msg != "" {
 				fmt.Fprintln(os.Stderr, msg)

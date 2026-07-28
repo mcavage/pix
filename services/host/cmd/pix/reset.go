@@ -897,12 +897,16 @@ func isOurBinTarget(target string) bool {
 // runUninstallCore runs the full reset, then removes the bin symlinks. Split for
 // testability (temp HOME, injected bins/fs/env). It returns runResetCore's error
 // (notably errResetNeedsYes) unchanged so the CLI maps it to the same exit code.
-func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts resetOpts,
+func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts resetOpts, prov provenance,
 	fsys resetFS, env shellEnv, rio setupIO, now func() time.Time) error {
 
 	a := resetPlan(cfg, paths, opts)
 	printResetPlan(a, rio.out)
-	fmt.Fprintln(rio.out, "Will also remove the installed pix + pix-host bin symlinks.")
+	if prov.Channel == channelHomebrew {
+		fmt.Fprintln(rio.out, "Homebrew owns the binaries and man page; pix will not remove them directly.")
+	} else {
+		fmt.Fprintln(rio.out, "Will also remove the installed pix + pix-host bin symlinks.")
+	}
 	// Harvested task artifacts are user work product and are NOT removed by
 	// default (they live under XDG_DATA_HOME, outside the reset trees). Print where
 	// they are + how big so they stay findable; --purge-data is the deliberate
@@ -935,8 +939,23 @@ func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts 
 		printResetSummary(created, rio.out)
 		return execErr
 	}
-	removeBinSymlinks(bins, fsys, rio.out)
-	removeInstalledManPage(env, fsys, rio.out)
+	if prov.Channel == channelHomebrew {
+		fmt.Fprintln(rio.out, "Binaries and man page are owned by Homebrew, not pix.")
+		fmt.Fprintln(rio.out, "State and managed services were removed first. Finish with:")
+		fmt.Fprintln(rio.out, "  brew uninstall mcavage/tap/pix")
+		fmt.Fprintln(rio.out, "Removing the formula first leaves launchd configured with a Cellar path that fails on its next launch.")
+		if rio.isTTY && env.runInteractive != nil {
+			ans := strings.ToLower(promptLine(rio, "Run brew uninstall now? [y/N]: "))
+			if ans == "y" || ans == "yes" {
+				if err := env.runInteractive("brew", "uninstall", "mcavage/tap/pix"); err != nil {
+					return fmt.Errorf("brew uninstall failed: %w", err)
+				}
+			}
+		}
+	} else {
+		removeBinSymlinks(bins, fsys, rio.out)
+		removeInstalledManPage(env, fsys, rio.out)
+	}
 	printResetSummary(created, rio.out)
 	return nil
 }
@@ -982,7 +1001,7 @@ func runUninstall(argv []string) {
 	}
 	env := defaultShellEnv()
 	rio := setupIO{in: os.Stdin, out: os.Stdout, isTTY: isTTY(os.Stdin)}
-	if err := runUninstallCore(cfg, resolveResetPaths(env), resolveBinPaths(env), opts,
+	if err := runUninstallCore(cfg, resolveResetPaths(env), resolveBinPaths(env), opts, installChannelNow(),
 		defaultResetFS(), env, rio, time.Now); err != nil {
 		if errors.Is(err, errResetNeedsYes) {
 			fmt.Fprintln(os.Stderr, "pix uninstall: refusing to run non-interactively without confirmation")

@@ -26,13 +26,14 @@ import (
 // running a command for its output, reading an env var, and dialing a local TCP
 // port. Tests substitute fakes; defaultShellEnv() wires the real thing.
 type shellEnv struct {
-	lookPath func(name string) (string, error)
-	run      func(name string, args ...string) (string, error)
-	getenv   func(name string) string
-	dial     func(port int) bool
-	statFile func(path string) bool            // does a regular file exist at path?
-	readFile func(path string) (string, error) // read a file's contents
-	homeDir  func() string                     // the user's home directory ($HOME)
+	executable func() (string, error)
+	lookPath   func(name string) (string, error)
+	run        func(name string, args ...string) (string, error)
+	getenv     func(name string) string
+	dial       func(port int) bool
+	statFile   func(path string) bool            // does a regular file exist at path?
+	readFile   func(path string) (string, error) // read a file's contents
+	homeDir    func() string                     // the user's home directory ($HOME)
 	// fileMode returns a path's mode bits + whether it exists (file OR dir). The
 	// Secrets group's perms check uses it to flag a group/other-accessible
 	// op-refs.env or its dir. Nil in tests that don't exercise perms.
@@ -132,7 +133,8 @@ func probeRun(env shellEnv, name string, args ...string) (string, bool, error) {
 // defaultShellEnv returns a shellEnv backed by the real OS.
 func defaultShellEnv() shellEnv {
 	return shellEnv{
-		lookPath: exec.LookPath,
+		executable: os.Executable,
+		lookPath:   exec.LookPath,
 		run: func(name string, args ...string) (string, error) {
 			out, err := exec.Command(name, args...).CombinedOutput()
 			return string(out), err
@@ -393,6 +395,9 @@ func grepWord(out, name string) bool {
 // stories can rework one group without touching the others.
 func runDoctor(cfg *config.Config, env shellEnv) *report {
 	r := &report{}
+	if g := installDuplicatesGroup(env); len(g.checks) > 0 {
+		r.groups = append(r.groups, g)
+	}
 
 	// sbx presence gates the provider + mcp checks (they read `sbx secret ls` /
 	// `sbx mcp ls`). Inside the sandbox sbx is absent — say so, don't crash.
