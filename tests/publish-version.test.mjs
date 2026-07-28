@@ -41,5 +41,6 @@ test("the tap bump reads release hashes and opens a gated PR", () => {
 	assert.match(workflow, /expected one explicit version/);
 	assert.match(workflow, /git checkout -b "\$branch"/);
 	assert.match(workflow, /gh pr create --repo mcavage\/homebrew-tap/);
+	assert.match(workflow, /gh pr merge "\$pr_url" --repo mcavage\/homebrew-tap --auto --squash/);
 	assert.doesNotMatch(workflow, /sha256sum.*tap\/Formula\/pix\.rb/);
 });
