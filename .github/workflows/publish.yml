@@ -359,3 +359,89 @@ jobs:
             dist/pix_*.tar.gz
             dist/SHA256SUMS
           fail_on_unmatched_files: true
+
+  bump-tap:
+    name: open Homebrew tap bump PR
+    needs: [version, release-binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download this release's checksum manifest
+        env:
+          V: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -o SHA256SUMS \
+            "https://github.com/mcavage/pix/releases/download/v${V}/SHA256SUMS"
+
+      - name: Read archive hashes from SHA256SUMS
+        id: sha
+        env:
+          V: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          arm="$(awk -v f="pix_${V}_darwin_arm64.tar.gz" '$2 == f {print $1}' SHA256SUMS)"
+          amd="$(awk -v f="pix_${V}_darwin_amd64.tar.gz" '$2 == f {print $1}' SHA256SUMS)"
+          test -n "$arm" && test -n "$amd"
+          echo "arm64=$arm" >> "$GITHUB_OUTPUT"
+          echo "amd64=$amd" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the tap
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: mcavage/homebrew-tap
+          token: ${{ secrets.TAP_PUSH_TOKEN }}
+          path: tap
+
+      - name: Update only release URLs and hashes
+        env:
+          V: ${{ needs.version.outputs.version }}
+          ARM_SHA: ${{ steps.sha.outputs.arm64 }}
+          AMD_SHA: ${{ steps.sha.outputs.amd64 }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path("tap/Formula/pix.rb")
+          body = path.read_text()
+          version = os.environ["V"]
+          replacements = (
+              ("arm", os.environ["ARM_SHA"]),
+              ("intel", os.environ["AMD_SHA"]),
+          )
+          for block, digest in replacements:
+              pattern = rf'(on_{block} do\n\s+url ")[^"]+("\n\s+sha256 ")[^"]+("\n\s+end)'
+              asset_arch = "arm64" if block == "arm" else "amd64"
+              url = f"https://github.com/mcavage/pix/releases/download/v{version}/pix_{version}_darwin_{asset_arch}.tar.gz"
+              body, count = re.subn(pattern, rf'\g<1>{url}\g<2>{digest}\g<3>', body)
+              if count != 1:
+                  raise SystemExit(f"expected one on_{block} block, replaced {count}")
+          path.write_text(body)
+          PY
+
+      - name: Assert formula hashes came from SHA256SUMS
+        run: |
+          set -euo pipefail
+          grep -q '${{ steps.sha.outputs.arm64 }}' tap/Formula/pix.rb
+          grep -q '${{ steps.sha.outputs.amd64 }}' tap/Formula/pix.rb
+
+      - name: Push bump branch and open PR
+        working-directory: tap
+        env:
+          GH_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+          V: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          branch="bump-v${V}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add Formula/pix.rb
+          git commit -m "pix v${V}"
+          git push origin "$branch"
+          gh pr create --repo mcavage/homebrew-tap \
+            --title "pix v${V}" \
+            --body "Automated bump from mcavage/pix release v${V}." \
+            --base main --head "$branch"

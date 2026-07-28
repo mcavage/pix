@@ -30,3 +30,14 @@ test("Homebrew archives are additive and contain both binaries plus the manpage"
 	assert.match(workflow, /-o "\$GITHUB_WORKSPACE\/dist\/pix-\$os-\$arch"/);
 	assert.doesNotMatch(workflow, /host binary has\s+no such symbol/);
 });
+
+test("the tap bump reads release hashes and opens a gated PR", () => {
+	assert.match(workflow, /bump-tap:/);
+	assert.match(workflow, /needs: \[version, release-binaries\]/);
+	assert.match(workflow, /pix_\$\{V\}_darwin_arm64\.tar\.gz/);
+	assert.match(workflow, /pix_\$\{V\}_darwin_amd64\.tar\.gz/);
+	assert.match(workflow, /secrets\.TAP_PUSH_TOKEN/);
+	assert.match(workflow, /git checkout -b "\$branch"/);
+	assert.match(workflow, /gh pr create --repo mcavage\/homebrew-tap/);
+	assert.doesNotMatch(workflow, /sha256sum.*tap\/Formula\/pix\.rb/);
+});
