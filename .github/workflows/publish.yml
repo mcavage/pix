@@ -451,7 +451,8 @@ jobs:
           git add Formula/pix.rb
           git commit -m "pix v${V}"
           git push origin "$branch"
-          gh pr create --repo mcavage/homebrew-tap \
+          pr_url="$(gh pr create --repo mcavage/homebrew-tap \
             --title "pix v${V}" \
             --body "Automated bump from mcavage/pix release v${V}." \
-            --base main --head "$branch"
+            --base main --head "$branch")"
+          gh pr merge "$pr_url" --repo mcavage/homebrew-tap --auto --squash
