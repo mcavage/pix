@@ -161,8 +161,36 @@ func TestComputeHostBoM_Tier0(t *testing.T) {
 		Proxies:      []packProxy{{Name: "warehouse", Egress: []string{"warehouse.example.test"}}},
 		Integrations: []packIntegration{{Name: "ref-only", Env: "SOME_TOKEN"}}, // env but NO mcp
 	}}
-	if b := computeHostBoM(p, "", func(string) bool { return true }); b.tier1() {
+	b := computeHostBoM(p, "", func(string) bool { return true })
+	if b.tier1() {
 		t.Errorf("no mcp, no host proxy, no bin must be Tier-0, got %+v", b)
+	}
+	if len(b.SandboxProxies) != 1 || b.SandboxProxies[0].Name != "warehouse" {
+		t.Fatalf("sandbox proxy disclosure = %+v", b.SandboxProxies)
+	}
+	var out bytes.Buffer
+	renderHostBoM(&out, b)
+	for _, want := range []string{"Sandbox command:", "warehouse", "warehouse.example.test"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("trust screen omitted %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestRenderHostBoM_UsesExecutionBoundariesAndSetupDescriptions(t *testing.T) {
+	b := hostBoM{
+		MCP:        []hostBoMMCP{{Name: "chat", Argv: []string{"pix-host", "mcp", "chat"}}},
+		Containers: []hostBoMContainer{{Name: "people", Image: "people-mcp:1"}},
+		RemoteMCP:  []hostBoMRemote{{Name: "docs", URL: "https://docs.example.test/mcp"}},
+		Setup:      []packSetupStep{{ID: "chat", Description: "Authorize chat", Path: "setup/chat", ApplyArgs: []string{"apply"}, Required: true}},
+	}
+	var out bytes.Buffer
+	renderHostBoM(&out, b)
+	text := out.String()
+	for _, want := range []string{"Host MCP:", "Host MCP container:", "Remote MCP:", "Required setup:", "Authorize chat"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("trust screen omitted %q:\n%s", want, text)
+		}
 	}
 }
 

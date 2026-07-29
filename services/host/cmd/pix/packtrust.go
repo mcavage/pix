@@ -46,14 +46,15 @@ import (
 // by renderHostBoM, gated by packTrustGate, and accepted as a fingerprint in
 // the HOST trust store (computeHostExecFingerprint + packtruststore.go).
 type hostBoM struct {
-	MCP        []hostBoMMCP       // built-in MCP servers the gateway spawns on the host
-	Containers []hostBoMContainer // OCI MCP servers Docker runs on the host
-	RemoteMCP  []hostBoMRemote    // remote MCP endpoints attached by the pack
-	Proxies    []string           // host=true [[proxy]] wrapper names (bin/<name>)
-	Bins       []packBin          // [[bin]] external binaries (path + pinned sha)
-	Egress     []string           // union of every facet's declared egress, sorted
-	Creds      []string           // credential ENV VAR names solicited (never values)
-	Setup      []packSetupStep    // pack setup executables, probes, and apply argv
+	MCP            []hostBoMMCP       // built-in MCP servers the gateway spawns on the host
+	Containers     []hostBoMContainer // OCI MCP servers Docker runs on the host
+	RemoteMCP      []hostBoMRemote    // remote MCP endpoints attached by the pack
+	Proxies        []string           // host=true [[proxy]] wrapper names (bin/<name>)
+	SandboxProxies []packProxy        // host=false wrappers: sandbox commands forwarding elsewhere
+	Bins           []packBin          // [[bin]] external binaries (path + pinned sha)
+	Egress         []string           // union of every facet's declared egress, sorted
+	Creds          []string           // credential ENV VAR names solicited (never values)
+	Setup          []packSetupStep    // pack setup executables, probes, and apply argv
 }
 
 // hostBoMMCP is one host-spawned MCP server: its name plus the exact argv the
@@ -186,6 +187,8 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 	for _, pr := range p.Manifest.Proxies {
 		if pr.Host {
 			b.Proxies = append(b.Proxies, pr.Name)
+		} else {
+			b.SandboxProxies = append(b.SandboxProxies, pr)
 		}
 		for _, e := range pr.Egress {
 			if e = strings.TrimSpace(e); e != "" {
@@ -362,7 +365,7 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 	fmt.Fprintln(out, "This pack adds these integrations to Pix:")
 	fmt.Fprintln(out)
 	for _, m := range b.MCP {
-		fmt.Fprintf(out, "  Local integration:   %s\n", m.Name)
+		fmt.Fprintf(out, "  Host MCP:            %s\n", m.Name)
 		fmt.Fprintf(out, "                       Runs on this Mac: op run -- %s\n", strings.Join(m.Argv, " "))
 	}
 	for _, c := range b.Containers {
@@ -370,26 +373,37 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 		if c.Image != "" {
 			source = "image " + c.Image
 		}
-		fmt.Fprintf(out, "  Local container:     %s (%s)\n", c.Name, source)
+		fmt.Fprintf(out, "  Host MCP container:  %s (%s)\n", c.Name, source)
 		if len(c.EnvKeys) > 0 {
 			fmt.Fprintf(out, "                       Receives: %s\n", strings.Join(c.EnvKeys, ", "))
 		}
 	}
 	for _, r := range b.RemoteMCP {
-		fmt.Fprintf(out, "  Remote integration:  %s → %s\n", r.Name, r.URL)
+		fmt.Fprintf(out, "  Remote MCP:          %s → %s\n", r.Name, r.URL)
 	}
 	for _, pr := range b.Proxies {
 		fmt.Fprintf(out, "  Host wrapper:        %s (bin/%s; on PATH for `pix host` only)\n", pr, pr)
+	}
+	for _, pr := range b.SandboxProxies {
+		destination := "a declared endpoint"
+		if len(pr.Egress) > 0 {
+			destination = strings.Join(pr.Egress, ", ")
+		}
+		fmt.Fprintf(out, "  Sandbox command:     %s (bin/%s → %s)\n", pr.Name, pr.Name, destination)
 	}
 	for _, bn := range b.Bins {
 		fmt.Fprintf(out, "  External binary:     %s  sha256:%s  [re-hashed before every launch]\n", bn.Name, strings.ToLower(strings.TrimSpace(bn.SHA)))
 	}
 	for _, s := range b.Setup {
-		kind := "optional"
+		kind := "Optional setup:"
 		if s.Required {
-			kind = "required"
+			kind = "Required setup:"
 		}
-		fmt.Fprintf(out, "  Setup hook:         %s (%s) %s %s\n", s.ID, kind, s.Path, strings.Join(s.ApplyArgs, " "))
+		label := strings.TrimSpace(s.Description)
+		if label == "" {
+			label = s.ID
+		}
+		fmt.Fprintf(out, "  %-20s %s — %s (%s %s)\n", kind, s.ID, label, s.Path, strings.Join(s.ApplyArgs, " "))
 	}
 	if len(b.Egress) > 0 {
 		fmt.Fprintf(out, "  Network egress:      %s\n", strings.Join(b.Egress, ", "))
