@@ -388,13 +388,17 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		}
 	}
 
-	fmt.Fprintf(out, "Importing your OAuth client + authorizing %s (gog auth route: %s, read-only scopes requested)...\n", account, route.name)
-	fmt.Fprintln(out, "This may open a browser for you to sign in.")
-	for _, step := range route.steps {
-		argv := step.argv(account, credentials)
-		fmt.Fprintf(out, "  running: gog %s\n", strings.Join(argv, " "))
-		if err := runInteractive("gog", argv...); err != nil {
-			return fmt.Errorf("gog %s: %w", strings.Join(argv, " "), err)
+	if gogAuthed(env, account) {
+		fmt.Fprintf(out, "Existing Google authorization found for %s; reusing it.\n", account)
+	} else {
+		fmt.Fprintf(out, "Importing your OAuth client + authorizing %s (gog auth route: %s, read-only scopes requested)...\n", account, route.name)
+		fmt.Fprintln(out, "This may open a browser for you to sign in.")
+		for _, step := range route.steps {
+			argv := step.argv(account, credentials)
+			fmt.Fprintf(out, "  running: gog %s\n", strings.Join(argv, " "))
+			if err := runInteractive("gog", argv...); err != nil {
+				return fmt.Errorf("gog %s: %w", strings.Join(argv, " "), err)
+			}
 		}
 	}
 

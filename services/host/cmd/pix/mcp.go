@@ -553,7 +553,12 @@ func buildGogRegistrar(env shellEnv, gogPath, account string) mcpRegistrar {
 	reg := mcpRegistrar{gog: gogPath, account: account}
 	opPath, opErr := lookPath("op")
 	opRefs := resolveOpRefs(env)
-	if opErr == nil && opRefs != "" {
+	// gog's normal macOS OAuth lives in its own keychain and must not inherit an
+	// op wrapper merely because unrelated Slack/BambooHR refs exist. The wrapper
+	// is only for the explicit file-keyring topology, identified by its password
+	// ref; otherwise `op run` adds a needless sign-in dependency and can prevent
+	// an already-working bare gog command from running at all.
+	if opErr == nil && opRefs != "" && opRefFilled(env, "GOG_KEYRING_PASSWORD") {
 		reg.op = opPath
 		reg.opRefs = opRefs
 	}

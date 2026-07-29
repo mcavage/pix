@@ -93,7 +93,7 @@ func gogHeadlessProbe(env shellEnv, acct, opRefs string) probeResult {
 		return probeResult{status: probeError, detail: "could not run (gog not found)"}
 	}
 	opPath, opErr := env.lookPath("op")
-	if opErr != nil || opRefs == "" {
+	if opErr != nil || opRefs == "" || !opRefFilled(env, "GOG_KEYRING_PASSWORD") {
 		opPath, opRefs = "", ""
 	}
 	return probeListTools(env, gogRegisteredArgv(gogPath, opPath, opRefs, acct))

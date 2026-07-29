@@ -564,3 +564,30 @@ func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 		t.Fatalf("non-container server must not use --local, got: %v", slack)
 	}
 }
+
+func TestBuildGogRegistrarIgnoresUnrelatedOpRefs(t *testing.T) {
+	dir := t.TempDir()
+	refs := filepath.Join(dir, "op-refs.env")
+	if err := os.WriteFile(refs, []byte("BAMBOOHR_API_KEY=op://Private/Bamboo/key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := defaultShellEnv()
+	env.lookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
+	env.getenv = func(key string) string {
+		if key == "PIX_CONFIG" {
+			return filepath.Join(dir, "config.toml")
+		}
+		return ""
+	}
+	reg := buildGogRegistrar(env, "/usr/bin/gog", "you@example.com")
+	if reg.opRefs != "" || strings.HasSuffix(reg.execArgv(gwServerName)[0], "/op") {
+		t.Fatalf("unrelated refs wrapped gog: %+v", reg.execArgv(gwServerName))
+	}
+	if err := os.WriteFile(refs, []byte("GOG_KEYRING_PASSWORD=op://Private/Gog/password\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reg = buildGogRegistrar(env, "/usr/bin/gog", "you@example.com")
+	if reg.opRefs == "" {
+		t.Fatal("explicit gog file-keyring password ref did not enable op wrapper")
+	}
+}
