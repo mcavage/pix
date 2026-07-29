@@ -72,7 +72,8 @@ func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 			{Name: "platformio", Host: true, Egress: []string{"api.registry.platformio.org"}},
 			{Name: "warehouse", Egress: []string{"warehouse.example.test"}},
 		},
-		Bins: []packBin{{Name: "fastmail-mcp", Path: "bin/fastmail-mcp", SHA: "9F2C", Host: true}},
+		Bins:          []packBin{{Name: "fastmail-mcp", Path: "bin/fastmail-mcp", SHA: "9F2C", Host: true}},
+		Prerequisites: []string{"VPN connected"},
 	}}
 	b := computeHostBoM(p, "", func(string) bool { return true })
 	if !b.tier1() {
@@ -88,7 +89,10 @@ func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 		t.Errorf("gog argv must carry the hardened flags, got %q", got)
 	}
 	if len(b.Proxies) != 1 || b.Proxies[0] != "platformio" {
-		t.Errorf("BoM host proxies = %v (sandbox proxies never appear)", b.Proxies)
+		t.Errorf("BoM host proxies = %v", b.Proxies)
+	}
+	if len(b.SandboxProxies) != 1 || b.SandboxProxies[0].Name != "warehouse" {
+		t.Errorf("BoM sandbox proxies = %+v", b.SandboxProxies)
 	}
 	if len(b.Bins) != 1 || b.Bins[0].Name != "fastmail-mcp" {
 		t.Errorf("BoM bins = %+v", b.Bins)
@@ -99,6 +103,9 @@ func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 	}
 	if strings.Join(b.Creds, ",") != "FASTMAIL_TOKEN,GOG_KEYRING" {
 		t.Errorf("BoM creds = %v (VAR names only)", b.Creds)
+	}
+	if strings.Join(b.Prerequisites, ",") != "VPN connected" {
+		t.Errorf("BoM prerequisites = %v", b.Prerequisites)
 	}
 }
 
@@ -179,15 +186,16 @@ func TestComputeHostBoM_Tier0(t *testing.T) {
 
 func TestRenderHostBoM_UsesExecutionBoundariesAndSetupDescriptions(t *testing.T) {
 	b := hostBoM{
-		MCP:        []hostBoMMCP{{Name: "chat", Argv: []string{"pix-host", "mcp", "chat"}}},
-		Containers: []hostBoMContainer{{Name: "people", Image: "people-mcp:1"}},
-		RemoteMCP:  []hostBoMRemote{{Name: "docs", URL: "https://docs.example.test/mcp"}},
-		Setup:      []packSetupStep{{ID: "chat", Description: "Authorize chat", Path: "setup/chat", ApplyArgs: []string{"apply"}, Required: true}},
+		MCP:           []hostBoMMCP{{Name: "chat", Argv: []string{"pix-host", "mcp", "chat"}}},
+		Containers:    []hostBoMContainer{{Name: "people", Image: "people-mcp:1"}},
+		RemoteMCP:     []hostBoMRemote{{Name: "docs", URL: "https://docs.example.test/mcp"}},
+		Setup:         []packSetupStep{{ID: "chat", Description: "Authorize chat", Path: "setup/chat", ApplyArgs: []string{"apply"}, Required: true}},
+		Prerequisites: []string{"Your VPN is connected"},
 	}
 	var out bytes.Buffer
 	renderHostBoM(&out, b)
 	text := out.String()
-	for _, want := range []string{"Host MCP:", "Host MCP container:", "Remote MCP:", "Required setup:", "Authorize chat"} {
+	for _, want := range []string{"Host MCP:", "people (image people-mcp:1)", "Remote MCP:", "Required setup:", "Authorize chat", "Before continuing", "Your VPN is connected"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("trust screen omitted %q:\n%s", want, text)
 		}

@@ -42,6 +42,10 @@ type packManifest struct {
 	// MemoryScope tags in-VM memory recall/capture (F4); default = the pack Name.
 	// "default" (or the pack's own default) selects the shared/unscoped tag.
 	MemoryScope string `toml:"memory_scope,omitempty"`
+	// Prerequisites are pack-authored, human-readable conditions shown on the
+	// adoption screen before any setup hook runs. They describe external state
+	// the user must bring; executable checks remain in [[setup]].
+	Prerequisites []string `toml:"prerequisites,omitempty"`
 	// Routing is a STRUCT-ONLY placeholder for a pack-level routing override
 	// (packs-v2-impl.md §2: "optional/stretch"). Nothing reads it in Phase 1.
 	Routing      *packRouting      `toml:"routing,omitempty"`
@@ -417,6 +421,11 @@ func validatePackFacets(root string, m *packManifest) error {
 	for _, p := range m.Proxies {
 		if !safeArtifactName(p.Name) {
 			return fmt.Errorf("pack %s: [[proxy]] name %q is invalid (letters, digits, -, _, . only; no path separators)", root, p.Name)
+		}
+	}
+	for _, prerequisite := range m.Prerequisites {
+		if strings.TrimSpace(prerequisite) == "" || strings.ContainsAny(prerequisite, "\x00\r\n") {
+			return fmt.Errorf("pack %s: prerequisites must be non-empty single-line text", root)
 		}
 	}
 	for _, b := range m.Bins {

@@ -54,6 +54,7 @@ type hostBoM struct {
 	Bins           []packBin          // [[bin]] external binaries (path + pinned sha)
 	Egress         []string           // union of every facet's declared egress, sorted
 	Creds          []string           // credential ENV VAR names solicited (never values)
+	Prerequisites  []string           // pack-authored external state the user must bring
 	Setup          []packSetupStep    // pack setup executables, probes, and apply argv
 }
 
@@ -202,6 +203,7 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 		}
 	}
 	b.Setup = append(b.Setup, p.Manifest.Setup...)
+	b.Prerequisites = append(b.Prerequisites, p.Manifest.Prerequisites...)
 	for e := range egress {
 		b.Egress = append(b.Egress, e)
 	}
@@ -274,17 +276,18 @@ func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]stri
 		Description string   `json:"description"`
 	}
 	type fpDoc struct {
-		V          int           `json:"v"`
-		MCP        []fpMCP       `json:"mcp"`
-		Containers []fpContainer `json:"container"`
-		RemoteMCP  []fpRemote    `json:"remote_mcp"`
-		Proxies    []fpProxy     `json:"proxy"`
-		Bins       []fpBin       `json:"bin"`
-		Egress     []string      `json:"egress"`
-		Creds      []string      `json:"cred"`
-		Setup      []fpSetup     `json:"setup"`
+		V             int           `json:"v"`
+		MCP           []fpMCP       `json:"mcp"`
+		Containers    []fpContainer `json:"container"`
+		RemoteMCP     []fpRemote    `json:"remote_mcp"`
+		Proxies       []fpProxy     `json:"proxy"`
+		Bins          []fpBin       `json:"bin"`
+		Egress        []string      `json:"egress"`
+		Creds         []string      `json:"cred"`
+		Prerequisites []string      `json:"prerequisites"`
+		Setup         []fpSetup     `json:"setup"`
 	}
-	doc := fpDoc{V: 4}
+	doc := fpDoc{V: 5}
 	proxySHA := map[string]string{}
 	for _, m := range b.MCP {
 		doc.MCP = append(doc.MCP, fpMCP{Name: m.Name, Argv: append([]string(nil), m.Argv...)})
@@ -333,6 +336,7 @@ func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]stri
 	sort.Strings(doc.Egress)
 	doc.Creds = append([]string(nil), b.Creds...)
 	sort.Strings(doc.Creds)
+	doc.Prerequisites = append([]string(nil), b.Prerequisites...)
 	for _, s := range b.Setup {
 		path := filepath.Join(root, s.Path)
 		if isSymlinkPath(path) {
@@ -373,7 +377,7 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 		if c.Image != "" {
 			source = "image " + c.Image
 		}
-		fmt.Fprintf(out, "  Host MCP container:  %s (%s)\n", c.Name, source)
+		fmt.Fprintf(out, "  Host MCP:            %s (%s)\n", c.Name, source)
 		if len(c.EnvKeys) > 0 {
 			fmt.Fprintf(out, "                       Receives: %s\n", strings.Join(c.EnvKeys, ", "))
 		}
@@ -408,8 +412,13 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 	if len(b.Egress) > 0 {
 		fmt.Fprintf(out, "  Network egress:      %s\n", strings.Join(b.Egress, ", "))
 	}
-	if len(b.Creds) > 0 {
-		fmt.Fprintf(out, "  Credentials (op://): %s   (you supply your own; never in the pack)\n", strings.Join(b.Creds, ", "))
+	if len(b.Prerequisites) > 0 {
+		fmt.Fprintln(out, "\nBefore continuing, make sure:")
+		for _, item := range b.Prerequisites {
+			fmt.Fprintf(out, "  • %s\n", item)
+		}
+	} else if len(b.Creds) > 0 {
+		fmt.Fprintf(out, "  1Password references needed: %s\n", strings.Join(b.Creds, ", "))
 	}
 }
 
