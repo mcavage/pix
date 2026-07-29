@@ -372,19 +372,19 @@ func gworkspaceStatus(cfg *config.Config, env shellEnv, out io.Writer, now time.
 func gworkspaceTokenAgeCheck(env shellEnv, now time.Time) check {
 	path, age, ok := gworkspaceCredentialAge(env, now)
 	if !ok {
-		return check{label: "token age", verdict: verdictUnverifiable,
+		return check{label: "token age", verdict: verdictUnverifiable, note: true,
 			detail:   "could not read the stored credentials' age; resolved by publishing the app at " + gwAudienceURL,
 			evidence: "no readable credential file under the Google Workspace home"}
 	}
 	days := int(age.Hours() / 24)
 	if age >= gwTestingTokenMaxAge {
-		return check{label: "token age", verdict: verdictUnverifiable,
+		return check{label: "token age", verdict: verdictUnverifiable, note: true,
 			detail: fmt.Sprintf("credentials are %s old, past the %d-day Testing limit; if the app is still in Testing it has already stopped working",
 				plural(days, "day"), int(gwTestingTokenMaxAge.Hours()/24)),
 			evidence: path + " last written " + plural(days, "day") + " ago",
 			todo:     "pix gworkspace setup"}
 	}
-	return check{label: "token age", verdict: verdictUnverifiable,
+	return check{label: "token age", verdict: verdictUnverifiable, note: true,
 		detail: fmt.Sprintf("credentials are %s old; an app still in Testing expires them at %d days",
 			plural(days, "day"), int(gwTestingTokenMaxAge.Hours()/24)),
 		evidence: path + " last written " + plural(days, "day") + " ago"}

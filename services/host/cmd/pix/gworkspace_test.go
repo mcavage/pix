@@ -239,15 +239,8 @@ func TestGworkspaceStatus_ReadyPath(t *testing.T) {
 	}
 	var out bytes.Buffer
 	code := gworkspaceStatus(cfg, env, &out, time.Now())
-	// NOTE: gworkspaceStatusUsage documents "0 ready" as an achievable exit
-	// code, but gworkspaceTokenAgeCheck always returns verdictUnverifiable
-	// (by design — Google's publication state is unknowable from here) WITHOUT
-	// note:true, so gworkspaceExit's tally always lands on 3 once an account
-	// is configured, even when every other check is ready. Asserting the
-	// ACTUAL exit code here (3) rather than the documented one (0) — see the
-	// handoff notes for this as a reported defect.
-	if code != 3 {
-		t.Errorf("exit code = %d, want 3 (token age is always unverifiable), output:\n%s", code, out.String())
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0 (publication state is informational), output:\n%s", code, out.String())
 	}
 	s := out.String()
 	for _, want := range []string{acct, "hardened read-only flags", "exposes tools", gwAudienceURL} {
@@ -257,6 +250,9 @@ func TestGworkspaceStatus_ReadyPath(t *testing.T) {
 	}
 	if !strings.Contains(s, "✓ account") || !strings.Contains(s, "✓ read-only") || !strings.Contains(s, "✓ headless spawn") {
 		t.Errorf("expected every real check (account/read-only/headless spawn) to be individually ready, got:\n%s", s)
+	}
+	if !strings.Contains(s, "· token age") {
+		t.Errorf("expected token age to render as an informational note, got:\n%s", s)
 	}
 }
 
