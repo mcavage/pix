@@ -158,6 +158,14 @@ func runSetupCmd(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(1)
 	}
+	// An unreleased launcher uses its local checkout kit. Validate that kit with
+	// the installed sbx parser before pack OAuth/setup or any other mutation;
+	// nightly schema skew must fail once, early, without opening browsers and
+	// only later dumping YAML from `sbx run`.
+	if err := validateSetupKit(version, resolveRepoRoot, validateSbxKit); err != nil {
+		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
+		os.Exit(1)
+	}
 
 	// A requested pack is adopted through the existing pack trust transaction
 	// before host setup. This gives `pix setup --pack owner/repo` one setup

@@ -119,12 +119,12 @@ func opWrappedGog(refs, acct string) string {
 	return "op run --no-masking --env-file=" + refs + " -- " + bareGog(acct)
 }
 
-// reconstructedGogProbe is the EXACT best-effort headless probe command the
-// gog group runs when sbx exposes no registered command: gogRegisteredArgv
-// with the fakeEnv's lookPath-resolved paths (/usr/bin/…) — the same hardened
-// argv + op wrapper registration would produce, plus --list-tools.
+// reconstructedGogProbe is the exact best-effort headless probe when the refs
+// file has no GOG_KEYRING_PASSWORD. Unrelated Slack/BambooHR refs must not wrap
+// gog in `op run`; gog's own OAuth keyring is independently headless.
 func reconstructedGogProbe(refs, acct string) string {
-	return strings.Join(append(gogRegisteredArgv("/usr/bin/gog", "/usr/bin/op", refs, acct), "--list-tools"), " ")
+	_ = refs
+	return strings.Join(append(gogRegisteredArgv("/usr/bin/gog", "", "", acct), "--list-tools"), " ")
 }
 
 // gogGreen adds the fixtures that make the whole gog group green: gog + op on

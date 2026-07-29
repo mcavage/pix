@@ -61,9 +61,7 @@ pix gworkspace status
 
 Setup guides Google Cloud project/API/OAuth configuration, proves the exact
 headless read-only MCP process can authenticate and list tools, and only then
-saves the Pix configuration. If the OAuth app remains in Testing, Google may
-expire the token after seven days; `pix gworkspace status` reports publication
-state and token age. Remove only Pix-owned registration and config with:
+saves the Pix configuration. Remove only Pix-owned registration and config with:
 
 ```bash
 pix gworkspace disable

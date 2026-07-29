@@ -275,6 +275,12 @@ func runRun(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix run: %v\n", plan.Err)
 		os.Exit(1)
 	}
+	if !plan.Reattach {
+		if err := validateCreateKits(plan.Args, validateSbxKit); err != nil {
+			fmt.Fprintf(os.Stderr, "pix run: %v\n", err)
+			os.Exit(1)
+		}
+	}
 	switch {
 	case o.Replace:
 		fmt.Fprintf(os.Stderr, "pix run: replacing sandbox %q\n", o.Name)

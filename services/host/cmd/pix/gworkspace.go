@@ -25,7 +25,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"pix/host/config"
 )
@@ -40,23 +39,16 @@ const (
 	gwInstallCmd = "brew install openclaw/tap/gogcli"
 	// gwUpgradeCmd is its upgrade twin.
 	gwUpgradeCmd = "brew upgrade openclaw/tap/gogcli"
-	// gwAudienceURL is the literal Google Cloud console page where an OAuth
-	// app's publication state (Testing vs In production) is read and changed.
-	// Printed at setup AND re-rendered by `gworkspace status` on every run:
-	// an app left in Testing expires its refresh tokens after 7 days, which is
-	// a time-based silent failure a one-time setup message cannot control.
-	gwAudienceURL = "https://console.cloud.google.com/auth/audience"
-	// gwTestingTokenMaxAge is how long a refresh token issued by an app still
-	// in Testing survives.
-	gwTestingTokenMaxAge = 7 * 24 * time.Hour
+	// gwPermissionsURL is where a user can revoke credentials that Pix leaves
+	// untouched during disable.
+	gwPermissionsURL = "https://myaccount.google.com/permissions"
 )
 
 const gworkspaceUsage = `usage: pix gworkspace <setup|status|disable> [args]
 
   setup     guided Google Workspace onboarding: dependency check, OAuth client
             import, read-only authorization, headless proof, then registration
-  status    what is configured, what is proven, and the OAuth publication
-            state + token age (re-rendered every run)
+  status    what is configured and what is proven by a live headless probe
   disable   remove the Pix-owned config + gateway registration (your Google
             credentials are left untouched)
 
@@ -118,8 +110,6 @@ Reports, from probes rather than config claims:
   - whether the sbx gateway has ` + gwServerName + ` registered, and whether
     the registered command carries the hardened read-only flags
   - whether the headless spawn the gateway uses returns tools
-  - the OAuth publication state you must confirm, and the age of the stored
-    credentials, re-rendered EVERY run until the app is published
 
 exit: 0 ready · 1 needs setup · 3 could not be verified from here
 `
@@ -131,7 +121,7 @@ Removes ONLY the Pix-owned pieces:
   - the ` + gwServerName + ` registration in the sbx gateway
 
 Your Google OAuth credentials and tokens are left untouched on disk; revoke
-them yourself at ` + gwAudienceURL + ` if you want them gone.
+them yourself at ` + gwPermissionsURL + ` if you want them gone.
 A clean no-op (exit 0) when nothing is configured.
 `
 
@@ -231,27 +221,8 @@ func runGworkspaceSetupCmd(argv []string) {
 }
 
 // gworkspaceSetup is the façade over the unchanged gog_setup.go transaction.
-// It adds exactly one thing the transaction does not own: the OAuth
-// publication confirmation (AC-P0-315), printed with the literal Audience URL
-// AFTER a proven, registered setup, because that trap is time-based and the
-// user must know to look for it. Everything else is delegated verbatim.
 func gworkspaceSetup(env shellEnv, opts gworkspaceSetupOpts, in io.Reader, out io.Writer, tty bool) error {
-	if err := gogSetup(env, opts, in, out, tty); err != nil {
-		return err
-	}
-	gworkspacePublicationNotice(out)
-	return nil
-}
-
-// gworkspacePublicationNotice prints the OAuth publication trap in the exact
-// words `gworkspace status` re-renders, so setup and status can never
-// disagree about what the user has to do.
-func gworkspacePublicationNotice(out io.Writer) {
-	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "confirm your OAuth app is published, or this stops working in 7 days:")
-	fmt.Fprintln(out, "  open: "+gwAudienceURL)
-	fmt.Fprintln(out, "  an app left in Testing expires its refresh tokens after 7 days;")
-	fmt.Fprintln(out, "  `pix gworkspace status` re-checks the token age every run.")
+	return gogSetup(env, opts, in, out, tty)
 }
 
 // ---------------------------------------------------------------------------
@@ -293,13 +264,13 @@ func runGworkspaceStatusCmd(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix gworkspace status: loading config: %v\n", err)
 		os.Exit(1)
 	}
-	os.Exit(gworkspaceStatus(cfg, defaultShellEnv(), os.Stdout, time.Now()))
+	os.Exit(gworkspaceStatus(cfg, defaultShellEnv(), os.Stdout))
 }
 
 // gworkspaceStatus renders the Google Workspace surface and returns the
 // process exit code. Every green here comes from a probe: config membership
 // is rendered as intent, never as readiness.
-func gworkspaceStatus(cfg *config.Config, env shellEnv, out io.Writer, now time.Time) int {
+func gworkspaceStatus(cfg *config.Config, env shellEnv, out io.Writer) int {
 	fmt.Fprintln(out, "Google Workspace (optional, read-only, via the host MCP gateway)")
 
 	acct := gogAccount(cfg, env)
@@ -348,64 +319,13 @@ func gworkspaceStatus(cfg *config.Config, env shellEnv, out io.Writer, now time.
 			todo:     "sbx mcp status"})
 	}
 
-	// The 7-day Testing trap, re-rendered EVERY run until the app is
-	// published. This is a recurring surface on purpose: a one-time setup
-	// message cannot control a time-based silent failure.
-	checks = append(checks, gworkspaceTokenAgeCheck(env, now))
-
 	for _, c := range checks {
 		fmt.Fprintf(out, "  %s %-15s %s\n", checkGlyph(c), c.label, c.detail)
 		if c.todo != "" {
 			fmt.Fprintf(out, "      fix: %s\n", c.todo)
 		}
 	}
-	fmt.Fprintln(out, "  publication: confirm the app is published at "+gwAudienceURL)
 	return gworkspaceExit(checks)
-}
-
-// gworkspaceTokenAgeCheck reports how old the stored OAuth credentials are,
-// against the 7-day lifetime an app still in Testing gives its refresh
-// tokens. It is UNVERIFIABLE, never a failure: pix cannot read Google's
-// publication state, so it reports the observation (the age) and names the
-// condition that resolves it (publishing the app), which is exactly what an
-// unverifiable verdict is required to carry.
-func gworkspaceTokenAgeCheck(env shellEnv, now time.Time) check {
-	path, age, ok := gworkspaceCredentialAge(env, now)
-	if !ok {
-		return check{label: "token age", verdict: verdictUnverifiable, note: true,
-			detail:   "could not read the stored credentials' age; resolved by publishing the app at " + gwAudienceURL,
-			evidence: "no readable credential file under the Google Workspace home"}
-	}
-	days := int(age.Hours() / 24)
-	if age >= gwTestingTokenMaxAge {
-		return check{label: "token age", verdict: verdictUnverifiable, note: true,
-			detail: fmt.Sprintf("credentials are %s old, past the %d-day Testing limit; if the app is still in Testing it has already stopped working",
-				plural(days, "day"), int(gwTestingTokenMaxAge.Hours()/24)),
-			evidence: path + " last written " + plural(days, "day") + " ago",
-			todo:     "pix gworkspace setup"}
-	}
-	return check{label: "token age", verdict: verdictUnverifiable, note: true,
-		detail: fmt.Sprintf("credentials are %s old; an app still in Testing expires them at %d days",
-			plural(days, "day"), int(gwTestingTokenMaxAge.Hours()/24)),
-		evidence: path + " last written " + plural(days, "day") + " ago"}
-}
-
-// gworkspaceCredentialAge finds the stored credential file and returns its
-// age. It reads only the file's modification time — never its contents.
-func gworkspaceCredentialAge(env shellEnv, now time.Time) (string, time.Duration, bool) {
-	if env.fileModTime == nil {
-		return "", 0, false
-	}
-	for _, p := range gworkspaceCredentialPaths(env) {
-		if mt, ok := env.fileModTime(p); ok {
-			age := now.Sub(mt)
-			if age < 0 {
-				age = 0
-			}
-			return p, age, true
-		}
-	}
-	return "", 0, false
 }
 
 // ---------------------------------------------------------------------------
@@ -484,28 +404,6 @@ func gworkspaceDisable(cfg *config.Config, env shellEnv, out io.Writer) error {
 	}
 
 	fmt.Fprintln(out, "Google Workspace is off. Your Google credentials were left untouched.")
-	fmt.Fprintln(out, "  revoke them yourself if you want them gone: "+gwAudienceURL)
+	fmt.Fprintln(out, "  revoke them yourself if you want them gone: "+gwPermissionsURL)
 	return nil
-}
-
-// gworkspaceCredentialPaths are the candidate locations of the dependency
-// CLI's stored token, most specific first. $GOG_HOME wins when set; otherwise
-// the documented default under the user's config dir.
-func gworkspaceCredentialPaths(env shellEnv) []string {
-	var roots []string
-	if env.getenv != nil {
-		if h := strings.TrimSpace(env.getenv("GOG_HOME")); h != "" {
-			roots = append(roots, h)
-		}
-	}
-	if env.homeDir != nil {
-		if h := strings.TrimSpace(env.homeDir()); h != "" {
-			roots = append(roots, h+"/.config/gog")
-		}
-	}
-	var paths []string
-	for _, r := range roots {
-		paths = append(paths, r+"/tokens.json", r+"/credentials.json", r+"/keyring.json")
-	}
-	return paths
 }

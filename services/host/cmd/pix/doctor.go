@@ -38,11 +38,6 @@ type shellEnv struct {
 	// Secrets group's perms check uses it to flag a group/other-accessible
 	// op-refs.env or its dir. Nil in tests that don't exercise perms.
 	fileMode func(path string) (os.FileMode, bool)
-	// fileModTime returns a path's modification time + whether it exists. Used
-	// to age stored OAuth credentials against the 7-day Testing-app token
-	// lifetime (gworkspace.go). It reads the stat only, never the contents.
-	// Nil in tests that don't exercise it.
-	fileModTime func(path string) (time.Time, bool)
 	// writeFile writes data to path (creating parent dirs). Nil in tests so
 	// seeding stays hermetic; defaultShellEnv wires the real os-backed writer.
 	writeFile func(path string, data []byte, perm os.FileMode) error
@@ -169,13 +164,6 @@ func defaultShellEnv() shellEnv {
 				return 0, false
 			}
 			return fi.Mode(), true
-		},
-		fileModTime: func(path string) (time.Time, bool) {
-			fi, err := os.Stat(path)
-			if err != nil {
-				return time.Time{}, false
-			}
-			return fi.ModTime(), true
 		},
 		// writeFile is LEAF-symlink-safe (parent-directory symlinks are a
 		// separate, honestly out-of-scope concern — see atomicWriteInDir's doc
