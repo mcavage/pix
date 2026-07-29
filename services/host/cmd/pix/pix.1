@@ -45,9 +45,9 @@ proxy.
 .TP
 .BR op (1)
 Guided setup requires the 1Password CLI, signed in.  It is the ONLY
-provider-key source.  Setup validates references for Anthropic, OpenAI, and
-Google, stores only those references in pix, and reconciles the resolved
-values into host-managed
+provider-key source.  One configured provider is sufficient.  Setup validates
+the configured Anthropic, OpenAI, or Google references, stores only those
+references in pix, and reconciles the resolved values into host-managed
 .B sbx
 secrets.  Resolved keys are never written to pix configuration or shown
 in its output.  There is no "trust existing sbx keys" shortcut (the removed
@@ -57,13 +57,14 @@ The shortest path from nothing to a fully configured agent:
 .PP
 .nf
 .RS
-curl -fsSL https://raw.githubusercontent.com/mcavage/pix/main/install.sh | sh
+brew install mcavage/tap/pix
 pix setup
+pix run
 .RE
 .fi
 .PP
 .B setup
-configures the host, sources the three provider keys from 1Password (the
+configures the host, sources at least one provider key from 1Password (the
 only source; see
 .B setup
 below), and creates the

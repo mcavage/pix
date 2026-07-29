@@ -30,26 +30,22 @@ qualifier is required.
 Activate a personal or work pack through the same setup flow:
 
 ```bash
-pix setup --pack owner/repository
+pix setup --pack docker/gm-pix-pack
 ```
 
 Packs can declare required setup probes and idempotent actions. Pix reviews and
 fingerprints host-executing hooks, runs only required hooks, verifies them after
-execution, and resumes past completed work on the next setup run.
-
-<!-- PIX_PRIMARY_PATH_END -->
-
-<details>
-<summary>Alternative: curl installer (Linux, or no Homebrew)</summary>
+execution, and resumes past completed work on the next setup run. A pack can also
+declare optional setup hooks. Run one explicitly with `--with`, for example:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mcavage/pix/main/install.sh | sh
+pix setup --pack docker/gm-pix-pack --with bamboohr
 ```
 
-This is the fallback path. On macOS, prefer Homebrew. `pix upgrade` on a
-curl-installed Mac requires manually rerunning this script. On a
-Homebrew-installed Mac, it directs you to `brew upgrade mcavage/tap/pix`.
-</details>
+Without `--with`, the pack is still activated and all required hooks run. Only
+the named optional hook is skipped. Repeat `--with` to select more than one.
+
+<!-- PIX_PRIMARY_PATH_END -->
 
 ## Optional: Google Workspace
 
@@ -96,7 +92,6 @@ This opens the OAuth grant in your browser, verifies your identity, and stores t
 pix                         # fast status dashboard
 pix run [DIR]               # create or reattach a sandbox
 pix doctor                  # full readiness evidence
-pix setup --no-agent --yes  # reconcile host state without an agent handoff
 pix task new <name>         # isolated parallel task sandbox
 pix task ls                 # list parallel tasks
 pix task harvest <name>     # collect a task's artifacts
@@ -128,7 +123,7 @@ repository Pix touches. The optional `.pix/knowledge` pointer remains trackable.
 
 ## Build from source
 
-Normal users should use the installer. Maintainers need a DHI-entitled Docker
+Normal users should install with Homebrew. Maintainers need a DHI-entitled Docker
 account to build the image:
 
 ```bash
