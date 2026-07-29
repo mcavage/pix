@@ -27,13 +27,13 @@ func runPackSetup(env shellEnv, out io.Writer, root string, requested []string) 
 			continue
 		}
 		path := filepath.Join(p.Root, step.Path)
-		if packSetupCheck(env, path, step.CheckArgs) {
-			fmt.Fprintf(out, "  ✓ pack setup %s: ready\n", step.ID)
-			continue
-		}
 		label := strings.TrimSpace(step.Description)
 		if label == "" {
 			label = step.ID
+		}
+		if packSetupCheck(env, path, step.CheckArgs) {
+			fmt.Fprintf(out, "  ✓ %s: ready\n", label)
+			continue
 		}
 		fmt.Fprintf(out, "\npack setup: %s\n", label)
 		if env.runInteractive == nil {
@@ -45,7 +45,7 @@ func runPackSetup(env shellEnv, out io.Writer, root string, requested []string) 
 		if !packSetupCheck(env, path, step.CheckArgs) {
 			return fmt.Errorf("pack setup %s did not pass its verification probe after apply", step.ID)
 		}
-		fmt.Fprintf(out, "  ✓ pack setup %s: verified\n", step.ID)
+		fmt.Fprintf(out, "  ✓ %s: verified\n", label)
 	}
 	for id := range wanted {
 		if id == "" || !known[id] {

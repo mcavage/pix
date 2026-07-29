@@ -760,7 +760,12 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			// listener, leaving the browser at ERR_CONNECTION_REFUSED. Remote MCP
 			// registration is an explicitly interactive mutation; let it inherit the
 			// terminal and run to completion. Read-only status checks remain bounded.
-			err = env.runInteractive("sbx", args...)
+			if !env.verbose && env.runInteractiveQuiet != nil {
+				fmt.Fprintf(out, "  Authorize %s in your browser…\n", n)
+				err = env.runInteractiveQuiet("sbx", args...)
+			} else {
+				err = env.runInteractive("sbx", args...)
+			}
 		} else if env.probe != nil {
 			_, timedOut, probeErr := env.probe("sbx", args...)
 			err = probeErr

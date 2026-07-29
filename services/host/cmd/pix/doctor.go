@@ -64,6 +64,9 @@ type shellEnv struct {
 	stateDir func() (string, error)
 	// runInteractive inherits the terminal for browser-based OAuth steps.
 	runInteractive func(name string, args ...string) error
+	// runInteractiveQuiet keeps stdin attached while capturing command chatter.
+	runInteractiveQuiet func(name string, args ...string) error
+	verbose             bool
 	// identityProbe answers the memory/knowledge `identity` JSON-RPC method
 	// (readiness_service.go, services/host/identity.go) — the APPLICATION-
 	// LEVEL proof a service axis needs before it may render ready. Nil in
@@ -200,6 +203,15 @@ func defaultShellEnv() shellEnv {
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
 			return cmd.Run()
+		},
+		runInteractiveQuiet: func(name string, args ...string) error {
+			cmd := exec.Command(name, args...)
+			cmd.Stdin = os.Stdin
+			out, err := cmd.CombinedOutput()
+			if err != nil && strings.TrimSpace(string(out)) != "" {
+				return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+			}
+			return err
 		},
 		identityProbe: rpcIdentityProbe,
 		slackAuthTest: liveSlackAuthTest,

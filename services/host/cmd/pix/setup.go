@@ -74,11 +74,16 @@ func runSetupCmd(argv []string) {
 	dirSet := false
 	replace := false
 	noAgent := false
+	verbose := false
 	var hostArgs []string
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		if a == "--replace" {
 			replace = true
+			continue
+		}
+		if a == "--verbose" {
+			verbose = true
 			continue
 		}
 		// --no-agent is SETUP'S OWN flag (AC-P0-308): run the host phase and
@@ -105,6 +110,10 @@ func runSetupCmd(argv []string) {
 	}
 
 	env := defaultShellEnv()
+	env.verbose = verbose
+	if verbose {
+		_ = os.Setenv("PIX_SETUP_VERBOSE", "1")
+	}
 	parsed, parseErr := parseOnboardArgs(hostArgs)
 	if parseErr != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", parseErr, setupUsage)
@@ -1494,6 +1503,8 @@ Setup flags:
   --replace                recreate an existing sandbox for DIR (sbx rm -f +
                            create) so it picks up current pack/MCP/skills and
                            receives the guided tour; harmless when absent
+  --verbose                show underlying sbx, Git, Docker, and setup command
+                           output; ordinary setup prints only actions/results
   --pull-models            pull any CONFIRMED-missing configured local Ollama
                            models (watcher/embed/bridge, deduplicated); the
                            ONLY consent a non-interactive setup honors (a broad
