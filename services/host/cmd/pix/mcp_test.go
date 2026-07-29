@@ -291,8 +291,11 @@ func TestRegisterServers_RemoteURLUsesInteractiveRunner(t *testing.T) {
 		return nil
 	}
 	env.probe = func(name string, args ...string) (string, bool, error) {
-		if name == "sbx" {
+		if name == "sbx" && len(args) >= 2 && args[1] == "add" {
 			t.Fatalf("remote OAuth registration was sent through the bounded probe: %s %s", name, strings.Join(args, " "))
+		}
+		if name == "sbx" {
+			return "", false, errors.New("not registered")
 		}
 		return "slack\n", false, nil
 	}
@@ -305,6 +308,27 @@ func TestRegisterServers_RemoteURLUsesInteractiveRunner(t *testing.T) {
 	}
 	if got := strings.Join(interactive, " "); got != "sbx mcp add meetings --url https://app.trymeetings.com/mcp" {
 		t.Fatalf("interactive registration = %q", got)
+	}
+}
+
+func TestRegisterServers_CurrentRemoteDoesNotReopenOAuth(t *testing.T) {
+	endpoint := "https://app.trymeetings.com/mcp"
+	env := fakeEnv{present: map[string]bool{"sbx": true}}.env()
+	env.probe = func(name string, args ...string) (string, bool, error) {
+		if name == "sbx" && strings.Join(args, " ") == "mcp inspect meetings" {
+			return "URL: " + endpoint, false, nil
+		}
+		return "slack\n", false, nil
+	}
+	env.runInteractive = func(string, ...string) error {
+		t.Fatal("an unchanged registered remote must not reopen OAuth")
+		return nil
+	}
+	cfg := defaultCfg()
+	cfg.MCP = []string{"meetings"}
+	if err := registerServers(cfg, env, &bytes.Buffer{}, nil, hostStub("/usr/bin/pix-host", nil),
+		map[string]packContainer{"meetings": {RemoteURL: endpoint}}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -492,7 +516,7 @@ func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 		hostBin: "/usr/local/bin/pix-host",
 		containers: map[string]packContainer{
 			"notion-ish": {Manifest: "https://example.com/mcp/x/server.json"},
-			"hr":         {Image: "hr-mcp:0.0.1", EnvKeys: []string{"HR_API_KEY", "HR_COMPANY_DOMAIN"}},
+			"hr":         {Image: "hr-mcp:0.0.1", EnvKeys: []string{"HR_API_KEY"}, EnvValues: map[string]string{"HR_COMPANY_DOMAIN": "acme"}},
 			"meetings":   {RemoteURL: "https://app.trymeetings.com/mcp"},
 		},
 	}
@@ -520,7 +544,7 @@ func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 		"mcp add hr --command /usr/bin/op",
 		"--args run", "--args --env-file=/abs/op-refs.env", "--args --",
 		"--args docker --args run --args -i --args --rm",
-		"--args -e --args HR_API_KEY --args -e --args HR_COMPANY_DOMAIN",
+		"--args -e --args HR_API_KEY --args -e --args HR_COMPANY_DOMAIN=acme",
 		"--args hr-mcp:0.0.1",
 	} {
 		if !strings.Contains(img, must) {

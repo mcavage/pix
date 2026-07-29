@@ -33,6 +33,27 @@ func TestPackInferenceValidationIsGenericAndFailClosed(t *testing.T) {
 	}
 }
 
+func TestPackInferenceReapplyPreservesOnlyMatchingEvidence(t *testing.T) {
+	source := "/packs/work"
+	inf := &packInference{
+		Backends: map[string]packInferenceBack{"gateway": {Driver: "openai-compatible", Protocol: "openai-responses", Auth: "sbx-session", BaseURL: "https://models.example.test/v1"}},
+		Models:   []packInferenceModel{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "prod"}},
+	}
+	cfg := &config.Config{}
+	applyPackInference(cfg, inf, source)
+	cfg.Inference.Models[0].Available = true
+	applyPackInference(cfg, inf, source)
+	if !cfg.Inference.Models[0].Available {
+		t.Fatal("unchanged pack reapply erased availability evidence")
+	}
+	changed := *inf
+	changed.Backends = map[string]packInferenceBack{"gateway": {Driver: "openai-compatible", Protocol: "openai-responses", Auth: "sbx-session", BaseURL: "https://new.example.test/v1"}}
+	applyPackInference(cfg, &changed, source)
+	if cfg.Inference.Models[0].Available {
+		t.Fatal("changed backend retained stale availability evidence")
+	}
+}
+
 func TestPackInferenceRejectsModelOutsideCatalog(t *testing.T) {
 	root := t.TempDir()
 	m := packManifest{Name: "team", Schema: 1, Inference: &packInference{

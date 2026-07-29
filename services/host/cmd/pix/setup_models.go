@@ -342,6 +342,9 @@ func setupReceiptStateDir(env shellEnv) (string, error) {
 // ...` commands are the guided command's internals; neither belongs in this
 // summary.
 func printSetupSummary(cfg *config.Config, env shellEnv, out io.Writer, models setupModelsOutcome) {
+	if env.quiet {
+		return
+	}
 	// The pack/knowledge state may have been persisted by helpers that load
 	// their own config (activateDefaultPack, setupKnowledge); reload so the
 	// summary reports the SAVED truth, not a stale in-memory copy.

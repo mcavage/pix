@@ -80,6 +80,20 @@ func applyPackInference(cfg *config.Config, inf *packInference, source string) {
 	if cfg == nil || inf == nil {
 		return
 	}
+	// Reapplying an unchanged active pack at launch must not erase the
+	// availability evidence setup just earned. Preserve it only across an exact
+	// backend + binding match; any endpoint/protocol/auth/upstream change starts
+	// unverified again.
+	type evidence struct{ available, verified bool }
+	prior := map[string]evidence{}
+	for _, binding := range cfg.Inference.Models {
+		backend, ok := cfg.Inference.Backends[binding.Backend]
+		if !ok || binding.Source != source {
+			continue
+		}
+		key := inferenceEvidenceKey(binding, backend)
+		prior[key] = evidence{binding.Available, binding.Verified}
+	}
 	clearPackInference(cfg, source)
 	if cfg.Inference.Backends == nil {
 		cfg.Inference.Backends = map[string]config.InferenceBackend{}
@@ -91,13 +105,28 @@ func applyPackInference(cfg *config.Config, inf *packInference, source string) {
 		}
 	}
 	for _, b := range inf.Models {
-		cfg.Inference.Models = append(cfg.Inference.Models, config.InferenceModelBinding{
+		binding := config.InferenceModelBinding{
 			Model: b.Model, Backend: b.Backend, Upstream: b.Upstream, Source: source,
-		})
+		}
+		if backend, ok := cfg.Inference.Backends[b.Backend]; ok {
+			if ev, found := prior[inferenceEvidenceKey(binding, backend)]; found {
+				binding.Available, binding.Verified = ev.available, ev.verified
+			}
+		}
+		cfg.Inference.Models = append(cfg.Inference.Models, binding)
 	}
 	if inf.Exclusive {
 		cfg.Inference.ExclusiveSource = source
 	}
+}
+
+func inferenceEvidenceKey(binding config.InferenceModelBinding, backend config.InferenceBackend) string {
+	return strings.Join([]string{
+		binding.Source, binding.Model, binding.Backend, binding.Upstream,
+		backend.Driver, backend.Protocol, backend.BaseURL, backend.Auth,
+		backend.KeyEnv, backend.Source, backend.CredentialService,
+		backend.CredentialHeader, backend.CredentialFormat,
+	}, "\x00")
 }
 
 // clearPackInference removes only pack-owned inference. An empty source clears
@@ -229,6 +258,10 @@ type packIntegration struct {
 	// Image container via `-e <KEY>` (e.g. HR_TENANT). The primary
 	// op-refs-backed secret goes in Env (also forwarded, and warned about if unset).
 	EnvKeys []string `toml:"env_keys,omitempty"`
+	// EnvValues are non-secret literal environment values baked into a pack's
+	// container command (for example, a company-wide tenant name). Secrets must
+	// use Env/op:// instead and are rejected here when they look secret-shaped.
+	EnvValues map[string]string `toml:"env_values,omitempty"`
 	// URL, when set, makes this a REMOTE integration the pack registers ITSELF:
 	// `pack use` runs `sbx mcp add <mcp> --url <url>` so the pack's remote
 	// gateway-catalog servers are wired without
@@ -250,8 +283,9 @@ type packIntegration struct {
 type packContainer struct {
 	Manifest  string
 	Image     string
-	EnvKeys   []string // env var names to forward into an Image container (-e KEY)
-	RemoteURL string   // remote MCP endpoint URL (`sbx mcp add <name> --url <url>`)
+	EnvKeys   []string          // env var names to forward into an Image container (-e KEY)
+	EnvValues map[string]string // non-secret literals forwarded as -e KEY=VALUE
+	RemoteURL string            // remote MCP endpoint URL (`sbx mcp add <name> --url <url>`)
 }
 
 // packInfo is a resolved pack on disk.
@@ -414,8 +448,16 @@ func validatePackFacets(root string, m *packManifest) error {
 			return fmt.Errorf("pack %s: integration %q sets more than one of manifest, image, and url; choose exactly one", root, name)
 		}
 		if (strings.TrimSpace(ig.Manifest) != "" || strings.TrimSpace(ig.URL) != "") &&
-			(strings.TrimSpace(ig.Env) != "" || len(ig.EnvKeys) > 0) {
+			(strings.TrimSpace(ig.Env) != "" || len(ig.EnvKeys) > 0 || len(ig.EnvValues) > 0) {
 			return fmt.Errorf("pack %s: integration %q cannot use env/env_keys with manifest or url; those registration modes do not forward pack environment variables", root, name)
+		}
+		for key, value := range ig.EnvValues {
+			if strings.TrimSpace(key) == "" || strings.ContainsAny(key+value, "\x00\r\n") {
+				return fmt.Errorf("pack %s: integration %q has an invalid env_values entry", root, name)
+			}
+			if config.LooksSecretShaped(key, value) {
+				return fmt.Errorf("pack %s: integration %q env_values[%s] looks secret-shaped; use an op:// reference via env instead", root, name, key)
+			}
 		}
 	}
 	for _, p := range m.Proxies {
@@ -1343,7 +1385,11 @@ func packContainerMCP(p *packInfo) map[string]packContainer {
 				keys = append(keys, ig.Env) // the op-refs secret, forwarded too
 			}
 			keys = append(keys, ig.EnvKeys...)
-			out[ig.MCP] = packContainer{Image: strings.TrimSpace(ig.Image), EnvKeys: keys}
+			values := make(map[string]string, len(ig.EnvValues))
+			for key, value := range ig.EnvValues {
+				values[key] = value
+			}
+			out[ig.MCP] = packContainer{Image: strings.TrimSpace(ig.Image), EnvKeys: keys, EnvValues: values}
 		case strings.TrimSpace(ig.URL) != "":
 			out[ig.MCP] = packContainer{RemoteURL: strings.TrimSpace(ig.URL)}
 		}
@@ -3074,7 +3120,9 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 
 	// --- post-Save: best-effort side effects (each already idempotent). ---
 
-	fmt.Fprintf(out, "active pack -> %s\n", root)
+	if !env.quiet {
+		fmt.Fprintf(out, "active pack -> %s\n", root)
+	}
 	// On a same-pack reactivation the revert-then-reapply (finding D) removes
 	// and immediately re-adds every still-declared entry; report as detached
 	// only what actually STAYED out (a facet dropped from the manifest).
@@ -3092,10 +3140,10 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 			}
 		}
 	}
-	if len(detachedMCP) > 0 {
+	if len(detachedMCP) > 0 && !env.quiet {
 		fmt.Fprintf(out, "detached mcp (previous activation): %s\n", strings.Join(detachedMCP, ", "))
 	}
-	if len(addedMCP) > 0 {
+	if len(addedMCP) > 0 && !env.quiet {
 		fmt.Fprintf(out, "attached mcp: %s\n", strings.Join(addedMCP, ", "))
 	}
 	// finding E: register ALL of this pack's MCPs post-Save (registration is
@@ -3108,13 +3156,15 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 			fmt.Fprintf(out, "note: mcp registration: %v\n", err)
 		}
 	}
-	for _, id := range detachedKnowledge {
-		fmt.Fprintf(out, "knowledge bundle detached (previous activation): %s\n", id)
+	if !env.quiet {
+		for _, id := range detachedKnowledge {
+			fmt.Fprintf(out, "knowledge bundle detached (previous activation): %s\n", id)
+		}
+		for _, id := range addedKnowledge {
+			fmt.Fprintf(out, "knowledge bundle registered: %s\n", id)
+		}
 	}
-	for _, id := range addedKnowledge {
-		fmt.Fprintf(out, "knowledge bundle registered: %s\n", id)
-	}
-	if skippedPrivate > 0 {
+	if skippedPrivate > 0 && !env.quiet {
 		fmt.Fprintf(out, "skipped %d private knowledge ref(s) from an adopted pack (shared=false local paths are never honored for a pack cloned from a remote)\n", skippedPrivate)
 	}
 
@@ -3124,7 +3174,11 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// acceptance recorded just above). Best-effort here, like every other
 	// post-Save side effect; the strict fingerprint + content re-verification
 	// happens again at every host launch.
-	if _, werr := refreshHostPackWrappers(out, cfg, false); werr != nil {
+	refreshOut := out
+	if env.quiet {
+		refreshOut = io.Discard
+	}
+	if _, werr := refreshHostPackWrappers(refreshOut, cfg, false); werr != nil {
 		fmt.Fprintf(out, "note: host wrappers not refreshed: %v\n", werr)
 	}
 
@@ -3136,12 +3190,18 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 
 	// A knowledge change is daemon-affecting: restart/advise the running serve so
 	// the new bundle is indexed (mirrors `knowledge use`). Best-effort.
-	propagateServeConfig(defaultServeReloader(), out)
+	serveOut := out
+	if env.quiet {
+		serveOut = io.Discard
+	}
+	propagateServeConfig(defaultServeReloader(), serveOut)
 
 	// ADR-3: --mcp/--kit are create-only. Print the recreate line UNCONDITIONALLY
 	// (this is "the change" for the purposes of packs.md §13's must-fix), so the
 	// sandbox-facet-changing case is never silently skipped.
-	printPackRecreateLine(out)
+	if !env.quiet {
+		printPackRecreateLine(out)
+	}
 }
 
 func runPackRm(out io.Writer, rest []string) {

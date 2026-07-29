@@ -425,6 +425,14 @@ func (m mcpRegistrar) serverCmd(name string) []string {
 		for _, k := range c.EnvKeys {
 			argv = append(argv, "-e", k)
 		}
+		keys := make([]string, 0, len(c.EnvValues))
+		for key := range c.EnvValues {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			argv = append(argv, "-e", key+"="+c.EnvValues[key])
+		}
 		return append(argv, c.Image)
 	}
 	switch name {
@@ -753,6 +761,12 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			fmt.Fprintf(out, "  sbx %s\n", strings.Join(args, " "))
 			continue
 		}
+		if remoteURL := containers[n].RemoteURL; remoteURL != "" && remoteMCPRegistrationCurrent(env, n, remoteURL) {
+			if !env.quiet {
+				fmt.Fprintf(out, "  already registered: %s\n", n)
+			}
+			continue
+		}
 		var err error
 		if containers[n].RemoteURL != "" && env.runInteractive != nil {
 			// `sbx mcp add --url` may perform OAuth and keep a localhost callback
@@ -760,7 +774,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			// listener, leaving the browser at ERR_CONNECTION_REFUSED. Remote MCP
 			// registration is an explicitly interactive mutation; let it inherit the
 			// terminal and run to completion. Read-only status checks remain bounded.
-			if !env.verbose && env.runInteractiveQuiet != nil {
+			if env.quiet && env.runInteractiveQuiet != nil {
 				fmt.Fprintf(out, "  Authorize %s in your browser…\n", n)
 				err = env.runInteractiveQuiet("sbx", args...)
 			} else {
@@ -779,12 +793,14 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			fmt.Fprintf(out, "  FAILED to register: %s (%v)\n", n, err)
 			regErrs = append(regErrs, fmt.Errorf("%s: %v", n, err))
 		} else {
-			fmt.Fprintf(out, "  registered: %s\n", n)
+			if !env.quiet {
+				fmt.Fprintf(out, "  registered: %s\n", n)
+			}
 		}
 	}
 
 	if sbxOK {
-		if reg.opRefs != "" {
+		if reg.opRefs != "" && !env.quiet {
 			fmt.Fprintf(out, "Each wrapped server resolves its creds from %s via op run at gateway spawn.\n", reg.opRefs)
 		}
 	} else {
@@ -801,6 +817,20 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 		return errors.Join(errSbxUnavailable, skippedErr)
 	}
 	return skippedErr
+}
+
+// remoteMCPRegistrationCurrent prevents an idempotent setup rerun from
+// reopening OAuth. It skips only when sbx's inspected definition contains the
+// exact endpoint the pack declares; a changed or unreadable definition is
+// registered again.
+func remoteMCPRegistrationCurrent(env shellEnv, name, endpoint string) bool {
+	for _, verb := range []string{"inspect", "get"} {
+		out, timedOut, err := probeRun(env, "sbx", "mcp", verb, name)
+		if err == nil && !timedOut && strings.Contains(out, endpoint) {
+			return true
+		}
+	}
+	return false
 }
 
 // allPreloadedMCP returns, order-preserving and de-duplicated, every non-empty

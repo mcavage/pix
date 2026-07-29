@@ -66,7 +66,7 @@ type shellEnv struct {
 	runInteractive func(name string, args ...string) error
 	// runInteractiveQuiet keeps stdin attached while capturing command chatter.
 	runInteractiveQuiet func(name string, args ...string) error
-	verbose             bool
+	quiet               bool
 	// identityProbe answers the memory/knowledge `identity` JSON-RPC method
 	// (readiness_service.go, services/host/identity.go) — the APPLICATION-
 	// LEVEL proof a service axis needs before it may render ready. Nil in

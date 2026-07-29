@@ -133,7 +133,7 @@ func TestComputeHostBoM_DisclosesContainerAndRemoteIntegrations(t *testing.T) {
 	p := &packInfo{Root: "/p", Manifest: packManifest{
 		Name: "docker-work",
 		Integrations: []packIntegration{
-			{Name: "HR", MCP: "hr", Image: "hr-mcp:0.0.1", Env: "HR_API_KEY", EnvKeys: []string{"HR_COMPANY_DOMAIN"}},
+			{Name: "HR", MCP: "hr", Image: "hr-mcp:0.0.1", Env: "HR_API_KEY", EnvValues: map[string]string{"HR_COMPANY_DOMAIN": "acme"}},
 			{Name: "Meetings", MCP: "meetings", URL: "https://app.trymeetings.com/mcp"},
 		},
 	}}
@@ -144,8 +144,11 @@ func TestComputeHostBoM_DisclosesContainerAndRemoteIntegrations(t *testing.T) {
 	if len(b.Containers) != 1 || b.Containers[0].Name != "hr" || b.Containers[0].Image != "hr-mcp:0.0.1" {
 		t.Fatalf("container disclosure = %+v", b.Containers)
 	}
-	if got := strings.Join(b.Containers[0].EnvKeys, ","); got != "HR_API_KEY,HR_COMPANY_DOMAIN" {
+	if got := strings.Join(b.Containers[0].EnvKeys, ","); got != "HR_API_KEY" {
 		t.Errorf("container env disclosure = %q", got)
+	}
+	if b.Containers[0].EnvValues["HR_COMPANY_DOMAIN"] != "acme" {
+		t.Errorf("container literal env disclosure = %+v", b.Containers[0].EnvValues)
 	}
 	if len(b.RemoteMCP) != 1 || b.RemoteMCP[0].Name != "meetings" || b.RemoteMCP[0].URL != "https://app.trymeetings.com/mcp" {
 		t.Fatalf("remote disclosure = %+v", b.RemoteMCP)
@@ -195,7 +198,7 @@ func TestRenderHostBoM_UsesExecutionBoundariesAndSetupDescriptions(t *testing.T)
 	var out bytes.Buffer
 	renderHostBoM(&out, b)
 	text := out.String()
-	for _, want := range []string{"Host MCP:", "people (image people-mcp:1)", "Remote MCP:", "Required setup:", "Authorize chat", "Before continuing", "Your VPN is connected"} {
+	for _, want := range []string{"Host MCP:", "people (image people-mcp:1)", "Remote MCP:", "Ensures:", "Authorize chat", "Before continuing", "Your VPN is connected"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("trust screen omitted %q:\n%s", want, text)
 		}

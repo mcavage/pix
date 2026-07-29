@@ -68,10 +68,11 @@ type hostBoMMCP struct {
 }
 
 type hostBoMContainer struct {
-	Name     string
-	Image    string
-	Manifest string
-	EnvKeys  []string
+	Name      string
+	Image     string
+	Manifest  string
+	EnvKeys   []string
+	EnvValues map[string]string
 }
 
 type hostBoMRemote struct {
@@ -176,7 +177,7 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 				keys = append([]string{env}, keys...)
 			}
 			b.Containers = append(b.Containers, hostBoMContainer{
-				Name: name, Image: strings.TrimSpace(ig.Image), Manifest: strings.TrimSpace(ig.Manifest), EnvKeys: keys,
+				Name: name, Image: strings.TrimSpace(ig.Image), Manifest: strings.TrimSpace(ig.Manifest), EnvKeys: keys, EnvValues: ig.EnvValues,
 			})
 		case strings.TrimSpace(ig.URL) != "":
 			b.RemoteMCP = append(b.RemoteMCP, hostBoMRemote{Name: name, URL: strings.TrimSpace(ig.URL)})
@@ -257,10 +258,11 @@ func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]stri
 		Argv []string `json:"argv"`
 	}
 	type fpContainer struct {
-		Name     string   `json:"name"`
-		Image    string   `json:"image,omitempty"`
-		Manifest string   `json:"manifest,omitempty"`
-		EnvKeys  []string `json:"env_keys,omitempty"`
+		Name      string            `json:"name"`
+		Image     string            `json:"image,omitempty"`
+		Manifest  string            `json:"manifest,omitempty"`
+		EnvKeys   []string          `json:"env_keys,omitempty"`
+		EnvValues map[string]string `json:"env_values,omitempty"`
 	}
 	type fpRemote struct {
 		Name string `json:"name"`
@@ -301,7 +303,7 @@ func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]stri
 	for _, c := range b.Containers {
 		keys := append([]string(nil), c.EnvKeys...)
 		sort.Strings(keys)
-		doc.Containers = append(doc.Containers, fpContainer{Name: c.Name, Image: c.Image, Manifest: c.Manifest, EnvKeys: keys})
+		doc.Containers = append(doc.Containers, fpContainer{Name: c.Name, Image: c.Image, Manifest: c.Manifest, EnvKeys: keys, EnvValues: c.EnvValues})
 	}
 	sort.Slice(doc.Containers, func(i, j int) bool { return doc.Containers[i].Name < doc.Containers[j].Name })
 	for _, r := range b.RemoteMCP {
@@ -381,6 +383,16 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 		if len(c.EnvKeys) > 0 {
 			fmt.Fprintf(out, "                       Receives: %s\n", strings.Join(c.EnvKeys, ", "))
 		}
+		if len(c.EnvValues) > 0 {
+			keys := make([]string, 0, len(c.EnvValues))
+			for key := range c.EnvValues {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				fmt.Fprintf(out, "                       Uses: %s=%s\n", key, c.EnvValues[key])
+			}
+		}
 	}
 	for _, r := range b.RemoteMCP {
 		fmt.Fprintf(out, "  Remote MCP:          %s → %s\n", r.Name, r.URL)
@@ -399,9 +411,9 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 		fmt.Fprintf(out, "  External binary:     %s  sha256:%s  [re-hashed before every launch]\n", bn.Name, strings.ToLower(strings.TrimSpace(bn.SHA)))
 	}
 	for _, s := range b.Setup {
-		kind := "Optional setup:"
+		kind := "Optional:"
 		if s.Required {
-			kind = "Required setup:"
+			kind = "Ensures:"
 		}
 		label := strings.TrimSpace(s.Description)
 		if label == "" {
@@ -409,8 +421,20 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 		}
 		fmt.Fprintf(out, "  %-20s %s — %s (%s %s)\n", kind, s.ID, label, s.Path, strings.Join(s.ApplyArgs, " "))
 	}
-	if len(b.Egress) > 0 {
-		fmt.Fprintf(out, "  Network egress:      %s\n", strings.Join(b.Egress, ", "))
+	coveredEgress := map[string]bool{}
+	for _, proxy := range b.SandboxProxies {
+		for _, endpoint := range proxy.Egress {
+			coveredEgress[endpoint] = true
+		}
+	}
+	var extraEgress []string
+	for _, endpoint := range b.Egress {
+		if !coveredEgress[endpoint] {
+			extraEgress = append(extraEgress, endpoint)
+		}
+	}
+	if len(extraEgress) > 0 {
+		fmt.Fprintf(out, "  Network access:      %s\n", strings.Join(extraEgress, ", "))
 	}
 	if len(b.Prerequisites) > 0 {
 		fmt.Fprintln(out, "\nBefore continuing, make sure:")

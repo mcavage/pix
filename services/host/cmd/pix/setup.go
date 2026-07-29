@@ -110,7 +110,7 @@ func runSetupCmd(argv []string) {
 	}
 
 	env := defaultShellEnv()
-	env.verbose = verbose
+	env.quiet = !verbose
 	if verbose {
 		_ = os.Setenv("PIX_SETUP_VERBOSE", "1")
 	}
@@ -164,6 +164,9 @@ func runSetupCmd(argv []string) {
 	// engine while preserving the exact same BoM review, fingerprint, and
 	// rollback behavior as `pix pack use`.
 	var activatedPacks []string
+	if len(parsed.packs) > 0 && env.quiet {
+		fmt.Fprintln(os.Stdout, "Configuring pack integrations…")
+	}
 	for _, requestedPack := range parsed.packs {
 		packArg := normalizeSetupPackArg(requestedPack)
 		useArgs := []string{packArg}
@@ -208,6 +211,9 @@ func runSetupCmd(argv []string) {
 	// is the seam: it does the validation-then-hostPhase-call as one pure step so a
 	// test can assert hostPhase is never invoked for a bad DIR without exercising
 	// os.Exit.
+	if env.quiet {
+		fmt.Fprintln(os.Stdout, "Setting up inference and host services…")
+	}
 	if err := runSetupCore(env, dir, hostArgs, os.Stdin, os.Stdout, isTTY(os.Stdin), setupHostPhase); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		var usage errUsage
@@ -330,8 +336,12 @@ func runSetupHandoff(dir, name string, state sbxState, replace bool, out io.Writ
 	// in-VM onboarding agent via an initial message. A --replace here is
 	// harmless (the create path ignores it).
 	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "Launching sandbox: pi will introduce itself, show you how it works,")
-	fmt.Fprintln(out, "and get you into a real task. (You can quit any time; just run `pix run`.)")
+	if !setupTranscriptVerbose {
+		fmt.Fprintln(out, "Launching Pix — the agent will take it from here.")
+	} else {
+		fmt.Fprintln(out, "Launching sandbox: pi will introduce itself, show you how it works,")
+		fmt.Fprintln(out, "and get you into a real task. (You can quit any time; just run `pix run`.)")
+	}
 	runFn(kickoffArgs())
 	return nil
 }
@@ -438,6 +448,9 @@ var setupPhaseOrder = []struct{ name, what string }{
 // Pass a non-empty override to say something more specific than the default
 // (e.g. that the handoff was skipped on purpose).
 func setupPhaseHeader(out io.Writer, name, override string) {
+	if !setupTranscriptVerbose {
+		return
+	}
 	for i, p := range setupPhaseOrder {
 		if p.name != name {
 			continue
@@ -450,6 +463,8 @@ func setupPhaseHeader(out io.Writer, name, override string) {
 		return
 	}
 }
+
+var setupTranscriptVerbose bool
 
 // setupMaxPrompts is the hard cap on interactive questions ONE setup run may
 // ask (AC-P0-307). There are exactly two: model-pull consent and the Google
@@ -761,7 +776,10 @@ func mcpAxes(servers []string) []Axis {
 // with --yes/--non-interactive or no TTY it is fully
 // non-interactive (the CI path).
 func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, tty bool) error {
-	fmt.Fprintln(out, "pix setup — configuring the host")
+	setupTranscriptVerbose = !env.quiet
+	if !env.quiet {
+		fmt.Fprintln(out, "pix setup — configuring the host")
+	}
 
 	// PHASE 1 — parse. Argument mistakes are caught here, before any probe or
 	// mutation, and map to exit 2 at the call site.
@@ -840,9 +858,11 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	setupPhaseHeader(out, setupPhaseReport, "")
 	printSetupSummary(postCfg, env, out, models)
 
-	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "host mode (optional, UNSANDBOXED: runs `pi` directly on the host): not enabled.")
-	fmt.Fprintln(out, "  set it up only if you need it:  pix host setup")
+	if !env.quiet {
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "host mode (optional, UNSANDBOXED: runs `pi` directly on the host): not enabled.")
+		fmt.Fprintln(out, "  set it up only if you need it:  pix host setup")
+	}
 
 	// A partial pull failure is a real, verified gap the user consented to
 	// closing: fail setup (non-zero) with the exact retry commands. The summary
