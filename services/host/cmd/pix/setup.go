@@ -172,6 +172,17 @@ func runSetupCmd(argv []string) {
 			os.Exit(1)
 		}
 	}
+	// A pack's required setup owns its interactive authorization flows. Run it
+	// before the ordinary host gate: that gate verifies configured MCP servers,
+	// so placing hooks afterward made it impossible for a fresh pack to satisfy
+	// the very prerequisites the gate checked (and skipped Slack/Google/BambooHR
+	// entirely on the first missing remote registration).
+	for _, root := range activatedPacks {
+		if err := runPackSetup(env, os.Stdout, root, parsed.withSetup); err != nil {
+			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
+			os.Exit(1)
+		}
+	}
 
 	// Phase 1: host config — source keys from 1Password, ensure memory, create the
 	// pack, seed identity, provision+enable host mode (see setupHostPhase). This
@@ -196,13 +207,6 @@ func runSetupCmd(argv []string) {
 		}
 		os.Exit(1)
 	}
-	for _, root := range activatedPacks {
-		if err := runPackSetup(env, os.Stdout, root, parsed.withSetup); err != nil {
-			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
 	// --no-agent stops here: the host phase is the whole command. The phase
 	// header is still printed so the transcript is complete and a reader can
 	// see that the handoff was skipped by request, not silently dropped.

@@ -754,7 +754,14 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			continue
 		}
 		var err error
-		if env.probe != nil {
+		if containers[n].RemoteURL != "" && env.runInteractive != nil {
+			// `sbx mcp add --url` may perform OAuth and keep a localhost callback
+			// listener alive while the browser completes. A bounded probe kills that
+			// listener, leaving the browser at ERR_CONNECTION_REFUSED. Remote MCP
+			// registration is an explicitly interactive mutation; let it inherit the
+			// terminal and run to completion. Read-only status checks remain bounded.
+			err = env.runInteractive("sbx", args...)
+		} else if env.probe != nil {
 			_, timedOut, probeErr := env.probe("sbx", args...)
 			err = probeErr
 			if timedOut {

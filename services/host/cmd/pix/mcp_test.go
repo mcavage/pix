@@ -280,6 +280,34 @@ func TestRegisterServers_RemoteWithURLRegistered(t *testing.T) {
 	}
 }
 
+func TestRegisterServers_RemoteURLUsesInteractiveRunner(t *testing.T) {
+	env := fakeEnv{
+		present: map[string]bool{"sbx": true},
+		output:  map[string]string{"/usr/bin/pix-host mcp --list": "slack\n"},
+	}.env()
+	var interactive []string
+	env.runInteractive = func(name string, args ...string) error {
+		interactive = append([]string{name}, args...)
+		return nil
+	}
+	env.probe = func(name string, args ...string) (string, bool, error) {
+		if name == "sbx" {
+			t.Fatalf("remote OAuth registration was sent through the bounded probe: %s %s", name, strings.Join(args, " "))
+		}
+		return "slack\n", false, nil
+	}
+	cfg := defaultCfg()
+	cfg.MCP = []string{"meetings"}
+	containers := map[string]packContainer{"meetings": {RemoteURL: "https://app.trymeetings.com/mcp"}}
+	var out bytes.Buffer
+	if err := registerServers(cfg, env, &out, nil, hostStub("/usr/bin/pix-host", nil), containers); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(interactive, " "); got != "sbx mcp add meetings --url https://app.trymeetings.com/mcp" {
+		t.Fatalf("interactive registration = %q", got)
+	}
+}
+
 // TestRegisterServers_LocalSetUnknownFailClosed: when the local-name list can't
 // be established (pix-host unresolved / `mcp --list` fails), a non-gog name
 // must FAIL CLOSED — NOT be registered as a local pix-host subcommand — and
