@@ -179,9 +179,8 @@ func TestSetupModels_ExplicitPullModels_PullsDeduped(t *testing.T) {
 	}
 }
 
-// The interactive flow shows ONE aggregate prompt listing every missing tag
-// with a disk warning, and it DEFAULTS TO NO: an empty answer (and EOF) must
-// not pull anything.
+// Ordinary interactive setup treats local models as progressive enhancement:
+// it never prompts and never pulls without the explicit --pull-models flag.
 func TestSetupModels_InteractiveDefaultNo(t *testing.T) {
 	for _, tc := range []struct {
 		name, input string
@@ -199,27 +198,25 @@ func TestSetupModels_InteractiveDefaultNo(t *testing.T) {
 				t.Fatalf("unexpected error: %v\n%s", err, out.String())
 			}
 			if n := w.count("ollama pull"); n != 0 {
-				t.Errorf("default-No prompt must not pull (input %q), got %d pulls:\n%v", tc.input, n, w.calls)
+				t.Errorf("ordinary setup must not pull (input %q), got %d pulls:\n%v", tc.input, n, w.calls)
 			}
 			s := out.String()
-			if !strings.Contains(s, "[y/N]") {
-				t.Errorf("interactive setup must show the default-No aggregate prompt, got:\n%s", s)
+			if strings.Contains(s, "[y/N]") {
+				t.Errorf("ordinary setup must not ask about local models, got:\n%s", s)
 			}
 			if !strings.Contains(s, "qwen3.5:9b") || !strings.Contains(s, "nomic-embed-text") {
 				t.Errorf("the aggregate prompt must list every missing tag, got:\n%s", s)
 			}
-			if !strings.Contains(s, "GB") {
-				t.Errorf("the prompt must warn about the download/disk size, got:\n%s", s)
-			}
-			if strings.Count(s, "[y/N]") != 1 {
-				t.Errorf("want exactly ONE aggregate prompt, got:\n%s", s)
+			if !strings.Contains(s, "pix setup --pull-models") {
+				t.Errorf("must show the explicit opt-in command, got:\n%s", s)
 			}
 		})
 	}
 }
 
-// Answering yes to the interactive prompt pulls the missing tags.
-func TestSetupModels_InteractiveYesPulls(t *testing.T) {
+// Stray interactive input cannot opt into a model download. Consent is a flag,
+// so it is deterministic and scriptable.
+func TestSetupModels_InteractiveYesDoesNotPull(t *testing.T) {
 	w := &ollamaWorld{}
 	env := modelsSetupEnv(t, w)
 	stubProvisionKeysOK(t)
@@ -227,8 +224,8 @@ func TestSetupModels_InteractiveYesPulls(t *testing.T) {
 	if err := setupHostPhase(env, nil, strings.NewReader("y\n"), &out, true); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
-	if n := w.count("ollama pull"); n != 2 {
-		t.Errorf("prompt-approved setup pulled %d times, want 2:\n%v", n, w.calls)
+	if n := w.count("ollama pull"); n != 0 {
+		t.Errorf("ordinary setup pulled %d times, want 0:\n%v", n, w.calls)
 	}
 	if strings.Contains(out.String(), "✓ qwen3.5:9b pulled and verified") || strings.Contains(out.String(), "✓ nomic-embed-text pulled and verified") {
 		t.Errorf("the model mutation must not print success; success comes from post-mutation probes:\n%s", out.String())

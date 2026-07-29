@@ -52,6 +52,15 @@ pix run
 
 `pix setup` may open browser or 1Password prompts. It resumes safely after interruption and prints one final verdict.
 
+A pack contributes setup through typed `[[setup]]` entries in `pack.toml`.
+Each entry names a repo-relative executable, bounded read-only probe arguments,
+idempotent apply arguments, and whether the step is required for first use.
+Setup executable bytes and argv are included in the launcher-owned Tier-1 trust
+fingerprint. Pix runs required steps only, probes before applying, and requires
+the same probe to pass afterward. Optional integrations authorize on first use
+or through an explicit later setup action. A pack must not ship a second public
+installer; a legacy installer may only delegate to `pix setup --pack`.
+
 ## 4. Setup phases
 
 Setup is an idempotent state machine. Each phase records observed evidence, makes one bounded change, verifies that change, and can be rerun.
@@ -150,6 +159,11 @@ Resolution order:
 4. Pix default.
 
 The router consumes observed provider availability, not a static assumption that Anthropic, OpenAI, Google, and Ollama all exist.
+
+On a single-provider host, setup also selects a compatible top-level intent
+when the shipped OpenAI-specific default would be unusable: `strategy` for
+Anthropic, `review` for Google, and `overlord` for OpenAI. An explicit
+non-default user intent is never overwritten.
 
 - With several providers, preserve cross-vendor review where possible.
 - With one cloud provider, use same-provider review and report the degradation once.

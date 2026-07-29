@@ -18,10 +18,24 @@ pix setup
 pix run
 ```
 
-`pix setup` installs prerequisites (`sbx`, `op`, `ollama`, `gh`) and walks
-through onboarding. Do not use the bare `brew install pix`: Homebrew does not
+`pix setup` installs the two core host tools (`sbx` and `op`) with one Homebrew
+consent when needed, configures one model provider from 1Password,
+and launches the first sandbox. One provider is enough. Additional providers,
+Ollama, GitHub CLI, and Google Workspace are optional capabilities that can be
+added later. When a required host tool is absent, setup prints the exact install
+command and resumes safely after it is run. Do not use the bare `brew install pix`: Homebrew does not
 know a formula by that name and may suggest `pixi` instead. The `mcavage/tap/`
 qualifier is required.
+
+Activate a personal or work pack through the same setup flow:
+
+```bash
+pix setup --pack owner/repository
+```
+
+Packs can declare required setup probes and idempotent actions. Pix reviews and
+fingerprints host-executing hooks, runs only required hooks, verifies them after
+execution, and resumes past completed work on the next setup run.
 
 <!-- PIX_PRIMARY_PATH_END -->
 
@@ -100,9 +114,9 @@ repository Pix touches. The optional `.pix/knowledge` pointer remains trackable.
 ## How it works
 
 - **Isolation:** pi runs in a disposable, network-limited Docker Sandbox.
-- **Models:** OpenAI orchestrates, Anthropic handles code and high-accuracy work,
-  Google provides cross-vendor review and high-volume roles, and Ollama supplies
-  local models.
+- **Models:** Pix runs with any one configured cloud provider. Additional
+  providers improve role specialization and cross-vendor review. Ollama adds
+  optional local models.
 - **Review:** code-producing workflows use a different model vendor for review.
 - **Memory:** a host service stores durable facts in SQLite with FTS5 and vector
   search. Recall is appended to conversation context without rewriting the

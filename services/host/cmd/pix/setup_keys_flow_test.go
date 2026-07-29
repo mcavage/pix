@@ -156,6 +156,32 @@ func TestSetupProvisionKeys_OpNotSignedIn_FailsWithExactFix(t *testing.T) {
 	}
 }
 
+func TestSetupProvisionKeys_InteractiveRunsOfficialOpSignin(t *testing.T) {
+	signedIn := false
+	env, _ := stepEnv(t, "OPENAI_API_KEY=op://v/openai/key\n", "openai", "sk-val")
+	baseRun := env.run
+	env.run = func(name string, args ...string) (string, error) {
+		if name == "op" && len(args) >= 1 && args[0] == "account" && !signedIn {
+			return "", nil
+		}
+		return baseRun(name, args...)
+	}
+	env.runInteractive = func(name string, args ...string) error {
+		if name != "op" || strings.Join(args, " ") != "signin" {
+			t.Fatalf("unexpected interactive command: %s %v", name, args)
+		}
+		signedIn = true
+		return nil
+	}
+	var out bytes.Buffer
+	if !setupProvisionKeys(env, strings.NewReader("\n"), &out, true, false) {
+		t.Fatalf("expected setup to continue after op signin:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "official `op signin` flow") {
+		t.Fatalf("missing authorization handoff: %s", out.String())
+	}
+}
+
 // --- STEP 1: existing refs are confirmed, not re-pasted, but validated ----
 
 // A ref that already exists, resolves, and is already synced is confirmed
@@ -223,19 +249,17 @@ func TestSetupProvisionKeys_ExistingRefBroken_FailsNoPersist(t *testing.T) {
 
 // --- STEP 1: missing refs, interactive ------------------------------------
 
-// Every provider missing a ref, interactive TTY: each is prompted for exactly
-// once (not a summary line), the valid answers are validated + persisted to
-// BOTH op-refs.env and hostmode.env, and reconcile sets all three (missing
-// from sbx) without asking.
+// With no provider configured, interactive setup chooses one provider and
+// persists only that provider to both credential files.
 func TestSetupProvisionKeys_MissingRefs_InteractivePromptsCollectsAndPersistsBoth(t *testing.T) {
 	env, calls := stepEnv(t, "", "", "sk-val")
-	in := strings.NewReader("op://V/anthropic/key\nop://V/openai/key\nop://V/gemini/key\n")
+	in := strings.NewReader("2\nop://V/anthropic/key\n")
 	var out bytes.Buffer
 	if !setupProvisionKeys(env, in, &out, true, false) {
 		t.Fatalf("expected success, got:\n%s", out.String())
 	}
-	if n := strings.Count(out.String(), "paste a 1Password ref"); n != 3 {
-		t.Errorf("must prompt exactly once per missing provider (3 total), got %d:\n%s", n, out.String())
+	if n := strings.Count(out.String(), "paste a 1Password ref"); n != 1 {
+		t.Errorf("must prompt exactly once for the chosen provider, got %d:\n%s", n, out.String())
 	}
 	opRefs := ""
 	hostMode := ""
@@ -247,7 +271,7 @@ func TestSetupProvisionKeys_MissingRefs_InteractivePromptsCollectsAndPersistsBot
 	if c, err := env.readFile(hostModeRefsPath(env)); err == nil {
 		hostMode = c
 	}
-	for _, want := range []string{"ANTHROPIC_API_KEY=op://V/anthropic/key", "OPENAI_API_KEY=op://V/openai/key", "GEMINI_API_KEY=op://V/gemini/key"} {
+	for _, want := range []string{"ANTHROPIC_API_KEY=op://V/anthropic/key"} {
 		if !strings.Contains(opRefs, want) {
 			t.Errorf("op-refs.env missing %q, got:\n%s", want, opRefs)
 		}
@@ -256,8 +280,8 @@ func TestSetupProvisionKeys_MissingRefs_InteractivePromptsCollectsAndPersistsBot
 		}
 	}
 	joined := strings.Join(*calls, "\n")
-	if strings.Count(joined, "sbx secret set") != 3 {
-		t.Errorf("all three keys were missing from sbx and must all be set:\n%s", joined)
+	if strings.Count(joined, "sbx secret set") != 1 {
+		t.Errorf("the chosen key was missing from sbx and must be set:\n%s", joined)
 	}
 }
 
@@ -265,7 +289,7 @@ func TestSetupProvisionKeys_MissingRefs_InteractivePromptsCollectsAndPersistsBot
 // providerKeyPromptAttempts; the resolved value is never echoed.
 func TestSetupProvisionKeys_InvalidThenValidRef_Reprompts(t *testing.T) {
 	env, _ := stepEnv(t, "", "", "sk-val")
-	in := strings.NewReader("not-a-ref\nop://V/anthropic/key\nop://V/openai/key\nop://V/gemini/key\n")
+	in := strings.NewReader("2\nnot-a-ref\nop://V/anthropic/key\n")
 	var out bytes.Buffer
 	if !setupProvisionKeys(env, in, &out, true, false) {
 		t.Fatalf("expected eventual success, got:\n%s", out.String())
@@ -286,15 +310,15 @@ func TestSetupProvisionKeys_EOFDuringPrompt_Fails(t *testing.T) {
 	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
 		t.Fatal("EOF must fail setup, not silently skip the provider")
 	}
-	if !strings.Contains(out.String(), "no input") || !strings.Contains(out.String(), "required") {
-		t.Errorf("must explain a ref is required, got:\n%s", out.String())
+	if !strings.Contains(out.String(), "no input") || !strings.Contains(out.String(), "cannot continue") {
+		t.Errorf("must explain setup cannot continue, got:\n%s", out.String())
 	}
 }
 
 // Repeated invalid input exhausts the retry budget and fails cleanly.
 func TestSetupProvisionKeys_TooManyInvalidAttempts_Fails(t *testing.T) {
 	env, _ := stepEnv(t, "", "", "sk-val")
-	in := strings.NewReader("nope\nnope\nnope\nnope\n")
+	in := strings.NewReader("2\nnope\nnope\nnope\n")
 	var out bytes.Buffer
 	if setupProvisionKeys(env, in, &out, true, false) {
 		t.Fatal("must fail after too many invalid attempts")
@@ -668,7 +692,7 @@ func TestSetupProvisionKeys_FinalProbe_SbxCommandFails_FailsClosed(t *testing.T)
 	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
 		t.Fatal("a failing final `sbx secret ls` must fail setup, not fail open")
 	}
-	if !strings.Contains(out.String(), "could not verify sbx has all three provider keys") {
+	if !strings.Contains(out.String(), "could not verify sbx has the configured provider keys") {
 		t.Errorf("must print the diagnostic, got:\n%s", out.String())
 	}
 }

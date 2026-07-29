@@ -208,6 +208,28 @@ func TestProviderRefSet(t *testing.T) {
 	}
 }
 
+func TestSetupSelectRunnableIntentForSingleProvider(t *testing.T) {
+	for _, tc := range []struct {
+		refs, start, want string
+		changed           bool
+	}{
+		{"ANTHROPIC_API_KEY=op://v/a/k\n", config.DefaultRunIntent, "strategy", true},
+		{"GEMINI_API_KEY=op://v/g/k\n", config.DefaultRunIntent, "review", true},
+		{"OPENAI_API_KEY=op://v/o/k\n", config.DefaultRunIntent, config.DefaultRunIntent, false},
+		{"ANTHROPIC_API_KEY=op://v/a/k\nOPENAI_API_KEY=op://v/o/k\n", config.DefaultRunIntent, config.DefaultRunIntent, false},
+		{"ANTHROPIC_API_KEY=op://v/a/k\n", "code", "code", false},
+	} {
+		env := shellEnv{readFile: func(string) (string, error) { return tc.refs, nil }}
+		cfg := &config.Config{RunIntent: tc.start}
+		if got := setupSelectRunnableIntent(cfg, env); got != tc.changed {
+			t.Errorf("refs=%q changed=%v, want %v", tc.refs, got, tc.changed)
+		}
+		if cfg.RunIntent != tc.want {
+			t.Errorf("refs=%q intent=%q, want %q", tc.refs, cfg.RunIntent, tc.want)
+		}
+	}
+}
+
 // setupProvisionKeys with `op` entirely missing is a HARD precondition
 // failure (never fail-open) — without op there's nothing to source keys
 // from at all. See setup_keys_flow_test.go's SbxUnavailable_FailsOpen for the

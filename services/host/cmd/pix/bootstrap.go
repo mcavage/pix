@@ -1,7 +1,7 @@
 // bootstrap.go: the "bare-minimum keys" provisioning flow used by `pix run`
 // (auto, only when no key is present). Policy: 1Password (op required). `pix
 // setup` does NOT use bootstrapProviderKeys. Its setupProvisionKeys path
-// validates and reconciles all three 1Password refs into sbx. This file keeps
+// validates and reconciles the configured 1Password refs into sbx. This file keeps
 // the tri-state sbx probes (sbxModelKeyState, sbxAllModelKeysPresent) both share.
 package main
 
