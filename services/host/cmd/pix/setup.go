@@ -105,6 +105,15 @@ func runSetupCmd(argv []string) {
 	}
 
 	env := defaultShellEnv()
+	parsed, parseErr := parseOnboardArgs(hostArgs)
+	if parseErr != nil {
+		fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", parseErr, setupUsage)
+		os.Exit(2)
+	}
+	if len(parsed.withSetup) > 0 && strings.TrimSpace(parsed.pack) == "" {
+		fmt.Fprintf(os.Stderr, "pix setup: --with requires --pack\n\n%s", setupUsage)
+		os.Exit(2)
+	}
 
 	// `--apply` is the surviving half of the deleted `pix onboard`: reconcile
 	// a pending <DIR>/.pix/onboarding.json (the control-plane proposal an
@@ -124,6 +133,31 @@ func runSetupCmd(argv []string) {
 		}
 		reconcileOnboarding(dir, env, os.Stdin, os.Stdout, opts.assumeYes, isTTY(os.Stdin))
 		return
+	}
+	if err := validateRunWorkspace(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
+		os.Exit(2)
+	}
+	if err := ensureSetupPrereqs(env, os.Stdin, os.Stdout, isTTY(os.Stdin) && !parsed.assumeYes); err != nil {
+		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
+		os.Exit(1)
+	}
+	if err := ensureSetupSbxSession(env, os.Stdout, isTTY(os.Stdin) && !parsed.assumeYes); err != nil {
+		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
+		os.Exit(1)
+	}
+
+	// A requested pack is adopted through the existing pack trust transaction
+	// before host setup. This gives `pix setup --pack owner/repo` one setup
+	// engine while preserving the exact same BoM review, fingerprint, and
+	// rollback behavior as `pix pack use`.
+	if strings.TrimSpace(parsed.pack) != "" {
+		packArg := normalizeSetupPackArg(parsed.pack)
+		useArgs := []string{packArg}
+		if parsed.assumeYes {
+			useArgs = append([]string{"--yes"}, useArgs...)
+		}
+		runPackUse(env, os.Stdout, useArgs)
 	}
 
 	// Phase 1: host config — source keys from 1Password, ensure memory, create the
@@ -148,6 +182,17 @@ func runSetupCmd(argv []string) {
 			os.Exit(2) // an argument mistake, caught before any probe or mutation
 		}
 		os.Exit(1)
+	}
+	if strings.TrimSpace(parsed.pack) != "" {
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "pix setup: load active pack: %v\n", err)
+			os.Exit(1)
+		}
+		if err := runPackSetup(env, os.Stdout, cfg.Pack, parsed.withSetup); err != nil {
+			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	// --no-agent stops here: the host phase is the whole command. The phase
@@ -324,7 +369,7 @@ func setupInteractivePrompts(tty, assumeYes bool) bool {
 //	inventory  read the current host state; NOTHING is written
 //	gate       preconditions that must hold before the first mutation
 //	mutate     the fixed-order, individually idempotent writes
-//	consent    the (at most two) interactive questions + what they authorize
+//	consent    bounded interactive questions and what they authorize
 //	verify     re-probe what was just changed
 //	report     render, purely from the post-mutation evidence
 //	handoff    launch the sandbox (skipped by --no-agent)
@@ -555,7 +600,13 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 			cfgOnly := *inv.proposal
 			cfgOnly.Knowledge = nil
 			_, err := applyOnboardingResult(&cfgOnly, cfg, env, io.Discard, func(c *config.Config) error { return c.Save() })
-			return err
+			if err != nil {
+				return err
+			}
+			if setupSelectRunnableIntent(cfg, env) {
+				return cfg.Save()
+			}
+			return nil
 		},
 	}, {
 		name:  "pack",
@@ -649,8 +700,10 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 			// prompt), verify once after the pulls, receipt the outcome. Never
 			// installs Ollama; never pulls a tag it could not positively verify
 			// as missing.
-			ask := opts.pullModels || prompts.reserve("local model pull consent")
-			*models = setupLocalModels(cfg, env, in, out, ask && interactive, opts.pullModels)
+			// Local models are progressive enhancement. Ordinary setup never asks
+			// about a multi-gigabyte download; only an explicit --pull-models opts
+			// into the pull path.
+			*models = setupLocalModels(cfg, env, in, out, false, opts.pullModels)
 			receiptSetupModels(env, out, *models)
 			return nil
 		},
@@ -671,8 +724,8 @@ func mcpAxes(servers []string) []Axis {
 
 // setupHostPhase runs the host half of `pix setup` as the eight-phase
 // transcript documented above. The only interactive steps are the mandatory
-// op:// ref collection (TTY + op installed) and the at most two consent
-// questions; with --yes/--non-interactive or no TTY it is fully
+// op:// ref collection (TTY + op installed) and bounded consent questions;
+// with --yes/--non-interactive or no TTY it is fully
 // non-interactive (the CI path).
 func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, tty bool) error {
 	fmt.Fprintln(out, "pix setup — configuring the host")
@@ -852,6 +905,30 @@ func setupProvidersAxis(env shellEnv) []check {
 	}
 }
 
+// setupSelectRunnableIntent prevents a successful one-provider setup from
+// immediately selecting a model whose provider has no key. It changes only
+// the shipped OpenAI-specific default. Explicit non-default user choices and
+// multi-provider installations are left untouched.
+func setupSelectRunnableIntent(cfg *config.Config, env shellEnv) bool {
+	if cfg == nil || cfg.RunIntent != config.DefaultRunIntent {
+		return false
+	}
+	names, err := hostModeProviderKeys(env)
+	if err != nil || len(names) != 1 {
+		return false
+	}
+	switch names[0] {
+	case "anthropic":
+		cfg.RunIntent = "strategy"
+		return true
+	case "google":
+		cfg.RunIntent = "review"
+		return true
+	default:
+		return false
+	}
+}
+
 // setupPackAxis is the post-mutation pack fact: an ACTIVE but EMPTY pack is a
 // TODO, never green.
 func setupPackAxis(cfg *config.Config) []check {
@@ -895,8 +972,8 @@ func setupGworkspaceAxis(cfg *config.Config, env shellEnv) []check {
 // forever.
 const providerKeyPromptAttempts = 3
 
-// setupProvisionKeys sources model provider keys (Anthropic/OpenAI/Google) from
-// 1Password and reconciles them into the sbx secret store. This is the ONLY
+// setupProvisionKeys sources one or more model provider keys from 1Password
+// and reconciles them into the sbx secret store. This is the ONLY
 // provider-key path: op is required, and the removed --use-sbx-keys flag,
 // persisted provider_key_mode, and the "already in sbx?" convenience prompt are
 // gone. Returns whether all keys ended up usable.
@@ -905,8 +982,10 @@ const providerKeyPromptAttempts = 3
 // either there is nothing to source keys from — fail setup with the exact fix,
 // before pack/host/onboarding ever run.
 //
-// Step 1 (collect + validate every ref): for each provider, in order
-// (providerKeyRefOrder):
+// Step 1 (collect + validate configured refs): existing provider refs are all
+// validated. When none exists, an interactive setup asks which ONE provider to
+// configure and then collects that provider's ref. One provider is enough to
+// run Pix; additional providers can be added later with `pix secret set`.
 //   - a ref already configured (op-refs.env OR hostmode.env, via currentOpRef)
 //     is CONFIRMED, not re-solicited — but it still must resolve via `op read`
 //     to a non-empty value; a broken existing ref fails setup outright.
@@ -918,12 +997,12 @@ const providerKeyPromptAttempts = 3
 //     `pix secret set` command per missing provider and fails setup.
 //
 // Step 2 (mirror + verify): every validated ref is written to BOTH op-refs.env
-// (sandbox) and hostmode.env (host mode); setup then verifies all three landed
+// (sandbox) and hostmode.env (host mode); setup then verifies they all landed
 // in hostmode.env.
 //
 // Step 3 (reconcile sbx): reconcileProviderKeysWithSbx brings sbx to the same
 // state as the validated refs, fed the Step-1 snapshot. A reconcile failure
-// fails setup. Step 4 (final probe) requires all three keys usable in sbx.
+// fails setup. Step 4 (final probe) requires every configured key usable in sbx.
 //
 // Steps 1-3 run holding the provider-refs transaction lock so a concurrent
 // `pix secret set`/`secret rm` cannot interleave. Never persists or prints
@@ -939,7 +1018,7 @@ func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive, 
 	return runStrictProviderKeyFlow(env, bufio.NewScanner(in), out, interactive, assumeYes)
 }
 
-// runStrictProviderKeyFlow resolves every provider key from 1Password and
+// runStrictProviderKeyFlow resolves the configured provider keys from 1Password and
 // reconciles it into sbx (Steps 0-4 documented on setupProvisionKeys). It is the
 // only provider-key path now that the sbx-keys shortcut is gone.
 func runStrictProviderKeyFlow(env shellEnv, sc *bufio.Scanner, out io.Writer, interactive, assumeYes bool) bool {
@@ -952,10 +1031,23 @@ func runStrictProviderKeyFlow(env shellEnv, sc *bufio.Scanner, out io.Writer, in
 		return false
 	}
 	if !opSignedIn(env) {
-		fmt.Fprintln(out, "`op` is installed but no 1Password account is configured.")
-		fmt.Fprintln(out, "  fix: op signin   (or add an account in the 1Password app)")
-		fmt.Fprintln(out, "then re-run the same setup command.")
-		return false
+		if interactive && env.runInteractive != nil {
+			fmt.Fprintln(out, "1Password needs authorization. Continuing with the official `op signin` flow.")
+			if err := env.runInteractive("op", "signin"); err == nil && opSignedIn(env) {
+				// Continue directly into provider selection. No separate user command
+				// or Pix identity is introduced.
+			} else {
+				fmt.Fprintln(out, "`op signin` did not establish a usable 1Password session.")
+				fmt.Fprintln(out, "  fix: op signin   (or add an account in the 1Password app)")
+				fmt.Fprintln(out, "then re-run the same setup command.")
+				return false
+			}
+		} else {
+			fmt.Fprintln(out, "`op` is installed but no 1Password account is configured.")
+			fmt.Fprintln(out, "  fix: op signin   (or add an account in the 1Password app)")
+			fmt.Fprintln(out, "then re-run the same setup command.")
+			return false
+		}
 	}
 
 	// Hold the provider-refs transaction lock across the WHOLE flow: initial
@@ -983,9 +1075,29 @@ func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer,
 	// reconcile never pays for a second `op read` of the same ref.
 	refs := make(map[string]string, len(providerKeyRefOrder))
 	resolved := make(map[string]string, len(providerKeyRefOrder))
-	var missingNonInteractive []struct{ envVar, name string }
-
+	configured := make([]struct{ envVar, name string }, 0, len(providerKeyRefOrder))
 	for _, p := range providerKeyRefOrder {
+		if _, ok := currentOpRef(env, p.envVar); ok {
+			configured = append(configured, p)
+		}
+	}
+	if len(configured) == 0 {
+		if !interactive {
+			fmt.Fprintln(out, "No model provider is configured. Add any ONE provider:")
+			for _, p := range providerKeyRefOrder {
+				fmt.Fprintf(out, "  pix secret set %s op://Vault/Item/field  # %s\n", p.envVar, p.name)
+			}
+			fmt.Fprintln(out, "then re-run: pix setup")
+			return false
+		}
+		chosen, ok := promptProviderChoice(sc, out)
+		if !ok {
+			return false
+		}
+		configured = append(configured, chosen)
+	}
+
+	for _, p := range configured {
 		ref, hasRef := currentOpRef(env, p.envVar)
 		switch {
 		case hasRef:
@@ -1032,38 +1144,29 @@ func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer,
 			refs[p.envVar] = ref
 			resolved[p.envVar] = val
 		default:
-			missingNonInteractive = append(missingNonInteractive, p)
+			// Only reachable for the one provider selected above.
+			return false
 		}
-	}
-
-	if len(missingNonInteractive) > 0 {
-		fmt.Fprintln(out, "Missing required 1Password refs for:")
-		for _, p := range missingNonInteractive {
-			fmt.Fprintf(out, "  pix secret set %s op://Vault/Item/field\n", p.envVar)
-		}
-		// `pix secret set` mirrors a provider key into BOTH op-refs.env AND
-		// hostmode.env, so the three commands above really are enough — no extra
-		// step needed before re-running setup.
-		fmt.Fprintln(out, "then re-run: pix setup")
-		return false
 	}
 
 	// Every validated ref was already canonical-written to BOTH files above, so
 	// there is no reread-and-remirror pass here — just the final membership
-	// verification that all three landed in hostmode.env (host mode reads ONLY
+	// verification that every configured provider landed in hostmode.env (host mode reads ONLY
 	// hostmode.env via `op run --env-file`, never op-refs.env).
 	got, kerr := hostModeProviderKeys(env)
 	if kerr != nil {
 		fmt.Fprintf(out, "  \u2717 credential state unreadable: %v\n", kerr)
 		return false
 	}
-	if !hasAllProviderKeyNames(got) {
-		// Compare the EXACT required set, not a length — hostModeProviderKeys
-		// already dedupes by provider name, but the completeness check itself
-		// must never accept "the count matches" as a proxy for "every provider is
-		// actually present".
-		fmt.Fprintf(out, "  \u2717 hostmode.env has %v after mirroring, want all of %v\n", got, modelProviders)
-		return false
+	gotSet := map[string]bool{}
+	for _, name := range got {
+		gotSet[name] = true
+	}
+	for _, p := range configured {
+		if !gotSet[p.name] {
+			fmt.Fprintf(out, "  \u2717 hostmode.env is missing configured provider %s after mirroring\n", p.name)
+			return false
+		}
 	}
 
 	if !reconcileProviderKeysWithSbx(env, sc, out, interactive, assumeYes, refs, resolved) {
@@ -1075,15 +1178,56 @@ func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer,
 	// open, we can't tell. sbx being installed but the check command FAILING is
 	// a real, diagnosable problem — fail CLOSED with a message, never silently
 	// pass a box whose completeness we couldn't actually verify.
-	allPresent, state := sbxAllModelKeysPresent(env)
+	sbxOut, state := probeSbxSecrets(env)
 	switch state {
 	case sbxSecretsAbsent:
 		return true
 	case sbxSecretsError:
-		fmt.Fprintln(out, "  \u2717 could not verify sbx has all three provider keys (`sbx secret ls` failed) \u2014 check sbx and re-run the same setup command")
+		fmt.Fprintln(out, "  \u2717 could not verify sbx has the configured provider keys (`sbx secret ls` failed) \u2014 check sbx and re-run the same setup command")
 		return false
 	}
-	return allPresent
+	for _, p := range providerKeyRefOrder {
+		if _, configured := refs[p.envVar]; configured && !grepWord(sbxOut, p.name) {
+			fmt.Fprintf(out, "  \u2717 sbx is missing configured provider %s after reconciliation\n", p.name)
+			return false
+		}
+	}
+	return true
+}
+
+// promptProviderChoice keeps first-run setup to one decision and one ref. It
+// accepts either the displayed number or provider name and defaults to OpenAI,
+// matching Pix's default overlord route.
+func promptProviderChoice(sc *bufio.Scanner, out io.Writer) (struct{ envVar, name string }, bool) {
+	empty := struct{ envVar, name string }{}
+	fmt.Fprintln(out, "One model provider is enough to start. You can add others later.")
+	fmt.Fprintln(out, "  1. openai (default)")
+	fmt.Fprintln(out, "  2. anthropic")
+	fmt.Fprintln(out, "  3. google")
+	fmt.Fprint(out, "Choose a provider [1]: ")
+	if !sc.Scan() {
+		fmt.Fprintln(out, "\n  no input; setup cannot continue")
+		return empty, false
+	}
+	choice := strings.ToLower(strings.TrimSpace(sc.Text()))
+	var envVar string
+	switch choice {
+	case "", "1", "openai":
+		envVar = "OPENAI_API_KEY"
+	case "2", "anthropic":
+		envVar = "ANTHROPIC_API_KEY"
+	case "3", "google", "gemini":
+		envVar = "GEMINI_API_KEY"
+	default:
+		fmt.Fprintf(out, "  unknown provider %q; choose 1, 2, or 3 and re-run setup\n", choice)
+		return empty, false
+	}
+	for _, p := range providerKeyRefOrder {
+		if p.envVar == envVar {
+			return p, true
+		}
+	}
+	return empty, false
 }
 
 // promptProviderRef prompts (once at a time, on a real TTY) for a NEW op://
@@ -1255,10 +1399,18 @@ func setupSandboxName(dir string) (string, bool) {
 // (only the space-separated form; `--flag=value` is self-contained).
 func flagTakesValue(a string) bool {
 	switch a {
-	case "--account", "--credentials", "--knowledge", "--mcp", "--model":
+	case "--account", "--credentials", "--knowledge", "--mcp", "--model", "--pack", "--with":
 		return true
 	}
 	return false
+}
+
+func normalizeSetupPackArg(arg string) string {
+	arg = strings.TrimSpace(arg)
+	if strings.Count(arg, "/") == 1 && !strings.Contains(arg, ":") && !strings.HasPrefix(arg, ".") && !strings.HasPrefix(arg, "~") {
+		return "https://github.com/" + arg + ".git"
+	}
+	return arg
 }
 
 const setupUsage = `usage: pix setup [DIR] [host-config flags]
@@ -1300,8 +1452,8 @@ Setup flags:
   --pull-models            pull any CONFIRMED-missing configured local Ollama
                            models (watcher/embed/bridge, deduplicated); the
                            ONLY consent a non-interactive setup honors (a broad
-                           --yes never downloads). Interactive setup without it
-                           asks once, defaulting to No. Setup never installs
+                           --yes never downloads). Ordinary setup never asks
+                           about local model downloads. Setup never installs
                            Ollama itself, and never pulls a tag it could not
                            positively verify as missing.
                            pix setup --pull-models with Ollama down exits
@@ -1310,6 +1462,11 @@ Setup flags:
                            blocks unrelated repair.
 
 Host-config flags (all optional):
+  --pack <path|owner/repo|git-url>
+                           activate a pack through the normal host trust gate,
+                           then run its required, resumable setup hooks
+  --with <setup-id>        also run a named optional setup hook from --pack;
+                           repeatable, and invalid without --pack
   --google-workspace       opt in to Google Workspace (absent otherwise): runs
                            the same transaction as 'pix gworkspace setup'
                            (may open a browser). Requires --account, and
@@ -1321,16 +1478,16 @@ Host-config flags (all optional):
   --knowledge <path|url>   scaffold/point the global knowledge base
   --mcp <name>             enable an MCP server (repeatable; allowlisted)
   --model <ollama-model>   set the ollama-bridge model
-  --yes | --non-interactive  never prompt (CI); each provider's op:// ref must
-                           already be configured and resolve (setup prints the
-                           exact 'pix secret set' command for any missing)
+  --yes | --non-interactive  never prompt (CI); at least one provider's op://
+                           ref must already be configured and resolve (setup
+                           prints exact alternatives when none is configured)
   -h | --help              this help
 
 Setup runs as a numbered transcript of eight phases — parse, inventory, gate,
 mutate, consent, verify, report, handoff — and prints each phase header BEFORE
 that phase does its work, so a run that hangs names the phase it hung in. It
-asks at most two questions (model-pull consent, the Google Workspace route) and
-never prompts at all without a TTY. Mutations run in a fixed order with the
+sequences prompts one at a time and never prompts at all without a TTY.
+Mutations run in a fixed order with the
 riskiest last (keys, config, pack, MCP, knowledge, identity, Google Workspace,
 model pulls) and each one is individually idempotent, so an interrupted run is
 resumed by re-running the same command: setup re-probes what is actually there

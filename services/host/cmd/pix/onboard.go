@@ -247,6 +247,8 @@ type onboardOpts struct {
 	// onboard` REJECTS them (authorization needs a browser).
 	googleWorkspace bool
 	credentials     string
+	pack            string
+	withSetup       []string
 	help            bool
 }
 
@@ -301,6 +303,17 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 			o.model, err = next()
 		case strings.HasPrefix(a, "--model="):
 			o.model = strings.TrimPrefix(a, "--model=")
+		case a == "--pack":
+			o.pack, err = next()
+		case strings.HasPrefix(a, "--pack="):
+			o.pack = strings.TrimPrefix(a, "--pack=")
+		case a == "--with":
+			var v string
+			if v, err = next(); err == nil {
+				o.withSetup = append(o.withSetup, v)
+			}
+		case strings.HasPrefix(a, "--with="):
+			o.withSetup = append(o.withSetup, strings.TrimPrefix(a, "--with="))
 		default:
 			return o, fmt.Errorf("unknown flag %q", a)
 		}

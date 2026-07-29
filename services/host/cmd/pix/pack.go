@@ -56,6 +56,20 @@ type packManifest struct {
 	// Knowledge are [[knowledge]] references (F6): shared=true travels (a git
 	// URL an adopter pulls), shared=false does not (a local path, standalone).
 	Knowledge []packKnowledge `toml:"knowledge,omitempty"`
+	// Setup steps let a pack contribute resumable host onboarding to `pix
+	// setup --pack`. Each step is a repo-relative executable with a read-only
+	// probe and an idempotent apply action. The script bytes and argv are part of
+	// the Tier-1 host-exec fingerprint.
+	Setup []packSetupStep `toml:"setup,omitempty"`
+}
+
+type packSetupStep struct {
+	ID          string   `toml:"id"`
+	Description string   `toml:"description,omitempty"`
+	Path        string   `toml:"path"`
+	CheckArgs   []string `toml:"check_args,omitempty"`
+	ApplyArgs   []string `toml:"apply_args,omitempty"`
+	Required    bool     `toml:"required,omitempty"`
 }
 
 // packRouting is the struct-only pack-level routing override placeholder
@@ -133,6 +147,9 @@ type packIntegration struct {
 	// gateway on first use (no credential in the pack). Mutually exclusive with
 	// Manifest/Image. Leave empty for a server the user registers out-of-band.
 	URL string `toml:"url,omitempty"`
+	// Setup links this integration to an optional [[setup]] hook. Pack
+	// activation registers it but does not solicit its credential up front.
+	Setup string `toml:"setup,omitempty"`
 }
 
 // packContainer is a resolved pack CONTAINER/REMOTE integration: a Manifest
@@ -296,6 +313,57 @@ func validatePackFacets(root string, m *packManifest) error {
 		}
 		if !k.Shared && knowledgeSourceIsGitURL(k.Source) {
 			return fmt.Errorf("pack %s: [[knowledge]] %q: shared=false (private) requires a local path source (got URL %q); use shared=true for a git URL", root, k.Name, k.Source)
+		}
+	}
+	seenSetup := map[string]bool{}
+	for _, s := range m.Setup {
+		if !safeArtifactName(s.ID) {
+			return fmt.Errorf("pack %s: [[setup]] id %q is invalid (letters, digits, -, _, . only)", root, s.ID)
+		}
+		if seenSetup[s.ID] {
+			return fmt.Errorf("pack %s: duplicate [[setup]] id %q", root, s.ID)
+		}
+		seenSetup[s.ID] = true
+		if err := validateRepoRelativePath(root, s.Path); err != nil {
+			return fmt.Errorf("pack %s: [[setup]] %q: %w", root, s.ID, err)
+		}
+		if err := validateNoSymlinkComponents(root, s.Path); err != nil {
+			return fmt.Errorf("pack %s: [[setup]] %q: %w", root, s.ID, err)
+		}
+		fi, err := os.Stat(filepath.Join(root, s.Path))
+		if err != nil {
+			return fmt.Errorf("pack %s: [[setup]] %q: %v", root, s.ID, err)
+		}
+		if !fi.Mode().IsRegular() || fi.Mode()&0o111 == 0 {
+			return fmt.Errorf("pack %s: [[setup]] %q path %q must be a regular executable file", root, s.ID, s.Path)
+		}
+		for _, arg := range append(append([]string{}, s.CheckArgs...), s.ApplyArgs...) {
+			if strings.ContainsAny(arg, "\x00\r\n") {
+				return fmt.Errorf("pack %s: [[setup]] %q contains a control character in argv", root, s.ID)
+			}
+		}
+	}
+	for _, ig := range m.Integrations {
+		if ig.Setup != "" && !seenSetup[ig.Setup] {
+			return fmt.Errorf("pack %s: integration %q references unknown setup hook %q", root, ig.Name, ig.Setup)
+		}
+	}
+	return nil
+}
+
+// validateNoSymlinkComponents rejects a symlink at any component beneath root.
+// Lstat on only the leaf is insufficient because the OS follows intermediate
+// directory symlinks before inspecting the final file.
+func validateNoSymlinkComponents(root, rel string) error {
+	cur := filepath.Clean(root)
+	for _, part := range strings.Split(filepath.Clean(rel), string(filepath.Separator)) {
+		cur = filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("path %q contains symlink component %q; refusing host execution", rel, cur)
 		}
 	}
 	return nil
@@ -985,7 +1053,11 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, er
 		// not from op-refs — so an op-ref warning would be misleading noise. Only
 		// warn for op-run-wrapped (host-provided/remote) integrations.
 		if ig.Env != "" && ig.Manifest == "" && !opRefFilled(env, ig.Env) {
-			fmt.Fprintf(os.Stderr, "pix: pack integration %q needs a credential — set it: pix secret set %s op://vault/item/field\n", ig.Name, ig.Env)
+			if ig.Setup != "" {
+				fmt.Fprintf(os.Stderr, "pix: pack integration %q is not connected; run: pix setup --pack %s --with %s\n", ig.Name, shellQuoteArg(p.Root), shellQuoteArg(ig.Setup))
+			} else {
+				fmt.Fprintf(os.Stderr, "pix: pack integration %q needs a credential; set it: pix secret set %s op://vault/item/field\n", ig.Name, ig.Env)
+			}
 		}
 	}
 	// S01: every pack integration's MCP server is in the preload set — no more
@@ -2291,6 +2363,16 @@ func runPackShow(out io.Writer, rest []string) {
 	if p.Manifest.MemoryScope != "" {
 		fmt.Fprintf(out, "memory:    %s\n", p.Manifest.MemoryScope)
 	}
+	if len(p.Manifest.Setup) > 0 {
+		fmt.Fprintln(out, "setup:")
+		for _, s := range p.Manifest.Setup {
+			kind := "optional"
+			if s.Required {
+				kind = "required"
+			}
+			fmt.Fprintf(out, "  - %s (%s; %s)\n", s.ID, kind, s.Path)
+		}
+	}
 	if len(p.Manifest.Proxies) > 0 {
 		fmt.Fprintln(out, "proxies:")
 		for _, pr := range p.Manifest.Proxies {
@@ -2334,6 +2416,8 @@ func runPackShow(out io.Writer, rest []string) {
 			if ig.Env != "" && ig.Manifest == "" {
 				if opRefFilled(env, ig.Env) {
 					fmt.Fprintf(out, " — %s ✓", ig.Env)
+				} else if ig.Setup != "" {
+					fmt.Fprintf(out, "; later: pix setup --pack %s --with %s", shellQuoteArg(p.Root), shellQuoteArg(ig.Setup))
 				} else {
 					fmt.Fprintf(out, " — %s ✗ (run: pix secret set %s op://vault/item/field)", ig.Env, ig.Env)
 				}
@@ -2368,6 +2452,9 @@ func solicitPackCredentials(env shellEnv, in io.Reader, out io.Writer, tty bool,
 	var missing []packIntegration
 	for _, ig := range p.Manifest.Integrations {
 		if ig.Env == "" {
+			continue
+		}
+		if ig.Setup != "" {
 			continue
 		}
 		if !envVarNameRe.MatchString(ig.Env) {
