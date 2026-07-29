@@ -1,6 +1,7 @@
 # Onboarding v3: one supported path
 
-Status: PROPOSED. The immediate correctness fixes described in section 2 are implemented on `fix/onboarding`; the productized installer and routing work remain future work.
+Status: IMPLEMENTED. Homebrew distribution, provider-aware setup, and pack setup
+hooks shipped in v0.1.14.
 
 ## 1. Why this exists
 
@@ -32,9 +33,9 @@ The first release fixes truthfulness before adding automation:
 
 ## 3. Product decision
 
-Homebrew is the primary and only supported macOS distribution. The curl
-installer (`install.sh`) is a fallback for Linux or a machine without Homebrew;
-there is no signed-release path.
+Homebrew is the only supported distribution. Pix currently supports macOS
+hosts. `install.sh` remains only for compatibility with existing legacy
+installations and release plumbing; it is not a supported new-install path.
 
 The Homebrew formula owns only the `pix` and `pix-host` binaries and the manpage.
 It deliberately declares no dependencies. `pix setup` owns prerequisite
@@ -57,9 +58,9 @@ Each entry names a repo-relative executable, bounded read-only probe arguments,
 idempotent apply arguments, and whether the step is required for first use.
 Setup executable bytes and argv are included in the launcher-owned Tier-1 trust
 fingerprint. Pix runs required steps only, probes before applying, and requires
-the same probe to pass afterward. Optional integrations authorize on first use
-or through an explicit later setup action. A pack must not ship a second public
-installer; a legacy installer may only delegate to `pix setup --pack`.
+the same probe to pass afterward. Optional setup hooks run only when selected
+with `--with <id>`. A pack must not ship a second public installer; a legacy
+compatibility wrapper may only delegate to `pix setup --pack`.
 
 ## 4. Setup phases
 

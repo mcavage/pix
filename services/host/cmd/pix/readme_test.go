@@ -49,7 +49,14 @@ func TestReadmePrimaryPathUsesHomebrew(t *testing.T) {
 		t.Fatalf("README primary path must be the three-command Homebrew flow:\n%s", want)
 	}
 	if strings.Contains(body, "curl ") {
-		t.Fatal("README primary path must keep the curl installer in the fallback section")
+		t.Fatal("README primary path must not mention the deprecated curl installer")
+	}
+}
+
+func TestReadmeHasNoLegacyInstallerPath(t *testing.T) {
+	s := readRepoFile(t, "README.md")
+	if strings.Contains(s, "install.sh") || strings.Contains(s, "curl -fsSL") {
+		t.Fatal("README must document Homebrew as the only supported install path")
 	}
 }
 

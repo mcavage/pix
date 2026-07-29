@@ -64,7 +64,7 @@ bold "\n[3] Install the launcher + host binary"
 if ask "Build (make launcher) and install (make install) now?"; then
   make launcher && ok "built out/pix + out/pix-host" || warn "make launcher failed"
   make install && ok "symlinked out/pix + out/pix-host onto PATH (~/.local/bin)" || warn "make install failed"
-  info "Ensure ~/.local/bin is on your PATH. (Or, after a release: curl -fsSL .../install.sh | sh)"
+  info "For a released build, install with: brew install mcavage/tap/pix"
 else info "Skipped."; fi
 
 # --- Step 4: managed login service for host services ----------------------------

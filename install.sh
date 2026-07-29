@@ -1,6 +1,12 @@
 #!/bin/sh
-# pix installer — fetches the two host binaries (pix + pix-host)
-# from a GitHub release and drops them in ~/.local/bin. No repo checkout, no sudo.
+# DEPRECATED compatibility installer for existing non-Homebrew installations.
+# New installations are supported on macOS through Homebrew only:
+#
+#   brew install mcavage/tap/pix
+#
+# This script remains for legacy `pix upgrade` and release compatibility. It
+# fetches the two host binaries (pix + pix-host) from a GitHub release and drops
+# them in ~/.local/bin. No repo checkout, no sudo.
 #
 #   curl -fsSL https://raw.githubusercontent.com/mcavage/pix/main/install.sh | sh
 #
@@ -367,6 +373,9 @@ main() {
 		esac
 	done
 	guard_homebrew_prefix
+	if [ "$action" = "install" ]; then
+		err "deprecated compatibility installer; new installs must use: brew install mcavage/tap/pix"
+	fi
 
 	case "$action" in
 		install) do_install ;;
