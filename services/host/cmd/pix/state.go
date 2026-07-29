@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-const stateUsage = `usage: pix state <backup|restore|reset|uninstall> [args]
+const stateUsage = `usage: pix state <backup|restore|reset> [args]
 
 Group for the stack's on-disk lifecycle. Each subcommand is identical to its
 top-level alias (which keeps working):
@@ -13,9 +13,6 @@ top-level alias (which keeps working):
   backup [--out P] [--keep N]   hot FULL backup (memory + config + op-refs) -> tar.gz
   restore <archive> [--force]   restore a FULL backup (safe swap)
   reset [flags]                 move stack state aside (reversible)
-  uninstall [flags]             reset, then remove the bin symlinks
-
-Note: uninstall removes installed binaries, not just state.
 Run ` + "`pix help <subcommand>`" + ` for full flags.
 `
 
@@ -35,8 +32,6 @@ func runState(argv []string) {
 		runRestore(argv[1:])
 	case "reset":
 		runReset(argv[1:])
-	case "uninstall":
-		runUninstall(argv[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "pix state: unknown subcommand %q\n\n%s", argv[0], stateUsage)
 		os.Exit(2)

@@ -163,7 +163,7 @@ func TestExecuteReset_PreservesOnePasswordRefs(t *testing.T) {
 	writeFile(t, filepath.Join(p.configDir, "op-refs.env"), "ANTHROPIC_API_KEY=op://vault/item/field\n")
 	writeFile(t, filepath.Join(p.configDir, "hostmode.env"), "OPENAI_API_KEY=op://vault/item2/field\n")
 	a := resetPlan(resetCfg(), p, resetOpts{})
-	a.PreserveRefs = true // reset semantics (runResetCore sets this; uninstall does not)
+	a.PreserveRefs = true // exercise the lower-level optional preservation mechanism
 
 	var buf bytes.Buffer
 	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
@@ -233,21 +233,21 @@ func TestExecuteReset_NoRefsNoFreshConfigDir(t *testing.T) {
 	}
 }
 
-// TestExecuteReset_UninstallDoesNotPreserveRefs: uninstall is a clean wipe —
-// PreserveRefs stays false, so refs are NOT restored (they remain only in .bak).
-func TestExecuteReset_UninstallDoesNotPreserveRefs(t *testing.T) {
+// TestExecuteReset_CleanResetDoesNotPreserveRefs: reset is a clean wipe — refs
+// remain recoverable only in the timestamped backup.
+func TestExecuteReset_CleanResetDoesNotPreserveRefs(t *testing.T) {
 	stubStopServe(t)
 	root := t.TempDir()
 	p := tempPaths(t, root)
 	writeFile(t, filepath.Join(p.configDir, "op-refs.env"), "ANTHROPIC_API_KEY=op://vault/item/field\n")
-	a := resetPlan(resetCfg(), p, resetOpts{}) // PreserveRefs defaults false (uninstall)
+	a := resetPlan(resetCfg(), p, resetOpts{})
 
 	var buf bytes.Buffer
 	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if exists(p.configDir) {
-		t.Error("uninstall must NOT recreate the config dir to preserve refs")
+		t.Error("reset must NOT recreate the config dir to preserve refs")
 	}
 	if !exists(p.configDir + ".bak-" + fixedTS + string(filepath.Separator) + "op-refs.env") {
 		t.Error("the ref should still be in the .bak")
@@ -409,27 +409,17 @@ func TestRunUninstallHomebrewDoesNotRemoveOwnedOrDuplicateBinaries(t *testing.T)
 	}
 }
 
-// TestParseResetArgs: --sbx is reset-only; uninstall rejects it. Help + unknown.
+// TestParseResetArgs covers reset flags, help, and unknown input.
 func TestParseResetArgs(t *testing.T) {
-	if o, err := parseResetArgs([]string{"--keep-memory", "--sbx", "--yes"}, true, false); err != nil ||
-		!o.keepMemory || !o.sbx || !o.assumeYes {
+	if o, err := parseResetArgs([]string{"--keep-memory", "--purge-data", "--sbx", "--yes"}, true, true); err != nil ||
+		!o.keepMemory || !o.purgeData || !o.sbx || !o.assumeYes {
 		t.Fatalf("reset flags: %+v err=%v", o, err)
-	}
-	if _, err := parseResetArgs([]string{"--sbx"}, false, true); err == nil {
-		t.Error("uninstall must reject --sbx")
 	}
 	if o, err := parseResetArgs([]string{"-h"}, true, false); err != nil || !o.help {
 		t.Errorf("help: %+v err=%v", o, err)
 	}
 	if _, err := parseResetArgs([]string{"--nope"}, true, false); err == nil {
 		t.Error("unknown flag must error")
-	}
-	// --purge-data is uninstall-only.
-	if o, err := parseResetArgs([]string{"--purge-data"}, false, true); err != nil || !o.purgeData {
-		t.Errorf("uninstall --purge-data: %+v err=%v", o, err)
-	}
-	if _, err := parseResetArgs([]string{"--purge-data"}, true, false); err == nil {
-		t.Error("reset must reject --purge-data")
 	}
 }
 

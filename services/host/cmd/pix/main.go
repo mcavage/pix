@@ -16,7 +16,7 @@
 //	pix config show|path          show config path + contents (full)
 //	pix serve [args…]             exec the sibling pix-host serve (full)
 //	pix status|doctor|setup|mcp|memory|knowledge|pack   (all implemented)
-//	pix reset|uninstall           (destructive, reversible: state moved aside)
+//	pix reset                     (destructive, reversible: state moved aside)
 //	pix help [verb]               print the verb tree (or one verb's usage)
 package main
 
@@ -125,8 +125,6 @@ func main() {
 		runReset(args[1:])
 	case "upgrade":
 		runUpgrade(args[1:])
-	case "uninstall":
-		runUninstall(args[1:])
 	case "state":
 		runState(args[1:])
 	case "task":

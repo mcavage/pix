@@ -31,10 +31,9 @@ func captureStdout(t *testing.T, fn func()) string {
 // usage (no exec, no config, no filesystem move).
 func TestRunState_RoutesToAliasesViaHelp(t *testing.T) {
 	cases := map[string]string{
-		"backup":    "usage: pix backup",
-		"restore":   "usage: pix restore",
-		"reset":     "usage: pix reset",
-		"uninstall": "usage: pix uninstall",
+		"backup":  "usage: pix backup",
+		"restore": "usage: pix restore",
+		"reset":   "usage: pix reset",
 	}
 	for sub, want := range cases {
 		out := captureStdout(t, func() { runState([]string{sub, "--help"}) })
@@ -66,7 +65,7 @@ func TestState_KnownAndRoutable(t *testing.T) {
 // TestLegacyLifecycleAliasesPreserved is the constraint-c regression: the four
 // flat lifecycle verbs stay dispatchable + documented even after grouping.
 func TestLegacyLifecycleAliasesPreserved(t *testing.T) {
-	for _, v := range []string{"backup", "restore", "reset", "uninstall"} {
+	for _, v := range []string{"backup", "restore", "reset"} {
 		if !knownVerbs[v] {
 			t.Errorf("%s dropped from knownVerbs", v)
 		}

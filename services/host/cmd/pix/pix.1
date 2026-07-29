@@ -1077,9 +1077,8 @@ The
 noun groups the stack's on-disk lifecycle commands.  The flat spellings
 .BR backup ,
 .BR restore ,
-.BR reset ,
 and
-.BR uninstall
+.BR reset
 keep working as aliases.
 .TP
 .B "pix state backup"
@@ -1093,18 +1092,16 @@ Alias for
 .B "pix state reset"
 Alias for
 .BR reset .
-.TP
-.B "pix state uninstall"
-Alias for
-.BR uninstall .
 .SS reset
 .TP
-.BR "pix reset" " [" \-\-keep-memory "] [" \-\-sbx "] [" \-\-force "] [" \-\-yes "|" \-y "]"
+.BR "pix reset" " [" \-\-keep-memory "] [" \-\-purge-data "] [" \-\-sbx "] [" \-\-force "] [" \-\-yes "|" \-y "]"
 Stop host services and move configuration and data aside to timestamped
 .B .bak-*
 siblings.  Nothing is hard-deleted.
 .B \-\-keep-memory
 preserves captured memory while resetting other state.
+.B \-\-purge-data
+also moves aside harvested task artifacts, which are kept by default.
 .B \-\-sbx
 also attempts, on a best-effort basis, to remove all
 .B pix-*
@@ -1116,22 +1113,6 @@ allows data movement if the service still appears to be running.
 or
 .B \-y
 suppresses confirmation and is required on a non-interactive terminal.
-.SS uninstall
-.TP
-.BR "pix uninstall" " [" \-\-keep-memory "] [" \-\-purge-data "] [" \-\-force "] [" \-\-yes "|" \-y "]"
-Perform the reset action, then remove the installed
-.B pix
-and
-.B pix-host
-entries from
-.B ~/.local/bin
-only when they are symlinks to pix binaries.  If reset fails, leave the
-symlinks installed.  Harvested task artifacts under
-.B $XDG_DATA_HOME/pix/artifacts
-are user work product and are KEPT by default (their path and size are printed);
-pass
-.B \-\-purge-data
-to move them aside too.
 .SS "version"
 .TP
 .B "pix version"
@@ -1240,14 +1221,6 @@ workspace state to the repository's local
 file. The
 .B .pix/knowledge
 pointer remains trackable.
-.TP
-.B ~/.local/bin/pix
-Installed launcher symlink removed by
-.BR uninstall .
-.TP
-.B ~/.local/bin/pix-host
-Installed host-service symlink removed by
-.BR uninstall .
 .SH ENVIRONMENT
 .TP
 .B PIX_CONFIG
