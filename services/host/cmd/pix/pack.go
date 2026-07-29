@@ -24,6 +24,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"pix/host/config"
+	"pix/host/routing"
 )
 
 // packManifest is pack.toml. Identity + model prefs (v1), plus the v2 facets:
@@ -61,6 +62,91 @@ type packManifest struct {
 	// probe and an idempotent apply action. The script bytes and argv are part of
 	// the Tier-1 host-exec fingerprint.
 	Setup []packSetupStep `toml:"setup,omitempty"`
+	// Inference lets a pack participate declaratively in setup before any user
+	// prompt. A private pack can provide an authenticated gateway and make it
+	// exclusive without adding its endpoint or aliases to public Pix.
+	Inference *packInference `toml:"inference,omitempty"`
+}
+
+// applyPackInference projects a pack's declarative inference contract into
+// launcher config. It intentionally copies only public wiring metadata; secret
+// values are impossible in this schema. Probe evidence starts false and is
+// earned later by setup.
+func applyPackInference(cfg *config.Config, inf *packInference, source string) {
+	if cfg == nil || inf == nil {
+		return
+	}
+	clearPackInference(cfg, source)
+	if cfg.Inference.Backends == nil {
+		cfg.Inference.Backends = map[string]config.InferenceBackend{}
+	}
+	for name, b := range inf.Backends {
+		cfg.Inference.Backends[name] = config.InferenceBackend{
+			Driver: b.Driver, Protocol: b.Protocol, BaseURL: b.BaseURL, Auth: b.Auth, KeyEnv: b.KeyEnv, Source: source,
+			CredentialService: b.CredentialService, CredentialHeader: b.CredentialHeader, CredentialFormat: b.CredentialFormat,
+		}
+	}
+	for _, b := range inf.Models {
+		cfg.Inference.Models = append(cfg.Inference.Models, config.InferenceModelBinding{
+			Model: b.Model, Backend: b.Backend, Upstream: b.Upstream, Source: source,
+		})
+	}
+	if inf.Exclusive {
+		cfg.Inference.ExclusiveSource = source
+	}
+}
+
+// clearPackInference removes only pack-owned inference. An empty source clears
+// every pack contribution; setup-authored backends have Source="" and survive.
+func clearPackInference(cfg *config.Config, source string) {
+	if cfg == nil {
+		return
+	}
+	for name, backend := range cfg.Inference.Backends {
+		if backend.Source != "" && (source == "" || backend.Source == source) {
+			delete(cfg.Inference.Backends, name)
+		}
+	}
+	kept := cfg.Inference.Models[:0]
+	for _, binding := range cfg.Inference.Models {
+		if binding.Source != "" && (source == "" || binding.Source == source) {
+			continue
+		}
+		kept = append(kept, binding)
+	}
+	cfg.Inference.Models = kept
+	if cfg.Inference.ExclusiveBackend != "" {
+		if _, ok := cfg.Inference.Backends[cfg.Inference.ExclusiveBackend]; !ok {
+			cfg.Inference.ExclusiveBackend = ""
+		}
+	}
+	if cfg.Inference.ExclusiveSource != "" && (source == "" || cfg.Inference.ExclusiveSource == source) {
+		cfg.Inference.ExclusiveSource = ""
+	}
+}
+
+type packInference struct {
+	Exclusive       bool                         `toml:"exclusive,omitempty"`
+	RequiredBackend string                       `toml:"required_backend,omitempty"`
+	Backends        map[string]packInferenceBack `toml:"backends,omitempty"`
+	Models          []packInferenceModel         `toml:"models,omitempty"`
+}
+
+type packInferenceBack struct {
+	Driver            string `toml:"driver"`
+	Protocol          string `toml:"protocol,omitempty"`
+	BaseURL           string `toml:"base_url,omitempty"`
+	Auth              string `toml:"auth"`
+	KeyEnv            string `toml:"key_env,omitempty"`
+	CredentialService string `toml:"credential_service,omitempty"`
+	CredentialHeader  string `toml:"credential_header,omitempty"`
+	CredentialFormat  string `toml:"credential_format,omitempty"`
+}
+
+type packInferenceModel struct {
+	Model    string `toml:"model"`
+	Backend  string `toml:"backend"`
+	Upstream string `toml:"upstream_id"`
 }
 
 type packSetupStep struct {
@@ -136,12 +222,12 @@ type packIntegration struct {
 	// matters when you share it. Mutually exclusive with Manifest.
 	Image string `toml:"image,omitempty"`
 	// EnvKeys are ADDITIONAL (typically non-secret) env var names forwarded into an
-	// Image container via `-e <KEY>` (e.g. BAMBOOHR_COMPANY_DOMAIN). The primary
+	// Image container via `-e <KEY>` (e.g. HR_TENANT). The primary
 	// op-refs-backed secret goes in Env (also forwarded, and warned about if unset).
 	EnvKeys []string `toml:"env_keys,omitempty"`
 	// URL, when set, makes this a REMOTE integration the pack registers ITSELF:
 	// `pack use` runs `sbx mcp add <mcp> --url <url>` so the pack's remote
-	// gateway-catalog servers (opine, notion, atlassian, granola) are wired without
+	// gateway-catalog servers are wired without
 	// a manual `pix mcp bundle` + `sbx mcp add`. The URL is a remote MCP
 	// endpoint (https://host/mcp); OAuth is discovered + handled host-side by the
 	// gateway on first use (no credential in the pack). Mutually exclusive with
@@ -254,6 +340,56 @@ func loadPack(root string) (*packInfo, error) {
 // deliberately NOT root-scoped: a shared=false reference pointing OUTSIDE the
 // pack (e.g. ~/notes/okf) is the entire point of a private reference (F6).
 func validatePackFacets(root string, m *packManifest) error {
+	if inf := m.Inference; inf != nil {
+		catalog, err := routing.LoadRegistry()
+		if err != nil {
+			return fmt.Errorf("pack %s: loading model catalog: %w", root, err)
+		}
+		if inf.RequiredBackend != "" {
+			if _, ok := inf.Backends[inf.RequiredBackend]; !ok {
+				return fmt.Errorf("pack %s: inference.required_backend %q is not declared in inference.backends", root, inf.RequiredBackend)
+			}
+		}
+		for name, b := range inf.Backends {
+			if strings.TrimSpace(name) == "" {
+				return fmt.Errorf("pack %s: inference backend name is empty", root)
+			}
+			switch b.Driver {
+			case "native", "openai-compatible", "ollama":
+			default:
+				return fmt.Errorf("pack %s: inference backend %q has unsupported driver %q", root, name, b.Driver)
+			}
+			if b.Protocol != "" && b.Protocol != "openai-completions" && b.Protocol != "openai-responses" && b.Protocol != "anthropic-messages" && b.Protocol != "google-generative-ai" {
+				return fmt.Errorf("pack %s: inference backend %q has unsupported protocol %q", root, name, b.Protocol)
+			}
+			switch b.Auth {
+			case "1password":
+				if strings.TrimSpace(b.KeyEnv) == "" {
+					return fmt.Errorf("pack %s: inference backend %q uses 1password but has no key_env", root, name)
+				}
+			case "sbx-session", "none":
+			default:
+				return fmt.Errorf("pack %s: inference backend %q has unsupported auth %q", root, name, b.Auth)
+			}
+			if b.Auth == "sbx-session" && (strings.TrimSpace(b.CredentialService) == "" || strings.TrimSpace(b.KeyEnv) == "") {
+				return fmt.Errorf("pack %s: inference backend %q uses sbx-session but has no credential_service/key_env", root, name)
+			}
+		}
+		for _, binding := range inf.Models {
+			if !routing.IsQualifiedID(binding.Model) {
+				return fmt.Errorf("pack %s: inference model %q is not a canonical lab/model id", root, binding.Model)
+			}
+			if _, ok := catalog.Get(binding.Model); !ok {
+				return fmt.Errorf("pack %s: inference model %q is not in the Pix model catalog", root, binding.Model)
+			}
+			if _, ok := inf.Backends[binding.Backend]; !ok {
+				return fmt.Errorf("pack %s: inference model %q references unknown backend %q", root, binding.Model, binding.Backend)
+			}
+			if strings.TrimSpace(binding.Upstream) == "" {
+				return fmt.Errorf("pack %s: inference model %q has no upstream_id", root, binding.Model)
+			}
+		}
+	}
 	seenMCP := map[string]bool{}
 	for _, ig := range m.Integrations {
 		name := strings.TrimSpace(ig.MCP)
@@ -434,6 +570,107 @@ func activePackRoot(cfgPack, override string) string {
 		return expandUser(strings.TrimSpace(override))
 	}
 	return expandUser(strings.TrimSpace(cfgPack))
+}
+
+func activePackRoots(cfg *config.Config, override string) []string {
+	if strings.TrimSpace(override) != "" {
+		return []string{expandUser(strings.TrimSpace(override))}
+	}
+	var roots []string
+	seen := map[string]bool{}
+	if cfg != nil {
+		for _, root := range cfg.Packs {
+			root = expandUser(strings.TrimSpace(root))
+			if root != "" && !seen[root] {
+				seen[root] = true
+				roots = append(roots, root)
+			}
+		}
+		root := expandUser(strings.TrimSpace(cfg.Pack))
+		if root != "" && !seen[root] {
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+// persistPackStack composes additive facets after each pack has independently
+// passed adoption and trust checks. Ordered scalars (notably exclusive
+// inference policy) are last-writer-wins; collections are unions.
+func persistPackStack(roots []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	cfg.Packs = append([]string(nil), roots...)
+	if len(roots) > 0 {
+		cfg.Pack = roots[len(roots)-1]
+	}
+	clearPackInference(cfg, "")
+	for _, root := range roots {
+		p, err := loadPack(root)
+		if err != nil {
+			return err
+		}
+		for _, name := range packMcpNames(p) {
+			cfg.AddMCP(name)
+		}
+		if p.KnowledgeDir != "" {
+			cfg.AddKnowledgeBundle(p.KnowledgeDir)
+			cfg.AddService("knowledge")
+		}
+		applyPackInference(cfg, p.Manifest.Inference, root)
+	}
+	// De-duplicate bindings by (model,backend), preserving the last declaration
+	// in stack order so a later pack can replace an upstream alias.
+	seen := map[string]bool{}
+	var bindings []config.InferenceModelBinding
+	for i := len(cfg.Inference.Models) - 1; i >= 0; i-- {
+		b := cfg.Inference.Models[i]
+		key := b.Model + "\x00" + b.Backend
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		bindings = append(bindings, b)
+	}
+	for i, j := 0, len(bindings)-1; i < j; i, j = i+1, j-1 {
+		bindings[i], bindings[j] = bindings[j], bindings[i]
+	}
+	cfg.Inference.Models = bindings
+	return cfg.Save()
+}
+
+func applyPackStackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, error) {
+	roots := activePackRoots(cfg, o.Pack)
+	if len(roots) == 0 {
+		return "", nil
+	}
+	originalPack, originalOverride := cfg.Pack, o.Pack
+	defer func() { cfg.Pack, o.Pack = originalPack, originalOverride }()
+	var effective string
+	for _, root := range roots {
+		cfg.Pack, o.Pack = root, ""
+		applied, err := applyPackToLaunch(cfg, o, env)
+		if err != nil {
+			return "", err
+		}
+		if applied == "" {
+			continue
+		}
+		effective = applied
+		p, err := loadPack(applied)
+		if err != nil {
+			return "", err
+		}
+		applyPackInference(cfg, p.Manifest.Inference, applied)
+		for _, name := range packMcpNames(p) {
+			if !containsStr(o.StaticMCP, name) {
+				o.StaticMCP = append(o.StaticMCP, name)
+			}
+		}
+	}
+	return effective, nil
 }
 
 // expandUser expands a leading ~ to $HOME (git/toml don't do it for us).
@@ -2729,8 +2966,14 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		lockOllamaModel = m
 		cfg.OllamaBridgeModel = lockOllamaModel
 	}
+	clearPackInference(cfg, "")
+	applyPackInference(cfg, p.Manifest.Inference, root)
 
 	cfg.Pack = root
+	// `pack use` remains a single-pack switch. Multi-pack composition is an
+	// explicit `pix setup --pack ... --pack ...` transaction; do not retain a
+	// stale prior stack when a user later switches contexts.
+	cfg.Packs = []string{root}
 
 	// COMMIT ORDERING (round-3 R1 + round-4 F1): the lock is written BEFORE
 	// cfg.Save, it records the INTENDED contribution set computed above, and a
@@ -2955,7 +3198,9 @@ func runPackRm(out io.Writer, rest []string) {
 			}
 		}
 		removedMCP, removedKnowledge = revertPackPriorContribution(cfg, store.activationFor(old))
+		clearPackInference(cfg, "")
 		cfg.Pack = ""
+		cfg.Packs = nil
 		if err := cfg.Save(); err != nil {
 			return err
 		}

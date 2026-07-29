@@ -105,9 +105,25 @@ func Resolve(reg *Registry, sc *Scorecard, pol *Policy, intent Intent) Decision 
 		return d
 	}
 
-	// 4. Nothing feasible — fall back, flagged. Canonicalize the fallback through
-	// the registry so an alias becomes the real (fully qualified) id the sandbox
-	// will accept, rather than a bare alias it would reject and inherit past.
+	// 4. Nothing feasible. Prefer the best SCORED+AVAILABLE candidate while
+	// flagging the constraint degradation. This is the progressive-setup rule:
+	// one callable model must serve every intent instead of falling through to a
+	// hard-coded model whose backend is unavailable. Only use the static fallback
+	// when there are no scored available candidates at all.
+	rankBy(cands, obj)
+	if len(cands) > 0 {
+		chosen := cands[0]
+		d.Model = chosen.ID
+		d.Chosen = &chosen
+		d.Alternatives = cands
+		d.ConstraintsMet = false
+		d.Reason = fmt.Sprintf("no model satisfied the constraints (%s); degraded to best available %s", constraintSummary(intent), chosen.ID)
+		return d
+	}
+
+	// No callable scored candidate exists — retain the declared fallback only as
+	// diagnostic output. MaterializeBindings removes this route unless that model
+	// later earns an available binding.
 	fb := intent.Fallback
 	if fb == "" {
 		fb = pol.DefaultFallback
@@ -117,14 +133,7 @@ func Resolve(reg *Registry, sc *Scorecard, pol *Policy, intent Intent) Decision 
 	}
 	d.Model = fb
 	d.ConstraintsMet = false
-	// Surface what got considered so the flag is actionable.
-	rankBy(cands, obj)
-	d.Alternatives = cands
-	if len(cands) == 0 {
-		d.Reason = fmt.Sprintf("no scored+available model for task_type %q; using fallback %s", intent.TaskType, fb)
-	} else {
-		d.Reason = fmt.Sprintf("no model satisfied the constraints (%s); using fallback %s", constraintSummary(intent), fb)
-	}
+	d.Reason = fmt.Sprintf("no scored+available model for task_type %q; using diagnostic fallback %s", intent.TaskType, fb)
 	return d
 }
 

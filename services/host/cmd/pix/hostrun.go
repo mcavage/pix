@@ -577,11 +577,14 @@ func hostChildEnv(agentDir, ollamaModel string) []string {
 // buildHostArgs composes pi's argv (after the binary name). Pure + testable.
 // The guard extension and the host preamble are Phase-1 security blockers, so
 // they are always present — the caller refuses to launch when either is missing.
-func buildHostArgs(agentDir, preamble string, o hostOpts) []string {
+func buildHostArgs(agentDir, preamble, personalSkills string, o hostOpts) []string {
 	args := []string{
 		"--session-dir", filepath.Join(agentDir, "sessions"),
 		"-e", filepath.Join(agentDir, "extensions", "host-guard.ts"),
 		"--append-system-prompt", preamble,
+	}
+	if personalSkills != "" {
+		args = append(args, "--skill", personalSkills)
 	}
 	if o.Model != "" {
 		args = append(args, "--model", o.Model)
@@ -708,7 +711,16 @@ func runHostLaunch(o hostOpts) {
 		fmt.Fprintf(os.Stderr, "pix host: no cloud keys (Ollama-only). To add them, put op:// refs in\n  %s\n(e.g. ANTHROPIC_API_KEY=op://vault/item/field) — resolved at launch, never stored.\n", refs)
 	}
 
-	piArgs := buildHostArgs(agentDir, string(preamble), o)
+	personal, err := readPersonalInstructions()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pix host: personal context: %v\n", err)
+		os.Exit(1)
+	}
+	combinedPreamble := string(preamble)
+	if personal != "" {
+		combinedPreamble += "\n\n# Personal instructions\n\n" + personal + "\n"
+	}
+	piArgs := buildHostArgs(agentDir, combinedPreamble, personalSkillsDir(), o)
 	var cmd *exec.Cmd
 	if useOp {
 		// --no-masking is REQUIRED for an interactive launch: op's default output

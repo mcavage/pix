@@ -59,6 +59,20 @@ type setupModelsOutcome struct {
 	failed             []string // pull failed, or claimed success the probe contradicts
 }
 
+func setupMemoryModelsReady(cfg *config.Config, o setupModelsOutcome) bool {
+	if cfg == nil || !o.installed || len(o.failed) > 0 || len(o.unverifiable) > 0 || len(o.pulledUnverified) > 0 {
+		return false
+	}
+	have := map[string]bool{}
+	for _, m := range o.ready {
+		have[m.tag] = true
+	}
+	for _, tag := range o.pulled {
+		have[tag] = true
+	}
+	return have[cfg.MemoryWatcherModel] && have[cfg.MemoryEmbedModel]
+}
+
 // modelTags flattens a missingModel set to its tags.
 func modelTags(ms []missingModel) []string {
 	tags := make([]string, 0, len(ms))
@@ -340,26 +354,33 @@ func printSetupSummary(cfg *config.Config, env shellEnv, out io.Writer, models s
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Setup summary:")
 
-	// keys: ready when at least ONE model-provider ref is configured (any one
-	// key launches). Setup's own strict flow requires all three, so after a
-	// successful run this reads all of them — but the axis rule stays one-of.
-	names, kerr := hostModeProviderKeys(env)
-	keysReady := false
-	switch {
-	case kerr != nil:
-		line("⚠", "keys", "could not read hostmode.env ("+kerr.Error()+")")
-	case len(names) == 0:
-		line("✗", "keys", "no provider key configured — pix secret set ANTHROPIC_API_KEY op://Vault/Item/field")
-	default:
-		keysReady = true
-		line("✓", "keys", strings.Join(names, ", ")+" — one provider key is enough to launch")
+	callable := 0
+	candidates := 0
+	for _, b := range cfg.Inference.Models {
+		if b.Available && inferenceBindingAllowed(cfg, b) {
+			candidates++
+			if b.Verified {
+				callable++
+			}
+		}
+	}
+	if callable == 0 && candidates == 0 {
+		line("✗", "inference", "no callable model")
+	} else if callable == 0 {
+		line("⚠", "inference", fmt.Sprintf("%d configured model candidate(s); first sandbox inference is the live probe", candidates))
+	} else {
+		backends := make([]string, 0, len(cfg.Inference.Backends))
+		for name, backend := range cfg.Inference.Backends {
+			if inferenceBackendAllowed(cfg, backend, name) {
+				backends = append(backends, name)
+			}
+		}
+		sort.Strings(backends)
+		line("✓", "inference", fmt.Sprintf("%d callable model(s) via %s", callable, strings.Join(backends, ", ")))
 	}
 
-	knowledgeReady := len(cfg.KnowledgeBundles) > 0
-	if knowledgeReady {
+	if len(cfg.KnowledgeBundles) > 0 {
 		line("✓", "knowledge", strings.Join(cfg.KnowledgeBundles, ", "))
-	} else {
-		line("✗", "knowledge", "no bundle configured — add one: pix knowledge init")
 	}
 
 	pack := resolveHostStatePack(cfg, "")
@@ -370,11 +391,13 @@ func printSetupSummary(cfg *config.Config, env shellEnv, out io.Writer, models s
 	case pack.Active && pack.Exists:
 		line("✗", "pack", "active but empty ("+pack.Path+") — add a skill: pix pack add skill <name>")
 	default:
-		line("✗", "pack", "no active pack — create one: pix pack new")
+		// Packs are explicit and undiscoverable in normal setup.
 	}
 
-	mg, md := models.summaryLine()
-	line(mg, "local models", md)
+	if enabled(cfg, "memory") || cfg.Inference.Backends["ollama"].Driver == "ollama" {
+		mg, md := models.summaryLine()
+		line(mg, "local models", md)
+	}
 
 	// Google Workspace is OPTIONAL and ABSENT from the default path
 	// (AC-P0-319): when it was never asked for, this summary says nothing at
@@ -392,10 +415,12 @@ func printSetupSummary(cfg *config.Config, env shellEnv, out io.Writer, models s
 		line("✗", "workspace", acct+" not verified — run: pix gworkspace setup")
 	}
 
-	if keysReady && knowledgeReady && packReady {
-		fmt.Fprintln(out, "Core provisioned (keys + knowledge + pack): yes")
+	if callable > 0 {
+		fmt.Fprintln(out, "Core ready: verified inference is configured.")
+	} else if candidates > 0 {
+		fmt.Fprintln(out, "Core configured: inference verification will occur on the first sandbox request.")
 	} else {
-		fmt.Fprintln(out, "Core provisioned (keys + knowledge + pack): not yet — finish the ✗ items above.")
+		fmt.Fprintln(out, "Core not ready: configure and verify at least one model.")
 	}
 
 	// Same two-fact disclosure doctor's footer prints, gated the same way (only

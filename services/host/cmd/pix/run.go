@@ -91,7 +91,7 @@ func runRun(argv []string) {
 	// snapshot further down, so rendering readiness costs `run` no second
 	// `sbx secret ls`.
 	var keyEvidence sbxKeyEvidence
-	if _, err := defaultShellEnv().lookPath("sbx"); err == nil {
+	if _, err := defaultShellEnv().lookPath("sbx"); err == nil && !configuredKeylessInference() {
 		env := defaultShellEnv()
 		bootstrapProviderKeys(env, os.Stdin, os.Stderr, isTTY(os.Stdin))
 		keyEvidence = probeSbxKeyEvidence(env)
@@ -113,6 +113,10 @@ func runRun(argv []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix run: %v\n", err)
 		os.Exit(1)
+	}
+	if !inferenceAllowsModel(cfg, o.Model) {
+		fmt.Fprintf(os.Stderr, "pix run: model %q is not available through the configured inference backends\n", o.Model)
+		os.Exit(2)
 	}
 
 	// Own the sandbox name so we can manage its lifecycle. sbx would otherwise
@@ -196,12 +200,36 @@ func runRun(argv []string) {
 		// Fatal on error (explicit --pack that doesn't load, or a declared
 		// sandbox proxy whose kit can't be built — round-4 F2 fail-closed):
 		// never create a sandbox missing context the pack declared.
-		root, err := applyPackToLaunch(cfg, &o, defaultShellEnv())
+		root, err := applyPackStackToLaunch(cfg, &o, defaultShellEnv())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "pix: %v\n", err)
 			os.Exit(1)
 		}
 		effectivePack = root
+		// Inference is a generated create-time facet just like pack wrappers: the
+		// sandbox receives only probed models, compiled routes, and public endpoint
+		// metadata. Credential values never enter this kit.
+		inferenceKit, ierr := synthesizeInferenceKit(cfg)
+		if ierr != nil {
+			fmt.Fprintf(os.Stderr, "pix: inference: %v\n", ierr)
+			os.Exit(1)
+		}
+		if inferenceKit != "" {
+			o.PackKits = append(o.PackKits, inferenceKit)
+		}
+		o.Models, ierr = callableRuntimeModels(cfg)
+		if ierr != nil {
+			fmt.Fprintf(os.Stderr, "pix: inference models: %v\n", ierr)
+			os.Exit(1)
+		}
+		contextKit, cerr := synthesizePersonalContextKit()
+		if cerr != nil {
+			fmt.Fprintf(os.Stderr, "pix: personal context: %v\n", cerr)
+			os.Exit(1)
+		}
+		if contextKit != "" {
+			o.PackKits = append(o.PackKits, contextKit)
+		}
 	}
 
 	// Local-image preflight: when we're about to pin --template to a locally loaded

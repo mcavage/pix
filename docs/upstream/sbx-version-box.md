@@ -1,12 +1,12 @@
 # sbx: no shipped version works for a custom-kit + hosted-MCP setup
 
-**Component:** Docker Sandboxes (`sbx`) + hosted MCP control plane · **Platform:** macOS arm64 · **Setup:** a custom `kind: agent` kit (pi-stack) that needs both cloud-provider API keys (Anthropic/OpenAI/Google) *and* hosted-catalog MCP servers (opine/granola/notion/atlassian).
+**Component:** Docker Sandboxes (`sbx`) + hosted MCP control plane · **Platform:** macOS arm64 · **Setup:** a custom `kind: agent` kit that needs both cloud-provider API keys and hosted-catalog MCP servers.
 
 ## TL;DR
 
 Two separate, version-boundary bugs box this setup in. There is **no shipped sbx version where both cloud-credential injection and hosted MCP servers work** for a custom kit:
 
-| | cloud model creds | hosted-catalog MCP (opine/granola/notion/atlassian) | local stdio MCP (slack/bamboohr) + host svcs (gws/github/snow) |
+| | cloud model creds | hosted-catalog MCP | local stdio MCP + host services |
 |---|---|---|---|
 | **0.33.0** (`d7da69cb`) | ✅ works | ❌ **control-plane provisioning 404s** (Bug B) | ✅ works |
 | **0.34.0** (`2eae0c4f`) | ❌ **custom-kit credential gate** (Bug A) | ✅ likely (speaks current CP API; unverified) | ✅ works |
@@ -27,9 +27,9 @@ On 0.33, every sandbox start that enables a hosted-catalog MCP server logs (10×
 ERROR mcp: CP gateway provisioning failed  err="create environment: unimplemented: 404 Not Found"
 ```
 
-The daemon then registers a gateway credential but the **environment never provisions**, so opine/granola/notion/atlassian never attach — a standup/refresh reports them "not in the gateway." `sbx mcp auth --all` succeeds and `sbx login` is fresh; the failure is the control plane answering `unimplemented: 404` to the `create environment` call that 0.33 makes — i.e., **the hosted control plane has dropped the API version 0.33 speaks.**
+The daemon then registers a gateway credential but the **environment never provisions**, so hosted servers never attach. `sbx mcp auth --all` succeeds and `sbx login` is fresh; the failure is the control plane answering `unimplemented: 404` to the `create environment` call that 0.33 makes — i.e., **the hosted control plane has dropped the API version 0.33 speaks.**
 
-Effect is scoped to control-plane servers. Local stdio MCP (slack, bamboohr — run via `op run`) and host services (gws-token, snow, github) are unaffected, which matches the observed "chat/gworkspace/github live; crm/calls/docs/issues dark."
+Effect is scoped to control-plane servers. Local stdio MCP and host services are unaffected.
 
 Log location: `~/Library/Application Support/com.docker.sandboxes/sandboxes/sandboxd/daemon.log`.
 

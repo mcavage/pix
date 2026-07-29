@@ -187,15 +187,13 @@ reports the failure instead of hanging forever.
 
 ## 5. Packs
 
-A pack is a git repo that is your portable capability context: the skills you
-taught pix, an OKF knowledge bundle, the MCP servers and CLI wrappers
+A pack is an explicit git repo containing portable capability context: skills,
+an OKF knowledge bundle, MCP servers, CLI wrappers,
 you're wired to, and config (which Google account, which model prefs). It's
 the thing you'd `git diff`, as opposed to memory, which you'd only see in a
-`/recall`. The default pack is active automatically; switching to another
-context is switching the active pack.
+`/recall`. Packs are opt-in and may be composed in order during setup.
 
 ```
-pix pack use default        # return to the default pack
 pix pack use <path|git-url> # switch to another pack (config, knowledge, MCP set)
 pix pack new [PATH]         # adopt an existing repo, or git-init a fresh one
 pix pack add skill <name> [PACK]
@@ -207,8 +205,8 @@ pix pack show [PATH]        # inspect a pack's full facet inventory
 pix pack rm                 # detach the active pack (files untouched)
 ```
 
-Adding a capability is one command and one file. `pack add proxy snowflake`
-scaffolds `bin/snowflake`, a wrapper script that lands on PATH inside the
+Adding a capability is one command and one file. `pack add proxy warehouse`
+scaffolds `bin/warehouse`, a wrapper script that lands on PATH inside the
 sandbox. `pack add mcp fastmail --env FASTMAIL_TOKEN` declares an MCP server
 the pack needs plus the env var name it'll ask you to fill via 1Password;
 the value never touches the pack or the VM.
@@ -317,9 +315,9 @@ disk, and the session prints a visible red banner so you can't mistake it for
 a normal run. Use it narrowly, for the two cases above, not as a default
 runtime.
 
-`pix setup` sources cloud keys from 1Password, and it's mandatory: the
-`op` CLI must be installed and signed in, or setup fails with the exact fix.
-1Password is the only provider-key source. The old `--use-sbx-keys` /
+`pix setup` sources direct cloud API keys from 1Password. The `op` CLI must be
+installed and signed in only for that path; a keyless gateway or verified
+Ollama-only setup does not invoke it. The old `--use-sbx-keys` /
 `--use-1password` flags and the persisted `provider_key_mode` are gone (both
 flags now error). setup validates one `op://` ref per provider, mirrors them
 into `hostmode.env`, and reconciles them into `sbx`. `pix setup --no-agent` never

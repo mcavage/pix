@@ -1221,6 +1221,14 @@ async function runSingle(
 		"--no-session",
 		"--no-extensions",
 	];
+	// Live skills (including XDG personal skills and pack skills) are launcher
+	// inputs, not part of the baked agent directory. Preserve every parent
+	// --skill argument so headless children see the same skill layer.
+	for (let i = 0; i < process.argv.length; i++) {
+		if (process.argv[i] === "--skill" && process.argv[i + 1]) {
+			args.push("--skill", process.argv[++i]);
+		}
+	}
 	// STABILITY: re-add ONLY safe extensions on top of --no-extensions so trees +
 	// web research work without the port-binding extensions that deadlock a
 	// fully-loaded child. SELF_PATH = subagents (trees); WEB_ACCESS = web_search

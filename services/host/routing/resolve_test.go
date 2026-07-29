@@ -6,6 +6,17 @@ func in(name, taskType, objective string) Intent {
 	return Intent{Name: name, TaskType: taskType, Objective: objective}
 }
 
+func TestResolveSingleAvailableModelServesEveryIntent(t *testing.T) {
+	reg := &Registry{Models: []Model{{ID: "lab/only", Provider: "lab", Available: true}}}
+	sc := &Scorecard{Scores: []Score{{Model: "lab/only", TaskType: "code", Accuracy: .5, CostUSD: 1, LatencyMsP50: 99999}}}
+	pol := &Policy{DefaultFallback: "other/missing"}
+	in := Intent{Name: "code", TaskType: "code", Providers: []string{"other"}, MinAccuracy: .99, MaxCostUSD: .01}
+	d := Resolve(reg, sc, pol, in)
+	if d.Model != "lab/only" || d.ConstraintsMet {
+		t.Fatalf("decision = %+v", d)
+	}
+}
+
 func TestResolve_AccuracyNoCap(t *testing.T) {
 	// Pure accuracy, no ceilings: the most accurate AVAILABLE model wins (opus),
 	// never the more-accurate-but-unavailable openai/retired.
@@ -73,7 +84,8 @@ func TestResolve_ProviderAllowlist(t *testing.T) {
 }
 
 func TestResolve_InfeasibleFallsBack(t *testing.T) {
-	// An impossible cost ceiling: nothing feasible -> intent fallback, flagged.
+	// An impossible cost ceiling: nothing feasible -> best callable model,
+	// flagged. Static fallbacks must never bypass observed availability.
 	it := in("tight", "code", "accuracy")
 	it.MaxCostUSD = 0.0001 // below every non-local model, and local is 0 so...
 	it.MinAccuracy = 0.99  // ...the accuracy floor rules the free local model out too
@@ -82,8 +94,8 @@ func TestResolve_InfeasibleFallsBack(t *testing.T) {
 	if d.ConstraintsMet {
 		t.Fatal("should be infeasible")
 	}
-	if d.Model != "anthropic/haiku" {
-		t.Fatalf("fallback model = %q, want anthropic/haiku", d.Model)
+	if d.Model != "anthropic/opus" {
+		t.Fatalf("degraded model = %q, want best available anthropic/opus", d.Model)
 	}
 	if d.Reason == "" {
 		t.Fatal("infeasible decision must explain itself")

@@ -67,6 +67,50 @@ func Compile(reg *Registry, sc *Scorecard, pol *Policy, now time.Time) CompiledR
 	return out
 }
 
+// MaterializeBindings rewrites canonical catalog ids in a compiled route map
+// to the provider/model ids Pi will use for concrete backends. Native bindings
+// may deliberately preserve the canonical id; gateway bindings normally use
+// <backend>/<upstream-id>. A route without a proven binding is removed rather
+// than left pointing at an unreachable theoretical model.
+func MaterializeBindings(in CompiledRouting, bindings []Binding, exclusiveBackend string) CompiledRouting {
+	byModel := map[string]Binding{}
+	for _, b := range bindings {
+		if !b.Available || (exclusiveBackend != "" && b.Backend != exclusiveBackend) {
+			continue
+		}
+		if _, exists := byModel[b.Model]; !exists {
+			byModel[b.Model] = b
+		}
+	}
+	for name, route := range in.Routes {
+		b, ok := byModel[route.Model]
+		if !ok {
+			delete(in.Routes, name)
+			continue
+		}
+		if b.UpstreamID == "" {
+			b.UpstreamID = b.Model
+		}
+		if IsQualifiedID(b.UpstreamID) && b.Backend == providerOf(b.UpstreamID) {
+			route.Model = b.UpstreamID
+		} else {
+			route.Model = b.Backend + "/" + b.UpstreamID
+		}
+		route.Reason += "; backend=" + b.Backend
+		in.Routes[name] = route
+	}
+	return in
+}
+
+func providerOf(id string) string {
+	for i := 0; i < len(id); i++ {
+		if id[i] == '/' {
+			return id[:i]
+		}
+	}
+	return ""
+}
+
 // WriteCompiled marshals a CompiledRouting to path (creating parent dirs).
 func WriteCompiled(path string, cr CompiledRouting) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

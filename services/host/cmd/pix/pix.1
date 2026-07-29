@@ -59,16 +59,13 @@ The shortest path from nothing to a fully configured agent:
 .RS
 brew install mcavage/tap/pix
 pix setup
-pix run
 .RE
 .fi
 .PP
 .B setup
-configures the host, sources at least one provider key from 1Password (the
-only source; see
-.B setup
-below), and creates the
-default pack every time.  On a fresh machine (no sandbox exists yet) it also
+configures at least one callable inference backend and launches Pix. API keys
+use 1Password; a healthy existing Ollama or custom gateway can be keyless.
+On a fresh machine (no sandbox exists yet) it also
 launches the one-shot onboarding tour; if a sandbox already exists for the
 directory it is left alone by default (never force-removed, never replayed
 into a live session) unless
@@ -171,24 +168,24 @@ keeps one (e.g. the box you are in).
 .TP
 .BR "pix setup" " [" DIR "] [" \-\-no\-agent "] [" \-\-apply "] [" \-\-replace "] [" \-\-pull\-models "] [" \-\-account " " email "] [" \-\-knowledge " " path-or-url "] [" \-\-mcp " " name "] [" \-\-model " " ollama-model "] [" \-\-yes "]"
 Actually sets you up: a real, two-phase command.
-Phase 1 (host) ALWAYS runs first, even on a repeat invocation: it sources
-model-provider keys, PREFERRING 1Password (wiring both the sandbox and host
-mode; see
-.BR "pix secret" ),
-ensures memory, and creates your default pack.  Provider keys come from
-1Password ONLY: the
-.B op
-CLI must be installed and signed in, or setup fails with the exact fix.  There
-is no "trust existing sbx keys" shortcut.  An ordinary value flag
+Phase 1 (host) ALWAYS runs first, even on a repeat invocation. Setup asks how
+models should run: API keys (the default), a healthy detected Ollama, or a
+custom gateway. Direct provider keys come from 1Password; keyless gateway and
+Ollama paths do not require
+.BR op .
+Memory is enabled only after Ollama's watcher and embedding models are verified.
+An ordinary value flag
 .RB ( \-\-account ,
 .BR \-\-knowledge ,
 .BR \-\-mcp ,
 .BR \-\-model )
-does NOT suppress the interactive key prompts; only
+does not change the inference choice. In non-interactive mode the default is
+the direct API-key path; therefore
 .B \-\-yes
 (alias
 .BR \-\-non-interactive )
-does.
+still requires valid 1Password references unless a pack preconfigures a
+keyless backend.
 .PP
 Local Ollama models (watcher/embed/bridge) are probed once and reported on
 their own readiness axis in the completion summary.  Setup only downloads a
@@ -265,7 +262,7 @@ and re-run.
 .SS doctor
 .TP
 .BR "pix doctor" " [" \-\-json "]"
-Check provider keys, Ollama and its configured models, memory, Google Workspace,
+Check inference backends and credentials, Ollama and its configured models, memory, Google Workspace,
 1Password refs, and MCP registrations.  Print repair commands for failed checks.
 .B \-\-json
 emits a machine-readable report.

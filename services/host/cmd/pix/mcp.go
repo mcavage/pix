@@ -753,7 +753,17 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			fmt.Fprintf(out, "  sbx %s\n", strings.Join(args, " "))
 			continue
 		}
-		if _, err := env.run("sbx", args...); err != nil {
+		var err error
+		if env.probe != nil {
+			_, timedOut, probeErr := env.probe("sbx", args...)
+			err = probeErr
+			if timedOut {
+				err = fmt.Errorf("timed out")
+			}
+		} else {
+			_, err = env.run("sbx", args...)
+		}
+		if err != nil {
 			fmt.Fprintf(out, "  FAILED to register: %s (%v)\n", n, err)
 			regErrs = append(regErrs, fmt.Errorf("%s: %v", n, err))
 		} else {

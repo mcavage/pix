@@ -161,7 +161,7 @@ func TestRunPackSetupRunsRequestedOptionalStep(t *testing.T) {
 }
 
 func TestNormalizeSetupPackArg(t *testing.T) {
-	if got := normalizeSetupPackArg("docker/gm-pix-pack"); got != "https://github.com/docker/gm-pix-pack.git" {
+	if got := normalizeSetupPackArg("acme/work-pack"); got != "https://github.com/acme/work-pack.git" {
 		t.Fatalf("got %q", got)
 	}
 	for _, unchanged := range []string{"./local", "/tmp/local", "https://github.com/a/b.git", "git@github.com:a/b.git"} {

@@ -66,7 +66,7 @@ These are the properties that cost real incidents to discover. They are load-bea
 2. **`pix` with no args never launches a sandbox.** It prints status. Launching is explicit, behind `run`. A bare positional launches `run` only when it names an existing directory.
 3. **`serve stop` is mode-aware.** A managed daemon (launchd/systemd --user) is stopped THROUGH its supervisor, never by a bare pid SIGTERM — `KeepAlive`/`Restart=` respawns it instantly, which is the classic "I stopped it but it came right back" bug.
 4. **Serve runtime state lives in the STATE dir** (`~/.local/state/pix/`: `serve.pid`, `serve.lazy`, `serve.spawn.lock`, `serve.log`), not the config dir, so `pix reset` (which moves the config dir aside) can never orphan a running daemon from its pidfile.
-5. **Provider keys come from 1Password only.** `op` is REQUIRED; missing or not-signed-in is a HARD failure with the exact command, never a silent degrade, never a "trust the existing sbx value" path.
+5. **Direct provider keys come from 1Password only.** `op` is REQUIRED only for the direct-API-key path; missing or not-signed-in is a HARD failure there. Keyless `sbx-session`, `none`, and verified Ollama backends never trigger an irrelevant 1Password flow.
 6. **`run` refuses to launch only on a POSITIVE "no model key" answer.** The key probe is tri-state; a transient `sbx secret ls` failure proceeds. A false refusal is worse than a failed launch.
 7. **An existing sandbox is never force-removed and never replayed into.** `--replace` is the only path that recreates one. Sandbox state that sbx could not report (unknown) FAILS CLOSED.
 8. **Pack trust is two gates in series with `host.enabled`.** Adopting a pack that runs host code (local MCP command, host wrapper, external `[[bin]]`) hits a Tier-1 bill-of-materials gate (`[y/N]`; non-TTY fails closed without `--yes`). Acceptance lives in a launcher-owned host-state store, NEVER in the pack payload. A canonical host-exec fingerprint re-gates on any change. Unknown local-vs-remote MCP classification fails CLOSED. Credentials are `op://` refs only.
@@ -114,7 +114,7 @@ accounts, names, thresholds) into a SKILL.md. Those are per-user and live in
 **memory** (the skill reads them at runtime); the skill only knows the *shape*.
 
 **Improving a pack skill: edit the pack's source on the host.** A pack's `skills/`
-dir lives in the pack repo on the host (e.g. `~/dev/gm-pix-pack/skills/<name>/`)
+dir lives in the pack repo on the host (e.g. `~/dev/work-pack/skills/<name>/`)
 and is mounted at runtime by `pix pack use` — no image bake, no rebuild. The
 copy pi loaded this session (`~/.pi/agent/skills/<name>/SKILL.md`) is a read-only
 delivery that dies with the sandbox; edits there are lost. So when you improve a
@@ -146,7 +146,7 @@ pack repo — hand the user the diff to apply.
 - **MCP runs through sbx's LOCAL data-plane gateway** — always available, **no
   `SBX_MCP_URL`** (nightly serves remotes directly; `sbx mcp status` shows mode
   `local`). Two kinds of server: **local stdio** subcommands of `pix-host`
-  (`slack`; a pack can add host-executing MCP servers as containers instead — e.g. `bamboohr`), registered with `sbx mcp add
+  (`slack`; a pack can add host-executing MCP servers as containers instead — e.g. `hr`), registered with `sbx mcp add
   <name> --command … --args …` (**no `--env`**); the command runs on the HOST as a
   daemon subprocess, so creds come from 1Password — the registered command is `op
   run --no-masking --env-file=config/op-refs.env -- pix-host <name>`, which
@@ -213,9 +213,8 @@ pack repo — hand the user the diff to apply.
   - **A host-only service** (needs a browser/OAuth or host-cached creds that can't
     containerize): a standalone host daemon + installer, with a thin in-sandbox
     `[[proxy]]` wrapper in the pack.
-  - Reference impls (private, separate): `gm-pix-pack` (the pack) and
-    `pix-docker-integrations` (a containerized `bamboohr` MCP server + a standalone
-    snow exec-proxy host daemon).
+  - Reference implementations stay private and separate: a work pack plus
+    its containerized internal MCP servers and standalone host daemons.
   - Never reference a private file from a committed one — the public tree has none.
     `scripts/check-open-core.sh` (CI) fails if a company-specific file or internal
     marker is ever tracked.

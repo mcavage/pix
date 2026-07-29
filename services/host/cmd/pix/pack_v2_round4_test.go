@@ -191,7 +191,7 @@ func TestApplyPackToLaunch_FailsClosedOnBrokenDeclaredProxy(t *testing.T) {
 
 	// 1) Declared proxy, no bin/<name> on disk: the launch must refuse.
 	broken := filepath.Join(dir, "broken-pack")
-	mustWritePack(t, broken, packManifest{Name: "broken", Schema: 1, Proxies: []packProxy{{Name: "snowflake"}}})
+	mustWritePack(t, broken, packManifest{Name: "broken", Schema: 1, Proxies: []packProxy{{Name: "warehouse"}}})
 	cfg.Pack = broken
 	o := runOpts{}
 	if _, lerr := applyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr == nil {
@@ -217,11 +217,11 @@ func TestApplyPackToLaunch_FailsClosedOnBrokenDeclaredProxy(t *testing.T) {
 
 	// 3) Buildable proxy: kit stacked, no error.
 	good := filepath.Join(dir, "good-pack")
-	mustWritePack(t, good, packManifest{Name: "good", Schema: 1, Proxies: []packProxy{{Name: "snowflake"}}})
+	mustWritePack(t, good, packManifest{Name: "good", Schema: 1, Proxies: []packProxy{{Name: "warehouse"}}})
 	if err := os.MkdirAll(filepath.Join(good, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(good, "bin", "snowflake"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(good, "bin", "warehouse"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cfg.Pack = good
@@ -232,7 +232,7 @@ func TestApplyPackToLaunch_FailsClosedOnBrokenDeclaredProxy(t *testing.T) {
 	if len(o.PackKits) != 1 {
 		t.Fatalf("expected exactly one stacked pack kit, got %v", o.PackKits)
 	}
-	if _, err := os.Stat(filepath.Join(o.PackKits[0], "files", "home", ".local", "bin", "snowflake")); err != nil {
+	if _, err := os.Stat(filepath.Join(o.PackKits[0], "files", "home", ".local", "bin", "warehouse")); err != nil {
 		t.Errorf("stacked kit is missing the wrapper: %v", err)
 	}
 }

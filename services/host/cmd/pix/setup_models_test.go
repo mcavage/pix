@@ -179,8 +179,8 @@ func TestSetupModels_ExplicitPullModels_PullsDeduped(t *testing.T) {
 	}
 }
 
-// Ordinary interactive setup treats local models as progressive enhancement:
-// it never prompts and never pulls without the explicit --pull-models flag.
+// When Ollama is already installed, setup offers one default-No memory-model
+// pull. Declining keeps memory disabled and never blocks inference.
 func TestSetupModels_InteractiveDefaultNo(t *testing.T) {
 	for _, tc := range []struct {
 		name, input string
@@ -194,15 +194,15 @@ func TestSetupModels_InteractiveDefaultNo(t *testing.T) {
 			env := modelsSetupEnv(t, w)
 			stubProvisionKeysOK(t)
 			var out bytes.Buffer
-			if err := setupHostPhase(env, nil, strings.NewReader(tc.input), &out, true); err != nil {
+			if err := setupHostPhase(env, nil, strings.NewReader("\n"+tc.input), &out, true); err != nil {
 				t.Fatalf("unexpected error: %v\n%s", err, out.String())
 			}
 			if n := w.count("ollama pull"); n != 0 {
 				t.Errorf("ordinary setup must not pull (input %q), got %d pulls:\n%v", tc.input, n, w.calls)
 			}
 			s := out.String()
-			if strings.Contains(s, "[y/N]") {
-				t.Errorf("ordinary setup must not ask about local models, got:\n%s", s)
+			if !strings.Contains(s, "[y/N]") {
+				t.Errorf("detected Ollama should offer the optional memory models, got:\n%s", s)
 			}
 			if !strings.Contains(s, "qwen3.5:9b") || !strings.Contains(s, "nomic-embed-text") {
 				t.Errorf("the aggregate prompt must list every missing tag, got:\n%s", s)
@@ -214,18 +214,17 @@ func TestSetupModels_InteractiveDefaultNo(t *testing.T) {
 	}
 }
 
-// Stray interactive input cannot opt into a model download. Consent is a flag,
-// so it is deterministic and scriptable.
-func TestSetupModels_InteractiveYesDoesNotPull(t *testing.T) {
+// An explicit interactive yes opts into the one aggregate model pull.
+func TestSetupModels_InteractiveYesPulls(t *testing.T) {
 	w := &ollamaWorld{}
 	env := modelsSetupEnv(t, w)
 	stubProvisionKeysOK(t)
 	var out bytes.Buffer
-	if err := setupHostPhase(env, nil, strings.NewReader("y\n"), &out, true); err != nil {
+	if err := setupHostPhase(env, nil, strings.NewReader("\ny\n"), &out, true); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
-	if n := w.count("ollama pull"); n != 0 {
-		t.Errorf("ordinary setup pulled %d times, want 0:\n%v", n, w.calls)
+	if n := w.count("ollama pull"); n != 2 {
+		t.Errorf("interactive consent pulled %d times, want 2:\n%v", n, w.calls)
 	}
 	if strings.Contains(out.String(), "✓ qwen3.5:9b pulled and verified") || strings.Contains(out.String(), "✓ nomic-embed-text pulled and verified") {
 		t.Errorf("the model mutation must not print success; success comes from post-mutation probes:\n%s", out.String())
@@ -364,10 +363,8 @@ func TestSetup_UnknownKeysNotCalledRetired(t *testing.T) {
 
 // --- requirement 4: the completion summary -----------------------------------
 
-// The exact summary block: keys / knowledge / pack / local models / gog on
-// separate readiness axes, plus the core-provisioned line (keys+knowledge+pack
-// only). Fresh setup: keys ready, no knowledge bundle, a freshly created EMPTY
-// default pack (TODO — never green), all models pulled, gog unconfigured.
+// The exact normal summary hides packs and optional knowledge. It reports only
+// verified inference and explicitly enabled local models.
 func TestSetupModels_ExactSummary(t *testing.T) {
 	w := &ollamaWorld{have: map[string]bool{"qwen3.5:9b": true, "nomic-embed-text": true}}
 	env := modelsSetupEnv(t, w)
@@ -380,11 +377,9 @@ func TestSetupModels_ExactSummary(t *testing.T) {
 	// (AC-P0-319): with no opt-in, the summary says nothing about it at all —
 	// no `workspace`/`gog` row here.
 	want := "Setup summary:\n" +
-		fmt.Sprintf("  %s %-12s %s\n", "✓", "keys", "anthropic, google, openai — one provider key is enough to launch") +
-		fmt.Sprintf("  %s %-12s %s\n", "✗", "knowledge", "no bundle configured — add one: pix knowledge init") +
-		fmt.Sprintf("  %s %-12s %s\n", "✗", "pack", "active but empty ("+defaultPackRoot()+") — add a skill: pix pack add skill <name>") +
+		fmt.Sprintf("  %s %-12s %s\n", "✓", "inference", "9 callable model(s) via anthropic, google, openai") +
 		fmt.Sprintf("  %s %-12s %s\n", "✓", "local models", "pulled: nomic-embed-text, qwen3.5:9b") +
-		"Core provisioned (keys + knowledge + pack): not yet — finish the ✗ items above.\n"
+		"Core ready: verified inference is configured.\n"
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("summary mismatch.\nwant block:\n%s\ngot output:\n%s", want, out.String())
 	}
@@ -427,7 +422,7 @@ func TestSetupModels_SummaryProvisionedWhenCoreReady(t *testing.T) {
 	if !strings.Contains(s, "✓ knowledge") || !strings.Contains(s, "✓ pack") {
 		t.Errorf("knowledge + non-empty pack must be green, got:\n%s", s)
 	}
-	if !strings.Contains(s, "Core provisioned (keys + knowledge + pack): yes") {
+	if !strings.Contains(s, "Core ready: verified inference is configured.") {
 		t.Errorf("core must be provisioned, got:\n%s", s)
 	}
 }

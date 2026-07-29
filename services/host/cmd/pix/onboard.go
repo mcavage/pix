@@ -248,6 +248,7 @@ type onboardOpts struct {
 	googleWorkspace bool
 	credentials     string
 	pack            string
+	packs           []string
 	withSetup       []string
 	help            bool
 }
@@ -305,8 +306,12 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 			o.model = strings.TrimPrefix(a, "--model=")
 		case a == "--pack":
 			o.pack, err = next()
+			if err == nil {
+				o.packs = append(o.packs, o.pack)
+			}
 		case strings.HasPrefix(a, "--pack="):
 			o.pack = strings.TrimPrefix(a, "--pack=")
+			o.packs = append(o.packs, o.pack)
 		case a == "--with":
 			var v string
 			if v, err = next(); err == nil {

@@ -70,7 +70,7 @@ func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 		},
 		Proxies: []packProxy{
 			{Name: "platformio", Host: true, Egress: []string{"api.registry.platformio.org"}},
-			{Name: "snowflake", Egress: []string{"snowflakecomputing.com"}},
+			{Name: "warehouse", Egress: []string{"warehouse.example.test"}},
 		},
 		Bins: []packBin{{Name: "fastmail-mcp", Path: "bin/fastmail-mcp", SHA: "9F2C", Host: true}},
 	}}
@@ -93,7 +93,7 @@ func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 	if len(b.Bins) != 1 || b.Bins[0].Name != "fastmail-mcp" {
 		t.Errorf("BoM bins = %+v", b.Bins)
 	}
-	wantEgress := []string{"api.registry.platformio.org", "snowflakecomputing.com"}
+	wantEgress := []string{"api.registry.platformio.org", "warehouse.example.test"}
 	if strings.Join(b.Egress, ",") != strings.Join(wantEgress, ",") {
 		t.Errorf("BoM egress = %v, want the sorted union %v", b.Egress, wantEgress)
 	}
@@ -126,27 +126,27 @@ func TestComputeHostBoM_DisclosesContainerAndRemoteIntegrations(t *testing.T) {
 	p := &packInfo{Root: "/p", Manifest: packManifest{
 		Name: "docker-work",
 		Integrations: []packIntegration{
-			{Name: "BambooHR", MCP: "bamboohr", Image: "bamboohr-mcp:0.0.1", Env: "BAMBOOHR_API_KEY", EnvKeys: []string{"BAMBOOHR_COMPANY_DOMAIN"}},
-			{Name: "Opine", MCP: "opine", URL: "https://app.tryopine.com/mcp"},
+			{Name: "HR", MCP: "hr", Image: "hr-mcp:0.0.1", Env: "HR_API_KEY", EnvKeys: []string{"HR_COMPANY_DOMAIN"}},
+			{Name: "Meetings", MCP: "meetings", URL: "https://app.trymeetings.com/mcp"},
 		},
 	}}
 	b := computeHostBoM(p, "", func(string) bool { return false })
 	if !b.tier1() {
 		t.Fatal("a host-run MCP container must require the adoption gate")
 	}
-	if len(b.Containers) != 1 || b.Containers[0].Name != "bamboohr" || b.Containers[0].Image != "bamboohr-mcp:0.0.1" {
+	if len(b.Containers) != 1 || b.Containers[0].Name != "hr" || b.Containers[0].Image != "hr-mcp:0.0.1" {
 		t.Fatalf("container disclosure = %+v", b.Containers)
 	}
-	if got := strings.Join(b.Containers[0].EnvKeys, ","); got != "BAMBOOHR_API_KEY,BAMBOOHR_COMPANY_DOMAIN" {
+	if got := strings.Join(b.Containers[0].EnvKeys, ","); got != "HR_API_KEY,HR_COMPANY_DOMAIN" {
 		t.Errorf("container env disclosure = %q", got)
 	}
-	if len(b.RemoteMCP) != 1 || b.RemoteMCP[0].Name != "opine" || b.RemoteMCP[0].URL != "https://app.tryopine.com/mcp" {
+	if len(b.RemoteMCP) != 1 || b.RemoteMCP[0].Name != "meetings" || b.RemoteMCP[0].URL != "https://app.trymeetings.com/mcp" {
 		t.Fatalf("remote disclosure = %+v", b.RemoteMCP)
 	}
 	var out bytes.Buffer
 	renderHostBoM(&out, b)
 	text := out.String()
-	for _, want := range []string{"BambooHR", "bamboohr-mcp:0.0.1", "BAMBOOHR_API_KEY", "Opine", "https://app.tryopine.com/mcp"} {
+	for _, want := range []string{"HR", "hr-mcp:0.0.1", "HR_API_KEY", "Meetings", "https://app.trymeetings.com/mcp"} {
 		if !strings.Contains(strings.ToLower(text), strings.ToLower(want)) {
 			t.Errorf("trust screen omitted %q:\n%s", want, text)
 		}
@@ -158,7 +158,7 @@ func TestComputeHostBoM_DisclosesContainerAndRemoteIntegrations(t *testing.T) {
 func TestComputeHostBoM_Tier0(t *testing.T) {
 	p := &packInfo{Root: "/p", Manifest: packManifest{
 		Name:         "personal",
-		Proxies:      []packProxy{{Name: "snowflake", Egress: []string{"snowflakecomputing.com"}}},
+		Proxies:      []packProxy{{Name: "warehouse", Egress: []string{"warehouse.example.test"}}},
 		Integrations: []packIntegration{{Name: "ref-only", Env: "SOME_TOKEN"}}, // env but NO mcp
 	}}
 	if b := computeHostBoM(p, "", func(string) bool { return true }); b.tier1() {
@@ -324,11 +324,11 @@ func TestPackUse_Tier0StillSilent(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packManifest{Name: "personal", Schema: 1,
-		Proxies: []packProxy{{Name: "snowflake"}}}) // sandbox-only proxy: Tier-0
+		Proxies: []packProxy{{Name: "warehouse"}}}) // sandbox-only proxy: Tier-0
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "bin", "snowflake"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "bin", "warehouse"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer

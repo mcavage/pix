@@ -214,7 +214,7 @@ launcher: ## Build BOTH host binaries (out/pix launcher + out/pix-host services)
 memory-serve: ## Build + run just the memory service (JSON-RPC :11435) from pix-host
 	(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .) && exec ./out/pix-host memory
 
-mcp-auth: ## (Re)authorize the remote OAuth MCP servers (opine/granola/notion/atlassian). Run this when standup/refresh reports them "not in the gateway" — sbx's hosted MCP OAuth creds do NOT persist reliably across sessions/daemon restarts (they silently drop to "Not Found"), so re-establishing them is a recurring chore until sbx fixes it. Opens a browser per server.
+mcp-auth: ## (Re)authorize all registered remote OAuth MCP servers. Opens a browser per server.
 	@command -v sbx >/dev/null 2>&1 || { echo "ERROR: sbx not found"; exit 1; }
 	@echo "1/3 refreshing the control-plane session (sbx login)…"
 	sbx login

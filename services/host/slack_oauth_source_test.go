@@ -125,7 +125,10 @@ func expiredSlackOAuthGrantBlob(accessToken string) slackoauth.Blob {
 // factory) — so this fake can never leak into an unrelated test.
 func useOAuthTokenSourceForTest(t *testing.T, mgr *slackoauth.Manager) {
 	t.Helper()
+	slackSourceMu.Lock()
+	slackSourceCache = nil
 	slackNewTokenSource = func() slackTokenSource { return &oauthSlackTokenSource{mgr: mgr} }
+	slackSourceMu.Unlock()
 	t.Cleanup(resetSlackTokenSourceForTest)
 }
 
@@ -134,7 +137,10 @@ func useOAuthTokenSourceForTest(t *testing.T, mgr *slackoauth.Manager) {
 // happens to have on disk.
 func useStaticTokenSourceForTest(t *testing.T) {
 	t.Helper()
+	slackSourceMu.Lock()
+	slackSourceCache = nil
 	slackNewTokenSource = func() slackTokenSource { return staticSlackTokenSource{} }
+	slackSourceMu.Unlock()
 	t.Cleanup(resetSlackTokenSourceForTest)
 }
 

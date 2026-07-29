@@ -31,7 +31,7 @@ mcp  = "fastmail"
 env  = "FASTMAIL_TOKEN"
 
 [[proxy]]
-name = "snowflake"
+name = "warehouse"
 
 [[proxy]]
 name = "platformio"
@@ -75,7 +75,7 @@ shared = false
 	if m.Routing == nil || m.Routing.Policy != "routing/policy.json" || m.Routing.Scorecard != "routing/scorecard.json" {
 		t.Errorf("routing not parsed: %+v", m.Routing)
 	}
-	if len(m.Proxies) != 2 || m.Proxies[0].Name != "snowflake" || m.Proxies[0].Host {
+	if len(m.Proxies) != 2 || m.Proxies[0].Name != "warehouse" || m.Proxies[0].Host {
 		t.Errorf("sandbox proxy not parsed: %+v", m.Proxies)
 	}
 	if !m.Proxies[1].Host || m.Proxies[1].Name != "platformio" {
@@ -138,21 +138,21 @@ func TestPackAdd_Proxy_ScaffoldsWrapperAndManifest(t *testing.T) {
 	root := filepath.Join(dir, "pack")
 	env := fakeGitEnv(nil)
 	var out bytes.Buffer
-	runPackAdd(env, &out, []string{"proxy", "snowflake", root})
+	runPackAdd(env, &out, []string{"proxy", "warehouse", root})
 
-	binFile := filepath.Join(root, "bin", "snowflake")
+	binFile := filepath.Join(root, "bin", "warehouse")
 	fi, err := os.Stat(binFile)
 	if err != nil {
-		t.Fatalf("bin/snowflake not scaffolded: %v", err)
+		t.Fatalf("bin/warehouse not scaffolded: %v", err)
 	}
 	if fi.Mode().Perm()&0o111 == 0 {
-		t.Errorf("bin/snowflake is not executable: %v", fi.Mode())
+		t.Errorf("bin/warehouse is not executable: %v", fi.Mode())
 	}
 	p, err := loadPack(root)
 	if err != nil {
 		t.Fatalf("loadPack: %v", err)
 	}
-	if len(p.Manifest.Proxies) != 1 || p.Manifest.Proxies[0].Name != "snowflake" || p.Manifest.Proxies[0].Host {
+	if len(p.Manifest.Proxies) != 1 || p.Manifest.Proxies[0].Name != "warehouse" || p.Manifest.Proxies[0].Host {
 		t.Errorf("proxy manifest entry missing/wrong: %+v", p.Manifest.Proxies)
 	}
 	if !strings.Contains(out.String(), "pix run --replace") {
@@ -189,7 +189,7 @@ func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "bin", "snowflake"), []byte("#!/usr/bin/env bash\necho hi\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "bin", "warehouse"), []byte("#!/usr/bin/env bash\necho hi\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "bin", "platformio"), []byte("#!/usr/bin/env bash\n"), 0o755); err != nil {
@@ -198,7 +198,7 @@ func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 	p := &packInfo{Root: root, Manifest: packManifest{
 		Name: "work",
 		Proxies: []packProxy{
-			{Name: "snowflake"},
+			{Name: "warehouse"},
 			{Name: "platformio", Host: true},
 		},
 	}}
@@ -209,8 +209,8 @@ func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(kit, "spec.yaml")); err != nil {
 		t.Errorf("spec.yaml missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(kit, "files", "home", ".local", "bin", "snowflake")); err != nil {
-		t.Errorf("snowflake wrapper not copied: %v", err)
+	if _, err := os.Stat(filepath.Join(kit, "files", "home", ".local", "bin", "warehouse")); err != nil {
+		t.Errorf("warehouse wrapper not copied: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(kit, "files", "home", ".local", "bin", "platformio")); err == nil {
 		t.Error("a host=true proxy must NOT be copied into the sandbox kit")

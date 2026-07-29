@@ -1217,7 +1217,7 @@ file):
  ```bash
 -brew install docker/tap/pix
 +brew install mcavage/tap/pix
- pix setup --pack docker/gm-pix-pack
+ pix setup --pack your-org/work-pack
  pix run
  ```
 ```

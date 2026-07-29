@@ -854,8 +854,8 @@ func TestSetupHostPhase_ActivatesExistingMigratedDefaultPack_WhenCfgPackEmpty(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Pack != root {
-		t.Errorf("cfg.Pack after setup = %q, want the existing default pack %q activated", cfg.Pack, root)
+	if cfg.Pack != "" {
+		t.Errorf("cfg.Pack after setup = %q; normal setup must not introduce or activate packs", cfg.Pack)
 	}
 }
 

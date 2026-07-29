@@ -251,29 +251,29 @@ func TestRegisterServers_RemoteSkipped(t *testing.T) {
 // the pack carries a URL for (containers[name].RemoteURL set) is NOT skipped — it
 // is registered via `sbx mcp add <name> --url <url>`, with no --local and no
 // op-run wrapper. This is the pack-self-registers-remotes path; it fails if the
-// RemoteURL branch is dropped and opine/notion/etc. fall back to the skip line.
+// RemoteURL branch is dropped and meetings/notion/etc. fall back to the skip line.
 func TestRegisterServers_RemoteWithURLRegistered(t *testing.T) {
 	f := fakeEnv{
 		present: map[string]bool{"op": true}, // no sbx -> would-run printed
 		output: map[string]string{
-			"/usr/bin/pix-host mcp --list": "slack\n", // opine is NOT a local server
+			"/usr/bin/pix-host mcp --list": "slack\n", // meetings is NOT a local server
 		},
 		envVars:  map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
 		statFile: map[string]bool{"/fake/config/op-refs.env": true},
 	}
 	cfg := defaultCfg()
-	cfg.MCP = []string{"opine"}
-	containers := map[string]packContainer{"opine": {RemoteURL: "https://app.tryopine.com/mcp"}}
+	cfg.MCP = []string{"meetings"}
+	containers := map[string]packContainer{"meetings": {RemoteURL: "https://app.trymeetings.com/mcp"}}
 	var buf bytes.Buffer
 	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pix-host", nil), containers); !errors.Is(err, errSbxUnavailable) {
 		t.Fatalf("expected errSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "sbx mcp add opine --url https://app.tryopine.com/mcp") {
-		t.Errorf("expected opine registered via --url, got:\n%s", out)
+	if !strings.Contains(out, "sbx mcp add meetings --url https://app.trymeetings.com/mcp") {
+		t.Errorf("expected meetings registered via --url, got:\n%s", out)
 	}
 	if strings.Contains(out, "gateway-catalog server, not locally registered") {
-		t.Errorf("opine with a pack URL must NOT be skipped, got:\n%s", out)
+		t.Errorf("meetings with a pack URL must NOT be skipped, got:\n%s", out)
 	}
 	if strings.Contains(out, "--local") || strings.Contains(out, "--command") {
 		t.Errorf("remote-url server must not use --local/--command, got:\n%s", out)
@@ -464,8 +464,8 @@ func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 		hostBin: "/usr/local/bin/pix-host",
 		containers: map[string]packContainer{
 			"notion-ish": {Manifest: "https://example.com/mcp/x/server.json"},
-			"bamboohr":   {Image: "bamboohr-mcp:0.0.1", EnvKeys: []string{"BAMBOOHR_API_KEY", "BAMBOOHR_COMPANY_DOMAIN"}},
-			"opine":      {RemoteURL: "https://app.tryopine.com/mcp"},
+			"hr":         {Image: "hr-mcp:0.0.1", EnvKeys: []string{"HR_API_KEY", "HR_COMPANY_DOMAIN"}},
+			"meetings":   {RemoteURL: "https://app.trymeetings.com/mcp"},
 		},
 	}
 
@@ -478,22 +478,22 @@ func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 
 	// Remote container: --url (remote endpoint), NO --local and NOT op-run wrapped
 	// (OAuth is handled host-side by the gateway).
-	rem := strings.Join(reg.addArgs("opine"), " ")
-	if rem != "mcp add opine --url https://app.tryopine.com/mcp" {
-		t.Fatalf("remote-url addArgs:\n got: %s\nwant: mcp add opine --url https://app.tryopine.com/mcp", rem)
+	rem := strings.Join(reg.addArgs("meetings"), " ")
+	if rem != "mcp add meetings --url https://app.trymeetings.com/mcp" {
+		t.Fatalf("remote-url addArgs:\n got: %s\nwant: mcp add meetings --url https://app.trymeetings.com/mcp", rem)
 	}
 	if strings.Contains(rem, "--local") || strings.Contains(rem, "--command") {
 		t.Fatalf("remote-url container must not use --local/--command, got:\n%s", rem)
 	}
 
 	// Image container: op-run-wrapped `docker run -i --rm -e KEY… <image>`.
-	img := strings.Join(reg.addArgs("bamboohr"), " ")
+	img := strings.Join(reg.addArgs("hr"), " ")
 	for _, must := range []string{
-		"mcp add bamboohr --command /usr/bin/op",
+		"mcp add hr --command /usr/bin/op",
 		"--args run", "--args --env-file=/abs/op-refs.env", "--args --",
 		"--args docker --args run --args -i --args --rm",
-		"--args -e --args BAMBOOHR_API_KEY --args -e --args BAMBOOHR_COMPANY_DOMAIN",
-		"--args bamboohr-mcp:0.0.1",
+		"--args -e --args HR_API_KEY --args -e --args HR_COMPANY_DOMAIN",
+		"--args hr-mcp:0.0.1",
 	} {
 		if !strings.Contains(img, must) {
 			t.Fatalf("image addArgs missing %q in:\n%s", must, img)

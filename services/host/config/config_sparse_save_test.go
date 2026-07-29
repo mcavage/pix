@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -138,7 +139,7 @@ func TestSaveValueEqualToDefaultIsOmittedButResolves(t *testing.T) {
 	if got.MemoryWatcherModel != DefaultMemoryWatcherModel {
 		t.Errorf("MemoryWatcherModel = %q, want default %q", got.MemoryWatcherModel, DefaultMemoryWatcherModel)
 	}
-	if len(got.Services) != len(DefaultServices) || got.Services[0] != DefaultServices[0] {
+	if !slices.Equal(got.Services, DefaultServices) {
 		t.Errorf("Services = %v, want DefaultServices %v", got.Services, DefaultServices)
 	}
 }
@@ -196,12 +197,8 @@ func TestSaveLoadSaveStaysSparse(t *testing.T) {
 	}
 }
 
-// (e) H2 regression: removing the LAST service must survive a Save -> Load ->
-// Save round trip as an EXPLICITLY-EMPTY list. `services` has a non-empty
-// default, so a plain omitempty slice used to drop `services = []` from the
-// file and applyDefaults silently restored ["memory"] on reload — losing the
-// user's `config unset services memory` AND triggering a spurious
-// daemon-restart propagation on the next write.
+// Removing the last explicitly enabled service must survive a Save -> Load ->
+// Save round trip as an empty set.
 func TestRemoveLastServiceRoundTripsExplicitEmpty(t *testing.T) {
 	path := tempConfig(t)
 
@@ -209,14 +206,15 @@ func TestRemoveLastServiceRoundTripsExplicitEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cfg.Services = []string{"memory"}
 	if !cfg.RemoveService("memory") {
 		t.Fatalf("RemoveService(memory) reported no change; Services = %v", cfg.Services)
 	}
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if raw := rawFile(t, path); !strings.Contains(raw, "services = []") {
-		t.Fatalf("explicitly-empty services not serialized:\n%s", raw)
+	if raw := rawFile(t, path); strings.Contains(raw, "services =") {
+		t.Fatalf("default-empty services should be omitted:\n%s", raw)
 	}
 
 	// Load -> the empty set MUST hold (not silently revert to DefaultServices).
@@ -228,13 +226,13 @@ func TestRemoveLastServiceRoundTripsExplicitEmpty(t *testing.T) {
 		t.Fatalf("reload restored services = %v, want [] (explicit empty lost)", again.Services)
 	}
 
-	// Save again (e.g. an unrelated `config set`) -> still explicitly empty.
+	// Save again (e.g. an unrelated `config set`) -> still resolves empty.
 	again.SetGogAccount("x@example.com")
 	if err := again.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if raw := rawFile(t, path); !strings.Contains(raw, "services = []") {
-		t.Fatalf("second save dropped the explicit empty services:\n%s", raw)
+	if raw := rawFile(t, path); strings.Contains(raw, "services =") {
+		t.Fatalf("second save petrified default-empty services:\n%s", raw)
 	}
 	final, err := Load()
 	if err != nil {
@@ -272,7 +270,7 @@ func TestRemovedServiceOnlyListFallsBackToDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Services) != len(DefaultServices) || got.Services[0] != DefaultServices[0] {
+	if !slices.Equal(got.Services, DefaultServices) {
 		t.Errorf("services = %v, want DefaultServices %v (stale gws-only list)", got.Services, DefaultServices)
 	}
 }

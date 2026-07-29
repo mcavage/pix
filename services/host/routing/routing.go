@@ -29,15 +29,48 @@ var defaults embed.FS
 // a single entry in models.json; everything downstream (resolver, compile)
 // picks it up with no code change.
 type Model struct {
-	ID            string   `json:"id"`             // fully qualified provider/id
-	Provider      string   `json:"provider"`       // "anthropic", "openai", "ollama", ...
-	Label         string   `json:"label"`          // human label
-	InputPerMTok  float64  `json:"input_per_mtok"` // USD per 1M input tokens
+	ID            string   `json:"id"`               // fully qualified provider/id
+	Provider      string   `json:"provider"`         // "anthropic", "openai", "ollama", ...
+	Family        string   `json:"family,omitempty"` // claude, gpt, gemini, glm, ...
+	Label         string   `json:"label"`            // human label
+	InputPerMTok  float64  `json:"input_per_mtok"`   // USD per 1M input tokens
 	OutputPerMTok float64  `json:"output_per_mtok"`
 	Local         bool     `json:"local"`     // Ollama/DMR: unmetered
 	Available     bool     `json:"available"` // wired/callable in this stack now
 	Aliases       []string `json:"aliases,omitempty"`
 	Notes         string   `json:"notes,omitempty"`
+}
+
+// Binding is the availability boundary between the shipped catalog and a
+// concrete inference backend. The catalog says what a model IS; a binding says
+// where it can be called on this host. UpstreamID may differ from Model when a
+// gateway uses private aliases.
+type Binding struct {
+	Model      string `json:"model"`
+	Backend    string `json:"backend"`
+	UpstreamID string `json:"upstream_id"`
+	Available  bool   `json:"available"`
+}
+
+// RegistryForBindings returns a copy whose availability reflects successful
+// backend probes. A catalog model without a proven binding is unavailable.
+// When exclusiveBackend is set, bindings through every other backend are
+// ignored; this is how a private pack can enforce an internal gateway without
+// putting any private endpoint or model alias in public Pix.
+func RegistryForBindings(catalog *Registry, bindings []Binding, exclusiveBackend string) *Registry {
+	available := map[string]bool{}
+	for _, b := range bindings {
+		if !b.Available || (exclusiveBackend != "" && b.Backend != exclusiveBackend) {
+			continue
+		}
+		available[b.Model] = true
+	}
+	out := &Registry{Models: make([]Model, len(catalog.Models))}
+	copy(out.Models, catalog.Models)
+	for i := range out.Models {
+		out.Models[i].Available = out.Models[i].Available && available[out.Models[i].ID]
+	}
+	return out
 }
 
 // CostFor returns the USD cost of a run given input/output token counts.

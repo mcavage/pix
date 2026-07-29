@@ -201,7 +201,7 @@ func TestApplyPackToLaunch_BrokenActivePackFailsClosed(t *testing.T) {
 
 	// 1) Tampered active pack: a symlink injected into bin/ -> launch refused.
 	tampered := filepath.Join(dir, "tampered")
-	mustWritePack(t, tampered, packManifest{Name: "t", Schema: 1, Proxies: []packProxy{{Name: "snowflake"}}})
+	mustWritePack(t, tampered, packManifest{Name: "t", Schema: 1, Proxies: []packProxy{{Name: "warehouse"}}})
 	if err := os.MkdirAll(filepath.Join(tampered, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestApplyPackToLaunch_BrokenActivePackFailsClosed(t *testing.T) {
 	if err := os.WriteFile(evil, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(evil, filepath.Join(tampered, "bin", "snowflake")); err != nil {
+	if err := os.Symlink(evil, filepath.Join(tampered, "bin", "warehouse")); err != nil {
 		t.Fatal(err)
 	}
 	cfg.Pack = tampered

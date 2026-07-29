@@ -9,7 +9,28 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"pix/host/config"
 )
+
+func TestGatewayInferenceSatisfiesCoreReadinessWithoutProviderKeys(t *testing.T) {
+	runtimeModel, err := resolveSessionModel(config.DefaultRunIntent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		Backends: map[string]config.InferenceBackend{"docker-openai": {Driver: "openai-compatible", Auth: "sbx-session"}},
+		Models:   []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "docker-openai", Upstream: "gpt-5.6-sol", Available: true}},
+	}}
+	core := inferenceCoreCheck(cfg, "", true)
+	if core.verdict != verdictReady || core.label != "inference" {
+		t.Fatalf("core = %+v", core)
+	}
+	session := runIntentKeyCheck(cfg, "", true)
+	if session.verdict != verdictReady || !strings.Contains(session.detail, runtimeModel) {
+		t.Fatalf("session = %+v", session)
+	}
+}
 
 // TestProvidersGroup_OneKeyReady: any ONE of anthropic/openai/google present
 // makes the core "model key" check ready \u2014 core, no todo, never blocking.
@@ -229,7 +250,7 @@ func TestProvidersGroup_RenderConcise(t *testing.T) {
 	var buf bytes.Buffer
 	r.render(&buf, false)
 	out := buf.String()
-	if !strings.Contains(out, "Providers / keys") {
+	if !strings.Contains(out, "Inference / credentials") {
 		t.Errorf("expected the providers group title, got:\n%s", out)
 	}
 	if strings.Contains(out, "TODO:") {

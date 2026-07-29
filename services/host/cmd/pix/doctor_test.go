@@ -236,7 +236,7 @@ func TestDoctor_SbxAbsent(t *testing.T) {
 
 	// The provider group's core check must degrade to unverifiable, not block.
 	prov := r.groups[0]
-	if prov.title != "Providers / keys (proxy-injected, never in the VM)" {
+	if prov.title != "Inference / credentials (proxy-injected, never in the VM)" {
 		t.Fatalf("expected the providers group first, got %q", prov.title)
 	}
 	core := prov.checks[0]

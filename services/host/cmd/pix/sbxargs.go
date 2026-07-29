@@ -55,6 +55,7 @@ type runOpts struct {
 	StaticMCP []string // RESOLVED set to attach at create (emitted as --static-mcp); the caller computes it from cfg.MCP+MCP via allPreloadedMCP — S01: every configured/pack server preloads, no eager/lazy split
 	Name      string   // --name N: sandbox name
 	Model     string   // --model M: active pi model (passed through to pi)
+	Models    []string // create-time callable model cycle, derived from probed bindings
 	Intent    string   // --intent NAME: resolve the session model via the router (unless --model overrides)
 	Replace   bool     // --replace: force a recreate (rm -f then create) instead of re-attaching to an existing sandbox
 	Pack      string   // --pack PATH: active pack for this run (overrides config.Pack); mounts its skills + knowledge
@@ -205,7 +206,11 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 
 	// Live skill trees: config paths + --skills flags. Each is mounted as an
 	// extra workspace so pi can read it inside the sandbox.
-	liveSkills := append(append([]string(nil), cfg.Skills.Paths...), o.Skills...)
+	liveSkills := append([]string(nil), cfg.Skills.Paths...)
+	if personal := filepath.Join(config.ContextDir(), "skills"); dirHasEntries(personal) {
+		liveSkills = append(liveSkills, personal)
+	}
+	liveSkills = append(liveSkills, o.Skills...)
 	args = append(args, liveSkills...)
 	// Dev mode also mounts the repo's own skills tree.
 	if o.Dev {
@@ -223,6 +228,9 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 	}
 	if o.Model != "" {
 		piArgs = append(piArgs, "--model", o.Model)
+	}
+	if len(o.Models) > 0 {
+		piArgs = append(piArgs, "--models", strings.Join(o.Models, ","))
 	}
 	piArgs = append(piArgs, o.Passthrough...)
 
