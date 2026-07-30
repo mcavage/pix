@@ -659,6 +659,12 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 			if err != nil {
 				return err
 			}
+			// GitHub is not an inference provider, but gh is a core sandbox CLI.
+			// Reuse an existing host login without another prompt/browser flow.
+			// It remains optional: an unauthenticated host does not block setup.
+			if err := syncGitHubCredentialFromHost(env); err != nil {
+				fmt.Fprintf(out, "  github: host credential was not synced (%v)\n", err)
+			}
 			if selected {
 				return cfg.Save()
 			}
@@ -817,6 +823,36 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 			return nil
 		},
 	}}
+}
+
+// syncGitHubCredentialFromHost mirrors the current host gh login into sbx's
+// global github service. The token exists only in process memory and the child
+// argv accepted by sbx (the same unavoidable boundary used by provider-key
+// sync); output/errors are redacted before they can reach a transcript.
+func syncGitHubCredentialFromHost(env shellEnv) error {
+	if env.lookPath == nil || env.run == nil {
+		return nil
+	}
+	if _, err := env.lookPath("gh"); err != nil {
+		return nil
+	}
+	if _, err := env.lookPath("sbx"); err != nil {
+		return nil
+	}
+	token, err := env.run("gh", "auth", "token")
+	if err != nil || strings.TrimSpace(token) == "" {
+		return nil // optional: no host login to reuse
+	}
+	token = strings.TrimSpace(token)
+	out, err := env.run("sbx", "secret", "set", "github", "-f", "-t", token)
+	if err == nil {
+		return nil
+	}
+	detail := redactSecretValue(strings.TrimSpace(firstLine(out)), token)
+	if detail == "" {
+		detail = redactSecretValue(err.Error(), token)
+	}
+	return fmt.Errorf("sbx secret set github failed: %s", detail)
 }
 
 // mcpAxes maps configured server names to their readiness axes.

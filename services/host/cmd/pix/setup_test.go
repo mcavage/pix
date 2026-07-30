@@ -28,6 +28,44 @@ func TestSetupSandboxName(t *testing.T) {
 	}
 }
 
+func TestSyncGitHubCredentialFromHost(t *testing.T) {
+	const token = "github-secret-value"
+	var calls []string
+	env := shellEnv{
+		lookPath: func(name string) (string, error) { return "/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			calls = append(calls, name+" "+strings.Join(args, " "))
+			if name == "gh" {
+				return token + "\n", nil
+			}
+			return "", nil
+		},
+	}
+	if err := syncGitHubCredentialFromHost(env); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 || calls[0] != "gh auth token" || calls[1] != "sbx secret set github -f -t "+token {
+		t.Fatalf("calls = %#v", calls)
+	}
+}
+
+func TestSyncGitHubCredentialFromHostRedactsFailure(t *testing.T) {
+	const token = "github-secret-value"
+	env := shellEnv{
+		lookPath: func(name string) (string, error) { return "/bin/" + name, nil },
+		run: func(name string, args ...string) (string, error) {
+			if name == "gh" {
+				return token, nil
+			}
+			return "rejected " + token, errors.New("failed with " + token)
+		},
+	}
+	err := syncGitHubCredentialFromHost(env)
+	if err == nil || strings.Contains(err.Error(), token) || !strings.Contains(err.Error(), "***") {
+		t.Fatalf("error must be useful and redacted, got %v", err)
+	}
+}
+
 // --- item 4: DIR must be validated BEFORE the host phase mutates anything ---
 
 // runSetupCore must refuse a NONEXISTENT DIR before ever invoking hostPhase —
