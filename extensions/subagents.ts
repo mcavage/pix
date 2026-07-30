@@ -369,6 +369,27 @@ function discoverAgents(
 	return { agents: Array.from(map.values()), projectDir };
 }
 
+function isKnownSkill(name: string): boolean {
+	if (!name || name.includes("/") || name.includes("\\")) return false;
+	const roots = [path.join(getAgentDir(), "skills")];
+	for (let i = 0; i < process.argv.length; i++) {
+		if (process.argv[i] === "--skill" && process.argv[i + 1])
+			roots.push(process.argv[++i]);
+	}
+	for (const root of roots) {
+		try {
+			if (
+				fs.existsSync(path.join(root, name, "SKILL.md")) ||
+				(path.basename(root) === name && fs.existsSync(path.join(root, "SKILL.md")))
+			)
+				return true;
+		} catch {
+			/* best-effort discovery; unknown remains a clear error */
+		}
+	}
+	return false;
+}
+
 // ─── Child pi invocation (robust resolution) ─────────────────────────────────
 let SELF_PATH: string | null = null;
 try {
@@ -1279,13 +1300,16 @@ async function runSingle(
 	const agent = agents.find((a) => a.name === agentName);
 	if (!agent) {
 		const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
+		const skillHint = isKnownSkill(agentName)
+			? ` "${agentName}" is a skill, not a subagent preset. Run it in the parent session with /skill:${agentName}; do not pass skill names to the subagent tool.`
+			: "";
 		const errResult: SingleResult = {
 			agent: agentName,
 			agentSource: "unknown",
 			task,
 			exitCode: 1,
 			messages: [],
-			stderr: `Unknown agent "${agentName}". Available: ${available}.`,
+			stderr: `Unknown agent "${agentName}".${skillHint} Available agents: ${available}.`,
 			usage: zeroUsage(),
 			step,
 		};
@@ -1748,6 +1772,7 @@ export default function (pi: ExtensionAPI) {
 				"Delegate tasks to specialized subagents, each in an isolated child pi with its own context window.",
 				"Modes: single (agent + task), parallel (tasks[]), chain (sequential, {previous} placeholder).",
 				`Agents are markdown files (filename = name) in ${path.join(getAgentDir(), "agents")}; set agentScope:"both" to also use project-local ${CONFIG_DIR_NAME}/agents.`,
+				"The agent field accepts agent presets only, never skill names; invoke skills in the parent session.",
 				"Every child has an inactivity + wall-clock watchdog, so a stuck subagent is killed and reported, never left to hang.",
 			].join(" "),
 			parameters: SubagentParams as any,

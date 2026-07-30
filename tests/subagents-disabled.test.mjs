@@ -16,6 +16,8 @@ register("./stub-loader.mjs", import.meta.url);
 // An empty agent dir for the stubbed getAgentDir(): no agents, no routing.json.
 const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-test-"));
 fs.mkdirSync(path.join(agentDir, "agents"), { recursive: true });
+fs.mkdirSync(path.join(agentDir, "skills", "challenge"), { recursive: true });
+fs.writeFileSync(path.join(agentDir, "skills", "challenge", "SKILL.md"), "# challenge\n");
 process.env.PI_TEST_AGENT_DIR = agentDir;
 
 // PI_SUBAGENT_DEPTH is cleared too: when this test itself runs INSIDE a
@@ -159,6 +161,14 @@ test('PI_SUBAGENT_DISABLED="0" / "false" do not disable', async () => {
 		assert.match(text(r), /Unknown agent/i, `env value ${JSON.stringify(v)}`);
 		assert.doesNotMatch(text(r), /disabled in host mode/i);
 	}
+});
+
+test("a skill name gets a skill-specific correction, not only an agent dump", async () => {
+	const reg = await loadSubagents({});
+	const r = await exec(reg, { agent: "challenge", task: "stress test this" });
+	assert.equal(r.isError, true);
+	assert.match(text(r), /"challenge" is a skill, not a subagent preset/i);
+	assert.match(text(r), /\/skill:challenge/);
 });
 
 // ── (b) an explicit MAX_DEPTH=0 is honored (num() used to reject zero) ──────
