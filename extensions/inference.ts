@@ -29,6 +29,16 @@ type Model = {
 
 type Manifest = { version: 1; backends: Record<string, Backend>; models: Model[] };
 
+// Pi's default OpenAI Responses affinity mode adds a `session_id` HTTP
+// header. Some standards-compliant gateways reject underscore-bearing header
+// names at their edge before the request reaches the API. The hyphenated
+// x-client-request-id header remains, so generated gateway providers use Pi's
+// explicit no-session-header compatibility mode. Native OpenAI is untouched.
+export function compatForBackend(backend: Backend): { sessionAffinityFormat: "openai-nosession" } | undefined {
+	if (backend.protocol !== "openai-responses") return undefined;
+	return { sessionAffinityFormat: "openai-nosession" };
+}
+
 function readManifest(): Manifest | undefined {
 	try {
 		const parsed = JSON.parse(fs.readFileSync(path.join(getAgentDir(), "inference.json"), "utf8"));
@@ -68,6 +78,7 @@ export default function (pi: any): void {
 					},
 					contextWindow: m.context_window ?? 131072,
 					maxTokens: m.max_tokens ?? 32768,
+					compat: compatForBackend(backend),
 				})),
 			});
 		} catch {
