@@ -30,9 +30,21 @@ func TestValidate(t *testing.T) {
 	}
 
 	// Negative price is rejected.
-	badReg := &Registry{Models: []Model{{ID: "a/b", Provider: "a", Available: true, InputPerMTok: -1}}}
+	badReg := &Registry{Models: []Model{{ID: "a/b", Provider: "a", Available: true, ContextWindow: 1, MaxOutputTokens: 1, InputPerMTok: -1}}}
 	if err := Validate(badReg, &Scorecard{}, testPol()); err == nil {
 		t.Fatal("expected negative-price rejection")
+	}
+
+	for name, model := range map[string]Model{
+		"missing context":  {ID: "a/b", Provider: "a", Available: true, MaxOutputTokens: 1},
+		"missing output":   {ID: "a/b", Provider: "a", Available: true, ContextWindow: 1},
+		"output too large": {ID: "a/b", Provider: "a", Available: true, ContextWindow: 1, MaxOutputTokens: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := Validate(&Registry{Models: []Model{model}}, &Scorecard{}, &Policy{DefaultFallback: "a/b"}); err == nil {
+				t.Fatal("expected invalid model-limit rejection")
+			}
+		})
 	}
 }
 

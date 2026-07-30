@@ -4,7 +4,14 @@ import { test } from "node:test";
 
 register("./stub-loader.mjs", import.meta.url);
 
-const { compatForBackend, compatForModel, providerBaseURL, suppressUnusedDirectCredentialSentinels } = await import("../extensions/inference.ts");
+const { compatForBackend, compatForModel, hasValidLimits, providerBaseURL, suppressUnusedDirectCredentialSentinels } = await import("../extensions/inference.ts");
+
+test("generated providers require catalog-owned context and output limits", () => {
+	assert.equal(hasValidLimits({ context_window: 1050000, max_tokens: 128000 }), true);
+	assert.equal(hasValidLimits({ context_window: undefined, max_tokens: 128000 }), false);
+	assert.equal(hasValidLimits({ context_window: 131072, max_tokens: undefined }), false);
+	assert.equal(hasValidLimits({ context_window: 1000, max_tokens: 1001 }), false);
+});
 
 test("generated Responses gateways suppress the underscore session_id header", () => {
 	assert.deepEqual(

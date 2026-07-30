@@ -518,6 +518,7 @@ func compileInferenceRuntime(cfg *config.Config, now time.Time) (routing.Compile
 		}
 		manifest.Models = append(manifest.Models, runtimeModel{
 			ID: boundRuntimeID(b), CatalogModel: m.ID, Backend: b.Backend, Name: m.Label,
+			ContextWindow: m.ContextWindow, MaxTokens: m.MaxOutputTokens,
 			Reasoning: true, AdaptiveThinking: m.AdaptiveThinking,
 			InputCost: m.InputPerMTok, OutputCost: m.OutputPerMTok,
 		})

@@ -20,8 +20,8 @@ type Model = {
 	catalog_model: string;
 	backend: string;
 	name: string;
-	context_window?: number;
-	max_tokens?: number;
+	context_window: number;
+	max_tokens: number;
 	reasoning?: boolean;
 	adaptive_thinking?: boolean;
 	input_cost?: number;
@@ -64,6 +64,16 @@ export function providerBaseURL(backend: Backend): string | undefined {
 	return baseURL;
 }
 
+// Context accounting controls both the status denominator and Pi's automatic
+// compaction threshold. Never invent limits here: the host compiles them from
+// the model catalog. A malformed generated entry is omitted instead of being
+// registered with a plausible-looking but unsafe default.
+export function hasValidLimits(model: Model): boolean {
+	return Number.isSafeInteger(model.context_window) && model.context_window > 0
+		&& Number.isSafeInteger(model.max_tokens) && model.max_tokens > 0
+		&& model.max_tokens <= model.context_window;
+}
+
 function readManifest(): Manifest | undefined {
 	try {
 		const parsed = JSON.parse(fs.readFileSync(path.join(getAgentDir(), "inference.json"), "utf8"));
@@ -98,7 +108,7 @@ export default function (pi: any): void {
 	suppressUnusedDirectCredentialSentinels(manifest);
 	for (const [name, backend] of Object.entries(manifest.backends)) {
 		if (backend.driver === "native") continue;
-		const models = manifest.models.filter((m) => m.backend === name);
+		const models = manifest.models.filter((m) => m.backend === name && hasValidLimits(m));
 		const baseURL = providerBaseURL(backend);
 		if (!baseURL || models.length === 0) continue;
 		let apiKey = "unused";
@@ -121,8 +131,8 @@ export default function (pi: any): void {
 						cacheRead: 0,
 						cacheWrite: 0,
 					},
-					contextWindow: m.context_window ?? 131072,
-					maxTokens: m.max_tokens ?? 32768,
+					contextWindow: m.context_window,
+					maxTokens: m.max_tokens,
 					compat: compatForModel(backend, m),
 				})),
 			});

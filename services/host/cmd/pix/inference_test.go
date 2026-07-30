@@ -29,6 +29,9 @@ func TestCompileInferenceRuntimeNoModelAndExclusiveFiltering(t *testing.T) {
 	if len(manifest.Models) != 1 || manifest.Models[0].ID != "gateway/reasoner" {
 		t.Fatalf("models = %+v", manifest.Models)
 	}
+	if manifest.Models[0].ContextWindow != 1050000 || manifest.Models[0].MaxTokens != 128000 {
+		t.Fatalf("GPT-5.6 Sol limits = %d/%d, want 1050000/128000", manifest.Models[0].ContextWindow, manifest.Models[0].MaxTokens)
+	}
 	if _, ok := manifest.Backends["direct"]; ok {
 		t.Fatal("exclusive runtime leaked a disallowed backend")
 	}
