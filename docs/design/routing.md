@@ -187,6 +187,18 @@ pinned model), an optional provider constraint, and an advisory `budget_usd`.
 2. `intent:` frontmatter → `routing.json` resolved map → model id,
 3. neither → inherit the parent model (current default).
 
+The host first filters bindings through the user's `inference.allowed_models`
+roster. Consequently every compiled route and runtime model cycle stays inside
+the setup choice. Exclusive packs bypass (but do not erase) that personal
+roster and compile only from their own bindings.
+
+An agent may declare `fallback_intent:` for a narrow provider-policy recovery.
+The subagent runner retries once only when the primary response is positively
+classified as a usage-policy refusal. Authentication, timeout, transport, and
+invalid-route failures never trigger cross-provider spend. `security-lead`
+uses `review` as its cross-vendor fallback because defensive cyber prompts can
+trip Anthropic's classifier even when the task is legitimate.
+
 Agent presets migrate from a hard-coded `model:` to an `intent:`. `routing.json`
 is baked at `~/.pi/agent/routing.json` next to `capabilities.json`.
 

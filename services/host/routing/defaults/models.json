@@ -159,6 +159,32 @@
       "local": true,
       "available": true,
       "notes": "Local via Ollama. The best all-rounder that fits a 16GB machine (~6.6GB download, Apache 2.0, tools + thinking; current as of 2026-02). Free + private but slower than cloud, so it wins nothing by default and is an offline/private fallback. Bigger boxes can bump to gemma4:e4b (~9GB) or qwen3.5:27b. Needs `ollama pull qwen3.5:9b` + the ollama-bridge to expose it. NOTE: this is the ROUTER's local option; the memory watcher is a separate role but defaults to the same qwen3.5:9b so Ollama keeps one model resident for both."
+    },
+    {
+      "id": "ollama/glm-5.2:cloud",
+      "provider": "ollama",
+      "family": "glm",
+      "label": "GLM 5.2 (Ollama Cloud)",
+      "context_window": 1000000,
+      "max_output_tokens": 131072,
+      "input_per_mtok": 0.0,
+      "output_per_mtok": 0.0,
+      "local": false,
+      "available": true,
+      "notes": "Ollama Cloud long-horizon coding model. Access is owned by the local Ollama login and proxied through the local Ollama API; Pix stores no Ollama credential. Subscription usage is not modeled as per-token USD cost."
+    },
+    {
+      "id": "ollama/kimi-k3:cloud",
+      "provider": "ollama",
+      "family": "kimi",
+      "label": "Kimi K3 (Ollama Cloud)",
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "input_per_mtok": 3.0,
+      "output_per_mtok": 15.0,
+      "local": false,
+      "available": true,
+      "notes": "Ollama Cloud frontier multimodal/agentic model. Access is owned by the local Ollama login and proxied through the local Ollama API; Pix stores no Ollama credential. Requires an eligible Ollama subscription and consumes extra usage credits."
     }
   ]
 }

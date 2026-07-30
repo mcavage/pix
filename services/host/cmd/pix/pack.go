@@ -3572,16 +3572,16 @@ func packNameFromURL(url string) string {
 }
 
 // safeGitURL rejects git URLs whose transport can execute arbitrary commands or
-// read arbitrary host files: only https/http/ssh/git protocols and scp-style
+// read arbitrary host files: only HTTPS/SSH protocols and scp-style
 // `user@host:path` are allowed. `ext::`, `file://`, a leading `-` (arg
-// injection), and anything else are refused. v1 packs are Tier-0 (no shipped
-// executables), so a clone must not become a code-execution vector.
+// injection), unauthenticated plaintext `git://`, and anything else are
+// refused. Packs may execute trust-gated host hooks, so transport integrity is
+// part of the security boundary even when the resulting bytes are fingerprinted.
 func safeGitURL(url string) bool {
 	if url == "" || strings.HasPrefix(url, "-") {
 		return false
 	}
-	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") ||
-		strings.HasPrefix(url, "ssh://") || strings.HasPrefix(url, "git://") {
+	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "ssh://") {
 		return true
 	}
 	// scp-style user@host:path (no scheme). Must contain ':' and not be a

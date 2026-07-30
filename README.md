@@ -30,7 +30,7 @@ qualifier is required.
 Activate an advanced work pack explicitly through the same setup flow:
 
 ```bash
-pix setup --pack your-org/work-pack
+pix setup --pack 'git+https://github.com/your-org/work-pack.git#ref=main'
 ```
 
 Packs can declare required setup probes and idempotent actions. Pix reviews and
@@ -39,7 +39,7 @@ execution, and resumes past completed work on the next setup run. A pack can als
 declare optional setup hooks. Run one explicitly with `--with`, for example:
 
 ```bash
-pix setup --pack your-org/work-pack --with hr
+pix setup --pack 'git+https://github.com/your-org/work-pack.git#ref=main' --with hr
 ```
 
 `--pack` is repeatable; packs compose in command order. Without `--with`, every

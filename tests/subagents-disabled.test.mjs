@@ -74,6 +74,50 @@ test("curated children reload generated inference providers before subagents", a
 	assert.deepEqual(reg.mod.coreChildExtensionArgs(self), ["-e", inference, "-e", self]);
 });
 
+test("policy-refusal detection is narrow and recognizes Anthropic cyber refusals", async () => {
+	const reg = await loadSubagents({});
+	assert.equal(
+		reg.mod.isProviderPolicyRefusal({
+			errorMessage:
+				"This request triggered restrictions on violative cyber content and was blocked under Anthropic's Usage Policy.",
+			stderr: "",
+			messages: [],
+		}),
+		true,
+	);
+	for (const errorMessage of [
+		"Model not found: docker-google/gemini",
+		"401 invalid x-api-key",
+		"request timed out",
+	]) {
+		assert.equal(
+			reg.mod.isProviderPolicyRefusal({ errorMessage, stderr: "", messages: [] }),
+			false,
+			errorMessage,
+		);
+	}
+});
+
+test("invalid compiled routes become actionable diagnostics", async () => {
+	const reg = await loadSubagents({});
+	const result = {
+		exitCode: 1,
+		stopReason: "error",
+		timedOut: null,
+		errorMessage: 'Model "docker-google/gemini-bad" not found',
+		stderr: "",
+		messages: [],
+	};
+	reg.mod.clarifyRoutedModelFailure(result, {
+		name: "review",
+		intent: "review",
+		model: "docker-google/gemini-bad",
+	});
+	assert.match(result.errorMessage, /intent "review" resolved to/);
+	assert.match(result.errorMessage, /pix run --replace/);
+	assert.match(result.errorMessage, /Original: Model/);
+});
+
 const ctx = { cwd: process.cwd(), hasUI: false, ui: null };
 const exec = (reg, params) =>
 	reg.tool.execute("id", params, new AbortController().signal, undefined, ctx);

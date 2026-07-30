@@ -205,7 +205,8 @@ func TestSetupModels_InteractiveDefaultNo(t *testing.T) {
 			env := modelsSetupEnv(t, w)
 			stubProvisionKeysOK(t)
 			var out bytes.Buffer
-			if err := setupHostPhase(env, nil, strings.NewReader("\n"+tc.input), &out, true); err != nil {
+			// inference default, model-roster default, then this case's memory answer
+			if err := setupHostPhase(env, nil, strings.NewReader("\n\n"+tc.input), &out, true); err != nil {
 				t.Fatalf("unexpected error: %v\n%s", err, out.String())
 			}
 			if n := w.count("ollama pull"); n != 0 {
@@ -231,7 +232,7 @@ func TestSetupModels_InteractiveYesPulls(t *testing.T) {
 	env := modelsSetupEnv(t, w)
 	stubProvisionKeysOK(t)
 	var out bytes.Buffer
-	if err := setupHostPhase(env, nil, strings.NewReader("\ny\n"), &out, true); err != nil {
+	if err := setupHostPhase(env, nil, strings.NewReader("\n\ny\n"), &out, true); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
 	if n := w.count("ollama pull"); n != 2 {

@@ -211,6 +211,123 @@ func configureOllamaInference(cfg *config.Config, env shellEnv) (bool, error) {
 	return true, nil
 }
 
+// configureModelRoster turns the broad set of backend bindings into the small,
+// explicit catalog-model surface agents may use. The router continues to pick
+// by intent, but it can never escape this roster. A mandatory pack is already
+// an explicit policy decision and therefore skips the personal roster prompt.
+func configureModelRoster(cfg *config.Config, in io.Reader, out io.Writer, interactive bool, requested string) error {
+	if cfg == nil || cfg.Inference.ExclusiveSource != "" {
+		return nil
+	}
+	reg, err := routing.LoadRegistry()
+	if err != nil {
+		return err
+	}
+	bound := map[string]bool{}
+	for _, b := range cfg.Inference.Models {
+		if b.Available && inferenceBindingTopologyAllowed(cfg, b) {
+			bound[b.Model] = true
+		}
+	}
+	var candidates []routing.Model
+	for _, m := range reg.Models {
+		if m.Available && bound[m.ID] {
+			candidates = append(candidates, m)
+		}
+	}
+	if len(candidates) == 0 {
+		return fmt.Errorf("the selected inference runtime exposes no models from the Pix catalog")
+	}
+	canonicalize := func(raw string) ([]string, error) {
+		seen := map[string]bool{}
+		var selected []string
+		for _, token := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
+			if token == "" {
+				continue
+			}
+			if token == "all" {
+				for _, m := range candidates {
+					if !seen[m.ID] {
+						seen[m.ID] = true
+						selected = append(selected, m.ID)
+					}
+				}
+				continue
+			}
+			if n, convErr := strconv.Atoi(token); convErr == nil {
+				if n < 1 || n > len(candidates) {
+					return nil, fmt.Errorf("model choice %d is out of range", n)
+				}
+				token = candidates[n-1].ID
+			}
+			m, ok := reg.Get(token)
+			if !ok || !bound[m.ID] {
+				return nil, fmt.Errorf("model %q is not available through the selected runtime", token)
+			}
+			if !seen[m.ID] {
+				seen[m.ID] = true
+				selected = append(selected, m.ID)
+			}
+		}
+		if len(selected) == 0 {
+			return nil, fmt.Errorf("choose at least one model")
+		}
+		return selected, nil
+	}
+
+	if strings.TrimSpace(requested) != "" {
+		selected, err := canonicalize(requested)
+		if err != nil {
+			return err
+		}
+		cfg.Inference.AllowedModels = selected
+		return nil
+	}
+
+	// Preserve an existing choice, dropping stale models that no longer have a
+	// binding. `--models` is the explicit way to change it on a later setup run.
+	if len(cfg.Inference.AllowedModels) > 0 {
+		var kept []string
+		for _, id := range cfg.Inference.AllowedModels {
+			if bound[id] {
+				kept = append(kept, id)
+			}
+		}
+		if len(kept) > 0 {
+			cfg.Inference.AllowedModels = kept
+			return nil
+		}
+	}
+
+	if len(candidates) == 1 {
+		cfg.Inference.AllowedModels = []string{candidates[0].ID}
+		return nil
+	}
+	if !interactive {
+		for _, m := range candidates {
+			cfg.Inference.AllowedModels = append(cfg.Inference.AllowedModels, m.ID)
+		}
+		return nil
+	}
+
+	fmt.Fprintln(out, "Which models may Pix agents use?")
+	fmt.Fprintln(out, "The router stays inside this roster; choose one model to use it everywhere.")
+	for i, m := range candidates {
+		fmt.Fprintf(out, "  %d. %s (%s)\n", i+1, m.Label, m.ID)
+	}
+	fmt.Fprint(out, "Choose models [all]: ")
+	choice, ok := readSetupLine(in)
+	if !ok || strings.TrimSpace(choice) == "" {
+		choice = "all"
+	}
+	selected, err := canonicalize(choice)
+	if err != nil {
+		return err
+	}
+	cfg.Inference.AllowedModels = selected
+	return nil
+}
+
 type runtimeInferenceManifest struct {
 	Version  int                       `json:"version"`
 	Backends map[string]runtimeBackend `json:"backends"`
@@ -252,11 +369,28 @@ func routingBindings(cfg *config.Config) []routing.Binding {
 	return out
 }
 
-func inferenceBindingAllowed(cfg *config.Config, b config.InferenceModelBinding) bool {
+func inferenceBindingTopologyAllowed(cfg *config.Config, b config.InferenceModelBinding) bool {
 	if cfg.Inference.ExclusiveSource != "" {
 		return b.Source == cfg.Inference.ExclusiveSource
 	}
 	return cfg.Inference.ExclusiveBackend == "" || b.Backend == cfg.Inference.ExclusiveBackend
+}
+
+func inferenceBindingAllowed(cfg *config.Config, b config.InferenceModelBinding) bool {
+	if !inferenceBindingTopologyAllowed(cfg, b) {
+		return false
+	}
+	// A mandatory pack owns the whole inference surface while active. Preserve
+	// the personal roster underneath so detaching the pack restores it.
+	if cfg.Inference.ExclusiveSource != "" || len(cfg.Inference.AllowedModels) == 0 {
+		return true
+	}
+	for _, id := range cfg.Inference.AllowedModels {
+		if id == b.Model {
+			return true
+		}
+	}
+	return false
 }
 
 func inferenceBackendAllowed(cfg *config.Config, b config.InferenceBackend, name string) bool {

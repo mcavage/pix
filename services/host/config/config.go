@@ -226,10 +226,15 @@ type Config struct {
 // must come from that pack. This supports a gateway with multiple native wire
 // protocols without weakening exclusivity.
 type InferenceConfig struct {
-	Backends         map[string]InferenceBackend `toml:"backends,omitempty"`
-	Models           []InferenceModelBinding     `toml:"models,omitempty"`
-	ExclusiveBackend string                      `toml:"exclusive_backend,omitempty"`
-	ExclusiveSource  string                      `toml:"exclusive_source,omitempty"`
+	Backends map[string]InferenceBackend `toml:"backends,omitempty"`
+	Models   []InferenceModelBinding     `toml:"models,omitempty"`
+	// AllowedModels is the user's canonical catalog-model roster. An empty list
+	// means no user restriction (pack declarations / legacy config remain
+	// callable). Exclusive pack inference bypasses this personal preference
+	// without deleting it, so switching back restores the personal roster.
+	AllowedModels    []string `toml:"allowed_models,omitempty"`
+	ExclusiveBackend string   `toml:"exclusive_backend,omitempty"`
+	ExclusiveSource  string   `toml:"exclusive_source,omitempty"`
 }
 
 type InferenceBackend struct {

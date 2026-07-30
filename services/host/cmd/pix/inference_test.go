@@ -81,6 +81,58 @@ func TestConfigureDirectInferenceUsesCatalog(t *testing.T) {
 	}
 }
 
+func TestConfigureModelRosterRestrictsRuntimeAndRoutes(t *testing.T) {
+	cfg := &config.Config{}
+	if err := configureDirectInference(cfg, []string{"anthropic", "openai"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := configureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, false, "openai/gpt-5.6-sol"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.Inference.AllowedModels, ","); got != "openai/gpt-5.6-sol" {
+		t.Fatalf("allowed models = %q", got)
+	}
+	for i := range cfg.Inference.Models {
+		cfg.Inference.Models[i].Verified = true
+	}
+	routes, manifest, err := compileInferenceRuntime(cfg, time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Models) != 1 || manifest.Models[0].CatalogModel != "openai/gpt-5.6-sol" {
+		t.Fatalf("runtime roster leaked another model: %+v", manifest.Models)
+	}
+	for intent, route := range routes.Routes {
+		if route.Model != "openai/gpt-5.6-sol" {
+			t.Fatalf("route %s escaped roster: %s", intent, route.Model)
+		}
+	}
+}
+
+func TestConfigureModelRosterPreservesPersonalChoiceUnderExclusivePack(t *testing.T) {
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		AllowedModels:   []string{"ollama/kimi-k3:cloud"},
+		ExclusiveSource: "/packs/work",
+	}}
+	if err := configureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.Inference.AllowedModels, ","); got != "ollama/kimi-k3:cloud" {
+		t.Fatalf("exclusive pack erased personal roster: %q", got)
+	}
+}
+
+func TestConfigureModelRosterRejectsUnavailableChoice(t *testing.T) {
+	cfg := &config.Config{}
+	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
+		t.Fatal(err)
+	}
+	err := configureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, false, "ollama/kimi-k3:cloud")
+	if err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey(t *testing.T) {
 	const key = "sk-valid-looking-but-unauthorized"
 	for _, probeFailure := range []string{"provider rejected model request (HTTP 401)", "probe unavailable"} {
@@ -193,7 +245,7 @@ func TestSetupChooseInferenceOffersDetectedOllamaAndNeedsNoOnePassword(t *testin
 		},
 		run: func(name string, args ...string) (string, error) {
 			if name == "ollama" && len(args) == 1 && args[0] == "list" {
-				return "NAME ID SIZE MODIFIED\nqwen3.5:9b abc 6GB now\n", nil
+				return "NAME ID SIZE MODIFIED\nqwen3.5:9b abc 6GB now\nglm-5.2:cloud def - now\nkimi-k3:cloud ghi - now\n", nil
 			}
 			return "", fmt.Errorf("unexpected command")
 		},
@@ -207,8 +259,17 @@ func TestSetupChooseInferenceOffersDetectedOllamaAndNeedsNoOnePassword(t *testin
 	if !selected || inferenceNeedsOnePassword(cfg) {
 		t.Fatalf("selected=%v inference=%+v", selected, cfg.Inference)
 	}
-	if !strings.Contains(out.String(), "2. Ollama") || len(cfg.Inference.Models) != 1 {
+	if !strings.Contains(out.String(), "2. Ollama") || len(cfg.Inference.Models) != 3 {
 		t.Fatalf("output=%q models=%+v", out.String(), cfg.Inference.Models)
+	}
+	got := map[string]bool{}
+	for _, b := range cfg.Inference.Models {
+		got[b.Model] = true
+	}
+	for _, want := range []string{"ollama/qwen3.5:9b", "ollama/glm-5.2:cloud", "ollama/kimi-k3:cloud"} {
+		if !got[want] {
+			t.Fatalf("missing Ollama binding %s: %+v", want, cfg.Inference.Models)
+		}
 	}
 }
 

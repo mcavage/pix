@@ -195,6 +195,12 @@ interface AgentConfig {
 	// Declared routing intent (frontmatter `intent:`). Resolved to `model` via
 	// routing.json unless an explicit `model:` overrides it. Kept for display.
 	intent?: string;
+	// Optional cross-vendor recovery route for provider policy refusals. This is
+	// deliberately agent-authored rather than a global retry: only roles whose
+	// work predictably brushes a provider policy boundary should pay for a second
+	// attempt, and the alternate route remains subject to the compiled roster.
+	fallbackIntent?: string;
+	fallbackModel?: string;
 	thinking?: string;
 	maxTurns?: number;
 	// Per-agent watchdog overrides (frontmatter idle_ms / wall_ms, milliseconds).
@@ -275,6 +281,16 @@ function loadAgentsFromDir(
 				);
 			}
 		}
+		const fallbackIntent = frontmatter.fallback_intent?.trim() || undefined;
+		let fallbackModel: string | undefined;
+		if (fallbackIntent) {
+			fallbackModel = resolveIntentModel(fallbackIntent) || undefined;
+			if (!fallbackModel) {
+				warnings.push(
+					`fallback_intent "${fallbackIntent}" not found in routing.json — policy refusals will be returned without retry.`,
+				);
+			}
+		}
 		let thinking = frontmatter.thinking?.trim().toLowerCase() || undefined;
 		if (thinking && !VALID_THINKING.has(thinking)) {
 			warnings.push(`thinking "${thinking}" is not a valid level; ignoring.`);
@@ -303,6 +319,8 @@ function loadAgentsFromDir(
 			tools: tools && tools.length > 0 ? tools : undefined,
 			model,
 			intent,
+			fallbackIntent,
+			fallbackModel,
 			thinking,
 			web,
 			maxTurns: Number.isFinite(maxTurns as number)
@@ -502,6 +520,7 @@ interface SingleResult {
 	idleMs?: number;
 	wallMs?: number;
 	step?: number;
+	fallbackFrom?: string;
 }
 
 interface SubagentDetails {
@@ -529,6 +548,48 @@ function isFailed(r: SingleResult): boolean {
 		Boolean(r.timedOut)
 	);
 }
+
+// Provider policy refusals are qualitatively different from auth, routing, and
+// transport failures: retrying the same endpoint cannot help, while a declared
+// cross-vendor route often can. Keep this matcher narrow so ordinary 4xx errors
+// are never converted into surprise spend on another model.
+export function isProviderPolicyRefusal(r: Pick<SingleResult, "errorMessage" | "stderr" | "messages">): boolean {
+	const text = [r.errorMessage, r.stderr, finalText(r.messages)]
+		.filter(Boolean)
+		.join("\n")
+		.toLowerCase();
+	return (
+		text.includes("triggered restrictions on violative") ||
+		text.includes("blocked under anthropic's usage policy") ||
+		text.includes("blocked under anthropic’s usage policy") ||
+		(text.includes("usage policy") && text.includes("refusal"))
+	);
+}
+
+function readableFailure(r: SingleResult): string {
+	const raw = r.errorMessage || r.stderr || finalText(r.messages) || "failed";
+	const first = raw
+		.split("\n")
+		.map((s) => s.trim())
+		.find(Boolean) || "failed";
+	// The row renderer already truncates to terminal width. Preserve enough of
+	// the actual diagnostic here to distinguish a bad route from auth or policy.
+	return first.slice(0, 240);
+}
+
+export function clarifyRoutedModelFailure(r: SingleResult, agent: AgentConfig): void {
+	if (!agent.model || !isFailed(r)) return;
+	const raw = [r.errorMessage, r.stderr, finalText(r.messages)]
+		.filter(Boolean)
+		.join("\n");
+	if (!/(model.{0,40}not found|unknown model|invalid (?:model|route|provider)|route.{0,40}invalid)/i.test(raw))
+		return;
+	const route = agent.intent ? `intent "${agent.intent}"` : "explicit model route";
+	r.errorMessage =
+		`Agent "${agent.name}" ${route} resolved to "${agent.model}", but that model is not registered in this sandbox. ` +
+		`Run \`pix run --replace\` to recreate it from the current inference config. Original: ${readableFailure(r)}`;
+}
+
 function resultOutput(r: SingleResult): string {
 	if (isFailed(r)) {
 		if (r.timedOut === "idle")
@@ -537,7 +598,10 @@ function resultOutput(r: SingleResult): string {
 			return `Timed out: exceeded ${Math.round((r.wallMs ?? WALL_MS) / 1000)}s wall-clock (killed). Partial output:\n${finalText(r.messages) || r.stderr || "(none)"}`;
 		return r.errorMessage || r.stderr || finalText(r.messages) || "(no output)";
 	}
-	return finalText(r.messages) || "(no output)";
+	const text = finalText(r.messages) || "(no output)";
+	return r.fallbackFrom
+		? `Primary model ${r.fallbackFrom} returned a provider policy refusal; recovered with ${r.model}.\n\n${text}`
+		: text;
 }
 function capOutput(s: string): string {
 	if (Buffer.byteLength(s, "utf8") <= PER_TASK_OUTPUT_CAP) return s;
@@ -908,7 +972,7 @@ function finalizeRun(id: string, r: SingleResult): void {
 			e.error = "aborted";
 		} else {
 			e.status = "failed";
-			e.error = (r.errorMessage || r.stderr || "failed").split("\n")[0].slice(0, 40);
+			e.error = readableFailure(r);
 		}
 		// Finished rows self-expire. Failures remain visible longer than successes,
 		// but never permanently occupy the user's screen; the full tool result is
@@ -1191,6 +1255,7 @@ async function runSingle(
 		preRunId?: string; // pre-registered "queued" row to adopt (parallel/chain)
 		enabled?: boolean; // false = don't pin (e.g. the doctor canary)
 	},
+	retryingPolicyRefusal = false,
 ): Promise<SingleResult> {
 	// CENTRAL kill switch: every spawn path (tool single/parallel/chain, trees,
 	// the doctor canary, anything added later) funnels through runSingle, so the
@@ -1539,6 +1604,58 @@ async function runSingle(
 		if (wasAborted) {
 			result.stopReason = "aborted";
 			result.errorMessage = result.errorMessage || "Subagent aborted.";
+		}
+		clarifyRoutedModelFailure(result, agent);
+
+		// Security review prompts can legitimately trip a provider's cyber-policy
+		// classifier. When (and only when) the agent declares a cross-vendor
+		// fallback intent, retry once through that compiled route. The fallback is
+		// still roster/materialization constrained; a missing route means no retry.
+		if (
+			!retryingPolicyRefusal &&
+			isFailed(result) &&
+			isProviderPolicyRefusal(result) &&
+			agent.fallbackModel &&
+			agent.fallbackModel !== agent.model
+		) {
+			const primaryModel = agent.model || "inherited parent model";
+			const primaryUsage = { ...result.usage };
+			const fallbackAgent: AgentConfig = {
+				...agent,
+				model: agent.fallbackModel,
+				fallbackIntent: undefined,
+				fallbackModel: undefined,
+			};
+			const retryAgents = agents.map((a) => (a === agent ? fallbackAgent : a));
+			const retry = await runSingle(
+				defaultCwd,
+				retryAgents,
+				agentName,
+				task,
+				cwd,
+				step,
+				signal,
+				onUpdate,
+				makeDetails,
+				{ mode: track?.mode ?? "single", enabled: false },
+				true,
+			);
+			const retryUsage = retry.usage;
+			Object.assign(result, retry);
+			result.agent = agentName;
+			result.agentSource = agent.source;
+			result.task = task;
+			result.step = step;
+			result.fallbackFrom = primaryModel;
+			result.usage = {
+				input: primaryUsage.input + retryUsage.input,
+				output: primaryUsage.output + retryUsage.output,
+				cacheRead: primaryUsage.cacheRead + retryUsage.cacheRead,
+				cacheWrite: primaryUsage.cacheWrite + retryUsage.cacheWrite,
+				cost: primaryUsage.cost + retryUsage.cost,
+				contextTokens: Math.max(primaryUsage.contextTokens, retryUsage.contextTokens),
+				turns: primaryUsage.turns + retryUsage.turns,
+			};
 		}
 		if (runId) finalizeRun(runId, result);
 		return result;

@@ -242,6 +242,7 @@ type onboardOpts struct {
 	knowledge string
 	mcp       []string
 	model     string
+	models    string
 	apply     bool
 	assumeYes bool
 	// pullModels is `pix setup`'s explicit local-model download consent
@@ -313,6 +314,10 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 			o.model, err = next()
 		case strings.HasPrefix(a, "--model="):
 			o.model = strings.TrimPrefix(a, "--model=")
+		case a == "--models":
+			o.models, err = next()
+		case strings.HasPrefix(a, "--models="):
+			o.models = strings.TrimPrefix(a, "--models=")
 		case a == "--pack":
 			o.pack, err = next()
 			if err == nil {

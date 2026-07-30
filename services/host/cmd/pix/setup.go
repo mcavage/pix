@@ -666,6 +666,9 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 				fmt.Fprintf(out, "  github: host credential was not synced (%v)\n", err)
 			}
 			if selected {
+				if err := configureModelRoster(cfg, in, out, interactive, opts.models); err != nil {
+					return fmt.Errorf("choosing models: %w", err)
+				}
 				return cfg.Save()
 			}
 			if err := ensureSetupPrereqsFor(env, in, out, interactive, true); err != nil {
@@ -684,6 +687,9 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 			}
 			if err := configureDirectInference(cfg, providers); err != nil {
 				return fmt.Errorf("configuring direct inference: %w", err)
+			}
+			if err := configureModelRoster(cfg, in, out, interactive, opts.models); err != nil {
+				return fmt.Errorf("choosing models: %w", err)
 			}
 			attempted, verified, failures := verifyDirectInference(cfg, env)
 			if err := cfg.Save(); err != nil {
@@ -1573,7 +1579,7 @@ func setupSandboxName(dir string) (string, bool) {
 // (only the space-separated form; `--flag=value` is self-contained).
 func flagTakesValue(a string) bool {
 	switch a {
-	case "--account", "--credentials", "--knowledge", "--mcp", "--model", "--pack", "--with":
+	case "--account", "--credentials", "--knowledge", "--mcp", "--model", "--models", "--pack", "--with":
 		return true
 	}
 	return false
@@ -1638,7 +1644,7 @@ Setup flags:
                            blocks unrelated repair.
 
 Host-config flags (all optional):
-  --pack <path|owner/repo|git-url>
+  --pack <path|git+https-url#ref=branch|tag|sha>
                            activate a pack through the normal host trust gate,
                            then run its required, resumable setup hooks;
                            repeatable, composed in command order (collections
@@ -1656,6 +1662,9 @@ Host-config flags (all optional):
   --knowledge <path|url>   scaffold/point the global knowledge base
   --mcp <name>             enable an MCP server (repeatable; allowlisted)
   --model <ollama-model>   set the ollama-bridge model
+  --models <id,id,...>     restrict agents to these canonical catalog models;
+                           interactive first setup otherwise offers every
+                           model available through the selected runtime(s)
   --yes | --non-interactive  never prompt (CI); callable inference must already
                            be configured through provider refs, a pack/session
                            gateway, a no-auth gateway, or verified Ollama

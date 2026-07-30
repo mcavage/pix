@@ -139,13 +139,13 @@ func TestPackNameFromURL_NoCollisionOrTraversal(t *testing.T) {
 }
 
 func TestSafeGitURL(t *testing.T) {
-	ok := []string{"https://github.com/me/p.git", "http://x/y", "ssh://git@h/p", "git://h/p", "git@github.com:me/p.git"}
+	ok := []string{"https://github.com/me/p.git", "ssh://git@h/p", "git@github.com:me/p.git"}
 	for _, u := range ok {
 		if !safeGitURL(u) {
 			t.Errorf("safeGitURL(%q) = false, want true", u)
 		}
 	}
-	bad := []string{"ext::sh -c touch/pwn", "file:///etc/passwd", "fd::0", "-oProxyCommand=evil", "", "/local/path", "./rel"}
+	bad := []string{"ext::sh -c touch/pwn", "file:///etc/passwd", "http://h/p", "git://h/p", "fd::0", "-oProxyCommand=evil", "", "/local/path", "./rel"}
 	for _, u := range bad {
 		if safeGitURL(u) {
 			t.Errorf("safeGitURL(%q) = true, want false (unsafe transport)", u)

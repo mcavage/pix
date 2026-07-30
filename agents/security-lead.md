@@ -3,6 +3,7 @@ description: STRIDE threat modeling, OWASP Top 10, supply-chain audit, secrets d
 tools: read, grep, find, ls, bash
 web: false
 intent: red-team
+fallback_intent: review
 thinking: high
 max_turns: 30
 ---
