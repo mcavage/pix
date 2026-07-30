@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -15,6 +17,8 @@ import (
 	"pix/host/config"
 	"pix/host/routing"
 )
+
+const directInferenceProbeTimeout = 8 * time.Second
 
 // readSetupLine consumes exactly one line without a buffered reader that could
 // steal subsequent answers from setup's provider-ref scanner.
@@ -222,15 +226,16 @@ type runtimeBackend struct {
 }
 
 type runtimeModel struct {
-	ID            string  `json:"id"`
-	CatalogModel  string  `json:"catalog_model"`
-	Backend       string  `json:"backend"`
-	Name          string  `json:"name"`
-	ContextWindow int     `json:"context_window,omitempty"`
-	MaxTokens     int     `json:"max_tokens,omitempty"`
-	Reasoning     bool    `json:"reasoning,omitempty"`
-	InputCost     float64 `json:"input_cost,omitempty"`
-	OutputCost    float64 `json:"output_cost,omitempty"`
+	ID               string  `json:"id"`
+	CatalogModel     string  `json:"catalog_model"`
+	Backend          string  `json:"backend"`
+	Name             string  `json:"name"`
+	ContextWindow    int     `json:"context_window,omitempty"`
+	MaxTokens        int     `json:"max_tokens,omitempty"`
+	Reasoning        bool    `json:"reasoning,omitempty"`
+	AdaptiveThinking bool    `json:"adaptive_thinking,omitempty"`
+	InputCost        float64 `json:"input_cost,omitempty"`
+	OutputCost       float64 `json:"output_cost,omitempty"`
 }
 
 func routingBindings(cfg *config.Config) []routing.Binding {
@@ -239,10 +244,10 @@ func routingBindings(cfg *config.Config) []routing.Binding {
 	}
 	out := make([]routing.Binding, 0, len(cfg.Inference.Models))
 	for _, b := range cfg.Inference.Models {
-		if !inferenceBindingAllowed(cfg, b) {
+		if !inferenceBindingCallable(cfg, b) {
 			continue
 		}
-		out = append(out, routing.Binding{Model: b.Model, Backend: b.Backend, UpstreamID: b.Upstream, Available: b.Available})
+		out = append(out, routing.Binding{Model: b.Model, Backend: b.Backend, UpstreamID: b.Upstream, Available: true})
 	}
 	return out
 }
@@ -266,7 +271,10 @@ func inferenceNeedsOnePassword(cfg *config.Config) bool {
 		return true // default setup path is a direct API key
 	}
 	for _, binding := range cfg.Inference.Models {
-		if !binding.Available || !inferenceBindingAllowed(cfg, binding) {
+		// Availability is probe evidence, not topology. Setup must still require
+		// 1Password for an allowed direct binding before that first probe has
+		// promoted it; exclusivity alone decides whether a backend is dormant.
+		if !inferenceBindingAllowed(cfg, binding) {
 			continue
 		}
 		b, ok := cfg.Inference.Backends[binding.Backend]
@@ -336,13 +344,137 @@ func configureDirectInference(cfg *config.Config, providers []string) error {
 		if m.Available && providerSet[m.Provider] {
 			cfg.Inference.Models = append(cfg.Inference.Models, config.InferenceModelBinding{
 				// A present credential makes this binding a candidate; it does not
-				// prove that the account is entitled to this particular model. The
-				// first sandbox request is the honest live verification point.
+				// prove that the account is entitled to this particular model.
+				// verifyDirectInference earns Verified with a bounded live request.
 				Model: m.ID, Backend: m.Provider, Upstream: m.ID, Available: true,
 			})
 		}
 	}
 	return nil
+}
+
+// verifyDirectInference earns Verified with an actual model-specific inference
+// request. Every binding is independently checked; probes run concurrently so
+// the wall-clock bound is one probe timeout rather than N timeouts. Resolved
+// key bytes stay in process memory and are never included in errors or persisted.
+func verifyDirectInference(cfg *config.Config, env shellEnv) (attempted, verified int, failures []string) {
+	if cfg == nil || env.directInferenceProbe == nil {
+		return 0, 0, nil
+	}
+	type candidate struct {
+		index           int
+		provider, model string
+	}
+	var candidates []candidate
+	for i := range cfg.Inference.Models {
+		binding := &cfg.Inference.Models[i]
+		backend, ok := cfg.Inference.Backends[binding.Backend]
+		if !ok || backend.Auth != "1password" || !binding.Available || !inferenceBindingAllowed(cfg, *binding) {
+			continue
+		}
+		binding.Verified = false
+		candidates = append(candidates, candidate{index: i, provider: binding.Backend, model: strings.TrimPrefix(binding.Upstream, binding.Backend+"/")})
+	}
+	keys := map[string]string{}
+	keyOK := map[string]bool{}
+	for _, c := range candidates {
+		if _, seen := keyOK[c.provider]; seen {
+			continue
+		}
+		provider := c.provider
+		backend := cfg.Inference.Backends[provider]
+		ref, ok := currentOpRef(env, backend.KeyEnv)
+		if !ok {
+			failures = append(failures, provider+": credential ref missing")
+			keyOK[provider] = false
+			continue
+		}
+		key, ok := opReadNonEmpty(env, ref)
+		if !ok {
+			failures = append(failures, provider+": credential could not be resolved")
+			keyOK[provider] = false
+			continue
+		}
+		keys[provider], keyOK[provider] = key, true
+	}
+	type result struct {
+		index int
+		label string
+		err   error
+	}
+	results := make(chan result, len(candidates))
+	for _, c := range candidates {
+		if !keyOK[c.provider] {
+			continue
+		}
+		attempted++
+		go func(c candidate, key string) {
+			results <- result{index: c.index, label: cfg.Inference.Models[c.index].Model, err: env.directInferenceProbe(c.provider, c.model, key)}
+		}(c, keys[c.provider])
+	}
+	for i := 0; i < attempted; i++ {
+		res := <-results
+		if res.err != nil {
+			failures = append(failures, res.label+": "+res.err.Error())
+			continue
+		}
+		cfg.Inference.Models[res.index].Verified = true
+		verified++
+	}
+	sort.Strings(failures)
+	return attempted, verified, failures
+}
+
+// liveDirectInferenceProbe makes a minimal generation request through the
+// provider's public API. The client has a hard wall-clock timeout and response
+// bodies are never echoed, preventing provider errors from accidentally
+// reflecting credential material into setup output.
+func liveDirectInferenceProbe(provider, model, key string) error {
+	var endpoint string
+	var body []byte
+	headers := map[string]string{"Content-Type": "application/json"}
+	switch provider {
+	case "openai":
+		endpoint = "https://api.openai.com/v1/responses"
+		body, _ = json.Marshal(map[string]any{"model": model, "input": "Reply OK", "max_output_tokens": 16})
+		headers["Authorization"] = "Bearer " + key
+	case "anthropic":
+		endpoint = "https://api.anthropic.com/v1/messages"
+		body, _ = json.Marshal(map[string]any{"model": model, "max_tokens": 8, "messages": []map[string]string{{"role": "user", "content": "Reply OK"}}})
+		headers["x-api-key"] = key
+		headers["anthropic-version"] = "2023-06-01"
+	case "google":
+		endpoint = "https://generativelanguage.googleapis.com/v1beta/models/" + url.PathEscape(model) + ":generateContent"
+		body, _ = json.Marshal(map[string]any{"contents": []map[string]any{{"parts": []map[string]string{{"text": "Reply OK"}}}}, "generationConfig": map[string]int{"maxOutputTokens": 8}})
+		headers["x-goog-api-key"] = key
+	default:
+		return fmt.Errorf("unsupported provider")
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("could not build probe")
+	}
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	resp, err := (&http.Client{Timeout: directInferenceProbeTimeout}).Do(req)
+	if err != nil {
+		return fmt.Errorf("probe unavailable")
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 32<<10))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("provider rejected model request (HTTP %d)", resp.StatusCode)
+	}
+	return nil
+}
+
+func inferenceBindingCallable(cfg *config.Config, binding config.InferenceModelBinding) bool {
+	if cfg == nil || !binding.Available || !inferenceBindingAllowed(cfg, binding) {
+		return false
+	}
+	backend, ok := cfg.Inference.Backends[binding.Backend]
+	return ok && (backend.Auth != "1password" || binding.Verified)
 }
 
 func boundRuntimeID(b routing.Binding) string {
@@ -376,17 +508,18 @@ func compileInferenceRuntime(cfg *config.Config, now time.Time) (routing.Compile
 		manifest.Backends[name] = runtimeBackend{Driver: b.Driver, Protocol: b.Protocol, BaseURL: b.BaseURL, Auth: b.Auth, KeyEnv: b.KeyEnv}
 	}
 	for _, configured := range cfg.Inference.Models {
-		if !configured.Available || !inferenceBindingAllowed(cfg, configured) {
+		if !inferenceBindingCallable(cfg, configured) {
 			continue
 		}
-		b := routing.Binding{Model: configured.Model, Backend: configured.Backend, UpstreamID: configured.Upstream, Available: configured.Available}
+		b := routing.Binding{Model: configured.Model, Backend: configured.Backend, UpstreamID: configured.Upstream, Available: true}
 		m, ok := reg.Get(b.Model)
 		if !ok {
 			continue
 		}
 		manifest.Models = append(manifest.Models, runtimeModel{
 			ID: boundRuntimeID(b), CatalogModel: m.ID, Backend: b.Backend, Name: m.Label,
-			Reasoning: true, InputCost: m.InputPerMTok, OutputCost: m.OutputPerMTok,
+			Reasoning: true, AdaptiveThinking: m.AdaptiveThinking,
+			InputCost: m.InputPerMTok, OutputCost: m.OutputPerMTok,
 		})
 	}
 	sort.Slice(manifest.Models, func(i, j int) bool { return manifest.Models[i].ID < manifest.Models[j].ID })
@@ -450,7 +583,7 @@ func inferenceKitSpec(cfg *config.Config) (string, error) {
 	seenHost, seenCredential := map[string]bool{}, map[string]bool{}
 	referenced := map[string]bool{}
 	for _, binding := range cfg.Inference.Models {
-		if binding.Available && inferenceBindingAllowed(cfg, binding) {
+		if inferenceBindingCallable(cfg, binding) {
 			referenced[binding.Backend] = true
 		}
 	}

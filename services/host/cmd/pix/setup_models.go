@@ -372,14 +372,20 @@ func printSetupSummary(cfg *config.Config, env shellEnv, out io.Writer, models s
 	} else if callable == 0 {
 		line("⚠", "inference", fmt.Sprintf("%d configured model candidate(s); first sandbox inference is the live probe", candidates))
 	} else {
-		backends := make([]string, 0, len(cfg.Inference.Backends))
-		for name, backend := range cfg.Inference.Backends {
-			if inferenceBackendAllowed(cfg, backend, name) {
-				backends = append(backends, name)
+		seenBackends := map[string]bool{}
+		var backends []string
+		for _, binding := range cfg.Inference.Models {
+			if binding.Verified && inferenceBindingAllowed(cfg, binding) && !seenBackends[binding.Backend] {
+				seenBackends[binding.Backend] = true
+				backends = append(backends, binding.Backend)
 			}
 		}
 		sort.Strings(backends)
-		line("✓", "inference", fmt.Sprintf("%d callable model(s) via %s", callable, strings.Join(backends, ", ")))
+		detail := fmt.Sprintf("%d callable model(s) via %s", callable, strings.Join(backends, ", "))
+		if candidates > callable {
+			detail += fmt.Sprintf("; %d candidate(s) failed live verification", candidates-callable)
+		}
+		line("✓", "inference", detail)
 	}
 
 	if len(cfg.KnowledgeBundles) > 0 {

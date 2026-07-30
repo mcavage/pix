@@ -54,6 +54,7 @@ async function loadSubagents(env) {
 		});
 		assert.ok(reg.tool, "subagent tool registered");
 		assert.ok(reg.command, "/subagents command registered");
+		reg.mod = mod;
 		return reg;
 	} finally {
 		for (const k of ENV_KEYS) {
@@ -62,6 +63,16 @@ async function loadSubagents(env) {
 		}
 	}
 }
+
+test("curated children reload generated inference providers before subagents", async () => {
+	const reg = await loadSubagents({});
+	const self = path.join(agentDir, "extensions", "subagents.ts");
+	const inference = path.join(agentDir, "extensions", "inference.ts");
+	fs.mkdirSync(path.dirname(self), { recursive: true });
+	fs.writeFileSync(self, "");
+	fs.writeFileSync(inference, "");
+	assert.deepEqual(reg.mod.coreChildExtensionArgs(self), ["-e", inference, "-e", self]);
+});
 
 const ctx = { cwd: process.cwd(), hasUI: false, ui: null };
 const exec = (reg, params) =>

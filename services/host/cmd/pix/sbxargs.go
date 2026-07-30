@@ -273,21 +273,12 @@ type runLaunchPlan struct {
 //     sandbox is already absent) then a full create, so changed kit/mcp/
 //     create-only flags take effect. This is today's implicit recreate, now
 //     explicit and available for a RUNNING sandbox too.
-//   - --replace requested but the sandbox's existence could not be determined
-//     (state == sbxUnknown, i.e. the run lifecycle's OWN probe of `sbx ls`
-//     failed or sbx is unavailable): FAIL CLOSED, not create. "Replace" means
-//     "remove whatever is there, then create" — with no reliable read on
-//     whether there IS anything there, an unconditional create can collide
-//     with a sandbox that in fact exists (sbx may itself reattach it with
-//     stale kit/mcp/create-only flags, exactly what --replace exists to
-//     avoid), while RmFirst stays false regardless (planSandboxLaunch never
-//     rm's on an unknown probe) so the two paths would silently disagree about
-//     what "replacing" even did. Refusing before doing anything mirrors
-//     setup.go's own sbxUnknown fail-closed posture (runSetupHandoff) at this
-//     lifecycle's independent probe site, rather than assuming setup's guard
-//     covers every path that can reach a replace. A plain (non-replace) launch
-//     on sbxUnknown is unaffected — it still optimistically creates via
-//     willCreate, same as always.
+//
+// Unknown always fails closed, with or without --replace. `sbx run` may
+// reattach an existing sandbox, so guessing "absent" could replay runtime
+// arguments into a live session. The caller also uses willCreate before this
+// planner to gate create-only preparation; that predicate must return false
+// for unknown so a refused launch has no generated-kit or pack side effects.
 func planSandboxLaunch(state sbxState, replace bool, cfg *config.Config, o runOpts, version string) runLaunchPlan {
 	if state == sbxUnknown {
 		return runLaunchPlan{Err: fmt.Errorf("could not determine whether sandbox %q exists (`sbx ls` failed or sbx is unavailable); refusing to create or reattach blind — fix sbx and retry", o.Name)}
@@ -309,6 +300,9 @@ func planSandboxLaunch(state sbxState, replace bool, cfg *config.Config, o runOp
 // must never fail on a --dev/checkout problem it doesn't need) without
 // duplicating — and risking drifting from — planSandboxLaunch's own logic.
 func willCreate(state sbxState, replace bool) bool {
+	if state == sbxUnknown {
+		return false
+	}
 	if replace {
 		return true
 	}
@@ -325,15 +319,9 @@ func willCreate(state sbxState, replace bool) bool {
 // definitelyCreating reports whether the launch is CERTAIN to create a fresh
 // sandbox: a POSITIVE "not present" probe, or --replace when removal actually
 // happens (planSandboxLaunch only runs `sbx rm -f` for a POSITIVELY known
-// running/stopped sandbox). It deliberately differs from willCreate on
-// sbxUnknown (round-3 R3 + round-4 F3): willCreate optimistically prepares
-// create args when the probe FAILED — sbx itself may still re-attach the
-// existing sandbox, and on sbxUnknown even --replace skips the rm (RmFirst is
-// false), so the old sandbox can come back — so persisted create-time state
-// (the workspace sandbox.pack marker) must gate on THIS stricter predicate,
-// never on willCreate or on --replace alone, or a transient `sbx ls` failure
-// would overwrite the marker for a sandbox that was in fact re-attached (and
-// wrongly silence stalePackReattachWarning).
+// running/stopped sandbox). Unknown is false here just as it is in willCreate;
+// keep this stricter predicate for persisted create-time state because it also
+// documents that only positive creation evidence may update that state.
 func definitelyCreating(state sbxState, replace bool) bool {
 	return state == sbxAbsent || (replace && state != sbxUnknown)
 }

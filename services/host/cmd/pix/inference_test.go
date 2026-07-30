@@ -42,6 +42,24 @@ func TestCompileInferenceRuntimeNoModelAndExclusiveFiltering(t *testing.T) {
 	}
 }
 
+func TestCompileInferenceRuntimeCarriesAdaptiveThinkingFromCatalog(t *testing.T) {
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		Backends: map[string]config.InferenceBackend{
+			"gateway": {Driver: "openai-compatible", Protocol: "anthropic-messages", Auth: "sbx-session", BaseURL: "https://models.example.test"},
+		},
+		Models: []config.InferenceModelBinding{
+			{Model: "anthropic/claude-opus-5", Backend: "gateway", Upstream: "claude-opus-5", Available: true},
+		},
+	}}
+	_, manifest, err := compileInferenceRuntime(cfg, time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Models) != 1 || !manifest.Models[0].AdaptiveThinking {
+		t.Fatalf("adaptive thinking metadata missing: %+v", manifest.Models)
+	}
+}
+
 func TestConfigureDirectInferenceUsesCatalog(t *testing.T) {
 	cfg := &config.Config{}
 	if err := configureDirectInference(cfg, []string{"anthropic"}); err != nil {
@@ -57,6 +75,108 @@ func TestConfigureDirectInferenceUsesCatalog(t *testing.T) {
 		if b.Backend != "anthropic" || !b.Available {
 			t.Fatalf("binding = %+v", b)
 		}
+	}
+}
+
+func TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey(t *testing.T) {
+	const key = "sk-valid-looking-but-unauthorized"
+	for _, probeFailure := range []string{"provider rejected model request (HTTP 401)", "probe unavailable"} {
+		t.Run(probeFailure, func(t *testing.T) {
+			cfg := &config.Config{}
+			if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
+				t.Fatal(err)
+			}
+			env := shellEnv{
+				readFile: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil },
+				run: func(name string, args ...string) (string, error) {
+					if name == "op" && len(args) == 2 && args[0] == "read" {
+						return key + "\n", nil
+					}
+					return "", fmt.Errorf("unexpected command")
+				},
+				directInferenceProbe: func(provider, model, gotKey string) error {
+					if provider != "openai" || model == "" || gotKey != key {
+						return fmt.Errorf("bad probe args provider=%q model=%q key-match=%v", provider, model, gotKey == key)
+					}
+					return fmt.Errorf("%s", probeFailure)
+				},
+			}
+			attempted, verified, failures := verifyDirectInference(cfg, env)
+			if attempted != len(cfg.Inference.Models) || verified != 0 || len(failures) != attempted {
+				t.Fatalf("attempted=%d verified=%d failures=%v", attempted, verified, failures)
+			}
+			if strings.Contains(strings.Join(failures, " "), key) {
+				t.Fatal("probe failure leaked the resolved key")
+			}
+			for _, binding := range cfg.Inference.Models {
+				if binding.Verified || inferenceBindingCallable(cfg, binding) {
+					t.Fatalf("unverified binding became callable: %+v", binding)
+				}
+			}
+			models, err := callableRuntimeModels(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(models) != 0 {
+				t.Fatalf("unverified models advertised as callable: %v", models)
+			}
+		})
+	}
+}
+
+func TestDirectInferenceProbeVerifiesOnlySuccessfulModel(t *testing.T) {
+	cfg := &config.Config{}
+	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
+		t.Fatal(err)
+	}
+	env := shellEnv{
+		readFile: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil },
+		run:      func(string, ...string) (string, error) { return "secret\n", nil },
+		directInferenceProbe: func(provider, model, key string) error {
+			return nil
+		},
+	}
+	attempted, verified, failures := verifyDirectInference(cfg, env)
+	if attempted != len(cfg.Inference.Models) || verified != attempted || len(failures) != 0 {
+		t.Fatalf("attempted=%d verified=%d failures=%v", attempted, verified, failures)
+	}
+	models, err := callableRuntimeModels(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != attempted {
+		t.Fatalf("callable models = %v, want all %d successfully probed models", models, attempted)
+	}
+}
+
+func TestDirectInferenceProbePromotesBindingsIndependently(t *testing.T) {
+	cfg := &config.Config{}
+	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
+		t.Fatal(err)
+	}
+	env := shellEnv{
+		readFile: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil },
+		run:      func(string, ...string) (string, error) { return "secret\n", nil },
+		directInferenceProbe: func(provider, model, key string) error {
+			if strings.Contains(model, "sol") {
+				return fmt.Errorf("provider rejected model request (HTTP 403)")
+			}
+			return nil
+		},
+	}
+	attempted, verified, failures := verifyDirectInference(cfg, env)
+	if attempted != len(cfg.Inference.Models) || verified != attempted-1 || len(failures) != 1 {
+		t.Fatalf("attempted=%d verified=%d failures=%v", attempted, verified, failures)
+	}
+	for _, binding := range cfg.Inference.Models {
+		want := !strings.Contains(binding.Upstream, "sol")
+		if binding.Verified != want || inferenceBindingCallable(cfg, binding) != want {
+			t.Fatalf("binding verification was not independent: %+v want-callable=%v", binding, want)
+		}
+	}
+	checks := setupProvidersAxis(cfg, shellEnv{})
+	if len(checks) != 1 || checks[0].verdict != verdictReady || !strings.Contains(checks[0].detail, "did not pass live verification") {
+		t.Fatalf("partial verification summary = %+v", checks)
 	}
 }
 
@@ -119,6 +239,37 @@ func TestExclusiveKeylessInferenceIgnoresDormantOnePasswordBackend(t *testing.T)
 	}}
 	if inferenceNeedsOnePassword(cfg) {
 		t.Fatal("a dormant direct backend outside the exclusive runtime must not force 1Password")
+	}
+}
+
+func TestExclusiveBackendKeylessInferenceIgnoresDormantOnePasswordBackend(t *testing.T) {
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		Backends: map[string]config.InferenceBackend{
+			"direct":  {Driver: "native", Auth: "1password"},
+			"gateway": {Driver: "openai-compatible", Auth: "none", BaseURL: "http://127.0.0.1:9000/v1"},
+		},
+		Models: []config.InferenceModelBinding{
+			{Model: "anthropic/claude-sonnet-5", Backend: "direct", Upstream: "anthropic/claude-sonnet-5", Available: true},
+			{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true},
+		},
+		ExclusiveBackend: "gateway",
+	}}
+	if inferenceNeedsOnePassword(cfg) {
+		t.Fatal("a dormant direct backend outside the exclusive backend must not force 1Password")
+	}
+}
+
+func TestActiveUnverifiedOnePasswordBindingStillNeedsOnePassword(t *testing.T) {
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		Backends: map[string]config.InferenceBackend{
+			"direct": {Driver: "native", Auth: "1password"},
+		},
+		Models: []config.InferenceModelBinding{
+			{Model: "anthropic/claude-sonnet-5", Backend: "direct", Upstream: "anthropic/claude-sonnet-5", Available: false},
+		},
+	}}
+	if !inferenceNeedsOnePassword(cfg) {
+		t.Fatal("an allowed direct binding needs 1Password before availability is verified")
 	}
 }
 

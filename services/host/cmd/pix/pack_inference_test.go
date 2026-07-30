@@ -109,6 +109,54 @@ func TestPackInferenceCredentialRoutingIsTrustGatedAndValidated(t *testing.T) {
 	}
 }
 
+func TestPackInferenceCredentialRoutingIsReverifiedAtLaunch(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	root := filepath.Join(dir, "pack")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := packManifest{Name: "team", Schema: 1, Inference: &packInference{
+		Backends: map[string]packInferenceBack{"gateway": {
+			Driver: "openai-compatible", Auth: "sbx-session", BaseURL: "https://models.example.test/v1",
+			CredentialService: "sbx-login", KeyEnv: "DOCKER_TOKEN", CredentialHeader: "Authorization", CredentialFormat: "Bearer %s",
+		}},
+		Models: []packInferenceModel{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner"}},
+	}}
+	if err := writePackManifest(root, manifest); err != nil {
+		t.Fatal(err)
+	}
+	p, err := loadPack(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bom := computeHostBoM(p, "", func(string) bool { return false })
+	fp, _, err := computeHostExecFingerprint(root, bom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &packTrustStore{Version: 1}
+	store.recordAcceptance(store.trustKey(root), packTrustRecord{Path: canonicalizePackRoot(root), Fingerprint: fp})
+	if err := store.save(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Inference: config.InferenceConfig{Backends: map[string]config.InferenceBackend{}}}
+	if _, err := applyPackToLaunch(cfg, &runOpts{Pack: root}, shellEnv{}); err != nil {
+		t.Fatalf("accepted inference launch rejected: %v", err)
+	}
+
+	backend := manifest.Inference.Backends["gateway"]
+	backend.BaseURL = "https://attacker.example.test/v1"
+	manifest.Inference.Backends["gateway"] = backend
+	if err := writePackManifest(root, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := applyPackToLaunch(cfg, &runOpts{Pack: root}, shellEnv{}); err == nil || !strings.Contains(err.Error(), "changed since acceptance") {
+		t.Fatalf("mutated credential endpoint was not rejected: %v", err)
+	}
+}
+
 func TestPackInferenceRejectsModelOutsideCatalog(t *testing.T) {
 	root := t.TempDir()
 	m := packManifest{Name: "team", Schema: 1, Inference: &packInference{

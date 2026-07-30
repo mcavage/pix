@@ -119,14 +119,15 @@ func runSetupCmd(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", parseErr, setupUsage)
 		os.Exit(2)
 	}
-	if len(parsed.withSetup) > 0 && len(parsed.packs) == 0 {
-		fmt.Fprintf(os.Stderr, "pix setup: --with requires --pack\n\n%s", setupUsage)
-		os.Exit(2)
+	// Load + validate every built-in semantic flag/value before prerequisites,
+	// pack adoption, setup hooks, or browser-capable authorization. The later
+	// host phase repeats the same pure validator for direct/test callers.
+	preflightCfg, cfgErr := config.Load()
+	if cfgErr != nil {
+		fmt.Fprintf(os.Stderr, "pix setup: loading config: %v\n", cfgErr)
+		os.Exit(1)
 	}
-	// Semantic argument relationships must fail before pack adoption, setup
-	// hooks, or browser-capable authorization. setupHostPhase repeats this check
-	// for direct callers, but runSetupCmd owns the earlier mutation boundary.
-	if err := checkGoogleWorkspaceFlags(parsed); err != nil {
+	if err := validateSetupSemantics(parsed, preflightCfg, env, hostBinaryResolver); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", err, setupUsage)
 		os.Exit(2)
 	}
@@ -536,26 +537,53 @@ func takeSetupInventory(env shellEnv, opts onboardOpts) (setupInventory, error) 
 		return setupInventory{}, fmt.Errorf("loading config: %w", err)
 	}
 	inv := setupInventory{
-		cfg:     cfg,
-		retired: cfg.RetiredKeys(),
-		proposal: &onboardingResult{
-			Version:           1,
-			MCP:               opts.mcp,
-			OllamaBridgeModel: strings.TrimSpace(opts.model),
-		},
-	}
-	if k := strings.TrimSpace(opts.knowledge); k != "" {
-		inv.proposal.Knowledge = &onboardKnowledge{Action: "use", Source: k}
+		cfg:      cfg,
+		retired:  cfg.RetiredKeys(),
+		proposal: setupProposal(opts),
 	}
 	return inv, nil
+}
+
+// setupProposal is the single flag -> proposal translation used by both the
+// pre-adoption semantic validator and the later inventory/mutation phase.
+// Keeping one constructor prevents the early safety boundary from accepting a
+// value that the host phase interprets differently.
+func setupProposal(opts onboardOpts) *onboardingResult {
+	p := &onboardingResult{
+		Version:           1,
+		MCP:               append([]string(nil), opts.mcp...),
+		OllamaBridgeModel: strings.TrimSpace(opts.model),
+	}
+	if k := strings.TrimSpace(opts.knowledge); k != "" {
+		p.Knowledge = &onboardKnowledge{Action: "use", Source: k}
+	}
+	return p
+}
+
+// validateSetupSemantics checks only built-in argument meaning. It performs no
+// writes and opens no authorization flow, so runSetupCmd can call it before the
+// first pack is adopted. External readiness (catalog OAuth, provider reachability,
+// model pulls) remains in the later gate/verify phases.
+func validateSetupSemantics(opts onboardOpts, cfg *config.Config, env shellEnv, hostResolver func() (string, error)) error {
+	if len(opts.withSetup) > 0 && len(opts.packs) == 0 {
+		return errUsage{fmt.Errorf("--with requires --pack")}
+	}
+	if err := checkGoogleWorkspaceFlags(opts); err != nil {
+		return err
+	}
+	if err := validateOnboardingResult(setupProposal(opts), cfg, env, hostResolver); err != nil {
+		return errUsage{err}
+	}
+	return nil
 }
 
 // setupGate is every precondition that must hold BEFORE the first mutation.
 // Each failure names the exact command that fixes it and returns an error, so
 // nothing is half-written when a run cannot succeed:
 //
-//   - an invalid --mcp/--knowledge/--model is an argument mistake and fails
-//     first, before any probe runs;
+// Built-in semantic flag/value validation has already run before pack adoption
+// in runSetupCmd (and immediately after inventory for direct callers). This gate
+// owns only external readiness that cannot be established from argument meaning:
 //   - a shipped-catalog MCP remote that is not registered AND auth-ready fails
 //     here rather than being persisted on the promise of a later fix;
 //
@@ -565,9 +593,6 @@ func takeSetupInventory(env shellEnv, opts onboardOpts) (setupInventory, error) 
 // and fails closed before it writes anything, so a gate copy would be a second
 // implementation of the same rule that could drift from it.
 func setupGate(env shellEnv, inv setupInventory, out io.Writer, interactive bool) error {
-	if err := validateOnboardingResult(inv.proposal, inv.cfg, env, hostBinaryResolver); err != nil {
-		return err
-	}
 	// Shipped-catalog remotes (mcpCatalogNames) must be registered AND
 	// auth-ready BEFORE setup writes anything — setup must never claim success
 	// for a server the gateway cannot spawn or that 401s on first use. The gate
@@ -653,7 +678,22 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 			if err := configureDirectInference(cfg, providers); err != nil {
 				return fmt.Errorf("configuring direct inference: %w", err)
 			}
-			return cfg.Save()
+			attempted, verified, failures := verifyDirectInference(cfg, env)
+			if err := cfg.Save(); err != nil {
+				return err
+			}
+			if verified == 0 && (attempted > 0 || len(failures) > 0) {
+				detail := strings.Join(failures, "; ")
+				if detail == "" {
+					detail = "no provider accepted a model-specific request"
+				}
+				return fmt.Errorf("provider keys resolved, but live inference verification failed: %s", detail)
+			}
+			if verified > 0 && len(failures) > 0 {
+				fmt.Fprintf(out, "  inference: %d model(s) verified; %d candidate(s) unavailable or unauthorized (%s)\n",
+					verified, len(failures), strings.Join(failures, "; "))
+			}
+			return nil
 		},
 	}, {
 		name:  "config",
@@ -808,18 +848,11 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	if perr != nil {
 		return errUsage{perr}
 	}
-	// --account/--credentials are Google Workspace inputs and are meaningless
-	// without the opt-in. Rejecting them here deletes the old ability to set an
-	// account without completing OAuth: there is no path that writes
-	// google_workspace_account except the transaction itself.
 	if opts.apply {
 		// --apply is intercepted by runSetupCmd (it reconciles a pending
 		// onboarding.json and stops). Reaching the host phase with it set means
 		// a caller bypassed that route, which would silently ignore the flag.
 		return errUsage{fmt.Errorf("--apply is handled before the host phase; run `pix setup [DIR] --apply`")}
-	}
-	if err := checkGoogleWorkspaceFlags(opts); err != nil {
-		return err
 	}
 	// Interactive prompts fire on any real TTY unless the caller explicitly opted
 	// out with --yes/-y/--non-interactive (opts.assumeYes). Ordinary VALUE flags
@@ -834,6 +867,9 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	setupPhaseHeader(out, setupPhaseInventory, "")
 	inv, err := takeSetupInventory(env, opts)
 	if err != nil {
+		return err
+	}
+	if err := validateSetupSemantics(opts, inv.cfg, env, hostBinaryResolver); err != nil {
 		return err
 	}
 	if len(inv.retired) > 0 {
@@ -977,8 +1013,12 @@ func setupProvidersAxis(cfg *config.Config, env shellEnv) []check {
 			}
 		}
 		if callable > 0 {
+			detail := fmt.Sprintf("%d callable model(s)", callable)
+			if candidates > callable {
+				detail += fmt.Sprintf("; %d candidate(s) did not pass live verification", candidates-callable)
+			}
 			return []check{{label: "inference", requirement: requirementCore, verdict: verdictReady,
-				detail: fmt.Sprintf("%d callable model(s)", callable), evidence: "availability-specific bindings compiled"}}
+				detail: detail, evidence: "model-specific live inference probes"}}
 		}
 		if candidates > 0 {
 			return []check{{label: "inference", requirement: requirementCore, verdict: verdictUnverifiable,

@@ -123,7 +123,7 @@ func configuredBindingForModel(cfg *config.Config, model string) (config.Inferen
 	}
 	for _, b := range cfg.Inference.Models {
 		runtimeID := boundRuntimeID(routing.Binding{Model: b.Model, Backend: b.Backend, UpstreamID: b.Upstream, Available: b.Available})
-		if (b.Model == model || runtimeID == model) && b.Available && inferenceBindingAllowed(cfg, b) {
+		if (b.Model == model || runtimeID == model) && inferenceBindingCallable(cfg, b) {
 			return b, true
 		}
 	}
@@ -152,7 +152,7 @@ func configuredInferenceSummary(cfg *config.Config) (int, []string) {
 	var backends []string
 	count := 0
 	for _, b := range cfg.Inference.Models {
-		if !b.Available || !inferenceBindingAllowed(cfg, b) {
+		if !inferenceBindingCallable(cfg, b) {
 			continue
 		}
 		count++

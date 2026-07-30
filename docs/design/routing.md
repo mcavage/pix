@@ -191,7 +191,10 @@ is baked at `~/.pi/agent/routing.json` next to `capabilities.json`.
 
 ## Adding a model later (the whole point)
 
-1. Add one entry to `models.json` (`id`, `provider`, prices, `available:true`).
+1. Add one entry to `models.json` (`id`, `provider`, prices, `available:true`,
+   plus transport capability metadata such as `adaptive_thinking:true` when the
+   upstream requires it). Runtime providers consume this catalog metadata; they
+   never infer protocol behavior from a model-name substring.
 2. Hand-add its scores to `scorecard.json` (from published benchmarks/model
    cards).
 3. `pix route compile` and `make load`.

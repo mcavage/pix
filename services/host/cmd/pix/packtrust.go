@@ -101,6 +101,35 @@ func (b hostBoM) tier1() bool {
 	return len(b.MCP) > 0 || len(b.Containers) > 0 || len(b.RemoteMCP) > 0 || len(b.Proxies) > 0 || len(b.Bins) > 0 || len(b.Setup) > 0 || len(b.Inference) > 0
 }
 
+// verifyPackInferenceTrust closes the adoption-to-launch gap for credential-
+// routing inference. A pack remains mutable after `pack use`; before a sandbox
+// consumes its endpoint/service/header policy, recompute the accepted surface
+// and require an exact launcher-owned trust-store match.
+func verifyPackInferenceTrust(p *packInfo, cfgGogAccount string, env shellEnv) error {
+	if p == nil {
+		return nil
+	}
+	bom := computeHostBoM(p, cfgGogAccount, localMCPClassifier(env, hostBinaryResolver))
+	if len(bom.Inference) == 0 {
+		return nil
+	}
+	fp, _, err := computeHostExecFingerprint(p.Root, bom)
+	if err != nil {
+		return fmt.Errorf("pack %s inference trust surface: %w", p.Manifest.Name, err)
+	}
+	return withPackTrustLock(func() error {
+		store, err := loadPackTrustStore()
+		if err != nil {
+			return fmt.Errorf("pack trust state unreadable: %w", err)
+		}
+		key := store.trustKey(p.Root)
+		if got, ok := store.acceptedFingerprint(key); !ok || got != fp {
+			return fmt.Errorf("pack %s inference credential routing is not accepted (or changed since acceptance) — run `pix pack use %s` to review it", p.Manifest.Name, p.Root)
+		}
+		return nil
+	})
+}
+
 // localMCPClassifier resolves mcpRegistrar's local-vs-gateway partition into
 // a predicate: TRUE for a name treated as a LOCAL stdio server this host runs
 // (`pix-host mcp --list`) — i.e. attaching it spawns a host command.

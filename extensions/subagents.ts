@@ -10,9 +10,10 @@
 //      ports, so the child's listen throws EADDRINUSE, the error is swallowed,
 //      the factory promise never resolves, and the child DEADLOCKS at startup
 //      before running a turn. We spawn every child with
-//      `--no-extensions -e <this file>`: no auto-discovered extensions (nothing
-//      binds a port), but this extension is re-added explicitly so subagent
-//      TREES still work.
+//      `--no-extensions -e <inference> -e <this file>`: no auto-discovered
+//      extensions (nothing binds a port), while the generated model providers
+//      and this extension are re-added explicitly so routed models and subagent
+//      TREES both work.
 //
 //   2) STABILITY PILLAR #2 — a real watchdog. pi has no client read timeout, so
 //      a dead SSE stream spins a child forever. Every child gets an inactivity
@@ -95,7 +96,7 @@ const MAX_DEPTH = (() => {
 })();
 // Host mode (docs/design/host-mode.md) sets PI_SUBAGENT_DISABLED=1 as a
 // first-class, explicit refusal — belt-and-suspenders with PI_SUBAGENT_MAX_DEPTH=0
-// (also set there). Children spawn as `pi --no-extensions -e <this file>`, which
+// (also set there). Children spawn with a curated explicit extension set, which
 // bypasses extensions/host-guard.ts entirely and inherits the full env
 // (credentials included) with no sandbox underneath either. Checked FIRST in the
 // tool (host-mode-specific message before the generic depth-limit text) AND
@@ -104,7 +105,7 @@ const MAX_DEPTH = (() => {
 // Boolean(env) would treat "0"/"false" as disabled too.
 const SUBAGENTS_DISABLED = process.env.PI_SUBAGENT_DISABLED === "1";
 const SUBAGENTS_DISABLED_MSG =
-	"Subagents are disabled in host mode (PI_SUBAGENT_DISABLED=1). Children spawn as `pi --no-extensions -e <subagents.ts>`, which bypasses the host-guard tool_call extension and inherits the full environment (credentials included) with no sandbox underneath. Do the work directly in this session instead of delegating. See docs/design/host-mode.md.";
+	"Subagents are disabled in host mode (PI_SUBAGENT_DISABLED=1). Children spawn with `pi --no-extensions` plus a curated provider/subagent extension set, which bypasses the host-guard tool_call extension and inherits the full environment (credentials included) with no sandbox underneath. Do the work directly in this session instead of delegating. See docs/design/host-mode.md.";
 const CURRENT_DEPTH = Math.max(
 	0,
 	Math.floor(Number(process.env.PI_SUBAGENT_DEPTH) || 0),
@@ -354,6 +355,20 @@ try {
 	if (fs.existsSync(p)) SELF_PATH = p;
 } catch {
 	/* trees disabled if we can't find ourselves; stability unaffected */
+}
+
+// inference.ts is headless-safe (it only registers generated providers) and is
+// required whenever routing resolves to a non-native backend such as a work or
+// personal gateway. Omitting it made `pi --list-models` succeed in the parent
+// while every routed child failed immediately with "Model not found".
+export function coreChildExtensionArgs(selfPath: string | null = SELF_PATH): string[] {
+	const args: string[] = [];
+	if (selfPath) {
+		const inferencePath = path.join(path.dirname(selfPath), "inference.ts");
+		if (fs.existsSync(inferencePath)) args.push("-e", inferencePath);
+		args.push("-e", selfPath);
+	}
+	return args;
 }
 
 // Extensions re-added to the child on top of --no-extensions. The blanket
@@ -1231,9 +1246,10 @@ async function runSingle(
 	}
 	// STABILITY: re-add ONLY safe extensions on top of --no-extensions so trees +
 	// web research work without the port-binding extensions that deadlock a
-	// fully-loaded child. SELF_PATH = subagents (trees); WEB_ACCESS = web_search
-	// et al (headless-safe, see resolveWebAccessExtensions).
-	if (SELF_PATH) args.push("-e", SELF_PATH);
+	// fully-loaded child. The core set is inference.ts (generated gateway model
+	// registry) + SELF_PATH (trees); WEB_ACCESS adds web_search et al
+	// (headless-safe, see resolveWebAccessExtensions).
+	args.push(...coreChildExtensionArgs());
 	// Web is on by default; a hermetic agent opts out with `web: false` so its
 	// (possibly sensitive) context never reaches a search provider. When off we
 	// don't even LOAD the extension — clean for restricted and unrestricted alike.

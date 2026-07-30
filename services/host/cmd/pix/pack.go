@@ -746,9 +746,6 @@ func applyPackStackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (strin
 		if err != nil {
 			return "", err
 		}
-		if err := applyPackInference(cfg, p.Manifest.Inference, applied); err != nil {
-			return "", err
-		}
 		for _, name := range packMcpNames(p) {
 			if !containsStr(o.StaticMCP, name) {
 				o.StaticMCP = append(o.StaticMCP, name)
@@ -1347,6 +1344,15 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, er
 		// failure): fail the launch closed. Creating a sandbox from a broken or
 		// tampered active pack would silently drop its declared context.
 		return "", fmt.Errorf("active pack %s: %v (refusing to launch without the pack's declared context; fix the pack or `pix pack rm` to detach it)", packRoot, err)
+	}
+	if err := verifyPackInferenceTrust(p, cfg.GogAccount, env); err != nil {
+		return "", err
+	}
+	// Apply the exact manifest snapshot whose trust surface was just verified.
+	// Reloading before projection would reopen a verify-then-use window for
+	// credential endpoint metadata.
+	if err := applyPackInference(cfg, p.Manifest.Inference, p.Root); err != nil {
+		return "", err
 	}
 	if p.SkillsDir != "" && !containsStr(o.Skills, p.SkillsDir) {
 		o.Skills = append(o.Skills, p.SkillsDir)

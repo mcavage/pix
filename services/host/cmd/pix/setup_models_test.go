@@ -114,6 +114,17 @@ func modelsSetupEnv(t *testing.T, w *ollamaWorld) shellEnv {
 	}
 }
 
+func stubLiveInferenceOK(env *shellEnv) {
+	run := env.run
+	env.run = func(name string, args ...string) (string, error) {
+		if name == "op" && len(args) == 2 && args[0] == "read" {
+			return "test-provider-key\n", nil
+		}
+		return run(name, args...)
+	}
+	env.directInferenceProbe = func(string, string, string) error { return nil }
+}
+
 // stubProvisionKeysOK bypasses the (separately tested) strict 1Password key
 // flow so these tests exercise only the S08 model/summary machinery.
 func stubProvisionKeysOK(t *testing.T) {
@@ -368,6 +379,7 @@ func TestSetup_UnknownKeysNotCalledRetired(t *testing.T) {
 func TestSetupModels_ExactSummary(t *testing.T) {
 	w := &ollamaWorld{have: map[string]bool{"qwen3.5:9b": true, "nomic-embed-text": true}}
 	env := modelsSetupEnv(t, w)
+	stubLiveInferenceOK(&env)
 	stubProvisionKeysOK(t)
 	var out bytes.Buffer
 	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
@@ -390,6 +402,7 @@ func TestSetupModels_ExactSummary(t *testing.T) {
 func TestSetupModels_SummaryProvisionedWhenCoreReady(t *testing.T) {
 	w := &ollamaWorld{have: map[string]bool{"qwen3.5:9b": true, "nomic-embed-text": true}}
 	env := modelsSetupEnv(t, w)
+	stubLiveInferenceOK(&env)
 	stubProvisionKeysOK(t)
 
 	// Pre-create a non-empty default pack and activate it in config, plus a

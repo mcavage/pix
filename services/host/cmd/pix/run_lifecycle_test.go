@@ -138,14 +138,8 @@ func TestPlanSandboxLaunch_UnknownFailsClosed(t *testing.T) {
 	}
 }
 
-// TestPlanSandboxLaunch_ReplaceOnUnknown_FailsClosed (item 5): --replace
-// requested but the sandbox's existence could not be determined (sbxUnknown,
-// i.e. the probe itself failed) must NOT build a create or a reattach plan —
-// it must return an error and leave Args/RmFirst/Reattach at their zero
-// values, so the caller errors out before ever claiming "replacing" or
-// touching sbx. This is deliberately DIFFERENT from a plain (non-replace)
-// launch on sbxUnknown, which still optimistically creates (see
-// TestPlanSandboxLaunch_UnknownCreates).
+// Replace on unknown follows the same fail-closed rule as a plain launch and
+// carries no action in its plan.
 func TestPlanSandboxLaunch_ReplaceOnUnknown_FailsClosed(t *testing.T) {
 	cfg := &config.Config{}
 	o := runOpts{Workspace: ".", Name: "pix-t", Replace: true}
@@ -385,6 +379,7 @@ func TestWillCreate_MatchesPlanSandboxLaunchReattachDecision(t *testing.T) {
 		{sbxRunning, true, true},
 		{sbxStopped, true, true},
 		{sbxAbsent, true, true},
+		{sbxUnknown, true, false},
 	} {
 		got := willCreate(tc.state, tc.replace)
 		if got != tc.want {

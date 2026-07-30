@@ -386,6 +386,10 @@ type mcpRegistrar struct {
 	gog     string // absolute gog (only needed to register gog)
 	account string // gog --account value
 	hostBin string // absolute pix-host (for slack + other host subcommands)
+	// gogUseOp is true only for gog's explicit file-keyring topology, where
+	// GOG_KEYRING_PASSWORD is an op:// ref. Normal macOS OAuth lives in gog's
+	// own keychain and must stay bare even when unrelated pack servers use op.
+	gogUseOp bool
 	// containers maps a server name to its pack CONTAINER/REMOTE spec (Manifest,
 	// Image, or RemoteURL). A Manifest name registers via `--local --url` (gateway
 	// resolves the OCI image; creds Docker-side; never op-run wrapped). An Image
@@ -483,7 +487,7 @@ func (m mcpRegistrar) addArgs(name string) []string {
 // them above.
 func (m mcpRegistrar) execArgv(name string) []string {
 	cmd := m.serverCmd(name)
-	if m.opRefs == "" {
+	if m.opRefs == "" || (name == gwServerName && !m.gogUseOp) {
 		return cmd
 	}
 	return append(opRunWrapPrefix(m.op, m.opRefs), cmd...)
@@ -525,7 +529,7 @@ func rawAddArgs(name string, argv []string) []string {
 // mirrors registerServers' opReady gate, where op and op-refs are only ever
 // used together.
 func gogRegisteredArgv(gogBin, opBin, opRefs, account string) []string {
-	return mcpRegistrar{gog: gogBin, account: account, op: opBin, opRefs: opRefs}.execArgv(gwServerName)
+	return mcpRegistrar{gog: gogBin, account: account, op: opBin, opRefs: opRefs, gogUseOp: opRefs != ""}.execArgv(gwServerName)
 }
 
 // gogBareRegistrationNote is the ONE shared message printed whenever gog is
@@ -562,6 +566,7 @@ func buildGogRegistrar(env shellEnv, gogPath, account string) mcpRegistrar {
 	if opErr == nil && opRefs != "" && opRefFilled(env, "GOG_KEYRING_PASSWORD") {
 		reg.op = opPath
 		reg.opRefs = opRefs
+		reg.gogUseOp = true
 	}
 	return reg
 }
@@ -690,8 +695,9 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	}
 
 	// Resolve op + op-refs. op-refs is the file of op:// refs the wrapper resolves
-	// at spawn; when both op and op-refs are present we wrap every server in
-	// `op run`. When either is absent we register BARE (1Password is optional):
+	// at spawn; when both op and op-refs are present we wrap credentialed local
+	// servers in `op run`. Normal gog OAuth remains bare unless the refs file
+	// explicitly contains GOG_KEYRING_PASSWORD. When either is absent we register BARE:
 	// a no-creds server registers fine, and a creds server runs uncredentialed
 	// until an op-refs.env is added — never a hard failure.
 	opPath, opErr := lookPath("op")
@@ -702,6 +708,9 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	if opReady {
 		reg.op = opPath
 		reg.opRefs = opRefs
+	}
+	if wantGog {
+		reg.gogUseOp = opReady && opRefFilled(env, "GOG_KEYRING_PASSWORD")
 	}
 
 	if !opReady {
@@ -835,7 +844,17 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	}
 
 	if sbxOK {
-		if reg.opRefs != "" && !env.quiet {
+		wrapped := false
+		if reg.op != "" && reg.opRefs != "" {
+			for _, name := range finalNames {
+				argv := reg.execArgv(name)
+				if len(argv) > 1 && argv[0] == reg.op && argv[1] == "run" {
+					wrapped = true
+					break
+				}
+			}
+		}
+		if wrapped && !env.quiet {
 			fmt.Fprintf(out, "Each wrapped server resolves its creds from %s via op run at gateway spawn.\n", reg.opRefs)
 		}
 	} else {

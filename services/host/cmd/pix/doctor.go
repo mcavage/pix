@@ -76,6 +76,9 @@ type shellEnv struct {
 	// that don't exercise Slack setup/status; defaultShellEnv wires the real
 	// HTTPS call (slack.go's liveSlackAuthTest).
 	slackAuthTest func(token string) (slackIdentity, error)
+	// directInferenceProbe performs one bounded, model-specific provider call.
+	// The key is held only in memory and must never appear in returned errors.
+	directInferenceProbe func(provider, model, key string) error
 }
 
 // probeTimeout bounds every registered-command probe so doctor can never wedge
@@ -201,8 +204,9 @@ func defaultShellEnv() shellEnv {
 			}
 			return err
 		},
-		identityProbe: rpcIdentityProbe,
-		slackAuthTest: liveSlackAuthTest,
+		identityProbe:        rpcIdentityProbe,
+		slackAuthTest:        liveSlackAuthTest,
+		directInferenceProbe: liveDirectInferenceProbe,
 	}
 }
 

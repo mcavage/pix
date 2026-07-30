@@ -475,7 +475,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		// registration entirely. Any rollback failure is folded into the
 		// returned error explicitly rather than swallowed.
 		if rerr := gogSetupRollbackRegistration(env, snap); rerr != nil {
-			return fmt.Errorf("saving config: %w; additionally, rollback of the gog registration failed: %v; fix by hand (sbx mcp inspect gog / sbx mcp rm gog)", err, rerr)
+			return fmt.Errorf("saving config: %w; additionally, rollback of the Google Workspace registration failed: %v; fix by hand (sbx mcp inspect %s / sbx mcp rm %s)", err, rerr, gwServerName, gwServerName)
 		}
 		return fmt.Errorf("saving config: %w (gog registration rolled back so config and the gateway stay in sync)", err)
 	}
@@ -560,7 +560,7 @@ type gogRegSnapshot struct {
 //   - the listing succeeds and gog is NOT in it           -> gogRegAbsent
 //   - the listing succeeds, gog IS in it, but the detailed
 //     command can't be read/parsed (registeredGogCommand's
-//     own `sbx mcp inspect gog` + `sbx mcp ls -o json` probes
+//     own `sbx mcp inspect google-workspace` + `sbx mcp ls -o json` probes
 //     both come up empty, quoted, or malformed)            -> gogRegUnknown
 //   - the listing succeeds, gog IS in it, and the detailed
 //     command parses cleanly                               -> gogRegPresent(argv)

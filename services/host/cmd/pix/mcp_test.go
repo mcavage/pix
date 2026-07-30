@@ -17,11 +17,12 @@ func hostStub(path string, err error) func() (string, error) {
 // gogRegistrar returns a registrar with fixed absolutes for builder tests.
 func gogRegistrar() mcpRegistrar {
 	return mcpRegistrar{
-		op:      "/usr/bin/op",
-		opRefs:  "/abs/config/op-refs.env",
-		gog:     "/usr/bin/gog",
-		account: "me@x.com",
-		hostBin: "/usr/bin/pix-host",
+		op:       "/usr/bin/op",
+		opRefs:   "/abs/config/op-refs.env",
+		gog:      "/usr/bin/gog",
+		account:  "me@x.com",
+		hostBin:  "/usr/bin/pix-host",
+		gogUseOp: true,
 	}
 }
 
@@ -506,6 +507,9 @@ func TestRegisterServers_Registers(t *testing.T) {
 	// Provide success output for the exact sbx call the registrar builds.
 	reg := mcpRegistrar{op: "/usr/bin/op", opRefs: "/fake/config/op-refs.env", gog: "/usr/bin/gog", account: "me@x.com"}
 	key := strings.Join(append([]string{"sbx"}, reg.addArgs(gwServerName)...), " ")
+	if strings.Contains(key, "--command /usr/bin/op") {
+		t.Fatalf("unrelated op-refs must not wrap normal gog OAuth: %s", key)
+	}
 	f.output[key] = "ok"
 	var buf bytes.Buffer
 	if err := registerServers(cfg, f.env(), &buf, []string{gwServerName}, hostStub("", nil), nil); err != nil {
@@ -513,6 +517,9 @@ func TestRegisterServers_Registers(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "registered: google-workspace") {
 		t.Errorf("expected registered: google-workspace, got:\n%s", buf.String())
+	}
+	if strings.Contains(buf.String(), "Each wrapped server") {
+		t.Errorf("bare gog registration claimed to use an op wrapper:\n%s", buf.String())
 	}
 }
 

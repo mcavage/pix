@@ -29,16 +29,17 @@ var defaults embed.FS
 // a single entry in models.json; everything downstream (resolver, compile)
 // picks it up with no code change.
 type Model struct {
-	ID            string   `json:"id"`               // fully qualified provider/id
-	Provider      string   `json:"provider"`         // "anthropic", "openai", "ollama", ...
-	Family        string   `json:"family,omitempty"` // claude, gpt, gemini, glm, ...
-	Label         string   `json:"label"`            // human label
-	InputPerMTok  float64  `json:"input_per_mtok"`   // USD per 1M input tokens
-	OutputPerMTok float64  `json:"output_per_mtok"`
-	Local         bool     `json:"local"`     // Ollama/DMR: unmetered
-	Available     bool     `json:"available"` // wired/callable in this stack now
-	Aliases       []string `json:"aliases,omitempty"`
-	Notes         string   `json:"notes,omitempty"`
+	ID               string   `json:"id"`               // fully qualified provider/id
+	Provider         string   `json:"provider"`         // "anthropic", "openai", "ollama", ...
+	Family           string   `json:"family,omitempty"` // claude, gpt, gemini, glm, ...
+	Label            string   `json:"label"`            // human label
+	InputPerMTok     float64  `json:"input_per_mtok"`   // USD per 1M input tokens
+	OutputPerMTok    float64  `json:"output_per_mtok"`
+	Local            bool     `json:"local"`                       // Ollama/DMR: unmetered
+	Available        bool     `json:"available"`                   // wired/callable in this stack now
+	AdaptiveThinking bool     `json:"adaptive_thinking,omitempty"` // Anthropic adaptive-thinking request shape
+	Aliases          []string `json:"aliases,omitempty"`
+	Notes            string   `json:"notes,omitempty"`
 }
 
 // Binding is the availability boundary between the shipped catalog and a

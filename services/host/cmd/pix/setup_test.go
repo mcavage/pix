@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -95,6 +97,109 @@ func TestRunSetupCore_PropagatesHostPhaseError(t *testing.T) {
 	stub := func(shellEnv, []string, io.Reader, io.Writer, bool) error { return wantErr }
 	if err := runSetupCore(shellEnv{}, ".", nil, strings.NewReader(""), &bytes.Buffer{}, false, stub); err != wantErr {
 		t.Errorf("expected hostPhase's own error to propagate, got %v", err)
+	}
+}
+
+// Semantic flag/value mistakes are rejected by the pre-adoption validator.
+// This function is deliberately pure/read-only: runSetupCmd invokes it before
+// pack use, pack hooks, OAuth, prerequisites, or any host-state mutation.
+func TestValidateSetupSemantics_RejectsBeforeMutationBoundary(t *testing.T) {
+	cfg := &config.Config{}
+	env := shellEnv{run: func(string, ...string) (string, error) {
+		t.Fatal("semantic validation must not execute a command for these invalid inputs")
+		return "", nil
+	}}
+	resolver := func() (string, error) { return "", fmt.Errorf("not available") }
+
+	cases := []struct {
+		name string
+		opts onboardOpts
+		want string
+	}{
+		{"with without pack", onboardOpts{withSetup: []string{"oauth"}}, "--with requires --pack"},
+		{"account without opt-in", onboardOpts{account: "me@example.com"}, "--account requires --google-workspace"},
+		{"credentials without opt-in", onboardOpts{credentials: "/tmp/client.json"}, "--credentials requires --google-workspace"},
+		{"unknown mcp", onboardOpts{mcp: []string{"not-a-real-server"}}, "not an allowlisted server"},
+		{"model whitespace", onboardOpts{model: "bad model"}, "must not contain whitespace"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateSetupSemantics(tc.opts, cfg, env, resolver)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validateSetupSemantics() error = %v, want containing %q", err, tc.want)
+			}
+			var usage errUsage
+			if !errors.As(err, &usage) {
+				t.Fatalf("semantic error must map to usage/exit 2, got %T: %v", err, err)
+			}
+		})
+	}
+}
+
+func TestValidateSetupSemantics_AcceptsValidCatalogAndGoogleOptions(t *testing.T) {
+	opts := onboardOpts{
+		googleWorkspace: true,
+		account:         "me@example.com",
+		credentials:     "/tmp/client.json",
+		packs:           []string{"team-pack"},
+		withSetup:       []string{"oauth"},
+		mcp:             []string{"notion"},
+		model:           "qwen3.5:9b",
+		knowledge:       "/tmp/knowledge",
+	}
+	if err := validateSetupSemantics(opts, &config.Config{}, shellEnv{}, noHostResolver); err != nil {
+		t.Fatalf("valid setup semantics rejected: %v", err)
+	}
+}
+
+// Exercise the real dispatcher boundary in a child process because
+// runSetupCmd intentionally exits on usage errors. A valid local pack is
+// supplied so reaching adoption would leave both config and pack.lock residue;
+// malformed --model must exit 2 before either can happen.
+func TestRunSetupCmd_SemanticErrorPrecedesPackAdoption(t *testing.T) {
+	if os.Getenv("PIX_TEST_SETUP_SEMANTIC_CHILD") == "1" {
+		runSetupCmd([]string{
+			os.Getenv("PIX_TEST_SETUP_WORKSPACE"),
+			"--pack", os.Getenv("PIX_TEST_SETUP_PACK"),
+			"--model", "bad model",
+			"--no-agent",
+		})
+		return
+	}
+
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	pack := filepath.Join(root, "pack")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestPack(t, pack, "semantic-boundary-test")
+	configPath := filepath.Join(root, "config", "config.toml")
+
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestRunSetupCmd_SemanticErrorPrecedesPackAdoption$")
+	cmd.Env = append(os.Environ(),
+		"PIX_TEST_SETUP_SEMANTIC_CHILD=1",
+		"PIX_TEST_SETUP_WORKSPACE="+workspace,
+		"PIX_TEST_SETUP_PACK="+pack,
+		"PIX_CONFIG="+configPath,
+		"XDG_STATE_HOME="+filepath.Join(root, "state"),
+		"XDG_DATA_HOME="+filepath.Join(root, "data"),
+	)
+	out, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+		t.Fatalf("child exit = %v, output:\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "must not contain whitespace") {
+		t.Fatalf("child did not report the semantic error:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(pack, packLockName)); !os.IsNotExist(err) {
+		t.Fatalf("pack adoption ran before semantic validation; pack.lock stat = %v", err)
+	}
+	if b, err := os.ReadFile(configPath); err == nil && strings.Contains(string(b), pack) {
+		t.Fatalf("pack adoption ran before semantic validation; config contains pack path:\n%s", b)
+	} else if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("reading child config: %v", err)
 	}
 }
 

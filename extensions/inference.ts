@@ -23,6 +23,7 @@ type Model = {
 	context_window?: number;
 	max_tokens?: number;
 	reasoning?: boolean;
+	adaptive_thinking?: boolean;
 	input_cost?: number;
 	output_cost?: number;
 };
@@ -37,6 +38,30 @@ type Manifest = { version: 1; backends: Record<string, Backend>; models: Model[]
 export function compatForBackend(backend: Backend): { sessionAffinityFormat: "openai-nosession" } | undefined {
 	if (backend.protocol !== "openai-responses") return undefined;
 	return { sessionAffinityFormat: "openai-nosession" };
+}
+
+export function compatForModel(
+	backend: Backend,
+	model: Model,
+): { sessionAffinityFormat?: "openai-nosession"; forceAdaptiveThinking?: boolean } | undefined {
+	const compat: { sessionAffinityFormat?: "openai-nosession"; forceAdaptiveThinking?: boolean } =
+		compatForBackend(backend) ?? {};
+	if (backend.protocol === "anthropic-messages" && model.adaptive_thinking) {
+		compat.forceAdaptiveThinking = true;
+	}
+	return Object.keys(compat).length > 0 ? compat : undefined;
+}
+
+// Pi's Anthropic transport uses the Anthropic SDK, which appends
+// `/v1/messages` to the configured base URL. Accept the common gateway form
+// ending in `/v1`, but remove that suffix before handing it to the SDK so the
+// request does not become `/v1/v1/messages`. Other protocols own their full
+// API base and must remain byte-for-byte unchanged.
+export function providerBaseURL(backend: Backend): string | undefined {
+	const baseURL = backend.base_url?.trim();
+	if (!baseURL) return undefined;
+	if (backend.protocol === "anthropic-messages") return baseURL.replace(/\/v1\/?$/, "");
+	return baseURL;
 }
 
 function readManifest(): Manifest | undefined {
@@ -55,14 +80,15 @@ export default function (pi: any): void {
 	for (const [name, backend] of Object.entries(manifest.backends)) {
 		if (backend.driver === "native") continue;
 		const models = manifest.models.filter((m) => m.backend === name);
-		if (!backend.base_url || models.length === 0) continue;
+		const baseURL = providerBaseURL(backend);
+		if (!baseURL || models.length === 0) continue;
 		let apiKey = "unused";
 		if (backend.auth === "sbx-session") apiKey = "proxy-managed";
 		if (backend.auth === "1password" && backend.key_env) apiKey = process.env[backend.key_env] ?? "proxy-managed";
 		try {
 			pi.registerProvider(name, {
 				name,
-				baseUrl: backend.base_url,
+				baseUrl: baseURL,
 				api: backend.protocol ?? "openai-completions",
 				apiKey,
 				models: models.map((m) => ({
@@ -78,7 +104,7 @@ export default function (pi: any): void {
 					},
 					contextWindow: m.context_window ?? 131072,
 					maxTokens: m.max_tokens ?? 32768,
-					compat: compatForBackend(backend),
+					compat: compatForModel(backend, m),
 				})),
 			});
 		} catch {

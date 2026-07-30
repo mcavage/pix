@@ -69,7 +69,9 @@ func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env shell
 		return fmt.Errorf("unsupported onboarding schema version %d (want 1)", r.Version)
 	}
 
-	localSet, known := localMCPNames(env, hostResolver)
+	var localSet map[string]bool
+	localKnown := false
+	localLoaded := false
 	for _, m := range r.MCP {
 		m = strings.TrimSpace(m)
 		if m == "" {
@@ -78,7 +80,14 @@ func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env shell
 		if m == gwServerName || onboardMCPCatalogAllow[m] {
 			continue
 		}
-		if known && localSet[m] {
+		// Resolve the local MCP inventory lazily. A semantic mistake unrelated
+		// to MCP (for example a malformed model value) must fail without paying
+		// for, or potentially hanging on, an irrelevant host-binary probe.
+		if !localLoaded {
+			localSet, localKnown = localMCPNames(env, hostResolver)
+			localLoaded = true
+		}
+		if localKnown && localSet[m] {
 			continue
 		}
 		return fmt.Errorf("mcp %q is not an allowlisted server (gog, a locally-known host server, or a curated catalog name); configure it with `pix mcp` instead", m)

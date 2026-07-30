@@ -67,7 +67,12 @@ Zero servers is fine unless a kit wired some. When one IS present (e.g. the sbx
 gateway multiplexes backends by tool-name prefix (`gateway_<name>__*`). Group the
 tool list by prefix, call one cheap read-only tool per backend (a `health`, a
 `get-*`, a `search`/`list` with a tiny limit), and report each: name, ok/fail,
-one-line evidence. A registered backend can still be unauthed or down.
+one-line evidence. Prefer an identity/account/organization lookup when offered.
+A successful representative call proves the backend is authenticated; a later
+`permission denied` from a specialized or permission-gated tool means only that
+capability is unavailable, not that the backend or OAuth is unhealthy. Report
+it separately as optional/permission-gated unless the pack explicitly requires
+that capability. A registered backend can still be unauthed or down.
 
 ### A4. CLIs
 ```bash

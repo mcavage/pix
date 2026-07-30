@@ -10,6 +10,7 @@
       "output_per_mtok": 25.0,
       "local": false,
       "available": true,
+      "adaptive_thinking": true,
       "notes": "Anthropic flagship (shipped 2026-07-24, $5/$25 live). INSTA-UPGRADE for any Opus role: succeeds Opus 4.8 for accuracy-critical strategy/advisory. Near-Fable reasoning at Opus-tier price. See the model-refresh skill before re-grounding scores."
     },
     {
@@ -21,6 +22,7 @@
       "output_per_mtok": 50.0,
       "local": false,
       "available": true,
+      "adaptive_thinking": true,
       "notes": "Frontier / top of BenchLM overall (SWE-bench Verified ~95%). The 'even Opus falls short' tier: one genuinely hard problem, no cost ceiling."
     },
     {
@@ -43,6 +45,7 @@
       "output_per_mtok": 15.0,
       "local": false,
       "available": true,
+      "adaptive_thinking": true,
       "notes": "The production workhorse (Anthropic's own guidance: send most coding + knowledge work here). SWE-bench Pro 63.2, near-Opus at lower cost. $2/$10 intro through 2026-08-31, then $3/$15."
     },
     {
