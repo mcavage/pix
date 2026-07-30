@@ -44,9 +44,14 @@ func catalogMCPState(env shellEnv, mcpOut string, mcpOK bool, name string) catal
 	case mcpRegUnknown:
 		return catalogMCPUnverifiable
 	}
-	// Registered: bounded auth-status probe. This is read-only — it NEVER
-	// starts the OAuth flow (that is `pix mcp auth <name>`, run by the
-	// user), so a non-interactive setup cannot auto-open a browser grant.
+	return remoteMCPAuthorizationState(env, name)
+}
+
+// remoteMCPAuthorizationState classifies the native sbx OAuth status for an
+// already-registered remote. Keeping this separate lets pack activation repair
+// a positively unauthorized registration in the same interactive transaction,
+// without reopening OAuth when the credential is already healthy.
+func remoteMCPAuthorizationState(env shellEnv, name string) catalogMCPReadiness {
 	out, timedOut, err := probeRun(env, "sbx", "mcp", "auth", "status", name)
 	if timedOut {
 		return catalogMCPUnverifiable
@@ -103,13 +108,13 @@ func verifyCatalogMCPReady(env shellEnv, names []string) error {
 		switch catalogMCPState(env, mcpOut, mcpOK, n) {
 		case catalogMCPReady:
 		case catalogMCPUnregistered:
-			return fmt.Errorf("catalog MCP server %q is not registered with the sbx gateway — nothing was saved; register the shipped catalog (`pix mcp bundle`), authorize it (`pix mcp auth %s`), then re-run", n, n)
+			return fmt.Errorf("catalog MCP server %q is not registered with the sbx gateway; register the shipped catalog (`pix mcp bundle`), authorize it (`pix mcp auth %s`), then re-run", n, n)
 		case catalogMCPUnauthorized:
-			return fmt.Errorf("catalog MCP server %q is registered but not authorized — nothing was saved; run `pix mcp auth %s`, then re-run", n, n)
+			return fmt.Errorf("catalog MCP server %q is registered but not authorized; run `pix mcp auth %s`, then re-run", n, n)
 		case catalogMCPDenied:
 			return fmt.Errorf("catalog MCP server %q is denied by policy (sbx mcp auth status %s) — an organizational denial no setup command can fix; drop it or contact your admin", n, n)
 		default: // catalogMCPUnverifiable
-			return fmt.Errorf("could not verify catalog MCP server %q is registered and authorized (sbx probe unavailable, failed, or timed out) — nothing was saved; fix sbx and retry, or prepare it first: `pix mcp bundle`, then `pix mcp auth %s`", n, n)
+			return fmt.Errorf("could not verify catalog MCP server %q is registered and authorized (sbx probe unavailable, failed, or timed out); fix sbx and retry, or prepare it first: `pix mcp bundle`, then `pix mcp auth %s`", n, n)
 		}
 	}
 	return nil

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -767,10 +768,39 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			continue
 		}
 		if remoteURL := containers[n].RemoteURL; remoteURL != "" && remoteMCPRegistrationCurrent(env, n, remoteURL) {
-			if !env.quiet {
-				fmt.Fprintf(out, "  already registered: %s\n", n)
+			switch remoteMCPAuthorizationState(env, n) {
+			case catalogMCPReady:
+				if !env.quiet {
+					fmt.Fprintf(out, "  already registered: %s\n", n)
+				}
+				continue
+			case catalogMCPUnauthorized:
+				if env.runInteractive == nil {
+					regErrs = append(regErrs, fmt.Errorf("%s: registered but not authorized; run `pix mcp auth %s`", n, n))
+					continue
+				}
+				fmt.Fprintf(out, "  Authorize %s in your browser…\n", n)
+				var authErr error
+				if env.quiet && env.runInteractiveQuiet != nil {
+					authErr = env.runInteractiveQuiet("sbx", "mcp", "auth", n)
+				} else {
+					authErr = env.runInteractive("sbx", "mcp", "auth", n)
+				}
+				if authErr != nil {
+					regErrs = append(regErrs, fmt.Errorf("%s: authorization failed: %v", n, authErr))
+					continue
+				}
+				if remoteMCPAuthorizationState(env, n) != catalogMCPReady {
+					regErrs = append(regErrs, fmt.Errorf("%s: authorization completed but could not be verified", n))
+				}
+				continue
+			case catalogMCPDenied:
+				regErrs = append(regErrs, fmt.Errorf("%s: authorization denied by policy", n))
+				continue
+			default:
+				regErrs = append(regErrs, fmt.Errorf("%s: registration exists but authorization could not be verified", n))
+				continue
 			}
-			continue
 		}
 		var err error
 		if containers[n].RemoteURL != "" && env.runInteractive != nil {
@@ -831,8 +861,51 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 func remoteMCPRegistrationCurrent(env shellEnv, name, endpoint string) bool {
 	for _, verb := range []string{"inspect", "get"} {
 		out, timedOut, err := probeRun(env, "sbx", "mcp", verb, name)
-		if err == nil && !timedOut && strings.Contains(out, endpoint) {
+		if err == nil && !timedOut && outputContainsExactString(out, endpoint) {
 			return true
+		}
+	}
+	return false
+}
+
+// outputContainsExactString accepts an endpoint only as a complete structured
+// value. A substring match would accept an attacker URL such as
+// https://evil.invalid/?next=https://expected.example/mcp.
+func outputContainsExactString(out, want string) bool {
+	var decoded any
+	if json.Unmarshal([]byte(out), &decoded) == nil && jsonValueContainsExactString(decoded, want) {
+		return true
+	}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == want {
+			return true
+		}
+		if i := strings.Index(line, ":"); i >= 0 {
+			v := strings.Trim(strings.TrimSpace(line[i+1:]), `"'`)
+			if v == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func jsonValueContainsExactString(v any, want string) bool {
+	switch x := v.(type) {
+	case string:
+		return x == want
+	case []any:
+		for _, item := range x {
+			if jsonValueContainsExactString(item, want) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, item := range x {
+			if jsonValueContainsExactString(item, want) {
+				return true
+			}
 		}
 	}
 	return false

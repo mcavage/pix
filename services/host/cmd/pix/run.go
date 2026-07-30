@@ -305,13 +305,6 @@ func runRun(argv []string) {
 	if msg := mcpReattachWarning(cfg, o, plan.Reattach); msg != "" {
 		fmt.Fprintln(os.Stderr, msg)
 	}
-	if plan.RmFirst {
-		if err := applyReplaceRm(defaultShellEnv(), plan, o.Name); err != nil {
-			fmt.Fprintf(os.Stderr, "pix run: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
 	// Lazy auto-start: make the configured host services (memory/knowledge)
 	// reachable before the sandbox tries them, with a SHORT budget — the launch
 	// waits AT MOST ensureServeRunTimeout (8s), covering spawn-lock acquisition
@@ -389,6 +382,16 @@ func runRun(argv []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix run: could not build trusted host state: %v\n", err)
 		os.Exit(1)
+	}
+	// Destructive replacement is deliberately last: all fallible, read-only
+	// kit/readiness/trusted-state preflights above must succeed before the old
+	// sandbox is removed. A failed generated onboarding payload must never leave
+	// the user with neither the old sandbox nor a replacement.
+	if plan.RmFirst {
+		if err := applyReplaceRm(defaultShellEnv(), plan, o.Name); err != nil {
+			fmt.Fprintf(os.Stderr, "pix run: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	if os.Getenv("PIX_DEBUG") != "" {

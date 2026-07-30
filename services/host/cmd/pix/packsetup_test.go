@@ -112,7 +112,7 @@ func TestRunRequiredPackSetupProbesAppliesAndReprobes(t *testing.T) {
 		},
 	}
 	var out bytes.Buffer
-	if err := runPackSetup(env, &out, root, nil); err != nil {
+	if err := runPackSetup(env, &out, root, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	if checks != 2 || applies != 1 {
@@ -132,7 +132,7 @@ func TestRunRequiredPackSetupSkipsOptionalSteps(t *testing.T) {
 		},
 		runInteractive: func(string, ...string) error { t.Fatal("optional hook was run"); return nil },
 	}
-	if err := runPackSetup(env, &bytes.Buffer{}, root, nil); err != nil {
+	if err := runPackSetup(env, &bytes.Buffer{}, root, nil, true); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -149,14 +149,66 @@ func TestRunPackSetupRunsRequestedOptionalStep(t *testing.T) {
 		},
 		runInteractive: func(string, ...string) error { ready = true; return nil },
 	}
-	if err := runPackSetup(env, &bytes.Buffer{}, root, []string{"account"}); err != nil {
+	if err := runPackSetup(env, &bytes.Buffer{}, root, []string{"account"}, true); err != nil {
 		t.Fatal(err)
 	}
 	if !ready {
 		t.Fatal("requested optional setup hook was not run")
 	}
-	if err := runPackSetup(env, &bytes.Buffer{}, root, []string{"missing"}); err == nil {
+	if err := runPackSetup(env, &bytes.Buffer{}, root, []string{"missing"}, true); err == nil {
 		t.Fatal("unknown requested setup id must fail")
+	}
+}
+
+func TestRunPackSetupRejectsUnknownBeforeAnyHook(t *testing.T) {
+	root := writeSetupPack(t, true)
+	probes, applies := 0, 0
+	env := shellEnv{
+		probe:          func(string, ...string) (string, bool, error) { probes++; return "", false, nil },
+		runInteractive: func(string, ...string) error { applies++; return nil },
+	}
+	if err := runPackSetup(env, &bytes.Buffer{}, root, []string{"typo"}, true); err == nil {
+		t.Fatal("unknown hook should fail")
+	}
+	if probes != 0 || applies != 0 {
+		t.Fatalf("unknown hook caused side effects: probes=%d applies=%d", probes, applies)
+	}
+}
+
+func TestRunPackSetupNonInteractiveNeverAppliesUnreadyHook(t *testing.T) {
+	root := writeSetupPack(t, true)
+	applies := 0
+	env := shellEnv{
+		probe:          func(string, ...string) (string, bool, error) { return "", false, fmt.Errorf("not ready") },
+		runInteractive: func(string, ...string) error { applies++; return nil },
+	}
+	err := runPackSetup(env, &bytes.Buffer{}, root, nil, false)
+	if err == nil || !strings.Contains(err.Error(), "interactive authorization") {
+		t.Fatalf("error = %v", err)
+	}
+	if applies != 0 {
+		t.Fatal("non-interactive setup must never execute an unready browser-capable hook")
+	}
+}
+
+func TestPlanPackSetupRequestsAssignsHookToOwningPack(t *testing.T) {
+	first := writeSetupPack(t, true)
+	second := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(second, "setup"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(second, "setup", "extra"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWritePack(t, second, packManifest{Name: "second", Schema: 1, Setup: []packSetupStep{{
+		ID: "extra", Path: "setup/extra", CheckArgs: []string{"check"}, ApplyArgs: []string{"apply"},
+	}}})
+	plan, err := planPackSetupRequests([]string{first, second}, []string{"extra"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan[first]) != 0 || strings.Join(plan[second], ",") != "extra" {
+		t.Fatalf("plan = %#v", plan)
 	}
 }
 

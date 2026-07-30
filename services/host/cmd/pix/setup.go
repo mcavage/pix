@@ -123,6 +123,13 @@ func runSetupCmd(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix setup: --with requires --pack\n\n%s", setupUsage)
 		os.Exit(2)
 	}
+	// Semantic argument relationships must fail before pack adoption, setup
+	// hooks, or browser-capable authorization. setupHostPhase repeats this check
+	// for direct callers, but runSetupCmd owns the earlier mutation boundary.
+	if err := checkGoogleWorkspaceFlags(parsed); err != nil {
+		fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", err, setupUsage)
+		os.Exit(2)
+	}
 
 	// `--apply` is the surviving half of the deleted `pix onboard`: reconcile
 	// a pending <DIR>/.pix/onboarding.json (the control-plane proposal an
@@ -197,8 +204,13 @@ func runSetupCmd(argv []string) {
 	// so placing hooks afterward made it impossible for a fresh pack to satisfy
 	// the very prerequisites the gate checked (and skipped Slack/Google/BambooHR
 	// entirely on the first missing remote registration).
+	setupRequests, err := planPackSetupRequests(activatedPacks, parsed.withSetup)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
+		os.Exit(1)
+	}
 	for _, root := range activatedPacks {
-		if err := runPackSetup(env, os.Stdout, root, parsed.withSetup); err != nil {
+		if err := runPackSetup(env, os.Stdout, root, setupRequests[root], isTTY(os.Stdin) && !parsed.assumeYes); err != nil {
 			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 			os.Exit(1)
 		}
@@ -749,9 +761,9 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 			// prompt), verify once after the pulls, receipt the outcome. Never
 			// installs Ollama; never pulls a tag it could not positively verify
 			// as missing.
-			// Local models are progressive enhancement. Ordinary setup never asks
-			// about a multi-gigabyte download; only an explicit --pull-models opts
-			// into the pull path.
+			// Local models are progressive enhancement. When Ollama is already
+			// healthy, interactive setup may offer a default-No pull for positively
+			// missing memory models; unattended setup requires --pull-models.
 			ask := prompts.reserve("enable local memory")
 			*models = setupLocalModels(cfg, env, in, out, ask, opts.pullModels)
 			if setupMemoryModelsReady(cfg, *models) {
@@ -1500,10 +1512,12 @@ func normalizeSetupPackArg(arg string) string {
 
 const setupUsage = `usage: pix setup [DIR] [host-config flags]
 
-Sets up callable inference, then starts Pix. Ordinary setup asks one question:
-how models should run. API keys are the default; a healthy existing Ollama is
-offered; a custom gateway can use the current sbx login or no auth. 1Password is
-required only for the API-key path. Ollama is never installed automatically.
+Sets up callable inference, then starts Pix. Ordinary setup begins with one
+model-runtime choice. The selected path may then ask only for the credentials
+or consent it actually needs. API keys are the default; a healthy existing
+Ollama is offered; a custom gateway can use the current sbx login or no auth.
+1Password is required only for the API-key path. Ollama is never installed
+automatically.
 
 Memory is progressive enhancement: it is enabled only when Ollama is healthy
 and its watcher and embedding models are verified. Without Ollama, Pix still
@@ -1535,9 +1549,10 @@ Setup flags:
                            output; ordinary setup prints only actions/results
   --pull-models            pull any CONFIRMED-missing configured local Ollama
                            models (watcher/embed/bridge, deduplicated); the
-                           ONLY consent a non-interactive setup honors (a broad
-                           --yes never downloads). Ordinary setup never asks
-                           about local model downloads. Setup never installs
+                           ONLY download consent a non-interactive setup honors
+                           (a broad --yes never downloads). Interactive setup
+                           may offer a default-No pull when an existing Ollama
+                           positively lacks required memory models. Setup never installs
                            Ollama itself, and never pulls a tag it could not
                            positively verify as missing.
                            pix setup --pull-models with Ollama down exits

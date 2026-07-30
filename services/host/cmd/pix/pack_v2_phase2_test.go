@@ -60,7 +60,7 @@ func acceptPackSurface(t *testing.T, root, cfgGogAccount string) {
 // informs the screen even though it never raises the tier), and credential
 // VAR names — never values. The classifier here marks both names LOCAL (the
 // Tier-1 case); the remote/reference-only partition half is pinned by
-// TestComputeHostBoM_RemoteMCPReferenceIsTier0.
+// TestComputeHostBoM_RemoteMCPReferenceRequiresConsent.
 func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 	p := &packInfo{Root: "/p", Manifest: packManifest{
 		Name: "work",

@@ -429,7 +429,7 @@ func TestTrustKey_StableAcrossCommits(t *testing.T) {
 // adopted Tier-1 pack whose provenance commit changes — but whose host-exec
 // fingerprint is byte-identical — re-activates non-interactively with NO
 // --yes. In-process: a misfiring gate would os.Exit(1) and fail the test
-// binary, exactly like TestPackUse_RemoteMCPReferenceStaysTier0.
+// binary, exactly like the non-interactive pack trust-gate tests.
 func TestPackUse_NewCommitSameFingerprintDoesNotRegate(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))

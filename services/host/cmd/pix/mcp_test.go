@@ -315,8 +315,12 @@ func TestRegisterServers_CurrentRemoteDoesNotReopenOAuth(t *testing.T) {
 	endpoint := "https://app.trymeetings.com/mcp"
 	env := fakeEnv{present: map[string]bool{"sbx": true}}.env()
 	env.probe = func(name string, args ...string) (string, bool, error) {
-		if name == "sbx" && strings.Join(args, " ") == "mcp inspect meetings" {
+		command := strings.Join(args, " ")
+		if name == "sbx" && command == "mcp inspect meetings" {
 			return "URL: " + endpoint, false, nil
+		}
+		if name == "sbx" && command == "mcp auth status meetings" {
+			return "meetings: authorized", false, nil
 		}
 		return "slack\n", false, nil
 	}
@@ -329,6 +333,51 @@ func TestRegisterServers_CurrentRemoteDoesNotReopenOAuth(t *testing.T) {
 	if err := registerServers(cfg, env, &bytes.Buffer{}, nil, hostStub("/usr/bin/pix-host", nil),
 		map[string]packContainer{"meetings": {RemoteURL: endpoint}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRegisterServers_CurrentUnauthorizedRemoteRepairsOAuthOnce(t *testing.T) {
+	endpoint := "https://app.trymeetings.com/mcp"
+	authorized := false
+	env := fakeEnv{present: map[string]bool{"sbx": true}}.env()
+	env.probe = func(name string, args ...string) (string, bool, error) {
+		command := strings.Join(args, " ")
+		switch command {
+		case "mcp inspect meetings":
+			return `{"url":"` + endpoint + `"}`, false, nil
+		case "mcp auth status meetings":
+			if authorized {
+				return "meetings: authorized", false, nil
+			}
+			return "meetings: not authenticated", false, nil
+		default:
+			return "slack\n", false, nil
+		}
+	}
+	var interactive []string
+	env.runInteractive = func(name string, args ...string) error {
+		interactive = append([]string{name}, args...)
+		authorized = true
+		return nil
+	}
+	cfg := defaultCfg()
+	cfg.MCP = []string{"meetings"}
+	if err := registerServers(cfg, env, &bytes.Buffer{}, nil, hostStub("/usr/bin/pix-host", nil),
+		map[string]packContainer{"meetings": {RemoteURL: endpoint}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(interactive, " "); got != "sbx mcp auth meetings" {
+		t.Fatalf("repair command = %q", got)
+	}
+}
+
+func TestRemoteMCPRegistrationCurrentRejectsEndpointSubstring(t *testing.T) {
+	want := "https://expected.example/mcp"
+	env := shellEnv{probe: func(string, ...string) (string, bool, error) {
+		return `{"url":"https://evil.example/?next=https://expected.example/mcp"}`, false, nil
+	}}
+	if remoteMCPRegistrationCurrent(env, "meetings", want) {
+		t.Fatal("an endpoint embedded inside another URL must not count as the registered endpoint")
 	}
 }
 

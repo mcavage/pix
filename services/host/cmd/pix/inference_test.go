@@ -100,8 +100,25 @@ func TestSetupChooseInferenceConfiguresKeylessGateway(t *testing.T) {
 	if !selected || inferenceNeedsOnePassword(cfg) || len(cfg.Inference.Models) != 1 {
 		t.Fatalf("selected=%v inference=%+v", selected, cfg.Inference)
 	}
-	if got := cfg.Inference.Backends["gateway"]; got.Auth != "sbx-session" || got.BaseURL != "https://models.example.test/v1" {
+	if got := cfg.Inference.Backends["gateway"]; got.Auth != "sbx-session" || got.BaseURL != "https://models.example.test/v1" || got.CredentialService != "sbx-login" || got.KeyEnv != "DOCKER_TOKEN" || got.CredentialHeader != "Authorization" || got.CredentialFormat != "Bearer %s" {
 		t.Fatalf("gateway = %+v", got)
+	}
+}
+
+func TestExclusiveKeylessInferenceIgnoresDormantOnePasswordBackend(t *testing.T) {
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		Backends: map[string]config.InferenceBackend{
+			"direct":  {Driver: "native", Auth: "1password"},
+			"gateway": {Driver: "openai-compatible", Auth: "sbx-session", BaseURL: "https://models.example.test/v1", Source: "/packs/work"},
+		},
+		Models: []config.InferenceModelBinding{
+			{Model: "anthropic/claude-sonnet-5", Backend: "direct", Upstream: "anthropic/claude-sonnet-5", Available: true},
+			{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true, Source: "/packs/work"},
+		},
+		ExclusiveSource: "/packs/work",
+	}}
+	if inferenceNeedsOnePassword(cfg) {
+		t.Fatal("a dormant direct backend outside the exclusive runtime must not force 1Password")
 	}
 }
 
@@ -149,6 +166,7 @@ func TestInferenceKitSpecGeneratesSessionCredentialAndEgress(t *testing.T) {
 				CredentialService: "session-login", CredentialHeader: "Authorization", CredentialFormat: "Bearer %s", Source: "/packs/work",
 			},
 		},
+		Models:          []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "work-openai", Upstream: "reasoner", Available: true, Source: "/packs/work"}},
 		ExclusiveSource: "/packs/work",
 	}}
 	spec, err := inferenceKitSpec(cfg)
@@ -171,6 +189,7 @@ func TestInferenceKitSpecPreservesAPIKeyHeaderWithoutBearerPrefix(t *testing.T) 
 				CredentialService: "session-login", CredentialHeader: "x-api-key", CredentialFormat: "%s",
 			},
 		},
+		Models: []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "work", Upstream: "reasoner", Available: true}},
 	}}
 	spec, err := inferenceKitSpec(cfg)
 	if err != nil {
@@ -183,5 +202,27 @@ func TestInferenceKitSpecPreservesAPIKeyHeaderWithoutBearerPrefix(t *testing.T) 
 	}
 	if strings.Contains(spec, "Bearer") {
 		t.Fatalf("API-key credential unexpectedly gained a bearer prefix:\n%s", spec)
+	}
+}
+
+func TestInferenceKitSpecUsesAmbientDockerSessionContract(t *testing.T) {
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		Backends: map[string]config.InferenceBackend{
+			"gateway": {
+				Driver: "openai-compatible", Protocol: "openai-responses",
+				BaseURL: "https://models.example.test/v1", Auth: "sbx-session", KeyEnv: "DOCKER_TOKEN",
+				CredentialService: "sbx-login", CredentialHeader: "Authorization", CredentialFormat: "Bearer %s",
+			},
+		},
+		Models: []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true}},
+	}}
+	spec, err := inferenceKitSpec(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`service: "sbx-login"`, `name: "DOCKER_TOKEN"`, `proxyManaged: true`, `header: "Authorization"`, `format: "Bearer %s"`} {
+		if !strings.Contains(spec, want) {
+			t.Fatalf("spec missing %q:\n%s", want, spec)
+		}
 	}
 }

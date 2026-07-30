@@ -264,8 +264,8 @@ type runLaunchPlan struct {
 // exist. It mirrors buildSbxArgs — no exec, no filesystem — so every branch is
 // unit-testable without sbx installed.
 //
-//   - absent (or unknown, when `sbx ls` itself failed) -> CREATE: the full
-//     buildSbxArgs, unchanged.
+//   - absent -> CREATE: the full buildSbxArgs, unchanged.
+//   - unknown -> FAIL CLOSED: never guess create vs reattach.
 //   - running or stopped, no --replace -> RE-ATTACH: sbx reads the agent from
 //     the existing sandbox's spec, so none of the create-only flags apply; see
 //     buildReattachArgs.
@@ -289,8 +289,8 @@ type runLaunchPlan struct {
 //     on sbxUnknown is unaffected — it still optimistically creates via
 //     willCreate, same as always.
 func planSandboxLaunch(state sbxState, replace bool, cfg *config.Config, o runOpts, version string) runLaunchPlan {
-	if replace && state == sbxUnknown {
-		return runLaunchPlan{Err: fmt.Errorf("--replace requested but could not determine whether sandbox %q exists (`sbx ls` failed or sbx is unavailable); refusing to replace blind — fix sbx and retry (or run without --replace to attempt a plain launch)", o.Name)}
+	if state == sbxUnknown {
+		return runLaunchPlan{Err: fmt.Errorf("could not determine whether sandbox %q exists (`sbx ls` failed or sbx is unavailable); refusing to create or reattach blind — fix sbx and retry", o.Name)}
 	}
 	if !willCreate(state, replace) {
 		return runLaunchPlan{Args: buildReattachArgs(o), Reattach: true}
@@ -315,8 +315,10 @@ func willCreate(state sbxState, replace bool) bool {
 	switch state {
 	case sbxRunning, sbxStopped:
 		return false
-	default: // sbxAbsent or sbxUnknown: nothing (known) is in the way, create fresh.
+	case sbxAbsent:
 		return true
+	default:
+		return false
 	}
 }
 

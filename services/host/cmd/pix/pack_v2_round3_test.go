@@ -362,10 +362,10 @@ func TestSweepStaleKitTemps_AgeGatedLaunchDirs(t *testing.T) {
 // probe (sbx may re-attach the old sandbox) must leave an existing marker
 // untouched, while a real create (absent, or --replace) writes it.
 func TestSandboxPackMarker_NotOverwrittenOnInconclusiveProbe(t *testing.T) {
-	// The predicate divergence that matters: willCreate optimistically preps
-	// create args on a failed probe, definitelyCreating must not.
-	if !willCreate(sbxUnknown, false) {
-		t.Fatal("precondition: willCreate(sbxUnknown) is expected to be true")
+	// An unknown state now fails closed before any create preparation or marker
+	// write; definitelyCreating must remain false too.
+	if willCreate(sbxUnknown, false) {
+		t.Fatal("willCreate(sbxUnknown) must fail closed")
 	}
 	cases := []struct {
 		state   sbxState

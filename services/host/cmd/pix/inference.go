@@ -135,7 +135,17 @@ func configureCustomGateway(cfg *config.Config, in io.Reader, out io.Writer) (bo
 	if cfg.Inference.Backends == nil {
 		cfg.Inference.Backends = map[string]config.InferenceBackend{}
 	}
-	cfg.Inference.Backends["gateway"] = config.InferenceBackend{Driver: "openai-compatible", BaseURL: strings.TrimRight(baseURL, "/"), Auth: auth}
+	backend := config.InferenceBackend{Driver: "openai-compatible", BaseURL: strings.TrimRight(baseURL, "/"), Auth: auth}
+	if auth == "sbx-session" {
+		// sbx-login is a reserved Docker Sandboxes credential service. The
+		// sandbox proxy resolves it from the current `sbx login` session; it is
+		// not a secret users seed into the sbx credential store.
+		backend.KeyEnv = "DOCKER_TOKEN"
+		backend.CredentialService = "sbx-login"
+		backend.CredentialHeader = "Authorization"
+		backend.CredentialFormat = "Bearer %s"
+	}
+	cfg.Inference.Backends["gateway"] = backend
 	for _, raw := range strings.Split(mappings, ",") {
 		parts := strings.SplitN(strings.TrimSpace(raw), "=", 2)
 		if len(parts) != 2 {
@@ -255,8 +265,12 @@ func inferenceNeedsOnePassword(cfg *config.Config) bool {
 	if cfg == nil || len(cfg.Inference.Backends) == 0 {
 		return true // default setup path is a direct API key
 	}
-	for _, b := range cfg.Inference.Backends {
-		if b.Auth == "1password" {
+	for _, binding := range cfg.Inference.Models {
+		if !binding.Available || !inferenceBindingAllowed(cfg, binding) {
+			continue
+		}
+		b, ok := cfg.Inference.Backends[binding.Backend]
+		if ok && inferenceBackendAllowed(cfg, b, binding.Backend) && b.Auth == "1password" {
 			return true
 		}
 	}
@@ -321,7 +335,10 @@ func configureDirectInference(cfg *config.Config, providers []string) error {
 	for _, m := range reg.Models {
 		if m.Available && providerSet[m.Provider] {
 			cfg.Inference.Models = append(cfg.Inference.Models, config.InferenceModelBinding{
-				Model: m.ID, Backend: m.Provider, Upstream: m.ID, Available: true, Verified: true,
+				// A present credential makes this binding a candidate; it does not
+				// prove that the account is entitled to this particular model. The
+				// first sandbox request is the honest live verification point.
+				Model: m.ID, Backend: m.Provider, Upstream: m.ID, Available: true,
 			})
 		}
 	}
@@ -431,8 +448,14 @@ func inferenceKitSpec(cfg *config.Config) (string, error) {
 	type credential struct{ service, name, domain, header, format string }
 	var credentials []credential
 	seenHost, seenCredential := map[string]bool{}, map[string]bool{}
+	referenced := map[string]bool{}
+	for _, binding := range cfg.Inference.Models {
+		if binding.Available && inferenceBindingAllowed(cfg, binding) {
+			referenced[binding.Backend] = true
+		}
+	}
 	for name, backend := range cfg.Inference.Backends {
-		if !inferenceBackendAllowed(cfg, backend, name) || backend.Driver == "ollama" || backend.BaseURL == "" {
+		if !referenced[name] || !inferenceBackendAllowed(cfg, backend, name) || backend.Driver == "ollama" || backend.BaseURL == "" {
 			continue
 		}
 		u, err := url.Parse(backend.BaseURL)

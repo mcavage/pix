@@ -126,18 +126,15 @@ func TestPlanSandboxLaunch_ReplaceOnAbsent(t *testing.T) {
 	}
 }
 
-// TestPlanSandboxLaunch_UnknownCreates: an indeterminate `sbx ls` (unknown)
-// degrades to the same behavior as absent — attempt a create rather than
-// refusing to launch on a probe failure.
-func TestPlanSandboxLaunch_UnknownCreates(t *testing.T) {
+// TestPlanSandboxLaunch_UnknownFailsClosed: an indeterminate `sbx ls` can be
+// neither safely created nor reattached because sbx run may replay arguments
+// into an existing sandbox.
+func TestPlanSandboxLaunch_UnknownFailsClosed(t *testing.T) {
 	cfg := &config.Config{}
 	o := runOpts{Workspace: ".", Name: "pix-t"}
 	plan := planSandboxLaunch(sbxUnknown, false, cfg, o, "0.0.99")
-	if plan.Reattach {
-		t.Error("unknown state must not reattach")
-	}
-	if !contains(plan.Args, []string{"--kit"}) {
-		t.Errorf("unknown state should still create, got %v", plan.Args)
+	if plan.Err == nil || plan.Reattach || plan.RmFirst || len(plan.Args) != 0 {
+		t.Fatalf("unknown state must fail closed with no action: %+v", plan)
 	}
 }
 
@@ -382,7 +379,7 @@ func TestWillCreate_MatchesPlanSandboxLaunchReattachDecision(t *testing.T) {
 		want    bool
 	}{
 		{sbxAbsent, false, true},
-		{sbxUnknown, false, true},
+		{sbxUnknown, false, false},
 		{sbxRunning, false, false},
 		{sbxStopped, false, false},
 		{sbxRunning, true, true},
@@ -394,7 +391,7 @@ func TestWillCreate_MatchesPlanSandboxLaunchReattachDecision(t *testing.T) {
 			t.Errorf("willCreate(%v, %v) = %v, want %v", tc.state, tc.replace, got, tc.want)
 		}
 		plan := planSandboxLaunch(tc.state, tc.replace, cfg, o, "0.0.99")
-		if got == plan.Reattach {
+		if plan.Err == nil && got == plan.Reattach {
 			t.Errorf("willCreate(%v, %v) = %v must be the inverse of plan.Reattach = %v", tc.state, tc.replace, got, plan.Reattach)
 		}
 	}
@@ -417,10 +414,13 @@ func TestRunDevResolution_SkippedOnReattach(t *testing.T) {
 		}
 	}
 	// And the create/replace paths DO need it resolved.
-	for _, state := range []sbxState{sbxAbsent, sbxUnknown} {
+	for _, state := range []sbxState{sbxAbsent} {
 		if !willCreate(state, false) {
 			t.Fatalf("state=%v: willCreate must be true so --dev/checkout resolution runs for a fresh create", state)
 		}
+	}
+	if willCreate(sbxUnknown, false) {
+		t.Fatal("unknown state must fail closed before resolving create-only inputs")
 	}
 	if !willCreate(sbxRunning, true) {
 		t.Fatal("--replace on a running sandbox must still resolve --dev/checkout (it recreates)")

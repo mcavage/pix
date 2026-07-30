@@ -42,8 +42,9 @@ type hostStateKeys struct {
 }
 
 type hostStateSvc struct {
-	Up   bool `json:"up"`
-	Port int  `json:"port"`
+	Enabled bool `json:"enabled"`
+	Up      bool `json:"up"`
+	Port    int  `json:"port"`
 }
 
 type hostStateKnowledge struct {
@@ -185,6 +186,10 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 		Source:    keysSource,
 	}
 	keys.Resolved = keys.Anthropic || keys.OpenAI || keys.Google
+	if !keys.Resolved && hasConfiguredKeylessModel(cfg) {
+		keys.Resolved = true
+		keys.Source = "configured inference"
+	}
 
 	bundles := append([]string(nil), cfg.KnowledgeBundles...)
 
@@ -198,7 +203,7 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 
 	hs := hostState{
 		Keys:      keys,
-		Memory:    hostStateSvc{Up: dialer(memoryPortDefault), Port: memoryPortDefault},
+		Memory:    hostStateSvc{Enabled: containsStr(cfg.Services, "memory"), Up: dialer(memoryPortDefault), Port: memoryPortDefault},
 		Knowledge: hostStateKnowledge{Bundles: bundles, Seeded: len(bundles) > 0, ServiceUp: dialer(knowledgePortDefault)},
 		Gog:       hostStateGog{Enabled: gogEnabled},
 		MCP:       hostStateMCP{Enabled: len(mcpServers) > 0, Servers: mcpServers},
@@ -211,6 +216,22 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 	// pack actually active. Onboarding short-circuits to "you're set up" on true.
 	hs.Provisioned = keys.Resolved && hs.Knowledge.Seeded && hs.Pack.Active
 	return hs
+}
+
+func hasConfiguredKeylessModel(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, binding := range cfg.Inference.Models {
+		if !binding.Available || !inferenceBindingAllowed(cfg, binding) {
+			continue
+		}
+		backend, ok := cfg.Inference.Backends[binding.Backend]
+		if ok && inferenceBackendAllowed(cfg, backend, binding.Backend) && (backend.Auth == "sbx-session" || backend.Auth == "none") {
+			return true
+		}
+	}
+	return false
 }
 
 // containsStr reports whether list contains s.

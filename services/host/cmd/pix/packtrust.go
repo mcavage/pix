@@ -56,6 +56,7 @@ type hostBoM struct {
 	Creds          []string           // credential ENV VAR names solicited (never values)
 	Prerequisites  []string           // pack-authored external state the user must bring
 	Setup          []packSetupStep    // pack setup executables, probes, and apply argv
+	Inference      []hostBoMInference // model endpoints plus credential-routing policy
 }
 
 // hostBoMMCP is one host-spawned MCP server: its name plus the exact argv the
@@ -80,14 +81,24 @@ type hostBoMRemote struct {
 	URL  string
 }
 
+type hostBoMInference struct {
+	Name    string
+	URL     string
+	Auth    string
+	Service string
+	Header  string
+	Format  string
+}
+
 // tier1 reports whether any host-exec facet is present — the Tier-0/Tier-1
 // split of packs.md §9. Egress and creds alone never raise the tier (a
 // sandbox wrapper's egress is fenced by the kit allowlist; a credential ref is
 // solicited, not executed). b.MCP holds only LOCAL host-spawned servers and
-// b.Bins only host=true entries (computeHostBoM filters), so a reference-only
-// remote MCP or an inert host=false [[bin]] never raises the tier.
+// b.Bins only host=true entries (computeHostBoM filters). An explicit remote
+// MCP endpoint does raise the tier: adopting it sends conversation context to
+// a pack-selected third party and may launch OAuth, so it requires consent.
 func (b hostBoM) tier1() bool {
-	return len(b.MCP) > 0 || len(b.Containers) > 0 || len(b.Proxies) > 0 || len(b.Bins) > 0 || len(b.Setup) > 0
+	return len(b.MCP) > 0 || len(b.Containers) > 0 || len(b.RemoteMCP) > 0 || len(b.Proxies) > 0 || len(b.Bins) > 0 || len(b.Setup) > 0 || len(b.Inference) > 0
 }
 
 // localMCPClassifier resolves mcpRegistrar's local-vs-gateway partition into
@@ -204,6 +215,15 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 		}
 	}
 	b.Setup = append(b.Setup, p.Manifest.Setup...)
+	if p.Manifest.Inference != nil {
+		for name, backend := range p.Manifest.Inference.Backends {
+			b.Inference = append(b.Inference, hostBoMInference{
+				Name: name, URL: backend.BaseURL, Auth: backend.Auth,
+				Service: backend.CredentialService, Header: backend.CredentialHeader, Format: backend.CredentialFormat,
+			})
+		}
+		sort.Slice(b.Inference, func(i, j int) bool { return b.Inference[i].Name < b.Inference[j].Name })
+	}
 	b.Prerequisites = append(b.Prerequisites, p.Manifest.Prerequisites...)
 	for e := range egress {
 		b.Egress = append(b.Egress, e)
@@ -277,6 +297,14 @@ func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]stri
 		Required    bool     `json:"required"`
 		Description string   `json:"description"`
 	}
+	type fpInference struct {
+		Name    string `json:"name"`
+		URL     string `json:"url"`
+		Auth    string `json:"auth"`
+		Service string `json:"service"`
+		Header  string `json:"header"`
+		Format  string `json:"format"`
+	}
 	type fpDoc struct {
 		V             int           `json:"v"`
 		MCP           []fpMCP       `json:"mcp"`
@@ -288,8 +316,9 @@ func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]stri
 		Creds         []string      `json:"cred"`
 		Prerequisites []string      `json:"prerequisites"`
 		Setup         []fpSetup     `json:"setup"`
+		Inference     []fpInference `json:"inference"`
 	}
-	doc := fpDoc{V: 5}
+	doc := fpDoc{V: 6}
 	proxySHA := map[string]string{}
 	for _, m := range b.MCP {
 		doc.MCP = append(doc.MCP, fpMCP{Name: m.Name, Argv: append([]string(nil), m.Argv...)})
@@ -356,6 +385,11 @@ func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]stri
 		})
 	}
 	sort.Slice(doc.Setup, func(i, j int) bool { return doc.Setup[i].ID < doc.Setup[j].ID })
+	for _, inf := range b.Inference {
+		doc.Inference = append(doc.Inference, fpInference{
+			Name: inf.Name, URL: inf.URL, Auth: inf.Auth, Service: inf.Service, Header: inf.Header, Format: inf.Format,
+		})
+	}
 	enc, err := json.Marshal(doc)
 	if err != nil {
 		return "", nil, fmt.Errorf("encoding host-exec surface: %v", err)
@@ -396,6 +430,13 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 	}
 	for _, r := range b.RemoteMCP {
 		fmt.Fprintf(out, "  Remote MCP:          %s → %s\n", r.Name, r.URL)
+	}
+	for _, inf := range b.Inference {
+		auth := inf.Auth
+		if inf.Service != "" {
+			auth += " via " + inf.Service
+		}
+		fmt.Fprintf(out, "  Model gateway:       %s → %s (%s)\n", inf.Name, inf.URL, auth)
 	}
 	for _, pr := range b.Proxies {
 		fmt.Fprintf(out, "  Host wrapper:        %s (bin/%s; on PATH for `pix host` only)\n", pr, pr)

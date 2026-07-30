@@ -82,7 +82,7 @@ test("Dockerfile and host pin the same pi + curated packages", () => {
 	assert.ok(dockerPackagesBlock, "Dockerfile must contain the curated pi package loop");
 	const dockerPackages = dockerPackagesBlock.replaceAll("\\", "").trim().split(/\s+/);
 	const todoPackage = dockerPackages.find((entry) => entry.startsWith("pi-manage-todo-list@"));
-	assert.equal(piPackage, "@earendil-works/pi-coding-agent@0.82.1");
+	assert.equal(piPackage, "@earendil-works/pi-coding-agent@0.83.0");
 	assert.ok(todoPackage, "Dockerfile must pin pi-manage-todo-list");
 
 	const hostRun = fs.readFileSync(

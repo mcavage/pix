@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,9 +77,18 @@ type packManifest struct {
 // launcher config. It intentionally copies only public wiring metadata; secret
 // values are impossible in this schema. Probe evidence starts false and is
 // earned later by setup.
-func applyPackInference(cfg *config.Config, inf *packInference, source string) {
+func applyPackInference(cfg *config.Config, inf *packInference, source string) error {
 	if cfg == nil || inf == nil {
-		return
+		return nil
+	}
+	for name := range inf.Backends {
+		if existing, ok := cfg.Inference.Backends[name]; ok && existing.Source != source {
+			owner := "user configuration"
+			if existing.Source != "" {
+				owner = existing.Source
+			}
+			return fmt.Errorf("pack inference backend %q conflicts with %s; backend names cannot replace another source", name, owner)
+		}
 	}
 	// Reapplying an unchanged active pack at launch must not erase the
 	// availability evidence setup just earned. Preserve it only across an exact
@@ -118,6 +128,7 @@ func applyPackInference(cfg *config.Config, inf *packInference, source string) {
 	if inf.Exclusive {
 		cfg.Inference.ExclusiveSource = source
 	}
+	return nil
 }
 
 func inferenceEvidenceKey(binding config.InferenceModelBinding, backend config.InferenceBackend) string {
@@ -412,6 +423,19 @@ func validatePackFacets(root string, m *packManifest) error {
 			if b.Auth == "sbx-session" && (strings.TrimSpace(b.CredentialService) == "" || strings.TrimSpace(b.KeyEnv) == "") {
 				return fmt.Errorf("pack %s: inference backend %q uses sbx-session but has no credential_service/key_env", root, name)
 			}
+			if b.Auth == "sbx-session" && strings.TrimSpace(b.CredentialService) != "sbx-login" {
+				return fmt.Errorf("pack %s: inference backend %q uses sbx-session but credential_service is %q (want reserved service sbx-login)", root, name, b.CredentialService)
+			}
+			if b.Driver != "native" && b.Driver != "ollama" {
+				u, err := url.Parse(strings.TrimSpace(b.BaseURL))
+				if err != nil || u.Hostname() == "" || u.User != nil {
+					return fmt.Errorf("pack %s: inference backend %q has invalid base_url %q", root, name, b.BaseURL)
+				}
+				loopback := u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"
+				if u.Scheme != "https" && !(u.Scheme == "http" && loopback) {
+					return fmt.Errorf("pack %s: inference backend %q base_url must use https (or loopback http)", root, name)
+				}
+			}
 		}
 		for _, binding := range inf.Models {
 			if !routing.IsQualifiedID(binding.Model) {
@@ -670,7 +694,15 @@ func persistPackStack(roots []string) error {
 			cfg.AddKnowledgeBundle(p.KnowledgeDir)
 			cfg.AddService("knowledge")
 		}
-		applyPackInference(cfg, p.Manifest.Inference, root)
+		// Exclusive policy is an ordered scalar, not an additive facet. A
+		// later pack that explicitly declares non-exclusive inference clears
+		// an earlier pack's exclusivity (last writer wins).
+		if p.Manifest.Inference != nil && !p.Manifest.Inference.Exclusive {
+			cfg.Inference.ExclusiveSource = ""
+		}
+		if err := applyPackInference(cfg, p.Manifest.Inference, root); err != nil {
+			return err
+		}
 	}
 	// De-duplicate bindings by (model,backend), preserving the last declaration
 	// in stack order so a later pack can replace an upstream alias.
@@ -714,7 +746,9 @@ func applyPackStackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (strin
 		if err != nil {
 			return "", err
 		}
-		applyPackInference(cfg, p.Manifest.Inference, applied)
+		if err := applyPackInference(cfg, p.Manifest.Inference, applied); err != nil {
+			return "", err
+		}
 		for _, name := range packMcpNames(p) {
 			if !containsStr(o.StaticMCP, name) {
 				o.StaticMCP = append(o.StaticMCP, name)
@@ -3022,7 +3056,10 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		cfg.OllamaBridgeModel = lockOllamaModel
 	}
 	clearPackInference(cfg, "")
-	applyPackInference(cfg, p.Manifest.Inference, root)
+	if err := applyPackInference(cfg, p.Manifest.Inference, root); err != nil {
+		fmt.Fprintf(out, "pix pack use: %v\n", err)
+		os.Exit(1)
+	}
 
 	cfg.Pack = root
 	// `pack use` remains a single-pack switch. Multi-pack composition is an

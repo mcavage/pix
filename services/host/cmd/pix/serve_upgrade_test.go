@@ -43,3 +43,23 @@ func TestRestartStaleServeLazyUsesSafeStopThenEnsure(t *testing.T) {
 		t.Fatalf("calls=%v output=%q", calls, out.String())
 	}
 }
+
+func TestRestartStaleServeUnrecordedOrphanUsesSafeDiscoveryStop(t *testing.T) {
+	var calls []string
+	rl := serveReloader{
+		mode: func() serveMode { return serveDown },
+		stopServe: func(io.Writer) (bool, error) {
+			calls = append(calls, "stop")
+			return true, nil
+		},
+		ensure: func() error {
+			calls = append(calls, "ensure")
+			return nil
+		},
+	}
+	var out bytes.Buffer
+	restartStaleServe(rl, "0.1.7", "0.1.14", &out)
+	if strings.Join(calls, ",") != "stop,ensure" || !strings.Contains(out.String(), "0.1.7 → 0.1.14") {
+		t.Fatalf("calls=%v output=%q", calls, out.String())
+	}
+}

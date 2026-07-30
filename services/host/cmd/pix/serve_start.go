@@ -449,5 +449,21 @@ func restartStaleServe(rl serveReloader, from, to string, out io.Writer) {
 		fmt.Fprintf(out, "updated pix services %s → %s.\n", from, to)
 	case serveForeground:
 		fmt.Fprintf(out, "pix services %s are running in another terminal; restart them to use %s.\n", from, to)
+	case serveDown:
+		// A previous launcher can leave a positively identified Pix daemon with
+		// neither a current pidfile nor a lazy/managed marker. mode() calls this
+		// "down", but the identity probe above proved the port holder is Pix.
+		// Reuse serve stop's ownership discovery rather than spawning a competing
+		// daemon; it still refuses to signal anything it cannot verify as ours.
+		stopped, err := rl.stopServe(io.Discard)
+		if err != nil || !stopped {
+			fmt.Fprintf(out, "warning: could not safely stop pix services %s — run: pix serve stop && pix serve\n", from)
+			return
+		}
+		if err := rl.ensure(); err != nil {
+			fmt.Fprintf(out, "warning: pix services stopped but %s did not start: %v\n", to, err)
+			return
+		}
+		fmt.Fprintf(out, "updated pix services %s → %s.\n", from, to)
 	}
 }
