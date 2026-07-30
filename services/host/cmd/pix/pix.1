@@ -204,11 +204,11 @@ pix setup \-\-pull\-models with Ollama down exits 1.
 pix setup with the same Ollama down exits 0 with an optional ⚠ row.
 Stale optional config never blocks unrelated repair.
 .PP
-Setup runs as a numbered transcript of eight phases \(em parse, inventory,
-gate, mutate, consent, verify, report, handoff \(em and prints each phase
-header BEFORE that phase does its work, so a run that hangs names the phase it
-hung in.  It asks at most two questions (model-pull consent, the Google
-Workspace route) and never prompts at all without a TTY.  Mutations run in a
+Ordinary setup prints a short action-oriented transcript.  \fB\-\-verbose\fR
+exposes the underlying eight phases \(em parse, inventory, gate, mutate,
+consent, verify, report, handoff \(em and the commands they run for diagnosis.
+Setup sequences prompts one at a time and never prompts at all without a TTY.
+Mutations run in a
 fixed order with the riskiest last (keys, config, pack, MCP, knowledge,
 identity, Google Workspace, model pulls); each is individually idempotent, so
 an interrupted run is resumed by re-running the same command \(em setup

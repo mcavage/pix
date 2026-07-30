@@ -1583,10 +1583,10 @@ Host-config flags (all optional):
                            gateway, a no-auth gateway, or verified Ollama
   -h | --help              this help
 
-Setup runs as a numbered transcript of eight phases — parse, inventory, gate,
-mutate, consent, verify, report, handoff — and prints each phase header BEFORE
-that phase does its work, so a run that hangs names the phase it hung in. It
-sequences prompts one at a time and never prompts at all without a TTY.
+Ordinary setup prints a short action-oriented transcript. --verbose exposes the
+underlying eight phases — parse, inventory, gate, mutate, consent, verify,
+report, handoff — and the commands they run for diagnosis. Setup sequences
+prompts one at a time and never prompts at all without a TTY.
 Mutations run in a fixed order with the
 riskiest last (keys, config, pack, MCP, knowledge, identity, Google Workspace,
 model pulls) and each one is individually idempotent, so an interrupted run is
