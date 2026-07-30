@@ -1499,7 +1499,7 @@ func synthesizePackKit(p *packInfo) (string, error) {
 	// A stacked kit needs a valid manifest: schemaVersion (required by the loader),
 	// kind: mixin, and a name. Match the base kit's schemaVersion "2".
 	spec := fmt.Sprintf("schemaVersion: \"2\"\nkind: mixin\nname: %s\n", p.Manifest.Name)
-	// Fold each sandbox proxy's declared egress into caps.network.allow so the
+	// Fold each sandbox proxy's declared egress into permissions.network.allow so the
 	// wrapper can actually reach its host endpoint — the sbx egress proxy blocks
 	// (403) any destination not on the allowlist, even host.docker.internal. Kit
 	// stacking unions this with the base kit's allowlist.
@@ -1528,7 +1528,7 @@ func synthesizePackKit(p *packInfo) (string, error) {
 		}
 	}
 	if len(egress) > 0 {
-		spec += "caps:\n  network:\n    allow:\n"
+		spec += "permissions:\n  network:\n    allow:\n"
 		for _, e := range egress {
 			spec += "      - " + e + "\n"
 		}

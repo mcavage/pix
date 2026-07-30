@@ -10,7 +10,7 @@ import (
 )
 
 // synthesizePersonalContextKit turns the user's durable AGENTS.md into the sbx
-// agentContext layer. It is appended after pack kits, so personal instructions
+// agentInstructions layer. It is appended after pack kits, so personal instructions
 // compose above organizational context while workspace AGENTS.md remains the
 // most specific layer. Skills are mounted live separately by buildSbxArgs.
 func synthesizePersonalContextKit() (string, error) {
@@ -38,9 +38,9 @@ func synthesizePersonalContextKit() (string, error) {
 		return "", err
 	}
 	var spec strings.Builder
-	spec.WriteString("schemaVersion: \"2\"\nkind: mixin\nname: pix-personal-context\nagentContext: |\n")
+	spec.WriteString("schemaVersion: \"2\"\nkind: mixin\nname: pix-personal-context\nagentInstructions:\n  content: |\n")
 	for _, line := range strings.Split(string(b), "\n") {
-		fmt.Fprintf(&spec, "  %s\n", line)
+		fmt.Fprintf(&spec, "    %s\n", line)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "spec.yaml"), []byte(spec.String()), 0o600); err != nil {
 		return "", err

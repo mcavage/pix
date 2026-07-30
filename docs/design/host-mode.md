@@ -149,7 +149,7 @@ pi --session-dir <dir> --models <cycle> [--model <o.Model>] [-- passthrough]
 **A host config dir is not a full clone of the sandbox.** Beyond the five
 symlinked harness dirs, the image also copies `settings.json`/`keybindings.json`
 /`mcp.json`/`capabilities.json` (`Dockerfile`), installs the curated npm
-extension packages, and — critically — carries a kit `agentContext`
+extension packages, and — critically — carries kit `agentInstructions`
 (`pi-kit/spec.yaml`) that tells the agent it is in a disposable, network-fenced,
 full-auto VM. Copying that context onto the host is actively dangerous (it would
 assert isolation that no longer exists). Host mode needs its **own** system-prompt
@@ -426,7 +426,7 @@ status-quo baseline any proposal must beat.
   in-process; the real answer is "don't run host mode in a dir near secrets").
 
 Move into **Phase 1 blockers** (review reclassified these — they are not
-fast-follows): disable subagents until guarded; host-specific agentContext (not
+fast-follows): disable subagents until guarded; host-specific agentInstructions (not
 the sandbox one); the ollama self-loop bypass; the `EvalSymlinks` fix; the
 `capability-routing` config-dir path fix; and a plain-language "guardrails, not a
 boundary" warning in the launch banner and docs.

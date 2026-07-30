@@ -303,7 +303,7 @@ const hostSettingsJSON = `{
 `
 
 // hostContextMD is the host-mode system preamble, appended to pi's system
-// prompt at launch. It exists because the sandbox agentContext (pi-kit/
+// prompt at launch. It exists because the sandbox agentInstructions (pi-kit/
 // spec.yaml) asserts a disposable, network-fenced, full-auto VM — isolation
 // that does NOT exist here. Copying it onto the host would be actively
 // dangerous, so host mode asserts the opposite, explicitly.

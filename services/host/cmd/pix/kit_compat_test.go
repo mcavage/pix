@@ -28,7 +28,7 @@ func TestValidateCreateKitsFailsBeforeLaunchWithUpgrade(t *testing.T) {
 		t.Fatalf("validated refs = %v", seen)
 	}
 	msg := err.Error()
-	for _, want := range []string{"cannot read the Pix kit schema", "INVALID: artifact: invalid spec.yaml", "brew upgrade --cask docker/tap/sbx@nightly"} {
+	for _, want := range []string{"does not match the installed Docker Sandboxes schema", "INVALID: artifact: invalid spec.yaml", "update Pix and Docker Sandboxes"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error missing %q: %s", want, msg)
 		}

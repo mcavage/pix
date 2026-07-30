@@ -717,7 +717,7 @@ func TestPackCapabilitiesJSON_LoadedAndMounted(t *testing.T) {
 }
 
 // TestSynthesizePackKit_EgressAllow: a sandbox [[proxy]] with egress emits
-// caps.network.allow into the synthesized mixin kit, so the wrapper can reach
+// permissions.network.allow into the synthesized mixin kit, so the wrapper can reach
 // its host endpoint (else the sbx egress proxy 403s host.docker.internal).
 func TestSynthesizePackKit_EgressAllow(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
@@ -737,9 +737,9 @@ func TestSynthesizePackKit_EgressAllow(t *testing.T) {
 		t.Fatalf("kit=%q err=%v", kit, err)
 	}
 	b, _ := os.ReadFile(filepath.Join(kit, "spec.yaml"))
-	for _, want := range []string{"caps:", "host.docker.internal:11442", "localhost:11442"} {
+	for _, want := range []string{"permissions:", "host.docker.internal:11442", "localhost:11442"} {
 		if !strings.Contains(string(b), want) {
-			t.Fatalf("proxy egress missing %q in caps.network.allow:\n%s", want, b)
+			t.Fatalf("proxy egress missing %q in permissions.network.allow:\n%s", want, b)
 		}
 	}
 }

@@ -25,7 +25,7 @@ func validateCreateKits(args []string, validate func(string) (string, error)) er
 		if detail == "" {
 			detail = err.Error()
 		}
-		return fmt.Errorf("installed Docker Sandboxes cannot read the Pix kit schema (%s)\n  detail: %s\n  fix: brew update && brew upgrade --cask docker/tap/sbx@nightly", ref, detail)
+		return fmt.Errorf("this Pix kit does not match the installed Docker Sandboxes schema (%s)\n  detail: %s\n  fix: update Pix and Docker Sandboxes, then retry", ref, detail)
 	}
 	return nil
 }

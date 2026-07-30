@@ -465,7 +465,7 @@ func inferenceKitSpec(cfg *config.Config) (string, error) {
 	var b strings.Builder
 	b.WriteString("schemaVersion: \"2\"\nkind: mixin\nname: pix-inference\n")
 	if len(hosts) > 0 {
-		b.WriteString("caps:\n  network:\n    allow:\n")
+		b.WriteString("permissions:\n  network:\n    allow:\n")
 		for _, host := range hosts {
 			fmt.Fprintf(&b, "      - %s\n", strconv.Quote(host))
 		}

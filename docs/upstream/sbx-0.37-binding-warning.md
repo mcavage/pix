@@ -20,7 +20,7 @@ about to work fine.
 
 2. Use any kit that declares that credential (`kind: sandbox`, a
    `credentials[].apiKey` for `anthropic` injecting on `api.anthropic.com`, with
-   `api.anthropic.com` in `caps.network.allow`).
+   `api.anthropic.com` in `permissions.network.allow`).
 
 3. Create the sandbox:
 
