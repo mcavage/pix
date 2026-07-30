@@ -240,7 +240,10 @@ function loadAgentsFromDir(
 			frontmatter = parsed.frontmatter ?? {};
 			body = parsed.body ?? content;
 		} catch {
-			/* treat as bodyonly */
+			// Metadata controls model and tool policy. Running malformed frontmatter
+			// as an unrestricted, parent-model child is an unsafe silent fallback.
+			// Omit it from discovery so invocation fails clearly as an unknown agent.
+			continue;
 		}
 		// Name = frontmatter.name if present, else filename (pix + skills style).
 		const name = (frontmatter.name || path.basename(entry.name, ".md")).trim();
@@ -682,12 +685,13 @@ type OnUpdate = (partial: { content: any[]; details: SubagentDetails }) => void;
 // Discipline (peer-reviewed): top-level runs only (a headless tree child has no
 // UI, so it renders nothing and never allocates a timer); a SINGLE 1s ticker
 // (not an 8Hz spinner — repaint churn, see status.ts); ticker gated on the
-// RUNNING count so sticky failures don't spin it forever; successes auto-clear
-// after a TTL, failures/timeouts/aborts stay pinned until the next batch or
-// shutdown; every pi-API touch guarded so nothing throws at load or wedges
+// RUNNING count so finished failures don't spin it forever; successes auto-clear
+// quickly and failures/timeouts/aborts remain briefly for visibility; every
+// pi-API touch is guarded so nothing throws at load or wedges
 // /reload.
 const TRACKER_WIDGET_ID = "subagent-tracker";
 const FINISHED_TTL_MS = num("PI_SUBAGENT_PIN_TTL_MS", 6_000);
+const FAILED_TTL_MS = num("PI_SUBAGENT_FAILED_PIN_TTL_MS", 15_000);
 const MAX_VISIBLE_ROWS = 10; // string[] widgets are capped ~10 lines by pi
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
@@ -745,8 +749,8 @@ function runningCount(): number {
 	return n;
 }
 
-// Before a fresh batch registers, sweep away any lingering finished rows (incl.
-// sticky failures) so a new run starts on a clean pin — but only when nothing is
+// Before a fresh batch registers, sweep away any lingering finished rows so a
+// new run starts on a clean pin — but only when nothing is
 // still running, so we never wipe a live sibling.
 function clearFinishedIfIdle(): void {
 	try {
@@ -906,11 +910,12 @@ function finalizeRun(id: string, r: SingleResult): void {
 			e.status = "failed";
 			e.error = (r.errorMessage || r.stderr || "failed").split("\n")[0].slice(0, 40);
 		}
-		// Successes self-expire; failures stay pinned until the next batch/shutdown.
-		// With no UI (headless child) never allocate a timer: just drop the row.
-		if (e.status === "done" && !tracker.ui) {
+		// Finished rows self-expire. Failures remain visible longer than successes,
+		// but never permanently occupy the user's screen; the full tool result is
+		// already durable in conversation history. With no UI, drop immediately.
+		if (!tracker.ui) {
 			tracker.runs.delete(id);
-		} else if (e.status === "done") {
+		} else {
 			const t = setTimeout(() => {
 				try {
 					tracker.runs.delete(id);
@@ -920,7 +925,7 @@ function finalizeRun(id: string, r: SingleResult): void {
 				} catch {
 					/* best-effort */
 				}
-			}, FINISHED_TTL_MS);
+			}, e.status === "done" ? FINISHED_TTL_MS : FAILED_TTL_MS);
 			if (typeof t.unref === "function") t.unref();
 			tracker.timers.set(id, t);
 		}
@@ -2103,12 +2108,19 @@ export default function (pi: ExtensionAPI) {
 					} catch {
 						/* ignore */
 					}
+					const currentModel =
+						ctx.model?.provider && ctx.model?.id
+							? `${ctx.model.provider}/${ctx.model.id}`
+							: undefined;
+					const canaryModel =
+						process.env.PI_SUBAGENT_DOCTOR_MODEL ||
+						resolveIntentModel("fast-balanced") ||
+						resolveIntentModel("breadth") ||
+						currentModel;
 					const canary: AgentConfig = {
 						name: "__doctor_canary",
 						description: "self-audit canary",
-						model:
-							process.env.PI_SUBAGENT_DOCTOR_MODEL ||
-							"anthropic/claude-haiku-4-5",
+						model: canaryModel,
 						thinking: "off",
 						tools: ["read"],
 						// Tight budgets for the audit regardless of global config, so a broken

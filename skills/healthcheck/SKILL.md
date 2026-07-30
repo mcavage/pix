@@ -24,15 +24,17 @@ the DHI trixie base ships without it) tells you a CLI exists; only running it
 tells you it works. No step is optional; skipping one and marking it OK is a
 false signal.
 
-### A1. Environment / keys
+### A1. Inference availability
 ```bash
-for k in ANTHROPIC_API_KEY OPENAI_API_KEY; do
-  [ -n "${!k}" ] && echo "OK: $k" || echo "FAIL: $k missing"
-done
-[ -n "$GEMINI_API_KEY" ] && echo "OK: GEMINI_API_KEY" || echo "optional: GEMINI_API_KEY unset"
+cat ~/.pi/agent/inference.json
+cat ~/.pi/agent/routing.json
 ```
-Anthropic + OpenAI are required (the model cycle and the cross-vendor `review`
-agent). Gemini is optional.
+The generated inference manifest and compiled routes are authoritative. One
+working route is sufficient; every vendor is not required. Never classify
+missing native env keys as failures when a custom gateway or Ollama supplies
+the resolved models. `proxy-managed` is a sentinel, not secret evidence and not
+a direct API key. Exercise the session model plus the three-agent routing smoke
+test in A5; do not independently fan out across every model or agent.
 
 ### A2. Memory service
 This raw curl is an explicit **harness diagnostic**, it hits the daemon directly
@@ -108,8 +110,10 @@ dx-consultant, legal, finance-analyst, growth-marketing, ux-copywriter,
 enterprise-admin). Then smoke-test one agent per model tier in parallel via the
 `subagent` tool (`{tasks:[{agent, task}, …]}`, a trivial task each): a cheap/fast
 tier role (`qa-lead`→Gemini Flash / `fanout`→Flash-Lite), an Opus-5 tier role
-(`architect`/`deep`), and the cross-vendor `review` (→Gemini Pro). Report each: role, model, ok/slow/fail. Three proves every
-model family and the dispatch path.
+(`architect`/`deep`), and the cross-vendor `review` (→Gemini Pro). Report each:
+role, model, ok/slow/fail. Three proves every model family and the dispatch path.
+Do not launch the entire roster: that adds cost and noisy concurrency failures
+without improving coverage.
 
 ### A6. Skills + tool routing
 ```bash
@@ -120,10 +124,10 @@ SKILL.md. Then confirm scoping holds: a read-only role (`fanout`, `qa-lead`) has
 no write/edit in its `tools:`, a builder (`engineer`) does, read the frontmatter.
 
 ### Part A report
-A table per check: OK / FAIL / optional + a one-line note, covering keys, memory,
+A table per check: OK / FAIL / optional + a one-line note, covering inference, memory,
 MCP (per backend), CLIs (per CLI), roster, skills, routing. Verdict is ALL CLEAR
-only when keys, roster, skills, and every present MCP backend + CLI are healthy. A
-missing memory service, Gemini key, MCP server, or pack CLI is optional; a
+only when inference, roster, skills, and every present MCP backend + CLI are healthy. A
+missing memory service, alternate model vendor, MCP server, or pack CLI is optional; a
 present-but-erroring backend or CLI IS a failure. If you skipped a subsystem, say
 so; do not imply coverage you didn't run.
 

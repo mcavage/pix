@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 register("./stub-loader.mjs", import.meta.url);
 
-const { compatForBackend, compatForModel, providerBaseURL } = await import("../extensions/inference.ts");
+const { compatForBackend, compatForModel, providerBaseURL, suppressUnusedDirectCredentialSentinels } = await import("../extensions/inference.ts");
 
 test("generated Responses gateways suppress the underscore session_id header", () => {
 	assert.deepEqual(
@@ -55,4 +55,42 @@ test("catalog metadata selects Anthropic adaptive thinking without guessing mode
 		),
 		undefined,
 	);
+});
+
+test("exclusive gateways hide native proxy sentinels from direct-search extensions", () => {
+	const saved = Object.fromEntries(["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"].map((k) => [k, process.env[k]]));
+	try {
+		process.env.ANTHROPIC_API_KEY = "proxy-managed";
+		process.env.OPENAI_API_KEY = "proxy-managed";
+		process.env.GEMINI_API_KEY = "real-user-value";
+		suppressUnusedDirectCredentialSentinels({
+			version: 1,
+			backends: { gateway: { driver: "openai-compatible", auth: "sbx-session" } },
+			models: [],
+		});
+		assert.equal(process.env.ANTHROPIC_API_KEY, undefined);
+		assert.equal(process.env.OPENAI_API_KEY, undefined);
+		assert.equal(process.env.GEMINI_API_KEY, "real-user-value", "never delete a real value");
+	} finally {
+		for (const [key, value] of Object.entries(saved)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	}
+});
+
+test("native runtime keeps its own proxy-managed credential sentinel", () => {
+	const saved = process.env.OPENAI_API_KEY;
+	try {
+		process.env.OPENAI_API_KEY = "proxy-managed";
+		suppressUnusedDirectCredentialSentinels({
+			version: 1,
+			backends: { openai: { driver: "native", auth: "1password", key_env: "OPENAI_API_KEY" } },
+			models: [],
+		});
+		assert.equal(process.env.OPENAI_API_KEY, "proxy-managed");
+	} finally {
+		if (saved === undefined) delete process.env.OPENAI_API_KEY;
+		else process.env.OPENAI_API_KEY = saved;
+	}
 });

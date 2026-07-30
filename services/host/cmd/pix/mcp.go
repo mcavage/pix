@@ -695,6 +695,13 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 		return nil
 	}
 
+	// Repair the exact malformed prose emitted by Pix 0.1.14 before handing the
+	// file to `op run`; otherwise every wrapped local MCP exits during dotenv
+	// parsing. Unknown malformed content still fails closed in op itself.
+	if err := repairLegacyOpRefsFile(env, defaultOpRefsPath(env)); err != nil {
+		return fmt.Errorf("repairing op-refs.env: %w", err)
+	}
+
 	// Resolve op + op-refs. op-refs is the file of op:// refs the wrapper resolves
 	// at spawn; when both op and op-refs are present we wrap credentialed local
 	// servers in `op run`. Normal gog OAuth remains bare unless the refs file

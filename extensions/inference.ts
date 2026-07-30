@@ -74,9 +74,28 @@ function readManifest(): Manifest | undefined {
 	}
 }
 
+// The base kit exposes proxy-managed sentinel env vars for native providers.
+// An exclusive custom-gateway runtime has no corresponding native credential,
+// but third-party extensions can mistake the sentinel for a usable direct API
+// key and send it to a public API. Hide only sentinels, and only for native
+// backends absent from this runtime.
+export function suppressUnusedDirectCredentialSentinels(manifest: Manifest): void {
+	const nativeEnvs = new Set(
+		Object.values(manifest.backends)
+			.filter((backend) => backend.driver === "native" && backend.key_env)
+			.map((backend) => backend.key_env as string),
+	);
+	for (const envName of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"]) {
+		if (!nativeEnvs.has(envName) && process.env[envName] === "proxy-managed") {
+			delete process.env[envName];
+		}
+	}
+}
+
 export default function (pi: any): void {
 	const manifest = readManifest();
 	if (!manifest) return;
+	suppressUnusedDirectCredentialSentinels(manifest);
 	for (const [name, backend] of Object.entries(manifest.backends)) {
 		if (backend.driver === "native") continue;
 		const models = manifest.models.filter((m) => m.backend === name);

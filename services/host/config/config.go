@@ -1016,11 +1016,15 @@ var NonSecretOpRefsKeys = map[string]bool{
 // to fill. Every example line is COMMENTED OUT so a freshly-seeded file has ZERO
 // active entries — the user uncomments (or adds) a line only when wiring a
 // server. Kept in sync with the repo's config/op-refs.env.example (which the
-// make path uses). Its header repeats OpRefsMentalModel verbatim.
+// make path uses). Its header repeats OpRefsMentalModel's wording as dotenv
+// comments; every physical prose line must carry its own # prefix.
 const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway resolves via
 # ` + "`op run --env-file`" + ` when it spawns each host MCP server.
 #
-# ` + OpRefsMentalModel + `
+# op-refs.env maps ENV_VAR = op://vault/item/field. When the gateway spawns a
+# host MCP server it resolves those refs from 1Password and injects them as env
+# vars — the secret never touches disk or the sandbox. A server with no creds
+# (pio) needs no entry.
 #
 # This file holds op://vault/item/field REFERENCES only, plus the documented
 # non-secret env allowlist (GOG_ACCOUNT, GOG_HOME, GOG_KEYRING_BACKEND,
