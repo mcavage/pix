@@ -716,6 +716,74 @@ func TestPackCapabilitiesJSON_LoadedAndMounted(t *testing.T) {
 	}
 }
 
+func TestPackWebSearchJSONLoadedAndMounted(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	root := filepath.Join(dir, "pack")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte("name = \"work\"\nschema = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config := `{"provider":"openai","openaiBaseUrl":"https://models.example.test/v1","openaiModel":"reasoner"}`
+	if err := os.WriteFile(filepath.Join(root, "web-search.json"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := loadPack(root)
+	if err != nil {
+		t.Fatalf("loadPack: %v", err)
+	}
+	if p.WebSearchFile == "" {
+		t.Fatal("loadPack did not set WebSearchFile")
+	}
+	kit, err := synthesizePackKit(p)
+	if err != nil || kit == "" {
+		t.Fatalf("expected web-search-only pack kit, got %q err=%v", kit, err)
+	}
+	got, err := os.ReadFile(filepath.Join(kit, "files", "home", ".pi", "web-search.json"))
+	if err != nil {
+		t.Fatalf("web-search.json not mounted: %v", err)
+	}
+	if string(got) != config {
+		t.Fatalf("mounted web-search.json = %s, want %s", got, config)
+	}
+}
+
+func TestPackWebSearchJSONRejectsMalformedAndSymlink(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		make func(string) error
+	}{
+		{name: "malformed", make: func(root string) error {
+			return os.WriteFile(filepath.Join(root, "web-search.json"), []byte(`{"provider":`), 0o644)
+		}},
+		{name: "non-object", make: func(root string) error {
+			return os.WriteFile(filepath.Join(root, "web-search.json"), []byte(`[]`), 0o644)
+		}},
+		{name: "symlink", make: func(root string) error {
+			target := filepath.Join(root, "target.json")
+			if err := os.WriteFile(target, []byte(`{}`), 0o644); err != nil {
+				return err
+			}
+			return os.Symlink(target, filepath.Join(root, "web-search.json"))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte("name = \"work\"\nschema = 1\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.make(root); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadPack(root); err == nil || !strings.Contains(err.Error(), "web-search.json") {
+				t.Fatalf("loadPack error = %v, want web-search.json rejection", err)
+			}
+		})
+	}
+}
+
 // TestSynthesizePackKit_EgressAllow: a sandbox [[proxy]] with egress emits
 // permissions.network.allow into the synthesized mixin kit, so the wrapper can reach
 // its host endpoint (else the sbx egress proxy 403s host.docker.internal).

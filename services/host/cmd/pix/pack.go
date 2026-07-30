@@ -310,6 +310,11 @@ type packInfo struct {
 	// else "". Mounted into the sandbox at ~/.pi/agent/capabilities.json via the
 	// synthesized mixin kit so a pack carries its own capability->provider routing.
 	CapabilitiesFile string
+	// WebSearchFile is <root>/web-search.json when present. It is mounted at
+	// ~/.pi/web-search.json (pi-web-access's sandbox config path) so a pack can
+	// route discovery through its private inference gateway without putting that
+	// endpoint in Pix.
+	WebSearchFile string
 }
 
 const packManifestName = "pack.toml"
@@ -372,6 +377,23 @@ func loadPack(root string) (*packInfo, error) {
 			return nil, fmt.Errorf("pack %s: capabilities.json is a symlink; refusing to mount", root)
 		}
 		p.CapabilitiesFile = f
+	}
+	if f := filepath.Join(root, "web-search.json"); fileExists(f) {
+		if isSymlinkPath(f) {
+			return nil, fmt.Errorf("pack %s: web-search.json is a symlink; refusing to mount", root)
+		}
+		b, readErr := os.ReadFile(f)
+		if readErr != nil {
+			return nil, fmt.Errorf("pack %s: reading web-search.json: %w", root, readErr)
+		}
+		var value any
+		if len(b) > 64*1024 || json.Unmarshal(b, &value) != nil {
+			return nil, fmt.Errorf("pack %s: web-search.json must be valid JSON no larger than 64 KiB", root)
+		}
+		if _, ok := value.(map[string]any); !ok {
+			return nil, fmt.Errorf("pack %s: web-search.json must contain a JSON object", root)
+		}
+		p.WebSearchFile = f
 	}
 	if err := validatePackFacets(root, &m); err != nil {
 		return nil, err
@@ -1624,7 +1646,7 @@ func synthesizePackKit(p *packInfo) (string, error) {
 	base := packKitDir(p.Root)
 	parent := filepath.Dir(base)
 	sweepStaleKitTemps(parent, filepath.Base(base))
-	if len(sandboxProxies) == 0 && p.CapabilitiesFile == "" {
+	if len(sandboxProxies) == 0 && p.CapabilitiesFile == "" && p.WebSearchFile == "" {
 		// No sandbox proxies and no capabilities.json: nothing to mount. A previous
 		// launch's kit dir is inert (nothing references it) and the sweep above
 		// cleans it up.
@@ -1717,6 +1739,19 @@ func synthesizePackKit(p *packInfo) (string, error) {
 		}
 		if err := os.WriteFile(filepath.Join(agentOut, "capabilities.json"), b, 0o644); err != nil {
 			return fail("pack capabilities.json: %v (refusing to build the pack kit)", err)
+		}
+	}
+	if p.WebSearchFile != "" {
+		configOut := filepath.Join(dir, "files", "home", ".pi")
+		if err := os.MkdirAll(configOut, 0o755); err != nil {
+			return fail("pack web-search.json: %v (refusing to build the pack kit)", err)
+		}
+		b, err := os.ReadFile(p.WebSearchFile)
+		if err != nil {
+			return fail("pack web-search.json: %v (refusing to build the pack kit)", err)
+		}
+		if err := os.WriteFile(filepath.Join(configOut, "web-search.json"), b, 0o644); err != nil {
+			return fail("pack web-search.json: %v (refusing to build the pack kit)", err)
 		}
 	}
 	return dir, nil
@@ -2794,6 +2829,9 @@ func runPackShow(out io.Writer, rest []string) {
 	fmt.Fprintf(out, "knowledge: %s\n", present(p.KnowledgeDir))
 	if p.CapabilitiesFile != "" {
 		fmt.Fprintln(out, "capabilities: yes (mounts to ~/.pi/agent/capabilities.json)")
+	}
+	if p.WebSearchFile != "" {
+		fmt.Fprintln(out, "web search: yes (mounts to ~/.pi/web-search.json)")
 	}
 	if p.Manifest.OllamaBridgeModel != "" {
 		fmt.Fprintf(out, "ollama:    %s\n", p.Manifest.OllamaBridgeModel)

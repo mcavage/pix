@@ -66,6 +66,7 @@ my-pack/
   knowledge/         # OKF bundle (what `knowledge init` scaffolds today)
   bin/               # CLI-proxy wrapper scripts
   capabilities.json  # capability routing FRAGMENT (colocated with what it routes)
+  web-search.json     # optional web discovery routing (provider/gateway/model)
   kit/files/…        # raw escape hatch for anything the schema can't express
   pack.lock          # generated: resolved refs + plugin SHAs
 ```

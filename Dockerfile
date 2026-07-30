@@ -252,6 +252,12 @@ RUN set -eux; for p in \
 # the clear marker so session resume and compaction continuation respect it.
 RUN node /usr/local/share/pix/patches/apply-todo-durable-clear.mjs
 
+# pi-web-access 0.13.0 hardcodes api.openai.com + gpt-5.4 for native Responses
+# search. Add the two configuration seams a private pack needs to reuse its
+# already trust-gated OpenAI Responses backend. The patch is pinned, exact, and
+# fails the image build if the upstream source moves.
+RUN node /usr/local/share/pix/patches/apply-web-access-gateway.mjs
+
 # Bound the subagent result-wait so a dead subagent can't park the event loop
 # (Esc-proof hang). Idempotent + non-fatal. DISABLED alongside pi-subagents above
 # (nothing to patch); it also proved insufficient — on 0.80.x the wait isn't the
