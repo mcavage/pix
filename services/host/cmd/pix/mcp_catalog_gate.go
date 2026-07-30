@@ -80,8 +80,10 @@ func remoteMCPAuthorizationState(env shellEnv, name string) catalogMCPReadiness 
 // verifyCatalogMCPReady is the gate itself: every shipped-catalog name in
 // names (derived from mcpCatalogNames — non-catalog names are never probed
 // here) must classify catalogMCPReady, or the whole operation fails with the
-// exact repair command BEFORE anything was saved or launched. One bounded
-// `sbx mcp ls` is shared across all names.
+// exact repair command before the host phase saves its proposal or launches a
+// sandbox. Pack adoption may already have committed launcher-owned pack state,
+// so errors deliberately make no global "nothing was saved" claim. One
+// bounded `sbx mcp ls` is shared across all names.
 func verifyCatalogMCPReady(env shellEnv, names []string) error {
 	var catalog []string
 	seen := map[string]bool{}

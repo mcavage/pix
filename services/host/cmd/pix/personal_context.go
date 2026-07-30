@@ -37,6 +37,12 @@ func synthesizePersonalContextKit() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	complete := false
+	defer func() {
+		if !complete {
+			_ = os.RemoveAll(dir)
+		}
+	}()
 	var spec strings.Builder
 	spec.WriteString("schemaVersion: \"2\"\nkind: mixin\nname: pix-personal-context\nagentInstructions:\n  content: |\n")
 	for _, line := range strings.Split(string(b), "\n") {
@@ -45,6 +51,7 @@ func synthesizePersonalContextKit() (string, error) {
 	if err := os.WriteFile(filepath.Join(dir, "spec.yaml"), []byte(spec.String()), 0o600); err != nil {
 		return "", err
 	}
+	complete = true
 	return dir, nil
 }
 

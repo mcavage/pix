@@ -552,6 +552,12 @@ func synthesizeInferenceKit(cfg *config.Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	complete := false
+	defer func() {
+		if !complete {
+			_ = os.RemoveAll(dir)
+		}
+	}()
 	agentDir := filepath.Join(dir, "files", "home", ".pi", "agent")
 	if err := os.MkdirAll(agentDir, 0o700); err != nil {
 		return "", err
@@ -573,6 +579,7 @@ func synthesizeInferenceKit(cfg *config.Config) (string, error) {
 	if err := os.WriteFile(filepath.Join(dir, "spec.yaml"), []byte(spec), 0o600); err != nil {
 		return "", err
 	}
+	complete = true
 	return dir, nil
 }
 

@@ -382,6 +382,31 @@ func TestRemoteMCPRegistrationCurrentRejectsEndpointSubstring(t *testing.T) {
 	}
 }
 
+func TestRemoteMCPRegistrationCurrentRequiresEndpointField(t *testing.T) {
+	want := "https://expected.example/mcp?a=1&b=2"
+	for _, payload := range []string{
+		`{"url":"https://evil.example/mcp","note":"https://expected.example/mcp?a=1&b=2"}`,
+		`{"callback_url":"https://expected.example/mcp?a=1&b=2"}`,
+		`{"url":"https://evil.example/mcp","nested":{"endpoint":"https://expected.example/mcp?a=1&b=2"}}`,
+		`url: https://evil.example/?next=https://expected.example/mcp?a=1&b=2`,
+	} {
+		env := shellEnv{probe: func(string, ...string) (string, bool, error) { return payload, false, nil }}
+		if remoteMCPRegistrationCurrent(env, "meetings", want) {
+			t.Fatalf("non-endpoint evidence was trusted: %s", payload)
+		}
+	}
+}
+
+func TestRemoteMCPRegistrationCurrentCanonicalExactMatch(t *testing.T) {
+	want := "https://expected.example/mcp?b=2&a=1"
+	env := shellEnv{probe: func(string, ...string) (string, bool, error) {
+		return `{"server":{"remote_url":"HTTPS://EXPECTED.EXAMPLE:443/mcp?a=1&b=2"}}`, false, nil
+	}}
+	if !remoteMCPRegistrationCurrent(env, "meetings", want) {
+		t.Fatal("canonically identical endpoint field was not recognized")
+	}
+}
+
 // TestRegisterServers_LocalSetUnknownFailClosed: when the local-name list can't
 // be established (pix-host unresolved / `mcp --list` fails), a non-gog name
 // must FAIL CLOSED — NOT be registered as a local pix-host subcommand — and
@@ -624,7 +649,7 @@ func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 func TestBuildGogRegistrarIgnoresUnrelatedOpRefs(t *testing.T) {
 	dir := t.TempDir()
 	refs := filepath.Join(dir, "op-refs.env")
-	if err := os.WriteFile(refs, []byte("BAMBOOHR_API_KEY=op://Private/Bamboo/key\n"), 0o600); err != nil {
+	if err := os.WriteFile(refs, []byte("EXAMPLE_API_KEY=op://Private/Example/key\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env := defaultShellEnv()

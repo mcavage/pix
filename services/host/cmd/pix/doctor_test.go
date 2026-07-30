@@ -120,7 +120,7 @@ func opWrappedGog(refs, acct string) string {
 }
 
 // reconstructedGogProbe is the exact best-effort headless probe when the refs
-// file has no GOG_KEYRING_PASSWORD. Unrelated Slack/BambooHR refs must not wrap
+// file has no GOG_KEYRING_PASSWORD. Unrelated integration refs must not wrap
 // gog in `op run`; gog's own OAuth keyring is independently headless.
 func reconstructedGogProbe(refs, acct string) string {
 	_ = refs

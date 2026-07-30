@@ -1178,10 +1178,17 @@ func launchTask(o runOpts) error {
 	if err != nil {
 		return err
 	}
+	var generatedKitDirs []string
+	defer func() {
+		if err := cleanupGeneratedKitDirs(generatedKitDirs); err != nil {
+			fmt.Fprintf(os.Stderr, "pix: warning: %v\n", err)
+		}
+	}()
 	if kit, ierr := synthesizeInferenceKit(cfg); ierr != nil {
 		return fmt.Errorf("inference: %w", ierr)
 	} else if kit != "" {
 		o.PackKits = append(o.PackKits, kit)
+		generatedKitDirs = append(generatedKitDirs, kit)
 	}
 	if o.Models, err = callableRuntimeModels(cfg); err != nil {
 		return fmt.Errorf("inference models: %w", err)
@@ -1190,6 +1197,7 @@ func launchTask(o runOpts) error {
 		return fmt.Errorf("personal context: %w", cerr)
 	} else if kit != "" {
 		o.PackKits = append(o.PackKits, kit)
+		generatedKitDirs = append(generatedKitDirs, kit)
 	}
 
 	released := isReleased(version)

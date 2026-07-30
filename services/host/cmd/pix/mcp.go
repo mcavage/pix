@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -559,7 +560,7 @@ func buildGogRegistrar(env shellEnv, gogPath, account string) mcpRegistrar {
 	opPath, opErr := lookPath("op")
 	opRefs := resolveOpRefs(env)
 	// gog's normal macOS OAuth lives in its own keychain and must not inherit an
-	// op wrapper merely because unrelated Slack/BambooHR refs exist. The wrapper
+	// op wrapper merely because unrelated integration refs exist. The wrapper
 	// is only for the explicit file-keyring topology, identified by its password
 	// ref; otherwise `op run` adds a needless sign-in dependency and can prevent
 	// an already-working bare gog command from running at all.
@@ -880,54 +881,107 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 func remoteMCPRegistrationCurrent(env shellEnv, name, endpoint string) bool {
 	for _, verb := range []string{"inspect", "get"} {
 		out, timedOut, err := probeRun(env, "sbx", "mcp", verb, name)
-		if err == nil && !timedOut && outputContainsExactString(out, endpoint) {
+		if err == nil && !timedOut && outputContainsCanonicalEndpoint(out, endpoint) {
 			return true
 		}
 	}
 	return false
 }
 
-// outputContainsExactString accepts an endpoint only as a complete structured
-// value. A substring match would accept an attacker URL such as
-// https://evil.invalid/?next=https://expected.example/mcp.
-func outputContainsExactString(out, want string) bool {
-	var decoded any
-	if json.Unmarshal([]byte(out), &decoded) == nil && jsonValueContainsExactString(decoded, want) {
-		return true
+// outputContainsCanonicalEndpoint accepts only URL/endpoint fields (or a bare
+// URL line) whose parsed canonical URL equals want. Arbitrary JSON strings and
+// substrings are not identity evidence.
+func outputContainsCanonicalEndpoint(out, want string) bool {
+	wantURL, ok := canonicalMCPEndpoint(want)
+	if !ok {
+		return false
 	}
+	var decoded any
+	if json.Unmarshal([]byte(out), &decoded) == nil {
+		found := map[string]bool{}
+		jsonCollectCanonicalEndpoints(decoded, found)
+		return len(found) == 1 && found[wantURL]
+	}
+	found := map[string]bool{}
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
-		if line == want {
-			return true
+		if got, valid := canonicalMCPEndpoint(strings.Trim(line, `"'`)); valid {
+			found[got] = true
 		}
 		if i := strings.Index(line, ":"); i >= 0 {
+			key := normalizeEndpointField(line[:i])
 			v := strings.Trim(strings.TrimSpace(line[i+1:]), `"'`)
-			if v == want {
-				return true
+			if endpointField(key) {
+				if got, valid := canonicalMCPEndpoint(v); valid {
+					found[got] = true
+				}
 			}
 		}
 	}
-	return false
+	return len(found) == 1 && found[wantURL]
 }
 
-func jsonValueContainsExactString(v any, want string) bool {
+func jsonCollectCanonicalEndpoints(v any, found map[string]bool) {
 	switch x := v.(type) {
-	case string:
-		return x == want
 	case []any:
 		for _, item := range x {
-			if jsonValueContainsExactString(item, want) {
-				return true
-			}
+			jsonCollectCanonicalEndpoints(item, found)
 		}
 	case map[string]any:
-		for _, item := range x {
-			if jsonValueContainsExactString(item, want) {
-				return true
+		for key, item := range x {
+			if endpointField(normalizeEndpointField(key)) {
+				if raw, ok := item.(string); ok {
+					if got, valid := canonicalMCPEndpoint(raw); valid {
+						found[got] = true
+					}
+				}
 			}
+			jsonCollectCanonicalEndpoints(item, found)
 		}
 	}
-	return false
+}
+
+func normalizeEndpointField(key string) string {
+	key = strings.ToLower(strings.TrimSpace(key))
+	return strings.NewReplacer("_", "", "-", "", ".", "").Replace(key)
+}
+
+func endpointField(key string) bool {
+	switch key {
+	case "url", "endpoint", "remoteurl", "serverurl":
+		return true
+	default:
+		return false
+	}
+}
+
+func canonicalMCPEndpoint(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", false
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	if u.User != nil || u.Hostname() == "" || (u.Scheme != "https" && u.Scheme != "http") || u.Fragment != "" {
+		return "", false
+	}
+	host := strings.ToLower(u.Hostname())
+	port := u.Port()
+	if (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
+		port = ""
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	u.Host = host
+	if port != "" {
+		u.Host += ":" + port
+	}
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	u.RawQuery = u.Query().Encode()
+	u.RawFragment = ""
+	return u.String(), true
 }
 
 // allPreloadedMCP returns, order-preserving and de-duplicated, every non-empty

@@ -293,6 +293,14 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 // An unreadable host proxy script is an ERROR (fail closed): a surface that
 // cannot be fingerprinted cannot be accepted or installed.
 func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]string, error) {
+	return computeHostExecFingerprintWithSetup(root, b, nil)
+}
+
+// computeHostExecFingerprintWithSetup hashes immutable setup-hook snapshots
+// when supplied. runPackSetup executes those same bytes, binding the accepted
+// fingerprint to the actual executable instead of re-opening mutable pack
+// paths after the trust decision.
+func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[string][]byte) (string, map[string]string, error) {
 	type fpProxy struct {
 		Name string `json:"name"`
 		SHA  string `json:"sha"`
@@ -398,13 +406,17 @@ func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]stri
 	sort.Strings(doc.Creds)
 	doc.Prerequisites = append([]string(nil), b.Prerequisites...)
 	for _, s := range b.Setup {
-		path := filepath.Join(root, s.Path)
-		if isSymlinkPath(path) {
-			return "", nil, fmt.Errorf("setup hook %q is a symlink; refusing to fingerprint it", s.ID)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return "", nil, fmt.Errorf("setup hook %q: %v (cannot fingerprint the host-exec surface; fail closed)", s.ID, err)
+		data, snapshotted := setupBytes[s.ID]
+		if !snapshotted {
+			path := filepath.Join(root, s.Path)
+			if isSymlinkPath(path) {
+				return "", nil, fmt.Errorf("setup hook %q is a symlink; refusing to fingerprint it", s.ID)
+			}
+			var err error
+			data, err = os.ReadFile(path)
+			if err != nil {
+				return "", nil, fmt.Errorf("setup hook %q: %v (cannot fingerprint the host-exec surface; fail closed)", s.ID, err)
+			}
 		}
 		sum := sha256.Sum256(data)
 		doc.Setup = append(doc.Setup, fpSetup{

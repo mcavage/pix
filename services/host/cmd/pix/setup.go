@@ -194,6 +194,7 @@ func runSetupCmd(argv []string) {
 			activatedPacks = append(activatedPacks, cfg.Pack)
 		}
 	}
+	activatedPacks = uniquePackRoots(activatedPacks)
 	if len(activatedPacks) > 0 {
 		if err := persistPackStack(activatedPacks); err != nil {
 			fmt.Fprintf(os.Stderr, "pix setup: composing packs: %v\n", err)
@@ -203,7 +204,7 @@ func runSetupCmd(argv []string) {
 	// A pack's required setup owns its interactive authorization flows. Run it
 	// before the ordinary host gate: that gate verifies configured MCP servers,
 	// so placing hooks afterward made it impossible for a fresh pack to satisfy
-	// the very prerequisites the gate checked (and skipped Slack/Google/BambooHR
+	// the very prerequisites the gate checked (and skipped integration
 	// entirely on the first missing remote registration).
 	setupRequests, err := planPackSetupRequests(activatedPacks, parsed.withSetup)
 	if err != nil {
@@ -1604,7 +1605,8 @@ Host-config flags (all optional):
   --pack <path|owner/repo|git-url>
                            activate a pack through the normal host trust gate,
                            then run its required, resumable setup hooks;
-                           repeatable, composed in command order
+                           repeatable, composed in command order (collections
+                           union; later scalar declarations win)
   --with <setup-id>        also run a named optional setup hook from --pack;
                            repeatable, and invalid without --pack
   --google-workspace       opt in to Google Workspace (absent otherwise): runs

@@ -191,6 +191,7 @@ required_backend = "missing"
 func TestPersistPackStackComposesInferenceInOrder(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	first, second := t.TempDir(), t.TempDir()
 	write := func(root, name, backend, model string, exclusive bool) {
 		t.Helper()
@@ -223,6 +224,7 @@ func TestPersistPackStackComposesInferenceInOrder(t *testing.T) {
 func TestPersistPackStackLaterNonExclusiveClearsExclusivity(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	first, second := t.TempDir(), t.TempDir()
 	write := func(root, name, backend string, exclusive bool) {
 		t.Helper()

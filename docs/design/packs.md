@@ -241,14 +241,15 @@ work/personal switch swapping ALL facets atomically; the Tier-1 host
 bill-of-materials trust gate + SHA-pin for pack-shipped binaries; and
 knowledge bundles that are shared-vs-private and usable standalone.
 
-Still deferred: registry/marketplace; signing PKI; multi-pack composition
-beyond additive stacking; pack-to-pack dependency resolution; a `pack
+Still deferred: registry/marketplace; signing PKI; pack-to-pack dependency
+resolution; a `pack
 publish` verb (git is the sync); a GUI.
 
 ## 13. Open questions — resolved (owner)
 
-1. **Single active pack** — no multi-pack composition. (Revisit if a real
-   personal+company-at-once need shows up.)
+1. **Ordered active pack stack.** `pix setup --pack A --pack B` composes
+   collections by union and scalar declarations by last writer, while the
+   host-owned activation ledger retains per-pack removal attribution.
 2. **Provenance/signing: deferred past v2.** Tier-0 packs are markdown +
    refs (no pack code runs), so trust there is the git remote, like `npm
    install` from a GitHub URL. Host-executing packs get the Tier-1 gate

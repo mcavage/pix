@@ -669,30 +669,108 @@ func activePackRoots(cfg *config.Config, override string) []string {
 	return roots
 }
 
-// persistPackStack composes additive facets after each pack has independently
-// passed adoption and trust checks. Ordered scalars (notably exclusive
-// inference policy) are last-writer-wins; collections are unions.
+// persistPackStack composes every declared config facet after each pack has
+// independently passed adoption and trust checks. Collections are unions;
+// scalar declarations are applied in command order (last declaration wins).
+// Ownership is recorded per pack in host state so a later switch/rm removes
+// only entries the stack actually added and restores scalar values in reverse.
 func persistPackStack(roots []string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
+	store, err := loadPackTrustStore()
+	if err != nil {
+		return fmt.Errorf("pack trust state unreadable: %w", err)
+	}
+	records, err := composePackStack(cfg, store, roots)
+	if err != nil {
+		return err
+	}
+	return commitPackStack(cfg, records)
+}
+
+func uniquePackRoots(roots []string) []string {
+	seen := map[string]bool{}
+	unique := make([]string, 0, len(roots))
+	for _, root := range roots {
+		key := canonicalizePackRoot(root)
+		if key != "" && !seen[key] {
+			seen[key] = true
+			unique = append(unique, root)
+		}
+	}
+	return unique
+}
+
+func composePackStack(cfg *config.Config, store *packTrustStore, roots []string) ([]packActivationRecord, error) {
+	// Repeating the same pack does not create a second ownership layer. Without
+	// this normalization both records have the same identity, making a later
+	// reverse lookup unable to distinguish their scalar restore chain.
+	roots = uniquePackRoots(roots)
+
+	// The setup adoption loop ends with the last pack active. Return to the
+	// pre-stack baseline, then apply the whole ordered stack once. Reversing the
+	// ownership ledger is what makes scalar Prior* chains unwind correctly.
+	priorRoots := activePackRoots(cfg, "")
+	for i := len(priorRoots) - 1; i >= 0; i-- {
+		revertPackPriorContribution(cfg, store.activationFor(priorRoots[i]))
+	}
+	clearPackInference(cfg, "")
+
 	cfg.Packs = append([]string(nil), roots...)
 	if len(roots) > 0 {
 		cfg.Pack = roots[len(roots)-1]
+	} else {
+		cfg.Pack = ""
 	}
-	clearPackInference(cfg, "")
+	var records []packActivationRecord
 	for _, root := range roots {
 		p, err := loadPack(root)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		lock := packLock{}
 		for _, name := range packMcpNames(p) {
-			cfg.AddMCP(name)
+			if cfg.AddMCP(name) {
+				lock.MCP = append(lock.MCP, name)
+			}
 		}
 		if p.KnowledgeDir != "" {
-			cfg.AddKnowledgeBundle(p.KnowledgeDir)
+			if cfg.AddKnowledgeBundle(p.KnowledgeDir) {
+				lock.Knowledge = append(lock.Knowledge, canonicalizeKnowledgeBundle(p.KnowledgeDir))
+			}
 			cfg.AddService("knowledge")
+		}
+		adopted := isAdoptedPack(root)
+		if store != nil {
+			_, adopted = store.Adopted[canonicalizePackRoot(root)]
+			adopted = adopted || isAdoptedPack(root)
+		}
+		for _, k := range p.Manifest.Knowledge {
+			resolved, rerr := resolvePackKnowledgeRef(io.Discard, root, adopted, k)
+			if rerr != nil {
+				if errors.Is(rerr, errPrivateRefSkippedAdopted) {
+					continue
+				}
+				// Match ordinary pack activation: one bad optional ref does not
+				// discard the rest of an otherwise usable pack.
+				continue
+			}
+			if cfg.AddKnowledgeBundle(resolved) {
+				lock.Knowledge = append(lock.Knowledge, canonicalizeKnowledgeBundle(resolved))
+			}
+			cfg.AddService("knowledge")
+		}
+		if v := strings.TrimSpace(p.Manifest.GogAccount); v != "" {
+			lock.PriorGogAccount = cfg.GogAccount
+			lock.GogAccount = v
+			cfg.SetGogAccount(v)
+		}
+		if v := strings.TrimSpace(p.Manifest.OllamaBridgeModel); v != "" {
+			lock.PriorOllamaBridgeModel = cfg.OllamaBridgeModel
+			lock.OllamaBridgeModel = v
+			cfg.OllamaBridgeModel = v
 		}
 		// Exclusive policy is an ordered scalar, not an additive facet. A
 		// later pack that explicitly declares non-exclusive inference clears
@@ -701,8 +779,9 @@ func persistPackStack(roots []string) error {
 			cfg.Inference.ExclusiveSource = ""
 		}
 		if err := applyPackInference(cfg, p.Manifest.Inference, root); err != nil {
-			return err
+			return nil, err
 		}
+		records = append(records, store.newActivationRecord(root, lock))
 	}
 	// De-duplicate bindings by (model,backend), preserving the last declaration
 	// in stack order so a later pack can replace an upstream alias.
@@ -721,7 +800,34 @@ func persistPackStack(roots []string) error {
 		bindings[i], bindings[j] = bindings[j], bindings[i]
 	}
 	cfg.Inference.Models = bindings
-	return cfg.Save()
+	return records, nil
+}
+
+// commitPackStack keeps the host-owned ownership ledger and config on the same
+// safe side of a two-file commit. A normal config-save error restores the prior
+// ledger; only a hard kill can leave a harmless over-claim.
+func commitPackStack(cfg *config.Config, records []packActivationRecord) error {
+	return withPackTrustLock(func() error {
+		store, err := loadPackTrustStore()
+		if err != nil {
+			return err
+		}
+		priorSingle := store.Activation
+		priorStack := append([]packActivationRecord(nil), store.Activations...)
+		store.setActivationStack(records)
+		if err := store.save(); err != nil {
+			return err
+		}
+		if err := cfg.Save(); err != nil {
+			store.Activation = priorSingle
+			store.Activations = priorStack
+			if rollbackErr := store.save(); rollbackErr != nil {
+				return fmt.Errorf("saving config: %v (ownership rollback failed: %v)", err, rollbackErr)
+			}
+			return fmt.Errorf("saving config: %w", err)
+		}
+		return nil
+	})
 }
 
 func applyPackStackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, error) {
@@ -1825,6 +1931,7 @@ func commitPackActivation(cfg *config.Config, store *packTrustStore, root string
 			return fmt.Errorf("pack trust state unreadable: %v — aborting without saving config (nothing was committed; fix %s and re-run)", lerr, packTrustStorePath())
 		}
 		priorActivation := fresh.Activation
+		priorActivations := append([]packActivationRecord(nil), fresh.Activations...)
 		fresh.setActivation(root, lock)
 		if err := fresh.save(); err != nil {
 			if rerr := restoreLock(); rerr != nil {
@@ -1836,6 +1943,7 @@ func commitPackActivation(cfg *config.Config, store *packTrustStore, root string
 			// Roll BOTH the store record and the lock back so they match the
 			// (unchanged) on-disk config.
 			fresh.Activation = priorActivation
+			fresh.Activations = priorActivations
 			serr := fresh.save()
 			rerr := restoreLock()
 			if serr != nil || rerr != nil {
@@ -1845,6 +1953,7 @@ func commitPackActivation(cfg *config.Config, store *packTrustStore, root string
 		}
 		if store != nil {
 			store.Activation = fresh.Activation // keep the caller's view coherent
+			store.Activations = append([]packActivationRecord(nil), fresh.Activations...)
 		}
 		return nil
 	})
@@ -2903,7 +3012,8 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// pre-Save cfg was never persisted. ---
 
 	prevRoot := cfg.Pack
-	switching := prevRoot != "" && prevRoot != root
+	prevRoots := activePackRoots(cfg, "")
+	switching := prevRoot != "" && (prevRoot != root || len(prevRoots) > 1)
 	// The pack-supplied pack.lock is NEVER trusted for reversibility (round-2
 	// A) — not even when this pack is already active: a plain `git pull` (or a
 	// zip update) rewrites files under an already-active pack root, so a forged
@@ -2956,7 +3066,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// (in-memory) store record BEFORE computing the switch below, so its
 	// contributions revert correctly. Adopted packs never migrate (their lock
 	// is payload); see migratePhase1Activation.
-	if prevRoot != "" {
+	if prevRoot != "" && len(prevRoots) <= 1 {
 		migratePhase1Activation(trustStore, prevRoot)
 	}
 	bom := computeHostBoM(p, cfg.GogAccount, localMCPClassifier(env, hostBinaryResolver))
@@ -2985,8 +3095,14 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	var removedMCP, removedKnowledge []string
 	switch {
 	case switching:
-		// The previous pack's contribution set: HOST state only (round-2 A).
-		removedMCP, removedKnowledge = revertPackPriorContribution(cfg, trustStore.activationFor(prevRoot))
+		// A composed stack unwinds in reverse command order so each scalar
+		// restoration sees the value its predecessor set. Collections remain
+		// scoped to the exact per-pack ownership records.
+		for i := len(prevRoots) - 1; i >= 0; i-- {
+			mcp, knowledge := revertPackPriorContribution(cfg, trustStore.activationFor(prevRoots[i]))
+			removedMCP = append(removedMCP, mcp...)
+			removedKnowledge = append(removedKnowledge, knowledge...)
+		}
 	case prevRoot == root:
 		// SAME-pack reactivation (finding D): revert THIS pack's own prior
 		// contribution first, then re-apply the manifest fresh below. Without
@@ -3309,7 +3425,12 @@ func runPackRm(out io.Writer, rest []string) {
 				return fmt.Errorf("host wrappers could not be removed: %v — nothing detached; fix that and re-run (a `pix host` launch refuses until they are cleared)", cerr)
 			}
 		}
-		removedMCP, removedKnowledge = revertPackPriorContribution(cfg, store.activationFor(old))
+		roots := activePackRoots(cfg, "")
+		for i := len(roots) - 1; i >= 0; i-- {
+			mcp, knowledge := revertPackPriorContribution(cfg, store.activationFor(roots[i]))
+			removedMCP = append(removedMCP, mcp...)
+			removedKnowledge = append(removedKnowledge, knowledge...)
+		}
 		clearPackInference(cfg, "")
 		cfg.Pack = ""
 		cfg.Packs = nil
@@ -3321,11 +3442,9 @@ func runPackRm(out io.Writer, rest []string) {
 		// already-locked mutation (round-3 #1; the lock is held — never nest
 		// withPackTrustLock); a failed store write merely over-claims (removals
 		// of absent entries are no-ops).
-		if store.hasActivationFor(old) {
+		if len(store.Activations) > 0 || store.hasActivationFor(old) {
 			if _, werr := mutatePackTrustStoreLocked(func(s *packTrustStore) error {
-				if s.hasActivationFor(old) {
-					s.Activation = nil
-				}
+				s.clearActivations()
 				return nil
 			}); werr != nil {
 				fmt.Fprintf(out, "note: could not clear the activation record: %v (harmless over-claim; re-run `pack rm` once %s is writable)\n", werr, packTrustStorePath())
