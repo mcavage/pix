@@ -59,8 +59,8 @@ func TestStatusMCPRowsEmptyCfgReceiptPreloaded(t *testing.T) {
 
 	var human bytes.Buffer
 	st.render(&human)
-	if !strings.Contains(human.String(), "notion") {
-		t.Errorf("human render must show the receipt-only row:\n%s", human.String())
+	if !strings.Contains(human.String(), "1 ready") || !strings.Contains(human.String(), "available in 1 sandbox") {
+		t.Errorf("human render must summarize the receipt-only integration:\n%s", human.String())
 	}
 	got, err := json.Marshal(st.MCPRows)
 	if err != nil {

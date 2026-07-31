@@ -602,7 +602,7 @@ func TestBoundSandboxName_LongProfileStaysBounded(t *testing.T) {
 func TestStatusRender_ArtifactsWithoutTasks(t *testing.T) {
 	var sb strings.Builder
 	statusReport{Version: "v", Tasks: 0, ArtifactB: 4096}.render(&sb)
-	if !strings.Contains(sb.String(), "artifacts 4.0KB") {
+	if !strings.Contains(sb.String(), "4.0KB artifacts") {
 		t.Errorf("artifact-only status did not render the tasks line:\n%s", sb.String())
 	}
 }

@@ -1163,6 +1163,11 @@ func launchTask(o runOpts) error {
 	if err != nil {
 		return err
 	}
+	if applied, rerr := applyConfiguredSessionModel(&o, cfg); rerr != nil {
+		fmt.Fprintf(os.Stderr, "pix: run_intent %q did not resolve (%v); using pi's default model. Fix with `pix config set run_intent <intent>`.\n", strings.TrimSpace(cfg.RunIntent), rerr)
+	} else if applied && o.Model != "" {
+		fmt.Fprintf(os.Stderr, "pix: intent %q -> model %s\n", o.Intent, o.Model)
+	}
 	if !inferenceAllowsModel(cfg, o.Model) {
 		return fmt.Errorf("model %q is not available through the configured inference backends", o.Model)
 	}

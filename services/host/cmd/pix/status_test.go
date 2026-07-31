@@ -86,7 +86,7 @@ func TestRenderStatusHuman(t *testing.T) {
 	if strings.Contains(s, "all systems go") {
 		t.Errorf("unverifiable mcp rows must prevent the all-systems-go headline:\n%s", s)
 	}
-	for _, want := range []string{"pix", "services", "memory ✓", "knowledge ✗", "nothing outstanding, but", "unverifiable (not failed"} {
+	for _, want := range []string{"pix", "knowledge", "1 bundle", "integrations", "nothing outstanding, but", "unverifiable (not failed"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("status output missing %q:\n%s", want, s)
 		}
@@ -108,8 +108,8 @@ func TestGatherStatusMonitor(t *testing.T) {
 	}
 }
 
-// TestRenderStatusMonitorLine (DX-5): the human render shows a monitor line
-// with its glyph and port, consistent with the memory/knowledge line style.
+// TestRenderStatusMonitorLine (DX-5): an active on-demand monitor is visible;
+// an inactive optional monitor is omitted rather than painted as a failure.
 func TestRenderStatusMonitorLine(t *testing.T) {
 	cfg := &config.Config{}
 	env := fakeStatusEnv()
@@ -117,7 +117,7 @@ func TestRenderStatusMonitorLine(t *testing.T) {
 	var out bytes.Buffer
 	renderStatus(cfg, "default", env, &out, false)
 	s := out.String()
-	if !strings.Contains(s, fmt.Sprintf("monitor     ✓ :%d", monitor.DefaultPort)) {
+	if !strings.Contains(s, fmt.Sprintf("monitor      active · :%d", monitor.DefaultPort)) {
 		t.Errorf("status output missing the monitor line:\n%s", s)
 	}
 }
@@ -625,10 +625,10 @@ func TestStatusRendersConfiguredInferenceInsteadOfIrrelevantProviderKeys(t *test
 	var out bytes.Buffer
 	st.render(&out)
 	got := out.String()
-	if !strings.Contains(got, "inference   3 model(s) via work-anthropic, work-openai") {
+	if !strings.Contains(got, "inference    3 model(s) via work-anthropic, work-openai") {
 		t.Fatalf("missing inference summary:\n%s", got)
 	}
-	if strings.Contains(got, "providers   ") {
+	if strings.Contains(got, "providers    ") {
 		t.Fatalf("gateway topology must hide irrelevant provider-key row:\n%s", got)
 	}
 }
