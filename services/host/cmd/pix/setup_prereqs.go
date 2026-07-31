@@ -191,8 +191,27 @@ func setupSbxNetworkPolicyInitialized(env shellEnv) (bool, error) {
 	if err != nil || timedOut {
 		return false, fmt.Errorf("reading Docker Sandboxes network policy: %w", setupProbeError(err, timedOut))
 	}
+	trimmed := strings.TrimSpace(out)
+	if strings.HasPrefix(trimmed, "{") {
+		// Newer sbx releases wrap policy rows in a top-level object, while older
+		// releases returned the rows as a bare array.
+		var result struct {
+			Rules json.RawMessage `json:"rules"`
+		}
+		if err := json.Unmarshal([]byte(trimmed), &result); err != nil {
+			return false, fmt.Errorf("reading Docker Sandboxes network policy: invalid JSON: %w", err)
+		}
+		if len(result.Rules) == 0 {
+			return false, fmt.Errorf("reading Docker Sandboxes network policy: invalid JSON: missing rules field")
+		}
+		var policies []json.RawMessage
+		if err := json.Unmarshal(result.Rules, &policies); err != nil {
+			return false, fmt.Errorf("reading Docker Sandboxes network policy: invalid JSON: %w", err)
+		}
+		return len(policies) > 0, nil
+	}
 	var policies []json.RawMessage
-	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &policies); err != nil {
+	if err := json.Unmarshal([]byte(trimmed), &policies); err != nil {
 		return false, fmt.Errorf("reading Docker Sandboxes network policy: invalid JSON: %w", err)
 	}
 	return len(policies) > 0, nil
