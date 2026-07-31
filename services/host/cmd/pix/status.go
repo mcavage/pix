@@ -86,6 +86,7 @@ type statusReport struct {
 	Memory            bool            `json:"memory_up"`
 	Knowledge         bool            `json:"knowledge_up"`
 	Monitor           bool            `json:"monitor_up"`
+	EnabledServices   []string        `json:"enabled_services,omitempty"`
 	Providers         map[string]bool `json:"providers"`
 	InferenceModels   int             `json:"inference_models,omitempty"`
 	InferenceBackends []string        `json:"inference_backends,omitempty"`
@@ -163,11 +164,12 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	// config/pack only.
 	currentIntent := mcpCurrentIntentNames(cfg.MCP, activeContainerMCP(cfg), nil)
 	st := statusReport{
-		Version:    version,
-		ConfigPath: config.Path(),
-		Profile:    profile,
-		Providers:  map[string]bool{},
-		MCP:        currentIntent,
+		Version:         version,
+		ConfigPath:      config.Path(),
+		Profile:         profile,
+		Providers:       map[string]bool{},
+		MCP:             currentIntent,
+		EnabledServices: append([]string(nil), cfg.Services...),
 	}
 	if env.executable != nil && env.getenv != nil {
 		self, err := env.executable()
@@ -415,106 +417,79 @@ func (st statusReport) render(out io.Writer) {
 			verdictGlyph(requirementOptional, verdictTodo, false),
 			strings.ReplaceAll(warning, "\n", "\n                "))
 	}
-	fmt.Fprintf(out, "pix %s    config: %s\n\n", st.Version, st.ConfigPath)
+	fmt.Fprintf(out, "pix %s\n\n", st.Version)
 
-	serve := "down"
-	if st.Memory || st.Knowledge {
-		serve = "up"
+	// The landing screen reports only services the user enabled. Disabled
+	// optional capabilities are absence, not failures, and must not paint the
+	// dashboard red. Doctor/--json retain the full probe detail.
+	var services []string
+	for _, name := range st.EnabledServices {
+		switch name {
+		case "memory":
+			services = append(services, compactReady("memory", st.Memory))
+		case "knowledge":
+			services = append(services, compactReady("knowledge", st.Knowledge))
+		default:
+			services = append(services, name)
+		}
 	}
-	fmt.Fprintf(out, "  services    memory %s :%d    knowledge %s :%d    (serve: %s)\n",
-		okGlyph(st.Memory), memoryClient().Port, okGlyph(st.Knowledge), knowledgeClient().Port, serve)
-	fmt.Fprintf(out, "  monitor     %s :%d    (on-demand: `pix monitor`)\n", okGlyph(st.Monitor), monitor.DefaultPort)
+	if len(services) > 0 {
+		fmt.Fprintf(out, "  services     %s\n", strings.Join(services, " · "))
+	}
+	if st.Monitor {
+		fmt.Fprintf(out, "  monitor      active · :%d\n", monitor.DefaultPort)
+	}
 
 	if st.InferenceModels > 0 {
-		fmt.Fprintf(out, "  inference   %d model(s) via %s\n", st.InferenceModels, strings.Join(st.InferenceBackends, ", "))
+		fmt.Fprintf(out, "  inference    %d model(s) via %s\n", st.InferenceModels, strings.Join(st.InferenceBackends, ", "))
 	} else {
 		var prov []string
 		for _, k := range []string{"anthropic", "openai", "google", "github"} {
 			prov = append(prov, fmt.Sprintf("%s %s", k, okGlyph(st.Providers[k])))
 		}
-		fmt.Fprintf(out, "  providers   %s\n", strings.Join(prov, "  "))
+		fmt.Fprintf(out, "  providers    %s\n", strings.Join(prov, "  "))
 	}
 
-	if len(st.Bundles) == 0 {
-		fmt.Fprintln(out, "  knowledge   (no bundle); `pix knowledge init`")
-	} else {
-		for i, b := range st.Bundles {
-			label := "knowledge"
-			if i > 0 {
-				label = "         "
-			}
-			git := ""
-			if b.Git != "" {
-				git = " (" + b.Git + ")"
-			}
-			fmt.Fprintf(out, "  %s   %s%s\n", label, b.Path, git)
-		}
+	if len(st.Bundles) > 0 {
+		fmt.Fprintf(out, "  knowledge    %s\n", plural(len(st.Bundles), "bundle"))
 	}
 
-	if len(st.MCP) == 0 {
-		fmt.Fprintln(out, "  mcp         (none)")
-	} else if len(st.MCPServers) == 0 {
-		// sbx unavailable (e.g. inside the sandbox): degrade to the bare names.
-		fmt.Fprintf(out, "  mcp         %s\n", strings.Join(st.MCP, ", "))
-	} else {
-		// Host-global summary: registration + preload intent only — a sandbox's
-		// current attachment is the per-sandbox rows' job below.
-		for i, m := range st.MCPServers {
-			label := "mcp"
-			if i > 0 {
-				label = "   "
-			}
-			var reg string
-			switch {
-			case m.Unverifiable:
-				// sbx present but `sbx mcp ls` itself failed/timed out: registration
-				// is genuinely unknown, never rendered as a false "not registered".
-				reg = verdictGlyph(requirementCore, verdictUnverifiable, false) + " registration unverifiable (sbx mcp ls unavailable/failed)"
-			case m.Registered:
-				reg = okGlyph(true) + " registered"
-			default:
-				reg = okGlyph(false) + " not registered"
-			}
-			fmt.Fprintf(out, "  %-9s   %-8s %s · preloads at sandbox create\n", label, m.Name, reg)
-		}
-	}
-
-	// Per-sandbox MCP truth rows (receipt-backed, from the shared join path).
-	for i, r := range st.MCPRows {
-		label := "mcp/box"
-		if i > 0 {
-			label = "       "
-		}
-		box := r.Sandbox
-		if box == "" {
-			box = "(sandboxes unknown)"
-		}
-		fmt.Fprintf(out, "  %-9s   %-24s %-8s %s\n", label, box, r.Name, mcpRowText(r))
-	}
+	st.renderIntegrations(out)
 
 	if st.GogAccount != "" {
 		label := "account set, needs auth (run " + gogSetupHint + ")"
 		if st.GogAuthed {
 			label = "authed"
 		}
-		fmt.Fprintf(out, "  integrations  workspace %s\n", label)
+		// A configured Workspace account is already included in the MCP summary.
+		// Only render it separately when it needs action or is not an MCP.
+		if !st.GogAuthed || !containsStr(st.MCP, gwServerName) {
+			fmt.Fprintf(out, "  workspace    %s\n", label)
+		}
 	}
 
 	if len(st.Sandboxes) > 0 {
-		for i, s := range st.Sandboxes {
-			label := "sandboxes"
-			if i > 0 {
-				label = "         "
-			}
-			fmt.Fprintf(out, "  %s   %-24s %s\n", label, s.Name, s.State)
+		states := map[string]int{}
+		for _, s := range st.Sandboxes {
+			states[s.State]++
 		}
+		var summary []string
+		for _, state := range []string{"running", "stopped", "exited", "created", "paused", "restarting", "dead", "?"} {
+			if n := states[state]; n > 0 {
+				summary = append(summary, fmt.Sprintf("%d %s", n, state))
+			}
+		}
+		fmt.Fprintf(out, "  sandboxes    %s · `pix ls` for details\n", strings.Join(summary, ", "))
 	}
 
 	// Show the line when there are tasks OR retained artifacts — harvested docs
 	// can outlive the last task clone, and they still cost disk.
 	if st.Tasks > 0 || st.ArtifactB > 0 {
-		fmt.Fprintf(out, "  tasks       %s   artifacts %s   `pix task gc` to prune\n",
-			plural(st.Tasks, "clone"), humanBytes(st.ArtifactB))
+		taskText := plural(st.Tasks, "task")
+		if st.ArtifactB > 0 {
+			taskText += " · " + humanBytes(st.ArtifactB) + " artifacts"
+		}
+		fmt.Fprintf(out, "  tasks        %s · `pix task ls` for details\n", taskText)
 	}
 
 	fmt.Fprintln(out)
@@ -545,16 +520,99 @@ func (st statusReport) render(out io.Writer) {
 		fmt.Fprintf(out, "  %s %s outstanding.   `%s` for fix commands.\n",
 			verdictGlyph(requirementOptional, verdictTodo, false), plural(len(st.Todos), "item"), readinessFooter("status", Snapshot{}))
 	case unverifiable > 0:
-		fmt.Fprintf(out, "  %s nothing outstanding, but %s unverifiable (not failed; see the mcp/box rows or `%s`).\n",
+		fmt.Fprintf(out, "  %s nothing outstanding, but %s unverifiable (not failed; run `%s` for details).\n",
 			verdictGlyph(requirementCore, verdictReady, false), plural(unverifiable, "check"), readinessFooter("status", Snapshot{}))
 	default:
 		fmt.Fprintf(out, "  %s all systems go.\n", verdictGlyph(requirementCore, verdictReady, false))
 	}
 	fmt.Fprintln(out)
-	fmt.Fprintln(out, "Next:  pix serve     start the knowledge service")
-	fmt.Fprintln(out, "       pix run       launch a sandbox and start working")
+	if len(st.Todos) > 0 {
+		fmt.Fprintln(out, "Next:  pix doctor    show the fix")
+		fmt.Fprintln(out, "       pix run       launch or resume Pix")
+	} else {
+		fmt.Fprintln(out, "Next:  pix run       launch or resume Pix")
+	}
 	fmt.Fprintln(out)
-	fmt.Fprintln(out, "Everything ok? run `pix doctor`.   Full command list: `pix help`.")
+	fmt.Fprintln(out, "Help:  pix help")
+}
+
+func compactReady(name string, ready bool) string {
+	if ready {
+		return name + " ready"
+	}
+	return name + " needs attention"
+}
+
+// renderIntegrations turns the host registration + per-sandbox receipt join
+// into one human sentence. The row-level evidence remains available in JSON
+// and doctor; healthy N×M joins do not belong on the landing screen.
+func (st statusReport) renderIntegrations(out io.Writer) {
+	names := map[string]bool{}
+	readyNames := map[string]bool{}
+	unknownNames := map[string]bool{}
+	for _, name := range st.MCP {
+		names[name] = true
+	}
+	for _, m := range st.MCPServers {
+		names[m.Name] = true
+		if m.Registered {
+			readyNames[m.Name] = true
+		}
+		if m.Unverifiable {
+			unknownNames[m.Name] = true
+		}
+	}
+	for _, r := range st.MCPRows {
+		names[r.Name] = true
+		if r.Registered == mcpRegYes.String() {
+			readyNames[r.Name] = true
+		}
+		if r.Registered == mcpRegUnknown.String() {
+			unknownNames[r.Name] = true
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	if len(st.MCPServers) == 0 && len(st.MCPRows) == 0 {
+		fmt.Fprintf(out, "  integrations  %s configured\n", plural(len(names), "integration"))
+		return
+	}
+	boxReady := map[string]bool{}
+	boxSeen := map[string]bool{}
+	for _, r := range st.MCPRows {
+		if r.Sandbox == "" {
+			continue
+		}
+		if !boxSeen[r.Sandbox] {
+			boxReady[r.Sandbox] = true
+		}
+		boxSeen[r.Sandbox] = true
+		if r.State != mcpJoinPreloaded && r.State != mcpJoinLoaded {
+			boxReady[r.Sandbox] = false
+		}
+	}
+	attached := 0
+	for box := range boxSeen {
+		if boxReady[box] {
+			attached++
+		}
+	}
+	status := fmt.Sprintf("%d/%d ready", len(readyNames), len(names))
+	if len(readyNames) == len(names) {
+		status = fmt.Sprintf("%d ready", len(readyNames))
+	}
+	if len(unknownNames) > 0 {
+		status += fmt.Sprintf(" · %d unverifiable", len(unknownNames))
+	}
+	if attached > 0 {
+		word := "sandboxes"
+		if attached == 1 {
+			word = "sandbox"
+		}
+		status += fmt.Sprintf(" · available in %d %s", attached, word)
+	}
+	fmt.Fprintf(out, "  integrations  %s\n", status)
 }
 
 // statusRegisterTodoFn returns a memoized picker for the TYPE-CORRECT
@@ -664,20 +722,12 @@ func bundleGitStatus(env shellEnv, dir string) string {
 }
 
 // parseSandboxes extracts pix-* sandbox lines from `sbx ls` output. It is
-// lenient about column layout: it takes the first token as the name and the
-// last token as the state, keeping only names starting with "pix-".
+// lenient about column layout by reusing the canonical sbx parser. In
+// particular, the final column may be a pack mount rather than the state.
 func parseSandboxes(sbxLsOut string) []sandboxLine {
 	var out []sandboxLine
-	for _, ln := range strings.Split(sbxLsOut, "\n") {
-		fields := strings.Fields(ln)
-		if len(fields) < 2 {
-			continue
-		}
-		name := fields[0]
-		if !strings.HasPrefix(name, "pix-") {
-			continue
-		}
-		out = append(out, sandboxLine{Name: name, State: fields[len(fields)-1]})
+	for _, box := range parsePixBoxes(sbxLsOut) {
+		out = append(out, sandboxLine{Name: box.Name, State: box.State})
 	}
 	return out
 }

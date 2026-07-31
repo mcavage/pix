@@ -55,11 +55,15 @@ func runRun(argv []string) {
 	// run_intent=overlord -> GPT-5.6 Sol). Track that it came from config, not a
 	// flag: a bad config-sourced intent must NOT brick the launch the way an
 	// explicit --intent typo does.
-	intentFromConfig := false
 	if o.Intent == "" && o.Model == "" {
-		if cfg, cerr := config.Load(); cerr == nil && strings.TrimSpace(cfg.RunIntent) != "" {
-			o.Intent = strings.TrimSpace(cfg.RunIntent)
-			intentFromConfig = true
+		if cfg, cerr := config.Load(); cerr == nil {
+			if applied, rerr := applyConfiguredSessionModel(&o, cfg); rerr != nil {
+				// A bad config value must not brick launch, but it must be loud. The
+				// explicit --intent path below remains a hard usage error.
+				fmt.Fprintf(os.Stderr, "pix: run_intent %q did not resolve (%v); using pi's default model. Fix with `pix config set run_intent <intent>`.\n", strings.TrimSpace(cfg.RunIntent), rerr)
+			} else if applied && o.Model != "" {
+				fmt.Fprintf(os.Stderr, "pix: intent %q -> model %s\n", o.Intent, o.Model)
+			}
 		}
 	}
 
@@ -76,15 +80,8 @@ func runRun(argv []string) {
 	if o.Intent != "" && o.Model == "" {
 		m, rerr := resolveSessionModel(o.Intent)
 		if rerr != nil {
-			if intentFromConfig {
-				// Degrade to pi's own default model rather than block a launch on a
-				// misconfigured run_intent. Loud, non-fatal.
-				fmt.Fprintf(os.Stderr, "pix: run_intent %q did not resolve (%v); using pi's default model. Fix with `pix config set run_intent <intent>`.\n", o.Intent, rerr)
-				o.Intent = ""
-			} else {
-				fmt.Fprintf(os.Stderr, "pix run: --intent %q: %v\n", o.Intent, rerr)
-				exit(2)
-			}
+			fmt.Fprintf(os.Stderr, "pix run: --intent %q: %v\n", o.Intent, rerr)
+			exit(2)
 		} else {
 			o.Model = m
 			fmt.Fprintf(os.Stderr, "pix: intent %q -> model %s\n", o.Intent, m)
@@ -452,6 +449,31 @@ func runRun(argv []string) {
 		}
 		exit(1)
 	}
+}
+
+// applyConfiguredSessionModel gives every interactive entry point (`run` and
+// `task new`) the same top-level model. Before this seam existed task sandboxes
+// skipped run_intent entirely and silently inherited Pi's provider default.
+// The bool reports whether a configured intent (including the explicit
+// none/off opt-out) applied; callers decide how to present resolver errors.
+func applyConfiguredSessionModel(o *runOpts, cfg *config.Config) (bool, error) {
+	if o == nil || cfg == nil || o.Model != "" || o.Intent != "" {
+		return false, nil
+	}
+	intent := strings.TrimSpace(cfg.RunIntent)
+	if intent == "" {
+		return false, nil
+	}
+	if strings.EqualFold(intent, "none") || strings.EqualFold(intent, "off") {
+		return true, nil
+	}
+	model, err := resolveSessionModel(intent)
+	if err != nil {
+		return true, err
+	}
+	o.Intent = intent
+	o.Model = model
+	return true, nil
 }
 
 // Creation-evidence poll seams. After `sbx run` is STARTED (not waited), the

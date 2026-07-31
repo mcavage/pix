@@ -251,8 +251,8 @@ func TestStatusMCPDiscoveryUnavailableNotNoSandboxes(t *testing.T) {
 	}
 	var out bytes.Buffer
 	st.render(&out)
-	if !strings.Contains(out.String(), "(sandboxes unknown)") {
-		t.Errorf("human render should show sandboxes as unknown, not absent:\n%s", out.String())
+	if !strings.Contains(out.String(), "unverifiable") {
+		t.Errorf("human render should summarize unavailable sandbox evidence:\n%s", out.String())
 	}
 }
 
@@ -269,8 +269,8 @@ func TestStatusHostGlobalNoAttachmentClaim(t *testing.T) {
 	var out bytes.Buffer
 	st.render(&out)
 	s := out.String()
-	if !strings.Contains(s, "preloads at sandbox create") {
-		t.Errorf("host-global summary must state the preload intent:\n%s", s)
+	if !strings.Contains(s, "1 ready") {
+		t.Errorf("host-global summary must report the integration ready:\n%s", s)
 	}
 	for _, banned := range []string{"attach", "Attach"} {
 		if strings.Contains(s, banned) {
@@ -282,9 +282,9 @@ func TestStatusHostGlobalNoAttachmentClaim(t *testing.T) {
 // TestStatusMCPReceiptOnlyNameVisible pins finding #2: a sandbox's receipt
 // names a server that is NOT part of current cfg.MCP/pack (a transient `run
 // --pack` mix-in, or a since-switched pack's historical integration). It
-// must still surface in both human and --json output, evidence labeled as
-// sandbox provenance rather than current preload intent — while a name that
-// IS part of current intent carries no such label.
+// must still affect the human summary and surface by name in --json, evidence
+// labeled as sandbox provenance rather than current preload intent — while a
+// name that IS part of current intent carries no such label.
 func TestStatusMCPReceiptOnlyNameVisible(t *testing.T) {
 	cfg := &config.Config{MCP: []string{gwServerName}} // current intent: gog only
 	env, stateDir := statusMCPEnv(t, "pix-proj running /home/u/proj\n", "google-workspace\nnotion\n")
@@ -308,8 +308,8 @@ func TestStatusMCPReceiptOnlyNameVisible(t *testing.T) {
 	}
 	var human bytes.Buffer
 	st.render(&human)
-	if !strings.Contains(human.String(), "notion") {
-		t.Errorf("human render should show notion:\n%s", human.String())
+	if !strings.Contains(human.String(), "2 ready") || !strings.Contains(human.String(), "available in 1 sandbox") {
+		t.Errorf("human render should include the receipt-only integration in its summary:\n%s", human.String())
 	}
 	got, err := json.Marshal(st.MCPRows)
 	if err != nil {
