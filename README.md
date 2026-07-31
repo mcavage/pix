@@ -62,6 +62,10 @@ pix gworkspace setup --account you@example.com
 pix gworkspace status
 ```
 
+By default this is read-only. A trusted pack may opt into the narrower
+`--create-docs` profile: agents can create new Docs, but cannot edit existing
+Docs or send Gmail/Slack messages.
+
 Setup guides Google Cloud project/API/OAuth configuration, proves the exact
 headless read-only MCP process can authenticate and list tools, and only then
 saves the Pix configuration. Remove only Pix-owned registration and config with:

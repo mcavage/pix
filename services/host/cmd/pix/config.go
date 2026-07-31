@@ -105,6 +105,8 @@ func configValue(cfg *config.Config, key string) (string, error) {
 	switch key {
 	case "google_workspace_account":
 		return cfg.GogAccount, nil
+	case "google_workspace_access":
+		return cfg.GoogleWorkspaceAccess, nil
 	case "mcp":
 		return strings.Join(cfg.MCP, " "), nil
 	case "services":
@@ -192,6 +194,8 @@ func runConfigWrite(unset bool, argv []string) {
 const configKeysHelp = `keys:
   google_workspace_account <email>
                            Google Workspace account for the google-workspace MCP server
+  google_workspace_access  get-only permission profile written by
+                           'pix gworkspace setup'
   mcp <server>              add/remove an MCP server in the mcp list; every
                             configured server preloads at sandbox create
   services <name>           add/remove a host service in the services list

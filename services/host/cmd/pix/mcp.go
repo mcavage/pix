@@ -590,6 +590,20 @@ func registerGogRegistrar(reg mcpRegistrar, env shellEnv, out io.Writer) error {
 	return nil
 }
 
+func registerDocsCreateRegistrar(reg mcpRegistrar, env shellEnv, out io.Writer) error {
+	if env.run == nil {
+		return fmt.Errorf("internal: shellEnv.run not wired")
+	}
+	if strings.TrimSpace(reg.hostBin) == "" {
+		return fmt.Errorf("pix-host path is unavailable")
+	}
+	if _, err := env.run("sbx", reg.addArgs(gwDocsCreateServerName)...); err != nil {
+		return fmt.Errorf("sbx mcp add %s: %w", gwDocsCreateServerName, err)
+	}
+	fmt.Fprintln(out, "  registered: "+gwDocsCreateServerName)
+	return nil
+}
+
 // registerServers resolves + guards + builds + runs the `sbx mcp add` commands
 // for the requested local stdio servers. With no requested names it registers
 // every entry in the resolved profile's cfg.MCP (gog via its special path, every
