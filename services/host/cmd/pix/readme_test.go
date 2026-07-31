@@ -60,6 +60,16 @@ func TestReadmeHasNoLegacyInstallerPath(t *testing.T) {
 	}
 }
 
+func TestReadmePackExamplesStayPublic(t *testing.T) {
+	s := readRepoFile(t, "README.md")
+	if !strings.Contains(s, "git+https://github.com/your-org/work-pack.git#ref=main") {
+		t.Fatal("README pack examples must use the public placeholder repository")
+	}
+	if strings.Contains(s, "pix setup --pack docker/") {
+		t.Fatal("README pack examples must not name an organization-specific repository")
+	}
+}
+
 func TestReadmePrimaryPathCommandsExist(t *testing.T) {
 	body := primaryReadmePath(t)
 	known := map[string]bool{

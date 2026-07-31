@@ -27,10 +27,10 @@ command and resumes safely after it is run. Do not use the bare `brew install pi
 know a formula by that name and may suggest `pixi` instead. The `mcavage/tap/`
 qualifier is required.
 
-Activate a personal or work pack through the same setup flow:
+Activate an advanced work pack explicitly through the same setup flow:
 
 ```bash
-pix setup --pack docker/gm-pix-pack
+pix setup --pack 'git+https://github.com/your-org/work-pack.git#ref=main'
 ```
 
 Packs can declare required setup probes and idempotent actions. Pix reviews and
@@ -39,7 +39,7 @@ execution, and resumes past completed work on the next setup run. A pack can als
 declare optional setup hooks. Run one explicitly with `--with`, for example:
 
 ```bash
-pix setup --pack docker/gm-pix-pack --with bamboohr
+pix setup --pack 'git+https://github.com/your-org/work-pack.git#ref=main' --with hr
 ```
 
 Without `--with`, the pack is still activated and all required hooks run. Only
