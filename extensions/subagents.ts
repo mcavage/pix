@@ -176,6 +176,26 @@ function isQualifiedModelId(id: string): boolean {
 	const i = id.indexOf("/");
 	return i > 0 && i < id.length - 1;
 }
+
+// An explicit Ollama model on the parent session is an availability boundary,
+// not merely a top-level preference. It is commonly selected when cloud
+// inference is unavailable (offline, gateway outage, or local-only setup).
+// Carry it into every child so a routed subagent cannot silently jump back to
+// an unavailable cloud backend. Cloud parent models keep normal intent routing.
+export function explicitParentOllamaModel(argv: string[] = process.argv): string {
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i];
+		let raw = "";
+		if (arg === "--model" && argv[i + 1]) raw = argv[i + 1];
+		else if (arg.startsWith("--model=")) raw = arg.slice("--model=".length);
+		const model = raw.trim();
+		if (model.startsWith("ollama/") && isQualifiedModelId(model)) return model;
+	}
+	return "";
+}
+
+const PARENT_OLLAMA_MODEL = explicitParentOllamaModel();
+
 function resolveIntentModel(intent: string): string {
 	const raw = ROUTING?.routes?.[intent]?.model;
 	// Guard the type explicitly: a malformed routing.json could carry a non-string
@@ -267,10 +287,10 @@ function loadAgentsFromDir(
 			);
 		}
 		const intent = frontmatter.intent?.trim() || undefined;
-		// Model resolution order: explicit `model:` wins (back-compat); else
-		// `intent:` resolves through routing.json; else undefined = inherit the
-		// parent model at spawn.
-		let model = explicitModel;
+		// Model resolution order: an explicitly selected parent Ollama model is
+		// inherited by every child (cloud may be unavailable); otherwise explicit
+		// `model:` wins (back-compat), then `intent:` resolves through routing.json.
+		let model = PARENT_OLLAMA_MODEL || explicitModel;
 		if (!model && intent) {
 			const routed = resolveIntentModel(intent);
 			if (routed) {
@@ -284,7 +304,8 @@ function loadAgentsFromDir(
 		const fallbackIntent = frontmatter.fallback_intent?.trim() || undefined;
 		let fallbackModel: string | undefined;
 		if (fallbackIntent) {
-			fallbackModel = resolveIntentModel(fallbackIntent) || undefined;
+			fallbackModel =
+				PARENT_OLLAMA_MODEL || resolveIntentModel(fallbackIntent) || undefined;
 			if (!fallbackModel) {
 				warnings.push(
 					`fallback_intent "${fallbackIntent}" not found in routing.json — policy refusals will be returned without retry.`,
@@ -2255,6 +2276,7 @@ export default function (pi: ExtensionAPI) {
 							? `${ctx.model.provider}/${ctx.model.id}`
 							: undefined;
 					const canaryModel =
+						PARENT_OLLAMA_MODEL ||
 						process.env.PI_SUBAGENT_DOCTOR_MODEL ||
 						resolveIntentModel("fast-balanced") ||
 						resolveIntentModel("breadth") ||
