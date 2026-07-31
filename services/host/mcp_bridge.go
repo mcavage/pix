@@ -42,6 +42,8 @@ func builtinMcpServerFor(name string) (plugin.McpServer, error) {
 	switch name {
 	case "slack":
 		return slackMcpAdapter{}, nil
+	case googleDocsCreateServerName:
+		return googleDocsCreateMcpAdapter{}, nil
 	}
 	return nil, fmt.Errorf("no built-in MCP server named %q", name)
 }
@@ -52,7 +54,7 @@ func builtinMcpServerFor(name string) (plugin.McpServer, error) {
 // this bridge. This is the source of truth for "is <name> a local stdio server"
 // that the launcher (`pix mcp register`) and doctor consult via `mcp --list`.
 func builtinMcpNames() []string {
-	names := []string{"slack"}
+	names := []string{googleDocsCreateServerName, "slack"}
 	sort.Strings(names)
 	return names
 }

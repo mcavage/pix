@@ -80,6 +80,7 @@ type gogSetupOpts struct {
 	account     string
 	credentials string
 	assumeYes   bool
+	access      string
 }
 
 // gogAuthStep is one command in a gogAuthRoute. help is the argv (after
@@ -193,6 +194,37 @@ func chooseGogAuthRoute(help string) (gogAuthRoute, bool) {
 	return gogAuthRoute{}, false
 }
 
+const gogWorkspaceServices = "gmail,calendar,drive,docs,sheets,contacts"
+
+// chooseCreateDocsAuthRoute requires gog's scoped auth-add surface. The older
+// one-shot and legacy login routes cannot express Gmail-read-only + Drive-file
+// scope independently, so Pix refuses them for this opt-in profile.
+func chooseCreateDocsAuthRoute(help string) (gogAuthRoute, bool) {
+	subs := gogAuthSubcommands(help)
+	if !subs["credentials"] || !subs["add"] {
+		return gogAuthRoute{}, false
+	}
+	return gogAuthRoute{name: "credentials+add", steps: []gogAuthStep{
+		{
+			help: []string{"auth", "credentials", "--help"},
+			argv: func(_, credentials string) []string {
+				return []string{"auth", "credentials", credentials}
+			},
+		},
+		{
+			help:          []string{"auth", "add", "--help"},
+			requiredFlags: []string{"--services", "--drive-scope", "--gmail-scope", "--force-consent"},
+			argv: func(account, _ string) []string {
+				return []string{"auth", "add", account,
+					"--services", gogWorkspaceServices,
+					"--drive-scope", "file",
+					"--gmail-scope", "readonly",
+					"--force-consent"}
+			},
+		},
+	}}, true
+}
+
 // gogAuthRouteCapable is the capability probe: it checks EVERY step's OWN
 // subcommand help (not just the top-level `gog auth --help` listing
 // chooseGogAuthRoute already used to pick a candidate by name) and confirms
@@ -258,6 +290,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	}
 
 	account := strings.TrimSpace(opts.account)
+	createDocs := strings.TrimSpace(opts.access) == gwAccessCreateDocs
 	if account == "" && tty {
 		account = prompt("Google Workspace account (email): ")
 	}
@@ -320,7 +353,13 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// through the BOUNDED probe machinery (timeout + output cap), so a hung gog
 	// can never wedge setup. Tests without env.probe fall back to env.run.
 	helpOut, _, _ := probeRun(env, "gog", "auth", "--help")
-	route, ok := chooseGogAuthRoute(helpOut)
+	var route gogAuthRoute
+	var ok bool
+	if createDocs {
+		route, ok = chooseCreateDocsAuthRoute(helpOut)
+	} else {
+		route, ok = chooseGogAuthRoute(helpOut)
+	}
 	if !ok {
 		verOut, _, _ := probeRun(env, "gog", "--version")
 		fmt.Fprintln(out, "the installed Google Workspace dependency CLI does not advertise a supported auth surface")
@@ -340,13 +379,17 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// scopes at grant time.
 	if capable, detail := gogAuthRouteCapable(env, route); !capable {
 		verOut, _, _ := probeRun(env, "gog", "--version")
-		fmt.Fprintf(out, "the installed Google Workspace dependency CLI cannot guarantee read-only OAuth authorization for the %q route:\n", route.name)
+		profile := "read-only"
+		if createDocs {
+			profile = "the create-new-Docs permission profile"
+		}
+		fmt.Fprintf(out, "the installed Google Workspace dependency CLI cannot guarantee %s OAuth authorization for the %q route:\n", profile, route.name)
 		fmt.Fprintf(out, "  %s\n", detail)
 		fmt.Fprintf(out, "  installed version: %s\n", strings.TrimSpace(verOut))
 		fmt.Fprintln(out, "  upgrade: "+gwUpgradeCmd)
 		fmt.Fprintln(out, "  then re-run: pix gworkspace setup")
-		fmt.Fprintln(out, "  pix never falls back to an auth route it cannot confirm requests read-only scopes.")
-		return fmt.Errorf("the installed Google Workspace dependency CLI cannot guarantee read-only OAuth authorization (route: %s): %s", route.name, detail)
+		fmt.Fprintln(out, "  pix never falls back to an auth route whose requested permissions it cannot confirm.")
+		return fmt.Errorf("the installed Google Workspace dependency CLI cannot guarantee %s OAuth authorization (route: %s): %s", profile, route.name, detail)
 	}
 
 	// Preflight every remaining PREDICTABLE hard requirement here, BEFORE the
@@ -358,6 +401,17 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	if _, err := env.lookPath("sbx"); err != nil {
 		return fmt.Errorf("sbx not found: pix gworkspace setup requires sbx to register the MCP server " +
 			"(install: https://docs.docker.com/ai/sandboxes); install it, then re-run pix gworkspace setup")
+	}
+	var hostPath string
+	if createDocs {
+		if env.hostBinary != nil {
+			hostPath, err = env.hostBinary()
+		} else {
+			hostPath, err = env.lookPath("pix-host")
+		}
+		if err != nil || strings.TrimSpace(hostPath) == "" {
+			return fmt.Errorf("pix-host not found: required for the create-new-Docs capability; reinstall Pix, then re-run pix gworkspace setup")
+		}
 	}
 	// Load the candidate config change IN MEMORY only — cfg.Save() must never
 	// run before the sbx registration it describes actually succeeds, or a
@@ -380,6 +434,13 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 			"refusing to authorize or overwrite it until this is readable; check the sbx daemon (sbx mcp status), " +
 			"then re-run pix gworkspace setup")
 	}
+	docsSnap := gogRegSnapshot{state: gogRegAbsent}
+	if createDocs {
+		docsSnap = snapshotMCPRegistration(env, gwDocsCreateServerName)
+		if docsSnap.state == gogRegUnknown {
+			return fmt.Errorf("could not confirm the prior %s registration: check the sbx daemon (sbx mcp status), then re-run pix gworkspace setup", gwDocsCreateServerName)
+		}
+	}
 
 	runInteractive := env.runInteractive
 	if runInteractive == nil {
@@ -388,10 +449,15 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		}
 	}
 
-	if gogAuthed(env, account) {
+	profileReady := !createDocs || cfg.GoogleWorkspaceAccess == gwAccessCreateDocs
+	if gogAuthed(env, account) && profileReady {
 		fmt.Fprintf(out, "Existing Google authorization found for %s; reusing it.\n", account)
 	} else {
-		fmt.Fprintf(out, "Importing your OAuth client + authorizing %s (gog auth route: %s, read-only scopes requested)...\n", account, route.name)
+		if createDocs {
+			fmt.Fprintf(out, "Authorizing %s for Workspace reads and create-new-Docs (mail sending remains blocked)...\n", account)
+		} else {
+			fmt.Fprintf(out, "Importing your OAuth client + authorizing %s (gog auth route: %s, read-only scopes requested)...\n", account, route.name)
+		}
 		fmt.Fprintln(out, "This may open a browser for you to sign in.")
 		for _, step := range route.steps {
 			argv := step.argv(account, credentials)
@@ -433,6 +499,9 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// success. Nothing here mutates config/registration yet — that only happens
 	// after `head` is confirmed healthy, below.
 	reg := buildGogRegistrar(env, gogPath, account)
+	if createDocs {
+		reg.hostBin = hostPath
+	}
 	head := probeListTools(env, reg.execArgv(gwServerName))
 	switch head.status {
 	case probeToolsOK:
@@ -452,10 +521,16 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// already confirmed above, before the interactive auth route ran — nothing
 	// left to preflight here, just apply the change.
 	cfg.SetGogAccount(account)
+	if createDocs {
+		cfg.SetGoogleWorkspaceAccess(gwAccessCreateDocs)
+	}
 	// Idempotency: ALWAYS ensure gog is in the configured MCP set, even when
 	// the account already matched (a healthy re-run must still leave gog
 	// attached/registered deterministically).
 	cfg.AddMCP(gwServerName)
+	if createDocs {
+		cfg.AddMCP(gwDocsCreateServerName)
+	}
 
 	// REGISTER FIRST, save second. registerGogRegistrar runs `sbx mcp add gog
 	// ...` using the EXACT reg snapshot resolved above (no re-resolution — the
@@ -466,6 +541,16 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	if err := registerGogRegistrar(reg, env, out); err != nil {
 		return fmt.Errorf("registering %s with the sbx gateway: %w (finish later: pix mcp register %s)", gwServerName, err, gwServerName)
 	}
+	if createDocs {
+		if err := registerDocsCreateRegistrar(reg, env, out); err != nil {
+			docsRollbackErr := restoreMCPRegistration(env, gwDocsCreateServerName, docsSnap)
+			gogRollbackErr := gogSetupRollbackRegistration(env, snap)
+			if docsRollbackErr != nil || gogRollbackErr != nil {
+				return fmt.Errorf("registering create-new-Docs with the sbx gateway: %w; rollback failed (workspace: %v; docs-create: %v)", err, gogRollbackErr, docsRollbackErr)
+			}
+			return fmt.Errorf("registering create-new-Docs with the sbx gateway: %w", err)
+		}
+	}
 
 	if err := cfg.Save(); err != nil {
 		// The sbx side is now AHEAD of the (about-to-remain) persisted config:
@@ -474,8 +559,13 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		// registered before this run (if anything), else remove the just-added
 		// registration entirely. Any rollback failure is folded into the
 		// returned error explicitly rather than swallowed.
-		if rerr := gogSetupRollbackRegistration(env, snap); rerr != nil {
-			return fmt.Errorf("saving config: %w; additionally, rollback of the Google Workspace registration failed: %v; fix by hand (sbx mcp inspect %s / sbx mcp rm %s)", err, rerr, gwServerName, gwServerName)
+		var docsErr error
+		if createDocs {
+			docsErr = restoreMCPRegistration(env, gwDocsCreateServerName, docsSnap)
+		}
+		gogErr := gogSetupRollbackRegistration(env, snap)
+		if docsErr != nil || gogErr != nil {
+			return fmt.Errorf("saving config: %w; additionally, rollback failed (workspace: %v; docs-create: %v)", err, gogErr, docsErr)
 		}
 		return fmt.Errorf("saving config: %w (gog registration rolled back so config and the gateway stay in sync)", err)
 	}
@@ -512,6 +602,39 @@ func gogSetupRollbackRegistration(env shellEnv, snap gogRegSnapshot) error {
 	}
 	if _, err := env.run("sbx", "mcp", "rm", gwServerName); err != nil {
 		return fmt.Errorf("could not remove the new gog registration: %w", err)
+	}
+	return nil
+}
+
+// snapshotMCPRegistration is the generic companion to snapshotGogRegistration
+// for Pix-owned host MCP servers. It preserves an existing definition so the
+// two-server Workspace transaction can roll back without deleting prior state.
+func snapshotMCPRegistration(env shellEnv, name string) gogRegSnapshot {
+	listOut, timedOut, err := probeRun(env, "sbx", "mcp", "ls")
+	if err != nil || timedOut {
+		return gogRegSnapshot{state: gogRegUnknown}
+	}
+	if !grepWord(listOut, name) {
+		return gogRegSnapshot{state: gogRegAbsent}
+	}
+	if argv, ok := registeredMCPCommand(env, name); ok {
+		return gogRegSnapshot{state: gogRegPresent, argv: argv}
+	}
+	return gogRegSnapshot{state: gogRegUnknown}
+}
+
+func restoreMCPRegistration(env shellEnv, name string, snap gogRegSnapshot) error {
+	if env.run == nil {
+		return fmt.Errorf("internal: shellEnv.run not wired")
+	}
+	if snap.state == gogRegPresent {
+		if _, err := env.run("sbx", rawAddArgs(name, snap.argv)...); err != nil {
+			return fmt.Errorf("restore %s: %w", name, err)
+		}
+		return nil
+	}
+	if _, err := env.run("sbx", "mcp", "rm", name); err != nil {
+		return fmt.Errorf("remove %s: %w", name, err)
 	}
 	return nil
 }

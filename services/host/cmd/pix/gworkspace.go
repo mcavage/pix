@@ -33,7 +33,9 @@ const (
 	// gwServerName is the MCP registration + display name. Everything that
 	// registers, lists, probes, or removes the server uses this constant, so
 	// the gateway name and the public name can never drift.
-	gwServerName = "google-workspace"
+	gwServerName           = "google-workspace"
+	gwDocsCreateServerName = "google-docs-create"
+	gwAccessCreateDocs     = "create-docs"
 	// gwInstallCmd is the ONE place the external binary's package name is
 	// allowed to reach the user, per the naming rule above.
 	gwInstallCmd = "brew install openclaw/tap/gogcli"
@@ -46,8 +48,8 @@ const (
 
 const gworkspaceUsage = `usage: pix gworkspace <setup|status|disable> [args]
 
-  setup     guided Google Workspace onboarding: dependency check, OAuth client
-            import, read-only authorization, headless proof, then registration
+  setup     guided read-only Google Workspace onboarding; --create-docs adds
+            new-document creation without existing-document edits or sending
   status    what is configured and what is proven by a live headless probe
   disable   remove the Pix-owned config + gateway registration (your Google
             credentials are left untouched)
@@ -56,15 +58,15 @@ Google Workspace is OPTIONAL and absent unless you set it up.
 Run 'pix gworkspace setup -h' for its flags.
 `
 
-const gworkspaceSetupUsage = `usage: pix gworkspace setup [--account <email>] [--credentials <path>] [--yes]
+const gworkspaceSetupUsage = `usage: pix gworkspace setup [--account <email>] [--credentials <path>] [--create-docs] [--yes]
 
 Guides Google Workspace onboarding end to end:
   1. checks the dependency CLI is installed (exact install command if not),
      then validates your credentials path is a true regular file and imports
      it by invoking that CLI: this command never reads or prints its
      contents, and never copies it into pix config
-  2. probes the selected auth route's OWN subcommand help/flags for the
-     read-only capability it needs at grant time (see step 3)
+  2. probes the selected auth route's OWN subcommand help/flags for the exact
+     permission profile requested
   3. preflights EVERY remaining predictable hard requirement BEFORE any
      authorization happens: sbx must be installed (it registers the server
      with the gateway; a missing sbx fails this command, it never reports a
@@ -72,10 +74,10 @@ Guides Google Workspace onboarding end to end:
      registration already exists must be CONFIRMED absent, or present with a
      readable command. An unreadable/unlistable prior registration aborts
      HERE, before any authorization runs and before config is touched
-  4. authorizes <email> REQUESTING READ-ONLY OAUTH SCOPES at grant time; if
-     the installed dependency cannot advertise read-only for the selected
-     route, this fails with upgrade guidance rather than authorizing without
-     it (may open a browser; inherits this terminal)
+  4. authorizes <email>: read-only by default; --create-docs requests
+     Gmail-read-only plus Drive-file-scoped document creation. If the
+     dependency cannot advertise the needed flags, setup fails before OAuth
+     (may open a browser; inherits this terminal)
   5. verifies interactive auth, THEN verifies headless tools with the EXACT
      hardened command the sbx gateway will actually spawn. Authorization that
      succeeds while the headless listing returns 0 tools registers NOTHING
@@ -90,15 +92,18 @@ Guides Google Workspace onboarding end to end:
 flags:
   --account <email>      the Google Workspace account to authorize
   --credentials <path>   path to your Desktop OAuth client JSON (regular file)
+  --create-docs          additionally expose create-new-Doc (never edit an
+                         existing Doc; Gmail and Slack sending stay blocked)
   --yes                  never prompt (fails instead of asking on a TTY)
 
 On a real terminal, a missing --account/--credentials is prompted for.
 Idempotent: re-running a healthy setup is safe and re-registers the server.
 
 pix does not independently inspect the OAuth scopes actually granted (no
-stable scope-inspection surface exists to check against); this command
-guarantees the grant REQUESTS read-only scopes, and the registered server's
-own runtime flags are the backstop that blocks writes regardless.
+stable scope-inspection surface exists to check against). The default grant
+requests read-only scopes. --create-docs requests Gmail-read-only and
+Drive-file-scoped access, while the agent surface exposes only new-document
+creation. The ordinary registered server remains runtime read-only.
 
 No organization OAuth client is bundled or referenced here; bring your own.
 `
@@ -186,6 +191,8 @@ func parseGworkspaceSetupArgs(argv []string) (gworkspaceSetupOpts, error) {
 			o.credentials = v
 		case strings.HasPrefix(a, "--credentials="):
 			o.credentials = strings.TrimPrefix(a, "--credentials=")
+		case a == "--create-docs":
+			o.access = gwAccessCreateDocs
 		case a == "--yes", a == "-y", a == "--non-interactive":
 			o.assumeYes = true
 		case a == "-h", a == "--help":
@@ -271,7 +278,11 @@ func runGworkspaceStatusCmd(argv []string) {
 // process exit code. Every green here comes from a probe: config membership
 // is rendered as intent, never as readiness.
 func gworkspaceStatus(cfg *config.Config, env shellEnv, out io.Writer) int {
-	fmt.Fprintln(out, "Google Workspace (optional, read-only, via the host MCP gateway)")
+	if cfg.GoogleWorkspaceAccess == gwAccessCreateDocs {
+		fmt.Fprintln(out, "Google Workspace (optional; read access + create-new-Docs only)")
+	} else {
+		fmt.Fprintln(out, "Google Workspace (optional, read-only, via the host MCP gateway)")
+	}
 
 	acct := gogAccount(cfg, env)
 	if acct == "" && !mcpConfigured(cfg, gwServerName) {
@@ -318,6 +329,19 @@ func gworkspaceStatus(cfg *config.Config, env shellEnv, out io.Writer) int {
 			evidence: "sbx mcp inspect " + gwServerName + " did not resolve a command",
 			todo:     "sbx mcp status"})
 	}
+	if cfg.GoogleWorkspaceAccess == gwAccessCreateDocs {
+		if argv, ok := registeredMCPCommand(env, gwDocsCreateServerName); ok {
+			if trusted, ok := recognizedMCPArgv(env, argv, gwDocsCreateServerName); ok {
+				checks = append(checks, docsCreateSpawnCheck(probeListTools(env, trusted)))
+			} else {
+				checks = append(checks, check{label: "create Docs", verdict: verdictUnverifiable,
+					detail: "registered command is not the canonical Pix host command", todo: "pix gworkspace setup --create-docs"})
+			}
+		} else {
+			checks = append(checks, check{label: "create Docs", verdict: verdictTodo,
+				detail: "create-new-Docs server is not registered", todo: "pix gworkspace setup --create-docs"})
+		}
+	}
 
 	for _, c := range checks {
 		fmt.Fprintf(out, "  %s %-15s %s\n", checkGlyph(c), c.label, c.detail)
@@ -326,6 +350,24 @@ func gworkspaceStatus(cfg *config.Config, env shellEnv, out io.Writer) int {
 		}
 	}
 	return gworkspaceExit(checks)
+}
+
+func docsCreateSpawnCheck(res probeResult) check {
+	switch res.status {
+	case probeToolsOK:
+		return check{label: "create Docs", verdict: verdictReady,
+			detail:   "create-new-Docs tool exposed (existing Docs remain immutable)",
+			evidence: fmt.Sprintf("--list-tools returned %s", plural(res.tools, "tool"))}
+	case probeNoTools:
+		return check{label: "create Docs", verdict: verdictTodo,
+			detail: "create-new-Docs server returned 0 tools", todo: "pix gworkspace setup --create-docs"}
+	case probeDeniedByPolicy:
+		return check{label: "create Docs", verdict: verdictDenied,
+			detail: "create-new-Docs spawn was refused by policy"}
+	default:
+		return check{label: "create Docs", verdict: verdictUnverifiable,
+			detail: "probe " + res.detail + " — could not verify", todo: "sbx mcp inspect " + gwDocsCreateServerName}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -365,14 +407,15 @@ func runGworkspaceDisableCmd(argv []string) {
 // registration; the reverse order would leave a persisted "disabled" config
 // while the gateway still spawns the server, which is the dangerous drift.
 func gworkspaceDisable(cfg *config.Config, env shellEnv, out io.Writer) error {
-	configured := strings.TrimSpace(cfg.GogAccount) != "" || mcpConfigured(cfg, gwServerName)
+	configured := strings.TrimSpace(cfg.GogAccount) != "" || mcpConfigured(cfg, gwServerName) || mcpConfigured(cfg, gwDocsCreateServerName)
 	snap := snapshotGogRegistration(env)
+	docsSnap := snapshotMCPRegistration(env, gwDocsCreateServerName)
 
-	if !configured && snap.state == gogRegAbsent {
+	if !configured && snap.state == gogRegAbsent && docsSnap.state == gogRegAbsent {
 		fmt.Fprintln(out, "Google Workspace is not configured; nothing to remove.")
 		return nil
 	}
-	if snap.state == gogRegUnknown {
+	if snap.state == gogRegUnknown || docsSnap.state == gogRegUnknown {
 		return fmt.Errorf("could not confirm the %s registration (sbx mcp ls did not resolve cleanly): "+
 			"refusing to remove config while the gateway state is unreadable; check the sbx daemon (sbx mcp status), "+
 			"then re-run pix gworkspace disable", gwServerName)
@@ -387,13 +430,26 @@ func gworkspaceDisable(cfg *config.Config, env shellEnv, out io.Writer) error {
 		}
 		fmt.Fprintln(out, "  removed registration: "+gwServerName)
 	}
+	if docsSnap.state == gogRegPresent {
+		if _, err := env.run("sbx", "mcp", "rm", gwDocsCreateServerName); err != nil {
+			return fmt.Errorf("removing the %s registration: %w", gwDocsCreateServerName, err)
+		}
+		fmt.Fprintln(out, "  removed registration: "+gwDocsCreateServerName)
+	}
 
 	changed := false
 	if strings.TrimSpace(cfg.GogAccount) != "" {
 		cfg.SetGogAccount("")
 		changed = true
 	}
+	if cfg.GoogleWorkspaceAccess != "" {
+		cfg.SetGoogleWorkspaceAccess("")
+		changed = true
+	}
 	if cfg.RemoveMCP(gwServerName) {
+		changed = true
+	}
+	if cfg.RemoveMCP(gwDocsCreateServerName) {
 		changed = true
 	}
 	if changed {

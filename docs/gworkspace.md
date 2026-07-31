@@ -24,6 +24,18 @@ server it hasn't just verified returns real tools, and never touches
 `config.toml` until sbx registration has already succeeded. Run
 `pix gworkspace setup -h` for exactly what each step checks and why.
 
+### Optional: create new Docs only
+
+```bash
+pix gworkspace setup --create-docs
+```
+
+This keeps the ordinary Workspace server read-only and adds one separate
+`google_docs_create` tool. It can create a new document with initial content;
+it cannot accept an existing document ID, edit/delete/move/share existing
+files, send Gmail, or post to Slack. Packs can request this profile during
+their required setup hook.
+
 Confirm it worked:
 
 ```bash
@@ -95,9 +107,8 @@ gog --account <you> --gmail-no-send --wrap-untrusted --readonly mcp --allow-tool
 ```
 
 Read-only, can't send mail, and returned Gmail/Doc bodies are fenced as
-untrusted data. Add write tools later, per surface, only when you actually
-want them (`--allow-write --allow-tool 'docs.*'`), by registering gog again
-with the flags you want.
+untrusted data. Use Pix's `--create-docs` profile when creation is needed;
+do not broaden the generic server to all Docs write tools.
 
 ## Security posture (why this is safe for full-auto)
 

@@ -118,9 +118,9 @@ func TestBuiltinMcpServerFor(t *testing.T) {
 	}
 }
 
-// TestBuiltinMcpNames proves the local-server source of truth: only slack is
-// listed, gog is NEVER listed (external CLI, not bridged), and the result is
-// sorted.
+// TestBuiltinMcpNames proves the local-server source of truth: Slack and the
+// create-only Docs adapter are listed, gog is NEVER listed (external CLI), and
+// the result is sorted.
 func TestBuiltinMcpNames(t *testing.T) {
 	names := builtinMcpNames()
 	got := map[string]bool{}
@@ -130,8 +130,11 @@ func TestBuiltinMcpNames(t *testing.T) {
 	if !got["slack"] {
 		t.Errorf("builtinMcpNames() = %v, want slack present", names)
 	}
-	if len(names) != 1 {
-		t.Errorf("builtinMcpNames() = %v, want exactly [slack]", names)
+	if !got[googleDocsCreateServerName] {
+		t.Errorf("builtinMcpNames() = %v, want %s present", names, googleDocsCreateServerName)
+	}
+	if len(names) != 2 {
+		t.Errorf("builtinMcpNames() = %v, want exactly two built-ins", names)
 	}
 	if got["gog"] {
 		t.Errorf("builtinMcpNames() = %v, must NOT list gog (external CLI)", names)

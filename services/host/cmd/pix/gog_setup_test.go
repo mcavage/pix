@@ -93,6 +93,15 @@ const gogAuthAddHelpNoReadonly = `usage: gog auth add <account> [flags]
 (no flags)
 `
 
+const gogAuthAddHelpCreateDocs = `usage: gog auth add <account> [flags]
+
+Flags:
+      --services
+      --drive-scope
+      --gmail-scope
+      --force-consent
+`
+
 const gogAuthAddClientHelp = `usage: gog auth add-client <path>
 
 Register an OAuth Desktop client.
@@ -210,6 +219,7 @@ func (g gogTestEnv) env() shellEnv {
 		calls = &[][]string{}
 	}
 	return shellEnv{
+		hostBinary: func() (string, error) { return "/usr/bin/pix-host", nil },
 		lookPath: func(name string) (string, error) {
 			if g.present[name] {
 				return "/usr/bin/" + name, nil
@@ -379,6 +389,38 @@ func TestGogSetup_CurrentTwoStepRoute(t *testing.T) {
 	// R1-02: the OAuth-granting `auth add` step always carries --readonly.
 	if strings.Join(calls[1], " ") != "gog auth add you@example.com --readonly" {
 		t.Errorf("call[1] = %v", calls[1])
+	}
+}
+
+func TestGogSetup_CreateDocsProfileIsScopedAndRegistersSeparateTool(t *testing.T) {
+	gogSetupTestCfg(t)
+	cred := gogCredFile(t)
+	var calls [][]string
+	ge := gogTestEnv{
+		present: map[string]bool{"gog": true, "sbx": true},
+		output: mergeOutputs(gogBareHeadlessFixture("you@example.com"), map[string]string{
+			"gog auth --help":     gogAuthHelpCurrentSetup,
+			"gog auth add --help": gogAuthAddHelpCreateDocs,
+			"gog --account you@example.com auth doctor --check": "ok",
+		}),
+		statFile:      map[string]bool{cred: true},
+		interCalls:    &calls,
+		sbxRegisterOK: true,
+	}
+	var out bytes.Buffer
+	opts := gogSetupOpts{account: "you@example.com", credentials: cred, access: gwAccessCreateDocs}
+	if err := gogSetup(ge.env(), opts, strings.NewReader(""), &out, false); err != nil {
+		t.Fatalf("gogSetup: %v\n%s", err, out.String())
+	}
+	if len(calls) != 2 || !containsToken(calls[1], "--gmail-scope") || !containsToken(calls[1], "readonly") || !containsToken(calls[1], "--drive-scope") || !containsToken(calls[1], "file") {
+		t.Fatalf("scoped auth calls = %v", calls)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GoogleWorkspaceAccess != gwAccessCreateDocs || !mcpConfigured(cfg, gwDocsCreateServerName) {
+		t.Fatalf("access=%q mcp=%v", cfg.GoogleWorkspaceAccess, cfg.MCP)
 	}
 }
 

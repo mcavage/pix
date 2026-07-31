@@ -177,6 +177,11 @@ type Config struct {
 	// The Go identifier keeps the dependency binary's short name; the KEY on
 	// disk is the public one.
 	GogAccount string `toml:"google_workspace_account"`
+	// GoogleWorkspaceAccess records the runtime capability profile Pix granted
+	// and registered. Empty identifies the legacy read-only setup; new setup
+	// writes "create-docs", which adds only a create-new-document tool while
+	// keeping the ordinary Workspace MCP surface read-only.
+	GoogleWorkspaceAccess string `toml:"google_workspace_access,omitempty"`
 
 	// KnowledgeBundles are the git-mounted OKF bundle directory path(s) the
 	// knowledge service (:11436) indexes at startup. Empty (the default) means no
@@ -656,6 +661,7 @@ ollama_bridge_model = "qwen3.5:9b"
 # sources it via pix config get google_workspace_account. Empty falls back to the
 # GOG_ACCOUNT env var.
 google_workspace_account = ""
+google_workspace_access = ""
 
 # OKF knowledge bundle directories the knowledge service (:11436) indexes.
 # Empty = no bundles (index served empty). The knowledge service is opt-in:
@@ -838,6 +844,12 @@ func stringSlicesEqual(a, b []string) bool {
 // SetGogAccount sets the Google Workspace account (trimmed). An empty value
 // clears it.
 func (c *Config) SetGogAccount(account string) { c.GogAccount = strings.TrimSpace(account) }
+
+// SetGoogleWorkspaceAccess records the named, launcher-owned permission
+// profile. This is capability metadata, never a credential or OAuth token.
+func (c *Config) SetGoogleWorkspaceAccess(access string) {
+	c.GoogleWorkspaceAccess = strings.TrimSpace(access)
+}
 
 // SetSlackClientID sets the Slack app's public OAuth client id (trimmed). An
 // empty value clears it — and, since RedirectURI only ever defaults off a
