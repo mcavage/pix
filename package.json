@@ -1,6 +1,6 @@
 {
   "name": "pix",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "private": true,
   "description": "Multi-model pi coding agent harness on a Docker Hardened (DHI) Debian base",
   "license": "MIT",
