@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -98,5 +99,116 @@ func TestEnsureSetupSbxSessionNonInteractivePrintsFix(t *testing.T) {
 	}}
 	if err := ensureSetupSbxSession(env, &bytes.Buffer{}, false); err == nil || !strings.Contains(err.Error(), "sbx login") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestEnsureSetupSbxDefaultsAddsPublisherAndInitializesOpenPolicy(t *testing.T) {
+	sources := []string{"docker.io/", "github.com/example/"}
+	policyInitialized := false
+	var mutations []string
+	env := shellEnv{
+		probe: func(name string, args ...string) (string, bool, error) {
+			got := strings.Join(append([]string{name}, args...), " ")
+			switch got {
+			case "sbx settings get kit.allowedSources":
+				b, _ := json.Marshal(sources)
+				return string(b), false, nil
+			case "sbx policy ls --source local --type network --json":
+				if policyInitialized {
+					return `[{"name":"global"}]`, false, nil
+				}
+				return `[]`, false, nil
+			default:
+				return "", false, fmt.Errorf("unexpected probe: %s", got)
+			}
+		},
+		runInteractiveQuiet: func(name string, args ...string) error {
+			got := strings.Join(append([]string{name}, args...), " ")
+			mutations = append(mutations, got)
+			switch {
+			case len(args) == 4 && strings.Join(args[:3], " ") == "settings set kit.allowedSources":
+				return json.Unmarshal([]byte(args[3]), &sources)
+			case got == "sbx policy init allow-all":
+				policyInitialized = true
+				return nil
+			default:
+				return fmt.Errorf("unexpected mutation: %s", got)
+			}
+		},
+	}
+	if err := ensureSetupSbxDefaults(env); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(sources, ","); got != "docker.io/,github.com/example/,github.com/mcavage/" {
+		t.Fatalf("sources=%q", got)
+	}
+	if !policyInitialized {
+		t.Fatal("network policy was not initialized")
+	}
+	if len(mutations) != 2 {
+		t.Fatalf("mutations=%v", mutations)
+	}
+}
+
+func TestEnsureSetupSbxDefaultsPreservesWildcardAndExistingPolicy(t *testing.T) {
+	mutations := 0
+	env := shellEnv{
+		probe: func(name string, args ...string) (string, bool, error) {
+			switch strings.Join(append([]string{name}, args...), " ") {
+			case "sbx settings get kit.allowedSources":
+				return `["*"]`, false, nil
+			case "sbx policy ls --source local --type network --json":
+				return `[{"decision":"deny"}]`, false, nil
+			default:
+				return "", false, fmt.Errorf("unexpected probe")
+			}
+		},
+		runInteractiveQuiet: func(string, ...string) error {
+			mutations++
+			return nil
+		},
+	}
+	if err := ensureSetupSbxDefaults(env); err != nil {
+		t.Fatal(err)
+	}
+	if mutations != 0 {
+		t.Fatalf("existing sbx policy was mutated %d time(s)", mutations)
+	}
+}
+
+func TestEnsureSetupOpenNetworkPolicyHandlesUninitializedListError(t *testing.T) {
+	initialized := false
+	env := shellEnv{
+		probe: func(string, ...string) (string, bool, error) {
+			if !initialized {
+				return "", false, fmt.Errorf("network policy is not initialized")
+			}
+			return `[{"name":"global"}]`, false, nil
+		},
+		runInteractiveQuiet: func(name string, args ...string) error {
+			if name != "sbx" || strings.Join(args, " ") != "policy init allow-all" {
+				return fmt.Errorf("unexpected command: %s %v", name, args)
+			}
+			initialized = true
+			return nil
+		},
+	}
+	if err := ensureSetupOpenNetworkPolicy(env); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnsureSetupKitAllowedSourceRequiresVerifiedPersistence(t *testing.T) {
+	reads := 0
+	env := shellEnv{
+		probe: func(string, ...string) (string, bool, error) {
+			reads++
+			return `["docker.io/"]`, false, nil
+		},
+		runInteractiveQuiet: func(string, ...string) error { return nil },
+	}
+	err := ensureSetupKitAllowedSource(env)
+	if err == nil || !strings.Contains(err.Error(), "did not retain") || reads != 2 {
+		t.Fatalf("err=%v reads=%d", err, reads)
 	}
 }

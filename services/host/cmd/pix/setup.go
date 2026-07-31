@@ -166,6 +166,14 @@ func runSetupCmd(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(1)
 	}
+	// Pix's published base kit comes from GitHub, while a fresh sbx install only
+	// trusts docker.io kit sources. Fill that one publisher allowlist entry and
+	// initialize the one-time global network policy before the first handoff.
+	// Existing publishers and an existing (possibly tightened) policy are kept.
+	if err := ensureSetupSbxDefaults(env); err != nil {
+		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
+		os.Exit(1)
+	}
 	// An unreleased launcher uses its local checkout kit. Validate that kit with
 	// the installed sbx parser before pack OAuth/setup or any other mutation;
 	// nightly schema skew must fail once, early, without opening browsers and

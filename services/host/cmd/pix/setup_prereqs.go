@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"runtime"
@@ -8,6 +9,11 @@ import (
 )
 
 var setupHostOS = runtime.GOOS
+
+const (
+	setupKitAllowedSource = "github.com/mcavage/"
+	setupKitSourcesKey    = "kit.allowedSources"
+)
 
 // ensureSetupPrereqs installs only Pix's two core host tools on macOS. Optional
 // capabilities such as Ollama, gh, and gog are intentionally absent here.
@@ -102,4 +108,116 @@ func ensureSetupSbxSession(env shellEnv, out io.Writer, interactive bool) error 
 		return fmt.Errorf("sbx login completed but Docker Sandboxes is still unreachable; run: sbx diagnose")
 	}
 	return nil
+}
+
+// ensureSetupSbxDefaults owns the two one-time sbx settings Pix needs before
+// its first sandbox can be created. It preserves an existing network policy and
+// every existing kit publisher; setup only fills missing first-run state.
+func ensureSetupSbxDefaults(env shellEnv) error {
+	if err := ensureSetupKitAllowedSource(env); err != nil {
+		return err
+	}
+	return ensureSetupOpenNetworkPolicy(env)
+}
+
+func ensureSetupKitAllowedSource(env shellEnv) error {
+	out, timedOut, err := probeRun(env, "sbx", "settings", "get", setupKitSourcesKey)
+	if err != nil || timedOut {
+		return fmt.Errorf("reading Docker Sandboxes kit allowlist: %w", setupProbeError(err, timedOut))
+	}
+	var sources []string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &sources); err != nil {
+		return fmt.Errorf("reading Docker Sandboxes kit allowlist: invalid JSON: %w", err)
+	}
+	for _, source := range sources {
+		if source == "*" || source == setupKitAllowedSource {
+			return nil
+		}
+	}
+	sources = append(sources, setupKitAllowedSource)
+	encoded, err := json.Marshal(sources)
+	if err != nil {
+		return fmt.Errorf("encoding Docker Sandboxes kit allowlist: %w", err)
+	}
+	if err := runSetupSbxCommand(env, "settings", "set", setupKitSourcesKey, string(encoded)); err != nil {
+		return fmt.Errorf("allowing Pix's GitHub kit publisher: %w", err)
+	}
+
+	verified, timedOut, err := probeRun(env, "sbx", "settings", "get", setupKitSourcesKey)
+	if err != nil || timedOut {
+		return fmt.Errorf("verifying Docker Sandboxes kit allowlist: %w", setupProbeError(err, timedOut))
+	}
+	var after []string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(verified)), &after); err != nil {
+		return fmt.Errorf("verifying Docker Sandboxes kit allowlist: invalid JSON: %w", err)
+	}
+	for _, source := range after {
+		if source == "*" || source == setupKitAllowedSource {
+			return nil
+		}
+	}
+	return fmt.Errorf("Docker Sandboxes did not retain Pix's kit publisher; run: sbx settings set %s '[\"docker.io/\",\"%s\"]'", setupKitSourcesKey, setupKitAllowedSource)
+}
+
+func ensureSetupOpenNetworkPolicy(env shellEnv) error {
+	initialized, inspectErr := setupSbxNetworkPolicyInitialized(env)
+	if initialized {
+		return nil
+	}
+	if err := runSetupSbxCommand(env, "policy", "init", "allow-all"); err != nil {
+		// Some sbx versions report uninitialized policy state as an error, while
+		// an already-initialized daemon rejects a second init. Re-probe after a
+		// rejected init so setup preserves an existing policy across both forms.
+		if after, afterErr := setupSbxNetworkPolicyInitialized(env); afterErr == nil && after {
+			return nil
+		}
+		if inspectErr != nil {
+			return fmt.Errorf("reading Docker Sandboxes network policy: %v; initializing it: %w", inspectErr, err)
+		}
+		return fmt.Errorf("initializing Docker Sandboxes network policy: %w", err)
+	}
+	initialized, err := setupSbxNetworkPolicyInitialized(env)
+	if err != nil {
+		return err
+	}
+	if !initialized {
+		return fmt.Errorf("Docker Sandboxes did not retain its network policy; run: sbx policy init allow-all")
+	}
+	return nil
+}
+
+func setupSbxNetworkPolicyInitialized(env shellEnv) (bool, error) {
+	out, timedOut, err := probeRun(env, "sbx", "policy", "ls", "--source", "local", "--type", "network", "--json")
+	if err != nil || timedOut {
+		return false, fmt.Errorf("reading Docker Sandboxes network policy: %w", setupProbeError(err, timedOut))
+	}
+	var policies []json.RawMessage
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &policies); err != nil {
+		return false, fmt.Errorf("reading Docker Sandboxes network policy: invalid JSON: %w", err)
+	}
+	return len(policies) > 0, nil
+}
+
+func runSetupSbxCommand(env shellEnv, args ...string) error {
+	if env.runInteractiveQuiet != nil {
+		return env.runInteractiveQuiet("sbx", args...)
+	}
+	if env.runInteractive != nil {
+		return env.runInteractive("sbx", args...)
+	}
+	if env.run != nil {
+		_, err := env.run("sbx", args...)
+		return err
+	}
+	return fmt.Errorf("cannot run sbx")
+}
+
+func setupProbeError(err error, timedOut bool) error {
+	if timedOut {
+		return fmt.Errorf("command timed out")
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("command failed")
 }
