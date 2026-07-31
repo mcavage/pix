@@ -27,6 +27,9 @@ exact install command and resumes safely after it is run. Do not use the bare `b
 know a formula by that name and may suggest `pixi` instead. The `mcavage/tap/`
 qualifier is required.
 
+On first use, setup trusts Pix's GitHub kit publisher and initializes Docker
+Sandboxes' global network policy to Open. A policy you later tighten is preserved.
+
 Activate an advanced work pack explicitly through the same setup flow:
 
 ```bash
@@ -107,7 +110,8 @@ repository Pix touches. The optional `.pix/knowledge` pointer remains trackable.
 
 ## How it works
 
-- **Isolation:** pi runs in a disposable, network-limited Docker Sandbox.
+- **Isolation:** pi runs in a disposable Docker Sandbox; setup starts with Open
+  outbound networking, which you can tighten later with `sbx policy`.
 - **Models:** Pix runs with any one configured cloud provider. Additional
   providers improve role specialization and cross-vendor review. Ollama adds
   optional local models.

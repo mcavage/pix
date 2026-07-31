@@ -175,6 +175,15 @@ custom gateway. Direct provider keys come from 1Password; keyless gateway and
 Ollama paths do not require
 .BR op .
 Memory is enabled only after Ollama's watcher and embedding models are verified.
+.PP
+On first use, setup adds
+.B github.com/mcavage/
+to Docker Sandboxes'
+.B kit.allowedSources
+without removing existing publishers, and initializes the global sbx network
+policy to
+.BR allow-all .
+An existing network policy is never replaced.
 An ordinary value flag
 .RB ( \-\-account ,
 .BR \-\-knowledge ,
