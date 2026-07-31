@@ -5,7 +5,7 @@
 # else pull once. Keep in sync with `version` in package.json and `image:` in
 # pi-kit/spec.yaml.
 DOCKER_USER ?= mcavage
-VERSION     ?= 0.1.16
+VERSION     ?= 0.1.17
 # LAUNCHER_VERSION stamps the pix launcher binary. A LOCAL build marks the
 # version "+local" so the launcher knows it is UNRELEASED (no matching git tag
 # v$(VERSION) exists) and uses the local checkout kit instead of pinning a bogus
