@@ -158,7 +158,7 @@ func TestEnsureSetupSbxDefaultsPreservesWildcardAndExistingPolicy(t *testing.T) 
 			case "sbx settings get kit.allowedSources":
 				return `["*"]`, false, nil
 			case "sbx policy ls --source local --type network --json":
-				return `[{"decision":"deny"}]`, false, nil
+				return `{"rules":[{"decision":"deny"}]}`, false, nil
 			default:
 				return "", false, fmt.Errorf("unexpected probe")
 			}
@@ -173,6 +173,26 @@ func TestEnsureSetupSbxDefaultsPreservesWildcardAndExistingPolicy(t *testing.T) 
 	}
 	if mutations != 0 {
 		t.Fatalf("existing sbx policy was mutated %d time(s)", mutations)
+	}
+}
+
+func TestSetupSbxNetworkPolicyInitializedAcceptsLegacyArray(t *testing.T) {
+	env := shellEnv{probe: func(string, ...string) (string, bool, error) {
+		return `[{"decision":"allow"}]`, false, nil
+	}}
+	initialized, err := setupSbxNetworkPolicyInitialized(env)
+	if err != nil || !initialized {
+		t.Fatalf("initialized=%v err=%v", initialized, err)
+	}
+}
+
+func TestSetupSbxNetworkPolicyInitializedAcceptsEmptyRulesObject(t *testing.T) {
+	env := shellEnv{probe: func(string, ...string) (string, bool, error) {
+		return `{"rules":[]}`, false, nil
+	}}
+	initialized, err := setupSbxNetworkPolicyInitialized(env)
+	if err != nil || initialized {
+		t.Fatalf("initialized=%v err=%v", initialized, err)
 	}
 }
 
