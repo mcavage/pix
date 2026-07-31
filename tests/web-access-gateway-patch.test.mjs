@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-test("pinned pi-web-access patch adds gateway endpoint, model, and env credential seams", () => {
+test("pinned pi-web-access patch adds gateway seams and preserves pack provider policy", () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pix-web-access-patch-"));
 	const source = `
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
@@ -34,6 +34,27 @@ async function run(useCodexEndpoint: boolean) {
 }
 `;
 	fs.writeFileSync(path.join(dir, "openai-search.ts"), source);
+	fs.writeFileSync(path.join(dir, "index.ts"), `
+type SearchProvider = "auto" | "openai" | "exa";
+function loadConfig(): { provider?: string } { return {}; }
+function normalizeProviderInput(value: unknown): SearchProvider | undefined {
+	if (value === undefined) return undefined;
+	return value as SearchProvider;
+}
+function normalizeCuratorTimeoutSeconds(value: unknown): number | undefined { return undefined; }
+function resolveProvider(requested: unknown) {
+	const provider = normalizeProviderInput(requested ?? loadConfig().provider ?? "auto") ?? "auto";
+	return provider;
+}
+function curated(params: { provider?: string }) {
+				const rawSearchProvider = normalizeProviderInput(params.provider ?? loadConfig().provider ?? "auto") ?? "auto";
+	return rawSearchProvider;
+}
+function headless(params: { provider?: string }) {
+			const resolvedProvider = normalizeProviderInput(params.provider ?? loadConfig().provider);
+	return resolvedProvider;
+}
+`);
 	const script = path.join(repo, "scripts", "patches", "apply-web-access-gateway.mjs");
 	const env = { ...process.env, PI_WEB_ACCESS_DIR: dir };
 	const first = execFileSync(process.execPath, [script], { env, encoding: "utf8" });
@@ -44,4 +65,8 @@ async function run(useCodexEndpoint: boolean) {
 	for (const expected of ["openaiApiKeyEnv", "openaiBaseUrl", "openaiModel", "configuredResponsesURL()"])
 		assert.match(patched, new RegExp(expected.replace(/[()]/g, "\\$&")));
 	assert.match(patched, /fetch\(useCodexEndpoint \? CODEX_RESPONSES_URL : configuredResponsesURL\(\)/);
+	const patchedIndex = fs.readFileSync(path.join(dir, "index.ts"), "utf8");
+	assert.match(patchedIndex, /function resolveConfiguredProviderInput/);
+	assert.equal((patchedIndex.match(/resolveConfiguredProviderInput\(params\.provider\)/g) ?? []).length, 2);
+	assert.match(patchedIndex, /resolveConfiguredProviderInput\(requested\)/);
 });

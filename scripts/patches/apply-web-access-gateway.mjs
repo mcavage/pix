@@ -11,6 +11,7 @@ import path from "node:path";
 const root = process.env.PI_WEB_ACCESS_DIR ||
 	path.join(os.homedir(), ".pi", "agent", "npm", "node_modules", "pi-web-access");
 const sourcePath = path.join(root, "openai-search.ts");
+const indexPath = path.join(root, "index.ts");
 
 function patch(before, after) {
 	const current = fs.readFileSync(sourcePath, "utf8");
@@ -19,6 +20,16 @@ function patch(before, after) {
 		throw new Error(`anchor not found in ${sourcePath}; refresh apply-web-access-gateway.mjs`);
 	}
 	fs.writeFileSync(sourcePath, current.replace(before, after));
+	return true;
+}
+
+function patchIndex(before, after) {
+	const current = fs.readFileSync(indexPath, "utf8");
+	if (current.includes(after)) return false;
+	if (!current.includes(before)) {
+		throw new Error(`anchor not found in ${indexPath}; refresh apply-web-access-gateway.mjs`);
+	}
+	fs.writeFileSync(indexPath, current.replace(before, after));
 	return true;
 }
 
@@ -41,6 +52,36 @@ changed = patch(
 changed = patch(
 	`\t\tconst response = await fetch(useCodexEndpoint ? CODEX_RESPONSES_URL : OPENAI_RESPONSES_URL, {`,
 	`\t\tconst response = await fetch(useCodexEndpoint ? CODEX_RESPONSES_URL : configuredResponsesURL(), {`,
+) || changed;
+
+// A pack's concrete provider is policy, while `provider:"auto"` is merely a
+// caller asking the extension to choose. Without this precedence, an agent that
+// explicitly emitted "auto" bypassed the pack and selected Exa for recency or
+// custom-result searches—even when the pack required its authenticated gateway.
+changed = patchIndex(
+	`function normalizeCuratorTimeoutSeconds(value: unknown): number | undefined {`,
+	`function resolveConfiguredProviderInput(requested: unknown): SearchProvider | undefined {
+	const explicit = normalizeProviderInput(requested);
+	if (explicit && explicit !== "auto") return explicit;
+	return normalizeProviderInput(loadConfig().provider) ?? explicit;
+}
+
+function normalizeCuratorTimeoutSeconds(value: unknown): number | undefined {`,
+) || changed;
+
+changed = patchIndex(
+	`\tconst provider = normalizeProviderInput(requested ?? loadConfig().provider ?? "auto") ?? "auto";`,
+	`\tconst provider = resolveConfiguredProviderInput(requested) ?? "auto";`,
+) || changed;
+
+changed = patchIndex(
+	`\t\t\t\tconst rawSearchProvider = normalizeProviderInput(params.provider ?? loadConfig().provider ?? "auto") ?? "auto";`,
+	`\t\t\t\tconst rawSearchProvider = resolveConfiguredProviderInput(params.provider) ?? "auto";`,
+) || changed;
+
+changed = patchIndex(
+	`\t\t\tconst resolvedProvider = normalizeProviderInput(params.provider ?? loadConfig().provider);`,
+	`\t\t\tconst resolvedProvider = resolveConfiguredProviderInput(params.provider);`,
 ) || changed;
 
 console.log(changed ? "[apply-web-access-gateway] patched" : "[apply-web-access-gateway] already patched");
