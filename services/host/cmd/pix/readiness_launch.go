@@ -56,7 +56,7 @@ func providersReadinessAxes(cfg *config.Config, ev sbxKeyEvidence) map[Axis]axis
 	return map[Axis]axisBuilder{
 		axisProviders: func() []check {
 			return []check{
-				modelKeyCoreCheck(ev.out, ev.ok()),
+				inferenceCoreCheck(cfg, ev.out, ev.ok()),
 				runIntentKeyCheck(cfg, ev.out, ev.ok()),
 			}
 		},

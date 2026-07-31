@@ -364,7 +364,7 @@ func TestRunDoctor_NothingBlocksYet(t *testing.T) {
 			// The providers group's "model key" check is the one deliberate
 			// exception (S06): it is core, but sbx-absent makes it unverifiable,
 			// which never blocks — exercised directly below.
-			if c.Requirement != "optional" && !(g.Title == "Providers / keys (proxy-injected, never in the VM)" && c.Label == "model key") {
+			if c.Requirement != "optional" && !(g.Title == "Inference / credentials (proxy-injected, never in the VM)" && c.Label == "model key") {
 				t.Errorf("check %q requirement = %q; only the S06 model-key check is core", c.Label, c.Requirement)
 			}
 			if c.Evidence == "" && !c.Note {
@@ -373,7 +373,7 @@ func TestRunDoctor_NothingBlocksYet(t *testing.T) {
 		}
 	}
 	for _, g := range v.Groups {
-		if g.Title != "Providers / keys (proxy-injected, never in the VM)" {
+		if g.Title != "Inference / credentials (proxy-injected, never in the VM)" {
 			continue
 		}
 		for _, c := range g.Checks {

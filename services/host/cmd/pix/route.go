@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 
+	"pix/host/config"
 	"pix/host/routing"
 )
 
@@ -38,6 +39,25 @@ func resolveSessionModel(intent string) (string, error) {
 		// degrades to pi's default on a bad config-sourced run_intent; doctor renders
 		// "does not resolve".
 		return "", fmt.Errorf("unknown intent %q (see `pix route show` for the intent list)", intent)
+	}
+	// Once backend bindings exist they are the availability authority. The
+	// shipped catalog alone never proves that a model is callable.
+	var binding *routing.Binding
+	if cfg, cerr := config.Load(); cerr == nil && len(cfg.Inference.Models) > 0 {
+		bindings := routingBindings(cfg)
+		reg = routing.RegistryForBindings(reg, bindings, "")
+		d := routing.Resolve(reg, sc, pol, it)
+		for _, b := range bindings {
+			if b.Available && b.Model == d.Model {
+				bb := b
+				binding = &bb
+				break
+			}
+		}
+		if binding == nil {
+			return "", fmt.Errorf("intent %q has no callable model binding", intent)
+		}
+		return boundRuntimeID(*binding), nil
 	}
 	d := routing.Resolve(reg, sc, pol, it)
 	if d.Model == "" {

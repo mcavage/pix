@@ -34,7 +34,7 @@ var knownVerbs = map[string]bool{
 	"ls": true, "rm": true,
 	"config": true, "mcp": true, "gworkspace": true, "slack": true, "memory": true, "monitor": true, "knowledge": true,
 	"pack": true, "version": true, "run": true, "secret": true,
-	"reset": true, "uninstall": true, "man": true,
+	"reset": true, "man": true,
 	"backup": true, "restore": true, "state": true,
 	"task": true, "route": true, "agent": true,
 	"host": true,
@@ -157,11 +157,10 @@ Integrations & credentials
   secret <cmd>        ls|set|rm|check the 1Password op-refs (host MCP creds)
 
 State (on-disk lifecycle)
-  state <cmd>         backup|restore|reset|uninstall (grouped aliases)
+  state <cmd>         backup|restore|reset (grouped aliases)
   backup [--out P]    hot FULL backup (memory + config + op-refs) -> tar.gz
   restore <archive>   restore a FULL backup (safe swap)   [--force]
-  reset [flags]       move stack state aside (reversible)   [--keep-memory --sbx --yes]
-  uninstall [flags]   reset, then remove the bin symlinks    [--keep-memory --yes]
+  reset [flags]       move Pix's XDG state aside (reversible) [--keep-memory --sbx --yes]
 
 Expert (dangerous; read the man page first)
   host [DIR]          run pi DIRECTLY on this machine: no sandbox, no network
@@ -226,8 +225,6 @@ func verbUsage(verb string) (string, bool) {
 		return manUsage, true
 	case "reset":
 		return resetUsage, true
-	case "uninstall":
-		return uninstallUsage, true
 	case "state":
 		return stateUsage, true
 	case "task":
@@ -391,7 +388,7 @@ const versionUsage = `usage: pix version
 Print the stamped launcher version.
 `
 
-const resetUsage = `usage: pix reset [--keep-memory] [--sbx] [--yes] [--force]
+const resetUsage = `usage: pix reset [--keep-memory] [--purge-data] [--sbx] [--yes] [--force]
 
 Reset the stack to a clean slate (REVERSIBLE). Nothing is hard-deleted: state is
 moved aside to a timestamped <path>.bak-<unixts> sibling you can rename back.
@@ -402,6 +399,7 @@ captured memory + the knowledge index). Best-effort stops a running
 
 flags:
   --keep-memory   preserve ~/.local/share/pix/memory (your captured facts); reset the rest
+  --purge-data    also move aside harvested task artifacts (kept by default)
   --sbx           also remove every pix-* sandbox and unregister the
                   configured local MCP servers (provider secrets are left alone)
   --force         move the data dir even if 'pix-host serve' still appears
@@ -411,22 +409,4 @@ flags:
 
 Without --yes on a TTY it prints exactly what will move and prompts before acting.
 On a non-TTY it refuses unless --yes is given.
-`
-
-const uninstallUsage = `usage: pix uninstall [--keep-memory] [--purge-data] [--yes] [--force]
-
-Run the full reset (see 'pix reset'), THEN remove the installed pix +
-pix-host bin symlinks (~/.local/bin). Only symlinks are removed; a real
-file there is left untouched. State is moved aside, never hard-deleted.
-
-Harvested task artifacts (~/.local/share/pix/artifacts) are user work
-product and are KEPT by default (their path + size are printed). Pass
---purge-data to move them aside too.
-
-flags:
-  --keep-memory   preserve ~/.local/share/pix/memory (your captured facts)
-  --purge-data    also move aside harvested task artifacts (kept by default)
-  --force         move the data dir even if 'pix-host serve' still appears
-                  to be running
-  --yes, -y       don't prompt (REQUIRED on a non-interactive terminal)
 `

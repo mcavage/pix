@@ -64,11 +64,9 @@ pix run
 .fi
 .PP
 .B setup
-configures the host, sources at least one provider key from 1Password (the
-only source; see
-.B setup
-below), and creates the
-default pack every time.  On a fresh machine (no sandbox exists yet) it also
+configures at least one callable inference backend and launches Pix. API keys
+use 1Password; a healthy existing Ollama or custom gateway can be keyless.
+On a fresh machine (no sandbox exists yet) it also
 launches the one-shot onboarding tour; if a sandbox already exists for the
 directory it is left alone by default (never force-removed, never replayed
 into a live session) unless
@@ -171,24 +169,24 @@ keeps one (e.g. the box you are in).
 .TP
 .BR "pix setup" " [" DIR "] [" \-\-no\-agent "] [" \-\-apply "] [" \-\-replace "] [" \-\-pull\-models "] [" \-\-account " " email "] [" \-\-knowledge " " path-or-url "] [" \-\-mcp " " name "] [" \-\-model " " ollama-model "] [" \-\-yes "]"
 Actually sets you up: a real, two-phase command.
-Phase 1 (host) ALWAYS runs first, even on a repeat invocation: it sources
-model-provider keys, PREFERRING 1Password (wiring both the sandbox and host
-mode; see
-.BR "pix secret" ),
-ensures memory, and creates your default pack.  Provider keys come from
-1Password ONLY: the
-.B op
-CLI must be installed and signed in, or setup fails with the exact fix.  There
-is no "trust existing sbx keys" shortcut.  An ordinary value flag
+Phase 1 (host) ALWAYS runs first, even on a repeat invocation. Setup asks how
+models should run: API keys (the default), a healthy detected Ollama, or a
+custom gateway. Direct provider keys come from 1Password; keyless gateway and
+Ollama paths do not require
+.BR op .
+Memory is enabled only after Ollama's watcher and embedding models are verified.
+An ordinary value flag
 .RB ( \-\-account ,
 .BR \-\-knowledge ,
 .BR \-\-mcp ,
 .BR \-\-model )
-does NOT suppress the interactive key prompts; only
+does not change the inference choice. In non-interactive mode the default is
+the direct API-key path; therefore
 .B \-\-yes
 (alias
 .BR \-\-non-interactive )
-does.
+still requires valid 1Password references unless a pack preconfigures a
+keyless backend.
 .PP
 Local Ollama models (watcher/embed/bridge) are probed once and reported on
 their own readiness axis in the completion summary.  Setup only downloads a
@@ -207,11 +205,11 @@ pix setup \-\-pull\-models with Ollama down exits 1.
 pix setup with the same Ollama down exits 0 with an optional ⚠ row.
 Stale optional config never blocks unrelated repair.
 .PP
-Setup runs as a numbered transcript of eight phases \(em parse, inventory,
-gate, mutate, consent, verify, report, handoff \(em and prints each phase
-header BEFORE that phase does its work, so a run that hangs names the phase it
-hung in.  It asks at most two questions (model-pull consent, the Google
-Workspace route) and never prompts at all without a TTY.  Mutations run in a
+Ordinary setup prints a short action-oriented transcript.  \fB\-\-verbose\fR
+exposes the underlying eight phases \(em parse, inventory, gate, mutate,
+consent, verify, report, handoff \(em and the commands they run for diagnosis.
+Setup sequences prompts one at a time and never prompts at all without a TTY.
+Mutations run in a
 fixed order with the riskiest last (keys, config, pack, MCP, knowledge,
 identity, Google Workspace, model pulls); each is individually idempotent, so
 an interrupted run is resumed by re-running the same command \(em setup
@@ -265,7 +263,7 @@ and re-run.
 .SS doctor
 .TP
 .BR "pix doctor" " [" \-\-json "]"
-Check provider keys, Ollama and its configured models, memory, Google Workspace,
+Check inference backends and credentials, Ollama and its configured models, memory, Google Workspace,
 1Password refs, and MCP registrations.  Print repair commands for failed checks.
 .B \-\-json
 emits a machine-readable report.
@@ -1080,9 +1078,8 @@ The
 noun groups the stack's on-disk lifecycle commands.  The flat spellings
 .BR backup ,
 .BR restore ,
-.BR reset ,
 and
-.BR uninstall
+.BR reset
 keep working as aliases.
 .TP
 .B "pix state backup"
@@ -1096,18 +1093,16 @@ Alias for
 .B "pix state reset"
 Alias for
 .BR reset .
-.TP
-.B "pix state uninstall"
-Alias for
-.BR uninstall .
 .SS reset
 .TP
-.BR "pix reset" " [" \-\-keep-memory "] [" \-\-sbx "] [" \-\-force "] [" \-\-yes "|" \-y "]"
+.BR "pix reset" " [" \-\-keep-memory "] [" \-\-purge-data "] [" \-\-sbx "] [" \-\-force "] [" \-\-yes "|" \-y "]"
 Stop host services and move configuration and data aside to timestamped
 .B .bak-*
 siblings.  Nothing is hard-deleted.
 .B \-\-keep-memory
 preserves captured memory while resetting other state.
+.B \-\-purge-data
+also moves aside harvested task artifacts, which are kept by default.
 .B \-\-sbx
 also attempts, on a best-effort basis, to remove all
 .B pix-*
@@ -1119,22 +1114,6 @@ allows data movement if the service still appears to be running.
 or
 .B \-y
 suppresses confirmation and is required on a non-interactive terminal.
-.SS uninstall
-.TP
-.BR "pix uninstall" " [" \-\-keep-memory "] [" \-\-purge-data "] [" \-\-force "] [" \-\-yes "|" \-y "]"
-Perform the reset action, then remove the installed
-.B pix
-and
-.B pix-host
-entries from
-.B ~/.local/bin
-only when they are symlinks to pix binaries.  If reset fails, leave the
-symlinks installed.  Harvested task artifacts under
-.B $XDG_DATA_HOME/pix/artifacts
-are user work product and are KEPT by default (their path and size are printed);
-pass
-.B \-\-purge-data
-to move them aside too.
 .SS "version"
 .TP
 .B "pix version"
@@ -1243,14 +1222,6 @@ workspace state to the repository's local
 file. The
 .B .pix/knowledge
 pointer remains trackable.
-.TP
-.B ~/.local/bin/pix
-Installed launcher symlink removed by
-.BR uninstall .
-.TP
-.B ~/.local/bin/pix-host
-Installed host-service symlink removed by
-.BR uninstall .
 .SH ENVIRONMENT
 .TP
 .B PIX_CONFIG

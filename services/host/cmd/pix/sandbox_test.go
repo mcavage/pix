@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+	"time"
+)
 
 func TestParsePixBoxes(t *testing.T) {
 	// A realistic `sbx ls` with a header, mixed columns, non-pix rows, and
@@ -27,6 +31,31 @@ pix-t-001-ab    pix:0.0.27  exited    /Users/mcavage/dev/pix/tasks/001/co
 		if b.Name == "some-other-box" {
 			t.Error("non-pix box leaked into the list")
 		}
+	}
+}
+
+func TestParsePixBoxes_DoesNotMistakePackMountForWorkspace(t *testing.T) {
+	boxes := parsePixBoxes("pix-demo running /tmp/project /Users/me/pack/skills\n")
+	if len(boxes) != 1 {
+		t.Fatalf("want one box, got %+v", boxes)
+	}
+	if boxes[0].Dir != "" {
+		t.Fatalf("ambiguous raw paths must not be guessed, got %q", boxes[0].Dir)
+	}
+}
+
+func TestOverlayReceiptDirs_PrefersCanonicalCreatedWorkspace(t *testing.T) {
+	stateDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "project")
+	if err := writeCreateReceipt(stateDir, "pix-demo", workspace, nil, func() time.Time {
+		return time.Unix(1, 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	boxes := []sbxBox{{Name: "pix-demo", State: "running", Dir: "/wrong/pack/skills"}}
+	overlayReceiptDirs(boxes, stateDir)
+	if boxes[0].Dir != workspace {
+		t.Fatalf("dir = %q, want receipt workspace %q", boxes[0].Dir, workspace)
 	}
 }
 

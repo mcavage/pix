@@ -15,15 +15,15 @@ pull request without asking for approval before every shell command.
 ```bash
 brew install mcavage/tap/pix
 pix setup
-pix run
 ```
 
-`pix setup` installs the two core host tools (`sbx` and `op`) with one Homebrew
-consent when needed, configures one model provider from 1Password,
-and launches the first sandbox. One provider is enough. Additional providers,
-Ollama, GitHub CLI, and Google Workspace are optional capabilities that can be
-added later. When a required host tool is absent, setup prints the exact install
-command and resumes safely after it is run. Do not use the bare `brew install pix`: Homebrew does not
+`pix setup` installs `sbx` when needed, asks how models should run, and launches
+the first sandbox. API keys are the default and use 1Password; an existing
+healthy Ollama or a custom gateway can be used without it. One callable model is
+enough. Memory is enabled only when Ollama and its required models are verified.
+Additional providers, GitHub CLI, and Google Workspace are optional capabilities
+that can be added later. When a required host tool is absent, setup prints the
+exact install command and resumes safely after it is run. Do not use the bare `brew install pix`: Homebrew does not
 know a formula by that name and may suggest `pixi` instead. The `mcavage/tap/`
 qualifier is required.
 
@@ -42,7 +42,8 @@ declare optional setup hooks. Run one explicitly with `--with`, for example:
 pix setup --pack 'git+https://github.com/your-org/work-pack.git#ref=main' --with hr
 ```
 
-Without `--with`, the pack is still activated and all required hooks run. Only
+`--pack` is repeatable; packs compose in command order. Without `--with`, every
+pack is still activated and all required hooks run. Only
 the named optional hook is skipped. Repeat `--with` to select more than one.
 
 <!-- PIX_PRIMARY_PATH_END -->
@@ -60,9 +61,7 @@ pix gworkspace status
 
 Setup guides Google Cloud project/API/OAuth configuration, proves the exact
 headless read-only MCP process can authenticate and list tools, and only then
-saves the Pix configuration. If the OAuth app remains in Testing, Google may
-expire the token after seven days; `pix gworkspace status` reports publication
-state and token age. Remove only Pix-owned registration and config with:
+saves the Pix configuration. Remove only Pix-owned registration and config with:
 
 ```bash
 pix gworkspace disable

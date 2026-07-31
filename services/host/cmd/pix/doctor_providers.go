@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
 	"pix/host/config"
+	"pix/host/routing"
 )
 
 // secretCheck reports whether a provider secret is set. When sbx is
@@ -42,10 +44,12 @@ func secretCheck(label, key, sbxOut string, sbxOK bool) check {
 // authorizes git operations (not the model), so it is never itself
 // outstanding.
 func providersGroup(cfg *config.Config, sbxOut string, sbxOK bool) group {
-	g := group{title: "Providers / keys (proxy-injected, never in the VM)"}
-	g.checks = append(g.checks, modelKeyCoreCheck(sbxOut, sbxOK))
-	for _, p := range []string{"anthropic", "openai", "google", "github"} {
-		g.checks = append(g.checks, providerInfoCheck(p, sbxOut, sbxOK))
+	g := group{title: "Inference / credentials (proxy-injected, never in the VM)"}
+	g.checks = append(g.checks, inferenceCoreCheck(cfg, sbxOut, sbxOK))
+	if inferenceNeedsOnePassword(cfg) {
+		for _, p := range []string{"anthropic", "openai", "google", "github"} {
+			g.checks = append(g.checks, providerInfoCheck(p, sbxOut, sbxOK))
+		}
 	}
 	g.checks = append(g.checks, runIntentKeyCheck(cfg, sbxOut, sbxOK))
 	return g
@@ -75,6 +79,11 @@ func runIntentKeyCheck(cfg *config.Config, sbxOut string, sbxOK bool) check {
 		// is a soft note, not a failure.
 		return check{label: label, note: true, verdict: verdictUnverifiable,
 			detail: "run_intent does not resolve to a model — launch will use pi's default; fix with `pix config set run_intent <intent>`"}
+	}
+	if b, ok := configuredBindingForModel(cfg, model); ok {
+		runtimeID := boundRuntimeID(routing.Binding{Model: b.Model, Backend: b.Backend, UpstreamID: b.Upstream, Available: b.Available})
+		return check{label: label, note: true, verdict: verdictReady,
+			detail: "-> " + runtimeID + " via inference backend " + b.Backend}
 	}
 	provider := model
 	if i := strings.IndexByte(model, '/'); i > 0 {
@@ -107,6 +116,53 @@ func runIntentKeyCheck(cfg *config.Config, sbxOut string, sbxOK bool) check {
 // provider (anthropic, chosen as the example); the other two are named in the
 // core check's evidence, not repeated here as alternative commands.
 const modelKeyFixCmd = "pix secret set ANTHROPIC_API_KEY op://vault/item/field && pix secret sync"
+
+func configuredBindingForModel(cfg *config.Config, model string) (config.InferenceModelBinding, bool) {
+	if cfg == nil {
+		return config.InferenceModelBinding{}, false
+	}
+	for _, b := range cfg.Inference.Models {
+		runtimeID := boundRuntimeID(routing.Binding{Model: b.Model, Backend: b.Backend, UpstreamID: b.Upstream, Available: b.Available})
+		if (b.Model == model || runtimeID == model) && inferenceBindingCallable(cfg, b) {
+			return b, true
+		}
+	}
+	return config.InferenceModelBinding{}, false
+}
+
+// inferenceCoreCheck makes readiness topology-aware. Direct-provider hosts
+// retain the established sbx-secret evidence; gateway and Ollama hosts earn
+// readiness from their availability-specific bindings instead of being told
+// to configure an unrelated cloud-provider key.
+func inferenceCoreCheck(cfg *config.Config, sbxOut string, sbxOK bool) check {
+	count, _ := configuredInferenceSummary(cfg)
+	if count > 0 {
+		return check{label: "inference", requirement: requirementCore, verdict: verdictReady,
+			detail:   fmt.Sprintf("%d configured callable model(s)", count),
+			evidence: "availability-specific inference bindings"}
+	}
+	return modelKeyCoreCheck(sbxOut, sbxOK)
+}
+
+func configuredInferenceSummary(cfg *config.Config) (int, []string) {
+	if cfg == nil {
+		return 0, nil
+	}
+	seen := map[string]bool{}
+	var backends []string
+	count := 0
+	for _, b := range cfg.Inference.Models {
+		if !inferenceBindingCallable(cfg, b) {
+			continue
+		}
+		count++
+		if !seen[b.Backend] {
+			seen[b.Backend] = true
+			backends = append(backends, b.Backend)
+		}
+	}
+	return count, backends
+}
 
 // modelKeyCoreCheck is the sole core launch-readiness check in this group: does
 // pix have AT LEAST ONE usable model-provider key. It reuses

@@ -241,6 +241,10 @@ func (g gogTestEnv) env() shellEnv {
 		},
 		getenv:   os.Getenv,
 		statFile: func(path string) bool { return g.statFile[path] },
+		readFile: func(path string) (string, error) {
+			b, err := os.ReadFile(path)
+			return string(b), err
+		},
 		// R2-05: fileMode drives the credentials regular-file check. A test-set
 		// override wins; otherwise a path marked present in statFile defaults to
 		// a plain regular-file mode (0o600) so every pre-existing statFile-only
@@ -498,7 +502,7 @@ func TestGogSetup_ZeroHeadlessToolsFailsWithGuidance(t *testing.T) {
 	cred := gogCredFile(t)
 	dir := t.TempDir()
 	refs := filepath.Join(dir, "op-refs.env")
-	if err := os.WriteFile(refs, []byte("GOG_ACCOUNT=you@example.com\n"), 0o600); err != nil {
+	if err := os.WriteFile(refs, []byte("GOG_ACCOUNT=you@example.com\nGOG_KEYRING_PASSWORD=op://Private/Gog/password\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "cfg", "config.toml"))
@@ -507,7 +511,7 @@ func TestGogSetup_ZeroHeadlessToolsFailsWithGuidance(t *testing.T) {
 		t.Fatal(err)
 	}
 	refs = filepath.Join(dir, "cfg", "op-refs.env")
-	if err := os.WriteFile(refs, []byte("GOG_ACCOUNT=you@example.com\n"), 0o600); err != nil {
+	if err := os.WriteFile(refs, []byte("GOG_ACCOUNT=you@example.com\nGOG_KEYRING_PASSWORD=op://Private/Gog/password\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ge := gogTestEnv{

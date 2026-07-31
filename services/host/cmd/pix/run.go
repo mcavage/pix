@@ -25,6 +25,18 @@ import (
 // Workspace now rides the sbx gateway as the host-side `gog` MCP server (the
 // `slack` pattern), authed entirely on the host — there is nothing to inject.
 func runRun(argv []string) {
+	var generatedKitDirs []string
+	cleanupGeneratedKits := func() {
+		if err := cleanupGeneratedKitDirs(generatedKitDirs); err != nil {
+			fmt.Fprintf(os.Stderr, "pix: warning: %v\n", err)
+		}
+	}
+	defer cleanupGeneratedKits()
+	exit := func(code int) {
+		cleanupGeneratedKits()
+		os.Exit(code)
+	}
+
 	o, err := parseRunArgs(argv)
 	if err != nil {
 		if err == errHelpRequested {
@@ -34,7 +46,7 @@ func runRun(argv []string) {
 		}
 		fmt.Fprintf(os.Stderr, "pix run: %v\n\n", err)
 		fmt.Fprint(os.Stderr, runUsage)
-		os.Exit(2)
+		exit(2)
 	}
 
 	// Default the session intent from config (run_intent, the "overlord") when the
@@ -71,7 +83,7 @@ func runRun(argv []string) {
 				o.Intent = ""
 			} else {
 				fmt.Fprintf(os.Stderr, "pix run: --intent %q: %v\n", o.Intent, rerr)
-				os.Exit(2)
+				exit(2)
 			}
 		} else {
 			o.Model = m
@@ -91,13 +103,13 @@ func runRun(argv []string) {
 	// snapshot further down, so rendering readiness costs `run` no second
 	// `sbx secret ls`.
 	var keyEvidence sbxKeyEvidence
-	if _, err := defaultShellEnv().lookPath("sbx"); err == nil {
+	if _, err := defaultShellEnv().lookPath("sbx"); err == nil && !configuredKeylessInference() {
 		env := defaultShellEnv()
 		bootstrapProviderKeys(env, os.Stdin, os.Stderr, isTTY(os.Stdin))
 		keyEvidence = probeSbxKeyEvidence(env)
 		if keyEvidence.ok() && !anyModelKeyInOutput(keyEvidence.out) {
 			fmt.Fprint(os.Stderr, modelKeyMissingMessage(env))
-			os.Exit(1)
+			exit(1)
 		}
 	}
 
@@ -112,7 +124,11 @@ func runRun(argv []string) {
 	cfg, _, err := loadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix run: %v\n", err)
-		os.Exit(1)
+		exit(1)
+	}
+	if !inferenceAllowsModel(cfg, o.Model) {
+		fmt.Fprintf(os.Stderr, "pix run: model %q is not available through the configured inference backends\n", o.Model)
+		exit(2)
 	}
 
 	// Own the sandbox name so we can manage its lifecycle. sbx would otherwise
@@ -155,7 +171,7 @@ func runRun(argv []string) {
 			root, err := resolveRepoRoot()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "pix run --dev: %v\n", err)
-				os.Exit(1)
+				exit(1)
 			}
 			o.DevRoot = root
 			o.LocalKit = filepath.Join(root, "pi-kit")
@@ -196,12 +212,38 @@ func runRun(argv []string) {
 		// Fatal on error (explicit --pack that doesn't load, or a declared
 		// sandbox proxy whose kit can't be built — round-4 F2 fail-closed):
 		// never create a sandbox missing context the pack declared.
-		root, err := applyPackToLaunch(cfg, &o, defaultShellEnv())
+		root, err := applyPackStackToLaunch(cfg, &o, defaultShellEnv())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "pix: %v\n", err)
-			os.Exit(1)
+			exit(1)
 		}
 		effectivePack = root
+		// Inference is a generated create-time facet just like pack wrappers: the
+		// sandbox receives only probed models, compiled routes, and public endpoint
+		// metadata. Credential values never enter this kit.
+		inferenceKit, ierr := synthesizeInferenceKit(cfg)
+		if ierr != nil {
+			fmt.Fprintf(os.Stderr, "pix: inference: %v\n", ierr)
+			exit(1)
+		}
+		if inferenceKit != "" {
+			o.PackKits = append(o.PackKits, inferenceKit)
+			generatedKitDirs = append(generatedKitDirs, inferenceKit)
+		}
+		o.Models, ierr = callableRuntimeModels(cfg)
+		if ierr != nil {
+			fmt.Fprintf(os.Stderr, "pix: inference models: %v\n", ierr)
+			exit(1)
+		}
+		contextKit, cerr := synthesizePersonalContextKit()
+		if cerr != nil {
+			fmt.Fprintf(os.Stderr, "pix: personal context: %v\n", cerr)
+			exit(1)
+		}
+		if contextKit != "" {
+			o.PackKits = append(o.PackKits, contextKit)
+			generatedKitDirs = append(generatedKitDirs, contextKit)
+		}
 	}
 
 	// Local-image preflight: when we're about to pin --template to a locally loaded
@@ -216,7 +258,7 @@ func runRun(argv []string) {
 			fmt.Fprintln(os.Stderr, "It's a local build (never published), so sbx would try to pull it and stall on a prompt.")
 			fmt.Fprintln(os.Stderr, "Load this build into sbx first, from your pix checkout:")
 			fmt.Fprintln(os.Stderr, "  make load")
-			os.Exit(1)
+			exit(1)
 		}
 	}
 
@@ -228,7 +270,7 @@ func runRun(argv []string) {
 			fmt.Fprintf(os.Stderr, "pix: --template %s is not loaded in sbx.\n", o.Template)
 			fmt.Fprintln(os.Stderr, "It's a local build (never published), so sbx would try to pull it and stall on a prompt.")
 			fmt.Fprintln(os.Stderr, "Load it first, from the checkout that built it:  make load")
-			os.Exit(1)
+			exit(1)
 		}
 	}
 
@@ -245,7 +287,13 @@ func runRun(argv []string) {
 		// happening, and before RmFirst or exec — see planSandboxLaunch's
 		// sbxUnknown+replace case.
 		fmt.Fprintf(os.Stderr, "pix run: %v\n", plan.Err)
-		os.Exit(1)
+		exit(1)
+	}
+	if !plan.Reattach {
+		if err := validateCreateKits(plan.Args, validateSbxKit); err != nil {
+			fmt.Fprintf(os.Stderr, "pix run: %v\n", err)
+			exit(1)
+		}
 	}
 	switch {
 	case o.Replace:
@@ -271,13 +319,6 @@ func runRun(argv []string) {
 	if msg := mcpReattachWarning(cfg, o, plan.Reattach); msg != "" {
 		fmt.Fprintln(os.Stderr, msg)
 	}
-	if plan.RmFirst {
-		if err := applyReplaceRm(defaultShellEnv(), plan, o.Name); err != nil {
-			fmt.Fprintf(os.Stderr, "pix run: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
 	// Lazy auto-start: make the configured host services (memory/knowledge)
 	// reachable before the sandbox tries them, with a SHORT budget — the launch
 	// waits AT MOST ensureServeRunTimeout (8s), covering spawn-lock acquisition
@@ -314,24 +355,6 @@ func runRun(argv []string) {
 	// the SAME pack context.
 	writePackContextFiles(cfg, o, effectivePack)
 
-	// finding G + round-3 R3: record the pack this sandbox is being CREATED
-	// with (workspace marker), so a later re-attach can warn precisely when the
-	// create-time pack differs from the then-active pack — and stay silent when
-	// they match. Written ONLY on a DEFINITE create (--replace, or a positive
-	// "absent" probe) — never on sbxUnknown: willCreate optimistically prepares
-	// create args for a FAILED probe, but sbx may well re-attach the OLD sandbox
-	// then, and overwriting the marker with the active pack would silence the
-	// stale-pack warning for a sandbox still carrying its create-time pack. On
-	// a re-attach/unknown path any existing marker stays untouched. Written
-	// from effectivePack (what applyPackToLaunch actually applied), NOT
-	// activePackRoot(cfg.Pack, o.Pack) — a degraded (errNotAPack) launch must
-	// record NO pack, or a later reattach's stalePackReattachWarning would
-	// wrongly stay silent comparing marker == active while the sandbox never got
-	// the pack's facets.
-	if definitelyCreating(state, o.Replace) {
-		writeSandboxPackMarker(o.Workspace, effectivePack)
-	}
-
 	// Trusted host state: the host-visible facts the fenced agent can't see for
 	// itself (keys/services/knowledge/gog/mcp/models/pack/identity). This
 	// travels ONLY inside the launcher-generated initial prompt (the pi
@@ -351,10 +374,30 @@ func runRun(argv []string) {
 	// present, it is the fenced in-VM agent's ONLY source of trusted host-visible
 	// truth, so a launch that can't build/encode it must ABORT before exec'ing
 	// sbx rather than hand the agent a generated prompt with no trusted payload.
-	args, err := injectTrustedHostState(plan.Args, cfg, defaultShellEnv(), packForState)
+	// Destructive replacement is deliberately last: all fallible, read-only
+	// kit/readiness/trusted-state preflights above must succeed before the old
+	// sandbox is removed. A failed generated onboarding payload must never leave
+	// the user with neither the old sandbox nor a replacement.
+	var args []string
+	err = preflightBeforeReplace(func() error {
+		var preflightErr error
+		args, preflightErr = injectTrustedHostState(plan.Args, cfg, defaultShellEnv(), packForState)
+		if preflightErr != nil {
+			return fmt.Errorf("could not build trusted host state: %w", preflightErr)
+		}
+		return nil
+	}, func() error {
+		return applyReplaceRm(defaultShellEnv(), plan, o.Name)
+	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix run: could not build trusted host state: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "pix run: %v\n", err)
+		exit(1)
+	}
+	// Record the pack only after every hard-fail preflight and any replacement
+	// removal succeeded. A failed trusted-state preflight must leave both the old
+	// sandbox and its create-time marker untouched.
+	if definitelyCreating(state, o.Replace) {
+		writeSandboxPackMarker(o.Workspace, effectivePack)
 	}
 
 	if os.Getenv("PIX_DEBUG") != "" {
@@ -371,9 +414,8 @@ func runRun(argv []string) {
 	// the retained generic seam and own that plumbing itself.
 	cmd.Env = os.Environ()
 	// S03: on a DEFINITE create (definitelyCreating — the same predicate that
-	// gates the sandbox.pack marker above, for the identical reason: an
-	// sbxUnknown probe may still have sbx reattach the OLD sandbox, and a plain
-	// re-attach must never write a fresh create receipt over one), record the
+	// gates the sandbox.pack marker above; a plain re-attach must never write a
+	// fresh create receipt over the existing lifetime), record the
 	// create receipt ONLY after this exact `sbx run` exec has itself succeeded
 	// — never before, never on failure, never on reattach.
 	if err := execSbxRunAndRecordCreate(cmd, definitelyCreating(state, o.Replace), o.Name, canonicalWorkspacePath(o.Workspace), o.StaticMCP); err != nil {
@@ -385,9 +427,9 @@ func runRun(argv []string) {
 			// this sandbox's MCP set is recorded when it isn't.
 			fmt.Fprintf(os.Stderr, "pix run: %v\n", rerr)
 			fmt.Fprintln(os.Stderr, "the sandbox itself launched fine; only pix's local record of its preloaded MCP set failed to write. Check state-dir permissions and re-run `pix doctor`.")
-			os.Exit(1)
+			exit(1)
 		}
-		if exit, ok := err.(*exec.ExitError); ok {
+		if exitErr, ok := err.(*exec.ExitError); ok {
 			// If we pinned a git #ref kit and sbx bailed (classically git exit 128
 			// "Remote branch not found"), the raw error is opaque — replace it with
 			// an actionable note instead of leaking the git 128.
@@ -399,7 +441,7 @@ func runRun(argv []string) {
 			if plan.Reattach {
 				fmt.Fprintf(os.Stderr, "pix run: re-attach failed; recreate it with: %s\n", runReplaceCommand(o.Workspace))
 			}
-			os.Exit(exit.ExitCode())
+			exit(exitErr.ExitCode())
 		}
 		fmt.Fprintf(os.Stderr, "pix run: exec sbx: %v\n", err)
 		if errors.Is(err, exec.ErrNotFound) {
@@ -408,7 +450,7 @@ func runRun(argv []string) {
 		if plan.Reattach {
 			fmt.Fprintf(os.Stderr, "pix run: re-attach failed; recreate it with: %s\n", runReplaceCommand(o.Workspace))
 		}
-		os.Exit(1)
+		exit(1)
 	}
 }
 

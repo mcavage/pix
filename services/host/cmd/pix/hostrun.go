@@ -156,7 +156,7 @@ var hostHarnessDirs = []string{"skills", "agents", "extensions", "lib", "prompts
 // "install pi" hints tell the user to match the image's version, so they must
 // name the ACTUAL pinned version, not an unversioned latest. When you bump the
 // Dockerfile ARG, bump this in the same commit (a test cross-checks the two).
-const hostPinnedPiPackage = "@earendil-works/pi-coding-agent@0.82.1"
+const hostPinnedPiPackage = "@earendil-works/pi-coding-agent@0.83.0"
 const hostPiVersionProbeTimeout = 2 * time.Second
 
 func checkHostPiVersion(piBin string) error {
@@ -303,7 +303,7 @@ const hostSettingsJSON = `{
 `
 
 // hostContextMD is the host-mode system preamble, appended to pi's system
-// prompt at launch. It exists because the sandbox agentContext (pi-kit/
+// prompt at launch. It exists because the sandbox agentInstructions (pi-kit/
 // spec.yaml) asserts a disposable, network-fenced, full-auto VM — isolation
 // that does NOT exist here. Copying it onto the host would be actively
 // dangerous, so host mode asserts the opposite, explicitly.
@@ -577,11 +577,14 @@ func hostChildEnv(agentDir, ollamaModel string) []string {
 // buildHostArgs composes pi's argv (after the binary name). Pure + testable.
 // The guard extension and the host preamble are Phase-1 security blockers, so
 // they are always present — the caller refuses to launch when either is missing.
-func buildHostArgs(agentDir, preamble string, o hostOpts) []string {
+func buildHostArgs(agentDir, preamble, personalSkills string, o hostOpts) []string {
 	args := []string{
 		"--session-dir", filepath.Join(agentDir, "sessions"),
 		"-e", filepath.Join(agentDir, "extensions", "host-guard.ts"),
 		"--append-system-prompt", preamble,
+	}
+	if personalSkills != "" {
+		args = append(args, "--skill", personalSkills)
 	}
 	if o.Model != "" {
 		args = append(args, "--model", o.Model)
@@ -708,7 +711,16 @@ func runHostLaunch(o hostOpts) {
 		fmt.Fprintf(os.Stderr, "pix host: no cloud keys (Ollama-only). To add them, put op:// refs in\n  %s\n(e.g. ANTHROPIC_API_KEY=op://vault/item/field) — resolved at launch, never stored.\n", refs)
 	}
 
-	piArgs := buildHostArgs(agentDir, string(preamble), o)
+	personal, err := readPersonalInstructions()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pix host: personal context: %v\n", err)
+		os.Exit(1)
+	}
+	combinedPreamble := string(preamble)
+	if personal != "" {
+		combinedPreamble += "\n\n# Personal instructions\n\n" + personal + "\n"
+	}
+	piArgs := buildHostArgs(agentDir, combinedPreamble, personalSkillsDir(), o)
 	var cmd *exec.Cmd
 	if useOp {
 		// --no-masking is REQUIRED for an interactive launch: op's default output

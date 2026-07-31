@@ -396,5 +396,74 @@ func ensureServeUp(services []string, timeout time.Duration) {
 	if err != nil {
 		return // a broken config fails loudly in the primary action instead
 	}
+	if from, stale := staleServeVersion(cfg, defaultShellEnv(), services, rpcIdentityProbe); stale {
+		restartStaleServe(defaultServeReloader(), from, version, os.Stderr)
+	}
 	_ = ensureServe(defaultServeStarter(), cfg, ensureServeOpts{Services: services, Timeout: timeout})
+}
+
+// staleServeVersion recognizes only a positively identified Pix service at a
+// different version. Foreign/unresponsive port holders are never restarted.
+func staleServeVersion(cfg *config.Config, env shellEnv, requested []string, probe identityProber) (string, bool) {
+	if cfg == nil || probe == nil {
+		return "", false
+	}
+	st := serveStarter{getenv: env.getenv}
+	for _, p := range requiredServePorts(st, cfg, requested) {
+		if env.dial != nil && !env.dial(p.port) {
+			continue
+		}
+		id, err := probe(p.port)
+		want := identityMemoryName
+		if p.name == "knowledge" {
+			want = identityKnowledgeName
+		}
+		if err == nil && id.Name == want && id.Version != "" && id.Version != version {
+			return id.Version, true
+		}
+	}
+	return "", false
+}
+
+// restartStaleServe preserves lifecycle ownership: managed services restart
+// through their supervisor, lazy services stop safely and relaunch, and a
+// foreground process is left for its terminal owner.
+func restartStaleServe(rl serveReloader, from, to string, out io.Writer) {
+	switch rl.mode() {
+	case serveManaged:
+		if err := rl.kickManaged(); err != nil {
+			fmt.Fprintf(out, "warning: could not update pix services from %s to %s: %v\n", from, to, err)
+			return
+		}
+		fmt.Fprintf(out, "updated pix services %s → %s.\n", from, to)
+	case serveLazy:
+		stopped, err := rl.stopServe(io.Discard)
+		if err != nil || !stopped {
+			fmt.Fprintf(out, "warning: could not safely stop pix services %s — run: pix serve stop && pix serve\n", from)
+			return
+		}
+		if err := rl.ensure(); err != nil {
+			fmt.Fprintf(out, "warning: pix services stopped but %s did not start: %v\n", to, err)
+			return
+		}
+		fmt.Fprintf(out, "updated pix services %s → %s.\n", from, to)
+	case serveForeground:
+		fmt.Fprintf(out, "pix services %s are running in another terminal; restart them to use %s.\n", from, to)
+	case serveDown:
+		// A previous launcher can leave a positively identified Pix daemon with
+		// neither a current pidfile nor a lazy/managed marker. mode() calls this
+		// "down", but the identity probe above proved the port holder is Pix.
+		// Reuse serve stop's ownership discovery rather than spawning a competing
+		// daemon; it still refuses to signal anything it cannot verify as ours.
+		stopped, err := rl.stopServe(io.Discard)
+		if err != nil || !stopped {
+			fmt.Fprintf(out, "warning: could not safely stop pix services %s — run: pix serve stop && pix serve\n", from)
+			return
+		}
+		if err := rl.ensure(); err != nil {
+			fmt.Fprintf(out, "warning: pix services stopped but %s did not start: %v\n", to, err)
+			return
+		}
+		fmt.Fprintf(out, "updated pix services %s → %s.\n", from, to)
+	}
 }

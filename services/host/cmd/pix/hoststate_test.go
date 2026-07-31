@@ -91,6 +91,25 @@ func TestBuildHostState_NotProvisioned(t *testing.T) {
 	}
 }
 
+func TestBuildHostState_KeylessGatewayCountsAsResolvedInference(t *testing.T) {
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		Backends: map[string]config.InferenceBackend{"gateway": {Driver: "openai-compatible", Auth: "sbx-session", BaseURL: "https://models.example.test/v1"}},
+		Models:   []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "gateway", Upstream: "reasoner", Available: true}},
+	}}
+	hs := buildHostState(cfg, "", true, func(int) bool { return false }, "sbx", hostStatePack{})
+	if !hs.Keys.Resolved || hs.Keys.OpenAI || hs.Keys.Anthropic || hs.Keys.Google {
+		t.Fatalf("gateway inference should resolve without pretending direct keys exist: %+v", hs.Keys)
+	}
+	if hs.Memory.Enabled {
+		t.Fatal("memory must not be reported enabled merely because its port is part of Pix")
+	}
+	cfg.Services = []string{"memory"}
+	hs = buildHostState(cfg, "", true, func(int) bool { return false }, "sbx", hostStatePack{})
+	if !hs.Memory.Enabled || hs.Memory.Up {
+		t.Fatalf("enabled-but-stopped memory state is wrong: %+v", hs.Memory)
+	}
+}
+
 func TestReadGitIdentity(t *testing.T) {
 	env := shellEnv{
 		run: func(name string, args ...string) (string, error) {

@@ -9,12 +9,12 @@ import (
 // exact numbers rather than the shipped seed (which may be tuned over time).
 func testReg() *Registry {
 	return &Registry{Models: []Model{
-		{ID: "anthropic/opus", Provider: "anthropic", Available: true, InputPerMTok: 15, OutputPerMTok: 75},
-		{ID: "anthropic/sonnet", Provider: "anthropic", Available: true, InputPerMTok: 3, OutputPerMTok: 15},
-		{ID: "anthropic/haiku", Provider: "anthropic", Available: true, InputPerMTok: 0.8, OutputPerMTok: 4},
-		{ID: "openai/gpt", Provider: "openai", Available: true, InputPerMTok: 1.25, OutputPerMTok: 10},
-		{ID: "ollama/local", Provider: "ollama", Available: true, Local: true},
-		{ID: "openai/retired", Provider: "openai", Available: false},
+		{ID: "anthropic/opus", Provider: "anthropic", Available: true, ContextWindow: 1000, MaxOutputTokens: 100, InputPerMTok: 15, OutputPerMTok: 75},
+		{ID: "anthropic/sonnet", Provider: "anthropic", Available: true, ContextWindow: 1000, MaxOutputTokens: 100, InputPerMTok: 3, OutputPerMTok: 15},
+		{ID: "anthropic/haiku", Provider: "anthropic", Available: true, ContextWindow: 1000, MaxOutputTokens: 100, InputPerMTok: 0.8, OutputPerMTok: 4},
+		{ID: "openai/gpt", Provider: "openai", Available: true, ContextWindow: 1000, MaxOutputTokens: 100, InputPerMTok: 1.25, OutputPerMTok: 10},
+		{ID: "ollama/local", Provider: "ollama", Available: true, Local: true, ContextWindow: 1000, MaxOutputTokens: 100},
+		{ID: "openai/retired", Provider: "openai", Available: false, ContextWindow: 1000, MaxOutputTokens: 100},
 	}}
 }
 

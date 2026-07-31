@@ -154,9 +154,9 @@ memory_scope = "work"                # → .pix/profile; default = pack name; "d
 
 # ── F2 in-sandbox proxy wrappers (bin/, fenced) ──
 [[proxy]]
-  name = "snowflake"            # scaffolds bin/snowflake; mounted → /usr/local/bin in the VM
+  name = "warehouse"            # scaffolds bin/warehouse; mounted → /usr/local/bin in the VM
   # host = false (default)      # sandbox-only
-  # egress = ["snowflakecomputing.com"]  # declared net domains → BoM + kit allowlist hint
+  # egress = ["warehouse.example"]  # declared net domains → BoM + kit allowlist hint
 
 # ── F3 host-mode wrappers (host exec, gated) ──
 [[proxy]]
@@ -549,7 +549,7 @@ identically to plugins.
 - F4 switch: MCP set + sandbox bin + config + knowledge scope + memory scope tag + `pack.lock`.
 - F6 knowledge shared/private references.
 - Tier-0 adoption (no prompt).
-- **DoD:** `pack use work` → fresh sandbox has the snowflake wrapper on PATH + work MCP set
+- **DoD:** `pack use work` → fresh sandbox has the warehouse wrapper on PATH + work MCP set
   attached; `pack use personal` → Fastmail MCP attached; one command flips; memory + knowledge
   scope follow.
 
@@ -600,7 +600,7 @@ Note on F1's tier: a pack that only *references* a host-provided MCP (`integrati
   `<StateDir>/pix/pack-kits/`. Add a `pack gc` step or clean-on-switch (cheap: keyed by pack
   name hash, overwrite in place). Recommend overwrite-in-place + a `pix state reset` sweep.
 - **Host PATH prepend ordering.** Prepending the pack `bin/` in host mode means a pack wrapper
-  shadows a real host tool of the same name. That is the intent (a wrapped `snowflake`), but it is a
+  shadows a real host tool of the same name. That is the intent (a wrapped `warehouse`), but it is a
   footgun for a careless pack. The BoM screen names every host wrapper so the user sees the shadow
   before adopting.
 - **Gateway registration is best-effort and out-of-band.** `registerServers` needs `SBX_MCP_URL`;

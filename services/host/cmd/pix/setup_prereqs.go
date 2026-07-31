@@ -14,8 +14,19 @@ var setupHostOS = runtime.GOOS
 // Interactive setup asks once for the package category; unattended setup never
 // installs and returns exact commands instead.
 func ensureSetupPrereqs(env shellEnv, in io.Reader, out io.Writer, interactive bool) error {
+	return ensureSetupPrereqsFor(env, in, out, interactive, true)
+}
+
+// ensureSetupPrereqsFor lets setup defer installing 1Password until after
+// explicit packs have contributed inference. A pack using sbx-session auth
+// must not make a keyless user install or sign into op.
+func ensureSetupPrereqsFor(env shellEnv, in io.Reader, out io.Writer, interactive, requireOp bool) error {
 	var missing []string
-	for _, name := range []string{"sbx", "op"} {
+	names := []string{"sbx"}
+	if requireOp {
+		names = append(names, "op")
+	}
+	for _, name := range names {
 		if env.lookPath == nil {
 			missing = append(missing, name)
 			continue

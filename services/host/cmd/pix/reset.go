@@ -13,11 +13,10 @@ import (
 	"pix/host/config"
 )
 
-// reset + uninstall are the destructive-but-reversible lifecycle verbs. Both are
-// built to be SAFE: nothing is ever hard-removed. State is MOVED aside to a
+// reset is the destructive-but-reversible lifecycle verb. Nothing is ever
+// hard-removed. State is MOVED aside to a
 // timestamped `<dir>.bak-<unixts>` sibling, so a reset can always be undone by
 // renaming the backup back. reset wipes the stack's *state* (config + data),
-// uninstall does that AND removes the installed bin symlinks.
 //
 // The design is split so the destructive core is unit-testable against a temp
 // HOME with no real sbx/pkill:
@@ -30,13 +29,13 @@ import (
 //     RETURNS an error for the non-TTY-no-yes refusal instead of os.Exit, so the
 //     refusal path is testable.
 
-// resetOpts is the parsed reset/uninstall flag set.
+// resetOpts is the parsed reset flag set.
 type resetOpts struct {
 	keepMemory bool // --keep-memory: preserve <dataRoot>/memory (captured facts)
 	sbx        bool // --sbx: also remove pix-* sandboxes + unregister MCP
 	assumeYes  bool // --yes: don't prompt (required on a non-TTY)
 	force      bool // --force: move the data dir even if serve appears still up
-	purgeData  bool // --purge-data (uninstall only): ALSO move aside harvested task artifacts
+	purgeData  bool // --purge-data: ALSO move aside harvested task artifacts
 	help       bool // -h/--help
 }
 
@@ -50,7 +49,7 @@ type resetPaths struct {
 	knowledgeDir string // <dataRoot>/knowledge or dir(KNOWLEDGE_DB): the rebuildable index
 	memoryDB     string // the custom MEMORY_DB file path (set ONLY when MEMORY_DB is given); "" for the default
 	knowledgeDB  string // the custom KNOWLEDGE_DB file path (set ONLY when KNOWLEDGE_DB is given); "" for the default
-	artifactRoot string // taskArtifactRoot(): harvested task docs. Touched ONLY by uninstall --purge-data; reset never reaches it.
+	artifactRoot string // taskArtifactRoot(): harvested task docs. Touched only by reset --purge-data.
 }
 
 // backupTarget is one path the reset moves aside, with a human label. Dangerous
@@ -77,7 +76,7 @@ type resetActions struct {
 	MemoryDB        string         // resolved custom MEMORY_DB file path ("" for the default), so the sweep can preserve a db that lives DIRECTLY in DataRoot
 	DataRoot        string         // the data root (for the keep-memory sweep)
 	ConfigDir       string         // the config dir (~/.config/pix) being backed up, so executeReset can snapshot + restore its 1Password ref files
-	PreserveRefs    bool           // reset ONLY: restore op-refs.env/hostmode.env into a fresh config dir (uninstall is a clean wipe, leaves it false)
+	PreserveRefs    bool           // lower-level restore option; the public reset command deliberately leaves it false
 	RemoveSandboxes bool           // --sbx: remove pix-* sandboxes
 	MCPRemove       []string       // --sbx: MCP server names to unregister (cfg.MCP)
 	Force           bool           // --force: skip the serve-still-up guard on the data move
@@ -244,9 +243,9 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 		config.ServeLazyMarkerPath(),
 		config.ServeSpawnLockPath(),
 	}
-	// --purge-data (uninstall only): move harvested task artifacts aside too. They
+	// --purge-data moves harvested task artifacts aside too. They
 	// live under XDG_DATA_HOME, OUTSIDE every tree reset normally touches, so they
-	// survive a plain reset/uninstall by design — this is the deliberate opt-in to
+	// survive a plain reset by design — this is the deliberate opt-in to
 	// sweep them. Move-aside (.bak), never hard-delete, like every other data path.
 	if opts.purgeData && paths.artifactRoot != "" {
 		a.Backups = append(a.Backups, backupTarget{Path: paths.artifactRoot, Label: "harvested task artifacts"})
@@ -427,7 +426,7 @@ func serveStillUp(env shellEnv) bool {
 // It returns the created .bak paths AND a non-nil error if ANY move-aside or
 // sweep failed (or the serve-still-up guard blocked the data move). A partial
 // reset must NOT report success: the caller uses the error to exit non-zero and
-// (for uninstall) to abort removing the bin symlinks.
+// to avoid reporting a partial reset as successful.
 func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now func() time.Time) ([]string, error) {
 	ts := now().Unix()
 	var errs []error
@@ -748,10 +747,13 @@ func runResetCore(cfg *config.Config, paths resetPaths, opts resetOpts,
 	fsys resetFS, env shellEnv, rio setupIO, now func() time.Time) error {
 
 	a := resetPlan(cfg, paths, opts)
-	// reset keeps your 1Password refs (op:// pointers, not secrets) so you don't
-	// re-paste after every reset. uninstall is a clean wipe and leaves this false.
-	a.PreserveRefs = true
 	printResetPlan(a, rio.out)
+	if !opts.purgeData && paths.artifactRoot != "" {
+		if _, size := artifactDirSize(paths.artifactRoot); size > 0 {
+			fmt.Fprintf(rio.out, "Keeping harvested task artifacts (%s) at %s — pass --purge-data to move them aside too.\n\n",
+				humanBytes(size), paths.artifactRoot)
+		}
+	}
 
 	if !opts.assumeYes {
 		if !rio.isTTY {
@@ -769,8 +771,7 @@ func runResetCore(cfg *config.Config, paths resetPaths, opts resetOpts,
 	return execErr
 }
 
-// parseResetArgs parses the reset/uninstall flag set (shared: both accept
-// --keep-memory / --yes; reset also accepts --sbx).
+// parseResetArgs parses the reset flag set.
 func parseResetArgs(argv []string, allowSbx, allowPurge bool) (resetOpts, error) {
 	var o resetOpts
 	for _, a := range argv {
@@ -803,7 +804,7 @@ func parseResetArgs(argv []string, allowSbx, allowPurge bool) (resetOpts, error)
 
 // runReset is the `reset` verb entry point.
 func runReset(argv []string) {
-	opts, err := parseResetArgs(argv, true, false)
+	opts, err := parseResetArgs(argv, true, true)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix reset: %v\n\n%s", err, resetUsage)
 		os.Exit(2)
@@ -981,34 +982,4 @@ func removeInstalledManPage(env shellEnv, fsys resetFS, out io.Writer) {
 		return
 	}
 	fmt.Fprintf(out, "  ✓ removed man page %s\n", p)
-}
-
-// runUninstall is the `uninstall` verb entry point (replaces the old stub).
-func runUninstall(argv []string) {
-	opts, err := parseResetArgs(argv, false, true)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix uninstall: %v\n\n%s", err, uninstallUsage)
-		os.Exit(2)
-	}
-	if opts.help {
-		fmt.Print(uninstallUsage)
-		return
-	}
-	cfg, _, err := loadResolvedConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix uninstall: %v\n", err)
-		os.Exit(1)
-	}
-	env := defaultShellEnv()
-	rio := setupIO{in: os.Stdin, out: os.Stdout, isTTY: isTTY(os.Stdin)}
-	if err := runUninstallCore(cfg, resolveResetPaths(env), resolveBinPaths(env), opts, installChannelNow(),
-		defaultResetFS(), env, rio, time.Now); err != nil {
-		if errors.Is(err, errResetNeedsYes) {
-			fmt.Fprintln(os.Stderr, "pix uninstall: refusing to run non-interactively without confirmation")
-			fmt.Fprintln(os.Stderr, "re-run with --yes to uninstall non-interactively")
-			os.Exit(2)
-		}
-		fmt.Fprintf(os.Stderr, "pix uninstall: %v\n", err)
-		os.Exit(1)
-	}
 }

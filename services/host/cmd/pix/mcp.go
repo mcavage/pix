@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -385,6 +387,10 @@ type mcpRegistrar struct {
 	gog     string // absolute gog (only needed to register gog)
 	account string // gog --account value
 	hostBin string // absolute pix-host (for slack + other host subcommands)
+	// gogUseOp is true only for gog's explicit file-keyring topology, where
+	// GOG_KEYRING_PASSWORD is an op:// ref. Normal macOS OAuth lives in gog's
+	// own keychain and must stay bare even when unrelated pack servers use op.
+	gogUseOp bool
 	// containers maps a server name to its pack CONTAINER/REMOTE spec (Manifest,
 	// Image, or RemoteURL). A Manifest name registers via `--local --url` (gateway
 	// resolves the OCI image; creds Docker-side; never op-run wrapped). An Image
@@ -424,6 +430,14 @@ func (m mcpRegistrar) serverCmd(name string) []string {
 		argv := []string{"docker", "run", "-i", "--rm"}
 		for _, k := range c.EnvKeys {
 			argv = append(argv, "-e", k)
+		}
+		keys := make([]string, 0, len(c.EnvValues))
+		for key := range c.EnvValues {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			argv = append(argv, "-e", key+"="+c.EnvValues[key])
 		}
 		return append(argv, c.Image)
 	}
@@ -474,7 +488,7 @@ func (m mcpRegistrar) addArgs(name string) []string {
 // them above.
 func (m mcpRegistrar) execArgv(name string) []string {
 	cmd := m.serverCmd(name)
-	if m.opRefs == "" {
+	if m.opRefs == "" || (name == gwServerName && !m.gogUseOp) {
 		return cmd
 	}
 	return append(opRunWrapPrefix(m.op, m.opRefs), cmd...)
@@ -516,7 +530,7 @@ func rawAddArgs(name string, argv []string) []string {
 // mirrors registerServers' opReady gate, where op and op-refs are only ever
 // used together.
 func gogRegisteredArgv(gogBin, opBin, opRefs, account string) []string {
-	return mcpRegistrar{gog: gogBin, account: account, op: opBin, opRefs: opRefs}.execArgv(gwServerName)
+	return mcpRegistrar{gog: gogBin, account: account, op: opBin, opRefs: opRefs, gogUseOp: opRefs != ""}.execArgv(gwServerName)
 }
 
 // gogBareRegistrationNote is the ONE shared message printed whenever gog is
@@ -545,9 +559,15 @@ func buildGogRegistrar(env shellEnv, gogPath, account string) mcpRegistrar {
 	reg := mcpRegistrar{gog: gogPath, account: account}
 	opPath, opErr := lookPath("op")
 	opRefs := resolveOpRefs(env)
-	if opErr == nil && opRefs != "" {
+	// gog's normal macOS OAuth lives in its own keychain and must not inherit an
+	// op wrapper merely because unrelated integration refs exist. The wrapper
+	// is only for the explicit file-keyring topology, identified by its password
+	// ref; otherwise `op run` adds a needless sign-in dependency and can prevent
+	// an already-working bare gog command from running at all.
+	if opErr == nil && opRefs != "" && opRefFilled(env, "GOG_KEYRING_PASSWORD") {
 		reg.op = opPath
 		reg.opRefs = opRefs
+		reg.gogUseOp = true
 	}
 	return reg
 }
@@ -675,9 +695,17 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 		return nil
 	}
 
+	// Repair the exact malformed prose emitted by Pix 0.1.14 before handing the
+	// file to `op run`; otherwise every wrapped local MCP exits during dotenv
+	// parsing. Unknown malformed content still fails closed in op itself.
+	if err := repairLegacyOpRefsFile(env, defaultOpRefsPath(env)); err != nil {
+		return fmt.Errorf("repairing op-refs.env: %w", err)
+	}
+
 	// Resolve op + op-refs. op-refs is the file of op:// refs the wrapper resolves
-	// at spawn; when both op and op-refs are present we wrap every server in
-	// `op run`. When either is absent we register BARE (1Password is optional):
+	// at spawn; when both op and op-refs are present we wrap credentialed local
+	// servers in `op run`. Normal gog OAuth remains bare unless the refs file
+	// explicitly contains GOG_KEYRING_PASSWORD. When either is absent we register BARE:
 	// a no-creds server registers fine, and a creds server runs uncredentialed
 	// until an op-refs.env is added — never a hard failure.
 	opPath, opErr := lookPath("op")
@@ -688,6 +716,9 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	if opReady {
 		reg.op = opPath
 		reg.opRefs = opRefs
+	}
+	if wantGog {
+		reg.gogUseOp = opReady && opRefFilled(env, "GOG_KEYRING_PASSWORD")
 	}
 
 	if !opReady {
@@ -753,16 +784,85 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			fmt.Fprintf(out, "  sbx %s\n", strings.Join(args, " "))
 			continue
 		}
-		if _, err := env.run("sbx", args...); err != nil {
+		if remoteURL := containers[n].RemoteURL; remoteURL != "" && remoteMCPRegistrationCurrent(env, n, remoteURL) {
+			switch remoteMCPAuthorizationState(env, n) {
+			case catalogMCPReady:
+				if !env.quiet {
+					fmt.Fprintf(out, "  already registered: %s\n", n)
+				}
+				continue
+			case catalogMCPUnauthorized:
+				if env.runInteractive == nil {
+					regErrs = append(regErrs, fmt.Errorf("%s: registered but not authorized; run `pix mcp auth %s`", n, n))
+					continue
+				}
+				fmt.Fprintf(out, "  Authorize %s in your browser…\n", n)
+				var authErr error
+				if env.quiet && env.runInteractiveQuiet != nil {
+					authErr = env.runInteractiveQuiet("sbx", "mcp", "auth", n)
+				} else {
+					authErr = env.runInteractive("sbx", "mcp", "auth", n)
+				}
+				if authErr != nil {
+					regErrs = append(regErrs, fmt.Errorf("%s: authorization failed: %v", n, authErr))
+					continue
+				}
+				if remoteMCPAuthorizationState(env, n) != catalogMCPReady {
+					regErrs = append(regErrs, fmt.Errorf("%s: authorization completed but could not be verified", n))
+				}
+				continue
+			case catalogMCPDenied:
+				regErrs = append(regErrs, fmt.Errorf("%s: authorization denied by policy", n))
+				continue
+			default:
+				regErrs = append(regErrs, fmt.Errorf("%s: registration exists but authorization could not be verified", n))
+				continue
+			}
+		}
+		var err error
+		if containers[n].RemoteURL != "" && env.runInteractive != nil {
+			// `sbx mcp add --url` may perform OAuth and keep a localhost callback
+			// listener alive while the browser completes. A bounded probe kills that
+			// listener, leaving the browser at ERR_CONNECTION_REFUSED. Remote MCP
+			// registration is an explicitly interactive mutation; let it inherit the
+			// terminal and run to completion. Read-only status checks remain bounded.
+			if env.quiet && env.runInteractiveQuiet != nil {
+				fmt.Fprintf(out, "  Authorize %s in your browser…\n", n)
+				err = env.runInteractiveQuiet("sbx", args...)
+			} else {
+				err = env.runInteractive("sbx", args...)
+			}
+		} else if env.probe != nil {
+			_, timedOut, probeErr := env.probe("sbx", args...)
+			err = probeErr
+			if timedOut {
+				err = fmt.Errorf("timed out")
+			}
+		} else {
+			_, err = env.run("sbx", args...)
+		}
+		if err != nil {
 			fmt.Fprintf(out, "  FAILED to register: %s (%v)\n", n, err)
 			regErrs = append(regErrs, fmt.Errorf("%s: %v", n, err))
 		} else {
-			fmt.Fprintf(out, "  registered: %s\n", n)
+			if !env.quiet {
+				fmt.Fprintf(out, "  registered: %s\n", n)
+			}
 		}
 	}
 
 	if sbxOK {
-		if reg.opRefs != "" {
+		wrapped := false
+		if reg.op != "" && reg.opRefs != "" {
+			for _, name := range finalNames {
+				argv := reg.execArgv(name)
+				if len(argv) > 1 && argv[0] == reg.op && argv[1] == "run" {
+					wrapped = true
+					break
+				}
+			}
+		}
+		if wrapped && !env.quiet {
 			fmt.Fprintf(out, "Each wrapped server resolves its creds from %s via op run at gateway spawn.\n", reg.opRefs)
 		}
 	} else {
@@ -779,6 +879,116 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 		return errors.Join(errSbxUnavailable, skippedErr)
 	}
 	return skippedErr
+}
+
+// remoteMCPRegistrationCurrent prevents an idempotent setup rerun from
+// reopening OAuth. It skips only when sbx's inspected definition contains the
+// exact endpoint the pack declares; a changed or unreadable definition is
+// registered again.
+func remoteMCPRegistrationCurrent(env shellEnv, name, endpoint string) bool {
+	for _, verb := range []string{"inspect", "get"} {
+		out, timedOut, err := probeRun(env, "sbx", "mcp", verb, name)
+		if err == nil && !timedOut && outputContainsCanonicalEndpoint(out, endpoint) {
+			return true
+		}
+	}
+	return false
+}
+
+// outputContainsCanonicalEndpoint accepts only URL/endpoint fields (or a bare
+// URL line) whose parsed canonical URL equals want. Arbitrary JSON strings and
+// substrings are not identity evidence.
+func outputContainsCanonicalEndpoint(out, want string) bool {
+	wantURL, ok := canonicalMCPEndpoint(want)
+	if !ok {
+		return false
+	}
+	var decoded any
+	if json.Unmarshal([]byte(out), &decoded) == nil {
+		found := map[string]bool{}
+		jsonCollectCanonicalEndpoints(decoded, found)
+		return len(found) == 1 && found[wantURL]
+	}
+	found := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if got, valid := canonicalMCPEndpoint(strings.Trim(line, `"'`)); valid {
+			found[got] = true
+		}
+		if i := strings.Index(line, ":"); i >= 0 {
+			key := normalizeEndpointField(line[:i])
+			v := strings.Trim(strings.TrimSpace(line[i+1:]), `"'`)
+			if endpointField(key) {
+				if got, valid := canonicalMCPEndpoint(v); valid {
+					found[got] = true
+				}
+			}
+		}
+	}
+	return len(found) == 1 && found[wantURL]
+}
+
+func jsonCollectCanonicalEndpoints(v any, found map[string]bool) {
+	switch x := v.(type) {
+	case []any:
+		for _, item := range x {
+			jsonCollectCanonicalEndpoints(item, found)
+		}
+	case map[string]any:
+		for key, item := range x {
+			if endpointField(normalizeEndpointField(key)) {
+				if raw, ok := item.(string); ok {
+					if got, valid := canonicalMCPEndpoint(raw); valid {
+						found[got] = true
+					}
+				}
+			}
+			jsonCollectCanonicalEndpoints(item, found)
+		}
+	}
+}
+
+func normalizeEndpointField(key string) string {
+	key = strings.ToLower(strings.TrimSpace(key))
+	return strings.NewReplacer("_", "", "-", "", ".", "").Replace(key)
+}
+
+func endpointField(key string) bool {
+	switch key {
+	case "url", "endpoint", "remoteurl", "serverurl":
+		return true
+	default:
+		return false
+	}
+}
+
+func canonicalMCPEndpoint(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", false
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	if u.User != nil || u.Hostname() == "" || (u.Scheme != "https" && u.Scheme != "http") || u.Fragment != "" {
+		return "", false
+	}
+	host := strings.ToLower(u.Hostname())
+	port := u.Port()
+	if (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
+		port = ""
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	u.Host = host
+	if port != "" {
+		u.Host += ":" + port
+	}
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	u.RawQuery = u.Query().Encode()
+	u.RawFragment = ""
+	return u.String(), true
 }
 
 // allPreloadedMCP returns, order-preserving and de-duplicated, every non-empty

@@ -115,7 +115,7 @@ lands and proves out. **Both keep every old verb as an alias.**
 
 ### Shape B (recommended baseline) — conservative grouping (~13 nouns)
 Keep the six existing nouns as-is. Add exactly one new grouping noun, `state`,
-for `backup|restore|reset|uninstall` (these all move the stack's on-disk state).
+for `backup|restore|reset` (these move the stack's on-disk state).
 Fold `man` into `help --man`. `secret` and `pack` stay top-level but drop out
 of the default help listing into the expert/occasional tiers. This is the
 lowest-risk structural change: it touches the test suite's one real tripwire
@@ -127,7 +127,7 @@ under `state` it keeps a clear standalone description.
 Review objections (P1-8): `mcp secret` forces a day-one user through undefined
 jargon (`mcp`, `secret`) to reach credentials; `config pack` buries a runtime
 context switch (the active pack affects run, status, memory, and knowledge)
-under "config"; `state uninstall` is misleading because uninstall removes
+under "config"; binary removal belongs to Homebrew, not the state noun
 binaries, not state. If pursued later, prefer user-facing concepts (e.g.
 `integrations credentials`) over protocol names, and keep `pack` and
 `uninstall` where a user expects them.
@@ -426,7 +426,7 @@ with existing tests bound to the old behavior. Split these out, each with tests:
 1. **Shape A vs B** — how aggressively to group. Recommendation: ship Phase 0
    immediately, then do Shape B (add only `state`). Shape A is not recommended
    (review P1-8: `mcp secret` fronts jargon, `config pack` hides a runtime
-   switch, `state uninstall` is misleading).
+   switch; binary removal belongs to Homebrew).
 2. **Does `setup` start `serve` on yes, or just print the command?**
    Recommendation (revised by review P0-5): **just print the command.** `serve`
    is a foreground process today, so auto-starting it from `setup` would block

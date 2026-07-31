@@ -341,6 +341,7 @@ func runSecretSetLocked(env shellEnv, out io.Writer, key, value string) error {
 			}
 		}
 	}
+	content, _ = repairLegacyOpRefsTemplate(content)
 
 	newContent := upsertOpRef(content, key, value)
 	if env.writeFile == nil {
@@ -549,6 +550,44 @@ func opRefLineKey(ln string) string {
 		return ""
 	}
 	return strings.TrimSpace(t[:eq])
+}
+
+// repairLegacyOpRefsTemplate comments the three prose lines emitted without a
+// leading # by Pix 0.1.14's template interpolation bug. Match exact known text
+// only: user-authored malformed lines are never silently rewritten.
+func repairLegacyOpRefsTemplate(content string) (string, bool) {
+	legacy := map[string]bool{
+		"host MCP server it resolves those refs from 1Password and injects them as env": true,
+		"vars — the secret never touches disk or the sandbox. A server with no creds":   true,
+		"(pio) needs no entry.": true,
+	}
+	lines := strings.Split(content, "\n")
+	changed := false
+	for i, line := range lines {
+		if legacy[line] {
+			lines[i] = "# " + line
+			changed = true
+		}
+	}
+	return strings.Join(lines, "\n"), changed
+}
+
+func repairLegacyOpRefsFile(env shellEnv, path string) error {
+	if env.readFile == nil || env.writeFile == nil {
+		return nil
+	}
+	content, err := env.readFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	repaired, changed := repairLegacyOpRefsTemplate(content)
+	if !changed {
+		return nil
+	}
+	return env.writeFile(path, []byte(repaired), 0o600)
 }
 
 // runSecretCheck resolves every op:// ref in op-refs.env with `op read` and

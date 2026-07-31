@@ -26,7 +26,7 @@ The first advertised release should be `v0.1.0`. It should:
 Two naming risks are accepted, not ignored:
 
 1. `pix` is also the Cinnamon image viewer binary on some Linux distributions. The installer must run `command -v pix`, compare the result with its managed install path, and fail closed on a collision. Non-interactive installs require an explicit `PIX_FORCE_INSTALL=1`; they never silently shadow another binary. Doctor reports which `pix` is first on `PATH`.
-2. Private repositories already use `pix` in names such as `gm-pix-pack`. That overlap is acceptable if Pix is the product name, but public docs must not imply those private repositories are part of the public distribution.
+2. Private repositories may already use `pix` in their names. That overlap is acceptable if Pix is the product name, but public docs must not imply private repositories are part of the public distribution.
 
 ## Audit baseline
 

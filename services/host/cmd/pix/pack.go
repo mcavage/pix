@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"pix/host/config"
+	"pix/host/routing"
 )
 
 // packManifest is pack.toml. Identity + model prefs (v1), plus the v2 facets:
@@ -41,6 +43,10 @@ type packManifest struct {
 	// MemoryScope tags in-VM memory recall/capture (F4); default = the pack Name.
 	// "default" (or the pack's own default) selects the shared/unscoped tag.
 	MemoryScope string `toml:"memory_scope,omitempty"`
+	// Prerequisites are pack-authored, human-readable conditions shown on the
+	// adoption screen before any setup hook runs. They describe external state
+	// the user must bring; executable checks remain in [[setup]].
+	Prerequisites []string `toml:"prerequisites,omitempty"`
 	// Routing is a STRUCT-ONLY placeholder for a pack-level routing override
 	// (packs-v2-impl.md §2: "optional/stretch"). Nothing reads it in Phase 1.
 	Routing      *packRouting      `toml:"routing,omitempty"`
@@ -61,6 +67,130 @@ type packManifest struct {
 	// probe and an idempotent apply action. The script bytes and argv are part of
 	// the Tier-1 host-exec fingerprint.
 	Setup []packSetupStep `toml:"setup,omitempty"`
+	// Inference lets a pack participate declaratively in setup before any user
+	// prompt. A private pack can provide an authenticated gateway and make it
+	// exclusive without adding its endpoint or aliases to public Pix.
+	Inference *packInference `toml:"inference,omitempty"`
+}
+
+// applyPackInference projects a pack's declarative inference contract into
+// launcher config. It intentionally copies only public wiring metadata; secret
+// values are impossible in this schema. Probe evidence starts false and is
+// earned later by setup.
+func applyPackInference(cfg *config.Config, inf *packInference, source string) error {
+	if cfg == nil || inf == nil {
+		return nil
+	}
+	for name := range inf.Backends {
+		if existing, ok := cfg.Inference.Backends[name]; ok && existing.Source != source {
+			owner := "user configuration"
+			if existing.Source != "" {
+				owner = existing.Source
+			}
+			return fmt.Errorf("pack inference backend %q conflicts with %s; backend names cannot replace another source", name, owner)
+		}
+	}
+	// Reapplying an unchanged active pack at launch must not erase the
+	// availability evidence setup just earned. Preserve it only across an exact
+	// backend + binding match; any endpoint/protocol/auth/upstream change starts
+	// unverified again.
+	type evidence struct{ available, verified bool }
+	prior := map[string]evidence{}
+	for _, binding := range cfg.Inference.Models {
+		backend, ok := cfg.Inference.Backends[binding.Backend]
+		if !ok || binding.Source != source {
+			continue
+		}
+		key := inferenceEvidenceKey(binding, backend)
+		prior[key] = evidence{binding.Available, binding.Verified}
+	}
+	clearPackInference(cfg, source)
+	if cfg.Inference.Backends == nil {
+		cfg.Inference.Backends = map[string]config.InferenceBackend{}
+	}
+	for name, b := range inf.Backends {
+		cfg.Inference.Backends[name] = config.InferenceBackend{
+			Driver: b.Driver, Protocol: b.Protocol, BaseURL: b.BaseURL, Auth: b.Auth, KeyEnv: b.KeyEnv, Source: source,
+			CredentialService: b.CredentialService, CredentialHeader: b.CredentialHeader, CredentialFormat: b.CredentialFormat,
+		}
+	}
+	for _, b := range inf.Models {
+		binding := config.InferenceModelBinding{
+			Model: b.Model, Backend: b.Backend, Upstream: b.Upstream, Source: source,
+		}
+		if backend, ok := cfg.Inference.Backends[b.Backend]; ok {
+			if ev, found := prior[inferenceEvidenceKey(binding, backend)]; found {
+				binding.Available, binding.Verified = ev.available, ev.verified
+			}
+		}
+		cfg.Inference.Models = append(cfg.Inference.Models, binding)
+	}
+	if inf.Exclusive {
+		cfg.Inference.ExclusiveSource = source
+	}
+	return nil
+}
+
+func inferenceEvidenceKey(binding config.InferenceModelBinding, backend config.InferenceBackend) string {
+	return strings.Join([]string{
+		binding.Source, binding.Model, binding.Backend, binding.Upstream,
+		backend.Driver, backend.Protocol, backend.BaseURL, backend.Auth,
+		backend.KeyEnv, backend.Source, backend.CredentialService,
+		backend.CredentialHeader, backend.CredentialFormat,
+	}, "\x00")
+}
+
+// clearPackInference removes only pack-owned inference. An empty source clears
+// every pack contribution; setup-authored backends have Source="" and survive.
+func clearPackInference(cfg *config.Config, source string) {
+	if cfg == nil {
+		return
+	}
+	for name, backend := range cfg.Inference.Backends {
+		if backend.Source != "" && (source == "" || backend.Source == source) {
+			delete(cfg.Inference.Backends, name)
+		}
+	}
+	kept := cfg.Inference.Models[:0]
+	for _, binding := range cfg.Inference.Models {
+		if binding.Source != "" && (source == "" || binding.Source == source) {
+			continue
+		}
+		kept = append(kept, binding)
+	}
+	cfg.Inference.Models = kept
+	if cfg.Inference.ExclusiveBackend != "" {
+		if _, ok := cfg.Inference.Backends[cfg.Inference.ExclusiveBackend]; !ok {
+			cfg.Inference.ExclusiveBackend = ""
+		}
+	}
+	if cfg.Inference.ExclusiveSource != "" && (source == "" || cfg.Inference.ExclusiveSource == source) {
+		cfg.Inference.ExclusiveSource = ""
+	}
+}
+
+type packInference struct {
+	Exclusive       bool                         `toml:"exclusive,omitempty"`
+	RequiredBackend string                       `toml:"required_backend,omitempty"`
+	Backends        map[string]packInferenceBack `toml:"backends,omitempty"`
+	Models          []packInferenceModel         `toml:"models,omitempty"`
+}
+
+type packInferenceBack struct {
+	Driver            string `toml:"driver"`
+	Protocol          string `toml:"protocol,omitempty"`
+	BaseURL           string `toml:"base_url,omitempty"`
+	Auth              string `toml:"auth"`
+	KeyEnv            string `toml:"key_env,omitempty"`
+	CredentialService string `toml:"credential_service,omitempty"`
+	CredentialHeader  string `toml:"credential_header,omitempty"`
+	CredentialFormat  string `toml:"credential_format,omitempty"`
+}
+
+type packInferenceModel struct {
+	Model    string `toml:"model"`
+	Backend  string `toml:"backend"`
+	Upstream string `toml:"upstream_id"`
 }
 
 type packSetupStep struct {
@@ -136,12 +266,16 @@ type packIntegration struct {
 	// matters when you share it. Mutually exclusive with Manifest.
 	Image string `toml:"image,omitempty"`
 	// EnvKeys are ADDITIONAL (typically non-secret) env var names forwarded into an
-	// Image container via `-e <KEY>` (e.g. BAMBOOHR_COMPANY_DOMAIN). The primary
+	// Image container via `-e <KEY>` (e.g. HR_TENANT). The primary
 	// op-refs-backed secret goes in Env (also forwarded, and warned about if unset).
 	EnvKeys []string `toml:"env_keys,omitempty"`
+	// EnvValues are non-secret literal environment values baked into a pack's
+	// container command (for example, a company-wide tenant name). Secrets must
+	// use Env/op:// instead and are rejected here when they look secret-shaped.
+	EnvValues map[string]string `toml:"env_values,omitempty"`
 	// URL, when set, makes this a REMOTE integration the pack registers ITSELF:
 	// `pack use` runs `sbx mcp add <mcp> --url <url>` so the pack's remote
-	// gateway-catalog servers (opine, notion, atlassian, granola) are wired without
+	// gateway-catalog servers are wired without
 	// a manual `pix mcp bundle` + `sbx mcp add`. The URL is a remote MCP
 	// endpoint (https://host/mcp); OAuth is discovered + handled host-side by the
 	// gateway on first use (no credential in the pack). Mutually exclusive with
@@ -160,8 +294,9 @@ type packIntegration struct {
 type packContainer struct {
 	Manifest  string
 	Image     string
-	EnvKeys   []string // env var names to forward into an Image container (-e KEY)
-	RemoteURL string   // remote MCP endpoint URL (`sbx mcp add <name> --url <url>`)
+	EnvKeys   []string          // env var names to forward into an Image container (-e KEY)
+	EnvValues map[string]string // non-secret literals forwarded as -e KEY=VALUE
+	RemoteURL string            // remote MCP endpoint URL (`sbx mcp add <name> --url <url>`)
 }
 
 // packInfo is a resolved pack on disk.
@@ -175,6 +310,11 @@ type packInfo struct {
 	// else "". Mounted into the sandbox at ~/.pi/agent/capabilities.json via the
 	// synthesized mixin kit so a pack carries its own capability->provider routing.
 	CapabilitiesFile string
+	// WebSearchFile is <root>/web-search.json when present. It is mounted at
+	// ~/.pi/web-search.json (pi-web-access's sandbox config path) so a pack can
+	// route discovery through its private inference gateway without putting that
+	// endpoint in Pix.
+	WebSearchFile string
 }
 
 const packManifestName = "pack.toml"
@@ -238,6 +378,23 @@ func loadPack(root string) (*packInfo, error) {
 		}
 		p.CapabilitiesFile = f
 	}
+	if f := filepath.Join(root, "web-search.json"); fileExists(f) {
+		if isSymlinkPath(f) {
+			return nil, fmt.Errorf("pack %s: web-search.json is a symlink; refusing to mount", root)
+		}
+		b, readErr := os.ReadFile(f)
+		if readErr != nil {
+			return nil, fmt.Errorf("pack %s: reading web-search.json: %w", root, readErr)
+		}
+		var value any
+		if len(b) > 64*1024 || json.Unmarshal(b, &value) != nil {
+			return nil, fmt.Errorf("pack %s: web-search.json must be valid JSON no larger than 64 KiB", root)
+		}
+		if _, ok := value.(map[string]any); !ok {
+			return nil, fmt.Errorf("pack %s: web-search.json must contain a JSON object", root)
+		}
+		p.WebSearchFile = f
+	}
 	if err := validatePackFacets(root, &m); err != nil {
 		return nil, err
 	}
@@ -254,6 +411,69 @@ func loadPack(root string) (*packInfo, error) {
 // deliberately NOT root-scoped: a shared=false reference pointing OUTSIDE the
 // pack (e.g. ~/notes/okf) is the entire point of a private reference (F6).
 func validatePackFacets(root string, m *packManifest) error {
+	if inf := m.Inference; inf != nil {
+		catalog, err := routing.LoadRegistry()
+		if err != nil {
+			return fmt.Errorf("pack %s: loading model catalog: %w", root, err)
+		}
+		if inf.RequiredBackend != "" {
+			if _, ok := inf.Backends[inf.RequiredBackend]; !ok {
+				return fmt.Errorf("pack %s: inference.required_backend %q is not declared in inference.backends", root, inf.RequiredBackend)
+			}
+		}
+		for name, b := range inf.Backends {
+			if strings.TrimSpace(name) == "" {
+				return fmt.Errorf("pack %s: inference backend name is empty", root)
+			}
+			switch b.Driver {
+			case "native", "openai-compatible", "ollama":
+			default:
+				return fmt.Errorf("pack %s: inference backend %q has unsupported driver %q", root, name, b.Driver)
+			}
+			if b.Protocol != "" && b.Protocol != "openai-completions" && b.Protocol != "openai-responses" && b.Protocol != "anthropic-messages" && b.Protocol != "google-generative-ai" {
+				return fmt.Errorf("pack %s: inference backend %q has unsupported protocol %q", root, name, b.Protocol)
+			}
+			switch b.Auth {
+			case "1password":
+				if strings.TrimSpace(b.KeyEnv) == "" {
+					return fmt.Errorf("pack %s: inference backend %q uses 1password but has no key_env", root, name)
+				}
+			case "sbx-session", "none":
+			default:
+				return fmt.Errorf("pack %s: inference backend %q has unsupported auth %q", root, name, b.Auth)
+			}
+			if b.Auth == "sbx-session" && (strings.TrimSpace(b.CredentialService) == "" || strings.TrimSpace(b.KeyEnv) == "") {
+				return fmt.Errorf("pack %s: inference backend %q uses sbx-session but has no credential_service/key_env", root, name)
+			}
+			if b.Auth == "sbx-session" && strings.TrimSpace(b.CredentialService) != "sbx-login" {
+				return fmt.Errorf("pack %s: inference backend %q uses sbx-session but credential_service is %q (want reserved service sbx-login)", root, name, b.CredentialService)
+			}
+			if b.Driver != "native" && b.Driver != "ollama" {
+				u, err := url.Parse(strings.TrimSpace(b.BaseURL))
+				if err != nil || u.Hostname() == "" || u.User != nil {
+					return fmt.Errorf("pack %s: inference backend %q has invalid base_url %q", root, name, b.BaseURL)
+				}
+				loopback := u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"
+				if u.Scheme != "https" && !(u.Scheme == "http" && loopback) {
+					return fmt.Errorf("pack %s: inference backend %q base_url must use https (or loopback http)", root, name)
+				}
+			}
+		}
+		for _, binding := range inf.Models {
+			if !routing.IsQualifiedID(binding.Model) {
+				return fmt.Errorf("pack %s: inference model %q is not a canonical lab/model id", root, binding.Model)
+			}
+			if _, ok := catalog.Get(binding.Model); !ok {
+				return fmt.Errorf("pack %s: inference model %q is not in the Pix model catalog", root, binding.Model)
+			}
+			if _, ok := inf.Backends[binding.Backend]; !ok {
+				return fmt.Errorf("pack %s: inference model %q references unknown backend %q", root, binding.Model, binding.Backend)
+			}
+			if strings.TrimSpace(binding.Upstream) == "" {
+				return fmt.Errorf("pack %s: inference model %q has no upstream_id", root, binding.Model)
+			}
+		}
+	}
 	seenMCP := map[string]bool{}
 	for _, ig := range m.Integrations {
 		name := strings.TrimSpace(ig.MCP)
@@ -274,13 +494,26 @@ func validatePackFacets(root string, m *packManifest) error {
 			return fmt.Errorf("pack %s: integration %q sets more than one of manifest, image, and url; choose exactly one", root, name)
 		}
 		if (strings.TrimSpace(ig.Manifest) != "" || strings.TrimSpace(ig.URL) != "") &&
-			(strings.TrimSpace(ig.Env) != "" || len(ig.EnvKeys) > 0) {
+			(strings.TrimSpace(ig.Env) != "" || len(ig.EnvKeys) > 0 || len(ig.EnvValues) > 0) {
 			return fmt.Errorf("pack %s: integration %q cannot use env/env_keys with manifest or url; those registration modes do not forward pack environment variables", root, name)
+		}
+		for key, value := range ig.EnvValues {
+			if strings.TrimSpace(key) == "" || strings.ContainsAny(key+value, "\x00\r\n") {
+				return fmt.Errorf("pack %s: integration %q has an invalid env_values entry", root, name)
+			}
+			if config.LooksSecretShaped(key, value) {
+				return fmt.Errorf("pack %s: integration %q env_values[%s] looks secret-shaped; use an op:// reference via env instead", root, name, key)
+			}
 		}
 	}
 	for _, p := range m.Proxies {
 		if !safeArtifactName(p.Name) {
 			return fmt.Errorf("pack %s: [[proxy]] name %q is invalid (letters, digits, -, _, . only; no path separators)", root, p.Name)
+		}
+	}
+	for _, prerequisite := range m.Prerequisites {
+		if strings.TrimSpace(prerequisite) == "" || strings.ContainsAny(prerequisite, "\x00\r\n") {
+			return fmt.Errorf("pack %s: prerequisites must be non-empty single-line text", root)
 		}
 	}
 	for _, b := range m.Bins {
@@ -434,6 +667,220 @@ func activePackRoot(cfgPack, override string) string {
 		return expandUser(strings.TrimSpace(override))
 	}
 	return expandUser(strings.TrimSpace(cfgPack))
+}
+
+func activePackRoots(cfg *config.Config, override string) []string {
+	if strings.TrimSpace(override) != "" {
+		return []string{expandUser(strings.TrimSpace(override))}
+	}
+	var roots []string
+	seen := map[string]bool{}
+	if cfg != nil {
+		for _, root := range cfg.Packs {
+			root = expandUser(strings.TrimSpace(root))
+			if root != "" && !seen[root] {
+				seen[root] = true
+				roots = append(roots, root)
+			}
+		}
+		root := expandUser(strings.TrimSpace(cfg.Pack))
+		if root != "" && !seen[root] {
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+// persistPackStack composes every declared config facet after each pack has
+// independently passed adoption and trust checks. Collections are unions;
+// scalar declarations are applied in command order (last declaration wins).
+// Ownership is recorded per pack in host state so a later switch/rm removes
+// only entries the stack actually added and restores scalar values in reverse.
+func persistPackStack(roots []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	store, err := loadPackTrustStore()
+	if err != nil {
+		return fmt.Errorf("pack trust state unreadable: %w", err)
+	}
+	records, err := composePackStack(cfg, store, roots)
+	if err != nil {
+		return err
+	}
+	return commitPackStack(cfg, records)
+}
+
+func uniquePackRoots(roots []string) []string {
+	seen := map[string]bool{}
+	unique := make([]string, 0, len(roots))
+	for _, root := range roots {
+		key := canonicalizePackRoot(root)
+		if key != "" && !seen[key] {
+			seen[key] = true
+			unique = append(unique, root)
+		}
+	}
+	return unique
+}
+
+func composePackStack(cfg *config.Config, store *packTrustStore, roots []string) ([]packActivationRecord, error) {
+	// Repeating the same pack does not create a second ownership layer. Without
+	// this normalization both records have the same identity, making a later
+	// reverse lookup unable to distinguish their scalar restore chain.
+	roots = uniquePackRoots(roots)
+
+	// The setup adoption loop ends with the last pack active. Return to the
+	// pre-stack baseline, then apply the whole ordered stack once. Reversing the
+	// ownership ledger is what makes scalar Prior* chains unwind correctly.
+	priorRoots := activePackRoots(cfg, "")
+	for i := len(priorRoots) - 1; i >= 0; i-- {
+		revertPackPriorContribution(cfg, store.activationFor(priorRoots[i]))
+	}
+	clearPackInference(cfg, "")
+
+	cfg.Packs = append([]string(nil), roots...)
+	if len(roots) > 0 {
+		cfg.Pack = roots[len(roots)-1]
+	} else {
+		cfg.Pack = ""
+	}
+	var records []packActivationRecord
+	for _, root := range roots {
+		p, err := loadPack(root)
+		if err != nil {
+			return nil, err
+		}
+		lock := packLock{}
+		for _, name := range packMcpNames(p) {
+			if cfg.AddMCP(name) {
+				lock.MCP = append(lock.MCP, name)
+			}
+		}
+		if p.KnowledgeDir != "" {
+			if cfg.AddKnowledgeBundle(p.KnowledgeDir) {
+				lock.Knowledge = append(lock.Knowledge, canonicalizeKnowledgeBundle(p.KnowledgeDir))
+			}
+			cfg.AddService("knowledge")
+		}
+		adopted := isAdoptedPack(root)
+		if store != nil {
+			_, adopted = store.Adopted[canonicalizePackRoot(root)]
+			adopted = adopted || isAdoptedPack(root)
+		}
+		for _, k := range p.Manifest.Knowledge {
+			resolved, rerr := resolvePackKnowledgeRef(io.Discard, root, adopted, k)
+			if rerr != nil {
+				if errors.Is(rerr, errPrivateRefSkippedAdopted) {
+					continue
+				}
+				// Match ordinary pack activation: one bad optional ref does not
+				// discard the rest of an otherwise usable pack.
+				continue
+			}
+			if cfg.AddKnowledgeBundle(resolved) {
+				lock.Knowledge = append(lock.Knowledge, canonicalizeKnowledgeBundle(resolved))
+			}
+			cfg.AddService("knowledge")
+		}
+		if v := strings.TrimSpace(p.Manifest.GogAccount); v != "" {
+			lock.PriorGogAccount = cfg.GogAccount
+			lock.GogAccount = v
+			cfg.SetGogAccount(v)
+		}
+		if v := strings.TrimSpace(p.Manifest.OllamaBridgeModel); v != "" {
+			lock.PriorOllamaBridgeModel = cfg.OllamaBridgeModel
+			lock.OllamaBridgeModel = v
+			cfg.OllamaBridgeModel = v
+		}
+		// Exclusive policy is an ordered scalar, not an additive facet. A
+		// later pack that explicitly declares non-exclusive inference clears
+		// an earlier pack's exclusivity (last writer wins).
+		if p.Manifest.Inference != nil && !p.Manifest.Inference.Exclusive {
+			cfg.Inference.ExclusiveSource = ""
+		}
+		if err := applyPackInference(cfg, p.Manifest.Inference, root); err != nil {
+			return nil, err
+		}
+		records = append(records, store.newActivationRecord(root, lock))
+	}
+	// De-duplicate bindings by (model,backend), preserving the last declaration
+	// in stack order so a later pack can replace an upstream alias.
+	seen := map[string]bool{}
+	var bindings []config.InferenceModelBinding
+	for i := len(cfg.Inference.Models) - 1; i >= 0; i-- {
+		b := cfg.Inference.Models[i]
+		key := b.Model + "\x00" + b.Backend
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		bindings = append(bindings, b)
+	}
+	for i, j := 0, len(bindings)-1; i < j; i, j = i+1, j-1 {
+		bindings[i], bindings[j] = bindings[j], bindings[i]
+	}
+	cfg.Inference.Models = bindings
+	return records, nil
+}
+
+// commitPackStack keeps the host-owned ownership ledger and config on the same
+// safe side of a two-file commit. A normal config-save error restores the prior
+// ledger; only a hard kill can leave a harmless over-claim.
+func commitPackStack(cfg *config.Config, records []packActivationRecord) error {
+	return withPackTrustLock(func() error {
+		store, err := loadPackTrustStore()
+		if err != nil {
+			return err
+		}
+		priorSingle := store.Activation
+		priorStack := append([]packActivationRecord(nil), store.Activations...)
+		store.setActivationStack(records)
+		if err := store.save(); err != nil {
+			return err
+		}
+		if err := cfg.Save(); err != nil {
+			store.Activation = priorSingle
+			store.Activations = priorStack
+			if rollbackErr := store.save(); rollbackErr != nil {
+				return fmt.Errorf("saving config: %v (ownership rollback failed: %v)", err, rollbackErr)
+			}
+			return fmt.Errorf("saving config: %w", err)
+		}
+		return nil
+	})
+}
+
+func applyPackStackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, error) {
+	roots := activePackRoots(cfg, o.Pack)
+	if len(roots) == 0 {
+		return "", nil
+	}
+	originalPack, originalOverride := cfg.Pack, o.Pack
+	defer func() { cfg.Pack, o.Pack = originalPack, originalOverride }()
+	var effective string
+	for _, root := range roots {
+		cfg.Pack, o.Pack = root, ""
+		applied, err := applyPackToLaunch(cfg, o, env)
+		if err != nil {
+			return "", err
+		}
+		if applied == "" {
+			continue
+		}
+		effective = applied
+		p, err := loadPack(applied)
+		if err != nil {
+			return "", err
+		}
+		for _, name := range packMcpNames(p) {
+			if !containsStr(o.StaticMCP, name) {
+				o.StaticMCP = append(o.StaticMCP, name)
+			}
+		}
+	}
+	return effective, nil
 }
 
 // expandUser expands a leading ~ to $HOME (git/toml don't do it for us).
@@ -1026,6 +1473,15 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, er
 		// tampered active pack would silently drop its declared context.
 		return "", fmt.Errorf("active pack %s: %v (refusing to launch without the pack's declared context; fix the pack or `pix pack rm` to detach it)", packRoot, err)
 	}
+	if err := verifyPackInferenceTrust(p, cfg.GogAccount, env); err != nil {
+		return "", err
+	}
+	// Apply the exact manifest snapshot whose trust surface was just verified.
+	// Reloading before projection would reopen a verify-then-use window for
+	// credential endpoint metadata.
+	if err := applyPackInference(cfg, p.Manifest.Inference, p.Root); err != nil {
+		return "", err
+	}
 	if p.SkillsDir != "" && !containsStr(o.Skills, p.SkillsDir) {
 		o.Skills = append(o.Skills, p.SkillsDir)
 	}
@@ -1097,7 +1553,11 @@ func packContainerMCP(p *packInfo) map[string]packContainer {
 				keys = append(keys, ig.Env) // the op-refs secret, forwarded too
 			}
 			keys = append(keys, ig.EnvKeys...)
-			out[ig.MCP] = packContainer{Image: strings.TrimSpace(ig.Image), EnvKeys: keys}
+			values := make(map[string]string, len(ig.EnvValues))
+			for key, value := range ig.EnvValues {
+				values[key] = value
+			}
+			out[ig.MCP] = packContainer{Image: strings.TrimSpace(ig.Image), EnvKeys: keys, EnvValues: values}
 		case strings.TrimSpace(ig.URL) != "":
 			out[ig.MCP] = packContainer{RemoteURL: strings.TrimSpace(ig.URL)}
 		}
@@ -1186,7 +1646,7 @@ func synthesizePackKit(p *packInfo) (string, error) {
 	base := packKitDir(p.Root)
 	parent := filepath.Dir(base)
 	sweepStaleKitTemps(parent, filepath.Base(base))
-	if len(sandboxProxies) == 0 && p.CapabilitiesFile == "" {
+	if len(sandboxProxies) == 0 && p.CapabilitiesFile == "" && p.WebSearchFile == "" {
 		// No sandbox proxies and no capabilities.json: nothing to mount. A previous
 		// launch's kit dir is inert (nothing references it) and the sweep above
 		// cleans it up.
@@ -1207,7 +1667,7 @@ func synthesizePackKit(p *packInfo) (string, error) {
 	// A stacked kit needs a valid manifest: schemaVersion (required by the loader),
 	// kind: mixin, and a name. Match the base kit's schemaVersion "2".
 	spec := fmt.Sprintf("schemaVersion: \"2\"\nkind: mixin\nname: %s\n", p.Manifest.Name)
-	// Fold each sandbox proxy's declared egress into caps.network.allow so the
+	// Fold each sandbox proxy's declared egress into permissions.network.allow so the
 	// wrapper can actually reach its host endpoint — the sbx egress proxy blocks
 	// (403) any destination not on the allowlist, even host.docker.internal. Kit
 	// stacking unions this with the base kit's allowlist.
@@ -1236,7 +1696,7 @@ func synthesizePackKit(p *packInfo) (string, error) {
 		}
 	}
 	if len(egress) > 0 {
-		spec += "caps:\n  network:\n    allow:\n"
+		spec += "permissions:\n  network:\n    allow:\n"
 		for _, e := range egress {
 			spec += "      - " + e + "\n"
 		}
@@ -1279,6 +1739,19 @@ func synthesizePackKit(p *packInfo) (string, error) {
 		}
 		if err := os.WriteFile(filepath.Join(agentOut, "capabilities.json"), b, 0o644); err != nil {
 			return fail("pack capabilities.json: %v (refusing to build the pack kit)", err)
+		}
+	}
+	if p.WebSearchFile != "" {
+		configOut := filepath.Join(dir, "files", "home", ".pi")
+		if err := os.MkdirAll(configOut, 0o755); err != nil {
+			return fail("pack web-search.json: %v (refusing to build the pack kit)", err)
+		}
+		b, err := os.ReadFile(p.WebSearchFile)
+		if err != nil {
+			return fail("pack web-search.json: %v (refusing to build the pack kit)", err)
+		}
+		if err := os.WriteFile(filepath.Join(configOut, "web-search.json"), b, 0o644); err != nil {
+			return fail("pack web-search.json: %v (refusing to build the pack kit)", err)
 		}
 	}
 	return dir, nil
@@ -1493,6 +1966,7 @@ func commitPackActivation(cfg *config.Config, store *packTrustStore, root string
 			return fmt.Errorf("pack trust state unreadable: %v — aborting without saving config (nothing was committed; fix %s and re-run)", lerr, packTrustStorePath())
 		}
 		priorActivation := fresh.Activation
+		priorActivations := append([]packActivationRecord(nil), fresh.Activations...)
 		fresh.setActivation(root, lock)
 		if err := fresh.save(); err != nil {
 			if rerr := restoreLock(); rerr != nil {
@@ -1504,6 +1978,7 @@ func commitPackActivation(cfg *config.Config, store *packTrustStore, root string
 			// Roll BOTH the store record and the lock back so they match the
 			// (unchanged) on-disk config.
 			fresh.Activation = priorActivation
+			fresh.Activations = priorActivations
 			serr := fresh.save()
 			rerr := restoreLock()
 			if serr != nil || rerr != nil {
@@ -1513,6 +1988,7 @@ func commitPackActivation(cfg *config.Config, store *packTrustStore, root string
 		}
 		if store != nil {
 			store.Activation = fresh.Activation // keep the caller's view coherent
+			store.Activations = append([]packActivationRecord(nil), fresh.Activations...)
 		}
 		return nil
 	})
@@ -2354,6 +2830,9 @@ func runPackShow(out io.Writer, rest []string) {
 	if p.CapabilitiesFile != "" {
 		fmt.Fprintln(out, "capabilities: yes (mounts to ~/.pi/agent/capabilities.json)")
 	}
+	if p.WebSearchFile != "" {
+		fmt.Fprintln(out, "web search: yes (mounts to ~/.pi/web-search.json)")
+	}
 	if p.Manifest.OllamaBridgeModel != "" {
 		fmt.Fprintf(out, "ollama:    %s\n", p.Manifest.OllamaBridgeModel)
 	}
@@ -2571,7 +3050,8 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// pre-Save cfg was never persisted. ---
 
 	prevRoot := cfg.Pack
-	switching := prevRoot != "" && prevRoot != root
+	prevRoots := activePackRoots(cfg, "")
+	switching := prevRoot != "" && (prevRoot != root || len(prevRoots) > 1)
 	// The pack-supplied pack.lock is NEVER trusted for reversibility (round-2
 	// A) — not even when this pack is already active: a plain `git pull` (or a
 	// zip update) rewrites files under an already-active pack root, so a forged
@@ -2624,7 +3104,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// (in-memory) store record BEFORE computing the switch below, so its
 	// contributions revert correctly. Adopted packs never migrate (their lock
 	// is payload); see migratePhase1Activation.
-	if prevRoot != "" {
+	if prevRoot != "" && len(prevRoots) <= 1 {
 		migratePhase1Activation(trustStore, prevRoot)
 	}
 	bom := computeHostBoM(p, cfg.GogAccount, localMCPClassifier(env, hostBinaryResolver))
@@ -2653,8 +3133,14 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	var removedMCP, removedKnowledge []string
 	switch {
 	case switching:
-		// The previous pack's contribution set: HOST state only (round-2 A).
-		removedMCP, removedKnowledge = revertPackPriorContribution(cfg, trustStore.activationFor(prevRoot))
+		// A composed stack unwinds in reverse command order so each scalar
+		// restoration sees the value its predecessor set. Collections remain
+		// scoped to the exact per-pack ownership records.
+		for i := len(prevRoots) - 1; i >= 0; i-- {
+			mcp, knowledge := revertPackPriorContribution(cfg, trustStore.activationFor(prevRoots[i]))
+			removedMCP = append(removedMCP, mcp...)
+			removedKnowledge = append(removedKnowledge, knowledge...)
+		}
 	case prevRoot == root:
 		// SAME-pack reactivation (finding D): revert THIS pack's own prior
 		// contribution first, then re-apply the manifest fresh below. Without
@@ -2729,8 +3215,17 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		lockOllamaModel = m
 		cfg.OllamaBridgeModel = lockOllamaModel
 	}
+	clearPackInference(cfg, "")
+	if err := applyPackInference(cfg, p.Manifest.Inference, root); err != nil {
+		fmt.Fprintf(out, "pix pack use: %v\n", err)
+		os.Exit(1)
+	}
 
 	cfg.Pack = root
+	// `pack use` remains a single-pack switch. Multi-pack composition is an
+	// explicit `pix setup --pack ... --pack ...` transaction; do not retain a
+	// stale prior stack when a user later switches contexts.
+	cfg.Packs = []string{root}
 
 	// COMMIT ORDERING (round-3 R1 + round-4 F1): the lock is written BEFORE
 	// cfg.Save, it records the INTENDED contribution set computed above, and a
@@ -2822,7 +3317,9 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 
 	// --- post-Save: best-effort side effects (each already idempotent). ---
 
-	fmt.Fprintf(out, "active pack -> %s\n", root)
+	if !env.quiet {
+		fmt.Fprintf(out, "active pack -> %s\n", root)
+	}
 	// On a same-pack reactivation the revert-then-reapply (finding D) removes
 	// and immediately re-adds every still-declared entry; report as detached
 	// only what actually STAYED out (a facet dropped from the manifest).
@@ -2840,10 +3337,10 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 			}
 		}
 	}
-	if len(detachedMCP) > 0 {
+	if len(detachedMCP) > 0 && !env.quiet {
 		fmt.Fprintf(out, "detached mcp (previous activation): %s\n", strings.Join(detachedMCP, ", "))
 	}
-	if len(addedMCP) > 0 {
+	if len(addedMCP) > 0 && !env.quiet {
 		fmt.Fprintf(out, "attached mcp: %s\n", strings.Join(addedMCP, ", "))
 	}
 	// finding E: register ALL of this pack's MCPs post-Save (registration is
@@ -2856,13 +3353,15 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 			fmt.Fprintf(out, "note: mcp registration: %v\n", err)
 		}
 	}
-	for _, id := range detachedKnowledge {
-		fmt.Fprintf(out, "knowledge bundle detached (previous activation): %s\n", id)
+	if !env.quiet {
+		for _, id := range detachedKnowledge {
+			fmt.Fprintf(out, "knowledge bundle detached (previous activation): %s\n", id)
+		}
+		for _, id := range addedKnowledge {
+			fmt.Fprintf(out, "knowledge bundle registered: %s\n", id)
+		}
 	}
-	for _, id := range addedKnowledge {
-		fmt.Fprintf(out, "knowledge bundle registered: %s\n", id)
-	}
-	if skippedPrivate > 0 {
+	if skippedPrivate > 0 && !env.quiet {
 		fmt.Fprintf(out, "skipped %d private knowledge ref(s) from an adopted pack (shared=false local paths are never honored for a pack cloned from a remote)\n", skippedPrivate)
 	}
 
@@ -2872,7 +3371,11 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// acceptance recorded just above). Best-effort here, like every other
 	// post-Save side effect; the strict fingerprint + content re-verification
 	// happens again at every host launch.
-	if _, werr := refreshHostPackWrappers(out, cfg, false); werr != nil {
+	refreshOut := out
+	if env.quiet {
+		refreshOut = io.Discard
+	}
+	if _, werr := refreshHostPackWrappers(refreshOut, cfg, false); werr != nil {
 		fmt.Fprintf(out, "note: host wrappers not refreshed: %v\n", werr)
 	}
 
@@ -2884,12 +3387,18 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 
 	// A knowledge change is daemon-affecting: restart/advise the running serve so
 	// the new bundle is indexed (mirrors `knowledge use`). Best-effort.
-	propagateServeConfig(defaultServeReloader(), out)
+	serveOut := out
+	if env.quiet {
+		serveOut = io.Discard
+	}
+	propagateServeConfig(defaultServeReloader(), serveOut)
 
 	// ADR-3: --mcp/--kit are create-only. Print the recreate line UNCONDITIONALLY
 	// (this is "the change" for the purposes of packs.md §13's must-fix), so the
 	// sandbox-facet-changing case is never silently skipped.
-	printPackRecreateLine(out)
+	if !env.quiet {
+		printPackRecreateLine(out)
+	}
 }
 
 func runPackRm(out io.Writer, rest []string) {
@@ -2954,8 +3463,15 @@ func runPackRm(out io.Writer, rest []string) {
 				return fmt.Errorf("host wrappers could not be removed: %v — nothing detached; fix that and re-run (a `pix host` launch refuses until they are cleared)", cerr)
 			}
 		}
-		removedMCP, removedKnowledge = revertPackPriorContribution(cfg, store.activationFor(old))
+		roots := activePackRoots(cfg, "")
+		for i := len(roots) - 1; i >= 0; i-- {
+			mcp, knowledge := revertPackPriorContribution(cfg, store.activationFor(roots[i]))
+			removedMCP = append(removedMCP, mcp...)
+			removedKnowledge = append(removedKnowledge, knowledge...)
+		}
+		clearPackInference(cfg, "")
 		cfg.Pack = ""
+		cfg.Packs = nil
 		if err := cfg.Save(); err != nil {
 			return err
 		}
@@ -2964,11 +3480,9 @@ func runPackRm(out io.Writer, rest []string) {
 		// already-locked mutation (round-3 #1; the lock is held — never nest
 		// withPackTrustLock); a failed store write merely over-claims (removals
 		// of absent entries are no-ops).
-		if store.hasActivationFor(old) {
+		if len(store.Activations) > 0 || store.hasActivationFor(old) {
 			if _, werr := mutatePackTrustStoreLocked(func(s *packTrustStore) error {
-				if s.hasActivationFor(old) {
-					s.Activation = nil
-				}
+				s.clearActivations()
 				return nil
 			}); werr != nil {
 				fmt.Fprintf(out, "note: could not clear the activation record: %v (harmless over-claim; re-run `pack rm` once %s is writable)\n", werr, packTrustStorePath())
@@ -3058,16 +3572,16 @@ func packNameFromURL(url string) string {
 }
 
 // safeGitURL rejects git URLs whose transport can execute arbitrary commands or
-// read arbitrary host files: only https/http/ssh/git protocols and scp-style
+// read arbitrary host files: only HTTPS/SSH protocols and scp-style
 // `user@host:path` are allowed. `ext::`, `file://`, a leading `-` (arg
-// injection), and anything else are refused. v1 packs are Tier-0 (no shipped
-// executables), so a clone must not become a code-execution vector.
+// injection), unauthenticated plaintext `git://`, and anything else are
+// refused. Packs may execute trust-gated host hooks, so transport integrity is
+// part of the security boundary even when the resulting bytes are fingerprinted.
 func safeGitURL(url string) bool {
 	if url == "" || strings.HasPrefix(url, "-") {
 		return false
 	}
-	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") ||
-		strings.HasPrefix(url, "ssh://") || strings.HasPrefix(url, "git://") {
+	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "ssh://") {
 		return true
 	}
 	// scp-style user@host:path (no scheme). Must contain ':' and not be a

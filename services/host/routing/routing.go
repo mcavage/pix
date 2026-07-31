@@ -25,19 +25,55 @@ import (
 //go:embed defaults/models.json defaults/scorecard.json defaults/policy.json
 var defaults embed.FS
 
-// Model is one callable model and its economics. Adding a model to the stack is
-// a single entry in models.json; everything downstream (resolver, compile)
-// picks it up with no code change.
+// Model is one callable model, its limits, and its economics. Adding a model to
+// the stack is a single entry in models.json; everything downstream (resolver,
+// runtime provider generation, compile) picks it up with no code change.
 type Model struct {
-	ID            string   `json:"id"`             // fully qualified provider/id
-	Provider      string   `json:"provider"`       // "anthropic", "openai", "ollama", ...
-	Label         string   `json:"label"`          // human label
-	InputPerMTok  float64  `json:"input_per_mtok"` // USD per 1M input tokens
-	OutputPerMTok float64  `json:"output_per_mtok"`
-	Local         bool     `json:"local"`     // Ollama/DMR: unmetered
-	Available     bool     `json:"available"` // wired/callable in this stack now
-	Aliases       []string `json:"aliases,omitempty"`
-	Notes         string   `json:"notes,omitempty"`
+	ID               string   `json:"id"`                // fully qualified provider/id
+	Provider         string   `json:"provider"`          // "anthropic", "openai", "ollama", ...
+	Family           string   `json:"family,omitempty"`  // claude, gpt, gemini, glm, ...
+	Label            string   `json:"label"`             // human label
+	ContextWindow    int      `json:"context_window"`    // maximum model context in tokens
+	MaxOutputTokens  int      `json:"max_output_tokens"` // maximum generated tokens per response
+	InputPerMTok     float64  `json:"input_per_mtok"`    // USD per 1M input tokens
+	OutputPerMTok    float64  `json:"output_per_mtok"`
+	Local            bool     `json:"local"`                       // Ollama/DMR: unmetered
+	Available        bool     `json:"available"`                   // wired/callable in this stack now
+	AdaptiveThinking bool     `json:"adaptive_thinking,omitempty"` // Anthropic adaptive-thinking request shape
+	Aliases          []string `json:"aliases,omitempty"`
+	Notes            string   `json:"notes,omitempty"`
+}
+
+// Binding is the availability boundary between the shipped catalog and a
+// concrete inference backend. The catalog says what a model IS; a binding says
+// where it can be called on this host. UpstreamID may differ from Model when a
+// gateway uses private aliases.
+type Binding struct {
+	Model      string `json:"model"`
+	Backend    string `json:"backend"`
+	UpstreamID string `json:"upstream_id"`
+	Available  bool   `json:"available"`
+}
+
+// RegistryForBindings returns a copy whose availability reflects successful
+// backend probes. A catalog model without a proven binding is unavailable.
+// When exclusiveBackend is set, bindings through every other backend are
+// ignored; this is how a private pack can enforce an internal gateway without
+// putting any private endpoint or model alias in public Pix.
+func RegistryForBindings(catalog *Registry, bindings []Binding, exclusiveBackend string) *Registry {
+	available := map[string]bool{}
+	for _, b := range bindings {
+		if !b.Available || (exclusiveBackend != "" && b.Backend != exclusiveBackend) {
+			continue
+		}
+		available[b.Model] = true
+	}
+	out := &Registry{Models: make([]Model, len(catalog.Models))}
+	copy(out.Models, catalog.Models)
+	for i := range out.Models {
+		out.Models[i].Available = out.Models[i].Available && available[out.Models[i].ID]
+	}
+	return out
 }
 
 // CostFor returns the USD cost of a run given input/output token counts.
@@ -151,11 +187,9 @@ func IsQualifiedID(id string) bool {
 // typo ("accuarcy") is caught at compile time, not by mystery routing.
 var validObjectives = map[string]bool{"accuracy": true, "cost": true, "latency": true, "balanced": true, "": true}
 
-// Validate checks the three truth sources for internal consistency BEFORE they
-// are used to compile routes: prices sane, scores in range and pointing at real
-// models, intents using a known objective and a resolvable fallback, and a
-// resolvable default fallback. Returns the first problem, or nil.
-func Validate(reg *Registry, sc *Scorecard, pol *Policy) error {
+// ValidateRegistry checks the model catalog independently so every consumer,
+// including runtime provider generation, gets complete and safe metadata.
+func ValidateRegistry(reg *Registry) error {
 	if len(reg.Models) == 0 {
 		return fmt.Errorf("registry is empty")
 	}
@@ -171,6 +205,26 @@ func Validate(reg *Registry, sc *Scorecard, pol *Policy) error {
 		if m.InputPerMTok < 0 || m.OutputPerMTok < 0 {
 			return fmt.Errorf("model %q has a negative price", m.ID)
 		}
+		if m.ContextWindow <= 0 {
+			return fmt.Errorf("model %q has no positive context_window", m.ID)
+		}
+		if m.MaxOutputTokens <= 0 {
+			return fmt.Errorf("model %q has no positive max_output_tokens", m.ID)
+		}
+		if m.MaxOutputTokens > m.ContextWindow {
+			return fmt.Errorf("model %q max_output_tokens exceeds context_window", m.ID)
+		}
+	}
+	return nil
+}
+
+// Validate checks the three truth sources for internal consistency BEFORE they
+// are used to compile routes: catalog metadata and prices sane, scores in range
+// and pointing at real models, intents using a known objective and a resolvable
+// fallback, and a resolvable default fallback. Returns the first problem, or nil.
+func Validate(reg *Registry, sc *Scorecard, pol *Policy) error {
+	if err := ValidateRegistry(reg); err != nil {
+		return err
 	}
 	for _, s := range sc.Scores {
 		if _, ok := reg.Get(s.Model); !ok {
@@ -254,6 +308,9 @@ func loadOrDefault(path, embedded string, v any) error {
 func LoadRegistry() (*Registry, error) {
 	r := &Registry{}
 	if err := loadOrDefault(ModelsPath(), "defaults/models.json", r); err != nil {
+		return nil, fmt.Errorf("load registry: %w", err)
+	}
+	if err := ValidateRegistry(r); err != nil {
 		return nil, fmt.Errorf("load registry: %w", err)
 	}
 	return r, nil

@@ -59,7 +59,7 @@ func TestMcpReattachWarning_PackChangeWarns(t *testing.T) {
 	}
 
 	packRoot := t.TempDir()
-	toml := "name = \"work\"\nschema = 1\n\n[[integrations]]\nname = \"BambooHR\"\nmcp  = \"bamboohr\"\n"
+	toml := "name = \"work\"\nschema = 1\n\n[[integrations]]\nname = \"HR\"\nmcp  = \"hr\"\n"
 	if err := os.WriteFile(filepath.Join(packRoot, "pack.toml"), []byte(toml), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestMcpReattachWarning_PackChangeWarns(t *testing.T) {
 	if msg == "" {
 		t.Fatal("expected a warning when the active pack's integration server is not in the receipt")
 	}
-	if !strings.Contains(msg, "bamboohr") {
+	if !strings.Contains(msg, "hr") {
 		t.Errorf("warning should name the pack's unattached server, got: %q", msg)
 	}
 }

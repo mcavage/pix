@@ -465,12 +465,13 @@ func TestHostProvisioned_RequiresPinnedPiVersion(t *testing.T) {
 // argv (Phase-1 blockers), sessions live outside the checkout, and model +
 // passthrough ride along.
 func TestBuildHostArgs(t *testing.T) {
-	args := buildHostArgs("/sa", "PREAMBLE", hostOpts{Model: "m", Passthrough: []string{"-p", "hi"}})
+	args := buildHostArgs("/sa", "PREAMBLE", "/personal/skills", hostOpts{Model: "m", Passthrough: []string{"-p", "hi"}})
 	j := strings.Join(args, " ")
 	for _, want := range []string{
 		"--session-dir /sa/sessions",
 		"-e /sa/extensions/host-guard.ts",
 		"--append-system-prompt PREAMBLE",
+		"--skill /personal/skills",
 		"--model m",
 		"-p hi",
 	} {

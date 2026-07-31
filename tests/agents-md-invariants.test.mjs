@@ -55,9 +55,9 @@ const SAFETY_INVARIANTS = [
 		phrases: ["serve.pid", "state dir", "orphan"],
 	},
 	{
-		id: "keys-1password-only",
-		invariant: "Provider keys come from 1Password only; missing or signed-out `op` is a hard failure, never a silent degrade.",
-		phrases: ["1Password only", "HARD failure", "never a silent degrade"],
+		id: "direct-keys-1password-only",
+		invariant: "Direct API keys come from 1Password only; keyless and Ollama backends never trigger that flow.",
+		phrases: ["Direct provider keys come from 1Password only", "HARD failure", "never trigger an irrelevant 1Password flow"],
 	},
 	{
 		id: "run-refuses-only-on-positive-no-key",

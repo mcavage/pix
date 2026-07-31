@@ -38,11 +38,6 @@ type shellEnv struct {
 	// Secrets group's perms check uses it to flag a group/other-accessible
 	// op-refs.env or its dir. Nil in tests that don't exercise perms.
 	fileMode func(path string) (os.FileMode, bool)
-	// fileModTime returns a path's modification time + whether it exists. Used
-	// to age stored OAuth credentials against the 7-day Testing-app token
-	// lifetime (gworkspace.go). It reads the stat only, never the contents.
-	// Nil in tests that don't exercise it.
-	fileModTime func(path string) (time.Time, bool)
 	// writeFile writes data to path (creating parent dirs). Nil in tests so
 	// seeding stays hermetic; defaultShellEnv wires the real os-backed writer.
 	writeFile func(path string, data []byte, perm os.FileMode) error
@@ -64,6 +59,9 @@ type shellEnv struct {
 	stateDir func() (string, error)
 	// runInteractive inherits the terminal for browser-based OAuth steps.
 	runInteractive func(name string, args ...string) error
+	// runInteractiveQuiet keeps stdin attached while capturing command chatter.
+	runInteractiveQuiet func(name string, args ...string) error
+	quiet               bool
 	// identityProbe answers the memory/knowledge `identity` JSON-RPC method
 	// (readiness_service.go, services/host/identity.go) — the APPLICATION-
 	// LEVEL proof a service axis needs before it may render ready. Nil in
@@ -78,6 +76,9 @@ type shellEnv struct {
 	// that don't exercise Slack setup/status; defaultShellEnv wires the real
 	// HTTPS call (slack.go's liveSlackAuthTest).
 	slackAuthTest func(token string) (slackIdentity, error)
+	// directInferenceProbe performs one bounded, model-specific provider call.
+	// The key is held only in memory and must never appear in returned errors.
+	directInferenceProbe func(provider, model, key string) error
 }
 
 // probeTimeout bounds every registered-command probe so doctor can never wedge
@@ -167,13 +168,6 @@ func defaultShellEnv() shellEnv {
 			}
 			return fi.Mode(), true
 		},
-		fileModTime: func(path string) (time.Time, bool) {
-			fi, err := os.Stat(path)
-			if err != nil {
-				return time.Time{}, false
-			}
-			return fi.ModTime(), true
-		},
 		// writeFile is LEAF-symlink-safe (parent-directory symlinks are a
 		// separate, honestly out-of-scope concern — see atomicWriteInDir's doc
 		// comment): the destination is never opened directly, so a leaf that is
@@ -201,8 +195,18 @@ func defaultShellEnv() shellEnv {
 			cmd.Stderr = os.Stderr
 			return cmd.Run()
 		},
-		identityProbe: rpcIdentityProbe,
-		slackAuthTest: liveSlackAuthTest,
+		runInteractiveQuiet: func(name string, args ...string) error {
+			cmd := exec.Command(name, args...)
+			cmd.Stdin = os.Stdin
+			out, err := cmd.CombinedOutput()
+			if err != nil && strings.TrimSpace(string(out)) != "" {
+				return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+			}
+			return err
+		},
+		identityProbe:        rpcIdentityProbe,
+		slackAuthTest:        liveSlackAuthTest,
+		directInferenceProbe: liveDirectInferenceProbe,
 	}
 }
 

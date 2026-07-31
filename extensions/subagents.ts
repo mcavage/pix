@@ -10,9 +10,10 @@
 //      ports, so the child's listen throws EADDRINUSE, the error is swallowed,
 //      the factory promise never resolves, and the child DEADLOCKS at startup
 //      before running a turn. We spawn every child with
-//      `--no-extensions -e <this file>`: no auto-discovered extensions (nothing
-//      binds a port), but this extension is re-added explicitly so subagent
-//      TREES still work.
+//      `--no-extensions -e <inference> -e <this file>`: no auto-discovered
+//      extensions (nothing binds a port), while the generated model providers
+//      and this extension are re-added explicitly so routed models and subagent
+//      TREES both work.
 //
 //   2) STABILITY PILLAR #2 — a real watchdog. pi has no client read timeout, so
 //      a dead SSE stream spins a child forever. Every child gets an inactivity
@@ -95,7 +96,7 @@ const MAX_DEPTH = (() => {
 })();
 // Host mode (docs/design/host-mode.md) sets PI_SUBAGENT_DISABLED=1 as a
 // first-class, explicit refusal — belt-and-suspenders with PI_SUBAGENT_MAX_DEPTH=0
-// (also set there). Children spawn as `pi --no-extensions -e <this file>`, which
+// (also set there). Children spawn with a curated explicit extension set, which
 // bypasses extensions/host-guard.ts entirely and inherits the full env
 // (credentials included) with no sandbox underneath either. Checked FIRST in the
 // tool (host-mode-specific message before the generic depth-limit text) AND
@@ -104,7 +105,7 @@ const MAX_DEPTH = (() => {
 // Boolean(env) would treat "0"/"false" as disabled too.
 const SUBAGENTS_DISABLED = process.env.PI_SUBAGENT_DISABLED === "1";
 const SUBAGENTS_DISABLED_MSG =
-	"Subagents are disabled in host mode (PI_SUBAGENT_DISABLED=1). Children spawn as `pi --no-extensions -e <subagents.ts>`, which bypasses the host-guard tool_call extension and inherits the full environment (credentials included) with no sandbox underneath. Do the work directly in this session instead of delegating. See docs/design/host-mode.md.";
+	"Subagents are disabled in host mode (PI_SUBAGENT_DISABLED=1). Children spawn with `pi --no-extensions` plus a curated provider/subagent extension set, which bypasses the host-guard tool_call extension and inherits the full environment (credentials included) with no sandbox underneath. Do the work directly in this session instead of delegating. See docs/design/host-mode.md.";
 const CURRENT_DEPTH = Math.max(
 	0,
 	Math.floor(Number(process.env.PI_SUBAGENT_DEPTH) || 0),
@@ -194,6 +195,12 @@ interface AgentConfig {
 	// Declared routing intent (frontmatter `intent:`). Resolved to `model` via
 	// routing.json unless an explicit `model:` overrides it. Kept for display.
 	intent?: string;
+	// Optional cross-vendor recovery route for provider policy refusals. This is
+	// deliberately agent-authored rather than a global retry: only roles whose
+	// work predictably brushes a provider policy boundary should pay for a second
+	// attempt, and the alternate route remains subject to the compiled roster.
+	fallbackIntent?: string;
+	fallbackModel?: string;
 	thinking?: string;
 	maxTurns?: number;
 	// Per-agent watchdog overrides (frontmatter idle_ms / wall_ms, milliseconds).
@@ -239,7 +246,10 @@ function loadAgentsFromDir(
 			frontmatter = parsed.frontmatter ?? {};
 			body = parsed.body ?? content;
 		} catch {
-			/* treat as bodyonly */
+			// Metadata controls model and tool policy. Running malformed frontmatter
+			// as an unrestricted, parent-model child is an unsafe silent fallback.
+			// Omit it from discovery so invocation fails clearly as an unknown agent.
+			continue;
 		}
 		// Name = frontmatter.name if present, else filename (pix + skills style).
 		const name = (frontmatter.name || path.basename(entry.name, ".md")).trim();
@@ -271,6 +281,16 @@ function loadAgentsFromDir(
 				);
 			}
 		}
+		const fallbackIntent = frontmatter.fallback_intent?.trim() || undefined;
+		let fallbackModel: string | undefined;
+		if (fallbackIntent) {
+			fallbackModel = resolveIntentModel(fallbackIntent) || undefined;
+			if (!fallbackModel) {
+				warnings.push(
+					`fallback_intent "${fallbackIntent}" not found in routing.json — policy refusals will be returned without retry.`,
+				);
+			}
+		}
 		let thinking = frontmatter.thinking?.trim().toLowerCase() || undefined;
 		if (thinking && !VALID_THINKING.has(thinking)) {
 			warnings.push(`thinking "${thinking}" is not a valid level; ignoring.`);
@@ -299,6 +319,8 @@ function loadAgentsFromDir(
 			tools: tools && tools.length > 0 ? tools : undefined,
 			model,
 			intent,
+			fallbackIntent,
+			fallbackModel,
 			thinking,
 			web,
 			maxTurns: Number.isFinite(maxTurns as number)
@@ -347,6 +369,27 @@ function discoverAgents(
 	return { agents: Array.from(map.values()), projectDir };
 }
 
+function isKnownSkill(name: string): boolean {
+	if (!name || name.includes("/") || name.includes("\\")) return false;
+	const roots = [path.join(getAgentDir(), "skills")];
+	for (let i = 0; i < process.argv.length; i++) {
+		if (process.argv[i] === "--skill" && process.argv[i + 1])
+			roots.push(process.argv[++i]);
+	}
+	for (const root of roots) {
+		try {
+			if (
+				fs.existsSync(path.join(root, name, "SKILL.md")) ||
+				(path.basename(root) === name && fs.existsSync(path.join(root, "SKILL.md")))
+			)
+				return true;
+		} catch {
+			/* best-effort discovery; unknown remains a clear error */
+		}
+	}
+	return false;
+}
+
 // ─── Child pi invocation (robust resolution) ─────────────────────────────────
 let SELF_PATH: string | null = null;
 try {
@@ -354,6 +397,20 @@ try {
 	if (fs.existsSync(p)) SELF_PATH = p;
 } catch {
 	/* trees disabled if we can't find ourselves; stability unaffected */
+}
+
+// inference.ts is headless-safe (it only registers generated providers) and is
+// required whenever routing resolves to a non-native backend such as a work or
+// personal gateway. Omitting it made `pi --list-models` succeed in the parent
+// while every routed child failed immediately with "Model not found".
+export function coreChildExtensionArgs(selfPath: string | null = SELF_PATH): string[] {
+	const args: string[] = [];
+	if (selfPath) {
+		const inferencePath = path.join(path.dirname(selfPath), "inference.ts");
+		if (fs.existsSync(inferencePath)) args.push("-e", inferencePath);
+		args.push("-e", selfPath);
+	}
+	return args;
 }
 
 // Extensions re-added to the child on top of --no-extensions. The blanket
@@ -484,6 +541,7 @@ interface SingleResult {
 	idleMs?: number;
 	wallMs?: number;
 	step?: number;
+	fallbackFrom?: string;
 }
 
 interface SubagentDetails {
@@ -511,6 +569,48 @@ function isFailed(r: SingleResult): boolean {
 		Boolean(r.timedOut)
 	);
 }
+
+// Provider policy refusals are qualitatively different from auth, routing, and
+// transport failures: retrying the same endpoint cannot help, while a declared
+// cross-vendor route often can. Keep this matcher narrow so ordinary 4xx errors
+// are never converted into surprise spend on another model.
+export function isProviderPolicyRefusal(r: Pick<SingleResult, "errorMessage" | "stderr" | "messages">): boolean {
+	const text = [r.errorMessage, r.stderr, finalText(r.messages)]
+		.filter(Boolean)
+		.join("\n")
+		.toLowerCase();
+	return (
+		text.includes("triggered restrictions on violative") ||
+		text.includes("blocked under anthropic's usage policy") ||
+		text.includes("blocked under anthropic’s usage policy") ||
+		(text.includes("usage policy") && text.includes("refusal"))
+	);
+}
+
+function readableFailure(r: SingleResult): string {
+	const raw = r.errorMessage || r.stderr || finalText(r.messages) || "failed";
+	const first = raw
+		.split("\n")
+		.map((s) => s.trim())
+		.find(Boolean) || "failed";
+	// The row renderer already truncates to terminal width. Preserve enough of
+	// the actual diagnostic here to distinguish a bad route from auth or policy.
+	return first.slice(0, 240);
+}
+
+export function clarifyRoutedModelFailure(r: SingleResult, agent: AgentConfig): void {
+	if (!agent.model || !isFailed(r)) return;
+	const raw = [r.errorMessage, r.stderr, finalText(r.messages)]
+		.filter(Boolean)
+		.join("\n");
+	if (!/(model.{0,40}not found|unknown model|invalid (?:model|route|provider)|route.{0,40}invalid)/i.test(raw))
+		return;
+	const route = agent.intent ? `intent "${agent.intent}"` : "explicit model route";
+	r.errorMessage =
+		`Agent "${agent.name}" ${route} resolved to "${agent.model}", but that model is not registered in this sandbox. ` +
+		`Run \`pix run --replace\` to recreate it from the current inference config. Original: ${readableFailure(r)}`;
+}
+
 function resultOutput(r: SingleResult): string {
 	if (isFailed(r)) {
 		if (r.timedOut === "idle")
@@ -519,7 +619,10 @@ function resultOutput(r: SingleResult): string {
 			return `Timed out: exceeded ${Math.round((r.wallMs ?? WALL_MS) / 1000)}s wall-clock (killed). Partial output:\n${finalText(r.messages) || r.stderr || "(none)"}`;
 		return r.errorMessage || r.stderr || finalText(r.messages) || "(no output)";
 	}
-	return finalText(r.messages) || "(no output)";
+	const text = finalText(r.messages) || "(no output)";
+	return r.fallbackFrom
+		? `Primary model ${r.fallbackFrom} returned a provider policy refusal; recovered with ${r.model}.\n\n${text}`
+		: text;
 }
 function capOutput(s: string): string {
 	if (Buffer.byteLength(s, "utf8") <= PER_TASK_OUTPUT_CAP) return s;
@@ -667,12 +770,13 @@ type OnUpdate = (partial: { content: any[]; details: SubagentDetails }) => void;
 // Discipline (peer-reviewed): top-level runs only (a headless tree child has no
 // UI, so it renders nothing and never allocates a timer); a SINGLE 1s ticker
 // (not an 8Hz spinner — repaint churn, see status.ts); ticker gated on the
-// RUNNING count so sticky failures don't spin it forever; successes auto-clear
-// after a TTL, failures/timeouts/aborts stay pinned until the next batch or
-// shutdown; every pi-API touch guarded so nothing throws at load or wedges
+// RUNNING count so finished failures don't spin it forever; successes auto-clear
+// quickly and failures/timeouts/aborts remain briefly for visibility; every
+// pi-API touch is guarded so nothing throws at load or wedges
 // /reload.
 const TRACKER_WIDGET_ID = "subagent-tracker";
 const FINISHED_TTL_MS = num("PI_SUBAGENT_PIN_TTL_MS", 6_000);
+const FAILED_TTL_MS = num("PI_SUBAGENT_FAILED_PIN_TTL_MS", 15_000);
 const MAX_VISIBLE_ROWS = 10; // string[] widgets are capped ~10 lines by pi
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
@@ -730,8 +834,8 @@ function runningCount(): number {
 	return n;
 }
 
-// Before a fresh batch registers, sweep away any lingering finished rows (incl.
-// sticky failures) so a new run starts on a clean pin — but only when nothing is
+// Before a fresh batch registers, sweep away any lingering finished rows so a
+// new run starts on a clean pin — but only when nothing is
 // still running, so we never wipe a live sibling.
 function clearFinishedIfIdle(): void {
 	try {
@@ -889,13 +993,14 @@ function finalizeRun(id: string, r: SingleResult): void {
 			e.error = "aborted";
 		} else {
 			e.status = "failed";
-			e.error = (r.errorMessage || r.stderr || "failed").split("\n")[0].slice(0, 40);
+			e.error = readableFailure(r);
 		}
-		// Successes self-expire; failures stay pinned until the next batch/shutdown.
-		// With no UI (headless child) never allocate a timer: just drop the row.
-		if (e.status === "done" && !tracker.ui) {
+		// Finished rows self-expire. Failures remain visible longer than successes,
+		// but never permanently occupy the user's screen; the full tool result is
+		// already durable in conversation history. With no UI, drop immediately.
+		if (!tracker.ui) {
 			tracker.runs.delete(id);
-		} else if (e.status === "done") {
+		} else {
 			const t = setTimeout(() => {
 				try {
 					tracker.runs.delete(id);
@@ -905,7 +1010,7 @@ function finalizeRun(id: string, r: SingleResult): void {
 				} catch {
 					/* best-effort */
 				}
-			}, FINISHED_TTL_MS);
+			}, e.status === "done" ? FINISHED_TTL_MS : FAILED_TTL_MS);
 			if (typeof t.unref === "function") t.unref();
 			tracker.timers.set(id, t);
 		}
@@ -1171,6 +1276,7 @@ async function runSingle(
 		preRunId?: string; // pre-registered "queued" row to adopt (parallel/chain)
 		enabled?: boolean; // false = don't pin (e.g. the doctor canary)
 	},
+	retryingPolicyRefusal = false,
 ): Promise<SingleResult> {
 	// CENTRAL kill switch: every spawn path (tool single/parallel/chain, trees,
 	// the doctor canary, anything added later) funnels through runSingle, so the
@@ -1194,13 +1300,16 @@ async function runSingle(
 	const agent = agents.find((a) => a.name === agentName);
 	if (!agent) {
 		const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
+		const skillHint = isKnownSkill(agentName)
+			? ` "${agentName}" is a skill, not a subagent preset. Run it in the parent session with /skill:${agentName}; do not pass skill names to the subagent tool.`
+			: "";
 		const errResult: SingleResult = {
 			agent: agentName,
 			agentSource: "unknown",
 			task,
 			exitCode: 1,
 			messages: [],
-			stderr: `Unknown agent "${agentName}". Available: ${available}.`,
+			stderr: `Unknown agent "${agentName}".${skillHint} Available agents: ${available}.`,
 			usage: zeroUsage(),
 			step,
 		};
@@ -1221,11 +1330,20 @@ async function runSingle(
 		"--no-session",
 		"--no-extensions",
 	];
+	// Live skills (including XDG personal skills and pack skills) are launcher
+	// inputs, not part of the baked agent directory. Preserve every parent
+	// --skill argument so headless children see the same skill layer.
+	for (let i = 0; i < process.argv.length; i++) {
+		if (process.argv[i] === "--skill" && process.argv[i + 1]) {
+			args.push("--skill", process.argv[++i]);
+		}
+	}
 	// STABILITY: re-add ONLY safe extensions on top of --no-extensions so trees +
 	// web research work without the port-binding extensions that deadlock a
-	// fully-loaded child. SELF_PATH = subagents (trees); WEB_ACCESS = web_search
-	// et al (headless-safe, see resolveWebAccessExtensions).
-	if (SELF_PATH) args.push("-e", SELF_PATH);
+	// fully-loaded child. The core set is inference.ts (generated gateway model
+	// registry) + SELF_PATH (trees); WEB_ACCESS adds web_search et al
+	// (headless-safe, see resolveWebAccessExtensions).
+	args.push(...coreChildExtensionArgs());
 	// Web is on by default; a hermetic agent opts out with `web: false` so its
 	// (possibly sensitive) context never reaches a search provider. When off we
 	// don't even LOAD the extension — clean for restricted and unrestricted alike.
@@ -1511,6 +1629,58 @@ async function runSingle(
 			result.stopReason = "aborted";
 			result.errorMessage = result.errorMessage || "Subagent aborted.";
 		}
+		clarifyRoutedModelFailure(result, agent);
+
+		// Security review prompts can legitimately trip a provider's cyber-policy
+		// classifier. When (and only when) the agent declares a cross-vendor
+		// fallback intent, retry once through that compiled route. The fallback is
+		// still roster/materialization constrained; a missing route means no retry.
+		if (
+			!retryingPolicyRefusal &&
+			isFailed(result) &&
+			isProviderPolicyRefusal(result) &&
+			agent.fallbackModel &&
+			agent.fallbackModel !== agent.model
+		) {
+			const primaryModel = agent.model || "inherited parent model";
+			const primaryUsage = { ...result.usage };
+			const fallbackAgent: AgentConfig = {
+				...agent,
+				model: agent.fallbackModel,
+				fallbackIntent: undefined,
+				fallbackModel: undefined,
+			};
+			const retryAgents = agents.map((a) => (a === agent ? fallbackAgent : a));
+			const retry = await runSingle(
+				defaultCwd,
+				retryAgents,
+				agentName,
+				task,
+				cwd,
+				step,
+				signal,
+				onUpdate,
+				makeDetails,
+				{ mode: track?.mode ?? "single", enabled: false },
+				true,
+			);
+			const retryUsage = retry.usage;
+			Object.assign(result, retry);
+			result.agent = agentName;
+			result.agentSource = agent.source;
+			result.task = task;
+			result.step = step;
+			result.fallbackFrom = primaryModel;
+			result.usage = {
+				input: primaryUsage.input + retryUsage.input,
+				output: primaryUsage.output + retryUsage.output,
+				cacheRead: primaryUsage.cacheRead + retryUsage.cacheRead,
+				cacheWrite: primaryUsage.cacheWrite + retryUsage.cacheWrite,
+				cost: primaryUsage.cost + retryUsage.cost,
+				contextTokens: Math.max(primaryUsage.contextTokens, retryUsage.contextTokens),
+				turns: primaryUsage.turns + retryUsage.turns,
+			};
+		}
 		if (runId) finalizeRun(runId, result);
 		return result;
 	} finally {
@@ -1602,6 +1772,7 @@ export default function (pi: ExtensionAPI) {
 				"Delegate tasks to specialized subagents, each in an isolated child pi with its own context window.",
 				"Modes: single (agent + task), parallel (tasks[]), chain (sequential, {previous} placeholder).",
 				`Agents are markdown files (filename = name) in ${path.join(getAgentDir(), "agents")}; set agentScope:"both" to also use project-local ${CONFIG_DIR_NAME}/agents.`,
+				"The agent field accepts agent presets only, never skill names; invoke skills in the parent session.",
 				"Every child has an inactivity + wall-clock watchdog, so a stuck subagent is killed and reported, never left to hang.",
 			].join(" "),
 			parameters: SubagentParams as any,
@@ -2079,12 +2250,19 @@ export default function (pi: ExtensionAPI) {
 					} catch {
 						/* ignore */
 					}
+					const currentModel =
+						ctx.model?.provider && ctx.model?.id
+							? `${ctx.model.provider}/${ctx.model.id}`
+							: undefined;
+					const canaryModel =
+						process.env.PI_SUBAGENT_DOCTOR_MODEL ||
+						resolveIntentModel("fast-balanced") ||
+						resolveIntentModel("breadth") ||
+						currentModel;
 					const canary: AgentConfig = {
 						name: "__doctor_canary",
 						description: "self-audit canary",
-						model:
-							process.env.PI_SUBAGENT_DOCTOR_MODEL ||
-							"anthropic/claude-haiku-4-5",
+						model: canaryModel,
 						thinking: "off",
 						tools: ["read"],
 						// Tight budgets for the audit regardless of global config, so a broken

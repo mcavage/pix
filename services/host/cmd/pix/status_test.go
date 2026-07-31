@@ -616,3 +616,19 @@ func TestParseSandboxes(t *testing.T) {
 		t.Errorf("out[0] = %+v", out[0])
 	}
 }
+
+func TestStatusRendersConfiguredInferenceInsteadOfIrrelevantProviderKeys(t *testing.T) {
+	st := statusReport{
+		Providers: map[string]bool{}, InferenceModels: 3,
+		InferenceBackends: []string{"work-anthropic", "work-openai"},
+	}
+	var out bytes.Buffer
+	st.render(&out)
+	got := out.String()
+	if !strings.Contains(got, "inference   3 model(s) via work-anthropic, work-openai") {
+		t.Fatalf("missing inference summary:\n%s", got)
+	}
+	if strings.Contains(got, "providers   ") {
+		t.Fatalf("gateway topology must hide irrelevant provider-key row:\n%s", got)
+	}
+}

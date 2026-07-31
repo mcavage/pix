@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"pix/host/config"
 )
@@ -94,10 +93,7 @@ func TestRunGworkspaceCmd_NoArgsExitsNonZero(t *testing.T) {
 
 // --- gworkspaceSetup façade: success, zero-tools, rollback ---------------
 
-// TestGworkspaceSetup_SuccessPrintsPublicationNotice: on a successful
-// gogSetup transaction, the façade appends the OAuth publication reminder
-// naming the exact Audience URL `gworkspace status` re-checks every run.
-func TestGworkspaceSetup_SuccessPrintsPublicationNotice(t *testing.T) {
+func TestGworkspaceSetup_SuccessDoesNotGuessOAuthAudience(t *testing.T) {
 	gogSetupTestCfg(t)
 	cred := gogCredFile(t)
 	ge := gogTestEnv{
@@ -114,18 +110,14 @@ func TestGworkspaceSetup_SuccessPrintsPublicationNotice(t *testing.T) {
 	if err := gworkspaceSetup(ge.env(), opts, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("gworkspaceSetup: %v\n%s", err, out.String())
 	}
-	if !strings.Contains(out.String(), gwAudienceURL) {
-		t.Errorf("expected the publication notice naming %s, got:\n%s", gwAudienceURL, out.String())
-	}
-	if !strings.Contains(out.String(), "7 days") {
-		t.Errorf("expected the 7-day Testing-app reminder, got:\n%s", out.String())
+	if strings.Contains(out.String(), "Testing") || strings.Contains(out.String(), "7 days") || strings.Contains(out.String(), "publish") {
+		t.Errorf("setup must not guess whether the OAuth client is Internal or External, got:\n%s", out.String())
 	}
 }
 
 // TestGworkspaceSetup_ZeroToolsFailsAndSkipsNotice: the headless probe
 // returning a clean, empty tool list must fail the façade with the EXACT
-// required sentence (never register/save anything), and must NOT print the
-// publication notice — there is nothing to confirm when setup itself failed.
+// required sentence (never register/save anything).
 func TestGworkspaceSetup_ZeroToolsFailsAndSkipsNotice(t *testing.T) {
 	gogSetupTestCfg(t)
 	cred := gogCredFile(t)
@@ -148,15 +140,11 @@ func TestGworkspaceSetup_ZeroToolsFailsAndSkipsNotice(t *testing.T) {
 	if !strings.Contains(err.Error(), "authorization succeeded but the headless tool listing returned 0 tools; nothing was registered") {
 		t.Errorf("expected the exact required zero-tools sentence, got %q", err)
 	}
-	if strings.Contains(out.String(), gwAudienceURL) {
-		t.Errorf("a failed setup must never print the publication notice, got:\n%s", out.String())
-	}
 }
 
 // TestGworkspaceSetup_RollbackOnSaveFailure: registration succeeds but the
 // subsequent config.Save() fails — the façade must surface the SAME rollback
 // guarantee gog_setup.go provides (restoring the prior registration) and
-// must NOT print the publication notice for a run that ultimately failed.
 func TestGworkspaceSetup_RollbackOnSaveFailure(t *testing.T) {
 	env, cred, addCalls, rmCalls := gogR108RollbackEnv(t, true)
 	var out bytes.Buffer
@@ -171,9 +159,6 @@ func TestGworkspaceSetup_RollbackOnSaveFailure(t *testing.T) {
 	if len(*rmCalls) != 0 || len(*addCalls) != 2 {
 		t.Errorf("expected the prior registration to be RESTORED (2 add calls, 0 rm calls), got add=%v rm=%v", *addCalls, *rmCalls)
 	}
-	if strings.Contains(out.String(), gwAudienceURL) {
-		t.Errorf("a rolled-back setup must never print the publication notice, got:\n%s", out.String())
-	}
 }
 
 // --- gworkspaceStatus ------------------------------------------------------
@@ -185,7 +170,7 @@ func TestGworkspaceStatus_NotConfigured(t *testing.T) {
 	cfg := &config.Config{}
 	env := shellEnv{lookPath: func(string) (string, error) { return "", os.ErrNotExist }}
 	var out bytes.Buffer
-	code := gworkspaceStatus(cfg, env, &out, time.Now())
+	code := gworkspaceStatus(cfg, env, &out)
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0", code)
 	}
@@ -201,7 +186,7 @@ func TestGworkspaceStatus_ConfiguredNoAccount(t *testing.T) {
 	cfg := &config.Config{MCP: []string{gwServerName}}
 	env := shellEnv{lookPath: func(string) (string, error) { return "", os.ErrNotExist }}
 	var out bytes.Buffer
-	code := gworkspaceStatus(cfg, env, &out, time.Now())
+	code := gworkspaceStatus(cfg, env, &out)
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1 (verified gap)", code)
 	}
@@ -238,25 +223,21 @@ func TestGworkspaceStatus_ReadyPath(t *testing.T) {
 		},
 	}
 	var out bytes.Buffer
-	code := gworkspaceStatus(cfg, env, &out, time.Now())
-	// NOTE: gworkspaceStatusUsage documents "0 ready" as an achievable exit
-	// code, but gworkspaceTokenAgeCheck always returns verdictUnverifiable
-	// (by design — Google's publication state is unknowable from here) WITHOUT
-	// note:true, so gworkspaceExit's tally always lands on 3 once an account
-	// is configured, even when every other check is ready. Asserting the
-	// ACTUAL exit code here (3) rather than the documented one (0) — see the
-	// handoff notes for this as a reported defect.
-	if code != 3 {
-		t.Errorf("exit code = %d, want 3 (token age is always unverifiable), output:\n%s", code, out.String())
+	code := gworkspaceStatus(cfg, env, &out)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0 (publication state is informational), output:\n%s", code, out.String())
 	}
 	s := out.String()
-	for _, want := range []string{acct, "hardened read-only flags", "exposes tools", gwAudienceURL} {
+	for _, want := range []string{acct, "hardened read-only flags", "exposes tools"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("expected %q in status output, got:\n%s", want, s)
 		}
 	}
 	if !strings.Contains(s, "✓ account") || !strings.Contains(s, "✓ read-only") || !strings.Contains(s, "✓ headless spawn") {
 		t.Errorf("expected every real check (account/read-only/headless spawn) to be individually ready, got:\n%s", s)
+	}
+	if strings.Contains(s, "token age") || strings.Contains(s, "publication") {
+		t.Errorf("status must report observed authorization health, not guess the OAuth audience, got:\n%s", s)
 	}
 }
 
@@ -268,7 +249,7 @@ func TestGworkspaceStatus_UnreadableRegistrationIsUnverifiableExitThree(t *testi
 	cfg := &config.Config{GogAccount: "you@example.com", MCP: []string{gwServerName}}
 	env := shellEnv{lookPath: func(string) (string, error) { return "", os.ErrNotExist }}
 	var out bytes.Buffer
-	code := gworkspaceStatus(cfg, env, &out, time.Now())
+	code := gworkspaceStatus(cfg, env, &out)
 	if code != 3 {
 		t.Errorf("exit code = %d, want 3 (unverifiable, nothing confirmed broken)", code)
 	}
@@ -380,8 +361,8 @@ func TestGworkspaceDisable_PresentRemovesRegistrationAndConfig(t *testing.T) {
 	if reloaded.GogAccount != "" || containsStr(reloaded.MCP, gwServerName) {
 		t.Errorf("disable must persist the cleared config, got account=%q mcp=%v", reloaded.GogAccount, reloaded.MCP)
 	}
-	if !strings.Contains(out.String(), "off") || !strings.Contains(out.String(), gwAudienceURL) {
-		t.Errorf("expected the off + revoke-yourself message naming the audience URL, got:\n%s", out.String())
+	if !strings.Contains(out.String(), "off") || !strings.Contains(out.String(), gwPermissionsURL) {
+		t.Errorf("expected the off + revoke-yourself message naming the permissions URL, got:\n%s", out.String())
 	}
 }
 

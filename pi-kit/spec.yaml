@@ -15,13 +15,11 @@ sandbox:
   # tag means "use the loaded build if present, else pull once." Keep in sync
   # with VERSION in the Makefile and `version` in package.json.
   image: "docker.io/mcavage/pix:0.1.16"
-  aiFilename: AGENTS.md
   entrypoint:
     # --session-dir persists sessions on the host-mounted workspace so they
     # survive sandbox recreation (resume with `pi -c` / `pi -r`); --models sets
     # the Alt+P cycle squad (Ctrl+P is remapped to emacs cursor-up).
-    run:
-      [
+    [
         pi,
         "--session-dir",
         ".pi-sessions",
@@ -39,10 +37,10 @@ sandbox:
 # plus an apiKey block: apiKey.name is the in-VM env var (set to the sentinel),
 # apiKey.inject[] tells the proxy which outbound domains to rewrite and with
 # which header/format. Egress is separate: a domain the proxy injects into must
-# ALSO be allowed for egress under caps.network.allow, so the credential API
+# ALSO be allowed for egress under permissions.network.allow, so the credential API
 # hosts are listed there too. The per-credential `service:` is required — without
 # it `sbx run` panics ("invalid identifier ... credentials/<sandbox>/").
-caps:
+permissions:
   network:
     allow:
       # Cloud model + GitHub API hosts the proxy injects credentials into (see
@@ -98,7 +96,7 @@ caps:
       - host.docker.internal:11437
       - localhost:11437
       # A pack that needs a host service (e.g. a CLI exec-proxy) adds its own
-      # domain to caps.network.allow from its own synthesized mixin kit — the
+      # domain to permissions.network.allow from its own synthesized mixin kit — the
       # public kit stays free of company-specific host services. See
       # docs/design/packs.md.
       # Note: local stdio MCP servers (e.g. slack) are NOT here. They're registered
@@ -163,7 +161,7 @@ environment:
 # The sandbox proxy terminates TLS and presents its own CA (delivered at runtime
 # via $PROXY_CA_CERT_B64). The stock template images trust it out of the box; a
 # custom image must install it. Same pattern as the docs' `internal-ca` kit.
-commands:
+setup:
   install:
     - command: 'mkdir -p /usr/local/share/ca-certificates && printf "%s" "$PROXY_CA_CERT_B64" | base64 -d > /usr/local/share/ca-certificates/proxy-ca.crt && update-ca-certificates'
       user: "0"
@@ -180,73 +178,75 @@ commands:
     - command: '[ -n "$MCP_GATEWAY_URL" ] || exit 0; mkdir -p "$HOME/.pi/agent"; printf ''{"mcpServers":{"mcp-gateway":{"url":"%s","headers":{"Authorization":"Bearer %s"}}}}\n'' "$MCP_GATEWAY_URL" "$MCP_SENTINEL_TOKEN_NAME" > "$HOME/.pi/agent/mcp.json"'
       description: Register the sbx MCP gateway with pi (pi-mcp-adapter)
 
-agentContext: |
-  # pix
-  You are pi, running inside the pix sandbox: a Docker Hardened (DHI) Debian
-  base, isolated by Docker Sandboxes. The environment is disposable. Work
-  directly and commit often.
+agentInstructions:
+  filename: AGENTS.md
+  content: |
+    # pix
+    You are pi, running inside the pix sandbox: a Docker Hardened (DHI) Debian
+    base, isolated by Docker Sandboxes. The environment is disposable. Work
+    directly and commit often.
 
-  You run as a NON-root user (`node`) and there is NO `sudo` (the DHI base is
-  minimal and ships none). You cannot install system packages (`apt-get` needs
-  root), so do not try, and do not tell the user to `sudo`. Anything that needs a
-  system-level install or a real device (e.g. platformio + `/dev/tty*`) is a HOST
-  operation the sandbox structurally cannot do; that is what `pix host` (the
-  unsandboxed escape hatch) or a host-side capability MCP is for. Use pip
-  `--user`, language-local package managers, or prebuilt static binaries when you
-  need a tool in-VM.
+    You run as a NON-root user (`node`) and there is NO `sudo` (the DHI base is
+    minimal and ships none). You cannot install system packages (`apt-get` needs
+    root), so do not try, and do not tell the user to `sudo`. Anything that needs a
+    system-level install or a real device (e.g. platformio + `/dev/tty*`) is a HOST
+    operation the sandbox structurally cannot do; that is what `pix host` (the
+    unsandboxed escape hatch) or a host-side capability MCP is for. Use pip
+    `--user`, language-local package managers, or prebuilt static binaries when you
+    need a tool in-VM.
 
-  ## Memory (automatic)
-  A host memory service recalls relevant facts into your context before every
-  turn, and quietly captures durable facts and corrections after. You never call
-  it. To see or steer it: /recall, /remember, /forget, /learnings. If recall is
-  empty, the user needs to run `make serve` (or `pix serve`) on the host.
+    ## Memory (automatic)
+    A host memory service recalls relevant facts into your context before every
+    turn, and quietly captures durable facts and corrections after. You never call
+    it. To see or steer it: /recall, /remember, /forget, /learnings. If recall is
+    empty, the user needs to run `make serve` (or `pix serve`) on the host.
 
-  ## Multi-model
-  Four providers in the cycle: Claude, GPT, and Gemini (cloud, keys injected by the
-  host proxy, never stored in this VM) plus Ollama (local, via the ollama-bridge
-  extension). Switch with /model or --model. Use a stronger model (Opus, Gemini Pro)
-  for synthesis and hard problems, and a cheap fast one (a small local Ollama model, a haiku/flash)
-  for mechanical passes. For review, switch to a different vendor than wrote the code
-  and re-read it (or fan out a `review` subagent — see below).
+    ## Multi-model
+    Four providers in the cycle: Claude, GPT, and Gemini (cloud, keys injected by the
+    host proxy, never stored in this VM) plus Ollama (local, via the ollama-bridge
+    extension). Switch with /model or --model. Use a stronger model (Opus, Gemini Pro)
+    for synthesis and hard problems, and a cheap fast one (a small local Ollama model, a haiku/flash)
+    for mechanical passes. For review, switch to a different vendor than wrote the code
+    and re-read it (or fan out a `review` subagent — see below).
 
-  ## Subagents
-  Fan-out works, via our own extensions/subagents.ts (the off-the-shelf
-  pi-subagents deadlocked on pi 0.80.x, so we replaced it). It registers a
-  `subagent` tool with single / parallel / chain modes and depth-capped trees,
-  each child spawned with an inactivity + wall-clock watchdog so a stuck one is
-  killed and reported, never left hanging. Call it with {agent, task} (single),
-  {tasks:[...]} (parallel), or {chain:[...]} with a {previous} placeholder —
-  agent = a preset in ~/.pi/agent/agents:
-    - fanout (haiku, read-only): spawn many for breadth.
-    - deep (opus): one genuinely hard sub-problem.
-    - review (cross-vendor): an adversarial second opinion before you ship.
-    - specialists: architect, engineer, designer, product-manager, qa-lead,
-      security-lead, sre-lead, devrel, dx-consultant, legal, finance-analyst,
-      growth-marketing, ux-copywriter, enterprise-admin.
-  Fan a task across the right roles, then synthesize. Use review before shipping.
-  Run /subagents to list agents/config and /subagents doctor for a self-check.
-  (Older skills say the Agent tool with subagent_type=…; that API is not present —
-  use the subagent tool with agent=… instead. Explore/Plan are not installed.)
+    ## Subagents
+    Fan-out works, via our own extensions/subagents.ts (the off-the-shelf
+    pi-subagents deadlocked on pi 0.80.x, so we replaced it). It registers a
+    `subagent` tool with single / parallel / chain modes and depth-capped trees,
+    each child spawned with an inactivity + wall-clock watchdog so a stuck one is
+    killed and reported, never left hanging. Call it with {agent, task} (single),
+    {tasks:[...]} (parallel), or {chain:[...]} with a {previous} placeholder —
+    agent = a preset in ~/.pi/agent/agents:
+      - fanout (haiku, read-only): spawn many for breadth.
+      - deep (opus): one genuinely hard sub-problem.
+      - review (cross-vendor): an adversarial second opinion before you ship.
+      - specialists: architect, engineer, designer, product-manager, qa-lead,
+        security-lead, sre-lead, devrel, dx-consultant, legal, finance-analyst,
+        growth-marketing, ux-copywriter, enterprise-admin.
+    Fan a task across the right roles, then synthesize. Use review before shipping.
+    Run /subagents to list agents/config and /subagents doctor for a self-check.
+    (Older skills say the Agent tool with subagent_type=…; that API is not present —
+    use the subagent tool with agent=… instead. Explore/Plan are not installed.)
 
-  ## Skills
-  Tight, opinionated workflows you run by name: plan, build, ship, debug,
-  code-review, tdd, verify, qa, brainstorm, challenge, design-review,
-  healthcheck, and many more. They are forcing functions, not manuals.
-  Auto-loaded when relevant.
+    ## Skills
+    Tight, opinionated workflows you run by name: plan, build, ship, debug,
+    code-review, tdd, verify, qa, brainstorm, challenge, design-review,
+    healthcheck, and many more. They are forcing functions, not manuals.
+    Auto-loaded when relevant.
 
-  ## Installed harness
-  plan mode (pi-plan), pi-mcp-adapter, todo list, pi-simplify, pi-web-access,
-  usage HUD, and the baked status + subagents extensions.
+    ## Installed harness
+    plan mode (pi-plan), pi-mcp-adapter, todo list, pi-simplify, pi-web-access,
+    usage HUD, and the baked status + subagents extensions.
 
-  ## CLIs and MCP
-  `gh` is installed; GitHub auth is routed through sbx credentials. Google
-  Workspace runs host-side as the `gog` MCP server (spawned by the MCP gateway,
-  authed with the host's own gog credentials, read-only by default) — the same
-  pattern as Slack (the `chat` capability). The VM never talks to Google
-  directly. Run the host services with `make serve`. Use sbx Cloud MCP Gateway
-  profiles for catalog servers (notion, atlassian, granola, …).
+    ## CLIs and MCP
+    `gh` is installed; GitHub auth is routed through sbx credentials. Google
+    Workspace runs host-side as the `gog` MCP server (spawned by the MCP gateway,
+    authed with the host's own gog credentials, read-only by default) — the same
+    pattern as Slack (the `chat` capability). The VM never talks to Google
+    directly. Run the host services with `make serve`. Use sbx Cloud MCP Gateway
+    profiles for catalog servers (notion, atlassian, granola, …).
 
-  ## Posture
-  Full-auto: no permission prompts. The sandbox isolation is the safety boundary.
-  Write in the user's voice (see the anti-slop and writing-voice skills): no
-  em-dashes, no AI slop, direct and concrete.
+    ## Posture
+    Full-auto: no permission prompts. The sandbox isolation is the safety boundary.
+    Write in the user's voice (see the anti-slop and writing-voice skills): no
+    em-dashes, no AI slop, direct and concrete.

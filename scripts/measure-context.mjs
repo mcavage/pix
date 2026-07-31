@@ -45,7 +45,7 @@ const readIf = (p) => (fs.existsSync(p) ? fs.readFileSync(p, "utf8") : null);
 
 /**
  * The project context files this repo owns and ships as always-on prompt text:
- * the root AGENTS.md, plus the sandbox kit's `agentContext` (sbx hands it to
+ * the root AGENTS.md, plus the sandbox kit's `agentInstructions.content` (sbx hands it to
  * the agent at launch, so it is on every turn just like AGENTS.md).
  */
 function projectContext(root) {
@@ -55,8 +55,18 @@ function projectContext(root) {
 
 	const spec = readIf(path.join(root, "pi-kit/spec.yaml"));
 	if (spec !== null) {
-		const i = spec.indexOf("agentContext: |");
-		if (i !== -1) parts.push({ name: "pi-kit/spec.yaml agentContext", bytes: bytes(spec.slice(i)) });
+		const marker = "  content: |\n";
+		const i = spec.indexOf(marker);
+		if (i !== -1) {
+			// Count the instructions sbx injects, not the four YAML indentation
+			// bytes on every source line.
+			const content = spec
+				.slice(i + marker.length)
+				.split("\n")
+				.map((line) => (line.startsWith("    ") ? line.slice(4) : line))
+				.join("\n");
+			parts.push({ name: "pi-kit/spec.yaml agentInstructions", bytes: bytes(content) });
+		}
 	}
 	return parts;
 }
@@ -153,7 +163,7 @@ export function measureContext(root = repoRootFrom(process.cwd()), opts = {}) {
 	const segments = [
 		{
 			id: "project-context",
-			label: "project context (AGENTS.md + kit agentContext)",
+			label: "project context (AGENTS.md + kit agentInstructions)",
 			owner: "project",
 			gated: true,
 			bytes: project.reduce((n, p) => n + p.bytes, 0),

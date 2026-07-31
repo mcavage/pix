@@ -286,63 +286,64 @@ func TestComputeHostBoM_InertBinNeverInSurface(t *testing.T) {
 	}
 }
 
-// --- C: reference-only MCP integrations are Tier-0 ----------------------------
+// --- C: MCP integration trust classification ----------------------------------
 
-// TestComputeHostBoM_RemoteMCPReferenceIsTier0: the local-vs-gateway partition
+// TestComputeHostBoM_RemoteMCPReferenceRequiresConsent: the local-vs-gateway partition
 // decides the tier — a name NOT in the local set (a remote gateway-catalog
-// server, or gog, which the bridge never lists) is a reference-only Tier-0
-// fact; a name the host serves locally is Tier-1. An UNKNOWN partition
+// server, or gog, which the bridge never lists) is reference-only. An explicit
+// pack-selected URL still requires consent because tools can send conversation
+// data there; a name the host serves locally is Tier-1. An UNKNOWN partition
 // (pix-host unresolved / probe failed) now FAILS CLOSED (round-3 #3):
 // every non-gog name classifies as host-exec so the gate fires — the name
 // still lands in cfg.MCP and attaches via --mcp, so an already-registered
 // local server would otherwise run its host command ungated.
-func TestComputeHostBoM_RemoteMCPReferenceIsTier0(t *testing.T) {
+func TestComputeHostBoM_RemoteMCPReferenceRequiresConsent(t *testing.T) {
 	p := &packInfo{Root: "/p", Manifest: packManifest{
 		Name:         "personal",
-		Integrations: []packIntegration{{Name: "Notion", MCP: "notion", Env: "NOTION_TOKEN"}},
+		Integrations: []packIntegration{{Name: "Docs", MCP: "docs", URL: "https://docs.example.test/mcp"}},
 	}}
 	resolver := func() (string, error) { return "pix-host", nil }
 	remoteOnly := localMCPClassifier(localMCPEnv("fastmail"), resolver)
-	if b := computeHostBoM(p, "", remoteOnly); b.tier1() || len(b.MCP) != 0 {
-		t.Errorf("a remote gateway-catalog reference must be Tier-0, got %+v", b)
-	} else if len(b.Creds) != 1 || b.Creds[0] != "NOTION_TOKEN" {
-		t.Errorf("credential names are still solicited/reviewable, got %v", b.Creds)
+	if b := computeHostBoM(p, "", remoteOnly); !b.tier1() || len(b.RemoteMCP) != 1 || len(b.MCP) != 0 {
+		t.Errorf("an explicit remote endpoint must require consent, got %+v", b)
 	}
+	localRef := &packInfo{Root: "/p", Manifest: packManifest{
+		Name: "personal", Integrations: []packIntegration{{Name: "Notion", MCP: "notion"}},
+	}}
 	unknown := localMCPClassifier(shellEnv{}, nil)
-	if b := computeHostBoM(p, "", unknown); !b.tier1() {
+	if b := computeHostBoM(localRef, "", unknown); !b.tier1() {
 		t.Errorf("an unknown local partition must FAIL CLOSED as host-exec (round-3 #3), got %+v", b)
 	}
 	local := localMCPClassifier(localMCPEnv("notion"), resolver)
-	if b := computeHostBoM(p, "", local); !b.tier1() || len(b.MCP) != 1 {
+	if b := computeHostBoM(localRef, "", local); !b.tier1() || len(b.MCP) != 1 {
 		t.Errorf("a LOCAL stdio MCP command must be Tier-1, got %+v", b)
 	} else if got := strings.Join(b.MCP[0].Argv, " "); got != "pix-host mcp notion" {
 		t.Errorf("local argv = %q", got)
 	}
 }
 
-// TestPackUse_RemoteMCPReferenceStaysTier0: the Phase-1 contract restored —
-// adopting a pack that only REFERENCES a remote gateway-catalog MCP succeeds
-// on a non-TTY with NO --yes and NO prompt (in-process: a misfiring gate
-// would os.Exit(1) and fail the test binary), and still attaches the name.
-func TestPackUse_RemoteMCPReferenceStaysTier0(t *testing.T) {
+// TestPackUse_RemoteMCPReferenceRequiresYes: a non-interactive caller must
+// explicitly accept a pack-selected remote endpoint. --yes is used here so
+// the in-process test can cross the same gate without an os.Exit.
+func TestPackUse_RemoteMCPReferenceRequiresYes(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	pinLocalMCP(t, "fastmail") // notion is NOT local
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packManifest{Name: "personal", Schema: 1,
-		Integrations: []packIntegration{{Name: "Notion", MCP: "notion", Env: "NOTION_TOKEN"}}})
+		Integrations: []packIntegration{{Name: "Docs", MCP: "docs", URL: "https://docs.example.test/mcp"}}})
 
 	var out bytes.Buffer
-	runPackUse(localMCPEnv("fastmail"), &out, []string{root}) // no --yes, non-TTY
-	if strings.Contains(out.String(), "adds these integrations to Pix") || strings.Contains(out.String(), "[y/N]") {
-		t.Errorf("a reference-only remote MCP must adopt silently (Tier-0), got:\n%s", out.String())
+	runPackUse(localMCPEnv("fastmail"), &out, []string{"--yes", root})
+	if !strings.Contains(out.String(), "Remote MCP:") {
+		t.Errorf("the consent screen must disclose the endpoint, got:\n%s", out.String())
 	}
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Pack != root || !containsStr(cfg.MCP, "notion") {
+	if cfg.Pack != root || !containsStr(cfg.MCP, "docs") {
 		t.Errorf("the reference must still attach: pack=%q mcp=%v", cfg.Pack, cfg.MCP)
 	}
 }

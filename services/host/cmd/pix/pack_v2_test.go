@@ -31,7 +31,7 @@ mcp  = "fastmail"
 env  = "FASTMAIL_TOKEN"
 
 [[proxy]]
-name = "snowflake"
+name = "warehouse"
 
 [[proxy]]
 name = "platformio"
@@ -75,7 +75,7 @@ shared = false
 	if m.Routing == nil || m.Routing.Policy != "routing/policy.json" || m.Routing.Scorecard != "routing/scorecard.json" {
 		t.Errorf("routing not parsed: %+v", m.Routing)
 	}
-	if len(m.Proxies) != 2 || m.Proxies[0].Name != "snowflake" || m.Proxies[0].Host {
+	if len(m.Proxies) != 2 || m.Proxies[0].Name != "warehouse" || m.Proxies[0].Host {
 		t.Errorf("sandbox proxy not parsed: %+v", m.Proxies)
 	}
 	if !m.Proxies[1].Host || m.Proxies[1].Name != "platformio" {
@@ -138,21 +138,21 @@ func TestPackAdd_Proxy_ScaffoldsWrapperAndManifest(t *testing.T) {
 	root := filepath.Join(dir, "pack")
 	env := fakeGitEnv(nil)
 	var out bytes.Buffer
-	runPackAdd(env, &out, []string{"proxy", "snowflake", root})
+	runPackAdd(env, &out, []string{"proxy", "warehouse", root})
 
-	binFile := filepath.Join(root, "bin", "snowflake")
+	binFile := filepath.Join(root, "bin", "warehouse")
 	fi, err := os.Stat(binFile)
 	if err != nil {
-		t.Fatalf("bin/snowflake not scaffolded: %v", err)
+		t.Fatalf("bin/warehouse not scaffolded: %v", err)
 	}
 	if fi.Mode().Perm()&0o111 == 0 {
-		t.Errorf("bin/snowflake is not executable: %v", fi.Mode())
+		t.Errorf("bin/warehouse is not executable: %v", fi.Mode())
 	}
 	p, err := loadPack(root)
 	if err != nil {
 		t.Fatalf("loadPack: %v", err)
 	}
-	if len(p.Manifest.Proxies) != 1 || p.Manifest.Proxies[0].Name != "snowflake" || p.Manifest.Proxies[0].Host {
+	if len(p.Manifest.Proxies) != 1 || p.Manifest.Proxies[0].Name != "warehouse" || p.Manifest.Proxies[0].Host {
 		t.Errorf("proxy manifest entry missing/wrong: %+v", p.Manifest.Proxies)
 	}
 	if !strings.Contains(out.String(), "pix run --replace") {
@@ -189,7 +189,7 @@ func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "bin", "snowflake"), []byte("#!/usr/bin/env bash\necho hi\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "bin", "warehouse"), []byte("#!/usr/bin/env bash\necho hi\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "bin", "platformio"), []byte("#!/usr/bin/env bash\n"), 0o755); err != nil {
@@ -198,7 +198,7 @@ func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 	p := &packInfo{Root: root, Manifest: packManifest{
 		Name: "work",
 		Proxies: []packProxy{
-			{Name: "snowflake"},
+			{Name: "warehouse"},
 			{Name: "platformio", Host: true},
 		},
 	}}
@@ -209,8 +209,8 @@ func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(kit, "spec.yaml")); err != nil {
 		t.Errorf("spec.yaml missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(kit, "files", "home", ".local", "bin", "snowflake")); err != nil {
-		t.Errorf("snowflake wrapper not copied: %v", err)
+	if _, err := os.Stat(filepath.Join(kit, "files", "home", ".local", "bin", "warehouse")); err != nil {
+		t.Errorf("warehouse wrapper not copied: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(kit, "files", "home", ".local", "bin", "platformio")); err == nil {
 		t.Error("a host=true proxy must NOT be copied into the sandbox kit")
@@ -716,8 +716,76 @@ func TestPackCapabilitiesJSON_LoadedAndMounted(t *testing.T) {
 	}
 }
 
+func TestPackWebSearchJSONLoadedAndMounted(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	root := filepath.Join(dir, "pack")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte("name = \"work\"\nschema = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config := `{"provider":"openai","openaiBaseUrl":"https://models.example.test/v1","openaiModel":"reasoner"}`
+	if err := os.WriteFile(filepath.Join(root, "web-search.json"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := loadPack(root)
+	if err != nil {
+		t.Fatalf("loadPack: %v", err)
+	}
+	if p.WebSearchFile == "" {
+		t.Fatal("loadPack did not set WebSearchFile")
+	}
+	kit, err := synthesizePackKit(p)
+	if err != nil || kit == "" {
+		t.Fatalf("expected web-search-only pack kit, got %q err=%v", kit, err)
+	}
+	got, err := os.ReadFile(filepath.Join(kit, "files", "home", ".pi", "web-search.json"))
+	if err != nil {
+		t.Fatalf("web-search.json not mounted: %v", err)
+	}
+	if string(got) != config {
+		t.Fatalf("mounted web-search.json = %s, want %s", got, config)
+	}
+}
+
+func TestPackWebSearchJSONRejectsMalformedAndSymlink(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		make func(string) error
+	}{
+		{name: "malformed", make: func(root string) error {
+			return os.WriteFile(filepath.Join(root, "web-search.json"), []byte(`{"provider":`), 0o644)
+		}},
+		{name: "non-object", make: func(root string) error {
+			return os.WriteFile(filepath.Join(root, "web-search.json"), []byte(`[]`), 0o644)
+		}},
+		{name: "symlink", make: func(root string) error {
+			target := filepath.Join(root, "target.json")
+			if err := os.WriteFile(target, []byte(`{}`), 0o644); err != nil {
+				return err
+			}
+			return os.Symlink(target, filepath.Join(root, "web-search.json"))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte("name = \"work\"\nschema = 1\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.make(root); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadPack(root); err == nil || !strings.Contains(err.Error(), "web-search.json") {
+				t.Fatalf("loadPack error = %v, want web-search.json rejection", err)
+			}
+		})
+	}
+}
+
 // TestSynthesizePackKit_EgressAllow: a sandbox [[proxy]] with egress emits
-// caps.network.allow into the synthesized mixin kit, so the wrapper can reach
+// permissions.network.allow into the synthesized mixin kit, so the wrapper can reach
 // its host endpoint (else the sbx egress proxy 403s host.docker.internal).
 func TestSynthesizePackKit_EgressAllow(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
@@ -737,9 +805,9 @@ func TestSynthesizePackKit_EgressAllow(t *testing.T) {
 		t.Fatalf("kit=%q err=%v", kit, err)
 	}
 	b, _ := os.ReadFile(filepath.Join(kit, "spec.yaml"))
-	for _, want := range []string{"caps:", "host.docker.internal:11442", "localhost:11442"} {
+	for _, want := range []string{"permissions:", "host.docker.internal:11442", "localhost:11442"} {
 		if !strings.Contains(string(b), want) {
-			t.Fatalf("proxy egress missing %q in caps.network.allow:\n%s", want, b)
+			t.Fatalf("proxy egress missing %q in permissions.network.allow:\n%s", want, b)
 		}
 	}
 }

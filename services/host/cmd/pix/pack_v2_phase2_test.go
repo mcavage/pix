@@ -60,7 +60,7 @@ func acceptPackSurface(t *testing.T, root, cfgGogAccount string) {
 // informs the screen even though it never raises the tier), and credential
 // VAR names — never values. The classifier here marks both names LOCAL (the
 // Tier-1 case); the remote/reference-only partition half is pinned by
-// TestComputeHostBoM_RemoteMCPReferenceIsTier0.
+// TestComputeHostBoM_RemoteMCPReferenceRequiresConsent.
 func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 	p := &packInfo{Root: "/p", Manifest: packManifest{
 		Name: "work",
@@ -70,9 +70,10 @@ func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 		},
 		Proxies: []packProxy{
 			{Name: "platformio", Host: true, Egress: []string{"api.registry.platformio.org"}},
-			{Name: "snowflake", Egress: []string{"snowflakecomputing.com"}},
+			{Name: "warehouse", Egress: []string{"warehouse.example.test"}},
 		},
-		Bins: []packBin{{Name: "fastmail-mcp", Path: "bin/fastmail-mcp", SHA: "9F2C", Host: true}},
+		Bins:          []packBin{{Name: "fastmail-mcp", Path: "bin/fastmail-mcp", SHA: "9F2C", Host: true}},
+		Prerequisites: []string{"VPN connected"},
 	}}
 	b := computeHostBoM(p, "", func(string) bool { return true })
 	if !b.tier1() {
@@ -88,17 +89,23 @@ func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 		t.Errorf("gog argv must carry the hardened flags, got %q", got)
 	}
 	if len(b.Proxies) != 1 || b.Proxies[0] != "platformio" {
-		t.Errorf("BoM host proxies = %v (sandbox proxies never appear)", b.Proxies)
+		t.Errorf("BoM host proxies = %v", b.Proxies)
+	}
+	if len(b.SandboxProxies) != 1 || b.SandboxProxies[0].Name != "warehouse" {
+		t.Errorf("BoM sandbox proxies = %+v", b.SandboxProxies)
 	}
 	if len(b.Bins) != 1 || b.Bins[0].Name != "fastmail-mcp" {
 		t.Errorf("BoM bins = %+v", b.Bins)
 	}
-	wantEgress := []string{"api.registry.platformio.org", "snowflakecomputing.com"}
+	wantEgress := []string{"api.registry.platformio.org", "warehouse.example.test"}
 	if strings.Join(b.Egress, ",") != strings.Join(wantEgress, ",") {
 		t.Errorf("BoM egress = %v, want the sorted union %v", b.Egress, wantEgress)
 	}
 	if strings.Join(b.Creds, ",") != "FASTMAIL_TOKEN,GOG_KEYRING" {
 		t.Errorf("BoM creds = %v (VAR names only)", b.Creds)
+	}
+	if strings.Join(b.Prerequisites, ",") != "VPN connected" {
+		t.Errorf("BoM prerequisites = %v", b.Prerequisites)
 	}
 }
 
@@ -126,27 +133,30 @@ func TestComputeHostBoM_DisclosesContainerAndRemoteIntegrations(t *testing.T) {
 	p := &packInfo{Root: "/p", Manifest: packManifest{
 		Name: "docker-work",
 		Integrations: []packIntegration{
-			{Name: "BambooHR", MCP: "bamboohr", Image: "bamboohr-mcp:0.0.1", Env: "BAMBOOHR_API_KEY", EnvKeys: []string{"BAMBOOHR_COMPANY_DOMAIN"}},
-			{Name: "Opine", MCP: "opine", URL: "https://app.tryopine.com/mcp"},
+			{Name: "HR", MCP: "hr", Image: "hr-mcp:0.0.1", Env: "HR_API_KEY", EnvValues: map[string]string{"HR_COMPANY_DOMAIN": "acme"}},
+			{Name: "Meetings", MCP: "meetings", URL: "https://app.trymeetings.com/mcp"},
 		},
 	}}
 	b := computeHostBoM(p, "", func(string) bool { return false })
 	if !b.tier1() {
 		t.Fatal("a host-run MCP container must require the adoption gate")
 	}
-	if len(b.Containers) != 1 || b.Containers[0].Name != "bamboohr" || b.Containers[0].Image != "bamboohr-mcp:0.0.1" {
+	if len(b.Containers) != 1 || b.Containers[0].Name != "hr" || b.Containers[0].Image != "hr-mcp:0.0.1" {
 		t.Fatalf("container disclosure = %+v", b.Containers)
 	}
-	if got := strings.Join(b.Containers[0].EnvKeys, ","); got != "BAMBOOHR_API_KEY,BAMBOOHR_COMPANY_DOMAIN" {
+	if got := strings.Join(b.Containers[0].EnvKeys, ","); got != "HR_API_KEY" {
 		t.Errorf("container env disclosure = %q", got)
 	}
-	if len(b.RemoteMCP) != 1 || b.RemoteMCP[0].Name != "opine" || b.RemoteMCP[0].URL != "https://app.tryopine.com/mcp" {
+	if b.Containers[0].EnvValues["HR_COMPANY_DOMAIN"] != "acme" {
+		t.Errorf("container literal env disclosure = %+v", b.Containers[0].EnvValues)
+	}
+	if len(b.RemoteMCP) != 1 || b.RemoteMCP[0].Name != "meetings" || b.RemoteMCP[0].URL != "https://app.trymeetings.com/mcp" {
 		t.Fatalf("remote disclosure = %+v", b.RemoteMCP)
 	}
 	var out bytes.Buffer
 	renderHostBoM(&out, b)
 	text := out.String()
-	for _, want := range []string{"BambooHR", "bamboohr-mcp:0.0.1", "BAMBOOHR_API_KEY", "Opine", "https://app.tryopine.com/mcp"} {
+	for _, want := range []string{"HR", "hr-mcp:0.0.1", "HR_API_KEY", "Meetings", "https://app.trymeetings.com/mcp"} {
 		if !strings.Contains(strings.ToLower(text), strings.ToLower(want)) {
 			t.Errorf("trust screen omitted %q:\n%s", want, text)
 		}
@@ -158,11 +168,40 @@ func TestComputeHostBoM_DisclosesContainerAndRemoteIntegrations(t *testing.T) {
 func TestComputeHostBoM_Tier0(t *testing.T) {
 	p := &packInfo{Root: "/p", Manifest: packManifest{
 		Name:         "personal",
-		Proxies:      []packProxy{{Name: "snowflake", Egress: []string{"snowflakecomputing.com"}}},
+		Proxies:      []packProxy{{Name: "warehouse", Egress: []string{"warehouse.example.test"}}},
 		Integrations: []packIntegration{{Name: "ref-only", Env: "SOME_TOKEN"}}, // env but NO mcp
 	}}
-	if b := computeHostBoM(p, "", func(string) bool { return true }); b.tier1() {
+	b := computeHostBoM(p, "", func(string) bool { return true })
+	if b.tier1() {
 		t.Errorf("no mcp, no host proxy, no bin must be Tier-0, got %+v", b)
+	}
+	if len(b.SandboxProxies) != 1 || b.SandboxProxies[0].Name != "warehouse" {
+		t.Fatalf("sandbox proxy disclosure = %+v", b.SandboxProxies)
+	}
+	var out bytes.Buffer
+	renderHostBoM(&out, b)
+	for _, want := range []string{"Sandbox command:", "warehouse", "warehouse.example.test"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("trust screen omitted %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestRenderHostBoM_UsesExecutionBoundariesAndSetupDescriptions(t *testing.T) {
+	b := hostBoM{
+		MCP:           []hostBoMMCP{{Name: "chat", Argv: []string{"pix-host", "mcp", "chat"}}},
+		Containers:    []hostBoMContainer{{Name: "people", Image: "people-mcp:1"}},
+		RemoteMCP:     []hostBoMRemote{{Name: "docs", URL: "https://docs.example.test/mcp"}},
+		Setup:         []packSetupStep{{ID: "chat", Description: "Authorize chat", Path: "setup/chat", ApplyArgs: []string{"apply"}, Required: true}},
+		Prerequisites: []string{"Your VPN is connected"},
+	}
+	var out bytes.Buffer
+	renderHostBoM(&out, b)
+	text := out.String()
+	for _, want := range []string{"Host MCP:", "people (image people-mcp:1)", "Remote MCP:", "Ensures:", "Authorize chat", "Before continuing", "Your VPN is connected"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("trust screen omitted %q:\n%s", want, text)
+		}
 	}
 }
 
@@ -324,11 +363,11 @@ func TestPackUse_Tier0StillSilent(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packManifest{Name: "personal", Schema: 1,
-		Proxies: []packProxy{{Name: "snowflake"}}}) // sandbox-only proxy: Tier-0
+		Proxies: []packProxy{{Name: "warehouse"}}}) // sandbox-only proxy: Tier-0
 	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "bin", "snowflake"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "bin", "warehouse"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer

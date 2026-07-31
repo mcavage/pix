@@ -44,9 +44,9 @@ func TestReadmeHasOnePrimaryPath(t *testing.T) {
 
 func TestReadmePrimaryPathUsesHomebrew(t *testing.T) {
 	body := primaryReadmePath(t)
-	want := "brew install mcavage/tap/pix\npix setup\npix run"
+	want := "brew install mcavage/tap/pix\npix setup"
 	if !strings.Contains(body, want) {
-		t.Fatalf("README primary path must be the three-command Homebrew flow:\n%s", want)
+		t.Fatalf("README primary path must be the two-command Homebrew flow:\n%s", want)
 	}
 	if strings.Contains(body, "curl ") {
 		t.Fatal("README primary path must not mention the deprecated curl installer")
@@ -85,7 +85,7 @@ func TestReadmePrimaryPathCommandsExist(t *testing.T) {
 			t.Errorf("README primary path documents unknown Pix verb %q", m[1])
 		}
 	}
-	for _, required := range []string{"pix setup", "pix run"} {
+	for _, required := range []string{"pix setup"} {
 		if !strings.Contains(body, required) {
 			t.Errorf("README primary path missing %q", required)
 		}

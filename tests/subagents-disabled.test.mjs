@@ -16,6 +16,8 @@ register("./stub-loader.mjs", import.meta.url);
 // An empty agent dir for the stubbed getAgentDir(): no agents, no routing.json.
 const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "subagents-test-"));
 fs.mkdirSync(path.join(agentDir, "agents"), { recursive: true });
+fs.mkdirSync(path.join(agentDir, "skills", "challenge"), { recursive: true });
+fs.writeFileSync(path.join(agentDir, "skills", "challenge", "SKILL.md"), "# challenge\n");
 process.env.PI_TEST_AGENT_DIR = agentDir;
 
 // PI_SUBAGENT_DEPTH is cleared too: when this test itself runs INSIDE a
@@ -54,6 +56,7 @@ async function loadSubagents(env) {
 		});
 		assert.ok(reg.tool, "subagent tool registered");
 		assert.ok(reg.command, "/subagents command registered");
+		reg.mod = mod;
 		return reg;
 	} finally {
 		for (const k of ENV_KEYS) {
@@ -62,6 +65,60 @@ async function loadSubagents(env) {
 		}
 	}
 }
+
+test("curated children reload generated inference providers before subagents", async () => {
+	const reg = await loadSubagents({});
+	const self = path.join(agentDir, "extensions", "subagents.ts");
+	const inference = path.join(agentDir, "extensions", "inference.ts");
+	fs.mkdirSync(path.dirname(self), { recursive: true });
+	fs.writeFileSync(self, "");
+	fs.writeFileSync(inference, "");
+	assert.deepEqual(reg.mod.coreChildExtensionArgs(self), ["-e", inference, "-e", self]);
+});
+
+test("policy-refusal detection is narrow and recognizes Anthropic cyber refusals", async () => {
+	const reg = await loadSubagents({});
+	assert.equal(
+		reg.mod.isProviderPolicyRefusal({
+			errorMessage:
+				"This request triggered restrictions on violative cyber content and was blocked under Anthropic's Usage Policy.",
+			stderr: "",
+			messages: [],
+		}),
+		true,
+	);
+	for (const errorMessage of [
+		"Model not found: docker-google/gemini",
+		"401 invalid x-api-key",
+		"request timed out",
+	]) {
+		assert.equal(
+			reg.mod.isProviderPolicyRefusal({ errorMessage, stderr: "", messages: [] }),
+			false,
+			errorMessage,
+		);
+	}
+});
+
+test("invalid compiled routes become actionable diagnostics", async () => {
+	const reg = await loadSubagents({});
+	const result = {
+		exitCode: 1,
+		stopReason: "error",
+		timedOut: null,
+		errorMessage: 'Model "docker-google/gemini-bad" not found',
+		stderr: "",
+		messages: [],
+	};
+	reg.mod.clarifyRoutedModelFailure(result, {
+		name: "review",
+		intent: "review",
+		model: "docker-google/gemini-bad",
+	});
+	assert.match(result.errorMessage, /intent "review" resolved to/);
+	assert.match(result.errorMessage, /pix run --replace/);
+	assert.match(result.errorMessage, /Original: Model/);
+});
 
 const ctx = { cwd: process.cwd(), hasUI: false, ui: null };
 const exec = (reg, params) =>
@@ -104,6 +161,14 @@ test('PI_SUBAGENT_DISABLED="0" / "false" do not disable', async () => {
 		assert.match(text(r), /Unknown agent/i, `env value ${JSON.stringify(v)}`);
 		assert.doesNotMatch(text(r), /disabled in host mode/i);
 	}
+});
+
+test("a skill name gets a skill-specific correction, not only an agent dump", async () => {
+	const reg = await loadSubagents({});
+	const r = await exec(reg, { agent: "challenge", task: "stress test this" });
+	assert.equal(r.isError, true);
+	assert.match(text(r), /"challenge" is a skill, not a subagent preset/i);
+	assert.match(text(r), /\/skill:challenge/);
 });
 
 // ── (b) an explicit MAX_DEPTH=0 is honored (num() used to reject zero) ──────

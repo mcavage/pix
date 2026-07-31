@@ -17,11 +17,12 @@ func hostStub(path string, err error) func() (string, error) {
 // gogRegistrar returns a registrar with fixed absolutes for builder tests.
 func gogRegistrar() mcpRegistrar {
 	return mcpRegistrar{
-		op:      "/usr/bin/op",
-		opRefs:  "/abs/config/op-refs.env",
-		gog:     "/usr/bin/gog",
-		account: "me@x.com",
-		hostBin: "/usr/bin/pix-host",
+		op:       "/usr/bin/op",
+		opRefs:   "/abs/config/op-refs.env",
+		gog:      "/usr/bin/gog",
+		account:  "me@x.com",
+		hostBin:  "/usr/bin/pix-host",
+		gogUseOp: true,
 	}
 }
 
@@ -251,32 +252,158 @@ func TestRegisterServers_RemoteSkipped(t *testing.T) {
 // the pack carries a URL for (containers[name].RemoteURL set) is NOT skipped — it
 // is registered via `sbx mcp add <name> --url <url>`, with no --local and no
 // op-run wrapper. This is the pack-self-registers-remotes path; it fails if the
-// RemoteURL branch is dropped and opine/notion/etc. fall back to the skip line.
+// RemoteURL branch is dropped and meetings/notion/etc. fall back to the skip line.
 func TestRegisterServers_RemoteWithURLRegistered(t *testing.T) {
 	f := fakeEnv{
 		present: map[string]bool{"op": true}, // no sbx -> would-run printed
 		output: map[string]string{
-			"/usr/bin/pix-host mcp --list": "slack\n", // opine is NOT a local server
+			"/usr/bin/pix-host mcp --list": "slack\n", // meetings is NOT a local server
 		},
 		envVars:  map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
 		statFile: map[string]bool{"/fake/config/op-refs.env": true},
 	}
 	cfg := defaultCfg()
-	cfg.MCP = []string{"opine"}
-	containers := map[string]packContainer{"opine": {RemoteURL: "https://app.tryopine.com/mcp"}}
+	cfg.MCP = []string{"meetings"}
+	containers := map[string]packContainer{"meetings": {RemoteURL: "https://app.trymeetings.com/mcp"}}
 	var buf bytes.Buffer
 	if err := registerServers(cfg, f.env(), &buf, nil, hostStub("/usr/bin/pix-host", nil), containers); !errors.Is(err, errSbxUnavailable) {
 		t.Fatalf("expected errSbxUnavailable, got: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "sbx mcp add opine --url https://app.tryopine.com/mcp") {
-		t.Errorf("expected opine registered via --url, got:\n%s", out)
+	if !strings.Contains(out, "sbx mcp add meetings --url https://app.trymeetings.com/mcp") {
+		t.Errorf("expected meetings registered via --url, got:\n%s", out)
 	}
 	if strings.Contains(out, "gateway-catalog server, not locally registered") {
-		t.Errorf("opine with a pack URL must NOT be skipped, got:\n%s", out)
+		t.Errorf("meetings with a pack URL must NOT be skipped, got:\n%s", out)
 	}
 	if strings.Contains(out, "--local") || strings.Contains(out, "--command") {
 		t.Errorf("remote-url server must not use --local/--command, got:\n%s", out)
+	}
+}
+
+func TestRegisterServers_RemoteURLUsesInteractiveRunner(t *testing.T) {
+	env := fakeEnv{
+		present: map[string]bool{"sbx": true},
+		output:  map[string]string{"/usr/bin/pix-host mcp --list": "slack\n"},
+	}.env()
+	var interactive []string
+	env.runInteractive = func(name string, args ...string) error {
+		interactive = append([]string{name}, args...)
+		return nil
+	}
+	env.probe = func(name string, args ...string) (string, bool, error) {
+		if name == "sbx" && len(args) >= 2 && args[1] == "add" {
+			t.Fatalf("remote OAuth registration was sent through the bounded probe: %s %s", name, strings.Join(args, " "))
+		}
+		if name == "sbx" {
+			return "", false, errors.New("not registered")
+		}
+		return "slack\n", false, nil
+	}
+	cfg := defaultCfg()
+	cfg.MCP = []string{"meetings"}
+	containers := map[string]packContainer{"meetings": {RemoteURL: "https://app.trymeetings.com/mcp"}}
+	var out bytes.Buffer
+	if err := registerServers(cfg, env, &out, nil, hostStub("/usr/bin/pix-host", nil), containers); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(interactive, " "); got != "sbx mcp add meetings --url https://app.trymeetings.com/mcp" {
+		t.Fatalf("interactive registration = %q", got)
+	}
+}
+
+func TestRegisterServers_CurrentRemoteDoesNotReopenOAuth(t *testing.T) {
+	endpoint := "https://app.trymeetings.com/mcp"
+	env := fakeEnv{present: map[string]bool{"sbx": true}}.env()
+	env.probe = func(name string, args ...string) (string, bool, error) {
+		command := strings.Join(args, " ")
+		if name == "sbx" && command == "mcp inspect meetings" {
+			return "URL: " + endpoint, false, nil
+		}
+		if name == "sbx" && command == "mcp auth status meetings" {
+			return "meetings: authorized", false, nil
+		}
+		return "slack\n", false, nil
+	}
+	env.runInteractive = func(string, ...string) error {
+		t.Fatal("an unchanged registered remote must not reopen OAuth")
+		return nil
+	}
+	cfg := defaultCfg()
+	cfg.MCP = []string{"meetings"}
+	if err := registerServers(cfg, env, &bytes.Buffer{}, nil, hostStub("/usr/bin/pix-host", nil),
+		map[string]packContainer{"meetings": {RemoteURL: endpoint}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRegisterServers_CurrentUnauthorizedRemoteRepairsOAuthOnce(t *testing.T) {
+	endpoint := "https://app.trymeetings.com/mcp"
+	authorized := false
+	env := fakeEnv{present: map[string]bool{"sbx": true}}.env()
+	env.probe = func(name string, args ...string) (string, bool, error) {
+		command := strings.Join(args, " ")
+		switch command {
+		case "mcp inspect meetings":
+			return `{"url":"` + endpoint + `"}`, false, nil
+		case "mcp auth status meetings":
+			if authorized {
+				return "meetings: authorized", false, nil
+			}
+			return "meetings: not authenticated", false, nil
+		default:
+			return "slack\n", false, nil
+		}
+	}
+	var interactive []string
+	env.runInteractive = func(name string, args ...string) error {
+		interactive = append([]string{name}, args...)
+		authorized = true
+		return nil
+	}
+	cfg := defaultCfg()
+	cfg.MCP = []string{"meetings"}
+	if err := registerServers(cfg, env, &bytes.Buffer{}, nil, hostStub("/usr/bin/pix-host", nil),
+		map[string]packContainer{"meetings": {RemoteURL: endpoint}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(interactive, " "); got != "sbx mcp auth meetings" {
+		t.Fatalf("repair command = %q", got)
+	}
+}
+
+func TestRemoteMCPRegistrationCurrentRejectsEndpointSubstring(t *testing.T) {
+	want := "https://expected.example/mcp"
+	env := shellEnv{probe: func(string, ...string) (string, bool, error) {
+		return `{"url":"https://evil.example/?next=https://expected.example/mcp"}`, false, nil
+	}}
+	if remoteMCPRegistrationCurrent(env, "meetings", want) {
+		t.Fatal("an endpoint embedded inside another URL must not count as the registered endpoint")
+	}
+}
+
+func TestRemoteMCPRegistrationCurrentRequiresEndpointField(t *testing.T) {
+	want := "https://expected.example/mcp?a=1&b=2"
+	for _, payload := range []string{
+		`{"url":"https://evil.example/mcp","note":"https://expected.example/mcp?a=1&b=2"}`,
+		`{"callback_url":"https://expected.example/mcp?a=1&b=2"}`,
+		`{"url":"https://evil.example/mcp","nested":{"endpoint":"https://expected.example/mcp?a=1&b=2"}}`,
+		`url: https://evil.example/?next=https://expected.example/mcp?a=1&b=2`,
+	} {
+		env := shellEnv{probe: func(string, ...string) (string, bool, error) { return payload, false, nil }}
+		if remoteMCPRegistrationCurrent(env, "meetings", want) {
+			t.Fatalf("non-endpoint evidence was trusted: %s", payload)
+		}
+	}
+}
+
+func TestRemoteMCPRegistrationCurrentCanonicalExactMatch(t *testing.T) {
+	want := "https://expected.example/mcp?b=2&a=1"
+	env := shellEnv{probe: func(string, ...string) (string, bool, error) {
+		return `{"server":{"remote_url":"HTTPS://EXPECTED.EXAMPLE:443/mcp?a=1&b=2"}}`, false, nil
+	}}
+	if !remoteMCPRegistrationCurrent(env, "meetings", want) {
+		t.Fatal("canonically identical endpoint field was not recognized")
 	}
 }
 
@@ -405,6 +532,9 @@ func TestRegisterServers_Registers(t *testing.T) {
 	// Provide success output for the exact sbx call the registrar builds.
 	reg := mcpRegistrar{op: "/usr/bin/op", opRefs: "/fake/config/op-refs.env", gog: "/usr/bin/gog", account: "me@x.com"}
 	key := strings.Join(append([]string{"sbx"}, reg.addArgs(gwServerName)...), " ")
+	if strings.Contains(key, "--command /usr/bin/op") {
+		t.Fatalf("unrelated op-refs must not wrap normal gog OAuth: %s", key)
+	}
 	f.output[key] = "ok"
 	var buf bytes.Buffer
 	if err := registerServers(cfg, f.env(), &buf, []string{gwServerName}, hostStub("", nil), nil); err != nil {
@@ -412,6 +542,9 @@ func TestRegisterServers_Registers(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "registered: google-workspace") {
 		t.Errorf("expected registered: google-workspace, got:\n%s", buf.String())
+	}
+	if strings.Contains(buf.String(), "Each wrapped server") {
+		t.Errorf("bare gog registration claimed to use an op wrapper:\n%s", buf.String())
 	}
 }
 
@@ -464,8 +597,8 @@ func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 		hostBin: "/usr/local/bin/pix-host",
 		containers: map[string]packContainer{
 			"notion-ish": {Manifest: "https://example.com/mcp/x/server.json"},
-			"bamboohr":   {Image: "bamboohr-mcp:0.0.1", EnvKeys: []string{"BAMBOOHR_API_KEY", "BAMBOOHR_COMPANY_DOMAIN"}},
-			"opine":      {RemoteURL: "https://app.tryopine.com/mcp"},
+			"hr":         {Image: "hr-mcp:0.0.1", EnvKeys: []string{"HR_API_KEY"}, EnvValues: map[string]string{"HR_COMPANY_DOMAIN": "acme"}},
+			"meetings":   {RemoteURL: "https://app.trymeetings.com/mcp"},
 		},
 	}
 
@@ -478,22 +611,22 @@ func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 
 	// Remote container: --url (remote endpoint), NO --local and NOT op-run wrapped
 	// (OAuth is handled host-side by the gateway).
-	rem := strings.Join(reg.addArgs("opine"), " ")
-	if rem != "mcp add opine --url https://app.tryopine.com/mcp" {
-		t.Fatalf("remote-url addArgs:\n got: %s\nwant: mcp add opine --url https://app.tryopine.com/mcp", rem)
+	rem := strings.Join(reg.addArgs("meetings"), " ")
+	if rem != "mcp add meetings --url https://app.trymeetings.com/mcp" {
+		t.Fatalf("remote-url addArgs:\n got: %s\nwant: mcp add meetings --url https://app.trymeetings.com/mcp", rem)
 	}
 	if strings.Contains(rem, "--local") || strings.Contains(rem, "--command") {
 		t.Fatalf("remote-url container must not use --local/--command, got:\n%s", rem)
 	}
 
 	// Image container: op-run-wrapped `docker run -i --rm -e KEY… <image>`.
-	img := strings.Join(reg.addArgs("bamboohr"), " ")
+	img := strings.Join(reg.addArgs("hr"), " ")
 	for _, must := range []string{
-		"mcp add bamboohr --command /usr/bin/op",
+		"mcp add hr --command /usr/bin/op",
 		"--args run", "--args --env-file=/abs/op-refs.env", "--args --",
 		"--args docker --args run --args -i --args --rm",
-		"--args -e --args BAMBOOHR_API_KEY --args -e --args BAMBOOHR_COMPANY_DOMAIN",
-		"--args bamboohr-mcp:0.0.1",
+		"--args -e --args HR_API_KEY --args -e --args HR_COMPANY_DOMAIN=acme",
+		"--args hr-mcp:0.0.1",
 	} {
 		if !strings.Contains(img, must) {
 			t.Fatalf("image addArgs missing %q in:\n%s", must, img)
@@ -510,5 +643,32 @@ func TestMcpRegistrar_ContainerAddArgs(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(slack, " "), "--local") {
 		t.Fatalf("non-container server must not use --local, got: %v", slack)
+	}
+}
+
+func TestBuildGogRegistrarIgnoresUnrelatedOpRefs(t *testing.T) {
+	dir := t.TempDir()
+	refs := filepath.Join(dir, "op-refs.env")
+	if err := os.WriteFile(refs, []byte("EXAMPLE_API_KEY=op://Private/Example/key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := defaultShellEnv()
+	env.lookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
+	env.getenv = func(key string) string {
+		if key == "PIX_CONFIG" {
+			return filepath.Join(dir, "config.toml")
+		}
+		return ""
+	}
+	reg := buildGogRegistrar(env, "/usr/bin/gog", "you@example.com")
+	if reg.opRefs != "" || strings.HasSuffix(reg.execArgv(gwServerName)[0], "/op") {
+		t.Fatalf("unrelated refs wrapped gog: %+v", reg.execArgv(gwServerName))
+	}
+	if err := os.WriteFile(refs, []byte("GOG_KEYRING_PASSWORD=op://Private/Gog/password\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reg = buildGogRegistrar(env, "/usr/bin/gog", "you@example.com")
+	if reg.opRefs == "" {
+		t.Fatal("explicit gog file-keyring password ref did not enable op wrapper")
 	}
 }

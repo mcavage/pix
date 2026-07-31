@@ -152,7 +152,7 @@ Found during planning, all verified against source. Each is live today.
    files. The user then sees a version that flips back and forth days later with
    nothing tying it to pix. **Shipping the formula without fixing this first is the
    most damaging outcome available.**
-2. **`pix uninstall` lies.** `resolveBinPaths` in `reset.go` hardcodes
+2. **Legacy uninstall ownership was split.** The old launcher path hardcoded
    `~/.local/bin`, so on a brew install it resets all state, removes no binaries,
    reports success, and leaves `pix` on PATH.
 3. **Duplicate installs are silent.** `~/.local/bin` usually precedes the brew
@@ -186,7 +186,7 @@ serve` whose binary just vanished will respawn-fail forever, and the only tool t
 stops it correctly is the binary just deleted.
 
 So the order is documented everywhere a user might read it at the decision point,
-including formula `caveats`: **`pix state uninstall` first, `brew uninstall`
+including formula `caveats`: **`pix reset` first, `brew uninstall`
 second.**
 
 ## Confidence limit

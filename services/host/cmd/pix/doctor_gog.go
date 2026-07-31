@@ -93,7 +93,7 @@ func gogHeadlessProbe(env shellEnv, acct, opRefs string) probeResult {
 		return probeResult{status: probeError, detail: "could not run (gog not found)"}
 	}
 	opPath, opErr := env.lookPath("op")
-	if opErr != nil || opRefs == "" {
+	if opErr != nil || opRefs == "" || !opRefFilled(env, "GOG_KEYRING_PASSWORD") {
 		opPath, opRefs = "", ""
 	}
 	return probeListTools(env, gogRegisteredArgv(gogPath, opPath, opRefs, acct))
@@ -129,7 +129,7 @@ func gogSpawnCheck(env shellEnv, res probeResult, readyDetail, noToolsDetail str
 			evidence: "probe output carried an explicit policy denial"}
 	default: // probeTimedOut / probeError — unverifiable, never a keyring claim
 		return check{label: "headless spawn", verdict: verdictUnverifiable,
-			detail:   "probe " + res.detail + " — could not verify (inspect: sbx mcp inspect gog)",
+			detail:   "probe " + res.detail + " — could not verify (inspect: sbx mcp inspect " + gwServerName + ")",
 			evidence: "probe " + res.detail}
 	}
 }
@@ -177,7 +177,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 		trustedArgv, trusted := trustedGogSpawn(env, argv)
 		if !trusted {
 			g.checks = append(g.checks, check{label: "headless spawn", verdict: verdictUnverifiable,
-				detail:   "probe skipped: the registered command's gog/op executable does not match the PATH-resolved binary (inspect: sbx mcp inspect gog) — never executed",
+				detail:   "probe skipped: the registered command's gog/op executable does not match the PATH-resolved binary (inspect: sbx mcp inspect " + gwServerName + ") — never executed",
 				evidence: "registered executable token not canonical; probe not executed"})
 			g.checks = append(g.checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
 			g.checks = append(g.checks, gogAttachCheck(cfg, ctx, gogReg))
@@ -372,7 +372,7 @@ func gogSpawnIsOpWrapped(argv []string) bool {
 // registeredGogCommand asks sbx what command it ACTUALLY registered for the gog
 // MCP server, so doctor can probe the real registration instead of a config
 // reconstruction that may have drifted from what `make mcp-register` wired up.
-// It tries, in order, current `sbx mcp inspect gog`, legacy `get`,
+// It tries, in order, current `sbx mcp inspect google-workspace`, legacy `get`,
 // `sbx mcp ls -o json`, then the current
 // `sbx mcp ls` plain table, returning the parsed argv. Returns (nil,false) when
 // sbx is absent or exposes no complete command; the caller then falls back to
@@ -409,10 +409,10 @@ func registeredGogCommand(env shellEnv) ([]string, bool) {
 }
 
 // gogCommandLineRe matches a `command: <full command>` (or `command = ...`) line
-// in `sbx mcp inspect gog` output (or the legacy `get` output).
+// in `sbx mcp inspect google-workspace` output (or the legacy `get` output).
 var gogCommandLineRe = regexp.MustCompile(`(?im)^\s*command\s*[:=]\s*(.+?)\s*$`)
 
-// parseGogCommandLine extracts the registered argv from an `sbx mcp inspect gog`
+// parseGogCommandLine extracts the registered argv from an `sbx mcp inspect google-workspace`
 // (or legacy `get`)
 // text dump: the `command:` line, split into fields. It only accepts an
 // UNAMBIGUOUS, COMPLETE command (see gogCommandComplete). A shell-quoted line

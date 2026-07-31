@@ -22,9 +22,11 @@
 //     which pack put them there, so clear/swap stays reliable even when the
 //     pack directory itself is gone. Attribution is only discarded once
 //     removal is CONFIRMED.
-//   - Activation: the Phase-1 ACTIVATION PROVENANCE (which mcp/knowledge/
+//   - Activation/Activations: the Phase-1 ACTIVATION PROVENANCE (which mcp/knowledge/
 //     gog_account/ollama_bridge_model entries the ACTIVE pack's last
-//     activation contributed, plus the prior config values to restore).
+//     activation contributed, plus the prior config values to restore). The
+//     ordered Activations ledger represents a composed stack; Activation is
+//     retained for backward compatibility with single-pack state.
 //     This used to live only in pack.lock — INSIDE the pack payload — so a
 //     local `git pull`/zip update could forge it and make the next
 //     switch-away DELETE the user's own config entries (the same-pack
@@ -160,9 +162,9 @@ type packInstalledSet struct {
 
 // packActivationRecord is the HOST-owned copy of one activation's Phase-1
 // contribution set (what commitPackActivation used to trust pack.lock for).
-// There is at most one — the ACTIVE pack's. Keyed by the same pack identity
-// as acceptance (Owner = trustKey at activation time) plus the canonical
-// path, so lookups survive a later path→remote identity upgrade.
+// A composed stack has one record per active pack, in command order. It is
+// keyed by the same pack identity as acceptance (Owner = trustKey at activation
+// time) plus the canonical path, so lookups survive a path→remote upgrade.
 type packActivationRecord struct {
 	Owner                  string   `json:"owner"`
 	Path                   string   `json:"path"`
@@ -180,6 +182,10 @@ type packTrustStore struct {
 	Adopted    map[string]packProvenance  `json:"adopted,omitempty"`
 	Installed  *packInstalledSet          `json:"installed,omitempty"`
 	Activation *packActivationRecord      `json:"activation,omitempty"`
+	// Activations is the ordered ownership ledger for a composed pack stack.
+	// Activation remains the backward-compatible single-pack field. New stack
+	// writes populate Activations and clear Activation; readers accept both.
+	Activations []packActivationRecord `json:"activations,omitempty"`
 }
 
 // loadPackTrustStore reads the trust store. Absent → an empty store (fresh
@@ -291,10 +297,10 @@ func (s *packTrustStore) recordAcceptance(key string, rec packTrustRecord) {
 // zero value is returned (remove NOTHING; the safe default, same posture as
 // a missing lock). Nothing here ever reads the pack payload.
 func (s *packTrustStore) activationFor(root string) packLock {
-	if !s.hasActivationFor(root) {
+	a := s.activationRecordFor(root)
+	if a == nil {
 		return packLock{}
 	}
-	a := s.Activation
 	return packLock{
 		MCP:                    append([]string(nil), a.MCP...),
 		Knowledge:              append([]string(nil), a.Knowledge...),
@@ -311,14 +317,36 @@ func (s *packTrustStore) activationFor(root string) packLock {
 // Phase-1 migration (migratePhase1Activation) can tell "no record" apart
 // from "a record with an empty contribution set".
 func (s *packTrustStore) hasActivationFor(root string) bool {
-	return s != nil && s.Activation != nil &&
-		(s.Activation.Path == canonicalizePackRoot(root) || s.Activation.Owner == s.trustKey(root))
+	return s.activationRecordFor(root) != nil
+}
+
+func (s *packTrustStore) activationRecordFor(root string) *packActivationRecord {
+	if s == nil {
+		return nil
+	}
+	path, owner := canonicalizePackRoot(root), s.trustKey(root)
+	for i := len(s.Activations) - 1; i >= 0; i-- {
+		a := &s.Activations[i]
+		if a.Path == path || a.Owner == owner {
+			return a
+		}
+	}
+	if s.Activation != nil && (s.Activation.Path == path || s.Activation.Owner == owner) {
+		return s.Activation
+	}
+	return nil
 }
 
 // setActivation records lock as the active pack's contribution set (the
 // caller saves the store; commitPackActivation owns the write ordering).
 func (s *packTrustStore) setActivation(root string, lock packLock) {
-	s.Activation = &packActivationRecord{
+	a := s.newActivationRecord(root, lock)
+	s.Activation = &a
+	s.Activations = nil
+}
+
+func (s *packTrustStore) newActivationRecord(root string, lock packLock) packActivationRecord {
+	return packActivationRecord{
 		Owner:                  s.trustKey(root),
 		Path:                   canonicalizePackRoot(root),
 		MCP:                    append([]string(nil), lock.MCP...),
@@ -328,6 +356,16 @@ func (s *packTrustStore) setActivation(root string, lock packLock) {
 		OllamaBridgeModel:      lock.OllamaBridgeModel,
 		PriorOllamaBridgeModel: lock.PriorOllamaBridgeModel,
 	}
+}
+
+func (s *packTrustStore) setActivationStack(records []packActivationRecord) {
+	s.Activation = nil
+	s.Activations = append([]packActivationRecord(nil), records...)
+}
+
+func (s *packTrustStore) clearActivations() {
+	s.Activation = nil
+	s.Activations = nil
 }
 
 // recordPackAdoptionInTrustStore durably records clone provenance in HOST

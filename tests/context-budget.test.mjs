@@ -37,7 +37,7 @@ const KNOWN_OVER_BUDGET = [
 		id: "project-context",
 		ceiling: 42_000,
 		why:
-			"AGENTS.md (36.8 KB) + the kit agentContext (3.9 KB) against an 8 KB budget. " +
+			"AGENTS.md (36.8 KB) + the kit agentInstructions (3.9 KB) against an 8 KB budget. " +
 			"U-W0b.08 removed the 15 KB launcher CLI reference; the remainder is repo layout, build/load/run, " +
 			"extension and skill authoring rules, and the hard-won gotchas — all of it load-bearing prose that a " +
 			"byte trim cannot delete, only RESTRUCTURE into always/on-demand/reference tiers. That restructuring is " +

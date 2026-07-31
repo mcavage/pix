@@ -12,7 +12,7 @@
 # nag (pi checks npm at runtime, so a new release always nags until you rebump).
 # When bumping, re-check the vendored tui patch still applies (build logs print
 # "[apply-tui-bottom-pin] patched" vs an "anchor not found" warning).
-ARG PI_PACKAGE=@earendil-works/pi-coding-agent@0.82.1
+ARG PI_PACKAGE=@earendil-works/pi-coding-agent@0.83.0
 
 # Hardened Node, maintained by Docker (DHI). Debian/glibc, so our entire apt
 # toolchain (clangd, chromium, gh, ruff, build-essential) keeps working — we just
@@ -251,6 +251,12 @@ RUN set -eux; for p in \
 # `/todos clear` in pi-manage-todo-list 0.4.0 clears only live memory. Persist
 # the clear marker so session resume and compaction continuation respect it.
 RUN node /usr/local/share/pix/patches/apply-todo-durable-clear.mjs
+
+# pi-web-access 0.13.0 hardcodes api.openai.com + gpt-5.4 for native Responses
+# search. Add the two configuration seams a private pack needs to reuse its
+# already trust-gated OpenAI Responses backend. The patch is pinned, exact, and
+# fails the image build if the upstream source moves.
+RUN node /usr/local/share/pix/patches/apply-web-access-gateway.mjs
 
 # Bound the subagent result-wait so a dead subagent can't park the event loop
 # (Esc-proof hang). Idempotent + non-fatal. DISABLED alongside pi-subagents above

@@ -57,6 +57,28 @@ func TestSeededOpRefsHasNoActiveEntries(t *testing.T) {
 	if refs := parseOpRefs(string(content)); len(refs) != 0 {
 		t.Errorf("freshly seeded op-refs.env has %d active entries, want 0: %+v", len(refs), refs)
 	}
+	for i, line := range strings.Split(string(content), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") && opRefLineKey(line) == "" {
+			t.Errorf("template line %d is invalid dotenv prose: %q", i+1, line)
+		}
+	}
+}
+
+func TestRepairLegacyOpRefsTemplate(t *testing.T) {
+	in := "# header\nhost MCP server it resolves those refs from 1Password and injects them as env\n" +
+		"vars — the secret never touches disk or the sandbox. A server with no creds\n" +
+		"(pio) needs no entry.\nEXAMPLE_KEY=op://Vault/Item/field\n"
+	got, changed := repairLegacyOpRefsTemplate(in)
+	if !changed {
+		t.Fatal("expected legacy template repair")
+	}
+	if !strings.Contains(got, "# host MCP server") || !strings.Contains(got, "EXAMPLE_KEY=op://Vault/Item/field") {
+		t.Fatalf("repair did not preserve/refactor expected lines:\n%s", got)
+	}
+	if again, changed := repairLegacyOpRefsTemplate(got); changed || again != got {
+		t.Fatal("repair must be idempotent")
+	}
 }
 
 // TestSecretLsShortLiteralFlagged covers F4 parity in `secret ls`: a short,

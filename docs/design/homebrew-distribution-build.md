@@ -94,12 +94,12 @@ verify, but the CONSEQUENCE needs observing): `brew uninstall pix` deletes
 the Cellar binaries out from under a launchd job that has no idea the
 formula existed. Run `pix serve install`, confirm it's up
 (`pix serve status`), then `brew uninstall mcavage/tap/pix` directly (skip
-`pix state uninstall`), and watch `launchctl list | grep pix` and
+`pix reset`), and watch `launchctl list | grep pix` and
 `~/Library/Logs` (or wherever the launchd stderr redirects) for the
 respawn-fail loop. This determines exactly how loud the formula's `caveats`
-block and the `pix state uninstall` step need to be in Step 7/Step 4 - if
+block and the `pix reset` step need to be in Step 7/Step 4 - if
 launchd's `KeepAlive` just quietly retries a dead binary forever with no
-visible symptom, the caveats need to say "you MUST run `pix state uninstall`
+visible symptom, the caveats need to say "you MUST run `pix reset`
 first" in the strongest language a caveats block supports; if it's obviously
 broken (crash loop in Console.app), a lighter caveats note may do.
 
@@ -129,7 +129,7 @@ section still unverified.
   running `pix-host`; launchd continued to report that process as running and
   no immediate error reached `serve.log`. The failure is latent: the next
   launch after logout, crash, or service restart cannot execute the missing
-  Cellar path. Caveats must require `pix state uninstall` first, but must not
+  Cellar path. Caveats must require `pix reset` first, but must not
   claim that an immediate visible respawn loop was observed.
 
 ---
@@ -490,7 +490,7 @@ but false "success" while `brew` still owns real files elsewhere.
 ```go
 // resolveBinPaths returns the installed launcher paths pix should try to
 // remove - but on a Homebrew install, pix itself must never touch them; only
-// `brew uninstall` may. Consults the provenance detector so `pix uninstall`
+// `brew uninstall` may. Consults the provenance detector so lifecycle cleanup
 // tells the truth about who owns these files.
 func resolveBinPaths(env shellEnv) []string {
 	home := ""
@@ -504,7 +504,7 @@ func resolveBinPaths(env shellEnv) []string {
 	}
 }
 
-// homebrewUninstallNotice is what `pix uninstall` prints instead of trying
+// homebrewUninstallNotice describes the explicit reset-then-Homebrew boundary
 // to remove binaries, when provenance says Homebrew owns them. Returns ""
 // when the running install isn't Homebrew (the existing removeBinSymlinks
 // path applies as before).
@@ -514,7 +514,7 @@ func homebrewUninstallNotice(prov provenance, stdin io.Reader, out io.Writer, ru
 	}
 	fmt.Fprintln(out, "Binaries + man page are owned by Homebrew, not pix.")
 	fmt.Fprintln(out, "pix will NOT touch them here. Uninstall order matters:")
-	fmt.Fprintln(out, "  1. pix state uninstall   (already ran - this stops/clears host state first)")
+	fmt.Fprintln(out, "  1. pix reset             (already ran - this stops/clears host state first)")
 	fmt.Fprintln(out, "  2. brew uninstall mcavage/tap/pix")
 	fmt.Fprintln(out, "Running step 2 out of order leaves a launchd job pointed at a binary that no")
 	fmt.Fprintln(out, "longer exists, which retries forever with no visible symptom (see caveats).")
@@ -889,7 +889,7 @@ class Pix < Formula
     <<~EOS
       Run `pix setup` to install prerequisites (op, sbx, ollama, gh) and finish onboarding.
 
-      To uninstall: run `pix state uninstall` FIRST, then `brew uninstall mcavage/tap/pix`.
+      To uninstall: run `pix reset` FIRST, then `brew uninstall mcavage/tap/pix`.
       Doing it in the other order leaves a launchd job pointed at a binary that no
       longer exists, and it will retry forever with no visible error.
     EOS
@@ -1217,7 +1217,7 @@ file):
  ```bash
 -brew install docker/tap/pix
 +brew install mcavage/tap/pix
- pix setup --pack docker/gm-pix-pack
+ pix setup --pack your-org/work-pack
  pix run
  ```
 ```
@@ -1270,7 +1270,7 @@ clean `~` with no prior pix install:
    `~/.local/bin` first, then brew-install): bare `pix` and `pix doctor` both
    show the shadow warning, name both paths, and the suggested fix never
    deletes anything by itself.
-8. `pix state uninstall` then `brew uninstall mcavage/tap/pix` - no
+8. `pix reset` then `brew uninstall mcavage/tap/pix` - no
    orphaned `launchd` job left retrying (confirm via `launchctl list | grep
    pix` - empty, or absent if `serve install` was never run in this pass).
    Reversing the order (`brew uninstall` first) is the documented-bad path

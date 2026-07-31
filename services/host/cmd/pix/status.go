@@ -80,24 +80,26 @@ func renderStatus(cfg *config.Config, profile string, env shellEnv, out io.Write
 
 // statusReport is the machine-readable status snapshot (also drives --json).
 type statusReport struct {
-	Version         string          `json:"version"`
-	ConfigPath      string          `json:"config_path"`
-	Profile         string          `json:"profile"`
-	Memory          bool            `json:"memory_up"`
-	Knowledge       bool            `json:"knowledge_up"`
-	Monitor         bool            `json:"monitor_up"`
-	Providers       map[string]bool `json:"providers"`
-	Bundles         []bundleStatus  `json:"knowledge_bundles"`
-	MCP             []string        `json:"mcp"`
-	MCPServers      []mcpStatusLine `json:"mcp_servers"`
-	MCPRows         []mcpSandboxRow `json:"mcp_sandbox_rows,omitempty"`
-	Sandboxes       []sandboxLine   `json:"sandboxes"`
-	Tasks           int             `json:"tasks"`
-	ArtifactB       int64           `json:"artifact_bytes"`
-	Todos           []string        `json:"todos"`
-	GogAccount      string          `json:"gog_account,omitempty"`
-	GogAuthed       bool            `json:"gog_authed,omitempty"`
-	InstallWarnings []string        `json:"install_warnings,omitempty"`
+	Version           string          `json:"version"`
+	ConfigPath        string          `json:"config_path"`
+	Profile           string          `json:"profile"`
+	Memory            bool            `json:"memory_up"`
+	Knowledge         bool            `json:"knowledge_up"`
+	Monitor           bool            `json:"monitor_up"`
+	Providers         map[string]bool `json:"providers"`
+	InferenceModels   int             `json:"inference_models,omitempty"`
+	InferenceBackends []string        `json:"inference_backends,omitempty"`
+	Bundles           []bundleStatus  `json:"knowledge_bundles"`
+	MCP               []string        `json:"mcp"`
+	MCPServers        []mcpStatusLine `json:"mcp_servers"`
+	MCPRows           []mcpSandboxRow `json:"mcp_sandbox_rows,omitempty"`
+	Sandboxes         []sandboxLine   `json:"sandboxes"`
+	Tasks             int             `json:"tasks"`
+	ArtifactB         int64           `json:"artifact_bytes"`
+	Todos             []string        `json:"todos"`
+	GogAccount        string          `json:"gog_account,omitempty"`
+	GogAuthed         bool            `json:"gog_authed,omitempty"`
+	InstallWarnings   []string        `json:"install_warnings,omitempty"`
 	// Checks is the shared, flat readiness array (the SAME row type doctor
 	// --json emits: axis/requirement/verdict/evidence/fix/duration_ms/
 	// endpoint), and Exit is the process exit code this same data produced.
@@ -228,6 +230,7 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	for _, key := range []string{"anthropic", "openai", "google", "github"} {
 		st.Providers[key] = sbxOK && grepWord(sbxOut, key)
 	}
+	st.InferenceModels, st.InferenceBackends = configuredInferenceSummary(cfg)
 	// Every repair the snapshot's axes verified is taken FROM the snapshot, so
 	// status can never print a different fix command than doctor for the same
 	// fact. Unverifiable axes contribute no TODO by construction (a repair we
@@ -246,6 +249,7 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	// installed-but-the-probe-failed. Not emitted when sbxOK is true (the core
 	// TODO above covers that case).
 	switch {
+	case st.InferenceModels > 0:
 	case !sbxOnPath:
 		st.Todos = append(st.Todos, "install the Docker Sandboxes CLI (sbx) to verify provider keys")
 	case !sbxOK:
@@ -421,11 +425,15 @@ func (st statusReport) render(out io.Writer) {
 		okGlyph(st.Memory), memoryClient().Port, okGlyph(st.Knowledge), knowledgeClient().Port, serve)
 	fmt.Fprintf(out, "  monitor     %s :%d    (on-demand: `pix monitor`)\n", okGlyph(st.Monitor), monitor.DefaultPort)
 
-	var prov []string
-	for _, k := range []string{"anthropic", "openai", "google", "github"} {
-		prov = append(prov, fmt.Sprintf("%s %s", k, okGlyph(st.Providers[k])))
+	if st.InferenceModels > 0 {
+		fmt.Fprintf(out, "  inference   %d model(s) via %s\n", st.InferenceModels, strings.Join(st.InferenceBackends, ", "))
+	} else {
+		var prov []string
+		for _, k := range []string{"anthropic", "openai", "google", "github"} {
+			prov = append(prov, fmt.Sprintf("%s %s", k, okGlyph(st.Providers[k])))
+		}
+		fmt.Fprintf(out, "  providers   %s\n", strings.Join(prov, "  "))
 	}
-	fmt.Fprintf(out, "  providers   %s\n", strings.Join(prov, "  "))
 
 	if len(st.Bundles) == 0 {
 		fmt.Fprintln(out, "  knowledge   (no bundle); `pix knowledge init`")

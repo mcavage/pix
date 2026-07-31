@@ -17,7 +17,7 @@ func TestLoadAbsentReturnsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() absent file: got err %v, want nil", err)
 	}
-	if want := []string{"memory"}; len(c.Services) != len(want) || c.Services[0] != want[0] {
+	if want := []string{}; len(c.Services) != len(want) {
 		t.Errorf("Services = %v, want %v", c.Services, want)
 	}
 	if c.MemoryWatcherModel != DefaultMemoryWatcherModel {

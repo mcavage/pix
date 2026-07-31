@@ -46,14 +46,17 @@ import (
 // by renderHostBoM, gated by packTrustGate, and accepted as a fingerprint in
 // the HOST trust store (computeHostExecFingerprint + packtruststore.go).
 type hostBoM struct {
-	MCP        []hostBoMMCP       // built-in MCP servers the gateway spawns on the host
-	Containers []hostBoMContainer // OCI MCP servers Docker runs on the host
-	RemoteMCP  []hostBoMRemote    // remote MCP endpoints attached by the pack
-	Proxies    []string           // host=true [[proxy]] wrapper names (bin/<name>)
-	Bins       []packBin          // [[bin]] external binaries (path + pinned sha)
-	Egress     []string           // union of every facet's declared egress, sorted
-	Creds      []string           // credential ENV VAR names solicited (never values)
-	Setup      []packSetupStep    // pack setup executables, probes, and apply argv
+	MCP            []hostBoMMCP       // built-in MCP servers the gateway spawns on the host
+	Containers     []hostBoMContainer // OCI MCP servers Docker runs on the host
+	RemoteMCP      []hostBoMRemote    // remote MCP endpoints attached by the pack
+	Proxies        []string           // host=true [[proxy]] wrapper names (bin/<name>)
+	SandboxProxies []packProxy        // host=false wrappers: sandbox commands forwarding elsewhere
+	Bins           []packBin          // [[bin]] external binaries (path + pinned sha)
+	Egress         []string           // union of every facet's declared egress, sorted
+	Creds          []string           // credential ENV VAR names solicited (never values)
+	Prerequisites  []string           // pack-authored external state the user must bring
+	Setup          []packSetupStep    // pack setup executables, probes, and apply argv
+	Inference      []hostBoMInference // model endpoints plus credential-routing policy
 }
 
 // hostBoMMCP is one host-spawned MCP server: its name plus the exact argv the
@@ -66,10 +69,11 @@ type hostBoMMCP struct {
 }
 
 type hostBoMContainer struct {
-	Name     string
-	Image    string
-	Manifest string
-	EnvKeys  []string
+	Name      string
+	Image     string
+	Manifest  string
+	EnvKeys   []string
+	EnvValues map[string]string
 }
 
 type hostBoMRemote struct {
@@ -77,14 +81,53 @@ type hostBoMRemote struct {
 	URL  string
 }
 
+type hostBoMInference struct {
+	Name    string
+	URL     string
+	Auth    string
+	Service string
+	Header  string
+	Format  string
+}
+
 // tier1 reports whether any host-exec facet is present — the Tier-0/Tier-1
 // split of packs.md §9. Egress and creds alone never raise the tier (a
 // sandbox wrapper's egress is fenced by the kit allowlist; a credential ref is
 // solicited, not executed). b.MCP holds only LOCAL host-spawned servers and
-// b.Bins only host=true entries (computeHostBoM filters), so a reference-only
-// remote MCP or an inert host=false [[bin]] never raises the tier.
+// b.Bins only host=true entries (computeHostBoM filters). An explicit remote
+// MCP endpoint does raise the tier: adopting it sends conversation context to
+// a pack-selected third party and may launch OAuth, so it requires consent.
 func (b hostBoM) tier1() bool {
-	return len(b.MCP) > 0 || len(b.Containers) > 0 || len(b.Proxies) > 0 || len(b.Bins) > 0 || len(b.Setup) > 0
+	return len(b.MCP) > 0 || len(b.Containers) > 0 || len(b.RemoteMCP) > 0 || len(b.Proxies) > 0 || len(b.Bins) > 0 || len(b.Setup) > 0 || len(b.Inference) > 0
+}
+
+// verifyPackInferenceTrust closes the adoption-to-launch gap for credential-
+// routing inference. A pack remains mutable after `pack use`; before a sandbox
+// consumes its endpoint/service/header policy, recompute the accepted surface
+// and require an exact launcher-owned trust-store match.
+func verifyPackInferenceTrust(p *packInfo, cfgGogAccount string, env shellEnv) error {
+	if p == nil {
+		return nil
+	}
+	bom := computeHostBoM(p, cfgGogAccount, localMCPClassifier(env, hostBinaryResolver))
+	if len(bom.Inference) == 0 {
+		return nil
+	}
+	fp, _, err := computeHostExecFingerprint(p.Root, bom)
+	if err != nil {
+		return fmt.Errorf("pack %s inference trust surface: %w", p.Manifest.Name, err)
+	}
+	return withPackTrustLock(func() error {
+		store, err := loadPackTrustStore()
+		if err != nil {
+			return fmt.Errorf("pack trust state unreadable: %w", err)
+		}
+		key := store.trustKey(p.Root)
+		if got, ok := store.acceptedFingerprint(key); !ok || got != fp {
+			return fmt.Errorf("pack %s inference credential routing is not accepted (or changed since acceptance) — run `pix pack use %s` to review it", p.Manifest.Name, p.Root)
+		}
+		return nil
+	})
 }
 
 // localMCPClassifier resolves mcpRegistrar's local-vs-gateway partition into
@@ -174,7 +217,7 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 				keys = append([]string{env}, keys...)
 			}
 			b.Containers = append(b.Containers, hostBoMContainer{
-				Name: name, Image: strings.TrimSpace(ig.Image), Manifest: strings.TrimSpace(ig.Manifest), EnvKeys: keys,
+				Name: name, Image: strings.TrimSpace(ig.Image), Manifest: strings.TrimSpace(ig.Manifest), EnvKeys: keys, EnvValues: ig.EnvValues,
 			})
 		case strings.TrimSpace(ig.URL) != "":
 			b.RemoteMCP = append(b.RemoteMCP, hostBoMRemote{Name: name, URL: strings.TrimSpace(ig.URL)})
@@ -186,6 +229,8 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 	for _, pr := range p.Manifest.Proxies {
 		if pr.Host {
 			b.Proxies = append(b.Proxies, pr.Name)
+		} else {
+			b.SandboxProxies = append(b.SandboxProxies, pr)
 		}
 		for _, e := range pr.Egress {
 			if e = strings.TrimSpace(e); e != "" {
@@ -199,6 +244,16 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 		}
 	}
 	b.Setup = append(b.Setup, p.Manifest.Setup...)
+	if p.Manifest.Inference != nil {
+		for name, backend := range p.Manifest.Inference.Backends {
+			b.Inference = append(b.Inference, hostBoMInference{
+				Name: name, URL: backend.BaseURL, Auth: backend.Auth,
+				Service: backend.CredentialService, Header: backend.CredentialHeader, Format: backend.CredentialFormat,
+			})
+		}
+		sort.Slice(b.Inference, func(i, j int) bool { return b.Inference[i].Name < b.Inference[j].Name })
+	}
+	b.Prerequisites = append(b.Prerequisites, p.Manifest.Prerequisites...)
 	for e := range egress {
 		b.Egress = append(b.Egress, e)
 	}
@@ -238,6 +293,14 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 // An unreadable host proxy script is an ERROR (fail closed): a surface that
 // cannot be fingerprinted cannot be accepted or installed.
 func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]string, error) {
+	return computeHostExecFingerprintWithSetup(root, b, nil)
+}
+
+// computeHostExecFingerprintWithSetup hashes immutable setup-hook snapshots
+// when supplied. runPackSetup executes those same bytes, binding the accepted
+// fingerprint to the actual executable instead of re-opening mutable pack
+// paths after the trust decision.
+func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[string][]byte) (string, map[string]string, error) {
 	type fpProxy struct {
 		Name string `json:"name"`
 		SHA  string `json:"sha"`
@@ -252,10 +315,11 @@ func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]stri
 		Argv []string `json:"argv"`
 	}
 	type fpContainer struct {
-		Name     string   `json:"name"`
-		Image    string   `json:"image,omitempty"`
-		Manifest string   `json:"manifest,omitempty"`
-		EnvKeys  []string `json:"env_keys,omitempty"`
+		Name      string            `json:"name"`
+		Image     string            `json:"image,omitempty"`
+		Manifest  string            `json:"manifest,omitempty"`
+		EnvKeys   []string          `json:"env_keys,omitempty"`
+		EnvValues map[string]string `json:"env_values,omitempty"`
 	}
 	type fpRemote struct {
 		Name string `json:"name"`
@@ -270,18 +334,28 @@ func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]stri
 		Required    bool     `json:"required"`
 		Description string   `json:"description"`
 	}
-	type fpDoc struct {
-		V          int           `json:"v"`
-		MCP        []fpMCP       `json:"mcp"`
-		Containers []fpContainer `json:"container"`
-		RemoteMCP  []fpRemote    `json:"remote_mcp"`
-		Proxies    []fpProxy     `json:"proxy"`
-		Bins       []fpBin       `json:"bin"`
-		Egress     []string      `json:"egress"`
-		Creds      []string      `json:"cred"`
-		Setup      []fpSetup     `json:"setup"`
+	type fpInference struct {
+		Name    string `json:"name"`
+		URL     string `json:"url"`
+		Auth    string `json:"auth"`
+		Service string `json:"service"`
+		Header  string `json:"header"`
+		Format  string `json:"format"`
 	}
-	doc := fpDoc{V: 4}
+	type fpDoc struct {
+		V             int           `json:"v"`
+		MCP           []fpMCP       `json:"mcp"`
+		Containers    []fpContainer `json:"container"`
+		RemoteMCP     []fpRemote    `json:"remote_mcp"`
+		Proxies       []fpProxy     `json:"proxy"`
+		Bins          []fpBin       `json:"bin"`
+		Egress        []string      `json:"egress"`
+		Creds         []string      `json:"cred"`
+		Prerequisites []string      `json:"prerequisites"`
+		Setup         []fpSetup     `json:"setup"`
+		Inference     []fpInference `json:"inference"`
+	}
+	doc := fpDoc{V: 6}
 	proxySHA := map[string]string{}
 	for _, m := range b.MCP {
 		doc.MCP = append(doc.MCP, fpMCP{Name: m.Name, Argv: append([]string(nil), m.Argv...)})
@@ -295,7 +369,7 @@ func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]stri
 	for _, c := range b.Containers {
 		keys := append([]string(nil), c.EnvKeys...)
 		sort.Strings(keys)
-		doc.Containers = append(doc.Containers, fpContainer{Name: c.Name, Image: c.Image, Manifest: c.Manifest, EnvKeys: keys})
+		doc.Containers = append(doc.Containers, fpContainer{Name: c.Name, Image: c.Image, Manifest: c.Manifest, EnvKeys: keys, EnvValues: c.EnvValues})
 	}
 	sort.Slice(doc.Containers, func(i, j int) bool { return doc.Containers[i].Name < doc.Containers[j].Name })
 	for _, r := range b.RemoteMCP {
@@ -330,14 +404,19 @@ func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]stri
 	sort.Strings(doc.Egress)
 	doc.Creds = append([]string(nil), b.Creds...)
 	sort.Strings(doc.Creds)
+	doc.Prerequisites = append([]string(nil), b.Prerequisites...)
 	for _, s := range b.Setup {
-		path := filepath.Join(root, s.Path)
-		if isSymlinkPath(path) {
-			return "", nil, fmt.Errorf("setup hook %q is a symlink; refusing to fingerprint it", s.ID)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return "", nil, fmt.Errorf("setup hook %q: %v (cannot fingerprint the host-exec surface; fail closed)", s.ID, err)
+		data, snapshotted := setupBytes[s.ID]
+		if !snapshotted {
+			path := filepath.Join(root, s.Path)
+			if isSymlinkPath(path) {
+				return "", nil, fmt.Errorf("setup hook %q is a symlink; refusing to fingerprint it", s.ID)
+			}
+			var err error
+			data, err = os.ReadFile(path)
+			if err != nil {
+				return "", nil, fmt.Errorf("setup hook %q: %v (cannot fingerprint the host-exec surface; fail closed)", s.ID, err)
+			}
 		}
 		sum := sha256.Sum256(data)
 		doc.Setup = append(doc.Setup, fpSetup{
@@ -347,6 +426,11 @@ func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]stri
 		})
 	}
 	sort.Slice(doc.Setup, func(i, j int) bool { return doc.Setup[i].ID < doc.Setup[j].ID })
+	for _, inf := range b.Inference {
+		doc.Inference = append(doc.Inference, fpInference{
+			Name: inf.Name, URL: inf.URL, Auth: inf.Auth, Service: inf.Service, Header: inf.Header, Format: inf.Format,
+		})
+	}
 	enc, err := json.Marshal(doc)
 	if err != nil {
 		return "", nil, fmt.Errorf("encoding host-exec surface: %v", err)
@@ -362,7 +446,7 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 	fmt.Fprintln(out, "This pack adds these integrations to Pix:")
 	fmt.Fprintln(out)
 	for _, m := range b.MCP {
-		fmt.Fprintf(out, "  Local integration:   %s\n", m.Name)
+		fmt.Fprintf(out, "  Host MCP:            %s\n", m.Name)
 		fmt.Fprintf(out, "                       Runs on this Mac: op run -- %s\n", strings.Join(m.Argv, " "))
 	}
 	for _, c := range b.Containers {
@@ -370,32 +454,77 @@ func renderHostBoM(out io.Writer, b hostBoM) {
 		if c.Image != "" {
 			source = "image " + c.Image
 		}
-		fmt.Fprintf(out, "  Local container:     %s (%s)\n", c.Name, source)
+		fmt.Fprintf(out, "  Host MCP:            %s (%s)\n", c.Name, source)
 		if len(c.EnvKeys) > 0 {
 			fmt.Fprintf(out, "                       Receives: %s\n", strings.Join(c.EnvKeys, ", "))
 		}
+		if len(c.EnvValues) > 0 {
+			keys := make([]string, 0, len(c.EnvValues))
+			for key := range c.EnvValues {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				fmt.Fprintf(out, "                       Uses: %s=%s\n", key, c.EnvValues[key])
+			}
+		}
 	}
 	for _, r := range b.RemoteMCP {
-		fmt.Fprintf(out, "  Remote integration:  %s → %s\n", r.Name, r.URL)
+		fmt.Fprintf(out, "  Remote MCP:          %s → %s\n", r.Name, r.URL)
+	}
+	for _, inf := range b.Inference {
+		auth := inf.Auth
+		if inf.Service != "" {
+			auth += " via " + inf.Service
+		}
+		fmt.Fprintf(out, "  Model gateway:       %s → %s (%s)\n", inf.Name, inf.URL, auth)
 	}
 	for _, pr := range b.Proxies {
 		fmt.Fprintf(out, "  Host wrapper:        %s (bin/%s; on PATH for `pix host` only)\n", pr, pr)
+	}
+	for _, pr := range b.SandboxProxies {
+		destination := "a declared endpoint"
+		if len(pr.Egress) > 0 {
+			destination = strings.Join(pr.Egress, ", ")
+		}
+		fmt.Fprintf(out, "  Sandbox command:     %s (bin/%s → %s)\n", pr.Name, pr.Name, destination)
 	}
 	for _, bn := range b.Bins {
 		fmt.Fprintf(out, "  External binary:     %s  sha256:%s  [re-hashed before every launch]\n", bn.Name, strings.ToLower(strings.TrimSpace(bn.SHA)))
 	}
 	for _, s := range b.Setup {
-		kind := "optional"
+		kind := "Optional:"
 		if s.Required {
-			kind = "required"
+			kind = "Ensures:"
 		}
-		fmt.Fprintf(out, "  Setup hook:         %s (%s) %s %s\n", s.ID, kind, s.Path, strings.Join(s.ApplyArgs, " "))
+		label := strings.TrimSpace(s.Description)
+		if label == "" {
+			label = s.ID
+		}
+		fmt.Fprintf(out, "  %-20s %s — %s (%s %s)\n", kind, s.ID, label, s.Path, strings.Join(s.ApplyArgs, " "))
 	}
-	if len(b.Egress) > 0 {
-		fmt.Fprintf(out, "  Network egress:      %s\n", strings.Join(b.Egress, ", "))
+	coveredEgress := map[string]bool{}
+	for _, proxy := range b.SandboxProxies {
+		for _, endpoint := range proxy.Egress {
+			coveredEgress[endpoint] = true
+		}
 	}
-	if len(b.Creds) > 0 {
-		fmt.Fprintf(out, "  Credentials (op://): %s   (you supply your own; never in the pack)\n", strings.Join(b.Creds, ", "))
+	var extraEgress []string
+	for _, endpoint := range b.Egress {
+		if !coveredEgress[endpoint] {
+			extraEgress = append(extraEgress, endpoint)
+		}
+	}
+	if len(extraEgress) > 0 {
+		fmt.Fprintf(out, "  Network access:      %s\n", strings.Join(extraEgress, ", "))
+	}
+	if len(b.Prerequisites) > 0 {
+		fmt.Fprintln(out, "\nBefore continuing, make sure:")
+		for _, item := range b.Prerequisites {
+			fmt.Fprintf(out, "  • %s\n", item)
+		}
+	} else if len(b.Creds) > 0 {
+		fmt.Fprintf(out, "  1Password references needed: %s\n", strings.Join(b.Creds, ", "))
 	}
 }
 

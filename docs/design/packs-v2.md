@@ -13,7 +13,7 @@ my MCPs, my CLI wrappers, and my config.**
 
 - **Personal context:** the Fastmail MCP + a custom `platformio` CLI wrapper (the
   owner writes it) + personal config.
-- **Work context:** the work MCPs + a wrapped `snowflake` CLI + work config.
+- **Work context:** work MCPs + a wrapped `warehouse` CLI + work config.
 - **One command to switch.** Adding a capability is one command + one file.
 - **Shareable at work:** hand a teammate the work pack; they put their OWN creds
   in (`op://` refs). Some knowledge travels with it (team truth); some stays
@@ -37,7 +37,7 @@ the one command to recreate. Creds are solicited as `op://` refs at adoption.
 ### F2 — In-sandbox CLI-proxy wrappers (`bin/`)
 `pix pack add proxy <name>` scaffolds a wrapper under the pack's `bin/`. On
 launch, the active pack's `bin/` is mounted onto PATH in the sandbox (the proven
-mixin-kit `files/` mechanism, made first-class). This covers the `snowflake` wrapper
+mixin-kit `files/` mechanism, made first-class). This covers the `warehouse` wrapper
 (network-only, runs fenced in the sandbox — §9 "in-sandbox, safe by default").
 
 ### F3 — Host-mode CLI wrappers (the platformio case) — IN SCOPE
@@ -81,7 +81,7 @@ simplest "shared, travels-in-the-repo" case. `pack add knowledge <name> [--ref
 
 ## Acceptance criteria (the owner's 5/5)
 
-1. `pix pack use work` → in a fresh sandbox: the `snowflake` wrapper is on
+1. `pix pack use work` → in a fresh sandbox: the `warehouse` wrapper is on
    PATH and the work MCPs are attached. `pix pack use personal` → the
    Fastmail MCP is attached and `platformio` is usable in host mode
    (`pix host`). One command flips between them.
@@ -105,7 +105,7 @@ never a compiled-in Go extension; see `packs.md`.
 
 - **Phase 1 — the flip, sandbox facets:** F1 (MCP attach) + F2 (sandbox `bin/`) +
   F4 (switch swaps MCP/bin/config/knowledge-scope/memory-scope) + F6 (knowledge
-  shared/private references) + Tier-0 adoption. DoD after P1: work-pack snowflake
+  shared/private references) + Tier-0 adoption. DoD after P1: work-pack warehouse
   + both MCP sets + the work/personal flip all work in-sandbox.
 - **Phase 2 — host execution:** F3 (host-mode wrappers → platformio) + F5 (Tier-1
   trust gate + SHA-pin + BoM screen). DoD after P2: platformio usable via

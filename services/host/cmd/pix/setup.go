@@ -3,19 +3,20 @@
 // Owner decision (supersedes the in-`run` auto-offer): onboarding is a TWO-PHASE
 // thing the user opts into by NAME.
 //
-//  1. HOST phase (here, on the host): source model keys from 1Password
-//     (setupProvisionKeys) — op is REQUIRED and the only source; ensure the
-//     memory service, create the default pack, and seed first-name identity.
+//  1. HOST phase (here, on the host): configure callable inference through
+//     direct 1Password-backed APIs, a gateway, Ollama, or pack-provided
+//     bindings; enable memory only when its local models are verified; and
+//     seed first-name identity.
 //     Host mode is NOT set up here — it's opt-in via `pix host setup`.
 //     Host-config (gog/knowledge/mcp) comes from FLAGS, not interactive prompts;
-//     the only interaction is pasting op:// refs on a TTY. Flag/non-TTY = CI-safe.
+//     Flag/non-TTY operation is CI-safe.
 //  2. AGENT phase (handoff): launch a normal `pix run` whose FIRST pi
 //     message kicks off the `onboarding` skill, so the agent PROACTIVELY starts
 //     the conversation (identity, tone, a real first task) instead of sitting
 //     silent — the passive system-prompt marker never spoke until the user
 //     typed, which is the bug this replaces.
 //
-// `pix run` on its own NEVER onboards. `pix onboard` is the host-only,
+// `pix run` on its own NEVER onboards. `pix setup --no-agent` is the host-only,
 // no-handoff path for CI.
 package main
 
@@ -26,7 +27,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"pix/host/config"
@@ -74,11 +74,16 @@ func runSetupCmd(argv []string) {
 	dirSet := false
 	replace := false
 	noAgent := false
+	verbose := false
 	var hostArgs []string
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		if a == "--replace" {
 			replace = true
+			continue
+		}
+		if a == "--verbose" {
+			verbose = true
 			continue
 		}
 		// --no-agent is SETUP'S OWN flag (AC-P0-308): run the host phase and
@@ -105,13 +110,25 @@ func runSetupCmd(argv []string) {
 	}
 
 	env := defaultShellEnv()
+	env.quiet = !verbose
+	if verbose {
+		_ = os.Setenv("PIX_SETUP_VERBOSE", "1")
+	}
 	parsed, parseErr := parseOnboardArgs(hostArgs)
 	if parseErr != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", parseErr, setupUsage)
 		os.Exit(2)
 	}
-	if len(parsed.withSetup) > 0 && strings.TrimSpace(parsed.pack) == "" {
-		fmt.Fprintf(os.Stderr, "pix setup: --with requires --pack\n\n%s", setupUsage)
+	// Load + validate every built-in semantic flag/value before prerequisites,
+	// pack adoption, setup hooks, or browser-capable authorization. The later
+	// host phase repeats the same pure validator for direct/test callers.
+	preflightCfg, cfgErr := config.Load()
+	if cfgErr != nil {
+		fmt.Fprintf(os.Stderr, "pix setup: loading config: %v\n", cfgErr)
+		os.Exit(1)
+	}
+	if err := validateSetupSemantics(parsed, preflightCfg, env, hostBinaryResolver); err != nil {
+		fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", err, setupUsage)
 		os.Exit(2)
 	}
 
@@ -138,11 +155,22 @@ func runSetupCmd(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(2)
 	}
-	if err := ensureSetupPrereqs(env, os.Stdin, os.Stdout, isTTY(os.Stdin) && !parsed.assumeYes); err != nil {
+	// sbx is universally required. 1Password is conditional and is decided only
+	// AFTER explicit packs have contributed inference; a keyless work gateway
+	// must never trigger an irrelevant op installation/login flow.
+	if err := ensureSetupPrereqsFor(env, os.Stdin, os.Stdout, isTTY(os.Stdin) && !parsed.assumeYes, false); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(1)
 	}
 	if err := ensureSetupSbxSession(env, os.Stdout, isTTY(os.Stdin) && !parsed.assumeYes); err != nil {
+		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
+		os.Exit(1)
+	}
+	// An unreleased launcher uses its local checkout kit. Validate that kit with
+	// the installed sbx parser before pack OAuth/setup or any other mutation;
+	// nightly schema skew must fail once, early, without opening browsers and
+	// only later dumping YAML from `sbx run`.
+	if err := validateSetupKit(version, resolveRepoRoot, validateSbxKit); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(1)
 	}
@@ -151,13 +179,43 @@ func runSetupCmd(argv []string) {
 	// before host setup. This gives `pix setup --pack owner/repo` one setup
 	// engine while preserving the exact same BoM review, fingerprint, and
 	// rollback behavior as `pix pack use`.
-	if strings.TrimSpace(parsed.pack) != "" {
-		packArg := normalizeSetupPackArg(parsed.pack)
+	var activatedPacks []string
+	if len(parsed.packs) > 0 && env.quiet {
+		fmt.Fprintln(os.Stdout, "Configuring pack integrations…")
+	}
+	for _, requestedPack := range parsed.packs {
+		packArg := normalizeSetupPackArg(requestedPack)
 		useArgs := []string{packArg}
 		if parsed.assumeYes {
 			useArgs = append([]string{"--yes"}, useArgs...)
 		}
 		runPackUse(env, os.Stdout, useArgs)
+		if cfg, err := config.Load(); err == nil && strings.TrimSpace(cfg.Pack) != "" {
+			activatedPacks = append(activatedPacks, cfg.Pack)
+		}
+	}
+	activatedPacks = uniquePackRoots(activatedPacks)
+	if len(activatedPacks) > 0 {
+		if err := persistPackStack(activatedPacks); err != nil {
+			fmt.Fprintf(os.Stderr, "pix setup: composing packs: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	// A pack's required setup owns its interactive authorization flows. Run it
+	// before the ordinary host gate: that gate verifies configured MCP servers,
+	// so placing hooks afterward made it impossible for a fresh pack to satisfy
+	// the very prerequisites the gate checked (and skipped integration
+	// entirely on the first missing remote registration).
+	setupRequests, err := planPackSetupRequests(activatedPacks, parsed.withSetup)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
+		os.Exit(1)
+	}
+	for _, root := range activatedPacks {
+		if err := runPackSetup(env, os.Stdout, root, setupRequests[root], isTTY(os.Stdin) && !parsed.assumeYes); err != nil {
+			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	// Phase 1: host config — source keys from 1Password, ensure memory, create the
@@ -175,6 +233,9 @@ func runSetupCmd(argv []string) {
 	// is the seam: it does the validation-then-hostPhase-call as one pure step so a
 	// test can assert hostPhase is never invoked for a bad DIR without exercising
 	// os.Exit.
+	if env.quiet {
+		fmt.Fprintln(os.Stdout, "Setting up inference and host services…")
+	}
 	if err := runSetupCore(env, dir, hostArgs, os.Stdin, os.Stdout, isTTY(os.Stdin), setupHostPhase); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		var usage errUsage
@@ -183,18 +244,6 @@ func runSetupCmd(argv []string) {
 		}
 		os.Exit(1)
 	}
-	if strings.TrimSpace(parsed.pack) != "" {
-		cfg, err := config.Load()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "pix setup: load active pack: %v\n", err)
-			os.Exit(1)
-		}
-		if err := runPackSetup(env, os.Stdout, cfg.Pack, parsed.withSetup); err != nil {
-			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
 	// --no-agent stops here: the host phase is the whole command. The phase
 	// header is still printed so the transcript is complete and a reader can
 	// see that the handoff was skipped by request, not silently dropped.
@@ -309,8 +358,12 @@ func runSetupHandoff(dir, name string, state sbxState, replace bool, out io.Writ
 	// in-VM onboarding agent via an initial message. A --replace here is
 	// harmless (the create path ignores it).
 	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "Launching sandbox: pi will introduce itself, show you how it works,")
-	fmt.Fprintln(out, "and get you into a real task. (You can quit any time; just run `pix run`.)")
+	if !setupTranscriptVerbose {
+		fmt.Fprintln(out, "Launching Pix — the agent will take it from here.")
+	} else {
+		fmt.Fprintln(out, "Launching sandbox: pi will introduce itself, show you how it works,")
+		fmt.Fprintln(out, "and get you into a real task. (You can quit any time; just run `pix run`.)")
+	}
 	runFn(kickoffArgs())
 	return nil
 }
@@ -417,6 +470,9 @@ var setupPhaseOrder = []struct{ name, what string }{
 // Pass a non-empty override to say something more specific than the default
 // (e.g. that the handoff was skipped on purpose).
 func setupPhaseHeader(out io.Writer, name, override string) {
+	if !setupTranscriptVerbose {
+		return
+	}
 	for i, p := range setupPhaseOrder {
 		if p.name != name {
 			continue
@@ -429,6 +485,8 @@ func setupPhaseHeader(out io.Writer, name, override string) {
 		return
 	}
 }
+
+var setupTranscriptVerbose bool
 
 // setupMaxPrompts is the hard cap on interactive questions ONE setup run may
 // ask (AC-P0-307). There are exactly two: model-pull consent and the Google
@@ -480,26 +538,53 @@ func takeSetupInventory(env shellEnv, opts onboardOpts) (setupInventory, error) 
 		return setupInventory{}, fmt.Errorf("loading config: %w", err)
 	}
 	inv := setupInventory{
-		cfg:     cfg,
-		retired: cfg.RetiredKeys(),
-		proposal: &onboardingResult{
-			Version:           1,
-			MCP:               opts.mcp,
-			OllamaBridgeModel: strings.TrimSpace(opts.model),
-		},
-	}
-	if k := strings.TrimSpace(opts.knowledge); k != "" {
-		inv.proposal.Knowledge = &onboardKnowledge{Action: "use", Source: k}
+		cfg:      cfg,
+		retired:  cfg.RetiredKeys(),
+		proposal: setupProposal(opts),
 	}
 	return inv, nil
+}
+
+// setupProposal is the single flag -> proposal translation used by both the
+// pre-adoption semantic validator and the later inventory/mutation phase.
+// Keeping one constructor prevents the early safety boundary from accepting a
+// value that the host phase interprets differently.
+func setupProposal(opts onboardOpts) *onboardingResult {
+	p := &onboardingResult{
+		Version:           1,
+		MCP:               append([]string(nil), opts.mcp...),
+		OllamaBridgeModel: strings.TrimSpace(opts.model),
+	}
+	if k := strings.TrimSpace(opts.knowledge); k != "" {
+		p.Knowledge = &onboardKnowledge{Action: "use", Source: k}
+	}
+	return p
+}
+
+// validateSetupSemantics checks only built-in argument meaning. It performs no
+// writes and opens no authorization flow, so runSetupCmd can call it before the
+// first pack is adopted. External readiness (catalog OAuth, provider reachability,
+// model pulls) remains in the later gate/verify phases.
+func validateSetupSemantics(opts onboardOpts, cfg *config.Config, env shellEnv, hostResolver func() (string, error)) error {
+	if len(opts.withSetup) > 0 && len(opts.packs) == 0 {
+		return errUsage{fmt.Errorf("--with requires --pack")}
+	}
+	if err := checkGoogleWorkspaceFlags(opts); err != nil {
+		return err
+	}
+	if err := validateOnboardingResult(setupProposal(opts), cfg, env, hostResolver); err != nil {
+		return errUsage{err}
+	}
+	return nil
 }
 
 // setupGate is every precondition that must hold BEFORE the first mutation.
 // Each failure names the exact command that fixes it and returns an error, so
 // nothing is half-written when a run cannot succeed:
 //
-//   - an invalid --mcp/--knowledge/--model is an argument mistake and fails
-//     first, before any probe runs;
+// Built-in semantic flag/value validation has already run before pack adoption
+// in runSetupCmd (and immediately after inventory for direct callers). This gate
+// owns only external readiness that cannot be established from argument meaning:
 //   - a shipped-catalog MCP remote that is not registered AND auth-ready fails
 //     here rather than being persisted on the promise of a later fix;
 //
@@ -509,9 +594,6 @@ func takeSetupInventory(env shellEnv, opts onboardOpts) (setupInventory, error) 
 // and fails closed before it writes anything, so a gate copy would be a second
 // implementation of the same rule that could drift from it.
 func setupGate(env shellEnv, inv setupInventory, out io.Writer, interactive bool) error {
-	if err := validateOnboardingResult(inv.proposal, inv.cfg, env, hostBinaryResolver); err != nil {
-		return err
-	}
 	// Shipped-catalog remotes (mcpCatalogNames) must be registered AND
 	// auth-ready BEFORE setup writes anything — setup must never claim success
 	// for a server the gateway cannot spawn or that 401s on first use. The gate
@@ -573,12 +655,56 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 		axes:  []Axis{axisProviders, axisSecrets},
 		fatal: true,
 		run: func() error {
+			selected, err := setupChooseInference(cfg, env, in, out, interactive)
+			if err != nil {
+				return err
+			}
+			// GitHub is not an inference provider, but gh is a core sandbox CLI.
+			// Reuse an existing host login without another prompt/browser flow.
+			// It remains optional: an unauthenticated host does not block setup.
+			if err := syncGitHubCredentialFromHost(env); err != nil {
+				fmt.Fprintf(out, "  github: host credential was not synced (%v)\n", err)
+			}
+			if selected {
+				if err := configureModelRoster(cfg, in, out, interactive, opts.models); err != nil {
+					return fmt.Errorf("choosing models: %w", err)
+				}
+				return cfg.Save()
+			}
+			if err := ensureSetupPrereqsFor(env, in, out, interactive, true); err != nil {
+				return err
+			}
 			// The ONLY mutation that may write to the real terminal: on a TTY
 			// it collects the mandatory op:// refs, and on failure it prints
 			// exactly what is wrong. It prints no ✓ — the keys row in the
 			// report comes from hostModeProviderKeys AFTER this ran.
 			if !setupProvisionKeysFn(env, in, out, interactive, opts.assumeYes) {
 				return fmt.Errorf("provider keys not fully configured — follow the fix printed above")
+			}
+			providers, err := hostModeProviderKeys(env)
+			if err != nil {
+				return fmt.Errorf("reading configured providers: %w", err)
+			}
+			if err := configureDirectInference(cfg, providers); err != nil {
+				return fmt.Errorf("configuring direct inference: %w", err)
+			}
+			if err := configureModelRoster(cfg, in, out, interactive, opts.models); err != nil {
+				return fmt.Errorf("choosing models: %w", err)
+			}
+			attempted, verified, failures := verifyDirectInference(cfg, env)
+			if err := cfg.Save(); err != nil {
+				return err
+			}
+			if verified == 0 && (attempted > 0 || len(failures) > 0) {
+				detail := strings.Join(failures, "; ")
+				if detail == "" {
+					detail = "no provider accepted a model-specific request"
+				}
+				return fmt.Errorf("provider keys resolved, but live inference verification failed: %s", detail)
+			}
+			if verified > 0 && len(failures) > 0 {
+				fmt.Fprintf(out, "  inference: %d model(s) verified; %d candidate(s) unavailable or unauthorized (%s)\n",
+					verified, len(failures), strings.Join(failures, "; "))
 			}
 			return nil
 		},
@@ -610,24 +736,12 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 		},
 	}, {
 		name:  "pack",
-		axes:  []Axis{axisPack},
+		axes:  nil,
 		fatal: true,
 		run: func() error {
-			// Ensure a default pack exists (git-init'd) AND is ACTIVE whenever
-			// cfg.Pack is empty — including a pack that already exists (a
-			// migrated legacy dir, or one created by an earlier interrupted
-			// run whose activation never landed). runPackNew handles both
-			// creation and activation for the fresh case; the already-exists
-			// branch must activate explicitly. Does NOT override an explicitly
-			// active alternate pack.
-			defaultRoot := defaultPackRoot() // runs the legacy pack/personal -> default migration
-			if _, err := os.Stat(filepath.Join(defaultRoot, packManifestName)); err != nil {
-				runPackNew(env, io.Discard, []string{defaultRoot})
-				return nil
-			}
-			if err := activateDefaultPack(defaultRoot); err != nil {
-				return fmt.Errorf("ensuring default pack is active: %w", err)
-			}
+			// Packs are explicit (`pix setup --pack ...`). Personal AGENTS.md and
+			// skills live in XDG_DATA_HOME/pix/context, so default setup must not
+			// manufacture a git repo or introduce the pack concept.
 			return nil
 		},
 	}, {
@@ -700,14 +814,51 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 			// prompt), verify once after the pulls, receipt the outcome. Never
 			// installs Ollama; never pulls a tag it could not positively verify
 			// as missing.
-			// Local models are progressive enhancement. Ordinary setup never asks
-			// about a multi-gigabyte download; only an explicit --pull-models opts
-			// into the pull path.
-			*models = setupLocalModels(cfg, env, in, out, false, opts.pullModels)
+			// Local models are progressive enhancement. When Ollama is already
+			// healthy, interactive setup may offer a default-No pull for positively
+			// missing memory models; unattended setup requires --pull-models.
+			ask := prompts.reserve("enable local memory")
+			*models = setupLocalModels(cfg, env, in, out, ask, opts.pullModels)
+			if setupMemoryModelsReady(cfg, *models) {
+				cfg.AddService("memory")
+				if err := cfg.Save(); err != nil {
+					return fmt.Errorf("enabling verified memory: %w", err)
+				}
+			}
 			receiptSetupModels(env, out, *models)
 			return nil
 		},
 	}}
+}
+
+// syncGitHubCredentialFromHost mirrors the current host gh login into sbx's
+// global github service. The token exists only in process memory and the child
+// argv accepted by sbx (the same unavoidable boundary used by provider-key
+// sync); output/errors are redacted before they can reach a transcript.
+func syncGitHubCredentialFromHost(env shellEnv) error {
+	if env.lookPath == nil || env.run == nil {
+		return nil
+	}
+	if _, err := env.lookPath("gh"); err != nil {
+		return nil
+	}
+	if _, err := env.lookPath("sbx"); err != nil {
+		return nil
+	}
+	token, err := env.run("gh", "auth", "token")
+	if err != nil || strings.TrimSpace(token) == "" {
+		return nil // optional: no host login to reuse
+	}
+	token = strings.TrimSpace(token)
+	out, err := env.run("sbx", "secret", "set", "github", "-f", "-t", token)
+	if err == nil {
+		return nil
+	}
+	detail := redactSecretValue(strings.TrimSpace(firstLine(out)), token)
+	if detail == "" {
+		detail = redactSecretValue(err.Error(), token)
+	}
+	return fmt.Errorf("sbx secret set github failed: %s", detail)
 }
 
 // mcpAxes maps configured server names to their readiness axes.
@@ -728,7 +879,10 @@ func mcpAxes(servers []string) []Axis {
 // with --yes/--non-interactive or no TTY it is fully
 // non-interactive (the CI path).
 func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, tty bool) error {
-	fmt.Fprintln(out, "pix setup — configuring the host")
+	setupTranscriptVerbose = !env.quiet
+	if !env.quiet {
+		fmt.Fprintln(out, "pix setup — configuring the host")
+	}
 
 	// PHASE 1 — parse. Argument mistakes are caught here, before any probe or
 	// mutation, and map to exit 2 at the call site.
@@ -737,18 +891,11 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	if perr != nil {
 		return errUsage{perr}
 	}
-	// --account/--credentials are Google Workspace inputs and are meaningless
-	// without the opt-in. Rejecting them here deletes the old ability to set an
-	// account without completing OAuth: there is no path that writes
-	// google_workspace_account except the transaction itself.
 	if opts.apply {
 		// --apply is intercepted by runSetupCmd (it reconciles a pending
 		// onboarding.json and stops). Reaching the host phase with it set means
 		// a caller bypassed that route, which would silently ignore the flag.
 		return errUsage{fmt.Errorf("--apply is handled before the host phase; run `pix setup [DIR] --apply`")}
-	}
-	if err := checkGoogleWorkspaceFlags(opts); err != nil {
-		return err
 	}
 	// Interactive prompts fire on any real TTY unless the caller explicitly opted
 	// out with --yes/-y/--non-interactive (opts.assumeYes). Ordinary VALUE flags
@@ -763,6 +910,9 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	setupPhaseHeader(out, setupPhaseInventory, "")
 	inv, err := takeSetupInventory(env, opts)
 	if err != nil {
+		return err
+	}
+	if err := validateSetupSemantics(opts, inv.cfg, env, hostBinaryResolver); err != nil {
 		return err
 	}
 	if len(inv.retired) > 0 {
@@ -807,9 +957,11 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	setupPhaseHeader(out, setupPhaseReport, "")
 	printSetupSummary(postCfg, env, out, models)
 
-	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "host mode (optional, UNSANDBOXED: runs `pi` directly on the host): not enabled.")
-	fmt.Fprintln(out, "  set it up only if you need it:  pix host setup")
+	if !env.quiet {
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "host mode (optional, UNSANDBOXED: runs `pi` directly on the host): not enabled.")
+		fmt.Fprintln(out, "  set it up only if you need it:  pix host setup")
+	}
 
 	// A partial pull failure is a real, verified gap the user consented to
 	// closing: fail setup (non-zero) with the exact retry commands. The summary
@@ -877,8 +1029,10 @@ func setupReadinessAxes(cfg *config.Config, env shellEnv, models setupModelsOutc
 			builders[a] = b
 		}
 	}
-	builders[axisProviders] = func() []check { return setupProvidersAxis(env) }
-	builders[axisPack] = func() []check { return setupPackAxis(cfg) }
+	builders[axisProviders] = func() []check { return setupProvidersAxis(cfg, env) }
+	if strings.TrimSpace(cfg.Pack) != "" {
+		builders[axisPack] = func() []check { return setupPackAxis(cfg) }
+	}
 	if strings.TrimSpace(cfg.GogAccount) != "" || containsStr(cfg.MCP, gwServerName) {
 		// Absent by default (AC-P0-319): with no opt-in there is no axis at
 		// all, so the report says nothing about Google Workspace.
@@ -889,7 +1043,33 @@ func setupReadinessAxes(cfg *config.Config, env shellEnv, models setupModelsOutc
 
 // setupProvidersAxis is the post-mutation provider-key fact: ready when at
 // least one model-provider ref resolves (any one key launches a sandbox).
-func setupProvidersAxis(env shellEnv) []check {
+func setupProvidersAxis(cfg *config.Config, env shellEnv) []check {
+	if cfg != nil && len(cfg.Inference.Models) > 0 {
+		callable := 0
+		candidates := 0
+		for _, b := range cfg.Inference.Models {
+			if b.Available && inferenceBindingAllowed(cfg, b) {
+				candidates++
+				if b.Verified {
+					callable++
+				}
+			}
+		}
+		if callable > 0 {
+			detail := fmt.Sprintf("%d callable model(s)", callable)
+			if candidates > callable {
+				detail += fmt.Sprintf("; %d candidate(s) did not pass live verification", candidates-callable)
+			}
+			return []check{{label: "inference", requirement: requirementCore, verdict: verdictReady,
+				detail: detail, evidence: "model-specific live inference probes"}}
+		}
+		if candidates > 0 {
+			return []check{{label: "inference", requirement: requirementCore, verdict: verdictUnverifiable,
+				detail: fmt.Sprintf("%d configured model candidate(s)", candidates), evidence: "first sandbox inference is the live probe"}}
+		}
+		return []check{{label: "inference", requirement: requirementCore, verdict: verdictTodo,
+			detail: "no callable model", evidence: "configured bindings have no successful probe"}}
+	}
 	names, err := hostModeProviderKeys(env)
 	switch {
 	case err != nil:
@@ -1399,7 +1579,7 @@ func setupSandboxName(dir string) (string, bool) {
 // (only the space-separated form; `--flag=value` is self-contained).
 func flagTakesValue(a string) bool {
 	switch a {
-	case "--account", "--credentials", "--knowledge", "--mcp", "--model", "--pack", "--with":
+	case "--account", "--credentials", "--knowledge", "--mcp", "--model", "--models", "--pack", "--with":
 		return true
 	}
 	return false
@@ -1415,21 +1595,20 @@ func normalizeSetupPackArg(arg string) string {
 
 const setupUsage = `usage: pix setup [DIR] [host-config flags]
 
-Actually sets you up (use 'pix run' if you just want to start working):
-  1. host   - resolve model keys from 1Password and reconcile them into sbx
-              (op is REQUIRED), wiring BOTH the sandbox and host mode's
-              hostmode.env; ensure memory; create your default pack
-  2. agent  - launch a sandbox and hand off to a ONE-SHOT upfront guide that
-              names the exact workflows, explains memory and packs, reports
-              grounded setup gaps, then asks for your real task
+Sets up callable inference, then starts Pix. Ordinary setup begins with one
+model-runtime choice. The selected path may then ask only for the credentials
+or consent it actually needs. API keys are the default; a healthy existing
+Ollama is offered; a custom gateway can use the current sbx login or no auth.
+1Password is required only for the API-key path. Ollama is never installed
+automatically.
 
-Provider keys come from 1Password only: the ` + "`op`" + ` CLI must be installed and
-signed in, or setup fails with the exact fix. There is no "trust existing sbx
-keys" shortcut. Host mode (pi UNSANDBOXED) is NOT set up here; it's opt-in via
-'pix host setup' (which provisions AND enables it in one step).
+Memory is progressive enhancement: it is enabled only when Ollama is healthy
+and its watcher and embedding models are verified. Without Ollama, Pix still
+runs normally with memory off. Host mode is separate and opt-in via
+'pix host setup'.
 
 DIR defaults to the current directory (like ` + "`pix run`" + `). Repeat semantics:
-the host phase (keys/memory/pack) ALWAYS reconciles again, even when a sandbox
+the host phase ALWAYS reconciles again, even when a sandbox
 already exists for DIR. If one exists and you did not pass --replace, setup
 leaves it alone (never force-removes it, never replays the tour into a live
 session) and prints your choices: 'pix run [DIR]' to reattach, or
@@ -1449,11 +1628,14 @@ Setup flags:
   --replace                recreate an existing sandbox for DIR (sbx rm -f +
                            create) so it picks up current pack/MCP/skills and
                            receives the guided tour; harmless when absent
+  --verbose                show underlying sbx, Git, Docker, and setup command
+                           output; ordinary setup prints only actions/results
   --pull-models            pull any CONFIRMED-missing configured local Ollama
                            models (watcher/embed/bridge, deduplicated); the
-                           ONLY consent a non-interactive setup honors (a broad
-                           --yes never downloads). Ordinary setup never asks
-                           about local model downloads. Setup never installs
+                           ONLY download consent a non-interactive setup honors
+                           (a broad --yes never downloads). Interactive setup
+                           may offer a default-No pull when an existing Ollama
+                           positively lacks required memory models. Setup never installs
                            Ollama itself, and never pulls a tag it could not
                            positively verify as missing.
                            pix setup --pull-models with Ollama down exits
@@ -1462,9 +1644,11 @@ Setup flags:
                            blocks unrelated repair.
 
 Host-config flags (all optional):
-  --pack <path|owner/repo|git-url>
+  --pack <path|git+https-url#ref=branch|tag|sha>
                            activate a pack through the normal host trust gate,
-                           then run its required, resumable setup hooks
+                           then run its required, resumable setup hooks;
+                           repeatable, composed in command order (collections
+                           union; later scalar declarations win)
   --with <setup-id>        also run a named optional setup hook from --pack;
                            repeatable, and invalid without --pack
   --google-workspace       opt in to Google Workspace (absent otherwise): runs
@@ -1478,15 +1662,18 @@ Host-config flags (all optional):
   --knowledge <path|url>   scaffold/point the global knowledge base
   --mcp <name>             enable an MCP server (repeatable; allowlisted)
   --model <ollama-model>   set the ollama-bridge model
-  --yes | --non-interactive  never prompt (CI); at least one provider's op://
-                           ref must already be configured and resolve (setup
-                           prints exact alternatives when none is configured)
+  --models <id,id,...>     restrict agents to these canonical catalog models;
+                           interactive first setup otherwise offers every
+                           model available through the selected runtime(s)
+  --yes | --non-interactive  never prompt (CI); callable inference must already
+                           be configured through provider refs, a pack/session
+                           gateway, a no-auth gateway, or verified Ollama
   -h | --help              this help
 
-Setup runs as a numbered transcript of eight phases — parse, inventory, gate,
-mutate, consent, verify, report, handoff — and prints each phase header BEFORE
-that phase does its work, so a run that hangs names the phase it hung in. It
-sequences prompts one at a time and never prompts at all without a TTY.
+Ordinary setup prints a short action-oriented transcript. --verbose exposes the
+underlying eight phases — parse, inventory, gate, mutate, consent, verify,
+report, handoff — and the commands they run for diagnosis. Setup sequences
+prompts one at a time and never prompts at all without a TTY.
 Mutations run in a fixed order with the
 riskiest last (keys, config, pack, MCP, knowledge, identity, Google Workspace,
 model pulls) and each one is individually idempotent, so an interrupted run is

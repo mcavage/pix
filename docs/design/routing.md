@@ -88,7 +88,7 @@ same idea for models.
 ```
 HOST (Go, tested, owns the truth)            SANDBOX (TS, reads one file)
 ┌───────────────────────────────┐            ┌──────────────────────────┐
-│ models.json    (registry+price)│            │ routing.json (resolved)  │
+│ models.json (limits+price)     │            │ routing.json (resolved)  │
 │ scorecard.json (hand-edited)   │  compile   │  intent -> model + why   │
 │ policy.json (intents)          │ ─────────▶ │                          │
 │      │                         │            │ subagents.ts reads it:   │
@@ -109,10 +109,11 @@ manual, easy to plug a model in" cadence the feature was scoped to.
 Dependency-light subpackage (JSON only, no sqlite) so both the host binary and
 the launcher can import it, exactly like `config`.
 
-- **Model** — `id` (fully qualified `provider/id`), `provider`, token prices
-  (`input_per_mtok`, `output_per_mtok`), `local` (Ollama/DMR: unmetered),
-  `available` (wired in this stack right now). **Adding a model is one entry** in
-  `models.json`; everything downstream picks it up.
+- **Model** — `id` (fully qualified `provider/id`), `provider`, token limits
+  (`context_window`, `max_output_tokens`), token prices (`input_per_mtok`,
+  `output_per_mtok`), `local` (Ollama/DMR: unmetered), `available` (wired in
+  this stack right now). **Adding a model is one entry** in `models.json`;
+  everything downstream picks it up.
 - **Score** — one `(model, task_type)` row: `accuracy` 0..1, `latency_ms_p50`,
   `cost_usd` (mean per task), `n` samples, `source` (`eval|seed`), `updated`.
   Hand-maintained: seeded from published benchmarks + pricing at launch, and
@@ -186,12 +187,28 @@ pinned model), an optional provider constraint, and an advisory `budget_usd`.
 2. `intent:` frontmatter → `routing.json` resolved map → model id,
 3. neither → inherit the parent model (current default).
 
+The host first filters bindings through the user's `inference.allowed_models`
+roster. Consequently every compiled route and runtime model cycle stays inside
+the setup choice. Exclusive packs bypass (but do not erase) that personal
+roster and compile only from their own bindings.
+
+An agent may declare `fallback_intent:` for a narrow provider-policy recovery.
+The subagent runner retries once only when the primary response is positively
+classified as a usage-policy refusal. Authentication, timeout, transport, and
+invalid-route failures never trigger cross-provider spend. `security-lead`
+uses `review` as its cross-vendor fallback because defensive cyber prompts can
+trip Anthropic's classifier even when the task is legitimate.
+
 Agent presets migrate from a hard-coded `model:` to an `intent:`. `routing.json`
 is baked at `~/.pi/agent/routing.json` next to `capabilities.json`.
 
 ## Adding a model later (the whole point)
 
-1. Add one entry to `models.json` (`id`, `provider`, prices, `available:true`).
+1. Add one entry to `models.json` (`id`, `provider`, context/output limits,
+   prices, `available:true`, plus transport capability metadata such as
+   `adaptive_thinking:true` when the upstream requires it). Runtime providers
+   consume this catalog metadata; they never infer protocol behavior from a
+   model-name substring.
 2. Hand-add its scores to `scorecard.json` (from published benchmarks/model
    cards).
 3. `pix route compile` and `make load`.

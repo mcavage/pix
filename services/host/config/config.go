@@ -58,8 +58,11 @@ const (
 // unconfigured install resolves neither a client id nor a redirect uri.
 const DefaultSlackOAuthRedirectURI = "http://localhost:17373/slack/callback"
 
-// DefaultServices is the service set a fresh install runs.
-var DefaultServices = []string{"memory"}
+// DefaultServices is intentionally empty. Memory requires a verified local
+// Ollama watcher + embedding model and is enabled by setup only after those
+// requirements pass; a fresh API-key/gateway user should not inherit a broken
+// optional daemon or be asked to install Ollama.
+var DefaultServices = []string{}
 
 // PluginSpec configures one plugin slot: how it is implemented and, for external
 // impls, where the binary lives and how it is verified/reached.
@@ -124,8 +127,8 @@ type Config struct {
 	// Services is the RESOLVED runtime service set every consumer reads
 	// (serve, ensureServe, doctor, …). It is never (de)serialized directly:
 	// ServicesRaw below is the TOML-facing tri-state field, and applyDefaults /
-	// sparseForSave translate between the two. Services has a NON-EMPTY default
-	// (DefaultServices), so unlike mcp/knowledge_bundles a plain `[]string` with
+	// sparseForSave translate between the two. Services historically had a
+	// non-empty default, so unlike mcp/knowledge_bundles a plain `[]string` with
 	// omitempty cannot distinguish "unset → default" from "explicitly empty →
 	// stays empty": `config unset services memory` used to report [] but reload
 	// silently restored ["memory"], losing intent and triggering a spurious
@@ -159,6 +162,14 @@ type Config struct {
 	// Sparse-saved: omitted from the file when it equals the default.
 	RunIntent string `toml:"run_intent,omitempty"`
 
+	// Inference describes WHERE catalog models can be called. Model identity and
+	// quality remain in the shipped routing catalog; this block contains only
+	// user/pack-owned backend wiring and model-id bindings. Secrets never live
+	// here: Auth="1password" names an environment variable whose op:// reference
+	// remains in op-refs.env, while Auth="sbx-session" delegates authentication
+	// to the session established by `sbx login`.
+	Inference InferenceConfig `toml:"inference,omitempty"`
+
 	// GogAccount is the Google Workspace account the gog host-MCP server serves.
 	// It is THE source of truth: doctor probes against it, and `make mcp-register`
 	// sources it via `pix config get gog_account` when registering with the
@@ -180,12 +191,11 @@ type Config struct {
 		Paths []string `toml:"paths"`
 	} `toml:"skills"`
 
-	// Pack is the active pack: a git-backed directory carrying skills + knowledge
-	// (+ later mcp/proxies/routing/config). Empty = no active pack. `pix pack
-	// use <path>` sets it; `run` mounts the pack's skills + knowledge. This is the
-	// unifying successor to the loose skills-dir + knowledge_bundles + (eventually)
-	// profile. See docs/design/packs.md.
-	Pack string `toml:"pack,omitempty"`
+	// Packs is the ordered active pack stack. Pack is retained as the last-pack
+	// compatibility image while the command surface migrates; runtime composition
+	// always prefers Packs and de-duplicates Pack.
+	Packs []string `toml:"packs,omitempty"`
+	Pack  string   `toml:"pack,omitempty"`
 
 	Plugins map[string]PluginSpec `toml:"plugins"`
 
@@ -208,6 +218,47 @@ type Config struct {
 	// See RetiredKeys / UnknownKeys.
 	retiredKeys []string
 	unknownKeys []string
+}
+
+// InferenceConfig is deliberately small. Setup and packs author it; ordinary
+// users should not need to understand it. ExclusiveSource, when non-empty, is
+// an enforcement boundary contributed by a pack: every runtime backend/model
+// must come from that pack. This supports a gateway with multiple native wire
+// protocols without weakening exclusivity.
+type InferenceConfig struct {
+	Backends map[string]InferenceBackend `toml:"backends,omitempty"`
+	Models   []InferenceModelBinding     `toml:"models,omitempty"`
+	// AllowedModels is the user's canonical catalog-model roster. An empty list
+	// means no user restriction (pack declarations / legacy config remain
+	// callable). Exclusive pack inference bypasses this personal preference
+	// without deleting it, so switching back restores the personal roster.
+	AllowedModels    []string `toml:"allowed_models,omitempty"`
+	ExclusiveBackend string   `toml:"exclusive_backend,omitempty"`
+	ExclusiveSource  string   `toml:"exclusive_source,omitempty"`
+}
+
+type InferenceBackend struct {
+	Driver            string `toml:"driver"`             // native | openai-compatible | ollama
+	Protocol          string `toml:"protocol,omitempty"` // openai-completions | openai-responses
+	BaseURL           string `toml:"base_url,omitempty"` // public endpoint; never credentials
+	Auth              string `toml:"auth"`               // 1password | sbx-session | none
+	KeyEnv            string `toml:"key_env,omitempty"`  // only for auth=1password
+	Source            string `toml:"source,omitempty"`   // contributing pack root; empty = user/setup
+	CredentialService string `toml:"credential_service,omitempty"`
+	CredentialHeader  string `toml:"credential_header,omitempty"`
+	CredentialFormat  string `toml:"credential_format,omitempty"`
+}
+
+// InferenceModelBinding maps a canonical catalog model to the model id exposed
+// by one backend. Available is observed evidence written by setup/probe, not a
+// theoretical claim from the catalog.
+type InferenceModelBinding struct {
+	Model     string `toml:"model"`
+	Backend   string `toml:"backend"`
+	Upstream  string `toml:"upstream_id"`
+	Available bool   `toml:"available,omitempty"`
+	Verified  bool   `toml:"verified,omitempty"` // successful backend-specific probe, not declaration
+	Source    string `toml:"source,omitempty"`   // contributing pack root; empty = user/setup
 }
 
 // retiredConfigKeys is the allowlist of top-level config keys that once had
@@ -403,6 +454,12 @@ func DataDir() (string, error) {
 // orphaned (see migrateLegacyPackDir in pack.go).
 func PackDir() string { return filepath.Join(dataDirOr(), "default") }
 
+// ContextDir is the always-on, user-authored context layer. It is DATA (durable
+// AGENTS.md + skills), not runtime config or ephemeral state. Team/project
+// context belongs in packs; this directory remains personal and composes above
+// every pack.
+func ContextDir() string { return filepath.Join(dataDirOr(), "context") }
+
 // PacksDir is where adopted REMOTE packs are cloned:
 // $XDG_DATA_HOME/pix/packs, else ~/.local/share/pix/packs. Each lives
 // at <PacksDir>/<name>. Distinct from PackDir (the single default pack).
@@ -460,6 +517,9 @@ var removedServices = map[string]bool{"gws": true, "gws-token": true}
 
 // defaults returns a Config with the sane defaults applied to any unset field.
 func (c *Config) applyDefaults() {
+	if c.Inference.Backends == nil {
+		c.Inference.Backends = map[string]InferenceBackend{}
+	}
 	// services is TRI-STATE (see the ServicesRaw field doc): absent key →
 	// DefaultServices; present key (even `services = []`) → authoritative.
 	if c.ServicesRaw != nil {
@@ -961,11 +1021,15 @@ var NonSecretOpRefsKeys = map[string]bool{
 // to fill. Every example line is COMMENTED OUT so a freshly-seeded file has ZERO
 // active entries — the user uncomments (or adds) a line only when wiring a
 // server. Kept in sync with the repo's config/op-refs.env.example (which the
-// make path uses). Its header repeats OpRefsMentalModel verbatim.
+// make path uses). Its header repeats OpRefsMentalModel's wording as dotenv
+// comments; every physical prose line must carry its own # prefix.
 const OpRefsTemplate = `# pix op-refs.env — 1Password refs the sbx gateway resolves via
 # ` + "`op run --env-file`" + ` when it spawns each host MCP server.
 #
-# ` + OpRefsMentalModel + `
+# op-refs.env maps ENV_VAR = op://vault/item/field. When the gateway spawns a
+# host MCP server it resolves those refs from 1Password and injects them as env
+# vars — the secret never touches disk or the sandbox. A server with no creds
+# (pio) needs no entry.
 #
 # This file holds op://vault/item/field REFERENCES only, plus the documented
 # non-secret env allowlist (GOG_ACCOUNT, GOG_HOME, GOG_KEYRING_BACKEND,

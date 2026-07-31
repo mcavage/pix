@@ -17,6 +17,12 @@ func clearSlackToken(t *testing.T) {
 	t.Setenv("SLACK_TOKEN", "")
 	t.Setenv("SLACK_USER_TOKEN", "")
 	t.Setenv("SLACK_BOT_TOKEN", "")
+	// A real host config may carry OAuth wiring even when the legacy env vars
+	// are empty. Pin this test to the static source so it never reads the user's
+	// 1Password document or calls Slack.
+	resetSlackTokenSourceForTest()
+	slackNewTokenSource = func() slackTokenSource { return staticSlackTokenSource{} }
+	t.Cleanup(resetSlackTokenSourceForTest)
 }
 
 func TestSlackAdapterInfo(t *testing.T) {

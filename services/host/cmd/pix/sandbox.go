@@ -36,8 +36,9 @@ var knownSbxStates = map[string]bool{
 
 // parsePixBoxes filters `sbx ls` output to pix-* rows and pulls name,
 // state, and (best-effort) the workspace dir. It tolerates column drift: the
-// state is whichever field is a known lifecycle word, and the dir is the last
-// absolute-path-looking field.
+// state is whichever field is a known lifecycle word. A raw row supplies the
+// dir only when it contains exactly one absolute path; pack mounts can add
+// more paths, and guessing among them would mislabel a mount as the workspace.
 func parsePixBoxes(sbxLsOut string) []sbxBox {
 	var out []sbxBox
 	for _, ln := range strings.Split(sbxLsOut, "\n") {
@@ -50,13 +51,17 @@ func parsePixBoxes(sbxLsOut string) []sbxBox {
 			continue
 		}
 		b := sbxBox{Name: name}
+		var absolutePaths []string
 		for _, f := range fields[1:] {
 			switch {
 			case knownSbxStates[strings.ToLower(f)]:
 				b.State = strings.ToLower(f)
 			case strings.HasPrefix(f, "/"):
-				b.Dir = f
+				absolutePaths = append(absolutePaths, f)
 			}
+		}
+		if len(absolutePaths) == 1 {
+			b.Dir = absolutePaths[0]
 		}
 		if b.State == "" {
 			b.State = "?"
@@ -64,6 +69,19 @@ func parsePixBoxes(sbxLsOut string) []sbxBox {
 		out = append(out, b)
 	}
 	return out
+}
+
+// overlayReceiptDirs replaces best-effort sbx display data with Pix's trusted
+// create receipt. The receipt records the canonical workspace passed to the
+// successful create and is therefore authoritative when packs add other host
+// paths to the sbx listing.
+func overlayReceiptDirs(boxes []sbxBox, stateDir string) {
+	for i := range boxes {
+		receipt, status, err := readSandboxMCPReceipt(stateDir, boxes[i].Name)
+		if err == nil && status == sandboxMCPStateOK && receipt != nil {
+			boxes[i].Dir = receipt.Workspace
+		}
+	}
 }
 
 // runLs lists the pix sandboxes on this host.
@@ -85,6 +103,9 @@ func runLs(argv []string) {
 		fatalSbx(fmt.Errorf("sbx ls failed: %v", err))
 	}
 	boxes := parsePixBoxes(out)
+	if stateDir, err := sandboxMCPStateDirFn(); err == nil {
+		overlayReceiptDirs(boxes, stateDir)
+	}
 	if jsonOut {
 		printJSONLauncher(boxes)
 		return

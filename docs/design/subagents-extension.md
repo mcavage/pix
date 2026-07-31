@@ -45,7 +45,8 @@ final output.
 **Better** (fix what's broken here):
 
 1. **Stability pillar #1 — curated child extension set.** Spawn the child with
-   `--no-extensions -e <this-extension>`. `--no-extensions` drops auto-discovery
+   `--no-extensions -e <inference-extension> -e <this-extension>`.
+   `--no-extensions` drops auto-discovery
    (so the port-binding extensions never load and never deadlock), while the
    explicit `-e` re-adds *only* this subagent extension — which is also what makes
    trees possible.
@@ -89,7 +90,7 @@ final output.
 parent pi (this extension registers tool "subagent")
   └─ execute(): discover agents → for each task:
        spawn: node <cli.js> --mode json -p --no-session \
-                 --no-extensions -e <self> \
+                 --no-extensions -e <inference> -e <self> \
                  [--model provider/id] [--thinking lvl] \
                  [--tools a,b,c] [--append-system-prompt <tmp>] \
                  "Task: ..."
