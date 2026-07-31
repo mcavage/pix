@@ -76,6 +76,31 @@ test("curated children reload generated inference providers before subagents", a
 	assert.deepEqual(reg.mod.coreChildExtensionArgs(self), ["-e", inference, "-e", self]);
 });
 
+test("an explicit parent Ollama model becomes the subagent availability boundary", async () => {
+	const reg = await loadSubagents({});
+	assert.equal(
+		reg.mod.explicitParentOllamaModel([
+			"pi",
+			"--model",
+			"ollama/glm-5.2:cloud",
+		]),
+		"ollama/glm-5.2:cloud",
+	);
+	assert.equal(
+		reg.mod.explicitParentOllamaModel(["pi", "--model=ollama/qwen3.5:9b"]),
+		"ollama/qwen3.5:9b",
+	);
+	assert.equal(
+		reg.mod.explicitParentOllamaModel([
+			"pi",
+			"--model",
+			"docker-openai/gpt-5.6-sol",
+		]),
+		"",
+		"cloud parents retain normal intent routing",
+	);
+});
+
 test("policy-refusal detection is narrow and recognizes Anthropic cyber refusals", async () => {
 	const reg = await loadSubagents({});
 	assert.equal(
