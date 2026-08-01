@@ -80,6 +80,11 @@ func ollamaGroup(cfg *config.Config, env shellEnv) group {
 		ollamaReadinessAxes(cfg, env, resolveMCPSandboxContext(env).sandbox, nil),
 	)
 	ollama.checks = append(ollama.checks, s.All()...)
+	// The hardware reading sits with the local models it sizes. It is appended
+	// directly rather than through an axis because it asserts NOTHING about
+	// readiness: it is an inference, so it is always a note and never a verdict
+	// (see readiness_hardware.go).
+	ollama.checks = append(ollama.checks, hardwareCheck(probeHostMemory(env))...)
 	return ollama
 }
 

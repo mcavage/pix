@@ -86,14 +86,17 @@ func TestConfigureModelRosterRestrictsRuntimeAndRoutes(t *testing.T) {
 	if err := configureDirectInference(cfg, []string{"anthropic", "openai"}); err != nil {
 		t.Fatal(err)
 	}
+	// The roster runs AFTER verification now, and only offers what answered a
+	// request — so a probed roster is the only shape it ever sees in setup.
+	for i := range cfg.Inference.Models {
+		cfg.Inference.Models[i].Verified = true
+		cfg.Inference.Models[i].VerifiedBy = config.VerifiedByProbe
+	}
 	if err := configureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, false, "openai/gpt-5.6-sol"); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(cfg.Inference.AllowedModels, ","); got != "openai/gpt-5.6-sol" {
 		t.Fatalf("allowed models = %q", got)
-	}
-	for i := range cfg.Inference.Models {
-		cfg.Inference.Models[i].Verified = true
 	}
 	routes, manifest, err := compileInferenceRuntime(cfg, time.Unix(1, 0))
 	if err != nil {
@@ -126,6 +129,10 @@ func TestConfigureModelRosterRejectsUnavailableChoice(t *testing.T) {
 	cfg := &config.Config{}
 	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
 		t.Fatal(err)
+	}
+	for i := range cfg.Inference.Models {
+		cfg.Inference.Models[i].Verified = true
+		cfg.Inference.Models[i].VerifiedBy = config.VerifiedByProbe
 	}
 	err := configureModelRoster(cfg, strings.NewReader(""), &bytes.Buffer{}, false, "ollama/kimi-k3:cloud")
 	if err == nil || !strings.Contains(err.Error(), "not available") {
@@ -264,14 +271,16 @@ func TestSetupChooseInferenceOffersDetectedOllamaAndNeedsNoOnePassword(t *testin
 	}
 	cfg := &config.Config{}
 	var out bytes.Buffer
-	selected, err := setupChooseInference(cfg, env, strings.NewReader("2\n"), &out, true)
+	// "2,4" is local AND cloud. Token 2 alone now means Ollama LOCAL only: the
+	// un-asked-for cloud binding was the gated-model delivery mechanism.
+	selected, err := setupChooseInference(cfg, env, strings.NewReader("2,4\n"), &out, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !selected || inferenceNeedsOnePassword(cfg) {
 		t.Fatalf("selected=%v inference=%+v", selected, cfg.Inference)
 	}
-	if !strings.Contains(out.String(), "2. Ollama") || len(cfg.Inference.Models) != 6 {
+	if !strings.Contains(out.String(), "2. Ollama local") || len(cfg.Inference.Models) != 6 {
 		t.Fatalf("output=%q models=%+v", out.String(), cfg.Inference.Models)
 	}
 	got := map[string]bool{}

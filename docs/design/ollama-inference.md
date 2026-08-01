@@ -87,7 +87,7 @@ empty). Local model choice cannot be sized to a machine that is never measured.
 
 **4. The catalog carries exactly one local rung.** `ollama/qwen3.5:9b` is the
 only `local: true` entry in `defaults/models.json`, so a 128 GB M4 Max and a
-16 GB Air are offered the same 9B.
+16 GB Air are offered the same 9B. (Resolved: a 24 GB floor — see the RAM table.)
 
 **5. A local-only user who has not pulled that one model hits a hard error and
 setup dies.** `inference.go:209`:
@@ -266,13 +266,37 @@ KB/token; it is hand-maintained beside the scorecard, same posture:
 
 (1 GB = 2³⁰; e.g. 32,768 × 96 KB = 3.0 GB, 32,768 × 128 KB = 4.0 GB.)
 
+**A hard 24 GB floor sits above the arithmetic.** Below `localFloorTotalGB`
+(24 GB total, whatever the usable budget computes) Pix offers NO local model and
+names Ollama Cloud instead. This is a product decision that deliberately
+overrides the fits-in-usable-RAM rule, taken by the owner after the review:
+
+> The rule alone said a 16 GB Mac should run the 9B — 16 × 0.67 = 10.7, over its
+> 10 GB gate. That is true only of an idle machine. The 9B wires ~9.3 GB,
+> leaving ~6.7 GB for macOS, a browser, an editor and the agent itself, and the
+> setup probe passes anyway because it runs during the one idle moment the
+> machine ever has. The user meets the thrash mid-session, when a probe can no
+> longer save them. Below the floor the honest answer is Cloud, not a model
+> small enough to fit but too small to code with.
+
+An UNMEASURABLE machine also gets nothing, reversing rev 2's floor-rung offer:
+combined with the floor, offering the smallest model to an unsized box hands a
+local model to exactly the machines the floor exists to protect, since an
+unmeasured machine is likelier small than large.
+
+That makes the 4b rung unreachable by the offer path on every machine (a 24 GB
+box already clears the 9b). It stays in the catalog as a routing target for a
+user who pulled it themselves — an already-pulled model is bound as a candidate
+and judged by the probe, not the gate.
+
 **Total RAM → top offered rung** (`usable = total × fraction`; the top rung is
-the largest whose `min_ram_gb ≤ usable`). Every row moved down relative to rev 1:
+the largest whose `min_ram_gb ≤ usable`, and only at/above the 24 GB floor):
 
 | total RAM | darwin usable | darwin rung | linux usable | linux rung |
 | --- | --- | --- | --- | --- |
-| 8 GB | 5.4 (0.67) | **none** — say so | 4.8 | **none** — say so |
-| 16 GB | 10.7 (0.67) | `qwen3.5:4b` | 9.6 | `qwen3.5:4b` |
+| 8 GB | 5.4 (0.67) | **none** — below floor | 4.8 | **none** — below floor |
+| 16 GB | 10.7 (0.67) | **none** — below floor | 9.6 | **none** — below floor |
+| unmeasurable | — | **none** — say so | — | **none** — say so |
 | 24 GB | 16.1 (0.67) | `qwen3.5:9b` | 14.4 | `qwen3.5:9b` |
 | 32 GB | 21.4 (0.67) | `qwen3.5:9b` | 19.2 | `qwen3.5:9b` |
 | 36 GB | 24.1 (0.67) | `qwen3.5:27b` | 21.6 | `qwen3.5:9b` |

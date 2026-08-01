@@ -149,10 +149,22 @@ func setupLocalModels(cfg *config.Config, env shellEnv, in io.Reader, out io.Wri
 	case pullFlag:
 		o.consent = "--pull-models"
 	case interactive:
+		// The header is RENDERED FROM THE ROLES PRESENT, not hard-coded. It used to
+		// say "optional — fact capture, semantic recall, the sandbox bridge", which
+		// was written when all three roles really were progressive enhancement. On
+		// a pure-local box the bridge tag is now the ONLY model Pix can call at
+		// all, and calling that optional is exactly the class of untrue statement
+		// honest verification exists to delete.
+		bridgeRequired := ollamaBridgeIsOnlyInferenceModel(cfg)
 		fmt.Fprintln(out, "")
-		fmt.Fprintln(out, "Missing local Ollama models (optional — fact capture, semantic recall, the sandbox bridge):")
+		fmt.Fprintln(out, "Missing local Ollama models:")
 		for _, m := range o.missing {
-			fmt.Fprintf(out, "  %s  (%s)\n", m.tag, strings.Join(m.roles, ", "))
+			roles := strings.Join(m.roles, ", ")
+			if bridgeRequired && m.tag == cfg.OllamaBridgeModel {
+				fmt.Fprintf(out, "  %-18s (%s, inference)  — REQUIRED: the only model Pix can call on this machine\n", m.tag, roles)
+				continue
+			}
+			fmt.Fprintf(out, "  %-18s (%s)  — optional\n", m.tag, roles)
 		}
 		fmt.Fprintf(out, "Pull %s now? Each download can be several GB of network and disk. [y/N] ", plural(len(o.missing), "model"))
 		line, ok := scanYN(bufio.NewScanner(in))
@@ -201,6 +213,25 @@ func setupLocalModels(cfg *config.Config, env shellEnv, in io.Reader, out io.Wri
 		}
 	}
 	return o
+}
+
+// ollamaBridgeIsOnlyInferenceModel reports whether the configured bridge tag is
+// also the inference binding this host is counting on — i.e. a pure-local box
+// with nothing callable yet. That is the case where the pull prompt must say
+// REQUIRED instead of optional.
+func ollamaBridgeIsOnlyInferenceModel(cfg *config.Config) bool {
+	if cfg == nil || strings.TrimSpace(cfg.OllamaBridgeModel) == "" {
+		return false
+	}
+	if callable, _ := configuredInferenceSummary(cfg); callable > 0 {
+		return false
+	}
+	for _, b := range cfg.Inference.Models {
+		if b.Upstream == cfg.OllamaBridgeModel && ollamaBindingDriver(cfg, b) && b.Available {
+			return true
+		}
+	}
+	return false
 }
 
 // summaryLine renders the outcome as ONE readiness-axis line for the setup

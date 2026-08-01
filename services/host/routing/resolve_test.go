@@ -1,6 +1,9 @@
 package routing
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func in(name, taskType, objective string) Intent {
 	return Intent{Name: name, TaskType: taskType, Objective: objective}
@@ -83,9 +86,12 @@ func TestResolve_ProviderAllowlist(t *testing.T) {
 	}
 }
 
-func TestResolve_InfeasibleFallsBack(t *testing.T) {
-	// An impossible cost ceiling: nothing feasible -> best callable model,
-	// flagged. Static fallbacks must never bypass observed availability.
+func TestResolve_InfeasibleRelaxesOneClassAtATime(t *testing.T) {
+	// Was TestResolve_InfeasibleFallsBack, which asserted the CLIFF: nothing
+	// feasible dropped every constraint at once and returned the best available
+	// model overall (anthropic/opus). The ladder surrenders one class at a time,
+	// so an impossible accuracy floor is dropped BEFORE the cost ceiling and the
+	// free local model — which honors the ceiling — wins.
 	it := in("tight", "code", "accuracy")
 	it.MaxCostUSD = 0.0001 // below every non-local model, and local is 0 so...
 	it.MinAccuracy = 0.99  // ...the accuracy floor rules the free local model out too
@@ -94,8 +100,11 @@ func TestResolve_InfeasibleFallsBack(t *testing.T) {
 	if d.ConstraintsMet {
 		t.Fatal("should be infeasible")
 	}
-	if d.Model != "anthropic/opus" {
-		t.Fatalf("degraded model = %q, want best available anthropic/opus", d.Model)
+	if d.Model != "ollama/local" {
+		t.Fatalf("degraded model = %q, want ollama/local (only the accuracy floor was surrendered)", d.Model)
+	}
+	if got := strings.Join(d.Relaxed, ","); got != "accuracy" {
+		t.Fatalf("relaxed = %q, want \"accuracy\" (the cost ceiling still holds)", got)
 	}
 	if d.Reason == "" {
 		t.Fatal("infeasible decision must explain itself")

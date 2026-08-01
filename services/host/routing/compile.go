@@ -9,6 +9,14 @@ import (
 
 // CompiledRoutingVersion is the schema version of routing.json. Bump on a
 // breaking change to the shape the sandbox reads.
+//
+// DO NOT BUMP IT FOR AN ADDITIVE FIELD. extensions/subagents.ts requires an
+// EXACT match (`if (parsed.version !== ROUTING_SCHEMA) ... return null`) and
+// silently drops every agent to "inherit parent model" when it does not match.
+// Every sandbox image already built carries the old ROUTING_SCHEMA, so a tidy
+// bump bricks subagent routing in the whole fleet until each image is rebuilt
+// and reloaded. An optional field the sandbox reader ignores is not a breaking
+// change; a bump ships WITH an image rebuild or not at all.
 const CompiledRoutingVersion = 1
 
 // CompiledRoute is one resolved intent the sandbox consumes: the chosen model
@@ -22,6 +30,10 @@ type CompiledRoute struct {
 	CostUSD        float64 `json:"cost_usd,omitempty"`
 	LatencyMs      float64 `json:"latency_ms,omitempty"`
 	Reason         string  `json:"reason"`
+	// Relaxed carries Decision.Relaxed to the sandbox and to machine readers of
+	// routing.json: which hard-constraint classes this route had to surrender.
+	// Additive and optional — see CompiledRoutingVersion.
+	Relaxed []string `json:"relaxed,omitempty"`
 }
 
 // CompiledRouting is the file the sandbox reads (routing.json). It maps intent
@@ -56,6 +68,7 @@ func Compile(reg *Registry, sc *Scorecard, pol *Policy, now time.Time) CompiledR
 			Objective:      d.Objective,
 			ConstraintsMet: d.ConstraintsMet,
 			Reason:         d.Reason,
+			Relaxed:        d.Relaxed,
 		}
 		if d.Chosen != nil {
 			r.Accuracy = d.Chosen.Accuracy

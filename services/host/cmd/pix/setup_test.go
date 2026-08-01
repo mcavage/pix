@@ -891,7 +891,7 @@ func TestSetupPhases_NumberedHeadersInFixedOrder(t *testing.T) {
 // consenting steps are last, and model pulls (the only step that can cost
 // gigabytes) are dead last.
 func TestSetupMutationOrder_FixedRiskiestLast(t *testing.T) {
-	want := "keys,config,pack,mcp,knowledge,identity,gworkspace,models"
+	want := "keys,config,pack,mcp,knowledge,identity,gworkspace,models,inference"
 	if got := strings.Join(setupMutationOrder, ","); got != want {
 		t.Errorf("setupMutationOrder = %s, want %s", got, want)
 	}
