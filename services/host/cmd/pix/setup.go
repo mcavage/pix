@@ -631,10 +631,11 @@ type setupMutationStep struct {
 
 // setupMutationOrder is the FIXED order (AC-P0-303), riskiest last, named
 // here so the order is a value a test can assert on rather than a property of
-// the control flow. gworkspace and models sit at the end because they are the
-// only two steps that can ask the user a question, and model pulls are last
-// because they are the only step that can cost gigabytes.
-var setupMutationOrder = []string{"keys", "config", "pack", "mcp", "knowledge", "identity", "gworkspace", "models"}
+// the control flow. gworkspace, models and inference sit at the end because
+// they are the only steps that talk to the user; models is second-to-last
+// because it is the only step that can cost gigabytes, and inference is last
+// because it can only judge what models left behind.
+var setupMutationOrder = []string{"keys", "config", "pack", "mcp", "knowledge", "identity", "gworkspace", "models", "inference"}
 
 // runSetupMutations executes steps in order and returns the axes it touched.
 // It returns NO user-facing strings (AC-P0-302): the report is rendered from
@@ -674,9 +675,10 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 				fmt.Fprintf(out, "  github: host credential was not synced (%v)\n", err)
 			}
 			if selected {
-				if err := configureModelRoster(cfg, in, out, interactive, opts.models); err != nil {
-					return fmt.Errorf("choosing models: %w", err)
-				}
+				// The roster moved to the `inference` step: an Ollama binding is only a
+				// CANDIDATE here (its weights may not be pulled until the models step),
+				// so choosing a roster now would either offer an unproven model or
+				// hard-fail a user whose first setup has not downloaded anything yet.
 				return cfg.Save()
 			}
 			if err := ensureSetupPrereqsFor(env, in, out, interactive, true); err != nil {
@@ -696,9 +698,9 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 			if err := configureDirectInference(cfg, providers); err != nil {
 				return fmt.Errorf("configuring direct inference: %w", err)
 			}
-			if err := configureModelRoster(cfg, in, out, interactive, opts.models); err != nil {
-				return fmt.Errorf("choosing models: %w", err)
-			}
+			// Bind -> verify -> roster. The roster must not offer a model that has
+			// not answered a request, so verification comes first; it costs at most
+			// one probe timeout before the prompt.
 			attempted, verified, failures := verifyDirectInference(cfg, env)
 			if err := cfg.Save(); err != nil {
 				return err
@@ -709,6 +711,18 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 					detail = "no provider accepted a model-specific request"
 				}
 				return fmt.Errorf("provider keys resolved, but live inference verification failed: %s", detail)
+			}
+			// Only choose a roster from models that answered. With nothing callable
+			// the roster has nothing to offer and must stay silent rather than fail
+			// the run for a second, already-reported reason — unless the caller named
+			// models explicitly, which deserves the specific error.
+			if callable, _ := configuredInferenceSummary(cfg); callable > 0 || strings.TrimSpace(opts.models) != "" {
+				if err := configureModelRoster(cfg, in, out, interactive, opts.models); err != nil {
+					return fmt.Errorf("choosing models: %w", err)
+				}
+			}
+			if err := cfg.Save(); err != nil {
+				return err
 			}
 			if verified > 0 && len(failures) > 0 {
 				fmt.Fprintf(out, "  inference: %d model(s) verified; %d candidate(s) unavailable or unauthorized (%s)\n",
@@ -836,7 +850,78 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 			receiptSetupModels(env, out, *models)
 			return nil
 		},
+	}, {
+		name:  "inference",
+		axes:  []Axis{axisProviders},
+		fatal: false,
+		run: func() error {
+			// LAST, and non-fatal: it can only judge what the models step left
+			// behind, and a probe failure must not stop the report from rendering
+			// the axes the run did touch. It prints no routine success line —
+			// success words come from the post-mutation probe (AC-P0-302).
+			return runSetupInferenceStep(cfg, env, in, out, interactive, *models)
+		},
 	}}
+}
+
+// runSetupInferenceStep verifies ollama bindings with real requests, picks the
+// roster from what actually answered, and then branches on the ONE question
+// that matters: is there anything callable, and if not, whose decision was it.
+//
+// Declining a multi-gigabyte download is a decision, not a failure: it returns
+// nil and setup exits 0 with an honest `✗ inference` summary. A non-zero exit
+// stays reserved for probes that were dispatched and refused, and for a pull
+// that was consented to and then failed (which the models step already reports
+// — a second error would double-report one cause).
+func runSetupInferenceStep(cfg *config.Config, env shellEnv, in io.Reader, out io.Writer, interactive bool, models setupModelsOutcome) error {
+	attempted, verified, failures, notProbed := verifyOllamaInference(cfg, env, out)
+	callable, _ := configuredInferenceSummary(cfg)
+	if callable > 0 {
+		// Deviation from the design: the roster prompt is NOT taken from
+		// prompts.reserve. setupMaxPrompts is 2 and both slots are already claimed
+		// (gworkspace, models), so reserving here would deny the prompt and
+		// silently auto-select every candidate — a regression, not a budget fix.
+		if err := configureModelRoster(cfg, in, out, interactive, ""); err != nil {
+			return fmt.Errorf("choosing models: %w", err)
+		}
+	}
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+	if verified > 0 {
+		if len(failures) > 0 {
+			fmt.Fprintf(out, "  inference: %d model(s) verified; %d candidate(s) unavailable or unauthorized (%s)\n",
+				verified, len(failures), strings.Join(failures, "; "))
+		}
+		return nil
+	}
+	// Cloud was selected but nothing on the plan answered: that is a hard
+	// failure, because a silent "configured" for an account that can call
+	// nothing is the exact class of claim this whole path exists to delete.
+	if cloud := ollamaCloudCandidates(cfg); len(cloud) > 0 && attempted > 0 {
+		return fmt.Errorf("Ollama Cloud was selected, but no cloud model answered a request: %s. Sign in with `ollama signin`, then re-run `pix setup`",
+			strings.Join(failures, "; "))
+	}
+	if attempted > 0 {
+		return fmt.Errorf("ollama models are bound, but none answered a request: %s", strings.Join(failures, "; "))
+	}
+	if len(unverifiedOllamaCandidates(cfg)) == 0 {
+		return nil // nothing ollama-shaped here; the keys step owns this host
+	}
+	switch models.consent {
+	case "--pull-models", "prompt-yes":
+		// The pull was consented to and did not produce a callable model. The
+		// models step already failed with the exact retry command and owns the
+		// non-zero exit; repeating it here would report one cause twice.
+		return nil
+	default:
+		// Declined or never asked. Print the truth, claim nothing, exit 0.
+		if len(notProbed) > 0 {
+			fmt.Fprintf(out, "  inference: %d candidate(s) not probed (the local budget ran out) — re-run: pix setup\n", len(notProbed))
+		}
+		fmt.Fprintf(out, "  inference: no model has passed a probe yet — pull one: %s\n", pullModelsFixCmd)
+		return nil
+	}
 }
 
 // syncGitHubCredentialFromHost mirrors the current host gh login into sbx's
@@ -936,11 +1021,11 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 
 	// PHASE 4 — mutate, and PHASE 5 — consent. One ordered step table
 	// (setupMutationOrder), split at the point where the steps start asking
-	// permission: the first six are unattended, the last two are the consented,
-	// riskiest-last pair.
+	// permission: the first six are unattended, the last three (gworkspace,
+	// models, inference) are the consented, riskiest-last group.
 	var models setupModelsOutcome
 	steps := setupMutationSteps(env, inv, opts, in, out, interactive, &models, prompts)
-	split := len(steps) - 2
+	split := len(steps) - 3
 	setupPhaseHeader(out, setupPhaseMutate, "")
 	if _, err := runSetupMutations(steps[:split]); err != nil {
 		return err

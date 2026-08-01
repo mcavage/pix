@@ -232,7 +232,10 @@ func TestSetupModels_InteractiveYesPulls(t *testing.T) {
 	env := modelsSetupEnv(t, w)
 	stubProvisionKeysOK(t)
 	var out bytes.Buffer
-	if err := setupHostPhase(env, nil, strings.NewReader("\n\ny\n"), &out, true); err != nil {
+	// inference default, then this run's memory answer. There is no roster
+	// prompt to answer: nothing is callable until a probe promotes it, and the
+	// roster never offers an unproven model.
+	if err := setupHostPhase(env, nil, strings.NewReader("\ny\n"), &out, true); err != nil {
 		t.Fatalf("unexpected error: %v\n%s", err, out.String())
 	}
 	if n := w.count("ollama pull"); n != 2 {
