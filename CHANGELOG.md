@@ -6,6 +6,26 @@ human-readable summary of what changed and whether an upgrade is breaking.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## Unreleased
+
+### Changed
+
+- **Renamed `pix route` to `pix models`** (docs/design/models-cli.md): the
+  noun a user actually wants ("what models can pix use, and which are wired
+  up") replaces the mechanism it was filed under. `pix models ls|show|pick`
+  and the mutating `pix models route` (`--out PATH`; `models compile` stays as
+  an undocumented muscle-memory alias) are thin passthroughs to the unchanged
+  `pix-host route` subcommand tree — nothing on the host side moved. Bare
+  `pix models` is a new read-only status screen: runtime, bound providers,
+  the roster, and the resolved session model, ending with a `Next:` line.
+  `pix route` keeps working for one release as a hidden alias, printing a
+  one-line deprecation to stderr only (stdout/`--json` unaffected);
+  `retiredVerbs["route"] = "models"` (help.go) is permanent and is what a
+  typed `pix route` resolves to after the alias is removed. `pix models add
+  <provider>` and `pix models setup` — the fix for "I can't find how to add a
+  second provider key later" — land in a follow-up change; this rename only
+  builds the verb tree and leaves the extension point.
+
 ## 0.1.0 - 2026-07-25
 
 ### Breaking

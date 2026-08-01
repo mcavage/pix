@@ -27,7 +27,9 @@ tutorials.
 - [slack-setup.md](design/slack-setup.md) — the accepted per-user Slack
   credential model and proposed guided setup flow.
 - [routing.md](design/routing.md) — the model router: registry, scorecard,
-  policy, and how `route compile` bakes `routing.json`.
+  policy, and how `models route` bakes `routing.json`.
+- [models-cli.md](design/models-cli.md) — the `pix models` noun rename and the
+  first-run "add a second provider key" fix.
 - [subagents-extension.md](design/subagents-extension.md) — the `subagent` tool
   (single / parallel / chain / trees) and the watchdog.
 - [subagent-pin-tracker.md](design/subagent-pin-tracker.md) — the pinned
