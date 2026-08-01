@@ -29,6 +29,42 @@ type Decision struct {
 	Reason         string      `json:"reason"`
 	Chosen         *Candidate  `json:"chosen,omitempty"`
 	Alternatives   []Candidate `json:"alternatives,omitempty"`
+	// Relaxed names the hard-constraint classes that had to be surrendered, in
+	// the order they were dropped, before anything was feasible. Empty means the
+	// route honored every constraint. Additive and optional: it does NOT change
+	// the shape the sandbox reads, so CompiledRoutingVersion stays 1.
+	Relaxed []string `json:"relaxed,omitempty"`
+}
+
+// relaxationStage is one rung of the ladder: the constraint classes still
+// enforced, plus the cumulative list of what has been surrendered to get here.
+type relaxationStage struct {
+	provider bool // enforce the provider allowlist
+	accuracy bool // enforce the accuracy floor
+	cost     bool // enforce the cost ceiling
+	latency  bool // enforce the latency ceiling
+	dropped  []string
+}
+
+// relaxationLadder is the DOCUMENTED order in which hard constraints are
+// surrendered when nothing is feasible. It replaces a single cliff that dropped
+// every constraint at once — which, on a pure-Ollama box, made a cheap breadth
+// fan-out land on the largest local model (every local cost is $0, so the cost
+// objective tie-broke on accuracy descending).
+//
+// Provider goes first: vendor diversity is a PREFERENCE encoded as a
+// constraint, and it is the first thing that stops making sense when there is
+// one vendor. Latency goes last on purpose: it is the axis that still protects
+// the user's wall-clock time on a laptop, and it is what keeps `breadth` off
+// the 35B rung.
+func relaxationLadder() []relaxationStage {
+	return []relaxationStage{
+		{provider: true, accuracy: true, cost: true, latency: true},
+		{accuracy: true, cost: true, latency: true, dropped: []string{"provider"}},
+		{cost: true, latency: true, dropped: []string{"provider", "accuracy"}},
+		{latency: true, dropped: []string{"provider", "accuracy", "cost"}},
+		{dropped: []string{"provider", "accuracy", "cost", "latency"}},
+	}
 }
 
 const defaultObjective = "accuracy"
@@ -40,7 +76,11 @@ const defaultObjective = "accuracy"
 //  2. Feasible   = candidates meeting every HARD constraint (cost/latency
 //     ceilings, accuracy floor, provider allowlist).
 //  3. If any are feasible, pick by Objective (ties broken deterministically).
-//  4. Else fall back to intent.Fallback (or the policy default) and flag it.
+//  4. Else walk the relaxation ladder, dropping ONE constraint class at a time
+//     (provider, then accuracy, then cost, then latency) and stopping at the
+//     first stage with a feasible set. ConstraintsMet is false from stage 1 on,
+//     and Relaxed names what was surrendered.
+//  5. Else fall back to intent.Fallback (or the policy default) and flag it.
 //
 // It never returns "no model": a crew task always gets one, just flagged when
 // the constraints could not be honored.
@@ -72,52 +112,49 @@ func Resolve(reg *Registry, sc *Scorecard, pol *Policy, intent Intent) Decision 
 		})
 	}
 
-	// 2. Feasible: apply hard constraints.
+	// 2-4. Feasible under the strictest stage that admits anything. Stage 0 is
+	// today's all-constraints filter; every later stage surrenders exactly one
+	// more class, so a degraded route names WHAT it gave up instead of silently
+	// dropping every constraint at once.
 	providerOK := providerFilter(intent.Providers)
-	var feasible []Candidate
-	for _, c := range cands {
-		if intent.MaxCostUSD > 0 && c.CostUSD > intent.MaxCostUSD {
+	for _, stage := range relaxationLadder() {
+		var feasible []Candidate
+		for _, c := range cands {
+			if stage.cost && intent.MaxCostUSD > 0 && c.CostUSD > intent.MaxCostUSD {
+				continue
+			}
+			if stage.latency && intent.MaxLatencyMs > 0 && c.LatencyMs > intent.MaxLatencyMs {
+				continue
+			}
+			if stage.accuracy && intent.MinAccuracy > 0 && c.Accuracy < intent.MinAccuracy {
+				continue
+			}
+			if stage.provider && !providerOK(c.Provider) {
+				continue
+			}
+			feasible = append(feasible, c)
+		}
+		if len(feasible) == 0 {
 			continue
 		}
-		if intent.MaxLatencyMs > 0 && c.LatencyMs > intent.MaxLatencyMs {
-			continue
-		}
-		if intent.MinAccuracy > 0 && c.Accuracy < intent.MinAccuracy {
-			continue
-		}
-		if !providerOK(c.Provider) {
-			continue
-		}
-		feasible = append(feasible, c)
-	}
-
-	// 3. Optimize among the feasible set.
-	if len(feasible) > 0 {
 		rankBy(feasible, obj)
 		chosen := feasible[0]
 		d.Model = chosen.ID
-		d.ConstraintsMet = true
 		d.Chosen = &chosen
 		d.Alternatives = feasible
-		d.Reason = fmt.Sprintf(
-			"objective=%s: chose %s (accuracy %.2f, $%.4f, %.0fms) from %d feasible of %d scored",
-			obj, chosen.ID, chosen.Accuracy, chosen.CostUSD, chosen.LatencyMs, len(feasible), len(cands))
-		return d
-	}
-
-	// 4. Nothing feasible. Prefer the best SCORED+AVAILABLE candidate while
-	// flagging the constraint degradation. This is the progressive-setup rule:
-	// one callable model must serve every intent instead of falling through to a
-	// hard-coded model whose backend is unavailable. Only use the static fallback
-	// when there are no scored available candidates at all.
-	rankBy(cands, obj)
-	if len(cands) > 0 {
-		chosen := cands[0]
-		d.Model = chosen.ID
-		d.Chosen = &chosen
-		d.Alternatives = cands
+		if len(stage.dropped) == 0 {
+			d.ConstraintsMet = true
+			d.Reason = fmt.Sprintf(
+				"objective=%s: chose %s (accuracy %.2f, $%.4f, %.0fms) from %d feasible of %d scored",
+				obj, chosen.ID, chosen.Accuracy, chosen.CostUSD, chosen.LatencyMs, len(feasible), len(cands))
+			return d
+		}
 		d.ConstraintsMet = false
-		d.Reason = fmt.Sprintf("no model satisfied the constraints (%s); degraded to best available %s", constraintSummary(intent), chosen.ID)
+		d.Relaxed = declaredClasses(intent, stage.dropped)
+		d.Reason = fmt.Sprintf(
+			"nothing matched %s; relaxed %s -> %s (accuracy %.2f, $%.4f, %.0fms) from %d feasible of %d scored",
+			constraintSummary(intent), joinComma(d.Relaxed), chosen.ID,
+			chosen.Accuracy, chosen.CostUSD, chosen.LatencyMs, len(feasible), len(cands))
 		return d
 	}
 
@@ -135,6 +172,27 @@ func Resolve(reg *Registry, sc *Scorecard, pol *Policy, intent Intent) Decision 
 	d.ConstraintsMet = false
 	d.Reason = fmt.Sprintf("no scored+available model for task_type %q; using diagnostic fallback %s", intent.TaskType, fb)
 	return d
+}
+
+// declaredClasses narrows a stage's cumulative dropped list to the constraint
+// classes the intent ACTUALLY declared. Reporting "relaxed provider" for an
+// intent that never had an allowlist would be a claim about a constraint that
+// did not exist; the class whose drop made the stage feasible is always
+// declared, so the result is never empty.
+func declaredClasses(in Intent, dropped []string) []string {
+	declared := map[string]bool{
+		"provider": len(in.Providers) > 0,
+		"accuracy": in.MinAccuracy > 0,
+		"cost":     in.MaxCostUSD > 0,
+		"latency":  in.MaxLatencyMs > 0,
+	}
+	var out []string
+	for _, c := range dropped {
+		if declared[c] {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // providerFilter returns a predicate that admits a provider iff the allowlist is
