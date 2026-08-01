@@ -118,6 +118,11 @@ func TestProvidersGroup_SecretLsFailure_Unverifiable(t *testing.T) {
 // confirmed present, the still-missing alternates are informational only \u2014
 // they never count as outstanding.
 func TestProvidersGroup_AlternateMissingNotOutstanding(t *testing.T) {
+	// Isolate from the developer's real config: runIntentKeyCheck calls
+	// resolveSessionModel -> config.Load(), so a real pix config with Ollama
+	// bindings on disk would make overlord degrade to an Ollama model instead
+	// of the baked openai/gpt-5.6-sol fallback this test asserts.
+	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	// anthropic set, openai/google/github unset. The baked overlord default
 	// (run_intent -> openai/gpt-5.6-sol) makes the run_intent check advise
 	// repointing run_intent, but that is a NOTE (never outstanding): a wrong

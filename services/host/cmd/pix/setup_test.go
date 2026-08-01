@@ -245,6 +245,11 @@ func TestRunSetupCmd_SemanticErrorPrecedesPackAdoption(t *testing.T) {
 // key can be provisioned and it's non-interactive (no prompt) — the fix for the
 // double-prompt + false "ready".
 func TestSetupHostPhase_NoKeyAborts(t *testing.T) {
+	// Isolate from the developer's real config: setupHostPhase consults
+	// configuredKeylessInference -> config.Load(), so a real pix config with
+	// keyless Ollama bindings on disk would make setup proceed without a model
+	// key, defeating the "must abort" assertion.
+	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	env := shellEnv{
 		lookPath: func(n string) (string, error) { return "/usr/bin/" + n, nil },
 		readFile: func(string) (string, error) { return "", os.ErrNotExist },
