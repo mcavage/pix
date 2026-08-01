@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"pix/host/config"
@@ -51,6 +52,17 @@ func providersGroup(cfg *config.Config, sbxOut string, sbxOK bool) group {
 			g.checks = append(g.checks, providerInfoCheck(p, sbxOut, sbxOK))
 		}
 	}
+	if legacy := legacyVerifiedOllamaBindings(cfg); len(legacy) > 0 {
+		// A pre-upgrade config asserted Verified from a LISTING. Grandfathered as
+		// callable (demoting at load would empty the runtime on a working local box
+		// and refuse a launch on a bookkeeping change, not on evidence), but said
+		// out loud once. The row clears on the next setup either way: a re-probe
+		// promotes with provenance, or demotes and the candidate row takes over.
+		g.checks = append(g.checks, check{label: "inference", note: true, verdict: verdictTodo,
+			detail:   fmt.Sprintf("%d ollama binding(s) were marked verified by a listing, not a request — re-verify", len(legacy)),
+			todo:     "pix setup",
+			evidence: "verified without verified_by=probe: " + strings.Join(legacy, ", ")})
+	}
 	g.checks = append(g.checks, runIntentKeyCheck(cfg, sbxOut, sbxOK))
 	return g
 }
@@ -85,6 +97,13 @@ func runIntentKeyCheck(cfg *config.Config, sbxOut string, sbxOK bool) check {
 		return check{label: label, note: true, verdict: verdictReady,
 			detail: "-> " + runtimeID + " via inference backend " + b.Backend}
 	}
+	// The intent's model IS bound here — it just has not answered a request. The
+	// fix is a pull, not somebody else's cloud key.
+	if containsStr(unverifiedOllamaCandidates(cfg), model) {
+		return check{label: label, note: true, verdict: verdictTodo,
+			detail: "-> " + model + " is bound but has not passed a probe (not pulled, or the probe failed)",
+			todo:   pullModelsFixCmd}
+	}
 	provider := model
 	if i := strings.IndexByte(model, '/'); i > 0 {
 		provider = model[:i]
@@ -117,6 +136,82 @@ func runIntentKeyCheck(cfg *config.Config, sbxOut string, sbxOK bool) check {
 // core check's evidence, not repeated here as alternative commands.
 const modelKeyFixCmd = "pix secret set ANTHROPIC_API_KEY op://vault/item/field && pix secret sync"
 
+// pullModelsFixCmd is the ONE copy-pasteable command for the state honest
+// Ollama verification creates: candidates are bound, none has passed a probe,
+// and the reason is almost always "the weights are not on disk". It is NOT a
+// provider-key fix, and remediating this state with one (which is what falling
+// through to modelKeyCoreCheck does) tells a pure-Ollama user to go buy an
+// Anthropic key to fix a download they declined.
+const pullModelsFixCmd = "pix setup --pull-models"
+
+// ollamaBindingDriver reports whether a binding runs through an ollama backend.
+func ollamaBindingDriver(cfg *config.Config, b config.InferenceModelBinding) bool {
+	backend, ok := cfg.Inference.Backends[b.Backend]
+	return ok && backend.Driver == "ollama"
+}
+
+// unverifiedOllamaCandidates returns bound-but-unproven ollama bindings — the
+// declined-pull state. Non-empty means the fix is a pull, never a key.
+func unverifiedOllamaCandidates(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	var out []string
+	for _, b := range cfg.Inference.Models {
+		if !b.Available || b.Verified || b.Source != "" || !ollamaBindingDriver(cfg, b) {
+			continue
+		}
+		if !inferenceBindingAllowed(cfg, b) {
+			continue
+		}
+		out = append(out, b.Model)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ollamaCloudCandidates returns bound non-local ollama models: the set whose
+// entitlement only a real call can establish.
+func ollamaCloudCandidates(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	reg, err := routing.LoadRegistry()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, b := range cfg.Inference.Models {
+		if !b.Available || b.Source != "" || !ollamaBindingDriver(cfg, b) {
+			continue
+		}
+		if m, ok := reg.Get(b.Model); ok && !m.Local {
+			out = append(out, b.Model)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// legacyVerifiedOllamaBindings returns bindings that claim Verified without
+// naming a probe. Only a PRE-UPGRADE config can produce this shape: everything
+// this codebase promotes writes VerifiedBy="probe" in the same assignment, and
+// everything it demotes clears both. So the row fires exactly once and clears
+// on the next setup whether that setup promotes or demotes the binding.
+func legacyVerifiedOllamaBindings(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	var out []string
+	for _, b := range cfg.Inference.Models {
+		if b.Verified && b.VerifiedBy != config.VerifiedByProbe && b.Source == "" && ollamaBindingDriver(cfg, b) {
+			out = append(out, b.Model)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func configuredBindingForModel(cfg *config.Config, model string) (config.InferenceModelBinding, bool) {
 	if cfg == nil {
 		return config.InferenceModelBinding{}, false
@@ -140,6 +235,16 @@ func inferenceCoreCheck(cfg *config.Config, sbxOut string, sbxOK bool) check {
 		return check{label: "inference", requirement: requirementCore, verdict: verdictReady,
 			detail:   fmt.Sprintf("%d configured callable model(s)", count),
 			evidence: "availability-specific inference bindings"}
+	}
+	// Nothing callable, but ollama candidates ARE bound: this host does not need
+	// a provider key, it needs weights. Falling through to modelKeyCoreCheck here
+	// would remediate a not-pulled-a-model problem with `pix secret set
+	// ANTHROPIC_API_KEY`, which is the wrong command for the wrong product.
+	if pending := unverifiedOllamaCandidates(cfg); len(pending) > 0 {
+		return check{label: "inference", requirement: requirementCore, verdict: verdictTodo,
+			detail:   fmt.Sprintf("%d local model candidate(s) bound but unproven (not pulled, or the probe failed)", len(pending)),
+			todo:     pullModelsFixCmd,
+			evidence: "ollama bindings without a probe: " + strings.Join(pending, ", ")}
 	}
 	return modelKeyCoreCheck(sbxOut, sbxOK)
 }
