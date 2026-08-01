@@ -245,7 +245,19 @@ func TestSetupChooseInferenceOffersDetectedOllamaAndNeedsNoOnePassword(t *testin
 		},
 		run: func(name string, args ...string) (string, error) {
 			if name == "ollama" && len(args) == 1 && args[0] == "list" {
-				return "NAME ID SIZE MODIFIED\nqwen3.5:9b abc 6GB now\nglm-5.2:cloud def - now\nkimi-k3:cloud ghi - now\n", nil
+				// Every AVAILABLE Ollama catalog model is present in this listing, so a
+				// catalog id that no real `ollama list` could ever print (the class of
+				// bug that shipped `qwen3.5:397b:cloud`, a two-colon reference) shows up
+				// here as a missing binding rather than as a model that silently never
+				// binds on a user's machine.
+				return "NAME ID SIZE MODIFIED\n" +
+					"qwen3.5:9b abc 6GB now\n" +
+					"glm-5.2:cloud def - now\n" +
+					"kimi-k3:cloud ghi - now\n" +
+					"deepseek-v4-flash:cloud jkl - now\n" +
+					"deepseek-v4-pro:cloud mno - now\n" +
+					"kimi-k2.7-code:cloud pqr - now\n" +
+					"qwen3.5:397b-cloud stu - now\n", nil
 			}
 			return "", fmt.Errorf("unexpected command")
 		},
@@ -259,7 +271,7 @@ func TestSetupChooseInferenceOffersDetectedOllamaAndNeedsNoOnePassword(t *testin
 	if !selected || inferenceNeedsOnePassword(cfg) {
 		t.Fatalf("selected=%v inference=%+v", selected, cfg.Inference)
 	}
-	if !strings.Contains(out.String(), "2. Ollama") || len(cfg.Inference.Models) != 2 {
+	if !strings.Contains(out.String(), "2. Ollama") || len(cfg.Inference.Models) != 6 {
 		t.Fatalf("output=%q models=%+v", out.String(), cfg.Inference.Models)
 	}
 	got := map[string]bool{}
@@ -268,8 +280,15 @@ func TestSetupChooseInferenceOffersDetectedOllamaAndNeedsNoOnePassword(t *testin
 	}
 	// kimi-k3:cloud is still listed by `ollama list` above, but the catalog
 	// retires it (available=false: "extra usage only", 401s on default plans),
-	// so configureOllamaInference must skip it and bind only the callable two.
-	for _, want := range []string{"ollama/qwen3.5:9b", "ollama/glm-5.2:cloud"} {
+	// so configureOllamaInference must skip it and bind only the callable six.
+	for _, want := range []string{
+		"ollama/qwen3.5:9b",
+		"ollama/glm-5.2:cloud",
+		"ollama/deepseek-v4-flash:cloud",
+		"ollama/deepseek-v4-pro:cloud",
+		"ollama/kimi-k2.7-code:cloud",
+		"ollama/qwen3.5:397b-cloud",
+	} {
 		if !got[want] {
 			t.Fatalf("missing Ollama binding %s: %+v", want, cfg.Inference.Models)
 		}

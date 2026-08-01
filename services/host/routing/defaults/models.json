@@ -226,7 +226,7 @@
       "notes": "Ollama Cloud coding specialist (1.04T, INT4, vision + tools + thinking). The plan-INCLUDED Kimi coding model (kimi-k3 is gated to extra-usage only). Access is owned by the local Ollama login and proxied through the local Ollama API; Pix stores no Ollama credential. Subscription usage is not modeled as per-token USD cost."
     },
     {
-      "id": "ollama/qwen3.5:397b:cloud",
+      "id": "ollama/qwen3.5:397b-cloud",
       "provider": "ollama",
       "family": "qwen",
       "label": "Qwen 3.5 397B (Ollama Cloud)",
