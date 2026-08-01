@@ -27,6 +27,16 @@ var hiddenVerbs = map[string]string{
 	"mem":       "documented abbreviation of memory",
 	"kb":        "documented abbreviation of knowledge",
 	"evals":     "experimental, deliberately unlisted",
+	// `route` is a one-release deprecation alias of `models` (docs/design/
+	// models-cli.md). It is NOT forced into this map by
+	// TestHelpListsEveryTopLevelVerb below — that test does naive
+	// strings.Contains matching, and the `models route` help line already
+	// supplies the token `route`, so the alias would pass with or without this
+	// entry. It is added anyway as hygiene: hiddenVerbs' contract is
+	// "deliberately absent from the help tree", and `route` genuinely is
+	// absent as a verb. Delete this line along with `case "route"` in main.go
+	// when the alias is removed.
+	"route": "deprecated alias of models; removed after one release",
 }
 
 // dispatchVerbs extracts the case values of main.go's top-level `switch
@@ -102,6 +112,10 @@ func TestEveryDispatchedSubcommandAppearsInItsUsage(t *testing.T) {
 		"slack":     {"setup", "status", "disable"},
 		"knowledge": {"init", "use", "ls", "query", "sync", "remote"},
 		"secret":    {"ls", "set", "rm", "check", "sync"},
+		// "add" and "setup" join this list once the reconcile seam lands
+		// (docs/design/models-cli.md); this rename-only change only wires
+		// ls/show/pick/route.
+		"models": {"ls", "show", "pick", "route"},
 	} {
 		usage, ok := verbUsage(verb)
 		if !ok {

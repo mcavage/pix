@@ -711,32 +711,48 @@ recompile.
 .BR \-\-model
 points you at hand-editing the scorecard instead of measuring anything.  Prints
 the routing diff.
-.SS route
-The model router: turn a declared
-.B intent
-(a hard cost/latency/accuracy constraint) into a concrete model, from a registry
-of callable models and their prices plus a measured scorecard.  Replaces
-hand-pinning a model on every agent.  Execes the sibling
+.SS models
+Which models pix can use, and which are wired up.  Bare
+.B "pix models"
+is a read-only status screen: runtime, bound providers, roster, and the
+resolved session model.
+.B ls ,
+.B show ,
+and
+.B pick
+are read-only;
+.B route
+is the one subcommand here that writes.  Execes the sibling
 .B pix-host
-binary.
+binary (still named
+.B route
+there — only the launcher-facing noun renamed).
 .TP
-.BR "pix route pick" " " intent " [" \-\-json "]"
+.B "pix models"
+Read-only status: runtime, bound providers (backend, key, model/verified
+counts), the roster, and the resolved session model, with a
+.B Next:
+line.
+.TP
+.BR "pix models ls" " [" \-\-json "]"
+List the model registry.
+.TP
+.BR "pix models show" " [" \-\-json "]"
+Print the registry, scorecard, and resolved-intent table.
+.TP
+.BR "pix models pick" " " intent " [" \-\-json "]"
 Resolve one intent to a model and print the rationale + ranked alternatives.
 .TP
-.BR "pix route compile" " [" \-\-out " " PATH "]"
+.BR "pix models route" " [" \-\-out " " PATH "]"
 Resolve every intent and write the intent-to-model map
 .RB ( routing.json ).
 Use
 .B "\-\-out ./routing.json"
 to update the baked file, then
 .B "make load"
-to bake it into the image.
-.TP
-.BR "pix route show" " [" \-\-json "]"
-Print the registry, scorecard, and resolved-intent table.
-.TP
-.BR "pix route models" " [" \-\-json "]"
-List the model registry.
+to bake it into the image.  The only mutating subcommand in this group;
+.B compile
+is an undocumented alias.
 .SS mcp
 MCP runs through sbx's local data-plane gateway (always available, no
 .BR SBX_MCP_URL ).

@@ -36,7 +36,7 @@ var knownVerbs = map[string]bool{
 	"pack": true, "version": true, "run": true, "secret": true,
 	"reset": true, "man": true,
 	"backup": true, "restore": true, "state": true,
-	"task": true, "route": true, "agent": true,
+	"task": true, "models": true, "agent": true,
 	"host": true,
 }
 
@@ -54,6 +54,12 @@ var retiredVerbs = map[string]string{
 	// within edit distance 2, so this is a retired-verb entry, not something
 	// suggestVerb's levenshtein search would ever find on its own.
 	"gog": "gworkspace",
+	// `route` -> `models` (docs/design/models-cli.md): the noun the owner asked
+	// for. `route` and `models` are also outside edit distance 2, and this
+	// entry stays permanently even after the one-release `case "route"` alias
+	// in main.go is deleted — it is the only remaining recovery path at that
+	// point.
+	"route": "models",
 }
 
 // suggestVerb returns the replacement for a retired verb, or else the closest
@@ -139,8 +145,9 @@ Observability
   monitor [name]       live-follow a sandbox's out-of-sandbox traffic (:11437)
 
 Models & agents (cost/latency/accuracy routing)
+  models              which models pix can use, and which are wired up
+  models route        recompile the intent -> model map the sandbox reads
   agent <cmd>         ls | new | edit | rm | reassess (subagents as objects)
-  route <cmd>         pick | compile | show | models (intent -> model)
 
 Config & context
   config show|path    show the resolved config path and contents
@@ -231,8 +238,8 @@ func verbUsage(verb string) (string, bool) {
 		return taskUsage, true
 	case "host":
 		return hostUsage, true
-	case "route":
-		return routeUsage(), true
+	case "models":
+		return modelsUsage(), true
 	case "agent":
 		return agentUsage, true
 	}
