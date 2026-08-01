@@ -79,10 +79,15 @@ func TestProvidersGroup_ZeroConfirmed_OneCopyPasteableCommand(t *testing.T) {
 	if core.todo == "" {
 		t.Fatal("expected a copy-pasteable fix command")
 	}
-	// Exactly one command: no "&&"-free alternative list, no second `pix
-	// secret set` invocation baked into the command string itself.
-	if strings.Count(core.todo, "pix secret set") != 1 {
-		t.Errorf("todo must name exactly one `pix secret set` invocation, got %q", core.todo)
+	// Exactly one command, and it must be the one that actually finishes the
+	// job. `pix secret set` stores a credential ref and stops, so a user who
+	// follows it lands right back here with the same check failing — the dead
+	// end `pix models add` exists to close.
+	if strings.Count(core.todo, "pix models add") != 1 {
+		t.Errorf("todo must name exactly one `pix models add` invocation, got %q", core.todo)
+	}
+	if strings.Contains(core.todo, "pix secret set") {
+		t.Errorf("todo must not send the user to `pix secret set`, which leaves the key unwired: %q", core.todo)
 	}
 	// Alternatives belong in evidence, never as a second command.
 	if !strings.Contains(core.evidenceString(), "openai") || !strings.Contains(core.evidenceString(), "google") {
@@ -161,8 +166,11 @@ func TestProvidersGroup_AlternateMissingNotOutstanding(t *testing.T) {
 			sessionCheck = &g.checks[i]
 		}
 	}
-	if sessionCheck == nil || !strings.Contains(sessionCheck.todo, "OPENAI_API_KEY") {
-		t.Errorf("expected the session model check's own .todo to name OPENAI_API_KEY, got %+v", sessionCheck)
+	// The point of this row is that it names the SPECIFIC missing provider (the
+	// session model's), not a generic "set a key" — and that following it
+	// actually wires that provider up.
+	if sessionCheck == nil || !strings.Contains(sessionCheck.todo, "pix models add openai") {
+		t.Errorf("expected the session model check's own .todo to wire openai, got %+v", sessionCheck)
 	}
 }
 
@@ -290,7 +298,7 @@ func TestProvidersGroup_RenderZeroConfirmed_OneTodoLine(t *testing.T) {
 	var buf bytes.Buffer
 	r.render(&buf, false)
 	out := buf.String()
-	if strings.Count(out, "TODO: pix secret set") != 1 {
+	if strings.Count(out, "TODO: pix models add") != 1 {
 		t.Errorf("expected exactly one provider TODO line, got:\n%s", out)
 	}
 }

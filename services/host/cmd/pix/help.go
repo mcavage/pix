@@ -146,6 +146,7 @@ Observability
 
 Models & agents (cost/latency/accuracy routing)
   models              which models pix can use, and which are wired up
+  models add <prov>   wire another provider key into callable models
   models route        recompile the intent -> model map the sandbox reads
   agent <cmd>         ls | new | edit | rm | reassess (subagents as objects)
 

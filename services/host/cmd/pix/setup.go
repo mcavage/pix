@@ -691,42 +691,17 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 			if !setupProvisionKeysFn(env, in, out, interactive, opts.assumeYes) {
 				return fmt.Errorf("provider keys not fully configured — follow the fix printed above")
 			}
-			providers, err := hostModeProviderKeys(env)
+			// Bind -> verify -> save -> judge -> roster, all of it in
+			// reconcileDirectInference so `pix models add` runs the IDENTICAL
+			// sequence. It living only here is why a key added any other way stayed
+			// inert: the ref was written and nothing ever rebuilt the bindings.
+			res, err := reconcileDirectInference(cfg, env, in, out, interactive, opts.models)
 			if err != nil {
-				return fmt.Errorf("reading configured providers: %w", err)
-			}
-			if err := configureDirectInference(cfg, providers); err != nil {
-				return fmt.Errorf("configuring direct inference: %w", err)
-			}
-			// Bind -> verify -> roster. The roster must not offer a model that has
-			// not answered a request, so verification comes first; it costs at most
-			// one probe timeout before the prompt.
-			attempted, verified, failures := verifyDirectInference(cfg, env)
-			if err := cfg.Save(); err != nil {
 				return err
 			}
-			if verified == 0 && (attempted > 0 || len(failures) > 0) {
-				detail := strings.Join(failures, "; ")
-				if detail == "" {
-					detail = "no provider accepted a model-specific request"
-				}
-				return fmt.Errorf("provider keys resolved, but live inference verification failed: %s", detail)
-			}
-			// Only choose a roster from models that answered. With nothing callable
-			// the roster has nothing to offer and must stay silent rather than fail
-			// the run for a second, already-reported reason — unless the caller named
-			// models explicitly, which deserves the specific error.
-			if callable, _ := configuredInferenceSummary(cfg); callable > 0 || strings.TrimSpace(opts.models) != "" {
-				if err := configureModelRoster(cfg, in, out, interactive, opts.models); err != nil {
-					return fmt.Errorf("choosing models: %w", err)
-				}
-			}
-			if err := cfg.Save(); err != nil {
-				return err
-			}
-			if verified > 0 && len(failures) > 0 {
+			if res.Verified > 0 && len(res.Failures) > 0 {
 				fmt.Fprintf(out, "  inference: %d model(s) verified; %d candidate(s) unavailable or unauthorized (%s)\n",
-					verified, len(failures), strings.Join(failures, "; "))
+					res.Verified, len(res.Failures), strings.Join(res.Failures, "; "))
 			}
 			return nil
 		},
@@ -1171,7 +1146,7 @@ func setupProvidersAxis(cfg *config.Config, env shellEnv) []check {
 	case len(names) == 0:
 		return []check{{label: "provider keys", requirement: requirementCore, verdict: verdictTodo,
 			detail: "no provider key configured", evidence: "hostmode.env lists no provider key",
-			todo: "pix secret set ANTHROPIC_API_KEY op://Vault/Item/field"}}
+			todo: "pix models add anthropic"}}
 	default:
 		return []check{{label: "provider keys", requirement: requirementCore, verdict: verdictReady,
 			detail: strings.Join(names, ", "), evidence: "hostmode.env lists " + strings.Join(names, ", ")}}
@@ -1358,9 +1333,11 @@ func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer,
 		if !interactive {
 			fmt.Fprintln(out, "No model provider is configured. Add any ONE provider:")
 			for _, p := range providerKeyRefOrder {
+				// No terminal here, so `pix models add` cannot collect a ref: it would
+				// exit 2 pointing back at this command. Lead with the scripted form.
 				fmt.Fprintf(out, "  pix secret set %s op://Vault/Item/field  # %s\n", p.envVar, p.name)
 			}
-			fmt.Fprintln(out, "then re-run: pix setup")
+			fmt.Fprintln(out, "then re-run: pix setup   (or, on a terminal: pix models add <provider>)")
 			return false
 		}
 		chosen, ok := promptProviderChoice(sc, out)
@@ -1473,7 +1450,11 @@ func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer,
 // matching Pix's default overlord route.
 func promptProviderChoice(sc *bufio.Scanner, out io.Writer) (struct{ envVar, name string }, bool) {
 	empty := struct{ envVar, name string }{}
-	fmt.Fprintln(out, "One model provider is enough to start. You can add others later.")
+	fmt.Fprintln(out, "One model provider is enough to start.")
+	// Name the literal command. "You can add others later" was true and useless:
+	// the only later path was `pix secret set`, which stores a ref and stops, so
+	// the second key stayed inert and there was nothing to search for.
+	fmt.Fprintln(out, "Add the others whenever you like with: pix models add <provider>")
 	fmt.Fprintln(out, "  1. openai (default)")
 	fmt.Fprintln(out, "  2. anthropic")
 	fmt.Fprintln(out, "  3. google")

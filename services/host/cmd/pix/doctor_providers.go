@@ -63,8 +63,38 @@ func providersGroup(cfg *config.Config, sbxOut string, sbxOK bool) group {
 			todo:     "pix setup",
 			evidence: "verified without verified_by=probe: " + strings.Join(legacy, ", ")})
 	}
+	if gap := inferenceBindingGapCheck(cfg); gap != nil {
+		g.checks = append(g.checks, *gap)
+	}
 	g.checks = append(g.checks, runIntentKeyCheck(cfg, sbxOut, sbxOK))
 	return g
+}
+
+// inferenceBindingGapCheck reports a provider key that resolves on this host
+// but is wired to no models — present, correct, and doing nothing.
+//
+// That state used to be unreachable except through setup, and permanent once
+// entered: `pix secret set` wrote the ref and stopped, so the key never became
+// bindings. `pix models add` fixes it, and this is the row that tells a user
+// the gap exists at all, since nothing else about the host looks wrong.
+//
+// Optional, never blocking: one wired provider is enough to launch, so a second
+// unwired key is a shortfall to report, not a reason to fail. It counts in
+// outstanding (note:false) because it is genuinely actionable.
+func inferenceBindingGapCheck(cfg *config.Config) *check {
+	gaps := unwiredProviderKeys(cfg, defaultShellEnv())
+	if len(gaps) == 0 {
+		return nil
+	}
+	list := strings.Join(gaps, ", ")
+	return &check{
+		label:       "inference bindings",
+		requirement: requirementOptional,
+		verdict:     verdictTodo,
+		detail:      list + ": key set but wired to no models",
+		evidence:    "hostmode.env carries " + list + "; config.inference.models has no native binding for " + list,
+		todo:        "pix models add " + gaps[0],
+	}
 }
 
 // runIntentKeyCheck warns when the top-level session intent (config.run_intent,
@@ -127,14 +157,17 @@ func runIntentKeyCheck(cfg *config.Config, sbxOut string, sbxOK bool) check {
 	}
 	return check{label: label, note: true, verdict: verdictTodo,
 		detail: "-> " + model + " but the " + provider + " key is NOT set: interactive turns will fail. Set " + provider + "'s key, or point run_intent at a provider you have (or `none` for pi's default)",
-		todo:   "pix secret set " + strings.ToUpper(provider) + "_API_KEY op://vault/item/field && pix secret sync"}
+		// `models add` rather than `secret set`: the latter stores the ref and stops,
+		// which leaves this check failing for the same reason after the user has
+		// done exactly what it told them to.
+		todo: "pix models add " + provider}
 }
 
 // modelKeyFixCmd is the ONE copy-pasteable command surfaced when doctor has
 // POSITIVELY confirmed zero model-provider keys are set. It fixes any one
 // provider (anthropic, chosen as the example); the other two are named in the
 // core check's evidence, not repeated here as alternative commands.
-const modelKeyFixCmd = "pix secret set ANTHROPIC_API_KEY op://vault/item/field && pix secret sync"
+const modelKeyFixCmd = "pix models add anthropic"
 
 // pullModelsFixCmd is the ONE copy-pasteable command for the state honest
 // Ollama verification creates: candidates are bound, none has passed a probe,

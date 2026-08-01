@@ -132,11 +132,10 @@ func runModels(argv []string) {
 		// extensions/subagents.ts, and the Makefile. Both map to the same
 		// `pix-host route compile`.
 		execHost("route", append([]string{"compile"}, argv[1:]...))
-	// EXTENSION POINT (later unit, docs/design/models-cli.md "reconcile seam"):
-	// case "add":   runModelsAdd(argv[1:])
-	// case "setup": runModelsSetup(argv[1:])
-	// Both are launcher-local (no execHost) and land here as a small additive
-	// change once reconcileDirectInference exists; nothing above needs to move.
+	case "add":
+		// Launcher-local (no execHost): wiring a key is a host credential +
+		// live-probe operation, not a router query. See modelsadd.go.
+		runModelsAdd(argv[1:])
 	default:
 		// Usage goes to stderr on the error path, matching every sibling verb
 		// (task.go, agent.go, state.go, config.go), so `pix models tpyo --json`
@@ -271,11 +270,12 @@ func renderModelsStatus(cfg *config.Config, out io.Writer) {
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Next:  pix models show           the full registry + resolved intents")
 	fmt.Fprintln(out, "       pix models route          rewrite routing.json (the only one here that writes)")
-	// EXTENSION POINT (later unit): a provider key with no callable binding
-	// (cross-referencing hostModeProviderKeys against the rows above) belongs
-	// here as a grounded "! X is set but has no model bindings" warning plus a
-	// `pix models add <provider>` next step, once that command exists (see
-	// docs/design/models-cli.md, "pix models (bare)" and the doctor gap check).
+	// A key that is set but wired to nothing is the failure this screen exists to
+	// surface, so name it here rather than making the user run doctor to find out.
+	for _, p := range unwiredProviderKeys(cfg, defaultShellEnv()) {
+		fmt.Fprintf(out, "\n!  %s is set but has no model bindings — the key is not in use yet.\n", p)
+		fmt.Fprintf(out, "   pix models add %s\n", p)
+	}
 }
 
 // modelsUsage is a func (not a const) so the override paths it prints are the
@@ -294,6 +294,10 @@ commands:
   ls [--json]              list the model registry
   show [--json]             registry + scorecard + resolved intent table
   pick <intent> [--json]   resolve one intent to a model (+ rationale)
+  add <provider>            wire a provider key into callable models: store its
+                            1Password ref if missing, rebuild the bindings, prove
+                            each with a live request, widen the roster, sync sbx.
+                            This is what setup means by "add others later".  (writes)
   route [--out PATH]        resolve every intent and write the intent->model map
                             (routing.json), read by the sandbox. With no --out it
                             writes into the override dir below; --out PATH targets

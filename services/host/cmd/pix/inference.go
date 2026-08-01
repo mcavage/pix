@@ -579,9 +579,35 @@ func liveOllamaInferenceProbe(endpoint, model string, numCtx int, timeout time.D
 // by intent, but it can never escape this roster. A mandatory pack is already
 // an explicit policy decision and therefore skips the personal roster prompt.
 func configureModelRoster(cfg *config.Config, in io.Reader, out io.Writer, interactive bool, requested string) error {
+	return configureModelRosterFrom(cfg, in, out, interactive, requested, nil)
+}
+
+// boundNativeProviders is the set of providers that already had a native
+// binding. Callers capture it BEFORE configureDirectInference mutates the
+// bindings; that pre-mutation snapshot is the whole mechanism behind widening.
+func boundNativeProviders(cfg *config.Config) map[string]bool {
+	out := map[string]bool{}
+	if cfg == nil {
+		return out
+	}
+	for _, b := range cfg.Inference.Models {
+		if cfg.Inference.Backends[b.Backend].Driver == "native" {
+			out[b.Backend] = true
+		}
+	}
+	return out
+}
+
+// configureModelRosterFrom is configureModelRoster with the pre-mutation
+// provider set injected, which is what makes "a provider the user has not been
+// offered yet" answerable at all.
+//
+// prior == nil means "no reconcile happened, do not widen" (plain setup).
+func configureModelRosterFrom(cfg *config.Config, in io.Reader, out io.Writer, interactive bool, requested string, prior map[string]bool) error {
 	if cfg == nil || cfg.Inference.ExclusiveSource != "" {
 		return nil
 	}
+	_ = prior // widening moved ahead of the probe; see widenRosterForNewProviders
 	reg, err := routing.LoadRegistry()
 	if err != nil {
 		return err
@@ -661,7 +687,18 @@ func configureModelRoster(cfg *config.Config, in io.Reader, out io.Writer, inter
 	}
 
 	// Preserve an existing choice, dropping stale models that no longer have a
-	// binding. `--models` is the explicit way to change it on a later setup run.
+	// binding, and WIDEN it for any provider the roster has never been offered
+	// for. Pruning alone froze the roster at first run: a user who set up with one
+	// provider and later added a second got a key whose models could never enter
+	// the roster, so they were never callable, so the key was inert — the dead end
+	// this whole path exists to close.
+	//
+	// The widening itself happens in widenRosterForNewProviders, BEFORE the probe
+	// (see reconcileDirectInference): verifyDirectInference only probes bindings
+	// the roster already allows, so a roster widened after verification would
+	// name models that were never probed, and therefore are not callable, and so
+	// get pruned right back out here. Roster and probe are mutually gating; the
+	// widen must come first and this pass prunes whatever failed.
 	if len(cfg.Inference.AllowedModels) > 0 {
 		var kept []string
 		for _, id := range cfg.Inference.AllowedModels {
@@ -671,9 +708,11 @@ func configureModelRoster(cfg *config.Config, in io.Reader, out io.Writer, inter
 		}
 		if len(kept) > 0 {
 			cfg.Inference.AllowedModels = kept
+			recordRosterProviders(cfg, candidates)
 			return nil
 		}
 	}
+	defer func() { recordRosterProviders(cfg, candidates) }()
 
 	if len(candidates) == 1 {
 		cfg.Inference.AllowedModels = []string{candidates[0].ID}
@@ -1225,4 +1264,189 @@ func inferenceAllowsModel(cfg *config.Config, id string) bool {
 		}
 	}
 	return false
+}
+
+// rosterSeenProviders answers "which providers has the roster already been
+// offered for", which decides what widening may touch.
+//
+// A config written before roster_providers existed has an empty list, and the
+// honest reading of that is the PRE-mutation bound set: those are the providers
+// whose models the user had a chance to include when they last chose. Reading
+// it as the CURRENT bound set instead is the bug this function exists to avoid
+// — the provider being added is already bound by then, so it would count as
+// seen and widening would silently do nothing on exactly the upgrade path that
+// motivated it.
+func rosterSeenProviders(cfg *config.Config, prior map[string]bool) map[string]bool {
+	seen := map[string]bool{}
+	for _, p := range cfg.Inference.RosterProviders {
+		seen[p] = true
+	}
+	if len(seen) > 0 {
+		return seen
+	}
+	if prior == nil {
+		// No reconcile in flight (a plain `pix setup` re-run): nothing is new, so
+		// treat every current provider as seen and widen nothing. Upgrading an
+		// existing install must not silently change the roster.
+		for _, id := range cfg.Inference.AllowedModels {
+			if provider, _, ok := strings.Cut(id, "/"); ok {
+				seen[provider] = true
+			}
+		}
+		for _, b := range cfg.Inference.Models {
+			seen[b.Backend] = true
+		}
+		return seen
+	}
+	for p := range prior {
+		seen[p] = true
+	}
+	// A legacy config may name providers in AllowedModels that the pre-mutation
+	// scan missed (a binding dropped from the catalog since). Union them in: the
+	// user was plainly offered those.
+	for _, id := range cfg.Inference.AllowedModels {
+		if provider, _, ok := strings.Cut(id, "/"); ok {
+			seen[provider] = true
+		}
+	}
+	return seen
+}
+
+// recordRosterProviders stamps the providers this roster decision covered, so
+// the next reconcile can tell a new provider from one the user already declined
+// models from. Sorted for a stable, diffable config.
+func recordRosterProviders(cfg *config.Config, candidates []routing.Model) {
+	seen := map[string]bool{}
+	for _, p := range cfg.Inference.RosterProviders {
+		seen[p] = true
+	}
+	for _, m := range candidates {
+		seen[m.Provider] = true
+	}
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	cfg.Inference.RosterProviders = out
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// errInferenceExclusive is returned when a mandatory pack owns the whole
+// inference surface. It is a REFUSAL, not a failure: adding a key would write
+// bindings that the topology filter then silently drops, so reporting success
+// would be a success word with nothing behind it.
+var errInferenceExclusive = fmt.Errorf("a mandatory pack owns inference on this host")
+
+// reconcileResult is what a reconcile actually did and proved.
+type reconcileResult struct {
+	Providers []string // every provider with a resolvable key, sorted
+	Added     []string // providers that had no native binding before this run
+	Attempted int
+	Verified  int
+	Failures  []string
+}
+
+// reconcileDirectInference turns the provider keys that exist on this host into
+// callable model bindings. It is the sequence that used to live only inside
+// setup's keys step, which is why adding a key any other way left it inert:
+// `pix secret set` wrote the ref, and nothing ever rebuilt the bindings, probed
+// them, or widened the roster.
+//
+// Order is load-bearing and matches the step it was extracted from:
+//
+//		capture prior providers -> bind -> verify -> save -> judge -> roster
+//
+//	  - The prior set is captured BEFORE binding, or widening cannot see what is
+//	    new (see rosterSeenProviders).
+//	  - cfg.Save() happens BEFORE the verified==0 verdict, so a partial success is
+//	    never thrown away by the error path.
+//	  - verified == 0 with something attempted is a hard error; verified > 0 with
+//	    some failures is not.
+func reconcileDirectInference(cfg *config.Config, env shellEnv, in io.Reader, out io.Writer, interactive bool, requestedModels string) (reconcileResult, error) {
+	var res reconcileResult
+	if cfg == nil {
+		return res, fmt.Errorf("no config")
+	}
+	if cfg.Inference.ExclusiveSource != "" {
+		return res, errInferenceExclusive
+	}
+	if out == nil {
+		out = io.Discard
+	}
+	prior := boundNativeProviders(cfg)
+
+	providers, err := hostModeProviderKeys(env)
+	if err != nil {
+		return res, fmt.Errorf("reading configured providers: %w", err)
+	}
+	res.Providers = providers
+	for _, p := range providers {
+		if !prior[p] {
+			res.Added = append(res.Added, p)
+		}
+	}
+	sort.Strings(res.Added)
+
+	if err := configureDirectInference(cfg, providers); err != nil {
+		return res, fmt.Errorf("configuring direct inference: %w", err)
+	}
+	// Widen BEFORE probing. verifyDirectInference only probes bindings the roster
+	// allows (inferenceBindingAllowed), so on a config with a non-empty roster
+	// the newly added provider would otherwise never be probed, never become
+	// callable, and be pruned straight back out of the roster for not being
+	// callable — the key stays inert and the command still reports success.
+	widenRosterForNewProviders(cfg, prior)
+	res.Attempted, res.Verified, res.Failures = verifyDirectInference(cfg, env)
+	if err := cfg.Save(); err != nil {
+		return res, err
+	}
+	if res.Verified == 0 && (res.Attempted > 0 || len(res.Failures) > 0) {
+		detail := strings.Join(res.Failures, "; ")
+		if detail == "" {
+			detail = "no provider accepted a model-specific request"
+		}
+		return res, fmt.Errorf("provider keys resolved, but live inference verification failed: %s", detail)
+	}
+	if callable, _ := configuredInferenceSummary(cfg); callable > 0 || strings.TrimSpace(requestedModels) != "" {
+		if err := configureModelRosterFrom(cfg, in, out, interactive, requestedModels, prior); err != nil {
+			return res, fmt.Errorf("choosing models: %w", err)
+		}
+	}
+	return res, cfg.Save()
+}
+
+// widenRosterForNewProviders adds every catalog model of a provider the roster
+// has never been offered for. It runs after binding and BEFORE verification, so
+// the new provider's models are probed; configureModelRosterFrom then prunes
+// whichever of them failed.
+//
+// A roster that is empty means "no user restriction" and needs no widening. A
+// non-empty one is the case that froze: it named only the first provider's
+// models, so every later key was permanently outside it.
+func widenRosterForNewProviders(cfg *config.Config, prior map[string]bool) {
+	if cfg == nil || cfg.Inference.ExclusiveSource != "" || len(cfg.Inference.AllowedModels) == 0 {
+		return
+	}
+	seen := rosterSeenProviders(cfg, prior)
+	reg, err := routing.LoadRegistry()
+	if err != nil {
+		return
+	}
+	for _, b := range cfg.Inference.Models {
+		if seen[b.Backend] || !b.Available || containsString(cfg.Inference.AllowedModels, b.Model) {
+			continue
+		}
+		if m, ok := reg.Get(b.Model); ok && m.Available {
+			cfg.Inference.AllowedModels = append(cfg.Inference.AllowedModels, b.Model)
+		}
+	}
 }
