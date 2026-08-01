@@ -297,7 +297,7 @@ function loadAgentsFromDir(
 				model = routed;
 			} else {
 				warnings.push(
-					`intent "${intent}" not found in routing.json — inheriting the parent model. Run \`pix route compile\` on the host (then \`make load\`).`,
+					`intent "${intent}" not found in routing.json — inheriting the parent model. Run \`pix models route\` on the host (then \`make load\`).`,
 				);
 			}
 		}

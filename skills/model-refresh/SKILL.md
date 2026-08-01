@@ -1,6 +1,6 @@
 ---
 name: model-refresh
-description: Refresh the model router (registry + scorecard + policy) from LIVE model cards and pricing, not training data. Use when a new model ships or `route show`/`agent ls` names stale models.
+description: Refresh the model router (registry + scorecard + policy) from LIVE model cards and pricing, not training data. Use when a new model ships or `models show`/`agent ls` names stale models.
 ---
 # model-refresh
 
@@ -17,7 +17,7 @@ The router has three source-of-truth files in `services/host/routing/defaults/`
 - `scorecard.json` — per-`(model, task_type)` accuracy / cost / latency priors.
 - `policy.json` — the intents (the tiering + cross-vendor posture). Usually stable.
 
-`route compile` resolves every intent against these and writes `routing.json`,
+`pix models route` resolves every intent against these and writes `routing.json`,
 which the sandbox reads offline. You are re-grounding the first two, and only
 touching `policy.json` if the price points moved enough to break a cost cap.
 
@@ -97,8 +97,8 @@ in agents; let the intent resolve.
 
 ```bash
 cd <repo>
-pix route compile --out routing.json     # or pix-host route compile --out routing.json
-pix route show                            # registry + resolved intents
+pix models route --out routing.json     # or pix-host route compile --out routing.json
+pix models show                           # registry + resolved intents
 pix agent ls                              # each agent's resolved model + WHY
 ```
 
@@ -113,7 +113,7 @@ Read the output like a reviewer, do not just run it:
 
 There is no eval harness to keep in sync — `scorecard.json` is the single
 source of truth and it is hand-maintained. If a card price/benchmark changes
-later, come back and hand-edit the row, then re-run `pix route compile`.
+later, come back and hand-edit the row, then re-run `pix models route`.
 
 ## 6. Ship
 

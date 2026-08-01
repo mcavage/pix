@@ -107,14 +107,32 @@ func main() {
 		runRestore(args[1:])
 	case "knowledge", "kb":
 		runKnowledge(args[1:])
+	case "models":
+		runModels(args[1:])
 	case "route":
-		runRoute(args[1:])
+		// Deprecated alias, one release only (docs/design/models-cli.md,
+		// Deprecation): stderr-only so --json/piped stdout is unaffected.
+		// retiredVerbs["route"] = "models" (help.go) survives after this case is
+		// deleted; that is the permanent recovery path.
+		//
+		// It forwards RAW to the host tree rather than through runModels, so the
+		// alias is bug-for-bug the command it replaces. Routing it through the new
+		// verb silently broke `pix route models` (the old spelling of the registry
+		// list): runModels has no `models` subcommand, so a script piping
+		// `pix route models --json` got usage prose on stdout and exit 2 — the
+		// exact compatibility this alias exists to promise.
+		fmt.Fprintln(os.Stderr, "pix route is now pix models (pix models route compiles the intent map).")
+		if len(args) > 1 && (args[1] == "-h" || args[1] == "--help") {
+			fmt.Print(modelsUsage())
+			return
+		}
+		execHostAs("route", "route", args[1:])
 	case "evals":
 		// Catch this explicitly (also shadowing the bare-arg-is-a-dir behavior when
 		// an evals/ dir is present) so a bare `evals` gets a clear message instead
 		// of a confusing "no such directory".
 		fmt.Fprintln(os.Stderr, "pix: evals were removed. Model scores are hand-maintained in")
-		fmt.Fprintf(os.Stderr, "  %s; run `pix route compile`\n", routing.ScorecardPath())
+		fmt.Fprintf(os.Stderr, "  %s; run `pix models route`\n", routing.ScorecardPath())
 		fmt.Fprintln(os.Stderr, "  after editing.")
 		os.Exit(2)
 	case "agent":
@@ -316,7 +334,7 @@ flags:
   --name N         sandbox name
   --model M        active pi model (passed through to pi)
   --intent NAME    resolve the session model via the router (cost/latency/accuracy);
-                   --model overrides it. Intents: pix route show
+                   --model overrides it. Intents: pix models show
   --replace        recreate the sandbox (sbx rm -f, then create) instead of
                    re-attaching to an existing one; picks up changed --kit/--mcp/
                    create-only flags
@@ -378,8 +396,8 @@ Data
   knowledge        init | use | ls | query | sync | remote
 
 Models & agents
+  models           which models pix can use, and which are wired up
   agent            manage subagents: ls | new | edit | rm | reassess
-  route            model router: pick | compile | show | models
 
 More
   config, mcp, state, version, man     (see ` + "`pix help --all`" + `)

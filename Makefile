@@ -95,7 +95,7 @@ SERVE_ENV ?=
 # at parse time so every target can rely on it.
 $(shell mkdir -p out)
 
-.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean launcher route require-launcher gate
+.PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean launcher models route require-launcher gate
 
 # Bare `make` builds the launcher binaries (the one thing require-launcher
 # demands as a prerequisite for run/serve/doctor), so a dev iterating on the
@@ -125,7 +125,7 @@ help: ## Show this help
 		awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Runtime, routing, agent, and parallel-task commands live in the launcher,"
-	@echo "not make:  pix help --all  (e.g. pix route compile,"
+	@echo "not make:  pix help --all  (e.g. pix models route,"
 	@echo "pix agent ls, pix task new)."
 
 build: ## Build the pix image from the DHI base
@@ -264,17 +264,26 @@ serve: require-launcher ## Start the host services named in SERVICES (config.tom
 	@(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .) || { echo "go build failed (pix-host)"; exit 1; }
 	@exec env $(SERVE_ENV) MEMORY_WATCHER_MODEL=$(MEMORY_WATCHER_MODEL) MEMORY_EMBED_MODEL=$(MEMORY_EMBED_MODEL) out/pix-host serve $(SERVICES)
 
-# route is MAINTAINER tooling for the model router, run from the repo (it reads
-# services/host/routing/). It is NOT part of the consumer surface: `route` is
-# deliberately NOT a `pix` command — it lives here in the Makefile, invoking
-# the repo-built pix-host backend. See the `model-refresh` skill +
+# models is MAINTAINER tooling for the model router, run from the repo (it
+# reads services/host/routing/). It is NOT part of the consumer surface: the
+# repo-built pix-host binary underneath is still called `route` there
+# (docs/design/models-cli.md: only the launcher-facing noun renamed, `pix-host
+# route` does not move) — this target is named to match the launcher's `pix
+# models` for muscle memory. See the `model-refresh` skill +
 # docs/design/routing.md. Scores are hand-maintained in
-# services/host/routing/defaults/scorecard.json — edit it, then `make route
-# ARGS=compile` (or `pix route compile`).
-# Bare `make route` defaults to the safe, read-only `show` (the scorecard /
+# services/host/routing/defaults/scorecard.json — edit it, then `make models
+# ARGS=compile` (or `pix models route`).
+# Bare `make models` defaults to the safe, read-only `show` (the scorecard /
 # resolved table) so it never errors without ARGS.
-route: ## Model router (maintainer): make route ARGS="show" | "models" | "compile" | "pick <intent>"
+models: ## Model router (maintainer): make models ARGS="show" | "models" | "compile" | "pick <intent>"
 	@(cd services/host && go build -ldflags "-X main.version=$(LAUNCHER_VERSION)" -o $(CURDIR)/out/pix-host .) && ./out/pix-host route $(if $(strip $(ARGS)),$(ARGS),show)
+
+# route: kept as a one-release alias so muscle memory (`make route
+# ARGS=compile`) still works; delegates straight to `models`. Delete alongside
+# the launcher's `case "route"` alias in cmd/pix/main.go.
+route: ## Deprecated alias of `make models` (renamed to match `pix models`)
+	@echo "make route is now make models — running that instead."
+	@$(MAKE) models ARGS="$(ARGS)"
 
 pull-models: require-launcher ## Pull the local Ollama models the stack uses (memory watcher + embed, and the bridge/router local model)
 	@command -v ollama >/dev/null 2>&1 || { echo "ollama not installed — see https://ollama.com (optional: enables semantic recall + fact capture + the local model)"; exit 1; }

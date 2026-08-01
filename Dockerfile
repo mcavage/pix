@@ -176,8 +176,8 @@ COPY --chown=agent:agent mcp.json          /home/agent/.pi/agent/mcp.json
 COPY --chown=agent:agent capabilities.json /home/agent/.pi/agent/capabilities.json
 # routing.json is the model router's compiled intent->model map (same swap-one-file
 # pattern as capabilities.json, but for MODELS). Agents declare an `intent:` and
-# subagents.ts resolves it here. Regenerate on the host with `pix route
-# compile` after editing services/host/routing/scorecard.json. See
+# subagents.ts resolves it here. Regenerate on the host with `pix models
+# route` after editing services/host/routing/scorecard.json. See
 # docs/design/routing.md.
 COPY --chown=agent:agent routing.json      /home/agent/.pi/agent/routing.json
 COPY --chown=agent:agent skills/       /home/agent/.pi/agent/skills/

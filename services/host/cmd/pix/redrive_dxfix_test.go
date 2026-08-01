@@ -2,7 +2,7 @@ package main
 
 // redrive_dxfix_test.go — DX-consultant redrive findings 1/3/4:
 //
-//  1: `pix route --help` pointed a consumer at the embedded repo source
+//  1: `pix route --help` (now `pix models --help`) pointed a consumer at the embedded repo source
 //     (services/host/routing/defaults/scorecard.json) for the override file
 //     they should hand-edit. That path only exists inside a pix repo
 //     checkout and means nothing on a consumer machine — the consumer-facing
@@ -33,16 +33,18 @@ import (
 	"pix/host/routing"
 )
 
-// --- finding 1: route help is repo-less for the consumer ------------------
+// --- finding 1: route/models help is repo-less for the consumer -----------
 
-// TestRouteUsage_ConsumerPathsAreLiveOverrideDir proves `route --help` points
+// TestRouteUsage_ConsumerPathsAreLiveOverrideDir proves `models --help` points
 // at the REAL resolved override paths (honoring $ROUTING_DIR), never a
-// hardcoded guess and never the repo's embedded default source.
+// hardcoded guess and never the repo's embedded default source. (Test name
+// kept from the `route` era; docs/design/models-cli.md renamed the verb, not
+// this file's history.)
 func TestRouteUsage_ConsumerPathsAreLiveOverrideDir(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("ROUTING_DIR", dir)
 
-	usage := routeUsage()
+	usage := modelsUsage()
 
 	wantModels := filepath.Join(dir, "models.json")
 	wantScorecard := filepath.Join(dir, "scorecard.json")
@@ -62,7 +64,7 @@ func TestRouteUsage_ConsumerPathsAreLiveOverrideDir(t *testing.T) {
 // editing shipped defaults, not a personal override) must be explicitly
 // labeled — never presented as if it were the consumer's recovery path.
 func TestRouteUsage_EmbeddedRepoSourceIsLabeledMaintainerOnly(t *testing.T) {
-	usage := routeUsage()
+	usage := modelsUsage()
 	idx := strings.Index(usage, "services/host/routing/defaults")
 	if idx < 0 {
 		return // no mention at all is also fine

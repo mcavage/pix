@@ -330,7 +330,7 @@ func agentLs(args []string) {
 	fmt.Println()
 	fmt.Println("WHY explains the pick: what the winner beat, or the constraints that left it the only")
 	fmt.Println("fit. The accuracy/cost/latency behind it are hand-maintained in scorecard.json (see")
-	fmt.Println("`route show`). Tune the tradeoffs in policy.json, then `pix route compile`.")
+	fmt.Println("`pix models show`). Tune the tradeoffs in policy.json, then `pix models route`.")
 }
 
 func agentNew(args []string) {
@@ -355,7 +355,7 @@ func agentNew(args []string) {
 	// Warn (do not block) on an unknown intent — the user may add it to policy next.
 	if pol, err := routing.LoadPolicy(); err == nil {
 		if _, ok := pol.Intent(intent); !ok {
-			fmt.Fprintf(os.Stderr, "note: intent %q is not in policy yet; the agent will inherit the parent model until you add it (pix route show).\n", intent)
+			fmt.Fprintf(os.Stderr, "note: intent %q is not in policy yet; the agent will inherit the parent model until you add it (pix models show).\n", intent)
 		}
 	}
 
@@ -392,7 +392,7 @@ func agentNew(args []string) {
 		fatalLauncher(err)
 	}
 
-	fmt.Printf("created agent %q\n  %s\n\nNext:\n  1. Edit the role brief in %s\n  2. If %q needs a new task_type, hand-add its scores to\n     %s\n  3. pix route compile                     # route it\nOr run `pix agent new %s --interactive` to author it conversationally.\n",
+	fmt.Printf("created agent %q\n  %s\n\nNext:\n  1. Edit the role brief in %s\n  2. If %q needs a new task_type, hand-add its scores to\n     %s\n  3. pix models route                      # route it\nOr run `pix agent new %s --interactive` to author it conversationally.\n",
 		name, path, path, intent, routing.ScorecardPath(), name)
 }
 

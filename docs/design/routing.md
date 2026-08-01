@@ -1,6 +1,9 @@
 # Model routing — cost / latency / accuracy tradeoff selection
 
-**Status:** built (v2). The router replaces hand-pinned model ids on every agent
+**Status:** built (v2). See also `docs/design/models-cli.md`, which renamed the
+launcher-facing verb from `pix route` to `pix models` (the host binary's own
+`pix-host route` subcommand tree, referenced throughout this doc, did not
+move). The router replaces hand-pinned model ids on every agent
 with a declared *intent* (a hard constraint) that resolves to a concrete model
 from a scorecard. Scores are seeded from published benchmarks and pricing and
 are **hand-maintained** (edit `scorecard.json` directly); the resolver picks,
@@ -70,7 +73,7 @@ the leverage of the role — not a wall of one model. Vendor spread after the
 code/strategy/advisory/security, **Google** does review/writing/verify/breadth. The registry/scorecard are
 seeded from LIVE model cards + pricing (see the `model-refresh` skill), not from
 training-data guesses; retarget any of it by editing `policy.json`/`scorecard.json`
-and re-running `route compile`; no agent files change. `pix agent ls` prints
+and re-running `pix models route`; no agent files change. `pix agent ls` prints
 a WHY for each pick (objective, the winner's accuracy/$/latency, and what it beat
 or whether a constraint left a sole fit).
 
@@ -100,7 +103,7 @@ HOST (Go, tested, owns the truth)            SANDBOX (TS, reads one file)
 
 The sandbox never calls the host at spawn time (that path can hang a subagent).
 It reads a precompiled `routing.json` — deterministic, offline, auditable. The
-host regenerates that file with `pix route compile`, and the user bakes it
+host regenerates that file with `pix models route`, and the user bakes it
 (`make load`) on a new-model release. This matches the "on new model release,
 manual, easy to plug a model in" cadence the feature was scoped to.
 
@@ -150,16 +153,18 @@ model cards rather than training-data guesses). This replaced an earlier harness
 that called every candidate model to re-measure scores automatically — useful
 in principle, but a fragile external host dependency for a router that only
 ever reads the scorecard, never the harness that produced it. After editing
-`scorecard.json`, run `pix route compile` to bake the change into
+`scorecard.json`, run `pix models route` to bake the change into
 `routing.json`.
 
 ## CLI
 
 Host (`pix-host`): `route pick <intent>`, `route compile`, `route show`,
-`models`.
-Launcher (`pix`): `agent ls|new|edit|rm|reassess`, `route` (passthrough to
-the host binary), and `run --intent <name>` resolves the interactive session
-model.
+`route models` (this subcommand tree is unchanged by the launcher rename
+below).
+Launcher (`pix`): `agent ls|new|edit|rm|reassess`, `models ls|show|pick|route`
+(thin passthroughs to the host binary above; `models` was `route` — see
+`docs/design/models-cli.md`), and `run --intent <name>` resolves the
+interactive session model.
 
 ## Agent lifecycle
 
@@ -211,7 +216,7 @@ is baked at `~/.pi/agent/routing.json` next to `capabilities.json`.
    model-name substring.
 2. Hand-add its scores to `scorecard.json` (from published benchmarks/model
    cards).
-3. `pix route compile` and `make load`.
+3. `pix models route` and `make load`.
 
 No agent files change. The router reconsiders every intent against the new model
 automatically.

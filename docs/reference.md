@@ -30,7 +30,7 @@ CLI reference of its own.
 | `host` | the unsandboxed escape hatch, off by default | §7, `docs/design/host-mode.md` |
 | `task` | isolated parallel-work clones + sandboxes | `docs/design/worktree-tasks.md` |
 | `monitor` | live-follow a sandbox's out-of-sandbox traffic | `docs/design/monitor.md` |
-| `route` | the model router: pick/compile/show/models | `docs/design/routing.md` |
+| `models` | which models pix can use, and the model router: ls/show/pick/route | `docs/design/routing.md`, `docs/design/models-cli.md` |
 | `agent` | the subagent roster: ls/new/edit/rm/reassess | §4 |
 | `state` | backup/restore/reset/uninstall on-disk state | §9 |
 | `version`, `help` | stamped version; tiered help | — |
@@ -171,7 +171,7 @@ resolves to a different vendor than whichever one wrote the code, on purpose.
 
 ```
 pix agent ls                 # roster with each agent's resolved model and WHY
-pix route pick <intent>      # what the router would resolve for that intent
+pix models pick <intent>     # what the router would resolve for that intent
 ```
 
 Example: `code-review` finishes its own pass, then dispatches the `review`
