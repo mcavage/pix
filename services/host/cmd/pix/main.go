@@ -114,8 +114,19 @@ func main() {
 		// Deprecation): stderr-only so --json/piped stdout is unaffected.
 		// retiredVerbs["route"] = "models" (help.go) survives after this case is
 		// deleted; that is the permanent recovery path.
+		//
+		// It forwards RAW to the host tree rather than through runModels, so the
+		// alias is bug-for-bug the command it replaces. Routing it through the new
+		// verb silently broke `pix route models` (the old spelling of the registry
+		// list): runModels has no `models` subcommand, so a script piping
+		// `pix route models --json` got usage prose on stdout and exit 2 — the
+		// exact compatibility this alias exists to promise.
 		fmt.Fprintln(os.Stderr, "pix route is now pix models (pix models route compiles the intent map).")
-		runModels(args[1:])
+		if len(args) > 1 && (args[1] == "-h" || args[1] == "--help") {
+			fmt.Print(modelsUsage())
+			return
+		}
+		execHostAs("route", "route", args[1:])
 	case "evals":
 		// Catch this explicitly (also shadowing the bare-arg-is-a-dir behavior when
 		// an evals/ dir is present) so a bare `evals` gets a clear message instead

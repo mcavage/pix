@@ -59,6 +59,56 @@ func TestRouteAliasStillDispatches(t *testing.T) {
 	}
 }
 
+// TestRouteAliasForwardsEverySubcommandRaw is the regression test for the
+// alias's whole reason to exist. `models` is a subcommand of the OLD verb
+// (`pix route models` listed the registry) and is NOT a subcommand of the new
+// one (`pix models ls` replaced it). Routing the alias through runModels
+// therefore turned `pix route models --json` into "unknown subcommand" +
+// usage on STDOUT + exit 2 — silently breaking the one-release compatibility
+// the deprecation notice promises, for a caller who is piping to jq.
+//
+// Forwarding raw makes the alias bug-for-bug the command it replaces, so this
+// walks the old spellings that have no new-verb equivalent.
+func TestRouteAliasForwardsEverySubcommandRaw(t *testing.T) {
+	if sub := os.Getenv("PIX_ROUTE_RAW_TEST"); sub != "" {
+		os.Args = append([]string{"pix", "route"}, strings.Fields(sub)...)
+		main()
+		return
+	}
+
+	dir := t.TempDir()
+	fakeHost := filepath.Join(dir, "pix-host")
+	script := "#!/bin/sh\nif [ \"$1\" = version ]; then echo dev; exit 0; fi\necho \"ARGV:$@\"\n"
+	if err := os.WriteFile(fakeHost, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake pix-host: %v", err)
+	}
+
+	// `models` is the case that regressed; the others guard the same shape.
+	for _, sub := range []string{"models", "models --json", "compile", "pick code"} {
+		sub := sub
+		t.Run(sub, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run", "TestRouteAliasForwardsEverySubcommandRaw")
+			cmd.Env = append(envWithout(os.Environ(), "PATH"),
+				"PIX_ROUTE_RAW_TEST="+sub,
+				"PATH="+dir,
+			)
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("`pix route %s` must still exit 0: %v\nstdout:\n%s\nstderr:\n%s", sub, err, stdout.String(), stderr.String())
+			}
+			if want := "ARGV:route " + sub; !strings.Contains(stdout.String(), want) {
+				t.Errorf("`pix route %s` must forward raw to %q, got stdout:\n%s", sub, want, stdout.String())
+			}
+			// The payload is the ONLY thing on stdout: no usage prose, no notice.
+			if strings.Contains(stdout.String(), "usage: pix models") {
+				t.Errorf("`pix route %s` put usage on stdout, which breaks a piped --json caller:\n%s", sub, stdout.String())
+			}
+		})
+	}
+}
+
 // TestNoRawPixRouteInProductionSource is a SOURCE guard, modeled on
 // TestNoRawGogAuthLoginInProductionSource (copy_guard_test.go): it scans every
 // production .go file in this package for the retired `pix route` phrase (in
@@ -95,6 +145,14 @@ func TestNoRawPixRouteInProductionSource(t *testing.T) {
 		}
 		for i, line := range strings.Split(string(b), "\n") {
 			if !re.MatchString(line) {
+				continue
+			}
+			// The guard is about what a USER can be told, so it inspects string
+			// literals only. A `//` comment naming the retired verb is how the
+			// rename documents itself ("routing the alias through runModels broke
+			// `pix route models`") and banning that would force the next reader to
+			// rediscover the bug. A comment cannot reach stdout; a literal can.
+			if !strings.Contains(line, `"`) || strings.HasPrefix(strings.TrimSpace(line), "//") {
 				continue
 			}
 			if strings.Contains(line, deprecationNotice) {

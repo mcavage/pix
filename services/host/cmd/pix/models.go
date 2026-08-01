@@ -78,14 +78,22 @@ func resolveSessionModel(intent string) (string, error) {
 }
 
 // execHost runs `pix-host <verb> <args...>` with inherited stdio and
-// propagates the exit code. Used by the route passthrough.
-func execHost(verb string, argv []string) {
+// propagates the exit code. Used by the models passthrough.
+func execHost(verb string, argv []string) { execHostAs("models", verb, argv) }
+
+// execHostAs is execHost with the launcher-facing verb named separately from
+// the host one. They differ for every `pix models` subcommand, since the host
+// tree is still spelled `pix-host route`: without this split, a missing
+// pix-host made `pix models ls` report itself as `pix route:` — resurrecting
+// the retired noun in user-facing output, where the source guard cannot see it
+// because the string is assembled by a format verb.
+func execHostAs(displayVerb, hostVerb string, argv []string) {
 	bin, err := findHostBinary()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix %s: %v\n", verb, err)
+		fmt.Fprintf(os.Stderr, "pix %s: %v\n", displayVerb, err)
 		os.Exit(1)
 	}
-	cmd := exec.Command(bin, append([]string{verb}, argv...)...)
+	cmd := exec.Command(bin, append([]string{hostVerb}, argv...)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -93,7 +101,7 @@ func execHost(verb string, argv []string) {
 		if exit, ok := err.(*exec.ExitError); ok {
 			os.Exit(exit.ExitCode())
 		}
-		fmt.Fprintf(os.Stderr, "pix %s: exec %s: %v\n", verb, bin, err)
+		fmt.Fprintf(os.Stderr, "pix %s: exec %s: %v\n", displayVerb, bin, err)
 		os.Exit(1)
 	}
 }
@@ -130,8 +138,11 @@ func runModels(argv []string) {
 	// Both are launcher-local (no execHost) and land here as a small additive
 	// change once reconcileDirectInference exists; nothing above needs to move.
 	default:
+		// Usage goes to stderr on the error path, matching every sibling verb
+		// (task.go, agent.go, state.go, config.go), so `pix models tpyo --json`
+		// cannot put usage prose on a caller's stdout.
 		fmt.Fprintf(os.Stderr, "pix models: unknown subcommand %q\n\n", argv[0])
-		fmt.Print(modelsUsage())
+		fmt.Fprint(os.Stderr, modelsUsage())
 		os.Exit(2)
 	}
 }
