@@ -259,17 +259,23 @@ func TestSetupChooseInferenceOffersDetectedOllamaAndNeedsNoOnePassword(t *testin
 	if !selected || inferenceNeedsOnePassword(cfg) {
 		t.Fatalf("selected=%v inference=%+v", selected, cfg.Inference)
 	}
-	if !strings.Contains(out.String(), "2. Ollama") || len(cfg.Inference.Models) != 3 {
+	if !strings.Contains(out.String(), "2. Ollama") || len(cfg.Inference.Models) != 2 {
 		t.Fatalf("output=%q models=%+v", out.String(), cfg.Inference.Models)
 	}
 	got := map[string]bool{}
 	for _, b := range cfg.Inference.Models {
 		got[b.Model] = true
 	}
-	for _, want := range []string{"ollama/qwen3.5:9b", "ollama/glm-5.2:cloud", "ollama/kimi-k3:cloud"} {
+	// kimi-k3:cloud is still listed by `ollama list` above, but the catalog
+	// retires it (available=false: "extra usage only", 401s on default plans),
+	// so configureOllamaInference must skip it and bind only the callable two.
+	for _, want := range []string{"ollama/qwen3.5:9b", "ollama/glm-5.2:cloud"} {
 		if !got[want] {
 			t.Fatalf("missing Ollama binding %s: %+v", want, cfg.Inference.Models)
 		}
+	}
+	if got["ollama/kimi-k3:cloud"] {
+		t.Fatalf("retired kimi-k3:cloud should not be bound: %+v", cfg.Inference.Models)
 	}
 }
 
