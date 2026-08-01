@@ -279,6 +279,7 @@ func configureOllamaInference(cfg *config.Config, env shellEnv, sel ollamaSelect
 	if cfg.Inference.Backends == nil {
 		cfg.Inference.Backends = map[string]config.InferenceBackend{}
 	}
+	_, backendPreexisted := cfg.Inference.Backends["ollama"]
 	endpoint := strings.TrimRight(effectiveOllamaEndpoint(cfg, env).URL, "/")
 	cfg.Inference.Backends["ollama"] = config.InferenceBackend{Driver: "ollama", BaseURL: endpoint + "/v1", Auth: "none"}
 
@@ -355,7 +356,47 @@ func configureOllamaInference(cfg *config.Config, env shellEnv, sel ollamaSelect
 		bind(rung)
 		plan.WantPull = ollamaTagFor(rung.ID)
 	}
+
+	// An Ollama selection that produced NOTHING must not be persisted. Deleting
+	// the old hard error left this function returning nil with an empty plan, so
+	// the keys step reached cfg.Save() and wrote a backend with no models — and
+	// the NEXT `pix setup` early-returns into enableDeclaredInferenceBindings
+	// ("configured but declares no models"), which is fatal. That bricks setup
+	// until `pix state reset`, with config.toml hand-editing forbidden. Reachable
+	// two ways: picking Ollama Cloud while signed out (no :cloud rows listed), and
+	// picking local on a machine under the floor.
+	//
+	// So: roll the backend back and fail with the actionable reason. This is not a
+	// return to the old hard error — that one fired at a user who simply had not
+	// pulled anything yet, which is now the WantPull path above.
+	if len(plan.LocalBound) == 0 && len(plan.CloudBound) == 0 && plan.WantPull == "" {
+		if !backendPreexisted {
+			delete(cfg.Inference.Backends, "ollama")
+		}
+		return ollamaPlan{}, fmt.Errorf("%s", emptyOllamaSelectionMessage(sel, plan))
+	}
 	return plan, nil
+}
+
+// emptyOllamaSelectionMessage names the ONE thing that would change the answer,
+// per selected flow, instead of a generic "nothing matched". Nothing has been
+// persisted by the time this is rendered.
+func emptyOllamaSelectionMessage(sel ollamaSelection, plan ollamaPlan) string {
+	var reasons []string
+	if sel.Local {
+		switch {
+		case !plan.Memory.OK:
+			reasons = append(reasons, "local: could not size this machine, so no local model was offered")
+		case plan.Memory.TotalGB < localFloorTotalGB:
+			reasons = append(reasons, fmt.Sprintf("local: %.0f GB RAM is below the %d GB a local model needs here", plan.Memory.TotalGB, localFloorTotalGB))
+		default:
+			reasons = append(reasons, "local: no catalog model fits this machine's usable memory")
+		}
+	}
+	if sel.Cloud {
+		reasons = append(reasons, "cloud: `ollama list` shows no cloud models — sign in with `ollama signin`, then re-run setup")
+	}
+	return "Ollama was selected but nothing is callable through it (" + strings.Join(reasons, "; ") + "). Nothing was saved; re-run `pix setup` and choose Ollama Cloud or an API key."
 }
 
 // verifyOllamaInference earns Verified for ollama bindings with an actual
@@ -949,15 +990,28 @@ func liveDirectInferenceProbe(provider, model, key string) error {
 // binding used to be callable regardless of Verified. That is the hole the
 // gated-cloud-model incident came through.
 //
-// Pack-declared bindings are exempt: a pack's authority is the sandbox smoke
-// test (see enableDeclaredInferenceBindings), and sbx-session auth cannot be
+// Pack-declared bindings are exempt ONLY where the exemption is earned: a
+// pack's authority is the sandbox smoke test (see
+// enableDeclaredInferenceBindings) because sbx-session auth cannot be
 // faithfully replayed by a host HTTP probe.
+//
+// That reasoning does NOT extend to a pack's 1Password-backed native backend,
+// which packs may legally declare. Host proof for those is not merely possible,
+// it already happens: verifyDirectInference probes every 1password binding with
+// no Source check, and demotes the ones that fail. Exempting them by source
+// would let a binding whose probe was DISPATCHED AND REFUSED stay callable, and
+// flow on into the compiled manifest, the sandbox kit, and doctor's "N callable
+// model(s)" — a success word behind a failed probe. So the exemption is scoped
+// to the auth Pix cannot verify from here.
 func bindingNeedsHostProof(cfg *config.Config, b config.InferenceModelBinding) bool {
-	if b.Source != "" {
+	backend, ok := cfg.Inference.Backends[b.Backend]
+	if !ok {
 		return false
 	}
-	backend, ok := cfg.Inference.Backends[b.Backend]
-	return ok && (backend.Auth == "1password" || backend.Driver == "ollama")
+	if b.Source != "" && backend.Auth != "1password" {
+		return false
+	}
+	return backend.Auth == "1password" || backend.Driver == "ollama"
 }
 
 func inferenceBindingCallable(cfg *config.Config, binding config.InferenceModelBinding) bool {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -634,5 +635,115 @@ func TestPullPromptNamesTheBridgeAsRequiredOnPureLocalBox(t *testing.T) {
 	}
 	if !strings.Contains(s, "REQUIRED") {
 		t.Fatalf("the bridge rung is the only model Pix can call here; say so:\n%s", s)
+	}
+}
+
+// TestPackOnePasswordBindingStillNeedsHostProof is the counterpart to the
+// pack-ollama exemption above, and the regression test for scoping it.
+//
+// Packs may legally declare an `auth = "1password"` native backend, and
+// verifyDirectInference already probes those with no Source check and demotes
+// the ones that fail. An exemption keyed on `Source != ""` alone therefore let
+// a binding whose probe was DISPATCHED AND REFUSED stay callable, flowing on
+// into the compiled manifest, the sandbox kit, and doctor's "N callable
+// model(s)" — a success word behind a failed probe. The exemption belongs to
+// the auth Pix cannot verify from the host, not to packs as a class.
+func TestPackOnePasswordBindingStillNeedsHostProof(t *testing.T) {
+	cfg := &config.Config{Inference: config.InferenceConfig{
+		Backends: map[string]config.InferenceBackend{
+			"anthropic": {Driver: "native", Auth: "1password", KeyEnv: "ANTHROPIC_API_KEY", Source: "/packs/work"},
+		},
+		Models: []config.InferenceModelBinding{
+			{Model: "anthropic/claude-sonnet-5", Backend: "anthropic", Upstream: "anthropic/claude-sonnet-5", Available: true, Source: "/packs/work"},
+		},
+	}}
+	if inferenceBindingCallable(cfg, cfg.Inference.Models[0]) {
+		t.Fatal("an unverified pack 1password binding must NOT be callable: the host can probe that auth, so it must")
+	}
+	// Earning it the honest way makes it callable, so the rule gates on proof,
+	// not on origin.
+	cfg.Inference.Models[0].Verified = true
+	if !inferenceBindingCallable(cfg, cfg.Inference.Models[0]) {
+		t.Fatal("a probe-verified pack 1password binding must be callable")
+	}
+}
+
+// TestEmptyOllamaSelectionPersistsNothing is the regression test for the dead
+// end that deleting the old hard error opened up.
+//
+// configureOllamaInference writes the ollama backend before it knows whether
+// anything will bind. With the hard error gone it returned nil with an empty
+// plan, so setup's keys step reached cfg.Save() and persisted a backend with no
+// models — and the NEXT `pix setup` early-returns into
+// enableDeclaredInferenceBindings ("configured but declares no models"), which
+// is fatal. Setup was then bricked until `pix state reset`, with config.toml
+// hand-editing forbidden by design.
+//
+// Reachable two ways, both covered here: choosing Ollama Cloud while signed out
+// (no :cloud rows in the listing), and choosing local on a machine under the
+// 24 GB floor.
+func TestEmptyOllamaSelectionPersistsNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		sel      ollamaSelection
+		listing  string
+		totalGB  float64
+		wantWord string
+	}{
+		{
+			name:     "cloud selected while signed out",
+			sel:      ollamaSelection{Cloud: true},
+			listing:  "NAME ID SIZE MODIFIED\n",
+			totalGB:  64,
+			wantWord: "ollama signin",
+		},
+		{
+			name:     "local selected on a machine under the floor",
+			sel:      ollamaSelection{Local: true},
+			listing:  "NAME ID SIZE MODIFIED\n",
+			totalGB:  16,
+			wantWord: "below the 24 GB",
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			// runtime.GOOS, not a fixed OS: probeHostMemory dispatches on the real
+			// one, and the 24 GB floor is a TOTAL-RAM rule, so it fires identically
+			// whichever usable-fraction applies.
+			env := hwMemEnv(t, runtime.GOOS, tc.totalGB)
+			base := env.run
+			env.run = func(name string, args ...string) (string, error) {
+				if name == "ollama" && len(args) == 1 && args[0] == "list" {
+					return tc.listing, nil
+				}
+				if base != nil {
+					return base(name, args...)
+				}
+				return "", nil
+			}
+			cfg := &config.Config{}
+			_, err := configureOllamaInference(cfg, env, tc.sel, io.Discard)
+			if err == nil {
+				t.Fatal("an Ollama selection that binds nothing must fail, not persist an empty backend")
+			}
+			if !strings.Contains(err.Error(), tc.wantWord) {
+				t.Errorf("error must name what would change the answer (%q), got: %v", tc.wantWord, err)
+			}
+			// The whole point: nothing was left behind for the next run to choke on.
+			if _, ok := cfg.Inference.Backends["ollama"]; ok {
+				t.Error("the ollama backend was persisted despite binding nothing; the next `pix setup` would hard-fail")
+			}
+			if len(cfg.Inference.Models) != 0 {
+				t.Errorf("bindings were persisted despite the failure: %+v", cfg.Inference.Models)
+			}
+			// And prove the dead end really was a dead end: a config in the state we
+			// just refused to write is exactly what bricks the next run.
+			bricked := &config.Config{Inference: config.InferenceConfig{
+				Backends: map[string]config.InferenceBackend{"ollama": {Driver: "ollama", BaseURL: "http://x/v1", Auth: "none"}},
+			}}
+			if err := enableDeclaredInferenceBindings(bricked); err == nil {
+				t.Fatal("expected the empty-backend config to be the fatal state; if this stops being true, revisit the rollback")
+			}
+		})
 	}
 }

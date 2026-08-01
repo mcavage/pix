@@ -147,25 +147,32 @@ func parseMemTotalKB(body string) (float64, bool) {
 	return 0, false
 }
 
-// chooseLocalRung picks the largest local rung whose min_ram_gb fits the probed
-// USABLE budget. It is an OFFER filter, never a verdict and never a download.
+// localFloorTotalGB is the machine size below which Pix offers NO local model
+// and points at Ollama Cloud instead. It is a product decision, not arithmetic,
+// and it deliberately overrides the fits-in-usable-RAM rule below it.
 //
-// When the machine could not be sized (mem.OK == false) it offers the FLOOR
-// rung — the smallest thing on the ladder, not the smallest thing that fits an
-// unmeasured box, because we do not know what fits. That is a guess, and it is
-// bounded: the pull still requires the existing consent, so a wrong guess costs
-// a declined prompt and a 3.4 GB download at worst, never a 24 GB one.
+// That rule alone said a 16 GB Mac should run the 9B: 16 x 0.67 = 10.7, over
+// its 10 GB gate. True only of an idle machine. The 9B wires ~9.3 GB, leaving
+// ~6.7 GB for macOS, a browser, an editor and the agent itself, and the setup
+// probe passes anyway because it runs during the one idle moment the machine
+// ever has — so the user meets the thrash mid-session, when a probe can no
+// longer save them. Below this floor the honest answer is Ollama Cloud, not a
+// model small enough to fit but too small to code with.
+const localFloorTotalGB = 24
+
+// chooseLocalRung picks the largest local rung whose min_ram_gb fits the probed
+// USABLE budget, on a machine big enough to be offered one at all. It is an
+// OFFER filter, never a verdict and never a download.
+//
+// A machine we could not size gets NOTHING, not the floor rung: an earlier
+// draft offered the smallest model on an unmeasured box, but combined with the
+// 24 GB floor that would hand a local model to precisely the machines the floor
+// exists to protect, since an unmeasured machine is more likely small than
+// large. Unknown size means Cloud, and the offer line says why.
 func chooseLocalRung(reg *routing.Registry, mem hostMemory) (routing.Model, bool) {
 	rungs := routing.LocalRungs(reg) // largest first
-	if len(rungs) == 0 {
+	if len(rungs) == 0 || !mem.OK || mem.TotalGB < localFloorTotalGB {
 		return routing.Model{}, false
-	}
-	if !mem.OK {
-		floor := rungs[len(rungs)-1]
-		if floor.MinRAMGB <= 0 {
-			return routing.Model{}, false
-		}
-		return floor, true
 	}
 	for _, m := range rungs {
 		if m.FitsMemory(mem.UsableGB) {
@@ -185,10 +192,10 @@ func localRungOfferLine(mem hostMemory, rung routing.Model, ok bool) string {
 		if source == "" {
 			source = "unsupported platform"
 		}
-		if ok {
-			return fmt.Sprintf("  could not size this machine (%s failed) — offering the smallest local model only (%s)", source, ollamaTagFor(rung.ID))
-		}
-		return fmt.Sprintf("  could not size this machine (%s failed) and the catalog offers no local model", source)
+		return fmt.Sprintf("  could not size this machine (%s failed) — not offering a local model; use Ollama Cloud or an API key", source)
+	case mem.TotalGB < localFloorTotalGB:
+		return fmt.Sprintf("  %.0f GB RAM — below the %d GB Pix needs before a local model is worth running alongside your editor and browser; use Ollama Cloud or an API key",
+			mem.TotalGB, localFloorTotalGB)
 	case !ok:
 		return fmt.Sprintf("  %.0f GB RAM (usable ~%.0f GB) does not fit the smallest local model — use Ollama Cloud or an API key instead",
 			mem.TotalGB, mem.UsableGB)

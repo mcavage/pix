@@ -107,13 +107,16 @@ func TestChooseLocalRungByRAM(t *testing.T) {
 		totalGB float64
 		want    string // "" = nothing on the ladder fits
 	}{
+		// Below localFloorTotalGB (24) NOTHING is offered, whatever the
+		// usable-budget arithmetic says. A 16 GB Mac clears the 9b's 10 GB gate on
+		// paper (16 * 0.67 = 10.72) and still should not be handed a local model:
+		// the 9b wires ~9.3 GB, and the machine also runs macOS, a browser, an
+		// editor and the agent. The floor is a product decision that outranks the
+		// arithmetic, and these rows are what pin it.
 		{"darwin", 8, ""},
 		{"linux", 8, ""},
-		// NOTE: the design's table prints 4b for a 16 GB Mac, but 16 * 0.67 =
-		// 10.72 >= the 9b's 10 GB gate, and the stated rule is "the largest rung
-		// whose min_ram_gb <= usable". The rule wins; the table row is a slip.
-		{"darwin", 16, "ollama/qwen3.5:9b"},
-		{"linux", 16, "ollama/qwen3.5:4b"},
+		{"darwin", 16, ""},
+		{"linux", 16, ""},
 		{"darwin", 24, "ollama/qwen3.5:9b"},
 		{"linux", 24, "ollama/qwen3.5:9b"},
 		{"darwin", 32, "ollama/qwen3.5:9b"},
@@ -143,20 +146,21 @@ func TestChooseLocalRungByRAM(t *testing.T) {
 	}
 }
 
-// TestUnknownMemoryOffersFloorRungOnly: "unknown" never means "unconstrained".
-func TestUnknownMemoryOffersFloorRungOnly(t *testing.T) {
+// TestUnknownMemoryOffersNothing: "unknown" never means "unconstrained", and
+// with a 24 GB floor it cannot mean "the floor rung" either. An earlier draft
+// offered the smallest model on an unmeasured box; combined with the floor that
+// hands a local model to exactly the machines the floor exists to protect,
+// since an unmeasured machine is likelier small than large.
+func TestUnknownMemoryOffersNothing(t *testing.T) {
 	reg, err := routing.LoadRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
 	rung, ok := chooseLocalRung(reg, hostMemory{Source: "sysctl hw.memsize"})
-	if !ok {
-		t.Fatal("an unsized machine still gets the floor rung offered (the pull remains consented)")
+	if ok {
+		t.Fatalf("an unsized machine was offered %s; unknown size must mean no local offer", rung.ID)
 	}
-	if rung.ID != "ollama/qwen3.5:4b" {
-		t.Fatalf("unsized machine was offered %s, want the floor rung ollama/qwen3.5:4b", rung.ID)
-	}
-	line := localRungOfferLine(hostMemory{Source: "sysctl hw.memsize"}, rung, true)
+	line := localRungOfferLine(hostMemory{Source: "sysctl hw.memsize"}, rung, false)
 	if !strings.Contains(line, "could not size this machine") {
 		t.Fatalf("the offer line must say the machine was not sized, got %q", line)
 	}
