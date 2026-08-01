@@ -370,6 +370,15 @@ func runSecretSetLocked(env shellEnv, out io.Writer, key, value string) error {
 		}
 	}
 	fmt.Fprintf(out, "set %s = %s in %s\n", key, value, path)
+	// A provider key is only half-wired at this point. `secret set` deliberately
+	// does NOT reconcile: it is a file transaction over arbitrary keys, and making
+	// it fire N live inference probes would mean a dead provider API could fail a
+	// credential write. But saying nothing is what produced "I set the key and
+	// nothing happened, and I could not find where to finish", so name the next
+	// command here, where the user actually is.
+	if p, isProviderKey := providerKeyRefs[key]; isProviderKey {
+		fmt.Fprintf(out, "%s is stored but not yet wired to any model. Finish with: pix models add %s\n", key, p)
+	}
 	return nil
 }
 

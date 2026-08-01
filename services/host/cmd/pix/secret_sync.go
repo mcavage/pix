@@ -745,7 +745,7 @@ func runSecretSync(env shellEnv, out io.Writer) {
 	synced, failed, fatal := syncProviderKeys(env, out)
 	if fatal != nil {
 		fmt.Fprintf(out, "pix secret sync: %v\n", fatal)
-		fmt.Fprintln(out, "Add provider keys with: pix secret set ANTHROPIC_API_KEY op://vault/item/field")
+		fmt.Fprintln(out, "Add a provider key with: pix models add anthropic")
 		os.Exit(3)
 	}
 	if synced == 0 && failed == 0 {

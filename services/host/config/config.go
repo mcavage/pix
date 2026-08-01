@@ -237,7 +237,15 @@ type InferenceConfig struct {
 	// means no user restriction (pack declarations / legacy config remain
 	// callable). Exclusive pack inference bypasses this personal preference
 	// without deleting it, so switching back restores the personal roster.
-	AllowedModels    []string `toml:"allowed_models,omitempty"`
+	AllowedModels []string `toml:"allowed_models,omitempty"`
+	// RosterProviders records which providers the roster has already been
+	// offered for. It is what lets a NEWLY added provider widen AllowedModels
+	// while a deliberate narrowing within providers the user has already seen is
+	// preserved. Empty on a config written before this existed, which is read as
+	// "whatever was bound before this reconcile" — never as the post-mutation set,
+	// or the provider being added would be marked seen by its own arrival and
+	// never widen. See reconcileDirectInference.
+	RosterProviders  []string `toml:"roster_providers,omitempty"`
 	ExclusiveBackend string   `toml:"exclusive_backend,omitempty"`
 	ExclusiveSource  string   `toml:"exclusive_source,omitempty"`
 }

@@ -743,6 +743,19 @@ Print the registry, scorecard, and resolved-intent table.
 .BR "pix models pick" " " intent " [" \-\-json "]"
 Resolve one intent to a model and print the rationale + ranked alternatives.
 .TP
+.BR "pix models add" " " provider
+Wire a model provider key
+.RB ( anthropic ,
+.BR openai ,
+.BR google )
+into callable models, end to end: store its 1Password ref if it has none,
+rebuild the model bindings, prove each one with a live request, widen the
+roster to include the new provider, and reconcile the key into sbx.  This is
+the command setup means by "you can add others later";
+.B "pix secret set"
+stores a credential ref and deliberately makes no network calls, so it alone
+leaves a key unwired.  Refuses when a mandatory pack owns inference.
+.TP
 .BR "pix models route" " [" \-\-out " " PATH "]"
 Resolve every intent and write the intent-to-model map
 .RB ( routing.json ).

@@ -848,7 +848,8 @@ func modelKeyMissingMessage(env shellEnv) string {
 	} else {
 		msg += "Keys come from 1Password (op is required). Configure them, then re-run:\n" +
 			"  pix setup                                                       (guided, all providers)\n" +
-			"  pix secret set ANTHROPIC_API_KEY op://vault/item/field && pix secret sync   (one provider)\n"
+			"  pix models add anthropic                                        (one provider, prompts for the ref)\n" +
+			"  pix secret set ANTHROPIC_API_KEY op://vault/item/field           (scripted; then `pix models add anthropic`)\n"
 	}
 	return msg
 }

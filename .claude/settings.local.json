@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ollama list *)",
+      "WebSearch",
+      "WebFetch(domain:ollama.com)"
+    ]
+  }
+}
