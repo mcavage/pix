@@ -264,7 +264,24 @@ type InferenceModelBinding struct {
 	Available bool   `toml:"available,omitempty"`
 	Verified  bool   `toml:"verified,omitempty"` // successful backend-specific probe, not declaration
 	Source    string `toml:"source,omitempty"`   // contributing pack root; empty = user/setup
+
+	// VerifiedBy records HOW Verified was earned. "probe" is the only value this
+	// codebase writes; empty on a binding written before provenance existed,
+	// which is exactly the legacy listing-derived claim doctor must flag.
+	// DECISION-BEARING: `Verified && VerifiedBy != "probe"` IS the migration
+	// predicate, and without it a listing-set verified=true is bit-identical to a
+	// probe-earned one.
+	VerifiedBy string `toml:"verified_by,omitempty"`
+	// VerifiedAt is RFC3339 EVIDENCE TEXT for the doctor/summary line ("verified
+	// 2026-07-14"). NEVER read for a decision: no staleness expiry, no re-probe
+	// trigger. It exists so a row can cite a date instead of asserting one.
+	VerifiedAt string `toml:"verified_at,omitempty"`
 }
+
+// VerifiedByProbe is the only provenance value this codebase writes. Promotion
+// sets it in the same assignment as Verified; demotion clears both, so the
+// provenance can never outlive the claim it describes.
+const VerifiedByProbe = "probe"
 
 // retiredConfigKeys is the allowlist of top-level config keys that once had
 // meaning but were retired: mcp_static / mcp_dynamic, the per-server eager/lazy

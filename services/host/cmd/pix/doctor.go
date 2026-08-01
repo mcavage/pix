@@ -79,6 +79,13 @@ type shellEnv struct {
 	// directInferenceProbe performs one bounded, model-specific provider call.
 	// The key is held only in memory and must never appear in returned errors.
 	directInferenceProbe func(provider, model, key string) error
+	// ollamaInferenceProbe makes ONE bounded, model-specific request against the
+	// RESOLVED Ollama endpoint (never a spelled-out address). Nil in tests that
+	// do not fake it, which leaves every ollama binding unverified — never a
+	// silent real call, never a false verified. numCtx is the rung's declared
+	// context budget (0 for cloud), so the probe loads the model at the size the
+	// RAM gate priced.
+	ollamaInferenceProbe func(endpoint, model string, numCtx int, timeout time.Duration) error
 }
 
 // probeTimeout bounds every registered-command probe so doctor can never wedge
@@ -207,6 +214,7 @@ func defaultShellEnv() shellEnv {
 		identityProbe:        rpcIdentityProbe,
 		slackAuthTest:        liveSlackAuthTest,
 		directInferenceProbe: liveDirectInferenceProbe,
+		ollamaInferenceProbe: liveOllamaInferenceProbe,
 	}
 }
 

@@ -20,6 +20,22 @@ import (
 
 const directInferenceProbeTimeout = 8 * time.Second
 
+// Ollama probe budgets. They are vars, not consts, for ONE reason: a hermetic
+// test has to be able to shrink them to exercise the budget branch without
+// sitting through a five-minute wall clock. Nothing else writes them.
+var (
+	// ollamaCloudProbeTimeout bounds a cloud probe: a pure network round trip
+	// that holds no local resource.
+	ollamaCloudProbeTimeout = 20 * time.Second
+	// ollamaLocalProbeTimeout bounds ONE cold local load, with nothing queued
+	// ahead of it because the local set is serialized.
+	ollamaLocalProbeTimeout = 90 * time.Second
+	// ollamaLocalProbeBudget is the TOTAL wall clock the serialized local set may
+	// spend. Four pulled rungs at 90s each is a pathological box, not a setup a
+	// user should sit through.
+	ollamaLocalProbeBudget = 300 * time.Second
+)
+
 // readSetupLine consumes exactly one line without a buffered reader that could
 // steal subsequent answers from setup's provider-ref scanner.
 func readSetupLine(in io.Reader) (string, bool) {
@@ -68,12 +84,21 @@ func setupChooseInference(cfg *config.Config, env shellEnv, in io.Reader, out io
 			ollamaReady = runErr == nil && !timedOut
 		}
 	}
-	fmt.Fprintln(out, "How should Pix run models? (choose one or more)")
-	fmt.Fprintln(out, "  1. API key (default)")
+	fmt.Fprintln(out, "How should Pix run models? (choose one or more, comma-separated)")
+	fmt.Fprintln(out, "  1. API key (default)     Anthropic / OpenAI / Google keys, resolved from 1Password")
 	if ollamaReady {
-		fmt.Fprintln(out, "  2. Ollama")
+		fmt.Fprintln(out, "  2. Ollama local          models that run on this machine")
 	}
-	fmt.Fprintln(out, "  3. Custom gateway")
+	fmt.Fprintln(out, "  3. Custom gateway        an OpenAI-compatible endpoint you host")
+	if ollamaReady {
+		fmt.Fprintln(out, "  4. Ollama Cloud          large models on your ollama.com subscription")
+		// A HINT, not entitlement. A `:cloud` row in the listing appears on every
+		// signed-in machine and proves nothing about what the plan may call — that
+		// inference is exactly how a gated model got bound and 401'd at call time.
+		if n := listedCloudTagCount(env); n > 0 {
+			fmt.Fprintf(out, "  (this machine lists %d cloud model(s); Pix proves which ones your plan can call)\n", n)
+		}
+	}
 	fmt.Fprint(out, "Choose [1]: ")
 	choice, ok := readSetupLine(in)
 	if !ok {
@@ -87,19 +112,22 @@ func setupChooseInference(cfg *config.Config, env shellEnv, in io.Reader, out io
 		switch raw {
 		case "1", "api":
 			selected["api"] = true
-		case "2", "ollama":
+		case "2", "ollama", "ollama-local", "local":
 			selected["ollama"] = true
 		case "3", "gateway":
 			selected["gateway"] = true
+		case "4", "ollama-cloud", "cloud":
+			selected["ollama-cloud"] = true
 		default:
 			return false, fmt.Errorf("unknown inference choice %q", raw)
 		}
 	}
-	if selected["ollama"] {
+	if selected["ollama"] || selected["ollama-cloud"] {
 		if !ollamaReady {
 			return false, fmt.Errorf("Ollama is not installed and healthy, so it is not an available inference choice")
 		}
-		if _, err := configureOllamaInference(cfg, env); err != nil {
+		sel := ollamaSelection{Local: selected["ollama"], Cloud: selected["ollama-cloud"]}
+		if _, err := configureOllamaInference(cfg, env, sel, out); err != nil {
 			return false, err
 		}
 	}
@@ -169,14 +197,33 @@ func configureCustomGateway(cfg *config.Config, in io.Reader, out io.Writer) (bo
 	return true, nil
 }
 
-func configureOllamaInference(cfg *config.Config, env shellEnv) (bool, error) {
+// ollamaSelection is what the user chose in the inference prompt. Local and
+// Cloud are separate answers because they are separate products: a `:cloud`
+// row in `ollama list` shows up on every signed-in machine and says nothing
+// about what this machine can RUN, and a local model says nothing about what
+// the subscription may CALL.
+type ollamaSelection struct{ Local, Cloud bool }
+
+// ollamaPlan is what configureOllamaInference decided, for the caller to render
+// and for the models step to act on. It contains no success claims: every
+// binding it created is a CANDIDATE (Verified: false) until a probe says
+// otherwise.
+type ollamaPlan struct {
+	Endpoint   string     // resolved via effectiveOllamaEndpoint
+	LocalBound []string   // catalog ids bound as candidates from the listing
+	CloudBound []string   // ditto, cloud
+	WantPull   string     // the RAM-appropriate rung handed to setupLocalModels
+	SkippedRAM []string   // catalog local ids this machine cannot run
+	Memory     hostMemory // the reading that sized the offer
+}
+
+// ollamaListedModels returns the tags `ollama list` reports. This is a LISTING,
+// the weakest possible signal: it proves a name was printed, not that the model
+// runs here or that the account may call it.
+func ollamaListedModels(env shellEnv) (map[string]bool, error) {
 	out, timedOut, err := probeRun(env, "ollama", "list")
 	if err != nil || timedOut {
-		return false, fmt.Errorf("could not list Ollama models")
-	}
-	reg, err := routing.LoadRegistry()
-	if err != nil {
-		return false, err
+		return nil, fmt.Errorf("could not list Ollama models")
 	}
 	seen := map[string]bool{}
 	for i, line := range strings.Split(out, "\n") {
@@ -188,27 +235,302 @@ func configureOllamaInference(cfg *config.Config, env shellEnv) (bool, error) {
 			seen[fields[0]] = true
 		}
 	}
+	return seen, nil
+}
+
+// listedCloudTagCount counts `:cloud`-tagged rows in the listing, for the
+// prompt's hint line only. It is never used to bind or to claim entitlement.
+func listedCloudTagCount(env shellEnv) int {
+	listed, err := ollamaListedModels(env)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for tag := range listed {
+		if strings.Contains(tag, "cloud") {
+			n++
+		}
+	}
+	return n
+}
+
+// configureOllamaInference binds CANDIDATES, never verified models. It splits
+// the catalog on Model.Local so "Ollama local" and "Ollama Cloud" are the two
+// separate answers they are, gates local rungs on the memory this machine
+// actually has, and — crucially — NEVER hard-fails a user who has not pulled
+// anything yet. The old error ("Ollama is healthy but none of its installed
+// models match the Pix catalog") propagated out of a fatal mutation step, so
+// the MOST COMMON local flow had the worst outcome in the whole setup. The
+// replacement writes the RAM-appropriate rung to cfg.OllamaBridgeModel and lets
+// it flow through the models step's EXISTING consent — there is no second
+// consent mechanism, and a bare --yes still downloads nothing.
+func configureOllamaInference(cfg *config.Config, env shellEnv, sel ollamaSelection, out io.Writer) (ollamaPlan, error) {
+	if out == nil {
+		out = io.Discard
+	}
+	listed, err := ollamaListedModels(env)
+	if err != nil {
+		return ollamaPlan{}, err
+	}
+	reg, err := routing.LoadRegistry()
+	if err != nil {
+		return ollamaPlan{}, err
+	}
 	if cfg.Inference.Backends == nil {
 		cfg.Inference.Backends = map[string]config.InferenceBackend{}
 	}
 	endpoint := strings.TrimRight(effectiveOllamaEndpoint(cfg, env).URL, "/")
 	cfg.Inference.Backends["ollama"] = config.InferenceBackend{Driver: "ollama", BaseURL: endpoint + "/v1", Auth: "none"}
-	before := len(cfg.Inference.Models)
+
+	plan := ollamaPlan{Endpoint: endpoint}
+	bound := map[string]bool{}
+	for _, b := range cfg.Inference.Models {
+		bound[b.Model] = true
+	}
+	bind := func(m routing.Model) {
+		if bound[m.ID] {
+			return
+		}
+		bound[m.ID] = true
+		cfg.Inference.Models = append(cfg.Inference.Models, config.InferenceModelBinding{
+			// A listing is not evidence. verifyOllamaInference earns Verified with a
+			// bounded, model-specific request through the resolved endpoint.
+			Model: m.ID, Backend: "ollama", Upstream: ollamaTagFor(m.ID), Available: true,
+		})
+	}
+
+	var rung, bestLocal routing.Model
+	rungOK := false
+	if sel.Local {
+		plan.Memory = probeHostMemory(env)
+		rung, rungOK = chooseLocalRung(reg, plan.Memory)
+		fmt.Fprintln(out, localRungOfferLine(plan.Memory, rung, rungOK))
+	}
+
 	for _, m := range reg.Models {
 		if m.Provider != "ollama" || !m.Available {
 			continue
 		}
-		upstream := strings.TrimPrefix(m.ID, "ollama/")
-		if seen[upstream] {
-			cfg.Inference.Models = append(cfg.Inference.Models, config.InferenceModelBinding{
-				Model: m.ID, Backend: "ollama", Upstream: upstream, Available: true, Verified: true,
-			})
+		tag := ollamaTagFor(m.ID)
+		switch {
+		case m.Local && sel.Local:
+			// The gate decides what to OFFER TO PULL. A rung the user ALREADY pulled
+			// costs nothing to bind as a candidate, and the probe — which loads it at
+			// its declared context — is a better judge of whether it runs here than
+			// the gate is. So the gate only skips a listed model when we positively
+			// measured the machine and it does not fit.
+			if plan.Memory.OK && !m.FitsMemory(plan.Memory.UsableGB) {
+				plan.SkippedRAM = append(plan.SkippedRAM, m.ID)
+				continue
+			}
+			if listed[tag] {
+				bind(m)
+				plan.LocalBound = append(plan.LocalBound, m.ID)
+				if m.MinRAMGB >= bestLocal.MinRAMGB {
+					bestLocal = m
+				}
+			}
+		case !m.Local && sel.Cloud:
+			if listed[tag] {
+				bind(m)
+				plan.CloudBound = append(plan.CloudBound, m.ID)
+			}
 		}
 	}
-	if len(cfg.Inference.Models) == before {
-		return false, fmt.Errorf("Ollama is healthy but none of its installed models match the Pix catalog")
+
+	if sel.Local && bestLocal.ID != "" {
+		// Something local is already on disk: the bridge and the router's local
+		// option point at the largest one that fits, and nothing needs pulling.
+		cfg.OllamaBridgeModel = ollamaTagFor(bestLocal.ID)
+		return plan, nil
 	}
-	return true, nil
+	if sel.Local && rungOK {
+		// The rung is the local model Pix will call and the tag the bridge exposes.
+		// Writing it BEFORE consent is deliberate and safe: setupLocalModels reads
+		// this key to build its readiness axes, so the tag must exist in config
+		// before the step that asks about it — and naming a tag is a declared
+		// intent, not a claim (Verified stays false, the binding is not callable,
+		// and doctor's bridge row reports it missing).
+		cfg.OllamaBridgeModel = ollamaTagFor(rung.ID)
+		bind(rung)
+		plan.WantPull = ollamaTagFor(rung.ID)
+	}
+	return plan, nil
+}
+
+// verifyOllamaInference earns Verified for ollama bindings with an actual
+// model-specific request through the RESOLVED endpoint. Every binding is
+// checked independently. CLOUD probes run concurrently (they are network round
+// trips and hold no local resource). LOCAL probes are SERIALIZED and unload
+// after themselves: two concurrent generates make Ollama co-load two sets of
+// weights, which either exhausts the memory budget readiness_hardware.go just
+// computed or serializes the loads anyway behind timers that started at
+// dispatch — so the second reports a timeout it never got a turn to spend, and
+// un-binds a model that works. Mirrors verifyDirectInference in structure, not
+// in concurrency.
+//
+// The local set runs LARGEST RUNG FIRST under its own wall budget, and a probe
+// is never STARTED unless its full timeout fits what remains: the budget can
+// therefore never manufacture a timeout. A candidate the budget never reached
+// is `not probed` — a THIRD state that is neither verified nor failed, excluded
+// from attempted, and never rendered as a rejection.
+//
+// Deviation from the design's signature: it takes an io.Writer (the design's
+// own output spec prints a live line per local probe, which cannot be done
+// without one) and returns the notProbed set (the third state has to be
+// observable to be assertable).
+func verifyOllamaInference(cfg *config.Config, env shellEnv, out io.Writer) (attempted, verified int, failures, notProbed []string) {
+	if cfg == nil || env.ollamaInferenceProbe == nil {
+		return 0, 0, nil, nil
+	}
+	if out == nil {
+		out = io.Discard
+	}
+	reg, err := routing.LoadRegistry()
+	if err != nil {
+		return 0, 0, nil, nil
+	}
+	endpoint := strings.TrimRight(effectiveOllamaEndpoint(cfg, env).URL, "/")
+	type candidate struct {
+		index  int
+		label  string
+		tag    string
+		numCtx int
+		minRAM float64
+	}
+	var local, cloud []candidate
+	for i := range cfg.Inference.Models {
+		binding := &cfg.Inference.Models[i]
+		backend, ok := cfg.Inference.Backends[binding.Backend]
+		if !ok || backend.Driver != "ollama" || !binding.Available || !inferenceBindingAllowed(cfg, *binding) {
+			continue
+		}
+		if binding.Source != "" {
+			// A pack's authority is the sandbox smoke test; a host probe must not
+			// demote what it cannot faithfully replay.
+			continue
+		}
+		// Demote first: a stale claim (including a pre-provenance listing-derived
+		// one) must never survive a run that could not re-earn it.
+		binding.Verified, binding.VerifiedBy, binding.VerifiedAt = false, "", ""
+		c := candidate{index: i, label: binding.Model, tag: binding.Upstream}
+		m, found := reg.Get(binding.Model)
+		if found && m.Local {
+			// num_ctx is the rung's DECLARED context budget, so the probe allocates
+			// the same KV cache the RAM gate priced. A rung that cannot hold its own
+			// declared context fails here, which is exactly when we want to find out.
+			c.numCtx, c.minRAM = m.ContextWindow, m.MinRAMGB
+			local = append(local, c)
+			continue
+		}
+		cloud = append(cloud, c)
+	}
+
+	promote := func(index int) {
+		cfg.Inference.Models[index].Verified = true
+		cfg.Inference.Models[index].VerifiedBy = config.VerifiedByProbe
+		cfg.Inference.Models[index].VerifiedAt = time.Now().UTC().Format(time.RFC3339)
+		verified++
+	}
+
+	// Cloud: concurrent. Nothing local is held, so N probes cost one timeout.
+	type result struct {
+		index int
+		label string
+		err   error
+	}
+	results := make(chan result, len(cloud))
+	for _, c := range cloud {
+		attempted++
+		go func(c candidate) {
+			results <- result{index: c.index, label: c.label, err: env.ollamaInferenceProbe(endpoint, c.tag, 0, ollamaCloudProbeTimeout)}
+		}(c)
+	}
+
+	// Local: strictly serial, largest rung first, each unloading after itself.
+	sort.Slice(local, func(i, j int) bool {
+		if local[i].minRAM != local[j].minRAM {
+			return local[i].minRAM > local[j].minRAM
+		}
+		return local[i].label < local[j].label
+	})
+	if len(local) > 0 {
+		fmt.Fprintf(out, "  verifying %d local ollama model(s), one at a time (each is loaded and unloaded) ...\n", len(local))
+	}
+	remaining := ollamaLocalProbeBudget
+	for _, c := range local {
+		if remaining < ollamaLocalProbeTimeout {
+			// NOT a failure: this candidate never got a turn. Reporting it as broken
+			// would let a budget un-bind a healthy model.
+			notProbed = append(notProbed, c.label)
+			fmt.Fprintf(out, "    %-14s not probed — %.0fs left of the %.0fs local budget, less than one probe's %.0fs\n",
+				c.tag, remaining.Seconds(), ollamaLocalProbeBudget.Seconds(), ollamaLocalProbeTimeout.Seconds())
+			continue
+		}
+		attempted++
+		start := time.Now()
+		err := env.ollamaInferenceProbe(endpoint, c.tag, c.numCtx, ollamaLocalProbeTimeout)
+		elapsed := time.Since(start)
+		if remaining -= elapsed; remaining < 0 {
+			remaining = 0
+		}
+		if err != nil {
+			failures = append(failures, c.label+": "+err.Error())
+			fmt.Fprintf(out, "    %-14s failed (%.0fs): %v\n", c.tag, elapsed.Seconds(), err)
+			continue
+		}
+		promote(c.index)
+		fmt.Fprintf(out, "    %-14s ok (%.0fs)\n", c.tag, elapsed.Seconds())
+	}
+
+	for range cloud {
+		res := <-results
+		if res.err != nil {
+			failures = append(failures, res.label+": "+res.err.Error())
+			continue
+		}
+		promote(res.index)
+	}
+	sort.Strings(failures)
+	sort.Strings(notProbed)
+	return attempted, verified, failures, notProbed
+}
+
+// liveOllamaInferenceProbe posts ONE minimal generate to endpoint/api/generate.
+// endpoint is ALWAYS supplied by effectiveOllamaEndpoint; this function never
+// spells an address of its own (scripts/check-endpoint-literals.sh). No auth
+// header: the local daemon owns any cloud credential and Pix stores none.
+//
+// keep_alive:0 is load-bearing, not tidiness — it tells the daemon to unload
+// the model as soon as the response is written, so probe n+1 starts against a
+// free memory budget instead of stacking on probe n's resident weights.
+func liveOllamaInferenceProbe(endpoint, model string, numCtx int, timeout time.Duration) error {
+	options := map[string]any{"num_predict": 8}
+	if numCtx > 0 {
+		options["num_ctx"] = numCtx
+	}
+	body, err := json.Marshal(map[string]any{
+		"model": model, "prompt": "Reply OK", "stream": false, "keep_alive": 0, "options": options,
+	})
+	if err != nil {
+		return fmt.Errorf("could not build probe")
+	}
+	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(endpoint, "/")+"/api/generate", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("could not build probe")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	if err != nil {
+		return fmt.Errorf("probe unavailable")
+	}
+	defer resp.Body.Close()
+	// Drained, never echoed: an Ollama error body can quote request content.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 32<<10))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("endpoint rejected the request (HTTP %d)", resp.StatusCode)
+	}
+	return nil
 }
 
 // configureModelRoster turns the broad set of backend bindings into the small,
@@ -223,11 +545,21 @@ func configureModelRoster(cfg *config.Config, in io.Reader, out io.Writer, inter
 	if err != nil {
 		return err
 	}
+	// Callable, not merely bound: the roster must not offer a model that has not
+	// answered a request, or the user picks something that 401s at call time.
+	// This changes the non-interactive `--models X` contract on purpose — see the
+	// probe-specific error below.
 	bound := map[string]bool{}
+	candidateOnly := map[string]bool{}
 	for _, b := range cfg.Inference.Models {
-		if b.Available && inferenceBindingTopologyAllowed(cfg, b) {
-			bound[b.Model] = true
+		if !b.Available || !inferenceBindingTopologyAllowed(cfg, b) {
+			continue
 		}
+		if inferenceBindingCallable(cfg, b) {
+			bound[b.Model] = true
+			continue
+		}
+		candidateOnly[b.Model] = true
 	}
 	var candidates []routing.Model
 	for _, m := range reg.Models {
@@ -261,6 +593,9 @@ func configureModelRoster(cfg *config.Config, in io.Reader, out io.Writer, inter
 				token = candidates[n-1].ID
 			}
 			m, ok := reg.Get(token)
+			if ok && !bound[m.ID] && candidateOnly[m.ID] {
+				return nil, fmt.Errorf("model %q is bound but has not passed a probe: pix setup --pull-models", token)
+			}
 			if !ok || !bound[m.ID] {
 				return nil, fmt.Errorf("model %q is not available through the selected runtime", token)
 			}
@@ -506,7 +841,7 @@ func verifyDirectInference(cfg *config.Config, env shellEnv) (attempted, verifie
 		if !ok || backend.Auth != "1password" || !binding.Available || !inferenceBindingAllowed(cfg, *binding) {
 			continue
 		}
-		binding.Verified = false
+		binding.Verified, binding.VerifiedBy, binding.VerifiedAt = false, "", ""
 		candidates = append(candidates, candidate{index: i, provider: binding.Backend, model: strings.TrimPrefix(binding.Upstream, binding.Backend+"/")})
 	}
 	keys := map[string]string{}
@@ -553,6 +888,10 @@ func verifyDirectInference(cfg *config.Config, env shellEnv) (attempted, verifie
 			continue
 		}
 		cfg.Inference.Models[res.index].Verified = true
+		// Provenance is written in the SAME assignment as the claim, and cleared
+		// with it above, so it can never outlive what it describes.
+		cfg.Inference.Models[res.index].VerifiedBy = config.VerifiedByProbe
+		cfg.Inference.Models[res.index].VerifiedAt = time.Now().UTC().Format(time.RFC3339)
 		verified++
 	}
 	sort.Strings(failures)
@@ -603,12 +942,32 @@ func liveDirectInferenceProbe(provider, model, key string) error {
 	return nil
 }
 
+// bindingNeedsHostProof reports whether Pix CAN — and therefore MUST — prove
+// this binding from the host before calling it callable. It replaces an inline
+// `backend.Auth != "1password"` shortcut that made honest Ollama verification
+// cosmetic: the ollama backend is written with Auth "none", so an ollama
+// binding used to be callable regardless of Verified. That is the hole the
+// gated-cloud-model incident came through.
+//
+// Pack-declared bindings are exempt: a pack's authority is the sandbox smoke
+// test (see enableDeclaredInferenceBindings), and sbx-session auth cannot be
+// faithfully replayed by a host HTTP probe.
+func bindingNeedsHostProof(cfg *config.Config, b config.InferenceModelBinding) bool {
+	if b.Source != "" {
+		return false
+	}
+	backend, ok := cfg.Inference.Backends[b.Backend]
+	return ok && (backend.Auth == "1password" || backend.Driver == "ollama")
+}
+
 func inferenceBindingCallable(cfg *config.Config, binding config.InferenceModelBinding) bool {
 	if cfg == nil || !binding.Available || !inferenceBindingAllowed(cfg, binding) {
 		return false
 	}
-	backend, ok := cfg.Inference.Backends[binding.Backend]
-	return ok && (backend.Auth != "1password" || binding.Verified)
+	if _, ok := cfg.Inference.Backends[binding.Backend]; !ok {
+		return false
+	}
+	return !bindingNeedsHostProof(cfg, binding) || binding.Verified
 }
 
 func boundRuntimeID(b routing.Binding) string {
@@ -673,7 +1032,10 @@ func synthesizeInferenceKit(cfg *config.Config) (string, error) {
 		return "", err
 	}
 	if len(manifest.Models) == 0 {
-		return "", fmt.Errorf("inference is configured but no model binding passed its probe")
+		// A dead-end refusal is the failure mode here: the user is told what is
+		// wrong and not what to type. The usual cause is weights that were never
+		// pulled, so name the pull.
+		return "", fmt.Errorf("inference is configured but no model binding passed its probe; pull a local model with `pix setup --pull-models`, or re-run `pix setup` to re-verify")
 	}
 	state, err := config.StateDir()
 	if err != nil {
