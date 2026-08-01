@@ -97,6 +97,13 @@ $(shell mkdir -p out)
 
 .PHONY: help build load publish validate inspect run run-published run-no-mcp serve doctor memory-serve mcp-register mcp-auth pull-models secrets pack install clean launcher route require-launcher gate
 
+# Bare `make` builds the launcher binaries (the one thing require-launcher
+# demands as a prerequisite for run/serve/doctor), so a dev iterating on the
+# host never hits the "must be built first" guard on a fresh checkout. Pin the
+# default goal explicitly: require-launcher is the first target, so without
+# this GNU make would make the guard the default and error out.
+.DEFAULT_GOAL := launcher
+
 # Guard for every target that sources runtime config (SERVICES/MCP/
 # models) from config.toml: the launcher binary MUST exist, and `config get`
 # MUST work — otherwise the $(shell …) sourcing above yields silently-empty

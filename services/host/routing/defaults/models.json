@@ -183,8 +183,60 @@
       "input_per_mtok": 3.0,
       "output_per_mtok": 15.0,
       "local": false,
+      "available": false,
+      "notes": "RETIRED from routing 2026-07-31: not callable on default Ollama subscriptions — kimi-k3 is 'extra usage only' and 401s at call time even though `ollama list` shows it, so trusting the listing routed the overlord intent to a model the account cannot call. Superseded for Ollama-Cloud coding by kimi-k2.7-code:cloud and deepseek-v4-pro:cloud (both plan-included). Kept for audit; available=false hides it from routing. Re-enable by setting available=true once your plan carries extra-usage balance."
+    },
+    {
+      "id": "ollama/deepseek-v4-flash:cloud",
+      "provider": "ollama",
+      "family": "deepseek",
+      "label": "DeepSeek V4 Flash (Ollama Cloud)",
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "input_per_mtok": 0.0,
+      "output_per_mtok": 0.0,
+      "local": false,
       "available": true,
-      "notes": "Ollama Cloud frontier multimodal/agentic model. Access is owned by the local Ollama login and proxied through the local Ollama API; Pix stores no Ollama credential. Requires an eligible Ollama subscription and consumes extra usage credits."
+      "notes": "Ollama Cloud fast/cheap coding model (158B, FP8, 1M context, tools + thinking). Plan-included on default Ollama subscriptions; access is owned by the local Ollama login and proxied through the local Ollama API; Pix stores no Ollama credential. Subscription usage is not modeled as per-token USD cost."
+    },
+    {
+      "id": "ollama/deepseek-v4-pro:cloud",
+      "provider": "ollama",
+      "family": "deepseek",
+      "label": "DeepSeek V4 Pro (Ollama Cloud)",
+      "context_window": 524288,
+      "max_output_tokens": 131072,
+      "input_per_mtok": 0.0,
+      "output_per_mtok": 0.0,
+      "local": false,
+      "available": true,
+      "notes": "Ollama Cloud frontier coding/reasoning model (1.6T, FP8, 512K context, tools + thinking). Plan-included on default Ollama subscriptions; the plan-callable accuracy tier overlord/max-accuracy fall back to (unlike gated kimi-k3). Access is owned by the local Ollama login and proxied through the local Ollama API; Pix stores no Ollama credential. Subscription usage is not modeled as per-token USD cost."
+    },
+    {
+      "id": "ollama/kimi-k2.7-code:cloud",
+      "provider": "ollama",
+      "family": "kimi",
+      "label": "Kimi K2.7 Code (Ollama Cloud)",
+      "context_window": 262144,
+      "max_output_tokens": 131072,
+      "input_per_mtok": 0.0,
+      "output_per_mtok": 0.0,
+      "local": false,
+      "available": true,
+      "notes": "Ollama Cloud coding specialist (1.04T, INT4, vision + tools + thinking). The plan-INCLUDED Kimi coding model (kimi-k3 is gated to extra-usage only). Access is owned by the local Ollama login and proxied through the local Ollama API; Pix stores no Ollama credential. Subscription usage is not modeled as per-token USD cost."
+    },
+    {
+      "id": "ollama/qwen3.5:397b-cloud",
+      "provider": "ollama",
+      "family": "qwen",
+      "label": "Qwen 3.5 397B (Ollama Cloud)",
+      "context_window": 262144,
+      "max_output_tokens": 131072,
+      "input_per_mtok": 0.0,
+      "output_per_mtok": 0.0,
+      "local": false,
+      "available": true,
+      "notes": "Ollama Cloud frontier Qwen (397B, BF16, vision + tools + thinking). A third independent vendor for reasoning/red-team via a keyless cloud backend. Access is owned by the local Ollama login and proxied through the local Ollama API; Pix stores no Ollama credential. Subscription usage is not modeled as per-token USD cost."
     }
   ]
 }
