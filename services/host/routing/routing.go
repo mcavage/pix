@@ -42,6 +42,58 @@ type Model struct {
 	AdaptiveThinking bool     `json:"adaptive_thinking,omitempty"` // Anthropic adaptive-thinking request shape
 	Aliases          []string `json:"aliases,omitempty"`
 	Notes            string   `json:"notes,omitempty"`
+
+	// MinRAMGB is the minimum USABLE RAM a local rung needs, priced as
+	// ceil(DownloadGB*1.15 + ContextWindow*KVGBPerTok + 1). It is compared
+	// against the probed USABLE budget (a fraction of total RAM), never against
+	// total RAM, and it is a SETUP-TIME OFFER FILTER only: availability comes
+	// from bindings, so `pix route show` on an unbound box still describes the
+	// catalog truthfully.
+	MinRAMGB float64 `json:"min_ram_gb,omitempty"`
+	// DownloadGB is the on-disk weight size, for the honest size warning in the
+	// pull prompt and as the auditable first term of MinRAMGB.
+	DownloadGB float64 `json:"download_gb,omitempty"`
+	// KVGBPerTok is the fp16 KV-cache cost per token — the term MinRAMGB was
+	// computed with, carried so the gate is auditable rather than a magic
+	// constant. ContextWindow does double duty as the rung's declared context
+	// budget: what MinRAMGB was priced for, what the setup probe sends as
+	// num_ctx, and what the bridge sends. One number, three readers.
+	KVGBPerTok float64 `json:"kv_gb_per_token,omitempty"`
+}
+
+// FitsMemory reports whether m fits a USABLE-memory budget in GB. A model with
+// no declared MinRAMGB never fits: an undeclared requirement is not a small one
+// (a user's ~/.pix/routing/models.json override predating the gate degrades
+// conservatively rather than offering an unsized model).
+func (m Model) FitsMemory(usableGB float64) bool {
+	if m.MinRAMGB <= 0 {
+		return false
+	}
+	return m.MinRAMGB <= usableGB
+}
+
+// LocalRungs returns the registry's available local models, LARGEST FIRST
+// (by MinRAMGB, id as the deterministic tiebreak). Both binaries share this
+// ordering: setup offers the largest rung that fits, and the setup probe walks
+// the same order so a budget that runs out never runs out on the model the
+// roster will actually use.
+func LocalRungs(reg *Registry) []Model {
+	if reg == nil {
+		return nil
+	}
+	var out []Model
+	for _, m := range reg.Models {
+		if m.Local && m.Available {
+			out = append(out, m)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].MinRAMGB != out[j].MinRAMGB {
+			return out[i].MinRAMGB > out[j].MinRAMGB
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
 }
 
 // Binding is the availability boundary between the shipped catalog and a
