@@ -1,13 +1,16 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"regexp"
 	"strings"
 
+	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/sys"
 )
 
 // secret is the CRUD home of the 1Password / op-refs.env concept. It never
@@ -20,60 +23,19 @@ import (
 // line.
 var envVarNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// runSecretCmd is the `secret` verb tree: ls (default) | set | rm | check.
+// runSecretCmd is the seam between argv and the command contract. The verb
+// tree, its arities and its usage live in secret_cmd.go.
 func runSecretCmd(argv []string) {
-	if wantsHelp(argv) {
-		fmt.Print(secretUsage)
-		return
+	d := &cli.Deps{
+		Sys: sys.Real{}, Out: os.Stdout, Err: os.Stderr,
+		In: os.Stdin, Interactive: cli.IsTTY(os.Stdin),
 	}
-	sub := "ls"
-	var rest []string
-	if len(argv) > 0 {
-		sub = argv[0]
-		rest = argv[1:]
-	}
-	env := defaultShellEnv()
-	switch sub {
-	case "ls", "check", "sync":
-		// Reject trailing junk (unknown args/flags). Leading -h/--help is already
-		// handled by the wantsHelp gate above.
-		if len(rest) > 0 {
-			fmt.Fprintf(os.Stderr, "pix secret %s: unexpected argument %q\n", sub, rest[0])
-			os.Exit(2)
+	if err := cli.Run[SecretCmd]("secret", secretDescription, argv, d); err != nil {
+		var silent cli.SilentError
+		if !errors.As(err, &silent) {
+			fmt.Fprintf(os.Stderr, "pix secret: %v\n", err)
 		}
-	case "set":
-		if len(rest) != 2 {
-			fmt.Fprintf(os.Stderr, "pix secret set: want exactly 2 arguments: ENV_VAR op://vault/item/field (got %d)\n", len(rest))
-			os.Exit(2)
-		}
-	case "rm":
-		if len(rest) != 1 {
-			fmt.Fprintf(os.Stderr, "pix secret rm: want exactly 1 argument: ENV_VAR (got %d)\n", len(rest))
-			os.Exit(2)
-		}
-	default:
-		fmt.Fprintf(os.Stderr, "pix secret: unknown subcommand %q (want: ls, set, rm, check, sync)\n", sub)
-		os.Exit(2)
-	}
-	switch sub {
-	case "ls":
-		runSecretLs(env, os.Stdout)
-	case "set":
-		// The dispatcher owns the exit code for a returned error (any file
-		// transaction or lock failure; runSecretSet still os.Exit(2)s itself for
-		// CLI-argument validation failures) — a mirror failure must never leave
-		// the CLI exiting 0 while quietly reporting a shortfall.
-		if err := runSecretSet(env, os.Stdout, rest[0], rest[1]); err != nil {
-			os.Exit(1)
-		}
-	case "rm":
-		if err := runSecretRm(env, os.Stdout, rest[0]); err != nil {
-			os.Exit(1)
-		}
-	case "check":
-		runSecretCheck(env, os.Stdout)
-	case "sync":
-		runSecretSync(env, os.Stdout)
+		os.Exit(cli.ExitCode(err))
 	}
 }
 

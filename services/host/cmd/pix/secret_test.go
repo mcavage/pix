@@ -281,12 +281,12 @@ func TestSecretHelpConfigIndependent(t *testing.T) {
 	// -h must print usage and NOT touch config/op — runSecretCmd handles help
 	// before any env work. We can't call os.Exit-free easily, so assert the
 	// help sentinel path via wantsHelp used inside runSecretCmd is honored by
-	// checking secretUsage is non-empty and wantsHelp detects the flag.
+	// checking secretUsage() is non-empty and wantsHelp detects the flag.
 	if !wantsHelp([]string{"--help"}) || !wantsHelp([]string{"ls", "-h"}) {
 		t.Error("wantsHelp should detect secret help flags")
 	}
-	if secretUsage == "" {
-		t.Error("secretUsage must be defined")
+	if secretUsage() == "" {
+		t.Error("secretUsage() must be defined")
 	}
 }
 

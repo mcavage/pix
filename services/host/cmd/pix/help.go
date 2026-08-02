@@ -3,8 +3,6 @@ package main
 import (
 	"errors"
 	"pix/host/cli"
-
-	"pix/host/config"
 )
 
 // errHelpRequested is the shared sentinel a parser returns when the argv asks
@@ -215,7 +213,7 @@ func verbUsage(verb string) (string, bool) {
 	case "knowledge", "kb":
 		return knowledgeUsage, true
 	case "secret":
-		return secretUsage, true
+		return secretUsage(), true
 	case "version":
 		return versionUsage, true
 	case "upgrade":
@@ -356,31 +354,10 @@ Idempotent: never clobbers an existing bundle.
 
 // secretHelpBody is the mental model reused verbatim from config so the concept
 // reads identically in setup, doctor, the template header, and `secret -h`.
-const secretUsage = `usage: pix secret <ls|set|rm|check|sync>
-
-Manage the 1Password refs (op-refs.env) the sbx gateway resolves for host MCP
-servers AND the cloud model provider keys. Values live in 1Password, never on
-disk; this verb only reads, writes, and reports REFS (op://vault/item/field
-lines). It never writes a resolved secret.
-
-` + config.OpRefsMentalModel + `
-
-  ls                       op installed? signed in? which refs are filled vs
-                           placeholder (the default; prints no secret values)
-  set ENV_VAR op://ref     upsert a ref (seeds op-refs.env if absent); a raw
-                           space in the ref (a field name like "api key") is
-                           kept as a literal space (op read/op run reject %20)
-  rm ENV_VAR               remove a ref (a no-op if it isn't set)
-  check                    resolve each op:// ref with "op read" and report
-                           OK/FAIL per key (never prints the resolved value)
-  sync                     FORCE re-resolve every provider-key ref
-                           (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY)
-                           into sbx (rotate/repair). You normally never run this:
-                           run and setup auto-resolve a MISSING key from its ref
-                           by themselves. Never prints or stores a value.
-
-The file lives at the absolute XDG path: see "pix config path op-refs".
-`
+// secretUsage renders the SAME help kong prints, so `pix help secret` cannot
+// drift from `pix secret --help`. It was a hand-written block that listed
+// argument counts the parser also enforced, separately.
+func secretUsage() string { return cli.Usage[SecretCmd]("secret", secretDescription) }
 
 const versionUsage = `usage: pix version
 
