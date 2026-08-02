@@ -354,7 +354,7 @@ func providerKeyRefsPresent(env shellEnv) bool {
 // ref whose sbx secret is currently MISSING, resolve it from 1Password and push
 // it into sbx. Because it acts only on missing keys, `op` (which may prompt) is
 // touched at most once per key ever — once sbx has the secret, later launches
-// skip op entirely. Best-effort and quiet: any failure just leaves the key unset
+// skip op entirely. Best-effort and Quiet: any failure just leaves the key unset
 // and the keys gate guides the user. Called from `run` (bootstrapProviderKeys)
 // and `task new`; the explicit `pix secret sync` is the force-resync
 // (rotate/repair) counterpart, and `setup` uses setupProvisionKeys (which

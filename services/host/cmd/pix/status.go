@@ -176,8 +176,8 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 		if warning := pathShadowIssue("pix", self, env.Getenv); warning != "" {
 			st.InstallWarnings = append(st.InstallWarnings, warning)
 		}
-		if env.hostBinary != nil {
-			host, err := env.hostBinary()
+		if env.HostBinary != nil {
+			host, err := env.HostBinary()
 			if err == nil {
 				if warning := pathShadowIssue("pix-host", host, env.Getenv); warning != "" {
 					st.InstallWarnings = append(st.InstallWarnings, warning)
@@ -630,7 +630,7 @@ func statusRegisterTodoFn(cfg *config.Config, env shellEnv) func(name string) st
 		if !resolved {
 			resolved = true
 			containers = activeContainerMCP(cfg)
-			localSet, localKnown = localMCPNames(env, env.hostBinary)
+			localSet, localKnown = localMCPNames(env, env.HostBinary)
 		}
 		kind := classifyMCPServer(name, containers, localSet, localKnown)
 		if td := mcpRegisterTodo(name, kind); td != "" {

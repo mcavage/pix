@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"pix/host/hostenv"
 	"strings"
 	"time"
 )
@@ -27,18 +28,14 @@ const (
 )
 
 // serviceIdentity is the launcher's view of the identity payload.
-type serviceIdentityResult struct {
-	Name           string
-	Version        string
-	Port           int
-	DBPath         string
-	Ready          bool
-	DegradedReason string
-}
+// serviceIdentityResult and identityProber alias their hostenv counterparts;
+// both moved so Env could leave package main, and both come back with the
+// readiness extraction.
+type serviceIdentityResult = hostenv.ServiceIdentity
 
 // identityProber calls the identity method on a port. Injected so tests drive
 // the classification without a live daemon.
-type identityProber func(port int) (serviceIdentityResult, error)
+type identityProber = hostenv.IdentityProber
 
 // rpcIdentityProbe is the real prober: the shared JSON-RPC client, bounded,
 // with exactly one retry.
@@ -137,7 +134,7 @@ func serviceReadinessCheck(spec serviceAxisSpec) check {
 	probe := spec.probeFunc
 	if probe == nil {
 		// No identity prober was supplied at all (production always wires
-		// env.identityProbe -> rpcIdentityProbe; this only happens in tests
+		// env.IdentityProbe -> rpcIdentityProbe; this only happens in tests
 		// that fake a listening port without also faking identity). A dial
 		// alone is not proof of identity, so this renders unverifiable —
 		// never a silent real network call, and never a todo for a

@@ -444,7 +444,7 @@ func verifyOllamaInference(cfg *config.Config, env shellEnv, out io.Writer) (res
 	if cfg == nil {
 		return res, fmt.Errorf("verify ollama inference: no config")
 	}
-	if env.ollamaInferenceProbe == nil {
+	if env.OllamaInference == nil {
 		return res, errNoProbeSeam
 	}
 	if out == nil {
@@ -507,7 +507,7 @@ func verifyOllamaInference(cfg *config.Config, env shellEnv, out io.Writer) (res
 	for _, c := range cloud {
 		res.Attempted++
 		go func(c candidate) {
-			results <- result{index: c.index, label: c.label, err: env.ollamaInferenceProbe(endpoint, c.tag, 0, ollamaCloudProbeTimeout)}
+			results <- result{index: c.index, label: c.label, err: env.OllamaInference(endpoint, c.tag, 0, ollamaCloudProbeTimeout)}
 		}(c)
 	}
 
@@ -533,7 +533,7 @@ func verifyOllamaInference(cfg *config.Config, env shellEnv, out io.Writer) (res
 		}
 		res.Attempted++
 		start := time.Now()
-		err := env.ollamaInferenceProbe(endpoint, c.tag, c.numCtx, ollamaLocalProbeTimeout)
+		err := env.OllamaInference(endpoint, c.tag, c.numCtx, ollamaLocalProbeTimeout)
 		elapsed := time.Since(start)
 		if remaining -= elapsed; remaining < 0 {
 			remaining = 0
@@ -888,7 +888,7 @@ func verifyDirectInference(cfg *config.Config, env shellEnv) (res probeOutcome, 
 	if cfg == nil {
 		return res, fmt.Errorf("verify direct inference: no config")
 	}
-	if env.directInferenceProbe == nil {
+	if env.DirectInference == nil {
 		return res, errNoProbeSeam
 	}
 	type candidate struct {
@@ -939,7 +939,7 @@ func verifyDirectInference(cfg *config.Config, env shellEnv) (res probeOutcome, 
 		}
 		res.Attempted++
 		go func(c candidate, key string) {
-			results <- result{index: c.index, label: cfg.Inference.Models[c.index].Model, err: env.directInferenceProbe(c.provider, c.model, key)}
+			results <- result{index: c.index, label: cfg.Inference.Models[c.index].Model, err: env.DirectInference(c.provider, c.model, key)}
 		}(c, keys[c.provider])
 	}
 	for i := 0; i < res.Attempted; i++ {

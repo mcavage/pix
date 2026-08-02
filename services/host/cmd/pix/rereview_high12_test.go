@@ -200,7 +200,7 @@ func f2Env() shellEnv {
 			return "/fake/pix/config.toml"
 		}
 		return ""
-	}, IsFileFn: func(p string) bool { return p == f2Refs }}, hostBinary: func() (string, error) { return f2Host, nil }}
+	}, IsFileFn: func(p string) bool { return p == f2Refs }}, HostBinary: func() (string, error) { return f2Host, nil }}
 }
 
 // TestUnwrapOpRun_AcceptsOnlyLauncherGrammar is the mutation-style grammar
@@ -244,7 +244,7 @@ func TestUnwrapOpRun_AcceptsOnlyLauncherGrammar(t *testing.T) {
 	// wrapped registration is rejected rather than blessed against an unknown
 	// env file.
 	noRefs := env
-	noRefs.fake().IsFileFn = func(string) bool { return false }
+	fakeOf(noRefs).IsFileFn = func(string) bool { return false }
 	if _, ok := unwrapOpRun(noRefs, canonical); ok {
 		t.Error("an op-wrapped registration must be rejected when the launcher refs file is unresolvable")
 	}
@@ -317,7 +317,7 @@ func TestRecognizedMCPArgv_WrapperGrammar(t *testing.T) {
 func TestMcpLocalCheck_RejectedWrapperNeverProbed(t *testing.T) {
 	env := f2Env()
 	reg := f2Op + " run --no-masking --env-file=/tmp/evil.env -- " + f2Host + " mcp slack"
-	env.fake().RunTimedFn = func(name string, args ...string) (string, bool, error) {
+	fakeOf(env).RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		key := strings.Join(append([]string{name}, args...), " ")
 		if strings.Contains(key, "--list-tools") {
 			t.Fatalf("doctor must never probe a rejected registration: %s", key)
@@ -327,7 +327,7 @@ func TestMcpLocalCheck_RejectedWrapperNeverProbed(t *testing.T) {
 		}
 		return "", false, fmt.Errorf("no fake output for %q", key)
 	}
-	env.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
 		t.Fatalf("rejected registration must never be exec'd: %s %v", name, args)
 		return "", nil
 	}

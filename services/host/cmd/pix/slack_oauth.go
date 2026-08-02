@@ -339,9 +339,9 @@ func slackServeCallback(ln net.Listener, path, wantState string, timeout time.Du
 // only ids, so this can never leak a secret regardless of which side is
 // wrong.
 func slackVerifyRotatingIdentity(id slackIdentity, blob slackoauth.Blob) error {
-	if id.teamID != blob.TeamID || id.userID != blob.UserID {
+	if id.TeamID != blob.TeamID || id.UserID != blob.UserID {
 		return fmt.Errorf("Slack auth.test identity (team %s / user %s) does not match the OAuth exchange identity (team %s / user %s); refusing to trust this credential",
-			id.teamID, id.userID, blob.TeamID, blob.UserID)
+			id.TeamID, id.UserID, blob.TeamID, blob.UserID)
 	}
 	return nil
 }
@@ -558,10 +558,10 @@ func slackSetupPKCE(env shellEnv, cfg *config.Config, opts slackSetupOpts, deps 
 		return fmt.Errorf("exchanging the Slack authorization code: %w", err)
 	}
 
-	if env.slackAuthTest == nil {
+	if env.SlackAuth == nil {
 		return fmt.Errorf("internal: shellEnv.slackAuthTest not wired")
 	}
-	id, err := env.slackAuthTest(blob.AccessToken)
+	id, err := env.SlackAuth(blob.AccessToken)
 	if err != nil {
 		note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
 		return fmt.Errorf("Slack auth.test failed on the newly issued token: %w (the exchange succeeded but the token did not authenticate); %s", err, note)
@@ -570,7 +570,7 @@ func slackSetupPKCE(env shellEnv, cfg *config.Config, opts slackSetupOpts, deps 
 		note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
 		return fmt.Errorf("%w; %s", err, note)
 	}
-	fmt.Fprintf(out, "Slack identity: %s (user %s) on team %s (%s)\n", id.user, id.userID, id.team, id.teamID)
+	fmt.Fprintf(out, "Slack identity: %s (user %s) on team %s (%s)\n", id.User, id.UserID, id.Team, id.TeamID)
 
 	// A DIFFERENT identity than whatever was already pinned (SLACK_TEAM_ID/
 	// SLACK_USER_ID) must never be silently re-pinned: under --yes that is a
@@ -581,20 +581,20 @@ func slackSetupPKCE(env shellEnv, cfg *config.Config, opts slackSetupOpts, deps 
 	// --yes with it set) skips this gate entirely.
 	_, existingRefsContent, _ := opRefsContent(env)
 	pinTeam, pinUser := slackIdentityPins(existingRefsContent)
-	identityChanged := (pinTeam != "" || pinUser != "") && (pinTeam != id.teamID || pinUser != id.userID)
+	identityChanged := (pinTeam != "" || pinUser != "") && (pinTeam != id.TeamID || pinUser != id.UserID)
 	if identityChanged && !opts.allowIdentityChange {
 		if opts.assumeYes {
 			note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
 			return fmt.Errorf("the existing identity pin (team %s / user %s) does not match this OAuth identity (team %s / user %s); "+
 				"refusing under --yes to avoid silently re-pinning to a different person — rerun interactively to confirm, or pass --allow-identity-change; %s",
-				pinTeam, pinUser, id.teamID, id.userID, note)
+				pinTeam, pinUser, id.TeamID, id.UserID, note)
 		}
 		if !tty {
 			note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
 			return fmt.Errorf("refusing to wire up Slack non-interactively without --yes; %s", note)
 		}
 		if !confirmYN(in, out, fmt.Sprintf("The pinned Slack identity differs (was %s / %s; this OAuth grant resolves to %s / %s). Replace the pin? [y/N]: ",
-			pinTeam, pinUser, id.teamID, id.userID), false) {
+			pinTeam, pinUser, id.TeamID, id.UserID), false) {
 			note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
 			fmt.Fprintf(out, "aborted; %s\n", note)
 			return nil
@@ -606,7 +606,7 @@ func slackSetupPKCE(env shellEnv, cfg *config.Config, opts slackSetupOpts, deps 
 			note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
 			return fmt.Errorf("refusing to wire up Slack non-interactively without --yes; %s", note)
 		}
-		if !confirmYN(in, out, fmt.Sprintf("Wire up Slack as %s on %s via OAuth? [y/N]: ", id.user, id.team), false) {
+		if !confirmYN(in, out, fmt.Sprintf("Wire up Slack as %s on %s via OAuth? [y/N]: ", id.User, id.Team), false) {
 			note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
 			fmt.Fprintf(out, "aborted; %s\n", note)
 			return nil
@@ -621,7 +621,7 @@ func slackSetupPKCE(env shellEnv, cfg *config.Config, opts slackSetupOpts, deps 
 	// Include a non-secret suffix from this flow's random OAuth state so the
 	// title is unique. If op requires a post-create metadata lookup, resolving
 	// by title cannot select an orphan from an earlier failed attempt.
-	title := fmt.Sprintf("Pix Slack OAuth - %s - %s", id.user, state[:8])
+	title := fmt.Sprintf("Pix Slack OAuth - %s - %s", id.User, state[:8])
 	store := slackoauth.NewOPStore(runner, vault, title, item)
 	opCtx, opCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer opCancel()
@@ -840,32 +840,32 @@ func slackOAuthAccessChecks(env shellEnv, mgr *slackoauth.Manager, pinTeam, pinU
 	checks = append(checks, check{label: "access", verdict: verdictReady,
 		detail: "obtained a valid OAuth access token from 1Password"})
 
-	if env.slackAuthTest == nil {
+	if env.SlackAuth == nil {
 		checks = append(checks, check{label: "identity", verdict: verdictUnverifiable,
 			detail: "cannot verify live identity (no auth.test probe wired here)"})
 		return checks
 	}
-	id, aerr := env.slackAuthTest(tok)
+	id, aerr := env.SlackAuth(tok)
 	if aerr != nil {
 		checks = append(checks, check{label: "identity", verdict: verdictTodo,
 			detail: "auth.test failed: " + aerr.Error(), todo: "pix slack auth"})
 		return checks
 	}
 	checks = append(checks, check{label: "identity", verdict: verdictReady,
-		detail: fmt.Sprintf("%s (user %s) on %s (%s)", id.user, id.userID, id.team, id.teamID)})
+		detail: fmt.Sprintf("%s (user %s) on %s (%s)", id.User, id.UserID, id.Team, id.TeamID)})
 
 	switch {
 	case pinTeam == "" && pinUser == "":
 		checks = append(checks, check{label: "identity pin", note: true, verdict: verdictUnverifiable,
 			detail: "no SLACK_TEAM_ID/SLACK_USER_ID pin recorded yet (set by pix slack auth/setup)"})
-	case pinTeam == id.teamID && pinUser == id.userID:
+	case pinTeam == id.TeamID && pinUser == id.UserID:
 		checks = append(checks, check{label: "identity pin", verdict: verdictReady,
 			detail: "matches the identity pinned at setup"})
 	default:
 		checks = append(checks, check{label: "identity pin", verdict: verdictTodo,
 			detail: fmt.Sprintf("live identity (team %s / user %s) does not match the pin (team %s / user %s) — "+
 				"the token was likely swapped; run pix slack auth if this is expected",
-				id.teamID, id.userID, pinTeam, pinUser),
+				id.TeamID, id.UserID, pinTeam, pinUser),
 			todo: "pix slack auth"})
 	}
 	return checks

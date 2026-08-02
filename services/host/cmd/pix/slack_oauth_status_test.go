@@ -127,9 +127,9 @@ func slackOAuthRegisteredEnv(t *testing.T, f *slackTestEnv, calls *[][]string, m
 	t.Helper()
 	stateDir := t.TempDir()
 	e := f.env()
-	e.hostBinary = func() (string, error) { return "/fake/bin/pix-host", nil }
-	e.fake().StateDirFn = func() (string, error) { return stateDir, nil }
-	e.fake().RunFn = func(name string, args ...string) (string, error) {
+	e.HostBinary = func() (string, error) { return "/fake/bin/pix-host", nil }
+	fakeOf(e).StateDirFn = func() (string, error) { return stateDir, nil }
+	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
 		if mu != nil {
 			mu.Lock()
 			*calls = append(*calls, append([]string{name}, args...))
@@ -162,7 +162,7 @@ func TestSlackStatusOAuthHappyPathNoSlackToken(t *testing.T) {
 		if strings.Contains(tok, "refresh") {
 			t.Errorf("auth.test called with what looks like a refresh token: %q", tok)
 		}
-		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	}}
 	var calls [][]string
 	var mu sync.Mutex
@@ -197,7 +197,7 @@ func TestSlackStatusOAuthGrantExpiryWarningWithin7Days(t *testing.T) {
 	withSlackOAuthRuntimeDeps(t, slackOAuthRuntimeDeps{runner: runner, clock: slackoauth.SystemClock{}})
 
 	f := &slackTestEnv{sbxPresent: true, authTest: func(string) (slackIdentity, error) {
-		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	}}
 	var calls [][]string
 	var mu sync.Mutex
@@ -279,8 +279,8 @@ func TestSlackDisableOAuthOrdering(t *testing.T) {
 	var calls [][]string
 	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
 	// Wrap env.Run so its calls land in the SAME order log as revoke/op calls.
-	inner := e.fake().RunFn
-	e.fake().RunFn = func(name string, args ...string) (string, error) {
+	inner := fakeOf(e).RunFn
+	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 3 && args[0] == "mcp" && args[1] == "rm" {
 			mu.Lock()
 			order = append(order, "sbx:mcp:rm")
@@ -543,7 +543,7 @@ func TestSlackDisableOAuthNeverRemovesForeignRegistration(t *testing.T) {
 
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	e.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "slack\n", nil
 		}
@@ -680,7 +680,7 @@ func TestSlackOAuthRuntimeFailsClosedWithoutStateDir(t *testing.T) {
 
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	e.fake().StateDirFn = func() (string, error) { return "", fmt.Errorf("$HOME could not be determined") }
+	fakeOf(e).StateDirFn = func() (string, error) { return "", fmt.Errorf("$HOME could not be determined") }
 
 	_, _, ok := slackOAuthRuntime(cfg, e, slackOAuthRuntimeDeps{runner: &slackOAuthRuntimeFakeRunner{}, clock: slackoauth.SystemClock{}})
 	if ok {

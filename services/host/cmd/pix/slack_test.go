@@ -154,10 +154,10 @@ func (f *slackTestEnv) env() shellEnv {
 	// RunTimedFn is deliberately left unset: systest.Fake routes RunTimed to the
 	// faked Run, so a bounded probe never becomes a real exec here.
 	e := shellEnv{System: &systest.Fake{Base: sys.Real{}}}
-	e.hostBinary = func() (string, error) { return hostBinaryResolver() }
-	e.identityProbe = rpcIdentityProbe
-	e.slackAuthTest = liveSlackAuthTest
-	e.fake().LookPathFn = func(name string) (string, error) {
+	e.HostBinary = func() (string, error) { return hostBinaryResolver() }
+	e.IdentityProbe = rpcIdentityProbe
+	e.SlackAuth = liveSlackAuthTest
+	fakeOf(e).LookPathFn = func(name string) (string, error) {
 		switch name {
 		case "sbx":
 			if f.sbxPresent {
@@ -169,7 +169,7 @@ func (f *slackTestEnv) env() shellEnv {
 		}
 		return "", fmt.Errorf("not found")
 	}
-	e.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
 		f.calls = append(f.calls, append([]string{name}, args...))
 		switch name {
 		case "op":
@@ -193,7 +193,7 @@ func (f *slackTestEnv) env() shellEnv {
 		}
 		return "", nil
 	}
-	e.slackAuthTest = f.authTest
+	e.SlackAuth = f.authTest
 	return e
 }
 
@@ -257,7 +257,7 @@ func TestSlackSetupRefusesForeignExistingRegistration(t *testing.T) {
 	slackTestCfg(t)
 	f := &slackTestEnv{opOK: true, opToken: "xoxp-unused", sbxPresent: true}
 	e := f.env()
-	e.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
 		f.calls = append(f.calls, append([]string{name}, args...))
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "slack\n", nil
@@ -334,7 +334,7 @@ func TestSlackSetupRejectsIdentityWithoutStableIDs(t *testing.T) {
 	f := &slackTestEnv{
 		opOK: true, opToken: "xoxp-real-looking-token", sbxPresent: true,
 		authTest: func(string) (slackIdentity, error) {
-			return slackIdentity{team: "Acme", user: "jane"}, nil
+			return slackIdentity{Team: "Acme", User: "jane"}, nil
 		},
 	}
 	var out bytes.Buffer
@@ -353,7 +353,7 @@ func TestSlackSetupDeclinedConfirmationWritesNothing(t *testing.T) {
 	f := &slackTestEnv{
 		opOK: true, opToken: "xoxp-real-looking-token", sbxPresent: true,
 		authTest: func(string) (slackIdentity, error) {
-			return slackIdentity{team: "Acme", teamID: "T1", user: "jane", userID: "U1"}, nil
+			return slackIdentity{Team: "Acme", TeamID: "T1", User: "jane", UserID: "U1"}, nil
 		},
 	}
 	var out bytes.Buffer
@@ -375,7 +375,7 @@ func TestSlackSetupNonInteractiveWithoutYesFails(t *testing.T) {
 	f := &slackTestEnv{
 		opOK: true, opToken: "xoxp-real-looking-token", sbxPresent: true,
 		authTest: func(string) (slackIdentity, error) {
-			return slackIdentity{team: "Acme", teamID: "T1", user: "jane", userID: "U1"}, nil
+			return slackIdentity{Team: "Acme", TeamID: "T1", User: "jane", UserID: "U1"}, nil
 		},
 	}
 	var out bytes.Buffer
@@ -396,7 +396,7 @@ func TestSlackSetupHappyPath(t *testing.T) {
 	f := &slackTestEnv{
 		opOK: true, opToken: "xoxp-real-looking-token", sbxPresent: true,
 		authTest: func(string) (slackIdentity, error) {
-			return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+			return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 		},
 	}
 	var out bytes.Buffer
@@ -441,7 +441,7 @@ func TestSlackSetupStaticRefusesWhenOAuthConfigured(t *testing.T) {
 	f := &slackTestEnv{
 		opOK: true, opToken: "xoxp-real-looking-token", sbxPresent: true,
 		authTest: func(string) (slackIdentity, error) {
-			return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+			return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 		},
 	}
 	var out bytes.Buffer
@@ -463,7 +463,7 @@ func TestSlackSetupHardFailsWhenSbxAbsent(t *testing.T) {
 	f := &slackTestEnv{
 		opOK: true, opToken: "xoxp-real-looking-token", sbxPresent: false,
 		authTest: func(string) (slackIdentity, error) {
-			return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+			return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 		},
 	}
 	var out bytes.Buffer
@@ -504,7 +504,7 @@ func TestSlackStatusIdentityPinMismatch(t *testing.T) {
 	f := &slackTestEnv{
 		opOK: true, opToken: "xoxp-rotated-token", sbxPresent: true,
 		authTest: func(string) (slackIdentity, error) {
-			return slackIdentity{team: "Acme", teamID: "T_NEW", user: "jane", userID: "U_NEW"}, nil
+			return slackIdentity{Team: "Acme", TeamID: "T_NEW", User: "jane", UserID: "U_NEW"}, nil
 		},
 	}
 	cfg, err := config.Load()
@@ -531,7 +531,7 @@ func TestSlackStatusIdentityPinMatch(t *testing.T) {
 	f := &slackTestEnv{
 		opOK: true, opToken: "xoxp-real-looking-token", sbxPresent: true,
 		authTest: func(string) (slackIdentity, error) {
-			return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+			return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 		},
 	}
 	cfg, err := config.Load()
@@ -556,7 +556,7 @@ func TestSlackStatusRejectsForeignRegistration(t *testing.T) {
 	slackTestCfg(t)
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	e.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 3 && args[0] == "mcp" && args[1] == "get" && args[2] == "slack" {
 			return "name: slack\ncommand: /tmp/not-pix-host mcp slack\n", nil
 		}
@@ -616,10 +616,10 @@ func TestSlackDisableRemovesRefsAndWarnsAboutRevocation(t *testing.T) {
 
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	e.hostBinary = func() (string, error) { return "/fake/bin/pix-host", nil }
+	e.HostBinary = func() (string, error) { return "/fake/bin/pix-host", nil }
 	// The tri-state probe reports slack present, and definition inspection
 	// proves it is the canonical Pix host command before disable removes it.
-	e.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
 		f.calls = append(f.calls, append([]string{name}, args...))
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "slack\n", nil
@@ -684,7 +684,7 @@ func TestSlackDisableRemovesOrphanIdentityPins(t *testing.T) {
 	}
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	e.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "", nil
 		}
@@ -709,7 +709,7 @@ func TestSlackDisableRefusesForeignRegistration(t *testing.T) {
 	}
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	e.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
 		f.calls = append(f.calls, append([]string{name}, args...))
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "slack\n", nil
@@ -738,7 +738,7 @@ func TestSlackDisableNoopWhenNothingConfigured(t *testing.T) {
 	}
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	e.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "", nil // nothing registered
 		}

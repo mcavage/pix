@@ -26,6 +26,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"pix/host/hostenv"
 	"strings"
 	"time"
 
@@ -43,9 +44,10 @@ const slackServerName = "slack"
 const slackAuthTestURL = "https://slack.com/api/auth.test"
 
 // slackIdentity is what a live auth.test call resolves a token to.
-type slackIdentity struct {
-	team, teamID, user, userID string
-}
+// slackIdentity aliases hostenv.SlackIdentity, which is where it had to move so
+// that Env (which carries the prober) could live outside package main. It comes
+// back here with the slack extraction.
+type slackIdentity = hostenv.SlackIdentity
 
 // liveSlackAuthTest is the real (non-hermetic) implementation wired by
 // defaultShellEnv: a bare HTTPS POST to auth.test with the token as a bearer.
@@ -84,7 +86,7 @@ func liveSlackAuthTest(token string) (slackIdentity, error) {
 		}
 		return slackIdentity{}, fmt.Errorf("auth.test: %s", e)
 	}
-	return slackIdentity{team: body.Team, teamID: body.TeamID, user: body.User, userID: body.UserID}, nil
+	return slackIdentity{Team: body.Team, TeamID: body.TeamID, User: body.User, UserID: body.UserID}, nil
 }
 
 // slackAuthRevokeURL is Slack's Web API method to kill a token. `pix slack
@@ -500,23 +502,23 @@ func slackSetupStatic(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Wr
 		return fmt.Errorf("--token-ref does not resolve to a personal xoxp- Slack user token; " +
 			"pix slack only accepts a personal user token, never a bot/other token type (see docs/design/slack-setup.md)")
 	}
-	if env.slackAuthTest == nil {
+	if env.SlackAuth == nil {
 		return fmt.Errorf("internal: shellEnv.slackAuthTest not wired")
 	}
-	id, err := env.slackAuthTest(token)
+	id, err := env.SlackAuth(token)
 	if err != nil {
 		return fmt.Errorf("Slack auth.test failed: %w (the token did not authenticate — check it hasn't been revoked)", err)
 	}
-	if strings.TrimSpace(id.teamID) == "" || strings.TrimSpace(id.userID) == "" {
+	if strings.TrimSpace(id.TeamID) == "" || strings.TrimSpace(id.UserID) == "" {
 		return fmt.Errorf("Slack auth.test returned no team_id or user_id; refusing to create an identity pin")
 	}
-	fmt.Fprintf(out, "Slack identity: %s (user %s) on team %s (%s)\n", id.user, id.userID, id.team, id.teamID)
+	fmt.Fprintf(out, "Slack identity: %s (user %s) on team %s (%s)\n", id.User, id.UserID, id.Team, id.TeamID)
 
 	if !opts.assumeYes {
 		if !tty {
 			return fmt.Errorf("refusing to wire up Slack non-interactively without --yes")
 		}
-		if !confirmYN(in, out, fmt.Sprintf("Wire up Slack as %s on %s? [y/N]: ", id.user, id.team), false) {
+		if !confirmYN(in, out, fmt.Sprintf("Wire up Slack as %s on %s? [y/N]: ", id.User, id.Team), false) {
 			fmt.Fprintln(out, "aborted; nothing written")
 			return nil
 		}
@@ -525,10 +527,10 @@ func slackSetupStatic(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Wr
 	if err := runSecretSet(env, out, "SLACK_TOKEN", ref); err != nil {
 		return fmt.Errorf("writing SLACK_TOKEN: %w", err)
 	}
-	if err := runSecretSet(env, out, "SLACK_TEAM_ID", id.teamID); err != nil {
+	if err := runSecretSet(env, out, "SLACK_TEAM_ID", id.TeamID); err != nil {
 		return fmt.Errorf("writing SLACK_TEAM_ID: %w", err)
 	}
-	if err := runSecretSet(env, out, "SLACK_USER_ID", id.userID); err != nil {
+	if err := runSecretSet(env, out, "SLACK_USER_ID", id.UserID); err != nil {
 		return fmt.Errorf("writing SLACK_USER_ID: %w", err)
 	}
 
@@ -674,18 +676,18 @@ func slackStaticStatusChecks(env shellEnv) []check {
 			checks = append(checks, check{label: "resolution", verdict: verdictTodo,
 				detail:   ref + " does not resolve to a personal xoxp- user token",
 				evidence: "resolved value lacks the xoxp- prefix", todo: "pix slack setup --token-ref op://vault/item/field"})
-		case env.slackAuthTest == nil:
+		case env.SlackAuth == nil:
 			checks = append(checks, check{label: "identity", verdict: verdictUnverifiable,
 				detail: "cannot verify live identity (no auth.test probe wired here)"})
 		default:
-			got, aerr := env.slackAuthTest(token)
+			got, aerr := env.SlackAuth(token)
 			if aerr != nil {
 				checks = append(checks, check{label: "identity", verdict: verdictTodo,
 					detail: "auth.test failed: " + aerr.Error(), todo: "pix slack setup --token-ref op://vault/item/field"})
 			} else {
 				id, haveIdentity = got, true
 				checks = append(checks, check{label: "identity", verdict: verdictReady,
-					detail: fmt.Sprintf("%s (user %s) on %s (%s)", got.user, got.userID, got.team, got.teamID)})
+					detail: fmt.Sprintf("%s (user %s) on %s (%s)", got.User, got.UserID, got.Team, got.TeamID)})
 			}
 		}
 	}
@@ -698,14 +700,14 @@ func slackStaticStatusChecks(env shellEnv) []check {
 	case !haveIdentity:
 		checks = append(checks, check{label: "identity pin", verdict: verdictUnverifiable,
 			detail: fmt.Sprintf("pinned to team %s / user %s, but the live identity could not be confirmed above", pinTeam, pinUser)})
-	case pinTeam == id.teamID && pinUser == id.userID:
+	case pinTeam == id.TeamID && pinUser == id.UserID:
 		checks = append(checks, check{label: "identity pin", verdict: verdictReady,
 			detail: "matches the identity pinned at setup"})
 	default:
 		checks = append(checks, check{label: "identity pin", verdict: verdictTodo,
 			detail: fmt.Sprintf("live identity (team %s / user %s) does not match the pin (team %s / user %s) — "+
 				"the token was likely swapped; re-run pix slack setup if this is expected",
-				id.teamID, id.userID, pinTeam, pinUser),
+				id.TeamID, id.UserID, pinTeam, pinUser),
 			todo: "pix slack setup --token-ref op://vault/item/field"})
 	}
 	return checks

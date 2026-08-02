@@ -172,8 +172,8 @@ func installDuplicatesGroup(env shellEnv) group {
 			g.checks = append(g.checks, check{label: "pix PATH", detail: warning, evidence: warning, verdict: verdictTodo})
 		}
 	}
-	if env.hostBinary != nil {
-		if host, err := env.hostBinary(); err == nil {
+	if env.HostBinary != nil {
+		if host, err := env.HostBinary(); err == nil {
 			if warning := pathShadowIssue("pix-host", host, env.Getenv); warning != "" {
 				g.checks = append(g.checks, check{label: "host PATH", detail: warning, evidence: warning, verdict: verdictTodo})
 			}

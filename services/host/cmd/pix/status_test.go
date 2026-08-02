@@ -26,7 +26,7 @@ func fakeStatusEnv() shellEnv {
 			return "google-workspace\nnotion\n", nil
 		}
 		return "", nil
-	}, DialLocalFn: func(port int) bool { return port == memoryPortDefault }, IsFileFn: func(string) bool { return false }}, identityProbe: identityFake(map[int]serviceIdentityResult{
+	}, DialLocalFn: func(port int) bool { return port == memoryPortDefault }, IsFileFn: func(string) bool { return false }}, IdentityProbe: identityFake(map[int]serviceIdentityResult{
 		memoryPortDefault: {Name: identityMemoryName, Ready: true},
 	})}
 }
@@ -89,7 +89,7 @@ func TestRenderStatusHuman(t *testing.T) {
 func TestGatherStatusMonitor(t *testing.T) {
 	cfg := &config.Config{}
 	env := fakeStatusEnv()
-	env.fake().DialLocalFn = func(port int) bool { return port == monitor.DefaultPort }
+	fakeOf(env).DialLocalFn = func(port int) bool { return port == monitor.DefaultPort }
 	st := gatherStatus(cfg, "default", env)
 	if !st.Monitor {
 		t.Error("monitor should be up when its port dials")
@@ -104,7 +104,7 @@ func TestGatherStatusMonitor(t *testing.T) {
 func TestRenderStatusMonitorLine(t *testing.T) {
 	cfg := &config.Config{}
 	env := fakeStatusEnv()
-	env.fake().DialLocalFn = func(port int) bool { return port == monitor.DefaultPort }
+	fakeOf(env).DialLocalFn = func(port int) bool { return port == monitor.DefaultPort }
 	var out bytes.Buffer
 	renderStatus(cfg, "default", env, &out, false)
 	s := out.String()
@@ -117,7 +117,7 @@ func TestRenderStatusMonitorLine(t *testing.T) {
 func TestRenderStatusMonitorJSON(t *testing.T) {
 	cfg := &config.Config{}
 	env := fakeStatusEnv()
-	env.fake().DialLocalFn = func(port int) bool { return port == monitor.DefaultPort }
+	fakeOf(env).DialLocalFn = func(port int) bool { return port == monitor.DefaultPort }
 	var out bytes.Buffer
 	renderStatus(cfg, "default", env, &out, true)
 	var st statusReport
@@ -156,7 +156,7 @@ func TestGatherStatusMCP(t *testing.T) {
 func TestGatherStatusMCPSbxAbsent(t *testing.T) {
 	cfg := &config.Config{MCP: []string{gwServerName}}
 	env := fakeStatusEnv()
-	env.fake().LookPathFn = func(name string) (string, error) { return "", fmt.Errorf("not found") }
+	fakeOf(env).LookPathFn = func(name string) (string, error) { return "", fmt.Errorf("not found") }
 	st := gatherStatus(cfg, "default", env)
 	if len(st.MCPServers) != 0 {
 		t.Errorf("MCPServers = %+v, want empty when sbx absent", st.MCPServers)
@@ -207,12 +207,12 @@ func TestRenderStatusJSON(t *testing.T) {
 func TestStatusRegisterTodo(t *testing.T) {
 	cfg := &config.Config{MCP: []string{gwServerName, "slack"}}
 	env := fakeStatusEnv() // sbx mcp ls -> gog,notion
-	env.hostBinary = func() (string, error) { return "/usr/local/bin/pix-host", nil }
+	env.HostBinary = func() (string, error) { return "/usr/local/bin/pix-host", nil }
 	// probe answers the `pix-host mcp --list` classification call; the
 	// sbx probes (secret ls / mcp ls / sbx ls also route through probeRun now)
 	// fall back to the canned env.Run outputs.
-	run := env.fake().RunFn
-	env.fake().RunTimedFn = func(name string, args ...string) (string, bool, error) {
+	run := fakeOf(env).RunFn
+	fakeOf(env).RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		if name == "/usr/local/bin/pix-host" && len(args) == 2 && args[0] == "mcp" && args[1] == "--list" {
 			return "slack\n", false, nil
 		}
@@ -268,7 +268,7 @@ func TestStatusNoRegisterTodoWhenRegistered(t *testing.T) {
 func TestStatusNoRegisterTodoWhenSbxAbsent(t *testing.T) {
 	cfg := &config.Config{MCP: []string{gwServerName, "slack"}}
 	env := fakeStatusEnv()
-	env.fake().LookPathFn = func(name string) (string, error) { return "", fmt.Errorf("not found") }
+	fakeOf(env).LookPathFn = func(name string) (string, error) { return "", fmt.Errorf("not found") }
 	st := gatherStatus(cfg, "default", env)
 	for _, tdo := range st.Todos {
 		if strings.Contains(tdo, "mcp register") || strings.Contains(tdo, "mcp bundle") {
@@ -526,8 +526,8 @@ func TestStatusMCPLoadTodoQuotesWorkspace(t *testing.T) {
 	const box = "pix-proj"
 	env := fakeStatusEnv()
 	stateDir := t.TempDir()
-	env.fake().StateDirFn = func() (string, error) { return stateDir, nil }
-	env.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(env).StateDirFn = func() (string, error) { return stateDir, nil }
+	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
 			return "anthropic\n", nil
 		}

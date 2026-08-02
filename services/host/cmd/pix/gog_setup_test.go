@@ -262,7 +262,7 @@ func (g gogTestEnv) env() shellEnv {
 	}, RunInteractiveFn: func(name string, args ...string) error {
 		*calls = append(*calls, append([]string{name}, args...))
 		return g.interErr
-	}}, hostBinary: func() (string, error) { return "/usr/bin/pix-host", nil }}
+	}}, HostBinary: func() (string, error) { return "/usr/bin/pix-host", nil }}
 }
 
 // gogSetupTestCfg points config.Load()/Save() at a fresh temp file for the
@@ -662,7 +662,7 @@ func TestGogSetup_NoCredentialContentReads(t *testing.T) {
 		sbxRegisterOK: true,
 	}
 	env := ge.env()
-	env.fake().ReadFileFn = func(path string) (string, error) {
+	fakeOf(env).ReadFileFn = func(path string) (string, error) {
 		readFileCalled = true
 		return "", fmt.Errorf("must not be called")
 	}
@@ -716,7 +716,7 @@ func TestGogSetup_ExpandsPromptedHomeCredentialsPath(t *testing.T) {
 		sbxRegisterOK: true,
 	}
 	env := ge.env()
-	env.fake().HomeDirFn = func() string { return home }
+	fakeOf(env).HomeDirFn = func() string { return home }
 	var out bytes.Buffer
 	in := strings.NewReader("you@example.com\n~/.config/pix/credentials/gog.json\n")
 	if err := gogSetup(env, gogSetupOpts{}, in, &out, true); err != nil {

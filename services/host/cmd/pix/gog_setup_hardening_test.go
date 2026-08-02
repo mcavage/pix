@@ -203,7 +203,7 @@ func gogR106Env(t *testing.T, probe func(name string, args ...string) (string, b
 	// itself cares to override it — none of gogR106Env's callers are testing
 	// prior-registration behavior, so they'd otherwise have to fixture this
 	// unrelated call themselves.
-	env.fake().RunTimedFn = func(name string, args ...string) (string, bool, error) {
+	fakeOf(env).RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		if name == "sbx" && len(args) == 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "", false, nil
 		}
@@ -473,9 +473,9 @@ func gogR108RollbackEnv(t *testing.T, priorRegistered bool) (env shellEnv, cred 
 		statFile: map[string]bool{cred: true},
 	}
 	e := ge.env()
-	baseRun := e.fake().RunFn
+	baseRun := fakeOf(e).RunFn
 	addCalls, rmCalls = &[][]string{}, &[][]string{}
-	e.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(e).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" {
 			switch args[1] {
 			case "add":
@@ -767,7 +767,7 @@ func TestGogSetup_R203_UnreadablePriorRegistration_AbortsBeforeOAuth(t *testing.
 		`name: gog`+"\n"+`command: /usr/bin/op run --env-file="/x/op refs.env" -- gog mcp`+"\n")
 
 	var calls [][]string
-	env.fake().RunInteractiveFn = func(name string, args ...string) error {
+	fakeOf(env).RunInteractiveFn = func(name string, args ...string) error {
 		calls = append(calls, append([]string{name}, args...))
 		return nil
 	}
@@ -827,7 +827,7 @@ func TestGogSetup_R203_ListingProbeTransientlyUnavailable_AbortsBeforeOAuth(t *t
 	}
 
 	var calls [][]string
-	env.fake().RunInteractiveFn = func(name string, args ...string) error {
+	fakeOf(env).RunInteractiveFn = func(name string, args ...string) error {
 		calls = append(calls, append([]string{name}, args...))
 		return nil
 	}

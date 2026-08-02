@@ -179,7 +179,7 @@ func TestOfferOnePasswordKeys_Gating(t *testing.T) {
 	// refs already present -> silent even on a tty
 	out.Reset()
 	withRefs := opEnv
-	withRefs.fake().ReadFileFn = func(string) (string, error) { return "ANTHROPIC_API_KEY=op://a/b/c\n", nil }
+	fakeOf(withRefs).ReadFileFn = func(string) (string, error) { return "ANTHROPIC_API_KEY=op://a/b/c\n", nil }
 	offerOnePasswordKeys(withRefs, strings.NewReader("y\n"), &out, true)
 	if strings.Contains(out.String(), "1Password") {
 		t.Errorf("must not offer when key refs already exist, got %q", out.String())
@@ -187,7 +187,7 @@ func TestOfferOnePasswordKeys_Gating(t *testing.T) {
 	// op not installed -> silent
 	out.Reset()
 	noOp := opEnv
-	noOp.fake().LookPathFn = func(string) (string, error) { return "", fmt.Errorf("nope") }
+	fakeOf(noOp).LookPathFn = func(string) (string, error) { return "", fmt.Errorf("nope") }
 	offerOnePasswordKeys(noOp, strings.NewReader("y\n"), &out, true)
 	if out.String() != "" {
 		t.Errorf("must be silent when op is not installed, got %q", out.String())

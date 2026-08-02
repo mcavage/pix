@@ -25,7 +25,7 @@ func ollamaAddEnv(t *testing.T, tags []string, totalGB float64, endpoint string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	env.fake().GetenvFn = func(k string) string {
+	fakeOf(env).GetenvFn = func(k string) string {
 		if k == "OLLAMA_HOST" {
 			return u.Host
 		}
@@ -36,7 +36,7 @@ func ollamaAddEnv(t *testing.T, tags []string, totalGB float64, endpoint string)
 	// is reachable — and leaving it nil is worse: verifyOllamaInference treats a
 	// nil probe seam as "nothing to do" and returns 0 verified, 0 attempted, no
 	// failures, which is indistinguishable from a clean run that found nothing.
-	env.ollamaInferenceProbe = liveOllamaInferenceProbe
+	env.OllamaInference = liveOllamaInferenceProbe
 	return env
 }
 
@@ -142,7 +142,7 @@ func TestRequireOllamaReady_NamesTheRightProblem(t *testing.T) {
 	}
 
 	installed := ollamaListEnv(nil, "darwin", 32)
-	installed.fake().RunTimedFn = func(string, ...string) (string, bool, error) { return "", true, nil } // timeout
+	fakeOf(installed).RunTimedFn = func(string, ...string) (string, bool, error) { return "", true, nil } // timeout
 	err = requireOllamaReady(installed)
 	if err == nil || !strings.Contains(err.Error(), "daemon") {
 		t.Fatalf("dead daemon: err = %v, want a daemon message", err)
@@ -264,7 +264,7 @@ func TestVerify_NilProbeSeamIsLoud(t *testing.T) {
 	}
 	// A seam that IS wired reports honestly, including the legitimate
 	// nothing-to-do case, which must stay distinguishable from the above.
-	empty, err := verifyDirectInference(&config.Config{}, shellEnv{System: &systest.Fake{}, directInferenceProbe: func(string, string, string) error { return nil }})
+	empty, err := verifyDirectInference(&config.Config{}, shellEnv{System: &systest.Fake{}, DirectInference: func(string, string, string) error { return nil }})
 	if err != nil || empty.Attempted != 0 || empty.Verified != 0 {
 		t.Fatalf("a wired seam with no bindings = %+v, %v; want a clean zero outcome and no error", empty, err)
 	}

@@ -3316,7 +3316,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 
 	// --- post-Save: best-effort side effects (each already idempotent). ---
 
-	if !env.quiet {
+	if !env.Quiet {
 		fmt.Fprintf(out, "active pack -> %s\n", root)
 	}
 	// On a same-pack reactivation the revert-then-reapply (finding D) removes
@@ -3336,10 +3336,10 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 			}
 		}
 	}
-	if len(detachedMCP) > 0 && !env.quiet {
+	if len(detachedMCP) > 0 && !env.Quiet {
 		fmt.Fprintf(out, "detached mcp (previous activation): %s\n", strings.Join(detachedMCP, ", "))
 	}
-	if len(addedMCP) > 0 && !env.quiet {
+	if len(addedMCP) > 0 && !env.Quiet {
 		fmt.Fprintf(out, "attached mcp: %s\n", strings.Join(addedMCP, ", "))
 	}
 	// finding E: register ALL of this pack's MCPs post-Save (registration is
@@ -3352,7 +3352,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 			fmt.Fprintf(out, "note: mcp registration: %v\n", err)
 		}
 	}
-	if !env.quiet {
+	if !env.Quiet {
 		for _, id := range detachedKnowledge {
 			fmt.Fprintf(out, "knowledge bundle detached (previous activation): %s\n", id)
 		}
@@ -3360,7 +3360,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 			fmt.Fprintf(out, "knowledge bundle registered: %s\n", id)
 		}
 	}
-	if skippedPrivate > 0 && !env.quiet {
+	if skippedPrivate > 0 && !env.Quiet {
 		fmt.Fprintf(out, "skipped %d private knowledge ref(s) from an adopted pack (shared=false local paths are never honored for a pack cloned from a remote)\n", skippedPrivate)
 	}
 
@@ -3371,7 +3371,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// post-Save side effect; the strict fingerprint + content re-verification
 	// happens again at every host launch.
 	refreshOut := out
-	if env.quiet {
+	if env.Quiet {
 		refreshOut = io.Discard
 	}
 	if _, werr := refreshHostPackWrappers(refreshOut, cfg, false); werr != nil {
@@ -3387,7 +3387,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// A knowledge change is daemon-affecting: restart/advise the running serve so
 	// the new bundle is indexed (mirrors `knowledge use`). Best-effort.
 	serveOut := out
-	if env.quiet {
+	if env.Quiet {
 		serveOut = io.Discard
 	}
 	propagateServeConfig(defaultServeReloader(), serveOut)
@@ -3395,7 +3395,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// ADR-3: --mcp/--kit are create-only. Print the recreate line UNCONDITIONALLY
 	// (this is "the change" for the purposes of packs.md §13's must-fix), so the
 	// sandbox-facet-changing case is never silently skipped.
-	if !env.quiet {
+	if !env.Quiet {
 		printPackRecreateLine(out)
 	}
 }

@@ -557,7 +557,7 @@ func TestSecretRmMissingFileIsCleanNoop(t *testing.T) {
 
 func TestSecretSetAndRmFailOnUnreadableOpRefs(t *testing.T) {
 	env := memEnv(map[string]string{})
-	env.fake().ReadFileFn = func(string) (string, error) { return "", os.ErrPermission }
+	fakeOf(env).ReadFileFn = func(string) (string, error) { return "", os.ErrPermission }
 
 	var setOut bytes.Buffer
 	if err := runSecretSet(env, &setOut, "SLACK_TOKEN", "op://v/slack/token"); err == nil {
@@ -679,8 +679,8 @@ func TestSecretRm_ProviderKey_PartialFailure_HostModeWriteFails(t *testing.T) {
 	if err := env.WriteFile(hmPath, []byte("ANTHROPIC_API_KEY=op://v/anthropic/key\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	realWrite := env.fake().WriteFileFn
-	env.fake().WriteFileFn = func(p string, d []byte, m os.FileMode) error {
+	realWrite := fakeOf(env).WriteFileFn
+	fakeOf(env).WriteFileFn = func(p string, d []byte, m os.FileMode) error {
 		if p == hmPath {
 			return os.ErrPermission
 		}

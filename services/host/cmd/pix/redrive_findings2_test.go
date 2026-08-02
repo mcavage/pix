@@ -112,7 +112,7 @@ func TestVerifyCatalogMCPReady_ProbeFailureIsUnverifiableRetry(t *testing.T) {
 	}
 	// Listing itself unavailable (sbx absent) — also unverifiable, fail closed.
 	absent := catalogGateEnv(t, nil)
-	absent.fake().LookPathFn = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	fakeOf(absent).LookPathFn = func(string) (string, error) { return "", fmt.Errorf("not found") }
 	if err := verifyCatalogMCPReady(absent, []string{"notion"}); err == nil || !strings.Contains(err.Error(), "could not verify") {
 		t.Errorf("sbx-absent must fail closed as unverifiable, got: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestVerifyCatalogMCPReady_ProbeFailureIsUnverifiableRetry(t *testing.T) {
 
 func TestVerifyCatalogMCPReady_NonCatalogNamesNeverProbed(t *testing.T) {
 	env := catalogGateEnv(t, nil) // any probe would error the run below
-	env.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
 		t.Fatalf("non-catalog names must never be probed by the gate: %s %v", name, args)
 		return "", nil
 	}
@@ -232,7 +232,7 @@ func TestMcpLocalCheck_PolicyDeniedVerdict(t *testing.T) {
 			return "403 forbidden: access denied by org policy", false, errors.New("exit status 1")
 		}
 		return "", false, fmt.Errorf("no fake probe")
-	}}, hostBinary: func() (string, error) { return hostBin, nil }}
+	}}, HostBinary: func() (string, error) { return hostBin, nil }}
 	c := mcpLocalCheck(env, "slack", "slack\n")
 	if c.result() != verdictDenied {
 		t.Errorf("an explicit policy denial from the local probe must be verdictDenied, got %+v", c)

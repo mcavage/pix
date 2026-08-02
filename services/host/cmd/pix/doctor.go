@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/sys"
 	"pix/host/sys/systest"
 )
@@ -24,46 +25,25 @@ import (
 // shellEnv abstracts the ways doctor/setup touch the host: locating a binary,
 // running a command for its output, reading an env var, and dialing a local TCP
 // port. Tests substitute fakes; defaultShellEnv() wires the real thing.
-// shellEnv is the launcher's dependency bundle: every OS seam (sys.System) plus
-// the domain probes that have not yet moved out with their packages.
+// shellEnv is an ALIAS for hostenv.Env, not a distinct type.
 //
-// It used to BE the seams — 22 nullable function pointers with 125 hand-written
-// nil guards that disagreed with each other. For `env.Run == nil` alone this
-// package held fourteen distinct behaviours. Those guards are gone: System is
-// never nil in production, so there is nothing left to guard.
+// The bundle moved to its own package so the seven domains still trapped in
+// this file's package can be extracted at all: an extracted package cannot name
+// a parameter type declared in `package main`. The alias means every one of the
+// ~250 signatures that says `shellEnv` keeps working unchanged, so the move
+// cost nothing at the call sites.
 //
-// The probes below are deliberately NOT in sys, which is OS seams with no
-// domain knowledge. Each leaves with its own package in Phase 3
-// (docs/design/rearchitecture.md), and this struct shrinks to nothing.
-type shellEnv struct {
-	sys.System
-
-	// quiet suppresses progress chatter on machine-readable paths.
-	quiet bool
-	// hostBinary resolves the canonical pix-host path. Late-bound so tests that
-	// swap hostBinaryResolver stay effective.
-	hostBinary func() (string, error)
-	// identityProbe answers a service's `identity` JSON-RPC method — the
-	// APPLICATION-level proof a readiness axis needs before rendering ready.
-	identityProbe identityProber
-	// slackAuthTest performs a live Slack auth.test. The token is never logged,
-	// persisted, or echoed by any caller.
-	slackAuthTest func(token string) (slackIdentity, error)
-	// directInferenceProbe makes one bounded, model-specific provider call. The
-	// key is held only in memory and must never appear in a returned error.
-	directInferenceProbe func(provider, model, key string) error
-	// ollamaInferenceProbe makes one bounded, model-specific request against the
-	// RESOLVED Ollama endpoint (never a spelled-out address). numCtx is the
-	// rung's declared context budget, 0 for cloud.
-	ollamaInferenceProbe func(endpoint, model string, numCtx int, timeout time.Duration) error
-}
+// The name stays because `shellEnv` is what this codebase calls it everywhere,
+// and renaming 250 signatures to prove a point is not a refactor. See
+// hostenv.Env for what it holds and where each field is going.
+type shellEnv = hostenv.Env
 
 // fake returns the embedded System as the test double, for fixtures that build
 // a base env and then override one seam. TEST-ONLY: it panics on a real env,
 // which is the right outcome for test-only code reached in production — the
 // alternative is a silent no-op, and silent no-ops are what this refactor
 // exists to delete.
-func (e shellEnv) fake() *systest.Fake { return e.System.(*systest.Fake) }
+func fakeOf(e shellEnv) *systest.Fake { return e.System.(*systest.Fake) }
 
 // probeTimeout bounds every registered-command probe so doctor can never wedge
 // on a hung MCP server; probeMaxOutput caps how much of its output we capture.
@@ -81,7 +61,7 @@ const (
 // defaultShellEnv returns a shellEnv backed by the real OS.
 func defaultShellEnv() shellEnv {
 	return shellEnv{
-		System: sys.Real{}, hostBinary: func() (string, error) { return hostBinaryResolver() }, identityProbe: rpcIdentityProbe, slackAuthTest: liveSlackAuthTest, directInferenceProbe: liveDirectInferenceProbe, ollamaInferenceProbe: liveOllamaInferenceProbe}
+		System: sys.Real{}, HostBinary: func() (string, error) { return hostBinaryResolver() }, IdentityProbe: rpcIdentityProbe, SlackAuth: liveSlackAuthTest, DirectInference: liveDirectInferenceProbe, OllamaInference: liveOllamaInferenceProbe}
 }
 
 // unwrapOpRun returns the effective command doctor would trust to exec. With

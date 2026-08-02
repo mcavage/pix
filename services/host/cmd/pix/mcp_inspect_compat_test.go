@@ -51,7 +51,7 @@ func TestTrustedHostBinaryAcceptsInstalledSymlinkToCanonicalBinary(t *testing.T)
 			return installed, nil
 		}
 		return "", os.ErrNotExist
-	}}, hostBinary: func() (string, error) { return real, nil }}
+	}}, HostBinary: func() (string, error) { return real, nil }}
 	if _, ok := trustedHostBinaryExecPath(env, installed); !ok {
 		t.Fatal("installed pix-host symlink to the canonical binary was rejected")
 	}

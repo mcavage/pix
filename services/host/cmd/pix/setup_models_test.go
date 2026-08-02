@@ -96,10 +96,10 @@ func modelsSetupEnv(t *testing.T, w *ollamaWorld) shellEnv {
 		// The fixture's premise is that keys ARE provisioned (three op:// refs in
 		// hostmode.env, setupProvisionKeysFn stubbed to succeed), so the credential
 		// resolves and the probe answers.
-		directInferenceProbe: func(string, string, string) error { return nil },
+		DirectInference: func(string, string, string) error { return nil },
 		// Answers iff the fake daemon actually has the tag, which is what keeps the
 		// pull-consent tests honest: an unpulled tag must still fail its probe.
-		ollamaInferenceProbe: func(_, model string, _ int, _ time.Duration) error {
+		OllamaInference: func(_, model string, _ int, _ time.Duration) error {
 			if w.have[model] {
 				return nil
 			}
@@ -146,14 +146,14 @@ func ollamaWorldRun(w *ollamaWorld, name string, args ...string) (string, error)
 }
 
 func stubLiveInferenceOK(env *shellEnv) {
-	run := env.fake().RunFn
-	env.fake().RunFn = func(name string, args ...string) (string, error) {
+	run := fakeOf(*env).RunFn
+	fakeOf(*env).RunFn = func(name string, args ...string) (string, error) {
 		if name == "op" && len(args) == 2 && args[0] == "read" {
 			return "test-provider-key\n", nil
 		}
 		return run(name, args...)
 	}
-	env.directInferenceProbe = func(string, string, string) error { return nil }
+	env.DirectInference = func(string, string, string) error { return nil }
 }
 
 // stubProvisionKeysOK bypasses the (separately tested) strict 1Password key

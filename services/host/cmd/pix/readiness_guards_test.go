@@ -289,13 +289,13 @@ func TestStatusJSONCarriesChecksAndExit(t *testing.T) {
 	// Suppressed-3: an unverifiable axis (no sbx, i.e. inside the sandbox)
 	// must never fail a script that only wanted the JSON.
 	inVM := fakeStatusEnv()
-	inVM.fake().LookPathFn = func(string) (string, error) { return "", errNotFoundFixture }
+	fakeOf(inVM).LookPathFn = func(string) (string, error) { return "", errNotFoundFixture }
 	if got := gatherStatus(cfg, "default", inVM).Exit; got != exitReady {
 		t.Errorf("unverifiable axes must not fail status: exit = %d", got)
 	}
 	// A POSITIVELY verified core failure still exits 1.
 	noKeys := fakeStatusEnv()
-	noKeys.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(noKeys).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
 			return "", nil // sbx answered: zero keys set
 		}
@@ -311,16 +311,16 @@ func TestStatusJSONCarriesChecksAndExit(t *testing.T) {
 // paid for, and the whole gather stays well inside a second on a fake host.
 func TestStatusProbesSecretsOnce(t *testing.T) {
 	env := fakeStatusEnv()
-	base := env.fake().RunFn
+	base := fakeOf(env).RunFn
 	secretProbes, dials := 0, map[int]int{}
-	env.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls" {
 			secretProbes++
 		}
 		return base(name, args...)
 	}
-	baseDial := env.fake().DialLocalFn
-	env.fake().DialLocalFn = func(port int) bool { dials[port]++; return baseDial(port) }
+	baseDial := fakeOf(env).DialLocalFn
+	fakeOf(env).DialLocalFn = func(port int) bool { dials[port]++; return baseDial(port) }
 
 	start := time.Now()
 	gatherStatus(&config.Config{Services: []string{"memory"}}, "default", env)

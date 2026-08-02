@@ -399,8 +399,8 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	}
 	var hostPath string
 	if createDocs {
-		if env.hostBinary != nil {
-			hostPath, err = env.hostBinary()
+		if env.HostBinary != nil {
+			hostPath, err = env.HostBinary()
 		} else {
 			hostPath, err = env.LookPath("pix-host")
 		}

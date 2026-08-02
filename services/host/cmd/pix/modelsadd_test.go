@@ -41,7 +41,7 @@ func modelsAddEnv(t *testing.T, providers ...string) shellEnv {
 			return "sk-test\n", nil
 		}
 		return "", nil
-	}}, directInferenceProbe: func(provider, model, key string) error { return nil }}
+	}}, DirectInference: func(provider, model, key string) error { return nil }}
 }
 
 func rosterProviders(cfg *config.Config) string {
@@ -229,7 +229,7 @@ func TestSecretSetNudgesTowardWiring(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "op-refs.env")
 	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "", nil }, WriteFileFn: func(string, []byte, os.FileMode) error { return nil }}}
-	env.fake().ReadFileFn = func(p string) (string, error) {
+	fakeOf(env).ReadFileFn = func(p string) (string, error) {
 		if p == path {
 			return "", nil
 		}

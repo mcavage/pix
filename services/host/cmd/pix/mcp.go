@@ -791,7 +791,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 		if remoteURL := containers[n].RemoteURL; remoteURL != "" && remoteMCPRegistrationCurrent(env, n, remoteURL) {
 			switch remoteMCPAuthorizationState(env, n) {
 			case catalogMCPReady:
-				if !env.quiet {
+				if !env.Quiet {
 					fmt.Fprintf(out, "  already registered: %s\n", n)
 				}
 				continue
@@ -799,7 +799,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 
 				fmt.Fprintf(out, "  Authorize %s in your browser…\n", n)
 				var authErr error
-				if env.quiet {
+				if env.Quiet {
 					authErr = env.RunInteractiveQuiet("sbx", "mcp", "auth", n)
 				} else {
 					authErr = env.RunInteractive("sbx", "mcp", "auth", n)
@@ -827,7 +827,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			// listener, leaving the browser at ERR_CONNECTION_REFUSED. Remote MCP
 			// registration is an explicitly interactive mutation; let it inherit the
 			// terminal and run to completion. Read-only status checks remain bounded.
-			if env.quiet {
+			if env.Quiet {
 				fmt.Fprintf(out, "  Authorize %s in your browser…\n", n)
 				err = env.RunInteractiveQuiet("sbx", args...)
 			} else {
@@ -846,7 +846,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			fmt.Fprintf(out, "  FAILED to register: %s (%v)\n", n, err)
 			regErrs = append(regErrs, fmt.Errorf("%s: %v", n, err))
 		} else {
-			if !env.quiet {
+			if !env.Quiet {
 				fmt.Fprintf(out, "  registered: %s\n", n)
 			}
 		}
@@ -863,7 +863,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 				}
 			}
 		}
-		if wrapped && !env.quiet {
+		if wrapped && !env.Quiet {
 			fmt.Fprintf(out, "Each wrapped server resolves its creds from %s via op run at gateway spawn.\n", reg.opRefs)
 		}
 	} else {

@@ -111,7 +111,7 @@ func runSetupCmd(argv []string) {
 	}
 
 	env := defaultShellEnv()
-	env.quiet = !verbose
+	env.Quiet = !verbose
 	if verbose {
 		_ = os.Setenv("PIX_SETUP_VERBOSE", "1")
 	}
@@ -189,7 +189,7 @@ func runSetupCmd(argv []string) {
 	// engine while preserving the exact same BoM review, fingerprint, and
 	// rollback behavior as `pix pack use`.
 	var activatedPacks []string
-	if len(parsed.packs) > 0 && env.quiet {
+	if len(parsed.packs) > 0 && env.Quiet {
 		fmt.Fprintln(os.Stdout, "Configuring pack integrations…")
 	}
 	for _, requestedPack := range parsed.packs {
@@ -242,7 +242,7 @@ func runSetupCmd(argv []string) {
 	// is the seam: it does the validation-then-hostPhase-call as one pure step so a
 	// test can assert hostPhase is never invoked for a bad DIR without exercising
 	// os.Exit.
-	if env.quiet {
+	if env.Quiet {
 		fmt.Fprintln(os.Stdout, "Setting up inference and host services…")
 	}
 	if err := runSetupCore(env, dir, hostArgs, os.Stdin, os.Stdout, isTTY(os.Stdin), setupHostPhase); err != nil {
@@ -966,8 +966,8 @@ func mcpAxes(servers []string) []Axis {
 // with --yes/--non-interactive or no TTY it is fully
 // non-interactive (the CI path).
 func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, tty bool) error {
-	setupTranscriptVerbose = !env.quiet
-	if !env.quiet {
+	setupTranscriptVerbose = !env.Quiet
+	if !env.Quiet {
 		fmt.Fprintln(out, "pix setup — configuring the host")
 	}
 
@@ -1044,7 +1044,7 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	setupPhaseHeader(out, setupPhaseReport, "")
 	printSetupSummary(postCfg, env, out, models)
 
-	if !env.quiet {
+	if !env.Quiet {
 		fmt.Fprintln(out, "")
 		fmt.Fprintln(out, "host mode (optional, UNSANDBOXED: runs `pi` directly on the host): not enabled.")
 		fmt.Fprintln(out, "  set it up only if you need it:  pix host setup")
@@ -1111,8 +1111,8 @@ func setupReadinessAxes(cfg *config.Config, env shellEnv, models setupModelsOutc
 	for a, b := range ollamaReadinessAxes(cfg, env, "", nil) {
 		builders[a] = b
 	}
-	if env.identityProbe != nil {
-		for a, b := range serviceReadinessAxes(env, enabled(cfg, "memory"), enabled(cfg, "knowledge"), env.identityProbe) {
+	if env.IdentityProbe != nil {
+		for a, b := range serviceReadinessAxes(env, enabled(cfg, "memory"), enabled(cfg, "knowledge"), env.IdentityProbe) {
 			builders[a] = b
 		}
 	}

@@ -76,7 +76,7 @@ var fastReadinessAxes = []Axis{axisProviders, axisServiceMemory, axisServiceKnow
 // running one costs a local JSON-RPC round trip.
 func fastReadinessSnapshot(cfg *config.Config, env shellEnv, ev sbxKeyEvidence) Snapshot {
 	builders := providersReadinessAxes(cfg, ev)
-	for a, b := range serviceReadinessAxes(env, enabled(cfg, "memory"), enabled(cfg, "knowledge"), env.identityProbe) {
+	for a, b := range serviceReadinessAxes(env, enabled(cfg, "memory"), enabled(cfg, "knowledge"), env.IdentityProbe) {
 		builders[a] = b
 	}
 	return buildSnapshot(Request{Axes: fastReadinessAxes}, builders)

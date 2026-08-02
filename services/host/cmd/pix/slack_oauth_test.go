@@ -449,7 +449,7 @@ func TestSlackVerifyRotatingIdentityMismatchRejectedAndNeverLeaksToken(t *testin
 		TeamID:       "T1",
 		UserID:       "U1",
 	}
-	id := slackIdentity{teamID: "T2", userID: "U1"}
+	id := slackIdentity{TeamID: "T2", UserID: "U1"}
 	err := slackVerifyRotatingIdentity(id, blob)
 	if err == nil {
 		t.Fatal("mismatched team id must be rejected")
@@ -458,12 +458,12 @@ func TestSlackVerifyRotatingIdentityMismatchRejectedAndNeverLeaksToken(t *testin
 		t.Errorf("identity mismatch error leaked a token: %q", err.Error())
 	}
 
-	id2 := slackIdentity{teamID: "T1", userID: "U2"}
+	id2 := slackIdentity{TeamID: "T1", UserID: "U2"}
 	if err := slackVerifyRotatingIdentity(id2, blob); err == nil {
 		t.Fatal("mismatched user id must be rejected")
 	}
 
-	idOK := slackIdentity{teamID: "T1", userID: "U1"}
+	idOK := slackIdentity{TeamID: "T1", UserID: "U1"}
 	if err := slackVerifyRotatingIdentity(idOK, blob); err != nil {
 		t.Errorf("matching identity must be accepted, got %v", err)
 	}
@@ -553,7 +553,7 @@ func slackOAuthTestExchangeBody(teamID, userID string) string {
 // TestSlackSetupPKCEHappyPath drives slackSetupPKCE end to end, hermetically:
 // a fake browser opener performs the real (loopback-only) HTTP callback GET,
 // a fake HTTPDoer stands in for Slack's oauth.v2.access, a fake CommandRunner
-// stands in for `op`, and env.slackAuthTest stands in for the live auth.test
+// stands in for `op`, and env.SlackAuth stands in for the live auth.test
 // call. Proves: authorize URL/exchange form correctness, the identity match
 // gate, that op-refs.env ends up with only the non-secret pins (legacy
 // SLACK_TOKEN removed), that config.toml is fully populated + MCP added, that
@@ -591,7 +591,7 @@ func TestSlackSetupPKCEHappyPath(t *testing.T) {
 		timeout: 5 * time.Second,
 	}
 
-	authTestIdentity := slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}
+	authTestIdentity := slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}
 	f := &slackTestEnv{sbxPresent: true, authTest: func(token string) (slackIdentity, error) {
 		if token != testRotatingAccessToken {
 			t.Errorf("auth.test called with unexpected token %q", token)
@@ -832,7 +832,7 @@ func TestSlackSetupPKCERevokesOnAuthTestFailure(t *testing.T) {
 // exchange-vs-auth.test identity mismatch gate.
 func TestSlackSetupPKCERevokesOnIdentityMismatch(t *testing.T) {
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
-		return slackIdentity{team: "Other", teamID: "T_OTHER", user: "eve", userID: "U_OTHER"}, nil
+		return slackIdentity{Team: "Other", TeamID: "T_OTHER", User: "eve", UserID: "U_OTHER"}, nil
 	})
 	var out bytes.Buffer
 	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
@@ -853,7 +853,7 @@ func TestSlackSetupPKCERevokesOnIdentityMismatch(t *testing.T) {
 // nothing was PERSISTED).
 func TestSlackSetupPKCERevokesOnDeclinedConfirmation(t *testing.T) {
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
-		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	})
 	opts.assumeYes = false
 	var out bytes.Buffer
@@ -880,7 +880,7 @@ func TestSlackSetupPKCERevokesOnDeclinedConfirmation(t *testing.T) {
 // here once a real code exchange already minted a live credential).
 func TestSlackSetupPKCERevokesOnNonInteractiveWithoutYes(t *testing.T) {
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
-		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	})
 	opts.assumeYes = false
 	var out bytes.Buffer
@@ -901,7 +901,7 @@ func TestSlackSetupPKCERevokesOnNonInteractiveWithoutYes(t *testing.T) {
 // best-effort revoke.
 func TestSlackSetupPKCERevokesOnStoreWriteFailure(t *testing.T) {
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
-		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	})
 	deps.runner.(*fakeOPRunner).writeErr = fmt.Errorf("op: vault locked")
 	var out bytes.Buffer
@@ -925,7 +925,7 @@ func TestSlackSetupPKCERevokesOnStoreWriteFailure(t *testing.T) {
 // freshly minted grant must be best-effort revoked.
 func TestSlackSetupPKCERefusesDifferentIdentityUnderYes(t *testing.T) {
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
-		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	})
 	opRefsWith(t, "SLACK_TEAM_ID=T_OLD", "SLACK_USER_ID=U_OLD")
 	var out bytes.Buffer
@@ -951,7 +951,7 @@ func TestSlackSetupPKCERefusesDifferentIdentityUnderYes(t *testing.T) {
 // new identity is then pinned as normal.
 func TestSlackSetupPKCEAllowsDifferentIdentityInteractivelyOnConfirm(t *testing.T) {
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
-		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	})
 	opts.assumeYes = false
 	opRefsWith(t, "SLACK_TEAM_ID=T_OLD", "SLACK_USER_ID=U_OLD")
@@ -976,7 +976,7 @@ func TestSlackSetupPKCEAllowsDifferentIdentityInteractivelyOnConfirm(t *testing.
 // reaching the ordinary wire-up confirmation at all.
 func TestSlackSetupPKCEDeclinesDifferentIdentityInteractively(t *testing.T) {
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
-		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	})
 	opts.assumeYes = false
 	opRefsWith(t, "SLACK_TEAM_ID=T_OLD", "SLACK_USER_ID=U_OLD")
@@ -1003,7 +1003,7 @@ func TestSlackSetupPKCEDeclinesDifferentIdentityInteractively(t *testing.T) {
 // without any extra prompt.
 func TestSlackSetupPKCEAllowIdentityChangeSkipsGateUnderYes(t *testing.T) {
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
-		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	})
 	opts.allowIdentityChange = true
 	opRefsWith(t, "SLACK_TEAM_ID=T_OLD", "SLACK_USER_ID=U_OLD")
@@ -1022,7 +1022,7 @@ func TestSlackSetupPKCEAllowIdentityChangeSkipsGateUnderYes(t *testing.T) {
 // the ordinary wire-up confirmation).
 func TestSlackSetupPKCESameIdentityNeverTriggersTheGate(t *testing.T) {
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
-		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	})
 	opRefsWith(t, "SLACK_TEAM_ID=T123", "SLACK_USER_ID=U456")
 	var out bytes.Buffer
@@ -1043,9 +1043,9 @@ func TestSlackSetupPKCESameIdentityNeverTriggersTheGate(t *testing.T) {
 // automatically.
 func TestSlackSetupPKCEDoesNotRevokeAfterDocumentPersisted(t *testing.T) {
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
-		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
+		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	})
-	env.fake().LockFn = func(string, func() error) error { return fmt.Errorf("lock busy") }
+	fakeOf(env).LockFn = func(string, func() error) error { return fmt.Errorf("lock busy") }
 	var out bytes.Buffer
 	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
 	if err == nil || !strings.Contains(err.Error(), "writing SLACK_TEAM_ID") {

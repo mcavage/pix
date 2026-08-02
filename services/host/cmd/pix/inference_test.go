@@ -155,7 +155,7 @@ func TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey(t *testing.T)
 					return key + "\n", nil
 				}
 				return "", fmt.Errorf("unexpected command")
-			}}, directInferenceProbe: func(provider, model, gotKey string) error {
+			}}, DirectInference: func(provider, model, gotKey string) error {
 				if provider != "openai" || model == "" || gotKey != key {
 					return fmt.Errorf("bad probe args provider=%q model=%q key-match=%v", provider, model, gotKey == key)
 				}
@@ -191,7 +191,7 @@ func TestDirectInferenceProbeVerifiesOnlySuccessfulModel(t *testing.T) {
 	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
 		t.Fatal(err)
 	}
-	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(string, ...string) (string, error) { return "secret\n", nil }}, directInferenceProbe: func(provider, model, key string) error {
+	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(string, ...string) (string, error) { return "secret\n", nil }}, DirectInference: func(provider, model, key string) error {
 		return nil
 	}}
 	probe, probeErr := verifyDirectInference(cfg, env)
@@ -214,7 +214,7 @@ func TestDirectInferenceProbePromotesBindingsIndependently(t *testing.T) {
 	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
 		t.Fatal(err)
 	}
-	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(string, ...string) (string, error) { return "secret\n", nil }}, directInferenceProbe: func(provider, model, key string) error {
+	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(string, ...string) (string, error) { return "secret\n", nil }}, DirectInference: func(provider, model, key string) error {
 		if strings.Contains(model, "sol") {
 			return fmt.Errorf("provider rejected model request (HTTP 403)")
 		}

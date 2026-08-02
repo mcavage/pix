@@ -59,12 +59,12 @@ func (f fakeEnv) env() shellEnv {
 			return m, true
 		}
 		return 0, false
-	}}, hostBinary: func() (string, error) {
+	}}, HostBinary: func() (string, error) {
 		if f.hostBin != "" {
 			return f.hostBin, nil
 		}
 		return "", fmt.Errorf("pix-host not found")
-	}, identityProbe: f.identityProbe}
+	}, IdentityProbe: f.identityProbe}
 }
 
 // identityFake builds an identityProber from a fixed port->result map: any
@@ -366,9 +366,9 @@ func TestDoctor_GogAttachDespiteMissingExecutable(t *testing.T) {
 		},
 	}
 	env := f.env()
-	env.fake().GetwdFn = func() (string, error) { return ws, nil }
+	fakeOf(env).GetwdFn = func() (string, error) { return ws, nil }
 	stateDir := t.TempDir()
-	env.fake().StateDirFn = func() (string, error) { return stateDir, nil }
+	fakeOf(env).StateDirFn = func() (string, error) { return stateDir, nil }
 	if err := writeCreateReceipt(stateDir, box, ws, []string{gwServerName}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
@@ -1072,8 +1072,8 @@ func TestDoctor_MCPUnrecognizedCommand(t *testing.T) {
 	})
 	// Wrap the fake run so an attempt to exec the untrusted command fails loudly.
 	env := f.env()
-	inner := env.fake().RunFn
-	env.fake().RunFn = func(name string, args ...string) (string, error) {
+	inner := fakeOf(env).RunFn
+	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
 		if name == "/bin/rm" {
 			t.Fatalf("doctor exec'd an unrecognized registered command: %s %v", name, args)
 		}

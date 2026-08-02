@@ -650,7 +650,7 @@ func recognizedMCPArgv(env shellEnv, argv []string, name string) ([]string, bool
 // registration (registerServers/serverCmd) ALWAYS spawns the ABSOLUTE path
 // hostBinaryResolver (findHostBinary) resolves — never a bare name. Trusting
 // an absolute path's basename alone would let a malicious
-// `/tmp/malicious/pix-host mcp slack` registration pass. env.hostBinary
+// `/tmp/malicious/pix-host mcp slack` registration pass. env.HostBinary
 // is the injected/hermetic trust seam mirroring hostBinaryResolver, so this
 // compares against the SAME canonical answer the real registration used. tok
 // must be absolute AND byte-equal (cleaned) to the resolved binary — STRICT
@@ -658,7 +658,7 @@ func recognizedMCPArgv(env shellEnv, argv []string, name string) ([]string, bool
 // alternate symlink path at check time and exec'ing it afterwards is a
 // check-then-exec race an attacker wins by swapping the link between the two.
 // On success it returns the RESOLVER's canonical token — the only thing the
-// caller may exec. An unresolvable canonical answer (env.hostBinary nil or
+// caller may exec. An unresolvable canonical answer (env.HostBinary nil or
 // erroring) fails CLOSED: never fall back to trusting the basename alone.
 func trustedHostBinaryExecPath(env shellEnv, tok string) (string, bool) {
 	if filepath.Base(tok) != "pix-host" {
@@ -667,10 +667,10 @@ func trustedHostBinaryExecPath(env shellEnv, tok string) (string, bool) {
 	if !filepath.IsAbs(tok) {
 		return "", false // never trust a bare/relative name for pix-host
 	}
-	if env.hostBinary == nil {
+	if env.HostBinary == nil {
 		return "", false
 	}
-	canonical, err := env.hostBinary()
+	canonical, err := env.HostBinary()
 	if err != nil || canonical == "" || !filepath.IsAbs(canonical) {
 		return "", false
 	}
@@ -783,7 +783,7 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 	} else {
 		// Classification source of truth: the same `pix-host mcp --list`
 		// registration itself uses. Bounded inside localMCPNames.
-		localSet, localKnown := localMCPNames(env, env.hostBinary)
+		localSet, localKnown := localMCPNames(env, env.HostBinary)
 		anyRegistered := false
 		for _, m := range names {
 			kind := classifyMCPServer(m, containers, localSet, localKnown)

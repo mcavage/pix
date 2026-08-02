@@ -85,7 +85,7 @@ func stepEnv(t *testing.T, refsContent, sbxLsOut string, opReadVal string) (shel
 			return "", nil
 		}
 		return "", nil
-	}}, directInferenceProbe: func(string, string, string) error { return nil }, ollamaInferenceProbe: func(_, model string, _ int, _ time.Duration) error {
+	}}, DirectInference: func(string, string, string) error { return nil }, OllamaInference: func(_, model string, _ int, _ time.Duration) error {
 		return fmt.Errorf("no ollama daemon in this fixture (%s)", model)
 	}}
 	return env, calls
@@ -150,14 +150,14 @@ func TestSetupProvisionKeys_OpNotSignedIn_FailsWithExactFix(t *testing.T) {
 func TestSetupProvisionKeys_InteractiveRunsOfficialOpSignin(t *testing.T) {
 	signedIn := false
 	env, _ := stepEnv(t, "OPENAI_API_KEY=op://v/openai/key\n", "openai", "sk-val")
-	baseRun := env.fake().RunFn
-	env.fake().RunFn = func(name string, args ...string) (string, error) {
+	baseRun := fakeOf(env).RunFn
+	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
 		if name == "op" && len(args) >= 1 && args[0] == "account" && !signedIn {
 			return "", nil
 		}
 		return baseRun(name, args...)
 	}
-	env.fake().RunInteractiveFn = func(name string, args ...string) error {
+	fakeOf(env).RunInteractiveFn = func(name string, args ...string) error {
 		if name != "op" || strings.Join(args, " ") != "signin" {
 			t.Fatalf("unexpected interactive command: %s %v", name, args)
 		}
@@ -569,8 +569,8 @@ func TestSetupProvisionKeys_HostModeMissingRef_Fails(t *testing.T) {
 	env, _ := stepEnv(t, refs, "anthropic openai google", "sk-val")
 	// Sabotage the mirror step: writes to hostmode.env silently fail (as if the
 	// file were unwritable), while op-refs.env itself stays readable/writable.
-	realWrite := env.fake().WriteFileFn
-	env.fake().WriteFileFn = func(p string, d []byte, m os.FileMode) error {
+	realWrite := fakeOf(env).WriteFileFn
+	fakeOf(env).WriteFileFn = func(p string, d []byte, m os.FileMode) error {
 		if strings.HasSuffix(p, "hostmode.env") {
 			return os.ErrPermission
 		}
@@ -592,7 +592,7 @@ func TestSetupProvisionKeys_HostModeMissingRef_Fails(t *testing.T) {
 func TestSetupProvisionKeys_SbxUnavailable_FailsOpen(t *testing.T) {
 	refs := allRefs("", "", "")
 	env, _ := stepEnv(t, refs, "", "sk-val")
-	env.fake().LookPathFn = func(name string) (string, error) {
+	fakeOf(env).LookPathFn = func(name string) (string, error) {
 		if name == "sbx" {
 			return "", os.ErrNotExist
 		}
@@ -613,7 +613,7 @@ func TestSetupProvisionKeys_FinalProbeRequiresAllThree(t *testing.T) {
 	// reconcile pass — simulate a sync that silently didn't take by having
 	// `sbx secret set` succeed yet never actually add the name (a broken sbx).
 	env, _ := stepEnv(t, refs, "anthropic openai", "sk-val")
-	env.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
 		switch {
 		case name == "op" && len(args) >= 1 && args[0] == "--version":
 			return "2.0", nil
@@ -658,7 +658,7 @@ func TestSetupProvisionKeys_FinalProbe_SbxCommandFails_FailsClosed(t *testing.T)
 		}
 	}
 	calls := 0
-	env.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
 		switch {
 		case name == "op" && len(args) >= 1 && args[0] == "--version":
 			return "2.0", nil

@@ -238,8 +238,8 @@ func TestDoctorContextResolvesCustomSandboxName(t *testing.T) {
 	f := mcpFake()
 	f.output["sbx ls"] = "pix-demo  running  " + canon + "\n"
 	env := f.env()
-	env.fake().GetwdFn = func() (string, error) { return ws, nil }
-	env.fake().StateDirFn = func() (string, error) { return stateDir, nil }
+	fakeOf(env).GetwdFn = func() (string, error) { return ws, nil }
+	fakeOf(env).StateDirFn = func() (string, error) { return stateDir, nil }
 	mustCreateReceipt(t, stateDir, "pix-demo", canon, []string{"slack"})
 
 	ctx := resolveMCPSandboxContext(env)
@@ -265,8 +265,8 @@ func TestDoctorContextAmbiguousMappingIsUnverifiable(t *testing.T) {
 	f := mcpFake()
 	f.output["sbx ls"] = "pix-a  running  " + canon + "\n"
 	env := f.env()
-	env.fake().GetwdFn = func() (string, error) { return ws, nil }
-	env.fake().StateDirFn = func() (string, error) { return stateDir, nil }
+	fakeOf(env).GetwdFn = func() (string, error) { return ws, nil }
+	fakeOf(env).StateDirFn = func() (string, error) { return stateDir, nil }
 	mustCreateReceipt(t, stateDir, "pix-a", canon, nil)
 	mustCreateReceipt(t, stateDir, "pix-b", canon, nil)
 
@@ -375,9 +375,9 @@ func TestResetSbxClearsReceiptsOnPositiveRemovalOnly(t *testing.T) {
 func statusReceiptEnv(t *testing.T, stateDir string) shellEnv {
 	t.Helper()
 	env := fakeStatusEnv()
-	env.fake().StateDirFn = func() (string, error) { return stateDir, nil }
-	base := env.fake().RunFn
-	env.fake().RunFn = func(name string, args ...string) (string, error) {
+	fakeOf(env).StateDirFn = func() (string, error) { return stateDir, nil }
+	base := fakeOf(env).RunFn
+	fakeOf(env).RunFn = func(name string, args ...string) (string, error) {
 		key := strings.Join(append([]string{name}, args...), " ")
 		if key == "sbx ls" {
 			return "NAME STATUS\npix-proj running\n", nil
