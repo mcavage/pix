@@ -10,6 +10,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/sys/systest"
+	"pix/host/workspace"
 )
 
 // fakeEnv builds a shellEnv from a set of present binaries, canned command
@@ -369,7 +370,7 @@ func TestDoctor_GogAttachDespiteMissingExecutable(t *testing.T) {
 	fakeOf(env).GetwdFn = func() (string, error) { return ws, nil }
 	stateDir := t.TempDir()
 	fakeOf(env).StateDirFn = func() (string, error) { return stateDir, nil }
-	if err := writeCreateReceipt(stateDir, box, ws, []string{gwServerName}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, box, ws, []string{gwServerName}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	ctx := resolveMCPSandboxContext(env)

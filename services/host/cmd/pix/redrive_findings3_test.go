@@ -28,6 +28,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/workspace"
 )
 
 // --- finding 3: per-sandbox MCP rows with an empty current intent ----------
@@ -35,7 +36,7 @@ import (
 func TestStatusMCPRowsEmptyCfgReceiptPreloaded(t *testing.T) {
 	cfg := &config.Config{} // empty cfg.MCP, no pack — currentIntent is empty
 	env, stateDir := statusMCPEnv(t, "pix-proj running /home/u/proj\n", "notion\n")
-	if err := writeCreateReceipt(stateDir, "pix-proj", "", []string{"notion"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{"notion"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	st := gatherStatus(cfg, "default", env)
@@ -74,7 +75,7 @@ func TestStatusMCPRowsEmptyCfgReceiptPreloaded(t *testing.T) {
 func TestStatusMCPRowsEmptyCfgReceiptLoaded(t *testing.T) {
 	cfg := &config.Config{}
 	env, stateDir := statusMCPEnv(t, "pix-proj running /home/u/proj\n", "slack\n")
-	if err := appendLoadReceipt(stateDir, "pix-proj", "slack", receiptClock); err != nil {
+	if err := workspace.AppendLoadReceipt(stateDir, "pix-proj", "slack", receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	st := gatherStatus(cfg, "default", env)

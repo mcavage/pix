@@ -26,6 +26,7 @@ import (
 	"pix/host/config"
 	"pix/host/sys"
 	"pix/host/sys/systest"
+	"pix/host/workspace"
 )
 
 // --- finding 8: catalog MCP readiness gate ---------------------------------
@@ -471,9 +472,9 @@ func TestParseMcpLoadArgs(t *testing.T) {
 // layer rejects without touching launcher state at all.
 func TestParseMcpLoadArgs_FailureWritesNoReceipt(t *testing.T) {
 	sd := t.TempDir()
-	orig := sandboxMCPStateDirFn
-	sandboxMCPStateDirFn = func() (string, error) { return sd, nil }
-	t.Cleanup(func() { sandboxMCPStateDirFn = orig })
+	orig := workspace.MCPStateDirFn
+	workspace.MCPStateDirFn = func() (string, error) { return sd, nil }
+	t.Cleanup(func() { workspace.MCPStateDirFn = orig })
 
 	if _, _, err := parseMcpLoadArgs([]string{"slack", filepath.Join(sd, "nope")}); err == nil {
 		t.Fatal("expected a usage failure")

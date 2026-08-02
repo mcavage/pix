@@ -423,7 +423,7 @@ func TestBuildSbxArgs_DevBranch(t *testing.T) {
 	}
 	// Repo skills mounted as an extra workspace.
 	if !contains(args, []string{"/repo/skills"}) {
-		t.Errorf("dev mode should mount /repo/skills workspace, got %v", args)
+		t.Errorf("dev mode should mount /repo/skills ws, got %v", args)
 	}
 }
 

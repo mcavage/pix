@@ -1,35 +1,35 @@
 // workspacestate.go is the single symlink-safe writer AND remover for the
-// launcher's per-workspace state files (<workspace>/.pix/*: sandbox.pack,
+// launcher's per-Workspace state files (<Workspace>/.pix/*: sandbox.pack,
 // profile, ollama-bridge.model, knowledge.scope, knowledge, onboarding.json).
 //
 // Trusted host-state facts (keys/services/knowledge/gog/mcp/models/pack/
 // identity) are deliberately NOT among these: they are built in memory and
 // injected directly into the launcher-generated initial prompt (see
-// hoststate.go's injectTrustedHostState), never written as a workspace file.
-// A workspace is attacker-influenced (a cloned repo), so a file there can
+// hoststate.go's injectTrustedHostState), never written as a Workspace file.
+// A Workspace is attacker-influenced (a cloned repo), so a file there can
 // never be the trust boundary for facts the fenced agent treats as ground
 // truth — see the top of hoststate.go for the full rationale.
 //
-// Why this exists (class fix, not a one-off): the workspace is
+// Why this exists (class fix, not a one-off): the Workspace is
 // attacker-influenced — a user can `pix run` inside a freshly cloned,
 // untrusted repo. That repo can ship a TRACKED symlink at .pix/<file>
 // (or make .pix itself a symlink), and os.WriteFile FOLLOWS symlinks, so
 // a plain WriteFile would truncate/overwrite an arbitrary host file with
 // pack/scope/state data. Same class as the pack.lock fix in
 // writePackLockBytes (pack.go); this generalizes that pattern for every
-// workspace state write.
+// Workspace state write.
 //
 // The removal side has a DIFFERENT vector than the write side: os.Remove
 // never follows a symlinked *destination* file (unlink just removes the
 // link), but it DOES traverse a symlinked *parent* directory to resolve the
 // path. So a repo that commits .pix ITSELF as a symlink to another
 // repo's .pix turns a plain
-// os.Remove(filepath.Join(workspace, ".pix", name)) into a delete of
+// os.Remove(filepath.Join(Workspace, ".pix", name)) into a delete of
 // that OTHER repo's profile/knowledge.scope/sandbox.pack/etc.
-// removeWorkspaceStateFile mirrors writeWorkspaceStateFile's Lstat-and-refuse
-// check on the .pix dir so every workspace-state removal gets the same
+// RemoveStateFile mirrors WriteStateFile's Lstat-and-refuse
+// check on the .pix dir so every Workspace-state removal gets the same
 // guarantee.
-package main
+package workspace
 
 import (
 	"fmt"
@@ -38,7 +38,7 @@ import (
 	"pix/host/sys"
 )
 
-// writeWorkspaceStateFile writes <workspace>/.pix/<name> without ever
+// WriteStateFile writes <Workspace>/.pix/<name> without ever
 // following a symlink:
 //
 //   - If .pix exists and is a SYMLINK, it REFUSES — state is never
@@ -55,8 +55,8 @@ import (
 // Callers that are best-effort by contract (host-state, pack marker, memory
 // scope, bridge model) discard the error; callers with a hard contract
 // (knowledge.scope, the knowledge pointer) propagate it.
-func writeWorkspaceStateFile(workspace, name string, data []byte, perm os.FileMode) error {
-	dir := filepath.Join(workspace, ".pix")
+func WriteStateFile(Workspace, name string, data []byte, perm os.FileMode) error {
+	dir := filepath.Join(Workspace, ".pix")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", dir, err)
 	}
@@ -65,18 +65,18 @@ func writeWorkspaceStateFile(workspace, name string, data []byte, perm os.FileMo
 		return err
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%s is a symlink; refusing to write workspace state through it", dir)
+		return fmt.Errorf("%s is a symlink; refusing to write Workspace state through it", dir)
 	}
-	return atomicWriteInDir(dir, name, data, perm)
+	return sys.AtomicWriteInDir(dir, name, data, perm)
 }
 
-// removeWorkspaceStateFile removes <workspace>/.pix/<name> without ever
+// RemoveStateFile removes <Workspace>/.pix/<name> without ever
 // traversing a symlinked .pix DIRECTORY:
 //
 //   - If .pix is absent, this is a clean no-op.
 //   - If .pix exists and is a SYMLINK, it REFUSES (mirrors
-//     writeWorkspaceStateFile's dir check exactly) — a plain
-//     os.Remove(filepath.Join(workspace, ".pix", name)) does NOT follow a
+//     WriteStateFile's dir check exactly) — a plain
+//     os.Remove(filepath.Join(Workspace, ".pix", name)) does NOT follow a
 //     symlinked *destination* file (unlink never follows the final symlink),
 //     but it DOES traverse a symlinked *parent* directory to resolve the
 //     path. So a hostile/cloned repo that commits .pix itself as a
@@ -88,8 +88,8 @@ func writeWorkspaceStateFile(workspace, name string, data []byte, perm os.FileMo
 //
 // Best-effort callers ignore the returned error (same contract as before);
 // they just no longer delete through a symlinked parent while doing so.
-func removeWorkspaceStateFile(workspace, name string) error {
-	dir := filepath.Join(workspace, ".pix")
+func RemoveStateFile(Workspace, name string) error {
+	dir := filepath.Join(Workspace, ".pix")
 	fi, err := os.Lstat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -98,17 +98,10 @@ func removeWorkspaceStateFile(workspace, name string) error {
 		return err
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%s is a symlink; refusing to remove workspace state through it", dir)
+		return fmt.Errorf("%s is a symlink; refusing to remove Workspace state through it", dir)
 	}
 	if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
-}
-
-// atomicWriteInDir delegates to sys, which owns the one hardened writer. It was
-// duplicated there when the OS seams moved; a second copy of an fsync-then-
-// rename is exactly the kind of thing that gets fixed in one place only.
-func atomicWriteInDir(dir, name string, data []byte, perm os.FileMode) error {
-	return sys.AtomicWriteInDir(dir, name, data, perm)
 }

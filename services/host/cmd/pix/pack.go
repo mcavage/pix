@@ -25,6 +25,8 @@ import (
 
 	"pix/host/config"
 	"pix/host/routing"
+	"pix/host/sys"
+	"pix/host/workspace"
 
 	"github.com/BurntSushi/toml"
 )
@@ -1913,7 +1915,7 @@ func writePackLockBytes(root string, data []byte) error {
 	if fi, err := os.Lstat(dest); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%s is a symlink; refusing to write through it", dest)
 	}
-	return atomicWriteInDir(root, packLockName, data, 0o644)
+	return sys.AtomicWriteInDir(root, packLockName, data, 0o644)
 }
 
 // commitPackActivation is the commit point shared by `pack use` and the
@@ -2263,13 +2265,13 @@ func resolvePackKnowledgeRef(out io.Writer, root string, adopted bool, k packKno
 // shared/unscoped tag, matching "default" == the shared scope from the schema
 // doc. No pack (or an unscoped pack) removes any stale file — this REPLACES the
 // old unconditional profile-delete in run.go. Symlink-safe via
-// writeWorkspaceStateFile (a hostile repo can commit .pix/profile as a
-// symlink) and removeWorkspaceStateFile (a hostile repo can commit .pix
+// workspace.WriteStateFile (a hostile repo can commit .pix/profile as a
+// symlink) and workspace.RemoveStateFile (a hostile repo can commit .pix
 // ITSELF as a symlink to another repo's .pix, which a plain os.Remove
 // would traverse and delete through).
-func writeMemoryScope(workspace string, p *packInfo) {
+func writeMemoryScope(ws string, p *packInfo) {
 	if p == nil {
-		_ = removeWorkspaceStateFile(workspace, "profile")
+		_ = workspace.RemoveStateFile(ws, "profile")
 		return
 	}
 	// Memory is a single SHARED store by default (AGENTS: the in-store scope column
@@ -2282,10 +2284,10 @@ func writeMemoryScope(workspace string, p *packInfo) {
 	// keeps its captures shared rather than accidentally scoped to itself.)
 	scope := strings.TrimSpace(p.Manifest.MemoryScope)
 	if scope == "" || scope == "default" {
-		_ = removeWorkspaceStateFile(workspace, "profile")
+		_ = workspace.RemoveStateFile(ws, "profile")
 		return
 	}
-	_ = writeWorkspaceStateFile(workspace, "profile", []byte(scope+"\n"), 0o644)
+	_ = workspace.WriteStateFile(ws, "profile", []byte(scope+"\n"), 0o644)
 }
 
 // writePackContextFiles writes the two per-launch, pack-scoped workspace files
@@ -2305,7 +2307,7 @@ func writeMemoryScope(workspace string, p *packInfo) {
 // though cfg.Pack/o.Pack still name the (unavailable) configured pack.
 func writePackContextFiles(cfg *config.Config, o runOpts, effectivePack string) {
 	if _, err := ensurePixGitExclude(o.Workspace); err != nil {
-		fmt.Fprintf(os.Stderr, "pix: could not add .pix workspace state to git excludes: %v\n", err)
+		fmt.Fprintf(os.Stderr, "pix: could not add .pix ws state to git excludes: %v\n", err)
 	}
 	writeOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
 	var activePack *packInfo
@@ -3754,7 +3756,7 @@ func writePackManifest(root string, m packManifest) error {
 	if fi, err := os.Lstat(dest); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%s is a symlink; refusing to write through it", dest)
 	}
-	return atomicWriteInDir(root, packManifestName, buf.Bytes(), 0o644)
+	return sys.AtomicWriteInDir(root, packManifestName, buf.Bytes(), 0o644)
 }
 
 // seedPackGitignore appends a `pack.lock` line to <root>/.gitignore, creating
@@ -3783,7 +3785,7 @@ func seedPackGitignore(root string) {
 		content += "\n"
 	}
 	content += line + "\n"
-	_ = atomicWriteInDir(root, ".gitignore", []byte(content), 0o644)
+	_ = sys.AtomicWriteInDir(root, ".gitignore", []byte(content), 0o644)
 }
 
 func present(p string) string {

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"pix/host/monitor/tui"
+	"pix/host/workspace"
 	"sort"
 	"strconv"
 	"strings"
@@ -492,7 +493,7 @@ func stripURLUserinfo(raw string) string {
 // The Profile field is a HOLDOVER from when profiles namespaced the sandbox
 // name (see taskSandboxName/legacyTaskSandboxName, which now ignore it — the
 // active PACK is the unit of context, see docs/design/packs.md). Every task
-// written by the current `task new` stores it as "" (loadResolvedConfig always
+// written by the current `task new` stores it as "" (workspace.LoadResolvedConfig always
 // returns "" now), and an OLDER meta may carry a real profile name like
 // "work": both are accepted here without requiring either. Rejecting an empty
 // Profile was the actual bug (AC-P0-008): it hid EVERY task the current writer
@@ -722,7 +723,7 @@ func executeTaskTeardown(env shellEnv, w io.Writer, meta taskMeta, co, name, rec
 // warning to w: the removal itself already succeeded, and the next launcher
 // create's pre-create clear is the correctness backstop.
 func clearTaskSandboxReceipt(w io.Writer, sandbox string) {
-	if err := clearRemovedSandboxReceipt(sandbox); err != nil {
+	if err := workspace.ClearRemovedReceipt(sandbox); err != nil {
 		fmt.Fprintf(w, "pix task rm: warning: could not clear the mcp receipt for removed sandbox %s: %v\n", sandbox, err)
 	}
 }
@@ -931,7 +932,7 @@ func runTaskNew(env shellEnv, argv []string) {
 	}
 
 	// The active profile namespaces the sandbox name (so contexts never collide).
-	_, profile, _ := loadResolvedConfig()
+	_, profile, _ := workspace.LoadResolvedConfig()
 	repokey := taskRepoKey(mainroot)
 	label := taskRepoLabel(mainroot)
 	repoDir := taskRepoDir(mainroot) // `new` always writes the new <label>-<key> layout
@@ -1147,7 +1148,7 @@ func prepareTaskLaunchSandbox(env shellEnv, name string) error {
 // launchTask is the error-returning launch helper `task new` uses so a failed
 // create can be rolled back. It reuses run.go's package helpers (config resolve,
 // preflight, kit resolution, knowledge/profile wiring, buildSbxArgs) WITHOUT
-// modifying run.go, and bypasses deriveSandboxName because o.Name is set.
+// modifying run.go, and bypasses workspace.DeriveSandboxName because o.Name is set.
 func launchTask(o runOpts) error {
 	env := defaultShellEnv()
 	if _, err := env.LookPath("sbx"); err == nil && !configuredKeylessInference() {
@@ -1160,7 +1161,7 @@ func launchTask(o runOpts) error {
 			return fmt.Errorf("%s", strings.TrimRight(modelKeyMissingMessage(env), "\n"))
 		}
 	}
-	cfg, _, err := loadResolvedConfig()
+	cfg, _, err := workspace.LoadResolvedConfig()
 	if err != nil {
 		return err
 	}
@@ -1270,10 +1271,10 @@ func launchTask(o runOpts) error {
 	// A task is ALWAYS a fresh create, so it runs the same corrected create
 	// lifecycle as `pix run` (run.go): pre-create receipt clear, Start,
 	// creation-evidence poll, mid-session receipt commit for o.StaticMCP, Wait.
-	// A *receiptRecordError here reaches `task new`'s error report as-is — the
+	// A *workspace.ReceiptRecordError here reaches `task new`'s error report as-is — the
 	// sandbox probe there reads running/stopped, so the clone is kept and the
 	// honest "created but unrecorded" message is printed, never a rollback.
-	return execSbxRunAndRecordCreate(cmd, true, o.Name, canonicalWorkspacePath(o.Workspace), o.StaticMCP)
+	return execSbxRunAndRecordCreate(cmd, true, o.Name, workspace.CanonicalPath(o.Workspace), o.StaticMCP)
 }
 
 // ---------------------------------------------------------------------------

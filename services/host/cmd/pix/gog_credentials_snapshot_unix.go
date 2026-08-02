@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/sys"
 	"syscall"
 )
 
@@ -59,7 +60,7 @@ func snapshotGogCredentials(path string) (string, func(), error) {
 
 	// Write the snapshot immutably inside the 0700 dir.
 	// atomicWriteInDir does a temp-file + rename so it's symlink-safe.
-	if err := atomicWriteInDir(tmpDir, "credentials.json", data, 0o600); err != nil {
+	if err := sys.AtomicWriteInDir(tmpDir, "credentials.json", data, 0o600); err != nil {
 		cleanup()
 		return "", nil, fmt.Errorf("writing snapshot: %w", err)
 	}

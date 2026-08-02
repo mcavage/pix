@@ -62,6 +62,7 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/sys"
 )
 
 const packTrustStoreName = "pack-trust.json"
@@ -231,7 +232,7 @@ func (s *packTrustStore) save() error {
 	if err != nil {
 		return err
 	}
-	return atomicWriteInDir(dir, packTrustStoreName, append(b, '\n'), 0o644)
+	return sys.AtomicWriteInDir(dir, packTrustStoreName, append(b, '\n'), 0o644)
 }
 
 // trustKey resolves a pack's identity for trust-store lookup: launcher-recorded

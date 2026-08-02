@@ -14,6 +14,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/rpc"
+	"pix/host/workspace"
 )
 
 // runKnowledge is the `knowledge` verb tree: `init`, `use`, `ls`. It scaffolds
@@ -81,7 +82,7 @@ func runKnowledgeQuery(argv []string) {
 		fmt.Fprintln(os.Stderr, "usage: pix knowledge query <text...> [--limit N] [--json]")
 		os.Exit(2)
 	}
-	cfg, _, cerr := loadResolvedConfig()
+	cfg, _, cerr := workspace.LoadResolvedConfig()
 	if cerr != nil {
 		fmt.Fprintf(os.Stderr, "pix knowledge query: %v\n", cerr)
 		os.Exit(1)
@@ -273,7 +274,7 @@ func resolveSyncBundle(bundleFlag string) (string, error) {
 	}
 	// Fall back to the configured bundle(s) (profiles were removed; there is a
 	// single knowledge_bundles list).
-	cfg, _, err := loadResolvedConfig()
+	cfg, _, err := workspace.LoadResolvedConfig()
 	if err != nil {
 		return "", err
 	}
@@ -495,7 +496,7 @@ func knowledgeUseProject(ref, dir string, out io.Writer) error {
 	pointer := filepath.Join(dir, ".pix", "knowledge")
 	// Symlink-safe: the target repo may be an untrusted clone shipping
 	// .pix (or .pix/knowledge) as a tracked symlink.
-	if err := writeWorkspaceStateFile(dir, "knowledge", []byte(portable+"\n"), 0o644); err != nil {
+	if err := workspace.WriteStateFile(dir, "knowledge", []byte(portable+"\n"), 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", pointer, err)
 	}
 	fmt.Fprintf(out, "Wrote project knowledge pointer %s -> %s\n", pointer, portable)
@@ -618,7 +619,7 @@ func runKnowledgeLs(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix knowledge ls: unexpected argument %q\nusage: pix knowledge ls [--json]\n", positional[0])
 		os.Exit(2)
 	}
-	cfg, _, err := loadResolvedConfig()
+	cfg, _, err := workspace.LoadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix knowledge ls: %v\n", err)
 		os.Exit(1)

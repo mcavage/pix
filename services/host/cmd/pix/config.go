@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/workspace"
 
 	"github.com/BurntSushi/toml"
 )
@@ -86,7 +87,7 @@ func runConfigGet(argv []string) {
 		fmt.Fprintf(os.Stderr, "usage: pix config get <key>\n%s", configKeysHelp)
 		os.Exit(2)
 	}
-	cfg, _, err := loadResolvedConfig()
+	cfg, _, err := workspace.LoadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix config get: %v\n", err)
 		os.Exit(1)

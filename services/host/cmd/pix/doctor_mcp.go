@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/workspace"
 )
 
 // doctor_mcp.go — the MCP truth group (S05). Three axes, each verified from
@@ -151,7 +152,7 @@ const (
 
 // mcpSandboxContext is the resolved workspace-sandbox context the attachment
 // checks read. sandbox comes from the SAME hardened workspace->sandbox
-// resolver `pix mcp load` uses (resolveWorkspaceSandbox: a unique
+// resolver `pix mcp load` uses (workspace.ResolveSandbox: a unique
 // trustworthy receipt mapping wins, else the derived default name), so doctor
 // can never report on a differently-named sandbox than the one that verb acts
 // on — including a custom-named `run --name pix-demo` box.
@@ -161,12 +162,12 @@ type mcpSandboxContext struct {
 	// workspace is the canonical workspace path the context was resolved for —
 	// what the exact `pix mcp load <name> <workspace>` repair command
 	// carries. Empty when no workspace resolved (mcpAttachNone).
-	workspace string
+	ws string
 	// note carries the reason attachment could not be resolved at all (an
 	// ambiguous workspace->sandbox mapping) for the group's attachment note.
 	note    string
-	receipt *sandboxMCPReceipt
-	status  sandboxMCPStateStatus
+	receipt *workspace.MCPReceipt
+	status  workspace.MCPStateStatus
 }
 
 // resolveMCPSandboxContext derives the current workspace's sandbox name and
@@ -187,7 +188,7 @@ func resolveMCPSandboxContext(env shellEnv) mcpSandboxContext {
 	if err != nil || strings.TrimSpace(sd) == "" {
 		return mcpSandboxContext{mode: mcpAttachNone}
 	}
-	canonWS := canonicalWorkspacePath(ws)
+	canonWS := workspace.CanonicalPath(ws)
 	// The hardened workspace->sandbox resolver — the SAME one `mcp load` uses.
 	// A unique trustworthy receipt mapping names the box (custom `run --name`);
 	// a clean no-mapping scan falls back to the derived default; an AMBIGUOUS
@@ -195,16 +196,16 @@ func resolveMCPSandboxContext(env shellEnv) mcpSandboxContext {
 	// UNTRUSTED store falls back to the derived name for read-only reporting —
 	// that box's own receipt state still governs rendering (a corrupt receipt
 	// there renders unverifiable, never trusted).
-	res := resolveWorkspaceSandbox(sd, ws)
+	res := workspace.ResolveSandbox(sd, ws)
 	var name string
 	switch res.Outcome {
-	case workspaceSandboxMapped, workspaceSandboxDefault:
+	case workspace.SandboxMapped, workspace.SandboxDefault:
 		name = res.Sandbox
-	case workspaceSandboxAmbiguous:
-		return mcpSandboxContext{mode: mcpAttachNone, workspace: canonWS,
+	case workspace.SandboxAmbiguous:
+		return mcpSandboxContext{mode: mcpAttachNone, ws: canonWS,
 			note: "workspace->sandbox mapping unresolvable: " + res.Detail}
-	default: // workspaceSandboxUntrusted
-		name = deriveSandboxName(ws)
+	default: // workspace.WorkspaceSandboxUntrusted
+		name = workspace.DeriveSandboxName(ws)
 	}
 	// Bounded existence probe. Only a SUCCESSFUL listing may conclude "absent";
 	// a failed or timed-out one proves nothing and must not erase the receipt
@@ -218,11 +219,11 @@ func resolveMCPSandboxContext(env shellEnv) mcpSandboxContext {
 			}
 		}
 		if !found {
-			return mcpSandboxContext{mode: mcpAttachSandboxAbsent, sandbox: name, workspace: canonWS}
+			return mcpSandboxContext{mode: mcpAttachSandboxAbsent, sandbox: name, ws: canonWS}
 		}
 	}
-	receipt, status, _ := readSandboxMCPReceipt(sd, name)
-	return mcpSandboxContext{mode: mcpAttachReceipt, sandbox: name, workspace: canonWS, receipt: receipt, status: status}
+	receipt, status, _ := workspace.ReadMCPReceipt(sd, name)
+	return mcpSandboxContext{mode: mcpAttachReceipt, sandbox: name, ws: canonWS, receipt: receipt, status: status}
 }
 
 // mcpLoadTodoCommand is the exact, copy-pasteable live-attach command for a
@@ -231,8 +232,8 @@ func resolveMCPSandboxContext(env shellEnv) mcpSandboxContext {
 // delegates to run.go's mcpLoadCommand (shell-quoting name and workspace via
 // shellQuoteArg, closure finding #3) so doctor and status can never drift on
 // how the repair command is quoted.
-func mcpLoadTodoCommand(name, workspace string) string {
-	return mcpLoadCommand(name, workspace)
+func mcpLoadTodoCommand(name, ws string) string {
+	return mcpLoadCommand(name, ws)
 }
 
 // mcpAttachGuidance is the exact, copy-pasteable pair of commands that would
@@ -248,8 +249,8 @@ func mcpAttachGuidance(name string) string {
 // mcpAttachCheck renders one server's sandbox-attachment evidence from the
 // launcher receipt, via the SHARED join row (joinMCPSandboxRow, mcpjoin.go)
 // so doctor and status derive attachment truth from ONE path. The receipt
-// records SUCCESSFUL pix actions (writeCreateReceipt after a create,
-// appendLoadReceipt after a live load) — that is the ONLY thing that may
+// records SUCCESSFUL pix actions (workspace.WriteCreateReceipt after a create,
+// workspace.AppendLoadReceipt after a live load) — that is the ONLY thing that may
 // claim ready here. Config membership is never attachment. reg is the
 // CURRENT registration tri-state (mcpRegEvidenceFrom) — a positive receipt
 // claim renders ready REGARDLESS of reg (see mcpjoin.go's PRECEDENCE doc):
@@ -278,7 +279,7 @@ func mcpAttachCheck(name string, ctx mcpSandboxContext, reg mcpRegEvidence) chec
 		// absent receipts never reach this state (they stay unverifiable).
 		return check{label: label, verdict: verdictTodo,
 			detail:   fmt.Sprintf("registered, but pix has no record of attaching it to %s; attach live, or recreate with `pix run --replace`", ctx.sandbox),
-			todo:     mcpLoadTodoCommand(name, ctx.workspace),
+			todo:     mcpLoadTodoCommand(name, ctx.ws),
 			evidence: row.Evidence}
 	case mcpJoinNotRegistered:
 		return check{label: label, verdict: verdictUnverifiable,
@@ -289,13 +290,13 @@ func mcpAttachCheck(name string, ctx mcpSandboxContext, reg mcpRegEvidence) chec
 	// (valid but load-only — it proves only the loads it lists, so a name it
 	// doesn't list is unverifiable, never "positively not attached"), or
 	// registration itself is unknowable.
-	if ctx.status == sandboxMCPStateOK && ctx.receipt.IsPartial() {
+	if ctx.status == workspace.MCPStateOK && ctx.receipt.IsPartial() {
 		return check{label: label, verdict: verdictUnverifiable,
 			detail: fmt.Sprintf("launcher receipt for sandbox %s is partial (load-only, no create record); preload state unknown; %s",
 				ctx.sandbox, guidance),
 			evidence: row.Evidence}
 	}
-	if ctx.status == sandboxMCPStateAbsent {
+	if ctx.status == workspace.MCPStateAbsent {
 		return check{label: label, verdict: verdictUnverifiable,
 			detail:   fmt.Sprintf("no launcher receipt for sandbox %s; attachment unverified; %s", ctx.sandbox, guidance),
 			evidence: row.Evidence}
@@ -767,7 +768,7 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 	// by its own dedicated group).
 	exclude := map[string]bool{gwServerName: true}
 	currentIntent := mcpCurrentIntentNames(cfg.MCP, containers, exclude)
-	var receipt *sandboxMCPReceipt
+	var receipt *workspace.MCPReceipt
 	if ctx.mode == mcpAttachReceipt {
 		receipt = ctx.receipt
 	}

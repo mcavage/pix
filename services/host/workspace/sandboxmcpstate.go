@@ -7,7 +7,7 @@
 // set what I think it is" without re-probing the gateway (which may be down,
 // slow, or simply not asked) — the receipt is a local, offline record of past
 // SUCCESSFUL pix operations, not a live poll. It lives OUTSIDE the
-// sandbox and outside any workspace: <state-dir>/sandboxes/<sandbox>/mcp.json,
+// sandbox and outside any Workspace: <state-dir>/sandboxes/<sandbox>/mcp.json,
 // state-dir being XDG_STATE_HOME/pix (config.StateDir()) in production —
 // ephemeral runtime state, the same home as the serve pidfile/lock, never the
 // config dir (a `pix state reset` moving the config dir aside must not
@@ -16,25 +16,25 @@
 // SCOPE (schema 1): Sandbox (identity the receipt is FOR — checked on every
 // read so a reused/renamed directory can never silently supply someone
 // else's receipt), CreatedAt + Preloaded (committed once per lifetime by
-// commitCreateReceipt, as soon as the caller's OWN `sbx run` create is
+// CommitCreateReceipt, as soon as the caller's OWN `sbx run` create is
 // observably done — the static-MCP set requested at create time), and Loads
-// (appended by appendLoadReceipt right after the caller's OWN successful
+// (appended by AppendLoadReceipt right after the caller's OWN successful
 // `mcp load`, one entry per server name, FIRST-success timestamp preserved —
 // a receipt answers "has this ever worked", not "when did it last run").
 //
 // LIFECYCLE: a receipt is scoped to ONE lifetime of a sandbox NAME, bounded
 // by pix's own operations. A definite create/replace (run.go's
 // execSbxRunAndRecordCreate) first CLEARS any stale receipt under the
-// per-sandbox lock (clearSandboxMCPReceipt) — a load history from a previous
+// per-sandbox lock (ClearMCPReceipt) — a load history from a previous
 // incarnation of the name must never leak into the new one — then, once the
 // freshly-created sandbox is observably present (the creation-evidence poll,
 // while the interactive session is still ALIVE, so status/doctor can render
 // preload provenance mid-session), COMMITS the create receipt
-// (commitCreateReceipt): fresh CreatedAt/Preloaded, merging ONLY loads
+// (CommitCreateReceipt): fresh CreatedAt/Preloaded, merging ONLY loads
 // appended after the clear — a concurrent `pix mcp load` racing the
 // create is preserved, a prior lifetime's loads are not. Every successful
 // launcher-side removal (`pix rm`, task rm/gc, the --replace pre-remove)
-// clears the receipt via clearRemovedSandboxReceipt; a FAILED or unknowable
+// clears the receipt via ClearRemovedReceipt; a FAILED or unknowable
 // removal RETAINS it — evidence is discarded only on positive proof the
 // lifetime ended. Appending a load to a sandbox that predates this feature
 // (no receipt on disk yet) synthesizes a PARTIAL receipt (IsPartial — no
@@ -53,7 +53,7 @@
 //
 // TRUST: every read REJECTS rather than silently degrades — schema mismatch,
 // malformed JSON, and sandbox-identity mismatch are all distinct typed
-// reasons (sandboxMCPStateStatus), never folded into "absent" (a genuinely
+// reasons (MCPStateStatus), never folded into "absent" (a genuinely
 // untouched sandbox, which is legitimately empty, not wrong). Callers
 // (doctor/status) use Unverifiable() to tell "nothing recorded yet" apart
 // from "something here can't be trusted" and render accordingly.
@@ -63,8 +63,8 @@
 // if they are a symlink (never MkdirAll-and-trust); the receipt file is never
 // opened for write directly — atomicWriteInDir's same-dir temp + fsync +
 // rename never follows a symlinked destination; directories are 0700, the
-// receipt file 0600. Every read-modify-write (appendLoadReceipt, and
-// writeCreateReceipt for symmetry) is serialized by a per-sandbox flock
+// receipt file 0600. Every read-modify-write (AppendLoadReceipt, and
+// WriteCreateReceipt for symmetry) is serialized by a per-sandbox flock
 // (mcp.json.lock, alongside mcp.json in the same directory) so concurrent
 // `pix mcp load` calls for the same sandbox can never lose an update to
 // a last-writer-wins race.
@@ -73,7 +73,7 @@
 // tests, config.StateDir() in production) and an injectable clock
 // (func() time.Time) — no test ever touches the real XDG state dir or wall
 // clock.
-package main
+package workspace
 
 import (
 	"encoding/json"
@@ -84,13 +84,14 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/sys"
 )
 
-// sandboxMCPStateSchema is the current receipt schema version. A receipt
-// written under a different schema is REJECTED on read (sandboxMCPStateSchemaMismatch),
+// MCPStateSchema is the current receipt schema version. A receipt
+// written under a different schema is REJECTED on read (MCPStateSchemaMismatch),
 // never partially trusted — a future schema change gets a bump here plus an
 // explicit migration, not a silent best-effort decode.
-const sandboxMCPStateSchema = 1
+const MCPStateSchema = 1
 
 // sandboxMCPStateFileName is the receipt file's name within its per-sandbox
 // directory.
@@ -101,90 +102,90 @@ const sandboxMCPStateFileName = "mcp.json"
 // holder never blocks a concurrent reader on file content.
 const sandboxMCPStateLockName = "mcp.json.lock"
 
-// sandboxMCPLoadReceipt is one successful `pix mcp load` for a server
-// name, at the FIRST time it was observed to succeed (appendLoadReceipt never
+// MCPLoadReceipt is one successful `pix mcp load` for a server
+// name, at the FIRST time it was observed to succeed (AppendLoadReceipt never
 // updates At for a name already present).
-type sandboxMCPLoadReceipt struct {
+type MCPLoadReceipt struct {
 	Name string `json:"name"`
 	At   string `json:"at"` // RFC3339 UTC
 }
 
-// sandboxMCPReceipt is the schema-1 on-disk receipt. Sandbox is the identity
+// MCPReceipt is the schema-1 on-disk receipt. Sandbox is the identity
 // check (compared against the caller's requested name on every read);
-// CreatedAt/Preloaded are set once by writeCreateReceipt and are empty on a
-// partial receipt synthesized by appendLoadReceipt for a pre-existing
-// sandbox; Loads accumulates via appendLoadReceipt, deduped by name.
-type sandboxMCPReceipt struct {
+// CreatedAt/Preloaded are set once by WriteCreateReceipt and are empty on a
+// partial receipt synthesized by AppendLoadReceipt for a pre-existing
+// sandbox; Loads accumulates via AppendLoadReceipt, deduped by name.
+type MCPReceipt struct {
 	Schema    int    `json:"schema"`
 	Sandbox   string `json:"sandbox"`
 	CreatedAt string `json:"created_at,omitempty"`
-	// Workspace is the canonical workspace directory the sandbox was created
-	// FOR (canonicalWorkspacePath at create time) — the launcher-owned
-	// workspace->sandbox identity that lets a custom-named sandbox
+	// Workspace is the canonical Workspace directory the sandbox was created
+	// FOR (CanonicalPath at create time) — the launcher-owned
+	// Workspace->sandbox identity that lets a custom-named sandbox
 	// (`run --name pix-demo`) be found again by verbs that only know the
-	// DIR (resolveWorkspaceSandbox). ADDITIVE to schema 1: a receipt written
+	// DIR (ResolveSandbox). ADDITIVE to schema 1: a receipt written
 	// before this field simply has it empty (an "old sandbox" — the resolver
 	// falls back to the derived default name), and an older binary decoding a
 	// newer receipt ignores it.
-	Workspace string                  `json:"workspace,omitempty"`
-	Preloaded []string                `json:"preloaded,omitempty"`
-	Loads     []sandboxMCPLoadReceipt `json:"loads,omitempty"`
+	Workspace string           `json:"Workspace,omitempty"`
+	Preloaded []string         `json:"preloaded,omitempty"`
+	Loads     []MCPLoadReceipt `json:"loads,omitempty"`
 }
 
 // IsPartial reports whether r is a PARTIAL receipt: one synthesized by
-// appendLoadReceipt for a sandbox whose creation pix never observed
+// AppendLoadReceipt for a sandbox whose creation pix never observed
 // (empty CreatedAt). A partial receipt proves ONLY the loads it lists — it
 // says nothing about the create-time preload set, so a consumer must never
 // read "no entry" in it as "positively never attached"; for every other name
 // the honest answer is unverifiable.
-func (r *sandboxMCPReceipt) IsPartial() bool {
+func (r *MCPReceipt) IsPartial() bool {
 	return r != nil && r.CreatedAt == ""
 }
 
-// sandboxMCPStateStatus is the typed outcome of reading a receipt — the
+// MCPStateStatus is the typed outcome of reading a receipt — the
 // "unavailable reason" doctor/status render instead of collapsing every
 // failure into "absent".
-type sandboxMCPStateStatus int
+type MCPStateStatus int
 
 const (
-	// sandboxMCPStateOK: a receipt exists, matches this schema, and matches
+	// MCPStateOK: a receipt exists, matches this schema, and matches
 	// the requested sandbox identity.
-	sandboxMCPStateOK sandboxMCPStateStatus = iota
-	// sandboxMCPStateAbsent: no receipt file — a genuinely untouched sandbox
+	MCPStateOK MCPStateStatus = iota
+	// MCPStateAbsent: no receipt file — a genuinely untouched sandbox
 	// (never create/load-receipted, e.g. predates this feature). Legitimately
 	// empty, NOT unverifiable.
-	sandboxMCPStateAbsent
-	// sandboxMCPStateUnreadable: an I/O-level problem reading the file itself
+	MCPStateAbsent
+	// MCPStateUnreadable: an I/O-level problem reading the file itself
 	// (permission denied, a symlinked path refused, etc.) — not a content
 	// problem.
-	sandboxMCPStateUnreadable
-	// sandboxMCPStateCorrupt: the file exists but is not valid JSON for this
+	MCPStateUnreadable
+	// MCPStateCorrupt: the file exists but is not valid JSON for this
 	// type.
-	sandboxMCPStateCorrupt
-	// sandboxMCPStateSchemaMismatch: valid JSON, but the schema field is not
+	MCPStateCorrupt
+	// MCPStateSchemaMismatch: valid JSON, but the schema field is not
 	// the one this binary understands.
-	sandboxMCPStateSchemaMismatch
-	// sandboxMCPStateIdentityMismatch: valid JSON, correct schema, but the
+	MCPStateSchemaMismatch
+	// MCPStateIdentityMismatch: valid JSON, correct schema, but the
 	// receipt's own Sandbox field does not match the sandbox whose directory
 	// it was read from — never trust a reused/renamed directory's leftover
 	// receipt.
-	sandboxMCPStateIdentityMismatch
+	MCPStateIdentityMismatch
 )
 
 // String renders the status for log/report lines (doctor/status).
-func (s sandboxMCPStateStatus) String() string {
+func (s MCPStateStatus) String() string {
 	switch s {
-	case sandboxMCPStateOK:
+	case MCPStateOK:
 		return "ok"
-	case sandboxMCPStateAbsent:
+	case MCPStateAbsent:
 		return "absent"
-	case sandboxMCPStateUnreadable:
+	case MCPStateUnreadable:
 		return "unreadable"
-	case sandboxMCPStateCorrupt:
+	case MCPStateCorrupt:
 		return "corrupt"
-	case sandboxMCPStateSchemaMismatch:
+	case MCPStateSchemaMismatch:
 		return "schema-mismatch"
-	case sandboxMCPStateIdentityMismatch:
+	case MCPStateIdentityMismatch:
 		return "identity-mismatch"
 	default:
 		return "unknown"
@@ -193,25 +194,25 @@ func (s sandboxMCPStateStatus) String() string {
 
 // Unverifiable reports whether status means "a receipt is present but cannot
 // be trusted" (corrupt bytes, an unreadable path, a schema this binary
-// doesn't know, or an identity mismatch) as opposed to sandboxMCPStateOK or
-// sandboxMCPStateAbsent (no receipt yet — legitimately empty). Callers must
+// doesn't know, or an identity mismatch) as opposed to MCPStateOK or
+// MCPStateAbsent (no receipt yet — legitimately empty). Callers must
 // render Unverifiable() distinctly from "empty": an absent receipt says
 // "nothing recorded", an unverifiable one says "something is wrong here,
 // don't trust the empty read".
-func (s sandboxMCPStateStatus) Unverifiable() bool {
-	return s != sandboxMCPStateOK && s != sandboxMCPStateAbsent
+func (s MCPStateStatus) Unverifiable() bool {
+	return s != MCPStateOK && s != MCPStateAbsent
 }
 
-// validateSandboxStateName rejects a sandbox name that could traverse or
+// ValidateStateName rejects a sandbox name that could traverse or
 // escape its directory: empty, ".", "..", or containing any path separator
 // (either OS's, checked unconditionally so a receipt written on one platform
 // can never be abused on another). A valid name is used AS the per-sandbox
 // directory's leaf component — there is no separate sanitize/hash step (unlike
 // sanitizeTaskName): an invalid sandbox name here means the caller passed
 // something that was never a real sandbox name, so refusing outright is
-// correct and callers of writeCreateReceipt/appendLoadReceipt/
-// readSandboxMCPReceipt already have the real sbx-assigned name in hand.
-func validateSandboxStateName(name string) error {
+// correct and callers of WriteCreateReceipt/AppendLoadReceipt/
+// ReadMCPReceipt already have the real sbx-assigned name in hand.
+func ValidateStateName(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("sandbox name is empty")
 	}
@@ -229,13 +230,13 @@ func validateSandboxStateName(name string) error {
 
 // defaultSandboxMCPStateDir resolves the production state root
 // (config.StateDir(), i.e. XDG_STATE_HOME/pix) for real callers. Tests
-// call writeCreateReceipt/appendLoadReceipt/readSandboxMCPReceipt directly
+// call WriteCreateReceipt/AppendLoadReceipt/ReadMCPReceipt directly
 // with a t.TempDir() stateDir instead — this helper is never on a test's path.
 func defaultSandboxMCPStateDir() (string, error) {
 	return config.StateDir()
 }
 
-// sandboxMCPStateDirFn is the ONE seam run.go's recordCreateReceipt and
+// MCPStateDirFn is the ONE seam run.go's recordCreateReceipt and
 // mcp.go's recordMcpLoadReceipt resolve the state root through — production
 // wiring never calls defaultSandboxMCPStateDir (nor config.StateDir())
 // directly. Tests override it to a t.TempDir()-backed stub so a wiring test
@@ -243,34 +244,34 @@ func defaultSandboxMCPStateDir() (string, error) {
 // REAL path contract (config.StateDir()'s XDG_STATE_HOME/pix join, no
 // doubled "pix") sets $XDG_STATE_HOME instead and leaves this seam at
 // its default.
-var sandboxMCPStateDirFn = defaultSandboxMCPStateDir
+var MCPStateDirFn = defaultSandboxMCPStateDir
 
-// receiptRecordError wraps a failure to durably record an otherwise-successful
+// ReceiptRecordError wraps a failure to durably record an otherwise-successful
 // pix operation (a sandbox create, or an `mcp load` attach) in the
 // per-sandbox MCP receipt. It is kept as a DISTINCT typed error — never folded
 // into the underlying operation's own error — so run.go/mcp.go can report the
 // honest, narrower truth: the operation itself worked; only the local
 // bookkeeping didn't, so doctor/status must not be told it succeeded cleanly,
 // and the caller must never print a plain success line over this failure.
-type receiptRecordError struct {
-	op      string // "create" or "mcp load"
-	sandbox string
-	name    string // mcp server name; set only for a load receipt
-	err     error
+type ReceiptRecordError struct {
+	Op      string // "create" or "mcp load"
+	Sandbox string
+	Name    string // mcp server name; set only for a load receipt
+	Err     error
 }
 
-func (e *receiptRecordError) Error() string {
-	if e.name != "" {
-		return fmt.Sprintf("%s %q on sandbox %q succeeded, but recording it in local state failed: %v", e.op, e.name, e.sandbox, e.err)
+func (e *ReceiptRecordError) Error() string {
+	if e.Name != "" {
+		return fmt.Sprintf("%s %q on sandbox %q succeeded, but recording it in local state failed: %v", e.Op, e.Name, e.Sandbox, e.Err)
 	}
-	return fmt.Sprintf("%s of sandbox %q succeeded, but recording it in local state failed: %v", e.op, e.sandbox, e.err)
+	return fmt.Sprintf("%s of sandbox %q succeeded, but recording it in local state failed: %v", e.Op, e.Sandbox, e.Err)
 }
 
-func (e *receiptRecordError) Unwrap() error { return e.err }
+func (e *ReceiptRecordError) Unwrap() error { return e.Err }
 
-// sandboxMCPStateRoot is <stateDir>/sandboxes, the parent of every
+// MCPStateRoot is <stateDir>/sandboxes, the parent of every
 // per-sandbox receipt directory.
-func sandboxMCPStateRoot(stateDir string) string {
+func MCPStateRoot(stateDir string) string {
 	return filepath.Join(stateDir, "sandboxes")
 }
 
@@ -279,7 +280,7 @@ func sandboxMCPStateRoot(stateDir string) string {
 // existing symlink-to-directory as "already there" and happily proceeds, so a
 // pre-planted symlink at either the state root or the per-sandbox leaf would
 // otherwise have writes land wherever it points. Mirrors
-// writeWorkspaceStateFile's dir check (workspacestate.go), generalized to any
+// WriteStateFile's dir check (workspacestate.go), generalized to any
 // directory in this file's own tree.
 func mkdirSymlinkSafe(dir string, perm os.FileMode) error {
 	if err := os.MkdirAll(dir, perm); err != nil {
@@ -301,10 +302,10 @@ func mkdirSymlinkSafe(dir string, perm os.FileMode) error {
 // leaf are checked; a symlinked ancestor further up (stateDir itself) is out
 // of scope, same posture as workspacestate.go's single-level check.
 func ensureSandboxMCPStateDir(stateDir, sandbox string) (string, error) {
-	if err := validateSandboxStateName(sandbox); err != nil {
+	if err := ValidateStateName(sandbox); err != nil {
 		return "", err
 	}
-	root := sandboxMCPStateRoot(stateDir)
+	root := MCPStateRoot(stateDir)
 	if err := mkdirSymlinkSafe(root, 0o700); err != nil {
 		return "", err
 	}
@@ -327,7 +328,7 @@ func withSandboxMCPStateLock(stateDir, sandbox string, fn func(dir string) error
 	if err != nil {
 		return err
 	}
-	return withFlock(filepath.Join(dir, sandboxMCPStateLockName), func() error {
+	return sys.Lock(filepath.Join(dir, sandboxMCPStateLockName), func() error {
 		return fn(dir)
 	})
 }
@@ -336,128 +337,128 @@ func withSandboxMCPStateLock(stateDir, sandbox string, fn func(dir string) error
 // symlink-safe + atomic (never opens the destination directly — a same-dir
 // temp file is fsync'd then renamed over it, replacing any symlink rather
 // than following it) via the shared atomicWriteInDir helper, at 0600.
-func writeSandboxMCPReceiptFile(dir string, r *sandboxMCPReceipt) error {
+func writeSandboxMCPReceiptFile(dir string, r *MCPReceipt) error {
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return err
 	}
-	return atomicWriteInDir(dir, sandboxMCPStateFileName, append(b, '\n'), 0o600)
+	return sys.AtomicWriteInDir(dir, sandboxMCPStateFileName, append(b, '\n'), 0o600)
 }
 
-// readSandboxMCPReceiptFile reads dir/mcp.json without following a symlinked
+// ReadMCPReceiptFile reads dir/mcp.json without following a symlinked
 // destination (Lstat first, refuse if it is a symlink), then validates schema
-// and sandbox identity. See sandboxMCPStateStatus for the full outcome space.
-func readSandboxMCPReceiptFile(dir, sandbox string) (*sandboxMCPReceipt, sandboxMCPStateStatus, error) {
+// and sandbox identity. See MCPStateStatus for the full outcome space.
+func ReadMCPReceiptFile(dir, sandbox string) (*MCPReceipt, MCPStateStatus, error) {
 	path := filepath.Join(dir, sandboxMCPStateFileName)
 	fi, lerr := os.Lstat(path)
 	if lerr != nil {
 		if os.IsNotExist(lerr) {
-			return nil, sandboxMCPStateAbsent, nil
+			return nil, MCPStateAbsent, nil
 		}
-		return nil, sandboxMCPStateUnreadable, lerr
+		return nil, MCPStateUnreadable, lerr
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
-		return nil, sandboxMCPStateUnreadable, fmt.Errorf("%s is a symlink; refusing to read through it", path)
+		return nil, MCPStateUnreadable, fmt.Errorf("%s is a symlink; refusing to read through it", path)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, sandboxMCPStateUnreadable, err
+		return nil, MCPStateUnreadable, err
 	}
-	var r sandboxMCPReceipt
+	var r MCPReceipt
 	if err := json.Unmarshal(b, &r); err != nil {
-		return nil, sandboxMCPStateCorrupt, fmt.Errorf("parse %s: %w", path, err)
+		return nil, MCPStateCorrupt, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if r.Schema != sandboxMCPStateSchema {
-		return nil, sandboxMCPStateSchemaMismatch, fmt.Errorf("%s: schema %d, want %d", path, r.Schema, sandboxMCPStateSchema)
+	if r.Schema != MCPStateSchema {
+		return nil, MCPStateSchemaMismatch, fmt.Errorf("%s: schema %d, want %d", path, r.Schema, MCPStateSchema)
 	}
 	if r.Sandbox != sandbox {
-		return nil, sandboxMCPStateIdentityMismatch, fmt.Errorf("%s: sandbox identity %q, want %q", path, r.Sandbox, sandbox)
+		return nil, MCPStateIdentityMismatch, fmt.Errorf("%s: sandbox identity %q, want %q", path, r.Sandbox, sandbox)
 	}
-	return &r, sandboxMCPStateOK, nil
+	return &r, MCPStateOK, nil
 }
 
-// readSandboxMCPReceipt reads the receipt for sandbox under stateDir. It
+// ReadMCPReceipt reads the receipt for sandbox under stateDir. It
 // never creates anything: an absent directory or file is
-// sandboxMCPStateAbsent, not an error. See sandboxMCPStateStatus.Unverifiable
+// MCPStateAbsent, not an error. See MCPStateStatus.Unverifiable
 // for how callers should distinguish "nothing recorded" from "don't trust
 // this".
-func readSandboxMCPReceipt(stateDir, sandbox string) (*sandboxMCPReceipt, sandboxMCPStateStatus, error) {
-	if err := validateSandboxStateName(sandbox); err != nil {
-		return nil, sandboxMCPStateUnreadable, err
+func ReadMCPReceipt(stateDir, sandbox string) (*MCPReceipt, MCPStateStatus, error) {
+	if err := ValidateStateName(sandbox); err != nil {
+		return nil, MCPStateUnreadable, err
 	}
-	dir := filepath.Join(sandboxMCPStateRoot(stateDir), sandbox)
-	return readSandboxMCPReceiptFile(dir, sandbox)
+	dir := filepath.Join(MCPStateRoot(stateDir), sandbox)
+	return ReadMCPReceiptFile(dir, sandbox)
 }
 
-// writeCreateReceipt is the plain-REPLACE create record: fresh CreatedAt
+// WriteCreateReceipt is the plain-REPLACE create record: fresh CreatedAt
 // (now(), UTC RFC3339) and Preloaded (a copy of the requested static-MCP
 // set), Loads reset to none, whatever was on disk discarded. It is the
 // DEGRADED create commit — used only when the pre-create clear could not be
-// proven (clearSandboxMCPReceipt failed), where merging would risk
+// proven (ClearMCPReceipt failed), where merging would risk
 // resurrecting a prior lifetime's loads; the normal path is
-// commitCreateReceipt, which preserves loads recorded since the clear.
+// CommitCreateReceipt, which preserves loads recorded since the clear.
 //
 // now defaults to time.Now when nil (production callers may still pass it
 // explicitly for consistency; tests always inject a fixed clock).
-func writeCreateReceipt(stateDir, sandbox, workspace string, preloaded []string, now func() time.Time) error {
+func WriteCreateReceipt(stateDir, sandbox, Workspace string, preloaded []string, now func() time.Time) error {
 	if now == nil {
 		now = time.Now
 	}
 	return withSandboxMCPStateLock(stateDir, sandbox, func(dir string) error {
-		r := &sandboxMCPReceipt{
-			Schema:    sandboxMCPStateSchema,
+		r := &MCPReceipt{
+			Schema:    MCPStateSchema,
 			Sandbox:   sandbox,
 			CreatedAt: now().UTC().Format(time.RFC3339),
-			Workspace: workspace,
+			Workspace: Workspace,
 			Preloaded: append([]string(nil), preloaded...),
 		}
 		return writeSandboxMCPReceiptFile(dir, r)
 	})
 }
 
-// commitCreateReceipt records creation evidence for a sandbox the caller has
+// CommitCreateReceipt records creation evidence for a sandbox the caller has
 // JUST created (the creation-evidence poll saw it appear): under the
 // per-sandbox lock it writes fresh CreatedAt/Preloaded while PRESERVING the
 // Loads of a VALID receipt already on disk. The caller cleared the receipt
-// (clearSandboxMCPReceipt) before starting the create, so any loads present
+// (ClearMCPReceipt) before starting the create, so any loads present
 // now were appended by a concurrent `pix mcp load` DURING this create
 // window — this lifetime's own evidence, which a plain replace would erase
 // (the lost-update the old post-exit write had). Anything on disk that is
 // not a valid OK receipt (absent, corrupt, wrong schema/identity) is
 // replaced outright: the caller positively owns this lifetime's start, so
 // only its own valid appends may merge.
-func commitCreateReceipt(stateDir, sandbox, workspace string, preloaded []string, now func() time.Time) error {
+func CommitCreateReceipt(stateDir, sandbox, Workspace string, preloaded []string, now func() time.Time) error {
 	if now == nil {
 		now = time.Now
 	}
 	return withSandboxMCPStateLock(stateDir, sandbox, func(dir string) error {
-		fresh := &sandboxMCPReceipt{
-			Schema:    sandboxMCPStateSchema,
+		fresh := &MCPReceipt{
+			Schema:    MCPStateSchema,
 			Sandbox:   sandbox,
 			CreatedAt: now().UTC().Format(time.RFC3339),
-			Workspace: workspace,
+			Workspace: Workspace,
 			Preloaded: append([]string(nil), preloaded...),
 		}
-		if r, status, _ := readSandboxMCPReceiptFile(dir, sandbox); status == sandboxMCPStateOK {
+		if r, status, _ := ReadMCPReceiptFile(dir, sandbox); status == MCPStateOK {
 			fresh.Loads = r.Loads
 		}
 		return writeSandboxMCPReceiptFile(dir, fresh)
 	})
 }
 
-// clearSandboxMCPReceipt removes the receipt file for sandbox under the SAME
+// ClearMCPReceipt removes the receipt file for sandbox under the SAME
 // per-sandbox lock every writer uses, so a clear can never interleave with a
 // concurrent load's read-modify-write. Symlink-safe: the per-sandbox
 // directory is refused if symlinked (withSandboxMCPStateLock), and os.Remove
 // on the receipt file removes a planted symlink itself, never what it points
 // to. A missing directory or file is a clean no-op — clearing an
 // already-empty lifetime is not an error.
-func clearSandboxMCPReceipt(stateDir, sandbox string) error {
-	if err := validateSandboxStateName(sandbox); err != nil {
+func ClearMCPReceipt(stateDir, sandbox string) error {
+	if err := ValidateStateName(sandbox); err != nil {
 		return err
 	}
 	// Don't materialize a state directory just to clear nothing.
-	if _, err := os.Lstat(filepath.Join(sandboxMCPStateRoot(stateDir), sandbox)); err != nil {
+	if _, err := os.Lstat(filepath.Join(MCPStateRoot(stateDir), sandbox)); err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
@@ -471,26 +472,26 @@ func clearSandboxMCPReceipt(stateDir, sandbox string) error {
 	})
 }
 
-// clearRemovedSandboxReceipt clears the receipt for a sandbox the LAUNCHER
+// ClearRemovedReceipt clears the receipt for a sandbox the LAUNCHER
 // ITSELF just successfully removed (`pix rm`, task rm/gc teardown, the
 // --replace pre-remove) — the receipt now describes a dead lifetime. Callers
 // must invoke it ONLY on positive removal success; a failed or unknowable
 // removal retains the receipt (evidence is discarded only on proof). Resolves
-// the state root through the same sandboxMCPStateDirFn seam as the writers.
-func clearRemovedSandboxReceipt(sandbox string) error {
-	dir, err := sandboxMCPStateDirFn()
+// the state root through the same MCPStateDirFn seam as the writers.
+func ClearRemovedReceipt(sandbox string) error {
+	dir, err := MCPStateDirFn()
 	if err != nil {
 		return fmt.Errorf("resolving pix state dir: %w", err)
 	}
-	return clearSandboxMCPReceipt(dir, sandbox)
+	return ClearMCPReceipt(dir, sandbox)
 }
 
-// appendLoadReceipt records a successful `pix mcp load <name>`: called by
+// AppendLoadReceipt records a successful `pix mcp load <name>`: called by
 // the caller only AFTER its own load succeeded. It read-modify-writes under
 // the per-sandbox lock so concurrent loads for the same sandbox never lose an
 // update:
 //
-//   - No receipt yet (sandboxMCPStateAbsent — an old sandbox that predates
+//   - No receipt yet (MCPStateAbsent — an old sandbox that predates
 //     this feature, or one that was never create-receipted): a PARTIAL
 //     receipt is synthesized with no CreatedAt/Preloaded — evidence starts
 //     from what pix could actually observe, never backfilled.
@@ -498,10 +499,10 @@ func clearRemovedSandboxReceipt(sandbox string) error {
 //     present, in which case this is a no-op — the FIRST success timestamp is
 //     preserved, never overwritten by a later reload of the same server.
 //   - A receipt exists but is unverifiable (corrupt/schema/identity mismatch)
-//     or unreadable: appendLoadReceipt FAILS CLOSED rather than silently
+//     or unreadable: AppendLoadReceipt FAILS CLOSED rather than silently
 //     clobbering it — an unverifiable receipt is a signal something is wrong,
 //     not a blank slate to overwrite.
-func appendLoadReceipt(stateDir, sandbox, name string, now func() time.Time) error {
+func AppendLoadReceipt(stateDir, sandbox, name string, now func() time.Time) error {
 	if now == nil {
 		now = time.Now
 	}
@@ -510,12 +511,12 @@ func appendLoadReceipt(stateDir, sandbox, name string, now func() time.Time) err
 		return fmt.Errorf("mcp server name is empty")
 	}
 	return withSandboxMCPStateLock(stateDir, sandbox, func(dir string) error {
-		r, status, err := readSandboxMCPReceiptFile(dir, sandbox)
+		r, status, err := ReadMCPReceiptFile(dir, sandbox)
 		switch status {
-		case sandboxMCPStateOK:
+		case MCPStateOK:
 			// use r as read
-		case sandboxMCPStateAbsent:
-			r = &sandboxMCPReceipt{Schema: sandboxMCPStateSchema, Sandbox: sandbox}
+		case MCPStateAbsent:
+			r = &MCPReceipt{Schema: MCPStateSchema, Sandbox: sandbox}
 		default:
 			return fmt.Errorf("sandbox mcp receipt for %q is unusable (%s): %w", sandbox, status, err)
 		}
@@ -524,7 +525,7 @@ func appendLoadReceipt(stateDir, sandbox, name string, now func() time.Time) err
 				return nil // dedupe: first-success timestamp preserved
 			}
 		}
-		r.Loads = append(r.Loads, sandboxMCPLoadReceipt{Name: name, At: now().UTC().Format(time.RFC3339)})
+		r.Loads = append(r.Loads, MCPLoadReceipt{Name: name, At: now().UTC().Format(time.RFC3339)})
 		return writeSandboxMCPReceiptFile(dir, r)
 	})
 }

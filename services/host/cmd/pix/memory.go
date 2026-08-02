@@ -13,6 +13,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/rpc"
+	"pix/host/workspace"
 )
 
 // runMemory is the `memory` verb tree — the host-side CLI over the memory daemon
@@ -39,7 +40,7 @@ func runMemory(argv []string) {
 	if len(argv) > 0 && !wantsHelp(argv) {
 		ensureServeUp([]string{"memory"}, ensureServeTimeout)
 	}
-	if err := runMemoryCore(argv, loadResolvedConfig, rpc.MemoryClient, os.Stdout); err != nil {
+	if err := runMemoryCore(argv, workspace.LoadResolvedConfig, rpc.MemoryClient, os.Stdout); err != nil {
 		exitFromErr(ctx, err)
 	}
 }

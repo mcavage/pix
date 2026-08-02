@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/workspace"
 )
 
 // doctor_mcp_test.go — S05 doctor MCP truth: registration states per kind,
@@ -135,7 +136,7 @@ func TestMCPRegistrationStates(t *testing.T) {
 }
 
 // receiptEnv builds a fakeEnv whose getwd/stateDir seams point at a real
-// t.TempDir() receipt store for workspace ws (sandbox pix-<base(ws)>).
+// t.TempDir() receipt store for workspace workspace (sandbox pix-<base(workspace)>).
 func receiptEnv(t *testing.T, f fakeEnv, ws string) (shellEnv, string) {
 	t.Helper()
 	stateDir := t.TempDir()
@@ -162,7 +163,7 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 
 	t.Run("preloaded at create -> ready with receipt evidence", func(t *testing.T) {
 		env, stateDir := receiptEnv(t, base, ws)
-		if err := writeCreateReceipt(stateDir, box, "", []string{"slack"}, receiptClock); err != nil {
+		if err := workspace.WriteCreateReceipt(stateDir, box, "", []string{"slack"}, receiptClock); err != nil {
 			t.Fatal(err)
 		}
 		g := mcpGroupWith(cfg, env, regOut, true, true, nil, resolveMCPSandboxContext(env))
@@ -174,10 +175,10 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 
 	t.Run("live load receipt -> ready `loaded by pix`", func(t *testing.T) {
 		env, stateDir := receiptEnv(t, base, ws)
-		if err := writeCreateReceipt(stateDir, box, "", nil, receiptClock); err != nil {
+		if err := workspace.WriteCreateReceipt(stateDir, box, "", nil, receiptClock); err != nil {
 			t.Fatal(err)
 		}
-		if err := appendLoadReceipt(stateDir, box, "slack", receiptClock); err != nil {
+		if err := workspace.AppendLoadReceipt(stateDir, box, "slack", receiptClock); err != nil {
 			t.Fatal(err)
 		}
 		g := mcpGroupWith(cfg, env, regOut, true, true, nil, resolveMCPSandboxContext(env))
@@ -194,7 +195,7 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 		// with status's row todo. (Partial/absent receipts stay unverifiable —
 		// covered below.)
 		env, stateDir := receiptEnv(t, base, ws)
-		if err := writeCreateReceipt(stateDir, box, "", []string{"notion"}, receiptClock); err != nil {
+		if err := workspace.WriteCreateReceipt(stateDir, box, "", []string{"notion"}, receiptClock); err != nil {
 			t.Fatal(err)
 		}
 		g := mcpGroupWith(cfg, env, regOut, true, true, nil, resolveMCPSandboxContext(env))
@@ -255,14 +256,14 @@ func TestMCPAttachmentTodoQuotesWorkspace(t *testing.T) {
 	// The workspace's PARENT segments carry the spaces/apostrophe/shell
 	// metacharacter (the reason the repair command needs quoting); the final
 	// path segment stays a plain sandbox-name-safe token, matching how
-	// deriveSandboxName ("pix-" + the final segment) actually derives a
+	// workspace.DeriveSandboxName ("pix-" + the final segment) actually derives a
 	// sandbox name in production.
 	const ws = "/home/u/my repo's proj; touch pwned/repo"
-	box := deriveSandboxName(ws)
+	box := workspace.DeriveSandboxName(ws)
 	base := mcpFake()
 	base.output["sbx ls"] = box + "  running\n"
 	env, stateDir := receiptEnv(t, base, ws)
-	if err := writeCreateReceipt(stateDir, box, "", []string{"notion"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, box, "", []string{"notion"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	g := mcpGroupWith(cfg, env, "slack\n", true, true, nil, resolveMCPSandboxContext(env))
@@ -291,7 +292,7 @@ func TestMCPAttachmentSurvivesDeregistration(t *testing.T) {
 	base := mcpFake()
 	base.output["sbx ls"] = box + "  running  " + ws + "\n"
 	env, stateDir := receiptEnv(t, base, ws)
-	if err := writeCreateReceipt(stateDir, box, "", []string{"slack"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, box, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	// slack is now DEREGISTERED (the `sbx mcp ls` output lacks it).
@@ -320,7 +321,7 @@ func TestMCPAttachmentSurvivesUnknownRegistration(t *testing.T) {
 	base := mcpFake()
 	base.output["sbx ls"] = box + "  running  " + ws + "\n"
 	env, stateDir := receiptEnv(t, base, ws)
-	if err := writeCreateReceipt(stateDir, box, "", []string{"slack"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, box, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	// mcpOK=false: the registration listing itself failed — unknown, not "no".
@@ -349,7 +350,7 @@ func TestMCPGroupIncludesReceiptOnlyName(t *testing.T) {
 	env, stateDir := receiptEnv(t, base, ws)
 	// The receipt preloaded BOTH slack (current intent) and notion (no longer
 	// configured).
-	if err := writeCreateReceipt(stateDir, box, "", []string{"slack", "notion"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, box, "", []string{"slack", "notion"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	g := mcpGroupWith(cfg, env, "slack\nnotion\n", true, true, nil, resolveMCPSandboxContext(env))
@@ -386,7 +387,7 @@ func TestMCPGroupSwitchedPackKeepsOldIntegrationVisible(t *testing.T) {
 	base := mcpFake()
 	base.output["sbx ls"] = box + "  running  " + ws + "\n"
 	env, stateDir := receiptEnv(t, base, ws)
-	if err := writeCreateReceipt(stateDir, box, "", []string{"acme-remote"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, box, "", []string{"acme-remote"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	newContainers := map[string]packContainer{"newco": {RemoteURL: "https://mcp.newco.example/sse"}}

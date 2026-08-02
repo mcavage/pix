@@ -42,6 +42,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/inference"
+	"pix/host/sys"
 )
 
 // setupModelsOutcome is what the local-models step actually did and proved:
@@ -325,7 +326,7 @@ func writeSetupModelsReceipt(stateDir string, rec setupModelsReceipt) error {
 	if err != nil {
 		return err
 	}
-	return atomicWriteInDir(dir, "models.json", append(b, '\n'), 0o600)
+	return sys.AtomicWriteInDir(dir, "models.json", append(b, '\n'), 0o600)
 }
 
 // receiptSetupModels persists the outcome, best-effort but never silent: a

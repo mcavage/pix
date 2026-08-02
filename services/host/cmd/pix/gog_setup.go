@@ -536,7 +536,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 			docsRollbackErr := restoreMCPRegistration(env, gwDocsCreateServerName, docsSnap)
 			gogRollbackErr := gogSetupRollbackRegistration(env, snap)
 			if docsRollbackErr != nil || gogRollbackErr != nil {
-				return fmt.Errorf("registering create-new-Docs with the sbx gateway: %w; rollback failed (workspace: %v; docs-create: %v)", err, gogRollbackErr, docsRollbackErr)
+				return fmt.Errorf("registering create-new-Docs with the sbx gateway: %w; rollback failed (ws: %v; docs-create: %v)", err, gogRollbackErr, docsRollbackErr)
 			}
 			return fmt.Errorf("registering create-new-Docs with the sbx gateway: %w", err)
 		}
@@ -555,7 +555,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		}
 		gogErr := gogSetupRollbackRegistration(env, snap)
 		if docsErr != nil || gogErr != nil {
-			return fmt.Errorf("saving config: %w; additionally, rollback failed (workspace: %v; docs-create: %v)", err, gogErr, docsErr)
+			return fmt.Errorf("saving config: %w; additionally, rollback failed (ws: %v; docs-create: %v)", err, gogErr, docsErr)
 		}
 		return fmt.Errorf("saving config: %w (gog registration rolled back so config and the gateway stay in sync)", err)
 	}

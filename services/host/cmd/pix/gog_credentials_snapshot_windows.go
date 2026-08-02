@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/sys"
 )
 
 // snapshotGogCredentials safely opens the user-provided OAuth client JSON,
@@ -63,7 +64,7 @@ func snapshotGogCredentials(path string) (string, func(), error) {
 		return "", nil, fmt.Errorf("credentials file too large (max 1MB)")
 	}
 
-	if err := atomicWriteInDir(tmpDir, "credentials.json", data, 0o600); err != nil {
+	if err := sys.AtomicWriteInDir(tmpDir, "credentials.json", data, 0o600); err != nil {
 		cleanup()
 		return "", nil, fmt.Errorf("writing snapshot: %w", err)
 	}

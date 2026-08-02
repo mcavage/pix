@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/workspace"
 )
 
 // runRun implements bare `pix [DIR]` and `pix run ...`. It reads the
@@ -113,12 +114,12 @@ func runRun(argv []string) {
 	// Reconcile any control-plane proposal a prior in-session onboarding wrote
 	// (<workspace>/.pix/onboarding.json): validate it, show the diff, apply
 	// under a [Y/n] gate, register newly-enabled MCP servers, delete the file. This
-	// runs BEFORE loadResolvedConfig so a fresh create picks up the applied config.
+	// runs BEFORE workspace.LoadResolvedConfig so a fresh create picks up the applied config.
 	// Best-effort and non-blocking on a non-TTY (it just leaves the file).
 	reconcileOnboarding(o.Workspace, defaultShellEnv(), os.Stdin, os.Stdout, false, isTTY(os.Stdin))
 
 	// Load the config for the rest of run (kits, mcp, gog, pack). The
-	cfg, _, err := loadResolvedConfig()
+	cfg, _, err := workspace.LoadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix run: %v\n", err)
 		exit(1)
@@ -133,7 +134,7 @@ func runRun(argv []string) {
 	// any create-only input resolution below — a plain re-attach must never fail on
 	// a --dev/checkout or --kit problem it doesn't even need.
 	if o.Name == "" {
-		o.Name = deriveSandboxName(o.Workspace)
+		o.Name = workspace.DeriveSandboxName(o.Workspace)
 	}
 	state := probeTaskSandbox(defaultShellEnv(), o.Name)
 
@@ -415,8 +416,8 @@ func runRun(argv []string) {
 	// fresh create receipt over the existing lifetime), record the
 	// create receipt ONLY after this exact `sbx run` exec has itself succeeded
 	// — never before, never on failure, never on reattach.
-	if err := execSbxRunAndRecordCreate(cmd, definitelyCreating(state, o.Replace), o.Name, canonicalWorkspacePath(o.Workspace), o.StaticMCP); err != nil {
-		var rerr *receiptRecordError
+	if err := execSbxRunAndRecordCreate(cmd, definitelyCreating(state, o.Replace), o.Name, workspace.CanonicalPath(o.Workspace), o.StaticMCP); err != nil {
+		var rerr *workspace.ReceiptRecordError
 		if errors.As(err, &rerr) {
 			// The sandbox itself WAS created successfully — only the local
 			// receipt failed. Say so honestly rather than implying the launch
@@ -512,21 +513,21 @@ func sandboxAppeared(st sbxState) bool { return st == sbxRunning || st == sbxSto
 // load` appended during the create window; merge=false (the clear could not
 // be proven) replaces outright so a prior lifetime's loads can never survive.
 // workspace is the CANONICAL workspace path the create was for
-// (canonicalWorkspacePath) — the receipt's workspace->sandbox identity that
-// resolveWorkspaceSandbox reads back for custom-named sandboxes.
-func recordCreateReceipt(sandbox, workspace string, preloaded []string, merge bool) error {
-	dir, err := sandboxMCPStateDirFn()
+// (workspace.CanonicalPath) — the receipt's workspace->sandbox identity that
+// workspace.ResolveSandbox reads back for custom-named sandboxes.
+func recordCreateReceipt(sandbox, ws string, preloaded []string, merge bool) error {
+	dir, err := workspace.MCPStateDirFn()
 	if err != nil {
-		return &receiptRecordError{op: "create", sandbox: sandbox, err: fmt.Errorf("resolving pix state dir: %w", err)}
+		return &workspace.ReceiptRecordError{Op: "create", Sandbox: sandbox, Err: fmt.Errorf("resolving pix state dir: %w", err)}
 	}
 	var werr error
 	if merge {
-		werr = commitCreateReceipt(dir, sandbox, workspace, preloaded, nil)
+		werr = workspace.CommitCreateReceipt(dir, sandbox, ws, preloaded, nil)
 	} else {
-		werr = writeCreateReceipt(dir, sandbox, workspace, preloaded, nil)
+		werr = workspace.WriteCreateReceipt(dir, sandbox, ws, preloaded, nil)
 	}
 	if werr != nil {
-		return &receiptRecordError{op: "create", sandbox: sandbox, err: werr}
+		return &workspace.ReceiptRecordError{Op: "create", Sandbox: sandbox, Err: werr}
 	}
 	return nil
 }
@@ -551,12 +552,12 @@ func recordCreateReceipt(sandbox, workspace string, preloaded []string, merge bo
 // records — evidence found at exit is evidence). If the receipt cannot be
 // recorded after the sandbox positively appeared (or the poll timed out with
 // the session still running), the session is still waited to completion and
-// the failure surfaces as *receiptRecordError — the caller reports
+// the failure surfaces as *workspace.ReceiptRecordError — the caller reports
 // "launched/attached, but state unrecorded" and exits non-zero, never a
 // silent success and never confused with a launch failure. The Wait goroutine
 // always terminates when the process exits and its result is always drained
 // — no goroutine leaks on any path.
-func execSbxRunAndRecordCreate(cmd *exec.Cmd, writeReceipt bool, sandbox, workspace string, preloaded []string) error {
+func execSbxRunAndRecordCreate(cmd *exec.Cmd, writeReceipt bool, sandbox, ws string, preloaded []string) error {
 	if !writeReceipt {
 		return cmd.Run()
 	}
@@ -568,8 +569,8 @@ func execSbxRunAndRecordCreate(cmd *exec.Cmd, writeReceipt bool, sandbox, worksp
 	// appended after this point; an unproven clear degrades to a plain
 	// replace, which cannot resurrect old loads.
 	merge := false
-	if stateDir, err := sandboxMCPStateDirFn(); err == nil {
-		if err := clearSandboxMCPReceipt(stateDir, sandbox); err == nil {
+	if stateDir, err := workspace.MCPStateDirFn(); err == nil {
+		if err := workspace.ClearMCPReceipt(stateDir, sandbox); err == nil {
 			merge = true
 		}
 	}
@@ -587,12 +588,12 @@ func execSbxRunAndRecordCreate(cmd *exec.Cmd, writeReceipt bool, sandbox, worksp
 poll:
 	for {
 		if sandboxAppeared(sandboxAppearProbeFn(sandbox)) {
-			recErr = recordCreateReceipt(sandbox, workspace, preloaded, merge)
+			recErr = recordCreateReceipt(sandbox, ws, preloaded, merge)
 			break poll
 		}
 		if time.Now().After(deadline) {
-			recErr = &receiptRecordError{op: "create", sandbox: sandbox,
-				err: fmt.Errorf("timed out after %s waiting for the sandbox to appear in `sbx ls`; its preloaded MCP set was not recorded", sandboxAppearPollTimeout)}
+			recErr = &workspace.ReceiptRecordError{Op: "create", Sandbox: sandbox,
+				Err: fmt.Errorf("timed out after %s waiting for the sandbox to appear in `sbx ls`; its preloaded MCP set was not recorded", sandboxAppearPollTimeout)}
 			break poll
 		}
 		select {
@@ -605,7 +606,7 @@ poll:
 				return werr
 			}
 			if sandboxAppeared(sandboxAppearProbeFn(sandbox)) {
-				return recordCreateReceipt(sandbox, workspace, preloaded, merge)
+				return recordCreateReceipt(sandbox, ws, preloaded, merge)
 			}
 			return nil
 		case <-ticker.C:
@@ -636,7 +637,7 @@ func applyReplaceRm(env shellEnv, plan runLaunchPlan, name string) error {
 	// The launcher itself removed this sandbox, so its MCP receipt describes a
 	// dead lifetime — clear it (E). Best-effort with a warning: the pre-create
 	// clear in execSbxRunAndRecordCreate is the correctness backstop.
-	if err := clearRemovedSandboxReceipt(name); err != nil {
+	if err := workspace.ClearRemovedReceipt(name); err != nil {
 		fmt.Fprintf(os.Stderr, "pix: warning: removed sandbox %q but could not clear its mcp receipt: %v\n", name, err)
 	}
 	return nil
@@ -647,30 +648,30 @@ func applyReplaceRm(env shellEnv, plan runLaunchPlan, name string) error {
 // create (removed when created pack-less), never on a re-attach, so a later
 // re-attach compares create-time truth against the CURRENT active pack instead
 // of guessing from the active pack alone.
-func sandboxPackMarkerPath(workspace string) string {
-	return filepath.Join(workspace, ".pix", "sandbox.pack")
+func sandboxPackMarkerPath(ws string) string {
+	return filepath.Join(ws, ".pix", "sandbox.pack")
 }
 
 // writeSandboxPackMarker records the pack root a sandbox is being created with
 // (or removes the marker when creating pack-less). Best-effort: a failed write
 // only costs a future stale-pack reminder, never the launch. Symlink-safe via
-// writeWorkspaceStateFile (a cloned repo can ship .pix/sandbox.pack as a
-// tracked symlink) and removeWorkspaceStateFile (a cloned repo can ship
+// workspace.WriteStateFile (a cloned repo can ship .pix/sandbox.pack as a
+// tracked symlink) and workspace.RemoveStateFile (a cloned repo can ship
 // .pix ITSELF as a symlink to another repo's .pix, which a plain
 // os.Remove would traverse and delete through).
-func writeSandboxPackMarker(workspace, packRoot string) {
+func writeSandboxPackMarker(ws, packRoot string) {
 	if strings.TrimSpace(packRoot) == "" {
-		_ = removeWorkspaceStateFile(workspace, "sandbox.pack")
+		_ = workspace.RemoveStateFile(ws, "sandbox.pack")
 		return
 	}
-	_ = writeWorkspaceStateFile(workspace, "sandbox.pack", []byte(canonicalizePackRoot(packRoot)+"\n"), 0o644)
+	_ = workspace.WriteStateFile(ws, "sandbox.pack", []byte(canonicalizePackRoot(packRoot)+"\n"), 0o644)
 }
 
 // readSandboxPackMarker returns the create-time pack root recorded for this
 // workspace's sandbox, or "" when no marker exists (a sandbox created before
 // markers existed, or created pack-less).
-func readSandboxPackMarker(workspace string) string {
-	b, err := os.ReadFile(sandboxPackMarkerPath(workspace))
+func readSandboxPackMarker(ws string) string {
+	b, err := os.ReadFile(sandboxPackMarkerPath(ws))
 	if err != nil {
 		return ""
 	}
@@ -747,19 +748,19 @@ func desiredMCPUniverse(cfg *config.Config, o runOpts) []string {
 // shellQuoteArg (closure finding #3) — a server name is ordinarily a plain
 // token, but quoting it too costs nothing and keeps every generated
 // copy-paste command uniformly safe.
-func mcpLoadCommand(name, workspace string) string {
-	if workspace == "" || workspace == "." {
+func mcpLoadCommand(name, ws string) string {
+	if ws == "" || ws == "." {
 		return "pix mcp load " + shellQuoteArg(name)
 	}
-	return "pix mcp load " + shellQuoteArg(name) + " " + shellQuoteArg(workspace)
+	return "pix mcp load " + shellQuoteArg(name) + " " + shellQuoteArg(ws)
 }
 
 // mcpLoadHints joins one mcpLoadCommand per name (mcp load only ever attaches
 // one server at a time, so N missing names need N commands).
-func mcpLoadHints(names []string, workspace string) string {
+func mcpLoadHints(names []string, ws string) string {
 	cmds := make([]string, 0, len(names))
 	for _, n := range names {
-		cmds = append(cmds, mcpLoadCommand(n, workspace))
+		cmds = append(cmds, mcpLoadCommand(n, ws))
 	}
 	return strings.Join(cmds, "; ")
 }
@@ -789,17 +790,17 @@ func mcpReattachWarning(cfg *config.Config, o runOpts, reattaching bool) string 
 	if len(desired) == 0 {
 		return ""
 	}
-	stateDir, err := sandboxMCPStateDirFn()
+	stateDir, err := workspace.MCPStateDirFn()
 	if err != nil {
 		return fmt.Sprintf("pix: re-attaching without --replace: could not resolve local state (%v), so attachment for %s cannot be verified. Attach live: %s. Or recreate with current context: %s",
 			err, strings.Join(desired, ", "), mcpLoadHints(desired, o.Workspace), runReplaceCommand(o.Workspace))
 	}
-	receipt, rstatus, _ := readSandboxMCPReceipt(stateDir, o.Name)
+	receipt, rstatus, _ := workspace.ReadMCPReceipt(stateDir, o.Name)
 	if rstatus.Unverifiable() {
 		return fmt.Sprintf("pix: re-attaching without --replace: this sandbox's MCP receipt is %s, so attachment for %s cannot be verified. Attach live: %s. Or recreate with current context: %s",
 			rstatus.String(), strings.Join(desired, ", "), mcpLoadHints(desired, o.Workspace), runReplaceCommand(o.Workspace))
 	}
-	if rstatus == sandboxMCPStateAbsent {
+	if rstatus == workspace.MCPStateAbsent {
 		return fmt.Sprintf("pix: re-attaching without --replace: no MCP receipt for this sandbox, so attachment for %s cannot be verified. Attach live: %s. Or recreate with current context: %s",
 			strings.Join(desired, ", "), mcpLoadHints(desired, o.Workspace), runReplaceCommand(o.Workspace))
 	}
@@ -825,11 +826,11 @@ func mcpReattachWarning(cfg *config.Config, o runOpts, reattaching bool) string 
 // cwd derives, which can be a completely different sandbox than the one that
 // just failed to reattach or is carrying a stale pack. Printing the wrong
 // recovery command is worse than a slightly longer one.
-func runReplaceCommand(workspace string) string {
-	if workspace == "" || workspace == "." {
+func runReplaceCommand(ws string) string {
+	if ws == "" || ws == "." {
 		return "pix run --replace"
 	}
-	return "pix run " + shellQuoteArg(workspace) + " --replace"
+	return "pix run " + shellQuoteArg(ws) + " --replace"
 }
 
 // modelProviders are the model-provider secret keys a pi session needs at least
@@ -1101,8 +1102,8 @@ type knowledgeRPC struct {
 //   - Scope file: write <workspace>/.pix/knowledge.scope, one canonical id
 //     per line, so the in-VM recall (U6) forwards it as the `bundles` filter.
 //     With no bundles at all, any stale scope file is removed (recall = all/none).
-func wireKnowledgeScope(cfg *config.Config, workspace string, rpc knowledgeRPC) {
-	project := projectBundle(workspace) // canonical id, or ""
+func wireKnowledgeScope(cfg *config.Config, ws string, rpc knowledgeRPC) {
+	project := projectBundle(ws) // canonical id, or ""
 
 	var ids []string
 	seen := map[string]bool{}
@@ -1140,10 +1141,10 @@ func wireKnowledgeScope(cfg *config.Config, workspace string, rpc knowledgeRPC) 
 	// Remove any stale scope file from a previous run (when bundles were wired)
 	// so the in-VM recall stops forwarding dead bundle ids. Best-effort.
 	if len(ids) == 0 {
-		_ = removeWorkspaceStateFile(workspace, "knowledge.scope")
+		_ = workspace.RemoveStateFile(ws, "knowledge.scope")
 		return
 	}
-	_ = writeKnowledgeScope(workspace, ids)
+	_ = writeKnowledgeScope(ws, ids)
 }
 
 // projectBundle reads <workspace>/.pix/knowledge and resolves it to a
@@ -1151,8 +1152,8 @@ func wireKnowledgeScope(cfg *config.Config, workspace string, rpc knowledgeRPC) 
 // as `use`), an absolute path is used as-is, and a relative path is taken
 // relative to the workspace. Returns "" when there is no pointer or it can't be
 // resolved (non-fatal: the workspace just has no project bundle this run).
-func projectBundle(workspace string) string {
-	line := readProjectPointer(workspace)
+func projectBundle(ws string) string {
+	line := readProjectPointer(ws)
 	if line == "" {
 		return ""
 	}
@@ -1167,7 +1168,7 @@ func projectBundle(workspace string) string {
 	case filepath.IsAbs(line):
 		local = line
 	default:
-		local = filepath.Join(workspace, line)
+		local = filepath.Join(ws, line)
 	}
 	return canonicalizeKnowledgeBundle(local)
 }
@@ -1177,22 +1178,22 @@ func projectBundle(workspace string) string {
 // router's local option). Configured on the host with `pix config set
 // ollama_bridge_model`; the bridge reads it (env var still overrides). Per-run,
 // gitignored, best-effort — an absent file just means the bridge uses its default.
-// Symlink-safe via writeWorkspaceStateFile.
-func writeOllamaBridgeFile(workspace, model string) {
+// Symlink-safe via workspace.WriteStateFile.
+func writeOllamaBridgeFile(ws, model string) {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		model = config.DefaultOllamaBridgeModel
 	}
-	_ = writeWorkspaceStateFile(workspace, "ollama-bridge.model", []byte(model+"\n"), 0o644)
+	_ = workspace.WriteStateFile(ws, "ollama-bridge.model", []byte(model+"\n"), 0o644)
 }
 
 // writeKnowledgeScope writes <workspace>/.pix/knowledge.scope: one canonical
 // bundle id per line, trailing newline. This is the launcher-generated,
 // per-run, gitignored file the recall extension reads (the committed pointer is
-// .pix/knowledge). Symlink-safe via writeWorkspaceStateFile.
-func writeKnowledgeScope(workspace string, ids []string) error {
+// .pix/knowledge). Symlink-safe via workspace.WriteStateFile.
+func writeKnowledgeScope(ws string, ids []string) error {
 	content := strings.Join(ids, "\n") + "\n"
-	return writeWorkspaceStateFile(workspace, "knowledge.scope", []byte(content), 0o644)
+	return workspace.WriteStateFile(ws, "knowledge.scope", []byte(content), 0o644)
 }
 
 // defaultKnowledgeRPC wires the real, short-timeout HTTP JSON-RPC client for the
@@ -1270,20 +1271,6 @@ func toStringSlice(v any) []string {
 		return out
 	}
 	return nil
-}
-
-// deriveSandboxName mirrors sbx's default `pix-<workspace-basename>` so the
-// launcher owns (and can recreate) the same sandbox sbx would auto-name.
-func deriveSandboxName(ws string) string {
-	abs, err := filepath.Abs(ws)
-	if err != nil {
-		abs = ws
-	}
-	base := filepath.Base(abs)
-	if base == "" || base == "." || base == string(filepath.Separator) {
-		base = "workspace"
-	}
-	return "pix-" + base
 }
 
 // The tri-state sandbox probe (running/stopped/absent/unknown) that drives the

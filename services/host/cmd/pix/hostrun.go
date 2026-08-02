@@ -13,6 +13,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/rpc"
+	"pix/host/workspace"
 )
 
 // runHost implements `pix host` — the UNSANDBOXED escape hatch that execs
@@ -113,7 +114,7 @@ three of pix's safety properties at once:
   - real credentials: any key in the session env is the real key
 
 pi has no built-in permission prompts and no built-in sandbox. The host-mode
-guardrails (guard extension, workspace checks, disabled subagents) reduce
+guardrails (guard extension, ws checks, disabled subagents) reduce
 accidents — they are NOT a security boundary. For anything you wouldn't hand a
 shell to, use ` + "`pix run`" + ` (the sandbox).
 
@@ -470,7 +471,7 @@ var hostSecretDirs = []string{
 	filepath.Join(".config", "gh"),
 }
 
-// resolveHostWorkspace canonicalizes ws (Abs + EvalSymlinks — a
+// resolveHostWorkspace canonicalizes workspace (Abs + EvalSymlinks — a
 // /tmp/link-to-home symlink must NOT defeat the check) and validates it against
 // the host-mode refusal list. It returns the resolved real path.
 func resolveHostWorkspace(ws string) (string, error) {
@@ -480,7 +481,7 @@ func resolveHostWorkspace(ws string) (string, error) {
 	}
 	real, err := filepath.EvalSymlinks(abs)
 	if err != nil {
-		return "", fmt.Errorf("cannot resolve workspace %q: %w", ws, err)
+		return "", fmt.Errorf("cannot resolve ws %q: %w", ws, err)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -499,7 +500,7 @@ func resolveHostWorkspace(ws string) (string, error) {
 // Pure given (real, home) so tests can drive it hermetically.
 func validateHostWorkspace(real, home string) error {
 	if real == "/" {
-		return fmt.Errorf("refusing to run host mode with the workspace at / — pick a project directory")
+		return fmt.Errorf("refusing to run host mode with the ws at / — pick a project directory")
 	}
 	etc := "/etc"
 	if real == etc || strings.HasPrefix(real, etc+string(filepath.Separator)) {
@@ -511,7 +512,7 @@ func validateHostWorkspace(real, home string) error {
 			home = h
 		}
 		if real == home {
-			return fmt.Errorf("refusing to run host mode with the workspace at your home directory — pick a project directory")
+			return fmt.Errorf("refusing to run host mode with the ws at your home directory — pick a project directory")
 		}
 		for _, s := range hostSecretDirs {
 			sd := filepath.Join(home, s)
@@ -674,7 +675,7 @@ func runHostLaunch(o hostOpts) {
 	// Shared launcher machinery: profile resolution (skill/memory/knowledge
 	// scoping — the sandbox-name half is meaningless here), knowledge scope, and
 	// the per-run profile file. All best-effort, exactly like run.go.
-	cfg, _, err := loadResolvedConfig()
+	cfg, _, err := workspace.LoadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix host: %v\n", err)
 		os.Exit(1)

@@ -1,16 +1,17 @@
-package main
+package workspace
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/sys"
 	"runtime"
 	"testing"
 )
 
-// requireSymlink creates a symlink or skips the test where symlinks are
+// RequireSymlink creates a symlink or skips the test where symlinks are
 // unavailable (Windows without developer mode).
-func requireSymlink(t *testing.T, oldname, newname string) {
+func RequireSymlink(t *testing.T, oldname, newname string) {
 	t.Helper()
 	if err := os.Symlink(oldname, newname); err != nil {
 		if runtime.GOOS == "windows" {
@@ -24,8 +25,8 @@ func requireSymlink(t *testing.T, oldname, newname string) {
 // the file round-trips with the requested permissions.
 func TestWriteWorkspaceStateFileNormal(t *testing.T) {
 	ws := t.TempDir()
-	if err := writeWorkspaceStateFile(ws, "profile", []byte("work\n"), 0o644); err != nil {
-		t.Fatalf("writeWorkspaceStateFile: %v", err)
+	if err := WriteStateFile(ws, "profile", []byte("work\n"), 0o644); err != nil {
+		t.Fatalf("WriteStateFile: %v", err)
 	}
 	dest := filepath.Join(ws, ".pix", "profile")
 	b, err := os.ReadFile(dest)
@@ -45,7 +46,7 @@ func TestWriteWorkspaceStateFileNormal(t *testing.T) {
 		}
 	}
 	// Overwrite of an existing regular file works too (temp+rename path).
-	if err := writeWorkspaceStateFile(ws, "profile", []byte("personal\n"), 0o644); err != nil {
+	if err := WriteStateFile(ws, "profile", []byte("personal\n"), 0o644); err != nil {
 		t.Fatalf("second write: %v", err)
 	}
 	if b, _ := os.ReadFile(dest); string(b) != "personal\n" {
@@ -68,10 +69,10 @@ func TestWriteWorkspaceStateFileSymlinkedDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 	dest := filepath.Join(stateDir, "profile")
-	requireSymlink(t, target, dest)
+	RequireSymlink(t, target, dest)
 
-	if err := writeWorkspaceStateFile(ws, "profile", []byte("work\n"), 0o644); err != nil {
-		t.Fatalf("writeWorkspaceStateFile over symlinked dest: %v", err)
+	if err := WriteStateFile(ws, "profile", []byte("work\n"), 0o644); err != nil {
+		t.Fatalf("WriteStateFile over symlinked dest: %v", err)
 	}
 	// The symlink target must be untouched — os.WriteFile would have
 	// truncated it; the temp+rename must not.
@@ -101,10 +102,10 @@ func TestWriteWorkspaceStateFileSymlinkedDir(t *testing.T) {
 	if err := os.WriteFile(existing, []byte(secret), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	requireSymlink(t, target, filepath.Join(ws, ".pix"))
+	RequireSymlink(t, target, filepath.Join(ws, ".pix"))
 
-	if err := writeWorkspaceStateFile(ws, "profile", []byte("work\n"), 0o644); err == nil {
-		t.Fatal("writeWorkspaceStateFile through a symlinked .pix dir: want error, got nil")
+	if err := WriteStateFile(ws, "profile", []byte("work\n"), 0o644); err == nil {
+		t.Fatal("WriteStateFile through a symlinked .pix dir: want error, got nil")
 	}
 	// The target dir must be untouched: the existing file keeps its bytes and
 	// nothing new (file or leftover temp) was created inside it.
@@ -124,46 +125,10 @@ func TestWriteWorkspaceStateFileSymlinkedDir(t *testing.T) {
 	}
 }
 
-// End-to-end through a real caller: writeMemoryScope must not truncate the
-// target of a symlinked .pix/profile (the launcher-write clobber).
-func TestWriteMemoryScopeSymlinkSafe(t *testing.T) {
-	ws := t.TempDir()
-	stateDir := filepath.Join(ws, ".pix")
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(t.TempDir(), "victim")
-	const secret = "do not clobber\n"
-	if err := os.WriteFile(target, []byte(secret), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	requireSymlink(t, target, filepath.Join(stateDir, "profile"))
-
-	// Needs an EXPLICIT memory_scope to write at all (a bare name no longer scopes).
-	writeMemoryScope(ws, &packInfo{Manifest: packManifest{Name: "acme", MemoryScope: "acme"}})
-
-	if b, err := os.ReadFile(target); err != nil || string(b) != secret {
-		t.Fatalf("writeMemoryScope followed the symlink: target = %q (err %v), want %q", b, err, secret)
-	}
-	if b, _ := os.ReadFile(filepath.Join(stateDir, "profile")); string(b) != "acme\n" {
-		t.Fatalf("profile = %q, want %q", b, "acme\n")
-	}
-}
-
-// End-to-end through an error-returning caller: writeKnowledgeScope refuses a
-// symlinked .pix dir instead of writing through it.
-func TestWriteKnowledgeScopeSymlinkedDirRefused(t *testing.T) {
-	ws := t.TempDir()
-	requireSymlink(t, t.TempDir(), filepath.Join(ws, ".pix"))
-	if err := writeKnowledgeScope(ws, []string{"/some/bundle"}); err == nil {
-		t.Fatal("writeKnowledgeScope through a symlinked .pix dir: want error, got nil")
-	}
-}
-
 // A .pix that is a SYMLINK to another repo's .pix must be refused
-// outright: removeWorkspaceStateFile must not traverse the symlinked parent
+// outright: RemoveStateFile must not traverse the symlinked parent
 // to delete the TARGET repo's profile/knowledge.scope/sandbox.pack, which a
-// plain os.Remove(filepath.Join(workspace, ".pix", name)) would do (it
+// plain os.Remove(filepath.Join(Workspace, ".pix", name)) would do (it
 // only refuses to follow a symlinked *destination file*, not a symlinked
 // *parent directory*).
 func TestRemoveWorkspaceStateFileSymlinkedDirRefused(t *testing.T) {
@@ -179,11 +144,11 @@ func TestRemoveWorkspaceStateFileSymlinkedDirRefused(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	requireSymlink(t, target, filepath.Join(ws, ".pix"))
+	RequireSymlink(t, target, filepath.Join(ws, ".pix"))
 
 	for name := range victims {
-		if err := removeWorkspaceStateFile(ws, name); err == nil {
-			t.Fatalf("removeWorkspaceStateFile(%q) through a symlinked .pix dir: want error, got nil", name)
+		if err := RemoveStateFile(ws, name); err == nil {
+			t.Fatalf("RemoveStateFile(%q) through a symlinked .pix dir: want error, got nil", name)
 		}
 	}
 
@@ -199,7 +164,7 @@ func TestRemoveWorkspaceStateFileSymlinkedDirRefused(t *testing.T) {
 	}
 }
 
-// A normal (real) .pix dir: removeWorkspaceStateFile actually removes
+// A normal (real) .pix dir: RemoveStateFile actually removes
 // the file, and a missing file is a clean no-op (not an error).
 func TestRemoveWorkspaceStateFileNormal(t *testing.T) {
 	ws := t.TempDir()
@@ -212,8 +177,8 @@ func TestRemoveWorkspaceStateFileNormal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := removeWorkspaceStateFile(ws, "profile"); err != nil {
-		t.Fatalf("removeWorkspaceStateFile: %v", err)
+	if err := RemoveStateFile(ws, "profile"); err != nil {
+		t.Fatalf("RemoveStateFile: %v", err)
 	}
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {
 		t.Fatalf("profile still present after removal (err=%v)", err)
@@ -221,11 +186,11 @@ func TestRemoveWorkspaceStateFileNormal(t *testing.T) {
 
 	// Removing an already-absent file (or an absent .pix dir entirely)
 	// is a no-op, not an error.
-	if err := removeWorkspaceStateFile(ws, "profile"); err != nil {
-		t.Fatalf("removeWorkspaceStateFile on already-absent file: %v", err)
+	if err := RemoveStateFile(ws, "profile"); err != nil {
+		t.Fatalf("RemoveStateFile on already-absent file: %v", err)
 	}
-	if err := removeWorkspaceStateFile(t.TempDir(), "profile"); err != nil {
-		t.Fatalf("removeWorkspaceStateFile with no .pix dir at all: %v", err)
+	if err := RemoveStateFile(t.TempDir(), "profile"); err != nil {
+		t.Fatalf("RemoveStateFile with no .pix dir at all: %v", err)
 	}
 }
 
@@ -236,7 +201,7 @@ func TestAtomicWriteInDir_AppliesRequestedMode(t *testing.T) {
 	dir := t.TempDir()
 	for _, perm := range []os.FileMode{0o600, 0o644} {
 		name := fmt.Sprintf("f-%o.txt", perm)
-		if err := atomicWriteInDir(dir, name, []byte("data"), perm); err != nil {
+		if err := sys.AtomicWriteInDir(dir, name, []byte("data"), perm); err != nil {
 			t.Fatal(err)
 		}
 		fi, err := os.Stat(filepath.Join(dir, name))

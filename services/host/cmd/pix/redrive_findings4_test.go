@@ -29,15 +29,16 @@ import (
 
 	"pix/host/config"
 	"pix/host/sys/systest"
+	"pix/host/workspace"
 )
 
 // --- finding 1: the hardened workspace->sandbox resolver ---------------------
 
 // mustCreateReceipt writes a full create receipt for sandbox with the given
 // canonical workspace, via the production writer.
-func mustCreateReceipt(t *testing.T, stateDir, sandbox, workspace string, preloaded []string) {
+func mustCreateReceipt(t *testing.T, stateDir, sandbox, ws string, preloaded []string) {
 	t.Helper()
-	if err := writeCreateReceipt(stateDir, sandbox, workspace, preloaded, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, sandbox, ws, preloaded, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -45,11 +46,11 @@ func mustCreateReceipt(t *testing.T, stateDir, sandbox, workspace string, preloa
 func TestResolveWorkspaceSandbox_CustomNameMapping(t *testing.T) {
 	stateDir := t.TempDir()
 	ws := t.TempDir() // a REAL dir so canonicalization is exact
-	canon := canonicalWorkspacePath(ws)
+	canon := workspace.CanonicalPath(ws)
 	mustCreateReceipt(t, stateDir, "pix-demo", canon, []string{"slack"})
 
-	res := resolveWorkspaceSandbox(stateDir, ws)
-	if res.Outcome != workspaceSandboxMapped || res.Sandbox != "pix-demo" {
+	res := workspace.ResolveSandbox(stateDir, ws)
+	if res.Outcome != workspace.SandboxMapped || res.Sandbox != "pix-demo" {
 		t.Fatalf("resolution = %+v, want mapped -> pix-demo", res)
 	}
 }
@@ -62,19 +63,19 @@ func TestResolveWorkspaceSandbox_NoMappingFallsBackToDerived(t *testing.T) {
 	}
 
 	t.Run("empty store", func(t *testing.T) {
-		res := resolveWorkspaceSandbox(stateDir, ws)
-		if res.Outcome != workspaceSandboxDefault || res.Sandbox != deriveSandboxName(ws) {
-			t.Fatalf("resolution = %+v, want default -> %s", res, deriveSandboxName(ws))
+		res := workspace.ResolveSandbox(stateDir, ws)
+		if res.Outcome != workspace.SandboxDefault || res.Sandbox != workspace.DeriveSandboxName(ws) {
+			t.Fatalf("resolution = %+v, want default -> %s", res, workspace.DeriveSandboxName(ws))
 		}
 	})
 
-	t.Run("old sandbox: receipt without a workspace field", func(t *testing.T) {
+	t.Run("old sandbox: receipt without a ws field", func(t *testing.T) {
 		// A receipt written before the Workspace field (or by an older
 		// binary) maps nothing — the clean fallback is the derived name.
-		mustCreateReceipt(t, stateDir, deriveSandboxName(ws), "", []string{"slack"})
-		res := resolveWorkspaceSandbox(stateDir, ws)
-		if res.Outcome != workspaceSandboxDefault || res.Sandbox != deriveSandboxName(ws) {
-			t.Fatalf("resolution = %+v, want default -> %s", res, deriveSandboxName(ws))
+		mustCreateReceipt(t, stateDir, workspace.DeriveSandboxName(ws), "", []string{"slack"})
+		res := workspace.ResolveSandbox(stateDir, ws)
+		if res.Outcome != workspace.SandboxDefault || res.Sandbox != workspace.DeriveSandboxName(ws) {
+			t.Fatalf("resolution = %+v, want default -> %s", res, workspace.DeriveSandboxName(ws))
 		}
 	})
 }
@@ -82,7 +83,7 @@ func TestResolveWorkspaceSandbox_NoMappingFallsBackToDerived(t *testing.T) {
 func TestResolveWorkspaceSandbox_PathCanonicalization(t *testing.T) {
 	stateDir := t.TempDir()
 	ws := t.TempDir()
-	canon := canonicalWorkspacePath(ws)
+	canon := workspace.CanonicalPath(ws)
 	mustCreateReceipt(t, stateDir, "pix-demo", canon, nil)
 
 	// Every non-canonical spelling of the same directory must resolve to the
@@ -93,8 +94,8 @@ func TestResolveWorkspaceSandbox_PathCanonicalization(t *testing.T) {
 		filepath.Join(ws, "."),
 		filepath.Join(ws, "..", base),
 	} {
-		res := resolveWorkspaceSandbox(stateDir, spelling)
-		if res.Outcome != workspaceSandboxMapped || res.Sandbox != "pix-demo" {
+		res := workspace.ResolveSandbox(stateDir, spelling)
+		if res.Outcome != workspace.SandboxMapped || res.Sandbox != "pix-demo" {
 			t.Errorf("spelling %q: resolution = %+v, want mapped -> pix-demo", spelling, res)
 		}
 	}
@@ -103,12 +104,12 @@ func TestResolveWorkspaceSandbox_PathCanonicalization(t *testing.T) {
 func TestResolveWorkspaceSandbox_AmbiguousRefuses(t *testing.T) {
 	stateDir := t.TempDir()
 	ws := t.TempDir()
-	canon := canonicalWorkspacePath(ws)
+	canon := workspace.CanonicalPath(ws)
 	mustCreateReceipt(t, stateDir, "pix-a", canon, nil)
 	mustCreateReceipt(t, stateDir, "pix-b", canon, nil)
 
-	res := resolveWorkspaceSandbox(stateDir, ws)
-	if res.Outcome != workspaceSandboxAmbiguous {
+	res := workspace.ResolveSandbox(stateDir, ws)
+	if res.Outcome != workspace.SandboxAmbiguous {
 		t.Fatalf("resolution = %+v, want ambiguous", res)
 	}
 	if res.Sandbox != "" {
@@ -118,7 +119,7 @@ func TestResolveWorkspaceSandbox_AmbiguousRefuses(t *testing.T) {
 
 func TestResolveWorkspaceSandbox_TamperedStoreRefuses(t *testing.T) {
 	ws := t.TempDir()
-	canon := canonicalWorkspacePath(ws)
+	canon := workspace.CanonicalPath(ws)
 
 	writeRaw := func(t *testing.T, stateDir, box, contents string) {
 		t.Helper()
@@ -138,8 +139,8 @@ func TestResolveWorkspaceSandbox_TamperedStoreRefuses(t *testing.T) {
 		// presence must poison the "no mapping" conclusion too.
 		writeRaw(t, stateDir, "pix-demo",
 			`{"schema":1,"sandbox":"pix-other","workspace":`+jsonStr(canon)+`}`)
-		res := resolveWorkspaceSandbox(stateDir, ws)
-		if res.Outcome != workspaceSandboxUntrusted || res.Sandbox != "" {
+		res := workspace.ResolveSandbox(stateDir, ws)
+		if res.Outcome != workspace.WorkspaceSandboxUntrusted || res.Sandbox != "" {
 			t.Fatalf("resolution = %+v, want untrusted with no target", res)
 		}
 	})
@@ -150,8 +151,8 @@ func TestResolveWorkspaceSandbox_TamperedStoreRefuses(t *testing.T) {
 		// BE the competing mapping — untrusted, never "unique".
 		mustCreateReceipt(t, stateDir, "pix-demo", canon, nil)
 		writeRaw(t, stateDir, "pix-unrelated", "not json{")
-		res := resolveWorkspaceSandbox(stateDir, ws)
-		if res.Outcome != workspaceSandboxUntrusted || res.Sandbox != "" {
+		res := workspace.ResolveSandbox(stateDir, ws)
+		if res.Outcome != workspace.WorkspaceSandboxUntrusted || res.Sandbox != "" {
 			t.Fatalf("resolution = %+v, want untrusted with no target", res)
 		}
 	})
@@ -165,8 +166,8 @@ func TestResolveWorkspaceSandbox_TamperedStoreRefuses(t *testing.T) {
 		if err := os.Symlink(real, filepath.Join(stateDir, "sandboxes", "pix-link")); err != nil {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
-		res := resolveWorkspaceSandbox(stateDir, ws)
-		if res.Outcome != workspaceSandboxUntrusted {
+		res := workspace.ResolveSandbox(stateDir, ws)
+		if res.Outcome != workspace.WorkspaceSandboxUntrusted {
 			t.Fatalf("resolution = %+v, want untrusted (symlinked dir)", res)
 		}
 	})
@@ -186,19 +187,19 @@ func TestCreateReceiptRecordsWorkspace(t *testing.T) {
 	withCreatePollSeams(t, probeAlways(sbxRunning), time.Millisecond, time.Second)
 
 	ws := t.TempDir()
-	canon := canonicalWorkspacePath(ws)
+	canon := workspace.CanonicalPath(ws)
 	if err := execSbxRunAndRecordCreate(trueCmd(t), true, "pix-demo", canon, []string{"slack"}); err != nil {
 		t.Fatal(err)
 	}
-	r, status, err := readSandboxMCPReceipt(stateDir, "pix-demo")
-	if err != nil || status != sandboxMCPStateOK {
+	r, status, err := workspace.ReadMCPReceipt(stateDir, "pix-demo")
+	if err != nil || status != workspace.MCPStateOK {
 		t.Fatalf("status=%v err=%v", status, err)
 	}
 	if r.Workspace != canon {
-		t.Fatalf("receipt workspace = %q, want %q", r.Workspace, canon)
+		t.Fatalf("receipt ws = %q, want %q", r.Workspace, canon)
 	}
 	// And it round-trips through the resolver: the exact flow behind
-	// `run --name pix-demo` then `mcp load slack <ws>`.
+	// `run --name pix-demo` then `mcp load slack <workspace>`.
 	if got, err := resolveMcpLoadSandbox(ws); err != nil || got != "pix-demo" {
 		t.Fatalf("resolveMcpLoadSandbox = %q, %v; want pix-demo", got, err)
 	}
@@ -208,11 +209,11 @@ func TestResolveMcpLoadSandbox_RefusalPaths(t *testing.T) {
 	stateDir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return stateDir, nil })
 	ws := t.TempDir()
-	canon := canonicalWorkspacePath(ws)
+	canon := workspace.CanonicalPath(ws)
 
 	// Default fallback first (no receipts): the derived name, no error.
-	if got, err := resolveMcpLoadSandbox(ws); err != nil || got != deriveSandboxName(ws) {
-		t.Fatalf("clean fallback = %q, %v; want %s", got, err, deriveSandboxName(ws))
+	if got, err := resolveMcpLoadSandbox(ws); err != nil || got != workspace.DeriveSandboxName(ws) {
+		t.Fatalf("clean fallback = %q, %v; want %s", got, err, workspace.DeriveSandboxName(ws))
 	}
 
 	// Ambiguous: two receipts claim the workspace -> refuse, never a target.
@@ -233,7 +234,7 @@ func TestResolveMcpLoadSandbox_RefusalPaths(t *testing.T) {
 
 func TestDoctorContextResolvesCustomSandboxName(t *testing.T) {
 	ws := t.TempDir()
-	canon := canonicalWorkspacePath(ws)
+	canon := workspace.CanonicalPath(ws)
 	stateDir := t.TempDir()
 	f := mcpFake()
 	f.output["sbx ls"] = "pix-demo  running  " + canon + "\n"
@@ -246,8 +247,8 @@ func TestDoctorContextResolvesCustomSandboxName(t *testing.T) {
 	if ctx.mode != mcpAttachReceipt || ctx.sandbox != "pix-demo" {
 		t.Fatalf("ctx = %+v, want receipt mode on pix-demo (the mapped custom name)", ctx)
 	}
-	if ctx.workspace != canon {
-		t.Fatalf("ctx.workspace = %q, want %q", ctx.workspace, canon)
+	if ctx.ws != canon {
+		t.Fatalf("ctx.ws = %q, want %q", ctx.ws, canon)
 	}
 	cfg := defaultCfg()
 	cfg.MCP = []string{"slack"}
@@ -260,7 +261,7 @@ func TestDoctorContextResolvesCustomSandboxName(t *testing.T) {
 
 func TestDoctorContextAmbiguousMappingIsUnverifiable(t *testing.T) {
 	ws := t.TempDir()
-	canon := canonicalWorkspacePath(ws)
+	canon := workspace.CanonicalPath(ws)
 	stateDir := t.TempDir()
 	f := mcpFake()
 	f.output["sbx ls"] = "pix-a  running  " + canon + "\n"
@@ -297,11 +298,11 @@ func TestGogAttachCheckUsesReceiptJoin(t *testing.T) {
 		t.Helper()
 		stateDir := t.TempDir()
 		mustCreateReceipt(t, stateDir, box, ws, preloaded)
-		receipt, status, err := readSandboxMCPReceipt(stateDir, box)
-		if err != nil || status != sandboxMCPStateOK {
+		receipt, status, err := workspace.ReadMCPReceipt(stateDir, box)
+		if err != nil || status != workspace.MCPStateOK {
 			t.Fatalf("status=%v err=%v", status, err)
 		}
-		return mcpSandboxContext{mode: mcpAttachReceipt, sandbox: box, workspace: ws, receipt: receipt, status: status}
+		return mcpSandboxContext{mode: mcpAttachReceipt, sandbox: box, ws: ws, receipt: receipt, status: status}
 	}
 
 	t.Run("configured AFTER create -> registered-not-attached TODO, never ready", func(t *testing.T) {
@@ -359,11 +360,11 @@ func TestResetSbxClearsReceiptsOnPositiveRemovalOnly(t *testing.T) {
 	executeSbxReset(resetActions{RemoveSandboxes: true}, env, &out)
 
 	// Positive success -> receipt cleared via the hardened helper.
-	if _, status, _ := readSandboxMCPReceipt(stateDir, "pix-ok"); status != sandboxMCPStateAbsent {
+	if _, status, _ := workspace.ReadMCPReceipt(stateDir, "pix-ok"); status != workspace.MCPStateAbsent {
 		t.Errorf("pix-ok receipt status = %v, want absent after a successful rm", status)
 	}
 	// Failed removal -> receipt RETAINED (evidence discarded only on proof).
-	if _, status, _ := readSandboxMCPReceipt(stateDir, "pix-bad"); status != sandboxMCPStateOK {
+	if _, status, _ := workspace.ReadMCPReceipt(stateDir, "pix-bad"); status != workspace.MCPStateOK {
 		t.Errorf("pix-bad receipt status = %v, want retained (ok) after a failed rm", status)
 	}
 }

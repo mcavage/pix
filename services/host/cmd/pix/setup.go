@@ -32,6 +32,7 @@ import (
 	"pix/host/config"
 	"pix/host/inference"
 	"pix/host/rpc"
+	"pix/host/workspace"
 )
 
 // generatedInputMarker prefixes any user-role message that `pix` itself
@@ -793,13 +794,13 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 			if !opts.googleWorkspace {
 				return nil
 			}
-			ask := prompts.reserve("google workspace route")
+			ask := prompts.reserve("google ws route")
 			if err := setupGoogleWorkspaceFn(env, gogSetupOpts{
 				account:     strings.TrimSpace(opts.account),
 				credentials: strings.TrimSpace(opts.credentials),
 				assumeYes:   opts.assumeYes,
 			}, in, out, ask); err != nil {
-				return fmt.Errorf("google workspace: %w", err)
+				return fmt.Errorf("google ws: %w", err)
 			}
 			return nil
 		},
@@ -1221,14 +1222,14 @@ func setupGworkspaceAxis(cfg *config.Config, env shellEnv) []check {
 	acct := strings.TrimSpace(cfg.GogAccount)
 	switch {
 	case acct == "":
-		return []check{{label: "google workspace", requirement: requirementOptional, verdict: verdictTodo,
+		return []check{{label: "google ws", requirement: requirementOptional, verdict: verdictTodo,
 			detail: "enabled but no account authorized", evidence: "google_workspace_account is empty",
 			todo: "pix gworkspace setup"}}
 	case gogSetupAccountHealthy(env, acct):
-		return []check{{label: "google workspace", requirement: requirementOptional, verdict: verdictReady,
+		return []check{{label: "google ws", requirement: requirementOptional, verdict: verdictReady,
 			detail: acct + " authorized (read-only)", evidence: "authorization probe passed for " + acct}}
 	default:
-		return []check{{label: "google workspace", requirement: requirementOptional, verdict: verdictTodo,
+		return []check{{label: "google ws", requirement: requirementOptional, verdict: verdictTodo,
 			detail: acct + " not verified", evidence: "authorization probe failed for " + acct,
 			todo: "pix gworkspace setup"}}
 	}
@@ -1664,7 +1665,7 @@ func setupSandboxName(dir string) (string, bool) {
 	if _, err := config.Load(); err != nil {
 		return "", false
 	}
-	return deriveSandboxName(dir), true
+	return workspace.DeriveSandboxName(dir), true
 }
 
 // flagTakesValue reports whether an onboard flag consumes a following token

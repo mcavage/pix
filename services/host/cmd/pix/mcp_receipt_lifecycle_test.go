@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"pix/host/sys/systest"
+	"pix/host/workspace"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,7 +61,7 @@ func TestCreateReceipt_RecordedWhileSessionAlive(t *testing.T) {
 	// The receipt must become readable while the session is still running.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if _, status, _ := readSandboxMCPReceipt(dir, "pix-live"); status == sandboxMCPStateOK {
+		if _, status, _ := workspace.ReadMCPReceipt(dir, "pix-live"); status == workspace.MCPStateOK {
 			break
 		}
 		select {
@@ -101,18 +102,18 @@ func TestCreateReceipt_MergesConcurrentLoadDropsPriorLifetime(t *testing.T) {
 	sandbox := "pix-merge"
 
 	// Prior lifetime: a create receipt with a load that must NOT survive.
-	if err := writeCreateReceipt(dir, sandbox, "", []string{"old"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"old"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendLoadReceipt(dir, sandbox, "stale", receiptClock); err != nil {
+	if err := workspace.AppendLoadReceipt(dir, sandbox, "stale", receiptClock); err != nil {
 		t.Fatal(err)
 	}
 
 	// The probe fires AFTER the pre-create clear and BEFORE the create commit
 	// — exactly the window a concurrent `pix mcp load` races into.
 	probe := func(string) sbxState {
-		if err := appendLoadReceipt(dir, sandbox, "fresh", receiptClock); err != nil {
-			t.Errorf("concurrent appendLoadReceipt: %v", err)
+		if err := workspace.AppendLoadReceipt(dir, sandbox, "fresh", receiptClock); err != nil {
+			t.Errorf("concurrent workspace.AppendLoadReceipt: %v", err)
 		}
 		return sbxRunning
 	}
@@ -122,8 +123,8 @@ func TestCreateReceipt_MergesConcurrentLoadDropsPriorLifetime(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	r, status, err := readSandboxMCPReceipt(dir, sandbox)
-	if err != nil || status != sandboxMCPStateOK {
+	r, status, err := workspace.ReadMCPReceipt(dir, sandbox)
+	if err != nil || status != workspace.MCPStateOK {
 		t.Fatalf("status=%v err=%v", status, err)
 	}
 	if r.CreatedAt == "" || len(r.Preloaded) != 1 || r.Preloaded[0] != gwServerName {
@@ -146,7 +147,7 @@ func TestCreateReceipt_CleanExitWithoutEvidenceWritesNothing(t *testing.T) {
 	if err := execSbxRunAndRecordCreate(trueCmd(t), true, "pix-noev", "", []string{"slack"}); err != nil {
 		t.Fatalf("clean exit must surface the process's own nil result, got %v", err)
 	}
-	if _, status, _ := readSandboxMCPReceipt(dir, "pix-noev"); status != sandboxMCPStateAbsent {
+	if _, status, _ := workspace.ReadMCPReceipt(dir, "pix-noev"); status != workspace.MCPStateAbsent {
 		t.Fatalf("status = %v, want absent (no creation evidence, no receipt)", status)
 	}
 }
@@ -168,7 +169,7 @@ func TestCreateReceipt_EvidenceAtExitStillRecorded(t *testing.T) {
 	if err := execSbxRunAndRecordCreate(trueCmd(t), true, "pix-lateev", "", []string{"slack"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, status, _ := readSandboxMCPReceipt(dir, "pix-lateev"); status != sandboxMCPStateOK {
+	if _, status, _ := workspace.ReadMCPReceipt(dir, "pix-lateev"); status != workspace.MCPStateOK {
 		t.Fatalf("status = %v, want ok (evidence at exit is evidence)", status)
 	}
 }
@@ -177,7 +178,7 @@ func TestCreateReceipt_EvidenceAtExitStillRecorded(t *testing.T) {
 
 // The poll timing out while the session is still running must (1) keep the
 // session interactive to its natural end, (2) write no receipt, and (3)
-// surface a *receiptRecordError so the caller exits non-zero with the honest
+// surface a *workspace.ReceiptRecordError so the caller exits non-zero with the honest
 // "launched, state unrecorded" report.
 func TestCreateReceipt_PollTimeoutReportsUnrecorded(t *testing.T) {
 	dir := t.TempDir()
@@ -186,9 +187,9 @@ func TestCreateReceipt_PollTimeoutReportsUnrecorded(t *testing.T) {
 
 	start := time.Now()
 	err := execSbxRunAndRecordCreate(exec.Command("sleep", "0.4"), true, "pix-timeout", "", []string{"slack"})
-	var rerr *receiptRecordError
+	var rerr *workspace.ReceiptRecordError
 	if !errors.As(err, &rerr) {
-		t.Fatalf("want a *receiptRecordError on poll timeout, got %T: %v", err, err)
+		t.Fatalf("want a *workspace.ReceiptRecordError on poll timeout, got %T: %v", err, err)
 	}
 	if !strings.Contains(err.Error(), "timed out") {
 		t.Errorf("error should name the timeout, got %q", err.Error())
@@ -196,7 +197,7 @@ func TestCreateReceipt_PollTimeoutReportsUnrecorded(t *testing.T) {
 	if elapsed := time.Since(start); elapsed < 350*time.Millisecond {
 		t.Errorf("returned after %v — the session must still be waited to completion after the poll times out", elapsed)
 	}
-	if _, status, _ := readSandboxMCPReceipt(dir, "pix-timeout"); status != sandboxMCPStateAbsent {
+	if _, status, _ := workspace.ReadMCPReceipt(dir, "pix-timeout"); status != workspace.MCPStateAbsent {
 		t.Fatalf("status = %v, want absent (a timed-out poll must not fabricate a receipt)", status)
 	}
 }
@@ -209,25 +210,25 @@ func TestApplyReplaceRm_ClearsReceiptOnSuccessRetainsOnFailure(t *testing.T) {
 	sandbox := "pix-replaceclear"
 	plan := runLaunchPlan{RmFirst: true}
 
-	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	ok := shellEnv{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", nil }}}
 	if err := applyReplaceRm(ok, plan, sandbox); err != nil {
 		t.Fatalf("applyReplaceRm: %v", err)
 	}
-	if _, status, _ := readSandboxMCPReceipt(dir, sandbox); status != sandboxMCPStateAbsent {
+	if _, status, _ := workspace.ReadMCPReceipt(dir, sandbox); status != workspace.MCPStateAbsent {
 		t.Fatalf("status = %v, want absent after a successful replace pre-remove", status)
 	}
 
-	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	bad := shellEnv{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", errors.New("rm failed") }}}
 	if err := applyReplaceRm(bad, plan, sandbox); err == nil {
 		t.Fatal("want the rm failure surfaced")
 	}
-	if _, status, _ := readSandboxMCPReceipt(dir, sandbox); status != sandboxMCPStateOK {
+	if _, status, _ := workspace.ReadMCPReceipt(dir, sandbox); status != workspace.MCPStateOK {
 		t.Fatalf("status = %v, want ok: a FAILED removal must retain the receipt", status)
 	}
 }
@@ -237,25 +238,25 @@ func TestRemovePixSandbox_ClearsReceiptOnSuccessRetainsOnFailure(t *testing.T) {
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
 	sandbox := "pix-rmclear"
 
-	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	ok := shellEnv{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", nil }}}
 	if err := removePixSandbox(ok, sandbox); err != nil {
 		t.Fatalf("removePixSandbox: %v", err)
 	}
-	if _, status, _ := readSandboxMCPReceipt(dir, sandbox); status != sandboxMCPStateAbsent {
+	if _, status, _ := workspace.ReadMCPReceipt(dir, sandbox); status != workspace.MCPStateAbsent {
 		t.Fatalf("status = %v, want absent after `pix rm` succeeded", status)
 	}
 
-	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	bad := shellEnv{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", errors.New("rm failed") }}}
 	if err := removePixSandbox(bad, sandbox); err == nil {
 		t.Fatal("want the rm failure surfaced")
 	}
-	if _, status, _ := readSandboxMCPReceipt(dir, sandbox); status != sandboxMCPStateOK {
+	if _, status, _ := workspace.ReadMCPReceipt(dir, sandbox); status != workspace.MCPStateOK {
 		t.Fatalf("status = %v, want ok: a FAILED `pix rm` must retain the receipt", status)
 	}
 }
@@ -269,7 +270,7 @@ func TestExecuteTaskTeardown_ClearsReceiptOnRemovalRetainsOnAbort(t *testing.T) 
 	m := taskMeta{Name: "work", Sandbox: sandbox, Mainroot: t.TempDir(), Branch: "pix/work"}
 
 	// Success: git snapshot ok, `sbx ls` reads absent, `sbx rm -f` succeeds.
-	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	ok := shellEnv{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", nil }}}
@@ -277,13 +278,13 @@ func TestExecuteTaskTeardown_ClearsReceiptOnRemovalRetainsOnAbort(t *testing.T) 
 	if rc := executeTaskTeardown(ok, &out, m, t.TempDir(), "work", "refs/pix/recovered/work", true, taskState{}); rc != 0 {
 		t.Fatalf("rc = %d, want 0, out:\n%s", rc, out.String())
 	}
-	if _, status, _ := readSandboxMCPReceipt(dir, sandbox); status != sandboxMCPStateAbsent {
+	if _, status, _ := workspace.ReadMCPReceipt(dir, sandbox); status != workspace.MCPStateAbsent {
 		t.Fatalf("status = %v, want absent after task teardown removed the sandbox", status)
 	}
 
 	// Abort: non-force with the sandbox running — teardown refuses before any
 	// rm, so the receipt (a live lifetime's evidence) must survive.
-	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	running := shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
@@ -296,7 +297,7 @@ func TestExecuteTaskTeardown_ClearsReceiptOnRemovalRetainsOnAbort(t *testing.T) 
 	if rc := executeTaskTeardown(running, &out, m, t.TempDir(), "work", "refs/pix/recovered/work", false, taskState{}); rc == 0 {
 		t.Fatalf("rc = 0, want non-zero (running sandbox, non-force), out:\n%s", out.String())
 	}
-	if _, status, _ := readSandboxMCPReceipt(dir, sandbox); status != sandboxMCPStateOK {
+	if _, status, _ := workspace.ReadMCPReceipt(dir, sandbox); status != workspace.MCPStateOK {
 		t.Fatalf("status = %v, want ok: an ABORTED teardown must retain the receipt", status)
 	}
 }
@@ -308,11 +309,11 @@ func TestReceiptIsPartial(t *testing.T) {
 	sandbox := "pix-partial"
 
 	// Load-only (no create ever observed): partial.
-	if err := appendLoadReceipt(dir, sandbox, "slack", receiptClock); err != nil {
+	if err := workspace.AppendLoadReceipt(dir, sandbox, "slack", receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	r, status, err := readSandboxMCPReceipt(dir, sandbox)
-	if err != nil || status != sandboxMCPStateOK {
+	r, status, err := workspace.ReadMCPReceipt(dir, sandbox)
+	if err != nil || status != workspace.MCPStateOK {
 		t.Fatalf("status=%v err=%v", status, err)
 	}
 	if !r.IsPartial() {
@@ -320,10 +321,10 @@ func TestReceiptIsPartial(t *testing.T) {
 	}
 
 	// A committed create makes it full — even with an empty preload set.
-	if err := commitCreateReceipt(dir, sandbox, "", nil, receiptClock); err != nil {
+	if err := workspace.CommitCreateReceipt(dir, sandbox, "", nil, receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	r, _, _ = readSandboxMCPReceipt(dir, sandbox)
+	r, _, _ = workspace.ReadMCPReceipt(dir, sandbox)
 	if r.IsPartial() {
 		t.Error("a receipt with CreatedAt set must not be IsPartial")
 	}
@@ -331,7 +332,7 @@ func TestReceiptIsPartial(t *testing.T) {
 		t.Errorf("Loads = %+v, want the pre-commit load merged, not erased", r.Loads)
 	}
 
-	var nilReceipt *sandboxMCPReceipt
+	var nilReceipt *workspace.MCPReceipt
 	if nilReceipt.IsPartial() {
 		t.Error("a nil receipt is no receipt at all, not a partial one")
 	}
@@ -342,7 +343,7 @@ func TestReceiptIsPartial(t *testing.T) {
 func TestCreateCommitRacesLoads(t *testing.T) {
 	dir := t.TempDir()
 	sandbox := "pix-race"
-	if err := clearSandboxMCPReceipt(dir, sandbox); err != nil {
+	if err := workspace.ClearMCPReceipt(dir, sandbox); err != nil {
 		t.Fatal(err)
 	}
 
@@ -353,13 +354,13 @@ func TestCreateCommitRacesLoads(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			errs[i] = appendLoadReceipt(dir, sandbox, fmt.Sprintf("srv-%d", i), receiptClock)
+			errs[i] = workspace.AppendLoadReceipt(dir, sandbox, fmt.Sprintf("srv-%d", i), receiptClock)
 		}(i)
 	}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		errs[loaders] = commitCreateReceipt(dir, sandbox, "", []string{gwServerName}, receiptClock)
+		errs[loaders] = workspace.CommitCreateReceipt(dir, sandbox, "", []string{gwServerName}, receiptClock)
 	}()
 	wg.Wait()
 	for i, err := range errs {
@@ -371,8 +372,8 @@ func TestCreateCommitRacesLoads(t *testing.T) {
 	// Whatever the interleaving: the create is committed and NO load was lost
 	// (commit merges those before it; those after append to the committed
 	// receipt) — all serialized by the per-sandbox flock.
-	r, status, err := readSandboxMCPReceipt(dir, sandbox)
-	if err != nil || status != sandboxMCPStateOK {
+	r, status, err := workspace.ReadMCPReceipt(dir, sandbox)
+	if err != nil || status != workspace.MCPStateOK {
 		t.Fatalf("status=%v err=%v", status, err)
 	}
 	if r.CreatedAt == "" || len(r.Preloaded) != 1 || r.Preloaded[0] != gwServerName {

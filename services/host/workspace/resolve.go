@@ -1,33 +1,33 @@
-package main
+package workspace
 
-// workspaceresolve.go — the hardened workspace->sandbox resolver. A sandbox
+// workspaceresolve.go — the hardened Workspace->sandbox resolver. A sandbox
 // created with a CUSTOM name (`pix run --name pix-demo`) breaks the
-// old assumption that a workspace's sandbox is always
-// `pix-<basename>` (deriveSandboxName). The create receipt
+// old assumption that a Workspace's sandbox is always
+// `pix-<basename>` (DeriveSandboxName). The create receipt
 // (sandboxmcpstate.go) now records the canonical Workspace it was created
 // for, so verbs that only know a DIR (`pix mcp load NAME [DIR]`, doctor's
-// workspace sandbox context) can find the box pix itself created for it.
+// Workspace sandbox context) can find the box pix itself created for it.
 //
 // TRUST POSTURE (same class as the receipt reads): the resolver only ever
 // TARGETS a sandbox it can positively justify —
 //
-//   - exactly ONE trustworthy receipt maps the canonical workspace -> that
-//     sandbox (workspaceSandboxMapped);
+//   - exactly ONE trustworthy receipt maps the canonical Workspace -> that
+//     sandbox (SandboxMapped);
 //   - the scan completed cleanly and NO receipt maps it -> the derived
-//     default name (workspaceSandboxDefault: an old sandbox predating the
+//     default name (SandboxDefault: an old sandbox predating the
 //     Workspace field, or none yet);
-//   - MORE than one trustworthy receipt claims the workspace ->
-//     workspaceSandboxAmbiguous, no target (never pick one arbitrarily);
+//   - MORE than one trustworthy receipt claims the Workspace ->
+//     SandboxAmbiguous, no target (never pick one arbitrarily);
 //   - any receipt in the store is untrustworthy (corrupt, wrong schema,
 //     identity mismatch, unreadable, a symlinked or invalid directory) ->
-//     workspaceSandboxUntrusted, no target: an unreadable receipt could be
+//     WorkspaceSandboxUntrusted, no target: an unreadable receipt could be
 //     the very mapping being asked about, so "no mapping found" is not a
 //     positive conclusion. Mutating callers (`mcp load`) MUST refuse;
 //     read-only callers (doctor) may fall back to the derived name for
 //     REPORTING, where the box's own receipt state still governs rendering.
 //
 // The resolver never creates anything and never follows a symlinked receipt
-// (readSandboxMCPReceiptFile's own hardening applies per entry).
+// (ReadMCPReceiptFile's own hardening applies per entry).
 
 import (
 	"fmt"
@@ -40,32 +40,32 @@ import (
 type workspaceSandboxOutcome int
 
 const (
-	// workspaceSandboxMapped: exactly one trustworthy receipt maps the
-	// workspace to Sandbox.
-	workspaceSandboxMapped workspaceSandboxOutcome = iota
-	// workspaceSandboxDefault: a clean scan found no mapping; Sandbox is the
-	// derived default name (deriveSandboxName).
-	workspaceSandboxDefault
-	// workspaceSandboxAmbiguous: two or more trustworthy receipts claim the
-	// workspace. No Sandbox is returned — picking one would target an
+	// SandboxMapped: exactly one trustworthy receipt maps the
+	// Workspace to Sandbox.
+	SandboxMapped workspaceSandboxOutcome = iota
+	// SandboxDefault: a clean scan found no mapping; Sandbox is the
+	// derived default name (DeriveSandboxName).
+	SandboxDefault
+	// SandboxAmbiguous: two or more trustworthy receipts claim the
+	// Workspace. No Sandbox is returned — picking one would target an
 	// arbitrary box.
-	workspaceSandboxAmbiguous
-	// workspaceSandboxUntrusted: the receipt store holds something that
+	SandboxAmbiguous
+	// WorkspaceSandboxUntrusted: the receipt store holds something that
 	// cannot be trusted (or could not be scanned), so "no mapping" cannot be
 	// concluded. No Sandbox is returned.
-	workspaceSandboxUntrusted
+	WorkspaceSandboxUntrusted
 )
 
 // String renders the outcome for messages/tests.
 func (o workspaceSandboxOutcome) String() string {
 	switch o {
-	case workspaceSandboxMapped:
+	case SandboxMapped:
 		return "mapped"
-	case workspaceSandboxDefault:
+	case SandboxDefault:
 		return "default"
-	case workspaceSandboxAmbiguous:
+	case SandboxAmbiguous:
 		return "ambiguous"
-	case workspaceSandboxUntrusted:
+	case WorkspaceSandboxUntrusted:
 		return "untrusted"
 	default:
 		return "unknown"
@@ -81,12 +81,12 @@ type workspaceSandboxResolution struct {
 	Detail  string
 }
 
-// canonicalWorkspacePath resolves ws to ONE canonical absolute form — the form
+// CanonicalPath resolves workspace to ONE canonical absolute form — the form
 // the create receipt records and every resolver comparison uses, so `run .`,
 // `run ./proj/../proj`, and a later `mcp load NAME /abs/proj` all agree.
 // Symlinks are resolved when the path exists (macOS /tmp vs /private/tmp);
 // a nonexistent path degrades to the cleaned absolute spelling.
-func canonicalWorkspacePath(ws string) string {
+func CanonicalPath(ws string) string {
 	abs, err := filepath.Abs(ws)
 	if err != nil {
 		return filepath.Clean(ws)
@@ -97,23 +97,23 @@ func canonicalWorkspacePath(ws string) string {
 	return filepath.Clean(abs)
 }
 
-// resolveWorkspaceSandbox scans the launcher's receipt store under stateDir
-// for a trustworthy receipt whose recorded Workspace is ws (canonicalized on
+// ResolveSandbox scans the launcher's receipt store under stateDir
+// for a trustworthy receipt whose recorded Workspace is workspace (canonicalized on
 // both sides). See the file doc for the outcome contract.
-func resolveWorkspaceSandbox(stateDir, ws string) workspaceSandboxResolution {
-	canon := canonicalWorkspacePath(ws)
+func ResolveSandbox(stateDir, ws string) workspaceSandboxResolution {
+	canon := CanonicalPath(ws)
 	fallback := workspaceSandboxResolution{
-		Sandbox: deriveSandboxName(ws),
-		Outcome: workspaceSandboxDefault,
+		Sandbox: DeriveSandboxName(ws),
+		Outcome: SandboxDefault,
 		Detail:  "no receipt maps " + canon + "; using the derived default name",
 	}
-	root := sandboxMCPStateRoot(stateDir)
+	root := MCPStateRoot(stateDir)
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return fallback // no store at all — nothing recorded, clean default
 		}
-		return workspaceSandboxResolution{Outcome: workspaceSandboxUntrusted,
+		return workspaceSandboxResolution{Outcome: WorkspaceSandboxUntrusted,
 			Detail: fmt.Sprintf("cannot scan the sandbox receipt store %s: %v", root, err)}
 	}
 	var matches []string
@@ -130,17 +130,17 @@ func resolveWorkspaceSandbox(stateDir, ws string) workspaceSandboxResolution {
 		if !e.IsDir() {
 			continue // a stray file at the root is not a receipt directory
 		}
-		if verr := validateSandboxStateName(name); verr != nil {
+		if verr := ValidateStateName(name); verr != nil {
 			problems = append(problems, name+": invalid sandbox directory name")
 			continue
 		}
-		r, status, rerr := readSandboxMCPReceiptFile(filepath.Join(root, name), name)
+		r, status, rerr := ReadMCPReceiptFile(filepath.Join(root, name), name)
 		switch status {
-		case sandboxMCPStateOK:
+		case MCPStateOK:
 			if r.Workspace != "" && filepath.Clean(r.Workspace) == canon {
 				matches = append(matches, name)
 			}
-		case sandboxMCPStateAbsent:
+		case MCPStateAbsent:
 			// no receipt file in this directory — nothing recorded, nothing
 			// to distrust
 		default:
@@ -149,17 +149,33 @@ func resolveWorkspaceSandbox(stateDir, ws string) workspaceSandboxResolution {
 	}
 	switch {
 	case len(matches) > 1:
-		return workspaceSandboxResolution{Outcome: workspaceSandboxAmbiguous,
+		return workspaceSandboxResolution{Outcome: SandboxAmbiguous,
 			Detail: fmt.Sprintf("%d receipts map %s (%s) — refusing to pick one", len(matches), canon, strings.Join(matches, ", "))}
 	case len(problems) > 0:
 		// Even a single clean match cannot be trusted as UNIQUE past an
-		// unreadable receipt: the corrupt one could map the same workspace.
-		return workspaceSandboxResolution{Outcome: workspaceSandboxUntrusted,
+		// unreadable receipt: the corrupt one could map the same Workspace.
+		return workspaceSandboxResolution{Outcome: WorkspaceSandboxUntrusted,
 			Detail: "untrustworthy receipt(s) in " + root + ": " + strings.Join(problems, "; ")}
 	case len(matches) == 1:
-		return workspaceSandboxResolution{Sandbox: matches[0], Outcome: workspaceSandboxMapped,
+		return workspaceSandboxResolution{Sandbox: matches[0], Outcome: SandboxMapped,
 			Detail: "receipt maps " + canon + " -> " + matches[0]}
 	default:
 		return fallback
 	}
+}
+
+// DeriveSandboxName is the default sandbox name for a Workspace: "pix-" plus
+// the directory's base name. It lived in run.go, which is where it was called
+// from, but naming a Workspace is this package's job — run.go was reaching down
+// into Workspace semantics it does not own.
+func DeriveSandboxName(ws string) string {
+	abs, err := filepath.Abs(ws)
+	if err != nil {
+		abs = ws
+	}
+	base := filepath.Base(abs)
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		base = "Workspace"
+	}
+	return "pix-" + base
 }

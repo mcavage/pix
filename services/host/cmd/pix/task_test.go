@@ -963,7 +963,7 @@ func captureStderr(t *testing.T, fn func()) string {
 
 // --- AC-P0-008/009: `task ls` must never hide a row because the real writer's
 // own metadata disagrees with what the harden guard expects. Profiles were
-// removed (loadResolvedConfig always returns "" now, see profile.go), so every
+// removed (workspace.LoadResolvedConfig always returns "" now, see profile.go), so every
 // task the CURRENT `task new` writes stores an empty profile; hardenTaskMeta
 // used to reject exactly that, which meant `task ls` hid every task on a fresh
 // checkout. This test drives the real writer end to end — a hand-built

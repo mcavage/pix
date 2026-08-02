@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"pix/host/workspace"
 	"strings"
 	"text/tabwriter"
 )
@@ -77,8 +78,8 @@ func parsePixBoxes(sbxLsOut string) []sbxBox {
 // paths to the sbx listing.
 func overlayReceiptDirs(boxes []sbxBox, stateDir string) {
 	for i := range boxes {
-		receipt, status, err := readSandboxMCPReceipt(stateDir, boxes[i].Name)
-		if err == nil && status == sandboxMCPStateOK && receipt != nil {
+		receipt, status, err := workspace.ReadMCPReceipt(stateDir, boxes[i].Name)
+		if err == nil && status == workspace.MCPStateOK && receipt != nil {
 			boxes[i].Dir = receipt.Workspace
 		}
 	}
@@ -109,7 +110,7 @@ func runLs(argv []string) {
 		fatalSbx(fmt.Errorf("sbx ls failed: %v", err))
 	}
 	boxes := parsePixBoxes(out)
-	if stateDir, err := sandboxMCPStateDirFn(); err == nil {
+	if stateDir, err := workspace.MCPStateDirFn(); err == nil {
 		overlayReceiptDirs(boxes, stateDir)
 	}
 	if jsonOut {
@@ -220,7 +221,7 @@ func removePixSandbox(env shellEnv, name string) error {
 	if _, err := env.Run("sbx", "rm", "-f", name); err != nil {
 		return err
 	}
-	if err := clearRemovedSandboxReceipt(name); err != nil {
+	if err := workspace.ClearRemovedReceipt(name); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: removed %s but could not clear its mcp receipt: %v\n", name, err)
 	}
 	return nil
@@ -228,7 +229,7 @@ func removePixSandbox(env shellEnv, name string) error {
 
 const lsUsage = `usage: pix ls [--json]
 
-List the pix sandboxes on this host (name, state, workspace dir). These are
+List the pix sandboxes on this host (name, state, ws dir). These are
 the boxes ` + "`pix run`" + ` and ` + "`pix task`" + ` create. For every sbx sandbox
 (not just pix's), use ` + "`sbx ls`" + `.
 `

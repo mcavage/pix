@@ -3,7 +3,7 @@
 //
 // Every test uses t.TempDir() as stateDir and a fixed injected clock — never
 // the real XDG state dir or wall clock (sandboxmcpstate.go's stated contract).
-package main
+package workspace
 
 import (
 	"encoding/json"
@@ -17,6 +17,12 @@ import (
 	"time"
 )
 
+// GWServerName is a literal here rather than an import: a receipt records
+// whatever server names it is handed, and this package has no business knowing
+// that one of them belongs to Google Workspace. Using the real constant would
+// be an upward dependency on a capability.
+const GWServerName = "google-workspace"
+
 func fixedClock(ts string) func() time.Time {
 	t, err := time.Parse(time.RFC3339, ts)
 	if err != nil {
@@ -29,14 +35,14 @@ func fixedClock(ts string) func() time.Time {
 
 func TestWriteCreateReceiptRoundtrip(t *testing.T) {
 	dir := t.TempDir()
-	if err := writeCreateReceipt(dir, "pix-work", "", []string{"slack", gwServerName}, fixedClock("2024-01-02T03:04:05Z")); err != nil {
-		t.Fatalf("writeCreateReceipt: %v", err)
+	if err := WriteCreateReceipt(dir, "pix-work", "", []string{"slack", GWServerName}, fixedClock("2024-01-02T03:04:05Z")); err != nil {
+		t.Fatalf("WriteCreateReceipt: %v", err)
 	}
-	r, status, err := readSandboxMCPReceipt(dir, "pix-work")
+	r, status, err := ReadMCPReceipt(dir, "pix-work")
 	if err != nil {
-		t.Fatalf("readSandboxMCPReceipt: %v", err)
+		t.Fatalf("ReadMCPReceipt: %v", err)
 	}
-	if status != sandboxMCPStateOK {
+	if status != MCPStateOK {
 		t.Fatalf("status = %v, want ok", status)
 	}
 	if r.Sandbox != "pix-work" {
@@ -45,7 +51,7 @@ func TestWriteCreateReceiptRoundtrip(t *testing.T) {
 	if r.CreatedAt != "2024-01-02T03:04:05Z" {
 		t.Errorf("CreatedAt = %q", r.CreatedAt)
 	}
-	if len(r.Preloaded) != 2 || r.Preloaded[0] != "slack" || r.Preloaded[1] != gwServerName {
+	if len(r.Preloaded) != 2 || r.Preloaded[0] != "slack" || r.Preloaded[1] != GWServerName {
 		t.Errorf("Preloaded = %v", r.Preloaded)
 	}
 	if len(r.Loads) != 0 {
@@ -68,17 +74,17 @@ func TestWriteCreateReceiptRoundtrip(t *testing.T) {
 
 func TestAppendLoadReceiptRoundtrip(t *testing.T) {
 	dir := t.TempDir()
-	if err := writeCreateReceipt(dir, "pix-work", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
-		t.Fatalf("writeCreateReceipt: %v", err)
+	if err := WriteCreateReceipt(dir, "pix-work", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+		t.Fatalf("WriteCreateReceipt: %v", err)
 	}
-	if err := appendLoadReceipt(dir, "pix-work", gwServerName, fixedClock("2024-01-01T01:00:00Z")); err != nil {
-		t.Fatalf("appendLoadReceipt: %v", err)
+	if err := AppendLoadReceipt(dir, "pix-work", GWServerName, fixedClock("2024-01-01T01:00:00Z")); err != nil {
+		t.Fatalf("AppendLoadReceipt: %v", err)
 	}
-	r, status, err := readSandboxMCPReceipt(dir, "pix-work")
-	if err != nil || status != sandboxMCPStateOK {
+	r, status, err := ReadMCPReceipt(dir, "pix-work")
+	if err != nil || status != MCPStateOK {
 		t.Fatalf("read: status=%v err=%v", status, err)
 	}
-	if len(r.Loads) != 1 || r.Loads[0].Name != gwServerName || r.Loads[0].At != "2024-01-01T01:00:00Z" {
+	if len(r.Loads) != 1 || r.Loads[0].Name != GWServerName || r.Loads[0].At != "2024-01-01T01:00:00Z" {
 		t.Fatalf("Loads = %+v", r.Loads)
 	}
 	// Preloaded/CreatedAt from the create receipt untouched by the append.
@@ -92,20 +98,20 @@ func TestAppendLoadReceiptRoundtrip(t *testing.T) {
 func TestAppendLoadReceiptOrderAndDedupe(t *testing.T) {
 	dir := t.TempDir()
 	sandbox := "pix-order"
-	if err := writeCreateReceipt(dir, sandbox, "", nil, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := WriteCreateReceipt(dir, sandbox, "", nil, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendLoadReceipt(dir, sandbox, "slack", fixedClock("2024-01-01T01:00:00Z")); err != nil {
+	if err := AppendLoadReceipt(dir, sandbox, "slack", fixedClock("2024-01-01T01:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendLoadReceipt(dir, sandbox, "notion", fixedClock("2024-01-01T02:00:00Z")); err != nil {
+	if err := AppendLoadReceipt(dir, sandbox, "notion", fixedClock("2024-01-01T02:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 	// Re-loading "slack" later must NOT move it or bump its timestamp.
-	if err := appendLoadReceipt(dir, sandbox, "slack", fixedClock("2024-01-01T03:00:00Z")); err != nil {
+	if err := AppendLoadReceipt(dir, sandbox, "slack", fixedClock("2024-01-01T03:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	r, _, err := readSandboxMCPReceipt(dir, sandbox)
+	r, _, err := ReadMCPReceipt(dir, sandbox)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,27 +131,27 @@ func TestAppendLoadReceiptOrderAndDedupe(t *testing.T) {
 func TestWriteCreateReceiptReplaceResetsLoads(t *testing.T) {
 	dir := t.TempDir()
 	sandbox := "pix-replace"
-	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendLoadReceipt(dir, sandbox, "slack", fixedClock("2024-01-01T01:00:00Z")); err != nil {
+	if err := AppendLoadReceipt(dir, sandbox, "slack", fixedClock("2024-01-01T01:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendLoadReceipt(dir, sandbox, "notion", fixedClock("2024-01-01T02:00:00Z")); err != nil {
+	if err := AppendLoadReceipt(dir, sandbox, "notion", fixedClock("2024-01-01T02:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 	// Recreate (e.g. `sbx rm -f` + fresh create) with a different preload set.
-	if err := writeCreateReceipt(dir, sandbox, "", []string{gwServerName}, fixedClock("2024-02-01T00:00:00Z")); err != nil {
+	if err := WriteCreateReceipt(dir, sandbox, "", []string{GWServerName}, fixedClock("2024-02-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	r, status, err := readSandboxMCPReceipt(dir, sandbox)
-	if err != nil || status != sandboxMCPStateOK {
+	r, status, err := ReadMCPReceipt(dir, sandbox)
+	if err != nil || status != MCPStateOK {
 		t.Fatalf("status=%v err=%v", status, err)
 	}
 	if r.CreatedAt != "2024-02-01T00:00:00Z" {
 		t.Errorf("CreatedAt = %q, want the fresh create time", r.CreatedAt)
 	}
-	if len(r.Preloaded) != 1 || r.Preloaded[0] != gwServerName {
+	if len(r.Preloaded) != 1 || r.Preloaded[0] != GWServerName {
 		t.Errorf("Preloaded = %v, want [gog]", r.Preloaded)
 	}
 	if len(r.Loads) != 0 {
@@ -158,13 +164,13 @@ func TestWriteCreateReceiptReplaceResetsLoads(t *testing.T) {
 func TestAppendLoadReceiptOldSandboxCreatesPartialReceipt(t *testing.T) {
 	dir := t.TempDir()
 	sandbox := "pix-legacy"
-	// No writeCreateReceipt ever called — simulates a sandbox created before
+	// No WriteCreateReceipt ever called — simulates a sandbox created before
 	// this feature shipped.
-	if err := appendLoadReceipt(dir, sandbox, "slack", fixedClock("2024-01-01T00:00:00Z")); err != nil {
-		t.Fatalf("appendLoadReceipt on old sandbox: %v", err)
+	if err := AppendLoadReceipt(dir, sandbox, "slack", fixedClock("2024-01-01T00:00:00Z")); err != nil {
+		t.Fatalf("AppendLoadReceipt on old sandbox: %v", err)
 	}
-	r, status, err := readSandboxMCPReceipt(dir, sandbox)
-	if err != nil || status != sandboxMCPStateOK {
+	r, status, err := ReadMCPReceipt(dir, sandbox)
+	if err != nil || status != MCPStateOK {
 		t.Fatalf("status=%v err=%v", status, err)
 	}
 	if r.CreatedAt != "" {
@@ -182,11 +188,11 @@ func TestAppendLoadReceiptOldSandboxCreatesPartialReceipt(t *testing.T) {
 
 func TestReadSandboxMCPReceiptAbsent(t *testing.T) {
 	dir := t.TempDir()
-	r, status, err := readSandboxMCPReceipt(dir, "pix-never-touched")
+	r, status, err := ReadMCPReceipt(dir, "pix-never-touched")
 	if err != nil {
 		t.Fatalf("absent read returned error: %v", err)
 	}
-	if status != sandboxMCPStateAbsent {
+	if status != MCPStateAbsent {
 		t.Fatalf("status = %v, want absent", status)
 	}
 	if r != nil {
@@ -209,11 +215,11 @@ func TestReadSandboxMCPReceiptCorrupt(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sdir, "mcp.json"), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	r, status, err := readSandboxMCPReceipt(dir, sandbox)
+	r, status, err := ReadMCPReceipt(dir, sandbox)
 	if err == nil {
 		t.Fatal("want an error for corrupt JSON")
 	}
-	if status != sandboxMCPStateCorrupt {
+	if status != MCPStateCorrupt {
 		t.Fatalf("status = %v, want corrupt", status)
 	}
 	if r != nil {
@@ -235,11 +241,11 @@ func TestReadSandboxMCPReceiptSchemaMismatch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sdir, "mcp.json"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, status, err := readSandboxMCPReceipt(dir, sandbox)
+	_, status, err := ReadMCPReceipt(dir, sandbox)
 	if err == nil {
 		t.Fatal("want an error for schema mismatch")
 	}
-	if status != sandboxMCPStateSchemaMismatch {
+	if status != MCPStateSchemaMismatch {
 		t.Fatalf("status = %v, want schema-mismatch", status)
 	}
 	if !status.Unverifiable() {
@@ -258,11 +264,11 @@ func TestReadSandboxMCPReceiptIdentityMismatch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sdir, "mcp.json"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, status, err := readSandboxMCPReceipt(dir, sandbox)
+	_, status, err := ReadMCPReceipt(dir, sandbox)
 	if err == nil {
 		t.Fatal("want an error for identity mismatch")
 	}
-	if status != sandboxMCPStateIdentityMismatch {
+	if status != MCPStateIdentityMismatch {
 		t.Fatalf("status = %v, want identity-mismatch", status)
 	}
 	if !status.Unverifiable() {
@@ -270,7 +276,7 @@ func TestReadSandboxMCPReceiptIdentityMismatch(t *testing.T) {
 	}
 }
 
-// appendLoadReceipt must FAIL CLOSED (never silently clobber) against an
+// AppendLoadReceipt must FAIL CLOSED (never silently clobber) against an
 // unverifiable existing receipt.
 func TestAppendLoadReceiptFailsClosedOnUnverifiable(t *testing.T) {
 	dir := t.TempDir()
@@ -282,9 +288,9 @@ func TestAppendLoadReceiptFailsClosedOnUnverifiable(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sdir, "mcp.json"), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := appendLoadReceipt(dir, sandbox, "slack", fixedClock("2024-01-01T00:00:00Z"))
+	err := AppendLoadReceipt(dir, sandbox, "slack", fixedClock("2024-01-01T00:00:00Z"))
 	if err == nil {
-		t.Fatal("want appendLoadReceipt to refuse an unverifiable existing receipt")
+		t.Fatal("want AppendLoadReceipt to refuse an unverifiable existing receipt")
 	}
 	// The corrupt file must be left untouched, not clobbered.
 	raw, rerr := os.ReadFile(filepath.Join(sdir, "mcp.json"))
@@ -302,14 +308,14 @@ func TestSandboxNameTraversalRejected(t *testing.T) {
 	dir := t.TempDir()
 	bad := []string{"", ".", "..", "../escape", "a/../../b", "foo/bar", "foo\\bar", "/etc/passwd"}
 	for _, name := range bad {
-		if err := writeCreateReceipt(dir, name, "", nil, fixedClock("2024-01-01T00:00:00Z")); err == nil {
-			t.Errorf("writeCreateReceipt(%q): want error, got nil", name)
+		if err := WriteCreateReceipt(dir, name, "", nil, fixedClock("2024-01-01T00:00:00Z")); err == nil {
+			t.Errorf("WriteCreateReceipt(%q): want error, got nil", name)
 		}
-		if err := appendLoadReceipt(dir, name, "slack", fixedClock("2024-01-01T00:00:00Z")); err == nil {
-			t.Errorf("appendLoadReceipt(%q): want error, got nil", name)
+		if err := AppendLoadReceipt(dir, name, "slack", fixedClock("2024-01-01T00:00:00Z")); err == nil {
+			t.Errorf("AppendLoadReceipt(%q): want error, got nil", name)
 		}
-		if _, _, err := readSandboxMCPReceipt(dir, name); err == nil {
-			t.Errorf("readSandboxMCPReceipt(%q): want error, got nil", name)
+		if _, _, err := ReadMCPReceipt(dir, name); err == nil {
+			t.Errorf("ReadMCPReceipt(%q): want error, got nil", name)
 		}
 	}
 	// Confirm nothing escaped the state root.
@@ -330,9 +336,9 @@ func TestWriteCreateReceiptRefusesSymlinkedSandboxDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	outside := t.TempDir()
-	requireSymlink(t, outside, filepath.Join(root, "pix-sym"))
+	RequireSymlink(t, outside, filepath.Join(root, "pix-sym"))
 
-	if err := writeCreateReceipt(dir, "pix-sym", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err == nil {
+	if err := WriteCreateReceipt(dir, "pix-sym", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err == nil {
 		t.Fatal("want an error writing through a symlinked sandbox directory")
 	}
 	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
@@ -346,9 +352,9 @@ func TestWriteCreateReceiptRefusesSymlinkedStateRoot(t *testing.T) {
 	}
 	dir := t.TempDir()
 	outside := t.TempDir()
-	requireSymlink(t, outside, filepath.Join(dir, "sandboxes"))
+	RequireSymlink(t, outside, filepath.Join(dir, "sandboxes"))
 
-	if err := writeCreateReceipt(dir, "pix-x", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err == nil {
+	if err := WriteCreateReceipt(dir, "pix-x", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err == nil {
 		t.Fatal("want an error creating through a symlinked state root")
 	}
 	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
@@ -372,10 +378,10 @@ func TestWriteCreateReceiptReplacesSymlinkedDestinationFile(t *testing.T) {
 	if err := os.WriteFile(victim, []byte("do-not-touch"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	requireSymlink(t, victim, filepath.Join(sdir, "mcp.json"))
+	RequireSymlink(t, victim, filepath.Join(sdir, "mcp.json"))
 
-	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
-		t.Fatalf("writeCreateReceipt: %v", err)
+	if err := WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+		t.Fatalf("WriteCreateReceipt: %v", err)
 	}
 	// The victim file must be untouched...
 	vb, err := os.ReadFile(victim)
@@ -393,8 +399,8 @@ func TestWriteCreateReceiptReplacesSymlinkedDestinationFile(t *testing.T) {
 	if fi.Mode()&os.ModeSymlink != 0 {
 		t.Fatal("mcp.json is still a symlink after write")
 	}
-	r, status, err := readSandboxMCPReceipt(dir, sandbox)
-	if err != nil || status != sandboxMCPStateOK {
+	r, status, err := ReadMCPReceipt(dir, sandbox)
+	if err != nil || status != MCPStateOK {
 		t.Fatalf("status=%v err=%v", status, err)
 	}
 	if len(r.Preloaded) != 1 || r.Preloaded[0] != "slack" {
@@ -402,7 +408,7 @@ func TestWriteCreateReceiptReplacesSymlinkedDestinationFile(t *testing.T) {
 	}
 }
 
-// readSandboxMCPReceipt must refuse (not follow) a symlinked mcp.json too.
+// ReadMCPReceipt must refuse (not follow) a symlinked mcp.json too.
 func TestReadSandboxMCPReceiptRefusesSymlinkedDestinationFile(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on windows")
@@ -417,13 +423,13 @@ func TestReadSandboxMCPReceiptRefusesSymlinkedDestinationFile(t *testing.T) {
 	if err := os.WriteFile(elsewhere, []byte(`{"schema":1,"sandbox":"pix-read-sym"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	requireSymlink(t, elsewhere, filepath.Join(sdir, "mcp.json"))
+	RequireSymlink(t, elsewhere, filepath.Join(sdir, "mcp.json"))
 
-	_, status, err := readSandboxMCPReceipt(dir, sandbox)
+	_, status, err := ReadMCPReceipt(dir, sandbox)
 	if err == nil {
 		t.Fatal("want an error reading through a symlinked destination")
 	}
-	if status != sandboxMCPStateUnreadable {
+	if status != MCPStateUnreadable {
 		t.Fatalf("status = %v, want unreadable", status)
 	}
 }
@@ -433,7 +439,7 @@ func TestReadSandboxMCPReceiptRefusesSymlinkedDestinationFile(t *testing.T) {
 func TestAppendLoadReceiptConcurrentAppendsDoNotLoseUpdates(t *testing.T) {
 	dir := t.TempDir()
 	sandbox := "pix-concurrent"
-	if err := writeCreateReceipt(dir, sandbox, "", nil, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := WriteCreateReceipt(dir, sandbox, "", nil, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 	names := make([]string, 0, 20)
@@ -446,17 +452,17 @@ func TestAppendLoadReceiptConcurrentAppendsDoNotLoseUpdates(t *testing.T) {
 		wg.Add(1)
 		go func(i int, name string) {
 			defer wg.Done()
-			errs[i] = appendLoadReceipt(dir, sandbox, name, fixedClock("2024-01-01T01:00:00Z"))
+			errs[i] = AppendLoadReceipt(dir, sandbox, name, fixedClock("2024-01-01T01:00:00Z"))
 		}(i, name)
 	}
 	wg.Wait()
 	for i, err := range errs {
 		if err != nil {
-			t.Fatalf("appendLoadReceipt(%q): %v", names[i], err)
+			t.Fatalf("AppendLoadReceipt(%q): %v", names[i], err)
 		}
 	}
-	r, status, err := readSandboxMCPReceipt(dir, sandbox)
-	if err != nil || status != sandboxMCPStateOK {
+	r, status, err := ReadMCPReceipt(dir, sandbox)
+	if err != nil || status != MCPStateOK {
 		t.Fatalf("status=%v err=%v", status, err)
 	}
 	if len(r.Loads) != len(names) {
@@ -484,10 +490,10 @@ func TestSandboxMCPStatePermissions(t *testing.T) {
 	}
 	dir := t.TempDir()
 	sandbox := "pix-perm"
-	if err := writeCreateReceipt(dir, sandbox, "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	root := sandboxMCPStateRoot(dir)
+	root := MCPStateRoot(dir)
 	if fi, err := os.Stat(root); err != nil {
 		t.Fatal(err)
 	} else if fi.Mode().Perm() != 0o700 {
@@ -507,11 +513,11 @@ func TestSandboxMCPStatePermissions(t *testing.T) {
 	}
 }
 
-// --- misc: empty name to appendLoadReceipt, nil-clock default, status strings ---
+// --- misc: empty name to AppendLoadReceipt, nil-clock default, status strings ---
 
 func TestAppendLoadReceiptRejectsEmptyName(t *testing.T) {
 	dir := t.TempDir()
-	if err := appendLoadReceipt(dir, "pix-empty-name", "   ", fixedClock("2024-01-01T00:00:00Z")); err == nil {
+	if err := AppendLoadReceipt(dir, "pix-empty-name", "   ", fixedClock("2024-01-01T00:00:00Z")); err == nil {
 		t.Fatal("want an error for a blank mcp server name")
 	}
 }
@@ -519,13 +525,13 @@ func TestAppendLoadReceiptRejectsEmptyName(t *testing.T) {
 func TestWriteAndAppendDefaultClock(t *testing.T) {
 	dir := t.TempDir()
 	before := time.Now().Add(-time.Second)
-	if err := writeCreateReceipt(dir, "pix-defclock", "", nil, nil); err != nil {
+	if err := WriteCreateReceipt(dir, "pix-defclock", "", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendLoadReceipt(dir, "pix-defclock", "slack", nil); err != nil {
+	if err := AppendLoadReceipt(dir, "pix-defclock", "slack", nil); err != nil {
 		t.Fatal(err)
 	}
-	r, _, err := readSandboxMCPReceipt(dir, "pix-defclock")
+	r, _, err := ReadMCPReceipt(dir, "pix-defclock")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,16 +546,16 @@ func TestWriteAndAppendDefaultClock(t *testing.T) {
 
 func TestSandboxMCPStateStatusStringsAndUnverifiable(t *testing.T) {
 	cases := []struct {
-		status       sandboxMCPStateStatus
+		status       MCPStateStatus
 		want         string
 		unverifiable bool
 	}{
-		{sandboxMCPStateOK, "ok", false},
-		{sandboxMCPStateAbsent, "absent", false},
-		{sandboxMCPStateUnreadable, "unreadable", true},
-		{sandboxMCPStateCorrupt, "corrupt", true},
-		{sandboxMCPStateSchemaMismatch, "schema-mismatch", true},
-		{sandboxMCPStateIdentityMismatch, "identity-mismatch", true},
+		{MCPStateOK, "ok", false},
+		{MCPStateAbsent, "absent", false},
+		{MCPStateUnreadable, "unreadable", true},
+		{MCPStateCorrupt, "corrupt", true},
+		{MCPStateSchemaMismatch, "schema-mismatch", true},
+		{MCPStateIdentityMismatch, "identity-mismatch", true},
 	}
 	for _, c := range cases {
 		if got := c.status.String(); got != c.want {
@@ -564,8 +570,8 @@ func TestSandboxMCPStateStatusStringsAndUnverifiable(t *testing.T) {
 func TestValidateSandboxStateNameAcceptsRealisticNames(t *testing.T) {
 	good := []string{"pix-work", "pix-t-foo-abc123", "a", "A1_-"}
 	for _, name := range good {
-		if err := validateSandboxStateName(name); err != nil {
-			t.Errorf("validateSandboxStateName(%q): %v", name, err)
+		if err := ValidateStateName(name); err != nil {
+			t.Errorf("ValidateStateName(%q): %v", name, err)
 		}
 	}
 }
@@ -583,7 +589,7 @@ func TestReadSandboxMCPReceiptErrorMessagesAreDescriptive(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sdir, "mcp.json"), []byte(`{"schema":1,"sandbox":"wrong"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := readSandboxMCPReceipt(dir, sandbox)
+	_, _, err := ReadMCPReceipt(dir, sandbox)
 	if err == nil || !strings.Contains(err.Error(), "identity") {
 		t.Fatalf("err = %v, want a message mentioning identity", err)
 	}
@@ -592,3 +598,7 @@ func TestReadSandboxMCPReceiptErrorMessagesAreDescriptive(t *testing.T) {
 		t.Fatalf("unexpected raw *os.PathError leaking as the identity-mismatch error: %v", err)
 	}
 }
+
+// RequireSymlink creates a symlink or skips on a platform that cannot. Each
+// package carries its own three-line copy rather than importing a testing
+// helper across a package boundary, which is the correct amount of duplication

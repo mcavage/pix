@@ -276,7 +276,7 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 	// rationale (trusted facts travel only inside the generated prompt, never
 	// a workspace file a hostile clone could also write).
 	if _, err := os.Stat(filepath.Join(ws, ".pix", "host-state.json")); !os.IsNotExist(err) {
-		t.Errorf("host-state.json must never exist in a workspace, stat err=%v", err)
+		t.Errorf("host-state.json must never exist in a ws, stat err=%v", err)
 	}
 }
 
@@ -300,10 +300,10 @@ func TestRoutingAndArtifactsAreHostDataRootNotWorkspaceMarkers(t *testing.T) {
 			t.Errorf("%s dir %q must resolve under XDG_DATA_HOME (%q), not somewhere workspace-relative", p.name, p.dir, dataHome)
 		}
 		if strings.Contains(p.dir, ".pix") {
-			t.Errorf("%s dir %q must never contain a .pix path component — it is host data, not a workspace marker", p.name, p.dir)
+			t.Errorf("%s dir %q must never contain a .pix path component — it is host data, not a ws marker", p.name, p.dir)
 		}
 		if strings.HasPrefix(p.dir, ws) {
-			t.Errorf("%s dir %q must never live inside the workspace %q", p.name, p.dir, ws)
+			t.Errorf("%s dir %q must never live inside the ws %q", p.name, p.dir, ws)
 		}
 	}
 }

@@ -34,6 +34,7 @@ import (
 	"path/filepath"
 
 	"pix/host/config"
+	"pix/host/sys"
 )
 
 const syncedRefsStoreName = "synced-refs.json"
@@ -117,7 +118,7 @@ func (s *syncedRefsStore) save() error {
 	if err != nil {
 		return err
 	}
-	return atomicWriteInDir(dir, syncedRefsStoreName, append(b, '\n'), 0o600)
+	return sys.AtomicWriteInDir(dir, syncedRefsStoreName, append(b, '\n'), 0o600)
 }
 
 // mutateSyncedRefsStore is the sanctioned write path: under the cross-process

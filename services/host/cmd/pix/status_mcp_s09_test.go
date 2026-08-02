@@ -17,6 +17,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/sys/systest"
+	"pix/host/workspace"
 )
 
 // statusMCPEnv is a hermetic shellEnv for the per-sandbox row tests: sbx on
@@ -57,10 +58,10 @@ func TestStatusMCPRowsAllFiveStates(t *testing.T) {
 	env, stateDir := statusMCPEnv(t,
 		"NAME STATE DIR\npix-proj running /home/u/proj\npix-bad running /home/u/bad\n",
 		"google-workspace\nslack\nnotion\n") // linear positively not registered
-	if err := writeCreateReceipt(stateDir, "pix-proj", "", []string{gwServerName}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{gwServerName}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendLoadReceipt(stateDir, "pix-proj", "slack", receiptClock); err != nil {
+	if err := workspace.AppendLoadReceipt(stateDir, "pix-proj", "slack", receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	badDir := filepath.Join(stateDir, "sandboxes", "pix-bad")
@@ -148,7 +149,7 @@ func TestStatusMCPPositiveReceiptDominatesDeregistration(t *testing.T) {
 		out, err := run(name, args...)
 		return out, false, err
 	}
-	if err := writeCreateReceipt(stateDir, "pix-proj", "", []string{"slack"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	st := gatherStatus(cfg, "default", env)
@@ -175,7 +176,7 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 
 	t.Run("dir known", func(t *testing.T) {
 		env, stateDir := statusMCPEnv(t, "pix-proj running /home/u/proj\n", "notion\n")
-		if err := writeCreateReceipt(stateDir, "pix-proj", "", nil, receiptClock); err != nil {
+		if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", nil, receiptClock); err != nil {
 			t.Fatal(err)
 		}
 		st := gatherStatus(cfg, "default", env)
@@ -186,7 +187,7 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 
 	t.Run("dir unknown", func(t *testing.T) {
 		env, stateDir := statusMCPEnv(t, "pix-proj running\n", "notion\n")
-		if err := writeCreateReceipt(stateDir, "pix-proj", "", nil, receiptClock); err != nil {
+		if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", nil, receiptClock); err != nil {
 			t.Fatal(err)
 		}
 		st := gatherStatus(cfg, "default", env)
@@ -283,7 +284,7 @@ func TestStatusHostGlobalNoAttachmentClaim(t *testing.T) {
 func TestStatusMCPReceiptOnlyNameVisible(t *testing.T) {
 	cfg := &config.Config{MCP: []string{gwServerName}} // current intent: gog only
 	env, stateDir := statusMCPEnv(t, "pix-proj running /home/u/proj\n", "google-workspace\nnotion\n")
-	if err := writeCreateReceipt(stateDir, "pix-proj", "", []string{gwServerName, "notion"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{gwServerName, "notion"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	st := gatherStatus(cfg, "default", env)
@@ -321,10 +322,10 @@ func TestStatusMCPReceiptOnlyNameVisible(t *testing.T) {
 func TestStatusMCPRowsJSONGolden(t *testing.T) {
 	cfg := &config.Config{MCP: []string{gwServerName, "slack", "notion", "linear"}}
 	env, stateDir := statusMCPEnv(t, "pix-proj running /home/u/proj\n", "google-workspace\nslack\nnotion\n")
-	if err := writeCreateReceipt(stateDir, "pix-proj", "", []string{gwServerName}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{gwServerName}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendLoadReceipt(stateDir, "pix-proj", "slack", receiptClock); err != nil {
+	if err := workspace.AppendLoadReceipt(stateDir, "pix-proj", "slack", receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	st := gatherStatus(cfg, "default", env)
@@ -386,7 +387,7 @@ func TestStatusNoRetiredMCPVocabulary(t *testing.T) {
 	}
 	cfg := &config.Config{MCP: []string{gwServerName, "slack", "notion", "linear"}}
 	env, stateDir := statusMCPEnv(t, "pix-proj running /home/u/proj\n", "google-workspace\nslack\nnotion\n")
-	if err := writeCreateReceipt(stateDir, "pix-proj", "", []string{gwServerName}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{gwServerName}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	for _, jsonOut := range []bool{false, true} {

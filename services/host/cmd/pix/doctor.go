@@ -11,6 +11,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/sys"
 	"pix/host/sys/systest"
+	"pix/host/workspace"
 )
 
 // doctor ports the Makefile `doctor:` target into Go. Unlike the shell version
@@ -326,7 +327,7 @@ func runDoctorCmd(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix doctor: %v\n\n%s", err, doctorUsage)
 		os.Exit(2)
 	}
-	cfg, _, err := loadResolvedConfig()
+	cfg, _, err := workspace.LoadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix doctor: %v\n", err)
 		os.Exit(1)

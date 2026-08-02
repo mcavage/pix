@@ -14,6 +14,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/rpc"
+	"pix/host/workspace"
 )
 
 // mcpCatalogNames is the SINGLE public source of truth for the shipped MCP
@@ -211,7 +212,7 @@ func runMcpLoad(argv []string) {
 	// itself succeeded — never before, never on a failed load. A missing sbx
 	// (the would-run branch above) never reaches this call at all.
 	if err := execSbxMcpLoadAndRecord(cmd, sandbox, name); err != nil {
-		var rerr *receiptRecordError
+		var rerr *workspace.ReceiptRecordError
 		if errors.As(err, &rerr) {
 			// The attach itself succeeded — only the local receipt failed.
 			// Report that distinctly (never a plain success) and exit non-zero
@@ -274,13 +275,13 @@ func parseMcpLoadArgs(argv []string) (name, ws string, err error) {
 // or an unresolvable state dir — returns an error so the caller REFUSES
 // instead of attaching a server to an arbitrary box.
 func resolveMcpLoadSandbox(ws string) (string, error) {
-	dir, err := sandboxMCPStateDirFn()
+	dir, err := workspace.MCPStateDirFn()
 	if err != nil {
 		return "", fmt.Errorf("resolving pix state dir: %w", err)
 	}
-	res := resolveWorkspaceSandbox(dir, ws)
+	res := workspace.ResolveSandbox(dir, ws)
 	switch res.Outcome {
-	case workspaceSandboxMapped, workspaceSandboxDefault:
+	case workspace.SandboxMapped, workspace.SandboxDefault:
 		return res.Sandbox, nil
 	default: // ambiguous / untrusted — never target an arbitrary box
 		return "", fmt.Errorf("cannot resolve which sandbox belongs to %s: %s", ws, res.Detail)
@@ -291,12 +292,12 @@ func resolveMcpLoadSandbox(ws string) (string, error) {
 // ONLY by execSbxMcpLoadAndRecord, after mcp.go's OWN `sbx mcp load` has
 // already exec'd successfully.
 func recordMcpLoadReceipt(sandbox, name string) error {
-	dir, err := sandboxMCPStateDirFn()
+	dir, err := workspace.MCPStateDirFn()
 	if err != nil {
-		return &receiptRecordError{op: "mcp load", sandbox: sandbox, name: name, err: fmt.Errorf("resolving pix state dir: %w", err)}
+		return &workspace.ReceiptRecordError{Op: "mcp load", Sandbox: sandbox, Name: name, Err: fmt.Errorf("resolving pix state dir: %w", err)}
 	}
-	if err := appendLoadReceipt(dir, sandbox, name, nil); err != nil {
-		return &receiptRecordError{op: "mcp load", sandbox: sandbox, name: name, err: err}
+	if err := workspace.AppendLoadReceipt(dir, sandbox, name, nil); err != nil {
+		return &workspace.ReceiptRecordError{Op: "mcp load", Sandbox: sandbox, Name: name, Err: err}
 	}
 	return nil
 }
@@ -305,8 +306,8 @@ func recordMcpLoadReceipt(sandbox, name string) error {
 // invocation) and — ONLY when the exec itself succeeds — appends the load
 // receipt for sandbox/name. Mirrors execSbxRunAndRecordCreate's ordering
 // contract (run.go): a failed exec returns before any receipt write is
-// attempted, and a writeCreateReceipt-equivalent failure here surfaces as
-// *receiptRecordError so the caller reports "attached, but state unrecorded"
+// attempted, and a workspace.WriteCreateReceipt-equivalent failure here surfaces as
+// *workspace.ReceiptRecordError so the caller reports "attached, but state unrecorded"
 // rather than a plain success or a plain failure.
 func execSbxMcpLoadAndRecord(cmd *exec.Cmd, sandbox, name string) error {
 	if err := cmd.Run(); err != nil {
@@ -365,7 +366,7 @@ const mcpLsAttachmentNote = "\nNote: this is the gateway's HOST registration lis
 // servers (or, with no args, the local ones in cfg.MCP) with the sbx gateway,
 // porting `make mcp-register` so nobody needs the repo/Makefile.
 func runMcpRegister(argv []string) {
-	cfg, _, err := loadResolvedConfig()
+	cfg, _, err := workspace.LoadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix mcp register: loading config: %v\n", err)
 		os.Exit(1)

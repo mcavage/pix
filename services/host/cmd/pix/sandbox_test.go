@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"pix/host/workspace"
 	"testing"
 	"time"
 )
@@ -46,16 +47,16 @@ func TestParsePixBoxes_DoesNotMistakePackMountForWorkspace(t *testing.T) {
 
 func TestOverlayReceiptDirs_PrefersCanonicalCreatedWorkspace(t *testing.T) {
 	stateDir := t.TempDir()
-	workspace := filepath.Join(t.TempDir(), "project")
-	if err := writeCreateReceipt(stateDir, "pix-demo", workspace, nil, func() time.Time {
+	ws := filepath.Join(t.TempDir(), "project")
+	if err := workspace.WriteCreateReceipt(stateDir, "pix-demo", ws, nil, func() time.Time {
 		return time.Unix(1, 0)
 	}); err != nil {
 		t.Fatal(err)
 	}
 	boxes := []sbxBox{{Name: "pix-demo", State: "running", Dir: "/wrong/pack/skills"}}
 	overlayReceiptDirs(boxes, stateDir)
-	if boxes[0].Dir != workspace {
-		t.Fatalf("dir = %q, want receipt workspace %q", boxes[0].Dir, workspace)
+	if boxes[0].Dir != ws {
+		t.Fatalf("dir = %q, want receipt ws %q", boxes[0].Dir, ws)
 	}
 }
 

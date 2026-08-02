@@ -1,5 +1,7 @@
 package main
 
+import "pix/host/workspace"
+
 // mcpjoin.go — S09: the ONE pure truth path joining a configured MCP server
 // set with host registration evidence and the per-sandbox launcher receipt
 // (sandboxmcpstate.go). Both consumers render FROM these rows:
@@ -73,12 +75,12 @@ func mcpRegEvidenceFrom(mcpOut string, mcpOK bool, name string) mcpRegEvidence {
 // The five join states. Exactly one is assigned per (server, sandbox) pair.
 const (
 	// mcpJoinPreloaded: the receipt records pix preloading this server at
-	// the sandbox's create (writeCreateReceipt). A positive receipt claim, so
+	// the sandbox's create (workspace.WriteCreateReceipt). A positive receipt claim, so
 	// it wins regardless of the current registration reading (see PRECEDENCE
 	// above).
 	mcpJoinPreloaded = "preloaded"
 	// mcpJoinLoaded: the receipt records a successful live `pix mcp load`
-	// (appendLoadReceipt). A positive receipt claim; same precedence as
+	// (workspace.AppendLoadReceipt). A positive receipt claim; same precedence as
 	// mcpJoinPreloaded.
 	mcpJoinLoaded = "loaded"
 	// mcpJoinRegisteredNotAttached: registered with the gateway, and a VALID
@@ -109,8 +111,8 @@ type mcpJoinRow struct {
 // create-time static set), "loaded" (a live `pix mcp load`), or "" (no
 // entry). It reads the receipt ONLY when rstatus vouches for it — an absent or
 // unverifiable receipt claims nothing.
-func receiptClaim(receipt *sandboxMCPReceipt, rstatus sandboxMCPStateStatus, name string) string {
-	if rstatus != sandboxMCPStateOK || receipt == nil {
+func receiptClaim(receipt *workspace.MCPReceipt, rstatus workspace.MCPStateStatus, name string) string {
+	if rstatus != workspace.MCPStateOK || receipt == nil {
 		return ""
 	}
 	if containsStr(receipt.Preloaded, name) {
@@ -164,7 +166,7 @@ func regEvidenceNote(reg mcpRegEvidence) string {
 //     "no entry" is not "positively never attached".
 //  5. No positive claim, registered, valid FULL receipt -> registered-not-
 //     attached: pix positively has no record of attaching it here.
-func joinMCPSandboxRow(name string, reg mcpRegEvidence, sandbox string, receipt *sandboxMCPReceipt, rstatus sandboxMCPStateStatus) mcpJoinRow {
+func joinMCPSandboxRow(name string, reg mcpRegEvidence, sandbox string, receipt *workspace.MCPReceipt, rstatus workspace.MCPStateStatus) mcpJoinRow {
 	row := mcpJoinRow{Name: name, Registered: reg, Sandbox: sandbox}
 	claim := receiptClaim(receipt, rstatus, name)
 	if claim != "" {
@@ -197,7 +199,7 @@ func joinMCPSandboxRow(name string, reg mcpRegEvidence, sandbox string, receipt 
 		row.Evidence = "receipt " + rstatus.String() + "; " + mcpAttachGuidance(name)
 		return row
 	}
-	if rstatus == sandboxMCPStateAbsent {
+	if rstatus == workspace.MCPStateAbsent {
 		row.State = mcpJoinUnverifiable
 		row.Evidence = "receipt absent; " + mcpAttachGuidance(name)
 		return row
@@ -215,7 +217,7 @@ func joinMCPSandboxRow(name string, reg mcpRegEvidence, sandbox string, receipt 
 // joinMCPSandboxRows joins every configured name against one sandbox's
 // receipt, preserving the configured order. reg supplies each name's
 // registration tri-state (from the ONE listing the caller already fetched).
-func joinMCPSandboxRows(names []string, reg func(name string) mcpRegEvidence, sandbox string, receipt *sandboxMCPReceipt, rstatus sandboxMCPStateStatus) []mcpJoinRow {
+func joinMCPSandboxRows(names []string, reg func(name string) mcpRegEvidence, sandbox string, receipt *workspace.MCPReceipt, rstatus workspace.MCPStateStatus) []mcpJoinRow {
 	rows := make([]mcpJoinRow, 0, len(names))
 	for _, n := range names {
 		rows = append(rows, joinMCPSandboxRow(n, reg(n), sandbox, receipt, rstatus))
@@ -253,9 +255,9 @@ func mcpCurrentIntentNames(cfgMCP []string, containers map[string]packContainer,
 // visible on THIS sandbox even after cfg.MCP/the active pack moved on.
 // receiptOnly reports which returned names are NOT part of currentIntent, so
 // callers can label their evidence as sandbox provenance rather than current
-// preload intent. A nil receipt (readSandboxMCPReceipt only ever returns
-// non-nil on sandboxMCPStateOK) is a no-op extension.
-func mcpConfiguredUniverse(currentIntent []string, receipt *sandboxMCPReceipt, exclude map[string]bool) (names []string, receiptOnly map[string]bool) {
+// preload intent. A nil receipt (workspace.ReadMCPReceipt only ever returns
+// non-nil on workspace.MCPStateOK) is a no-op extension.
+func mcpConfiguredUniverse(currentIntent []string, receipt *workspace.MCPReceipt, exclude map[string]bool) (names []string, receiptOnly map[string]bool) {
 	seen := map[string]bool{}
 	for k := range exclude {
 		seen[k] = true

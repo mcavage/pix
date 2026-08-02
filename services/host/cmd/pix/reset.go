@@ -12,6 +12,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/rpc"
+	"pix/host/workspace"
 )
 
 // reset is the destructive-but-reversible lifecycle verb. Nothing is ever
@@ -660,7 +661,7 @@ func executeSbxReset(a resetActions, env shellEnv, out io.Writer) {
 				// use (lock-serialized, symlink-safe). Best-effort: the removal
 				// DID succeed, so a clear failure is reported, never fatal — the
 				// next launcher create's pre-create clear is the backstop.
-				if cerr := clearRemovedSandboxReceipt(sb.Name); cerr != nil {
+				if cerr := workspace.ClearRemovedReceipt(sb.Name); cerr != nil {
 					fmt.Fprintf(out, "  · could not clear the mcp receipt for %s — %v\n", sb.Name, cerr)
 				}
 			}
@@ -804,7 +805,7 @@ func runReset(argv []string) {
 		fmt.Print(resetUsage)
 		return
 	}
-	cfg, _, err := loadResolvedConfig()
+	cfg, _, err := workspace.LoadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix reset: %v\n", err)
 		os.Exit(1)

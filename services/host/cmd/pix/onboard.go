@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/workspace"
 )
 
 // Onboarding is the agentic first-run flow (docs/design/onboarding.md). The
@@ -46,7 +47,7 @@ type onboardKnowledge struct {
 	Source string `json:"source"` // path (scaffold) or path|git-url (use)
 }
 
-// onboardingFileName is the per-workspace control-plane proposal, written by the
+// onboardingFileName is the per-ws control-plane proposal, written by the
 // agent and consumed by the host on the next run.
 const onboardingFileName = "onboarding.json"
 
@@ -160,8 +161,8 @@ func applyOnboardingResult(r *onboardingResult, cfg *config.Config, env shellEnv
 // prompt for CI), registers any newly-enabled MCP servers, then removes the
 // file. Absent file is a clean no-op. A validation failure leaves the file in
 // place and warns (so a human can inspect it) but never aborts the caller.
-func reconcileOnboarding(workspace string, env shellEnv, in io.Reader, out io.Writer, assumeYes, tty bool) {
-	path := filepath.Join(workspace, ".pix", onboardingFileName)
+func reconcileOnboarding(ws string, env shellEnv, in io.Reader, out io.Writer, assumeYes, tty bool) {
+	path := filepath.Join(ws, ".pix", onboardingFileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return // absent (or unreadable) => nothing to reconcile
@@ -198,7 +199,7 @@ func reconcileOnboarding(workspace string, env shellEnv, in io.Reader, out io.Wr
 		return
 	}
 	if len(changes) == 0 {
-		_ = removeWorkspaceStateFile(workspace, onboardingFileName) // nothing new; clear the marker
+		_ = workspace.RemoveStateFile(ws, onboardingFileName) // nothing new; clear the marker
 		return
 	}
 
@@ -227,7 +228,7 @@ func reconcileOnboarding(workspace string, env shellEnv, in io.Reader, out io.Wr
 			fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pix mcp register)\n", err)
 		}
 	}
-	_ = removeWorkspaceStateFile(workspace, onboardingFileName)
+	_ = workspace.RemoveStateFile(ws, onboardingFileName)
 	fmt.Fprintf(out, "Applied %d onboarding change(s) to %s.\n", len(applied), config.Path())
 }
 

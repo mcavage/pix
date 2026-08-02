@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/workspace"
 )
 
 // TestMcpReattachWarning_CfgChangeWarns: a server added to cfg.MCP since this
@@ -24,7 +25,7 @@ import (
 func TestMcpReattachWarning_CfgChangeWarns(t *testing.T) {
 	sd := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return sd, nil })
-	if err := writeCreateReceipt(sd, "pix-t", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := workspace.WriteCreateReceipt(sd, "pix-t", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -54,7 +55,7 @@ func TestMcpReattachWarning_CfgChangeWarns(t *testing.T) {
 func TestMcpReattachWarning_PackChangeWarns(t *testing.T) {
 	sd := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return sd, nil })
-	if err := writeCreateReceipt(sd, "pix-t", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := workspace.WriteCreateReceipt(sd, "pix-t", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -80,7 +81,7 @@ func TestMcpReattachWarning_PackChangeWarns(t *testing.T) {
 func TestMcpReattachWarning_ExplicitMCPWarns(t *testing.T) {
 	sd := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return sd, nil })
-	if err := writeCreateReceipt(sd, "pix-t", "", nil, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := workspace.WriteCreateReceipt(sd, "pix-t", "", nil, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -97,10 +98,10 @@ func TestMcpReattachWarning_ExplicitMCPWarns(t *testing.T) {
 func TestMcpReattachWarning_AllAttachedSilent(t *testing.T) {
 	sd := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return sd, nil })
-	if err := writeCreateReceipt(sd, "pix-t", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := workspace.WriteCreateReceipt(sd, "pix-t", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendLoadReceipt(sd, "pix-t", gwServerName, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := workspace.AppendLoadReceipt(sd, "pix-t", gwServerName, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -117,7 +118,7 @@ func TestMcpReattachWarning_AllAttachedSilent(t *testing.T) {
 func TestMcpReattachWarning_ReceiptOnlyHistoricalNameSilent(t *testing.T) {
 	sd := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return sd, nil })
-	if err := writeCreateReceipt(sd, "pix-t", "", []string{"slack", "old-server"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := workspace.WriteCreateReceipt(sd, "pix-t", "", []string{"slack", "old-server"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -215,7 +216,7 @@ func TestMcpReattachWarning_NoDesiredServersSilent(t *testing.T) {
 func TestMcpReattachWarning_FiresOnBothRunningAndStopped(t *testing.T) {
 	sd := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return sd, nil })
-	if err := writeCreateReceipt(sd, "pix-t", "", nil, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := workspace.WriteCreateReceipt(sd, "pix-t", "", nil, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{MCP: []string{gwServerName}}
@@ -239,7 +240,7 @@ func TestMcpReattachWarning_FiresOnBothRunningAndStopped(t *testing.T) {
 func TestMcpReattachWarning_NeverAutoLoads(t *testing.T) {
 	sd := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return sd, nil })
-	if err := writeCreateReceipt(sd, "pix-t", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
+	if err := workspace.WriteCreateReceipt(sd, "pix-t", "", []string{"slack"}, fixedClock("2024-01-01T00:00:00Z")); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(filepath.Join(sd, "sandboxes", "pix-t", "mcp.json"))

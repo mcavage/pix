@@ -10,6 +10,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/monitor"
+	"pix/host/workspace"
 )
 
 // gogAuthTimeout bounds the `gog auth status` probe so the fast, read-only
@@ -31,7 +32,7 @@ func runStatusCmd(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix status: %v\n\n%s", err, statusUsage)
 		os.Exit(2)
 	}
-	cfg, name, err := loadResolvedConfig()
+	cfg, name, err := workspace.LoadResolvedConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix status: %v\n", err)
 		os.Exit(1)
@@ -460,7 +461,7 @@ func (st statusReport) render(out io.Writer) {
 		// A configured Workspace account is already included in the MCP summary.
 		// Only render it separately when it needs action or is not an MCP.
 		if !st.GogAuthed || !containsStr(st.MCP, gwServerName) {
-			fmt.Fprintf(out, "  workspace    %s\n", label)
+			fmt.Fprintf(out, "  ws    %s\n", label)
 		}
 	}
 
@@ -642,15 +643,15 @@ func statusRegisterTodoFn(cfg *config.Config, env shellEnv) func(name string) st
 
 // statusSandboxReceipt reads one discovered sandbox's launcher MCP receipt
 // through the stateDir seam. An unresolvable state dir yields
-// sandboxMCPStateUnreadable so the join renders UNVERIFIABLE — never a
+// workspace.MCPStateUnreadable so the join renders UNVERIFIABLE — never a
 // guessed empty receipt.
-func statusSandboxReceipt(env shellEnv, sandbox string) (*sandboxMCPReceipt, sandboxMCPStateStatus) {
+func statusSandboxReceipt(env shellEnv, sandbox string) (*workspace.MCPReceipt, workspace.MCPStateStatus) {
 
 	sd, err := env.StateDir()
 	if err != nil || strings.TrimSpace(sd) == "" {
-		return nil, sandboxMCPStateUnreadable
+		return nil, workspace.MCPStateUnreadable
 	}
-	receipt, rstatus, _ := readSandboxMCPReceipt(sd, sandbox)
+	receipt, rstatus, _ := workspace.ReadMCPReceipt(sd, sandbox)
 	return receipt, rstatus
 }
 

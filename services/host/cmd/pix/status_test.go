@@ -11,6 +11,7 @@ import (
 	"pix/host/monitor"
 	"pix/host/rpc"
 	"pix/host/sys/systest"
+	"pix/host/workspace"
 )
 
 // fakeStatusEnv builds a shellEnv where memory is up, knowledge down, sbx lists
@@ -540,7 +541,7 @@ func TestStatusMCPLoadTodoQuotesWorkspace(t *testing.T) {
 		}
 		return "", nil
 	}
-	if err := writeCreateReceipt(stateDir, box, ws, []string{"notion"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, box, ws, []string{"notion"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	st := gatherStatus(cfg, "default", env)
