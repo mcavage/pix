@@ -1,7 +1,9 @@
 # Rearchitecture: foundations for a 41k-line package
 
-Status: **in progress.** Phase 0 done, Phase 1 in flight. This doc is both the
-plan and the handoff — read "Where we are" before picking anything up.
+Status: **in progress.** Phases 0 and 1 are done and on `main`'s
+`refactor/foundations` branch, gate green. Phases 2 and 3 are specified below
+and not started. This doc is both the plan and the handoff — read "Where we
+are" before picking anything up.
 
 ## Why
 
@@ -118,19 +120,21 @@ type System interface { Exec; FS; Env; Net }
   a nil field means "this test did not wire it", and calling it returns a loud
   error naming the method and the test's own fixture. Nullability is confined
   to the test double, where it is explicit and safe.
-- The 125 nil-guards are deleted. `errNoProbeSeam` becomes unnecessary and goes
-  with them.
+- The nil-guards are deleted: **125 -> 11**, and the 11 survivors are all on the
+  domain probes below, which are not `sys`'s business.
 
 Domain probes (`slackAuthTest`, `identityProbe`, `directInferenceProbe`,
 `ollamaInferenceProbe`) deliberately do NOT live in `sys` — `sys` is OS seams
 with no domain knowledge. They stay on a shrinking `deps` struct in
 `cmd/pix` and move out with their packages in Phase 3.
 
-**Migration is compiler-verified**, which is what makes a 570-site change safe:
-every field access is a 1:1 rename, and the 205 `shellEnv{...}` test literals
-are rewritten by a brace-matching script (`scripts/migrate-shellenv.py`) into
-`&systest.Fake{...}`. Nothing is hand-edited in bulk; the type checker and 1,501
-tests are the proof.
+**Migration was compiler-verified**, which is what made a ~780-site change safe.
+Nothing was hand-edited in bulk; the type checker and 1,501 tests were the proof.
+See "Tools, and why they are committed" below.
+
+`sys.Exec` also carries `RunWithin(timeout, ...)`, because one caller needs a
+tighter bound than the default and the previous code got that by reaching past
+the seam to the real runner — which silently un-faked a hermetic test.
 
 ### Phase 2 — `cli`: one command model
 
@@ -140,11 +144,28 @@ usage string and exit: **266 `os.Exit` calls across 25 files, 349 direct
 place that could keep them honest, and no way to assert a verb's exit code
 without spawning a subprocess (several tests do).
 
-**Library: `github.com/alecthomas/kong`.** Chosen over cobra because it has
-**zero transitive dependencies** (verified), because commands are plain structs
-with a `Run(deps) error` method — which is the testability requirement stated
-directly — and because struct tags replace the hand-rolled parsing, so it
-*removes* lines rather than adding a framework's worth.
+**Library: `github.com/alecthomas/kong`** (decided; owner chose it over cobra
+after seeing both spelled out).
+
+Cobra is the default choice and deserves the rebuttal. Dependency weight is NOT
+the reason: cobra pulls three small pure-Go modules (cobra, pflag, mousetrap),
+kong pulls one with no transitive deps — a real but minor difference. The
+deciding factors were the two things this refactor is actually about:
+
+- **Boilerplate.** The same `models add` command is 8 lines in kong and ~20 in
+  cobra, because a kong flag is a struct field with a tag while a cobra flag is
+  a declaration plus a registration call plus a target variable. Across 34 verbs
+  that is the difference between the CLI layer shrinking and growing.
+- **Where dependencies live.** Cobra's `RunE` has no parameter for them, so they
+  arrive via `cmd.Context()` (untyped) and flag targets become package-level
+  vars — which is the global mutable state this refactor exists to remove. Kong
+  binds a typed `*cli.Deps` and hands it to `Run`, so a command is testable by
+  constructing the struct and calling the method: no parser, no globals, no
+  subprocess.
+
+What cobra would have bought — shell completions and man-page generation — this
+repo already implements itself (`pix help --all`, `--man`), and those renderers
+are staying either way.
 
 ```go
 type ModelsAddCmd struct {
@@ -183,9 +204,44 @@ rather than containing them.
 
 - [x] **Phase 0** — `services/host/inference` extracted; the router tells the
       truth about this host; `pix models add ollama`; probe seams return errors.
-- [ ] **Phase 1** — `sys` + `systest`, migration, 125 guards deleted.
-- [ ] **Phase 2** — `cli` + kong; verbs migrated incrementally.
-- [ ] **Phase 3** — domain packages.
+- [x] **Phase 1** — `sys` + `systest` landed and migrated. **125 nil guards ->
+      11**, and all 11 remaining are on the four DOMAIN probes that deliberately
+      do not live in `sys` and leave with their packages in Phase 3. Net **-623
+      lines**. Gate green.
+- [ ] **Phase 2** — `cli` + kong. Not started. Library decided; the command
+      contract is specified above. Start with `models`, which is the verb whose
+      behaviour is best understood right now.
+- [ ] **Phase 3** — domain packages. Not started. Phase 1 unblocked it by
+      removing the `shellEnv` coupling.
+
+### What Phase 1 actually found
+
+Every one of these was a fixture gap that the nullable seam had been rendering
+as a result. They are listed because they are the argument for the whole
+exercise, and because the same shape will keep surfacing in Phases 2-3:
+
+- `ollama pull` always preferred `RunInteractive`; the plain-runner fallback
+  existed only for fixtures that left it nil, so setup's pull tests spent their
+  entire lives exercising a path no user ever took.
+- `gogAuthed` reached PAST its own seam to the real bounded runner whenever a
+  nil check happened to pass — a "hermetic" test shelled out for real.
+- `localMCPNames` bailed on `env.run == nil`: production behaviour keyed off
+  "am I running inside a test".
+- An undeclared file in the doctor fixture returned an I/O error rather than
+  `os.ErrNotExist`. "I did not declare this file" means absent.
+
+### Tools, and why they are committed
+
+- `scripts/migrate-shellenv/` (Go, go/parser) — rewrote 207 composite literals.
+  A hand-rolled brace matcher was written first and abandoned: Go source has
+  braces inside line comments, rune literals and raw strings, and a scanner that
+  does not know the grammar mis-pairs them.
+- `scripts/migrate-shellenv.py` — 576 field-access renames. Textual, but every
+  false positive is a compile error (it caught `manEnv`, `resetFS`, `installFS`,
+  `serveStarter` and `fakeProber`, all of which share field names by accident).
+- `scripts/drop-nil-guards/` (Go, go/parser) — deleted 94 dead guards, skipping
+  nested edits so an outer guard's stale offsets cannot splice into text an
+  inner edit already moved.
 
 ## Rules for whoever picks this up
 

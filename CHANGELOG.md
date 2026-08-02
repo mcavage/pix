@@ -62,6 +62,20 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **`shellEnv` is gone; OS seams live in `services/host/sys`.** It was 22
+  nullable function pointers threaded through 254 functions and guarded by 125
+  hand-written nil checks that disagreed with each other — for `env.run == nil`
+  alone the package held fourteen distinct behaviours, and three shipped bugs
+  came out of the gap. `sys` splits the seams into four interfaces by what they
+  touch (`Exec`, `FS`, `Env`, `Net`), so a signature says what a function can
+  reach; `sys.Real` holds no nullable state, which is what let the guards be
+  deleted rather than rewritten (**125 -> 11**, all 11 on domain probes that
+  leave in a later phase). Nullability survives only in `sys/systest.Fake`,
+  where an unwired method fails loudly instead of returning a zero value that
+  reads like an answer. Net **-623 lines**. No user-visible behaviour change,
+  but several fixtures were found to have been testing paths no user took —
+  see docs/design/rearchitecture.md.
+
 - **An intent's `providers` list is a PREFERENCE, not an allowlist**, and is
   spelled `prefer_providers` in `policy.json` (the old key still loads, with
   the new semantics). The resolver ranks by objective and then floats preferred
