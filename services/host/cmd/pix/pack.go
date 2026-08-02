@@ -3579,17 +3579,13 @@ func packNameFromURL(url string) string {
 	return name + "-" + hex.EncodeToString(sum[:])[:16]
 }
 
-// safeGitURL moved to cli.SafeGitURL: refusing a URL that could be read as a
-// git flag is argument hygiene, and pack was only its first caller.
-func safeGitURL(url string) bool { return cli.SafeGitURL(url) }
-
 // clonePack clones (or updates) a remote pack into PacksDir/<name>, pinned to the
 // optional ref, and returns the local path. SHA-pin/provenance is a v2 concern;
 // v1 trusts the git remote (Tier 0: skills/knowledge/config, no host execution).
 func clonePack(env hostenv.Env, out io.Writer, raw string) (string, error) {
 
 	url, ref := parsePackURL(raw)
-	if !safeGitURL(url) {
+	if !cli.SafeGitURL(url) {
 		return "", fmt.Errorf("refusing unsafe git URL %q (only https/ssh/git remotes; no ext::/file:: transports)", url)
 	}
 	if ref != "" && strings.HasPrefix(ref, "-") {
@@ -3833,3 +3829,22 @@ wrappers + config that defines your context. See docs/design/packs.md.
                           (pix run --replace) to take effect.
   rm                      detach the active pack (files untouched)
 `
+
+// packContainerNames returns the pack-integration server names in a stable
+// (sorted) order, so the group renders deterministically.
+func packContainerNames(containers map[string]packContainer) []string {
+	if len(containers) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(containers))
+	for n := range containers {
+		names = append(names, n)
+	}
+	// small n; insertion sort avoids an import for sort in this file's diff
+	for i := 1; i < len(names); i++ {
+		for j := i; j > 0 && names[j] < names[j-1]; j-- {
+			names[j], names[j-1] = names[j-1], names[j]
+		}
+	}
+	return names
+}

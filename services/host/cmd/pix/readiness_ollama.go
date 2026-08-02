@@ -114,7 +114,7 @@ func splitHostPort(s string) (string, int, bool) {
 // not by hard-coding a requirement.
 func ollamaHostAxis(cfg *config.Config, env hostenv.Env, ep ollamaEndpoint, p ollamaProbe) []readiness.Check {
 	daemonUp := p.daemonUp || p.listOK
-	memoryEnabled := enabled(cfg, "memory")
+	memoryEnabled := config.ServiceEnabled(cfg, "memory")
 	switch {
 	case p.installed && daemonUp:
 		return []readiness.Check{{

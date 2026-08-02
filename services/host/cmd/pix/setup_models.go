@@ -431,7 +431,7 @@ func printSetupSummary(cfg *config.Config, env hostenv.Env, out io.Writer, model
 		// Packs are explicit and undiscoverable in normal setup.
 	}
 
-	if enabled(cfg, "memory") || cfg.Inference.Backends["ollama"].Driver == "ollama" {
+	if config.ServiceEnabled(cfg, "memory") || cfg.Inference.Backends["ollama"].Driver == "ollama" {
 		mg, md := models.summaryLine()
 		line(mg, "local models", md)
 	}

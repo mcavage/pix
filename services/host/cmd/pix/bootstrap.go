@@ -7,6 +7,7 @@ package main
 
 import (
 	"io"
+	"pix/host/cli"
 	"pix/host/hostenv"
 	"pix/host/secret"
 )
@@ -36,7 +37,7 @@ func sbxModelKeyState(env hostenv.Env) (present, probeOK bool) {
 // already-fetched probe result) so the two can never diverge.
 func anyModelKeyInOutput(out string) bool {
 	for _, k := range secret.ModelProviders {
-		if grepWord(out, k) {
+		if cli.GrepWord(out, k) {
 			return true
 		}
 	}

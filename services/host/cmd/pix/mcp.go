@@ -17,6 +17,7 @@ import (
 	"pix/host/launcher"
 	"pix/host/rpc"
 	"pix/host/secret"
+	"pix/host/sys"
 	"pix/host/workspace"
 )
 
@@ -447,7 +448,7 @@ func (m mcpRegistrar) serverCmd(name string) []string {
 		return append(argv, c.Image)
 	}
 	switch name {
-	case gwServerName:
+	case config.GWServerName:
 		return gogHardenedArgv(m.gog, m.account)
 	default:
 		// slack + any other local stdio server is a pix-host subcommand.
@@ -493,7 +494,7 @@ func (m mcpRegistrar) addArgs(name string) []string {
 // them above.
 func (m mcpRegistrar) execArgv(name string) []string {
 	cmd := m.serverCmd(name)
-	if m.opRefs == "" || (name == gwServerName && !m.gogUseOp) {
+	if m.opRefs == "" || (name == config.GWServerName && !m.gogUseOp) {
 		return cmd
 	}
 	return append(opRunWrapPrefix(m.op, m.opRefs), cmd...)
@@ -535,7 +536,7 @@ func rawAddArgs(name string, argv []string) []string {
 // mirrors registerServers' opReady gate, where op and op-refs are only ever
 // used together.
 func gogRegisteredArgv(gogBin, opBin, opRefs, account string) []string {
-	return mcpRegistrar{gog: gogBin, account: account, op: opBin, opRefs: opRefs, gogUseOp: opRefs != ""}.execArgv(gwServerName)
+	return mcpRegistrar{gog: gogBin, account: account, op: opBin, opRefs: opRefs, gogUseOp: opRefs != ""}.execArgv(config.GWServerName)
 }
 
 // gogBareRegistrationNote is the ONE shared message printed whenever gog is
@@ -560,7 +561,7 @@ func buildGogRegistrar(env hostenv.Env, gogPath, account string) mcpRegistrar {
 	lookPath := env.LookPath
 	reg := mcpRegistrar{gog: gogPath, account: account}
 	opPath, opErr := lookPath("op")
-	opRefs := resolveOpRefs(env)
+	opRefs := secret.FindOpRefs(env)
 	// gog's normal macOS OAuth lives in its own keychain and must not inherit an
 	// op wrapper merely because unrelated integration refs exist. The wrapper
 	// is only for the explicit file-keyring topology, identified by its password
@@ -583,10 +584,10 @@ func registerGogRegistrar(reg mcpRegistrar, env hostenv.Env, out io.Writer) erro
 	if reg.opRefs == "" {
 		gogBareRegistrationNote(out)
 	}
-	if _, err := env.Run("sbx", reg.addArgs(gwServerName)...); err != nil {
-		return fmt.Errorf("sbx mcp add %s: %w", gwServerName, err)
+	if _, err := env.Run("sbx", reg.addArgs(config.GWServerName)...); err != nil {
+		return fmt.Errorf("sbx mcp add %s: %w", config.GWServerName, err)
 	}
-	fmt.Fprintln(out, "  registered: "+gwServerName)
+	fmt.Fprintln(out, "  registered: "+config.GWServerName)
 	return nil
 }
 
@@ -595,10 +596,10 @@ func registerDocsCreateRegistrar(reg mcpRegistrar, env hostenv.Env, out io.Write
 	if strings.TrimSpace(reg.hostBin) == "" {
 		return fmt.Errorf("pix-host path is unavailable")
 	}
-	if _, err := env.Run("sbx", reg.addArgs(gwDocsCreateServerName)...); err != nil {
-		return fmt.Errorf("sbx mcp add %s: %w", gwDocsCreateServerName, err)
+	if _, err := env.Run("sbx", reg.addArgs(config.GWDocsCreateServerName)...); err != nil {
+		return fmt.Errorf("sbx mcp add %s: %w", config.GWDocsCreateServerName, err)
 	}
-	fmt.Fprintln(out, "  registered: "+gwDocsCreateServerName)
+	fmt.Fprintln(out, "  registered: "+config.GWDocsCreateServerName)
 	return nil
 }
 
@@ -619,7 +620,7 @@ func registerServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 	}
 	if len(names) == 0 {
 		fmt.Fprintln(out, "Nothing to register: no local stdio servers requested or in config mcp.")
-		fmt.Fprintln(out, "Enable one first, e.g.:  pix config set mcp "+gwServerName)
+		fmt.Fprintln(out, "Enable one first, e.g.:  pix config set mcp "+config.GWServerName)
 		return nil
 	}
 
@@ -644,7 +645,7 @@ func registerServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 	var skippedUnknown []string   // non-gog names skipped because the local set is unknown
 	for _, n := range names {
 		switch {
-		case n == gwServerName:
+		case n == config.GWServerName:
 			wantGog = true
 		case containers[n].Manifest != "":
 			// Manifest container: registered by --local --url, not a host --command,
@@ -694,7 +695,7 @@ func registerServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 	finalNames = append(finalNames, localServers...)
 	finalNames = append(finalNames, containerServers...)
 	if wantGog {
-		finalNames = append(finalNames, gwServerName)
+		finalNames = append(finalNames, config.GWServerName)
 	}
 	if len(finalNames) == 0 {
 		if skippedErr != nil {
@@ -718,7 +719,7 @@ func registerServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 	// a no-creds server registers fine, and a creds server runs uncredentialed
 	// until an op-refs.env is added — never a hard failure.
 	opPath, opErr := lookPath("op")
-	opRefs := resolveOpRefs(env)
+	opRefs := secret.FindOpRefs(env)
 	opReady := opErr == nil && opRefs != ""
 
 	reg := mcpRegistrar{containers: containers}
@@ -759,7 +760,7 @@ func registerServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 	if wantGog {
 		gogPath, err := lookPath("gog")
 		if err != nil {
-			return fmt.Errorf("gog is requested but gog not found — " + gwInstallCmd)
+			return fmt.Errorf("gog is requested but gog not found — " + config.GWInstallCmd)
 		}
 		account := strings.TrimSpace(cfg.GogAccount)
 		if account == "" {
@@ -1051,3 +1052,86 @@ func localMCPNames(env hostenv.Env, hostResolver func() (string, error)) (map[st
 	}
 	return set, true
 }
+
+// mcpAttachGuidance is the exact, copy-pasteable pair of commands that would
+// MAKE attachment true (and receipted). It lives in the detail/evidence of an
+// unverifiable attachment check — never as a todo, because unverifiable means
+// doctor does not KNOW the server is unattached. name is shell-quoted via
+// sys.ShellQuote (closure finding #3), consistent with every other generated
+// mcp load command.
+func mcpAttachGuidance(name string) string {
+	return "attach live with `pix mcp load " + sys.ShellQuote(name) + "` or recreate with `pix run --replace`"
+}
+
+// mcpRegisteredIn reports registration truth from the bounded `sbx mcp ls`
+// output ONLY — never from config, a receipt, or a definition inspection.
+func mcpRegisteredIn(mcpOut, name string) bool {
+	return cli.GrepWord(mcpOut, name)
+}
+
+// mcpAuthResult is the outcome mcpAuthStatus classifies a `sbx mcp auth
+// status <name>` probe into. mcpAuthUnknown covers output doctor cannot
+// confidently parse as either a pass or a fail — it must never guess (a
+// misread failure would recommend a repair command that doesn't apply, and a
+// misread success would silently hide a real auth gap).
+type mcpAuthResult int
+
+// mcpAuthStatus parses `sbx mcp auth status <name>` output (name-scoped: sbx
+// prints only this server's state) into the tri-state above. It is
+// deliberately lenient about exact wording (this is a passthrough to sbx, not
+// a format pix controls — see runMcpAuth) but conservative about
+// ambiguity: a negative phrase anywhere wins over a positive one, and neither
+// present at all is unknown rather than a guess.
+func mcpAuthStatus(out string) mcpAuthResult {
+	lower := strings.ToLower(out)
+	for _, neg := range []string{"not authenticated", "unauthenticated", "not authorized", "unauthorized", "needs auth", "not logged in", "expired", "no token", "401"} {
+		if strings.Contains(lower, neg) {
+			return mcpAuthFailed
+		}
+	}
+	for _, pos := range []string{"authenticated", "authorized", "logged in", " ok", "\tok"} {
+		if strings.Contains(lower, pos) {
+			return mcpAuthOK
+		}
+	}
+	if strings.TrimSpace(lower) == "ok" {
+		return mcpAuthOK
+	}
+	return mcpAuthUnknown
+}
+
+// mcpCatalogBundleName is the bundle name `pix mcp bundle` registers the
+// public catalog under, so `sbx mcp bundle rm pix-catalog` removes the set.
+const mcpCatalogBundleName = "pix-catalog"
+
+// mcpCatalogBundleURL is the raw-GitHub URL of the shipped public MCP catalog
+// bundle (notion/atlassian/granola), pinned to THIS build's ref exactly like the
+// kit (a released build → v<version>, an unreleased build → main), so a consumer
+// registers the remote set that matches their launcher with one command.
+func mcpCatalogBundleURL(version string) string {
+	return "https://raw.githubusercontent.com/mcavage/pix/" + kitRef(version) + "/config/mcp-catalog.bundle.json"
+}
+
+const mcpUsage = `usage: pix mcp <register|ls|load|auth|bundle> [args]
+
+  register [name...]   register local stdio MCP servers with the sbx gateway
+                       (no names = every local server in the resolved mcp list)
+  ls                   list servers registered with the gateway (sbx mcp ls).
+                       HOST registration only, not what's attached to your
+                       current sandbox; see 'pix status'/'pix doctor' for
+                       what's live, 'pix mcp load' to attach one now, or
+                       'pix run --replace' to recreate with everything preloaded
+  load <name> [DIR]    attach an already-registered server to the RUNNING sandbox
+                       for DIR (default cwd); live, no recreate (sbx mcp load)
+  auth [args...]       authorize remote OAuth servers via the hosted control
+                       plane (sbx mcp auth; e.g. auth --all, auth status --all)
+  bundle [ls|rm ...]   register the shipped public catalog bundle
+                       (notion/atlassian/granola) in one step; ls/rm forward to
+                       sbx mcp bundle. Then: pix mcp auth --all
+`
+
+const (
+	mcpAuthUnknown mcpAuthResult = iota
+	mcpAuthOK
+	mcpAuthFailed
+)

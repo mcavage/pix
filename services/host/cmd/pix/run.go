@@ -1185,16 +1185,11 @@ func writeKnowledgeScope(ws string, ids []string) error {
 func defaultKnowledgeRPC() knowledgeRPC {
 	const port = 11436
 	return knowledgeRPC{
-		up:      func() bool { return dialLocalPort(port) },
+		up:      func() bool { return sys.Real{}.DialLocal(port) },
 		health:  func() ([]string, error) { return knowledgeHealthBundles(port) },
 		reindex: func(bundle string) error { return knowledgeReindex(port, bundle) },
 	}
 }
-
-// dialLocalPort delegates to sys: dialling a local port is an OS seam, and
-// run.go was never its owner -- serve, doctor and status all reached across for
-// it.
-func dialLocalPort(port int) bool { return sys.Real{}.DialLocal(port) }
 
 // knowledgeRPCCall POSTs a JSON-RPC 2.0 request to the daemon and returns the
 // decoded envelope, mapping a JSON-RPC error object to a Go error. Short

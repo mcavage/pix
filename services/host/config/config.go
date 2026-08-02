@@ -1034,6 +1034,13 @@ func HostRefsPath() string {
 // domains is configuration, not behaviour.
 const GWServerName = "google-workspace"
 
+// GWDocsCreateServerName is the write-scoped companion server, registered
+// separately so the read-only default stays read-only. GWInstallCmd is the ONE
+// place the external binary's package name may reach a user. Both cross domain
+// boundaries for the same reason GWServerName does.
+const GWDocsCreateServerName = "google-docs-create"
+const GWInstallCmd = "brew install openclaw/tap/gogcli"
+
 // OpRefsMentalModel is the ≤4-line plain explanation of what op-refs.env is and
 // how the gateway uses it. Reused VERBATIM in `pix setup`, the `secret`
 // help, and the template header so the concept is described identically

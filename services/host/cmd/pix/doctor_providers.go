@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"pix/host/cli"
 	"pix/host/readiness"
 	"pix/host/secret"
 	"slices"
@@ -23,7 +24,7 @@ func secretCheck(label, key, sbxOut string, sbxOK bool) readiness.Check {
 	if !sbxOK {
 		return readiness.Check{Label: label, Verdict: readiness.VerdictTodo, Detail: "sbx unavailable here (set on the host)", Todo: cmd}
 	}
-	if grepWord(sbxOut, key) {
+	if cli.GrepWord(sbxOut, key) {
 		return readiness.Check{Label: label, Verdict: readiness.VerdictReady, Detail: "set"}
 	}
 	return readiness.Check{Label: label, Verdict: readiness.VerdictTodo, Detail: "not set", Todo: cmd}
@@ -148,7 +149,7 @@ func runIntentKeyCheck(cfg *config.Config, sbxOut string, sbxOK bool) readiness.
 	}
 	// Only the model providers carry a launch-relevant key here; a local (ollama)
 	// model needs none.
-	if provider == "ollama" || grepWord(sbxOut, provider) {
+	if provider == "ollama" || cli.GrepWord(sbxOut, provider) {
 		return readiness.Check{Label: label, Note: true, Verdict: readiness.VerdictReady, Detail: "-> " + model + " (" + provider + " key set)"}
 	}
 	// If NO model key is set at all, the core "at least one key" check already owns
@@ -347,7 +348,7 @@ func modelKeyCoreCheck(sbxOut string, sbxOK bool) readiness.Check {
 func presentModelProviders(sbxOut string) string {
 	var got []string
 	for _, k := range secret.ModelProviders {
-		if grepWord(sbxOut, k) {
+		if cli.GrepWord(sbxOut, k) {
 			got = append(got, k)
 		}
 	}
@@ -364,7 +365,7 @@ func providerInfoCheck(key string, sbxOut string, sbxOK bool) readiness.Check {
 	if !sbxOK {
 		return readiness.Check{Label: key, Note: true, Verdict: readiness.VerdictUnverifiable, Detail: "cannot verify (sbx unavailable here)"}
 	}
-	if grepWord(sbxOut, key) {
+	if cli.GrepWord(sbxOut, key) {
 		return readiness.Check{Label: key, Note: true, Verdict: readiness.VerdictReady, Detail: "set"}
 	}
 	return readiness.Check{Label: key, Note: true, Verdict: readiness.VerdictUnverifiable, Detail: "not configured"}

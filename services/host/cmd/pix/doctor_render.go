@@ -1,7 +1,6 @@
 package main
 
 import (
-	"pix/host/cli"
 	"pix/host/readiness"
 )
 
@@ -16,8 +15,6 @@ import (
 // conversation sent to your model provider. Shared verbatim by doctor's
 // footer and setup's completion summary so the two surfaces never drift.
 const mcpHostTrustNotice = "Note: local/container MCP servers run on the host, outside the sandbox, with your host-user privileges. Content they return can be included in the conversation sent to your model provider. Details: SECURITY.md."
-
-func upDown(up bool) string { return cli.UpDown(up) }
 
 // doctorHints are the surface-specific strings the readiness renderer cannot
 // know for itself: the exact sbx install command, and the host-MCP trust

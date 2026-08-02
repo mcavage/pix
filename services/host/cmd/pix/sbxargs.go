@@ -110,18 +110,6 @@ func templateTag(ref string) string {
 	return ref[i+1:]
 }
 
-// mcpCatalogBundleName is the bundle name `pix mcp bundle` registers the
-// public catalog under, so `sbx mcp bundle rm pix-catalog` removes the set.
-const mcpCatalogBundleName = "pix-catalog"
-
-// mcpCatalogBundleURL is the raw-GitHub URL of the shipped public MCP catalog
-// bundle (notion/atlassian/granola), pinned to THIS build's ref exactly like the
-// kit (a released build → v<version>, an unreleased build → main), so a consumer
-// registers the remote set that matches their launcher with one command.
-func mcpCatalogBundleURL(version string) string {
-	return "https://raw.githubusercontent.com/mcavage/pix/" + kitRef(version) + "/config/mcp-catalog.bundle.json"
-}
-
 // buildSbxArgs composes the full argv for `sbx <args...>` (i.e. it returns
 // everything AFTER the "sbx" program name, starting with "run"). It is pure: no
 // exec, no filesystem, no token minting — the caller does all of that and feeds

@@ -1094,7 +1094,7 @@ func setupReadinessAxes(cfg *config.Config, env hostenv.Env, models setupModelsO
 		builders[a] = b
 	}
 	if env.IdentityProbe != nil {
-		for a, b := range serviceReadinessAxes(env, enabled(cfg, "memory"), enabled(cfg, "knowledge"), env.IdentityProbe) {
+		for a, b := range serviceReadinessAxes(env, config.ServiceEnabled(cfg, "memory"), config.ServiceEnabled(cfg, "knowledge"), env.IdentityProbe) {
 			builders[a] = b
 		}
 	}
@@ -1438,7 +1438,7 @@ func strictProviderKeyFlowLocked(env hostenv.Env, sc *bufio.Scanner, out io.Writ
 		return false
 	}
 	for _, p := range secret.ProviderKeyRefOrder {
-		if _, configured := refs[p.EnvVar]; configured && !grepWord(sbxOut, p.Name) {
+		if _, configured := refs[p.EnvVar]; configured && !cli.GrepWord(sbxOut, p.Name) {
 			fmt.Fprintf(out, "  \u2717 sbx is missing configured provider %s after reconciliation\n", p.Name)
 			return false
 		}

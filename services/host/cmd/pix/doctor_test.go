@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/cli"
 	"pix/host/hostenv"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"strings"
 	"testing"
 
@@ -400,7 +402,7 @@ func TestResolveOpRefs(t *testing.T) {
 		envVars:  map[string]string{"PIX_CONFIG": "/etc/pix/config.toml"},
 		statFile: map[string]bool{"/etc/pix/op-refs.env": true},
 	}
-	got := resolveOpRefs(f.env())
+	got := secret.FindOpRefs(f.env())
 	if got != "/etc/pix/op-refs.env" {
 		t.Errorf("expected the PIX_CONFIG-dir op-refs, got %q", got)
 	}
@@ -413,7 +415,7 @@ func TestResolveOpRefs(t *testing.T) {
 		statFile: map[string]bool{"/home/me/.config/pix/op-refs.env": true},
 		home:     "/home/me",
 	}
-	if got := resolveOpRefs(f2.env()); got != "/home/me/.config/pix/op-refs.env" {
+	if got := secret.FindOpRefs(f2.env()); got != "/home/me/.config/pix/op-refs.env" {
 		t.Errorf("expected the home-dir op-refs fallback, got %q", got)
 	}
 }
@@ -1084,13 +1086,13 @@ func TestDoctorTodosDedup(t *testing.T) {
 
 // TestGrepWord matches the Makefile's `grep -qw` semantics.
 func TestGrepWord(t *testing.T) {
-	if !grepWord("anthropic openai", "openai") {
+	if !cli.GrepWord("anthropic openai", "openai") {
 		t.Error("should match whole word")
 	}
-	if grepWord("openaikey", "openai") {
+	if cli.GrepWord("openaikey", "openai") {
 		t.Error("should not match substring")
 	}
-	if !grepWord("a,b:c/d", "c") {
+	if !cli.GrepWord("a,b:c/d", "c") {
 		t.Error("should split on punctuation")
 	}
 }

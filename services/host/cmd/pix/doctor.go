@@ -113,7 +113,7 @@ func unwrapOpRun(env hostenv.Env, argv []string) ([]string, bool) {
 	}
 	// No resolvable launcher refs file means no legitimate op-run wrapper can
 	// exist for this host — fail closed rather than bless an unknown env file.
-	refs := resolveOpRefs(env)
+	refs := secret.FindOpRefs(env)
 	if refs == "" {
 		return nil, false
 	}
@@ -143,10 +143,6 @@ func unwrapOpRun(env hostenv.Env, argv []string) ([]string, bool) {
 	return inner, true
 }
 
-// enabled moved to config.ServiceEnabled: whether a service is in the
-// configured set is a question about the config file, not about doctor.
-func enabled(cfg *config.Config, name string) bool { return config.ServiceEnabled(cfg, name) }
-
 // mcpConfigured reports whether name is in the configured MCP set (so `run`
 // auto-attaches it via --mcp).
 func mcpConfigured(cfg *config.Config, name string) bool {
@@ -157,75 +153,6 @@ func mcpConfigured(cfg *config.Config, name string) bool {
 	}
 	return false
 }
-
-// findUpward walks up from the current working directory looking for a directory
-// that contains BOTH a Makefile and the given repo-relative file, returning the
-// absolute path to that file (or "" if none is found before the filesystem root).
-// This is how doctor locates a repo checkout's config files (op-refs.env)
-// regardless of where it was invoked from within the tree.
-func findUpward(env hostenv.Env, rel string) string {
-
-	dir, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	for {
-		if env.IsFile(filepath.Join(dir, "Makefile")) && env.IsFile(filepath.Join(dir, rel)) {
-			return filepath.Join(dir, rel)
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
-	}
-}
-
-// resolveOpRefs resolves config/op-refs.env to an ABSOLUTE, canonical location
-// so doctor's headless probe matches the gateway registration exactly (`make
-// mcp-register` registers the gog spawn with an absolute --env-file; a relative
-// one here would resolve against doctor's cwd and could probe a different file
-// than the gateway actually uses). It searches, in order, and returns the FIRST
-// that exists:
-//  1. $PIX_CONFIG's directory + op-refs.env,
-//  2. a repo checkout's config/op-refs.env (walk up for Makefile + that file),
-//  3. ~/.config/pix/op-refs.env.
-//
-// Returns "" when none exists, so the caller reports "cannot verify" rather than
-// probing (and blessing) a file the gateway never uses.
-func resolveOpRefs(env hostenv.Env) string {
-	// abs makes every resolved path ABSOLUTE regardless of doctor's cwd: a
-	// relative $PIX_CONFIG (e.g. `config/config.toml`) would otherwise yield
-	// a cwd-relative op-refs path that need not match the gateway's --env-file.
-	abs := func(p string) string {
-		if a, err := filepath.Abs(p); err == nil {
-			return a
-		}
-		return p
-	}
-	if p := env.Getenv("PIX_CONFIG"); p != "" {
-		cand := filepath.Join(filepath.Dir(p), "op-refs.env")
-		if env.IsFile(cand) {
-			return abs(cand)
-		}
-	}
-	if p := findUpward(env, filepath.Join("config", "op-refs.env")); p != "" {
-		return abs(p)
-	}
-	{
-		if home := env.HomeDir(); home != "" {
-			cand := filepath.Join(home, ".config", "pix", "op-refs.env")
-			if env.IsFile(cand) {
-				return abs(cand)
-			}
-		}
-	}
-	return ""
-}
-
-// grepWord moved to cli.GrepWord: a whole-word match on command output is
-// generic text handling, and doctor was only its first caller.
-func grepWord(out, name string) bool { return cli.GrepWord(out, name) }
 
 // runDoctor builds the report. Pure apart from env: no direct OS access, so the
 // tests feed a faked hostenv.Env and assert on the rendered output. Each group is

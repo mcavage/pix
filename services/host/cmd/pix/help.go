@@ -272,24 +272,6 @@ const configUsage = `usage: pix config <show|path|get|set|unset> [args]
 
 ` + configKeysHelp
 
-const mcpUsage = `usage: pix mcp <register|ls|load|auth|bundle> [args]
-
-  register [name...]   register local stdio MCP servers with the sbx gateway
-                       (no names = every local server in the resolved mcp list)
-  ls                   list servers registered with the gateway (sbx mcp ls).
-                       HOST registration only, not what's attached to your
-                       current sandbox; see 'pix status'/'pix doctor' for
-                       what's live, 'pix mcp load' to attach one now, or
-                       'pix run --replace' to recreate with everything preloaded
-  load <name> [DIR]    attach an already-registered server to the RUNNING sandbox
-                       for DIR (default cwd); live, no recreate (sbx mcp load)
-  auth [args...]       authorize remote OAuth servers via the hosted control
-                       plane (sbx mcp auth; e.g. auth --all, auth status --all)
-  bundle [ls|rm ...]   register the shipped public catalog bundle
-                       (notion/atlassian/granola) in one step; ls/rm forward to
-                       sbx mcp bundle. Then: pix mcp auth --all
-`
-
 // secretHelpBody is the mental model reused verbatim from config so the concept
 // reads identically in setup, doctor, the template header, and `secret -h`.
 // secretUsage renders the SAME help kong prints, so `pix help secret` cannot

@@ -37,11 +37,11 @@ const (
 	// value lives in config because callers outside this workflow must
 	// recognise the server without importing it.
 	gwServerName           = config.GWServerName
-	gwDocsCreateServerName = "google-docs-create"
+	gwDocsCreateServerName = config.GWDocsCreateServerName
 	gwAccessCreateDocs     = "create-docs"
 	// gwInstallCmd is the ONE place the external binary's package name is
 	// allowed to reach the user, per the naming rule above.
-	gwInstallCmd = "brew install openclaw/tap/gogcli"
+	gwInstallCmd = config.GWInstallCmd
 	// gwUpgradeCmd is its upgrade twin.
 	gwUpgradeCmd = "brew upgrade openclaw/tap/gogcli"
 	// gwPermissionsURL is where a user can revoke credentials that Pix leaves

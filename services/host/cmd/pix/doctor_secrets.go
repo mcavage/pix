@@ -90,7 +90,7 @@ func secretsGroup(cfg *config.Config, env hostenv.Env) readiness.Group {
 			g.Checks = append(g.Checks, readiness.Check{Label: rf.Key, Verdict: readiness.VerdictTodo,
 				Detail: "unfilled placeholder — set the op:// ref",
 				Todo:   "pix secret set <ENV_VAR> op://vault/item/field"})
-		case looksSecretShaped(rf.Key, rf.Value):
+		case config.LooksSecretShaped(rf.Key, rf.Value):
 			// MEDIUM finding — a pasted secret. NEVER echo the value.
 			g.Checks = append(g.Checks, readiness.Check{Label: rf.Key, Verdict: readiness.VerdictTodo,
 				Detail: "possible pasted secret — replace with op://vault/item/field",
@@ -105,8 +105,3 @@ func secretsGroup(cfg *config.Config, env hostenv.Env) readiness.Group {
 	}
 	return g
 }
-
-// looksSecretShaped reports whether a NON-ref, non-allowlisted op-refs.env value
-// looks like a pasted secret. Thin wrapper over the shared config.LooksSecretShaped
-// so doctor's lint and backup's pre-archive warning judge identically.
-func looksSecretShaped(key, val string) bool { return config.LooksSecretShaped(key, val) }

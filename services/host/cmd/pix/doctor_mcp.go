@@ -8,7 +8,6 @@ import (
 	"pix/host/cli"
 	"pix/host/hostenv"
 	"pix/host/readiness"
-	"pix/host/sys"
 	"strings"
 
 	"pix/host/config"
@@ -240,16 +239,6 @@ func mcpLoadTodoCommand(name, ws string) string {
 	return mcpLoadCommand(name, ws)
 }
 
-// mcpAttachGuidance is the exact, copy-pasteable pair of commands that would
-// MAKE attachment true (and receipted). It lives in the detail/evidence of an
-// unverifiable attachment check — never as a todo, because unverifiable means
-// doctor does not KNOW the server is unattached. name is shell-quoted via
-// sys.ShellQuote (closure finding #3), consistent with every other generated
-// mcp load command.
-func mcpAttachGuidance(name string) string {
-	return "attach live with `pix mcp load " + sys.ShellQuote(name) + "` or recreate with `pix run --replace`"
-}
-
 // mcpAttachCheck renders one server's sandbox-attachment evidence from the
 // launcher receipt, via the SHARED join row (joinMCPSandboxRow, mcpjoin.go)
 // so doctor and status derive attachment truth from ONE path. The receipt
@@ -314,12 +303,6 @@ func mcpAttachCheck(name string, ctx mcpSandboxContext, reg mcpRegEvidence) read
 		Detail: fmt.Sprintf("launcher receipt for sandbox %s is %s; not trusting it; %s",
 			ctx.sandbox, ctx.status, guidance),
 		Evidence: row.Evidence}
-}
-
-// mcpRegisteredIn reports registration truth from the bounded `sbx mcp ls`
-// output ONLY — never from config, a receipt, or a definition inspection.
-func mcpRegisteredIn(mcpOut, name string) bool {
-	return grepWord(mcpOut, name)
 }
 
 // mcpUnavailableCheck is the shared degrade when the registration listing
@@ -709,43 +692,6 @@ func trustedHostBinaryExecPath(env hostenv.Env, tok string) (string, bool) {
 // a positive denial, same as the remote auth axis), and everything else
 // unclassified to unverifiable.
 
-// mcpAuthResult is the outcome mcpAuthStatus classifies a `sbx mcp auth
-// status <name>` probe into. mcpAuthUnknown covers output doctor cannot
-// confidently parse as either a pass or a fail — it must never guess (a
-// misread failure would recommend a repair command that doesn't apply, and a
-// misread success would silently hide a real auth gap).
-type mcpAuthResult int
-
-const (
-	mcpAuthUnknown mcpAuthResult = iota
-	mcpAuthOK
-	mcpAuthFailed
-)
-
-// mcpAuthStatus parses `sbx mcp auth status <name>` output (name-scoped: sbx
-// prints only this server's state) into the tri-state above. It is
-// deliberately lenient about exact wording (this is a passthrough to sbx, not
-// a format pix controls — see runMcpAuth) but conservative about
-// ambiguity: a negative phrase anywhere wins over a positive one, and neither
-// present at all is unknown rather than a guess.
-func mcpAuthStatus(out string) mcpAuthResult {
-	lower := strings.ToLower(out)
-	for _, neg := range []string{"not authenticated", "unauthenticated", "not authorized", "unauthorized", "needs auth", "not logged in", "expired", "no token", "401"} {
-		if strings.Contains(lower, neg) {
-			return mcpAuthFailed
-		}
-	}
-	for _, pos := range []string{"authenticated", "authorized", "logged in", " ok", "\tok"} {
-		if strings.Contains(lower, pos) {
-			return mcpAuthOK
-		}
-	}
-	if strings.TrimSpace(lower) == "ok" {
-		return mcpAuthOK
-	}
-	return mcpAuthUnknown
-}
-
 // mcpGroup builds the MCP-servers cluster for every configured server plus
 // every active-pack integration server. gog is DELIBERATELY skipped — the
 // dedicated gog group already owns its registration check + TODO, so probing
@@ -837,23 +783,4 @@ func annotateReceiptOnlyCheck(c readiness.Check, name string) readiness.Check {
 	note := "sandbox provenance only (from this sandbox's receipt); " + name + " is not part of the current cfg.MCP/pack"
 	c.Evidence = c.EvidenceString() + "; " + note
 	return c
-}
-
-// packContainerNames returns the pack-integration server names in a stable
-// (sorted) order, so the group renders deterministically.
-func packContainerNames(containers map[string]packContainer) []string {
-	if len(containers) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(containers))
-	for n := range containers {
-		names = append(names, n)
-	}
-	// small n; insertion sort avoids an import for sort in this file's diff
-	for i := 1; i < len(names); i++ {
-		for j := i; j > 0 && names[j] < names[j-1]; j-- {
-			names[j], names[j-1] = names[j-1], names[j]
-		}
-	}
-	return names
 }

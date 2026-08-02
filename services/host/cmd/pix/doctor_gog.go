@@ -212,7 +212,7 @@ func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPres
 	g.Checks = append(g.Checks, readiness.Check{Label: "dependency CLI", Verdict: readiness.VerdictReady, Detail: "installed"})
 
 	acct := gogAccount(cfg, env)
-	opRefs := resolveOpRefs(env)
+	opRefs := secret.FindOpRefs(env)
 
 	// FALLBACK / TRANSPARENCY: sbx couldn't tell us the registered command, so we
 	// reconstruct the probe from config and LABEL it best-effort — we can verify

@@ -65,6 +65,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/secret"
@@ -267,7 +268,7 @@ func gogSetupAccountHealthy(env hostenv.Env, acct string) bool {
 	if !gogAuthed(env, acct) {
 		return false
 	}
-	opRefs := resolveOpRefs(env)
+	opRefs := secret.FindOpRefs(env)
 	if _, err := env.LookPath("op"); err != nil || opRefs == "" {
 		return true // headless unverifiable here; not a confirmed unhealthy state
 	}
@@ -604,7 +605,7 @@ func snapshotMCPRegistration(env hostenv.Env, name string) gogRegSnapshot {
 	if err != nil || timedOut {
 		return gogRegSnapshot{state: gogRegUnknown}
 	}
-	if !grepWord(listOut, name) {
+	if !cli.GrepWord(listOut, name) {
 		return gogRegSnapshot{state: gogRegAbsent}
 	}
 	if argv, ok := registeredMCPCommand(env, name); ok {
@@ -687,7 +688,7 @@ func snapshotGogRegistration(env hostenv.Env) gogRegSnapshot {
 	if err != nil || timedOut {
 		return gogRegSnapshot{state: gogRegUnknown}
 	}
-	if !grepWord(listOut, gwServerName) {
+	if !cli.GrepWord(listOut, gwServerName) {
 		return gogRegSnapshot{state: gogRegAbsent}
 	}
 	if argv, ok := registeredGogCommand(env); ok {

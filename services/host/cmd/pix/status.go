@@ -234,7 +234,7 @@ func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 	// and is NEVER itself outstanding, whether set, absent, or unverifiable.
 	// Per-provider booleans are still populated for informational display.
 	for _, key := range []string{"anthropic", "openai", "google", "github"} {
-		st.Providers[key] = sbxOK && grepWord(sbxOut, key)
+		st.Providers[key] = sbxOK && cli.GrepWord(sbxOut, key)
 	}
 	st.InferenceModels, st.InferenceBackends = configuredInferenceSummary(cfg)
 	// Every repair the snapshot's axes verified is taken FROM the snapshot, so
