@@ -38,47 +38,9 @@ type serviceIdentityResult = hostenv.ServiceIdentity
 // the classification without a live daemon.
 type identityProber = hostenv.IdentityProber
 
-// rpcIdentityProbe is the real prober: the shared JSON-RPC client, bounded,
-// with exactly one retry.
-func rpcIdentityProbe(port int) (serviceIdentityResult, error) {
-	c := rpc.Client{Port: port, Timeout: serviceIdentityTimeout}
-	var lastErr error
-	for attempt := 0; attempt <= serviceIdentityRetries; attempt++ {
-		res, err := c.Call("identity", nil)
-		if err == nil {
-			return serviceIdentityResult{
-				Name:           idStr(res["name"]),
-				Version:        idStr(res["version"]),
-				Port:           intOf(res["port"]),
-				DBPath:         idStr(res["db_path"]),
-				Ready:          boolOf(res["ready"]),
-				DegradedReason: idStr(res["degraded_reason"]),
-			}, nil
-		}
-		lastErr = err
-	}
-	return serviceIdentityResult{}, lastErr
-}
-
-func idStr(v any) string {
-	s, _ := v.(string)
-	return s
-}
-
-func boolOf(v any) bool {
-	b, _ := v.(bool)
-	return b
-}
-
-func intOf(v any) int {
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case int:
-		return n
-	}
-	return 0
-}
+// The identity probe and its JSON field extractors moved to rpc.IdentityProbe: it is a JSON-RPC call, and
+// leaving it here made every package that needs an identity probe depend on
+// readiness.
 
 // serviceAxisSpec describes one identifiable host service.
 type serviceAxisSpec struct {
@@ -135,7 +97,7 @@ func serviceReadinessCheck(spec serviceAxisSpec) check {
 	probe := spec.probeFunc
 	if probe == nil {
 		// No identity prober was supplied at all (production always wires
-		// env.IdentityProbe -> rpcIdentityProbe; this only happens in tests
+		// env.IdentityProbe -> rpc.IdentityProbe; this only happens in tests
 		// that fake a listening port without also faking identity). A dial
 		// alone is not proof of identity, so this renders unverifiable —
 		// never a silent real network call, and never a todo for a
@@ -199,7 +161,7 @@ func serviceReadinessAxes(env shellEnv, memoryEnabled, knowledgeEnabled bool, pr
 		axisServiceMemory: func() []check {
 			return []check{serviceReadinessCheck(serviceAxisSpec{
 				axis: axisServiceMemory, label: "memory",
-				port: rpc.MemoryClient().Port, wantName: identityMemoryName,
+				port: rpc.MemoryClient().Port, wantName: rpc.MemoryName,
 				enabled: memoryEnabled, startCmd: "pix serve",
 				selfVer: version, dialOnly: dial, probeFunc: probe,
 			})}
@@ -207,7 +169,7 @@ func serviceReadinessAxes(env shellEnv, memoryEnabled, knowledgeEnabled bool, pr
 		axisServiceKnowledge: func() []check {
 			return []check{serviceReadinessCheck(serviceAxisSpec{
 				axis: axisServiceKnowledge, label: "knowledge",
-				port: rpc.KnowledgeClient().Port, wantName: identityKnowledgeName,
+				port: rpc.KnowledgeClient().Port, wantName: rpc.KnowledgeName,
 				enabled: knowledgeEnabled, startCmd: "pix serve",
 				selfVer: version, dialOnly: dial, probeFunc: probe,
 			})}
@@ -215,12 +177,9 @@ func serviceReadinessAxes(env shellEnv, memoryEnabled, knowledgeEnabled bool, pr
 	}
 }
 
-// The identity names the daemons report. Duplicated from
-// services/host/identity.go on purpose: these two binaries are separate
-// packages, and the launcher must state the name it EXPECTS rather than
-// importing whatever the local build happens to say. A mismatch between them
-// is exactly the "unidentified process" case this probe exists to report.
-const (
-	identityMemoryName    = "pix-memory"
-	identityKnowledgeName = "pix-knowledge"
-)
+// The identity names the daemons report now live beside the probe that checks
+// them, as rpc.MemoryName / rpc.KnowledgeName. They remain deliberately
+// DUPLICATED from services/host/identity.go: those are separate binaries, and
+// the launcher must state the name it EXPECTS rather than importing whatever
+// the local build happens to say. A mismatch is exactly the "unidentified
+// process" case the probe exists to report.

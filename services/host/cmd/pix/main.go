@@ -24,15 +24,24 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
+	"pix/host/launcher"
 	"pix/host/routing"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=0.0.x". An
 // unstamped build reports "dev" and tracks the kit's main branch.
+//
+// It must stay a plain string with a CONSTANT initializer. `-X` silently does
+// nothing to a variable initialised from a non-constant expression, so writing
+// `var version = launcher.Version` here would leave every release reporting
+// "dev" with no error anywhere — and the Makefile stamps this same symbol in
+// pix-host, which is a different package, so the stamp cannot simply move.
+// Instead main OWNS the stamp and pushes it down.
 var version = "dev"
+
+func init() { launcher.Version = version }
 
 func main() {
 	args := os.Args[1:]
@@ -277,33 +286,11 @@ func runServe(argv []string) {
 // responder when exercising the local-vs-remote MCP partition in setup.
 var hostBinaryResolver = findHostBinary
 
-// findHostBinary locates pix-host next to argv[0] first (the common install
-// layout), then falls back to PATH. A located binary is usable only when its
-// stamped version exactly matches the launcher, preventing silent mixed-release
-// RPC and flag behavior.
-func findHostBinary() (string, error) {
-	verify := func(path string) (string, error) {
-		out, err := exec.Command(path, "version").CombinedOutput()
-		if err != nil {
-			return "", fmt.Errorf("pix-host at %s cannot report its version: %v", path, err)
-		}
-		hostVersion := strings.TrimSpace(string(out))
-		if hostVersion != version {
-			return "", fmt.Errorf("pix-host version %q at %s does not match pix version %q; reinstall both binaries together", hostVersion, path, version)
-		}
-		return path, nil
-	}
-	if self, err := os.Executable(); err == nil {
-		sibling := filepath.Join(filepath.Dir(self), "pix-host")
-		if fi, err := os.Stat(sibling); err == nil && !fi.IsDir() {
-			return verify(sibling)
-		}
-	}
-	if p, err := exec.LookPath("pix-host"); err == nil {
-		return verify(p)
-	}
-	return "", fmt.Errorf("pix-host not found next to this binary or on PATH")
-}
+// findHostBinary and the version it verifies against moved to the launcher
+// package: "which pix-host am I paired with" is an identity question, and
+// keeping it here forced every package that needs the host binary to depend on
+// package main.
+func findHostBinary() (string, error) { return launcher.FindHostBinary() }
 
 const runUsage = `usage: pix run [DIR] [flags] [-- pi-args...]
 

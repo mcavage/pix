@@ -52,6 +52,7 @@ var pkgLayer = map[string]int{
 	"rpc":         layerFoundation,
 	"cli":         layerFoundation,
 	"hostenv":     layerFoundation,
+	"launcher":    layerFoundation,
 
 	// L1 — capability. One domain each, siblings invisible to each other.
 	"inference":   layerCapability,
@@ -82,7 +83,7 @@ var pkgLayer = map[string]int{
 // data layout.
 var l0Order = map[string]int{
 	"config": 0, "routing": 0,
-	"sys": 1, "rpc": 1,
+	"sys": 1, "rpc": 1, "launcher": 1,
 	"sys/systest": 2, "hostenv": 2,
 	"cli": 3,
 }

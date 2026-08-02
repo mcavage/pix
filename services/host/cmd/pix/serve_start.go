@@ -398,7 +398,7 @@ func ensureServeUp(services []string, timeout time.Duration) {
 	if err != nil {
 		return // a broken config fails loudly in the primary action instead
 	}
-	if from, stale := staleServeVersion(cfg, defaultShellEnv(), services, rpcIdentityProbe); stale {
+	if from, stale := staleServeVersion(cfg, defaultShellEnv(), services, rpc.IdentityProbe); stale {
 		restartStaleServe(defaultServeReloader(), from, version, os.Stderr)
 	}
 	_ = ensureServe(defaultServeStarter(), cfg, ensureServeOpts{Services: services, Timeout: timeout})
@@ -416,9 +416,9 @@ func staleServeVersion(cfg *config.Config, env shellEnv, requested []string, pro
 			continue
 		}
 		id, err := probe(p.port)
-		want := identityMemoryName
+		want := rpc.MemoryName
 		if p.name == "knowledge" {
-			want = identityKnowledgeName
+			want = rpc.KnowledgeName
 		}
 		if err == nil && id.Name == want && id.Version != "" && id.Version != version {
 			return id.Version, true

@@ -18,6 +18,7 @@ package hostenv
 import (
 	"time"
 
+	"pix/host/rpc"
 	"pix/host/sys"
 )
 
@@ -28,21 +29,12 @@ type SlackIdentity struct {
 	Team, TeamID, User, UserID string
 }
 
-// ServiceIdentity is a host service's answer to the `identity` JSON-RPC method
-// — the APPLICATION-level proof a readiness axis needs before rendering ready.
-// A listening port is not evidence that the thing behind it works.
-type ServiceIdentity struct {
-	Name           string
-	Version        string
-	Port           int
-	DBPath         string
-	Ready          bool
-	DegradedReason string
-}
-
-// IdentityProber calls the identity method on a port. Injected so tests can
-// drive the classification without a live daemon.
-type IdentityProber func(port int) (ServiceIdentity, error)
+// ServiceIdentity and IdentityProber live in rpc, which is where the call they
+// describe lives. Aliased here because Env carries the prober as a field.
+type (
+	ServiceIdentity = rpc.ServiceIdentity
+	IdentityProber  = rpc.IdentityProber
+)
 
 // Env is the bundle. The embedded System is never nil in production (sys.Real
 // has no nullable state), which is why nothing here is guarded.

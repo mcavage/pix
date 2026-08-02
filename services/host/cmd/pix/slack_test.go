@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/rpc"
 	"pix/host/sys"
 	"pix/host/sys/systest"
 )
@@ -155,7 +156,7 @@ func (f *slackTestEnv) env() shellEnv {
 	// faked Run, so a bounded probe never becomes a real exec here.
 	e := shellEnv{System: &systest.Fake{Base: sys.Real{}}}
 	e.HostBinary = func() (string, error) { return hostBinaryResolver() }
-	e.IdentityProbe = rpcIdentityProbe
+	e.IdentityProbe = rpc.IdentityProbe
 	e.SlackAuth = liveSlackAuthTest
 	fakeOf(e).LookPathFn = func(name string) (string, error) {
 		switch name {

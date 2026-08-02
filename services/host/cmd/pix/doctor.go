@@ -9,6 +9,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/rpc"
 	"pix/host/sys"
 	"pix/host/sys/systest"
 	"pix/host/workspace"
@@ -62,7 +63,7 @@ const (
 // defaultShellEnv returns a shellEnv backed by the real OS.
 func defaultShellEnv() shellEnv {
 	return shellEnv{
-		System: sys.Real{}, HostBinary: func() (string, error) { return hostBinaryResolver() }, IdentityProbe: rpcIdentityProbe, SlackAuth: liveSlackAuthTest, DirectInference: liveDirectInferenceProbe, OllamaInference: liveOllamaInferenceProbe}
+		System: sys.Real{}, HostBinary: func() (string, error) { return hostBinaryResolver() }, IdentityProbe: rpc.IdentityProbe, SlackAuth: liveSlackAuthTest, DirectInference: liveDirectInferenceProbe, OllamaInference: liveOllamaInferenceProbe}
 }
 
 // unwrapOpRun returns the effective command doctor would trust to exec. With

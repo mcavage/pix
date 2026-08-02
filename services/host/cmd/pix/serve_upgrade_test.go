@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/rpc"
 	"pix/host/sys/systest"
 )
 
@@ -14,7 +15,7 @@ func TestStaleServeVersionRequiresPositivePixIdentity(t *testing.T) {
 	cfg := &config.Config{Services: []string{"memory"}}
 	env := shellEnv{System: &systest.Fake{DialLocalFn: func(int) bool { return true }, GetenvFn: func(string) string { return "" }}}
 	if from, stale := staleServeVersion(cfg, env, nil, func(int) (serviceIdentityResult, error) {
-		return serviceIdentityResult{Name: identityMemoryName, Version: "0.1.7"}, nil
+		return serviceIdentityResult{Name: rpc.MemoryName, Version: "0.1.7"}, nil
 	}); !stale || from != "0.1.7" {
 		t.Fatalf("staleServeVersion = %q, %v", from, stale)
 	}

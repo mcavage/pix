@@ -29,7 +29,7 @@ func fakeStatusEnv() shellEnv {
 		}
 		return "", nil
 	}, DialLocalFn: func(port int) bool { return port == rpc.MemoryPortDefault }, IsFileFn: func(string) bool { return false }}, IdentityProbe: identityFake(map[int]serviceIdentityResult{
-		rpc.MemoryPortDefault: {Name: identityMemoryName, Ready: true},
+		rpc.MemoryPortDefault: {Name: rpc.MemoryName, Ready: true},
 	})}
 }
 

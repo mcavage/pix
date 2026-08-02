@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/rpc"
 	"pix/host/sys/systest"
 	"pix/host/workspace"
 )
@@ -87,7 +88,7 @@ func identityFake(results map[int]serviceIdentityResult) identityProber {
 // ready (readiness_service.go never derives ready from a dial alone).
 func memGreen(f fakeEnv) fakeEnv {
 	f.identityProbe = identityFake(map[int]serviceIdentityResult{
-		11435: {Name: identityMemoryName, Ready: true},
+		11435: {Name: rpc.MemoryName, Ready: true},
 	})
 	return f
 }
