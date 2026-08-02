@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"pix/host/cli"
 	"strings"
 	"testing"
 )
@@ -22,8 +23,8 @@ func TestBackupHelp(t *testing.T) {
 // TestBackupRejectsPositional proves an unexpected positional is a usage error
 // before any exec.
 func TestBackupRejectsPositional(t *testing.T) {
-	if err := runBackupCore([]string{"extra"}, &bytes.Buffer{}); !isUsage(err) {
-		t.Errorf("backup with a positional: err = %v, want usageError", err)
+	if err := runBackupCore([]string{"extra"}, &bytes.Buffer{}); !cli.IsUsage(err) {
+		t.Errorf("backup with a positional: err = %v, want cli.UsageError2", err)
 	}
 }
 
@@ -42,8 +43,8 @@ func TestRestoreHelp(t *testing.T) {
 // TestRestoreNeedsArchive proves the launcher rejects a restore with no
 // <archive> as a usage error before any exec.
 func TestRestoreNeedsArchive(t *testing.T) {
-	if err := runRestoreCore(nil, &bytes.Buffer{}); !isUsage(err) {
-		t.Errorf("restore with no archive: err = %v, want usageError", err)
+	if err := runRestoreCore(nil, &bytes.Buffer{}); !cli.IsUsage(err) {
+		t.Errorf("restore with no archive: err = %v, want cli.UsageError2", err)
 	}
 }
 

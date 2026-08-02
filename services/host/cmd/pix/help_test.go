@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"pix/host/cli"
+	"pix/host/memory"
 	"pix/host/rpc"
 	"strings"
 	"testing"
@@ -151,26 +153,26 @@ func TestKnowledgeInitHelp_NoSideEffects(t *testing.T) {
 	}
 }
 
-// --- S1: flagSet help bool + dispatch help routing ---
+// --- S1: cli.FlagSet help bool + dispatch help routing ---
 
 func TestFlagSetHelp(t *testing.T) {
 	for _, argv := range [][]string{{"--help"}, {"-h"}, {"q", "--help"}} {
-		fs := newFlagSet()
-		if _, err := fs.parse(argv); err != nil {
+		fs := cli.NewFlagSet()
+		if _, err := fs.Parse(argv); err != nil {
 			t.Fatalf("parse(%v): %v", argv, err)
 		}
-		if !fs.help {
-			t.Errorf("parse(%v) did not set fs.help", argv)
+		if !fs.Help {
+			t.Errorf("parse(%v) did not set fs.Help", argv)
 		}
 	}
 	// No help token -> help stays false.
-	fs := newFlagSet()
-	fs.enableJSON()
-	if _, err := fs.parse([]string{"q", "--json"}); err != nil {
+	fs := cli.NewFlagSet()
+	fs.EnableJSON()
+	if _, err := fs.Parse([]string{"q", "--json"}); err != nil {
 		t.Fatal(err)
 	}
-	if fs.help {
-		t.Error("fs.help set without a help token")
+	if fs.Help {
+		t.Error("fs.Help set without a help token")
 	}
 }
 
@@ -179,25 +181,25 @@ func TestFlagSetHelp(t *testing.T) {
 // error rather than a silently-swallowed no-op.
 func TestFlagSetJSONOptIn(t *testing.T) {
 	// Not enabled: --json is rejected.
-	fs := newFlagSet()
-	if _, err := fs.parse([]string{"--json"}); !isUsage(err) {
+	fs := cli.NewFlagSet()
+	if _, err := fs.Parse([]string{"--json"}); !cli.IsUsage(err) {
 		t.Errorf("parse([--json]) without enableJSON = %v, want usage error", err)
 	}
-	// Enabled: --json is accepted and sets fs.json.
-	fs = newFlagSet()
-	fs.enableJSON()
-	if _, err := fs.parse([]string{"--json"}); err != nil {
+	// Enabled: --json is accepted and sets fs.Json.
+	fs = cli.NewFlagSet()
+	fs.EnableJSON()
+	if _, err := fs.Parse([]string{"--json"}); err != nil {
 		t.Fatalf("parse([--json]) with enableJSON: %v", err)
 	}
-	if !fs.json {
-		t.Error("enableJSON()+--json did not set fs.json")
+	if !fs.Json {
+		t.Error("enableJSON()+--json did not set fs.Json")
 	}
 }
 
 func TestMemoryHelp_NoRPC(t *testing.T) {
 	// `memory recall --help` must print usage and NOT hit the (down) daemon.
 	var out bytes.Buffer
-	if err := dispatchMemory("recall", []string{"--help"}, rpc.Client{Port: 1}, &out, "default"); err != nil {
+	if err := memory.Dispatch("recall", []string{"--help"}, rpc.Client{Port: 1}, &out, "default"); err != nil {
 		t.Fatalf("memory recall --help: %v", err)
 	}
 	if !strings.Contains(out.String(), "usage: pix memory recall") {
@@ -205,7 +207,7 @@ func TestMemoryHelp_NoRPC(t *testing.T) {
 	}
 	// stats/learnings likewise.
 	out.Reset()
-	if err := dispatchMemory("stats", []string{"--help"}, rpc.Client{Port: 1}, &out, "default"); err != nil {
+	if err := memory.Dispatch("stats", []string{"--help"}, rpc.Client{Port: 1}, &out, "default"); err != nil {
 		t.Fatalf("memory stats --help: %v", err)
 	}
 	if !strings.Contains(out.String(), "usage: pix memory stats") {
@@ -340,10 +342,10 @@ func TestDoctorJSONView(t *testing.T) {
 	r.Services, r.MCP = cfg.Services, cfg.MCP
 	v := jsonView(r, "default")
 
-	// Serialize through writeJSONOut (the same path `doctor --json` uses) and parse.
+	// Serialize through cli.WriteJSONOut (the same path `doctor --json` uses) and parse.
 	var buf bytes.Buffer
-	if err := writeJSONOut(&buf, v); err != nil {
-		t.Fatalf("writeJSONOut: %v", err)
+	if err := cli.WriteJSONOut(&buf, v); err != nil {
+		t.Fatalf("cli.WriteJSONOut: %v", err)
 	}
 	var got doctorJSON
 	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {

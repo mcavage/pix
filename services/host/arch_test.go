@@ -63,6 +63,7 @@ var pkgLayer = map[string]int{
 	"slackoauth":  layerCapability,
 	"workspace":   layerCapability,
 	"service":     layerCapability,
+	"memory":      layerCapability,
 
 	// L2 — the shared model of "is this working".
 	"readiness": layerReadiness,

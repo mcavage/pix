@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"pix/host/cli"
+	"pix/host/memory"
 	"pix/host/service"
 )
 
@@ -204,7 +205,7 @@ func verbUsage(verb string) (string, bool) {
 	case "pack":
 		return packUsage, true
 	case "memory", "mem":
-		return memoryUsage + "\n", true
+		return memory.Usage + "\n", true
 	case "monitor":
 		return monitorUsage, true
 	case "backup":

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"pix/host/cli"
 	"pix/host/monitor"
 	"pix/host/monitor/tui"
 )
@@ -192,8 +193,8 @@ func TestMonitorUnknownFlag(t *testing.T) {
 		panic("runMonitorCore must not run the TUI on a flag-parse error")
 	}
 	err := runMonitorCore([]string{"--bogus"}, panicNewHub, panicRunTUI, &bytes.Buffer{}, io.Discard)
-	if !isUsage(err) {
-		t.Errorf("runMonitorCore(--bogus): err = %v, want usageError", err)
+	if !cli.IsUsage(err) {
+		t.Errorf("runMonitorCore(--bogus): err = %v, want cli.UsageError2", err)
 	}
 }
 
@@ -207,8 +208,8 @@ func TestMonitorTooManyPositional(t *testing.T) {
 		panic("runMonitorCore must not run the TUI on a usage error")
 	}
 	err := runMonitorCore([]string{"box1", "box2"}, panicNewHub, panicRunTUI, &bytes.Buffer{}, io.Discard)
-	if !isUsage(err) {
-		t.Errorf("runMonitorCore(box1 box2): err = %v, want usageError", err)
+	if !cli.IsUsage(err) {
+		t.Errorf("runMonitorCore(box1 box2): err = %v, want cli.UsageError2", err)
 	}
 }
 

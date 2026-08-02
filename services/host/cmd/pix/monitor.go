@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/monitor"
 	"pix/host/monitor/tui"
 )
@@ -20,7 +21,7 @@ import (
 // failure is just a generic error (exit 1).
 func runMonitor(argv []string) {
 	if err := runMonitorCore(argv, monitor.NewHub, tui.RunTUI, os.Stdout, os.Stderr); err != nil {
-		exitFromErr("monitor", err)
+		cli.ExitFromErr("monitor", err)
 	}
 }
 
@@ -62,19 +63,19 @@ const hubBindTimeout = 2 * time.Second
 // port instead of a real one), and a fake runTUI can return immediately
 // without spinning bubbletea.
 func runMonitorCore(argv []string, newHub func(monitor.HubConfig) *monitor.Hub, runTUI func(tui.TUIConfig) error, out, errOut io.Writer) error {
-	fs := newFlagSet()
-	port := fs.int("port", monitor.DefaultPort)
-	bind := fs.str("bind", "")
-	positional, err := fs.parse(argv)
+	fs := cli.NewFlagSet()
+	port := fs.Int("port", monitor.DefaultPort)
+	bind := fs.Str("bind", "")
+	positional, err := fs.Parse(argv)
 	if err != nil {
 		return err
 	}
-	if fs.help {
+	if fs.Help {
 		fmt.Fprint(out, monitorUsage)
 		return nil
 	}
 	if len(positional) > 1 {
-		return usageErr(monitorUsage)
+		return cli.UsageErr(monitorUsage)
 	}
 	name := ""
 	if len(positional) == 1 {

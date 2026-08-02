@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/rpc"
 	"pix/host/service"
@@ -67,14 +68,14 @@ func runKnowledge(argv []string) {
 // ACTIVE PROFILE's bundles (the daemon indexes the union of all profiles), so a
 // personal query never returns work concepts.
 func runKnowledgeQuery(argv []string) {
-	fs := newFlagSet()
-	fs.enableJSON()
-	limit := fs.int("limit", 5, "n")
-	positional, perr := fs.parse(argv)
+	fs := cli.NewFlagSet()
+	fs.EnableJSON()
+	limit := fs.Int("limit", 5, "n")
+	positional, perr := fs.Parse(argv)
 	if perr != nil {
-		exitFromErr("knowledge query", perr)
+		cli.ExitFromErr("knowledge query", perr)
 	}
-	if fs.help {
+	if fs.Help {
 		fmt.Println("usage: pix knowledge query <text...> [--limit N] [--json]")
 		return
 	}
@@ -101,11 +102,11 @@ func runKnowledgeQuery(argv []string) {
 	service.EnsureUp([]string{"knowledge"}, service.EnsureTimeout)
 	res, err := rpc.KnowledgeClient().Call("query", params)
 	if err != nil {
-		exitFromErr("knowledge query", err)
+		cli.ExitFromErr("knowledge query", err)
 	}
 	concepts := rpc.AsList(res["concepts"])
-	if fs.json {
-		_ = writeJSONOut(os.Stdout, map[string]any{"concepts": concepts})
+	if fs.Json {
+		_ = cli.WriteJSONOut(os.Stdout, map[string]any{"concepts": concepts})
 		return
 	}
 	if len(concepts) == 0 {
@@ -128,14 +129,14 @@ func runKnowledgeQuery(argv []string) {
 //	pix knowledge remote [--bundle DIR]              show origin
 //	pix knowledge remote set <url> [--bundle DIR]    set origin
 func runKnowledgeRemote(argv []string) {
-	fs := newFlagSet()
-	bundleFlag := fs.str("bundle", "")
-	positional, perr := fs.parse(argv)
+	fs := cli.NewFlagSet()
+	bundleFlag := fs.Str("bundle", "")
+	positional, perr := fs.Parse(argv)
 	if perr != nil {
 		fmt.Fprintln(os.Stderr, perr.Error())
 		os.Exit(2)
 	}
-	if fs.help {
+	if fs.Help {
 		fmt.Println("usage: pix knowledge remote [set <url>] [--bundle DIR]")
 		return
 	}
@@ -172,16 +173,16 @@ func runKnowledgeRemote(argv []string) {
 //
 //	pix knowledge sync [-m MSG] [--bundle DIR] [--allow-main]
 func runKnowledgeSync(argv []string) {
-	fs := newFlagSet()
-	msg := fs.str("message", "", "m")
-	bundleFlag := fs.str("bundle", "")
-	allowMain := fs.bool("allow-main")
-	positional, perr := fs.parse(argv)
+	fs := cli.NewFlagSet()
+	msg := fs.Str("message", "", "m")
+	bundleFlag := fs.Str("bundle", "")
+	allowMain := fs.Bool("allow-main")
+	positional, perr := fs.Parse(argv)
 	if perr != nil {
 		fmt.Fprintln(os.Stderr, perr.Error())
 		os.Exit(2)
 	}
-	if fs.help {
+	if fs.Help {
 		fmt.Println("usage: pix knowledge sync [-m MSG] [--bundle DIR] [--allow-main]")
 		return
 	}
@@ -606,13 +607,13 @@ func resolveBundleRef(ref, cacheDir string, out io.Writer) (string, error) {
 
 // runKnowledgeLs is the CLI entry point for `knowledge ls [--json]`.
 func runKnowledgeLs(argv []string) {
-	fs := newFlagSet()
-	fs.enableJSON()
-	positional, err := fs.parse(argv)
+	fs := cli.NewFlagSet()
+	fs.EnableJSON()
+	positional, err := fs.Parse(argv)
 	if err != nil {
-		exitFromErr("knowledge ls", err)
+		cli.ExitFromErr("knowledge ls", err)
 	}
-	if fs.help {
+	if fs.Help {
 		fmt.Print(knowledgeUsage)
 		return
 	}
@@ -625,8 +626,8 @@ func runKnowledgeLs(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix knowledge ls: %v\n", err)
 		os.Exit(1)
 	}
-	if fs.json {
-		_ = writeJSONOut(os.Stdout, knowledgeLsView(cfg, defaultShellEnv()))
+	if fs.Json {
+		_ = cli.WriteJSONOut(os.Stdout, knowledgeLsView(cfg, defaultShellEnv()))
 		return
 	}
 	knowledgeLs(cfg, defaultShellEnv(), os.Stdout)

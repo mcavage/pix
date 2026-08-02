@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/cli"
 	"pix/host/readiness"
 	"strings"
 	"time"
@@ -73,7 +74,7 @@ func parseStatusArgs(argv []string) (jsonOut bool, err error) {
 func renderStatus(cfg *config.Config, profile string, env shellEnv, out io.Writer, jsonOut bool) int {
 	st := gatherStatus(cfg, profile, env)
 	if jsonOut {
-		_ = writeJSONOut(out, st)
+		_ = cli.WriteJSONOut(out, st)
 		return st.Exit
 	}
 	st.render(out)

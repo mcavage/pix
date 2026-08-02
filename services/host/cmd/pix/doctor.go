@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/readiness"
@@ -338,7 +339,7 @@ func runDoctorCmd(argv []string) {
 	r.Services = cfg.Services
 	r.MCP = cfg.MCP
 	if jsonOut {
-		_ = writeJSONOut(os.Stdout, jsonView(r, ""))
+		_ = cli.WriteJSONOut(os.Stdout, jsonView(r, ""))
 	} else {
 		r.Render(os.Stdout, verbose, doctorHints())
 	}

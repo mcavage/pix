@@ -1,4 +1,4 @@
-package main
+package memory
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/rpc"
 )
@@ -94,7 +95,7 @@ func TestMemoryProfileForwarded(t *testing.T) {
 		{"stats", nil, "stats"},
 	}
 	for _, tc := range cases {
-		if err := dispatchMemory(tc.sub, tc.argv, c, &bytes.Buffer{}, "work"); err != nil {
+		if err := Dispatch(tc.sub, tc.argv, c, &bytes.Buffer{}, "work"); err != nil {
 			t.Fatalf("%s: %v", tc.sub, err)
 		}
 		if got, _ := seen[tc.method]["profile"].(string); got != "work" {
@@ -110,7 +111,7 @@ func TestMemoryRecall(t *testing.T) {
 		}},
 	})
 	var out bytes.Buffer
-	if err := dispatchMemory("recall", []string{"guitar"}, c, &out, "default"); err != nil {
+	if err := Dispatch("recall", []string{"guitar"}, c, &out, "default"); err != nil {
 		t.Fatalf("recall: %v", err)
 	}
 	got := out.String()
@@ -137,7 +138,7 @@ func TestMemoryRecall_NoTimestampDoesNotCrash(t *testing.T) {
 		}},
 	})
 	var out bytes.Buffer
-	if err := dispatchMemory("recall", []string{"x"}, c, &out, "default"); err != nil {
+	if err := Dispatch("recall", []string{"x"}, c, &out, "default"); err != nil {
 		t.Fatalf("recall: %v", err)
 	}
 	got := out.String()
@@ -169,7 +170,7 @@ func TestMemoryTimestamp(t *testing.T) {
 func TestMemoryRecallJSON(t *testing.T) {
 	c := fakeRPCServer(t, map[string]any{"recall": map[string]any{"hits": []any{}}})
 	var out bytes.Buffer
-	if err := dispatchMemory("recall", []string{"x", "--json"}, c, &out, "default"); err != nil {
+	if err := Dispatch("recall", []string{"x", "--json"}, c, &out, "default"); err != nil {
 		t.Fatalf("recall --json: %v", err)
 	}
 	var parsed map[string]any
@@ -180,15 +181,15 @@ func TestMemoryRecallJSON(t *testing.T) {
 
 func TestMemoryRecallNoQuery(t *testing.T) {
 	c := rpc.Client{Port: 1}
-	if err := dispatchMemory("recall", nil, c, &bytes.Buffer{}, "default"); !isUsage(err) {
-		t.Errorf("recall with no query: err = %v, want usageError", err)
+	if err := Dispatch("recall", nil, c, &bytes.Buffer{}, "default"); !cli.IsUsage(err) {
+		t.Errorf("recall with no query: err = %v, want cli.UsageError2", err)
 	}
 }
 
 func TestMemoryRemember(t *testing.T) {
 	c := fakeRPCServer(t, map[string]any{"remember": map[string]any{"id": "deadbeef-00", "reaffirmed": false}})
 	var out bytes.Buffer
-	if err := dispatchMemory("remember", []string{"a", "new", "fact"}, c, &out, "default"); err != nil {
+	if err := Dispatch("remember", []string{"a", "new", "fact"}, c, &out, "default"); err != nil {
 		t.Fatalf("remember: %v", err)
 	}
 	if !strings.Contains(out.String(), "remembered deadbeef") {
@@ -199,7 +200,7 @@ func TestMemoryRemember(t *testing.T) {
 func TestMemoryForget(t *testing.T) {
 	c := fakeRPCServer(t, map[string]any{"forget": map[string]any{"ok": true}})
 	var out bytes.Buffer
-	if err := dispatchMemory("forget", []string{"abc123"}, c, &out, "default"); err != nil {
+	if err := Dispatch("forget", []string{"abc123"}, c, &out, "default"); err != nil {
 		t.Fatalf("forget: %v", err)
 	}
 	if !strings.Contains(out.String(), "forgot abc123") {
@@ -212,7 +213,7 @@ func TestMemoryLearnings(t *testing.T) {
 		map[string]any{"id": "aa11-bb", "content": "always run tests", "frequency": 5.0, "createdAt": "2026-07-22T16:15:03Z"},
 	}}})
 	var out bytes.Buffer
-	if err := dispatchMemory("learnings", nil, c, &out, "default"); err != nil {
+	if err := Dispatch("learnings", nil, c, &out, "default"); err != nil {
 		t.Fatalf("learnings: %v", err)
 	}
 	if !strings.Contains(out.String(), "5x") || !strings.Contains(out.String(), "always run tests") {
@@ -229,7 +230,7 @@ func TestMemoryStats(t *testing.T) {
 		"active": 10.0, "durable": 3.0, "perishable": 7.0, "facts": 8.0, "learnings": 2.0, "deleted": 1.0,
 	}})
 	var out bytes.Buffer
-	if err := dispatchMemory("stats", nil, c, &out, "default"); err != nil {
+	if err := Dispatch("stats", nil, c, &out, "default"); err != nil {
 		t.Fatalf("stats: %v", err)
 	}
 	if !strings.Contains(out.String(), "active 10") {
@@ -240,23 +241,23 @@ func TestMemoryStats(t *testing.T) {
 func TestMemoryServiceDown(t *testing.T) {
 	// Nothing listening on this port -> rpc.ErrServiceDown.
 	c := rpc.Client{Port: 1}
-	err := dispatchMemory("recall", []string{"x"}, c, &bytes.Buffer{}, "default")
+	err := Dispatch("recall", []string{"x"}, c, &bytes.Buffer{}, "default")
 	if err != rpc.ErrServiceDown {
 		t.Errorf("recall against down service: err = %v, want rpc.ErrServiceDown", err)
 	}
 }
 
 func TestMemoryUnknownSub(t *testing.T) {
-	if err := dispatchMemory("frobnicate", nil, rpc.Client{Port: 1}, &bytes.Buffer{}, "default"); !isUsage(err) {
-		t.Errorf("unknown sub: err = %v, want usageError", err)
+	if err := Dispatch("frobnicate", nil, rpc.Client{Port: 1}, &bytes.Buffer{}, "default"); !cli.IsUsage(err) {
+		t.Errorf("unknown sub: err = %v, want cli.UsageError2", err)
 	}
 }
 
 // TestMemoryUsageMentionsBackupRestore keeps the top-level memory usage pointing
 // users at the promoted top-level backup/restore verbs.
 func TestMemoryUsageMentionsBackupRestore(t *testing.T) {
-	if !strings.Contains(memoryUsage, "pix backup") || !strings.Contains(memoryUsage, "pix restore") {
-		t.Error("memoryUsage should point to the top-level backup/restore verbs")
+	if !strings.Contains(Usage, "pix backup") || !strings.Contains(Usage, "pix restore") {
+		t.Error("Usage should point to the top-level backup/restore verbs")
 	}
 }
 
@@ -265,18 +266,18 @@ func TestMemoryUsageMentionsBackupRestore(t *testing.T) {
 // unknown subcommand.
 func TestMemoryDispatchNoLongerHasBackupRestore(t *testing.T) {
 	for _, sub := range []string{"backup", "restore"} {
-		if err := dispatchMemory(sub, nil, rpc.Client{}, &bytes.Buffer{}, "default"); !isUsage(err) {
-			t.Errorf("dispatchMemory(%q) err = %v, want usageError (removed subcommand)", sub, err)
+		if err := Dispatch(sub, nil, rpc.Client{}, &bytes.Buffer{}, "default"); !cli.IsUsage(err) {
+			t.Errorf("Dispatch(%q) err = %v, want cli.UsageError2 (removed subcommand)", sub, err)
 		}
 	}
 }
 
 func TestFlagSetParse(t *testing.T) {
-	fs := newFlagSet()
-	fs.enableJSON()
-	limit := fs.int("limit", 8)
-	project := fs.str("project", "")
-	pos, err := fs.parse([]string{"hello", "world", "--limit", "3", "--project=recipes", "--json"})
+	fs := cli.NewFlagSet()
+	fs.EnableJSON()
+	limit := fs.Int("limit", 8)
+	project := fs.Str("project", "")
+	pos, err := fs.Parse([]string{"hello", "world", "--limit", "3", "--project=recipes", "--json"})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -286,7 +287,7 @@ func TestFlagSetParse(t *testing.T) {
 	if *project != "recipes" {
 		t.Errorf("project = %q, want recipes", *project)
 	}
-	if !fs.json {
+	if !fs.Json {
 		t.Error("json flag not set")
 	}
 	if strings.Join(pos, " ") != "hello world" {
@@ -295,9 +296,9 @@ func TestFlagSetParse(t *testing.T) {
 }
 
 func TestFlagSetShortAlias(t *testing.T) {
-	fs := newFlagSet()
-	msg := fs.str("message", "", "m")
-	if _, err := fs.parse([]string{"-m", "hello there"}); err != nil {
+	fs := cli.NewFlagSet()
+	msg := fs.Str("message", "", "m")
+	if _, err := fs.Parse([]string{"-m", "hello there"}); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if *msg != "hello there" {
@@ -306,9 +307,9 @@ func TestFlagSetShortAlias(t *testing.T) {
 }
 
 func TestFlagSetBool(t *testing.T) {
-	fs := newFlagSet()
-	b := fs.bool("allow-main")
-	pos, err := fs.parse([]string{"--allow-main", "x"})
+	fs := cli.NewFlagSet()
+	b := fs.Bool("allow-main")
+	pos, err := fs.Parse([]string{"--allow-main", "x"})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -327,10 +328,10 @@ func TestFlagSetErrors(t *testing.T) {
 		{"--limit", "abc"}, // non-integer
 	}
 	for _, argv := range cases {
-		fs := newFlagSet()
-		fs.int("limit", 8)
-		if _, err := fs.parse(argv); !isUsage(err) {
-			t.Errorf("parse(%v) err = %v, want usageError", argv, err)
+		fs := cli.NewFlagSet()
+		fs.Int("limit", 8)
+		if _, err := fs.Parse(argv); !cli.IsUsage(err) {
+			t.Errorf("parse(%v) err = %v, want cli.UsageError2", argv, err)
 		}
 	}
 }
@@ -343,13 +344,13 @@ func TestFlagSetHelpWinsOverValue(t *testing.T) {
 	for _, argv := range [][]string{
 		{"-m", "--help"}, {"--message", "-h"}, {"-m", "-h", "extra"}, {"foo", "-h"},
 	} {
-		fs := newFlagSet()
-		msg := fs.str("message", "", "m")
-		pos, err := fs.parse(argv)
+		fs := cli.NewFlagSet()
+		msg := fs.Str("message", "", "m")
+		pos, err := fs.Parse(argv)
 		if err != nil {
 			t.Fatalf("parse(%v): %v", argv, err)
 		}
-		if !fs.help {
+		if !fs.Help {
 			t.Errorf("parse(%v) did not set help", argv)
 		}
 		if *msg != "" {
@@ -360,12 +361,12 @@ func TestFlagSetHelpWinsOverValue(t *testing.T) {
 		}
 	}
 	// A help token AFTER a `--` terminator is passthrough, not ours: help stays off.
-	fs := newFlagSet()
-	fs.str("message", "", "m")
-	if _, err := fs.parse([]string{"--", "--help"}); err != nil {
+	fs := cli.NewFlagSet()
+	fs.Str("message", "", "m")
+	if _, err := fs.Parse([]string{"--", "--help"}); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if fs.help {
+	if fs.Help {
 		t.Error("--help after -- must not set help")
 	}
 }
@@ -385,19 +386,19 @@ func TestMemoryRecallHelp_BothPositions(t *testing.T) {
 }
 
 // TestKnowledgeSyncHelp_NoCommit is the F3 sync gate: `sync -m --help` must set
-// help via the flagSet pre-scan and NOT consume `--help` as the -m value, so the
-// commit/push path is never reached. Asserted at the flagSet level (the same
+// help via the cli.FlagSet pre-scan and NOT consume `--help` as the -m value, so the
+// commit/push path is never reached. Asserted at the cli.FlagSet level (the same
 // parser runKnowledgeSync uses) so no git repo is required.
 func TestKnowledgeSyncHelp_NoCommit(t *testing.T) {
-	fs := newFlagSet()
-	msg := fs.str("message", "", "m")
-	fs.str("bundle", "")
-	fs.bool("allow-main")
-	pos, err := fs.parse([]string{"-m", "--help"})
+	fs := cli.NewFlagSet()
+	msg := fs.Str("message", "", "m")
+	fs.Str("bundle", "")
+	fs.Bool("allow-main")
+	pos, err := fs.Parse([]string{"-m", "--help"})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if !fs.help {
+	if !fs.Help {
 		t.Fatal("sync -m --help must set help (so it prints usage, not commit)")
 	}
 	if *msg != "" || len(pos) != 0 {
@@ -413,27 +414,27 @@ func TestRunMemoryCore_HelpIgnoresBrokenConfig(t *testing.T) {
 	brokenLoad := func() (*config.Config, string, error) {
 		return nil, "", fmt.Errorf(`no profile "wrok" — configured: work`)
 	}
-	panicClient := func() rpc.Client { panic("runMemoryCore must not RPC on a help request") }
+	panicClient := func() rpc.Client { panic("RunCore must not RPC on a help request") }
 
 	for _, argv := range [][]string{{"recall", "--help"}, {"stats", "-h"}, {"forget", "--help"}} {
 		var out bytes.Buffer
-		if err := runMemoryCore(argv, brokenLoad, panicClient, &out); err != nil {
-			t.Fatalf("runMemoryCore(%v) with broken config: %v", argv, err)
+		if err := RunCore(argv, brokenLoad, panicClient, &out); err != nil {
+			t.Fatalf("RunCore(%v) with broken config: %v", argv, err)
 		}
 		if !strings.Contains(out.String(), "usage: pix memory "+argv[0]) {
-			t.Errorf("runMemoryCore(%v) = %q, want %s usage", argv, out.String(), argv[0])
+			t.Errorf("RunCore(%v) = %q, want %s usage", argv, out.String(), argv[0])
 		}
 	}
 
 	// Without a help request, the broken config MUST surface (never a silent
 	// fallback to the default bucket).
-	if err := runMemoryCore([]string{"recall", "foo"}, brokenLoad, rpc.MemoryClient, &bytes.Buffer{}); err == nil {
-		t.Error("runMemoryCore(recall foo) with broken config should error, not fall back")
+	if err := RunCore([]string{"recall", "foo"}, brokenLoad, rpc.MemoryClient, &bytes.Buffer{}); err == nil {
+		t.Error("RunCore(recall foo) with broken config should error, not fall back")
 	}
 	// Bare `memory --help` prints the top-level usage, also config-free.
 	var out bytes.Buffer
-	if err := runMemoryCore([]string{"--help"}, brokenLoad, panicClient, &out); err != nil {
-		t.Fatalf("runMemoryCore([--help]): %v", err)
+	if err := RunCore([]string{"--help"}, brokenLoad, panicClient, &out); err != nil {
+		t.Fatalf("RunCore([--help]): %v", err)
 	}
 	if !strings.Contains(out.String(), "usage: pix memory <") {
 		t.Errorf("memory --help = %q, want top-level usage", out.String())
@@ -441,8 +442,8 @@ func TestRunMemoryCore_HelpIgnoresBrokenConfig(t *testing.T) {
 }
 
 func TestFlagSetTerminator(t *testing.T) {
-	fs := newFlagSet()
-	pos, err := fs.parse([]string{"a", "--", "--not-a-flag", "b"})
+	fs := cli.NewFlagSet()
+	pos, err := fs.Parse([]string{"a", "--", "--not-a-flag", "b"})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

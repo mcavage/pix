@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"pix/host/cli"
 	"strconv"
 )
 
@@ -47,27 +48,27 @@ flags:
 // runBackup is the `pix backup` entry: classify the error into an exit code.
 func runBackup(argv []string) {
 	if err := runBackupCore(argv, os.Stdout); err != nil {
-		exitFromErr("backup", err)
+		cli.ExitFromErr("backup", err)
 	}
 }
 
 // runBackupCore parses --out/--keep and execs `pix-host backup`. Help is
 // printed BEFORE any exec (config-independent), matching the other verbs. It
-// returns the child's error unmapped so exitFromErr propagates its exit code.
+// returns the child's error unmapped so cli.ExitFromErr propagates its exit code.
 func runBackupCore(argv []string, out io.Writer) error {
-	fs := newFlagSet()
-	outPath := fs.str("out", "", "o")
-	keep := fs.int("keep", 7)
-	positional, err := fs.parse(argv)
+	fs := cli.NewFlagSet()
+	outPath := fs.Str("out", "", "o")
+	keep := fs.Int("keep", 7)
+	positional, err := fs.Parse(argv)
 	if err != nil {
 		return err
 	}
-	if fs.help {
+	if fs.Help {
 		fmt.Fprint(out, backupUsage)
 		return nil
 	}
 	if len(positional) > 0 {
-		return usageErr(backupUsage)
+		return cli.UsageErr(backupUsage)
 	}
 	bin, err := findHostBinary()
 	if err != nil {
@@ -87,25 +88,25 @@ func runBackupCore(argv []string, out io.Writer) error {
 // runRestore is the `pix restore` entry: classify the error into an exit code.
 func runRestore(argv []string) {
 	if err := runRestoreCore(argv, os.Stdout); err != nil {
-		exitFromErr("restore", err)
+		cli.ExitFromErr("restore", err)
 	}
 }
 
 // runRestoreCore parses <archive>/--force and execs `pix-host restore`.
 // Help + missing-archive are handled BEFORE any exec (config-independent).
 func runRestoreCore(argv []string, out io.Writer) error {
-	fs := newFlagSet()
-	force := fs.bool("force", "f")
-	positional, err := fs.parse(argv)
+	fs := cli.NewFlagSet()
+	force := fs.Bool("force", "f")
+	positional, err := fs.Parse(argv)
 	if err != nil {
 		return err
 	}
-	if fs.help {
+	if fs.Help {
 		fmt.Fprint(out, restoreUsage)
 		return nil
 	}
 	if len(positional) != 1 {
-		return usageErr(restoreUsage)
+		return cli.UsageErr(restoreUsage)
 	}
 	bin, err := findHostBinary()
 	if err != nil {
