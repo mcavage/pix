@@ -5,7 +5,7 @@
 // failure-leaves-everything-in-place rollback discipline, the archive call's
 // argv shape, and that config clears the OAuth-managed fields while
 // retaining client_id/redirect_uri.
-package main
+package slack
 
 import (
 	"bytes"
@@ -18,6 +18,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/slackoauth"
@@ -173,7 +174,7 @@ func TestSlackStatusOAuthHappyPathNoSlackToken(t *testing.T) {
 	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
 
 	var out bytes.Buffer
-	exit := slackStatus(cfg, e, &out, time.Now())
+	exit := Status(cfg, e, &out, time.Now())
 	text := out.String()
 	if exit != 0 {
 		t.Errorf("exit = %d, want 0, output:\n%s", exit, text)
@@ -208,7 +209,7 @@ func TestSlackStatusOAuthGrantExpiryWarningWithin7Days(t *testing.T) {
 	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
 
 	var out bytes.Buffer
-	exit := slackStatus(cfg, e, &out, time.Now())
+	exit := Status(cfg, e, &out, time.Now())
 	text := out.String()
 	if exit != 0 {
 		t.Errorf("a warning-only expiry must not block exit; exit = %d, output:\n%s", exit, text)
@@ -234,7 +235,7 @@ func TestSlackStatusOAuthGrantExpiredIsTodoAndExit1(t *testing.T) {
 	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
 
 	var out bytes.Buffer
-	exit := slackStatus(cfg, e, &out, time.Now())
+	exit := Status(cfg, e, &out, time.Now())
 	text := out.String()
 	if exit != 1 {
 		t.Errorf("an expired grant must be a verified TODO (exit 1), got exit=%d, output:\n%s", exit, text)
@@ -504,8 +505,8 @@ func TestSlackDisableOAuthConfigClearRetainsClientID(t *testing.T) {
 	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
 
 	var out bytes.Buffer
-	if err := slackDisable(cfg, e, &out); err != nil {
-		t.Fatalf("slackDisable: %v\n--- output ---\n%s", err, out.String())
+	if err := Disable(cfg, e, &out); err != nil {
+		t.Fatalf("Disable: %v\n--- output ---\n%s", err, out.String())
 	}
 
 	got, err := config.Load()
@@ -524,7 +525,7 @@ func TestSlackDisableOAuthConfigClearRetainsClientID(t *testing.T) {
 	if !got.Slack.OAuthGrantExpiresAt.IsZero() {
 		t.Errorf("OAuthGrantExpiresAt = %v, want cleared", got.Slack.OAuthGrantExpiresAt)
 	}
-	if mcpConfigured(got, slackServerName) {
+	if mcp.Configured(got, slackServerName) {
 		t.Error("slack must be removed from the configured mcp set")
 	}
 	for _, r := range secret.ParseOpRefs(opRefsFileContent(t)) {

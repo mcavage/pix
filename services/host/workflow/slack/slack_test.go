@@ -3,7 +3,7 @@
 // ever leaks into output), that an auth.test failure writes and registers
 // nothing, status's identity-pin mismatch + registered-vs-attachment
 // wording, and disable's revocation warning.
-package main
+package slack
 
 import (
 	"bytes"
@@ -17,58 +17,60 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/launcher"
+	"pix/host/mcp"
 	"pix/host/rpc"
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/sys/systest"
 )
 
-// --- parseSlackSetupArgs -----------------------------------------------
+// --- ParseSlackSetupArgs -----------------------------------------------
 
 func TestParseSlackSetupArgs(t *testing.T) {
-	o, err := parseSlackSetupArgs([]string{"--token-ref", "op://Private/Slack/credential", "--yes"})
+	o, err := ParseSlackSetupArgs([]string{"--token-ref", "op://Private/Slack/credential", "--yes"})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if o.tokenRef != "op://Private/Slack/credential" || !o.assumeYes {
+	if o.tokenRef != "op://Private/Slack/credential" || !o.AssumeYes {
 		t.Errorf("parsed = %+v", o)
 	}
 
-	o2, err := parseSlackSetupArgs([]string{"--token-ref=op://Private/Slack/credential", "-y"})
+	o2, err := ParseSlackSetupArgs([]string{"--token-ref=op://Private/Slack/credential", "-y"})
 	if err != nil {
 		t.Fatalf("parse (= form, -y): %v", err)
 	}
-	if o2.tokenRef != "op://Private/Slack/credential" || !o2.assumeYes {
+	if o2.tokenRef != "op://Private/Slack/credential" || !o2.AssumeYes {
 		t.Errorf("parsed (= form) = %+v", o2)
 	}
 
-	if _, err := parseSlackSetupArgs([]string{"--token-ref"}); err == nil {
+	if _, err := ParseSlackSetupArgs([]string{"--token-ref"}); err == nil {
 		t.Error("--token-ref without a value should error")
 	}
-	if _, err := parseSlackSetupArgs([]string{"--bogus"}); err == nil {
+	if _, err := ParseSlackSetupArgs([]string{"--bogus"}); err == nil {
 		t.Error("an unknown flag should error")
 	}
 	pasted := "xoxp-should-never-be-echoed"
-	if _, err := parseSlackSetupArgs([]string{pasted}); err == nil || strings.Contains(err.Error(), pasted) || !strings.Contains(err.Error(), "[REDACTED]") {
+	if _, err := ParseSlackSetupArgs([]string{pasted}); err == nil || strings.Contains(err.Error(), pasted) || !strings.Contains(err.Error(), "[REDACTED]") {
 		t.Errorf("a positional pasted token must be rejected and redacted, got %v", err)
 	}
-	if _, err := parseSlackSetupArgs([]string{"-h"}); err != cli.ErrHelpRequested {
+	if _, err := ParseSlackSetupArgs([]string{"-h"}); err != cli.ErrHelpRequested {
 		t.Error("-h should return the cli.ErrHelpRequested sentinel")
 	}
-	if _, err := parseSlackSetupArgs([]string{"--token-ref", "op://x/y/z", "--help"}); err != cli.ErrHelpRequested {
+	if _, err := ParseSlackSetupArgs([]string{"--token-ref", "op://x/y/z", "--help"}); err != cli.ErrHelpRequested {
 		t.Error("--help should return the cli.ErrHelpRequested sentinel even after other flags")
 	}
 }
 
 func TestParseSlackAuthArgsIsOAuthOnly(t *testing.T) {
-	o, err := parseSlackAuthArgs([]string{"--client-id", "C123", "--vault", "Private"})
+	o, err := ParseSlackAuthArgs([]string{"--client-id", "C123", "--vault", "Private"})
 	if err != nil {
-		t.Fatalf("parseSlackAuthArgs OAuth flags: %v", err)
+		t.Fatalf("ParseSlackAuthArgs OAuth flags: %v", err)
 	}
 	if o.clientID != "C123" || o.vault != "Private" {
 		t.Errorf("parsed opts = %+v, want OAuth client/vault", o)
 	}
-	if _, err := parseSlackAuthArgs([]string{"--token-ref", "op://Private/Slack/token"}); err == nil || !strings.Contains(err.Error(), "OAuth-only") {
+	if _, err := ParseSlackAuthArgs([]string{"--token-ref", "op://Private/Slack/token"}); err == nil || !strings.Contains(err.Error(), "OAuth-only") {
 		t.Fatalf("auth accepted static --token-ref or returned an unclear error: %v", err)
 	}
 }
@@ -77,7 +79,7 @@ func TestParseSlackAuthArgsIsOAuthOnly(t *testing.T) {
 // parse in both "space" and "=" forms, and that --vault defaults to "Private"
 // when omitted (vaultExplicit false) but is tracked as explicit when passed.
 func TestParseSlackSetupArgsPKCEFlags(t *testing.T) {
-	o, err := parseSlackSetupArgs(nil)
+	o, err := ParseSlackSetupArgs(nil)
 	if err != nil {
 		t.Fatalf("parse empty argv: %v", err)
 	}
@@ -85,7 +87,7 @@ func TestParseSlackSetupArgsPKCEFlags(t *testing.T) {
 		t.Errorf("default vault = %q explicit=%v, want Private/false", o.vault, o.vaultExplicit)
 	}
 
-	o2, err := parseSlackSetupArgs([]string{"--client-id", "C123", "--redirect-uri", "http://localhost:9/slack/callback", "--vault", "Shared"})
+	o2, err := ParseSlackSetupArgs([]string{"--client-id", "C123", "--redirect-uri", "http://localhost:9/slack/callback", "--vault", "Shared"})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -93,7 +95,7 @@ func TestParseSlackSetupArgsPKCEFlags(t *testing.T) {
 		t.Errorf("parsed = %+v", o2)
 	}
 
-	o3, err := parseSlackSetupArgs([]string{"--client-id=C456", "--redirect-uri=http://localhost:9/slack/callback", "--vault=Shared2"})
+	o3, err := ParseSlackSetupArgs([]string{"--client-id=C456", "--redirect-uri=http://localhost:9/slack/callback", "--vault=Shared2"})
 	if err != nil {
 		t.Fatalf("parse (= form): %v", err)
 	}
@@ -101,13 +103,13 @@ func TestParseSlackSetupArgsPKCEFlags(t *testing.T) {
 		t.Errorf("parsed (= form) = %+v", o3)
 	}
 
-	if _, err := parseSlackSetupArgs([]string{"--client-id"}); err == nil {
+	if _, err := ParseSlackSetupArgs([]string{"--client-id"}); err == nil {
 		t.Error("--client-id without a value should error")
 	}
-	if _, err := parseSlackSetupArgs([]string{"--redirect-uri"}); err == nil {
+	if _, err := ParseSlackSetupArgs([]string{"--redirect-uri"}); err == nil {
 		t.Error("--redirect-uri without a value should error")
 	}
-	if _, err := parseSlackSetupArgs([]string{"--vault"}); err == nil {
+	if _, err := ParseSlackSetupArgs([]string{"--vault"}); err == nil {
 		t.Error("--vault without a value should error")
 	}
 }
@@ -123,17 +125,17 @@ func TestParseSlackSetupArgsRejectsMixedStaticAndPKCEFlags(t *testing.T) {
 		{"--token-ref", "op://v/i/f", "--allow-identity-change"},
 	}
 	for _, argv := range cases {
-		if _, err := parseSlackSetupArgs(argv); err == nil {
+		if _, err := ParseSlackSetupArgs(argv); err == nil {
 			t.Errorf("argv %v: expected a mixed-flags refusal, got success", argv)
 		}
 	}
 	// A PKCE-only combination (no --token-ref) must still parse fine.
-	if _, err := parseSlackSetupArgs([]string{"--client-id", "C123", "--allow-identity-change"}); err != nil {
+	if _, err := ParseSlackSetupArgs([]string{"--client-id", "C123", "--allow-identity-change"}); err != nil {
 		t.Errorf("PKCE-only flags should parse cleanly, got %v", err)
 	}
 }
 
-// --- slackSetup hermetic harness ----------------------------------------
+// --- Setup hermetic harness ----------------------------------------
 
 // slackTestEnv builds a hostenv.Env over a real (but temp-dir-scoped) config +
 // op-refs.env — config.Load/Save and secret.DefaultOpRefsPath both honor PIX_CONFIG,
@@ -158,9 +160,9 @@ func (f *slackTestEnv) env() hostenv.Env {
 	// RunTimedFn is deliberately left unset: systest.Fake routes RunTimed to the
 	// faked Run, so a bounded probe never becomes a real exec here.
 	e := hostenv.Env{System: &systest.Fake{Base: sys.Real{}}}
-	e.HostBinary = func() (string, error) { return hostBinaryResolver() }
+	e.HostBinary = launcher.FindHostBinary
 	e.IdentityProbe = rpc.IdentityProbe
-	e.SlackAuth = liveSlackAuthTest
+	e.SlackAuth = LiveSlackAuthTest
 	systest.Of(e.System).LookPathFn = func(name string) (string, error) {
 		switch name {
 		case "sbx":
@@ -242,7 +244,7 @@ func TestSlackSetupRejectsPastedToken(t *testing.T) {
 	// Construct at runtime so secret scanners do not mistake the deliberately
 	// fake fixture for a live Slack token embedded in repository history.
 	pasted := "xoxp-" + strings.Repeat("not-a-real-token-", 4)
-	err := slackSetup(f.env(), slackSetupOpts{tokenRef: pasted, assumeYes: true}, strings.NewReader(""), &out, false, fakeHostResolver)
+	err := Setup(f.env(), slackSetupOpts{tokenRef: pasted, AssumeYes: true}, strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil {
 		t.Fatal("a pasted (non-op://) --token-ref must be rejected")
 	}
@@ -272,8 +274,8 @@ func TestSlackSetupRefusesForeignExistingRegistration(t *testing.T) {
 		return "", nil
 	}
 	var out bytes.Buffer
-	err := slackSetup(e, slackSetupOpts{tokenRef: "op://Private/Slack/credential", assumeYes: true},
-		strings.NewReader(""), &out, false, fakeHostResolver)
+	err := Setup(e, slackSetupOpts{tokenRef: "op://Private/Slack/credential", AssumeYes: true},
+		strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil || !strings.Contains(err.Error(), "refusing to overwrite") {
 		t.Fatalf("foreign registration should be refused, got %v", err)
 	}
@@ -288,8 +290,8 @@ func TestSlackSetupRejectsNonXoxpToken(t *testing.T) {
 	slackTestCfg(t)
 	f := &slackTestEnv{opOK: true, opToken: "xoxb-not-a-user-token", sbxPresent: true}
 	var out bytes.Buffer
-	err := slackSetup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential", assumeYes: true},
-		strings.NewReader(""), &out, false, fakeHostResolver)
+	err := Setup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential", AssumeYes: true},
+		strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil {
 		t.Fatal("a resolved token without the xoxp- prefix must be rejected")
 	}
@@ -313,8 +315,8 @@ func TestSlackSetupAuthTestFailureNoWriteNoRegister(t *testing.T) {
 		authTest: func(string) (slackIdentity, error) { return slackIdentity{}, fmt.Errorf("invalid_auth") },
 	}
 	var out bytes.Buffer
-	err := slackSetup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential", assumeYes: true},
-		strings.NewReader(""), &out, false, fakeHostResolver)
+	err := Setup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential", AssumeYes: true},
+		strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil {
 		t.Fatal("a failed live auth.test must fail the command")
 	}
@@ -328,7 +330,7 @@ func TestSlackSetupAuthTestFailureNoWriteNoRegister(t *testing.T) {
 		t.Errorf("an auth.test failure must never write op-refs.env, got:\n%s", got)
 	}
 	cfg, _ := config.Load()
-	if mcpConfigured(cfg, slackServerName) {
+	if mcp.Configured(cfg, slackServerName) {
 		t.Error("an auth.test failure must never add slack to the configured mcp set")
 	}
 }
@@ -342,8 +344,8 @@ func TestSlackSetupRejectsIdentityWithoutStableIDs(t *testing.T) {
 		},
 	}
 	var out bytes.Buffer
-	err := slackSetup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential", assumeYes: true},
-		strings.NewReader(""), &out, false, fakeHostResolver)
+	err := Setup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential", AssumeYes: true},
+		strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil || !strings.Contains(err.Error(), "team_id or user_id") {
 		t.Fatalf("missing stable identity ids should fail, got %v", err)
 	}
@@ -361,8 +363,8 @@ func TestSlackSetupDeclinedConfirmationWritesNothing(t *testing.T) {
 		},
 	}
 	var out bytes.Buffer
-	err := slackSetup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential"},
-		strings.NewReader("n\n"), &out, true, fakeHostResolver)
+	err := Setup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential"},
+		strings.NewReader("n\n"), &out, true, fakeHostResolver, registerOK)
 	if err != nil {
 		t.Fatalf("declining confirmation should abort cleanly, not error: %v", err)
 	}
@@ -383,8 +385,8 @@ func TestSlackSetupNonInteractiveWithoutYesFails(t *testing.T) {
 		},
 	}
 	var out bytes.Buffer
-	err := slackSetup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential"},
-		strings.NewReader(""), &out, false, fakeHostResolver)
+	err := Setup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential"},
+		strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil {
 		t.Fatal("non-interactive without --yes must refuse rather than silently proceed")
 	}
@@ -396,6 +398,7 @@ func TestSlackSetupNonInteractiveWithoutYesFails(t *testing.T) {
 // --- happy path: writes refs, registers, saves config ---------------------
 
 func TestSlackSetupHappyPath(t *testing.T) {
+	var registered []string
 	slackTestCfg(t)
 	f := &slackTestEnv{
 		opOK: true, opToken: "xoxp-real-looking-token", sbxPresent: true,
@@ -404,10 +407,10 @@ func TestSlackSetupHappyPath(t *testing.T) {
 		},
 	}
 	var out bytes.Buffer
-	err := slackSetup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential", assumeYes: true},
-		strings.NewReader(""), &out, false, fakeHostResolver)
+	err := Setup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential", AssumeYes: true},
+		strings.NewReader(""), &out, false, fakeHostResolver, registerRecorder(&registered))
 	if err != nil {
-		t.Fatalf("slackSetup: %v\n--- output ---\n%s", err, out.String())
+		t.Fatalf("Setup: %v\n--- output ---\n%s", err, out.String())
 	}
 	if strings.Contains(out.String(), f.opToken) {
 		t.Errorf("the token must never be printed, got:\n%s", out.String())
@@ -419,14 +422,14 @@ func TestSlackSetupHappyPath(t *testing.T) {
 	if !strings.Contains(content, "SLACK_TEAM_ID=T123") || !strings.Contains(content, "SLACK_USER_ID=U456") {
 		t.Errorf("op-refs.env must carry the identity pins, got:\n%s", content)
 	}
-	if !f.ranSbxAdd() {
-		t.Errorf("slack must be registered with the sbx gateway, calls = %v", f.calls)
+	if len(registered) != 1 || registered[0] != slackServerName {
+		t.Errorf("setup must register exactly %q, registered = %v", slackServerName, registered)
 	}
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	if !mcpConfigured(cfg, slackServerName) {
+	if !mcp.Configured(cfg, slackServerName) {
 		t.Error("slack must be added to the configured mcp set")
 	}
 }
@@ -449,8 +452,8 @@ func TestSlackSetupStaticRefusesWhenOAuthConfigured(t *testing.T) {
 		},
 	}
 	var out bytes.Buffer
-	err := slackSetup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential", assumeYes: true},
-		strings.NewReader(""), &out, false, fakeHostResolver)
+	err := Setup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential", AssumeYes: true},
+		strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil || !strings.Contains(err.Error(), "pix slack disable") {
 		t.Fatalf("expected a refusal naming `pix slack disable`, got %v", err)
 	}
@@ -471,13 +474,13 @@ func TestSlackSetupHardFailsWhenSbxAbsent(t *testing.T) {
 		},
 	}
 	var out bytes.Buffer
-	err := slackSetup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential", assumeYes: true},
-		strings.NewReader(""), &out, false, fakeHostResolver)
+	err := Setup(f.env(), slackSetupOpts{tokenRef: "op://Private/Slack/credential", AssumeYes: true},
+		strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil {
 		t.Fatal("setup must hard-fail (non-zero) when sbx is absent, not silently succeed")
 	}
 	cfg, _ := config.Load()
-	if mcpConfigured(cfg, slackServerName) {
+	if mcp.Configured(cfg, slackServerName) {
 		t.Error("config must not claim slack is configured when registration never happened")
 	}
 	if got := opRefsFileContent(t); got != "" {
@@ -516,7 +519,7 @@ func TestSlackStatusIdentityPinMismatch(t *testing.T) {
 		t.Fatalf("config.Load: %v", err)
 	}
 	var out bytes.Buffer
-	exit := slackStatus(cfg, f.env(), &out, time.Now())
+	exit := Status(cfg, f.env(), &out, time.Now())
 	if exit != 1 {
 		t.Errorf("exit = %d, want 1 (a verified mismatch)", exit)
 	}
@@ -546,7 +549,7 @@ func TestSlackStatusIdentityPinMatch(t *testing.T) {
 	// registration is still not-registered in this fixture (no `sbx mcp get`
 	// stub wired), so the OVERALL exit still reflects that separate gap; this
 	// test only asserts the identity pin line itself reads as matched.
-	slackStatus(cfg, f.env(), &out, time.Now())
+	Status(cfg, f.env(), &out, time.Now())
 	if !strings.Contains(out.String(), "matches the identity pinned at setup") {
 		t.Errorf("status must report a matching pin as matched, got:\n%s", out.String())
 	}
@@ -571,7 +574,7 @@ func TestSlackStatusRejectsForeignRegistration(t *testing.T) {
 		t.Fatalf("config.Load: %v", err)
 	}
 	var out bytes.Buffer
-	if exit := slackStatus(cfg, e, &out, time.Now()); exit != 1 {
+	if exit := Status(cfg, e, &out, time.Now()); exit != 1 {
 		t.Errorf("foreign registration exit = %d, want 1", exit)
 	}
 	if !strings.Contains(out.String(), "not the canonical Pix host command") {
@@ -587,7 +590,7 @@ func TestSlackStatusRegisteredVsAttachmentWording(t *testing.T) {
 		t.Fatalf("config.Load: %v", err)
 	}
 	var out bytes.Buffer
-	slackStatus(cfg, f.env(), &out, time.Now())
+	Status(cfg, f.env(), &out, time.Now())
 	text := out.String()
 	if !strings.Contains(text, "registration") {
 		t.Errorf("status must have a distinct 'registration' line, got:\n%s", text)
@@ -635,8 +638,8 @@ func TestSlackDisableRemovesRefsAndWarnsAboutRevocation(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := slackDisable(cfg, e, &out); err != nil {
-		t.Fatalf("slackDisable: %v\n--- output ---\n%s", err, out.String())
+	if err := Disable(cfg, e, &out); err != nil {
+		t.Fatalf("Disable: %v\n--- output ---\n%s", err, out.String())
 	}
 
 	text := out.String()
@@ -674,7 +677,7 @@ func TestSlackDisableRemovesRefsAndWarnsAboutRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load after disable: %v", err)
 	}
-	if mcpConfigured(got, slackServerName) {
+	if mcp.Configured(got, slackServerName) {
 		t.Error("disable must remove slack from the configured mcp set")
 	}
 }
@@ -695,8 +698,8 @@ func TestSlackDisableRemovesOrphanIdentityPins(t *testing.T) {
 		return "", nil
 	}
 	var out bytes.Buffer
-	if err := slackDisable(cfg, e, &out); err != nil {
-		t.Fatalf("slackDisable with orphan pins: %v", err)
+	if err := Disable(cfg, e, &out); err != nil {
+		t.Fatalf("Disable with orphan pins: %v", err)
 	}
 	for _, r := range secret.ParseOpRefs(opRefsFileContent(t)) {
 		if r.Key == "SLACK_TEAM_ID" || r.Key == "SLACK_USER_ID" {
@@ -724,7 +727,7 @@ func TestSlackDisableRefusesForeignRegistration(t *testing.T) {
 		return "", nil
 	}
 	var out bytes.Buffer
-	if err := slackDisable(cfg, e, &out); err == nil || !strings.Contains(err.Error(), "refusing to remove") {
+	if err := Disable(cfg, e, &out); err == nil || !strings.Contains(err.Error(), "refusing to remove") {
 		t.Fatalf("foreign registration should be preserved, got %v", err)
 	}
 	for _, c := range f.calls {
@@ -749,8 +752,8 @@ func TestSlackDisableNoopWhenNothingConfigured(t *testing.T) {
 		return "", nil
 	}
 	var out bytes.Buffer
-	if err := slackDisable(cfg, e, &out); err != nil {
-		t.Fatalf("slackDisable on a clean config should be a no-op, got: %v", err)
+	if err := Disable(cfg, e, &out); err != nil {
+		t.Fatalf("Disable on a clean config should be a no-op, got: %v", err)
 	}
 	if !strings.Contains(out.String(), "nothing to remove") {
 		t.Errorf("expected a clean no-op message, got:\n%s", out.String())
@@ -758,24 +761,3 @@ func TestSlackDisableNoopWhenNothingConfigured(t *testing.T) {
 }
 
 // --- verb/help coverage ---------------------------------------------------
-
-// TestSlackVerbDiscoverable is a focused sibling of the generic
-// TestHelpListsEveryTopLevelVerb/TestManPageDocumentsEveryKnownVerb checks
-// (verbcoverage_test.go, man_test.go), which already cover `slack` because
-// they read the dispatch switch / knownVerbs live. This pins the four
-// subcommands specifically, so a future edit that drops one from slackUsage
-// fails locally in this file too.
-func TestSlackVerbDiscoverable(t *testing.T) {
-	if !knownVerbs["slack"] {
-		t.Error(`"slack" must be in knownVerbs so it is discoverable/documented`)
-	}
-	usage, ok := verbUsage("slack")
-	if !ok {
-		t.Fatal(`verbUsage("slack") must resolve`)
-	}
-	for _, sub := range []string{"setup", "auth", "status", "disable"} {
-		if !strings.Contains(usage, sub) {
-			t.Errorf("pix slack usage is missing subcommand %q:\n%s", sub, usage)
-		}
-	}
-}

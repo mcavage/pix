@@ -366,7 +366,7 @@ func (m McpRegistrar) ExecArgv(name string) []string {
 // OpRunWrapPrefix is the ONE op-run wrapper grammar the launcher ever
 // generates: `<op> run --no-masking --env-file=<refs> --`. It is shared
 // between the generator (ExecArgv above) and the recognizer (doctor.go's
-// unwrapOpRun), so what doctor trusts to unwrap can never drift from what
+// UnwrapOpRun), so what doctor trusts to unwrap can never drift from what
 // registration actually writes — any other op subcommand, option set,
 // ordering, or env file is by definition not launcher-generated.
 func OpRunWrapPrefix(op, refs string) []string {

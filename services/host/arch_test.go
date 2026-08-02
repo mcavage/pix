@@ -82,6 +82,13 @@ var pkgLayer = map[string]int{
 	"workflow/backup":  layerWorkflow,
 	"workflow/man":     layerWorkflow,
 	"workflow/upgrade": layerWorkflow,
+	// slack is a WORKFLOW, not a capability, and the layering test is what
+	// settled it: as an L1 it violated three rules at once (mcp, secret,
+	// readiness). `pix slack setup` sequences an OAuth grant, a credential
+	// write, an MCP registration and a readiness report — that is cross-domain
+	// sequencing, which is the definition of L3. The pure capability underneath
+	// it is slackoauth, which was already L1 and already correct.
+	"workflow/slack": layerWorkflow,
 
 	// L4 — the command layer.
 	"cmd/pix": layerCommand,

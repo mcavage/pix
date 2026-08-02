@@ -1,14 +1,12 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"pix/host/cli"
 	"pix/host/hostenv"
 	"pix/host/mcp"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"pix/host/sys"
 	"strings"
 
@@ -71,7 +69,7 @@ const (
 	// mcpKindLocal: confirmed in `pix-host mcp --list` — a local stdio
 	// server this host can spawn. `pix mcp register <name>` registers it;
 	// its health may be probed by exec'ing the registered argv, but ONLY after
-	// the canonical-executable gate (recognizedMCPArgv). Never OAuth-checked.
+	// the canonical-executable gate (mcp.RecognizedArgv). Never OAuth-checked.
 	mcpKindLocal
 	// mcpKindCatalog: confirmed NON-local and in the shipped public catalog
 	// bundle (mcp.McpCatalogNames: notion/atlassian/granola). Registered via
@@ -359,18 +357,18 @@ func mcpUnknownKindCheck(name, mcpOut string, mcpOK, sbxPresent bool) readiness.
 // mcpLocalCheck is the HONEST local stdio check: registered -> spawns ->
 // returns N tools. It reads the definition sbx ACTUALLY registered for <name>
 // (bounded) and probes THAT — but ONLY after the canonical-executable gate:
-// the registered argv is never exec'd unless recognizedMCPArgv approves and
+// the registered argv is never exec'd unless mcp.RecognizedArgv approves and
 // normalizes it (see its doc). Outcomes degrade honestly: unreadable command
 // or untrusted shape -> unverifiable (registration stays stated, never a false
 // green health claim); a timeout/exec failure -> unverifiable; a clean spawn
 // with zero tools -> a verified headless-creds TODO.
 func mcpLocalCheck(env hostenv.Env, name, mcpOut string) readiness.Check {
-	argv, ok := registeredMCPCommand(env, name)
+	argv, ok := mcp.RegisteredCommand(env, name)
 	if !ok {
 		return readiness.Check{Label: name, Verdict: readiness.VerdictUnverifiable,
 			Detail: "registered (tool probe unavailable: couldn't read the registered command)"}
 	}
-	trusted, ok := recognizedMCPArgv(env, argv, name)
+	trusted, ok := mcp.RecognizedArgv(env, argv, name, secret.FindOpRefs(env))
 	if !ok {
 		return readiness.Check{Label: name, Verdict: readiness.VerdictUnverifiable,
 			Detail: "registered (probe skipped: unrecognized/untrusted command, never executed; inspect: sbx mcp inspect " + name + ")"}
@@ -508,186 +506,7 @@ func unknownKeyCheck(key string) readiness.Check {
 	}
 }
 
-// registeredMCPCommand asks sbx for the DEFINITION actually registered for
-// <name> — the argv the gateway would spawn — so doctor can probe the real
-// registration for a local stdio server. Definition inspection ONLY: nothing
-// here says anything about sandbox attachment (that is the receipt's job).
-// It tries the current `sbx mcp inspect <name>`, then the legacy `get` form,
-// then `sbx mcp ls -o json`, all BOUNDED via
-// probeRun so a hung sbx degrades to "couldn't read the registered command",
-// never a wedged doctor. Returns (nil,false) when sbx is absent or exposes no
-// command.
-func registeredMCPCommand(env hostenv.Env, name string) ([]string, bool) {
-
-	if _, err := env.LookPath("sbx"); err != nil {
-		return nil, false
-	}
-	if out, timedOut, err := env.RunTimed("sbx", "mcp", "inspect", name); err == nil && !timedOut {
-		if argv, ok := parseMCPCommandLine(out); ok {
-			return argv, true
-		}
-	}
-	// Compatibility with older sbx releases that called this command `get`.
-	if out, timedOut, err := env.RunTimed("sbx", "mcp", "get", name); err == nil && !timedOut {
-		if argv, ok := parseMCPCommandLine(out); ok {
-			return argv, true
-		}
-	}
-	if out, timedOut, err := env.RunTimed("sbx", "mcp", "ls", "-o", "json"); err == nil && !timedOut {
-		if argv, ok := parseMCPCommandJSON(out, name); ok {
-			return argv, true
-		}
-	}
-	return nil, false
-}
-
-// parseMCPCommandLine extracts a registered argv from `sbx mcp inspect <name>`
-// (or the legacy `get` equivalent)
-// text dump: the `command:` line split into fields. A shell-quoted line (which
-// strings.Fields cannot split reliably) or an empty command returns (nil,false)
-// so registeredMCPCommand falls through to the structured JSON parser.
-func parseMCPCommandLine(out string) ([]string, bool) {
-	m := gogCommandLineRe.FindStringSubmatch(out)
-	if len(m) < 2 {
-		return nil, false
-	}
-	cmd := strings.TrimSpace(m[1])
-	if cmd == "" || strings.ContainsAny(cmd, "\"'") {
-		return nil, false
-	}
-	fields := strings.Fields(cmd)
-	if len(fields) == 0 {
-		return nil, false
-	}
-	return fields, true
-}
-
-// parseMCPCommandJSON extracts the registered argv for <name> from `sbx mcp ls
-// -o json` (an array of {name, command, args}). Returns (nil,false) when there
-// is no matching entry or the JSON doesn't parse.
-func parseMCPCommandJSON(out, name string) ([]string, bool) {
-	var servers []struct {
-		Name    string   `json:"name"`
-		Command string   `json:"command"`
-		Args    []string `json:"args"`
-	}
-	if err := json.Unmarshal([]byte(out), &servers); err != nil {
-		return nil, false
-	}
-	for _, s := range servers {
-		if s.Name != name || strings.TrimSpace(s.Command) == "" {
-			continue
-		}
-		return append([]string{s.Command}, s.Args...), true
-	}
-	return nil, false
-}
-
-// recognizedMCPArgv reports whether argv is a shape doctor TRUSTS to exec as a
-// probe: either a TRUSTED gog spawn (canonical gog/op executables), or
-// (optionally wrapped in `op run … -- …`, with the op binary itself canonical)
-// an ABSOLUTE path equal to the canonical `pix-host` followed by
-// `mcp <name>` — exactly how mcp.go registers a local stdio server. Anything
-// else is an arbitrary command someone put in the registration, which doctor
-// must NOT run. On success it returns the NORMALIZED argv: every executable
-// token replaced with the resolver's canonical path, so the caller execs the
-// TRUSTED tokens, never the registered spelling — there is no check-then-exec
-// window on a path an attacker controls (a symlink blessed at check time and
-// swapped before exec never enters the picture, because symlink resolution is
-// never consulted and the exec'd token is the resolver's own answer).
-func recognizedMCPArgv(env hostenv.Env, argv []string, name string) ([]string, bool) {
-	if norm, ok := trustedGogSpawn(env, argv); ok {
-		return norm, true
-	}
-	// Unwrap ONLY the exact launcher-generated `op run --no-masking
-	// --env-file=<refs> --` wrapper grammar (unwrapOpRun). A `--` behind any
-	// other prefix — a foreign argv[0], another op subcommand, an alternate
-	// env file, extra options — is rejected: the probe execs these tokens.
-	cmd, ok := unwrapOpRun(env, argv)
-	if !ok {
-		return nil, false
-	}
-	norm := append([]string(nil), argv...)
-	innerStart := len(argv) - len(cmd)
-	if innerStart > 0 {
-		// An op-wrapped command must run the SAME op binary env.LookPath finds —
-		// a look-alike `/tmp/op` is never executed.
-		opTok, opOK := trustedExecPath(env, argv[0], "op")
-		if !opOK {
-			return nil, false
-		}
-		norm[0] = opTok
-	}
-	if len(cmd) < 3 {
-		return nil, false
-	}
-	if cmd[1] != "mcp" || cmd[2] != name {
-		return nil, false
-	}
-	// Basename alone ("pix-host") is NOT enough — an absolute path
-	// anywhere on disk with that basename (e.g. /tmp/malicious/pix-host)
-	// would satisfy a basename check. Require the CANONICAL binary registration
-	// actually uses, and exec THAT token.
-	hostTok, hostOK := trustedHostBinaryExecPath(env, cmd[0])
-	if !hostOK {
-		return nil, false
-	}
-	norm[innerStart] = hostTok
-	return norm, true
-}
-
-// trustedHostBinaryExecPath is the canonical-pix-host gate: mcp.go
-// registration (mcp.RegisterServers/serverCmd) ALWAYS spawns the ABSOLUTE path
-// hostBinaryResolver (launcher.FindHostBinary) resolves — never a bare name. Trusting
-// an absolute path's basename alone would let a malicious
-// `/tmp/malicious/pix-host mcp slack` registration pass. env.HostBinary
-// is the injected/hermetic trust seam mirroring hostBinaryResolver, so this
-// compares against the SAME canonical answer the real registration used. tok
-// must be absolute AND byte-equal (cleaned) to the resolved binary — STRICT
-// equality only. Symlink resolution is deliberately NOT consulted: blessing an
-// alternate symlink path at check time and exec'ing it afterwards is a
-// check-then-exec race an attacker wins by swapping the link between the two.
-// On success it returns the RESOLVER's canonical token — the only thing the
-// caller may exec. An unresolvable canonical answer (env.HostBinary nil or
-// erroring) fails CLOSED: never fall back to trusting the basename alone.
-func trustedHostBinaryExecPath(env hostenv.Env, tok string) (string, bool) {
-	if filepath.Base(tok) != "pix-host" {
-		return "", false
-	}
-	if !filepath.IsAbs(tok) {
-		return "", false // never trust a bare/relative name for pix-host
-	}
-	if env.HostBinary == nil {
-		return "", false
-	}
-	canonical, err := env.HostBinary()
-	if err != nil || canonical == "" || !filepath.IsAbs(canonical) {
-		return "", false
-	}
-	if filepath.Clean(tok) == filepath.Clean(canonical) {
-		return filepath.Clean(canonical), true
-	}
-	// `make install` exposes the PATH-resolved pix-host as a symlink to the
-	// checkout's out/pix-host. os.Executable may resolve the launcher symlink
-	// while sbx keeps the installed spelling. Accept that alternate spelling
-	// only when it is EXACTLY the pix-host this process resolves from PATH and
-	// both paths currently identify the same file. This deliberately rejects
-	// arbitrary lookalike symlinks (for example /tmp/pix-host -> canonical),
-	// which could otherwise be retargeted after this check.
-
-	pathHost, pathErr := env.LookPath("pix-host")
-	if pathErr != nil || !filepath.IsAbs(pathHost) || filepath.Clean(tok) != filepath.Clean(pathHost) {
-		return "", false
-	}
-	registeredInfo, registeredErr := os.Stat(tok)
-	canonicalInfo, canonicalErr := os.Stat(canonical)
-	if registeredErr != nil || canonicalErr != nil || !os.SameFile(registeredInfo, canonicalInfo) {
-		return "", false
-	}
-	return filepath.Clean(canonical), true
-}
-
-// trustedExecPath, trustedGogSpawn, probeStatus/probeResult, probeListTools,
+// trustedExecPath, mcp.TrustedGogSpawn, probeStatus/probeResult, probeListTools,
 // and classifyProbeErr are SHARED with doctor_gog.go — see doctor_probe.go,
 // which owns the single implementation. mcpLocalCheck maps the shared
 // probeDeniedByPolicy outcome to readiness.VerdictDenied (an explicit policy refusal is

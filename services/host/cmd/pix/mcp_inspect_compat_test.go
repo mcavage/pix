@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/sys/systest"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ func TestRegisteredMCPCommandUsesCurrentInspectCommand(t *testing.T) {
 		}
 		return "", os.ErrNotExist
 	}}}
-	argv, ok := registeredMCPCommand(env, "slack")
+	argv, ok := mcp.RegisteredCommand(env, "slack")
 	if !ok {
 		t.Fatalf("current sbx inspect output was not recognized; calls=%v", calls)
 	}
@@ -53,21 +54,21 @@ func TestTrustedHostBinaryAcceptsInstalledSymlinkToCanonicalBinary(t *testing.T)
 		}
 		return "", os.ErrNotExist
 	}}, HostBinary: func() (string, error) { return real, nil }}
-	if _, ok := trustedHostBinaryExecPath(env, installed); !ok {
+	if _, ok := mcp.TrustedHostBinaryExecPath(env, installed); !ok {
 		t.Fatal("installed pix-host symlink to the canonical binary was rejected")
 	}
 	lookalike := filepath.Join(dir, "lookalike-pix-host")
 	if err := os.Symlink(real, lookalike); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := trustedHostBinaryExecPath(env, lookalike); ok {
+	if _, ok := mcp.TrustedHostBinaryExecPath(env, lookalike); ok {
 		t.Fatal("an arbitrary symlink to the canonical binary was trusted")
 	}
 	foreign := filepath.Join(dir, "foreign")
 	if err := os.WriteFile(foreign, []byte("other"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := trustedHostBinaryExecPath(env, foreign); ok {
+	if _, ok := mcp.TrustedHostBinaryExecPath(env, foreign); ok {
 		t.Fatal("a different absolute binary was trusted")
 	}
 }

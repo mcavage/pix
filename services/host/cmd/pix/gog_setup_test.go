@@ -410,7 +410,7 @@ func TestGogSetup_CreateDocsProfileIsScopedAndRegistersSeparateTool(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GoogleWorkspaceAccess != gwAccessCreateDocs || !mcpConfigured(cfg, config.GWDocsCreateServerName) {
+	if cfg.GoogleWorkspaceAccess != gwAccessCreateDocs || !mcp.Configured(cfg, config.GWDocsCreateServerName) {
 		t.Fatalf("access=%q mcp=%v", cfg.GoogleWorkspaceAccess, cfg.MCP)
 	}
 }

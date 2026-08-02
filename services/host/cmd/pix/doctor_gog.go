@@ -48,7 +48,7 @@ func gogAccount(cfg *config.Config, env hostenv.Env) string {
 }
 
 // probeStatus/probeResult (the `--list-tools` probe outcome), probeListTools,
-// classifyProbeErr, trustedExecPath, and trustedGogSpawn are SHARED with
+// classifyProbeErr, trustedExecPath, and mcp.TrustedGogSpawn are SHARED with
 // doctor_mcp.go — see doctor_probe.go, which owns the single implementation
 // (this file's version was the superset kept there: probeDeniedByPolicy, an
 // EXPLICIT policy/permission refusal distinguished from a generic probe
@@ -63,7 +63,7 @@ var gogHardenedFlags = []string{"--gmail-no-send", "--wrap-untrusted", "--readon
 // gogMissingHardenedFlags returns the hardened read-only flags absent from the
 // registered gog spawn's INNER argv (after unwrapping any op-run prefix).
 func gogMissingHardenedFlags(env hostenv.Env, argv []string) []string {
-	inner, ok := gogSpawnArgv(env, argv)
+	inner, ok := mcp.GogSpawnArgv(env, argv, secret.FindOpRefs(env))
 	if !ok {
 		return append([]string(nil), gogHardenedFlags...)
 	}
@@ -175,7 +175,7 @@ func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPres
 		// op, or a symlink-swapped spelling is skipped (unverifiable), not probed.
 		// On trust, exec the NORMALIZED argv (canonical executable tokens), never
 		// the registered spelling.
-		trustedArgv, trusted := trustedGogSpawn(env, argv)
+		trustedArgv, trusted := mcp.TrustedGogSpawn(env, argv, secret.FindOpRefs(env))
 		if !trusted {
 			g.Checks = append(g.Checks, readiness.Check{Label: "headless spawn", Verdict: readiness.VerdictUnverifiable,
 				Detail:   "probe skipped: the registered command's gog/op executable does not match the PATH-resolved binary (inspect: sbx mcp inspect " + config.GWServerName + ") — never executed",
@@ -444,43 +444,13 @@ func parseGogCommandLine(env hostenv.Env, out string) ([]string, bool) {
 // (`gog … mcp …`, when op-refs is absent — 1Password is optional for gog). A
 // command is complete in EITHER form: it resolves (unwrapping ONLY the exact
 // launcher-generated `op run --no-masking --env-file=<refs> --` prefix — see
-// unwrapOpRun) to a binary whose basename is `gog` and whose args carry the
+// mcp.UnwrapOpRun) to a binary whose basename is `gog` and whose args carry the
 // `mcp` subcommand. A partial capture (`op`, `op run`, args on a separate
 // line) or a wrapper that deviates from the launcher grammar does not, so the
 // caller keeps looking rather than probe a truncated or drifted command.
 func gogCommandComplete(env hostenv.Env, argv []string) bool {
-	_, ok := gogSpawnArgv(env, argv)
+	_, ok := mcp.GogSpawnArgv(env, argv, secret.FindOpRefs(env))
 	return ok
-}
-
-// gogSpawnArgv extracts the effective gog spawn argv from a registered command,
-// handling both the op-wrapped form (`op run … -- gog … mcp …`) and the bare
-// form (`gog … mcp …`). It returns (cmd,true) when the resolved binary's
-// basename is `gog` and its args contain the `mcp` subcommand; (nil,false)
-// otherwise. Guards against index-out-of-range on short/empty argv.
-func gogSpawnArgv(env hostenv.Env, argv []string) ([]string, bool) {
-	if len(argv) == 0 {
-		return nil, false
-	}
-	// Unwrap ONLY the exact launcher-generated `op run … --` wrapper grammar;
-	// anything else (foreign argv[0], other op subcommands, alternate env
-	// files, extra options) is rejected — the probe execs these tokens.
-	cmd, ok := unwrapOpRun(env, argv)
-	if !ok {
-		return nil, false
-	}
-	if len(cmd) == 0 || strings.TrimSpace(cmd[0]) == "" {
-		return nil, false
-	}
-	if filepath.Base(cmd[0]) != "gog" {
-		return nil, false
-	}
-	for _, a := range cmd[1:] {
-		if a == "mcp" {
-			return cmd, true
-		}
-	}
-	return nil, false
 }
 
 // parseGogCommandTable extracts gog's argv from the current sbx plain table:
@@ -547,7 +517,7 @@ func gogAttachCheck(cfg *config.Config, ctx mcpSandboxContext, reg mcp.McpRegEvi
 	if ctx.mode == mcpAttachReceipt {
 		return mcpAttachCheck(config.GWServerName, ctx, reg)
 	}
-	if mcpConfigured(cfg, config.GWServerName) {
+	if mcp.Configured(cfg, config.GWServerName) {
 		det := "in the configured MCP set — preloads at sandbox create (intent, not attachment)"
 		if ctx.mode == mcpAttachSandboxAbsent {
 			det = "sandbox " + ctx.sandbox + " not created yet — gog preloads at `pix run` create"

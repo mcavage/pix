@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"pix/host/cli"
 	"pix/host/hostenv"
 	"runtime"
 	"strings"
@@ -63,7 +64,7 @@ func ensureSetupPrereqsFor(env hostenv.Env, in io.Reader, out io.Writer, interac
 		return fmt.Errorf("missing required host tool(s): %s\n%s", strings.Join(missing, ", "), fix())
 	}
 	fmt.Fprintf(out, "Pix needs %s. Install with Homebrew now? [Y/n]: ", strings.Join(missing, " and "))
-	if !confirmYN(in, out, "", true) {
+	if !cli.ConfirmYN(in, out, "", true) {
 		return fmt.Errorf("required host tools were not installed\n%s", fix())
 	}
 

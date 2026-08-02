@@ -10,7 +10,7 @@ package main
 //     hangingProbe (redrive_findings2_test.go), which drives the REAL
 //     runWithTimeoutD path under a short injected deadline.
 //
-//  2: unwrapOpRun accepts ONLY the exact op-run wrapper grammar the launcher
+//  2: mcp.UnwrapOpRun accepts ONLY the exact op-run wrapper grammar the launcher
 //     generates (mcp.McpRegistrar.execArgv via the shared mcp.OpRunWrapPrefix):
 //     canonical op executable, literal `run`, `--no-masking`,
 //     `--env-file=<the launcher's resolved op-refs.env>`, exactly one `--`,
@@ -216,12 +216,12 @@ func TestUnwrapOpRun_AcceptsOnlyLauncherGrammar(t *testing.T) {
 	inner := []string{f2Host, "mcp", "slack"}
 	canonical := append(mcp.OpRunWrapPrefix(f2Op, f2Refs), inner...)
 
-	got, ok := unwrapOpRun(env, canonical)
+	got, ok := mcp.UnwrapOpRun(env, canonical, secret.FindOpRefs(env))
 	if !ok || !reflect.DeepEqual(got, inner) {
 		t.Fatalf("the canonical launcher wrapper must unwrap to the inner argv, got (%v,%v)", got, ok)
 	}
 	// A bare (unwrapped) command passes through untouched.
-	if got, ok := unwrapOpRun(env, inner); !ok || !reflect.DeepEqual(got, inner) {
+	if got, ok := mcp.UnwrapOpRun(env, inner, secret.FindOpRefs(env)); !ok || !reflect.DeepEqual(got, inner) {
 		t.Errorf("a bare command must pass through, got (%v,%v)", got, ok)
 	}
 
@@ -240,7 +240,7 @@ func TestUnwrapOpRun_AcceptsOnlyLauncherGrammar(t *testing.T) {
 		"empty argv":                       {},
 	}
 	for name, argv := range rejects {
-		if _, ok := unwrapOpRun(env, argv); ok {
+		if _, ok := mcp.UnwrapOpRun(env, argv, secret.FindOpRefs(env)); ok {
 			t.Errorf("%s must be rejected, argv=%v", name, argv)
 		}
 	}
@@ -250,14 +250,14 @@ func TestUnwrapOpRun_AcceptsOnlyLauncherGrammar(t *testing.T) {
 	// env file.
 	noRefs := env
 	systest.Of(noRefs.System).IsFileFn = func(string) bool { return false }
-	if _, ok := unwrapOpRun(noRefs, canonical); ok {
+	if _, ok := mcp.UnwrapOpRun(noRefs, canonical, secret.FindOpRefs(noRefs)); ok {
 		t.Error("an op-wrapped registration must be rejected when the launcher refs file is unresolvable")
 	}
 }
 
 // TestUnwrapOpRun_MatchesExecArgvGrammar pins the shared-grammar invariant:
 // whatever mcp.McpRegistrar.execArgv generates (for pix-host AND gog),
-// unwrapOpRun accepts and unwraps back to the bare server command — the
+// mcp.UnwrapOpRun accepts and unwraps back to the bare server command — the
 // recognizer can never drift from the generator.
 func TestUnwrapOpRun_MatchesExecArgvGrammar(t *testing.T) {
 	env := f2Env()
@@ -265,7 +265,7 @@ func TestUnwrapOpRun_MatchesExecArgvGrammar(t *testing.T) {
 	for _, name := range []string{"slack", config.GWServerName} {
 		wrapped := reg.ExecArgv(name)
 		want := reg.ServerCmd(name)
-		got, ok := unwrapOpRun(env, wrapped)
+		got, ok := mcp.UnwrapOpRun(env, wrapped, secret.FindOpRefs(env))
 		if !ok || !reflect.DeepEqual(got, want) {
 			t.Errorf("execArgv(%q)=%v must unwrap to serverCmd=%v, got (%v,%v)", name, wrapped, want, got, ok)
 		}
@@ -278,7 +278,7 @@ func TestTrustedGogSpawn_WrapperGrammar(t *testing.T) {
 	env := f2Env()
 	inner := []string{f2Gog, "--account", "you@example.com", "--gmail-no-send", "--wrap-untrusted", "--readonly", "mcp", "--allow-tool", "read"}
 	canonical := append(mcp.OpRunWrapPrefix(f2Op, f2Refs), inner...)
-	if norm, ok := trustedGogSpawn(env, canonical); !ok || norm[0] != f2Op {
+	if norm, ok := mcp.TrustedGogSpawn(env, canonical, secret.FindOpRefs(env)); !ok || norm[0] != f2Op {
 		t.Fatalf("canonical op-wrapped gog spawn must be trusted with canonical tokens, got (%v,%v)", norm, ok)
 	}
 	rejects := map[string][]string{
@@ -287,7 +287,7 @@ func TestTrustedGogSpawn_WrapperGrammar(t *testing.T) {
 		"extra option":       append([]string{f2Op, "run", "--no-masking", "--env-file=" + f2Refs, "--evil", "--"}, inner...),
 	}
 	for name, argv := range rejects {
-		if _, ok := trustedGogSpawn(env, argv); ok {
+		if _, ok := mcp.TrustedGogSpawn(env, argv, secret.FindOpRefs(env)); ok {
 			t.Errorf("%s must not be trusted, argv=%v", name, argv)
 		}
 	}
@@ -298,7 +298,7 @@ func TestRecognizedMCPArgv_WrapperGrammar(t *testing.T) {
 	env := f2Env()
 	inner := []string{f2Host, "mcp", "slack"}
 	canonical := append(mcp.OpRunWrapPrefix(f2Op, f2Refs), inner...)
-	norm, ok := recognizedMCPArgv(env, canonical, "slack")
+	norm, ok := mcp.RecognizedArgv(env, canonical, "slack", secret.FindOpRefs(env))
 	if !ok || norm[0] != f2Op || norm[len(norm)-3] != f2Host {
 		t.Fatalf("canonical op-wrapped host spawn must be recognized with canonical tokens, got (%v,%v)", norm, ok)
 	}
@@ -309,7 +309,7 @@ func TestRecognizedMCPArgv_WrapperGrammar(t *testing.T) {
 		"double separator":   append(append(mcp.OpRunWrapPrefix(f2Op, f2Refs), inner...), "--"),
 	}
 	for name, argv := range rejects {
-		if _, ok := recognizedMCPArgv(env, argv, "slack"); ok {
+		if _, ok := mcp.RecognizedArgv(env, argv, "slack", secret.FindOpRefs(env)); ok {
 			t.Errorf("%s must not be recognized, argv=%v", name, argv)
 		}
 	}

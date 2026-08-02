@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"pix/host/hostenv"
 	"pix/host/sys"
 	"strings"
@@ -15,7 +14,7 @@ import (
 // group (doctor_gog.go, S07). It was consolidated here after both stories
 // independently grew the same primitives during integration: probeListTools /
 // probeStatus / classifyProbeErr (the `--list-tools` probe + its outcome
-// classification) and trustedExecPath / trustedGogSpawn (the
+// classification) and trustedExecPath / mcp.TrustedGogSpawn (the
 // canonical-executable trust gate). doctor_gog.go's copy had grown one extra
 // outcome — probeDeniedByPolicy, an EXPLICIT policy/permission refusal
 // distinguished from a generic probe error — so that is the superset kept
@@ -90,65 +89,4 @@ func classifyProbeErr(err error) string {
 		return fmt.Sprintf("exited non-zero (%s)", ee.ProcessState)
 	}
 	return "could not be run"
-}
-
-// trustedExecPath is the canonical-executable gate: it returns the exec token
-// doctor may run for base, and whether the registered token is trusted. A bare
-// name (no path separator) is trusted as-is — exec resolves it through PATH at
-// spawn time, which IS lookPath's answer; there is no recorded path for an
-// attacker to swap. A path-carrying token must be byte-equal (cleaned) to the
-// PATH-resolved binary — STRICT equality only, with symlink resolution
-// deliberately NOT consulted (a check-time symlink bless followed by exec of
-// the registered path is a race the attacker wins by swapping the link). On
-// success the returned token is the RESOLVER's canonical path, never the
-// registered spelling, so the exec'd token is the trusted one by construction.
-// Anything else (a look-alike /tmp/gog, a fake op) is untrusted and never
-// executed.
-func trustedExecPath(env hostenv.Env, tok, base string) (string, bool) {
-	if filepath.Base(tok) != base {
-		return "", false
-	}
-	if !strings.ContainsAny(tok, `/\`) {
-		return tok, true // bare name: exec resolves via PATH = lookPath's answer
-	}
-
-	canonical, err := env.LookPath(base)
-	if err != nil || canonical == "" {
-		return "", false
-	}
-	if filepath.Clean(tok) != filepath.Clean(canonical) {
-		return "", false
-	}
-	return filepath.Clean(canonical), true
-}
-
-// trustedGogSpawn reports whether a registered gog command is BOTH the
-// recognized gog shape (gogSpawnArgv) AND built from canonical executables:
-// the inner gog binary must match env.LookPath("gog"), and — when op-wrapped —
-// the op binary must match env.LookPath("op"). On success it returns the
-// NORMALIZED argv: the gog/op executable tokens replaced with the resolvers'
-// canonical paths, so the caller execs the TRUSTED tokens, never the
-// registered spelling. Only that normalized spawn is ever executed as a probe.
-func trustedGogSpawn(env hostenv.Env, argv []string) ([]string, bool) {
-	inner, ok := gogSpawnArgv(env, argv)
-	if !ok {
-		return nil, false
-	}
-	gogTok, gogOK := trustedExecPath(env, inner[0], "gog")
-	if !gogOK {
-		return nil, false
-	}
-	norm := append([]string(nil), argv...)
-	// inner is the suffix gogSpawnArgv/unwrapOpRun peeled off argv, so the
-	// inner executable sits at len(argv)-len(inner); >0 means op-wrapped.
-	innerStart := len(argv) - len(inner)
-	norm[innerStart] = gogTok
-	if innerStart > 0 {
-		opTok, opOK := trustedExecPath(env, argv[0], "op")
-		if !opOK {
-			return nil, false
-		}
-		norm[0] = opTok
-	}
-	return norm, true
 }

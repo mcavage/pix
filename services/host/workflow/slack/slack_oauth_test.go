@@ -4,7 +4,7 @@
 // identity check, and a full hermetic end-to-end run of slackSetupPKCE
 // proving config/op-refs/1Password argv all land correctly and no secret
 // ever leaks into output, an error, or an argv.
-package main
+package slack
 
 import (
 	"bytes"
@@ -23,6 +23,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/secret"
 	"pix/host/slackoauth"
 	"pix/host/sys/systest"
@@ -563,6 +564,7 @@ func slackOAuthTestExchangeBody(teamID, userID string) string {
 // the OPStore write only ever puts the blob on stdin, and that neither the
 // rotating access nor refresh token appears anywhere in printed output.
 func TestSlackSetupPKCEHappyPath(t *testing.T) {
+	var registered []string
 	slackTestCfg(t)
 	// Seed a legacy SLACK_TOKEN ref to prove the PKCE path removes it.
 	opRefsWith(t, "SLACK_TOKEN=op://Private/Slack/credential")
@@ -608,14 +610,14 @@ func TestSlackSetupPKCEHappyPath(t *testing.T) {
 		t.Fatalf("config.Load: %v", err)
 	}
 	opts := slackSetupOpts{
-		assumeYes:     true,
+		AssumeYes:     true,
 		clientID:      "C0PKCE",
 		redirectURI:   redirectURI,
 		vault:         "Private",
 		vaultExplicit: true,
 	}
 	var out bytes.Buffer
-	err = slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	err = slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver, registerRecorder(&registered))
 	if err != nil {
 		t.Fatalf("slackSetupPKCE: %v\n--- output ---\n%s", err, out.String())
 	}
@@ -715,11 +717,11 @@ func TestSlackSetupPKCEHappyPath(t *testing.T) {
 	if !got.Slack.OAuthGrantExpiresAt.Equal(wantExpiry) {
 		t.Errorf("Slack.OAuthGrantExpiresAt = %v, want %v", got.Slack.OAuthGrantExpiresAt, wantExpiry)
 	}
-	if !mcpConfigured(got, slackServerName) {
+	if !mcp.Configured(got, slackServerName) {
 		t.Error("slack must be added to the configured mcp set")
 	}
-	if !f.ranSbxAdd() {
-		t.Error("slack must be registered with the sbx gateway")
+	if len(registered) != 1 || registered[0] != slackServerName {
+		t.Errorf("setup must register exactly %q, registered = %v", slackServerName, registered)
 	}
 }
 
@@ -731,22 +733,22 @@ func TestSlackSetupPKCERequiresClientID(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	err = slackSetupPKCE(f.env(), cfg, slackSetupOpts{assumeYes: true, vault: "Private"}, defaultSlackOAuthDeps(),
-		strings.NewReader(""), &out, false, fakeHostResolver)
+	err = slackSetupPKCE(f.env(), cfg, slackSetupOpts{AssumeYes: true, vault: "Private"}, defaultSlackOAuthDeps(),
+		strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil || !strings.Contains(err.Error(), "client id") {
 		t.Fatalf("missing client id must be refused, got %v", err)
 	}
 }
 
 // TestSlackSetupDispatchesToPKCEWithoutTokenRef proves the umbrella
-// slackSetup dispatcher runs the PKCE path (not the static one) whenever
+// Setup dispatcher runs the PKCE path (not the static one) whenever
 // --token-ref is absent — i.e. the token-ref path is a genuine fallback, not
 // the only path.
 func TestSlackSetupDispatchesToPKCEWithoutTokenRef(t *testing.T) {
 	slackTestCfg(t)
 	f := &slackTestEnv{sbxPresent: true}
 	var out bytes.Buffer
-	err := slackSetup(f.env(), slackSetupOpts{assumeYes: true, vault: "Private"}, strings.NewReader(""), &out, false, fakeHostResolver)
+	err := Setup(f.env(), slackSetupOpts{AssumeYes: true, vault: "Private"}, strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil || !strings.Contains(err.Error(), "client id") {
 		t.Fatalf("expected the PKCE path's missing-client-id error, got %v", err)
 	}
@@ -801,7 +803,7 @@ func slackOAuthRevokeFixture(t *testing.T, authTest func(token string) (slackIde
 		t.Fatalf("config.Load: %v", err)
 	}
 	opts = slackSetupOpts{
-		assumeYes:     true,
+		AssumeYes:     true,
 		clientID:      "C0PKCE",
 		redirectURI:   redirectURI,
 		vault:         "Private",
@@ -819,7 +821,7 @@ func TestSlackSetupPKCERevokesOnAuthTestFailure(t *testing.T) {
 		return slackIdentity{}, fmt.Errorf("auth.test: invalid_auth")
 	})
 	var out bytes.Buffer
-	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil {
 		t.Fatal("expected an error when auth.test fails on the newly issued token")
 	}
@@ -838,7 +840,7 @@ func TestSlackSetupPKCERevokesOnIdentityMismatch(t *testing.T) {
 		return slackIdentity{Team: "Other", TeamID: "T_OTHER", User: "eve", UserID: "U_OTHER"}, nil
 	})
 	var out bytes.Buffer
-	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("expected an identity mismatch error, got %v", err)
 	}
@@ -858,9 +860,9 @@ func TestSlackSetupPKCERevokesOnDeclinedConfirmation(t *testing.T) {
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
 		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	})
-	opts.assumeYes = false
+	opts.AssumeYes = false
 	var out bytes.Buffer
-	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader("n\n"), &out, true, fakeHostResolver)
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader("n\n"), &out, true, fakeHostResolver, registerOK)
 	if err != nil {
 		t.Fatalf("a declined confirmation must not itself be an error, got %v", err)
 	}
@@ -885,9 +887,9 @@ func TestSlackSetupPKCERevokesOnNonInteractiveWithoutYes(t *testing.T) {
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
 		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	})
-	opts.assumeYes = false
+	opts.AssumeYes = false
 	var out bytes.Buffer
-	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil || !strings.Contains(err.Error(), "--yes") {
 		t.Fatalf("expected the non-interactive refusal, got %v", err)
 	}
@@ -908,7 +910,7 @@ func TestSlackSetupPKCERevokesOnStoreWriteFailure(t *testing.T) {
 	})
 	deps.runner.(*fakeOPRunner).writeErr = fmt.Errorf("op: vault locked")
 	var out bytes.Buffer
-	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil || !strings.Contains(err.Error(), "writing the Slack credential to 1Password") {
 		t.Fatalf("expected the 1Password write failure, got %v", err)
 	}
@@ -932,7 +934,7 @@ func TestSlackSetupPKCERefusesDifferentIdentityUnderYes(t *testing.T) {
 	})
 	opRefsWith(t, "SLACK_TEAM_ID=T_OLD", "SLACK_USER_ID=U_OLD")
 	var out bytes.Buffer
-	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil || !strings.Contains(err.Error(), "does not match this OAuth identity") {
 		t.Fatalf("expected an identity-pin-change refusal under --yes, got %v", err)
 	}
@@ -956,11 +958,11 @@ func TestSlackSetupPKCEAllowsDifferentIdentityInteractivelyOnConfirm(t *testing.
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
 		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	})
-	opts.assumeYes = false
+	opts.AssumeYes = false
 	opRefsWith(t, "SLACK_TEAM_ID=T_OLD", "SLACK_USER_ID=U_OLD")
 	// Two prompts now: "replace the pin?" then "wire up Slack?" — both answered y.
 	var out bytes.Buffer
-	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader("y\ny\n"), &out, true, fakeHostResolver)
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader("y\ny\n"), &out, true, fakeHostResolver, registerOK)
 	if err != nil {
 		t.Fatalf("slackSetupPKCE: %v\n--- output ---\n%s", err, out.String())
 	}
@@ -981,10 +983,10 @@ func TestSlackSetupPKCEDeclinesDifferentIdentityInteractively(t *testing.T) {
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
 		return slackIdentity{Team: "Acme", TeamID: "T123", User: "jane", UserID: "U456"}, nil
 	})
-	opts.assumeYes = false
+	opts.AssumeYes = false
 	opRefsWith(t, "SLACK_TEAM_ID=T_OLD", "SLACK_USER_ID=U_OLD")
 	var out bytes.Buffer
-	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader("n\n"), &out, true, fakeHostResolver)
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader("n\n"), &out, true, fakeHostResolver, registerOK)
 	if err != nil {
 		t.Fatalf("a declined confirmation must not itself be an error, got %v", err)
 	}
@@ -1011,7 +1013,7 @@ func TestSlackSetupPKCEAllowIdentityChangeSkipsGateUnderYes(t *testing.T) {
 	opts.allowIdentityChange = true
 	opRefsWith(t, "SLACK_TEAM_ID=T_OLD", "SLACK_USER_ID=U_OLD")
 	var out bytes.Buffer
-	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err != nil {
 		t.Fatalf("slackSetupPKCE: %v\n--- output ---\n%s", err, out.String())
 	}
@@ -1029,7 +1031,7 @@ func TestSlackSetupPKCESameIdentityNeverTriggersTheGate(t *testing.T) {
 	})
 	opRefsWith(t, "SLACK_TEAM_ID=T123", "SLACK_USER_ID=U456")
 	var out bytes.Buffer
-	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err != nil {
 		t.Fatalf("slackSetupPKCE: %v\n--- output ---\n%s", err, out.String())
 	}
@@ -1050,7 +1052,7 @@ func TestSlackSetupPKCEDoesNotRevokeAfterDocumentPersisted(t *testing.T) {
 	})
 	systest.Of(env.System).LockFn = func(string, func() error) error { return fmt.Errorf("lock busy") }
 	var out bytes.Buffer
-	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
+	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver, registerOK)
 	if err == nil || !strings.Contains(err.Error(), "writing SLACK_TEAM_ID") {
 		t.Fatalf("expected the SLACK_TEAM_ID ref write to fail, got %v", err)
 	}

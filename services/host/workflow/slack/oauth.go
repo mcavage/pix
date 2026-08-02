@@ -28,7 +28,7 @@
 // ongoing basis) is NOT implemented here — that is slackoauth.Manager's job,
 // wired elsewhere. This file only ever performs the INITIAL (or a repeated,
 // monthly-reauthorization) grant.
-package main
+package slack
 
 import (
 	"context"
@@ -46,6 +46,7 @@ import (
 	"path/filepath"
 	"pix/host/cli"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/readiness"
 	"pix/host/secret"
 	"runtime"
@@ -85,7 +86,7 @@ const (
 var slackOAuthUserScopes = slackoauth.RequiredUserScopes
 
 // slackOAuthPKCESetupUsage documents the no---token-ref path; appended to
-// slackSetupUsage.
+// SetupUsage.
 const slackOAuthPKCESetupUsage = `
 Without --token-ref, setup instead runs a LOCAL PKCE OAuth grant (no client
 secret is ever held or requested):
@@ -418,8 +419,8 @@ func slackRegistrationPreflight(env hostenv.Env) (wasRegistered bool, err error)
 		return false, err
 	}
 	if wasRegistered {
-		argv, ok := registeredMCPCommand(env, slackServerName)
-		if _, trusted := recognizedMCPArgv(env, argv, slackServerName); !ok || !trusted {
+		argv, ok := mcp.RegisteredCommand(env, slackServerName)
+		if _, trusted := mcp.RecognizedArgv(env, argv, slackServerName, secret.FindOpRefs(env)); !ok || !trusted {
 			return false, fmt.Errorf("the existing slack registration is not the canonical Pix host command; refusing to overwrite it (inspect: sbx mcp inspect slack)")
 		}
 	}
@@ -432,8 +433,8 @@ func slackRegistrationPreflight(env hostenv.Env) (wasRegistered bool, err error)
 // a save failure after a NEW registration rolls that registration back (a
 // PRE-EXISTING one, per wasRegistered, is left alone). extra, when non-empty,
 // is appended to every returned error (the PKCE flow's orphan-document note).
-func slackRegisterAndSave(cfg *config.Config, env hostenv.Env, out io.Writer, hostResolver func() (string, error), wasRegistered bool, extra string) error {
-	if err := registerServers(cfg, env, out, []string{slackServerName}, hostResolver, nil); err != nil {
+func slackRegisterAndSave(cfg *config.Config, env hostenv.Env, out io.Writer, hostResolver func() (string, error), register RegisterFn, wasRegistered bool, extra string) error {
+	if err := register(cfg, env, out, []string{slackServerName}, hostResolver); err != nil {
 		if extra != "" {
 			return fmt.Errorf("registering %s with the sbx gateway: %w (re-run this pix slack setup command after fixing sbx); %s",
 				slackServerName, err, extra)
@@ -474,7 +475,7 @@ func slackRegisterAndSave(cfg *config.Config, env hostenv.Env, out io.Writer, ho
 // 1Password write onward, any later failure is reported with the orphan
 // document's item/vault id (slackOAuthOrphanNote) and NEVER claims success.
 func slackSetupPKCE(env hostenv.Env, cfg *config.Config, opts slackSetupOpts, deps slackOAuthDeps,
-	in io.Reader, out io.Writer, tty bool, hostResolver func() (string, error)) error {
+	in io.Reader, out io.Writer, tty bool, hostResolver func() (string, error), register RegisterFn) error {
 
 	clientID := strings.TrimSpace(opts.clientID)
 	if clientID == "" {
@@ -587,7 +588,7 @@ func slackSetupPKCE(env hostenv.Env, cfg *config.Config, opts slackSetupOpts, de
 	pinTeam, pinUser := slackIdentityPins(existingRefsContent)
 	identityChanged := (pinTeam != "" || pinUser != "") && (pinTeam != id.TeamID || pinUser != id.UserID)
 	if identityChanged && !opts.allowIdentityChange {
-		if opts.assumeYes {
+		if opts.AssumeYes {
 			note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
 			return fmt.Errorf("the existing identity pin (team %s / user %s) does not match this OAuth identity (team %s / user %s); "+
 				"refusing under --yes to avoid silently re-pinning to a different person — rerun interactively to confirm, or pass --allow-identity-change; %s",
@@ -597,7 +598,7 @@ func slackSetupPKCE(env hostenv.Env, cfg *config.Config, opts slackSetupOpts, de
 			note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
 			return fmt.Errorf("refusing to wire up Slack non-interactively without --yes; %s", note)
 		}
-		if !confirmYN(in, out, fmt.Sprintf("The pinned Slack identity differs (was %s / %s; this OAuth grant resolves to %s / %s). Replace the pin? [y/N]: ",
+		if !cli.ConfirmYN(in, out, fmt.Sprintf("The pinned Slack identity differs (was %s / %s; this OAuth grant resolves to %s / %s). Replace the pin? [y/N]: ",
 			pinTeam, pinUser, id.TeamID, id.UserID), false) {
 			note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
 			fmt.Fprintf(out, "aborted; %s\n", note)
@@ -605,12 +606,12 @@ func slackSetupPKCE(env hostenv.Env, cfg *config.Config, opts slackSetupOpts, de
 		}
 	}
 
-	if !opts.assumeYes {
+	if !opts.AssumeYes {
 		if !tty {
 			note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
 			return fmt.Errorf("refusing to wire up Slack non-interactively without --yes; %s", note)
 		}
-		if !confirmYN(in, out, fmt.Sprintf("Wire up Slack as %s on %s via OAuth? [y/N]: ", id.User, id.Team), false) {
+		if !cli.ConfirmYN(in, out, fmt.Sprintf("Wire up Slack as %s on %s via OAuth? [y/N]: ", id.User, id.Team), false) {
 			note := slackOAuthBestEffortRevoke(deps, blob.AccessToken)
 			fmt.Fprintf(out, "aborted; %s\n", note)
 			return nil
@@ -656,7 +657,7 @@ func slackSetupPKCE(env hostenv.Env, cfg *config.Config, opts slackSetupOpts, de
 	cfg.SetSlackOAuthDocumentID(itemID)
 	cfg.SetSlackOAuthGrantExpiresAt(blob.GrantExpiresAt)
 
-	if err := slackRegisterAndSave(cfg, env, out, hostResolver, wasRegistered, orphan); err != nil {
+	if err := slackRegisterAndSave(cfg, env, out, hostResolver, register, wasRegistered, orphan); err != nil {
 		return err
 	}
 
@@ -731,7 +732,7 @@ func defaultSlackOAuthRuntimeDeps() slackOAuthRuntimeDeps {
 	}
 }
 
-// slackOAuthRuntimeDepsFn is the seam slackStatus/slackDisable use to build
+// slackOAuthRuntimeDepsFn is the seam Status/Disable use to build
 // their OAuth runtime dependencies. Production leaves it at
 // defaultSlackOAuthRuntimeDeps; a test overrides it for the duration of one
 // call (there is nothing process-lifetime cached here, unlike the running
@@ -935,8 +936,8 @@ func slackDisableOAuth(cfg *config.Config, env hostenv.Env, out io.Writer, deps 
 		return err
 	}
 	if registered {
-		argv, ok := registeredMCPCommand(env, slackServerName)
-		if _, trusted := recognizedMCPArgv(env, argv, slackServerName); !ok || !trusted {
+		argv, ok := mcp.RegisteredCommand(env, slackServerName)
+		if _, trusted := mcp.RecognizedArgv(env, argv, slackServerName, secret.FindOpRefs(env)); !ok || !trusted {
 			return fmt.Errorf("a server named slack is registered, but it is not the canonical Pix host command; refusing to remove it (inspect: sbx mcp inspect slack)")
 		}
 	}

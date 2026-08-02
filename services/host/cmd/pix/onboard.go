@@ -215,7 +215,7 @@ func reconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 			fmt.Fprintf(out, "Not a terminal; leaving %s for review. Apply with: pix setup --apply --yes\n", path)
 			return
 		}
-		if !confirmYN(in, out, "Apply these changes? [Y/n]: ", true) {
+		if !cli.ConfirmYN(in, out, "Apply these changes? [Y/n]: ", true) {
 			fmt.Fprintf(out, "Left %s in place; not applied.\n", path)
 			return
 		}
@@ -345,10 +345,4 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 		}
 	}
 	return o, nil
-}
-
-// confirmYN moved to cli.ConfirmYN: a y/N prompt is a CLI primitive, and
-// onboard was only its first caller.
-func confirmYN(in io.Reader, out io.Writer, prompt string, def bool) bool {
-	return cli.ConfirmYN(in, out, prompt, def)
 }

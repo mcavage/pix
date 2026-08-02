@@ -57,3 +57,11 @@ func mcpCredentials(env hostenv.Env) mcp.Credentials {
 func repairLegacyOpRefs(env hostenv.Env) error {
 	return secret.RepairLegacyOpRefsFile(env, secret.DefaultOpRefsPath(env))
 }
+
+// registerNoContainers adapts registerServers to slack.RegisterFn: slack has
+// no pack containers to contribute, and saying so here keeps that fact out of
+// the slack code, which has no business knowing what a pack container is.
+func registerNoContainers(cfg *config.Config, env hostenv.Env, out io.Writer, names []string,
+	hostResolver func() (string, error)) error {
+	return registerServers(cfg, env, out, names, hostResolver, nil)
+}

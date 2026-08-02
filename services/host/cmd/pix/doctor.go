@@ -3,18 +3,16 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
-	"pix/host/mcp"
 	"pix/host/readiness"
 	"pix/host/rpc"
 	"pix/host/secret"
 	"pix/host/sys"
+	"pix/host/workflow/slack"
 	"pix/host/workflow/upgrade"
 	"pix/host/workspace"
 )
@@ -64,95 +62,7 @@ const (
 // defaultShellEnv returns a hostenv.Env backed by the real OS.
 func defaultShellEnv() hostenv.Env {
 	return hostenv.Env{
-		System: sys.Real{}, HostBinary: func() (string, error) { return hostBinaryResolver() }, IdentityProbe: rpc.IdentityProbe, SlackAuth: liveSlackAuthTest, DirectInference: liveDirectInferenceProbe, OllamaInference: liveOllamaInferenceProbe}
-}
-
-// unwrapOpRun returns the effective command doctor would trust to exec. With
-// no `--` it is argv itself (a bare command). With a `--`, it unwraps ONLY the
-// EXACT wrapper grammar the launcher generates (mcp.McpRegistrar.execArgv via the
-// shared mcp.OpRunWrapPrefix):
-//
-//	<canonical op> run --no-masking --env-file=<launcher op-refs.env> -- <cmd…>
-//
-// token for token: a canonical op executable (trustedExecPath — a bare `op`
-// or lookPath's exact answer, never a look-alike path), the literal `run`
-// subcommand (never signin/plugin/anything else), the exact generated option
-// set in the generated order (no missing/extra/reordered options; the
-// --env-file value must Clean-equal resolveOpRefs' answer — the same file
-// registration wires — and the launcher only ever emits the one-token
-// `--env-file=<refs>` form, so the two-token form is rejected), EXACTLY one
-// `--`, and a non-empty inner command. Anything else returns ok=false so a
-// hostile or drifted prefix is never exec'd — the caller reports the
-// registration unverifiable instead of probing it.
-func unwrapOpRun(env hostenv.Env, argv []string) ([]string, bool) {
-	if len(argv) == 0 {
-		return nil, false
-	}
-	sep := -1
-	for i, a := range argv {
-		if a != "--" {
-			continue
-		}
-		if sep >= 0 {
-			return nil, false // multiple separators: never launcher-generated
-		}
-		sep = i
-	}
-	if sep < 0 {
-		return argv, true // bare command, nothing to unwrap
-	}
-	inner := argv[sep+1:]
-	if len(inner) == 0 {
-		return nil, false
-	}
-	// The wrapper must run the SAME op binary env.LookPath resolves — a
-	// foreign argv[0] (`/tmp/evil -- …`) or a look-alike `/tmp/op` is never
-	// unwrapped, because the probe would exec that token verbatim.
-	opTok, ok := trustedExecPath(env, argv[0], "op")
-	if !ok {
-		return nil, false
-	}
-	// No resolvable launcher refs file means no legitimate op-run wrapper can
-	// exist for this host — fail closed rather than bless an unknown env file.
-	refs := secret.FindOpRefs(env)
-	if refs == "" {
-		return nil, false
-	}
-	want := mcp.OpRunWrapPrefix(opTok, refs)
-	prefix := argv[:sep+1]
-	if len(prefix) != len(want) {
-		return nil, false
-	}
-	const envFileOpt = "--env-file="
-	for i, tok := range prefix {
-		switch {
-		case i == 0:
-			// argv[0] already vetted canonical above.
-		case strings.HasPrefix(want[i], envFileOpt):
-			// Compare the env-file PATH cleaned, so a `/a//b` spelling can
-			// neither dodge nor spuriously fail the equality.
-			val, cut := strings.CutPrefix(tok, envFileOpt)
-			if !cut || filepath.Clean(val) != filepath.Clean(refs) {
-				return nil, false
-			}
-		default:
-			if tok != want[i] {
-				return nil, false
-			}
-		}
-	}
-	return inner, true
-}
-
-// mcpConfigured reports whether name is in the configured MCP set (so `run`
-// auto-attaches it via --mcp).
-func mcpConfigured(cfg *config.Config, name string) bool {
-	for _, m := range cfg.MCP {
-		if m == name {
-			return true
-		}
-	}
-	return false
+		System: sys.Real{}, HostBinary: func() (string, error) { return hostBinaryResolver() }, IdentityProbe: rpc.IdentityProbe, SlackAuth: slack.LiveSlackAuthTest, DirectInference: liveDirectInferenceProbe, OllamaInference: liveOllamaInferenceProbe}
 }
 
 // runDoctor builds the report. Pure apart from env: no direct OS access, so the

@@ -26,7 +26,9 @@ import (
 	"os"
 	"pix/host/cli"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/readiness"
+	"pix/host/secret"
 	"strings"
 
 	"pix/host/config"
@@ -285,7 +287,7 @@ func gworkspaceStatus(cfg *config.Config, env hostenv.Env, out io.Writer) int {
 	}
 
 	acct := gogAccount(cfg, env)
-	if acct == "" && !mcpConfigured(cfg, config.GWServerName) {
+	if acct == "" && !mcp.Configured(cfg, config.GWServerName) {
 		fmt.Fprintln(out, "  · not configured — set it up: pix gworkspace setup")
 		return 0
 	}
@@ -313,7 +315,7 @@ func gworkspaceStatus(cfg *config.Config, env hostenv.Env, out io.Writer) int {
 				Detail:   "registered command carries the hardened read-only flags",
 				Evidence: strings.Join(gogHardenedFlags, " ") + " present in the registered argv"})
 		}
-		trustedArgv, trusted := trustedGogSpawn(env, argv)
+		trustedArgv, trusted := mcp.TrustedGogSpawn(env, argv, secret.FindOpRefs(env))
 		if !trusted {
 			checks = append(checks, readiness.Check{Label: "headless spawn", Verdict: readiness.VerdictUnverifiable,
 				Detail:   "probe skipped: the registered command's executable does not match the PATH-resolved binary — never executed",
@@ -330,8 +332,8 @@ func gworkspaceStatus(cfg *config.Config, env hostenv.Env, out io.Writer) int {
 			Todo:     "sbx mcp status"})
 	}
 	if cfg.GoogleWorkspaceAccess == gwAccessCreateDocs {
-		if argv, ok := registeredMCPCommand(env, config.GWDocsCreateServerName); ok {
-			if trusted, ok := recognizedMCPArgv(env, argv, config.GWDocsCreateServerName); ok {
+		if argv, ok := mcp.RegisteredCommand(env, config.GWDocsCreateServerName); ok {
+			if trusted, ok := mcp.RecognizedArgv(env, argv, config.GWDocsCreateServerName, secret.FindOpRefs(env)); ok {
 				checks = append(checks, docsCreateSpawnCheck(probeListTools(env, trusted)))
 			} else {
 				checks = append(checks, readiness.Check{Label: "create Docs", Verdict: readiness.VerdictUnverifiable,
@@ -407,7 +409,7 @@ func runGworkspaceDisableCmd(argv []string) {
 // registration; the reverse order would leave a persisted "disabled" config
 // while the gateway still spawns the server, which is the dangerous drift.
 func gworkspaceDisable(cfg *config.Config, env hostenv.Env, out io.Writer) error {
-	configured := strings.TrimSpace(cfg.GogAccount) != "" || mcpConfigured(cfg, config.GWServerName) || mcpConfigured(cfg, config.GWDocsCreateServerName)
+	configured := strings.TrimSpace(cfg.GogAccount) != "" || mcp.Configured(cfg, config.GWServerName) || mcp.Configured(cfg, config.GWDocsCreateServerName)
 	snap := snapshotGogRegistration(env)
 	docsSnap := snapshotMCPRegistration(env, config.GWDocsCreateServerName)
 

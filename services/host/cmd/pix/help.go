@@ -8,6 +8,7 @@ import (
 	"pix/host/service"
 	"pix/host/workflow/backup"
 	"pix/host/workflow/man"
+	"pix/host/workflow/slack"
 	"pix/host/workflow/upgrade"
 )
 
@@ -195,7 +196,7 @@ func verbUsage(verb string) (string, bool) {
 	case "gworkspace":
 		return gworkspaceUsage, true
 	case "slack":
-		return slackUsage, true
+		return slack.Usage, true
 	case "pack":
 		return packUsage, true
 	case "memory", "mem":

@@ -609,7 +609,7 @@ func snapshotMCPRegistration(env hostenv.Env, name string) gogRegSnapshot {
 	if !cli.GrepWord(listOut, name) {
 		return gogRegSnapshot{state: gogRegAbsent}
 	}
-	if argv, ok := registeredMCPCommand(env, name); ok {
+	if argv, ok := mcp.RegisteredCommand(env, name); ok {
 		return gogRegSnapshot{state: gogRegPresent, argv: argv}
 	}
 	return gogRegSnapshot{state: gogRegUnknown}
