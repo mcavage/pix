@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/alecthomas/kong"
 	"golang.org/x/term"
@@ -266,4 +267,24 @@ func UpDown(up bool) string {
 		return "up"
 	}
 	return "down"
+}
+
+// SafeGitURL rejects a URL that git could read as a FLAG rather than a remote.
+// It is argument hygiene shared by every verb that clones something.
+func SafeGitURL(url string) bool {
+	if url == "" || strings.HasPrefix(url, "-") {
+		return false
+	}
+	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "ssh://") {
+		return true
+	}
+	// scp-style user@host:path (no scheme). Must contain ':' and not be a
+	// transport helper like ext::/fd:: (those contain '::').
+	if strings.Contains(url, "::") {
+		return false
+	}
+	if at := strings.IndexByte(url, '@'); at > 0 && strings.Contains(url[at:], ":") {
+		return true
+	}
+	return false
 }

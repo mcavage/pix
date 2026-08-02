@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/cli"
+	"pix/host/knowledge"
 	"pix/host/memory"
 	"pix/host/rpc"
 	"strings"
@@ -98,19 +99,19 @@ func TestParseRunArgs_HelpSentinel(t *testing.T) {
 
 func TestResolveKnowledgeInitArgs(t *testing.T) {
 	// --help -> help sentinel, no dir.
-	if dir, help, err := resolveKnowledgeInitArgs([]string{"--help"}); !help || err != nil || dir != "" {
-		t.Errorf("resolveKnowledgeInitArgs([--help]) = (%q,%v,%v), want ('',true,nil)", dir, help, err)
+	if dir, help, err := knowledge.ResolveInitArgs([]string{"--help"}); !help || err != nil || dir != "" {
+		t.Errorf("knowledge.ResolveInitArgs([--help]) = (%q,%v,%v), want ('',true,nil)", dir, help, err)
 	}
 	// A flag typo -> error, no dir, no side effect.
-	if dir, help, err := resolveKnowledgeInitArgs([]string{"--nope"}); err == nil || help || dir != "" {
-		t.Errorf("resolveKnowledgeInitArgs([--nope]) = (%q,%v,%v), want ('',false,error)", dir, help, err)
+	if dir, help, err := knowledge.ResolveInitArgs([]string{"--nope"}); err == nil || help || dir != "" {
+		t.Errorf("knowledge.ResolveInitArgs([--nope]) = (%q,%v,%v), want ('',false,error)", dir, help, err)
 	}
 	// A real DIR resolves to its absolute form.
 	tmp := t.TempDir()
 	sub := filepath.Join(tmp, "kb")
-	dir, help, err := resolveKnowledgeInitArgs([]string{sub})
+	dir, help, err := knowledge.ResolveInitArgs([]string{sub})
 	if help || err != nil || dir != sub {
-		t.Errorf("resolveKnowledgeInitArgs([%q]) = (%q,%v,%v), want (%q,false,nil)", sub, dir, help, err, sub)
+		t.Errorf("knowledge.ResolveInitArgs([%q]) = (%q,%v,%v), want (%q,false,nil)", sub, dir, help, err, sub)
 	}
 }
 
@@ -133,7 +134,7 @@ func TestKnowledgeInitHelp_NoSideEffects(t *testing.T) {
 	old := os.Stdout
 	rp, wp, _ := os.Pipe()
 	os.Stdout = wp
-	runKnowledgeInit([]string{"--help"})
+	knowledge.RunKnowledgeInit([]string{"--help"})
 	_ = wp.Close()
 	os.Stdout = old
 	var buf bytes.Buffer
@@ -148,7 +149,7 @@ func TestKnowledgeInitHelp_NoSideEffects(t *testing.T) {
 	if _, err := os.Stat(cfgFile); err == nil {
 		t.Error("`knowledge init --help` wrote config — expected no side effects")
 	}
-	if _, err := os.Stat(defaultKnowledgeDir()); err == nil {
+	if _, err := os.Stat(knowledge.DefaultKnowledgeDir()); err == nil {
 		t.Error("`knowledge init --help` scaffolded the default bundle dir")
 	}
 }

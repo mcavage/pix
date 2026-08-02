@@ -1,4 +1,4 @@
-package main
+package knowledge
 
 import (
 	"bytes"
@@ -26,18 +26,18 @@ func TestKnowledgeInit_Scaffold(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := knowledgeInit(cfg, dir, &buf); err != nil {
-		t.Fatalf("knowledgeInit: %v", err)
+	if err := Init(cfg, dir, &buf); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
 
 	// Root index.md carries okf_version frontmatter (and only that).
-	index := readFile(t, filepath.Join(dir, "index.md"))
+	index := readBundleFile(t, filepath.Join(dir, "index.md"))
 	if !strings.HasPrefix(index, "---\n") || !strings.Contains(index, "okf_version") {
 		t.Errorf("index.md missing okf_version frontmatter:\n%s", index)
 	}
 
 	// The concept has a required `type` frontmatter key + a Citations section.
-	concept := readFile(t, filepath.Join(dir, "reference", "getting-started.md"))
+	concept := readBundleFile(t, filepath.Join(dir, "reference", "getting-started.md"))
 	if !strings.Contains(concept, "type: reference") {
 		t.Errorf("concept missing `type` frontmatter:\n%s", concept)
 	}
@@ -46,7 +46,7 @@ func TestKnowledgeInit_Scaffold(t *testing.T) {
 	}
 
 	// log.md has NO frontmatter (reserved file rule).
-	logMd := readFile(t, filepath.Join(dir, "log.md"))
+	logMd := readBundleFile(t, filepath.Join(dir, "log.md"))
 	if strings.HasPrefix(logMd, "---") {
 		t.Errorf("log.md must NOT have frontmatter:\n%s", logMd)
 	}
@@ -79,7 +79,7 @@ func TestKnowledgeInit_Scaffold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	absDir := canonicalizeKnowledgeBundle(dir)
+	absDir := CanonicalizeKnowledgeBundle(dir)
 	if !containsStr(got.KnowledgeBundles, absDir) {
 		t.Errorf("knowledge_bundles = %v, want %q", got.KnowledgeBundles, absDir)
 	}
@@ -96,7 +96,7 @@ func TestKnowledgeInit_Idempotent(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "kb")
 
 	cfg, _ := config.Load()
-	if err := knowledgeInit(cfg, dir, new(bytes.Buffer)); err != nil {
+	if err := Init(cfg, dir, new(bytes.Buffer)); err != nil {
 		t.Fatal(err)
 	}
 	// Hand-edit the concept, then re-init.
@@ -105,13 +105,13 @@ func TestKnowledgeInit_Idempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg2, _ := config.Load()
-	if err := knowledgeInit(cfg2, dir, new(bytes.Buffer)); err != nil {
+	if err := Init(cfg2, dir, new(bytes.Buffer)); err != nil {
 		t.Fatal(err)
 	}
-	if got := readFile(t, concept); !strings.Contains(got, "MINE") {
+	if got := readBundleFile(t, concept); !strings.Contains(got, "MINE") {
 		t.Errorf("re-init clobbered hand-authored concept: %q", got)
 	}
-	absDir := canonicalizeKnowledgeBundle(dir)
+	absDir := CanonicalizeKnowledgeBundle(dir)
 	if n := countStr(cfg2.KnowledgeBundles, absDir); n != 1 {
 		t.Errorf("knowledge_bundles has %q %d times, want 1: %v", absDir, n, cfg2.KnowledgeBundles)
 	}
@@ -130,14 +130,14 @@ func TestResolveKnowledgeInitArgs_TrailingJunk(t *testing.T) {
 		{"a", "b", "c"},     // several positionals
 	}
 	for _, argv := range bad {
-		dir, help, err := resolveKnowledgeInitArgs(argv)
+		dir, help, err := ResolveInitArgs(argv)
 		if err == nil || help || dir != "" {
-			t.Errorf("resolveKnowledgeInitArgs(%v) = (%q,%v,%v), want ('',false,error)", argv, dir, help, err)
+			t.Errorf("ResolveInitArgs(%v) = (%q,%v,%v), want ('',false,error)", argv, dir, help, err)
 		}
 	}
 	// A help token anywhere still wins over trailing junk.
-	if _, help, err := resolveKnowledgeInitArgs([]string{"./kb", "--help"}); !help || err != nil {
-		t.Errorf("resolveKnowledgeInitArgs([./kb --help]) help=%v err=%v, want help,nil", help, err)
+	if _, help, err := ResolveInitArgs([]string{"./kb", "--help"}); !help || err != nil {
+		t.Errorf("ResolveInitArgs([./kb --help]) help=%v err=%v, want help,nil", help, err)
 	}
 }
 
@@ -154,9 +154,9 @@ func TestKnowledgeInitTrailingJunk_NoSideEffects(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(cwd) })
 
-	// runKnowledgeInit calls os.Exit(2) on a usage error, so exercise the pure
+	// RunKnowledgeInit calls os.Exit(2) on a usage error, so exercise the pure
 	// resolver + assert no bundle/config was created as a proxy for "no side effect".
-	if _, _, err := resolveKnowledgeInitArgs([]string{"./kb", "--jsom"}); err == nil {
+	if _, _, err := ResolveInitArgs([]string{"./kb", "--jsom"}); err == nil {
 		t.Fatal("expected a usage error for trailing junk")
 	}
 	if _, err := os.Stat(filepath.Join(tmp, "kb")); err == nil {
@@ -173,10 +173,10 @@ func TestKnowledgeUse_LocalPath(t *testing.T) {
 	bundle := t.TempDir()
 
 	cfg, _ := config.Load()
-	if err := knowledgeUse(cfg, bundle, new(bytes.Buffer)); err != nil {
-		t.Fatalf("knowledgeUse: %v", err)
+	if err := Use(cfg, bundle, new(bytes.Buffer)); err != nil {
+		t.Fatalf("Use: %v", err)
 	}
-	absDir := canonicalizeKnowledgeBundle(bundle)
+	absDir := CanonicalizeKnowledgeBundle(bundle)
 	if !containsStr(cfg.KnowledgeBundles, absDir) {
 		t.Errorf("knowledge_bundles = %v, want %q", cfg.KnowledgeBundles, absDir)
 	}
@@ -196,8 +196,8 @@ func TestIsGitURL(t *testing.T) {
 		"me/kb.git",
 	}
 	for _, u := range urls {
-		if !isGitURL(u) {
-			t.Errorf("isGitURL(%q) = false, want true", u)
+		if !IsGitURL(u) {
+			t.Errorf("IsGitURL(%q) = false, want true", u)
 		}
 	}
 	paths := []string{
@@ -208,8 +208,8 @@ func TestIsGitURL(t *testing.T) {
 		"~/kb",
 	}
 	for _, p := range paths {
-		if isGitURL(p) {
-			t.Errorf("isGitURL(%q) = true, want false", p)
+		if IsGitURL(p) {
+			t.Errorf("IsGitURL(%q) = true, want false", p)
 		}
 	}
 }
@@ -321,7 +321,7 @@ func TestKnowledgeLs(t *testing.T) {
 	}
 }
 
-func readFile(t *testing.T, path string) string {
+func readBundleFile(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -353,7 +353,7 @@ func TestKnowledgeInitAndUsePropagateServeConfig(t *testing.T) {
 	defer func() { knowledgePropagate = orig }()
 
 	dir := filepath.Join(t.TempDir(), "kb")
-	runKnowledgeInit([]string{dir})
+	RunKnowledgeInit([]string{dir})
 	if propagations != 1 {
 		t.Fatalf("knowledge init propagated %d times, want 1", propagations)
 	}

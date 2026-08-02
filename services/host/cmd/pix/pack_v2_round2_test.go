@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/knowledge"
 	"pix/host/sys/systest"
 )
 
@@ -88,13 +89,13 @@ func TestResolveBundleRef_RejectsUnsafeGitTransports(t *testing.T) {
 		"fd::0/x.git",
 		"-oProxyCommand=evil.git",
 	} {
-		if _, err := resolveBundleRef(ref, cache, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "unsafe") {
-			t.Errorf("resolveBundleRef(%q): want an unsafe-transport refusal, got err=%v", ref, err)
+		if _, err := knowledge.ResolveBundleRef(ref, cache, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "unsafe") {
+			t.Errorf("knowledge.ResolveBundleRef(%q): want an unsafe-transport refusal, got err=%v", ref, err)
 		}
 	}
 	// A plain local path still resolves (never touches git).
 	dir := t.TempDir()
-	got, err := resolveBundleRef(dir, cache, &bytes.Buffer{})
+	got, err := knowledge.ResolveBundleRef(dir, cache, &bytes.Buffer{})
 	if err != nil || got == "" {
 		t.Errorf("local path must still resolve, got (%q, %v)", got, err)
 	}
@@ -104,7 +105,7 @@ func TestResolveBundleRef_RejectsUnsafeGitTransports(t *testing.T) {
 // parsing with `--` before the URL, so a dash-leading URL can never be smuggled
 // in as a git option (defense-in-depth behind safeGitURL).
 func TestGitCloneArgs_UsesDashDashSeparator(t *testing.T) {
-	args := gitCloneArgs("-oProxyCommand=evil", "/dest")
+	args := knowledge.GitCloneArgs("-oProxyCommand=evil", "/dest")
 	sep := -1
 	for i, a := range args {
 		if a == "--" {
@@ -113,7 +114,7 @@ func TestGitCloneArgs_UsesDashDashSeparator(t *testing.T) {
 		}
 	}
 	if sep < 0 {
-		t.Fatalf("gitCloneArgs must contain `--`, got %v", args)
+		t.Fatalf("knowledge.GitCloneArgs must contain `--`, got %v", args)
 	}
 	if args[sep+1] != "-oProxyCommand=evil" || args[sep+2] != "/dest" {
 		t.Errorf("url+dest must follow `--`, got %v", args)
@@ -202,7 +203,7 @@ func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
 	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"})
-	aID := canonicalizeKnowledgeBundle(filepath.Join(rootA, "knowledge"))
+	aID := knowledge.CanonicalizeKnowledgeBundle(filepath.Join(rootA, "knowledge"))
 	cfg, _ := config.Load()
 	if !containsStr(cfg.KnowledgeBundles, aID) || !containsStr(cfg.MCP, "a-mcp") {
 		t.Fatalf("setup: pack use A did not attach: %+v", cfg)

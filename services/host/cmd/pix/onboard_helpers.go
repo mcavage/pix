@@ -2,6 +2,7 @@ package main
 
 import (
 	"pix/host/cli"
+	"pix/host/knowledge"
 	"pix/host/sys"
 
 	"bufio"
@@ -45,20 +46,20 @@ func gogAuthed(env sys.Exec, account string) bool {
 
 // setupKnowledge sets up the global knowledge base from a user-supplied source,
 // reusing the `knowledge` verb's logic (no duplicated OKF scaffold or config
-// wiring). A git URL is cloned/pulled and used in place (knowledgeUse); a local
-// path is scaffolded-if-new and wired (knowledgeInit, which never clobbers an
+// wiring). A git URL is cloned/pulled and used in place (knowledge.Use); a local
+// path is scaffolded-if-new and wired (knowledge.Init, which never clobbers an
 // existing bundle). Both add the bundle to knowledge_bundles + enable the
 // knowledge service and Save().
 func setupKnowledge(cfg *config.Config, ref string, out io.Writer) error {
 	ref = strings.TrimSpace(ref)
-	if isGitURL(ref) {
-		return knowledgeUse(cfg, ref, out)
+	if knowledge.IsGitURL(ref) {
+		return knowledge.Use(cfg, ref, out)
 	}
 	abs, err := filepath.Abs(ref)
 	if err != nil {
 		return fmt.Errorf("resolving %s: %w", ref, err)
 	}
-	return knowledgeInit(cfg, abs, out)
+	return knowledge.Init(cfg, abs, out)
 }
 
 // promptLine reads a single trimmed line from sio.in after writing prompt.

@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"pix/host/cli"
+	"pix/host/knowledge"
 	"pix/host/memory"
 	"pix/host/service"
 )
@@ -213,7 +214,7 @@ func verbUsage(verb string) (string, bool) {
 	case "restore":
 		return restoreUsage, true
 	case "knowledge", "kb":
-		return knowledgeUsage, true
+		return knowledge.Usage, true
 	case "secret":
 		return secretUsage(), true
 	case "version":
@@ -295,25 +296,6 @@ const mcpUsage = `usage: pix mcp <register|ls|load|auth|bundle> [args]
   bundle [ls|rm ...]   register the shipped public catalog bundle
                        (notion/atlassian/granola) in one step; ls/rm forward to
                        sbx mcp bundle. Then: pix mcp auth --all
-`
-
-const knowledgeUsage = `usage: pix knowledge <init|use|ls|query|sync|remote> [args]
-
-  init [DIR]                     scaffold + wire a global OKF bundle
-  use <path|url>                 point the global KB at a bundle (path made
-                                 absolute; not checked for existence/OKF)
-  use --project <path|url> [--dir D]   write a per-repo .pix/knowledge pointer
-  ls [--json]                    list configured bundles + daemon health
-  query <text...> [--limit N] [--json]   search the knowledge daemon (:11436)
-  sync [-m MSG] [--bundle D] [--allow-main]   commit + push the bundle
-  remote [set <url>] [--bundle D]   show or set the bundle's git remote
-`
-
-const knowledgeInitUsage = `usage: pix knowledge init [DIR]
-
-Scaffold a spec-correct OKF bundle (default <config-dir>/knowledge), git-init it,
-and wire it into config (services += knowledge, knowledge_bundles += DIR).
-Idempotent: never clobbers an existing bundle.
 `
 
 // secretHelpBody is the mental model reused verbatim from config so the concept

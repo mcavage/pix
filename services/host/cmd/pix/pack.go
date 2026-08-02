@@ -23,7 +23,9 @@ import (
 	"strings"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/knowledge"
 	"pix/host/routing"
 	"pix/host/service"
 	"pix/host/sys"
@@ -613,7 +615,7 @@ func validateNoSymlinkComponents(root, rel string) error {
 // never on the manifest's shared flag, which an attacker controls.
 func knowledgeSourceIsGitURL(source string) bool {
 	source = strings.TrimSpace(source)
-	return isGitURL(source) || strings.Contains(source, "::")
+	return knowledge.IsGitURL(source) || strings.Contains(source, "::")
 }
 
 // validateRepoRelativePath rejects a [[bin]].Path that is empty, absolute, that
@@ -764,7 +766,7 @@ func composePackStack(cfg *config.Config, store *packTrustStore, roots []string)
 		}
 		if p.KnowledgeDir != "" {
 			if cfg.AddKnowledgeBundle(p.KnowledgeDir) {
-				lock.Knowledge = append(lock.Knowledge, canonicalizeKnowledgeBundle(p.KnowledgeDir))
+				lock.Knowledge = append(lock.Knowledge, knowledge.CanonicalizeKnowledgeBundle(p.KnowledgeDir))
 			}
 			cfg.AddService("knowledge")
 		}
@@ -784,7 +786,7 @@ func composePackStack(cfg *config.Config, store *packTrustStore, roots []string)
 				continue
 			}
 			if cfg.AddKnowledgeBundle(resolved) {
-				lock.Knowledge = append(lock.Knowledge, canonicalizeKnowledgeBundle(resolved))
+				lock.Knowledge = append(lock.Knowledge, knowledge.CanonicalizeKnowledgeBundle(resolved))
 			}
 			cfg.AddService("knowledge")
 		}
@@ -2172,7 +2174,7 @@ func prevPackKnowledgeIDs(lock packLock) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, id := range lock.Knowledge {
-		id = canonicalizeKnowledgeBundle(id)
+		id = knowledge.CanonicalizeKnowledgeBundle(id)
 		if id == "" || seen[id] {
 			continue
 		}
@@ -2192,7 +2194,7 @@ func prevPackKnowledgeIDs(lock packLock) []string {
 // entry never even loads; the class check here keeps this function safe for
 // any caller regardless.
 //
-// A git URL TRAVELS: resolved via resolveBundleRef, which clones/pulls it into
+// A git URL TRAVELS: resolved via knowledge.ResolveBundleRef, which clones/pulls it into
 // the shared knowledge cache through the safeGitURL gate (no ext::/fd::/file::
 // transports, no local-as-remote) — an adopter who shares the pack pulls the
 // SAME team bundle.
@@ -2220,7 +2222,7 @@ func resolvePackKnowledgeRef(out io.Writer, root string, adopted bool, k packKno
 		return "", fmt.Errorf("[[knowledge]] %q has no source", k.Name)
 	}
 	if knowledgeSourceIsGitURL(source) {
-		return resolveBundleRef(source, knowledgeCacheDir(), out)
+		return knowledge.ResolveBundleRef(source, knowledge.KnowledgeCacheDir(), out)
 	}
 	// LOCAL path: authored-only, regardless of the shared flag (finding A).
 	if adopted {
@@ -3166,7 +3168,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	}
 
 	// Knowledge (F4 + F6): add the NEW pack's embedded dir + resolved
-	// [[knowledge]] refs (shared travels via resolveBundleRef; private resolves
+	// [[knowledge]] refs (shared travels via knowledge.ResolveBundleRef; private resolves
 	// to a local path that never entered the pack's git tree — and is skipped
 	// entirely for an adopted pack, finding #1). Only what cfg.AddKnowledgeBundle
 	// ACTUALLY ADDED is recorded for the next switch's removal set (finding #2):
@@ -3176,7 +3178,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	if p.KnowledgeDir != "" {
 		if cfg.AddKnowledgeBundle(p.KnowledgeDir) {
 			addedKnowledge = append(addedKnowledge, p.KnowledgeDir)
-			newKnowledgeIDs = append(newKnowledgeIDs, canonicalizeKnowledgeBundle(p.KnowledgeDir))
+			newKnowledgeIDs = append(newKnowledgeIDs, knowledge.CanonicalizeKnowledgeBundle(p.KnowledgeDir))
 		}
 		cfg.AddService("knowledge")
 	}
@@ -3193,7 +3195,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		}
 		if cfg.AddKnowledgeBundle(resolved) {
 			addedKnowledge = append(addedKnowledge, resolved)
-			newKnowledgeIDs = append(newKnowledgeIDs, canonicalizeKnowledgeBundle(resolved))
+			newKnowledgeIDs = append(newKnowledgeIDs, knowledge.CanonicalizeKnowledgeBundle(resolved))
 		}
 		cfg.AddService("knowledge")
 	}
@@ -3520,7 +3522,7 @@ func runPackRm(out io.Writer, rest []string) {
 
 // --- git-URL adoption -------------------------------------------------------
 
-// isPackGitURL reuses knowledge.go's isGitURL and additionally accepts the
+// isPackGitURL reuses knowledge.go's knowledge.IsGitURL and additionally accepts the
 // "git+" scheme prefix used by kit URLs.
 func isPackGitURL(s string) bool {
 	s = strings.TrimSpace(s)
@@ -3530,7 +3532,7 @@ func isPackGitURL(s string) bool {
 	if strings.Contains(s, "::") {
 		return true
 	}
-	return strings.HasPrefix(s, "git+") || isGitURL(s)
+	return strings.HasPrefix(s, "git+") || knowledge.IsGitURL(s)
 }
 
 // parsePackURL splits an optional "#ref=<ref>" (or bare "#<ref>") pin off a git
@@ -3573,29 +3575,9 @@ func packNameFromURL(url string) string {
 	return name + "-" + hex.EncodeToString(sum[:])[:16]
 }
 
-// safeGitURL rejects git URLs whose transport can execute arbitrary commands or
-// read arbitrary host files: only HTTPS/SSH protocols and scp-style
-// `user@host:path` are allowed. `ext::`, `file://`, a leading `-` (arg
-// injection), unauthenticated plaintext `git://`, and anything else are
-// refused. Packs may execute trust-gated host hooks, so transport integrity is
-// part of the security boundary even when the resulting bytes are fingerprinted.
-func safeGitURL(url string) bool {
-	if url == "" || strings.HasPrefix(url, "-") {
-		return false
-	}
-	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "ssh://") {
-		return true
-	}
-	// scp-style user@host:path (no scheme). Must contain ':' and not be a
-	// transport helper like ext::/fd:: (those contain '::').
-	if strings.Contains(url, "::") {
-		return false
-	}
-	if at := strings.IndexByte(url, '@'); at > 0 && strings.Contains(url[at:], ":") {
-		return true
-	}
-	return false
-}
+// safeGitURL moved to cli.SafeGitURL: refusing a URL that could be read as a
+// git flag is argument hygiene, and pack was only its first caller.
+func safeGitURL(url string) bool { return cli.SafeGitURL(url) }
 
 // clonePack clones (or updates) a remote pack into PacksDir/<name>, pinned to the
 // optional ref, and returns the local path. SHA-pin/provenance is a v2 concern;

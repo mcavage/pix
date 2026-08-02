@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/knowledge"
 )
 
 func TestPersistPackStackComposesAllFacetsAndKeepsPerPackOwnership(t *testing.T) {
@@ -59,7 +60,7 @@ func TestPersistPackStackComposesAllFacetsAndKeepsPerPackOwnership(t *testing.T)
 			}
 		}
 		for _, dir := range []string{manualKnowledge, firstKnowledge, secondKnowledge} {
-			if !containsStr(cfg.KnowledgeBundles, canonicalizeKnowledgeBundle(dir)) {
+			if !containsStr(cfg.KnowledgeBundles, knowledge.CanonicalizeKnowledgeBundle(dir)) {
 				t.Fatalf("knowledge %q missing from %v", dir, cfg.KnowledgeBundles)
 			}
 		}
@@ -73,9 +74,9 @@ func TestPersistPackStackComposesAllFacetsAndKeepsPerPackOwnership(t *testing.T)
 	if store.Activation != nil || len(store.Activations) != 2 {
 		t.Fatalf("activation ledger = single:%+v stack:%+v", store.Activation, store.Activations)
 	}
-	if !containsStr(store.Activations[0].Knowledge, canonicalizeKnowledgeBundle(firstKnowledge)) ||
-		containsStr(store.Activations[0].Knowledge, canonicalizeKnowledgeBundle(secondKnowledge)) ||
-		!containsStr(store.Activations[1].Knowledge, canonicalizeKnowledgeBundle(secondKnowledge)) {
+	if !containsStr(store.Activations[0].Knowledge, knowledge.CanonicalizeKnowledgeBundle(firstKnowledge)) ||
+		containsStr(store.Activations[0].Knowledge, knowledge.CanonicalizeKnowledgeBundle(secondKnowledge)) ||
+		!containsStr(store.Activations[1].Knowledge, knowledge.CanonicalizeKnowledgeBundle(secondKnowledge)) {
 		t.Fatalf("knowledge ownership is not per-pack: %+v", store.Activations)
 	}
 	if store.Activations[0].PriorGogAccount != "manual@example.com" ||
@@ -106,9 +107,9 @@ func TestPersistPackStackComposesAllFacetsAndKeepsPerPackOwnership(t *testing.T)
 	if !containsStr(cfg.MCP, "manual-mcp") || containsStr(cfg.MCP, "first-mcp") || containsStr(cfg.MCP, "second-mcp") {
 		t.Fatalf("reverse removal violated MCP ownership: %v", cfg.MCP)
 	}
-	if !containsStr(cfg.KnowledgeBundles, canonicalizeKnowledgeBundle(manualKnowledge)) ||
-		containsStr(cfg.KnowledgeBundles, canonicalizeKnowledgeBundle(firstKnowledge)) ||
-		containsStr(cfg.KnowledgeBundles, canonicalizeKnowledgeBundle(secondKnowledge)) {
+	if !containsStr(cfg.KnowledgeBundles, knowledge.CanonicalizeKnowledgeBundle(manualKnowledge)) ||
+		containsStr(cfg.KnowledgeBundles, knowledge.CanonicalizeKnowledgeBundle(firstKnowledge)) ||
+		containsStr(cfg.KnowledgeBundles, knowledge.CanonicalizeKnowledgeBundle(secondKnowledge)) {
 		t.Fatalf("reverse removal violated knowledge ownership: %v", cfg.KnowledgeBundles)
 	}
 }

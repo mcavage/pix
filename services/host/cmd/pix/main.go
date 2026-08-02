@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"pix/host/knowledge"
 	"pix/host/launcher"
 	"pix/host/routing"
 	"pix/host/service"
@@ -116,7 +117,7 @@ func main() {
 	case "restore":
 		runRestore(args[1:])
 	case "knowledge", "kb":
-		runKnowledge(args[1:])
+		knowledge.Run(args[1:])
 	case "models":
 		runModels(args[1:])
 	case "route":

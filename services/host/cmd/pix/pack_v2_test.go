@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/knowledge"
 	"pix/host/sys"
 	"pix/host/sys/systest"
 )
@@ -427,8 +428,8 @@ func TestPackUse_KnowledgeReversible(t *testing.T) {
 	out.Reset()
 	runPackUse(env, &out, []string{rootB})
 	cfgB, _ := config.Load()
-	aID := canonicalizeKnowledgeBundle(filepath.Join(rootA, "knowledge"))
-	bID := canonicalizeKnowledgeBundle(filepath.Join(rootB, "knowledge"))
+	aID := knowledge.CanonicalizeKnowledgeBundle(filepath.Join(rootA, "knowledge"))
+	bID := knowledge.CanonicalizeKnowledgeBundle(filepath.Join(rootB, "knowledge"))
 	if containsStr(cfgB.KnowledgeBundles, aID) {
 		t.Errorf("switching away from A should remove its bundle, got %v", cfgB.KnowledgeBundles)
 	}
@@ -474,13 +475,13 @@ func TestPackUse_PrivateKnowledgeNeverTravels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantID := canonicalizeKnowledgeBundle(privateDir)
+	wantID := knowledge.CanonicalizeKnowledgeBundle(privateDir)
 	if !containsStr(cfg.KnowledgeBundles, wantID) {
 		t.Errorf("private bundle should still be indexed locally, got %v", cfg.KnowledgeBundles)
 	}
 	// The resolved bundle must NOT live inside the pack's own tree — i.e. it
 	// travels with the pack repo only if it is UNDER root, which it must not be.
-	if strings.HasPrefix(wantID, canonicalizeKnowledgeBundle(root)+string(filepath.Separator)) {
+	if strings.HasPrefix(wantID, knowledge.CanonicalizeKnowledgeBundle(root)+string(filepath.Separator)) {
 		t.Errorf("private knowledge %q must not live inside the pack root %q", wantID, root)
 	}
 	// And the pack.toml reference line is a LOCAL PATH (inert for an adopter who

@@ -72,3 +72,14 @@ func requireSymlink(t *testing.T, oldname, newname string) {
 		t.Fatalf("os.Symlink(%q, %q): %v", oldname, newname, err)
 	}
 }
+
+// readFile is a three-line test helper that left with knowledge_test.go. Each
+// package carrying its own copy is the right amount of duplication for this.
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(b)
+}

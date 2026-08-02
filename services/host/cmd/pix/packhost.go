@@ -42,7 +42,7 @@ func hostPackBinDir() string { return filepath.Join(hostAgentDir(), "bin") }
 // hashFileSHA256 returns the lowercase hex sha256 of the file at path. It is
 // the ADR-4 duplicate of the hashing core inside verifyPluginSHA
 // (services/host/serve_plugin.go) — the launcher is a separate,
-// dependency-light main package (same pattern as canonicalizeKnowledgeBundle),
+// dependency-light main package (same pattern as knowledge.CanonicalizeKnowledgeBundle),
 // so the ~10 lines are duplicated rather than inventing a shared library
 // package or a second checksum scheme. Keep the two in behavioral lockstep.
 func hashFileSHA256(path string) (string, error) {

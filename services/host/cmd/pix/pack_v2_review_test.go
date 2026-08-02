@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/knowledge"
 )
 
 // --- finding #1 [CRITICAL SECURITY]: adopted-pack private knowledge refs must
@@ -49,7 +50,7 @@ func TestResolvePackKnowledgeRef_AllowsAuthoredPrivate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolvePackKnowledgeRef: %v", err)
 	}
-	want := canonicalizeKnowledgeBundle(target)
+	want := knowledge.CanonicalizeKnowledgeBundle(target)
 	if resolved != want {
 		t.Errorf("resolved = %q, want %q", resolved, want)
 	}
@@ -131,7 +132,7 @@ func TestPackUse_AdoptedPackSkipsPrivateKnowledgeRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sensitiveID := canonicalizeKnowledgeBundle(sensitive)
+	sensitiveID := knowledge.CanonicalizeKnowledgeBundle(sensitive)
 	if containsStr(cfg.KnowledgeBundles, sensitiveID) {
 		t.Fatalf("CRITICAL: adopted pack's private knowledge ref was indexed! cfg.KnowledgeBundles = %v", cfg.KnowledgeBundles)
 	}

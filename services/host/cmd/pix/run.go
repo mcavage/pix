@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/knowledge"
 	"pix/host/service"
 	"pix/host/sys"
 	"pix/host/workspace"
@@ -1109,7 +1110,7 @@ func wireKnowledgeScope(cfg *config.Config, ws string, rpc knowledgeRPC) {
 	var ids []string
 	seen := map[string]bool{}
 	add := func(p string) {
-		c := canonicalizeKnowledgeBundle(p)
+		c := knowledge.CanonicalizeKnowledgeBundle(p)
 		if c == "" || seen[c] {
 			return
 		}
@@ -1154,14 +1155,14 @@ func wireKnowledgeScope(cfg *config.Config, ws string, rpc knowledgeRPC) {
 // relative to the workspace. Returns "" when there is no pointer or it can't be
 // resolved (non-fatal: the workspace just has no project bundle this run).
 func projectBundle(ws string) string {
-	line := readProjectPointer(ws)
+	line := knowledge.ReadProjectPointer(ws)
 	if line == "" {
 		return ""
 	}
 	var local string
 	switch {
-	case isGitURL(line):
-		r, err := resolveBundleRef(line, knowledgeCacheDir(), io.Discard)
+	case knowledge.IsGitURL(line):
+		r, err := knowledge.ResolveBundleRef(line, knowledge.KnowledgeCacheDir(), io.Discard)
 		if err != nil {
 			return ""
 		}
@@ -1171,7 +1172,7 @@ func projectBundle(ws string) string {
 	default:
 		local = filepath.Join(ws, line)
 	}
-	return canonicalizeKnowledgeBundle(local)
+	return knowledge.CanonicalizeKnowledgeBundle(local)
 }
 
 // writeOllamaBridgeFile writes <workspace>/.pix/ollama-bridge.model: the

@@ -53,6 +53,12 @@ var pkgLayer = map[string]int{
 	"cli":         layerFoundation,
 	"hostenv":     layerFoundation,
 	"launcher":    layerFoundation,
+	// workspace is L0, not a capability: it answers "where am I working and what
+	// state is stored there", which is location resolution in the same family as
+	// config. It imports only config and sys. Filing it as a capability was a
+	// mis-read that made two legitimate users (memory, knowledge) look like
+	// sibling violations.
+	"workspace": layerFoundation,
 
 	// L1 — capability. One domain each, siblings invisible to each other.
 	"inference":   layerCapability,
@@ -61,9 +67,9 @@ var pkgLayer = map[string]int{
 	"okf":         layerCapability,
 	"plugin":      layerCapability,
 	"slackoauth":  layerCapability,
-	"workspace":   layerCapability,
 	"service":     layerCapability,
 	"memory":      layerCapability,
+	"knowledge":   layerCapability,
 
 	// L2 — the shared model of "is this working".
 	"readiness": layerReadiness,
@@ -89,8 +95,9 @@ var pkgLayer = map[string]int{
 var l0Order = map[string]int{
 	"config": 0, "routing": 0,
 	"sys": 1, "rpc": 1, "launcher": 1,
-	"sys/systest": 2, "hostenv": 2,
-	"cli": 3,
+	"workspace":   2,
+	"sys/systest": 2, "hostenv": 3,
+	"cli": 4,
 }
 
 // drainingPackages may still violate the rules while they are being emptied.

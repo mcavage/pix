@@ -30,7 +30,7 @@
 //	                                   (writeSandboxPackMarker /
 //	                                   readSandboxPackMarker); no TS reader
 //	.pix/knowledge               — Go writes AND reads
-//	                                   (knowledgeUseProject / readProjectPointer
+//	                                   (knowledge.KnowledgeUseProject / knowledge.ReadProjectPointer
 //	                                   / projectBundle); no TS reader
 //	.pix/onboarding.json         — the IN-SANDBOX AGENT writes it (not Go);
 //	                                   Go reads + removes it (reconcileOnboarding)
@@ -59,6 +59,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/knowledge"
 	"pix/host/routing"
 )
 
@@ -183,19 +184,19 @@ func TestMarkerRoundTrip_KnowledgeProjectPointer(t *testing.T) {
 	bundle := t.TempDir()
 
 	var out bytes.Buffer
-	if err := knowledgeUseProject(bundle, repo, &out); err != nil {
-		t.Fatalf("knowledgeUseProject: %v", err)
+	if err := knowledge.KnowledgeUseProject(bundle, repo, &out); err != nil {
+		t.Fatalf("knowledge.KnowledgeUseProject: %v", err)
 	}
 
-	// readProjectPointer sees the portable (repo-relative-or-absolute) ref...
-	pointer := readProjectPointer(repo)
+	// knowledge.ReadProjectPointer sees the portable (repo-relative-or-absolute) ref...
+	pointer := knowledge.ReadProjectPointer(repo)
 	if pointer == "" {
-		t.Fatal("readProjectPointer returned empty after knowledgeUseProject wrote the pointer")
+		t.Fatal("knowledge.ReadProjectPointer returned empty after knowledge.KnowledgeUseProject wrote the pointer")
 	}
 	// ...and projectBundle re-resolves that ref back to the SAME canonical id
 	// the store keys its `bundle` column on — the round trip
 	// wireKnowledgeScope actually depends on every real run.
-	want := canonicalizeKnowledgeBundle(bundle)
+	want := knowledge.CanonicalizeKnowledgeBundle(bundle)
 	got := projectBundle(repo)
 	if got != want {
 		t.Errorf("projectBundle round-trip = %q, want %q (pointer was %q)", got, want, pointer)
@@ -263,7 +264,7 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 	writeOllamaBridgeFile(ws, "qwen3.5:9b")
 	writeSandboxPackMarker(ws, filepath.Join(ws, "pack"))
 	var out bytes.Buffer
-	_ = knowledgeUseProject(t.TempDir(), ws, &out)
+	_ = knowledge.KnowledgeUseProject(t.TempDir(), ws, &out)
 	if err := os.WriteFile(filepath.Join(ws, ".pix", onboardingFileName), []byte(`{"version":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}

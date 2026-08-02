@@ -32,6 +32,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/knowledge"
 	"pix/host/sys/systest"
 )
 
@@ -97,7 +98,7 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
-	userBundleID := canonicalizeKnowledgeBundle(userBundle)
+	userBundleID := knowledge.CanonicalizeKnowledgeBundle(userBundle)
 
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packManifest{Name: "p", Schema: 1}) // Tier-0

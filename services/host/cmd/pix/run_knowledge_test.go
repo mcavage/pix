@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/knowledge"
 )
 
 // TestKnowledgeUseProject_LocalPath: `knowledge use --project <localpath>` writes
@@ -21,8 +22,8 @@ func TestKnowledgeUseProject_LocalPath(t *testing.T) {
 	bundle := t.TempDir()
 
 	var buf bytes.Buffer
-	if err := knowledgeUseProject(bundle, repo, &buf); err != nil {
-		t.Fatalf("knowledgeUseProject: %v", err)
+	if err := knowledge.KnowledgeUseProject(bundle, repo, &buf); err != nil {
+		t.Fatalf("knowledge.KnowledgeUseProject: %v", err)
 	}
 
 	pointer := filepath.Join(repo, ".pix", "knowledge")
@@ -47,12 +48,12 @@ func TestKnowledgeUseProject_LocalPath(t *testing.T) {
 func TestReadProjectPointer_SkipsCommentsAndBlanks(t *testing.T) {
 	repo := t.TempDir()
 	mustWritePointer(t, repo, "\n# a comment\n\n/abs/bundle\n/second\n")
-	if got := readProjectPointer(repo); got != "/abs/bundle" {
-		t.Errorf("readProjectPointer = %q, want /abs/bundle", got)
+	if got := knowledge.ReadProjectPointer(repo); got != "/abs/bundle" {
+		t.Errorf("knowledge.ReadProjectPointer = %q, want /abs/bundle", got)
 	}
 	// Absent pointer -> empty.
-	if got := readProjectPointer(t.TempDir()); got != "" {
-		t.Errorf("readProjectPointer(absent) = %q, want empty", got)
+	if got := knowledge.ReadProjectPointer(t.TempDir()); got != "" {
+		t.Errorf("knowledge.ReadProjectPointer(absent) = %q, want empty", got)
 	}
 }
 
@@ -67,7 +68,7 @@ func TestWireKnowledgeScope_GlobalOnly(t *testing.T) {
 	wireKnowledgeScope(cfg, ws, knowledgeRPC{up: func() bool { return false }})
 
 	lines := scopeLines(t, ws)
-	want := []string{canonicalizeKnowledgeBundle(global)}
+	want := []string{knowledge.CanonicalizeKnowledgeBundle(global)}
 	assertLines(t, lines, want)
 }
 
@@ -84,7 +85,7 @@ func TestWireKnowledgeScope_GlobalPlusProject(t *testing.T) {
 	wireKnowledgeScope(cfg, ws, knowledgeRPC{up: func() bool { return false }})
 
 	lines := scopeLines(t, ws)
-	want := []string{canonicalizeKnowledgeBundle(global), canonicalizeKnowledgeBundle(project)}
+	want := []string{knowledge.CanonicalizeKnowledgeBundle(global), knowledge.CanonicalizeKnowledgeBundle(project)}
 	assertLines(t, lines, want)
 }
 
@@ -102,7 +103,7 @@ func TestWireKnowledgeScope_RelativePointerResolvesToWorkspace(t *testing.T) {
 	wireKnowledgeScope(cfg, ws, knowledgeRPC{up: func() bool { return false }})
 
 	lines := scopeLines(t, ws)
-	want := []string{canonicalizeKnowledgeBundle(filepath.Join(ws, "kb"))}
+	want := []string{knowledge.CanonicalizeKnowledgeBundle(filepath.Join(ws, "kb"))}
 	assertLines(t, lines, want)
 }
 
@@ -148,7 +149,7 @@ func TestWireKnowledgeScope_RemovesStaleScope(t *testing.T) {
 func TestWireKnowledgeScope_LazyReindexGating(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	project := t.TempDir()
-	canon := canonicalizeKnowledgeBundle(project)
+	canon := knowledge.CanonicalizeKnowledgeBundle(project)
 
 	newCase := func(up bool, health []string) (*[]string, knowledgeRPC) {
 		var called []string

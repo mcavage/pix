@@ -145,15 +145,9 @@ func unwrapOpRun(env shellEnv, argv []string) ([]string, bool) {
 	return inner, true
 }
 
-// enabled reports whether a service name is in the configured SERVICES set.
-func enabled(cfg *config.Config, name string) bool {
-	for _, s := range cfg.Services {
-		if s == name {
-			return true
-		}
-	}
-	return false
-}
+// enabled moved to config.ServiceEnabled: whether a service is in the
+// configured set is a question about the config file, not about doctor.
+func enabled(cfg *config.Config, name string) bool { return config.ServiceEnabled(cfg, name) }
 
 // mcpConfigured reports whether name is in the configured MCP set (so `run`
 // auto-attaches it via --mcp).
