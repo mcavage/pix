@@ -32,6 +32,7 @@ import (
 	"pix/host/mcp"
 	"pix/host/readiness"
 	"pix/host/sys/systest"
+	"pix/host/workflow/reset"
 	"pix/host/workspace"
 )
 
@@ -360,7 +361,7 @@ func TestResetSbxClearsReceiptsOnPositiveRemovalOnly(t *testing.T) {
 		return "", nil
 	}}}
 	var out bytes.Buffer
-	executeSbxReset(resetActions{RemoveSandboxes: true}, env, &out)
+	reset.ExecuteSbxReset(reset.Actions{RemoveSandboxes: true}, env, &out)
 
 	// Positive success -> receipt cleared via the hardened helper.
 	if _, status, _ := workspace.ReadMCPReceipt(stateDir, "pix-ok"); status != workspace.MCPStateAbsent {

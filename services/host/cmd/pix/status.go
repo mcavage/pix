@@ -8,24 +8,20 @@ import (
 	"pix/host/cli"
 	"pix/host/hostenv"
 	"pix/host/mcp"
+	"pix/host/monitor/tui"
 	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/sys"
+	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 	"pix/host/workflow/upgrade"
 	"slices"
 	"strings"
-	"time"
 
 	"pix/host/config"
 	"pix/host/monitor"
 	"pix/host/workspace"
 )
-
-// gogAuthTimeout bounds the `gog auth status` probe so the fast, read-only
-// `status` command can never hang on a network round-trip (mirrors doctor's
-// bounded probes). On timeout or error gog is treated as not-authed.
-const gogAuthTimeout = 2 * time.Second
 
 // runStatusCmd is the `status` verb AND the bare-`pix` landing screen: a
 // fast, read-only control panel answering "what state am I in, what's my next
@@ -90,27 +86,27 @@ func renderStatus(cfg *config.Config, profile string, env hostenv.Env, out io.Wr
 
 // statusReport is the machine-readable status snapshot (also drives --json).
 type statusReport struct {
-	Version           string          `json:"version"`
-	ConfigPath        string          `json:"config_path"`
-	Profile           string          `json:"profile"`
-	Memory            bool            `json:"memory_up"`
-	Knowledge         bool            `json:"knowledge_up"`
-	Monitor           bool            `json:"monitor_up"`
-	EnabledServices   []string        `json:"enabled_services,omitempty"`
-	Providers         map[string]bool `json:"providers"`
-	InferenceModels   int             `json:"inference_models,omitempty"`
-	InferenceBackends []string        `json:"inference_backends,omitempty"`
-	Bundles           []bundleStatus  `json:"knowledge_bundles"`
-	MCP               []string        `json:"mcp"`
-	MCPServers        []mcpStatusLine `json:"mcp_servers"`
-	MCPRows           []mcpSandboxRow `json:"mcp_sandbox_rows,omitempty"`
-	Sandboxes         []sandboxLine   `json:"sandboxes"`
-	Tasks             int             `json:"tasks"`
-	ArtifactB         int64           `json:"artifact_bytes"`
-	Todos             []string        `json:"todos"`
-	GogAccount        string          `json:"gog_account,omitempty"`
-	GogAuthed         bool            `json:"gog_authed,omitempty"`
-	InstallWarnings   []string        `json:"install_warnings,omitempty"`
+	Version           string                  `json:"version"`
+	ConfigPath        string                  `json:"config_path"`
+	Profile           string                  `json:"profile"`
+	Memory            bool                    `json:"memory_up"`
+	Knowledge         bool                    `json:"knowledge_up"`
+	Monitor           bool                    `json:"monitor_up"`
+	EnabledServices   []string                `json:"enabled_services,omitempty"`
+	Providers         map[string]bool         `json:"providers"`
+	InferenceModels   int                     `json:"inference_models,omitempty"`
+	InferenceBackends []string                `json:"inference_backends,omitempty"`
+	Bundles           []bundleStatus          `json:"knowledge_bundles"`
+	MCP               []string                `json:"mcp"`
+	MCPServers        []mcpStatusLine         `json:"mcp_servers"`
+	MCPRows           []mcpSandboxRow         `json:"mcp_sandbox_rows,omitempty"`
+	Sandboxes         []workspace.SandboxLine `json:"sandboxes"`
+	Tasks             int                     `json:"tasks"`
+	ArtifactB         int64                   `json:"artifact_bytes"`
+	Todos             []string                `json:"todos"`
+	GogAccount        string                  `json:"gog_account,omitempty"`
+	GogAuthed         bool                    `json:"gog_authed,omitempty"`
+	InstallWarnings   []string                `json:"install_warnings,omitempty"`
 	// Checks is the shared, flat readiness array (the SAME row type doctor
 	// --json emits: axis/requirement/verdict/evidence/fix/duration_ms/
 	// endpoint), and Exit is the process exit code this same data produced.
@@ -158,11 +154,6 @@ type mcpSandboxRow struct {
 type bundleStatus struct {
 	Path string `json:"path"`
 	Git  string `json:"git"` // e.g. "clean", "3 ahead", "dirty", "no remote", ""
-}
-
-type sandboxLine struct {
-	Name  string `json:"name"`
-	State string `json:"state"`
 }
 
 func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusReport {
@@ -324,7 +315,7 @@ func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 	// probe passes (an email alone is not completed OAuth). Best-effort.
 	st.GogAccount = cfg.GogAccount
 	if cfg.GogAccount != "" {
-		st.GogAuthed = gogAuthed(env, cfg.GogAccount)
+		st.GogAuthed = onboard.GogAuthed(env, cfg.GogAccount)
 		// An account set but not authed is an outstanding item: setting an email is
 		// not completed OAuth, so the verdict must not read "all systems go".
 		if !st.GogAuthed {
@@ -336,14 +327,14 @@ func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 	// is tracked separately from emptiness: a failed listing must never render
 	// as "no sandboxes".
 	sbxLsOK := false
-	var boxes []sbxBox
+	var boxes []workspace.SbxBox
 	if sbxOnPath {
 		// BOUNDED (probeRun): a hung `sbx ls` leaves discovery unavailable —
 		// the rows below render unverifiable, never a false "no sandboxes".
 		if o, timedOut, err := env.RunTimed("sbx", "ls"); err == nil && !timedOut {
 			sbxLsOK = true
-			st.Sandboxes = parseSandboxes(o)
-			boxes = parsePixBoxes(o)
+			st.Sandboxes = workspace.ParseSandboxes(o)
+			boxes = workspace.ParsePixBoxes(o)
 		}
 	}
 
@@ -493,7 +484,7 @@ func (st statusReport) render(out io.Writer) {
 	if st.Tasks > 0 || st.ArtifactB > 0 {
 		taskText := cli.Plural(st.Tasks, "task")
 		if st.ArtifactB > 0 {
-			taskText += " · " + humanBytes(st.ArtifactB) + " artifacts"
+			taskText += " · " + tui.HumanBytes(st.ArtifactB) + " artifacts"
 		}
 		fmt.Fprintf(out, "  tasks        %s · `pix task ls` for details\n", taskText)
 	}
@@ -721,15 +712,4 @@ func bundleGitStatus(env hostenv.Env, dir string) string {
 	default:
 		return "clean"
 	}
-}
-
-// parseSandboxes extracts pix-* sandbox lines from `sbx ls` output. It is
-// lenient about column layout by reusing the canonical sbx parser. In
-// particular, the final column may be a pack mount rather than the state.
-func parseSandboxes(sbxLsOut string) []sandboxLine {
-	var out []sandboxLine
-	for _, box := range parsePixBoxes(sbxLsOut) {
-		out = append(out, sandboxLine{Name: box.Name, State: box.State})
-	}
-	return out
 }

@@ -10,6 +10,7 @@ import (
 	"pix/host/mcp"
 	"pix/host/memory"
 	"pix/host/rpc"
+	"pix/host/workflow/onboard"
 	"strings"
 	"testing"
 )
@@ -316,11 +317,11 @@ func TestParseDoctorArgs(t *testing.T) {
 }
 
 func TestParseOnboardArgs_Help(t *testing.T) {
-	o, err := parseOnboardArgs([]string{"--help"})
-	if err != nil || !o.help {
-		t.Errorf("parseOnboardArgs([--help]) = (%+v,%v), want help=true,nil", o, err)
+	o, err := onboard.ParseOnboardArgs([]string{"--help"})
+	if err != nil || !o.Help {
+		t.Errorf("onboard.ParseOnboardArgs([--help]) = (%+v,%v), want help=true,nil", o, err)
 	}
-	if _, err := parseOnboardArgs([]string{"--bogus"}); err == nil {
+	if _, err := onboard.ParseOnboardArgs([]string{"--bogus"}); err == nil {
 		t.Error("--bogus should be a usage error")
 	}
 }

@@ -34,6 +34,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
 	"pix/host/workflow/man"
+	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 	"strings"
 	"testing"
@@ -581,11 +582,11 @@ func TestWriteSetupModelsReceipt_AtomicWrite(t *testing.T) {
 // --- flags/help/man ----------------------------------------------------------
 
 func TestParseOnboardArgs_PullModels(t *testing.T) {
-	o, err := parseOnboardArgs([]string{"--pull-models", "--yes"})
+	o, err := onboard.ParseOnboardArgs([]string{"--pull-models", "--yes"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !o.pullModels {
+	if !o.PullModels {
 		t.Error("--pull-models must parse")
 	}
 }

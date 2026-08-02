@@ -22,6 +22,7 @@ import (
 	"pix/host/secret"
 	"pix/host/service"
 	"pix/host/sys"
+	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 	"pix/host/workspace"
 )
@@ -124,7 +125,7 @@ func runRun(argv []string) {
 	// under a [Y/n] gate, register newly-enabled MCP servers, delete the file. This
 	// runs BEFORE workspace.LoadResolvedConfig so a fresh create picks up the applied config.
 	// Best-effort and non-blocking on a non-TTY (it just leaves the file).
-	reconcileOnboarding(o.Workspace, defaultShellEnv(), os.Stdin, os.Stdout, false, cli.IsTTY(os.Stdin))
+	onboard.ReconcileOnboarding(o.Workspace, defaultShellEnv(), os.Stdin, os.Stdout, false, cli.IsTTY(os.Stdin), onboardDeps())
 
 	// Load the config for the rest of run (kits, mcp, gog, pack). The
 	cfg, _, err := workspace.LoadResolvedConfig()

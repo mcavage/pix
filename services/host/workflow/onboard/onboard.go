@@ -1,4 +1,4 @@
-package main
+package onboard
 
 import (
 	"encoding/json"
@@ -27,35 +27,35 @@ import (
 // `pix setup` wizard).
 //
 // SECURITY MODEL: the sandbox is network-fenced and non-root; it can only
-// PROPOSE config within onboardingResult's fixed field set. Because we unmarshal
+// PROPOSE config within OnboardingResult's fixed field set. Because we unmarshal
 // into a typed struct, a hostile file CANNOT reach host.enabled, plugins.*,
 // kits.stack, or arbitrary services — those fields simply do not exist here.
 // mcp names are additionally allowlisted, and the host applies everything under
 // a confirm gate. No new network listener is introduced (the memory endpoint
 // writes data rows; this writes nothing over the wire).
 
-// onboardingResult is the declarative control-plane proposal the in-sandbox
+// OnboardingResult is the declarative control-plane proposal the in-sandbox
 // onboarding agent writes to <workspace>/.pix/onboarding.json. Identity is
 // deliberately ABSENT: it is memory data, written live over the memory RPC, not
 // host config.
-type onboardingResult struct {
-	Version            int               `json:"version"`
-	MCP                []string          `json:"mcp,omitempty"`
-	Knowledge          *onboardKnowledge `json:"knowledge,omitempty"`
-	OllamaBridgeModel  string            `json:"ollama_bridge_model,omitempty"`
-	MemoryWatcherModel string            `json:"memory_watcher_model,omitempty"`
+type OnboardingResult struct {
+	Version            int        `json:"version"`
+	MCP                []string   `json:"mcp,omitempty"`
+	Knowledge          *Knowledge `json:"knowledge,omitempty"`
+	OllamaBridgeModel  string     `json:"ollama_bridge_model,omitempty"`
+	MemoryWatcherModel string     `json:"memory_watcher_model,omitempty"`
 }
 
-type onboardKnowledge struct {
+type Knowledge struct {
 	Action string `json:"action"` // "scaffold" | "use" | "skip"
 	Source string `json:"source"` // path (scaffold) or path|git-url (use)
 }
 
-// onboardingFileName is the per-ws control-plane proposal, written by the
+// FileName is the per-ws control-plane proposal, written by the
 // agent and consumed by the host on the next run.
-const onboardingFileName = "onboarding.json"
+const FileName = "onboarding.json"
 
-// onboardMCPCatalogAllow is the set of remote gateway-catalog MCP names the
+// MCPCatalogAllow is the set of remote gateway-catalog MCP names the
 // onboarding file may enable in addition to gog and the locally-known servers.
 // It IS mcp.McpCatalogNames — the single source of truth for what `pix mcp
 // bundle` actually registers — never an independent copy that can drift (the
@@ -63,13 +63,13 @@ const onboardingFileName = "onboarding.json"
 // register, so accepting it silently persisted a server that could never
 // come up). Anything else is configured with `pix mcp` directly, not via
 // an untrusted onboarding file.
-var onboardMCPCatalogAllow = mcp.McpCatalogNames
+var MCPCatalogAllow = mcp.McpCatalogNames
 
-// validateOnboardingResult rejects anything outside the allowlist BEFORE it
+// ValidateOnboardingResult rejects anything outside the allowlist BEFORE it
 // touches config. env/hostResolver resolve the locally-known MCP set; when that
 // probe fails we fail CLOSED on any non-gog/non-catalog mcp name rather than
 // trust an unknown one.
-func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env hostenv.Env, hostResolver func() (string, error)) error {
+func ValidateOnboardingResult(r *OnboardingResult, cfg *config.Config, env hostenv.Env, hostResolver func() (string, error)) error {
 	if r.Version != 1 {
 		return fmt.Errorf("unsupported onboarding schema version %d (want 1)", r.Version)
 	}
@@ -82,7 +82,7 @@ func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env hoste
 		if m == "" {
 			return fmt.Errorf("empty mcp name")
 		}
-		if m == config.GWServerName || onboardMCPCatalogAllow[m] {
+		if m == config.GWServerName || MCPCatalogAllow[m] {
 			continue
 		}
 		// Resolve the local MCP inventory lazily. A semantic mistake unrelated
@@ -120,11 +120,11 @@ func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env hoste
 	return nil
 }
 
-// applyOnboardingResult applies a VALIDATED proposal onto cfg via the same
+// ApplyOnboardingResult applies a VALIDATED proposal onto cfg via the same
 // setters the CLI uses, then Save()s. It is idempotent: re-applying identical
 // input yields identical config. It returns the human-readable changes it made.
 // Caller validates first.
-func applyOnboardingResult(r *onboardingResult, cfg *config.Config, env hostenv.Env, out io.Writer, save func(*config.Config) error) ([]string, error) {
+func ApplyOnboardingResult(r *OnboardingResult, cfg *config.Config, env hostenv.Env, out io.Writer, save func(*config.Config) error) ([]string, error) {
 	var changes []string
 
 	// There is deliberately NO account writer here. Setting
@@ -160,18 +160,30 @@ func applyOnboardingResult(r *onboardingResult, cfg *config.Config, env hostenv.
 	return changes, nil
 }
 
-// reconcileOnboarding reads <workspace>/.pix/onboarding.json if present,
+// ReconcileOnboarding reads <workspace>/.pix/onboarding.json if present,
 // validates it, shows the diff, applies under a [Y/n] gate (assumeYes skips the
 // prompt for CI), registers any newly-enabled MCP servers, then removes the
 // file. Absent file is a clean no-op. A validation failure leaves the file in
 // place and warns (so a human can inspect it) but never aborts the caller.
-func reconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer, assumeYes, tty bool) {
-	path := filepath.Join(ws, ".pix", onboardingFileName)
+// Deps is what onboarding cannot resolve for itself: which pix-host binary is
+// paired with this build, how to register MCP servers, and how to verify a
+// shipped-catalog remote is launch-ready. All three are composition -- two of
+// them reach capabilities onboarding may not import -- so the caller supplies
+// them.
+type Deps struct {
+	HostBinary func() (string, error)
+	Register   func(cfg *config.Config, env hostenv.Env, out io.Writer, names []string,
+		hostResolver func() (string, error), containers map[string]config.MCPContainer) error
+	VerifyCatalog func(env hostenv.Env, names []string) error
+}
+
+func ReconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer, assumeYes, tty bool, deps Deps) {
+	path := filepath.Join(ws, ".pix", FileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return // absent (or unreadable) => nothing to reconcile
 	}
-	var r onboardingResult
+	var r OnboardingResult
 	if err := json.Unmarshal(data, &r); err != nil {
 		fmt.Fprintf(out, "pix: ignoring malformed %s: %v\n", path, err)
 		return
@@ -181,7 +193,7 @@ func reconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 		fmt.Fprintf(out, "pix: could not load config to apply onboarding: %v\n", err)
 		return
 	}
-	if err := validateOnboardingResult(&r, cfg, env, hostBinaryResolver); err != nil {
+	if err := ValidateOnboardingResult(&r, cfg, env, deps.HostBinary); err != nil {
 		fmt.Fprintf(out, "pix: refusing onboarding proposal in %s: %v\n", path, err)
 		fmt.Fprintln(out, "  Inspect and remove it by hand if it is not what you intended.")
 		return
@@ -189,7 +201,7 @@ func reconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 	// A shipped-catalog remote in the proposal must be registered AND
 	// auth-ready BEFORE anything is persisted — never applied on the promise
 	// that someone will run bundle/auth later.
-	if err := verifyCatalogMCPReady(env, r.MCP); err != nil {
+	if err := deps.VerifyCatalog(env, r.MCP); err != nil {
 		fmt.Fprintf(out, "pix: refusing onboarding proposal in %s: %v\n", path, err)
 		fmt.Fprintln(out, "  Nothing was applied; the file was left in place.")
 		return
@@ -197,13 +209,13 @@ func reconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 
 	// Preview: apply against a COPY to compute the diff without committing.
 	preview := *cfg
-	changes, err := applyOnboardingResult(&r, &preview, env, io.Discard, func(*config.Config) error { return nil })
+	changes, err := ApplyOnboardingResult(&r, &preview, env, io.Discard, func(*config.Config) error { return nil })
 	if err != nil {
 		fmt.Fprintf(out, "pix: onboarding proposal could not be applied: %v\n", err)
 		return
 	}
 	if len(changes) == 0 {
-		_ = workspace.RemoveStateFile(ws, onboardingFileName) // nothing new; clear the marker
+		_ = workspace.RemoveStateFile(ws, FileName) // nothing new; clear the marker
 		return
 	}
 
@@ -222,54 +234,54 @@ func reconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 		}
 	}
 
-	applied, err := applyOnboardingResult(&r, cfg, env, out, func(c *config.Config) error { return c.Save() })
+	applied, err := ApplyOnboardingResult(&r, cfg, env, out, func(c *config.Config) error { return c.Save() })
 	if err != nil {
 		fmt.Fprintf(out, "pix: applied partially then failed: %v\n", err)
 		return
 	}
 	if len(cfg.MCP) > 0 {
-		if err := registerServers(cfg, env, out, nil, hostBinaryResolver, pack.ActiveContainerMCP(cfg)); err != nil {
+		if err := deps.Register(cfg, env, out, nil, deps.HostBinary, pack.ActiveContainerMCP(cfg)); err != nil {
 			fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pix mcp register)\n", err)
 		}
 	}
-	_ = workspace.RemoveStateFile(ws, onboardingFileName)
+	_ = workspace.RemoveStateFile(ws, FileName)
 	fmt.Fprintf(out, "Applied %d onboarding change(s) to %s.\n", len(applied), config.Path())
 }
 
-// onboardOpts is the parsed host-config flag set. The `pix onboard` VERB
+// Opts is the parsed host-config flag set. The `pix onboard` VERB
 // is gone (AC-P0-308: `pix setup --no-agent` replaced it); the onboarding
 // MACHINERY in this file — the schema, its allowlist validation, the applier
 // and the reconcile-on-next-run path — is what `run` and `setup` both depend
 // on, and it stays exactly where it was. This parser is the flag surface both
 // the host phase and the --apply path share.
-type onboardOpts struct {
-	account   string
-	knowledge string
-	mcp       []string
-	model     string
-	models    string
-	apply     bool
-	assumeYes bool
+type Opts struct {
+	Account   string
+	Knowledge string
+	Mcp       []string
+	Model     string
+	Models    string
+	Apply     bool
+	AssumeYes bool
 	// pullModels is `pix setup`'s explicit local-model download consent
 	// (S08). Parsed here because setup shares this parser; `pix onboard`
 	// itself REJECTS it — onboard is the scripted host-config path and never
 	// downloads models.
-	pullModels bool
+	PullModels bool
 	// googleWorkspace is `pix setup --google-workspace`: the OPT-IN that
 	// routes setup through the Google Workspace transaction. Google Workspace
 	// is absent unless this is passed. credentials is its OAuth client path.
 	// Both are parsed here because setup shares this parser; `pix
 	// onboard` REJECTS them (authorization needs a browser).
-	googleWorkspace bool
-	credentials     string
+	GoogleWorkspace bool
+	Credentials     string
 	pack            string
-	packs           []string
-	withSetup       []string
-	help            bool
+	Packs           []string
+	WithSetup       []string
+	Help            bool
 }
 
-func parseOnboardArgs(argv []string) (onboardOpts, error) {
-	var o onboardOpts
+func ParseOnboardArgs(argv []string) (Opts, error) {
+	var o Opts
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		next := func() (string, error) {
@@ -282,62 +294,62 @@ func parseOnboardArgs(argv []string) (onboardOpts, error) {
 		var err error
 		switch {
 		case a == "-h" || a == "--help":
-			o.help = true
+			o.Help = true
 			return o, nil
 		case a == "--apply":
-			o.apply = true
+			o.Apply = true
 		case a == "--use-sbx-keys":
 			return o, fmt.Errorf("--use-sbx-keys has been removed: 1Password (op) is now the only provider-key source; run `pix setup` with op installed + signed in")
 		case a == "--use-1password":
 			return o, fmt.Errorf("--use-1password has been removed: 1Password is now the only provider-key source, so `pix setup` always uses it")
 		case a == "--yes" || a == "-y" || a == "--non-interactive":
-			o.assumeYes = true
+			o.AssumeYes = true
 		case a == "--pull-models":
-			o.pullModels = true
+			o.PullModels = true
 		case a == "--google-workspace":
-			o.googleWorkspace = true
+			o.GoogleWorkspace = true
 		case a == "--credentials":
-			o.credentials, err = next()
+			o.Credentials, err = next()
 		case strings.HasPrefix(a, "--credentials="):
-			o.credentials = strings.TrimPrefix(a, "--credentials=")
+			o.Credentials = strings.TrimPrefix(a, "--credentials=")
 		case a == "--account":
-			o.account, err = next()
+			o.Account, err = next()
 		case strings.HasPrefix(a, "--account="):
-			o.account = strings.TrimPrefix(a, "--account=")
+			o.Account = strings.TrimPrefix(a, "--account=")
 		case a == "--knowledge":
-			o.knowledge, err = next()
+			o.Knowledge, err = next()
 		case strings.HasPrefix(a, "--knowledge="):
-			o.knowledge = strings.TrimPrefix(a, "--knowledge=")
+			o.Knowledge = strings.TrimPrefix(a, "--knowledge=")
 		case a == "--mcp":
 			var v string
 			if v, err = next(); err == nil {
-				o.mcp = append(o.mcp, v)
+				o.Mcp = append(o.Mcp, v)
 			}
 		case strings.HasPrefix(a, "--mcp="):
-			o.mcp = append(o.mcp, strings.TrimPrefix(a, "--mcp="))
+			o.Mcp = append(o.Mcp, strings.TrimPrefix(a, "--mcp="))
 		case a == "--model":
-			o.model, err = next()
+			o.Model, err = next()
 		case strings.HasPrefix(a, "--model="):
-			o.model = strings.TrimPrefix(a, "--model=")
+			o.Model = strings.TrimPrefix(a, "--model=")
 		case a == "--models":
-			o.models, err = next()
+			o.Models, err = next()
 		case strings.HasPrefix(a, "--models="):
-			o.models = strings.TrimPrefix(a, "--models=")
+			o.Models = strings.TrimPrefix(a, "--models=")
 		case a == "--pack":
 			o.pack, err = next()
 			if err == nil {
-				o.packs = append(o.packs, o.pack)
+				o.Packs = append(o.Packs, o.pack)
 			}
 		case strings.HasPrefix(a, "--pack="):
 			o.pack = strings.TrimPrefix(a, "--pack=")
-			o.packs = append(o.packs, o.pack)
+			o.Packs = append(o.Packs, o.pack)
 		case a == "--with":
 			var v string
 			if v, err = next(); err == nil {
-				o.withSetup = append(o.withSetup, v)
+				o.WithSetup = append(o.WithSetup, v)
 			}
 		case strings.HasPrefix(a, "--with="):
-			o.withSetup = append(o.withSetup, strings.TrimPrefix(a, "--with="))
+			o.WithSetup = append(o.WithSetup, strings.TrimPrefix(a, "--with="))
 		default:
 			return o, fmt.Errorf("unknown flag %q", a)
 		}

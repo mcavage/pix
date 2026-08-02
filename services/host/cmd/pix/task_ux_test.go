@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/monitor/tui"
+	"pix/host/workflow/reset"
+	"pix/host/workspace"
 )
 
 // --- Story 1: naming --------------------------------------------------------
@@ -300,7 +303,7 @@ func TestPruneArtifacts(t *testing.T) {
 	data := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", data)
 	repoDir := "proj-abcd1234"
-	base := filepath.Join(taskArtifactRoot(), repoDir, "task1")
+	base := filepath.Join(workspace.TaskArtifactRoot(), repoDir, "task1")
 	oldSnap := filepath.Join(base, "old")
 	freshSnap := filepath.Join(base, "fresh")
 	for _, d := range []string{oldSnap, freshSnap} {
@@ -401,8 +404,8 @@ func TestRunTaskGc_RemovesCleanSkipsDirty(t *testing.T) {
 func TestHumanBytes(t *testing.T) {
 	cases := map[int64]string{0: "0B", 512: "512B", 1024: "1.0KB", 1536: "1.5KB", 1048576: "1.0MB"}
 	for in, want := range cases {
-		if got := humanBytes(in); got != want {
-			t.Errorf("humanBytes(%d) = %q, want %q", in, got, want)
+		if got := tui.HumanBytes(in); got != want {
+			t.Errorf("tui.HumanBytes(%d) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -420,7 +423,7 @@ func TestTaskStateSummary(t *testing.T) {
 	writeFile(t, filepath.Join(metaDir, "a.json"), "{}\n")
 	writeFile(t, filepath.Join(metaDir, "b.json"), "{}\n")
 	// An artifact file to size.
-	artDir := filepath.Join(taskArtifactRoot(), "proj-abcd1234", "a", "ts")
+	artDir := filepath.Join(workspace.TaskArtifactRoot(), "proj-abcd1234", "a", "ts")
 	if err := os.MkdirAll(artDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -439,8 +442,8 @@ func TestTaskStateSummary(t *testing.T) {
 
 func TestResetPlan_PurgeDataAddsArtifacts(t *testing.T) {
 	cfg := &config.Config{}
-	paths := resetPaths{configDir: "/c", dataRoot: "/d", memoryDir: "/d/memory", artifactRoot: "/data/pix/artifacts"}
-	hasArtifacts := func(a resetActions) bool {
+	paths := reset.Paths{ConfigDir: "/c", DataRoot: "/d", MemoryDir: "/d/memory", ArtifactRoot: "/data/pix/artifacts"}
+	hasArtifacts := func(a reset.Actions) bool {
 		for _, b := range a.Backups {
 			if b.Path == "/data/pix/artifacts" {
 				return true
@@ -449,11 +452,11 @@ func TestResetPlan_PurgeDataAddsArtifacts(t *testing.T) {
 		return false
 	}
 	// Without --purge-data the artifacts dir is never in the plan (survives).
-	if hasArtifacts(resetPlan(cfg, paths, resetOpts{})) {
+	if hasArtifacts(reset.Plan(cfg, paths, reset.Opts{})) {
 		t.Error("artifacts must NOT be backed up without --purge-data")
 	}
 	// With --purge-data it is moved aside like any other data path.
-	if !hasArtifacts(resetPlan(cfg, paths, resetOpts{purgeData: true})) {
+	if !hasArtifacts(reset.Plan(cfg, paths, reset.Opts{PurgeData: true})) {
 		t.Error("--purge-data must add the artifacts dir to the backup plan")
 	}
 }
@@ -674,7 +677,7 @@ func TestHarvestArtifacts_FailsClosedOnUnwritableDest(t *testing.T) {
 	data := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", data)
 	// Make the artifacts root unwritable so the snapshot dir cannot be created.
-	root := taskArtifactRoot()
+	root := workspace.TaskArtifactRoot()
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
 	}

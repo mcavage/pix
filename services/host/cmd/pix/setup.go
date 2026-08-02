@@ -32,6 +32,7 @@ import (
 	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/sys"
+	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 	"slices"
 	"strings"
@@ -78,7 +79,7 @@ func runSetupCmd(argv []string) {
 	// Split an optional positional DIR from the onboard-style flags. DIR is the
 	// single non-flag token; everything else is forwarded to the host phase.
 	// --replace is SETUP'S OWN flag (recreate an existing sandbox and hand it
-	// the tour): consumed here, never forwarded to parseOnboardArgs — it is not
+	// the tour): consumed here, never forwarded to onboard.ParseOnboardArgs — it is not
 	// host config.
 	dir := "."
 	dirSet := false
@@ -124,7 +125,7 @@ func runSetupCmd(argv []string) {
 	if verbose {
 		_ = os.Setenv("PIX_SETUP_VERBOSE", "1")
 	}
-	parsed, parseErr := parseOnboardArgs(hostArgs)
+	parsed, parseErr := onboard.ParseOnboardArgs(hostArgs)
 	if parseErr != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", parseErr, setupUsage)
 		os.Exit(2)
@@ -153,12 +154,12 @@ func runSetupCmd(argv []string) {
 			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 			os.Exit(2)
 		}
-		opts, perr := parseOnboardArgs(hostArgs)
+		opts, perr := onboard.ParseOnboardArgs(hostArgs)
 		if perr != nil {
 			fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", perr, setupUsage)
 			os.Exit(2)
 		}
-		reconcileOnboarding(dir, env, os.Stdin, os.Stdout, opts.assumeYes, cli.IsTTY(os.Stdin))
+		onboard.ReconcileOnboarding(dir, env, os.Stdin, os.Stdout, opts.AssumeYes, cli.IsTTY(os.Stdin), onboardDeps())
 		return
 	}
 	if err := validateRunWorkspace(dir); err != nil {
@@ -168,11 +169,11 @@ func runSetupCmd(argv []string) {
 	// sbx is universally required. 1Password is conditional and is decided only
 	// AFTER explicit packs have contributed inference; a keyless work gateway
 	// must never trigger an irrelevant op installation/login flow.
-	if err := ensureSetupPrereqsFor(env, os.Stdin, os.Stdout, cli.IsTTY(os.Stdin) && !parsed.assumeYes, false); err != nil {
+	if err := ensureSetupPrereqsFor(env, os.Stdin, os.Stdout, cli.IsTTY(os.Stdin) && !parsed.AssumeYes, false); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(1)
 	}
-	if err := ensureSetupSbxSession(env, os.Stdout, cli.IsTTY(os.Stdin) && !parsed.assumeYes); err != nil {
+	if err := ensureSetupSbxSession(env, os.Stdout, cli.IsTTY(os.Stdin) && !parsed.AssumeYes); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(1)
 	}
@@ -198,13 +199,13 @@ func runSetupCmd(argv []string) {
 	// engine while preserving the exact same BoM review, fingerprint, and
 	// rollback behavior as `pix pack use`.
 	var activatedPacks []string
-	if len(parsed.packs) > 0 && env.Quiet {
+	if len(parsed.Packs) > 0 && env.Quiet {
 		fmt.Fprintln(os.Stdout, "Configuring pack integrations…")
 	}
-	for _, requestedPack := range parsed.packs {
+	for _, requestedPack := range parsed.Packs {
 		packArg := normalizeSetupPackArg(requestedPack)
 		useArgs := []string{packArg}
-		if parsed.assumeYes {
+		if parsed.AssumeYes {
 			useArgs = append([]string{"--yes"}, useArgs...)
 		}
 		pack.RunPackUse(env, os.Stdout, useArgs, registerServers)
@@ -224,13 +225,13 @@ func runSetupCmd(argv []string) {
 	// so placing hooks afterward made it impossible for a fresh pack to satisfy
 	// the very prerequisites the gate checked (and skipped integration
 	// entirely on the first missing remote registration).
-	setupRequests, err := pack.PlanPackSetupRequests(activatedPacks, parsed.withSetup)
+	setupRequests, err := pack.PlanPackSetupRequests(activatedPacks, parsed.WithSetup)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(1)
 	}
 	for _, root := range activatedPacks {
-		if err := pack.RunPackSetup(env, os.Stdout, root, setupRequests[root], cli.IsTTY(os.Stdin) && !parsed.assumeYes); err != nil {
+		if err := pack.RunPackSetup(env, os.Stdout, root, setupRequests[root], cli.IsTTY(os.Stdin) && !parsed.AssumeYes); err != nil {
 			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 			os.Exit(1)
 		}
@@ -518,13 +519,13 @@ func (b *setupPromptBudget) reserve(what string) bool {
 // (AC-P0-302, guarded by TestSetupReport_NeverReadsInventory).
 type setupInventory struct {
 	cfg      *config.Config
-	proposal *onboardingResult
+	proposal *onboard.OnboardingResult
 	retired  []string
 }
 
 // takeSetupInventory reads current state. It writes NOTHING: every call in
 // here is a load, a parse, or a bounded probe.
-func takeSetupInventory(env hostenv.Env, opts onboardOpts) (setupInventory, error) {
+func takeSetupInventory(env hostenv.Env, opts onboard.Opts) (setupInventory, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return setupInventory{}, fmt.Errorf("loading config: %w", err)
@@ -541,14 +542,14 @@ func takeSetupInventory(env hostenv.Env, opts onboardOpts) (setupInventory, erro
 // pre-adoption semantic validator and the later inventory/mutation phase.
 // Keeping one constructor prevents the early safety boundary from accepting a
 // value that the host phase interprets differently.
-func setupProposal(opts onboardOpts) *onboardingResult {
-	p := &onboardingResult{
+func setupProposal(opts onboard.Opts) *onboard.OnboardingResult {
+	p := &onboard.OnboardingResult{
 		Version:           1,
-		MCP:               append([]string(nil), opts.mcp...),
-		OllamaBridgeModel: strings.TrimSpace(opts.model),
+		MCP:               append([]string(nil), opts.Mcp...),
+		OllamaBridgeModel: strings.TrimSpace(opts.Model),
 	}
-	if k := strings.TrimSpace(opts.knowledge); k != "" {
-		p.Knowledge = &onboardKnowledge{Action: "use", Source: k}
+	if k := strings.TrimSpace(opts.Knowledge); k != "" {
+		p.Knowledge = &onboard.Knowledge{Action: "use", Source: k}
 	}
 	return p
 }
@@ -557,14 +558,14 @@ func setupProposal(opts onboardOpts) *onboardingResult {
 // writes and opens no authorization flow, so runSetupCmd can call it before the
 // first pack is adopted. External readiness (catalog OAuth, provider reachability,
 // model pulls) remains in the later gate/verify phases.
-func validateSetupSemantics(opts onboardOpts, cfg *config.Config, env hostenv.Env, hostResolver func() (string, error)) error {
-	if len(opts.withSetup) > 0 && len(opts.packs) == 0 {
+func validateSetupSemantics(opts onboard.Opts, cfg *config.Config, env hostenv.Env, hostResolver func() (string, error)) error {
+	if len(opts.WithSetup) > 0 && len(opts.Packs) == 0 {
 		return errUsage{fmt.Errorf("--with requires --pack")}
 	}
 	if err := checkGoogleWorkspaceFlags(opts); err != nil {
 		return err
 	}
-	if err := validateOnboardingResult(setupProposal(opts), cfg, env, hostResolver); err != nil {
+	if err := onboard.ValidateOnboardingResult(setupProposal(opts), cfg, env, hostResolver); err != nil {
 		return errUsage{err}
 	}
 	return nil
@@ -641,7 +642,7 @@ func runSetupMutations(steps []setupMutationStep) (touched []readiness.Axis, err
 
 // setupMutationSteps builds the ordered step table. Every closure here writes
 // to io.Discard unless it is reporting a failure or collecting mandatory input.
-func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboardOpts, in io.Reader, out io.Writer, interactive bool, models *setupModelsOutcome, prompts *setupPromptBudget) []setupMutationStep {
+func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboard.Opts, in io.Reader, out io.Writer, interactive bool, models *setupModelsOutcome, prompts *setupPromptBudget) []setupMutationStep {
 	cfg := inv.cfg
 	return []setupMutationStep{{
 		name:  "keys",
@@ -672,14 +673,14 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboardOpts, i
 			// it collects the mandatory op:// refs, and on failure it prints
 			// exactly what is wrong. It prints no ✓ — the keys row in the
 			// report comes from secret.HostModeProviderKeys AFTER this ran.
-			if !setupProvisionKeysFn(env, in, out, interactive, opts.assumeYes) {
+			if !setupProvisionKeysFn(env, in, out, interactive, opts.AssumeYes) {
 				return fmt.Errorf("provider keys not fully configured — follow the fix printed above")
 			}
 			// Bind -> verify -> save -> judge -> roster, all of it in
 			// reconcileDirectInference so `pix models add` runs the IDENTICAL
 			// sequence. It living only here is why a key added any other way stayed
 			// inert: the ref was written and nothing ever rebuilt the bindings.
-			res, err := reconcileDirectInference(cfg, env, in, out, interactive, opts.models, "")
+			res, err := reconcileDirectInference(cfg, env, in, out, interactive, opts.Models, "")
 			if err != nil {
 				return err
 			}
@@ -706,7 +707,7 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboardOpts, i
 			// combined call.
 			cfgOnly := *inv.proposal
 			cfgOnly.Knowledge = nil
-			_, err := applyOnboardingResult(&cfgOnly, cfg, env, io.Discard, func(c *config.Config) error { return c.Save() })
+			_, err := onboard.ApplyOnboardingResult(&cfgOnly, cfg, env, io.Discard, func(c *config.Config) error { return c.Save() })
 			if err != nil {
 				return err
 			}
@@ -747,8 +748,8 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboardOpts, i
 			if inv.proposal.Knowledge == nil {
 				return nil
 			}
-			only := &onboardingResult{Version: 1, Knowledge: inv.proposal.Knowledge}
-			_, err := applyOnboardingResult(only, cfg, env, io.Discard, func(c *config.Config) error { return c.Save() })
+			only := &onboard.OnboardingResult{Version: 1, Knowledge: inv.proposal.Knowledge}
+			_, err := onboard.ApplyOnboardingResult(only, cfg, env, io.Discard, func(c *config.Config) error { return c.Save() })
 			return err
 		},
 	}, {
@@ -772,14 +773,14 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboardOpts, i
 			// success text: the row in the report is rendered from a
 			// post-mutation probe, so a half-finished authorization can never
 			// print a ✓.
-			if !opts.googleWorkspace {
+			if !opts.GoogleWorkspace {
 				return nil
 			}
 			ask := prompts.reserve("google ws route")
 			if err := setupGoogleWorkspaceFn(env, gogSetupOpts{
-				account:     strings.TrimSpace(opts.account),
-				credentials: strings.TrimSpace(opts.credentials),
-				assumeYes:   opts.assumeYes,
+				account:     strings.TrimSpace(opts.Account),
+				credentials: strings.TrimSpace(opts.Credentials),
+				assumeYes:   opts.AssumeYes,
 			}, in, out, ask); err != nil {
 				return fmt.Errorf("google ws: %w", err)
 			}
@@ -799,7 +800,7 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboardOpts, i
 			// healthy, interactive setup may offer a default-No pull for positively
 			// missing memory models; unattended setup requires --pull-models.
 			ask := prompts.reserve("enable local memory")
-			*models = setupLocalModels(cfg, env, in, out, ask, opts.pullModels)
+			*models = setupLocalModels(cfg, env, in, out, ask, opts.PullModels)
 			if setupMemoryModelsReady(cfg, *models) {
 				cfg.AddService("memory")
 				if err := cfg.Save(); err != nil {
@@ -957,23 +958,23 @@ func setupHostPhase(env hostenv.Env, flags []string, in io.Reader, out io.Writer
 	// PHASE 1 — parse. Argument mistakes are caught here, before any probe or
 	// mutation, and map to exit 2 at the call site.
 	setupPhaseHeader(out, setupPhaseParse, "")
-	opts, perr := parseOnboardArgs(flags)
+	opts, perr := onboard.ParseOnboardArgs(flags)
 	if perr != nil {
 		return errUsage{perr}
 	}
-	if opts.apply {
+	if opts.Apply {
 		// --apply is intercepted by runSetupCmd (it reconciles a pending
 		// onboarding.json and stops). Reaching the host phase with it set means
 		// a caller bypassed that route, which would silently ignore the flag.
 		return errUsage{fmt.Errorf("--apply is handled before the host phase; run `pix setup [DIR] --apply`")}
 	}
 	// Interactive prompts fire on any real TTY unless the caller explicitly opted
-	// out with --yes/-y/--non-interactive (opts.assumeYes). Ordinary VALUE flags
+	// out with --yes/-y/--non-interactive (opts.AssumeYes). Ordinary VALUE flags
 	// (--account/--knowledge/--mcp/--model) configure host settings; they say
 	// nothing about whether pasting a 1Password ref should still prompt, so their
 	// mere presence must NOT silently suppress the key-collection/overwrite
 	// prompts — only an explicit non-interactive opt-out does.
-	interactive := setupInteractivePrompts(tty, opts.assumeYes)
+	interactive := setupInteractivePrompts(tty, opts.AssumeYes)
 	prompts := &setupPromptBudget{interactive: interactive}
 
 	// PHASE 2 — inventory. Reads only.
@@ -1058,15 +1059,15 @@ func setupHostPhase(env hostenv.Env, flags []string, in io.Reader, out io.Writer
 // `--mcp X` promotes `mcp:X`, which setup additionally enforces in the gate
 // (verifyCatalogMCPReady) — a requested server that cannot come up fails before
 // anything is written, which is strictly earlier than an exit code.
-func setupRequestedAxes(opts onboardOpts) []readiness.Axis {
+func setupRequestedAxes(opts onboard.Opts) []readiness.Axis {
 	var out []readiness.Axis
-	if opts.pullModels {
+	if opts.PullModels {
 		out = append(out, readiness.AxisOllamaHost, readiness.AxisModelWatcher, readiness.AxisModelEmbed, readiness.AxisModelBridge)
 	}
-	if opts.googleWorkspace {
+	if opts.GoogleWorkspace {
 		out = append(out, readiness.AxisGworkspace)
 	}
-	out = append(out, mcpAxes(opts.mcp)...)
+	out = append(out, mcpAxes(opts.Mcp)...)
 	return out
 }
 
@@ -1734,14 +1735,14 @@ rather than reading back a journal of what it once intended.
 // is deliberately in the standard grammar (invoked path, lowercase, no trailing
 // period) and maps to exit 2 at the call site, because it is an argument
 // mistake, not a failed probe.
-func checkGoogleWorkspaceFlags(opts onboardOpts) error {
-	if opts.googleWorkspace {
+func checkGoogleWorkspaceFlags(opts onboard.Opts) error {
+	if opts.GoogleWorkspace {
 		return nil
 	}
-	if strings.TrimSpace(opts.account) != "" {
+	if strings.TrimSpace(opts.Account) != "" {
 		return errUsage{fmt.Errorf("--account requires --google-workspace")}
 	}
-	if strings.TrimSpace(opts.credentials) != "" {
+	if strings.TrimSpace(opts.Credentials) != "" {
 		return errUsage{fmt.Errorf("--credentials requires --google-workspace")}
 	}
 	return nil

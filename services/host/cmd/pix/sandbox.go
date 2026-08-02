@@ -23,62 +23,11 @@ func fatalSbx(err error) {
 	os.Exit(1)
 }
 
-// sbxBox is one parsed `sbx ls` row for a pix sandbox.
-type sbxBox struct {
-	Name  string `json:"name"`
-	State string `json:"state"`
-	Dir   string `json:"dir,omitempty"`
-}
-
-// knownSbxStates are the sbx lifecycle words we recognize when parsing a row,
-// so we can pick the state column out regardless of sbx's exact layout.
-var knownSbxStates = map[string]bool{
-	"running": true, "stopped": true, "exited": true,
-	"created": true, "paused": true, "restarting": true, "dead": true,
-}
-
-// parsePixBoxes filters `sbx ls` output to pix-* rows and pulls name,
-// state, and (best-effort) the workspace dir. It tolerates column drift: the
-// state is whichever field is a known lifecycle word. A raw row supplies the
-// dir only when it contains exactly one absolute path; pack mounts can add
-// more paths, and guessing among them would mislabel a mount as the workspace.
-func parsePixBoxes(sbxLsOut string) []sbxBox {
-	var out []sbxBox
-	for _, ln := range strings.Split(sbxLsOut, "\n") {
-		fields := strings.Fields(ln)
-		if len(fields) < 1 {
-			continue
-		}
-		name := fields[0]
-		if !strings.HasPrefix(name, "pix-") {
-			continue
-		}
-		b := sbxBox{Name: name}
-		var absolutePaths []string
-		for _, f := range fields[1:] {
-			switch {
-			case knownSbxStates[strings.ToLower(f)]:
-				b.State = strings.ToLower(f)
-			case strings.HasPrefix(f, "/"):
-				absolutePaths = append(absolutePaths, f)
-			}
-		}
-		if len(absolutePaths) == 1 {
-			b.Dir = absolutePaths[0]
-		}
-		if b.State == "" {
-			b.State = "?"
-		}
-		out = append(out, b)
-	}
-	return out
-}
-
 // overlayReceiptDirs replaces best-effort sbx display data with Pix's trusted
 // create receipt. The receipt records the canonical workspace passed to the
 // successful create and is therefore authoritative when packs add other host
 // paths to the sbx listing.
-func overlayReceiptDirs(boxes []sbxBox, stateDir string) {
+func overlayReceiptDirs(boxes []workspace.SbxBox, stateDir string) {
 	for i := range boxes {
 		receipt, status, err := workspace.ReadMCPReceipt(stateDir, boxes[i].Name)
 		if err == nil && status == workspace.MCPStateOK && receipt != nil {
@@ -111,7 +60,7 @@ func runLs(argv []string) {
 	if timedOut || err != nil {
 		fatalSbx(fmt.Errorf("sbx ls failed: %v", err))
 	}
-	boxes := parsePixBoxes(out)
+	boxes := workspace.ParsePixBoxes(out)
 	if stateDir, err := workspace.MCPStateDirFn(); err == nil {
 		overlayReceiptDirs(boxes, stateDir)
 	}
@@ -182,7 +131,7 @@ func runRm(argv []string) {
 		for _, k := range keep {
 			keepSet[k] = true
 		}
-		for _, b := range parsePixBoxes(out) {
+		for _, b := range workspace.ParsePixBoxes(out) {
 			if !keepSet[b.Name] {
 				names = append(names, b.Name)
 			}

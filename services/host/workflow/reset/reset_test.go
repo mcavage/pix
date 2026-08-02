@@ -1,4 +1,4 @@
-package main
+package reset
 
 import (
 	"bytes"
@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/hostenv/hostenvtest"
 	"pix/host/rpc"
 	"pix/host/sys/systest"
 	"pix/host/workflow/upgrade"
@@ -28,8 +30,8 @@ func resetCfg() *config.Config {
 }
 
 // tempPaths lays out a fake config + data tree under root and returns the
-// resetPaths pointing at it. It seeds a file in each so a move is observable.
-func tempPaths(t *testing.T, root string) resetPaths {
+// Paths pointing at it. It seeds a file in each so a move is observable.
+func tempPaths(t *testing.T, root string) Paths {
 	t.Helper()
 	configDir := filepath.Join(root, "config", "pix")
 	dataRoot := filepath.Join(root, "data", ".pix")
@@ -43,7 +45,7 @@ func tempPaths(t *testing.T, root string) resetPaths {
 	writeFile(t, filepath.Join(configDir, "config.toml"), "x")
 	writeFile(t, filepath.Join(memDir, "memory.db"), "facts")
 	writeFile(t, filepath.Join(kbDir, "knowledge.db"), "index")
-	return resetPaths{configDir: configDir, dataRoot: dataRoot, memoryDir: memDir, knowledgeDir: kbDir}
+	return Paths{ConfigDir: configDir, DataRoot: dataRoot, MemoryDir: memDir, knowledgeDir: kbDir}
 }
 
 func writeFile(t *testing.T, path, body string) {
@@ -61,9 +63,9 @@ func exists(path string) bool {
 // TestResetPlan_KeepMemory: --keep-memory targets the knowledge dir but NOT the
 // memory dir or the whole data root; the default (no keep) moves the data root.
 func TestResetPlan_KeepMemory(t *testing.T) {
-	p := resetPaths{configDir: "/c", dataRoot: "/d", memoryDir: "/d/memory", knowledgeDir: "/d/knowledge"}
+	p := Paths{ConfigDir: "/c", DataRoot: "/d", MemoryDir: "/d/memory", knowledgeDir: "/d/knowledge"}
 
-	keep := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+	keep := Plan(resetCfg(), p, Opts{keepMemory: true})
 	if !keep.KeepMemory || keep.MemoryDir != "/d/memory" {
 		t.Fatalf("keep plan: KeepMemory=%v MemoryDir=%q", keep.KeepMemory, keep.MemoryDir)
 	}
@@ -80,7 +82,7 @@ func TestResetPlan_KeepMemory(t *testing.T) {
 		t.Error("config dir must always be backed up")
 	}
 
-	full := resetPlan(resetCfg(), p, resetOpts{})
+	full := Plan(resetCfg(), p, Opts{})
 	if !backupHas(full.Backups, "/d") {
 		t.Error("default reset must back up the whole data root (memory included)")
 	}
@@ -88,9 +90,9 @@ func TestResetPlan_KeepMemory(t *testing.T) {
 
 // TestResetPlan_Sbx: --sbx includes the sandbox + mcp actions; without it, none.
 func TestResetPlan_Sbx(t *testing.T) {
-	p := resetPaths{configDir: "/c", dataRoot: "/d", memoryDir: "/d/memory", knowledgeDir: "/d/knowledge"}
+	p := Paths{ConfigDir: "/c", DataRoot: "/d", MemoryDir: "/d/memory", knowledgeDir: "/d/knowledge"}
 
-	with := resetPlan(resetCfg(), p, resetOpts{sbx: true})
+	with := Plan(resetCfg(), p, Opts{sbx: true})
 	if !with.RemoveSandboxes {
 		t.Error("--sbx must set RemoveSandboxes")
 	}
@@ -98,7 +100,7 @@ func TestResetPlan_Sbx(t *testing.T) {
 		t.Errorf("MCPRemove = %v, want [%s slack]", with.MCPRemove, config.GWServerName)
 	}
 
-	without := resetPlan(resetCfg(), p, resetOpts{})
+	without := Plan(resetCfg(), p, Opts{})
 	if without.RemoveSandboxes || len(without.MCPRemove) != 0 {
 		t.Errorf("without --sbx: RemoveSandboxes=%v MCPRemove=%v", without.RemoveSandboxes, without.MCPRemove)
 	}
@@ -133,26 +135,26 @@ func TestExecuteReset_MovesConfigAndData(t *testing.T) {
 	called := stubStopServe(t)
 	root := t.TempDir()
 	p := tempPaths(t, root)
-	a := resetPlan(resetCfg(), p, resetOpts{})
+	a := Plan(resetCfg(), p, Opts{})
 
 	var buf bytes.Buffer
-	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+	if _, err := executeReset(a, DefaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if !*called {
 		t.Error("executeReset must stop host services via service.Stop")
 	}
-	if exists(p.configDir) {
+	if exists(p.ConfigDir) {
 		t.Error("config dir should have been moved aside")
 	}
-	if exists(p.dataRoot) {
+	if exists(p.DataRoot) {
 		t.Error("data root should have been moved aside")
 	}
-	if !exists(p.configDir + ".bak-" + fixedTS) {
+	if !exists(p.ConfigDir + ".bak-" + fixedTS) {
 		t.Error("config .bak backup missing")
 	}
-	if !exists(p.dataRoot + ".bak-" + fixedTS) {
+	if !exists(p.DataRoot + ".bak-" + fixedTS) {
 		t.Error("data .bak backup missing")
 	}
 }
@@ -164,36 +166,36 @@ func TestExecuteReset_PreservesOnePasswordRefs(t *testing.T) {
 	stubStopServe(t)
 	root := t.TempDir()
 	p := tempPaths(t, root)
-	writeFile(t, filepath.Join(p.configDir, "op-refs.env"), "ANTHROPIC_API_KEY=op://vault/item/field\n")
-	writeFile(t, filepath.Join(p.configDir, "hostmode.env"), "OPENAI_API_KEY=op://vault/item2/field\n")
-	a := resetPlan(resetCfg(), p, resetOpts{})
+	writeFile(t, filepath.Join(p.ConfigDir, "op-refs.env"), "ANTHROPIC_API_KEY=op://vault/item/field\n")
+	writeFile(t, filepath.Join(p.ConfigDir, "hostmode.env"), "OPENAI_API_KEY=op://vault/item2/field\n")
+	a := Plan(resetCfg(), p, Opts{})
 	a.PreserveRefs = true // exercise the lower-level optional preservation mechanism
 
 	var buf bytes.Buffer
-	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+	if _, err := executeReset(a, DefaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// The old config dir moved aside as usual — config.toml is still in the .bak.
-	if !exists(p.configDir + ".bak-" + fixedTS + string(filepath.Separator) + "config.toml") {
+	if !exists(p.ConfigDir + ".bak-" + fixedTS + string(filepath.Separator) + "config.toml") {
 		t.Error("config.toml should still be in the .bak")
 	}
 
 	// A FRESH config dir exists with just the ref files, not config.toml.
-	if !exists(p.configDir) {
+	if !exists(p.ConfigDir) {
 		t.Fatal("a fresh config dir should have been recreated to hold the preserved refs")
 	}
-	if exists(filepath.Join(p.configDir, "config.toml")) {
+	if exists(filepath.Join(p.ConfigDir, "config.toml")) {
 		t.Error("config.toml must NOT come back into the fresh config dir")
 	}
-	gotOP, err := os.ReadFile(filepath.Join(p.configDir, "op-refs.env"))
+	gotOP, err := os.ReadFile(filepath.Join(p.ConfigDir, "op-refs.env"))
 	if err != nil {
 		t.Fatalf("op-refs.env missing from fresh config dir: %v", err)
 	}
 	if string(gotOP) != "ANTHROPIC_API_KEY=op://vault/item/field\n" {
 		t.Errorf("op-refs.env content mismatch, got %q", gotOP)
 	}
-	gotHM, err := os.ReadFile(filepath.Join(p.configDir, "hostmode.env"))
+	gotHM, err := os.ReadFile(filepath.Join(p.ConfigDir, "hostmode.env"))
 	if err != nil {
 		t.Fatalf("hostmode.env missing from fresh config dir: %v", err)
 	}
@@ -202,7 +204,7 @@ func TestExecuteReset_PreservesOnePasswordRefs(t *testing.T) {
 	}
 
 	// And the same refs are STILL present in the .bak (additive, not a move).
-	bakOP, err := os.ReadFile(p.configDir + ".bak-" + fixedTS + string(filepath.Separator) + "op-refs.env")
+	bakOP, err := os.ReadFile(p.ConfigDir + ".bak-" + fixedTS + string(filepath.Separator) + "op-refs.env")
 	if err != nil {
 		t.Fatalf("op-refs.env should still be present in the .bak: %v", err)
 	}
@@ -221,15 +223,15 @@ func TestExecuteReset_NoRefsNoFreshConfigDir(t *testing.T) {
 	stubStopServe(t)
 	root := t.TempDir()
 	p := tempPaths(t, root) // seeds only config.toml, no ref files
-	a := resetPlan(resetCfg(), p, resetOpts{})
+	a := Plan(resetCfg(), p, Opts{})
 	a.PreserveRefs = true
 
 	var buf bytes.Buffer
-	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+	if _, err := executeReset(a, DefaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if exists(p.configDir) {
+	if exists(p.ConfigDir) {
 		t.Error("no ref files were present — a fresh config dir must NOT be recreated")
 	}
 	if strings.Contains(buf.String(), "kept 1Password refs") {
@@ -243,17 +245,17 @@ func TestExecuteReset_CleanResetDoesNotPreserveRefs(t *testing.T) {
 	stubStopServe(t)
 	root := t.TempDir()
 	p := tempPaths(t, root)
-	writeFile(t, filepath.Join(p.configDir, "op-refs.env"), "ANTHROPIC_API_KEY=op://vault/item/field\n")
-	a := resetPlan(resetCfg(), p, resetOpts{})
+	writeFile(t, filepath.Join(p.ConfigDir, "op-refs.env"), "ANTHROPIC_API_KEY=op://vault/item/field\n")
+	a := Plan(resetCfg(), p, Opts{})
 
 	var buf bytes.Buffer
-	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+	if _, err := executeReset(a, DefaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if exists(p.configDir) {
+	if exists(p.ConfigDir) {
 		t.Error("reset must NOT recreate the config dir to preserve refs")
 	}
-	if !exists(p.configDir + ".bak-" + fixedTS + string(filepath.Separator) + "op-refs.env") {
+	if !exists(p.ConfigDir + ".bak-" + fixedTS + string(filepath.Separator) + "op-refs.env") {
 		t.Error("the ref should still be in the .bak")
 	}
 }
@@ -265,21 +267,21 @@ func TestExecuteReset_KeepMemoryPreservesMemory(t *testing.T) {
 	root := t.TempDir()
 	p := tempPaths(t, root)
 	// An extra non-memory entry to prove the sweep catches "anything else".
-	other := filepath.Join(p.dataRoot, "cache")
+	other := filepath.Join(p.DataRoot, "cache")
 	if err := os.MkdirAll(other, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+	a := Plan(resetCfg(), p, Opts{keepMemory: true})
 
 	var buf bytes.Buffer
-	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+	if _, err := executeReset(a, DefaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !exists(p.memoryDir) {
+	if !exists(p.MemoryDir) {
 		t.Error("--keep-memory must preserve the memory dir")
 	}
-	if !exists(filepath.Join(p.memoryDir, "memory.db")) {
+	if !exists(filepath.Join(p.MemoryDir, "memory.db")) {
 		t.Error("captured facts must survive --keep-memory")
 	}
 	if exists(p.knowledgeDir) {
@@ -296,18 +298,18 @@ func TestExecuteReset_KeepMemoryPreservesMemory(t *testing.T) {
 	}
 }
 
-// TestRunResetCore_NonTTYNoYesRefuses: no TTY + no --yes => errResetNeedsYes and
+// TestRunResetCore_NonTTYNoYesRefuses: no TTY + no --yes => ErrResetNeedsYes and
 // NOTHING is moved.
 func TestRunResetCore_NonTTYNoYesRefuses(t *testing.T) {
 	root := t.TempDir()
 	p := tempPaths(t, root)
-	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
+	rio := cli.IO{In: strings.NewReader(""), Out: &bytes.Buffer{}, IsTTY: false}
 
-	err := runResetCore(resetCfg(), p, resetOpts{}, defaultResetFS(), noToolEnv(), rio, fixedNow)
-	if !errors.Is(err, errResetNeedsYes) {
-		t.Fatalf("want errResetNeedsYes, got %v", err)
+	err := RunCore(resetCfg(), p, Opts{}, DefaultResetFS(), noToolEnv(), rio, fixedNow)
+	if !errors.Is(err, ErrResetNeedsYes) {
+		t.Fatalf("want ErrResetNeedsYes, got %v", err)
 	}
-	if !exists(p.configDir) || !exists(p.dataRoot) {
+	if !exists(p.ConfigDir) || !exists(p.DataRoot) {
 		t.Error("a refused reset must not move anything")
 	}
 }
@@ -317,12 +319,12 @@ func TestRunResetCore_YesExecutes(t *testing.T) {
 	stubStopServe(t)
 	root := t.TempDir()
 	p := tempPaths(t, root)
-	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
+	rio := cli.IO{In: strings.NewReader(""), Out: &bytes.Buffer{}, IsTTY: false}
 
-	if err := runResetCore(resetCfg(), p, resetOpts{assumeYes: true}, defaultResetFS(), noToolEnv(), rio, fixedNow); err != nil {
+	if err := RunCore(resetCfg(), p, Opts{assumeYes: true}, DefaultResetFS(), noToolEnv(), rio, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if exists(p.configDir) {
+	if exists(p.ConfigDir) {
 		t.Error("--yes should have moved the config dir")
 	}
 }
@@ -353,9 +355,9 @@ func TestUninstall_RemovesBinSymlinks(t *testing.T) {
 	notOurs := filepath.Join(bin, "pix-host")
 	writeFile(t, notOurs, "hand-placed")
 
-	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
-	err := runUninstallCore(resetCfg(), p, []string{link, notOurs}, resetOpts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelInstaller},
-		defaultResetFS(), noToolEnv(), rio, fixedNow)
+	rio := cli.IO{In: strings.NewReader(""), Out: &bytes.Buffer{}, IsTTY: false}
+	err := runUninstallCore(resetCfg(), p, []string{link, notOurs}, Opts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelInstaller},
+		DefaultResetFS(), noToolEnv(), rio, fixedNow)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -365,7 +367,7 @@ func TestUninstall_RemovesBinSymlinks(t *testing.T) {
 	if !exists(notOurs) {
 		t.Error("uninstall must NOT remove a non-symlink we didn't install")
 	}
-	if exists(p.configDir) {
+	if exists(p.ConfigDir) {
 		t.Error("uninstall should also run the reset (config dir moved)")
 	}
 }
@@ -375,13 +377,13 @@ func TestUninstall_NonTTYNoYesRefuses(t *testing.T) {
 	root := t.TempDir()
 	p := tempPaths(t, root)
 	link := filepath.Join(root, "pix")
-	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
+	rio := cli.IO{In: strings.NewReader(""), Out: &bytes.Buffer{}, IsTTY: false}
 
-	err := runUninstallCore(resetCfg(), p, []string{link}, resetOpts{}, upgrade.Provenance{Channel: upgrade.ChannelInstaller}, defaultResetFS(), noToolEnv(), rio, fixedNow)
-	if !errors.Is(err, errResetNeedsYes) {
-		t.Fatalf("want errResetNeedsYes, got %v", err)
+	err := runUninstallCore(resetCfg(), p, []string{link}, Opts{}, upgrade.Provenance{Channel: upgrade.ChannelInstaller}, DefaultResetFS(), noToolEnv(), rio, fixedNow)
+	if !errors.Is(err, ErrResetNeedsYes) {
+		t.Fatalf("want ErrResetNeedsYes, got %v", err)
 	}
-	if !exists(p.configDir) {
+	if !exists(p.ConfigDir) {
 		t.Error("a refused uninstall must not move anything")
 	}
 }
@@ -397,9 +399,9 @@ func TestRunUninstallHomebrewDoesNotRemoveOwnedOrDuplicateBinaries(t *testing.T)
 	writeFile(t, localPix, "curl-installed copy")
 
 	var out bytes.Buffer
-	rio := setupIO{in: strings.NewReader(""), out: &out, isTTY: false}
-	err := runUninstallCore(resetCfg(), p, []string{localPix}, resetOpts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelHomebrew},
-		defaultResetFS(), noToolEnv(), rio, fixedNow)
+	rio := cli.IO{In: strings.NewReader(""), Out: &out, IsTTY: false}
+	err := runUninstallCore(resetCfg(), p, []string{localPix}, Opts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelHomebrew},
+		DefaultResetFS(), noToolEnv(), rio, fixedNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,27 +417,27 @@ func TestRunUninstallHomebrewDoesNotRemoveOwnedOrDuplicateBinaries(t *testing.T)
 
 // TestParseResetArgs covers reset flags, help, and unknown input.
 func TestParseResetArgs(t *testing.T) {
-	if o, err := parseResetArgs([]string{"--keep-memory", "--purge-data", "--sbx", "--yes"}, true, true); err != nil ||
-		!o.keepMemory || !o.purgeData || !o.sbx || !o.assumeYes {
+	if o, err := ParseArgs([]string{"--keep-memory", "--purge-data", "--sbx", "--yes"}, true, true); err != nil ||
+		!o.keepMemory || !o.PurgeData || !o.sbx || !o.assumeYes {
 		t.Fatalf("reset flags: %+v err=%v", o, err)
 	}
-	if o, err := parseResetArgs([]string{"-h"}, true, false); err != nil || !o.help {
+	if o, err := ParseArgs([]string{"-h"}, true, false); err != nil || !o.Help {
 		t.Errorf("help: %+v err=%v", o, err)
 	}
-	if _, err := parseResetArgs([]string{"--nope"}, true, false); err == nil {
+	if _, err := ParseArgs([]string{"--nope"}, true, false); err == nil {
 		t.Error("unknown flag must error")
 	}
 }
 
 // TestExecuteReset_MoveFailureReturnsError: a failing rename makes executeReset
-// return an error, and runResetCore propagates it (non-zero exit for the CLI).
+// return an error, and RunCore propagates it (non-zero exit for the CLI).
 func TestExecuteReset_MoveFailureReturnsError(t *testing.T) {
 	stubStopServe(t)
 	root := t.TempDir()
 	p := tempPaths(t, root)
-	a := resetPlan(resetCfg(), p, resetOpts{})
+	a := Plan(resetCfg(), p, Opts{})
 
-	fsys := defaultResetFS()
+	fsys := DefaultResetFS()
 	fsys.rename = func(_, _ string) error { return errors.New("disk full") }
 
 	var buf bytes.Buffer
@@ -444,9 +446,9 @@ func TestExecuteReset_MoveFailureReturnsError(t *testing.T) {
 		t.Fatal("a failed move must make executeReset return an error, not report success")
 	}
 
-	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
-	if rErr := runResetCore(resetCfg(), p, resetOpts{assumeYes: true}, fsys, noToolEnv(), rio, fixedNow); rErr == nil {
-		t.Error("runResetCore must return non-nil when a move failed")
+	rio := cli.IO{In: strings.NewReader(""), Out: &bytes.Buffer{}, IsTTY: false}
+	if rErr := RunCore(resetCfg(), p, Opts{assumeYes: true}, fsys, noToolEnv(), rio, fixedNow); rErr == nil {
+		t.Error("RunCore must return non-nil when a move failed")
 	}
 }
 
@@ -473,11 +475,11 @@ func TestUninstall_BackupFailureKeepsSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fsys := defaultResetFS()
+	fsys := DefaultResetFS()
 	fsys.rename = func(_, _ string) error { return errors.New("backup failed") }
 
-	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
-	err := runUninstallCore(resetCfg(), p, []string{link}, resetOpts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelInstaller},
+	rio := cli.IO{In: strings.NewReader(""), Out: &bytes.Buffer{}, IsTTY: false}
+	err := runUninstallCore(resetCfg(), p, []string{link}, Opts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelInstaller},
 		fsys, noToolEnv(), rio, fixedNow)
 	if err == nil {
 		t.Fatal("uninstall must return the backup error")
@@ -493,26 +495,26 @@ func TestExecuteReset_ServeUpAbortsDataMove(t *testing.T) {
 	stubStopServe(t)
 	root := t.TempDir()
 	p := tempPaths(t, root)
-	a := resetPlan(resetCfg(), p, resetOpts{})
+	a := Plan(resetCfg(), p, Opts{})
 
-	env := fakeEnv{present: map[string]bool{}, ports: map[int]bool{rpc.MemoryPortDefault: true}}.env()
+	env := hostenvtest.Env{Present: map[string]bool{}, Ports: map[int]bool{rpc.MemoryPortDefault: true}}.Build()
 	var buf bytes.Buffer
-	_, err := executeReset(a, defaultResetFS(), env, &buf, fixedNow)
+	_, err := executeReset(a, DefaultResetFS(), env, &buf, fixedNow)
 	if err == nil {
 		t.Fatal("serve still up must make executeReset return an error")
 	}
-	if exists(p.dataRoot + ".bak-" + fixedTS) {
+	if exists(p.DataRoot + ".bak-" + fixedTS) {
 		t.Error("the data dir must NOT move while serve is up")
 	}
-	if !exists(p.dataRoot) {
+	if !exists(p.DataRoot) {
 		t.Error("the data dir must be left in place when the move is blocked")
 	}
-	if exists(p.configDir) {
+	if exists(p.ConfigDir) {
 		t.Error("the config dir (safe) should still be backed up")
 	}
 
 	// --force overrides the guard: the data dir moves even with serve up.
-	aForce := resetPlan(resetCfg(), tempPaths(t, t.TempDir()), resetOpts{force: true})
+	aForce := Plan(resetCfg(), tempPaths(t, t.TempDir()), Opts{force: true})
 	if !aForce.Force {
 		t.Error("--force must set Force on the plan")
 	}
@@ -534,11 +536,11 @@ func TestExecuteReset_KeepMemoryCustomDBDir(t *testing.T) {
 		}
 	}
 	writeFile(t, filepath.Join(customMem, "memory.db"), "facts")
-	p := resetPaths{configDir: filepath.Join(root, "config"), dataRoot: dataRoot, memoryDir: customMem, knowledgeDir: kbDir}
-	a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+	p := Paths{ConfigDir: filepath.Join(root, "config"), DataRoot: dataRoot, MemoryDir: customMem, knowledgeDir: kbDir}
+	a := Plan(resetCfg(), p, Opts{keepMemory: true})
 
 	var buf bytes.Buffer
-	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+	if _, err := executeReset(a, DefaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !exists(customMem) || !exists(filepath.Join(customMem, "memory.db")) {
@@ -578,17 +580,17 @@ func TestExecuteReset_KeepMemoryLooseDBInRoot(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(siblingDir, "knowledge.db"), "index")
 
-	p := resetPaths{
-		configDir:    filepath.Join(root, "config"),
-		dataRoot:     dataRoot,
-		memoryDir:    dataRoot, // dir(MEMORY_DB) == dataRoot
+	p := Paths{
+		ConfigDir:    filepath.Join(root, "config"),
+		DataRoot:     dataRoot,
+		MemoryDir:    dataRoot, // dir(MEMORY_DB) == dataRoot
 		memoryDB:     memDB,    // the loose db file directly in the root
 		knowledgeDir: siblingDir,
 	}
-	a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+	a := Plan(resetCfg(), p, Opts{keepMemory: true})
 
 	var buf bytes.Buffer
-	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+	if _, err := executeReset(a, DefaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// The loose db + its -wal are STILL present, untouched.
@@ -627,7 +629,7 @@ func TestMoveAside_NoOverwrite(t *testing.T) {
 	collision := src + ".bak-" + fixedTS
 	writeFile(t, collision, "existing backup")
 
-	dest, err := moveAside(defaultResetFS(), src, 1700000000)
+	dest, err := moveAside(DefaultResetFS(), src, 1700000000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -679,9 +681,9 @@ func TestUninstall_LeavesUnrelatedSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
-	if err := runUninstallCore(resetCfg(), p, []string{linkA, linkB}, resetOpts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelInstaller},
-		defaultResetFS(), noToolEnv(), rio, fixedNow); err != nil {
+	rio := cli.IO{In: strings.NewReader(""), Out: &bytes.Buffer{}, IsTTY: false}
+	if err := runUninstallCore(resetCfg(), p, []string{linkA, linkB}, Opts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelInstaller},
+		DefaultResetFS(), noToolEnv(), rio, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !exists(linkA) {
@@ -690,7 +692,7 @@ func TestUninstall_LeavesUnrelatedSymlinks(t *testing.T) {
 	if !exists(linkB) {
 		t.Error("uninstall must NOT remove a deceptive substring symlink (/opt/pix-ish-wrapper)")
 	}
-	out := rio.out.(*bytes.Buffer).String()
+	out := rio.Out.(*bytes.Buffer).String()
 	if !strings.Contains(out, "not a pix binary") {
 		t.Errorf("want a 'left in place' report, got %q", out)
 	}
@@ -717,16 +719,16 @@ func TestExecuteReset_CustomDBOutsideRootMovesFileOnly(t *testing.T) {
 	unrelated := filepath.Join(docs, "taxes.pdf")
 	writeFile(t, unrelated, "important")
 
-	p := resetPaths{
-		configDir: filepath.Join(root, "config"),
-		dataRoot:  dataRoot,
-		memoryDir: docs,  // dir(MEMORY_DB)
+	p := Paths{
+		ConfigDir: filepath.Join(root, "config"),
+		DataRoot:  dataRoot,
+		MemoryDir: docs,  // dir(MEMORY_DB)
 		memoryDB:  memDB, // the custom file path
 	}
-	a := resetPlan(resetCfg(), p, resetOpts{})
+	a := Plan(resetCfg(), p, Opts{})
 
 	var buf bytes.Buffer
-	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+	if _, err := executeReset(a, DefaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// The db file + its -wal moved aside...
@@ -779,17 +781,17 @@ func TestExecuteReset_KeepMemoryCustomKnowledgeDBOutsideRoot(t *testing.T) {
 	unrelated := filepath.Join(docs, "taxes.pdf")
 	writeFile(t, unrelated, "important")
 
-	p := resetPaths{
-		configDir:    filepath.Join(root, "config"),
-		dataRoot:     dataRoot,
-		memoryDir:    memoryDir,
+	p := Paths{
+		ConfigDir:    filepath.Join(root, "config"),
+		DataRoot:     dataRoot,
+		MemoryDir:    memoryDir,
 		knowledgeDir: docs, // dir(KNOWLEDGE_DB)
 		knowledgeDB:  kbDB, // the custom file path
 	}
-	a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+	a := Plan(resetCfg(), p, Opts{keepMemory: true})
 
 	var buf bytes.Buffer
-	if _, err := executeReset(a, defaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
+	if _, err := executeReset(a, DefaultResetFS(), noToolEnv(), &buf, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// The knowledge db file + its -wal moved aside...
@@ -830,21 +832,21 @@ func TestExecuteReset_KnowledgePortUpAbortsDataMove(t *testing.T) {
 	stubStopServe(t)
 	root := t.TempDir()
 	p := tempPaths(t, root)
-	a := resetPlan(resetCfg(), p, resetOpts{})
+	a := Plan(resetCfg(), p, Opts{})
 
-	env := fakeEnv{present: map[string]bool{}, ports: map[int]bool{rpc.KnowledgePortDefault: true}}.env()
+	env := hostenvtest.Env{Present: map[string]bool{}, Ports: map[int]bool{rpc.KnowledgePortDefault: true}}.Build()
 	var buf bytes.Buffer
-	_, err := executeReset(a, defaultResetFS(), env, &buf, fixedNow)
+	_, err := executeReset(a, DefaultResetFS(), env, &buf, fixedNow)
 	if err == nil {
 		t.Fatal("a knowledge-only serve still up must block the data move")
 	}
-	if exists(p.dataRoot + ".bak-" + fixedTS) {
+	if exists(p.DataRoot + ".bak-" + fixedTS) {
 		t.Error("the data dir must NOT move while the knowledge port is up")
 	}
-	if !exists(p.dataRoot) {
+	if !exists(p.DataRoot) {
 		t.Error("the data dir must be left in place when the move is blocked")
 	}
-	if exists(p.configDir) {
+	if exists(p.ConfigDir) {
 		t.Error("the config dir (safe) should still be backed up")
 	}
 }
@@ -856,9 +858,9 @@ func TestExecuteReset_KeepMemoryReadDirErrorSurfaces(t *testing.T) {
 	stubStopServe(t)
 	root := t.TempDir()
 	p := tempPaths(t, root)
-	a := resetPlan(resetCfg(), p, resetOpts{keepMemory: true})
+	a := Plan(resetCfg(), p, Opts{keepMemory: true})
 
-	fsys := defaultResetFS()
+	fsys := DefaultResetFS()
 	fsys.readDir = func(string) ([]os.DirEntry, error) {
 		return nil, errors.New("permission denied")
 	}
@@ -877,7 +879,7 @@ func TestExecuteReset_KeepMemoryReadDirErrorSurfaces(t *testing.T) {
 // commands) without touching the host. The serve-stop no longer probes PATH (it
 // is pidfile-based via service.Stop), so this env exercises the sbx path only.
 func noToolEnv() hostenv.Env {
-	return fakeEnv{present: map[string]bool{}, output: map[string]string{}}.env()
+	return hostenvtest.Env{Present: map[string]bool{}, Output: map[string]string{}}.Build()
 }
 
 // TestResolveResetPaths_RelativeMemoryDBAbsolute gates round-6: a relative
@@ -891,12 +893,12 @@ func TestResolveResetPaths_RelativeMemoryDBAbsolute(t *testing.T) {
 		}
 		return ""
 	}}}
-	p := resolveResetPaths(env)
+	p := ResolveResetPaths(env)
 	if !filepath.IsAbs(p.memoryDB) {
 		t.Errorf("memoryDB = %q, want absolute", p.memoryDB)
 	}
-	if !filepath.IsAbs(p.memoryDir) {
-		t.Errorf("memoryDir = %q, want absolute", p.memoryDir)
+	if !filepath.IsAbs(p.MemoryDir) {
+		t.Errorf("memoryDir = %q, want absolute", p.MemoryDir)
 	}
 }
 
@@ -937,9 +939,9 @@ func TestExecuteReset_ClearsRuntimeFilesAndRestarts(t *testing.T) {
 		return false
 	}
 
-	a := resetActions{RuntimeFiles: []string{pid, lock}}
+	a := Actions{RuntimeFiles: []string{pid, lock}}
 	var buf bytes.Buffer
-	if _, err := executeReset(a, defaultResetFS(), env, &buf, fixedNow); err != nil {
+	if _, err := executeReset(a, DefaultResetFS(), env, &buf, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	for _, p := range []string{pid, lock} {
@@ -958,7 +960,7 @@ func TestExecuteReset_NoRestartWhenDown(t *testing.T) {
 	restarted := stubRestartServe(t)
 	env := noToolEnv() // dial nil => serveStillUp false
 	var buf bytes.Buffer
-	if _, err := executeReset(resetActions{}, defaultResetFS(), env, &buf, fixedNow); err != nil {
+	if _, err := executeReset(Actions{}, DefaultResetFS(), env, &buf, fixedNow); err != nil {
 		t.Fatal(err)
 	}
 	if *restarted {

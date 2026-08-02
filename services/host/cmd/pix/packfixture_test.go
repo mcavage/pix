@@ -69,3 +69,20 @@ func brokenPackLock(t *testing.T, root string) {
 		t.Fatal(err)
 	}
 }
+
+// writeFile is a three-line test write. reset has its own copy; sharing one
+// across a package boundary costs more than the duplication.
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func exists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
+}

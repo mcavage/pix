@@ -31,6 +31,7 @@ import (
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/sys/systest"
+	"pix/host/workflow/onboard"
 	"pix/host/workspace"
 )
 
@@ -188,7 +189,7 @@ func TestReconcileOnboarding_CatalogGateLeavesFileAndConfig(t *testing.T) {
 	env := catalogGateEnv(t, map[string]string{"sbx mcp ls": "atlassian\n"})
 
 	var out bytes.Buffer
-	reconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false)
+	onboard.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false, onboardDeps())
 
 	if _, err := os.Stat(fp); err != nil {
 		t.Errorf("proposal file must be left in place on a gate failure, err=%v", err)
@@ -208,15 +209,15 @@ func TestReconcileOnboarding_CatalogGateLeavesFileAndConfig(t *testing.T) {
 // TestOnboardCatalogAllowlist_IsTheShippedCatalog: the accepted catalog names
 // derive from mcp.McpCatalogNames — no independent list that can drift.
 func TestOnboardCatalogAllowlist_IsTheShippedCatalog(t *testing.T) {
-	if len(onboardMCPCatalogAllow) != len(mcp.McpCatalogNames) {
-		t.Fatalf("allowlist (%v) must equal mcp.McpCatalogNames (%v)", onboardMCPCatalogAllow, mcp.McpCatalogNames)
+	if len(onboard.MCPCatalogAllow) != len(mcp.McpCatalogNames) {
+		t.Fatalf("allowlist (%v) must equal mcp.McpCatalogNames (%v)", onboard.MCPCatalogAllow, mcp.McpCatalogNames)
 	}
 	for n := range mcp.McpCatalogNames {
-		if !onboardMCPCatalogAllow[n] {
+		if !onboard.MCPCatalogAllow[n] {
 			t.Errorf("shipped catalog name %q missing from the onboarding allowlist", n)
 		}
 	}
-	if onboardMCPCatalogAllow["linear"] {
+	if onboard.MCPCatalogAllow["linear"] {
 		t.Error("\"linear\" is not a shipped catalog server and must not be accepted (the drift finding 8 removes)")
 	}
 }

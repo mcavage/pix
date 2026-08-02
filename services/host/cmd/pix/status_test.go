@@ -561,7 +561,7 @@ func TestStatusMCPLoadTodoQuotesWorkspace(t *testing.T) {
 }
 
 func TestParseSandboxes(t *testing.T) {
-	out := parseSandboxes("NAME STATUS\npix-a running\nfoo bar\npix-b stopped\n")
+	out := workspace.ParseSandboxes("NAME STATUS\npix-a running\nfoo bar\npix-b stopped\n")
 	if len(out) != 2 {
 		t.Fatalf("got %d, want 2: %v", len(out), out)
 	}

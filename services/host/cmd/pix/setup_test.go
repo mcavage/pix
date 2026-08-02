@@ -17,6 +17,7 @@ import (
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/sys/systest"
+	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
 )
 
@@ -151,14 +152,14 @@ func TestValidateSetupSemantics_RejectsBeforeMutationBoundary(t *testing.T) {
 
 	cases := []struct {
 		name string
-		opts onboardOpts
+		opts onboard.Opts
 		want string
 	}{
-		{"with without pack", onboardOpts{withSetup: []string{"oauth"}}, "--with requires --pack"},
-		{"account without opt-in", onboardOpts{account: "me@example.com"}, "--account requires --google-workspace"},
-		{"credentials without opt-in", onboardOpts{credentials: "/tmp/client.json"}, "--credentials requires --google-workspace"},
-		{"unknown mcp", onboardOpts{mcp: []string{"not-a-real-server"}}, "not an allowlisted server"},
-		{"model whitespace", onboardOpts{model: "bad model"}, "must not contain whitespace"},
+		{"with without pack", onboard.Opts{WithSetup: []string{"oauth"}}, "--with requires --pack"},
+		{"account without opt-in", onboard.Opts{Account: "me@example.com"}, "--account requires --google-workspace"},
+		{"credentials without opt-in", onboard.Opts{Credentials: "/tmp/client.json"}, "--credentials requires --google-workspace"},
+		{"unknown mcp", onboard.Opts{Mcp: []string{"not-a-real-server"}}, "not an allowlisted server"},
+		{"model whitespace", onboard.Opts{Model: "bad model"}, "must not contain whitespace"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -175,15 +176,15 @@ func TestValidateSetupSemantics_RejectsBeforeMutationBoundary(t *testing.T) {
 }
 
 func TestValidateSetupSemantics_AcceptsValidCatalogAndGoogleOptions(t *testing.T) {
-	opts := onboardOpts{
-		googleWorkspace: true,
-		account:         "me@example.com",
-		credentials:     "/tmp/client.json",
-		packs:           []string{"team-pack"},
-		withSetup:       []string{"oauth"},
-		mcp:             []string{"notion"},
-		model:           "qwen3.5:9b",
-		knowledge:       "/tmp/knowledge",
+	opts := onboard.Opts{
+		GoogleWorkspace: true,
+		Account:         "me@example.com",
+		Credentials:     "/tmp/client.json",
+		Packs:           []string{"team-pack"},
+		WithSetup:       []string{"oauth"},
+		Mcp:             []string{"notion"},
+		Model:           "qwen3.5:9b",
+		Knowledge:       "/tmp/knowledge",
 	}
 	if err := validateSetupSemantics(opts, &config.Config{}, hostenv.Env{System: &systest.Fake{}}, noHostResolver); err != nil {
 		t.Fatalf("valid setup semantics rejected: %v", err)
@@ -848,7 +849,7 @@ func TestSetupMutationOrder_FixedRiskiestLast(t *testing.T) {
 		t.Errorf("setupMutationOrder = %s, want %s", got, want)
 	}
 	env := modelsSetupEnv(t, &ollamaWorld{})
-	opts, err := parseOnboardArgs([]string{"--yes"})
+	opts, err := onboard.ParseOnboardArgs([]string{"--yes"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -964,7 +965,7 @@ func TestSetupReport_NeverReadsInventory(t *testing.T) {
 // AC-P0-308: `--no-agent` is setup's own flag and is never forwarded to the
 // host-config parser (which would reject it as unknown).
 func TestSetupNoAgent_IsSetupsOwnFlag(t *testing.T) {
-	if _, err := parseOnboardArgs([]string{"--no-agent"}); err == nil {
+	if _, err := onboard.ParseOnboardArgs([]string{"--no-agent"}); err == nil {
 		t.Error("--no-agent must be consumed by setup itself, not the host-config parser")
 	}
 	if !strings.Contains(setupUsage, "--no-agent") {

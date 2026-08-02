@@ -16,7 +16,6 @@ import (
 	"pix/host/hostenv"
 	"pix/host/launcher"
 	"pix/host/mcp"
-	"pix/host/monitor/tui"
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/workspace"
@@ -1615,21 +1614,6 @@ func removeTaskArtifacts(co, metaPath string, removeAll func(string) error, remo
 // OKF stays a deliberate `enrich` act.
 // ---------------------------------------------------------------------------
 
-// taskArtifactRoot is the durable base dir for harvested artifacts:
-// $XDG_DATA_HOME/pix/artifacts (default ~/.local/share/pix/artifacts).
-// Deliberately under DATA_HOME, not the STATE tree the clones live in, so
-// `state reset`/`uninstall` never reach it.
-func taskArtifactRoot() string {
-	if x := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); x != "" {
-		return filepath.Join(x, "pix", "artifacts")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
-	return filepath.Join(home, ".local", "share", "pix", "artifacts")
-}
-
 // artifactExts is the default set of doc file extensions harvest rescues.
 // Overridable via PIX_TASK_ARTIFACT_EXTS (comma-separated, with or without
 // the leading dot).
@@ -1843,7 +1827,7 @@ func expandHarvestDir(co, rel, code string) ([]harvestFile, error) {
 }
 
 // harvestArtifacts copies the matching untracked/ignored/modified docs from co
-// into a fresh timestamped dir under taskArtifactRoot()/<repoDir>/<name>/<ts>/,
+// into a fresh timestamped dir under workspace.TaskArtifactRoot()/<repoDir>/<name>/<ts>/,
 // writes a manifest.json beside them, and returns the destination dir ("" when
 // nothing matched). It is idempotent: each call writes a NEW timestamped dir, so
 // re-running never clobbers a prior capture. It returns a NON-NIL error when
@@ -1858,8 +1842,8 @@ func harvestArtifacts(env hostenv.Env, w io.Writer, meta taskMeta, repoDir, co, 
 		return "", nil
 	}
 	// repoDir is already path-safe (label+repokey); name is raw user input, so it
-	// is sanitized. pruneArtifacts walks the same taskArtifactRoot()/<repoDir> tree.
-	parent := filepath.Join(taskArtifactRoot(), repoDir, sanitizeTaskName(name))
+	// is sanitized. pruneArtifacts walks the same workspace.TaskArtifactRoot()/<repoDir> tree.
+	parent := filepath.Join(workspace.TaskArtifactRoot(), repoDir, sanitizeTaskName(name))
 	dest, err := freshSnapshotDir(parent)
 	if err != nil {
 		return "", fmt.Errorf("create artifacts dir: %w", err)
@@ -2393,14 +2377,14 @@ func runTaskGc(env hostenv.Env, argv []string) {
 }
 
 // pruneArtifacts deletes harvested artifact snapshot dirs older than days under
-// taskArtifactRoot()/<repoDir>/<task>/<ts>/, by the snapshot dir's mtime. Pure
+// workspace.TaskArtifactRoot()/<repoDir>/<task>/<ts>/, by the snapshot dir's mtime. Pure
 // age-gated deletion (the snapshot was already the rescue copy). Returns the
 // count pruned (or that WOULD be pruned under dryRun). days <= 0 disables it.
 func pruneArtifacts(repoDir string, days int, dryRun bool) int {
 	if days <= 0 {
 		return 0
 	}
-	base := filepath.Join(taskArtifactRoot(), repoDir)
+	base := filepath.Join(workspace.TaskArtifactRoot(), repoDir)
 	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 	pruned := 0
 	tasks, err := os.ReadDir(base)
@@ -2525,28 +2509,6 @@ func taskStateSummary() (tasks int, artifactBytes int64) {
 			}
 		}
 	}
-	_, artifactBytes = artifactDirSize(taskArtifactRoot())
+	_, artifactBytes = sys.DirSize(workspace.TaskArtifactRoot())
 	return tasks, artifactBytes
 }
-
-// artifactDirSize sums the file count + byte size under root (best-effort; an
-// unreadable tree or a missing root contributes 0). Shared by the status summary
-// and uninstall's "keeping artifacts" notice.
-func artifactDirSize(root string) (files int, bytes int64) {
-	_ = filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		files++
-		if info, err := d.Info(); err == nil {
-			bytes += info.Size()
-		}
-		return nil
-	})
-	return files, bytes
-}
-
-// humanBytes renders a byte count as a short human string (B/KB/MB/GB).
-// humanBytes now lives in monitor/tui (two packages need it; a second copy is
-// how two renderers come to disagree about what "1.0MB" means).
-func humanBytes(n int64) string { return tui.HumanBytes(n) }

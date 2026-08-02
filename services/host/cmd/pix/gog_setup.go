@@ -70,6 +70,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/mcp"
 	"pix/host/secret"
+	"pix/host/workflow/onboard"
 )
 
 // The `gog` verb layer that used to live here (gogUsage, gogSetupUsage,
@@ -257,7 +258,7 @@ func gogAuthRouteCapable(env hostenv.Env, route gogAuthRoute) (bool, string) {
 }
 
 // gogSetupAccountHealthy reports whether acct's gog auth is ALREADY confirmed
-// healthy: interactive auth (gogAuthed) passes, and — only when the headless
+// healthy: interactive auth (onboard.GogAuthed) passes, and — only when the headless
 // path can actually be probed (op installed + an op-refs.env resolves) —
 // headless tools are also non-empty. When headless can't be probed at all it
 // is NOT counted against health here (macOS system keychain setups skip that
@@ -266,7 +267,7 @@ func gogAuthRouteCapable(env hostenv.Env, route gogAuthRoute) (bool, string) {
 // decide whether to print the `pix gworkspace setup` hint — it never runs the
 // OAuth flow itself.
 func gogSetupAccountHealthy(env hostenv.Env, acct string) bool {
-	if !gogAuthed(env, acct) {
+	if !onboard.GogAuthed(env, acct) {
 		return false
 	}
 	opRefs := secret.FindOpRefs(env)
@@ -444,7 +445,7 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 	runInteractive := env.RunInteractive
 
 	profileReady := !createDocs || cfg.GoogleWorkspaceAccess == gwAccessCreateDocs
-	if gogAuthed(env, account) && profileReady {
+	if onboard.GogAuthed(env, account) && profileReady {
 		fmt.Fprintf(out, "Existing Google authorization found for %s; reusing it.\n", account)
 	} else {
 		if createDocs {

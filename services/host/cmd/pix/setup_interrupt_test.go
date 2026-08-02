@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/hostenv"
+	"pix/host/workflow/onboard"
 	"regexp"
 	"strings"
 	"testing"
@@ -58,7 +59,7 @@ func scrubbed(s string) string { return tmpPath.ReplaceAllString(s, "<tmp>") }
 // SIGINT delivered immediately after step n.
 func runMutationPrefix(t *testing.T, env hostenv.Env, n int) {
 	t.Helper()
-	opts, err := parseOnboardArgs([]string{"--yes", "--pull-models"})
+	opts, err := onboard.ParseOnboardArgs([]string{"--yes", "--pull-models"})
 	if err != nil {
 		t.Fatal(err)
 	}

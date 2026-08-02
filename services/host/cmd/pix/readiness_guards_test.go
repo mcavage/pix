@@ -6,6 +6,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"pix/host/hostenv"
 	"pix/host/readiness"
 	"sort"
@@ -29,19 +31,21 @@ var errNotFoundFixture = errors.New("not found")
 // readinessRenderers is every file that PRINTS readiness to a user. They may
 // not spell a verdict glyph themselves: the mapping lives in exactly one place
 // (readiness_render.go) or two commands start disagreeing about the same fact.
-var readinessRenderers = []string{
-	"doctor_render.go",
-	"status.go",
-	"run.go",
-	"onboard.go",
-	"onboard_helpers.go",
-	"hoststate.go",
-	"gworkspace.go",
-	"readiness_launch.go",
-	"readiness_service.go",
-	"../../readiness/snapshot.go",
-	"../../readiness/types.go",
-}
+// glyphOwner is the ONE file allowed to spell a verdict glyph: the vocabulary
+// itself.
+const glyphOwner = "readiness/render.go"
+
+// glyphExempt is out-of-scope, not forgiven. setup.go both BUILDS a readiness
+// report (so it matches the in-scope test below) and prints its own
+// step-progress lines — "  ✗ could not write ref to op-refs.env" — which are
+// not verdicts about a requirement and were never what this guard is for. The
+// hand-written file list this test used to carry did not include setup.go
+// either; deriving the scope newly catches it.
+//
+// The list may only SHRINK, like drainingPackages in arch_test.go. Routing
+// those progress lines through the shared vocabulary would be a real
+// improvement; adding a second entry should require arguing for it.
+var glyphExempt = map[string]bool{"cmd/pix/setup.go": true}
 
 // verdictGlyphs is the closed set of markers the vocabulary owns.
 var verdictGlyphs = []string{"✓", "✗", "⚠", "⊘"}
@@ -52,8 +56,58 @@ var verdictGlyphs = []string{"✓", "✗", "⚠", "⊘"}
 // there: the moment a renderer spells its own glyph, the single vocabulary is
 // no longer single.
 func TestRendererPurity(t *testing.T) {
-	for _, file := range readinessRenderers {
-		node, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+	root := filepath.Join("..", "..") // the test runs in cmd/pix
+
+	// A "readiness renderer" is any production file that IMPORTS the readiness
+	// package — derived, not listed. The previous version named eleven files by
+	// hand and so silently stopped covering onboard.go, status.go and run.go as
+	// those moved into packages. Widening it to the whole module was worse: it
+	// caught sixty-eight glyphs in setup/reset/secret PROGRESS output, which was
+	// never what this guards. The import is the honest definition of in-scope.
+	var files []string
+	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && path != root && (d.Name() == "testdata" || strings.HasPrefix(d.Name(), ".")) {
+			return filepath.SkipDir
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		if rel == glyphOwner || glyphExempt[rel] {
+			return nil
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		// In scope = builds or renders the readiness MODEL, identified by
+		// mentioning one of its aggregate types. Importing the package is too
+		// broad: setup and setup_models import it for verdict CONSTANTS while
+		// printing their own step-progress ("  ✗ ollama pull failed"), which is
+		// not verdict rendering and never was in this guard's scope.
+		src := string(b)
+		renders := strings.HasPrefix(rel, "readiness/")
+		for _, t := range []string{"readiness.Group", "readiness.Report", "readiness.Snapshot"} {
+			if strings.Contains(src, t) {
+				renders = true
+			}
+		}
+		if !renders {
+			return nil
+		}
+		files = append(files, rel)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(files) < 8 {
+		t.Fatalf("found only %d readiness renderers — the walk is broken, not the code", len(files))
+	}
+	for _, file := range files {
+		node, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, file), nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", file, err)
 		}
@@ -73,6 +127,15 @@ func TestRendererPurity(t *testing.T) {
 			}
 			return true
 		})
+	}
+}
+
+// TestGlyphExemptIsShrinking guards the exemption the way
+// TestArchitecture_DrainingListIsShrinking guards its own: a list of "allowed
+// to break the rule" stays honest only while growing it is deliberate.
+func TestGlyphExemptIsShrinking(t *testing.T) {
+	if len(glyphExempt) > 1 {
+		t.Errorf("glyphExempt has %d entries; it may only shrink", len(glyphExempt))
 	}
 }
 

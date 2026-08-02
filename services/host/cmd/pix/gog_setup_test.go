@@ -742,7 +742,7 @@ func TestGogSetup_ExpandsPromptedHomeCredentialsPath(t *testing.T) {
 // only shows up in the recorded runInteractive argv, which no prior test
 // captured). gogSetup deliberately shares ONE bufio.Reader across both
 // prompts for exactly this reason (see its doc comment): promptLine's
-// per-call `bufio.NewReader(sio.in)` would silently drop the second answer
+// per-call `bufio.NewReader(sio.In)` would silently drop the second answer
 // here, because the first call's internal read-ahead can consume the whole
 // buffered input (including the credentials line) from the underlying
 // strings.Reader, leaving nothing for a second, freshly-constructed

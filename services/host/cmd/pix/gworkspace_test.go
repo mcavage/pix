@@ -23,6 +23,7 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
+	"pix/host/workflow/onboard"
 )
 
 // --- parseGworkspaceSetupArgs -------------------------------------------
@@ -366,16 +367,16 @@ func TestGworkspaceDisable_PresentRemovesRegistrationAndConfig(t *testing.T) {
 func TestCheckGoogleWorkspaceFlags_RequireOptIn(t *testing.T) {
 	cases := []struct {
 		name    string
-		opts    onboardOpts
+		opts    onboard.Opts
 		wantErr bool
 	}{
-		{"account alone", onboardOpts{account: "a@b.com"}, true},
-		{"credentials alone", onboardOpts{credentials: "/x.json"}, true},
-		{"both alone", onboardOpts{account: "a@b.com", credentials: "/x.json"}, true},
-		{"account with opt-in", onboardOpts{account: "a@b.com", googleWorkspace: true}, false},
-		{"credentials with opt-in", onboardOpts{credentials: "/x.json", googleWorkspace: true}, false},
-		{"opt-in alone", onboardOpts{googleWorkspace: true}, false},
-		{"neither", onboardOpts{}, false},
+		{"account alone", onboard.Opts{Account: "a@b.com"}, true},
+		{"credentials alone", onboard.Opts{Credentials: "/x.json"}, true},
+		{"both alone", onboard.Opts{Account: "a@b.com", Credentials: "/x.json"}, true},
+		{"account with opt-in", onboard.Opts{Account: "a@b.com", GoogleWorkspace: true}, false},
+		{"credentials with opt-in", onboard.Opts{Credentials: "/x.json", GoogleWorkspace: true}, false},
+		{"opt-in alone", onboard.Opts{GoogleWorkspace: true}, false},
+		{"neither", onboard.Opts{}, false},
 	}
 	for _, c := range cases {
 		err := checkGoogleWorkspaceFlags(c.opts)

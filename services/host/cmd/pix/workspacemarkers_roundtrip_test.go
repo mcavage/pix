@@ -33,14 +33,14 @@
 //	                                   (knowledge.KnowledgeUseProject / knowledge.ReadProjectPointer
 //	                                   / projectBundle); no TS reader
 //	.pix/onboarding.json         — the IN-SANDBOX AGENT writes it (not Go);
-//	                                   Go reads + removes it (reconcileOnboarding)
+//	                                   Go reads + removes it (onboard.ReconcileOnboarding)
 //	.pix/host-state.json         — NEVER a file on EITHER side, by design
 //	                                   (hoststate.go); this file's job is to
 //	                                   prove that stays true even after every
 //	                                   OTHER marker above has been written into
 //	                                   the same workspace
 //	routing, artifacts, custom-memory.db — NOT workspace ".pix" markers at
-//	                                   all: routing.Dir()/taskArtifactRoot()
+//	                                   all: routing.Dir()/workspace.TaskArtifactRoot()
 //	                                   resolve under the HOST's
 //	                                   XDG_DATA_HOME/pix tree, never under
 //	                                   any workspace's .pix; TestRoutingAnd
@@ -62,7 +62,9 @@ import (
 	"pix/host/config"
 	"pix/host/knowledge"
 	"pix/host/routing"
+	"pix/host/workflow/onboard"
 	"pix/host/workflow/pack"
+	"pix/host/workspace"
 )
 
 // workspaceMarkerFiles is the literal, enumerated set of REAL files a
@@ -209,7 +211,7 @@ func TestMarkerRoundTrip_KnowledgeProjectPointer(t *testing.T) {
 //
 // Unlike every marker above, this file is written by the IN-SANDBOX AGENT,
 // not by Go — Go is the READER here. The round trip under test is therefore
-// "the exact JSON shape the agent is documented to write" -> reconcileOnboarding
+// "the exact JSON shape the agent is documented to write" -> onboard.ReconcileOnboarding
 // consumes it -> the marker is gone and config reflects it exactly once.
 
 func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
@@ -221,19 +223,19 @@ func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	proposal := onboardingResult{Version: 1, MCP: []string{config.GWServerName}}
+	proposal := onboard.OnboardingResult{Version: 1, MCP: []string{config.GWServerName}}
 	data, err := json.Marshal(proposal)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, onboardingFileName)
+	path := filepath.Join(dir, onboard.FileName)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	env := fakeEnv{present: map[string]bool{}}.env()
 	var out bytes.Buffer
-	reconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false)
+	onboard.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false, onboardDeps())
 
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("onboarding.json must be removed once applied, stat err=%v", err)
@@ -267,11 +269,11 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 	writeSandboxPackMarker(ws, filepath.Join(ws, "pack"))
 	var out bytes.Buffer
 	_ = knowledge.KnowledgeUseProject(t.TempDir(), ws, &out)
-	if err := os.WriteFile(filepath.Join(ws, ".pix", onboardingFileName), []byte(`{"version":1}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(ws, ".pix", onboard.FileName), []byte(`{"version":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	env := fakeEnv{present: map[string]bool{}}.env()
-	reconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false)
+	onboard.ReconcileOnboarding(ws, env, strings.NewReader(""), &out, true, false, onboardDeps())
 
 	// ...and confirm host-state.json never appeared. See hoststate.go's own
 	// package comment + hoststate_test.go's
@@ -293,7 +295,7 @@ func TestRoutingAndArtifactsAreHostDataRootNotWorkspaceMarkers(t *testing.T) {
 	t.Setenv("ROUTING_DIR", "")
 
 	routingDir := routing.Dir()
-	artifactsDir := taskArtifactRoot()
+	artifactsDir := workspace.TaskArtifactRoot()
 
 	for _, p := range []struct{ name, dir string }{
 		{"routing", routingDir},

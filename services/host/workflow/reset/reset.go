@@ -1,4 +1,4 @@
-package main
+package reset
 
 import (
 	"errors"
@@ -13,8 +13,10 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/monitor/tui"
 	"pix/host/rpc"
 	"pix/host/service"
+	"pix/host/sys"
 	"pix/host/workflow/upgrade"
 	"pix/host/workspace"
 )
@@ -27,35 +29,35 @@ import (
 // The design is split so the destructive core is unit-testable against a temp
 // HOME with no real sbx/pkill:
 //
-//   - resetPlan(cfg, paths, opts) is PURE — it resolves which paths get moved
+//   - Plan(cfg, paths, opts) is PURE — it resolves which paths get moved
 //     aside and which sbx actions run, with zero filesystem/exec side effects.
 //   - executeReset(...) takes injected fs ops (resetFS) + a hostenv.Env, so a test
 //     drives it against t.TempDir() and asserts files landed in .bak.
-//   - runResetCore(...) wires plan -> guard (TTY prompt / --yes) -> execute, and
+//   - RunCore(...) wires plan -> guard (TTY prompt / --yes) -> execute, and
 //     RETURNS an error for the non-TTY-no-yes refusal instead of os.Exit, so the
 //     refusal path is testable.
 
-// resetOpts is the parsed reset flag set.
-type resetOpts struct {
+// Opts is the parsed reset flag set.
+type Opts struct {
 	keepMemory bool // --keep-memory: preserve <dataRoot>/memory (captured facts)
 	sbx        bool // --sbx: also remove pix-* sandboxes + unregister MCP
 	assumeYes  bool // --yes: don't prompt (required on a non-TTY)
 	force      bool // --force: move the data dir even if serve appears still up
-	purgeData  bool // --purge-data: ALSO move aside harvested task artifacts
-	help       bool // -h/--help
+	PurgeData  bool // --purge-data: ALSO move aside harvested task artifacts
+	Help       bool // -h/--help
 }
 
-// resetPaths are the resolved host locations reset acts on. Split out so the
+// Paths are the resolved host locations reset acts on. Split out so the
 // pure planner takes them injected (a test supplies temp-dir paths, no real
 // $HOME lookup). memoryDir/knowledgeDir honor MEMORY_DB/KNOWLEDGE_DB.
-type resetPaths struct {
-	configDir    string // ~/.config/pix (config.toml, op-refs.env, broker-token, knowledge/, knowledge-cache/)
-	dataRoot     string // ~/.local/share/pix (memory/ + knowledge/)
-	memoryDir    string // <dataRoot>/memory or dir(MEMORY_DB): the user's captured facts
+type Paths struct {
+	ConfigDir    string // ~/.config/pix (config.toml, op-refs.env, broker-token, knowledge/, knowledge-cache/)
+	DataRoot     string // ~/.local/share/pix (memory/ + knowledge/)
+	MemoryDir    string // <dataRoot>/memory or dir(MEMORY_DB): the user's captured facts
 	knowledgeDir string // <dataRoot>/knowledge or dir(KNOWLEDGE_DB): the rebuildable index
 	memoryDB     string // the custom MEMORY_DB file path (set ONLY when MEMORY_DB is given); "" for the default
 	knowledgeDB  string // the custom KNOWLEDGE_DB file path (set ONLY when KNOWLEDGE_DB is given); "" for the default
-	artifactRoot string // taskArtifactRoot(): harvested task docs. Touched only by reset --purge-data.
+	ArtifactRoot string // workspace.TaskArtifactRoot(): harvested task docs. Touched only by reset --purge-data.
 }
 
 // backupTarget is one path the reset moves aside, with a human label. Dangerous
@@ -73,9 +75,9 @@ type backupTarget struct {
 	WithSidecars bool
 }
 
-// resetActions is the pure plan: exactly what will be moved + which sbx actions
+// Actions is the pure plan: exactly what will be moved + which sbx actions
 // run. It carries no side effects; executeReset consumes it.
-type resetActions struct {
+type Actions struct {
 	Backups         []backupTarget // paths to move to <path>.bak-<ts>
 	KeepMemory      bool           // preserve MemoryDir (sweep DataRoot minus memory)
 	MemoryDir       string         // preserved dir when KeepMemory
@@ -90,7 +92,7 @@ type resetActions struct {
 }
 
 // resetFS is the injected filesystem surface, so executeReset stays hermetic in
-// tests (a temp HOME, no real rm). defaultResetFS wires the os-backed ops.
+// tests (a temp HOME, no real rm). DefaultResetFS wires the os-backed ops.
 type resetFS struct {
 	stat      func(path string) (os.FileInfo, error)
 	lstat     func(path string) (os.FileInfo, error)
@@ -103,7 +105,7 @@ type resetFS struct {
 	mkdirAll  func(path string, perm os.FileMode) error
 }
 
-func defaultResetFS() resetFS {
+func DefaultResetFS() resetFS {
 	return resetFS{
 		stat:      os.Stat,
 		lstat:     os.Lstat,
@@ -130,20 +132,20 @@ type refFileSnapshot struct {
 	data []byte
 }
 
-// errResetNeedsYes is returned by runResetCore when it can't prompt (non-TTY)
+// ErrResetNeedsYes is returned by RunCore when it can't prompt (non-TTY)
 // and --yes was not given. The CLI wrapper maps it to exit 2. errNotExist is the
 // internal "nothing to move" signal from moveAside.
 var (
-	errResetNeedsYes = errors.New("reset needs --yes on a non-interactive terminal")
+	ErrResetNeedsYes = errors.New("reset needs --yes on a non-interactive terminal")
 	errNotExist      = errors.New("path does not exist")
 )
 
-// resolveResetPaths resolves the host paths reset touches from the injected env
+// ResolveResetPaths resolves the host paths reset touches from the injected env
 // (MEMORY_DB/KNOWLEDGE_DB honored; the data root defaults to
 // $XDG_DATA_HOME/pix, else ~/.local/share/pix; the config dir to
 // config.Path()'s parent). It resolves the data root from the INJECTED env
 // (not config.DataDir()) so tests stay hermetic.
-func resolveResetPaths(env hostenv.Env) resetPaths {
+func ResolveResetPaths(env hostenv.Env) Paths {
 	home := ""
 	home = env.HomeDir()
 	var dataRoot string
@@ -176,33 +178,33 @@ func resolveResetPaths(env hostenv.Env) resetPaths {
 		knowledgeDir = filepath.Dir(db)
 		knowledgeDB = db
 	}
-	return resetPaths{
-		configDir:    filepath.Dir(config.Path()),
-		dataRoot:     dataRoot,
-		memoryDir:    memoryDir,
+	return Paths{
+		ConfigDir:    filepath.Dir(config.Path()),
+		DataRoot:     dataRoot,
+		MemoryDir:    memoryDir,
 		knowledgeDir: knowledgeDir,
 		memoryDB:     memoryDB,
 		knowledgeDB:  knowledgeDB,
-		artifactRoot: taskArtifactRoot(),
+		ArtifactRoot: workspace.TaskArtifactRoot(),
 	}
 }
 
-// resetPlan is the PURE planner. It resolves the backup targets + sbx actions
+// Plan is the PURE planner. It resolves the backup targets + sbx actions
 // from the config, paths, and opts — no filesystem, no exec. The config dir is
 // always backed up. Without --keep-memory the whole data root (memory included)
 // is moved aside; with --keep-memory only the knowledge index is targeted here
 // and executeReset sweeps any OTHER non-memory data-root entry.
-func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetActions {
-	a := resetActions{
+func Plan(cfg *config.Config, paths Paths, opts Opts) Actions {
+	a := Actions{
 		KeepMemory: opts.keepMemory,
-		MemoryDir:  paths.memoryDir,
+		MemoryDir:  paths.MemoryDir,
 		MemoryDB:   paths.memoryDB,
-		DataRoot:   paths.dataRoot,
+		DataRoot:   paths.DataRoot,
 		Force:      opts.force,
 	}
-	a.ConfigDir = paths.configDir
-	if paths.configDir != "" {
-		a.Backups = append(a.Backups, backupTarget{Path: paths.configDir, Label: "config"})
+	a.ConfigDir = paths.ConfigDir
+	if paths.ConfigDir != "" {
+		a.Backups = append(a.Backups, backupTarget{Path: paths.ConfigDir, Label: "config"})
 	}
 	if opts.keepMemory {
 		// Preserve the captured facts (memory); move the rebuildable index aside.
@@ -211,22 +213,22 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 		// ~/Documents/knowledge.db must not drag all of ~/Documents aside) — the same
 		// custom-outside-root handling the default path uses. A default in-root index
 		// is moved as a whole directory.
-		if t, ok := customDBOutsideRoot(paths.knowledgeDir, paths.knowledgeDB, paths.dataRoot, "knowledge database"); ok {
+		if t, ok := customDBOutsideRoot(paths.knowledgeDir, paths.knowledgeDB, paths.DataRoot, "knowledge database"); ok {
 			a.Backups = append(a.Backups, t)
 		} else if paths.knowledgeDir != "" {
 			a.Backups = append(a.Backups, backupTarget{Path: paths.knowledgeDir, Label: "knowledge database", Dangerous: true})
 		}
-	} else if paths.dataRoot != "" {
+	} else if paths.DataRoot != "" {
 		// Move the whole data root aside (captured memory + knowledge index).
-		a.Backups = append(a.Backups, backupTarget{Path: paths.dataRoot, Label: "data (memory, knowledge, skills)", Dangerous: true})
+		a.Backups = append(a.Backups, backupTarget{Path: paths.DataRoot, Label: "data (memory, knowledge, skills)", Dangerous: true})
 		// Honor a custom MEMORY_DB / KNOWLEDGE_DB that lives OUTSIDE the data root:
 		// the data-root move alone would miss it. Move ONLY the db FILE + its
 		// -wal/-shm sidecars, NEVER the whole parent dir. A whole directory is moved
 		// only for the pix-owned default dir, handled by the data-root move above.
-		if t, ok := customDBOutsideRoot(paths.memoryDir, paths.memoryDB, paths.dataRoot, "memory database"); ok {
+		if t, ok := customDBOutsideRoot(paths.MemoryDir, paths.memoryDB, paths.DataRoot, "memory database"); ok {
 			a.Backups = append(a.Backups, t)
 		}
-		if t, ok := customDBOutsideRoot(paths.knowledgeDir, paths.knowledgeDB, paths.dataRoot, "knowledge database"); ok {
+		if t, ok := customDBOutsideRoot(paths.knowledgeDir, paths.knowledgeDB, paths.DataRoot, "knowledge database"); ok {
 			a.Backups = append(a.Backups, t)
 		}
 	}
@@ -247,8 +249,8 @@ func resetPlan(cfg *config.Config, paths resetPaths, opts resetOpts) resetAction
 	// live under XDG_DATA_HOME, OUTSIDE every tree reset normally touches, so they
 	// survive a plain reset by design — this is the deliberate opt-in to
 	// sweep them. Move-aside (.bak), never hard-delete, like every other data path.
-	if opts.purgeData && paths.artifactRoot != "" {
-		a.Backups = append(a.Backups, backupTarget{Path: paths.artifactRoot, Label: "harvested task artifacts"})
+	if opts.PurgeData && paths.ArtifactRoot != "" {
+		a.Backups = append(a.Backups, backupTarget{Path: paths.ArtifactRoot, Label: "harvested task artifacts"})
 	}
 	return a
 }
@@ -425,7 +427,7 @@ func serveStillUp(env hostenv.Env) bool {
 // sweep failed (or the serve-still-up guard blocked the data move). A partial
 // reset must NOT report success: the caller uses the error to exit non-zero and
 // to avoid reporting a partial reset as successful.
-func executeReset(a resetActions, fsys resetFS, env hostenv.Env, out io.Writer, now func() time.Time) ([]string, error) {
+func executeReset(a Actions, fsys resetFS, env hostenv.Env, out io.Writer, now func() time.Time) ([]string, error) {
 	ts := now().Unix()
 	var errs []error
 
@@ -575,7 +577,7 @@ func executeReset(a resetActions, fsys resetFS, env hostenv.Env, out io.Writer, 
 	// Provider secrets (sbx secret) are intentionally LEFT ALONE — those are just
 	// keys, not stack state, and re-entering them is friction with no upside here.
 	if a.RemoveSandboxes {
-		executeSbxReset(a, env, out)
+		ExecuteSbxReset(a, env, out)
 	}
 
 	// 5. Restart the daemon on the clean slate if one was running before (and we
@@ -628,10 +630,10 @@ func stopHostServices(_ hostenv.Env, out io.Writer) {
 	}
 }
 
-// executeSbxReset removes pix-* sandboxes and unregisters the configured
+// ExecuteSbxReset removes pix-* sandboxes and unregisters the configured
 // local MCP servers. Best-effort throughout: each action is reported, and if sbx
 // is absent (e.g. inside a sandbox) it prints the commands for the user to run.
-func executeSbxReset(a resetActions, env hostenv.Env, out io.Writer) {
+func ExecuteSbxReset(a Actions, env hostenv.Env, out io.Writer) {
 	fmt.Fprintln(out, "Sandboxes + MCP (sbx):")
 	haveSbx := false
 	_, err := env.LookPath("sbx")
@@ -649,7 +651,7 @@ func executeSbxReset(a resetActions, env hostenv.Env, out io.Writer) {
 	// failed-listing message; the `sbx rm -f` removals below are mutating
 	// lifecycle commands and stay on env.Run.
 	if lsOut, timedOut, err := env.RunTimed("sbx", "ls"); err == nil && !timedOut {
-		boxes := parseSandboxes(lsOut)
+		boxes := workspace.ParseSandboxes(lsOut)
 		if len(boxes) == 0 {
 			fmt.Fprintln(out, "  · no pix-* sandboxes to remove")
 		}
@@ -687,7 +689,7 @@ func executeSbxReset(a resetActions, env hostenv.Env, out io.Writer) {
 
 // printResetPlan shows EXACTLY what will be moved/removed before any change, so
 // the guard prompt is informed.
-func printResetPlan(a resetActions, out io.Writer) {
+func printResetPlan(a Actions, out io.Writer) {
 	fmt.Fprintln(out, "pix reset: moves state aside (reversible), never deletes.")
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Moving to <path>.bak-<timestamp> (rename back to restore):")
@@ -736,44 +738,44 @@ func printResetSummary(created []string, out io.Writer) {
 	fmt.Fprintln(out, "Next: pix setup")
 }
 
-// runResetCore wires plan -> guard -> execute against injected deps. It returns
-// errResetNeedsYes on the non-TTY-no-yes refusal (the CLI maps it to exit 2);
+// RunCore wires plan -> guard -> execute against injected deps. It returns
+// ErrResetNeedsYes on the non-TTY-no-yes refusal (the CLI maps it to exit 2);
 // an interactive "no" aborts cleanly with a nil error.
-func runResetCore(cfg *config.Config, paths resetPaths, opts resetOpts,
-	fsys resetFS, env hostenv.Env, rio setupIO, now func() time.Time) error {
+func RunCore(cfg *config.Config, paths Paths, opts Opts,
+	fsys resetFS, env hostenv.Env, rio cli.IO, now func() time.Time) error {
 
-	a := resetPlan(cfg, paths, opts)
-	printResetPlan(a, rio.out)
-	if !opts.purgeData && paths.artifactRoot != "" {
-		if _, size := artifactDirSize(paths.artifactRoot); size > 0 {
-			fmt.Fprintf(rio.out, "Keeping harvested task artifacts (%s) at %s — pass --purge-data to move them aside too.\n\n",
-				humanBytes(size), paths.artifactRoot)
+	a := Plan(cfg, paths, opts)
+	printResetPlan(a, rio.Out)
+	if !opts.PurgeData && paths.ArtifactRoot != "" {
+		if _, size := sys.DirSize(paths.ArtifactRoot); size > 0 {
+			fmt.Fprintf(rio.Out, "Keeping harvested task artifacts (%s) at %s — pass --purge-data to move them aside too.\n\n",
+				tui.HumanBytes(size), paths.ArtifactRoot)
 		}
 	}
 
 	if !opts.assumeYes {
-		if !rio.isTTY {
-			return errResetNeedsYes
+		if !rio.IsTTY {
+			return ErrResetNeedsYes
 		}
-		ans := strings.ToLower(promptLine(rio, "Proceed? [y/N]: "))
+		ans := strings.ToLower(cli.PromptLine(rio, "Proceed? [y/N]: "))
 		if ans != "y" && ans != "yes" {
-			fmt.Fprintln(rio.out, "Aborted — nothing changed.")
+			fmt.Fprintln(rio.Out, "Aborted — nothing changed.")
 			return nil
 		}
 	}
 
-	created, execErr := executeReset(a, fsys, env, rio.out, now)
-	printResetSummary(created, rio.out)
+	created, execErr := executeReset(a, fsys, env, rio.Out, now)
+	printResetSummary(created, rio.Out)
 	return execErr
 }
 
-// parseResetArgs parses the reset flag set.
-func parseResetArgs(argv []string, allowSbx, allowPurge bool) (resetOpts, error) {
-	var o resetOpts
+// ParseArgs parses the reset flag set.
+func ParseArgs(argv []string, allowSbx, allowPurge bool) (Opts, error) {
+	var o Opts
 	for _, a := range argv {
 		switch a {
 		case "-h", "--help":
-			o.help = true
+			o.Help = true
 			return o, nil
 		case "--keep-memory":
 			o.keepMemory = true
@@ -790,41 +792,12 @@ func parseResetArgs(argv []string, allowSbx, allowPurge bool) (resetOpts, error)
 			if !allowPurge {
 				return o, fmt.Errorf("unknown flag %q", a)
 			}
-			o.purgeData = true
+			o.PurgeData = true
 		default:
 			return o, fmt.Errorf("unknown flag %q", a)
 		}
 	}
 	return o, nil
-}
-
-// runReset is the `reset` verb entry point.
-func runReset(argv []string) {
-	opts, err := parseResetArgs(argv, true, true)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix reset: %v\n\n%s", err, resetUsage)
-		os.Exit(2)
-	}
-	if opts.help {
-		fmt.Print(resetUsage)
-		return
-	}
-	cfg, _, err := workspace.LoadResolvedConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix reset: %v\n", err)
-		os.Exit(1)
-	}
-	env := defaultShellEnv()
-	rio := setupIO{in: os.Stdin, out: os.Stdout, isTTY: cli.IsTTY(os.Stdin)}
-	if err := runResetCore(cfg, resolveResetPaths(env), opts, defaultResetFS(), env, rio, time.Now); err != nil {
-		if errors.Is(err, errResetNeedsYes) {
-			fmt.Fprintln(os.Stderr, "pix reset: refusing to reset a non-interactive terminal without confirmation")
-			fmt.Fprintln(os.Stderr, "re-run with --yes to reset non-interactively")
-			os.Exit(2)
-		}
-		fmt.Fprintf(os.Stderr, "pix reset: %v\n", err)
-		os.Exit(1)
-	}
 }
 
 // resolveBinPaths returns the installed launcher symlinks (~/.local/bin/pix
@@ -890,57 +863,57 @@ func isOurBinTarget(target string) bool {
 }
 
 // runUninstallCore runs the full reset, then removes the bin symlinks. Split for
-// testability (temp HOME, injected bins/fs/env). It returns runResetCore's error
-// (notably errResetNeedsYes) unchanged so the CLI maps it to the same exit code.
-func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts resetOpts, prov upgrade.Provenance,
-	fsys resetFS, env hostenv.Env, rio setupIO, now func() time.Time) error {
+// testability (temp HOME, injected bins/fs/env). It returns RunCore's error
+// (notably ErrResetNeedsYes) unchanged so the CLI maps it to the same exit code.
+func runUninstallCore(cfg *config.Config, paths Paths, bins []string, opts Opts, prov upgrade.Provenance,
+	fsys resetFS, env hostenv.Env, rio cli.IO, now func() time.Time) error {
 
-	a := resetPlan(cfg, paths, opts)
-	printResetPlan(a, rio.out)
+	a := Plan(cfg, paths, opts)
+	printResetPlan(a, rio.Out)
 	if prov.Channel == upgrade.ChannelHomebrew {
-		fmt.Fprintln(rio.out, "Homebrew owns the binaries and man page; pix will not remove them directly.")
+		fmt.Fprintln(rio.Out, "Homebrew owns the binaries and man page; pix will not remove them directly.")
 	} else {
-		fmt.Fprintln(rio.out, "Will also remove the installed pix + pix-host bin symlinks.")
+		fmt.Fprintln(rio.Out, "Will also remove the installed pix + pix-host bin symlinks.")
 	}
 	// Harvested task artifacts are user work product and are NOT removed by
 	// default (they live under XDG_DATA_HOME, outside the reset trees). Print where
 	// they are + how big so they stay findable; --purge-data is the deliberate
 	// opt-in that moves them aside too (added to the plan above).
-	if !opts.purgeData && paths.artifactRoot != "" {
-		if _, size := artifactDirSize(paths.artifactRoot); size > 0 {
-			fmt.Fprintf(rio.out, "Keeping harvested task artifacts (%s) at %s — pass --purge-data to remove them too.\n",
-				humanBytes(size), paths.artifactRoot)
+	if !opts.PurgeData && paths.ArtifactRoot != "" {
+		if _, size := sys.DirSize(paths.ArtifactRoot); size > 0 {
+			fmt.Fprintf(rio.Out, "Keeping harvested task artifacts (%s) at %s — pass --purge-data to remove them too.\n",
+				tui.HumanBytes(size), paths.ArtifactRoot)
 		}
 	}
-	fmt.Fprintln(rio.out)
+	fmt.Fprintln(rio.Out)
 
 	if !opts.assumeYes {
-		if !rio.isTTY {
-			return errResetNeedsYes
+		if !rio.IsTTY {
+			return ErrResetNeedsYes
 		}
-		ans := strings.ToLower(promptLine(rio, "Proceed? [y/N]: "))
+		ans := strings.ToLower(cli.PromptLine(rio, "Proceed? [y/N]: "))
 		if ans != "y" && ans != "yes" {
-			fmt.Fprintln(rio.out, "Aborted — nothing changed.")
+			fmt.Fprintln(rio.Out, "Aborted — nothing changed.")
 			return nil
 		}
 	}
 
-	created, execErr := executeReset(a, fsys, env, rio.out, now)
+	created, execErr := executeReset(a, fsys, env, rio.Out, now)
 	if execErr != nil {
 		// The state backup failed (or was blocked) — do NOT remove the bin symlinks.
 		// Stranding the user with no binaries after a failed backup is the worst
 		// outcome; leave the working install in place so they can retry.
-		fmt.Fprintln(rio.out, "Reset backup failed — leaving the pix + pix-host bin symlinks in place (not uninstalling).")
-		printResetSummary(created, rio.out)
+		fmt.Fprintln(rio.Out, "Reset backup failed — leaving the pix + pix-host bin symlinks in place (not uninstalling).")
+		printResetSummary(created, rio.Out)
 		return execErr
 	}
 	if prov.Channel == upgrade.ChannelHomebrew {
-		fmt.Fprintln(rio.out, "Binaries and man page are owned by Homebrew, not pix.")
-		fmt.Fprintln(rio.out, "state and managed services were removed first. Finish with:")
-		fmt.Fprintln(rio.out, "  brew uninstall mcavage/tap/pix")
-		fmt.Fprintln(rio.out, "Removing the formula first leaves launchd configured with a Cellar path that fails on its next launch.")
-		if rio.isTTY {
-			ans := strings.ToLower(promptLine(rio, "Run brew uninstall now? [y/N]: "))
+		fmt.Fprintln(rio.Out, "Binaries and man page are owned by Homebrew, not pix.")
+		fmt.Fprintln(rio.Out, "state and managed services were removed first. Finish with:")
+		fmt.Fprintln(rio.Out, "  brew uninstall mcavage/tap/pix")
+		fmt.Fprintln(rio.Out, "Removing the formula first leaves launchd configured with a Cellar path that fails on its next launch.")
+		if rio.IsTTY {
+			ans := strings.ToLower(cli.PromptLine(rio, "Run brew uninstall now? [y/N]: "))
 			if ans == "y" || ans == "yes" {
 				if err := env.RunInteractive("brew", "uninstall", "mcavage/tap/pix"); err != nil {
 					return fmt.Errorf("brew uninstall failed: %w", err)
@@ -948,10 +921,10 @@ func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts 
 			}
 		}
 	} else {
-		removeBinSymlinks(bins, fsys, rio.out)
-		removeInstalledManPage(env, fsys, rio.out)
+		removeBinSymlinks(bins, fsys, rio.Out)
+		removeInstalledManPage(env, fsys, rio.Out)
 	}
-	printResetSummary(created, rio.out)
+	printResetSummary(created, rio.Out)
 	return nil
 }
 
@@ -975,3 +948,26 @@ func removeInstalledManPage(env hostenv.Env, fsys resetFS, out io.Writer) {
 	}
 	fmt.Fprintf(out, "  ✓ removed man page %s\n", p)
 }
+
+const Usage = `usage: pix reset [--keep-memory] [--purge-data] [--sbx] [--yes] [--force]
+
+Reset the stack to a clean slate (REVERSIBLE). Nothing is hard-deleted: state is
+moved aside to a timestamped <path>.bak-<unixts> sibling you can rename back.
+
+Moves aside the config dir (~/.config/pix) and the data dir (~/.local/share/pix:
+captured memory + the knowledge index). Best-effort stops a running
+'pix-host serve' first.
+
+flags:
+  --keep-memory   preserve ~/.local/share/pix/memory (your captured facts); reset the rest
+  --purge-data    also move aside harvested task artifacts (kept by default)
+  --sbx           also remove every pix-* sandbox and unregister the
+                  configured local MCP servers (provider secrets are left alone)
+  --force         move the data dir even if 'pix-host serve' still appears
+                  to be running (otherwise the data move is refused to avoid
+                  splitting a live sqlite db from its wal)
+  --yes, -y       don't prompt (REQUIRED on a non-interactive terminal)
+
+Without --yes on a TTY it prints exactly what will move and prompts before acting.
+On a non-TTY it refuses unless --yes is given.
+`

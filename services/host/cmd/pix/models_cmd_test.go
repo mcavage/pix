@@ -35,7 +35,7 @@ func testDeps(cfg *config.Config) (*cli.Deps, *bytes.Buffer, *bytes.Buffer) {
 	return d, &out, &errb
 }
 
-// TestModelsStatus_RendersToDepsOut: output goes to Deps.Out, not the process's
+// TestModelsStatus_RendersToDepsOut: output goes to onboard.Deps.Out, not the process's
 // stdout. That is the property that removes the need for a subprocess.
 func TestModelsStatus_RendersToDepsOut(t *testing.T) {
 	cfg := &config.Config{Inference: config.InferenceConfig{
@@ -100,7 +100,7 @@ func TestModelsAdd_ValidatesProviderFromOneList(t *testing.T) {
 }
 
 // kongParseInto parses argv far enough to validate it, without running. It
-// exists so the enum check above does not need a Deps or a filesystem.
+// exists so the enum check above does not need a onboard.Deps or a filesystem.
 func kongParseInto(t *testing.T, _ *ModelsAddCmd, argv []string) error {
 	t.Helper()
 	d, _, _ := testDeps(&config.Config{Inference: config.InferenceConfig{ExclusiveSource: "/packs/stop"}})

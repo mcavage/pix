@@ -16,7 +16,7 @@ pix-tact        pix:0.0.27  stopped   /Users/mcavage/dev/tact
 some-other-box       ubuntu           running   /tmp/x
 pix-t-001-ab    pix:0.0.27  exited    /Users/mcavage/dev/pix/tasks/001/co
 `
-	boxes := parsePixBoxes(out)
+	boxes := workspace.ParsePixBoxes(out)
 	if len(boxes) != 3 {
 		t.Fatalf("want 3 pix boxes, got %d: %+v", len(boxes), boxes)
 	}
@@ -36,7 +36,7 @@ pix-t-001-ab    pix:0.0.27  exited    /Users/mcavage/dev/pix/tasks/001/co
 }
 
 func TestParsePixBoxes_DoesNotMistakePackMountForWorkspace(t *testing.T) {
-	boxes := parsePixBoxes("pix-demo running /tmp/project /Users/me/pack/skills\n")
+	boxes := workspace.ParsePixBoxes("pix-demo running /tmp/project /Users/me/pack/skills\n")
 	if len(boxes) != 1 {
 		t.Fatalf("want one box, got %+v", boxes)
 	}
@@ -53,7 +53,7 @@ func TestOverlayReceiptDirs_PrefersCanonicalCreatedWorkspace(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	boxes := []sbxBox{{Name: "pix-demo", State: "running", Dir: "/wrong/pack/skills"}}
+	boxes := []workspace.SbxBox{{Name: "pix-demo", State: "running", Dir: "/wrong/pack/skills"}}
 	overlayReceiptDirs(boxes, stateDir)
 	if boxes[0].Dir != ws {
 		t.Fatalf("dir = %q, want receipt ws %q", boxes[0].Dir, ws)
@@ -61,7 +61,7 @@ func TestOverlayReceiptDirs_PrefersCanonicalCreatedWorkspace(t *testing.T) {
 }
 
 func TestParsePixBoxes_Empty(t *testing.T) {
-	if got := parsePixBoxes("NAME  STATE\n"); len(got) != 0 {
+	if got := workspace.ParsePixBoxes("NAME  STATE\n"); len(got) != 0 {
 		t.Fatalf("want 0, got %+v", got)
 	}
 }

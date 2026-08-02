@@ -9,6 +9,7 @@ import (
 	"pix/host/workflow/backup"
 	"pix/host/workflow/man"
 	"pix/host/workflow/pack"
+	"pix/host/workflow/reset"
 	"pix/host/workflow/slack"
 	"pix/host/workflow/upgrade"
 )
@@ -219,7 +220,7 @@ func verbUsage(verb string) (string, bool) {
 	case "man":
 		return man.ManUsage, true
 	case "reset":
-		return resetUsage, true
+		return reset.Usage, true
 	case "state":
 		return stateUsage, true
 	case "task":
@@ -285,27 +286,4 @@ func secretUsage() string { return cli.Usage[SecretCmd]("secret", secretDescript
 const versionUsage = `usage: pix version
 
 Print the stamped launcher version.
-`
-
-const resetUsage = `usage: pix reset [--keep-memory] [--purge-data] [--sbx] [--yes] [--force]
-
-Reset the stack to a clean slate (REVERSIBLE). Nothing is hard-deleted: state is
-moved aside to a timestamped <path>.bak-<unixts> sibling you can rename back.
-
-Moves aside the config dir (~/.config/pix) and the data dir (~/.local/share/pix:
-captured memory + the knowledge index). Best-effort stops a running
-'pix-host serve' first.
-
-flags:
-  --keep-memory   preserve ~/.local/share/pix/memory (your captured facts); reset the rest
-  --purge-data    also move aside harvested task artifacts (kept by default)
-  --sbx           also remove every pix-* sandbox and unregister the
-                  configured local MCP servers (provider secrets are left alone)
-  --force         move the data dir even if 'pix-host serve' still appears
-                  to be running (otherwise the data move is refused to avoid
-                  splitting a live sqlite db from its wal)
-  --yes, -y       don't prompt (REQUIRED on a non-interactive terminal)
-
-Without --yes on a TTY it prints exactly what will move and prompts before acting.
-On a non-TTY it refuses unless --yes is given.
 `

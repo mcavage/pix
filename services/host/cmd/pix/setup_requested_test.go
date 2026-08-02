@@ -19,6 +19,7 @@ import (
 	"errors"
 	"pix/host/readiness"
 	"pix/host/workflow/man"
+	"pix/host/workflow/onboard"
 	"strings"
 	"testing"
 
@@ -101,10 +102,10 @@ func TestSetupRequested_StaleOptionalConfigNeverBlocks(t *testing.T) {
 // The flag→axis mapping is the ONLY thing setup owns; the promotion rule
 // itself lives in the readiness type.
 func TestSetupRequestedAxes_FlagMapping(t *testing.T) {
-	if got := setupRequestedAxes(onboardOpts{}); len(got) != 0 {
+	if got := setupRequestedAxes(onboard.Opts{}); len(got) != 0 {
 		t.Errorf("no flags must promote nothing, got %v", got)
 	}
-	got := readiness.AxisNames(setupRequestedAxes(onboardOpts{pullModels: true, googleWorkspace: true, mcp: []string{"slack"}}))
+	got := readiness.AxisNames(setupRequestedAxes(onboard.Opts{PullModels: true, GoogleWorkspace: true, Mcp: []string{"slack"}}))
 	want := []string{"gworkspace", "mcp:slack", "model.bridge", "model.embed", "model.watcher", "ollama.host"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("setupRequestedAxes = %v, want %v", got, want)

@@ -12,6 +12,7 @@ import (
 	"pix/host/inference"
 	"pix/host/readiness"
 	"pix/host/sys/systest"
+	"pix/host/workflow/onboard"
 )
 
 func TestCompileInferenceRuntimeNoModelAndExclusiveFiltering(t *testing.T) {
@@ -392,11 +393,11 @@ func TestInferenceAllowsOnlyMaterializedRuntimeID(t *testing.T) {
 }
 
 func TestSetupPackFlagIsRepeatableAndOrdered(t *testing.T) {
-	o, err := parseOnboardArgs([]string{"--pack", "one", "--pack=two", "--with", "optional"})
+	o, err := onboard.ParseOnboardArgs([]string{"--pack", "one", "--pack=two", "--with", "optional"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(o.packs, ","); got != "one,two" {
+	if got := strings.Join(o.Packs, ","); got != "one,two" {
 		t.Fatalf("packs = %q", got)
 	}
 }

@@ -1,10 +1,10 @@
-package main
+package onboard
 
 import (
 	"pix/host/knowledge"
 	"pix/host/sys"
+	"time"
 
-	"bufio"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -19,15 +19,9 @@ import (
 // by reconcile prompts and reset, the gog auth probe (also used by doctor +
 // status), the knowledge-source setup, and a line reader.
 
-// setupIO carries the streams + a TTY flag so callers can exercise the non-TTY
+// cli.IO carries the streams + a TTY flag so callers can exercise the non-TTY
 // path hermetically.
-type setupIO struct {
-	in    io.Reader
-	out   io.Writer
-	isTTY bool
-}
-
-// gogAuthed reports whether gog has usable auth for a specific account: it is on
+// GogAuthed reports whether gog has usable auth for a specific account: it is on
 // PATH and an account-scoped `gog --account <account> auth status` exits 0.
 // Setting an account email does NOT imply completed OAuth, so callers pass the
 // CONFIGURED account and probe THAT account before claiming gog is ready. The
@@ -35,7 +29,7 @@ type setupIO struct {
 // fast command: real callers wire env.probe and we run our own short-timeout
 // exec; tests leave probe nil and use the hermetic env.Run. Best-effort: any gap
 // (gog absent, a timeout, status errors) is "not authed", never a crash.
-func gogAuthed(env sys.Exec, account string) bool {
+func GogAuthed(env sys.Exec, account string) bool {
 	if _, err := env.LookPath("gog"); err != nil {
 		return false
 	}
@@ -61,9 +55,7 @@ func setupKnowledge(cfg *config.Config, ref string, out io.Writer) error {
 	return knowledge.Init(cfg, abs, out)
 }
 
-// promptLine reads a single trimmed line from sio.in after writing prompt.
-func promptLine(sio setupIO, prompt string) string {
-	fmt.Fprint(sio.out, prompt)
-	line, _ := bufio.NewReader(sio.in).ReadString('\n')
-	return strings.TrimSpace(line)
-}
+// gogAuthTimeout bounds the `gog auth status` probe so the fast, read-only
+// `status` command can never hang on a network round-trip (mirrors doctor's
+// bounded probes). On timeout or error gog is treated as not-authed.
+const gogAuthTimeout = 2 * time.Second
