@@ -5,6 +5,8 @@ import (
 	"pix/host/knowledge"
 	"pix/host/memory"
 	"pix/host/service"
+	"pix/host/workflow/backup"
+	"pix/host/workflow/man"
 )
 
 // cli.ErrHelpRequested is the shared sentinel a parser returns when the argv asks
@@ -199,9 +201,9 @@ func verbUsage(verb string) (string, bool) {
 	case "monitor":
 		return monitorUsage, true
 	case "backup":
-		return backupUsage, true
+		return backup.BackupUsage, true
 	case "restore":
-		return restoreUsage, true
+		return backup.RestoreUsage, true
 	case "knowledge", "kb":
 		return knowledge.Usage, true
 	case "secret":
@@ -211,7 +213,7 @@ func verbUsage(verb string) (string, bool) {
 	case "upgrade":
 		return upgradeUsage, true
 	case "man":
-		return manUsage, true
+		return man.ManUsage, true
 	case "reset":
 		return resetUsage, true
 	case "state":

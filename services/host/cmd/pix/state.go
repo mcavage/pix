@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"pix/host/workflow/backup"
 )
 
 const stateUsage = `usage: pix state <backup|restore|reset> [args]
@@ -27,9 +28,9 @@ func runState(argv []string) {
 	}
 	switch argv[0] {
 	case "backup":
-		runBackup(argv[1:])
+		backup.RunBackup(argv[1:])
 	case "restore":
-		runRestore(argv[1:])
+		backup.RunRestore(argv[1:])
 	case "reset":
 		runReset(argv[1:])
 	default:

@@ -333,7 +333,7 @@ install: launcher ## Build + put the Go binaries (out/pix launcher + out/pix-hos
 	@# Drop the man page on the user manpath too (bonus; the binary embed is the
 	@# guarantee, so `pix man` works with or without this). No sudo.
 	mkdir -p $(HOME)/.local/share/man/man1
-	cp services/host/cmd/pix/pix.1 $(HOME)/.local/share/man/man1/pix.1
+	cp services/host/workflow/man/pix.1 $(HOME)/.local/share/man/man1/pix.1
 	@echo "Installed: man page -> $(HOME)/.local/share/man/man1/pix.1"
 	@manpath 2>/dev/null | tr ':' '\n' | grep -qx "$(HOME)/.local/share/man" \
 		|| echo "Tip: add ~/.local/share/man to MANPATH for \`man pix\` (or just use \`pix man\`)."

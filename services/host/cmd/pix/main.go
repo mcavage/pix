@@ -31,6 +31,8 @@ import (
 	"pix/host/launcher"
 	"pix/host/routing"
 	"pix/host/service"
+	"pix/host/workflow/backup"
+	"pix/host/workflow/man"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=0.0.x". An
@@ -52,8 +54,8 @@ func main() {
 	// A global `--man` may appear anywhere on the command line (before a `--`
 	// terminator): render the embedded man page and exit. It is DISTINCT from the
 	// -h/--help contract — `--help` prints usage, `--man` opens the full page.
-	if rest, ok := extractManFlag(args); ok {
-		runMan(rest)
+	if rest, ok := man.ExtractManFlag(args); ok {
+		man.RunMan(rest)
 		return
 	}
 
@@ -114,9 +116,9 @@ func main() {
 	case "monitor":
 		runMonitor(args[1:])
 	case "backup":
-		runBackup(args[1:])
+		backup.RunBackup(args[1:])
 	case "restore":
-		runRestore(args[1:])
+		backup.RunRestore(args[1:])
 	case "knowledge", "kb":
 		knowledge.Run(args[1:])
 	case "models":
@@ -146,7 +148,7 @@ func main() {
 	case "agent":
 		runAgent(args[1:])
 	case "man":
-		runMan(args[1:])
+		man.RunMan(args[1:])
 	case "reset":
 		runReset(args[1:])
 	case "upgrade":

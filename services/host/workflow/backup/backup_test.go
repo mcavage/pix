@@ -1,4 +1,4 @@
-package main
+package backup
 
 import (
 	"bytes"
@@ -45,19 +45,5 @@ func TestRestoreHelp(t *testing.T) {
 func TestRestoreNeedsArchive(t *testing.T) {
 	if err := runRestoreCore(nil, &bytes.Buffer{}); !cli.IsUsage(err) {
 		t.Errorf("restore with no archive: err = %v, want cli.UsageError2", err)
-	}
-}
-
-// TestBackupRestoreVerbUsage proves the top-level help routing knows the new
-// verbs.
-func TestBackupRestoreVerbUsage(t *testing.T) {
-	for _, v := range []string{"backup", "restore"} {
-		u, ok := verbUsage(v)
-		if !ok {
-			t.Errorf("verbUsage(%q) not found", v)
-		}
-		if !strings.Contains(u, "usage: pix "+v) {
-			t.Errorf("verbUsage(%q) = %q, want it to start with the verb usage", v, u)
-		}
 	}
 }

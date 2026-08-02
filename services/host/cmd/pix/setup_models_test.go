@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
+	"pix/host/workflow/man"
 	"strings"
 	"testing"
 	"time"
@@ -591,7 +592,7 @@ func TestSetupUsageAndManMentionPullModels(t *testing.T) {
 	if !strings.Contains(setupUsage, "--pull-models") {
 		t.Error("setup usage must document --pull-models")
 	}
-	b, err := os.ReadFile("pix.1")
+	b, err := man.Source(), error(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

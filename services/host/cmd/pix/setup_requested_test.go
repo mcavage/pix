@@ -17,8 +17,8 @@ package main
 import (
 	"bytes"
 	"errors"
-	"os"
 	"pix/host/readiness"
+	"pix/host/workflow/man"
 	"strings"
 	"testing"
 
@@ -141,7 +141,7 @@ func TestRequestedExitContract_InHelpAndMan(t *testing.T) {
 	if !strings.Contains(normalizeCopy(setupUsage), requestedExitContract) {
 		t.Errorf("`pix help setup` must state the exit contract verbatim:\n%s", requestedExitContract)
 	}
-	b, err := os.ReadFile("pix.1")
+	b, err := man.Source(), error(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

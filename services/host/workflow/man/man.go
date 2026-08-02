@@ -1,4 +1,4 @@
-package main
+package man
 
 import (
 	"bytes"
@@ -19,7 +19,12 @@ import (
 //go:embed pix.1
 var manPage []byte
 
-const manUsage = `usage: pix man
+// Source returns the embedded roff man page. It is exported so the cmd/pix
+// test that cross-checks the page against the live verb table can read it
+// without this package having to know what a verb table is.
+func Source() []byte { return manPage }
+
+const ManUsage = `usage: pix man
 
 Render the embedded pix manual page. The page is baked into the binary, so
 no MANPATH entry is ever required. It is rendered through the first available of
@@ -31,11 +36,11 @@ the page is written straight to stdout, so 'pix man | grep foo' works.
 The global alias '--man' is accepted anywhere on the command line.
 `
 
-// extractManFlag reports whether a global `--man` appears anywhere in argv
+// ExtractManFlag reports whether a global `--man` appears anywhere in argv
 // before a `--` terminator (everything after `--` is pi passthrough and must
 // not be scanned). It returns argv with the `--man` token removed, so any
-// remaining -h/--help still reaches runMan. ok is false when `--man` is absent.
-func extractManFlag(argv []string) ([]string, bool) {
+// remaining -h/--help still reaches RunMan. ok is false when `--man` is absent.
+func ExtractManFlag(argv []string) ([]string, bool) {
 	found := false
 	var rest []string
 	for i, a := range argv {
@@ -52,14 +57,14 @@ func extractManFlag(argv []string) ([]string, bool) {
 	return rest, found
 }
 
-// runMan is the `man` verb entry point. It honors -h/--help, otherwise renders
+// RunMan is the `man` verb entry point. It honors -h/--help, otherwise renders
 // the embedded roff to stdout (paging when attached to a TTY). It never errors
 // out and never nags to install a man toolchain — at worst it emits raw roff
 // with a one-line stderr hint.
-func runMan(argv []string) {
+func RunMan(argv []string) {
 	for _, a := range argv {
 		if a == "-h" || a == "--help" {
-			fmt.Print(manUsage)
+			fmt.Print(ManUsage)
 			return
 		}
 	}

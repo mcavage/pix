@@ -1,4 +1,4 @@
-package main
+package backup
 
 import (
 	"fmt"
@@ -21,7 +21,7 @@ import (
 // backup/restore are the advertised recovery path they never load config here \u2014
 // a corrupt config must not block bringing your data back.
 
-const backupUsage = `usage: pix backup [--out PATH] [--keep N]
+const BackupUsage = `usage: pix backup [--out PATH] [--keep N]
 
 Take a hot, consistent FULL backup \u2014 safe while 'serve' holds the db open. Packs
 a VACUUM INTO snapshot of the memory DB, config.toml (profiles), op-refs.env
@@ -34,7 +34,7 @@ flags:
   --keep N     keep only the newest N backups in the out dir (default 7)
 `
 
-const restoreUsage = `usage: pix restore <archive> [--force]
+const RestoreUsage = `usage: pix restore <archive> [--force]
 
 Restore a FULL backup produced by 'pix backup': memory.db, config.toml
 (profiles come back), and op-refs.env. Refuses to run while 'serve' holds the db,
@@ -46,8 +46,8 @@ flags:
   --force, -f   overwrite an existing live db (current db kept as .bak-<ts>)
 `
 
-// runBackup is the `pix backup` entry: classify the error into an exit code.
-func runBackup(argv []string) {
+// RunBackup is the `pix backup` entry: classify the error into an exit code.
+func RunBackup(argv []string) {
 	if err := runBackupCore(argv, os.Stdout); err != nil {
 		cli.ExitFromErr("backup", err)
 	}
@@ -65,11 +65,11 @@ func runBackupCore(argv []string, out io.Writer) error {
 		return err
 	}
 	if fs.Help {
-		fmt.Fprint(out, backupUsage)
+		fmt.Fprint(out, BackupUsage)
 		return nil
 	}
 	if len(positional) > 0 {
-		return cli.UsageErr(backupUsage)
+		return cli.UsageErr(BackupUsage)
 	}
 	bin, err := launcher.FindHostBinary()
 	if err != nil {
@@ -86,8 +86,8 @@ func runBackupCore(argv []string, out io.Writer) error {
 	return cmd.Run()
 }
 
-// runRestore is the `pix restore` entry: classify the error into an exit code.
-func runRestore(argv []string) {
+// RunRestore is the `pix restore` entry: classify the error into an exit code.
+func RunRestore(argv []string) {
 	if err := runRestoreCore(argv, os.Stdout); err != nil {
 		cli.ExitFromErr("restore", err)
 	}
@@ -103,11 +103,11 @@ func runRestoreCore(argv []string, out io.Writer) error {
 		return err
 	}
 	if fs.Help {
-		fmt.Fprint(out, restoreUsage)
+		fmt.Fprint(out, RestoreUsage)
 		return nil
 	}
 	if len(positional) != 1 {
-		return cli.UsageErr(restoreUsage)
+		return cli.UsageErr(RestoreUsage)
 	}
 	bin, err := launcher.FindHostBinary()
 	if err != nil {
