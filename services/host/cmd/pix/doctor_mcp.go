@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/readiness"
 	"strings"
 
 	"pix/host/config"
@@ -40,12 +41,12 @@ const gatewayDownDetail = "sbx present but couldn't list MCP registrations — c
 // false outstanding item invented from a probe that answered nothing. This
 // replaces the legacy binary mcpCheck, which rendered every listing failure
 // as a TODO.
-func gogRegistrationCheck(mcpOut string, mcpOK, sbxPresent bool) check {
+func gogRegistrationCheck(mcpOut string, mcpOK, sbxPresent bool) readiness.Check {
 	switch mcpRegEvidenceFrom(mcpOut, mcpOK, gwServerName) {
 	case mcpRegYes:
-		return check{label: gwServerName, verdict: verdictReady, detail: "registered", evidence: "sbx mcp ls"}
+		return readiness.Check{Label: gwServerName, Verdict: readiness.VerdictReady, Detail: "registered", Evidence: "sbx mcp ls"}
 	case mcpRegNo:
-		return check{label: gwServerName, verdict: verdictTodo, detail: "not registered", todo: "pix mcp register"}
+		return readiness.Check{Label: gwServerName, Verdict: readiness.VerdictTodo, Detail: "not registered", Todo: "pix mcp register"}
 	default: // mcpRegUnknown: sbx absent, or present with the listing failing
 		return mcpUnavailableCheck(gwServerName, sbxPresent)
 	}
@@ -259,57 +260,57 @@ func mcpAttachGuidance(name string) string {
 // entry, no receipt, or a receipt that is corrupt / wrong schema / wrong
 // sandbox identity) is UNVERIFIABLE with the exact repair commands in the
 // evidence — never a false claim in either direction.
-func mcpAttachCheck(name string, ctx mcpSandboxContext, reg mcpRegEvidence) check {
+func mcpAttachCheck(name string, ctx mcpSandboxContext, reg mcpRegEvidence) readiness.Check {
 	label := name + " attachment"
 	guidance := mcpAttachGuidance(name)
 	row := joinMCPSandboxRow(name, reg, ctx.sandbox, ctx.receipt, ctx.status)
 	switch row.State {
 	case mcpJoinPreloaded:
-		return check{label: label, verdict: verdictReady,
-			detail:   "preloaded by pix at create (sandbox " + ctx.sandbox + ")",
-			evidence: row.Evidence}
+		return readiness.Check{Label: label, Verdict: readiness.VerdictReady,
+			Detail:   "preloaded by pix at create (sandbox " + ctx.sandbox + ")",
+			Evidence: row.Evidence}
 	case mcpJoinLoaded:
-		return check{label: label, verdict: verdictReady,
-			detail:   "loaded by pix (pix mcp load, sandbox " + ctx.sandbox + ")",
-			evidence: row.Evidence}
+		return readiness.Check{Label: label, Verdict: readiness.VerdictReady,
+			Detail:   "loaded by pix (pix mcp load, sandbox " + ctx.sandbox + ")",
+			Evidence: row.Evidence}
 	case mcpJoinRegisteredNotAttached:
 		// A POSITIVE, verified gap (registration confirmed + a COMPLETE valid
 		// receipt with no entry): a verified OPTIONAL todo with the exact
 		// live-attach command — consistent with status's row todo. Partial or
 		// absent receipts never reach this state (they stay unverifiable).
-		return check{label: label, verdict: verdictTodo,
-			detail:   fmt.Sprintf("registered, but pix has no record of attaching it to %s; attach live, or recreate with `pix run --replace`", ctx.sandbox),
-			todo:     mcpLoadTodoCommand(name, ctx.ws),
-			evidence: row.Evidence}
+		return readiness.Check{Label: label, Verdict: readiness.VerdictTodo,
+			Detail:   fmt.Sprintf("registered, but pix has no record of attaching it to %s; attach live, or recreate with `pix run --replace`", ctx.sandbox),
+			Todo:     mcpLoadTodoCommand(name, ctx.ws),
+			Evidence: row.Evidence}
 	case mcpJoinNotRegistered:
-		return check{label: label, verdict: verdictUnverifiable,
-			detail:   fmt.Sprintf("not currently registered, and the receipt has no positive claim for it either; attachment cannot be claimed for %s; %s", ctx.sandbox, guidance),
-			evidence: row.Evidence}
+		return readiness.Check{Label: label, Verdict: readiness.VerdictUnverifiable,
+			Detail:   fmt.Sprintf("not currently registered, and the receipt has no positive claim for it either; attachment cannot be claimed for %s; %s", ctx.sandbox, guidance),
+			Evidence: row.Evidence}
 	}
 	// mcpJoinUnverifiable: the receipt is absent, untrustworthy, or PARTIAL
 	// (valid but load-only — it proves only the loads it lists, so a name it
 	// doesn't list is unverifiable, never "positively not attached"), or
 	// registration itself is unknowable.
 	if ctx.status == workspace.MCPStateOK && ctx.receipt.IsPartial() {
-		return check{label: label, verdict: verdictUnverifiable,
-			detail: fmt.Sprintf("launcher receipt for sandbox %s is partial (load-only, no create record); preload state unknown; %s",
+		return readiness.Check{Label: label, Verdict: readiness.VerdictUnverifiable,
+			Detail: fmt.Sprintf("launcher receipt for sandbox %s is partial (load-only, no create record); preload state unknown; %s",
 				ctx.sandbox, guidance),
-			evidence: row.Evidence}
+			Evidence: row.Evidence}
 	}
 	if ctx.status == workspace.MCPStateAbsent {
-		return check{label: label, verdict: verdictUnverifiable,
-			detail:   fmt.Sprintf("no launcher receipt for sandbox %s; attachment unverified; %s", ctx.sandbox, guidance),
-			evidence: row.Evidence}
+		return readiness.Check{Label: label, Verdict: readiness.VerdictUnverifiable,
+			Detail:   fmt.Sprintf("no launcher receipt for sandbox %s; attachment unverified; %s", ctx.sandbox, guidance),
+			Evidence: row.Evidence}
 	}
 	if reg == mcpRegUnknown {
-		return check{label: label, verdict: verdictUnverifiable,
-			detail:   fmt.Sprintf("registration listing unavailable for sandbox %s; attachment unverified; %s", ctx.sandbox, guidance),
-			evidence: row.Evidence}
+		return readiness.Check{Label: label, Verdict: readiness.VerdictUnverifiable,
+			Detail:   fmt.Sprintf("registration listing unavailable for sandbox %s; attachment unverified; %s", ctx.sandbox, guidance),
+			Evidence: row.Evidence}
 	}
-	return check{label: label, verdict: verdictUnverifiable,
-		detail: fmt.Sprintf("launcher receipt for sandbox %s is %s; not trusting it; %s",
+	return readiness.Check{Label: label, Verdict: readiness.VerdictUnverifiable,
+		Detail: fmt.Sprintf("launcher receipt for sandbox %s is %s; not trusting it; %s",
 			ctx.sandbox, ctx.status, guidance),
-		evidence: row.Evidence}
+		Evidence: row.Evidence}
 }
 
 // mcpRegisteredIn reports registration truth from the bounded `sbx mcp ls`
@@ -322,18 +323,18 @@ func mcpRegisteredIn(mcpOut, name string) bool {
 // itself failed: sbx absent (in-sandbox) vs sbx present but the gateway
 // listing failing (daemon unhealthy). Doctor knows NOTHING about this server
 // then — unverifiable, no repair command.
-func mcpUnavailableCheck(name string, sbxPresent bool) check {
+func mcpUnavailableCheck(name string, sbxPresent bool) readiness.Check {
 	if sbxPresent {
-		return check{label: name, verdict: verdictUnverifiable, detail: gatewayDownDetail}
+		return readiness.Check{Label: name, Verdict: readiness.VerdictUnverifiable, Detail: gatewayDownDetail}
 	}
-	return check{label: name, verdict: verdictUnverifiable,
-		detail: "sbx unavailable here; registration cannot be verified (check from the host)"}
+	return readiness.Check{Label: name, Verdict: readiness.VerdictUnverifiable,
+		Detail: "sbx unavailable here; registration cannot be verified (check from the host)"}
 }
 
 // mcpNotRegisteredCheck is a POSITIVELY VERIFIED registration gap (the bounded
 // `sbx mcp ls` succeeded and lacks the name) with the type-correct repair.
 // Always optional: an MCP server is an integration, never core.
-func mcpNotRegisteredCheck(name string, kind mcpKind) check {
+func mcpNotRegisteredCheck(name string, kind mcpKind) readiness.Check {
 	detail := "not registered"
 	switch kind {
 	case mcpKindCatalog:
@@ -345,14 +346,14 @@ func mcpNotRegisteredCheck(name string, kind mcpKind) check {
 			"(`pix mcp register` is local-stdio-only; `pix mcp bundle` covers only " +
 			mcpCatalogSummary() + "). Register it natively with its own URL/transport: sbx mcp add"
 	}
-	return check{label: name, verdict: verdictTodo, detail: detail, todo: mcpRegisterTodo(name, kind)}
+	return readiness.Check{Label: name, Verdict: readiness.VerdictTodo, Detail: detail, Todo: mcpRegisterTodo(name, kind)}
 }
 
 // mcpUnknownKindCheck is the fail-closed rendering when classification itself
 // could not be established (`pix-host mcp --list` unavailable): doctor
 // must not guess local vs remote, so there is no probe, no exec, and NO repair
 // command — none is safe to recommend.
-func mcpUnknownKindCheck(name, mcpOut string, mcpOK, sbxPresent bool) check {
+func mcpUnknownKindCheck(name, mcpOut string, mcpOK, sbxPresent bool) readiness.Check {
 	if !mcpOK {
 		return mcpUnavailableCheck(name, sbxPresent)
 	}
@@ -364,7 +365,7 @@ func mcpUnknownKindCheck(name, mcpOut string, mcpOK, sbxPresent bool) check {
 	} else {
 		det = "not seen in `sbx mcp ls`; " + det
 	}
-	return check{label: name, verdict: verdictUnverifiable, detail: det, evidence: "classification unknown"}
+	return readiness.Check{Label: name, Verdict: readiness.VerdictUnverifiable, Detail: det, Evidence: "classification unknown"}
 }
 
 // mcpLocalCheck is the HONEST local stdio check: registered -> spawns ->
@@ -375,35 +376,35 @@ func mcpUnknownKindCheck(name, mcpOut string, mcpOK, sbxPresent bool) check {
 // or untrusted shape -> unverifiable (registration stays stated, never a false
 // green health claim); a timeout/exec failure -> unverifiable; a clean spawn
 // with zero tools -> a verified headless-creds TODO.
-func mcpLocalCheck(env shellEnv, name, mcpOut string) check {
+func mcpLocalCheck(env shellEnv, name, mcpOut string) readiness.Check {
 	argv, ok := registeredMCPCommand(env, name)
 	if !ok {
-		return check{label: name, verdict: verdictUnverifiable,
-			detail: "registered (tool probe unavailable: couldn't read the registered command)"}
+		return readiness.Check{Label: name, Verdict: readiness.VerdictUnverifiable,
+			Detail: "registered (tool probe unavailable: couldn't read the registered command)"}
 	}
 	trusted, ok := recognizedMCPArgv(env, argv, name)
 	if !ok {
-		return check{label: name, verdict: verdictUnverifiable,
-			detail: "registered (probe skipped: unrecognized/untrusted command, never executed; inspect: sbx mcp inspect " + name + ")"}
+		return readiness.Check{Label: name, Verdict: readiness.VerdictUnverifiable,
+			Detail: "registered (probe skipped: unrecognized/untrusted command, never executed; inspect: sbx mcp inspect " + name + ")"}
 	}
 	res := probeListTools(env, trusted)
 	switch res.status {
 	case probeToolsOK:
-		return check{label: name, verdict: verdictReady,
-			detail: fmt.Sprintf("registered, spawns %s", plural(res.tools, "tool"))}
+		return readiness.Check{Label: name, Verdict: readiness.VerdictReady,
+			Detail: fmt.Sprintf("registered, spawns %s", plural(res.tools, "tool"))}
 	case probeNoTools:
-		return check{label: name, verdict: verdictTodo,
-			detail: "registered but the spawned command returns 0 tools — headless creds/keyring",
-			todo:   "review the registered command: sbx mcp inspect " + name}
+		return readiness.Check{Label: name, Verdict: readiness.VerdictTodo,
+			Detail: "registered but the spawned command returns 0 tools — headless creds/keyring",
+			Todo:   "review the registered command: sbx mcp inspect " + name}
 	case probeDeniedByPolicy:
 		// An EXPLICIT policy/permission refusal is a positive denial — an org
 		// decision, not a setup gap, and never collapsed into unverifiable.
-		return check{label: name, verdict: verdictDenied,
-			detail:   "registered, but the spawn is positively refused by policy/permission (sbx mcp inspect " + name + ")",
-			evidence: "denied"}
+		return readiness.Check{Label: name, Verdict: readiness.VerdictDenied,
+			Detail:   "registered, but the spawn is positively refused by policy/permission (sbx mcp inspect " + name + ")",
+			Evidence: "denied"}
 	default: // probeTimedOut / probeError
-		return check{label: name, verdict: verdictUnverifiable,
-			detail: "registered but the tool probe " + res.detail + "; could not verify"}
+		return readiness.Check{Label: name, Verdict: readiness.VerdictUnverifiable,
+			Detail: "registered but the tool probe " + res.detail + "; could not verify"}
 	}
 }
 
@@ -416,37 +417,37 @@ func mcpLocalCheck(env shellEnv, name, mcpOut string) check {
 //   - an EXPLICIT policy/forbidden/access-denied signal -> denied (an org
 //     decision, not a setup gap — no setup command can fix it);
 //   - a timeout or transport/exec failure -> unverifiable, never a guess.
-func mcpRemoteAuthCheck(env shellEnv, name string) check {
+func mcpRemoteAuthCheck(env shellEnv, name string) readiness.Check {
 	out, timedOut, err := env.RunTimed("sbx", "mcp", "auth", "status", name)
 	if timedOut {
-		return check{label: name, verdict: verdictUnverifiable,
-			detail: "registered; auth status timed out (sbx mcp auth status " + name + "); could not verify"}
+		return readiness.Check{Label: name, Verdict: readiness.VerdictUnverifiable,
+			Detail: "registered; auth status timed out (sbx mcp auth status " + name + "); could not verify"}
 	}
 	// EXPLICIT denial signals win regardless of exit code: a policy denial is
 	// a positive refusal, not a credential gap.
 	if classifyProbeFailure(out, err) == probeDenied {
-		return check{label: name, verdict: verdictDenied,
-			detail:   "registered, but access is denied by policy (sbx mcp auth status " + name + ")",
-			evidence: "denied"}
+		return readiness.Check{Label: name, Verdict: readiness.VerdictDenied,
+			Detail:   "registered, but access is denied by policy (sbx mcp auth status " + name + ")",
+			Evidence: "denied"}
 	}
 	if err != nil {
 		if classifyProbeFailure(out, err) == probeAuthTodo {
-			return check{label: name, verdict: verdictTodo,
-				detail: "registered but not authorized", todo: "pix mcp auth " + name}
+			return readiness.Check{Label: name, Verdict: readiness.VerdictTodo,
+				Detail: "registered but not authorized", Todo: "pix mcp auth " + name}
 		}
-		return check{label: name, verdict: verdictUnverifiable,
-			detail: "registered; auth status could not be verified (sbx mcp auth status " + name + ")"}
+		return readiness.Check{Label: name, Verdict: readiness.VerdictUnverifiable,
+			Detail: "registered; auth status could not be verified (sbx mcp auth status " + name + ")"}
 	}
 	switch mcpAuthStatus(out) {
 	case mcpAuthOK:
-		return check{label: name, verdict: verdictReady, detail: "registered, authorized",
-			evidence: "sbx mcp auth status " + name}
+		return readiness.Check{Label: name, Verdict: readiness.VerdictReady, Detail: "registered, authorized",
+			Evidence: "sbx mcp auth status " + name}
 	case mcpAuthFailed:
-		return check{label: name, verdict: verdictTodo,
-			detail: "registered but not authorized", todo: "pix mcp auth " + name}
+		return readiness.Check{Label: name, Verdict: readiness.VerdictTodo,
+			Detail: "registered but not authorized", Todo: "pix mcp auth " + name}
 	default: // mcpAuthUnknown
-		return check{label: name, verdict: verdictUnverifiable,
-			detail: "registered; auth status unclear (sbx mcp auth status " + name + "); could not verify"}
+		return readiness.Check{Label: name, Verdict: readiness.VerdictUnverifiable,
+			Detail: "registered; auth status unclear (sbx mcp auth status " + name + "); could not verify"}
 	}
 }
 
@@ -458,9 +459,9 @@ func mcpRemoteAuthCheck(env shellEnv, name string) check {
 // unregistered or unclassifiable (mcpjoin.go's PRECEDENCE): registration
 // truth is a separate, present-tense fact that never proves the sandbox was
 // unloaded.
-func mcpServerChecks(env shellEnv, name string, kind mcpKind, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) []check {
+func mcpServerChecks(env shellEnv, name string, kind mcpKind, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) []readiness.Check {
 	reg := mcpRegEvidenceFrom(mcpOut, mcpOK, name)
-	attach := func(cks []check) []check {
+	attach := func(cks []readiness.Check) []readiness.Check {
 		if ctx.mode == mcpAttachReceipt {
 			cks = append(cks, mcpAttachCheck(name, ctx, reg))
 		}
@@ -469,15 +470,15 @@ func mcpServerChecks(env shellEnv, name string, kind mcpKind, mcpOut string, mcp
 	if kind == mcpKindUnknown {
 		// Fail closed BEFORE any probing: unknown classification never reads or
 		// execs the registered definition and never picks a repair command.
-		return attach([]check{mcpUnknownKindCheck(name, mcpOut, mcpOK, sbxPresent)})
+		return attach([]readiness.Check{mcpUnknownKindCheck(name, mcpOut, mcpOK, sbxPresent)})
 	}
 	if !mcpOK {
-		return attach([]check{mcpUnavailableCheck(name, sbxPresent)})
+		return attach([]readiness.Check{mcpUnavailableCheck(name, sbxPresent)})
 	}
 	if !mcpRegisteredIn(mcpOut, name) {
-		return attach([]check{mcpNotRegisteredCheck(name, kind)})
+		return attach([]readiness.Check{mcpNotRegisteredCheck(name, kind)})
 	}
-	var out []check
+	var out []readiness.Check
 	switch kind {
 	case mcpKindLocal:
 		out = append(out, mcpLocalCheck(env, name, mcpOut))
@@ -486,8 +487,8 @@ func mcpServerChecks(env shellEnv, name string, kind mcpKind, mcpOut string, mcp
 	default: // mcpKindPackContainer, mcpKindCustom
 		// Registration is confirmed; there is nothing further doctor can
 		// honestly verify here (no trusted local spawn, no native OAuth).
-		out = append(out, check{label: name, verdict: verdictReady, detail: "registered",
-			evidence: "sbx mcp ls"})
+		out = append(out, readiness.Check{Label: name, Verdict: readiness.VerdictReady, Detail: "registered",
+			Evidence: "sbx mcp ls"})
 	}
 	return attach(out)
 }
@@ -497,25 +498,25 @@ func mcpServerChecks(env shellEnv, name string, kind mcpKind, mcpOut string, mcp
 // accepted-and-ignored, and the next config mutation (`pix config
 // set`/`unset`) rewrites config.toml without it. No todo command: any
 // mutation drops it, and there is nothing to "fix" beyond that.
-func retiredKeyCheck(key string) check {
-	return check{
-		label:   "config " + key,
-		verdict: verdictTodo,
-		detail: "retired config key; ignored (every configured MCP server now preloads at sandbox create); " +
+func retiredKeyCheck(key string) readiness.Check {
+	return readiness.Check{
+		Label:   "config " + key,
+		Verdict: readiness.VerdictTodo,
+		Detail: "retired config key; ignored (every configured MCP server now preloads at sandbox create); " +
 			"the next `pix config set`/`unset` rewrite drops it from config.toml",
-		evidence: "retired key present in config.toml",
+		Evidence: "retired key present in config.toml",
 	}
 }
 
 // unknownKeyCheck surfaces an unrecognized config key — softer than a retired
 // one: doctor cannot tell a typo from a newer pix's key, so this is
 // unverifiable info, never a verified failure.
-func unknownKeyCheck(key string) check {
-	return check{
-		label:    "config " + key,
-		verdict:  verdictUnverifiable,
-		detail:   "unknown config key; ignored (a typo, or a key only a newer pix understands)",
-		evidence: "unknown key present in config.toml",
+func unknownKeyCheck(key string) readiness.Check {
+	return readiness.Check{
+		Label:    "config " + key,
+		Verdict:  readiness.VerdictUnverifiable,
+		Detail:   "unknown config key; ignored (a typo, or a key only a newer pix understands)",
+		Evidence: "unknown key present in config.toml",
 	}
 }
 
@@ -701,7 +702,7 @@ func trustedHostBinaryExecPath(env shellEnv, tok string) (string, bool) {
 // trustedExecPath, trustedGogSpawn, probeStatus/probeResult, probeListTools,
 // and classifyProbeErr are SHARED with doctor_gog.go — see doctor_probe.go,
 // which owns the single implementation. mcpLocalCheck maps the shared
-// probeDeniedByPolicy outcome to verdictDenied (an explicit policy refusal is
+// probeDeniedByPolicy outcome to readiness.VerdictDenied (an explicit policy refusal is
 // a positive denial, same as the remote auth axis), and everything else
 // unclassified to unverifiable.
 
@@ -746,7 +747,7 @@ func mcpAuthStatus(out string) mcpAuthResult {
 // every active-pack integration server. gog is DELIBERATELY skipped — the
 // dedicated gog group already owns its registration check + TODO, so probing
 // it again would emit a duplicate `pix mcp register`.
-func mcpGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) group {
+func mcpGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) readiness.Group {
 	return mcpGroupWith(cfg, env, mcpOut, mcpOK, sbxPresent,
 		activeContainerMCP(cfg), ctx)
 }
@@ -754,9 +755,9 @@ func mcpGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 // mcpGroupWith is mcpGroup with the pack-integration set and the sandbox
 // context injected, so tests drive both hermetically.
 func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent bool,
-	containers map[string]packContainer, ctx mcpSandboxContext) group {
+	containers map[string]packContainer, ctx mcpSandboxContext) readiness.Group {
 
-	mcp := group{title: "MCP servers (via the sbx gateway)"}
+	mcp := readiness.Group{Title: "MCP servers (via the sbx gateway)"}
 
 	// The server set: configured servers first (order preserved), then any
 	// pack-declared integration servers not already configured, then — when a
@@ -775,11 +776,11 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 	names, receiptOnly := mcpConfiguredUniverse(currentIntent, receipt, exclude)
 
 	if len(names) == 0 {
-		mcp.checks = append(mcp.checks, check{
-			label:   "(none configured)",
-			note:    true,
-			verdict: verdictUnverifiable,
-			detail:  "add servers with `pix config set mcp <server>`",
+		mcp.Checks = append(mcp.Checks, readiness.Check{
+			Label:   "(none configured)",
+			Note:    true,
+			Verdict: readiness.VerdictUnverifiable,
+			Detail:  "add servers with `pix config set mcp <server>`",
 		})
 	} else {
 		// Classification source of truth: the same `pix-host mcp --list`
@@ -794,7 +795,7 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 					cks[i] = annotateReceiptOnlyCheck(cks[i], m)
 				}
 			}
-			mcp.checks = append(mcp.checks, cks...)
+			mcp.Checks = append(mcp.Checks, cks...)
 			if mcpOK && kind != mcpKindUnknown && mcpRegisteredIn(mcpOut, m) {
 				anyRegistered = true
 			}
@@ -809,17 +810,17 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 			} else if ctx.note != "" {
 				det = ctx.note + "; reporting registration/auth only"
 			}
-			mcp.checks = append(mcp.checks, check{label: "attachment", note: true, verdict: verdictUnverifiable, detail: det})
+			mcp.Checks = append(mcp.Checks, readiness.Check{Label: "attachment", Note: true, Verdict: readiness.VerdictUnverifiable, Detail: det})
 		}
 	}
 
 	// Config hygiene: stale retired keys (the removed mcp_static/mcp_dynamic
 	// split) are a verified optional leftover; unknown keys are softer info.
 	for _, k := range cfg.RetiredKeys() {
-		mcp.checks = append(mcp.checks, retiredKeyCheck(k))
+		mcp.Checks = append(mcp.Checks, retiredKeyCheck(k))
 	}
 	for _, k := range cfg.UnknownKeys() {
-		mcp.checks = append(mcp.checks, unknownKeyCheck(k))
+		mcp.Checks = append(mcp.Checks, unknownKeyCheck(k))
 	}
 	return mcp
 }
@@ -829,9 +830,9 @@ func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPre
 // sandbox's own receipt proves it was preloaded or loaded here — sandbox
 // PROVENANCE, never current preload intent. Evidence-only: it never changes
 // verdict, label, or todo.
-func annotateReceiptOnlyCheck(c check, name string) check {
+func annotateReceiptOnlyCheck(c readiness.Check, name string) readiness.Check {
 	note := "sandbox provenance only (from this sandbox's receipt); " + name + " is not part of the current cfg.MCP/pack"
-	c.evidence = c.evidenceString() + "; " + note
+	c.Evidence = c.EvidenceString() + "; " + note
 	return c
 }
 

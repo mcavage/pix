@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/readiness"
 	"strings"
 	"testing"
 
@@ -29,11 +30,11 @@ func TestGatewayInferenceSatisfiesCoreReadinessWithoutProviderKeys(t *testing.T)
 		Models:   []config.InferenceModelBinding{{Model: "openai/gpt-5.6-sol", Backend: "docker-openai", Upstream: "gpt-5.6-sol", Available: true}},
 	}}
 	core := inferenceCoreCheck(cfg, "", true)
-	if core.verdict != verdictReady || core.label != "inference" {
+	if core.Verdict != readiness.VerdictReady || core.Label != "inference" {
 		t.Fatalf("core = %+v", core)
 	}
 	session := runIntentKeyCheck(cfg, "", true)
-	if session.verdict != verdictReady || !strings.Contains(session.detail, runtimeModel) {
+	if session.Verdict != readiness.VerdictReady || !strings.Contains(session.Detail, runtimeModel) {
 		t.Fatalf("session = %+v", session)
 	}
 }
@@ -42,20 +43,20 @@ func TestGatewayInferenceSatisfiesCoreReadinessWithoutProviderKeys(t *testing.T)
 // makes the core "model key" check ready \u2014 core, no todo, never blocking.
 func TestProvidersGroup_OneKeyReady(t *testing.T) {
 	g := providersGroup(nil, "anthropic\ngithub\n", true)
-	core := g.checks[0]
-	if core.label != "model key" {
-		t.Fatalf("expected the core check first, got %q", core.label)
+	core := g.Checks[0]
+	if core.Label != "model key" {
+		t.Fatalf("expected the core check first, got %q", core.Label)
 	}
-	if core.req() != requirementCore {
-		t.Errorf("model key requirement = %q, want core", core.req())
+	if core.Req() != readiness.RequirementCore {
+		t.Errorf("model key requirement = %q, want core", core.Req())
 	}
-	if core.result() != verdictReady {
-		t.Errorf("model key verdict = %q, want ready", core.result())
+	if core.Result() != readiness.VerdictReady {
+		t.Errorf("model key verdict = %q, want ready", core.Result())
 	}
-	if core.todo != "" {
-		t.Errorf("a ready core check must carry no todo, got %q", core.todo)
+	if core.Todo != "" {
+		t.Errorf("a ready core check must carry no todo, got %q", core.Todo)
 	}
-	if blockingCheck(core.req(), core.result()) {
+	if readiness.BlockingCheck(core.Req(), core.Result()) {
 		t.Error("a ready core check must never block")
 	}
 }
@@ -66,32 +67,32 @@ func TestProvidersGroup_OneKeyReady(t *testing.T) {
 // command).
 func TestProvidersGroup_ZeroConfirmed_OneCopyPasteableCommand(t *testing.T) {
 	g := providersGroup(nil, "github\n", true) // github set, but no MODEL key
-	core := g.checks[0]
-	if core.req() != requirementCore {
-		t.Fatalf("model key requirement = %q, want core", core.req())
+	core := g.Checks[0]
+	if core.Req() != readiness.RequirementCore {
+		t.Fatalf("model key requirement = %q, want core", core.Req())
 	}
-	if core.result() != verdictTodo {
-		t.Fatalf("model key verdict = %q, want todo", core.result())
+	if core.Result() != readiness.VerdictTodo {
+		t.Fatalf("model key verdict = %q, want todo", core.Result())
 	}
-	if !blockingCheck(core.req(), core.result()) {
+	if !readiness.BlockingCheck(core.Req(), core.Result()) {
 		t.Error("a positively-confirmed-zero core check must block")
 	}
-	if core.todo == "" {
+	if core.Todo == "" {
 		t.Fatal("expected a copy-pasteable fix command")
 	}
 	// Exactly one command, and it must be the one that actually finishes the
 	// job. `pix secret set` stores a credential ref and stops, so a user who
 	// follows it lands right back here with the same check failing — the dead
 	// end `pix models add` exists to close.
-	if strings.Count(core.todo, "pix models add") != 1 {
-		t.Errorf("todo must name exactly one `pix models add` invocation, got %q", core.todo)
+	if strings.Count(core.Todo, "pix models add") != 1 {
+		t.Errorf("todo must name exactly one `pix models add` invocation, got %q", core.Todo)
 	}
-	if strings.Contains(core.todo, "pix secret set") {
-		t.Errorf("todo must not send the user to `pix secret set`, which leaves the key unwired: %q", core.todo)
+	if strings.Contains(core.Todo, "pix secret set") {
+		t.Errorf("todo must not send the user to `pix secret set`, which leaves the key unwired: %q", core.Todo)
 	}
 	// Alternatives belong in evidence, never as a second command.
-	if !strings.Contains(core.evidenceString(), "openai") || !strings.Contains(core.evidenceString(), "google") {
-		t.Errorf("evidence should name the alternative providers, got %q", core.evidenceString())
+	if !strings.Contains(core.EvidenceString(), "openai") || !strings.Contains(core.EvidenceString(), "google") {
+		t.Errorf("evidence should name the alternative providers, got %q", core.EvidenceString())
 	}
 }
 
@@ -99,18 +100,18 @@ func TestProvidersGroup_ZeroConfirmed_OneCopyPasteableCommand(t *testing.T) {
 // denied, never blocking, and carries no todo command.
 func TestProvidersGroup_SbxAbsentUnverifiable(t *testing.T) {
 	g := providersGroup(nil, "", false)
-	core := g.checks[0]
-	if core.result() != verdictUnverifiable {
-		t.Fatalf("model key verdict = %q, want unverifiable", core.result())
+	core := g.Checks[0]
+	if core.Result() != readiness.VerdictUnverifiable {
+		t.Fatalf("model key verdict = %q, want unverifiable", core.Result())
 	}
-	if core.result() == verdictDenied {
+	if core.Result() == readiness.VerdictDenied {
 		t.Error("sbx-absent must never be classified denied")
 	}
-	if blockingCheck(core.req(), core.result()) {
+	if readiness.BlockingCheck(core.Req(), core.Result()) {
 		t.Error("an unverifiable core check must never block")
 	}
-	if core.todo != "" {
-		t.Errorf("an unverifiable check must carry no todo, got %q", core.todo)
+	if core.Todo != "" {
+		t.Errorf("an unverifiable check must carry no todo, got %q", core.Todo)
 	}
 }
 
@@ -119,9 +120,9 @@ func TestProvidersGroup_SbxAbsentUnverifiable(t *testing.T) {
 // (control plane down). Same tri-state sbxOK=false path as sbxModelKeyState.
 func TestProvidersGroup_SecretLsFailure_Unverifiable(t *testing.T) {
 	g := providersGroup(nil, "", false) // sbxOK=false covers both "absent" and "errored"
-	core := g.checks[0]
-	if core.result() != verdictUnverifiable {
-		t.Fatalf("verdict = %q, want unverifiable", core.result())
+	core := g.Checks[0]
+	if core.Result() != readiness.VerdictUnverifiable {
+		t.Fatalf("verdict = %q, want unverifiable", core.Result())
 	}
 }
 
@@ -140,13 +141,13 @@ func TestProvidersGroup_AlternateMissingNotOutstanding(t *testing.T) {
 	// session-model vendor is a config fix, not a blocking gap, and the core
 	// "at least one key" gate is satisfied.
 	g := providersGroup(nil, "anthropic\n", true)
-	r := &report{groups: []group{g}}
-	if got := r.outstanding(); got != 0 {
+	r := &readiness.Report{Groups: []readiness.Group{g}}
+	if got := r.Outstanding(); got != 0 {
 		t.Errorf("outstanding = %d, want 0 (missing alternates + the run_intent advisory are informational)", got)
 	}
-	for _, c := range g.checks[1:] {
-		if !c.note {
-			t.Errorf("per-provider check %q must be a note (informational), got %+v", c.label, c)
+	for _, c := range g.Checks[1:] {
+		if !c.Note {
+			t.Errorf("per-provider check %q must be a note (informational), got %+v", c.Label, c)
 		}
 	}
 	// The session-model advisory is a NOTE (asserted above), so it must NOT
@@ -154,22 +155,22 @@ func TestProvidersGroup_AlternateMissingNotOutstanding(t *testing.T) {
 	// VERIFIED, non-informational failures (report.todos() excludes every note,
 	// same as outstanding()/unverifiableCount()); a green headline must never
 	// carry an actionable TODO generated purely by an informational note.
-	if td := r.todos(); len(td) != 0 {
+	if td := r.Todos(); len(td) != 0 {
 		t.Errorf("todos = %v, want none — the session-model advisory is a note and must not appear in the aggregate TODO list", td)
 	}
 	// The check itself still carries the OPENAI_API_KEY command in its OWN
 	// .todo field (surfaced per-check in JSON's Fix, not the aggregate list) so
 	// a consumer that reads the individual row loses no information.
-	var sessionCheck *check
-	for i := range g.checks {
-		if strings.HasPrefix(g.checks[i].label, "session model") {
-			sessionCheck = &g.checks[i]
+	var sessionCheck *readiness.Check
+	for i := range g.Checks {
+		if strings.HasPrefix(g.Checks[i].Label, "session model") {
+			sessionCheck = &g.Checks[i]
 		}
 	}
 	// The point of this row is that it names the SPECIFIC missing provider (the
 	// session model's), not a generic "set a key" — and that following it
 	// actually wires that provider up.
-	if sessionCheck == nil || !strings.Contains(sessionCheck.todo, "pix models add openai") {
+	if sessionCheck == nil || !strings.Contains(sessionCheck.Todo, "pix models add openai") {
 		t.Errorf("expected the session model check's own .todo to wire openai, got %+v", sessionCheck)
 	}
 }
@@ -179,25 +180,25 @@ func TestProvidersGroup_AlternateMissingNotOutstanding(t *testing.T) {
 // set (the model-key core todo is the only outstanding item).
 func TestProvidersGroup_GithubOptional_NoOutstanding(t *testing.T) {
 	g := providersGroup(nil, "", true) // sbx reachable, nothing set at all
-	r := &report{groups: []group{g}}
-	if got := r.outstanding(); got != 1 {
+	r := &readiness.Report{Groups: []readiness.Group{g}}
+	if got := r.Outstanding(); got != 1 {
 		t.Errorf("outstanding = %d, want 1 (only the core model-key todo)", got)
 	}
-	var github check
+	var github readiness.Check
 	found := false
-	for _, c := range g.checks {
-		if c.label == "github" {
+	for _, c := range g.Checks {
+		if c.Label == "github" {
 			github, found = c, true
 		}
 	}
 	if !found {
 		t.Fatal("expected a github info line")
 	}
-	if !github.note {
+	if !github.Note {
 		t.Error("github must be an informational note, never a second requirement")
 	}
-	if strings.Contains(github.detail, "set") && !strings.Contains(github.detail, "not configured") {
-		t.Errorf("github detail = %q", github.detail)
+	if strings.Contains(github.Detail, "set") && !strings.Contains(github.Detail, "not configured") {
+		t.Errorf("github detail = %q", github.Detail)
 	}
 }
 
@@ -205,25 +206,25 @@ func TestProvidersGroup_GithubOptional_NoOutstanding(t *testing.T) {
 // github's info line reads unverifiable (via detail text), not a false claim.
 func TestProvidersGroup_GithubProbeFailure_Unverifiable(t *testing.T) {
 	g := providersGroup(nil, "", false)
-	var github check
-	for _, c := range g.checks {
-		if c.label == "github" {
+	var github readiness.Check
+	for _, c := range g.Checks {
+		if c.Label == "github" {
 			github = c
 		}
 	}
-	if !github.note {
+	if !github.Note {
 		t.Fatal("github must remain a note even when unverifiable")
 	}
-	if !strings.Contains(github.detail, "cannot verify") {
-		t.Errorf("github detail = %q, want a cannot-verify note", github.detail)
+	if !strings.Contains(github.Detail, "cannot verify") {
+		t.Errorf("github detail = %q, want a cannot-verify note", github.Detail)
 	}
 }
 
 // TestProvidersGroup_JSON: exact JSON contract for the core check and the
 // per-provider info lines.
 func TestProvidersGroup_JSON(t *testing.T) {
-	r := &report{groups: []group{providersGroup(nil, "anthropic\n", true)}}
-	v := r.jsonView("")
+	r := &readiness.Report{Groups: []readiness.Group{providersGroup(nil, "anthropic\n", true)}}
+	v := jsonView(r, "")
 	if v.Blocking {
 		t.Error("one confirmed key must not block")
 	}
@@ -251,8 +252,8 @@ func TestProvidersGroup_JSON(t *testing.T) {
 // TestProvidersGroup_JSON_ZeroConfirmed: the blocked-JSON shape when zero keys
 // are confirmed.
 func TestProvidersGroup_JSON_ZeroConfirmed(t *testing.T) {
-	r := &report{groups: []group{providersGroup(nil, "", true)}}
-	v := r.jsonView("")
+	r := &readiness.Report{Groups: []readiness.Group{providersGroup(nil, "", true)}}
+	v := jsonView(r, "")
 	if !v.Blocking || v.Verdict != "blocked" {
 		t.Errorf("zero confirmed -> (blocking=%v, verdict=%q), want (true, blocked)", v.Blocking, v.Verdict)
 	}
@@ -265,9 +266,9 @@ func TestProvidersGroup_JSON_ZeroConfirmed(t *testing.T) {
 // TestProvidersGroup_RenderConcise: concise mode collapses the ready per-key
 // notes/checks but still shows the group is all-ready when a key is present.
 func TestProvidersGroup_RenderConcise(t *testing.T) {
-	r := &report{groups: []group{providersGroup(nil, "anthropic\nopenai\ngoogle\ngithub\n", true)}}
+	r := &readiness.Report{Groups: []readiness.Group{providersGroup(nil, "anthropic\nopenai\ngoogle\ngithub\n", true)}}
 	var buf bytes.Buffer
-	r.render(&buf, false)
+	r.Render(&buf, false, doctorHints())
 	out := buf.String()
 	if !strings.Contains(out, "Inference / credentials") {
 		t.Errorf("expected the providers group title, got:\n%s", out)
@@ -280,9 +281,9 @@ func TestProvidersGroup_RenderConcise(t *testing.T) {
 // TestProvidersGroup_RenderVerbose: verbose mode shows every per-provider
 // info line, not just the collapsed core summary.
 func TestProvidersGroup_RenderVerbose(t *testing.T) {
-	r := &report{groups: []group{providersGroup(nil, "anthropic\n", true)}}
+	r := &readiness.Report{Groups: []readiness.Group{providersGroup(nil, "anthropic\n", true)}}
 	var buf bytes.Buffer
-	r.render(&buf, true)
+	r.Render(&buf, true, doctorHints())
 	out := buf.String()
 	for _, want := range []string{"anthropic", "openai", "google", "github", "model key"} {
 		if !strings.Contains(out, want) {
@@ -294,9 +295,9 @@ func TestProvidersGroup_RenderVerbose(t *testing.T) {
 // TestProvidersGroup_RenderZeroConfirmed_OneTodoLine: the concise render must
 // surface exactly the one fix command, in the TODO section.
 func TestProvidersGroup_RenderZeroConfirmed_OneTodoLine(t *testing.T) {
-	r := &report{groups: []group{providersGroup(nil, "", true)}}
+	r := &readiness.Report{Groups: []readiness.Group{providersGroup(nil, "", true)}}
 	var buf bytes.Buffer
-	r.render(&buf, false)
+	r.Render(&buf, false, doctorHints())
 	out := buf.String()
 	if strings.Count(out, "TODO: pix models add") != 1 {
 		t.Errorf("expected exactly one provider TODO line, got:\n%s", out)

@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"pix/host/hostenv"
+	"pix/host/readiness"
 	"strings"
 	"time"
 
@@ -488,7 +489,7 @@ func slackSetupStatic(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Wr
 			"would be shadowed by it and never used by the running server — run `pix slack disable` first if you want to switch to a static token")
 	}
 
-	// Snapshot gateway state before touching refs. Never bless or overwrite an
+	// snapshot gateway state before touching refs. Never bless or overwrite an
 	// arbitrary command that merely happens to be registered as "slack".
 	wasRegistered, err := slackRegistrationPreflight(env)
 	if err != nil {
@@ -555,16 +556,16 @@ func slackSetupStatic(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Wr
 // process exit code: 1 for a verified gap, 3 for something that could not be
 // checked from here, 0 when everything is proven. Mirrors gworkspaceExit's
 // contract exactly (a verified failure outranks an unverifiable).
-func slackExit(checks []check) int {
+func slackExit(checks []readiness.Check) int {
 	worst := 0
 	for _, c := range checks {
-		if c.note {
+		if c.Note {
 			continue
 		}
-		switch c.verdict {
-		case verdictTodo, verdictDenied:
+		switch c.Verdict {
+		case readiness.VerdictTodo, readiness.VerdictDenied:
 			return 1
-		case verdictUnverifiable:
+		case readiness.VerdictUnverifiable:
 			worst = 3
 		}
 	}
@@ -616,7 +617,7 @@ func slackIdentityPins(content string) (teamID, userID string) {
 func slackStatus(cfg *config.Config, env shellEnv, out io.Writer, now time.Time) int {
 	fmt.Fprintln(out, "Slack (optional, personal xoxp- user token, via the host MCP gateway)")
 
-	var checks []check
+	var checks []readiness.Check
 	if slackOAuthConfigComplete(cfg) {
 		checks = append(checks, slackOAuthStatusChecks(cfg, env, now)...)
 	} else {
@@ -625,9 +626,9 @@ func slackStatus(cfg *config.Config, env shellEnv, out io.Writer, now time.Time)
 	checks = append(checks, slackRegistrationAndAttachmentChecks(env)...)
 
 	for _, c := range checks {
-		fmt.Fprintf(out, "  %s %-13s %s\n", checkGlyph(c), c.label, c.detail)
-		if c.todo != "" {
-			fmt.Fprintf(out, "      fix: %s\n", c.todo)
+		fmt.Fprintf(out, "  %s %-13s %s\n", readiness.Glyph(c), c.Label, c.Detail)
+		if c.Todo != "" {
+			fmt.Fprintf(out, "      fix: %s\n", c.Todo)
 		}
 	}
 	return slackExit(checks)
@@ -638,7 +639,7 @@ func slackStatus(cfg *config.Config, env shellEnv, out io.Writer, now time.Time)
 // identity pin comparison. Never runs in OAuth mode (slackStatus branches
 // before calling it), so it can never demand SLACK_TOKEN when OAuth is what
 // is actually configured.
-func slackStaticStatusChecks(env shellEnv) []check {
+func slackStaticStatusChecks(env shellEnv) []readiness.Check {
 	path, content, exists := opRefsContent(env)
 	var ref string
 	var refFilled bool
@@ -650,18 +651,18 @@ func slackStaticStatusChecks(env shellEnv) []check {
 		}
 	}
 
-	var checks []check
+	var checks []readiness.Check
 	switch {
 	case ref == "":
-		checks = append(checks, check{label: "token ref", verdict: verdictTodo,
-			detail: "SLACK_TOKEN is not set in " + path, evidence: "no SLACK_TOKEN line in op-refs.env",
-			todo: "pix slack setup --token-ref op://vault/item/field"})
+		checks = append(checks, readiness.Check{Label: "token ref", Verdict: readiness.VerdictTodo,
+			Detail: "SLACK_TOKEN is not set in " + path, Evidence: "no SLACK_TOKEN line in op-refs.env",
+			Todo: "pix slack setup --token-ref op://vault/item/field"})
 	case !refFilled:
-		checks = append(checks, check{label: "token ref", verdict: verdictTodo,
-			detail: "SLACK_TOKEN is set but is not a filled op:// ref", evidence: "placeholder or non-ref value in op-refs.env",
-			todo: "pix slack setup --token-ref op://vault/item/field"})
+		checks = append(checks, readiness.Check{Label: "token ref", Verdict: readiness.VerdictTodo,
+			Detail: "SLACK_TOKEN is set but is not a filled op:// ref", Evidence: "placeholder or non-ref value in op-refs.env",
+			Todo: "pix slack setup --token-ref op://vault/item/field"})
 	default:
-		checks = append(checks, check{label: "token ref", verdict: verdictReady, detail: ref})
+		checks = append(checks, readiness.Check{Label: "token ref", Verdict: readiness.VerdictReady, Detail: ref})
 	}
 
 	var id slackIdentity
@@ -670,24 +671,24 @@ func slackStaticStatusChecks(env shellEnv) []check {
 		token, ok := opReadNonEmpty(env, ref)
 		switch {
 		case !ok:
-			checks = append(checks, check{label: "resolution", verdict: verdictUnverifiable,
-				detail: "could not resolve " + ref + " via op read", evidence: "op read failed or returned empty"})
+			checks = append(checks, readiness.Check{Label: "resolution", Verdict: readiness.VerdictUnverifiable,
+				Detail: "could not resolve " + ref + " via op read", Evidence: "op read failed or returned empty"})
 		case !strings.HasPrefix(token, "xoxp-"):
-			checks = append(checks, check{label: "resolution", verdict: verdictTodo,
-				detail:   ref + " does not resolve to a personal xoxp- user token",
-				evidence: "resolved value lacks the xoxp- prefix", todo: "pix slack setup --token-ref op://vault/item/field"})
+			checks = append(checks, readiness.Check{Label: "resolution", Verdict: readiness.VerdictTodo,
+				Detail:   ref + " does not resolve to a personal xoxp- user token",
+				Evidence: "resolved value lacks the xoxp- prefix", Todo: "pix slack setup --token-ref op://vault/item/field"})
 		case env.SlackAuth == nil:
-			checks = append(checks, check{label: "identity", verdict: verdictUnverifiable,
-				detail: "cannot verify live identity (no auth.test probe wired here)"})
+			checks = append(checks, readiness.Check{Label: "identity", Verdict: readiness.VerdictUnverifiable,
+				Detail: "cannot verify live identity (no auth.test probe wired here)"})
 		default:
 			got, aerr := env.SlackAuth(token)
 			if aerr != nil {
-				checks = append(checks, check{label: "identity", verdict: verdictTodo,
-					detail: "auth.test failed: " + aerr.Error(), todo: "pix slack setup --token-ref op://vault/item/field"})
+				checks = append(checks, readiness.Check{Label: "identity", Verdict: readiness.VerdictTodo,
+					Detail: "auth.test failed: " + aerr.Error(), Todo: "pix slack setup --token-ref op://vault/item/field"})
 			} else {
 				id, haveIdentity = got, true
-				checks = append(checks, check{label: "identity", verdict: verdictReady,
-					detail: fmt.Sprintf("%s (user %s) on %s (%s)", got.User, got.UserID, got.Team, got.TeamID)})
+				checks = append(checks, readiness.Check{Label: "identity", Verdict: readiness.VerdictReady,
+					Detail: fmt.Sprintf("%s (user %s) on %s (%s)", got.User, got.UserID, got.Team, got.TeamID)})
 			}
 		}
 	}
@@ -695,20 +696,20 @@ func slackStaticStatusChecks(env shellEnv) []check {
 	pinTeam, pinUser := slackIdentityPins(content)
 	switch {
 	case pinTeam == "" && pinUser == "":
-		checks = append(checks, check{label: "identity pin", note: true, verdict: verdictUnverifiable,
-			detail: "no SLACK_TEAM_ID/SLACK_USER_ID pin recorded yet (set by pix slack setup)"})
+		checks = append(checks, readiness.Check{Label: "identity pin", Note: true, Verdict: readiness.VerdictUnverifiable,
+			Detail: "no SLACK_TEAM_ID/SLACK_USER_ID pin recorded yet (set by pix slack setup)"})
 	case !haveIdentity:
-		checks = append(checks, check{label: "identity pin", verdict: verdictUnverifiable,
-			detail: fmt.Sprintf("pinned to team %s / user %s, but the live identity could not be confirmed above", pinTeam, pinUser)})
+		checks = append(checks, readiness.Check{Label: "identity pin", Verdict: readiness.VerdictUnverifiable,
+			Detail: fmt.Sprintf("pinned to team %s / user %s, but the live identity could not be confirmed above", pinTeam, pinUser)})
 	case pinTeam == id.TeamID && pinUser == id.UserID:
-		checks = append(checks, check{label: "identity pin", verdict: verdictReady,
-			detail: "matches the identity pinned at setup"})
+		checks = append(checks, readiness.Check{Label: "identity pin", Verdict: readiness.VerdictReady,
+			Detail: "matches the identity pinned at setup"})
 	default:
-		checks = append(checks, check{label: "identity pin", verdict: verdictTodo,
-			detail: fmt.Sprintf("live identity (team %s / user %s) does not match the pin (team %s / user %s) — "+
+		checks = append(checks, readiness.Check{Label: "identity pin", Verdict: readiness.VerdictTodo,
+			Detail: fmt.Sprintf("live identity (team %s / user %s) does not match the pin (team %s / user %s) — "+
 				"the token was likely swapped; re-run pix slack setup if this is expected",
 				id.TeamID, id.UserID, pinTeam, pinUser),
-			todo: "pix slack setup --token-ref op://vault/item/field"})
+			Todo: "pix slack setup --token-ref op://vault/item/field"})
 	}
 	return checks
 }
@@ -717,30 +718,30 @@ func slackStaticStatusChecks(env shellEnv) []check {
 // and the registration-is-not-attachment reminder — identical regardless of
 // which credential mode backs the server, since both are properties of the
 // gateway, not the credential.
-func slackRegistrationAndAttachmentChecks(env shellEnv) []check {
-	var checks []check
+func slackRegistrationAndAttachmentChecks(env shellEnv) []readiness.Check {
+	var checks []readiness.Check
 	registeredArgv, registrationExists := registeredMCPCommand(env, slackServerName)
 	_, registrationTrusted := recognizedMCPArgv(env, registeredArgv, slackServerName)
 	switch {
 	case registrationExists && registrationTrusted:
-		checks = append(checks, check{label: "registration", verdict: verdictReady,
-			detail: "canonical Pix host command registered with the sbx gateway", evidence: "sbx mcp inspect " + slackServerName})
+		checks = append(checks, readiness.Check{Label: "registration", Verdict: readiness.VerdictReady,
+			Detail: "canonical Pix host command registered with the sbx gateway", Evidence: "sbx mcp inspect " + slackServerName})
 	case registrationExists:
-		checks = append(checks, check{label: "registration", verdict: verdictTodo,
-			detail: "a server named slack is registered, but it is not the canonical Pix host command",
-			todo:   "inspect it with: sbx mcp inspect slack"})
+		checks = append(checks, readiness.Check{Label: "registration", Verdict: readiness.VerdictTodo,
+			Detail: "a server named slack is registered, but it is not the canonical Pix host command",
+			Todo:   "inspect it with: sbx mcp inspect slack"})
 	default:
 		if _, err := env.LookPath("sbx"); err != nil {
-			checks = append(checks, check{label: "registration", verdict: verdictUnverifiable,
-				detail: "sbx unavailable here; registration cannot be verified"})
+			checks = append(checks, readiness.Check{Label: "registration", Verdict: readiness.VerdictUnverifiable,
+				Detail: "sbx unavailable here; registration cannot be verified"})
 		} else {
-			checks = append(checks, check{label: "registration", verdict: verdictTodo,
-				detail: "not registered with the sbx gateway", todo: "pix mcp register slack"})
+			checks = append(checks, readiness.Check{Label: "registration", Verdict: readiness.VerdictTodo,
+				Detail: "not registered with the sbx gateway", Todo: "pix mcp register slack"})
 		}
 	}
 
-	checks = append(checks, check{label: "attachment", note: true, verdict: verdictUnverifiable,
-		detail: "registration is NOT the same as attachment: a sandbox already running won't see slack " +
+	checks = append(checks, readiness.Check{Label: "attachment", Note: true, Verdict: readiness.VerdictUnverifiable,
+		Detail: "registration is NOT the same as attachment: a sandbox already running won't see slack " +
 			"until it's recreated (pix run --replace) or attached live (pix mcp load slack)"})
 	return checks
 }

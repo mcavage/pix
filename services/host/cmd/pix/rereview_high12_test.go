@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"pix/host/readiness"
 	"pix/host/sys/systest"
 	"reflect"
 	"strings"
@@ -332,7 +333,7 @@ func TestMcpLocalCheck_RejectedWrapperNeverProbed(t *testing.T) {
 		return "", nil
 	}
 	c := mcpLocalCheck(env, "slack", "slack\n")
-	if c.result() != verdictUnverifiable || !strings.Contains(c.detail, "never executed") {
+	if c.Result() != readiness.VerdictUnverifiable || !strings.Contains(c.Detail, "never executed") {
 		t.Errorf("rejected wrapper = %+v, want unverifiable + never-executed note", c)
 	}
 }

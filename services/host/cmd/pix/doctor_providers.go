@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"pix/host/readiness"
 	"sort"
 	"strings"
 
@@ -15,15 +16,15 @@ import (
 // Kept for hoststate.go/onboard.go's per-provider booleans (a DIFFERENT need
 // from doctor's readiness axes below: they just want a plain ok/not-ok per
 // key, not the core-vs-informational split doctor renders).
-func secretCheck(label, key, sbxOut string, sbxOK bool) check {
+func secretCheck(label, key, sbxOut string, sbxOK bool) readiness.Check {
 	cmd := "sbx secret set -g " + key
 	if !sbxOK {
-		return check{label: label, verdict: verdictTodo, detail: "sbx unavailable here (set on the host)", todo: cmd}
+		return readiness.Check{Label: label, Verdict: readiness.VerdictTodo, Detail: "sbx unavailable here (set on the host)", Todo: cmd}
 	}
 	if grepWord(sbxOut, key) {
-		return check{label: label, verdict: verdictReady, detail: "set"}
+		return readiness.Check{Label: label, Verdict: readiness.VerdictReady, Detail: "set"}
 	}
-	return check{label: label, verdict: verdictTodo, detail: "not set", todo: cmd}
+	return readiness.Check{Label: label, Verdict: readiness.VerdictTodo, Detail: "not set", Todo: cmd}
 }
 
 // providersGroup builds the provider-secrets cluster: the model/github keys
@@ -45,12 +46,12 @@ func secretCheck(label, key, sbxOut string, sbxOK bool) check {
 // missing alternate is expected once one provider exists, and github merely
 // authorizes git operations (not the model), so it is never itself
 // outstanding.
-func providersGroup(cfg *config.Config, sbxOut string, sbxOK bool) group {
-	g := group{title: "Inference / credentials (proxy-injected, never in the VM)"}
-	g.checks = append(g.checks, inferenceCoreCheck(cfg, sbxOut, sbxOK))
+func providersGroup(cfg *config.Config, sbxOut string, sbxOK bool) readiness.Group {
+	g := readiness.Group{Title: "Inference / credentials (proxy-injected, never in the VM)"}
+	g.Checks = append(g.Checks, inferenceCoreCheck(cfg, sbxOut, sbxOK))
 	if inferenceNeedsOnePassword(cfg) {
 		for _, p := range []string{"anthropic", "openai", "google", "github"} {
-			g.checks = append(g.checks, providerInfoCheck(p, sbxOut, sbxOK))
+			g.Checks = append(g.Checks, providerInfoCheck(p, sbxOut, sbxOK))
 		}
 	}
 	if legacy := legacyVerifiedOllamaBindings(cfg); len(legacy) > 0 {
@@ -59,15 +60,15 @@ func providersGroup(cfg *config.Config, sbxOut string, sbxOK bool) group {
 		// and refuse a launch on a bookkeeping change, not on evidence), but said
 		// out loud once. The row clears on the next setup either way: a re-probe
 		// promotes with provenance, or demotes and the candidate row takes over.
-		g.checks = append(g.checks, check{label: "inference", note: true, verdict: verdictTodo,
-			detail:   fmt.Sprintf("%d ollama binding(s) were marked verified by a listing, not a request — re-verify", len(legacy)),
-			todo:     "pix setup",
-			evidence: "verified without verified_by=probe: " + strings.Join(legacy, ", ")})
+		g.Checks = append(g.Checks, readiness.Check{Label: "inference", Note: true, Verdict: readiness.VerdictTodo,
+			Detail:   fmt.Sprintf("%d ollama binding(s) were marked verified by a listing, not a request — re-verify", len(legacy)),
+			Todo:     "pix setup",
+			Evidence: "verified without verified_by=probe: " + strings.Join(legacy, ", ")})
 	}
 	if gap := inferenceBindingGapCheck(cfg); gap != nil {
-		g.checks = append(g.checks, *gap)
+		g.Checks = append(g.Checks, *gap)
 	}
-	g.checks = append(g.checks, runIntentKeyCheck(cfg, sbxOut, sbxOK))
+	g.Checks = append(g.Checks, runIntentKeyCheck(cfg, sbxOut, sbxOK))
 	return g
 }
 
@@ -82,19 +83,19 @@ func providersGroup(cfg *config.Config, sbxOut string, sbxOK bool) group {
 // Optional, never blocking: one wired provider is enough to launch, so a second
 // unwired key is a shortfall to report, not a reason to fail. It counts in
 // outstanding (note:false) because it is genuinely actionable.
-func inferenceBindingGapCheck(cfg *config.Config) *check {
+func inferenceBindingGapCheck(cfg *config.Config) *readiness.Check {
 	gaps := unwiredProviderKeys(cfg, defaultShellEnv())
 	if len(gaps) == 0 {
 		return nil
 	}
 	list := strings.Join(gaps, ", ")
-	return &check{
-		label:       "inference bindings",
-		requirement: requirementOptional,
-		verdict:     verdictTodo,
-		detail:      list + ": key set but wired to no models",
-		evidence:    "hostmode.env carries " + list + "; config.inference.models has no native binding for " + list,
-		todo:        "pix models add " + gaps[0],
+	return &readiness.Check{
+		Label:       "inference bindings",
+		Requirement: readiness.RequirementOptional,
+		Verdict:     readiness.VerdictTodo,
+		Detail:      list + ": key set but wired to no models",
+		Evidence:    "hostmode.env carries " + list + "; config.inference.models has no native binding for " + list,
+		Todo:        "pix models add " + gaps[0],
 	}
 }
 
@@ -105,7 +106,7 @@ func inferenceBindingGapCheck(cfg *config.Config) *check {
 // turn 401s because the session model is OpenAI. It is INFORMATIONAL (note: true
 // — never blocks, never counts as outstanding): the fix is a config change, not
 // a missing requirement, and the core "at least one key" gate already stands.
-func runIntentKeyCheck(cfg *config.Config, sbxOut string, sbxOK bool) check {
+func runIntentKeyCheck(cfg *config.Config, sbxOut string, sbxOK bool) readiness.Check {
 	intent := config.DefaultRunIntent
 	if cfg != nil && strings.TrimSpace(cfg.RunIntent) != "" {
 		intent = strings.TrimSpace(cfg.RunIntent)
@@ -114,54 +115,54 @@ func runIntentKeyCheck(cfg *config.Config, sbxOut string, sbxOK bool) check {
 	// "none"/"off" is the explicit opt-out (run.go): pi picks its own default model,
 	// which needs no specific provider key beyond the core "at least one" gate.
 	if strings.EqualFold(intent, "none") || strings.EqualFold(intent, "off") {
-		return check{label: label, note: true, verdict: verdictReady, detail: "opt-out: pi's own default model"}
+		return readiness.Check{Label: label, Note: true, Verdict: readiness.VerdictReady, Detail: "opt-out: pi's own default model"}
 	}
 	model, err := resolveSessionModel(intent)
 	if err != nil || model == "" {
 		// A bad run_intent degrades to pi's own default at launch (run.go), so this
 		// is a soft note, not a failure.
-		return check{label: label, note: true, verdict: verdictUnverifiable,
-			detail: "run_intent does not resolve to a model — launch will use pi's default; fix with `pix config set run_intent <intent>`"}
+		return readiness.Check{Label: label, Note: true, Verdict: readiness.VerdictUnverifiable,
+			Detail: "run_intent does not resolve to a model — launch will use pi's default; fix with `pix config set run_intent <intent>`"}
 	}
 	if b, ok := configuredBindingForModel(cfg, model); ok {
 		runtimeID := inference.RuntimeID(routing.Binding{Model: b.Model, Backend: b.Backend, UpstreamID: b.Upstream, Available: b.Available})
-		return check{label: label, note: true, verdict: verdictReady,
-			detail: "-> " + runtimeID + " via inference backend " + b.Backend}
+		return readiness.Check{Label: label, Note: true, Verdict: readiness.VerdictReady,
+			Detail: "-> " + runtimeID + " via inference backend " + b.Backend}
 	}
 	// The intent's model IS bound here — it just has not answered a request. The
 	// fix is a pull, not somebody else's cloud key.
 	if containsStr(unverifiedOllamaCandidates(cfg), model) {
-		return check{label: label, note: true, verdict: verdictTodo,
-			detail: "-> " + model + " is bound but has not passed a probe (not pulled, or the probe failed)",
-			todo:   pullModelsFixCmd}
+		return readiness.Check{Label: label, Note: true, Verdict: readiness.VerdictTodo,
+			Detail: "-> " + model + " is bound but has not passed a probe (not pulled, or the probe failed)",
+			Todo:   pullModelsFixCmd}
 	}
 	provider := model
 	if i := strings.IndexByte(model, '/'); i > 0 {
 		provider = model[:i]
 	}
 	if !sbxOK {
-		return check{label: label, note: true, verdict: verdictUnverifiable,
-			detail: "-> " + model + " (cannot verify " + provider + " key: sbx unavailable here)"}
+		return readiness.Check{Label: label, Note: true, Verdict: readiness.VerdictUnverifiable,
+			Detail: "-> " + model + " (cannot verify " + provider + " key: sbx unavailable here)"}
 	}
 	// Only the model providers carry a launch-relevant key here; a local (ollama)
 	// model needs none.
 	if provider == "ollama" || grepWord(sbxOut, provider) {
-		return check{label: label, note: true, verdict: verdictReady, detail: "-> " + model + " (" + provider + " key set)"}
+		return readiness.Check{Label: label, Note: true, Verdict: readiness.VerdictReady, Detail: "-> " + model + " (" + provider + " key set)"}
 	}
 	// If NO model key is set at all, the core "at least one key" check already owns
 	// the fix — don't double up a second secret-set todo here. This check earns its
 	// keep in the SPECIFIC trap: you HAVE a key, just not the session model's
 	// provider (e.g. Anthropic-only host + baked overlord -> OpenAI).
 	if !anyModelKeyInOutput(sbxOut) {
-		return check{label: label, note: true, verdict: verdictUnverifiable,
-			detail: "-> " + model + " (needs a " + provider + " key; set a model key first — see the core check above)"}
+		return readiness.Check{Label: label, Note: true, Verdict: readiness.VerdictUnverifiable,
+			Detail: "-> " + model + " (needs a " + provider + " key; set a model key first — see the core check above)"}
 	}
-	return check{label: label, note: true, verdict: verdictTodo,
-		detail: "-> " + model + " but the " + provider + " key is NOT set: interactive turns will fail. Set " + provider + "'s key, or point run_intent at a provider you have (or `none` for pi's default)",
+	return readiness.Check{Label: label, Note: true, Verdict: readiness.VerdictTodo,
+		Detail: "-> " + model + " but the " + provider + " key is NOT set: interactive turns will fail. Set " + provider + "'s key, or point run_intent at a provider you have (or `none` for pi's default)",
 		// `models add` rather than `secret set`: the latter stores the ref and stops,
 		// which leaves this check failing for the same reason after the user has
 		// done exactly what it told them to.
-		todo: "pix models add " + provider}
+		Todo: "pix models add " + provider}
 }
 
 // modelKeyFixCmd is the ONE copy-pasteable command surfaced when doctor has
@@ -263,22 +264,22 @@ func configuredBindingForModel(cfg *config.Config, model string) (config.Inferen
 // retain the established sbx-secret evidence; gateway and Ollama hosts earn
 // readiness from their availability-specific bindings instead of being told
 // to configure an unrelated cloud-provider key.
-func inferenceCoreCheck(cfg *config.Config, sbxOut string, sbxOK bool) check {
+func inferenceCoreCheck(cfg *config.Config, sbxOut string, sbxOK bool) readiness.Check {
 	count, _ := configuredInferenceSummary(cfg)
 	if count > 0 {
-		return check{label: "inference", requirement: requirementCore, verdict: verdictReady,
-			detail:   fmt.Sprintf("%d configured callable model(s)", count),
-			evidence: "availability-specific inference bindings"}
+		return readiness.Check{Label: "inference", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictReady,
+			Detail:   fmt.Sprintf("%d configured callable model(s)", count),
+			Evidence: "availability-specific inference bindings"}
 	}
 	// Nothing callable, but ollama candidates ARE bound: this host does not need
 	// a provider key, it needs weights. Falling through to modelKeyCoreCheck here
 	// would remediate a not-pulled-a-model problem with `pix secret set
 	// ANTHROPIC_API_KEY`, which is the wrong command for the wrong product.
 	if pending := unverifiedOllamaCandidates(cfg); len(pending) > 0 {
-		return check{label: "inference", requirement: requirementCore, verdict: verdictTodo,
-			detail:   fmt.Sprintf("%d local model candidate(s) bound but unproven (not pulled, or the probe failed)", len(pending)),
-			todo:     pullModelsFixCmd,
-			evidence: "ollama bindings without a probe: " + strings.Join(pending, ", ")}
+		return readiness.Check{Label: "inference", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictTodo,
+			Detail:   fmt.Sprintf("%d local model candidate(s) bound but unproven (not pulled, or the probe failed)", len(pending)),
+			Todo:     pullModelsFixCmd,
+			Evidence: "ollama bindings without a probe: " + strings.Join(pending, ", ")}
 	}
 	return modelKeyCoreCheck(sbxOut, sbxOK)
 }
@@ -308,33 +309,33 @@ func configuredInferenceSummary(cfg *config.Config) (int, []string) {
 // anyModelKeyInOutput \u2014 the exact same "what counts as present" definition
 // sbxModelKeyState uses for `run`'s launch gate \u2014 so doctor and the launch
 // gate can never disagree about what "a key is present" means.
-func modelKeyCoreCheck(sbxOut string, sbxOK bool) check {
+func modelKeyCoreCheck(sbxOut string, sbxOK bool) readiness.Check {
 	names := strings.Join(modelProviders, "/")
 	if !sbxOK {
-		return check{
-			label:       "model key",
-			requirement: requirementCore,
-			verdict:     verdictUnverifiable,
-			detail:      "cannot verify (sbx unavailable here) \u2014 re-run `pix doctor` on the host",
-			evidence:    "sbx secret ls: unavailable",
+		return readiness.Check{
+			Label:       "model key",
+			Requirement: readiness.RequirementCore,
+			Verdict:     readiness.VerdictUnverifiable,
+			Detail:      "cannot verify (sbx unavailable here) \u2014 re-run `pix doctor` on the host",
+			Evidence:    "sbx secret ls: unavailable",
 		}
 	}
 	if anyModelKeyInOutput(sbxOut) {
-		return check{
-			label:       "model key",
-			requirement: requirementCore,
-			verdict:     verdictReady,
-			detail:      "at least one of " + names + " is set",
-			evidence:    "sbx secret ls: " + presentModelProviders(sbxOut) + " set",
+		return readiness.Check{
+			Label:       "model key",
+			Requirement: readiness.RequirementCore,
+			Verdict:     readiness.VerdictReady,
+			Detail:      "at least one of " + names + " is set",
+			Evidence:    "sbx secret ls: " + presentModelProviders(sbxOut) + " set",
 		}
 	}
-	return check{
-		label:       "model key",
-		requirement: requirementCore,
-		verdict:     verdictTodo,
-		detail:      "none of " + names + " is set \u2014 pix cannot launch a model",
-		todo:        modelKeyFixCmd,
-		evidence:    "sbx secret ls: none of " + strings.Join(modelProviders, ", ") + " present",
+	return readiness.Check{
+		Label:       "model key",
+		Requirement: readiness.RequirementCore,
+		Verdict:     readiness.VerdictTodo,
+		Detail:      "none of " + names + " is set \u2014 pix cannot launch a model",
+		Todo:        modelKeyFixCmd,
+		Evidence:    "sbx secret ls: none of " + strings.Join(modelProviders, ", ") + " present",
 	}
 }
 
@@ -357,12 +358,12 @@ func presentModelProviders(sbxOut string) string {
 // unset alternate provider (or an unset github, which is optional
 // infrastructure that authorizes git operations, not the model) is never
 // itself a gap once the core check above is satisfied.
-func providerInfoCheck(key string, sbxOut string, sbxOK bool) check {
+func providerInfoCheck(key string, sbxOut string, sbxOK bool) readiness.Check {
 	if !sbxOK {
-		return check{label: key, note: true, verdict: verdictUnverifiable, detail: "cannot verify (sbx unavailable here)"}
+		return readiness.Check{Label: key, Note: true, Verdict: readiness.VerdictUnverifiable, Detail: "cannot verify (sbx unavailable here)"}
 	}
 	if grepWord(sbxOut, key) {
-		return check{label: key, note: true, verdict: verdictReady, detail: "set"}
+		return readiness.Check{Label: key, Note: true, Verdict: readiness.VerdictReady, Detail: "set"}
 	}
-	return check{label: key, note: true, verdict: verdictUnverifiable, detail: "not configured"}
+	return readiness.Check{Label: key, Note: true, Verdict: readiness.VerdictUnverifiable, Detail: "not configured"}
 }

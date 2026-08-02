@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/readiness"
 	"strings"
 	"time"
 
@@ -37,14 +38,14 @@ func runStatusCmd(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix status: %v\n", err)
 		os.Exit(1)
 	}
-	// ONE exit contract (Snapshot.ExitCode), with the 3 arm suppressed: status
+	// ONE exit contract (snapshot.ExitCode), with the 3 arm suppressed: status
 	// is the landing screen and a JSON-scraping script must never fail merely
 	// because a fact could not be checked from here (inside the sandbox, sbx is
 	// absent and half the axes are unverifiable by construction). A POSITIVELY
 	// verified core failure still exits 1, and the same integer is published as
 	// the JSON `exit` sibling, so a reader of the rows and a reader of $? can
 	// never disagree.
-	if code := renderStatus(cfg, name, defaultShellEnv(), os.Stdout, jsonOut); code != exitReady {
+	if code := renderStatus(cfg, name, defaultShellEnv(), os.Stdout, jsonOut); code != readiness.ExitReady {
 		os.Exit(code)
 	}
 }
@@ -208,8 +209,8 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	// requirement plus the two host services, identity-verified. status renders
 	// the same rows, in the same words, that doctor and run do.
 	snap := fastReadinessSnapshot(cfg, env, keyEvidence)
-	st.Memory = axisReady(snap, axisServiceMemory)
-	st.Knowledge = axisReady(snap, axisServiceKnowledge)
+	st.Memory = axisReady(snap, readiness.AxisServiceMemory)
+	st.Knowledge = axisReady(snap, readiness.AxisServiceKnowledge)
 	st.Checks = readinessChecksJSON(snap.All())
 	st.Exit = snap.ExitCodeSuppressingUnverifiable()
 	unverifiableAxes := snap.UnverifiableCount()
@@ -235,11 +236,11 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	// fact. Unverifiable axes contribute no TODO by construction (a repair we
 	// cannot prove is needed is a guess), and are counted separately below.
 	for _, c := range snap.All() {
-		if c.note {
+		if c.Note {
 			continue
 		}
-		if v := c.result(); (v == verdictTodo || v == verdictDenied) && c.todo != "" {
-			st.Todos = append(st.Todos, c.todo)
+		if v := c.Result(); (v == readiness.VerdictTodo || v == readiness.VerdictDenied) && c.Todo != "" {
+			st.Todos = append(st.Todos, c.Todo)
 		}
 	}
 	// When sbx could NOT verify keys, no per-key/core TODO above fires — so
@@ -411,7 +412,7 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 func (st statusReport) render(out io.Writer) {
 	for _, warning := range st.InstallWarnings {
 		fmt.Fprintf(out, "  %s install     %s\n",
-			verdictGlyph(requirementOptional, verdictTodo, false),
+			readiness.VerdictGlyph(readiness.RequirementOptional, readiness.VerdictTodo, false),
 			strings.ReplaceAll(warning, "\n", "\n                "))
 	}
 	fmt.Fprintf(out, "pix %s\n\n", st.Version)
@@ -515,12 +516,12 @@ func (st statusReport) render(out io.Writer) {
 	switch {
 	case len(st.Todos) > 0:
 		fmt.Fprintf(out, "  %s %s outstanding.   `%s` for fix commands.\n",
-			verdictGlyph(requirementOptional, verdictTodo, false), plural(len(st.Todos), "item"), readinessFooter("status", Snapshot{}))
+			readiness.VerdictGlyph(readiness.RequirementOptional, readiness.VerdictTodo, false), plural(len(st.Todos), "item"), readiness.Footer("status", readiness.Snapshot{}))
 	case unverifiable > 0:
 		fmt.Fprintf(out, "  %s nothing outstanding, but %s unverifiable (not failed; run `%s` for details).\n",
-			verdictGlyph(requirementCore, verdictReady, false), plural(unverifiable, "check"), readinessFooter("status", Snapshot{}))
+			readiness.VerdictGlyph(readiness.RequirementCore, readiness.VerdictReady, false), plural(unverifiable, "check"), readiness.Footer("status", readiness.Snapshot{}))
 	default:
-		fmt.Fprintf(out, "  %s all systems go.\n", verdictGlyph(requirementCore, verdictReady, false))
+		fmt.Fprintf(out, "  %s all systems go.\n", readiness.VerdictGlyph(readiness.RequirementCore, readiness.VerdictReady, false))
 	}
 	fmt.Fprintln(out)
 	if len(st.Todos) > 0 {
@@ -661,20 +662,20 @@ func statusSandboxReceipt(env shellEnv, sandbox string) (*workspace.MCPReceipt, 
 func mcpRowText(r mcpSandboxRow) string {
 	switch r.State {
 	case mcpJoinPreloaded, mcpJoinLoaded:
-		return verdictGlyph(requirementCore, verdictReady, false) + " " + r.State + " (" + r.Evidence + ")"
+		return readiness.VerdictGlyph(readiness.RequirementCore, readiness.VerdictReady, false) + " " + r.State + " (" + r.Evidence + ")"
 	case mcpJoinNotRegistered, mcpJoinRegisteredNotAttached:
-		return verdictGlyph(requirementCore, verdictTodo, false) + " " + r.State + ": " + r.Evidence
+		return readiness.VerdictGlyph(readiness.RequirementCore, readiness.VerdictTodo, false) + " " + r.State + ": " + r.Evidence
 	default: // unverifiable
-		return verdictGlyph(requirementCore, verdictUnverifiable, false) + " " + r.State + ": " + r.Evidence
+		return readiness.VerdictGlyph(readiness.RequirementCore, readiness.VerdictUnverifiable, false) + " " + r.State + ": " + r.Evidence
 	}
 }
 
 // glyph renders a bool as the shared ✓/✗ status glyphs.
 func okGlyph(ok bool) string {
 	if ok {
-		return verdictGlyph(requirementCore, verdictReady, false)
+		return readiness.VerdictGlyph(readiness.RequirementCore, readiness.VerdictReady, false)
 	}
-	return verdictGlyph(requirementCore, verdictTodo, false)
+	return readiness.VerdictGlyph(readiness.RequirementCore, readiness.VerdictTodo, false)
 }
 
 // bundleGitStatus returns a short git-drift summary for a bundle dir: "clean",

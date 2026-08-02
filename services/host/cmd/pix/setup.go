@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"pix/host/readiness"
 	"strings"
 
 	"pix/host/config"
@@ -623,7 +624,7 @@ func setupGate(env shellEnv, inv setupInventory, out io.Writer, interactive bool
 // writes NO success prose (see setupMutationOut).
 type setupMutationStep struct {
 	name string
-	axes []Axis
+	axes []readiness.Axis
 	// fatal marks a step whose failure aborts setup. A non-fatal step reports
 	// its own failure and lets the run continue to the report, which will show
 	// the axis as not ready — the failure is never swallowed, it just is not
@@ -645,7 +646,7 @@ var setupMutationOrder = []string{"keys", "config", "pack", "mcp", "knowledge", 
 // post-mutation probes, so a stubbed-to-fail mutation cannot print a ✓ for its
 // axis. Steps that must talk to the user (the keys step's ref prompt, a
 // non-fatal step's failure line) write diagnostics, never success claims.
-func runSetupMutations(steps []setupMutationStep) (touched []Axis, err error) {
+func runSetupMutations(steps []setupMutationStep) (touched []readiness.Axis, err error) {
 	for _, s := range steps {
 		if e := s.run(); e != nil {
 			if s.fatal {
@@ -664,7 +665,7 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 	cfg := inv.cfg
 	return []setupMutationStep{{
 		name:  "keys",
-		axes:  []Axis{axisProviders, axisSecrets},
+		axes:  []readiness.Axis{readiness.AxisProviders, readiness.AxisSecrets},
 		fatal: true,
 		run: func() error {
 			selected, err := setupChooseInference(cfg, env, in, out, interactive)
@@ -760,7 +761,7 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 		},
 	}, {
 		name:  "knowledge",
-		axes:  []Axis{axisServiceKnowledge},
+		axes:  []readiness.Axis{readiness.AxisServiceKnowledge},
 		fatal: true,
 		run: func() error {
 			if inv.proposal.Knowledge == nil {
@@ -783,7 +784,7 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 		},
 	}, {
 		name: "gworkspace",
-		axes: []Axis{axisGworkspace},
+		axes: []readiness.Axis{readiness.AxisGworkspace},
 		run: func() error {
 			// Google Workspace is OFF unless --google-workspace. It runs the
 			// SAME transaction `pix gworkspace setup` runs, through the
@@ -806,7 +807,7 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 		},
 	}, {
 		name: "models",
-		axes: []Axis{axisModelWatcher, axisModelEmbed, axisModelBridge},
+		axes: []readiness.Axis{readiness.AxisModelWatcher, readiness.AxisModelEmbed, readiness.AxisModelBridge},
 		run: func() error {
 			// The riskiest step, therefore last: probe Ollama once, classify on
 			// the shared ModelReadiness axes, pull confirmed-missing tags only
@@ -830,7 +831,7 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 		},
 	}, {
 		name:  "inference",
-		axes:  []Axis{axisProviders},
+		axes:  []readiness.Axis{readiness.AxisProviders},
 		fatal: false,
 		run: func() error {
 			// LAST, and non-fatal: it can only judge what the models step left
@@ -951,13 +952,13 @@ func syncGitHubCredentialFromHost(env shellEnv) error {
 }
 
 // mcpAxes maps configured server names to their readiness axes.
-func mcpAxes(servers []string) []Axis {
-	var out []Axis
+func mcpAxes(servers []string) []readiness.Axis {
+	var out []readiness.Axis
 	for _, s := range servers {
 		if strings.TrimSpace(s) == "" {
 			continue
 		}
-		out = append(out, mcpAxis(s))
+		out = append(out, readiness.MCPAxis(s))
 	}
 	return out
 }
@@ -1038,8 +1039,8 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 	if cerr != nil {
 		postCfg = inv.cfg
 	}
-	req := requestAll(postCfg.MCP, setupRequestedAxes(opts)...)
-	snap := buildSnapshot(req, setupReadinessAxes(postCfg, env, models))
+	req := readiness.RequestAll(postCfg.MCP, setupRequestedAxes(opts)...)
+	snap := readiness.Build(req, setupReadinessAxes(postCfg, env, models))
 
 	// PHASE 7 — report. A pure function of the post-mutation snapshot: it
 	// takes no inventory, no mutation log, and no "what we meant to do".
@@ -1071,19 +1072,19 @@ func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, t
 
 // setupRequestedAxes maps THIS invocation's flags to the axes they promote from
 // optional to blocking (AC-P0-209). Promotion itself lives in the readiness
-// type (buildSnapshot); this is only the flag→axis mapping, so no command
+// type (build); this is only the flag→axis mapping, so no command
 // re-implements the rule.
 //
 // `--mcp X` promotes `mcp:X`, which setup additionally enforces in the gate
 // (verifyCatalogMCPReady) — a requested server that cannot come up fails before
 // anything is written, which is strictly earlier than an exit code.
-func setupRequestedAxes(opts onboardOpts) []Axis {
-	var out []Axis
+func setupRequestedAxes(opts onboardOpts) []readiness.Axis {
+	var out []readiness.Axis
 	if opts.pullModels {
-		out = append(out, axisOllamaHost, axisModelWatcher, axisModelEmbed, axisModelBridge)
+		out = append(out, readiness.AxisOllamaHost, readiness.AxisModelWatcher, readiness.AxisModelEmbed, readiness.AxisModelBridge)
 	}
 	if opts.googleWorkspace {
-		out = append(out, axisGworkspace)
+		out = append(out, readiness.AxisGworkspace)
 	}
 	out = append(out, mcpAxes(opts.mcp)...)
 	return out
@@ -1092,14 +1093,14 @@ func setupRequestedAxes(opts onboardOpts) []Axis {
 // requestedShortfallMessage names the requested axes that did not end ready,
 // in snapshot order, with the verdict word for each — so the exit-1 line says
 // which request failed and how, never just "setup failed".
-func requestedShortfallMessage(short []Axis, s Snapshot) string {
+func requestedShortfallMessage(short []readiness.Axis, s readiness.Snapshot) string {
 	parts := make([]string, 0, len(short))
 	for _, a := range short {
 		_, v, ok := s.AxisVerdict(a)
 		if !ok {
 			continue
 		}
-		parts = append(parts, string(a)+": "+verdictWord(v))
+		parts = append(parts, string(a)+": "+readiness.VerdictWord(v))
 	}
 	return "you asked for " + strings.Join(parts, ", ")
 }
@@ -1108,8 +1109,8 @@ func requestedShortfallMessage(short []Axis, s Snapshot) string {
 // Ollama/model and service builders doctor uses (so setup and doctor can never
 // disagree), plus the three axes only setup's own post-mutation reads can speak
 // to. Every builder here probes; none reads the inventory.
-func setupReadinessAxes(cfg *config.Config, env shellEnv, models setupModelsOutcome) map[Axis]axisBuilder {
-	builders := map[Axis]axisBuilder{}
+func setupReadinessAxes(cfg *config.Config, env shellEnv, models setupModelsOutcome) map[readiness.Axis]readiness.AxisBuilder {
+	builders := map[readiness.Axis]readiness.AxisBuilder{}
 	for a, b := range ollamaReadinessAxes(cfg, env, "", nil) {
 		builders[a] = b
 	}
@@ -1118,21 +1119,21 @@ func setupReadinessAxes(cfg *config.Config, env shellEnv, models setupModelsOutc
 			builders[a] = b
 		}
 	}
-	builders[axisProviders] = func() []check { return setupProvidersAxis(cfg, env) }
+	builders[readiness.AxisProviders] = func() []readiness.Check { return setupProvidersAxis(cfg, env) }
 	if strings.TrimSpace(cfg.Pack) != "" {
-		builders[axisPack] = func() []check { return setupPackAxis(cfg) }
+		builders[readiness.AxisPack] = func() []readiness.Check { return setupPackAxis(cfg) }
 	}
 	if strings.TrimSpace(cfg.GogAccount) != "" || containsStr(cfg.MCP, gwServerName) {
 		// Absent by default (AC-P0-319): with no opt-in there is no axis at
 		// all, so the report says nothing about Google Workspace.
-		builders[axisGworkspace] = func() []check { return setupGworkspaceAxis(cfg, env) }
+		builders[readiness.AxisGworkspace] = func() []readiness.Check { return setupGworkspaceAxis(cfg, env) }
 	}
 	return builders
 }
 
 // setupProvidersAxis is the post-mutation provider-key fact: ready when at
 // least one model-provider ref resolves (any one key launches a sandbox).
-func setupProvidersAxis(cfg *config.Config, env shellEnv) []check {
+func setupProvidersAxis(cfg *config.Config, env shellEnv) []readiness.Check {
 	if cfg != nil && len(cfg.Inference.Models) > 0 {
 		callable := 0
 		candidates := 0
@@ -1149,28 +1150,28 @@ func setupProvidersAxis(cfg *config.Config, env shellEnv) []check {
 			if candidates > callable {
 				detail += fmt.Sprintf("; %d candidate(s) did not pass live verification", candidates-callable)
 			}
-			return []check{{label: "inference", requirement: requirementCore, verdict: verdictReady,
-				detail: detail, evidence: "model-specific live inference probes"}}
+			return []readiness.Check{{Label: "inference", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictReady,
+				Detail: detail, Evidence: "model-specific live inference probes"}}
 		}
 		if candidates > 0 {
-			return []check{{label: "inference", requirement: requirementCore, verdict: verdictUnverifiable,
-				detail: fmt.Sprintf("%d configured model candidate(s)", candidates), evidence: "first sandbox inference is the live probe"}}
+			return []readiness.Check{{Label: "inference", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictUnverifiable,
+				Detail: fmt.Sprintf("%d configured model candidate(s)", candidates), Evidence: "first sandbox inference is the live probe"}}
 		}
-		return []check{{label: "inference", requirement: requirementCore, verdict: verdictTodo,
-			detail: "no callable model", evidence: "configured bindings have no successful probe"}}
+		return []readiness.Check{{Label: "inference", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictTodo,
+			Detail: "no callable model", Evidence: "configured bindings have no successful probe"}}
 	}
 	names, err := hostModeProviderKeys(env)
 	switch {
 	case err != nil:
-		return []check{{label: "provider keys", requirement: requirementCore, verdict: verdictUnverifiable,
-			detail: "could not read hostmode.env (" + err.Error() + ")", evidence: "hostmode.env unreadable: " + err.Error()}}
+		return []readiness.Check{{Label: "provider keys", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictUnverifiable,
+			Detail: "could not read hostmode.env (" + err.Error() + ")", Evidence: "hostmode.env unreadable: " + err.Error()}}
 	case len(names) == 0:
-		return []check{{label: "provider keys", requirement: requirementCore, verdict: verdictTodo,
-			detail: "no provider key configured", evidence: "hostmode.env lists no provider key",
-			todo: "pix models add anthropic"}}
+		return []readiness.Check{{Label: "provider keys", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictTodo,
+			Detail: "no provider key configured", Evidence: "hostmode.env lists no provider key",
+			Todo: "pix models add anthropic"}}
 	default:
-		return []check{{label: "provider keys", requirement: requirementCore, verdict: verdictReady,
-			detail: strings.Join(names, ", "), evidence: "hostmode.env lists " + strings.Join(names, ", ")}}
+		return []readiness.Check{{Label: "provider keys", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictReady,
+			Detail: strings.Join(names, ", "), Evidence: "hostmode.env lists " + strings.Join(names, ", ")}}
 	}
 }
 
@@ -1200,38 +1201,38 @@ func setupSelectRunnableIntent(cfg *config.Config, env shellEnv) bool {
 
 // setupPackAxis is the post-mutation pack fact: an ACTIVE but EMPTY pack is a
 // TODO, never green.
-func setupPackAxis(cfg *config.Config) []check {
+func setupPackAxis(cfg *config.Config) []readiness.Check {
 	p := resolveHostStatePack(cfg, "")
 	switch {
 	case p.Active && p.Exists && (p.Skills || p.Knowledge):
-		return []check{{label: "pack", requirement: requirementCore, verdict: verdictReady,
-			detail: p.Path + " (active)", evidence: "active pack " + p.Path + " has content"}}
+		return []readiness.Check{{Label: "pack", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictReady,
+			Detail: p.Path + " (active)", Evidence: "active pack " + p.Path + " has content"}}
 	case p.Active && p.Exists:
-		return []check{{label: "pack", requirement: requirementCore, verdict: verdictTodo,
-			detail: "active but empty (" + p.Path + ")", evidence: "active pack " + p.Path + " has no skills or knowledge",
-			todo: "pix pack add skill <name>"}}
+		return []readiness.Check{{Label: "pack", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictTodo,
+			Detail: "active but empty (" + p.Path + ")", Evidence: "active pack " + p.Path + " has no skills or knowledge",
+			Todo: "pix pack add skill <name>"}}
 	default:
-		return []check{{label: "pack", requirement: requirementCore, verdict: verdictTodo,
-			detail: "no active pack", evidence: "no pack is active", todo: "pix pack new"}}
+		return []readiness.Check{{Label: "pack", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictTodo,
+			Detail: "no active pack", Evidence: "no pack is active", Todo: "pix pack new"}}
 	}
 }
 
 // setupGworkspaceAxis is the post-mutation Google Workspace fact, probed the
 // same way `pix gworkspace status` probes it.
-func setupGworkspaceAxis(cfg *config.Config, env shellEnv) []check {
+func setupGworkspaceAxis(cfg *config.Config, env shellEnv) []readiness.Check {
 	acct := strings.TrimSpace(cfg.GogAccount)
 	switch {
 	case acct == "":
-		return []check{{label: "google ws", requirement: requirementOptional, verdict: verdictTodo,
-			detail: "enabled but no account authorized", evidence: "google_workspace_account is empty",
-			todo: "pix gworkspace setup"}}
+		return []readiness.Check{{Label: "google ws", Requirement: readiness.RequirementOptional, Verdict: readiness.VerdictTodo,
+			Detail: "enabled but no account authorized", Evidence: "google_workspace_account is empty",
+			Todo: "pix gworkspace setup"}}
 	case gogSetupAccountHealthy(env, acct):
-		return []check{{label: "google ws", requirement: requirementOptional, verdict: verdictReady,
-			detail: acct + " authorized (read-only)", evidence: "authorization probe passed for " + acct}}
+		return []readiness.Check{{Label: "google ws", Requirement: readiness.RequirementOptional, Verdict: readiness.VerdictReady,
+			Detail: acct + " authorized (read-only)", Evidence: "authorization probe passed for " + acct}}
 	default:
-		return []check{{label: "google ws", requirement: requirementOptional, verdict: verdictTodo,
-			detail: acct + " not verified", evidence: "authorization probe failed for " + acct,
-			todo: "pix gworkspace setup"}}
+		return []readiness.Check{{Label: "google ws", Requirement: readiness.RequirementOptional, Verdict: readiness.VerdictTodo,
+			Detail: acct + " not verified", Evidence: "authorization probe failed for " + acct,
+			Todo: "pix gworkspace setup"}}
 	}
 }
 

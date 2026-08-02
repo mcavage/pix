@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"pix/host/readiness"
 	"pix/host/sys/systest"
 	"strings"
 	"testing"
@@ -115,10 +116,10 @@ func TestInstallDuplicatesGroupSurfacesDoctorWarning(t *testing.T) {
 		return ""
 	}}}
 	g := installDuplicatesGroup(env)
-	if len(g.checks) != 1 || g.checks[0].result() != verdictTodo {
+	if len(g.Checks) != 1 || g.Checks[0].Result() != readiness.VerdictTodo {
 		t.Fatalf("group = %+v", g)
 	}
-	if !strings.Contains(g.checks[0].detail, "multiple pix installations") {
-		t.Fatalf("detail = %q", g.checks[0].detail)
+	if !strings.Contains(g.Checks[0].Detail, "multiple pix installations") {
+		t.Fatalf("detail = %q", g.Checks[0].Detail)
 	}
 }

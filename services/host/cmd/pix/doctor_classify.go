@@ -29,10 +29,10 @@ type probeClass int
 
 const (
 	// probeUnverifiable: the probe could not prove anything (transport, DNS,
-	// TLS, timeout, generic failure). Callers map this to verdictUnverifiable.
+	// TLS, timeout, generic failure). Callers map this to readiness.VerdictUnverifiable.
 	probeUnverifiable probeClass = iota
 	// probeDenied: the remote side POSITIVELY refused by policy/permission.
-	// Callers map this to verdictDenied.
+	// Callers map this to readiness.VerdictDenied.
 	probeDenied
 	// probeAuthTodo: authentication is missing/expired (bare 401 /
 	// unauthorized). An actionable credential gap for the caller to surface

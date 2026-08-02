@@ -13,7 +13,7 @@
 // value later (rotation in place, e.g. the 1Password item's field was
 // updated without changing which item/field is referenced). So the store also
 // keeps a SHA-256 DIGEST of the resolved value alongside the ref — metadata
-// only, never the value itself, and never printed. "Known-same" (safe to skip
+// only, never the value itself, and never printed. "known-same" (safe to skip
 // without asking) requires BOTH the ref string AND the digest to match; a
 // legacy record with a ref but no digest (predates this feature) is treated
 // as UNKNOWN, not same, and goes through the normal batched

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"pix/host/hostenv"
+	"pix/host/readiness"
 	"pix/host/rpc"
 	"strings"
 	"time"
@@ -44,7 +45,7 @@ type identityProber = hostenv.IdentityProber
 
 // serviceAxisSpec describes one identifiable host service.
 type serviceAxisSpec struct {
-	axis      Axis
+	Axis      readiness.Axis
 	label     string
 	port      int
 	wantName  string // the exact identity.name this port must report
@@ -66,14 +67,14 @@ type serviceAxisSpec struct {
 //	identity ours + ready          -> ready
 //
 // There is no path from a successful dial to `ready`.
-func serviceReadinessCheck(spec serviceAxisSpec) check {
+func serviceReadinessCheck(spec serviceAxisSpec) readiness.Check {
 	endpoint := fmt.Sprintf("127.0.0.1:%d", spec.port)
-	base := check{label: spec.label, endpoint: endpoint}
+	base := readiness.Check{Label: spec.label, Endpoint: endpoint}
 	// A configured-but-down service is a VERIFIED todo, and it is optional:
 	// the harness still runs without recall. `--requested` promotion (an
 	// invocation that explicitly asked for the service) is what makes it
 	// block, and that lives in the snapshot, not here.
-	base.requirement = requirementOptional
+	base.Requirement = readiness.RequirementOptional
 
 	listening := true
 	if spec.dialOnly != nil {
@@ -81,16 +82,16 @@ func serviceReadinessCheck(spec serviceAxisSpec) check {
 	}
 	if !listening {
 		if !spec.enabled {
-			base.note = true
-			base.verdict = verdictUnverifiable
-			base.detail = fmt.Sprintf(":%d down (not in configured services)", spec.port)
-			base.evidence = fmt.Sprintf("nothing listening on %s; %s is not in the configured services", endpoint, spec.label)
+			base.Note = true
+			base.Verdict = readiness.VerdictUnverifiable
+			base.Detail = fmt.Sprintf(":%d down (not in configured services)", spec.port)
+			base.Evidence = fmt.Sprintf("nothing listening on %s; %s is not in the configured services", endpoint, spec.label)
 			return base
 		}
-		base.verdict = verdictTodo
-		base.detail = fmt.Sprintf(":%d down", spec.port)
-		base.evidence = fmt.Sprintf("nothing listening on %s", endpoint)
-		base.todo = spec.startCmd
+		base.Verdict = readiness.VerdictTodo
+		base.Detail = fmt.Sprintf(":%d down", spec.port)
+		base.Evidence = fmt.Sprintf("nothing listening on %s", endpoint)
+		base.Todo = spec.startCmd
 		return base
 	}
 
@@ -102,20 +103,20 @@ func serviceReadinessCheck(spec serviceAxisSpec) check {
 		// alone is not proof of identity, so this renders unverifiable —
 		// never a silent real network call, and never a todo for a
 		// capability this environment never claimed to be able to check.
-		base.verdict = verdictUnverifiable
-		base.detail = fmt.Sprintf(":%d up but identity could not be confirmed from here", spec.port)
-		base.evidence = fmt.Sprintf("something is listening on %s but no identity prober is available in this environment", endpoint)
+		base.Verdict = readiness.VerdictUnverifiable
+		base.Detail = fmt.Sprintf(":%d up but identity could not be confirmed from here", spec.port)
+		base.Evidence = fmt.Sprintf("something is listening on %s but no identity prober is available in this environment", endpoint)
 		return base
 	}
 	start := time.Now()
 	id, err := probe(spec.port)
-	base.duration = time.Since(start)
+	base.Duration = time.Since(start)
 
-	unidentified := func(why string) check {
-		base.verdict = verdictTodo
-		base.detail = fmt.Sprintf("port %d held by an unidentified process", spec.port)
-		base.evidence = fmt.Sprintf("port %d held by an unidentified process: %s", spec.port, why)
-		base.todo = spec.startCmd
+	unidentified := func(why string) readiness.Check {
+		base.Verdict = readiness.VerdictTodo
+		base.Detail = fmt.Sprintf("port %d held by an unidentified process", spec.port)
+		base.Evidence = fmt.Sprintf("port %d held by an unidentified process: %s", spec.port, why)
+		base.Todo = spec.startCmd
 		return base
 	}
 	switch {
@@ -126,49 +127,49 @@ func serviceReadinessCheck(spec serviceAxisSpec) check {
 	case id.Name != spec.wantName:
 		return unidentified(fmt.Sprintf("it identifies as %q, not %q", id.Name, spec.wantName))
 	case spec.selfVer != "" && id.Version != "" && id.Version != spec.selfVer:
-		base.verdict = verdictTodo
-		base.detail = fmt.Sprintf("port %d holds %s %s, this launcher is %s", spec.port, spec.wantName, id.Version, spec.selfVer)
-		base.evidence = fmt.Sprintf("port %d held by %s version %s; expected %s", spec.port, id.Name, id.Version, spec.selfVer)
-		base.todo = "pix serve stop && pix serve"
+		base.Verdict = readiness.VerdictTodo
+		base.Detail = fmt.Sprintf("port %d holds %s %s, this launcher is %s", spec.port, spec.wantName, id.Version, spec.selfVer)
+		base.Evidence = fmt.Sprintf("port %d held by %s version %s; expected %s", spec.port, id.Name, id.Version, spec.selfVer)
+		base.Todo = "pix serve stop && pix serve"
 		return base
 	case !id.Ready:
-		base.verdict = verdictTodo
+		base.Verdict = readiness.VerdictTodo
 		reason := id.DegradedReason
 		if strings.TrimSpace(reason) == "" {
 			reason = "the service reports it is not ready"
 		}
-		base.detail = fmt.Sprintf(":%d up but not ready — %s", spec.port, reason)
-		base.evidence = fmt.Sprintf("%s on %s reports ready=false: %s", id.Name, endpoint, reason)
-		base.todo = spec.startCmd
+		base.Detail = fmt.Sprintf(":%d up but not ready — %s", spec.port, reason)
+		base.Evidence = fmt.Sprintf("%s on %s reports ready=false: %s", id.Name, endpoint, reason)
+		base.Todo = spec.startCmd
 		return base
 	}
 
-	base.verdict = verdictReady
-	base.detail = fmt.Sprintf(":%d up", spec.port)
-	base.evidence = fmt.Sprintf("%s %s answered identity on %s (db %s)", id.Name, id.Version, endpoint, id.DBPath)
+	base.Verdict = readiness.VerdictReady
+	base.Detail = fmt.Sprintf(":%d up", spec.port)
+	base.Evidence = fmt.Sprintf("%s %s answered identity on %s (db %s)", id.Name, id.Version, endpoint, id.DBPath)
 	if id.DegradedReason != "" {
-		base.detail += " (" + id.DegradedReason + ")"
-		base.evidence += "; degraded: " + id.DegradedReason
+		base.Detail += " (" + id.DegradedReason + ")"
+		base.Evidence += "; degraded: " + id.DegradedReason
 	}
 	return base
 }
 
 // serviceReadinessAxes builds the memory and knowledge axes. Both are lazy:
 // a caller that requests neither pays for no probe at all.
-func serviceReadinessAxes(env shellEnv, memoryEnabled, knowledgeEnabled bool, probe identityProber) map[Axis]axisBuilder {
+func serviceReadinessAxes(env shellEnv, memoryEnabled, knowledgeEnabled bool, probe identityProber) map[readiness.Axis]readiness.AxisBuilder {
 	dial := env.DialLocal
-	return map[Axis]axisBuilder{
-		axisServiceMemory: func() []check {
-			return []check{serviceReadinessCheck(serviceAxisSpec{
-				axis: axisServiceMemory, label: "memory",
+	return map[readiness.Axis]readiness.AxisBuilder{
+		readiness.AxisServiceMemory: func() []readiness.Check {
+			return []readiness.Check{serviceReadinessCheck(serviceAxisSpec{
+				Axis: readiness.AxisServiceMemory, label: "memory",
 				port: rpc.MemoryClient().Port, wantName: rpc.MemoryName,
 				enabled: memoryEnabled, startCmd: "pix serve",
 				selfVer: version, dialOnly: dial, probeFunc: probe,
 			})}
 		},
-		axisServiceKnowledge: func() []check {
-			return []check{serviceReadinessCheck(serviceAxisSpec{
-				axis: axisServiceKnowledge, label: "knowledge",
+		readiness.AxisServiceKnowledge: func() []readiness.Check {
+			return []readiness.Check{serviceReadinessCheck(serviceAxisSpec{
+				Axis: readiness.AxisServiceKnowledge, label: "knowledge",
 				port: rpc.KnowledgeClient().Port, wantName: rpc.KnowledgeName,
 				enabled: knowledgeEnabled, startCmd: "pix serve",
 				selfVer: version, dialOnly: dial, probeFunc: probe,

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"pix/host/readiness"
 	"pix/host/sys"
 	"runtime"
 	"strconv"
@@ -202,21 +203,21 @@ func localRungOfferLine(mem hostMemory, rung routing.Model, ok bool) string {
 // hardwareCheck renders the doctor row. It is ALWAYS a note and NEVER ready:
 // see this file's header. There is nothing to fix, so it is never a todo
 // either — RAM is not a configuration mistake.
-func hardwareCheck(mem hostMemory) []check {
-	c := check{label: "hardware", note: true, verdict: verdictUnverifiable}
+func hardwareCheck(mem hostMemory) []readiness.Check {
+	c := readiness.Check{Label: "hardware", Note: true, Verdict: readiness.VerdictUnverifiable}
 	if !mem.OK {
 		source := mem.Source
 		if source == "" {
 			source = "unsupported platform"
 		}
-		c.detail = "could not size this machine (" + source + ") — local model offers degrade to the smallest rung; not a readiness verdict"
-		c.evidence = "host memory unreadable via " + source
-		return []check{c}
+		c.Detail = "could not size this machine (" + source + ") — local model offers degrade to the smallest rung; not a readiness verdict"
+		c.Evidence = "host memory unreadable via " + source
+		return []readiness.Check{c}
 	}
-	c.detail = fmt.Sprintf("%.0f GB (usable ~%.0f GB, %s) — informs local model offers; not a readiness verdict",
+	c.Detail = fmt.Sprintf("%.0f GB (usable ~%.0f GB, %s) — informs local model offers; not a readiness verdict",
 		mem.TotalGB, mem.UsableGB, mem.Source)
-	c.evidence = fmt.Sprintf("%s: %.0f GB total, planning on %.0f GB", mem.Source, mem.TotalGB, mem.UsableGB)
-	return []check{c}
+	c.Evidence = fmt.Sprintf("%s: %.0f GB total, planning on %.0f GB", mem.Source, mem.TotalGB, mem.UsableGB)
+	return []readiness.Check{c}
 }
 
 // minRAMFor recomputes a rung's gate from its own declared terms. Nothing reads

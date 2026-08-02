@@ -15,6 +15,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/inference"
+	"pix/host/readiness"
 	"pix/host/sys/systest"
 )
 
@@ -211,14 +212,14 @@ func TestDoctorGapCheckIsOptionalAndActionable(t *testing.T) {
 	if c == nil {
 		t.Skip("no gap detectable in this environment")
 	}
-	if c.requirement != requirementOptional {
+	if c.Requirement != readiness.RequirementOptional {
 		t.Errorf("the gap must not block a launch; one wired provider is enough: %+v", c)
 	}
-	if c.note {
+	if c.Note {
 		t.Errorf("the gap is actionable, so it must count in outstanding (note must be false): %+v", c)
 	}
-	if !strings.Contains(c.todo, "pix models add") {
-		t.Errorf("the gap's fix must be the command that closes it, got %q", c.todo)
+	if !strings.Contains(c.Todo, "pix models add") {
+		t.Errorf("the gap's fix must be the command that closes it, got %q", c.Todo)
 	}
 }
 

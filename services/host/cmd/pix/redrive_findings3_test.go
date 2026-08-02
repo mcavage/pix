@@ -24,6 +24,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"pix/host/readiness"
 	"strings"
 	"testing"
 
@@ -125,15 +126,15 @@ func TestRunDoctor_SecretFailureMcpSuccess(t *testing.T) {
 	}
 	r := runDoctor(cfg, f.env())
 
-	if r.sbxAbsent {
+	if r.SbxAbsent {
 		t.Fatal("sbx IS on PATH — a failing `sbx secret ls` must not set sbxAbsent")
 	}
 
-	var modelKey check
+	var modelKey readiness.Check
 	found := false
-	for _, g := range r.groups {
-		for _, c := range g.checks {
-			if c.label == "model key" {
+	for _, g := range r.Groups {
+		for _, c := range g.Checks {
+			if c.Label == "model key" {
 				modelKey, found = c, true
 			}
 		}
@@ -141,15 +142,15 @@ func TestRunDoctor_SecretFailureMcpSuccess(t *testing.T) {
 	if !found {
 		t.Fatal("model key check not found")
 	}
-	if modelKey.result() != verdictUnverifiable {
-		t.Errorf("model key verdict = %q, want unverifiable (secret ls failed)", modelKey.result())
+	if modelKey.Result() != readiness.VerdictUnverifiable {
+		t.Errorf("model key verdict = %q, want unverifiable (secret ls failed)", modelKey.Result())
 	}
 
-	var notion check
+	var notion readiness.Check
 	found = false
-	for _, g := range r.groups {
-		for _, c := range g.checks {
-			if c.label == "notion" {
+	for _, g := range r.Groups {
+		for _, c := range g.Checks {
+			if c.Label == "notion" {
 				notion, found = c, true
 			}
 		}
@@ -157,11 +158,11 @@ func TestRunDoctor_SecretFailureMcpSuccess(t *testing.T) {
 	if !found {
 		t.Fatal("notion check not found")
 	}
-	if notion.result() != verdictReady {
-		t.Errorf("notion verdict = %q, want ready (mcp ls + auth status both succeeded)", notion.result())
+	if notion.Result() != readiness.VerdictReady {
+		t.Errorf("notion verdict = %q, want ready (mcp ls + auth status both succeeded)", notion.Result())
 	}
-	if strings.Contains(strings.ToLower(notion.detail), "sbx unavailable") ||
-		strings.Contains(strings.ToLower(notion.detail), "gateway") {
+	if strings.Contains(strings.ToLower(notion.Detail), "sbx unavailable") ||
+		strings.Contains(strings.ToLower(notion.Detail), "gateway") {
 		t.Errorf("notion must not read as sbx-unavailable when only the SECRET probe failed: %+v", notion)
 	}
 }
@@ -174,17 +175,17 @@ func TestRunDoctor_SecretAndPathBothAbsent(t *testing.T) {
 	cfg.MCP = []string{"notion"}
 	f := fakeEnv{present: map[string]bool{}}
 	r := runDoctor(cfg, f.env())
-	if !r.sbxAbsent {
+	if !r.SbxAbsent {
 		t.Fatal("sbx off PATH must set sbxAbsent")
 	}
-	for _, g := range r.groups {
-		for _, c := range g.checks {
-			if c.label == "notion" {
-				if c.result() != verdictUnverifiable {
+	for _, g := range r.Groups {
+		for _, c := range g.Checks {
+			if c.Label == "notion" {
+				if c.Result() != readiness.VerdictUnverifiable {
 					t.Errorf("notion with sbx absent = %+v, want unverifiable", c)
 				}
-				if !strings.Contains(c.detail, "sbx unavailable") {
-					t.Errorf("notion detail should say sbx unavailable, got %q", c.detail)
+				if !strings.Contains(c.Detail, "sbx unavailable") {
+					t.Errorf("notion detail should say sbx unavailable, got %q", c.Detail)
 				}
 			}
 		}
@@ -196,28 +197,28 @@ func TestRunDoctor_SecretAndPathBothAbsent(t *testing.T) {
 // TestCheckResult_NoteDoesNotForceReady pins the core fix: result() reads the
 // EXPLICIT verdict on a note check; it must not blanket-override to ready.
 func TestCheckResult_NoteDoesNotForceReady(t *testing.T) {
-	unset := check{label: "n", note: true, detail: "some annotation"}
-	if got := unset.result(); got != verdictUnverifiable {
+	unset := readiness.Check{Label: "n", Note: true, Detail: "some annotation"}
+	if got := unset.Result(); got != readiness.VerdictUnverifiable {
 		t.Errorf("note with unset verdict = %q, want unverifiable (fail-safe default)", got)
 	}
 	// state() still renders as the info glyph regardless — a note never
 	// claims ✓/✗/⚠, it's presentational — but the underlying VERDICT (JSON)
 	// must be truthful.
-	if unset.state() != stateInfo {
-		t.Errorf("note state = %v, want stateInfo (presentation unaffected)", unset.state())
+	if unset.State() != readiness.StateInfo {
+		t.Errorf("note state = %v, want readiness.StateInfo (presentation unaffected)", unset.State())
 	}
-	positive := check{label: "n", note: true, verdict: verdictReady, detail: "set"}
-	if got := positive.result(); got != verdictReady {
-		t.Errorf("note with explicit verdictReady = %q, want ready", got)
+	positive := readiness.Check{Label: "n", Note: true, Verdict: readiness.VerdictReady, Detail: "set"}
+	if got := positive.Result(); got != readiness.VerdictReady {
+		t.Errorf("note with explicit readiness.VerdictReady = %q, want ready", got)
 	}
-	if positive.state() != stateInfo {
-		t.Errorf("positive note state = %v, want stateInfo", positive.state())
+	if positive.State() != readiness.StateInfo {
+		t.Errorf("positive note state = %v, want readiness.StateInfo", positive.State())
 	}
 	// A note explicitly marked unverifiable must read that way too — the
 	// point of the fix.
-	negative := check{label: "n", note: true, verdict: verdictUnverifiable, detail: "cannot verify (sbx unavailable here)"}
-	if got := negative.result(); got != verdictUnverifiable {
-		t.Errorf("note with explicit verdictUnverifiable = %q, want unverifiable", got)
+	negative := readiness.Check{Label: "n", Note: true, Verdict: readiness.VerdictUnverifiable, Detail: "cannot verify (sbx unavailable here)"}
+	if got := negative.Result(); got != readiness.VerdictUnverifiable {
+		t.Errorf("note with explicit readiness.VerdictUnverifiable = %q, want unverifiable", got)
 	}
 }
 
@@ -225,13 +226,13 @@ func TestCheckResult_NoteDoesNotForceReady(t *testing.T) {
 // named repro) must set ready only for a confirmed-set key, and unverifiable
 // for both "cannot verify" and "not configured" — never a blanket ready.
 func TestProviderInfoCheck_TruthfulVerdict(t *testing.T) {
-	if c := providerInfoCheck("anthropic", "", false); c.result() != verdictUnverifiable {
+	if c := providerInfoCheck("anthropic", "", false); c.Result() != readiness.VerdictUnverifiable {
 		t.Errorf("cannot-verify provider info = %+v, want unverifiable", c)
 	}
-	if c := providerInfoCheck("anthropic", "anthropic\n", true); c.result() != verdictReady {
+	if c := providerInfoCheck("anthropic", "anthropic\n", true); c.Result() != readiness.VerdictReady {
 		t.Errorf("set provider info = %+v, want ready", c)
 	}
-	if c := providerInfoCheck("anthropic", "openai\n", true); c.result() != verdictUnverifiable {
+	if c := providerInfoCheck("anthropic", "openai\n", true); c.Result() != readiness.VerdictUnverifiable {
 		t.Errorf("not-configured provider info = %+v, want unverifiable", c)
 	}
 }
@@ -244,18 +245,18 @@ func TestProviderInfoCheck_TruthfulVerdict(t *testing.T) {
 // forcing ready over "cannot verify"/"not configured" language.
 func TestDoctorInvariant_NoReadyEvidenceClaimsUnverified(t *testing.T) {
 	banned := []string{"cannot verify", "could not verify", "unavailable", "not configured", "missing", "not installed", "not present", "not found"}
-	scan := func(t *testing.T, r *report) {
+	scan := func(t *testing.T, r *readiness.Report) {
 		t.Helper()
-		for _, g := range r.groups {
-			for _, c := range g.checks {
-				if c.result() != verdictReady {
+		for _, g := range r.Groups {
+			for _, c := range g.Checks {
+				if c.Result() != readiness.VerdictReady {
 					continue
 				}
-				hay := strings.ToLower(c.evidenceString() + " " + c.detail)
+				hay := strings.ToLower(c.EvidenceString() + " " + c.Detail)
 				for _, b := range banned {
 					if strings.Contains(hay, b) {
-						t.Errorf("group %q check %q is verdict=ready but evidence/detail says %q: detail=%q evidence=%q",
-							g.title, c.label, b, c.detail, c.evidence)
+						t.Errorf("group %q readiness.Check %q is readiness.Verdict=ready but evidence/detail says %q: detail=%q evidence=%q",
+							g.Title, c.Label, b, c.Detail, c.Evidence)
 					}
 				}
 			}
@@ -297,11 +298,11 @@ func TestDoctorInvariant_NoReadyEvidenceClaimsUnverified(t *testing.T) {
 // TestDoctorJSON_NoteVerdictSerializesTruthfully: the --json payload must
 // carry the SAME truthful verdict on a note check, not a blanket "ready".
 func TestDoctorJSON_NoteVerdictSerializesTruthfully(t *testing.T) {
-	r := &report{groups: []group{{title: "g", checks: []check{
-		{label: "a", note: true, verdict: verdictUnverifiable, detail: "not configured"},
-		{label: "b", note: true, verdict: verdictReady, detail: "set"},
+	r := &readiness.Report{Groups: []readiness.Group{{Title: "g", Checks: []readiness.Check{
+		{Label: "a", Note: true, Verdict: readiness.VerdictUnverifiable, Detail: "not configured"},
+		{Label: "b", Note: true, Verdict: readiness.VerdictReady, Detail: "set"},
 	}}}}
-	v := r.jsonView("")
+	v := jsonView(r, "")
 	byLabel := map[string]doctorCheckJSON{}
 	for _, c := range v.Groups[0].Checks {
 		byLabel[c.Label] = c
@@ -316,7 +317,7 @@ func TestDoctorJSON_NoteVerdictSerializesTruthfully(t *testing.T) {
 		t.Errorf(`note "b" verdict = %q, want "ready"`, byLabel["b"].Verdict)
 	}
 	// Notes never block/count as outstanding regardless of verdict.
-	if r.outstanding() != 0 || r.blocking() {
-		t.Errorf("notes must never count as outstanding or block: outstanding=%d blocking=%v", r.outstanding(), r.blocking())
+	if r.Outstanding() != 0 || r.Blocking() {
+		t.Errorf("notes must never count as outstanding or block: outstanding=%d blocking=%v", r.Outstanding(), r.Blocking())
 	}
 }

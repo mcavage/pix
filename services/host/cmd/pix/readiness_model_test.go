@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/readiness"
 	"pix/host/sys/systest"
 )
 
@@ -22,16 +23,16 @@ func TestModelReadiness_Verdicts(t *testing.T) {
 		name      string
 		p         ollamaProbe
 		model     string
-		want      verdict
+		want      readiness.Verdict
 		installed bool
 	}{
-		{"pulled -> ready", pulled, "gemma4", verdictReady, true},
-		{"clean list without tag -> verified todo", pulled, "nomic-embed-text", verdictTodo, true},
-		{"list failed -> unverifiable", ollamaProbe{installed: true, daemonUp: false}, "gemma4", verdictUnverifiable, true},
-		{"not installed -> not configured", ollamaProbe{}, "gemma4", verdict(""), false},
+		{"pulled -> ready", pulled, "gemma4", readiness.VerdictReady, true},
+		{"clean list without tag -> verified todo", pulled, "nomic-embed-text", readiness.VerdictTodo, true},
+		{"list failed -> unverifiable", ollamaProbe{installed: true, daemonUp: false}, "gemma4", readiness.VerdictUnverifiable, true},
+		{"not installed -> not configured", ollamaProbe{}, "gemma4", readiness.Verdict(""), false},
 	}
 	for _, tc := range cases {
-		m := modelReadiness("watcher", tc.model, "fact capture", tc.p, requirementOptional)
+		m := modelReadiness("watcher", tc.model, "fact capture", tc.p, readiness.RequirementOptional)
 		if m.Installed != tc.installed {
 			t.Errorf("%s: Installed = %v, want %v", tc.name, m.Installed, tc.installed)
 		}
@@ -51,8 +52,8 @@ func TestModelReadiness_Verdicts(t *testing.T) {
 func TestComputeMissingModels_UnverifiableIsNeverMissing(t *testing.T) {
 	down := ollamaProbe{installed: true, daemonUp: false} // list failed
 	rs := []ModelReadiness{
-		modelReadiness("watcher", "gemma4", "fact capture", down, requirementOptional),
-		modelReadiness("embed", "nomic-embed-text", "semantic recall", down, requirementOptional),
+		modelReadiness("watcher", "gemma4", "fact capture", down, readiness.RequirementOptional),
+		modelReadiness("embed", "nomic-embed-text", "semantic recall", down, readiness.RequirementOptional),
 	}
 	if missing := computeMissingModels(rs); len(missing) != 0 {
 		t.Fatalf("unverifiable tags must NEVER be reported as missing, got %+v", missing)
@@ -69,9 +70,9 @@ func TestComputeMissingModels_UnverifiableIsNeverMissing(t *testing.T) {
 func TestComputeMissingModels_ConfirmedMissingAndRoleDedup(t *testing.T) {
 	p := ollamaProbe{installed: true, daemonUp: true, listOK: true, listOut: "other:latest\n"}
 	rs := []ModelReadiness{
-		modelReadiness("watcher", "qwen3.5:9b", "fact capture", p, requirementOptional),
-		modelReadiness("bridge", "qwen3.5:9b", "local chat", p, requirementOptional),
-		modelReadiness("embed", "nomic-embed-text", "semantic recall", p, requirementOptional),
+		modelReadiness("watcher", "qwen3.5:9b", "fact capture", p, readiness.RequirementOptional),
+		modelReadiness("bridge", "qwen3.5:9b", "local chat", p, readiness.RequirementOptional),
+		modelReadiness("embed", "nomic-embed-text", "semantic recall", p, readiness.RequirementOptional),
 	}
 	missing := computeMissingModels(rs)
 	if len(missing) != 2 {
@@ -91,7 +92,7 @@ func TestComputeMissingModels_ConfirmedMissingAndRoleDedup(t *testing.T) {
 func TestComputeModels_NotInstalledIsNeitherMissingNorUnverifiable(t *testing.T) {
 	none := ollamaProbe{}
 	rs := []ModelReadiness{
-		modelReadiness("watcher", "gemma4", "fact capture", none, requirementOptional),
+		modelReadiness("watcher", "gemma4", "fact capture", none, readiness.RequirementOptional),
 	}
 	if len(computeMissingModels(rs)) != 0 || len(computeUnverifiableModels(rs)) != 0 {
 		t.Fatalf("not-installed must be excluded from both sets, got missing=%v unv=%v",
@@ -148,16 +149,16 @@ func TestDoctorOllama_ListFailureIsUnverifiableNotMissing(t *testing.T) {
 		return "", fmt.Errorf("not found")
 	}, DialLocalFn: func(port int) bool { return port == 11434 }, RunFn: func(name string, args ...string) (string, error) { return "", fmt.Errorf("boom") }}}
 	g := ollamaGroup(cfg, env)
-	for _, c := range g.checks {
-		if !strings.HasPrefix(strings.TrimSpace(c.label), "watcher") &&
-			!strings.HasPrefix(strings.TrimSpace(c.label), "embed") {
+	for _, c := range g.Checks {
+		if !strings.HasPrefix(strings.TrimSpace(c.Label), "watcher") &&
+			!strings.HasPrefix(strings.TrimSpace(c.Label), "embed") {
 			continue
 		}
-		if c.result() != verdictUnverifiable {
-			t.Errorf("%s: a failed `ollama list` must be unverifiable, got %+v", c.label, c)
+		if c.Result() != readiness.VerdictUnverifiable {
+			t.Errorf("%s: a failed `ollama list` must be unverifiable, got %+v", c.Label, c)
 		}
-		if c.todo != "" {
-			t.Errorf("%s: an unverifiable model must not offer a pull todo, got %q", c.label, c.todo)
+		if c.Todo != "" {
+			t.Errorf("%s: an unverifiable model must not offer a pull todo, got %q", c.Label, c.Todo)
 		}
 	}
 }
@@ -174,13 +175,13 @@ func TestDoctorOllama_DaemonDownIsOptionalTodo(t *testing.T) {
 		return "", fmt.Errorf("not found")
 	}, DialLocalFn: func(int) bool { return false }, RunFn: func(name string, args ...string) (string, error) { return "", fmt.Errorf("daemon down") }}}
 	g := ollamaGroup(cfg, env)
-	if len(g.checks) == 0 || g.checks[0].result() != verdictTodo {
-		t.Fatalf("daemon down must be a verified todo, got %+v", g.checks)
+	if len(g.Checks) == 0 || g.Checks[0].Result() != readiness.VerdictTodo {
+		t.Fatalf("daemon down must be a verified todo, got %+v", g.Checks)
 	}
-	if !strings.Contains(g.checks[0].todo, "ollama serve") {
-		t.Errorf("the fix is starting the daemon, got %q", g.checks[0].todo)
+	if !strings.Contains(g.Checks[0].Todo, "ollama serve") {
+		t.Errorf("the fix is starting the daemon, got %q", g.Checks[0].Todo)
 	}
-	if blockingCheck(g.checks[0].req(), g.checks[0].result()) {
+	if readiness.BlockingCheck(g.Checks[0].Req(), g.Checks[0].Result()) {
 		t.Error("ollama is optional — its todo must never block")
 	}
 }
@@ -193,11 +194,11 @@ func TestDoctorOllama_NotInstalledUnconfiguredIsNote(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "gemma4", MemoryEmbedModel: "nomic-embed-text"}
 	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, DialLocalFn: func(int) bool { return false }}}
 	g := ollamaGroup(cfg, env)
-	if len(g.checks) == 0 || !g.checks[0].note {
-		t.Fatalf("an uninstalled ollama with no configured dependents must be a note, got %+v", g.checks)
+	if len(g.Checks) == 0 || !g.Checks[0].Note {
+		t.Fatalf("an uninstalled ollama with no configured dependents must be a note, got %+v", g.Checks)
 	}
-	for _, c := range g.checks {
-		if c.todo != "" && c.result() == verdictTodo {
+	for _, c := range g.Checks {
+		if c.Todo != "" && c.Result() == readiness.VerdictTodo {
 			t.Errorf("no todos expected when nothing depends on ollama, got %+v", c)
 		}
 	}

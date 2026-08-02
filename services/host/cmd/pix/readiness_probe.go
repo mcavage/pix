@@ -18,7 +18,7 @@ import (
 // outcome — probeDeniedByPolicy, an EXPLICIT policy/permission refusal
 // distinguished from a generic probe error — so that is the superset kept
 // here; both callers (gogSpawnCheck and mcpLocalCheck) map it to
-// verdictDenied, and every other unclassified failure stays unverifiable.
+// readiness.VerdictDenied, and every other unclassified failure stays unverifiable.
 
 // probeStatus/probeResult are the STRUCTURED outcome of a `--list-tools`
 // probe: a clean non-empty list is healthy; a clean EMPTY list is a verified

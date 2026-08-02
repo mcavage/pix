@@ -44,9 +44,9 @@ func TestMcpHostTrustNotice_StatesBothFacts(t *testing.T) {
 // must print the disclosure when at least one MCP server is configured.
 func TestDoctorRender_DisclosesHostMCPTrust_WhenMCPConfigured(t *testing.T) {
 	r := runDoctor(defaultCfg(), fakeEnv{}.env())
-	r.services, r.mcp = defaultCfg().Services, []string{gwServerName}
+	r.Services, r.MCP = defaultCfg().Services, []string{gwServerName}
 	var buf bytes.Buffer
-	r.render(&buf, false)
+	r.Render(&buf, false, doctorHints())
 	out := buf.String()
 	for _, want := range mcpHostTrustNoticeFacts {
 		if !strings.Contains(out, want) {
@@ -60,9 +60,9 @@ func TestDoctorRender_DisclosesHostMCPTrust_WhenMCPConfigured(t *testing.T) {
 // never alarmist about something the user hasn't touched).
 func TestDoctorRender_NoDisclosure_WhenNoMCPConfigured(t *testing.T) {
 	r := runDoctor(defaultCfg(), fakeEnv{}.env())
-	r.services, r.mcp = defaultCfg().Services, nil
+	r.Services, r.MCP = defaultCfg().Services, nil
 	var buf bytes.Buffer
-	r.render(&buf, false)
+	r.Render(&buf, false, doctorHints())
 	if strings.Contains(buf.String(), mcpHostTrustNotice) {
 		t.Errorf("doctor must not print the MCP host-trust notice with no MCP configured, got:\n%s", buf.String())
 	}

@@ -1044,7 +1044,7 @@ func runTaskNew(env shellEnv, argv []string) {
 				// or we might strand a live sandbox and drop its work. Leave everything
 				// and hand the user the manual check.
 				fmt.Fprintf(os.Stderr, "pix task new: launch failed and the sandbox state is unknown (sbx ls did not respond): %v\n", err)
-				fmt.Fprintf(os.Stderr, "Left the clone at %s. Check `sbx ls`, then remove %s and that clone manually if no sandbox was created.\n", co, sbxname)
+				fmt.Fprintf(os.Stderr, "Left the clone at %s. check `sbx ls`, then remove %s and that clone manually if no sandbox was created.\n", co, sbxname)
 			default:
 				// running/stopped: the sandbox exists, the session merely exited
 				// non-zero. Keep the clone; guarded `task rm` handles teardown safely.

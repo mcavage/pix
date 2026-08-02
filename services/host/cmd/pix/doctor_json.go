@@ -1,6 +1,10 @@
 package main
 
-import "strings"
+import (
+	"strings"
+
+	"pix/host/readiness"
+)
 
 // doctorSchemaVersion is bumped whenever the JSON shape gains/changes fields a
 // machine consumer might depend on. v1 (implicit — no schema_version field)
@@ -54,49 +58,31 @@ type readinessCheckJSON struct {
 
 // readinessChecksJSON renders any set of checks into the shared array. Only a
 // VERIFIED failure carries a fix, mirroring report.todos().
-func readinessChecksJSON(checks []check) []readinessCheckJSON {
+func readinessChecksJSON(checks []readiness.Check) []readinessCheckJSON {
 	out := make([]readinessCheckJSON, 0, len(checks))
 	for _, c := range checks {
 		row := readinessCheckJSON{
-			Axis:        string(c.axisOf()),
-			Label:       strings.TrimSpace(c.label),
-			Requirement: string(c.req()),
-			Verdict:     string(c.result()),
-			Evidence:    c.evidenceString(),
+			Axis:        string(c.AxisOf()),
+			Label:       strings.TrimSpace(c.Label),
+			Requirement: string(c.Req()),
+			Verdict:     string(c.Result()),
+			Evidence:    c.EvidenceString(),
 			Fix:         []string{},
-			DurationMS:  c.duration.Milliseconds(),
-			Endpoint:    c.endpoint,
-			Note:        c.note,
+			DurationMS:  c.Duration.Milliseconds(),
+			Endpoint:    c.Endpoint,
+			Note:        c.Note,
 		}
-		if v := c.result(); (v == verdictTodo || v == verdictDenied) && c.todo != "" {
-			row.Fix = []string{c.todo}
+		if v := c.Result(); (v == readiness.VerdictTodo || v == readiness.VerdictDenied) && c.Todo != "" {
+			row.Fix = []string{c.Todo}
 		}
 		out = append(out, row)
 	}
 	return out
 }
 
-// snapshot projects the report onto the shared Snapshot: every check inherits
-// its group's axis unless it carries its own (the Ollama and service groups
-// already stamp per-check axes). This is what lets doctor derive its exit code
-// from the SAME function status and setup use.
-func (r *report) snapshot() Snapshot {
-	s := Snapshot{checks: map[Axis][]check{}}
-	for _, g := range r.groups {
-		for _, c := range g.checks {
-			a := c.axisOf()
-			if a == "" {
-				a = g.axis
-			}
-			c.axis = a
-			if _, seen := s.checks[a]; !seen {
-				s.order = append(s.order, a)
-			}
-			s.checks[a] = append(s.checks[a], c)
-		}
-	}
-	return s
-}
+// Report.Snapshot moved to the readiness package: reconstructing a Snapshot
+// from a Report is model machinery, and Go requires a method to live with its
+// type anyway.
 
 type doctorGroupJSON struct {
 	Title  string            `json:"title"`
@@ -126,51 +112,54 @@ type doctorCheckJSON struct {
 
 // jsonView renders the report into its serializable form (the same data render
 // prints, minus the glyph presentation).
-func (r *report) jsonView(profile string) doctorJSON {
-	todos := r.todos()
+// jsonView is a function rather than a method now: doctorJSON is doctor's own
+// wire schema (v3, with its compatibility history), and readiness has no
+// business owning it. Report moved; the schema stayed.
+func jsonView(r *readiness.Report, profile string) doctorJSON {
+	todos := r.Todos()
 	// Verdict derives from the same axes the headline uses: a verified core
 	// failure → blocked; any verified failure → outstanding; nothing verified
 	// failing but unverifiable checks → unverifiable; else pass.
 	verdict := "pass"
 	switch {
-	case r.blocking():
+	case r.Blocking():
 		verdict = "blocked"
-	case r.outstanding() > 0:
+	case r.Outstanding() > 0:
 		verdict = "outstanding"
-	case r.unverifiableCount() > 0:
+	case r.UnverifiableCount() > 0:
 		verdict = "unverifiable"
 	}
 	v := doctorJSON{
 		SchemaVersion: doctorSchemaVersion,
 		Verdict:       verdict,
-		Blocking:      r.blocking(),
+		Blocking:      r.Blocking(),
 		Profile:       profile,
 		Todos:         todos,
-		Services:      r.services,
-		MCP:           r.mcp,
-		SbxAbsent:     r.sbxAbsent,
+		Services:      r.Services,
+		MCP:           r.MCP,
+		SbxAbsent:     r.SbxAbsent,
 	}
-	snap := r.snapshot()
+	snap := r.Snapshot()
 	v.Checks = readinessChecksJSON(snap.All())
 	v.Exit = snap.ExitCode()
-	for _, g := range r.groups {
-		gj := doctorGroupJSON{Title: g.title}
-		for _, c := range g.checks {
-			res := c.result()
-			todo := c.todo
-			if res != verdictTodo && res != verdictDenied {
+	for _, g := range r.Groups {
+		gj := doctorGroupJSON{Title: g.Title}
+		for _, c := range g.Checks {
+			res := c.Result()
+			todo := c.Todo
+			if res != readiness.VerdictTodo && res != readiness.VerdictDenied {
 				todo = "" // only a verified failure carries a repair command
 			}
 			gj.Checks = append(gj.Checks, doctorCheckJSON{
-				Group:       g.title,
-				Label:       c.label,
-				Requirement: string(c.req()),
+				Group:       g.Title,
+				Label:       c.Label,
+				Requirement: string(c.Req()),
 				Verdict:     string(res),
-				Evidence:    c.evidenceString(),
+				Evidence:    c.EvidenceString(),
 				Todo:        todo,
-				Note:        c.note,
-				State:       stateName(c.state()),
-				Detail:      c.detail,
+				Note:        c.Note,
+				State:       stateName(c.State()),
+				Detail:      c.Detail,
 			})
 		}
 		v.Groups = append(v.Groups, gj)
@@ -179,15 +168,15 @@ func (r *report) jsonView(profile string) doctorJSON {
 }
 
 // stateName maps a rendered checkState to its v1-compatible JSON string.
-// stateWarn renders as "warn" (additive — v1 never produced it) so a JSON
+// readiness.StateWarn renders as "warn" (additive — v1 never produced it) so a JSON
 // consumer can tell an unverifiable result apart from a plain info line.
-func stateName(s checkState) string {
+func stateName(s readiness.CheckState) string {
 	switch s {
-	case stateOK:
+	case readiness.StateOK:
 		return "ok"
-	case stateTODO:
+	case readiness.StateTODO:
 		return "todo"
-	case stateWarn:
+	case readiness.StateWarn:
 		return "warn"
 	default:
 		return "info"

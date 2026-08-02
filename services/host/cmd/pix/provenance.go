@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/readiness"
 	"strings"
 )
 
@@ -163,19 +164,19 @@ func pathShadowIssue(name, self string, getenv func(string) string) string {
 	return message
 }
 
-func installDuplicatesGroup(env shellEnv) group {
-	g := group{title: "Installation"}
+func installDuplicatesGroup(env shellEnv) readiness.Group {
+	g := readiness.Group{Title: "Installation"}
 
 	self, err := env.Executable()
 	if err == nil {
 		if warning := pathShadowIssue("pix", self, env.Getenv); warning != "" {
-			g.checks = append(g.checks, check{label: "pix PATH", detail: warning, evidence: warning, verdict: verdictTodo})
+			g.Checks = append(g.Checks, readiness.Check{Label: "pix PATH", Detail: warning, Evidence: warning, Verdict: readiness.VerdictTodo})
 		}
 	}
 	if env.HostBinary != nil {
 		if host, err := env.HostBinary(); err == nil {
 			if warning := pathShadowIssue("pix-host", host, env.Getenv); warning != "" {
-				g.checks = append(g.checks, check{label: "host PATH", detail: warning, evidence: warning, verdict: verdictTodo})
+				g.Checks = append(g.Checks, readiness.Check{Label: "host PATH", Detail: warning, Evidence: warning, Verdict: readiness.VerdictTodo})
 			}
 		}
 	}

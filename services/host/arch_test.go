@@ -64,6 +64,9 @@ var pkgLayer = map[string]int{
 	"workspace":   layerCapability,
 	"service":     layerCapability,
 
+	// L2 — the shared model of "is this working".
+	"readiness": layerReadiness,
+
 	// L4 — the command layer.
 	"cmd/pix": layerCommand,
 

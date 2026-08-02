@@ -1,13 +1,13 @@
-package main
+package readiness
 
-// readiness_render.go holds the ONE verdict vocabulary. Every renderer —
+// readiness_render.go holds the ONE Verdict vocabulary. Every renderer —
 // doctor, status, run's warnings, the onboarding host-state payload, setup —
-// maps a (requirement, verdict) pair to a glyph and a word THROUGH these two
+// maps a (Requirement, Verdict) pair to a glyph and a word THROUGH these two
 // functions. A renderer that spells a glyph itself is how two commands start
 // disagreeing about the same fact, which is the whole defect this wave exists
 // to remove.
 //
-// The mapping, and the only four verdict words that may appear anywhere:
+// The mapping, and the only four Verdict words that may appear anywhere:
 //
 //	ready         ✓  "ready"
 //	todo (core)   ✗  "needs setup"
@@ -26,20 +26,20 @@ const (
 	glyphNote         = "·"
 )
 
-// verdictGlyph maps a (requirement, verdict, note) triple to its marker.
+// VerdictGlyph maps a (Requirement, Verdict, note) triple to its marker.
 // A requested axis renders exactly like a core one: the user asked for it, so
 // a gap there is a hard ✗, not a shrug.
-func verdictGlyph(req requirement, v verdict, note bool) string {
+func VerdictGlyph(req Requirement, v Verdict, note bool) string {
 	if note {
 		return glyphNote
 	}
 	switch v {
-	case verdictReady:
+	case VerdictReady:
 		return glyphReady
-	case verdictDenied:
+	case VerdictDenied:
 		return glyphDenied
-	case verdictTodo:
-		if blocksExit(req) {
+	case VerdictTodo:
+		if BlocksExit(req) {
 			return glyphTodoCore
 		}
 		return glyphTodoOptional
@@ -48,34 +48,34 @@ func verdictGlyph(req requirement, v verdict, note bool) string {
 	}
 }
 
-// verdictWord maps a verdict to the ONE word every renderer uses for it.
-func verdictWord(v verdict) string {
+// VerdictWord maps a Verdict to the ONE word every renderer uses for it.
+func VerdictWord(v Verdict) string {
 	switch v {
-	case verdictReady:
+	case VerdictReady:
 		return "ready"
-	case verdictTodo:
+	case VerdictTodo:
 		return "needs setup"
-	case verdictDenied:
+	case VerdictDenied:
 		return "blocked"
 	default:
 		return "can't check from here"
 	}
 }
 
-// checkGlyph is the check-level shorthand every renderer calls.
-func checkGlyph(c check) string { return verdictGlyph(c.req(), c.result(), c.note) }
+// Glyph is the Check-level shorthand every renderer calls.
+func Glyph(c Check) string { return VerdictGlyph(c.Req(), c.Result(), c.Note) }
 
-// checkWord is the check-level shorthand for the verdict word.
-func checkWord(c check) string {
-	if c.note {
-		return verdictWord(verdictUnverifiable)
+// Word is the Check-level shorthand for the Verdict word.
+func Word(c Check) string {
+	if c.Note {
+		return VerdictWord(VerdictUnverifiable)
 	}
-	return verdictWord(c.result())
+	return VerdictWord(c.Result())
 }
 
-// readinessFooter names the ONE next command for a renderer, so no surface
+// Footer names the ONE next command for a renderer, so no surface
 // ends with a menu of options.
-func readinessFooter(surface string, s Snapshot) string {
+func Footer(surface string, s Snapshot) string {
 	switch surface {
 	case "status":
 		return "pix doctor"

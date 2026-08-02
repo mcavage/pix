@@ -440,7 +440,7 @@ fixes reach you without upgrading. This is for the two host binaries, which
 cannot update themselves.
 
 flags:
-  --check          report what is installed vs published; change nothing
+  --check          readiness.Report what is installed vs published; change nothing
   --version X.Y.Z  install this exact release instead of the latest stable
                    (also how you downgrade)
   --force          upgrade from a local/dev build, or reinstall the same version

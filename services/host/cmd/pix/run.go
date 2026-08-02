@@ -425,7 +425,7 @@ func runRun(argv []string) {
 			// failed, but still exit non-zero: doctor/status must not be told
 			// this sandbox's MCP set is recorded when it isn't.
 			fmt.Fprintf(os.Stderr, "pix run: %v\n", rerr)
-			fmt.Fprintln(os.Stderr, "the sandbox itself launched fine; only pix's local record of its preloaded MCP set failed to write. Check state-dir permissions and re-run `pix doctor`.")
+			fmt.Fprintln(os.Stderr, "the sandbox itself launched fine; only pix's local record of its preloaded MCP set failed to write. check state-dir permissions and re-run `pix doctor`.")
 			exit(1)
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {

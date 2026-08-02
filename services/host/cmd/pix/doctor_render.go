@@ -1,91 +1,14 @@
 package main
 
 import (
-	"fmt"
-	"io"
 	"pix/host/cli"
-	"strings"
-
-	"pix/host/config"
+	"pix/host/readiness"
 )
 
-// render writes the verdict-first report to w. Default (verbose=false) is
-// CONCISE: verified-ready checks collapse to a single per-group summary line
-// so the output leads with what needs attention. verbose=true retains the
-// full detailed group evidence, one line per check.
-func (r *report) render(w io.Writer, verbose bool) {
-	todos := r.todos()
-
-	// One-line headline up front, derived entirely from requirement+verdict:
-	// a VERIFIED core failure is the hard ✗ (exit 1); verified optional
-	// failures are the ⚠ outstanding count; a report with nothing verified
-	// failing but unverifiable checks is called out as "could not verify"
-	// (never "outstanding" — there is nothing confirmed to fix).
-	unv := r.unverifiableCount()
-	switch {
-	case r.blocking():
-		fmt.Fprintf(w, "%s pix: a required core check is verified failing — fix it and re-run (doctor exits 1).\n",
-			verdictGlyph(requirementCore, verdictTodo, false))
-	case r.outstanding() > 0:
-		fmt.Fprintf(w, "%s pix: %s outstanding (optional, nothing blocking) — see the TODOs below.\n",
-			verdictGlyph(requirementOptional, verdictTodo, false), plural(r.outstanding(), "item"))
-	case unv > 0:
-		fmt.Fprintf(w, "%s pix: no verified failures, but %s could not be verified from here.\n",
-			verdictGlyph(requirementOptional, verdictTodo, false), plural(unv, "check"))
-	default:
-		fmt.Fprintf(w, "%s pix: all checks pass — you're ready to `pix serve` + `pix`.\n",
-			verdictGlyph(requirementCore, verdictReady, false))
-	}
-	if r.sbxAbsent {
-		fmt.Fprintln(w, "  note: sbx not on PATH (you're likely inside the sandbox) — provider/MCP")
-		fmt.Fprintln(w, "        checks can't be verified here; run `pix doctor` on the host.")
-		fmt.Fprintln(w, "        On a macOS host, install it with: "+sbxInstallHint)
-	}
-	fmt.Fprintln(w)
-
-	// Only hint at --verbose when concise mode actually HID something. A
-	// cold/all-todo run (nothing ready to collapse) shows every check already,
-	// so the hint would point at detail that doesn't exist.
-	collapsedAny := false
-	for _, g := range r.groups {
-		fmt.Fprintf(w, "%s:\n", g.title)
-		shown := 0
-		for _, c := range g.checks {
-			if !verbose && !c.note && c.result() == verdictReady {
-				collapsedAny = true
-				continue // concise: collapse verified-ready detail
-			}
-			fmt.Fprintf(w, "  %s %-12s %s\n", checkGlyph(c), c.label, c.detail)
-			shown++
-		}
-		if !verbose && shown == 0 {
-			fmt.Fprintf(w, "  %s all %s ready\n", verdictGlyph(requirementCore, verdictReady, false), plural(len(g.checks), "check"))
-		}
-		fmt.Fprintln(w)
-	}
-
-	if len(todos) > 0 {
-		fmt.Fprintln(w, "TODO (copy-paste, in dependency order):")
-		for _, t := range todos {
-			fmt.Fprintf(w, "  TODO: %s\n", t)
-		}
-		fmt.Fprintln(w)
-	}
-	fmt.Fprintf(w, "Config: %s   (services=%s, mcp=%s)\n",
-		config.Path(), strings.Join(r.cfgServices(), " "), r.cfgMCP())
-	// The hint is only useful — and only printed — when concise mode actually
-	// hid a ready detail line; otherwise --verbose would show nothing new.
-	if !verbose && collapsedAny {
-		fmt.Fprintln(w, "(concise output; run `pix doctor --verbose` for full group detail)")
-	}
-	// Security disclosure, printed only when there is something to disclose
-	// (at least one MCP server configured) so a bare/no-MCP report stays
-	// notice-free. Concise on purpose: full detail lives in SECURITY.md, this
-	// is the reminder at the one place a user checks MCP health.
-	if len(r.mcp) > 0 {
-		fmt.Fprintln(w, mcpHostTrustNotice)
-	}
-}
+// Report.Render moved to the readiness package: Report lives there now, and Go
+// will not let a method be declared outside its type's package. The surface's
+// own words travel with the call (hints) rather than being baked into
+// the renderer, which is what kept this here for as long as it was here.
 
 // mcpHostTrustNotice is the two-fact disclosure for local command/container
 // MCP servers: they run on the host, outside sandbox isolation, with your
@@ -94,16 +17,14 @@ func (r *report) render(w io.Writer, verbose bool) {
 // footer and setup's completion summary so the two surfaces never drift.
 const mcpHostTrustNotice = "Note: local/container MCP servers run on the host, outside the sandbox, with your host-user privileges. Content they return can be included in the conversation sent to your model provider. Details: SECURITY.md."
 
-// cfgServices / cfgMCP are filled by runDoctorCmd; keep them on the report so
-// render stays config-free. Stored at build time.
-func (r *report) cfgServices() []string { return r.services }
-func (r *report) cfgMCP() string {
-	if len(r.mcp) == 0 {
-		return "<none>"
-	}
-	return strings.Join(r.mcp, " ")
-}
-
 func upDown(up bool) string { return cli.UpDown(up) }
 
 func plural(n int, noun string) string { return cli.Plural(n, noun) }
+
+// doctorHints are the surface-specific strings the readiness renderer cannot
+// know for itself: the exact sbx install command, and the host-MCP trust
+// notice. They are passed IN rather than baked into readiness, so doctor,
+// status and setup can each say what they mean while sharing one renderer.
+func doctorHints() readiness.Hints {
+	return readiness.Hints{SbxInstall: sbxInstallHint, MCPHostTrust: mcpHostTrustNotice}
+}

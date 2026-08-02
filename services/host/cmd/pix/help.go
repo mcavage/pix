@@ -152,7 +152,7 @@ Integrations & credentials
   gworkspace <cmd>    setup | status | disable: Google Workspace access
   slack <cmd>         setup | auth | status | disable: Slack OAuth and access
   mcp <cmd>           register|ls|load|auth|bundle MCP servers (sbx gateway)
-  secret <cmd>        ls|set|rm|check the 1Password op-refs (host MCP creds)
+  secret <cmd>        ls|set|rm|readiness.Check the 1Password op-refs (host MCP creds)
 
 State (on-disk lifecycle)
   state <cmd>         backup|restore|reset (grouped aliases)
@@ -252,12 +252,12 @@ const doctorUsage = `usage: pix doctor [--json] [--verbose]
 
 Diagnose host + sandbox health (provider keys, ollama/models, memory, Google Workspace, mcp),
 leading with a one-line verdict and copy-pasteable TODO commands. The default
-output is concise (verified-ready checks collapse per group); --verbose shows
-every check.
+output is concise (verified-ready checks collapse per readiness.Group); --verbose shows
+every readiness.Check.
 
 flags:
-  --json      emit the machine-readable report (schema_version 2)
-  --verbose   show every check, including verified-ready detail
+  --json      emit the machine-readable readiness.Report (schema_version 2)
+  --verbose   show every readiness.Check, including verified-ready detail
 
 exit codes:
   0  ready, or only optional/unverifiable gaps (nothing verified-broken that

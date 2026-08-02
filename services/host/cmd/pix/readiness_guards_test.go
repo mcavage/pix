@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"pix/host/readiness"
 	"sort"
 	"strconv"
 	"strings"
@@ -37,8 +38,8 @@ var readinessRenderers = []string{
 	"gworkspace.go",
 	"readiness_launch.go",
 	"readiness_service.go",
-	"readiness_snapshot.go",
-	"readiness_types.go",
+	"../../readiness/snapshot.go",
+	"../../readiness/types.go",
 }
 
 // verdictGlyphs is the closed set of markers the vocabulary owns.
@@ -66,7 +67,7 @@ func TestRendererPurity(t *testing.T) {
 			}
 			for _, g := range verdictGlyphs {
 				if strings.Contains(value, g) {
-					t.Errorf("%s spells the verdict glyph %q in a string literal (%q) — render it through verdictGlyph/checkGlyph instead", file, g, value)
+					t.Errorf("%s spells the verdict glyph %q in a string literal (%q) — render it through readiness.VerdictGlyph/readiness.Glyph instead", file, g, value)
 				}
 			}
 			return true
@@ -117,16 +118,16 @@ func TestAxisSetFrozen(t *testing.T) {
 		"service.knowledge",
 		"service.memory",
 	}
-	got := axisNames(readinessAxes)
+	got := readiness.AxisNames(readiness.AllAxes)
 	sort.Strings(want)
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("frozen axis set changed:\n got %v\nwant %v", got, want)
 	}
 	// The one parameterized family, and nothing else, is accepted beyond the list.
-	if !mcpAxis("slack").known() {
+	if !readiness.MCPAxis("slack").Known() {
 		t.Error("mcp:<server> must be a known axis")
 	}
-	if Axis("mcp:").known() || Axis("invented").known() {
+	if readiness.Axis("mcp:").Known() || readiness.Axis("invented").Known() {
 		t.Error("an unknown axis must never be known")
 	}
 }
@@ -135,22 +136,21 @@ func TestAxisSetFrozen(t *testing.T) {
 // rendered ready and never rendered as a verdict. This is what keeps the fast
 // surfaces honest about what they did not check.
 func TestUnrequestedAxisIsAbsent(t *testing.T) {
-	s := buildSnapshot(
-		Request{Axes: []Axis{axisProviders}},
-		map[Axis]axisBuilder{
-			axisProviders: func() []check {
-				return []check{{label: "k", requirement: requirementCore, verdict: verdictReady, evidence: "e"}}
+	s := readiness.Build(readiness.Request{Axes: []readiness.Axis{readiness.AxisProviders}},
+		map[readiness.Axis]readiness.AxisBuilder{
+			readiness.AxisProviders: func() []readiness.Check {
+				return []readiness.Check{{Label: "k", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictReady, Evidence: "e"}}
 			},
-			axisPack: func() []check { t.Fatal("an unrequested axis builder must never run"); return nil },
+			readiness.AxisPack: func() []readiness.Check { t.Fatal("an unrequested axis builder must never run"); return nil },
 		},
 	)
-	if s.Has(axisPack) {
+	if s.Has(readiness.AxisPack) {
 		t.Error("an unrequested axis must be absent from the snapshot")
 	}
-	if _, _, ok := s.AxisVerdict(axisPack); ok {
-		t.Error("an absent axis must not report a verdict")
+	if _, _, ok := s.AxisVerdict(readiness.AxisPack); ok {
+		t.Error("an absent axis must not report a readiness.Verdict")
 	}
-	if axisReady(s, axisPack) {
+	if axisReady(s, readiness.AxisPack) {
 		t.Error("an absent axis must never read as ready")
 	}
 }
@@ -166,31 +166,31 @@ var fixFirstTokens = map[string]bool{
 // walkEvidenceAndFix asserts the two properties a reader depends on: every
 // non-ready check STATES AN OBSERVATION, and every verified failure carries an
 // exact, runnable repair.
-func walkEvidenceAndFix(t *testing.T, where string, checks []check) {
+func walkEvidenceAndFix(t *testing.T, where string, checks []readiness.Check) {
 	t.Helper()
 	for _, c := range checks {
-		if c.result() == verdictReady {
+		if c.Result() == readiness.VerdictReady {
 			continue
 		}
-		if strings.TrimSpace(c.evidenceString()) == "" {
-			t.Errorf("%s: check %q is %s with no evidence", where, c.label, c.result())
+		if strings.TrimSpace(c.EvidenceString()) == "" {
+			t.Errorf("%s: check %q is %s with no evidence", where, c.Label, c.Result())
 		}
-		if strings.Contains(c.evidenceString(), "...") {
-			t.Errorf("%s: check %q elides its evidence with \"...\": %q", where, c.label, c.evidenceString())
+		if strings.Contains(c.EvidenceString(), "...") {
+			t.Errorf("%s: check %q elides its evidence with \"...\": %q", where, c.Label, c.EvidenceString())
 		}
-		if c.note {
+		if c.Note {
 			continue // a note asserts nothing, so it owes no repair
 		}
-		if v := c.result(); v != verdictTodo && v != verdictDenied {
+		if v := c.Result(); v != readiness.VerdictTodo && v != readiness.VerdictDenied {
 			continue
 		}
-		if strings.TrimSpace(c.todo) == "" {
-			t.Errorf("%s: verified failure %q carries no fix command", where, c.label)
+		if strings.TrimSpace(c.Todo) == "" {
+			t.Errorf("%s: verified failure %q carries no fix command", where, c.Label)
 			continue
 		}
-		first := strings.Fields(c.todo)[0]
+		first := strings.Fields(c.Todo)[0]
 		if !fixFirstTokens[first] {
-			t.Errorf("%s: fix for %q starts with %q, which is not a command: %q", where, c.label, first, c.todo)
+			t.Errorf("%s: fix for %q starts with %q, which is not a command: %q", where, c.Label, first, c.Todo)
 		}
 	}
 }
@@ -202,7 +202,7 @@ func TestEvidenceAndFixWalk_Doctor(t *testing.T) {
 	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "", errNotFoundFixture }, RunFn: func(string, ...string) (string, error) { return "", errNotFoundFixture }, GetenvFn: func(string) string { return "" }, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }, HomeDirFn: func() string { return t.TempDir() }}}
 	cfg := &config.Config{Services: []string{"memory", "knowledge"}}
 	r := runDoctor(cfg, env)
-	walkEvidenceAndFix(t, "doctor", r.snapshot().All())
+	walkEvidenceAndFix(t, "doctor", r.Snapshot().All())
 }
 
 // TestEvidenceAndFixWalk_Fast walks the shared fast snapshot the daily
@@ -216,13 +216,13 @@ func TestEvidenceAndFixWalk_Fast(t *testing.T) {
 // TestRunWarningsAreCappedAndNeverBlock (AC-P0-224): `run` prints AT MOST
 // three readiness rows plus a count, and rendering them is not a gate.
 func TestRunWarningsAreCappedAndNeverBlock(t *testing.T) {
-	var rows []check
+	var rows []readiness.Check
 	for _, label := range []string{"a", "b", "c", "d", "e"} {
-		rows = append(rows, check{label: label, requirement: requirementCore, verdict: verdictTodo,
-			evidence: "nothing listening", todo: "pix serve"})
+		rows = append(rows, readiness.Check{Label: label, Requirement: readiness.RequirementCore, Verdict: readiness.VerdictTodo,
+			Evidence: "nothing listening", Todo: "pix serve"})
 	}
-	s := buildSnapshot(Request{Axes: []Axis{axisProviders}}, map[Axis]axisBuilder{
-		axisProviders: func() []check { return rows },
+	s := readiness.Build(readiness.Request{Axes: []readiness.Axis{readiness.AxisProviders}}, map[readiness.Axis]readiness.AxisBuilder{
+		readiness.AxisProviders: func() []readiness.Check { return rows },
 	})
 	var out bytes.Buffer
 	if total := renderReadinessWarnings(&out, s, launchWarningLimit); total != len(rows) {
@@ -248,18 +248,18 @@ func TestRunWarningsAreCappedAndNeverBlock(t *testing.T) {
 // defines for each (requirement, verdict) pair.
 func TestFastSurfacesShareTheVocabulary(t *testing.T) {
 	for _, tc := range []struct {
-		req         requirement
-		v           verdict
+		req         readiness.Requirement
+		v           readiness.Verdict
 		glyph, word string
 	}{
-		{requirementCore, verdictTodo, "✗", "needs setup"},
-		{requirementOptional, verdictTodo, "⚠", "needs setup"},
-		{requirementCore, verdictUnverifiable, "?", "can't check from here"},
-		{requirementCore, verdictDenied, "⊘", "blocked"},
+		{readiness.RequirementCore, readiness.VerdictTodo, "✗", "needs setup"},
+		{readiness.RequirementOptional, readiness.VerdictTodo, "⚠", "needs setup"},
+		{readiness.RequirementCore, readiness.VerdictUnverifiable, "?", "can't check from here"},
+		{readiness.RequirementCore, readiness.VerdictDenied, "⊘", "blocked"},
 	} {
-		c := check{label: "axis", requirement: tc.req, verdict: tc.v, evidence: "observed", todo: "pix doctor"}
-		s := buildSnapshot(Request{Axes: []Axis{axisProviders}}, map[Axis]axisBuilder{
-			axisProviders: func() []check { return []check{c} },
+		c := readiness.Check{Label: "axis", Requirement: tc.req, Verdict: tc.v, Evidence: "observed", Todo: "pix doctor"}
+		s := readiness.Build(readiness.Request{Axes: []readiness.Axis{readiness.AxisProviders}}, map[readiness.Axis]readiness.AxisBuilder{
+			readiness.AxisProviders: func() []readiness.Check { return []readiness.Check{c} },
 		})
 		var out bytes.Buffer
 		renderReadinessWarnings(&out, s, launchWarningLimit)
@@ -283,14 +283,14 @@ func TestStatusJSONCarriesChecksAndExit(t *testing.T) {
 			t.Errorf("check %q has no axis", c.Label)
 		}
 	}
-	if st.Exit != exitReady {
-		t.Errorf("exit = %d, want %d (a provider key is set and memory identifies itself)", st.Exit, exitReady)
+	if st.Exit != readiness.ExitReady {
+		t.Errorf("exit = %d, want %d (a provider key is set and memory identifies itself)", st.Exit, readiness.ExitReady)
 	}
 	// Suppressed-3: an unverifiable axis (no sbx, i.e. inside the sandbox)
 	// must never fail a script that only wanted the JSON.
 	inVM := fakeStatusEnv()
 	fakeOf(inVM).LookPathFn = func(string) (string, error) { return "", errNotFoundFixture }
-	if got := gatherStatus(cfg, "default", inVM).Exit; got != exitReady {
+	if got := gatherStatus(cfg, "default", inVM).Exit; got != readiness.ExitReady {
 		t.Errorf("unverifiable axes must not fail status: exit = %d", got)
 	}
 	// A POSITIVELY verified core failure still exits 1.
@@ -301,8 +301,8 @@ func TestStatusJSONCarriesChecksAndExit(t *testing.T) {
 		}
 		return "", nil
 	}
-	if got := gatherStatus(cfg, "default", noKeys).Exit; got != exitNotReady {
-		t.Errorf("a verified missing model key must exit %d, got %d", exitNotReady, got)
+	if got := gatherStatus(cfg, "default", noKeys).Exit; got != readiness.ExitNotReady {
+		t.Errorf("a verified missing model key must exit %d, got %d", readiness.ExitNotReady, got)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"pix/host/readiness"
 	"strconv"
 	"strings"
 	"testing"
@@ -136,28 +137,28 @@ func TestEveryDispatchedSubcommandAppearsInItsUsage(t *testing.T) {
 // probe, so they can never be derived from a snapshot and are not in this
 // table.
 func TestExitMatrix(t *testing.T) {
-	core := func(v verdict) check {
-		return check{label: "core", requirement: requirementCore, verdict: v, evidence: "fixture", todo: "pix setup"}
+	core := func(v readiness.Verdict) readiness.Check {
+		return readiness.Check{Label: "core", Requirement: readiness.RequirementCore, Verdict: v, Evidence: "fixture", Todo: "pix setup"}
 	}
-	opt := func(v verdict) check {
-		return check{label: "opt", requirement: requirementOptional, verdict: v, evidence: "fixture", todo: "pix setup"}
+	opt := func(v readiness.Verdict) readiness.Check {
+		return readiness.Check{Label: "opt", Requirement: readiness.RequirementOptional, Verdict: v, Evidence: "fixture", Todo: "pix setup"}
 	}
 	for name, tc := range map[string]struct {
-		checks         []check
+		checks         []readiness.Check
 		full, suppress int
 	}{
-		"all ready":                     {[]check{core(verdictReady), opt(verdictReady)}, exitReady, exitReady},
-		"core todo":                     {[]check{core(verdictTodo)}, exitNotReady, exitNotReady},
-		"core denied":                   {[]check{core(verdictDenied)}, exitNotReady, exitNotReady},
-		"core unverifiable":             {[]check{core(verdictUnverifiable)}, exitUnverifiable, exitReady},
-		"verified failure outranks unv": {[]check{core(verdictUnverifiable), core(verdictTodo)}, exitNotReady, exitNotReady},
-		"optional todo never blocks":    {[]check{core(verdictReady), opt(verdictTodo)}, exitReady, exitReady},
-		"note never blocks":             {[]check{{label: "n", requirement: requirementCore, verdict: verdictTodo, note: true}}, exitReady, exitReady},
+		"all ready":                     {[]readiness.Check{core(readiness.VerdictReady), opt(readiness.VerdictReady)}, readiness.ExitReady, readiness.ExitReady},
+		"core todo":                     {[]readiness.Check{core(readiness.VerdictTodo)}, readiness.ExitNotReady, readiness.ExitNotReady},
+		"core denied":                   {[]readiness.Check{core(readiness.VerdictDenied)}, readiness.ExitNotReady, readiness.ExitNotReady},
+		"core unverifiable":             {[]readiness.Check{core(readiness.VerdictUnverifiable)}, readiness.ExitUnverifiable, readiness.ExitReady},
+		"verified failure outranks unv": {[]readiness.Check{core(readiness.VerdictUnverifiable), core(readiness.VerdictTodo)}, readiness.ExitNotReady, readiness.ExitNotReady},
+		"optional todo never blocks":    {[]readiness.Check{core(readiness.VerdictReady), opt(readiness.VerdictTodo)}, readiness.ExitReady, readiness.ExitReady},
+		"note never blocks":             {[]readiness.Check{{Label: "n", Requirement: readiness.RequirementCore, Verdict: readiness.VerdictTodo, Note: true}}, readiness.ExitReady, readiness.ExitReady},
 	} {
 		t.Run(name, func(t *testing.T) {
-			s := buildSnapshot(
-				Request{Axes: []Axis{axisProviders}},
-				map[Axis]axisBuilder{axisProviders: func() []check { return tc.checks }},
+			s := readiness.Build(
+				readiness.Request{Axes: []readiness.Axis{readiness.AxisProviders}},
+				map[readiness.Axis]readiness.AxisBuilder{readiness.AxisProviders: func() []readiness.Check { return tc.checks }},
 			)
 			if got := s.ExitCode(); got != tc.full {
 				t.Errorf("ExitCode() = %d, want %d", got, tc.full)
@@ -173,17 +174,17 @@ func TestExitMatrix(t *testing.T) {
 // on this invocation blocks like core, and promotion happens in the snapshot
 // type rather than in any command's flag handling.
 func TestRequestedPromotionBlocks(t *testing.T) {
-	builders := map[Axis]axisBuilder{
-		axisGworkspace: func() []check {
-			return []check{{label: "gworkspace", requirement: requirementOptional, verdict: verdictTodo, evidence: "not authed", todo: "pix gworkspace setup"}}
+	builders := map[readiness.Axis]readiness.AxisBuilder{
+		readiness.AxisGworkspace: func() []readiness.Check {
+			return []readiness.Check{{Label: "gworkspace", Requirement: readiness.RequirementOptional, Verdict: readiness.VerdictTodo, Evidence: "not authed", Todo: "pix gworkspace setup"}}
 		},
 	}
-	unrequested := buildSnapshot(Request{Axes: []Axis{axisGworkspace}}, builders)
-	if got := unrequested.ExitCode(); got != exitReady {
+	unrequested := readiness.Build(readiness.Request{Axes: []readiness.Axis{readiness.AxisGworkspace}}, builders)
+	if got := unrequested.ExitCode(); got != readiness.ExitReady {
 		t.Errorf("an unrequested optional failure must not block: exit = %d", got)
 	}
-	requested := buildSnapshot(Request{Axes: []Axis{axisGworkspace}, Requested: []Axis{axisGworkspace}}, builders)
-	if got := requested.ExitCode(); got != exitNotReady {
+	requested := readiness.Build(readiness.Request{Axes: []readiness.Axis{readiness.AxisGworkspace}, Requested: []readiness.Axis{readiness.AxisGworkspace}}, builders)
+	if got := requested.ExitCode(); got != readiness.ExitNotReady {
 		t.Errorf("a REQUESTED optional failure must block: exit = %d", got)
 	}
 }

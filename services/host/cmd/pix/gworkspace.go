@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"pix/host/readiness"
 	"strings"
 
 	"pix/host/config"
@@ -241,16 +242,16 @@ func gworkspaceSetup(env shellEnv, opts gworkspaceSetupOpts, in io.Reader, out i
 // verified gap, 3 for something that could not be checked from here, 0 when
 // everything asked for is proven. A verified failure outranks an
 // unverifiable.
-func gworkspaceExit(checks []check) int {
+func gworkspaceExit(checks []readiness.Check) int {
 	worst := 0
 	for _, c := range checks {
-		if c.note {
+		if c.Note {
 			continue // notes are context, never a verdict
 		}
-		switch c.verdict {
-		case verdictTodo, verdictDenied:
+		switch c.Verdict {
+		case readiness.VerdictTodo, readiness.VerdictDenied:
 			return 1
-		case verdictUnverifiable:
+		case readiness.VerdictUnverifiable:
 			worst = 3
 		}
 	}
@@ -290,83 +291,83 @@ func gworkspaceStatus(cfg *config.Config, env shellEnv, out io.Writer) int {
 		return 0
 	}
 
-	var checks []check
+	var checks []readiness.Check
 	if acct == "" {
-		checks = append(checks, check{label: "account", verdict: verdictTodo,
-			detail:   gwServerName + " is in the configured MCP set but no account is authorized",
-			evidence: "google_workspace_account is unset",
-			todo:     "pix gworkspace setup"})
+		checks = append(checks, readiness.Check{Label: "account", Verdict: readiness.VerdictTodo,
+			Detail:   gwServerName + " is in the configured MCP set but no account is authorized",
+			Evidence: "google_workspace_account is unset",
+			Todo:     "pix gworkspace setup"})
 	} else {
-		checks = append(checks, check{label: "account", verdict: verdictReady,
-			detail: acct, evidence: "google_workspace_account = " + acct})
+		checks = append(checks, readiness.Check{Label: "account", Verdict: readiness.VerdictReady,
+			Detail: acct, Evidence: "google_workspace_account = " + acct})
 	}
 
 	// Registration + headless proof, read from what sbx ACTUALLY registered.
 	if argv, ok := registeredGogCommand(env); ok {
 		if missing := gogMissingHardenedFlags(env, argv); len(missing) > 0 {
-			checks = append(checks, check{label: "read-only", verdict: verdictTodo,
-				detail:   "registered command is missing hardened read-only flags: " + strings.Join(missing, " "),
-				evidence: "registered argv lacks " + strings.Join(missing, " "),
-				todo:     "pix gworkspace setup"})
+			checks = append(checks, readiness.Check{Label: "read-only", Verdict: readiness.VerdictTodo,
+				Detail:   "registered command is missing hardened read-only flags: " + strings.Join(missing, " "),
+				Evidence: "registered argv lacks " + strings.Join(missing, " "),
+				Todo:     "pix gworkspace setup"})
 		} else {
-			checks = append(checks, check{label: "read-only", verdict: verdictReady,
-				detail:   "registered command carries the hardened read-only flags",
-				evidence: strings.Join(gogHardenedFlags, " ") + " present in the registered argv"})
+			checks = append(checks, readiness.Check{Label: "read-only", Verdict: readiness.VerdictReady,
+				Detail:   "registered command carries the hardened read-only flags",
+				Evidence: strings.Join(gogHardenedFlags, " ") + " present in the registered argv"})
 		}
 		trustedArgv, trusted := trustedGogSpawn(env, argv)
 		if !trusted {
-			checks = append(checks, check{label: "headless spawn", verdict: verdictUnverifiable,
-				detail:   "probe skipped: the registered command's executable does not match the PATH-resolved binary — never executed",
-				evidence: "registered executable token not canonical; probe not executed"})
+			checks = append(checks, readiness.Check{Label: "headless spawn", Verdict: readiness.VerdictUnverifiable,
+				Detail:   "probe skipped: the registered command's executable does not match the PATH-resolved binary — never executed",
+				Evidence: "registered executable token not canonical; probe not executed"})
 		} else {
 			checks = append(checks, gogSpawnCheck(env, probeListTools(env, trustedArgv),
 				"registered command exposes tools (verified as-registered)",
 				"the registered command returns 0 tools — keyring not headless"))
 		}
 	} else {
-		checks = append(checks, check{label: "registration", verdict: verdictUnverifiable,
-			detail:   "could not read the " + gwServerName + " registration from sbx",
-			evidence: "sbx mcp inspect " + gwServerName + " did not resolve a command",
-			todo:     "sbx mcp status"})
+		checks = append(checks, readiness.Check{Label: "registration", Verdict: readiness.VerdictUnverifiable,
+			Detail:   "could not read the " + gwServerName + " registration from sbx",
+			Evidence: "sbx mcp inspect " + gwServerName + " did not resolve a command",
+			Todo:     "sbx mcp status"})
 	}
 	if cfg.GoogleWorkspaceAccess == gwAccessCreateDocs {
 		if argv, ok := registeredMCPCommand(env, gwDocsCreateServerName); ok {
 			if trusted, ok := recognizedMCPArgv(env, argv, gwDocsCreateServerName); ok {
 				checks = append(checks, docsCreateSpawnCheck(probeListTools(env, trusted)))
 			} else {
-				checks = append(checks, check{label: "create Docs", verdict: verdictUnverifiable,
-					detail: "registered command is not the canonical Pix host command", todo: "pix gworkspace setup --create-docs"})
+				checks = append(checks, readiness.Check{Label: "create Docs", Verdict: readiness.VerdictUnverifiable,
+					Detail: "registered command is not the canonical Pix host command", Todo: "pix gworkspace setup --create-docs"})
 			}
 		} else {
-			checks = append(checks, check{label: "create Docs", verdict: verdictTodo,
-				detail: "create-new-Docs server is not registered", todo: "pix gworkspace setup --create-docs"})
+			checks = append(checks, readiness.Check{Label: "create Docs", Verdict: readiness.VerdictTodo,
+				Detail: "create-new-Docs server is not registered", Todo: "pix gworkspace setup --create-docs"})
 		}
 	}
 
 	for _, c := range checks {
-		fmt.Fprintf(out, "  %s %-15s %s\n", checkGlyph(c), c.label, c.detail)
-		if c.todo != "" {
-			fmt.Fprintf(out, "      fix: %s\n", c.todo)
+		fmt.Fprintf(out, "  %s %-15s %s\n", readiness.Glyph(c), c.Label, c.Detail)
+		if c.Todo != "" {
+			fmt.Fprintf(out, "      fix: %s\n", c.Todo)
 		}
 	}
 	return gworkspaceExit(checks)
 }
 
-func docsCreateSpawnCheck(res probeResult) check {
+func docsCreateSpawnCheck(res probeResult) readiness.Check {
 	switch res.status {
 	case probeToolsOK:
-		return check{label: "create Docs", verdict: verdictReady,
-			detail:   "create-new-Docs tool exposed (existing Docs remain immutable)",
-			evidence: fmt.Sprintf("--list-tools returned %s", plural(res.tools, "tool"))}
+		return readiness.Check{Label: "create Docs", Verdict: readiness.VerdictReady,
+			Detail:   "create-new-Docs tool exposed (existing Docs remain immutable)",
+			Evidence: fmt.Sprintf("--list-tools returned %s", plural(res.tools, "tool"))}
 	case probeNoTools:
-		return check{label: "create Docs", verdict: verdictTodo,
-			detail: "create-new-Docs server returned 0 tools", todo: "pix gworkspace setup --create-docs"}
+		return readiness.Check{Label: "create Docs", Verdict: readiness.VerdictTodo,
+			Detail: "create-new-Docs server returned 0 tools", Todo: "pix gworkspace setup --create-docs"}
 	case probeDeniedByPolicy:
-		return check{label: "create Docs", verdict: verdictDenied,
-			detail: "create-new-Docs spawn was refused by policy"}
+		return readiness.Check{Label: "create Docs", Verdict: readiness.VerdictDenied,
+			Detail: "create-new-Docs spawn was refused by policy"}
 	default:
-		return check{label: "create Docs", verdict: verdictUnverifiable,
-			detail: "probe " + res.detail + " — could not verify", todo: "sbx mcp inspect " + gwDocsCreateServerName}
+		return readiness.Check{Label: "create Docs", Verdict: readiness.VerdictUnverifiable,
+			Detail: "probe " + res.detail + " — could not verify", Todo: "sbx mcp inspect " + gwDocsCreateServerName}
 	}
 }
 

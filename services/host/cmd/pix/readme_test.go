@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"pix/host/readiness"
 	"regexp"
 	"strings"
 	"testing"
@@ -94,7 +95,7 @@ func TestReadmePrimaryPathCommandsExist(t *testing.T) {
 
 func TestDocumentedExitCodesMatchImplementation(t *testing.T) {
 	man := readRepoFile(t, "services/host/cmd/pix/pix.1")
-	for _, code := range []int{exitReady, exitNotReady, exitUsage, exitUnverifiable} {
+	for _, code := range []int{readiness.ExitReady, readiness.ExitNotReady, readiness.ExitUsage, readiness.ExitUnverifiable} {
 		needle := ".B " + string(rune('0'+code))
 		if !strings.Contains(man, needle) {
 			t.Errorf("man page missing exit status %d", code)

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"pix/host/readiness"
 	"strings"
 	"testing"
 
@@ -103,7 +104,7 @@ func TestSetupRequestedAxes_FlagMapping(t *testing.T) {
 	if got := setupRequestedAxes(onboardOpts{}); len(got) != 0 {
 		t.Errorf("no flags must promote nothing, got %v", got)
 	}
-	got := axisNames(setupRequestedAxes(onboardOpts{pullModels: true, googleWorkspace: true, mcp: []string{"slack"}}))
+	got := readiness.AxisNames(setupRequestedAxes(onboardOpts{pullModels: true, googleWorkspace: true, mcp: []string{"slack"}}))
 	want := []string{"gworkspace", "mcp:slack", "model.bridge", "model.embed", "model.watcher", "ollama.host"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("setupRequestedAxes = %v, want %v", got, want)
@@ -113,16 +114,22 @@ func TestSetupRequestedAxes_FlagMapping(t *testing.T) {
 // RequestedShortfall reports only PROMOTED axes that did not end ready, and
 // never invents one for an axis the snapshot does not contain.
 func TestRequestedShortfall_OnlyPromotedAndPresentAxes(t *testing.T) {
-	req := Request{
-		Axes:      []Axis{axisPack, axisGworkspace, axisModelWatcher},
-		Requested: []Axis{axisGworkspace, axisModelWatcher, axisModelEmbed}, // embed has no builder
+	req := readiness.Request{
+		Axes:      []readiness.Axis{readiness.AxisPack, readiness.AxisGworkspace, readiness.AxisModelWatcher},
+		Requested: []readiness.Axis{readiness.AxisGworkspace, readiness.AxisModelWatcher, readiness.AxisModelEmbed}, // embed has no builder
 	}
-	s := buildSnapshot(req, map[Axis]axisBuilder{
-		axisPack:         func() []check { return []check{{label: "pack", verdict: verdictTodo}} },
-		axisGworkspace:   func() []check { return []check{{label: "gw", verdict: verdictUnverifiable}} },
-		axisModelWatcher: func() []check { return []check{{label: "watcher", verdict: verdictReady}} },
+	s := readiness.Build(req, map[readiness.Axis]readiness.AxisBuilder{
+		readiness.AxisPack: func() []readiness.Check {
+			return []readiness.Check{{Label: "pack", Verdict: readiness.VerdictTodo}}
+		},
+		readiness.AxisGworkspace: func() []readiness.Check {
+			return []readiness.Check{{Label: "gw", Verdict: readiness.VerdictUnverifiable}}
+		},
+		readiness.AxisModelWatcher: func() []readiness.Check {
+			return []readiness.Check{{Label: "watcher", Verdict: readiness.VerdictReady}}
+		},
 	})
-	got := axisNames(s.RequestedShortfall(req))
+	got := readiness.AxisNames(s.RequestedShortfall(req))
 	if strings.Join(got, ",") != "gworkspace" {
 		t.Errorf("RequestedShortfall = %v, want [gworkspace] (pack was not requested, watcher is ready, embed is absent)", got)
 	}

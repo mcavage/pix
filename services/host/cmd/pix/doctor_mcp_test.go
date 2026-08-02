@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/readiness"
 	"strings"
 	"testing"
 	"time"
@@ -18,21 +19,21 @@ import (
 // canonical-executable / TOCTOU exec gate.
 
 // findCheck returns the first check in g whose label matches.
-func findCheck(t *testing.T, g group, label string) check {
+func findCheck(t *testing.T, g readiness.Group, label string) readiness.Check {
 	t.Helper()
-	for _, c := range g.checks {
-		if c.label == label {
+	for _, c := range g.Checks {
+		if c.Label == label {
 			return c
 		}
 	}
-	t.Fatalf("no check labeled %q in group %+v", label, g)
-	return check{}
+	t.Fatalf("no check labeled %q in readiness.Group %+v", label, g)
+	return readiness.Check{}
 }
 
 // hasCheck reports whether g carries a check with the label.
-func hasCheck(g group, label string) bool {
-	for _, c := range g.checks {
-		if c.label == label {
+func hasCheck(g readiness.Group, label string) bool {
+	for _, c := range g.Checks {
+		if c.Label == label {
 			return true
 		}
 	}
@@ -63,7 +64,7 @@ func TestMCPRegistrationStates(t *testing.T) {
 		cfg.MCP = []string{"slack"}
 		g := mcpGroupWith(cfg, mcpFake().env(), "google-workspace\n", true, true, nil, noCtx)
 		c := findCheck(t, g, "slack")
-		if c.result() != verdictTodo || c.todo != "pix mcp register slack" {
+		if c.Result() != readiness.VerdictTodo || c.Todo != "pix mcp register slack" {
 			t.Errorf("local not-registered = %+v, want todo `pix mcp register slack`", c)
 		}
 	})
@@ -72,11 +73,11 @@ func TestMCPRegistrationStates(t *testing.T) {
 		cfg.MCP = []string{"notion"}
 		g := mcpGroupWith(cfg, mcpFake().env(), "google-workspace\n", true, true, nil, noCtx)
 		c := findCheck(t, g, "notion")
-		if c.result() != verdictTodo || c.todo != "pix mcp bundle" {
+		if c.Result() != readiness.VerdictTodo || c.Todo != "pix mcp bundle" {
 			t.Errorf("catalog not-registered = %+v, want todo `pix mcp bundle`", c)
 		}
-		if !strings.Contains(c.detail, "pix mcp auth notion") {
-			t.Errorf("catalog guidance should mention the auth step: %q", c.detail)
+		if !strings.Contains(c.Detail, "pix mcp auth notion") {
+			t.Errorf("catalog guidance should mention the auth step: %q", c.Detail)
 		}
 	})
 
@@ -85,7 +86,7 @@ func TestMCPRegistrationStates(t *testing.T) {
 		containers := map[string]packContainer{"acme": {RemoteURL: "https://mcp.acme.example/sse"}}
 		g := mcpGroupWith(cfg, mcpFake().env(), "google-workspace\n", true, true, containers, noCtx)
 		c := findCheck(t, g, "acme")
-		if c.result() != verdictTodo || c.todo != "pix mcp register acme" {
+		if c.Result() != readiness.VerdictTodo || c.Todo != "pix mcp register acme" {
 			t.Errorf("pack-remote not-registered = %+v, want todo `pix mcp register acme`", c)
 		}
 	})
@@ -94,14 +95,14 @@ func TestMCPRegistrationStates(t *testing.T) {
 		cfg.MCP = []string{"linear"}
 		g := mcpGroupWith(cfg, mcpFake().env(), "google-workspace\n", true, true, nil, noCtx)
 		c := findCheck(t, g, "linear")
-		if c.result() != verdictTodo {
+		if c.Result() != readiness.VerdictTodo {
 			t.Errorf("confirmed-missing custom server must be a verified todo, got %+v", c)
 		}
-		if strings.Contains(c.todo, "pix mcp register") || strings.Contains(c.todo, "pix mcp bundle") {
-			t.Errorf("custom repair must not name a pix command that can't register it: %q", c.todo)
+		if strings.Contains(c.Todo, "pix mcp register") || strings.Contains(c.Todo, "pix mcp bundle") {
+			t.Errorf("custom repair must not name a pix command that can't register it: %q", c.Todo)
 		}
-		if !strings.Contains(c.detail, "sbx mcp add") {
-			t.Errorf("custom guidance should point at native sbx mcp add: %q", c.detail)
+		if !strings.Contains(c.Detail, "sbx mcp add") {
+			t.Errorf("custom guidance should point at native sbx mcp add: %q", c.Detail)
 		}
 	})
 
@@ -109,7 +110,7 @@ func TestMCPRegistrationStates(t *testing.T) {
 		cfg.MCP = []string{"slack"}
 		g := mcpGroupWith(cfg, mcpFake().env(), "slack\n", true, true, nil, noCtx)
 		c := findCheck(t, g, "slack")
-		if c.result() != verdictUnverifiable {
+		if c.Result() != readiness.VerdictUnverifiable {
 			t.Errorf("registered w/o readable command = %+v, want unverifiable", c)
 		}
 	})
@@ -118,7 +119,7 @@ func TestMCPRegistrationStates(t *testing.T) {
 		cfg.MCP = []string{"slack"}
 		g := mcpGroupWith(cfg, mcpFake().env(), "", false, true, nil, noCtx)
 		c := findCheck(t, g, "slack")
-		if c.result() != verdictUnverifiable || !strings.Contains(c.detail, "sbx daemon") {
+		if c.Result() != readiness.VerdictUnverifiable || !strings.Contains(c.Detail, "sbx daemon") {
 			t.Errorf("gateway-down = %+v, want unverifiable + daemon detail", c)
 		}
 	})
@@ -129,7 +130,7 @@ func TestMCPRegistrationStates(t *testing.T) {
 		f.present = map[string]bool{}
 		g := mcpGroupWith(cfg, f.env(), "", false, false, nil, noCtx)
 		c := findCheck(t, g, "slack")
-		if c.result() != verdictUnverifiable {
+		if c.Result() != readiness.VerdictUnverifiable {
 			t.Errorf("sbx-absent = %+v, want unverifiable", c)
 		}
 	})
@@ -168,7 +169,7 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 		}
 		g := mcpGroupWith(cfg, env, regOut, true, true, nil, resolveMCPSandboxContext(env))
 		c := findCheck(t, g, "slack attachment")
-		if c.result() != verdictReady || c.evidence != "preloaded by pix at create" {
+		if c.Result() != readiness.VerdictReady || c.Evidence != "preloaded by pix at create" {
 			t.Errorf("preloaded attach = %+v, want ready with `preloaded by pix at create`", c)
 		}
 	})
@@ -183,7 +184,7 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 		}
 		g := mcpGroupWith(cfg, env, regOut, true, true, nil, resolveMCPSandboxContext(env))
 		c := findCheck(t, g, "slack attachment")
-		if c.result() != verdictReady || c.evidence != "loaded by pix" {
+		if c.Result() != readiness.VerdictReady || c.Evidence != "loaded by pix" {
 			t.Errorf("loaded attach = %+v, want ready with `loaded by pix`", c)
 		}
 	})
@@ -200,14 +201,14 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 		}
 		g := mcpGroupWith(cfg, env, regOut, true, true, nil, resolveMCPSandboxContext(env))
 		c := findCheck(t, g, "slack attachment")
-		if c.result() != verdictTodo {
+		if c.Result() != readiness.VerdictTodo {
 			t.Errorf("no-entry attach with a complete receipt must be a verified todo, got %+v", c)
 		}
-		if want := "pix mcp load slack " + ws; c.todo != want {
-			t.Errorf("todo = %q, want the exact command %q", c.todo, want)
+		if want := "pix mcp load slack " + ws; c.Todo != want {
+			t.Errorf("todo = %q, want the exact command %q", c.Todo, want)
 		}
-		if !strings.Contains(c.detail, "pix run --replace") {
-			t.Errorf("detail should keep the recreate alternative: %q", c.detail)
+		if !strings.Contains(c.Detail, "pix run --replace") {
+			t.Errorf("detail should keep the recreate alternative: %q", c.Detail)
 		}
 	})
 
@@ -215,7 +216,7 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 		env, _ := receiptEnv(t, base, ws)
 		g := mcpGroupWith(cfg, env, regOut, true, true, nil, resolveMCPSandboxContext(env))
 		c := findCheck(t, g, "slack attachment")
-		if c.result() != verdictUnverifiable || !strings.Contains(c.detail, "pix mcp load slack") {
+		if c.Result() != readiness.VerdictUnverifiable || !strings.Contains(c.Detail, "pix mcp load slack") {
 			t.Errorf("absent-receipt attach = %+v, want unverifiable + load guidance", c)
 		}
 	})
@@ -236,11 +237,11 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 			}
 			g := mcpGroupWith(cfg, env, regOut, true, true, nil, resolveMCPSandboxContext(env))
 			c := findCheck(t, g, "slack attachment")
-			if c.result() != verdictUnverifiable {
+			if c.Result() != readiness.VerdictUnverifiable {
 				t.Errorf("%s receipt = %+v, want unverifiable — a bad receipt must never claim attachment", name, c)
 			}
-			if !strings.Contains(c.detail, name) {
-				t.Errorf("detail should name the receipt state %q: %q", name, c.detail)
+			if !strings.Contains(c.Detail, name) {
+				t.Errorf("detail should name the receipt state %q: %q", name, c.Detail)
 			}
 		})
 	}
@@ -268,12 +269,12 @@ func TestMCPAttachmentTodoQuotesWorkspace(t *testing.T) {
 	}
 	g := mcpGroupWith(cfg, env, "slack\n", true, true, nil, resolveMCPSandboxContext(env))
 	c := findCheck(t, g, "slack attachment")
-	if c.result() != verdictTodo {
+	if c.Result() != readiness.VerdictTodo {
 		t.Fatalf("expected a verified registered-not-attached todo, got %+v", c)
 	}
 	want := "pix mcp load " + shellQuoteArg("slack") + " " + shellQuoteArg(ws)
-	if c.todo != want {
-		t.Errorf("todo = %q, want %q", c.todo, want)
+	if c.Todo != want {
+		t.Errorf("todo = %q, want %q", c.Todo, want)
 	}
 }
 
@@ -298,14 +299,14 @@ func TestMCPAttachmentSurvivesDeregistration(t *testing.T) {
 	// slack is now DEREGISTERED (the `sbx mcp ls` output lacks it).
 	g := mcpGroupWith(cfg, env, "google-workspace\n", true, true, nil, resolveMCPSandboxContext(env))
 	c := findCheck(t, g, "slack attachment")
-	if c.result() != verdictReady || !strings.Contains(c.evidence, "preloaded by pix at create") {
+	if c.Result() != readiness.VerdictReady || !strings.Contains(c.Evidence, "preloaded by pix at create") {
 		t.Errorf("attach = %+v, want ready — the receipt dominates deregistration", c)
 	}
-	if !strings.Contains(c.evidence, "currently not registered") {
-		t.Errorf("evidence should still name the current dereg reading: %q", c.evidence)
+	if !strings.Contains(c.Evidence, "currently not registered") {
+		t.Errorf("evidence should still name the current dereg reading: %q", c.Evidence)
 	}
 	reg := findCheck(t, g, "slack")
-	if reg.result() != verdictTodo || reg.todo != "pix mcp register slack" {
+	if reg.Result() != readiness.VerdictTodo || reg.Todo != "pix mcp register slack" {
 		t.Errorf("registration line = %+v, want its own register TODO (deregistration is still real)", reg)
 	}
 }
@@ -327,11 +328,11 @@ func TestMCPAttachmentSurvivesUnknownRegistration(t *testing.T) {
 	// mcpOK=false: the registration listing itself failed — unknown, not "no".
 	g := mcpGroupWith(cfg, env, "", false, true, nil, resolveMCPSandboxContext(env))
 	c := findCheck(t, g, "slack attachment")
-	if c.result() != verdictReady || !strings.Contains(c.evidence, "preloaded by pix at create") {
+	if c.Result() != readiness.VerdictReady || !strings.Contains(c.Evidence, "preloaded by pix at create") {
 		t.Errorf("attach = %+v, want ready — the receipt survives an unknown registration reading", c)
 	}
-	if !strings.Contains(c.evidence, "registration unknown") {
-		t.Errorf("evidence should name the registration-unknown fact: %q", c.evidence)
+	if !strings.Contains(c.Evidence, "registration unknown") {
+		t.Errorf("evidence should name the registration-unknown fact: %q", c.Evidence)
 	}
 }
 
@@ -358,20 +359,20 @@ func TestMCPGroupIncludesReceiptOnlyName(t *testing.T) {
 		t.Fatalf("expected notion's attachment even though it's not in cfg.MCP: %+v", g)
 	}
 	attach := findCheck(t, g, "notion attachment")
-	if attach.result() != verdictReady {
+	if attach.Result() != readiness.VerdictReady {
 		t.Errorf("notion attach = %+v, want ready (preloaded)", attach)
 	}
-	if !strings.Contains(attach.evidence, "sandbox provenance only") {
-		t.Errorf("notion attach evidence should be labeled sandbox provenance: %q", attach.evidence)
+	if !strings.Contains(attach.Evidence, "sandbox provenance only") {
+		t.Errorf("notion attach evidence should be labeled sandbox provenance: %q", attach.Evidence)
 	}
 	reg := findCheck(t, g, "notion")
-	if !strings.Contains(reg.evidence, "sandbox provenance only") {
-		t.Errorf("notion registration-line evidence = %q, want the sandbox-provenance label", reg.evidence)
+	if !strings.Contains(reg.Evidence, "sandbox provenance only") {
+		t.Errorf("notion registration-line evidence = %q, want the sandbox-provenance label", reg.Evidence)
 	}
 	// slack (current intent) must NOT carry the receipt-only label.
 	slackReg := findCheck(t, g, "slack")
-	if strings.Contains(slackReg.evidence, "sandbox provenance only") {
-		t.Errorf("slack (current intent) must not carry the receipt-only label: %q", slackReg.evidence)
+	if strings.Contains(slackReg.Evidence, "sandbox provenance only") {
+		t.Errorf("slack (current intent) must not carry the receipt-only label: %q", slackReg.Evidence)
 	}
 }
 
@@ -396,7 +397,7 @@ func TestMCPGroupSwitchedPackKeepsOldIntegrationVisible(t *testing.T) {
 		t.Fatalf("switched-pack historical MCP provenance must remain visible: %+v", g)
 	}
 	c := findCheck(t, g, "acme-remote attachment")
-	if c.result() != verdictReady || !strings.Contains(c.evidence, "sandbox provenance only") {
+	if c.Result() != readiness.VerdictReady || !strings.Contains(c.Evidence, "sandbox provenance only") {
 		t.Errorf("acme-remote attach = %+v, want ready + sandbox-provenance label", c)
 	}
 	if !hasCheck(g, "newco") {
@@ -416,7 +417,7 @@ func TestMCPHostGlobalContext(t *testing.T) {
 			t.Errorf("host-global must not emit an attachment check: %+v", g)
 		}
 		c := findCheck(t, g, "attachment")
-		if !c.note || !strings.Contains(c.detail, "preload at sandbox create") {
+		if !c.Note || !strings.Contains(c.Detail, "preload at sandbox create") {
 			t.Errorf("host-global note = %+v, want a preload-at-create statement", c)
 		}
 	})
@@ -434,7 +435,7 @@ func TestMCPHostGlobalContext(t *testing.T) {
 			t.Errorf("absent sandbox must not emit an attachment check: %+v", g)
 		}
 		c := findCheck(t, g, "attachment")
-		if !c.note || !strings.Contains(c.detail, "pix-proj not created yet") {
+		if !c.Note || !strings.Contains(c.Detail, "pix-proj not created yet") {
 			t.Errorf("absent-sandbox note = %+v", c)
 		}
 	})
@@ -446,7 +447,7 @@ func TestMCPRemoteAuth(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"notion"}
 
-	authCase := func(out string, err error) check {
+	authCase := func(out string, err error) readiness.Check {
 		f := mcpFake()
 		env := f.env()
 		fakeOf(env).RunTimedFn = func(name string, args ...string) (string, bool, error) {
@@ -463,22 +464,22 @@ func TestMCPRemoteAuth(t *testing.T) {
 		return findCheck(t, g, "notion")
 	}
 
-	if c := authCase("notion: authorized\n", nil); c.result() != verdictReady || !strings.Contains(c.detail, "authorized") {
+	if c := authCase("notion: authorized\n", nil); c.Result() != readiness.VerdictReady || !strings.Contains(c.Detail, "authorized") {
 		t.Errorf("authorized = %+v, want ready", c)
 	}
-	if c := authCase("notion: 401 unauthorized\n", nil); c.result() != verdictTodo || c.todo != "pix mcp auth notion" {
+	if c := authCase("notion: 401 unauthorized\n", nil); c.Result() != readiness.VerdictTodo || c.Todo != "pix mcp auth notion" {
 		t.Errorf("bare 401 = %+v, want auth TODO `pix mcp auth notion`", c)
 	}
-	if c := authCase("notion: not authenticated\n", nil); c.result() != verdictTodo || c.todo != "pix mcp auth notion" {
+	if c := authCase("notion: not authenticated\n", nil); c.Result() != readiness.VerdictTodo || c.Todo != "pix mcp auth notion" {
 		t.Errorf("not-authenticated = %+v, want auth TODO", c)
 	}
-	if c := authCase("403 forbidden: access denied by org policy\n", fmt.Errorf("exit status 1")); c.result() != verdictDenied {
+	if c := authCase("403 forbidden: access denied by org policy\n", fmt.Errorf("exit status 1")); c.Result() != readiness.VerdictDenied {
 		t.Errorf("explicit policy denial = %+v, want denied", c)
 	}
-	if c := authCase("dial tcp: connection refused\n", fmt.Errorf("exit status 1")); c.result() != verdictUnverifiable {
+	if c := authCase("dial tcp: connection refused\n", fmt.Errorf("exit status 1")); c.Result() != readiness.VerdictUnverifiable {
 		t.Errorf("network failure = %+v, want unverifiable", c)
 	}
-	if c := authCase("gibberish\n", nil); c.result() != verdictUnverifiable {
+	if c := authCase("gibberish\n", nil); c.Result() != readiness.VerdictUnverifiable {
 		t.Errorf("unparseable status = %+v, want unverifiable (never a guess)", c)
 	}
 
@@ -496,7 +497,7 @@ func TestMCPRemoteAuth(t *testing.T) {
 		return "", false, fmt.Errorf("no fake output for %q", key)
 	}
 	g := mcpGroupWith(cfg, env, "notion\n", true, true, nil, noCtx)
-	if c := findCheck(t, g, "notion"); c.result() != verdictUnverifiable || !strings.Contains(c.detail, "timed out") {
+	if c := findCheck(t, g, "notion"); c.Result() != readiness.VerdictUnverifiable || !strings.Contains(c.Detail, "timed out") {
 		t.Errorf("auth timeout = %+v, want unverifiable + timed out", c)
 	}
 }
@@ -540,14 +541,14 @@ func TestMCPUnknownClassificationFailsClosed(t *testing.T) {
 	}
 	g := mcpGroupWith(cfg, env, "mystery\n", true, true, nil, noCtx)
 	c := findCheck(t, g, "mystery")
-	if c.result() != verdictUnverifiable {
+	if c.Result() != readiness.VerdictUnverifiable {
 		t.Errorf("unknown classification = %+v, want unverifiable", c)
 	}
-	if c.todo != "" {
-		t.Errorf("unknown classification must not recommend a repair command: %q", c.todo)
+	if c.Todo != "" {
+		t.Errorf("unknown classification must not recommend a repair command: %q", c.Todo)
 	}
-	if len((&report{groups: []group{g}}).todos()) != 0 {
-		t.Errorf("unknown classification leaked a TODO: %v", (&report{groups: []group{g}}).todos())
+	if len((&readiness.Report{Groups: []readiness.Group{g}}).Todos()) != 0 {
+		t.Errorf("unknown classification leaked a TODO: %v", (&readiness.Report{Groups: []readiness.Group{g}}).Todos())
 	}
 }
 
@@ -569,18 +570,18 @@ func TestMCPStaleAndUnknownConfigKeys(t *testing.T) {
 
 	for _, k := range []string{"mcp_static", "mcp_dynamic"} {
 		c := findCheck(t, g, "config "+k)
-		if c.result() != verdictTodo || c.req() != requirementOptional {
+		if c.Result() != readiness.VerdictTodo || c.Req() != readiness.RequirementOptional {
 			t.Errorf("retired key %s = %+v, want an optional verified todo", k, c)
 		}
-		if !strings.Contains(c.detail, "retired") || !strings.Contains(c.detail, "next `pix config set`") {
-			t.Errorf("retired key %s detail should say retired+ignored and that the next mutation drops it: %q", k, c.detail)
+		if !strings.Contains(c.Detail, "retired") || !strings.Contains(c.Detail, "next `pix config set`") {
+			t.Errorf("retired key %s detail should say retired+ignored and that the next mutation drops it: %q", k, c.Detail)
 		}
 	}
 	c := findCheck(t, g, "config froopy")
-	if c.result() != verdictUnverifiable {
+	if c.Result() != readiness.VerdictUnverifiable {
 		t.Errorf("unknown key = %+v, want softer unverifiable info", c)
 	}
-	if r := (&report{groups: []group{g}}); r.blocking() {
+	if r := (&readiness.Report{Groups: []readiness.Group{g}}); r.Blocking() {
 		t.Errorf("stale/unknown config keys must never block doctor's exit code")
 	}
 }
@@ -607,7 +608,7 @@ func TestMCPProbeTimeoutIsUnverifiable(t *testing.T) {
 	}
 	g := mcpGroupWith(cfg, env, "slack\n", true, true, nil, noCtx)
 	c := findCheck(t, g, "slack")
-	if c.result() != verdictUnverifiable || !strings.Contains(c.detail, "timed out") {
+	if c.Result() != readiness.VerdictUnverifiable || !strings.Contains(c.Detail, "timed out") {
 		t.Errorf("probe timeout = %+v, want unverifiable + timed out", c)
 	}
 }
@@ -633,7 +634,7 @@ func TestMCPCanonicalExecutableGate(t *testing.T) {
 		}
 		g := mcpGroupWith(cfg, env, "slack\n", true, true, nil, noCtx)
 		c := findCheck(t, g, "slack")
-		if c.result() != verdictUnverifiable || !strings.Contains(c.detail, "never executed") {
+		if c.Result() != readiness.VerdictUnverifiable || !strings.Contains(c.Detail, "never executed") {
 			t.Errorf("look-alike host binary = %+v, want unverifiable + never-executed note", c)
 		}
 	})
@@ -657,7 +658,7 @@ func TestMCPCanonicalExecutableGate(t *testing.T) {
 		}
 		g := mcpGroupWith(cfg, env, "slack\n", true, true, nil, noCtx)
 		c := findCheck(t, g, "slack")
-		if c.result() != verdictReady || !strings.Contains(c.detail, "spawns 1 tool") {
+		if c.Result() != readiness.VerdictReady || !strings.Contains(c.Detail, "spawns 1 tool") {
 			t.Errorf("normalized spawn = %+v, want ready with tool count", c)
 		}
 		if execd != "/usr/local/bin/pix-host" {
@@ -679,7 +680,7 @@ func TestMCPCanonicalExecutableGate(t *testing.T) {
 		}
 		g := mcpGroupWith(cfg, env, "slack\n", true, true, nil, noCtx)
 		c := findCheck(t, g, "slack")
-		if c.result() != verdictUnverifiable || !strings.Contains(c.detail, "never executed") {
+		if c.Result() != readiness.VerdictUnverifiable || !strings.Contains(c.Detail, "never executed") {
 			t.Errorf("look-alike op = %+v, want unverifiable + never-executed note", c)
 		}
 	})
@@ -705,7 +706,7 @@ func TestMCPCanonicalExecutableGate(t *testing.T) {
 		}
 		g := mcpGroupWith(cfg, env, "slack\n", true, true, nil, noCtx)
 		c := findCheck(t, g, "slack")
-		if c.result() != verdictReady || !strings.Contains(c.detail, "spawns 2 tools") {
+		if c.Result() != readiness.VerdictReady || !strings.Contains(c.Detail, "spawns 2 tools") {
 			t.Errorf("op-wrapped spawn = %+v, want ready", c)
 		}
 		if execd != "/usr/bin/op" {
@@ -725,7 +726,7 @@ func TestMCPCanonicalExecutableGate(t *testing.T) {
 			return inner(name, args...)
 		}
 		g := mcpGroupWith(cfg, env, "slack\n", true, true, nil, noCtx)
-		if c := findCheck(t, g, "slack"); c.result() != verdictUnverifiable {
+		if c := findCheck(t, g, "slack"); c.Result() != readiness.VerdictUnverifiable {
 			t.Errorf("foreign wrapper = %+v, want unverifiable", c)
 		}
 	})
@@ -739,8 +740,8 @@ func TestMCPNoRetiredWording(t *testing.T) {
 	f := mcpFake()
 	f.output["sbx mcp auth status notion"] = "authorized"
 	g := mcpGroupWith(cfg, f.env(), "slack\nnotion\n", true, true, nil, noCtx)
-	for _, c := range g.checks {
-		joined := strings.ToLower(c.label + " " + c.detail + " " + c.todo + " " + c.evidence)
+	for _, c := range g.Checks {
+		joined := strings.ToLower(c.Label + " " + c.Detail + " " + c.Todo + " " + c.Evidence)
 		for _, banned := range []string{"dynamic discovery", "mcp-find", "attach-on-run"} {
 			if strings.Contains(joined, banned) {
 				t.Errorf("shipping output carries retired wording %q: %+v", banned, c)

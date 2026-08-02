@@ -9,6 +9,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/readiness"
 	"pix/host/rpc"
 	"pix/host/sys"
 	"pix/host/sys/systest"
@@ -249,10 +250,10 @@ func grepWord(out, name string) bool {
 // built by its own builder (doctor_providers.go, doctor_ollama.go,
 // doctor_memory.go, doctor_gog.go, doctor_secrets.go, doctor_mcp.go) so later
 // stories can rework one group without touching the others.
-func runDoctor(cfg *config.Config, env shellEnv) *report {
-	r := &report{}
-	if g := installDuplicatesGroup(env); len(g.checks) > 0 {
-		r.groups = append(r.groups, g)
+func runDoctor(cfg *config.Config, env shellEnv) *readiness.Report {
+	r := &readiness.Report{}
+	if g := installDuplicatesGroup(env); len(g.Checks) > 0 {
+		r.Groups = append(r.Groups, g)
 	}
 
 	// sbx presence gates the provider + mcp checks (they read `sbx secret ls` /
@@ -266,13 +267,13 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	// a generic probe failure: sbx present with `sbx secret ls` erroring or
 	// timing out is a different, diagnosable host state (sbxSecretsError) and
 	// must not render the "you're likely inside the sandbox" note.
-	r.sbxAbsent = sbxState == sbxSecretsAbsent
+	r.SbxAbsent = sbxState == sbxSecretsAbsent
 	// sbxOnPath is tracked INDEPENDENTLY of sbxOK (finding #4): sbx being on
 	// PATH but `sbx secret ls` failing/timing out (sbxSecretsError) is a
 	// DIFFERENT state from sbx being entirely absent, and the MCP/gog groups
 	// must still get to try their OWN probe (`sbx mcp ls`) rather than being
 	// falsely gated off by an unrelated secret-probe failure.
-	sbxOnPath := !r.sbxAbsent
+	sbxOnPath := !r.SbxAbsent
 
 	// MCP registrations (`sbx mcp ls`), listed once and reused by the gog group
 	// (its gateway registration) and the MCP group below. Gated on sbxOnPath,
@@ -291,11 +292,11 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	// (a) provider secrets — proxy-injected, never in the VM. Genuinely gated
 	// on sbxOK: this group's OWN probe (`sbx secret ls`) is the one that
 	// failed, so it stays unverifiable regardless of sbxOnPath/mcpOK.
-	r.groups = append(r.groups, providersGroup(cfg, sbxOut, sbxOK))
+	r.Groups = append(r.Groups, providersGroup(cfg, sbxOut, sbxOK))
 	// (b) ollama + the configured watcher/embed models.
-	r.groups = append(r.groups, ollamaGroup(cfg, env))
+	r.Groups = append(r.Groups, ollamaGroup(cfg, env))
 	// (c) memory service on :11435.
-	r.groups = append(r.groups, memoryGroup(cfg, env))
+	r.Groups = append(r.Groups, memoryGroup(cfg, env))
 	// The ONE workspace-sandbox context (hardened resolver + receipt read),
 	// shared by the gog and MCP groups so both render attachment truth from
 	// the SAME receipt-backed join rows — never two different stories.
@@ -304,17 +305,17 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	// spawns (the slack pattern). Passed sbxOnPath (not sbxOK) as its "sbx
 	// present" signal so a secret-probe failure never masquerades as sbx
 	// being off PATH.
-	r.groups = append(r.groups, gogGroup(cfg, env, mcpOut, mcpOK, sbxOnPath, sandboxCtx))
+	r.Groups = append(r.Groups, gogGroup(cfg, env, mcpOut, mcpOK, sbxOnPath, sandboxCtx))
 	// (d2) Secrets (1Password) — its OWN top-level group, honest and separate.
-	r.groups = append(r.groups, secretsGroup(cfg, env))
+	r.Groups = append(r.Groups, secretsGroup(cfg, env))
 	// (e) MCP servers registered with sbx. Same sbxOnPath signal as gog.
-	r.groups = append(r.groups, mcpGroup(cfg, env, mcpOut, mcpOK, sbxOnPath, sandboxCtx))
+	r.Groups = append(r.Groups, mcpGroup(cfg, env, mcpOut, mcpOK, sbxOnPath, sandboxCtx))
 
 	return r
 }
 
 // runDoctorCmd is the CLI entry point wired into main's dispatch. Exit codes
-// are part of the shared contract (Snapshot.ExitCode): 0 = every core and
+// are part of the shared contract (snapshot.ExitCode): 0 = every core and
 // requested axis is ready, 1 = a POSITIVELY VERIFIED core/requested failure
 // (verdict todo/denied) or a config-load error, 2 = usage error, 3 = a
 // core/requested axis could not be verified from here.
@@ -334,19 +335,19 @@ func runDoctorCmd(argv []string) {
 		os.Exit(1)
 	}
 	r := runDoctor(cfg, defaultShellEnv())
-	r.services = cfg.Services
-	r.mcp = cfg.MCP
+	r.Services = cfg.Services
+	r.MCP = cfg.MCP
 	if jsonOut {
-		_ = writeJSONOut(os.Stdout, r.jsonView(""))
+		_ = writeJSONOut(os.Stdout, jsonView(r, ""))
 	} else {
-		r.render(os.Stdout, verbose)
+		r.Render(os.Stdout, verbose, doctorHints())
 	}
-	// The exit code is derived by the SHARED contract (Snapshot.ExitCode):
+	// The exit code is derived by the SHARED contract (snapshot.ExitCode):
 	// 0 ready, 1 a verified core/requested failure, 3 core/requested axes
 	// that could not be verified from here. Usage errors above already exit 2.
 	// Doctor used to collapse 3 into 0; two exit contracts over one snapshot
 	// would reintroduce exactly the disagreement this wave removes.
-	if code := r.snapshot().ExitCode(); code != exitReady {
+	if code := r.Snapshot().ExitCode(); code != readiness.ExitReady {
 		os.Exit(code)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/readiness"
 	"strings"
 	"testing"
 
@@ -181,12 +182,12 @@ func TestDoctor_AllGreen(t *testing.T) {
 		ports: map[int]bool{11434: true, 11435: true},
 	}))
 	r := runDoctor(defaultCfg(), f.env())
-	if got := len(r.todos()); got != 0 {
-		t.Fatalf("expected 0 todos, got %d: %v", got, r.todos())
+	if got := len(r.Todos()); got != 0 {
+		t.Fatalf("expected 0 todos, got %d: %v", got, r.Todos())
 	}
 	var buf bytes.Buffer
-	r.services, r.mcp = defaultCfg().Services, nil
-	r.render(&buf, false)
+	r.Services, r.MCP = defaultCfg().Services, nil
+	r.Render(&buf, false, doctorHints())
 	out := buf.String()
 	if !strings.Contains(out, "all checks pass") {
 		t.Errorf("expected all-pass verdict, got:\n%s", out)
@@ -205,10 +206,10 @@ func TestDoctor_SbxAbsent(t *testing.T) {
 		ports:   map[int]bool{},
 	}
 	r := runDoctor(defaultCfg(), f.env())
-	if !r.sbxAbsent {
+	if !r.SbxAbsent {
 		t.Error("expected sbxAbsent to be true when sbx not on PATH")
 	}
-	todos := r.todos()
+	todos := r.Todos()
 	if len(todos) == 0 {
 		t.Fatal("expected TODOs when nothing is set up")
 	}
@@ -231,21 +232,21 @@ func TestDoctor_SbxAbsent(t *testing.T) {
 	}
 
 	// The provider group's core check must degrade to unverifiable, not block.
-	prov := r.groups[0]
-	if prov.title != "Inference / credentials (proxy-injected, never in the VM)" {
-		t.Fatalf("expected the providers group first, got %q", prov.title)
+	prov := r.Groups[0]
+	if prov.Title != "Inference / credentials (proxy-injected, never in the VM)" {
+		t.Fatalf("expected the providers group first, got %q", prov.Title)
 	}
-	core := prov.checks[0]
-	if core.label != "model key" || core.req() != requirementCore || core.result() != verdictUnverifiable {
+	core := prov.Checks[0]
+	if core.Label != "model key" || core.Req() != readiness.RequirementCore || core.Result() != readiness.VerdictUnverifiable {
 		t.Errorf("expected an unverifiable core model-key check, got %+v", core)
 	}
-	if r.blocking() {
+	if r.Blocking() {
 		t.Error("an unverifiable core check must never block")
 	}
 
 	var buf bytes.Buffer
-	r.services, r.mcp = defaultCfg().Services, nil
-	r.render(&buf, false)
+	r.Services, r.MCP = defaultCfg().Services, nil
+	r.Render(&buf, false, doctorHints())
 	out := buf.String()
 	if !strings.Contains(out, "outstanding") {
 		t.Errorf("expected outstanding verdict, got:\n%s", out)
@@ -268,7 +269,7 @@ func TestDoctor_PartialModels(t *testing.T) {
 		ports: map[int]bool{11435: true},
 	}))
 	r := runDoctor(defaultCfg(), f.env())
-	todos := r.todos()
+	todos := r.Todos()
 	if len(todos) != 1 || !strings.Contains(todos[0], "ollama pull nomic-embed-text") {
 		t.Fatalf("expected exactly the embed-model TODO, got %v", todos)
 	}
@@ -294,19 +295,19 @@ func TestDoctor_GogHeadlessTrap(t *testing.T) {
 		ports:    map[int]bool{11435: true},
 	}
 	r := runDoctor(defaultCfg(), f.env())
-	var gog group
-	for _, g := range r.groups {
-		if strings.HasPrefix(g.title, "Google Workspace") {
+	var gog readiness.Group
+	for _, g := range r.Groups {
+		if strings.HasPrefix(g.Title, "Google Workspace") {
 			gog = g
 		}
 	}
 	var acctOK, headTODO bool
-	for _, c := range gog.checks {
-		if c.label == "account" && c.state() == stateOK {
+	for _, c := range gog.Checks {
+		if c.Label == "account" && c.State() == readiness.StateOK {
 			acctOK = true
 		}
-		if c.label == "headless spawn" && c.state() == stateTODO &&
-			strings.Contains(c.todo, "GOG_KEYRING_BACKEND=file") {
+		if c.Label == "headless spawn" && c.State() == readiness.StateTODO &&
+			strings.Contains(c.Todo, "GOG_KEYRING_BACKEND=file") {
 			headTODO = true
 		}
 	}
@@ -330,15 +331,15 @@ func TestDoctor_GogAccountUnset(t *testing.T) {
 		ports:   map[int]bool{},
 	}
 	r := runDoctor(defaultCfg(), f.env())
-	joined := strings.Join(r.todos(), "\n")
+	joined := strings.Join(r.Todos(), "\n")
 	if strings.Contains(joined, "google_workspace_account") || strings.Contains(joined, "gog setup") {
-		t.Errorf("an unset gog account is not-configured, never a TODO, got %v", r.todos())
+		t.Errorf("an unset gog account is not-configured, never a TODO, got %v", r.Todos())
 	}
 	// It must NOT report green either: the account line is a note that says
 	// it is not configured and names the guided setup command.
 	var buf bytes.Buffer
-	r.services, r.mcp = defaultCfg().Services, nil
-	r.render(&buf, false)
+	r.Services, r.MCP = defaultCfg().Services, nil
+	r.Render(&buf, false, doctorHints())
 	if !strings.Contains(buf.String(), "not configured (gog_account unset) — set up: pix gworkspace setup") {
 		t.Errorf("expected a not-configured account note naming pix gworkspace setup, got:\n%s", buf.String())
 	}
@@ -381,11 +382,11 @@ func TestDoctor_GogAttachDespiteMissingExecutable(t *testing.T) {
 	g := gogGroup(cfg, env, "google-workspace\n", true, true, ctx)
 
 	reg := findCheck(t, g, gwServerName)
-	if reg.result() != verdictReady {
+	if reg.Result() != readiness.VerdictReady {
 		t.Errorf("registration check must still be emitted and ready: %+v", reg)
 	}
 	attach := findCheck(t, g, gwServerName+" attachment")
-	if attach.result() != verdictReady || !strings.Contains(attach.evidence, "preloaded by pix at create") {
+	if attach.Result() != readiness.VerdictReady || !strings.Contains(attach.Evidence, "preloaded by pix at create") {
 		t.Errorf("attach check must be emitted and ready despite the missing gog executable: %+v", attach)
 	}
 }
@@ -430,8 +431,8 @@ func TestDoctor_GogTransparency(t *testing.T) {
 	})
 	r := runDoctor(defaultCfg(), f.env())
 	var buf bytes.Buffer
-	r.services, r.mcp = defaultCfg().Services, []string{gwServerName}
-	r.render(&buf, false)
+	r.Services, r.MCP = defaultCfg().Services, []string{gwServerName}
+	r.Render(&buf, false, doctorHints())
 	out := buf.String()
 	if !strings.Contains(out, "verifying") || !strings.Contains(out, gogAcct) || !strings.Contains(out, gogOpRefs) {
 		t.Errorf("expected a transparency line naming account+op-refs, got:\n%s", out)
@@ -457,68 +458,6 @@ func TestDoctor_GogTransparency(t *testing.T) {
 // ERRORS (no fake output — the sbx daemon/gateway is unhealthy). doctor
 // must NOT claim "sbx unavailable" anywhere, must point at the sbx daemon/gateway
 // rather than "register on the host", and must emit
-// `pix secret set <ENV_VAR> op://vault/item/field` at most once.
-func TestDoctor_SbxPresentMcpListFailed(t *testing.T) {
-	cfg := defaultCfg()
-	cfg.MCP = []string{gwServerName}
-	cfg.GogAccount = gogAcct
-	f := fakeEnv{
-		present: map[string]bool{"sbx": true, "gog": true, "op": true},
-		output: map[string]string{
-			// secret ls works: providers all green, sbx clearly present.
-			"sbx secret ls": "anthropic\nopenai\ngoogle\ngithub\n",
-			// every `sbx mcp ...` errors (no fake output) — daemon/gateway unhealthy.
-		},
-		envVars: map[string]string{"GOG_ACCOUNT": gogAcct},
-		ports:   map[int]bool{11435: true},
-	}
-	r := runDoctor(cfg, f.env())
-
-	// sbx is present — the report-level sbxAbsent flag must be false.
-	if r.sbxAbsent {
-		t.Errorf("sbx is present (secret ls ok) — sbxAbsent must be false")
-	}
-
-	// No check detail may claim sbx is unavailable.
-	for _, g := range r.groups {
-		for _, c := range g.checks {
-			if strings.Contains(c.detail, "sbx unavailable") {
-				t.Errorf("sbx is present — no detail may say 'sbx unavailable', got group %q: %q", g.title, c.detail)
-			}
-		}
-	}
-
-	// The gog + mcp guidance must point at the sbx daemon/gateway, not
-	// "register on the host".
-	var buf bytes.Buffer
-	r.services, r.mcp = cfg.Services, cfg.MCP
-	r.render(&buf, false)
-	out := buf.String()
-	if !strings.Contains(out, "sbx mcp status") && !strings.Contains(out, "sbx daemon") {
-		t.Errorf("expected sbx daemon/gateway guidance, got:\n%s", out)
-	}
-	if strings.Contains(out, "register on the host") {
-		t.Errorf("sbx is present — must not say 'register on the host', got:\n%s", out)
-	}
-
-	// providers still green (sanity): no provider TODO.
-	joined := strings.Join(r.todos(), "\n")
-	if strings.Contains(joined, "sbx secret set -g") {
-		t.Errorf("providers are set — no provider TODO expected, got %v", r.todos())
-	}
-
-	// `pix secret set <ENV_VAR> op://vault/item/field` appears at most once across all todos.
-	n := 0
-	for _, tdo := range r.todos() {
-		if todoDedupKey(tdo) == "pix secret set <ENV_VAR> op://vault/item/field" {
-			n++
-		}
-	}
-	if n > 1 {
-		t.Errorf("`pix secret set` must appear at most once, got %d: %v", n, r.todos())
-	}
-}
-
 // TestRedactRegisteredCommand covers F3: a value token (e.g. a pasted secret
 // behind --client-secret) is never echoed verbatim, while recognizable
 // subcommands/flag names survive.
@@ -559,10 +498,10 @@ func TestDoctor_RegisteredCommandNeverLeaksSecret(t *testing.T) {
 		ports: map[int]bool{11435: true},
 	}
 	r := runDoctor(defaultCfg(), f.env())
-	for _, g := range r.groups {
-		for _, c := range g.checks {
-			if strings.Contains(c.detail, secret) || strings.Contains(c.todo, secret) {
-				t.Errorf("doctor leaked the pasted secret in group %q: detail=%q todo=%q", g.title, c.detail, c.todo)
+	for _, g := range r.Groups {
+		for _, c := range g.Checks {
+			if strings.Contains(c.Detail, secret) || strings.Contains(c.Todo, secret) {
+				t.Errorf("doctor leaked the pasted secret in group %q: detail=%q todo=%q", g.Title, c.Detail, c.Todo)
 			}
 		}
 	}
@@ -582,22 +521,22 @@ func TestDoctor_SecretsGroupShortLiteralFlagged(t *testing.T) {
 	cfg.MCP = []string{"slack"}
 	g := secretsGroup(cfg, f.env())
 	var found bool
-	for _, c := range g.checks {
-		if strings.Contains(c.detail, val) {
-			t.Errorf("secrets group LEAKED the literal value: %q", c.detail)
+	for _, c := range g.Checks {
+		if strings.Contains(c.Detail, val) {
+			t.Errorf("secrets group LEAKED the literal value: %q", c.Detail)
 		}
-		if c.label == "SLACK_TOKEN" {
-			if c.state() != stateTODO {
-				t.Errorf("SLACK_TOKEN state = %v, want stateTODO", c.state())
+		if c.Label == "SLACK_TOKEN" {
+			if c.State() != readiness.StateTODO {
+				t.Errorf("SLACK_TOKEN state = %v, want readiness.StateTODO", c.State())
 			}
-			if !strings.Contains(c.detail, "not an op:// ref") {
-				t.Errorf("SLACK_TOKEN detail should flag refs-only: %q", c.detail)
+			if !strings.Contains(c.Detail, "not an op:// ref") {
+				t.Errorf("SLACK_TOKEN detail should flag refs-only: %q", c.Detail)
 			}
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("expected a SLACK_TOKEN check in the Secrets group, group=%+v", g)
+		t.Errorf("expected a SLACK_TOKEN check in the Secrets readiness.Group, readiness.Group=%+v", g)
 	}
 }
 
@@ -623,26 +562,26 @@ func TestDoctor_GogRegisteredCommand(t *testing.T) {
 		ports: map[int]bool{11435: true},
 	}
 	r := runDoctor(defaultCfg(), f.env())
-	var gog group
-	for _, g := range r.groups {
-		if strings.HasPrefix(g.title, "Google Workspace") {
+	var gog readiness.Group
+	for _, g := range r.Groups {
+		if strings.HasPrefix(g.Title, "Google Workspace") {
 			gog = g
 		}
 	}
 	var regShown, headOK bool
-	for _, c := range gog.checks {
-		if c.label == "registration" {
+	for _, c := range gog.Checks {
+		if c.Label == "registration" {
 			// The registered command is shown REDACTED: recognizable skeleton (op
 			// run/env-file/gog/mcp), but the account value scrubbed to ‹redacted›.
-			if strings.Contains(c.detail, "op run --no-masking --env-file=… -- gog --account ‹redacted›") &&
-				strings.Contains(c.detail, "mcp") {
+			if strings.Contains(c.Detail, "op run --no-masking --env-file=… -- gog --account ‹redacted›") &&
+				strings.Contains(c.Detail, "mcp") {
 				regShown = true
 			}
-			if strings.Contains(c.detail, gogAcct) {
-				t.Errorf("registered command detail must not echo the account verbatim: %q", c.detail)
+			if strings.Contains(c.Detail, gogAcct) {
+				t.Errorf("registered command detail must not echo the account verbatim: %q", c.Detail)
 			}
 		}
-		if c.label == "headless spawn" && c.state() == stateOK {
+		if c.Label == "headless spawn" && c.State() == readiness.StateOK {
 			headOK = true
 		}
 	}
@@ -653,9 +592,9 @@ func TestDoctor_GogRegisteredCommand(t *testing.T) {
 		t.Errorf("expected a confirmed headless spawn from probing the registered command, group=%+v", gog)
 	}
 	// No fallback/reconstruction lines when the honest path fires.
-	for _, c := range gog.checks {
-		if strings.Contains(c.detail, "best-effort") {
-			t.Errorf("honest path should not print best-effort fallback lines, got %q", c.detail)
+	for _, c := range gog.Checks {
+		if strings.Contains(c.Detail, "best-effort") {
+			t.Errorf("honest path should not print best-effort fallback lines, got %q", c.Detail)
 		}
 	}
 }
@@ -682,30 +621,30 @@ func TestDoctor_GogFallbackUnconfirmedIsTODO(t *testing.T) {
 	// know whether the best-effort pass matches the real registration — and it
 	// must carry NO repair TODO (nothing is confirmed broken to fix).
 	var headWarn bool
-	for _, g := range r.groups {
-		if !strings.HasPrefix(g.title, "Google Workspace") {
+	for _, g := range r.Groups {
+		if !strings.HasPrefix(g.Title, "Google Workspace") {
 			continue
 		}
-		for _, c := range g.checks {
-			if c.label == "headless spawn" {
-				if c.state() == stateWarn &&
-					strings.Contains(c.detail, "could not be confirmed") {
+		for _, c := range g.Checks {
+			if c.Label == "headless spawn" {
+				if c.State() == readiness.StateWarn &&
+					strings.Contains(c.Detail, "could not be confirmed") {
 					headWarn = true
 				}
-				if c.todo != "" {
-					t.Errorf("an unverifiable best-effort pass must not carry a TODO, got %q", c.todo)
+				if c.Todo != "" {
+					t.Errorf("an unverifiable best-effort pass must not carry a TODO, got %q", c.Todo)
 				}
 			}
 		}
 	}
 	if !headWarn {
-		t.Fatalf("expected an unconfirmed-fallback headless ⚠, groups=%+v", r.groups)
+		t.Fatalf("expected an unconfirmed-fallback headless ⚠, groups=%+v", r.Groups)
 	}
 	// Verdict must NOT be all-clear: the headline calls out the unverified
 	// checks instead.
 	var buf bytes.Buffer
-	r.services, r.mcp = defaultCfg().Services, []string{gwServerName}
-	r.render(&buf, false)
+	r.Services, r.MCP = defaultCfg().Services, []string{gwServerName}
+	r.Render(&buf, false, doctorHints())
 	out := buf.String()
 	if strings.Contains(out, "all checks pass") {
 		t.Errorf("unconfirmed fallback must not report all-clear, got:\n%s", out)
@@ -735,18 +674,18 @@ func TestDoctor_GogRegisteredCommandLineFallsThrough(t *testing.T) {
 	}
 	r := runDoctor(defaultCfg(), f.env())
 	var headOK bool
-	for _, g := range r.groups {
-		if !strings.HasPrefix(g.title, "Google Workspace") {
+	for _, g := range r.Groups {
+		if !strings.HasPrefix(g.Title, "Google Workspace") {
 			continue
 		}
-		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state() == stateOK {
+		for _, c := range g.Checks {
+			if c.Label == "headless spawn" && c.State() == readiness.StateOK {
 				headOK = true
 			}
 		}
 	}
 	if !headOK {
-		t.Errorf("expected line form to fall through to JSON and confirm green, groups=%+v", r.groups)
+		t.Errorf("expected line form to fall through to JSON and confirm green, groups=%+v", r.Groups)
 	}
 }
 
@@ -796,18 +735,18 @@ func TestDoctor_GogRegisteredCommandJSON(t *testing.T) {
 	}
 	r := runDoctor(defaultCfg(), f.env())
 	var headOK bool
-	for _, g := range r.groups {
-		if !strings.HasPrefix(g.title, "Google Workspace") {
+	for _, g := range r.Groups {
+		if !strings.HasPrefix(g.Title, "Google Workspace") {
 			continue
 		}
-		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state() == stateOK {
+		for _, c := range g.Checks {
+			if c.Label == "headless spawn" && c.State() == readiness.StateOK {
 				headOK = true
 			}
 		}
 	}
 	if !headOK {
-		t.Errorf("expected a confirmed headless spawn from the JSON-parsed registration, groups=%+v", r.groups)
+		t.Errorf("expected a confirmed headless spawn from the JSON-parsed registration, groups=%+v", r.Groups)
 	}
 }
 
@@ -830,25 +769,25 @@ func TestDoctor_GogBareRegisteredCommand(t *testing.T) {
 		ports: map[int]bool{11435: true},
 	}
 	r := runDoctor(defaultCfg(), f.env())
-	var gog group
-	for _, g := range r.groups {
-		if strings.HasPrefix(g.title, "Google Workspace") {
+	var gog readiness.Group
+	for _, g := range r.Groups {
+		if strings.HasPrefix(g.Title, "Google Workspace") {
 			gog = g
 		}
 	}
 	var regShown, headOK bool
-	for _, c := range gog.checks {
-		if c.label == "registration" {
+	for _, c := range gog.Checks {
+		if c.Label == "registration" {
 			// Bare command shown REDACTED: recognizable `gog --account ‹redacted› … mcp`.
-			if strings.Contains(c.detail, "gog --account ‹redacted›") &&
-				strings.Contains(c.detail, "mcp") {
+			if strings.Contains(c.Detail, "gog --account ‹redacted›") &&
+				strings.Contains(c.Detail, "mcp") {
 				regShown = true
 			}
-			if strings.Contains(c.detail, gogAcct) {
-				t.Errorf("registered command detail must not echo the account verbatim: %q", c.detail)
+			if strings.Contains(c.Detail, gogAcct) {
+				t.Errorf("registered command detail must not echo the account verbatim: %q", c.Detail)
 			}
 		}
-		if c.label == "headless spawn" && c.state() == stateOK {
+		if c.Label == "headless spawn" && c.State() == readiness.StateOK {
 			headOK = true
 		}
 	}
@@ -859,9 +798,9 @@ func TestDoctor_GogBareRegisteredCommand(t *testing.T) {
 		t.Errorf("expected a confirmed headless spawn from probing the bare registered command, group=%+v", gog)
 	}
 	// A confirmed bare registration must NOT print the best-effort fallback lines.
-	for _, c := range gog.checks {
-		if strings.Contains(c.detail, "best-effort") {
-			t.Errorf("confirmed bare path should not print best-effort fallback lines, got %q", c.detail)
+	for _, c := range gog.Checks {
+		if strings.Contains(c.Detail, "best-effort") {
+			t.Errorf("confirmed bare path should not print best-effort fallback lines, got %q", c.Detail)
 		}
 	}
 }
@@ -884,18 +823,18 @@ func TestDoctor_GogBareRegisteredCommandJSON(t *testing.T) {
 	}
 	r := runDoctor(defaultCfg(), f.env())
 	var headOK bool
-	for _, g := range r.groups {
-		if !strings.HasPrefix(g.title, "Google Workspace") {
+	for _, g := range r.Groups {
+		if !strings.HasPrefix(g.Title, "Google Workspace") {
 			continue
 		}
-		for _, c := range g.checks {
-			if c.label == "headless spawn" && c.state() == stateOK {
+		for _, c := range g.Checks {
+			if c.Label == "headless spawn" && c.State() == readiness.StateOK {
 				headOK = true
 			}
 		}
 	}
 	if !headOK {
-		t.Errorf("expected a confirmed headless spawn from the bare JSON-parsed registration, groups=%+v", r.groups)
+		t.Errorf("expected a confirmed headless spawn from the bare JSON-parsed registration, groups=%+v", r.Groups)
 	}
 }
 
@@ -916,9 +855,9 @@ func TestDoctor_GogAccountFromConfig(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.GogAccount = gogAcct
 	r := runDoctor(cfg, f.env())
-	joined := strings.Join(r.todos(), "\n")
+	joined := strings.Join(r.Todos(), "\n")
 	if strings.Contains(joined, "google_workspace_account") || strings.Contains(joined, "GOG_ACCOUNT") {
-		t.Errorf("account from config should not TODO, got %v", r.todos())
+		t.Errorf("account from config should not TODO, got %v", r.Todos())
 	}
 }
 
@@ -935,18 +874,18 @@ func TestDoctor_GogRegistration(t *testing.T) {
 	})
 	r := runDoctor(defaultCfg(), f.env())
 	var found bool
-	for _, g := range r.groups {
-		if !strings.HasPrefix(g.title, "Google Workspace") {
+	for _, g := range r.Groups {
+		if !strings.HasPrefix(g.Title, "Google Workspace") {
 			continue
 		}
-		for _, c := range g.checks {
-			if c.label == gwServerName && c.state() == stateTODO {
+		for _, c := range g.Checks {
+			if c.Label == gwServerName && c.State() == readiness.StateTODO {
 				found = true
 			}
 		}
 	}
 	if !found {
-		t.Errorf("expected an unregistered Google Workspace TODO, groups=%+v", r.groups)
+		t.Errorf("expected an unregistered Google Workspace TODO, groups=%+v", r.Groups)
 	}
 }
 
@@ -967,20 +906,20 @@ func TestDoctor_MCPRegistration(t *testing.T) {
 	})
 	r := runDoctor(cfg, f.env())
 	found := false
-	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state() == stateTODO {
+	for _, c := range r.Groups[len(r.Groups)-1].Checks {
+		if c.Label == "slack" && c.State() == readiness.StateTODO {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("expected slack MCP TODO, groups=%v", r.groups)
+		t.Errorf("expected slack MCP TODO, groups=%v", r.Groups)
 	}
 
 	// Now register it -> no MCP todo.
 	f.output["sbx mcp ls"] = "notion\nslack\n"
 	r = runDoctor(cfg, f.env())
-	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state() == stateTODO {
+	for _, c := range r.Groups[len(r.Groups)-1].Checks {
+		if c.Label == "slack" && c.State() == readiness.StateTODO {
 			t.Errorf("registered slack should not be a TODO")
 		}
 	}
@@ -1010,13 +949,13 @@ func TestDoctor_MCPToolProbe(t *testing.T) {
 	r := runDoctor(cfg, f.env())
 	// The generic mcp group is last; slack must read as a real tool count.
 	var found bool
-	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state() == stateOK && strings.Contains(c.detail, "spawns 3 tools") {
+	for _, c := range r.Groups[len(r.Groups)-1].Checks {
+		if c.Label == "slack" && c.State() == readiness.StateOK && strings.Contains(c.Detail, "spawns 3 tools") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("expected slack to report a real tool count, group=%+v", r.groups[len(r.groups)-1])
+		t.Errorf("expected slack to report a real tool count, readiness.Group=%+v", r.Groups[len(r.Groups)-1])
 	}
 }
 
@@ -1041,13 +980,13 @@ func TestDoctor_MCPToolProbeZero(t *testing.T) {
 	})
 	r := runDoctor(cfg, f.env())
 	var todo bool
-	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "slack" && c.state() == stateTODO && strings.Contains(c.detail, "0 tools") {
+	for _, c := range r.Groups[len(r.Groups)-1].Checks {
+		if c.Label == "slack" && c.State() == readiness.StateTODO && strings.Contains(c.Detail, "0 tools") {
 			todo = true
 		}
 	}
 	if !todo {
-		t.Errorf("expected a 0-tools TODO for slack, group=%+v", r.groups[len(r.groups)-1])
+		t.Errorf("expected a 0-tools TODO for slack, group=%+v", r.Groups[len(r.Groups)-1])
 	}
 }
 
@@ -1083,14 +1022,14 @@ func TestDoctor_MCPUnrecognizedCommand(t *testing.T) {
 	}
 	r := runDoctor(cfg, env)
 	var found bool
-	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == "evil" && c.state() == stateWarn &&
-			strings.Contains(c.detail, "never executed") {
+	for _, c := range r.Groups[len(r.Groups)-1].Checks {
+		if c.Label == "evil" && c.State() == readiness.StateWarn &&
+			strings.Contains(c.Detail, "never executed") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("expected evil to report a skipped probe, group=%+v", r.groups[len(r.groups)-1])
+		t.Errorf("expected evil to report a skipped probe, readiness.Group=%+v", r.Groups[len(r.Groups)-1])
 	}
 }
 
@@ -1112,18 +1051,18 @@ func TestDoctor_GogTodoOnce(t *testing.T) {
 	})
 	r := runDoctor(cfg, f.env())
 	n := 0
-	for _, tdo := range r.todos() {
+	for _, tdo := range r.Todos() {
 		if tdo == "pix mcp register" {
 			n++
 		}
 	}
 	if n != 1 {
-		t.Errorf("expected `pix mcp register` exactly once, got %d: %v", n, r.todos())
+		t.Errorf("expected `pix mcp register` exactly once, got %d: %v", n, r.Todos())
 	}
 	// The generic mcp group must not carry a gog check at all.
-	for _, c := range r.groups[len(r.groups)-1].checks {
-		if c.label == gwServerName {
-			t.Errorf("generic mcp group should skip gog, got check %+v", c)
+	for _, c := range r.Groups[len(r.Groups)-1].Checks {
+		if c.Label == gwServerName {
+			t.Errorf("generic mcp group should skip gog, got readiness.Check %+v", c)
 		}
 	}
 }
@@ -1131,11 +1070,11 @@ func TestDoctor_GogTodoOnce(t *testing.T) {
 // TestDoctorTodosDedup proves report.todos() drops exact-duplicate commands
 // while preserving first-occurrence order.
 func TestDoctorTodosDedup(t *testing.T) {
-	r := &report{groups: []group{
-		{checks: []check{{verdict: verdictTodo, todo: "a"}, {verdict: verdictTodo, todo: "b"}}},
-		{checks: []check{{verdict: verdictTodo, todo: "a"}, {verdict: verdictTodo, todo: "c"}}},
+	r := &readiness.Report{Groups: []readiness.Group{
+		{Checks: []readiness.Check{{Verdict: readiness.VerdictTodo, Todo: "a"}, {Verdict: readiness.VerdictTodo, Todo: "b"}}},
+		{Checks: []readiness.Check{{Verdict: readiness.VerdictTodo, Todo: "a"}, {Verdict: readiness.VerdictTodo, Todo: "c"}}},
 	}}
-	got := r.todos()
+	got := r.Todos()
 	want := []string{"a", "b", "c"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("todos() = %v, want %v", got, want)
@@ -1168,24 +1107,24 @@ func TestModelPulled(t *testing.T) {
 
 // secretsGroupFor runs doctor with the given cfg.MCP + fake env and returns the
 // "Secrets (1Password...)" group.
-func secretsGroupFor(t *testing.T, mcp []string, f fakeEnv) group {
+func secretsGroupFor(t *testing.T, mcp []string, f fakeEnv) readiness.Group {
 	t.Helper()
 	cfg := defaultCfg()
 	cfg.MCP = mcp
 	r := runDoctor(cfg, f.env())
-	for _, g := range r.groups {
-		if strings.HasPrefix(g.title, "Secrets") {
+	for _, g := range r.Groups {
+		if strings.HasPrefix(g.Title, "Secrets") {
 			return g
 		}
 	}
 	t.Fatal("no Secrets group in doctor output")
-	return group{}
+	return readiness.Group{}
 }
 
 func TestDoctor_SecretsGroup_NotNeeded(t *testing.T) {
 	g := secretsGroupFor(t, nil, fakeEnv{present: map[string]bool{}})
-	if len(g.checks) != 1 || !strings.Contains(g.checks[0].detail, "not needed") {
-		t.Errorf("no-server config should say 1Password not needed, got %+v", g.checks)
+	if len(g.Checks) != 1 || !strings.Contains(g.Checks[0].Detail, "not needed") {
+		t.Errorf("no-server config should say 1Password not needed, got %+v", g.Checks)
 	}
 }
 
@@ -1194,11 +1133,11 @@ func TestDoctor_SecretsGroup_GogOnlyNotNeeded(t *testing.T) {
 	// OAuth, never op-refs, so a fresh gog-only install must not surface a phantom
 	// `pix secret set <ENV_VAR> op://vault/item/field` TODO for a missing op-refs.env.
 	g := secretsGroupFor(t, []string{gwServerName}, fakeEnv{present: map[string]bool{}})
-	if len(g.checks) != 1 || !strings.Contains(g.checks[0].detail, "not needed") {
-		t.Errorf("gog-only config should say 1Password not needed, got %+v", g.checks)
+	if len(g.Checks) != 1 || !strings.Contains(g.Checks[0].Detail, "not needed") {
+		t.Errorf("gog-only config should say 1Password not needed, got %+v", g.Checks)
 	}
-	for _, c := range g.checks {
-		if c.state() == stateTODO {
+	for _, c := range g.Checks {
+		if c.State() == readiness.StateTODO {
 			t.Errorf("gog-only config must raise no Secrets TODO, got %+v", c)
 		}
 	}
@@ -1215,13 +1154,13 @@ func TestDoctor_SecretsGroup_SlackOnly(t *testing.T) {
 	}
 	g := secretsGroupFor(t, []string{"slack"}, f)
 	var sawRef bool
-	for _, c := range g.checks {
-		if c.label == "SLACK_TOKEN" && c.state() == stateOK {
+	for _, c := range g.Checks {
+		if c.Label == "SLACK_TOKEN" && c.State() == readiness.StateOK {
 			sawRef = true
 		}
 	}
 	if !sawRef {
-		t.Errorf("slack-only Secrets group should report SLACK_TOKEN filled, got %+v", g.checks)
+		t.Errorf("slack-only Secrets group should readiness.Report SLACK_TOKEN filled, got %+v", g.Checks)
 	}
 }
 
@@ -1234,14 +1173,14 @@ func TestDoctor_SecretsGroup_PermsFinding(t *testing.T) {
 		modes:   map[string]os.FileMode{"/fake/config/op-refs.env": 0o644, "/fake/config": 0o700},
 	}
 	g := secretsGroupFor(t, []string{"slack"}, f)
-	var perms *check
-	for i := range g.checks {
-		if g.checks[i].label == "perms" {
-			perms = &g.checks[i]
+	var perms *readiness.Check
+	for i := range g.Checks {
+		if g.Checks[i].Label == "perms" {
+			perms = &g.Checks[i]
 		}
 	}
-	if perms == nil || perms.state() != stateTODO || !strings.Contains(perms.todo, "chmod 600") {
-		t.Errorf("0644 op-refs.env should raise a chmod 600 perms TODO, got %+v", g.checks)
+	if perms == nil || perms.State() != readiness.StateTODO || !strings.Contains(perms.Todo, "chmod 600") {
+		t.Errorf("0644 op-refs.env should raise a chmod 600 perms TODO, got %+v", g.Checks)
 	}
 }
 
@@ -1258,15 +1197,77 @@ func TestDoctor_SecretsGroup_LintNoLeak(t *testing.T) {
 	}
 	g := secretsGroupFor(t, []string{"slack"}, f)
 	var flagged bool
-	for _, c := range g.checks {
-		if c.label == "SLACK_TOKEN" && strings.Contains(c.detail, "possible pasted secret") {
+	for _, c := range g.Checks {
+		if c.Label == "SLACK_TOKEN" && strings.Contains(c.Detail, "possible pasted secret") {
 			flagged = true
 		}
-		if strings.Contains(c.detail, pasted) || strings.Contains(c.todo, pasted) {
+		if strings.Contains(c.Detail, pasted) || strings.Contains(c.Todo, pasted) {
 			t.Errorf("doctor LEAKED the pasted value in a check: %+v", c)
 		}
 	}
 	if !flagged {
-		t.Errorf("a pasted secret should be flagged, got %+v", g.checks)
+		t.Errorf("a pasted secret should be flagged, got %+v", g.Checks)
+	}
+}
+
+// `pix secret set <ENV_VAR> op://vault/item/field` at most once.
+func TestDoctor_SbxPresentMcpListFailed(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.MCP = []string{gwServerName}
+	cfg.GogAccount = gogAcct
+	f := fakeEnv{
+		present: map[string]bool{"sbx": true, "gog": true, "op": true},
+		output: map[string]string{
+			// secret ls works: providers all green, sbx clearly present.
+			"sbx secret ls": "anthropic\nopenai\ngoogle\ngithub\n",
+			// every `sbx mcp ...` errors (no fake output) — daemon/gateway unhealthy.
+		},
+		envVars: map[string]string{"GOG_ACCOUNT": gogAcct},
+		ports:   map[int]bool{11435: true},
+	}
+	r := runDoctor(cfg, f.env())
+
+	// sbx is present — the report-level sbxAbsent flag must be false.
+	if r.SbxAbsent {
+		t.Errorf("sbx is present (secret ls ok) — sbxAbsent must be false")
+	}
+
+	// No check detail may claim sbx is unavailable.
+	for _, g := range r.Groups {
+		for _, c := range g.Checks {
+			if strings.Contains(c.Detail, "sbx unavailable") {
+				t.Errorf("sbx is present — no detail may say 'sbx unavailable', got group %q: %q", g.Title, c.Detail)
+			}
+		}
+	}
+
+	// The gog + mcp guidance must point at the sbx daemon/gateway, not
+	// "register on the host".
+	var buf bytes.Buffer
+	r.Services, r.MCP = cfg.Services, cfg.MCP
+	r.Render(&buf, false, doctorHints())
+	out := buf.String()
+	if !strings.Contains(out, "sbx mcp status") && !strings.Contains(out, "sbx daemon") {
+		t.Errorf("expected sbx daemon/gateway guidance, got:\n%s", out)
+	}
+	if strings.Contains(out, "register on the host") {
+		t.Errorf("sbx is present — must not say 'register on the host', got:\n%s", out)
+	}
+
+	// providers still green (sanity): no provider TODO.
+	joined := strings.Join(r.Todos(), "\n")
+	if strings.Contains(joined, "sbx secret set -g") {
+		t.Errorf("providers are set — no provider TODO expected, got %v", r.Todos())
+	}
+
+	// `pix secret set <ENV_VAR> op://vault/item/field` appears at most once across all todos.
+	n := 0
+	for _, tdo := range r.Todos() {
+		if readiness.TodoDedupKey(tdo) == "pix secret set <ENV_VAR> op://vault/item/field" {
+			n++
+		}
+	}
+	if n > 1 {
+		t.Errorf("`pix secret set` must appear at most once, got %d: %v", n, r.Todos())
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"pix/host/readiness"
 	"runtime"
 	"strings"
 	"sync"
@@ -500,15 +501,15 @@ func TestSynthesizeInferenceKitErrorNamesTheFix(t *testing.T) {
 func TestUnverifiedOllamaCandidateRemediatesWithPullNotProviderKey(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	c := inferenceCoreCheck(cfg, "", true)
-	if c.verdict != verdictTodo || c.todo != pullModelsFixCmd {
+	if c.Verdict != readiness.VerdictTodo || c.Todo != pullModelsFixCmd {
 		t.Fatalf("core check = %+v, want a todo remediated by %q", c, pullModelsFixCmd)
 	}
-	if strings.Contains(c.todo+c.detail+c.evidence, "ANTHROPIC_API_KEY") {
+	if strings.Contains(c.Todo+c.Detail+c.Evidence, "ANTHROPIC_API_KEY") {
 		t.Fatalf("a not-pulled model must never be remediated with a cloud key: %+v", c)
 	}
 	// With no ollama candidates at all, the key fix is still correct.
 	empty := &config.Config{}
-	if got := inferenceCoreCheck(empty, "", true); got.todo != modelKeyFixCmd {
+	if got := inferenceCoreCheck(empty, "", true); got.Todo != modelKeyFixCmd {
 		t.Fatalf("a host with no ollama candidates still needs a key: %+v", got)
 	}
 }
@@ -524,7 +525,7 @@ func TestRunIntentRowNamesThePullForUnverifiedOllamaBinding(t *testing.T) {
 	cfg.Inference.Models[0].Model = model
 	cfg.Inference.Models[0].Upstream = ollamaTagFor(model)
 	c := runIntentKeyCheck(cfg, "", true)
-	if c.todo != pullModelsFixCmd {
+	if c.Todo != pullModelsFixCmd {
 		t.Fatalf("run_intent row = %+v, want the pull remediation", c)
 	}
 }

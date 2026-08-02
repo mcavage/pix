@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/readiness"
 	"pix/host/slackoauth"
 )
 
@@ -692,12 +693,12 @@ func TestSlackOAuthRuntimeFailsClosedWithoutStateDir(t *testing.T) {
 	checks := slackOAuthStatusChecks(cfg, e, time.Now())
 	foundUnverifiableAccess := false
 	for _, c := range checks {
-		if c.label == "access" && c.verdict == verdictUnverifiable {
+		if c.Label == "access" && c.Verdict == readiness.VerdictUnverifiable {
 			foundUnverifiableAccess = true
 		}
 	}
 	if !foundUnverifiableAccess {
-		t.Errorf("status must report an unverifiable access check when the runtime can't be built, got: %+v", checks)
+		t.Errorf("status must report an unverifiable access readiness.Check when the runtime can't be built, got: %+v", checks)
 	}
 
 	var out bytes.Buffer

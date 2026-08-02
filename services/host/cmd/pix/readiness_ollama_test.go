@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"pix/host/readiness"
 	"strings"
 	"testing"
 
@@ -63,21 +64,21 @@ func TestEffectiveOllamaEndpoint(t *testing.T) {
 func TestOllamaEvidenceNamesTheResolvedEndpoint(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "w:1", MemoryEmbedModel: "e:1", OllamaBridgeModel: "b:1", Services: []string{"memory"}}
 	env := ollamaEnv(t, "box.local:9999", false, "")
-	s := buildSnapshot(
-		Request{Axes: []Axis{axisOllamaHost, axisModelWatcher, axisModelEmbed, axisModelBridge}},
+	s := readiness.Build(
+		readiness.Request{Axes: []readiness.Axis{readiness.AxisOllamaHost, readiness.AxisModelWatcher, readiness.AxisModelEmbed, readiness.AxisModelBridge}},
 		ollamaReadinessAxes(cfg, env, "", nil),
 	)
 	for _, c := range s.All() {
-		if c.endpoint != "http://box.local:9999" {
-			t.Errorf("%s: endpoint = %q, want the resolved endpoint", c.label, c.endpoint)
+		if c.Endpoint != "http://box.local:9999" {
+			t.Errorf("%s: endpoint = %q, want the resolved endpoint", c.Label, c.Endpoint)
 		}
 	}
-	host, _ := s.Checks(axisOllamaHost)
-	if !strings.Contains(host[0].evidence, "http://box.local:9999") {
-		t.Errorf("ollama.host evidence must name the endpoint, got %q", host[0].evidence)
+	host, _ := s.Checks(readiness.AxisOllamaHost)
+	if !strings.Contains(host[0].Evidence, "http://box.local:9999") {
+		t.Errorf("ollama.host evidence must name the endpoint, got %q", host[0].Evidence)
 	}
-	if host[0].result() != verdictTodo {
-		t.Errorf("installed with a dead endpoint is a verified todo, got %q", host[0].result())
+	if host[0].Result() != readiness.VerdictTodo {
+		t.Errorf("installed with a dead endpoint is a verified todo, got %q", host[0].Result())
 	}
 }
 
@@ -85,14 +86,14 @@ func TestOllamaEvidenceNamesTheResolvedEndpoint(t *testing.T) {
 func TestEveryModelRoleHasAnAxis(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "w:1", MemoryEmbedModel: "e:1", OllamaBridgeModel: "b:1"}
 	env := ollamaEnv(t, "", true, "w:1\ne:1\n")
-	s := buildSnapshot(
-		Request{Axes: []Axis{axisModelWatcher, axisModelEmbed, axisModelBridge}},
+	s := readiness.Build(
+		readiness.Request{Axes: []readiness.Axis{readiness.AxisModelWatcher, readiness.AxisModelEmbed, readiness.AxisModelBridge}},
 		ollamaReadinessAxes(cfg, env, "", nil),
 	)
-	for axis, want := range map[Axis]verdict{
-		axisModelWatcher: verdictReady,
-		axisModelEmbed:   verdictReady,
-		axisModelBridge:  verdictTodo, // configured, `ollama list` ran clean, not listed
+	for axis, want := range map[readiness.Axis]readiness.Verdict{
+		readiness.AxisModelWatcher: readiness.VerdictReady,
+		readiness.AxisModelEmbed:   readiness.VerdictReady,
+		readiness.AxisModelBridge:  readiness.VerdictTodo, // configured, `ollama list` ran clean, not listed
 	} {
 		_, got, ok := s.AxisVerdict(axis)
 		if !ok {
@@ -109,18 +110,18 @@ func TestEveryModelRoleHasAnAxis(t *testing.T) {
 func TestOllamaSandboxAxisNeverCreatesASandbox(t *testing.T) {
 	cfg := &config.Config{}
 	env := ollamaEnv(t, "", true, "")
-	s := buildSnapshot(Request{Axes: []Axis{axisOllamaSandbox}}, ollamaReadinessAxes(cfg, env, "", nil))
-	c, _ := s.Checks(axisOllamaSandbox)
-	if c[0].result() != verdictUnverifiable || c[0].req() != requirementOptional {
-		t.Fatalf("no sandbox => unverifiable+optional, got %q/%q", c[0].result(), c[0].req())
+	s := readiness.Build(readiness.Request{Axes: []readiness.Axis{readiness.AxisOllamaSandbox}}, ollamaReadinessAxes(cfg, env, "", nil))
+	c, _ := s.Checks(readiness.AxisOllamaSandbox)
+	if c[0].Result() != readiness.VerdictUnverifiable || c[0].Req() != readiness.RequirementOptional {
+		t.Fatalf("no sandbox => unverifiable+optional, got %q/%q", c[0].Result(), c[0].Req())
 	}
-	if c[0].todo != "" {
+	if c[0].Todo != "" {
 		t.Error("an unverifiable check must not carry a repair command")
 	}
-	if !strings.Contains(c[0].evidence, "pix run") {
-		t.Errorf("evidence must name what makes it verifiable, got %q", c[0].evidence)
+	if !strings.Contains(c[0].Evidence, "pix run") {
+		t.Errorf("evidence must name what makes it verifiable, got %q", c[0].Evidence)
 	}
-	if s.ExitCode() != exitReady {
+	if s.ExitCode() != readiness.ExitReady {
 		t.Errorf("an optional unverifiable axis must not change the exit code, got %d", s.ExitCode())
 	}
 }
@@ -131,18 +132,18 @@ func TestBindInferenceNeverProducesReady(t *testing.T) {
 	cfg := &config.Config{}
 	env := ollamaEnv(t, "", true, "")
 	no := false
-	s := buildSnapshot(Request{Axes: []Axis{axisOllamaSandbox}}, ollamaReadinessAxes(cfg, env, "pix-demo", &no))
-	c, _ := s.Checks(axisOllamaSandbox)
-	if c[0].result() != verdictTodo {
-		t.Fatalf("a probed failure is a todo, got %q", c[0].result())
+	s := readiness.Build(readiness.Request{Axes: []readiness.Axis{readiness.AxisOllamaSandbox}}, ollamaReadinessAxes(cfg, env, "pix-demo", &no))
+	c, _ := s.Checks(readiness.AxisOllamaSandbox)
+	if c[0].Result() != readiness.VerdictTodo {
+		t.Fatalf("a probed failure is a todo, got %q", c[0].Result())
 	}
-	if !strings.Contains(c[0].detail, "loopback-only") {
-		t.Errorf("loopback inference should add remediation context, got %q", c[0].detail)
+	if !strings.Contains(c[0].Detail, "loopback-only") {
+		t.Errorf("loopback inference should add remediation context, got %q", c[0].Detail)
 	}
 	yes := true
-	s2 := buildSnapshot(Request{Axes: []Axis{axisOllamaSandbox}}, ollamaReadinessAxes(cfg, env, "pix-demo", &yes))
-	c2, _ := s2.Checks(axisOllamaSandbox)
-	if c2[0].result() != verdictReady {
-		t.Fatalf("only a positive probe produces ready, got %q", c2[0].result())
+	s2 := readiness.Build(readiness.Request{Axes: []readiness.Axis{readiness.AxisOllamaSandbox}}, ollamaReadinessAxes(cfg, env, "pix-demo", &yes))
+	c2, _ := s2.Checks(readiness.AxisOllamaSandbox)
+	if c2[0].Result() != readiness.VerdictReady {
+		t.Fatalf("only a positive probe produces ready, got %q", c2[0].Result())
 	}
 }

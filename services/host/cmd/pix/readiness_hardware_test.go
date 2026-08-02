@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"pix/host/readiness"
 	"pix/host/routing"
 	"pix/host/sys/systest"
 )
@@ -178,14 +179,14 @@ func TestHardwareCheckIsNeverReady(t *testing.T) {
 		{TotalGB: 32, UsableGB: 19.2, Source: "/proc/meminfo MemTotal", OK: true},
 	} {
 		for _, c := range hardwareCheck(mem) {
-			if c.verdict == verdictReady {
+			if c.Verdict == readiness.VerdictReady {
 				t.Errorf("hardwareCheck(%+v) rendered ready; a hardware reading is not a probe", mem)
 			}
-			if !c.note {
+			if !c.Note {
 				t.Errorf("hardwareCheck(%+v) is not a note; it must never block or count as outstanding", mem)
 			}
-			if c.todo != "" {
-				t.Errorf("hardwareCheck(%+v) offered a fix command (%q); RAM is not a configuration mistake", mem, c.todo)
+			if c.Todo != "" {
+				t.Errorf("hardwareCheck(%+v) offered a fix command (%q); RAM is not a configuration mistake", mem, c.Todo)
 			}
 		}
 	}

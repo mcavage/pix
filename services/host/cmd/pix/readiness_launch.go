@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"pix/host/readiness"
 
 	"pix/host/config"
 )
@@ -23,7 +24,7 @@ import (
 //     count.
 //  2. LAZINESS IS THE COST MODEL. Only the axes in fastReadinessAxes are
 //     built; everything else is absent from the snapshot, which is different
-//     from ready (Snapshot.Checks reports ok=false, so no renderer can invent
+//     from ready (snapshot.Checks reports ok=false, so no renderer can invent
 //     a verdict for an axis nobody paid to probe).
 
 // sbxKeyEvidence is one `sbx secret ls` result an invocation ALREADY paid for.
@@ -52,10 +53,10 @@ func probeSbxKeyEvidence(env shellEnv) sbxKeyEvidence {
 // probed. The checks are doctor's own (modelKeyCoreCheck, runIntentKeyCheck),
 // so run/status/onboard cannot disagree with doctor about the one core
 // launch requirement.
-func providersReadinessAxes(cfg *config.Config, ev sbxKeyEvidence) map[Axis]axisBuilder {
-	return map[Axis]axisBuilder{
-		axisProviders: func() []check {
-			return []check{
+func providersReadinessAxes(cfg *config.Config, ev sbxKeyEvidence) map[readiness.Axis]readiness.AxisBuilder {
+	return map[readiness.Axis]readiness.AxisBuilder{
+		readiness.AxisProviders: func() []readiness.Check {
+			return []readiness.Check{
 				inferenceCoreCheck(cfg, ev.out, ev.ok()),
 				runIntentKeyCheck(cfg, ev.out, ev.ok()),
 			}
@@ -68,26 +69,26 @@ func providersReadinessAxes(cfg *config.Config, ev sbxKeyEvidence) map[Axis]axis
 // absence silently degrades a session (recall, knowledge). Everything else —
 // ollama, models, pack, gworkspace, per-server MCP — belongs to `pix
 // doctor`, which is the command whose job is to be thorough.
-var fastReadinessAxes = []Axis{axisProviders, axisServiceMemory, axisServiceKnowledge}
+var fastReadinessAxes = []readiness.Axis{readiness.AxisProviders, readiness.AxisServiceMemory, readiness.AxisServiceKnowledge}
 
 // fastReadinessSnapshot builds the shared fast snapshot from evidence the
 // caller already has. The service axes are identity-verified (never a bare
 // dial), and both are lazy: a disabled service costs one dial, an enabled and
 // running one costs a local JSON-RPC round trip.
-func fastReadinessSnapshot(cfg *config.Config, env shellEnv, ev sbxKeyEvidence) Snapshot {
+func fastReadinessSnapshot(cfg *config.Config, env shellEnv, ev sbxKeyEvidence) readiness.Snapshot {
 	builders := providersReadinessAxes(cfg, ev)
 	for a, b := range serviceReadinessAxes(env, enabled(cfg, "memory"), enabled(cfg, "knowledge"), env.IdentityProbe) {
 		builders[a] = b
 	}
-	return buildSnapshot(Request{Axes: fastReadinessAxes}, builders)
+	return readiness.Build(readiness.Request{Axes: fastReadinessAxes}, builders)
 }
 
 // axisReady reports whether a BUILT axis is verified ready. An axis that was
 // never requested (absent from the snapshot) is never ready: a renderer must
 // not turn "nobody probed this" into a green row.
-func axisReady(s Snapshot, a Axis) bool {
+func axisReady(s readiness.Snapshot, a readiness.Axis) bool {
 	_, v, ok := s.AxisVerdict(a)
-	return ok && v == verdictReady
+	return ok && v == readiness.VerdictReady
 }
 
 // launchWarningLimit is how many readiness rows `pix run` may print
@@ -100,13 +101,13 @@ const launchWarningLimit = 3
 // non-note check that is not verified ready, worst first (verified failures
 // before "can't check from here") and stable within a rank so the same host
 // renders the same order twice.
-func readinessWarnings(s Snapshot) []check {
-	var failed, unverifiable []check
+func readinessWarnings(s readiness.Snapshot) []readiness.Check {
+	var failed, unverifiable []readiness.Check
 	for _, c := range s.All() {
-		if c.note || c.result() == verdictReady {
+		if c.Note || c.Result() == readiness.VerdictReady {
 			continue
 		}
-		if c.result() == verdictUnverifiable {
+		if c.Result() == readiness.VerdictUnverifiable {
 			unverifiable = append(unverifiable, c)
 			continue
 		}
@@ -116,12 +117,12 @@ func readinessWarnings(s Snapshot) []check {
 }
 
 // renderReadinessWarnings prints at most limit warning rows to w through the
-// shared vocabulary (checkGlyph/checkWord — a fast surface never spells a
+// shared vocabulary (glyph/word — a fast surface never spells a
 // glyph or a verdict word itself), then a single "N more" pointer at doctor.
 // It returns the TOTAL number of warnings, not the number printed, so a caller
 // can report the true tally. It never blocks and never exits: the only thing
 // that stops a launch is the provider-key gate in run.go.
-func renderReadinessWarnings(w io.Writer, s Snapshot, limit int) int {
+func renderReadinessWarnings(w io.Writer, s readiness.Snapshot, limit int) int {
 	rows := readinessWarnings(s)
 	if len(rows) == 0 {
 		return 0
@@ -131,16 +132,16 @@ func renderReadinessWarnings(w io.Writer, s Snapshot, limit int) int {
 		shown = rows[:limit]
 	}
 	for _, c := range shown {
-		fmt.Fprintf(w, "  %s %s: %s (%s)\n", checkGlyph(c), c.label, checkWord(c), c.evidenceString())
+		fmt.Fprintf(w, "  %s %s: %s (%s)\n", readiness.Glyph(c), c.Label, readiness.Word(c), c.EvidenceString())
 		// A verified failure always carries its exact repair command; an
 		// unverifiable row never does (we do not know there is anything to
 		// repair, so a command here would be a guess).
-		if v := c.result(); (v == verdictTodo || v == verdictDenied) && c.todo != "" {
-			fmt.Fprintf(w, "      fix: %s\n", c.todo)
+		if v := c.Result(); (v == readiness.VerdictTodo || v == readiness.VerdictDenied) && c.Todo != "" {
+			fmt.Fprintf(w, "      fix: %s\n", c.Todo)
 		}
 	}
 	if n := len(rows) - len(shown); n > 0 {
-		fmt.Fprintf(w, "  (%d more: run `%s`)\n", n, readinessFooter("run", s))
+		fmt.Fprintf(w, "  (%d more: run `%s`)\n", n, readiness.Footer("run", s))
 	}
 	return len(rows)
 }

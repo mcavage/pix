@@ -44,6 +44,7 @@ import (
 	"net/url"
 	"os/exec"
 	"path/filepath"
+	"pix/host/readiness"
 	"runtime"
 	"strconv"
 	"strings"
@@ -788,27 +789,27 @@ func slackOAuthRuntime(cfg *config.Config, env shellEnv, deps slackOAuthRuntimeD
 // (pix slack auth). Seven days or fewer remaining is a non-blocking warning
 // — still reported ready, called out so it is not missed until it actually
 // breaks.
-func slackOAuthGrantExpiryCheck(cfg *config.Config, now time.Time) check {
+func slackOAuthGrantExpiryCheck(cfg *config.Config, now time.Time) readiness.Check {
 	exp := cfg.Slack.OAuthGrantExpiresAt
 	if exp.IsZero() {
-		return check{label: "grant expiry", verdict: verdictUnverifiable,
-			detail: "no cached grant expiry recorded (set by pix slack setup)"}
+		return readiness.Check{Label: "grant expiry", Verdict: readiness.VerdictUnverifiable,
+			Detail: "no cached grant expiry recorded (set by pix slack setup)"}
 	}
 	remaining := exp.Sub(now)
 	if remaining <= 0 {
 		agoDays := int((-remaining).Hours() / 24)
-		return check{label: "grant expiry", verdict: verdictTodo,
-			detail: fmt.Sprintf("OAuth grant expired %s ago", plural(agoDays, "day")),
-			todo:   "pix slack auth"}
+		return readiness.Check{Label: "grant expiry", Verdict: readiness.VerdictTodo,
+			Detail: fmt.Sprintf("OAuth grant expired %s ago", plural(agoDays, "day")),
+			Todo:   "pix slack auth"}
 	}
 	days := int(remaining.Hours() / 24)
 	if remaining <= slackOAuthGrantExpiryWarning {
-		return check{label: "grant expiry", verdict: verdictReady,
-			detail: fmt.Sprintf("\u26a0 expires in %s — renew soon", plural(days, "day")),
-			todo:   "pix slack auth (reauthorize before it expires)"}
+		return readiness.Check{Label: "grant expiry", Verdict: readiness.VerdictReady,
+			Detail: fmt.Sprintf("\u26a0 expires in %s — renew soon", plural(days, "day")),
+			Todo:   "pix slack auth (reauthorize before it expires)"}
 	}
-	return check{label: "grant expiry", verdict: verdictReady,
-		detail: fmt.Sprintf("expires in %s", plural(days, "day"))}
+	return readiness.Check{Label: "grant expiry", Verdict: readiness.VerdictReady,
+		Detail: fmt.Sprintf("expires in %s", plural(days, "day"))}
 }
 
 // slackOAuthAccessChecks obtains a live access token through mgr (reading,
@@ -820,53 +821,53 @@ func slackOAuthGrantExpiryCheck(cfg *config.Config, now time.Time) check {
 // (slackoauth.ErrGrantExpired — nothing else can be done from here but
 // re-authorize); any other read/refresh failure is unverifiable, since it
 // may be a transient 1Password/network problem rather than a proven gap.
-func slackOAuthAccessChecks(env shellEnv, mgr *slackoauth.Manager, pinTeam, pinUser string) []check {
-	var checks []check
+func slackOAuthAccessChecks(env shellEnv, mgr *slackoauth.Manager, pinTeam, pinUser string) []readiness.Check {
+	var checks []readiness.Check
 	ctx, cancel := context.WithTimeout(context.Background(), slackOAuthRuntimeTimeout)
 	defer cancel()
 	tok, err := mgr.Token(ctx)
 	if err != nil {
-		v := verdictUnverifiable
+		v := readiness.VerdictUnverifiable
 		todo := ""
 		if errors.Is(err, slackoauth.ErrGrantExpired) {
-			v, todo = verdictTodo, "pix slack auth"
+			v, todo = readiness.VerdictTodo, "pix slack auth"
 		}
-		checks = append(checks, check{label: "access", verdict: v,
-			detail: "could not obtain a valid OAuth access token: " + err.Error(), todo: todo})
-		checks = append(checks, check{label: "identity", verdict: verdictUnverifiable,
-			detail: "cannot verify live identity (no access token available)"})
+		checks = append(checks, readiness.Check{Label: "access", Verdict: v,
+			Detail: "could not obtain a valid OAuth access token: " + err.Error(), Todo: todo})
+		checks = append(checks, readiness.Check{Label: "identity", Verdict: readiness.VerdictUnverifiable,
+			Detail: "cannot verify live identity (no access token available)"})
 		return checks
 	}
-	checks = append(checks, check{label: "access", verdict: verdictReady,
-		detail: "obtained a valid OAuth access token from 1Password"})
+	checks = append(checks, readiness.Check{Label: "access", Verdict: readiness.VerdictReady,
+		Detail: "obtained a valid OAuth access token from 1Password"})
 
 	if env.SlackAuth == nil {
-		checks = append(checks, check{label: "identity", verdict: verdictUnverifiable,
-			detail: "cannot verify live identity (no auth.test probe wired here)"})
+		checks = append(checks, readiness.Check{Label: "identity", Verdict: readiness.VerdictUnverifiable,
+			Detail: "cannot verify live identity (no auth.test probe wired here)"})
 		return checks
 	}
 	id, aerr := env.SlackAuth(tok)
 	if aerr != nil {
-		checks = append(checks, check{label: "identity", verdict: verdictTodo,
-			detail: "auth.test failed: " + aerr.Error(), todo: "pix slack auth"})
+		checks = append(checks, readiness.Check{Label: "identity", Verdict: readiness.VerdictTodo,
+			Detail: "auth.test failed: " + aerr.Error(), Todo: "pix slack auth"})
 		return checks
 	}
-	checks = append(checks, check{label: "identity", verdict: verdictReady,
-		detail: fmt.Sprintf("%s (user %s) on %s (%s)", id.User, id.UserID, id.Team, id.TeamID)})
+	checks = append(checks, readiness.Check{Label: "identity", Verdict: readiness.VerdictReady,
+		Detail: fmt.Sprintf("%s (user %s) on %s (%s)", id.User, id.UserID, id.Team, id.TeamID)})
 
 	switch {
 	case pinTeam == "" && pinUser == "":
-		checks = append(checks, check{label: "identity pin", note: true, verdict: verdictUnverifiable,
-			detail: "no SLACK_TEAM_ID/SLACK_USER_ID pin recorded yet (set by pix slack auth/setup)"})
+		checks = append(checks, readiness.Check{Label: "identity pin", Note: true, Verdict: readiness.VerdictUnverifiable,
+			Detail: "no SLACK_TEAM_ID/SLACK_USER_ID pin recorded yet (set by pix slack auth/setup)"})
 	case pinTeam == id.TeamID && pinUser == id.UserID:
-		checks = append(checks, check{label: "identity pin", verdict: verdictReady,
-			detail: "matches the identity pinned at setup"})
+		checks = append(checks, readiness.Check{Label: "identity pin", Verdict: readiness.VerdictReady,
+			Detail: "matches the identity pinned at setup"})
 	default:
-		checks = append(checks, check{label: "identity pin", verdict: verdictTodo,
-			detail: fmt.Sprintf("live identity (team %s / user %s) does not match the pin (team %s / user %s) — "+
+		checks = append(checks, readiness.Check{Label: "identity pin", Verdict: readiness.VerdictTodo,
+			Detail: fmt.Sprintf("live identity (team %s / user %s) does not match the pin (team %s / user %s) — "+
 				"the token was likely swapped; run pix slack auth if this is expected",
 				id.TeamID, id.UserID, pinTeam, pinUser),
-			todo: "pix slack auth"})
+			Todo: "pix slack auth"})
 	}
 	return checks
 }
@@ -877,18 +878,18 @@ func slackOAuthAccessChecks(env shellEnv, mgr *slackoauth.Manager, pinTeam, pinU
 // manager the MCP server uses) live access + identity + identity-pin checks.
 // It never reads or reports SLACK_TOKEN — that variable plays no role in
 // this mode.
-func slackOAuthStatusChecks(cfg *config.Config, env shellEnv, now time.Time) []check {
-	var checks []check
-	checks = append(checks, check{label: "mode", verdict: verdictReady,
-		detail: "OAuth (rotating PKCE credential in 1Password)"})
-	checks = append(checks, check{label: "1Password doc", verdict: verdictReady,
-		detail: fmt.Sprintf("vault %s, document %s", cfg.Slack.OAuthVaultID, cfg.Slack.OAuthDocumentID)})
+func slackOAuthStatusChecks(cfg *config.Config, env shellEnv, now time.Time) []readiness.Check {
+	var checks []readiness.Check
+	checks = append(checks, readiness.Check{Label: "mode", Verdict: readiness.VerdictReady,
+		Detail: "OAuth (rotating PKCE credential in 1Password)"})
+	checks = append(checks, readiness.Check{Label: "1Password doc", Verdict: readiness.VerdictReady,
+		Detail: fmt.Sprintf("vault %s, document %s", cfg.Slack.OAuthVaultID, cfg.Slack.OAuthDocumentID)})
 	checks = append(checks, slackOAuthGrantExpiryCheck(cfg, now))
 
 	mgr, _, ok := slackOAuthRuntime(cfg, env, slackOAuthRuntimeDepsFn())
 	if !ok {
-		checks = append(checks, check{label: "access", verdict: verdictUnverifiable,
-			detail: "could not build the OAuth runtime source (the shared 1Password-credential lock's state directory could not be resolved)"})
+		checks = append(checks, readiness.Check{Label: "access", Verdict: readiness.VerdictUnverifiable,
+			Detail: "could not build the OAuth runtime source (the shared 1Password-credential lock's state directory could not be resolved)"})
 		return checks
 	}
 	_, content, _ := opRefsContent(env)

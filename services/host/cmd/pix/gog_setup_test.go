@@ -33,7 +33,7 @@ Available Commands:
   add          add an authorized account
   credentials  register an OAuth Desktop client
   doctor       diagnose auth health
-  status       report auth status
+  status       readiness.Report auth status
 `
 
 // gogAuthHelpLegacy mirrors the OLDER repo docs' surface: add-client + login,
@@ -44,7 +44,7 @@ Available Commands:
   add-client   register an OAuth Desktop client
   doctor       diagnose auth health
   login        authorize an account interactively
-  status       report auth status
+  status       readiness.Report auth status
 `
 
 // gogAuthHelpUnsupported has none of the known subcommand surfaces.
@@ -52,7 +52,7 @@ const gogAuthHelpUnsupported = `Manage gog authorization.
 
 Available Commands:
   doctor       diagnose auth health
-  status       report auth status
+  status       readiness.Report auth status
 `
 
 // The following are the SUBCOMMAND-level `gog auth <verb> --help` outputs

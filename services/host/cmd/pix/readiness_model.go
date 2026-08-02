@@ -1,6 +1,8 @@
 package main
 
-// modelreadiness.go is the SHARED, presentation-free local-model readiness
+import "pix/host/readiness"
+
+// modelgo is the SHARED, presentation-free local-model readiness
 // vocabulary. `pix doctor` (doctor_ollama.go) derives every per-model
 // (watcher/embed/bridge) check from ONE ollamaProbe + modelReadiness, and a
 // future `pix setup` receipt (S08) consumes the SAME seam — so the two
@@ -44,7 +46,7 @@ func probeOllamaAt(env shellEnv, ep ollamaEndpoint) ollamaProbe {
 // ModelReadiness is the pure, presentation-free readiness of ONE configured
 // Ollama model tag, evaluated against a shared ollamaProbe. It carries the
 // same requirement/verdict axes every other doctor check does
-// (doctor_readiness.go) so a caller never has to invent a parallel vocabulary
+// (doctor_go) so a caller never has to invent a parallel vocabulary
 // for local models. Installed=false means Ollama itself isn't on PATH: the
 // model is NOT CONFIGURED (an expected absence, a note) rather than any
 // verdict about the tag — and it must never enter the missing OR unverifiable
@@ -53,17 +55,17 @@ type ModelReadiness struct {
 	Role        string // "watcher" | "embed" | "bridge"
 	Model       string // configured tag, e.g. "qwen3.5:9b"
 	Purpose     string // short human purpose, e.g. "fact capture (memory watcher)"
-	Requirement requirement
-	Verdict     verdict // meaningful only when Installed
-	Installed   bool    // ollama on PATH; false => not-configured, no verdict claimed
-	PullCmd     string  // "ollama pull <tag>" — always populated, even when healthy
+	Requirement readiness.Requirement
+	Verdict     readiness.Verdict // meaningful only when Installed
+	Installed   bool              // ollama on PATH; false => not-configured, no verdict claimed
+	PullCmd     string            // "ollama pull <tag>" — always populated, even when healthy
 }
 
 // modelReadiness evaluates one (role, model) pair against p. req is supplied
 // by the CALLER — doctor's Ollama group weighs it by whether configured roles
 // (the memory service) actually depend on local models; a setup receipt may
 // legitimately pass a different requirement for the same model.
-func modelReadiness(role, model, purpose string, p ollamaProbe, req requirement) ModelReadiness {
+func modelReadiness(role, model, purpose string, p ollamaProbe, req readiness.Requirement) ModelReadiness {
 	m := ModelReadiness{
 		Role: role, Model: model, Purpose: purpose,
 		Requirement: req, Installed: p.installed,
@@ -75,18 +77,18 @@ func modelReadiness(role, model, purpose string, p ollamaProbe, req requirement)
 		// the framework reads fail-safe (unverifiable) if anyone consults it —
 		// but Installed=false is the authoritative signal.
 	case model != "" && !isValidOllamaTag(model):
-		m.Verdict = verdictUnverifiable
+		m.Verdict = readiness.VerdictUnverifiable
 	case p.listOK && modelPulled(p.listOut, model):
-		m.Verdict = verdictReady
+		m.Verdict = readiness.VerdictReady
 	case p.listOK:
 		// `ollama list` ran fine and simply does not list this tag — a
 		// CONFIRMED gap, not a guess.
-		m.Verdict = verdictTodo
+		m.Verdict = readiness.VerdictTodo
 	default:
 		// ollama is on PATH but `ollama list` itself did not succeed (e.g. the
 		// daemon isn't reachable) — this could not be verified one way or the
 		// other, which is different from a confirmed "not pulled".
-		m.Verdict = verdictUnverifiable
+		m.Verdict = readiness.VerdictUnverifiable
 	}
 	return m
 }
@@ -106,7 +108,7 @@ type missingModel struct {
 // order. Not-installed (not-configured) entries never match anything. Shared
 // by computeMissingModels and computeUnverifiableModels so the two never
 // drift into different dedup/order behavior.
-func filterModelsByVerdict(readinesses []ModelReadiness, match func(verdict) bool) []missingModel {
+func filterModelsByVerdict(readinesses []ModelReadiness, match func(readiness.Verdict) bool) []missingModel {
 	var out []missingModel
 	index := make(map[string]int, len(readinesses))
 	for _, m := range readinesses {
@@ -124,15 +126,15 @@ func filterModelsByVerdict(readinesses []ModelReadiness, match func(verdict) boo
 }
 
 // computeMissingModels reduces a set of ModelReadiness to the distinct tags
-// that are CONFIRMED missing (verdictTodo only — `ollama list` ran fine and
-// simply does not list the tag). verdictUnverifiable must NEVER enter this
+// that are CONFIRMED missing (readiness.VerdictTodo only — `ollama list` ran fine and
+// simply does not list the tag). readiness.VerdictUnverifiable must NEVER enter this
 // set — a stopped daemon or a failed `ollama list` proves nothing about
 // whether the tag is actually pulled, so treating it as "missing" would
 // contradict the evidence and could force-repull an already-installed model.
 // See computeUnverifiableModels for the disjoint unverifiable set. Nothing
 // here pulls anything: callers only surface the PullCmd for the user to act on.
 func computeMissingModels(readinesses []ModelReadiness) []missingModel {
-	return filterModelsByVerdict(readinesses, func(v verdict) bool { return v == verdictTodo })
+	return filterModelsByVerdict(readinesses, func(v readiness.Verdict) bool { return v == readiness.VerdictTodo })
 }
 
 // computeUnverifiableModels reduces a set of ModelReadiness to the distinct
@@ -142,7 +144,7 @@ func computeMissingModels(readinesses []ModelReadiness) []missingModel {
 // "missing" — only receipted with an accurate diagnostic of why they
 // couldn't be checked.
 func computeUnverifiableModels(readinesses []ModelReadiness) []missingModel {
-	return filterModelsByVerdict(readinesses, func(v verdict) bool { return v == verdictUnverifiable })
+	return filterModelsByVerdict(readinesses, func(v readiness.Verdict) bool { return v == readiness.VerdictUnverifiable })
 }
 
 // ollamaVerifyFailureReason names WHY a model tag could not be verified, so a

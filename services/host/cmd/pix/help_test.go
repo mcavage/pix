@@ -337,8 +337,8 @@ func TestDoctorJSONView(t *testing.T) {
 	}
 	cfg := defaultCfg()
 	r := runDoctor(cfg, f.env())
-	r.services, r.mcp = cfg.Services, cfg.MCP
-	v := r.jsonView("default")
+	r.Services, r.MCP = cfg.Services, cfg.MCP
+	v := jsonView(r, "default")
 
 	// Serialize through writeJSONOut (the same path `doctor --json` uses) and parse.
 	var buf bytes.Buffer
@@ -399,8 +399,8 @@ func TestDoctorJSONView(t *testing.T) {
 		}
 	}
 	// The parsed todos match the report's own todos() (serialization preserved them).
-	if strings.Join(got.Todos, "\n") != strings.Join(r.todos(), "\n") {
-		t.Errorf("serialized todos %v != report todos %v", got.Todos, r.todos())
+	if strings.Join(got.Todos, "\n") != strings.Join(r.Todos(), "\n") {
+		t.Errorf("serialized todos %v != report todos %v", got.Todos, r.Todos())
 	}
 }
 

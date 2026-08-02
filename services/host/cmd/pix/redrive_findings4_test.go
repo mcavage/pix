@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/readiness"
 	"pix/host/sys/systest"
 	"pix/host/workspace"
 )
@@ -254,7 +255,7 @@ func TestDoctorContextResolvesCustomSandboxName(t *testing.T) {
 	cfg.MCP = []string{"slack"}
 	g := mcpGroupWith(cfg, env, "slack\n", true, true, nil, ctx)
 	c := findCheck(t, g, "slack attachment")
-	if c.result() != verdictReady || !strings.Contains(c.detail, "pix-demo") {
+	if c.Result() != readiness.VerdictReady || !strings.Contains(c.Detail, "pix-demo") {
 		t.Fatalf("attachment = %+v, want ready on the custom-named sandbox", c)
 	}
 }
@@ -282,7 +283,7 @@ func TestDoctorContextAmbiguousMappingIsUnverifiable(t *testing.T) {
 		t.Fatalf("an ambiguous mapping must never emit a per-sandbox attachment check: %+v", g)
 	}
 	note := findCheck(t, g, "attachment")
-	if note.result() != verdictUnverifiable || !strings.Contains(note.detail, "mapping unresolvable") {
+	if note.Result() != readiness.VerdictUnverifiable || !strings.Contains(note.Detail, "mapping unresolvable") {
 		t.Fatalf("attachment note = %+v, want unverifiable naming the mapping problem", note)
 	}
 }
@@ -310,27 +311,27 @@ func TestGogAttachCheckUsesReceiptJoin(t *testing.T) {
 		// gog is intent, not attachment — a verified optional TODO with the
 		// exact live-attach command.
 		c := gogAttachCheck(cfg, receiptCtx(t, []string{"slack"}), mcpRegYes)
-		if c.result() != verdictTodo {
+		if c.Result() != readiness.VerdictTodo {
 			t.Fatalf("check = %+v, want a verified registered-not-attached todo", c)
 		}
-		if want := "pix mcp load google-workspace " + ws; c.todo != want {
-			t.Fatalf("todo = %q, want %q", c.todo, want)
+		if want := "pix mcp load google-workspace " + ws; c.Todo != want {
+			t.Fatalf("todo = %q, want %q", c.Todo, want)
 		}
 	})
 
 	t.Run("receipted preload -> ready", func(t *testing.T) {
 		c := gogAttachCheck(cfg, receiptCtx(t, []string{gwServerName}), mcpRegYes)
-		if c.result() != verdictReady || !strings.Contains(c.detail, "preloaded by pix at create") {
+		if c.Result() != readiness.VerdictReady || !strings.Contains(c.Detail, "preloaded by pix at create") {
 			t.Fatalf("check = %+v, want ready from the receipt's preload claim", c)
 		}
 	})
 
 	t.Run("no sandbox context -> config membership is intent, never ready", func(t *testing.T) {
 		c := gogAttachCheck(cfg, noCtx, mcpRegYes)
-		if c.result() == verdictReady {
+		if c.Result() == readiness.VerdictReady {
 			t.Fatalf("check = %+v — config membership alone must never render ready", c)
 		}
-		if !c.note || !strings.Contains(c.detail, "intent") {
+		if !c.Note || !strings.Contains(c.Detail, "intent") {
 			t.Fatalf("check = %+v, want an intent-labeled note", c)
 		}
 	})

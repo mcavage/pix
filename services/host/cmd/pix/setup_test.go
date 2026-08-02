@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/readiness"
 	"pix/host/sys/systest"
 )
 
@@ -315,7 +316,7 @@ func TestHostStateHostReadiness(t *testing.T) {
 	// In this test env host mode is not provisioned, so Ready must be false even
 	// though Enabled is true (the exact enabled!=ready bug).
 	if hs.Host.Ready && !hs.Host.Provisioned {
-		t.Error("Ready must be false when not provisioned")
+		t.Error("ready must be false when not provisioned")
 	}
 }
 
@@ -855,7 +856,7 @@ func TestSetupPhases_NumberedHeadersInFixedOrder(t *testing.T) {
 	// The header must precede the work: the report's first verdict line can
 	// only appear AFTER the report header.
 	if strings.Index(got, "[7/8] report") > strings.Index(got, "Setup summary:") {
-		t.Errorf("the report header must be printed before the report, got:\n%s", got)
+		t.Errorf("the report header must be printed before the readiness.Report, got:\n%s", got)
 	}
 }
 
@@ -894,8 +895,8 @@ func TestSetupMutationOrder_FixedRiskiestLast(t *testing.T) {
 func TestSetupMutations_StubbedToFail_PrintNoSuccessGlyph(t *testing.T) {
 	var out bytes.Buffer
 	steps := []setupMutationStep{
-		{name: "keys", axes: []Axis{axisProviders}, run: func() error { return fmt.Errorf("boom") }},
-		{name: "pack", axes: []Axis{axisPack}, run: func() error { return fmt.Errorf("boom") }},
+		{name: "keys", axes: []readiness.Axis{readiness.AxisProviders}, run: func() error { return fmt.Errorf("boom") }},
+		{name: "pack", axes: []readiness.Axis{readiness.AxisPack}, run: func() error { return fmt.Errorf("boom") }},
 	}
 	for _, s := range steps {
 		_ = s.run()

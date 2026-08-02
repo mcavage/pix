@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"pix/host/readiness"
 
 	"pix/host/config"
 )
@@ -17,31 +18,31 @@ import (
 // literal WITHOUT ever printing its value. op sign-in is advisory (never a
 // standalone green); the confirmed "creds actually resolve" proof stays the gog
 // group's headless op-run probe.
-func secretsGroup(cfg *config.Config, env shellEnv) group {
-	g := group{title: "Secrets (1Password, host MCP creds via op-refs.env)"}
+func secretsGroup(cfg *config.Config, env shellEnv) readiness.Group {
+	g := readiness.Group{Title: "Secrets (1Password, host MCP creds via op-refs.env)"}
 
 	if !anyOpWrappedServer(cfg) {
 		// Positive info: verified there is nothing 1Password-dependent configured,
 		// so there is genuinely nothing to set up here.
-		g.checks = append(g.checks, check{label: "1Password", note: true, verdict: verdictReady,
-			detail: "no credentialed host MCP servers configured — 1Password not needed"})
+		g.Checks = append(g.Checks, readiness.Check{Label: "1Password", Note: true, Verdict: readiness.VerdictReady,
+			Detail: "no credentialed host MCP servers configured — 1Password not needed"})
 		return g
 	}
 
 	// op installed? (advisory sign-in only when installed — never a blocker).
 	if opInstalled(env) {
-		g.checks = append(g.checks, check{label: "op CLI", verdict: verdictReady, detail: "installed"})
+		g.Checks = append(g.Checks, readiness.Check{Label: "op CLI", Verdict: readiness.VerdictReady, Detail: "installed"})
 		if opSignedIn(env) {
-			g.checks = append(g.checks, check{label: "account configured", verdict: verdictReady,
-				detail: "op account list ok (advisory — not a proof of an unlocked session)"})
+			g.Checks = append(g.Checks, readiness.Check{Label: "account configured", Verdict: readiness.VerdictReady,
+				Detail: "op account list ok (advisory — not a proof of an unlocked session)"})
 		} else {
-			g.checks = append(g.checks, check{label: "account configured", note: true, verdict: verdictUnverifiable,
-				detail: "no account configured (advisory) — run: op signin"})
+			g.Checks = append(g.Checks, readiness.Check{Label: "account configured", Note: true, Verdict: readiness.VerdictUnverifiable,
+				Detail: "no account configured (advisory) — run: op signin"})
 		}
 	} else {
-		g.checks = append(g.checks, check{label: "op CLI", verdict: verdictTodo,
-			detail: "not installed",
-			todo:   "install the 1Password CLI (op) — https://developer.1password.com/docs/cli"})
+		g.Checks = append(g.Checks, readiness.Check{Label: "op CLI", Verdict: readiness.VerdictTodo,
+			Detail: "not installed",
+			Todo:   "install the 1Password CLI (op) — https://developer.1password.com/docs/cli"})
 	}
 
 	// op-refs.env present at the absolute XDG path?
@@ -51,53 +52,53 @@ func secretsGroup(cfg *config.Config, env shellEnv) group {
 		content, exists = c, true
 	}
 	if !exists {
-		g.checks = append(g.checks, check{label: "op-refs.env", verdict: verdictTodo,
-			detail: "not present at " + path,
-			todo:   "pix secret set <ENV_VAR> op://vault/item/field"})
+		g.Checks = append(g.Checks, readiness.Check{Label: "op-refs.env", Verdict: readiness.VerdictTodo,
+			Detail: "not present at " + path,
+			Todo:   "pix secret set <ENV_VAR> op://vault/item/field"})
 		return g
 	}
-	g.checks = append(g.checks, check{label: "op-refs.env", note: true, verdict: verdictReady, detail: path})
+	g.Checks = append(g.Checks, readiness.Check{Label: "op-refs.env", Note: true, Verdict: readiness.VerdictReady, Detail: path})
 
 	// Perms: the file AND its dir must not be group/other-accessible.
 	if m, ok := env.Mode(path); ok && m.Perm()&0o077 != 0 {
-		g.checks = append(g.checks, check{label: "perms", verdict: verdictTodo,
-			detail: fmt.Sprintf("op-refs.env is %04o — group/other accessible", m.Perm()),
-			todo:   "chmod 600 " + path})
+		g.Checks = append(g.Checks, readiness.Check{Label: "perms", Verdict: readiness.VerdictTodo,
+			Detail: fmt.Sprintf("op-refs.env is %04o — group/other accessible", m.Perm()),
+			Todo:   "chmod 600 " + path})
 	}
 	dir := filepath.Dir(path)
 	if m, ok := env.Mode(dir); ok && m.Perm()&0o077 != 0 {
-		g.checks = append(g.checks, check{label: "dir perms", verdict: verdictTodo,
-			detail: fmt.Sprintf("%s is %04o — group/other accessible", dir, m.Perm()),
-			todo:   "chmod 700 " + dir})
+		g.Checks = append(g.Checks, readiness.Check{Label: "dir perms", Verdict: readiness.VerdictTodo,
+			Detail: fmt.Sprintf("%s is %04o — group/other accessible", dir, m.Perm()),
+			Todo:   "chmod 700 " + dir})
 	}
 
 	// Per-ref: filled vs placeholder, plus the refs-only lint. NEVER print a value.
 	for _, rf := range parseOpRefs(content) {
 		switch {
 		case rf.nonSecret:
-			g.checks = append(g.checks, check{label: rf.key, note: true, verdict: verdictReady, detail: "non-secret env (allowed literal)"})
+			g.Checks = append(g.Checks, readiness.Check{Label: rf.key, Note: true, Verdict: readiness.VerdictReady, Detail: "non-secret env (allowed literal)"})
 		case rf.isRef && rf.placeholder:
-			g.checks = append(g.checks, check{label: rf.key, verdict: verdictTodo,
-				detail: "unfilled placeholder — set the op:// ref",
-				todo:   "pix secret set <ENV_VAR> op://vault/item/field"})
+			g.Checks = append(g.Checks, readiness.Check{Label: rf.key, Verdict: readiness.VerdictTodo,
+				Detail: "unfilled placeholder — set the op:// ref",
+				Todo:   "pix secret set <ENV_VAR> op://vault/item/field"})
 		case rf.isRef:
-			g.checks = append(g.checks, check{label: rf.key, verdict: verdictReady, detail: "op:// ref filled"})
+			g.Checks = append(g.Checks, readiness.Check{Label: rf.key, Verdict: readiness.VerdictReady, Detail: "op:// ref filled"})
 		case rf.placeholder:
 			// A non-ref value still carrying an unfilled <...> placeholder.
-			g.checks = append(g.checks, check{label: rf.key, verdict: verdictTodo,
-				detail: "unfilled placeholder — set the op:// ref",
-				todo:   "pix secret set <ENV_VAR> op://vault/item/field"})
+			g.Checks = append(g.Checks, readiness.Check{Label: rf.key, Verdict: readiness.VerdictTodo,
+				Detail: "unfilled placeholder — set the op:// ref",
+				Todo:   "pix secret set <ENV_VAR> op://vault/item/field"})
 		case looksSecretShaped(rf.key, rf.value):
 			// MEDIUM finding — a pasted secret. NEVER echo the value.
-			g.checks = append(g.checks, check{label: rf.key, verdict: verdictTodo,
-				detail: "possible pasted secret — replace with op://vault/item/field",
-				todo:   "pix secret set <ENV_VAR> op://vault/item/field"})
+			g.Checks = append(g.Checks, readiness.Check{Label: rf.key, Verdict: readiness.VerdictTodo,
+				Detail: "possible pasted secret — replace with op://vault/item/field",
+				Todo:   "pix secret set <ENV_VAR> op://vault/item/field"})
 		default:
 			// Refs-only policy: ANY other non-ref, non-allowlisted value is flagged.
 			// NEVER echo the value.
-			g.checks = append(g.checks, check{label: rf.key, verdict: verdictTodo,
-				detail: "not an op:// ref — this file is refs-only; use op://vault/item/field or move it to the non-secret allowlist",
-				todo:   "pix secret set <ENV_VAR> op://vault/item/field"})
+			g.Checks = append(g.Checks, readiness.Check{Label: rf.key, Verdict: readiness.VerdictTodo,
+				Detail: "not an op:// ref — this file is refs-only; use op://vault/item/field or move it to the non-secret allowlist",
+				Todo:   "pix secret set <ENV_VAR> op://vault/item/field"})
 		}
 	}
 	return g

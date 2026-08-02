@@ -110,7 +110,7 @@ func TestSnapshotGogCredentials_SourceSwapDoesNotAffectSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Snapshot must remain unchanged
+	// snapshot must remain unchanged
 	snapContent, err := os.ReadFile(snapPath)
 	if err != nil {
 		t.Fatalf("reading snapshot: %v", err)

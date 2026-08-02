@@ -1,6 +1,6 @@
 // setup_models.go — S08: `pix setup`'s local-model readiness step + the
 // completion summary, built on the SHARED ModelReadiness seam
-// (modelreadiness.go) so setup and doctor can never disagree about what is
+// (modelgo) so setup and doctor can never disagree about what is
 // pulled.
 //
 // Consent model (the whole point):
@@ -13,7 +13,7 @@
 //     Empty answer and EOF are both No.
 //
 // Evidence model: Ollama is probed ONCE up front (probeOllama); only tags the
-// probe CONFIRMED missing (verdictTodo — `ollama list` ran cleanly and lacks
+// probe CONFIRMED missing (readiness.VerdictTodo — `ollama list` ran cleanly and lacks
 // the tag) are ever offered or pulled. An unverifiable probe (daemon down,
 // list failed) is never "missing" and never pulled — even with --pull-models.
 // After the pulls, ONE verification probe re-checks each pulled tag; a pull
@@ -36,6 +36,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/readiness"
 	"sort"
 	"strings"
 	"time"
@@ -98,9 +99,9 @@ func runOllamaPull(env shellEnv, tag string) error {
 func setupLocalModels(cfg *config.Config, env shellEnv, in io.Reader, out io.Writer, interactive, pullFlag bool) setupModelsOutcome {
 	p := probeOllamaAt(env, effectiveOllamaEndpoint(cfg, env))
 	rs := []ModelReadiness{
-		modelReadiness("watcher", cfg.MemoryWatcherModel, "fact capture", p, requirementOptional),
-		modelReadiness("embed", cfg.MemoryEmbedModel, "semantic recall", p, requirementOptional),
-		modelReadiness("bridge", cfg.OllamaBridgeModel, "sandbox ollama bridge", p, requirementOptional),
+		modelReadiness("watcher", cfg.MemoryWatcherModel, "fact capture", p, readiness.RequirementOptional),
+		modelReadiness("embed", cfg.MemoryEmbedModel, "semantic recall", p, readiness.RequirementOptional),
+		modelReadiness("bridge", cfg.OllamaBridgeModel, "sandbox ollama bridge", p, readiness.RequirementOptional),
 	}
 	o := setupModelsOutcome{installed: p.installed, consent: "none"}
 	seen := map[string]bool{}
@@ -115,7 +116,7 @@ func setupLocalModels(cfg *config.Config, env shellEnv, in io.Reader, out io.Wri
 		// Not configured: optional, nothing claimed, nothing installed by us.
 		return o
 	}
-	o.ready = filterModelsByVerdict(rs, func(v verdict) bool { return v == verdictReady })
+	o.ready = filterModelsByVerdict(rs, func(v readiness.Verdict) bool { return v == readiness.VerdictReady })
 	o.missing = computeMissingModels(rs)
 	o.unverifiable = computeUnverifiableModels(rs)
 	if len(o.unverifiable) > 0 {

@@ -1324,7 +1324,7 @@ func repairStaleLegacyPackStateLocked(newDir, newCanon string) error {
 		return fmt.Errorf("loading pack-trust store for repair: %w", terr)
 	}
 	needCfg := legacyPathIsAmong(cfg.Pack, stale)
-	// Snapshot BEFORE mutating the freshly-loaded trust object, so a later
+	// snapshot BEFORE mutating the freshly-loaded trust object, so a later
 	// cfg-save failure can still roll back an already-persisted trust save.
 	trustSnapshot, serr := snapshotPackTrustStore(trust)
 	if serr != nil {

@@ -9,6 +9,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/inference"
+	"pix/host/readiness"
 	"pix/host/sys/systest"
 )
 
@@ -233,7 +234,7 @@ func TestDirectInferenceProbePromotesBindingsIndependently(t *testing.T) {
 		}
 	}
 	checks := setupProvidersAxis(cfg, shellEnv{System: &systest.Fake{}})
-	if len(checks) != 1 || checks[0].verdict != verdictReady || !strings.Contains(checks[0].detail, "did not pass live verification") {
+	if len(checks) != 1 || checks[0].Verdict != readiness.VerdictReady || !strings.Contains(checks[0].Detail, "did not pass live verification") {
 		t.Fatalf("partial verification summary = %+v", checks)
 	}
 }

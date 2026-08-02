@@ -445,7 +445,7 @@ func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now
 		errs = append(errs, errors.New(msg))
 	}
 
-	// Snapshot the 1Password ref files (op-refs.env, hostmode.env) BEFORE the
+	// snapshot the 1Password ref files (op-refs.env, hostmode.env) BEFORE the
 	// config dir moves aside. They are op:// POINTERS, not secrets — resolvable
 	// only with the user's own 1Password — so re-pasting every one of them after
 	// every reset is pure friction. They stay in the .bak too, so restoring them
@@ -933,7 +933,7 @@ func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts 
 	}
 	if prov.Channel == channelHomebrew {
 		fmt.Fprintln(rio.out, "Binaries and man page are owned by Homebrew, not pix.")
-		fmt.Fprintln(rio.out, "State and managed services were removed first. Finish with:")
+		fmt.Fprintln(rio.out, "state and managed services were removed first. Finish with:")
 		fmt.Fprintln(rio.out, "  brew uninstall mcavage/tap/pix")
 		fmt.Fprintln(rio.out, "Removing the formula first leaves launchd configured with a Cellar path that fails on its next launch.")
 		if rio.isTTY {

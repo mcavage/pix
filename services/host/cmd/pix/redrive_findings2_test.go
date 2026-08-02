@@ -4,7 +4,7 @@ package main
 //   8: setup/onboard never persist a shipped-catalog remote that is not
 //      registered + auth-ready (allowlist derived from mcpCatalogNames);
 //   9: doctor's local MCP probe maps an explicit policy denial to
-//      verdictDenied, and gog registration uses the shared tri-state;
+//      readiness.VerdictDenied, and gog registration uses the shared tri-state;
 //  10: every primary readiness probe (doctor/status/run-preflight sbx calls)
 //      is bounded — a hanging sbx can never wedge a verb;
 //  11: doctor's sbxAbsent means POSITIVELY absent, never a generic probe error;
@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/readiness"
 	"pix/host/sys"
 	"pix/host/sys/systest"
 	"pix/host/workspace"
@@ -235,37 +236,37 @@ func TestMcpLocalCheck_PolicyDeniedVerdict(t *testing.T) {
 		return "", false, fmt.Errorf("no fake probe")
 	}}, HostBinary: func() (string, error) { return hostBin, nil }}
 	c := mcpLocalCheck(env, "slack", "slack\n")
-	if c.result() != verdictDenied {
-		t.Errorf("an explicit policy denial from the local probe must be verdictDenied, got %+v", c)
+	if c.Result() != readiness.VerdictDenied {
+		t.Errorf("an explicit policy denial from the local probe must be readiness.VerdictDenied, got %+v", c)
 	}
 }
 
 func TestGogRegistrationCheck_TriState(t *testing.T) {
 	// Present in a successful listing -> ready.
-	if c := gogRegistrationCheck("google-workspace\nslack\n", true, true); c.result() != verdictReady {
+	if c := gogRegistrationCheck("google-workspace\nslack\n", true, true); c.Result() != readiness.VerdictReady {
 		t.Errorf("registered gog = %+v, want ready", c)
 	}
 	// Positively missing from a successful listing -> verified register TODO.
 	c := gogRegistrationCheck("notion\n", true, true)
-	if c.result() != verdictTodo || c.todo != "pix mcp register" {
+	if c.Result() != readiness.VerdictTodo || c.Todo != "pix mcp register" {
 		t.Errorf("unregistered gog = %+v, want the register todo", c)
 	}
 	// Listing failed with sbx PRESENT -> unverifiable (daemon guidance), and
 	// NEVER a false outstanding item.
 	c = gogRegistrationCheck("", false, true)
-	if c.result() != verdictUnverifiable || c.todo != "" {
+	if c.Result() != readiness.VerdictUnverifiable || c.Todo != "" {
 		t.Errorf("gog with failed listing (sbx present) = %+v, want unverifiable with no todo", c)
 	}
-	if !strings.Contains(c.detail, "sbx daemon") {
-		t.Errorf("sbx-present degrade should point at the daemon, got %q", c.detail)
+	if !strings.Contains(c.Detail, "sbx daemon") {
+		t.Errorf("sbx-present degrade should point at the daemon, got %q", c.Detail)
 	}
 	// sbx absent entirely -> unverifiable in-sandbox degrade, no todo.
 	c = gogRegistrationCheck("", false, false)
-	if c.result() != verdictUnverifiable || c.todo != "" {
+	if c.Result() != readiness.VerdictUnverifiable || c.Todo != "" {
 		t.Errorf("gog with sbx absent = %+v, want unverifiable with no todo", c)
 	}
-	if !strings.Contains(c.detail, "sbx unavailable") {
-		t.Errorf("sbx-absent degrade should say sbx unavailable, got %q", c.detail)
+	if !strings.Contains(c.Detail, "sbx unavailable") {
+		t.Errorf("sbx-absent degrade should say sbx unavailable, got %q", c.Detail)
 	}
 }
 
@@ -381,11 +382,11 @@ func TestRunDoctor_HangingMcpLsUnverifiable(t *testing.T) {
 	if el := time.Since(start); el > 30*time.Second {
 		t.Fatalf("runDoctor took %s with a hanging `sbx mcp ls` — unbounded", el)
 	}
-	if r.sbxAbsent {
+	if r.SbxAbsent {
 		t.Error("sbx is on PATH — a hanging mcp ls must not read as sbx absent")
 	}
-	c := findCheck(t, r.groups[len(r.groups)-1], "slack")
-	if c.result() != verdictUnverifiable {
+	c := findCheck(t, r.Groups[len(r.Groups)-1], "slack")
+	if c.Result() != readiness.VerdictUnverifiable {
 		t.Errorf("hanging mcp ls must render the server unverifiable, got %+v", c)
 	}
 }
@@ -399,27 +400,27 @@ func TestDoctor_SecretLsFailure_IsNotSbxAbsent(t *testing.T) {
 		output:  map[string]string{}, // `sbx secret ls` errors (no canned output)
 	}
 	r := runDoctor(cfg, f.env())
-	if r.sbxAbsent {
+	if r.SbxAbsent {
 		t.Fatal("sbx IS on PATH — a failing `sbx secret ls` must not set sbxAbsent")
 	}
 	// Human rendering: the in-sandbox note must NOT appear.
 	var buf bytes.Buffer
-	r.render(&buf, false)
+	r.Render(&buf, false, doctorHints())
 	if strings.Contains(buf.String(), "sbx not on PATH") {
 		t.Errorf("human output must not claim sbx is off PATH:\n%s", buf.String())
 	}
 	// JSON: sbx_absent false.
-	if r.jsonView("").SbxAbsent {
+	if jsonView(r, "").SbxAbsent {
 		t.Error("JSON sbx_absent must be false when sbx is present but the probe failed")
 	}
 
 	// Converse: sbx genuinely off PATH -> sbxAbsent true, note rendered.
 	absent := runDoctor(cfg, fakeEnv{present: map[string]bool{}}.env())
-	if !absent.sbxAbsent || !absent.jsonView("").SbxAbsent {
+	if !absent.SbxAbsent || !jsonView(absent, "").SbxAbsent {
 		t.Error("sbx off PATH must set sbxAbsent (human + JSON)")
 	}
 	buf.Reset()
-	absent.render(&buf, false)
+	absent.Render(&buf, false, doctorHints())
 	if !strings.Contains(buf.String(), "sbx not on PATH") {
 		t.Errorf("sbx off PATH should render the in-sandbox note:\n%s", buf.String())
 	}
