@@ -3,10 +3,10 @@ package main
 import (
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"pix/host/config"
+	"pix/host/launcher"
 )
 
 // kitRepo is the canonical git-hosted kit source. The launcher pins it to the
@@ -18,19 +18,6 @@ const kitRepo = "git+https://github.com/mcavage/pix.git"
 // loaded tag from <repo>/out/.local-image-tag via --template, mirroring the
 // `make run` target.
 const dockerImageRepo = "docker.io/mcavage/pix"
-
-// releasedVersionRE matches a CLEAN released semver like "0.0.16" — the shape a
-// CI release stamps, for which a matching git tag "v0.0.16" is expected to
-// exist. Anything else (an unstamped "dev" build, a "0.0.16+local" local
-// build, or non-semver) is treated as UNRELEASED, so the launcher never pins a
-// nonexistent v<version> tag.
-var releasedVersionRE = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
-
-// isReleased reports whether version is a clean released semver whose git tag
-// is expected to exist.
-func isReleased(version string) bool {
-	return releasedVersionRE.MatchString(version)
-}
 
 // runOpts carries everything the arg builder needs, resolved by the caller. It
 // is deliberately side-effect-free (no filesystem probing, no token minting) so
@@ -80,7 +67,7 @@ type runOpts struct {
 // (a "dev"/"+local" or non-semver build, whose tag does not exist) tracks
 // "main" instead of pinning a bogus v<version>.
 func kitRef(version string) string {
-	if isReleased(version) {
+	if launcher.IsReleased(version) {
 		return "v" + version
 	}
 	return "main"

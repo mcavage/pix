@@ -1,4 +1,4 @@
-package main
+package upgrade
 
 import (
 	"bytes"
@@ -15,7 +15,7 @@ import (
 func TestRunUpgradeHomebrewNonTTYPrintsAndExits(t *testing.T) {
 	var out bytes.Buffer
 	called := false
-	err := runUpgradeHomebrew(upgradeOpts{}, provenance{Channel: channelHomebrew}, strings.NewReader("yes\n"), &out, false,
+	err := runUpgradeHomebrew(upgradeOpts{}, Provenance{Channel: ChannelHomebrew}, strings.NewReader("yes\n"), &out, false,
 		func(io.Reader, io.Writer) error { called = true; return nil },
 		func() (string, error) { t.Fatal("probe called"); return "", nil },
 	)
@@ -28,7 +28,7 @@ func TestRunUpgradeHomebrewNonTTYPrintsAndExits(t *testing.T) {
 }
 
 func TestRunUpgradeHomebrewForceRefuses(t *testing.T) {
-	err := runUpgradeHomebrew(upgradeOpts{Force: true}, provenance{}, strings.NewReader(""), &bytes.Buffer{}, true,
+	err := runUpgradeHomebrew(upgradeOpts{Force: true}, Provenance{}, strings.NewReader(""), &bytes.Buffer{}, true,
 		func(io.Reader, io.Writer) error { t.Fatal("brew called"); return nil },
 		func() (string, error) { t.Fatal("probe called"); return "", nil },
 	)
@@ -38,7 +38,7 @@ func TestRunUpgradeHomebrewForceRefuses(t *testing.T) {
 }
 
 func TestRunUpgradeHomebrewVersionFlagRefuses(t *testing.T) {
-	err := runUpgradeHomebrew(upgradeOpts{Version: "0.1.7"}, provenance{}, strings.NewReader(""), &bytes.Buffer{}, true,
+	err := runUpgradeHomebrew(upgradeOpts{Version: "0.1.7"}, Provenance{}, strings.NewReader(""), &bytes.Buffer{}, true,
 		func(io.Reader, io.Writer) error { t.Fatal("brew called"); return nil },
 		func() (string, error) { t.Fatal("probe called"); return "", nil },
 	)
@@ -49,7 +49,7 @@ func TestRunUpgradeHomebrewVersionFlagRefuses(t *testing.T) {
 
 func TestRunUpgradeHomebrewCheckMatchesOtherChannels(t *testing.T) {
 	var out bytes.Buffer
-	err := runUpgradeHomebrew(upgradeOpts{Check: true}, provenance{}, strings.NewReader(""), &out, true,
+	err := runUpgradeHomebrew(upgradeOpts{Check: true}, Provenance{}, strings.NewReader(""), &out, true,
 		func(io.Reader, io.Writer) error { t.Fatal("brew called"); return nil },
 		func() (string, error) { t.Fatal("probe called"); return "", nil },
 	)
@@ -66,7 +66,7 @@ func TestRunUpgradeHomebrewCheckMatchesOtherChannels(t *testing.T) {
 func TestRunUpgradeHomebrewVerifiesAfterBrew(t *testing.T) {
 	var out bytes.Buffer
 	brewCalled := false
-	err := runUpgradeHomebrew(upgradeOpts{}, provenance{}, strings.NewReader("yes\n"), &out, true,
+	err := runUpgradeHomebrew(upgradeOpts{}, Provenance{}, strings.NewReader("yes\n"), &out, true,
 		func(io.Reader, io.Writer) error { brewCalled = true; return nil },
 		func() (string, error) { return "0.1.9", nil },
 	)
@@ -75,7 +75,7 @@ func TestRunUpgradeHomebrewVerifiesAfterBrew(t *testing.T) {
 	}
 
 	out.Reset()
-	err = runUpgradeHomebrew(upgradeOpts{}, provenance{}, strings.NewReader("y\n"), &out, true,
+	err = runUpgradeHomebrew(upgradeOpts{}, Provenance{}, strings.NewReader("y\n"), &out, true,
 		func(io.Reader, io.Writer) error { return nil },
 		func() (string, error) { return "", errors.New("shadowed") },
 	)

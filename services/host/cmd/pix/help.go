@@ -7,6 +7,7 @@ import (
 	"pix/host/service"
 	"pix/host/workflow/backup"
 	"pix/host/workflow/man"
+	"pix/host/workflow/upgrade"
 )
 
 // cli.ErrHelpRequested is the shared sentinel a parser returns when the argv asks
@@ -211,7 +212,7 @@ func verbUsage(verb string) (string, bool) {
 	case "version":
 		return versionUsage, true
 	case "upgrade":
-		return upgradeUsage, true
+		return upgrade.UpgradeUsage, true
 	case "man":
 		return man.ManUsage, true
 	case "reset":

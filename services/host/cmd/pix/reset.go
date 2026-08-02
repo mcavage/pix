@@ -15,6 +15,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/rpc"
 	"pix/host/service"
+	"pix/host/workflow/upgrade"
 	"pix/host/workspace"
 )
 
@@ -891,12 +892,12 @@ func isOurBinTarget(target string) bool {
 // runUninstallCore runs the full reset, then removes the bin symlinks. Split for
 // testability (temp HOME, injected bins/fs/env). It returns runResetCore's error
 // (notably errResetNeedsYes) unchanged so the CLI maps it to the same exit code.
-func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts resetOpts, prov provenance,
+func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts resetOpts, prov upgrade.Provenance,
 	fsys resetFS, env hostenv.Env, rio setupIO, now func() time.Time) error {
 
 	a := resetPlan(cfg, paths, opts)
 	printResetPlan(a, rio.out)
-	if prov.Channel == channelHomebrew {
+	if prov.Channel == upgrade.ChannelHomebrew {
 		fmt.Fprintln(rio.out, "Homebrew owns the binaries and man page; pix will not remove them directly.")
 	} else {
 		fmt.Fprintln(rio.out, "Will also remove the installed pix + pix-host bin symlinks.")
@@ -933,7 +934,7 @@ func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts 
 		printResetSummary(created, rio.out)
 		return execErr
 	}
-	if prov.Channel == channelHomebrew {
+	if prov.Channel == upgrade.ChannelHomebrew {
 		fmt.Fprintln(rio.out, "Binaries and man page are owned by Homebrew, not pix.")
 		fmt.Fprintln(rio.out, "state and managed services were removed first. Finish with:")
 		fmt.Fprintln(rio.out, "  brew uninstall mcavage/tap/pix")

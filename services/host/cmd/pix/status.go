@@ -10,6 +10,7 @@ import (
 	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/sys"
+	"pix/host/workflow/upgrade"
 	"slices"
 	"strings"
 	"time"
@@ -180,13 +181,13 @@ func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 	}
 	self, err := env.Executable()
 	if err == nil {
-		if warning := pathShadowIssue("pix", self, env.Getenv); warning != "" {
+		if warning := upgrade.PathShadowIssue("pix", self, env.Getenv); warning != "" {
 			st.InstallWarnings = append(st.InstallWarnings, warning)
 		}
 		if env.HostBinary != nil {
 			host, err := env.HostBinary()
 			if err == nil {
-				if warning := pathShadowIssue("pix-host", host, env.Getenv); warning != "" {
+				if warning := upgrade.PathShadowIssue("pix-host", host, env.Getenv); warning != "" {
 					st.InstallWarnings = append(st.InstallWarnings, warning)
 				}
 			}

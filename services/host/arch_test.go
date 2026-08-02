@@ -77,8 +77,9 @@ var pkgLayer = map[string]int{
 
 	// L3 — workflow. A user-facing verb's logic. Allowed to compose L1+L2;
 	// may not contain a capability.
-	"workflow/backup": layerWorkflow,
-	"workflow/man":    layerWorkflow,
+	"workflow/backup":  layerWorkflow,
+	"workflow/man":     layerWorkflow,
+	"workflow/upgrade": layerWorkflow,
 
 	// L4 — the command layer.
 	"cmd/pix": layerCommand,

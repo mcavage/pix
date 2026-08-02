@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"pix/host/cli"
 	"pix/host/hostenv"
+	"pix/host/launcher"
 	"pix/host/monitor/tui"
 	"pix/host/secret"
 	"pix/host/sys"
@@ -1211,7 +1212,7 @@ func launchTask(o runOpts) error {
 		generatedKitDirs = append(generatedKitDirs, kit)
 	}
 
-	released := isReleased(version)
+	released := launcher.IsReleased(version)
 	kitOverride := len(o.Kits) > 0
 	if o.Dev {
 		root, err := resolveRepoRoot()

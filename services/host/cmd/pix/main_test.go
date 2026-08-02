@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/launcher"
 	"pix/host/secret"
 )
 
@@ -62,13 +63,13 @@ func TestIsReleased(t *testing.T) {
 	released := []string{"0.0.16", "1.2.3", "10.20.30"}
 	unreleased := []string{"dev", "0.0.16+local", "0.0.16-dev", "v0.0.16", "0.0", ""}
 	for _, v := range released {
-		if !isReleased(v) {
-			t.Errorf("isReleased(%q) = false, want true", v)
+		if !launcher.IsReleased(v) {
+			t.Errorf("launcher.IsReleased(%q) = false, want true", v)
 		}
 	}
 	for _, v := range unreleased {
-		if isReleased(v) {
-			t.Errorf("isReleased(%q) = true, want false", v)
+		if launcher.IsReleased(v) {
+			t.Errorf("launcher.IsReleased(%q) = true, want false", v)
 		}
 	}
 }

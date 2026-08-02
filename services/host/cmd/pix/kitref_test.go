@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/workflow/upgrade"
 )
 
 func TestParseLatestReleaseLocation(t *testing.T) {
@@ -19,8 +20,8 @@ func TestParseLatestReleaseLocation(t *testing.T) {
 		"https://github.com/mcavage/pix/releases/tag/v0.1.2#a": "0.1.2",
 	}
 	for loc, want := range ok {
-		if got := parseLatestReleaseLocation(loc); got != want {
-			t.Errorf("parseLatestReleaseLocation(%q) = %q, want %q", loc, got, want)
+		if got := upgrade.ParseLatestReleaseLocation(loc); got != want {
+			t.Errorf("upgrade.ParseLatestReleaseLocation(%q) = %q, want %q", loc, got, want)
 		}
 	}
 	// Anything that is not a clean released semver must yield "" — a bogus pin is
@@ -36,8 +37,8 @@ func TestParseLatestReleaseLocation(t *testing.T) {
 		"https://github.com/mcavage/pix/releases/tag/v0.1.2+local",
 	}
 	for _, loc := range bad {
-		if got := parseLatestReleaseLocation(loc); got != "" {
-			t.Errorf("parseLatestReleaseLocation(%q) = %q, want \"\"", loc, got)
+		if got := upgrade.ParseLatestReleaseLocation(loc); got != "" {
+			t.Errorf("upgrade.ParseLatestReleaseLocation(%q) = %q, want \"\"", loc, got)
 		}
 	}
 }
@@ -85,8 +86,8 @@ func TestFetchLatestRelease_FollowsRedirect(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if got := fetchLatestRelease(srv.Client(), srv.URL+"/mcavage/pix/releases/latest"); got != "0.1.2" {
-		t.Errorf("fetchLatestRelease = %q, want 0.1.2", got)
+	if got := upgrade.FetchLatestRelease(srv.Client(), srv.URL+"/mcavage/pix/releases/latest"); got != "0.1.2" {
+		t.Errorf("upgrade.FetchLatestRelease = %q, want 0.1.2", got)
 	}
 }
 
@@ -97,7 +98,7 @@ func TestFetchLatestRelease_FailuresYieldEmpty(t *testing.T) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
 	defer down.Close()
-	if got := fetchLatestRelease(down.Client(), down.URL); got != "" {
+	if got := upgrade.FetchLatestRelease(down.Client(), down.URL); got != "" {
 		t.Errorf("500 response = %q, want \"\"", got)
 	}
 
@@ -109,18 +110,18 @@ func TestFetchLatestRelease_FailuresYieldEmpty(t *testing.T) {
 		http.Redirect(w, r, "/login", http.StatusFound)
 	}))
 	defer login.Close()
-	if got := fetchLatestRelease(login.Client(), login.URL); got != "" {
+	if got := upgrade.FetchLatestRelease(login.Client(), login.URL); got != "" {
 		t.Errorf("login redirect = %q, want \"\"", got)
 	}
 
 	unreachable := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	url := unreachable.URL
 	unreachable.Close() // nothing is listening now
-	if got := fetchLatestRelease(&http.Client{Timeout: time.Second}, url); got != "" {
+	if got := upgrade.FetchLatestRelease(&http.Client{Timeout: time.Second}, url); got != "" {
 		t.Errorf("unreachable host = %q, want \"\"", got)
 	}
 
-	if got := fetchLatestRelease(&http.Client{}, "://not a url"); got != "" {
+	if got := upgrade.FetchLatestRelease(&http.Client{}, "://not a url"); got != "" {
 		t.Errorf("malformed url = %q, want \"\"", got)
 	}
 }

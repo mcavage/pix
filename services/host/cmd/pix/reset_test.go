@@ -14,6 +14,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/rpc"
 	"pix/host/sys/systest"
+	"pix/host/workflow/upgrade"
 )
 
 // fixedNow returns a stable timestamp so .bak suffixes are predictable in tests.
@@ -353,7 +354,7 @@ func TestUninstall_RemovesBinSymlinks(t *testing.T) {
 	writeFile(t, notOurs, "hand-placed")
 
 	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
-	err := runUninstallCore(resetCfg(), p, []string{link, notOurs}, resetOpts{assumeYes: true}, provenance{Channel: channelInstaller},
+	err := runUninstallCore(resetCfg(), p, []string{link, notOurs}, resetOpts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelInstaller},
 		defaultResetFS(), noToolEnv(), rio, fixedNow)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -376,7 +377,7 @@ func TestUninstall_NonTTYNoYesRefuses(t *testing.T) {
 	link := filepath.Join(root, "pix")
 	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
 
-	err := runUninstallCore(resetCfg(), p, []string{link}, resetOpts{}, provenance{Channel: channelInstaller}, defaultResetFS(), noToolEnv(), rio, fixedNow)
+	err := runUninstallCore(resetCfg(), p, []string{link}, resetOpts{}, upgrade.Provenance{Channel: upgrade.ChannelInstaller}, defaultResetFS(), noToolEnv(), rio, fixedNow)
 	if !errors.Is(err, errResetNeedsYes) {
 		t.Fatalf("want errResetNeedsYes, got %v", err)
 	}
@@ -397,7 +398,7 @@ func TestRunUninstallHomebrewDoesNotRemoveOwnedOrDuplicateBinaries(t *testing.T)
 
 	var out bytes.Buffer
 	rio := setupIO{in: strings.NewReader(""), out: &out, isTTY: false}
-	err := runUninstallCore(resetCfg(), p, []string{localPix}, resetOpts{assumeYes: true}, provenance{Channel: channelHomebrew},
+	err := runUninstallCore(resetCfg(), p, []string{localPix}, resetOpts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelHomebrew},
 		defaultResetFS(), noToolEnv(), rio, fixedNow)
 	if err != nil {
 		t.Fatal(err)
@@ -476,7 +477,7 @@ func TestUninstall_BackupFailureKeepsSymlinks(t *testing.T) {
 	fsys.rename = func(_, _ string) error { return errors.New("backup failed") }
 
 	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
-	err := runUninstallCore(resetCfg(), p, []string{link}, resetOpts{assumeYes: true}, provenance{Channel: channelInstaller},
+	err := runUninstallCore(resetCfg(), p, []string{link}, resetOpts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelInstaller},
 		fsys, noToolEnv(), rio, fixedNow)
 	if err == nil {
 		t.Fatal("uninstall must return the backup error")
@@ -679,7 +680,7 @@ func TestUninstall_LeavesUnrelatedSymlinks(t *testing.T) {
 	}
 
 	rio := setupIO{in: strings.NewReader(""), out: &bytes.Buffer{}, isTTY: false}
-	if err := runUninstallCore(resetCfg(), p, []string{linkA, linkB}, resetOpts{assumeYes: true}, provenance{Channel: channelInstaller},
+	if err := runUninstallCore(resetCfg(), p, []string{linkA, linkB}, resetOpts{assumeYes: true}, upgrade.Provenance{Channel: upgrade.ChannelInstaller},
 		defaultResetFS(), noToolEnv(), rio, fixedNow); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

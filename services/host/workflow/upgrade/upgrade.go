@@ -1,4 +1,4 @@
-package main
+package upgrade
 
 // upgrade.go — `pix upgrade`: route upgrades through the install owner.
 //
@@ -29,6 +29,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"pix/host/cli"
+	"pix/host/launcher"
 	"strings"
 	"time"
 )
@@ -84,7 +85,7 @@ func parseUpgradeArgs(argv []string) (upgradeOpts, error) {
 			return o, fmt.Errorf("unknown flag %q", a)
 		}
 	}
-	if versionSet && !isReleased(o.Version) {
+	if versionSet && !launcher.IsReleased(o.Version) {
 		return o, fmt.Errorf("--version %q is not a released semver like 0.1.4", o.Version)
 	}
 	return o, nil
@@ -153,7 +154,7 @@ func planUpgrade(current, latest string, o upgradeOpts) upgradePlan {
 	// A local/dev build is someone's own `make install`. Silently replacing it
 	// with a release would throw away the thing they are testing, and the loss is
 	// invisible until they wonder why their change stopped taking effect.
-	if !isReleased(current) && !o.Force {
+	if !launcher.IsReleased(current) && !o.Force {
 		return upgradePlan{Err: fmt.Errorf("this is a local build (%s), not a release — `pix upgrade` would replace it with %s.\nRebuild from your checkout with `make install`, or force it: pix upgrade --force", current, target)}
 	}
 
@@ -162,7 +163,7 @@ func planUpgrade(current, latest string, o upgradeOpts) upgradePlan {
 	}
 
 	verb := "Upgrading"
-	if isReleased(current) && isReleased(target) && olderVersion(target, current) {
+	if launcher.IsReleased(current) && launcher.IsReleased(target) && olderVersion(target, current) {
 		verb = "DOWNGRADING"
 	}
 	return upgradePlan{Target: target, Message: fmt.Sprintf("%s pix %s -> %s", verb, current, target)}
@@ -193,22 +194,22 @@ func atoiSafe(s string) int {
 	return n
 }
 
-// runUpgrade is the `pix upgrade` entry point.
-func runUpgrade(argv []string) {
+// RunUpgrade is the `pix upgrade` entry point.
+func RunUpgrade(argv []string) {
 	for _, a := range argv {
 		if a == "-h" || a == "--help" {
-			fmt.Print(upgradeUsage)
+			fmt.Print(UpgradeUsage)
 			return
 		}
 	}
 	o, err := parseUpgradeArgs(argv)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix upgrade: %v\n\n%s", err, upgradeUsage)
+		fmt.Fprintf(os.Stderr, "pix upgrade: %v\n\n%s", err, UpgradeUsage)
 		os.Exit(2)
 	}
 
 	prov := installChannelNow()
-	if prov.Channel == channelHomebrew {
+	if prov.Channel == ChannelHomebrew {
 		err := runUpgradeHomebrew(o, prov, os.Stdin, os.Stdout, cli.IsTTY(os.Stdin), runBrewUpgrade, probeInstalledVersion)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "pix upgrade: %v\n", err)
@@ -223,10 +224,10 @@ func runUpgrade(argv []string) {
 	// next `pix run` benefits from the lookup we just paid for.
 	latest := o.Version
 	if latest == "" {
-		latest = fetchLatestRelease(&http.Client{Timeout: upgradeLookupTimeout}, releasesLatestURL)
+		latest = FetchLatestRelease(&http.Client{Timeout: upgradeLookupTimeout}, releasesLatestURL)
 	}
 
-	plan := planUpgrade(version, latest, o)
+	plan := planUpgrade(launcher.Version, latest, o)
 	if plan.Err != nil {
 		fmt.Fprintf(os.Stderr, "pix upgrade: %v\n", plan.Err)
 		os.Exit(1)
@@ -237,7 +238,7 @@ func runUpgrade(argv []string) {
 			fmt.Println(plan.Message)
 			return
 		}
-		fmt.Printf("pix %s is installed; %s is available.\n  upgrade:  pix upgrade\n", version, plan.Target)
+		fmt.Printf("pix %s is installed; %s is available.\n  upgrade:  pix upgrade\n", launcher.Version, plan.Target)
 		return
 	}
 	if plan.Target == "" {
@@ -260,7 +261,7 @@ const homebrewUpgradeCommand = "brew upgrade mcavage/tap/pix"
 // not prompt or invoke brew and that success requires a post-mutation probe.
 func runUpgradeHomebrew(
 	o upgradeOpts,
-	prov provenance,
+	prov Provenance,
 	stdin io.Reader,
 	stdout io.Writer,
 	isTerminal bool,
@@ -274,11 +275,11 @@ func runUpgradeHomebrew(
 		return fmt.Errorf("--force has no effect on a Homebrew install; run `%s` if you mean to upgrade it", homebrewUpgradeCommand)
 	}
 	if o.Check {
-		fmt.Fprintf(stdout, "pix %s is installed via Homebrew.\n  check:    brew outdated mcavage/tap/pix\n  upgrade:  %s\n", version, homebrewUpgradeCommand)
+		fmt.Fprintf(stdout, "pix %s is installed via Homebrew.\n  check:    brew outdated mcavage/tap/pix\n  upgrade:  %s\n", launcher.Version, homebrewUpgradeCommand)
 		return nil
 	}
 
-	fmt.Fprintf(stdout, "pix %s is installed via Homebrew.\n  %s\n", version, homebrewUpgradeCommand)
+	fmt.Fprintf(stdout, "pix %s is installed via Homebrew.\n  %s\n", launcher.Version, homebrewUpgradeCommand)
 	if prov.Evidence != "" {
 		fmt.Fprintf(stdout, "  detected: %s\n", prov.Evidence)
 	}
@@ -333,7 +334,7 @@ func probeInstalledVersion() (string, error) {
 		return "", err
 	}
 	v := strings.TrimSpace(string(out))
-	if !isReleased(v) {
+	if !launcher.IsReleased(v) {
 		return "", fmt.Errorf("%s version returned %q", path, v)
 	}
 	return v, nil
@@ -345,7 +346,7 @@ const upgradeLookupTimeout = 10 * time.Second
 
 const releasesLatestURL = "https://github.com/mcavage/pix/releases/latest"
 
-func parseLatestReleaseLocation(loc string) string {
+func ParseLatestReleaseLocation(loc string) string {
 	i := strings.LastIndex(loc, "/tag/")
 	if i < 0 {
 		return ""
@@ -355,13 +356,13 @@ func parseLatestReleaseLocation(loc string) string {
 		v = v[:j]
 	}
 	v = strings.TrimPrefix(v, "v")
-	if !isReleased(v) {
+	if !launcher.IsReleased(v) {
 		return ""
 	}
 	return v
 }
 
-func fetchLatestRelease(client *http.Client, url string) string {
+func FetchLatestRelease(client *http.Client, url string) string {
 	req, err := http.NewRequest(http.MethodHead, url, nil)
 	if err != nil {
 		return ""
@@ -372,11 +373,11 @@ func fetchLatestRelease(client *http.Client, url string) string {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if loc := resp.Request.URL.String(); loc != "" {
-		if v := parseLatestReleaseLocation(loc); v != "" {
+		if v := ParseLatestReleaseLocation(loc); v != "" {
 			return v
 		}
 	}
-	return parseLatestReleaseLocation(resp.Header.Get("Location"))
+	return ParseLatestReleaseLocation(resp.Header.Get("Location"))
 }
 
 // execInstaller downloads install.sh for the target release and runs it. The
@@ -432,7 +433,7 @@ func execInstallerFrom(url, target, prefix string, stdout, stderr io.Writer) err
 	return cmd.Run()
 }
 
-const upgradeUsage = `usage: pix upgrade [--check] [--version X.Y.Z] [--force]
+const UpgradeUsage = `usage: pix upgrade [--check] [--version X.Y.Z] [--force]
 
 Upgrade pix through the tool that owns the current installation.
 

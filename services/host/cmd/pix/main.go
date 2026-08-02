@@ -33,6 +33,7 @@ import (
 	"pix/host/service"
 	"pix/host/workflow/backup"
 	"pix/host/workflow/man"
+	"pix/host/workflow/upgrade"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=0.0.x". An
@@ -152,7 +153,7 @@ func main() {
 	case "reset":
 		runReset(args[1:])
 	case "upgrade":
-		runUpgrade(args[1:])
+		upgrade.RunUpgrade(args[1:])
 	case "state":
 		runState(args[1:])
 	case "task":

@@ -13,6 +13,7 @@ package main
 
 import (
 	"fmt"
+	"pix/host/launcher"
 	"strings"
 )
 
@@ -38,7 +39,7 @@ func resolveKitRef(version, flagRef, pinRef string) (ref string, src kitRefSourc
 		return flagRef, kitRefFlag
 	case pinRef != "":
 		return normalizeKitRef(pinRef), kitRefConfigPin
-	case !isReleased(version):
+	case !launcher.IsReleased(version):
 		return "", kitRefUnreleased
 	default:
 		return "", kitRefStamped
@@ -50,7 +51,7 @@ func resolveKitRef(version, flagRef, pinRef string) (ref string, src kitRefSourc
 // value (a branch name, a sha) passes through untouched.
 func normalizeKitRef(pin string) string {
 	pin = strings.TrimSpace(pin)
-	if isReleased(pin) {
+	if launcher.IsReleased(pin) {
 		return "v" + pin
 	}
 	return pin

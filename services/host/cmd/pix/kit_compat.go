@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"pix/host/launcher"
 	"strings"
 )
 
@@ -60,7 +61,7 @@ func validateSbxKit(ref string) (string, error) {
 }
 
 func validateSetupKit(version string, repoRoot func() (string, error), validate func(string) (string, error)) error {
-	if isReleased(version) || repoRoot == nil {
+	if launcher.IsReleased(version) || repoRoot == nil {
 		return nil
 	}
 	root, err := repoRoot()

@@ -1,10 +1,11 @@
-package main
+package upgrade
 
 import (
 	"errors"
 	"os"
 	"path/filepath"
 	"pix/host/hostenv"
+	"pix/host/launcher"
 	"pix/host/readiness"
 	"pix/host/sys/systest"
 	"strings"
@@ -12,8 +13,8 @@ import (
 )
 
 func TestDetectInstallChannel(t *testing.T) {
-	originalVersion := version
-	t.Cleanup(func() { version = originalVersion })
+	originalVersion := launcher.Version
+	t.Cleanup(func() { launcher.Version = originalVersion })
 
 	tests := []struct {
 		name       string
@@ -25,16 +26,16 @@ func TestDetectInstallChannel(t *testing.T) {
 		want       installChannel
 		wantString string
 	}{
-		{name: "Homebrew arm prefix", version: "0.3.0", self: "/opt/homebrew/bin/pix", resolved: "/opt/homebrew/Cellar/pix/0.3.0/bin/pix", prefix: "/opt/homebrew", want: channelHomebrew, wantString: "Homebrew"},
-		{name: "installer", version: "0.3.0", self: "/home/x/.local/bin/pix", resolved: "/home/x/.local/bin/pix", want: channelInstaller, wantString: "Installer"},
+		{name: "Homebrew arm prefix", version: "0.3.0", self: "/opt/homebrew/bin/pix", resolved: "/opt/homebrew/Cellar/pix/0.3.0/bin/pix", prefix: "/opt/homebrew", want: ChannelHomebrew, wantString: "Homebrew"},
+		{name: "installer", version: "0.3.0", self: "/home/x/.local/bin/pix", resolved: "/home/x/.local/bin/pix", want: ChannelInstaller, wantString: "Installer"},
 		{name: "local build wins regardless of path", version: "dev", self: "/opt/homebrew/bin/pix", resolved: "/opt/homebrew/Cellar/pix/0.3.0/bin/pix", prefix: "/opt/homebrew", want: channelLocalDev, wantString: "LocalDev"},
 		{name: "executable error", version: "0.3.0", execErr: errors.New("boom"), want: channelUnknown, wantString: "?"},
-		{name: "Cellar and pix must be adjacent", version: "0.3.0", self: "/tmp/Cellar/other/pix/0.3.0/bin/pix", resolved: "/tmp/Cellar/other/pix/0.3.0/bin/pix", want: channelInstaller, wantString: "Installer"},
+		{name: "Cellar and pix must be adjacent", version: "0.3.0", self: "/tmp/Cellar/other/pix/0.3.0/bin/pix", resolved: "/tmp/Cellar/other/pix/0.3.0/bin/pix", want: ChannelInstaller, wantString: "Installer"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			version = tc.version
+			launcher.Version = tc.version
 			got := detectInstallChannel(
 				func() (string, error) { return tc.self, tc.execErr },
 				func(string) (string, error) { return tc.resolved, nil },
@@ -46,7 +47,7 @@ func TestDetectInstallChannel(t *testing.T) {
 				},
 			)
 			if got.Channel != tc.want || got.Channel.String() != tc.wantString {
-				t.Fatalf("channel = %v (%q), want %v (%q); provenance: %+v", got.Channel, got.Channel.String(), tc.want, tc.wantString, got)
+				t.Fatalf("channel = %v (%q), want %v (%q); Provenance: %+v", got.Channel, got.Channel.String(), tc.want, tc.wantString, got)
 			}
 		})
 	}
@@ -81,7 +82,7 @@ func TestPathShadowIssue(t *testing.T) {
 		return ""
 	}
 
-	got := pathShadowIssue("pix", localPix, getenv)
+	got := PathShadowIssue("pix", localPix, getenv)
 	for _, want := range []string{"multiple pix installations", localPix, brewPix, "remove the stale copy explicitly"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("message %q missing %q", got, want)
@@ -91,7 +92,7 @@ func TestPathShadowIssue(t *testing.T) {
 		t.Fatalf("message contains destructive fix: %q", got)
 	}
 
-	got = pathShadowIssue("pix", cellarPix, getenv)
+	got = PathShadowIssue("pix", cellarPix, getenv)
 	if !strings.Contains(got, "not the running binary") || !strings.Contains(got, localPix) {
 		t.Fatalf("direct Cellar invocation should report the PATH shadow: %q", got)
 	}
@@ -116,7 +117,7 @@ func TestInstallDuplicatesGroupSurfacesDoctorWarning(t *testing.T) {
 		}
 		return ""
 	}}}
-	g := installDuplicatesGroup(env)
+	g := InstallDuplicatesGroup(env)
 	if len(g.Checks) != 1 || g.Checks[0].Result() != readiness.VerdictTodo {
 		t.Fatalf("group = %+v", g)
 	}

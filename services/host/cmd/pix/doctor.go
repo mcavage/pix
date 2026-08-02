@@ -14,6 +14,7 @@ import (
 	"pix/host/rpc"
 	"pix/host/secret"
 	"pix/host/sys"
+	"pix/host/workflow/upgrade"
 	"pix/host/workspace"
 )
 
@@ -233,7 +234,7 @@ func grepWord(out, name string) bool { return cli.GrepWord(out, name) }
 // stories can rework one group without touching the others.
 func runDoctor(cfg *config.Config, env hostenv.Env) *readiness.Report {
 	r := &readiness.Report{}
-	if g := installDuplicatesGroup(env); len(g.Checks) > 0 {
+	if g := upgrade.InstallDuplicatesGroup(env); len(g.Checks) > 0 {
 		r.Groups = append(r.Groups, g)
 	}
 

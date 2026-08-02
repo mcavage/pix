@@ -17,6 +17,7 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/knowledge"
+	"pix/host/launcher"
 	"pix/host/secret"
 	"pix/host/service"
 	"pix/host/sys"
@@ -155,7 +156,7 @@ func runRun(argv []string) {
 		// build, or non-semver — is UNRELEASED, its tag does not exist, so we never
 		// pin v<version>. --dev forces the local checkout kit; an unreleased build
 		// uses it too when a checkout is resolvable, else falls back to #ref=main.
-		released := isReleased(version)
+		released := launcher.IsReleased(version)
 		kitOverride := len(o.Kits) > 0
 
 		// Released launchers pin the kit and image to their own stamped version.
