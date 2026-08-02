@@ -202,7 +202,7 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 	mcpServers := append([]string(nil), cfg.MCP...)
 	gogEnabled := false
 	for _, m := range mcpServers {
-		if strings.TrimSpace(m) == gwServerName {
+		if strings.TrimSpace(m) == config.GWServerName {
 			gogEnabled = true
 		}
 	}
@@ -238,12 +238,6 @@ func hasConfiguredKeylessModel(cfg *config.Config) bool {
 		}
 	}
 	return false
-}
-
-// dirHasEntries reports whether path is a directory with at least one entry.
-func dirHasEntries(path string) bool {
-	ents, err := os.ReadDir(path)
-	return err == nil && len(ents) > 0
 }
 
 // buildHostStateHost builds the host slice with a SINGLE hostProvisioned() probe so

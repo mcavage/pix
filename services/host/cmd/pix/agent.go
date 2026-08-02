@@ -533,15 +533,10 @@ func repoRoutingTarget() string {
 	}
 	routing := filepath.Join(wd, "routing.json")
 	spec := filepath.Join(wd, "pi-kit", "spec.yaml")
-	if fileExists(routing) && fileExists(spec) {
+	if sys.IsRegularFile(routing) && sys.IsRegularFile(spec) {
 		return routing
 	}
 	return ""
-}
-
-func fileExists(p string) bool {
-	info, err := os.Stat(p)
-	return err == nil && !info.IsDir()
 }
 
 // launchInteractiveAuthoring hands off to an interactive `pi` session seeded to

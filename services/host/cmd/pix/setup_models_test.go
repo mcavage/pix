@@ -30,6 +30,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
 	"pix/host/workflow/man"
@@ -489,7 +490,7 @@ func TestSetupModels_GogGuidanceIsGogSetupOnly(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(cfgPath, []byte("google_workspace_account = \"me@example.com\"\nmcp = [\""+gwServerName+"\"]\n"), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("google_workspace_account = \"me@example.com\"\nmcp = [\""+config.GWServerName+"\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer

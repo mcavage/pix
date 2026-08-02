@@ -12,7 +12,7 @@
 //
 // Naming (the one rule this file exists to hold): the product is "Google
 // Workspace", the CLI noun is `gworkspace`, the MCP registration/display name
-// is `google-workspace` (gwServerName), and the config key is
+// is `google-workspace` (config.GWServerName), and the config key is
 // `google_workspace_account`. The external binary is still called `gog` and
 // that name may appear ONLY in a dependency-install/upgrade fix line, in
 // troubleshooting docs, and in code that execs it. Go identifiers that name
@@ -32,16 +32,13 @@ import (
 	"pix/host/config"
 )
 
+// The server names and the install command live in config
+// (config.GWServerName, config.GWDocsCreateServerName, config.GWInstallCmd):
+// callers outside this workflow have to recognise the server without importing
+// the workflow that installs it, and a name that crosses domains is
+// configuration.
 const (
-	// gwServerName is config.GWServerName under the workflow's own name. The
-	// value lives in config because callers outside this workflow must
-	// recognise the server without importing it.
-	gwServerName           = config.GWServerName
-	gwDocsCreateServerName = config.GWDocsCreateServerName
-	gwAccessCreateDocs     = "create-docs"
-	// gwInstallCmd is the ONE place the external binary's package name is
-	// allowed to reach the user, per the naming rule above.
-	gwInstallCmd = config.GWInstallCmd
+	gwAccessCreateDocs = "create-docs"
 	// gwUpgradeCmd is its upgrade twin.
 	gwUpgradeCmd = "brew upgrade openclaw/tap/gogcli"
 	// gwPermissionsURL is where a user can revoke credentials that Pix leaves
@@ -85,7 +82,7 @@ Guides Google Workspace onboarding end to end:
      hardened command the sbx gateway will actually spawn. Authorization that
      succeeds while the headless listing returns 0 tools registers NOTHING
      and saves NOTHING; an unverifiable probe is never reported as success
-  6. on success: registers ` + gwServerName + ` with the sbx gateway FIRST,
+  6. on success: registers ` + config.GWServerName + ` with the sbx gateway FIRST,
      using the SAME captured command snapshot that was just verified, and
      only once that succeeds saves google_workspace_account + enables the
      server in the configured MCP set. A registration failure never touches
@@ -115,7 +112,7 @@ const gworkspaceStatusUsage = `usage: pix gworkspace status
 
 Reports, from probes rather than config claims:
   - whether an account is configured (google_workspace_account)
-  - whether the sbx gateway has ` + gwServerName + ` registered, and whether
+  - whether the sbx gateway has ` + config.GWServerName + ` registered, and whether
     the registered command carries the hardened read-only flags
   - whether the headless spawn the gateway uses returns tools
 
@@ -125,8 +122,8 @@ exit: 0 ready · 1 needs setup · 3 could not be verified from here
 const gworkspaceDisableUsage = `usage: pix gworkspace disable
 
 Removes ONLY the Pix-owned pieces:
-  - google_workspace_account and the ` + gwServerName + ` entry in config.toml
-  - the ` + gwServerName + ` registration in the sbx gateway
+  - google_workspace_account and the ` + config.GWServerName + ` entry in config.toml
+  - the ` + config.GWServerName + ` registration in the sbx gateway
 
 Your Google OAuth credentials and tokens are left untouched on disk; revoke
 them yourself at ` + gwPermissionsURL + ` if you want them gone.
@@ -288,7 +285,7 @@ func gworkspaceStatus(cfg *config.Config, env hostenv.Env, out io.Writer) int {
 	}
 
 	acct := gogAccount(cfg, env)
-	if acct == "" && !mcpConfigured(cfg, gwServerName) {
+	if acct == "" && !mcpConfigured(cfg, config.GWServerName) {
 		fmt.Fprintln(out, "  · not configured — set it up: pix gworkspace setup")
 		return 0
 	}
@@ -296,7 +293,7 @@ func gworkspaceStatus(cfg *config.Config, env hostenv.Env, out io.Writer) int {
 	var checks []readiness.Check
 	if acct == "" {
 		checks = append(checks, readiness.Check{Label: "account", Verdict: readiness.VerdictTodo,
-			Detail:   gwServerName + " is in the configured MCP set but no account is authorized",
+			Detail:   config.GWServerName + " is in the configured MCP set but no account is authorized",
 			Evidence: "google_workspace_account is unset",
 			Todo:     "pix gworkspace setup"})
 	} else {
@@ -328,13 +325,13 @@ func gworkspaceStatus(cfg *config.Config, env hostenv.Env, out io.Writer) int {
 		}
 	} else {
 		checks = append(checks, readiness.Check{Label: "registration", Verdict: readiness.VerdictUnverifiable,
-			Detail:   "could not read the " + gwServerName + " registration from sbx",
-			Evidence: "sbx mcp inspect " + gwServerName + " did not resolve a command",
+			Detail:   "could not read the " + config.GWServerName + " registration from sbx",
+			Evidence: "sbx mcp inspect " + config.GWServerName + " did not resolve a command",
 			Todo:     "sbx mcp status"})
 	}
 	if cfg.GoogleWorkspaceAccess == gwAccessCreateDocs {
-		if argv, ok := registeredMCPCommand(env, gwDocsCreateServerName); ok {
-			if trusted, ok := recognizedMCPArgv(env, argv, gwDocsCreateServerName); ok {
+		if argv, ok := registeredMCPCommand(env, config.GWDocsCreateServerName); ok {
+			if trusted, ok := recognizedMCPArgv(env, argv, config.GWDocsCreateServerName); ok {
 				checks = append(checks, docsCreateSpawnCheck(probeListTools(env, trusted)))
 			} else {
 				checks = append(checks, readiness.Check{Label: "create Docs", Verdict: readiness.VerdictUnverifiable,
@@ -369,7 +366,7 @@ func docsCreateSpawnCheck(res probeResult) readiness.Check {
 			Detail: "create-new-Docs spawn was refused by policy"}
 	default:
 		return readiness.Check{Label: "create Docs", Verdict: readiness.VerdictUnverifiable,
-			Detail: "probe " + res.detail + " — could not verify", Todo: "sbx mcp inspect " + gwDocsCreateServerName}
+			Detail: "probe " + res.detail + " — could not verify", Todo: "sbx mcp inspect " + config.GWDocsCreateServerName}
 	}
 }
 
@@ -410,9 +407,9 @@ func runGworkspaceDisableCmd(argv []string) {
 // registration; the reverse order would leave a persisted "disabled" config
 // while the gateway still spawns the server, which is the dangerous drift.
 func gworkspaceDisable(cfg *config.Config, env hostenv.Env, out io.Writer) error {
-	configured := strings.TrimSpace(cfg.GogAccount) != "" || mcpConfigured(cfg, gwServerName) || mcpConfigured(cfg, gwDocsCreateServerName)
+	configured := strings.TrimSpace(cfg.GogAccount) != "" || mcpConfigured(cfg, config.GWServerName) || mcpConfigured(cfg, config.GWDocsCreateServerName)
 	snap := snapshotGogRegistration(env)
-	docsSnap := snapshotMCPRegistration(env, gwDocsCreateServerName)
+	docsSnap := snapshotMCPRegistration(env, config.GWDocsCreateServerName)
 
 	if !configured && snap.state == gogRegAbsent && docsSnap.state == gogRegAbsent {
 		fmt.Fprintln(out, "Google Workspace is not configured; nothing to remove.")
@@ -421,21 +418,21 @@ func gworkspaceDisable(cfg *config.Config, env hostenv.Env, out io.Writer) error
 	if snap.state == gogRegUnknown || docsSnap.state == gogRegUnknown {
 		return fmt.Errorf("could not confirm the %s registration (sbx mcp ls did not resolve cleanly): "+
 			"refusing to remove config while the gateway state is unreadable; check the sbx daemon (sbx mcp status), "+
-			"then re-run pix gworkspace disable", gwServerName)
+			"then re-run pix gworkspace disable", config.GWServerName)
 	}
 
 	if snap.state == gogRegPresent {
 
-		if _, err := env.Run("sbx", "mcp", "rm", gwServerName); err != nil {
-			return fmt.Errorf("removing the %s registration: %w (remove it by hand: sbx mcp rm %s)", gwServerName, err, gwServerName)
+		if _, err := env.Run("sbx", "mcp", "rm", config.GWServerName); err != nil {
+			return fmt.Errorf("removing the %s registration: %w (remove it by hand: sbx mcp rm %s)", config.GWServerName, err, config.GWServerName)
 		}
-		fmt.Fprintln(out, "  removed registration: "+gwServerName)
+		fmt.Fprintln(out, "  removed registration: "+config.GWServerName)
 	}
 	if docsSnap.state == gogRegPresent {
-		if _, err := env.Run("sbx", "mcp", "rm", gwDocsCreateServerName); err != nil {
-			return fmt.Errorf("removing the %s registration: %w", gwDocsCreateServerName, err)
+		if _, err := env.Run("sbx", "mcp", "rm", config.GWDocsCreateServerName); err != nil {
+			return fmt.Errorf("removing the %s registration: %w", config.GWDocsCreateServerName, err)
 		}
-		fmt.Fprintln(out, "  removed registration: "+gwDocsCreateServerName)
+		fmt.Fprintln(out, "  removed registration: "+config.GWDocsCreateServerName)
 	}
 
 	changed := false
@@ -447,17 +444,17 @@ func gworkspaceDisable(cfg *config.Config, env hostenv.Env, out io.Writer) error
 		cfg.SetGoogleWorkspaceAccess("")
 		changed = true
 	}
-	if cfg.RemoveMCP(gwServerName) {
+	if cfg.RemoveMCP(config.GWServerName) {
 		changed = true
 	}
-	if cfg.RemoveMCP(gwDocsCreateServerName) {
+	if cfg.RemoveMCP(config.GWDocsCreateServerName) {
 		changed = true
 	}
 	if changed {
 		if err := cfg.Save(); err != nil {
 			return fmt.Errorf("saving config: %w (the gateway registration was already removed; re-run pix gworkspace disable)", err)
 		}
-		fmt.Fprintln(out, "  cleared config: google_workspace_account, mcp "+gwServerName)
+		fmt.Fprintln(out, "  cleared config: google_workspace_account, mcp "+config.GWServerName)
 	}
 
 	fmt.Fprintln(out, "Google Workspace is off. Your Google credentials were left untouched.")

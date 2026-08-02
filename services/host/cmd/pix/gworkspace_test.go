@@ -5,7 +5,7 @@
 // (delegated verbatim to gog_setup.go, exercised here THROUGH the façade so a
 // regression in the wiring itself would show up here even if gog_setup.go's
 // own tests stayed green), and the naming contract gworkspace.go's own header
-// documents: CLI noun `gworkspace`, MCP name `google-workspace` (gwServerName),
+// documents: CLI noun `gworkspace`, MCP name `google-workspace` (config.GWServerName),
 // config key `google_workspace_account`, "gog" appearing only in the
 // dependency install/upgrade lines.
 package main
@@ -167,7 +167,7 @@ func TestGworkspaceSetup_RollbackOnSaveFailure(t *testing.T) {
 
 // --- gworkspaceStatus ------------------------------------------------------
 
-// TestGworkspaceStatus_NotConfigured: no account, gwServerName not in the MCP
+// TestGworkspaceStatus_NotConfigured: no account, config.GWServerName not in the MCP
 // set -> a single not-configured line and exit 0 (nothing to fail on since
 // nothing was ever asked for).
 func TestGworkspaceStatus_NotConfigured(t *testing.T) {
@@ -183,11 +183,11 @@ func TestGworkspaceStatus_NotConfigured(t *testing.T) {
 	}
 }
 
-// TestGworkspaceStatus_ConfiguredNoAccount: gwServerName is in the MCP set but
+// TestGworkspaceStatus_ConfiguredNoAccount: config.GWServerName is in the MCP set but
 // no account is authorized -> a TODO pointing at `pix gworkspace setup`
 // and a non-zero (needs-setup) exit code.
 func TestGworkspaceStatus_ConfiguredNoAccount(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName}}
+	cfg := &config.Config{MCP: []string{config.GWServerName}}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", os.ErrNotExist }}}
 	var out bytes.Buffer
 	code := gworkspaceStatus(cfg, env, &out)
@@ -207,7 +207,7 @@ func TestGworkspaceStatus_ReadyPath(t *testing.T) {
 	acct := "you@example.com"
 	regCmd := bareGog(acct)
 	probeKey := regCmd + " --list-tools"
-	cfg := &config.Config{GogAccount: acct, MCP: []string{gwServerName}}
+	cfg := &config.Config{GogAccount: acct, MCP: []string{config.GWServerName}}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "sbx" || name == "gog" {
 			return "/usr/bin/" + name, nil
@@ -216,7 +216,7 @@ func TestGworkspaceStatus_ReadyPath(t *testing.T) {
 	}, RunFn: func(name string, args ...string) (string, error) {
 		key := strings.Join(append([]string{name}, args...), " ")
 		switch key {
-		case "sbx mcp get " + gwServerName:
+		case "sbx mcp get " + config.GWServerName:
 			return "name: gog\ncommand: " + regCmd + "\n", nil
 		case probeKey:
 			return "gmail_search\ncalendar_events\n", nil
@@ -247,14 +247,14 @@ func TestGworkspaceStatus_ReadyPath(t *testing.T) {
 // and with nothing else confirmed broken the worst verdict (and exit code)
 // is 3, never a false green (0) or a false hard failure (1).
 func TestGworkspaceStatus_UnreadableRegistrationIsUnverifiableExitThree(t *testing.T) {
-	cfg := &config.Config{GogAccount: "you@example.com", MCP: []string{gwServerName}}
+	cfg := &config.Config{GogAccount: "you@example.com", MCP: []string{config.GWServerName}}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", os.ErrNotExist }}}
 	var out bytes.Buffer
 	code := gworkspaceStatus(cfg, env, &out)
 	if code != 3 {
 		t.Errorf("exit code = %d, want 3 (unverifiable, nothing confirmed broken)", code)
 	}
-	if !strings.Contains(out.String(), "could not read the "+gwServerName+" registration") {
+	if !strings.Contains(out.String(), "could not read the "+config.GWServerName+" registration") {
 		t.Errorf("expected the unreadable-registration note, got:\n%s", out.String())
 	}
 }
@@ -286,7 +286,7 @@ func TestGworkspaceDisable_NotConfiguredIsCleanNoop(t *testing.T) {
 // guess, and must never silently drop config while the gateway state is
 // unreadable.
 func TestGworkspaceDisable_UnknownRegistrationRefuses(t *testing.T) {
-	cfg := &config.Config{GogAccount: "you@example.com", MCP: []string{gwServerName}}
+	cfg := &config.Config{GogAccount: "you@example.com", MCP: []string{config.GWServerName}}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		return "", os.ErrNotExist // every `sbx mcp ...` call fails
 	}}}
@@ -316,7 +316,7 @@ func TestGworkspaceDisable_PresentRemovesRegistrationAndConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.SetGogAccount("you@example.com")
-	cfg.AddMCP(gwServerName)
+	cfg.AddMCP(config.GWServerName)
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -325,9 +325,9 @@ func TestGworkspaceDisable_PresentRemovesRegistrationAndConfig(t *testing.T) {
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		key := strings.Join(append([]string{name}, args...), " ")
 		if key == "sbx mcp ls" {
-			return gwServerName + "\n", nil
+			return config.GWServerName + "\n", nil
 		}
-		if key == "sbx mcp get "+gwServerName {
+		if key == "sbx mcp get "+config.GWServerName {
 			return "name: gog\ncommand: " + bareGog("you@example.com") + "\n", nil
 		}
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "rm" {
@@ -340,17 +340,17 @@ func TestGworkspaceDisable_PresentRemovesRegistrationAndConfig(t *testing.T) {
 	if err := gworkspaceDisable(cfg, env, &out); err != nil {
 		t.Fatalf("gworkspaceDisable: %v\n%s", err, out.String())
 	}
-	if len(rmCalls) != 1 || rmCalls[0][2] != gwServerName {
-		t.Fatalf("expected a `sbx mcp rm %s` call, got %v", gwServerName, rmCalls)
+	if len(rmCalls) != 1 || rmCalls[0][2] != config.GWServerName {
+		t.Fatalf("expected a `sbx mcp rm %s` call, got %v", config.GWServerName, rmCalls)
 	}
-	if cfg.GogAccount != "" || slices.Contains(cfg.MCP, gwServerName) {
+	if cfg.GogAccount != "" || slices.Contains(cfg.MCP, config.GWServerName) {
 		t.Errorf("config must be cleared after disable, got account=%q mcp=%v", cfg.GogAccount, cfg.MCP)
 	}
 	reloaded, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.GogAccount != "" || slices.Contains(reloaded.MCP, gwServerName) {
+	if reloaded.GogAccount != "" || slices.Contains(reloaded.MCP, config.GWServerName) {
 		t.Errorf("disable must persist the cleared config, got account=%q mcp=%v", reloaded.GogAccount, reloaded.MCP)
 	}
 	if !strings.Contains(out.String(), "off") || !strings.Contains(out.String(), gwPermissionsURL) {
@@ -388,7 +388,7 @@ func TestCheckGoogleWorkspaceFlags_RequireOptIn(t *testing.T) {
 // --- naming-leak: the façade's own strings hold the public contract -------
 
 // TestGworkspaceUsage_NamingContract pins gworkspace.go's own naming rule: the
-// CLI noun is `gworkspace`, the MCP name is gwServerName ("google-workspace"),
+// CLI noun is `gworkspace`, the MCP name is config.GWServerName ("google-workspace"),
 // and the external binary's name ("gog") appears ONLY in the dependency
 // install/upgrade lines — never as a verb, a flag, or a registered/display
 // name in any of the four usage blocks.
@@ -401,7 +401,7 @@ func TestGworkspaceUsage_NamingContract(t *testing.T) {
 	}
 	// Lines legitimately allowed to name the dependency binary (the ONE
 	// exception the header documents).
-	allowed := []string{gwInstallCmd, gwUpgradeCmd}
+	allowed := []string{config.GWInstallCmd, gwUpgradeCmd}
 	for name, block := range blocks {
 		if !strings.Contains(block, "gworkspace") {
 			t.Errorf("%s must use the public CLI noun `gworkspace`, got:\n%s", name, block)
@@ -421,8 +421,8 @@ func TestGworkspaceUsage_NamingContract(t *testing.T) {
 			}
 		}
 	}
-	if gwServerName != "google-workspace" {
-		t.Errorf("gwServerName = %q, want the public MCP display name", gwServerName)
+	if config.GWServerName != "google-workspace" {
+		t.Errorf("config.GWServerName = %q, want the public MCP display name", config.GWServerName)
 	}
 }
 

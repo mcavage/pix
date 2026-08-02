@@ -19,7 +19,7 @@ import (
 func TestBuildHostState(t *testing.T) {
 	cfg := &config.Config{
 		GogAccount:         "me@acme.com",
-		MCP:                []string{gwServerName},
+		MCP:                []string{config.GWServerName},
 		KnowledgeBundles:   []string{"/kb/acme"},
 		MemoryWatcherModel: "gemma4:e4b-mlx",
 		MemoryEmbedModel:   "nomic-embed-text",
@@ -315,7 +315,7 @@ func TestEncodeTrustedHostState_EncodingFailureReturnsError(t *testing.T) {
 // touching disk. This exercises it directly (rather than only through
 // injectTrustedHostState) so the seam has its own focused coverage.
 func TestBuildTrustedHostState_MatchesBuildHostStateShape(t *testing.T) {
-	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y", MCP: []string{gwServerName}, GogAccount: "me@acme.com"}
+	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y", MCP: []string{config.GWServerName}, GogAccount: "me@acme.com"}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }, DialLocalFn: func(int) bool { return true }}}
 	hs := buildTrustedHostState(cfg, env, "")
 	if !hs.Memory.Up {
@@ -338,7 +338,7 @@ func TestBuildTrustedHostState_MatchesBuildHostStateShape(t *testing.T) {
 // in-memory hostState struct. gog.enabled is sufficient for onboarding; the
 // email is PII with no onboarding use.
 func TestInjectTrustedHostState_NeverLeaksGogAccountEmail(t *testing.T) {
-	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y", MCP: []string{gwServerName}, GogAccount: "secret-owner@acme.com"}
+	cfg := &config.Config{MemoryWatcherModel: "x", MemoryEmbedModel: "y", MCP: []string{config.GWServerName}, GogAccount: "secret-owner@acme.com"}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("no sbx") }}}
 	args := []string{"run", "pix", ".", "--", generatedInputMarker + "hi"}
 	out, err := injectTrustedHostState(args, cfg, env, "")

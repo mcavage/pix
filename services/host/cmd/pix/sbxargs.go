@@ -7,6 +7,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/launcher"
+	"pix/host/sys"
 )
 
 // kitRepo is the canonical git-hosted kit source. The launcher pins it to the
@@ -176,7 +177,7 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 	// Live skill trees: config paths + --skills flags. Each is mounted as an
 	// extra workspace so pi can read it inside the sandbox.
 	liveSkills := append([]string(nil), cfg.Skills.Paths...)
-	if personal := filepath.Join(config.ContextDir(), "skills"); dirHasEntries(personal) {
+	if personal := filepath.Join(config.ContextDir(), "skills"); sys.DirHasEntries(personal) {
 		liveSkills = append(liveSkills, personal)
 	}
 	liveSkills = append(liveSkills, o.Skills...)

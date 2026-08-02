@@ -231,7 +231,7 @@ func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 	if !unknown("fastmail") {
 		t.Error("unknown classification must treat a non-gog name as host-exec (fail closed)")
 	}
-	if unknown(gwServerName) {
+	if unknown(config.GWServerName) {
 		t.Error("gog stays the reference-only Tier-0 special case even when the partition is unknown")
 	}
 	// Probe resolves but errors.
@@ -258,7 +258,7 @@ func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 	}
 	// gog-only packs stay Tier-0 under an unknown partition.
 	pg := &packInfo{Root: "/p", Manifest: packManifest{Name: "g",
-		Integrations: []packIntegration{{Name: "gog", MCP: gwServerName}}}}
+		Integrations: []packIntegration{{Name: "gog", MCP: config.GWServerName}}}}
 	if computeHostBoM(pg, "", unknown2).tier1() {
 		t.Error("a gog-only reference must stay Tier-0 even when the partition is unknown")
 	}

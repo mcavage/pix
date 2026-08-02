@@ -1,10 +1,10 @@
 // gworkspace_antidrift_test.go — repo-wide guard for the Google Workspace
 // naming/install contract (fix/onboarding). The canonical forms are: the
 // dependency BINARY is `gog`; the brew FORMULA is `openclaw/tap/gogcli`
-// (gwInstallCmd/gwUpgradeCmd in gworkspace.go); the guided CLI is
+// (config.GWInstallCmd/gwUpgradeCmd in gworkspace.go); the guided CLI is
 // `pix gworkspace setup|status|disable`; the config key is
 // `google_workspace_account`; the MCP server name is `google-workspace`
-// (gwServerName). The retired `gog` verb tree, `gog_account` as a
+// (config.GWServerName). The retired `gog` verb tree, `gog_account` as a
 // user-facing key, and a bare `brew install gog` are never allowed to
 // reappear in a production (non-test) source string in this package.
 //
@@ -34,14 +34,14 @@ type gwForbiddenPhrase struct {
 }
 
 var gwForbiddenPhrases = []gwForbiddenPhrase{
-	{"brew install gog", "the canonical formula is `brew install openclaw/tap/gogcli` (gwInstallCmd)"},
+	{"brew install gog", "the canonical formula is `brew install openclaw/tap/gogcli` (config.GWInstallCmd)"},
 	{"brew upgrade gog ", "the canonical formula is `brew upgrade openclaw/tap/gogcli` (gwUpgradeCmd)"},
 	{"pix gog setup", "the `gog` verb tree is deleted (6b39a69); the guided CLI is `pix gworkspace setup`"},
 	{"pix gog auth", "the `gog` verb tree is deleted (6b39a69); the guided CLI is `pix gworkspace`"},
 	{"pix gog status", "the `gog` verb tree is deleted (6b39a69); the guided CLI is `pix gworkspace status`"},
 	{"pix gog disable", "the `gog` verb tree is deleted (6b39a69); the guided CLI is `pix gworkspace disable`"},
 	{"config set gog_account", "the canonical config key is `google_workspace_account`"},
-	{"config set mcp gog", "the canonical MCP server name is `google-workspace` (gwServerName)"},
+	{"config set mcp gog", "the canonical MCP server name is `google-workspace` (config.GWServerName)"},
 }
 
 // TestGworkspaceNaming_NoRetiredPhrasesInProductionSource scans every non-test

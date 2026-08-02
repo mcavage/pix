@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/config"
 	"pix/host/mcp"
 	"pix/host/rpc"
 	"pix/host/workspace"
@@ -142,14 +143,14 @@ func TestExecSbxRunAndRecordCreate_ReplaceRewritesAndClearsLoads(t *testing.T) {
 	}
 	// A --replace re-run: definitelyCreating is true again (state doesn't
 	// matter to the wrapper — the caller already decided), new preloaded set.
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{gwServerName}); err != nil {
+	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{config.GWServerName}); err != nil {
 		t.Fatal(err)
 	}
 	r, status, err := workspace.ReadMCPReceipt(dir, sandbox)
 	if err != nil || status != workspace.MCPStateOK {
 		t.Fatalf("status=%v err=%v", status, err)
 	}
-	if len(r.Preloaded) != 1 || r.Preloaded[0] != gwServerName {
+	if len(r.Preloaded) != 1 || r.Preloaded[0] != config.GWServerName {
 		t.Errorf("Preloaded = %v, want [gog] after replace", r.Preloaded)
 	}
 	if len(r.Loads) != 0 {

@@ -1102,7 +1102,7 @@ func setupReadinessAxes(cfg *config.Config, env hostenv.Env, models setupModelsO
 	if strings.TrimSpace(cfg.Pack) != "" {
 		builders[readiness.AxisPack] = func() []readiness.Check { return setupPackAxis(cfg) }
 	}
-	if strings.TrimSpace(cfg.GogAccount) != "" || slices.Contains(cfg.MCP, gwServerName) {
+	if strings.TrimSpace(cfg.GogAccount) != "" || slices.Contains(cfg.MCP, config.GWServerName) {
 		// Absent by default (AC-P0-319): with no opt-in there is no axis at
 		// all, so the report says nothing about Google Workspace.
 		builders[readiness.AxisGworkspace] = func() []readiness.Check { return setupGworkspaceAxis(cfg, env) }

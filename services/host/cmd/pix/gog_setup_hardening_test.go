@@ -283,7 +283,7 @@ func TestGogSetup_R106_BareProbe_Timeout_UnverifiableNeverSuccess(t *testing.T) 
 	cfg, _ := config.Load()
 	if cfg != nil {
 		for _, m := range cfg.MCP {
-			if m == gwServerName {
+			if m == config.GWServerName {
 				t.Errorf("must not register gog when headless verification is unverifiable")
 			}
 		}
@@ -538,7 +538,7 @@ func TestGogSetup_R108_SaveFailure_RemovesNewRegistrationWhenNoPrior(t *testing.
 	if len(*addCalls) != 1 {
 		t.Fatalf("expected exactly 1 `sbx mcp add` call (the new registration), got %d: %v", len(*addCalls), *addCalls)
 	}
-	if len(*rmCalls) != 1 || len((*rmCalls)[0]) < 3 || (*rmCalls)[0][2] != gwServerName {
+	if len(*rmCalls) != 1 || len((*rmCalls)[0]) < 3 || (*rmCalls)[0][2] != config.GWServerName {
 		t.Fatalf("expected a rollback `sbx mcp rm google-workspace` call, got %v", *rmCalls)
 	}
 }

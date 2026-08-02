@@ -218,8 +218,8 @@ func findTaskLayout(mainroot, sane string) (lay taskLayout, found, ambiguous boo
 	legacy := taskRepoKey(mainroot)
 	_, newMeta := taskPaths(newer, sane)
 	_, legMeta := taskPaths(legacy, sane)
-	newOK := fileExistsTask(newMeta)
-	legOK := legacy != newer && fileExistsTask(legMeta)
+	newOK := sys.PathExists(newMeta)
+	legOK := legacy != newer && sys.PathExists(legMeta)
 	switch {
 	case newOK && legOK:
 		return taskLayout{}, false, true
@@ -230,11 +230,6 @@ func findTaskLayout(mainroot, sane string) (lay taskLayout, found, ambiguous boo
 	default:
 		return taskLayout{newer, false}, false, false
 	}
-}
-
-func fileExistsTask(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
 }
 
 // taskStateRoot is the base dir for all task state:

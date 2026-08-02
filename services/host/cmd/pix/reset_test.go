@@ -24,7 +24,7 @@ const fixedTS = "1700000000"
 
 // resetCfg is a minimal config with a couple of MCP servers, for the --sbx plan.
 func resetCfg() *config.Config {
-	return &config.Config{MCP: []string{gwServerName, "slack"}}
+	return &config.Config{MCP: []string{config.GWServerName, "slack"}}
 }
 
 // tempPaths lays out a fake config + data tree under root and returns the
@@ -94,8 +94,8 @@ func TestResetPlan_Sbx(t *testing.T) {
 	if !with.RemoveSandboxes {
 		t.Error("--sbx must set RemoveSandboxes")
 	}
-	if strings.Join(with.MCPRemove, ",") != gwServerName+",slack" {
-		t.Errorf("MCPRemove = %v, want [%s slack]", with.MCPRemove, gwServerName)
+	if strings.Join(with.MCPRemove, ",") != config.GWServerName+",slack" {
+		t.Errorf("MCPRemove = %v, want [%s slack]", with.MCPRemove, config.GWServerName)
 	}
 
 	without := resetPlan(resetCfg(), p, resetOpts{})

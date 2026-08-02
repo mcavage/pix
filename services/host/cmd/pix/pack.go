@@ -342,7 +342,7 @@ func loadPack(root string) (*packInfo, error) {
 		return nil, fmt.Errorf("parse %s: %w", mf, err)
 	}
 	p := &packInfo{Root: root, Manifest: m}
-	if d := filepath.Join(root, "skills"); dirHasEntries(d) {
+	if d := filepath.Join(root, "skills"); sys.DirHasEntries(d) {
 		if isSymlinkPath(d) {
 			return nil, fmt.Errorf("pack %s: skills/ is a symlink; refusing to mount", root)
 		}
@@ -351,7 +351,7 @@ func loadPack(root string) (*packInfo, error) {
 		}
 		p.SkillsDir = d
 	}
-	if d := filepath.Join(root, "knowledge"); dirHasEntries(d) {
+	if d := filepath.Join(root, "knowledge"); sys.DirHasEntries(d) {
 		if isSymlinkPath(d) {
 			return nil, fmt.Errorf("pack %s: knowledge/ is a symlink; refusing to mount", root)
 		}
@@ -360,7 +360,7 @@ func loadPack(root string) (*packInfo, error) {
 		}
 		p.KnowledgeDir = d
 	}
-	if d := filepath.Join(root, "bin"); dirHasEntries(d) {
+	if d := filepath.Join(root, "bin"); sys.DirHasEntries(d) {
 		if isSymlinkPath(d) {
 			return nil, fmt.Errorf("pack %s: bin/ is a symlink; refusing to mount", root)
 		}
@@ -369,13 +369,13 @@ func loadPack(root string) (*packInfo, error) {
 		}
 		p.BinDir = d
 	}
-	if f := filepath.Join(root, "capabilities.json"); fileExists(f) {
+	if f := filepath.Join(root, "capabilities.json"); sys.IsRegularFile(f) {
 		if isSymlinkPath(f) {
 			return nil, fmt.Errorf("pack %s: capabilities.json is a symlink; refusing to mount", root)
 		}
 		p.CapabilitiesFile = f
 	}
-	if f := filepath.Join(root, "web-search.json"); fileExists(f) {
+	if f := filepath.Join(root, "web-search.json"); sys.IsRegularFile(f) {
 		if isSymlinkPath(f) {
 			return nil, fmt.Errorf("pack %s: web-search.json is a symlink; refusing to mount", root)
 		}

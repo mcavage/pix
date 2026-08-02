@@ -46,13 +46,13 @@ const gatewayDownDetail = "sbx present but couldn't list MCP registrations — c
 // replaces the legacy binary mcpCheck, which rendered every listing failure
 // as a TODO.
 func gogRegistrationCheck(mcpOut string, mcpOK, sbxPresent bool) readiness.Check {
-	switch mcp.McpRegEvidenceFrom(mcpOut, mcpOK, gwServerName) {
+	switch mcp.McpRegEvidenceFrom(mcpOut, mcpOK, config.GWServerName) {
 	case mcp.McpRegYes:
-		return readiness.Check{Label: gwServerName, Verdict: readiness.VerdictReady, Detail: "registered", Evidence: "sbx mcp ls"}
+		return readiness.Check{Label: config.GWServerName, Verdict: readiness.VerdictReady, Detail: "registered", Evidence: "sbx mcp ls"}
 	case mcp.McpRegNo:
-		return readiness.Check{Label: gwServerName, Verdict: readiness.VerdictTodo, Detail: "not registered", Todo: "pix mcp register"}
+		return readiness.Check{Label: config.GWServerName, Verdict: readiness.VerdictTodo, Detail: "not registered", Todo: "pix mcp register"}
 	default: // mcp.McpRegUnknown: sbx absent, or present with the listing failing
-		return mcpUnavailableCheck(gwServerName, sbxPresent)
+		return mcpUnavailableCheck(config.GWServerName, sbxPresent)
 	}
 }
 
@@ -718,7 +718,7 @@ func mcpGroupWith(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbx
 	// `run --pack` mix-in or a since-switched pack's historical MCP
 	// provenance visible on THIS sandbox. gog is excluded throughout (owned
 	// by its own dedicated group).
-	exclude := map[string]bool{gwServerName: true}
+	exclude := map[string]bool{config.GWServerName: true}
 	currentIntent := mcp.McpCurrentIntentNames(cfg.MCP, containers, exclude)
 	var receipt *workspace.MCPReceipt
 	if ctx.mode == mcpAttachReceipt {

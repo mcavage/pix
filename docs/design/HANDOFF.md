@@ -16,19 +16,20 @@ the reasoning; each message states what it found, not just what it changed.
 ## Current state
 
 ```
-cmd/pix production LOC    40,905 -> 33,621
-packages                       6 -> 14
-nil-seam guards              125 -> 11   (all on domain probes; see hostenv)
+cmd/pix production LOC    40,905 -> 27,836   (64 files, was 91)
+packages                       6 -> 22
+nil-seam guards              125 -> 11        (all on domain probes; see hostenv)
 ```
 
 Layers (see `architecture.md` for the rule, `arch_test.go` for the enforcement):
 
 ```
-L0  sys sys/systest config routing rpc cli hostenv launcher     done
+L0  sys sys/systest config routing rpc cli launcher
+    hostenv hostenv/hostenvtest workspace                       done
 L1  inference monitor monitor/tui okf plugin slackoauth
-    workspace service                                           partial
+    service memory knowledge secret mcp                         partial
 L2  readiness                                                   done
-L3  —                              (workflows still inside cmd/pix)
+L3  workflow/man workflow/backup workflow/upgrade               open
 L4  cmd/pix                                                     draining
 ```
 
@@ -57,7 +58,8 @@ Rules, in priority order:
 
 | tool | what it is for |
 |---|---|
-| `scripts/extract-pkg` | Size an extraction. go/parser, NOT regex — a regex was off by 12× (said 25 external symbols for the monitor TUI; the truth was 2). |
+| `scripts/extract-pkg` | Size an extraction. go/parser, NOT regex — a regex was off by 12× (said 25 external symbols for the monitor TUI; the truth was 2). Run it from the REPO ROOT with bare basename prefixes (`extract-pkg pack kitref`), not paths. |
+| `scripts/movesym` | Move declarations between files in one package, carrying doc comments. The most useful tool here: most extractions are unblocked by moving symbols home, not files. |
 | `scripts/migrate-shellenv/` | AST literal rewriter. Pattern to copy for composite-literal surgery. |
 | `scripts/drop-nil-guards/` | AST dead-guard removal, skipping nested edits. |
 | `scripts/migrate-shellenv.py` | Line-level renames. Every false positive is a compile error, which is the safety net. |
@@ -74,21 +76,34 @@ extracted package cannot import `package main`.
 took `memory` from 11 to 5 without touching `memory.go`. The numbers in
 `architecture.md` predate `workspace`, `service` and `readiness`.
 
-Remaining: knowledge, secret, pack, mcp, task, run+sandbox. `doctor` stays —
-110 inbound is what a composition root looks like, and "fixing" it would be
-wrong.
+Remaining, inbound ascending: onboard (6), pack (8), slack (9), reset (9),
+status (21), gworkspace (23), task (25), run+sandbox (47). `doctor` (34) and
+`setup` (58) stay — a high inbound count is what a composition root looks like,
+and "fixing" it would be wrong.
+
+Three counts are noise in EVERY domain: `main`, `version`, `defaultShellEnv`.
+Subtract them first.
 
 ### The recipe
 
 1. `/tmp/extract-pkg <prefix>` — read INBOUND, not LOC.
-2. If inbound is stubborn, the cause is almost always a capability calling a
-   sibling. **Invert it into the workflow** rather than moving both.
-3. Consider whether a *smaller thing inside* the folder is the real package.
+2. Look at WHERE each inbound symbol is declared. If it is named after your
+   domain and lives in someone else's file, `movesym` it home — that is usually
+   most of the count. `mcp` went 23 -> 5 this way with no file moving.
+3. Then split the argv seams (`runFooCmd`, anything calling `os.Exit`) into a
+   `foo_cmd.go` in cmd/pix. Those are the calls that legitimately need
+   `defaultShellEnv` and the composition root, and they belong at L4.
+4. If inbound is STILL stubborn, the cause is a capability calling a sibling.
+   **Invert it** — define a struct of the facts it needs and let the workflow
+   fill it (see `mcp.Credentials`). Do not move both packages.
+5. Consider whether a *smaller thing inside* the folder is the real package.
    `readiness` measured 17 as a directory and 2 as types+snapshot+render.
-4. `git mv` the files, rewrite the package clause, export the API.
-5. Drive the compiler in a loop — see "the fix loop" below.
-6. Add the package to `pkgLayer` in `arch_test.go`. It fails until you do.
-7. Gate, commit.
+   Equally: a file named `mcp_catalog_gate.go` was a SETUP gate; renaming it to
+   match its subject removed it from the extraction entirely.
+6. `git mv` the files, rewrite the package clause, export the API.
+7. Drive the compiler in a loop — see "the fix loop" below.
+8. Add the package to `pkgLayer` in `arch_test.go`. It fails until you do.
+9. Gate, **diff the string literals AND the comments** (see traps), commit.
 
 ### The fix loop
 
@@ -119,11 +134,20 @@ for _ in range(400):
 
 ## Traps, all of which bit
 
-- **Renames leak into string literals.** `"google-workspace"` became
-  `"google-ws"`; `-test.run` became `-test.Run`; the doctor headline's
-  "outstanding" became "Outstanding". After any bulk rename:
-  `git diff HEAD -- services/host | grep -E '^\+' | grep -oE '"[^"]{4,}"' | sort -u`
-  and read it.
+- **Renames leak into string literals AND comments.** This keeps happening and
+  it keeps reaching users. `"google-workspace"` -> `"google-ws"`; `-test.run`
+  -> `-test.Run`; "outstanding" -> "Outstanding"; `provenance` -> 
+  `upgrade.Provenance` in 23 strings and 57 comments including three sentences
+  doctor/status/pack print; `gog` -> `Gog` in 28 strings and 42 comments; and a
+  LOCAL variable rename that turned the advice `pix config set mcp <server>`
+  into `pix config set group <server>`. Diff both, every time:
+  ```sh
+  git diff -- services/host | grep -E '^\+' | grep -oE '"[^"]{5,}"' | sort -u > /tmp/n
+  git diff -- services/host | grep -E '^-' | grep -oE '"[^"]{5,}"' | sort -u > /tmp/o
+  comm -23 /tmp/n /tmp/o
+  ```
+  Repair inside literals and comment tails SEPARATELY — a single pass over the
+  whole file re-breaks the code you just renamed.
 - **Renames leak into `package` clauses and comments.** One pass renamed
   `package workspace` to `package Workspace`; the error it produced
   (`undefined: workspace` at a correct-looking import) is deeply unhelpful.
@@ -149,7 +173,9 @@ tags so usage is generated. Library is kong — chosen over cobra because cobra'
 `RunE` has no parameter for dependencies, so they arrive via untyped
 `cmd.Context()` and flag targets become package-level vars.
 
-Migrated: `models`, `agent`, `secret`. 31 verbs remain. Copy
+Migrated: `models`, `agent`, `secret`. 31 verbs remain. `mcp` has its argv seam
+split out (`cmd/pix/mcp_cmd.go`) but still hand-parses; that file is the natural
+next one to convert. Copy
 `services/host/cmd/pix/models_cmd.go` or `agent_cmd.go`; the five-step recipe is
 in `architecture.md`. One quirk to know: `cli.Run` recovers a panic to intercept
 kong's `os.Exit` on `--help`. Kong offers no other hook. It is confined to one

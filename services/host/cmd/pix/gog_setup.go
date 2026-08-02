@@ -330,8 +330,8 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 	gogPath, gogErr := env.LookPath("gog")
 	if gogErr != nil {
 		fmt.Fprintln(out, "the Google Workspace dependency CLI is not installed.")
-		fmt.Fprintln(out, "  install it:  "+gwInstallCmd)
-		return fmt.Errorf("the Google Workspace dependency CLI is not installed (%s)", gwInstallCmd)
+		fmt.Fprintln(out, "  install it:  "+config.GWInstallCmd)
+		return fmt.Errorf("the Google Workspace dependency CLI is not installed (%s)", config.GWInstallCmd)
 	} // Validate the credentials path BEFORE ever handing it to gog: must be a
 	// TRUE regular file — Mode().IsRegular(), not merely "exists and isn't a
 	// directory" (which a FIFO, socket, or device would also satisfy).
@@ -429,15 +429,15 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 	// same-run rollback.
 	snap := snapshotGogRegistration(env)
 	if snap.state == gogRegUnknown {
-		return fmt.Errorf("could not confirm the prior " + gwServerName + " registration (sbx mcp ls/get did not resolve cleanly): " +
+		return fmt.Errorf("could not confirm the prior " + config.GWServerName + " registration (sbx mcp ls/get did not resolve cleanly): " +
 			"refusing to authorize or overwrite it until this is readable; check the sbx daemon (sbx mcp status), " +
 			"then re-run pix gworkspace setup")
 	}
 	docsSnap := gogRegSnapshot{state: gogRegAbsent}
 	if createDocs {
-		docsSnap = snapshotMCPRegistration(env, gwDocsCreateServerName)
+		docsSnap = snapshotMCPRegistration(env, config.GWDocsCreateServerName)
 		if docsSnap.state == gogRegUnknown {
-			return fmt.Errorf("could not confirm the prior %s registration: check the sbx daemon (sbx mcp status), then re-run pix gworkspace setup", gwDocsCreateServerName)
+			return fmt.Errorf("could not confirm the prior %s registration: check the sbx daemon (sbx mcp status), then re-run pix gworkspace setup", config.GWDocsCreateServerName)
 		}
 	}
 
@@ -496,7 +496,7 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 	if createDocs {
 		reg.HostBin = hostPath
 	}
-	head := probeListTools(env, reg.ExecArgv(gwServerName))
+	head := probeListTools(env, reg.ExecArgv(config.GWServerName))
 	switch head.status {
 	case probeToolsOK:
 		fmt.Fprintln(out, "headless tools OK (verified the same host-side path the sbx gateway/doctor use)")
@@ -521,9 +521,9 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 	// Idempotency: ALWAYS ensure gog is in the configured MCP set, even when
 	// the account already matched (a healthy re-run must still leave gog
 	// attached/registered deterministically).
-	cfg.AddMCP(gwServerName)
+	cfg.AddMCP(config.GWServerName)
 	if createDocs {
-		cfg.AddMCP(gwDocsCreateServerName)
+		cfg.AddMCP(config.GWDocsCreateServerName)
 	}
 
 	// REGISTER FIRST, save second. mcp.RegisterGogRegistrar runs `sbx mcp add gog
@@ -533,11 +533,11 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 	// cfg.Save() is ever called, so the persisted config is left byte-for-byte
 	// unchanged — there is no config/registration drift to roll back from.
 	if err := mcp.RegisterGogRegistrar(reg, env, out); err != nil {
-		return fmt.Errorf("registering %s with the sbx gateway: %w (finish later: pix mcp register %s)", gwServerName, err, gwServerName)
+		return fmt.Errorf("registering %s with the sbx gateway: %w (finish later: pix mcp register %s)", config.GWServerName, err, config.GWServerName)
 	}
 	if createDocs {
 		if err := mcp.RegisterDocsCreateRegistrar(reg, env, out); err != nil {
-			docsRollbackErr := restoreMCPRegistration(env, gwDocsCreateServerName, docsSnap)
+			docsRollbackErr := restoreMCPRegistration(env, config.GWDocsCreateServerName, docsSnap)
 			gogRollbackErr := gogSetupRollbackRegistration(env, snap)
 			if docsRollbackErr != nil || gogRollbackErr != nil {
 				return fmt.Errorf("registering create-new-Docs with the sbx gateway: %w; rollback failed (ws: %v; docs-create: %v)", err, gogRollbackErr, docsRollbackErr)
@@ -555,7 +555,7 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 		// returned error explicitly rather than swallowed.
 		var docsErr error
 		if createDocs {
-			docsErr = restoreMCPRegistration(env, gwDocsCreateServerName, docsSnap)
+			docsErr = restoreMCPRegistration(env, config.GWDocsCreateServerName, docsSnap)
 		}
 		gogErr := gogSetupRollbackRegistration(env, snap)
 		if docsErr != nil || gogErr != nil {
@@ -565,8 +565,8 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 	}
 
 	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, gwServerName+" is in the configured MCP set: a fresh sandbox creation preloads it (tools in context from the start).")
-	fmt.Fprintln(out, "Existing sandbox? attach it live: pix mcp load "+gwServerName)
+	fmt.Fprintln(out, config.GWServerName+" is in the configured MCP set: a fresh sandbox creation preloads it (tools in context from the start).")
+	fmt.Fprintln(out, "Existing sandbox? attach it live: pix mcp load "+config.GWServerName)
 	return nil
 }
 
@@ -586,13 +586,13 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 func gogSetupRollbackRegistration(env hostenv.Env, snap gogRegSnapshot) error {
 
 	if snap.state == gogRegPresent {
-		args := mcp.RawAddArgs(gwServerName, snap.argv)
+		args := mcp.RawAddArgs(config.GWServerName, snap.argv)
 		if _, err := env.Run("sbx", args...); err != nil {
 			return fmt.Errorf("could not restore the prior gog registration: %w", err)
 		}
 		return nil
 	}
-	if _, err := env.Run("sbx", "mcp", "rm", gwServerName); err != nil {
+	if _, err := env.Run("sbx", "mcp", "rm", config.GWServerName); err != nil {
 		return fmt.Errorf("could not remove the new gog registration: %w", err)
 	}
 	return nil
@@ -689,7 +689,7 @@ func snapshotGogRegistration(env hostenv.Env) gogRegSnapshot {
 	if err != nil || timedOut {
 		return gogRegSnapshot{state: gogRegUnknown}
 	}
-	if !cli.GrepWord(listOut, gwServerName) {
+	if !cli.GrepWord(listOut, config.GWServerName) {
 		return gogRegSnapshot{state: gogRegAbsent}
 	}
 	if argv, ok := registeredGogCommand(env); ok {

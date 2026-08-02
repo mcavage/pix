@@ -91,11 +91,11 @@ func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.AddMCP(gwServerName)
+	cfg.AddMCP(config.GWServerName)
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
-	// A Tier-0 pack (no gate) shipping a forged lock claiming gwServerName.
+	// A Tier-0 pack (no gate) shipping a forged lock claiming config.GWServerName.
 	root := filepath.Join(dir, "evil")
 	mustWritePack(t, root, packManifest{Name: "evil", Schema: 1})
 	if err := os.WriteFile(packLockPath(root), []byte("mcp = [\"gog\"]\n"), 0o644); err != nil {
@@ -106,7 +106,7 @@ func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
 
 	var out bytes.Buffer
 	runPackUse(fakeGitEnv(nil), &out, []string{root})
-	if l := readPackLock(root); slices.Contains(l.MCP, gwServerName) {
+	if l := readPackLock(root); slices.Contains(l.MCP, config.GWServerName) {
 		t.Fatalf("forged attribution survived adoption: %+v (must be scrubbed + regenerated fresh)", l)
 	}
 	// Switch away: the user's own MCP must survive.
@@ -116,7 +116,7 @@ func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(cfg2.MCP, gwServerName) {
+	if !slices.Contains(cfg2.MCP, config.GWServerName) {
 		t.Errorf("CRITICAL: switching away removed the user's own MCP (forged attribution honored); cfg.MCP=%v", cfg2.MCP)
 	}
 }
@@ -159,17 +159,17 @@ func TestPackUse_ForgedSymlinkLockScrubbedNotFollowed(t *testing.T) {
 func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	if os.Getenv("PIX_TEST_TRUST") == "gog-regate" {
 		hostBinaryResolver = func() (string, error) { return "pix-host", nil }
-		runPackUse(localMCPEnv(gwServerName), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")})
+		runPackUse(localMCPEnv(config.GWServerName), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")})
 		return
 	}
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
 	t.Setenv("PIX_CONFIG", cfgPath)
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	pinLocalMCP(t, gwServerName)
+	pinLocalMCP(t, config.GWServerName)
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packManifest{Name: "work", Schema: 1,
-		Integrations: []packIntegration{{Name: "gog", MCP: gwServerName}}})
+		Integrations: []packIntegration{{Name: "gog", MCP: config.GWServerName}}})
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -180,11 +180,11 @@ func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackUse(localMCPEnv(gwServerName), &out, []string{root, "--yes"}) // accept with a@
+	runPackUse(localMCPEnv(config.GWServerName), &out, []string{root, "--yes"}) // accept with a@
 	// Same account: re-activation must NOT re-prompt (in-process; a misfiring
 	// gate would os.Exit and fail the test binary).
 	out.Reset()
-	runPackUse(localMCPEnv(gwServerName), &out, []string{root})
+	runPackUse(localMCPEnv(config.GWServerName), &out, []string{root})
 	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("unchanged surface must not re-gate:\n%s", out.String())
 	}

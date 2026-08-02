@@ -57,11 +57,11 @@ func rowsFor(st statusReport, sandbox string) map[string]mcpSandboxRow {
 // state across two sandboxes with DISTINCT receipts — preloaded, loaded,
 // registered-not-attached, not-registered, and unverifiable (corrupt receipt).
 func TestStatusMCPRowsAllFiveStates(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName, "slack", "notion", "linear"}}
+	cfg := &config.Config{MCP: []string{config.GWServerName, "slack", "notion", "linear"}}
 	env, stateDir := statusMCPEnv(t,
 		"NAME STATE DIR\npix-proj running /home/u/proj\npix-bad running /home/u/bad\n",
 		"google-workspace\nslack\nnotion\n") // linear positively not registered
-	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{gwServerName}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{config.GWServerName}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	if err := workspace.AppendLoadReceipt(stateDir, "pix-proj", "slack", receiptClock); err != nil {
@@ -81,17 +81,17 @@ func TestStatusMCPRowsAllFiveStates(t *testing.T) {
 	}
 	proj := rowsFor(st, "pix-proj")
 	for name, want := range map[string]string{
-		gwServerName: mcp.McpJoinPreloaded,
-		"slack":      mcp.McpJoinLoaded,
-		"notion":     mcp.McpJoinRegisteredNotAttached,
-		"linear":     mcp.McpJoinNotRegistered,
+		config.GWServerName: mcp.McpJoinPreloaded,
+		"slack":             mcp.McpJoinLoaded,
+		"notion":            mcp.McpJoinRegisteredNotAttached,
+		"linear":            mcp.McpJoinNotRegistered,
 	} {
 		if proj[name].State != want {
 			t.Errorf("pix-proj %s state = %q, want %q", name, proj[name].State, want)
 		}
 	}
 	bad := rowsFor(st, "pix-bad")
-	for _, name := range []string{gwServerName, "slack", "notion"} {
+	for _, name := range []string{config.GWServerName, "slack", "notion"} {
 		r := bad[name]
 		if r.State != mcp.McpJoinUnverifiable || !strings.Contains(r.Evidence, "receipt corrupt") {
 			t.Errorf("pix-bad %s = %+v, want unverifiable on a corrupt receipt", name, r)
@@ -102,8 +102,8 @@ func TestStatusMCPRowsAllFiveStates(t *testing.T) {
 		t.Errorf("pix-bad slack = %+v — leaked pix-proj's receipt", bad["slack"])
 	}
 	// Registration tri-state carried on every row.
-	if proj["linear"].Registered != "no" || proj[gwServerName].Registered != "yes" {
-		t.Errorf("registered tri-state wrong: linear=%q gog=%q", proj["linear"].Registered, proj[gwServerName].Registered)
+	if proj["linear"].Registered != "no" || proj[config.GWServerName].Registered != "yes" {
+		t.Errorf("registered tri-state wrong: linear=%q gog=%q", proj["linear"].Registered, proj[config.GWServerName].Registered)
 	}
 }
 
@@ -220,7 +220,7 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 // failing must render unverifiable rows — never as if there were zero
 // sandboxes (and never a receipt-backed claim without a discovered sandbox).
 func TestStatusMCPDiscoveryUnavailableNotNoSandboxes(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName, "slack"}}
+	cfg := &config.Config{MCP: []string{config.GWServerName, "slack"}}
 	env, _ := statusMCPEnv(t, "", "google-workspace\nslack\n")
 	inner := systest.Of(env.System).RunFn
 	systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
@@ -259,7 +259,7 @@ func TestStatusMCPDiscoveryUnavailableNotNoSandboxes(t *testing.T) {
 // the host-global MCP summary states registration + preload intent only —
 // no attachment vocabulary anywhere.
 func TestStatusHostGlobalNoAttachmentClaim(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName}}
+	cfg := &config.Config{MCP: []string{config.GWServerName}}
 	env, _ := statusMCPEnv(t, "other-box running\n", "google-workspace\n") // zero pix boxes
 	st := gatherStatus(cfg, "default", env)
 	if len(st.MCPRows) != 0 {
@@ -285,9 +285,9 @@ func TestStatusHostGlobalNoAttachmentClaim(t *testing.T) {
 // labeled as sandbox provenance rather than current preload intent — while a
 // name that IS part of current intent carries no such label.
 func TestStatusMCPReceiptOnlyNameVisible(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName}} // current intent: gog only
+	cfg := &config.Config{MCP: []string{config.GWServerName}} // current intent: gog only
 	env, stateDir := statusMCPEnv(t, "pix-proj running /home/u/proj\n", "google-workspace\nnotion\n")
-	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{gwServerName, "notion"}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{config.GWServerName, "notion"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	st := gatherStatus(cfg, "default", env)
@@ -302,8 +302,8 @@ func TestStatusMCPReceiptOnlyNameVisible(t *testing.T) {
 	if !strings.Contains(notion.Evidence, "sandbox provenance only") {
 		t.Errorf("notion evidence should be labeled sandbox provenance: %q", notion.Evidence)
 	}
-	if strings.Contains(rows[gwServerName].Evidence, "sandbox provenance only") {
-		t.Errorf("gog (current intent) must not carry the receipt-only label: %+v", rows[gwServerName])
+	if strings.Contains(rows[config.GWServerName].Evidence, "sandbox provenance only") {
+		t.Errorf("gog (current intent) must not carry the receipt-only label: %+v", rows[config.GWServerName])
 	}
 	var human bytes.Buffer
 	st.render(&human)
@@ -323,9 +323,9 @@ func TestStatusMCPReceiptOnlyNameVisible(t *testing.T) {
 // {name,registered,sandbox,state,evidence} with the registration tri-state as
 // a string. A schema drift breaks this golden on purpose.
 func TestStatusMCPRowsJSONGolden(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName, "slack", "notion", "linear"}}
+	cfg := &config.Config{MCP: []string{config.GWServerName, "slack", "notion", "linear"}}
 	env, stateDir := statusMCPEnv(t, "pix-proj running /home/u/proj\n", "google-workspace\nslack\nnotion\n")
-	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{gwServerName}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{config.GWServerName}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	if err := workspace.AppendLoadReceipt(stateDir, "pix-proj", "slack", receiptClock); err != nil {
@@ -338,7 +338,7 @@ func TestStatusMCPRowsJSONGolden(t *testing.T) {
 	}
 	golden := `[
   {
-    "name": "` + gwServerName + `",
+    "name": "` + config.GWServerName + `",
     "registered": "yes",
     "sandbox": "pix-proj",
     "state": "preloaded",
@@ -388,9 +388,9 @@ func TestStatusNoRetiredMCPVocabulary(t *testing.T) {
 			}
 		}
 	}
-	cfg := &config.Config{MCP: []string{gwServerName, "slack", "notion", "linear"}}
+	cfg := &config.Config{MCP: []string{config.GWServerName, "slack", "notion", "linear"}}
 	env, stateDir := statusMCPEnv(t, "pix-proj running /home/u/proj\n", "google-workspace\nslack\nnotion\n")
-	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{gwServerName}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, "pix-proj", "", []string{config.GWServerName}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	for _, jsonOut := range []bool{false, true} {

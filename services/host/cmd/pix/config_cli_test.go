@@ -35,21 +35,21 @@ func TestApplyConfigChange_GogAccount(t *testing.T) {
 // TestApplyConfigChange_MCP: set adds (idempotent), unset removes.
 func TestApplyConfigChange_MCP(t *testing.T) {
 	cfg := defaultCfg()
-	if _, err := applyConfigChange(cfg, false, "mcp", []string{gwServerName}); err != nil {
+	if _, err := applyConfigChange(cfg, false, "mcp", []string{config.GWServerName}); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(cfg.MCP, gwServerName) {
+	if !slices.Contains(cfg.MCP, config.GWServerName) {
 		t.Errorf("MCP = %v, want gog added", cfg.MCP)
 	}
 	// Adding again is a no-op (no duplicate).
-	_, _ = applyConfigChange(cfg, false, "mcp", []string{gwServerName})
-	if n := countStr(cfg.MCP, gwServerName); n != 1 {
+	_, _ = applyConfigChange(cfg, false, "mcp", []string{config.GWServerName})
+	if n := countStr(cfg.MCP, config.GWServerName); n != 1 {
 		t.Errorf("MCP should contain gog exactly once, got %d in %v", n, cfg.MCP)
 	}
-	if _, err := applyConfigChange(cfg, true, "mcp", []string{gwServerName}); err != nil {
+	if _, err := applyConfigChange(cfg, true, "mcp", []string{config.GWServerName}); err != nil {
 		t.Fatal(err)
 	}
-	if slices.Contains(cfg.MCP, gwServerName) {
+	if slices.Contains(cfg.MCP, config.GWServerName) {
 		t.Errorf("MCP = %v, want gog removed", cfg.MCP)
 	}
 	if _, err := applyConfigChange(cfg, false, "mcp", nil); err == nil {
@@ -263,7 +263,7 @@ func TestConfigSaveRoundTrip(t *testing.T) {
 	if _, err := applyConfigChange(cfg, false, "google_workspace_account", []string{"round@trip.com"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := applyConfigChange(cfg, false, "mcp", []string{gwServerName}); err != nil {
+	if _, err := applyConfigChange(cfg, false, "mcp", []string{config.GWServerName}); err != nil {
 		t.Fatal(err)
 	}
 	if err := cfg.Save(); err != nil {
@@ -273,7 +273,7 @@ func TestConfigSaveRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.GogAccount != "round@trip.com" || !slices.Contains(got.MCP, gwServerName) {
+	if got.GogAccount != "round@trip.com" || !slices.Contains(got.MCP, config.GWServerName) {
 		t.Errorf("round-trip lost data: %+v", got)
 	}
 }

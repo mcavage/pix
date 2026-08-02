@@ -130,7 +130,7 @@ func gogSpawnCheck(env hostenv.Env, res probeResult, readyDetail, noToolsDetail 
 			Evidence: "probe output carried an explicit policy denial"}
 	default: // probeTimedOut / probeError — unverifiable, never a keyring claim
 		return readiness.Check{Label: "headless spawn", Verdict: readiness.VerdictUnverifiable,
-			Detail:   "probe " + res.detail + " — could not verify (inspect: sbx mcp inspect " + gwServerName + ")",
+			Detail:   "probe " + res.detail + " — could not verify (inspect: sbx mcp inspect " + config.GWServerName + ")",
 			Evidence: "probe " + res.detail}
 	}
 }
@@ -146,7 +146,7 @@ func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPres
 	// gog's attachment truth comes from the SAME receipt-backed join row every
 	// other MCP server uses (mcpjoin.go, via the shared workspace-sandbox
 	// context) — config membership alone is an intent, never an attachment.
-	gogReg := mcp.McpRegEvidenceFrom(mcpOut, mcpOK, gwServerName)
+	gogReg := mcp.McpRegEvidenceFrom(mcpOut, mcpOK, config.GWServerName)
 
 	// HONEST PATH: probe the command sbx ACTUALLY registered for gog. This is the
 	// only check that proves the real registration — account, op-refs path, and
@@ -178,7 +178,7 @@ func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPres
 		trustedArgv, trusted := trustedGogSpawn(env, argv)
 		if !trusted {
 			g.Checks = append(g.Checks, readiness.Check{Label: "headless spawn", Verdict: readiness.VerdictUnverifiable,
-				Detail:   "probe skipped: the registered command's gog/op executable does not match the PATH-resolved binary (inspect: sbx mcp inspect " + gwServerName + ") — never executed",
+				Detail:   "probe skipped: the registered command's gog/op executable does not match the PATH-resolved binary (inspect: sbx mcp inspect " + config.GWServerName + ") — never executed",
 				Evidence: "registered executable token not canonical; probe not executed"})
 			g.Checks = append(g.Checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
 			g.Checks = append(g.Checks, gogAttachCheck(cfg, ctx, gogReg))
@@ -383,12 +383,12 @@ func registeredGogCommand(env hostenv.Env) ([]string, bool) {
 	if _, err := env.LookPath("sbx"); err != nil {
 		return nil, false
 	}
-	if out, timedOut, err := env.RunTimed("sbx", "mcp", "inspect", gwServerName); err == nil && !timedOut {
+	if out, timedOut, err := env.RunTimed("sbx", "mcp", "inspect", config.GWServerName); err == nil && !timedOut {
 		if argv, ok := parseGogCommandLine(env, out); ok {
 			return argv, true
 		}
 	}
-	if out, timedOut, err := env.RunTimed("sbx", "mcp", "get", gwServerName); err == nil && !timedOut {
+	if out, timedOut, err := env.RunTimed("sbx", "mcp", "get", config.GWServerName); err == nil && !timedOut {
 		if argv, ok := parseGogCommandLine(env, out); ok {
 			return argv, true
 		}
@@ -491,7 +491,7 @@ func gogSpawnArgv(env hostenv.Env, argv []string) ([]string, bool) {
 func parseGogCommandTable(env hostenv.Env, out string) ([]string, bool) {
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 3 || fields[0] != gwServerName || fields[1] != "local" {
+		if len(fields) < 3 || fields[0] != config.GWServerName || fields[1] != "local" {
 			continue
 		}
 		if strings.ContainsAny(line, "\"'") {
@@ -519,7 +519,7 @@ func parseGogCommandJSON(env hostenv.Env, out string) ([]string, bool) {
 		return nil, false
 	}
 	for _, s := range servers {
-		if s.Name != gwServerName || strings.TrimSpace(s.Command) == "" {
+		if s.Name != config.GWServerName || strings.TrimSpace(s.Command) == "" {
 			continue
 		}
 		argv := append([]string{s.Command}, s.Args...)
@@ -545,9 +545,9 @@ func parseGogCommandJSON(env hostenv.Env, out string) ([]string, bool) {
 // informational note, never a ready attachment claim.
 func gogAttachCheck(cfg *config.Config, ctx mcpSandboxContext, reg mcp.McpRegEvidence) readiness.Check {
 	if ctx.mode == mcpAttachReceipt {
-		return mcpAttachCheck(gwServerName, ctx, reg)
+		return mcpAttachCheck(config.GWServerName, ctx, reg)
 	}
-	if mcpConfigured(cfg, gwServerName) {
+	if mcpConfigured(cfg, config.GWServerName) {
 		det := "in the configured MCP set — preloads at sandbox create (intent, not attachment)"
 		if ctx.mode == mcpAttachSandboxAbsent {
 			det = "sandbox " + ctx.sandbox + " not created yet — gog preloads at `pix run` create"
@@ -557,5 +557,5 @@ func gogAttachCheck(cfg *config.Config, ctx mcpSandboxContext, reg mcp.McpRegEvi
 		return readiness.Check{Label: "attached", Note: true, Verdict: readiness.VerdictUnverifiable, Detail: det}
 	}
 	return readiness.Check{Label: "attached", Note: true, Verdict: readiness.VerdictUnverifiable,
-		Detail: "run `pix config set mcp " + gwServerName + "` to attach it"}
+		Detail: "run `pix config set mcp " + config.GWServerName + "` to attach it"}
 }

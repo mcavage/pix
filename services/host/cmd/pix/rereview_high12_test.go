@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/mcp"
 	"pix/host/readiness"
@@ -261,7 +262,7 @@ func TestUnwrapOpRun_AcceptsOnlyLauncherGrammar(t *testing.T) {
 func TestUnwrapOpRun_MatchesExecArgvGrammar(t *testing.T) {
 	env := f2Env()
 	reg := mcp.McpRegistrar{Op: f2Op, OpRefs: f2Refs, HostBin: f2Host, Gog: f2Gog, Account: "you@example.com"}
-	for _, name := range []string{"slack", gwServerName} {
+	for _, name := range []string{"slack", config.GWServerName} {
 		wrapped := reg.ExecArgv(name)
 		want := reg.ServerCmd(name)
 		got, ok := unwrapOpRun(env, wrapped)

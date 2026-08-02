@@ -343,7 +343,7 @@ func TestGogSetup_CurrentOneShotRoute(t *testing.T) {
 	}
 	found := false
 	for _, m := range cfg.MCP {
-		if m == gwServerName {
+		if m == config.GWServerName {
 			found = true
 		}
 	}
@@ -410,7 +410,7 @@ func TestGogSetup_CreateDocsProfileIsScopedAndRegistersSeparateTool(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GoogleWorkspaceAccess != gwAccessCreateDocs || !mcpConfigured(cfg, gwDocsCreateServerName) {
+	if cfg.GoogleWorkspaceAccess != gwAccessCreateDocs || !mcpConfigured(cfg, config.GWDocsCreateServerName) {
 		t.Fatalf("access=%q mcp=%v", cfg.GoogleWorkspaceAccess, cfg.MCP)
 	}
 }
@@ -486,7 +486,7 @@ func TestGogSetup_MissingGogCLI(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error when gog is not installed")
 	}
-	if !strings.Contains(out.String(), gwInstallCmd) {
+	if !strings.Contains(out.String(), config.GWInstallCmd) {
 		t.Errorf("expected exact install guidance, got %q", out.String())
 	}
 }
@@ -575,7 +575,7 @@ func TestGogSetup_ZeroHeadlessToolsFailsWithGuidance(t *testing.T) {
 	if cfg != nil {
 		found := false
 		for _, m := range cfg.MCP {
-			if m == gwServerName {
+			if m == config.GWServerName {
 				found = true
 			}
 		}
@@ -620,7 +620,7 @@ func TestGogSetup_IdempotentAddMCPWhenAccountUnchanged(t *testing.T) {
 	}
 	found := false
 	for _, m := range got.MCP {
-		if m == gwServerName {
+		if m == config.GWServerName {
 			found = true
 		}
 	}

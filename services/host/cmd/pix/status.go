@@ -468,7 +468,7 @@ func (st statusReport) render(out io.Writer) {
 		}
 		// A configured Workspace account is already included in the MCP summary.
 		// Only render it separately when it needs action or is not an MCP.
-		if !st.GogAuthed || !slices.Contains(st.MCP, gwServerName) {
+		if !st.GogAuthed || !slices.Contains(st.MCP, config.GWServerName) {
 			fmt.Fprintf(out, "  ws    %s\n", label)
 		}
 	}

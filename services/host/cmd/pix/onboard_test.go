@@ -26,7 +26,7 @@ func TestValidateOnboarding_Allowlist(t *testing.T) {
 	env := fakeEnv{present: map[string]bool{}}.env()
 
 	ok := []*onboardingResult{
-		{Version: 1, MCP: []string{gwServerName}},
+		{Version: 1, MCP: []string{config.GWServerName}},
 		{Version: 1, MCP: []string{"notion", "atlassian", "granola"}},
 		{Version: 1, Knowledge: &onboardKnowledge{Action: "skip"}},
 	}
@@ -58,7 +58,7 @@ func TestValidateOnboarding_Allowlist(t *testing.T) {
 func TestApplyOnboarding_Idempotent(t *testing.T) {
 	cfg := defaultCfg()
 	env := fakeEnv{present: map[string]bool{}}.env()
-	r := &onboardingResult{Version: 1, MCP: []string{gwServerName}, OllamaBridgeModel: "qwen3.5:9b"}
+	r := &onboardingResult{Version: 1, MCP: []string{config.GWServerName}, OllamaBridgeModel: "qwen3.5:9b"}
 
 	var saved *config.Config
 	first, err := applyOnboardingResult(r, cfg, env, &bytes.Buffer{}, captureSave(&saved))
@@ -81,7 +81,7 @@ func TestApplyOnboarding_AppliesFields(t *testing.T) {
 	cfg := defaultCfg()
 	env := fakeEnv{present: map[string]bool{}}.env()
 	r := &onboardingResult{
-		Version: 1, MCP: []string{gwServerName, "notion"},
+		Version: 1, MCP: []string{config.GWServerName, "notion"},
 		OllamaBridgeModel: "qwen3.5:9b", MemoryWatcherModel: "qwen3.5:9b",
 	}
 	var saved *config.Config
@@ -95,7 +95,7 @@ func TestApplyOnboarding_AppliesFields(t *testing.T) {
 	if cfg.GogAccount != "" {
 		t.Errorf("onboarding must never set google_workspace_account, got %q", cfg.GogAccount)
 	}
-	if !slices.Contains(cfg.MCP, gwServerName) || !slices.Contains(cfg.MCP, "notion") {
+	if !slices.Contains(cfg.MCP, config.GWServerName) || !slices.Contains(cfg.MCP, "notion") {
 		t.Errorf("mcp = %v", cfg.MCP)
 	}
 	if !slices.Contains(cfg.Services, "memory") {
@@ -110,14 +110,14 @@ func TestApplyOnboarding_AppliesFields(t *testing.T) {
 }
 
 func TestParseOnboardArgs(t *testing.T) {
-	o, err := parseOnboardArgs([]string{"--account", "a@b.com", "--mcp", gwServerName, "--mcp=notion", "--model", "m", "--yes"})
+	o, err := parseOnboardArgs([]string{"--account", "a@b.com", "--mcp", config.GWServerName, "--mcp=notion", "--model", "m", "--yes"})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if o.account != "a@b.com" || o.model != "m" || !o.assumeYes {
 		t.Errorf("parsed = %+v", o)
 	}
-	if !slices.Contains(o.mcp, gwServerName) || !slices.Contains(o.mcp, "notion") {
+	if !slices.Contains(o.mcp, config.GWServerName) || !slices.Contains(o.mcp, "notion") {
 		t.Errorf("mcp = %v", o.mcp)
 	}
 	if _, err := parseOnboardArgs([]string{"--account"}); err == nil {
@@ -160,7 +160,7 @@ func TestReconcileOnboarding_AppliesFromFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := filepath.Join(dir, "onboarding.json")
-	if err := os.WriteFile(fp, []byte(`{"version":1,"google_workspace_account":"me@x.com","mcp":["`+gwServerName+`"]}`), 0o644); err != nil {
+	if err := os.WriteFile(fp, []byte(`{"version":1,"google_workspace_account":"me@x.com","mcp":["`+config.GWServerName+`"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	env := fakeEnv{present: map[string]bool{}}.env()
@@ -181,7 +181,7 @@ func TestReconcileOnboarding_AppliesFromFile(t *testing.T) {
 	if cfg.GogAccount != "" {
 		t.Errorf("onboarding must never apply google_workspace_account from the file, got %q", cfg.GogAccount)
 	}
-	if !slices.Contains(cfg.MCP, gwServerName) {
+	if !slices.Contains(cfg.MCP, config.GWServerName) {
 		t.Errorf("config not applied: mcp=%v", cfg.MCP)
 	}
 }
@@ -200,7 +200,7 @@ func TestReconcileOnboarding_NonTTYLeavesFile(t *testing.T) {
 	// google_workspace_account alone produces no applicable change (onboarding
 	// has deliberately no account writer); give the proposal a real change
 	// (mcp) so the assumeYes/tty gate below actually gets exercised.
-	if err := os.WriteFile(fp, []byte(`{"version":1,"google_workspace_account":"me@x.com","mcp":["`+gwServerName+`"]}`), 0o644); err != nil {
+	if err := os.WriteFile(fp, []byte(`{"version":1,"google_workspace_account":"me@x.com","mcp":["`+config.GWServerName+`"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	env := fakeEnv{present: map[string]bool{}}.env()

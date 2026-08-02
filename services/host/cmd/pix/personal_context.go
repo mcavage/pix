@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/sys"
 )
 
 // synthesizePersonalContextKit turns the user's durable AGENTS.md into the sbx
@@ -68,7 +69,7 @@ func readPersonalInstructions() (string, error) {
 
 func personalSkillsDir() string {
 	dir := filepath.Join(config.ContextDir(), "skills")
-	if dirHasEntries(dir) {
+	if sys.DirHasEntries(dir) {
 		return dir
 	}
 	return ""

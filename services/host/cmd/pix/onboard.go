@@ -81,7 +81,7 @@ func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env hoste
 		if m == "" {
 			return fmt.Errorf("empty mcp name")
 		}
-		if m == gwServerName || onboardMCPCatalogAllow[m] {
+		if m == config.GWServerName || onboardMCPCatalogAllow[m] {
 			continue
 		}
 		// Resolve the local MCP inventory lazily. A semantic mistake unrelated

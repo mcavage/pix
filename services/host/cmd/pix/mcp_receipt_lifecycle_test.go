@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
 	"pix/host/workspace"
@@ -120,7 +121,7 @@ func TestCreateReceipt_MergesConcurrentLoadDropsPriorLifetime(t *testing.T) {
 	}
 	withCreatePollSeams(t, probe, time.Millisecond, 5*time.Second)
 
-	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{gwServerName}); err != nil {
+	if err := execSbxRunAndRecordCreate(trueCmd(t), true, sandbox, "", []string{config.GWServerName}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -128,7 +129,7 @@ func TestCreateReceipt_MergesConcurrentLoadDropsPriorLifetime(t *testing.T) {
 	if err != nil || status != workspace.MCPStateOK {
 		t.Fatalf("status=%v err=%v", status, err)
 	}
-	if r.CreatedAt == "" || len(r.Preloaded) != 1 || r.Preloaded[0] != gwServerName {
+	if r.CreatedAt == "" || len(r.Preloaded) != 1 || r.Preloaded[0] != config.GWServerName {
 		t.Errorf("create commit = created_at %q, preloaded %v; want a fresh create with [gog]", r.CreatedAt, r.Preloaded)
 	}
 	if len(r.Loads) != 1 || r.Loads[0].Name != "fresh" {
@@ -361,7 +362,7 @@ func TestCreateCommitRacesLoads(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		errs[loaders] = workspace.CommitCreateReceipt(dir, sandbox, "", []string{gwServerName}, receiptClock)
+		errs[loaders] = workspace.CommitCreateReceipt(dir, sandbox, "", []string{config.GWServerName}, receiptClock)
 	}()
 	wg.Wait()
 	for i, err := range errs {
@@ -377,7 +378,7 @@ func TestCreateCommitRacesLoads(t *testing.T) {
 	if err != nil || status != workspace.MCPStateOK {
 		t.Fatalf("status=%v err=%v", status, err)
 	}
-	if r.CreatedAt == "" || len(r.Preloaded) != 1 || r.Preloaded[0] != gwServerName {
+	if r.CreatedAt == "" || len(r.Preloaded) != 1 || r.Preloaded[0] != config.GWServerName {
 		t.Errorf("create commit lost: created_at %q, preloaded %v", r.CreatedAt, r.Preloaded)
 	}
 	if len(r.Loads) != loaders {

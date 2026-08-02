@@ -442,7 +442,7 @@ func printSetupSummary(cfg *config.Config, env hostenv.Env, out io.Writer, model
 	// from a probe.
 	acct := strings.TrimSpace(cfg.GogAccount)
 	switch {
-	case acct == "" && !slices.Contains(cfg.MCP, gwServerName):
+	case acct == "" && !slices.Contains(cfg.MCP, config.GWServerName):
 		// absent by default: no row.
 	case acct == "":
 		line("✗", "workspace", "enabled but no account authorized — run: pix gworkspace setup")

@@ -37,6 +37,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/mcp"
 	"sort"
@@ -154,7 +155,7 @@ func localMCPClassifier(env hostenv.Env, hostResolver func() (string, error)) fu
 	set, known := mcp.LocalMCPNames(env, hostResolver)
 	return func(name string) bool {
 		if !known {
-			return name != gwServerName // fail closed: unknown ⇒ gate (except Google Workspace)
+			return name != config.GWServerName // fail closed: unknown ⇒ gate (except Google Workspace)
 		}
 		return set[name]
 	}
@@ -203,7 +204,7 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 	if isLocalMCP == nil {
 		// No partition available at all: same fail-closed posture as an
 		// unknown probe (round-3 #3) — gate every non-gog name.
-		isLocalMCP = func(name string) bool { return name != gwServerName }
+		isLocalMCP = func(name string) bool { return name != config.GWServerName }
 	}
 	seenMCP := map[string]bool{}
 	for _, ig := range p.Manifest.Integrations {

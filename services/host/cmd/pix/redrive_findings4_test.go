@@ -293,7 +293,7 @@ func TestDoctorContextAmbiguousMappingIsUnverifiable(t *testing.T) {
 // --- finding 2: gog attachment is the shared receipt-backed join row --------
 
 func TestGogAttachCheckUsesReceiptJoin(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName}}
+	cfg := &config.Config{MCP: []string{config.GWServerName}}
 	const box = "pix-proj"
 	const ws = "/home/u/proj"
 
@@ -322,7 +322,7 @@ func TestGogAttachCheckUsesReceiptJoin(t *testing.T) {
 	})
 
 	t.Run("receipted preload -> ready", func(t *testing.T) {
-		c := gogAttachCheck(cfg, receiptCtx(t, []string{gwServerName}), mcp.McpRegYes)
+		c := gogAttachCheck(cfg, receiptCtx(t, []string{config.GWServerName}), mcp.McpRegYes)
 		if c.Result() != readiness.VerdictReady || !strings.Contains(c.Detail, "preloaded by pix at create") {
 			t.Fatalf("check = %+v, want ready from the receipt's preload claim", c)
 		}
@@ -395,11 +395,11 @@ func statusReceiptEnv(t *testing.T, stateDir string) hostenv.Env {
 }
 
 func TestStatusHeadlineUnverifiableRows(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName}}
+	cfg := &config.Config{MCP: []string{config.GWServerName}}
 
 	t.Run("provider-ready + valid preload receipt -> all systems go", func(t *testing.T) {
 		stateDir := t.TempDir()
-		mustCreateReceipt(t, stateDir, "pix-proj", "/w/proj", []string{gwServerName})
+		mustCreateReceipt(t, stateDir, "pix-proj", "/w/proj", []string{config.GWServerName})
 		env := statusReceiptEnv(t, stateDir)
 		st := gatherStatus(cfg, "default", env)
 		if len(st.Todos) != 0 {
@@ -435,7 +435,7 @@ func TestStatusHeadlineUnverifiableRows(t *testing.T) {
 			// JSON stays the row truth: the row itself reads unverifiable.
 			found := false
 			for _, r := range st.MCPRows {
-				if r.Name == gwServerName && r.Sandbox == "pix-proj" && r.State == mcp.McpJoinUnverifiable {
+				if r.Name == config.GWServerName && r.Sandbox == "pix-proj" && r.State == mcp.McpJoinUnverifiable {
 					found = true
 				}
 			}

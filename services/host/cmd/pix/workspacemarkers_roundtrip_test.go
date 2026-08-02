@@ -220,7 +220,7 @@ func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	proposal := onboardingResult{Version: 1, MCP: []string{gwServerName}}
+	proposal := onboardingResult{Version: 1, MCP: []string{config.GWServerName}}
 	data, err := json.Marshal(proposal)
 	if err != nil {
 		t.Fatal(err)
@@ -244,8 +244,8 @@ func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
 	// onboarding has deliberately NO account writer (Google Workspace
 	// authorization needs a browser); the marker's mcp entry is what should
 	// round-trip into config.
-	if !slices.Contains(cfg.MCP, gwServerName) {
-		t.Errorf("cfg.MCP = %v, want %s round-tripped from the marker", cfg.MCP, gwServerName)
+	if !slices.Contains(cfg.MCP, config.GWServerName) {
+		t.Errorf("cfg.MCP = %v, want %s round-tripped from the marker", cfg.MCP, config.GWServerName)
 	}
 }
 

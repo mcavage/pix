@@ -361,7 +361,7 @@ func TestDoctor_GogAccountUnset(t *testing.T) {
 // executable/hardened/tools checks short-circuit on their own.
 func TestDoctor_GogAttachDespiteMissingExecutable(t *testing.T) {
 	cfg := defaultCfg()
-	cfg.MCP = []string{gwServerName}
+	cfg.MCP = []string{config.GWServerName}
 	const ws = "/home/u/proj"
 	const box = "pix-proj"
 	f := fakeEnv{
@@ -376,7 +376,7 @@ func TestDoctor_GogAttachDespiteMissingExecutable(t *testing.T) {
 	systest.Of(env.System).GetwdFn = func() (string, error) { return ws, nil }
 	stateDir := t.TempDir()
 	systest.Of(env.System).StateDirFn = func() (string, error) { return stateDir, nil }
-	if err := workspace.WriteCreateReceipt(stateDir, box, ws, []string{gwServerName}, receiptClock); err != nil {
+	if err := workspace.WriteCreateReceipt(stateDir, box, ws, []string{config.GWServerName}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
 	ctx := resolveMCPSandboxContext(env)
@@ -385,11 +385,11 @@ func TestDoctor_GogAttachDespiteMissingExecutable(t *testing.T) {
 	}
 	g := gogGroup(cfg, env, "google-workspace\n", true, true, ctx)
 
-	reg := findCheck(t, g, gwServerName)
+	reg := findCheck(t, g, config.GWServerName)
 	if reg.Result() != readiness.VerdictReady {
 		t.Errorf("registration check must still be emitted and ready: %+v", reg)
 	}
-	attach := findCheck(t, g, gwServerName+" attachment")
+	attach := findCheck(t, g, config.GWServerName+" attachment")
 	if attach.Result() != readiness.VerdictReady || !strings.Contains(attach.Evidence, "preloaded by pix at create") {
 		t.Errorf("attach check must be emitted and ready despite the missing gog executable: %+v", attach)
 	}
@@ -435,7 +435,7 @@ func TestDoctor_GogTransparency(t *testing.T) {
 	})
 	r := runDoctor(defaultCfg(), f.env())
 	var buf bytes.Buffer
-	r.Services, r.MCP = defaultCfg().Services, []string{gwServerName}
+	r.Services, r.MCP = defaultCfg().Services, []string{config.GWServerName}
 	r.Render(&buf, false, doctorHints())
 	out := buf.String()
 	if !strings.Contains(out, "verifying") || !strings.Contains(out, gogAcct) || !strings.Contains(out, gogOpRefs) {
@@ -647,7 +647,7 @@ func TestDoctor_GogFallbackUnconfirmedIsTODO(t *testing.T) {
 	// Verdict must NOT be all-clear: the headline calls out the unverified
 	// checks instead.
 	var buf bytes.Buffer
-	r.Services, r.MCP = defaultCfg().Services, []string{gwServerName}
+	r.Services, r.MCP = defaultCfg().Services, []string{config.GWServerName}
 	r.Render(&buf, false, doctorHints())
 	out := buf.String()
 	if strings.Contains(out, "all checks pass") {
@@ -810,7 +810,7 @@ func TestDoctor_GogBareRegisteredCommand(t *testing.T) {
 }
 
 // TestDoctor_GogBareRegisteredCommandJSON: same bare (no op-run) registration,
-// but surfaced only via `sbx mcp ls -o json` (command=gwServerName, args=[…]). doctor
+// but surfaced only via `sbx mcp ls -o json` (command=config.GWServerName, args=[…]). doctor
 // must parse command+args, recognize it as a valid gog registration, and probe
 // it to a confirmed green.
 func TestDoctor_GogBareRegisteredCommandJSON(t *testing.T) {
@@ -883,7 +883,7 @@ func TestDoctor_GogRegistration(t *testing.T) {
 			continue
 		}
 		for _, c := range g.Checks {
-			if c.Label == gwServerName && c.State() == readiness.StateTODO {
+			if c.Label == config.GWServerName && c.State() == readiness.StateTODO {
 				found = true
 			}
 		}
@@ -1043,7 +1043,7 @@ func TestDoctor_MCPUnrecognizedCommand(t *testing.T) {
 // `pix mcp register` appears AT MOST ONCE.
 func TestDoctor_GogTodoOnce(t *testing.T) {
 	cfg := defaultCfg()
-	cfg.MCP = []string{gwServerName}
+	cfg.MCP = []string{config.GWServerName}
 	f := gogGreen(fakeEnv{
 		present: map[string]bool{"sbx": true, "ollama": true},
 		output: map[string]string{
@@ -1065,7 +1065,7 @@ func TestDoctor_GogTodoOnce(t *testing.T) {
 	}
 	// The generic mcp group must not carry a gog check at all.
 	for _, c := range r.Groups[len(r.Groups)-1].Checks {
-		if c.Label == gwServerName {
+		if c.Label == config.GWServerName {
 			t.Errorf("generic mcp group should skip gog, got readiness.Check %+v", c)
 		}
 	}
@@ -1136,7 +1136,7 @@ func TestDoctor_SecretsGroup_GogOnlyNotNeeded(t *testing.T) {
 	// A gog-only config must NOT trigger the Secrets group: gog authenticates via
 	// OAuth, never op-refs, so a fresh gog-only install must not surface a phantom
 	// `pix secret set <ENV_VAR> op://vault/item/field` TODO for a missing op-refs.env.
-	g := secretsGroupFor(t, []string{gwServerName}, fakeEnv{present: map[string]bool{}})
+	g := secretsGroupFor(t, []string{config.GWServerName}, fakeEnv{present: map[string]bool{}})
 	if len(g.Checks) != 1 || !strings.Contains(g.Checks[0].Detail, "not needed") {
 		t.Errorf("gog-only config should say 1Password not needed, got %+v", g.Checks)
 	}
@@ -1217,7 +1217,7 @@ func TestDoctor_SecretsGroup_LintNoLeak(t *testing.T) {
 // `pix secret set <ENV_VAR> op://vault/item/field` at most once.
 func TestDoctor_SbxPresentMcpListFailed(t *testing.T) {
 	cfg := defaultCfg()
-	cfg.MCP = []string{gwServerName}
+	cfg.MCP = []string{config.GWServerName}
 	cfg.GogAccount = gogAcct
 	f := fakeEnv{
 		present: map[string]bool{"sbx": true, "gog": true, "op": true},

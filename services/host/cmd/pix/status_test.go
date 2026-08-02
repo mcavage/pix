@@ -37,7 +37,7 @@ func fakeStatusEnv() hostenv.Env {
 }
 
 func TestGatherStatus(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName}, KnowledgeBundles: []string{"/kb"}}
+	cfg := &config.Config{MCP: []string{config.GWServerName}, KnowledgeBundles: []string{"/kb"}}
 	st := gatherStatus(cfg, "default", fakeStatusEnv())
 
 	if !st.Memory {
@@ -70,7 +70,7 @@ func TestGatherStatus(t *testing.T) {
 }
 
 func TestRenderStatusHuman(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName}, KnowledgeBundles: []string{"/kb"}}
+	cfg := &config.Config{MCP: []string{config.GWServerName}, KnowledgeBundles: []string{"/kb"}}
 	var out bytes.Buffer
 	renderStatus(cfg, "default", fakeStatusEnv(), &out, false)
 	s := out.String()
@@ -138,7 +138,7 @@ func TestRenderStatusMonitorJSON(t *testing.T) {
 // `sbx mcp ls` (host-global summary: registration + preload intent only);
 // gog is registered, slack is not.
 func TestGatherStatusMCP(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName, "slack"}}
+	cfg := &config.Config{MCP: []string{config.GWServerName, "slack"}}
 	st := gatherStatus(cfg, "default", fakeStatusEnv())
 	if len(st.MCPServers) != 2 {
 		t.Fatalf("MCPServers = %+v, want 2 entries", st.MCPServers)
@@ -147,8 +147,8 @@ func TestGatherStatusMCP(t *testing.T) {
 	for _, m := range st.MCPServers {
 		byName[m.Name] = m
 	}
-	if !byName[gwServerName].Registered {
-		t.Errorf("gog should be registered: %+v", byName[gwServerName])
+	if !byName[config.GWServerName].Registered {
+		t.Errorf("gog should be registered: %+v", byName[config.GWServerName])
 	}
 	if byName["slack"].Registered {
 		t.Errorf("slack should NOT be registered: %+v", byName["slack"])
@@ -159,7 +159,7 @@ func TestGatherStatusMCP(t *testing.T) {
 // degrades to the bare names) — but the per-sandbox rows must render
 // UNVERIFIABLE (discovery unavailable), never a false "no sandboxes".
 func TestGatherStatusMCPSbxAbsent(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName}}
+	cfg := &config.Config{MCP: []string{config.GWServerName}}
 	env := fakeStatusEnv()
 	systest.Of(env.System).LookPathFn = func(name string) (string, error) { return "", fmt.Errorf("not found") }
 	st := gatherStatus(cfg, "default", env)
@@ -180,7 +180,7 @@ func TestGatherStatusMCPSbxAbsent(t *testing.T) {
 
 // TestRenderStatusMCPJSON: --json carries the mcp_servers registration state.
 func TestRenderStatusMCPJSON(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName, "slack"}}
+	cfg := &config.Config{MCP: []string{config.GWServerName, "slack"}}
 	var out bytes.Buffer
 	renderStatus(cfg, "default", fakeStatusEnv(), &out, true)
 	var st statusReport
@@ -193,7 +193,7 @@ func TestRenderStatusMCPJSON(t *testing.T) {
 }
 
 func TestRenderStatusJSON(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName}}
+	cfg := &config.Config{MCP: []string{config.GWServerName}}
 	var out bytes.Buffer
 	renderStatus(cfg, "default", fakeStatusEnv(), &out, true)
 	var st statusReport
@@ -210,7 +210,7 @@ func TestRenderStatusJSON(t *testing.T) {
 // appends exactly one TYPE-CORRECT register TODO so it can't claim "all
 // systems go" while a server is unregistered.
 func TestStatusRegisterTodo(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName, "slack"}}
+	cfg := &config.Config{MCP: []string{config.GWServerName, "slack"}}
 	env := fakeStatusEnv() // sbx mcp ls -> gog,notion
 	env.HostBinary = func() (string, error) { return "/usr/local/bin/pix-host", nil }
 	// probe answers the `pix-host mcp --list` classification call; the
@@ -259,7 +259,7 @@ func TestStatusRegisterTodoUnclassifiable(t *testing.T) {
 // TestStatusNoRegisterTodoWhenRegistered: every configured server registered ->
 // no register TODO.
 func TestStatusNoRegisterTodoWhenRegistered(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName, "notion"}} // both in `sbx mcp ls`
+	cfg := &config.Config{MCP: []string{config.GWServerName, "notion"}} // both in `sbx mcp ls`
 	st := gatherStatus(cfg, "default", fakeStatusEnv())
 	for _, tdo := range st.Todos {
 		if strings.Contains(tdo, "mcp register") || strings.Contains(tdo, "mcp bundle") {
@@ -271,7 +271,7 @@ func TestStatusNoRegisterTodoWhenRegistered(t *testing.T) {
 // TestStatusNoRegisterTodoWhenSbxAbsent: sbx off PATH -> registration is
 // unknowable, so status must NOT invent a register TODO.
 func TestStatusNoRegisterTodoWhenSbxAbsent(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName, "slack"}}
+	cfg := &config.Config{MCP: []string{config.GWServerName, "slack"}}
 	env := fakeStatusEnv()
 	systest.Of(env.System).LookPathFn = func(name string) (string, error) { return "", fmt.Errorf("not found") }
 	st := gatherStatus(cfg, "default", env)
@@ -469,7 +469,7 @@ func TestStatusProbeFailureNoProviderTodo(t *testing.T) {
 // verdict must not read "all systems go" even though nothing else is
 // outstanding and there are no sandboxes/rows to render unverifiable.
 func TestStatusMCPRegistrationUnverifiableBlocksAllGreen(t *testing.T) {
-	cfg := &config.Config{MCP: []string{gwServerName}}
+	cfg := &config.Config{MCP: []string{config.GWServerName}}
 	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
 			return "anthropic\n", nil // provider-ready
@@ -488,7 +488,7 @@ func TestStatusMCPRegistrationUnverifiableBlocksAllGreen(t *testing.T) {
 	}
 	foundUnverifiable := false
 	for _, m := range st.MCPServers {
-		if m.Name == gwServerName && m.Unverifiable {
+		if m.Name == config.GWServerName && m.Unverifiable {
 			foundUnverifiable = true
 		}
 	}
@@ -512,7 +512,7 @@ func TestStatusMCPRegistrationUnverifiableBlocksAllGreen(t *testing.T) {
 	}
 	found := false
 	for _, m := range jst.MCPServers {
-		if m.Name == gwServerName && m.Unverifiable {
+		if m.Name == config.GWServerName && m.Unverifiable {
 			found = true
 		}
 	}
