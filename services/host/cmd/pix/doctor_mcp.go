@@ -178,14 +178,12 @@ type mcpSandboxContext struct {
 //   - a failed/timed-out `sbx ls` -> existence unknown; the receipt (a local,
 //     offline record of past successful pix actions) is still consulted.
 func resolveMCPSandboxContext(env shellEnv) mcpSandboxContext {
-	if env.getwd == nil || env.stateDir == nil {
-		return mcpSandboxContext{mode: mcpAttachNone}
-	}
-	ws, err := env.getwd()
+
+	ws, err := env.Getwd()
 	if err != nil || strings.TrimSpace(ws) == "" {
 		return mcpSandboxContext{mode: mcpAttachNone}
 	}
-	sd, err := env.stateDir()
+	sd, err := env.StateDir()
 	if err != nil || strings.TrimSpace(sd) == "" {
 		return mcpSandboxContext{mode: mcpAttachNone}
 	}
@@ -211,7 +209,7 @@ func resolveMCPSandboxContext(env shellEnv) mcpSandboxContext {
 	// Bounded existence probe. Only a SUCCESSFUL listing may conclude "absent";
 	// a failed or timed-out one proves nothing and must not erase the receipt
 	// context.
-	if out, timedOut, lerr := probeRun(env, "sbx", "ls"); lerr == nil && !timedOut {
+	if out, timedOut, lerr := env.RunTimed("sbx", "ls"); lerr == nil && !timedOut {
 		found := false
 		for _, line := range strings.Split(out, "\n") {
 			if f := strings.Fields(line); len(f) >= 1 && f[0] == name {
@@ -418,7 +416,7 @@ func mcpLocalCheck(env shellEnv, name, mcpOut string) check {
 //     decision, not a setup gap — no setup command can fix it);
 //   - a timeout or transport/exec failure -> unverifiable, never a guess.
 func mcpRemoteAuthCheck(env shellEnv, name string) check {
-	out, timedOut, err := probeRun(env, "sbx", "mcp", "auth", "status", name)
+	out, timedOut, err := env.RunTimed("sbx", "mcp", "auth", "status", name)
 	if timedOut {
 		return check{label: name, verdict: verdictUnverifiable,
 			detail: "registered; auth status timed out (sbx mcp auth status " + name + "); could not verify"}
@@ -530,24 +528,22 @@ func unknownKeyCheck(key string) check {
 // never a wedged doctor. Returns (nil,false) when sbx is absent or exposes no
 // command.
 func registeredMCPCommand(env shellEnv, name string) ([]string, bool) {
-	if env.lookPath == nil {
+
+	if _, err := env.LookPath("sbx"); err != nil {
 		return nil, false
 	}
-	if _, err := env.lookPath("sbx"); err != nil {
-		return nil, false
-	}
-	if out, timedOut, err := probeRun(env, "sbx", "mcp", "inspect", name); err == nil && !timedOut {
+	if out, timedOut, err := env.RunTimed("sbx", "mcp", "inspect", name); err == nil && !timedOut {
 		if argv, ok := parseMCPCommandLine(out); ok {
 			return argv, true
 		}
 	}
 	// Compatibility with older sbx releases that called this command `get`.
-	if out, timedOut, err := probeRun(env, "sbx", "mcp", "get", name); err == nil && !timedOut {
+	if out, timedOut, err := env.RunTimed("sbx", "mcp", "get", name); err == nil && !timedOut {
 		if argv, ok := parseMCPCommandLine(out); ok {
 			return argv, true
 		}
 	}
-	if out, timedOut, err := probeRun(env, "sbx", "mcp", "ls", "-o", "json"); err == nil && !timedOut {
+	if out, timedOut, err := env.RunTimed("sbx", "mcp", "ls", "-o", "json"); err == nil && !timedOut {
 		if argv, ok := parseMCPCommandJSON(out, name); ok {
 			return argv, true
 		}
@@ -624,7 +620,7 @@ func recognizedMCPArgv(env shellEnv, argv []string, name string) ([]string, bool
 	norm := append([]string(nil), argv...)
 	innerStart := len(argv) - len(cmd)
 	if innerStart > 0 {
-		// An op-wrapped command must run the SAME op binary env.lookPath finds —
+		// An op-wrapped command must run the SAME op binary env.LookPath finds —
 		// a look-alike `/tmp/op` is never executed.
 		opTok, opOK := trustedExecPath(env, argv[0], "op")
 		if !opOK {
@@ -688,10 +684,8 @@ func trustedHostBinaryExecPath(env shellEnv, tok string) (string, bool) {
 	// both paths currently identify the same file. This deliberately rejects
 	// arbitrary lookalike symlinks (for example /tmp/pix-host -> canonical),
 	// which could otherwise be retargeted after this check.
-	if env.lookPath == nil {
-		return "", false
-	}
-	pathHost, pathErr := env.lookPath("pix-host")
+
+	pathHost, pathErr := env.LookPath("pix-host")
 	if pathErr != nil || !filepath.IsAbs(pathHost) || filepath.Clean(tok) != filepath.Clean(pathHost) {
 		return "", false
 	}

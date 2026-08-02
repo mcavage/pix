@@ -131,10 +131,8 @@ func firstName(full string) string {
 // inject). Best-effort: empty when git is absent or unset.
 func readGitIdentity(env shellEnv) hostStateIdentity {
 	id := hostStateIdentity{}
-	if env.run == nil {
-		return id
-	}
-	if out, err := env.run("git", "config", "--global", "--get", "user.name"); err == nil {
+
+	if out, err := env.Run("git", "config", "--global", "--get", "user.name"); err == nil {
 		id.Name = firstName(sanitizeIdentity(out))
 	}
 	return id
@@ -319,19 +317,14 @@ func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
 // seam), so it is unit-testable without touching disk.
 func buildTrustedHostState(cfg *config.Config, env shellEnv, packOverride string) hostState {
 	sbxOut, sbxOK := "", false
-	if env.lookPath != nil {
-		if _, err := env.lookPath("sbx"); err == nil {
-			// BOUNDED (probeRun): a hung `sbx secret ls` leaves sbxOK=false —
-			// keys stay unverified, and setup's payload build never wedges.
-			if o, timedOut, rerr := probeRun(env, "sbx", "secret", "ls"); rerr == nil && !timedOut {
-				sbxOut, sbxOK = o, true
-			}
+	if _, err := env.LookPath("sbx"); err == nil {
+		// BOUNDED (probeRun): a hung `sbx secret ls` leaves sbxOK=false —
+		// keys stay unverified, and setup's payload build never wedges.
+		if o, timedOut, rerr := env.RunTimed("sbx", "secret", "ls"); rerr == nil && !timedOut {
+			sbxOut, sbxOK = o, true
 		}
 	}
-	dial := env.dial
-	if dial == nil {
-		dial = dialLocalPort
-	}
+	dial := env.DialLocal
 	source := "sbx"
 	if providerKeyRefsPresent(env) {
 		source = "1password"

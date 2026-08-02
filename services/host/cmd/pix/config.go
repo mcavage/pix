@@ -7,8 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	"pix/host/config"
+
+	"github.com/BurntSushi/toml"
 )
 
 // runConfig implements the `config` verb tree: `show`, `path`, `get`, `set`,

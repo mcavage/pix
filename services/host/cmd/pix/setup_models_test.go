@@ -30,6 +30,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/sys/systest"
 	"strings"
 	"testing"
 	"time"
@@ -72,69 +73,81 @@ func modelsSetupEnv(t *testing.T, w *ollamaWorld) shellEnv {
 		w.pullFail = map[string]bool{}
 	}
 	return shellEnv{
-		getenv:   func(string) string { return "" },
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		readFile: func(p string) (string, error) {
-			if strings.HasSuffix(p, "hostmode.env") {
-				return "ANTHROPIC_API_KEY=op://v/a/k\nOPENAI_API_KEY=op://v/o/k\nGEMINI_API_KEY=op://v/g/k\n", nil
-			}
-			return "", os.ErrNotExist
+		System: &systest.Fake{
+			GetenvFn:   func(string) string { return "" },
+			LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+			ReadFileFn: func(p string) (string, error) {
+				if strings.HasSuffix(p, "hostmode.env") {
+					return "ANTHROPIC_API_KEY=op://v/a/k\nOPENAI_API_KEY=op://v/o/k\nGEMINI_API_KEY=op://v/g/k\n", nil
+				}
+				return "", os.ErrNotExist
+			},
+			WriteFileFn: func(string, []byte, os.FileMode) error { return nil },
+			RunFn:       func(name string, args ...string) (string, error) { return ollamaWorldRun(w, name, args...) },
+			// `ollama pull` is INTERACTIVE (it streams progress) and production has
+			// always preferred this seam; the plain-runner fallback existed only for
+			// fixtures that left it nil, so this fixture spent its life exercising a
+			// path no user ever took. Same world, so the argv assertions still hold.
+			RunInteractiveFn: func(name string, args ...string) error {
+				_, err := ollamaWorldRun(w, name, args...)
+				return err
+			},
 		},
-		writeFile: func(string, []byte, os.FileMode) error { return nil },
-		// The fixture's premise is that keys ARE provisioned (it writes three
-		// op:// refs into hostmode.env and stubs setupProvisionKeysFn to succeed),
-		// so the credential resolves and the probe answers. Leaving these two
-		// seams nil made verifyDirectInference return silently and contradicted
-		// that premise without anyone noticing.
+		// The fixture's premise is that keys ARE provisioned (three op:// refs in
+		// hostmode.env, setupProvisionKeysFn stubbed to succeed), so the credential
+		// resolves and the probe answers.
 		directInferenceProbe: func(string, string, string) error { return nil },
-		// A probe that answers iff the fake daemon actually has the tag. Modelling
-		// the daemon keeps the pull-consent tests honest: an unpulled tag must
-		// still fail its probe.
+		// Answers iff the fake daemon actually has the tag, which is what keeps the
+		// pull-consent tests honest: an unpulled tag must still fail its probe.
 		ollamaInferenceProbe: func(_, model string, _ int, _ time.Duration) error {
 			if w.have[model] {
 				return nil
 			}
 			return fmt.Errorf("model %q is not pulled on this fake daemon", model)
 		},
-		run: func(name string, args ...string) (string, error) {
-			w.calls = append(w.calls, name+" "+strings.Join(args, " "))
-			if name == "op" && len(args) == 2 && args[0] == "read" {
-				return "test-provider-key\n", nil
-			}
-			if name == "ollama" && len(args) > 0 {
-				switch args[0] {
-				case "list":
-					if w.listErr {
-						return "", fmt.Errorf("could not connect to ollama")
-					}
-					var b strings.Builder
-					b.WriteString("NAME ID SIZE\n")
-					for tag := range w.have {
-						b.WriteString(tag + " x 1GB\n")
-					}
-					return b.String(), nil
-				case "pull":
-					tag := args[1]
-					if w.pullFail[tag] {
-						return "", fmt.Errorf("pull failed")
-					}
-					if !w.pullLies {
-						w.have[tag] = true
-					}
-					return "", nil
-				}
-			}
-			if name == "gog" && w.gogAuthErr {
-				return "", fmt.Errorf("not authed")
-			}
-			return "", nil
-		},
 	}
 }
 
+// ollamaWorldRun is the fake Ollama installation's one behaviour, shared by the
+// plain and interactive runners so a command behaves the same whichever seam
+// production picks.
+func ollamaWorldRun(w *ollamaWorld, name string, args ...string) (string, error) {
+	w.calls = append(w.calls, name+" "+strings.Join(args, " "))
+	if name == "op" && len(args) == 2 && args[0] == "read" {
+		return "test-provider-key\n", nil
+	}
+	if name == "ollama" && len(args) > 0 {
+		switch args[0] {
+		case "list":
+			if w.listErr {
+				return "", fmt.Errorf("could not connect to ollama")
+			}
+			var b strings.Builder
+			b.WriteString("NAME ID SIZE\n")
+			for tag := range w.have {
+				b.WriteString(tag + " x 1GB\n")
+			}
+			return b.String(), nil
+		case "pull":
+			tag := args[1]
+			if w.pullFail[tag] {
+				return "", fmt.Errorf("pull failed")
+			}
+			if !w.pullLies {
+				w.have[tag] = true
+			}
+			return "", nil
+		}
+	}
+	if name == "gog" && w.gogAuthErr {
+		return "", fmt.Errorf("not authed")
+	}
+	return "", nil
+}
+
 func stubLiveInferenceOK(env *shellEnv) {
-	run := env.run
-	env.run = func(name string, args ...string) (string, error) {
+	run := env.fake().RunFn
+	env.fake().RunFn = func(name string, args ...string) (string, error) {
 		if name == "op" && len(args) == 2 && args[0] == "read" {
 			return "test-provider-key\n", nil
 		}

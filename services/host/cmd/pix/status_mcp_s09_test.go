@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 // statusMCPEnv is a hermetic shellEnv for the per-sandbox row tests: sbx on
@@ -24,23 +25,17 @@ import (
 func statusMCPEnv(t *testing.T, sbxLs, mcpLs string) (shellEnv, string) {
 	t.Helper()
 	stateDir := t.TempDir()
-	env := shellEnv{
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			switch strings.Join(append([]string{name}, args...), " ") {
-			case "sbx ls":
-				return sbxLs, nil
-			case "sbx mcp ls":
-				return mcpLs, nil
-			case "sbx secret ls":
-				return "anthropic\nopenai\ngoogle\ngithub\n", nil
-			}
-			return "", nil
-		},
-		dial:     func(int) bool { return false },
-		statFile: func(string) bool { return false },
-		stateDir: func() (string, error) { return stateDir, nil },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		switch strings.Join(append([]string{name}, args...), " ") {
+		case "sbx ls":
+			return sbxLs, nil
+		case "sbx mcp ls":
+			return mcpLs, nil
+		case "sbx secret ls":
+			return "anthropic\nopenai\ngoogle\ngithub\n", nil
+		}
+		return "", nil
+	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }, StateDirFn: func() (string, error) { return stateDir, nil }}}
 	return env, stateDir
 }
 
@@ -144,9 +139,9 @@ func TestStatusMCPPositiveReceiptDominatesDeregistration(t *testing.T) {
 	env.hostBinary = func() (string, error) { return "/usr/local/bin/pix-host", nil }
 	// probe answers ONLY the `pix-host mcp --list` classification call;
 	// every other bounded probe (sbx secret ls / mcp ls / sbx ls now route
-	// through probeRun too) falls back to the canned env.run outputs.
-	run := env.run
-	env.probe = func(name string, args ...string) (string, bool, error) {
+	// through probeRun too) falls back to the canned env.Run outputs.
+	run := env.fake().RunFn
+	env.fake().RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		if name == "/usr/local/bin/pix-host" {
 			return "slack\n", false, nil
 		}
@@ -223,8 +218,8 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 func TestStatusMCPDiscoveryUnavailableNotNoSandboxes(t *testing.T) {
 	cfg := &config.Config{MCP: []string{gwServerName, "slack"}}
 	env, _ := statusMCPEnv(t, "", "google-workspace\nslack\n")
-	inner := env.run
-	env.run = func(name string, args ...string) (string, error) {
+	inner := env.fake().RunFn
+	env.fake().RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) == 1 && args[0] == "ls" {
 			return "", fmt.Errorf("sbx daemon down")
 		}

@@ -50,6 +50,13 @@ type Exec interface {
 	// second return distinguishes a timeout from a failure: a timeout is not
 	// evidence that a thing is broken, only that it did not answer in time.
 	RunTimed(name string, args ...string) (out string, timedOut bool, err error)
+	// RunWithin is RunTimed with a caller-chosen bound, for a probe that must be
+	// tighter than the default (status' gog check allows 2s, not 5s). It exists
+	// as a METHOD rather than a package function because the previous code
+	// reached past the seam to call the real one directly whenever a nil check
+	// happened to pass — so a fixture's fake runner was bypassed and a hermetic
+	// test shelled out for real.
+	RunWithin(timeout time.Duration, name string, args ...string) (out string, timedOut bool, err error)
 	// RunInteractive inherits the terminal (browser-based OAuth, `op signin`).
 	RunInteractive(name string, args ...string) error
 	// RunInteractiveQuiet keeps stdin attached but captures the command's
@@ -195,5 +202,24 @@ func (Real) RunTimed(name string, args ...string) (string, bool, error) {
 	return RunTimed(ProbeTimeout, name, args...)
 }
 
+func (Real) RunWithin(d time.Duration, name string, args ...string) (string, bool, error) {
+	return RunTimed(d, name, args...)
+}
+
 // compile-time proof that Real is a complete System.
 var _ System = Real{}
+
+// Getenver is the one-method view of Env, for the many functions that read a
+// single variable and nothing else. Narrowing a parameter to this is the whole
+// point of splitting the interfaces: `func servePort(env sys.Getenver, ...)`
+// tells a reader — and the compiler — that it cannot touch the disk or spawn a
+// process, which the 22-field struct it replaced could not say.
+type Getenver interface{ Getenv(name string) string }
+
+// GetenvFunc adapts a bare lookup function to Getenver. It has no nil case on
+// purpose: a nil GetenvFunc is a programming error that panics at the call,
+// rather than silently reporting every variable as unset — which is how a
+// missing seam used to read as a real answer.
+type GetenvFunc func(name string) string
+
+func (f GetenvFunc) Getenv(name string) string { return f(name) }

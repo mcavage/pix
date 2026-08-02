@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/sys/systest"
 	"sort"
 	"strings"
 	"testing"
@@ -46,62 +47,47 @@ func stepEnv(t *testing.T, refsContent, sbxLsOut string, opReadVal string) (shel
 	for _, w := range strings.Fields(sbxLsOut) {
 		sbxNames[w] = true
 	}
-	env := shellEnv{
-		getenv: func(k string) string {
-			if k == "XDG_CONFIG_HOME" {
-				return "/cfg"
+	env := shellEnv{System: &systest.Fake{GetenvFn: func(k string) string {
+		if k == "XDG_CONFIG_HOME" {
+			return "/cfg"
+		}
+		return ""
+	}, ReadFileFn: func(p string) (string, error) {
+		if v, ok := files[p]; ok {
+			return v, nil
+		}
+		return "", os.ErrNotExist
+	}, WriteFileFn: func(p string, d []byte, _ os.FileMode) error {
+		files[p] = string(d)
+		return nil
+	}, LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		*calls = append(*calls, name+" "+strings.Join(args, " "))
+		switch {
+		case name == "op" && len(args) >= 1 && args[0] == "--version":
+			return "2.0", nil
+		case name == "op" && len(args) >= 1 && args[0] == "account":
+			return "acct", nil
+		case name == "op" && len(args) >= 1 && args[0] == "read":
+			return opReadVal, nil
+		case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
+			names := make([]string, 0, len(sbxNames))
+			for n := range sbxNames {
+				names = append(names, n)
 			}
-			return ""
-		},
-		readFile: func(p string) (string, error) {
-			if v, ok := files[p]; ok {
-				return v, nil
-			}
-			return "", os.ErrNotExist
-		},
-		writeFile: func(p string, d []byte, _ os.FileMode) error {
-			files[p] = string(d)
-			return nil
-		},
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		// This fixture's premise is a working 1Password path: `op read` returns a
-		// key, so the provider probe answers. The seam was nil, which made
-		// verifyDirectInference return a silent zero and quietly contradicted that
-		// premise; it is now an explicit error, so the fixture states what it meant.
-		directInferenceProbe: func(string, string, string) error { return nil },
-		// No ollama backend is configured here, so this is never called — but
-		// runSetupInferenceStep still ASKS, and "nobody asked" must not be spelled
-		// the same way as "nothing to ask about".
-		ollamaInferenceProbe: func(_, model string, _ int, _ time.Duration) error {
-			return fmt.Errorf("no ollama daemon in this fixture (%s)", model)
-		},
-		run: func(name string, args ...string) (string, error) {
-			*calls = append(*calls, name+" "+strings.Join(args, " "))
-			switch {
-			case name == "op" && len(args) >= 1 && args[0] == "--version":
-				return "2.0", nil
-			case name == "op" && len(args) >= 1 && args[0] == "account":
-				return "acct", nil
-			case name == "op" && len(args) >= 1 && args[0] == "read":
-				return opReadVal, nil
-			case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
-				names := make([]string, 0, len(sbxNames))
-				for n := range sbxNames {
-					names = append(names, n)
+			sort.Strings(names)
+			return strings.Join(names, "\n") + "\n", nil
+		case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "set":
+			for i, a := range args {
+				if a == "-g" && i+1 < len(args) {
+					sbxNames[args[i+1]] = true
 				}
-				sort.Strings(names)
-				return strings.Join(names, "\n") + "\n", nil
-			case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "set":
-				for i, a := range args {
-					if a == "-g" && i+1 < len(args) {
-						sbxNames[args[i+1]] = true
-					}
-				}
-				return "", nil
 			}
 			return "", nil
-		},
-	}
+		}
+		return "", nil
+	}}, directInferenceProbe: func(string, string, string) error { return nil }, ollamaInferenceProbe: func(_, model string, _ int, _ time.Duration) error {
+		return fmt.Errorf("no ollama daemon in this fixture (%s)", model)
+	}}
 	return env, calls
 }
 
@@ -126,10 +112,7 @@ func countOccurrences(haystack, needle string) int {
 // --- hard preconditions ---------------------------------------------------
 
 func TestSetupProvisionKeys_OpNotInstalled_FailsWithExactFix(t *testing.T) {
-	env := shellEnv{
-		lookPath: func(string) (string, error) { return "", os.ErrNotExist },
-		readFile: func(string) (string, error) { return "", os.ErrNotExist },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", os.ErrNotExist }, ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }}}
 	var out bytes.Buffer
 	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
 		t.Fatal("must fail when op is not installed")
@@ -146,16 +129,12 @@ func TestSetupProvisionKeys_OpNotInstalled_FailsWithExactFix(t *testing.T) {
 }
 
 func TestSetupProvisionKeys_OpNotSignedIn_FailsWithExactFix(t *testing.T) {
-	env := shellEnv{
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		readFile: func(string) (string, error) { return "", os.ErrNotExist },
-		run: func(name string, args ...string) (string, error) {
-			if name == "op" && len(args) >= 1 && args[0] == "account" {
-				return "", nil // no account configured
-			}
-			return "", nil
-		},
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }, RunFn: func(name string, args ...string) (string, error) {
+		if name == "op" && len(args) >= 1 && args[0] == "account" {
+			return "", nil // no account configured
+		}
+		return "", nil
+	}}}
 	var out bytes.Buffer
 	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
 		t.Fatal("must fail when op has no account configured")
@@ -171,14 +150,14 @@ func TestSetupProvisionKeys_OpNotSignedIn_FailsWithExactFix(t *testing.T) {
 func TestSetupProvisionKeys_InteractiveRunsOfficialOpSignin(t *testing.T) {
 	signedIn := false
 	env, _ := stepEnv(t, "OPENAI_API_KEY=op://v/openai/key\n", "openai", "sk-val")
-	baseRun := env.run
-	env.run = func(name string, args ...string) (string, error) {
+	baseRun := env.fake().RunFn
+	env.fake().RunFn = func(name string, args ...string) (string, error) {
 		if name == "op" && len(args) >= 1 && args[0] == "account" && !signedIn {
 			return "", nil
 		}
 		return baseRun(name, args...)
 	}
-	env.runInteractive = func(name string, args ...string) error {
+	env.fake().RunInteractiveFn = func(name string, args ...string) error {
 		if name != "op" || strings.Join(args, " ") != "signin" {
 			t.Fatalf("unexpected interactive command: %s %v", name, args)
 		}
@@ -277,10 +256,10 @@ func TestSetupProvisionKeys_MissingRefs_InteractivePromptsCollectsAndPersistsBot
 	hostMode := ""
 	// re-read through the env's own readFile so this checks the ACTUAL paths
 	// setup writes, not a hardcoded guess.
-	if c, err := env.readFile(defaultOpRefsPath(env)); err == nil {
+	if c, err := env.ReadFile(defaultOpRefsPath(env)); err == nil {
 		opRefs = c
 	}
-	if c, err := env.readFile(hostModeRefsPath(env)); err == nil {
+	if c, err := env.ReadFile(hostModeRefsPath(env)); err == nil {
 		hostMode = c
 	}
 	for _, want := range []string{"ANTHROPIC_API_KEY=op://V/anthropic/key"} {
@@ -590,8 +569,8 @@ func TestSetupProvisionKeys_HostModeMissingRef_Fails(t *testing.T) {
 	env, _ := stepEnv(t, refs, "anthropic openai google", "sk-val")
 	// Sabotage the mirror step: writes to hostmode.env silently fail (as if the
 	// file were unwritable), while op-refs.env itself stays readable/writable.
-	realWrite := env.writeFile
-	env.writeFile = func(p string, d []byte, m os.FileMode) error {
+	realWrite := env.fake().WriteFileFn
+	env.fake().WriteFileFn = func(p string, d []byte, m os.FileMode) error {
 		if strings.HasSuffix(p, "hostmode.env") {
 			return os.ErrPermission
 		}
@@ -613,7 +592,7 @@ func TestSetupProvisionKeys_HostModeMissingRef_Fails(t *testing.T) {
 func TestSetupProvisionKeys_SbxUnavailable_FailsOpen(t *testing.T) {
 	refs := allRefs("", "", "")
 	env, _ := stepEnv(t, refs, "", "sk-val")
-	env.lookPath = func(name string) (string, error) {
+	env.fake().LookPathFn = func(name string) (string, error) {
 		if name == "sbx" {
 			return "", os.ErrNotExist
 		}
@@ -634,7 +613,7 @@ func TestSetupProvisionKeys_FinalProbeRequiresAllThree(t *testing.T) {
 	// reconcile pass — simulate a sync that silently didn't take by having
 	// `sbx secret set` succeed yet never actually add the name (a broken sbx).
 	env, _ := stepEnv(t, refs, "anthropic openai", "sk-val")
-	env.run = func(name string, args ...string) (string, error) {
+	env.fake().RunFn = func(name string, args ...string) (string, error) {
 		switch {
 		case name == "op" && len(args) >= 1 && args[0] == "--version":
 			return "2.0", nil
@@ -679,7 +658,7 @@ func TestSetupProvisionKeys_FinalProbe_SbxCommandFails_FailsClosed(t *testing.T)
 		}
 	}
 	calls := 0
-	env.run = func(name string, args ...string) (string, error) {
+	env.fake().RunFn = func(name string, args ...string) (string, error) {
 		switch {
 		case name == "op" && len(args) >= 1 && args[0] == "--version":
 			return "2.0", nil
@@ -716,18 +695,16 @@ func TestSetupProvisionKeys_FinalProbe_SbxCommandFails_FailsClosed(t *testing.T)
 // error can echo the full argv (including "-t <value>") back verbatim.
 func TestSyncProviderKeyToSbx_RedactsValueFromOutputAndError(t *testing.T) {
 	const secretVal = "sk-should-never-print"
-	env := shellEnv{
-		run: func(name string, args ...string) (string, error) {
-			if name == "sbx" {
-				// Simulate sbx echoing the full failed command (including the
-				// secret value) back in its own stdout/stderr AND the wrapping Go
-				// error carrying the same argv.
-				return "sbx: command failed: sbx secret set -f -g anthropic -t " + secretVal,
-					fmt.Errorf("exit status 1: -t %s", secretVal)
-			}
-			return "", nil
-		},
-	}
+	env := shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
+		if name == "sbx" {
+			// Simulate sbx echoing the full failed command (including the
+			// secret value) back in its own stdout/stderr AND the wrapping Go
+			// error carrying the same argv.
+			return "sbx: command failed: sbx secret set -f -g anthropic -t " + secretVal,
+				fmt.Errorf("exit status 1: -t %s", secretVal)
+		}
+		return "", nil
+	}}}
 	var out bytes.Buffer
 	p := struct{ envVar, name string }{"ANTHROPIC_API_KEY", "anthropic"}
 	if syncProviderKeyToSbx(env, &out, p, "op://v/a/k", secretVal) {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 // errNotFoundForTest is the stand-in for exec.LookPath's not-found error.
@@ -13,30 +14,25 @@ var errNotFoundForTest = errors.New("not found")
 
 func ollamaEnv(t *testing.T, ollamaHost string, dialOK bool, list string) shellEnv {
 	t.Helper()
-	return shellEnv{
-		lookPath: func(name string) (string, error) {
-			if name == "ollama" {
-				return "/usr/local/bin/ollama", nil
+	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		if name == "ollama" {
+			return "/usr/local/bin/ollama", nil
+		}
+		return "", errNotFoundForTest
+	}, GetenvFn: func(k string) string {
+		if k == "OLLAMA_HOST" {
+			return ollamaHost
+		}
+		return ""
+	}, DialLocalFn: func(int) bool { return dialOK }, RunFn: func(name string, args ...string) (string, error) {
+		if name == "ollama" && len(args) > 0 && args[0] == "list" {
+			if !dialOK {
+				return "", errNotFoundForTest // a down daemon fails `ollama list` too
 			}
-			return "", errNotFoundForTest
-		},
-		getenv: func(k string) string {
-			if k == "OLLAMA_HOST" {
-				return ollamaHost
-			}
-			return ""
-		},
-		dial: func(int) bool { return dialOK },
-		run: func(name string, args ...string) (string, error) {
-			if name == "ollama" && len(args) > 0 && args[0] == "list" {
-				if !dialOK {
-					return "", errNotFoundForTest // a down daemon fails `ollama list` too
-				}
-				return list, nil
-			}
-			return "", errNotFoundForTest
-		},
-	}
+			return list, nil
+		}
+		return "", errNotFoundForTest
+	}}}
 }
 
 func TestEffectiveOllamaEndpoint(t *testing.T) {
@@ -55,7 +51,7 @@ func TestEffectiveOllamaEndpoint(t *testing.T) {
 		{"https://ollama.internal:443", "https://ollama.internal:443", 443, "OLLAMA_HOST"},
 	}
 	for _, tc := range cases {
-		ep := effectiveOllamaEndpoint(cfg, shellEnv{getenv: func(string) string { return tc.env }})
+		ep := effectiveOllamaEndpoint(cfg, shellEnv{System: &systest.Fake{GetenvFn: func(string) string { return tc.env }}})
 		if ep.URL != tc.wantURL || ep.Port != tc.wantPort || ep.Source != tc.wantSrc {
 			t.Errorf("OLLAMA_HOST=%q -> %+v, want url=%s port=%d source=%s", tc.env, ep, tc.wantURL, tc.wantPort, tc.wantSrc)
 		}

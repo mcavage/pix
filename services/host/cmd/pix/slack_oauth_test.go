@@ -1045,7 +1045,7 @@ func TestSlackSetupPKCEDoesNotRevokeAfterDocumentPersisted(t *testing.T) {
 	deps, opts, env, cfg, revoked := slackOAuthRevokeFixture(t, func(string) (slackIdentity, error) {
 		return slackIdentity{team: "Acme", teamID: "T123", user: "jane", userID: "U456"}, nil
 	})
-	env.flock = func(string, func() error) error { return fmt.Errorf("lock busy") }
+	env.fake().LockFn = func(string, func() error) error { return fmt.Errorf("lock busy") }
 	var out bytes.Buffer
 	err := slackSetupPKCE(env, cfg, opts, deps, strings.NewReader(""), &out, false, fakeHostResolver)
 	if err == nil || !strings.Contains(err.Error(), "writing SLACK_TEAM_ID") {

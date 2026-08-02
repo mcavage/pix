@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 // --- finding 1: the hardened workspace->sandbox resolver ---------------------
@@ -237,8 +238,8 @@ func TestDoctorContextResolvesCustomSandboxName(t *testing.T) {
 	f := mcpFake()
 	f.output["sbx ls"] = "pix-demo  running  " + canon + "\n"
 	env := f.env()
-	env.getwd = func() (string, error) { return ws, nil }
-	env.stateDir = func() (string, error) { return stateDir, nil }
+	env.fake().GetwdFn = func() (string, error) { return ws, nil }
+	env.fake().StateDirFn = func() (string, error) { return stateDir, nil }
 	mustCreateReceipt(t, stateDir, "pix-demo", canon, []string{"slack"})
 
 	ctx := resolveMCPSandboxContext(env)
@@ -264,8 +265,8 @@ func TestDoctorContextAmbiguousMappingIsUnverifiable(t *testing.T) {
 	f := mcpFake()
 	f.output["sbx ls"] = "pix-a  running  " + canon + "\n"
 	env := f.env()
-	env.getwd = func() (string, error) { return ws, nil }
-	env.stateDir = func() (string, error) { return stateDir, nil }
+	env.fake().GetwdFn = func() (string, error) { return ws, nil }
+	env.fake().StateDirFn = func() (string, error) { return stateDir, nil }
 	mustCreateReceipt(t, stateDir, "pix-a", canon, nil)
 	mustCreateReceipt(t, stateDir, "pix-b", canon, nil)
 
@@ -342,21 +343,18 @@ func TestResetSbxClearsReceiptsOnPositiveRemovalOnly(t *testing.T) {
 	mustCreateReceipt(t, stateDir, "pix-ok", "/w/ok", []string{"slack"})
 	mustCreateReceipt(t, stateDir, "pix-bad", "/w/bad", []string{"slack"})
 
-	env := shellEnv{
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			key := strings.Join(append([]string{name}, args...), " ")
-			switch key {
-			case "sbx ls":
-				return "pix-ok running\npix-bad running\n", nil
-			case "sbx rm -f pix-ok":
-				return "", nil
-			case "sbx rm -f pix-bad":
-				return "", fmt.Errorf("sandbox busy")
-			}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		key := strings.Join(append([]string{name}, args...), " ")
+		switch key {
+		case "sbx ls":
+			return "pix-ok running\npix-bad running\n", nil
+		case "sbx rm -f pix-ok":
 			return "", nil
-		},
-	}
+		case "sbx rm -f pix-bad":
+			return "", fmt.Errorf("sandbox busy")
+		}
+		return "", nil
+	}}}
 	var out bytes.Buffer
 	executeSbxReset(resetActions{RemoveSandboxes: true}, env, &out)
 
@@ -377,9 +375,9 @@ func TestResetSbxClearsReceiptsOnPositiveRemovalOnly(t *testing.T) {
 func statusReceiptEnv(t *testing.T, stateDir string) shellEnv {
 	t.Helper()
 	env := fakeStatusEnv()
-	env.stateDir = func() (string, error) { return stateDir, nil }
-	base := env.run
-	env.run = func(name string, args ...string) (string, error) {
+	env.fake().StateDirFn = func() (string, error) { return stateDir, nil }
+	base := env.fake().RunFn
+	env.fake().RunFn = func(name string, args ...string) (string, error) {
 		key := strings.Join(append([]string{name}, args...), " ")
 		if key == "sbx ls" {
 			return "NAME STATUS\npix-proj running\n", nil

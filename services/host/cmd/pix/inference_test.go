@@ -9,6 +9,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/inference"
+	"pix/host/sys/systest"
 )
 
 func TestCompileInferenceRuntimeNoModelAndExclusiveFiltering(t *testing.T) {
@@ -149,21 +150,17 @@ func TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey(t *testing.T)
 			if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
 				t.Fatal(err)
 			}
-			env := shellEnv{
-				readFile: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil },
-				run: func(name string, args ...string) (string, error) {
-					if name == "op" && len(args) == 2 && args[0] == "read" {
-						return key + "\n", nil
-					}
-					return "", fmt.Errorf("unexpected command")
-				},
-				directInferenceProbe: func(provider, model, gotKey string) error {
-					if provider != "openai" || model == "" || gotKey != key {
-						return fmt.Errorf("bad probe args provider=%q model=%q key-match=%v", provider, model, gotKey == key)
-					}
-					return fmt.Errorf("%s", probeFailure)
-				},
-			}
+			env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(name string, args ...string) (string, error) {
+				if name == "op" && len(args) == 2 && args[0] == "read" {
+					return key + "\n", nil
+				}
+				return "", fmt.Errorf("unexpected command")
+			}}, directInferenceProbe: func(provider, model, gotKey string) error {
+				if provider != "openai" || model == "" || gotKey != key {
+					return fmt.Errorf("bad probe args provider=%q model=%q key-match=%v", provider, model, gotKey == key)
+				}
+				return fmt.Errorf("%s", probeFailure)
+			}}
 			probe, probeErr := verifyDirectInference(cfg, env)
 			mustNoProbeErr(t, probeErr)
 			attempted, verified, failures := probe.Attempted, probe.Verified, probe.Failures
@@ -194,13 +191,9 @@ func TestDirectInferenceProbeVerifiesOnlySuccessfulModel(t *testing.T) {
 	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
 		t.Fatal(err)
 	}
-	env := shellEnv{
-		readFile: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil },
-		run:      func(string, ...string) (string, error) { return "secret\n", nil },
-		directInferenceProbe: func(provider, model, key string) error {
-			return nil
-		},
-	}
+	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(string, ...string) (string, error) { return "secret\n", nil }}, directInferenceProbe: func(provider, model, key string) error {
+		return nil
+	}}
 	probe, probeErr := verifyDirectInference(cfg, env)
 	mustNoProbeErr(t, probeErr)
 	attempted, verified, failures := probe.Attempted, probe.Verified, probe.Failures
@@ -221,16 +214,12 @@ func TestDirectInferenceProbePromotesBindingsIndependently(t *testing.T) {
 	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
 		t.Fatal(err)
 	}
-	env := shellEnv{
-		readFile: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil },
-		run:      func(string, ...string) (string, error) { return "secret\n", nil },
-		directInferenceProbe: func(provider, model, key string) error {
-			if strings.Contains(model, "sol") {
-				return fmt.Errorf("provider rejected model request (HTTP 403)")
-			}
-			return nil
-		},
-	}
+	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(string, ...string) (string, error) { return "secret\n", nil }}, directInferenceProbe: func(provider, model, key string) error {
+		if strings.Contains(model, "sol") {
+			return fmt.Errorf("provider rejected model request (HTTP 403)")
+		}
+		return nil
+	}}
 	probe, probeErr := verifyDirectInference(cfg, env)
 	mustNoProbeErr(t, probeErr)
 	attempted, verified, failures := probe.Attempted, probe.Verified, probe.Failures
@@ -243,39 +232,36 @@ func TestDirectInferenceProbePromotesBindingsIndependently(t *testing.T) {
 			t.Fatalf("binding verification was not independent: %+v want-callable=%v", binding, want)
 		}
 	}
-	checks := setupProvidersAxis(cfg, shellEnv{})
+	checks := setupProvidersAxis(cfg, shellEnv{System: &systest.Fake{}})
 	if len(checks) != 1 || checks[0].verdict != verdictReady || !strings.Contains(checks[0].detail, "did not pass live verification") {
 		t.Fatalf("partial verification summary = %+v", checks)
 	}
 }
 
 func TestSetupChooseInferenceOffersDetectedOllamaAndNeedsNoOnePassword(t *testing.T) {
-	env := shellEnv{
-		lookPath: func(name string) (string, error) {
-			if name == "ollama" {
-				return "/usr/local/bin/ollama", nil
-			}
-			return "", fmt.Errorf("missing")
-		},
-		run: func(name string, args ...string) (string, error) {
-			if name == "ollama" && len(args) == 1 && args[0] == "list" {
-				// Every AVAILABLE Ollama catalog model is present in this listing, so a
-				// catalog id that no real `ollama list` could ever print (the class of
-				// bug that shipped `qwen3.5:397b:cloud`, a two-colon reference) shows up
-				// here as a missing binding rather than as a model that silently never
-				// binds on a user's machine.
-				return "NAME ID SIZE MODIFIED\n" +
-					"qwen3.5:9b abc 6GB now\n" +
-					"glm-5.2:cloud def - now\n" +
-					"kimi-k3:cloud ghi - now\n" +
-					"deepseek-v4-flash:cloud jkl - now\n" +
-					"deepseek-v4-pro:cloud mno - now\n" +
-					"kimi-k2.7-code:cloud pqr - now\n" +
-					"qwen3.5:397b-cloud stu - now\n", nil
-			}
-			return "", fmt.Errorf("unexpected command")
-		},
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		if name == "ollama" {
+			return "/usr/local/bin/ollama", nil
+		}
+		return "", fmt.Errorf("missing")
+	}, RunFn: func(name string, args ...string) (string, error) {
+		if name == "ollama" && len(args) == 1 && args[0] == "list" {
+			// Every AVAILABLE Ollama catalog model is present in this listing, so a
+			// catalog id that no real `ollama list` could ever print (the class of
+			// bug that shipped `qwen3.5:397b:cloud`, a two-colon reference) shows up
+			// here as a missing binding rather than as a model that silently never
+			// binds on a user's machine.
+			return "NAME ID SIZE MODIFIED\n" +
+				"qwen3.5:9b abc 6GB now\n" +
+				"glm-5.2:cloud def - now\n" +
+				"kimi-k3:cloud ghi - now\n" +
+				"deepseek-v4-flash:cloud jkl - now\n" +
+				"deepseek-v4-pro:cloud mno - now\n" +
+				"kimi-k2.7-code:cloud pqr - now\n" +
+				"qwen3.5:397b-cloud stu - now\n", nil
+		}
+		return "", fmt.Errorf("unexpected command")
+	}}}
 	cfg := &config.Config{}
 	var out bytes.Buffer
 	// "2,4" is local AND cloud. Token 2 alone now means Ollama LOCAL only: the
@@ -318,7 +304,7 @@ func TestSetupChooseInferenceConfiguresKeylessGateway(t *testing.T) {
 	cfg := &config.Config{}
 	var out bytes.Buffer
 	input := "3\nhttps://models.example.test/v1\n\nanthropic/claude-sonnet-5=sonnet-prod\n"
-	selected, err := setupChooseInference(cfg, shellEnv{}, strings.NewReader(input), &out, true)
+	selected, err := setupChooseInference(cfg, shellEnv{System: &systest.Fake{}}, strings.NewReader(input), &out, true)
 	if err != nil {
 		t.Fatal(err)
 	}

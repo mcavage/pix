@@ -23,8 +23,9 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"gopkg.in/yaml.v3"
 	"pix/host/routing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // parseBudget parses a budget string and rejects non-positive, NaN, and Inf

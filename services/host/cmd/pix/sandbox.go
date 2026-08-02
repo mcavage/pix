@@ -92,13 +92,11 @@ func runLs(argv []string) {
 	}
 	jsonOut := hasFlagLauncher(argv, "--json")
 	env := defaultShellEnv()
-	if env.lookPath != nil {
-		if _, err := env.lookPath("sbx"); err != nil {
-			fatalSbx(fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to list sandboxes"))
-		}
+	if _, err := env.LookPath("sbx"); err != nil {
+		fatalSbx(fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to list sandboxes"))
 	}
 	// BOUNDED (probeRun): a hung `sbx ls` fails with a message, never wedges.
-	out, timedOut, err := probeRun(env, "sbx", "ls")
+	out, timedOut, err := env.RunTimed("sbx", "ls")
 	if timedOut || err != nil {
 		fatalSbx(fmt.Errorf("sbx ls failed: %v", err))
 	}
@@ -137,10 +135,8 @@ func runRm(argv []string) {
 		return
 	}
 	env := defaultShellEnv()
-	if env.lookPath != nil {
-		if _, err := env.lookPath("sbx"); err != nil {
-			fatalSbx(fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to remove sandboxes"))
-		}
+	if _, err := env.LookPath("sbx"); err != nil {
+		fatalSbx(fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to remove sandboxes"))
 	}
 
 	var names, keep []string
@@ -166,8 +162,8 @@ func runRm(argv []string) {
 	if all {
 		// BOUNDED (probeRun): the --all discovery listing is read-only; a hung
 		// sbx fails with a message rather than wedging (the `sbx rm -f` calls
-		// below are mutating lifecycle commands and stay on env.run).
-		out, timedOut, err := probeRun(env, "sbx", "ls")
+		// below are mutating lifecycle commands and stay on env.Run).
+		out, timedOut, err := env.RunTimed("sbx", "ls")
 		if timedOut || err != nil {
 			fatalSbx(fmt.Errorf("sbx ls failed: %v", err))
 		}
@@ -213,7 +209,7 @@ func runRm(argv []string) {
 // the removal DID succeed, and the next launcher create's pre-create clear is
 // the correctness backstop).
 func removePixSandbox(env shellEnv, name string) error {
-	if _, err := env.run("sbx", "rm", "-f", name); err != nil {
+	if _, err := env.Run("sbx", "rm", "-f", name); err != nil {
 		return err
 	}
 	if err := clearRemovedSandboxReceipt(name); err != nil {

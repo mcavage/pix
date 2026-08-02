@@ -925,21 +925,19 @@ func runSetupInferenceStep(cfg *config.Config, env shellEnv, in io.Reader, out i
 // argv accepted by sbx (the same unavoidable boundary used by provider-key
 // sync); output/errors are redacted before they can reach a transcript.
 func syncGitHubCredentialFromHost(env shellEnv) error {
-	if env.lookPath == nil || env.run == nil {
+
+	if _, err := env.LookPath("gh"); err != nil {
 		return nil
 	}
-	if _, err := env.lookPath("gh"); err != nil {
+	if _, err := env.LookPath("sbx"); err != nil {
 		return nil
 	}
-	if _, err := env.lookPath("sbx"); err != nil {
-		return nil
-	}
-	token, err := env.run("gh", "auth", "token")
+	token, err := env.Run("gh", "auth", "token")
 	if err != nil || strings.TrimSpace(token) == "" {
 		return nil // optional: no host login to reuse
 	}
 	token = strings.TrimSpace(token)
-	out, err := env.run("sbx", "secret", "set", "github", "-f", "-t", token)
+	out, err := env.Run("sbx", "secret", "set", "github", "-f", "-t", token)
 	if err == nil {
 		return nil
 	}
@@ -1300,9 +1298,9 @@ func runStrictProviderKeyFlow(env shellEnv, sc *bufio.Scanner, out io.Writer, in
 		return false
 	}
 	if !opSignedIn(env) {
-		if interactive && env.runInteractive != nil {
+		if interactive {
 			fmt.Fprintln(out, "1Password needs authorization. Continuing with the official `op signin` flow.")
-			if err := env.runInteractive("op", "signin"); err == nil && opSignedIn(env) {
+			if err := env.RunInteractive("op", "signin"); err == nil && opSignedIn(env) {
 				// Continue directly into provider selection. No separate user command
 				// or Pix identity is introduced.
 			} else {
@@ -1574,12 +1572,10 @@ func currentOpRef(env shellEnv, envVar string) (string, bool) {
 			}
 		}
 	}
-	if env.readFile != nil {
-		if content, err := env.readFile(hostModeRefsPath(env)); err == nil {
-			for _, r := range parseOpRefs(content) {
-				if r.key == envVar && r.isRef && !r.placeholder {
-					return r.value, true
-				}
+	if content, err := env.ReadFile(hostModeRefsPath(env)); err == nil {
+		for _, r := range parseOpRefs(content) {
+			if r.key == envVar && r.isRef && !r.placeholder {
+				return r.value, true
 			}
 		}
 	}

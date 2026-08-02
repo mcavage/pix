@@ -171,31 +171,27 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 		MCP:             currentIntent,
 		EnabledServices: append([]string(nil), cfg.Services...),
 	}
-	if env.executable != nil && env.getenv != nil {
-		self, err := env.executable()
-		if err == nil {
-			if warning := pathShadowIssue("pix", self, env.getenv); warning != "" {
-				st.InstallWarnings = append(st.InstallWarnings, warning)
-			}
-			if env.hostBinary != nil {
-				host, err := env.hostBinary()
-				if err == nil {
-					if warning := pathShadowIssue("pix-host", host, env.getenv); warning != "" {
-						st.InstallWarnings = append(st.InstallWarnings, warning)
-					}
+	self, err := env.Executable()
+	if err == nil {
+		if warning := pathShadowIssue("pix", self, env.Getenv); warning != "" {
+			st.InstallWarnings = append(st.InstallWarnings, warning)
+		}
+		if env.hostBinary != nil {
+			host, err := env.hostBinary()
+			if err == nil {
+				if warning := pathShadowIssue("pix-host", host, env.Getenv); warning != "" {
+					st.InstallWarnings = append(st.InstallWarnings, warning)
 				}
 			}
 		}
 	}
-	if env.dial != nil {
-		// monitor is an on-demand tool (`pix monitor`), not a background
-		// serve service, so its up/down state is reported but never feeds the
-		// "serve: up/down" label or an outstanding-item TODO below. It is the
-		// only remaining bare dial here: memory and knowledge come from the
-		// identity-verified readiness axes below, because a held port is not
-		// proof that the process holding it is ours.
-		st.Monitor = env.dial(monitor.DefaultPort)
-	}
+	// monitor is an on-demand tool (`pix monitor`), not a background
+	// serve service, so its up/down state is reported but never feeds the
+	// "serve: up/down" label or an outstanding-item TODO below. It is the
+	// only remaining bare dial here: memory and knowledge come from the
+	// identity-verified readiness axes below, because a held port is not
+	// proof that the process holding it is ours.
+	st.Monitor = env.DialLocal(monitor.DefaultPort)
 
 	// Providers: probe `sbx secret ls` ONCE (proxy-injected keys; never in VM)
 	// and reuse that one result for the per-provider booleans below AND for the
@@ -280,7 +276,7 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	if sbxOnPath {
 		// BOUNDED (probeRun): timeout/failure -> registration unknowable
 		// (mcpRegUnknown everywhere below), never a hang or a false "no".
-		if o, timedOut, err := probeRun(env, "sbx", "mcp", "ls"); err == nil && !timedOut {
+		if o, timedOut, err := env.RunTimed("sbx", "mcp", "ls"); err == nil && !timedOut {
 			mcpLsOut, mcpLsOK = o, true
 		}
 	}
@@ -334,7 +330,7 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 	if sbxOnPath {
 		// BOUNDED (probeRun): a hung `sbx ls` leaves discovery unavailable —
 		// the rows below render unverifiable, never a false "no sandboxes".
-		if o, timedOut, err := probeRun(env, "sbx", "ls"); err == nil && !timedOut {
+		if o, timedOut, err := env.RunTimed("sbx", "ls"); err == nil && !timedOut {
 			sbxLsOK = true
 			st.Sandboxes = parseSandboxes(o)
 			boxes = parsePixBoxes(o)
@@ -649,10 +645,8 @@ func statusRegisterTodoFn(cfg *config.Config, env shellEnv) func(name string) st
 // sandboxMCPStateUnreadable so the join renders UNVERIFIABLE — never a
 // guessed empty receipt.
 func statusSandboxReceipt(env shellEnv, sandbox string) (*sandboxMCPReceipt, sandboxMCPStateStatus) {
-	if env.stateDir == nil {
-		return nil, sandboxMCPStateUnreadable
-	}
-	sd, err := env.stateDir()
+
+	sd, err := env.StateDir()
 	if err != nil || strings.TrimSpace(sd) == "" {
 		return nil, sandboxMCPStateUnreadable
 	}
@@ -686,17 +680,15 @@ func okGlyph(ok bool) string {
 // "dirty", "N ahead", "no remote", or "" when it isn't a git repo / git is
 // absent. Best-effort and short — never blocks status.
 func bundleGitStatus(env shellEnv, dir string) string {
-	if env.statFile == nil || env.run == nil {
-		return ""
-	}
+
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		return ""
 	}
 	dirty := false
-	if o, err := env.run("git", "-C", dir, "status", "--porcelain"); err == nil {
+	if o, err := env.Run("git", "-C", dir, "status", "--porcelain"); err == nil {
 		dirty = strings.TrimSpace(o) != ""
 	}
-	remote, rerr := env.run("git", "-C", dir, "remote")
+	remote, rerr := env.Run("git", "-C", dir, "remote")
 	if rerr != nil || strings.TrimSpace(remote) == "" {
 		if dirty {
 			return "dirty, no remote"
@@ -704,7 +696,7 @@ func bundleGitStatus(env shellEnv, dir string) string {
 		return "no remote"
 	}
 	ahead := ""
-	if o, err := env.run("git", "-C", dir, "rev-list", "--count", "@{upstream}..HEAD"); err == nil {
+	if o, err := env.Run("git", "-C", dir, "rev-list", "--count", "@{upstream}..HEAD"); err == nil {
 		if n := strings.TrimSpace(o); n != "" && n != "0" {
 			ahead = n + " ahead"
 		}

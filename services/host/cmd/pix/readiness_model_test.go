@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 func TestModelReadiness_Verdicts(t *testing.T) {
@@ -102,23 +103,18 @@ func TestComputeModels_NotInstalledIsNeitherMissingNorUnverifiable(t *testing.T)
 // probe machinery when wired, and a timeout classifies as list-unverified.
 func TestProbeOllama_Bounded(t *testing.T) {
 	var probed []string
-	env := shellEnv{
-		lookPath: func(name string) (string, error) {
-			if name == "ollama" {
-				return "/usr/bin/ollama", nil
-			}
-			return "", fmt.Errorf("not found")
-		},
-		dial: func(int) bool { return true },
-		probe: func(name string, args ...string) (string, bool, error) {
-			probed = append(probed, strings.Join(append([]string{name}, args...), " "))
-			return "", true, fmt.Errorf("context deadline exceeded") // wedged ollama
-		},
-		run: func(name string, args ...string) (string, error) {
-			t.Fatalf("ollama list must go through the bounded probe, not raw run")
-			return "", nil
-		},
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		if name == "ollama" {
+			return "/usr/bin/ollama", nil
+		}
+		return "", fmt.Errorf("not found")
+	}, DialLocalFn: func(int) bool { return true }, RunTimedFn: func(name string, args ...string) (string, bool, error) {
+		probed = append(probed, strings.Join(append([]string{name}, args...), " "))
+		return "", true, fmt.Errorf("context deadline exceeded") // wedged ollama
+	}, RunFn: func(name string, args ...string) (string, error) {
+		t.Fatalf("ollama list must go through the bounded probe, not raw run")
+		return "", nil
+	}}}
 	p := probeOllamaAt(env, effectiveOllamaEndpoint(&config.Config{}, env))
 	if !p.installed || p.listOK {
 		t.Fatalf("expected installed with an unverified list, got %+v", p)
@@ -145,16 +141,12 @@ func TestOllamaVerifyFailureReason(t *testing.T) {
 // must be UNVERIFIABLE (⚠, no pull todo), never a confirmed "not pulled".
 func TestDoctorOllama_ListFailureIsUnverifiableNotMissing(t *testing.T) {
 	cfg := defaultCfg()
-	env := shellEnv{
-		lookPath: func(name string) (string, error) {
-			if name == "ollama" {
-				return "/usr/bin/ollama", nil
-			}
-			return "", fmt.Errorf("not found")
-		},
-		dial: func(port int) bool { return port == 11434 },
-		run:  func(name string, args ...string) (string, error) { return "", fmt.Errorf("boom") },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		if name == "ollama" {
+			return "/usr/bin/ollama", nil
+		}
+		return "", fmt.Errorf("not found")
+	}, DialLocalFn: func(port int) bool { return port == 11434 }, RunFn: func(name string, args ...string) (string, error) { return "", fmt.Errorf("boom") }}}
 	g := ollamaGroup(cfg, env)
 	for _, c := range g.checks {
 		if !strings.HasPrefix(strings.TrimSpace(c.label), "watcher") &&
@@ -175,16 +167,12 @@ func TestDoctorOllama_ListFailureIsUnverifiableNotMissing(t *testing.T) {
 // doctor's exit code.
 func TestDoctorOllama_DaemonDownIsOptionalTodo(t *testing.T) {
 	cfg := defaultCfg()
-	env := shellEnv{
-		lookPath: func(name string) (string, error) {
-			if name == "ollama" {
-				return "/usr/bin/ollama", nil
-			}
-			return "", fmt.Errorf("not found")
-		},
-		dial: func(int) bool { return false },
-		run:  func(name string, args ...string) (string, error) { return "", fmt.Errorf("daemon down") },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		if name == "ollama" {
+			return "/usr/bin/ollama", nil
+		}
+		return "", fmt.Errorf("not found")
+	}, DialLocalFn: func(int) bool { return false }, RunFn: func(name string, args ...string) (string, error) { return "", fmt.Errorf("daemon down") }}}
 	g := ollamaGroup(cfg, env)
 	if len(g.checks) == 0 || g.checks[0].result() != verdictTodo {
 		t.Fatalf("daemon down must be a verified todo, got %+v", g.checks)
@@ -203,10 +191,7 @@ func TestDoctorOllama_DaemonDownIsOptionalTodo(t *testing.T) {
 // (covered by TestDoctor_SbxAbsent).
 func TestDoctorOllama_NotInstalledUnconfiguredIsNote(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "gemma4", MemoryEmbedModel: "nomic-embed-text"}
-	env := shellEnv{
-		lookPath: func(string) (string, error) { return "", fmt.Errorf("not found") },
-		dial:     func(int) bool { return false },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, DialLocalFn: func(int) bool { return false }}}
 	g := ollamaGroup(cfg, env)
 	if len(g.checks) == 0 || !g.checks[0].note {
 		t.Fatalf("an uninstalled ollama with no configured dependents must be a note, got %+v", g.checks)

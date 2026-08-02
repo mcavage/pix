@@ -54,10 +54,8 @@ func runPackSetup(env shellEnv, out io.Writer, root string, requested []string, 
 			return fmt.Errorf("pack setup %s is not ready and may require interactive authorization; re-run without --yes/--non-interactive", step.ID)
 		}
 		fmt.Fprintf(out, "\npack setup: %s\n", label)
-		if env.runInteractive == nil {
-			return fmt.Errorf("pack setup %s needs an interactive command runner", step.ID)
-		}
-		if err := env.runInteractive(path, step.ApplyArgs...); err != nil {
+
+		if err := env.RunInteractive(path, step.ApplyArgs...); err != nil {
 			return fmt.Errorf("pack setup %s failed: %w", step.ID, err)
 		}
 		if !packSetupCheck(env, path, step.CheckArgs) {
@@ -172,6 +170,6 @@ func planPackSetupRequests(roots, requested []string) (map[string][]string, erro
 }
 
 func packSetupCheck(env shellEnv, path string, args []string) bool {
-	_, timedOut, err := probeRun(env, path, args...)
+	_, timedOut, err := env.RunTimed(path, args...)
 	return !timedOut && err == nil
 }

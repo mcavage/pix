@@ -52,7 +52,7 @@ func catalogMCPState(env shellEnv, mcpOut string, mcpOK bool, name string) catal
 // a positively unauthorized registration in the same interactive transaction,
 // without reopening OAuth when the credential is already healthy.
 func remoteMCPAuthorizationState(env shellEnv, name string) catalogMCPReadiness {
-	out, timedOut, err := probeRun(env, "sbx", "mcp", "auth", "status", name)
+	out, timedOut, err := env.RunTimed("sbx", "mcp", "auth", "status", name)
 	if timedOut {
 		return catalogMCPUnverifiable
 	}
@@ -98,12 +98,10 @@ func verifyCatalogMCPReady(env shellEnv, names []string) error {
 		return nil
 	}
 	mcpOut, mcpOK := "", false
-	if env.lookPath != nil {
-		if _, err := env.lookPath("sbx"); err == nil {
-			// BOUNDED: a hung listing degrades to unverifiable, never a hang.
-			if o, timedOut, err := probeRun(env, "sbx", "mcp", "ls"); err == nil && !timedOut {
-				mcpOut, mcpOK = o, true
-			}
+	if _, err := env.LookPath("sbx"); err == nil {
+		// BOUNDED: a hung listing degrades to unverifiable, never a hang.
+		if o, timedOut, err := env.RunTimed("sbx", "mcp", "ls"); err == nil && !timedOut {
+			mcpOut, mcpOK = o, true
 		}
 	}
 	for _, n := range catalog {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/sys/systest"
 	"strings"
 	"testing"
 )
@@ -110,23 +111,23 @@ func TestRunRequiredPackSetupProbesAppliesAndReprobes(t *testing.T) {
 	ready := false
 	checks := 0
 	applies := 0
-	env := shellEnv{
-		probe: func(name string, args ...string) (string, bool, error) {
-			checks++
-			if ready {
-				return "", false, nil
-			}
-			return "", false, fmt.Errorf("not ready")
-		},
-		runInteractive: func(name string, args ...string) error {
-			applies++
-			if filepath.Base(name) != "account" || strings.Join(args, " ") != "apply" {
-				t.Fatalf("unexpected apply: %s %v", name, args)
-			}
-			ready = true
-			return nil
-		},
-	}
+	env := shellEnv{System: &systest.Fake{RunTimedFn: func(name string, args ...string) (string, bool, error) {
+		if filepath.Base(name) != "account" {
+			return "", false, fmt.Errorf("unrelated probe, not this test's subject")
+		}
+		checks++
+		if ready {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("not ready")
+	}, RunInteractiveFn: func(name string, args ...string) error {
+		applies++
+		if filepath.Base(name) != "account" || strings.Join(args, " ") != "apply" {
+			t.Fatalf("unexpected apply: %s %v", name, args)
+		}
+		ready = true
+		return nil
+	}}}
 	var out bytes.Buffer
 	if err := runPackSetup(env, &out, root, nil, true); err != nil {
 		t.Fatal(err)
@@ -146,10 +147,13 @@ func TestRunPackSetupRejectsHookChangedAfterAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	probes, applies := 0, 0
-	env := shellEnv{
-		probe:          func(string, ...string) (string, bool, error) { probes++; return "", false, nil },
-		runInteractive: func(string, ...string) error { applies++; return nil },
-	}
+	env := shellEnv{System: &systest.Fake{RunTimedFn: func(name string, _ ...string) (string, bool, error) {
+		if filepath.Base(name) != "account" {
+			return "", false, fmt.Errorf("unrelated probe, not this test's subject")
+		}
+		probes++
+		return "", false, nil
+	}, RunInteractiveFn: func(string, ...string) error { applies++; return nil }}}
 	err := runPackSetup(env, &bytes.Buffer{}, root, nil, true)
 	if err == nil || !strings.Contains(err.Error(), "changed since acceptance") {
 		t.Fatalf("mutated hook error = %v", err)
@@ -164,32 +168,29 @@ func TestRunPackSetupExecutesSnapshotWhenSourceChangesAfterCheck(t *testing.T) {
 	hook := filepath.Join(root, "setup", "account")
 	ready := false
 	checks := 0
-	env := shellEnv{
-		probe: func(name string, args ...string) (string, bool, error) {
-			checks++
-			if checks == 1 {
-				if err := os.WriteFile(hook, []byte("#!/bin/sh\necho attacker\n"), 0o755); err != nil {
-					t.Fatal(err)
-				}
-				return "", false, fmt.Errorf("not ready")
-			}
-			if ready {
-				return "", false, nil
+	env := shellEnv{System: &systest.Fake{RunTimedFn: func(name string, args ...string) (string, bool, error) {
+		checks++
+		if checks == 1 {
+			if err := os.WriteFile(hook, []byte("#!/bin/sh\necho attacker\n"), 0o755); err != nil {
+				t.Fatal(err)
 			}
 			return "", false, fmt.Errorf("not ready")
-		},
-		runInteractive: func(name string, args ...string) error {
-			data, err := os.ReadFile(name)
-			if err != nil {
-				return err
-			}
-			if strings.Contains(string(data), "attacker") || !strings.Contains(string(data), "exit 0") {
-				return fmt.Errorf("apply did not execute accepted snapshot: %q", data)
-			}
-			ready = true
-			return nil
-		},
-	}
+		}
+		if ready {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("not ready")
+	}, RunInteractiveFn: func(name string, args ...string) error {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(data), "attacker") || !strings.Contains(string(data), "exit 0") {
+			return fmt.Errorf("apply did not execute accepted snapshot: %q", data)
+		}
+		ready = true
+		return nil
+	}}}
 	if err := runPackSetup(env, &bytes.Buffer{}, root, nil, true); err != nil {
 		t.Fatal(err)
 	}
@@ -197,13 +198,17 @@ func TestRunPackSetupExecutesSnapshotWhenSourceChangesAfterCheck(t *testing.T) {
 
 func TestRunRequiredPackSetupSkipsOptionalSteps(t *testing.T) {
 	root := writeSetupPack(t, false)
-	env := shellEnv{
-		probe: func(string, ...string) (string, bool, error) {
+	// Assert on the HOOK specifically, not on "nothing may ever be probed".
+	// runPackSetup also asks the host which MCP servers it can serve locally,
+	// which is an unrelated bounded probe. That probe used to be skipped only
+	// because this fixture left env.run nil — production behaviour keyed off a
+	// fixture gap, which is precisely what the seam refactor removes.
+	env := shellEnv{System: &systest.Fake{RunTimedFn: func(name string, _ ...string) (string, bool, error) {
+		if filepath.Base(name) == "account" {
 			t.Fatal("optional hook was probed")
-			return "", false, nil
-		},
-		runInteractive: func(string, ...string) error { t.Fatal("optional hook was run"); return nil },
-	}
+		}
+		return "", false, fmt.Errorf("nothing else is available in this fixture")
+	}, RunInteractiveFn: func(string, ...string) error { t.Fatal("optional hook was run"); return nil }}}
 	if err := runPackSetup(env, &bytes.Buffer{}, root, nil, true); err != nil {
 		t.Fatal(err)
 	}
@@ -212,15 +217,12 @@ func TestRunRequiredPackSetupSkipsOptionalSteps(t *testing.T) {
 func TestRunPackSetupRunsRequestedOptionalStep(t *testing.T) {
 	root := writeSetupPack(t, false)
 	ready := false
-	env := shellEnv{
-		probe: func(string, ...string) (string, bool, error) {
-			if ready {
-				return "", false, nil
-			}
-			return "", false, fmt.Errorf("not ready")
-		},
-		runInteractive: func(string, ...string) error { ready = true; return nil },
-	}
+	env := shellEnv{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
+		if ready {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("not ready")
+	}, RunInteractiveFn: func(string, ...string) error { ready = true; return nil }}}
 	if err := runPackSetup(env, &bytes.Buffer{}, root, []string{"account"}, true); err != nil {
 		t.Fatal(err)
 	}
@@ -235,10 +237,13 @@ func TestRunPackSetupRunsRequestedOptionalStep(t *testing.T) {
 func TestRunPackSetupRejectsUnknownBeforeAnyHook(t *testing.T) {
 	root := writeSetupPack(t, true)
 	probes, applies := 0, 0
-	env := shellEnv{
-		probe:          func(string, ...string) (string, bool, error) { probes++; return "", false, nil },
-		runInteractive: func(string, ...string) error { applies++; return nil },
-	}
+	env := shellEnv{System: &systest.Fake{RunTimedFn: func(name string, _ ...string) (string, bool, error) {
+		if filepath.Base(name) != "account" {
+			return "", false, fmt.Errorf("unrelated probe, not this test's subject")
+		}
+		probes++
+		return "", false, nil
+	}, RunInteractiveFn: func(string, ...string) error { applies++; return nil }}}
 	if err := runPackSetup(env, &bytes.Buffer{}, root, []string{"typo"}, true); err == nil {
 		t.Fatal("unknown hook should fail")
 	}
@@ -250,10 +255,7 @@ func TestRunPackSetupRejectsUnknownBeforeAnyHook(t *testing.T) {
 func TestRunPackSetupNonInteractiveNeverAppliesUnreadyHook(t *testing.T) {
 	root := writeSetupPack(t, true)
 	applies := 0
-	env := shellEnv{
-		probe:          func(string, ...string) (string, bool, error) { return "", false, fmt.Errorf("not ready") },
-		runInteractive: func(string, ...string) error { applies++; return nil },
-	}
+	env := shellEnv{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) { return "", false, fmt.Errorf("not ready") }, RunInteractiveFn: func(string, ...string) error { applies++; return nil }}}
 	err := runPackSetup(env, &bytes.Buffer{}, root, nil, false)
 	if err == nil || !strings.Contains(err.Error(), "interactive authorization") {
 		t.Fatalf("error = %v", err)
@@ -355,19 +357,16 @@ func TestPackSetupPlanRunsOptionalHookOnlyForItsOwner(t *testing.T) {
 	}
 	ready := map[string]bool{}
 	var applied []string
-	env := shellEnv{
-		probe: func(name string, _ ...string) (string, bool, error) {
-			if ready[name] {
-				return "", false, nil
-			}
-			return "", false, fmt.Errorf("not ready")
-		},
-		runInteractive: func(name string, _ ...string) error {
-			applied = append(applied, name)
-			ready[name] = true
-			return nil
-		},
-	}
+	env := shellEnv{System: &systest.Fake{RunTimedFn: func(name string, _ ...string) (string, bool, error) {
+		if ready[name] {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("not ready")
+	}, RunInteractiveFn: func(name string, _ ...string) error {
+		applied = append(applied, name)
+		ready[name] = true
+		return nil
+	}}}
 	var out bytes.Buffer
 	for _, root := range []string{first, second} {
 		if err := runPackSetup(env, &out, root, plan[root], true); err != nil {

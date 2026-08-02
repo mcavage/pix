@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/sys"
 	"strconv"
 	"strings"
 	"syscall"
@@ -345,14 +346,12 @@ type serveState struct {
 }
 
 // servePort resolves a service port honoring the MEMORY_PORT / KNOWLEDGE_PORT env
-// overrides `serve` itself reads, preferring the injected env.getenv (so tests
+// overrides `serve` itself reads, preferring the injected env.Getenv (so tests
 // stay hermetic) and falling back to the process environment.
-func servePort(env shellEnv, name string, def int) int {
-	get := os.Getenv
-	if env.getenv != nil {
-		get = env.getenv
-	}
-	if v := strings.TrimSpace(get(name)); v != "" {
+// servePort takes sys.Getenver, not the whole world: it reads one variable.
+// The signature is now the documentation.
+func servePort(env sys.Getenver, name string, def int) int {
+	if v := strings.TrimSpace(env.Getenv(name)); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
@@ -386,10 +385,8 @@ func resolveServeStatus(ctl serveCtl, env shellEnv) serveState {
 	}
 	st.MemoryPort = servePort(env, "MEMORY_PORT", memoryPortDefault)
 	st.KnowledgePort = servePort(env, "KNOWLEDGE_PORT", knowledgePortDefault)
-	if env.dial != nil {
-		st.Memory = env.dial(st.MemoryPort)
-		st.Knowledge = env.dial(st.KnowledgePort)
-	}
+	st.Memory = env.DialLocal(st.MemoryPort)
+	st.Knowledge = env.DialLocal(st.KnowledgePort)
 	return st
 }
 

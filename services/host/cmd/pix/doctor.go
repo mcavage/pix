@@ -1,16 +1,15 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"pix/host/config"
+	"pix/host/sys"
+	"pix/host/sys/systest"
 )
 
 // doctor ports the Makefile `doctor:` target into Go. Unlike the shell version
@@ -25,68 +24,46 @@ import (
 // shellEnv abstracts the ways doctor/setup touch the host: locating a binary,
 // running a command for its output, reading an env var, and dialing a local TCP
 // port. Tests substitute fakes; defaultShellEnv() wires the real thing.
+// shellEnv is the launcher's dependency bundle: every OS seam (sys.System) plus
+// the domain probes that have not yet moved out with their packages.
+//
+// It used to BE the seams — 22 nullable function pointers with 125 hand-written
+// nil guards that disagreed with each other. For `env.Run == nil` alone this
+// package held fourteen distinct behaviours. Those guards are gone: System is
+// never nil in production, so there is nothing left to guard.
+//
+// The probes below are deliberately NOT in sys, which is OS seams with no
+// domain knowledge. Each leaves with its own package in Phase 3
+// (docs/design/rearchitecture.md), and this struct shrinks to nothing.
 type shellEnv struct {
-	executable func() (string, error)
-	lookPath   func(name string) (string, error)
-	run        func(name string, args ...string) (string, error)
-	getenv     func(name string) string
-	dial       func(port int) bool
-	statFile   func(path string) bool            // does a regular file exist at path?
-	readFile   func(path string) (string, error) // read a file's contents
-	homeDir    func() string                     // the user's home directory ($HOME)
-	// fileMode returns a path's mode bits + whether it exists (file OR dir). The
-	// Secrets group's perms check uses it to flag a group/other-accessible
-	// op-refs.env or its dir. Nil in tests that don't exercise perms.
-	fileMode func(path string) (os.FileMode, bool)
-	// writeFile writes data to path (creating parent dirs). Nil in tests so
-	// seeding stays hermetic; defaultShellEnv wires the real os-backed writer.
-	writeFile func(path string, data []byte, perm os.FileMode) error
-	// flock serializes a cross-process critical section on lockPath (an
-	// advisory exclusive file lock). Nil in tests, which run fn directly so
-	// hermetic unit tests never create a real lock file (the lock path derives
-	// from defaultOpRefsPath, which those tests fake anyway); defaultShellEnv
-	// wires the real blocking withFlock. See withProviderRefsLock.
-	flock func(lockPath string, fn func() error) error
-	// probe runs an UNTRUSTED registered command with a hard timeout + capped
-	// output, so doctor never hangs (or floods) on a misbehaving MCP server. It
-	// returns (output, timedOut, err). Nil in tests, which fall back to run so
-	// they stay hermetic; defaultShellEnv wires runWithTimeout.
-	probe func(name string, args ...string) (out string, timedOut bool, err error)
-	// hostBinary resolves the canonical pix-host path used by registration.
+	sys.System
+
+	// quiet suppresses progress chatter on machine-readable paths.
+	quiet bool
+	// hostBinary resolves the canonical pix-host path. Late-bound so tests that
+	// swap hostBinaryResolver stay effective.
 	hostBinary func() (string, error)
-	// getwd and stateDir locate launcher-owned per-sandbox MCP receipts.
-	getwd    func() (string, error)
-	stateDir func() (string, error)
-	// runInteractive inherits the terminal for browser-based OAuth steps.
-	runInteractive func(name string, args ...string) error
-	// runInteractiveQuiet keeps stdin attached while capturing command chatter.
-	runInteractiveQuiet func(name string, args ...string) error
-	quiet               bool
-	// identityProbe answers the memory/knowledge `identity` JSON-RPC method
-	// (readiness_service.go, services/host/identity.go) — the APPLICATION-
-	// LEVEL proof a service axis needs before it may render ready. Nil in
-	// tests that don't fake it, which is deliberate: a service axis with a
-	// listening port but no identity prober renders unverifiable, NEVER a
-	// silent real network call and never a false ready.
+	// identityProbe answers a service's `identity` JSON-RPC method — the
+	// APPLICATION-level proof a readiness axis needs before rendering ready.
 	identityProbe identityProber
-	// slackAuthTest performs a live Slack `auth.test` call with the given
-	// bearer token and returns the resolved identity (team/user). `pix slack
-	// setup`/`status` use this EXCLUSIVELY for live verification — the token
-	// itself is never logged, persisted, or echoed by any caller. Nil in tests
-	// that don't exercise Slack setup/status; defaultShellEnv wires the real
-	// HTTPS call (slack.go's liveSlackAuthTest).
+	// slackAuthTest performs a live Slack auth.test. The token is never logged,
+	// persisted, or echoed by any caller.
 	slackAuthTest func(token string) (slackIdentity, error)
-	// directInferenceProbe performs one bounded, model-specific provider call.
-	// The key is held only in memory and must never appear in returned errors.
+	// directInferenceProbe makes one bounded, model-specific provider call. The
+	// key is held only in memory and must never appear in a returned error.
 	directInferenceProbe func(provider, model, key string) error
-	// ollamaInferenceProbe makes ONE bounded, model-specific request against the
-	// RESOLVED Ollama endpoint (never a spelled-out address). Nil in tests that
-	// do not fake it, which leaves every ollama binding unverified — never a
-	// silent real call, never a false verified. numCtx is the rung's declared
-	// context budget (0 for cloud), so the probe loads the model at the size the
-	// RAM gate priced.
+	// ollamaInferenceProbe makes one bounded, model-specific request against the
+	// RESOLVED Ollama endpoint (never a spelled-out address). numCtx is the
+	// rung's declared context budget, 0 for cloud.
 	ollamaInferenceProbe func(endpoint, model string, numCtx int, timeout time.Duration) error
 }
+
+// fake returns the embedded System as the test double, for fixtures that build
+// a base env and then override one seam. TEST-ONLY: it panics on a real env,
+// which is the right outcome for test-only code reached in production — the
+// alternative is a silent no-op, and silent no-ops are what this refactor
+// exists to delete.
+func (e shellEnv) fake() *systest.Fake { return e.System.(*systest.Fake) }
 
 // probeTimeout bounds every registered-command probe so doctor can never wedge
 // on a hung MCP server; probeMaxOutput caps how much of its output we capture.
@@ -95,127 +72,16 @@ const (
 	probeMaxOutput = 64 << 10 // 64KB
 )
 
-// runWithTimeout execs name+args under a hard context deadline with capped
-// captured output. It is the bounded alternative to shellEnv.run for probing
-// untrusted registered commands: a server that hangs is killed at probeTimeout
-// rather than freezing doctor, and runaway output is truncated at
-// probeMaxOutput. Returns (output, timedOut, err).
-func runWithTimeout(name string, args ...string) (string, bool, error) {
-	return runWithTimeoutD(probeTimeout, name, args...)
-}
-
-// runWithTimeoutD is runWithTimeout with a caller-chosen deadline, so a fast
-// command (e.g. `status`'s gog auth probe) can bound itself tighter than the
-// default probeTimeout.
-func runWithTimeoutD(timeout time.Duration, name string, args ...string) (string, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
-	// Hard wall-clock bound: if the child (or a descendant it spawned that still
-	// holds stdout/stderr) is alive when the context fires, WaitDelay forces the
-	// pipes closed + the process killed so CombinedOutput can't hang past it.
-	cmd.WaitDelay = 2 * time.Second
-	out, err := cmd.CombinedOutput()
-	if len(out) > probeMaxOutput {
-		out = out[:probeMaxOutput]
-	}
-	if ctx.Err() == context.DeadlineExceeded {
-		return string(out), true, ctx.Err()
-	}
-	return string(out), false, err
-}
-
-// probeRun invokes the bounded env.probe when wired (the real path), else falls
-// back to env.run (tests). Returns (output, timedOut, err).
-func probeRun(env shellEnv, name string, args ...string) (string, bool, error) {
-	if env.probe != nil {
-		return env.probe(name, args...)
-	}
-	if env.run == nil {
-		return "", false, fmt.Errorf("no runner")
-	}
-	out, err := env.run(name, args...)
-	return out, false, err
-}
+// probeRun is gone: with a non-nullable System it was `env.RunTimed(...)` with
+// extra steps. It used to fall back to env.Run when env.probe was nil, and to
+// `fmt.Errorf("no runner")` when both were — one of the fourteen disagreeing
+// answers to a missing seam. runWithTimeout/runWithTimeoutD moved to
+// sys.RunTimed, which is where a bounded exec belongs.
 
 // defaultShellEnv returns a shellEnv backed by the real OS.
 func defaultShellEnv() shellEnv {
 	return shellEnv{
-		executable: os.Executable,
-		lookPath:   exec.LookPath,
-		run: func(name string, args ...string) (string, error) {
-			out, err := exec.Command(name, args...).CombinedOutput()
-			return string(out), err
-		},
-		getenv: os.Getenv,
-		dial: func(port int) bool {
-			conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 400*time.Millisecond)
-			if err != nil {
-				return false
-			}
-			_ = conn.Close()
-			return true
-		},
-		statFile: func(path string) bool {
-			info, err := os.Stat(path)
-			return err == nil && !info.IsDir()
-		},
-		readFile: func(path string) (string, error) {
-			b, err := os.ReadFile(path)
-			return string(b), err
-		},
-		homeDir: func() string {
-			h, _ := os.UserHomeDir()
-			return h
-		},
-		fileMode: func(path string) (os.FileMode, bool) {
-			fi, err := os.Stat(path)
-			if err != nil {
-				return 0, false
-			}
-			return fi.Mode(), true
-		},
-		// writeFile is LEAF-symlink-safe (parent-directory symlinks are a
-		// separate, honestly out-of-scope concern — see atomicWriteInDir's doc
-		// comment): the destination is never opened directly, so a leaf that is
-		// itself a symlink is REPLACED by an atomic same-directory temp file +
-		// rename, never followed/truncated through. Parent creation stays 0700
-		// (unchanged perm posture). Shared with writeWorkspaceStateFile's exact
-		// mechanism (workspacestate.go) so there is one hardened writer, not two.
-		writeFile: func(path string, data []byte, perm os.FileMode) error {
-			dir := filepath.Dir(path)
-			if err := os.MkdirAll(dir, 0o700); err != nil {
-				return err
-			}
-			return atomicWriteInDir(dir, filepath.Base(path), data, perm)
-		},
-		flock: withFlock,
-		probe: runWithTimeout,
-		// Late-bound so tests that swap hostBinaryResolver remain effective.
-		hostBinary: func() (string, error) { return hostBinaryResolver() },
-		getwd:      os.Getwd,
-		stateDir:   config.StateDir,
-		runInteractive: func(name string, args ...string) error {
-			cmd := exec.Command(name, args...)
-			cmd.Stdin = os.Stdin
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			return cmd.Run()
-		},
-		runInteractiveQuiet: func(name string, args ...string) error {
-			cmd := exec.Command(name, args...)
-			cmd.Stdin = os.Stdin
-			out, err := cmd.CombinedOutput()
-			if err != nil && strings.TrimSpace(string(out)) != "" {
-				return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
-			}
-			return err
-		},
-		identityProbe:        rpcIdentityProbe,
-		slackAuthTest:        liveSlackAuthTest,
-		directInferenceProbe: liveDirectInferenceProbe,
-		ollamaInferenceProbe: liveOllamaInferenceProbe,
-	}
+		System: sys.Real{}, hostBinary: func() (string, error) { return hostBinaryResolver() }, identityProbe: rpcIdentityProbe, slackAuthTest: liveSlackAuthTest, directInferenceProbe: liveDirectInferenceProbe, ollamaInferenceProbe: liveOllamaInferenceProbe}
 }
 
 // unwrapOpRun returns the effective command doctor would trust to exec. With
@@ -256,7 +122,7 @@ func unwrapOpRun(env shellEnv, argv []string) ([]string, bool) {
 	if len(inner) == 0 {
 		return nil, false
 	}
-	// The wrapper must run the SAME op binary env.lookPath resolves — a
+	// The wrapper must run the SAME op binary env.LookPath resolves — a
 	// foreign argv[0] (`/tmp/evil -- …`) or a look-alike `/tmp/op` is never
 	// unwrapped, because the probe would exec that token verbatim.
 	opTok, ok := trustedExecPath(env, argv[0], "op")
@@ -322,15 +188,13 @@ func mcpConfigured(cfg *config.Config, name string) bool {
 // This is how doctor locates a repo checkout's config files (op-refs.env)
 // regardless of where it was invoked from within the tree.
 func findUpward(env shellEnv, rel string) string {
-	if env.statFile == nil {
-		return ""
-	}
+
 	dir, err := os.Getwd()
 	if err != nil {
 		return ""
 	}
 	for {
-		if env.statFile(filepath.Join(dir, "Makefile")) && env.statFile(filepath.Join(dir, rel)) {
+		if env.IsFile(filepath.Join(dir, "Makefile")) && env.IsFile(filepath.Join(dir, rel)) {
 			return filepath.Join(dir, rel)
 		}
 		parent := filepath.Dir(dir)
@@ -363,21 +227,19 @@ func resolveOpRefs(env shellEnv) string {
 		}
 		return p
 	}
-	if env.getenv != nil {
-		if p := env.getenv("PIX_CONFIG"); p != "" {
-			cand := filepath.Join(filepath.Dir(p), "op-refs.env")
-			if env.statFile != nil && env.statFile(cand) {
-				return abs(cand)
-			}
+	if p := env.Getenv("PIX_CONFIG"); p != "" {
+		cand := filepath.Join(filepath.Dir(p), "op-refs.env")
+		if env.IsFile(cand) {
+			return abs(cand)
 		}
 	}
 	if p := findUpward(env, filepath.Join("config", "op-refs.env")); p != "" {
 		return abs(p)
 	}
-	if env.homeDir != nil && env.statFile != nil {
-		if home := env.homeDir(); home != "" {
+	{
+		if home := env.HomeDir(); home != "" {
 			cand := filepath.Join(home, ".config", "pix", "op-refs.env")
-			if env.statFile(cand) {
+			if env.IsFile(cand) {
 				return abs(cand)
 			}
 		}
@@ -439,7 +301,7 @@ func runDoctor(cfg *config.Config, env shellEnv) *report {
 	if sbxOnPath {
 		// BOUNDED (probeRun): a hung `sbx mcp ls` degrades to mcpOK=false —
 		// every dependent check renders unverifiable — never a wedged doctor.
-		if out, timedOut, err := probeRun(env, "sbx", "mcp", "ls"); err == nil && !timedOut {
+		if out, timedOut, err := env.RunTimed("sbx", "mcp", "ls"); err == nil && !timedOut {
 			mcpOut, mcpOK = out, true
 		}
 	}

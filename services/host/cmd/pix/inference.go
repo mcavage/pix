@@ -79,11 +79,9 @@ func setupChooseInference(cfg *config.Config, env shellEnv, in io.Reader, out io
 		return false, nil
 	}
 	ollamaReady := false
-	if env.lookPath != nil {
-		if _, err := env.lookPath("ollama"); err == nil {
-			_, timedOut, runErr := probeRun(env, "ollama", "list")
-			ollamaReady = runErr == nil && !timedOut
-		}
+	if _, err := env.LookPath("ollama"); err == nil {
+		_, timedOut, runErr := env.RunTimed("ollama", "list")
+		ollamaReady = runErr == nil && !timedOut
 	}
 	fmt.Fprintln(out, "How should Pix run models? (choose one or more, comma-separated)")
 	fmt.Fprintln(out, "  1. API key (default)     Anthropic / OpenAI / Google keys, resolved from 1Password")
@@ -240,7 +238,7 @@ func (p ollamaPlan) LocalBoundTags() []string {
 // the weakest possible signal: it proves a name was printed, not that the model
 // runs here or that the account may call it.
 func ollamaListedModels(env shellEnv) (map[string]bool, error) {
-	out, timedOut, err := probeRun(env, "ollama", "list")
+	out, timedOut, err := env.RunTimed("ollama", "list")
 	if err != nil || timedOut {
 		return nil, fmt.Errorf("could not list Ollama models")
 	}
@@ -1505,13 +1503,11 @@ func reconcileOllamaInference(cfg *config.Config, env shellEnv, in io.Reader, ou
 // is not running — and telling a user to install software they already have is
 // its own kind of wrong.
 func requireOllamaReady(env shellEnv) error {
-	if env.lookPath == nil {
-		return fmt.Errorf("cannot probe for the ollama binary on this host")
-	}
-	if _, err := env.lookPath("ollama"); err != nil {
+
+	if _, err := env.LookPath("ollama"); err != nil {
 		return fmt.Errorf("ollama is not installed or not on PATH — see https://ollama.com, then re-run")
 	}
-	if _, timedOut, err := probeRun(env, "ollama", "list"); err != nil || timedOut {
+	if _, timedOut, err := env.RunTimed("ollama", "list"); err != nil || timedOut {
 		return fmt.Errorf("the ollama binary is installed but the daemon did not answer `ollama list` — start Ollama, then re-run")
 	}
 	return nil

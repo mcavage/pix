@@ -4,18 +4,19 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"pix/host/sys/systest"
 	"strings"
 	"testing"
 )
 
 // fakeGitEnv records git invocations and pretends they succeed.
 func fakeGitEnv(calls *[]string) shellEnv {
-	return shellEnv{run: func(name string, args ...string) (string, error) {
+	return shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		if calls != nil {
 			*calls = append(*calls, name+" "+strings.Join(args, " "))
 		}
 		return "", nil
-	}}
+	}}}
 }
 
 func TestPackNew_InitsAndAddSkill(t *testing.T) {

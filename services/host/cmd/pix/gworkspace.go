@@ -422,16 +422,14 @@ func gworkspaceDisable(cfg *config.Config, env shellEnv, out io.Writer) error {
 	}
 
 	if snap.state == gogRegPresent {
-		if env.run == nil {
-			return fmt.Errorf("internal: shellEnv.run not wired")
-		}
-		if _, err := env.run("sbx", "mcp", "rm", gwServerName); err != nil {
+
+		if _, err := env.Run("sbx", "mcp", "rm", gwServerName); err != nil {
 			return fmt.Errorf("removing the %s registration: %w (remove it by hand: sbx mcp rm %s)", gwServerName, err, gwServerName)
 		}
 		fmt.Fprintln(out, "  removed registration: "+gwServerName)
 	}
 	if docsSnap.state == gogRegPresent {
-		if _, err := env.run("sbx", "mcp", "rm", gwDocsCreateServerName); err != nil {
+		if _, err := env.Run("sbx", "mcp", "rm", gwDocsCreateServerName); err != nil {
 			return fmt.Errorf("removing the %s registration: %w", gwDocsCreateServerName, err)
 		}
 		fmt.Fprintln(out, "  removed registration: "+gwDocsCreateServerName)

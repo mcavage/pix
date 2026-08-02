@@ -70,9 +70,7 @@ func (e ollamaEndpoint) loopbackOnly() bool {
 // a bare host, host:port, or full URL all accepted; otherwise the default.
 func effectiveOllamaEndpoint(cfg *config.Config, env shellEnv) ollamaEndpoint {
 	raw := ""
-	if env.getenv != nil {
-		raw = strings.TrimSpace(env.getenv("OLLAMA_HOST"))
-	}
+	raw = strings.TrimSpace(env.Getenv("OLLAMA_HOST"))
 	if raw == "" {
 		return ollamaEndpoint{URL: "http://" + defaultOllamaHost, Host: "127.0.0.1", Port: defaultOllamaPort, Source: "default"}
 	}

@@ -648,8 +648,8 @@ func knowledgeLsView(cfg *config.Config, env shellEnv) knowledgeLsSnapshot {
 			break
 		}
 	}
-	if v.ServiceEnabled && env.dial != nil {
-		v.ServiceUp = env.dial(11436)
+	if v.ServiceEnabled {
+		v.ServiceUp = env.DialLocal(11436)
 	}
 	v.ProjectPointer = readProjectPointer(".")
 	return v
@@ -676,7 +676,7 @@ func knowledgeLs(cfg *config.Config, env shellEnv, out io.Writer) {
 	}
 	if !enabled {
 		fmt.Fprintln(out, "service: disabled — enable with `pix config set services knowledge`")
-	} else if env.dial != nil && env.dial(11436) {
+	} else if env.DialLocal(11436) {
 		fmt.Fprintln(out, "service: up (:11436)")
 	} else {
 		fmt.Fprintln(out, "service: down (:11436 unreachable) — start it with `pix serve`")

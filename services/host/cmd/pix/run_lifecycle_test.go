@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 // TestPlanSandboxLaunch_AbsentCreates (a): no sandbox by that name -> a full
@@ -310,10 +311,10 @@ func TestBuildReattachArgs_NeitherModelNorPassthrough(t *testing.T) {
 // step, and assert exactly one rm attempt was made (no retry, no fallback).
 func TestApplyReplaceRm_FailurePropagatesAndBlocksCreate(t *testing.T) {
 	var recorded [][]string
-	env := shellEnv{run: func(cmd string, args ...string) (string, error) {
+	env := shellEnv{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) {
 		recorded = append(recorded, append([]string{cmd}, args...))
 		return "Error: cannot remove sandbox", fmt.Errorf("exit status 1")
-	}}
+	}}}
 	plan := runLaunchPlan{RmFirst: true, Args: []string{"run", "pix", "."}}
 
 	err := applyReplaceRm(env, plan, "pix-t")
@@ -338,7 +339,7 @@ func TestApplyReplaceRm_FailurePropagatesAndBlocksCreate(t *testing.T) {
 // TestApplyReplaceRm_SuccessAllowsCreate: the mirror-image case — a successful
 // rm returns nil, so run.go's caller proceeds to create.
 func TestApplyReplaceRm_SuccessAllowsCreate(t *testing.T) {
-	env := shellEnv{run: func(cmd string, args ...string) (string, error) { return "", nil }}
+	env := shellEnv{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) { return "", nil }}}
 	plan := runLaunchPlan{RmFirst: true}
 	if err := applyReplaceRm(env, plan, "pix-t"); err != nil {
 		t.Errorf("expected nil error on a successful rm, got %v", err)
@@ -346,15 +347,15 @@ func TestApplyReplaceRm_SuccessAllowsCreate(t *testing.T) {
 }
 
 // TestApplyReplaceRm_NoOpWhenNotNeeded: RmFirst=false (a plain reattach or a
-// create with nothing to remove) never calls env.run at all.
+// create with nothing to remove) never calls env.Run at all.
 func TestApplyReplaceRm_NoOpWhenNotNeeded(t *testing.T) {
 	called := false
-	env := shellEnv{run: func(cmd string, args ...string) (string, error) { called = true; return "", nil }}
+	env := shellEnv{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) { called = true; return "", nil }}}
 	if err := applyReplaceRm(env, runLaunchPlan{RmFirst: false}, "pix-t"); err != nil {
 		t.Errorf("expected nil error, got %v", err)
 	}
 	if called {
-		t.Error("applyReplaceRm must not call env.run when RmFirst is false")
+		t.Error("applyReplaceRm must not call env.Run when RmFirst is false")
 	}
 }
 
@@ -438,10 +439,7 @@ func TestParseRunArgs_Replace(t *testing.T) {
 func TestLocalImageLoaded(t *testing.T) {
 	lsOut := dockerImageRepo + "  local-111  abc123\n" +
 		dockerImageRepo + "  local-222  def456\n"
-	present := shellEnv{
-		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
-		run:      func(string, ...string) (string, error) { return lsOut, nil },
-	}
+	present := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return lsOut, nil }}}
 	if !localImageLoaded(present, "local-222") {
 		t.Error("a loaded tag must be reported present")
 	}
@@ -449,10 +447,7 @@ func TestLocalImageLoaded(t *testing.T) {
 		t.Error("an unloaded tag must be reported absent")
 	}
 	// Combined `repo:tag id` column form (the round-2 regression) must match too.
-	combined := shellEnv{
-		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
-		run:      func(string, ...string) (string, error) { return dockerImageRepo + ":local-333  ghi789\n", nil },
-	}
+	combined := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return dockerImageRepo + ":local-333  ghi789\n", nil }}}
 	if !localImageLoaded(combined, "local-333") {
 		t.Error("combined repo:tag column must be recognized as present")
 	}
@@ -460,34 +455,22 @@ func TestLocalImageLoaded(t *testing.T) {
 		t.Error("combined form: an unloaded tag must be absent")
 	}
 	// No sbx on PATH -> fail OPEN (true).
-	noSbx := shellEnv{
-		lookPath: func(string) (string, error) { return "", fmt.Errorf("not found") },
-		run:      func(string, ...string) (string, error) { return "", nil },
-	}
+	noSbx := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, RunFn: func(string, ...string) (string, error) { return "", nil }}}
 	if !localImageLoaded(noSbx, "local-222") {
 		t.Error("must fail open (true) when sbx is unavailable")
 	}
 	// ls error -> fail OPEN (true).
-	lsErr := shellEnv{
-		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
-		run:      func(string, ...string) (string, error) { return "", fmt.Errorf("boom") },
-	}
+	lsErr := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "", fmt.Errorf("boom") }}}
 	if !localImageLoaded(lsErr, "local-222") {
 		t.Error("must fail open (true) when `sbx template ls` errors")
 	}
 	// Empty ls output -> no signal -> fail OPEN (true).
-	empty := shellEnv{
-		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
-		run:      func(string, ...string) (string, error) { return "   \n", nil },
-	}
+	empty := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "   \n", nil }}}
 	if !localImageLoaded(empty, "local-222") {
 		t.Error("must fail open (true) when ls output is empty")
 	}
 	// Store fully pruned (non-empty ls, tag absent) -> REFUSE (would otherwise pull).
-	pruned := shellEnv{
-		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
-		run:      func(string, ...string) (string, error) { return "REPOSITORY TAG ID\nother/img latest xyz\n", nil },
-	}
+	pruned := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "REPOSITORY TAG ID\nother/img latest xyz\n", nil }}}
 	if localImageLoaded(pruned, "local-222") {
 		t.Error("must refuse when the tag is absent from a non-empty store (pruned)")
 	}

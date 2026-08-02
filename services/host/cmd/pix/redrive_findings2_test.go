@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/sys"
+	"pix/host/sys/systest"
 )
 
 // --- finding 8: catalog MCP readiness gate ---------------------------------
@@ -33,25 +35,21 @@ import (
 // never open an OAuth flow itself.
 func catalogGateEnv(t *testing.T, output map[string]string) shellEnv {
 	t.Helper()
-	return shellEnv{
-		lookPath: func(name string) (string, error) {
-			if name == "sbx" {
-				return "/usr/bin/sbx", nil
-			}
-			return "", fmt.Errorf("%q not found", name)
-		},
-		run: func(name string, args ...string) (string, error) {
-			key := strings.Join(append([]string{name}, args...), " ")
-			if out, ok := output[key]; ok {
-				return out, nil
-			}
-			return "", fmt.Errorf("no fake output for %q", key)
-		},
-		runInteractive: func(name string, args ...string) error {
-			t.Fatalf("the catalog gate must NEVER launch an interactive command (OAuth): %s %v", name, args)
-			return nil
-		},
-	}
+	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		if name == "sbx" {
+			return "/usr/bin/sbx", nil
+		}
+		return "", fmt.Errorf("%q not found", name)
+	}, RunFn: func(name string, args ...string) (string, error) {
+		key := strings.Join(append([]string{name}, args...), " ")
+		if out, ok := output[key]; ok {
+			return out, nil
+		}
+		return "", fmt.Errorf("no fake output for %q", key)
+	}, RunInteractiveFn: func(name string, args ...string) error {
+		t.Fatalf("the catalog gate must NEVER launch an interactive command (OAuth): %s %v", name, args)
+		return nil
+	}}}
 }
 
 func TestVerifyCatalogMCPReady_Ready(t *testing.T) {
@@ -114,7 +112,7 @@ func TestVerifyCatalogMCPReady_ProbeFailureIsUnverifiableRetry(t *testing.T) {
 	}
 	// Listing itself unavailable (sbx absent) — also unverifiable, fail closed.
 	absent := catalogGateEnv(t, nil)
-	absent.lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	absent.fake().LookPathFn = func(string) (string, error) { return "", fmt.Errorf("not found") }
 	if err := verifyCatalogMCPReady(absent, []string{"notion"}); err == nil || !strings.Contains(err.Error(), "could not verify") {
 		t.Errorf("sbx-absent must fail closed as unverifiable, got: %v", err)
 	}
@@ -122,7 +120,7 @@ func TestVerifyCatalogMCPReady_ProbeFailureIsUnverifiableRetry(t *testing.T) {
 
 func TestVerifyCatalogMCPReady_NonCatalogNamesNeverProbed(t *testing.T) {
 	env := catalogGateEnv(t, nil) // any probe would error the run below
-	env.run = func(name string, args ...string) (string, error) {
+	env.fake().RunFn = func(name string, args ...string) (string, error) {
 		t.Fatalf("non-catalog names must never be probed by the gate: %s %v", name, args)
 		return "", nil
 	}
@@ -221,24 +219,20 @@ func TestOnboardCatalogAllowlist_IsTheShippedCatalog(t *testing.T) {
 
 func TestMcpLocalCheck_PolicyDeniedVerdict(t *testing.T) {
 	const hostBin = "/usr/local/bin/pix-host"
-	env := shellEnv{
-		lookPath: func(name string) (string, error) {
-			if name == "sbx" {
-				return "/usr/bin/sbx", nil
-			}
-			return "", fmt.Errorf("%q not found", name)
-		},
-		hostBinary: func() (string, error) { return hostBin, nil },
-		probe: func(name string, args ...string) (string, bool, error) {
-			switch strings.Join(append([]string{name}, args...), " ") {
-			case "sbx mcp get slack":
-				return "name: slack\ncommand: " + hostBin + " mcp slack\n", false, nil
-			case hostBin + " mcp slack --list-tools":
-				return "403 forbidden: access denied by org policy", false, errors.New("exit status 1")
-			}
-			return "", false, fmt.Errorf("no fake probe")
-		},
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		if name == "sbx" {
+			return "/usr/bin/sbx", nil
+		}
+		return "", fmt.Errorf("%q not found", name)
+	}, RunTimedFn: func(name string, args ...string) (string, bool, error) {
+		switch strings.Join(append([]string{name}, args...), " ") {
+		case "sbx mcp get slack":
+			return "name: slack\ncommand: " + hostBin + " mcp slack\n", false, nil
+		case hostBin + " mcp slack --list-tools":
+			return "403 forbidden: access denied by org policy", false, errors.New("exit status 1")
+		}
+		return "", false, fmt.Errorf("no fake probe")
+	}}, hostBinary: func() (string, error) { return hostBin, nil }}
 	c := mcpLocalCheck(env, "slack", "slack\n")
 	if c.result() != verdictDenied {
 		t.Errorf("an explicit policy denial from the local probe must be verdictDenied, got %+v", c)
@@ -296,14 +290,14 @@ func hangingExe(t *testing.T) string {
 func hangingProbe(t *testing.T, deadline time.Duration) func(string, ...string) (string, bool, error) {
 	exe := hangingExe(t)
 	return func(name string, args ...string) (string, bool, error) {
-		return runWithTimeoutD(deadline, exe, args...)
+		return sys.RunTimed(deadline, exe, args...)
 	}
 }
 
 func TestRunWithTimeoutD_HangingProcessBounded(t *testing.T) {
 	exe := hangingExe(t)
 	start := time.Now()
-	_, timedOut, _ := runWithTimeoutD(100*time.Millisecond, exe)
+	_, timedOut, _ := sys.RunTimed(100*time.Millisecond, exe)
 	if !timedOut {
 		t.Fatal("a hanging process must report timedOut under the injected deadline")
 	}
@@ -313,10 +307,7 @@ func TestRunWithTimeoutD_HangingProcessBounded(t *testing.T) {
 }
 
 func TestProbeSbxSecrets_HangingSbxIsErrorNotAbsent(t *testing.T) {
-	env := shellEnv{
-		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
-		probe:    hangingProbe(t, 100*time.Millisecond),
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
 	_, state := probeSbxSecrets(env)
 	if state != sbxSecretsError {
@@ -331,10 +322,7 @@ func TestProbeSbxSecrets_HangingSbxIsErrorNotAbsent(t *testing.T) {
 // tri-state under a hang: probeOK=false (unknown), which under the existing
 // rule PROCEEDS — only a POSITIVELY confirmed missing key blocks a launch.
 func TestSbxModelKeyState_HangingProbeUnknownProceeds(t *testing.T) {
-	env := shellEnv{
-		lookPath: func(string) (string, error) { return "/usr/bin/sbx", nil },
-		probe:    hangingProbe(t, 100*time.Millisecond),
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	present, probeOK := sbxModelKeyState(env)
 	if present || probeOK {
 		t.Errorf("hanging preflight must be (present=false, probeOK=false) so run proceeds, got (%v,%v)", present, probeOK)
@@ -344,18 +332,12 @@ func TestSbxModelKeyState_HangingProbeUnknownProceeds(t *testing.T) {
 func TestGatherStatus_HangingSbxBounded(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"notion"}}
 	sd := t.TempDir()
-	env := shellEnv{
-		lookPath: func(name string) (string, error) {
-			if name == "sbx" {
-				return "/usr/bin/sbx", nil
-			}
-			return "", fmt.Errorf("%q not found", name)
-		},
-		probe:    hangingProbe(t, 100*time.Millisecond),
-		dial:     func(int) bool { return false },
-		statFile: func(string) bool { return false },
-		stateDir: func() (string, error) { return sd, nil },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		if name == "sbx" {
+			return "/usr/bin/sbx", nil
+		}
+		return "", fmt.Errorf("%q not found", name)
+	}, RunTimedFn: hangingProbe(t, 100*time.Millisecond), DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }, StateDirFn: func() (string, error) { return sd, nil }}}
 	start := time.Now()
 	st := gatherStatus(cfg, "default", env)
 	if el := time.Since(start); el > 30*time.Second {
@@ -382,24 +364,17 @@ func TestRunDoctor_HangingMcpLsUnverifiable(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"slack"}
 	hang := hangingProbe(t, 100*time.Millisecond)
-	env := shellEnv{
-		lookPath: func(name string) (string, error) {
-			if name == "sbx" {
-				return "/usr/bin/sbx", nil
-			}
-			return "", fmt.Errorf("%q not found", name)
-		},
-		probe: func(name string, args ...string) (string, bool, error) {
-			if name == "sbx" && len(args) == 2 && args[0] == "secret" && args[1] == "ls" {
-				return "anthropic\nopenai\ngoogle\n", false, nil
-			}
-			return hang(name, args...)
-		},
-		dial:     func(int) bool { return false },
-		statFile: func(string) bool { return false },
-		getenv:   func(string) string { return "" },
-		homeDir:  func() string { return "" },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		if name == "sbx" {
+			return "/usr/bin/sbx", nil
+		}
+		return "", fmt.Errorf("%q not found", name)
+	}, RunTimedFn: func(name string, args ...string) (string, bool, error) {
+		if name == "sbx" && len(args) == 2 && args[0] == "secret" && args[1] == "ls" {
+			return "anthropic\nopenai\ngoogle\n", false, nil
+		}
+		return hang(name, args...)
+	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }, GetenvFn: func(string) string { return "" }, HomeDirFn: func() string { return "" }}}
 	start := time.Now()
 	r := runDoctor(cfg, env)
 	if el := time.Since(start); el > 30*time.Second {

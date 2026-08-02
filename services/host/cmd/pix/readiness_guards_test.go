@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 // readiness_guards_test.go holds the fitness functions for Wave 1's "one
@@ -198,14 +199,7 @@ func walkEvidenceAndFix(t *testing.T, where string, checks []check) {
 // sbx, no ollama, nothing listening) — the worst case for evidence quality,
 // because almost everything is a gap.
 func TestEvidenceAndFixWalk_Doctor(t *testing.T) {
-	env := shellEnv{
-		lookPath: func(name string) (string, error) { return "", errNotFoundFixture },
-		run:      func(string, ...string) (string, error) { return "", errNotFoundFixture },
-		getenv:   func(string) string { return "" },
-		dial:     func(int) bool { return false },
-		statFile: func(string) bool { return false },
-		homeDir:  func() string { return t.TempDir() },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "", errNotFoundFixture }, RunFn: func(string, ...string) (string, error) { return "", errNotFoundFixture }, GetenvFn: func(string) string { return "" }, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }, HomeDirFn: func() string { return t.TempDir() }}}
 	cfg := &config.Config{Services: []string{"memory", "knowledge"}}
 	r := runDoctor(cfg, env)
 	walkEvidenceAndFix(t, "doctor", r.snapshot().All())
@@ -214,11 +208,7 @@ func TestEvidenceAndFixWalk_Doctor(t *testing.T) {
 // TestEvidenceAndFixWalk_Fast walks the shared fast snapshot the daily
 // surfaces render, on the same cold host.
 func TestEvidenceAndFixWalk_Fast(t *testing.T) {
-	env := shellEnv{
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run:      func(string, ...string) (string, error) { return "", nil },
-		dial:     func(int) bool { return false },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(string, ...string) (string, error) { return "", nil }, DialLocalFn: func(int) bool { return false }}}
 	cfg := &config.Config{Services: []string{"memory", "knowledge"}}
 	walkEvidenceAndFix(t, "fast", fastReadinessSnapshot(cfg, env, probeSbxKeyEvidence(env)).All())
 }
@@ -299,13 +289,13 @@ func TestStatusJSONCarriesChecksAndExit(t *testing.T) {
 	// Suppressed-3: an unverifiable axis (no sbx, i.e. inside the sandbox)
 	// must never fail a script that only wanted the JSON.
 	inVM := fakeStatusEnv()
-	inVM.lookPath = func(string) (string, error) { return "", errNotFoundFixture }
+	inVM.fake().LookPathFn = func(string) (string, error) { return "", errNotFoundFixture }
 	if got := gatherStatus(cfg, "default", inVM).Exit; got != exitReady {
 		t.Errorf("unverifiable axes must not fail status: exit = %d", got)
 	}
 	// A POSITIVELY verified core failure still exits 1.
 	noKeys := fakeStatusEnv()
-	noKeys.run = func(name string, args ...string) (string, error) {
+	noKeys.fake().RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
 			return "", nil // sbx answered: zero keys set
 		}
@@ -321,16 +311,16 @@ func TestStatusJSONCarriesChecksAndExit(t *testing.T) {
 // paid for, and the whole gather stays well inside a second on a fake host.
 func TestStatusProbesSecretsOnce(t *testing.T) {
 	env := fakeStatusEnv()
-	base := env.run
+	base := env.fake().RunFn
 	secretProbes, dials := 0, map[int]int{}
-	env.run = func(name string, args ...string) (string, error) {
+	env.fake().RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls" {
 			secretProbes++
 		}
 		return base(name, args...)
 	}
-	baseDial := env.dial
-	env.dial = func(port int) bool { dials[port]++; return baseDial(port) }
+	baseDial := env.fake().DialLocalFn
+	env.fake().DialLocalFn = func(port int) bool { dials[port]++; return baseDial(port) }
 
 	start := time.Now()
 	gatherStatus(&config.Config{Services: []string{"memory"}}, "default", env)

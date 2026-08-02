@@ -33,11 +33,8 @@ func ensureSetupPrereqsFor(env shellEnv, in io.Reader, out io.Writer, interactiv
 		names = append(names, "op")
 	}
 	for _, name := range names {
-		if env.lookPath == nil {
-			missing = append(missing, name)
-			continue
-		}
-		if _, err := env.lookPath(name); err != nil {
+
+		if _, err := env.LookPath(name); err != nil {
 			missing = append(missing, name)
 		}
 	}
@@ -55,10 +52,10 @@ func ensureSetupPrereqsFor(env shellEnv, in io.Reader, out io.Writer, interactiv
 		}
 		return strings.Join(lines, "\n")
 	}
-	if setupHostOS != "darwin" || env.lookPath == nil {
+	if setupHostOS != "darwin" {
 		return fmt.Errorf("missing required host tool(s): %s\n%s", strings.Join(missing, ", "), fix())
 	}
-	if _, err := env.lookPath("brew"); err != nil {
+	if _, err := env.LookPath("brew"); err != nil {
 		return fmt.Errorf("missing required host tool(s): %s; Homebrew is unavailable\n%s", strings.Join(missing, ", "), fix())
 	}
 	if !interactive || in == nil {
@@ -68,9 +65,7 @@ func ensureSetupPrereqsFor(env shellEnv, in io.Reader, out io.Writer, interactiv
 	if !confirmYN(in, out, "", true) {
 		return fmt.Errorf("required host tools were not installed\n%s", fix())
 	}
-	if env.runInteractive == nil {
-		return fmt.Errorf("cannot run Homebrew installer\n%s", fix())
-	}
+
 	var formulae []string
 	for _, name := range missing {
 		switch name {
@@ -80,11 +75,11 @@ func ensureSetupPrereqsFor(env shellEnv, in io.Reader, out io.Writer, interactiv
 			formulae = append(formulae, "1password-cli")
 		}
 	}
-	if err := env.runInteractive("brew", append([]string{"install"}, formulae...)...); err != nil {
+	if err := env.RunInteractive("brew", append([]string{"install"}, formulae...)...); err != nil {
 		return fmt.Errorf("installing required host tools: %w", err)
 	}
 	for _, name := range missing {
-		if _, err := env.lookPath(name); err != nil {
+		if _, err := env.LookPath(name); err != nil {
 			return fmt.Errorf("Homebrew completed but %s is still not on PATH; restart the shell and re-run pix setup", name)
 		}
 	}
@@ -94,17 +89,17 @@ func ensureSetupPrereqsFor(env shellEnv, in io.Reader, out io.Writer, interactiv
 // ensureSetupSbxSession drives Docker's own login flow when the sbx control
 // plane is not usable. It creates no Pix account and stores no Docker token.
 func ensureSetupSbxSession(env shellEnv, out io.Writer, interactive bool) error {
-	if _, timedOut, err := probeRun(env, "sbx", "ls"); err == nil && !timedOut {
+	if _, timedOut, err := env.RunTimed("sbx", "ls"); err == nil && !timedOut {
 		return nil
 	}
-	if !interactive || env.runInteractive == nil {
+	if !interactive {
 		return fmt.Errorf("Docker Sandboxes is not signed in or reachable; run: sbx login")
 	}
 	fmt.Fprintln(out, "Docker Sandboxes needs authorization. Continuing with the official `sbx login` flow.")
-	if err := env.runInteractive("sbx", "login"); err != nil {
+	if err := env.RunInteractive("sbx", "login"); err != nil {
 		return fmt.Errorf("sbx login failed: %w", err)
 	}
-	if _, timedOut, err := probeRun(env, "sbx", "ls"); err != nil || timedOut {
+	if _, timedOut, err := env.RunTimed("sbx", "ls"); err != nil || timedOut {
 		return fmt.Errorf("sbx login completed but Docker Sandboxes is still unreachable; run: sbx diagnose")
 	}
 	return nil
@@ -121,7 +116,7 @@ func ensureSetupSbxDefaults(env shellEnv) error {
 }
 
 func ensureSetupKitAllowedSource(env shellEnv) error {
-	out, timedOut, err := probeRun(env, "sbx", "settings", "get", setupKitSourcesKey)
+	out, timedOut, err := env.RunTimed("sbx", "settings", "get", setupKitSourcesKey)
 	if err != nil || timedOut {
 		return fmt.Errorf("reading Docker Sandboxes kit allowlist: %w", setupProbeError(err, timedOut))
 	}
@@ -143,7 +138,7 @@ func ensureSetupKitAllowedSource(env shellEnv) error {
 		return fmt.Errorf("allowing Pix's GitHub kit publisher: %w", err)
 	}
 
-	verified, timedOut, err := probeRun(env, "sbx", "settings", "get", setupKitSourcesKey)
+	verified, timedOut, err := env.RunTimed("sbx", "settings", "get", setupKitSourcesKey)
 	if err != nil || timedOut {
 		return fmt.Errorf("verifying Docker Sandboxes kit allowlist: %w", setupProbeError(err, timedOut))
 	}
@@ -187,7 +182,7 @@ func ensureSetupOpenNetworkPolicy(env shellEnv) error {
 }
 
 func setupSbxNetworkPolicyInitialized(env shellEnv) (bool, error) {
-	out, timedOut, err := probeRun(env, "sbx", "policy", "ls", "--source", "local", "--type", "network", "--json")
+	out, timedOut, err := env.RunTimed("sbx", "policy", "ls", "--source", "local", "--type", "network", "--json")
 	if err != nil || timedOut {
 		return false, fmt.Errorf("reading Docker Sandboxes network policy: %w", setupProbeError(err, timedOut))
 	}
@@ -218,17 +213,7 @@ func setupSbxNetworkPolicyInitialized(env shellEnv) (bool, error) {
 }
 
 func runSetupSbxCommand(env shellEnv, args ...string) error {
-	if env.runInteractiveQuiet != nil {
-		return env.runInteractiveQuiet("sbx", args...)
-	}
-	if env.runInteractive != nil {
-		return env.runInteractive("sbx", args...)
-	}
-	if env.run != nil {
-		_, err := env.run("sbx", args...)
-		return err
-	}
-	return fmt.Errorf("cannot run sbx")
+	return env.RunInteractiveQuiet("sbx", args...)
 }
 
 func setupProbeError(err error, timedOut bool) error {

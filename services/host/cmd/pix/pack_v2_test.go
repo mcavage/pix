@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/sys"
+	"pix/host/sys/systest"
 )
 
 // --- §2 schema ---------------------------------------------------------------
@@ -543,13 +545,17 @@ func TestPackUse_AlwaysPrintsRecreateLine(t *testing.T) {
 func TestSolicitPackCredentials_OnlyWritesOpRefs(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	env := defaultShellEnv()
-	env.lookPath = func(name string) (string, error) {
-		if name == "op" {
-			return "/usr/bin/op", nil
-		}
-		return "", os.ErrNotExist
-	}
+	// Real OS (this asserts on a file actually written to disk), with LookPath
+	// faked so `op` resolves without one installed.
+	env := shellEnv{System: &systest.Fake{
+		Base: sys.Real{},
+		LookPathFn: func(name string) (string, error) {
+			if name == "op" {
+				return "/usr/bin/op", nil
+			}
+			return "", os.ErrNotExist
+		},
+	}}
 	p := &packInfo{Manifest: packManifest{Integrations: []packIntegration{
 		{Name: "Fastmail", MCP: "fastmail", Env: "FASTMAIL_TOKEN"},
 	}}}
@@ -576,13 +582,17 @@ func TestSolicitPackCredentials_OnlyWritesOpRefs(t *testing.T) {
 func TestSolicitPackCredentials_RejectsPastedLiteral(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	env := defaultShellEnv()
-	env.lookPath = func(name string) (string, error) {
-		if name == "op" {
-			return "/usr/bin/op", nil
-		}
-		return "", os.ErrNotExist
-	}
+	// Real OS (this asserts on a file actually written to disk), with LookPath
+	// faked so `op` resolves without one installed.
+	env := shellEnv{System: &systest.Fake{
+		Base: sys.Real{},
+		LookPathFn: func(name string) (string, error) {
+			if name == "op" {
+				return "/usr/bin/op", nil
+			}
+			return "", os.ErrNotExist
+		},
+	}}
 	p := &packInfo{Manifest: packManifest{Integrations: []packIntegration{
 		{Name: "Fastmail", MCP: "fastmail", Env: "FASTMAIL_TOKEN"},
 	}}}

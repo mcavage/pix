@@ -14,10 +14,19 @@ Two transforms:
    `.probe` is excluded from the bare-value form because `fakeProber.probe` is a
    genuine method value that tests pass around.
 
-2. LITERALS  `shellEnv{run: f, quiet: true}` ->
-   `shellEnv{System: &systest.Fake{RunFn: f}, quiet: true}`
-   Brace/paren/string-aware, because the 205 fixtures contain multi-line
-   closures that a comma-splitting regex would cut in half.
+2. ASSIGNS  `env.readFile = fn` -> `env.fake().ReadFileFn = fn`
+   You cannot assign to a promoted interface method, and 116 fixtures override
+   one seam after building a base env. `fake()` is a test-only accessor that
+   type-asserts the embedded System back to *systest.Fake; on a real env it
+   panics, which is the correct outcome for test-only code reached in
+   production. All 116 sites are in _test.go files (verified before writing
+   this).
+
+Composite literals are NOT handled here. A hand-rolled brace matcher was tried
+and is the wrong instrument — Go source has braces inside line comments, rune
+literals ('{') and raw strings, and a scanner that does not know Go grammar
+mis-pairs them. That job moved to scripts/migrate-shellenv/, which uses
+go/parser to locate each literal and then edits at byte offsets.
 """
 import re
 import sys
@@ -47,102 +56,19 @@ KEEP = {"quiet", "hostBinary", "identityProbe", "slackAuthTest",
         "directInferenceProbe", "ollamaInferenceProbe"}
 
 
-def split_top_level(body: str):
-    """Split a composite-literal body on commas at depth 0, respecting
-    (), {}, [], "" , `` and ''."""
-    parts, depth, i, start = [], 0, 0, 0
-    while i < len(body):
-        c = body[i]
-        if c in '"`\'':
-            q, i = c, i + 1
-            while i < len(body):
-                if body[i] == "\\" and q != "`":
-                    i += 2
-                    continue
-                if body[i] == q:
-                    break
-                i += 1
-        elif c in "({[":
-            depth += 1
-        elif c in ")}]":
-            depth -= 1
-        elif c == "," and depth == 0:
-            parts.append(body[start:i])
-            start = i + 1
-        i += 1
-    parts.append(body[start:])
-    return [p for p in parts if p.strip()]
-
-
-def match_brace(text: str, open_idx: int) -> int:
-    """Index of the '}' matching the '{' at open_idx."""
-    depth, i = 0, open_idx
-    while i < len(text):
-        c = text[i]
-        if c in '"`\'':
-            q, i = c, i + 1
-            while i < len(text):
-                if text[i] == "\\" and q != "`":
-                    i += 2
-                    continue
-                if text[i] == q:
-                    break
-                i += 1
-        elif c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                return i
-        i += 1
-    raise ValueError("unbalanced brace")
-
-
-def rewrite_literals(text: str) -> tuple[str, int]:
-    n, out, pos = 0, [], 0
-    for m in re.finditer(r"\bshellEnv\{", text):
-        if m.start() < pos:
-            continue
-        open_idx = m.end() - 1
-        close = match_brace(text, open_idx)
-        body = text[open_idx + 1:close]
-        if not body.strip():
-            out.append(text[pos:m.start()])
-            out.append("shellEnv{System: &systest.Fake{}}")
-            pos = close + 1
-            n += 1
-            continue
-        sysparts, keepparts = [], []
-        ok = True
-        for part in split_top_level(body):
-            km = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*:(.*)", part, re.S)
-            if not km:
-                ok = False  # positional literal: leave it for a human
-                break
-            key, val = km.group(1), km.group(2)
-            lead = part[:len(part) - len(part.lstrip())]
-            if key in SYS_FIELDS:
-                sysparts.append(f"{lead}{SYS_FIELDS[key][1]}:{val}")
-            elif key in KEEP:
-                keepparts.append(part)
-            else:
-                ok = False
-                break
-        if not ok:
-            continue
-        out.append(text[pos:m.start()])
-        inner = ",".join(sysparts)
-        if sysparts:
-            inner += ","
-        rendered = "shellEnv{System: &systest.Fake{" + inner + "}"
-        if keepparts:
-            rendered += "," + ",".join(keepparts)
-        rendered += "}"
-        out.append(rendered)
-        pos = close + 1
-        n += 1
-    out.append(text[pos:])
-    return "".join(out), n
+def rewrite_assigns(text: str) -> tuple[str, int]:
+    """`x.field = v` -> `x.fake().FieldFn = v`, and the read half of the
+    read-then-wrap idiom (`orig := x.field`) alongside it."""
+    n = 0
+    for field, (_, fake) in SYS_FIELDS.items():
+        pat = re.compile(r"(?<![A-Za-z0-9_.])([A-Za-z_][A-Za-z0-9_]*)\." + field + r"(\s*=[^=])")
+        text, k = pat.subn(lambda m: f"{m.group(1)}.fake().{fake}{m.group(2)}", text)
+        n += k
+        # read half: `orig := env.field` / `run := env.run`
+        pat = re.compile(r"(:?=\s*)([A-Za-z_][A-Za-z0-9_]*)\." + field + r"\b(?!\s*[(:=])")
+        text, k = pat.subn(lambda m: f"{m.group(1)}{m.group(2)}.fake().{fake}", text)
+        n += k
+    return text, n
 
 
 def rewrite_uses(text: str) -> tuple[str, int]:
@@ -169,8 +95,10 @@ def main() -> int:
     lits = uses = files = 0
     for p in sorted(root.glob("*.go")):
         src = original = p.read_text()
-        src, a = rewrite_literals(src)
+        a = 0
+        src, c = rewrite_assigns(src)
         src, b = rewrite_uses(src)
+        uses += c
         if src != original:
             p.write_text(src)
             files += 1

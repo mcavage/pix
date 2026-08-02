@@ -6,7 +6,7 @@ package main
 //     secret-sync paths is BOUNDED (probeRun -> runWithTimeout in production):
 //     a hanging sbx resolves to unknown/unverifiable and can never wedge a
 //     verb. Mutating sbx commands (run/rm/mcp add/load) are lifecycle, not
-//     probes, and stay on env.run. The hanging-fake-executable tests reuse
+//     probes, and stay on env.Run. The hanging-fake-executable tests reuse
 //     hangingProbe (redrive_findings2_test.go), which drives the REAL
 //     runWithTimeoutD path under a short injected deadline.
 //
@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"pix/host/sys/systest"
 	"reflect"
 	"strings"
 	"testing"
@@ -44,10 +45,7 @@ func sbxOnlyLookPath(name string) (string, error) {
 // agent-phase gate, task rm/gc guards all route through probeTaskSandbox):
 // a wedged `sbx ls` must classify sbxUnknown under the bounded seam, quickly.
 func TestProbeTaskSandbox_HangingSbxIsUnknownBounded(t *testing.T) {
-	env := shellEnv{
-		lookPath: sbxOnlyLookPath,
-		probe:    hangingProbe(t, 100*time.Millisecond),
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
 	if st := probeTaskSandbox(env, "pix-x"); st != sbxUnknown {
 		t.Errorf("hanging `sbx ls` must classify sbxUnknown, got %v", st)
@@ -59,33 +57,32 @@ func TestProbeTaskSandbox_HangingSbxIsUnknownBounded(t *testing.T) {
 
 // TestProbeTaskSandbox_UsesBoundedSeam: when the bounded probe seam is wired
 // (defaultShellEnv always wires it), probeTaskSandbox must route through it,
-// never the unbounded env.run.
+// never the unbounded env.Run.
 func TestProbeTaskSandbox_UsesBoundedSeam(t *testing.T) {
-	env := shellEnv{
-		run: func(name string, args ...string) (string, error) {
-			t.Fatalf("probeTaskSandbox must use the bounded probe seam, not env.run: %s %v", name, args)
-			return "", nil
-		},
-		probe: func(name string, args ...string) (string, bool, error) {
-			if name != "sbx" || len(args) != 1 || args[0] != "ls" {
-				return "", false, fmt.Errorf("unexpected probe %s %v", name, args)
-			}
-			return "pix-x  abc123  running\n", false, nil
-		},
-	}
+	env := shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
+		t.Fatalf("probeTaskSandbox must use the bounded probe seam, not env.run: %s %v", name, args)
+		return "", nil
+	}, RunTimedFn: func(name string, args ...string) (string, bool, error) {
+		if name != "sbx" || len(args) != 1 || args[0] != "ls" {
+			return "", false, fmt.Errorf("unexpected probe %s %v", name, args)
+		}
+		return "pix-x  abc123  running\n", false, nil
+	}}}
 	if st := probeTaskSandbox(env, "pix-x"); st != sbxRunning {
 		t.Errorf("probe-seam `sbx ls` = %v, want sbxRunning", st)
 	}
-	if defaultShellEnv().probe == nil {
-		t.Fatal("defaultShellEnv must wire the bounded probe seam — production probes would be unbounded")
+	// This used to assert `defaultShellEnv().probe != nil`, guarding against an
+	// unbounded production probe. A nullable seam made that a runtime question;
+	// sys.Real answers it at compile time (RunTimed is a method, and its only
+	// implementation bounds the command). What is left to check is that
+	// production wires the REAL system rather than a fake.
+	if _, isFake := defaultShellEnv().System.(*systest.Fake); isFake {
+		t.Fatal("defaultShellEnv must wire sys.Real, not a test double")
 	}
 }
 
 func TestTaskSandboxStatus_HangingSbxIsEmptyBounded(t *testing.T) {
-	env := shellEnv{
-		lookPath: sbxOnlyLookPath,
-		probe:    hangingProbe(t, 100*time.Millisecond),
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
 	if s := taskSandboxStatus(env, "pix-x"); s != "" {
 		t.Errorf("hanging `sbx ls` must yield an empty display status, got %q", s)
@@ -99,10 +96,7 @@ func TestTaskSandboxStatus_HangingSbxIsEmptyBounded(t *testing.T) {
 // sandbox state before any handoff; a hanging sbx is sbxUnknown, which must
 // FAIL CLOSED (never launch) and must not hang.
 func TestSetupHandoff_HangingSbxFailsClosed(t *testing.T) {
-	env := shellEnv{
-		lookPath: sbxOnlyLookPath,
-		probe:    hangingProbe(t, 100*time.Millisecond),
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
 	state := probeTaskSandbox(env, "pix-ws")
 	if state != sbxUnknown {
@@ -123,16 +117,12 @@ func TestSetupHandoff_HangingSbxFailsClosed(t *testing.T) {
 // TestLocalImageLoaded_HangingSbxBounded: `pix run --dev`'s image-loaded
 // preflight (`sbx template ls`) is read-only; a hang is bounded and degrades
 // to the documented fail-open "no signal" answer — never a wedge, and never
-// through the unbounded env.run.
+// through the unbounded env.Run.
 func TestLocalImageLoaded_HangingSbxBounded(t *testing.T) {
-	env := shellEnv{
-		lookPath: sbxOnlyLookPath,
-		run: func(name string, args ...string) (string, error) {
-			t.Fatalf("localImageLoaded must use the bounded probe seam, not env.run: %s %v", name, args)
-			return "", nil
-		},
-		probe: hangingProbe(t, 100*time.Millisecond),
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunFn: func(name string, args ...string) (string, error) {
+		t.Fatalf("localImageLoaded must use the bounded probe seam, not env.run: %s %v", name, args)
+		return "", nil
+	}, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
 	if !localImageLoaded(env, "local-12345") {
 		t.Error("a timed-out `sbx template ls` is no signal — must fail open (true), never block the launch")
@@ -146,19 +136,12 @@ func TestLocalImageLoaded_HangingSbxBounded(t *testing.T) {
 // read probe (`sbx secret ls`) is bounded; on a hang the sync returns without
 // guessing — it must never reach op or `sbx secret set`.
 func TestEnsureProviderKeysFromRefs_HangingSbxBoundedNoMutation(t *testing.T) {
-	env := shellEnv{
-		lookPath: sbxOnlyLookPath,
-		getenv:   func(string) string { return "" },
-		homeDir:  func() string { return "/home/u" },
-		readFile: func(string) (string, error) {
-			return "ANTHROPIC_API_KEY=op://Vault/Anthropic/api key\n", nil
-		},
-		run: func(name string, args ...string) (string, error) {
-			t.Fatalf("a hung `sbx secret ls` must abort the sync before any op/sbx mutation: %s %v", name, args)
-			return "", nil
-		},
-		probe: hangingProbe(t, 100*time.Millisecond),
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, GetenvFn: func(string) string { return "" }, HomeDirFn: func() string { return "/home/u" }, ReadFileFn: func(string) (string, error) {
+		return "ANTHROPIC_API_KEY=op://Vault/Anthropic/api key\n", nil
+	}, RunFn: func(name string, args ...string) (string, error) {
+		t.Fatalf("a hung `sbx secret ls` must abort the sync before any op/sbx mutation: %s %v", name, args)
+		return "", nil
+	}, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	var out bytes.Buffer
 	start := time.Now()
 	ensureProviderKeysFromRefsLocked(env, &out)
@@ -174,21 +157,12 @@ func TestEnsureProviderKeysFromRefs_HangingSbxBoundedNoMutation(t *testing.T) {
 // payload reads `sbx secret ls`; a hang must leave every key un-claimed
 // (sbxOK=false semantics) and complete quickly.
 func TestBuildTrustedHostState_HangingSbxBounded(t *testing.T) {
-	env := shellEnv{
-		lookPath: sbxOnlyLookPath,
-		getenv:   func(string) string { return "" },
-		statFile: func(string) bool { return false },
-		readFile: func(string) (string, error) { return "", fmt.Errorf("no file") },
-		homeDir:  func() string { return "/home/u" },
-		dial:     func(int) bool { return false },
-		run: func(name string, args ...string) (string, error) {
-			if name == "sbx" {
-				t.Fatalf("host-state's sbx read must use the bounded probe seam, not env.run: %s %v", name, args)
-			}
-			return "", fmt.Errorf("no fake output")
-		},
-		probe: hangingProbe(t, 100*time.Millisecond),
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, GetenvFn: func(string) string { return "" }, IsFileFn: func(string) bool { return false }, ReadFileFn: func(string) (string, error) { return "", fmt.Errorf("no file") }, HomeDirFn: func() string { return "/home/u" }, DialLocalFn: func(int) bool { return false }, RunFn: func(name string, args ...string) (string, error) {
+		if name == "sbx" {
+			t.Fatalf("host-state's sbx read must use the bounded probe seam, not env.run: %s %v", name, args)
+		}
+		return "", fmt.Errorf("no fake output")
+	}, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
 	hs := buildTrustedHostState(defaultCfg(), env, "")
 	if el := time.Since(start); el > 10*time.Second {
@@ -211,27 +185,22 @@ const (
 // f2Env is a shellEnv where resolveOpRefs answers f2Refs (via PIX_CONFIG)
 // and op/gog/pix-host all resolve canonically.
 func f2Env() shellEnv {
-	return shellEnv{
-		lookPath: func(name string) (string, error) {
-			switch name {
-			case "op":
-				return f2Op, nil
-			case "gog":
-				return f2Gog, nil
-			case "sbx":
-				return "/usr/bin/sbx", nil
-			}
-			return "", fmt.Errorf("%q not found", name)
-		},
-		getenv: func(k string) string {
-			if k == "PIX_CONFIG" {
-				return "/fake/pix/config.toml"
-			}
-			return ""
-		},
-		statFile:   func(p string) bool { return p == f2Refs },
-		hostBinary: func() (string, error) { return f2Host, nil },
-	}
+	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		switch name {
+		case "op":
+			return f2Op, nil
+		case "gog":
+			return f2Gog, nil
+		case "sbx":
+			return "/usr/bin/sbx", nil
+		}
+		return "", fmt.Errorf("%q not found", name)
+	}, GetenvFn: func(k string) string {
+		if k == "PIX_CONFIG" {
+			return "/fake/pix/config.toml"
+		}
+		return ""
+	}, IsFileFn: func(p string) bool { return p == f2Refs }}, hostBinary: func() (string, error) { return f2Host, nil }}
 }
 
 // TestUnwrapOpRun_AcceptsOnlyLauncherGrammar is the mutation-style grammar
@@ -275,7 +244,7 @@ func TestUnwrapOpRun_AcceptsOnlyLauncherGrammar(t *testing.T) {
 	// wrapped registration is rejected rather than blessed against an unknown
 	// env file.
 	noRefs := env
-	noRefs.statFile = func(string) bool { return false }
+	noRefs.fake().IsFileFn = func(string) bool { return false }
 	if _, ok := unwrapOpRun(noRefs, canonical); ok {
 		t.Error("an op-wrapped registration must be rejected when the launcher refs file is unresolvable")
 	}
@@ -348,7 +317,7 @@ func TestRecognizedMCPArgv_WrapperGrammar(t *testing.T) {
 func TestMcpLocalCheck_RejectedWrapperNeverProbed(t *testing.T) {
 	env := f2Env()
 	reg := f2Op + " run --no-masking --env-file=/tmp/evil.env -- " + f2Host + " mcp slack"
-	env.probe = func(name string, args ...string) (string, bool, error) {
+	env.fake().RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		key := strings.Join(append([]string{name}, args...), " ")
 		if strings.Contains(key, "--list-tools") {
 			t.Fatalf("doctor must never probe a rejected registration: %s", key)
@@ -358,7 +327,7 @@ func TestMcpLocalCheck_RejectedWrapperNeverProbed(t *testing.T) {
 		}
 		return "", false, fmt.Errorf("no fake output for %q", key)
 	}
-	env.run = func(name string, args ...string) (string, error) {
+	env.fake().RunFn = func(name string, args ...string) (string, error) {
 		t.Fatalf("rejected registration must never be exec'd: %s %v", name, args)
 		return "", nil
 	}

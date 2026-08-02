@@ -47,10 +47,8 @@ func secretsGroup(cfg *config.Config, env shellEnv) group {
 	// op-refs.env present at the absolute XDG path?
 	path := defaultOpRefsPath(env)
 	content, exists := "", false
-	if env.readFile != nil {
-		if c, err := env.readFile(path); err == nil {
-			content, exists = c, true
-		}
+	if c, err := env.ReadFile(path); err == nil {
+		content, exists = c, true
 	}
 	if !exists {
 		g.checks = append(g.checks, check{label: "op-refs.env", verdict: verdictTodo,
@@ -61,18 +59,16 @@ func secretsGroup(cfg *config.Config, env shellEnv) group {
 	g.checks = append(g.checks, check{label: "op-refs.env", note: true, verdict: verdictReady, detail: path})
 
 	// Perms: the file AND its dir must not be group/other-accessible.
-	if env.fileMode != nil {
-		if m, ok := env.fileMode(path); ok && m.Perm()&0o077 != 0 {
-			g.checks = append(g.checks, check{label: "perms", verdict: verdictTodo,
-				detail: fmt.Sprintf("op-refs.env is %04o — group/other accessible", m.Perm()),
-				todo:   "chmod 600 " + path})
-		}
-		dir := filepath.Dir(path)
-		if m, ok := env.fileMode(dir); ok && m.Perm()&0o077 != 0 {
-			g.checks = append(g.checks, check{label: "dir perms", verdict: verdictTodo,
-				detail: fmt.Sprintf("%s is %04o — group/other accessible", dir, m.Perm()),
-				todo:   "chmod 700 " + dir})
-		}
+	if m, ok := env.Mode(path); ok && m.Perm()&0o077 != 0 {
+		g.checks = append(g.checks, check{label: "perms", verdict: verdictTodo,
+			detail: fmt.Sprintf("op-refs.env is %04o — group/other accessible", m.Perm()),
+			todo:   "chmod 600 " + path})
+	}
+	dir := filepath.Dir(path)
+	if m, ok := env.Mode(dir); ok && m.Perm()&0o077 != 0 {
+		g.checks = append(g.checks, check{label: "dir perms", verdict: verdictTodo,
+			detail: fmt.Sprintf("%s is %04o — group/other accessible", dir, m.Perm()),
+			todo:   "chmod 700 " + dir})
 	}
 
 	// Per-ref: filled vs placeholder, plus the refs-only lint. NEVER print a value.

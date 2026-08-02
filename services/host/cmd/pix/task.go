@@ -625,7 +625,7 @@ func executeTaskTeardown(env shellEnv, w io.Writer, meta taskMeta, co, name, rec
 	snapshotArgs := []string{"-C", meta.Mainroot, "fetch", "-q", co,
 		"+refs/heads/*:" + recovered + "/heads/*",
 		"+HEAD:" + recovered + "/HEAD"}
-	if out, err := env.run("git", snapshotArgs...); err != nil {
+	if out, err := env.Run("git", snapshotArgs...); err != nil {
 		fmt.Fprintf(w, "pix task rm: warning: could not snapshot to %s: %v\n%s", recovered, err, out)
 		// --force still must not silently drop unrecoverable work: if the snapshot
 		// failed AND the work might be unrecoverable (clone-only commits, or an
@@ -671,7 +671,7 @@ func executeTaskTeardown(env shellEnv, w io.Writer, meta taskMeta, co, name, rec
 		// --force: `sbx rm -f`. The user has accepted killing a running sandbox.
 		// A not-found failure (the sandbox is already gone) is success; any other
 		// failure aborts BEFORE deleting the checkout.
-		if out, err := env.run("sbx", "rm", "-f", meta.Sandbox); err != nil {
+		if out, err := env.Run("sbx", "rm", "-f", meta.Sandbox); err != nil {
 			if probeTaskSandbox(env, meta.Sandbox) == sbxAbsent {
 				// rm -f failed only because there was nothing to remove — the
 				// lifetime is positively over, so the receipt goes too.
@@ -693,7 +693,7 @@ func executeTaskTeardown(env shellEnv, w io.Writer, meta taskMeta, co, name, rec
 	//   - running => a live session owns the name; ABORT, leave the clone intact.
 	//   - stopped => the sandbox is still present but rm failed; ABORT.
 	//   - unknown => sbx can no longer be reached; ABORT (fail-safe).
-	if out, err := env.run("sbx", "rm", meta.Sandbox); err != nil {
+	if out, err := env.Run("sbx", "rm", meta.Sandbox); err != nil {
 		switch probeTaskSandbox(env, meta.Sandbox) {
 		case sbxAbsent:
 			// The rm failed because the sandbox was not present; nothing was
@@ -734,7 +734,7 @@ func gatherTaskState(env shellEnv, m taskMeta, co string) taskState {
 	// executor both decide on this single value.
 	st.sandbox = probeTaskSandbox(env, m.Sandbox)
 
-	if out, err := env.run("git", "-C", co, "status", "--porcelain"); err == nil {
+	if out, err := env.Run("git", "-C", co, "status", "--porcelain"); err == nil {
 		st.dirty = strings.TrimSpace(out) != ""
 	} else {
 		// A failed status probe means the clean/dirty state is UNKNOWN, not clean.
@@ -754,7 +754,7 @@ func gatherTaskState(env shellEnv, m taskMeta, co string) taskState {
 	chk := "refs/pix/_chk/" + name
 	// Force refspecs (leading '+') so stale/existing _chk refs never block the
 	// update and silently mask the count to 0.
-	if _, err := env.run("git", "-C", m.Mainroot, "fetch", "-q", co,
+	if _, err := env.Run("git", "-C", m.Mainroot, "fetch", "-q", co,
 		"+refs/heads/*:"+chk+"/heads/*",
 		"+HEAD:"+chk+"/HEAD",
 		"+refs/remotes/*:"+chk+"/remotes/*"); err == nil {
@@ -764,7 +764,7 @@ func gatherTaskState(env shellEnv, m taskMeta, co string) taskState {
 		// count to 0) PLUS the clone's fetched remote-tracking refs. `--not` flips
 		// the sense for everything after it; --exclude applies only to the next
 		// --all, so the trailing --glob for remotes stays in the negated set.
-		if out, err := env.run("git", "-C", m.Mainroot, "rev-list", "--count",
+		if out, err := env.Run("git", "-C", m.Mainroot, "rev-list", "--count",
 			"--glob="+chk+"/heads", chk+"/HEAD",
 			"--not", "--exclude=refs/pix/*", "--all",
 			"--glob="+chk+"/remotes"); err == nil {
@@ -773,9 +773,9 @@ func gatherTaskState(env shellEnv, m taskMeta, co string) taskState {
 			st.unknown = true
 		}
 		// Delete the whole throwaway namespace (multiple refs now).
-		if refs, err := env.run("git", "-C", m.Mainroot, "for-each-ref", "--format=%(refname)", chk); err == nil {
+		if refs, err := env.Run("git", "-C", m.Mainroot, "for-each-ref", "--format=%(refname)", chk); err == nil {
 			for _, r := range strings.Fields(refs) {
-				_, _ = env.run("git", "-C", m.Mainroot, "update-ref", "-d", r)
+				_, _ = env.Run("git", "-C", m.Mainroot, "update-ref", "-d", r)
 			}
 		}
 	} else {
@@ -786,8 +786,8 @@ func gatherTaskState(env shellEnv, m taskMeta, co string) taskState {
 
 	// unpushed: commits ahead of the upstream when one exists, else fall back to
 	// unrec (defined for the no-upstream and no-remote cases).
-	if out, err := env.run("git", "-C", co, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"); err == nil && strings.TrimSpace(out) != "" {
-		if c, err := env.run("git", "-C", co, "rev-list", "--count", "@{u}..HEAD"); err == nil {
+	if out, err := env.Run("git", "-C", co, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"); err == nil && strings.TrimSpace(out) != "" {
+		if c, err := env.Run("git", "-C", co, "rev-list", "--count", "@{u}..HEAD"); err == nil {
 			st.unpushed = parseCount(c)
 		} else {
 			// An upstream exists but counting ahead-commits failed: the unpushed
@@ -812,7 +812,7 @@ func parseCount(s string) int {
 func taskSandboxStatus(env shellEnv, name string) string {
 	// BOUNDED (probeRun): a hung `sbx ls` yields "" (no display status), it
 	// never wedges `task ls`.
-	out, timedOut, err := probeRun(env, "sbx", "ls")
+	out, timedOut, err := env.RunTimed("sbx", "ls")
 	if timedOut || err != nil {
 		return ""
 	}
@@ -847,7 +847,7 @@ const (
 // as "the sandbox was never created". BOUNDED (probeRun): a hung sbx times out
 // to UNKNOWN — run/setup/task preflights degrade honestly instead of wedging.
 func probeTaskSandbox(env shellEnv, name string) sbxState {
-	out, timedOut, err := probeRun(env, "sbx", "ls")
+	out, timedOut, err := env.RunTimed("sbx", "ls")
 	if timedOut || err != nil {
 		return sbxUnknown
 	}
@@ -873,7 +873,7 @@ func probeTaskSandbox(env shellEnv, name string) sbxState {
 // The field is still called "mainroot" for continuity, but it now holds the
 // git-common-dir, not the worktree root.
 func resolveMainroot(env shellEnv, cwd string) (string, error) {
-	out, err := env.run("git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	out, err := env.Run("git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		return "", fmt.Errorf("%s", strings.TrimSpace(out))
 	}
@@ -914,7 +914,7 @@ func runTaskNew(env shellEnv, argv []string) {
 	// string. A local `git clone` does not copy the source's refs/remotes/* or
 	// refs/pull/*, so a source-only ref would fail `checkout <ref>` in the clone;
 	// the OID always resolves because --local hardlinks the whole object store.
-	revOut, err := env.run("git", "-C", mainroot, "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
+	revOut, err := env.Run("git", "-C", mainroot, "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix task new: start point %q not found in %s\n", ref, mainroot)
 		os.Exit(1)
@@ -925,7 +925,7 @@ func runTaskNew(env shellEnv, argv []string) {
 		os.Exit(1)
 	}
 	origin := ""
-	if out, err := env.run("git", "-C", mainroot, "remote", "get-url", "origin"); err == nil {
+	if out, err := env.Run("git", "-C", mainroot, "remote", "get-url", "origin"); err == nil {
 		origin = strings.TrimSpace(out)
 	}
 
@@ -984,13 +984,13 @@ func runTaskNew(env shellEnv, argv []string) {
 			}
 		}
 
-		if out, err := env.run("git", "clone", "--local", mainroot, co); err != nil {
+		if out, err := env.Run("git", "clone", "--local", mainroot, co); err != nil {
 			rollback()
 			fmt.Fprintf(os.Stderr, "pix task new: git clone failed: %v\n%s", err, out)
 			exitCode = 1
 			return nil
 		}
-		if out, err := env.run("git", "-C", co, "checkout", "-q", "-b", branch, "--end-of-options", oid); err != nil {
+		if out, err := env.Run("git", "-C", co, "checkout", "-q", "-b", branch, "--end-of-options", oid); err != nil {
 			rollback()
 			fmt.Fprintf(os.Stderr, "pix task new: checkout failed: %v\n%s", err, out)
 			exitCode = 1
@@ -999,7 +999,7 @@ func runTaskNew(env shellEnv, argv []string) {
 		if origin != "" {
 			// Wire origin to the real upstream so in-sandbox `git push` uses the sbx
 			// credential proxy.
-			_, _ = env.run("git", "-C", co, "remote", "set-url", "origin", origin)
+			_, _ = env.Run("git", "-C", co, "remote", "set-url", "origin", origin)
 		}
 		if _, err := os.Stat(filepath.Join(mainroot, ".gitmodules")); err == nil {
 			fmt.Fprintln(os.Stderr, "pix task new: note: submodules are not auto-initialized (v1). "+
@@ -1132,7 +1132,7 @@ func prepareTaskLaunchSandbox(env shellEnv, name string) error {
 	case sbxUnknown:
 		return fmt.Errorf("cannot determine the state of sandbox %q (sbx ls failed); resolve (check `sbx ls`), then retry", name)
 	default: // sbxStopped: recreate, but only via a non-force rm.
-		if out, err := env.run("sbx", "rm", name); err != nil {
+		if out, err := env.Run("sbx", "rm", name); err != nil {
 			return fmt.Errorf("could not remove the stopped sandbox %q; it may be running. "+
 				"Stop it (sbx stop %s) or remove it, then retry: %v\n%s", name, name, err, strings.TrimRight(out, "\n"))
 		}
@@ -1149,7 +1149,7 @@ func prepareTaskLaunchSandbox(env shellEnv, name string) error {
 // modifying run.go, and bypasses deriveSandboxName because o.Name is set.
 func launchTask(o runOpts) error {
 	env := defaultShellEnv()
-	if _, err := env.lookPath("sbx"); err == nil && !configuredKeylessInference() {
+	if _, err := env.LookPath("sbx"); err == nil && !configuredKeylessInference() {
 		// Resolve any 1Password key refs into sbx first (same no-ritual path as run),
 		// so a task on a fresh machine isn't rejected for a key it can auto-provision.
 		ensureProviderKeysFromRefs(env, os.Stderr)
@@ -1723,7 +1723,7 @@ func listHarvestCandidates(env shellEnv, co string) ([]harvestFile, error) {
 	}
 
 	// 1. Untracked + ignored docs.
-	out, err := env.run("git", "-C", co,
+	out, err := env.Run("git", "-C", co,
 		"status", "--porcelain=v1", "-z", "--ignored", "--untracked-files=all")
 	if err != nil {
 		return nil, fmt.Errorf("%s", strings.TrimSpace(out))
@@ -1762,7 +1762,7 @@ func listHarvestCandidates(env shellEnv, co string) ([]harvestFile, error) {
 	// --force would lose its working-tree changes. `git diff --name-only -z HEAD`
 	// lists changed tracked paths (renames report the new name); we keep only ones
 	// that still exist on disk (skip deletions) and pass the doc filter.
-	dout, derr := env.run("git", "-C", co, "diff", "--name-only", "-z", "HEAD")
+	dout, derr := env.Run("git", "-C", co, "diff", "--name-only", "-z", "HEAD")
 	if derr != nil {
 		return nil, fmt.Errorf("%s", strings.TrimSpace(dout))
 	}

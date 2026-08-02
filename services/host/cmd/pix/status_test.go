@@ -9,35 +9,26 @@ import (
 
 	"pix/host/config"
 	"pix/host/monitor"
+	"pix/host/sys/systest"
 )
 
 // fakeStatusEnv builds a shellEnv where memory is up, knowledge down, sbx lists
 // two boxes and reports two secrets set.
 func fakeStatusEnv() shellEnv {
-	return shellEnv{
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
-				return "anthropic\nopenai\n", nil
-			}
-			if name == "sbx" && len(args) >= 1 && args[0] == "ls" {
-				return "NAME STATUS\npix-myrepo running\npix-scratch stopped\nother-box running\n", nil
-			}
-			if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
-				return "google-workspace\nnotion\n", nil
-			}
-			return "", nil
-		},
-		dial:     func(port int) bool { return port == memoryPortDefault },
-		statFile: func(string) bool { return false },
-		// status renders memory/knowledge from the identity-verified readiness
-		// axes, never from a bare dial (readiness_service.go): a fixture that
-		// only opens the port renders unverifiable, so the healthy-memory
-		// fixture has to answer identity too.
-		identityProbe: identityFake(map[int]serviceIdentityResult{
-			memoryPortDefault: {Name: identityMemoryName, Ready: true},
-		}),
-	}
+	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+			return "anthropic\nopenai\n", nil
+		}
+		if name == "sbx" && len(args) >= 1 && args[0] == "ls" {
+			return "NAME STATUS\npix-myrepo running\npix-scratch stopped\nother-box running\n", nil
+		}
+		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
+			return "google-workspace\nnotion\n", nil
+		}
+		return "", nil
+	}, DialLocalFn: func(port int) bool { return port == memoryPortDefault }, IsFileFn: func(string) bool { return false }}, identityProbe: identityFake(map[int]serviceIdentityResult{
+		memoryPortDefault: {Name: identityMemoryName, Ready: true},
+	})}
 }
 
 func TestGatherStatus(t *testing.T) {
@@ -94,11 +85,11 @@ func TestRenderStatusHuman(t *testing.T) {
 }
 
 // TestGatherStatusMonitor (DX-5): the monitor hub's up/down state is probed
-// via env.dial(monitor.DefaultPort), independent of memory/knowledge.
+// via env.DialLocal(monitor.DefaultPort), independent of memory/knowledge.
 func TestGatherStatusMonitor(t *testing.T) {
 	cfg := &config.Config{}
 	env := fakeStatusEnv()
-	env.dial = func(port int) bool { return port == monitor.DefaultPort }
+	env.fake().DialLocalFn = func(port int) bool { return port == monitor.DefaultPort }
 	st := gatherStatus(cfg, "default", env)
 	if !st.Monitor {
 		t.Error("monitor should be up when its port dials")
@@ -113,7 +104,7 @@ func TestGatherStatusMonitor(t *testing.T) {
 func TestRenderStatusMonitorLine(t *testing.T) {
 	cfg := &config.Config{}
 	env := fakeStatusEnv()
-	env.dial = func(port int) bool { return port == monitor.DefaultPort }
+	env.fake().DialLocalFn = func(port int) bool { return port == monitor.DefaultPort }
 	var out bytes.Buffer
 	renderStatus(cfg, "default", env, &out, false)
 	s := out.String()
@@ -126,7 +117,7 @@ func TestRenderStatusMonitorLine(t *testing.T) {
 func TestRenderStatusMonitorJSON(t *testing.T) {
 	cfg := &config.Config{}
 	env := fakeStatusEnv()
-	env.dial = func(port int) bool { return port == monitor.DefaultPort }
+	env.fake().DialLocalFn = func(port int) bool { return port == monitor.DefaultPort }
 	var out bytes.Buffer
 	renderStatus(cfg, "default", env, &out, true)
 	var st statusReport
@@ -165,7 +156,7 @@ func TestGatherStatusMCP(t *testing.T) {
 func TestGatherStatusMCPSbxAbsent(t *testing.T) {
 	cfg := &config.Config{MCP: []string{gwServerName}}
 	env := fakeStatusEnv()
-	env.lookPath = func(name string) (string, error) { return "", fmt.Errorf("not found") }
+	env.fake().LookPathFn = func(name string) (string, error) { return "", fmt.Errorf("not found") }
 	st := gatherStatus(cfg, "default", env)
 	if len(st.MCPServers) != 0 {
 		t.Errorf("MCPServers = %+v, want empty when sbx absent", st.MCPServers)
@@ -219,9 +210,9 @@ func TestStatusRegisterTodo(t *testing.T) {
 	env.hostBinary = func() (string, error) { return "/usr/local/bin/pix-host", nil }
 	// probe answers the `pix-host mcp --list` classification call; the
 	// sbx probes (secret ls / mcp ls / sbx ls also route through probeRun now)
-	// fall back to the canned env.run outputs.
-	run := env.run
-	env.probe = func(name string, args ...string) (string, bool, error) {
+	// fall back to the canned env.Run outputs.
+	run := env.fake().RunFn
+	env.fake().RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		if name == "/usr/local/bin/pix-host" && len(args) == 2 && args[0] == "mcp" && args[1] == "--list" {
 			return "slack\n", false, nil
 		}
@@ -277,7 +268,7 @@ func TestStatusNoRegisterTodoWhenRegistered(t *testing.T) {
 func TestStatusNoRegisterTodoWhenSbxAbsent(t *testing.T) {
 	cfg := &config.Config{MCP: []string{gwServerName, "slack"}}
 	env := fakeStatusEnv()
-	env.lookPath = func(name string) (string, error) { return "", fmt.Errorf("not found") }
+	env.fake().LookPathFn = func(name string) (string, error) { return "", fmt.Errorf("not found") }
 	st := gatherStatus(cfg, "default", env)
 	for _, tdo := range st.Todos {
 		if strings.Contains(tdo, "mcp register") || strings.Contains(tdo, "mcp bundle") {
@@ -291,11 +282,7 @@ func TestStatusNoRegisterTodoWhenSbxAbsent(t *testing.T) {
 // outstanding item and --json/human reflect it.
 func TestStatusSbxAbsentNotAllGreen(t *testing.T) {
 	cfg := &config.Config{}
-	env := shellEnv{
-		lookPath: func(string) (string, error) { return "", fmt.Errorf("not found") },
-		dial:     func(int) bool { return false },
-		statFile: func(string) bool { return false },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
 	st := gatherStatus(cfg, "default", env)
 	if len(st.Todos) == 0 {
 		t.Fatalf("expected a non-empty Todos when sbx is absent, got none")
@@ -313,20 +300,15 @@ func TestStatusSbxAbsentNotAllGreen(t *testing.T) {
 // provider key is set.
 func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
 	cfg := &config.Config{GogAccount: "me@x.com"}
-	env := shellEnv{
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			if name == "gog" {
-				return "", fmt.Errorf("not authed")
-			}
-			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
-				return "anthropic\nopenai\ngoogle\ngithub\n", nil
-			}
-			return "", nil
-		},
-		dial:     func(int) bool { return false },
-		statFile: func(string) bool { return false },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		if name == "gog" {
+			return "", fmt.Errorf("not authed")
+		}
+		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+			return "anthropic\nopenai\ngoogle\ngithub\n", nil
+		}
+		return "", nil
+	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
 	st := gatherStatus(cfg, "default", env)
 	var gogTodo bool
 	for _, tdo := range st.Todos {
@@ -349,17 +331,12 @@ func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
 // the install-sbx guidance, and never claim "all systems go".
 func TestStatusSbxProbeFailedTodo(t *testing.T) {
 	cfg := &config.Config{}
-	env := shellEnv{
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
-				return "", fmt.Errorf("sbx secret ls boom")
-			}
-			return "", nil
-		},
-		dial:     func(int) bool { return false },
-		statFile: func(string) bool { return false },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+			return "", fmt.Errorf("sbx secret ls boom")
+		}
+		return "", nil
+	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
 	st := gatherStatus(cfg, "default", env)
 	var sawVerify, sawInstall bool
 	for _, tdo := range st.Todos {
@@ -387,17 +364,12 @@ func TestStatusSbxProbeFailedTodo(t *testing.T) {
 // render shows the "needs auth (run pix gworkspace setup)" integrations line.
 func TestStatusGogNeedsAuth(t *testing.T) {
 	cfg := &config.Config{GogAccount: "me@x.com"}
-	env := shellEnv{
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			if name == "gog" {
-				return "", fmt.Errorf("not authed")
-			}
-			return "", nil
-		},
-		dial:     func(int) bool { return false },
-		statFile: func(string) bool { return false },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		if name == "gog" {
+			return "", fmt.Errorf("not authed")
+		}
+		return "", nil
+	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
 	var out bytes.Buffer
 	renderStatus(cfg, "default", env, &out, false)
 	s := out.String()
@@ -412,17 +384,12 @@ func TestStatusGogNeedsAuth(t *testing.T) {
 // (plus an absent github) are informational, never outstanding.
 func TestStatusOpenAIOnlyAllSystemsGo(t *testing.T) {
 	cfg := &config.Config{}
-	env := shellEnv{
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
-				return "openai\n", nil
-			}
-			return "", nil
-		},
-		dial:     func(int) bool { return false },
-		statFile: func(string) bool { return false },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+			return "openai\n", nil
+		}
+		return "", nil
+	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
 	st := gatherStatus(cfg, "default", env)
 	if len(st.Todos) != 0 {
 		t.Errorf("todos = %v, want none (openai alone satisfies core readiness)", st.Todos)
@@ -439,17 +406,12 @@ func TestStatusOpenAIOnlyAllSystemsGo(t *testing.T) {
 // per-key TODO per missing provider), and the verdict is not falsely green.
 func TestStatusZeroModelKeysOneTodo(t *testing.T) {
 	cfg := &config.Config{}
-	env := shellEnv{
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
-				return "", nil // sbx reachable, nothing set at all
-			}
-			return "", nil
-		},
-		dial:     func(int) bool { return false },
-		statFile: func(string) bool { return false },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+			return "", nil // sbx reachable, nothing set at all
+		}
+		return "", nil
+	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
 	st := gatherStatus(cfg, "default", env)
 	if len(st.Todos) != 1 || st.Todos[0] != modelKeyFixCmd {
 		t.Errorf("todos = %v, want exactly [%q]", st.Todos, modelKeyFixCmd)
@@ -479,27 +441,18 @@ func TestStatusProbeFailureNoProviderTodo(t *testing.T) {
 
 	t.Run("sbx absent", func(t *testing.T) {
 		cfg := &config.Config{}
-		env := shellEnv{
-			lookPath: func(string) (string, error) { return "", fmt.Errorf("not found") },
-			dial:     func(int) bool { return false },
-			statFile: func(string) bool { return false },
-		}
+		env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
 		assertNoProviderTodo(t, gatherStatus(cfg, "default", env))
 	})
 
 	t.Run("sbx present, secret ls failed", func(t *testing.T) {
 		cfg := &config.Config{}
-		env := shellEnv{
-			lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-			run: func(name string, args ...string) (string, error) {
-				if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
-					return "", fmt.Errorf("sbx secret ls boom")
-				}
-				return "", nil
-			},
-			dial:     func(int) bool { return false },
-			statFile: func(string) bool { return false },
-		}
+		env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+				return "", fmt.Errorf("sbx secret ls boom")
+			}
+			return "", nil
+		}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
 		assertNoProviderTodo(t, gatherStatus(cfg, "default", env))
 	})
 }
@@ -512,23 +465,18 @@ func TestStatusProbeFailureNoProviderTodo(t *testing.T) {
 // outstanding and there are no sandboxes/rows to render unverifiable.
 func TestStatusMCPRegistrationUnverifiableBlocksAllGreen(t *testing.T) {
 	cfg := &config.Config{MCP: []string{gwServerName}}
-	env := shellEnv{
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
-				return "anthropic\n", nil // provider-ready
-			}
-			if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
-				return "", fmt.Errorf("mcp ls boom") // registration probe fails
-			}
-			if name == "sbx" && len(args) >= 1 && args[0] == "ls" {
-				return "NAME STATUS\n", nil // zero pix sandboxes
-			}
-			return "", nil
-		},
-		dial:     func(int) bool { return false },
-		statFile: func(string) bool { return false },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
+			return "anthropic\n", nil // provider-ready
+		}
+		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
+			return "", fmt.Errorf("mcp ls boom") // registration probe fails
+		}
+		if name == "sbx" && len(args) >= 1 && args[0] == "ls" {
+			return "NAME STATUS\n", nil // zero pix sandboxes
+		}
+		return "", nil
+	}, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
 	st := gatherStatus(cfg, "default", env)
 	if len(st.Todos) != 0 {
 		t.Errorf("todos = %v, want none (a failed registration probe is unverifiable, never a false TODO)", st.Todos)
@@ -578,8 +526,8 @@ func TestStatusMCPLoadTodoQuotesWorkspace(t *testing.T) {
 	const box = "pix-proj"
 	env := fakeStatusEnv()
 	stateDir := t.TempDir()
-	env.stateDir = func() (string, error) { return stateDir, nil }
-	env.run = func(name string, args ...string) (string, error) {
+	env.fake().StateDirFn = func() (string, error) { return stateDir, nil }
+	env.fake().RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
 			return "anthropic\n", nil
 		}

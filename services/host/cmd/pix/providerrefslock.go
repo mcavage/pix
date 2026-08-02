@@ -39,13 +39,11 @@ func providerRefsLockPath(env shellEnv) string {
 
 // withProviderRefsLock runs fn holding the exclusive provider-refs
 // transaction lock (blocking — credential transactions are short except
-// setup's strict flow, where waiting is exactly the point). A nil env.flock
+// setup's strict flow, where waiting is exactly the point). A nil env.Lock
 // (hermetic unit tests) runs fn directly with no lock file; defaultShellEnv
 // wires the real withFlock. A lock-acquisition error is returned to the
 // caller, which must fail its operation honestly — never proceed unlocked.
 func withProviderRefsLock(env shellEnv, fn func() error) error {
-	if env.flock == nil {
-		return fn()
-	}
-	return env.flock(providerRefsLockPath(env), fn)
+
+	return env.Lock(providerRefsLockPath(env), fn)
 }

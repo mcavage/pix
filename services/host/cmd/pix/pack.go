@@ -23,9 +23,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	"pix/host/config"
 	"pix/host/routing"
+
+	"github.com/BurntSushi/toml"
 )
 
 // packManifest is pack.toml. Identity + model prefs (v1), plus the v2 facets:
@@ -2437,8 +2438,8 @@ func runPackNew(env shellEnv, out io.Writer, rest []string) {
 	if _, err := os.Stat(filepath.Join(root, ".git")); err == nil {
 		isRepo = true
 	}
-	if !isRepo && env.run != nil {
-		if _, err := env.run("git", "-C", root, "init"); err != nil {
+	if !isRepo {
+		if _, err := env.Run("git", "-C", root, "init"); err != nil {
 			fmt.Fprintf(out, "  note: `git init` failed (%v) — the pack still works; init it yourself\n", err)
 		} else {
 			isRepo = true
@@ -3012,10 +3013,8 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		}
 		root = r
 		remoteURL, _ = parsePackURL(arg)
-		if env.run != nil {
-			if sha, cerr := env.run("git", "-C", root, "rev-parse", "HEAD"); cerr == nil {
-				remoteCommit = strings.TrimSpace(sha)
-			}
+		if sha, cerr := env.Run("git", "-C", root, "rev-parse", "HEAD"); cerr == nil {
+			remoteCommit = strings.TrimSpace(sha)
 		}
 	} else {
 		root = expandUser(arg)
@@ -3599,9 +3598,7 @@ func safeGitURL(url string) bool {
 // optional ref, and returns the local path. SHA-pin/provenance is a v2 concern;
 // v1 trusts the git remote (Tier 0: skills/knowledge/config, no host execution).
 func clonePack(env shellEnv, out io.Writer, raw string) (string, error) {
-	if env.run == nil {
-		return "", fmt.Errorf("git not available")
-	}
+
 	url, ref := parsePackURL(raw)
 	if !safeGitURL(url) {
 		return "", fmt.Errorf("refusing unsafe git URL %q (only https/ssh/git remotes; no ext::/file:: transports)", url)
@@ -3620,18 +3617,18 @@ func clonePack(env shellEnv, out io.Writer, raw string) (string, error) {
 		// matches the requested URL before trusting it — a 64-bit hash collision (or
 		// a pre-planted dir) must NOT let us fetch/activate the wrong repo. On
 		// mismatch, wipe and re-clone.
-		if got, _ := env.run("git", "-C", dest, "remote", "get-url", "origin"); strings.TrimSpace(got) != url {
+		if got, _ := env.Run("git", "-C", dest, "remote", "get-url", "origin"); strings.TrimSpace(got) != url {
 			_ = os.RemoveAll(dest)
 		} else {
 			fmt.Fprintf(out, "updating pack %q...\n", name)
-			if _, err := env.run("git", "-C", dest, "fetch", "--tags", "--", "origin"); err != nil {
+			if _, err := env.Run("git", "-C", dest, "fetch", "--tags", "--", "origin"); err != nil {
 				return "", fmt.Errorf("git fetch %s: %w", url, err)
 			}
 		}
 	}
 	if _, err := os.Stat(filepath.Join(dest, ".git")); err != nil {
 		fmt.Fprintf(out, "cloning pack %q from %s...\n", name, url)
-		if _, err := env.run("git", "clone", "--", url, dest); err != nil {
+		if _, err := env.Run("git", "clone", "--", url, dest); err != nil {
 			return "", fmt.Errorf("git clone %s: %w", url, err)
 		}
 		freshClone = true
@@ -3639,17 +3636,17 @@ func clonePack(env shellEnv, out io.Writer, raw string) (string, error) {
 	if ref != "" {
 		// No `--` before a ref: `git checkout -- <ref>` means path-checkout, not a
 		// ref switch. ref is already validated (no leading dash), so this is safe.
-		if _, err := env.run("git", "-C", dest, "checkout", ref); err != nil {
+		if _, err := env.Run("git", "-C", dest, "checkout", ref); err != nil {
 			if freshClone {
 				_ = os.RemoveAll(dest)
 			}
 			return "", fmt.Errorf("git checkout %s: %w", ref, err)
 		}
 		// Advance to the fetched tip when ref is a branch (no-op for a tag/sha).
-		_, _ = env.run("git", "-C", dest, "reset", "--hard", "origin/"+ref)
+		_, _ = env.Run("git", "-C", dest, "reset", "--hard", "origin/"+ref)
 	} else if !freshClone {
 		// Unpinned existing clone: advance to the remote default branch's tip.
-		_, _ = env.run("git", "-C", dest, "reset", "--hard", "@{upstream}")
+		_, _ = env.Run("git", "-C", dest, "reset", "--hard", "@{upstream}")
 	}
 	// A clone that has no pack.toml is not a pack: clean up the fresh clone so a
 	// retry starts clean, and fail with a clear message.
@@ -3706,9 +3703,9 @@ func scrubRemotePackLock(env shellEnv, dest string, freshClone bool) error {
 		return nil // no pack.lock at all — nothing to scrub
 	}
 	fromRemote := freshClone || fi.Mode()&os.ModeSymlink != 0
-	if !fromRemote && env.run != nil {
+	if !fromRemote {
 		// Tracked by git => restored from the remote by checkout/reset above.
-		if _, lerr := env.run("git", "-C", dest, "ls-files", "--error-unmatch", "--", packLockName); lerr == nil {
+		if _, lerr := env.Run("git", "-C", dest, "ls-files", "--error-unmatch", "--", packLockName); lerr == nil {
 			fromRemote = true
 		}
 	}
@@ -3732,10 +3729,8 @@ func markPackAdopted(env shellEnv, root, remote string) error {
 	lock := readPackLock(root)
 	lock.Remote = remote
 	lock.Commit = ""
-	if env.run != nil {
-		if sha, err := env.run("git", "-C", root, "rev-parse", "HEAD"); err == nil {
-			lock.Commit = strings.TrimSpace(sha)
-		}
+	if sha, err := env.Run("git", "-C", root, "rev-parse", "HEAD"); err == nil {
+		lock.Commit = strings.TrimSpace(sha)
 	}
 	_ = recordPackAdoptionInTrustStore(root, remote, lock.Commit)
 	return writePackLock(root, lock)

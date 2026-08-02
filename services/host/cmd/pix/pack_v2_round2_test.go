@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 // --- finding A [CRITICAL]: knowledge-ref host-file disclosure + RCE ----------
@@ -131,7 +132,7 @@ func TestClonePack_MarksAdoptionDurablyBeforeReturn(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
 
 	const url = "https://example.com/attacker/pack.git"
-	env := shellEnv{run: func(name string, args ...string) (string, error) {
+	env := shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "clone" {
 			dest := args[len(args)-1]
 			if err := os.MkdirAll(dest, 0o755); err != nil {
@@ -145,7 +146,7 @@ func TestClonePack_MarksAdoptionDurablyBeforeReturn(t *testing.T) {
 			return "abc123\n", nil
 		}
 		return "", nil
-	}}
+	}}}
 
 	dest, err := clonePack(env, &bytes.Buffer{}, url)
 	if err != nil {

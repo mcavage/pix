@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/sys"
+	"pix/host/sys/systest"
 )
 
 // --- parseSlackSetupArgs -----------------------------------------------
@@ -144,9 +146,18 @@ type slackTestEnv struct {
 }
 
 func (f *slackTestEnv) env() shellEnv {
-	e := defaultShellEnv()
-	e.probe = nil // force probeRun through env.run (faked below), never a real exec
-	e.lookPath = func(name string) (string, error) {
+	// The real system with the seams below faked. `Base` states that intent
+	// explicitly; it used to be implicit in starting from defaultShellEnv() and
+	// overwriting fields, which meant an un-overwritten seam silently reached the
+	// real OS from inside a "hermetic" test.
+	//
+	// RunTimedFn is deliberately left unset: systest.Fake routes RunTimed to the
+	// faked Run, so a bounded probe never becomes a real exec here.
+	e := shellEnv{System: &systest.Fake{Base: sys.Real{}}}
+	e.hostBinary = func() (string, error) { return hostBinaryResolver() }
+	e.identityProbe = rpcIdentityProbe
+	e.slackAuthTest = liveSlackAuthTest
+	e.fake().LookPathFn = func(name string) (string, error) {
 		switch name {
 		case "sbx":
 			if f.sbxPresent {
@@ -158,7 +169,7 @@ func (f *slackTestEnv) env() shellEnv {
 		}
 		return "", fmt.Errorf("not found")
 	}
-	e.run = func(name string, args ...string) (string, error) {
+	e.fake().RunFn = func(name string, args ...string) (string, error) {
 		f.calls = append(f.calls, append([]string{name}, args...))
 		switch name {
 		case "op":
@@ -246,7 +257,7 @@ func TestSlackSetupRefusesForeignExistingRegistration(t *testing.T) {
 	slackTestCfg(t)
 	f := &slackTestEnv{opOK: true, opToken: "xoxp-unused", sbxPresent: true}
 	e := f.env()
-	e.run = func(name string, args ...string) (string, error) {
+	e.fake().RunFn = func(name string, args ...string) (string, error) {
 		f.calls = append(f.calls, append([]string{name}, args...))
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "slack\n", nil
@@ -545,7 +556,7 @@ func TestSlackStatusRejectsForeignRegistration(t *testing.T) {
 	slackTestCfg(t)
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	e.run = func(name string, args ...string) (string, error) {
+	e.fake().RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 3 && args[0] == "mcp" && args[1] == "get" && args[2] == "slack" {
 			return "name: slack\ncommand: /tmp/not-pix-host mcp slack\n", nil
 		}
@@ -608,7 +619,7 @@ func TestSlackDisableRemovesRefsAndWarnsAboutRevocation(t *testing.T) {
 	e.hostBinary = func() (string, error) { return "/fake/bin/pix-host", nil }
 	// The tri-state probe reports slack present, and definition inspection
 	// proves it is the canonical Pix host command before disable removes it.
-	e.run = func(name string, args ...string) (string, error) {
+	e.fake().RunFn = func(name string, args ...string) (string, error) {
 		f.calls = append(f.calls, append([]string{name}, args...))
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "slack\n", nil
@@ -673,7 +684,7 @@ func TestSlackDisableRemovesOrphanIdentityPins(t *testing.T) {
 	}
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	e.run = func(name string, args ...string) (string, error) {
+	e.fake().RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "", nil
 		}
@@ -698,7 +709,7 @@ func TestSlackDisableRefusesForeignRegistration(t *testing.T) {
 	}
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	e.run = func(name string, args ...string) (string, error) {
+	e.fake().RunFn = func(name string, args ...string) (string, error) {
 		f.calls = append(f.calls, append([]string{name}, args...))
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "slack\n", nil
@@ -727,7 +738,7 @@ func TestSlackDisableNoopWhenNothingConfigured(t *testing.T) {
 	}
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	e.run = func(name string, args ...string) (string, error) {
+	e.fake().RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "", nil // nothing registered
 		}

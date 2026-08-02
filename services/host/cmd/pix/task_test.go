@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/sys/systest"
 	"reflect"
 	"strings"
 	"sync"
@@ -237,21 +238,19 @@ func TestTask_KnownAndRoutable(t *testing.T) {
 // absent / not running).
 func gitEnv(t *testing.T, sbxLs string, recorded *[][]string) shellEnv {
 	t.Helper()
-	return shellEnv{
-		run: func(name string, args ...string) (string, error) {
-			if name == "sbx" {
-				if recorded != nil {
-					*recorded = append(*recorded, append([]string{name}, args...))
-				}
-				if len(args) > 0 && args[0] == "ls" {
-					return sbxLs, nil
-				}
-				return "", nil
+	return shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
+		if name == "sbx" {
+			if recorded != nil {
+				*recorded = append(*recorded, append([]string{name}, args...))
 			}
-			out, err := exec.Command(name, args...).CombinedOutput()
-			return string(out), err
-		},
-	}
+			if len(args) > 0 && args[0] == "ls" {
+				return sbxLs, nil
+			}
+			return "", nil
+		}
+		out, err := exec.Command(name, args...).CombinedOutput()
+		return string(out), err
+	}}}
 }
 
 // tgit runs a real git command in dir, failing the test on error.
@@ -647,18 +646,16 @@ func TestTaskMeta_TamperedBranchNeverTargetsMainRef(t *testing.T) {
 
 	// Record every git fetch invocation while delegating to real git.
 	var fetches [][]string
-	env := shellEnv{
-		run: func(name string, args ...string) (string, error) {
-			if name == "sbx" {
-				return "", nil
-			}
-			if name == "git" && len(args) >= 3 && args[2] == "fetch" {
-				fetches = append(fetches, append([]string{name}, args...))
-			}
-			out, err := exec.Command(name, args...).CombinedOutput()
-			return string(out), err
-		},
-	}
+	env := shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
+		if name == "sbx" {
+			return "", nil
+		}
+		if name == "git" && len(args) >= 3 && args[2] == "fetch" {
+			fetches = append(fetches, append([]string{name}, args...))
+		}
+		out, err := exec.Command(name, args...).CombinedOutput()
+		return string(out), err
+	}}}
 
 	// A tampered branch that, un-hardened, would resolve a fetch onto refs/heads/main.
 	tampered := taskMeta{Name: "work", Profile: "default", Branch: "pix/../../heads/main", Sandbox: "x", Mainroot: main}
@@ -817,14 +814,14 @@ func TestProbeTaskSandbox_TriState(t *testing.T) {
 		t.Errorf("absent: got %v, want sbxAbsent", got)
 	}
 	// unknown: sbx invocation errors. Must NOT read as absent.
-	errEnv := shellEnv{run: func(n string, a ...string) (string, error) {
+	errEnv := shellEnv{System: &systest.Fake{RunFn: func(n string, a ...string) (string, error) {
 		return "boom", fmt.Errorf("sbx exploded")
-	}}
+	}}}
 	if got := probeTaskSandbox(errEnv, name); got != sbxUnknown {
 		t.Errorf("errored sbx: got %v, want sbxUnknown", got)
 	}
 	// unknown: no runner wired.
-	if got := probeTaskSandbox(shellEnv{}, name); got != sbxUnknown {
+	if got := probeTaskSandbox(shellEnv{System: &systest.Fake{}}, name); got != sbxUnknown {
 		t.Errorf("nil runner: got %v, want sbxUnknown", got)
 	}
 }
@@ -837,18 +834,16 @@ func TestGatherTaskState_StatusFailIsUnknown(t *testing.T) {
 	makeTaskClone(t, main, co, "pix/work", "HEAD")
 	// Fail ONLY `git status --porcelain`; delegate every other command to real
 	// git so unrec resolves cleanly (0). The dirty state is therefore UNKNOWN.
-	env := shellEnv{
-		run: func(name string, args ...string) (string, error) {
-			if name == "sbx" {
-				return "", nil
-			}
-			if name == "git" && len(args) >= 4 && args[2] == "status" && args[3] == "--porcelain" {
-				return "fatal: simulated status failure", fmt.Errorf("status blew up")
-			}
-			out, err := exec.Command(name, args...).CombinedOutput()
-			return string(out), err
-		},
-	}
+	env := shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
+		if name == "sbx" {
+			return "", nil
+		}
+		if name == "git" && len(args) >= 4 && args[2] == "status" && args[3] == "--porcelain" {
+			return "fatal: simulated status failure", fmt.Errorf("status blew up")
+		}
+		out, err := exec.Command(name, args...).CombinedOutput()
+		return string(out), err
+	}}}
 	m := taskMeta{Name: "work", Sandbox: "x", Mainroot: main, Branch: "pix/work"}
 	st := gatherTaskState(env, m, co)
 	if !st.unknown {
@@ -909,7 +904,7 @@ func TestRunTaskLs_UnknownStateSurfaced(t *testing.T) {
 
 	// Delegate every command to real git EXCEPT `git status --porcelain`, which
 	// fails; that makes the clean/dirty state UNKNOWN in gatherTaskState.
-	env := shellEnv{run: func(name string, args ...string) (string, error) {
+	env := shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		if name == "sbx" {
 			return "", nil
 		}
@@ -918,7 +913,7 @@ func TestRunTaskLs_UnknownStateSurfaced(t *testing.T) {
 		}
 		out, err := exec.Command(name, args...).CombinedOutput()
 		return string(out), err
-	}}
+	}}}
 
 	// Lay down a clone + meta the way `task new` would, keyed the way ls resolves.
 	mainroot, err := resolveMainroot(env, main)
@@ -1201,7 +1196,7 @@ func TestTaskTeardownAbort(t *testing.T) {
 // every sbx invocation, and delegates all other commands to real git.
 func countingSbxEnv(name string, lsByCall []string, recorded *[][]string) shellEnv {
 	var calls int
-	return shellEnv{run: func(cmd string, args ...string) (string, error) {
+	return shellEnv{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) {
 		if cmd == "sbx" {
 			if recorded != nil {
 				*recorded = append(*recorded, append([]string{cmd}, args...))
@@ -1223,7 +1218,7 @@ func countingSbxEnv(name string, lsByCall []string, recorded *[][]string) shellE
 		}
 		out, err := exec.Command(cmd, args...).CombinedOutput()
 		return string(out), err
-	}}
+	}}}
 }
 
 // TestExecuteTaskTeardown_FreshRunningRefuses proves the R3-1 fix: the gather-time
@@ -1374,7 +1369,7 @@ func TestExecuteTaskTeardown_NonForceRmFailureAborts(t *testing.T) {
 	var recorded [][]string
 	// sbx ls => stopped (guard + fresh probe both pass); `sbx rm` (no -f) fails,
 	// mimicking sbx refusing a sandbox that came up after the probe.
-	env := shellEnv{run: func(cmd string, args ...string) (string, error) {
+	env := shellEnv{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) {
 		if cmd == "sbx" {
 			recorded = append(recorded, append([]string{cmd}, args...))
 			if len(args) > 0 && args[0] == "ls" {
@@ -1387,7 +1382,7 @@ func TestExecuteTaskTeardown_NonForceRmFailureAborts(t *testing.T) {
 		}
 		out, err := exec.Command(cmd, args...).CombinedOutput()
 		return string(out), err
-	}}
+	}}}
 
 	m := taskMeta{Name: "work", Sandbox: sbxname, Mainroot: main, Branch: "pix/work"}
 	st := gatherTaskState(env, m, co)
@@ -1479,13 +1474,13 @@ func TestPrepareTaskLaunchSandbox_RunningRefuses(t *testing.T) {
 func TestPrepareTaskLaunchSandbox_UnknownAborts(t *testing.T) {
 	name := "pix-t-x-work"
 	var recorded [][]string
-	env := shellEnv{run: func(cmd string, args ...string) (string, error) {
+	env := shellEnv{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) {
 		if cmd == "sbx" {
 			recorded = append(recorded, append([]string{cmd}, args...))
 			return "", fmt.Errorf("sbx ls exploded")
 		}
 		return "", nil
-	}}
+	}}}
 	err := prepareTaskLaunchSandbox(env, name)
 	if err == nil {
 		t.Fatal("unknown probe must abort the launch")
@@ -1506,7 +1501,7 @@ func TestPrepareTaskLaunchSandbox_UnknownAborts(t *testing.T) {
 func TestPrepareTaskLaunchSandbox_StoppedRmFailureAborts(t *testing.T) {
 	name := "pix-t-x-work"
 	var recorded [][]string
-	env := shellEnv{run: func(cmd string, args ...string) (string, error) {
+	env := shellEnv{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) {
 		if cmd == "sbx" {
 			recorded = append(recorded, append([]string{cmd}, args...))
 			if len(args) > 0 && args[0] == "ls" {
@@ -1517,7 +1512,7 @@ func TestPrepareTaskLaunchSandbox_StoppedRmFailureAborts(t *testing.T) {
 			}
 		}
 		return "", nil
-	}}
+	}}}
 	err := prepareTaskLaunchSandbox(env, name)
 	if err == nil {
 		t.Fatal("a failed non-force `sbx rm` must abort the launch")
@@ -1538,7 +1533,7 @@ func TestPrepareTaskLaunchSandbox_StoppedRmFailureAborts(t *testing.T) {
 // lsByCall (gather, fresh probe, then the re-probe after the rm fails).
 func countingSbxEnvRmErr(name string, lsByCall []string, recorded *[][]string) shellEnv {
 	var calls int
-	return shellEnv{run: func(cmd string, args ...string) (string, error) {
+	return shellEnv{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) {
 		if cmd == "sbx" {
 			if recorded != nil {
 				*recorded = append(*recorded, append([]string{cmd}, args...))
@@ -1563,7 +1558,7 @@ func countingSbxEnvRmErr(name string, lsByCall []string, recorded *[][]string) s
 		}
 		out, err := exec.Command(cmd, args...).CombinedOutput()
 		return string(out), err
-	}}
+	}}}
 }
 
 // rmArgv returns the last recorded `sbx rm ...` invocation, or nil.

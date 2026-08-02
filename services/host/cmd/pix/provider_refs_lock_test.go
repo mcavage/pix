@@ -25,13 +25,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/sys/systest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-// recordingFlock is a fake shellEnv.flock that records acquire/release events
+// recordingFlock is a fake shellEnv.Lock that records acquire/release events
 // into a shared event log and fails the test on a NESTED acquisition of the
 // same lock path — which with the real flock (per-open-file-description)
 // would block forever, so it is exactly the deadlock this suite must catch
@@ -100,16 +101,16 @@ func TestSecretSetHoldsLockAcrossBothFileTransaction(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "# header\n"}
 	var events []string
 	env := memEnv(files)
-	origRead, origWrite := env.readFile, env.writeFile
-	env.readFile = func(p string) (string, error) {
+	origRead, origWrite := env.fake().ReadFileFn, env.fake().WriteFileFn
+	env.fake().ReadFileFn = func(p string) (string, error) {
 		events = append(events, "read "+p)
 		return origRead(p)
 	}
-	env.writeFile = func(p string, d []byte, perm os.FileMode) error {
+	env.fake().WriteFileFn = func(p string, d []byte, perm os.FileMode) error {
 		events = append(events, "write "+p)
 		return origWrite(p, d, perm)
 	}
-	env.flock = newRecordingFlock(t, &events).flock
+	env.fake().LockFn = newRecordingFlock(t, &events).flock
 
 	var out bytes.Buffer
 	if err := runSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://v/anthropic/key"); err != nil {
@@ -146,16 +147,16 @@ func TestSecretRmHoldsLockAcrossBothFileTransaction(t *testing.T) {
 	}
 	var events []string
 	env := memEnv(files)
-	origRead, origWrite := env.readFile, env.writeFile
-	env.readFile = func(p string) (string, error) {
+	origRead, origWrite := env.fake().ReadFileFn, env.fake().WriteFileFn
+	env.fake().ReadFileFn = func(p string) (string, error) {
 		events = append(events, "read "+p)
 		return origRead(p)
 	}
-	env.writeFile = func(p string, d []byte, perm os.FileMode) error {
+	env.fake().WriteFileFn = func(p string, d []byte, perm os.FileMode) error {
 		events = append(events, "write "+p)
 		return origWrite(p, d, perm)
 	}
-	env.flock = newRecordingFlock(t, &events).flock
+	env.fake().LockFn = newRecordingFlock(t, &events).flock
 
 	var out bytes.Buffer
 	if err := runSecretRm(env, &out, "ANTHROPIC_API_KEY"); err != nil {
@@ -186,20 +187,20 @@ func TestSecretRmHoldsLockAcrossBothFileTransaction(t *testing.T) {
 func TestStrictFlowHoldsLockThroughReconcile(t *testing.T) {
 	env, _ := stepEnv(t, allRefs("", "", ""), "", "tok-value")
 	var events []string
-	origRead, origWrite, origRun := env.readFile, env.writeFile, env.run
-	env.readFile = func(p string) (string, error) {
+	origRead, origWrite, origRun := env.fake().ReadFileFn, env.fake().WriteFileFn, env.fake().RunFn
+	env.fake().ReadFileFn = func(p string) (string, error) {
 		events = append(events, "read "+p)
 		return origRead(p)
 	}
-	env.writeFile = func(p string, d []byte, perm os.FileMode) error {
+	env.fake().WriteFileFn = func(p string, d []byte, perm os.FileMode) error {
 		events = append(events, "write "+p)
 		return origWrite(p, d, perm)
 	}
-	env.run = func(name string, args ...string) (string, error) {
+	env.fake().RunFn = func(name string, args ...string) (string, error) {
 		events = append(events, "run "+name+" "+strings.Join(args, " "))
 		return origRun(name, args...)
 	}
-	env.flock = newRecordingFlock(t, &events).flock
+	env.fake().LockFn = newRecordingFlock(t, &events).flock
 
 	var out bytes.Buffer
 	if !setupProvisionKeys(env, strings.NewReader(""), &out, false, true) {
@@ -246,7 +247,7 @@ func TestMirrorHelperStandaloneTakesLock(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "ANTHROPIC_API_KEY=op://v/anthropic/key\n"}
 	var events []string
 	env := memEnv(files)
-	env.flock = newRecordingFlock(t, &events).flock
+	env.fake().LockFn = newRecordingFlock(t, &events).flock
 
 	mirrorProviderRefsToHostMode(env)
 
@@ -270,34 +271,29 @@ func TestMirrorHelperStandaloneTakesLock(t *testing.T) {
 func syncEnv(refsContent, opReadVal, sbxLsOut string, events *[]string) (shellEnv, string) {
 	dir := "/cfg-synctest"
 	refsPath := filepath.Join(dir, "pix", "op-refs.env")
-	env := shellEnv{
-		getenv: func(k string) string {
-			if k == "XDG_CONFIG_HOME" {
-				return dir
-			}
-			return ""
-		},
-		readFile: func(p string) (string, error) {
-			*events = append(*events, "read "+p)
-			if p == refsPath {
-				return refsContent, nil
-			}
-			return "", os.ErrNotExist
-		},
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			*events = append(*events, "run "+name+" "+strings.Join(args, " "))
-			switch {
-			case name == "op" && len(args) >= 1 && args[0] == "account":
-				return "acct", nil
-			case name == "op" && len(args) >= 1 && args[0] == "read":
-				return opReadVal, nil
-			case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
-				return sbxLsOut, nil
-			}
-			return "", nil
-		},
-	}
+	env := shellEnv{System: &systest.Fake{GetenvFn: func(k string) string {
+		if k == "XDG_CONFIG_HOME" {
+			return dir
+		}
+		return ""
+	}, ReadFileFn: func(p string) (string, error) {
+		*events = append(*events, "read "+p)
+		if p == refsPath {
+			return refsContent, nil
+		}
+		return "", os.ErrNotExist
+	}, LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		*events = append(*events, "run "+name+" "+strings.Join(args, " "))
+		switch {
+		case name == "op" && len(args) >= 1 && args[0] == "account":
+			return "acct", nil
+		case name == "op" && len(args) >= 1 && args[0] == "read":
+			return opReadVal, nil
+		case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
+			return sbxLsOut, nil
+		}
+		return "", nil
+	}}}
 	return env, refsPath
 }
 
@@ -309,7 +305,7 @@ func syncEnv(refsContent, opReadVal, sbxLsOut string, events *[]string) (shellEn
 func TestSyncProviderKeysHoldsLockAcrossReadResolveSbxSync(t *testing.T) {
 	var events []string
 	env, refsPath := syncEnv("ANTHROPIC_API_KEY=op://v/anthropic/key\n", "sk-val", "", &events)
-	env.flock = newRecordingFlock(t, &events).flock
+	env.fake().LockFn = newRecordingFlock(t, &events).flock
 
 	var out bytes.Buffer
 	synced, failed, fatal := syncProviderKeys(env, &out)
@@ -343,7 +339,7 @@ func TestSyncProviderKeysHoldsLockAcrossReadResolveSbxSync(t *testing.T) {
 func TestEnsureProviderKeysFromRefsHoldsLockAcrossReadResolveSbxSync(t *testing.T) {
 	var events []string
 	env, refsPath := syncEnv("GEMINI_API_KEY=op://v/gemini/key\n", "sk-val", "", &events)
-	env.flock = newRecordingFlock(t, &events).flock
+	env.fake().LockFn = newRecordingFlock(t, &events).flock
 
 	var out bytes.Buffer
 	ensureProviderKeysFromRefs(env, &out)
@@ -384,40 +380,34 @@ func TestOfferOnePasswordKeysWritesPairUnderOneLockThenSyncsAfterRelease(t *test
 	hmPath := filepath.Join(dir, "pix", "hostmode.env")
 	files := map[string]string{}
 	var events []string
-	env := shellEnv{
-		getenv: func(k string) string {
-			if k == "XDG_CONFIG_HOME" {
-				return dir
-			}
-			return ""
-		},
-		readFile: func(p string) (string, error) {
-			events = append(events, "read "+p)
-			if v, ok := files[p]; ok {
-				return v, nil
-			}
-			return "", os.ErrNotExist
-		},
-		writeFile: func(p string, d []byte, _ os.FileMode) error {
-			events = append(events, "write "+p)
-			files[p] = string(d)
-			return nil
-		},
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			events = append(events, "run "+name+" "+strings.Join(args, " "))
-			switch {
-			case name == "op" && len(args) >= 1 && args[0] == "--version":
-				return "2.0", nil
-			case name == "op" && len(args) >= 1 && args[0] == "account":
-				return "acct", nil
-			case name == "op" && len(args) >= 1 && args[0] == "read":
-				return "sk-val", nil
-			}
-			return "", nil
-		},
-	}
-	env.flock = newRecordingFlock(t, &events).flock
+	env := shellEnv{System: &systest.Fake{GetenvFn: func(k string) string {
+		if k == "XDG_CONFIG_HOME" {
+			return dir
+		}
+		return ""
+	}, ReadFileFn: func(p string) (string, error) {
+		events = append(events, "read "+p)
+		if v, ok := files[p]; ok {
+			return v, nil
+		}
+		return "", os.ErrNotExist
+	}, WriteFileFn: func(p string, d []byte, _ os.FileMode) error {
+		events = append(events, "write "+p)
+		files[p] = string(d)
+		return nil
+	}, LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		events = append(events, "run "+name+" "+strings.Join(args, " "))
+		switch {
+		case name == "op" && len(args) >= 1 && args[0] == "--version":
+			return "2.0", nil
+		case name == "op" && len(args) >= 1 && args[0] == "account":
+			return "acct", nil
+		case name == "op" && len(args) >= 1 && args[0] == "read":
+			return "sk-val", nil
+		}
+		return "", nil
+	}}}
+	env.fake().LockFn = newRecordingFlock(t, &events).flock
 
 	// Accept the offer, paste ONE ref (anthropic), blank the other two so the
 	// pair-write happens exactly once before the loop finishes and falls
@@ -477,7 +467,7 @@ func TestOfferOnePasswordKeysWritesPairUnderOneLockThenSyncsAfterRelease(t *test
 func TestLockAcquisitionErrorFailsSyncProviderKeys(t *testing.T) {
 	var events []string
 	env, _ := syncEnv("ANTHROPIC_API_KEY=op://v/a/k\n", "sk-val", "", &events)
-	env.flock = func(string, func() error) error { return errors.New("lock dir unwritable") }
+	env.fake().LockFn = func(string, func() error) error { return errors.New("lock dir unwritable") }
 
 	var out bytes.Buffer
 	_, _, fatal := syncProviderKeys(env, &out)
@@ -495,7 +485,7 @@ func TestLockAcquisitionErrorFailsSyncProviderKeys(t *testing.T) {
 func TestLockAcquisitionErrorMakesEnsureProviderKeysFromRefsANoOp(t *testing.T) {
 	var events []string
 	env, _ := syncEnv("ANTHROPIC_API_KEY=op://v/a/k\n", "sk-val", "", &events)
-	env.flock = func(string, func() error) error { return errors.New("lock dir unwritable") }
+	env.fake().LockFn = func(string, func() error) error { return errors.New("lock dir unwritable") }
 
 	var out bytes.Buffer
 	ensureProviderKeysFromRefs(env, &out)
@@ -508,17 +498,12 @@ func TestLockAcquisitionErrorMakesEnsureProviderKeysFromRefsANoOp(t *testing.T) 
 }
 
 func TestLockAcquisitionErrorSkipsProviderInOfferOnePasswordKeys(t *testing.T) {
-	env := shellEnv{
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			if name == "op" && len(args) >= 1 && args[0] == "--version" {
-				return "2.0", nil
-			}
-			return "", nil
-		},
-		readFile: func(string) (string, error) { return "", os.ErrNotExist }, // no refs yet
-		flock:    func(string, func() error) error { return errors.New("lock dir unwritable") },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		if name == "op" && len(args) >= 1 && args[0] == "--version" {
+			return "2.0", nil
+		}
+		return "", nil
+	}, ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }, LockFn: func(string, func() error) error { return errors.New("lock dir unwritable") }}}
 	var out bytes.Buffer
 	offerOnePasswordKeys(env, strings.NewReader("y\nop://v/anthropic/key\n\n\n"), &out, true)
 	if !strings.Contains(out.String(), "could not lock provider refs for anthropic") {
@@ -539,23 +524,18 @@ func realFileEnv(t *testing.T) (shellEnv, string) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "config.toml")
 	t.Setenv("PIX_CONFIG", cfg) // keeps any config.* fallback in the temp dir too
-	env := shellEnv{
-		getenv: func(k string) string {
-			if k == "PIX_CONFIG" {
-				return cfg
-			}
-			return ""
-		},
-		readFile: func(p string) (string, error) {
-			b, err := os.ReadFile(p)
-			return string(b), err
-		},
-		writeFile: func(p string, d []byte, perm os.FileMode) error {
-			time.Sleep(2 * time.Millisecond) // widen the read..write race window
-			return os.WriteFile(p, d, perm)
-		},
-		flock: withFlock,
-	}
+	env := shellEnv{System: &systest.Fake{GetenvFn: func(k string) string {
+		if k == "PIX_CONFIG" {
+			return cfg
+		}
+		return ""
+	}, ReadFileFn: func(p string) (string, error) {
+		b, err := os.ReadFile(p)
+		return string(b), err
+	}, WriteFileFn: func(p string, d []byte, perm os.FileMode) error {
+		time.Sleep(2 * time.Millisecond) // widen the read..write race window
+		return os.WriteFile(p, d, perm)
+	}, LockFn: withFlock}}
 	if err := os.WriteFile(defaultOpRefsPath(env), []byte("# header\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -638,37 +618,31 @@ func reconcileEnv(t *testing.T, files map[string]string, calls *[]string) shellE
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	return shellEnv{
-		getenv: func(k string) string {
-			if k == "PIX_CONFIG" {
-				return filepath.Join(dir, "config.toml")
-			}
-			return ""
-		},
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		readFile: func(p string) (string, error) {
-			if c, ok := files[p]; ok {
-				return c, nil
-			}
-			return "", os.ErrNotExist
-		},
-		writeFile: func(p string, d []byte, _ os.FileMode) error {
-			files[p] = string(d)
-			return nil
-		},
-		run: func(name string, args ...string) (string, error) {
-			*calls = append(*calls, name+" "+strings.Join(args, " "))
-			switch {
-			case name == "op" && len(args) >= 1 && args[0] == "account":
-				return "acct", nil
-			case name == "op" && len(args) >= 1 && args[0] == "read":
-				return "resolved-tok", nil
-			case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
-				return "", nil // sbx has NO provider keys
-			}
-			return "", nil
-		},
-	}
+	return shellEnv{System: &systest.Fake{GetenvFn: func(k string) string {
+		if k == "PIX_CONFIG" {
+			return filepath.Join(dir, "config.toml")
+		}
+		return ""
+	}, LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, ReadFileFn: func(p string) (string, error) {
+		if c, ok := files[p]; ok {
+			return c, nil
+		}
+		return "", os.ErrNotExist
+	}, WriteFileFn: func(p string, d []byte, _ os.FileMode) error {
+		files[p] = string(d)
+		return nil
+	}, RunFn: func(name string, args ...string) (string, error) {
+		*calls = append(*calls, name+" "+strings.Join(args, " "))
+		switch {
+		case name == "op" && len(args) >= 1 && args[0] == "account":
+			return "acct", nil
+		case name == "op" && len(args) >= 1 && args[0] == "read":
+			return "resolved-tok", nil
+		case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
+			return "", nil // sbx has NO provider keys
+		}
+		return "", nil
+	}}}
 }
 
 // The snapshot IS the source: with EMPTY refs files, a snapshot entry must
@@ -698,7 +672,7 @@ func TestReconcileIgnoresOnDiskRefsAbsentFromSnapshot(t *testing.T) {
 	var calls []string
 	env := reconcileEnv(t, nil, &calls) // files set below to reuse the env's dir
 	files := map[string]string{defaultOpRefsPath(env): "ANTHROPIC_API_KEY=op://v/anthropic/key\n"}
-	env.readFile = func(p string) (string, error) {
+	env.fake().ReadFileFn = func(p string) (string, error) {
 		if c, ok := files[p]; ok {
 			return c, nil
 		}
@@ -718,7 +692,7 @@ func TestReconcileIgnoresOnDiskRefsAbsentFromSnapshot(t *testing.T) {
 func TestLockAcquisitionErrorFailsSecretSetAndRm(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "ANTHROPIC_API_KEY=op://v/anthropic/key\n"}
 	env := memEnv(files)
-	env.flock = func(string, func() error) error { return errors.New("lock dir unwritable") }
+	env.fake().LockFn = func(string, func() error) error { return errors.New("lock dir unwritable") }
 
 	var out bytes.Buffer
 	if err := runSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://v/anthropic/new"); err == nil {
@@ -745,7 +719,7 @@ func TestLockAcquisitionErrorFailsSecretSetAndRm(t *testing.T) {
 
 func TestLockAcquisitionErrorFailsStrictSetup(t *testing.T) {
 	env, _ := stepEnv(t, allRefs("", "", ""), "", "tok-value")
-	env.flock = func(string, func() error) error { return errors.New("lock dir unwritable") }
+	env.fake().LockFn = func(string, func() error) error { return errors.New("lock dir unwritable") }
 	var out bytes.Buffer
 	if setupProvisionKeys(env, strings.NewReader(""), &out, false, true) {
 		t.Fatal("strict setup must fail when the provider-refs lock cannot be acquired")

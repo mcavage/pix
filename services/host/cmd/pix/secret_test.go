@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 func TestParseOpRefsClassification(t *testing.T) {
@@ -296,24 +297,20 @@ func TestSecretHelpConfigIndependent(t *testing.T) {
 // files map, and whose getenv resolves PIX_CONFIG so defaultOpRefsPath
 // lines up with the fake path used by the test.
 func memEnv(files map[string]string) shellEnv {
-	return shellEnv{
-		getenv: func(name string) string {
-			if name == "PIX_CONFIG" {
-				return "/fake/config/config.toml"
-			}
-			return ""
-		},
-		readFile: func(path string) (string, error) {
-			if c, ok := files[path]; ok {
-				return c, nil
-			}
-			return "", os.ErrNotExist
-		},
-		writeFile: func(path string, data []byte, perm os.FileMode) error {
-			files[path] = string(data)
-			return nil
-		},
-	}
+	return shellEnv{System: &systest.Fake{GetenvFn: func(name string) string {
+		if name == "PIX_CONFIG" {
+			return "/fake/config/config.toml"
+		}
+		return ""
+	}, ReadFileFn: func(path string) (string, error) {
+		if c, ok := files[path]; ok {
+			return c, nil
+		}
+		return "", os.ErrNotExist
+	}, WriteFileFn: func(path string, data []byte, perm os.FileMode) error {
+		files[path] = string(data)
+		return nil
+	}}}
 }
 
 const fakeRefsPath = "/fake/config/op-refs.env"
@@ -453,7 +450,7 @@ func TestSecretSetNormalizesPercentEncodedSpaceToLiteral(t *testing.T) {
 		t.Errorf("op-refs.env = %q, must NOT keep the percent-encoded space", opRefs)
 	}
 
-	hostMode, err := env.readFile(hostModeRefsPath(env))
+	hostMode, err := env.ReadFile(hostModeRefsPath(env))
 	if err != nil {
 		t.Fatalf("read hostmode.env: %v", err)
 	}
@@ -479,7 +476,7 @@ func TestSecretSetMirrorsProviderKeyToHostMode(t *testing.T) {
 	env := memEnv(files)
 	var out bytes.Buffer
 	runSecretSet(env, &out, "ANTHROPIC_API_KEY", "op://v/anthropic/key")
-	hostMode, err := env.readFile(hostModeRefsPath(env))
+	hostMode, err := env.ReadFile(hostModeRefsPath(env))
 	if err != nil {
 		t.Fatalf("read hostmode.env: %v", err)
 	}
@@ -498,7 +495,7 @@ func TestSecretSetDoesNotMirrorNonProviderKeys(t *testing.T) {
 	env := memEnv(files)
 	var out bytes.Buffer
 	runSecretSet(env, &out, "SLACK_TOKEN", "op://v/slack/token")
-	if _, err := env.readFile(hostModeRefsPath(env)); err == nil {
+	if _, err := env.ReadFile(hostModeRefsPath(env)); err == nil {
 		t.Error("a non-provider key must not create/mirror into hostmode.env")
 	}
 }
@@ -560,7 +557,7 @@ func TestSecretRmMissingFileIsCleanNoop(t *testing.T) {
 
 func TestSecretSetAndRmFailOnUnreadableOpRefs(t *testing.T) {
 	env := memEnv(map[string]string{})
-	env.readFile = func(string) (string, error) { return "", os.ErrPermission }
+	env.fake().ReadFileFn = func(string) (string, error) { return "", os.ErrPermission }
 
 	var setOut bytes.Buffer
 	if err := runSecretSet(env, &setOut, "SLACK_TOKEN", "op://v/slack/token"); err == nil {
@@ -626,7 +623,7 @@ func TestSecretRm_ProviderKey_RemovesFromBothFiles(t *testing.T) {
 	}
 	env := memEnv(files)
 	hmPath := hostModeRefsPath(env)
-	if err := env.writeFile(hmPath, []byte("ANTHROPIC_API_KEY=op://v/anthropic/key\n"), 0o600); err != nil {
+	if err := env.WriteFile(hmPath, []byte("ANTHROPIC_API_KEY=op://v/anthropic/key\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -653,7 +650,7 @@ func TestSecretRm_NonProviderKey_OnlyTouchesOpRefs(t *testing.T) {
 	files := map[string]string{fakeRefsPath: "SLACK_TOKEN=op://v/slack/token\n"}
 	env := memEnv(files)
 	hmPath := hostModeRefsPath(env)
-	if err := env.writeFile(hmPath, []byte("SLACK_TOKEN=op://v/slack/token\n"), 0o600); err != nil {
+	if err := env.WriteFile(hmPath, []byte("SLACK_TOKEN=op://v/slack/token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -679,11 +676,11 @@ func TestSecretRm_ProviderKey_PartialFailure_HostModeWriteFails(t *testing.T) {
 	}
 	env := memEnv(files)
 	hmPath := hostModeRefsPath(env)
-	if err := env.writeFile(hmPath, []byte("ANTHROPIC_API_KEY=op://v/anthropic/key\n"), 0o600); err != nil {
+	if err := env.WriteFile(hmPath, []byte("ANTHROPIC_API_KEY=op://v/anthropic/key\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	realWrite := env.writeFile
-	env.writeFile = func(p string, d []byte, m os.FileMode) error {
+	realWrite := env.fake().WriteFileFn
+	env.fake().WriteFileFn = func(p string, d []byte, m os.FileMode) error {
 		if p == hmPath {
 			return os.ErrPermission
 		}

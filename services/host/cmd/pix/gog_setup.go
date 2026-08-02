@@ -100,7 +100,7 @@ type gogAuthStep struct {
 
 // gogAuthRoute is one supported way to import an OAuth client + authorize an
 // account with the installed gog CLI, as an ordered sequence of steps run via
-// env.runInteractive.
+// env.RunInteractive.
 type gogAuthRoute struct {
 	name  string
 	steps []gogAuthStep
@@ -241,7 +241,7 @@ func gogAuthRouteCapable(env shellEnv, route gogAuthRoute) (bool, string) {
 			continue
 		}
 		args := append([]string{"gog"}, step.help...)
-		helpOut, _, _ := probeRun(env, args[0], args[1:]...)
+		helpOut, _, _ := env.RunTimed(args[0], args[1:]...)
 		for _, flag := range step.requiredFlags {
 			if !strings.Contains(helpOut, flag) {
 				subcmd := strings.Join(step.help[:len(step.help)-1], " ")
@@ -266,7 +266,7 @@ func gogSetupAccountHealthy(env shellEnv, acct string) bool {
 		return false
 	}
 	opRefs := resolveOpRefs(env)
-	if _, err := env.lookPath("op"); err != nil || opRefs == "" {
+	if _, err := env.LookPath("op"); err != nil || opRefs == "" {
 		return true // headless unverifiable here; not a confirmed unhealthy state
 	}
 	return gogHeadlessOK(env, acct, opRefs)
@@ -309,10 +309,10 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// otherwise be statted literally. Expand only the current user's home form;
 	// do not perform environment-variable, command, glob, or ~other expansion.
 	if credentials == "~" || strings.HasPrefix(credentials, "~/") {
-		if env.homeDir == nil || strings.TrimSpace(env.homeDir()) == "" {
+		if strings.TrimSpace(env.HomeDir()) == "" {
 			return fmt.Errorf("cannot expand credentials path %q: user home directory is unavailable", credentials)
 		}
-		home := strings.TrimSpace(env.homeDir())
+		home := strings.TrimSpace(env.HomeDir())
 		if credentials == "~" {
 			credentials = home
 		} else {
@@ -320,13 +320,10 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		}
 	}
 
-	if env.lookPath == nil {
-		return fmt.Errorf("internal: shellEnv.lookPath not wired")
-	}
 	// gogPath is captured HERE and never re-resolved: it feeds the immutable
 	// registrar snapshot built below (buildGogRegistrar), the single source for
 	// both the headless probe and the eventual registration.
-	gogPath, gogErr := env.lookPath("gog")
+	gogPath, gogErr := env.LookPath("gog")
 	if gogErr != nil {
 		fmt.Fprintln(out, "the Google Workspace dependency CLI is not installed.")
 		fmt.Fprintln(out, "  install it:  "+gwInstallCmd)
@@ -334,10 +331,8 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	} // Validate the credentials path BEFORE ever handing it to gog: must be a
 	// TRUE regular file — Mode().IsRegular(), not merely "exists and isn't a
 	// directory" (which a FIFO, socket, or device would also satisfy).
-	if env.fileMode == nil {
-		return fmt.Errorf("internal: shellEnv.fileMode not wired")
-	}
-	credMode, credOK := env.fileMode(credentials)
+
+	credMode, credOK := env.Mode(credentials)
 	if !credOK || !credMode.IsRegular() {
 		return fmt.Errorf("credentials file not found (must be a regular file): %s", credentials)
 	}
@@ -351,8 +346,8 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 
 	// Every noninteractive gog probe here (help/version/auth check) runs
 	// through the BOUNDED probe machinery (timeout + output cap), so a hung gog
-	// can never wedge setup. Tests without env.probe fall back to env.run.
-	helpOut, _, _ := probeRun(env, "gog", "auth", "--help")
+	// can never wedge setup. Tests without env.probe fall back to env.Run.
+	helpOut, _, _ := env.RunTimed("gog", "auth", "--help")
 	var route gogAuthRoute
 	var ok bool
 	if createDocs {
@@ -361,7 +356,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		route, ok = chooseGogAuthRoute(helpOut)
 	}
 	if !ok {
-		verOut, _, _ := probeRun(env, "gog", "--version")
+		verOut, _, _ := env.RunTimed("gog", "--version")
 		fmt.Fprintln(out, "the installed Google Workspace dependency CLI does not advertise a supported auth surface")
 		fmt.Fprintln(out, "  (looked for: auth setup | auth credentials+add | auth add-client+login)")
 		fmt.Fprintf(out, "  installed version: %s\n", strings.TrimSpace(verOut))
@@ -378,7 +373,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// unsafe route — pix never authorizes without requesting read-only
 	// scopes at grant time.
 	if capable, detail := gogAuthRouteCapable(env, route); !capable {
-		verOut, _, _ := probeRun(env, "gog", "--version")
+		verOut, _, _ := env.RunTimed("gog", "--version")
 		profile := "read-only"
 		if createDocs {
 			profile = "the create-new-Docs permission profile"
@@ -398,7 +393,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 	// registration snapshot must be CONFIRMED (never unknown). Any failure here
 	// returns before a single runInteractive call and before config is touched,
 	// so a botched preflight can never leave OAuth half-run or config mutated.
-	if _, err := env.lookPath("sbx"); err != nil {
+	if _, err := env.LookPath("sbx"); err != nil {
 		return fmt.Errorf("sbx not found: pix gworkspace setup requires sbx to register the MCP server " +
 			"(install: https://docs.docker.com/ai/sandboxes); install it, then re-run pix gworkspace setup")
 	}
@@ -407,7 +402,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		if env.hostBinary != nil {
 			hostPath, err = env.hostBinary()
 		} else {
-			hostPath, err = env.lookPath("pix-host")
+			hostPath, err = env.LookPath("pix-host")
 		}
 		if err != nil || strings.TrimSpace(hostPath) == "" {
 			return fmt.Errorf("pix-host not found: required for the create-new-Docs capability; reinstall Pix, then re-run pix gworkspace setup")
@@ -442,12 +437,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		}
 	}
 
-	runInteractive := env.runInteractive
-	if runInteractive == nil {
-		runInteractive = func(name string, args ...string) error {
-			return fmt.Errorf("internal: shellEnv.runInteractive not wired")
-		}
-	}
+	runInteractive := env.RunInteractive
 
 	profileReady := !createDocs || cfg.GoogleWorkspaceAccess == gwAccessCreateDocs
 	if gogAuthed(env, account) && profileReady {
@@ -468,7 +458,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 		}
 	}
 
-	if _, timedOut, err := probeRun(env, "gog", "--account", account, "auth", "doctor", "--check"); timedOut || err != nil {
+	if _, timedOut, err := env.RunTimed("gog", "--account", account, "auth", "doctor", "--check"); timedOut || err != nil {
 		fmt.Fprintln(out, "authorization did not verify:")
 		fmt.Fprintf(out, "  gog --account %s auth doctor --check\n", account)
 		if timedOut {
@@ -590,17 +580,15 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 // (never silent) when the rollback itself fails, naming the exact command to
 // run by hand.
 func gogSetupRollbackRegistration(env shellEnv, snap gogRegSnapshot) error {
-	if env.run == nil {
-		return fmt.Errorf("internal: shellEnv.run not wired")
-	}
+
 	if snap.state == gogRegPresent {
 		args := rawAddArgs(gwServerName, snap.argv)
-		if _, err := env.run("sbx", args...); err != nil {
+		if _, err := env.Run("sbx", args...); err != nil {
 			return fmt.Errorf("could not restore the prior gog registration: %w", err)
 		}
 		return nil
 	}
-	if _, err := env.run("sbx", "mcp", "rm", gwServerName); err != nil {
+	if _, err := env.Run("sbx", "mcp", "rm", gwServerName); err != nil {
 		return fmt.Errorf("could not remove the new gog registration: %w", err)
 	}
 	return nil
@@ -610,7 +598,7 @@ func gogSetupRollbackRegistration(env shellEnv, snap gogRegSnapshot) error {
 // for Pix-owned host MCP servers. It preserves an existing definition so the
 // two-server Workspace transaction can roll back without deleting prior state.
 func snapshotMCPRegistration(env shellEnv, name string) gogRegSnapshot {
-	listOut, timedOut, err := probeRun(env, "sbx", "mcp", "ls")
+	listOut, timedOut, err := env.RunTimed("sbx", "mcp", "ls")
 	if err != nil || timedOut {
 		return gogRegSnapshot{state: gogRegUnknown}
 	}
@@ -624,16 +612,14 @@ func snapshotMCPRegistration(env shellEnv, name string) gogRegSnapshot {
 }
 
 func restoreMCPRegistration(env shellEnv, name string, snap gogRegSnapshot) error {
-	if env.run == nil {
-		return fmt.Errorf("internal: shellEnv.run not wired")
-	}
+
 	if snap.state == gogRegPresent {
-		if _, err := env.run("sbx", rawAddArgs(name, snap.argv)...); err != nil {
+		if _, err := env.Run("sbx", rawAddArgs(name, snap.argv)...); err != nil {
 			return fmt.Errorf("restore %s: %w", name, err)
 		}
 		return nil
 	}
-	if _, err := env.run("sbx", "mcp", "rm", name); err != nil {
+	if _, err := env.Run("sbx", "mcp", "rm", name); err != nil {
 		return fmt.Errorf("remove %s: %w", name, err)
 	}
 	return nil
@@ -688,16 +674,14 @@ type gogRegSnapshot struct {
 //   - the listing succeeds, gog IS in it, and the detailed
 //     command parses cleanly                               -> gogRegPresent(argv)
 func snapshotGogRegistration(env shellEnv) gogRegSnapshot {
-	if env.lookPath == nil {
-		return gogRegSnapshot{state: gogRegUnknown}
-	}
-	if _, err := env.lookPath("sbx"); err != nil {
+
+	if _, err := env.LookPath("sbx"); err != nil {
 		// Defensive only: gogSetup's own preflight already refuses to run past a
 		// missing sbx, so a caller reaching here with sbx absent is unexpected —
 		// report unknown rather than guessing absent.
 		return gogRegSnapshot{state: gogRegUnknown}
 	}
-	listOut, timedOut, err := probeRun(env, "sbx", "mcp", "ls")
+	listOut, timedOut, err := env.RunTimed("sbx", "mcp", "ls")
 	if err != nil || timedOut {
 		return gogRegSnapshot{state: gogRegUnknown}
 	}

@@ -16,6 +16,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/inference"
+	"pix/host/sys/systest"
 )
 
 // ollamaListEnv fakes a healthy daemon whose `ollama list` prints tags, plus a
@@ -23,14 +24,12 @@ import (
 // the fixture works whatever GOOS the test binary runs on; every RAM figure the
 // tests use resolves to the same rung under the darwin AND linux fractions.
 func ollamaListEnv(tags []string, _ string, totalGB float64) shellEnv {
-	env := shellEnv{
-		lookPath: func(string) (string, error) { return "/usr/local/bin/ollama", nil },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/local/bin/ollama", nil }}}
 	rows := "NAME ID SIZE MODIFIED\n"
 	for _, tag := range tags {
 		rows += tag + " abc 1GB - now\n"
 	}
-	env.probe = func(name string, args ...string) (string, bool, error) {
+	env.fake().RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		switch name {
 		case "ollama":
 			return rows, false, nil
@@ -39,7 +38,7 @@ func ollamaListEnv(tags []string, _ string, totalGB float64) shellEnv {
 		}
 		return "", false, fmt.Errorf("unexpected command %s", name)
 	}
-	env.readFile = func(path string) (string, error) {
+	env.fake().ReadFileFn = func(path string) (string, error) {
 		if path == "/proc/meminfo" {
 			return fmt.Sprintf("MemTotal: %d kB\n", int64(totalGB*bytesPerGB/1024)), nil
 		}
@@ -186,7 +185,7 @@ func TestVerifyOllamaInferencePromotesOnlyAnsweringModels(t *testing.T) {
 		binding("ollama/deepseek-v4-pro:cloud"),
 	)
 	f := &fakeProber{fail: map[string]error{"deepseek-v4-pro:cloud": fmt.Errorf("endpoint rejected the request (HTTP 401)")}}
-	env := shellEnv{ollamaInferenceProbe: f.probe}
+	env := shellEnv{System: &systest.Fake{}, ollamaInferenceProbe: f.probe}
 	probe, probeErr := verifyOllamaInference(cfg, env, io.Discard)
 	mustNoProbeErr(t, probeErr)
 	attempted, verified, failures, notProbed := probe.Attempted, probe.Verified, probe.Failures, probe.NotProbed
@@ -209,7 +208,7 @@ func TestVerifyOllamaInferencePromotesOnlyAnsweringModels(t *testing.T) {
 func TestVerifiedBindingRecordsProbeProvenance(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	f := &fakeProber{}
-	env := shellEnv{ollamaInferenceProbe: f.probe}
+	env := shellEnv{System: &systest.Fake{}, ollamaInferenceProbe: f.probe}
 	if probe, _ := verifyOllamaInference(cfg, env, io.Discard); probe.Verified != 1 {
 		t.Fatal("probe succeeded but nothing was promoted")
 	}
@@ -219,7 +218,7 @@ func TestVerifiedBindingRecordsProbeProvenance(t *testing.T) {
 	}
 	// Now demote: the same binding, a refusing prober.
 	f2 := &fakeProber{fail: map[string]error{"qwen3.5:9b": fmt.Errorf("endpoint rejected the request (HTTP 500)")}}
-	if probe, _ := verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f2.probe}, io.Discard); probe.Verified != 0 {
+	if probe, _ := verifyOllamaInference(cfg, shellEnv{System: &systest.Fake{}, ollamaInferenceProbe: f2.probe}, io.Discard); probe.Verified != 0 {
 		t.Fatal("a refused probe must not verify")
 	}
 	got = cfg.Inference.Models[0]
@@ -238,7 +237,7 @@ func TestVerifiedBindingRecordsProbeProvenance(t *testing.T) {
 // here is the part that was always right: nothing gets marked verified.
 func TestNilOllamaProbeSeamLeavesBindingsUnverified(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	probe, err := verifyOllamaInference(cfg, shellEnv{}, io.Discard)
+	probe, err := verifyOllamaInference(cfg, shellEnv{System: &systest.Fake{}}, io.Discard)
 	if err == nil {
 		t.Fatal("a nil prober must be reported, not silently treated as nothing to do")
 	}
@@ -255,18 +254,15 @@ func TestNilOllamaProbeSeamLeavesBindingsUnverified(t *testing.T) {
 func TestVerifyOllamaInferenceUsesResolvedEndpoint(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	var seen string
-	env := shellEnv{
-		getenv: func(name string) string {
-			if name == "OLLAMA_HOST" {
-				return "10.0.0.5:11500"
-			}
-			return ""
-		},
-		ollamaInferenceProbe: func(endpoint, model string, numCtx int, timeout time.Duration) error {
-			seen = endpoint
-			return nil
-		},
-	}
+	env := shellEnv{System: &systest.Fake{GetenvFn: func(name string) string {
+		if name == "OLLAMA_HOST" {
+			return "10.0.0.5:11500"
+		}
+		return ""
+	}}, ollamaInferenceProbe: func(endpoint, model string, numCtx int, timeout time.Duration) error {
+		seen = endpoint
+		return nil
+	}}
 	_, _ = verifyOllamaInference(cfg, env, io.Discard)
 	if seen != "http://10.0.0.5:11500" {
 		t.Fatalf("probe endpoint = %q, want the resolved OLLAMA_HOST", seen)
@@ -290,7 +286,7 @@ func TestLocalOllamaProbesAreSerialized(t *testing.T) {
 	}
 	var cloudInFlight, maxCloud int32
 	base := f.probe
-	env := shellEnv{ollamaInferenceProbe: func(endpoint, model string, numCtx int, timeout time.Duration) error {
+	env := shellEnv{System: &systest.Fake{}, ollamaInferenceProbe: func(endpoint, model string, numCtx int, timeout time.Duration) error {
 		if strings.Contains(model, "cloud") {
 			n := atomic.AddInt32(&cloudInFlight, 1)
 			if n > atomic.LoadInt32(&maxCloud) {
@@ -318,7 +314,7 @@ func TestLocalProbeOrderIsLargestRungFirst(t *testing.T) {
 		binding("ollama/qwen3.5:9b"),
 	)
 	f := &fakeProber{}
-	_, _ = verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f.probe}, io.Discard)
+	_, _ = verifyOllamaInference(cfg, shellEnv{System: &systest.Fake{}, ollamaInferenceProbe: f.probe}, io.Discard)
 	want := []string{"qwen3.5:27b", "qwen3.5:9b", "qwen3.5:4b"}
 	if strings.Join(f.order, ",") != strings.Join(want, ",") {
 		t.Fatalf("probe order = %v, want %v", f.order, want)
@@ -344,7 +340,7 @@ func TestLocalProbeBudgetMarksRemainderNotProbedNotFailed(t *testing.T) {
 	)
 	f := &fakeProber{delay: 70 * time.Millisecond}
 	var out bytes.Buffer
-	probe, probeErr := verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f.probe}, &out)
+	probe, probeErr := verifyOllamaInference(cfg, shellEnv{System: &systest.Fake{}, ollamaInferenceProbe: f.probe}, &out)
 	mustNoProbeErr(t, probeErr)
 	attempted, verified, failures, notProbed := probe.Attempted, probe.Verified, probe.Failures, probe.NotProbed
 	if len(notProbed) == 0 {
@@ -467,7 +463,7 @@ func TestPackDeclaredOllamaBindingStaysCallableWithoutHostProof(t *testing.T) {
 	}
 	// And a host probe must not even try to demote it.
 	f := &fakeProber{}
-	if probe, _ := verifyOllamaInference(cfg, shellEnv{ollamaInferenceProbe: f.probe}, io.Discard); probe.Attempted != 0 {
+	if probe, _ := verifyOllamaInference(cfg, shellEnv{System: &systest.Fake{}, ollamaInferenceProbe: f.probe}, io.Discard); probe.Attempted != 0 {
 		t.Fatalf("a pack binding was probed (%d attempts): %v", probe.Attempted, f.order)
 	}
 }
@@ -548,7 +544,7 @@ func TestLegacyVerifiedOllamaBindingFlaggedOnceThenClears(t *testing.T) {
 	promoted := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	promoted.Inference.Models[0].Verified = true
 	f := &fakeProber{}
-	_, _ = verifyOllamaInference(promoted, shellEnv{ollamaInferenceProbe: f.probe}, io.Discard)
+	_, _ = verifyOllamaInference(promoted, shellEnv{System: &systest.Fake{}, ollamaInferenceProbe: f.probe}, io.Discard)
 	if got := legacyVerifiedOllamaBindings(promoted); len(got) != 0 {
 		t.Fatalf("the row must clear once a probe earns the claim: %v", got)
 	}
@@ -557,7 +553,7 @@ func TestLegacyVerifiedOllamaBindingFlaggedOnceThenClears(t *testing.T) {
 	demoted := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	demoted.Inference.Models[0].Verified = true
 	f2 := &fakeProber{fail: map[string]error{"qwen3.5:9b": fmt.Errorf("endpoint rejected the request (HTTP 500)")}}
-	_, _ = verifyOllamaInference(demoted, shellEnv{ollamaInferenceProbe: f2.probe}, io.Discard)
+	_, _ = verifyOllamaInference(demoted, shellEnv{System: &systest.Fake{}, ollamaInferenceProbe: f2.probe}, io.Discard)
 	if got := legacyVerifiedOllamaBindings(demoted); len(got) != 0 {
 		t.Fatalf("the row must clear on demotion too: %v", got)
 	}
@@ -573,7 +569,7 @@ func TestInferenceStepPrintsNothingOnFullSuccess(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
 	f := &fakeProber{}
 	var out bytes.Buffer
-	if err := runSetupInferenceStep(cfg, shellEnv{ollamaInferenceProbe: f.probe}, strings.NewReader(""), &out, false, setupModelsOutcome{consent: "none"}); err != nil {
+	if err := runSetupInferenceStep(cfg, shellEnv{System: &systest.Fake{}, ollamaInferenceProbe: f.probe}, strings.NewReader(""), &out, false, setupModelsOutcome{consent: "none"}); err != nil {
 		t.Fatal(err)
 	}
 	s := out.String()
@@ -597,7 +593,7 @@ func TestDeclinedPullLeavesNoCallableModelAndExitsZero(t *testing.T) {
 	// thing is what this change deletes — "no prober" and "the prober said no"
 	// are different facts, and only the second is what a declined pull produces.
 	refuses := &fakeProber{fail: map[string]error{"qwen3.5:9b": fmt.Errorf("model not found")}}
-	err := runSetupInferenceStep(cfg, shellEnv{ollamaInferenceProbe: refuses.probe}, strings.NewReader(""), &out, false, setupModelsOutcome{consent: "prompt-no"})
+	err := runSetupInferenceStep(cfg, shellEnv{System: &systest.Fake{}, ollamaInferenceProbe: refuses.probe}, strings.NewReader(""), &out, false, setupModelsOutcome{consent: "prompt-no"})
 	if err != nil {
 		t.Fatalf("a declined pull must not fail setup: %v", err)
 	}
@@ -619,7 +615,7 @@ func TestOllamaCloudSelectedWithZeroVerifiedFailsSetup(t *testing.T) {
 		"deepseek-v4-pro:cloud": fmt.Errorf("endpoint rejected the request (HTTP 401)"),
 	}}
 	var out bytes.Buffer
-	err := runSetupInferenceStep(cfg, shellEnv{ollamaInferenceProbe: f.probe}, strings.NewReader(""), &out, false, setupModelsOutcome{consent: "none"})
+	err := runSetupInferenceStep(cfg, shellEnv{System: &systest.Fake{}, ollamaInferenceProbe: f.probe}, strings.NewReader(""), &out, false, setupModelsOutcome{consent: "none"})
 	if err == nil {
 		t.Fatal("cloud selected with zero verified models must fail setup")
 	}
@@ -729,8 +725,8 @@ func TestEmptyOllamaSelectionPersistsNothing(t *testing.T) {
 			// one, and the 24 GB floor is a TOTAL-RAM rule, so it fires identically
 			// whichever usable-fraction applies.
 			env := hwMemEnv(t, runtime.GOOS, tc.totalGB)
-			base := env.run
-			env.run = func(name string, args ...string) (string, error) {
+			base := env.fake().RunFn
+			env.fake().RunFn = func(name string, args ...string) (string, error) {
 				if name == "ollama" && len(args) == 1 && args[0] == "list" {
 					return tc.listing, nil
 				}

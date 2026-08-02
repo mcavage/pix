@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/sys"
 	"strconv"
 	"strings"
 	"time"
@@ -302,7 +303,7 @@ func requiredServePorts(st serveStarter, cfg *config.Config, requested []string)
 	if len(requested) == 0 {
 		requested = cfg.Services
 	}
-	env := shellEnv{getenv: st.getenv}
+	env := sys.GetenvFunc(st.getenv)
 	var out []servePortSpec
 	seen := map[string]bool{}
 	for _, s := range requested {
@@ -408,9 +409,9 @@ func staleServeVersion(cfg *config.Config, env shellEnv, requested []string, pro
 	if cfg == nil || probe == nil {
 		return "", false
 	}
-	st := serveStarter{getenv: env.getenv}
+	st := serveStarter{getenv: env.Getenv}
 	for _, p := range requiredServePorts(st, cfg, requested) {
-		if env.dial != nil && !env.dial(p.port) {
+		if !env.DialLocal(p.port) {
 			continue
 		}
 		id, err := probe(p.port)

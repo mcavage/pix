@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 // fakeEnv builds a shellEnv from a set of present binaries, canned command
@@ -33,44 +34,37 @@ type fakeEnv struct {
 }
 
 func (f fakeEnv) env() shellEnv {
-	return shellEnv{
-		lookPath: func(name string) (string, error) {
-			if f.present[name] {
-				return "/usr/bin/" + name, nil
-			}
-			return "", fmt.Errorf("exec: %q not found", name)
-		},
-		run: func(name string, args ...string) (string, error) {
-			key := strings.Join(append([]string{name}, args...), " ")
-			if out, ok := f.output[key]; ok {
-				return out, nil
-			}
-			return "", fmt.Errorf("no fake output for %q", key)
-		},
-		getenv:   func(name string) string { return f.envVars[name] },
-		dial:     func(port int) bool { return f.ports[port] },
-		statFile: func(path string) bool { return f.statFile[path] },
-		readFile: func(path string) (string, error) {
-			if s, ok := f.files[path]; ok {
-				return s, nil
-			}
-			return "", fmt.Errorf("no fake file %q", path)
-		},
-		homeDir: func() string { return f.home },
-		fileMode: func(path string) (os.FileMode, bool) {
-			if m, ok := f.modes[path]; ok {
-				return m, true
-			}
-			return 0, false
-		},
-		hostBinary: func() (string, error) {
-			if f.hostBin != "" {
-				return f.hostBin, nil
-			}
-			return "", fmt.Errorf("pix-host not found")
-		},
-		identityProbe: f.identityProbe,
-	}
+	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		if f.present[name] {
+			return "/usr/bin/" + name, nil
+		}
+		return "", fmt.Errorf("exec: %q not found", name)
+	}, RunFn: func(name string, args ...string) (string, error) {
+		key := strings.Join(append([]string{name}, args...), " ")
+		if out, ok := f.output[key]; ok {
+			return out, nil
+		}
+		return "", fmt.Errorf("no fake output for %q", key)
+	}, GetenvFn: func(name string) string { return f.envVars[name] }, DialLocalFn: func(port int) bool { return f.ports[port] }, IsFileFn: func(path string) bool { return f.statFile[path] }, ReadFileFn: func(path string) (string, error) {
+		if s, ok := f.files[path]; ok {
+			return s, nil
+		}
+		// An undeclared file means ABSENT, not an I/O error. The distinction was
+		// invisible while a nil readFile seam skipped the read entirely; now that
+		// the seam is always present, every caller reaches it, and they all
+		// already handle os.ErrNotExist.
+		return "", os.ErrNotExist
+	}, HomeDirFn: func() string { return f.home }, ModeFn: func(path string) (os.FileMode, bool) {
+		if m, ok := f.modes[path]; ok {
+			return m, true
+		}
+		return 0, false
+	}}, hostBinary: func() (string, error) {
+		if f.hostBin != "" {
+			return f.hostBin, nil
+		}
+		return "", fmt.Errorf("pix-host not found")
+	}, identityProbe: f.identityProbe}
 }
 
 // identityFake builds an identityProber from a fixed port->result map: any
@@ -372,9 +366,9 @@ func TestDoctor_GogAttachDespiteMissingExecutable(t *testing.T) {
 		},
 	}
 	env := f.env()
-	env.getwd = func() (string, error) { return ws, nil }
+	env.fake().GetwdFn = func() (string, error) { return ws, nil }
 	stateDir := t.TempDir()
-	env.stateDir = func() (string, error) { return stateDir, nil }
+	env.fake().StateDirFn = func() (string, error) { return stateDir, nil }
 	if err := writeCreateReceipt(stateDir, box, ws, []string{gwServerName}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
@@ -1078,8 +1072,8 @@ func TestDoctor_MCPUnrecognizedCommand(t *testing.T) {
 	})
 	// Wrap the fake run so an attempt to exec the untrusted command fails loudly.
 	env := f.env()
-	inner := env.run
-	env.run = func(name string, args ...string) (string, error) {
+	inner := env.fake().RunFn
+	env.fake().RunFn = func(name string, args ...string) (string, error) {
 		if name == "/bin/rm" {
 			t.Fatalf("doctor exec'd an unrecognized registered command: %s %v", name, args)
 		}

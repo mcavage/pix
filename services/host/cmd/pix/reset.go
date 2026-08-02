@@ -139,14 +139,10 @@ var (
 // (not config.DataDir()) so tests stay hermetic.
 func resolveResetPaths(env shellEnv) resetPaths {
 	home := ""
-	if env.homeDir != nil {
-		home = env.homeDir()
-	}
+	home = env.HomeDir()
 	var dataRoot string
-	if env.getenv != nil {
-		if xdg := strings.TrimSpace(env.getenv("XDG_DATA_HOME")); xdg != "" {
-			dataRoot = filepath.Join(xdg, "pix")
-		}
+	if xdg := strings.TrimSpace(env.Getenv("XDG_DATA_HOME")); xdg != "" {
+		dataRoot = filepath.Join(xdg, "pix")
 	}
 	if dataRoot == "" {
 		dataRoot = filepath.Join(home, ".local", "share", "pix")
@@ -155,26 +151,24 @@ func resolveResetPaths(env shellEnv) resetPaths {
 	knowledgeDir := filepath.Join(dataRoot, "knowledge")
 	memoryDB := ""
 	knowledgeDB := ""
-	if env.getenv != nil {
-		// Normalize custom db paths to ABSOLUTE at the source so every downstream
-		// comparison (dir-move vs file-only, the --keep-memory preserve set, the
-		// sweep) agrees. A relative MEMORY_DB (e.g. run from $HOME with
-		// MEMORY_DB=.pix/x.db) would otherwise leave relative preserve keys
-		// that never match the sweep's absolute entries -> memory swept aside.
-		if db := strings.TrimSpace(env.getenv("MEMORY_DB")); db != "" {
-			if abs, err := filepath.Abs(db); err == nil {
-				db = abs
-			}
-			memoryDir = filepath.Dir(db)
-			memoryDB = db
+	// Normalize custom db paths to ABSOLUTE at the source so every downstream
+	// comparison (dir-move vs file-only, the --keep-memory preserve set, the
+	// sweep) agrees. A relative MEMORY_DB (e.g. run from $HOME with
+	// MEMORY_DB=.pix/x.db) would otherwise leave relative preserve keys
+	// that never match the sweep's absolute entries -> memory swept aside.
+	if db := strings.TrimSpace(env.Getenv("MEMORY_DB")); db != "" {
+		if abs, err := filepath.Abs(db); err == nil {
+			db = abs
 		}
-		if db := strings.TrimSpace(env.getenv("KNOWLEDGE_DB")); db != "" {
-			if abs, err := filepath.Abs(db); err == nil {
-				db = abs
-			}
-			knowledgeDir = filepath.Dir(db)
-			knowledgeDB = db
+		memoryDir = filepath.Dir(db)
+		memoryDB = db
+	}
+	if db := strings.TrimSpace(env.Getenv("KNOWLEDGE_DB")); db != "" {
+		if abs, err := filepath.Abs(db); err == nil {
+			db = abs
 		}
+		knowledgeDir = filepath.Dir(db)
+		knowledgeDB = db
 	}
 	return resetPaths{
 		configDir:    filepath.Dir(config.Path()),
@@ -410,13 +404,11 @@ func underDir(path, dir string) bool {
 // knowledge-only serve still holds a live sqlite writer under the data root, so
 // checking only the memory port would let its db be split mid-move.
 func serveStillUp(env shellEnv) bool {
-	if env.dial == nil {
-		return false
-	}
-	if env.dial(servePort(env, "MEMORY_PORT", memoryPortDefault)) {
+
+	if env.DialLocal(servePort(env, "MEMORY_PORT", memoryPortDefault)) {
 		return true
 	}
-	return env.dial(servePort(env, "KNOWLEDGE_PORT", knowledgePortDefault))
+	return env.DialLocal(servePort(env, "KNOWLEDGE_PORT", knowledgePortDefault))
 }
 
 // executeReset performs the plan: stop services (best-effort), move each backup
@@ -636,10 +628,8 @@ func stopHostServices(_ shellEnv, out io.Writer) {
 func executeSbxReset(a resetActions, env shellEnv, out io.Writer) {
 	fmt.Fprintln(out, "Sandboxes + MCP (sbx):")
 	haveSbx := false
-	if env.lookPath != nil {
-		_, err := env.lookPath("sbx")
-		haveSbx = err == nil
-	}
+	_, err := env.LookPath("sbx")
+	haveSbx = err == nil
 	if !haveSbx {
 		fmt.Fprintln(out, "  · sbx not found — run these on your host:")
 		fmt.Fprintln(out, "      sbx ls   # then: sbx rm -f <each pix-* sandbox>")
@@ -651,14 +641,14 @@ func executeSbxReset(a resetActions, env shellEnv, out io.Writer) {
 	// Remove each pix-* sandbox parsed from `sbx ls`. The LISTING is a
 	// read-only probe and BOUNDED (probeRun) — a hung sbx degrades to the
 	// failed-listing message; the `sbx rm -f` removals below are mutating
-	// lifecycle commands and stay on env.run.
-	if lsOut, timedOut, err := probeRun(env, "sbx", "ls"); err == nil && !timedOut {
+	// lifecycle commands and stay on env.Run.
+	if lsOut, timedOut, err := env.RunTimed("sbx", "ls"); err == nil && !timedOut {
 		boxes := parseSandboxes(lsOut)
 		if len(boxes) == 0 {
 			fmt.Fprintln(out, "  · no pix-* sandboxes to remove")
 		}
 		for _, sb := range boxes {
-			if _, err := env.run("sbx", "rm", "-f", sb.Name); err != nil {
+			if _, err := env.Run("sbx", "rm", "-f", sb.Name); err != nil {
 				// Removal FAILED (or unknowable): the receipt is RETAINED —
 				// evidence is discarded only on positive proof of removal.
 				fmt.Fprintf(out, "  ✗ sbx rm -f %s — %v\n", sb.Name, err)
@@ -681,7 +671,7 @@ func executeSbxReset(a resetActions, env shellEnv, out io.Writer) {
 	// confirmed from inside a sandbox (no sbx there); `sbx mcp rm <name>` is the
 	// expected form — if your sbx differs, run the printed command by hand.
 	for _, name := range a.MCPRemove {
-		if _, err := env.run("sbx", "mcp", "rm", name); err != nil {
+		if _, err := env.Run("sbx", "mcp", "rm", name); err != nil {
 			fmt.Fprintf(out, "  ✗ sbx mcp rm %s — %v (run it yourself if the verb differs)\n", name, err)
 		} else {
 			fmt.Fprintf(out, "  ✓ unregistered MCP %s\n", name)
@@ -835,9 +825,7 @@ func runReset(argv []string) {
 // + pix-host) from the injected env's home dir.
 func resolveBinPaths(env shellEnv) []string {
 	home := ""
-	if env.homeDir != nil {
-		home = env.homeDir()
-	}
+	home = env.HomeDir()
 	bin := filepath.Join(home, ".local", "bin")
 	return []string{
 		filepath.Join(bin, "pix"),
@@ -945,10 +933,10 @@ func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts 
 		fmt.Fprintln(rio.out, "State and managed services were removed first. Finish with:")
 		fmt.Fprintln(rio.out, "  brew uninstall mcavage/tap/pix")
 		fmt.Fprintln(rio.out, "Removing the formula first leaves launchd configured with a Cellar path that fails on its next launch.")
-		if rio.isTTY && env.runInteractive != nil {
+		if rio.isTTY {
 			ans := strings.ToLower(promptLine(rio, "Run brew uninstall now? [y/N]: "))
 			if ans == "y" || ans == "yes" {
-				if err := env.runInteractive("brew", "uninstall", "mcavage/tap/pix"); err != nil {
+				if err := env.RunInteractive("brew", "uninstall", "mcavage/tap/pix"); err != nil {
 					return fmt.Errorf("brew uninstall failed: %w", err)
 				}
 			}
@@ -967,9 +955,7 @@ func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts 
 // file is fine and never fails the uninstall.
 func removeInstalledManPage(env shellEnv, fsys resetFS, out io.Writer) {
 	home := ""
-	if env.homeDir != nil {
-		home = env.homeDir()
-	}
+	home = env.HomeDir()
 	p := filepath.Join(home, ".local", "share", "man", "man1", "pix.1")
 	if _, err := fsys.lstat(p); err != nil {
 		if !os.IsNotExist(err) {

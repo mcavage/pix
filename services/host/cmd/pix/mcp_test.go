@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"pix/host/sys"
+	"pix/host/sys/systest"
 	"strings"
 	"testing"
 )
@@ -287,11 +289,11 @@ func TestRegisterServers_RemoteURLUsesInteractiveRunner(t *testing.T) {
 		output:  map[string]string{"/usr/bin/pix-host mcp --list": "slack\n"},
 	}.env()
 	var interactive []string
-	env.runInteractive = func(name string, args ...string) error {
+	env.fake().RunInteractiveFn = func(name string, args ...string) error {
 		interactive = append([]string{name}, args...)
 		return nil
 	}
-	env.probe = func(name string, args ...string) (string, bool, error) {
+	env.fake().RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		if name == "sbx" && len(args) >= 2 && args[1] == "add" {
 			t.Fatalf("remote OAuth registration was sent through the bounded probe: %s %s", name, strings.Join(args, " "))
 		}
@@ -315,7 +317,7 @@ func TestRegisterServers_RemoteURLUsesInteractiveRunner(t *testing.T) {
 func TestRegisterServers_CurrentRemoteDoesNotReopenOAuth(t *testing.T) {
 	endpoint := "https://app.trymeetings.com/mcp"
 	env := fakeEnv{present: map[string]bool{"sbx": true}}.env()
-	env.probe = func(name string, args ...string) (string, bool, error) {
+	env.fake().RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		command := strings.Join(args, " ")
 		if name == "sbx" && command == "mcp inspect meetings" {
 			return "URL: " + endpoint, false, nil
@@ -325,7 +327,7 @@ func TestRegisterServers_CurrentRemoteDoesNotReopenOAuth(t *testing.T) {
 		}
 		return "slack\n", false, nil
 	}
-	env.runInteractive = func(string, ...string) error {
+	env.fake().RunInteractiveFn = func(string, ...string) error {
 		t.Fatal("an unchanged registered remote must not reopen OAuth")
 		return nil
 	}
@@ -341,7 +343,7 @@ func TestRegisterServers_CurrentUnauthorizedRemoteRepairsOAuthOnce(t *testing.T)
 	endpoint := "https://app.trymeetings.com/mcp"
 	authorized := false
 	env := fakeEnv{present: map[string]bool{"sbx": true}}.env()
-	env.probe = func(name string, args ...string) (string, bool, error) {
+	env.fake().RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		command := strings.Join(args, " ")
 		switch command {
 		case "mcp inspect meetings":
@@ -356,7 +358,7 @@ func TestRegisterServers_CurrentUnauthorizedRemoteRepairsOAuthOnce(t *testing.T)
 		}
 	}
 	var interactive []string
-	env.runInteractive = func(name string, args ...string) error {
+	env.fake().RunInteractiveFn = func(name string, args ...string) error {
 		interactive = append([]string{name}, args...)
 		authorized = true
 		return nil
@@ -374,9 +376,9 @@ func TestRegisterServers_CurrentUnauthorizedRemoteRepairsOAuthOnce(t *testing.T)
 
 func TestRemoteMCPRegistrationCurrentRejectsEndpointSubstring(t *testing.T) {
 	want := "https://expected.example/mcp"
-	env := shellEnv{probe: func(string, ...string) (string, bool, error) {
+	env := shellEnv{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
 		return `{"url":"https://evil.example/?next=https://expected.example/mcp"}`, false, nil
-	}}
+	}}}
 	if remoteMCPRegistrationCurrent(env, "meetings", want) {
 		t.Fatal("an endpoint embedded inside another URL must not count as the registered endpoint")
 	}
@@ -390,7 +392,7 @@ func TestRemoteMCPRegistrationCurrentRequiresEndpointField(t *testing.T) {
 		`{"url":"https://evil.example/mcp","nested":{"endpoint":"https://expected.example/mcp?a=1&b=2"}}`,
 		`url: https://evil.example/?next=https://expected.example/mcp?a=1&b=2`,
 	} {
-		env := shellEnv{probe: func(string, ...string) (string, bool, error) { return payload, false, nil }}
+		env := shellEnv{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) { return payload, false, nil }}}
 		if remoteMCPRegistrationCurrent(env, "meetings", want) {
 			t.Fatalf("non-endpoint evidence was trusted: %s", payload)
 		}
@@ -399,9 +401,9 @@ func TestRemoteMCPRegistrationCurrentRequiresEndpointField(t *testing.T) {
 
 func TestRemoteMCPRegistrationCurrentCanonicalExactMatch(t *testing.T) {
 	want := "https://expected.example/mcp?b=2&a=1"
-	env := shellEnv{probe: func(string, ...string) (string, bool, error) {
+	env := shellEnv{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
 		return `{"server":{"remote_url":"HTTPS://EXPECTED.EXAMPLE:443/mcp?a=1&b=2"}}`, false, nil
-	}}
+	}}}
 	if !remoteMCPRegistrationCurrent(env, "meetings", want) {
 		t.Fatal("canonically identical endpoint field was not recognized")
 	}
@@ -652,14 +654,19 @@ func TestBuildGogRegistrarIgnoresUnrelatedOpRefs(t *testing.T) {
 	if err := os.WriteFile(refs, []byte("EXAMPLE_API_KEY=op://Private/Example/key\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := defaultShellEnv()
-	env.lookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
-	env.getenv = func(key string) string {
-		if key == "PIX_CONFIG" {
-			return filepath.Join(dir, "config.toml")
-		}
-		return ""
-	}
+	// Real OS (this test writes actual files into dir), with two seams faked.
+	// systest.Base makes that intent explicit instead of it being a side effect
+	// of which fields happened to be left nil.
+	env := shellEnv{System: &systest.Fake{
+		Base:       sys.Real{},
+		LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		GetenvFn: func(key string) string {
+			if key == "PIX_CONFIG" {
+				return filepath.Join(dir, "config.toml")
+			}
+			return ""
+		},
+	}}
 	reg := buildGogRegistrar(env, "/usr/bin/gog", "you@example.com")
 	if reg.opRefs != "" || strings.HasSuffix(reg.execArgv(gwServerName)[0], "/op") {
 		t.Fatalf("unrelated refs wrapped gog: %+v", reg.execArgv(gwServerName))

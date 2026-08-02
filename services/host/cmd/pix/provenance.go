@@ -165,18 +165,16 @@ func pathShadowIssue(name, self string, getenv func(string) string) string {
 
 func installDuplicatesGroup(env shellEnv) group {
 	g := group{title: "Installation"}
-	if env.executable == nil || env.getenv == nil {
-		return g
-	}
-	self, err := env.executable()
+
+	self, err := env.Executable()
 	if err == nil {
-		if warning := pathShadowIssue("pix", self, env.getenv); warning != "" {
+		if warning := pathShadowIssue("pix", self, env.Getenv); warning != "" {
 			g.checks = append(g.checks, check{label: "pix PATH", detail: warning, evidence: warning, verdict: verdictTodo})
 		}
 	}
 	if env.hostBinary != nil {
 		if host, err := env.hostBinary(); err == nil {
-			if warning := pathShadowIssue("pix-host", host, env.getenv); warning != "" {
+			if warning := pathShadowIssue("pix-host", host, env.Getenv); warning != "" {
 				g.checks = append(g.checks, check{label: "host PATH", detail: warning, evidence: warning, verdict: verdictTodo})
 			}
 		}

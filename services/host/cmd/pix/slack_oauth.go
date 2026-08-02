@@ -405,13 +405,8 @@ func slackPrintAttachmentNote(out io.Writer) {
 // already existed, so the caller can decide whether a later failure may roll
 // a NEW registration back (never a pre-existing one).
 func slackRegistrationPreflight(env shellEnv) (wasRegistered bool, err error) {
-	if env.run == nil {
-		return false, fmt.Errorf("internal: shellEnv.run not wired")
-	}
-	if env.lookPath == nil {
-		return false, fmt.Errorf("internal: shellEnv.lookPath not wired")
-	}
-	if _, err := env.lookPath("sbx"); err != nil {
+
+	if _, err := env.LookPath("sbx"); err != nil {
 		return false, fmt.Errorf("sbx not found: pix slack setup requires sbx to register the MCP server; install it, then re-run this command")
 	}
 	wasRegistered, err = slackRegistrationPresence(env)
@@ -451,7 +446,7 @@ func slackRegisterAndSave(cfg *config.Config, env shellEnv, out io.Writer, hostR
 			}
 			return fmt.Errorf("saving config: %w (the pre-existing slack registration was left in place)", err)
 		}
-		if _, rerr := env.run("sbx", "mcp", "rm", slackServerName); rerr != nil {
+		if _, rerr := env.Run("sbx", "mcp", "rm", slackServerName); rerr != nil {
 			if extra != "" {
 				return fmt.Errorf("saving config: %w; additionally, rollback of the %s registration failed: %v; fix by hand (sbx mcp rm %s); %s",
 					err, slackServerName, rerr, slackServerName, extra)
@@ -762,10 +757,8 @@ func slackOAuthRuntime(cfg *config.Config, env shellEnv, deps slackOAuthRuntimeD
 	if !slackOAuthConfigComplete(cfg) {
 		return nil, nil, false
 	}
-	if env.stateDir == nil {
-		return nil, nil, false
-	}
-	sd, err := env.stateDir()
+
+	sd, err := env.StateDir()
 	if err != nil || strings.TrimSpace(sd) == "" {
 		return nil, nil, false
 	}
@@ -994,10 +987,8 @@ func slackDisableOAuth(cfg *config.Config, env shellEnv, out io.Writer, deps sla
 	fmt.Fprintln(out, "  archived the 1Password document")
 
 	if registered {
-		if env.run == nil {
-			return fmt.Errorf("internal: shellEnv.run not wired")
-		}
-		if _, err := env.run("sbx", "mcp", "rm", slackServerName); err != nil {
+
+		if _, err := env.Run("sbx", "mcp", "rm", slackServerName); err != nil {
 			return fmt.Errorf("removing the %s registration: %w (the token was revoked and the 1Password document archived; remove the registration by hand: sbx mcp rm %s)",
 				slackServerName, err, slackServerName)
 		}

@@ -36,10 +36,8 @@ func gogAccount(cfg *config.Config, env shellEnv) string {
 			return a
 		}
 	}
-	if env.getenv != nil {
-		if a := strings.TrimSpace(env.getenv("GOG_ACCOUNT")); a != "" {
-			return a
-		}
+	if a := strings.TrimSpace(env.Getenv("GOG_ACCOUNT")); a != "" {
+		return a
 	}
 	return ""
 }
@@ -85,14 +83,12 @@ func gogHeadlessProbe(env shellEnv, acct, opRefs string) probeResult {
 	if acct == "" {
 		return probeResult{status: probeError, detail: "could not run (account unresolved)"}
 	}
-	if env.lookPath == nil {
-		return probeResult{status: probeError, detail: "could not run (no lookPath)"}
-	}
-	gogPath, err := env.lookPath("gog")
+
+	gogPath, err := env.LookPath("gog")
 	if err != nil {
 		return probeResult{status: probeError, detail: "could not run (gog not found)"}
 	}
-	opPath, opErr := env.lookPath("op")
+	opPath, opErr := env.LookPath("op")
 	if opErr != nil || opRefs == "" || !opRefFilled(env, "GOG_KEYRING_PASSWORD") {
 		opPath, opRefs = "", ""
 	}
@@ -202,7 +198,7 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 	// whether the gateway already has gog registered, or whether a sandbox's
 	// receipt already proves it attached — dropping those checks here would
 	// silently hide real, independently-verifiable evidence.
-	if _, err := env.lookPath("gog"); err != nil {
+	if _, err := env.LookPath("gog"); err != nil {
 		g.checks = append(g.checks, check{label: "dependency CLI", note: true, verdict: verdictUnverifiable,
 			detail: "not installed — optional; set up Google Workspace with: " + gogSetupHint})
 		g.checks = append(g.checks, gogRegistrationCheck(mcpOut, mcpOK, sbxPresent))
@@ -267,8 +263,8 @@ func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent
 	// 2. account authorized (interactive). 3. THE GOTCHA — headless spawn. The
 	// auth check runs through the BOUNDED probe machinery so a hung `gog auth
 	// doctor --check` can never wedge doctor.
-	_, interTimedOut, interErr := probeRun(env, "gog", "--account", acct, "auth", "doctor", "--check")
-	_, opErr := env.lookPath("op")
+	_, interTimedOut, interErr := env.RunTimed("gog", "--account", acct, "auth", "doctor", "--check")
+	_, opErr := env.LookPath("op")
 	head := gogHeadlessProbe(env, acct, opRefs)
 	switch {
 	case interTimedOut:
@@ -379,28 +375,25 @@ func gogSpawnIsOpWrapped(argv []string) bool {
 // the best-effort reconstruction. Every discovery subprocess is BOUNDED
 // (probeRun) so a hung sbx can never wedge the caller.
 func registeredGogCommand(env shellEnv) ([]string, bool) {
-	if env.lookPath == nil || (env.run == nil && env.probe == nil) {
+	if _, err := env.LookPath("sbx"); err != nil {
 		return nil, false
 	}
-	if _, err := env.lookPath("sbx"); err != nil {
-		return nil, false
-	}
-	if out, timedOut, err := probeRun(env, "sbx", "mcp", "inspect", gwServerName); err == nil && !timedOut {
+	if out, timedOut, err := env.RunTimed("sbx", "mcp", "inspect", gwServerName); err == nil && !timedOut {
 		if argv, ok := parseGogCommandLine(env, out); ok {
 			return argv, true
 		}
 	}
-	if out, timedOut, err := probeRun(env, "sbx", "mcp", "get", gwServerName); err == nil && !timedOut {
+	if out, timedOut, err := env.RunTimed("sbx", "mcp", "get", gwServerName); err == nil && !timedOut {
 		if argv, ok := parseGogCommandLine(env, out); ok {
 			return argv, true
 		}
 	}
-	if out, timedOut, err := probeRun(env, "sbx", "mcp", "ls", "-o", "json"); err == nil && !timedOut {
+	if out, timedOut, err := env.RunTimed("sbx", "mcp", "ls", "-o", "json"); err == nil && !timedOut {
 		if argv, ok := parseGogCommandJSON(env, out); ok {
 			return argv, true
 		}
 	}
-	if out, timedOut, err := probeRun(env, "sbx", "mcp", "ls"); err == nil && !timedOut {
+	if out, timedOut, err := env.RunTimed("sbx", "mcp", "ls"); err == nil && !timedOut {
 		if argv, ok := parseGogCommandTable(env, out); ok {
 			return argv, true
 		}

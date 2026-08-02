@@ -140,10 +140,8 @@ func hasPlaceholder(val string) bool {
 
 // opInstalled reports whether the 1Password CLI (op) is on PATH.
 func opInstalled(env shellEnv) bool {
-	if env.lookPath == nil {
-		return false
-	}
-	_, err := env.lookPath("op")
+
+	_, err := env.LookPath("op")
 	return err == nil
 }
 
@@ -153,10 +151,10 @@ func opInstalled(env shellEnv) bool {
 // is unlocked/usable. Best-effort: any error is "no account configured", never a
 // crash.
 func opSignedIn(env shellEnv) bool {
-	if !opInstalled(env) || env.run == nil {
+	if !opInstalled(env) {
 		return false
 	}
-	out, err := env.run("op", "account", "list")
+	out, err := env.Run("op", "account", "list")
 	return err == nil && strings.TrimSpace(out) != ""
 }
 
@@ -164,10 +162,8 @@ func opSignedIn(env shellEnv) bool {
 // its path, contents, and whether it exists.
 func opRefsContent(env shellEnv) (path, content string, exists bool) {
 	path = defaultOpRefsPath(env)
-	if env.readFile == nil {
-		return path, "", false
-	}
-	c, err := env.readFile(path)
+
+	c, err := env.ReadFile(path)
 	if err != nil {
 		return path, "", false
 	}
@@ -315,17 +311,15 @@ func runSecretSetLocked(env shellEnv, out io.Writer, key, value string) error {
 	path := defaultOpRefsPath(env)
 	content := ""
 	exists := false
-	if env.readFile != nil {
-		c, err := env.readFile(path)
-		switch {
-		case err == nil:
-			content, exists = c, true
-		case os.IsNotExist(err):
-			// A missing refs file is seeded below.
-		default:
-			fmt.Fprintf(out, "pix secret set: could not read %s: %v\n", path, err)
-			return fmt.Errorf("read %s: %w", path, err)
-		}
+	c, err := env.ReadFile(path)
+	switch {
+	case err == nil:
+		content, exists = c, true
+	case os.IsNotExist(err):
+		// A missing refs file is seeded below.
+	default:
+		fmt.Fprintf(out, "pix secret set: could not read %s: %v\n", path, err)
+		return fmt.Errorf("read %s: %w", path, err)
 	}
 	if !exists {
 		seededPath, _, err := config.SeedOpRefs()
@@ -335,20 +329,15 @@ func runSecretSetLocked(env shellEnv, out io.Writer, key, value string) error {
 		}
 		path = seededPath
 		content = config.OpRefsTemplate
-		if env.readFile != nil {
-			if c, err := env.readFile(path); err == nil {
-				content = c
-			}
+		if c, err := env.ReadFile(path); err == nil {
+			content = c
 		}
 	}
 	content, _ = repairLegacyOpRefsTemplate(content)
 
 	newContent := upsertOpRef(content, key, value)
-	if env.writeFile == nil {
-		fmt.Fprintf(out, "pix secret set: cannot write %s (no writer available)\n", path)
-		return fmt.Errorf("no writer available for %s", path)
-	}
-	if err := env.writeFile(path, []byte(newContent), 0o600); err != nil {
+
+	if err := env.WriteFile(path, []byte(newContent), 0o600); err != nil {
 		fmt.Fprintf(out, "pix secret set: could not write %s: %v\n", path, err)
 		return fmt.Errorf("write %s: %w", path, err)
 	}
@@ -391,7 +380,7 @@ func runSecretSetLocked(env shellEnv, out io.Writer, key, value string) error {
 // fully undoes what `secret set` did in BOTH files, never leaving a stale
 // key in one of them. A non-provider key is unchanged: op-refs.env only.
 //
-// Every write goes through env.writeFile, which for the real CLI
+// Every write goes through env.WriteFile, which for the real CLI
 // (defaultShellEnv) is symlink-safe and atomic (a same-directory temp file +
 // rename, so a symlinked leaf is replaced rather than followed/truncated —
 // see atomicWriteInDir). A partial failure (one file's removal succeeds, the
@@ -422,27 +411,22 @@ func runSecretRmLocked(env shellEnv, out io.Writer, key string) error {
 	path := defaultOpRefsPath(env)
 	content := ""
 	exists := false
-	if env.readFile != nil {
-		c, err := env.readFile(path)
-		switch {
-		case err == nil:
-			content, exists = c, true
-		case os.IsNotExist(err):
-			// Missing is an idempotent no-op unless hostmode.env has the key.
-		default:
-			fmt.Fprintf(out, "pix secret rm: could not read %s: %v\n", path, err)
-			return fmt.Errorf("read %s: %w", path, err)
-		}
+	c, err := env.ReadFile(path)
+	switch {
+	case err == nil:
+		content, exists = c, true
+	case os.IsNotExist(err):
+		// Missing is an idempotent no-op unless hostmode.env has the key.
+	default:
+		fmt.Fprintf(out, "pix secret rm: could not read %s: %v\n", path, err)
+		return fmt.Errorf("read %s: %w", path, err)
 	}
 	opRemoved := false
 	if exists {
 		newContent, removed := removeOpRef(content, key)
 		if removed {
-			if env.writeFile == nil {
-				fmt.Fprintf(out, "pix secret rm: cannot write %s (no writer available)\n", path)
-				return fmt.Errorf("no writer available for %s", path)
-			}
-			if err := env.writeFile(path, []byte(newContent), 0o600); err != nil {
+
+			if err := env.WriteFile(path, []byte(newContent), 0o600); err != nil {
 				fmt.Fprintf(out, "pix secret rm: could not write %s: %v\n", path, err)
 				return err
 			}
@@ -452,17 +436,14 @@ func runSecretRmLocked(env shellEnv, out io.Writer, key string) error {
 
 	hmPath := hostModeRefsPath(env)
 	hmRemoved := false
-	if _, isProviderKey := providerKeyRefs[key]; isProviderKey && env.readFile != nil {
-		hmContent, rerr := env.readFile(hmPath)
+	if _, isProviderKey := providerKeyRefs[key]; isProviderKey {
+		hmContent, rerr := env.ReadFile(hmPath)
 		switch {
 		case rerr == nil:
 			newHm, removed := removeOpRef(hmContent, key)
 			if removed {
-				if env.writeFile == nil {
-					fmt.Fprintf(out, "pix secret rm: cannot write %s (no writer available)\n", hmPath)
-					return fmt.Errorf("no writer available for %s", hmPath)
-				}
-				if err := env.writeFile(hmPath, []byte(newHm), 0o600); err != nil {
+
+				if err := env.WriteFile(hmPath, []byte(newHm), 0o600); err != nil {
 					fmt.Fprintf(out, "pix secret rm: removed %s from %s, but could not remove it from %s: %v — host mode still has this key until you fix that\n", key, path, hmPath, err)
 					return fmt.Errorf("remove %s from hostmode.env: %w", key, err)
 				}
@@ -582,10 +563,8 @@ func repairLegacyOpRefsTemplate(content string) (string, bool) {
 }
 
 func repairLegacyOpRefsFile(env shellEnv, path string) error {
-	if env.readFile == nil || env.writeFile == nil {
-		return nil
-	}
-	content, err := env.readFile(path)
+
+	content, err := env.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -596,7 +575,7 @@ func repairLegacyOpRefsFile(env shellEnv, path string) error {
 	if !changed {
 		return nil
 	}
-	return env.writeFile(path, []byte(repaired), 0o600)
+	return env.WriteFile(path, []byte(repaired), 0o600)
 }
 
 // runSecretCheck resolves every op:// ref in op-refs.env with `op read` and
@@ -630,7 +609,7 @@ func runSecretCheck(env shellEnv, out io.Writer) {
 		}
 		// op read resolves the ref; we discard the value (stdout) and only look
 		// at the exit status, so no secret is ever printed.
-		if _, err := env.run("op", "read", r.value); err != nil {
+		if _, err := env.Run("op", "read", r.value); err != nil {
 			fmt.Fprintf(out, "  ✗ %s: FAIL\n", r.key)
 			failed++
 		} else {

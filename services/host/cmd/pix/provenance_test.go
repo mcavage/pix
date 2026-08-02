@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"pix/host/sys/systest"
 	"strings"
 	"testing"
 )
@@ -107,15 +108,12 @@ func TestInstallDuplicatesGroupSurfacesDoctorWarning(t *testing.T) {
 		}
 	}
 	self := filepath.Join(first, "pix")
-	env := shellEnv{
-		executable: func() (string, error) { return self, nil },
-		getenv: func(key string) string {
-			if key == "PATH" {
-				return first + string(os.PathListSeparator) + second
-			}
-			return ""
-		},
-	}
+	env := shellEnv{System: &systest.Fake{ExecutableFn: func() (string, error) { return self, nil }, GetenvFn: func(key string) string {
+		if key == "PATH" {
+			return first + string(os.PathListSeparator) + second
+		}
+		return ""
+	}}}
 	g := installDuplicatesGroup(env)
 	if len(g.checks) != 1 || g.checks[0].result() != verdictTodo {
 		t.Fatalf("group = %+v", g)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/sys/systest"
 	"strings"
 	"testing"
 )
@@ -13,26 +14,22 @@ import (
 // fakeSyncEnv builds a shellEnv whose op-refs.env content is fixed, op is
 // installed+signed-in, sbx is present, and op read returns a canned value.
 func fakeSyncEnv(refs string, opReadVal string, sbxSetErr error, capture *[]string) shellEnv {
-	return shellEnv{
-		readFile: func(string) (string, error) { return refs, nil },
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			if capture != nil {
-				*capture = append(*capture, name+" "+strings.Join(args, " "))
-			}
-			switch {
-			case name == "op" && len(args) >= 1 && args[0] == "--version":
-				return "2.0", nil
-			case name == "op" && len(args) >= 1 && args[0] == "account":
-				return "acct", nil // opSignedIn
-			case name == "op" && len(args) >= 1 && args[0] == "read":
-				return opReadVal, nil
-			case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "set":
-				return "", sbxSetErr
-			}
-			return "", nil
-		},
-	}
+	return shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return refs, nil }, LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		if capture != nil {
+			*capture = append(*capture, name+" "+strings.Join(args, " "))
+		}
+		switch {
+		case name == "op" && len(args) >= 1 && args[0] == "--version":
+			return "2.0", nil
+		case name == "op" && len(args) >= 1 && args[0] == "account":
+			return "acct", nil // opSignedIn
+		case name == "op" && len(args) >= 1 && args[0] == "read":
+			return opReadVal, nil
+		case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "set":
+			return "", sbxSetErr
+		}
+		return "", nil
+	}}}
 }
 
 func TestSyncProviderKeys_Success(t *testing.T) {
@@ -79,10 +76,7 @@ func TestSyncProviderKeysUsesFirstConflictingRef(t *testing.T) {
 }
 
 func TestSyncProviderKeys_OpMissing(t *testing.T) {
-	env := shellEnv{
-		readFile: func(string) (string, error) { return "ANTHROPIC_API_KEY=op://a/b/c\n", nil },
-		lookPath: func(name string) (string, error) { return "", fmt.Errorf("not found") },
-	}
+	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "ANTHROPIC_API_KEY=op://a/b/c\n", nil }, LookPathFn: func(name string) (string, error) { return "", fmt.Errorf("not found") }}}
 	var out bytes.Buffer
 	_, _, fatal := syncProviderKeys(env, &out)
 	if fatal == nil {
@@ -92,12 +86,12 @@ func TestSyncProviderKeys_OpMissing(t *testing.T) {
 
 func TestProviderKeyRefsPresent(t *testing.T) {
 	// filled provider ref -> present
-	env := shellEnv{readFile: func(string) (string, error) { return "ANTHROPIC_API_KEY=op://a/b/c\n", nil }}
+	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "ANTHROPIC_API_KEY=op://a/b/c\n", nil }}}
 	if !providerKeyRefsPresent(env) {
 		t.Error("filled anthropic ref should be present")
 	}
 	// only a non-provider ref -> not present
-	env2 := shellEnv{readFile: func(string) (string, error) { return "SLACK_TOKEN=op://a/b/c\n", nil }}
+	env2 := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "SLACK_TOKEN=op://a/b/c\n", nil }}}
 	if providerKeyRefsPresent(env2) {
 		t.Error("non-provider ref must not count as a provider key")
 	}
@@ -108,24 +102,20 @@ func TestProviderKeyRefsPresent(t *testing.T) {
 func TestEnsureProviderKeysFromRefs_OnlyMissing(t *testing.T) {
 	refs := "ANTHROPIC_API_KEY=op://P/anthropic/key\nGEMINI_API_KEY=op://P/gemini/key\n"
 	var calls []string
-	env := shellEnv{
-		readFile: func(string) (string, error) { return refs, nil },
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			calls = append(calls, name+" "+strings.Join(args, " "))
-			switch {
-			case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
-				return "anthropic\n", nil // anthropic already present; gemini/google missing
-			case name == "op" && len(args) >= 1 && args[0] == "--version":
-				return "2.0", nil
-			case name == "op" && len(args) >= 1 && args[0] == "account":
-				return "acct", nil
-			case name == "op" && len(args) >= 1 && args[0] == "read":
-				return "val\n", nil
-			}
-			return "", nil
-		},
-	}
+	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return refs, nil }, LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		switch {
+		case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
+			return "anthropic\n", nil // anthropic already present; gemini/google missing
+		case name == "op" && len(args) >= 1 && args[0] == "--version":
+			return "2.0", nil
+		case name == "op" && len(args) >= 1 && args[0] == "account":
+			return "acct", nil
+		case name == "op" && len(args) >= 1 && args[0] == "read":
+			return "val\n", nil
+		}
+		return "", nil
+	}}}
 	var out bytes.Buffer
 	ensureProviderKeysFromRefs(env, &out)
 	joined := strings.Join(calls, "\n")
@@ -144,24 +134,20 @@ func TestEnsureProviderKeysFromRefs_OnlyMissing(t *testing.T) {
 func TestEnsureProviderKeysFromRefsUsesFirstConflictingRef(t *testing.T) {
 	refs := "GEMINI_API_KEY=op://vault/new/key\nGEMINI_API_KEY=op://vault/old/key\n"
 	var calls []string
-	env := shellEnv{
-		readFile: func(string) (string, error) { return refs, nil },
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			calls = append(calls, name+" "+strings.Join(args, " "))
-			switch {
-			case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
-				return "", nil // google not present yet
-			case name == "op" && len(args) >= 1 && args[0] == "--version":
-				return "2.0", nil
-			case name == "op" && len(args) >= 1 && args[0] == "account":
-				return "acct", nil
-			case name == "op" && len(args) >= 1 && args[0] == "read":
-				return "val\n", nil
-			}
-			return "", nil
-		},
-	}
+	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return refs, nil }, LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		switch {
+		case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
+			return "", nil // google not present yet
+		case name == "op" && len(args) >= 1 && args[0] == "--version":
+			return "2.0", nil
+		case name == "op" && len(args) >= 1 && args[0] == "account":
+			return "acct", nil
+		case name == "op" && len(args) >= 1 && args[0] == "read":
+			return "val\n", nil
+		}
+		return "", nil
+	}}}
 	var out bytes.Buffer
 	ensureProviderKeysFromRefs(env, &out)
 	joined := strings.Join(calls, "\n")
@@ -178,16 +164,12 @@ func TestEnsureProviderKeysFromRefsUsesFirstConflictingRef(t *testing.T) {
 
 // offerOnePasswordKeys must stay silent unless TTY + op installed + no refs yet.
 func TestOfferOnePasswordKeys_Gating(t *testing.T) {
-	opEnv := shellEnv{
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			if name == "op" && len(args) >= 1 && args[0] == "--version" {
-				return "2.0", nil
-			}
-			return "", nil
-		},
-		readFile: func(string) (string, error) { return "", nil }, // no refs
-	}
+	opEnv := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		if name == "op" && len(args) >= 1 && args[0] == "--version" {
+			return "2.0", nil
+		}
+		return "", nil
+	}, ReadFileFn: func(string) (string, error) { return "", nil }}}
 	// not a tty -> silent
 	var out bytes.Buffer
 	offerOnePasswordKeys(opEnv, strings.NewReader("y\n"), &out, false)
@@ -197,7 +179,7 @@ func TestOfferOnePasswordKeys_Gating(t *testing.T) {
 	// refs already present -> silent even on a tty
 	out.Reset()
 	withRefs := opEnv
-	withRefs.readFile = func(string) (string, error) { return "ANTHROPIC_API_KEY=op://a/b/c\n", nil }
+	withRefs.fake().ReadFileFn = func(string) (string, error) { return "ANTHROPIC_API_KEY=op://a/b/c\n", nil }
 	offerOnePasswordKeys(withRefs, strings.NewReader("y\n"), &out, true)
 	if strings.Contains(out.String(), "1Password") {
 		t.Errorf("must not offer when key refs already exist, got %q", out.String())
@@ -205,7 +187,7 @@ func TestOfferOnePasswordKeys_Gating(t *testing.T) {
 	// op not installed -> silent
 	out.Reset()
 	noOp := opEnv
-	noOp.lookPath = func(string) (string, error) { return "", fmt.Errorf("nope") }
+	noOp.fake().LookPathFn = func(string) (string, error) { return "", fmt.Errorf("nope") }
 	offerOnePasswordKeys(noOp, strings.NewReader("y\n"), &out, true)
 	if out.String() != "" {
 		t.Errorf("must be silent when op is not installed, got %q", out.String())
@@ -234,21 +216,17 @@ func TestMirrorProviderRefsToHostMode(t *testing.T) {
 	dir := "/cfg/pix"
 	files[filepath.Join(dir, "op-refs.env")] = "ANTHROPIC_API_KEY=op://v/anthropic/key\nSLACK_TOKEN=op://v/slack/tok\n"
 	files[filepath.Join(dir, "hostmode.env")] = "EXISTING=op://v/x/y\n"
-	env := shellEnv{
-		getenv: func(k string) string {
-			if k == "XDG_CONFIG_HOME" {
-				return "/cfg"
-			}
-			return ""
-		},
-		readFile: func(p string) (string, error) {
-			if v, ok := files[p]; ok {
-				return v, nil
-			}
-			return "", os.ErrNotExist
-		},
-		writeFile: func(p string, d []byte, _ os.FileMode) error { files[p] = string(d); return nil },
-	}
+	env := shellEnv{System: &systest.Fake{GetenvFn: func(k string) string {
+		if k == "XDG_CONFIG_HOME" {
+			return "/cfg"
+		}
+		return ""
+	}, ReadFileFn: func(p string) (string, error) {
+		if v, ok := files[p]; ok {
+			return v, nil
+		}
+		return "", os.ErrNotExist
+	}, WriteFileFn: func(p string, d []byte, _ os.FileMode) error { files[p] = string(d); return nil }}}
 	mirrorProviderRefsToHostMode(env)
 	got := files[filepath.Join(dir, "hostmode.env")]
 	if !strings.Contains(got, "ANTHROPIC_API_KEY=op://v/anthropic/key") {
@@ -266,21 +244,17 @@ func TestMirrorProviderRefsToHostModeUsesFirstConflictingRef(t *testing.T) {
 	files := map[string]string{}
 	dir := "/cfg/pix"
 	files[filepath.Join(dir, "op-refs.env")] = "ANTHROPIC_API_KEY=op://vault/new/key\nANTHROPIC_API_KEY=op://vault/old/key\n"
-	env := shellEnv{
-		getenv: func(k string) string {
-			if k == "XDG_CONFIG_HOME" {
-				return "/cfg"
-			}
-			return ""
-		},
-		readFile: func(p string) (string, error) {
-			if v, ok := files[p]; ok {
-				return v, nil
-			}
-			return "", os.ErrNotExist
-		},
-		writeFile: func(p string, d []byte, _ os.FileMode) error { files[p] = string(d); return nil },
-	}
+	env := shellEnv{System: &systest.Fake{GetenvFn: func(k string) string {
+		if k == "XDG_CONFIG_HOME" {
+			return "/cfg"
+		}
+		return ""
+	}, ReadFileFn: func(p string) (string, error) {
+		if v, ok := files[p]; ok {
+			return v, nil
+		}
+		return "", os.ErrNotExist
+	}, WriteFileFn: func(p string, d []byte, _ os.FileMode) error { files[p] = string(d); return nil }}}
 	mirrorProviderRefsToHostMode(env)
 	got := files[filepath.Join(dir, "hostmode.env")]
 	if !strings.Contains(got, "ANTHROPIC_API_KEY=op://vault/new/key") || strings.Contains(got, "old/key") {
@@ -291,10 +265,7 @@ func TestMirrorProviderRefsToHostModeUsesFirstConflictingRef(t *testing.T) {
 // writeOpRefFileQuiet must NOT clobber a file it can't read (a real read error,
 // e.g. EACCES); it fails closed instead of truncating to a single entry.
 func TestWriteOpRefFileQuiet_ReadErrorNoClobber(t *testing.T) {
-	env := shellEnv{
-		readFile:  func(string) (string, error) { return "", errors.New("permission denied") },
-		writeFile: func(string, []byte, os.FileMode) error { t.Fatal("must not write when read fails"); return nil },
-	}
+	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "", errors.New("permission denied") }, WriteFileFn: func(string, []byte, os.FileMode) error { t.Fatal("must not write when read fails"); return nil }}}
 	if err := writeOpRefFileQuiet(env, "/x/op-refs.env", "ANTHROPIC_API_KEY", "op://v/a/k"); err == nil {
 		t.Fatal("expected error on unreadable file, got nil")
 	}
@@ -306,10 +277,7 @@ func TestWriteOpRefFileQuiet_ReadErrorNoClobber(t *testing.T) {
 func TestWriteOpRefFileQuiet_KeepsLiteralSpaces_DecodesEncoded(t *testing.T) {
 	write := func(val string) string {
 		var written string
-		env := shellEnv{
-			readFile:  func(string) (string, error) { return "", os.ErrNotExist },
-			writeFile: func(_ string, d []byte, _ os.FileMode) error { written = string(d); return nil },
-		}
+		env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }, WriteFileFn: func(_ string, d []byte, _ os.FileMode) error { written = string(d); return nil }}}
 		if err := writeOpRefFileQuiet(env, "/x/hostmode.env", "OPENAI_API_KEY", val); err != nil {
 			t.Fatal(err)
 		}
@@ -336,21 +304,18 @@ func TestWriteOpRefFileQuiet_KeepsLiteralSpaces_DecodesEncoded(t *testing.T) {
 // never inflate hostModeProviderKeys past the real distinct-provider count —
 // dedupe is by PROVIDER NAME, not by input line.
 func TestHostModeProviderKeys_DedupesDuplicateEntries(t *testing.T) {
-	env := shellEnv{
-		getenv: func(k string) string {
-			if k == "XDG_CONFIG_HOME" {
-				return "/cfg"
-			}
-			return ""
-		},
-		readFile: func(p string) (string, error) {
-			if p == filepath.Join("/cfg", "pix", "hostmode.env") {
-				// ANTHROPIC_API_KEY declared TWICE, GEMINI_API_KEY never.
-				return "ANTHROPIC_API_KEY=op://v/a/k\nANTHROPIC_API_KEY=op://v/a/k2\nOPENAI_API_KEY=op://v/o/k\n", nil
-			}
-			return "", os.ErrNotExist
-		},
-	}
+	env := shellEnv{System: &systest.Fake{GetenvFn: func(k string) string {
+		if k == "XDG_CONFIG_HOME" {
+			return "/cfg"
+		}
+		return ""
+	}, ReadFileFn: func(p string) (string, error) {
+		if p == filepath.Join("/cfg", "pix", "hostmode.env") {
+			// ANTHROPIC_API_KEY declared TWICE, GEMINI_API_KEY never.
+			return "ANTHROPIC_API_KEY=op://v/a/k\nANTHROPIC_API_KEY=op://v/a/k2\nOPENAI_API_KEY=op://v/o/k\n", nil
+		}
+		return "", os.ErrNotExist
+	}}}
 	got, err := hostModeProviderKeys(env)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -395,48 +360,39 @@ func TestSetupProvisionKeys_HasRefOnlyInHostMode_UnwritableOpRefsFailsEvenSbxUna
 		"/cfg/pix/hostmode.env": "ANTHROPIC_API_KEY=op://v/anthropic/key\n" +
 			"OPENAI_API_KEY=op://v/openai/key\nGEMINI_API_KEY=op://v/gemini/key\n",
 	}
-	env := shellEnv{
-		getenv: func(k string) string {
-			if k == "XDG_CONFIG_HOME" {
-				return "/cfg"
-			}
-			return ""
-		},
-		readFile: func(p string) (string, error) {
-			if v, ok := files[p]; ok {
-				return v, nil
-			}
+	env := shellEnv{System: &systest.Fake{GetenvFn: func(k string) string {
+		if k == "XDG_CONFIG_HOME" {
+			return "/cfg"
+		}
+		return ""
+	}, ReadFileFn: func(p string) (string, error) {
+		if v, ok := files[p]; ok {
+			return v, nil
+		}
+		return "", os.ErrNotExist
+	}, WriteFileFn: func(p string, d []byte, m os.FileMode) error {
+		if strings.HasSuffix(p, "op-refs.env") {
+			return os.ErrPermission // op-refs.env is unwritable
+		}
+		files[p] = string(d)
+		return nil
+	}, LookPathFn: func(name string) (string, error) {
+		if name == "sbx" {
 			return "", os.ErrNotExist
-		},
-		writeFile: func(p string, d []byte, m os.FileMode) error {
-			if strings.HasSuffix(p, "op-refs.env") {
-				return os.ErrPermission // op-refs.env is unwritable
-			}
-			files[p] = string(d)
-			return nil
-		},
-		// sbx entirely unavailable (but `op` IS on PATH) — the OLD bug's final
-		// probe would fail OPEN (return true) here, masking the op-refs.env write
-		// failure.
-		lookPath: func(name string) (string, error) {
-			if name == "sbx" {
-				return "", os.ErrNotExist
-			}
-			return "/usr/bin/" + name, nil
-		},
-		run: func(name string, args ...string) (string, error) {
-			if name == "op" && len(args) >= 1 && args[0] == "--version" {
-				return "2.0", nil
-			}
-			if name == "op" && len(args) >= 1 && args[0] == "account" {
-				return "acct", nil
-			}
-			if name == "op" && len(args) >= 1 && args[0] == "read" {
-				return "sk-val", nil
-			}
-			return "", nil
-		},
-	}
+		}
+		return "/usr/bin/" + name, nil
+	}, RunFn: func(name string, args ...string) (string, error) {
+		if name == "op" && len(args) >= 1 && args[0] == "--version" {
+			return "2.0", nil
+		}
+		if name == "op" && len(args) >= 1 && args[0] == "account" {
+			return "acct", nil
+		}
+		if name == "op" && len(args) >= 1 && args[0] == "read" {
+			return "sk-val", nil
+		}
+		return "", nil
+	}}}
 	var out bytes.Buffer
 	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
 		t.Fatal("an unwritable op-refs.env must fail setup even when sbx can't be probed at all")
@@ -468,7 +424,7 @@ func TestOpReadNonEmpty_TrimsWhitespaceAndRejectsWhitespaceOnly(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			env := shellEnv{run: func(string, ...string) (string, error) { return c.raw, nil }}
+			env := shellEnv{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return c.raw, nil }}}
 			val, ok := opReadNonEmpty(env, "op://v/a/k")
 			if ok != c.wantOK || val != c.wantVal {
 				t.Errorf("opReadNonEmpty(%q) = (%q, %v), want (%q, %v)", c.raw, val, ok, c.wantVal, c.wantOK)
@@ -486,27 +442,23 @@ func TestOpReadNonEmpty_TrimsWhitespaceAndRejectsWhitespaceOnly(t *testing.T) {
 func TestSyncProviderKeys_RedactsValueFromOutputAndError(t *testing.T) {
 	const secretVal = "sk-should-never-print-either"
 	refs := "ANTHROPIC_API_KEY=op://Private/anthropic/key\n"
-	env := shellEnv{
-		readFile: func(string) (string, error) { return refs, nil },
-		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			switch {
-			case name == "op" && len(args) >= 1 && args[0] == "--version":
-				return "2.0", nil
-			case name == "op" && len(args) >= 1 && args[0] == "account":
-				return "acct", nil
-			case name == "op" && len(args) >= 1 && args[0] == "read":
-				return secretVal, nil
-			case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "set":
-				// Simulate sbx echoing the full failed command (including the
-				// secret value) back in its own stdout/stderr AND the wrapping Go
-				// error carrying the same argv.
-				return "sbx: command failed: sbx secret set -f -g anthropic -t " + secretVal,
-					fmt.Errorf("exit status 1: -t %s", secretVal)
-			}
-			return "", nil
-		},
-	}
+	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return refs, nil }, LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		switch {
+		case name == "op" && len(args) >= 1 && args[0] == "--version":
+			return "2.0", nil
+		case name == "op" && len(args) >= 1 && args[0] == "account":
+			return "acct", nil
+		case name == "op" && len(args) >= 1 && args[0] == "read":
+			return secretVal, nil
+		case name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "set":
+			// Simulate sbx echoing the full failed command (including the
+			// secret value) back in its own stdout/stderr AND the wrapping Go
+			// error carrying the same argv.
+			return "sbx: command failed: sbx secret set -f -g anthropic -t " + secretVal,
+				fmt.Errorf("exit status 1: -t %s", secretVal)
+		}
+		return "", nil
+	}}}
 	var out bytes.Buffer
 	synced, failed, fatal := syncProviderKeys(env, &out)
 	if fatal != nil || synced != 0 || failed != 1 {

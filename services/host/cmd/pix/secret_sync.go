@@ -9,7 +9,7 @@
 // --env-file` (hostmode.env). The sandbox needs the extra sync step only because
 // its keys ride the sbx proxy's secret store rather than pi's process env.
 //
-// All op/sbx calls go through env.run so this is unit-testable with fakes; the
+// All op/sbx calls go through env.Run so this is unit-testable with fakes; the
 // LIVE run (real 1Password + sbx) happens on the host (op is a host tool).
 package main
 
@@ -36,15 +36,13 @@ var providerKeyRefOrder = []struct{ envVar, name string }{
 // provider-key ref must pass (a ref that exists but doesn't resolve, or
 // resolves to nothing, is as broken as no ref at all). Never logs the value.
 func opReadNonEmpty(env shellEnv, ref string) (string, bool) {
-	if env.run == nil {
-		return "", false
-	}
+
 	// Decode any %20 from refs written by the old (buggy) encoding path: `op read`
 	// rejects a percent-encoded ref, so a space-containing item name (e.g.
 	// "Anthropic API Key") stored as %20 would never resolve. Reading it decoded
 	// resolves it now; the write path stores literal so files self-heal.
 	ref = strings.ReplaceAll(ref, "%20", " ")
-	val, err := env.run("op", "read", ref)
+	val, err := env.Run("op", "read", ref)
 	if err != nil {
 		return "", false
 	}
@@ -161,10 +159,8 @@ func providerRefSet(env shellEnv, envVar string) bool {
 // about state we could not actually read.
 func hostModeProviderKeys(env shellEnv) ([]string, error) {
 	path := hostModeRefsPath(env)
-	if env.readFile == nil {
-		return nil, nil
-	}
-	content, err := env.readFile(path)
+
+	content, err := env.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -271,9 +267,7 @@ func writeOpRefFileQuiet(env shellEnv, path, key, value string) error {
 // writeOpRefFileQuietLocked is writeOpRefFileQuiet's transaction body (the
 // validation + upsert). Caller MUST hold the provider-refs lock.
 func writeOpRefFileQuietLocked(env shellEnv, path, key, value string) error {
-	if env.writeFile == nil {
-		return fmt.Errorf("no writer available")
-	}
+
 	if !envVarNameRe.MatchString(key) {
 		return fmt.Errorf("invalid env var name %q", key)
 	}
@@ -289,20 +283,18 @@ func writeOpRefFileQuietLocked(env shellEnv, path, key, value string) error {
 	// self-heal on the next write (e.g. setup's re-mirror).
 	value = strings.ReplaceAll(value, "%20", " ")
 	content := ""
-	if env.readFile != nil {
-		c, rerr := env.readFile(path)
-		switch {
-		case rerr == nil:
-			content = c
-		case os.IsNotExist(rerr):
-			// absent file = empty, upsert creates it
-		default:
-			// A real read error (e.g. EACCES on a write-only file) must NOT be
-			// treated as empty — overwriting would truncate existing refs.
-			return fmt.Errorf("read %s: %w", path, rerr)
-		}
+	c, rerr := env.ReadFile(path)
+	switch {
+	case rerr == nil:
+		content = c
+	case os.IsNotExist(rerr):
+		// absent file = empty, upsert creates it
+	default:
+		// A real read error (e.g. EACCES on a write-only file) must NOT be
+		// treated as empty — overwriting would truncate existing refs.
+		return fmt.Errorf("read %s: %w", path, rerr)
 	}
-	return env.writeFile(path, []byte(upsertOpRef(content, key, value)), 0o600)
+	return env.WriteFile(path, []byte(upsertOpRef(content, key, value)), 0o600)
 }
 
 // providerKeyRefs maps each cloud model provider's op-refs.env ENV var to its
@@ -390,16 +382,14 @@ func ensureProviderKeysFromRefs(env shellEnv, out io.Writer) {
 // a duplicated env-var line resolves the SAME ref setup/currentOpRef/mirror
 // would pick, never whichever duplicate happens to come last in the file.
 func ensureProviderKeysFromRefsLocked(env shellEnv, out io.Writer) {
-	if env.run == nil {
-		return
-	}
+
 	_, content, exists := opRefsContent(env)
 	if !exists {
 		return
 	}
 	// BOUNDED (probeRun): a hung `sbx secret ls` times out and aborts the sync
 	// — can't tell what's set, don't guess, never touch op or `sbx secret set`.
-	sbxOut, timedOut, err := probeRun(env, "sbx", "secret", "ls")
+	sbxOut, timedOut, err := env.RunTimed("sbx", "secret", "ls")
 	if timedOut || err != nil {
 		return // can't tell what's set; don't guess
 	}
@@ -429,7 +419,7 @@ func ensureProviderKeysFromRefsLocked(env shellEnv, out io.Writer) {
 		}
 		// -f: 1Password is the source of truth, so overwrite whatever sbx has
 		// (sbx errors on an existing secret without it).
-		if _, err := env.run("sbx", "secret", "set", "-f", "-g", p.name, "-t", val); err == nil {
+		if _, err := env.Run("sbx", "secret", "set", "-f", "-g", p.name, "-t", val); err == nil {
 			fmt.Fprintf(out, "pix: resolved %s from 1Password\n", p.name)
 		}
 	}
@@ -565,7 +555,7 @@ func syncProviderKeyToSbx(env shellEnv, out io.Writer, p struct{ envVar, name st
 		}
 		val = v
 	}
-	if sbxOut, err := env.run("sbx", "secret", "set", "-f", "-g", p.name, "-t", val); err != nil {
+	if sbxOut, err := env.Run("sbx", "secret", "set", "-f", "-g", p.name, "-t", val); err != nil {
 		detail := strings.TrimSpace(firstLine(sbxOut))
 		if detail == "" {
 			detail = err.Error()
@@ -654,10 +644,8 @@ func syncProviderKeysLocked(env shellEnv, out io.Writer) (synced, failed int, fa
 	if !opSignedIn(env) {
 		return 0, 0, fmt.Errorf("op installed but no account configured (run: op signin)")
 	}
-	if env.lookPath != nil {
-		if _, err := env.lookPath("sbx"); err != nil {
-			return 0, 0, fmt.Errorf("sbx not on PATH")
-		}
+	if _, err := env.LookPath("sbx"); err != nil {
+		return 0, 0, fmt.Errorf("sbx not on PATH")
 	}
 
 	present := firstProviderKeyRefs(content)
@@ -678,7 +666,7 @@ func syncProviderKeysLocked(env shellEnv, out io.Writer) (synced, failed int, fa
 			failed++
 			continue
 		}
-		val, err := env.run("op", "read", r.value)
+		val, err := env.Run("op", "read", r.value)
 		if err != nil {
 			fmt.Fprintf(out, "  \u2717 %s (%s): op read failed\n", name, envVar)
 			failed++
@@ -695,7 +683,7 @@ func syncProviderKeysLocked(env shellEnv, out io.Writer) (synced, failed int, fa
 		// re-sync must replace the sbx copy (without it sbx errors "secret already
 		// exists"). The value is briefly an argv element on the HOST; it is never
 		// written to pix's disk and never enters the VM.
-		if sbxOut, err := env.run("sbx", "secret", "set", "-f", "-g", name, "-t", val); err != nil {
+		if sbxOut, err := env.Run("sbx", "secret", "set", "-f", "-g", name, "-t", val); err != nil {
 			detail := strings.TrimSpace(firstLine(sbxOut))
 			if detail == "" {
 				detail = err.Error()

@@ -85,16 +85,9 @@ func modelTags(ms []missingModel) []string {
 
 // runOllamaPull execs `ollama pull <tag>` with the user's terminal inherited
 // (real progress output) when runInteractive is wired; tests fall back to the
-// recorded env.run seam.
+// recorded env.Run seam.
 func runOllamaPull(env shellEnv, tag string) error {
-	if env.runInteractive != nil {
-		return env.runInteractive("ollama", "pull", tag)
-	}
-	if env.run != nil {
-		_, err := env.run("ollama", "pull", tag)
-		return err
-	}
-	return fmt.Errorf("internal: no runner wired")
+	return env.RunInteractive("ollama", "pull", tag)
 }
 
 // setupLocalModels is the whole step: probe once, classify on the shared
@@ -355,10 +348,7 @@ func receiptSetupModels(env shellEnv, out io.Writer, o setupModelsOutcome) {
 // setupReceiptStateDir resolves the launcher state dir through the env seam
 // (tests), falling back to the real config.StateDir.
 func setupReceiptStateDir(env shellEnv) (string, error) {
-	if env.stateDir != nil {
-		return env.stateDir()
-	}
-	return config.StateDir()
+	return env.StateDir()
 }
 
 // printSetupSummary renders the completion summary: keys, knowledge, pack,

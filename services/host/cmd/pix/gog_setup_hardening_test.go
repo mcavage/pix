@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 // --- R1-02: read-only enforced at grant time, no unsafe fallback ---
@@ -202,7 +203,7 @@ func gogR106Env(t *testing.T, probe func(name string, args ...string) (string, b
 	// itself cares to override it — none of gogR106Env's callers are testing
 	// prior-registration behavior, so they'd otherwise have to fixture this
 	// unrelated call themselves.
-	env.probe = func(name string, args ...string) (string, bool, error) {
+	env.fake().RunTimedFn = func(name string, args ...string) (string, bool, error) {
 		if name == "sbx" && len(args) == 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "", false, nil
 		}
@@ -417,7 +418,7 @@ func TestGogSetup_R108_RegistrationFails_ConfigUnchanged(t *testing.T) {
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",
 			// deliberately NO "sbx mcp add google-workspace ..." fixture and sbxRegisterOK
-			// left false, so registerServers' env.run call for it errors.
+			// left false, so registerServers' env.Run call for it errors.
 		}),
 		statFile: map[string]bool{cred: true},
 	}
@@ -472,9 +473,9 @@ func gogR108RollbackEnv(t *testing.T, priorRegistered bool) (env shellEnv, cred 
 		statFile: map[string]bool{cred: true},
 	}
 	e := ge.env()
-	baseRun := e.run
+	baseRun := e.fake().RunFn
 	addCalls, rmCalls = &[][]string{}, &[][]string{}
-	e.run = func(name string, args ...string) (string, error) {
+	e.fake().RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" {
 			switch args[1] {
 			case "add":
@@ -546,7 +547,7 @@ func TestGogSetup_R108_SaveFailure_RemovesNewRegistrationWhenNoPrior(t *testing.
 // TestGogSetup_R114_CapabilityAndBareHeadlessProbesAreBounded proves the NEW
 // probes this round introduces — the per-step capability-help probe
 // (gogAuthRouteCapable) and the bare headless probe (R1-06) — go through the
-// bounded probe machinery (env.probe), never raw env.run, exactly like the
+// bounded probe machinery (env.probe), never raw env.Run, exactly like the
 // pre-existing help/version/auth-doctor probes.
 func TestGogSetup_R114_CapabilityAndBareHeadlessProbesAreBounded(t *testing.T) {
 	const acct = "you@example.com"
@@ -558,52 +559,43 @@ func TestGogSetup_R114_CapabilityAndBareHeadlessProbesAreBounded(t *testing.T) {
 	headlessKey := gogBareHeadlessKey(acct)
 
 	var probed []string
-	env := shellEnv{
-		lookPath: func(name string) (string, error) {
-			if name == "gog" || name == "sbx" {
-				return "/usr/bin/" + name, nil
-			}
-			return "", fmt.Errorf("exec: %q not found", name)
-		},
-		statFile: func(path string) bool { return path == cred },
-		// R2-05: the credentials regular-file check now reads fileMode.
-		fileMode: func(path string) (os.FileMode, bool) {
-			if path == cred {
-				return 0o600, true
-			}
-			return 0, false
-		},
-		getenv: func(string) string { return "" },
-		probe: func(name string, args ...string) (string, bool, error) {
-			key := strings.Join(append([]string{name}, args...), " ")
-			probed = append(probed, key)
-			switch key {
-			case helpKey:
-				return gogAuthHelpCurrentSetup, false, nil
-			case setupHelpKey:
-				return gogAuthSetupHelpReadonly, false, nil
-			case authKey:
-				return "ok", false, nil
-			case headlessKey:
-				return "gmail_search\n", false, nil
-			case "sbx mcp ls":
-				// R2-03 preflight: confirm no prior gog registration.
-				return "", false, nil
-			}
-			return "", false, fmt.Errorf("no fake probe output for %q", key)
-		},
-		run: func(name string, args ...string) (string, error) {
-			key := strings.Join(append([]string{name}, args...), " ")
-			if key == helpKey || key == authKey || key == setupHelpKey || key == headlessKey {
-				t.Fatalf("gog setup probe %q must go through the bounded probe, not raw run", key)
-			}
-			if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "add" {
-				return "", nil
-			}
-			return "", fmt.Errorf("no fake output for %q", key)
-		},
-		runInteractive: func(name string, args ...string) error { return nil },
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		if name == "gog" || name == "sbx" {
+			return "/usr/bin/" + name, nil
+		}
+		return "", fmt.Errorf("exec: %q not found", name)
+	}, IsFileFn: func(path string) bool { return path == cred }, ModeFn: func(path string) (os.FileMode, bool) {
+		if path == cred {
+			return 0o600, true
+		}
+		return 0, false
+	}, GetenvFn: func(string) string { return "" }, RunTimedFn: func(name string, args ...string) (string, bool, error) {
+		key := strings.Join(append([]string{name}, args...), " ")
+		probed = append(probed, key)
+		switch key {
+		case helpKey:
+			return gogAuthHelpCurrentSetup, false, nil
+		case setupHelpKey:
+			return gogAuthSetupHelpReadonly, false, nil
+		case authKey:
+			return "ok", false, nil
+		case headlessKey:
+			return "gmail_search\n", false, nil
+		case "sbx mcp ls":
+			// R2-03 preflight: confirm no prior gog registration.
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("no fake probe output for %q", key)
+	}, RunFn: func(name string, args ...string) (string, error) {
+		key := strings.Join(append([]string{name}, args...), " ")
+		if key == helpKey || key == authKey || key == setupHelpKey || key == headlessKey {
+			t.Fatalf("gog setup probe %q must go through the bounded probe, not raw run", key)
+		}
+		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "add" {
+			return "", nil
+		}
+		return "", fmt.Errorf("no fake output for %q", key)
+	}, RunInteractiveFn: func(name string, args ...string) error { return nil }}}
 	var out bytes.Buffer
 	if err := gogSetup(env, gogSetupOpts{account: acct, credentials: cred}, strings.NewReader(""), &out, false); err != nil {
 		t.Fatalf("gogSetup: %v\n--- output ---\n%s", err, out.String())
@@ -622,29 +614,26 @@ func TestGogSetup_R114_CapabilityAndBareHeadlessProbesAreBounded(t *testing.T) {
 // directly: sbx is present, and lsOut/lsTimedOut/lsErr control the bounded
 // `sbx mcp ls` listing probe; getFixtures drives the detailed `sbx mcp get
 // gog` / `sbx mcp ls -o json` readers (registeredGogCommand) via probeRun's
-// env.run fallback.
+// env.Run fallback.
 func gogSnapEnv(lsOut string, lsTimedOut bool, lsErr error, getFixtures map[string]string, getErrs map[string]bool) shellEnv {
-	return shellEnv{
-		lookPath: func(name string) (string, error) {
-			if name == "sbx" {
-				return "/usr/bin/sbx", nil
-			}
-			return "", fmt.Errorf("exec: %q not found", name)
-		},
-		probe: func(name string, args ...string) (string, bool, error) {
-			key := strings.Join(append([]string{name}, args...), " ")
-			if key == "sbx mcp ls" {
-				return lsOut, lsTimedOut, lsErr
-			}
-			if getErrs[key] {
-				return "", false, fmt.Errorf("exit status 1")
-			}
-			if out, ok := getFixtures[key]; ok {
-				return out, false, nil
-			}
-			return "", false, fmt.Errorf("no fake probe output for %q", key)
-		},
-	}
+	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		if name == "sbx" {
+			return "/usr/bin/sbx", nil
+		}
+		return "", fmt.Errorf("exec: %q not found", name)
+	}, RunTimedFn: func(name string, args ...string) (string, bool, error) {
+		key := strings.Join(append([]string{name}, args...), " ")
+		if key == "sbx mcp ls" {
+			return lsOut, lsTimedOut, lsErr
+		}
+		if getErrs[key] {
+			return "", false, fmt.Errorf("exit status 1")
+		}
+		if out, ok := getFixtures[key]; ok {
+			return out, false, nil
+		}
+		return "", false, fmt.Errorf("no fake probe output for %q", key)
+	}}}
 }
 
 func TestSnapshotGogRegistration_ConfirmedAbsent(t *testing.T) {
@@ -723,7 +712,7 @@ func TestSnapshotGogRegistration_GetAndJSONTransientErrors_Unknown(t *testing.T)
 }
 
 func TestSnapshotGogRegistration_SbxAbsent_Unknown(t *testing.T) {
-	env := shellEnv{lookPath: func(string) (string, error) { return "", fmt.Errorf("not found") }}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }}}
 	snap := snapshotGogRegistration(env)
 	if snap.state != gogRegUnknown {
 		t.Fatalf("expected gogRegUnknown when sbx is absent, got state=%v", snap.state)
@@ -778,7 +767,7 @@ func TestGogSetup_R203_UnreadablePriorRegistration_AbortsBeforeOAuth(t *testing.
 		`name: gog`+"\n"+`command: /usr/bin/op run --env-file="/x/op refs.env" -- gog mcp`+"\n")
 
 	var calls [][]string
-	env.runInteractive = func(name string, args ...string) error {
+	env.fake().RunInteractiveFn = func(name string, args ...string) error {
 		calls = append(calls, append([]string{name}, args...))
 		return nil
 	}
@@ -838,7 +827,7 @@ func TestGogSetup_R203_ListingProbeTransientlyUnavailable_AbortsBeforeOAuth(t *t
 	}
 
 	var calls [][]string
-	env.runInteractive = func(name string, args ...string) error {
+	env.fake().RunInteractiveFn = func(name string, args ...string) error {
 		calls = append(calls, append([]string{name}, args...))
 		return nil
 	}

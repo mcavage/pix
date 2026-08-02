@@ -22,7 +22,7 @@ func TestDefaultShellEnvWriteFile_CreatesRegularFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "op-refs.env")
 	env := defaultShellEnv()
-	if err := env.writeFile(path, []byte("ANTHROPIC_API_KEY=op://v/a/k\n"), 0o600); err != nil {
+	if err := env.WriteFile(path, []byte("ANTHROPIC_API_KEY=op://v/a/k\n"), 0o600); err != nil {
 		t.Fatalf("writeFile: %v", err)
 	}
 	b, err := os.ReadFile(path)
@@ -58,7 +58,7 @@ func TestDefaultShellEnvWriteFile_ReplacesLeafSymlinkTargetUntouched(t *testing.
 	}
 
 	env := defaultShellEnv()
-	if err := env.writeFile(link, []byte("ANTHROPIC_API_KEY=op://v/a/k\n"), 0o600); err != nil {
+	if err := env.WriteFile(link, []byte("ANTHROPIC_API_KEY=op://v/a/k\n"), 0o600); err != nil {
 		t.Fatalf("writeFile: %v", err)
 	}
 

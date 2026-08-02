@@ -35,6 +35,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 // --- #1: cross-process lock, fresh-load mutations ------------------------------
@@ -224,7 +225,7 @@ func TestPackUse_AdoptedPackLockNeverMigrated(t *testing.T) {
 // without --yes. gog stays reference-only Tier-0.
 func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 	// No probe available at all.
-	unknown := localMCPClassifier(shellEnv{}, nil)
+	unknown := localMCPClassifier(shellEnv{System: &systest.Fake{}}, nil)
 	if !unknown("fastmail") {
 		t.Error("unknown classification must treat a non-gog name as host-exec (fail closed)")
 	}
@@ -232,7 +233,7 @@ func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 		t.Error("gog stays the reference-only Tier-0 special case even when the partition is unknown")
 	}
 	// Probe resolves but errors.
-	failEnv := shellEnv{run: func(string, ...string) (string, error) { return "", fmt.Errorf("probe failed") }}
+	failEnv := shellEnv{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", fmt.Errorf("probe failed") }}}
 	resolver := func() (string, error) { return "pix-host", nil }
 	unknown2 := localMCPClassifier(failEnv, resolver)
 	if !unknown2("notion") {

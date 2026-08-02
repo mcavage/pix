@@ -196,10 +196,7 @@ func serviceReadinessCheck(spec serviceAxisSpec) check {
 // serviceReadinessAxes builds the memory and knowledge axes. Both are lazy:
 // a caller that requests neither pays for no probe at all.
 func serviceReadinessAxes(env shellEnv, memoryEnabled, knowledgeEnabled bool, probe identityProber) map[Axis]axisBuilder {
-	dial := env.dial
-	if dial == nil {
-		dial = dialLocalPort
-	}
+	dial := env.DialLocal
 	return map[Axis]axisBuilder{
 		axisServiceMemory: func() []check {
 			return []check{serviceReadinessCheck(serviceAxisSpec{

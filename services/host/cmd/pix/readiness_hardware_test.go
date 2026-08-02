@@ -6,21 +6,22 @@ import (
 	"testing"
 
 	"pix/host/routing"
+	"pix/host/sys/systest"
 )
 
 func hwMemEnv(t *testing.T, goos string, totalGB float64) shellEnv {
 	t.Helper()
-	env := shellEnv{}
+	env := shellEnv{System: &systest.Fake{}}
 	switch goos {
 	case "darwin":
-		env.run = func(name string, args ...string) (string, error) {
+		env.fake().RunFn = func(name string, args ...string) (string, error) {
 			if name == "sysctl" {
 				return fmt.Sprintf("%d\n", int64(totalGB*bytesPerGB)), nil
 			}
 			return "", fmt.Errorf("unexpected command %s", name)
 		}
 	case "linux":
-		env.readFile = func(path string) (string, error) {
+		env.fake().ReadFileFn = func(path string) (string, error) {
 			if path != "/proc/meminfo" {
 				return "", fmt.Errorf("unexpected file %s", path)
 			}
@@ -86,7 +87,7 @@ func TestProbeHostMemoryReadsBothPlatformSeams(t *testing.T) {
 	if lin.UsableGB != 32*0.60 {
 		t.Fatalf("linux usable = %g, want 19.2", lin.UsableGB)
 	}
-	if got := probeHostMemoryFor("darwin", shellEnv{}); got.OK {
+	if got := probeHostMemoryFor("darwin", shellEnv{System: &systest.Fake{}}); got.OK {
 		t.Fatalf("an unwired seam must not report a size: %+v", got)
 	}
 	if got := probeHostMemoryFor("windows", hwMemEnv(t, "linux", 32)); got.OK {

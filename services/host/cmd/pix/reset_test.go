@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 // fixedNow returns a stable timestamp so .bak suffixes are predictable in tests.
@@ -881,15 +882,12 @@ func noToolEnv() shellEnv {
 // --keep-memory preserve set matches the sweep's absolute entries.
 func TestResolveResetPaths_RelativeMemoryDBAbsolute(t *testing.T) {
 	t.Chdir(t.TempDir())
-	env := shellEnv{
-		homeDir: func() string { return "/home/fake" },
-		getenv: func(k string) string {
-			if k == "MEMORY_DB" {
-				return ".pix/custom-memory.db"
-			}
-			return ""
-		},
-	}
+	env := shellEnv{System: &systest.Fake{HomeDirFn: func() string { return "/home/fake" }, GetenvFn: func(k string) string {
+		if k == "MEMORY_DB" {
+			return ".pix/custom-memory.db"
+		}
+		return ""
+	}}}
 	p := resolveResetPaths(env)
 	if !filepath.IsAbs(p.memoryDB) {
 		t.Errorf("memoryDB = %q, want absolute", p.memoryDB)
@@ -928,7 +926,7 @@ func TestExecuteReset_ClearsRuntimeFilesAndRestarts(t *testing.T) {
 	// sees it down (so the data move isn't blocked and restart runs).
 	firstDial := true
 	env := noToolEnv()
-	env.dial = func(int) bool {
+	env.fake().DialLocalFn = func(int) bool {
 		if firstDial {
 			firstDial = false
 			return true

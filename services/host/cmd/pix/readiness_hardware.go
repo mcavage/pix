@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"pix/host/sys"
 	"runtime"
 	"strconv"
 	"strings"
@@ -92,10 +93,8 @@ func probeHostMemoryFor(goos string, env shellEnv) hostMemory {
 		}
 		totalGB, source = bytes/bytesPerGB, "sysctl hw.memsize"
 	case "linux":
-		if env.readFile == nil {
-			return hostMemory{Source: "/proc/meminfo MemTotal"}
-		}
-		body, err := env.readFile("/proc/meminfo")
+
+		body, err := env.ReadFile("/proc/meminfo")
 		if err != nil {
 			return hostMemory{Source: "/proc/meminfo MemTotal"}
 		}
@@ -114,18 +113,13 @@ func probeHostMemoryFor(goos string, env shellEnv) hostMemory {
 	return hostMemory{TotalGB: totalGB, UsableGB: totalGB * fraction, Source: source, OK: true}
 }
 
-// probeMemoryCommand prefers the BOUNDED probe seam so a wedged sysctl can
-// never hang setup, falling back to the plain runner tests usually wire.
-func probeMemoryCommand(env shellEnv, name string, args ...string) (string, bool) {
-	if env.probe != nil {
-		out, timedOut, err := env.probe(name, args...)
-		return out, err == nil && !timedOut
-	}
-	if env.run != nil {
-		out, err := env.run(name, args...)
-		return out, err == nil
-	}
-	return "", false
+// probeMemoryCommand runs a hardware probe under the bounded seam, so a wedged
+// sysctl can never hang setup. It used to fall back to the plain runner "tests
+// usually wire" — a fallback that existed only because the bounded seam was
+// nullable. It is not, so there is nothing to fall back from.
+func probeMemoryCommand(env sys.Exec, name string, args ...string) (string, bool) {
+	out, timedOut, err := env.RunTimed(name, args...)
+	return out, err == nil && !timedOut
 }
 
 // parseMemTotalKB pulls MemTotal (in kB) out of /proc/meminfo.

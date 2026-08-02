@@ -10,6 +10,7 @@ package main
 
 import (
 	"fmt"
+	"pix/host/sys/systest"
 	"strings"
 	"testing"
 )
@@ -121,8 +122,8 @@ func TestDoctorGog_NonCanonicalRegisteredPathNeverExecuted(t *testing.T) {
 		ports:   map[int]bool{11435: true},
 	}
 	env := f.env()
-	baseRun := env.run
-	env.run = func(name string, args ...string) (string, error) {
+	baseRun := env.fake().RunFn
+	env.fake().RunFn = func(name string, args ...string) (string, error) {
 		if strings.HasPrefix(name, "/tmp/") {
 			executed = append(executed, name)
 		}
@@ -180,42 +181,33 @@ func registeredGogProbeEnv(probeFn func() (string, bool, error)) shellEnv {
 		"sbx mcp ls":                   "google-workspace\n",
 		"sbx mcp get google-workspace": "name: gog\ncommand: " + regCmd + "\n",
 	}
-	return shellEnv{
-		lookPath: func(name string) (string, error) {
-			switch name {
-			case "sbx", "gog", "op":
-				return "/usr/bin/" + name, nil
-			}
-			return "", fmt.Errorf("exec: %q not found", name)
-		},
-		run: func(name string, args ...string) (string, error) {
-			key := strings.Join(append([]string{name}, args...), " ")
-			if out, ok := fixtures[key]; ok {
-				return out, nil
-			}
-			return "", fmt.Errorf("no fake output for %q", key)
-		},
-		probe: func(name string, args ...string) (string, bool, error) {
-			key := strings.Join(append([]string{name}, args...), " ")
-			if strings.HasSuffix(key, "--list-tools") {
-				return probeFn()
-			}
-			if out, ok := fixtures[key]; ok {
-				return out, false, nil
-			}
-			return "", false, fmt.Errorf("no fake probe output for %q", key)
-		},
-		// resolveOpRefs must answer gogOpRefs so the launcher-grammar wrapper
-		// in the registered command is recognized (and probed) at all.
-		getenv: func(k string) string {
-			if k == "PIX_CONFIG" {
-				return gogCfgFile
-			}
-			return ""
-		},
-		statFile: func(p string) bool { return p == gogOpRefs },
-		dial:     func(int) bool { return false },
-	}
+	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		switch name {
+		case "sbx", "gog", "op":
+			return "/usr/bin/" + name, nil
+		}
+		return "", fmt.Errorf("exec: %q not found", name)
+	}, RunFn: func(name string, args ...string) (string, error) {
+		key := strings.Join(append([]string{name}, args...), " ")
+		if out, ok := fixtures[key]; ok {
+			return out, nil
+		}
+		return "", fmt.Errorf("no fake output for %q", key)
+	}, RunTimedFn: func(name string, args ...string) (string, bool, error) {
+		key := strings.Join(append([]string{name}, args...), " ")
+		if strings.HasSuffix(key, "--list-tools") {
+			return probeFn()
+		}
+		if out, ok := fixtures[key]; ok {
+			return out, false, nil
+		}
+		return "", false, fmt.Errorf("no fake probe output for %q", key)
+	}, GetenvFn: func(k string) string {
+		if k == "PIX_CONFIG" {
+			return gogCfgFile
+		}
+		return ""
+	}, IsFileFn: func(p string) bool { return p == gogOpRefs }, DialLocalFn: func(int) bool { return false }}}
 }
 
 // TestDoctorGog_ProbeTimeoutIsUnverifiable: a timed-out probe of the

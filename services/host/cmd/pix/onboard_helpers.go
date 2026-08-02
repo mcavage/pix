@@ -1,6 +1,8 @@
 package main
 
 import (
+	"pix/host/sys"
+
 	"bufio"
 	"fmt"
 	"io"
@@ -33,24 +35,14 @@ type setupIO struct {
 // CONFIGURED account and probe THAT account before claiming gog is ready. The
 // probe is BOUNDED (gogAuthTimeout) so a network round-trip can never hang a
 // fast command: real callers wire env.probe and we run our own short-timeout
-// exec; tests leave probe nil and use the hermetic env.run. Best-effort: any gap
+// exec; tests leave probe nil and use the hermetic env.Run. Best-effort: any gap
 // (gog absent, a timeout, status errors) is "not authed", never a crash.
-func gogAuthed(env shellEnv, account string) bool {
-	if env.lookPath == nil {
+func gogAuthed(env sys.Exec, account string) bool {
+	if _, err := env.LookPath("gog"); err != nil {
 		return false
 	}
-	if _, err := env.lookPath("gog"); err != nil {
-		return false
-	}
-	if env.probe != nil {
-		_, timedOut, err := runWithTimeoutD(gogAuthTimeout, "gog", "--account", account, "auth", "status")
-		return !timedOut && err == nil
-	}
-	if env.run == nil {
-		return false
-	}
-	_, err := env.run("gog", "--account", account, "auth", "status")
-	return err == nil
+	_, timedOut, err := env.RunWithin(gogAuthTimeout, "gog", "--account", account, "auth", "status")
+	return !timedOut && err == nil
 }
 
 // setupKnowledge sets up the global knowledge base from a user-supplied source,

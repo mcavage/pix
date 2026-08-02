@@ -32,6 +32,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 // localMCPEnv returns a shellEnv whose `pix-host mcp --list` reports the
@@ -39,12 +40,12 @@ import (
 // succeed, like fakeGitEnv).
 func localMCPEnv(names ...string) shellEnv {
 	list := strings.Join(names, "\n")
-	return shellEnv{run: func(name string, args ...string) (string, error) {
+	return shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		if len(args) >= 2 && args[0] == "mcp" && args[1] == "--list" {
 			return list, nil
 		}
 		return "", nil
-	}}
+	}}}
 }
 
 // pinLocalMCP pins the local-vs-gateway partition for the duration of a test:
@@ -310,7 +311,7 @@ func TestComputeHostBoM_RemoteMCPReferenceRequiresConsent(t *testing.T) {
 	localRef := &packInfo{Root: "/p", Manifest: packManifest{
 		Name: "personal", Integrations: []packIntegration{{Name: "Notion", MCP: "notion"}},
 	}}
-	unknown := localMCPClassifier(shellEnv{}, nil)
+	unknown := localMCPClassifier(shellEnv{System: &systest.Fake{}}, nil)
 	if b := computeHostBoM(localRef, "", unknown); !b.tier1() {
 		t.Errorf("an unknown local partition must FAIL CLOSED as host-exec (round-3 #3), got %+v", b)
 	}

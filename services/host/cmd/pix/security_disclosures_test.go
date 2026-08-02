@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 // mcpHostTrustNoticeFacts are the exact facts the disclosure must state,
@@ -73,10 +74,7 @@ func TestDoctorRender_NoDisclosure_WhenNoMCPConfigured(t *testing.T) {
 func hostTrustSummaryEnv(t *testing.T) shellEnv {
 	t.Helper()
 	home := t.TempDir()
-	return shellEnv{
-		getenv:  func(string) string { return "" },
-		homeDir: func() string { return home },
-	}
+	return shellEnv{System: &systest.Fake{GetenvFn: func(string) string { return "" }, HomeDirFn: func() string { return home }}}
 }
 
 // TestPrintSetupSummary_DisclosesHostMCPTrust_WhenMCPConfigured: setup's

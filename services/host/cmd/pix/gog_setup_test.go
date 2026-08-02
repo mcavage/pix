@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 // gogAuthHelpCurrentSetup is the current gog CLI's `gog auth --help` output
@@ -182,7 +183,7 @@ type gogTestEnv struct {
 	// test that WANTS to exercise a registration failure (e.g.
 	// TestGogSetup_RegistrationFailureReported) leaves this false.
 	sbxRegisterOK bool
-	// fileModeOverride lets a test (R2-05) drive env.fileMode's answer for a
+	// fileModeOverride lets a test (R2-05) drive env.Mode's answer for a
 	// specific path directly (e.g. a FIFO/socket/device mode, or "not found").
 	// A path absent here falls back to env().fileMode's default: a plain
 	// regular-file mode iff statFile[path] is true, so every existing test that
@@ -218,63 +219,50 @@ func (g gogTestEnv) env() shellEnv {
 	if calls == nil {
 		calls = &[][]string{}
 	}
-	return shellEnv{
-		hostBinary: func() (string, error) { return "/usr/bin/pix-host", nil },
-		lookPath: func(name string) (string, error) {
-			if g.present[name] {
-				return "/usr/bin/" + name, nil
+	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		if g.present[name] {
+			return "/usr/bin/" + name, nil
+		}
+		return "", fmt.Errorf("exec: %q not found", name)
+	}, RunFn: func(name string, args ...string) (string, error) {
+		key := strings.Join(append([]string{name}, args...), " ")
+		if g.outputErr[key] {
+			return g.output[key], fmt.Errorf("exit status 1")
+		}
+		if out, ok := g.output[key]; ok {
+			return out, nil
+		}
+		if g.sbxRegisterOK && name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "add" {
+			return "", nil
+		}
+		// R2-03/R2-04 default: an otherwise-unfixtured bounded `sbx mcp ls`
+		// listing (snapshotGogRegistration's presence probe) defaults to an
+		// EMPTY listing (confirmed absent) — most gogSetup tests don't care
+		// about a prior registration, and requiring every one of them to
+		// fixture this explicitly would be pure noise. A test that DOES care
+		// sets g.output["sbx mcp ls"] explicitly, which the check above
+		// already wins over this default.
+		if name == "sbx" && len(args) == 2 && args[0] == "mcp" && args[1] == "ls" {
+			return "", nil
+		}
+		return "", fmt.Errorf("no fake output for %q", key)
+	}, GetenvFn: os.Getenv, IsFileFn: func(path string) bool { return g.statFile[path] }, ReadFileFn: func(path string) (string, error) {
+		b, err := os.ReadFile(path)
+		return string(b), err
+	}, ModeFn: func(path string) (os.FileMode, bool) {
+		if g.fileModeOverride != nil {
+			if m, ok := g.fileModeOverride[path]; ok {
+				return m, true
 			}
-			return "", fmt.Errorf("exec: %q not found", name)
-		},
-		run: func(name string, args ...string) (string, error) {
-			key := strings.Join(append([]string{name}, args...), " ")
-			if g.outputErr[key] {
-				return g.output[key], fmt.Errorf("exit status 1")
-			}
-			if out, ok := g.output[key]; ok {
-				return out, nil
-			}
-			if g.sbxRegisterOK && name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "add" {
-				return "", nil
-			}
-			// R2-03/R2-04 default: an otherwise-unfixtured bounded `sbx mcp ls`
-			// listing (snapshotGogRegistration's presence probe) defaults to an
-			// EMPTY listing (confirmed absent) — most gogSetup tests don't care
-			// about a prior registration, and requiring every one of them to
-			// fixture this explicitly would be pure noise. A test that DOES care
-			// sets g.output["sbx mcp ls"] explicitly, which the check above
-			// already wins over this default.
-			if name == "sbx" && len(args) == 2 && args[0] == "mcp" && args[1] == "ls" {
-				return "", nil
-			}
-			return "", fmt.Errorf("no fake output for %q", key)
-		},
-		getenv:   os.Getenv,
-		statFile: func(path string) bool { return g.statFile[path] },
-		readFile: func(path string) (string, error) {
-			b, err := os.ReadFile(path)
-			return string(b), err
-		},
-		// R2-05: fileMode drives the credentials regular-file check. A test-set
-		// override wins; otherwise a path marked present in statFile defaults to
-		// a plain regular-file mode (0o600) so every pre-existing statFile-only
-		// fixture keeps behaving as a valid regular file.
-		fileMode: func(path string) (os.FileMode, bool) {
-			if g.fileModeOverride != nil {
-				if m, ok := g.fileModeOverride[path]; ok {
-					return m, true
-				}
-			}
-			if g.statFile[path] {
-				return 0o600, true
-			}
-			return 0, false
-		},
-		runInteractive: func(name string, args ...string) error {
-			*calls = append(*calls, append([]string{name}, args...))
-			return g.interErr
-		},
-	}
+		}
+		if g.statFile[path] {
+			return 0o600, true
+		}
+		return 0, false
+	}, RunInteractiveFn: func(name string, args ...string) error {
+		*calls = append(*calls, append([]string{name}, args...))
+		return g.interErr
+	}}, hostBinary: func() (string, error) { return "/usr/bin/pix-host", nil }}
 }
 
 // gogSetupTestCfg points config.Load()/Save() at a fresh temp file for the
@@ -646,7 +634,7 @@ func TestGogSetup_RegistrationFailureReported(t *testing.T) {
 		output: map[string]string{
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",
-			// no fake "sbx mcp add google-workspace ..." output => registerServers' env.run
+			// no fake "sbx mcp add google-workspace ..." output => registerServers' env.Run
 			// call for it returns an error, exercising the registration-failure
 			// path end to end.
 		},
@@ -674,7 +662,7 @@ func TestGogSetup_NoCredentialContentReads(t *testing.T) {
 		sbxRegisterOK: true,
 	}
 	env := ge.env()
-	env.readFile = func(path string) (string, error) {
+	env.fake().ReadFileFn = func(path string) (string, error) {
 		readFileCalled = true
 		return "", fmt.Errorf("must not be called")
 	}
@@ -728,7 +716,7 @@ func TestGogSetup_ExpandsPromptedHomeCredentialsPath(t *testing.T) {
 		sbxRegisterOK: true,
 	}
 	env := ge.env()
-	env.homeDir = func() string { return home }
+	env.fake().HomeDirFn = func() string { return home }
 	var out bytes.Buffer
 	in := strings.NewReader("you@example.com\n~/.config/pix/credentials/gog.json\n")
 	if err := gogSetup(env, gogSetupOpts{}, in, &out, true); err != nil {

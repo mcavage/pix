@@ -29,17 +29,13 @@ type ollamaProbe struct {
 // `ollama list` exec is BOUNDED (probeRun: hard timeout + output cap), so a
 // wedged ollama classifies as list-unverified rather than hanging the caller.
 func probeOllamaAt(env shellEnv, ep ollamaEndpoint) ollamaProbe {
-	if env.lookPath == nil {
-		return ollamaProbe{}
-	}
-	if _, err := env.lookPath("ollama"); err != nil {
+
+	if _, err := env.LookPath("ollama"); err != nil {
 		return ollamaProbe{}
 	}
 	p := ollamaProbe{installed: true, endpoint: ep}
-	if env.dial != nil {
-		p.daemonUp = env.dial(ep.Port)
-	}
-	if out, timedOut, err := probeRun(env, "ollama", "list"); err == nil && !timedOut {
+	p.daemonUp = env.DialLocal(ep.Port)
+	if out, timedOut, err := env.RunTimed("ollama", "list"); err == nil && !timedOut {
 		p.listOut, p.listOK = out, true
 	}
 	return p

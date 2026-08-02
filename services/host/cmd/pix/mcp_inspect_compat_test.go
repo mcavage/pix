@@ -3,23 +3,21 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"pix/host/sys/systest"
 	"strings"
 	"testing"
 )
 
 func TestRegisteredMCPCommandUsesCurrentInspectCommand(t *testing.T) {
 	var calls []string
-	env := shellEnv{
-		lookPath: func(name string) (string, error) { return "/usr/local/bin/" + name, nil },
-		run: func(name string, args ...string) (string, error) {
-			call := strings.Join(append([]string{name}, args...), " ")
-			calls = append(calls, call)
-			if call == "sbx mcp inspect slack" {
-				return "Name: slack\nType: local\nCommand: /opt/homebrew/bin/op run --no-masking --env-file=/Users/me/.config/pix/op-refs.env -- /Users/me/.local/bin/pix-host mcp slack\nResolved: /opt/homebrew/bin/op\n", nil
-			}
-			return "", os.ErrNotExist
-		},
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/local/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		call := strings.Join(append([]string{name}, args...), " ")
+		calls = append(calls, call)
+		if call == "sbx mcp inspect slack" {
+			return "Name: slack\nType: local\nCommand: /opt/homebrew/bin/op run --no-masking --env-file=/Users/me/.config/pix/op-refs.env -- /Users/me/.local/bin/pix-host mcp slack\nResolved: /opt/homebrew/bin/op\n", nil
+		}
+		return "", os.ErrNotExist
+	}}}
 	argv, ok := registeredMCPCommand(env, "slack")
 	if !ok {
 		t.Fatalf("current sbx inspect output was not recognized; calls=%v", calls)
@@ -48,15 +46,12 @@ func TestTrustedHostBinaryAcceptsInstalledSymlinkToCanonicalBinary(t *testing.T)
 	if err := os.Symlink(real, installed); err != nil {
 		t.Skipf("symlinks unsupported: %v", err)
 	}
-	env := shellEnv{
-		hostBinary: func() (string, error) { return real, nil },
-		lookPath: func(name string) (string, error) {
-			if name == "pix-host" {
-				return installed, nil
-			}
-			return "", os.ErrNotExist
-		},
-	}
+	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+		if name == "pix-host" {
+			return installed, nil
+		}
+		return "", os.ErrNotExist
+	}}, hostBinary: func() (string, error) { return real, nil }}
 	if _, ok := trustedHostBinaryExecPath(env, installed); !ok {
 		t.Fatal("installed pix-host symlink to the canonical binary was rejected")
 	}

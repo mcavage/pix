@@ -20,6 +20,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"pix/host/sys"
 )
@@ -35,6 +36,7 @@ type Fake struct {
 	LookPathFn            func(name string) (string, error)
 	RunFn                 func(name string, args ...string) (string, error)
 	RunTimedFn            func(name string, args ...string) (string, bool, error)
+	RunWithinFn           func(d time.Duration, name string, args ...string) (string, bool, error)
 	RunInteractiveFn      func(name string, args ...string) error
 	RunInteractiveQuietFn func(name string, args ...string) error
 
@@ -51,6 +53,17 @@ type Fake struct {
 	ExecutableFn func() (string, error)
 
 	DialLocalFn func(port int) bool
+
+	// Base, when set, answers any method this fixture did not wire, instead of
+	// refusing. It is for the handful of tests that genuinely want "the real OS,
+	// except these two seams" — one writes real files to a temp dir and only
+	// needs LookPath and Getenv faked.
+	//
+	// It must be set EXPLICITLY. A default of sys.Real{} would silently turn
+	// every fixture gap into a real subprocess or a real file read, which is the
+	// failure this package exists to prevent; opting in names the intent at the
+	// call site.
+	Base sys.System
 
 	// Calls records every command Run/RunTimed/RunInteractive* was asked to
 	// execute, in order, as "name arg arg". Recording is built in because
@@ -89,6 +102,9 @@ func (f *Fake) Count(prefix string) int {
 
 func (f *Fake) LookPath(name string) (string, error) {
 	if f.LookPathFn == nil {
+		if f.Base != nil {
+			return f.Base.LookPath(name)
+		}
 		return "", unwired("LookPath")
 	}
 	return f.LookPathFn(name)
@@ -97,6 +113,9 @@ func (f *Fake) LookPath(name string) (string, error) {
 func (f *Fake) Run(name string, args ...string) (string, error) {
 	f.record(name, args)
 	if f.RunFn == nil {
+		if f.Base != nil {
+			return f.Base.Run(name, args...)
+		}
 		return "", unwired("Run")
 	}
 	return f.RunFn(name, args...)
@@ -119,9 +138,23 @@ func (f *Fake) RunTimed(name string, args ...string) (string, bool, error) {
 	return f.RunTimedFn(name, args...)
 }
 
+// RunWithin falls back to RunTimed: a fixture almost never cares about the
+// bound, only about the answer, and making every fixture wire two seams to test
+// one behaviour is how fixtures end up with gaps.
+func (f *Fake) RunWithin(d time.Duration, name string, args ...string) (string, bool, error) {
+	if f.RunWithinFn == nil {
+		return f.RunTimed(name, args...)
+	}
+	f.record(name, args)
+	return f.RunWithinFn(d, name, args...)
+}
+
 func (f *Fake) RunInteractive(name string, args ...string) error {
 	f.record(name, args)
 	if f.RunInteractiveFn == nil {
+		if f.Base != nil {
+			return f.Base.RunInteractive(name, args...)
+		}
 		return unwired("RunInteractive")
 	}
 	return f.RunInteractiveFn(name, args...)
@@ -130,6 +163,9 @@ func (f *Fake) RunInteractive(name string, args ...string) error {
 func (f *Fake) RunInteractiveQuiet(name string, args ...string) error {
 	f.record(name, args)
 	if f.RunInteractiveQuietFn == nil {
+		if f.Base != nil {
+			return f.Base.RunInteractiveQuiet(name, args...)
+		}
 		return unwired("RunInteractiveQuiet")
 	}
 	return f.RunInteractiveQuietFn(name, args...)
@@ -137,6 +173,9 @@ func (f *Fake) RunInteractiveQuiet(name string, args ...string) error {
 
 func (f *Fake) ReadFile(path string) (string, error) {
 	if f.ReadFileFn == nil {
+		if f.Base != nil {
+			return f.Base.ReadFile(path)
+		}
 		// os.ErrNotExist, not a refusal: "this fixture declares no files" is a
 		// complete and common answer, and every caller already handles it.
 		return "", os.ErrNotExist
@@ -146,6 +185,9 @@ func (f *Fake) ReadFile(path string) (string, error) {
 
 func (f *Fake) WriteFile(path string, data []byte, perm os.FileMode) error {
 	if f.WriteFileFn == nil {
+		if f.Base != nil {
+			return f.Base.WriteFile(path, data, perm)
+		}
 		return unwired("WriteFile")
 	}
 	return f.WriteFileFn(path, data, perm)
@@ -153,6 +195,9 @@ func (f *Fake) WriteFile(path string, data []byte, perm os.FileMode) error {
 
 func (f *Fake) IsFile(path string) bool {
 	if f.IsFileFn == nil {
+		if f.Base != nil {
+			return f.Base.IsFile(path)
+		}
 		return false // "no such file" is a complete answer; see ReadFile.
 	}
 	return f.IsFileFn(path)
@@ -160,6 +205,9 @@ func (f *Fake) IsFile(path string) bool {
 
 func (f *Fake) Mode(path string) (os.FileMode, bool) {
 	if f.ModeFn == nil {
+		if f.Base != nil {
+			return f.Base.Mode(path)
+		}
 		return 0, false
 	}
 	return f.ModeFn(path)
@@ -177,6 +225,9 @@ func (f *Fake) Lock(lockPath string, fn func() error) error {
 
 func (f *Fake) Getenv(name string) string {
 	if f.GetenvFn == nil {
+		if f.Base != nil {
+			return f.Base.Getenv(name)
+		}
 		return "" // an unset variable is a complete answer.
 	}
 	return f.GetenvFn(name)
@@ -184,6 +235,9 @@ func (f *Fake) Getenv(name string) string {
 
 func (f *Fake) HomeDir() string {
 	if f.HomeDirFn == nil {
+		if f.Base != nil {
+			return f.Base.HomeDir()
+		}
 		return ""
 	}
 	return f.HomeDirFn()
@@ -191,20 +245,34 @@ func (f *Fake) HomeDir() string {
 
 func (f *Fake) Getwd() (string, error) {
 	if f.GetwdFn == nil {
+		if f.Base != nil {
+			return f.Base.Getwd()
+		}
 		return "", unwired("Getwd")
 	}
 	return f.GetwdFn()
 }
 
+// StateDir resolves for real when unwired, because it is an OVERRIDE seam
+// rather than a required one: production code always fell back to
+// config.StateDir(), and that resolver is driven by $XDG_STATE_HOME, which
+// tests already redirect. Refusing here would demand that every fixture wire a
+// seam whose real implementation is hermetic anyway.
 func (f *Fake) StateDir() (string, error) {
 	if f.StateDirFn == nil {
-		return "", unwired("StateDir")
+		if f.Base != nil {
+			return f.Base.StateDir()
+		}
+		return sys.Real{}.StateDir()
 	}
 	return f.StateDirFn()
 }
 
 func (f *Fake) Executable() (string, error) {
 	if f.ExecutableFn == nil {
+		if f.Base != nil {
+			return f.Base.Executable()
+		}
 		return "", unwired("Executable")
 	}
 	return f.ExecutableFn()
@@ -212,6 +280,9 @@ func (f *Fake) Executable() (string, error) {
 
 func (f *Fake) DialLocal(port int) bool {
 	if f.DialLocalFn == nil {
+		if f.Base != nil {
+			return f.Base.DialLocal(port)
+		}
 		return false // "nothing is listening" is a complete answer.
 	}
 	return f.DialLocalFn(port)

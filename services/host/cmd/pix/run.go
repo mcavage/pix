@@ -100,7 +100,7 @@ func runRun(argv []string) {
 	// snapshot further down, so rendering readiness costs `run` no second
 	// `sbx secret ls`.
 	var keyEvidence sbxKeyEvidence
-	if _, err := defaultShellEnv().lookPath("sbx"); err == nil && !configuredKeylessInference() {
+	if _, err := defaultShellEnv().LookPath("sbx"); err == nil && !configuredKeylessInference() {
 		env := defaultShellEnv()
 		bootstrapProviderKeys(env, os.Stdin, os.Stderr, isTTY(os.Stdin))
 		keyEvidence = probeSbxKeyEvidence(env)
@@ -630,7 +630,7 @@ func applyReplaceRm(env shellEnv, plan runLaunchPlan, name string) error {
 	if !plan.RmFirst {
 		return nil
 	}
-	if _, err := env.run("sbx", "rm", "-f", name); err != nil {
+	if _, err := env.Run("sbx", "rm", "-f", name); err != nil {
 		return fmt.Errorf("could not remove existing sandbox %q to replace it: %w", name, err)
 	}
 	// The launcher itself removed this sandbox, so its MCP receipt describes a
@@ -1048,17 +1048,15 @@ func repoFromBinary() (string, bool) {
 // match can't collide with anything else. It fails OPEN (returns true) only when
 // there's NO signal to judge from: no sbx, an ls error, or empty output.
 func localImageLoaded(env shellEnv, tag string) bool {
-	if tag == "" || (env.run == nil && env.probe == nil) {
+	if tag == "" || false {
 		return true
 	}
-	if env.lookPath != nil {
-		if _, err := env.lookPath("sbx"); err != nil {
-			return true
-		}
+	if _, err := env.LookPath("sbx"); err != nil {
+		return true
 	}
 	// BOUNDED (probeRun): a hung `sbx template ls` is a timeout, which is the
 	// same "no signal" as an error — fail open, never wedge the launch.
-	out, timedOut, err := probeRun(env, "sbx", "template", "ls")
+	out, timedOut, err := env.RunTimed("sbx", "template", "ls")
 	if timedOut || err != nil || strings.TrimSpace(out) == "" {
 		return true // no signal -> don't block
 	}

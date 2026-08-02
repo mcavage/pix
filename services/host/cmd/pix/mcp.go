@@ -552,10 +552,7 @@ func gogBareRegistrationNote(out io.Writer) {
 // two, so a PATH or op-refs.env mutation in that window can never register a
 // different command than the one that was just proven healthy.
 func buildGogRegistrar(env shellEnv, gogPath, account string) mcpRegistrar {
-	lookPath := env.lookPath
-	if lookPath == nil {
-		lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
-	}
+	lookPath := env.LookPath
 	reg := mcpRegistrar{gog: gogPath, account: account}
 	opPath, opErr := lookPath("op")
 	opRefs := resolveOpRefs(env)
@@ -577,13 +574,11 @@ func buildGogRegistrar(env shellEnv, gogPath, account string) mcpRegistrar {
 // probed against — no independent re-resolution here, so the registered
 // command is byte-for-byte the one that was just verified.
 func registerGogRegistrar(reg mcpRegistrar, env shellEnv, out io.Writer) error {
-	if env.run == nil {
-		return fmt.Errorf("internal: shellEnv.run not wired")
-	}
+
 	if reg.opRefs == "" {
 		gogBareRegistrationNote(out)
 	}
-	if _, err := env.run("sbx", reg.addArgs(gwServerName)...); err != nil {
+	if _, err := env.Run("sbx", reg.addArgs(gwServerName)...); err != nil {
 		return fmt.Errorf("sbx mcp add %s: %w", gwServerName, err)
 	}
 	fmt.Fprintln(out, "  registered: "+gwServerName)
@@ -591,13 +586,11 @@ func registerGogRegistrar(reg mcpRegistrar, env shellEnv, out io.Writer) error {
 }
 
 func registerDocsCreateRegistrar(reg mcpRegistrar, env shellEnv, out io.Writer) error {
-	if env.run == nil {
-		return fmt.Errorf("internal: shellEnv.run not wired")
-	}
+
 	if strings.TrimSpace(reg.hostBin) == "" {
 		return fmt.Errorf("pix-host path is unavailable")
 	}
-	if _, err := env.run("sbx", reg.addArgs(gwDocsCreateServerName)...); err != nil {
+	if _, err := env.Run("sbx", reg.addArgs(gwDocsCreateServerName)...); err != nil {
 		return fmt.Errorf("sbx mcp add %s: %w", gwDocsCreateServerName, err)
 	}
 	fmt.Fprintln(out, "  registered: "+gwDocsCreateServerName)
@@ -630,13 +623,10 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	// precondition to check here anymore.
 
 	// Nil-safe lookPath: a partially-populated shellEnv (some tests set only
-	// env.run) must degrade to "binary not found" rather than panic — the same
-	// posture localMCPNames takes for a nil env.run. Every op/gog/sbx lookup below
+	// env.Run) must degrade to "binary not found" rather than panic — the same
+	// posture localMCPNames takes for a nil env.Run. Every op/gog/sbx lookup below
 	// goes through this.
-	lookPath := env.lookPath
-	if lookPath == nil {
-		lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
-	}
+	lookPath := env.LookPath
 
 	// The set of names this host can serve locally is the source of truth
 	// (`pix-host mcp --list`). gog is always a valid local special case even
@@ -806,16 +796,13 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 				}
 				continue
 			case catalogMCPUnauthorized:
-				if env.runInteractive == nil {
-					regErrs = append(regErrs, fmt.Errorf("%s: registered but not authorized; run `pix mcp auth %s`", n, n))
-					continue
-				}
+
 				fmt.Fprintf(out, "  Authorize %s in your browser…\n", n)
 				var authErr error
-				if env.quiet && env.runInteractiveQuiet != nil {
-					authErr = env.runInteractiveQuiet("sbx", "mcp", "auth", n)
+				if env.quiet {
+					authErr = env.RunInteractiveQuiet("sbx", "mcp", "auth", n)
 				} else {
-					authErr = env.runInteractive("sbx", "mcp", "auth", n)
+					authErr = env.RunInteractive("sbx", "mcp", "auth", n)
 				}
 				if authErr != nil {
 					regErrs = append(regErrs, fmt.Errorf("%s: authorization failed: %v", n, authErr))
@@ -834,26 +821,26 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 			}
 		}
 		var err error
-		if containers[n].RemoteURL != "" && env.runInteractive != nil {
+		if containers[n].RemoteURL != "" {
 			// `sbx mcp add --url` may perform OAuth and keep a localhost callback
 			// listener alive while the browser completes. A bounded probe kills that
 			// listener, leaving the browser at ERR_CONNECTION_REFUSED. Remote MCP
 			// registration is an explicitly interactive mutation; let it inherit the
 			// terminal and run to completion. Read-only status checks remain bounded.
-			if env.quiet && env.runInteractiveQuiet != nil {
+			if env.quiet {
 				fmt.Fprintf(out, "  Authorize %s in your browser…\n", n)
-				err = env.runInteractiveQuiet("sbx", args...)
+				err = env.RunInteractiveQuiet("sbx", args...)
 			} else {
-				err = env.runInteractive("sbx", args...)
+				err = env.RunInteractive("sbx", args...)
 			}
-		} else if env.probe != nil {
-			_, timedOut, probeErr := env.probe("sbx", args...)
+		} else {
+			// One branch, not two: the bounded seam is always present, so the
+			// "fall back to the plain runner" arm this used to carry is gone.
+			_, timedOut, probeErr := env.RunTimed("sbx", args...)
 			err = probeErr
 			if timedOut {
 				err = fmt.Errorf("timed out")
 			}
-		} else {
-			_, err = env.run("sbx", args...)
 		}
 		if err != nil {
 			fmt.Fprintf(out, "  FAILED to register: %s (%v)\n", n, err)
@@ -901,7 +888,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 // registered again.
 func remoteMCPRegistrationCurrent(env shellEnv, name, endpoint string) bool {
 	for _, verb := range []string{"inspect", "get"} {
-		out, timedOut, err := probeRun(env, "sbx", "mcp", verb, name)
+		out, timedOut, err := env.RunTimed("sbx", "mcp", verb, name)
 		if err == nil && !timedOut && outputContainsCanonicalEndpoint(out, endpoint) {
 			return true
 		}
@@ -1038,7 +1025,7 @@ func allPreloadedMCP(servers []string) []string {
 // requested name rather than risk registering a remote gateway-catalog name as a
 // local pix-host subcommand.
 func localMCPNames(env shellEnv, hostResolver func() (string, error)) (map[string]bool, bool) {
-	if env.run == nil || hostResolver == nil {
+	if hostResolver == nil {
 		return nil, false
 	}
 	hb, err := hostResolver()
@@ -1047,7 +1034,7 @@ func localMCPNames(env shellEnv, hostResolver func() (string, error)) (map[strin
 	}
 	// BOUNDED: a hung `pix-host mcp --list` degrades to an unknown local
 	// set (callers fail closed), never a wedged caller.
-	out, timedOut, err := probeRun(env, hb, "mcp", "--list")
+	out, timedOut, err := env.RunTimed(hb, "mcp", "--list")
 	if err != nil || timedOut {
 		return nil, false
 	}
@@ -1066,18 +1053,14 @@ func localMCPNames(env shellEnv, hostResolver func() (string, error)) (map[strin
 // This is the path repo-less hosts must create, so every user-facing message and
 // the seeder reference it (never a meaningless repo-relative config/op-refs.env).
 func defaultOpRefsPath(env shellEnv) string {
-	if env.getenv != nil {
-		if p := env.getenv("PIX_CONFIG"); p != "" {
-			return filepath.Join(filepath.Dir(p), "op-refs.env")
-		}
-		if xdg := env.getenv("XDG_CONFIG_HOME"); xdg != "" {
-			return filepath.Join(xdg, "pix", "op-refs.env")
-		}
+	if p := env.Getenv("PIX_CONFIG"); p != "" {
+		return filepath.Join(filepath.Dir(p), "op-refs.env")
 	}
-	if env.homeDir != nil {
-		if home := env.homeDir(); home != "" {
-			return filepath.Join(home, ".config", "pix", "op-refs.env")
-		}
+	if xdg := env.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "pix", "op-refs.env")
+	}
+	if home := env.HomeDir(); home != "" {
+		return filepath.Join(home, ".config", "pix", "op-refs.env")
 	}
 	return config.OpRefsPath()
 }

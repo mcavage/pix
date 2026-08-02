@@ -727,11 +727,8 @@ func slackRegistrationAndAttachmentChecks(env shellEnv) []check {
 		checks = append(checks, check{label: "registration", verdict: verdictTodo,
 			detail: "a server named slack is registered, but it is not the canonical Pix host command",
 			todo:   "inspect it with: sbx mcp inspect slack"})
-	case env.lookPath == nil:
-		checks = append(checks, check{label: "registration", verdict: verdictUnverifiable,
-			detail: "sbx unavailable here; registration cannot be verified"})
 	default:
-		if _, err := env.lookPath("sbx"); err != nil {
+		if _, err := env.LookPath("sbx"); err != nil {
 			checks = append(checks, check{label: "registration", verdict: verdictUnverifiable,
 				detail: "sbx unavailable here; registration cannot be verified"})
 		} else {
@@ -777,14 +774,11 @@ func runSlackDisableCmd(argv []string) {
 // refuse to touch config rather than risk silently dropping a registration
 // disable can't see.
 func slackRegistrationPresence(env shellEnv) (present bool, err error) {
-	if env.lookPath == nil {
-		return false, fmt.Errorf("could not confirm the %s registration (no shell environment wired): "+
-			"refusing to remove config while the gateway state is unreadable", slackServerName)
-	}
-	if _, lerr := env.lookPath("sbx"); lerr != nil {
+
+	if _, lerr := env.LookPath("sbx"); lerr != nil {
 		return false, nil // sbx isn't installed here: nothing is registered from this host's POV
 	}
-	out, timedOut, rerr := probeRun(env, "sbx", "mcp", "ls")
+	out, timedOut, rerr := env.RunTimed("sbx", "mcp", "ls")
 	if timedOut || rerr != nil {
 		return false, fmt.Errorf("could not confirm the %s registration (sbx mcp ls did not resolve cleanly): "+
 			"refusing to remove config while the gateway state is unreadable; check the sbx daemon (sbx mcp status), "+
@@ -840,10 +834,8 @@ func slackDisableStatic(cfg *config.Config, env shellEnv, out io.Writer) error {
 	}
 
 	if registered {
-		if env.run == nil {
-			return fmt.Errorf("internal: shellEnv.run not wired")
-		}
-		if _, err := env.run("sbx", "mcp", "rm", slackServerName); err != nil {
+
+		if _, err := env.Run("sbx", "mcp", "rm", slackServerName); err != nil {
 			return fmt.Errorf("removing the %s registration: %w (remove it by hand: sbx mcp rm %s)",
 				slackServerName, err, slackServerName)
 		}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/sys/systest"
 )
 
 // --- S1 [CRITICAL]: pack.lock symlink bypass + arbitrary overwrite ------------
@@ -93,7 +94,7 @@ func TestClonePack_ScrubsSymlinkPackLock(t *testing.T) {
 	}
 
 	const url = "https://example.com/attacker/pack.git"
-	env := shellEnv{run: func(name string, args ...string) (string, error) {
+	env := shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "clone" {
 			dest := args[len(args)-1]
 			if err := os.MkdirAll(dest, 0o755); err != nil {
@@ -115,7 +116,7 @@ func TestClonePack_ScrubsSymlinkPackLock(t *testing.T) {
 			return "def456\n", nil
 		}
 		return "", nil
-	}}
+	}}}
 
 	dest, err := clonePack(env, &bytes.Buffer{}, url)
 	if err != nil {
@@ -156,7 +157,7 @@ func TestClonePack_ScrubsCheckedInRegularPackLock(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
 
 	const url = "https://example.com/attacker/pack2.git"
-	env := shellEnv{run: func(name string, args ...string) (string, error) {
+	env := shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "clone" {
 			dest := args[len(args)-1]
 			if err := os.MkdirAll(dest, 0o755); err != nil {
@@ -171,7 +172,7 @@ func TestClonePack_ScrubsCheckedInRegularPackLock(t *testing.T) {
 			}
 		}
 		return "", nil
-	}}
+	}}}
 
 	dest, err := clonePack(env, &bytes.Buffer{}, url)
 	if err != nil {

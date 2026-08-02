@@ -26,7 +26,7 @@ import (
 // depending on exact call sequencing. calls records everything (name+args)
 // in order, shared across the whole disable flow, so ordering assertions
 // (revoke -> delete -> ...) can be made against a single timeline alongside
-// env.run's sbx calls (see orderRecorder below).
+// env.Run's sbx calls (see orderRecorder below).
 type slackOAuthRuntimeFakeRunner struct {
 	mu        sync.Mutex
 	getBlob   []byte
@@ -128,8 +128,8 @@ func slackOAuthRegisteredEnv(t *testing.T, f *slackTestEnv, calls *[][]string, m
 	stateDir := t.TempDir()
 	e := f.env()
 	e.hostBinary = func() (string, error) { return "/fake/bin/pix-host", nil }
-	e.stateDir = func() (string, error) { return stateDir, nil }
-	e.run = func(name string, args ...string) (string, error) {
+	e.fake().StateDirFn = func() (string, error) { return stateDir, nil }
+	e.fake().RunFn = func(name string, args ...string) (string, error) {
 		if mu != nil {
 			mu.Lock()
 			*calls = append(*calls, append([]string{name}, args...))
@@ -278,9 +278,9 @@ func TestSlackDisableOAuthOrdering(t *testing.T) {
 	f := &slackTestEnv{sbxPresent: true}
 	var calls [][]string
 	e := slackOAuthRegisteredEnv(t, f, &calls, &mu)
-	// Wrap env.run so its calls land in the SAME order log as revoke/op calls.
-	inner := e.run
-	e.run = func(name string, args ...string) (string, error) {
+	// Wrap env.Run so its calls land in the SAME order log as revoke/op calls.
+	inner := e.fake().RunFn
+	e.fake().RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 3 && args[0] == "mcp" && args[1] == "rm" {
 			mu.Lock()
 			order = append(order, "sbx:mcp:rm")
@@ -543,7 +543,7 @@ func TestSlackDisableOAuthNeverRemovesForeignRegistration(t *testing.T) {
 
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	e.run = func(name string, args ...string) (string, error) {
+	e.fake().RunFn = func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "mcp" && args[1] == "ls" {
 			return "slack\n", nil
 		}
@@ -680,7 +680,7 @@ func TestSlackOAuthRuntimeFailsClosedWithoutStateDir(t *testing.T) {
 
 	f := &slackTestEnv{sbxPresent: true}
 	e := f.env()
-	e.stateDir = func() (string, error) { return "", fmt.Errorf("$HOME could not be determined") }
+	e.fake().StateDirFn = func() (string, error) { return "", fmt.Errorf("$HOME could not be determined") }
 
 	_, _, ok := slackOAuthRuntime(cfg, e, slackOAuthRuntimeDeps{runner: &slackOAuthRuntimeFakeRunner{}, clock: slackoauth.SystemClock{}})
 	if ok {

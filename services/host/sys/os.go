@@ -78,3 +78,9 @@ func AtomicWriteInDir(dir, name string, data []byte, perm os.FileMode) error {
 	}
 	return nil
 }
+
+// RunTimedDefault is RunTimed at the standard ProbeTimeout, for callers that
+// have no reason to choose their own.
+func RunTimedDefault(name string, args ...string) (string, bool, error) {
+	return RunTimed(ProbeTimeout, name, args...)
+}

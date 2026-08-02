@@ -53,7 +53,7 @@ func probeListTools(env shellEnv, argv []string) probeResult {
 		return probeResult{status: probeError, detail: "has no command to run"}
 	}
 	full := append(append([]string{}, argv...), "--list-tools")
-	out, timedOut, err := probeRun(env, full[0], full[1:]...)
+	out, timedOut, err := env.RunTimed(full[0], full[1:]...)
 	if timedOut {
 		return probeResult{status: probeTimedOut, detail: fmt.Sprintf("timed out after %s", probeTimeout)}
 	}
@@ -109,10 +109,8 @@ func trustedExecPath(env shellEnv, tok, base string) (string, bool) {
 	if !strings.ContainsAny(tok, `/\`) {
 		return tok, true // bare name: exec resolves via PATH = lookPath's answer
 	}
-	if env.lookPath == nil {
-		return "", false
-	}
-	canonical, err := env.lookPath(base)
+
+	canonical, err := env.LookPath(base)
 	if err != nil || canonical == "" {
 		return "", false
 	}
@@ -124,8 +122,8 @@ func trustedExecPath(env shellEnv, tok, base string) (string, bool) {
 
 // trustedGogSpawn reports whether a registered gog command is BOTH the
 // recognized gog shape (gogSpawnArgv) AND built from canonical executables:
-// the inner gog binary must match env.lookPath("gog"), and — when op-wrapped —
-// the op binary must match env.lookPath("op"). On success it returns the
+// the inner gog binary must match env.LookPath("gog"), and — when op-wrapped —
+// the op binary must match env.LookPath("op"). On success it returns the
 // NORMALIZED argv: the gog/op executable tokens replaced with the resolvers'
 // canonical paths, so the caller execs the TRUSTED tokens, never the
 // registered spelling. Only that normalized spawn is ever executed as a probe.

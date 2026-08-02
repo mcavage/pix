@@ -15,6 +15,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/inference"
+	"pix/host/sys/systest"
 )
 
 // reconcileEnv fakes a host where the named providers have resolvable 1Password
@@ -30,22 +31,17 @@ func modelsAddEnv(t *testing.T, providers ...string) shellEnv {
 		}
 	}
 	body := strings.Join(lines, "\n") + "\n"
-	return shellEnv{
-		lookPath: func(n string) (string, error) { return "/usr/bin/" + n, nil },
-		readFile: func(path string) (string, error) {
-			if strings.HasSuffix(path, "hostmode.env") || strings.HasSuffix(path, "op-refs.env") {
-				return body, nil
-			}
-			return "", os.ErrNotExist
-		},
-		run: func(name string, args ...string) (string, error) {
-			if name == "op" {
-				return "sk-test\n", nil
-			}
-			return "", nil
-		},
-		directInferenceProbe: func(provider, model, key string) error { return nil },
-	}
+	return shellEnv{System: &systest.Fake{LookPathFn: func(n string) (string, error) { return "/usr/bin/" + n, nil }, ReadFileFn: func(path string) (string, error) {
+		if strings.HasSuffix(path, "hostmode.env") || strings.HasSuffix(path, "op-refs.env") {
+			return body, nil
+		}
+		return "", os.ErrNotExist
+	}, RunFn: func(name string, args ...string) (string, error) {
+		if name == "op" {
+			return "sk-test\n", nil
+		}
+		return "", nil
+	}}, directInferenceProbe: func(provider, model, key string) error { return nil }}
 }
 
 func rosterProviders(cfg *config.Config) string {
@@ -232,11 +228,8 @@ func TestDoctorGapCheckIsOptionalAndActionable(t *testing.T) {
 func TestSecretSetNudgesTowardWiring(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "op-refs.env")
-	env := shellEnv{
-		readFile:  func(string) (string, error) { return "", nil },
-		writeFile: func(string, []byte, os.FileMode) error { return nil },
-	}
-	env.readFile = func(p string) (string, error) {
+	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "", nil }, WriteFileFn: func(string, []byte, os.FileMode) error { return nil }}}
+	env.fake().ReadFileFn = func(p string) (string, error) {
 		if p == path {
 			return "", nil
 		}
