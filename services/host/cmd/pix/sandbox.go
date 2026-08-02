@@ -90,7 +90,15 @@ func runLs(argv []string) {
 		fmt.Print(lsUsage)
 		return
 	}
-	jsonOut := hasFlagLauncher(argv, "--json")
+	// hasJSONFlag rather than a shared helper: `ls` is the last verb still
+	// parsing argv by hand, and a one-line scan beats keeping a generic
+	// arg-parsing kit alive for it. It goes when `ls` migrates.
+	jsonOut := false
+	for _, a := range argv {
+		if a == "--json" {
+			jsonOut = true
+		}
+	}
 	env := defaultShellEnv()
 	if _, err := env.LookPath("sbx"); err != nil {
 		fatalSbx(fmt.Errorf("sbx not found on PATH; install the Docker Sandboxes CLI to list sandboxes"))

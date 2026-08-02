@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"pix/host/cli"
 
 	"pix/host/config"
 )
@@ -15,17 +16,7 @@ var errHelpRequested = errors.New("help requested")
 // before any `--` terminator (everything after `--` is passthrough and must not
 // be scanned for help). This is the single shared contract every verb + its
 // subcommands use so `<verb> -h` / `<verb> --help` always prints usage + exit 0.
-func wantsHelp(argv []string) bool {
-	for _, a := range argv {
-		if a == "--" {
-			return false
-		}
-		if a == "-h" || a == "--help" {
-			return true
-		}
-	}
-	return false
-}
+func wantsHelp(argv []string) bool { return cli.WantsHelp(argv) }
 
 // knownVerbs is the set of top-level verbs, used to suggest a fix when a bare
 // positional (a would-be run DIR) is actually a mistyped verb.
@@ -242,7 +233,7 @@ func verbUsage(verb string) (string, bool) {
 	case "models":
 		return modelsUsage(), true
 	case "agent":
-		return agentUsage, true
+		return agentUsage(), true
 	}
 	return "", false
 }

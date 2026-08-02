@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"pix/host/cli"
 	"strings"
 
 	"pix/host/config"
@@ -110,9 +111,4 @@ func upDown(up bool) string {
 	return "down"
 }
 
-func plural(n int, noun string) string {
-	if n == 1 {
-		return fmt.Sprintf("1 %s", noun)
-	}
-	return fmt.Sprintf("%d %ss", n, noun)
-}
+func plural(n int, noun string) string { return cli.Plural(n, noun) }

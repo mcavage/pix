@@ -35,8 +35,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/alecthomas/kong"
+	"golang.org/x/term"
 
 	"pix/host/config"
 	"pix/host/sys"
@@ -210,4 +212,48 @@ func Usage[T any](name, description string) string {
 		_, _ = parser.Parse([]string{"--help"})
 	}()
 	return buf.String()
+}
+
+// ── shared launcher primitives ──────────────────────────────────────────────
+//
+// These are the handful of helpers every verb needed, which is why they showed
+// up as an inbound dependency of every domain measured for extraction
+// (scripts/extract-pkg). They live here rather than in a grab-bag `util`
+// package because each one is about presenting a command to a user, which is
+// what this package is for.
+
+// WantsHelp reports whether argv requests help. A `--` terminator stops the
+// scan: everything after it belongs to the wrapped program, and a `--help` there
+// is theirs, not ours.
+func WantsHelp(argv []string) bool {
+	for _, a := range argv {
+		if a == "--" {
+			return false
+		}
+		if a == "-h" || a == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+// IsTTY reports whether r is a terminal. Commands consult Deps.Interactive
+// rather than calling this directly; it is exported for the one caller that
+// builds a Deps.
+func IsTTY(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(f.Fd()))
+}
+
+// Plural renders "1 thing" / "2 things". Naive by design: every noun it is
+// asked about is an English word with an -s plural, and a real pluralizer would
+// be a dependency to avoid saying "2 checks".
+func Plural(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s", noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }

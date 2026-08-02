@@ -133,7 +133,7 @@ func TestAgentNew_NextStepsPointAtLiveScorecardPath(t *testing.T) {
 	old := os.Stdout
 	rp, wp, _ := os.Pipe()
 	os.Stdout = wp
-	agentNew([]string{"redrive-dx-probe"})
+	mustRunAgent(t, "new", "redrive-dx-probe")
 	_ = wp.Close()
 	os.Stdout = old
 	var buf bytes.Buffer
@@ -154,7 +154,7 @@ func TestAgentNew_NextStepsPointAtLiveScorecardPath(t *testing.T) {
 // subprocess since agentReassess calls os.Exit(2) on this path.
 func TestAgentReassessModel_PointsAtLiveScorecardPath(t *testing.T) {
 	if os.Getenv("PIX_DXFIX_REASSESS") == "1" {
-		agentReassess([]string{"--model", "anthropic/claude-haiku-4-5"})
+		mustRunAgent(t, "reassess", "--model", "anthropic/claude-haiku-4-5")
 		return
 	}
 	dir := t.TempDir()

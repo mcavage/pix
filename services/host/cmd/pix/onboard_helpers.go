@@ -1,16 +1,14 @@
 package main
 
 import (
+	"pix/host/cli"
 	"pix/host/sys"
 
 	"bufio"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
-
-	"golang.org/x/term"
 
 	"pix/host/config"
 )
@@ -72,10 +70,4 @@ func promptLine(sio setupIO, prompt string) string {
 
 // isTTY reports whether r is an interactive terminal. Any non-*os.File (e.g. a
 // test buffer) or a redirected/piped stdin is treated as non-interactive.
-func isTTY(r io.Reader) bool {
-	f, ok := r.(*os.File)
-	if !ok {
-		return false
-	}
-	return term.IsTerminal(int(f.Fd()))
-}
+func isTTY(r io.Reader) bool { return cli.IsTTY(r) }

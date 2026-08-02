@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"pix/host/cli"
 	"pix/host/routing"
+	"pix/host/sys/systest"
 )
 
 func TestParseAgent(t *testing.T) {
@@ -78,7 +80,10 @@ func TestAgentNewEditRm(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	agentNew([]string{"go-eng", "--intent", "code", "--budget", "0.25", "--tools", "read,edit"})
+	// Through the PARSER now, not straight into the handler: the flags, their
+	// types and their defaults are part of what is under test, and they were not
+	// before — the old call handed the handler a []string it parsed itself.
+	mustRunAgent(t, "new", "go-eng", "--intent", "code", "--budget", "0.25", "--tools", "read,edit")
 
 	mdPath := filepath.Join("agents", "go-eng.md")
 	m, _, err := loadAgentMeta(mdPath)
@@ -90,7 +95,7 @@ func TestAgentNewEditRm(t *testing.T) {
 	}
 
 	// Edit: change intent + budget; parse must still succeed (the quoted-number bug).
-	agentEdit([]string{"go-eng", "--intent", "reasoning", "--budget", "0.30"})
+	mustRunAgent(t, "edit", "go-eng", "--intent", "reasoning", "--budget", "0.30")
 	m2, _, err := loadAgentMeta(mdPath)
 	if err != nil {
 		t.Fatalf("loadAgentMeta after edit: %v", err)
@@ -103,7 +108,7 @@ func TestAgentNewEditRm(t *testing.T) {
 	}
 
 	// Remove.
-	agentRm([]string{"go-eng", "--yes"})
+	mustRunAgent(t, "rm", "go-eng", "--yes")
 	if _, err := os.Stat(mdPath); !os.IsNotExist(err) {
 		t.Fatalf("agent md should be gone: %v", err)
 	}
@@ -139,5 +144,19 @@ func TestRepoRoutingTarget(t *testing.T) {
 	want := filepath.Join(dir, "routing.json")
 	if got := repoRoutingTarget(); got != want {
 		t.Fatalf("repo dir: want %q, got %q", want, got)
+	}
+}
+
+// mustRunAgent drives the real `pix agent` parser and fails on any error. It
+// exists because the handlers no longer take []string: argv goes through kong,
+// which is the behaviour worth testing.
+func mustRunAgent(t *testing.T, argv ...string) {
+	t.Helper()
+	d := &cli.Deps{
+		Sys: &systest.Fake{}, Out: os.Stdout, Err: os.Stderr,
+		In: strings.NewReader(""), Interactive: false,
+	}
+	if err := cli.Run[AgentCmd]("agent", agentDescription, argv, d); err != nil {
+		t.Fatalf("pix agent %v: %v", argv, err)
 	}
 }
