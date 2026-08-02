@@ -14,7 +14,7 @@ package main
 //     read-only `mcp ls`) printed "would run: ..." and exited 0 when sbx
 //     isn't on PATH — a command that PROMISES an operation must not report a
 //     silent success. They now return/exit with errSbxUnavailable ->
-//     exitServiceDown (3), the SAME "dependency unavailable" code
+//     rpc.ExitServiceDown (3), the SAME "dependency unavailable" code
 //     `pix memory`/`secret` already use, while still printing the exact
 //     recovery command verbatim and never mutating a receipt or config file.
 //  4: the same embedded-repo-path mistake as finding 1 also leaked into
@@ -31,6 +31,7 @@ import (
 	"testing"
 
 	"pix/host/routing"
+	"pix/host/rpc"
 )
 
 // --- finding 1: route/models help is repo-less for the consumer -----------
@@ -209,8 +210,8 @@ func TestRunMcpLs_AbsentSbxExitsServiceDown(t *testing.T) {
 	if !errors.As(runErr, &ee) {
 		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
 	}
-	if ee.ExitCode() != exitServiceDown {
-		t.Errorf("exit code = %d, want %d (exitServiceDown); output:\n%s", ee.ExitCode(), exitServiceDown, out.String())
+	if ee.ExitCode() != rpc.ExitServiceDown {
+		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", ee.ExitCode(), rpc.ExitServiceDown, out.String())
 	}
 	if !strings.Contains(out.String(), "would run: sbx mcp ls") {
 		t.Errorf("expected the exact recovery command, got:\n%s", out.String())
@@ -238,8 +239,8 @@ func TestRunMcpAuth_AbsentSbxExitsServiceDown(t *testing.T) {
 	if !errors.As(runErr, &ee) {
 		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
 	}
-	if ee.ExitCode() != exitServiceDown {
-		t.Errorf("exit code = %d, want %d (exitServiceDown); output:\n%s", ee.ExitCode(), exitServiceDown, out.String())
+	if ee.ExitCode() != rpc.ExitServiceDown {
+		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", ee.ExitCode(), rpc.ExitServiceDown, out.String())
 	}
 	if !strings.Contains(out.String(), "would run: sbx mcp auth --all") {
 		t.Errorf("expected the exact recovery command, got:\n%s", out.String())
@@ -267,8 +268,8 @@ func TestRunMcpBundle_AbsentSbxExitsServiceDown(t *testing.T) {
 	if !errors.As(runErr, &ee) {
 		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
 	}
-	if ee.ExitCode() != exitServiceDown {
-		t.Errorf("exit code = %d, want %d (exitServiceDown); output:\n%s", ee.ExitCode(), exitServiceDown, out.String())
+	if ee.ExitCode() != rpc.ExitServiceDown {
+		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", ee.ExitCode(), rpc.ExitServiceDown, out.String())
 	}
 	if !strings.Contains(out.String(), "would run: sbx mcp bundle add") {
 		t.Errorf("expected the exact recovery command, got:\n%s", out.String())
@@ -320,8 +321,8 @@ func TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation(t *testing.T) 
 	if !errors.As(runErr, &ee) {
 		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
 	}
-	if ee.ExitCode() != exitServiceDown {
-		t.Errorf("exit code = %d, want %d (exitServiceDown); output:\n%s", ee.ExitCode(), exitServiceDown, out.String())
+	if ee.ExitCode() != rpc.ExitServiceDown {
+		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", ee.ExitCode(), rpc.ExitServiceDown, out.String())
 	}
 	if !strings.Contains(out.String(), "sbx mcp add slack") {
 		t.Errorf("expected the exact would-run registration command, got:\n%s", out.String())

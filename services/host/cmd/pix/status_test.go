@@ -9,6 +9,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/monitor"
+	"pix/host/rpc"
 	"pix/host/sys/systest"
 )
 
@@ -26,8 +27,8 @@ func fakeStatusEnv() shellEnv {
 			return "google-workspace\nnotion\n", nil
 		}
 		return "", nil
-	}, DialLocalFn: func(port int) bool { return port == memoryPortDefault }, IsFileFn: func(string) bool { return false }}, IdentityProbe: identityFake(map[int]serviceIdentityResult{
-		memoryPortDefault: {Name: identityMemoryName, Ready: true},
+	}, DialLocalFn: func(port int) bool { return port == rpc.MemoryPortDefault }, IsFileFn: func(string) bool { return false }}, IdentityProbe: identityFake(map[int]serviceIdentityResult{
+		rpc.MemoryPortDefault: {Name: identityMemoryName, Ready: true},
 	})}
 }
 

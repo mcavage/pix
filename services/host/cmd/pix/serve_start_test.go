@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/rpc"
 )
 
 // starterRec records what a fake serveStarter did, and drives a fake clock.
@@ -482,8 +483,8 @@ func TestRequiredServePorts(t *testing.T) {
 	}
 	both := starterCfg()
 	got := requiredServePorts(st, both, nil)
-	if len(got) != 2 || got[0].name != "memory" || got[0].port != memoryPortDefault ||
-		got[1].name != "knowledge" || got[1].port != knowledgePortDefault {
+	if len(got) != 2 || got[0].name != "memory" || got[0].port != rpc.MemoryPortDefault ||
+		got[1].name != "knowledge" || got[1].port != rpc.KnowledgePortDefault {
 		t.Errorf("full set = %v", got)
 	}
 	if got := requiredServePorts(st, both, []string{"memory", "memory", "bogus"}); len(got) != 1 || got[0].name != "memory" {

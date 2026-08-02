@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/rpc"
 	"pix/host/sys/systest"
 )
 
@@ -41,7 +42,7 @@ func TestBuildHostState(t *testing.T) {
 	if hs.Keys.OpenAI || hs.Keys.Google {
 		t.Errorf("openai/google should be absent: %+v", hs.Keys)
 	}
-	if !hs.Memory.Up || hs.Memory.Port != memoryPortDefault {
+	if !hs.Memory.Up || hs.Memory.Port != rpc.MemoryPortDefault {
 		t.Errorf("memory up/port wrong: %+v", hs.Memory)
 	}
 	if !hs.Knowledge.Seeded || len(hs.Knowledge.Bundles) != 1 {

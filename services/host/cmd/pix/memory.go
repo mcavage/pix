@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/rpc"
 )
 
 // runMemory is the `memory` verb tree — the host-side CLI over the memory daemon
@@ -25,7 +26,7 @@ import (
 //	pix memory stats [--json]
 //
 // Every verb degrades cleanly when the daemon is down: an actionable message on
-// stderr + exit code 3 (exitServiceDown), distinct from usage (2) / generic (1).
+// stderr + exit code 3 (rpc.ExitServiceDown), distinct from usage (2) / generic (1).
 func runMemory(argv []string) {
 	ctx := "memory"
 	if len(argv) > 0 && argv[0] != "-h" && argv[0] != "--help" {
@@ -34,11 +35,11 @@ func runMemory(argv []string) {
 	// Lazy auto-start: if the memory daemon is down, spin it up detached before
 	// dispatching, so the common "daemon just not up yet" case just works. Never
 	// on a help request (help must stay side-effect free); best-effort — on
-	// failure the errServiceDown path below still degrades with exit 3.
+	// failure the rpc.ErrServiceDown path below still degrades with exit 3.
 	if len(argv) > 0 && !wantsHelp(argv) {
 		ensureServeUp([]string{"memory"}, ensureServeTimeout)
 	}
-	if err := runMemoryCore(argv, loadResolvedConfig, memoryClient, os.Stdout); err != nil {
+	if err := runMemoryCore(argv, loadResolvedConfig, rpc.MemoryClient, os.Stdout); err != nil {
 		exitFromErr(ctx, err)
 	}
 }
@@ -49,7 +50,7 @@ func runMemory(argv []string) {
 // injected so tests can feed a failing loader and prove help still works. It
 // returns an error (nil on success/help) instead of calling os.Exit; runMemory
 // classifies the error into an exit code.
-func runMemoryCore(argv []string, load func() (*config.Config, string, error), client func() rpcClient, out io.Writer) error {
+func runMemoryCore(argv []string, load func() (*config.Config, string, error), client func() rpc.Client, out io.Writer) error {
 	if len(argv) == 0 {
 		return usageErr(memoryUsage)
 	}
@@ -63,7 +64,7 @@ func runMemoryCore(argv []string, load func() (*config.Config, string, error), c
 	// with a zero client + empty profile, which dispatchMemory only reaches after
 	// printing usage (fs.help short-circuits before any RPC), so neither is used.
 	if wantsHelp(rest) {
-		return dispatchMemory(sub, rest, rpcClient{}, out, "")
+		return dispatchMemory(sub, rest, rpc.Client{}, out, "")
 	}
 	// Load config to surface a config error up front rather than proceeding with a
 	// fallback (config.Load() can still fail on malformed TOML). The second return
@@ -91,7 +92,7 @@ Backup/restore are now TOP-LEVEL verbs (they cover config + op-refs + memory):
 
 // dispatchMemory is the testable core: it runs one subcommand against an
 // injected client + writer and returns an error (instead of exiting).
-func dispatchMemory(sub string, argv []string, c rpcClient, out io.Writer, profile string) error {
+func dispatchMemory(sub string, argv []string, c rpc.Client, out io.Writer, profile string) error {
 	switch sub {
 	case "recall", "search":
 		return memoryRecall(argv, c, out, profile)
@@ -108,7 +109,7 @@ func dispatchMemory(sub string, argv []string, c rpcClient, out io.Writer, profi
 	}
 }
 
-func memoryRecall(argv []string, c rpcClient, out io.Writer, profile string) error {
+func memoryRecall(argv []string, c rpc.Client, out io.Writer, profile string) error {
 	fs := newFlagSet()
 	fs.enableJSON()
 	limit := fs.int("limit", 8, "n")
@@ -130,7 +131,7 @@ func memoryRecall(argv []string, c rpcClient, out io.Writer, profile string) err
 	if err != nil {
 		return err
 	}
-	hits := asList(res["hits"])
+	hits := rpc.AsList(res["hits"])
 	if fs.json {
 		return writeJSONOut(out, map[string]any{"hits": hits})
 	}
@@ -139,12 +140,12 @@ func memoryRecall(argv []string, c rpcClient, out io.Writer, profile string) err
 		return nil
 	}
 	for _, h := range hits {
-		fmt.Fprintf(out, "%s  %s  %s%s\n", memoryTimestamp(str(h, "createdAt")), shortID(str(h, "id")), str(h, "content"), memoryMeta(h))
+		fmt.Fprintf(out, "%s  %s  %s%s\n", memoryTimestamp(rpc.Str(h, "createdAt")), shortID(rpc.Str(h, "id")), rpc.Str(h, "content"), memoryMeta(h))
 	}
 	return nil
 }
 
-func memoryRemember(argv []string, c rpcClient, out io.Writer, profile string) error {
+func memoryRemember(argv []string, c rpc.Client, out io.Writer, profile string) error {
 	fs := newFlagSet()
 	fs.enableJSON()
 	positional, err := fs.parse(argv)
@@ -166,7 +167,7 @@ func memoryRemember(argv []string, c rpcClient, out io.Writer, profile string) e
 	if fs.json {
 		return writeJSONOut(out, res)
 	}
-	id := shortID(str(res, "id"))
+	id := shortID(rpc.Str(res, "id"))
 	if reaff, _ := res["reaffirmed"].(bool); reaff {
 		fmt.Fprintf(out, "reaffirmed %s\n", id)
 	} else {
@@ -175,7 +176,7 @@ func memoryRemember(argv []string, c rpcClient, out io.Writer, profile string) e
 	return nil
 }
 
-func memoryForget(argv []string, c rpcClient, out io.Writer, profile string) error {
+func memoryForget(argv []string, c rpc.Client, out io.Writer, profile string) error {
 	fs := newFlagSet()
 	fs.enableJSON()
 	positional, err := fs.parse(argv)
@@ -205,7 +206,7 @@ func memoryForget(argv []string, c rpcClient, out io.Writer, profile string) err
 	return nil
 }
 
-func memoryLearnings(argv []string, c rpcClient, out io.Writer, profile string) error {
+func memoryLearnings(argv []string, c rpc.Client, out io.Writer, profile string) error {
 	fs := newFlagSet()
 	fs.enableJSON()
 	min := fs.int("min", 3)
@@ -224,7 +225,7 @@ func memoryLearnings(argv []string, c rpcClient, out io.Writer, profile string) 
 	if err != nil {
 		return err
 	}
-	cands := asList(res["candidates"])
+	cands := rpc.AsList(res["candidates"])
 	if fs.json {
 		return writeJSONOut(out, map[string]any{"candidates": cands})
 	}
@@ -237,12 +238,12 @@ func memoryLearnings(argv []string, c rpcClient, out io.Writer, profile string) 
 		if f, ok := cn["frequency"].(float64); ok {
 			freq = int(f)
 		}
-		fmt.Fprintf(out, "%s  %s  (%dx)  %s\n", memoryTimestamp(str(cn, "createdAt")), shortID(str(cn, "id")), freq, str(cn, "content"))
+		fmt.Fprintf(out, "%s  %s  (%dx)  %s\n", memoryTimestamp(rpc.Str(cn, "createdAt")), shortID(rpc.Str(cn, "id")), freq, rpc.Str(cn, "content"))
 	}
 	return nil
 }
 
-func memoryStats(argv []string, c rpcClient, out io.Writer, profile string) error {
+func memoryStats(argv []string, c rpc.Client, out io.Writer, profile string) error {
 	fs := newFlagSet()
 	fs.enableJSON()
 	positional, perr := fs.parse(argv)
@@ -277,13 +278,13 @@ func memoryStats(argv []string, c rpcClient, out io.Writer, profile string) erro
 // memoryMeta renders the trailing "[kind·durability·project score]" annotation.
 func memoryMeta(h map[string]any) string {
 	var parts []string
-	if k := str(h, "kind"); k != "" {
+	if k := rpc.Str(h, "kind"); k != "" {
 		parts = append(parts, k)
 	}
-	if d := str(h, "durability"); d != "" {
+	if d := rpc.Str(h, "durability"); d != "" {
 		parts = append(parts, d)
 	}
-	if p := str(h, "project"); p != "" {
+	if p := rpc.Str(h, "project"); p != "" {
 		parts = append(parts, p)
 	}
 	meta := strings.Join(parts, "·")
@@ -486,9 +487,9 @@ func usageErr(msg string) error    { return usageError{msg} }
 func exitFromErr(ctx string, err error) {
 	var exit *exec.ExitError
 	switch {
-	case err == errServiceDown:
+	case err == rpc.ErrServiceDown:
 		fmt.Fprintf(os.Stderr, "pix %s: service unreachable — start it with `pix serve`\n", ctx)
-		os.Exit(exitServiceDown)
+		os.Exit(rpc.ExitServiceDown)
 	case isUsage(err):
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(2)

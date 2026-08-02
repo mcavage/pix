@@ -31,6 +31,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/inference"
+	"pix/host/rpc"
 )
 
 type hostStateKeys struct {
@@ -202,8 +203,8 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 
 	hs := hostState{
 		Keys:      keys,
-		Memory:    hostStateSvc{Enabled: containsStr(cfg.Services, "memory"), Up: dialer(memoryPortDefault), Port: memoryPortDefault},
-		Knowledge: hostStateKnowledge{Bundles: bundles, Seeded: len(bundles) > 0, ServiceUp: dialer(knowledgePortDefault)},
+		Memory:    hostStateSvc{Enabled: containsStr(cfg.Services, "memory"), Up: dialer(rpc.MemoryPortDefault), Port: rpc.MemoryPortDefault},
+		Knowledge: hostStateKnowledge{Bundles: bundles, Seeded: len(bundles) > 0, ServiceUp: dialer(rpc.KnowledgePortDefault)},
 		Gog:       hostStateGog{Enabled: gogEnabled},
 		MCP:       hostStateMCP{Enabled: len(mcpServers) > 0, Servers: mcpServers},
 		Models:    hostStateModels{Watcher: cfg.MemoryWatcherModel, Embed: cfg.MemoryEmbedModel},

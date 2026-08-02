@@ -208,13 +208,86 @@ rather than containing them.
       11**, and all 11 remaining are on the four DOMAIN probes that deliberately
       do not live in `sys` and leave with their packages in Phase 3. Net **-623
       lines**. Gate green.
-- [~] **Phase 2** — `services/host/cli` landed: the command contract, the
-      single exit-code table, `cli.Run[T]`, and `cli.Usage[T]` (so `pix help
-      <verb>` is generated from the parser rather than a hand-written twin).
-      **`models` is migrated** as the worked example, with five tests that assert
-      output and exit codes without forking a process. **33 verbs remain.**
-- [~] **Phase 3** — `monitor/tui` extracted (3,129 lines). `cmd/pix` is
-      **40,905 -> 37,493**. Seven domains remain.
+- [~] **Phase 2** — `services/host/cli` landed: the command contract, the single
+      exit-code table, `cli.Run[T]`, `cli.Usage[T]`, and the shared primitives
+      (`WantsHelp`/`IsTTY`/`Plural`) that every domain depended on. **Three verbs
+      migrated** — `models`, `agent`, `secret` — deleting three hand-written
+      usage blocks, three private arg-parsing kits, and 27 `os.Exit` calls from
+      `agent` alone. **31 verbs remain.**
+- [~] **Phase 3** — `hostenv` extracted (the bundle move that unblocks every
+      other extraction) and `monitor/tui` extracted (3,129 lines). `cmd/pix` is
+      **40,905 -> 37,456**. **The plan for the rest was wrong; see below.**
+
+### Phase 3 was mis-scoped, and here is the measurement
+
+The original plan said "extract seven domain packages, cheapest first". That was
+wrong, and `scripts/extract-pkg` (go/parser, not regex) is what showed it.
+
+Measured OUTBOUND (symbols the rest of `cmd/pix` needs from a candidate — the
+export cost) and INBOUND (symbols the candidate needs back — the real blocker,
+because an extracted package cannot import `package main`):
+
+| domain              | LOC    | outbound | inbound |
+|---------------------|--------|----------|---------|
+| monitor/tui         | 3,280  | 2        | 1       | ← extracted
+| rpcclient           | 126    | 10       | 1       |
+| memory              | 509    | 6        | 11      |
+| serve               | 1,959  | 20       | 16      |
+| knowledge           | 1,049  | 9        | 20      |
+| secret + syncedrefs | 1,632  | 27       | 20      |
+| slack               | 1,885  | 3        | 27      |
+| readiness + doctor  | 4,821  | 105      | 68      |
+| task                | 2,550  | 12       | 35      |
+| pack                | 5,471  | 22       | 36      |
+| gog + gworkspace    | 1,298  | 8        | 37      |
+
+`monitor/tui` came out cleanly because its seam was already one-directional
+(`RunTUI`, `TUIConfig`). Nothing else is like that.
+
+Then the two-cluster hypothesis was tested and ALSO failed:
+
+- launch cluster (run, task, pack, sbxargs, inference, bootstrap, …): 12,529
+  LOC, **73 inbound**
+- host-management cluster (doctor, readiness, setup, secret, mcp, slack, gog,
+  serve): 15,585 LOC, **90 inbound**
+
+The two clusters depend on each other as heavily as their members do. So
+`cmd/pix` is not seven domains, and it is not two — **it is one dense web**, and
+extracting from it is UNTANGLING, not moving files. `slack` is the sharpest
+illustration: only 3 symbols leave it, but it needs 27 back, spanning readiness
+types, secret's op-ref parsing, and MCP registration. Moving it requires those
+three to move first.
+
+**Revised approach for whoever continues.** Do not pick a domain and try to move
+it. Instead, repeatedly extract the SHARED KERNEL — the symbols that appear as
+an inbound dependency of many domains — until the domains fall apart on their
+own. Ranked by how many domains need them today:
+
+```
+9  wantsHelp        -> cli.WantsHelp        (done)
+8  shellEnv         -> hostenv.Env          (done)
+8  defaultShellEnv  -> hostenv              (next: hostenv.Default)
+4  withFlock        -> sys.Lock             (done)
+4  atomicWriteInDir -> sys.AtomicWriteInDir (done)
+4  loadResolvedConfig -> config
+3  isTTY / plural   -> cli                  (done)
+3  findHostBinary / version -> a launcher-identity package
+2  verdict* / check -> readiness types package
+2  rpcClient / str  -> an rpc package
+```
+
+Each kernel move is small, safe, and reduces the inbound count of several
+domains at once. When a domain's inbound count reaches roughly zero, it moves in
+an afternoon.
+
+**This is verified, not theorised.** `rpc` was extracted on exactly this basis
+(inbound 0), and `memory`'s inbound count fell **11 -> 5** as a direct result,
+without touching a line of memory.go. Its five survivors are the next lesson:
+`wantsHelp` is already in `cli`, `loadResolvedConfig` belongs in `config`, and
+`ensureServeUp`/`ensureServeTimeout` should be INVERTED rather than moved —
+`memory` has no business knowing how to start a daemon, and should be handed an
+"ensure it is up" function by whoever composes it. Extraction is not only about
+moving code down; sometimes the dependency is pointing the wrong way.
 
 ### Migrating the next verb (Phase 2)
 

@@ -12,11 +12,12 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/rpc"
 )
 
 // fakeRPCServer stands up an httptest JSON-RPC server that returns canned
-// results per method, and returns an rpcClient pointed at it.
-func fakeRPCServer(t *testing.T, results map[string]any) rpcClient {
+// results per method, and returns an rpc.Client pointed at it.
+func fakeRPCServer(t *testing.T, results map[string]any) rpc.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]any
@@ -37,13 +38,13 @@ func fakeRPCServer(t *testing.T, results map[string]any) rpcClient {
 	if err != nil {
 		t.Fatalf("parsing test server port %q: %v", port, err)
 	}
-	return rpcClient{Port: p}
+	return rpc.Client{Port: p}
 }
 
 // capturingRPCServer stands up a JSON-RPC server that records the params of the
 // most recent request per method (so tests can assert what the CLI forwarded)
 // and returns a canned result.
-func capturingRPCServer(t *testing.T, results map[string]any, seen map[string]map[string]any) rpcClient {
+func capturingRPCServer(t *testing.T, results map[string]any, seen map[string]map[string]any) rpc.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]any
@@ -68,7 +69,7 @@ func capturingRPCServer(t *testing.T, results map[string]any, seen map[string]ma
 	if err != nil {
 		t.Fatalf("parsing test server port %q: %v", port, err)
 	}
-	return rpcClient{Port: p}
+	return rpc.Client{Port: p}
 }
 
 // TestMemoryProfileForwarded checks the active profile is forwarded on the
@@ -178,7 +179,7 @@ func TestMemoryRecallJSON(t *testing.T) {
 }
 
 func TestMemoryRecallNoQuery(t *testing.T) {
-	c := rpcClient{Port: 1}
+	c := rpc.Client{Port: 1}
 	if err := dispatchMemory("recall", nil, c, &bytes.Buffer{}, "default"); !isUsage(err) {
 		t.Errorf("recall with no query: err = %v, want usageError", err)
 	}
@@ -237,16 +238,16 @@ func TestMemoryStats(t *testing.T) {
 }
 
 func TestMemoryServiceDown(t *testing.T) {
-	// Nothing listening on this port -> errServiceDown.
-	c := rpcClient{Port: 1}
+	// Nothing listening on this port -> rpc.ErrServiceDown.
+	c := rpc.Client{Port: 1}
 	err := dispatchMemory("recall", []string{"x"}, c, &bytes.Buffer{}, "default")
-	if err != errServiceDown {
-		t.Errorf("recall against down service: err = %v, want errServiceDown", err)
+	if err != rpc.ErrServiceDown {
+		t.Errorf("recall against down service: err = %v, want rpc.ErrServiceDown", err)
 	}
 }
 
 func TestMemoryUnknownSub(t *testing.T) {
-	if err := dispatchMemory("frobnicate", nil, rpcClient{Port: 1}, &bytes.Buffer{}, "default"); !isUsage(err) {
+	if err := dispatchMemory("frobnicate", nil, rpc.Client{Port: 1}, &bytes.Buffer{}, "default"); !isUsage(err) {
 		t.Errorf("unknown sub: err = %v, want usageError", err)
 	}
 }
@@ -264,7 +265,7 @@ func TestMemoryUsageMentionsBackupRestore(t *testing.T) {
 // unknown subcommand.
 func TestMemoryDispatchNoLongerHasBackupRestore(t *testing.T) {
 	for _, sub := range []string{"backup", "restore"} {
-		if err := dispatchMemory(sub, nil, rpcClient{}, &bytes.Buffer{}, "default"); !isUsage(err) {
+		if err := dispatchMemory(sub, nil, rpc.Client{}, &bytes.Buffer{}, "default"); !isUsage(err) {
 			t.Errorf("dispatchMemory(%q) err = %v, want usageError (removed subcommand)", sub, err)
 		}
 	}
@@ -374,7 +375,7 @@ func TestFlagSetHelpWinsOverValue(t *testing.T) {
 func TestMemoryRecallHelp_BothPositions(t *testing.T) {
 	for _, argv := range [][]string{{"-h", "foo"}, {"foo", "-h"}, {"--help", "foo"}} {
 		var out bytes.Buffer
-		if err := memoryRecall(argv, rpcClient{Port: 1}, &out, "default"); err != nil {
+		if err := memoryRecall(argv, rpc.Client{Port: 1}, &out, "default"); err != nil {
 			t.Fatalf("memoryRecall(%v): %v", argv, err)
 		}
 		if !strings.Contains(out.String(), "usage: pix memory recall") {
@@ -412,7 +413,7 @@ func TestRunMemoryCore_HelpIgnoresBrokenConfig(t *testing.T) {
 	brokenLoad := func() (*config.Config, string, error) {
 		return nil, "", fmt.Errorf(`no profile "wrok" — configured: work`)
 	}
-	panicClient := func() rpcClient { panic("runMemoryCore must not RPC on a help request") }
+	panicClient := func() rpc.Client { panic("runMemoryCore must not RPC on a help request") }
 
 	for _, argv := range [][]string{{"recall", "--help"}, {"stats", "-h"}, {"forget", "--help"}} {
 		var out bytes.Buffer
@@ -426,7 +427,7 @@ func TestRunMemoryCore_HelpIgnoresBrokenConfig(t *testing.T) {
 
 	// Without a help request, the broken config MUST surface (never a silent
 	// fallback to the default bucket).
-	if err := runMemoryCore([]string{"recall", "foo"}, brokenLoad, memoryClient, &bytes.Buffer{}); err == nil {
+	if err := runMemoryCore([]string{"recall", "foo"}, brokenLoad, rpc.MemoryClient, &bytes.Buffer{}); err == nil {
 		t.Error("runMemoryCore(recall foo) with broken config should error, not fall back")
 	}
 	// Bare `memory --help` prints the top-level usage, also config-free.

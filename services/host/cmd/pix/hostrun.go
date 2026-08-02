@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/rpc"
 )
 
 // runHost implements `pix host` — the UNSANDBOXED escape hatch that execs
@@ -555,8 +556,8 @@ func validateHostWorkspace(real, home string) error {
 func hostChildEnv(agentDir, ollamaModel string) []string {
 	env := []string{
 		"PI_CODING_AGENT_DIR=" + agentDir,
-		fmt.Sprintf("MEMORY_URL=http://127.0.0.1:%d", portFromEnv("MEMORY_PORT", memoryPortDefault)),
-		fmt.Sprintf("KNOWLEDGE_URL=http://127.0.0.1:%d", portFromEnv("KNOWLEDGE_PORT", knowledgePortDefault)),
+		fmt.Sprintf("MEMORY_URL=http://127.0.0.1:%d", rpc.PortFromEnv("MEMORY_PORT", rpc.MemoryPortDefault)),
+		fmt.Sprintf("KNOWLEDGE_URL=http://127.0.0.1:%d", rpc.PortFromEnv("KNOWLEDGE_PORT", rpc.KnowledgePortDefault)),
 		"OLLAMA_HOSTMODE=1",
 		"OLLAMA_URL=http://127.0.0.1:11434/v1",
 		"PI_SUBAGENT_DISABLED=1",

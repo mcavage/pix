@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"pix/host/rpc"
 	"strings"
 	"testing"
 )
@@ -196,7 +197,7 @@ func TestFlagSetJSONOptIn(t *testing.T) {
 func TestMemoryHelp_NoRPC(t *testing.T) {
 	// `memory recall --help` must print usage and NOT hit the (down) daemon.
 	var out bytes.Buffer
-	if err := dispatchMemory("recall", []string{"--help"}, rpcClient{Port: 1}, &out, "default"); err != nil {
+	if err := dispatchMemory("recall", []string{"--help"}, rpc.Client{Port: 1}, &out, "default"); err != nil {
 		t.Fatalf("memory recall --help: %v", err)
 	}
 	if !strings.Contains(out.String(), "usage: pix memory recall") {
@@ -204,7 +205,7 @@ func TestMemoryHelp_NoRPC(t *testing.T) {
 	}
 	// stats/learnings likewise.
 	out.Reset()
-	if err := dispatchMemory("stats", []string{"--help"}, rpcClient{Port: 1}, &out, "default"); err != nil {
+	if err := dispatchMemory("stats", []string{"--help"}, rpc.Client{Port: 1}, &out, "default"); err != nil {
 		t.Fatalf("memory stats --help: %v", err)
 	}
 	if !strings.Contains(out.String(), "usage: pix memory stats") {

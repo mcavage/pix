@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/rpc"
 )
 
 // mcpCatalogNames is the SINGLE public source of truth for the shipped MCP
@@ -43,7 +44,7 @@ func mcpCatalogSummary() string {
 // errSbxUnavailable is the sentinel every mcp subcommand that PROMISES an
 // operation (register/load/auth/bundle) returns when sbx isn't on PATH,
 // instead of silently exiting 0 after only printing what it would have run.
-// It maps to exitServiceDown (3) — the same "evidence/dependency unavailable"
+// It maps to rpc.ExitServiceDown (3) — the same "evidence/dependency unavailable"
 // code `pix memory`/`secret` use — never a bare exit 0. `pix mcp ls`
 // is read-only but is deliberately held to the SAME contract (documented
 // here, the one place this policy is decided): the caller asked for gateway
@@ -64,7 +65,7 @@ func mcpWouldRun(out io.Writer, args ...string) error {
 // exitMcpVerb is the shared exit dispatcher for the mcp subcommands that were
 // refactored to return an error instead of calling os.Exit deep inside their
 // logic (so tests can drive the core hermetically and only the outer wrapper
-// touches the process). errSbxUnavailable -> exitServiceDown (3); a captured
+// touches the process). errSbxUnavailable -> rpc.ExitServiceDown (3); a captured
 // child exit code is propagated as-is; anything else is a generic failure (1)
 // with the error printed once.
 func exitMcpVerb(ctx string, err error) {
@@ -72,7 +73,7 @@ func exitMcpVerb(ctx string, err error) {
 		return
 	}
 	if errors.Is(err, errSbxUnavailable) {
-		os.Exit(exitServiceDown)
+		os.Exit(rpc.ExitServiceDown)
 	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
@@ -202,7 +203,7 @@ func runMcpLoad(argv []string) {
 		// exact recovery command; execSbxMcpLoadAndRecord (and hence the load
 		// receipt) is never reached on this path.
 		_ = mcpWouldRun(os.Stdout, "mcp", "load", name, "--sandbox", sandbox)
-		os.Exit(exitServiceDown)
+		os.Exit(rpc.ExitServiceDown)
 	}
 	cmd := exec.Command("sbx", "mcp", "load", name, "--sandbox", sandbox)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -372,7 +373,7 @@ func runMcpRegister(argv []string) {
 	if err := registerServers(cfg, defaultShellEnv(), os.Stdout, argv, findHostBinary, activeContainerMCP(cfg)); err != nil {
 		fmt.Fprintf(os.Stderr, "pix mcp register: %v\n", err)
 		if errors.Is(err, errSbxUnavailable) {
-			os.Exit(exitServiceDown)
+			os.Exit(rpc.ExitServiceDown)
 		}
 		os.Exit(1)
 	}
@@ -875,7 +876,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	if !sbxOK {
 		// `register` PROMISED to register these servers and did not (nothing was
 		// exec'd, nothing is registered with the gateway) — exit non-zero
-		// (errSbxUnavailable -> exitServiceDown) rather than a silent success
+		// (errSbxUnavailable -> rpc.ExitServiceDown) rather than a silent success
 		// just because the would-run lines above printed cleanly.
 		return errors.Join(errSbxUnavailable, skippedErr)
 	}

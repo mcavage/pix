@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/rpc"
 	"pix/host/sys/systest"
 )
 
@@ -492,7 +493,7 @@ func TestExecuteReset_ServeUpAbortsDataMove(t *testing.T) {
 	p := tempPaths(t, root)
 	a := resetPlan(resetCfg(), p, resetOpts{})
 
-	env := fakeEnv{present: map[string]bool{}, ports: map[int]bool{memoryPortDefault: true}}.env()
+	env := fakeEnv{present: map[string]bool{}, ports: map[int]bool{rpc.MemoryPortDefault: true}}.env()
 	var buf bytes.Buffer
 	_, err := executeReset(a, defaultResetFS(), env, &buf, fixedNow)
 	if err == nil {
@@ -829,7 +830,7 @@ func TestExecuteReset_KnowledgePortUpAbortsDataMove(t *testing.T) {
 	p := tempPaths(t, root)
 	a := resetPlan(resetCfg(), p, resetOpts{})
 
-	env := fakeEnv{present: map[string]bool{}, ports: map[int]bool{knowledgePortDefault: true}}.env()
+	env := fakeEnv{present: map[string]bool{}, ports: map[int]bool{rpc.KnowledgePortDefault: true}}.env()
 	var buf bytes.Buffer
 	_, err := executeReset(a, defaultResetFS(), env, &buf, fixedNow)
 	if err == nil {

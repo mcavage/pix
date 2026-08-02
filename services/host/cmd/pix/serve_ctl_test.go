@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"pix/host/rpc"
 	"strconv"
 	"strings"
 	"syscall"
@@ -253,7 +254,7 @@ func TestResolveServeStatus_Running(t *testing.T) {
 	removed := false
 	proc := &fakeProc{pid: 321, alive: true}
 	ctl := ctlFor("321", nil, proc, &removed, func(int) (bool, bool) { return true, true })
-	env := fakeEnv{ports: map[int]bool{memoryPortDefault: true, knowledgePortDefault: false}}.env()
+	env := fakeEnv{ports: map[int]bool{rpc.MemoryPortDefault: true, rpc.KnowledgePortDefault: false}}.env()
 
 	st := resolveServeStatus(ctl, env)
 	if !st.Running || st.PID != 321 {
@@ -491,7 +492,7 @@ func TestResolveServeStatus_HonorsPortEnv(t *testing.T) {
 	const customPort = 21435
 	env := fakeEnv{
 		envVars: map[string]string{"MEMORY_PORT": strconv.Itoa(customPort)},
-		ports:   map[int]bool{customPort: true, memoryPortDefault: false},
+		ports:   map[int]bool{customPort: true, rpc.MemoryPortDefault: false},
 	}.env()
 
 	st := resolveServeStatus(ctl, env)

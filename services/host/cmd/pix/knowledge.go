@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/rpc"
 )
 
 // runKnowledge is the `knowledge` verb tree: `init`, `use`, `ls`. It scaffolds
@@ -94,13 +95,13 @@ func runKnowledgeQuery(argv []string) {
 	}
 	// Lazy auto-start: spin up the knowledge daemon detached if it is down (only
 	// when the knowledge service is actually enabled; best-effort — a failure
-	// falls through to the existing errServiceDown degrade below).
+	// falls through to the existing rpc.ErrServiceDown degrade below).
 	ensureServeUp([]string{"knowledge"}, ensureServeTimeout)
-	res, err := knowledgeClient().Call("query", params)
+	res, err := rpc.KnowledgeClient().Call("query", params)
 	if err != nil {
 		exitFromErr("knowledge query", err)
 	}
-	concepts := asList(res["concepts"])
+	concepts := rpc.AsList(res["concepts"])
 	if fs.json {
 		_ = writeJSONOut(os.Stdout, map[string]any{"concepts": concepts})
 		return
@@ -114,7 +115,7 @@ func runKnowledgeQuery(argv []string) {
 		if s, ok := c["score"].(float64); ok {
 			score = fmt.Sprintf("  [%.2f]", s)
 		}
-		fmt.Printf("%s  %s%s\n", str(c, "id"), str(c, "title"), score)
+		fmt.Printf("%s  %s%s\n", rpc.Str(c, "id"), rpc.Str(c, "title"), score)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/rpc"
 )
 
 // reset is the destructive-but-reversible lifecycle verb. Nothing is ever
@@ -405,10 +406,10 @@ func underDir(path, dir string) bool {
 // checking only the memory port would let its db be split mid-move.
 func serveStillUp(env shellEnv) bool {
 
-	if env.DialLocal(servePort(env, "MEMORY_PORT", memoryPortDefault)) {
+	if env.DialLocal(servePort(env, "MEMORY_PORT", rpc.MemoryPortDefault)) {
 		return true
 	}
-	return env.DialLocal(servePort(env, "KNOWLEDGE_PORT", knowledgePortDefault))
+	return env.DialLocal(servePort(env, "KNOWLEDGE_PORT", rpc.KnowledgePortDefault))
 }
 
 // executeReset performs the plan: stop services (best-effort), move each backup

@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/rpc"
 	"pix/host/sys"
 	"strconv"
 	"strings"
@@ -313,9 +314,9 @@ func requiredServePorts(st serveStarter, cfg *config.Config, requested []string)
 		seen[s] = true
 		switch s {
 		case "memory":
-			out = append(out, servePortSpec{"memory", servePort(env, "MEMORY_PORT", memoryPortDefault)})
+			out = append(out, servePortSpec{"memory", servePort(env, "MEMORY_PORT", rpc.MemoryPortDefault)})
 		case "knowledge":
-			out = append(out, servePortSpec{"knowledge", servePort(env, "KNOWLEDGE_PORT", knowledgePortDefault)})
+			out = append(out, servePortSpec{"knowledge", servePort(env, "KNOWLEDGE_PORT", rpc.KnowledgePortDefault)})
 		}
 	}
 	return out // requested order preserved ("memory:11435, knowledge:11436")

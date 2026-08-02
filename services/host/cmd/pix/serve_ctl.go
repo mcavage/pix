@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/rpc"
 	"pix/host/sys"
 	"strconv"
 	"strings"
@@ -383,8 +384,8 @@ func resolveServeStatus(ctl serveCtl, env shellEnv) serveState {
 	} else if !os.IsNotExist(err) {
 		st.Detail = "could not read pidfile: " + err.Error()
 	}
-	st.MemoryPort = servePort(env, "MEMORY_PORT", memoryPortDefault)
-	st.KnowledgePort = servePort(env, "KNOWLEDGE_PORT", knowledgePortDefault)
+	st.MemoryPort = servePort(env, "MEMORY_PORT", rpc.MemoryPortDefault)
+	st.KnowledgePort = servePort(env, "KNOWLEDGE_PORT", rpc.KnowledgePortDefault)
 	st.Memory = env.DialLocal(st.MemoryPort)
 	st.Knowledge = env.DialLocal(st.KnowledgePort)
 	return st
@@ -406,10 +407,10 @@ func printServeStatus(st serveState, out io.Writer, jsonOut bool) {
 	}
 	memPort, kbPort := st.MemoryPort, st.KnowledgePort
 	if memPort == 0 {
-		memPort = memoryPortDefault
+		memPort = rpc.MemoryPortDefault
 	}
 	if kbPort == 0 {
-		kbPort = knowledgePortDefault
+		kbPort = rpc.KnowledgePortDefault
 	}
 	fmt.Fprintf(out, "  memory    (:%d): %s\n", memPort, upDown(st.Memory))
 	fmt.Fprintf(out, "  knowledge (:%d): %s\n", kbPort, upDown(st.Knowledge))

@@ -31,6 +31,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/inference"
+	"pix/host/rpc"
 )
 
 // generatedInputMarker prefixes any user-role message that `pix` itself
@@ -1591,7 +1592,7 @@ type identityMemory interface {
 }
 
 // newIdentityMemory is seedIdentity's seam to the memory daemon.
-var newIdentityMemory = func() identityMemory { return memoryClient() }
+var newIdentityMemory = func() identityMemory { return rpc.MemoryClient() }
 
 // rememberPersistedID extracts the "id" field from a remember RPC result,
 // returning "" for anything that does not prove a durable write actually

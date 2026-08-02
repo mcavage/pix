@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/rpc"
 	"strings"
 	"testing"
 	"time"
@@ -310,7 +311,7 @@ func TestExecSbxMcpLoadAndRecord_ReceiptWriteFailureIsDistinctError(t *testing.T
 // runMcpLoad's "sbx absent" branch returns before constructing any *exec.Cmd
 // at all, so it never reaches execSbxMcpLoadAndRecord — no receipt is ever
 // written. A command that PROMISES an attach must not exit 0 having done
-// nothing (finding: no-sbx behavior), so this now exits exitServiceDown (3)
+// nothing (finding: no-sbx behavior), so this now exits rpc.ExitServiceDown (3)
 // instead of returning — proven in a subprocess since runMcpLoad calls
 // os.Exit on this path.
 func TestRunMcpLoad_AbsentSbxExitsServiceDownWritesNoReceipt(t *testing.T) {
@@ -337,8 +338,8 @@ func TestRunMcpLoad_AbsentSbxExitsServiceDownWritesNoReceipt(t *testing.T) {
 	if !errors.As(runErr, &ee) {
 		t.Fatalf("expected an ExitError, got %v (output: %s)", runErr, out.String())
 	}
-	if ee.ExitCode() != exitServiceDown {
-		t.Errorf("exit code = %d, want %d (exitServiceDown); output:\n%s", ee.ExitCode(), exitServiceDown, out.String())
+	if ee.ExitCode() != rpc.ExitServiceDown {
+		t.Errorf("exit code = %d, want %d (rpc.ExitServiceDown); output:\n%s", ee.ExitCode(), rpc.ExitServiceDown, out.String())
 	}
 	sandbox := deriveSandboxName(ws)
 	want := "would run: sbx mcp load slack --sandbox " + sandbox

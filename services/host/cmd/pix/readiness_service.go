@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"pix/host/hostenv"
+	"pix/host/rpc"
 	"strings"
 	"time"
 )
@@ -40,7 +41,7 @@ type identityProber = hostenv.IdentityProber
 // rpcIdentityProbe is the real prober: the shared JSON-RPC client, bounded,
 // with exactly one retry.
 func rpcIdentityProbe(port int) (serviceIdentityResult, error) {
-	c := rpcClient{Port: port, Timeout: serviceIdentityTimeout}
+	c := rpc.Client{Port: port, Timeout: serviceIdentityTimeout}
 	var lastErr error
 	for attempt := 0; attempt <= serviceIdentityRetries; attempt++ {
 		res, err := c.Call("identity", nil)
@@ -198,7 +199,7 @@ func serviceReadinessAxes(env shellEnv, memoryEnabled, knowledgeEnabled bool, pr
 		axisServiceMemory: func() []check {
 			return []check{serviceReadinessCheck(serviceAxisSpec{
 				axis: axisServiceMemory, label: "memory",
-				port: memoryClient().Port, wantName: identityMemoryName,
+				port: rpc.MemoryClient().Port, wantName: identityMemoryName,
 				enabled: memoryEnabled, startCmd: "pix serve",
 				selfVer: version, dialOnly: dial, probeFunc: probe,
 			})}
@@ -206,7 +207,7 @@ func serviceReadinessAxes(env shellEnv, memoryEnabled, knowledgeEnabled bool, pr
 		axisServiceKnowledge: func() []check {
 			return []check{serviceReadinessCheck(serviceAxisSpec{
 				axis: axisServiceKnowledge, label: "knowledge",
-				port: knowledgeClient().Port, wantName: identityKnowledgeName,
+				port: rpc.KnowledgeClient().Port, wantName: identityKnowledgeName,
 				enabled: knowledgeEnabled, startCmd: "pix serve",
 				selfVer: version, dialOnly: dial, probeFunc: probe,
 			})}

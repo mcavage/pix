@@ -1,4 +1,12 @@
-package main
+// Package rpc is the JSON-RPC client the launcher uses to talk to the host
+// services (memory :11435, knowledge :11436).
+//
+// First extraction taken on the revised Phase 3 approach: pull the SHARED
+// KERNEL out until the domains fall apart on their own, rather than picking a
+// domain and fighting its inbound dependencies. rpc had an inbound count of
+// zero (scripts/extract-pkg), and it is what `memory` and `knowledge` mostly
+// need back from package main -- so moving it is a precondition for both.
+package rpc
 
 import (
 	"bytes"
@@ -21,33 +29,33 @@ import (
 // so a non-default bind stays reachable from the CLI.
 
 const (
-	memoryPortDefault    = 11435
-	knowledgePortDefault = 11436
+	MemoryPortDefault    = 11435
+	KnowledgePortDefault = 11436
 
-	// exitServiceDown is the distinct exit code CLI verbs return when the target
+	// ExitServiceDown is the distinct exit code CLI verbs return when the target
 	// daemon is unreachable, so scripts can tell "service down" (3) apart from a
 	// usage error (2) or a generic failure (1).
-	exitServiceDown = 3
+	ExitServiceDown = 3
 )
 
-// rpcClient talks JSON-RPC 2.0 to a local daemon on 127.0.0.1:Port.
-type rpcClient struct {
+// Client talks JSON-RPC 2.0 to a local daemon on 127.0.0.1:Port.
+type Client struct {
 	Port    int
 	Timeout time.Duration
 }
 
-// memoryClient / knowledgeClient return clients pointed at the right port,
+// MemoryClient / KnowledgeClient return clients pointed at the right port,
 // honoring the MEMORY_PORT / KNOWLEDGE_PORT env overrides.
-func memoryClient() rpcClient {
-	return rpcClient{Port: portFromEnv("MEMORY_PORT", memoryPortDefault), Timeout: 3 * time.Second}
+func MemoryClient() Client {
+	return Client{Port: PortFromEnv("MEMORY_PORT", MemoryPortDefault), Timeout: 3 * time.Second}
 }
-func knowledgeClient() rpcClient {
-	return rpcClient{Port: portFromEnv("KNOWLEDGE_PORT", knowledgePortDefault), Timeout: 3 * time.Second}
+func KnowledgeClient() Client {
+	return Client{Port: PortFromEnv("KNOWLEDGE_PORT", KnowledgePortDefault), Timeout: 3 * time.Second}
 }
 
-// portFromEnv reads a port from an env var, falling back to def when unset or
+// PortFromEnv reads a port from an env var, falling back to def when unset or
 // unparseable.
-func portFromEnv(name string, def int) int {
+func PortFromEnv(name string, def int) int {
 	if v := os.Getenv(name); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
@@ -57,7 +65,7 @@ func portFromEnv(name string, def int) int {
 }
 
 // Up reports whether the daemon is reachable within a short dial timeout.
-func (c rpcClient) Up() bool {
+func (c Client) Up() bool {
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", c.Port), 300*time.Millisecond)
 	if err != nil {
 		return false
@@ -68,8 +76,8 @@ func (c rpcClient) Up() bool {
 
 // Call POSTs a JSON-RPC request and returns the decoded `result` object. A
 // JSON-RPC error envelope maps to a Go error; a transport failure (daemon down)
-// maps to errServiceDown so callers can exit with exitServiceDown.
-func (c rpcClient) Call(method string, params map[string]any) (map[string]any, error) {
+// maps to ErrServiceDown so callers can exit with ExitServiceDown.
+func (c Client) Call(method string, params map[string]any) (map[string]any, error) {
 	if params == nil {
 		params = map[string]any{}
 	}
@@ -81,7 +89,7 @@ func (c rpcClient) Call(method string, params map[string]any) (map[string]any, e
 	client := &http.Client{Timeout: timeout}
 	resp, err := client.Post(fmt.Sprintf("http://127.0.0.1:%d/", c.Port), "application/json", bytes.NewReader(body))
 	if err != nil {
-		return nil, errServiceDown
+		return nil, ErrServiceDown
 	}
 	defer resp.Body.Close()
 	var parsed map[string]any
@@ -98,12 +106,12 @@ func (c rpcClient) Call(method string, params map[string]any) (map[string]any, e
 	return result, nil
 }
 
-// errServiceDown is the sentinel returned when a daemon can't be reached, so
+// ErrServiceDown is the sentinel returned when a daemon can't be reached, so
 // callers render a consistent "start it with pix serve" message + exit 3.
-var errServiceDown = fmt.Errorf("service unreachable")
+var ErrServiceDown = fmt.Errorf("service unreachable")
 
-// asList coerces a decoded JSON array (of objects) into []map[string]any.
-func asList(v any) []map[string]any {
+// AsList coerces a decoded JSON array (of objects) into []map[string]any.
+func AsList(v any) []map[string]any {
 	arr, ok := v.([]any)
 	if !ok {
 		return nil
@@ -117,8 +125,8 @@ func asList(v any) []map[string]any {
 	return out
 }
 
-// str safely reads a string field from a decoded JSON object.
-func str(m map[string]any, key string) string {
+// Str safely reads a string field from a decoded JSON object.
+func Str(m map[string]any, key string) string {
 	if s, ok := m[key].(string); ok {
 		return s
 	}
