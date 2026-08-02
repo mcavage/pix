@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/cli"
+	"pix/host/hostenv"
 	"pix/host/readiness"
+	"pix/host/sys"
 	"strings"
 
 	"pix/host/config"
@@ -179,7 +182,7 @@ type mcpSandboxContext struct {
 //     mcpAttachSandboxAbsent (nothing exists to be attached to);
 //   - a failed/timed-out `sbx ls` -> existence unknown; the receipt (a local,
 //     offline record of past successful pix actions) is still consulted.
-func resolveMCPSandboxContext(env shellEnv) mcpSandboxContext {
+func resolveMCPSandboxContext(env hostenv.Env) mcpSandboxContext {
 
 	ws, err := env.Getwd()
 	if err != nil || strings.TrimSpace(ws) == "" {
@@ -231,7 +234,7 @@ func resolveMCPSandboxContext(env shellEnv) mcpSandboxContext {
 // VERIFIED registered-not-attached gap: the same `pix mcp load NAME DIR`
 // spelling status emits, carrying the canonical workspace when known. It
 // delegates to run.go's mcpLoadCommand (shell-quoting name and workspace via
-// shellQuoteArg, closure finding #3) so doctor and status can never drift on
+// sys.ShellQuote, closure finding #3) so doctor and status can never drift on
 // how the repair command is quoted.
 func mcpLoadTodoCommand(name, ws string) string {
 	return mcpLoadCommand(name, ws)
@@ -241,10 +244,10 @@ func mcpLoadTodoCommand(name, ws string) string {
 // MAKE attachment true (and receipted). It lives in the detail/evidence of an
 // unverifiable attachment check — never as a todo, because unverifiable means
 // doctor does not KNOW the server is unattached. name is shell-quoted via
-// shellQuoteArg (closure finding #3), consistent with every other generated
+// sys.ShellQuote (closure finding #3), consistent with every other generated
 // mcp load command.
 func mcpAttachGuidance(name string) string {
-	return "attach live with `pix mcp load " + shellQuoteArg(name) + "` or recreate with `pix run --replace`"
+	return "attach live with `pix mcp load " + sys.ShellQuote(name) + "` or recreate with `pix run --replace`"
 }
 
 // mcpAttachCheck renders one server's sandbox-attachment evidence from the
@@ -376,7 +379,7 @@ func mcpUnknownKindCheck(name, mcpOut string, mcpOK, sbxPresent bool) readiness.
 // or untrusted shape -> unverifiable (registration stays stated, never a false
 // green health claim); a timeout/exec failure -> unverifiable; a clean spawn
 // with zero tools -> a verified headless-creds TODO.
-func mcpLocalCheck(env shellEnv, name, mcpOut string) readiness.Check {
+func mcpLocalCheck(env hostenv.Env, name, mcpOut string) readiness.Check {
 	argv, ok := registeredMCPCommand(env, name)
 	if !ok {
 		return readiness.Check{Label: name, Verdict: readiness.VerdictUnverifiable,
@@ -391,7 +394,7 @@ func mcpLocalCheck(env shellEnv, name, mcpOut string) readiness.Check {
 	switch res.status {
 	case probeToolsOK:
 		return readiness.Check{Label: name, Verdict: readiness.VerdictReady,
-			Detail: fmt.Sprintf("registered, spawns %s", plural(res.tools, "tool"))}
+			Detail: fmt.Sprintf("registered, spawns %s", cli.Plural(res.tools, "tool"))}
 	case probeNoTools:
 		return readiness.Check{Label: name, Verdict: readiness.VerdictTodo,
 			Detail: "registered but the spawned command returns 0 tools — headless creds/keyring",
@@ -417,7 +420,7 @@ func mcpLocalCheck(env shellEnv, name, mcpOut string) readiness.Check {
 //   - an EXPLICIT policy/forbidden/access-denied signal -> denied (an org
 //     decision, not a setup gap — no setup command can fix it);
 //   - a timeout or transport/exec failure -> unverifiable, never a guess.
-func mcpRemoteAuthCheck(env shellEnv, name string) readiness.Check {
+func mcpRemoteAuthCheck(env hostenv.Env, name string) readiness.Check {
 	out, timedOut, err := env.RunTimed("sbx", "mcp", "auth", "status", name)
 	if timedOut {
 		return readiness.Check{Label: name, Verdict: readiness.VerdictUnverifiable,
@@ -459,7 +462,7 @@ func mcpRemoteAuthCheck(env shellEnv, name string) readiness.Check {
 // unregistered or unclassifiable (mcpjoin.go's PRECEDENCE): registration
 // truth is a separate, present-tense fact that never proves the sandbox was
 // unloaded.
-func mcpServerChecks(env shellEnv, name string, kind mcpKind, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) []readiness.Check {
+func mcpServerChecks(env hostenv.Env, name string, kind mcpKind, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) []readiness.Check {
 	reg := mcpRegEvidenceFrom(mcpOut, mcpOK, name)
 	attach := func(cks []readiness.Check) []readiness.Check {
 		if ctx.mode == mcpAttachReceipt {
@@ -529,7 +532,7 @@ func unknownKeyCheck(key string) readiness.Check {
 // probeRun so a hung sbx degrades to "couldn't read the registered command",
 // never a wedged doctor. Returns (nil,false) when sbx is absent or exposes no
 // command.
-func registeredMCPCommand(env shellEnv, name string) ([]string, bool) {
+func registeredMCPCommand(env hostenv.Env, name string) ([]string, bool) {
 
 	if _, err := env.LookPath("sbx"); err != nil {
 		return nil, false
@@ -607,7 +610,7 @@ func parseMCPCommandJSON(out, name string) ([]string, bool) {
 // window on a path an attacker controls (a symlink blessed at check time and
 // swapped before exec never enters the picture, because symlink resolution is
 // never consulted and the exec'd token is the resolver's own answer).
-func recognizedMCPArgv(env shellEnv, argv []string, name string) ([]string, bool) {
+func recognizedMCPArgv(env hostenv.Env, argv []string, name string) ([]string, bool) {
 	if norm, ok := trustedGogSpawn(env, argv); ok {
 		return norm, true
 	}
@@ -650,7 +653,7 @@ func recognizedMCPArgv(env shellEnv, argv []string, name string) ([]string, bool
 
 // trustedHostBinaryExecPath is the canonical-pix-host gate: mcp.go
 // registration (registerServers/serverCmd) ALWAYS spawns the ABSOLUTE path
-// hostBinaryResolver (findHostBinary) resolves — never a bare name. Trusting
+// hostBinaryResolver (launcher.FindHostBinary) resolves — never a bare name. Trusting
 // an absolute path's basename alone would let a malicious
 // `/tmp/malicious/pix-host mcp slack` registration pass. env.HostBinary
 // is the injected/hermetic trust seam mirroring hostBinaryResolver, so this
@@ -662,7 +665,7 @@ func recognizedMCPArgv(env shellEnv, argv []string, name string) ([]string, bool
 // On success it returns the RESOLVER's canonical token — the only thing the
 // caller may exec. An unresolvable canonical answer (env.HostBinary nil or
 // erroring) fails CLOSED: never fall back to trusting the basename alone.
-func trustedHostBinaryExecPath(env shellEnv, tok string) (string, bool) {
+func trustedHostBinaryExecPath(env hostenv.Env, tok string) (string, bool) {
 	if filepath.Base(tok) != "pix-host" {
 		return "", false
 	}
@@ -747,14 +750,14 @@ func mcpAuthStatus(out string) mcpAuthResult {
 // every active-pack integration server. gog is DELIBERATELY skipped — the
 // dedicated gog group already owns its registration check + TODO, so probing
 // it again would emit a duplicate `pix mcp register`.
-func mcpGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) readiness.Group {
+func mcpGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) readiness.Group {
 	return mcpGroupWith(cfg, env, mcpOut, mcpOK, sbxPresent,
 		activeContainerMCP(cfg), ctx)
 }
 
 // mcpGroupWith is mcpGroup with the pack-integration set and the sandbox
 // context injected, so tests drive both hermetically.
-func mcpGroupWith(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent bool,
+func mcpGroupWith(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPresent bool,
 	containers map[string]packContainer, ctx mcpSandboxContext) readiness.Group {
 
 	mcp := readiness.Group{Title: "MCP servers (via the sbx gateway)"}

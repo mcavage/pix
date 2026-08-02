@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"pix/host/hostenv"
 	"pix/host/sys"
 	"pix/host/sys/systest"
 	"strings"
@@ -376,7 +377,7 @@ func TestRegisterServers_CurrentUnauthorizedRemoteRepairsOAuthOnce(t *testing.T)
 
 func TestRemoteMCPRegistrationCurrentRejectsEndpointSubstring(t *testing.T) {
 	want := "https://expected.example/mcp"
-	env := shellEnv{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
+	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
 		return `{"url":"https://evil.example/?next=https://expected.example/mcp"}`, false, nil
 	}}}
 	if remoteMCPRegistrationCurrent(env, "meetings", want) {
@@ -392,7 +393,7 @@ func TestRemoteMCPRegistrationCurrentRequiresEndpointField(t *testing.T) {
 		`{"url":"https://evil.example/mcp","nested":{"endpoint":"https://expected.example/mcp?a=1&b=2"}}`,
 		`url: https://evil.example/?next=https://expected.example/mcp?a=1&b=2`,
 	} {
-		env := shellEnv{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) { return payload, false, nil }}}
+		env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) { return payload, false, nil }}}
 		if remoteMCPRegistrationCurrent(env, "meetings", want) {
 			t.Fatalf("non-endpoint evidence was trusted: %s", payload)
 		}
@@ -401,7 +402,7 @@ func TestRemoteMCPRegistrationCurrentRequiresEndpointField(t *testing.T) {
 
 func TestRemoteMCPRegistrationCurrentCanonicalExactMatch(t *testing.T) {
 	want := "https://expected.example/mcp?b=2&a=1"
-	env := shellEnv{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
+	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
 		return `{"server":{"remote_url":"HTTPS://EXPECTED.EXAMPLE:443/mcp?a=1&b=2"}}`, false, nil
 	}}}
 	if !remoteMCPRegistrationCurrent(env, "meetings", want) {
@@ -657,7 +658,7 @@ func TestBuildGogRegistrarIgnoresUnrelatedOpRefs(t *testing.T) {
 	// Real OS (this test writes actual files into dir), with two seams faked.
 	// systest.Base makes that intent explicit instead of it being a side effect
 	// of which fields happened to be left nil.
-	env := shellEnv{System: &systest.Fake{
+	env := hostenv.Env{System: &systest.Fake{
 		Base:       sys.Real{},
 		LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil },
 		GetenvFn: func(key string) string {

@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/sys/systest"
 )
 
@@ -166,7 +168,7 @@ func mergeOutputs(maps ...map[string]string) map[string]string {
 	return out
 }
 
-// gogTestEnv builds a hermetic shellEnv + a recorder of every "interactive"
+// gogTestEnv builds a hermetic hostenv.Env + a recorder of every "interactive"
 // command gogSetup would otherwise hand real stdio to (the browser-opening
 // auth steps), so tests never touch a real gog binary or terminal.
 type gogTestEnv struct {
@@ -214,12 +216,12 @@ func gogWrappedHeadlessKey(acct, opRefs string) string {
 	return strings.Join(gogRegisteredArgv("/usr/bin/gog", "/usr/bin/op", opRefs, acct), " ") + " --list-tools"
 }
 
-func (g gogTestEnv) env() shellEnv {
+func (g gogTestEnv) env() hostenv.Env {
 	calls := g.interCalls
 	if calls == nil {
 		calls = &[][]string{}
 	}
-	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	return hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if g.present[name] {
 			return "/usr/bin/" + name, nil
 		}
@@ -824,7 +826,7 @@ func TestGogSetup_PrintsAttachModeGuidance(t *testing.T) {
 // --- CLI dispatch / help ---
 
 func TestRunGogCmd_HelpAndUnknownSubcommand(t *testing.T) {
-	if !wantsHelp([]string{"-h"}) {
+	if !cli.WantsHelp([]string{"-h"}) {
 		t.Fatal("sanity")
 	}
 	if _, ok := verbUsage("gworkspace"); !ok {

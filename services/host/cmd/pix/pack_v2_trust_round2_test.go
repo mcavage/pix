@@ -28,20 +28,22 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/knowledge"
 	"pix/host/sys/systest"
 )
 
-// localMCPEnv returns a shellEnv whose `pix-host mcp --list` reports the
+// localMCPEnv returns a hostenv.Env whose `pix-host mcp --list` reports the
 // given names as LOCAL stdio servers (every other command pretends to
 // succeed, like fakeGitEnv).
-func localMCPEnv(names ...string) shellEnv {
+func localMCPEnv(names ...string) hostenv.Env {
 	list := strings.Join(names, "\n")
-	return shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
+	return hostenv.Env{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		if len(args) >= 2 && args[0] == "mcp" && args[1] == "--list" {
 			return list, nil
 		}
@@ -122,7 +124,7 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfg2.MCP, gwServerName) || !containsStr(cfg2.KnowledgeBundles, userBundleID) {
+	if !slices.Contains(cfg2.MCP, gwServerName) || !slices.Contains(cfg2.KnowledgeBundles, userBundleID) {
 		t.Fatalf("CRITICAL: same-pack reactivation honored a forged pack.lock; mcp=%v knowledge=%v", cfg2.MCP, cfg2.KnowledgeBundles)
 	}
 
@@ -136,7 +138,7 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfg3.MCP, gwServerName) || !containsStr(cfg3.KnowledgeBundles, userBundleID) {
+	if !slices.Contains(cfg3.MCP, gwServerName) || !slices.Contains(cfg3.KnowledgeBundles, userBundleID) {
 		t.Fatalf("CRITICAL: switch-away honored a forged pack.lock; mcp=%v knowledge=%v", cfg3.MCP, cfg3.KnowledgeBundles)
 	}
 }
@@ -312,7 +314,7 @@ func TestComputeHostBoM_RemoteMCPReferenceRequiresConsent(t *testing.T) {
 	localRef := &packInfo{Root: "/p", Manifest: packManifest{
 		Name: "personal", Integrations: []packIntegration{{Name: "Notion", MCP: "notion"}},
 	}}
-	unknown := localMCPClassifier(shellEnv{System: &systest.Fake{}}, nil)
+	unknown := localMCPClassifier(hostenv.Env{System: &systest.Fake{}}, nil)
 	if b := computeHostBoM(localRef, "", unknown); !b.tier1() {
 		t.Errorf("an unknown local partition must FAIL CLOSED as host-exec (round-3 #3), got %+v", b)
 	}
@@ -345,7 +347,7 @@ func TestPackUse_RemoteMCPReferenceRequiresYes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Pack != root || !containsStr(cfg.MCP, "docs") {
+	if cfg.Pack != root || !slices.Contains(cfg.MCP, "docs") {
 		t.Errorf("the reference must still attach: pack=%q mcp=%v", cfg.Pack, cfg.MCP)
 	}
 }
@@ -372,7 +374,7 @@ func TestPackUse_GogReferenceStaysTier0(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfg.MCP, gwServerName) {
+	if !slices.Contains(cfg.MCP, gwServerName) {
 		t.Errorf("gog must still attach, mcp=%v", cfg.MCP)
 	}
 }

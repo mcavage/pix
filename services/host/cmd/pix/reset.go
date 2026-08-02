@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/rpc"
 	"pix/host/service"
 	"pix/host/workspace"
@@ -26,7 +28,7 @@ import (
 //
 //   - resetPlan(cfg, paths, opts) is PURE — it resolves which paths get moved
 //     aside and which sbx actions run, with zero filesystem/exec side effects.
-//   - executeReset(...) takes injected fs ops (resetFS) + a shellEnv, so a test
+//   - executeReset(...) takes injected fs ops (resetFS) + a hostenv.Env, so a test
 //     drives it against t.TempDir() and asserts files landed in .bak.
 //   - runResetCore(...) wires plan -> guard (TTY prompt / --yes) -> execute, and
 //     RETURNS an error for the non-TTY-no-yes refusal instead of os.Exit, so the
@@ -140,7 +142,7 @@ var (
 // $XDG_DATA_HOME/pix, else ~/.local/share/pix; the config dir to
 // config.Path()'s parent). It resolves the data root from the INJECTED env
 // (not config.DataDir()) so tests stay hermetic.
-func resolveResetPaths(env shellEnv) resetPaths {
+func resolveResetPaths(env hostenv.Env) resetPaths {
 	home := ""
 	home = env.HomeDir()
 	var dataRoot string
@@ -406,7 +408,7 @@ func underDir(path, dir string) bool {
 // dangerous data move after a best-effort stop failed to bring it down. A
 // knowledge-only serve still holds a live sqlite writer under the data root, so
 // checking only the memory port would let its db be split mid-move.
-func serveStillUp(env shellEnv) bool {
+func serveStillUp(env hostenv.Env) bool {
 
 	if env.DialLocal(service.Port(env, "MEMORY_PORT", rpc.MemoryPortDefault)) {
 		return true
@@ -422,7 +424,7 @@ func serveStillUp(env shellEnv) bool {
 // sweep failed (or the serve-still-up guard blocked the data move). A partial
 // reset must NOT report success: the caller uses the error to exit non-zero and
 // to avoid reporting a partial reset as successful.
-func executeReset(a resetActions, fsys resetFS, env shellEnv, out io.Writer, now func() time.Time) ([]string, error) {
+func executeReset(a resetActions, fsys resetFS, env hostenv.Env, out io.Writer, now func() time.Time) ([]string, error) {
 	ts := now().Unix()
 	var errs []error
 
@@ -618,7 +620,7 @@ var stopServeForReset = func(out io.Writer) (bool, error) {
 // exactly what it did (stopped / not running / stale / refused). Best-effort: a
 // hard error is reported but never aborts the reset, keeping the "cannot stop, do
 // it yourself" degradation.
-func stopHostServices(_ shellEnv, out io.Writer) {
+func stopHostServices(_ hostenv.Env, out io.Writer) {
 	fmt.Fprintln(out, "Stopping host services:")
 	if _, err := stopServeForReset(out); err != nil {
 		fmt.Fprintf(out, "  · could not stop 'pix-host serve' (%v) — stop it yourself if running\n", err)
@@ -628,7 +630,7 @@ func stopHostServices(_ shellEnv, out io.Writer) {
 // executeSbxReset removes pix-* sandboxes and unregisters the configured
 // local MCP servers. Best-effort throughout: each action is reported, and if sbx
 // is absent (e.g. inside a sandbox) it prints the commands for the user to run.
-func executeSbxReset(a resetActions, env shellEnv, out io.Writer) {
+func executeSbxReset(a resetActions, env hostenv.Env, out io.Writer) {
 	fmt.Fprintln(out, "Sandboxes + MCP (sbx):")
 	haveSbx := false
 	_, err := env.LookPath("sbx")
@@ -737,7 +739,7 @@ func printResetSummary(created []string, out io.Writer) {
 // errResetNeedsYes on the non-TTY-no-yes refusal (the CLI maps it to exit 2);
 // an interactive "no" aborts cleanly with a nil error.
 func runResetCore(cfg *config.Config, paths resetPaths, opts resetOpts,
-	fsys resetFS, env shellEnv, rio setupIO, now func() time.Time) error {
+	fsys resetFS, env hostenv.Env, rio setupIO, now func() time.Time) error {
 
 	a := resetPlan(cfg, paths, opts)
 	printResetPlan(a, rio.out)
@@ -812,7 +814,7 @@ func runReset(argv []string) {
 		os.Exit(1)
 	}
 	env := defaultShellEnv()
-	rio := setupIO{in: os.Stdin, out: os.Stdout, isTTY: isTTY(os.Stdin)}
+	rio := setupIO{in: os.Stdin, out: os.Stdout, isTTY: cli.IsTTY(os.Stdin)}
 	if err := runResetCore(cfg, resolveResetPaths(env), opts, defaultResetFS(), env, rio, time.Now); err != nil {
 		if errors.Is(err, errResetNeedsYes) {
 			fmt.Fprintln(os.Stderr, "pix reset: refusing to reset a non-interactive terminal without confirmation")
@@ -826,7 +828,7 @@ func runReset(argv []string) {
 
 // resolveBinPaths returns the installed launcher symlinks (~/.local/bin/pix
 // + pix-host) from the injected env's home dir.
-func resolveBinPaths(env shellEnv) []string {
+func resolveBinPaths(env hostenv.Env) []string {
 	home := ""
 	home = env.HomeDir()
 	bin := filepath.Join(home, ".local", "bin")
@@ -890,7 +892,7 @@ func isOurBinTarget(target string) bool {
 // testability (temp HOME, injected bins/fs/env). It returns runResetCore's error
 // (notably errResetNeedsYes) unchanged so the CLI maps it to the same exit code.
 func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts resetOpts, prov provenance,
-	fsys resetFS, env shellEnv, rio setupIO, now func() time.Time) error {
+	fsys resetFS, env hostenv.Env, rio setupIO, now func() time.Time) error {
 
 	a := resetPlan(cfg, paths, opts)
 	printResetPlan(a, rio.out)
@@ -956,7 +958,7 @@ func runUninstallCore(cfg *config.Config, paths resetPaths, bins []string, opts 
 // manpath (~/.local/share/man/man1/pix.1) — and ONLY that file. The embed
 // in the binary remains the guarantee, so this is best-effort cleanup: a missing
 // file is fine and never fails the uninstall.
-func removeInstalledManPage(env shellEnv, fsys resetFS, out io.Writer) {
+func removeInstalledManPage(env hostenv.Env, fsys resetFS, out io.Writer) {
 	home := ""
 	home = env.HomeDir()
 	p := filepath.Join(home, ".local", "share", "man", "man1", "pix.1")

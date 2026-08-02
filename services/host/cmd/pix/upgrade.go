@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/cli"
 	"strings"
 	"time"
 )
@@ -208,7 +209,7 @@ func runUpgrade(argv []string) {
 
 	prov := installChannelNow()
 	if prov.Channel == channelHomebrew {
-		err := runUpgradeHomebrew(o, prov, os.Stdin, os.Stdout, isTTY(os.Stdin), runBrewUpgrade, probeInstalledVersion)
+		err := runUpgradeHomebrew(o, prov, os.Stdin, os.Stdout, cli.IsTTY(os.Stdin), runBrewUpgrade, probeInstalledVersion)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "pix upgrade: %v\n", err)
 			os.Exit(1)

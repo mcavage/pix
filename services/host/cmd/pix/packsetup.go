@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/service"
 )
 
@@ -15,7 +16,7 @@ import (
 // pack has been adopted through the normal Tier-1 trust gate. Every step is
 // resumable: its bounded check runs first, apply runs only when check fails,
 // and the same check must pass afterward before Pix reports readiness.
-func runPackSetup(env shellEnv, out io.Writer, root string, requested []string, interactive bool) error {
+func runPackSetup(env hostenv.Env, out io.Writer, root string, requested []string, interactive bool) error {
 	p, err := loadPack(root)
 	if err != nil {
 		return err
@@ -71,7 +72,7 @@ func runPackSetup(env shellEnv, out io.Writer, root string, requested []string, 
 // launcher-owned directory, then fingerprints the complete host surface using
 // the captured bytes and requires an exact accepted trust record. Checks,
 // apply, and re-check all execute the same immutable snapshot path.
-func snapshotAcceptedPackSetup(env shellEnv, p *packInfo, wanted map[string]bool) (map[string]string, func(), error) {
+func snapshotAcceptedPackSetup(env hostenv.Env, p *packInfo, wanted map[string]bool) (map[string]string, func(), error) {
 	paths := map[string]string{}
 	cleanup := func() {}
 	if p == nil {
@@ -170,7 +171,7 @@ func planPackSetupRequests(roots, requested []string) (map[string][]string, erro
 	return plan, nil
 }
 
-func packSetupCheck(env shellEnv, path string, args []string) bool {
+func packSetupCheck(env hostenv.Env, path string, args []string) bool {
 	_, timedOut, err := env.RunTimed(path, args...)
 	return !timedOut && err == nil
 }

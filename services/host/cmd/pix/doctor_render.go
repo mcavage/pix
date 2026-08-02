@@ -19,8 +19,6 @@ const mcpHostTrustNotice = "Note: local/container MCP servers run on the host, o
 
 func upDown(up bool) string { return cli.UpDown(up) }
 
-func plural(n int, noun string) string { return cli.Plural(n, noun) }
-
 // doctorHints are the surface-specific strings the readiness renderer cannot
 // know for itself: the exact sbx install command, and the host-MCP trust
 // notice. They are passed IN rather than baked into readiness, so doctor,

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/inference"
 	"pix/host/readiness"
 	"pix/host/sys/systest"
@@ -151,7 +152,7 @@ func TestDirectInferenceProbeDoesNotVerifyRejectedOrUnavailableKey(t *testing.T)
 			if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
 				t.Fatal(err)
 			}
-			env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(name string, args ...string) (string, error) {
+			env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(name string, args ...string) (string, error) {
 				if name == "op" && len(args) == 2 && args[0] == "read" {
 					return key + "\n", nil
 				}
@@ -192,7 +193,7 @@ func TestDirectInferenceProbeVerifiesOnlySuccessfulModel(t *testing.T) {
 	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
 		t.Fatal(err)
 	}
-	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(string, ...string) (string, error) { return "secret\n", nil }}, DirectInference: func(provider, model, key string) error {
+	env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(string, ...string) (string, error) { return "secret\n", nil }}, DirectInference: func(provider, model, key string) error {
 		return nil
 	}}
 	probe, probeErr := verifyDirectInference(cfg, env)
@@ -215,7 +216,7 @@ func TestDirectInferenceProbePromotesBindingsIndependently(t *testing.T) {
 	if err := configureDirectInference(cfg, []string{"openai"}); err != nil {
 		t.Fatal(err)
 	}
-	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(string, ...string) (string, error) { return "secret\n", nil }}, DirectInference: func(provider, model, key string) error {
+	env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "OPENAI_API_KEY=op://vault/openai/key\n", nil }, RunFn: func(string, ...string) (string, error) { return "secret\n", nil }}, DirectInference: func(provider, model, key string) error {
 		if strings.Contains(model, "sol") {
 			return fmt.Errorf("provider rejected model request (HTTP 403)")
 		}
@@ -233,14 +234,14 @@ func TestDirectInferenceProbePromotesBindingsIndependently(t *testing.T) {
 			t.Fatalf("binding verification was not independent: %+v want-callable=%v", binding, want)
 		}
 	}
-	checks := setupProvidersAxis(cfg, shellEnv{System: &systest.Fake{}})
+	checks := setupProvidersAxis(cfg, hostenv.Env{System: &systest.Fake{}})
 	if len(checks) != 1 || checks[0].Verdict != readiness.VerdictReady || !strings.Contains(checks[0].Detail, "did not pass live verification") {
 		t.Fatalf("partial verification summary = %+v", checks)
 	}
 }
 
 func TestSetupChooseInferenceOffersDetectedOllamaAndNeedsNoOnePassword(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "ollama" {
 			return "/usr/local/bin/ollama", nil
 		}
@@ -305,7 +306,7 @@ func TestSetupChooseInferenceConfiguresKeylessGateway(t *testing.T) {
 	cfg := &config.Config{}
 	var out bytes.Buffer
 	input := "3\nhttps://models.example.test/v1\n\nanthropic/claude-sonnet-5=sonnet-prod\n"
-	selected, err := setupChooseInference(cfg, shellEnv{System: &systest.Fake{}}, strings.NewReader(input), &out, true)
+	selected, err := setupChooseInference(cfg, hostenv.Env{System: &systest.Fake{}}, strings.NewReader(input), &out, true)
 	if err != nil {
 		t.Fatal(err)
 	}

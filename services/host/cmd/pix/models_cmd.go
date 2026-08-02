@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"pix/host/cli"
+	"pix/host/launcher"
 	"pix/host/routing"
 )
 
@@ -164,7 +165,7 @@ func (c *ModelsAddCmd) Run(d *cli.Deps) error {
 // execHostRoute forwards to the sibling pix-host binary, which owns the router.
 // It is the one place that knows the host tree is still spelled `route`.
 func execHostRoute(d *cli.Deps, verb string, argv []string) error {
-	bin, err := findHostBinary()
+	bin, err := launcher.FindHostBinary()
 	if err != nil {
 		return err
 	}

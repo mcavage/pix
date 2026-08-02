@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
+	"pix/host/sys"
 	"pix/host/sys/systest"
 )
 
@@ -181,12 +183,12 @@ func TestRunReplaceCommand_PreservesExplicitWorkspace(t *testing.T) {
 }
 
 // A workspace path needing shell-quoting (spaces, apostrophe) must be quoted
-// POSIX-safely via the existing shellQuoteArg, not printed raw (which would
+// POSIX-safely via the existing sys.ShellQuote, not printed raw (which would
 // paste-and-break, or worse, silently split into multiple shell words).
 func TestRunReplaceCommand_QuotesUnsafeWorkspace(t *testing.T) {
 	ws := "/home/mark/my repo's"
 	got := runReplaceCommand(ws)
-	want := "pix run " + shellQuoteArg(ws) + " --replace"
+	want := "pix run " + sys.ShellQuote(ws) + " --replace"
 	if got != want {
 		t.Errorf("runReplaceCommand(%q) = %q, want %q", ws, got, want)
 	}
@@ -194,7 +196,7 @@ func TestRunReplaceCommand_QuotesUnsafeWorkspace(t *testing.T) {
 
 // TestMcpLoadCommand_QuotesWorkspaceAndName pins closure finding #3: every
 // generated copy-paste `mcp load` repair command shell-quotes BOTH the
-// server name and the workspace via the shared shellQuoteArg, so a workspace
+// server name and the workspace via the shared sys.ShellQuote, so a workspace
 // with spaces/apostrophe/shell metacharacters round-trips safely.
 func TestMcpLoadCommand_QuotesWorkspaceAndName(t *testing.T) {
 	for _, ws := range []string{
@@ -203,7 +205,7 @@ func TestMcpLoadCommand_QuotesWorkspaceAndName(t *testing.T) {
 		"/tmp/$HOME/proj",
 	} {
 		got := mcpLoadCommand("slack", ws)
-		want := "pix mcp load " + shellQuoteArg("slack") + " " + shellQuoteArg(ws)
+		want := "pix mcp load " + sys.ShellQuote("slack") + " " + sys.ShellQuote(ws)
 		if got != want {
 			t.Errorf("mcpLoadCommand(%q) = %q, want %q", ws, got, want)
 		}
@@ -311,7 +313,7 @@ func TestBuildReattachArgs_NeitherModelNorPassthrough(t *testing.T) {
 // step, and assert exactly one rm attempt was made (no retry, no fallback).
 func TestApplyReplaceRm_FailurePropagatesAndBlocksCreate(t *testing.T) {
 	var recorded [][]string
-	env := shellEnv{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) {
 		recorded = append(recorded, append([]string{cmd}, args...))
 		return "Error: cannot remove sandbox", fmt.Errorf("exit status 1")
 	}}}
@@ -339,7 +341,7 @@ func TestApplyReplaceRm_FailurePropagatesAndBlocksCreate(t *testing.T) {
 // TestApplyReplaceRm_SuccessAllowsCreate: the mirror-image case — a successful
 // rm returns nil, so run.go's caller proceeds to create.
 func TestApplyReplaceRm_SuccessAllowsCreate(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) { return "", nil }}}
+	env := hostenv.Env{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) { return "", nil }}}
 	plan := runLaunchPlan{RmFirst: true}
 	if err := applyReplaceRm(env, plan, "pix-t"); err != nil {
 		t.Errorf("expected nil error on a successful rm, got %v", err)
@@ -350,7 +352,7 @@ func TestApplyReplaceRm_SuccessAllowsCreate(t *testing.T) {
 // create with nothing to remove) never calls env.Run at all.
 func TestApplyReplaceRm_NoOpWhenNotNeeded(t *testing.T) {
 	called := false
-	env := shellEnv{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) { called = true; return "", nil }}}
+	env := hostenv.Env{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) { called = true; return "", nil }}}
 	if err := applyReplaceRm(env, runLaunchPlan{RmFirst: false}, "pix-t"); err != nil {
 		t.Errorf("expected nil error, got %v", err)
 	}
@@ -439,7 +441,7 @@ func TestParseRunArgs_Replace(t *testing.T) {
 func TestLocalImageLoaded(t *testing.T) {
 	lsOut := dockerImageRepo + "  local-111  abc123\n" +
 		dockerImageRepo + "  local-222  def456\n"
-	present := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return lsOut, nil }}}
+	present := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return lsOut, nil }}}
 	if !localImageLoaded(present, "local-222") {
 		t.Error("a loaded tag must be reported present")
 	}
@@ -447,7 +449,7 @@ func TestLocalImageLoaded(t *testing.T) {
 		t.Error("an unloaded tag must be reported absent")
 	}
 	// Combined `repo:tag id` column form (the round-2 regression) must match too.
-	combined := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return dockerImageRepo + ":local-333  ghi789\n", nil }}}
+	combined := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return dockerImageRepo + ":local-333  ghi789\n", nil }}}
 	if !localImageLoaded(combined, "local-333") {
 		t.Error("combined repo:tag column must be recognized as present")
 	}
@@ -455,22 +457,22 @@ func TestLocalImageLoaded(t *testing.T) {
 		t.Error("combined form: an unloaded tag must be absent")
 	}
 	// No sbx on PATH -> fail OPEN (true).
-	noSbx := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, RunFn: func(string, ...string) (string, error) { return "", nil }}}
+	noSbx := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, RunFn: func(string, ...string) (string, error) { return "", nil }}}
 	if !localImageLoaded(noSbx, "local-222") {
 		t.Error("must fail open (true) when sbx is unavailable")
 	}
 	// ls error -> fail OPEN (true).
-	lsErr := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "", fmt.Errorf("boom") }}}
+	lsErr := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "", fmt.Errorf("boom") }}}
 	if !localImageLoaded(lsErr, "local-222") {
 		t.Error("must fail open (true) when `sbx template ls` errors")
 	}
 	// Empty ls output -> no signal -> fail OPEN (true).
-	empty := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "   \n", nil }}}
+	empty := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "   \n", nil }}}
 	if !localImageLoaded(empty, "local-222") {
 		t.Error("must fail open (true) when ls output is empty")
 	}
 	// Store fully pruned (non-empty ls, tag absent) -> REFUSE (would otherwise pull).
-	pruned := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "REPOSITORY TAG ID\nother/img latest xyz\n", nil }}}
+	pruned := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunFn: func(string, ...string) (string, error) { return "REPOSITORY TAG ID\nother/img latest xyz\n", nil }}}
 	if localImageLoaded(pruned, "local-222") {
 		t.Error("must refuse when the tag is absent from a non-empty store (pruned)")
 	}

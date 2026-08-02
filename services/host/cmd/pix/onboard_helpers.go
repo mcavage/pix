@@ -1,7 +1,6 @@
 package main
 
 import (
-	"pix/host/cli"
 	"pix/host/knowledge"
 	"pix/host/sys"
 
@@ -68,7 +67,3 @@ func promptLine(sio setupIO, prompt string) string {
 	line, _ := bufio.NewReader(sio.in).ReadString('\n')
 	return strings.TrimSpace(line)
 }
-
-// isTTY reports whether r is an interactive terminal. Any non-*os.File (e.g. a
-// test buffer) or a redirected/piped stdin is treated as non-interactive.
-func isTTY(r io.Reader) bool { return cli.IsTTY(r) }

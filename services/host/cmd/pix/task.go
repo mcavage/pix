@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/cli"
+	"pix/host/hostenv"
 	"pix/host/monitor/tui"
 	"pix/host/secret"
 	"pix/host/sys"
@@ -606,7 +608,7 @@ func taskTeardownAbort(final sbxState, force bool) bool {
 }
 
 // executeTaskTeardown runs the guarded teardown AFTER taskRemoveGuard has passed,
-// using the SAME injectable shellEnv the guard's facts came from. Order: snapshot
+// using the SAME injectable hostenv.Env the guard's facts came from. Order: snapshot
 // the branch to refs/pix/recovered/<name>, re-probe the sandbox for a friendly
 // early message, then ALWAYS attempt the atomic `sbx rm`. The removal is where
 // correctness lives: non-force issues `sbx rm` (no -f) on EVERY call — even when
@@ -621,7 +623,7 @@ func taskTeardownAbort(final sbxState, force bool) bool {
 // snapshot-abort needs. This is the single choke point that guarantees a live or
 // indeterminate sandbox is never dropped, and the clone is never deleted without
 // first attempting the atomic rm.
-func executeTaskTeardown(env shellEnv, w io.Writer, meta taskMeta, co, name, recovered string, force bool, st taskState) int {
+func executeTaskTeardown(env hostenv.Env, w io.Writer, meta taskMeta, co, name, recovered string, force bool, st taskState) int {
 	// a. ALWAYS snapshot ALL of the clone's local heads + HEAD to a durable
 	// namespace in the main repo, so even a --force teardown is fully recoverable:
 	// work on scratch branches and a detached HEAD is captured, not just the task
@@ -730,9 +732,9 @@ func clearTaskSandboxReceipt(w io.Writer, sandbox string) {
 	}
 }
 
-// gatherTaskState collects the four guard facts via the shellEnv seam (real git
+// gatherTaskState collects the four guard facts via the hostenv.Env seam (real git
 // in production and integration tests, a fake sbx in tests).
-func gatherTaskState(env shellEnv, m taskMeta, co string) taskState {
+func gatherTaskState(env hostenv.Env, m taskMeta, co string) taskState {
 	st := taskState{}
 	// Probe the sandbox ONCE and carry the tri-state; the guard and the teardown
 	// executor both decide on this single value.
@@ -813,7 +815,7 @@ func parseCount(s string) int {
 // seam (mirrors sandboxStatus but hermetic-testable), or "" when absent. This
 // is the DISPLAY-only accessor used by `task ls`; destructive decisions use the
 // tri-state probeTaskSandbox instead, which never conflates errored with absent.
-func taskSandboxStatus(env shellEnv, name string) string {
+func taskSandboxStatus(env hostenv.Env, name string) string {
 	// BOUNDED (probeRun): a hung `sbx ls` yields "" (no display status), it
 	// never wedges `task ls`.
 	out, timedOut, err := env.RunTimed("sbx", "ls")
@@ -850,7 +852,7 @@ const (
 // missing runner) is UNKNOWN, never absent, so a failed probe can never be read
 // as "the sandbox was never created". BOUNDED (probeRun): a hung sbx times out
 // to UNKNOWN — run/setup/task preflights degrade honestly instead of wedging.
-func probeTaskSandbox(env shellEnv, name string) sbxState {
+func probeTaskSandbox(env hostenv.Env, name string) sbxState {
 	out, timedOut, err := env.RunTimed("sbx", "ls")
 	if timedOut || err != nil {
 		return sbxUnknown
@@ -876,7 +878,7 @@ func probeTaskSandbox(env shellEnv, name string) sbxState {
 // against the main repo, so the two never disagree about which store they mean.
 // The field is still called "mainroot" for continuity, but it now holds the
 // git-common-dir, not the worktree root.
-func resolveMainroot(env shellEnv, cwd string) (string, error) {
+func resolveMainroot(env hostenv.Env, cwd string) (string, error) {
 	out, err := env.Run("git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		return "", fmt.Errorf("%s", strings.TrimSpace(out))
@@ -892,8 +894,8 @@ func resolveMainroot(env shellEnv, cwd string) (string, error) {
 // task new
 // ---------------------------------------------------------------------------
 
-func runTaskNew(env shellEnv, argv []string) {
-	if wantsHelp(argv) {
+func runTaskNew(env hostenv.Env, argv []string) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(taskUsage)
 		return
 	}
@@ -1127,7 +1129,7 @@ func parseTaskNewArgs(argv []string) (name, from string, passthrough []string, e
 //     sandbox there, so a sandbox that started between the probe and the rm is
 //     left alone (the rm fails) rather than force-killed. A failed rm ABORTS the
 //     launch with a teachable message; we never fall back to -f.
-func prepareTaskLaunchSandbox(env shellEnv, name string) error {
+func prepareTaskLaunchSandbox(env hostenv.Env, name string) error {
 	switch probeTaskSandbox(env, name) {
 	case sbxAbsent:
 		return nil
@@ -1306,8 +1308,8 @@ type taskListRow struct {
 // format string that could drift.
 const taskMetaUnreadableStatus = "\u2298 unreadable metadata"
 
-func runTaskLs(env shellEnv, argv []string) {
-	if wantsHelp(argv) {
+func runTaskLs(env hostenv.Env, argv []string) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(taskUsage)
 		return
 	}
@@ -1428,7 +1430,7 @@ func runTaskLs(env shellEnv, argv []string) {
 	}
 	if gcEligible > 0 {
 		fmt.Printf("%s clean and older than %dd; `pix task gc` to prune.\n",
-			plural(gcEligible, "task"), taskGCDefaultDays)
+			cli.Plural(gcEligible, "task"), taskGCDefaultDays)
 	}
 	fmt.Println("Next: `pix task rm <name>` to tear one down (guarded).")
 }
@@ -1441,8 +1443,8 @@ func runTaskLs(env shellEnv, argv []string) {
 // shell: `cd "$(pix task foo path)"`. Everything else (errors, hints) goes
 // to stderr, and a missing task is exit 1 with nothing on stdout. It is
 // read-only: no lock, no meta hardening beyond confirming the task exists.
-func runTaskPath(env shellEnv, argv []string) {
-	if wantsHelp(argv) {
+func runTaskPath(env hostenv.Env, argv []string) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(taskUsage)
 		return
 	}
@@ -1476,8 +1478,8 @@ func runTaskPath(env shellEnv, argv []string) {
 // task rm
 // ---------------------------------------------------------------------------
 
-func runTaskRm(env shellEnv, argv []string) {
-	if wantsHelp(argv) {
+func runTaskRm(env hostenv.Env, argv []string) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(taskUsage)
 		return
 	}
@@ -1547,7 +1549,7 @@ func runTaskRm(env shellEnv, argv []string) {
 
 		// Teardown (never lose data, even with --force). executeTaskTeardown owns the
 		// full order: snapshot -> fresh-probe message -> atomic rm (`sbx rm` no -f for
-		// non-force, `sbx rm -f` for --force), deciding on the SAME shellEnv the guard's
+		// non-force, `sbx rm -f` for --force), deciding on the SAME hostenv.Env the guard's
 		// facts came from. A non-zero return means it aborted with everything intact;
 		// do NOT touch the checkout.
 		recovered := "refs/pix/recovered/" + sane
@@ -1715,7 +1717,7 @@ type harvestManifest struct {
 // bytes, so nothing is mis-parsed and silently dropped (which, on the rm path,
 // would delete an un-git'd doc the filter never saw). A git failure returns the
 // error so the caller fails CLOSED (rm/gc leave the checkout intact).
-func listHarvestCandidates(env shellEnv, co string) ([]harvestFile, error) {
+func listHarvestCandidates(env hostenv.Env, co string) ([]harvestFile, error) {
 	seen := map[string]bool{}
 	var files []harvestFile
 	add := func(rel, status string) {
@@ -1850,7 +1852,7 @@ func expandHarvestDir(co, rel, code string) ([]harvestFile, error) {
 // re-running never clobbers a prior capture. It returns a NON-NIL error when
 // enumeration, any copy, or the manifest write fails, so rm/gc callers fail
 // CLOSED (keep the clone) rather than delete the only copy of un-git'd docs.
-func harvestArtifacts(env shellEnv, w io.Writer, meta taskMeta, repoDir, co, name string) (string, error) {
+func harvestArtifacts(env hostenv.Env, w io.Writer, meta taskMeta, repoDir, co, name string) (string, error) {
 	files, err := listHarvestCandidates(env, co)
 	if err != nil {
 		return "", err
@@ -1895,7 +1897,7 @@ func harvestArtifacts(env shellEnv, w io.Writer, meta taskMeta, repoDir, co, nam
 		return dest, fmt.Errorf("some artifacts could not be copied: %s", strings.Join(copyErrs, "; "))
 	}
 	if len(copied) > 0 {
-		fmt.Fprintf(w, "pix: harvested %s to %s\n", plural(len(copied), "doc"), dest)
+		fmt.Fprintf(w, "pix: harvested %s to %s\n", cli.Plural(len(copied), "doc"), dest)
 	}
 	return dest, nil
 }
@@ -1989,8 +1991,8 @@ func copyFilePreserve(src, dst string) (copied bool, err error) {
 // capture. It reads + hardens the meta like rm/ls, then harvests. No sandbox or
 // guard interaction — it only ever COPIES from the host clone, so it is safe to
 // run mid-task, repeatedly.
-func runTaskHarvest(env shellEnv, argv []string) {
-	if wantsHelp(argv) {
+func runTaskHarvest(env hostenv.Env, argv []string) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(taskUsage)
 		return
 	}
@@ -2060,7 +2062,7 @@ func runTaskHarvest(env shellEnv, argv []string) {
 // destination would open a file O_TRUNC on itself, destroying the original), and
 // it accumulates copy failures and reports a non-zero exit code rather than a
 // false success. Returns the exit code (0 ok, 1 error).
-func harvestToDir(env shellEnv, co, to, name string) int {
+func harvestToDir(env hostenv.Env, co, to, name string) int {
 	coAbs, err := absResolve(co)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix task harvest: %v\n", err)
@@ -2108,7 +2110,7 @@ func harvestToDir(env shellEnv, co, to, name string) int {
 		fmt.Fprintf(os.Stderr, "pix task harvest: %d of %d docs could not be copied: %s\n", len(errs), len(files), strings.Join(errs, "; "))
 		return 1
 	}
-	fmt.Printf("Harvested %s to %s\n", plural(copied, "doc"), toAbs)
+	fmt.Printf("Harvested %s to %s\n", cli.Plural(copied, "doc"), toAbs)
 	return 0
 }
 
@@ -2266,8 +2268,8 @@ func taskAge(meta taskMeta, co string) time.Duration {
 // so a task with uncommitted/unpushed work is skipped and reported, never
 // force-dropped (there is no --force on gc, by design). After the task sweep it
 // prunes harvested artifact snapshots older than --artifact-days.
-func runTaskGc(env shellEnv, argv []string) {
-	if wantsHelp(argv) {
+func runTaskGc(env hostenv.Env, argv []string) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(taskUsage)
 		return
 	}
@@ -2381,10 +2383,10 @@ func runTaskGc(env shellEnv, argv []string) {
 
 	if opts.dryRun {
 		fmt.Printf("gc (dry run): %d would be removed, %d skipped, %d failed, %s would be pruned.\n",
-			wouldRemove, skipped, failed, plural(prunedArtifacts, "artifact snapshot"))
+			wouldRemove, skipped, failed, cli.Plural(prunedArtifacts, "artifact snapshot"))
 	} else {
 		fmt.Printf("gc: %d removed, %d skipped, %d failed, %s pruned.\n",
-			removed, skipped, failed, plural(prunedArtifacts, "artifact snapshot"))
+			removed, skipped, failed, cli.Plural(prunedArtifacts, "artifact snapshot"))
 	}
 	// A guard skip is normal (exit 0); an operational failure is not — exit non-zero
 	// so automation never treats a failed safety operation as success.

@@ -12,8 +12,10 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
+	"pix/host/sys"
 	"pix/host/sys/systest"
 )
 
@@ -34,7 +36,7 @@ func TestSetupSandboxName(t *testing.T) {
 func TestSyncGitHubCredentialFromHost(t *testing.T) {
 	const token = "github-secret-value"
 	var calls []string
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		calls = append(calls, name+" "+strings.Join(args, " "))
 		if name == "gh" {
 			return token + "\n", nil
@@ -51,7 +53,7 @@ func TestSyncGitHubCredentialFromHost(t *testing.T) {
 
 func TestSyncGitHubCredentialFromHostRedactsFailure(t *testing.T) {
 	const token = "github-secret-value"
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		if name == "gh" {
 			return token, nil
 		}
@@ -71,11 +73,11 @@ func TestSyncGitHubCredentialFromHostRedactsFailure(t *testing.T) {
 // the default pack/memory/host-mode.
 func TestRunSetupCore_NonexistentDir_NoHostPhaseInvocation(t *testing.T) {
 	invoked := false
-	stub := func(shellEnv, []string, io.Reader, io.Writer, bool) error {
+	stub := func(hostenv.Env, []string, io.Reader, io.Writer, bool) error {
 		invoked = true
 		return nil
 	}
-	err := runSetupCore(shellEnv{System: &systest.Fake{}}, filepath.Join(t.TempDir(), "does-not-exist"), nil, strings.NewReader(""), &bytes.Buffer{}, false, stub)
+	err := runSetupCore(hostenv.Env{System: &systest.Fake{}}, filepath.Join(t.TempDir(), "does-not-exist"), nil, strings.NewReader(""), &bytes.Buffer{}, false, stub)
 	if err == nil {
 		t.Fatal("a nonexistent DIR must fail runSetupCore")
 	}
@@ -93,11 +95,11 @@ func TestRunSetupCore_FileNotDir_NoHostPhaseInvocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	invoked := false
-	stub := func(shellEnv, []string, io.Reader, io.Writer, bool) error {
+	stub := func(hostenv.Env, []string, io.Reader, io.Writer, bool) error {
 		invoked = true
 		return nil
 	}
-	err := runSetupCore(shellEnv{System: &systest.Fake{}}, file, nil, strings.NewReader(""), &bytes.Buffer{}, false, stub)
+	err := runSetupCore(hostenv.Env{System: &systest.Fake{}}, file, nil, strings.NewReader(""), &bytes.Buffer{}, false, stub)
 	if err == nil {
 		t.Fatal("a DIR that is a file (not a directory) must fail runSetupCore")
 	}
@@ -112,11 +114,11 @@ func TestRunSetupCore_ValidDir_InvokesHostPhase(t *testing.T) {
 	dir := t.TempDir()
 	for _, valid := range []string{dir, "."} {
 		invoked := false
-		stub := func(shellEnv, []string, io.Reader, io.Writer, bool) error {
+		stub := func(hostenv.Env, []string, io.Reader, io.Writer, bool) error {
 			invoked = true
 			return nil
 		}
-		if err := runSetupCore(shellEnv{System: &systest.Fake{}}, valid, nil, strings.NewReader(""), &bytes.Buffer{}, false, stub); err != nil {
+		if err := runSetupCore(hostenv.Env{System: &systest.Fake{}}, valid, nil, strings.NewReader(""), &bytes.Buffer{}, false, stub); err != nil {
 			t.Fatalf("dir=%q: unexpected error: %v", valid, err)
 		}
 		if !invoked {
@@ -129,8 +131,8 @@ func TestRunSetupCore_ValidDir_InvokesHostPhase(t *testing.T) {
 // (it's a thin validate-then-call, not a swallow).
 func TestRunSetupCore_PropagatesHostPhaseError(t *testing.T) {
 	wantErr := fmt.Errorf("boom")
-	stub := func(shellEnv, []string, io.Reader, io.Writer, bool) error { return wantErr }
-	if err := runSetupCore(shellEnv{System: &systest.Fake{}}, ".", nil, strings.NewReader(""), &bytes.Buffer{}, false, stub); err != wantErr {
+	stub := func(hostenv.Env, []string, io.Reader, io.Writer, bool) error { return wantErr }
+	if err := runSetupCore(hostenv.Env{System: &systest.Fake{}}, ".", nil, strings.NewReader(""), &bytes.Buffer{}, false, stub); err != wantErr {
 		t.Errorf("expected hostPhase's own error to propagate, got %v", err)
 	}
 }
@@ -140,7 +142,7 @@ func TestRunSetupCore_PropagatesHostPhaseError(t *testing.T) {
 // pack use, pack hooks, OAuth, prerequisites, or any host-state mutation.
 func TestValidateSetupSemantics_RejectsBeforeMutationBoundary(t *testing.T) {
 	cfg := &config.Config{}
-	env := shellEnv{System: &systest.Fake{RunFn: func(string, ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) {
 		t.Fatal("semantic validation must not execute a command for these invalid inputs")
 		return "", nil
 	}}}
@@ -182,7 +184,7 @@ func TestValidateSetupSemantics_AcceptsValidCatalogAndGoogleOptions(t *testing.T
 		model:           "qwen3.5:9b",
 		knowledge:       "/tmp/knowledge",
 	}
-	if err := validateSetupSemantics(opts, &config.Config{}, shellEnv{System: &systest.Fake{}}, noHostResolver); err != nil {
+	if err := validateSetupSemantics(opts, &config.Config{}, hostenv.Env{System: &systest.Fake{}}, noHostResolver); err != nil {
 		t.Fatalf("valid setup semantics rejected: %v", err)
 	}
 }
@@ -247,7 +249,7 @@ func TestSetupHostPhase_NoKeyAborts(t *testing.T) {
 	// keyless Ollama bindings on disk would make setup proceed without a model
 	// key, defeating the "must abort" assertion.
 	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(n string) (string, error) { return "/usr/bin/" + n, nil }, ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(n string) (string, error) { return "/usr/bin/" + n, nil }, ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }, RunFn: func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 2 && args[0] == "secret" && args[1] == "ls" {
 			return "github\n", nil // no model key
 		}
@@ -286,13 +288,13 @@ func TestSetupHostPhase_InvalidFlags_NeverInvokesProviderKeyFlow(t *testing.T) {
 			t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 
 			invoked := false
-			setupProvisionKeysFn = func(shellEnv, io.Reader, io.Writer, bool, bool) bool {
+			setupProvisionKeysFn = func(hostenv.Env, io.Reader, io.Writer, bool, bool) bool {
 				invoked = true
 				return true
 			}
 
 			var out bytes.Buffer
-			err := setupHostPhase(shellEnv{System: &systest.Fake{}}, tc.flags, strings.NewReader(""), &out, false)
+			err := setupHostPhase(hostenv.Env{System: &systest.Fake{}}, tc.flags, strings.NewReader(""), &out, false)
 			if err == nil {
 				t.Fatalf("expected setupHostPhase to fail for flags %v", tc.flags)
 			}
@@ -332,7 +334,7 @@ func TestSetupSelectRunnableIntentForSingleProvider(t *testing.T) {
 		{"ANTHROPIC_API_KEY=op://v/a/k\nOPENAI_API_KEY=op://v/o/k\n", config.DefaultRunIntent, config.DefaultRunIntent, false},
 		{"ANTHROPIC_API_KEY=op://v/a/k\n", "code", "code", false},
 	} {
-		env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return tc.refs, nil }}}
+		env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return tc.refs, nil }}}
 		cfg := &config.Config{RunIntent: tc.start}
 		if got := setupSelectRunnableIntent(cfg, env); got != tc.changed {
 			t.Errorf("refs=%q changed=%v, want %v", tc.refs, got, tc.changed)
@@ -348,7 +350,7 @@ func TestSetupSelectRunnableIntentForSingleProvider(t *testing.T) {
 // from at all. See setup_keys_flow_test.go's SbxUnavailable_FailsOpen for the
 // case that DOES fail open (valid refs, sbx itself unreachable).
 func TestSetupProvisionKeys_OpMissingNeverFailsOpen(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, GetenvFn: func(string) string { return "/cfg" }, ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }}}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, GetenvFn: func(string) string { return "/cfg" }, ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }}}
 	var out bytes.Buffer
 	if setupProvisionKeys(env, strings.NewReader(""), &out, false, false) {
 		t.Error("op missing must fail setup, never fail open")
@@ -359,8 +361,8 @@ func TestSetupProvisionKeys_OpMissingNeverFailsOpen(t *testing.T) {
 }
 
 func TestHostModeProviderKeys(t *testing.T) {
-	mk := func(hostmode string) shellEnv {
-		return shellEnv{System: &systest.Fake{GetenvFn: func(k string) string {
+	mk := func(hostmode string) hostenv.Env {
+		return hostenv.Env{System: &systest.Fake{GetenvFn: func(k string) string {
 			if k == "XDG_CONFIG_HOME" {
 				return "/cfg"
 			}
@@ -388,7 +390,7 @@ func TestHostModeProviderKeys(t *testing.T) {
 // hostmode.env is "no refs configured yet" (nil error), never treated the
 // same as a real read failure.
 func TestHostModeProviderKeys_ENOENTIsNoneNotError(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{GetenvFn: func(string) string { return "/cfg" }, ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }}}
+	env := hostenv.Env{System: &systest.Fake{GetenvFn: func(string) string { return "/cfg" }, ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }}}
 	got, err := secret.HostModeProviderKeys(env)
 	if err != nil || len(got) != 0 {
 		t.Errorf("ENOENT: got %v, %v; want none, nil", got, err)
@@ -398,7 +400,7 @@ func TestHostModeProviderKeys_ENOENTIsNoneNotError(t *testing.T) {
 // TestHostModeProviderKeys_RealReadErrorIsError: EACCES/ELOOP/etc must surface
 // as a non-nil error naming the path, never silently downgraded to "none".
 func TestHostModeProviderKeys_RealReadErrorIsError(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{GetenvFn: func(string) string { return "/cfg" }, ReadFileFn: func(string) (string, error) { return "", os.ErrPermission }}}
+	env := hostenv.Env{System: &systest.Fake{GetenvFn: func(string) string { return "/cfg" }, ReadFileFn: func(string) (string, error) { return "", os.ErrPermission }}}
 	got, err := secret.HostModeProviderKeys(env)
 	if err == nil {
 		t.Fatal("a real read error must not be masked as none")
@@ -415,7 +417,7 @@ func TestHostModeProviderKeys_RealReadErrorIsError(t *testing.T) {
 // (ELOOP via os.PathError) classifies identically to any other non-ENOENT
 // error.
 func TestHostModeProviderKeys_SymlinkLoopIsError(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{GetenvFn: func(string) string { return "/cfg" }, ReadFileFn: func(string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{GetenvFn: func(string) string { return "/cfg" }, ReadFileFn: func(string) (string, error) {
 		return "", &os.PathError{Op: "open", Path: "hostmode.env", Err: os.ErrInvalid}
 	}}}
 	_, err := secret.HostModeProviderKeys(env)
@@ -541,7 +543,7 @@ func TestRunSetupHandoff_UnknownState_RetryCommandPreservesDirAndReplace(t *test
 	if err2 == nil {
 		t.Fatal("unknown state must return an error")
 	}
-	want2 := "pix setup " + shellQuoteArg("/some/repo's dir") + " --replace"
+	want2 := "pix setup " + sys.ShellQuote("/some/repo's dir") + " --replace"
 	if !strings.Contains(err2.Error(), want2) {
 		t.Errorf("error must contain the exact quoted retry command %q, got: %v", want2, err2)
 	}
@@ -617,7 +619,7 @@ func TestRunSetupHandoff_ExistingSandbox_QuotesExplicitDir(t *testing.T) {
 	}
 }
 
-// shellQuoteArg: safe tokens pass through; anything else is single-quoted with
+// sys.ShellQuote: safe tokens pass through; anything else is single-quoted with
 // apostrophes escaped.
 func TestShellQuoteArg(t *testing.T) {
 	cases := []struct{ in, want string }{
@@ -629,8 +631,8 @@ func TestShellQuoteArg(t *testing.T) {
 		{"a;b", "'a;b'"},
 	}
 	for _, c := range cases {
-		if got := shellQuoteArg(c.in); got != c.want {
-			t.Errorf("shellQuoteArg(%q) = %s, want %s", c.in, got, c.want)
+		if got := sys.ShellQuote(c.in); got != c.want {
+			t.Errorf("sys.ShellQuote(%q) = %s, want %s", c.in, got, c.want)
 		}
 	}
 }
@@ -685,8 +687,8 @@ func (f *fakeIdentityMemory) Call(method string, params map[string]any) (map[str
 	return map[string]any{"id": "mem-" + content, "reaffirmed": false}, nil
 }
 
-func gitIdentityEnv(name, email string) shellEnv {
-	return shellEnv{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) {
+func gitIdentityEnv(name, email string) hostenv.Env {
+	return hostenv.Env{System: &systest.Fake{RunFn: func(cmd string, args ...string) (string, error) {
 		if cmd == "git" && len(args) >= 4 && args[3] == "user.name" {
 			return name, nil
 		}

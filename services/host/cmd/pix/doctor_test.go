@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"strings"
 	"testing"
@@ -15,7 +16,7 @@ import (
 	"pix/host/workspace"
 )
 
-// fakeEnv builds a shellEnv from a set of present binaries, canned command
+// fakeEnv builds a hostenv.Env from a set of present binaries, canned command
 // output, env vars, and open ports, so runDoctor can be driven with no real
 // sbx/ollama/gog.
 type fakeEnv struct {
@@ -36,8 +37,8 @@ type fakeEnv struct {
 	identityProbe identityProber
 }
 
-func (f fakeEnv) env() shellEnv {
-	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+func (f fakeEnv) env() hostenv.Env {
+	return hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if f.present[name] {
 			return "/usr/bin/" + name, nil
 		}

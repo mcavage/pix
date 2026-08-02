@@ -20,12 +20,15 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/knowledge"
+	"pix/host/launcher"
 	"pix/host/routing"
 	"pix/host/secret"
 	"pix/host/service"
@@ -859,7 +862,7 @@ func commitPackStack(cfg *config.Config, records []packActivationRecord) error {
 	})
 }
 
-func applyPackStackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, error) {
+func applyPackStackToLaunch(cfg *config.Config, o *runOpts, env hostenv.Env) (string, error) {
 	roots := activePackRoots(cfg, o.Pack)
 	if len(roots) == 0 {
 		return "", nil
@@ -882,7 +885,7 @@ func applyPackStackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (strin
 			return "", err
 		}
 		for _, name := range packMcpNames(p) {
-			if !containsStr(o.StaticMCP, name) {
+			if !slices.Contains(o.StaticMCP, name) {
 				o.StaticMCP = append(o.StaticMCP, name)
 			}
 		}
@@ -1456,7 +1459,7 @@ func setPackManifestName(root, name string) error {
 // pack-less this launch, and recording it anyway would make a later
 // stalePackReattachWarning wrongly stay silent (marker == active) even though
 // the sandbox never got the pack's create-time facets.
-func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, error) {
+func applyPackToLaunch(cfg *config.Config, o *runOpts, env hostenv.Env) (string, error) {
 	packRoot := activePackRoot(cfg.Pack, o.Pack)
 	if packRoot == "" {
 		return "", nil // no active pack; nothing to mount (detached or never created)
@@ -1489,7 +1492,7 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, er
 	if err := applyPackInference(cfg, p.Manifest.Inference, p.Root); err != nil {
 		return "", err
 	}
-	if p.SkillsDir != "" && !containsStr(o.Skills, p.SkillsDir) {
+	if p.SkillsDir != "" && !slices.Contains(o.Skills, p.SkillsDir) {
 		o.Skills = append(o.Skills, p.SkillsDir)
 	}
 	if m := strings.TrimSpace(p.Manifest.OllamaBridgeModel); m != "" {
@@ -1508,7 +1511,7 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, er
 	if kerr != nil {
 		return "", fmt.Errorf("pack %s: %v (refusing to launch a sandbox missing a declared wrapper; fix the pack's bin/ or drop the [[proxy]] entry)", p.Manifest.Name, kerr)
 	}
-	if kit != "" && !containsStr(o.PackKits, kit) {
+	if kit != "" && !slices.Contains(o.PackKits, kit) {
 		o.PackKits = append(o.PackKits, kit)
 	}
 	for _, ig := range p.Manifest.Integrations {
@@ -1517,7 +1520,7 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, er
 		// warn for op-run-wrapped (host-provided/remote) integrations.
 		if ig.Env != "" && ig.Manifest == "" && !opRefFilled(env, ig.Env) {
 			if ig.Setup != "" {
-				fmt.Fprintf(os.Stderr, "pix: pack integration %q is not connected; run: pix setup --pack %s --with %s\n", ig.Name, shellQuoteArg(p.Root), shellQuoteArg(ig.Setup))
+				fmt.Fprintf(os.Stderr, "pix: pack integration %q is not connected; run: pix setup --pack %s --with %s\n", ig.Name, sys.ShellQuote(p.Root), sys.ShellQuote(ig.Setup))
 			} else {
 				fmt.Fprintf(os.Stderr, "pix: pack integration %q needs a credential; set it: pix secret set %s op://vault/item/field\n", ig.Name, ig.Env)
 			}
@@ -1532,7 +1535,7 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env shellEnv) (string, er
 	// applyPackToLaunch, so a --pack override never leaks into the persisted
 	// config.
 	for _, n := range packMcpNames(p) {
-		if !containsStr(cfg.MCP, n) {
+		if !slices.Contains(cfg.MCP, n) {
 			cfg.MCP = append(cfg.MCP, n)
 		}
 	}
@@ -2335,7 +2338,7 @@ func printPackRecreateLine(out io.Writer) {
 // --- verb tree --------------------------------------------------------------
 
 func runPackCmd(argv []string) {
-	if wantsHelp(argv) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(packUsage)
 		return
 	}
@@ -2420,7 +2423,7 @@ func activateDefaultPack(root string) error {
 
 // runPackNew adopts a pre-existing repo (or one already carrying pack.toml) in
 // place, else creates + git-inits a fresh pack. Never re-inits or clobbers.
-func runPackNew(env shellEnv, out io.Writer, rest []string) {
+func runPackNew(env hostenv.Env, out io.Writer, rest []string) {
 	root := packTarget(rest)
 	// Already a pack? Nothing to do (but ensure the default one is active).
 	if _, err := os.Stat(filepath.Join(root, packManifestName)); err == nil {
@@ -2484,7 +2487,7 @@ func runPackNew(env shellEnv, out io.Writer, rest []string) {
 
 // runPackAdd writes one artifact into a pack (implicit-create), then registers
 // it by presence (skills/knowledge are discovered by convention).
-func runPackAdd(env shellEnv, out io.Writer, rest []string) {
+func runPackAdd(env hostenv.Env, out io.Writer, rest []string) {
 	if len(rest) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: pix pack add <skill|knowledge|proxy|mcp> <name> [PACK] [flags]")
 		os.Exit(2)
@@ -2729,7 +2732,7 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 				bomFingerprint = fp
 				packKey = trustStore.trustKey(root)
 				if got, ok := trustStore.acceptedFingerprint(packKey); !ok || got != fp {
-					if gerr := packTrustGate(os.Stdin, out, isTTY(os.Stdin), yes, p.Manifest.Name, bom); gerr != nil {
+					if gerr := packTrustGate(os.Stdin, out, cli.IsTTY(os.Stdin), yes, p.Manifest.Name, bom); gerr != nil {
 						fmt.Fprintf(out, "pix pack add: %v (declared in pack.toml, but NOT attached)\n", gerr)
 						os.Exit(1)
 					}
@@ -2747,7 +2750,7 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 				// lock; the adoption marker for the hint comes from host-recorded
 				// provenance first, else the (fail-safe) payload marker.
 				lock := trustStore.activationFor(root)
-				if !containsStr(lock.MCP, name) {
+				if !slices.Contains(lock.MCP, name) {
 					lock.MCP = append(lock.MCP, name)
 				}
 				if prov, ok := trustStore.Adopted[canonicalizePackRoot(root)]; ok {
@@ -2782,10 +2785,10 @@ func runPackAdd(env shellEnv, out io.Writer, rest []string) {
 			// cfg.MCP (added == false) — it is idempotent, and a retry after a
 			// failed gateway registration must actually re-register instead of
 			// silently doing nothing.
-			if err := registerServers(cfg, env, out, []string{name}, findHostBinary, packContainerMCP(p)); err != nil {
+			if err := registerServers(cfg, env, out, []string{name}, launcher.FindHostBinary, packContainerMCP(p)); err != nil {
 				fmt.Fprintf(out, "note: mcp registration: %v\n", err)
 			}
-			solicitPackCredentials(env, os.Stdin, out, isTTY(os.Stdin), p)
+			solicitPackCredentials(env, os.Stdin, out, cli.IsTTY(os.Stdin), p)
 			if added {
 				printPackRecreateLine(out)
 			}
@@ -2903,7 +2906,7 @@ func runPackShow(out io.Writer, rest []string) {
 				if opRefFilled(env, ig.Env) {
 					fmt.Fprintf(out, " — %s ✓", ig.Env)
 				} else if ig.Setup != "" {
-					fmt.Fprintf(out, "; later: pix setup --pack %s --with %s", shellQuoteArg(p.Root), shellQuoteArg(ig.Setup))
+					fmt.Fprintf(out, "; later: pix setup --pack %s --with %s", sys.ShellQuote(p.Root), sys.ShellQuote(ig.Setup))
 				} else {
 					fmt.Fprintf(out, " — %s ✗ (run: pix secret set %s op://vault/item/field)", ig.Env, ig.Env)
 				}
@@ -2914,7 +2917,7 @@ func runPackShow(out io.Writer, rest []string) {
 }
 
 // opRefFilled reports whether op-refs.env has a FILLED op:// ref for env var key.
-func opRefFilled(env shellEnv, key string) bool {
+func opRefFilled(env hostenv.Env, key string) bool {
 	_, content, exists := secret.OpRefsContent(env)
 	if !exists {
 		return false
@@ -2931,7 +2934,7 @@ func opRefFilled(env shellEnv, key string) bool {
 // credential ref is missing, writing each accepted ref. No-op off-TTY or when op
 // isn't installed; missing refs then just surface as warnings at run time. The
 // pack ships no secret — only the user's own op:// reference is stored.
-func solicitPackCredentials(env shellEnv, in io.Reader, out io.Writer, tty bool, p *packInfo) {
+func solicitPackCredentials(env hostenv.Env, in io.Reader, out io.Writer, tty bool, p *packInfo) {
 	if !tty || in == nil || !secret.OpInstalled(env) {
 		return
 	}
@@ -2977,7 +2980,7 @@ func solicitPackCredentials(env shellEnv, in io.Reader, out io.Writer, tty bool,
 	}
 }
 
-func runPackUse(env shellEnv, out io.Writer, rest []string) {
+func runPackUse(env hostenv.Env, out io.Writer, rest []string) {
 	// --yes / -y accepts the F5 Tier-1 host BoM without prompting (the ONLY way
 	// a non-TTY adoption of a host-exec pack can proceed — it fails closed
 	// otherwise).
@@ -3123,7 +3126,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 		bomFingerprint = fp
 		packKey = trustStore.trustKey(root)
 		if got, ok := trustStore.acceptedFingerprint(packKey); !ok || got != fp {
-			if gerr := packTrustGate(os.Stdin, out, isTTY(os.Stdin), yes, p.Manifest.Name, bom); gerr != nil {
+			if gerr := packTrustGate(os.Stdin, out, cli.IsTTY(os.Stdin), yes, p.Manifest.Name, bom); gerr != nil {
 				fmt.Fprintf(out, "pix pack use: %v\n", gerr)
 				os.Exit(1)
 			}
@@ -3332,12 +3335,12 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	if !switching {
 		detachedMCP, detachedKnowledge = nil, nil
 		for _, m := range removedMCP {
-			if !containsStr(cfg.MCP, m) {
+			if !slices.Contains(cfg.MCP, m) {
 				detachedMCP = append(detachedMCP, m)
 			}
 		}
 		for _, id := range removedKnowledge {
-			if !containsStr(cfg.KnowledgeBundles, id) {
+			if !slices.Contains(cfg.KnowledgeBundles, id) {
 				detachedKnowledge = append(detachedKnowledge, id)
 			}
 		}
@@ -3354,7 +3357,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	// false) and must still re-register, and a pack changing gog_account while
 	// redeclaring an existing `gog` server must re-register the new account.
 	if all := packMcpNames(p); len(all) > 0 {
-		if err := registerServers(cfg, env, out, all, findHostBinary, packContainerMCP(p)); err != nil {
+		if err := registerServers(cfg, env, out, all, launcher.FindHostBinary, packContainerMCP(p)); err != nil {
 			fmt.Fprintf(out, "note: mcp registration: %v\n", err)
 		}
 	}
@@ -3385,7 +3388,7 @@ func runPackUse(env shellEnv, out io.Writer, rest []string) {
 	}
 
 	// Solicit any 1Password creds this pack's reference-only integrations need.
-	solicitPackCredentials(env, os.Stdin, out, isTTY(os.Stdin), p)
+	solicitPackCredentials(env, os.Stdin, out, cli.IsTTY(os.Stdin), p)
 
 	// (The activation lock — this switch's removal set for the NEXT switch — was
 	// already written just BEFORE cfg.Save; see the R1 commit-ordering comment.)
@@ -3583,7 +3586,7 @@ func safeGitURL(url string) bool { return cli.SafeGitURL(url) }
 // clonePack clones (or updates) a remote pack into PacksDir/<name>, pinned to the
 // optional ref, and returns the local path. SHA-pin/provenance is a v2 concern;
 // v1 trusts the git remote (Tier 0: skills/knowledge/config, no host execution).
-func clonePack(env shellEnv, out io.Writer, raw string) (string, error) {
+func clonePack(env hostenv.Env, out io.Writer, raw string) (string, error) {
 
 	url, ref := parsePackURL(raw)
 	if !safeGitURL(url) {
@@ -3682,7 +3685,7 @@ func clonePack(env shellEnv, out io.Writer, raw string) (string, error) {
 // it from the remote) is remote-authored. A legit LOCAL lock (untracked regular
 // file carrying prior activation attribution) is preserved. os.Remove removes a
 // symlink itself, never its target.
-func scrubRemotePackLock(env shellEnv, dest string, freshClone bool) error {
+func scrubRemotePackLock(env hostenv.Env, dest string, freshClone bool) error {
 	path := packLockPath(dest)
 	fi, err := os.Lstat(path)
 	if err != nil {
@@ -3711,7 +3714,7 @@ func scrubRemotePackLock(env shellEnv, dest string, freshClone bool) error {
 // state — the trusted source for pack identity and the adopted-pack guard);
 // that mirror is best-effort because the lock marker plus the under-PacksDir
 // location check already keep the guard fail-safe without it.
-func markPackAdopted(env shellEnv, root, remote string) error {
+func markPackAdopted(env hostenv.Env, root, remote string) error {
 	lock := readPackLock(root)
 	lock.Remote = remote
 	lock.Commit = ""

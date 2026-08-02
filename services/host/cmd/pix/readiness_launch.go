@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
 
@@ -44,7 +45,7 @@ func (e sbxKeyEvidence) ok() bool { return e.state == secret.SbxSecretsOK }
 // probeSbxKeyEvidence runs the ONE shared secrets probe, for a caller that has
 // no evidence in hand yet. A caller that already probed passes its own result
 // instead of calling this.
-func probeSbxKeyEvidence(env shellEnv) sbxKeyEvidence {
+func probeSbxKeyEvidence(env hostenv.Env) sbxKeyEvidence {
 	out, state := secret.ProbeSbxSecrets(env)
 	return sbxKeyEvidence{out: out, state: state}
 }
@@ -76,7 +77,7 @@ var fastReadinessAxes = []readiness.Axis{readiness.AxisProviders, readiness.Axis
 // caller already has. The service axes are identity-verified (never a bare
 // dial), and both are lazy: a disabled service costs one dial, an enabled and
 // running one costs a local JSON-RPC round trip.
-func fastReadinessSnapshot(cfg *config.Config, env shellEnv, ev sbxKeyEvidence) readiness.Snapshot {
+func fastReadinessSnapshot(cfg *config.Config, env hostenv.Env, ev sbxKeyEvidence) readiness.Snapshot {
 	builders := providersReadinessAxes(cfg, ev)
 	for a, b := range serviceReadinessAxes(env, enabled(cfg, "memory"), enabled(cfg, "knowledge"), env.IdentityProbe) {
 		builders[a] = b

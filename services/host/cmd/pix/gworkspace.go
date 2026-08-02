@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"pix/host/cli"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"strings"
 
@@ -31,10 +33,10 @@ import (
 )
 
 const (
-	// gwServerName is the MCP registration + display name. Everything that
-	// registers, lists, probes, or removes the server uses this constant, so
-	// the gateway name and the public name can never drift.
-	gwServerName           = "google-workspace"
+	// gwServerName is config.GWServerName under the workflow's own name. The
+	// value lives in config because callers outside this workflow must
+	// recognise the server without importing it.
+	gwServerName           = config.GWServerName
 	gwDocsCreateServerName = "google-docs-create"
 	gwAccessCreateDocs     = "create-docs"
 	// gwInstallCmd is the ONE place the external binary's package name is
@@ -142,7 +144,7 @@ func runGworkspaceCmd(argv []string) {
 		fmt.Fprint(os.Stderr, gworkspaceUsage)
 		os.Exit(2)
 	}
-	if wantsHelp(argv[:1]) {
+	if cli.WantsHelp(argv[:1]) {
 		fmt.Print(gworkspaceUsage)
 		return
 	}
@@ -197,7 +199,7 @@ func parseGworkspaceSetupArgs(argv []string) (gworkspaceSetupOpts, error) {
 		case a == "--yes", a == "-y", a == "--non-interactive":
 			o.assumeYes = true
 		case a == "-h", a == "--help":
-			return o, errHelpRequested
+			return o, cli.ErrHelpRequested
 		default:
 			return o, fmt.Errorf("unknown flag %q (see: pix gworkspace setup -h)", a)
 		}
@@ -205,20 +207,20 @@ func parseGworkspaceSetupArgs(argv []string) (gworkspaceSetupOpts, error) {
 	return o, nil
 }
 
-// runGworkspaceSetupCmd parses flags, wires the real shellEnv (the
+// runGworkspaceSetupCmd parses flags, wires the real hostenv.Env (the
 // browser-opening auth steps inherit THIS process's stdio), and runs the
 // unchanged transaction.
 func runGworkspaceSetupCmd(argv []string) {
 	opts, err := parseGworkspaceSetupArgs(argv)
 	if err != nil {
-		if err == errHelpRequested {
+		if err == cli.ErrHelpRequested {
 			fmt.Print(gworkspaceSetupUsage)
 			return
 		}
 		fmt.Fprintf(os.Stderr, "pix gworkspace setup: %v\n\n%s", err, gworkspaceSetupUsage)
 		os.Exit(2)
 	}
-	tty := isTTY(os.Stdin)
+	tty := cli.IsTTY(os.Stdin)
 	if opts.assumeYes {
 		tty = false // --yes means "never prompt", even on a real terminal
 	}
@@ -229,7 +231,7 @@ func runGworkspaceSetupCmd(argv []string) {
 }
 
 // gworkspaceSetup is the façade over the unchanged gog_setup.go transaction.
-func gworkspaceSetup(env shellEnv, opts gworkspaceSetupOpts, in io.Reader, out io.Writer, tty bool) error {
+func gworkspaceSetup(env hostenv.Env, opts gworkspaceSetupOpts, in io.Reader, out io.Writer, tty bool) error {
 	return gogSetup(env, opts, in, out, tty)
 }
 
@@ -259,7 +261,7 @@ func gworkspaceExit(checks []readiness.Check) int {
 }
 
 func runGworkspaceStatusCmd(argv []string) {
-	if wantsHelp(argv) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(gworkspaceStatusUsage)
 		return
 	}
@@ -278,7 +280,7 @@ func runGworkspaceStatusCmd(argv []string) {
 // gworkspaceStatus renders the Google Workspace surface and returns the
 // process exit code. Every green here comes from a probe: config membership
 // is rendered as intent, never as readiness.
-func gworkspaceStatus(cfg *config.Config, env shellEnv, out io.Writer) int {
+func gworkspaceStatus(cfg *config.Config, env hostenv.Env, out io.Writer) int {
 	if cfg.GoogleWorkspaceAccess == gwAccessCreateDocs {
 		fmt.Fprintln(out, "Google Workspace (optional; read access + create-new-Docs only)")
 	} else {
@@ -358,7 +360,7 @@ func docsCreateSpawnCheck(res probeResult) readiness.Check {
 	case probeToolsOK:
 		return readiness.Check{Label: "create Docs", Verdict: readiness.VerdictReady,
 			Detail:   "create-new-Docs tool exposed (existing Docs remain immutable)",
-			Evidence: fmt.Sprintf("--list-tools returned %s", plural(res.tools, "tool"))}
+			Evidence: fmt.Sprintf("--list-tools returned %s", cli.Plural(res.tools, "tool"))}
 	case probeNoTools:
 		return readiness.Check{Label: "create Docs", Verdict: readiness.VerdictTodo,
 			Detail: "create-new-Docs server returned 0 tools", Todo: "pix gworkspace setup --create-docs"}
@@ -376,7 +378,7 @@ func docsCreateSpawnCheck(res probeResult) readiness.Check {
 // ---------------------------------------------------------------------------
 
 func runGworkspaceDisableCmd(argv []string) {
-	if wantsHelp(argv) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(gworkspaceDisableUsage)
 		return
 	}
@@ -407,7 +409,7 @@ func runGworkspaceDisableCmd(argv []string) {
 // gateway no longer has, which `status` reports honestly as a missing
 // registration; the reverse order would leave a persisted "disabled" config
 // while the gateway still spawns the server, which is the dangerous drift.
-func gworkspaceDisable(cfg *config.Config, env shellEnv, out io.Writer) error {
+func gworkspaceDisable(cfg *config.Config, env hostenv.Env, out io.Writer) error {
 	configured := strings.TrimSpace(cfg.GogAccount) != "" || mcpConfigured(cfg, gwServerName) || mcpConfigured(cfg, gwDocsCreateServerName)
 	snap := snapshotGogRegistration(env)
 	docsSnap := snapshotMCPRegistration(env, gwDocsCreateServerName)

@@ -14,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/rpc"
 	"pix/host/secret"
 	"pix/host/sys"
@@ -50,11 +52,11 @@ func TestParseSlackSetupArgs(t *testing.T) {
 	if _, err := parseSlackSetupArgs([]string{pasted}); err == nil || strings.Contains(err.Error(), pasted) || !strings.Contains(err.Error(), "[REDACTED]") {
 		t.Errorf("a positional pasted token must be rejected and redacted, got %v", err)
 	}
-	if _, err := parseSlackSetupArgs([]string{"-h"}); err != errHelpRequested {
-		t.Error("-h should return the errHelpRequested sentinel")
+	if _, err := parseSlackSetupArgs([]string{"-h"}); err != cli.ErrHelpRequested {
+		t.Error("-h should return the cli.ErrHelpRequested sentinel")
 	}
-	if _, err := parseSlackSetupArgs([]string{"--token-ref", "op://x/y/z", "--help"}); err != errHelpRequested {
-		t.Error("--help should return the errHelpRequested sentinel even after other flags")
+	if _, err := parseSlackSetupArgs([]string{"--token-ref", "op://x/y/z", "--help"}); err != cli.ErrHelpRequested {
+		t.Error("--help should return the cli.ErrHelpRequested sentinel even after other flags")
 	}
 }
 
@@ -133,7 +135,7 @@ func TestParseSlackSetupArgsRejectsMixedStaticAndPKCEFlags(t *testing.T) {
 
 // --- slackSetup hermetic harness ----------------------------------------
 
-// slackTestEnv builds a shellEnv over a real (but temp-dir-scoped) config +
+// slackTestEnv builds a hostenv.Env over a real (but temp-dir-scoped) config +
 // op-refs.env — config.Load/Save and secret.DefaultOpRefsPath both honor PIX_CONFIG,
 // so using defaultShellEnv() here means the disk-touching bits behave exactly
 // as production, while run/lookPath/probe/slackAuthTest are faked so nothing
@@ -147,7 +149,7 @@ type slackTestEnv struct {
 	authTest   func(token string) (slackIdentity, error)
 }
 
-func (f *slackTestEnv) env() shellEnv {
+func (f *slackTestEnv) env() hostenv.Env {
 	// The real system with the seams below faked. `Base` states that intent
 	// explicitly; it used to be implicit in starting from defaultShellEnv() and
 	// overwriting fields, which meant an un-overwritten seam silently reached the
@@ -155,7 +157,7 @@ func (f *slackTestEnv) env() shellEnv {
 	//
 	// RunTimedFn is deliberately left unset: systest.Fake routes RunTimed to the
 	// faked Run, so a bounded probe never becomes a real exec here.
-	e := shellEnv{System: &systest.Fake{Base: sys.Real{}}}
+	e := hostenv.Env{System: &systest.Fake{Base: sys.Real{}}}
 	e.HostBinary = func() (string, error) { return hostBinaryResolver() }
 	e.IdentityProbe = rpc.IdentityProbe
 	e.SlackAuth = liveSlackAuthTest

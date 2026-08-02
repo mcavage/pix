@@ -1,6 +1,9 @@
 package main
 
-import "pix/host/workspace"
+import (
+	"pix/host/workspace"
+	"slices"
+)
 
 // mcpjoin.go — S09: the ONE pure truth path joining a configured MCP server
 // set with host registration evidence and the per-sandbox launcher receipt
@@ -115,7 +118,7 @@ func receiptClaim(receipt *workspace.MCPReceipt, rstatus workspace.MCPStateStatu
 	if rstatus != workspace.MCPStateOK || receipt == nil {
 		return ""
 	}
-	if containsStr(receipt.Preloaded, name) {
+	if slices.Contains(receipt.Preloaded, name) {
 		return mcpJoinPreloaded
 	}
 	for _, l := range receipt.Loads {

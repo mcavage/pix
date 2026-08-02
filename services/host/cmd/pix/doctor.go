@@ -24,23 +24,22 @@ import (
 //
 // It must RUN cleanly inside the sandbox, where sbx and ollama are absent: every
 // probe degrades to a sane TODO rather than crashing. All the OS-touching work
-// goes through a shellEnv of function values so the tests drive it hermetically.
+// goes through a hostenv.Env of function values so the tests drive it hermetically.
 
-// shellEnv abstracts the ways doctor/setup touch the host: locating a binary,
+// hostenv.Env abstracts the ways doctor/setup touch the host: locating a binary,
 // running a command for its output, reading an env var, and dialing a local TCP
 // port. Tests substitute fakes; defaultShellEnv() wires the real thing.
-// shellEnv is an ALIAS for hostenv.Env, not a distinct type.
+// hostenv.Env is an ALIAS for hostenv.Env, not a distinct type.
 //
 // The bundle moved to its own package so the seven domains still trapped in
 // this file's package can be extracted at all: an extracted package cannot name
 // a parameter type declared in `package main`. The alias means every one of the
-// ~250 signatures that says `shellEnv` keeps working unchanged, so the move
+// ~250 signatures that says `hostenv.Env` keeps working unchanged, so the move
 // cost nothing at the call sites.
 //
-// The name stays because `shellEnv` is what this codebase calls it everywhere,
+// The name stays because `hostenv.Env` is what this codebase calls it everywhere,
 // and renaming 250 signatures to prove a point is not a refactor. See
 // hostenv.Env for what it holds and where each field is going.
-type shellEnv = hostenv.Env
 
 // fake returns the embedded System as the test double, for fixtures that build
 // a base env and then override one seam. TEST-ONLY: it panics on a real env,
@@ -60,9 +59,9 @@ const (
 // answers to a missing seam. runWithTimeout/runWithTimeoutD moved to
 // sys.RunTimed, which is where a bounded exec belongs.
 
-// defaultShellEnv returns a shellEnv backed by the real OS.
-func defaultShellEnv() shellEnv {
-	return shellEnv{
+// defaultShellEnv returns a hostenv.Env backed by the real OS.
+func defaultShellEnv() hostenv.Env {
+	return hostenv.Env{
 		System: sys.Real{}, HostBinary: func() (string, error) { return hostBinaryResolver() }, IdentityProbe: rpc.IdentityProbe, SlackAuth: liveSlackAuthTest, DirectInference: liveDirectInferenceProbe, OllamaInference: liveOllamaInferenceProbe}
 }
 
@@ -83,7 +82,7 @@ func defaultShellEnv() shellEnv {
 // `--`, and a non-empty inner command. Anything else returns ok=false so a
 // hostile or drifted prefix is never exec'd — the caller reports the
 // registration unverifiable instead of probing it.
-func unwrapOpRun(env shellEnv, argv []string) ([]string, bool) {
+func unwrapOpRun(env hostenv.Env, argv []string) ([]string, bool) {
 	if len(argv) == 0 {
 		return nil, false
 	}
@@ -163,7 +162,7 @@ func mcpConfigured(cfg *config.Config, name string) bool {
 // absolute path to that file (or "" if none is found before the filesystem root).
 // This is how doctor locates a repo checkout's config files (op-refs.env)
 // regardless of where it was invoked from within the tree.
-func findUpward(env shellEnv, rel string) string {
+func findUpward(env hostenv.Env, rel string) string {
 
 	dir, err := os.Getwd()
 	if err != nil {
@@ -193,7 +192,7 @@ func findUpward(env shellEnv, rel string) string {
 //
 // Returns "" when none exists, so the caller reports "cannot verify" rather than
 // probing (and blessing) a file the gateway never uses.
-func resolveOpRefs(env shellEnv) string {
+func resolveOpRefs(env hostenv.Env) string {
 	// abs makes every resolved path ABSOLUTE regardless of doctor's cwd: a
 	// relative $PIX_CONFIG (e.g. `config/config.toml`) would otherwise yield
 	// a cwd-relative op-refs path that need not match the gateway's --env-file.
@@ -228,11 +227,11 @@ func resolveOpRefs(env shellEnv) string {
 func grepWord(out, name string) bool { return cli.GrepWord(out, name) }
 
 // runDoctor builds the report. Pure apart from env: no direct OS access, so the
-// tests feed a faked shellEnv and assert on the rendered output. Each group is
+// tests feed a faked hostenv.Env and assert on the rendered output. Each group is
 // built by its own builder (doctor_providers.go, doctor_ollama.go,
 // doctor_memory.go, doctor_gog.go, doctor_secrets.go, doctor_mcp.go) so later
 // stories can rework one group without touching the others.
-func runDoctor(cfg *config.Config, env shellEnv) *readiness.Report {
+func runDoctor(cfg *config.Config, env hostenv.Env) *readiness.Report {
 	r := &readiness.Report{}
 	if g := installDuplicatesGroup(env); len(g.Checks) > 0 {
 		r.Groups = append(r.Groups, g)
@@ -304,7 +303,7 @@ func runDoctor(cfg *config.Config, env shellEnv) *readiness.Report {
 func runDoctorCmd(argv []string) {
 	jsonOut, verbose, err := parseDoctorArgs(argv)
 	if err != nil {
-		if err == errHelpRequested {
+		if err == cli.ErrHelpRequested {
 			fmt.Print(doctorUsage)
 			return
 		}
@@ -334,7 +333,7 @@ func runDoctorCmd(argv []string) {
 	}
 }
 
-// parseDoctorArgs validates doctor flags: -h/--help returns errHelpRequested,
+// parseDoctorArgs validates doctor flags: -h/--help returns cli.ErrHelpRequested,
 // --json sets jsonOut, --verbose sets verbose (full per-check detail; the
 // default is concise and collapses ready checks), any other token is a usage
 // error (exit 2).
@@ -342,7 +341,7 @@ func parseDoctorArgs(argv []string) (jsonOut, verbose bool, err error) {
 	for _, a := range argv {
 		switch a {
 		case "-h", "--help":
-			return false, false, errHelpRequested
+			return false, false, cli.ErrHelpRequested
 		case "--json":
 			jsonOut = true
 		case "--verbose":

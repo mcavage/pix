@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"pix/host/rpc"
 	"pix/host/workspace"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -433,7 +434,7 @@ func TestPackIntegrations_FoldIntoStaticSetAndReceipt(t *testing.T) {
 	o.StaticMCP = allPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
 
 	for _, want := range []string{"slack", "fastmail", "notion"} {
-		if !containsStr(o.StaticMCP, want) {
+		if !slices.Contains(o.StaticMCP, want) {
 			t.Errorf("o.StaticMCP = %v, want it to contain %q", o.StaticMCP, want)
 		}
 	}

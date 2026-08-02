@@ -1,6 +1,7 @@
 package main
 
 import (
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"strings"
 
@@ -74,7 +75,7 @@ func modelPulled(listOut, model string) bool {
 // (never by creating a sandbox), and all THREE configured model roles —
 // watcher, embed and bridge. Every fact comes from ollamaReadinessAxes, so
 // doctor, status, setup and run cannot disagree about them.
-func ollamaGroup(cfg *config.Config, env shellEnv) readiness.Group {
+func ollamaGroup(cfg *config.Config, env hostenv.Env) readiness.Group {
 	ollama := readiness.Group{Title: "Ollama / local models (optional: fact capture + semantic recall)", Axis: readiness.AxisOllamaHost}
 	s := readiness.Build(
 		readiness.Request{Axes: []readiness.Axis{readiness.AxisOllamaHost, readiness.AxisOllamaSandbox, readiness.AxisModelWatcher, readiness.AxisModelEmbed, readiness.AxisModelBridge}},
@@ -93,7 +94,7 @@ func ollamaGroup(cfg *config.Config, env shellEnv) readiness.Group {
 // doctor, status, setup and run. It probes Ollama exactly once (lazily: a
 // caller that requests only ollama.host pays for one probe, one that requests
 // none pays for nothing) and threads the resolved endpoint into every check.
-func ollamaReadinessAxes(cfg *config.Config, env shellEnv, sandbox string, sandboxReachable *bool) map[readiness.Axis]readiness.AxisBuilder {
+func ollamaReadinessAxes(cfg *config.Config, env hostenv.Env, sandbox string, sandboxReachable *bool) map[readiness.Axis]readiness.AxisBuilder {
 	ep := effectiveOllamaEndpoint(cfg, env)
 	var probed bool
 	var p ollamaProbe

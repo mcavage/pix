@@ -31,9 +31,9 @@ func TestFindHostBinaryRejectsVersionSkew(t *testing.T) {
 	old := launcher.Version
 	launcher.Version = "0.1.0"
 	t.Cleanup(func() { launcher.Version = old })
-	_, err := findHostBinary()
+	_, err := launcher.FindHostBinary()
 	if err == nil || !strings.Contains(err.Error(), `does not match pix version "0.1.0"`) {
-		t.Fatalf("findHostBinary error = %v, want explicit version mismatch", err)
+		t.Fatalf("launcher.FindHostBinary error = %v, want explicit version mismatch", err)
 	}
 }
 
@@ -47,7 +47,7 @@ func TestFindHostBinaryAcceptsExactVersion(t *testing.T) {
 	old := launcher.Version
 	launcher.Version = "0.1.0"
 	t.Cleanup(func() { launcher.Version = old })
-	got, err := findHostBinary()
+	got, err := launcher.FindHostBinary()
 	if err != nil {
 		t.Fatal(err)
 	}

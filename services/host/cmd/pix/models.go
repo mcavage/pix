@@ -25,6 +25,7 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/inference"
+	"pix/host/launcher"
 	"pix/host/routing"
 	"pix/host/sys"
 )
@@ -92,7 +93,7 @@ func resolveSessionModel(intent string) (string, error) {
 func runModels(argv []string) {
 	d := &cli.Deps{
 		Sys: sys.Real{}, Out: os.Stdout, Err: os.Stderr,
-		In: os.Stdin, Interactive: isTTY(os.Stdin),
+		In: os.Stdin, Interactive: cli.IsTTY(os.Stdin),
 	}
 	err := cli.Run[ModelsCmd]("models", modelsDescription(), argv, d)
 	if err != nil {
@@ -114,7 +115,7 @@ func runRouteAlias(argv []string) {
 	// and it should — the one place still allowed to say it is the alias whose
 	// whole job is to answer to it.
 	const verb = "route"
-	bin, err := findHostBinary()
+	bin, err := launcher.FindHostBinary()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix %s: %v\n", verb, err)
 		os.Exit(1)

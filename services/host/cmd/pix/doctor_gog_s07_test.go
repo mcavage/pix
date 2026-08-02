@@ -10,6 +10,7 @@ package main
 
 import (
 	"fmt"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/sys/systest"
 	"strings"
@@ -172,17 +173,17 @@ func TestDoctorGog_ZeroToolsCleanExitIsTodo(t *testing.T) {
 	}
 }
 
-// registeredGogProbeEnv builds a shellEnv where the registered gog command is
+// registeredGogProbeEnv builds a hostenv.Env where the registered gog command is
 // read from sbx and its bounded probe is driven by probeFn (so tests can
 // simulate timeouts and policy denials, which the fakeEnv map cannot).
-func registeredGogProbeEnv(probeFn func() (string, bool, error)) shellEnv {
+func registeredGogProbeEnv(probeFn func() (string, bool, error)) hostenv.Env {
 	regCmd := opWrappedGog(gogOpRefs, gogAcct)
 	fixtures := map[string]string{
 		"sbx secret ls":                "anthropic openai google github",
 		"sbx mcp ls":                   "google-workspace\n",
 		"sbx mcp get google-workspace": "name: gog\ncommand: " + regCmd + "\n",
 	}
-	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	return hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		switch name {
 		case "sbx", "gog", "op":
 			return "/usr/bin/" + name, nil

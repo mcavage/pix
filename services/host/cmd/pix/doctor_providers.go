@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"pix/host/readiness"
 	"pix/host/secret"
+	"slices"
 	"sort"
 	"strings"
 
@@ -132,7 +133,7 @@ func runIntentKeyCheck(cfg *config.Config, sbxOut string, sbxOK bool) readiness.
 	}
 	// The intent's model IS bound here — it just has not answered a request. The
 	// fix is a pull, not somebody else's cloud key.
-	if containsStr(unverifiedOllamaCandidates(cfg), model) {
+	if slices.Contains(unverifiedOllamaCandidates(cfg), model) {
 		return readiness.Check{Label: label, Note: true, Verdict: readiness.VerdictTodo,
 			Detail: "-> " + model + " is bound but has not passed a probe (not pulled, or the probe failed)",
 			Todo:   pullModelsFixCmd}

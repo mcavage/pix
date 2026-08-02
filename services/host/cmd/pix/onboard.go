@@ -11,6 +11,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/workspace"
 )
 
@@ -66,7 +67,7 @@ var onboardMCPCatalogAllow = mcpCatalogNames
 // touches config. env/hostResolver resolve the locally-known MCP set; when that
 // probe fails we fail CLOSED on any non-gog/non-catalog mcp name rather than
 // trust an unknown one.
-func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env shellEnv, hostResolver func() (string, error)) error {
+func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env hostenv.Env, hostResolver func() (string, error)) error {
 	if r.Version != 1 {
 		return fmt.Errorf("unsupported onboarding schema version %d (want 1)", r.Version)
 	}
@@ -121,7 +122,7 @@ func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env shell
 // setters the CLI uses, then Save()s. It is idempotent: re-applying identical
 // input yields identical config. It returns the human-readable changes it made.
 // Caller validates first.
-func applyOnboardingResult(r *onboardingResult, cfg *config.Config, env shellEnv, out io.Writer, save func(*config.Config) error) ([]string, error) {
+func applyOnboardingResult(r *onboardingResult, cfg *config.Config, env hostenv.Env, out io.Writer, save func(*config.Config) error) ([]string, error) {
 	var changes []string
 
 	// There is deliberately NO account writer here. Setting
@@ -162,7 +163,7 @@ func applyOnboardingResult(r *onboardingResult, cfg *config.Config, env shellEnv
 // prompt for CI), registers any newly-enabled MCP servers, then removes the
 // file. Absent file is a clean no-op. A validation failure leaves the file in
 // place and warns (so a human can inspect it) but never aborts the caller.
-func reconcileOnboarding(ws string, env shellEnv, in io.Reader, out io.Writer, assumeYes, tty bool) {
+func reconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer, assumeYes, tty bool) {
 	path := filepath.Join(ws, ".pix", onboardingFileName)
 	data, err := os.ReadFile(path)
 	if err != nil {

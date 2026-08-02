@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/service"
 	"pix/host/workspace"
@@ -23,7 +24,7 @@ import (
 // keeping a second config file.
 func runConfig(argv []string) {
 	// A leading -h/--help (with or without a subcommand) prints config usage.
-	if wantsHelp(argv) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(configUsage)
 		return
 	}
@@ -80,7 +81,7 @@ func runConfig(argv []string) {
 // space-separated. An unknown key is a loud error on stderr + exit 2, never a
 // silent empty value.
 func runConfigGet(argv []string) {
-	if wantsHelp(argv) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(configUsage)
 		return
 	}
@@ -160,7 +161,7 @@ func runConfigWrite(unset bool, argv []string) {
 	if unset {
 		verb = "unset"
 	}
-	if wantsHelp(argv) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(configUsage)
 		return
 	}

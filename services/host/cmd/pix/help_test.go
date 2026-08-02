@@ -20,16 +20,16 @@ func TestWantsHelp(t *testing.T) {
 		{"-h"}, {"--help"}, {"recall", "--help"}, {"set", "-h", "x"},
 	}
 	for _, argv := range yes {
-		if !wantsHelp(argv) {
-			t.Errorf("wantsHelp(%v) = false, want true", argv)
+		if !cli.WantsHelp(argv) {
+			t.Errorf("cli.WantsHelp(%v) = false, want true", argv)
 		}
 	}
 	no := [][]string{
 		nil, {"recall", "q"}, {"--json"}, {"--", "--help"}, {"set", "--", "-h"},
 	}
 	for _, argv := range no {
-		if wantsHelp(argv) {
-			t.Errorf("wantsHelp(%v) = true, want false", argv)
+		if cli.WantsHelp(argv) {
+			t.Errorf("cli.WantsHelp(%v) = true, want false", argv)
 		}
 	}
 }
@@ -89,8 +89,8 @@ func TestValidateRunWorkspace(t *testing.T) {
 
 func TestParseRunArgs_HelpSentinel(t *testing.T) {
 	for _, argv := range [][]string{{"--help"}, {"-h"}, {"--help", "extra"}} {
-		if _, err := parseRunArgs(argv); err != errHelpRequested {
-			t.Errorf("parseRunArgs(%v) err = %v, want errHelpRequested", argv, err)
+		if _, err := parseRunArgs(argv); err != cli.ErrHelpRequested {
+			t.Errorf("parseRunArgs(%v) err = %v, want cli.ErrHelpRequested", argv, err)
 		}
 	}
 }
@@ -291,8 +291,8 @@ func TestParseStatusArgs(t *testing.T) {
 	if j, err := parseStatusArgs(nil); err != nil || j {
 		t.Errorf("no args = (%v,%v), want (false,nil)", j, err)
 	}
-	if _, err := parseStatusArgs([]string{"--help"}); err != errHelpRequested {
-		t.Errorf("--help err = %v, want errHelpRequested", err)
+	if _, err := parseStatusArgs([]string{"--help"}); err != cli.ErrHelpRequested {
+		t.Errorf("--help err = %v, want cli.ErrHelpRequested", err)
 	}
 	if _, err := parseStatusArgs([]string{"--jsom"}); err == nil {
 		t.Error("--jsom (typo) should be a usage error")
@@ -306,8 +306,8 @@ func TestParseDoctorArgs(t *testing.T) {
 	if j, v, err := parseDoctorArgs([]string{"--verbose"}); err != nil || j || !v {
 		t.Errorf("--verbose = (%v,%v,%v), want (false,true,nil)", j, v, err)
 	}
-	if _, _, err := parseDoctorArgs([]string{"--help"}); err != errHelpRequested {
-		t.Errorf("--help err = %v, want errHelpRequested", err)
+	if _, _, err := parseDoctorArgs([]string{"--help"}); err != cli.ErrHelpRequested {
+		t.Errorf("--help err = %v, want cli.ErrHelpRequested", err)
 	}
 	if _, _, err := parseDoctorArgs([]string{"--bogus"}); err == nil {
 		t.Error("--bogus should be a usage error")

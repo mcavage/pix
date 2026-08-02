@@ -55,6 +55,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -243,7 +244,7 @@ func TestMarkerRoundTrip_OnboardingJSON(t *testing.T) {
 	// onboarding has deliberately NO account writer (Google Workspace
 	// authorization needs a browser); the marker's mcp entry is what should
 	// round-trip into config.
-	if !containsStr(cfg.MCP, gwServerName) {
+	if !slices.Contains(cfg.MCP, gwServerName) {
 		t.Errorf("cfg.MCP = %v, want %s round-tripped from the marker", cfg.MCP, gwServerName)
 	}
 }

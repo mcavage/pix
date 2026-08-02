@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"pix/host/hostenv"
 	"regexp"
 	"strings"
 	"testing"
@@ -55,7 +56,7 @@ func scrubbed(s string) string { return tmpPath.ReplaceAllString(s, "<tmp>") }
 
 // runMutationPrefix runs the first n mutation steps and stops, simulating a
 // SIGINT delivered immediately after step n.
-func runMutationPrefix(t *testing.T, env shellEnv, n int) {
+func runMutationPrefix(t *testing.T, env hostenv.Env, n int) {
 	t.Helper()
 	opts, err := parseOnboardArgs([]string{"--yes", "--pull-models"})
 	if err != nil {

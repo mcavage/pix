@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -37,7 +38,7 @@ func TestApplyConfigChange_MCP(t *testing.T) {
 	if _, err := applyConfigChange(cfg, false, "mcp", []string{gwServerName}); err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfg.MCP, gwServerName) {
+	if !slices.Contains(cfg.MCP, gwServerName) {
 		t.Errorf("MCP = %v, want gog added", cfg.MCP)
 	}
 	// Adding again is a no-op (no duplicate).
@@ -48,7 +49,7 @@ func TestApplyConfigChange_MCP(t *testing.T) {
 	if _, err := applyConfigChange(cfg, true, "mcp", []string{gwServerName}); err != nil {
 		t.Fatal(err)
 	}
-	if containsStr(cfg.MCP, gwServerName) {
+	if slices.Contains(cfg.MCP, gwServerName) {
 		t.Errorf("MCP = %v, want gog removed", cfg.MCP)
 	}
 	if _, err := applyConfigChange(cfg, false, "mcp", nil); err == nil {
@@ -62,13 +63,13 @@ func TestApplyConfigChange_Services(t *testing.T) {
 	if _, err := applyConfigChange(cfg, false, "services", []string{"knowledge"}); err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfg.Services, "knowledge") {
+	if !slices.Contains(cfg.Services, "knowledge") {
 		t.Errorf("Services = %v, want knowledge added", cfg.Services)
 	}
 	if _, err := applyConfigChange(cfg, true, "services", []string{"knowledge"}); err != nil {
 		t.Fatal(err)
 	}
-	if containsStr(cfg.Services, "knowledge") {
+	if slices.Contains(cfg.Services, "knowledge") {
 		t.Errorf("Services = %v, want knowledge removed", cfg.Services)
 	}
 }
@@ -88,11 +89,11 @@ func TestApplyConfigChange_KnowledgeBundles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfg.KnowledgeBundles, abs) {
+	if !slices.Contains(cfg.KnowledgeBundles, abs) {
 		t.Errorf("KnowledgeBundles = %v, want abs path %q added", cfg.KnowledgeBundles, abs)
 	}
 	// Setting a bundle must also ensure the knowledge service is enabled.
-	if !containsStr(cfg.Services, "knowledge") {
+	if !slices.Contains(cfg.Services, "knowledge") {
 		t.Errorf("Services = %v, want knowledge enabled", cfg.Services)
 	}
 	if !strings.Contains(sum, "knowledge") {
@@ -113,7 +114,7 @@ func TestApplyConfigChange_KnowledgeBundles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(got.KnowledgeBundles, abs) || !containsStr(got.Services, "knowledge") {
+	if !slices.Contains(got.KnowledgeBundles, abs) || !slices.Contains(got.Services, "knowledge") {
 		t.Errorf("round-trip lost data: bundles=%v services=%v", got.KnowledgeBundles, got.Services)
 	}
 
@@ -122,7 +123,7 @@ func TestApplyConfigChange_KnowledgeBundles(t *testing.T) {
 	if _, err := applyConfigChange(got, true, "knowledge_bundles", []string{"bundles/okf"}); err != nil {
 		t.Fatal(err)
 	}
-	if containsStr(got.KnowledgeBundles, abs) {
+	if slices.Contains(got.KnowledgeBundles, abs) {
 		t.Errorf("KnowledgeBundles = %v, want bundle removed", got.KnowledgeBundles)
 	}
 
@@ -272,7 +273,7 @@ func TestConfigSaveRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.GogAccount != "round@trip.com" || !containsStr(got.MCP, gwServerName) {
+	if got.GogAccount != "round@trip.com" || !slices.Contains(got.MCP, gwServerName) {
 		t.Errorf("round-trip lost data: %+v", got)
 	}
 }

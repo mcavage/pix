@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -105,7 +106,7 @@ func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
 
 	var out bytes.Buffer
 	runPackUse(fakeGitEnv(nil), &out, []string{root})
-	if l := readPackLock(root); containsStr(l.MCP, gwServerName) {
+	if l := readPackLock(root); slices.Contains(l.MCP, gwServerName) {
 		t.Fatalf("forged attribution survived adoption: %+v (must be scrubbed + regenerated fresh)", l)
 	}
 	// Switch away: the user's own MCP must survive.
@@ -115,7 +116,7 @@ func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfg2.MCP, gwServerName) {
+	if !slices.Contains(cfg2.MCP, gwServerName) {
 		t.Errorf("CRITICAL: switching away removed the user's own MCP (forged attribution honored); cfg.MCP=%v", cfg2.MCP)
 	}
 }

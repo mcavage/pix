@@ -30,6 +30,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/hostenv"
 	"pix/host/sys/systest"
 	"strings"
 	"testing"
@@ -58,9 +59,9 @@ func (w *ollamaWorld) count(prefix string) int {
 	return n
 }
 
-// modelsSetupEnv builds a hermetic shellEnv + temp config/state/data homes for
+// modelsSetupEnv builds a hermetic hostenv.Env + temp config/state/data homes for
 // driving setupHostPhase end to end with a stubbed provider-key flow.
-func modelsSetupEnv(t *testing.T, w *ollamaWorld) shellEnv {
+func modelsSetupEnv(t *testing.T, w *ollamaWorld) hostenv.Env {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "cfg", "config.toml"))
@@ -72,7 +73,7 @@ func modelsSetupEnv(t *testing.T, w *ollamaWorld) shellEnv {
 	if w.pullFail == nil {
 		w.pullFail = map[string]bool{}
 	}
-	return shellEnv{
+	return hostenv.Env{
 		System: &systest.Fake{
 			GetenvFn:   func(string) string { return "" },
 			LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil },
@@ -145,7 +146,7 @@ func ollamaWorldRun(w *ollamaWorld, name string, args ...string) (string, error)
 	return "", nil
 }
 
-func stubLiveInferenceOK(env *shellEnv) {
+func stubLiveInferenceOK(env *hostenv.Env) {
 	run := systest.Of(env.System).RunFn
 	systest.Of(env.System).RunFn = func(name string, args ...string) (string, error) {
 		if name == "op" && len(args) == 2 && args[0] == "read" {
@@ -161,7 +162,7 @@ func stubLiveInferenceOK(env *shellEnv) {
 func stubProvisionKeysOK(t *testing.T) {
 	t.Helper()
 	orig := setupProvisionKeysFn
-	setupProvisionKeysFn = func(shellEnv, io.Reader, io.Writer, bool, bool) bool { return true }
+	setupProvisionKeysFn = func(hostenv.Env, io.Reader, io.Writer, bool, bool) bool { return true }
 	t.Cleanup(func() { setupProvisionKeysFn = orig })
 }
 

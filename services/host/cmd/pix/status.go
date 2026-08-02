@@ -6,8 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/cli"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
+	"pix/host/sys"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,7 +31,7 @@ const gogAuthTimeout = 2 * time.Second
 func runStatusCmd(argv []string) {
 	jsonOut, err := parseStatusArgs(argv)
 	if err != nil {
-		if err == errHelpRequested {
+		if err == cli.ErrHelpRequested {
 			fmt.Print(statusUsage)
 			return
 		}
@@ -52,14 +55,14 @@ func runStatusCmd(argv []string) {
 	}
 }
 
-// parseStatusArgs validates status flags: -h/--help returns errHelpRequested,
+// parseStatusArgs validates status flags: -h/--help returns cli.ErrHelpRequested,
 // --json sets jsonOut, and any other token is a usage error (so a typo like
 // --jsom fails loud instead of running silently as if no flag were given).
 func parseStatusArgs(argv []string) (jsonOut bool, err error) {
 	for _, a := range argv {
 		switch a {
 		case "-h", "--help":
-			return false, errHelpRequested
+			return false, cli.ErrHelpRequested
 		case "--json":
 			jsonOut = true
 		default:
@@ -72,7 +75,7 @@ func parseStatusArgs(argv []string) (jsonOut bool, err error) {
 // renderStatus is the testable core: it probes the environment via env and
 // renders to out. Everything is best-effort and short-timeout so status never
 // hangs on a down daemon.
-func renderStatus(cfg *config.Config, profile string, env shellEnv, out io.Writer, jsonOut bool) int {
+func renderStatus(cfg *config.Config, profile string, env hostenv.Env, out io.Writer, jsonOut bool) int {
 	st := gatherStatus(cfg, profile, env)
 	if jsonOut {
 		_ = cli.WriteJSONOut(out, st)
@@ -159,7 +162,7 @@ type sandboxLine struct {
 	State string `json:"state"`
 }
 
-func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport {
+func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusReport {
 	// currentIntent is the "current config/pack" universe — cfg.MCP plus any
 	// active-pack integration name not already there — the host-global
 	// baseline BOTH the summary list and the per-sandbox rows start from
@@ -386,10 +389,10 @@ func gatherStatus(cfg *config.Config, profile string, env shellEnv) statusReport
 				// does not KNOW they are unattached, so no repair claim.
 				if row.State == mcpJoinRegisteredNotAttached {
 					// mcpLoadCommand shell-quotes both name and workspace via
-					// shellQuoteArg (closure finding #3), so this repair command
+					// sys.ShellQuote (closure finding #3), so this repair command
 					// round-trips a workspace with spaces/apostrophe/shell
 					// metacharacters safely when copy-pasted.
-					td := "pix mcp load " + shellQuoteArg(row.Name) + " [DIR]"
+					td := "pix mcp load " + sys.ShellQuote(row.Name) + " [DIR]"
 					switch {
 					case receipt != nil && strings.TrimSpace(receipt.Workspace) != "":
 						// The receipt's own canonical workspace is the most exact
@@ -451,7 +454,7 @@ func (st statusReport) render(out io.Writer) {
 	}
 
 	if len(st.Bundles) > 0 {
-		fmt.Fprintf(out, "  knowledge    %s\n", plural(len(st.Bundles), "bundle"))
+		fmt.Fprintf(out, "  knowledge    %s\n", cli.Plural(len(st.Bundles), "bundle"))
 	}
 
 	st.renderIntegrations(out)
@@ -463,7 +466,7 @@ func (st statusReport) render(out io.Writer) {
 		}
 		// A configured Workspace account is already included in the MCP summary.
 		// Only render it separately when it needs action or is not an MCP.
-		if !st.GogAuthed || !containsStr(st.MCP, gwServerName) {
+		if !st.GogAuthed || !slices.Contains(st.MCP, gwServerName) {
 			fmt.Fprintf(out, "  ws    %s\n", label)
 		}
 	}
@@ -485,7 +488,7 @@ func (st statusReport) render(out io.Writer) {
 	// Show the line when there are tasks OR retained artifacts — harvested docs
 	// can outlive the last task clone, and they still cost disk.
 	if st.Tasks > 0 || st.ArtifactB > 0 {
-		taskText := plural(st.Tasks, "task")
+		taskText := cli.Plural(st.Tasks, "task")
 		if st.ArtifactB > 0 {
 			taskText += " · " + humanBytes(st.ArtifactB) + " artifacts"
 		}
@@ -518,10 +521,10 @@ func (st statusReport) render(out io.Writer) {
 	switch {
 	case len(st.Todos) > 0:
 		fmt.Fprintf(out, "  %s %s outstanding.   `%s` for fix commands.\n",
-			readiness.VerdictGlyph(readiness.RequirementOptional, readiness.VerdictTodo, false), plural(len(st.Todos), "item"), readiness.Footer("status", readiness.Snapshot{}))
+			readiness.VerdictGlyph(readiness.RequirementOptional, readiness.VerdictTodo, false), cli.Plural(len(st.Todos), "item"), readiness.Footer("status", readiness.Snapshot{}))
 	case unverifiable > 0:
 		fmt.Fprintf(out, "  %s nothing outstanding, but %s unverifiable (not failed; run `%s` for details).\n",
-			readiness.VerdictGlyph(readiness.RequirementCore, readiness.VerdictReady, false), plural(unverifiable, "check"), readiness.Footer("status", readiness.Snapshot{}))
+			readiness.VerdictGlyph(readiness.RequirementCore, readiness.VerdictReady, false), cli.Plural(unverifiable, "check"), readiness.Footer("status", readiness.Snapshot{}))
 	default:
 		fmt.Fprintf(out, "  %s all systems go.\n", readiness.VerdictGlyph(readiness.RequirementCore, readiness.VerdictReady, false))
 	}
@@ -575,7 +578,7 @@ func (st statusReport) renderIntegrations(out io.Writer) {
 		return
 	}
 	if len(st.MCPServers) == 0 && len(st.MCPRows) == 0 {
-		fmt.Fprintf(out, "  integrations  %s configured\n", plural(len(names), "integration"))
+		fmt.Fprintf(out, "  integrations  %s configured\n", cli.Plural(len(names), "integration"))
 		return
 	}
 	boxReady := map[string]bool{}
@@ -623,7 +626,7 @@ func (st statusReport) renderIntegrations(out io.Writer) {
 // are resolved at most ONCE, on first use — status never pays them when every
 // server is registered. When classification itself is unavailable NO command
 // is safe to recommend — the TODO points at doctor instead of guessing one.
-func statusRegisterTodoFn(cfg *config.Config, env shellEnv) func(name string) string {
+func statusRegisterTodoFn(cfg *config.Config, env hostenv.Env) func(name string) string {
 	var (
 		resolved   bool
 		containers map[string]packContainer
@@ -648,7 +651,7 @@ func statusRegisterTodoFn(cfg *config.Config, env shellEnv) func(name string) st
 // through the stateDir seam. An unresolvable state dir yields
 // workspace.MCPStateUnreadable so the join renders UNVERIFIABLE — never a
 // guessed empty receipt.
-func statusSandboxReceipt(env shellEnv, sandbox string) (*workspace.MCPReceipt, workspace.MCPStateStatus) {
+func statusSandboxReceipt(env hostenv.Env, sandbox string) (*workspace.MCPReceipt, workspace.MCPStateStatus) {
 
 	sd, err := env.StateDir()
 	if err != nil || strings.TrimSpace(sd) == "" {
@@ -683,7 +686,7 @@ func okGlyph(ok bool) string {
 // bundleGitStatus returns a short git-drift summary for a bundle dir: "clean",
 // "dirty", "N ahead", "no remote", or "" when it isn't a git repo / git is
 // absent. Best-effort and short — never blocks status.
-func bundleGitStatus(env shellEnv, dir string) string {
+func bundleGitStatus(env hostenv.Env, dir string) string {
 
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		return ""

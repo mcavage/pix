@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"pix/host/cli"
 )
 
 // manPage is the authored roff man page, embedded at build time so `pix
@@ -65,7 +66,7 @@ func runMan(argv []string) {
 	renderMan(manEnv{
 		lookPath: exec.LookPath,
 		getenv:   os.Getenv,
-		isTTY:    isTTY(os.Stdout),
+		isTTY:    cli.IsTTY(os.Stdout),
 		stdout:   os.Stdout,
 		stderr:   os.Stderr,
 		run:      runManCmd,

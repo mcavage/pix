@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/url"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"strconv"
 	"strings"
@@ -69,7 +70,7 @@ func (e ollamaEndpoint) loopbackOnly() bool {
 // setup and run can never talk about different endpoints. It mirrors the
 // daemon-side resolution in services/host/memembed.go: OLLAMA_HOST wins, with
 // a bare host, host:port, or full URL all accepted; otherwise the default.
-func effectiveOllamaEndpoint(cfg *config.Config, env shellEnv) ollamaEndpoint {
+func effectiveOllamaEndpoint(cfg *config.Config, env hostenv.Env) ollamaEndpoint {
 	raw := ""
 	raw = strings.TrimSpace(env.Getenv("OLLAMA_HOST"))
 	if raw == "" {
@@ -111,7 +112,7 @@ func splitHostPort(s string) (string, int, bool) {
 // optional here (a missing local model degrades capture/recall; it never
 // blocks) — `--pull-models` promotes the model axes through request.Requested,
 // not by hard-coding a requirement.
-func ollamaHostAxis(cfg *config.Config, env shellEnv, ep ollamaEndpoint, p ollamaProbe) []readiness.Check {
+func ollamaHostAxis(cfg *config.Config, env hostenv.Env, ep ollamaEndpoint, p ollamaProbe) []readiness.Check {
 	daemonUp := p.daemonUp || p.listOK
 	memoryEnabled := enabled(cfg, "memory")
 	switch {
@@ -158,7 +159,7 @@ func ollamaHostAxis(cfg *config.Config, env shellEnv, ep ollamaEndpoint, p ollam
 // optional, naming the exact condition that would make it verifiable — run's
 // post-create probe. Bind-address inference only ever adds remediation
 // context; it never upgrades anything to ready.
-func ollamaSandboxAxis(env shellEnv, ep ollamaEndpoint, p ollamaProbe, sandbox string, reachable *bool) []readiness.Check {
+func ollamaSandboxAxis(env hostenv.Env, ep ollamaEndpoint, p ollamaProbe, sandbox string, reachable *bool) []readiness.Check {
 	c := readiness.Check{
 		Label:       "ollama in sandbox",
 		Requirement: readiness.RequirementOptional,

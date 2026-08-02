@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -82,7 +83,7 @@ func TestCommitPackActivation_LockFailureAbortsBeforeSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(saved.MCP, "fastmail") {
+	if !slices.Contains(saved.MCP, "fastmail") {
 		t.Error("config not saved on the success path")
 	}
 }

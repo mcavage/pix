@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -94,10 +95,10 @@ func TestApplyOnboarding_AppliesFields(t *testing.T) {
 	if cfg.GogAccount != "" {
 		t.Errorf("onboarding must never set google_workspace_account, got %q", cfg.GogAccount)
 	}
-	if !containsStr(cfg.MCP, gwServerName) || !containsStr(cfg.MCP, "notion") {
+	if !slices.Contains(cfg.MCP, gwServerName) || !slices.Contains(cfg.MCP, "notion") {
 		t.Errorf("mcp = %v", cfg.MCP)
 	}
-	if !containsStr(cfg.Services, "memory") {
+	if !slices.Contains(cfg.Services, "memory") {
 		t.Errorf("memory service should be ensured: %v", cfg.Services)
 	}
 	if cfg.OllamaBridgeModel != "qwen3.5:9b" || cfg.MemoryWatcherModel != "qwen3.5:9b" {
@@ -116,7 +117,7 @@ func TestParseOnboardArgs(t *testing.T) {
 	if o.account != "a@b.com" || o.model != "m" || !o.assumeYes {
 		t.Errorf("parsed = %+v", o)
 	}
-	if !containsStr(o.mcp, gwServerName) || !containsStr(o.mcp, "notion") {
+	if !slices.Contains(o.mcp, gwServerName) || !slices.Contains(o.mcp, "notion") {
 		t.Errorf("mcp = %v", o.mcp)
 	}
 	if _, err := parseOnboardArgs([]string{"--account"}); err == nil {
@@ -180,7 +181,7 @@ func TestReconcileOnboarding_AppliesFromFile(t *testing.T) {
 	if cfg.GogAccount != "" {
 		t.Errorf("onboarding must never apply google_workspace_account from the file, got %q", cfg.GogAccount)
 	}
-	if !containsStr(cfg.MCP, gwServerName) {
+	if !slices.Contains(cfg.MCP, gwServerName) {
 		t.Errorf("config not applied: mcp=%v", cfg.MCP)
 	}
 }

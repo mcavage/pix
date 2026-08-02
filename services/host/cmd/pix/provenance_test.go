@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/sys/systest"
 	"strings"
@@ -109,7 +110,7 @@ func TestInstallDuplicatesGroupSurfacesDoctorWarning(t *testing.T) {
 		}
 	}
 	self := filepath.Join(first, "pix")
-	env := shellEnv{System: &systest.Fake{ExecutableFn: func() (string, error) { return self, nil }, GetenvFn: func(key string) string {
+	env := hostenv.Env{System: &systest.Fake{ExecutableFn: func() (string, error) { return self, nil }, GetenvFn: func(key string) string {
 		if key == "PATH" {
 			return first + string(os.PathListSeparator) + second
 		}

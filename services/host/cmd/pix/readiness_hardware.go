@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/sys"
 	"runtime"
@@ -70,16 +71,16 @@ func usableFraction(goos string, totalGB float64) (float64, bool) {
 	}
 }
 
-// probeHostMemory reads TOTAL physical memory through the shellEnv seams, so it
+// probeHostMemory reads TOTAL physical memory through the hostenv.Env seams, so it
 // is fakeable in tests and never links cgo. darwin: `sysctl -n hw.memsize`
 // (bytes). linux: /proc/meminfo MemTotal (kB). Any other GOOS: OK=false.
-func probeHostMemory(env shellEnv) hostMemory {
+func probeHostMemory(env hostenv.Env) hostMemory {
 	return probeHostMemoryFor(runtime.GOOS, env)
 }
 
 // probeHostMemoryFor is probeHostMemory with the OS injected, which is the only
 // way a hermetic test can exercise both readers on one machine.
-func probeHostMemoryFor(goos string, env shellEnv) hostMemory {
+func probeHostMemoryFor(goos string, env hostenv.Env) hostMemory {
 	var totalGB float64
 	var source string
 	switch goos {

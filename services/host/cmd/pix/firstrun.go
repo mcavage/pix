@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 
+	"pix/host/cli"
 	"pix/host/config"
 )
 
@@ -21,7 +22,7 @@ func maybeFirstRun() bool {
 	if configExists() {
 		return false
 	}
-	return firstRunFlow(os.Stdin, os.Stdout, isTTY(os.Stdin))
+	return firstRunFlow(os.Stdin, os.Stdout, cli.IsTTY(os.Stdin))
 }
 
 // configExists reports whether the config file is present on disk.

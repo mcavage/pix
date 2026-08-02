@@ -1,6 +1,9 @@
 package main
 
-import "pix/host/readiness"
+import (
+	"pix/host/hostenv"
+	"pix/host/readiness"
+)
 
 // modelgo is the SHARED, presentation-free local-model readiness
 // vocabulary. `pix doctor` (doctor_ollama.go) derives every per-model
@@ -30,7 +33,7 @@ type ollamaProbe struct {
 // host with no Ollama pays for exactly one failed lookPath call. The
 // `ollama list` exec is BOUNDED (probeRun: hard timeout + output cap), so a
 // wedged ollama classifies as list-unverified rather than hanging the caller.
-func probeOllamaAt(env shellEnv, ep ollamaEndpoint) ollamaProbe {
+func probeOllamaAt(env hostenv.Env, ep ollamaEndpoint) ollamaProbe {
 
 	if _, err := env.LookPath("ollama"); err != nil {
 		return ollamaProbe{}

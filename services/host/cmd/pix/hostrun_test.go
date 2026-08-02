@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/config"
 )
 
@@ -135,8 +136,8 @@ func TestParseHostArgs_Launch(t *testing.T) {
 	if _, _, err := parseHostArgs([]string{dir, dir}); err == nil {
 		t.Error("expected extra-positional error")
 	}
-	if _, _, err := parseHostArgs([]string{"-h"}); err != errHelpRequested {
-		t.Errorf("-h: err = %v, want errHelpRequested", err)
+	if _, _, err := parseHostArgs([]string{"-h"}); err != cli.ErrHelpRequested {
+		t.Errorf("-h: err = %v, want cli.ErrHelpRequested", err)
 	}
 	// A nonexistent dir is rejected (shared validateRunWorkspace contract).
 	if _, _, err := parseHostArgs([]string{"no-such-dir-xyz"}); err == nil {

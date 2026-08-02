@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"pix/host/hostenv"
 	"strings"
 )
 
@@ -48,7 +49,7 @@ type probeResult struct {
 // probeDenied rather than a generic error. The diagnostic is deliberately
 // generic (never raw error text), so a registered command's tokens — which may
 // carry pasted secrets — can never leak through an error message.
-func probeListTools(env shellEnv, argv []string) probeResult {
+func probeListTools(env hostenv.Env, argv []string) probeResult {
 	if len(argv) == 0 {
 		return probeResult{status: probeError, detail: "has no command to run"}
 	}
@@ -102,7 +103,7 @@ func classifyProbeErr(err error) string {
 // registered spelling, so the exec'd token is the trusted one by construction.
 // Anything else (a look-alike /tmp/gog, a fake op) is untrusted and never
 // executed.
-func trustedExecPath(env shellEnv, tok, base string) (string, bool) {
+func trustedExecPath(env hostenv.Env, tok, base string) (string, bool) {
 	if filepath.Base(tok) != base {
 		return "", false
 	}
@@ -127,7 +128,7 @@ func trustedExecPath(env shellEnv, tok, base string) (string, bool) {
 // NORMALIZED argv: the gog/op executable tokens replaced with the resolvers'
 // canonical paths, so the caller execs the TRUSTED tokens, never the
 // registered spelling. Only that normalized spawn is ever executed as a probe.
-func trustedGogSpawn(env shellEnv, argv []string) ([]string, bool) {
+func trustedGogSpawn(env hostenv.Env, argv []string) ([]string, bool) {
 	inner, ok := gogSpawnArgv(env, argv)
 	if !ok {
 		return nil, false

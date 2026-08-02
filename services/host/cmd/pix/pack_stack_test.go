@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"pix/host/config"
@@ -55,12 +56,12 @@ func TestPersistPackStackComposesAllFacetsAndKeepsPerPackOwnership(t *testing.T)
 			t.Fatalf("last-writer scalar composition failed: gog=%q ollama=%q", cfg.GogAccount, cfg.OllamaBridgeModel)
 		}
 		for _, name := range []string{"manual-mcp", "first-mcp", "second-mcp"} {
-			if !containsStr(cfg.MCP, name) {
+			if !slices.Contains(cfg.MCP, name) {
 				t.Fatalf("MCP %q missing from %v", name, cfg.MCP)
 			}
 		}
 		for _, dir := range []string{manualKnowledge, firstKnowledge, secondKnowledge} {
-			if !containsStr(cfg.KnowledgeBundles, knowledge.CanonicalizeKnowledgeBundle(dir)) {
+			if !slices.Contains(cfg.KnowledgeBundles, knowledge.CanonicalizeKnowledgeBundle(dir)) {
 				t.Fatalf("knowledge %q missing from %v", dir, cfg.KnowledgeBundles)
 			}
 		}
@@ -74,9 +75,9 @@ func TestPersistPackStackComposesAllFacetsAndKeepsPerPackOwnership(t *testing.T)
 	if store.Activation != nil || len(store.Activations) != 2 {
 		t.Fatalf("activation ledger = single:%+v stack:%+v", store.Activation, store.Activations)
 	}
-	if !containsStr(store.Activations[0].Knowledge, knowledge.CanonicalizeKnowledgeBundle(firstKnowledge)) ||
-		containsStr(store.Activations[0].Knowledge, knowledge.CanonicalizeKnowledgeBundle(secondKnowledge)) ||
-		!containsStr(store.Activations[1].Knowledge, knowledge.CanonicalizeKnowledgeBundle(secondKnowledge)) {
+	if !slices.Contains(store.Activations[0].Knowledge, knowledge.CanonicalizeKnowledgeBundle(firstKnowledge)) ||
+		slices.Contains(store.Activations[0].Knowledge, knowledge.CanonicalizeKnowledgeBundle(secondKnowledge)) ||
+		!slices.Contains(store.Activations[1].Knowledge, knowledge.CanonicalizeKnowledgeBundle(secondKnowledge)) {
 		t.Fatalf("knowledge ownership is not per-pack: %+v", store.Activations)
 	}
 	if store.Activations[0].PriorGogAccount != "manual@example.com" ||
@@ -104,12 +105,12 @@ func TestPersistPackStackComposesAllFacetsAndKeepsPerPackOwnership(t *testing.T)
 	if cfg.GogAccount != "manual@example.com" || cfg.OllamaBridgeModel != "manual-model" {
 		t.Fatalf("reverse removal did not restore baseline scalars: gog=%q ollama=%q", cfg.GogAccount, cfg.OllamaBridgeModel)
 	}
-	if !containsStr(cfg.MCP, "manual-mcp") || containsStr(cfg.MCP, "first-mcp") || containsStr(cfg.MCP, "second-mcp") {
+	if !slices.Contains(cfg.MCP, "manual-mcp") || slices.Contains(cfg.MCP, "first-mcp") || slices.Contains(cfg.MCP, "second-mcp") {
 		t.Fatalf("reverse removal violated MCP ownership: %v", cfg.MCP)
 	}
-	if !containsStr(cfg.KnowledgeBundles, knowledge.CanonicalizeKnowledgeBundle(manualKnowledge)) ||
-		containsStr(cfg.KnowledgeBundles, knowledge.CanonicalizeKnowledgeBundle(firstKnowledge)) ||
-		containsStr(cfg.KnowledgeBundles, knowledge.CanonicalizeKnowledgeBundle(secondKnowledge)) {
+	if !slices.Contains(cfg.KnowledgeBundles, knowledge.CanonicalizeKnowledgeBundle(manualKnowledge)) ||
+		slices.Contains(cfg.KnowledgeBundles, knowledge.CanonicalizeKnowledgeBundle(firstKnowledge)) ||
+		slices.Contains(cfg.KnowledgeBundles, knowledge.CanonicalizeKnowledgeBundle(secondKnowledge)) {
 		t.Fatalf("reverse removal violated knowledge ownership: %v", cfg.KnowledgeBundles)
 	}
 }

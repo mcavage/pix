@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/knowledge"
 	"pix/host/sys"
 	"pix/host/sys/systest"
@@ -255,7 +257,7 @@ func TestPackAdd_Mcp_NotActive_NoAttachNoRecreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if containsStr(cfg.MCP, "fastmail") {
+	if slices.Contains(cfg.MCP, "fastmail") {
 		t.Error("cfg.MCP must not gain the mcp until the pack is activated")
 	}
 }
@@ -291,14 +293,14 @@ func TestPackAdd_Mcp_Active_AttachesAndPrintsRecreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfg2.MCP, "fastmail") {
+	if !slices.Contains(cfg2.MCP, "fastmail") {
 		t.Errorf("cfg.MCP should gain fastmail on the active pack, got %v", cfg2.MCP)
 	}
 	if !strings.Contains(out.String(), "pix run --replace") {
 		t.Errorf("expected the recreate line, got:\n%s", out.String())
 	}
 	lock := readPackLock(root)
-	if !containsStr(lock.MCP, "fastmail") {
+	if !slices.Contains(lock.MCP, "fastmail") {
 		t.Errorf("pack.lock should record the attached mcp, got %+v", lock)
 	}
 }
@@ -351,13 +353,13 @@ func TestPackUse_ReversibleSwitch(t *testing.T) {
 	out.Reset()
 	runPackUse(env, &out, []string{rootB, "--yes"})
 	cfgAfterB, _ := config.Load()
-	if !containsStr(cfgAfterB.MCP, "usermcp") {
+	if !slices.Contains(cfgAfterB.MCP, "usermcp") {
 		t.Errorf("user-added mcp must survive a switch, cfg.MCP = %v", cfgAfterB.MCP)
 	}
-	if containsStr(cfgAfterB.MCP, "a-mcp") {
+	if slices.Contains(cfgAfterB.MCP, "a-mcp") {
 		t.Errorf("switching away from A must remove a-mcp, cfg.MCP = %v", cfgAfterB.MCP)
 	}
-	if !containsStr(cfgAfterB.MCP, "b-mcp") {
+	if !slices.Contains(cfgAfterB.MCP, "b-mcp") {
 		t.Errorf("switching to B must add b-mcp, cfg.MCP = %v", cfgAfterB.MCP)
 	}
 
@@ -368,7 +370,7 @@ func TestPackUse_ReversibleSwitch(t *testing.T) {
 	if !stringSlicesEqualUnordered(cfgAfterA2.MCP, wantAfterA) {
 		t.Errorf("reversible switch: cfg.MCP after A->B->A = %v, want %v (same as first A)", cfgAfterA2.MCP, wantAfterA)
 	}
-	if !containsStr(cfgAfterA2.MCP, "usermcp") {
+	if !slices.Contains(cfgAfterA2.MCP, "usermcp") {
 		t.Errorf("user-added mcp must survive every switch, final cfg.MCP = %v", cfgAfterA2.MCP)
 	}
 }
@@ -430,10 +432,10 @@ func TestPackUse_KnowledgeReversible(t *testing.T) {
 	cfgB, _ := config.Load()
 	aID := knowledge.CanonicalizeKnowledgeBundle(filepath.Join(rootA, "knowledge"))
 	bID := knowledge.CanonicalizeKnowledgeBundle(filepath.Join(rootB, "knowledge"))
-	if containsStr(cfgB.KnowledgeBundles, aID) {
+	if slices.Contains(cfgB.KnowledgeBundles, aID) {
 		t.Errorf("switching away from A should remove its bundle, got %v", cfgB.KnowledgeBundles)
 	}
-	if !containsStr(cfgB.KnowledgeBundles, bID) {
+	if !slices.Contains(cfgB.KnowledgeBundles, bID) {
 		t.Errorf("switching to B should add its bundle, got %v", cfgB.KnowledgeBundles)
 	}
 
@@ -476,7 +478,7 @@ func TestPackUse_PrivateKnowledgeNeverTravels(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantID := knowledge.CanonicalizeKnowledgeBundle(privateDir)
-	if !containsStr(cfg.KnowledgeBundles, wantID) {
+	if !slices.Contains(cfg.KnowledgeBundles, wantID) {
 		t.Errorf("private bundle should still be indexed locally, got %v", cfg.KnowledgeBundles)
 	}
 	// The resolved bundle must NOT live inside the pack's own tree — i.e. it
@@ -548,7 +550,7 @@ func TestSolicitPackCredentials_OnlyWritesOpRefs(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	// Real OS (this asserts on a file actually written to disk), with LookPath
 	// faked so `op` resolves without one installed.
-	env := shellEnv{System: &systest.Fake{
+	env := hostenv.Env{System: &systest.Fake{
 		Base: sys.Real{},
 		LookPathFn: func(name string) (string, error) {
 			if name == "op" {
@@ -585,7 +587,7 @@ func TestSolicitPackCredentials_RejectsPastedLiteral(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	// Real OS (this asserts on a file actually written to disk), with LookPath
 	// faked so `op` resolves without one installed.
-	env := shellEnv{System: &systest.Fake{
+	env := hostenv.Env{System: &systest.Fake{
 		Base: sys.Real{},
 		LookPathFn: func(name string) (string, error) {
 			if name == "op" {

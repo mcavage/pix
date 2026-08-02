@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/hostenv"
 	"pix/host/secret"
 	"pix/host/sys/systest"
 	"sort"
@@ -24,14 +25,14 @@ import (
 )
 
 // stepEnv sets up a temp config+state dir (so syncedrefs.go's real os-backed
-// store works) and returns a shellEnv whose op-refs.env content is
+// store works) and returns a hostenv.Env whose op-refs.env content is
 // controllable and whose sbx secret store is a STATEFUL in-memory set seeded
 // from sbxLsOut: a `secret set -g <name>` call actually adds <name>, so a
 // later `secret ls` (including setupProvisionKeys' own final probe) reflects
 // it — matching real sbx behavior instead of a frozen fixture. `op read`
 // returns opReadVal for every ref (tests that need to distinguish which ref
 // was read assert on the "op read <ref>" call text, not the resolved value).
-func stepEnv(t *testing.T, refsContent, sbxLsOut string, opReadVal string) (shellEnv, *[]string) {
+func stepEnv(t *testing.T, refsContent, sbxLsOut string, opReadVal string) (hostenv.Env, *[]string) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "cfg", "config.toml"))
@@ -48,7 +49,7 @@ func stepEnv(t *testing.T, refsContent, sbxLsOut string, opReadVal string) (shel
 	for _, w := range strings.Fields(sbxLsOut) {
 		sbxNames[w] = true
 	}
-	env := shellEnv{System: &systest.Fake{GetenvFn: func(k string) string {
+	env := hostenv.Env{System: &systest.Fake{GetenvFn: func(k string) string {
 		if k == "XDG_CONFIG_HOME" {
 			return "/cfg"
 		}
@@ -113,7 +114,7 @@ func countOccurrences(haystack, needle string) int {
 // --- hard preconditions ---------------------------------------------------
 
 func TestSetupProvisionKeys_OpNotInstalled_FailsWithExactFix(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", os.ErrNotExist }, ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }}}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", os.ErrNotExist }, ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }}}
 	var out bytes.Buffer
 	if setupProvisionKeys(env, strings.NewReader(""), &out, true, false) {
 		t.Fatal("must fail when op is not installed")
@@ -130,7 +131,7 @@ func TestSetupProvisionKeys_OpNotInstalled_FailsWithExactFix(t *testing.T) {
 }
 
 func TestSetupProvisionKeys_OpNotSignedIn_FailsWithExactFix(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, ReadFileFn: func(string) (string, error) { return "", os.ErrNotExist }, RunFn: func(name string, args ...string) (string, error) {
 		if name == "op" && len(args) >= 1 && args[0] == "account" {
 			return "", nil // no account configured
 		}
@@ -696,7 +697,7 @@ func TestSetupProvisionKeys_FinalProbe_SbxCommandFails_FailsClosed(t *testing.T)
 // error can echo the full argv (including "-t <value>") back verbatim.
 func TestSyncProviderKeyToSbx_RedactsValueFromOutputAndError(t *testing.T) {
 	const secretVal = "sk-should-never-print"
-	env := shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		if name == "sbx" {
 			// Simulate sbx echoing the full failed command (including the
 			// secret value) back in its own stdout/stderr AND the wrapping Go

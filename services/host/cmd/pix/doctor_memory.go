@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"time"
 
@@ -75,7 +76,7 @@ func memCaptureCheck() readiness.Check {
 
 // memoryGroup builds the memory-service cluster: the :11435 daemon plus (when
 // it is up) the live fact-capture flag read from its health endpoint.
-func memoryGroup(cfg *config.Config, env shellEnv) readiness.Group {
+func memoryGroup(cfg *config.Config, env hostenv.Env) readiness.Group {
 	memory := readiness.Group{Title: "Memory service (recall + capture)", Axis: readiness.AxisServiceMemory}
 	// Readiness comes from the APPLICATION-LEVEL identity probe, never from a
 	// dial: a port held by a foreign process renders "unidentified", not ✓.

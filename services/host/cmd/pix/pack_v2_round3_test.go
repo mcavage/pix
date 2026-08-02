@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/sys/systest"
 )
 
@@ -59,7 +61,7 @@ func TestWritePackLock_AtomicRoundTripNoDebris(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readPackLock(root)
-	if !containsStr(got.MCP, "second") || got.Remote != "https://example.com/p.git" {
+	if !slices.Contains(got.MCP, "second") || got.Remote != "https://example.com/p.git" {
 		t.Errorf("lock round-trip = %+v", got)
 	}
 	entries, err := os.ReadDir(root)
@@ -94,7 +96,7 @@ func TestClonePack_ScrubsSymlinkPackLock(t *testing.T) {
 	}
 
 	const url = "https://example.com/attacker/pack.git"
-	env := shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "clone" {
 			dest := args[len(args)-1]
 			if err := os.MkdirAll(dest, 0o755); err != nil {
@@ -157,7 +159,7 @@ func TestClonePack_ScrubsCheckedInRegularPackLock(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
 
 	const url = "https://example.com/attacker/pack2.git"
-	env := shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "clone" {
 			dest := args[len(args)-1]
 			if err := os.MkdirAll(dest, 0o755); err != nil {
@@ -204,7 +206,7 @@ func TestRevertPackPriorContribution_ToleratesOverclaimingLock(t *testing.T) {
 	if len(removedMCP) != 0 || len(removedKnowledge) != 0 {
 		t.Errorf("over-claimed entries must remove nothing, got mcp=%v knowledge=%v", removedMCP, removedKnowledge)
 	}
-	if !containsStr(cfg.MCP, "users-own") {
+	if !slices.Contains(cfg.MCP, "users-own") {
 		t.Errorf("a user's own MCP must survive, got %v", cfg.MCP)
 	}
 	// cfg.GogAccount != lock.GogAccount => the guarded revert must not fire.
@@ -273,7 +275,7 @@ func TestPackAddMcp_LockWrittenBeforeSaveFailure(t *testing.T) {
 	}
 	// FIX A: the lock (written first, R1) is ROLLED BACK on the Save failure —
 	// no prior lock existed, so nothing may over-claim the never-committed name.
-	if lock := readPackLock(root); containsStr(lock.MCP, "fastmail") {
+	if lock := readPackLock(root); slices.Contains(lock.MCP, "fastmail") {
 		t.Fatalf("FIX A: the lock must be rolled back after a Save failure, got %+v", lock)
 	}
 	// Config on disk never committed the entry.
@@ -281,7 +283,7 @@ func TestPackAddMcp_LockWrittenBeforeSaveFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if containsStr(cfgAfter.MCP, "fastmail") {
+	if slices.Contains(cfgAfter.MCP, "fastmail") {
 		t.Fatalf("cfg must not carry the entry after the failed save, got %v", cfgAfter.MCP)
 	}
 

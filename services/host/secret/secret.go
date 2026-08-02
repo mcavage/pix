@@ -599,7 +599,7 @@ func indent(s string) string {
 // counts (mirrors setup's hasNonGogMCP).
 func AnyOpWrappedServer(cfg *config.Config) bool {
 	for _, m := range cfg.MCP {
-		if m != gwServerNameForSecrets {
+		if m != config.GWServerName {
 			return true
 		}
 	}
@@ -730,9 +730,3 @@ func ModelKeyMissingMessage(env hostenv.Env) string {
 	}
 	return msg
 }
-
-// gwServerNameForSecrets is a literal, not an import. This package refuses to
-// depend on the gworkspace capability to learn a server name -- that would be a
-// sibling edge for a string. If it ever diverges, the doctor check that compares
-// them will say so.
-const gwServerNameForSecrets = "google-workspace"

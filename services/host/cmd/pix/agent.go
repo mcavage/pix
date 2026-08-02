@@ -25,6 +25,7 @@ import (
 	"text/tabwriter"
 
 	"pix/host/cli"
+	"pix/host/launcher"
 	"pix/host/routing"
 	"pix/host/sys"
 
@@ -615,7 +616,7 @@ func resolveRoster() (map[string]string, error) {
 
 // runHostVerb execs `pix-host <verb...>` with inherited stdio.
 func runHostVerb(argv []string) error {
-	bin, err := findHostBinary()
+	bin, err := launcher.FindHostBinary()
 	if err != nil {
 		return err
 	}

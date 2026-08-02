@@ -44,6 +44,8 @@ import (
 	"net/url"
 	"os/exec"
 	"path/filepath"
+	"pix/host/cli"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
 	"runtime"
@@ -406,7 +408,7 @@ func slackPrintAttachmentNote(out io.Writer) {
 // host command — never silently overwritten. Returns whether a registration
 // already existed, so the caller can decide whether a later failure may roll
 // a NEW registration back (never a pre-existing one).
-func slackRegistrationPreflight(env shellEnv) (wasRegistered bool, err error) {
+func slackRegistrationPreflight(env hostenv.Env) (wasRegistered bool, err error) {
 
 	if _, err := env.LookPath("sbx"); err != nil {
 		return false, fmt.Errorf("sbx not found: pix slack setup requires sbx to register the MCP server; install it, then re-run this command")
@@ -430,7 +432,7 @@ func slackRegistrationPreflight(env shellEnv) (wasRegistered bool, err error) {
 // a save failure after a NEW registration rolls that registration back (a
 // PRE-EXISTING one, per wasRegistered, is left alone). extra, when non-empty,
 // is appended to every returned error (the PKCE flow's orphan-document note).
-func slackRegisterAndSave(cfg *config.Config, env shellEnv, out io.Writer, hostResolver func() (string, error), wasRegistered bool, extra string) error {
+func slackRegisterAndSave(cfg *config.Config, env hostenv.Env, out io.Writer, hostResolver func() (string, error), wasRegistered bool, extra string) error {
 	if err := registerServers(cfg, env, out, []string{slackServerName}, hostResolver, nil); err != nil {
 		if extra != "" {
 			return fmt.Errorf("registering %s with the sbx gateway: %w (re-run this pix slack setup command after fixing sbx); %s",
@@ -471,7 +473,7 @@ func slackRegisterAndSave(cfg *config.Config, env shellEnv, out io.Writer, hostR
 // confirm -> 1Password document -> refs -> register -> save. From the
 // 1Password write onward, any later failure is reported with the orphan
 // document's item/vault id (slackOAuthOrphanNote) and NEVER claims success.
-func slackSetupPKCE(env shellEnv, cfg *config.Config, opts slackSetupOpts, deps slackOAuthDeps,
+func slackSetupPKCE(env hostenv.Env, cfg *config.Config, opts slackSetupOpts, deps slackOAuthDeps,
 	in io.Reader, out io.Writer, tty bool, hostResolver func() (string, error)) error {
 
 	clientID := strings.TrimSpace(opts.clientID)
@@ -561,7 +563,7 @@ func slackSetupPKCE(env shellEnv, cfg *config.Config, opts slackSetupOpts, deps 
 	}
 
 	if env.SlackAuth == nil {
-		return fmt.Errorf("internal: shellEnv.slackAuthTest not wired")
+		return fmt.Errorf("internal: hostenv.Env.slackAuthTest not wired")
 	}
 	id, err := env.SlackAuth(blob.AccessToken)
 	if err != nil {
@@ -755,7 +757,7 @@ var slackOAuthRuntimeDepsFn = defaultSlackOAuthRuntimeDeps
 // be a silent refresh race, strictly worse than refusing to proceed. In
 // production config.StateDir only fails when $HOME cannot be determined at
 // all, so this should never actually trigger outside a broken environment.
-func slackOAuthRuntime(cfg *config.Config, env shellEnv, deps slackOAuthRuntimeDeps) (*slackoauth.Manager, *slackoauth.OPStore, bool) {
+func slackOAuthRuntime(cfg *config.Config, env hostenv.Env, deps slackOAuthRuntimeDeps) (*slackoauth.Manager, *slackoauth.OPStore, bool) {
 	if !slackOAuthConfigComplete(cfg) {
 		return nil, nil, false
 	}
@@ -800,17 +802,17 @@ func slackOAuthGrantExpiryCheck(cfg *config.Config, now time.Time) readiness.Che
 	if remaining <= 0 {
 		agoDays := int((-remaining).Hours() / 24)
 		return readiness.Check{Label: "grant expiry", Verdict: readiness.VerdictTodo,
-			Detail: fmt.Sprintf("OAuth grant expired %s ago", plural(agoDays, "day")),
+			Detail: fmt.Sprintf("OAuth grant expired %s ago", cli.Plural(agoDays, "day")),
 			Todo:   "pix slack auth"}
 	}
 	days := int(remaining.Hours() / 24)
 	if remaining <= slackOAuthGrantExpiryWarning {
 		return readiness.Check{Label: "grant expiry", Verdict: readiness.VerdictReady,
-			Detail: fmt.Sprintf("\u26a0 expires in %s — renew soon", plural(days, "day")),
+			Detail: fmt.Sprintf("\u26a0 expires in %s — renew soon", cli.Plural(days, "day")),
 			Todo:   "pix slack auth (reauthorize before it expires)"}
 	}
 	return readiness.Check{Label: "grant expiry", Verdict: readiness.VerdictReady,
-		Detail: fmt.Sprintf("expires in %s", plural(days, "day"))}
+		Detail: fmt.Sprintf("expires in %s", cli.Plural(days, "day"))}
 }
 
 // slackOAuthAccessChecks obtains a live access token through mgr (reading,
@@ -822,7 +824,7 @@ func slackOAuthGrantExpiryCheck(cfg *config.Config, now time.Time) readiness.Che
 // (slackoauth.ErrGrantExpired — nothing else can be done from here but
 // re-authorize); any other read/refresh failure is unverifiable, since it
 // may be a transient 1Password/network problem rather than a proven gap.
-func slackOAuthAccessChecks(env shellEnv, mgr *slackoauth.Manager, pinTeam, pinUser string) []readiness.Check {
+func slackOAuthAccessChecks(env hostenv.Env, mgr *slackoauth.Manager, pinTeam, pinUser string) []readiness.Check {
 	var checks []readiness.Check
 	ctx, cancel := context.WithTimeout(context.Background(), slackOAuthRuntimeTimeout)
 	defer cancel()
@@ -879,7 +881,7 @@ func slackOAuthAccessChecks(env shellEnv, mgr *slackoauth.Manager, pinTeam, pinU
 // manager the MCP server uses) live access + identity + identity-pin checks.
 // It never reads or reports SLACK_TOKEN — that variable plays no role in
 // this mode.
-func slackOAuthStatusChecks(cfg *config.Config, env shellEnv, now time.Time) []readiness.Check {
+func slackOAuthStatusChecks(cfg *config.Config, env hostenv.Env, now time.Time) []readiness.Check {
 	var checks []readiness.Check
 	checks = append(checks, readiness.Check{Label: "mode", Verdict: readiness.VerdictReady,
 		Detail: "OAuth (rotating PKCE credential in 1Password)"})
@@ -927,7 +929,7 @@ func slackOAuthStatusChecks(cfg *config.Config, env shellEnv, now time.Time) []r
 //  4. only once archived, remove the sbx registration, clear the OAuth
 //     vault/document/expiry from config (keeping client_id/redirect_uri so a
 //     later setup is one step), and remove the identity pin refs
-func slackDisableOAuth(cfg *config.Config, env shellEnv, out io.Writer, deps slackOAuthRuntimeDeps) error {
+func slackDisableOAuth(cfg *config.Config, env hostenv.Env, out io.Writer, deps slackOAuthRuntimeDeps) error {
 	registered, err := slackRegistrationPresence(env)
 	if err != nil {
 		return err

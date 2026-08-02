@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/sys/systest"
 )
 
@@ -184,7 +185,7 @@ func TestGogSetup_R112_SelectedRouteSubcommandSyntaxChanged_FailsBeforeExec(t *t
 // keychain, no 1Password installed" — R1-06 is explicit that this is not an
 // excuse to skip the direct bare probe). Callers add sbx/registration
 // fixtures if their case needs to reach registration.
-func gogR106Env(t *testing.T, probe func(name string, args ...string) (string, bool, error)) (shellEnv, string) {
+func gogR106Env(t *testing.T, probe func(name string, args ...string) (string, bool, error)) (hostenv.Env, string) {
 	t.Helper()
 	gogSetupTestCfg(t)
 	cred := gogCredFile(t)
@@ -445,7 +446,7 @@ func TestGogSetup_R108_RegistrationFails_ConfigUnchanged(t *testing.T) {
 // clean defaults), then chmod'd read-only so Save()'s os.CreateTemp inside it
 // fails with a permission error. Non-root is guaranteed in this sandbox (see
 // AGENTS.md), so the permission bits are honored deterministically.
-func gogR108RollbackEnv(t *testing.T, priorRegistered bool) (env shellEnv, cred string, addCalls, rmCalls *[][]string) {
+func gogR108RollbackEnv(t *testing.T, priorRegistered bool) (env hostenv.Env, cred string, addCalls, rmCalls *[][]string) {
 	t.Helper()
 	dir := t.TempDir()
 	cred = gogCredFile(t)
@@ -559,7 +560,7 @@ func TestGogSetup_R114_CapabilityAndBareHeadlessProbesAreBounded(t *testing.T) {
 	headlessKey := gogBareHeadlessKey(acct)
 
 	var probed []string
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "gog" || name == "sbx" {
 			return "/usr/bin/" + name, nil
 		}
@@ -610,13 +611,13 @@ func TestGogSetup_R114_CapabilityAndBareHeadlessProbesAreBounded(t *testing.T) {
 
 // --- R2-03: tri-state snapshot -----------------------------------------
 
-// gogSnapEnv builds a minimal shellEnv driving snapshotGogRegistration
+// gogSnapEnv builds a minimal hostenv.Env driving snapshotGogRegistration
 // directly: sbx is present, and lsOut/lsTimedOut/lsErr control the bounded
 // `sbx mcp ls` listing probe; getFixtures drives the detailed `sbx mcp get
 // gog` / `sbx mcp ls -o json` readers (registeredGogCommand) via probeRun's
 // env.Run fallback.
-func gogSnapEnv(lsOut string, lsTimedOut bool, lsErr error, getFixtures map[string]string, getErrs map[string]bool) shellEnv {
-	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+func gogSnapEnv(lsOut string, lsTimedOut bool, lsErr error, getFixtures map[string]string, getErrs map[string]bool) hostenv.Env {
+	return hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "sbx" {
 			return "/usr/bin/sbx", nil
 		}
@@ -712,7 +713,7 @@ func TestSnapshotGogRegistration_GetAndJSONTransientErrors_Unknown(t *testing.T)
 }
 
 func TestSnapshotGogRegistration_SbxAbsent_Unknown(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }}}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }}}
 	snap := snapshotGogRegistration(env)
 	if snap.state != gogRegUnknown {
 		t.Fatalf("expected gogRegUnknown when sbx is absent, got state=%v", snap.state)
@@ -726,7 +727,7 @@ func TestSnapshotGogRegistration_SbxAbsent_Unknown(t *testing.T) {
 // environment (mirrors gogR108RollbackEnv's shape) so tests can isolate just
 // the prior-registration snapshot behavior. lsFixture/lsErr drive the bounded
 // `sbx mcp ls` presence probe; getFixture (optional) drives `sbx mcp get google-workspace`.
-func gogR203PreflightEnv(t *testing.T, lsFixture string, lsErrs bool, getFixture string) (env shellEnv, cred string) {
+func gogR203PreflightEnv(t *testing.T, lsFixture string, lsErrs bool, getFixture string) (env hostenv.Env, cred string) {
 	t.Helper()
 	gogSetupTestCfg(t)
 	cred = gogCredFile(t)

@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"pix/host/cli"
+	"pix/host/hostenv"
 	"pix/host/workspace"
 	"strings"
 	"text/tabwriter"
@@ -87,7 +89,7 @@ func overlayReceiptDirs(boxes []sbxBox, stateDir string) {
 
 // runLs lists the pix sandboxes on this host.
 func runLs(argv []string) {
-	if wantsHelp(argv) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(lsUsage)
 		return
 	}
@@ -136,7 +138,7 @@ func runLs(argv []string) {
 // rest) and `--all` removes every pix-* box, with `--except <name>` to keep
 // one (e.g. the box you are in).
 func runRm(argv []string) {
-	if wantsHelp(argv) || len(argv) == 0 {
+	if cli.WantsHelp(argv) || len(argv) == 0 {
 		fmt.Print(rmUsage)
 		if len(argv) == 0 {
 			os.Exit(2)
@@ -217,7 +219,7 @@ func runRm(argv []string) {
 // guess. The receipt clear itself is best-effort (warn, don't fail the rm —
 // the removal DID succeed, and the next launcher create's pre-create clear is
 // the correctness backstop).
-func removePixSandbox(env shellEnv, name string) error {
+func removePixSandbox(env hostenv.Env, name string) error {
 	if _, err := env.Run("sbx", "rm", "-f", name); err != nil {
 		return err
 	}

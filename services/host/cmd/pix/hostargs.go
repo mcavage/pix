@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"pix/host/cli"
 	"strings"
 )
 
@@ -22,10 +23,10 @@ var hostSubcommands = map[string]bool{"setup": true}
 
 // parseHostArgs parses the `host` verb's argv. It returns the subcommand name
 // ("" = launch, "setup" = provision) plus the launch options. A leading
-// -h/--help returns errHelpRequested (usage to stdout, exit 0).
+// -h/--help returns cli.ErrHelpRequested (usage to stdout, exit 0).
 func parseHostArgs(argv []string) (sub string, o hostOpts, err error) {
-	if wantsHelp(argv) {
-		return "", hostOpts{}, errHelpRequested
+	if cli.WantsHelp(argv) {
+		return "", hostOpts{}, cli.ErrHelpRequested
 	}
 	o = hostOpts{Workspace: "."}
 

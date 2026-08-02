@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"pix/host/cli"
 	"pix/host/knowledge"
 	"pix/host/launcher"
 	"pix/host/routing"
@@ -229,7 +230,7 @@ func classifyBareArg(a string) (msg string, launch bool) {
 // explicit `pix setup`, which does the host phase then launches a normal
 // `run` handing the agent a short kickoff message to begin the walkthrough.
 func runVerb(argv []string) {
-	if wantsHelp(argv) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(runUsage)
 		return
 	}
@@ -265,7 +266,7 @@ func runServe(argv []string) {
 			return
 		}
 	}
-	bin, err := findHostBinary()
+	bin, err := launcher.FindHostBinary()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix serve: %v\n", err)
 		os.Exit(1)
@@ -286,13 +287,10 @@ func runServe(argv []string) {
 // hostBinaryResolver locates pix-host. It is indirected through a package
 // var (like firstRunHook) so tests can inject a fake `pix-host mcp --list`
 // responder when exercising the local-vs-remote MCP partition in setup.
-var hostBinaryResolver = findHostBinary
+var hostBinaryResolver = launcher.FindHostBinary
 
-// findHostBinary and the version it verifies against moved to the launcher
-// package: "which pix-host am I paired with" is an identity question, and
-// keeping it here forced every package that needs the host binary to depend on
-// package main.
-func findHostBinary() (string, error) { return launcher.FindHostBinary() }
+// "which pix-host am I paired with" is an identity question, so the answer
+// lives in the launcher package; only the test indirection stays here.
 
 const runUsage = `usage: pix run [DIR] [flags] [-- pi-args...]
 

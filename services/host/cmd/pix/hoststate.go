@@ -26,8 +26,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -132,7 +134,7 @@ func firstName(full string) string {
 // terminal-control/format chars, caps length), then firstName takes only the
 // leading token. Email is deliberately NOT read (unused, and it's PII we won't
 // inject). Best-effort: empty when git is absent or unset.
-func readGitIdentity(env shellEnv) hostStateIdentity {
+func readGitIdentity(env hostenv.Env) hostStateIdentity {
 	id := hostStateIdentity{}
 
 	if out, err := env.Run("git", "config", "--global", "--get", "user.name"); err == nil {
@@ -207,7 +209,7 @@ func buildHostState(cfg *config.Config, sbxSecretsOut string, sbxOK bool, dial f
 
 	hs := hostState{
 		Keys:      keys,
-		Memory:    hostStateSvc{Enabled: containsStr(cfg.Services, "memory"), Up: dialer(rpc.MemoryPortDefault), Port: rpc.MemoryPortDefault},
+		Memory:    hostStateSvc{Enabled: slices.Contains(cfg.Services, "memory"), Up: dialer(rpc.MemoryPortDefault), Port: rpc.MemoryPortDefault},
 		Knowledge: hostStateKnowledge{Bundles: bundles, Seeded: len(bundles) > 0, ServiceUp: dialer(rpc.KnowledgePortDefault)},
 		Gog:       hostStateGog{Enabled: gogEnabled},
 		MCP:       hostStateMCP{Enabled: len(mcpServers) > 0, Servers: mcpServers},
@@ -232,16 +234,6 @@ func hasConfiguredKeylessModel(cfg *config.Config) bool {
 		}
 		backend, ok := cfg.Inference.Backends[binding.Backend]
 		if ok && inference.BackendAllowed(cfg, backend, binding.Backend) && (backend.Auth == "sbx-session" || backend.Auth == "none") {
-			return true
-		}
-	}
-	return false
-}
-
-// containsStr reports whether list contains s.
-func containsStr(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
 			return true
 		}
 	}
@@ -318,9 +310,9 @@ func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
 // buildTrustedHostState gathers the host-visible facts, entirely in memory —
 // reusing the exact same probes (sbx secret ls, port dial, key-ref source,
 // pack resolution, git identity) writeHostStateFile used to run before it
-// wrote them to a file. Pure w.r.t. env/cfg (all I/O goes through the shellEnv
+// wrote them to a file. Pure w.r.t. env/cfg (all I/O goes through the hostenv.Env
 // seam), so it is unit-testable without touching disk.
-func buildTrustedHostState(cfg *config.Config, env shellEnv, packOverride string) hostState {
+func buildTrustedHostState(cfg *config.Config, env hostenv.Env, packOverride string) hostState {
 	sbxOut, sbxOK := "", false
 	if _, err := env.LookPath("sbx"); err == nil {
 		// BOUNDED (probeRun): a hung `sbx secret ls` leaves sbxOK=false —
@@ -385,7 +377,7 @@ const (
 // must abort BEFORE exec'ing sbx (the caller in run.go checks the returned
 // error) rather than hand the onboarding agent a generated prompt with no
 // trusted facts, or — worse — let it fall back to reading something else.
-func injectTrustedHostState(args []string, cfg *config.Config, env shellEnv, packOverride string) ([]string, error) {
+func injectTrustedHostState(args []string, cfg *config.Config, env hostenv.Env, packOverride string) ([]string, error) {
 	idx := -1
 	for i, a := range args {
 		if strings.HasPrefix(a, generatedInputMarker) {

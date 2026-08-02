@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"pix/host/hostenv"
 	"strings"
 )
 
@@ -37,7 +38,7 @@ const (
 // `sbx mcp ls`) plus a bounded native `sbx mcp auth status <name>` probe —
 // the SAME classification doctor's mcpRemoteAuthCheck applies, so the gate
 // and doctor can never disagree about what "auth-ready" means.
-func catalogMCPState(env shellEnv, mcpOut string, mcpOK bool, name string) catalogMCPReadiness {
+func catalogMCPState(env hostenv.Env, mcpOut string, mcpOK bool, name string) catalogMCPReadiness {
 	switch mcpRegEvidenceFrom(mcpOut, mcpOK, name) {
 	case mcpRegNo:
 		return catalogMCPUnregistered
@@ -51,7 +52,7 @@ func catalogMCPState(env shellEnv, mcpOut string, mcpOK bool, name string) catal
 // already-registered remote. Keeping this separate lets pack activation repair
 // a positively unauthorized registration in the same interactive transaction,
 // without reopening OAuth when the credential is already healthy.
-func remoteMCPAuthorizationState(env shellEnv, name string) catalogMCPReadiness {
+func remoteMCPAuthorizationState(env hostenv.Env, name string) catalogMCPReadiness {
 	out, timedOut, err := env.RunTimed("sbx", "mcp", "auth", "status", name)
 	if timedOut {
 		return catalogMCPUnverifiable
@@ -84,7 +85,7 @@ func remoteMCPAuthorizationState(env shellEnv, name string) catalogMCPReadiness 
 // sandbox. Pack adoption may already have committed launcher-owned pack state,
 // so errors deliberately make no global "nothing was saved" claim. One
 // bounded `sbx mcp ls` is shared across all names.
-func verifyCatalogMCPReady(env shellEnv, names []string) error {
+func verifyCatalogMCPReady(env hostenv.Env, names []string) error {
 	var catalog []string
 	seen := map[string]bool{}
 	for _, n := range names {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"pix/host/hostenv"
 	"pix/host/sys/systest"
 	"strings"
 	"testing"
@@ -15,7 +16,7 @@ func TestEnsureSetupPrereqsInstallsCoreToolsOnce(t *testing.T) {
 	t.Cleanup(func() { setupHostOS = old })
 	installed := map[string]bool{"brew": true}
 	runs := 0
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if installed[name] {
 			return "/opt/homebrew/bin/" + name, nil
 		}
@@ -41,7 +42,7 @@ func TestEnsureSetupPrereqsNonInteractivePrintsExactFixes(t *testing.T) {
 	old := setupHostOS
 	setupHostOS = "darwin"
 	t.Cleanup(func() { setupHostOS = old })
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "brew" {
 			return "/opt/homebrew/bin/brew", nil
 		}
@@ -54,7 +55,7 @@ func TestEnsureSetupPrereqsNonInteractivePrintsExactFixes(t *testing.T) {
 }
 
 func TestEnsureSetupPrereqsIgnoresOptionalTools(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "sbx" || name == "op" {
 			return "/bin/" + name, nil
 		}
@@ -67,7 +68,7 @@ func TestEnsureSetupPrereqsIgnoresOptionalTools(t *testing.T) {
 
 func TestEnsureSetupSbxSessionRunsOfficialLoginAndVerifies(t *testing.T) {
 	ready := false
-	env := shellEnv{System: &systest.Fake{RunTimedFn: func(name string, args ...string) (string, bool, error) {
+	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(name string, args ...string) (string, bool, error) {
 		if ready {
 			return "", false, nil
 		}
@@ -89,7 +90,7 @@ func TestEnsureSetupSbxSessionRunsOfficialLoginAndVerifies(t *testing.T) {
 }
 
 func TestEnsureSetupSbxSessionNonInteractivePrintsFix(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
+	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
 		return "", false, fmt.Errorf("not signed in")
 	}}}
 	if err := ensureSetupSbxSession(env, &bytes.Buffer{}, false); err == nil || !strings.Contains(err.Error(), "sbx login") {
@@ -101,7 +102,7 @@ func TestEnsureSetupSbxDefaultsAddsPublisherAndInitializesOpenPolicy(t *testing.
 	sources := []string{"docker.io/", "github.com/example/"}
 	policyInitialized := false
 	var mutations []string
-	env := shellEnv{System: &systest.Fake{RunTimedFn: func(name string, args ...string) (string, bool, error) {
+	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(name string, args ...string) (string, bool, error) {
 		got := strings.Join(append([]string{name}, args...), " ")
 		switch got {
 		case "sbx settings get kit.allowedSources":
@@ -144,7 +145,7 @@ func TestEnsureSetupSbxDefaultsAddsPublisherAndInitializesOpenPolicy(t *testing.
 
 func TestEnsureSetupSbxDefaultsPreservesWildcardAndExistingPolicy(t *testing.T) {
 	mutations := 0
-	env := shellEnv{System: &systest.Fake{RunTimedFn: func(name string, args ...string) (string, bool, error) {
+	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(name string, args ...string) (string, bool, error) {
 		switch strings.Join(append([]string{name}, args...), " ") {
 		case "sbx settings get kit.allowedSources":
 			return `["*"]`, false, nil
@@ -166,7 +167,7 @@ func TestEnsureSetupSbxDefaultsPreservesWildcardAndExistingPolicy(t *testing.T) 
 }
 
 func TestSetupSbxNetworkPolicyInitializedAcceptsLegacyArray(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
+	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
 		return `[{"decision":"allow"}]`, false, nil
 	}}}
 	initialized, err := setupSbxNetworkPolicyInitialized(env)
@@ -176,7 +177,7 @@ func TestSetupSbxNetworkPolicyInitializedAcceptsLegacyArray(t *testing.T) {
 }
 
 func TestSetupSbxNetworkPolicyInitializedAcceptsEmptyRulesObject(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
+	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
 		return `{"rules":[]}`, false, nil
 	}}}
 	initialized, err := setupSbxNetworkPolicyInitialized(env)
@@ -187,7 +188,7 @@ func TestSetupSbxNetworkPolicyInitializedAcceptsEmptyRulesObject(t *testing.T) {
 
 func TestEnsureSetupOpenNetworkPolicyHandlesUninitializedListError(t *testing.T) {
 	initialized := false
-	env := shellEnv{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
+	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
 		if !initialized {
 			return "", false, fmt.Errorf("network policy is not initialized")
 		}
@@ -206,7 +207,7 @@ func TestEnsureSetupOpenNetworkPolicyHandlesUninitializedListError(t *testing.T)
 
 func TestEnsureSetupKitAllowedSourceRequiresVerifiedPersistence(t *testing.T) {
 	reads := 0
-	env := shellEnv{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
+	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) {
 		reads++
 		return `["docker.io/"]`, false, nil
 	}, RunInteractiveQuietFn: func(string, ...string) error { return nil }}}

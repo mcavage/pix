@@ -11,7 +11,10 @@ import (
 	"sort"
 	"strings"
 
+	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/hostenv"
+	"pix/host/launcher"
 	"pix/host/rpc"
 	"pix/host/secret"
 	"pix/host/workspace"
@@ -96,7 +99,7 @@ func exitMcpVerb(ctx string, err error) {
 
 // runMcpCmd is the `mcp` verb tree: `register [name...]` and `ls`.
 func runMcpCmd(argv []string) {
-	if wantsHelp(argv) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(mcpUsage)
 		return
 	}
@@ -178,7 +181,7 @@ func runMcpAuthCore(lookPath func(string) (string, error), out io.Writer, in io.
 // the nightly gateway's live-attach that the old --mcp-at-create model couldn't
 // do. Register first with `pix mcp register` (or `sbx mcp add`).
 func runMcpLoad(argv []string) {
-	if wantsHelp(argv) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(mcpUsage)
 		return
 	}
@@ -371,7 +374,7 @@ func runMcpRegister(argv []string) {
 		fmt.Fprintf(os.Stderr, "pix mcp register: loading config: %v\n", err)
 		os.Exit(1)
 	}
-	if err := registerServers(cfg, defaultShellEnv(), os.Stdout, argv, findHostBinary, activeContainerMCP(cfg)); err != nil {
+	if err := registerServers(cfg, defaultShellEnv(), os.Stdout, argv, launcher.FindHostBinary, activeContainerMCP(cfg)); err != nil {
 		fmt.Fprintf(os.Stderr, "pix mcp register: %v\n", err)
 		if errors.Is(err, errSbxUnavailable) {
 			os.Exit(rpc.ExitServiceDown)
@@ -553,7 +556,7 @@ func gogBareRegistrationNote(out io.Writer) {
 // reg.addArgs("gog")) — no re-resolution of op/op-refs/gog happens between the
 // two, so a PATH or op-refs.env mutation in that window can never register a
 // different command than the one that was just proven healthy.
-func buildGogRegistrar(env shellEnv, gogPath, account string) mcpRegistrar {
+func buildGogRegistrar(env hostenv.Env, gogPath, account string) mcpRegistrar {
 	lookPath := env.LookPath
 	reg := mcpRegistrar{gog: gogPath, account: account}
 	opPath, opErr := lookPath("op")
@@ -575,7 +578,7 @@ func buildGogRegistrar(env shellEnv, gogPath, account string) mcpRegistrar {
 // already-resolved reg snapshot gogSetup built via buildGogRegistrar and
 // probed against — no independent re-resolution here, so the registered
 // command is byte-for-byte the one that was just verified.
-func registerGogRegistrar(reg mcpRegistrar, env shellEnv, out io.Writer) error {
+func registerGogRegistrar(reg mcpRegistrar, env hostenv.Env, out io.Writer) error {
 
 	if reg.opRefs == "" {
 		gogBareRegistrationNote(out)
@@ -587,7 +590,7 @@ func registerGogRegistrar(reg mcpRegistrar, env shellEnv, out io.Writer) error {
 	return nil
 }
 
-func registerDocsCreateRegistrar(reg mcpRegistrar, env shellEnv, out io.Writer) error {
+func registerDocsCreateRegistrar(reg mcpRegistrar, env hostenv.Env, out io.Writer) error {
 
 	if strings.TrimSpace(reg.hostBin) == "" {
 		return fmt.Errorf("pix-host path is unavailable")
@@ -607,7 +610,7 @@ func registerDocsCreateRegistrar(reg mcpRegistrar, env shellEnv, out io.Writer) 
 // unset). When sbx is absent it prints exactly what it WOULD run instead of
 // crashing. hostResolver locates pix-host (injected so tests stay
 // hermetic).
-func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
+func registerServers(cfg *config.Config, env hostenv.Env, out io.Writer,
 	requested []string, hostResolver func() (string, error), containers map[string]packContainer) error {
 
 	names := requested
@@ -624,7 +627,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 	// always available (no SBX_MCP_URL needed on nightly) — so there's no gateway
 	// precondition to check here anymore.
 
-	// Nil-safe lookPath: a partially-populated shellEnv (some tests set only
+	// Nil-safe lookPath: a partially-populated hostenv.Env (some tests set only
 	// env.Run) must degrade to "binary not found" rather than panic — the same
 	// posture localMCPNames takes for a nil env.Run. Every op/gog/sbx lookup below
 	// goes through this.
@@ -888,7 +891,7 @@ func registerServers(cfg *config.Config, env shellEnv, out io.Writer,
 // reopening OAuth. It skips only when sbx's inspected definition contains the
 // exact endpoint the pack declares; a changed or unreadable definition is
 // registered again.
-func remoteMCPRegistrationCurrent(env shellEnv, name, endpoint string) bool {
+func remoteMCPRegistrationCurrent(env hostenv.Env, name, endpoint string) bool {
 	for _, verb := range []string{"inspect", "get"} {
 		out, timedOut, err := env.RunTimed("sbx", "mcp", verb, name)
 		if err == nil && !timedOut && outputContainsCanonicalEndpoint(out, endpoint) {
@@ -1026,7 +1029,7 @@ func allPreloadedMCP(servers []string) []string {
 // CLOSED — it registers only gog (a known special case) and SKIPS every other
 // requested name rather than risk registering a remote gateway-catalog name as a
 // local pix-host subcommand.
-func localMCPNames(env shellEnv, hostResolver func() (string, error)) (map[string]bool, bool) {
+func localMCPNames(env hostenv.Env, hostResolver func() (string, error)) (map[string]bool, bool) {
 	if hostResolver == nil {
 		return nil, false
 	}

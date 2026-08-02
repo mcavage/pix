@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"pix/host/hostenv"
 	"pix/host/sys/systest"
 	"strings"
 	"testing"
@@ -10,7 +11,7 @@ import (
 
 func TestRegisteredMCPCommandUsesCurrentInspectCommand(t *testing.T) {
 	var calls []string
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/local/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/local/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		call := strings.Join(append([]string{name}, args...), " ")
 		calls = append(calls, call)
 		if call == "sbx mcp inspect slack" {
@@ -46,7 +47,7 @@ func TestTrustedHostBinaryAcceptsInstalledSymlinkToCanonicalBinary(t *testing.T)
 	if err := os.Symlink(real, installed); err != nil {
 		t.Skipf("symlinks unsupported: %v", err)
 	}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "pix-host" {
 			return installed, nil
 		}

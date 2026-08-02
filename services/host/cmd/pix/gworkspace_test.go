@@ -15,10 +15,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/sys/systest"
 )
 
@@ -38,8 +41,8 @@ func TestParseGworkspaceSetupArgs(t *testing.T) {
 	if _, err := parseGworkspaceSetupArgs([]string{"--bogus"}); err == nil {
 		t.Error("an unknown flag should error")
 	}
-	if _, err := parseGworkspaceSetupArgs([]string{"-h"}); err != errHelpRequested {
-		t.Error("-h should return the errHelpRequested sentinel")
+	if _, err := parseGworkspaceSetupArgs([]string{"-h"}); err != cli.ErrHelpRequested {
+		t.Error("-h should return the cli.ErrHelpRequested sentinel")
 	}
 }
 
@@ -169,7 +172,7 @@ func TestGworkspaceSetup_RollbackOnSaveFailure(t *testing.T) {
 // nothing was ever asked for).
 func TestGworkspaceStatus_NotConfigured(t *testing.T) {
 	cfg := &config.Config{}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", os.ErrNotExist }}}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", os.ErrNotExist }}}
 	var out bytes.Buffer
 	code := gworkspaceStatus(cfg, env, &out)
 	if code != 0 {
@@ -185,7 +188,7 @@ func TestGworkspaceStatus_NotConfigured(t *testing.T) {
 // and a non-zero (needs-setup) exit code.
 func TestGworkspaceStatus_ConfiguredNoAccount(t *testing.T) {
 	cfg := &config.Config{MCP: []string{gwServerName}}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", os.ErrNotExist }}}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", os.ErrNotExist }}}
 	var out bytes.Buffer
 	code := gworkspaceStatus(cfg, env, &out)
 	if code != 1 {
@@ -205,7 +208,7 @@ func TestGworkspaceStatus_ReadyPath(t *testing.T) {
 	regCmd := bareGog(acct)
 	probeKey := regCmd + " --list-tools"
 	cfg := &config.Config{GogAccount: acct, MCP: []string{gwServerName}}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "sbx" || name == "gog" {
 			return "/usr/bin/" + name, nil
 		}
@@ -245,7 +248,7 @@ func TestGworkspaceStatus_ReadyPath(t *testing.T) {
 // is 3, never a false green (0) or a false hard failure (1).
 func TestGworkspaceStatus_UnreadableRegistrationIsUnverifiableExitThree(t *testing.T) {
 	cfg := &config.Config{GogAccount: "you@example.com", MCP: []string{gwServerName}}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", os.ErrNotExist }}}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", os.ErrNotExist }}}
 	var out bytes.Buffer
 	code := gworkspaceStatus(cfg, env, &out)
 	if code != 3 {
@@ -262,7 +265,7 @@ func TestGworkspaceStatus_UnreadableRegistrationIsUnverifiableExitThree(t *testi
 // registered -> a no-op that touches neither config nor the gateway.
 func TestGworkspaceDisable_NotConfiguredIsCleanNoop(t *testing.T) {
 	cfg := &config.Config{}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		key := strings.Join(append([]string{name}, args...), " ")
 		if key == "sbx mcp ls" {
 			return "", nil // confirmed absent
@@ -284,7 +287,7 @@ func TestGworkspaceDisable_NotConfiguredIsCleanNoop(t *testing.T) {
 // unreadable.
 func TestGworkspaceDisable_UnknownRegistrationRefuses(t *testing.T) {
 	cfg := &config.Config{GogAccount: "you@example.com", MCP: []string{gwServerName}}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		return "", os.ErrNotExist // every `sbx mcp ...` call fails
 	}}}
 	var out bytes.Buffer
@@ -319,7 +322,7 @@ func TestGworkspaceDisable_PresentRemovesRegistrationAndConfig(t *testing.T) {
 	}
 
 	var rmCalls [][]string
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		key := strings.Join(append([]string{name}, args...), " ")
 		if key == "sbx mcp ls" {
 			return gwServerName + "\n", nil
@@ -340,14 +343,14 @@ func TestGworkspaceDisable_PresentRemovesRegistrationAndConfig(t *testing.T) {
 	if len(rmCalls) != 1 || rmCalls[0][2] != gwServerName {
 		t.Fatalf("expected a `sbx mcp rm %s` call, got %v", gwServerName, rmCalls)
 	}
-	if cfg.GogAccount != "" || containsStr(cfg.MCP, gwServerName) {
+	if cfg.GogAccount != "" || slices.Contains(cfg.MCP, gwServerName) {
 		t.Errorf("config must be cleared after disable, got account=%q mcp=%v", cfg.GogAccount, cfg.MCP)
 	}
 	reloaded, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.GogAccount != "" || containsStr(reloaded.MCP, gwServerName) {
+	if reloaded.GogAccount != "" || slices.Contains(reloaded.MCP, gwServerName) {
 		t.Errorf("disable must persist the cleared config, got account=%q mcp=%v", reloaded.GogAccount, reloaded.MCP)
 	}
 	if !strings.Contains(out.String(), "off") || !strings.Contains(out.String(), gwPermissionsURL) {
@@ -429,7 +432,7 @@ func TestGworkspaceUsage_NamingContract(t *testing.T) {
 // dead command.
 func TestGworkspaceDisable_NeverPrintsLegacyGogVerb(t *testing.T) {
 	cfg := &config.Config{}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		if strings.Join(append([]string{name}, args...), " ") == "sbx mcp ls" {
 			return "", nil
 		}

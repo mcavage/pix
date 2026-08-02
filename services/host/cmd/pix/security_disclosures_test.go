@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/sys/systest"
 )
 
@@ -68,13 +69,13 @@ func TestDoctorRender_NoDisclosure_WhenNoMCPConfigured(t *testing.T) {
 	}
 }
 
-// hostTrustSummaryEnv is a minimal shellEnv sufficient for
+// hostTrustSummaryEnv is a minimal hostenv.Env sufficient for
 // printSetupSummary's own reads (secret.HostModeProviderKeys, gogSetupAccountHealthy)
 // without touching the real filesystem.
-func hostTrustSummaryEnv(t *testing.T) shellEnv {
+func hostTrustSummaryEnv(t *testing.T) hostenv.Env {
 	t.Helper()
 	home := t.TempDir()
-	return shellEnv{System: &systest.Fake{GetenvFn: func(string) string { return "" }, HomeDirFn: func() string { return home }}}
+	return hostenv.Env{System: &systest.Fake{GetenvFn: func(string) string { return "" }, HomeDirFn: func() string { return home }}}
 }
 
 // TestPrintSetupSummary_DisclosesHostMCPTrust_WhenMCPConfigured: setup's

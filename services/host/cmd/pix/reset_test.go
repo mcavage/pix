@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/rpc"
 	"pix/host/sys/systest"
 )
@@ -871,10 +872,10 @@ func TestExecuteReset_KeepMemoryReadDirErrorSurfaces(t *testing.T) {
 	}
 }
 
-// noToolEnv is a shellEnv with no sbx on PATH, so the executor degrades (prints
+// noToolEnv is a hostenv.Env with no sbx on PATH, so the executor degrades (prints
 // commands) without touching the host. The serve-stop no longer probes PATH (it
 // is pidfile-based via service.Stop), so this env exercises the sbx path only.
-func noToolEnv() shellEnv {
+func noToolEnv() hostenv.Env {
 	return fakeEnv{present: map[string]bool{}, output: map[string]string{}}.env()
 }
 
@@ -883,7 +884,7 @@ func noToolEnv() shellEnv {
 // --keep-memory preserve set matches the sweep's absolute entries.
 func TestResolveResetPaths_RelativeMemoryDBAbsolute(t *testing.T) {
 	t.Chdir(t.TempDir())
-	env := shellEnv{System: &systest.Fake{HomeDirFn: func() string { return "/home/fake" }, GetenvFn: func(k string) string {
+	env := hostenv.Env{System: &systest.Fake{HomeDirFn: func() string { return "/home/fake" }, GetenvFn: func(k string) string {
 		if k == "MEMORY_DB" {
 			return ".pix/custom-memory.db"
 		}

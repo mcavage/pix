@@ -13,7 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/knowledge"
 	"pix/host/secret"
 	"pix/host/service"
@@ -43,7 +45,7 @@ func runRun(argv []string) {
 
 	o, err := parseRunArgs(argv)
 	if err != nil {
-		if err == errHelpRequested {
+		if err == cli.ErrHelpRequested {
 			// -h/--help: usage to STDOUT, exit 0 (a help request, not an error).
 			fmt.Print(runUsage)
 			return
@@ -106,7 +108,7 @@ func runRun(argv []string) {
 	var keyEvidence sbxKeyEvidence
 	if _, err := defaultShellEnv().LookPath("sbx"); err == nil && !configuredKeylessInference() {
 		env := defaultShellEnv()
-		bootstrapProviderKeys(env, os.Stdin, os.Stderr, isTTY(os.Stdin))
+		bootstrapProviderKeys(env, os.Stdin, os.Stderr, cli.IsTTY(os.Stdin))
 		keyEvidence = probeSbxKeyEvidence(env)
 		if keyEvidence.ok() && !anyModelKeyInOutput(keyEvidence.out) {
 			fmt.Fprint(os.Stderr, secret.ModelKeyMissingMessage(env))
@@ -119,7 +121,7 @@ func runRun(argv []string) {
 	// under a [Y/n] gate, register newly-enabled MCP servers, delete the file. This
 	// runs BEFORE workspace.LoadResolvedConfig so a fresh create picks up the applied config.
 	// Best-effort and non-blocking on a non-TTY (it just leaves the file).
-	reconcileOnboarding(o.Workspace, defaultShellEnv(), os.Stdin, os.Stdout, false, isTTY(os.Stdin))
+	reconcileOnboarding(o.Workspace, defaultShellEnv(), os.Stdin, os.Stdout, false, cli.IsTTY(os.Stdin))
 
 	// Load the config for the rest of run (kits, mcp, gog, pack). The
 	cfg, _, err := workspace.LoadResolvedConfig()
@@ -630,7 +632,7 @@ poll:
 // anyway is undefined (sbx may error, or silently reattach to a sandbox with
 // stale kit/mcp/create-only flags — exactly what --replace was trying to avoid).
 // A no-op (nil) when the plan doesn't call for it.
-func applyReplaceRm(env shellEnv, plan runLaunchPlan, name string) error {
+func applyReplaceRm(env hostenv.Env, plan runLaunchPlan, name string) error {
 	if !plan.RmFirst {
 		return nil
 	}
@@ -748,14 +750,14 @@ func desiredMCPUniverse(cfg *config.Config, o runOpts) []string {
 // command for name, workspace-qualified the same way runReplaceCommand is
 // (bare for ".", quoted otherwise) so the two recovery commands read
 // consistently. Both name and workspace are shell-quoted via the shared
-// shellQuoteArg (closure finding #3) — a server name is ordinarily a plain
+// sys.ShellQuote (closure finding #3) — a server name is ordinarily a plain
 // token, but quoting it too costs nothing and keeps every generated
 // copy-paste command uniformly safe.
 func mcpLoadCommand(name, ws string) string {
 	if ws == "" || ws == "." {
-		return "pix mcp load " + shellQuoteArg(name)
+		return "pix mcp load " + sys.ShellQuote(name)
 	}
-	return "pix mcp load " + shellQuoteArg(name) + " " + shellQuoteArg(ws)
+	return "pix mcp load " + sys.ShellQuote(name) + " " + sys.ShellQuote(ws)
 }
 
 // mcpLoadHints joins one mcpLoadCommand per name (mcp load only ever attaches
@@ -822,7 +824,7 @@ func mcpReattachWarning(cfg *config.Config, o runOpts, reattaching bool) string 
 
 // runReplaceCommand returns the exact `pix run [WORKSPACE] --replace`
 // recovery command to print for workspace, POSIX-shell-safe via
-// shellQuoteArg. Bare "pix run --replace" is only correct for the "."
+// sys.ShellQuote. Bare "pix run --replace" is only correct for the "."
 // default (the sandbox name derives from cwd, so a bare re-run from the SAME
 // cwd targets the same sandbox); an EXPLICIT workspace must be echoed back
 // verbatim (quoted) — omitting it would target whatever sandbox the CURRENT
@@ -833,7 +835,7 @@ func runReplaceCommand(ws string) string {
 	if ws == "" || ws == "." {
 		return "pix run --replace"
 	}
-	return "pix run " + shellQuoteArg(ws) + " --replace"
+	return "pix run " + sys.ShellQuote(ws) + " --replace"
 }
 
 // parseRunArgs is a small hand-rolled parser (no cobra, no third-party flags) so
@@ -841,8 +843,8 @@ func runReplaceCommand(ws string) string {
 // bin/pix shell launcher. Everything after `--` is pi passthrough.
 func parseRunArgs(argv []string) (runOpts, error) {
 	// -h/--help anywhere before `--` is a help request, not a parse error.
-	if wantsHelp(argv) {
-		return runOpts{}, errHelpRequested
+	if cli.WantsHelp(argv) {
+		return runOpts{}, cli.ErrHelpRequested
 	}
 	o := runOpts{Workspace: "."}
 	wsSet := false
@@ -1029,7 +1031,7 @@ func repoFromBinary() (string, bool) {
 // -> not loaded -> refuse). The tag is a unique local-<unixts>, so a substring
 // match can't collide with anything else. It fails OPEN (returns true) only when
 // there's NO signal to judge from: no sbx, an ls error, or empty output.
-func localImageLoaded(env shellEnv, tag string) bool {
+func localImageLoaded(env hostenv.Env, tag string) bool {
 	if tag == "" || false {
 		return true
 	}

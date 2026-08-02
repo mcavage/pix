@@ -8,10 +8,12 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/knowledge"
 	"pix/host/sys/systest"
 )
@@ -133,7 +135,7 @@ func TestClonePack_MarksAdoptionDurablyBeforeReturn(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))
 
 	const url = "https://example.com/attacker/pack.git"
-	env := shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		if len(args) > 0 && args[0] == "clone" {
 			dest := args[len(args)-1]
 			if err := os.MkdirAll(dest, 0o755); err != nil {
@@ -205,7 +207,7 @@ func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"})
 	aID := knowledge.CanonicalizeKnowledgeBundle(filepath.Join(rootA, "knowledge"))
 	cfg, _ := config.Load()
-	if !containsStr(cfg.KnowledgeBundles, aID) || !containsStr(cfg.MCP, "a-mcp") {
+	if !slices.Contains(cfg.KnowledgeBundles, aID) || !slices.Contains(cfg.MCP, "a-mcp") {
 		t.Fatalf("setup: pack use A did not attach: %+v", cfg)
 	}
 
@@ -226,10 +228,10 @@ func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 	out.Reset()
 	runPackUse(fakeGitEnv(nil), &out, []string{rootB})
 	cfg2, _ := config.Load()
-	if !containsStr(cfg2.KnowledgeBundles, aID) {
+	if !slices.Contains(cfg2.KnowledgeBundles, aID) {
 		t.Errorf("empty lock: the switch must remove NOTHING (no manifest fallback), lost %q from %v", aID, cfg2.KnowledgeBundles)
 	}
-	if !containsStr(cfg2.MCP, "a-mcp") {
+	if !slices.Contains(cfg2.MCP, "a-mcp") {
 		t.Errorf("empty lock: the switch must not guess mcp removals either, cfg.MCP = %v", cfg2.MCP)
 	}
 }
@@ -259,14 +261,14 @@ func TestPackUse_SamePackReactivationPreservesAttribution(t *testing.T) {
 	runPackUse(env, &out, []string{rootA}) // same-pack reactivation
 
 	lock := readPackLock(rootA)
-	if !containsStr(lock.MCP, "a-mcp") {
+	if !slices.Contains(lock.MCP, "a-mcp") {
 		t.Fatalf("same-pack reactivation erased the lock attribution, lock.MCP = %v", lock.MCP)
 	}
 
 	out.Reset()
 	runPackUse(env, &out, []string{rootB})
 	cfg, _ := config.Load()
-	if containsStr(cfg.MCP, "a-mcp") {
+	if slices.Contains(cfg.MCP, "a-mcp") {
 		t.Errorf("switching to B after a same-pack reactivation must still remove a-mcp, cfg.MCP = %v", cfg.MCP)
 	}
 }

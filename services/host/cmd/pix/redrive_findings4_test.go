@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/sys/systest"
 	"pix/host/workspace"
@@ -345,7 +346,7 @@ func TestResetSbxClearsReceiptsOnPositiveRemovalOnly(t *testing.T) {
 	mustCreateReceipt(t, stateDir, "pix-ok", "/w/ok", []string{"slack"})
 	mustCreateReceipt(t, stateDir, "pix-bad", "/w/bad", []string{"slack"})
 
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		key := strings.Join(append([]string{name}, args...), " ")
 		switch key {
 		case "sbx ls":
@@ -374,7 +375,7 @@ func TestResetSbxClearsReceiptsOnPositiveRemovalOnly(t *testing.T) {
 
 // statusReceiptEnv is fakeStatusEnv with the receipt stateDir seam wired and a
 // single running pix box, providers ready.
-func statusReceiptEnv(t *testing.T, stateDir string) shellEnv {
+func statusReceiptEnv(t *testing.T, stateDir string) hostenv.Env {
 	t.Helper()
 	env := fakeStatusEnv()
 	systest.Of(env.System).StateDirFn = func() (string, error) { return stateDir, nil }

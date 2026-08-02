@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"pix/host/cli"
+	"pix/host/launcher"
 	"strconv"
 )
 
@@ -70,7 +71,7 @@ func runBackupCore(argv []string, out io.Writer) error {
 	if len(positional) > 0 {
 		return cli.UsageErr(backupUsage)
 	}
-	bin, err := findHostBinary()
+	bin, err := launcher.FindHostBinary()
 	if err != nil {
 		return err
 	}
@@ -108,7 +109,7 @@ func runRestoreCore(argv []string, out io.Writer) error {
 	if len(positional) != 1 {
 		return cli.UsageErr(restoreUsage)
 	}
-	bin, err := findHostBinary()
+	bin, err := launcher.FindHostBinary()
 	if err != nil {
 		return err
 	}

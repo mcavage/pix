@@ -18,6 +18,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/secret"
 )
 
@@ -28,7 +29,7 @@ import (
 // They replaced runModelsAdd, which hand-parsed argv, validated the provider
 // name against a list it maintained separately from providerNames(), and exited
 // the process from nine places.
-func addKeyedProvider(d *cli.Deps, cfg *config.Config, env shellEnv, provider string) error {
+func addKeyedProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, provider string) error {
 	p, ok := providerByName(provider)
 	if !ok {
 		return cli.Usagef("unknown provider %q (want one of: %s)", provider, strings.Join(providerNames(), ", "))
@@ -79,7 +80,7 @@ func addKeyedProvider(d *cli.Deps, cfg *config.Config, env shellEnv, provider st
 // this box can run), but a user typing `pix models add ollama` means "take
 // everything you can prove", and making them guess which flag they needed would
 // be the discoverability failure this command was written to end.
-func addOllamaProvider(d *cli.Deps, cfg *config.Config, env shellEnv, sel ollamaSelection) error {
+func addOllamaProvider(d *cli.Deps, cfg *config.Config, env hostenv.Env, sel ollamaSelection) error {
 	if !sel.Local && !sel.Cloud {
 		sel = ollamaSelection{Local: true, Cloud: true}
 	}
@@ -211,7 +212,7 @@ alone leaves a key unwired.
 // Silent when a pack owns inference (its bindings are the pack's business) and
 // when the key list is unreadable, since an unreadable list is not evidence of
 // a gap.
-func unwiredProviderKeys(cfg *config.Config, env shellEnv) []string {
+func unwiredProviderKeys(cfg *config.Config, env hostenv.Env) []string {
 	if cfg == nil || cfg.Inference.ExclusiveSource != "" {
 		return nil
 	}

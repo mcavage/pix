@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"pix/host/cli"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
 	"regexp"
@@ -32,7 +34,7 @@ import (
 //
 // NEVER a hardcoded address. Empty means "not configured" and the caller emits
 // a not-configured note rather than reporting green.
-func gogAccount(cfg *config.Config, env shellEnv) string {
+func gogAccount(cfg *config.Config, env hostenv.Env) string {
 	if cfg != nil {
 		if a := strings.TrimSpace(cfg.GogAccount); a != "" {
 			return a
@@ -59,7 +61,7 @@ var gogHardenedFlags = []string{"--gmail-no-send", "--wrap-untrusted", "--readon
 
 // gogMissingHardenedFlags returns the hardened read-only flags absent from the
 // registered gog spawn's INNER argv (after unwrapping any op-run prefix).
-func gogMissingHardenedFlags(env shellEnv, argv []string) []string {
+func gogMissingHardenedFlags(env hostenv.Env, argv []string) []string {
 	inner, ok := gogSpawnArgv(env, argv)
 	if !ok {
 		return append([]string(nil), gogHardenedFlags...)
@@ -81,7 +83,7 @@ func gogMissingHardenedFlags(env shellEnv, argv []string) []string {
 // registration would produce for these inputs — gogRegisteredArgv, so the
 // probe can never drift lighter than what registration runs): op-wrapped when
 // op + op-refs resolve, bare otherwise.
-func gogHeadlessProbe(env shellEnv, acct, opRefs string) probeResult {
+func gogHeadlessProbe(env hostenv.Env, acct, opRefs string) probeResult {
 	if acct == "" {
 		return probeResult{status: probeError, detail: "could not run (account unresolved)"}
 	}
@@ -99,7 +101,7 @@ func gogHeadlessProbe(env shellEnv, acct, opRefs string) probeResult {
 
 // gogHeadlessOK is gogHeadlessProbe collapsed to a bool for callers that only
 // need pass/fail (gog setup's follow-up gate).
-func gogHeadlessOK(env shellEnv, acct, opRefs string) bool {
+func gogHeadlessOK(env hostenv.Env, acct, opRefs string) bool {
 	return gogHeadlessProbe(env, acct, opRefs).status == probeToolsOK
 }
 
@@ -110,12 +112,12 @@ const gogSetupHint = "pix gworkspace setup"
 // spawnCheck builds the "headless spawn" check from a structured probe result.
 // Shared by the honest (registered-command) path and the best-effort
 // reconstruction fallback, with per-path ready/zero-tools wording.
-func gogSpawnCheck(env shellEnv, res probeResult, readyDetail, noToolsDetail string) readiness.Check {
+func gogSpawnCheck(env hostenv.Env, res probeResult, readyDetail, noToolsDetail string) readiness.Check {
 	switch res.status {
 	case probeToolsOK:
 		return readiness.Check{Label: "headless spawn", Verdict: readiness.VerdictReady,
 			Detail:   readyDetail,
-			Evidence: fmt.Sprintf("--list-tools returned %s", plural(res.tools, "tool"))}
+			Evidence: fmt.Sprintf("--list-tools returned %s", cli.Plural(res.tools, "tool"))}
 	case probeNoTools:
 		return readiness.Check{Label: "headless spawn", Verdict: readiness.VerdictTodo,
 			Detail:   noToolsDetail,
@@ -138,7 +140,7 @@ func gogSpawnCheck(env shellEnv, res probeResult, readyDetail, noToolsDetail str
 // (or exposes no command) does it fall back to a best-effort reconstruction
 // from config — clearly labeled, and never a confirmed green. Every probe
 // degrades cleanly, so this runs in-sandbox (gog/sbx/op all absent) too.
-func gogGroup(cfg *config.Config, env shellEnv, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) readiness.Group {
+func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) readiness.Group {
 	g := readiness.Group{Title: "Google Workspace (optional, via host MCP — read-only)"}
 	// gog's attachment truth comes from the SAME receipt-backed join row every
 	// other MCP server uses (mcpjoin.go, via the shared workspace-sandbox
@@ -376,7 +378,7 @@ func gogSpawnIsOpWrapped(argv []string) bool {
 // sbx is absent or exposes no complete command; the caller then falls back to
 // the best-effort reconstruction. Every discovery subprocess is BOUNDED
 // (probeRun) so a hung sbx can never wedge the caller.
-func registeredGogCommand(env shellEnv) ([]string, bool) {
+func registeredGogCommand(env hostenv.Env) ([]string, bool) {
 	if _, err := env.LookPath("sbx"); err != nil {
 		return nil, false
 	}
@@ -415,7 +417,7 @@ var gogCommandLineRe = regexp.MustCompile(`(?im)^\s*command\s*[:=]\s*(.+?)\s*$`)
 // `op`, `op run`, or the command line when the args landed on a separate line —
 // returns (nil,false) so registeredGogCommand falls through to the structured
 // JSON parser rather than probing a truncated/wrong argv.
-func parseGogCommandLine(env shellEnv, out string) ([]string, bool) {
+func parseGogCommandLine(env hostenv.Env, out string) ([]string, bool) {
 	m := gogCommandLineRe.FindStringSubmatch(out)
 	if len(m) < 2 {
 		return nil, false
@@ -445,7 +447,7 @@ func parseGogCommandLine(env shellEnv, out string) ([]string, bool) {
 // `mcp` subcommand. A partial capture (`op`, `op run`, args on a separate
 // line) or a wrapper that deviates from the launcher grammar does not, so the
 // caller keeps looking rather than probe a truncated or drifted command.
-func gogCommandComplete(env shellEnv, argv []string) bool {
+func gogCommandComplete(env hostenv.Env, argv []string) bool {
 	_, ok := gogSpawnArgv(env, argv)
 	return ok
 }
@@ -455,7 +457,7 @@ func gogCommandComplete(env shellEnv, argv []string) bool {
 // form (`gog … mcp …`). It returns (cmd,true) when the resolved binary's
 // basename is `gog` and its args contain the `mcp` subcommand; (nil,false)
 // otherwise. Guards against index-out-of-range on short/empty argv.
-func gogSpawnArgv(env shellEnv, argv []string) ([]string, bool) {
+func gogSpawnArgv(env hostenv.Env, argv []string) ([]string, bool) {
 	if len(argv) == 0 {
 		return nil, false
 	}
@@ -485,7 +487,7 @@ func gogSpawnArgv(env shellEnv, argv []string) ([]string, bool) {
 // quoted tokens are rejected because strings.Fields cannot recover them
 // unambiguously. Completeness and wrapper validation use the same strict gate
 // as the text and JSON readers.
-func parseGogCommandTable(env shellEnv, out string) ([]string, bool) {
+func parseGogCommandTable(env hostenv.Env, out string) ([]string, bool) {
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 3 || fields[0] != gwServerName || fields[1] != "local" {
@@ -506,7 +508,7 @@ func parseGogCommandTable(env shellEnv, out string) ([]string, bool) {
 // parseGogCommandJSON extracts the registered argv from `sbx mcp ls -o json`
 // (an array of {name, command, args}). Returns (nil,false) when there is no gog
 // entry or the JSON doesn't parse.
-func parseGogCommandJSON(env shellEnv, out string) ([]string, bool) {
+func parseGogCommandJSON(env hostenv.Env, out string) ([]string, bool) {
 	var servers []struct {
 		Name    string   `json:"name"`
 		Command string   `json:"command"`

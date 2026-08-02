@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
 
@@ -19,7 +20,7 @@ import (
 // literal WITHOUT ever printing its value. op sign-in is advisory (never a
 // standalone green); the confirmed "creds actually resolve" proof stays the gog
 // group's headless op-run probe.
-func secretsGroup(cfg *config.Config, env shellEnv) readiness.Group {
+func secretsGroup(cfg *config.Config, env hostenv.Env) readiness.Group {
 	g := readiness.Group{Title: "Secrets (1Password, host MCP creds via op-refs.env)"}
 
 	if !secret.AnyOpWrappedServer(cfg) {

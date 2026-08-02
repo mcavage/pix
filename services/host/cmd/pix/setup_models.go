@@ -36,8 +36,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/cli"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -89,7 +92,7 @@ func modelTags(ms []missingModel) []string {
 // runOllamaPull execs `ollama pull <tag>` with the user's terminal inherited
 // (real progress output) when runInteractive is wired; tests fall back to the
 // recorded env.Run seam.
-func runOllamaPull(env shellEnv, tag string) error {
+func runOllamaPull(env hostenv.Env, tag string) error {
 	return env.RunInteractive("ollama", "pull", tag)
 }
 
@@ -97,7 +100,7 @@ func runOllamaPull(env shellEnv, tag string) error {
 // ModelReadiness axes, gather consent, pull confirmed-missing tags (deduped by
 // computeMissingModels), verify once, and return the truthful outcome. It
 // never installs Ollama and never pulls without consent.
-func setupLocalModels(cfg *config.Config, env shellEnv, in io.Reader, out io.Writer, interactive, pullFlag bool) setupModelsOutcome {
+func setupLocalModels(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive, pullFlag bool) setupModelsOutcome {
 	p := probeOllamaAt(env, effectiveOllamaEndpoint(cfg, env))
 	rs := []ModelReadiness{
 		modelReadiness("watcher", cfg.MemoryWatcherModel, "fact capture", p, readiness.RequirementOptional),
@@ -163,7 +166,7 @@ func setupLocalModels(cfg *config.Config, env shellEnv, in io.Reader, out io.Wri
 			}
 			fmt.Fprintf(out, "  %-18s (%s)  — optional\n", m.tag, roles)
 		}
-		fmt.Fprintf(out, "Pull %s now? Each download can be several GB of network and disk. [y/N] ", plural(len(o.missing), "model"))
+		fmt.Fprintf(out, "Pull %s now? Each download can be several GB of network and disk. [y/N] ", cli.Plural(len(o.missing), "model"))
 		line, ok := secret.ScanYN(bufio.NewScanner(in))
 		if !ok || (line != "y" && line != "yes") {
 			o.consent = "prompt-no"
@@ -255,7 +258,7 @@ func (o setupModelsOutcome) summaryLine() (glyph, detail string) {
 	case len(o.missing) > len(o.pulled):
 		var remaining []string
 		for _, m := range o.missing {
-			if !containsStr(o.pulled, m.tag) {
+			if !slices.Contains(o.pulled, m.tag) {
 				remaining = append(remaining, m.tag)
 			}
 		}
@@ -295,11 +298,11 @@ func buildSetupModelsReceipt(o setupModelsOutcome, now time.Time) setupModelsRec
 	for _, m := range o.missing {
 		status := "missing"
 		switch {
-		case containsStr(o.pulled, m.tag):
+		case slices.Contains(o.pulled, m.tag):
 			status = "pulled"
-		case containsStr(o.failed, m.tag):
+		case slices.Contains(o.failed, m.tag):
 			status = "pull-failed"
-		case containsStr(o.pulledUnverified, m.tag):
+		case slices.Contains(o.pulledUnverified, m.tag):
 			status = "pulled-unverified"
 		}
 		rec.Models = append(rec.Models, setupModelReceiptEntry{Tag: m.tag, Roles: m.roles, Status: status})
@@ -335,7 +338,7 @@ func writeSetupModelsReceipt(stateDir string, rec setupModelsReceipt) error {
 // receipt is evidence, so a failed write is reported (not fatal — the run
 // itself already happened and the summary above is the human record). Skipped
 // entirely when ollama isn't installed: there was no decision to receipt.
-func receiptSetupModels(env shellEnv, out io.Writer, o setupModelsOutcome) {
+func receiptSetupModels(env hostenv.Env, out io.Writer, o setupModelsOutcome) {
 	if !o.installed {
 		return
 	}
@@ -350,7 +353,7 @@ func receiptSetupModels(env shellEnv, out io.Writer, o setupModelsOutcome) {
 
 // setupReceiptStateDir resolves the launcher state dir through the env seam
 // (tests), falling back to the real config.StateDir.
-func setupReceiptStateDir(env shellEnv) (string, error) {
+func setupReceiptStateDir(env hostenv.Env) (string, error) {
 	return env.StateDir()
 }
 
@@ -366,7 +369,7 @@ func setupReceiptStateDir(env shellEnv) (string, error) {
 // here. Native `sbx mcp auth` is for remote catalog servers and raw `gog auth
 // ...` commands are the guided command's internals; neither belongs in this
 // summary.
-func printSetupSummary(cfg *config.Config, env shellEnv, out io.Writer, models setupModelsOutcome) {
+func printSetupSummary(cfg *config.Config, env hostenv.Env, out io.Writer, models setupModelsOutcome) {
 	if env.Quiet {
 		return
 	}
@@ -439,7 +442,7 @@ func printSetupSummary(cfg *config.Config, env shellEnv, out io.Writer, models s
 	// from a probe.
 	acct := strings.TrimSpace(cfg.GogAccount)
 	switch {
-	case acct == "" && !containsStr(cfg.MCP, gwServerName):
+	case acct == "" && !slices.Contains(cfg.MCP, gwServerName):
 		// absent by default: no row.
 	case acct == "":
 		line("✗", "workspace", "enabled but no account authorized — run: pix gworkspace setup")

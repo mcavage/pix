@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -652,7 +653,7 @@ func TestPackUse_HostWrapperSwapOnSwitch(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "a-tool")); err != nil {
 		t.Fatalf("pack use A must install a-tool: %v\noutput:\n%s", err, out.String())
 	}
-	if store, serr := loadPackTrustStore(); serr != nil || store.Installed == nil || !containsStr(store.Installed.Wrappers, "a-tool") {
+	if store, serr := loadPackTrustStore(); serr != nil || store.Installed == nil || !slices.Contains(store.Installed.Wrappers, "a-tool") {
 		t.Errorf("HOST state must attribute the installed wrapper (store=%+v, err=%v)", store, serr)
 	}
 

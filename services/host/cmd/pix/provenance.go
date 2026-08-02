@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"strings"
 )
@@ -164,7 +165,7 @@ func pathShadowIssue(name, self string, getenv func(string) string) string {
 	return message
 }
 
-func installDuplicatesGroup(env shellEnv) readiness.Group {
+func installDuplicatesGroup(env hostenv.Env) readiness.Group {
 	g := readiness.Group{Title: "Installation"}
 
 	self, err := env.Executable()

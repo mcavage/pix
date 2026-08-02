@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/sys/systest"
 )
@@ -104,7 +105,7 @@ func TestComputeModels_NotInstalledIsNeitherMissingNorUnverifiable(t *testing.T)
 // probe machinery when wired, and a timeout classifies as list-unverified.
 func TestProbeOllama_Bounded(t *testing.T) {
 	var probed []string
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "ollama" {
 			return "/usr/bin/ollama", nil
 		}
@@ -142,7 +143,7 @@ func TestOllamaVerifyFailureReason(t *testing.T) {
 // must be UNVERIFIABLE (⚠, no pull todo), never a confirmed "not pulled".
 func TestDoctorOllama_ListFailureIsUnverifiableNotMissing(t *testing.T) {
 	cfg := defaultCfg()
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "ollama" {
 			return "/usr/bin/ollama", nil
 		}
@@ -168,7 +169,7 @@ func TestDoctorOllama_ListFailureIsUnverifiableNotMissing(t *testing.T) {
 // doctor's exit code.
 func TestDoctorOllama_DaemonDownIsOptionalTodo(t *testing.T) {
 	cfg := defaultCfg()
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "ollama" {
 			return "/usr/bin/ollama", nil
 		}
@@ -192,7 +193,7 @@ func TestDoctorOllama_DaemonDownIsOptionalTodo(t *testing.T) {
 // (covered by TestDoctor_SbxAbsent).
 func TestDoctorOllama_NotInstalledUnconfiguredIsNote(t *testing.T) {
 	cfg := &config.Config{MemoryWatcherModel: "gemma4", MemoryEmbedModel: "nomic-embed-text"}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, DialLocalFn: func(int) bool { return false }}}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, DialLocalFn: func(int) bool { return false }}}
 	g := ollamaGroup(cfg, env)
 	if len(g.Checks) == 0 || !g.Checks[0].Note {
 		t.Fatalf("an uninstalled ollama with no configured dependents must be a note, got %+v", g.Checks)

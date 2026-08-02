@@ -12,13 +12,14 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/inference"
 	"pix/host/sys/systest"
 )
 
 // ollamaAddEnv is ollamaListEnv plus an OLLAMA_HOST pointing at a fake daemon,
 // so reconcileOllamaInference's probe reaches a server this test controls.
-func ollamaAddEnv(t *testing.T, tags []string, totalGB float64, endpoint string) shellEnv {
+func ollamaAddEnv(t *testing.T, tags []string, totalGB float64, endpoint string) hostenv.Env {
 	t.Helper()
 	env := ollamaListEnv(tags, "darwin", totalGB)
 	u, err := url.Parse(endpoint)
@@ -135,7 +136,7 @@ func TestReconcileOllamaInference_RefusesUnderExclusivePack(t *testing.T) {
 // software they already have is its own kind of wrong, so a missing binary and
 // a dead daemon must not share a message.
 func TestRequireOllamaReady_NamesTheRightProblem(t *testing.T) {
-	missing := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", errNotFoundFixture }}}
+	missing := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", errNotFoundFixture }}}
 	err := requireOllamaReady(missing)
 	if err == nil || !strings.Contains(err.Error(), "not installed") {
 		t.Fatalf("missing binary: err = %v, want an install message", err)
@@ -251,20 +252,20 @@ func mustNoProbeErr(t *testing.T, err error) {
 }
 
 // TestVerify_NilProbeSeamIsLoud pins the fix. Both verify functions used to
-// return (0 attempted, 0 verified, no failures) when handed a shellEnv with no
+// return (0 attempted, 0 verified, no failures) when handed a hostenv.Env with no
 // probe — a value a caller cannot tell apart from a clean pass, which is how
 // `0 model(s) answered a live request` got printed next to exit code 0.
 func TestVerify_NilProbeSeamIsLoud(t *testing.T) {
 	cfg := ollamaCfgWith(binding("ollama/qwen3.5:9b"))
-	if _, err := verifyOllamaInference(cfg, shellEnv{System: &systest.Fake{}}, io.Discard); !errors.Is(err, errNoProbeSeam) {
+	if _, err := verifyOllamaInference(cfg, hostenv.Env{System: &systest.Fake{}}, io.Discard); !errors.Is(err, errNoProbeSeam) {
 		t.Fatalf("ollama verify with no probe seam: err = %v, want errNoProbeSeam", err)
 	}
-	if _, err := verifyDirectInference(&config.Config{}, shellEnv{System: &systest.Fake{}}); !errors.Is(err, errNoProbeSeam) {
+	if _, err := verifyDirectInference(&config.Config{}, hostenv.Env{System: &systest.Fake{}}); !errors.Is(err, errNoProbeSeam) {
 		t.Fatalf("direct verify with no probe seam: err = %v, want errNoProbeSeam", err)
 	}
 	// A seam that IS wired reports honestly, including the legitimate
 	// nothing-to-do case, which must stay distinguishable from the above.
-	empty, err := verifyDirectInference(&config.Config{}, shellEnv{System: &systest.Fake{}, DirectInference: func(string, string, string) error { return nil }})
+	empty, err := verifyDirectInference(&config.Config{}, hostenv.Env{System: &systest.Fake{}, DirectInference: func(string, string, string) error { return nil }})
 	if err != nil || empty.Attempted != 0 || empty.Verified != 0 {
 		t.Fatalf("a wired seam with no bindings = %+v, %v; want a clean zero outcome and no error", empty, err)
 	}

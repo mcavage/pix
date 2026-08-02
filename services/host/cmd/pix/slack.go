@@ -26,6 +26,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"pix/host/cli"
 	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
@@ -292,7 +293,7 @@ func runSlackCmd(argv []string) {
 		fmt.Fprint(os.Stderr, slackUsage)
 		os.Exit(2)
 	}
-	if wantsHelp(argv[:1]) {
+	if cli.WantsHelp(argv[:1]) {
 		fmt.Print(slackUsage)
 		return
 	}
@@ -384,7 +385,7 @@ func parseSlackSetupArgs(argv []string) (slackSetupOpts, error) {
 		case a == "--allow-identity-change":
 			o.allowIdentityChange = true
 		case a == "-h", a == "--help":
-			return o, errHelpRequested
+			return o, cli.ErrHelpRequested
 		default:
 			// Do not echo an accidentally pasted token back to stderr.
 			if strings.HasPrefix(a, "xox") || config.LooksSecretShaped("SLACK_TOKEN", a) {
@@ -411,14 +412,14 @@ func parseSlackAuthArgs(argv []string) (slackSetupOpts, error) {
 func runSlackAuthCmd(argv []string) {
 	opts, err := parseSlackAuthArgs(argv)
 	if err != nil {
-		if err == errHelpRequested {
+		if err == cli.ErrHelpRequested {
 			fmt.Print(slackAuthUsage)
 			return
 		}
 		fmt.Fprintf(os.Stderr, "pix slack auth: %v\n\n%s", err, slackAuthUsage)
 		os.Exit(2)
 	}
-	tty := isTTY(os.Stdin)
+	tty := cli.IsTTY(os.Stdin)
 	if opts.assumeYes {
 		tty = false
 	}
@@ -431,14 +432,14 @@ func runSlackAuthCmd(argv []string) {
 func runSlackSetupCmd(argv []string) {
 	opts, err := parseSlackSetupArgs(argv)
 	if err != nil {
-		if err == errHelpRequested {
+		if err == cli.ErrHelpRequested {
 			fmt.Print(slackSetupUsage)
 			return
 		}
 		fmt.Fprintf(os.Stderr, "pix slack setup: %v\n\n%s", err, slackSetupUsage)
 		os.Exit(2)
 	}
-	tty := isTTY(os.Stdin)
+	tty := cli.IsTTY(os.Stdin)
 	if opts.assumeYes {
 		tty = false // --yes means "never prompt", even on a real terminal
 	}
@@ -452,7 +453,7 @@ func runSlackSetupCmd(argv []string) {
 // (already-issued token) path, and its absence runs the localhost PKCE OAuth
 // path (slack_oauth.go). Both share the same preflight/register/rollback
 // helpers so their observable failure discipline matches.
-func slackSetup(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Writer, tty bool, hostResolver func() (string, error)) error {
+func slackSetup(env hostenv.Env, opts slackSetupOpts, in io.Reader, out io.Writer, tty bool, hostResolver func() (string, error)) error {
 	if strings.TrimSpace(opts.tokenRef) != "" {
 		return slackSetupStatic(env, opts, in, out, tty, hostResolver)
 	}
@@ -468,7 +469,7 @@ func slackSetup(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Writer, 
 // registered, so a rejected ref, an unresolved ref, a non-xoxp- token, a
 // failed live auth.test, or a declined confirmation all leave op-refs.env,
 // the sbx gateway, and config.toml completely untouched.
-func slackSetupStatic(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Writer, tty bool, hostResolver func() (string, error)) error {
+func slackSetupStatic(env hostenv.Env, opts slackSetupOpts, in io.Reader, out io.Writer, tty bool, hostResolver func() (string, error)) error {
 	ref := secret.NormalizeOpRef(strings.TrimSpace(opts.tokenRef))
 	if !strings.HasPrefix(ref, "op://") {
 		return fmt.Errorf("--token-ref must be an op://vault/item/field reference — " +
@@ -505,7 +506,7 @@ func slackSetupStatic(env shellEnv, opts slackSetupOpts, in io.Reader, out io.Wr
 			"pix slack only accepts a personal user token, never a bot/other token type (see docs/design/slack-setup.md)")
 	}
 	if env.SlackAuth == nil {
-		return fmt.Errorf("internal: shellEnv.slackAuthTest not wired")
+		return fmt.Errorf("internal: hostenv.Env.slackAuthTest not wired")
 	}
 	id, err := env.SlackAuth(token)
 	if err != nil {
@@ -574,7 +575,7 @@ func slackExit(checks []readiness.Check) int {
 }
 
 func runSlackStatusCmd(argv []string) {
-	if wantsHelp(argv) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(slackStatusUsage)
 		return
 	}
@@ -615,7 +616,7 @@ func slackIdentityPins(content string) (teamID, userID string) {
 // unchanged (slackStaticStatusChecks). Registration and sandbox attachment
 // are reported identically either way — they are properties of the sbx
 // gateway, not of which credential mode backs the server.
-func slackStatus(cfg *config.Config, env shellEnv, out io.Writer, now time.Time) int {
+func slackStatus(cfg *config.Config, env hostenv.Env, out io.Writer, now time.Time) int {
 	fmt.Fprintln(out, "Slack (optional, personal xoxp- user token, via the host MCP gateway)")
 
 	var checks []readiness.Check
@@ -640,7 +641,7 @@ func slackStatus(cfg *config.Config, env shellEnv, out io.Writer, now time.Time)
 // identity pin comparison. Never runs in OAuth mode (slackStatus branches
 // before calling it), so it can never demand SLACK_TOKEN when OAuth is what
 // is actually configured.
-func slackStaticStatusChecks(env shellEnv) []readiness.Check {
+func slackStaticStatusChecks(env hostenv.Env) []readiness.Check {
 	path, content, exists := secret.OpRefsContent(env)
 	var ref string
 	var refFilled bool
@@ -719,7 +720,7 @@ func slackStaticStatusChecks(env shellEnv) []readiness.Check {
 // and the registration-is-not-attachment reminder — identical regardless of
 // which credential mode backs the server, since both are properties of the
 // gateway, not the credential.
-func slackRegistrationAndAttachmentChecks(env shellEnv) []readiness.Check {
+func slackRegistrationAndAttachmentChecks(env hostenv.Env) []readiness.Check {
 	var checks []readiness.Check
 	registeredArgv, registrationExists := registeredMCPCommand(env, slackServerName)
 	_, registrationTrusted := recognizedMCPArgv(env, registeredArgv, slackServerName)
@@ -752,7 +753,7 @@ func slackRegistrationAndAttachmentChecks(env shellEnv) []readiness.Check {
 // ---------------------------------------------------------------------------
 
 func runSlackDisableCmd(argv []string) {
-	if wantsHelp(argv) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(slackDisableUsage)
 		return
 	}
@@ -777,7 +778,7 @@ func runSlackDisableCmd(argv []string) {
 // gateway state could not be read at all — in which case the caller must
 // refuse to touch config rather than risk silently dropping a registration
 // disable can't see.
-func slackRegistrationPresence(env shellEnv) (present bool, err error) {
+func slackRegistrationPresence(env hostenv.Env) (present bool, err error) {
 
 	if _, lerr := env.LookPath("sbx"); lerr != nil {
 		return false, nil // sbx isn't installed here: nothing is registered from this host's POV
@@ -797,7 +798,7 @@ func slackRegistrationPresence(env shellEnv) (present bool, err error) {
 // short of that runs slackDisableStatic, unchanged — it never revokes
 // (pix never holds a client secret of its own for the static path, so it
 // cannot mint a revocation on the user's behalf).
-func slackDisable(cfg *config.Config, env shellEnv, out io.Writer) error {
+func slackDisable(cfg *config.Config, env hostenv.Env, out io.Writer) error {
 	if slackOAuthConfigComplete(cfg) {
 		return slackDisableOAuth(cfg, env, out, slackOAuthRuntimeDepsFn())
 	}
@@ -808,7 +809,7 @@ func slackDisable(cfg *config.Config, env shellEnv, out io.Writer) error {
 // registration, the mcp config entry, and the
 // SLACK_TOKEN/SLACK_TEAM_ID/SLACK_USER_ID refs. It never revokes the token
 // at Slack — see the printed notice at the end.
-func slackDisableStatic(cfg *config.Config, env shellEnv, out io.Writer) error {
+func slackDisableStatic(cfg *config.Config, env hostenv.Env, out io.Writer) error {
 	_, content, exists := secret.OpRefsContent(env)
 	hasManagedRef := false
 	if exists {

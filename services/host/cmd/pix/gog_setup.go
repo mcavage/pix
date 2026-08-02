@@ -66,6 +66,7 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/secret"
 )
 
@@ -236,7 +237,7 @@ func chooseCreateDocsAuthRoute(help string) (gogAuthRoute, bool) {
 // FIRST unsupported step, with a detail identifying exactly what is missing;
 // gogSetup fails outright on !ok rather than silently trying an older,
 // possibly-unsafe route. Every help probe is BOUNDED (probeRun).
-func gogAuthRouteCapable(env shellEnv, route gogAuthRoute) (bool, string) {
+func gogAuthRouteCapable(env hostenv.Env, route gogAuthRoute) (bool, string) {
 	for _, step := range route.steps {
 		if len(step.requiredFlags) == 0 {
 			continue
@@ -262,7 +263,7 @@ func gogAuthRouteCapable(env shellEnv, route gogAuthRoute) (bool, string) {
 // their own. The seam a future `pix setup --account` follow-up (S08) uses to
 // decide whether to print the `pix gworkspace setup` hint — it never runs the
 // OAuth flow itself.
-func gogSetupAccountHealthy(env shellEnv, acct string) bool {
+func gogSetupAccountHealthy(env hostenv.Env, acct string) bool {
 	if !gogAuthed(env, acct) {
 		return false
 	}
@@ -277,7 +278,7 @@ func gogSetupAccountHealthy(env shellEnv, acct string) bool {
 // contact (lookPath/run/statFile/runInteractive) goes through env; account/
 // credentials prompting is gated on tty (never on a bare non-TTY run, never
 // when --yes was given).
-func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty bool) error {
+func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, tty bool) error {
 	// A single shared bufio.Reader across BOTH prompts: promptLine's own
 	// bufio.NewReader-per-call would silently drop the second answer here (its
 	// first read can buffer past the first line on a fully-buffered io.Reader,
@@ -580,7 +581,7 @@ func gogSetup(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, tty 
 // Every outcome is reported: nil on a confirmed rollback, a descriptive error
 // (never silent) when the rollback itself fails, naming the exact command to
 // run by hand.
-func gogSetupRollbackRegistration(env shellEnv, snap gogRegSnapshot) error {
+func gogSetupRollbackRegistration(env hostenv.Env, snap gogRegSnapshot) error {
 
 	if snap.state == gogRegPresent {
 		args := rawAddArgs(gwServerName, snap.argv)
@@ -598,7 +599,7 @@ func gogSetupRollbackRegistration(env shellEnv, snap gogRegSnapshot) error {
 // snapshotMCPRegistration is the generic companion to snapshotGogRegistration
 // for Pix-owned host MCP servers. It preserves an existing definition so the
 // two-server Workspace transaction can roll back without deleting prior state.
-func snapshotMCPRegistration(env shellEnv, name string) gogRegSnapshot {
+func snapshotMCPRegistration(env hostenv.Env, name string) gogRegSnapshot {
 	listOut, timedOut, err := env.RunTimed("sbx", "mcp", "ls")
 	if err != nil || timedOut {
 		return gogRegSnapshot{state: gogRegUnknown}
@@ -612,7 +613,7 @@ func snapshotMCPRegistration(env shellEnv, name string) gogRegSnapshot {
 	return gogRegSnapshot{state: gogRegUnknown}
 }
 
-func restoreMCPRegistration(env shellEnv, name string, snap gogRegSnapshot) error {
+func restoreMCPRegistration(env hostenv.Env, name string, snap gogRegSnapshot) error {
 
 	if snap.state == gogRegPresent {
 		if _, err := env.Run("sbx", rawAddArgs(name, snap.argv)...); err != nil {
@@ -674,7 +675,7 @@ type gogRegSnapshot struct {
 //     both come up empty, quoted, or malformed)            -> gogRegUnknown
 //   - the listing succeeds, gog IS in it, and the detailed
 //     command parses cleanly                               -> gogRegPresent(argv)
-func snapshotGogRegistration(env shellEnv) gogRegSnapshot {
+func snapshotGogRegistration(env hostenv.Env) gogRegSnapshot {
 
 	if _, err := env.LookPath("sbx"); err != nil {
 		// Defensive only: gogSetup's own preflight already refuses to run past a

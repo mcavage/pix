@@ -30,11 +30,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/sys/systest"
 )
 
@@ -79,7 +81,7 @@ func TestMutatePackTrustStore_InterleavedMutationsLoseNothing(t *testing.T) {
 	if fp, ok := after.acceptedFingerprint("path:" + root); !ok || fp != "fp1" {
 		t.Errorf("the committed acceptance was clobbered, got (%q,%v)", fp, ok)
 	}
-	if after.Installed == nil || !containsStr(after.Installed.Wrappers, "tool") {
+	if after.Installed == nil || !slices.Contains(after.Installed.Wrappers, "tool") {
 		t.Errorf("the second writer's own mutation must land too, got %+v", after.Installed)
 	}
 }
@@ -164,10 +166,10 @@ func TestPackUse_MigratesPhase1LocalActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if containsStr(cfg2.MCP, "a-mcp") {
+	if slices.Contains(cfg2.MCP, "a-mcp") {
 		t.Errorf("Phase-1 attribution must be migrated: switching away must revert a-mcp, cfg.MCP=%v", cfg2.MCP)
 	}
-	if !containsStr(cfg2.MCP, "usermcp") {
+	if !slices.Contains(cfg2.MCP, "usermcp") {
 		t.Errorf("the user's own MCP must survive the migrated switch, cfg.MCP=%v", cfg2.MCP)
 	}
 }
@@ -212,7 +214,7 @@ func TestPackUse_AdoptedPackLockNeverMigrated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfg2.MCP, "usermcp") {
+	if !slices.Contains(cfg2.MCP, "usermcp") {
 		t.Errorf("CRITICAL: an adopted pack's lock was migrated and deleted the user's own MCP, cfg.MCP=%v", cfg2.MCP)
 	}
 }
@@ -225,7 +227,7 @@ func TestPackUse_AdoptedPackLockNeverMigrated(t *testing.T) {
 // without --yes. gog stays reference-only Tier-0.
 func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 	// No probe available at all.
-	unknown := localMCPClassifier(shellEnv{System: &systest.Fake{}}, nil)
+	unknown := localMCPClassifier(hostenv.Env{System: &systest.Fake{}}, nil)
 	if !unknown("fastmail") {
 		t.Error("unknown classification must treat a non-gog name as host-exec (fail closed)")
 	}
@@ -233,7 +235,7 @@ func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 		t.Error("gog stays the reference-only Tier-0 special case even when the partition is unknown")
 	}
 	// Probe resolves but errors.
-	failEnv := shellEnv{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", fmt.Errorf("probe failed") }}}
+	failEnv := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", fmt.Errorf("probe failed") }}}
 	resolver := func() (string, error) { return "pix-host", nil }
 	unknown2 := localMCPClassifier(failEnv, resolver)
 	if !unknown2("notion") {
@@ -333,7 +335,7 @@ func TestPackRm_ClearFailureExitsNonZero(t *testing.T) {
 	if serr != nil {
 		t.Fatal(serr)
 	}
-	if store.Installed == nil || !containsStr(store.Installed.Wrappers, "tool") {
+	if store.Installed == nil || !slices.Contains(store.Installed.Wrappers, "tool") {
 		t.Errorf("attribution must be kept until removal is confirmed, got %+v", store.Installed)
 	}
 }

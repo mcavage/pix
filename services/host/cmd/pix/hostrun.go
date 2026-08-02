@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/rpc"
 	"pix/host/secret"
@@ -52,7 +53,7 @@ import (
 func runHost(argv []string) {
 	sub, o, err := parseHostArgs(argv)
 	if err != nil {
-		if err == errHelpRequested {
+		if err == cli.ErrHelpRequested {
 			fmt.Print(hostUsage)
 			return
 		}
@@ -745,7 +746,7 @@ func runHostLaunch(o hostOpts) {
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), hostChildEnv(agentDir, cfg.OllamaBridgeModel)...)
 
-	fmt.Fprint(os.Stderr, hostBanner(isTTY(os.Stderr)))
+	fmt.Fprint(os.Stderr, hostBanner(cli.IsTTY(os.Stderr)))
 	if isRepoRoot(ws) {
 		fmt.Fprint(os.Stderr, hostSelfDevFooter)
 	}

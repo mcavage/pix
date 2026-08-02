@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/hostenv"
 	"pix/host/sys/systest"
 	"pix/host/workspace"
 	"strings"
@@ -213,7 +214,7 @@ func TestApplyReplaceRm_ClearsReceiptOnSuccessRetainsOnFailure(t *testing.T) {
 	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	ok := shellEnv{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", nil }}}
+	ok := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", nil }}}
 	if err := applyReplaceRm(ok, plan, sandbox); err != nil {
 		t.Fatalf("applyReplaceRm: %v", err)
 	}
@@ -224,7 +225,7 @@ func TestApplyReplaceRm_ClearsReceiptOnSuccessRetainsOnFailure(t *testing.T) {
 	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	bad := shellEnv{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", errors.New("rm failed") }}}
+	bad := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", errors.New("rm failed") }}}
 	if err := applyReplaceRm(bad, plan, sandbox); err == nil {
 		t.Fatal("want the rm failure surfaced")
 	}
@@ -241,7 +242,7 @@ func TestRemovePixSandbox_ClearsReceiptOnSuccessRetainsOnFailure(t *testing.T) {
 	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	ok := shellEnv{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", nil }}}
+	ok := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", nil }}}
 	if err := removePixSandbox(ok, sandbox); err != nil {
 		t.Fatalf("removePixSandbox: %v", err)
 	}
@@ -252,7 +253,7 @@ func TestRemovePixSandbox_ClearsReceiptOnSuccessRetainsOnFailure(t *testing.T) {
 	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	bad := shellEnv{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", errors.New("rm failed") }}}
+	bad := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", errors.New("rm failed") }}}
 	if err := removePixSandbox(bad, sandbox); err == nil {
 		t.Fatal("want the rm failure surfaced")
 	}
@@ -273,7 +274,7 @@ func TestExecuteTaskTeardown_ClearsReceiptOnRemovalRetainsOnAbort(t *testing.T) 
 	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	ok := shellEnv{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", nil }}}
+	ok := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", nil }}}
 	var out bytes.Buffer
 	if rc := executeTaskTeardown(ok, &out, m, t.TempDir(), "work", "refs/pix/recovered/work", true, taskState{}); rc != 0 {
 		t.Fatalf("rc = %d, want 0, out:\n%s", rc, out.String())
@@ -287,7 +288,7 @@ func TestExecuteTaskTeardown_ClearsReceiptOnRemovalRetainsOnAbort(t *testing.T) 
 	if err := workspace.WriteCreateReceipt(dir, sandbox, "", []string{"slack"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	running := shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
+	running := hostenv.Env{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) == 1 && args[0] == "ls" {
 			return sandbox + "  abc123  running\n", nil
 		}

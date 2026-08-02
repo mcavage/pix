@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/hostenv"
 	"pix/host/readiness"
+	"pix/host/sys"
 	"pix/host/sys/systest"
 	"strings"
 	"testing"
@@ -139,7 +141,7 @@ func TestMCPRegistrationStates(t *testing.T) {
 
 // receiptEnv builds a fakeEnv whose getwd/stateDir seams point at a real
 // t.TempDir() receipt store for workspace workspace (sandbox pix-<base(workspace)>).
-func receiptEnv(t *testing.T, f fakeEnv, ws string) (shellEnv, string) {
+func receiptEnv(t *testing.T, f fakeEnv, ws string) (hostenv.Env, string) {
 	t.Helper()
 	stateDir := t.TempDir()
 	env := f.env()
@@ -250,7 +252,7 @@ func TestMCPAttachmentFromReceipt(t *testing.T) {
 
 // TestMCPAttachmentTodoQuotesWorkspace pins closure finding #3: the exact
 // registered-not-attached repair command shell-quotes both the server name
-// and the workspace via shellQuoteArg, so a workspace with spaces, an
+// and the workspace via sys.ShellQuote, so a workspace with spaces, an
 // apostrophe, and a shell metacharacter round-trips safely when copy-pasted.
 func TestMCPAttachmentTodoQuotesWorkspace(t *testing.T) {
 	cfg := defaultCfg()
@@ -273,7 +275,7 @@ func TestMCPAttachmentTodoQuotesWorkspace(t *testing.T) {
 	if c.Result() != readiness.VerdictTodo {
 		t.Fatalf("expected a verified registered-not-attached todo, got %+v", c)
 	}
-	want := "pix mcp load " + shellQuoteArg("slack") + " " + shellQuoteArg(ws)
+	want := "pix mcp load " + sys.ShellQuote("slack") + " " + sys.ShellQuote(ws)
 	if c.Todo != want {
 		t.Errorf("todo = %q, want %q", c.Todo, want)
 	}

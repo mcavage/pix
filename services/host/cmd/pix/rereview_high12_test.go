@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/sys/systest"
@@ -47,7 +48,7 @@ func sbxOnlyLookPath(name string) (string, error) {
 // agent-phase gate, task rm/gc guards all route through probeTaskSandbox):
 // a wedged `sbx ls` must classify sbxUnknown under the bounded seam, quickly.
 func TestProbeTaskSandbox_HangingSbxIsUnknownBounded(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
 	if st := probeTaskSandbox(env, "pix-x"); st != sbxUnknown {
 		t.Errorf("hanging `sbx ls` must classify sbxUnknown, got %v", st)
@@ -61,7 +62,7 @@ func TestProbeTaskSandbox_HangingSbxIsUnknownBounded(t *testing.T) {
 // (defaultShellEnv always wires it), probeTaskSandbox must route through it,
 // never the unbounded env.Run.
 func TestProbeTaskSandbox_UsesBoundedSeam(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		t.Fatalf("probeTaskSandbox must use the bounded probe seam, not env.run: %s %v", name, args)
 		return "", nil
 	}, RunTimedFn: func(name string, args ...string) (string, bool, error) {
@@ -84,7 +85,7 @@ func TestProbeTaskSandbox_UsesBoundedSeam(t *testing.T) {
 }
 
 func TestTaskSandboxStatus_HangingSbxIsEmptyBounded(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
 	if s := taskSandboxStatus(env, "pix-x"); s != "" {
 		t.Errorf("hanging `sbx ls` must yield an empty display status, got %q", s)
@@ -98,7 +99,7 @@ func TestTaskSandboxStatus_HangingSbxIsEmptyBounded(t *testing.T) {
 // sandbox state before any handoff; a hanging sbx is sbxUnknown, which must
 // FAIL CLOSED (never launch) and must not hang.
 func TestSetupHandoff_HangingSbxFailsClosed(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
 	state := probeTaskSandbox(env, "pix-ws")
 	if state != sbxUnknown {
@@ -121,7 +122,7 @@ func TestSetupHandoff_HangingSbxFailsClosed(t *testing.T) {
 // to the documented fail-open "no signal" answer — never a wedge, and never
 // through the unbounded env.Run.
 func TestLocalImageLoaded_HangingSbxBounded(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, RunFn: func(name string, args ...string) (string, error) {
 		t.Fatalf("localImageLoaded must use the bounded probe seam, not env.run: %s %v", name, args)
 		return "", nil
 	}, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
@@ -138,7 +139,7 @@ func TestLocalImageLoaded_HangingSbxBounded(t *testing.T) {
 // read probe (`sbx secret ls`) is bounded; on a hang the sync returns without
 // guessing — it must never reach op or `sbx secret set`.
 func TestEnsureProviderKeysFromRefs_HangingSbxBoundedNoMutation(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, GetenvFn: func(string) string { return "" }, HomeDirFn: func() string { return "/home/u" }, ReadFileFn: func(string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, GetenvFn: func(string) string { return "" }, HomeDirFn: func() string { return "/home/u" }, ReadFileFn: func(string) (string, error) {
 		return "ANTHROPIC_API_KEY=op://Vault/Anthropic/api key\n", nil
 	}, RunFn: func(name string, args ...string) (string, error) {
 		t.Fatalf("a hung `sbx secret ls` must abort the sync before any op/sbx mutation: %s %v", name, args)
@@ -159,7 +160,7 @@ func TestEnsureProviderKeysFromRefs_HangingSbxBoundedNoMutation(t *testing.T) {
 // payload reads `sbx secret ls`; a hang must leave every key un-claimed
 // (sbxOK=false semantics) and complete quickly.
 func TestBuildTrustedHostState_HangingSbxBounded(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, GetenvFn: func(string) string { return "" }, IsFileFn: func(string) bool { return false }, ReadFileFn: func(string) (string, error) { return "", fmt.Errorf("no file") }, HomeDirFn: func() string { return "/home/u" }, DialLocalFn: func(int) bool { return false }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: sbxOnlyLookPath, GetenvFn: func(string) string { return "" }, IsFileFn: func(string) bool { return false }, ReadFileFn: func(string) (string, error) { return "", fmt.Errorf("no file") }, HomeDirFn: func() string { return "/home/u" }, DialLocalFn: func(int) bool { return false }, RunFn: func(name string, args ...string) (string, error) {
 		if name == "sbx" {
 			t.Fatalf("host-state's sbx read must use the bounded probe seam, not env.run: %s %v", name, args)
 		}
@@ -184,10 +185,10 @@ const (
 	f2Host = "/usr/local/bin/pix-host"
 )
 
-// f2Env is a shellEnv where resolveOpRefs answers f2Refs (via PIX_CONFIG)
+// f2Env is a hostenv.Env where resolveOpRefs answers f2Refs (via PIX_CONFIG)
 // and op/gog/pix-host all resolve canonically.
-func f2Env() shellEnv {
-	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+func f2Env() hostenv.Env {
+	return hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		switch name {
 		case "op":
 			return f2Op, nil

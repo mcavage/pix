@@ -1027,6 +1027,13 @@ func HostRefsPath() string {
 	return filepath.Join(dir, "hostmode.env")
 }
 
+// GWServerName is the google-workspace MCP server's registration + display
+// name. It lives here, not in the gworkspace workflow, because six unrelated
+// callers (secret, mcp, doctor, status, setup, slack) need to recognise the
+// server without importing the workflow that installs it. A name that crosses
+// domains is configuration, not behaviour.
+const GWServerName = "google-workspace"
+
 // OpRefsMentalModel is the ≤4-line plain explanation of what op-refs.env is and
 // how the gateway uses it. Reused VERBATIM in `pix setup`, the `secret`
 // help, and the template header so the concept is described identically

@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -133,7 +134,7 @@ func TestPackUse_AdoptedPackSkipsPrivateKnowledgeRef(t *testing.T) {
 		t.Fatal(err)
 	}
 	sensitiveID := knowledge.CanonicalizeKnowledgeBundle(sensitive)
-	if containsStr(cfg.KnowledgeBundles, sensitiveID) {
+	if slices.Contains(cfg.KnowledgeBundles, sensitiveID) {
 		t.Fatalf("CRITICAL: adopted pack's private knowledge ref was indexed! cfg.KnowledgeBundles = %v", cfg.KnowledgeBundles)
 	}
 	if !strings.Contains(out.String(), "skipped 1 private knowledge ref") {
@@ -179,7 +180,7 @@ func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"})
 
 	lockA := readPackLock(rootA)
-	if containsStr(lockA.MCP, gwServerName) {
+	if slices.Contains(lockA.MCP, gwServerName) {
 		t.Fatalf("pack.lock must not claim a pre-existing mcp as its own contribution, lock.MCP = %v", lockA.MCP)
 	}
 
@@ -190,7 +191,7 @@ func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfgAfterB.MCP, gwServerName) {
+	if !slices.Contains(cfgAfterB.MCP, gwServerName) {
 		t.Errorf("switching away from A must NOT remove the user's pre-existing gog mcp, cfg.MCP = %v", cfgAfterB.MCP)
 	}
 }
@@ -279,7 +280,7 @@ func TestPackRm_RemovesActivePackContributions(t *testing.T) {
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
 	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"})
 	cfgActive, _ := config.Load()
-	if !containsStr(cfgActive.MCP, "fastmail") || cfgActive.GogAccount != "work@company.com" {
+	if !slices.Contains(cfgActive.MCP, "fastmail") || cfgActive.GogAccount != "work@company.com" {
 		t.Fatalf("setup: pack use did not attach as expected: %+v", cfgActive)
 	}
 
@@ -293,7 +294,7 @@ func TestPackRm_RemovesActivePackContributions(t *testing.T) {
 	if cfgAfter.Pack != "" {
 		t.Errorf("pack rm should clear the active pack, got %q", cfgAfter.Pack)
 	}
-	if containsStr(cfgAfter.MCP, "fastmail") {
+	if slices.Contains(cfgAfter.MCP, "fastmail") {
 		t.Errorf("pack rm should remove the active pack's mcp contribution, cfg.MCP = %v", cfgAfter.MCP)
 	}
 	if cfgAfter.GogAccount != "" {
@@ -422,7 +423,7 @@ func TestPackAdd_Mcp_CanonicalizesActivePackComparison(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(cfg2.MCP, "fastmail") {
+	if !slices.Contains(cfg2.MCP, "fastmail") {
 		t.Errorf("expected fastmail to attach to the active pack, cfg.MCP = %v", cfg2.MCP)
 	}
 }

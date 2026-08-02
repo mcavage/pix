@@ -27,8 +27,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"pix/host/cli"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
+	"pix/host/sys"
+	"slices"
 	"strings"
 
 	"pix/host/config"
@@ -65,7 +69,7 @@ const onboardingKickoff = generatedInputMarker + "I just ran pix setup. Give me 
 // flags as `onboard` plus an optional DIR (default "."), runs the host phase,
 // prints the handoff, then execs the run with the onboarding kickoff message.
 func runSetupCmd(argv []string) {
-	if wantsHelp(argv) {
+	if cli.WantsHelp(argv) {
 		fmt.Print(setupUsage)
 		return
 	}
@@ -143,7 +147,7 @@ func runSetupCmd(argv []string) {
 	// the phase machine — it applies a proposal the user already reviewed rather
 	// than provisioning a host — so it validates DIR, reconciles, and returns
 	// without touching keys, packs, or the sandbox.
-	if containsStr(hostArgs, "--apply") {
+	if slices.Contains(hostArgs, "--apply") {
 		if err := validateRunWorkspace(dir); err != nil {
 			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 			os.Exit(2)
@@ -153,7 +157,7 @@ func runSetupCmd(argv []string) {
 			fmt.Fprintf(os.Stderr, "pix setup: %v\n\n%s", perr, setupUsage)
 			os.Exit(2)
 		}
-		reconcileOnboarding(dir, env, os.Stdin, os.Stdout, opts.assumeYes, isTTY(os.Stdin))
+		reconcileOnboarding(dir, env, os.Stdin, os.Stdout, opts.assumeYes, cli.IsTTY(os.Stdin))
 		return
 	}
 	if err := validateRunWorkspace(dir); err != nil {
@@ -163,11 +167,11 @@ func runSetupCmd(argv []string) {
 	// sbx is universally required. 1Password is conditional and is decided only
 	// AFTER explicit packs have contributed inference; a keyless work gateway
 	// must never trigger an irrelevant op installation/login flow.
-	if err := ensureSetupPrereqsFor(env, os.Stdin, os.Stdout, isTTY(os.Stdin) && !parsed.assumeYes, false); err != nil {
+	if err := ensureSetupPrereqsFor(env, os.Stdin, os.Stdout, cli.IsTTY(os.Stdin) && !parsed.assumeYes, false); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(1)
 	}
-	if err := ensureSetupSbxSession(env, os.Stdout, isTTY(os.Stdin) && !parsed.assumeYes); err != nil {
+	if err := ensureSetupSbxSession(env, os.Stdout, cli.IsTTY(os.Stdin) && !parsed.assumeYes); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(1)
 	}
@@ -225,7 +229,7 @@ func runSetupCmd(argv []string) {
 		os.Exit(1)
 	}
 	for _, root := range activatedPacks {
-		if err := runPackSetup(env, os.Stdout, root, setupRequests[root], isTTY(os.Stdin) && !parsed.assumeYes); err != nil {
+		if err := runPackSetup(env, os.Stdout, root, setupRequests[root], cli.IsTTY(os.Stdin) && !parsed.assumeYes); err != nil {
 			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 			os.Exit(1)
 		}
@@ -249,7 +253,7 @@ func runSetupCmd(argv []string) {
 	if env.Quiet {
 		fmt.Fprintln(os.Stdout, "Setting up inference and host services…")
 	}
-	if err := runSetupCore(env, dir, hostArgs, os.Stdin, os.Stdout, isTTY(os.Stdin), setupHostPhase); err != nil {
+	if err := runSetupCore(env, dir, hostArgs, os.Stdin, os.Stdout, cli.IsTTY(os.Stdin), setupHostPhase); err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		var usage errUsage
 		if errors.As(err, &usage) {
@@ -296,7 +300,7 @@ func runSetupCmd(argv []string) {
 // the default pack/memory/host-mode) ever runs: a test can pass a hostPhase
 // stub that fails the test if called, and assert on the returned error alone,
 // without needing to exercise runSetupCmd's os.Exit calls.
-func runSetupCore(env shellEnv, dir string, hostArgs []string, in io.Reader, out io.Writer, tty bool, hostPhase func(shellEnv, []string, io.Reader, io.Writer, bool) error) error {
+func runSetupCore(env hostenv.Env, dir string, hostArgs []string, in io.Reader, out io.Writer, tty bool, hostPhase func(hostenv.Env, []string, io.Reader, io.Writer, bool) error) error {
 	if err := validateRunWorkspace(dir); err != nil {
 		return err
 	}
@@ -326,7 +330,7 @@ func runSetupHandoff(dir, name string, state sbxState, replace bool, out io.Writ
 	}
 	dirArg := ""
 	if dir != "." {
-		dirArg = " " + shellQuoteArg(dir)
+		dirArg = " " + sys.ShellQuote(dir)
 	}
 	// retryArg carries the caller's ORIGINAL --replace request into the exact
 	// retry command we print below. Dropping it would silently downgrade a
@@ -379,32 +383,6 @@ func runSetupHandoff(dir, name string, state sbxState, replace bool, out io.Writ
 	}
 	runFn(kickoffArgs())
 	return nil
-}
-
-// shellQuoteArg quotes s for safe copy-paste into a POSIX shell: a token made
-// only of clearly-safe characters passes through untouched; anything else is
-// single-quoted using the standard close-escape-reopen sequence for embedded
-// apostrophes, so a DIR like `my repo's` round-trips exactly.
-func shellQuoteArg(s string) string {
-	if s == "" {
-		return "''"
-	}
-	safe := true
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '-' || r == '_' || r == '.' || r == '/' || r == ':' || r == '@' || r == '%' || r == '+' || r == ',' || r == '=':
-		default:
-			safe = false
-		}
-		if !safe {
-			break
-		}
-	}
-	if safe {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // setupHostPhase does the deterministic host configuration and reports what is
@@ -545,7 +523,7 @@ type setupInventory struct {
 
 // takeSetupInventory reads current state. It writes NOTHING: every call in
 // here is a load, a parse, or a bounded probe.
-func takeSetupInventory(env shellEnv, opts onboardOpts) (setupInventory, error) {
+func takeSetupInventory(env hostenv.Env, opts onboardOpts) (setupInventory, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return setupInventory{}, fmt.Errorf("loading config: %w", err)
@@ -578,7 +556,7 @@ func setupProposal(opts onboardOpts) *onboardingResult {
 // writes and opens no authorization flow, so runSetupCmd can call it before the
 // first pack is adopted. External readiness (catalog OAuth, provider reachability,
 // model pulls) remains in the later gate/verify phases.
-func validateSetupSemantics(opts onboardOpts, cfg *config.Config, env shellEnv, hostResolver func() (string, error)) error {
+func validateSetupSemantics(opts onboardOpts, cfg *config.Config, env hostenv.Env, hostResolver func() (string, error)) error {
 	if len(opts.withSetup) > 0 && len(opts.packs) == 0 {
 		return errUsage{fmt.Errorf("--with requires --pack")}
 	}
@@ -606,7 +584,7 @@ func validateSetupSemantics(opts onboardOpts, cfg *config.Config, env shellEnv, 
 // duplicated here: they belong to the keys step, which is the FIRST mutation
 // and fails closed before it writes anything, so a gate copy would be a second
 // implementation of the same rule that could drift from it.
-func setupGate(env shellEnv, inv setupInventory, out io.Writer, interactive bool) error {
+func setupGate(env hostenv.Env, inv setupInventory, out io.Writer, interactive bool) error {
 	// Shipped-catalog remotes (mcpCatalogNames) must be registered AND
 	// auth-ready BEFORE setup writes anything — setup must never claim success
 	// for a server the gateway cannot spawn or that 401s on first use. The gate
@@ -662,7 +640,7 @@ func runSetupMutations(steps []setupMutationStep) (touched []readiness.Axis, err
 
 // setupMutationSteps builds the ordered step table. Every closure here writes
 // to io.Discard unless it is reporting a failure or collecting mandatory input.
-func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in io.Reader, out io.Writer, interactive bool, models *setupModelsOutcome, prompts *setupPromptBudget) []setupMutationStep {
+func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboardOpts, in io.Reader, out io.Writer, interactive bool, models *setupModelsOutcome, prompts *setupPromptBudget) []setupMutationStep {
 	cfg := inv.cfg
 	return []setupMutationStep{{
 		name:  "keys",
@@ -853,7 +831,7 @@ func setupMutationSteps(env shellEnv, inv setupInventory, opts onboardOpts, in i
 // stays reserved for probes that were dispatched and refused, and for a pull
 // that was consented to and then failed (which the models step already reports
 // — a second error would double-report one cause).
-func runSetupInferenceStep(cfg *config.Config, env shellEnv, in io.Reader, out io.Writer, interactive bool, models setupModelsOutcome) error {
+func runSetupInferenceStep(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive bool, models setupModelsOutcome) error {
 	probe, err := verifyOllamaInference(cfg, env, out)
 	if err != nil {
 		return fmt.Errorf("verifying ollama models: %w", err)
@@ -928,7 +906,7 @@ func runSetupInferenceStep(cfg *config.Config, env shellEnv, in io.Reader, out i
 // global github service. The token exists only in process memory and the child
 // argv accepted by sbx (the same unavoidable boundary used by provider-key
 // sync); output/errors are redacted before they can reach a transcript.
-func syncGitHubCredentialFromHost(env shellEnv) error {
+func syncGitHubCredentialFromHost(env hostenv.Env) error {
 
 	if _, err := env.LookPath("gh"); err != nil {
 		return nil
@@ -969,7 +947,7 @@ func mcpAxes(servers []string) []readiness.Axis {
 // op:// ref collection (TTY + op installed) and bounded consent questions;
 // with --yes/--non-interactive or no TTY it is fully
 // non-interactive (the CI path).
-func setupHostPhase(env shellEnv, flags []string, in io.Reader, out io.Writer, tty bool) error {
+func setupHostPhase(env hostenv.Env, flags []string, in io.Reader, out io.Writer, tty bool) error {
 	setupTranscriptVerbose = !env.Quiet
 	if !env.Quiet {
 		fmt.Fprintln(out, "pix setup — configuring the host")
@@ -1110,7 +1088,7 @@ func requestedShortfallMessage(short []readiness.Axis, s readiness.Snapshot) str
 // Ollama/model and service builders doctor uses (so setup and doctor can never
 // disagree), plus the three axes only setup's own post-mutation reads can speak
 // to. Every builder here probes; none reads the inventory.
-func setupReadinessAxes(cfg *config.Config, env shellEnv, models setupModelsOutcome) map[readiness.Axis]readiness.AxisBuilder {
+func setupReadinessAxes(cfg *config.Config, env hostenv.Env, models setupModelsOutcome) map[readiness.Axis]readiness.AxisBuilder {
 	builders := map[readiness.Axis]readiness.AxisBuilder{}
 	for a, b := range ollamaReadinessAxes(cfg, env, "", nil) {
 		builders[a] = b
@@ -1124,7 +1102,7 @@ func setupReadinessAxes(cfg *config.Config, env shellEnv, models setupModelsOutc
 	if strings.TrimSpace(cfg.Pack) != "" {
 		builders[readiness.AxisPack] = func() []readiness.Check { return setupPackAxis(cfg) }
 	}
-	if strings.TrimSpace(cfg.GogAccount) != "" || containsStr(cfg.MCP, gwServerName) {
+	if strings.TrimSpace(cfg.GogAccount) != "" || slices.Contains(cfg.MCP, gwServerName) {
 		// Absent by default (AC-P0-319): with no opt-in there is no axis at
 		// all, so the report says nothing about Google Workspace.
 		builders[readiness.AxisGworkspace] = func() []readiness.Check { return setupGworkspaceAxis(cfg, env) }
@@ -1134,7 +1112,7 @@ func setupReadinessAxes(cfg *config.Config, env shellEnv, models setupModelsOutc
 
 // setupProvidersAxis is the post-mutation provider-key fact: ready when at
 // least one model-provider ref resolves (any one key launches a sandbox).
-func setupProvidersAxis(cfg *config.Config, env shellEnv) []readiness.Check {
+func setupProvidersAxis(cfg *config.Config, env hostenv.Env) []readiness.Check {
 	if cfg != nil && len(cfg.Inference.Models) > 0 {
 		callable := 0
 		candidates := 0
@@ -1180,7 +1158,7 @@ func setupProvidersAxis(cfg *config.Config, env shellEnv) []readiness.Check {
 // immediately selecting a model whose provider has no key. It changes only
 // the shipped OpenAI-specific default. Explicit non-default user choices and
 // multi-provider installations are left untouched.
-func setupSelectRunnableIntent(cfg *config.Config, env shellEnv) bool {
+func setupSelectRunnableIntent(cfg *config.Config, env hostenv.Env) bool {
 	if cfg == nil || cfg.RunIntent != config.DefaultRunIntent {
 		return false
 	}
@@ -1220,7 +1198,7 @@ func setupPackAxis(cfg *config.Config) []readiness.Check {
 
 // setupGworkspaceAxis is the post-mutation Google Workspace fact, probed the
 // same way `pix gworkspace status` probes it.
-func setupGworkspaceAxis(cfg *config.Config, env shellEnv) []readiness.Check {
+func setupGworkspaceAxis(cfg *config.Config, env hostenv.Env) []readiness.Check {
 	acct := strings.TrimSpace(cfg.GogAccount)
 	switch {
 	case acct == "":
@@ -1285,14 +1263,14 @@ var setupProvisionKeysFn = setupProvisionKeys
 
 // setupProvisionKeys resolves provider keys from 1Password (the strict, and now
 // only, flow) and returns whether it succeeded.
-func setupProvisionKeys(env shellEnv, in io.Reader, out io.Writer, interactive, assumeYes bool) bool {
+func setupProvisionKeys(env hostenv.Env, in io.Reader, out io.Writer, interactive, assumeYes bool) bool {
 	return runStrictProviderKeyFlow(env, bufio.NewScanner(in), out, interactive, assumeYes)
 }
 
 // runStrictProviderKeyFlow resolves the configured provider keys from 1Password and
 // reconciles it into sbx (Steps 0-4 documented on setupProvisionKeys). It is the
 // only provider-key path now that the sbx-keys shortcut is gone.
-func runStrictProviderKeyFlow(env shellEnv, sc *bufio.Scanner, out io.Writer, interactive, assumeYes bool) bool {
+func runStrictProviderKeyFlow(env hostenv.Env, sc *bufio.Scanner, out io.Writer, interactive, assumeYes bool) bool {
 	fmt.Fprintln(out, "")
 
 	if !secret.OpInstalled(env) {
@@ -1339,7 +1317,7 @@ func runStrictProviderKeyFlow(env shellEnv, sc *bufio.Scanner, out io.Writer, in
 // strictProviderKeyFlowLocked is runStrictProviderKeyFlow's transaction body
 // (Steps 1-4). Caller MUST hold the provider-refs lock; every refs-file write
 // in here goes through a *Locked variant for exactly that reason.
-func strictProviderKeyFlowLocked(env shellEnv, sc *bufio.Scanner, out io.Writer, interactive, assumeYes bool) bool {
+func strictProviderKeyFlowLocked(env hostenv.Env, sc *bufio.Scanner, out io.Writer, interactive, assumeYes bool) bool {
 	// refs is the validated snapshot reconcile (STEP 3) works from (envVar ->
 	// op:// ref — every entry validated AND canonical-written to both files
 	// below); resolved caches each provider's validated op-read value so
@@ -1513,7 +1491,7 @@ func promptProviderChoice(sc *bufio.Scanner, out io.Writer) (secret.ProviderKeyR
 // the resolved value. Empty input or EOF is a hard failure (a key is
 // mandatory, not optional to skip); an invalid or unresolvable ref explains
 // why and reprompts, up to providerKeyPromptAttempts, then fails.
-func promptProviderRef(env shellEnv, sc *bufio.Scanner, out io.Writer, p secret.ProviderKeyRef) (ref, value string, ok bool) {
+func promptProviderRef(env hostenv.Env, sc *bufio.Scanner, out io.Writer, p secret.ProviderKeyRef) (ref, value string, ok bool) {
 	for attempt := 1; attempt <= providerKeyPromptAttempts; attempt++ {
 		fmt.Fprintf(out, "  %s: paste a 1Password ref (op://Vault/Item/field): ", p.Name)
 		if !sc.Scan() {
@@ -1592,7 +1570,7 @@ func rememberPersistedID(res map[string]any) string {
 // remember RPC is tracked individually: the output claims a memory save ONLY
 // for writes that actually succeeded, is honest about a partial or failed
 // batch, and never promises recall it can't guarantee.
-func seedIdentity(env shellEnv, out io.Writer) {
+func seedIdentity(env hostenv.Env, out io.Writer) {
 	id := readGitIdentity(env)
 	if id.Name == "" {
 		return
@@ -1774,6 +1752,6 @@ type errUsage struct{ error }
 // setupGoogleWorkspaceFn is the seam tests stub so setup's phases can be
 // exercised without a browser or an installed dependency CLI. Production wires
 // the real façade over the unchanged transaction.
-var setupGoogleWorkspaceFn = func(env shellEnv, opts gogSetupOpts, in io.Reader, out io.Writer, interactive bool) error {
+var setupGoogleWorkspaceFn = func(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, interactive bool) error {
 	return gworkspaceSetup(env, opts, in, out, interactive)
 }

@@ -37,6 +37,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pix/host/hostenv"
 	"sort"
 	"strings"
 )
@@ -105,7 +106,7 @@ func (b hostBoM) tier1() bool {
 // routing inference. A pack remains mutable after `pack use`; before a sandbox
 // consumes its endpoint/service/header policy, recompute the accepted surface
 // and require an exact launcher-owned trust-store match.
-func verifyPackInferenceTrust(p *packInfo, cfgGogAccount string, env shellEnv) error {
+func verifyPackInferenceTrust(p *packInfo, cfgGogAccount string, env hostenv.Env) error {
 	if p == nil {
 		return nil
 	}
@@ -148,7 +149,7 @@ func verifyPackInferenceTrust(p *packInfo, cfgGogAccount string, env shellEnv) e
 // failure is acceptable; silently skipping the gate is not. gog stays the
 // reference-only special case (its registration is launcher-built, never
 // pack-authored).
-func localMCPClassifier(env shellEnv, hostResolver func() (string, error)) func(string) bool {
+func localMCPClassifier(env hostenv.Env, hostResolver func() (string, error)) func(string) bool {
 	set, known := localMCPNames(env, hostResolver)
 	return func(name string) bool {
 		if !known {

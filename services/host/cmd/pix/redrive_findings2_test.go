@@ -19,11 +19,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/sys"
@@ -33,12 +35,12 @@ import (
 
 // --- finding 8: catalog MCP readiness gate ---------------------------------
 
-// catalogGateEnv builds a shellEnv for the gate tests: sbx on PATH, canned
+// catalogGateEnv builds a hostenv.Env for the gate tests: sbx on PATH, canned
 // probe outputs, and a runInteractive that FAILS the test — the gate must
 // never open an OAuth flow itself.
-func catalogGateEnv(t *testing.T, output map[string]string) shellEnv {
+func catalogGateEnv(t *testing.T, output map[string]string) hostenv.Env {
 	t.Helper()
-	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	return hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "sbx" {
 			return "/usr/bin/sbx", nil
 		}
@@ -142,7 +144,7 @@ func TestSetupHostPhase_CatalogGate_NoSaveNoKeysOnGap(t *testing.T) {
 	orig := setupProvisionKeysFn
 	t.Cleanup(func() { setupProvisionKeysFn = orig })
 	invoked := false
-	setupProvisionKeysFn = func(env shellEnv, in io.Reader, out io.Writer, interactive, assumeYes bool) bool {
+	setupProvisionKeysFn = func(env hostenv.Env, in io.Reader, out io.Writer, interactive, assumeYes bool) bool {
 		invoked = true
 		return true
 	}
@@ -194,7 +196,7 @@ func TestReconcileOnboarding_CatalogGateLeavesFileAndConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if containsStr(cfg.MCP, "notion") {
+	if slices.Contains(cfg.MCP, "notion") {
 		t.Errorf("notion must NOT be persisted while unregistered: %v", cfg.MCP)
 	}
 	if !strings.Contains(out.String(), "pix mcp bundle") {
@@ -222,7 +224,7 @@ func TestOnboardCatalogAllowlist_IsTheShippedCatalog(t *testing.T) {
 
 func TestMcpLocalCheck_PolicyDeniedVerdict(t *testing.T) {
 	const hostBin = "/usr/local/bin/pix-host"
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "sbx" {
 			return "/usr/bin/sbx", nil
 		}
@@ -310,7 +312,7 @@ func TestRunWithTimeoutD_HangingProcessBounded(t *testing.T) {
 }
 
 func TestProbeSbxSecrets_HangingSbxIsErrorNotAbsent(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	start := time.Now()
 	_, state := secret.ProbeSbxSecrets(env)
 	if state != secret.SbxSecretsError {
@@ -325,7 +327,7 @@ func TestProbeSbxSecrets_HangingSbxIsErrorNotAbsent(t *testing.T) {
 // tri-state under a hang: probeOK=false (unknown), which under the existing
 // rule PROCEEDS — only a POSITIVELY confirmed missing key blocks a launch.
 func TestSbxModelKeyState_HangingProbeUnknownProceeds(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "/usr/bin/sbx", nil }, RunTimedFn: hangingProbe(t, 100*time.Millisecond)}}
 	present, probeOK := sbxModelKeyState(env)
 	if present || probeOK {
 		t.Errorf("hanging preflight must be (present=false, probeOK=false) so run proceeds, got (%v,%v)", present, probeOK)
@@ -335,7 +337,7 @@ func TestSbxModelKeyState_HangingProbeUnknownProceeds(t *testing.T) {
 func TestGatherStatus_HangingSbxBounded(t *testing.T) {
 	cfg := &config.Config{MCP: []string{"notion"}}
 	sd := t.TempDir()
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "sbx" {
 			return "/usr/bin/sbx", nil
 		}
@@ -367,7 +369,7 @@ func TestRunDoctor_HangingMcpLsUnverifiable(t *testing.T) {
 	cfg := defaultCfg()
 	cfg.MCP = []string{"slack"}
 	hang := hangingProbe(t, 100*time.Millisecond)
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "sbx" {
 			return "/usr/bin/sbx", nil
 		}

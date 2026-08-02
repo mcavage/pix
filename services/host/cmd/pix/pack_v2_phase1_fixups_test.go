@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -140,7 +141,7 @@ func TestCommitPackActivation_SaveFailureRestoresPriorLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if containsStr(saved.MCP, "fastmail") {
+	if slices.Contains(saved.MCP, "fastmail") {
 		t.Errorf("FIX A: pack rm must remove the lock-attributed MCP; config still has it:\n%s", out.String())
 	}
 	if saved.Pack != "" {

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/secret"
 	"pix/host/slackoauth"
 	"pix/host/sys/systest"
@@ -759,7 +760,7 @@ func TestSlackSetupDispatchesToPKCEWithoutTokenRef(t *testing.T) {
 // then fail a LATER step and prove the freshly minted grant gets a
 // best-effort revoke via the injected deps.revoke seam. revokedTokens
 // records every token passed to revoke, in order.
-func slackOAuthRevokeFixture(t *testing.T, authTest func(token string) (slackIdentity, error)) (deps slackOAuthDeps, opts slackSetupOpts, env shellEnv, cfg *config.Config, revokedTokens *[]string) {
+func slackOAuthRevokeFixture(t *testing.T, authTest func(token string) (slackIdentity, error)) (deps slackOAuthDeps, opts slackSetupOpts, env hostenv.Env, cfg *config.Config, revokedTokens *[]string) {
 	t.Helper()
 	slackTestCfg(t)
 	port := freeLocalPort(t)

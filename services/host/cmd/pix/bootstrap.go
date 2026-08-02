@@ -7,6 +7,7 @@ package main
 
 import (
 	"io"
+	"pix/host/hostenv"
 	"pix/host/secret"
 )
 
@@ -14,7 +15,7 @@ import (
 // github does not count) as a TRI-STATE: present says a key is set, probeOK says
 // we could actually check. probeOK is false when sbx is absent OR `sbx secret ls`
 // errors (control plane down) — the caller must NOT treat that as "no key".
-func sbxModelKeyState(env shellEnv) (present, probeOK bool) {
+func sbxModelKeyState(env hostenv.Env) (present, probeOK bool) {
 	if _, err := env.LookPath("sbx"); err != nil {
 		return false, false
 	}
@@ -44,7 +45,7 @@ func anyModelKeyInOutput(out string) bool {
 
 // anyModelKeyPresent reports whether sbx has at least one model provider key.
 // Returns false when sbx can't be probed (can't verify -> caller decides).
-func anyModelKeyPresent(env shellEnv) bool {
+func anyModelKeyPresent(env hostenv.Env) bool {
 	present, _ := sbxModelKeyState(env)
 	return present
 }
@@ -60,7 +61,7 @@ func anyModelKeyPresent(env shellEnv) bool {
 // confirms no key). Idempotent: with a key already present it does nothing beyond
 // a cheap sbx probe (op is never touched). Only `run` calls this; `setup` uses
 // the stronger setupProvisionKeys.
-func bootstrapProviderKeys(env shellEnv, in io.Reader, out io.Writer, tty bool) bool {
+func bootstrapProviderKeys(env hostenv.Env, in io.Reader, out io.Writer, tty bool) bool {
 	secret.EnsureProviderKeysFromRefs(env, out)
 	if anyModelKeyPresent(env) {
 		return true

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/slackoauth"
@@ -118,7 +119,7 @@ func withSlackOAuthRuntimeDeps(t *testing.T, deps slackOAuthRuntimeDeps) {
 	t.Cleanup(func() { slackOAuthRuntimeDepsFn = old })
 }
 
-// slackOAuthRegisteredEnv returns a shellEnv wired so the sbx registration
+// slackOAuthRegisteredEnv returns a hostenv.Env wired so the sbx registration
 // reads back as the canonical, trusted Pix host command — i.e. the
 // registration/attachment checks in status render ready, and disable's
 // preflight recognizes it as safe to remove. stateDir resolves to a fresh
@@ -126,7 +127,7 @@ func withSlackOAuthRuntimeDeps(t *testing.T, deps slackOAuthRuntimeDeps) {
 // slackOAuthRuntime now FAILS CLOSED when stateDir is unresolvable, so a
 // hermetic test needs a real, working, isolated one, not the in-process
 // fallback this used to lean on).
-func slackOAuthRegisteredEnv(t *testing.T, f *slackTestEnv, calls *[][]string, mu *sync.Mutex) shellEnv {
+func slackOAuthRegisteredEnv(t *testing.T, f *slackTestEnv, calls *[][]string, mu *sync.Mutex) hostenv.Env {
 	t.Helper()
 	stateDir := t.TempDir()
 	e := f.env()

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"strings"
 	"testing"
@@ -13,9 +14,9 @@ import (
 // errNotFoundForTest is the stand-in for exec.LookPath's not-found error.
 var errNotFoundForTest = errors.New("not found")
 
-func ollamaEnv(t *testing.T, ollamaHost string, dialOK bool, list string) shellEnv {
+func ollamaEnv(t *testing.T, ollamaHost string, dialOK bool, list string) hostenv.Env {
 	t.Helper()
-	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
+	return hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) {
 		if name == "ollama" {
 			return "/usr/local/bin/ollama", nil
 		}
@@ -52,7 +53,7 @@ func TestEffectiveOllamaEndpoint(t *testing.T) {
 		{"https://ollama.internal:443", "https://ollama.internal:443", 443, "OLLAMA_HOST"},
 	}
 	for _, tc := range cases {
-		ep := effectiveOllamaEndpoint(cfg, shellEnv{System: &systest.Fake{GetenvFn: func(string) string { return tc.env }}})
+		ep := effectiveOllamaEndpoint(cfg, hostenv.Env{System: &systest.Fake{GetenvFn: func(string) string { return tc.env }}})
 		if ep.URL != tc.wantURL || ep.Port != tc.wantPort || ep.Source != tc.wantSrc {
 			t.Errorf("OLLAMA_HOST=%q -> %+v, want url=%s port=%d source=%s", tc.env, ep, tc.wantURL, tc.wantPort, tc.wantSrc)
 		}

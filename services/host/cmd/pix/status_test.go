@@ -8,16 +8,18 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/monitor"
 	"pix/host/rpc"
+	"pix/host/sys"
 	"pix/host/sys/systest"
 	"pix/host/workspace"
 )
 
-// fakeStatusEnv builds a shellEnv where memory is up, knowledge down, sbx lists
+// fakeStatusEnv builds a hostenv.Env where memory is up, knowledge down, sbx lists
 // two boxes and reports two secrets set.
-func fakeStatusEnv() shellEnv {
-	return shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+func fakeStatusEnv() hostenv.Env {
+	return hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
 			return "anthropic\nopenai\n", nil
 		}
@@ -284,7 +286,7 @@ func TestStatusNoRegisterTodoWhenSbxAbsent(t *testing.T) {
 // outstanding item and --json/human reflect it.
 func TestStatusSbxAbsentNotAllGreen(t *testing.T) {
 	cfg := &config.Config{}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
 	st := gatherStatus(cfg, "default", env)
 	if len(st.Todos) == 0 {
 		t.Fatalf("expected a non-empty Todos when sbx is absent, got none")
@@ -302,7 +304,7 @@ func TestStatusSbxAbsentNotAllGreen(t *testing.T) {
 // provider key is set.
 func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
 	cfg := &config.Config{GogAccount: "me@x.com"}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		if name == "gog" {
 			return "", fmt.Errorf("not authed")
 		}
@@ -333,7 +335,7 @@ func TestStatusGogNeedsAuthTodoNotAllGreen(t *testing.T) {
 // the install-sbx guidance, and never claim "all systems go".
 func TestStatusSbxProbeFailedTodo(t *testing.T) {
 	cfg := &config.Config{}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
 			return "", fmt.Errorf("sbx secret ls boom")
 		}
@@ -366,7 +368,7 @@ func TestStatusSbxProbeFailedTodo(t *testing.T) {
 // render shows the "needs auth (run pix gworkspace setup)" integrations line.
 func TestStatusGogNeedsAuth(t *testing.T) {
 	cfg := &config.Config{GogAccount: "me@x.com"}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		if name == "gog" {
 			return "", fmt.Errorf("not authed")
 		}
@@ -386,7 +388,7 @@ func TestStatusGogNeedsAuth(t *testing.T) {
 // (plus an absent github) are informational, never outstanding.
 func TestStatusOpenAIOnlyAllSystemsGo(t *testing.T) {
 	cfg := &config.Config{}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
 			return "openai\n", nil
 		}
@@ -408,7 +410,7 @@ func TestStatusOpenAIOnlyAllSystemsGo(t *testing.T) {
 // per-key TODO per missing provider), and the verdict is not falsely green.
 func TestStatusZeroModelKeysOneTodo(t *testing.T) {
 	cfg := &config.Config{}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
 			return "", nil // sbx reachable, nothing set at all
 		}
@@ -443,13 +445,13 @@ func TestStatusProbeFailureNoProviderTodo(t *testing.T) {
 
 	t.Run("sbx absent", func(t *testing.T) {
 		cfg := &config.Config{}
-		env := shellEnv{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
+		env := hostenv.Env{System: &systest.Fake{LookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") }, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }}}
 		assertNoProviderTodo(t, gatherStatus(cfg, "default", env))
 	})
 
 	t.Run("sbx present, secret ls failed", func(t *testing.T) {
 		cfg := &config.Config{}
-		env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+		env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 			if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
 				return "", fmt.Errorf("sbx secret ls boom")
 			}
@@ -467,7 +469,7 @@ func TestStatusProbeFailureNoProviderTodo(t *testing.T) {
 // outstanding and there are no sandboxes/rows to render unverifiable.
 func TestStatusMCPRegistrationUnverifiableBlocksAllGreen(t *testing.T) {
 	cfg := &config.Config{MCP: []string{gwServerName}}
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		if name == "sbx" && len(args) >= 1 && args[0] == "secret" {
 			return "anthropic\n", nil // provider-ready
 		}
@@ -551,7 +553,7 @@ func TestStatusMCPLoadTodoQuotesWorkspace(t *testing.T) {
 			td = tdo
 		}
 	}
-	want := "pix mcp load " + shellQuoteArg("slack") + " " + shellQuoteArg(ws)
+	want := "pix mcp load " + sys.ShellQuote("slack") + " " + sys.ShellQuote(ws)
 	if td != want {
 		t.Errorf("todo = %q, want %q", td, want)
 	}

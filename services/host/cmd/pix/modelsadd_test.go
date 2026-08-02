@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/inference"
 	"pix/host/readiness"
 	"pix/host/secret"
@@ -22,7 +23,7 @@ import (
 
 // reconcileEnv fakes a host where the named providers have resolvable 1Password
 // refs and every model answers its probe.
-func modelsAddEnv(t *testing.T, providers ...string) shellEnv {
+func modelsAddEnv(t *testing.T, providers ...string) hostenv.Env {
 	t.Helper()
 	var lines []string
 	for _, p := range providers {
@@ -33,7 +34,7 @@ func modelsAddEnv(t *testing.T, providers ...string) shellEnv {
 		}
 	}
 	body := strings.Join(lines, "\n") + "\n"
-	return shellEnv{System: &systest.Fake{LookPathFn: func(n string) (string, error) { return "/usr/bin/" + n, nil }, ReadFileFn: func(path string) (string, error) {
+	return hostenv.Env{System: &systest.Fake{LookPathFn: func(n string) (string, error) { return "/usr/bin/" + n, nil }, ReadFileFn: func(path string) (string, error) {
 		if strings.HasSuffix(path, "hostmode.env") || strings.HasSuffix(path, "op-refs.env") {
 			return body, nil
 		}
@@ -230,7 +231,7 @@ func TestDoctorGapCheckIsOptionalAndActionable(t *testing.T) {
 func TestSecretSetNudgesTowardWiring(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "op-refs.env")
-	env := shellEnv{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "", nil }, WriteFileFn: func(string, []byte, os.FileMode) error { return nil }}}
+	env := hostenv.Env{System: &systest.Fake{ReadFileFn: func(string) (string, error) { return "", nil }, WriteFileFn: func(string, []byte, os.FileMode) error { return nil }}}
 	systest.Of(env.System).ReadFileFn = func(p string) (string, error) {
 		if p == path {
 			return "", nil

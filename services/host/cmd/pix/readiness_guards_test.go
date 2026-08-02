@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"pix/host/hostenv"
 	"pix/host/readiness"
 	"sort"
 	"strconv"
@@ -199,7 +200,7 @@ func walkEvidenceAndFix(t *testing.T, where string, checks []readiness.Check) {
 // sbx, no ollama, nothing listening) — the worst case for evidence quality,
 // because almost everything is a gap.
 func TestEvidenceAndFixWalk_Doctor(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "", errNotFoundFixture }, RunFn: func(string, ...string) (string, error) { return "", errNotFoundFixture }, GetenvFn: func(string) string { return "" }, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }, HomeDirFn: func() string { return t.TempDir() }}}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "", errNotFoundFixture }, RunFn: func(string, ...string) (string, error) { return "", errNotFoundFixture }, GetenvFn: func(string) string { return "" }, DialLocalFn: func(int) bool { return false }, IsFileFn: func(string) bool { return false }, HomeDirFn: func() string { return t.TempDir() }}}
 	cfg := &config.Config{Services: []string{"memory", "knowledge"}}
 	r := runDoctor(cfg, env)
 	walkEvidenceAndFix(t, "doctor", r.Snapshot().All())
@@ -208,7 +209,7 @@ func TestEvidenceAndFixWalk_Doctor(t *testing.T) {
 // TestEvidenceAndFixWalk_Fast walks the shared fast snapshot the daily
 // surfaces render, on the same cold host.
 func TestEvidenceAndFixWalk_Fast(t *testing.T) {
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(string, ...string) (string, error) { return "", nil }, DialLocalFn: func(int) bool { return false }}}
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(string, ...string) (string, error) { return "", nil }, DialLocalFn: func(int) bool { return false }}}
 	cfg := &config.Config{Services: []string{"memory", "knowledge"}}
 	walkEvidenceAndFix(t, "fast", fastReadinessSnapshot(cfg, env, probeSbxKeyEvidence(env)).All())
 }

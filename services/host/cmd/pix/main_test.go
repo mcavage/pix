@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -386,7 +387,7 @@ func TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded(t *testing.T) {
 	if _, err := applyPackToLaunch(cfg, &o, fakeGitEnv(nil)); err != nil {
 		t.Fatalf("applyPackToLaunch: %v", err)
 	}
-	if !containsStr(cfg.MCP, "fastmail") || !containsStr(cfg.MCP, "notion") {
+	if !slices.Contains(cfg.MCP, "fastmail") || !slices.Contains(cfg.MCP, "notion") {
 		t.Errorf("cfg.MCP = %v, want it to contain both integration servers (every pack integration preloads)", cfg.MCP)
 	}
 	if got := allPreloadedMCP(cfg.MCP); len(got) != len(cfg.MCP) {

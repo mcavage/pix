@@ -12,21 +12,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/sys/systest"
 	"pix/host/workspace"
 )
 
-// statusMCPEnv is a hermetic shellEnv for the per-sandbox row tests: sbx on
+// statusMCPEnv is a hermetic hostenv.Env for the per-sandbox row tests: sbx on
 // PATH, canned `sbx ls` / `sbx mcp ls` output, and a t.TempDir()-backed
 // launcher state dir for receipts.
-func statusMCPEnv(t *testing.T, sbxLs, mcpLs string) (shellEnv, string) {
+func statusMCPEnv(t *testing.T, sbxLs, mcpLs string) (hostenv.Env, string) {
 	t.Helper()
 	stateDir := t.TempDir()
-	env := shellEnv{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
+	env := hostenv.Env{System: &systest.Fake{LookPathFn: func(name string) (string, error) { return "/usr/bin/" + name, nil }, RunFn: func(name string, args ...string) (string, error) {
 		switch strings.Join(append([]string{name}, args...), " ") {
 		case "sbx ls":
 			return sbxLs, nil
@@ -180,7 +182,7 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 		st := gatherStatus(cfg, "default", env)
-		if !containsStr(st.Todos, "pix mcp load notion /home/u/proj") {
+		if !slices.Contains(st.Todos, "pix mcp load notion /home/u/proj") {
 			t.Errorf("want exact `pix mcp load notion /home/u/proj` TODO, got %v", st.Todos)
 		}
 	})
@@ -191,7 +193,7 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 		st := gatherStatus(cfg, "default", env)
-		if !containsStr(st.Todos, "pix mcp load notion [DIR]") {
+		if !slices.Contains(st.Todos, "pix mcp load notion [DIR]") {
 			t.Errorf("want `pix mcp load notion [DIR]` TODO, got %v", st.Todos)
 		}
 	})

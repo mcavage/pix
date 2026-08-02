@@ -1,24 +1,13 @@
 package main
 
 import (
-	"errors"
 	"pix/host/cli"
 	"pix/host/knowledge"
 	"pix/host/memory"
 	"pix/host/service"
 )
 
-// errHelpRequested is the shared sentinel a parser returns when the argv asks
-// for help (a leading -h/--help). Callers print the relevant usage to STDOUT
-// and exit 0, distinguishing a help request from a usage ERROR (stderr, exit 2).
-var errHelpRequested = errors.New("help requested")
-
-// wantsHelp reports whether argv requests help: a -h or --help token appears
-// before any `--` terminator (everything after `--` is passthrough and must not
-// be scanned for help). This is the single shared contract every verb + its
-// subcommands use so `<verb> -h` / `<verb> --help` always prints usage + exit 0.
-func wantsHelp(argv []string) bool { return cli.WantsHelp(argv) }
-
+// cli.ErrHelpRequested is the shared sentinel a parser returns when the argv asks
 // knownVerbs is the set of top-level verbs, used to suggest a fix when a bare
 // positional (a would-be run DIR) is actually a mistyped verb.
 var knownVerbs = map[string]bool{

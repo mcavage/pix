@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"pix/host/config"
+	"pix/host/hostenv"
 	"pix/host/inference"
 	"pix/host/routing"
 	"pix/host/secret"
@@ -63,7 +64,7 @@ func readSetupLine(in io.Reader) (string, bool) {
 // setupChooseInference owns the single ordinary-user inference question. It
 // is skipped when a pack or prior setup already supplied a backend. Ollama is
 // shown only after both binary and daemon probes succeed.
-func setupChooseInference(cfg *config.Config, env shellEnv, in io.Reader, out io.Writer, interactive bool) (bool, error) {
+func setupChooseInference(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive bool) (bool, error) {
 	if cfg == nil {
 		return false, nil
 	}
@@ -238,7 +239,7 @@ func (p ollamaPlan) LocalBoundTags() []string {
 // ollamaListedModels returns the tags `ollama list` reports. This is a LISTING,
 // the weakest possible signal: it proves a name was printed, not that the model
 // runs here or that the account may call it.
-func ollamaListedModels(env shellEnv) (map[string]bool, error) {
+func ollamaListedModels(env hostenv.Env) (map[string]bool, error) {
 	out, timedOut, err := env.RunTimed("ollama", "list")
 	if err != nil || timedOut {
 		return nil, fmt.Errorf("could not list Ollama models")
@@ -258,7 +259,7 @@ func ollamaListedModels(env shellEnv) (map[string]bool, error) {
 
 // listedCloudTagCount counts `:cloud`-tagged rows in the listing, for the
 // prompt's hint line only. It is never used to bind or to claim entitlement.
-func listedCloudTagCount(env shellEnv) int {
+func listedCloudTagCount(env hostenv.Env) int {
 	listed, err := ollamaListedModels(env)
 	if err != nil {
 		return 0
@@ -282,7 +283,7 @@ func listedCloudTagCount(env shellEnv) int {
 // replacement writes the RAM-appropriate rung to cfg.OllamaBridgeModel and lets
 // it flow through the models step's EXISTING consent — there is no second
 // consent mechanism, and a bare --yes still downloads nothing.
-func configureOllamaInference(cfg *config.Config, env shellEnv, sel ollamaSelection, out io.Writer) (ollamaPlan, error) {
+func configureOllamaInference(cfg *config.Config, env hostenv.Env, sel ollamaSelection, out io.Writer) (ollamaPlan, error) {
 	if out == nil {
 		out = io.Discard
 	}
@@ -441,7 +442,7 @@ func emptyOllamaSelectionMessage(sel ollamaSelection, plan ollamaPlan) string {
 // own output spec prints a live line per local probe, which cannot be done
 // without one) and returns the notProbed set (the third state has to be
 // observable to be assertable).
-func verifyOllamaInference(cfg *config.Config, env shellEnv, out io.Writer) (res probeOutcome, err error) {
+func verifyOllamaInference(cfg *config.Config, env hostenv.Env, out io.Writer) (res probeOutcome, err error) {
 	if cfg == nil {
 		return res, fmt.Errorf("verify ollama inference: no config")
 	}
@@ -885,7 +886,7 @@ func configureDirectInference(cfg *config.Config, providers []string) error {
 // request. Every binding is independently checked; probes run concurrently so
 // the wall-clock bound is one probe timeout rather than N timeouts. Resolved
 // key bytes stay in process memory and are never included in errors or persisted.
-func verifyDirectInference(cfg *config.Config, env shellEnv) (res probeOutcome, err error) {
+func verifyDirectInference(cfg *config.Config, env hostenv.Env) (res probeOutcome, err error) {
 	if cfg == nil {
 		return res, fmt.Errorf("verify direct inference: no config")
 	}
@@ -1296,7 +1297,7 @@ type probeOutcome struct {
 	NotProbed []string
 }
 
-// errNoProbeSeam is returned when a verify function is handed a shellEnv with no
+// errNoProbeSeam is returned when a verify function is handed a hostenv.Env with no
 // probe function. That is a PROGRAMMING error, not a runtime condition, and it
 // used to be returned as `0 attempted, 0 verified, no failures` — a value
 // indistinguishable from a clean pass that found nothing to do. A caller then
@@ -1306,7 +1307,7 @@ type probeOutcome struct {
 // runSetupInferenceStep unreachable from its own test, hiding a bug where
 // declining a model download exited non-zero. Absence rendered as a benign
 // value is the same shape as the availability bug this package spent a week on.
-var errNoProbeSeam = fmt.Errorf("no inference probe is configured on this shellEnv (use defaultShellEnv, or inject a probe in tests)")
+var errNoProbeSeam = fmt.Errorf("no inference probe is configured on this hostenv.Env (use defaultShellEnv, or inject a probe in tests)")
 
 // reconcileResult is what a reconcile actually did and proved.
 type reconcileResult struct {
@@ -1336,7 +1337,7 @@ type reconcileResult struct {
 // (`pix models add google`), or "" for setup's own reconcile. It is the only
 // thing that can override the roster's already-offered stamp — see
 // widenRosterForProvider.
-func reconcileDirectInference(cfg *config.Config, env shellEnv, in io.Reader, out io.Writer, interactive bool, requestedModels, requestedProvider string) (reconcileResult, error) {
+func reconcileDirectInference(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive bool, requestedModels, requestedProvider string) (reconcileResult, error) {
 	var res reconcileResult
 	if cfg == nil {
 		return res, fmt.Errorf("no config")
@@ -1441,7 +1442,7 @@ func widenRosterForProvider(cfg *config.Config, provider string) {
 // Downloads nothing. configureOllamaInference may name a rung worth pulling; we
 // report that tag and let the user decide, because `models add` is a wiring
 // command and a multi-gigabyte download is not something to infer from it.
-func reconcileOllamaInference(cfg *config.Config, env shellEnv, in io.Reader, out io.Writer, interactive bool, sel ollamaSelection) (reconcileResult, ollamaPlan, error) {
+func reconcileOllamaInference(cfg *config.Config, env hostenv.Env, in io.Reader, out io.Writer, interactive bool, sel ollamaSelection) (reconcileResult, ollamaPlan, error) {
 	var res reconcileResult
 	if cfg == nil {
 		return res, ollamaPlan{}, fmt.Errorf("no config")
@@ -1503,7 +1504,7 @@ func reconcileOllamaInference(cfg *config.Config, env shellEnv, in io.Reader, ou
 // is not installed, while a binary whose `list` hangs or errors means the daemon
 // is not running — and telling a user to install software they already have is
 // its own kind of wrong.
-func requireOllamaReady(env shellEnv) error {
+func requireOllamaReady(env hostenv.Env) error {
 
 	if _, err := env.LookPath("ollama"); err != nil {
 		return fmt.Errorf("ollama is not installed or not on PATH — see https://ollama.com, then re-run")
