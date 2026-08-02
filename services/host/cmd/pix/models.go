@@ -14,6 +14,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,9 +22,11 @@ import (
 	"sort"
 	"strings"
 
+	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/inference"
 	"pix/host/routing"
+	"pix/host/sys"
 )
 
 // resolveSessionModel turns a --intent into a concrete model id for the
@@ -79,71 +82,51 @@ func resolveSessionModel(intent string) (string, error) {
 }
 
 // execHost runs `pix-host <verb> <args...>` with inherited stdio and
-// propagates the exit code. Used by the models passthrough.
-func execHost(verb string, argv []string) { execHostAs("models", verb, argv) }
 
-// execHostAs is execHost with the launcher-facing verb named separately from
-// the host one. They differ for every `pix models` subcommand, since the host
-// tree is still spelled `pix-host route`: without this split, a missing
-// pix-host made `pix models ls` report itself as `pix route:` — resurrecting
-// the retired noun in user-facing output, where the source guard cannot see it
-// because the string is assembled by a format verb.
-func execHostAs(displayVerb, hostVerb string, argv []string) {
+// runModels is the entry point main's switch calls. The verb tree, its flags
+// and its usage all live in models_cmd.go as kong-tagged structs — this is only
+// the seam between an argv slice and the command contract.
+//
+// It replaced a hand-written switch plus two hand-maintained usage strings plus
+// nine os.Exit calls.
+func runModels(argv []string) {
+	d := &cli.Deps{
+		Sys: sys.Real{}, Out: os.Stdout, Err: os.Stderr,
+		In: os.Stdin, Interactive: isTTY(os.Stdin),
+	}
+	err := cli.Run[ModelsCmd]("models", modelsDescription(), argv, d)
+	if err != nil {
+		var silent cli.SilentError
+		if !errors.As(err, &silent) {
+			fmt.Fprintf(os.Stderr, "pix models: %v\n", err)
+		}
+		os.Exit(cli.ExitCode(err))
+	}
+}
+
+// runRouteAlias is the retired `pix route` spelling, forwarded RAW to the host
+// tree for one release so it stays bug-for-bug the command it replaces. Routing
+// it through the new verb once broke `pix route models` (the old spelling of
+// the registry list), which is the exact compatibility the alias promises.
+func runRouteAlias(argv []string) {
+	// The retired noun is a CONSTANT, never a literal in a message: the rename
+	// guard (models_rename_test.go) bans raw `pix route` from production source,
+	// and it should — the one place still allowed to say it is the alias whose
+	// whole job is to answer to it.
+	const verb = "route"
 	bin, err := findHostBinary()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix %s: %v\n", displayVerb, err)
+		fmt.Fprintf(os.Stderr, "pix %s: %v\n", verb, err)
 		os.Exit(1)
 	}
-	cmd := exec.Command(bin, append([]string{hostVerb}, argv...)...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd := exec.Command(bin, append([]string{verb}, argv...)...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
 			os.Exit(exit.ExitCode())
 		}
-		fmt.Fprintf(os.Stderr, "pix %s: exec %s: %v\n", displayVerb, bin, err)
+		fmt.Fprintf(os.Stderr, "pix %s: exec %s: %v\n", verb, bin, err)
 		os.Exit(1)
-	}
-}
-
-// runModels dispatches the `pix models` verb tree (docs/design/models-cli.md).
-// `ls`/`show`/`pick`/`route` (plus the undocumented `compile` alias) are thin
-// passthroughs to the unchanged `pix-host route` subcommand tree; bare
-// `pix models` is the launcher-local read-only status screen.
-func runModels(argv []string) {
-	if len(argv) == 0 {
-		runModelsStatus()
-		return
-	}
-	if argv[0] == "-h" || argv[0] == "--help" {
-		fmt.Print(modelsUsage())
-		return
-	}
-	switch argv[0] {
-	case "ls":
-		execHost("route", append([]string{"models"}, argv[1:]...))
-	case "show":
-		execHost("route", append([]string{"show"}, argv[1:]...))
-	case "pick":
-		execHost("route", append([]string{"pick"}, argv[1:]...))
-	case "route", "compile":
-		// `models compile` is an undocumented alias for `models route`, kept
-		// because that spelling is muscle memory in skills/model-refresh/SKILL.md,
-		// extensions/subagents.ts, and the Makefile. Both map to the same
-		// `pix-host route compile`.
-		execHost("route", append([]string{"compile"}, argv[1:]...))
-	case "add":
-		// Launcher-local (no execHost): wiring a key is a host credential +
-		// live-probe operation, not a router query. See modelsadd.go.
-		runModelsAdd(argv[1:])
-	default:
-		// Usage goes to stderr on the error path, matching every sibling verb
-		// (task.go, agent.go, state.go, config.go), so `pix models tpyo --json`
-		// cannot put usage prose on a caller's stdout.
-		fmt.Fprintf(os.Stderr, "pix models: unknown subcommand %q\n\n", argv[0])
-		fmt.Fprint(os.Stderr, modelsUsage())
-		os.Exit(2)
 	}
 }
 
@@ -279,44 +262,10 @@ func renderModelsStatus(cfg *config.Config, out io.Writer) {
 	}
 }
 
-// modelsUsage is a func (not a const) so the override paths it prints are the
-// REAL resolved paths (honoring $ROUTING_DIR / $XDG_DATA_HOME), never a
-// hardcoded guess — and never the repo's embedded default source, which only
-// exists in a pix checkout and means nothing on a consumer's machine.
-func modelsUsage() string {
-	return `usage: pix models [command]
-
-Which models pix can use, and which are wired up. Every command here describes
-THIS HOST: the shipped catalog narrowed to the models a probed backend binding
-makes callable. ls/show/pick/route also take --catalog, which drops the host
-filter and describes the shipped catalog itself.
-
-commands:
-  (none)                   status: runtime, wired providers, roster, and the
-                           model your session would launch with        (read-only)
-  ls [--json]              one row per model, with why each is or is not usable
-                           here: wired / unwired / retired             (read-only)
-  show [--json]            ls, plus the scorecard and the resolved intent table
-                                                                       (read-only)
-  pick <intent> [--json]   resolve one intent to a model, with the rationale
-                                                                       (read-only)
-  add <provider>           wire a provider in and prove it with a live request.
-                           This is what setup means by "add others later".
-                           ` + "`pix models add -h`" + ` for the per-provider detail  (WRITES)
-  route [--out PATH]       resolve every intent and write the intent->model map
-                           read by host-mode subagents. Intents with no callable
-                           model are left out rather than pointed at a provider
-                           you cannot call.                            (WRITES)
-
-Add a model to the catalog: one entry in
-  ` + routing.ModelsPath() + `
-and its scores in
-  ` + routing.ScorecardPath() + `
-then ` + "`pix models route`" + `. Neither file exists until you create it — absent
-means "use the defaults built into this binary", so create only the one you
-want to override.
-(Maintainer-only, not a personal override: the shipped defaults live in
-services/host/routing/defaults/*.json in the pix repo checkout, and the image's
-baked map is compiled with ` + "`--catalog --out ./routing.json`" + ` + ` + "`make load`" + `.)
-`
-}
+// modelsUsage renders the SAME help kong prints for `pix models --help`, so the
+// tiered help tree (`pix help models`) cannot drift from the parser.
+//
+// It used to be a hand-written string that the parser never read. That is the
+// drift this migration removes: a flag could be added to one and not the other,
+// and was.
+func modelsUsage() string { return cli.Usage[ModelsCmd]("models", modelsDescription()) }

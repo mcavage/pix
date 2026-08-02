@@ -13,132 +13,86 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 
+	"pix/host/cli"
 	"pix/host/config"
 )
 
-// runModelsAdd wires one provider end to end: make sure a 1Password ref exists
-// for it (prompting on a TTY), then run the SAME reconcile setup runs, so the
-// key becomes callable models and a routable roster in one command.
-func runModelsAdd(argv []string) {
-	if wantsHelp(argv) {
-		fmt.Print(modelsAddUsage())
-		return
-	}
-	var positional []string
-	sel := ollamaSelection{}
-	for _, a := range argv {
-		switch a {
-		case "--local":
-			sel.Local = true
-		case "--cloud":
-			sel.Cloud = true
-		default:
-			if strings.HasPrefix(a, "-") {
-				fmt.Fprintf(os.Stderr, "pix models add: unknown flag %q\n", a)
-				os.Exit(2)
-			}
-			positional = append(positional, a)
-		}
-	}
-	if len(positional) != 1 {
-		fmt.Fprintf(os.Stderr, "pix models add: want exactly one provider (%s)\n", strings.Join(providerNames(), ", "))
-		os.Exit(2)
-	}
-	name := strings.ToLower(strings.TrimSpace(positional[0]))
-	if (sel.Local || sel.Cloud) && name != "ollama" {
-		fmt.Fprintf(os.Stderr, "pix models add: --local/--cloud only apply to ollama, not %q\n", positional[0])
-		os.Exit(2)
-	}
-
-	env := defaultShellEnv()
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix models add: %v\n", err)
-		os.Exit(1)
-	}
-	if name == "ollama" {
-		runModelsAddOllama(cfg, env, sel)
-		return
-	}
-	p, ok := providerByName(positional[0])
+// addKeyedProvider and addOllamaProvider are the two shapes a provider comes
+// in. They RETURN errors: the command contract owns the exit code, so neither
+// calls os.Exit, and both are testable against a bytes.Buffer.
+//
+// They replaced runModelsAdd, which hand-parsed argv, validated the provider
+// name against a list it maintained separately from providerNames(), and exited
+// the process from nine places.
+func addKeyedProvider(d *cli.Deps, cfg *config.Config, env shellEnv, provider string) error {
+	p, ok := providerByName(provider)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "pix models add: unknown provider %q (want one of: %s)\n", positional[0], strings.Join(providerNames(), ", "))
-		os.Exit(2)
+		return cli.Usagef("unknown provider %q (want one of: %s)", provider, strings.Join(providerNames(), ", "))
 	}
 	// Refuse under a mandatory pack BEFORE touching anything. configureDirect-
 	// Inference would happily write bindings that the topology filter then drops
 	// silently, so "added" would be a success word with nothing behind it.
 	if cfg.Inference.ExclusiveSource != "" {
-		fmt.Fprintf(os.Stderr, "pix models add: the active pack (%s) owns inference on this host, so a provider key cannot be wired in.\n", cfg.Inference.ExclusiveSource)
-		fmt.Fprintf(os.Stderr, "  The key itself is still worth storing now: pix secret set %s op://vault/item/field\n", p.envVar)
-		fmt.Fprintln(os.Stderr, "  It gets wired the moment the pack stops being the exclusive source (`pix pack rm`, or a pack that does not claim inference).")
-		os.Exit(2)
+		return fmt.Errorf("the active pack (%s) owns inference on this host, so a provider key cannot be wired in.\n"+
+			"  The key itself is still worth storing now: pix secret set %s op://vault/item/field\n"+
+			"  It gets wired the moment the pack stops being the exclusive source (`pix pack rm`, or a pack that does not claim inference).",
+			cfg.Inference.ExclusiveSource, p.envVar)
 	}
-
-	interactive := isTTY(os.Stdin)
-	sc := bufio.NewScanner(os.Stdin)
 	if _, hasRef := currentOpRef(env, p.envVar); !hasRef {
-		if !interactive {
-			fmt.Fprintf(os.Stderr, "pix models add: no 1Password ref for %s yet, and there is no terminal to ask on.\n", p.name)
-			fmt.Fprintf(os.Stderr, "  pix secret set %s op://vault/item/field && pix models add %s\n", p.envVar, p.name)
-			os.Exit(2)
+		if !d.Interactive {
+			return fmt.Errorf("no 1Password ref for %s yet, and there is no terminal to ask on.\n"+
+				"  pix secret set %s op://vault/item/field && pix models add %s", p.name, p.envVar, p.name)
 		}
-		if err := ensureSetupPrereqsFor(env, os.Stdin, os.Stdout, interactive, true); err != nil {
-			fmt.Fprintf(os.Stderr, "pix models add: %v\n", err)
-			os.Exit(1)
+		if err := ensureSetupPrereqsFor(env, d.In, d.Out, d.Interactive, true); err != nil {
+			return err
 		}
-		ref, _, ok := promptProviderRef(env, sc, os.Stdout, p)
+		ref, _, ok := promptProviderRef(env, bufio.NewScanner(d.In), d.Out, p)
 		if !ok {
-			os.Exit(1)
+			return cli.SilentError{Code: 1}
 		}
-		if err := runSecretSet(env, os.Stdout, p.envVar, ref); err != nil {
-			os.Exit(1)
+		if err := runSecretSet(env, d.Out, p.envVar, ref); err != nil {
+			return cli.SilentError{Code: 1}
 		}
 	}
-
-	res, err := reconcileDirectInference(cfg, env, os.Stdin, os.Stdout, interactive, "", p.name)
+	res, err := reconcileDirectInference(cfg, env, d.In, d.Out, d.Interactive, "", p.name)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix models add: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-	renderModelsAdd(os.Stdout, p.name, res)
-
+	renderModelsAdd(d.Out, p.name, res)
 	// The sandbox reads the credential from sbx, not from this host's refs file,
-	// so a key that never reaches sbx is wired for host mode only. Reconcile it
-	// the same way setup does rather than quietly leaving half the job done.
-	runSecretSync(env, os.Stdout)
+	// so a key that never reaches sbx is wired for host mode only.
+	runSecretSync(env, d.Out)
+	return nil
 }
 
-// runModelsAddOllama is the keyless half of `models add`. Ollama needs no
-// credential, so there is no ref to prompt for and nothing to sync into sbx —
-// the whole job is: is the daemon up, what does it list, which of those can this
-// machine/plan actually run, and put the survivors in the roster.
+// addOllamaProvider is the keyless half. Ollama needs no credential, so there
+// is no ref to prompt for and nothing to sync into sbx — the whole job is: is
+// the daemon up, what does it list, which of those can this machine/plan
+// actually run, and put the survivors in the roster.
 //
-// With neither --local nor --cloud, it does BOTH. They are separate products
-// (a `:cloud` row appears on every signed-in machine and says nothing about what
-// this box can run; a local tag says nothing about what the subscription may
-// call), but a user typing `pix models add ollama` means "take everything you
-// can prove", and making them guess which of two flags they needed would be the
-// discoverability failure this command was written to end.
-func runModelsAddOllama(cfg *config.Config, env shellEnv, sel ollamaSelection) {
+// With neither --local nor --cloud it does BOTH. They are separate products (a
+// `:cloud` row appears on every signed-in machine and says nothing about what
+// this box can run), but a user typing `pix models add ollama` means "take
+// everything you can prove", and making them guess which flag they needed would
+// be the discoverability failure this command was written to end.
+func addOllamaProvider(d *cli.Deps, cfg *config.Config, env shellEnv, sel ollamaSelection) error {
 	if !sel.Local && !sel.Cloud {
 		sel = ollamaSelection{Local: true, Cloud: true}
 	}
 	if cfg.Inference.ExclusiveSource != "" {
-		fmt.Fprintf(os.Stderr, "pix models add: the active pack (%s) owns inference on this host, so Ollama cannot be wired in.\n", cfg.Inference.ExclusiveSource)
-		fmt.Fprintln(os.Stderr, "  It gets wired the moment the pack stops being the exclusive source (`pix pack rm`, or a pack that does not claim inference).")
-		os.Exit(2)
+		return fmt.Errorf("the active pack (%s) owns inference on this host, so Ollama cannot be wired in.\n"+
+			"  It gets wired the moment the pack stops being the exclusive source (`pix pack rm`, or a pack that does not claim inference).",
+			cfg.Inference.ExclusiveSource)
 	}
-	res, plan, err := reconcileOllamaInference(cfg, env, os.Stdin, os.Stdout, isTTY(os.Stdin), sel)
+	res, plan, err := reconcileOllamaInference(cfg, env, d.In, d.Out, d.Interactive, sel)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pix models add: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-	renderModelsAddOllama(os.Stdout, res, plan)
+	renderModelsAddOllama(d.Out, res, plan)
+	return nil
 }
 
 // renderModelsAddOllama reports proof, then the two things a user can act on:
@@ -154,9 +108,7 @@ func renderModelsAddOllama(out io.Writer, res reconcileResult, plan ollamaPlan) 
 		fmt.Fprintf(out, "%d candidate(s) did not answer: %s\n", len(res.Failures), strings.Join(res.Failures, "; "))
 	}
 	// Name the pullable rung in BOTH cases, or the offer line configureOllama-
-	// Inference already printed ("offering qwen3.5:35b") is left hanging: the
-	// user is told a model was offered and then never hears about it again
-	// because a smaller one happened to be on disk.
+	// Inference already printed ("offering qwen3.5:35b") is left hanging.
 	switch {
 	case plan.WantPull != "":
 		fmt.Fprintf(out, "\nNot downloaded: %s is the largest local model that fits this machine, but it is not pulled.\n", plan.WantPull)

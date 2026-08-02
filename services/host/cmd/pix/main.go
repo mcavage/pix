@@ -122,11 +122,7 @@ func main() {
 		// `pix route models --json` got usage prose on stdout and exit 2 — the
 		// exact compatibility this alias exists to promise.
 		fmt.Fprintln(os.Stderr, "pix route is now pix models (pix models route compiles the intent map).")
-		if len(args) > 1 && (args[1] == "-h" || args[1] == "--help") {
-			fmt.Print(modelsUsage())
-			return
-		}
-		execHostAs("route", "route", args[1:])
+		runRouteAlias(args[1:])
 	case "evals":
 		// Catch this explicitly (also shadowing the bare-arg-is-a-dir behavior when
 		// an evals/ dir is present) so a bare `evals` gets a clear message instead

@@ -1,0 +1,213 @@
+// Package cli is the command contract: how a pix verb is declared, what it is
+// given, and who owns the exit code.
+//
+// It replaces 34 hand-rolled argument loops. Not one file in cmd/pix imported
+// `flag`; every verb parsed its own argv, wrote its own usage string, and
+// called os.Exit itself — 266 exits across 25 files and 349 direct writes to
+// os.Stderr. Three consequences, all of which this package removes:
+//
+//   - Usage drifted from behaviour, because nothing connected them. A flag could
+//     exist without appearing in help, and did.
+//   - A verb's exit code could only be tested by re-execing the test binary,
+//     which several tests do — slow, and it hides the assertion behind a
+//     subprocess.
+//   - Output went to the process's stdout, so asserting on it meant capturing
+//     global state.
+//
+// The contract, in three rules:
+//
+//  1. A command RETURNS an error. It never calls os.Exit. main owns the single
+//     exit point and the single error renderer, so exit codes are one table
+//     rather than 266 decisions.
+//  2. A command writes to Deps.Out / Deps.Err, never to os.Stdout / os.Stderr.
+//     That is what makes output assertable without a subprocess.
+//  3. Flags and args are STRUCT FIELDS with tags. Usage is generated from the
+//     same declaration that parses them, so it cannot describe a flag that does
+//     not exist, or omit one that does.
+//
+// Migration is verb-by-verb, not big-bang: main.go's switch stays, and a
+// migrated verb's case calls Run[T]. An unmigrated verb is untouched. There is
+// no flag day and no period where half a parser is live.
+package cli
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+
+	"github.com/alecthomas/kong"
+
+	"pix/host/config"
+	"pix/host/sys"
+)
+
+// Deps is everything a command may reach. It is a struct rather than a
+// context.Context value because a command should not have to know a key to find
+// its dependencies, and because the compiler should reject a command that wants
+// something the process does not provide.
+type Deps struct {
+	// Sys is every OS seam. A command that needs less should still take Deps —
+	// the narrowing happens at the function it calls, not at the verb boundary.
+	Sys sys.System
+	// Out is the command's stdout. Machine-readable output goes here and nowhere
+	// else, so `--json` can never be polluted by a stray progress line.
+	Out io.Writer
+	// Err is the command's stderr: progress, warnings, and usage on the error
+	// path.
+	Err io.Writer
+	// In is the command's stdin, for prompts.
+	In io.Reader
+	// Interactive reports whether In is a terminal. Commands must consult this
+	// rather than probing os.Stdin, or a piped run behaves differently under
+	// test than in production.
+	Interactive bool
+
+	// cfg is loaded lazily and memoized: most commands need it, a few (version,
+	// help) must work when it is missing or corrupt, and loading it eagerly in
+	// main would make those fail for an unrelated reason.
+	cfg    *config.Config
+	cfgErr error
+}
+
+// Config loads config.toml once per command. The error is returned rather than
+// fatal so a command can decide whether it can proceed without one.
+func (d *Deps) Config() (*config.Config, error) {
+	if d.cfg == nil && d.cfgErr == nil {
+		d.cfg, d.cfgErr = config.Load()
+	}
+	return d.cfg, d.cfgErr
+}
+
+// SetConfig injects a config, for tests and for commands that have already
+// mutated one in memory.
+func (d *Deps) SetConfig(c *config.Config) { d.cfg, d.cfgErr = c, nil }
+
+// UsageError marks an error as the user's mistake rather than a failure:
+// exit 2, and print usage. A plain error is exit 1 with no usage, because
+// dumping a usage screen after a network timeout tells the user nothing.
+type UsageError struct{ Err error }
+
+func (e UsageError) Error() string { return e.Err.Error() }
+func (e UsageError) Unwrap() error { return e.Err }
+
+// Usagef builds a UsageError.
+func Usagef(format string, a ...any) error {
+	return UsageError{Err: fmt.Errorf(format, a...)}
+}
+
+// SilentError carries an exit code but no message, for a command that has
+// already reported the problem in its own words (a rendered doctor table, say).
+type SilentError struct{ Code int }
+
+func (e SilentError) Error() string { return fmt.Sprintf("exit %d", e.Code) }
+
+// ExitCode is the ONE place a Go error becomes a process exit code.
+//
+//	0  success
+//	1  the command failed
+//	2  the user's invocation was wrong (usage printed)
+//	n  whatever a SilentError asked for
+func ExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var silent SilentError
+	if errors.As(err, &silent) {
+		return silent.Code
+	}
+	var usage UsageError
+	if errors.As(err, &usage) {
+		return 2
+	}
+	return 1
+}
+
+// Runner is what every command implements. kong finds it by method name on the
+// selected node; it is declared here so the contract is stated in one place.
+type Runner interface{ Run(*Deps) error }
+
+// Run parses argv into a fresh T and runs it. T's fields carry the flag/arg
+// declarations; kong generates the usage from them.
+//
+// Generic over the command type so each verb can be migrated on its own: main's
+// switch calls Run[ModelsCmd] for a migrated verb and leaves the rest alone.
+// There is no root command that has to know about all 34 at once, which is what
+// would have forced a big-bang cutover.
+func Run[T any](name, description string, argv []string, d *Deps) error {
+	var cmd T
+	parser, err := kong.New(&cmd,
+		kong.Name("pix "+name),
+		kong.Description(description),
+		kong.Writers(d.Err, d.Err),
+		// kong's default exits the process on --help and on a parse error. Both
+		// must be errors instead, or this package would reintroduce the 266 exits
+		// it exists to remove.
+		kong.Exit(func(int) { panic(errHelpRequested) }),
+		kong.UsageOnError(),
+	)
+	if err != nil {
+		return fmt.Errorf("internal: building the %s parser: %w", name, err)
+	}
+	ctx, err := parse(parser, argv)
+	if err != nil || ctx == nil {
+		return err // ctx == nil means --help was printed
+	}
+	// kong dispatches to the SELECTED leaf, which is what lets a verb group
+	// (`models ls` vs `models add`) live in one struct without a hand-written
+	// switch. Deps is bound so each leaf's Run(*Deps) receives it.
+	return ctx.Run(d)
+}
+
+// errHelpRequested is the sentinel kong's exit hook panics with. Recovering a
+// panic is not a style anyone enjoys, but kong offers no other way to intercept
+// its terminal paths, and confining the ugliness to this one function is better
+// than letting every verb inherit an os.Exit it cannot test.
+var errHelpRequested = errors.New("help requested")
+
+func parse(parser *kong.Kong, argv []string) (ctx *kong.Context, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if r == errHelpRequested {
+				ctx, err = nil, nil // --help printed; exit 0
+				return
+			}
+			panic(r)
+		}
+	}()
+	c, perr := parser.Parse(argv)
+	if perr != nil {
+		return nil, UsageError{Err: perr}
+	}
+	return c, nil
+}
+
+// Usage renders T's help exactly as `pix <name> --help` would, as a string.
+//
+// This is what lets the tiered help tree (`pix help <verb>`) stay a feature
+// without becoming a second source of truth. Before, a verb had a hand-written
+// usage constant that `help` printed and the parser never read, so a flag could
+// be added to one and not the other — which is how `pix models` came to
+// document a `--json` its parser rejected and omit the `--catalog` it accepted.
+func Usage[T any](name, description string) string {
+	var cmd T
+	var buf bytes.Buffer
+	parser, err := kong.New(&cmd,
+		kong.Name("pix "+name),
+		kong.Description(description),
+		kong.Writers(&buf, &buf),
+		kong.Exit(func(int) { panic(errHelpRequested) }),
+	)
+	if err != nil {
+		return ""
+	}
+	func() {
+		defer func() {
+			if r := recover(); r != nil && r != errHelpRequested {
+				panic(r)
+			}
+		}()
+		_, _ = parser.Parse([]string{"--help"})
+	}()
+	return buf.String()
+}
