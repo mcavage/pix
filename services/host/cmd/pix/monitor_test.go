@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"pix/host/monitor"
+	"pix/host/monitor/tui"
 )
 
 // TestMonitorHelp is the help gate: `-h`/`--help` prints monitorUsage and
@@ -17,7 +18,7 @@ func TestMonitorHelp(t *testing.T) {
 	panicNewHub := func(monitor.HubConfig) *monitor.Hub {
 		panic("runMonitorCore must not construct a hub on --help")
 	}
-	panicRunTUI := func(TUIConfig) error {
+	panicRunTUI := func(tui.TUIConfig) error {
 		panic("runMonitorCore must not run the TUI on --help")
 	}
 
@@ -43,8 +44,8 @@ func TestMonitorFlagParse(t *testing.T) {
 		gotCfg = cfg
 		return monitor.NewHub(monitor.HubConfig{Port: 0})
 	}
-	var gotTUICfg TUIConfig
-	fakeRunTUI := func(cfg TUIConfig) error {
+	var gotTUICfg tui.TUIConfig
+	fakeRunTUI := func(cfg tui.TUIConfig) error {
 		gotTUICfg = cfg
 		return nil
 	}
@@ -63,16 +64,16 @@ func TestMonitorFlagParse(t *testing.T) {
 		t.Errorf("HubConfig.BindAddr = %q, want default %q", gotCfg.BindAddr, monitor.DefaultBindAddr)
 	}
 	if gotTUICfg.Filter != "mybox" {
-		t.Errorf("TUIConfig.Filter = %q, want %q", gotTUICfg.Filter, "mybox")
+		t.Errorf("tui.TUIConfig.Filter = %q, want %q", gotTUICfg.Filter, "mybox")
 	}
 	if gotTUICfg.Events == nil {
-		t.Error("TUIConfig.Events is nil, want the hub's subscriber channel")
+		t.Error("tui.TUIConfig.Events is nil, want the hub's subscriber channel")
 	}
 	if gotTUICfg.Blob == nil {
-		t.Error("TUIConfig.Blob is nil, want the hub's blob lookup")
+		t.Error("tui.TUIConfig.Blob is nil, want the hub's blob lookup")
 	}
 	if gotTUICfg.Port != 9999 {
-		t.Errorf("TUIConfig.Port = %d, want the resolved --port %d (DX-2b: empty-state hint needs it)", gotTUICfg.Port, 9999)
+		t.Errorf("tui.TUIConfig.Port = %d, want the resolved --port %d (DX-2b: empty-state hint needs it)", gotTUICfg.Port, 9999)
 	}
 }
 
@@ -104,7 +105,7 @@ func TestMonitorNoArgs(t *testing.T) {
 		gotCfg = cfg
 		return monitor.NewHub(monitor.HubConfig{Port: 0})
 	}
-	fakeRunTUI := func(TUIConfig) error { return nil }
+	fakeRunTUI := func(tui.TUIConfig) error { return nil }
 
 	var out bytes.Buffer
 	if err := runMonitorCore(nil, fakeNewHub, fakeRunTUI, &out, io.Discard); err != nil {
@@ -127,7 +128,7 @@ func TestMonitorBindDefaultIsLoopbackNoWarning(t *testing.T) {
 	fakeNewHub := func(cfg monitor.HubConfig) *monitor.Hub {
 		return monitor.NewHub(monitor.HubConfig{Port: 0})
 	}
-	fakeRunTUI := func(TUIConfig) error { return nil }
+	fakeRunTUI := func(tui.TUIConfig) error { return nil }
 
 	var out, errOut bytes.Buffer
 	if err := runMonitorCore(nil, fakeNewHub, fakeRunTUI, &out, &errOut); err != nil {
@@ -147,7 +148,7 @@ func TestMonitorBindNonLoopbackWarns(t *testing.T) {
 		gotCfg = cfg
 		return monitor.NewHub(monitor.HubConfig{Port: 0})
 	}
-	fakeRunTUI := func(TUIConfig) error { return nil }
+	fakeRunTUI := func(tui.TUIConfig) error { return nil }
 
 	var out, errOut bytes.Buffer
 	if err := runMonitorCore([]string{"--bind", "0.0.0.0"}, fakeNewHub, fakeRunTUI, &out, &errOut); err != nil {
@@ -169,7 +170,7 @@ func TestMonitorBindNonLoopbackWarns(t *testing.T) {
 func TestMonitorBindLoopbackVariantsNoWarning(t *testing.T) {
 	for _, addr := range []string{"127.0.0.1", "::1", "localhost"} {
 		fakeNewHub := func(monitor.HubConfig) *monitor.Hub { return monitor.NewHub(monitor.HubConfig{Port: 0}) }
-		fakeRunTUI := func(TUIConfig) error { return nil }
+		fakeRunTUI := func(tui.TUIConfig) error { return nil }
 		var out, errOut bytes.Buffer
 		if err := runMonitorCore([]string{"--bind", addr}, fakeNewHub, fakeRunTUI, &out, &errOut); err != nil {
 			t.Fatalf("runMonitorCore(--bind %s): %v", addr, err)
@@ -187,7 +188,7 @@ func TestMonitorUnknownFlag(t *testing.T) {
 	panicNewHub := func(monitor.HubConfig) *monitor.Hub {
 		panic("runMonitorCore must not construct a hub on a flag-parse error")
 	}
-	panicRunTUI := func(TUIConfig) error {
+	panicRunTUI := func(tui.TUIConfig) error {
 		panic("runMonitorCore must not run the TUI on a flag-parse error")
 	}
 	err := runMonitorCore([]string{"--bogus"}, panicNewHub, panicRunTUI, &bytes.Buffer{}, io.Discard)
@@ -202,7 +203,7 @@ func TestMonitorTooManyPositional(t *testing.T) {
 	panicNewHub := func(monitor.HubConfig) *monitor.Hub {
 		panic("runMonitorCore must not construct a hub on a usage error")
 	}
-	panicRunTUI := func(TUIConfig) error {
+	panicRunTUI := func(tui.TUIConfig) error {
 		panic("runMonitorCore must not run the TUI on a usage error")
 	}
 	err := runMonitorCore([]string{"box1", "box2"}, panicNewHub, panicRunTUI, &bytes.Buffer{}, io.Discard)

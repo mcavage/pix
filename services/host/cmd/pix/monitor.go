@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"pix/host/monitor"
+	"pix/host/monitor/tui"
 )
 
 // runMonitor is the `monitor` verb: a host-side live wiretap of a running
@@ -18,7 +19,7 @@ import (
 // there is no "serviceDown" degrade path — monitor IS the service, so a bind
 // failure is just a generic error (exit 1).
 func runMonitor(argv []string) {
-	if err := runMonitorCore(argv, monitor.NewHub, RunTUI, os.Stdout, os.Stderr); err != nil {
+	if err := runMonitorCore(argv, monitor.NewHub, tui.RunTUI, os.Stdout, os.Stderr); err != nil {
 		exitFromErr("monitor", err)
 	}
 }
@@ -60,7 +61,7 @@ const hubBindTimeout = 2 * time.Second
 // HubConfig it was called with (and hand back a Hub bound to an ephemeral
 // port instead of a real one), and a fake runTUI can return immediately
 // without spinning bubbletea.
-func runMonitorCore(argv []string, newHub func(monitor.HubConfig) *monitor.Hub, runTUI func(TUIConfig) error, out, errOut io.Writer) error {
+func runMonitorCore(argv []string, newHub func(monitor.HubConfig) *monitor.Hub, runTUI func(tui.TUIConfig) error, out, errOut io.Writer) error {
 	fs := newFlagSet()
 	port := fs.int("port", monitor.DefaultPort)
 	bind := fs.str("bind", "")
@@ -102,7 +103,7 @@ func runMonitorCore(argv []string, newHub func(monitor.HubConfig) *monitor.Hub, 
 	sub, unsubscribe := hub.Subscribe()
 	defer unsubscribe()
 
-	tuiErr := runTUI(TUIConfig{Events: sub, Blob: hub.Blob, Filter: name, Port: *port})
+	tuiErr := runTUI(tui.TUIConfig{Events: sub, Blob: hub.Blob, Filter: name, Port: *port})
 
 	// Cancel and wait for Start to actually finish shutting the listener down
 	// before returning, so the port is released deterministically (avoids the

@@ -12,7 +12,7 @@
 // calls hub.Subscribe() for the Events channel and passes hub.Blob for the
 // Blob func, then calls RunTUI(cfg). Everything below is exactly the API
 // pinned in architecture.md Section 3.B — no more, no less.
-package main
+package tui
 
 import (
 	"fmt"
@@ -2576,7 +2576,7 @@ func renderRequestRow(r tuiRow) string {
 		msgs = fmt.Sprintf("+%d", r.msgDelta)
 	}
 	diag := fmt.Sprintf("turn %s  %s  sys=%s(%s) msgs=%s tools=%d ~%s",
-		r.turnID, r.model, humanBytes(int64(r.sysBytes)), label, msgs, r.toolCount, humanTok(r.estTokens))
+		r.turnID, r.model, HumanBytes(int64(r.sysBytes)), label, msgs, r.toolCount, humanTok(r.estTokens))
 	if len(r.newMessages) == 0 {
 		return "req        \u00b7 " + diag
 	}
@@ -2641,7 +2641,7 @@ func renderToolRow(r tuiRow) string {
 		if !r.ok {
 			okLabel = "FAIL"
 		}
-		base += fmt.Sprintf("  \u2192 %s %s %s", okLabel, humanBytes(int64(r.resultBytes)), humanDuration(r.durationMs))
+		base += fmt.Sprintf("  \u2192 %s %s %s", okLabel, HumanBytes(int64(r.resultBytes)), humanDuration(r.durationMs))
 	} else {
 		base += "  \u2026" // pending: tool_start seen, tool_end not yet
 	}
@@ -2716,7 +2716,7 @@ func (m Model) detailLines(r tuiRow) []detailLine {
 		// then a clearly separated diagnostics section for the plumbing
 		// (model, tokens, system prompt, tool schema, tool name lists).
 		for i, nm := range r.newMessages {
-			add(fmt.Sprintf("      msg %-9s %-6s %s", nm.Role, humanBytes(int64(nm.Bytes)), nm.Preview))
+			add(fmt.Sprintf("      msg %-9s %-6s %s", nm.Role, HumanBytes(int64(nm.Bytes)), nm.Preview))
 			if m.showFull && i < len(r.newMessageTexts) {
 				if i < len(r.newMessageRendered) && len(r.newMessageRendered[i]) > 0 {
 					preBlock("        ", r.newMessageRendered[i])
@@ -2731,7 +2731,7 @@ func (m Model) detailLines(r tuiRow) []detailLine {
 		}
 		add(diagnosticsMarker)
 		add(fmt.Sprintf("      model %s  system prompt %s (%s)  tools=%d  est ~%s",
-			r.model, humanBytes(int64(r.sysBytes)), label, r.toolCount, humanTok(r.estTokens)))
+			r.model, HumanBytes(int64(r.sysBytes)), label, r.toolCount, humanTok(r.estTokens)))
 		if len(r.toolNames) > 0 {
 			add("      tools: " + strings.Join(r.toolNames, ", "))
 		}
@@ -2756,14 +2756,14 @@ func (m Model) detailLines(r tuiRow) []detailLine {
 		// headers dead LAST (the least interesting data, per live user
 		// feedback; they never appear on the summary line at all).
 		if m.showFull && r.assistantText != "" {
-			add(fmt.Sprintf("      assistant %s:", humanBytes(int64(r.textBytes))))
+			add(fmt.Sprintf("      assistant %s:", HumanBytes(int64(r.textBytes))))
 			if len(r.assistantRendered) > 0 {
 				preBlock("        ", r.assistantRendered)
 			} else {
 				block("        ", r.assistantText)
 			}
 		} else if r.textPreview != "" {
-			add(fmt.Sprintf("      assistant %s  %s", humanBytes(int64(r.textBytes)), r.textPreview))
+			add(fmt.Sprintf("      assistant %s  %s", HumanBytes(int64(r.textBytes)), r.textPreview))
 		}
 		if len(r.toolCalls) > 0 {
 			add("      tool calls: " + strings.Join(r.toolCalls, ", "))
@@ -2787,7 +2787,7 @@ func (m Model) detailLines(r tuiRow) []detailLine {
 			if !r.ok {
 				okLabel = "FAIL"
 			}
-			state = fmt.Sprintf("%s %s %s", okLabel, humanBytes(int64(r.resultBytes)), humanDuration(r.durationMs))
+			state = fmt.Sprintf("%s %s %s", okLabel, HumanBytes(int64(r.resultBytes)), humanDuration(r.durationMs))
 		}
 		add(fmt.Sprintf("      tool %s  source=%s  id=%s  %s", r.name, r.source, r.toolID, state))
 		if r.argsSummary != "" {

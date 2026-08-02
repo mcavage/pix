@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/monitor/tui"
 	"sort"
 	"strconv"
 	"strings"
@@ -2544,15 +2545,6 @@ func artifactDirSize(root string) (files int, bytes int64) {
 }
 
 // humanBytes renders a byte count as a short human string (B/KB/MB/GB).
-func humanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%dB", n)
-	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f%cB", float64(n)/float64(div), "KMGTPE"[exp])
-}
+// humanBytes now lives in monitor/tui (two packages need it; a second copy is
+// how two renderers come to disagree about what "1.0MB" means).
+func humanBytes(n int64) string { return tui.HumanBytes(n) }
