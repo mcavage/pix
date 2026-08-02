@@ -258,7 +258,7 @@ func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 	}
 	// gog-only packs stay Tier-0 under an unknown partition.
 	pg := &packInfo{Root: "/p", Manifest: packManifest{Name: "g",
-		Integrations: []packIntegration{{Name: "Gog", MCP: gwServerName}}}}
+		Integrations: []packIntegration{{Name: "gog", MCP: gwServerName}}}}
 	if computeHostBoM(pg, "", unknown2).tier1() {
 		t.Error("a gog-only reference must stay Tier-0 even when the partition is unknown")
 	}

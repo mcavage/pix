@@ -419,7 +419,7 @@ func TestGogSetup_R108_RegistrationFails_ConfigUnchanged(t *testing.T) {
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",
 			// deliberately NO "sbx mcp add google-workspace ..." fixture and sbxRegisterOK
-			// left false, so registerServers' env.Run call for it errors.
+			// left false, so mcp.RegisterServers' env.Run call for it errors.
 		}),
 		statFile: map[string]bool{cred: true},
 	}

@@ -32,7 +32,7 @@
 // (gog exposes no stable, parseable scope-inspection surface to check
 // against) — the guarantee is that the grant REQUESTS read-only scopes, and
 // the runtime backstop (`--gmail-no-send --wrap-untrusted --readonly
-// --allow-tool read`, set at MCP-serve time in mcp.go's gogHardenedArgv)
+// --allow-tool read`, set at MCP-serve time in mcp.go's mcp.GogHardenedArgv)
 // blocks writes regardless.
 //
 // `pix gworkspace setup` requires sbx: a missing sbx binary, or a failed `sbx
@@ -68,6 +68,7 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/secret"
 )
 
@@ -324,7 +325,7 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 	}
 
 	// gogPath is captured HERE and never re-resolved: it feeds the immutable
-	// registrar snapshot built below (buildGogRegistrar), the single source for
+	// registrar snapshot built below (mcp.BuildGogRegistrar), the single source for
 	// both the headless probe and the eventual registration.
 	gogPath, gogErr := env.LookPath("gog")
 	if gogErr != nil {
@@ -472,12 +473,12 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 	fmt.Fprintf(out, "interactive auth OK for %s\n", account)
 
 	// TOCTOU guard: resolve the registrar snapshot EXACTLY ONCE, right here —
-	// op, op-refs, and gogPath are captured into ONE immutable mcpRegistrar and
+	// op, op-refs, and gogPath are captured into ONE immutable mcp.McpRegistrar and
 	// never re-resolved after this point. The exact same reg feeds BOTH the
-	// headless probe below (reg.execArgv — byte-for-byte the hardened argv,
+	// headless probe below (reg.ExecArgv — byte-for-byte the hardened argv,
 	// including --gmail-no-send --wrap-untrusted --readonly --allow-tool read
-	// and any op wrapper) and the eventual registration (registerGogRegistrar
-	// -> reg.addArgs), so a concurrent PATH or op-refs.env mutation between
+	// and any op wrapper) and the eventual registration (mcp.RegisterGogRegistrar
+	// -> reg.AddArgs), so a concurrent PATH or op-refs.env mutation between
 	// probe and registration can never cause a DIFFERENT command to be
 	// registered than the one that was just proven healthy.
 	//
@@ -491,11 +492,11 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 	// exec/timeout result is unverifiable and must never be reported as
 	// success. Nothing here mutates config/registration yet — that only happens
 	// after `head` is confirmed healthy, below.
-	reg := buildGogRegistrar(env, gogPath, account)
+	reg := mcp.BuildGogRegistrar(gogPath, account, mcpCredentials(env))
 	if createDocs {
-		reg.hostBin = hostPath
+		reg.HostBin = hostPath
 	}
-	head := probeListTools(env, reg.execArgv(gwServerName))
+	head := probeListTools(env, reg.ExecArgv(gwServerName))
 	switch head.status {
 	case probeToolsOK:
 		fmt.Fprintln(out, "headless tools OK (verified the same host-side path the sbx gateway/doctor use)")
@@ -525,17 +526,17 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 		cfg.AddMCP(gwDocsCreateServerName)
 	}
 
-	// REGISTER FIRST, save second. registerGogRegistrar runs `sbx mcp add gog
+	// REGISTER FIRST, save second. mcp.RegisterGogRegistrar runs `sbx mcp add gog
 	// ...` using the EXACT reg snapshot resolved above (no re-resolution — the
 	// TOCTOU guard); only once that has genuinely succeeded do we persist
 	// gog_account/mcp to disk. A registration failure here returns before
 	// cfg.Save() is ever called, so the persisted config is left byte-for-byte
 	// unchanged — there is no config/registration drift to roll back from.
-	if err := registerGogRegistrar(reg, env, out); err != nil {
+	if err := mcp.RegisterGogRegistrar(reg, env, out); err != nil {
 		return fmt.Errorf("registering %s with the sbx gateway: %w (finish later: pix mcp register %s)", gwServerName, err, gwServerName)
 	}
 	if createDocs {
-		if err := registerDocsCreateRegistrar(reg, env, out); err != nil {
+		if err := mcp.RegisterDocsCreateRegistrar(reg, env, out); err != nil {
 			docsRollbackErr := restoreMCPRegistration(env, gwDocsCreateServerName, docsSnap)
 			gogRollbackErr := gogSetupRollbackRegistration(env, snap)
 			if docsRollbackErr != nil || gogRollbackErr != nil {
@@ -585,7 +586,7 @@ func gogSetup(env hostenv.Env, opts gogSetupOpts, in io.Reader, out io.Writer, t
 func gogSetupRollbackRegistration(env hostenv.Env, snap gogRegSnapshot) error {
 
 	if snap.state == gogRegPresent {
-		args := rawAddArgs(gwServerName, snap.argv)
+		args := mcp.RawAddArgs(gwServerName, snap.argv)
 		if _, err := env.Run("sbx", args...); err != nil {
 			return fmt.Errorf("could not restore the prior gog registration: %w", err)
 		}
@@ -617,7 +618,7 @@ func snapshotMCPRegistration(env hostenv.Env, name string) gogRegSnapshot {
 func restoreMCPRegistration(env hostenv.Env, name string, snap gogRegSnapshot) error {
 
 	if snap.state == gogRegPresent {
-		if _, err := env.Run("sbx", rawAddArgs(name, snap.argv)...); err != nil {
+		if _, err := env.Run("sbx", mcp.RawAddArgs(name, snap.argv)...); err != nil {
 			return fmt.Errorf("restore %s: %w", name, err)
 		}
 		return nil

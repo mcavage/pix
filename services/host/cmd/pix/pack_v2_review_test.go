@@ -170,7 +170,7 @@ func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 
 	rootA := filepath.Join(dir, "a")
 	mustWritePack(t, rootA, packManifest{Name: "a", Schema: 1, Integrations: []packIntegration{
-		{Name: "Gog", MCP: gwServerName}, // overlapping name the pack merely re-declares
+		{Name: "gog", MCP: gwServerName}, // overlapping name the pack merely re-declares
 	}})
 	rootB := filepath.Join(dir, "b")
 	mustWritePack(t, rootB, packManifest{Name: "b", Schema: 1})

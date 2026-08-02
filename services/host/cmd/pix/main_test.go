@@ -9,6 +9,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/launcher"
+	"pix/host/mcp"
 	"pix/host/secret"
 )
 
@@ -47,15 +48,15 @@ func countFlag(args []string, flag string) int {
 }
 
 func TestKitRef(t *testing.T) {
-	if got := kitRef("0.0.99"); got != "v0.0.99" {
-		t.Errorf("kitRef(0.0.99) = %q, want v0.0.99", got)
+	if got := launcher.KitRef("0.0.99"); got != "v0.0.99" {
+		t.Errorf("launcher.KitRef(0.0.99) = %q, want v0.0.99", got)
 	}
-	if got := kitRef("dev"); got != "main" {
-		t.Errorf("kitRef(dev) = %q, want main", got)
+	if got := launcher.KitRef("dev"); got != "main" {
+		t.Errorf("launcher.KitRef(dev) = %q, want main", got)
 	}
 	// An unreleased +local build must NOT pin a v-tag.
-	if got := kitRef("0.0.16+local"); got != "main" {
-		t.Errorf("kitRef(0.0.16+local) = %q, want main", got)
+	if got := launcher.KitRef("0.0.16+local"); got != "main" {
+		t.Errorf("launcher.KitRef(0.0.16+local) = %q, want main", got)
 	}
 }
 
@@ -325,7 +326,7 @@ func TestBuildSbxArgs_StackWithoutOverride(t *testing.T) {
 func TestBuildSbxArgs_MCPExpansion(t *testing.T) {
 	cfg := &config.Config{}
 	// buildSbxArgs emits --static-mcp for the PRELOADED set (o.StaticMCP); the
-	// caller computes it via allPreloadedMCP. The sbx local gateway serves them,
+	// caller computes it via mcp.AllPreloadedMCP. The sbx local gateway serves them,
 	// no SBX_MCP_URL.
 	args := buildSbxArgs(cfg, runOpts{Workspace: ".", StaticMCP: []string{"slack", "notion", "linear"}}, "0.0.99")
 
@@ -342,20 +343,20 @@ func TestBuildSbxArgs_MCPExpansion(t *testing.T) {
 	}
 }
 
-// allPreloadedMCP: S01 — every configured server preloads, no eager/lazy
+// mcp.AllPreloadedMCP: S01 — every configured server preloads, no eager/lazy
 // split. It is pure list hygiene: dedupe + drop empties, order preserved.
 func TestAllPreloadedMCP(t *testing.T) {
-	if got := allPreloadedMCP(nil); len(got) != 0 {
-		t.Errorf("allPreloadedMCP(nil) = %v, want none", got)
+	if got := mcp.AllPreloadedMCP(nil); len(got) != 0 {
+		t.Errorf("mcp.AllPreloadedMCP(nil) = %v, want none", got)
 	}
-	got := allPreloadedMCP([]string{"gog", "slack", "notion", "slack", "", "atlassian"})
+	got := mcp.AllPreloadedMCP([]string{"gog", "slack", "notion", "slack", "", "atlassian"})
 	want := []string{"gog", "slack", "notion", "atlassian"}
 	if len(got) != len(want) {
-		t.Fatalf("allPreloadedMCP = %v, want %v", got, want)
+		t.Fatalf("mcp.AllPreloadedMCP = %v, want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Errorf("allPreloadedMCP = %v, want %v", got, want)
+			t.Errorf("mcp.AllPreloadedMCP = %v, want %v", got, want)
 		}
 	}
 }
@@ -391,7 +392,7 @@ func TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded(t *testing.T) {
 	if !slices.Contains(cfg.MCP, "fastmail") || !slices.Contains(cfg.MCP, "notion") {
 		t.Errorf("cfg.MCP = %v, want it to contain both integration servers (every pack integration preloads)", cfg.MCP)
 	}
-	if got := allPreloadedMCP(cfg.MCP); len(got) != len(cfg.MCP) {
+	if got := mcp.AllPreloadedMCP(cfg.MCP); len(got) != len(cfg.MCP) {
 		t.Errorf("every entry in cfg.MCP should be in the preload set, got %v vs %v", got, cfg.MCP)
 	}
 

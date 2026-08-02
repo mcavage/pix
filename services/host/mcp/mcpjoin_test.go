@@ -1,6 +1,7 @@
-package main
+package mcp
 
 import (
+	"pix/host/config"
 	"pix/host/workspace"
 	"strings"
 	"testing"
@@ -41,14 +42,14 @@ func TestJoinMCPSandboxRow_PartialReceipt(t *testing.T) {
 		t.Fatal("precondition: a load-only receipt (empty CreatedAt) must be IsPartial")
 	}
 
-	loaded := joinMCPSandboxRow("slack", mcpRegYes, box, r, workspace.MCPStateOK)
-	if loaded.State != mcpJoinLoaded {
-		t.Errorf("listed load: state = %q, want %q", loaded.State, mcpJoinLoaded)
+	loaded := JoinMCPSandboxRow("slack", McpRegYes, box, r, workspace.MCPStateOK)
+	if loaded.State != McpJoinLoaded {
+		t.Errorf("listed load: state = %q, want %q", loaded.State, McpJoinLoaded)
 	}
 
-	other := joinMCPSandboxRow(gwServerName, mcpRegYes, box, r, workspace.MCPStateOK)
-	if other.State != mcpJoinUnverifiable {
-		t.Errorf("unlisted name on a partial receipt: state = %q, want %q", other.State, mcpJoinUnverifiable)
+	other := JoinMCPSandboxRow(config.GWServerName, McpRegYes, box, r, workspace.MCPStateOK)
+	if other.State != McpJoinUnverifiable {
+		t.Errorf("unlisted name on a partial receipt: state = %q, want %q", other.State, McpJoinUnverifiable)
 	}
 	if !strings.Contains(other.Evidence, "partial") {
 		t.Errorf("evidence should say the receipt is partial, got %q", other.Evidence)
@@ -58,9 +59,9 @@ func TestJoinMCPSandboxRow_PartialReceipt(t *testing.T) {
 	}
 
 	// A FULL receipt keeps the positive registered-not-attached answer.
-	full := joinMCPSandboxRow(gwServerName, mcpRegYes, box, okReceipt(box, nil, "slack"), workspace.MCPStateOK)
-	if full.State != mcpJoinRegisteredNotAttached {
-		t.Errorf("unlisted name on a full receipt: state = %q, want %q", full.State, mcpJoinRegisteredNotAttached)
+	full := JoinMCPSandboxRow(config.GWServerName, McpRegYes, box, okReceipt(box, nil, "slack"), workspace.MCPStateOK)
+	if full.State != McpJoinRegisteredNotAttached {
+		t.Errorf("unlisted name on a full receipt: state = %q, want %q", full.State, McpJoinRegisteredNotAttached)
 	}
 }
 
@@ -69,37 +70,37 @@ func TestJoinMCPSandboxRow_PartialReceipt(t *testing.T) {
 func TestJoinMCPSandboxRowStates(t *testing.T) {
 	const box = "pix-proj"
 	cases := []struct {
-		name         string
-		reg          mcpRegEvidence
+		Name         string
+		reg          McpRegEvidence
 		receipt      *workspace.MCPReceipt
 		rstatus      workspace.MCPStateStatus
 		wantState    string
 		wantEvidence string // substring
 	}{
-		{"preloaded", mcpRegYes, okReceipt(box, []string{"slack"}), workspace.MCPStateOK,
-			mcpJoinPreloaded, "preloaded by pix at create"},
-		{"loaded", mcpRegYes, okReceipt(box, nil, "slack"), workspace.MCPStateOK,
-			mcpJoinLoaded, "loaded by pix"},
-		{"registered-not-attached", mcpRegYes, okReceipt(box, []string{"notion"}), workspace.MCPStateOK,
-			mcpJoinRegisteredNotAttached, "no receipt entry"},
-		{"not-registered", mcpRegNo, okReceipt(box, nil), workspace.MCPStateOK,
-			mcpJoinNotRegistered, "not in `sbx mcp ls`"},
-		{"unverifiable: receipt absent", mcpRegYes, nil, workspace.MCPStateAbsent,
-			mcpJoinUnverifiable, "receipt absent"},
-		{"unverifiable: receipt corrupt", mcpRegYes, nil, workspace.MCPStateCorrupt,
-			mcpJoinUnverifiable, "receipt corrupt"},
-		{"unverifiable: schema mismatch", mcpRegYes, nil, workspace.MCPStateSchemaMismatch,
-			mcpJoinUnverifiable, "receipt schema-mismatch"},
-		{"unverifiable: identity mismatch", mcpRegYes, nil, workspace.MCPStateIdentityMismatch,
-			mcpJoinUnverifiable, "receipt identity-mismatch"},
-		{"unverifiable: receipt unreadable", mcpRegYes, nil, workspace.MCPStateUnreadable,
-			mcpJoinUnverifiable, "receipt unreadable"},
-		{"unverifiable: registration listing unavailable", mcpRegUnknown, okReceipt(box, nil), workspace.MCPStateOK,
-			mcpJoinUnverifiable, "registration listing unavailable"},
+		{"preloaded", McpRegYes, okReceipt(box, []string{"slack"}), workspace.MCPStateOK,
+			McpJoinPreloaded, "preloaded by pix at create"},
+		{"loaded", McpRegYes, okReceipt(box, nil, "slack"), workspace.MCPStateOK,
+			McpJoinLoaded, "loaded by pix"},
+		{"registered-not-attached", McpRegYes, okReceipt(box, []string{"notion"}), workspace.MCPStateOK,
+			McpJoinRegisteredNotAttached, "no receipt entry"},
+		{"not-registered", McpRegNo, okReceipt(box, nil), workspace.MCPStateOK,
+			McpJoinNotRegistered, "not in `sbx mcp ls`"},
+		{"unverifiable: receipt absent", McpRegYes, nil, workspace.MCPStateAbsent,
+			McpJoinUnverifiable, "receipt absent"},
+		{"unverifiable: receipt corrupt", McpRegYes, nil, workspace.MCPStateCorrupt,
+			McpJoinUnverifiable, "receipt corrupt"},
+		{"unverifiable: schema mismatch", McpRegYes, nil, workspace.MCPStateSchemaMismatch,
+			McpJoinUnverifiable, "receipt schema-mismatch"},
+		{"unverifiable: identity mismatch", McpRegYes, nil, workspace.MCPStateIdentityMismatch,
+			McpJoinUnverifiable, "receipt identity-mismatch"},
+		{"unverifiable: receipt unreadable", McpRegYes, nil, workspace.MCPStateUnreadable,
+			McpJoinUnverifiable, "receipt unreadable"},
+		{"unverifiable: registration listing unavailable", McpRegUnknown, okReceipt(box, nil), workspace.MCPStateOK,
+			McpJoinUnverifiable, "registration listing unavailable"},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			row := joinMCPSandboxRow("slack", tc.reg, box, tc.receipt, tc.rstatus)
+		t.Run(tc.Name, func(t *testing.T) {
+			row := JoinMCPSandboxRow("slack", tc.reg, box, tc.receipt, tc.rstatus)
 			if row.State != tc.wantState {
 				t.Errorf("state = %q, want %q (row %+v)", row.State, tc.wantState, row)
 			}
@@ -118,8 +119,8 @@ func TestJoinMCPSandboxRowStates(t *testing.T) {
 // still wins — not-registered.
 func TestJoinNotRegisteredWhenNoPositiveClaim(t *testing.T) {
 	const box = "pix-proj"
-	row := joinMCPSandboxRow("slack", mcpRegNo, box, okReceipt(box, nil), workspace.MCPStateOK)
-	if row.State != mcpJoinNotRegistered {
+	row := JoinMCPSandboxRow("slack", McpRegNo, box, okReceipt(box, nil), workspace.MCPStateOK)
+	if row.State != McpJoinNotRegistered {
 		t.Fatalf("state = %q, want not-registered when the receipt has no claim for this name (row %+v)", row.State, row)
 	}
 }
@@ -133,8 +134,8 @@ func TestJoinNotRegisteredWhenNoPositiveClaim(t *testing.T) {
 func TestJoinPositiveReceiptDominatesDeregistration(t *testing.T) {
 	const box = "pix-proj"
 
-	preloaded := joinMCPSandboxRow("slack", mcpRegNo, box, okReceipt(box, []string{"slack"}), workspace.MCPStateOK)
-	if preloaded.State != mcpJoinPreloaded {
+	preloaded := JoinMCPSandboxRow("slack", McpRegNo, box, okReceipt(box, []string{"slack"}), workspace.MCPStateOK)
+	if preloaded.State != McpJoinPreloaded {
 		t.Fatalf("state = %q, want preloaded even though currently deregistered (row %+v)", preloaded.State, preloaded)
 	}
 	if !strings.Contains(preloaded.Evidence, "preloaded by pix at create") {
@@ -144,8 +145,8 @@ func TestJoinPositiveReceiptDominatesDeregistration(t *testing.T) {
 		t.Errorf("evidence should still name the current registration reading: %q", preloaded.Evidence)
 	}
 
-	loaded := joinMCPSandboxRow("slack", mcpRegNo, box, okReceipt(box, nil, "slack"), workspace.MCPStateOK)
-	if loaded.State != mcpJoinLoaded {
+	loaded := JoinMCPSandboxRow("slack", McpRegNo, box, okReceipt(box, nil, "slack"), workspace.MCPStateOK)
+	if loaded.State != McpJoinLoaded {
 		t.Fatalf("state = %q, want loaded even though currently deregistered (row %+v)", loaded.State, loaded)
 	}
 }
@@ -156,8 +157,8 @@ func TestJoinPositiveReceiptDominatesDeregistration(t *testing.T) {
 // preloaded/loaded, with the registration-unknown fact carried as evidence.
 func TestJoinPositiveReceiptSurvivesUnknownRegistration(t *testing.T) {
 	const box = "pix-proj"
-	row := joinMCPSandboxRow("slack", mcpRegUnknown, box, okReceipt(box, []string{"slack"}), workspace.MCPStateOK)
-	if row.State != mcpJoinPreloaded {
+	row := JoinMCPSandboxRow("slack", McpRegUnknown, box, okReceipt(box, []string{"slack"}), workspace.MCPStateOK)
+	if row.State != McpJoinPreloaded {
 		t.Fatalf("state = %q, want preloaded when registration is merely unknowable", row.State)
 	}
 	if !strings.Contains(row.Evidence, "preloaded by pix at create") {
@@ -173,7 +174,7 @@ func TestJoinPositiveReceiptSurvivesUnknownRegistration(t *testing.T) {
 // `pix run --replace`) — guidance, never a claim.
 func TestJoinUnverifiableCarriesRepairGuidance(t *testing.T) {
 	for _, rstatus := range []workspace.MCPStateStatus{workspace.MCPStateAbsent, workspace.MCPStateCorrupt} {
-		row := joinMCPSandboxRow("slack", mcpRegYes, "pix-proj", nil, rstatus)
+		row := JoinMCPSandboxRow("slack", McpRegYes, "pix-proj", nil, rstatus)
 		if !strings.Contains(row.Evidence, "pix mcp load slack") ||
 			!strings.Contains(row.Evidence, "pix run --replace") {
 			t.Errorf("%s: evidence missing repair guidance: %q", rstatus, row.Evidence)
@@ -185,15 +186,15 @@ func TestJoinUnverifiableCarriesRepairGuidance(t *testing.T) {
 // order and applies each name's own registration tri-state.
 func TestJoinMCPSandboxRowsOrderAndFanout(t *testing.T) {
 	const box = "pix-proj"
-	receipt := okReceipt(box, []string{gwServerName}, "slack")
-	reg := func(name string) mcpRegEvidence {
+	receipt := okReceipt(box, []string{config.GWServerName}, "slack")
+	reg := func(name string) McpRegEvidence {
 		if name == "linear" {
-			return mcpRegNo
+			return McpRegNo
 		}
-		return mcpRegYes
+		return McpRegYes
 	}
-	rows := joinMCPSandboxRows([]string{gwServerName, "slack", "notion", "linear"}, reg, box, receipt, workspace.MCPStateOK)
-	want := []string{mcpJoinPreloaded, mcpJoinLoaded, mcpJoinRegisteredNotAttached, mcpJoinNotRegistered}
+	rows := JoinMCPSandboxRows([]string{config.GWServerName, "slack", "notion", "linear"}, reg, box, receipt, workspace.MCPStateOK)
+	want := []string{McpJoinPreloaded, McpJoinLoaded, McpJoinRegisteredNotAttached, McpJoinNotRegistered}
 	if len(rows) != len(want) {
 		t.Fatalf("rows = %+v, want %d", rows, len(want))
 	}

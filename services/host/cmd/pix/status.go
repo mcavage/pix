@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"pix/host/cli"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/sys"
@@ -140,7 +141,7 @@ type mcpStatusLine struct {
 }
 
 // mcpSandboxRow is one (server, sandbox) truth row from the shared join path
-// (joinMCPSandboxRow, mcpjoin.go — the same path doctor renders from):
+// (mcp.JoinMCPSandboxRow, mcpjoin.go — the same path doctor renders from):
 // registered is the tri-state host registration evidence (yes|no|unknown),
 // state one of preloaded|loaded|registered-not-attached|not-registered|
 // unverifiable, evidence the concrete proof or degrade reason. Sandbox is
@@ -167,10 +168,10 @@ func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 	// currentIntent is the "current config/pack" universe — cfg.MCP plus any
 	// active-pack integration name not already there — the host-global
 	// baseline BOTH the summary list and the per-sandbox rows start from
-	// before a sandbox's own receipt extends the latter (mcpConfiguredUniverse
+	// before a sandbox's own receipt extends the latter (mcp.McpConfiguredUniverse
 	// below). Without a sandbox receipt, status/doctor stay current
 	// config/pack only.
-	currentIntent := mcpCurrentIntentNames(cfg.MCP, activeContainerMCP(cfg), nil)
+	currentIntent := mcp.McpCurrentIntentNames(cfg.MCP, activeContainerMCP(cfg), nil)
 	st := statusReport{
 		Version:         version,
 		ConfigPath:      config.Path(),
@@ -283,17 +284,17 @@ func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 	mcpLsOut, mcpLsOK := "", false
 	if sbxOnPath {
 		// BOUNDED (probeRun): timeout/failure -> registration unknowable
-		// (mcpRegUnknown everywhere below), never a hang or a false "no".
+		// (mcp.McpRegUnknown everywhere below), never a hang or a false "no".
 		if o, timedOut, err := env.RunTimed("sbx", "mcp", "ls"); err == nil && !timedOut {
 			mcpLsOut, mcpLsOK = o, true
 		}
 	}
-	regOf := func(name string) mcpRegEvidence { return mcpRegEvidenceFrom(mcpLsOut, mcpLsOK, name) }
+	regOf := func(name string) mcp.McpRegEvidence { return mcp.McpRegEvidenceFrom(mcpLsOut, mcpLsOK, name) }
 	switch {
 	case mcpLsOK:
 		registerTodoFor := statusRegisterTodoFn(cfg, env)
 		for _, m := range currentIntent {
-			reg := regOf(m) == mcpRegYes
+			reg := regOf(m) == mcp.McpRegYes
 			st.MCPServers = append(st.MCPServers, mcpStatusLine{Name: m, Registered: reg})
 			// A POSITIVELY unregistered server can't be spawned by the gateway — an
 			// outstanding item with the TYPE-CORRECT repair (the same classifier +
@@ -359,7 +360,7 @@ func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 		for _, m := range currentIntent {
 			st.MCPRows = append(st.MCPRows, mcpSandboxRow{
 				Name: m, Registered: regOf(m).String(), Sandbox: "",
-				State:    mcpJoinUnverifiable,
+				State:    mcp.McpJoinUnverifiable,
 				Evidence: "sandbox discovery unavailable (`sbx ls`); cannot enumerate pix sandboxes",
 			})
 		}
@@ -374,8 +375,8 @@ func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 			// currentIntent itself is EMPTY — finding #3). receiptOnly names
 			// are labeled in evidence as sandbox provenance, never current
 			// intent.
-			names, receiptOnly := mcpConfiguredUniverse(currentIntent, receipt, nil)
-			for _, row := range joinMCPSandboxRows(names, regOf, b.Name, receipt, rstatus) {
+			names, receiptOnly := mcp.McpConfiguredUniverse(currentIntent, receipt, nil)
+			for _, row := range mcp.JoinMCPSandboxRows(names, regOf, b.Name, receipt, rstatus) {
 				evidence := row.Evidence
 				if receiptOnly[row.Name] {
 					evidence += "; sandbox provenance only (from this sandbox's receipt); " + row.Name + " is not part of the current cfg.MCP/pack"
@@ -388,7 +389,7 @@ func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 				// lacks the entry): the exact live-attach command is the TODO.
 				// Unverifiable rows get guidance in their evidence only — status
 				// does not KNOW they are unattached, so no repair claim.
-				if row.State == mcpJoinRegisteredNotAttached {
+				if row.State == mcp.McpJoinRegisteredNotAttached {
 					// mcpLoadCommand shell-quotes both name and workspace via
 					// sys.ShellQuote (closure finding #3), so this repair command
 					// round-trips a workspace with spaces/apostrophe/shell
@@ -506,7 +507,7 @@ func (st statusReport) render(out io.Writer) {
 	// say so rather than claim everything is fine.
 	unverifiable := st.Unverifiable
 	for _, r := range st.MCPRows {
-		if r.State == mcpJoinUnverifiable {
+		if r.State == mcp.McpJoinUnverifiable {
 			unverifiable++
 		}
 	}
@@ -568,10 +569,10 @@ func (st statusReport) renderIntegrations(out io.Writer) {
 	}
 	for _, r := range st.MCPRows {
 		names[r.Name] = true
-		if r.Registered == mcpRegYes.String() {
+		if r.Registered == mcp.McpRegYes.String() {
 			readyNames[r.Name] = true
 		}
-		if r.Registered == mcpRegUnknown.String() {
+		if r.Registered == mcp.McpRegUnknown.String() {
 			unknownNames[r.Name] = true
 		}
 	}
@@ -592,7 +593,7 @@ func (st statusReport) renderIntegrations(out io.Writer) {
 			boxReady[r.Sandbox] = true
 		}
 		boxSeen[r.Sandbox] = true
-		if r.State != mcpJoinPreloaded && r.State != mcpJoinLoaded {
+		if r.State != mcp.McpJoinPreloaded && r.State != mcp.McpJoinLoaded {
 			boxReady[r.Sandbox] = false
 		}
 	}
@@ -630,7 +631,7 @@ func (st statusReport) renderIntegrations(out io.Writer) {
 func statusRegisterTodoFn(cfg *config.Config, env hostenv.Env) func(name string) string {
 	var (
 		resolved   bool
-		containers map[string]packContainer
+		containers map[string]config.MCPContainer
 		localSet   map[string]bool
 		localKnown bool
 	)
@@ -638,7 +639,7 @@ func statusRegisterTodoFn(cfg *config.Config, env hostenv.Env) func(name string)
 		if !resolved {
 			resolved = true
 			containers = activeContainerMCP(cfg)
-			localSet, localKnown = localMCPNames(env, env.HostBinary)
+			localSet, localKnown = mcp.LocalMCPNames(env, env.HostBinary)
 		}
 		kind := classifyMCPServer(name, containers, localSet, localKnown)
 		if td := mcpRegisterTodo(name, kind); td != "" {
@@ -667,9 +668,9 @@ func statusSandboxReceipt(env hostenv.Env, sandbox string) (*workspace.MCPReceip
 // the states that have one).
 func mcpRowText(r mcpSandboxRow) string {
 	switch r.State {
-	case mcpJoinPreloaded, mcpJoinLoaded:
+	case mcp.McpJoinPreloaded, mcp.McpJoinLoaded:
 		return readiness.VerdictGlyph(readiness.RequirementCore, readiness.VerdictReady, false) + " " + r.State + " (" + r.Evidence + ")"
-	case mcpJoinNotRegistered, mcpJoinRegisteredNotAttached:
+	case mcp.McpJoinNotRegistered, mcp.McpJoinRegisteredNotAttached:
 		return readiness.VerdictGlyph(readiness.RequirementCore, readiness.VerdictTodo, false) + " " + r.State + ": " + r.Evidence
 	default: // unverifiable
 		return readiness.VerdictGlyph(readiness.RequirementCore, readiness.VerdictUnverifiable, false) + " " + r.State + ": " + r.Evidence

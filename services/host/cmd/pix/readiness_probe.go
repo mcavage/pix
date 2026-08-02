@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"pix/host/hostenv"
+	"pix/host/sys"
 	"strings"
 )
 
@@ -45,8 +46,8 @@ type probeResult struct {
 
 // probeListTools runs argv with `--list-tools` appended, BOUNDED by probeRun's
 // timeout + output cap, and classifies the outcome. A failed probe's output is
-// run through classifyProbeFailure so an EXPLICIT policy denial classifies as
-// probeDenied rather than a generic error. The diagnostic is deliberately
+// run through sys.ClassifyProbeFailure so an EXPLICIT policy denial classifies as
+// sys.ProbeDenied rather than a generic error. The diagnostic is deliberately
 // generic (never raw error text), so a registered command's tokens — which may
 // carry pasted secrets — can never leak through an error message.
 func probeListTools(env hostenv.Env, argv []string) probeResult {
@@ -59,7 +60,7 @@ func probeListTools(env hostenv.Env, argv []string) probeResult {
 		return probeResult{status: probeTimedOut, detail: fmt.Sprintf("timed out after %s", probeTimeout)}
 	}
 	if err != nil {
-		if classifyProbeFailure(out, err) == probeDenied {
+		if sys.ClassifyProbeFailure(out, err) == sys.ProbeDenied {
 			return probeResult{status: probeDeniedByPolicy, detail: "positively refused by policy/permission"}
 		}
 		return probeResult{status: probeError, detail: classifyProbeErr(err)}

@@ -169,7 +169,7 @@ func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	pinLocalMCP(t, gwServerName)
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packManifest{Name: "work", Schema: 1,
-		Integrations: []packIntegration{{Name: "Gog", MCP: gwServerName}}})
+		Integrations: []packIntegration{{Name: "gog", MCP: gwServerName}}})
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)

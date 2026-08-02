@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"pix/host/cli"
 	"pix/host/knowledge"
+	"pix/host/mcp"
 	"pix/host/memory"
 	"pix/host/rpc"
 	"strings"
@@ -429,7 +430,7 @@ func TestRunVerb_HelpPrintsUsage(t *testing.T) {
 
 func TestMCPUsageListsEverySubcommand(t *testing.T) {
 	const want = "usage: pix mcp <register|ls|load|auth|bundle> [args]"
-	if !strings.Contains(mcpUsage, want) {
-		t.Fatalf("mcp usage synopsis missing subcommands: %q", mcpUsage)
+	if !strings.Contains(mcp.McpUsage, want) {
+		t.Fatalf("mcp usage synopsis missing subcommands: %q", mcp.McpUsage)
 	}
 }

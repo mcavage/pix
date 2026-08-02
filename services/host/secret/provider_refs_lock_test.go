@@ -123,7 +123,7 @@ func TestSecretRmHoldsLockAcrossBothFileTransaction(t *testing.T) {
 		}
 	}
 	if strings.Contains(files[fakeRefsPath], "ANTHROPIC_API_KEY") || strings.Contains(files[hmPath], "ANTHROPIC_API_KEY") {
-		t.Errorf("key not removed from both files: op-refs=%q hostmode=%q", files[fakeRefsPath], files[hmPath])
+		t.Errorf("key not removed from both Files: op-refs=%q hostmode=%q", files[fakeRefsPath], files[hmPath])
 	}
 }
 

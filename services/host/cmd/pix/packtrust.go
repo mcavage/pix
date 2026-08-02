@@ -12,7 +12,7 @@
 //     only a NAME, and the argv (if any) is launcher-built. No prompt,
 //     non-TTY fine.
 //   - Tier-1: ANY host-exec facet — an integration.mcp that resolves to a
-//     LOCAL stdio host command (mcpRegistrar's local partition:
+//     LOCAL stdio host command (mcp.McpRegistrar's local partition:
 //     `pix-host mcp <name>` per `pix-host mcp --list`), a
 //     host=true [[proxy]] wrapper, or a host=true [[bin]] external binary.
 //     Adoption halts at the bill-of-materials screen and requires an
@@ -38,6 +38,7 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"sort"
 	"strings"
 )
@@ -61,7 +62,7 @@ type hostBoM struct {
 }
 
 // hostBoMMCP is one host-spawned MCP server: its name plus the exact argv the
-// gateway will ultimately run (mcpRegistrar.serverCmd — reused, not re-derived,
+// gateway will ultimately run (mcp.McpRegistrar.serverCmd — reused, not re-derived,
 // so the screen shows the real shape: gog's hardened flags, or
 // `pix-host mcp <name>`).
 type hostBoMMCP struct {
@@ -131,7 +132,7 @@ func verifyPackInferenceTrust(p *packInfo, cfgGogAccount string, env hostenv.Env
 	})
 }
 
-// localMCPClassifier resolves mcpRegistrar's local-vs-gateway partition into
+// localMCPClassifier resolves mcp.McpRegistrar's local-vs-gateway partition into
 // a predicate: TRUE for a name treated as a LOCAL stdio server this host runs
 // (`pix-host mcp --list`) — i.e. attaching it spawns a host command.
 // With the partition ESTABLISHED, a name not in the local set — a remote
@@ -142,7 +143,7 @@ func verifyPackInferenceTrust(p *packInfo, cfgGogAccount string, env hostenv.Env
 // UNKNOWN classification FAILS CLOSED (round-3 #3): when the local set cannot
 // be established (probe error / pix-host unresolved), every non-gog name
 // is treated as HOST-EXEC (Tier-1) so the adoption gate fires. The old
-// unknown⇒Tier-0 shortcut leaned on registerServers skipping registration on
+// unknown⇒Tier-0 shortcut leaned on mcp.RegisterServers skipping registration on
 // the same condition — but the name still lands in cfg.MCP and is attached
 // via --mcp, so one ALREADY-registered in the gateway would run its host
 // command with NO gate ever shown. Over-prompting on a transient probe
@@ -150,7 +151,7 @@ func verifyPackInferenceTrust(p *packInfo, cfgGogAccount string, env hostenv.Env
 // reference-only special case (its registration is launcher-built, never
 // pack-authored).
 func localMCPClassifier(env hostenv.Env, hostResolver func() (string, error)) func(string) bool {
-	set, known := localMCPNames(env, hostResolver)
+	set, known := mcp.LocalMCPNames(env, hostResolver)
 	return func(name string) bool {
 		if !known {
 			return name != gwServerName // fail closed: unknown ⇒ gate (except Google Workspace)
@@ -198,7 +199,7 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 	if account == "" {
 		account = "<gog_account>"
 	}
-	reg := mcpRegistrar{gog: "gog", account: account, hostBin: "pix-host"}
+	reg := mcp.McpRegistrar{Gog: "gog", Account: account, HostBin: "pix-host"}
 	if isLocalMCP == nil {
 		// No partition available at all: same fail-closed posture as an
 		// unknown probe (round-3 #3) — gate every non-gog name.
@@ -223,7 +224,7 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 		case strings.TrimSpace(ig.URL) != "":
 			b.RemoteMCP = append(b.RemoteMCP, hostBoMRemote{Name: name, URL: strings.TrimSpace(ig.URL)})
 		case isLocalMCP(name):
-			b.MCP = append(b.MCP, hostBoMMCP{Name: name, Argv: reg.serverCmd(name)})
+			b.MCP = append(b.MCP, hostBoMMCP{Name: name, Argv: reg.ServerCmd(name)})
 		}
 	}
 	egress := map[string]bool{}

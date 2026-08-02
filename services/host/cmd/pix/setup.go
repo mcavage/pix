@@ -585,7 +585,7 @@ func validateSetupSemantics(opts onboardOpts, cfg *config.Config, env hostenv.En
 // and fails closed before it writes anything, so a gate copy would be a second
 // implementation of the same rule that could drift from it.
 func setupGate(env hostenv.Env, inv setupInventory, out io.Writer, interactive bool) error {
-	// Shipped-catalog remotes (mcpCatalogNames) must be registered AND
+	// Shipped-catalog remotes (mcp.McpCatalogNames) must be registered AND
 	// auth-ready BEFORE setup writes anything — setup must never claim success
 	// for a server the gateway cannot spawn or that 401s on first use. The gate
 	// covers both the new --mcp proposal and any catalog name already persisted

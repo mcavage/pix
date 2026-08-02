@@ -45,14 +45,15 @@ const (
 // architecture was chosen.
 var pkgLayer = map[string]int{
 	// L0 — foundation. No domain knowledge.
-	"sys":         layerFoundation,
-	"sys/systest": layerFoundation,
-	"config":      layerFoundation,
-	"routing":     layerFoundation,
-	"rpc":         layerFoundation,
-	"cli":         layerFoundation,
-	"hostenv":     layerFoundation,
-	"launcher":    layerFoundation,
+	"sys":                 layerFoundation,
+	"sys/systest":         layerFoundation,
+	"hostenv/hostenvtest": layerFoundation,
+	"config":              layerFoundation,
+	"routing":             layerFoundation,
+	"rpc":                 layerFoundation,
+	"cli":                 layerFoundation,
+	"hostenv":             layerFoundation,
+	"launcher":            layerFoundation,
 	// workspace is L0, not a capability: it answers "where am I working and what
 	// state is stored there", which is location resolution in the same family as
 	// config. It imports only config and sys. Filing it as a capability was a
@@ -71,6 +72,7 @@ var pkgLayer = map[string]int{
 	"memory":      layerCapability,
 	"knowledge":   layerCapability,
 	"secret":      layerCapability,
+	"mcp":         layerCapability,
 
 	// L2 — the shared model of "is this working".
 	"readiness": layerReadiness,
@@ -104,7 +106,8 @@ var l0Order = map[string]int{
 	"sys": 1, "rpc": 1, "launcher": 1,
 	"workspace":   2,
 	"sys/systest": 2, "hostenv": 3,
-	"cli": 4,
+	"hostenv/hostenvtest": 4,
+	"cli":                 4,
 }
 
 // drainingPackages may still violate the rules while they are being emptied.

@@ -1,11 +1,11 @@
-package main
+package sys
 
 import (
 	"regexp"
 	"strings"
 )
 
-// doctor_classify.go is the PURE probe-outcome classifier: given the captured
+// probeclass.go is the PURE probe-outcome classifier: given the captured
 // output (+ error) of a failed readiness probe, decide whether the failure is
 // a positive policy/permission DENIAL (verdict denied), a missing/expired
 // credential the user can fix (an auth TODO), or merely UNVERIFIABLE
@@ -24,28 +24,28 @@ import (
 //   - everything else — timeout, connection refused, EOF, DNS, TLS, a generic
 //     non-zero exit — is unverifiable.
 
-// probeClass is the classified outcome of a failed probe.
-type probeClass int
+// ProbeClass is the classified outcome of a failed probe.
+type ProbeClass int
 
 const (
-	// probeUnverifiable: the probe could not prove anything (transport, DNS,
+	// ProbeUnverifiable: the probe could not prove anything (transport, DNS,
 	// TLS, timeout, generic failure). Callers map this to readiness.VerdictUnverifiable.
-	probeUnverifiable probeClass = iota
-	// probeDenied: the remote side POSITIVELY refused by policy/permission.
+	ProbeUnverifiable ProbeClass = iota
+	// ProbeDenied: the remote side POSITIVELY refused by policy/permission.
 	// Callers map this to readiness.VerdictDenied.
-	probeDenied
-	// probeAuthTodo: authentication is missing/expired (bare 401 /
+	ProbeDenied
+	// ProbeAuthTodo: authentication is missing/expired (bare 401 /
 	// unauthorized). An actionable credential gap for the caller to surface
 	// as a verified todo — NOT an org-policy denial.
-	probeAuthTodo
+	ProbeAuthTodo
 )
 
 // String returns the machine-readable evidence token for the class.
-func (p probeClass) String() string {
+func (p ProbeClass) String() string {
 	switch p {
-	case probeDenied:
+	case ProbeDenied:
 		return "denied"
-	case probeAuthTodo:
+	case ProbeAuthTodo:
 		return "auth-todo"
 	default:
 		return "unverifiable"
@@ -88,28 +88,28 @@ var authPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bauthentication required\b`),
 }
 
-// classifyProbeFailure classifies a FAILED probe's combined output + error.
+// ClassifyProbeFailure classifies a FAILED probe's combined output + error.
 // It is pure (no I/O) and case-insensitive. Explicit denial tokens win over
 // auth tokens (a "403 forbidden" that also mentions a token is still a
 // denial); everything unmatched is unverifiable — the safe default that never
 // invents a verified failure out of a flaky transport.
-func classifyProbeFailure(output string, err error) probeClass {
+func ClassifyProbeFailure(output string, err error) ProbeClass {
 	hay := strings.ToLower(output)
 	if err != nil {
 		hay += "\n" + strings.ToLower(err.Error())
 	}
 	for _, re := range deniedPatterns {
 		if re.MatchString(hay) {
-			return probeDenied
+			return ProbeDenied
 		}
 	}
 	if http403.MatchString(hay) && deniedBodyTokens.MatchString(hay) {
-		return probeDenied
+		return ProbeDenied
 	}
 	for _, re := range authPatterns {
 		if re.MatchString(hay) {
-			return probeAuthTodo
+			return ProbeAuthTodo
 		}
 	}
-	return probeUnverifiable
+	return ProbeUnverifiable
 }

@@ -15,6 +15,7 @@ import (
 	"pix/host/cli"
 	"pix/host/hostenv"
 	"pix/host/launcher"
+	"pix/host/mcp"
 	"pix/host/monitor/tui"
 	"pix/host/secret"
 	"pix/host/sys"
@@ -1262,7 +1263,7 @@ func launchTask(o runOpts) error {
 	// Resolve every configured MCP server to attach at create (--static-mcp).
 	// S01: all of them preload. A task is always a fresh create, so it's always
 	// needed.
-	o.StaticMCP = allPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
+	o.StaticMCP = mcp.AllPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
 
 	args := buildSbxArgs(cfg, o, version)
 	if os.Getenv("PIX_DEBUG") != "" {

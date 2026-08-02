@@ -363,7 +363,7 @@ func TestPackUse_GogReferenceStaysTier0(t *testing.T) {
 	pinLocalMCP(t) // empty local set — gog is never listed
 	root := filepath.Join(dir, "pack")
 	mustWritePack(t, root, packManifest{Name: "personal", Schema: 1,
-		Integrations: []packIntegration{{Name: "Gog", MCP: gwServerName, Env: "GOG_KEYRING"}}})
+		Integrations: []packIntegration{{Name: "gog", MCP: gwServerName, Env: "GOG_KEYRING"}}})
 
 	var out bytes.Buffer
 	runPackUse(localMCPEnv(), &out, []string{root}) // no --yes, non-TTY

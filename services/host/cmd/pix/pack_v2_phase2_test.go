@@ -67,7 +67,7 @@ func TestComputeHostBoM_EnumeratesEveryHostExecFacet(t *testing.T) {
 		Name: "work",
 		Integrations: []packIntegration{
 			{Name: "Fastmail", MCP: "fastmail", Env: "FASTMAIL_TOKEN"},
-			{Name: "Gog", MCP: gwServerName, Env: "GOG_KEYRING"},
+			{Name: "gog", MCP: gwServerName, Env: "GOG_KEYRING"},
 		},
 		Proxies: []packProxy{
 			{Name: "platformio", Host: true, Egress: []string{"api.registry.platformio.org"}},
@@ -255,7 +255,7 @@ func TestHostExecFingerprint(t *testing.T) {
 	}
 	base := packManifest{
 		Name:         "work",
-		Integrations: []packIntegration{{Name: "Gog", MCP: gwServerName, Env: "GOG_KEYRING"}},
+		Integrations: []packIntegration{{Name: "gog", MCP: gwServerName, Env: "GOG_KEYRING"}},
 		Proxies:      []packProxy{{Name: "platformio", Host: true, Egress: []string{"api.registry.platformio.org"}}},
 		Bins:         []packBin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: true}},
 	}

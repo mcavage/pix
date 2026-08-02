@@ -12,6 +12,7 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/workspace"
 )
 
@@ -55,13 +56,13 @@ const onboardingFileName = "onboarding.json"
 
 // onboardMCPCatalogAllow is the set of remote gateway-catalog MCP names the
 // onboarding file may enable in addition to gog and the locally-known servers.
-// It IS mcpCatalogNames — the single source of truth for what `pix mcp
+// It IS mcp.McpCatalogNames — the single source of truth for what `pix mcp
 // bundle` actually registers — never an independent copy that can drift (the
 // old hand-written list had grown a "linear" that no pix command could
 // register, so accepting it silently persisted a server that could never
 // come up). Anything else is configured with `pix mcp` directly, not via
 // an untrusted onboarding file.
-var onboardMCPCatalogAllow = mcpCatalogNames
+var onboardMCPCatalogAllow = mcp.McpCatalogNames
 
 // validateOnboardingResult rejects anything outside the allowlist BEFORE it
 // touches config. env/hostResolver resolve the locally-known MCP set; when that
@@ -87,7 +88,7 @@ func validateOnboardingResult(r *onboardingResult, cfg *config.Config, env hoste
 		// to MCP (for example a malformed model value) must fail without paying
 		// for, or potentially hanging on, an irrelevant host-binary probe.
 		if !localLoaded {
-			localSet, localKnown = localMCPNames(env, hostResolver)
+			localSet, localKnown = mcp.LocalMCPNames(env, hostResolver)
 			localLoaded = true
 		}
 		if localKnown && localSet[m] {

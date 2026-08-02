@@ -18,6 +18,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/knowledge"
 	"pix/host/launcher"
+	"pix/host/mcp"
 	"pix/host/secret"
 	"pix/host/service"
 	"pix/host/sys"
@@ -282,7 +283,7 @@ func runRun(argv []string) {
 	// S01: all of them preload — no more eager/lazy split. Only needed on a
 	// create — a re-attach never sends --static-mcp.
 	if willCreate(state, o.Replace) {
-		o.StaticMCP = allPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
+		o.StaticMCP = mcp.AllPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
 	}
 
 	plan := planSandboxLaunch(state, o.Replace, cfg, o, version)
@@ -511,7 +512,7 @@ func sandboxAppeared(st sbxState) bool { return st == sbxRunning || st == sbxSto
 // execSbxRunAndRecordCreate, once its creation-evidence poll has positively
 // seen run.go's OWN `sbx run` create appear. preloaded is the EXACT
 // --static-mcp set that launch emitted (o.StaticMCP:
-// allPreloadedMCP(cfg.MCP+o.MCP), which already folds in every
+// mcp.AllPreloadedMCP(cfg.MCP+o.MCP), which already folds in every
 // active/transient pack integration's MCP server — applyPackToLaunch runs
 // before this set is computed), so a receipt read later never disagrees with
 // what create actually requested. merge=true (the normal path: the
@@ -729,7 +730,7 @@ func stalePackReattachWarning(cfg *config.Config, o runOpts, reattaching bool) s
 // desiredMCPUniverse computes the FULL set of MCP server names this
 // invocation would preload at CREATE: cfg.MCP, the active/transient pack's
 // integration servers (packMcpNames), and any explicit --mcp, deduped via
-// allPreloadedMCP. It is the read-only twin of applyPackToLaunch's pack-fold
+// mcp.AllPreloadedMCP. It is the read-only twin of applyPackToLaunch's pack-fold
 // step (pack.go) used ONLY for this comparison: a re-attach never mounts a
 // pack (skills/bin/knowledge are create-time only) and must never trigger
 // applyPackToLaunch's mount/kit-synthesis side effects just to answer "what
@@ -744,7 +745,7 @@ func desiredMCPUniverse(cfg *config.Config, o runOpts) []string {
 		}
 	}
 	names = append(names, o.MCP...)
-	return allPreloadedMCP(names)
+	return mcp.AllPreloadedMCP(names)
 }
 
 // mcpLoadCommand returns the exact `pix mcp load NAME [WORKSPACE]`
@@ -812,7 +813,7 @@ func mcpReattachWarning(cfg *config.Config, o runOpts, reattaching bool) string 
 	}
 	var missing []string
 	for _, name := range desired {
-		if receiptClaim(receipt, rstatus, name) == "" {
+		if mcp.ReceiptClaim(receipt, rstatus, name) == "" {
 			missing = append(missing, name)
 		}
 	}
@@ -959,16 +960,12 @@ func parseRunArgs(argv []string) (runOpts, error) {
 // default (".") always is; any other value must name an existing directory. A
 // non-directory token that matches a known verb gets a "did you mean" hint.
 func validateRunWorkspace(ws string) error {
-	if ws == "." {
-		return nil
-	}
-	if fi, err := os.Stat(ws); err == nil && fi.IsDir() {
-		return nil
-	}
-	if knownVerbs[ws] {
+	err := workspace.Validate(ws)
+	var nd workspace.ErrNotDirectory
+	if errors.As(err, &nd) && knownVerbs[ws] {
 		return fmt.Errorf("%q is not a directory. Did you mean `pix %s`?", ws, ws)
 	}
-	return fmt.Errorf("%q is not a directory", ws)
+	return err
 }
 
 // resolveRepoRoot finds a pix repo checkout for the local kit path, in

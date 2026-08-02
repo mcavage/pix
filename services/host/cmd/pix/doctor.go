@@ -10,6 +10,7 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/readiness"
 	"pix/host/rpc"
 	"pix/host/secret"
@@ -68,8 +69,8 @@ func defaultShellEnv() hostenv.Env {
 
 // unwrapOpRun returns the effective command doctor would trust to exec. With
 // no `--` it is argv itself (a bare command). With a `--`, it unwraps ONLY the
-// EXACT wrapper grammar the launcher generates (mcpRegistrar.execArgv via the
-// shared opRunWrapPrefix):
+// EXACT wrapper grammar the launcher generates (mcp.McpRegistrar.execArgv via the
+// shared mcp.OpRunWrapPrefix):
 //
 //	<canonical op> run --no-masking --env-file=<launcher op-refs.env> -- <cmd…>
 //
@@ -117,7 +118,7 @@ func unwrapOpRun(env hostenv.Env, argv []string) ([]string, bool) {
 	if refs == "" {
 		return nil, false
 	}
-	want := opRunWrapPrefix(opTok, refs)
+	want := mcp.OpRunWrapPrefix(opTok, refs)
 	prefix := argv[:sep+1]
 	if len(prefix) != len(want) {
 		return nil, false

@@ -29,6 +29,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/readiness"
 	"pix/host/sys/systest"
 	"pix/host/workspace"
@@ -202,8 +203,8 @@ func TestCreateReceiptRecordsWorkspace(t *testing.T) {
 	}
 	// And it round-trips through the resolver: the exact flow behind
 	// `run --name pix-demo` then `mcp load slack <workspace>`.
-	if got, err := resolveMcpLoadSandbox(ws); err != nil || got != "pix-demo" {
-		t.Fatalf("resolveMcpLoadSandbox = %q, %v; want pix-demo", got, err)
+	if got, err := mcp.ResolveMcpLoadSandbox(ws); err != nil || got != "pix-demo" {
+		t.Fatalf("mcp.ResolveMcpLoadSandbox = %q, %v; want pix-demo", got, err)
 	}
 }
 
@@ -214,20 +215,20 @@ func TestResolveMcpLoadSandbox_RefusalPaths(t *testing.T) {
 	canon := workspace.CanonicalPath(ws)
 
 	// Default fallback first (no receipts): the derived name, no error.
-	if got, err := resolveMcpLoadSandbox(ws); err != nil || got != workspace.DeriveSandboxName(ws) {
+	if got, err := mcp.ResolveMcpLoadSandbox(ws); err != nil || got != workspace.DeriveSandboxName(ws) {
 		t.Fatalf("clean fallback = %q, %v; want %s", got, err, workspace.DeriveSandboxName(ws))
 	}
 
 	// Ambiguous: two receipts claim the workspace -> refuse, never a target.
 	mustCreateReceipt(t, stateDir, "pix-a", canon, nil)
 	mustCreateReceipt(t, stateDir, "pix-b", canon, nil)
-	if got, err := resolveMcpLoadSandbox(ws); err == nil {
+	if got, err := mcp.ResolveMcpLoadSandbox(ws); err == nil {
 		t.Fatalf("ambiguous mapping must refuse, resolved %q", got)
 	}
 
 	// Unresolvable state dir: refuse (cannot prove no mapping exists).
 	withSandboxMCPStateDirFn(t, func() (string, error) { return "", fmt.Errorf("no state dir") })
-	if got, err := resolveMcpLoadSandbox(ws); err == nil {
+	if got, err := mcp.ResolveMcpLoadSandbox(ws); err == nil {
 		t.Fatalf("unresolvable state dir must refuse, resolved %q", got)
 	}
 }
@@ -311,7 +312,7 @@ func TestGogAttachCheckUsesReceiptJoin(t *testing.T) {
 		// The sandbox's complete valid receipt has NO gog entry: cfg naming
 		// gog is intent, not attachment — a verified optional TODO with the
 		// exact live-attach command.
-		c := gogAttachCheck(cfg, receiptCtx(t, []string{"slack"}), mcpRegYes)
+		c := gogAttachCheck(cfg, receiptCtx(t, []string{"slack"}), mcp.McpRegYes)
 		if c.Result() != readiness.VerdictTodo {
 			t.Fatalf("check = %+v, want a verified registered-not-attached todo", c)
 		}
@@ -321,14 +322,14 @@ func TestGogAttachCheckUsesReceiptJoin(t *testing.T) {
 	})
 
 	t.Run("receipted preload -> ready", func(t *testing.T) {
-		c := gogAttachCheck(cfg, receiptCtx(t, []string{gwServerName}), mcpRegYes)
+		c := gogAttachCheck(cfg, receiptCtx(t, []string{gwServerName}), mcp.McpRegYes)
 		if c.Result() != readiness.VerdictReady || !strings.Contains(c.Detail, "preloaded by pix at create") {
 			t.Fatalf("check = %+v, want ready from the receipt's preload claim", c)
 		}
 	})
 
 	t.Run("no sandbox context -> config membership is intent, never ready", func(t *testing.T) {
-		c := gogAttachCheck(cfg, noCtx, mcpRegYes)
+		c := gogAttachCheck(cfg, noCtx, mcp.McpRegYes)
 		if c.Result() == readiness.VerdictReady {
 			t.Fatalf("check = %+v — config membership alone must never render ready", c)
 		}
@@ -434,7 +435,7 @@ func TestStatusHeadlineUnverifiableRows(t *testing.T) {
 			// JSON stays the row truth: the row itself reads unverifiable.
 			found := false
 			for _, r := range st.MCPRows {
-				if r.Name == gwServerName && r.Sandbox == "pix-proj" && r.State == mcpJoinUnverifiable {
+				if r.Name == gwServerName && r.Sandbox == "pix-proj" && r.State == mcp.McpJoinUnverifiable {
 					found = true
 				}
 			}

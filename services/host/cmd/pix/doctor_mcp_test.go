@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/readiness"
 	"pix/host/sys"
 	"pix/host/sys/systest"
@@ -86,7 +87,7 @@ func TestMCPRegistrationStates(t *testing.T) {
 
 	t.Run("pack remote not registered -> register TODO", func(t *testing.T) {
 		cfg.MCP = nil
-		containers := map[string]packContainer{"acme": {RemoteURL: "https://mcp.acme.example/sse"}}
+		containers := map[string]config.MCPContainer{"acme": {RemoteURL: "https://mcp.acme.example/sse"}}
 		g := mcpGroupWith(cfg, mcpFake().env(), "google-workspace\n", true, true, containers, noCtx)
 		c := findCheck(t, g, "acme")
 		if c.Result() != readiness.VerdictTodo || c.Todo != "pix mcp register acme" {
@@ -394,7 +395,7 @@ func TestMCPGroupSwitchedPackKeepsOldIntegrationVisible(t *testing.T) {
 	if err := workspace.WriteCreateReceipt(stateDir, box, "", []string{"acme-remote"}, receiptClock); err != nil {
 		t.Fatal(err)
 	}
-	newContainers := map[string]packContainer{"newco": {RemoteURL: "https://mcp.newco.example/sse"}}
+	newContainers := map[string]config.MCPContainer{"newco": {RemoteURL: "https://mcp.newco.example/sse"}}
 	g := mcpGroupWith(cfg, env, "newco\n", true, true, newContainers, resolveMCPSandboxContext(env))
 	if !hasCheck(g, "acme-remote attachment") {
 		t.Fatalf("switched-pack historical MCP provenance must remain visible: %+v", g)
@@ -754,7 +755,7 @@ func TestMCPNoRetiredWording(t *testing.T) {
 }
 
 // TestMCPCatalogNamesMatchShippedBundle anti-drift-parses the shipped catalog
-// bundle JSON against mcpCatalogNames, so the classifier can never silently
+// bundle JSON against mcp.McpCatalogNames, so the classifier can never silently
 // diverge from what `pix mcp bundle` actually registers.
 func TestMCPCatalogNamesMatchShippedBundle(t *testing.T) {
 	// The bundle lives at the repo root; walk up from the package dir.
@@ -763,14 +764,14 @@ func TestMCPCatalogNamesMatchShippedBundle(t *testing.T) {
 	if err != nil {
 		t.Skipf("shipped bundle not found at %s: %v", path, err)
 	}
-	for name := range mcpCatalogNames {
+	for name := range mcp.McpCatalogNames {
 		if !strings.Contains(string(b), `"`+name+`"`) {
-			t.Errorf("mcpCatalogNames has %q but the shipped bundle does not", name)
+			t.Errorf("mcp.McpCatalogNames has %q but the shipped bundle does not", name)
 		}
 	}
 	for _, name := range []string{"notion", "atlassian", "granola"} {
-		if !mcpCatalogNames[name] {
-			t.Errorf("shipped bundle server %q missing from mcpCatalogNames", name)
+		if !mcp.McpCatalogNames[name] {
+			t.Errorf("shipped bundle server %q missing from mcp.McpCatalogNames", name)
 		}
 	}
 }

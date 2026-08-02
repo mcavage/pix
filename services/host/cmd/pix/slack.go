@@ -28,6 +28,7 @@ import (
 	"os"
 	"pix/host/cli"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/readiness"
 	"pix/host/secret"
 	"strings"
@@ -538,7 +539,7 @@ func slackSetupStatic(env hostenv.Env, opts slackSetupOpts, in io.Reader, out io
 	}
 
 	// REGISTER FIRST, save second — mirrors gworkspace's commit order.
-	// registerServers itself hard-fails (errSbxUnavailable) when sbx is
+	// mcp.RegisterServers itself hard-fails (mcp.ErrSbxUnavailable) when sbx is
 	// absent rather than silently reporting a no-op success; a failure here
 	// returns before cfg.AddMCP/Save ever runs.
 	if err := slackRegisterAndSave(cfg, env, out, hostResolver, wasRegistered, ""); err != nil {
@@ -789,7 +790,7 @@ func slackRegistrationPresence(env hostenv.Env) (present bool, err error) {
 			"refusing to remove config while the gateway state is unreadable; check the sbx daemon (sbx mcp status), "+
 			"then re-run pix slack disable", slackServerName)
 	}
-	return mcpRegisteredIn(out, slackServerName), nil
+	return mcp.McpRegisteredIn(out, slackServerName), nil
 }
 
 // slackDisable is `pix slack disable`'s dispatcher: a COMPLETE [slack] OAuth

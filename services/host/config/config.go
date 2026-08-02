@@ -1032,6 +1032,23 @@ func HostRefsPath() string {
 // callers (secret, mcp, doctor, status, setup, slack) need to recognise the
 // server without importing the workflow that installs it. A name that crosses
 // domains is configuration, not behaviour.
+// MCPContainer is one MCP server a pack contributes: a Manifest ref (`sbx mcp
+// add --local --url`, gateway resolves the OCI image; creds Docker-side), an
+// Image ref (`docker run <image>`, op-run wrapped; creds from op-refs forwarded
+// via EnvKeys), or a RemoteURL (`sbx mcp add --url`, a remote MCP endpoint the
+// gateway OAuths host-side). Exactly one of Manifest/Image/RemoteURL is set.
+//
+// It lives in config rather than in pack or mcp because pack PRODUCES these
+// and mcp CONSUMES them: a type two capabilities exchange has to sit below
+// both, or one of them ends up importing the other.
+type MCPContainer struct {
+	Manifest  string
+	Image     string
+	EnvKeys   []string          // env var names to forward into an Image container (-e KEY)
+	EnvValues map[string]string // non-secret literals forwarded as -e KEY=VALUE
+	RemoteURL string            // remote MCP endpoint URL (`sbx mcp add <name> --url <url>`)
+}
+
 const GWServerName = "google-workspace"
 
 // GWDocsCreateServerName is the write-scoped companion server, registered

@@ -9,6 +9,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/monitor"
 	"pix/host/rpc"
 	"pix/host/sys"
@@ -169,7 +170,7 @@ func TestGatherStatusMCPSbxAbsent(t *testing.T) {
 		t.Fatalf("MCPRows = %+v, want 1 unverifiable row (discovery unavailable)", st.MCPRows)
 	}
 	r := st.MCPRows[0]
-	if r.State != mcpJoinUnverifiable || r.Registered != "unknown" || r.Sandbox != "" {
+	if r.State != mcp.McpJoinUnverifiable || r.Registered != "unknown" || r.Sandbox != "" {
 		t.Errorf("row = %+v, want unverifiable/unknown with no sandbox claim", r)
 	}
 	if !strings.Contains(r.Evidence, "sandbox discovery unavailable") {

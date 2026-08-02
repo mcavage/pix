@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"pix/host/cli"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/readiness"
 	"pix/host/secret"
 	"regexp"
@@ -54,7 +55,7 @@ func gogAccount(cfg *config.Config, env hostenv.Env) string {
 // error).
 
 // gogHardenedFlags are the read-only runtime flags a healthy gog registration
-// MUST carry (mcp.go's gogHardenedArgv). Doctor verifies their presence in the
+// MUST carry (mcp.go's mcp.GogHardenedArgv). Doctor verifies their presence in the
 // registered argv and reports them as evidence — a registration missing any of
 // them is a verified gap (writes would not be blocked at runtime).
 var gogHardenedFlags = []string{"--gmail-no-send", "--wrap-untrusted", "--readonly"}
@@ -80,7 +81,7 @@ func gogMissingHardenedFlags(env hostenv.Env, argv []string) []string {
 }
 
 // gogHeadlessProbe probes the RECONSTRUCTED headless spawn (the exact argv
-// registration would produce for these inputs — gogRegisteredArgv, so the
+// registration would produce for these inputs — mcp.GogRegisteredArgv, so the
 // probe can never drift lighter than what registration runs): op-wrapped when
 // op + op-refs resolve, bare otherwise.
 func gogHeadlessProbe(env hostenv.Env, acct, opRefs string) probeResult {
@@ -93,10 +94,10 @@ func gogHeadlessProbe(env hostenv.Env, acct, opRefs string) probeResult {
 		return probeResult{status: probeError, detail: "could not run (gog not found)"}
 	}
 	opPath, opErr := env.LookPath("op")
-	if opErr != nil || opRefs == "" || !opRefFilled(env, "GOG_KEYRING_PASSWORD") {
+	if opErr != nil || opRefs == "" || !secret.OpRefFilled(env, "GOG_KEYRING_PASSWORD") {
 		opPath, opRefs = "", ""
 	}
-	return probeListTools(env, gogRegisteredArgv(gogPath, opPath, opRefs, acct))
+	return probeListTools(env, mcp.GogRegisteredArgv(gogPath, opPath, opRefs, acct))
 }
 
 // gogHeadlessOK is gogHeadlessProbe collapsed to a bool for callers that only
@@ -145,7 +146,7 @@ func gogGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPres
 	// gog's attachment truth comes from the SAME receipt-backed join row every
 	// other MCP server uses (mcpjoin.go, via the shared workspace-sandbox
 	// context) — config membership alone is an intent, never an attachment.
-	gogReg := mcpRegEvidenceFrom(mcpOut, mcpOK, gwServerName)
+	gogReg := mcp.McpRegEvidenceFrom(mcpOut, mcpOK, gwServerName)
 
 	// HONEST PATH: probe the command sbx ACTUALLY registered for gog. This is the
 	// only check that proves the real registration — account, op-refs path, and
@@ -535,14 +536,14 @@ func parseGogCommandJSON(env hostenv.Env, out string) ([]string, bool) {
 
 // gogAttachCheck is check 5: gog's sandbox attachment. With a workspace
 // sandbox context it is the SAME receipt-backed join row every other MCP
-// server gets (mcpAttachCheck -> joinMCPSandboxRow): preloaded/loaded receipt
+// server gets (mcpAttachCheck -> mcp.JoinMCPSandboxRow): preloaded/loaded receipt
 // claims render ready; a registered server a COMPLETE valid receipt has no
 // entry for is a verified registered-not-attached TODO (a sandbox created
 // BEFORE gog was configured is NOT attached just because cfg now names it);
 // everything else stays unverifiable. Without a sandbox context, config
 // membership is stated as INTENT (preloads at the next create) — an
 // informational note, never a ready attachment claim.
-func gogAttachCheck(cfg *config.Config, ctx mcpSandboxContext, reg mcpRegEvidence) readiness.Check {
+func gogAttachCheck(cfg *config.Config, ctx mcpSandboxContext, reg mcp.McpRegEvidence) readiness.Check {
 	if ctx.mode == mcpAttachReceipt {
 		return mcpAttachCheck(gwServerName, ctx, reg)
 	}

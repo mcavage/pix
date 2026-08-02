@@ -13,7 +13,7 @@ package main
 //  3: `pix mcp register/load/auth/bundle` (and, by the same policy,
 //     read-only `mcp ls`) printed "would run: ..." and exited 0 when sbx
 //     isn't on PATH — a command that PROMISES an operation must not report a
-//     silent success. They now return/exit with errSbxUnavailable ->
+//     silent success. They now return/exit with mcp.ErrSbxUnavailable ->
 //     rpc.ExitServiceDown (3), the SAME "dependency unavailable" code
 //     `pix memory`/`secret` already use, while still printing the exact
 //     recovery command verbatim and never mutating a receipt or config file.
@@ -189,7 +189,7 @@ func TestAgentReassessModel_PointsAtLiveScorecardPath(t *testing.T) {
 // --- finding 3: mcp verbs that promise an operation must not exit 0 --------
 
 // TestRunMcpLs_AbsentSbxExitsServiceDown: read-only `mcp ls` also exits 3 when
-// sbx is unreachable — the documented policy decision (see errSbxUnavailable)
+// sbx is unreachable — the documented policy decision (see mcp.ErrSbxUnavailable)
 // so a caller can tell "zero servers" from "couldn't ask".
 func TestRunMcpLs_AbsentSbxExitsServiceDown(t *testing.T) {
 	if os.Getenv("PIX_DXFIX_MCP_LS") == "1" {
@@ -279,7 +279,7 @@ func TestRunMcpBundle_AbsentSbxExitsServiceDown(t *testing.T) {
 // TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation: `mcp register`
 // promises to register servers with the gateway; sbx-absent must exit 3, print
 // the exact would-run commands, and leave config.toml byte-for-byte untouched
-// (registerServers never writes config — only `pix config set` may).
+// (mcp.RegisterServers never writes config — only `pix config set` may).
 func TestRunMcpRegister_AbsentSbxExitsServiceDownNoConfigMutation(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")

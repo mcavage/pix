@@ -24,6 +24,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"pix/host/mcp"
 	"pix/host/readiness"
 	"strings"
 	"testing"
@@ -52,7 +53,7 @@ func TestStatusMCPRowsEmptyCfgReceiptPreloaded(t *testing.T) {
 		t.Fatalf("MCPRows = %+v, want 1 receipt-only row even with empty cfg.MCP", st.MCPRows)
 	}
 	r := st.MCPRows[0]
-	if r.Name != "notion" || r.State != mcpJoinPreloaded || r.Sandbox != "pix-proj" {
+	if r.Name != "notion" || r.State != mcp.McpJoinPreloaded || r.Sandbox != "pix-proj" {
 		t.Errorf("row = %+v, want preloaded notion on pix-proj", r)
 	}
 	if !strings.Contains(r.Evidence, "sandbox provenance only") {
@@ -84,7 +85,7 @@ func TestStatusMCPRowsEmptyCfgReceiptLoaded(t *testing.T) {
 	if len(st.MCPServers) != 0 {
 		t.Errorf("host-global MCPServers = %+v, want empty", st.MCPServers)
 	}
-	if len(st.MCPRows) != 1 || st.MCPRows[0].Name != "slack" || st.MCPRows[0].State != mcpJoinLoaded {
+	if len(st.MCPRows) != 1 || st.MCPRows[0].Name != "slack" || st.MCPRows[0].State != mcp.McpJoinLoaded {
 		t.Fatalf("MCPRows = %+v, want 1 loaded slack row", st.MCPRows)
 	}
 }

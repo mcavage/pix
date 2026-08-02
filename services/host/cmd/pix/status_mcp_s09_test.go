@@ -18,6 +18,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/sys/systest"
 	"pix/host/workspace"
 )
@@ -80,10 +81,10 @@ func TestStatusMCPRowsAllFiveStates(t *testing.T) {
 	}
 	proj := rowsFor(st, "pix-proj")
 	for name, want := range map[string]string{
-		gwServerName: mcpJoinPreloaded,
-		"slack":      mcpJoinLoaded,
-		"notion":     mcpJoinRegisteredNotAttached,
-		"linear":     mcpJoinNotRegistered,
+		gwServerName: mcp.McpJoinPreloaded,
+		"slack":      mcp.McpJoinLoaded,
+		"notion":     mcp.McpJoinRegisteredNotAttached,
+		"linear":     mcp.McpJoinNotRegistered,
 	} {
 		if proj[name].State != want {
 			t.Errorf("pix-proj %s state = %q, want %q", name, proj[name].State, want)
@@ -92,12 +93,12 @@ func TestStatusMCPRowsAllFiveStates(t *testing.T) {
 	bad := rowsFor(st, "pix-bad")
 	for _, name := range []string{gwServerName, "slack", "notion"} {
 		r := bad[name]
-		if r.State != mcpJoinUnverifiable || !strings.Contains(r.Evidence, "receipt corrupt") {
+		if r.State != mcp.McpJoinUnverifiable || !strings.Contains(r.Evidence, "receipt corrupt") {
 			t.Errorf("pix-bad %s = %+v, want unverifiable on a corrupt receipt", name, r)
 		}
 	}
 	// A distinct receipt per sandbox: proj's loaded slack must NOT leak into bad.
-	if bad["slack"].State == mcpJoinLoaded {
+	if bad["slack"].State == mcp.McpJoinLoaded {
 		t.Errorf("pix-bad slack = %+v — leaked pix-proj's receipt", bad["slack"])
 	}
 	// Registration tri-state carried on every row.
@@ -124,7 +125,7 @@ func TestStatusMCPRowsIdentityMismatch(t *testing.T) {
 		t.Fatalf("MCPRows = %+v, want 1", st.MCPRows)
 	}
 	r := st.MCPRows[0]
-	if r.State != mcpJoinUnverifiable || !strings.Contains(r.Evidence, "identity-mismatch") {
+	if r.State != mcp.McpJoinUnverifiable || !strings.Contains(r.Evidence, "identity-mismatch") {
 		t.Errorf("row = %+v, want unverifiable naming identity-mismatch", r)
 	}
 }
@@ -156,7 +157,7 @@ func TestStatusMCPPositiveReceiptDominatesDeregistration(t *testing.T) {
 	}
 	st := gatherStatus(cfg, "default", env)
 	r := st.MCPRows[0]
-	if r.State != mcpJoinPreloaded || !strings.Contains(r.Evidence, "currently not registered") {
+	if r.State != mcp.McpJoinPreloaded || !strings.Contains(r.Evidence, "currently not registered") {
 		t.Errorf("row = %+v, want preloaded (receipt dominates) with the dereg reading as evidence", r)
 	}
 	found := false
@@ -207,7 +208,7 @@ func TestStatusMCPLoadTodoExactCommand(t *testing.T) {
 			}
 		}
 		r := st.MCPRows[0]
-		if r.State != mcpJoinUnverifiable ||
+		if r.State != mcp.McpJoinUnverifiable ||
 			!strings.Contains(r.Evidence, "pix mcp load notion") ||
 			!strings.Contains(r.Evidence, "pix run --replace") {
 			t.Errorf("row = %+v, want unverifiable with load/--replace guidance as EVIDENCE", r)
@@ -236,7 +237,7 @@ func TestStatusMCPDiscoveryUnavailableNotNoSandboxes(t *testing.T) {
 		t.Fatalf("MCPRows = %+v, want one unverifiable row per configured server", st.MCPRows)
 	}
 	for _, r := range st.MCPRows {
-		if r.State != mcpJoinUnverifiable || r.Sandbox != "" {
+		if r.State != mcp.McpJoinUnverifiable || r.Sandbox != "" {
 			t.Errorf("row = %+v, want unverifiable with no sandbox claim", r)
 		}
 		if !strings.Contains(r.Evidence, "sandbox discovery unavailable") {
@@ -295,7 +296,7 @@ func TestStatusMCPReceiptOnlyNameVisible(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected a notion row even though it's not in cfg.MCP: %+v", st.MCPRows)
 	}
-	if notion.State != mcpJoinPreloaded {
+	if notion.State != mcp.McpJoinPreloaded {
 		t.Errorf("notion state = %q, want preloaded", notion.State)
 	}
 	if !strings.Contains(notion.Evidence, "sandbox provenance only") {
@@ -375,7 +376,7 @@ func TestStatusMCPRowsJSONGolden(t *testing.T) {
 // attach-on-run / dynamic-discovery / mcp-find vocabulary.
 func TestStatusNoRetiredMCPVocabulary(t *testing.T) {
 	banned := []string{"attach_on_run", "attach-on-run", "mcp-find", "dynamic"}
-	for _, src := range []string{"status.go", "mcpjoin.go"} {
+	for _, src := range []string{"status.go", filepath.Join("..", "..", "mcp", "join.go")} {
 		b, err := os.ReadFile(src)
 		if err != nil {
 			t.Fatalf("read %s: %v", src, err)

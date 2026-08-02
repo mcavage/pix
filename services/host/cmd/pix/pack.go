@@ -296,19 +296,6 @@ type packIntegration struct {
 	Setup string `toml:"setup,omitempty"`
 }
 
-// packContainer is a resolved pack CONTAINER/REMOTE integration: a Manifest
-// (`sbx mcp add --local --url`, gateway resolves the OCI image; creds Docker-side),
-// an Image ref (`docker run <image>`, op-run wrapped; creds from op-refs forwarded
-// via EnvKeys), or a RemoteURL (`sbx mcp add --url`, a remote MCP endpoint the
-// gateway OAuths host-side). Exactly one of Manifest/Image/RemoteURL is set.
-type packContainer struct {
-	Manifest  string
-	Image     string
-	EnvKeys   []string          // env var names to forward into an Image container (-e KEY)
-	EnvValues map[string]string // non-secret literals forwarded as -e KEY=VALUE
-	RemoteURL string            // remote MCP endpoint URL (`sbx mcp add <name> --url <url>`)
-}
-
 // packInfo is a resolved pack on disk.
 type packInfo struct {
 	Root         string
@@ -1518,7 +1505,7 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env hostenv.Env) (string,
 		// CONTAINER integrations (Manifest set) get their credentials Docker-side,
 		// not from op-refs — so an op-ref warning would be misleading noise. Only
 		// warn for op-run-wrapped (host-provided/remote) integrations.
-		if ig.Env != "" && ig.Manifest == "" && !opRefFilled(env, ig.Env) {
+		if ig.Env != "" && ig.Manifest == "" && !secret.OpRefFilled(env, ig.Env) {
 			if ig.Setup != "" {
 				fmt.Fprintf(os.Stderr, "pix: pack integration %q is not connected; run: pix setup --pack %s --with %s\n", ig.Name, sys.ShellQuote(p.Root), sys.ShellQuote(ig.Setup))
 			} else {
@@ -1542,21 +1529,21 @@ func applyPackToLaunch(cfg *config.Config, o *runOpts, env hostenv.Env) (string,
 	return packRoot, nil
 }
 
-// packContainerMCP returns {integration.mcp: packContainer} for a pack's
+// packContainerMCP returns {integration.mcp: config.MCPContainer} for a pack's
 // CONTAINER/REMOTE integrations — Manifest servers (`sbx mcp add <name> --local
 // --url`), Image servers (`docker run <image>`, op-run wrapped), and remote URL
 // servers (`sbx mcp add <name> --url`, OAuth'd host-side). These are what
 // `pix mcp register` adds specially rather than as a plain host subcommand.
 // Returns nil when the pack declares none.
-func packContainerMCP(p *packInfo) map[string]packContainer {
-	out := map[string]packContainer{}
+func packContainerMCP(p *packInfo) map[string]config.MCPContainer {
+	out := map[string]config.MCPContainer{}
 	for _, ig := range p.Manifest.Integrations {
 		if ig.MCP == "" {
 			continue
 		}
 		switch {
 		case strings.TrimSpace(ig.Manifest) != "":
-			out[ig.MCP] = packContainer{Manifest: strings.TrimSpace(ig.Manifest)}
+			out[ig.MCP] = config.MCPContainer{Manifest: strings.TrimSpace(ig.Manifest)}
 		case strings.TrimSpace(ig.Image) != "":
 			var keys []string
 			if ig.Env != "" {
@@ -1567,9 +1554,9 @@ func packContainerMCP(p *packInfo) map[string]packContainer {
 			for key, value := range ig.EnvValues {
 				values[key] = value
 			}
-			out[ig.MCP] = packContainer{Image: strings.TrimSpace(ig.Image), EnvKeys: keys, EnvValues: values}
+			out[ig.MCP] = config.MCPContainer{Image: strings.TrimSpace(ig.Image), EnvKeys: keys, EnvValues: values}
 		case strings.TrimSpace(ig.URL) != "":
-			out[ig.MCP] = packContainer{RemoteURL: strings.TrimSpace(ig.URL)}
+			out[ig.MCP] = config.MCPContainer{RemoteURL: strings.TrimSpace(ig.URL)}
 		}
 	}
 	if len(out) == 0 {
@@ -1581,7 +1568,7 @@ func packContainerMCP(p *packInfo) map[string]packContainer {
 // activeContainerMCP resolves packContainerMCP for the active pack. Returns nil
 // when there is no active pack or it won't load (registration of the other
 // servers proceeds regardless).
-func activeContainerMCP(cfg *config.Config) map[string]packContainer {
+func activeContainerMCP(cfg *config.Config) map[string]config.MCPContainer {
 	root := activePackRoot(cfg.Pack, "")
 	if root == "" {
 		return nil
@@ -2903,7 +2890,7 @@ func runPackShow(out io.Writer, rest []string) {
 			// Image + host/remote integrations resolve their secret from op-refs
 			// (Manifest containers don't — those are Docker-side).
 			if ig.Env != "" && ig.Manifest == "" {
-				if opRefFilled(env, ig.Env) {
+				if secret.OpRefFilled(env, ig.Env) {
 					fmt.Fprintf(out, " — %s ✓", ig.Env)
 				} else if ig.Setup != "" {
 					fmt.Fprintf(out, "; later: pix setup --pack %s --with %s", sys.ShellQuote(p.Root), sys.ShellQuote(ig.Setup))
@@ -2914,20 +2901,6 @@ func runPackShow(out io.Writer, rest []string) {
 			fmt.Fprintln(out)
 		}
 	}
-}
-
-// opRefFilled reports whether op-refs.env has a FILLED op:// ref for env var key.
-func opRefFilled(env hostenv.Env, key string) bool {
-	_, content, exists := secret.OpRefsContent(env)
-	if !exists {
-		return false
-	}
-	for _, r := range secret.ParseOpRefs(content) {
-		if r.Key == key && r.IsRef && !r.Placeholder {
-			return true
-		}
-	}
-	return false
 }
 
 // solicitPackCredentials, on a TTY, prompts for any pack integration whose op://
@@ -2950,7 +2923,7 @@ func solicitPackCredentials(env hostenv.Env, in io.Reader, out io.Writer, tty bo
 			fmt.Fprintf(out, "  (skipping integration %q: invalid env var name %q)\n", ig.Name, ig.Env)
 			continue
 		}
-		if !opRefFilled(env, ig.Env) {
+		if !secret.OpRefFilled(env, ig.Env) {
 			missing = append(missing, ig)
 		}
 	}
@@ -3829,22 +3802,3 @@ wrappers + config that defines your context. See docs/design/packs.md.
                           (pix run --replace) to take effect.
   rm                      detach the active pack (files untouched)
 `
-
-// packContainerNames returns the pack-integration server names in a stable
-// (sorted) order, so the group renders deterministically.
-func packContainerNames(containers map[string]packContainer) []string {
-	if len(containers) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(containers))
-	for n := range containers {
-		names = append(names, n)
-	}
-	// small n; insertion sort avoids an import for sort in this file's diff
-	for i := 1; i < len(names); i++ {
-		for j := i; j > 0 && names[j] < names[j-1]; j-- {
-			names[j], names[j-1] = names[j-1], names[j]
-		}
-	}
-	return names
-}

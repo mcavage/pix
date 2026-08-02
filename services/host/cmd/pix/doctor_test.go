@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"pix/host/cli"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/readiness"
 	"pix/host/secret"
 	"strings"
@@ -124,7 +125,7 @@ func opWrappedGog(refs, acct string) string {
 // gog in `op run`; gog's own OAuth keyring is independently headless.
 func reconstructedGogProbe(refs, acct string) string {
 	_ = refs
-	return strings.Join(append(gogRegisteredArgv("/usr/bin/gog", "", "", acct), "--list-tools"), " ")
+	return strings.Join(append(mcp.GogRegisteredArgv("/usr/bin/gog", "", "", acct), "--list-tools"), " ")
 }
 
 // gogGreen adds the fixtures that make the whole gog group green: gog + op on

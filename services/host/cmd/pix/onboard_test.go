@@ -17,7 +17,7 @@ func captureSave(dst **config.Config) func(*config.Config) error {
 	return func(c *config.Config) error { *dst = c; return nil }
 }
 
-// noHostResolver makes localMCPNames report the local set as UNKNOWN, so
+// noHostResolver makes mcp.LocalMCPNames report the local set as UNKNOWN, so
 // validation fails closed on any non-gog/non-catalog mcp name.
 func noHostResolver() (string, error) { return "", fmt.Errorf("no host binary in test") }
 

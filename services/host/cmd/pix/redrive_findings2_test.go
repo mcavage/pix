@@ -2,7 +2,7 @@ package main
 
 // redrive_findings2_test.go — adversarial-review redrive findings 8/9/10/11/13:
 //   8: setup/onboard never persist a shipped-catalog remote that is not
-//      registered + auth-ready (allowlist derived from mcpCatalogNames);
+//      registered + auth-ready (allowlist derived from mcp.McpCatalogNames);
 //   9: doctor's local MCP probe maps an explicit policy denial to
 //      readiness.VerdictDenied, and gog registration uses the shared tri-state;
 //  10: every primary readiness probe (doctor/status/run-preflight sbx calls)
@@ -26,6 +26,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/sys"
@@ -205,12 +206,12 @@ func TestReconcileOnboarding_CatalogGateLeavesFileAndConfig(t *testing.T) {
 }
 
 // TestOnboardCatalogAllowlist_IsTheShippedCatalog: the accepted catalog names
-// derive from mcpCatalogNames — no independent list that can drift.
+// derive from mcp.McpCatalogNames — no independent list that can drift.
 func TestOnboardCatalogAllowlist_IsTheShippedCatalog(t *testing.T) {
-	if len(onboardMCPCatalogAllow) != len(mcpCatalogNames) {
-		t.Fatalf("allowlist (%v) must equal mcpCatalogNames (%v)", onboardMCPCatalogAllow, mcpCatalogNames)
+	if len(onboardMCPCatalogAllow) != len(mcp.McpCatalogNames) {
+		t.Fatalf("allowlist (%v) must equal mcp.McpCatalogNames (%v)", onboardMCPCatalogAllow, mcp.McpCatalogNames)
 	}
-	for n := range mcpCatalogNames {
+	for n := range mcp.McpCatalogNames {
 		if !onboardMCPCatalogAllow[n] {
 			t.Errorf("shipped catalog name %q missing from the onboarding allowlist", n)
 		}
@@ -357,7 +358,7 @@ func TestGatherStatus_HangingSbxBounded(t *testing.T) {
 	if !found {
 		t.Errorf("hanging secret ls must degrade to an honest could-not-verify todo, got %v", st.Todos)
 	}
-	if len(st.MCPRows) != 1 || st.MCPRows[0].State != mcpJoinUnverifiable {
+	if len(st.MCPRows) != 1 || st.MCPRows[0].State != mcp.McpJoinUnverifiable {
 		t.Errorf("hanging sbx ls must yield an unverifiable row, never a false claim: %+v", st.MCPRows)
 	}
 	if st.MCPRows[0].Registered != "unknown" {
@@ -446,9 +447,9 @@ func TestParseMcpLoadArgs(t *testing.T) {
 		{[]string{"slack", dir}, "slack", dir},
 	}
 	for _, tc := range ok {
-		name, ws, err := parseMcpLoadArgs(tc.argv)
+		name, ws, err := mcp.ParseMcpLoadArgs(tc.argv)
 		if err != nil || name != tc.name || ws != tc.ws {
-			t.Errorf("parseMcpLoadArgs(%v) = (%q,%q,%v), want (%q,%q,nil)", tc.argv, name, ws, err, tc.name, tc.ws)
+			t.Errorf("mcp.ParseMcpLoadArgs(%v) = (%q,%q,%v), want (%q,%q,nil)", tc.argv, name, ws, err, tc.name, tc.ws)
 		}
 	}
 
@@ -463,15 +464,15 @@ func TestParseMcpLoadArgs(t *testing.T) {
 		"file not directory": {"slack", file},
 	}
 	for label, argv := range bad {
-		if _, _, err := parseMcpLoadArgs(argv); err == nil {
-			t.Errorf("%s: parseMcpLoadArgs(%v) must fail", label, argv)
+		if _, _, err := mcp.ParseMcpLoadArgs(argv); err == nil {
+			t.Errorf("%s: mcp.ParseMcpLoadArgs(%v) must fail", label, argv)
 		}
 	}
 }
 
 // TestParseMcpLoadArgs_FailureWritesNoReceipt: a usage failure returns before
 // any sandbox name is derived, so nothing downstream (exec, receipt) can run.
-// The receipt path is only reachable via execSbxMcpLoadAndRecord, which the
+// The receipt path is only reachable via mcp.ExecSbxMcpLoadAndRecord, which the
 // wiring tests already gate on a successful exec; here we prove the parse
 // layer rejects without touching launcher state at all.
 func TestParseMcpLoadArgs_FailureWritesNoReceipt(t *testing.T) {
@@ -480,7 +481,7 @@ func TestParseMcpLoadArgs_FailureWritesNoReceipt(t *testing.T) {
 	workspace.MCPStateDirFn = func() (string, error) { return sd, nil }
 	t.Cleanup(func() { workspace.MCPStateDirFn = orig })
 
-	if _, _, err := parseMcpLoadArgs([]string{"slack", filepath.Join(sd, "nope")}); err == nil {
+	if _, _, err := mcp.ParseMcpLoadArgs([]string{"slack", filepath.Join(sd, "nope")}); err == nil {
 		t.Fatal("expected a usage failure")
 	}
 	entries, err := os.ReadDir(sd)

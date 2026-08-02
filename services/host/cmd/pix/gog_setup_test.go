@@ -11,6 +11,7 @@ import (
 	"pix/host/cli"
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/mcp"
 	"pix/host/sys/systest"
 )
 
@@ -179,7 +180,7 @@ type gogTestEnv struct {
 	interCalls *[][]string // recorded runInteractive invocations
 	interErr   error       // error runInteractive returns (nil = success)
 	// sbxRegisterOK makes an otherwise-unfixtured `sbx mcp add <name> ...` call
-	// (registerServers' actual registration exec) succeed by default, so a test
+	// (mcp.RegisterServers' actual registration exec) succeed by default, so a test
 	// that only cares about gogSetup's OWN verification logic doesn't need to
 	// hand-construct the exact addArgs argv just to let registration through. A
 	// test that WANTS to exercise a registration failure (e.g.
@@ -197,7 +198,7 @@ type gogTestEnv struct {
 // key gogTestEnv's canonical "/usr/bin/gog" lookPath answer produces (R1-06):
 // the same hardened invocation mcp.go registers, plus "--list-tools".
 func gogBareHeadlessKey(acct string) string {
-	return strings.Join(gogHardenedArgv("/usr/bin/gog", acct), " ") + " --list-tools"
+	return strings.Join(mcp.GogHardenedArgv("/usr/bin/gog", acct), " ") + " --list-tools"
 }
 
 // gogBareHeadlessFixture is a one-entry output map making the bare headless
@@ -209,11 +210,11 @@ func gogBareHeadlessFixture(acct string) map[string]string {
 
 // gogWrappedHeadlessKey is the exact op-wrapped, hardened headless probe key
 // (op + opRefs both present): the same `op run --no-masking --env-file=<refs>`
-// wrapper + hardened gog invocation mcpRegistrar/gogRegisteredArgv actually
+// wrapper + hardened gog invocation mcp.McpRegistrar/mcp.GogRegisteredArgv actually
 // register, plus "--list-tools" (finding #2 -- gogSetup's own verification
 // must probe this EXACT command, never a lighter reconstruction).
 func gogWrappedHeadlessKey(acct, opRefs string) string {
-	return strings.Join(gogRegisteredArgv("/usr/bin/gog", "/usr/bin/op", opRefs, acct), " ") + " --list-tools"
+	return strings.Join(mcp.GogRegisteredArgv("/usr/bin/gog", "/usr/bin/op", opRefs, acct), " ") + " --list-tools"
 }
 
 func (g gogTestEnv) env() hostenv.Env {
@@ -534,7 +535,7 @@ func TestGogSetup_ZeroHeadlessToolsFailsWithGuidance(t *testing.T) {
 	cred := gogCredFile(t)
 	dir := t.TempDir()
 	refs := filepath.Join(dir, "op-refs.env")
-	if err := os.WriteFile(refs, []byte("GOG_ACCOUNT=you@example.com\nGOG_KEYRING_PASSWORD=op://Private/Gog/password\n"), 0o600); err != nil {
+	if err := os.WriteFile(refs, []byte("GOG_ACCOUNT=you@example.com\nGOG_KEYRING_PASSWORD=op://Private/gog/password\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "cfg", "config.toml"))
@@ -543,7 +544,7 @@ func TestGogSetup_ZeroHeadlessToolsFailsWithGuidance(t *testing.T) {
 		t.Fatal(err)
 	}
 	refs = filepath.Join(dir, "cfg", "op-refs.env")
-	if err := os.WriteFile(refs, []byte("GOG_ACCOUNT=you@example.com\nGOG_KEYRING_PASSWORD=op://Private/Gog/password\n"), 0o600); err != nil {
+	if err := os.WriteFile(refs, []byte("GOG_ACCOUNT=you@example.com\nGOG_KEYRING_PASSWORD=op://Private/gog/password\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ge := gogTestEnv{
@@ -555,7 +556,7 @@ func TestGogSetup_ZeroHeadlessToolsFailsWithGuidance(t *testing.T) {
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",
 			// headless probe: the EXACT hardened, op-wrapped command registration
-			// will use (gogWrappedHeadlessKey/gogRegisteredArgv) returns EMPTY
+			// will use (gogWrappedHeadlessKey/mcp.GogRegisteredArgv) returns EMPTY
 			// output => zero tools.
 			gogWrappedHeadlessKey("you@example.com", refs): "",
 		}),
@@ -636,7 +637,7 @@ func TestGogSetup_RegistrationFailureReported(t *testing.T) {
 		output: map[string]string{
 			"gog auth --help": gogAuthHelpCurrentSetup,
 			"gog --account you@example.com auth doctor --check": "ok",
-			// no fake "sbx mcp add google-workspace ..." output => registerServers' env.Run
+			// no fake "sbx mcp add google-workspace ..." output => mcp.RegisterServers' env.Run
 			// call for it returns an error, exercising the registration-failure
 			// path end to end.
 		},

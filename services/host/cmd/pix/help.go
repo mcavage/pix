@@ -3,6 +3,7 @@ package main
 import (
 	"pix/host/cli"
 	"pix/host/knowledge"
+	"pix/host/mcp"
 	"pix/host/memory"
 	"pix/host/service"
 	"pix/host/workflow/backup"
@@ -190,7 +191,7 @@ func verbUsage(verb string) (string, bool) {
 	case "config":
 		return configUsage, true
 	case "mcp":
-		return mcpUsage, true
+		return mcp.McpUsage, true
 	case "gworkspace":
 		return gworkspaceUsage, true
 	case "slack":

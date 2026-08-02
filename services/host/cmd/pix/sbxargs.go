@@ -39,7 +39,7 @@ type runOpts struct {
 	// rather than replacing it, so --dev / local-checkout selection still wins.
 	KitRef    string
 	MCP       []string // --mcp M: extra MCP servers on top of config.MCP (folded into StaticMCP by the caller)
-	StaticMCP []string // RESOLVED set to attach at create (emitted as --static-mcp); the caller computes it from cfg.MCP+MCP via allPreloadedMCP — S01: every configured/pack server preloads, no eager/lazy split
+	StaticMCP []string // RESOLVED set to attach at create (emitted as --static-mcp); the caller computes it from cfg.MCP+MCP via mcp.AllPreloadedMCP — S01: every configured/pack server preloads, no eager/lazy split
 	Name      string   // --name N: sandbox name
 	Model     string   // --model M: active pi model (passed through to pi)
 	Models    []string // create-time callable model cycle, derived from probed bindings
@@ -66,17 +66,11 @@ type runOpts struct {
 // version (e.g. "0.0.16") pins the tag "v0.0.16"; any UNRELEASED version
 // (a "dev"/"+local" or non-semver build, whose tag does not exist) tracks
 // "main" instead of pinning a bogus v<version>.
-func kitRef(version string) string {
-	if launcher.IsReleased(version) {
-		return "v" + version
-	}
-	return "main"
-}
 
 // gitKitURL is the full --kit URL for a repo-less consumer run, pinned to the
 // stamped version (or main for an unreleased build).
 func gitKitURL(version string) string {
-	return gitKitURLRef(kitRef(version))
+	return gitKitURLRef(launcher.KitRef(version))
 }
 
 // gitKitURLRef is gitKitURL for an ALREADY-RESOLVED ref (see kitref.go), which
@@ -91,7 +85,7 @@ func refOrStamped(ref, version string) string {
 	if ref != "" {
 		return ref
 	}
-	return kitRef(version)
+	return launcher.KitRef(version)
 }
 
 // localImageRef is the --template ref for a locally loaded image tag.
@@ -162,7 +156,7 @@ func buildSbxArgs(cfg *config.Config, o runOpts, version string) []string {
 	}
 
 	// MCP servers: emit --static-mcp for every preloaded server (o.StaticMCP,
-	// computed by the caller via allPreloadedMCP — S01: all configured/pack
+	// computed by the caller via mcp.AllPreloadedMCP — S01: all configured/pack
 	// servers preload, no eager/lazy split). sbx's flag is --static-mcp (the
 	// fixed set chosen at CREATE; can't change on re-attach). The local
 	// data-plane gateway serves them with no SBX_MCP_URL. Attach one to an

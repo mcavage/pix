@@ -2,7 +2,7 @@
 // RE-ATTACH (existing running or stopped sandbox, not --replace), `pix
 // run` must compare the DESIRED MCP universe for THIS invocation (cfg.MCP +
 // the active/transient pack's integrations + explicit --mcp, deduped via
-// allPreloadedMCP) against the launcher's own per-sandbox receipt
+// mcp.AllPreloadedMCP) against the launcher's own per-sandbox receipt
 // (Preloaded/Loads) and warn, BEFORE reattaching, about any desired name the
 // receipt cannot prove is attached. It must never auto-load, and a
 // receipt-only historical name (one the receipt lists that is no longer

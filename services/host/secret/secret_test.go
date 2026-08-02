@@ -11,6 +11,7 @@ import (
 
 	"pix/host/config"
 	"pix/host/hostenv"
+	"pix/host/hostenv/hostenvtest"
 	"pix/host/sys"
 	"pix/host/sys/systest"
 )
@@ -89,13 +90,13 @@ func TestRepairLegacyOpRefsTemplate(t *testing.T) {
 // printed.
 func TestSecretLsShortLiteralFlagged(t *testing.T) {
 	const val = "correcthorsebattery"
-	f := fakeEnv{
-		present: map[string]bool{},
-		envVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
-		files:   map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=" + val + "\n"},
+	f := hostenvtest.Env{
+		Present: map[string]bool{},
+		EnvVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
+		Files:   map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=" + val + "\n"},
 	}
 	var out bytes.Buffer
-	RunSecretLs(f.env(), &out)
+	RunSecretLs(f.Build(), &out)
 	s := out.String()
 	if strings.Contains(s, val) {
 		t.Errorf("secret ls LEAKED the literal value:\n%s", s)
@@ -118,13 +119,13 @@ func TestHasPlaceholder(t *testing.T) {
 // NEVER appear in `secret ls` output.
 func TestSecretLsNeverLeaksValue(t *testing.T) {
 	const pasted = "xoxb-THIS-MUST-NOT-BE-PRINTED"
-	f := fakeEnv{
-		present: map[string]bool{}, // op not installed
-		envVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
-		files:   map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=" + pasted + "\n"},
+	f := hostenvtest.Env{
+		Present: map[string]bool{}, // op not installed
+		EnvVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
+		Files:   map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=" + pasted + "\n"},
 	}
 	var out bytes.Buffer
-	RunSecretLs(f.env(), &out)
+	RunSecretLs(f.Build(), &out)
 	s := out.String()
 	if strings.Contains(s, pasted) {
 		t.Errorf("secret ls LEAKED the pasted value:\n%s", s)
@@ -138,15 +139,15 @@ func TestSecretLsNeverLeaksValue(t *testing.T) {
 
 func TestSecretLsStates(t *testing.T) {
 	// op installed + signed in; a filled ref + a placeholder.
-	f := fakeEnv{
-		present: map[string]bool{"op": true},
-		output:  map[string]string{"op account list": "me@example.com\n"},
-		envVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
-		files: map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=op://Private/Slack/credential\n" +
+	f := hostenvtest.Env{
+		Present: map[string]bool{"op": true},
+		Output:  map[string]string{"op account list": "me@example.com\n"},
+		EnvVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
+		Files: map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=op://Private/Slack/credential\n" +
 			"OTHER=op://<vault>/<item>/credential\n"},
 	}
 	var out bytes.Buffer
-	RunSecretLs(f.env(), &out)
+	RunSecretLs(f.Build(), &out)
 	s := out.String()
 	if !strings.Contains(s, "installed + account configured") {
 		t.Errorf("want op installed+account-configured state:\n%s", s)
@@ -160,13 +161,13 @@ func TestSecretLsStates(t *testing.T) {
 }
 
 func TestSecretLsOpNotSignedIn(t *testing.T) {
-	f := fakeEnv{
-		present: map[string]bool{"op": true},
+	f := hostenvtest.Env{
+		Present: map[string]bool{"op": true},
 		// no "op account list" output => not signed in
-		envVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
+		EnvVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
 	}
 	var out bytes.Buffer
-	RunSecretLs(f.env(), &out)
+	RunSecretLs(f.Build(), &out)
 	s := out.String()
 	if !strings.Contains(s, "no account configured") {
 		t.Errorf("want no-account-configured state:\n%s", s)
@@ -183,17 +184,17 @@ func TestSecretLsOpNotSignedIn(t *testing.T) {
 // key and never prints the resolved secret value.
 func TestSecretCheckOKNeverLeaks(t *testing.T) {
 	const resolved = "SECRET-VALUE-DO-NOT-PRINT"
-	f := fakeEnv{
-		present: map[string]bool{"op": true},
-		output: map[string]string{
+	f := hostenvtest.Env{
+		Present: map[string]bool{"op": true},
+		Output: map[string]string{
 			"op account list":                       "me@example.com\n",
 			"op read op://Private/Slack/credential": resolved,
 		},
-		envVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
-		files:   map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=op://Private/Slack/credential\n"},
+		EnvVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"},
+		Files:   map[string]string{"/fake/config/op-refs.env": "SLACK_TOKEN=op://Private/Slack/credential\n"},
 	}
 	var out bytes.Buffer
-	RunSecretCheck(f.env(), &out)
+	RunSecretCheck(f.Build(), &out)
 	s := out.String()
 	if strings.Contains(s, resolved) {
 		t.Errorf("secret check LEAKED the resolved value:\n%s", s)
@@ -208,8 +209,8 @@ func TestSecretCheckOKNeverLeaks(t *testing.T) {
 // calls os.Exit(3) on a missing file, so this runs in a subprocess.
 func TestSecretCheckMissingRefsHintsSet(t *testing.T) {
 	if os.Getenv("PIX_SECRET_CHECK_MISSING") == "1" {
-		f := fakeEnv{envVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"}}
-		RunSecretCheck(f.env(), os.Stdout)
+		f := hostenvtest.Env{EnvVars: map[string]string{"PIX_CONFIG": "/fake/config/config.toml"}}
+		RunSecretCheck(f.Build(), os.Stdout)
 		return
 	}
 	cmd := exec.Command(os.Args[0], "-test.run", "TestSecretCheckMissingRefsHintsSet")
@@ -217,7 +218,7 @@ func TestSecretCheckMissingRefsHintsSet(t *testing.T) {
 	outBuf, err := cmd.CombinedOutput()
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {
-		t.Fatalf("expected an ExitError, got %v (output: %s)", err, outBuf)
+		t.Fatalf("expected an ExitError, got %v (Output: %s)", err, outBuf)
 	}
 	if ee.ExitCode() != 3 {
 		t.Errorf("exit code = %d, want 3", ee.ExitCode())
@@ -286,7 +287,7 @@ func TestSecretSetRejectsNonRefForSecretKey(t *testing.T) {
 	outBuf, err := cmd.CombinedOutput()
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {
-		t.Fatalf("expected an ExitError, got %v (output: %s)", err, outBuf)
+		t.Fatalf("expected an ExitError, got %v (Output: %s)", err, outBuf)
 	}
 	if ee.ExitCode() != 2 {
 		t.Errorf("exit code = %d, want 2", ee.ExitCode())
@@ -313,7 +314,7 @@ func TestSecretSetRejectsControlChars(t *testing.T) {
 	outBuf, err := cmd.CombinedOutput()
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {
-		t.Fatalf("expected an ExitError, got %v (output: %s)", err, outBuf)
+		t.Fatalf("expected an ExitError, got %v (Output: %s)", err, outBuf)
 	}
 	if ee.ExitCode() != 2 {
 		t.Errorf("exit code = %d, want 2", ee.ExitCode())
@@ -613,7 +614,7 @@ func TestSecretSetThenRm_FullLifecycle(t *testing.T) {
 		t.Fatalf("set: unexpected error: %v", err)
 	}
 	if !strings.Contains(files[fakeRefsPath], "OPENAI_API_KEY") || !strings.Contains(files[hmPath], "OPENAI_API_KEY") {
-		t.Fatalf("set must land the ref in both files: op-refs=%q hostmode=%q", files[fakeRefsPath], files[hmPath])
+		t.Fatalf("set must land the ref in both Files: op-refs=%q hostmode=%q", files[fakeRefsPath], files[hmPath])
 	}
 
 	var rmOut bytes.Buffer

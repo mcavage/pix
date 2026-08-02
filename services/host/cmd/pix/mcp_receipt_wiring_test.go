@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/mcp"
 	"pix/host/rpc"
 	"pix/host/workspace"
 	"slices"
@@ -36,7 +37,7 @@ func withSandboxMCPStateDirFn(t *testing.T, fn func() (string, error)) {
 	t.Cleanup(func() { workspace.MCPStateDirFn = old })
 }
 
-// trueCmd / falseCmd give execSbxRunAndRecordCreate / execSbxMcpLoadAndRecord a
+// trueCmd / falseCmd give execSbxRunAndRecordCreate / mcp.ExecSbxMcpLoadAndRecord a
 // real, fast, portable *exec.Cmd standing in for `sbx ...` without needing sbx
 // on PATH at all — only its exit status matters to these wrappers.
 func trueCmd(t *testing.T) *exec.Cmd  { t.Helper(); return exec.Command("true") }
@@ -258,13 +259,13 @@ func TestRecordCreateReceipt_ExactStateDirPath(t *testing.T) {
 	}
 }
 
-// --- execSbxMcpLoadAndRecord: ordering + gating -----------------------------
+// --- mcp.ExecSbxMcpLoadAndRecord: ordering + gating -----------------------------
 
 func TestExecSbxMcpLoadAndRecord_FailedLoadWritesNoReceipt(t *testing.T) {
 	dir := t.TempDir()
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
 
-	err := execSbxMcpLoadAndRecord(falseCmd(t), "pix-loadfail", "slack")
+	err := mcp.ExecSbxMcpLoadAndRecord(falseCmd(t), "pix-loadfail", "slack")
 	if err == nil {
 		t.Fatal("want an error propagated from the failed load")
 	}
@@ -282,7 +283,7 @@ func TestExecSbxMcpLoadAndRecord_SuccessAppendsLoad(t *testing.T) {
 	withSandboxMCPStateDirFn(t, func() (string, error) { return dir, nil })
 
 	sandbox := "pix-loadok"
-	if err := execSbxMcpLoadAndRecord(trueCmd(t), sandbox, "slack"); err != nil {
+	if err := mcp.ExecSbxMcpLoadAndRecord(trueCmd(t), sandbox, "slack"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	r, status, err := workspace.ReadMCPReceipt(dir, sandbox)
@@ -297,7 +298,7 @@ func TestExecSbxMcpLoadAndRecord_SuccessAppendsLoad(t *testing.T) {
 func TestExecSbxMcpLoadAndRecord_ReceiptWriteFailureIsDistinctError(t *testing.T) {
 	withSandboxMCPStateDirFn(t, func() (string, error) { return "", errors.New("boom: no state dir") })
 
-	err := execSbxMcpLoadAndRecord(trueCmd(t), "pix-loadrecerr", "slack")
+	err := mcp.ExecSbxMcpLoadAndRecord(trueCmd(t), "pix-loadrecerr", "slack")
 	if err == nil {
 		t.Fatal("want an error when the receipt write fails")
 	}
@@ -311,7 +312,7 @@ func TestExecSbxMcpLoadAndRecord_ReceiptWriteFailureIsDistinctError(t *testing.T
 }
 
 // runMcpLoad's "sbx absent" branch returns before constructing any *exec.Cmd
-// at all, so it never reaches execSbxMcpLoadAndRecord — no receipt is ever
+// at all, so it never reaches mcp.ExecSbxMcpLoadAndRecord — no receipt is ever
 // written. A command that PROMISES an attach must not exit 0 having done
 // nothing (finding: no-sbx behavior), so this now exits rpc.ExitServiceDown (3)
 // instead of returning — proven in a subprocess since runMcpLoad calls
@@ -388,7 +389,7 @@ func TestRecordMcpLoadReceipt_ExactSandboxDerivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	sandbox := workspace.DeriveSandboxName(ws)
-	if err := recordMcpLoadReceipt(sandbox, "slack"); err != nil {
+	if err := mcp.RecordMcpLoadReceipt(sandbox, "slack"); err != nil {
 		t.Fatal(err)
 	}
 	// Read back under the SAME derivation — proves the receipt is keyed by the
@@ -410,7 +411,7 @@ func TestRecordMcpLoadReceipt_ExactSandboxDerivation(t *testing.T) {
 
 // S03 item 4: an active pack's integration MCP servers already fold into
 // cfg.MCP via applyPackToLaunch (S01); this pins that the run.go COMPUTATION
-// run.go actually performs (allPreloadedMCP(cfg.MCP+o.MCP) -> o.StaticMCP,
+// run.go actually performs (mcp.AllPreloadedMCP(cfg.MCP+o.MCP) -> o.StaticMCP,
 // emitted as --static-mcp by buildSbxArgs) and the CREATE RECEIPT agree
 // exactly on that same set, for both a persisted (`pack use`d) integration and
 // a transient --pack override never persisted to cfg.MCP.
@@ -431,7 +432,7 @@ func TestPackIntegrations_FoldIntoStaticSetAndReceipt(t *testing.T) {
 
 	// The exact computation run.go performs before building sbx args / writing
 	// the receipt.
-	o.StaticMCP = allPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
+	o.StaticMCP = mcp.AllPreloadedMCP(append(append([]string(nil), cfg.MCP...), o.MCP...))
 
 	for _, want := range []string{"slack", "fastmail", "notion"} {
 		if !slices.Contains(o.StaticMCP, want) {
@@ -477,15 +478,15 @@ func TestPackIntegrations_FoldIntoStaticSetAndReceipt(t *testing.T) {
 // (an "automatic load" on session start, a background watcher, ...) fails this
 // test rather than being discovered later via a wrong doctor/status report.
 func TestMCPReceiptCallSitesAreGuarded(t *testing.T) {
-	assertOnlyCalledFrom(t, "workspace.WriteCreateReceipt(", []string{"run.go", "", "sandboxmcpstate.go"})
-	assertOnlyCalledFrom(t, "workspace.CommitCreateReceipt(", []string{"run.go", "", "sandboxmcpstate.go"})
-	assertOnlyCalledFrom(t, "workspace.AppendLoadReceipt(", []string{"mcp.go", "sandboxmcpstate.go"})
+	assertOnlyCalledFrom(t, "workspace.WriteCreateReceipt(", []string{"cmd/pix/run.go"})
+	assertOnlyCalledFrom(t, "workspace.CommitCreateReceipt(", []string{"cmd/pix/run.go"})
+	assertOnlyCalledFrom(t, "workspace.AppendLoadReceipt(", []string{"mcp/mcp.go"})
 	// The create LIFECYCLE (pre-clear + start + evidence poll + commit + wait)
 	// has exactly two owners: run.go (pix run) and task.go (task new) —
 	// both launch paths MUST share the corrected lifecycle, and nothing else
 	// may fabricate one.
-	assertOnlyCalledFrom(t, "execSbxRunAndRecordCreate(", []string{"run.go", "task.go"})
-	assertOnlyCalledFrom(t, "workspace.ClearMCPReceipt(", []string{"run.go", "sandboxmcpstate.go"})
+	assertOnlyCalledFrom(t, "execSbxRunAndRecordCreate(", []string{"cmd/pix/run.go", "cmd/pix/task.go"})
+	assertOnlyCalledFrom(t, "workspace.ClearMCPReceipt(", []string{"cmd/pix/run.go"})
 	// Receipt removal is tied to LAUNCHER sandbox removal only: pix rm
 	// (sandbox.go), replace pre-remove (run.go), task teardown/prepare
 	// (task.go), and `pix reset --sbx`'s positive per-sandbox removals
@@ -507,8 +508,28 @@ func TestTaskLaunchUsesSharedCreateLifecycle(t *testing.T) {
 
 func assertOnlyCalledFrom(t *testing.T, needle string, allowed []string) {
 	t.Helper()
-	files, err := filepath.Glob("*.go")
-	if err != nil {
+	// Scan the WHOLE module, not just this directory. When mcp.go moved into
+	// its own package this globbed "*.go" and stopped seeing it — a guard that
+	// silently covers less than it claims is worse than one that fails, so it
+	// now walks from services/host and matches allowed entries as path
+	// suffixes ("mcp/mcp.go"), which also survives the next extraction.
+	var files []string
+	root := filepath.Join("..", "..") // the test runs in cmd/pix; the module root is two up
+	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		// NB: the root itself is "..", whose Name() starts with a dot — skipping
+		// on that prefix without excluding the root walks nothing at all.
+		if d.IsDir() && path != root && (d.Name() == "testdata" || strings.HasPrefix(d.Name(), ".")) {
+			return filepath.SkipDir
+		}
+		if !d.IsDir() && strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") {
+			rel, _ := filepath.Rel(root, path)
+			files = append(files, rel)
+		}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	allow := map[string]bool{}
@@ -517,18 +538,16 @@ func assertOnlyCalledFrom(t *testing.T, needle string, allowed []string) {
 	}
 	found := false
 	for _, f := range files {
-		if strings.HasSuffix(f, "_test.go") {
-			continue // tests are allowed to call these directly to set up fixtures
-		}
-		b, err := os.ReadFile(f)
+		b, err := os.ReadFile(filepath.Join(root, f))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(string(b), needle) {
-			found = true
-			if !allow[filepath.Base(f)] {
-				t.Errorf("%s calls %s but is not an allowed call site (allowed: %v)", f, needle, allowed)
-			}
+		if !strings.Contains(string(b), needle) {
+			continue
+		}
+		found = true
+		if !allow[f] && !allow[filepath.Base(f)] {
+			t.Errorf("%s calls %s but is not an allowed call site (allowed: %v)", f, needle, allowed)
 		}
 	}
 	if !found {

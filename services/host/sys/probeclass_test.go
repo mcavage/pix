@@ -1,4 +1,4 @@
-package main
+package sys
 
 import (
 	"errors"
@@ -25,13 +25,13 @@ func TestClassifyProbeFailure_Denied(t *testing.T) {
 		`status 403: {"error":"request denied"}`,
 	}
 	for _, out := range cases {
-		if got := classifyProbeFailure(out, nil); got != probeDenied {
-			t.Errorf("classifyProbeFailure(%q) = %v, want probeDenied", out, got)
+		if got := ClassifyProbeFailure(out, nil); got != ProbeDenied {
+			t.Errorf("ClassifyProbeFailure(%q) = %v, want ProbeDenied", out, got)
 		}
 	}
 	// The error text is classified too, not just stdout.
-	if got := classifyProbeFailure("", errors.New("upstream: not allowed by policy")); got != probeDenied {
-		t.Errorf("error-carried denial = %v, want probeDenied", got)
+	if got := ClassifyProbeFailure("", errors.New("upstream: not allowed by policy")); got != ProbeDenied {
+		t.Errorf("error-carried denial = %v, want ProbeDenied", got)
 	}
 }
 
@@ -46,8 +46,8 @@ func TestClassifyProbeFailure_AuthTodo(t *testing.T) {
 		"authentication required",
 	}
 	for _, out := range cases {
-		if got := classifyProbeFailure(out, nil); got != probeAuthTodo {
-			t.Errorf("classifyProbeFailure(%q) = %v, want probeAuthTodo", out, got)
+		if got := ClassifyProbeFailure(out, nil); got != ProbeAuthTodo {
+			t.Errorf("ClassifyProbeFailure(%q) = %v, want ProbeAuthTodo", out, got)
 		}
 	}
 }
@@ -71,12 +71,12 @@ func TestClassifyProbeFailure_Unverifiable(t *testing.T) {
 		"open /etc/foo: permission denied",
 	}
 	for _, out := range cases {
-		if got := classifyProbeFailure(out, nil); got != probeUnverifiable {
-			t.Errorf("classifyProbeFailure(%q) = %v, want probeUnverifiable", out, got)
+		if got := ClassifyProbeFailure(out, nil); got != ProbeUnverifiable {
+			t.Errorf("ClassifyProbeFailure(%q) = %v, want ProbeUnverifiable", out, got)
 		}
 	}
-	if got := classifyProbeFailure("", errors.New("signal: killed")); got != probeUnverifiable {
-		t.Errorf("generic error = %v, want probeUnverifiable", got)
+	if got := ClassifyProbeFailure("", errors.New("signal: killed")); got != ProbeUnverifiable {
+		t.Errorf("generic error = %v, want ProbeUnverifiable", got)
 	}
 }
 
@@ -94,8 +94,8 @@ func TestClassifyProbeFailure_NoNaivePolicyMatch(t *testing.T) {
 		"request was denied\nsee the docs about the retry policy",
 	}
 	for _, out := range cases {
-		if got := classifyProbeFailure(out, nil); got == probeDenied {
-			t.Errorf("classifyProbeFailure(%q) = probeDenied; naive policy match", out)
+		if got := ClassifyProbeFailure(out, nil); got == ProbeDenied {
+			t.Errorf("ClassifyProbeFailure(%q) = ProbeDenied; naive policy match", out)
 		}
 	}
 }
@@ -104,17 +104,17 @@ func TestClassifyProbeFailure_NoNaivePolicyMatch(t *testing.T) {
 // carries auth words classifies as denied (the stronger, positive signal).
 func TestClassifyProbeFailure_DeniedTrumpsAuth(t *testing.T) {
 	out := "403 Forbidden: token valid but access denied by org policy (was 401 before login)"
-	if got := classifyProbeFailure(out, nil); got != probeDenied {
-		t.Errorf("classifyProbeFailure(%q) = %v, want probeDenied", out, got)
+	if got := ClassifyProbeFailure(out, nil); got != ProbeDenied {
+		t.Errorf("ClassifyProbeFailure(%q) = %v, want ProbeDenied", out, got)
 	}
 }
 
 // TestProbeClassString: the machine-readable evidence tokens.
 func TestProbeClassString(t *testing.T) {
-	for want, p := range map[string]probeClass{
-		"denied":       probeDenied,
-		"auth-todo":    probeAuthTodo,
-		"unverifiable": probeUnverifiable,
+	for want, p := range map[string]ProbeClass{
+		"denied":       ProbeDenied,
+		"auth-todo":    ProbeAuthTodo,
+		"unverifiable": ProbeUnverifiable,
 	} {
 		if got := p.String(); got != want {
 			t.Errorf("%v.String() = %q, want %q", p, got, want)
