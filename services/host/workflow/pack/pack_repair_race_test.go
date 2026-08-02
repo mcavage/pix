@@ -11,7 +11,7 @@
 // aborting loudly and retrying. The fix recomputes which legacy dirs are
 // still absent, and reloads config + trust, FRESH, inside the lock — and
 // aborts the whole repair (no mutation at all) if either fresh load fails.
-package main
+package pack
 
 import (
 	"bytes"
@@ -36,12 +36,12 @@ func seedRepairScenario(t *testing.T, legacy, def string) (cfgBytes, trustBytes 
 	if err := os.WriteFile(filepath.Join(def, "pack.toml"), []byte("name = \"default\"\nschema = 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	oldCanon := canonicalizePackRoot(legacy)
-	store := &packTrustStore{
+	oldCanon := CanonicalizePackRoot(legacy)
+	store := &PackTrustStore{
 		Version:  1,
-		Accepted: map[string]packTrustRecord{"path:" + oldCanon: {Path: oldCanon, Fingerprint: "fp"}},
+		Accepted: map[string]PackTrustRecord{"path:" + oldCanon: {Path: oldCanon, Fingerprint: "fp"}},
 	}
-	if err := store.save(); err != nil {
+	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := config.Load()
@@ -81,7 +81,7 @@ func TestRepairStaleLegacyPackStateLocked_LegacyDirRevived_NoOp(t *testing.T) {
 	// blocked waiting for the trust lock.
 	writeLegacyPack(t, legacy)
 
-	newCanon := canonicalizePackRoot(def)
+	newCanon := CanonicalizePackRoot(def)
 	if err := withPackTrustLock(func() error {
 		return repairStaleLegacyPackStateLocked(def, newCanon)
 	}); err != nil {
@@ -99,7 +99,7 @@ func TestRepairStaleLegacyPackStateLocked_LegacyDirRevived_NoOp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldCanon := canonicalizePackRoot(legacy)
+	oldCanon := CanonicalizePackRoot(legacy)
 	if _, ok := s.Accepted["path:"+oldCanon]; !ok {
 		t.Error("trust record must remain keyed at the legacy path once it's live again")
 	}
@@ -148,8 +148,8 @@ func TestRepairStaleLegacyPackState_ConcurrentCalls_ConvergeCleanly(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldCanon := canonicalizePackRoot(legacy)
-	newCanon := canonicalizePackRoot(def)
+	oldCanon := CanonicalizePackRoot(legacy)
+	newCanon := CanonicalizePackRoot(def)
 	if _, ok := s.Accepted["path:"+oldCanon]; ok {
 		t.Errorf("stale legacy trust key must not survive concurrent repairs, got %+v", s.Accepted)
 	}
@@ -177,7 +177,7 @@ func TestRepairStaleLegacyPackState_CorruptTrustStore_AbortsWithoutTouchingConfi
 	legacy, def := migrationTestEnv(t)
 	cfgBytesBefore, _ := seedRepairScenario(t, legacy, def)
 
-	// Corrupt the trust store directly (bypassing store.save()'s valid-JSON
+	// Corrupt the trust store directly (bypassing store.Save()'s valid-JSON
 	// path) — simulates disk corruption or a hostile/torn write.
 	corrupt := []byte("{ not valid json")
 	if err := os.WriteFile(packTrustStorePath(), corrupt, 0o644); err != nil {

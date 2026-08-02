@@ -1,4 +1,4 @@
-package main
+package pack
 
 import (
 	"bytes"
@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"pix/host/config"
-	"pix/host/secret"
 )
 
 // TestPackDir_DefaultsToDefault: the built-in pack dir basename ("pack" ->
@@ -30,7 +29,7 @@ func TestPackDir_DefaultsToDefault(t *testing.T) {
 // TestMigrateLegacyPackDir_PersonalToDefault_RenamesAndUpdatesConfig: an
 // existing mid-rename ".../personal" (with pack.toml, i.e. a real pack, and a
 // .git dir to prove history survives a plain rename) is migrated to
-// ".../default" on the first defaultPackRoot() resolution, a cfg.Pack pointing
+// ".../default" on the first DefaultPackRoot() resolution, a cfg.Pack pointing
 // at the old path is updated + saved, and the manifest's Name field is
 // rewritten to "default" while every other field is preserved.
 func TestMigrateLegacyPackDir_PersonalToDefault_RenamesAndUpdatesConfig(t *testing.T) {
@@ -59,10 +58,10 @@ func TestMigrateLegacyPackDir_PersonalToDefault_RenamesAndUpdatesConfig(t *testi
 		t.Fatal(err)
 	}
 
-	root := defaultPackRoot()
+	root := DefaultPackRoot()
 	want := filepath.Join(data, "pix", "default")
 	if root != want {
-		t.Fatalf("defaultPackRoot() = %q, want %q", root, want)
+		t.Fatalf("DefaultPackRoot() = %q, want %q", root, want)
 	}
 	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
 		t.Errorf("legacy dir should be gone after migration, stat err = %v", err)
@@ -74,9 +73,9 @@ func TestMigrateLegacyPackDir_PersonalToDefault_RenamesAndUpdatesConfig(t *testi
 		t.Errorf("marker.txt not preserved by migration: %v", err)
 	}
 
-	p, err := loadPack(root)
+	p, err := LoadPack(root)
 	if err != nil {
-		t.Fatalf("loadPack(%s): %v", root, err)
+		t.Fatalf("LoadPack(%s): %v", root, err)
 	}
 	if p.Manifest.Name != "default" {
 		t.Errorf("migrated manifest Name = %q, want %q", p.Manifest.Name, "default")
@@ -109,17 +108,17 @@ func TestMigrateLegacyPackDir_OldPackToDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := defaultPackRoot()
+	root := DefaultPackRoot()
 	want := filepath.Join(data, "pix", "default")
 	if root != want {
-		t.Fatalf("defaultPackRoot() = %q, want %q", root, want)
+		t.Fatalf("DefaultPackRoot() = %q, want %q", root, want)
 	}
 	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
 		t.Errorf("legacy \"pack\" dir should be gone after migration, stat err = %v", err)
 	}
-	p, err := loadPack(root)
+	p, err := LoadPack(root)
 	if err != nil {
-		t.Fatalf("loadPack(%s): %v", root, err)
+		t.Fatalf("LoadPack(%s): %v", root, err)
 	}
 	if p.Manifest.Name != "default" {
 		t.Errorf("migrated manifest Name = %q, want %q", p.Manifest.Name, "default")
@@ -154,10 +153,10 @@ func TestMigrateLegacyPackDir_PreferPersonalOverPack_LeavesPackUntouched(t *test
 		t.Fatal(err)
 	}
 
-	root := defaultPackRoot()
+	root := DefaultPackRoot()
 	want := filepath.Join(base, "default")
 	if root != want {
-		t.Fatalf("defaultPackRoot() = %q, want %q", root, want)
+		t.Fatalf("DefaultPackRoot() = %q, want %q", root, want)
 	}
 	if _, err := os.Stat(personal); !os.IsNotExist(err) {
 		t.Errorf("personal dir should be gone after migration, stat err = %v", err)
@@ -166,9 +165,9 @@ func TestMigrateLegacyPackDir_PreferPersonalOverPack_LeavesPackUntouched(t *test
 	if _, err := os.Stat(filepath.Join(oldPack, "sentinel.txt")); err != nil {
 		t.Errorf("old \"pack\" dir was touched by migration: %v", err)
 	}
-	p, err := loadPack(root)
+	p, err := LoadPack(root)
 	if err != nil {
-		t.Fatalf("loadPack(%s): %v", root, err)
+		t.Fatalf("LoadPack(%s): %v", root, err)
 	}
 	if p.Manifest.Name != "default" {
 		t.Errorf("migrated manifest Name = %q, want %q", p.Manifest.Name, "default")
@@ -176,23 +175,23 @@ func TestMigrateLegacyPackDir_PreferPersonalOverPack_LeavesPackUntouched(t *test
 }
 
 // TestMigrateLegacyPackDir_NoLegacy_NoOp: with no legacy dir, migration is a
-// clean no-op (defaultPackRoot just returns the new default).
+// clean no-op (DefaultPackRoot just returns the new default).
 func TestMigrateLegacyPackDir_NoLegacy_NoOp(t *testing.T) {
 	data := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", data)
 	t.Setenv("PIX_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 
-	root := defaultPackRoot()
+	root := DefaultPackRoot()
 	want := filepath.Join(data, "pix", "default")
 	if root != want {
-		t.Errorf("defaultPackRoot() = %q, want %q", root, want)
+		t.Errorf("DefaultPackRoot() = %q, want %q", root, want)
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Errorf("no pack should have been created, stat err = %v", err)
 	}
 }
 
-// TestMigrateLegacyPackDir_AlreadyDefault_Idempotent: calling defaultPackRoot
+// TestMigrateLegacyPackDir_AlreadyDefault_Idempotent: calling DefaultPackRoot
 // twice (or when ".../default" already exists) is a no-op the second time —
 // migration never re-fires once the new dir is in place.
 func TestMigrateLegacyPackDir_AlreadyDefault_Idempotent(t *testing.T) {
@@ -218,9 +217,9 @@ func TestMigrateLegacyPackDir_AlreadyDefault_Idempotent(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ {
-		root := defaultPackRoot()
+		root := DefaultPackRoot()
 		if root != newDir {
-			t.Fatalf("call %d: defaultPackRoot() = %q, want %q", i, root, newDir)
+			t.Fatalf("call %d: DefaultPackRoot() = %q, want %q", i, root, newDir)
 		}
 	}
 	if _, err := os.Stat(legacy); err != nil {
@@ -253,10 +252,10 @@ func TestMigrateLegacyPackDir_SymlinkedPersonal_Refused(t *testing.T) {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
-	root := defaultPackRoot()
+	root := DefaultPackRoot()
 	want := filepath.Join(data, "pix", "default")
 	if root != want {
-		t.Errorf("defaultPackRoot() = %q, want %q", root, want)
+		t.Errorf("DefaultPackRoot() = %q, want %q", root, want)
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Errorf("symlinked legacy dir must not be migrated, but %q now exists", root)
@@ -289,10 +288,10 @@ func TestMigrateLegacyPackDir_SymlinkedOldPack_Refused(t *testing.T) {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
-	root := defaultPackRoot()
+	root := DefaultPackRoot()
 	want := filepath.Join(data, "pix", "default")
 	if root != want {
-		t.Errorf("defaultPackRoot() = %q, want %q", root, want)
+		t.Errorf("DefaultPackRoot() = %q, want %q", root, want)
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Errorf("symlinked legacy dir must not be migrated, but %q now exists", root)
@@ -302,7 +301,7 @@ func TestMigrateLegacyPackDir_SymlinkedOldPack_Refused(t *testing.T) {
 	}
 }
 
-// TestWritePackManifest_RefusesSymlinkedManifest: writePackManifest must
+// TestWritePackManifest_RefusesSymlinkedManifest: WriteManifest must
 // Lstat-refuse a symlinked pack.toml rather than writing through it (the pack
 // root is untrusted input — an adopted/migrated pack could ship a symlinked
 // manifest pointing outside the pack root).
@@ -312,14 +311,14 @@ func TestWritePackManifest_RefusesSymlinkedManifest(t *testing.T) {
 	if err := os.WriteFile(target, []byte("do not touch"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	manifestPath := filepath.Join(root, packManifestName)
+	manifestPath := filepath.Join(root, PackManifestName)
 	if err := os.Symlink(target, manifestPath); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
-	err := writePackManifest(root, packManifest{Name: "default", Schema: 1})
+	err := WriteManifest(root, Manifest{Name: "default", Schema: 1})
 	if err == nil {
-		t.Fatal("writePackManifest through a symlinked pack.toml should have failed")
+		t.Fatal("WriteManifest through a symlinked pack.toml should have failed")
 	}
 	b, rerr := os.ReadFile(target)
 	if rerr != nil {
@@ -334,14 +333,14 @@ func TestWritePackManifest_RefusesSymlinkedManifest(t *testing.T) {
 }
 
 // TestWritePackManifest_AtomicRoundTrip: a normal (non-symlinked) manifest
-// write round-trips every field via loadPack.
+// write round-trips every field via LoadPack.
 func TestWritePackManifest_AtomicRoundTrip(t *testing.T) {
 	root := t.TempDir()
-	m := packManifest{Name: "default", Schema: 1, OllamaBridgeModel: "llama3", GogAccount: "me@example.com"}
-	if err := writePackManifest(root, m); err != nil {
+	m := Manifest{Name: "default", Schema: 1, OllamaBridgeModel: "llama3", GogAccount: "me@example.com"}
+	if err := WriteManifest(root, m); err != nil {
 		t.Fatal(err)
 	}
-	p, err := loadPack(root)
+	p, err := LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +360,7 @@ func TestPackNew_DefaultRoot_ActivatesAndPrintsDefaultLabel(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
 
 	var buf bytes.Buffer
-	runPackNew(fakeGitEnv(nil), &buf, nil)
+	RunPackNew(fakeGitEnv(nil), &buf, nil)
 
 	root := filepath.Join(data, "pix", "default")
 	out := buf.String()
@@ -374,9 +373,9 @@ func TestPackNew_DefaultRoot_ActivatesAndPrintsDefaultLabel(t *testing.T) {
 	if strings.Contains(out, "personal") {
 		t.Errorf("output should never say \"personal\", got: %s", out)
 	}
-	p, err := loadPack(root)
+	p, err := LoadPack(root)
 	if err != nil {
-		t.Fatalf("loadPack(%s): %v", root, err)
+		t.Fatalf("LoadPack(%s): %v", root, err)
 	}
 	if p.Manifest.Name != "default" {
 		t.Errorf("new pack Name = %q, want %q", p.Manifest.Name, "default")
@@ -409,16 +408,16 @@ func TestPackUse_DefaultAlias_ResolvesToPackDir(t *testing.T) {
 		t.Fatalf("refusing to run: %s already exists on disk", decoy)
 	}
 
-	root := defaultPackRoot() // creates+migrates nothing; just resolves the path and ensures parent exists
+	root := DefaultPackRoot() // creates+migrates nothing; just resolves the path and ensures parent exists
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, packManifestName), []byte("name = \"default\"\nschema = 1\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, PackManifestName), []byte("name = \"default\"\nschema = 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	var buf bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &buf, []string{"default"}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &buf, []string{"default"}, registerOK)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -442,16 +441,16 @@ func TestPackUse_PersonalAlias_DeprecatedButResolvesToDefault(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(cfgDir, "state"))
 
-	root := defaultPackRoot()
+	root := DefaultPackRoot()
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, packManifestName), []byte("name = \"default\"\nschema = 1\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, PackManifestName), []byte("name = \"default\"\nschema = 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	var buf bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &buf, []string{"personal"}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &buf, []string{"personal"}, registerOK)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -496,11 +495,11 @@ func writeLegacyPack(t *testing.T, legacy string) {
 func TestMigrateLegacyPackDir_MigratesTrustPathState(t *testing.T) {
 	legacy, def := migrationTestEnv(t)
 	writeLegacyPack(t, legacy)
-	oldCanon := canonicalizePackRoot(legacy)
+	oldCanon := CanonicalizePackRoot(legacy)
 
-	store := &packTrustStore{
+	store := &PackTrustStore{
 		Version: 1,
-		Accepted: map[string]packTrustRecord{
+		Accepted: map[string]PackTrustRecord{
 			"path:" + oldCanon:       {Path: oldCanon, Fingerprint: "fp-local"},
 			"remote:https://x/p.git": {Remote: "https://x/p.git", Path: oldCanon, Commit: "abc", Fingerprint: "fp-remote"},
 		},
@@ -511,15 +510,15 @@ func TestMigrateLegacyPackDir_MigratesTrustPathState(t *testing.T) {
 			MCP: []string{config.GWServerName}, Knowledge: []string{"kb"}, GogAccount: "a@b.c",
 		},
 	}
-	if err := store.save(); err != nil {
+	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
 
-	root := defaultPackRoot()
+	root := DefaultPackRoot()
 	if root != def {
-		t.Fatalf("defaultPackRoot() = %q, want %q", root, def)
+		t.Fatalf("DefaultPackRoot() = %q, want %q", root, def)
 	}
-	newCanon := canonicalizePackRoot(def)
+	newCanon := CanonicalizePackRoot(def)
 
 	s, err := loadPackTrustStore()
 	if err != nil {
@@ -562,18 +561,18 @@ func TestMigrateLegacyPackDir_MigratesTrustPathState(t *testing.T) {
 
 // TestMigrateLegacyPackDir_ConfigSaveFailure_RollsBackEverything: a cfg.Save
 // failure rolls back the trust store, the manifest name, and the directory
-// rename; defaultPackRoot fails CLOSED to the legacy path so no caller can
+// rename; DefaultPackRoot fails CLOSED to the legacy path so no caller can
 // create a second empty pack at the default root.
 func TestMigrateLegacyPackDir_ConfigSaveFailure_RollsBackEverything(t *testing.T) {
 	legacy, def := migrationTestEnv(t)
 	writeLegacyPack(t, legacy)
-	oldCanon := canonicalizePackRoot(legacy)
+	oldCanon := CanonicalizePackRoot(legacy)
 
-	store := &packTrustStore{
+	store := &PackTrustStore{
 		Version:  1,
-		Accepted: map[string]packTrustRecord{"path:" + oldCanon: {Path: oldCanon, Fingerprint: "fp"}},
+		Accepted: map[string]PackTrustRecord{"path:" + oldCanon: {Path: oldCanon, Fingerprint: "fp"}},
 	}
-	if err := store.save(); err != nil {
+	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := config.Load()
@@ -589,14 +588,14 @@ func TestMigrateLegacyPackDir_ConfigSaveFailure_RollsBackEverything(t *testing.T
 	savePackMigrationConfig = func(*config.Config) error { return fmt.Errorf("disk full") }
 	t.Cleanup(func() { savePackMigrationConfig = origSave })
 
-	root := defaultPackRoot()
+	root := DefaultPackRoot()
 	if root != legacy {
-		t.Errorf("defaultPackRoot() after failed migration = %q, want fail-closed legacy %q", root, legacy)
+		t.Errorf("DefaultPackRoot() after failed migration = %q, want fail-closed legacy %q", root, legacy)
 	}
 	if _, err := os.Stat(def); !os.IsNotExist(err) {
 		t.Errorf("default dir must not exist after rollback, stat err = %v", err)
 	}
-	p, err := loadPack(legacy)
+	p, err := LoadPack(legacy)
 	if err != nil {
 		t.Fatalf("legacy pack must still load: %v", err)
 	}
@@ -621,7 +620,7 @@ func TestMigrateLegacyPackDir_ConfigSaveFailure_RollsBackEverything(t *testing.T
 
 // TestRepairStaleLegacyPackState: the default dir already exists (an earlier,
 // non-transactional migration renamed it) but cfg.Pack and the trust store
-// still reference the GONE legacy path — a later defaultPackRoot() resolution
+// still reference the GONE legacy path — a later DefaultPackRoot() resolution
 // repairs both, idempotently.
 func TestRepairStaleLegacyPackState(t *testing.T) {
 	legacy, def := migrationTestEnv(t)
@@ -631,14 +630,14 @@ func TestRepairStaleLegacyPackState(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(def, "pack.toml"), []byte("name = \"default\"\nschema = 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	oldCanon := canonicalizePackRoot(legacy)
+	oldCanon := CanonicalizePackRoot(legacy)
 
-	store := &packTrustStore{
+	store := &PackTrustStore{
 		Version:    1,
-		Accepted:   map[string]packTrustRecord{"path:" + oldCanon: {Path: oldCanon, Fingerprint: "fp"}},
+		Accepted:   map[string]PackTrustRecord{"path:" + oldCanon: {Path: oldCanon, Fingerprint: "fp"}},
 		Activation: &packActivationRecord{Owner: "path:" + oldCanon, Path: oldCanon, MCP: []string{config.GWServerName}},
 	}
-	if err := store.save(); err != nil {
+	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := config.Load()
@@ -651,11 +650,11 @@ func TestRepairStaleLegacyPackState(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ { // idempotent
-		if root := defaultPackRoot(); root != def {
-			t.Fatalf("call %d: defaultPackRoot() = %q, want %q", i, root, def)
+		if root := DefaultPackRoot(); root != def {
+			t.Fatalf("call %d: DefaultPackRoot() = %q, want %q", i, root, def)
 		}
 	}
-	newCanon := canonicalizePackRoot(def)
+	newCanon := CanonicalizePackRoot(def)
 	reloaded, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -699,8 +698,8 @@ func TestRepairStaleLegacyPackState_LiveLegacyNeverHijacked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if root := defaultPackRoot(); root != def {
-		t.Fatalf("defaultPackRoot() = %q, want %q", root, def)
+	if root := DefaultPackRoot(); root != def {
+		t.Fatalf("DefaultPackRoot() = %q, want %q", root, def)
 	}
 	reloaded, err := config.Load()
 	if err != nil {
@@ -737,7 +736,7 @@ func TestActivateDefaultPack_ConfigSaveFailure_NeverClaimsActive(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePackManifest(root, packManifest{Name: "default", Schema: 1}); err != nil {
+	if err := WriteManifest(root, Manifest{Name: "default", Schema: 1}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -784,7 +783,7 @@ func TestActivateDefaultPack_DoesNotOverrideExplicitAlternate(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePackManifest(root, packManifest{Name: "default", Schema: 1}); err != nil {
+	if err := WriteManifest(root, Manifest{Name: "default", Schema: 1}); err != nil {
 		t.Fatal(err)
 	}
 	alternate := filepath.Join(data, "alt-pack")
@@ -809,130 +808,19 @@ func TestActivateDefaultPack_DoesNotOverrideExplicitAlternate(t *testing.T) {
 	}
 }
 
-// setupHostPhase must activate an ALREADY-EXISTING default pack (e.g. one
-// landed by the legacy migration, or discovered from a prior run) when
-// cfg.Pack is empty — not only a brand-new one created via runPackNew.
-func TestSetupHostPhase_ActivatesExistingMigratedDefaultPack_WhenCfgPackEmpty(t *testing.T) {
-	data := t.TempDir()
-	cfgDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", data)
-	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(cfgDir, "state"))
-
-	// Simulate a default pack that already exists (as if migrated or created by
-	// an earlier run) but whose activation never landed: cfg.Pack is empty.
-	root := filepath.Join(data, "pix", "default")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := writePackManifest(root, packManifest{Name: "default", Schema: 1}); err != nil {
-		t.Fatal(err)
-	}
-
-	refs := "ANTHROPIC_API_KEY=op://v/anthropic/key\nOPENAI_API_KEY=op://v/openai/key\nGEMINI_API_KEY=op://v/gemini/key\n"
-	env, _ := stepEnv(t, refs, "anthropic openai google", "sk-val")
-	// stepEnv points PIX_CONFIG/XDG_STATE_HOME/XDG_DATA_HOME at ITS OWN
-	// temp dirs (overriding what we set above); redirect them back to cfgDir /
-	// data so the real config.Load/Save AND the pre-created default pack this
-	// test asserts on both land where we expect.
-	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(cfgDir, "state"))
-	t.Setenv("XDG_DATA_HOME", data)
-	for envVar, ref := range map[string]string{
-		"ANTHROPIC_API_KEY": "op://v/anthropic/key",
-		"OPENAI_API_KEY":    "op://v/openai/key",
-		"GEMINI_API_KEY":    "op://v/gemini/key",
-	} {
-		if err := secret.RecordSyncedRefWithDigest(envVar, ref, secret.SecretDigestHex("sk-val")); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var out bytes.Buffer
-	if err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false); err != nil {
-		t.Fatalf("unexpected error: %v\n%s", err, out.String())
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Pack != "" {
-		t.Errorf("cfg.Pack after setup = %q; normal setup must not introduce or activate packs", cfg.Pack)
-	}
-}
-
-// setupHostPhase must FAIL (propagate the error) when activating the default
-// pack fails (cfg.Save error) — it must never report success while cfg.Pack
-// still points nowhere.
-func TestSetupHostPhase_PackActivationFailure_FailsSetup(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("root ignores directory write permissions")
-	}
-	data := t.TempDir()
-	cfgDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", data)
-	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(cfgDir, "state"))
-
-	root := filepath.Join(data, "pix", "default")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := writePackManifest(root, packManifest{Name: "default", Schema: 1}); err != nil {
-		t.Fatal(err)
-	}
-
-	refs := "ANTHROPIC_API_KEY=op://v/anthropic/key\nOPENAI_API_KEY=op://v/openai/key\nGEMINI_API_KEY=op://v/gemini/key\n"
-	env, _ := stepEnv(t, refs, "anthropic openai google", "sk-val")
-	// stepEnv points PIX_CONFIG/XDG_STATE_HOME/XDG_DATA_HOME at ITS OWN
-	// temp dirs (overriding what we set above); redirect them back to cfgDir /
-	// data so we chmod the SAME directory config.Save() actually writes into
-	// and the pre-created pack above is the one setupHostPhase resolves.
-	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(cfgDir, "state"))
-	t.Setenv("XDG_DATA_HOME", data)
-	for envVar, ref := range map[string]string{
-		"ANTHROPIC_API_KEY": "op://v/anthropic/key",
-		"OPENAI_API_KEY":    "op://v/openai/key",
-		"GEMINI_API_KEY":    "op://v/gemini/key",
-	} {
-		if err := secret.RecordSyncedRefWithDigest(envVar, ref, secret.SecretDigestHex("sk-val")); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Config must exist on disk before it becomes unwritable, so setupHostPhase's
-	// own earlier config.Load()/writes have already succeeded and only the pack
-	// activation's cfg.Save is what fails.
-	if cfg, err := config.Load(); err != nil {
-		t.Fatal(err)
-	} else if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(cfgDir, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(cfgDir, 0o755) })
-
-	var out bytes.Buffer
-	err := setupHostPhase(env, []string{"--yes"}, strings.NewReader(""), &out, false)
-	_ = os.Chmod(cfgDir, 0o755) // restore before any later cleanup/log reads
-	if err == nil {
-		t.Fatal("setup must fail when default-pack activation fails")
-	}
-}
-
 // --- item 7: a cfg.Pack SYMLINK ALIAS resolving onto the legacy dir must
 // refuse migration outright, before touching anything ---------------------
 
 // TestMigrateLegacyPackDir_CfgPackSymlinkAlias_RefusesBeforeAnyMutation:
 // cfg.Pack points at a DIFFERENT path (an alias) that is itself a symlink
-// resolving onto the legacy pack dir being migrated. canonicalizePackRoot
+// resolving onto the legacy pack dir being migrated. CanonicalizePackRoot
 // (Abs+Clean only, never EvalSymlinks) would never string-match the alias
 // against the legacy dir's own canonical path, so the existing step-4
 // cfg.Pack==oldDir check would miss it — proceeding would rename the legacy
 // dir out from under the alias (leaving it dangling) with no trust-store
 // migration for the alias-keyed state either. The fix must catch this BEFORE
 // the directory rename, the manifest edit, the trust-store save, or the
-// config save — i.e. NO mutation at all — and defaultPackRoot must fall back
+// config save — i.e. NO mutation at all — and DefaultPackRoot must fall back
 // to the (untouched) legacy path.
 func TestMigrateLegacyPackDir_CfgPackSymlinkAlias_RefusesBeforeAnyMutation(t *testing.T) {
 	legacy, def := migrationTestEnv(t)
@@ -955,24 +843,24 @@ func TestMigrateLegacyPackDir_CfgPackSymlinkAlias_RefusesBeforeAnyMutation(t *te
 		t.Fatal(err)
 	}
 
-	trustKey := "path:" + canonicalizePackRoot(alias)
-	store := &packTrustStore{
+	trustKey := "path:" + CanonicalizePackRoot(alias)
+	store := &PackTrustStore{
 		Version:  1,
-		Accepted: map[string]packTrustRecord{trustKey: {Path: canonicalizePackRoot(alias), Fingerprint: "fp-alias"}},
+		Accepted: map[string]PackTrustRecord{trustKey: {Path: CanonicalizePackRoot(alias), Fingerprint: "fp-alias"}},
 	}
-	if err := store.save(); err != nil {
+	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
 
-	root := defaultPackRoot()
+	root := DefaultPackRoot()
 	if root != legacy {
-		t.Errorf("defaultPackRoot() with an aliased cfg.Pack must fall back to the untouched legacy dir %q, got %q", legacy, root)
+		t.Errorf("DefaultPackRoot() with an aliased cfg.Pack must fall back to the untouched legacy dir %q, got %q", legacy, root)
 	}
 	// NO mutation: new dir must not exist, legacy dir/manifest untouched.
 	if _, err := os.Stat(def); !os.IsNotExist(err) {
 		t.Errorf("the default dir must NOT be created when migration is refused, stat err = %v", err)
 	}
-	p, err := loadPack(legacy)
+	p, err := LoadPack(legacy)
 	if err != nil {
 		t.Fatalf("legacy pack must still load untouched: %v", err)
 	}
@@ -996,7 +884,7 @@ func TestMigrateLegacyPackDir_CfgPackSymlinkAlias_RefusesBeforeAnyMutation(t *te
 	if rec, ok := s.Accepted[trustKey]; !ok || rec.Fingerprint != "fp-alias" {
 		t.Errorf("alias trust record must be untouched, got %+v", s.Accepted)
 	}
-	if _, ok := s.Accepted["path:"+canonicalizePackRoot(legacy)]; ok {
+	if _, ok := s.Accepted["path:"+CanonicalizePackRoot(legacy)]; ok {
 		t.Error("no NEW trust record should be created for the legacy path")
 	}
 }
@@ -1041,13 +929,13 @@ func TestMigrateLegacyPackDir_CfgPackSymlinkAlias_LegacyUnderSymlinkedAncestor(t
 		t.Fatal(err)
 	}
 
-	if root := defaultPackRoot(); root != legacy {
-		t.Errorf("defaultPackRoot() must fall back to the untouched legacy dir %q, got %q", legacy, root)
+	if root := DefaultPackRoot(); root != legacy {
+		t.Errorf("DefaultPackRoot() must fall back to the untouched legacy dir %q, got %q", legacy, root)
 	}
 	if _, err := os.Stat(def); !os.IsNotExist(err) {
 		t.Errorf("the default dir must NOT be created when migration is refused, stat err = %v", err)
 	}
-	p, err := loadPack(legacy)
+	p, err := LoadPack(legacy)
 	if err != nil {
 		t.Fatalf("legacy pack must still load untouched: %v", err)
 	}
@@ -1072,13 +960,13 @@ func TestRepairStaleLegacyPackState_ConfigSaveFailure_RollsBackTrust(t *testing.
 	if err := os.WriteFile(filepath.Join(def, "pack.toml"), []byte("name = \"default\"\nschema = 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	oldCanon := canonicalizePackRoot(legacy)
+	oldCanon := CanonicalizePackRoot(legacy)
 
-	store := &packTrustStore{
+	store := &PackTrustStore{
 		Version:  1,
-		Accepted: map[string]packTrustRecord{"path:" + oldCanon: {Path: oldCanon, Fingerprint: "fp"}},
+		Accepted: map[string]PackTrustRecord{"path:" + oldCanon: {Path: oldCanon, Fingerprint: "fp"}},
 	}
-	if err := store.save(); err != nil {
+	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := config.Load()
@@ -1094,11 +982,11 @@ func TestRepairStaleLegacyPackState_ConfigSaveFailure_RollsBackTrust(t *testing.
 	savePackMigrationConfig = func(*config.Config) error { return fmt.Errorf("disk full") }
 	t.Cleanup(func() { savePackMigrationConfig = origSave })
 
-	if root := defaultPackRoot(); root != def {
-		t.Fatalf("defaultPackRoot() = %q, want %q even when the repair partially fails", root, def)
+	if root := DefaultPackRoot(); root != def {
+		t.Fatalf("DefaultPackRoot() = %q, want %q even when the repair partially fails", root, def)
 	}
 
-	newCanon := canonicalizePackRoot(def)
+	newCanon := CanonicalizePackRoot(def)
 	s, err := loadPackTrustStore()
 	if err != nil {
 		t.Fatal(err)
@@ -1119,8 +1007,8 @@ func TestRepairStaleLegacyPackState_ConfigSaveFailure_RollsBackTrust(t *testing.
 
 	// Retry once saving works again: BOTH must now repair.
 	savePackMigrationConfig = origSave
-	if root := defaultPackRoot(); root != def {
-		t.Fatalf("retry: defaultPackRoot() = %q, want %q", root, def)
+	if root := DefaultPackRoot(); root != def {
+		t.Fatalf("retry: DefaultPackRoot() = %q, want %q", root, def)
 	}
 	s2, err := loadPackTrustStore()
 	if err != nil {

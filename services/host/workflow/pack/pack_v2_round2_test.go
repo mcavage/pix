@@ -1,4 +1,4 @@
-package main
+package pack
 
 // Round-2 review tests for packs-v2 Phase 1 (docs/design/packs-v2-impl.md):
 // one (or more) test per finding A–G of the second security + correctness
@@ -26,39 +26,39 @@ import (
 func TestLoadPack_SharedClassMismatchFailsClosed(t *testing.T) {
 	// shared=true + LOCAL path: the exact bypass — refuse to load.
 	root := t.TempDir()
-	mustWritePack(t, root, packManifest{Name: "p", Schema: 1, Knowledge: []packKnowledge{
+	mustWritePack(t, root, Manifest{Name: "p", Schema: 1, Knowledge: []packKnowledge{
 		{Name: "bypass", Source: "/etc", Shared: true},
 	}})
-	if _, err := loadPack(root); err == nil || !strings.Contains(err.Error(), "requires a git URL") {
-		t.Errorf("shared=true + local path must fail loadPack, got err=%v", err)
+	if _, err := LoadPack(root); err == nil || !strings.Contains(err.Error(), "requires a git URL") {
+		t.Errorf("shared=true + local path must fail LoadPack, got err=%v", err)
 	}
 
 	// shared=false + git URL: nonsensical "private remote" — refuse to load.
 	root2 := t.TempDir()
-	mustWritePack(t, root2, packManifest{Name: "p2", Schema: 1, Knowledge: []packKnowledge{
+	mustWritePack(t, root2, Manifest{Name: "p2", Schema: 1, Knowledge: []packKnowledge{
 		{Name: "mismatch", Source: "https://github.com/acme/kb.git", Shared: false},
 	}})
-	if _, err := loadPack(root2); err == nil || !strings.Contains(err.Error(), "requires a local path") {
-		t.Errorf("shared=false + git URL must fail loadPack, got err=%v", err)
+	if _, err := LoadPack(root2); err == nil || !strings.Contains(err.Error(), "requires a local path") {
+		t.Errorf("shared=false + git URL must fail LoadPack, got err=%v", err)
 	}
 
 	// A transport-helper string is URL-shaped, never a "local path": with
 	// shared=false it is a class mismatch and must fail at load too.
 	root3 := t.TempDir()
-	mustWritePack(t, root3, packManifest{Name: "p3", Schema: 1, Knowledge: []packKnowledge{
+	mustWritePack(t, root3, Manifest{Name: "p3", Schema: 1, Knowledge: []packKnowledge{
 		{Name: "helper", Source: "ext::sh -c pwn", Shared: false},
 	}})
-	if _, err := loadPack(root3); err == nil {
-		t.Error("shared=false + ext:: transport helper must fail loadPack")
+	if _, err := LoadPack(root3); err == nil {
+		t.Error("shared=false + ext:: transport helper must fail LoadPack")
 	}
 
 	// And the matched classes still load fine.
 	rootOK := t.TempDir()
-	mustWritePack(t, rootOK, packManifest{Name: "ok", Schema: 1, Knowledge: []packKnowledge{
+	mustWritePack(t, rootOK, Manifest{Name: "ok", Schema: 1, Knowledge: []packKnowledge{
 		{Name: "team", Source: "https://github.com/acme/kb.git", Shared: true},
 		{Name: "mine", Source: "~/notes/okf", Shared: false},
 	}})
-	if _, err := loadPack(rootOK); err != nil {
+	if _, err := LoadPack(rootOK); err != nil {
 		t.Errorf("matched shared/class must load, got %v", err)
 	}
 }
@@ -67,7 +67,7 @@ func TestLoadPack_SharedClassMismatchFailsClosed(t *testing.T) {
 // adopted-pack skip-guard keys on the source CLASS (local path), never the
 // attacker-authored shared flag — shared=true with a local path on an adopted
 // pack is skipped exactly like shared=false (defense-in-depth behind the
-// loadPack class check).
+// LoadPack class check).
 func TestResolvePackKnowledgeRef_AdoptedLocalPathSkippedRegardlessOfShared(t *testing.T) {
 	root := t.TempDir()
 	target := t.TempDir() // stands in for e.g. /etc or ~/.ssh
@@ -141,7 +141,7 @@ func TestClonePack_MarksAdoptionDurablyBeforeReturn(t *testing.T) {
 			if err := os.MkdirAll(dest, 0o755); err != nil {
 				return "", err
 			}
-			if err := writePackManifest(dest, packManifest{Name: "adopted", Schema: 1}); err != nil {
+			if err := WriteManifest(dest, Manifest{Name: "adopted", Schema: 1}); err != nil {
 				return "", err
 			}
 		}
@@ -155,7 +155,7 @@ func TestClonePack_MarksAdoptionDurablyBeforeReturn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clonePack: %v", err)
 	}
-	// The marker is on disk NOW — before any runPackUse post-clone step ran
+	// The marker is on disk NOW — before any RunPackUse post-clone step ran
 	// (this is the "subsequent Save failed" state: nothing after clonePack).
 	lock := readPackLock(dest)
 	if lock.Remote != url {
@@ -198,13 +198,13 @@ func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rootA, "knowledge", "x.md"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	mustWritePack(t, rootA, packManifest{Name: "a", Schema: 1, Integrations: []packIntegration{{Name: "A", MCP: "a-mcp"}}})
+	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1, Integrations: []Integration{{Name: "A", MCP: "a-mcp"}}})
 	rootB := filepath.Join(dir, "b")
-	mustWritePack(t, rootB, packManifest{Name: "b", Schema: 1})
+	mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
 
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
-	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerOK)
 	aID := knowledge.CanonicalizeKnowledgeBundle(filepath.Join(rootA, "knowledge"))
 	cfg, _ := config.Load()
 	if !slices.Contains(cfg.KnowledgeBundles, aID) || !slices.Contains(cfg.MCP, "a-mcp") {
@@ -218,15 +218,15 @@ func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 		t.Fatal(serr)
 	}
 	store.Activation = nil
-	if err := store.save(); err != nil {
+	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(packLockPath(rootA)); err != nil {
+	if err := os.Remove(PackLockPath(rootA)); err != nil {
 		t.Fatal(err)
 	}
 
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerOK)
 	cfg2, _ := config.Load()
 	if !slices.Contains(cfg2.KnowledgeBundles, aID) {
 		t.Errorf("empty lock: the switch must remove NOTHING (no manifest fallback), lost %q from %v", aID, cfg2.KnowledgeBundles)
@@ -248,17 +248,17 @@ func TestPackUse_SamePackReactivationPreservesAttribution(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 
 	rootA := filepath.Join(dir, "a")
-	mustWritePack(t, rootA, packManifest{Name: "a", Schema: 1, Integrations: []packIntegration{{Name: "A", MCP: "a-mcp"}}})
+	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1, Integrations: []Integration{{Name: "A", MCP: "a-mcp"}}})
 	rootB := filepath.Join(dir, "b")
-	mustWritePack(t, rootB, packManifest{Name: "b", Schema: 1})
+	mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
 
 	env := fakeGitEnv(nil)
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
 	// The reactivation needs no --yes: the first use recorded the acceptance.
-	runPackUse(env, &out, []string{rootA, "--yes"}, registerServers)
+	RunPackUse(env, &out, []string{rootA, "--yes"}, registerOK)
 	out.Reset()
-	runPackUse(env, &out, []string{rootA}, registerServers) // same-pack reactivation
+	RunPackUse(env, &out, []string{rootA}, registerOK) // same-pack reactivation
 
 	lock := readPackLock(rootA)
 	if !slices.Contains(lock.MCP, "a-mcp") {
@@ -266,7 +266,7 @@ func TestPackUse_SamePackReactivationPreservesAttribution(t *testing.T) {
 	}
 
 	out.Reset()
-	runPackUse(env, &out, []string{rootB}, registerServers)
+	RunPackUse(env, &out, []string{rootB}, registerOK)
 	cfg, _ := config.Load()
 	if slices.Contains(cfg.MCP, "a-mcp") {
 		t.Errorf("switching to B after a same-pack reactivation must still remove a-mcp, cfg.MCP = %v", cfg.MCP)
@@ -293,21 +293,21 @@ func TestPackUse_SamePackReactivationReconcilesRemovedFields(t *testing.T) {
 	}
 
 	root := filepath.Join(dir, "work")
-	mustWritePack(t, root, packManifest{Name: "work", Schema: 1,
+	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
 		GogAccount: "work@company.com", OllamaBridgeModel: "work-model"})
 
 	env := fakeGitEnv(nil)
 	var out bytes.Buffer
-	runPackUse(env, &out, []string{root}, registerServers)
+	RunPackUse(env, &out, []string{root}, registerOK)
 	cfg1, _ := config.Load()
 	if cfg1.GogAccount != "work@company.com" || cfg1.OllamaBridgeModel != "work-model" {
 		t.Fatalf("setup: pack did not layer config: %+v", cfg1)
 	}
 
 	// The author drops both fields from the manifest, then re-uses the pack.
-	mustWritePack(t, root, packManifest{Name: "work", Schema: 1})
+	mustWritePack(t, root, Manifest{Name: "work", Schema: 1})
 	out.Reset()
-	runPackUse(env, &out, []string{root}, registerServers)
+	RunPackUse(env, &out, []string{root}, registerOK)
 	cfg2, _ := config.Load()
 	if cfg2.GogAccount != "manual@example.com" {
 		t.Errorf("removed gog_account must revert to prior on re-use, got %q", cfg2.GogAccount)
@@ -340,12 +340,12 @@ func TestPackUse_RegistersMcpAlreadyPresentInConfig(t *testing.T) {
 	}
 
 	root := filepath.Join(dir, "work")
-	mustWritePack(t, root, packManifest{Name: "work", Schema: 1,
-		Integrations: []packIntegration{{Name: "Fastmail", MCP: "fastmail"}}})
+	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
+		Integrations: []Integration{{Name: "Fastmail", MCP: "fastmail"}}})
 
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
 	// mcp.RegisterServers must be INVOKED for an already-present pack MCP (retry
 	// recovery), not skipped by an only-newly-added gate — observable as its own
 	// per-server line for fastmail (here classified remote in the fake env).
@@ -361,7 +361,7 @@ func TestPackAdd_Mcp_RetryReregisters(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, packManifest{Name: "work", Schema: 1})
+	mustWritePack(t, root, Manifest{Name: "work", Schema: 1})
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -373,7 +373,7 @@ func TestPackAdd_Mcp_RetryReregisters(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--yes"}, registerServers)
+	RunPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--yes"}, registerOK)
 	// Re-invocation is observable as mcp.RegisterServers' own per-server line for
 	// fastmail (here classified remote in the fake env), not the error-only note.
 	if !strings.Contains(out.String(), "fastmail") {
@@ -400,13 +400,13 @@ func TestSynthesizePackKit_ResynthOverExistingKit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	p := &packInfo{Root: root, Manifest: packManifest{Name: "p", Proxies: []packProxy{{Name: "a"}, {Name: "b"}}}}
+	p := &Info{Root: root, Manifest: Manifest{Name: "p", Proxies: []PackProxy{{Name: "a"}, {Name: "b"}}}}
 
-	kit1, err := synthesizePackKit(p)
+	kit1, err := SynthesizePackKit(p)
 	if err != nil || kit1 == "" {
 		t.Fatalf("first synth failed: %q, err=%v", kit1, err)
 	}
-	kit2, err := synthesizePackKit(p) // second launch, same pack
+	kit2, err := SynthesizePackKit(p) // second launch, same pack
 	if err != nil || kit2 == "" {
 		t.Fatalf("second synth failed: %q, err=%v", kit2, err)
 	}
@@ -435,18 +435,3 @@ func TestSynthesizePackKit_ResynthOverExistingKit(t *testing.T) {
 }
 
 // --- finding G [CONCERN]: create-time pack marker round-trip ------------------
-
-// TestSandboxPackMarker_RoundTrip: the marker records the canonicalized pack
-// root at create, reads back identically, and an empty pack removes it.
-func TestSandboxPackMarker_RoundTrip(t *testing.T) {
-	ws := t.TempDir()
-	root := filepath.Join(t.TempDir(), "work")
-	writeSandboxPackMarker(ws, root)
-	if got := readSandboxPackMarker(ws); got != canonicalizePackRoot(root) {
-		t.Errorf("marker round-trip = %q, want %q", got, canonicalizePackRoot(root))
-	}
-	writeSandboxPackMarker(ws, "") // pack-less create removes it
-	if got := readSandboxPackMarker(ws); got != "" {
-		t.Errorf("pack-less create must remove the marker, got %q", got)
-	}
-}

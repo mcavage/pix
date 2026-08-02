@@ -1,4 +1,4 @@
-package main
+package pack
 
 // Tests for the packs-v2 Phase 1 review + security findings
 // (docs/design/packs-v2-impl.md). One (or more) test per numbered finding in
@@ -117,7 +117,7 @@ func TestPackUse_AdoptedPackSkipsPrivateKnowledgeRef(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sensitive, "id_rsa"), []byte("PRIVATE KEY"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	mustWritePack(t, root, packManifest{Name: "adopted", Schema: 1, Knowledge: []packKnowledge{
+	mustWritePack(t, root, Manifest{Name: "adopted", Schema: 1, Knowledge: []packKnowledge{
 		{Name: "attacker-ref", Source: sensitive, Shared: false},
 	}})
 	// Simulate this pack having been cloned via `pack use <git-url>` at some
@@ -127,7 +127,7 @@ func TestPackUse_AdoptedPackSkipsPrivateKnowledgeRef(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -169,15 +169,15 @@ func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 	}
 
 	rootA := filepath.Join(dir, "a")
-	mustWritePack(t, rootA, packManifest{Name: "a", Schema: 1, Integrations: []packIntegration{
+	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1, Integrations: []Integration{
 		{Name: "gog", MCP: config.GWServerName}, // overlapping name the pack merely re-declares
 	}})
 	rootB := filepath.Join(dir, "b")
-	mustWritePack(t, rootB, packManifest{Name: "b", Schema: 1})
+	mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
 
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
-	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerOK)
 
 	lockA := readPackLock(rootA)
 	if slices.Contains(lockA.MCP, config.GWServerName) {
@@ -185,7 +185,7 @@ func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 	}
 
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerOK)
 
 	cfgAfterB, err := config.Load()
 	if err != nil {
@@ -204,7 +204,7 @@ func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 // (empty) default, same as an absent file.
 func TestReadPackLock_CorruptFileReturnsSafeDefault(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(packLockPath(root), []byte("mcp = [\"a\", not valid toml!!! ["), 0o644); err != nil {
+	if err := os.WriteFile(PackLockPath(root), []byte("mcp = [\"a\", not valid toml!!! ["), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got := readPackLock(root)
@@ -241,19 +241,19 @@ func TestPackUse_RestoresGogAccountToPriorValueOnSwitchAway(t *testing.T) {
 	}
 
 	rootWork := filepath.Join(dir, "work")
-	mustWritePack(t, rootWork, packManifest{Name: "work", Schema: 1, GogAccount: "work@company.com"})
+	mustWritePack(t, rootWork, Manifest{Name: "work", Schema: 1, GogAccount: "work@company.com"})
 	rootPersonal := filepath.Join(dir, "personal")
-	mustWritePack(t, rootPersonal, packManifest{Name: "personal", Schema: 1})
+	mustWritePack(t, rootPersonal, Manifest{Name: "personal", Schema: 1})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{rootWork}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{rootWork}, registerOK)
 	cfgWork, _ := config.Load()
 	if cfgWork.GogAccount != "work@company.com" {
 		t.Fatalf("pack use work should set gog_account, got %q", cfgWork.GogAccount)
 	}
 
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{rootPersonal}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{rootPersonal}, registerOK)
 	cfgPersonal, _ := config.Load()
 	if cfgPersonal.GogAccount != "manual@example.com" {
 		t.Errorf("switching to a pack with no gog_account should restore the PRIOR value, got %q, want %q", cfgPersonal.GogAccount, "manual@example.com")
@@ -269,23 +269,23 @@ func TestPackRm_RemovesActivePackContributions(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 
 	root := filepath.Join(dir, "work")
-	mustWritePack(t, root, packManifest{
+	mustWritePack(t, root, Manifest{
 		Name:         "work",
 		Schema:       1,
 		GogAccount:   "work@company.com",
-		Integrations: []packIntegration{{Name: "Fastmail", MCP: "fastmail"}},
+		Integrations: []Integration{{Name: "Fastmail", MCP: "fastmail"}},
 	})
 
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
 	cfgActive, _ := config.Load()
 	if !slices.Contains(cfgActive.MCP, "fastmail") || cfgActive.GogAccount != "work@company.com" {
 		t.Fatalf("setup: pack use did not attach as expected: %+v", cfgActive)
 	}
 
 	out.Reset()
-	runPackRm(&out, nil)
+	RunPackRm(&out, nil)
 
 	cfgAfter, err := config.Load()
 	if err != nil {
@@ -302,7 +302,7 @@ func TestPackRm_RemovesActivePackContributions(t *testing.T) {
 	}
 }
 
-// --- finding #6 [BLOCK]: synthesizePackKit must rebuild from scratch and fail
+// --- finding #6 [BLOCK]: SynthesizePackKit must rebuild from scratch and fail
 // closed -----------------------------------------------------------------------
 
 // TestSynthesizePackKit_RebuildRemovesStaleWrapper: a proxy removed from
@@ -321,8 +321,8 @@ func TestSynthesizePackKit_RebuildRemovesStaleWrapper(t *testing.T) {
 		}
 	}
 
-	p1 := &packInfo{Root: root, Manifest: packManifest{Name: "p", Proxies: []packProxy{{Name: "a"}, {Name: "b"}}}}
-	kit1, err := synthesizePackKit(p1)
+	p1 := &Info{Root: root, Manifest: Manifest{Name: "p", Proxies: []PackProxy{{Name: "a"}, {Name: "b"}}}}
+	kit1, err := SynthesizePackKit(p1)
 	if err != nil || kit1 == "" {
 		t.Fatalf("expected a kit dir, got %q, err=%v", kit1, err)
 	}
@@ -331,8 +331,8 @@ func TestSynthesizePackKit_RebuildRemovesStaleWrapper(t *testing.T) {
 	}
 
 	// pack.toml no longer declares "b" (e.g. the author removed it).
-	p2 := &packInfo{Root: root, Manifest: packManifest{Name: "p", Proxies: []packProxy{{Name: "a"}}}}
-	kit2, err := synthesizePackKit(p2)
+	p2 := &Info{Root: root, Manifest: Manifest{Name: "p", Proxies: []PackProxy{{Name: "a"}}}}
+	kit2, err := SynthesizePackKit(p2)
 	if err != nil || kit2 == "" {
 		t.Fatalf("expected a kit dir from the second synth, got %q, err=%v", kit2, err)
 	}
@@ -362,15 +362,15 @@ func TestSynthesizePackKit_FailsClosedOnUnreadableWrapper(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pGood := &packInfo{Root: root, Manifest: packManifest{Name: "p", Proxies: []packProxy{{Name: "a"}}}}
-	kitGood, err := synthesizePackKit(pGood)
+	pGood := &Info{Root: root, Manifest: Manifest{Name: "p", Proxies: []PackProxy{{Name: "a"}}}}
+	kitGood, err := SynthesizePackKit(pGood)
 	if err != nil || kitGood == "" {
 		t.Fatalf("expected the first (good) synth to succeed, got %q, err=%v", kitGood, err)
 	}
 
 	// "missing" has no bin/missing file on disk.
-	pBad := &packInfo{Root: root, Manifest: packManifest{Name: "p", Proxies: []packProxy{{Name: "a"}, {Name: "missing"}}}}
-	kitBad, badErr := synthesizePackKit(pBad)
+	pBad := &Info{Root: root, Manifest: Manifest{Name: "p", Proxies: []PackProxy{{Name: "a"}, {Name: "missing"}}}}
+	kitBad, badErr := SynthesizePackKit(pBad)
 	if kitBad != "" || badErr == nil {
 		t.Errorf("expected (\"\", error) (fail closed) when a declared wrapper is unreadable, got %q, err=%v", kitBad, badErr)
 	}
@@ -387,10 +387,10 @@ func TestSynthesizePackKit_FailsClosedOnUnreadableWrapper(t *testing.T) {
 // comparison -------------------------------------------------------------------
 
 func TestCanonicalizePackRoot_NormalizesEquivalentPaths(t *testing.T) {
-	a := canonicalizePackRoot("/tmp/x/y/../y/work")
-	b := canonicalizePackRoot("/tmp/x/y/work")
+	a := CanonicalizePackRoot("/tmp/x/y/../y/work")
+	b := CanonicalizePackRoot("/tmp/x/y/work")
 	if a != b {
-		t.Errorf("canonicalizePackRoot(%q) = %q, want it to equal canonicalizePackRoot(%q) = %q", "/tmp/x/y/../y/work", a, "/tmp/x/y/work", b)
+		t.Errorf("CanonicalizePackRoot(%q) = %q, want it to equal CanonicalizePackRoot(%q) = %q", "/tmp/x/y/../y/work", a, "/tmp/x/y/work", b)
 	}
 }
 
@@ -401,7 +401,7 @@ func TestPackAdd_Mcp_CanonicalizesActivePackComparison(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	root := filepath.Join(dir, "work")
-	mustWritePack(t, root, packManifest{Name: "work", Schema: 1})
+	mustWritePack(t, root, Manifest{Name: "work", Schema: 1})
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -414,7 +414,7 @@ func TestPackAdd_Mcp_CanonicalizesActivePackComparison(t *testing.T) {
 
 	t.Chdir(dir)
 	var out bytes.Buffer
-	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", "./work", "--yes"}, registerServers)
+	RunPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", "./work", "--yes"}, registerOK)
 
 	if strings.Contains(out.String(), "activate the pack to attach it") {
 		t.Errorf("finding #7: relative path should have matched the active pack, got:\n%s", out.String())
@@ -435,72 +435,5 @@ func TestPrintPackRecreateLine_MentionsSkills(t *testing.T) {
 	printPackRecreateLine(&out)
 	if !strings.Contains(out.String(), "skills") {
 		t.Errorf("recreate line should mention skills (also create-only), got:\n%s", out.String())
-	}
-}
-
-// TestStalePackReattachWarning_FiresWhenCreateTimePackDiffers (finding G): the
-// warning keys on the CREATE-TIME marker vs the active pack — it fires when
-// they differ (a pack switched since create, or removed via `pack rm`), and
-// names both sides.
-func TestStalePackReattachWarning_FiresWhenCreateTimePackDiffers(t *testing.T) {
-	ws := t.TempDir()
-	oldRoot := filepath.Join(t.TempDir(), "old-pack")
-	newRoot := filepath.Join(t.TempDir(), "new-pack")
-	writeSandboxPackMarker(ws, oldRoot)
-
-	// Switched pack since create: marker != active -> warn.
-	cfg := &config.Config{Pack: newRoot}
-	msg := stalePackReattachWarning(cfg, runOpts{Workspace: ws}, true)
-	if msg == "" {
-		t.Fatal("expected a stale-pack warning when the create-time pack differs from the active pack")
-	}
-	if !strings.Contains(msg, canonicalizePackRoot(oldRoot)) || !strings.Contains(msg, canonicalizePackRoot(newRoot)) || !strings.Contains(msg, "--replace") {
-		t.Errorf("warning should name both packs and the fix, got: %q", msg)
-	}
-
-	// `pack rm` case: marker set, active pack EMPTY -> still warn (the old
-	// sandbox keeps the removed pack's create-time facets).
-	msgRm := stalePackReattachWarning(&config.Config{}, runOpts{Workspace: ws}, true)
-	if msgRm == "" {
-		t.Fatal("expected a warning after pack rm (marker set, active pack empty)")
-	}
-	if !strings.Contains(msgRm, canonicalizePackRoot(oldRoot)) || !strings.Contains(msgRm, "--replace") {
-		t.Errorf("rm-case warning should name the create-time pack and the fix, got: %q", msgRm)
-	}
-}
-
-// TestStalePackReattachWarning_SilentWhenNoMarkerOrIdentical (finding G): no
-// marker (a pre-marker or pack-less sandbox) or an identical marker (the
-// sandbox already carries the active pack) must NOT warn — the identical case
-// is the false positive the marker exists to kill.
-func TestStalePackReattachWarning_SilentWhenNoMarkerOrIdentical(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "work")
-	cfg := &config.Config{Pack: root}
-
-	// No marker in the workspace: silent, even with an active pack.
-	if msg := stalePackReattachWarning(cfg, runOpts{Workspace: t.TempDir()}, true); msg != "" {
-		t.Errorf("no marker must not warn, got %q", msg)
-	}
-
-	// Marker matches the active pack: the sandbox already has it — silent.
-	ws := t.TempDir()
-	writeSandboxPackMarker(ws, root)
-	if msg := stalePackReattachWarning(cfg, runOpts{Workspace: ws}, true); msg != "" {
-		t.Errorf("marker == active pack must not warn (false positive), got %q", msg)
-	}
-
-	// Create / --replace paths never warn, marker or not.
-	if msg := stalePackReattachWarning(cfg, runOpts{Workspace: ws}, false); msg != "" {
-		t.Errorf("a create/first-launch (reattaching=false) must not warn, got %q", msg)
-	}
-	writeSandboxPackMarker(ws, filepath.Join(t.TempDir(), "other"))
-	if msg := stalePackReattachWarning(cfg, runOpts{Workspace: ws, Replace: true}, true); msg != "" {
-		t.Errorf("--replace recreates, so must not warn, got %q", msg)
-	}
-
-	// Marker removed when the sandbox is created pack-less: silent afterwards.
-	writeSandboxPackMarker(ws, "")
-	if msg := stalePackReattachWarning(&config.Config{}, runOpts{Workspace: ws}, true); msg != "" {
-		t.Errorf("pack-less create removes the marker, so no warning, got %q", msg)
 	}
 }

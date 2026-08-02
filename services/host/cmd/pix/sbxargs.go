@@ -48,7 +48,7 @@ type runOpts struct {
 	Replace   bool     // --replace: force a recreate (rm -f then create) instead of re-attaching to an existing sandbox
 	Pack      string   // --pack PATH: active pack for this run (overrides config.Pack); mounts its skills + knowledge
 	// PackKits are ephemeral mixin kit dir(s) synthesized from the active pack's
-	// bin/ wrappers (F2, see synthesizePackKit). Deliberately SEPARATE from Kits:
+	// bin/ wrappers (F2, see pack.SynthesizePackKit). Deliberately SEPARATE from Kits:
 	// Kits non-empty is the --kit ESCAPE HATCH that replaces the auto git/local
 	// pin (see kitOverride in buildSbxArgs); a pack-synthesized kit must stack
 	// alongside the base kit, never suppress it, so it gets its own field and its

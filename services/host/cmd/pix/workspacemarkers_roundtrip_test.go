@@ -19,7 +19,7 @@
 // THE MEASURED SET (shards.md U-W0b.05's row), and where each one actually
 // lives:
 //
-//	.pix/profile               — Go writes (pack.go writeMemoryScope),
+//	.pix/profile               — Go writes (pack.go pack.WriteMemoryScope),
 //	                                   TS reads (memory-recall.ts,
 //	                                   memory-capture.ts)
 //	.pix/knowledge.scope        — Go writes (run.go writeKnowledgeScope),
@@ -62,6 +62,7 @@ import (
 	"pix/host/config"
 	"pix/host/knowledge"
 	"pix/host/routing"
+	"pix/host/workflow/pack"
 )
 
 // workspaceMarkerFiles is the literal, enumerated set of REAL files a
@@ -100,7 +101,7 @@ func TestWorkspaceMarkerInventory_MatchesEnumeratedSet(t *testing.T) {
 
 func TestMarkerRoundTrip_Profile(t *testing.T) {
 	ws := t.TempDir()
-	writeMemoryScope(ws, &packInfo{Manifest: packManifest{MemoryScope: "work"}})
+	pack.WriteMemoryScope(ws, &pack.Info{Manifest: pack.Manifest{MemoryScope: "work"}})
 
 	got := readFile(t, filepath.Join(ws, ".pix", "profile"))
 	if got != "work\n" {
@@ -110,7 +111,7 @@ func TestMarkerRoundTrip_Profile(t *testing.T) {
 	// nil pack (or a default/unscoped one) removes the marker entirely — the TS
 	// side's readFileSync then throws ENOENT and both readers fall back to
 	// "default", which is the documented un-scoped case.
-	writeMemoryScope(ws, nil)
+	pack.WriteMemoryScope(ws, nil)
 	if _, err := os.Stat(filepath.Join(ws, ".pix", "profile")); !os.IsNotExist(err) {
 		t.Errorf("profile marker should be removed for a nil pack, stat err=%v", err)
 	}
@@ -161,7 +162,7 @@ func TestMarkerRoundTrip_SandboxPack(t *testing.T) {
 	}
 	writeSandboxPackMarker(ws, packRoot)
 
-	want := canonicalizePackRoot(packRoot)
+	want := pack.CanonicalizePackRoot(packRoot)
 	got := readSandboxPackMarker(ws)
 	if got != want {
 		t.Errorf("readSandboxPackMarker = %q, want %q", got, want)
@@ -258,7 +259,7 @@ func TestMarkerRoundTrip_HostStateNeverBecomesAWorkspaceFile(t *testing.T) {
 	t.Setenv("PIX_PROFILE", "")
 
 	// Write every OTHER real marker into the same workspace...
-	writeMemoryScope(ws, &packInfo{Manifest: packManifest{MemoryScope: "work"}})
+	pack.WriteMemoryScope(ws, &pack.Info{Manifest: pack.Manifest{MemoryScope: "work"}})
 	if err := writeKnowledgeScope(ws, []string{"/a"}); err != nil {
 		t.Fatal(err)
 	}

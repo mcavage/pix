@@ -3,8 +3,8 @@
 // loaded and applied, not the merely CONFIGURED cfg.Pack/o.Pack path.
 //
 // Before this fix, applyPackToLaunch returned only an error, so run.go and
-// task.go wrote the marker from activePackRoot(cfg.Pack, o.Pack) even when
-// applyPackToLaunch degraded to pack-less via errNotAPack (active pack dir
+// task.go wrote the marker from pack.ActivePackRoot(cfg.Pack, o.Pack) even when
+// applyPackToLaunch degraded to pack-less via pack.ErrNotAPack (active pack dir
 // genuinely missing -> warn + proceed without the pack). The marker then
 // recorded a pack that was NOT attached; once the dir came back and the user
 // reattached, stalePackReattachWarning compared marker == active and stayed
@@ -12,7 +12,7 @@
 //
 // applyPackToLaunch now returns (effectiveRoot string, err error):
 // effectiveRoot is "" both when there is no active pack AND when it degraded
-// via errNotAPack, and the real pack root when the pack loaded and applied.
+// via pack.ErrNotAPack, and the real pack root when the pack loaded and applied.
 // Callers must write the marker (and scope memory) from that return value.
 package main
 
@@ -22,11 +22,12 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/workflow/pack"
 )
 
 // TestApplyPackToLaunch_DegradedMissingPack_EffectiveRootEmpty: a cfg.Pack
 // pointing at a dir that does not exist (or has no pack.toml) is the
-// errNotAPack degrade path — applyPackToLaunch must warn-and-proceed (nil
+// pack.ErrNotAPack degrade path — applyPackToLaunch must warn-and-proceed (nil
 // error) but report "" as the effective root, since nothing was actually
 // mounted onto o/cfg.
 func TestApplyPackToLaunch_DegradedMissingPack_EffectiveRootEmpty(t *testing.T) {
@@ -50,7 +51,7 @@ func TestApplyPackToLaunch_DegradedMissingPack_EffectiveRootEmpty(t *testing.T) 
 // active pack returns its own root as the effective root.
 func TestApplyPackToLaunch_ValidPack_EffectiveRootIsRealRoot(t *testing.T) {
 	packRoot := t.TempDir()
-	mustWritePack(t, packRoot, packManifest{Name: "work", Schema: 1})
+	mustWritePack(t, packRoot, pack.Manifest{Name: "work", Schema: 1})
 
 	cfg := &config.Config{Pack: packRoot}
 	o := runOpts{}
@@ -67,7 +68,7 @@ func TestApplyPackToLaunch_ValidPack_EffectiveRootIsRealRoot(t *testing.T) {
 // TestSandboxPackMarker_HonestAboutDegradedLaunch is the end-to-end
 // regression: it drives the exact sequence run.go/task.go run (call
 // applyPackToLaunch, then write the marker from its returned effective root,
-// never from activePackRoot(cfg.Pack, o.Pack) directly) and asserts the
+// never from pack.ActivePackRoot(cfg.Pack, o.Pack) directly) and asserts the
 // marker agrees with what actually loaded in both directions.
 func TestSandboxPackMarker_HonestAboutDegradedLaunch(t *testing.T) {
 	t.Run("degraded pack: marker is removed, not written", func(t *testing.T) {
@@ -98,7 +99,7 @@ func TestSandboxPackMarker_HonestAboutDegradedLaunch(t *testing.T) {
 
 	t.Run("valid active pack: marker records the real root", func(t *testing.T) {
 		packRoot := t.TempDir()
-		mustWritePack(t, packRoot, packManifest{Name: "work", Schema: 1})
+		mustWritePack(t, packRoot, pack.Manifest{Name: "work", Schema: 1})
 		ws := t.TempDir()
 
 		cfg := &config.Config{Pack: packRoot}
@@ -110,8 +111,8 @@ func TestSandboxPackMarker_HonestAboutDegradedLaunch(t *testing.T) {
 		}
 		writeSandboxPackMarker(o.Workspace, effectiveRoot)
 
-		if got := readSandboxPackMarker(ws); got != canonicalizePackRoot(packRoot) {
-			t.Errorf("marker = %q, want the real pack root %q", got, canonicalizePackRoot(packRoot))
+		if got := readSandboxPackMarker(ws); got != pack.CanonicalizePackRoot(packRoot) {
+			t.Errorf("marker = %q, want the real pack root %q", got, pack.CanonicalizePackRoot(packRoot))
 		}
 	})
 }

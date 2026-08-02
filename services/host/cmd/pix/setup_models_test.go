@@ -34,6 +34,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
 	"pix/host/workflow/man"
+	"pix/host/workflow/pack"
 	"strings"
 	"testing"
 	"time"
@@ -447,11 +448,11 @@ func TestSetupModels_SummaryProvisionedWhenCoreReady(t *testing.T) {
 
 	// Pre-create a non-empty default pack and activate it in config, plus a
 	// knowledge bundle path.
-	root := defaultPackRoot()
+	root := pack.DefaultPackRoot()
 	if err := os.MkdirAll(filepath.Join(root, "skills", "demo"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePackManifest(root, packManifest{Name: "default", Schema: 1}); err != nil {
+	if err := pack.WriteManifest(root, pack.Manifest{Name: "default", Schema: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "skills", "demo", "SKILL.md"), []byte("x"), 0o644); err != nil {

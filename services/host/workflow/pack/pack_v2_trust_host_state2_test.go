@@ -1,4 +1,4 @@
-package main
+package pack
 
 import (
 	"bytes"
@@ -16,13 +16,13 @@ func TestPackUse_ForgedDirectorySymlinkLockScrubbedNotFollowed(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := filepath.Join(dir, "evil")
-	mustWritePack(t, root, packManifest{Name: "evil", Schema: 1})
-	if err := os.Symlink(victim, packLockPath(root)); err != nil {
+	mustWritePack(t, root, Manifest{Name: "evil", Schema: 1})
+	if err := os.Symlink(victim, PackLockPath(root)); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers)
-	if fi, err := os.Lstat(packLockPath(root)); err != nil || !fi.Mode().IsRegular() {
+	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
+	if fi, err := os.Lstat(PackLockPath(root)); err != nil || !fi.Mode().IsRegular() {
 		t.Errorf("pack.lock must be a fresh regular file after adoption, got %v (err=%v)", fi, err)
 	}
 }

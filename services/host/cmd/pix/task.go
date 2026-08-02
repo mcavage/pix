@@ -1179,9 +1179,9 @@ func launchTask(o runOpts) error {
 	// gets the same authored context a normal `pix run` does. Fatal on error
 	// (round-4 F2): a declared-but-unbuildable pack wrapper refuses the launch.
 	// effectivePack is what actually loaded/applied — "" when there is no active
-	// pack OR applyPackToLaunch degraded via errNotAPack — and is what the
+	// pack OR applyPackToLaunch degraded via pack.ErrNotAPack — and is what the
 	// sandbox.pack marker + memory scope below must agree on (never the merely
-	// CONFIGURED activePackRoot(cfg.Pack, o.Pack)).
+	// CONFIGURED pack.ActivePackRoot(cfg.Pack, o.Pack)).
 	effectivePack, err := applyPackStackToLaunch(cfg, &o, defaultShellEnv())
 	if err != nil {
 		return err
@@ -1248,7 +1248,7 @@ func launchTask(o runOpts) error {
 	// per-launch workspace files that carry that context INTO the sandbox. Without
 	// these a task sandbox silently loses the active pack's memory scope, its
 	// ollama-bridge model, and the stale-pack marker run.go relies on. A task is
-	// always a fresh create, so writeMemoryScope and writeSandboxPackMarker run
+	// always a fresh create, so pack.WriteMemoryScope and writeSandboxPackMarker run
 	// unconditionally (no willCreate/definitelyCreating gating needed — that only
 	// exists in run.go to distinguish create from re-attach, and a task never
 	// re-attaches).

@@ -10,7 +10,7 @@
 // <config-dir>/pack-trust.json, a file only the launcher writes:
 //
 //   - Accepted: per pack identity, the FINGERPRINT of the entire host-exec
-//     surface the user approved (computeHostExecFingerprint). The gate skips
+//     surface the user approved (ComputeHostExecFingerprint). The gate skips
 //     the prompt ONLY on an exact fingerprint match — a changed MCP argv
 //     (e.g. gog_account), a mutated host proxy script, a changed [[bin]] sha,
 //     or a new egress domain all change the fingerprint and re-gate.
@@ -18,7 +18,7 @@
 //     clone time, keyed by canonical path — the trusted source for both pack
 //     identity and the adopted-pack knowledge guard, independent of anything
 //     the pack ships.
-//   - Installed: which wrapper names are currently in hostPackBinDir() and
+//   - Installed: which wrapper names are currently in HostPackBinDir() and
 //     which pack put them there, so clear/swap stays reliable even when the
 //     pack directory itself is gone. Attribution is only discarded once
 //     removal is CONFIRMED.
@@ -52,7 +52,7 @@
 // `pack use` racing a `pix host` wrapper refresh used to be plain
 // last-writer-wins: whichever process loaded first could save its stale
 // in-memory object over the other's committed activation/acceptance.
-package main
+package pack
 
 import (
 	"encoding/json"
@@ -85,7 +85,7 @@ func packTrustLockPath() string {
 // helper (serve_start_unix.go; the non-unix shim runs fn unserialized —
 // single-process correctness is unaffected there). SINGLE lock, never
 // nested: fn must not call another withPackTrustLock/mutatePackTrustStore/
-// clearInstalledHostPackWrappers/refreshHostPackWrappers — flock is per open
+// clearInstalledHostPackWrappers/RefreshHostPackWrappers — flock is per open
 // file description, so a nested acquire in the same process self-deadlocks.
 // Code that already holds the lock uses the *Locked variants
 // (mutatePackTrustStoreLocked, clearInstalledHostPackWrappersLocked,
@@ -100,8 +100,8 @@ func withPackTrustLock(fn func() error) error {
 // in-memory object over a concurrent writer's committed record. mutate sees
 // the CURRENT on-disk state; returning an error aborts without saving. The
 // freshly-saved store is returned so callers can sync their own view.
-func mutatePackTrustStore(mutate func(*packTrustStore) error) (*packTrustStore, error) {
-	var fresh *packTrustStore
+func mutatePackTrustStore(mutate func(*PackTrustStore) error) (*PackTrustStore, error) {
+	var fresh *PackTrustStore
 	err := withPackTrustLock(func() error {
 		var e error
 		fresh, e = mutatePackTrustStoreLocked(mutate)
@@ -116,7 +116,7 @@ func mutatePackTrustStore(mutate func(*packTrustStore) error) (*packTrustStore, 
 // file description, so re-acquiring it in the same process self-deadlocks;
 // this variant exists precisely so a locked region (the transactional
 // wrapper refresh, `pack rm`) never nests the lock.
-func mutatePackTrustStoreLocked(mutate func(*packTrustStore) error) (*packTrustStore, error) {
+func mutatePackTrustStoreLocked(mutate func(*PackTrustStore) error) (*PackTrustStore, error) {
 	s, lerr := loadPackTrustStore()
 	if lerr != nil {
 		return nil, lerr
@@ -124,7 +124,7 @@ func mutatePackTrustStoreLocked(mutate func(*packTrustStore) error) (*packTrustS
 	if merr := mutate(s); merr != nil {
 		return nil, merr
 	}
-	if serr := s.save(); serr != nil {
+	if serr := s.Save(); serr != nil {
 		return nil, serr
 	}
 	return s, nil
@@ -136,10 +136,10 @@ func packTrustStorePath() string {
 	return filepath.Join(filepath.Dir(config.Path()), packTrustStoreName)
 }
 
-// packTrustRecord is one accepted host-exec surface: the fingerprint the user
+// PackTrustRecord is one accepted host-exec surface: the fingerprint the user
 // approved at the Tier-1 gate, plus provenance for the record's own hygiene
 // (recordAcceptance drops stale records for the same path/remote).
-type packTrustRecord struct {
+type PackTrustRecord struct {
 	Path        string `json:"path,omitempty"`
 	Remote      string `json:"remote,omitempty"`
 	Commit      string `json:"commit,omitempty"`
@@ -153,7 +153,7 @@ type packProvenance struct {
 	Commit string `json:"commit,omitempty"`
 }
 
-// packInstalledSet records what is currently installed in hostPackBinDir()
+// packInstalledSet records what is currently installed in HostPackBinDir()
 // and which pack (trust key) put it there. There is at most one: the dir only
 // ever holds the ACTIVE pack's accepted wrappers.
 type packInstalledSet struct {
@@ -177,9 +177,9 @@ type packActivationRecord struct {
 	PriorOllamaBridgeModel string   `json:"prior_ollama_bridge_model,omitempty"`
 }
 
-type packTrustStore struct {
+type PackTrustStore struct {
 	Version    int                        `json:"version"`
-	Accepted   map[string]packTrustRecord `json:"accepted,omitempty"`
+	Accepted   map[string]PackTrustRecord `json:"accepted,omitempty"`
 	Adopted    map[string]packProvenance  `json:"adopted,omitempty"`
 	Installed  *packInstalledSet          `json:"installed,omitempty"`
 	Activation *packActivationRecord      `json:"activation,omitempty"`
@@ -193,7 +193,7 @@ type packTrustStore struct {
 // host, nothing accepted). Unreadable/unparsable → an ERROR, never a partial
 // decode: callers fail closed (the gate re-prompts; a strict host launch
 // refuses) rather than trusting half a store.
-func loadPackTrustStore() (*packTrustStore, error) {
+func loadPackTrustStore() (*PackTrustStore, error) {
 	// Lstat-REFUSE a symlinked store file on READ too (write already does): a
 	// pack-trust.json symlinked at an attacker-readable/-writable file must
 	// never supply crafted acceptance records. Fail closed, never follow.
@@ -203,11 +203,11 @@ func loadPackTrustStore() (*packTrustStore, error) {
 	b, err := os.ReadFile(packTrustStorePath())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &packTrustStore{Version: 1}, nil
+			return &PackTrustStore{Version: 1}, nil
 		}
 		return nil, err
 	}
-	var s packTrustStore
+	var s PackTrustStore
 	if err := json.Unmarshal(b, &s); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", packTrustStorePath(), err)
 	}
@@ -218,7 +218,7 @@ func loadPackTrustStore() (*packTrustStore, error) {
 // writePackLockBytes): Lstat-REFUSE a symlinked destination, then a same-dir
 // temp + rename via atomicWriteInDir. The config dir is host-owned, but the
 // consistency costs nothing and the class fix stays uniform.
-func (s *packTrustStore) save() error {
+func (s *PackTrustStore) Save() error {
 	dir := filepath.Dir(config.Path())
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -242,8 +242,8 @@ func (s *packTrustStore) save() error {
 // acceptance by commit re-gated every pull even when the host-exec
 // fingerprint — the actual control — was byte-identical. NEVER derived from
 // pack.lock (untrusted payload).
-func (s *packTrustStore) trustKey(root string) string {
-	canon := canonicalizePackRoot(root)
+func (s *PackTrustStore) TrustKey(root string) string {
+	canon := CanonicalizePackRoot(root)
 	if s != nil {
 		if prov, ok := s.Adopted[canon]; ok && strings.TrimSpace(prov.Remote) != "" {
 			return "remote:" + strings.TrimSpace(prov.Remote)
@@ -258,7 +258,7 @@ func (s *packTrustStore) trustKey(root string) string {
 // spuriously re-prompt after the identity became commit-stable; the
 // fingerprint comparison at the call site is still the control, and
 // recordAcceptance sweeps the legacy key on the next write.
-func (s *packTrustStore) acceptedFingerprint(key string) (string, bool) {
+func (s *PackTrustStore) acceptedFingerprint(key string) (string, bool) {
 	if s == nil || s.Accepted == nil {
 		return "", false
 	}
@@ -276,9 +276,9 @@ func (s *packTrustStore) acceptedFingerprint(key string) (string, bool) {
 // recordAcceptance stores rec under key and drops stale records for the same
 // remote or path (e.g. an earlier commit of the same clone) — acceptance is
 // always for the CURRENT surface only.
-func (s *packTrustStore) recordAcceptance(key string, rec packTrustRecord) {
+func (s *PackTrustStore) RecordAcceptance(key string, rec PackTrustRecord) {
 	if s.Accepted == nil {
-		s.Accepted = map[string]packTrustRecord{}
+		s.Accepted = map[string]PackTrustRecord{}
 	}
 	for k, r := range s.Accepted {
 		if k == key {
@@ -297,7 +297,7 @@ func (s *packTrustStore) recordAcceptance(key string, rec packTrustRecord) {
 // attributed to THIS pack — canonical path or trust-key match — else the
 // zero value is returned (remove NOTHING; the safe default, same posture as
 // a missing lock). Nothing here ever reads the pack payload.
-func (s *packTrustStore) activationFor(root string) packLock {
+func (s *PackTrustStore) activationFor(root string) packLock {
 	a := s.activationRecordFor(root)
 	if a == nil {
 		return packLock{}
@@ -317,15 +317,15 @@ func (s *packTrustStore) activationFor(root string) packLock {
 // behind activationFor's zero-value contract, split out so the one-time
 // Phase-1 migration (migratePhase1Activation) can tell "no record" apart
 // from "a record with an empty contribution set".
-func (s *packTrustStore) hasActivationFor(root string) bool {
+func (s *PackTrustStore) hasActivationFor(root string) bool {
 	return s.activationRecordFor(root) != nil
 }
 
-func (s *packTrustStore) activationRecordFor(root string) *packActivationRecord {
+func (s *PackTrustStore) activationRecordFor(root string) *packActivationRecord {
 	if s == nil {
 		return nil
 	}
-	path, owner := canonicalizePackRoot(root), s.trustKey(root)
+	path, owner := CanonicalizePackRoot(root), s.TrustKey(root)
 	for i := len(s.Activations) - 1; i >= 0; i-- {
 		a := &s.Activations[i]
 		if a.Path == path || a.Owner == owner {
@@ -340,16 +340,16 @@ func (s *packTrustStore) activationRecordFor(root string) *packActivationRecord 
 
 // setActivation records lock as the active pack's contribution set (the
 // caller saves the store; commitPackActivation owns the write ordering).
-func (s *packTrustStore) setActivation(root string, lock packLock) {
+func (s *PackTrustStore) setActivation(root string, lock packLock) {
 	a := s.newActivationRecord(root, lock)
 	s.Activation = &a
 	s.Activations = nil
 }
 
-func (s *packTrustStore) newActivationRecord(root string, lock packLock) packActivationRecord {
+func (s *PackTrustStore) newActivationRecord(root string, lock packLock) packActivationRecord {
 	return packActivationRecord{
-		Owner:                  s.trustKey(root),
-		Path:                   canonicalizePackRoot(root),
+		Owner:                  s.TrustKey(root),
+		Path:                   CanonicalizePackRoot(root),
 		MCP:                    append([]string(nil), lock.MCP...),
 		Knowledge:              append([]string(nil), lock.Knowledge...),
 		GogAccount:             lock.GogAccount,
@@ -359,12 +359,12 @@ func (s *packTrustStore) newActivationRecord(root string, lock packLock) packAct
 	}
 }
 
-func (s *packTrustStore) setActivationStack(records []packActivationRecord) {
+func (s *PackTrustStore) setActivationStack(records []packActivationRecord) {
 	s.Activation = nil
 	s.Activations = append([]packActivationRecord(nil), records...)
 }
 
-func (s *packTrustStore) clearActivations() {
+func (s *PackTrustStore) clearActivations() {
 	s.Activation = nil
 	s.Activations = nil
 }
@@ -376,11 +376,11 @@ func (s *packTrustStore) clearActivations() {
 // best-effort — the pack.lock marker and the under-PacksDir location check
 // keep the adopted-pack guard fail-safe.
 func recordPackAdoptionInTrustStore(root, remote, commit string) error {
-	_, err := mutatePackTrustStore(func(s *packTrustStore) error {
+	_, err := mutatePackTrustStore(func(s *PackTrustStore) error {
 		if s.Adopted == nil {
 			s.Adopted = map[string]packProvenance{}
 		}
-		s.Adopted[canonicalizePackRoot(root)] = packProvenance{Remote: remote, Commit: commit}
+		s.Adopted[CanonicalizePackRoot(root)] = packProvenance{Remote: remote, Commit: commit}
 		return nil
 	})
 	return err

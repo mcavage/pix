@@ -13,6 +13,7 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/mcp"
+	"pix/host/workflow/pack"
 	"pix/host/workspace"
 )
 
@@ -227,7 +228,7 @@ func reconcileOnboarding(ws string, env hostenv.Env, in io.Reader, out io.Writer
 		return
 	}
 	if len(cfg.MCP) > 0 {
-		if err := registerServers(cfg, env, out, nil, hostBinaryResolver, activeContainerMCP(cfg)); err != nil {
+		if err := registerServers(cfg, env, out, nil, hostBinaryResolver, pack.ActiveContainerMCP(cfg)); err != nil {
 			fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pix mcp register)\n", err)
 		}
 	}

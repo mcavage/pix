@@ -1,4 +1,4 @@
-package main
+package pack
 
 import (
 	"fmt"
@@ -12,12 +12,12 @@ import (
 	"pix/host/service"
 )
 
-// runPackSetup runs a pack's required setup contributions after the
+// RunPackSetup runs a pack's required setup contributions after the
 // pack has been adopted through the normal Tier-1 trust gate. Every step is
 // resumable: its bounded check runs first, apply runs only when check fails,
 // and the same check must pass afterward before Pix reports readiness.
-func runPackSetup(env hostenv.Env, out io.Writer, root string, requested []string, interactive bool) error {
-	p, err := loadPack(root)
+func RunPackSetup(env hostenv.Env, out io.Writer, root string, requested []string, interactive bool) error {
+	p, err := LoadPack(root)
 	if err != nil {
 		return err
 	}
@@ -72,7 +72,7 @@ func runPackSetup(env hostenv.Env, out io.Writer, root string, requested []strin
 // launcher-owned directory, then fingerprints the complete host surface using
 // the captured bytes and requires an exact accepted trust record. Checks,
 // apply, and re-check all execute the same immutable snapshot path.
-func snapshotAcceptedPackSetup(env hostenv.Env, p *packInfo, wanted map[string]bool) (map[string]string, func(), error) {
+func snapshotAcceptedPackSetup(env hostenv.Env, p *Info, wanted map[string]bool) (map[string]string, func(), error) {
 	paths := map[string]string{}
 	cleanup := func() {}
 	if p == nil {
@@ -90,7 +90,7 @@ func snapshotAcceptedPackSetup(env hostenv.Env, p *packInfo, wanted map[string]b
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("loading config for setup trust verification: %w", err)
 	}
-	bom := computeHostBoM(p, cfg.GogAccount, localMCPClassifier(env, hostBinaryResolver))
+	bom := ComputeHostBoM(p, cfg.GogAccount, LocalMCPClassifier(env, env.HostBinary))
 	fp, _, err := computeHostExecFingerprintWithSetup(p.Root, bom, allBytes)
 	if err != nil {
 		return nil, cleanup, err
@@ -100,7 +100,7 @@ func snapshotAcceptedPackSetup(env hostenv.Env, p *packInfo, wanted map[string]b
 		if err != nil {
 			return fmt.Errorf("pack trust state unreadable: %w", err)
 		}
-		if got, ok := store.acceptedFingerprint(store.trustKey(p.Root)); !ok || got != fp {
+		if got, ok := store.acceptedFingerprint(store.TrustKey(p.Root)); !ok || got != fp {
 			return fmt.Errorf("pack %s setup hooks are not accepted (or changed since acceptance) — run `pix pack use %s` to review them", p.Manifest.Name, p.Root)
 		}
 		return nil
@@ -135,20 +135,20 @@ func snapshotAcceptedPackSetup(env hostenv.Env, p *packInfo, wanted map[string]b
 	return paths, cleanup, nil
 }
 
-// planPackSetupRequests assigns each optional --with id to the one pack that
+// PlanPackSetupRequests assigns each optional --with id to the one pack that
 // declares it, before any hook runs. Unknown and ambiguous ids fail without
 // partially applying required hooks from an earlier pack.
-func planPackSetupRequests(roots, requested []string) (map[string][]string, error) {
+func PlanPackSetupRequests(roots, requested []string) (map[string][]string, error) {
 	plan := map[string][]string{}
 	owners := map[string][]string{}
 	seenRoots := map[string]bool{}
 	for _, root := range roots {
-		key := canonicalizePackRoot(root)
+		key := CanonicalizePackRoot(root)
 		if seenRoots[key] {
 			continue
 		}
 		seenRoots[key] = true
-		p, err := loadPack(root)
+		p, err := LoadPack(root)
 		if err != nil {
 			return nil, err
 		}

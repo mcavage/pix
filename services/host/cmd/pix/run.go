@@ -22,6 +22,7 @@ import (
 	"pix/host/secret"
 	"pix/host/service"
 	"pix/host/sys"
+	"pix/host/workflow/pack"
 	"pix/host/workspace"
 )
 
@@ -205,14 +206,14 @@ func runRun(argv []string) {
 	// active. Create-time only (skills + knowledge are create-time mounts; a
 	// re-attach keeps what it was made with).
 	// effectivePack is the pack root that ACTUALLY loaded and applied, as
-	// opposed to activePackRoot(cfg.Pack, o.Pack) (the merely CONFIGURED one).
+	// opposed to pack.ActivePackRoot(cfg.Pack, o.Pack) (the merely CONFIGURED one).
 	// It defaults to the configured root for a re-attach (no applyPackToLaunch
 	// call — writePackContextFiles below still attempts its own load and
 	// degrades to unscoped on failure), and is overwritten with
 	// applyPackToLaunch's honest return on a create, where it becomes "" if
-	// the pack degraded via errNotAPack. This is what keeps the sandbox.pack
+	// the pack degraded via pack.ErrNotAPack. This is what keeps the sandbox.pack
 	// marker and memory scope from disagreeing about what actually loaded.
-	effectivePack := activePackRoot(cfg.Pack, o.Pack)
+	effectivePack := pack.ActivePackRoot(cfg.Pack, o.Pack)
 	if willCreate(state, o.Replace) {
 		// Fatal on error (explicit --pack that doesn't load, or a declared
 		// sandbox proxy whose kit can't be built — round-4 F2 fail-closed):
@@ -353,7 +354,7 @@ func runRun(argv []string) {
 	// Local model + memory scope: hand the configured ollama_bridge_model to the
 	// in-VM ollama-bridge, and the active pack's memory_scope (default: the pack
 	// name; "default" is the shared/unscoped tag) to the in-VM recall/capture
-	// extensions, via per-run workspace files. No active pack -> writeMemoryScope
+	// extensions, via per-run workspace files. No active pack -> pack.WriteMemoryScope
 	// removes any stale file (unscoped recall). Best-effort throughout: an
 	// unloadable pack degrades to unscoped rather than failing run. Shared with
 	// `task new` via writePackContextFiles (pack.go) so both launch paths write
@@ -671,7 +672,7 @@ func writeSandboxPackMarker(ws, packRoot string) {
 		_ = workspace.RemoveStateFile(ws, "sandbox.pack")
 		return
 	}
-	_ = workspace.WriteStateFile(ws, "sandbox.pack", []byte(canonicalizePackRoot(packRoot)+"\n"), 0o644)
+	_ = workspace.WriteStateFile(ws, "sandbox.pack", []byte(pack.CanonicalizePackRoot(packRoot)+"\n"), 0o644)
 }
 
 // readSandboxPackMarker returns the create-time pack root recorded for this
@@ -715,8 +716,8 @@ func stalePackReattachWarning(cfg *config.Config, o runOpts, reattaching bool) s
 		return ""
 	}
 	active := ""
-	if root := activePackRoot(cfg.Pack, o.Pack); root != "" {
-		active = canonicalizePackRoot(root)
+	if root := pack.ActivePackRoot(cfg.Pack, o.Pack); root != "" {
+		active = pack.CanonicalizePackRoot(root)
 	}
 	if created == active {
 		return ""
@@ -729,7 +730,7 @@ func stalePackReattachWarning(cfg *config.Config, o runOpts, reattaching bool) s
 
 // desiredMCPUniverse computes the FULL set of MCP server names this
 // invocation would preload at CREATE: cfg.MCP, the active/transient pack's
-// integration servers (packMcpNames), and any explicit --mcp, deduped via
+// integration servers (pack.McpNames), and any explicit --mcp, deduped via
 // mcp.AllPreloadedMCP. It is the read-only twin of applyPackToLaunch's pack-fold
 // step (pack.go) used ONLY for this comparison: a re-attach never mounts a
 // pack (skills/bin/knowledge are create-time only) and must never trigger
@@ -739,9 +740,9 @@ func stalePackReattachWarning(cfg *config.Config, o runOpts, reattaching bool) s
 // rather than blocking a reattach comparison on a broken pack.
 func desiredMCPUniverse(cfg *config.Config, o runOpts) []string {
 	names := append([]string(nil), cfg.MCP...)
-	if root := activePackRoot(cfg.Pack, o.Pack); root != "" {
-		if p, err := loadPack(root); err == nil {
-			names = append(names, packMcpNames(p)...)
+	if root := pack.ActivePackRoot(cfg.Pack, o.Pack); root != "" {
+		if p, err := pack.LoadPack(root); err == nil {
+			names = append(names, pack.McpNames(p)...)
 		}
 	}
 	names = append(names, o.MCP...)

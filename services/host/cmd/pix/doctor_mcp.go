@@ -8,6 +8,7 @@ import (
 	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/sys"
+	"pix/host/workflow/pack"
 	"strings"
 
 	"pix/host/config"
@@ -519,7 +520,7 @@ func unknownKeyCheck(key string) readiness.Check {
 // it again would emit a duplicate `pix mcp register`.
 func mcpGroup(cfg *config.Config, env hostenv.Env, mcpOut string, mcpOK, sbxPresent bool, ctx mcpSandboxContext) readiness.Group {
 	return mcpGroupWith(cfg, env, mcpOut, mcpOK, sbxPresent,
-		activeContainerMCP(cfg), ctx)
+		pack.ActiveContainerMCP(cfg), ctx)
 }
 
 // mcpGroupWith is mcpGroup with the pack-integration set and the sandbox

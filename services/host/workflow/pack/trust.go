@@ -20,13 +20,13 @@
 //
 // Acceptance lives in TRUSTED HOST STATE (packtruststore.go — never inside
 // the pack payload), keyed by pack identity, over a FINGERPRINT of the entire
-// host-exec surface (computeHostExecFingerprint). Switching between accepted
+// host-exec surface (ComputeHostExecFingerprint). Switching between accepted
 // packs never re-prompts, but ANY change to the surface — a facet added, a
 // [[bin]] sha changed, a host proxy script mutated, an MCP argv resolved
 // differently (e.g. gog_account) — changes the fingerprint and re-triggers
 // the gate. The typed schema is the allowlist: only integration.mcp, host
 // [[proxy]], and [[bin]] ever reach an exec path.
-package main
+package pack
 
 import (
 	"bufio"
@@ -45,15 +45,15 @@ import (
 )
 
 // hostBoM is the host bill-of-materials: everything a pack would run on (or
-// solicit from) THIS machine. Pure data, computed by computeHostBoM, rendered
+// solicit from) THIS machine. Pure data, computed by ComputeHostBoM, rendered
 // by renderHostBoM, gated by packTrustGate, and accepted as a fingerprint in
-// the HOST trust store (computeHostExecFingerprint + packtruststore.go).
+// the HOST trust store (ComputeHostExecFingerprint + packtruststore.go).
 type hostBoM struct {
 	MCP            []hostBoMMCP       // built-in MCP servers the gateway spawns on the host
 	Containers     []hostBoMContainer // OCI MCP servers Docker runs on the host
 	RemoteMCP      []hostBoMRemote    // remote MCP endpoints attached by the pack
 	Proxies        []string           // host=true [[proxy]] wrapper names (bin/<name>)
-	SandboxProxies []packProxy        // host=false wrappers: sandbox commands forwarding elsewhere
+	SandboxProxies []PackProxy        // host=false wrappers: sandbox commands forwarding elsewhere
 	Bins           []packBin          // [[bin]] external binaries (path + pinned sha)
 	Egress         []string           // union of every facet's declared egress, sorted
 	Creds          []string           // credential ENV VAR names solicited (never values)
@@ -97,26 +97,26 @@ type hostBoMInference struct {
 // split of packs.md §9. Egress and creds alone never raise the tier (a
 // sandbox wrapper's egress is fenced by the kit allowlist; a credential ref is
 // solicited, not executed). b.MCP holds only LOCAL host-spawned servers and
-// b.Bins only host=true entries (computeHostBoM filters). An explicit remote
+// b.Bins only host=true entries (ComputeHostBoM filters). An explicit remote
 // MCP endpoint does raise the tier: adopting it sends conversation context to
 // a pack-selected third party and may launch OAuth, so it requires consent.
-func (b hostBoM) tier1() bool {
+func (b hostBoM) Tier1() bool {
 	return len(b.MCP) > 0 || len(b.Containers) > 0 || len(b.RemoteMCP) > 0 || len(b.Proxies) > 0 || len(b.Bins) > 0 || len(b.Setup) > 0 || len(b.Inference) > 0
 }
 
-// verifyPackInferenceTrust closes the adoption-to-launch gap for credential-
+// VerifyPackInferenceTrust closes the adoption-to-launch gap for credential-
 // routing inference. A pack remains mutable after `pack use`; before a sandbox
 // consumes its endpoint/service/header policy, recompute the accepted surface
 // and require an exact launcher-owned trust-store match.
-func verifyPackInferenceTrust(p *packInfo, cfgGogAccount string, env hostenv.Env) error {
+func VerifyPackInferenceTrust(p *Info, cfgGogAccount string, env hostenv.Env) error {
 	if p == nil {
 		return nil
 	}
-	bom := computeHostBoM(p, cfgGogAccount, localMCPClassifier(env, hostBinaryResolver))
+	bom := ComputeHostBoM(p, cfgGogAccount, LocalMCPClassifier(env, env.HostBinary))
 	if len(bom.Inference) == 0 {
 		return nil
 	}
-	fp, _, err := computeHostExecFingerprint(p.Root, bom)
+	fp, _, err := ComputeHostExecFingerprint(p.Root, bom)
 	if err != nil {
 		return fmt.Errorf("pack %s inference trust surface: %w", p.Manifest.Name, err)
 	}
@@ -125,7 +125,7 @@ func verifyPackInferenceTrust(p *packInfo, cfgGogAccount string, env hostenv.Env
 		if err != nil {
 			return fmt.Errorf("pack trust state unreadable: %w", err)
 		}
-		key := store.trustKey(p.Root)
+		key := store.TrustKey(p.Root)
 		if got, ok := store.acceptedFingerprint(key); !ok || got != fp {
 			return fmt.Errorf("pack %s inference credential routing is not accepted (or changed since acceptance) — run `pix pack use %s` to review it", p.Manifest.Name, p.Root)
 		}
@@ -133,7 +133,7 @@ func verifyPackInferenceTrust(p *packInfo, cfgGogAccount string, env hostenv.Env
 	})
 }
 
-// localMCPClassifier resolves mcp.McpRegistrar's local-vs-gateway partition into
+// LocalMCPClassifier resolves mcp.McpRegistrar's local-vs-gateway partition into
 // a predicate: TRUE for a name treated as a LOCAL stdio server this host runs
 // (`pix-host mcp --list`) — i.e. attaching it spawns a host command.
 // With the partition ESTABLISHED, a name not in the local set — a remote
@@ -151,7 +151,7 @@ func verifyPackInferenceTrust(p *packInfo, cfgGogAccount string, env hostenv.Env
 // failure is acceptable; silently skipping the gate is not. gog stays the
 // reference-only special case (its registration is launcher-built, never
 // pack-authored).
-func localMCPClassifier(env hostenv.Env, hostResolver func() (string, error)) func(string) bool {
+func LocalMCPClassifier(env hostenv.Env, hostResolver func() (string, error)) func(string) bool {
 	set, known := mcp.LocalMCPNames(env, hostResolver)
 	return func(name string) bool {
 		if !known {
@@ -161,13 +161,13 @@ func localMCPClassifier(env hostenv.Env, hostResolver func() (string, error)) fu
 	}
 }
 
-// packLocalMCP builds the classifier for callers without an injected env
-// (refreshHostPackWrappers). A package var so tests can pin the partition.
-var packLocalMCP = func() func(string) bool {
-	return localMCPClassifier(defaultShellEnv(), hostBinaryResolver)
-}
+// PackLocalMCP builds the classifier for callers without an injected env
+// (RefreshHostPackWrappers). A package var so tests can pin the partition, and
+// so the composition root can supply the real env without this package having
+// to construct one.
+var PackLocalMCP = func() func(string) bool { return func(string) bool { return false } }
 
-// computeHostBoM enumerates a pack's host bill-of-materials (pure, testable):
+// ComputeHostBoM enumerates a pack's host bill-of-materials (pure, testable):
 // MCP commands (resolved argv via mcp.go's serverCmd), host=true wrappers,
 // [[bin]] external binaries, the egress union, and credential VAR names. The
 // display registrar uses the bare binary names ("gog", "pix-host") so the
@@ -180,7 +180,7 @@ var packLocalMCP = func() func(string) bool {
 // actually run, so a later gog_account change re-gates (it changes what the
 // gateway spawns on the host).
 //
-// isLocalMCP is the local-vs-gateway partition (localMCPClassifier): only an
+// isLocalMCP is the local-vs-gateway partition (LocalMCPClassifier): only an
 // integration.mcp that resolves to a LOCAL host command enters the BoM — a
 // remote gateway-catalog reference (notion/atlassian/gog) ships no
 // pack-authored executable and stays Tier-0 (packs.md §9). nil means "no
@@ -191,7 +191,7 @@ var packLocalMCP = func() func(string) bool {
 // [[bin]] entries enter the BoM ONLY with host=true (mirroring host=true
 // proxies): an inert host=false bin never enters the accepted surface, so
 // flipping it to host=true later is a NEW surface that re-gates.
-func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) bool) hostBoM {
+func ComputeHostBoM(p *Info, cfgGogAccount string, isLocalMCP func(string) bool) hostBoM {
 	var b hostBoM
 	account := strings.TrimSpace(p.Manifest.GogAccount)
 	if account == "" {
@@ -271,7 +271,7 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 	return b
 }
 
-// computeHostExecFingerprint hashes the ENTIRE host-exec surface of a pack —
+// ComputeHostExecFingerprint hashes the ENTIRE host-exec surface of a pack —
 // what the Tier-1 acceptance is actually FOR: every MCP's resolved argv,
 // every host=true [[proxy]] script's CONTENT (sha256 of the bytes on disk,
 // symlink-refused — a mutated script changes the fingerprint), every [[bin]]
@@ -290,17 +290,17 @@ func computeHostBoM(p *packInfo, cfgGogAccount string, isLocalMCP func(string) b
 // surface with an identical hash (the reviewer showed a real collision:
 // egress ["a","b"] vs ["a\negress\x00b"]). JSON escaping makes any two
 // distinct surfaces serialize to distinct bytes. [[bin]] entries also encode
-// their Host flag (belt-and-suspenders on top of computeHostBoM only ever
+// their Host flag (belt-and-suspenders on top of ComputeHostBoM only ever
 // admitting host=true bins).
 //
 // An unreadable host proxy script is an ERROR (fail closed): a surface that
 // cannot be fingerprinted cannot be accepted or installed.
-func computeHostExecFingerprint(root string, b hostBoM) (string, map[string]string, error) {
+func ComputeHostExecFingerprint(root string, b hostBoM) (string, map[string]string, error) {
 	return computeHostExecFingerprintWithSetup(root, b, nil)
 }
 
 // computeHostExecFingerprintWithSetup hashes immutable setup-hook snapshots
-// when supplied. runPackSetup executes those same bytes, binding the accepted
+// when supplied. RunPackSetup executes those same bytes, binding the accepted
 // fingerprint to the actual executable instead of re-opening mutable pack
 // paths after the trust decision.
 func computeHostExecFingerprintWithSetup(root string, b hostBoM, setupBytes map[string][]byte) (string, map[string]string, error) {

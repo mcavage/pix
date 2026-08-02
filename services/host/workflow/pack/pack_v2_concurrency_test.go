@@ -1,20 +1,20 @@
 // pack_v2_concurrency_test.go — the Phase-2 concurrency review (the last
 // correctness BLOCK): the host-wrapper lifecycle is ONE cross-process
 // transaction under the pack trust flock, held ACROSS the filesystem dir
-// swap (refreshHostPackWrappers), and `pack rm` decides what to detach only
+// swap (RefreshHostPackWrappers), and `pack rm` decides what to detach only
 // UNDER that same lock. The old shape — record intended attribution (locked),
 // swap the dir (UNLOCKED), trim attribution (locked) — let two concurrent
 // refreshes interleave into "live dir holds B's wrappers, store attributes
 // A", so a later clear removed only A and ORPHANED B's executables on the
 // host PATH.
 //
-// Invariant pinned here: the live hostPackBinDir() contents are ALWAYS a
+// Invariant pinned here: the live HostPackBinDir() contents are ALWAYS a
 // subset of what the trust store attributes (no orphan wrapper), even under
 // concurrent refresh/refresh and refresh/rm — and at rest the two are EQUAL.
 // The goroutines below contend on the REAL flock (distinct fds conflict even
 // in-process), so these tests also prove the lifecycle is deadlock-free: a
 // nested withPackTrustLock acquisition would hang them forever.
-package main
+package pack
 
 import (
 	"bytes"
@@ -26,11 +26,11 @@ import (
 	"pix/host/config"
 )
 
-// liveHostWrapperNames lists hostPackBinDir() (nil when the dir is absent —
+// liveHostWrapperNames lists HostPackBinDir() (nil when the dir is absent —
 // the fail-safe "no wrappers at all" state).
 func liveHostWrapperNames(t *testing.T) []string {
 	t.Helper()
-	ents, err := os.ReadDir(hostPackBinDir())
+	ents, err := os.ReadDir(HostPackBinDir())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -46,7 +46,7 @@ func liveHostWrapperNames(t *testing.T) []string {
 
 // assertLiveSubsetOfAttribution fails if any live wrapper is unattributed —
 // the orphan a later clear could never remove.
-func assertLiveSubsetOfAttribution(t *testing.T, live []string, store *packTrustStore) {
+func assertLiveSubsetOfAttribution(t *testing.T, live []string, store *PackTrustStore) {
 	t.Helper()
 	attributed := map[string]bool{}
 	if store.Installed != nil {
@@ -57,7 +57,7 @@ func assertLiveSubsetOfAttribution(t *testing.T, live []string, store *packTrust
 	for _, n := range live {
 		if !attributed[n] {
 			t.Errorf("ORPHAN host wrapper %q: live in %s but attributed to nobody (a later clear would strand it on the host PATH); store=%+v",
-				n, hostPackBinDir(), store.Installed)
+				n, HostPackBinDir(), store.Installed)
 		}
 	}
 }
@@ -94,7 +94,7 @@ func auditHostWrapperInvariant(stop <-chan struct{}) (<-chan string, *sync.WaitG
 						attributed[n] = true
 					}
 				}
-				ents, rerr := os.ReadDir(hostPackBinDir())
+				ents, rerr := os.ReadDir(HostPackBinDir())
 				if rerr != nil {
 					return nil // absent dir = no wrappers = trivially a subset
 				}
@@ -130,8 +130,8 @@ func TestRefreshHostPackWrappers_ConcurrentRefreshesNoOrphan(t *testing.T) {
 	// Accept BOTH surfaces once (acceptance is per identity and survives
 	// switches — see TestPackSwitch_BetweenAcceptedPacksNoReprompt).
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerServers)
-	runPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerOK)
+	RunPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"}, registerOK)
 
 	stop := make(chan struct{})
 	violations, auditWG := auditHostWrapperInvariant(stop)
@@ -145,7 +145,7 @@ func TestRefreshHostPackWrappers_ConcurrentRefreshesNoOrphan(t *testing.T) {
 			cfg := &config.Config{Pack: root} // each racer's own (stale-able) config view
 			var buf bytes.Buffer
 			for i := 0; i < iters; i++ {
-				if _, err := refreshHostPackWrappers(&buf, cfg, false); err != nil {
+				if _, err := RefreshHostPackWrappers(&buf, cfg, false); err != nil {
 					t.Errorf("concurrent refresh of %s: %v\n%s", root, err, buf.String())
 					return
 				}
@@ -190,8 +190,8 @@ func TestPackRm_RacingRefreshNeverOrphans(t *testing.T) {
 	root := phase2HostPack(t, dir, "work", "platformio")
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers)
-	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "platformio")); err != nil {
+	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
+	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "platformio")); err != nil {
 		t.Fatalf("setup: accepted wrapper not installed: %v\n%s", err, out.String())
 	}
 
@@ -204,14 +204,14 @@ func TestPackRm_RacingRefreshNeverOrphans(t *testing.T) {
 		defer wg.Done()
 		var buf bytes.Buffer
 		// The racing host launch loaded its config BEFORE rm detached.
-		if _, err := refreshHostPackWrappers(&buf, &config.Config{Pack: root}, false); err != nil {
+		if _, err := RefreshHostPackWrappers(&buf, &config.Config{Pack: root}, false); err != nil {
 			t.Errorf("racing refresh: %v\n%s", err, buf.String())
 		}
 	}()
 	go func() {
 		defer wg.Done()
 		var buf bytes.Buffer
-		runPackRm(&buf, nil) // os.Exit(1) on failure would kill the test binary
+		RunPackRm(&buf, nil) // os.Exit(1) on failure would kill the test binary
 	}()
 	wg.Wait()
 	close(stop)

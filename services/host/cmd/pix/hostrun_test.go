@@ -10,6 +10,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/workflow/pack"
 	"pix/host/workspace"
 )
 
@@ -329,7 +330,7 @@ func TestHostChildEnv_Contract(t *testing.T) {
 		"PI_SUBAGENT_DISABLED=1",
 		"PI_SUBAGENT_MAX_DEPTH=0",
 		// F3: pack host wrappers on the child PATH — host mode ONLY.
-		"PATH=" + hostPackBinDir() + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"PATH=" + pack.HostPackBinDir() + string(os.PathListSeparator) + os.Getenv("PATH"),
 	}
 	if strings.Join(env, "\n") != strings.Join(want, "\n") {
 		t.Errorf("host env contract drifted:\n got: %v\nwant: %v", env, want)
@@ -699,14 +700,22 @@ func TestCheckHostPiVersion_TimesOut(t *testing.T) {
 	if err := os.WriteFile(pi, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A short injected bound: the invariant is that the deadline FIRES and is
+	// reported, which is observable in 50ms exactly as well as in two seconds.
+	const bound = 50 * time.Millisecond
 	started := time.Now()
-	err := checkHostPiVersion(pi)
+	err := checkHostPiVersionWithin(pi, bound)
 	elapsed := time.Since(started)
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("hanging pi error = %v, want bounded timeout", err)
 	}
-	if elapsed > hostPiVersionProbeTimeout+2*time.Second {
-		t.Fatalf("hanging pi probe took %s, want near %s", elapsed, hostPiVersionProbeTimeout)
+	if elapsed > bound+2*time.Second {
+		t.Fatalf("hanging pi probe took %s, want near %s", elapsed, bound)
+	}
+	// And the production path is still bounded at all: an unbounded default
+	// would make the injection meaningless.
+	if hostPiVersionProbeTimeout <= 0 {
+		t.Fatal("hostPiVersionProbeTimeout must be a positive bound")
 	}
 }
 

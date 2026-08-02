@@ -1,4 +1,4 @@
-package main
+package pack
 
 import (
 	"bytes"
@@ -28,7 +28,7 @@ func TestPackNew_InitsAndAddSkill(t *testing.T) {
 	env := fakeGitEnv(&git)
 
 	var out bytes.Buffer
-	runPackNew(env, &out, []string{root})
+	RunPackNew(env, &out, []string{root})
 	if _, err := os.Stat(filepath.Join(root, "pack.toml")); err != nil {
 		t.Fatalf("pack.toml not created: %v", err)
 	}
@@ -36,10 +36,10 @@ func TestPackNew_InitsAndAddSkill(t *testing.T) {
 		t.Errorf("expected git init, got: %v", git)
 	}
 
-	// loadPack reads it back.
-	p, err := loadPack(root)
+	// LoadPack reads it back.
+	p, err := LoadPack(root)
 	if err != nil {
-		t.Fatalf("loadPack: %v", err)
+		t.Fatalf("LoadPack: %v", err)
 	}
 	if p.Manifest.Name != "mypack" || p.Manifest.Schema != 1 {
 		t.Errorf("manifest = %+v", p.Manifest)
@@ -50,12 +50,12 @@ func TestPackNew_InitsAndAddSkill(t *testing.T) {
 
 	// add a skill -> SkillsDir now populated.
 	out.Reset()
-	runPackAdd(env, &out, []string{"skill", "deploy", root}, registerServers)
+	RunPackAdd(env, &out, []string{"skill", "deploy", root}, registerOK)
 	sk := filepath.Join(root, "skills", "deploy", "SKILL.md")
 	if _, err := os.Stat(sk); err != nil {
 		t.Fatalf("skill not written: %v", err)
 	}
-	p2, _ := loadPack(root)
+	p2, _ := LoadPack(root)
 	if p2.SkillsDir == "" {
 		t.Error("SkillsDir should be set after adding a skill")
 	}
@@ -70,7 +70,7 @@ func TestPackNew_AdoptsExistingRepo(t *testing.T) {
 	var git []string
 	env := fakeGitEnv(&git)
 	var out bytes.Buffer
-	runPackNew(env, &out, []string{dir})
+	RunPackNew(env, &out, []string{dir})
 	// Must NOT re-init an existing repo.
 	if strings.Contains(strings.Join(git, "\n"), "init") {
 		t.Errorf("must not git-init an existing repo, calls: %v", git)
@@ -84,19 +84,19 @@ func TestPackNew_AdoptsExistingRepo(t *testing.T) {
 }
 
 func TestLoadPack_NotAPack(t *testing.T) {
-	if _, err := loadPack(t.TempDir()); err == nil {
+	if _, err := LoadPack(t.TempDir()); err == nil {
 		t.Error("a dir with no pack.toml is not a pack")
 	}
 }
 
 func TestActivePackRoot_OverrideWins(t *testing.T) {
-	if got := activePackRoot("/cfg/pack", "/flag/pack"); got != "/flag/pack" {
+	if got := ActivePackRoot("/cfg/pack", "/flag/pack"); got != "/flag/pack" {
 		t.Errorf("--pack override should win, got %q", got)
 	}
-	if got := activePackRoot("/cfg/pack", ""); got != "/cfg/pack" {
+	if got := ActivePackRoot("/cfg/pack", ""); got != "/cfg/pack" {
 		t.Errorf("config pack when no override, got %q", got)
 	}
-	if got := activePackRoot("", ""); got != "" {
+	if got := ActivePackRoot("", ""); got != "" {
 		t.Errorf("no pack -> empty, got %q", got)
 	}
 }
@@ -182,7 +182,7 @@ func TestLoadPack_RejectsEscapingSymlink(t *testing.T) {
 	if err := os.Symlink("/etc", filepath.Join(root, "skills", "escape")); err != nil {
 		t.Skip("symlink unsupported: " + err.Error())
 	}
-	if _, err := loadPack(root); err == nil {
-		t.Error("loadPack must reject a pack whose skills/ escapes via symlink")
+	if _, err := LoadPack(root); err == nil {
+		t.Error("LoadPack must reject a pack whose skills/ escapes via symlink")
 	}
 }

@@ -29,6 +29,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
+	"pix/host/workflow/pack"
 	"pix/host/workspace"
 	"slices"
 	"strings"
@@ -278,12 +279,12 @@ func hostProvisioned() bool {
 // onboarding copy unconditionally claim "a pack is active" on hosts where
 // nothing was.
 func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
-	root := activePackRoot(cfg.Pack, override)
+	root := pack.ActivePackRoot(cfg.Pack, override)
 	active := root != ""
 	if root == "" {
-		root = defaultPackRoot() // runs the legacy pack/personal -> default migration
+		root = pack.DefaultPackRoot() // runs the legacy pack/personal -> default migration
 	}
-	p, err := loadPack(root)
+	p, err := pack.LoadPack(root)
 	if err != nil {
 		return hostStatePack{}
 	}
@@ -294,7 +295,7 @@ func resolveHostStatePack(cfg *config.Config, override string) hostStatePack {
 	return hostStatePack{
 		Active:         active,
 		Exists:         true,
-		Default:        canonicalizePackRoot(p.Root) == canonicalizePackRoot(defaultPackRoot()),
+		Default:        pack.CanonicalizePackRoot(p.Root) == pack.CanonicalizePackRoot(pack.DefaultPackRoot()),
 		Path:           p.Root,
 		GitInitialized: gitInit,
 		Skills:         p.SkillsDir != "",

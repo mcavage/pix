@@ -89,6 +89,13 @@ var pkgLayer = map[string]int{
 	// sequencing, which is the definition of L3. The pure capability underneath
 	// it is slackoauth, which was already L1 and already correct.
 	"workflow/slack": layerWorkflow,
+	// pack is a workflow for the same reason slack is: `pix pack use` resolves a
+	// pack, then registers its MCP servers, wires its knowledge refs, seeds its
+	// credentials and restarts services. It consumes five capabilities and
+	// nothing below L4 consumes it. The capability-shaped parts inside it
+	// (manifest parsing, the trust store, the host BoM) are candidates to split
+	// out later; being a workflow is already correct today.
+	"workflow/pack": layerWorkflow,
 
 	// L4 — the command layer.
 	"cmd/pix": layerCommand,

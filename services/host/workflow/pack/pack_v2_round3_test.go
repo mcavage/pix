@@ -1,4 +1,4 @@
-package main
+package pack
 
 // Round-3 review tests for packs-v2 Phase 1: one (or more) test per finding
 // S1/R1/R2/R3 of the third security + correctness review. See the matching
@@ -34,7 +34,7 @@ func TestWritePackLock_RefusesSymlinkDest(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(victim, packLockPath(root)); err != nil {
+	if err := os.Symlink(victim, PackLockPath(root)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -73,7 +73,7 @@ func TestWritePackLock_AtomicRoundTripNoDebris(t *testing.T) {
 			t.Errorf("leftover lock temp file: %s", e.Name())
 		}
 	}
-	if fi, err := os.Lstat(packLockPath(root)); err != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
+	if fi, err := os.Lstat(PackLockPath(root)); err != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
 		t.Errorf("pack.lock must be a regular file, got %v (err=%v)", fi, err)
 	}
 }
@@ -104,13 +104,13 @@ func TestClonePack_ScrubsSymlinkPackLock(t *testing.T) {
 			}
 			// The attacker's tree: a manifest declaring a private local ref,
 			// plus pack.lock checked in as a symlink at a host file.
-			m := packManifest{Name: "evil", Schema: 1, Knowledge: []packKnowledge{
+			m := Manifest{Name: "evil", Schema: 1, Knowledge: []packKnowledge{
 				{Name: "steal", Source: privateDir, Shared: false},
 			}}
-			if err := writePackManifest(dest, m); err != nil {
+			if err := WriteManifest(dest, m); err != nil {
 				return "", err
 			}
-			if err := os.Symlink(victim, packLockPath(dest)); err != nil {
+			if err := os.Symlink(victim, PackLockPath(dest)); err != nil {
 				return "", err
 			}
 		}
@@ -125,7 +125,7 @@ func TestClonePack_ScrubsSymlinkPackLock(t *testing.T) {
 		t.Fatalf("clonePack: %v", err)
 	}
 	// The symlink is GONE — replaced by a real lock file carrying adoption.
-	fi, lerr := os.Lstat(packLockPath(dest))
+	fi, lerr := os.Lstat(PackLockPath(dest))
 	if lerr != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
 		t.Fatalf("pack.lock must be a fresh regular file after adoption, got %v (err=%v)", fi, lerr)
 	}
@@ -140,9 +140,9 @@ func TestClonePack_ScrubsSymlinkPackLock(t *testing.T) {
 		t.Errorf("symlink target must be untouched, got %q (err=%v)", b, rerr)
 	}
 	// And the private local ref is still refused for the adopted pack.
-	p, perr := loadPack(dest)
+	p, perr := LoadPack(dest)
 	if perr != nil {
-		t.Fatalf("loadPack: %v", perr)
+		t.Fatalf("LoadPack: %v", perr)
 	}
 	if _, rerr := resolvePackKnowledgeRef(&bytes.Buffer{}, dest, isAdoptedPack(dest), p.Manifest.Knowledge[0]); rerr != errPrivateRefSkippedAdopted {
 		t.Errorf("private local ref of an adopted pack must be skipped, got %v", rerr)
@@ -165,11 +165,11 @@ func TestClonePack_ScrubsCheckedInRegularPackLock(t *testing.T) {
 			if err := os.MkdirAll(dest, 0o755); err != nil {
 				return "", err
 			}
-			if err := writePackManifest(dest, packManifest{Name: "evil2", Schema: 1}); err != nil {
+			if err := WriteManifest(dest, Manifest{Name: "evil2", Schema: 1}); err != nil {
 				return "", err
 			}
 			// Poisoned attribution: claims the user's own MCP as this pack's.
-			if err := os.WriteFile(packLockPath(dest), []byte("mcp = [\"gog\", \"slack\"]\n"), 0o644); err != nil {
+			if err := os.WriteFile(PackLockPath(dest), []byte("mcp = [\"gog\", \"slack\"]\n"), 0o644); err != nil {
 				return "", err
 			}
 		}
@@ -227,7 +227,7 @@ func TestPackAddMcp_LockWrittenBeforeSaveFailure(t *testing.T) {
 	if os.Getenv("PIX_TEST_SAVEFAIL") == "add" {
 		// Child: exits 1 at the commit point (Save fails on the read-only dir).
 		// --yes accepts the Phase-2 Tier-1 gate so the commit point is reached.
-		runPackAdd(fakeGitEnv(nil), os.Stdout, []string{"mcp", "fastmail", os.Getenv("PIX_TEST_PACK_ROOT"), "--yes"}, registerServers)
+		RunPackAdd(fakeGitEnv(nil), os.Stdout, []string{"mcp", "fastmail", os.Getenv("PIX_TEST_PACK_ROOT"), "--yes"}, registerOK)
 		return
 	}
 	if os.Getuid() == 0 {
@@ -243,7 +243,7 @@ func TestPackAddMcp_LockWrittenBeforeSaveFailure(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePackManifest(root, packManifest{Name: "work", Schema: 1}); err != nil {
+	if err := WriteManifest(root, Manifest{Name: "work", Schema: 1}); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := config.Load()
@@ -293,7 +293,7 @@ func TestPackAddMcp_LockWrittenBeforeSaveFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	var rmOut bytes.Buffer
-	runPackRm(&rmOut, nil)
+	RunPackRm(&rmOut, nil)
 	if !strings.Contains(rmOut.String(), "detached active pack") {
 		t.Errorf("pack rm must succeed after the crash residue, got:\n%s", rmOut.String())
 	}
@@ -324,9 +324,9 @@ func TestSweepStaleKitTemps_AgeGatedLaunchDirs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "bin", "a"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := &packInfo{Root: root, Manifest: packManifest{Name: "p", Proxies: []packProxy{{Name: "a"}}}}
+	p := &Info{Root: root, Manifest: Manifest{Name: "p", Proxies: []PackProxy{{Name: "a"}}}}
 
-	kit1, err := synthesizePackKit(p)
+	kit1, err := SynthesizePackKit(p)
 	if err != nil || kit1 == "" {
 		t.Fatalf("first synth failed: %q, err=%v", kit1, err)
 	}
@@ -343,7 +343,7 @@ func TestSweepStaleKitTemps_AgeGatedLaunchDirs(t *testing.T) {
 		}
 	}
 
-	kit2, err := synthesizePackKit(p)
+	kit2, err := SynthesizePackKit(p)
 	if err != nil || kit2 == "" {
 		t.Fatalf("second synth failed: %q, err=%v", kit2, err)
 	}
@@ -359,58 +359,3 @@ func TestSweepStaleKitTemps_AgeGatedLaunchDirs(t *testing.T) {
 }
 
 // --- R3 [BLOCK]: marker only on a DEFINITE create ------------------------------
-
-// TestSandboxPackMarker_NotOverwrittenOnInconclusiveProbe: the create-time pack
-// marker is persisted state, so it gates on definitelyCreating — an sbxUnknown
-// probe (sbx may re-attach the old sandbox) must leave an existing marker
-// untouched, while a real create (absent, or --replace) writes it.
-func TestSandboxPackMarker_NotOverwrittenOnInconclusiveProbe(t *testing.T) {
-	// An unknown state now fails closed before any create preparation or marker
-	// write; definitelyCreating must remain false too.
-	if willCreate(sbxUnknown, false) {
-		t.Fatal("willCreate(sbxUnknown) must fail closed")
-	}
-	cases := []struct {
-		state   sbxState
-		replace bool
-		want    bool
-	}{
-		{sbxAbsent, false, true},
-		{sbxUnknown, false, false}, // R3: inconclusive probe never writes
-		{sbxRunning, false, false},
-		{sbxStopped, false, false},
-		// round-4 F3: --replace on an INCONCLUSIVE probe is NOT a definite
-		// create — planSandboxLaunch skips the rm on sbxUnknown (RmFirst is
-		// false), so sbx may re-attach the old sandbox; the marker must not be
-		// overwritten (or stalePackReattachWarning would wrongly go silent).
-		{sbxUnknown, true, false},
-		{sbxAbsent, true, true},  // absent + replace: rm is a no-op, create is certain
-		{sbxRunning, true, true}, // --replace with a positive probe really removes + creates
-		{sbxStopped, true, true},
-	}
-	oldPack := canonicalizePackRoot(filepath.Join(t.TempDir(), "old-pack"))
-	newPack := filepath.Join(t.TempDir(), "new-pack")
-	for _, tc := range cases {
-		if got := definitelyCreating(tc.state, tc.replace); got != tc.want {
-			t.Errorf("definitelyCreating(%v, %v) = %v, want %v", tc.state, tc.replace, got, tc.want)
-		}
-		// Behavioral: run.go's gate over an existing marker.
-		ws := t.TempDir()
-		if err := os.MkdirAll(filepath.Join(ws, ".pix"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(sandboxPackMarkerPath(ws), []byte(oldPack+"\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if definitelyCreating(tc.state, tc.replace) { // mirrors runRun's marker gate
-			writeSandboxPackMarker(ws, newPack)
-		}
-		got := readSandboxPackMarker(ws)
-		if tc.want && got != canonicalizePackRoot(newPack) {
-			t.Errorf("state=%v replace=%v: a definite create must write the marker, got %q", tc.state, tc.replace, got)
-		}
-		if !tc.want && got != oldPack {
-			t.Errorf("state=%v replace=%v: a non-create must leave the marker untouched, got %q", tc.state, tc.replace, got)
-		}
-	}
-}

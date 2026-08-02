@@ -17,6 +17,7 @@ import (
 	"pix/host/secret"
 	"pix/host/sys"
 	"pix/host/sys/systest"
+	"pix/host/workflow/pack"
 )
 
 // TestSetupSandboxName derives pix-<base> under the default profile.
@@ -206,18 +207,18 @@ func TestRunSetupCmd_SemanticErrorPrecedesPackAdoption(t *testing.T) {
 
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
-	pack := filepath.Join(root, "pack")
+	packDir := filepath.Join(root, "pack")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeTestPack(t, pack, "semantic-boundary-test")
+	writeTestPack(t, packDir, "semantic-boundary-test")
 	configPath := filepath.Join(root, "config", "config.toml")
 
 	cmd := exec.Command(os.Args[0], "-test.run", "^TestRunSetupCmd_SemanticErrorPrecedesPackAdoption$")
 	cmd.Env = append(os.Environ(),
 		"PIX_TEST_SETUP_SEMANTIC_CHILD=1",
 		"PIX_TEST_SETUP_WORKSPACE="+workspace,
-		"PIX_TEST_SETUP_PACK="+pack,
+		"PIX_TEST_SETUP_PACK="+packDir,
 		"PIX_CONFIG="+configPath,
 		"XDG_STATE_HOME="+filepath.Join(root, "state"),
 		"XDG_DATA_HOME="+filepath.Join(root, "data"),
@@ -230,10 +231,10 @@ func TestRunSetupCmd_SemanticErrorPrecedesPackAdoption(t *testing.T) {
 	if !strings.Contains(string(out), "must not contain whitespace") {
 		t.Fatalf("child did not report the semantic error:\n%s", out)
 	}
-	if _, err := os.Stat(filepath.Join(pack, packLockName)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(packDir, pack.PackLockName)); !os.IsNotExist(err) {
 		t.Fatalf("pack adoption ran before semantic validation; pack.lock stat = %v", err)
 	}
-	if b, err := os.ReadFile(configPath); err == nil && strings.Contains(string(b), pack) {
+	if b, err := os.ReadFile(configPath); err == nil && strings.Contains(string(b), packDir) {
 		t.Fatalf("pack adoption ran before semantic validation; config contains pack path:\n%s", b)
 	} else if err != nil && !os.IsNotExist(err) {
 		t.Fatalf("reading child config: %v", err)

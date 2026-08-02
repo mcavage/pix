@@ -1,4 +1,4 @@
-package main
+package pack
 
 import (
 	"bytes"
@@ -69,9 +69,9 @@ shared = false
 		t.Fatal(err)
 	}
 
-	p, err := loadPack(root)
+	p, err := LoadPack(root)
 	if err != nil {
-		t.Fatalf("loadPack: %v", err)
+		t.Fatalf("LoadPack: %v", err)
 	}
 	m := p.Manifest
 	if m.GogAccount != "me@company.com" || m.MemoryScope != "work" {
@@ -102,8 +102,8 @@ func TestLoadPack_RejectsEmptyBinSHA(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte(toml), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadPack(root); err == nil {
-		t.Error("loadPack must reject a [[bin]] with no sha")
+	if _, err := LoadPack(root); err == nil {
+		t.Error("LoadPack must reject a [[bin]] with no sha")
 	}
 }
 
@@ -114,8 +114,8 @@ func TestLoadPack_RejectsInvalidProxyName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte(toml), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadPack(root); err == nil {
-		t.Error("loadPack must reject an unsafe [[proxy]] name")
+	if _, err := LoadPack(root); err == nil {
+		t.Error("LoadPack must reject an unsafe [[proxy]] name")
 	}
 }
 
@@ -127,8 +127,8 @@ func TestLoadPack_RejectsBinPathEscape(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "pack.toml"), []byte(toml), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadPack(root); err == nil {
-		t.Error("loadPack must reject a [[bin]].path that escapes the pack root")
+	if _, err := LoadPack(root); err == nil {
+		t.Error("LoadPack must reject a [[bin]].path that escapes the pack root")
 	}
 }
 
@@ -143,7 +143,7 @@ func TestPackAdd_Proxy_ScaffoldsWrapperAndManifest(t *testing.T) {
 	root := filepath.Join(dir, "pack")
 	env := fakeGitEnv(nil)
 	var out bytes.Buffer
-	runPackAdd(env, &out, []string{"proxy", "warehouse", root}, registerServers)
+	RunPackAdd(env, &out, []string{"proxy", "warehouse", root}, registerOK)
 
 	binFile := filepath.Join(root, "bin", "warehouse")
 	fi, err := os.Stat(binFile)
@@ -153,9 +153,9 @@ func TestPackAdd_Proxy_ScaffoldsWrapperAndManifest(t *testing.T) {
 	if fi.Mode().Perm()&0o111 == 0 {
 		t.Errorf("bin/warehouse is not executable: %v", fi.Mode())
 	}
-	p, err := loadPack(root)
+	p, err := LoadPack(root)
 	if err != nil {
-		t.Fatalf("loadPack: %v", err)
+		t.Fatalf("LoadPack: %v", err)
 	}
 	if len(p.Manifest.Proxies) != 1 || p.Manifest.Proxies[0].Name != "warehouse" || p.Manifest.Proxies[0].Host {
 		t.Errorf("proxy manifest entry missing/wrong: %+v", p.Manifest.Proxies)
@@ -172,13 +172,13 @@ func TestPackAdd_Proxy_Host_NoRecreateLine(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	root := filepath.Join(dir, "pack")
 	var out bytes.Buffer
-	runPackAdd(fakeGitEnv(nil), &out, []string{"proxy", "platformio", root, "--host"}, registerServers)
+	RunPackAdd(fakeGitEnv(nil), &out, []string{"proxy", "platformio", root, "--host"}, registerOK)
 	if strings.Contains(out.String(), "pix run --replace") {
 		t.Errorf("host proxy should not print the sandbox recreate line, got:\n%s", out.String())
 	}
-	p, err := loadPack(root)
+	p, err := LoadPack(root)
 	if err != nil {
-		t.Fatalf("loadPack: %v", err)
+		t.Fatalf("LoadPack: %v", err)
 	}
 	if len(p.Manifest.Proxies) != 1 || !p.Manifest.Proxies[0].Host {
 		t.Errorf("host proxy not recorded: %+v", p.Manifest.Proxies)
@@ -200,14 +200,14 @@ func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "bin", "platformio"), []byte("#!/usr/bin/env bash\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := &packInfo{Root: root, Manifest: packManifest{
+	p := &Info{Root: root, Manifest: Manifest{
 		Name: "work",
-		Proxies: []packProxy{
+		Proxies: []PackProxy{
 			{Name: "warehouse"},
 			{Name: "platformio", Host: true},
 		},
 	}}
-	kit, err := synthesizePackKit(p)
+	kit, err := SynthesizePackKit(p)
 	if err != nil || kit == "" {
 		t.Fatalf("expected a synthesized kit dir, got %q, err=%v", kit, err)
 	}
@@ -225,8 +225,8 @@ func TestSynthesizePackKit_SandboxOnly(t *testing.T) {
 // TestSynthesizePackKit_NoProxiesReturnsEmpty: a pack with no sandbox proxies
 // synthesizes nothing (the caller must not stack an empty kit).
 func TestSynthesizePackKit_NoProxiesReturnsEmpty(t *testing.T) {
-	p := &packInfo{Root: t.TempDir(), Manifest: packManifest{Name: "p"}}
-	if kit, err := synthesizePackKit(p); err != nil || kit != "" {
+	p := &Info{Root: t.TempDir(), Manifest: Manifest{Name: "p"}}
+	if kit, err := SynthesizePackKit(p); err != nil || kit != "" {
 		t.Errorf("expected no kit and no error, got %q, err=%v", kit, err)
 	}
 }
@@ -241,11 +241,11 @@ func TestPackAdd_Mcp_NotActive_NoAttachNoRecreate(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	root := filepath.Join(dir, "pack")
 	var out bytes.Buffer
-	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--env", "FASTMAIL_TOKEN"}, registerServers)
+	RunPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--env", "FASTMAIL_TOKEN"}, registerOK)
 
-	p, err := loadPack(root)
+	p, err := LoadPack(root)
 	if err != nil {
-		t.Fatalf("loadPack: %v", err)
+		t.Fatalf("LoadPack: %v", err)
 	}
 	if len(p.Manifest.Integrations) != 1 || p.Manifest.Integrations[0].MCP != "fastmail" || p.Manifest.Integrations[0].Env != "FASTMAIL_TOKEN" {
 		t.Errorf("mcp integration not recorded: %+v", p.Manifest.Integrations)
@@ -272,7 +272,7 @@ func TestPackAdd_Mcp_Active_AttachesAndPrintsRecreate(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePackManifest(root, packManifest{Name: "work", Schema: 1}); err != nil {
+	if err := WriteManifest(root, Manifest{Name: "work", Schema: 1}); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := config.Load()
@@ -287,7 +287,7 @@ func TestPackAdd_Mcp_Active_AttachesAndPrintsRecreate(t *testing.T) {
 	var out bytes.Buffer
 	// F5 (Phase 2): attaching an MCP to the active pack is Tier-1 — the host
 	// BoM gate fires; --yes accepts it non-interactively (tests have no TTY).
-	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--yes"}, registerServers)
+	RunPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--yes"}, registerOK)
 
 	cfg2, err := config.Load()
 	if err != nil {
@@ -307,12 +307,12 @@ func TestPackAdd_Mcp_Active_AttachesAndPrintsRecreate(t *testing.T) {
 
 // --- F4: atomic switch, reversibility -----------------------------------------
 
-func mustWritePack(t *testing.T, root string, m packManifest) {
+func mustWritePack(t *testing.T, root string, m Manifest) {
 	t.Helper()
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePackManifest(root, m); err != nil {
+	if err := WriteManifest(root, m); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -328,8 +328,8 @@ func TestPackUse_ReversibleSwitch(t *testing.T) {
 
 	rootA := filepath.Join(dir, "a")
 	rootB := filepath.Join(dir, "b")
-	mustWritePack(t, rootA, packManifest{Name: "a", Schema: 1, Integrations: []packIntegration{{Name: "A", MCP: "a-mcp"}}})
-	mustWritePack(t, rootB, packManifest{Name: "b", Schema: 1, Integrations: []packIntegration{{Name: "B", MCP: "b-mcp"}}})
+	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1, Integrations: []Integration{{Name: "A", MCP: "a-mcp"}}})
+	mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1, Integrations: []Integration{{Name: "B", MCP: "b-mcp"}}})
 
 	// A pre-existing, user-added MCP that no pack ever declared.
 	cfg, err := config.Load()
@@ -346,12 +346,12 @@ func TestPackUse_ReversibleSwitch(t *testing.T) {
 
 	// F5 (Phase 2): packs declaring an integration.mcp are Tier-1 — --yes
 	// accepts the host BoM non-interactively (tests have no TTY).
-	runPackUse(env, &out, []string{rootA, "--yes"}, registerServers)
+	RunPackUse(env, &out, []string{rootA, "--yes"}, registerOK)
 	cfgAfterA1, _ := config.Load()
 	wantAfterA := append([]string(nil), cfgAfterA1.MCP...)
 
 	out.Reset()
-	runPackUse(env, &out, []string{rootB, "--yes"}, registerServers)
+	RunPackUse(env, &out, []string{rootB, "--yes"}, registerOK)
 	cfgAfterB, _ := config.Load()
 	if !slices.Contains(cfgAfterB.MCP, "usermcp") {
 		t.Errorf("user-added mcp must survive a switch, cfg.MCP = %v", cfgAfterB.MCP)
@@ -364,7 +364,7 @@ func TestPackUse_ReversibleSwitch(t *testing.T) {
 	}
 
 	out.Reset()
-	runPackUse(env, &out, []string{rootA, "--yes"}, registerServers)
+	RunPackUse(env, &out, []string{rootA, "--yes"}, registerOK)
 	cfgAfterA2, _ := config.Load()
 
 	if !stringSlicesEqualUnordered(cfgAfterA2.MCP, wantAfterA) {
@@ -416,19 +416,19 @@ func TestPackUse_KnowledgeReversible(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rootB, "knowledge", "y.md"), []byte("y"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	mustWritePack(t, rootA, packManifest{Name: "a", Schema: 1})
-	mustWritePack(t, rootB, packManifest{Name: "b", Schema: 1})
-	// re-adding knowledge/ dirs after writePackManifest overwrote nothing (manifest
-	// write doesn't touch knowledge/), but ensure they still exist for loadPack.
+	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1})
+	mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
+	// re-adding knowledge/ dirs after WriteManifest overwrote nothing (manifest
+	// write doesn't touch knowledge/), but ensure they still exist for LoadPack.
 
 	env := fakeGitEnv(nil)
 	var out bytes.Buffer
-	runPackUse(env, &out, []string{rootA}, registerServers)
+	RunPackUse(env, &out, []string{rootA}, registerOK)
 	cfgA, _ := config.Load()
 	wantA := append([]string(nil), cfgA.KnowledgeBundles...)
 
 	out.Reset()
-	runPackUse(env, &out, []string{rootB}, registerServers)
+	RunPackUse(env, &out, []string{rootB}, registerOK)
 	cfgB, _ := config.Load()
 	aID := knowledge.CanonicalizeKnowledgeBundle(filepath.Join(rootA, "knowledge"))
 	bID := knowledge.CanonicalizeKnowledgeBundle(filepath.Join(rootB, "knowledge"))
@@ -440,7 +440,7 @@ func TestPackUse_KnowledgeReversible(t *testing.T) {
 	}
 
 	out.Reset()
-	runPackUse(env, &out, []string{rootA}, registerServers)
+	RunPackUse(env, &out, []string{rootA}, registerOK)
 	cfgA2, _ := config.Load()
 	if !stringSlicesEqualUnordered(cfgA2.KnowledgeBundles, wantA) {
 		t.Errorf("reversible switch: knowledge_bundles after A->B->A = %v, want %v", cfgA2.KnowledgeBundles, wantA)
@@ -466,12 +466,12 @@ func TestPackUse_PrivateKnowledgeNeverTravels(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(privateDir, "secret-plan.md"), []byte("do not share"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	mustWritePack(t, root, packManifest{Name: "work", Schema: 1, Knowledge: []packKnowledge{
+	mustWritePack(t, root, Manifest{Name: "work", Schema: 1, Knowledge: []packKnowledge{
 		{Name: "my-notes", Source: privateDir, Shared: false},
 	}})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -504,11 +504,11 @@ func TestPackAddKnowledge_RefAndPrivateFlags(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	root := filepath.Join(dir, "pack")
 	var out bytes.Buffer
-	runPackAdd(fakeGitEnv(nil), &out, []string{"knowledge", "my-notes", root, "--ref", "/tmp/notes", "--private"}, registerServers)
+	RunPackAdd(fakeGitEnv(nil), &out, []string{"knowledge", "my-notes", root, "--ref", "/tmp/notes", "--private"}, registerOK)
 
-	p, err := loadPack(root)
+	p, err := LoadPack(root)
 	if err != nil {
-		t.Fatalf("loadPack: %v", err)
+		t.Fatalf("LoadPack: %v", err)
 	}
 	if len(p.Manifest.Knowledge) != 1 {
 		t.Fatalf("expected one knowledge ref, got %+v", p.Manifest.Knowledge)
@@ -531,10 +531,10 @@ func TestPackUse_AlwaysPrintsRecreateLine(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	root := filepath.Join(dir, "p")
-	mustWritePack(t, root, packManifest{Name: "p", Schema: 1})
+	mustWritePack(t, root, Manifest{Name: "p", Schema: 1})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
 	if !strings.Contains(out.String(), "pix run --replace") {
 		t.Errorf("pack use must always print the recreate line, got:\n%s", out.String())
 	}
@@ -559,7 +559,7 @@ func TestSolicitPackCredentials_OnlyWritesOpRefs(t *testing.T) {
 			return "", os.ErrNotExist
 		},
 	}}
-	p := &packInfo{Manifest: packManifest{Integrations: []packIntegration{
+	p := &Info{Manifest: Manifest{Integrations: []Integration{
 		{Name: "Fastmail", MCP: "fastmail", Env: "FASTMAIL_TOKEN"},
 	}}}
 	in := strings.NewReader("op://Private/Fastmail/token\n")
@@ -596,7 +596,7 @@ func TestSolicitPackCredentials_RejectsPastedLiteral(t *testing.T) {
 			return "", os.ErrNotExist
 		},
 	}}
-	p := &packInfo{Manifest: packManifest{Integrations: []packIntegration{
+	p := &Info{Manifest: Manifest{Integrations: []Integration{
 		{Name: "Fastmail", MCP: "fastmail", Env: "FASTMAIL_TOKEN"},
 	}}}
 	in := strings.NewReader("pasted-literal-secret-123\n")
@@ -618,8 +618,8 @@ func TestWriteMemoryScope_NoExplicitScopeIsShared(t *testing.T) {
 	// memory stays the single shared store (no profile file => "default"), else
 	// conversational captures get hidden from the default recall view.
 	ws := t.TempDir()
-	p := &packInfo{Manifest: packManifest{Name: "work"}}
-	writeMemoryScope(ws, p)
+	p := &Info{Manifest: Manifest{Name: "work"}}
+	WriteMemoryScope(ws, p)
 	if _, err := os.Stat(filepath.Join(ws, ".pix", "profile")); err == nil {
 		t.Error("a pack without explicit memory_scope must NOT write a scope file (memory stays shared)")
 	}
@@ -627,8 +627,8 @@ func TestWriteMemoryScope_NoExplicitScopeIsShared(t *testing.T) {
 
 func TestWriteMemoryScope_ExplicitOverridesName(t *testing.T) {
 	ws := t.TempDir()
-	p := &packInfo{Manifest: packManifest{Name: "work", MemoryScope: "shared-team"}}
-	writeMemoryScope(ws, p)
+	p := &Info{Manifest: Manifest{Name: "work", MemoryScope: "shared-team"}}
+	WriteMemoryScope(ws, p)
 	got := strings.TrimSpace(readFile(t, filepath.Join(ws, ".pix", "profile")))
 	if got != "shared-team" {
 		t.Errorf("profile = %q, want %q", got, "shared-team")
@@ -644,7 +644,7 @@ func TestWriteMemoryScope_NoPackRemovesStaleFile(t *testing.T) {
 	if err := os.WriteFile(stale, []byte("old\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeMemoryScope(ws, nil)
+	WriteMemoryScope(ws, nil)
 	if _, err := os.Stat(stale); err == nil {
 		t.Error("no active pack should remove the stale profile file")
 	}
@@ -659,8 +659,8 @@ func TestWriteMemoryScope_DefaultNameUnscoped(t *testing.T) {
 	if err := os.WriteFile(stale, []byte("old\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p := &packInfo{Manifest: packManifest{Name: "default"}}
-	writeMemoryScope(ws, p)
+	p := &Info{Manifest: Manifest{Name: "default"}}
+	WriteMemoryScope(ws, p)
 	if _, err := os.Stat(stale); err == nil {
 		t.Error("a pack named/scoped \"default\" should be unscoped (no profile file)")
 	}
@@ -668,24 +668,6 @@ func TestWriteMemoryScope_DefaultNameUnscoped(t *testing.T) {
 
 // --- buildSbxArgs: PackKits stacking -------------------------------------------
 
-// TestBuildSbxArgs_PackKits_NeverSuppressesBaseKit: PackKits must stack
-// alongside the base git/local kit pin, unlike o.Kits (the escape hatch) which
-// replaces it. This guards the ADR-2 deviation (see docs deviation note).
-func TestBuildSbxArgs_PackKits_NeverSuppressesBaseKit(t *testing.T) {
-	cfg := &config.Config{}
-	args := buildSbxArgs(cfg, runOpts{Workspace: ".", PackKits: []string{"/pack/kit"}}, "0.0.99")
-	if pinnedGitKit(args) == "" {
-		t.Errorf("PackKits must not suppress the base git kit pin, got %v", args)
-	}
-	if !contains(args, []string{"--kit", "/pack/kit"}) {
-		t.Errorf("pack kit missing from %v", args)
-	}
-}
-
-// TestPackCapabilitiesJSON_LoadedAndMounted: a pack's capabilities.json is
-// discovered by loadPack and mounted by synthesizePackKit into the sandbox at
-// files/home/.pi/agent/capabilities.json — even with no [[proxy]] entries. This
-// is what lets a pack carry its own capability routing.
 func TestPackCapabilitiesJSON_LoadedAndMounted(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
@@ -700,14 +682,14 @@ func TestPackCapabilitiesJSON_LoadedAndMounted(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "capabilities.json"), []byte(caps), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p, err := loadPack(root)
+	p, err := LoadPack(root)
 	if err != nil {
-		t.Fatalf("loadPack: %v", err)
+		t.Fatalf("LoadPack: %v", err)
 	}
 	if p.CapabilitiesFile == "" {
-		t.Fatal("loadPack did not set CapabilitiesFile for a pack with capabilities.json")
+		t.Fatal("LoadPack did not set CapabilitiesFile for a pack with capabilities.json")
 	}
-	kit, err := synthesizePackKit(p)
+	kit, err := SynthesizePackKit(p)
 	if err != nil || kit == "" {
 		t.Fatalf("expected a kit for a capabilities-only pack, got %q err=%v", kit, err)
 	}
@@ -743,14 +725,14 @@ func TestPackWebSearchJSONLoadedAndMounted(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "web-search.json"), []byte(config), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p, err := loadPack(root)
+	p, err := LoadPack(root)
 	if err != nil {
-		t.Fatalf("loadPack: %v", err)
+		t.Fatalf("LoadPack: %v", err)
 	}
 	if p.WebSearchFile == "" {
-		t.Fatal("loadPack did not set WebSearchFile")
+		t.Fatal("LoadPack did not set WebSearchFile")
 	}
-	kit, err := synthesizePackKit(p)
+	kit, err := SynthesizePackKit(p)
 	if err != nil || kit == "" {
 		t.Fatalf("expected web-search-only pack kit, got %q err=%v", kit, err)
 	}
@@ -790,8 +772,8 @@ func TestPackWebSearchJSONRejectsMalformedAndSymlink(t *testing.T) {
 			if err := tc.make(root); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := loadPack(root); err == nil || !strings.Contains(err.Error(), "web-search.json") {
-				t.Fatalf("loadPack error = %v, want web-search.json rejection", err)
+			if _, err := LoadPack(root); err == nil || !strings.Contains(err.Error(), "web-search.json") {
+				t.Fatalf("LoadPack error = %v, want web-search.json rejection", err)
 			}
 		})
 	}
@@ -809,11 +791,11 @@ func TestSynthesizePackKit_EgressAllow(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "bin", "snow"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := &packInfo{Root: root, Manifest: packManifest{
+	p := &Info{Root: root, Manifest: Manifest{
 		Name:    "work",
-		Proxies: []packProxy{{Name: "snow", Egress: []string{"host.docker.internal:11442"}}},
+		Proxies: []PackProxy{{Name: "snow", Egress: []string{"host.docker.internal:11442"}}},
 	}}
-	kit, err := synthesizePackKit(p)
+	kit, err := SynthesizePackKit(p)
 	if err != nil || kit == "" {
 		t.Fatalf("kit=%q err=%v", kit, err)
 	}

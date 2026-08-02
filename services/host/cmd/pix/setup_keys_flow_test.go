@@ -38,7 +38,7 @@ func stepEnv(t *testing.T, refsContent, sbxLsOut string, opReadVal string) (host
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "cfg", "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	// A test that drives setupHostPhase all the way to success reaches
-	// defaultPackRoot(), which without this would resolve to the REAL user's
+	// pack.DefaultPackRoot(), which without this would resolve to the REAL user's
 	// ~/.local/share/pix and git-init a pack there. Every stepEnv-based
 	// test gets this for free, whether or not it happens to run that far.
 	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "data"))

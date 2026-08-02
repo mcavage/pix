@@ -1,7 +1,7 @@
 // packhost.go — F3: pack host-mode wrappers (packs-v2-impl.md F3, packs.md §9).
 //
 // A pack's host-exec facets ([[proxy]] host=true wrapper scripts and [[bin]]
-// SHA-pinned external binaries) install into hostPackBinDir(), which
+// SHA-pinned external binaries) install into HostPackBinDir(), which
 // hostChildEnv prepends to the child PATH — so they are reachable from
 // `pix host` ONLY (never the sandbox, never the login shell). Two gates in
 // series guard them: the machine-level host.enabled opt-in (hostrun.go, off by
@@ -17,7 +17,7 @@
 // atomically; a strict (launch) failure refuses the launch, never leaving a
 // half-installed set. Installed-wrapper attribution lives in the trust store,
 // so clearing/swapping works even when the pack directory is gone.
-package main
+package pack
 
 import (
 	"crypto/sha256"
@@ -34,11 +34,11 @@ import (
 	"pix/host/workspace"
 )
 
-// hostPackBinDir is where the ACTIVE pack's host-mode wrappers live:
+// HostPackBinDir is where the ACTIVE pack's host-mode wrappers live:
 // <workspace.HostAgentDir>/bin. State-flavored and rebuildable (cleared + refreshed from
 // the active pack), exactly like the rest of the host agent dir. It reaches a
 // PATH in exactly one place: hostChildEnv (hostrun.go) — host mode only.
-func hostPackBinDir() string { return filepath.Join(workspace.HostAgentDir(), "bin") }
+func HostPackBinDir() string { return filepath.Join(workspace.HostAgentDir(), "bin") }
 
 // hashFileSHA256 returns the lowercase hex sha256 of the file at path. It is
 // the ADR-4 duplicate of the hashing core inside verifyPluginSHA
@@ -62,9 +62,9 @@ func hashFileSHA256(path string) (string, error) {
 // verifyPackBinSHA re-hashes a [[bin]] entry's file (root-relative b.Path)
 // against its mandatory pinned sha, failing closed on empty/missing/mismatch —
 // the same contract verifyPluginSHA enforces for external go-plugin binaries.
-// loadPack already refuses an empty sha and a symlinked/escaping Path; the
+// LoadPack already refuses an empty sha and a symlinked/escaping Path; the
 // empty-sha check here is belt-and-suspenders for callers holding a packBin
-// that never went through loadPack.
+// that never went through LoadPack.
 func verifyPackBinSHA(root string, b packBin) error {
 	want := strings.ToLower(strings.TrimSpace(b.SHA))
 	if want == "" {
@@ -80,7 +80,7 @@ func verifyPackBinSHA(root string, b packBin) error {
 	return nil
 }
 
-// clearHostPackWrappers removes the named wrappers from hostPackBinDir().
+// clearHostPackWrappers removes the named wrappers from HostPackBinDir().
 // Removal is strictly name-scoped (host-state attribution — the same
 // never-remove-what-you-can't-attribute posture as the MCP/knowledge swap) and
 // symlink-safe: a symlinked host bin dir is never traversed, and a name that
@@ -90,7 +90,7 @@ func clearHostPackWrappers(names []string) error {
 	if len(names) == 0 {
 		return nil
 	}
-	dir := hostPackBinDir()
+	dir := HostPackBinDir()
 	if isSymlinkPath(dir) {
 		return fmt.Errorf("%s is a symlink; refusing to remove host wrappers through it", dir)
 	}
@@ -111,7 +111,7 @@ func clearHostPackWrappers(names []string) error {
 }
 
 // clearInstalledHostPackWrappers removes whatever the trust store attributes
-// to hostPackBinDir() and, ONLY on confirmed removal, discards the
+// to HostPackBinDir() and, ONLY on confirmed removal, discards the
 // attribution. A removal failure is surfaced (note + returned error) and the
 // attribution is kept, so the next refresh retries instead of stranding
 // wrappers with no owner. Works with no pack directory at all — attribution
@@ -128,7 +128,7 @@ func clearHostPackWrappers(names []string) error {
 // transactional refresh, `pack rm`) uses clearInstalledHostPackWrappersLocked
 // instead — nesting withPackTrustLock self-deadlocks (flock is per open file
 // description).
-func clearInstalledHostPackWrappers(out io.Writer, store *packTrustStore) error {
+func clearInstalledHostPackWrappers(out io.Writer, store *PackTrustStore) error {
 	if store == nil || store.Installed == nil || len(store.Installed.Wrappers) == 0 {
 		return nil
 	}
@@ -141,7 +141,7 @@ func clearInstalledHostPackWrappers(out io.Writer, store *packTrustStore) error 
 // of clearInstalledHostPackWrappers: same fresh-load → union → remove →
 // drop-attribution contract, NO lock acquisition of its own. Callers MUST
 // hold withPackTrustLock.
-func clearInstalledHostPackWrappersLocked(out io.Writer, store *packTrustStore) error {
+func clearInstalledHostPackWrappersLocked(out io.Writer, store *PackTrustStore) error {
 	if store == nil || store.Installed == nil || len(store.Installed.Wrappers) == 0 {
 		return nil
 	}
@@ -173,7 +173,7 @@ func clearInstalledHostPackWrappersLocked(out io.Writer, store *packTrustStore) 
 		return nil // nothing persisted to update
 	}
 	disk.Installed = nil
-	if err := disk.save(); err != nil {
+	if err := disk.Save(); err != nil {
 		// The wrappers ARE gone; a stale attribution only over-claims (the next
 		// removal is a no-op). Still surfaced AND returned so launch-critical
 		// callers fail closed on an unwritable trust store.
@@ -185,25 +185,25 @@ func clearInstalledHostPackWrappersLocked(out io.Writer, store *packTrustStore) 
 
 // installHostPackWrappersStaged builds the COMPLETE host-wrapper set for pack
 // p in a staging directory, verifying every artifact's content, then swaps it
-// into hostPackBinDir() — all-or-nothing, never a half-installed set:
+// into HostPackBinDir() — all-or-nothing, never a half-installed set:
 //
 //   - Every host=true [[proxy]] script's bytes are re-hashed and must match
 //     the content hash inside the ACCEPTED fingerprint (proxySHA — computed by
-//     the caller via computeHostExecFingerprint), so what lands on the host
+//     the caller via ComputeHostExecFingerprint), so what lands on the host
 //     PATH is byte-for-byte what the user accepted (no TOCTOU between the
 //     fingerprint check and the copy).
 //   - Every host=true [[bin]]'s bytes are re-hashed against the pinned sha and
 //     REFUSED on mismatch.
-//   - Sources are Lstat-checked (loadPack already refuses symlinks in the
+//   - Sources are Lstat-checked (LoadPack already refuses symlinks in the
 //     pack tree; belt-and-suspenders here) and names re-validated.
 //   - ANY failure aborts with an error before the swap: the previous
 //     (verified) contents stay in place untouched.
 //
 // The swap replaces the whole dir (rename old aside, rename staging in,
-// remove old) — hostPackBinDir() is exclusively launcher-owned, rebuildable
+// remove old) — HostPackBinDir() is exclusively launcher-owned, rebuildable
 // state, so a full swap also flushes anything stale a prior activation left.
-func installHostPackWrappersStaged(p *packInfo, proxySHA map[string]string) ([]string, error) {
-	var hostProxies []packProxy
+func installHostPackWrappersStaged(p *Info, proxySHA map[string]string) ([]string, error) {
+	var hostProxies []PackProxy
 	var hostBins []packBin
 	for _, pr := range p.Manifest.Proxies {
 		if pr.Host {
@@ -215,7 +215,7 @@ func installHostPackWrappersStaged(p *packInfo, proxySHA map[string]string) ([]s
 			hostBins = append(hostBins, b)
 		}
 	}
-	dir := hostPackBinDir()
+	dir := HostPackBinDir()
 	if isSymlinkPath(dir) {
 		return nil, fmt.Errorf("%s is a symlink; refusing to install host wrappers through it", dir)
 	}
@@ -309,8 +309,8 @@ func installHostPackWrappersStaged(p *packInfo, proxySHA map[string]string) ([]s
 	return names, nil
 }
 
-// refreshHostPackWrappers syncs hostPackBinDir() with the ACTIVE pack's
-// ACCEPTED host-exec surface. Called from runPackUse (post-commit swap),
+// RefreshHostPackWrappers syncs HostPackBinDir() with the ACTIVE pack's
+// ACCEPTED host-exec surface. Called from RunPackUse (post-commit swap),
 // runHostSetup (strict=false: notes, setup never fails), and runHostLaunch
 // (strict=true: ANY problem returns an error and the launch must refuse).
 //
@@ -329,7 +329,7 @@ func installHostPackWrappersStaged(p *packInfo, proxySHA map[string]string) ([]s
 // Install counts as successful only when BOTH the swap and the store write
 // succeeded; any store-write failure returns an error (strict callers refuse
 // the launch), and at every point the store's attribution is a SUPERSET of
-// what is live in hostPackBinDir() — never a live wrapper the store
+// what is live in HostPackBinDir() — never a live wrapper the store
 // attributes to nobody. Clearing stale wrappers (no active pack, absent pack
 // dir, Tier-0, no-longer-accepted surface) is equally fail-closed in strict
 // mode: a launch never proceeds with orphan host executables on PATH.
@@ -345,9 +345,9 @@ func installHostPackWrappersStaged(p *packInfo, proxySHA map[string]string) ([]s
 // so the next switch/rm can clear them even if the pack dir disappears.
 //
 // It returns the loaded active pack (nil when none/degraded) so runHostLaunch
-// can reuse it for the memory scope tag without a second loadPack.
-func refreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*packInfo, error) {
-	var p *packInfo
+// can reuse it for the memory scope tag without a second LoadPack.
+func RefreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*Info, error) {
+	var p *Info
 	err := withPackTrustLock(func() error {
 		var rerr error
 		p, rerr = refreshHostPackWrappersLocked(out, cfg, strict)
@@ -357,20 +357,20 @@ func refreshHostPackWrappers(out io.Writer, cfg *config.Config, strict bool) (*p
 }
 
 // refreshHostPackWrappersLocked is the ALREADY-HOLDING-THE-LOCK body of
-// refreshHostPackWrappers. It MUST NOT acquire withPackTrustLock (directly
+// RefreshHostPackWrappers. It MUST NOT acquire withPackTrustLock (directly
 // or via mutatePackTrustStore/clearInstalledHostPackWrappers) — only the
 // *Locked variants and plain load/save, which are safe because the caller
 // holds the flock for the whole lifecycle.
-func refreshHostPackWrappersLocked(out io.Writer, cfg *config.Config, strict bool) (*packInfo, error) {
+func refreshHostPackWrappersLocked(out io.Writer, cfg *config.Config, strict bool) (*Info, error) {
 	store, serr := loadPackTrustStore()
 	if serr != nil {
 		if strict {
 			return nil, fmt.Errorf("pack trust state unreadable: %v (refusing host launch; fix or remove %s)", serr, packTrustStorePath())
 		}
 		fmt.Fprintf(out, "note: pack trust state unreadable (%v); treating as empty (nothing is accepted)\n", serr)
-		store = &packTrustStore{}
+		store = &PackTrustStore{}
 	}
-	root := activePackRoot(cfg.Pack, "")
+	root := ActivePackRoot(cfg.Pack, "")
 	if root == "" {
 		// No active pack: clear whatever host state attributes to the bin dir
 		// (works even though the previous pack's directory may be long gone).
@@ -386,9 +386,9 @@ func refreshHostPackWrappersLocked(out io.Writer, cfg *config.Config, strict boo
 		}
 		return nil, nil
 	}
-	p, err := loadPack(root)
+	p, err := LoadPack(root)
 	if err != nil {
-		if errors.Is(err, errNotAPack) {
+		if errors.Is(err, ErrNotAPack) {
 			// Genuinely absent pack: it still must not leave ITS wrappers live.
 			if cerr := clearInstalledHostPackWrappersLocked(out, store); cerr != nil {
 				if strict {
@@ -401,8 +401,8 @@ func refreshHostPackWrappersLocked(out io.Writer, cfg *config.Config, strict boo
 		}
 		return nil, fmt.Errorf("active pack %s: %v (refusing to use its host wrappers; fix the pack or `pix pack rm` to detach it)", root, err)
 	}
-	bom := computeHostBoM(p, cfg.GogAccount, packLocalMCP())
-	if !bom.tier1() {
+	bom := ComputeHostBoM(p, cfg.GogAccount, PackLocalMCP())
+	if !bom.Tier1() {
 		// Tier-0 for host purposes: nothing to install; clear stale leftovers.
 		if cerr := clearInstalledHostPackWrappersLocked(out, store); cerr != nil {
 			if strict {
@@ -412,7 +412,7 @@ func refreshHostPackWrappersLocked(out io.Writer, cfg *config.Config, strict boo
 		}
 		return p, nil
 	}
-	fp, proxySHA, ferr := computeHostExecFingerprint(root, bom)
+	fp, proxySHA, ferr := ComputeHostExecFingerprint(root, bom)
 	if ferr != nil {
 		if strict {
 			return nil, fmt.Errorf("pack %s: %v (refusing host launch)", p.Manifest.Name, ferr)
@@ -420,7 +420,7 @@ func refreshHostPackWrappersLocked(out io.Writer, cfg *config.Config, strict boo
 		fmt.Fprintf(out, "TODO: pack %s: %v — host wrappers not installed\n", p.Manifest.Name, ferr)
 		return p, nil
 	}
-	key := store.trustKey(root)
+	key := store.TrustKey(root)
 	if got, ok := store.acceptedFingerprint(key); !ok || got != fp {
 		msg := fmt.Sprintf("pack %s declares host-exec facets that are not accepted (or changed since acceptance) — run `pix pack use %s` to review + accept the host BoM", p.Manifest.Name, root)
 		if strict {
@@ -474,7 +474,7 @@ func refreshHostPackWrappersLocked(out io.Writer, cfg *config.Config, strict boo
 	}
 	sort.Strings(intendedNames)
 	store.Installed = &packInstalledSet{Owner: key, Wrappers: intendedNames}
-	if werr := store.save(); werr != nil {
+	if werr := store.Save(); werr != nil {
 		err := fmt.Errorf("pack %s: could not record intended host-wrapper attribution: %v (host wrappers NOT installed; fail closed)", p.Manifest.Name, werr)
 		if strict {
 			return nil, fmt.Errorf("%v — refusing host launch", err)
@@ -495,7 +495,7 @@ func refreshHostPackWrappersLocked(out io.Writer, cfg *config.Config, strict boo
 	// every live wrapper (no orphan), but the install is NOT considered
 	// successful: the error propagates and a strict caller refuses the launch.
 	store.Installed = &packInstalledSet{Owner: key, Wrappers: installed}
-	if werr := store.save(); werr != nil {
+	if werr := store.Save(); werr != nil {
 		err := fmt.Errorf("pack %s: host wrappers installed but the attribution write failed: %v (attribution over-claims until the store is writable)", p.Manifest.Name, werr)
 		if strict {
 			return nil, fmt.Errorf("%v — refusing host launch", err)

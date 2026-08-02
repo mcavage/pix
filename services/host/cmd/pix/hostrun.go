@@ -15,6 +15,7 @@ import (
 	"pix/host/config"
 	"pix/host/rpc"
 	"pix/host/secret"
+	"pix/host/workflow/pack"
 	"pix/host/workspace"
 )
 
@@ -44,7 +45,7 @@ import (
 //	                             --no-extensions, so they'd escape the guard)
 //	PI_SUBAGENT_MAX_DEPTH = 0    belt-and-suspenders: today's depth guard already
 //	                             refuses at depth 0/0 with no TS change
-//	PATH                  = <hostPackBinDir()>:<PATH>  (F3: the active pack's
+//	PATH                  = <pack.HostPackBinDir()>:<PATH>  (F3: the active pack's
 //	                             ACCEPTED host wrappers — host mode ONLY; the
 //	                             sandbox and the login shell never see this dir)
 //
@@ -149,14 +150,22 @@ const hostPinnedPiPackage = "@earendil-works/pi-coding-agent@0.83.0"
 const hostPiVersionProbeTimeout = 2 * time.Second
 
 func checkHostPiVersion(piBin string) error {
+	return checkHostPiVersionWithin(piBin, hostPiVersionProbeTimeout)
+}
+
+// checkHostPiVersionWithin is checkHostPiVersion with the bound injected. The
+// test for "a hanging pi is bounded" proves the DEADLINE fires, which does not
+// require waiting the production two seconds to observe -- it used to, and two
+// seconds of sleeping was the single slowest test in the suite.
+func checkHostPiVersionWithin(piBin string, timeout time.Duration) error {
 	want := strings.TrimPrefix(hostPinnedPiPackage, "@earendil-works/pi-coding-agent@")
-	ctx, cancel := context.WithTimeout(context.Background(), hostPiVersionProbeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, piBin, "--version")
 	cmd.WaitDelay = 250 * time.Millisecond
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
-		return fmt.Errorf("`pi --version` timed out after %s", hostPiVersionProbeTimeout)
+		return fmt.Errorf("`pi --version` timed out after %s", timeout)
 	}
 	if err != nil {
 		return fmt.Errorf("could not read `pi --version`: %w", err)
@@ -338,7 +347,7 @@ func runHostSetup(errw *os.File) error {
 	// install prints a TODO — exactly like the pi-extension loop below — and
 	// never fails setup. The strict re-hash gate runs at every host LAUNCH.
 	if cfg, cerr := config.Load(); cerr == nil {
-		if _, werr := refreshHostPackWrappers(errw, cfg, false); werr != nil {
+		if _, werr := pack.RefreshHostPackWrappers(errw, cfg, false); werr != nil {
 			fmt.Fprintf(errw, "pix host setup: TODO — pack host wrappers not installed: %v\n", werr)
 		}
 	} else {
@@ -555,7 +564,7 @@ func hostChildEnv(agentDir, ollamaModel string) []string {
 		// before adoption). exec.Cmd de-duplicates env keys keeping the LAST
 		// entry, so this wins over os.Environ()'s PATH for the child only —
 		// never exported, never persisted. A not-yet-existing dir is harmless.
-		"PATH=" + hostPackBinDir() + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"PATH=" + pack.HostPackBinDir() + string(os.PathListSeparator) + os.Getenv("PATH"),
 	}
 	if m := strings.TrimSpace(ollamaModel); m != "" {
 		env = append(env, "OLLAMA_BRIDGE_MODEL="+m)
@@ -672,18 +681,18 @@ func runHostLaunch(o hostOpts) {
 	// F3: refresh the active pack's host wrappers so a `pack use` since the
 	// last `host setup` takes effect, re-hashing every ACCEPTED [[bin]] against
 	// its pinned sha — a tampered external binary REFUSES the launch (fail
-	// closed; packs.md §9 safeguard 2). The wrappers land in hostPackBinDir(),
+	// closed; packs.md §9 safeguard 2). The wrappers land in pack.HostPackBinDir(),
 	// which hostChildEnv prepends to the child PATH — this launch path is the
 	// ONLY thing that ever puts them on a PATH.
-	activePack, perr := refreshHostPackWrappers(os.Stderr, cfg, true)
+	activePack, perr := pack.RefreshHostPackWrappers(os.Stderr, cfg, true)
 	if perr != nil {
 		fmt.Fprintf(os.Stderr, "pix host: %v\n", perr)
 		os.Exit(1)
 	}
 	// F4: tag the host session's memory scope from the active pack — the same
 	// .pix/profile file `pix run` writes (memory-recall/capture read
-	// it). Best-effort by contract (writeMemoryScope discards errors).
-	writeMemoryScope(ws, activePack)
+	// it). Best-effort by contract (pack.WriteMemoryScope discards errors).
+	pack.WriteMemoryScope(ws, activePack)
 
 	// Credentials: op:// refs resolved just-in-time by `op run`, or Ollama-only.
 	// hostModelPreflight replaces modelProviderPreflight (which reads sbx

@@ -17,7 +17,7 @@
 //   - clearHostPackWrappers returns errors; attribution survives a failed
 //     removal
 //   - seedPackGitignore refuses a symlinked .gitignore
-package main
+package pack
 
 import (
 	"bytes"
@@ -37,11 +37,11 @@ import (
 // TestPackUse_ForgedPackLockDoesNotSkipGate (CRITICAL): a local pack shipping
 // a pre-filled pack.lock in the OLD acceptance schema (accepted_* /
 // host_wrappers) must still hit the Tier-1 gate — non-TTY without --yes fails
-// closed, nothing committed, nothing installed. Subprocess (runPackUse
+// closed, nothing committed, nothing installed. Subprocess (RunPackUse
 // os.Exits on refusal).
 func TestPackUse_ForgedPackLockDoesNotSkipGate(t *testing.T) {
 	if os.Getenv("PIX_TEST_TRUST") == "forged-lock" {
-		runPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")}, registerServers)
+		RunPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")}, registerOK)
 		return // exit 0 == the forged lock skipped the gate
 	}
 	dir := t.TempDir()
@@ -50,7 +50,7 @@ func TestPackUse_ForgedPackLockDoesNotSkipGate(t *testing.T) {
 	forged := "accepted_host_proxies = [\"platformio\"]\n" +
 		"accepted_mcp = [\"gog\"]\n" +
 		"host_wrappers = [\"platformio\"]\n"
-	if err := os.WriteFile(packLockPath(root), []byte(forged), 0o644); err != nil {
+	if err := os.WriteFile(PackLockPath(root), []byte(forged), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -98,21 +98,21 @@ func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
 	}
 	// A Tier-0 pack (no gate) shipping a forged lock claiming config.GWServerName.
 	root := filepath.Join(dir, "evil")
-	mustWritePack(t, root, packManifest{Name: "evil", Schema: 1})
-	if err := os.WriteFile(packLockPath(root), []byte("mcp = [\"gog\"]\n"), 0o644); err != nil {
+	mustWritePack(t, root, Manifest{Name: "evil", Schema: 1})
+	if err := os.WriteFile(PackLockPath(root), []byte("mcp = [\"gog\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	other := filepath.Join(dir, "other")
-	mustWritePack(t, other, packManifest{Name: "other", Schema: 1})
+	mustWritePack(t, other, Manifest{Name: "other", Schema: 1})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
 	if l := readPackLock(root); slices.Contains(l.MCP, config.GWServerName) {
 		t.Fatalf("forged attribution survived adoption: %+v (must be scrubbed + regenerated fresh)", l)
 	}
 	// Switch away: the user's own MCP must survive.
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{other}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{other}, registerOK)
 	cfg2, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -134,16 +134,16 @@ func TestPackUse_ForgedSymlinkLockScrubbedNotFollowed(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := filepath.Join(dir, "evil")
-	mustWritePack(t, root, packManifest{Name: "evil", Schema: 1})
-	if err := os.Symlink(victim, packLockPath(root)); err != nil {
+	mustWritePack(t, root, Manifest{Name: "evil", Schema: 1})
+	if err := os.Symlink(victim, PackLockPath(root)); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
 	if b, err := os.ReadFile(victim); err != nil || string(b) != "host secret\n" {
 		t.Errorf("symlink target must be untouched, got %q (err=%v)", b, err)
 	}
-	if fi, err := os.Lstat(packLockPath(root)); err != nil || !fi.Mode().IsRegular() {
+	if fi, err := os.Lstat(PackLockPath(root)); err != nil || !fi.Mode().IsRegular() {
 		t.Errorf("pack.lock must be a fresh regular file after adoption, got %v (err=%v)", fi, err)
 	}
 }
@@ -159,8 +159,7 @@ func TestPackUse_ForgedSymlinkLockScrubbedNotFollowed(t *testing.T) {
 // test pins the account→argv→fingerprint machinery for the local case.
 func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	if os.Getenv("PIX_TEST_TRUST") == "gog-regate" {
-		hostBinaryResolver = func() (string, error) { return "pix-host", nil }
-		runPackUse(localMCPEnv(config.GWServerName), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")}, registerServers)
+		RunPackUse(localMCPEnv(config.GWServerName), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")}, registerOK)
 		return
 	}
 	dir := t.TempDir()
@@ -169,8 +168,8 @@ func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	pinLocalMCP(t, config.GWServerName)
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, packManifest{Name: "work", Schema: 1,
-		Integrations: []packIntegration{{Name: "gog", MCP: config.GWServerName}}})
+	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
+		Integrations: []Integration{{Name: "gog", MCP: config.GWServerName}}})
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -181,11 +180,11 @@ func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackUse(localMCPEnv(config.GWServerName), &out, []string{root, "--yes"}, registerServers) // accept with a@
+	RunPackUse(localMCPEnv(config.GWServerName), &out, []string{root, "--yes"}, registerOK) // accept with a@
 	// Same account: re-activation must NOT re-prompt (in-process; a misfiring
 	// gate would os.Exit and fail the test binary).
 	out.Reset()
-	runPackUse(localMCPEnv(config.GWServerName), &out, []string{root}, registerServers)
+	RunPackUse(localMCPEnv(config.GWServerName), &out, []string{root}, registerOK)
 	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("unchanged surface must not re-gate:\n%s", out.String())
 	}
@@ -219,7 +218,7 @@ func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, rerr := refreshHostPackWrappers(&out, cfg3, true); rerr == nil {
+	if _, rerr := RefreshHostPackWrappers(&out, cfg3, true); rerr == nil {
 		t.Error("strict refresh must refuse a surface changed since acceptance (gog_account)")
 	}
 }
@@ -235,8 +234,8 @@ func TestHostLaunch_MutatedProxyScriptRefusesUntilReaccepted(t *testing.T) {
 	root := phase2HostPack(t, dir, "work", "platformio")
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers)
-	installedAt := filepath.Join(hostPackBinDir(), "platformio")
+	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
+	installedAt := filepath.Join(HostPackBinDir(), "platformio")
 	if _, err := os.Stat(installedAt); err != nil {
 		t.Fatalf("accepted wrapper not installed: %v\n%s", err, out.String())
 	}
@@ -244,7 +243,7 @@ func TestHostLaunch_MutatedProxyScriptRefusesUntilReaccepted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, rerr := refreshHostPackWrappers(&out, cfg, true); rerr != nil {
+	if _, rerr := RefreshHostPackWrappers(&out, cfg, true); rerr != nil {
 		t.Fatalf("strict refresh of the accepted, unchanged surface must pass: %v", rerr)
 	}
 
@@ -253,12 +252,12 @@ func TestHostLaunch_MutatedProxyScriptRefusesUntilReaccepted(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if _, rerr := refreshHostPackWrappers(&out, cfg, true); rerr == nil || !strings.Contains(rerr.Error(), "not accepted") {
+	if _, rerr := RefreshHostPackWrappers(&out, cfg, true); rerr == nil || !strings.Contains(rerr.Error(), "not accepted") {
 		t.Fatalf("strict launch must REFUSE a mutated accepted script, got err=%v", rerr)
 	}
 	// Lenient refresh de-installs the no-longer-accepted wrapper.
 	out.Reset()
-	if _, rerr := refreshHostPackWrappers(&out, cfg, false); rerr != nil {
+	if _, rerr := RefreshHostPackWrappers(&out, cfg, false); rerr != nil {
 		t.Fatalf("lenient refresh must not hard-fail: %v", rerr)
 	}
 	if _, err := os.Stat(installedAt); err == nil {
@@ -267,11 +266,11 @@ func TestHostLaunch_MutatedProxyScriptRefusesUntilReaccepted(t *testing.T) {
 
 	// Re-accept: the gate fires again and, once accepted, launch works.
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
 	if !strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("the mutated script must have re-fired the gate:\n%s", out.String())
 	}
-	if _, rerr := refreshHostPackWrappers(&out, cfg, true); rerr != nil {
+	if _, rerr := RefreshHostPackWrappers(&out, cfg, true); rerr != nil {
 		t.Errorf("strict refresh after re-acceptance must pass: %v", rerr)
 	}
 	if b, err := os.ReadFile(installedAt); err != nil || !strings.Contains(string(b), "curl evil") {
@@ -292,17 +291,17 @@ func TestPackSwitch_BetweenAcceptedPacksNoReprompt(t *testing.T) {
 	rootB := phase2HostPack(t, dir, "b", "b-tool")
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerServers)
-	runPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerOK)
+	RunPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"}, registerOK)
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{rootA}, registerServers) // no --yes, non-TTY
+	RunPackUse(fakeGitEnv(nil), &out, []string{rootA}, registerOK) // no --yes, non-TTY
 	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("switching back to an accepted pack must not re-prompt:\n%s", out.String())
 	}
-	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "a-tool")); err != nil {
+	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "a-tool")); err != nil {
 		t.Errorf("A's wrapper must be re-installed on switch-back: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "b-tool")); err == nil {
+	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "b-tool")); err == nil {
 		t.Error("B's wrapper must be cleared on switch-back")
 	}
 }
@@ -320,8 +319,8 @@ func TestPackRm_ClearsHostWrappersWhenPackDirGone(t *testing.T) {
 	root := phase2HostPack(t, dir, "work", "platformio")
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers)
-	installedAt := filepath.Join(hostPackBinDir(), "platformio")
+	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
+	installedAt := filepath.Join(HostPackBinDir(), "platformio")
 	if _, err := os.Stat(installedAt); err != nil {
 		t.Fatalf("wrapper not installed: %v", err)
 	}
@@ -329,7 +328,7 @@ func TestPackRm_ClearsHostWrappersWhenPackDirGone(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	runPackRm(&out, nil)
+	RunPackRm(&out, nil)
 	if _, err := os.Stat(installedAt); err == nil {
 		t.Error("pack rm must remove the host wrapper even with the pack dir gone (host-state attribution)")
 	}
@@ -353,7 +352,7 @@ func TestClearHostPackWrappers_ReturnsErrorAndKeepsAttribution(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	// Make hostPackBinDir a symlink.
+	// Make HostPackBinDir a symlink.
 	agent := workspace.HostAgentDir()
 	if err := os.MkdirAll(agent, 0o755); err != nil {
 		t.Fatal(err)
@@ -362,13 +361,13 @@ func TestClearHostPackWrappers_ReturnsErrorAndKeepsAttribution(t *testing.T) {
 	if err := os.MkdirAll(elsewhere, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(elsewhere, hostPackBinDir()); err != nil {
+	if err := os.Symlink(elsewhere, HostPackBinDir()); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if err := clearHostPackWrappers([]string{"platformio"}); err == nil {
 		t.Error("clearHostPackWrappers must RETURN an error for a symlinked dir, not discard it")
 	}
-	store := &packTrustStore{Installed: &packInstalledSet{Owner: "path:/x", Wrappers: []string{"platformio"}}}
+	store := &PackTrustStore{Installed: &packInstalledSet{Owner: "path:/x", Wrappers: []string{"platformio"}}}
 	var out bytes.Buffer
 	if err := clearInstalledHostPackWrappers(&out, store); err == nil {
 		t.Error("clearInstalledHostPackWrappers must surface the removal failure")
@@ -399,14 +398,14 @@ func TestRefreshHostPackWrappers_FailClosedNoPartialSet(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "bin", "fm"), binBytes, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustWritePack(t, root, packManifest{Name: "work", Schema: 1,
-		Proxies: []packProxy{{Name: "tool", Host: true}},
+	mustWritePack(t, root, Manifest{Name: "work", Schema: 1,
+		Proxies: []PackProxy{{Name: "tool", Host: true}},
 		Bins:    []packBin{{Name: "fm", Path: "bin/fm", SHA: sha256Hex(binBytes), Host: true}}})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK)
 	for _, n := range []string{"tool", "fm"} {
-		if _, err := os.Stat(filepath.Join(hostPackBinDir(), n)); err != nil {
+		if _, err := os.Stat(filepath.Join(HostPackBinDir(), n)); err != nil {
 			t.Fatalf("accepted item %q not installed: %v\n%s", n, err, out.String())
 		}
 	}
@@ -420,12 +419,12 @@ func TestRefreshHostPackWrappers_FailClosedNoPartialSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if _, rerr := refreshHostPackWrappers(&out, cfg, true); rerr == nil {
+	if _, rerr := RefreshHostPackWrappers(&out, cfg, true); rerr == nil {
 		t.Fatal("strict refresh must fail closed on ANY bad accepted item (host launch refuses)")
 	}
 	// The previously verified set is untouched — no partial swap.
 	for _, n := range []string{"tool", "fm"} {
-		if _, err := os.Stat(filepath.Join(hostPackBinDir(), n)); err != nil {
+		if _, err := os.Stat(filepath.Join(HostPackBinDir(), n)); err != nil {
 			t.Errorf("the previous verified set must stay intact on failure; %q missing: %v", n, err)
 		}
 	}
@@ -441,13 +440,13 @@ func TestPackTrustStore_IdentityAndProvenance(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	root := filepath.Join(dir, "clone")
-	mustWritePack(t, root, packManifest{Name: "c", Schema: 1})
+	mustWritePack(t, root, Manifest{Name: "c", Schema: 1})
 
 	store, err := loadPackTrustStore()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := store.trustKey(root); got != "path:"+canonicalizePackRoot(root) {
+	if got := store.TrustKey(root); got != "path:"+CanonicalizePackRoot(root) {
 		t.Errorf("un-adopted pack must key by canonical path, got %q", got)
 	}
 	if err := recordPackAdoptionInTrustStore(root, "https://example.com/x.git", "abc123"); err != nil {
@@ -457,7 +456,7 @@ func TestPackTrustStore_IdentityAndProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := store.trustKey(root); got != "remote:https://example.com/x.git" {
+	if got := store.TrustKey(root); got != "remote:https://example.com/x.git" {
 		t.Errorf("adopted pack must key by the commit-stable remote (round-3 #5), got %q", got)
 	}
 	// No pack.lock at all — host state alone marks it adopted.
@@ -471,7 +470,7 @@ func TestPackTrustStore_IdentityAndProvenance(t *testing.T) {
 	if err := os.Symlink(filepath.Join(dir, "victim"), packTrustStorePath()); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if err := (&packTrustStore{}).save(); err == nil || !strings.Contains(err.Error(), "symlink") {
+	if err := (&PackTrustStore{}).Save(); err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Errorf("save through a symlinked trust store must refuse, got %v", err)
 	}
 }
@@ -507,7 +506,7 @@ func TestSeedPackGitignore_RefusesSymlinkedGitignore(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedPackGitignore(root2)
-	if b, err := os.ReadFile(filepath.Join(root2, ".gitignore")); err != nil || !strings.Contains(string(b), packLockName) {
+	if b, err := os.ReadFile(filepath.Join(root2, ".gitignore")); err != nil || !strings.Contains(string(b), PackLockName) {
 		t.Errorf("a real .gitignore must be seeded, got %q (err=%v)", b, err)
 	}
 }

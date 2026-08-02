@@ -11,6 +11,7 @@ import (
 	"pix/host/launcher"
 	"pix/host/mcp"
 	"pix/host/secret"
+	"pix/host/workflow/pack"
 )
 
 // contains reports whether the ordered args slice contains the given
@@ -369,7 +370,7 @@ func TestAllPreloadedMCP(t *testing.T) {
 func TestApplyPackToLaunch_IntegrationMCPAlwaysPreloaded(t *testing.T) {
 	dir := t.TempDir()
 	root := filepath.Join(dir, "override-pack")
-	mustWritePack(t, root, packManifest{Name: "override", Schema: 1, Integrations: []packIntegration{
+	mustWritePack(t, root, pack.Manifest{Name: "override", Schema: 1, Integrations: []pack.Integration{
 		{Name: "Fastmail", MCP: "fastmail"},
 		{Name: "Notion", MCP: "notion"},
 		{Name: "NoServer"}, // no mcp -> ignored

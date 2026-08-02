@@ -22,7 +22,7 @@
 //	    pack.lock Remote cannot evict another pack's acceptance record.
 //	F — the trust store is Lstat-refused on READ when symlinked (write
 //	    already was).
-package main
+package pack
 
 import (
 	"bytes"
@@ -43,33 +43,30 @@ import (
 // succeed, like fakeGitEnv).
 func localMCPEnv(names ...string) hostenv.Env {
 	list := strings.Join(names, "\n")
+	// HostBinary is wired here rather than by reassigning a package var: the env
+	// is the seam, and LocalMCPClassifier reads it off the env now.
 	return hostenv.Env{System: &systest.Fake{RunFn: func(name string, args ...string) (string, error) {
 		if len(args) >= 2 && args[0] == "mcp" && args[1] == "--list" {
 			return list, nil
 		}
 		return "", nil
-	}}}
+	}}, HostBinary: func() (string, error) { return "pix-host", nil }}
 }
 
 // pinLocalMCP pins the local-vs-gateway partition for the duration of a test:
-// hostBinaryResolver resolves, and packLocalMCP classifies exactly the given
+// launcher.FindHostBinary resolves, and PackLocalMCP classifies exactly the given
 // names as local. Restored on cleanup.
 func pinLocalMCP(t *testing.T, names ...string) {
 	t.Helper()
-	prevResolver := hostBinaryResolver
-	prevClassifier := packLocalMCP
-	hostBinaryResolver = func() (string, error) { return "pix-host", nil }
+	prevClassifier := PackLocalMCP
 	set := map[string]bool{}
 	for _, n := range names {
 		set[n] = true
 	}
-	packLocalMCP = func() func(string) bool {
+	PackLocalMCP = func() func(string) bool {
 		return func(n string) bool { return set[n] }
 	}
-	t.Cleanup(func() {
-		hostBinaryResolver = prevResolver
-		packLocalMCP = prevClassifier
-	})
+	t.Cleanup(func() { PackLocalMCP = prevClassifier })
 }
 
 // --- A: activation provenance in HOST state ----------------------------------
@@ -103,23 +100,23 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	userBundleID := knowledge.CanonicalizeKnowledgeBundle(userBundle)
 
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, packManifest{Name: "p", Schema: 1}) // Tier-0
+	mustWritePack(t, root, Manifest{Name: "p", Schema: 1}) // Tier-0
 	other := filepath.Join(dir, "other")
-	mustWritePack(t, other, packManifest{Name: "other", Schema: 1})
+	mustWritePack(t, other, Manifest{Name: "other", Schema: 1})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers) // activate (legit)
+	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK) // activate (legit)
 
 	// Simulate the pull-forgery: the ACTIVE pack's lock now claims the user's
 	// own entries as this pack's contribution.
 	forged := "mcp = [\"gog\"]\nknowledge = [\"" + userBundleID + "\"]\n"
-	if err := os.WriteFile(packLockPath(root), []byte(forged), 0o644); err != nil {
+	if err := os.WriteFile(PackLockPath(root), []byte(forged), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// Same-pack REACTIVATION (the previously-skipped scrub path).
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK)
 	cfg2, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -129,11 +126,11 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	}
 
 	// Forge again and SWITCH AWAY — the other trusted-lock read path.
-	if err := os.WriteFile(packLockPath(root), []byte(forged), 0o644); err != nil {
+	if err := os.WriteFile(PackLockPath(root), []byte(forged), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{other}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{other}, registerOK)
 	cfg3, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +151,7 @@ func TestCommitPackActivation_CfgSaveFailureRollsBackActivationRecord(t *testing
 	t.Setenv("PIX_CONFIG", cfgPath)
 
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, packManifest{Name: "p", Schema: 1})
+	mustWritePack(t, root, Manifest{Name: "p", Schema: 1})
 
 	// Prior on-disk state: activation record + lock attribute "old".
 	prior, err := loadPackTrustStore()
@@ -162,13 +159,13 @@ func TestCommitPackActivation_CfgSaveFailureRollsBackActivationRecord(t *testing
 		t.Fatal(err)
 	}
 	prior.setActivation(root, packLock{MCP: []string{"old"}})
-	if err := prior.save(); err != nil {
+	if err := prior.Save(); err != nil {
 		t.Fatal(err)
 	}
 	if err := writePackLock(root, packLock{MCP: []string{"old"}}); err != nil {
 		t.Fatal(err)
 	}
-	lockBefore, err := os.ReadFile(packLockPath(root))
+	lockBefore, err := os.ReadFile(PackLockPath(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +199,7 @@ func TestCommitPackActivation_CfgSaveFailureRollsBackActivationRecord(t *testing
 	if got := after.activationFor(root); len(got.MCP) != 1 || got.MCP[0] != "old" {
 		t.Errorf("on-disk activation record must be rolled back to the prior value, got %+v", got)
 	}
-	lockAfter, err := os.ReadFile(packLockPath(root))
+	lockAfter, err := os.ReadFile(PackLockPath(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +219,7 @@ func TestHostExecFingerprint_CanonicalEncodingResistsCollisions(t *testing.T) {
 	root := t.TempDir()
 	fpOf := func(b hostBoM) string {
 		t.Helper()
-		fp, _, err := computeHostExecFingerprint(root, b)
+		fp, _, err := ComputeHostExecFingerprint(root, b)
 		if err != nil {
 			t.Fatalf("fingerprint: %v", err)
 		}
@@ -258,24 +255,24 @@ func TestComputeHostBoM_InertBinNeverInSurface(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "bin", "w"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	inert := packManifest{Name: "w", Schema: 1,
-		Proxies: []packProxy{{Name: "w", Host: true}},
+	inert := Manifest{Name: "w", Schema: 1,
+		Proxies: []PackProxy{{Name: "w", Host: true}},
 		Bins:    []packBin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: false}}}
-	b := computeHostBoM(&packInfo{Root: root, Manifest: inert}, "", nil)
+	b := ComputeHostBoM(&Info{Root: root, Manifest: inert}, "", nil)
 	if len(b.Bins) != 0 {
 		t.Fatalf("a host=false [[bin]] must never enter the BoM, got %+v", b.Bins)
 	}
-	fpInert, _, err := computeHostExecFingerprint(root, b)
+	fpInert, _, err := ComputeHostExecFingerprint(root, b)
 	if err != nil {
 		t.Fatal(err)
 	}
 	flipped := inert
 	flipped.Bins = []packBin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: true}}
-	b2 := computeHostBoM(&packInfo{Root: root, Manifest: flipped}, "", nil)
+	b2 := ComputeHostBoM(&Info{Root: root, Manifest: flipped}, "", nil)
 	if len(b2.Bins) != 1 {
 		t.Fatalf("a host=true [[bin]] must enter the BoM, got %+v", b2.Bins)
 	}
-	fpFlipped, _, err := computeHostExecFingerprint(root, b2)
+	fpFlipped, _, err := ComputeHostExecFingerprint(root, b2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,9 +280,9 @@ func TestComputeHostBoM_InertBinNeverInSurface(t *testing.T) {
 		t.Error("SILENT INSTALL: flipping [[bin]] host=false→true must change the fingerprint (re-gate)")
 	}
 	// A pack whose ONLY facet is an inert bin is Tier-0 outright.
-	onlyInert := packManifest{Name: "w", Schema: 1,
+	onlyInert := Manifest{Name: "w", Schema: 1,
 		Bins: []packBin{{Name: "fm", Path: "bin/fm", SHA: "aaaa", Host: false}}}
-	if computeHostBoM(&packInfo{Root: root, Manifest: onlyInert}, "", nil).tier1() {
+	if ComputeHostBoM(&Info{Root: root, Manifest: onlyInert}, "", nil).Tier1() {
 		t.Error("an inert (host=false) [[bin]] alone must not raise the tier")
 	}
 }
@@ -302,24 +299,24 @@ func TestComputeHostBoM_InertBinNeverInSurface(t *testing.T) {
 // still lands in cfg.MCP and attaches via --mcp, so an already-registered
 // local server would otherwise run its host command ungated.
 func TestComputeHostBoM_RemoteMCPReferenceRequiresConsent(t *testing.T) {
-	p := &packInfo{Root: "/p", Manifest: packManifest{
+	p := &Info{Root: "/p", Manifest: Manifest{
 		Name:         "personal",
-		Integrations: []packIntegration{{Name: "Docs", MCP: "docs", URL: "https://docs.example.test/mcp"}},
+		Integrations: []Integration{{Name: "Docs", MCP: "docs", URL: "https://docs.example.test/mcp"}},
 	}}
 	resolver := func() (string, error) { return "pix-host", nil }
-	remoteOnly := localMCPClassifier(localMCPEnv("fastmail"), resolver)
-	if b := computeHostBoM(p, "", remoteOnly); !b.tier1() || len(b.RemoteMCP) != 1 || len(b.MCP) != 0 {
+	remoteOnly := LocalMCPClassifier(localMCPEnv("fastmail"), resolver)
+	if b := ComputeHostBoM(p, "", remoteOnly); !b.Tier1() || len(b.RemoteMCP) != 1 || len(b.MCP) != 0 {
 		t.Errorf("an explicit remote endpoint must require consent, got %+v", b)
 	}
-	localRef := &packInfo{Root: "/p", Manifest: packManifest{
-		Name: "personal", Integrations: []packIntegration{{Name: "Notion", MCP: "notion"}},
+	localRef := &Info{Root: "/p", Manifest: Manifest{
+		Name: "personal", Integrations: []Integration{{Name: "Notion", MCP: "notion"}},
 	}}
-	unknown := localMCPClassifier(hostenv.Env{System: &systest.Fake{}}, nil)
-	if b := computeHostBoM(localRef, "", unknown); !b.tier1() {
+	unknown := LocalMCPClassifier(hostenv.Env{System: &systest.Fake{}}, nil)
+	if b := ComputeHostBoM(localRef, "", unknown); !b.Tier1() {
 		t.Errorf("an unknown local partition must FAIL CLOSED as host-exec (round-3 #3), got %+v", b)
 	}
-	local := localMCPClassifier(localMCPEnv("notion"), resolver)
-	if b := computeHostBoM(localRef, "", local); !b.tier1() || len(b.MCP) != 1 {
+	local := LocalMCPClassifier(localMCPEnv("notion"), resolver)
+	if b := ComputeHostBoM(localRef, "", local); !b.Tier1() || len(b.MCP) != 1 {
 		t.Errorf("a LOCAL stdio MCP command must be Tier-1, got %+v", b)
 	} else if got := strings.Join(b.MCP[0].Argv, " "); got != "pix-host mcp notion" {
 		t.Errorf("local argv = %q", got)
@@ -335,11 +332,11 @@ func TestPackUse_RemoteMCPReferenceRequiresYes(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	pinLocalMCP(t, "fastmail") // notion is NOT local
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, packManifest{Name: "personal", Schema: 1,
-		Integrations: []packIntegration{{Name: "Docs", MCP: "docs", URL: "https://docs.example.test/mcp"}}})
+	mustWritePack(t, root, Manifest{Name: "personal", Schema: 1,
+		Integrations: []Integration{{Name: "Docs", MCP: "docs", URL: "https://docs.example.test/mcp"}}})
 
 	var out bytes.Buffer
-	runPackUse(localMCPEnv("fastmail"), &out, []string{"--yes", root}, registerServers)
+	RunPackUse(localMCPEnv("fastmail"), &out, []string{"--yes", root}, registerOK)
 	if !strings.Contains(out.String(), "Remote MCP:") {
 		t.Errorf("the consent screen must disclose the endpoint, got:\n%s", out.String())
 	}
@@ -362,11 +359,11 @@ func TestPackUse_GogReferenceStaysTier0(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	pinLocalMCP(t) // empty local set — gog is never listed
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, packManifest{Name: "personal", Schema: 1,
-		Integrations: []packIntegration{{Name: "gog", MCP: config.GWServerName, Env: "GOG_KEYRING"}}})
+	mustWritePack(t, root, Manifest{Name: "personal", Schema: 1,
+		Integrations: []Integration{{Name: "gog", MCP: config.GWServerName, Env: "GOG_KEYRING"}}})
 
 	var out bytes.Buffer
-	runPackUse(localMCPEnv(), &out, []string{root}, registerServers) // no --yes, non-TTY
+	RunPackUse(localMCPEnv(), &out, []string{root}, registerOK) // no --yes, non-TTY
 	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("a gog reference must adopt silently (Tier-0), got:\n%s", out.String())
 	}
@@ -406,17 +403,17 @@ func TestRefreshHostPackWrappers_StoreWriteFailureFailsClosed(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(cfgDir, 0o755) })
 
 	var out bytes.Buffer
-	if _, err := refreshHostPackWrappers(&out, cfg, true); err == nil {
+	if _, err := RefreshHostPackWrappers(&out, cfg, true); err == nil {
 		t.Error("strict refresh must REFUSE when the attribution cannot be recorded")
 	}
-	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "platformio")); err == nil {
+	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "platformio")); err == nil {
 		t.Error("nothing may install when the attribution write failed (orphan wrapper)")
 	}
 	out.Reset()
-	if _, err := refreshHostPackWrappers(&out, cfg, false); err == nil {
+	if _, err := RefreshHostPackWrappers(&out, cfg, false); err == nil {
 		t.Error("lenient refresh must also surface the failed transaction as an error")
 	}
-	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "platformio")); err == nil {
+	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "platformio")); err == nil {
 		t.Error("nothing may install in lenient mode either")
 	}
 }
@@ -433,10 +430,10 @@ func TestRefreshHostPackWrappers_AbsentPackClearsAttributedWrappersOrRefuses(t *
 
 	seed := func() {
 		t.Helper()
-		if err := os.MkdirAll(hostPackBinDir(), 0o755); err != nil {
+		if err := os.MkdirAll(HostPackBinDir(), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(hostPackBinDir(), "stale"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		if err := os.WriteFile(filepath.Join(HostPackBinDir(), "stale"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		store, err := loadPackTrustStore()
@@ -444,7 +441,7 @@ func TestRefreshHostPackWrappers_AbsentPackClearsAttributedWrappersOrRefuses(t *
 			t.Fatal(err)
 		}
 		store.Installed = &packInstalledSet{Owner: "path:/gone", Wrappers: []string{"stale"}}
-		if err := store.save(); err != nil {
+		if err := store.Save(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -452,10 +449,10 @@ func TestRefreshHostPackWrappers_AbsentPackClearsAttributedWrappersOrRefuses(t *
 	// 1) Active pack dir deleted: degrade, but the stale wrapper is cleared.
 	seed()
 	var out bytes.Buffer
-	if p, err := refreshHostPackWrappers(&out, &config.Config{Pack: filepath.Join(dir, "gone")}, true); err != nil || p != nil {
+	if p, err := RefreshHostPackWrappers(&out, &config.Config{Pack: filepath.Join(dir, "gone")}, true); err != nil || p != nil {
 		t.Fatalf("absent pack must degrade after clearing, got (%v,%v)", p, err)
 	}
-	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "stale")); err == nil {
+	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "stale")); err == nil {
 		t.Error("an absent active pack must still clear its attributed wrappers")
 	}
 	if store, err := loadPackTrustStore(); err != nil || store.Installed != nil {
@@ -465,22 +462,22 @@ func TestRefreshHostPackWrappers_AbsentPackClearsAttributedWrappersOrRefuses(t *
 	// 2) No active pack at all: same clearing contract.
 	seed()
 	out.Reset()
-	if _, err := refreshHostPackWrappers(&out, &config.Config{}, true); err != nil {
+	if _, err := RefreshHostPackWrappers(&out, &config.Config{}, true); err != nil {
 		t.Fatalf("no active pack must clear cleanly: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "stale")); err == nil {
+	if _, err := os.Stat(filepath.Join(HostPackBinDir(), "stale")); err == nil {
 		t.Error("detached state must still clear attributed wrappers")
 	}
 
 	// 3) The clear FAILS (symlinked bin dir): a strict launch must refuse.
-	if err := os.RemoveAll(hostPackBinDir()); err != nil {
+	if err := os.RemoveAll(HostPackBinDir()); err != nil {
 		t.Fatal(err)
 	}
 	elsewhere := filepath.Join(dir, "elsewhere")
 	if err := os.MkdirAll(elsewhere, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(elsewhere, hostPackBinDir()); err != nil {
+	if err := os.Symlink(elsewhere, HostPackBinDir()); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	store, err := loadPackTrustStore()
@@ -488,15 +485,15 @@ func TestRefreshHostPackWrappers_AbsentPackClearsAttributedWrappersOrRefuses(t *
 		t.Fatal(err)
 	}
 	store.Installed = &packInstalledSet{Owner: "path:/gone", Wrappers: []string{"stale"}}
-	if err := store.save(); err != nil {
+	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if _, rerr := refreshHostPackWrappers(&out, &config.Config{}, true); rerr == nil {
+	if _, rerr := RefreshHostPackWrappers(&out, &config.Config{}, true); rerr == nil {
 		t.Error("a strict refresh must REFUSE when stale attributed wrappers cannot be cleared")
 	}
 	out.Reset()
-	if _, rerr := refreshHostPackWrappers(&out, &config.Config{Pack: filepath.Join(dir, "gone")}, true); rerr == nil {
+	if _, rerr := RefreshHostPackWrappers(&out, &config.Config{Pack: filepath.Join(dir, "gone")}, true); rerr == nil {
 		t.Error("an absent pack whose stale wrappers cannot be cleared must refuse a strict refresh")
 	}
 }
@@ -520,23 +517,23 @@ func TestPackUse_ForgedRemoteCannotEvictOtherPacksAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"}, registerOK)
 	store, err := loadPackTrustStore()
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyB := store.trustKey(rootB)
+	keyB := store.TrustKey(rootB)
 	if _, ok := store.acceptedFingerprint(keyB); !ok {
 		t.Fatalf("setup: B's acceptance not recorded (store=%+v)", store)
 	}
 
 	// Evil local pack E ships a forged pack.lock claiming B's Remote.
 	rootE := phase2HostPack(t, dir, "e", "e-tool")
-	if err := os.WriteFile(packLockPath(rootE), []byte("remote = \""+legitRemote+"\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(PackLockPath(rootE), []byte("remote = \""+legitRemote+"\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{rootE, "--yes"}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{rootE, "--yes"}, registerOK)
 
 	after, err := loadPackTrustStore()
 	if err != nil {
@@ -545,7 +542,7 @@ func TestPackUse_ForgedRemoteCannotEvictOtherPacksAcceptance(t *testing.T) {
 	if _, ok := after.acceptedFingerprint(keyB); !ok {
 		t.Errorf("a forged pack.lock Remote evicted the legit pack's acceptance (store=%+v)", after)
 	}
-	recE, ok := after.Accepted[after.trustKey(rootE)]
+	recE, ok := after.Accepted[after.TrustKey(rootE)]
 	if !ok {
 		t.Fatalf("E's own acceptance should exist (store=%+v)", after)
 	}

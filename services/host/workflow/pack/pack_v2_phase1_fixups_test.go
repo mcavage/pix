@@ -11,7 +11,7 @@
 //	        parse error): the launch is refused instead of silently creating a
 //	        sandbox missing the pack's declared context. Only a genuinely
 //	        ABSENT pack (deleted dir / no pack.toml) warns and proceeds.
-package main
+package pack
 
 import (
 	"bytes"
@@ -47,7 +47,7 @@ func TestCommitPackActivation_SaveFailureRestoresPriorLock(t *testing.T) {
 	t.Setenv("PIX_CONFIG", cfgPath)
 
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, packManifest{Name: "work", Schema: 1})
+	mustWritePack(t, root, Manifest{Name: "work", Schema: 1})
 
 	// Prior activation state: the config carries the pack's MCP contribution
 	// and the lock attributes it.
@@ -65,10 +65,10 @@ func TestCommitPackActivation_SaveFailureRestoresPriorLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	priorStore.setActivation(root, packLock{MCP: []string{"fastmail"}})
-	if err := priorStore.save(); err != nil {
+	if err := priorStore.Save(); err != nil {
 		t.Fatal(err)
 	}
-	lockBefore, err := os.ReadFile(packLockPath(root))
+	lockBefore, err := os.ReadFile(PackLockPath(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestCommitPackActivation_SaveFailureRestoresPriorLock(t *testing.T) {
 	}
 
 	// (1) The prior lock is back, byte-for-byte — NOT the new empty lock.
-	lockAfter, err := os.ReadFile(packLockPath(root))
+	lockAfter, err := os.ReadFile(PackLockPath(root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestCommitPackActivation_SaveFailureRestoresPriorLock(t *testing.T) {
 	// intact activation record still attributes fastmail, so nothing is
 	// orphaned.
 	var out bytes.Buffer
-	runPackRm(&out, nil)
+	RunPackRm(&out, nil)
 	saved, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +166,7 @@ func TestCommitPackActivation_SaveFailureRemovesFirstLock(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(cfgDir, "config.toml"))
 
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, packManifest{Name: "work", Schema: 1})
+	mustWritePack(t, root, Manifest{Name: "work", Schema: 1})
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -175,86 +175,12 @@ func TestCommitPackActivation_SaveFailureRemovesFirstLock(t *testing.T) {
 	cfg.AddMCP("fastmail")
 	cfg.Pack = root
 
-	if cerr := commitPackActivation(cfg, &packTrustStore{}, root, packLock{MCP: []string{"fastmail"}}); cerr == nil {
+	if cerr := commitPackActivation(cfg, &PackTrustStore{}, root, packLock{MCP: []string{"fastmail"}}); cerr == nil {
 		t.Fatal("expected commitPackActivation to fail when cfg.Save cannot write")
 	}
-	if _, serr := os.Stat(packLockPath(root)); !os.IsNotExist(serr) {
+	if _, serr := os.Stat(PackLockPath(root)); !os.IsNotExist(serr) {
 		t.Errorf("FIX A: with no prior lock, a Save failure must remove the new lock (stat err=%v)", serr)
 	}
 }
 
 // --- FIX B: broken active pack fails the launch closed -------------------------
-
-// TestApplyPackToLaunch_BrokenActivePackFailsClosed: an ACTIVE pack (cfg.Pack,
-// no explicit --pack) whose bin/ contains a symlink is rejected by loadPack —
-// the launch must REFUSE instead of proceeding without the pack's declared
-// wrappers. A cfg.Pack pointing at a deleted dir (or a dir with no pack.toml)
-// is "genuinely absent" and proceeds. An explicit --pack keeps failing closed
-// in every error class.
-func TestApplyPackToLaunch_BrokenActivePackFailsClosed(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// 1) Tampered active pack: a symlink injected into bin/ -> launch refused.
-	tampered := filepath.Join(dir, "tampered")
-	mustWritePack(t, tampered, packManifest{Name: "t", Schema: 1, Proxies: []packProxy{{Name: "warehouse"}}})
-	if err := os.MkdirAll(filepath.Join(tampered, "bin"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	evil := filepath.Join(dir, "evil")
-	if err := os.WriteFile(evil, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(evil, filepath.Join(tampered, "bin", "warehouse")); err != nil {
-		t.Fatal(err)
-	}
-	cfg.Pack = tampered
-	o := runOpts{}
-	_, lerr := applyPackToLaunch(cfg, &o, fakeGitEnv(nil))
-	if lerr == nil {
-		t.Fatal("FIX B: a broken/tampered ACTIVE pack must refuse the launch, not proceed without its context")
-	}
-	if !strings.Contains(lerr.Error(), "refusing to launch") {
-		t.Errorf("expected a refusal message, got: %v", lerr)
-	}
-	if len(o.Skills) != 0 || len(o.PackKits) != 0 {
-		t.Errorf("nothing may be mounted on a refused launch, got skills=%v kits=%v", o.Skills, o.PackKits)
-	}
-
-	// 2) Genuinely absent active pack (deleted dir): warn + proceed.
-	cfg.Pack = filepath.Join(dir, "gone")
-	o = runOpts{}
-	if _, lerr := applyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr != nil {
-		t.Fatalf("a deleted active-pack dir must degrade to no-pack, got: %v", lerr)
-	}
-	if len(o.Skills) != 0 || len(o.PackKits) != 0 {
-		t.Errorf("an absent pack must mount nothing, got skills=%v kits=%v", o.Skills, o.PackKits)
-	}
-
-	// 2b) Dir exists but has no pack.toml: same "absent" class, proceeds.
-	notAPack := filepath.Join(dir, "not-a-pack")
-	if err := os.MkdirAll(notAPack, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cfg.Pack = notAPack
-	o = runOpts{}
-	if _, lerr := applyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr != nil {
-		t.Fatalf("a dir without pack.toml must degrade to no-pack, got: %v", lerr)
-	}
-
-	// 3) Explicit --pack keeps failing closed, even for the absent class.
-	cfg.Pack = ""
-	o = runOpts{Pack: filepath.Join(dir, "gone")}
-	if _, lerr := applyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr == nil {
-		t.Fatal("an explicit --pack that does not load must stay fatal")
-	}
-	o = runOpts{Pack: tampered}
-	if _, lerr := applyPackToLaunch(cfg, &o, fakeGitEnv(nil)); lerr == nil {
-		t.Fatal("an explicit --pack with a tampered bin/ must stay fatal")
-	}
-}

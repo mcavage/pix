@@ -21,7 +21,7 @@
 //	     byte-identical host-exec fingerprint never re-prompts, while any
 //	     fingerprint change still re-gates. Legacy commit-suffixed keys are
 //	     honored via a one-time fallback.
-package main
+package pack
 
 import (
 	"bytes"
@@ -55,9 +55,9 @@ func TestMutatePackTrustStore_InterleavedMutationsLoseNothing(t *testing.T) {
 	root := filepath.Join(dir, "pack")
 
 	// Writer 1 (a `pack use` commit): records an activation + an acceptance.
-	if _, err := mutatePackTrustStore(func(s *packTrustStore) error {
+	if _, err := mutatePackTrustStore(func(s *PackTrustStore) error {
 		s.setActivation(root, packLock{MCP: []string{"a-mcp"}})
-		s.recordAcceptance("path:"+root, packTrustRecord{Path: root, Fingerprint: "fp1"})
+		s.RecordAcceptance("path:"+root, PackTrustRecord{Path: root, Fingerprint: "fp1"})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -65,7 +65,7 @@ func TestMutatePackTrustStore_InterleavedMutationsLoseNothing(t *testing.T) {
 	// Writer 2 (a concurrent host launch): its logical view predates writer 1,
 	// but the helper re-loads fresh, so its Installed write lands BESIDE the
 	// activation instead of over it.
-	if _, err := mutatePackTrustStore(func(s *packTrustStore) error {
+	if _, err := mutatePackTrustStore(func(s *PackTrustStore) error {
 		s.Installed = &packInstalledSet{Owner: "path:" + root, Wrappers: []string{"tool"}}
 		return nil
 	}); err != nil {
@@ -103,8 +103,8 @@ func TestMutatePackTrustStore_ConcurrentWritersSerialized(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			key := fmt.Sprintf("path:/pack-%d", i)
-			if _, err := mutatePackTrustStore(func(s *packTrustStore) error {
-				s.recordAcceptance(key, packTrustRecord{Path: fmt.Sprintf("/pack-%d", i), Fingerprint: "fp"})
+			if _, err := mutatePackTrustStore(func(s *PackTrustStore) error {
+				s.RecordAcceptance(key, PackTrustRecord{Path: fmt.Sprintf("/pack-%d", i), Fingerprint: "fp"})
 				return nil
 			}); err != nil {
 				t.Errorf("writer %d: %v", i, err)
@@ -137,10 +137,10 @@ func TestPackUse_MigratesPhase1LocalActivation(t *testing.T) {
 	pinLocalMCP(t) // nothing is local: a-mcp stays a remote (Tier-0) reference
 
 	rootA := filepath.Join(dir, "a")
-	mustWritePack(t, rootA, packManifest{Name: "a", Schema: 1,
-		Integrations: []packIntegration{{Name: "A", MCP: "a-mcp"}}})
+	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1,
+		Integrations: []Integration{{Name: "A", MCP: "a-mcp"}}})
 	rootB := filepath.Join(dir, "b")
-	mustWritePack(t, rootB, packManifest{Name: "b", Schema: 1})
+	mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
 
 	// Phase-1 residue: config carries the pack's MCP AND the user's own; the
 	// attribution lives ONLY in pack.lock; there is NO trust store at all.
@@ -162,7 +162,7 @@ func TestPackUse_MigratesPhase1LocalActivation(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerOK)
 	cfg2, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -186,9 +186,9 @@ func TestPackUse_AdoptedPackLockNeverMigrated(t *testing.T) {
 	pinLocalMCP(t)
 
 	rootA := filepath.Join(dir, "a")
-	mustWritePack(t, rootA, packManifest{Name: "a", Schema: 1})
+	mustWritePack(t, rootA, Manifest{Name: "a", Schema: 1})
 	rootB := filepath.Join(dir, "b")
-	mustWritePack(t, rootB, packManifest{Name: "b", Schema: 1})
+	mustWritePack(t, rootB, Manifest{Name: "b", Schema: 1})
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -204,13 +204,13 @@ func TestPackUse_AdoptedPackLockNeverMigrated(t *testing.T) {
 	if err := recordPackAdoptionInTrustStore(rootA, "https://example.com/a.git", "c1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(packLockPath(rootA),
+	if err := os.WriteFile(PackLockPath(rootA),
 		[]byte("mcp = [\"usermcp\"]\nremote = \"https://example.com/a.git\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerServers)
+	RunPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerOK)
 	cfg2, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -228,7 +228,7 @@ func TestPackUse_AdoptedPackLockNeverMigrated(t *testing.T) {
 // without --yes. gog stays reference-only Tier-0.
 func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 	// No probe available at all.
-	unknown := localMCPClassifier(hostenv.Env{System: &systest.Fake{}}, nil)
+	unknown := LocalMCPClassifier(hostenv.Env{System: &systest.Fake{}}, nil)
 	if !unknown("fastmail") {
 		t.Error("unknown classification must treat a non-gog name as host-exec (fail closed)")
 	}
@@ -238,15 +238,15 @@ func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 	// Probe resolves but errors.
 	failEnv := hostenv.Env{System: &systest.Fake{RunFn: func(string, ...string) (string, error) { return "", fmt.Errorf("probe failed") }}}
 	resolver := func() (string, error) { return "pix-host", nil }
-	unknown2 := localMCPClassifier(failEnv, resolver)
+	unknown2 := LocalMCPClassifier(failEnv, resolver)
 	if !unknown2("notion") {
 		t.Error("a failing `mcp --list` probe must classify a non-gog name as host-exec")
 	}
 
-	p := &packInfo{Root: "/p", Manifest: packManifest{Name: "p",
-		Integrations: []packIntegration{{Name: "N", MCP: "notion"}}}}
-	b := computeHostBoM(p, "", unknown2)
-	if !b.tier1() {
+	p := &Info{Root: "/p", Manifest: Manifest{Name: "p",
+		Integrations: []Integration{{Name: "N", MCP: "notion"}}}}
+	b := ComputeHostBoM(p, "", unknown2)
+	if !b.Tier1() {
 		t.Fatalf("a pack whose MCP cannot be classified must be Tier-1 (gated), got %+v", b)
 	}
 	// The gate itself fails closed non-interactively without --yes.
@@ -254,13 +254,13 @@ func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 		t.Error("non-TTY without --yes must fail closed for an unclassifiable MCP")
 	}
 	// A nil classifier (no partition available) fails closed the same way.
-	if bn := computeHostBoM(p, "", nil); !bn.tier1() {
+	if bn := ComputeHostBoM(p, "", nil); !bn.Tier1() {
 		t.Errorf("a nil classifier must fail closed too, got %+v", bn)
 	}
 	// gog-only packs stay Tier-0 under an unknown partition.
-	pg := &packInfo{Root: "/p", Manifest: packManifest{Name: "g",
-		Integrations: []packIntegration{{Name: "gog", MCP: config.GWServerName}}}}
-	if computeHostBoM(pg, "", unknown2).tier1() {
+	pg := &Info{Root: "/p", Manifest: Manifest{Name: "g",
+		Integrations: []Integration{{Name: "gog", MCP: config.GWServerName}}}}
+	if ComputeHostBoM(pg, "", unknown2).Tier1() {
 		t.Error("a gog-only reference must stay Tier-0 even when the partition is unknown")
 	}
 }
@@ -273,7 +273,7 @@ func TestLocalMCPClassifier_UnknownFailsClosed(t *testing.T) {
 // Subprocess: the failure path os.Exits.
 func TestPackRm_ClearFailureExitsNonZero(t *testing.T) {
 	if os.Getenv("PIX_TEST_TRUST") == "rm-clear-fail" {
-		runPackRm(os.Stdout, nil)
+		RunPackRm(os.Stdout, nil)
 		return // exit 0 == the clear failure was swallowed as success
 	}
 	dir := t.TempDir()
@@ -283,7 +283,7 @@ func TestPackRm_ClearFailureExitsNonZero(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", stateDir)
 
 	root := filepath.Join(dir, "pack")
-	mustWritePack(t, root, packManifest{Name: "p", Schema: 1})
+	mustWritePack(t, root, Manifest{Name: "p", Schema: 1})
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -292,13 +292,13 @@ func TestPackRm_ClearFailureExitsNonZero(t *testing.T) {
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mutatePackTrustStore(func(s *packTrustStore) error {
+	if _, err := mutatePackTrustStore(func(s *PackTrustStore) error {
 		s.Installed = &packInstalledSet{Owner: "path:" + root, Wrappers: []string{"tool"}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// Make the clear FAIL: hostPackBinDir is a symlink (never traversed).
+	// Make the clear FAIL: HostPackBinDir is a symlink (never traversed).
 	if err := os.MkdirAll(workspace.HostAgentDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestPackRm_ClearFailureExitsNonZero(t *testing.T) {
 	if err := os.MkdirAll(elsewhere, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(elsewhere, hostPackBinDir()); err != nil {
+	if err := os.Symlink(elsewhere, HostPackBinDir()); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
@@ -348,7 +348,7 @@ func TestRefreshHostPackWrappers_LenientClearFailureSurfaced(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	if _, err := mutatePackTrustStore(func(s *packTrustStore) error {
+	if _, err := mutatePackTrustStore(func(s *PackTrustStore) error {
 		s.Installed = &packInstalledSet{Owner: "path:/gone", Wrappers: []string{"stale"}}
 		return nil
 	}); err != nil {
@@ -361,11 +361,11 @@ func TestRefreshHostPackWrappers_LenientClearFailureSurfaced(t *testing.T) {
 	if err := os.MkdirAll(elsewhere, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(elsewhere, hostPackBinDir()); err != nil {
+	if err := os.Symlink(elsewhere, HostPackBinDir()); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	var out bytes.Buffer
-	if _, err := refreshHostPackWrappers(&out, &config.Config{}, false); err == nil {
+	if _, err := RefreshHostPackWrappers(&out, &config.Config{}, false); err == nil {
 		t.Error("the lenient refresh must surface a clear failure, not report success")
 	}
 }
@@ -382,7 +382,7 @@ func TestTrustKey_StableAcrossCommits(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	root := filepath.Join(dir, "clone")
-	mustWritePack(t, root, packManifest{Name: "c", Schema: 1})
+	mustWritePack(t, root, Manifest{Name: "c", Schema: 1})
 	const url = "https://example.com/x.git"
 
 	if err := recordPackAdoptionInTrustStore(root, url, "c1"); err != nil {
@@ -392,12 +392,12 @@ func TestTrustKey_StableAcrossCommits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := store.trustKey(root)
+	key := store.TrustKey(root)
 	if strings.Contains(key, "#") {
 		t.Fatalf("the trust key must not embed the commit (round-3 #5), got %q", key)
 	}
-	store.recordAcceptance(key, packTrustRecord{Path: canonicalizePackRoot(root), Remote: url, Commit: "c1", Fingerprint: "fp1"})
-	if err := store.save(); err != nil {
+	store.RecordAcceptance(key, PackTrustRecord{Path: CanonicalizePackRoot(root), Remote: url, Commit: "c1", Fingerprint: "fp1"})
+	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -409,10 +409,10 @@ func TestTrustKey_StableAcrossCommits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := store2.trustKey(root); got != key {
+	if got := store2.TrustKey(root); got != key {
 		t.Errorf("a commit bump moved the identity (%q -> %q); acceptance would spuriously re-gate", key, got)
 	}
-	got, ok := store2.acceptedFingerprint(store2.trustKey(root))
+	got, ok := store2.acceptedFingerprint(store2.TrustKey(root))
 	if !ok || got != "fp1" {
 		t.Errorf("same fingerprint across commits must stay accepted (no re-prompt), got (%q,%v)", got, ok)
 	}
@@ -421,7 +421,7 @@ func TestTrustKey_StableAcrossCommits(t *testing.T) {
 	}
 
 	// Legacy commit-suffixed key (pre-round-3 store on disk) still honored.
-	legacy := &packTrustStore{Accepted: map[string]packTrustRecord{
+	legacy := &PackTrustStore{Accepted: map[string]PackTrustRecord{
 		"remote:https://l.example/y.git#c9": {Remote: "https://l.example/y.git", Commit: "c9", Fingerprint: "fpL"},
 	}}
 	if fp, ok := legacy.acceptedFingerprint("remote:https://l.example/y.git"); !ok || fp != "fpL" {
@@ -445,14 +445,14 @@ func TestPackUse_NewCommitSameFingerprintDoesNotRegate(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers) // accept once
+	RunPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerOK) // accept once
 
 	// A README-only pull: new commit, identical host-exec surface.
 	if err := recordPackAdoptionInTrustStore(root, url, "c2"); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers) // no --yes, non-TTY
+	RunPackUse(fakeGitEnv(nil), &out, []string{root}, registerOK) // no --yes, non-TTY
 	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("a commit bump with an unchanged fingerprint must not re-prompt:\n%s", out.String())
 	}
@@ -467,7 +467,7 @@ func TestPackUse_NewCommitSameFingerprintDoesNotRegate(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if _, rerr := refreshHostPackWrappers(&out, cfg, true); rerr == nil {
+	if _, rerr := RefreshHostPackWrappers(&out, cfg, true); rerr == nil {
 		t.Error("a changed host-exec fingerprint must still fail closed (re-gate/refuse)")
 	}
 }

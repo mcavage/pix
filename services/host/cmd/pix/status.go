@@ -11,6 +11,7 @@ import (
 	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/sys"
+	"pix/host/workflow/pack"
 	"pix/host/workflow/upgrade"
 	"slices"
 	"strings"
@@ -171,7 +172,7 @@ func gatherStatus(cfg *config.Config, profile string, env hostenv.Env) statusRep
 	// before a sandbox's own receipt extends the latter (mcp.McpConfiguredUniverse
 	// below). Without a sandbox receipt, status/doctor stay current
 	// config/pack only.
-	currentIntent := mcp.McpCurrentIntentNames(cfg.MCP, activeContainerMCP(cfg), nil)
+	currentIntent := mcp.McpCurrentIntentNames(cfg.MCP, pack.ActiveContainerMCP(cfg), nil)
 	st := statusReport{
 		Version:         version,
 		ConfigPath:      config.Path(),
@@ -638,7 +639,7 @@ func statusRegisterTodoFn(cfg *config.Config, env hostenv.Env) func(name string)
 	return func(name string) string {
 		if !resolved {
 			resolved = true
-			containers = activeContainerMCP(cfg)
+			containers = pack.ActiveContainerMCP(cfg)
 			localSet, localKnown = mcp.LocalMCPNames(env, env.HostBinary)
 		}
 		kind := classifyMCPServer(name, containers, localSet, localKnown)

@@ -1,13 +1,14 @@
 package main
 
 // These two moved BACK from the workspace package. They exercise pack and run
-// behaviour (writeMemoryScope, wireKnowledgeScope) that happens to write a
+// behaviour (pack.WriteMemoryScope, wireKnowledgeScope) that happens to write a
 // workspace state file — the subject is the caller, not the writer, so they
 // belong with the caller.
 
 import (
 	"os"
 	"path/filepath"
+	"pix/host/workflow/pack"
 	"runtime"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ func fixedClock(ts string) func() time.Time {
 	}
 }
 
-// End-to-end through a real caller: writeMemoryScope must not truncate the
+// End-to-end through a real caller: pack.WriteMemoryScope must not truncate the
 // target of a symlinked .pix/profile (the launcher-write clobber).
 func TestWriteMemoryScopeSymlinkSafe(t *testing.T) {
 	ws := t.TempDir()
@@ -39,10 +40,10 @@ func TestWriteMemoryScopeSymlinkSafe(t *testing.T) {
 	requireSymlink(t, target, filepath.Join(stateDir, "profile"))
 
 	// Needs an EXPLICIT memory_scope to write at all (a bare name no longer scopes).
-	writeMemoryScope(ws, &packInfo{Manifest: packManifest{Name: "acme", MemoryScope: "acme"}})
+	pack.WriteMemoryScope(ws, &pack.Info{Manifest: pack.Manifest{Name: "acme", MemoryScope: "acme"}})
 
 	if b, err := os.ReadFile(target); err != nil || string(b) != secret {
-		t.Fatalf("writeMemoryScope followed the symlink: target = %q (err %v), want %q", b, err, secret)
+		t.Fatalf("pack.WriteMemoryScope followed the symlink: target = %q (err %v), want %q", b, err, secret)
 	}
 	if b, _ := os.ReadFile(filepath.Join(stateDir, "profile")); string(b) != "acme\n" {
 		t.Fatalf("profile = %q, want %q", b, "acme\n")

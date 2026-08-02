@@ -1,4 +1,4 @@
-package main
+package pack
 
 import (
 	"os"
@@ -32,18 +32,18 @@ func TestPersistPackStackComposesAllFacetsAndKeepsPerPackOwnership(t *testing.T)
 	}
 
 	first, second := t.TempDir(), t.TempDir()
-	mustWritePack(t, first, packManifest{
+	mustWritePack(t, first, Manifest{
 		Name: "first", Schema: 1, GogAccount: "first@example.com", OllamaBridgeModel: "first-model",
-		Integrations: []packIntegration{{Name: "first", MCP: "first-mcp"}},
+		Integrations: []Integration{{Name: "first", MCP: "first-mcp"}},
 		Knowledge:    []packKnowledge{{Name: "first-ref", Source: firstKnowledge}},
 	})
-	mustWritePack(t, second, packManifest{
+	mustWritePack(t, second, Manifest{
 		Name: "second", Schema: 1, GogAccount: "second@example.com",
-		Integrations: []packIntegration{{Name: "second", MCP: "second-mcp"}},
+		Integrations: []Integration{{Name: "second", MCP: "second-mcp"}},
 		Knowledge:    []packKnowledge{{Name: "second-ref", Source: secondKnowledge}},
 	})
 
-	if err := persistPackStack([]string{first, second}); err != nil {
+	if err := PersistPackStack([]string{first, second}); err != nil {
 		t.Fatal(err)
 	}
 	assertComposed := func() {
@@ -87,7 +87,7 @@ func TestPersistPackStackComposesAllFacetsAndKeepsPerPackOwnership(t *testing.T)
 
 	// Re-composition must unwind the existing ledger first, not claim user
 	// entries or accumulate duplicate contributions.
-	if err := persistPackStack([]string{first, second}); err != nil {
+	if err := PersistPackStack([]string{first, second}); err != nil {
 		t.Fatal(err)
 	}
 	assertComposed()

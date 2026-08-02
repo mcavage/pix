@@ -32,6 +32,7 @@ import (
 	"pix/host/readiness"
 	"pix/host/secret"
 	"pix/host/sys"
+	"pix/host/workflow/pack"
 	"slices"
 	"strings"
 
@@ -206,14 +207,14 @@ func runSetupCmd(argv []string) {
 		if parsed.assumeYes {
 			useArgs = append([]string{"--yes"}, useArgs...)
 		}
-		runPackUse(env, os.Stdout, useArgs, registerServers)
+		pack.RunPackUse(env, os.Stdout, useArgs, registerServers)
 		if cfg, err := config.Load(); err == nil && strings.TrimSpace(cfg.Pack) != "" {
 			activatedPacks = append(activatedPacks, cfg.Pack)
 		}
 	}
-	activatedPacks = uniquePackRoots(activatedPacks)
+	activatedPacks = pack.UniquePackRoots(activatedPacks)
 	if len(activatedPacks) > 0 {
-		if err := persistPackStack(activatedPacks); err != nil {
+		if err := pack.PersistPackStack(activatedPacks); err != nil {
 			fmt.Fprintf(os.Stderr, "pix setup: composing packs: %v\n", err)
 			os.Exit(1)
 		}
@@ -223,13 +224,13 @@ func runSetupCmd(argv []string) {
 	// so placing hooks afterward made it impossible for a fresh pack to satisfy
 	// the very prerequisites the gate checked (and skipped integration
 	// entirely on the first missing remote registration).
-	setupRequests, err := planPackSetupRequests(activatedPacks, parsed.withSetup)
+	setupRequests, err := pack.PlanPackSetupRequests(activatedPacks, parsed.withSetup)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 		os.Exit(1)
 	}
 	for _, root := range activatedPacks {
-		if err := runPackSetup(env, os.Stdout, root, setupRequests[root], cli.IsTTY(os.Stdin) && !parsed.assumeYes); err != nil {
+		if err := pack.RunPackSetup(env, os.Stdout, root, setupRequests[root], cli.IsTTY(os.Stdin) && !parsed.assumeYes); err != nil {
 			fmt.Fprintf(os.Stderr, "pix setup: %v\n", err)
 			os.Exit(1)
 		}
@@ -732,7 +733,7 @@ func setupMutationSteps(env hostenv.Env, inv setupInventory, opts onboardOpts, i
 				return nil
 			}
 			var buf bytes.Buffer
-			if err := registerServers(cfg, env, &buf, nil, hostBinaryResolver, activeContainerMCP(cfg)); err != nil {
+			if err := registerServers(cfg, env, &buf, nil, hostBinaryResolver, pack.ActiveContainerMCP(cfg)); err != nil {
 				fmt.Fprintf(out, "  mcp register skipped: %v (finish later: pix mcp register)\n", err)
 				return err
 			}

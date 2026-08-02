@@ -1,4 +1,4 @@
-package main
+package pack
 
 import (
 	"bytes"
@@ -24,21 +24,21 @@ func writeSetupPack(t *testing.T, required bool) string {
 	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustWritePack(t, root, packManifest{Name: "work", Schema: 1, Setup: []packSetupStep{{
+	mustWritePack(t, root, Manifest{Name: "work", Schema: 1, Setup: []packSetupStep{{
 		ID: "account", Path: "setup/account", CheckArgs: []string{"check"},
 		ApplyArgs: []string{"apply"}, Required: required, Description: "Connect account",
 	}}})
-	p, err := loadPack(root)
+	p, err := LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fp, _, err := computeHostExecFingerprint(root, computeHostBoM(p, "", func(string) bool { return false }))
+	fp, _, err := ComputeHostExecFingerprint(root, ComputeHostBoM(p, "", func(string) bool { return false }))
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &packTrustStore{Version: 1}
-	store.recordAcceptance(store.trustKey(root), packTrustRecord{Path: canonicalizePackRoot(root), Fingerprint: fp})
-	if err := store.save(); err != nil {
+	store := &PackTrustStore{Version: 1}
+	store.RecordAcceptance(store.TrustKey(root), PackTrustRecord{Path: CanonicalizePackRoot(root), Fingerprint: fp})
+	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
 	return root
@@ -54,7 +54,7 @@ func TestPackSetupValidationRejectsUnsafeOrNonExecutableHooks(t *testing.T) {
 		{ID: "good", Path: "../escape"},
 		{ID: "good", Path: "hook"},
 	} {
-		m := packManifest{Name: "x", Schema: 1, Setup: []packSetupStep{step}}
+		m := Manifest{Name: "x", Schema: 1, Setup: []packSetupStep{step}}
 		if err := validatePackFacets(root, &m); err == nil {
 			t.Fatalf("expected validation failure for %+v", step)
 		}
@@ -70,7 +70,7 @@ func TestPackSetupValidationRejectsIntermediateSymlink(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "setup")); err != nil {
 		t.Fatal(err)
 	}
-	m := packManifest{Name: "x", Schema: 1, Setup: []packSetupStep{{ID: "bad", Path: "setup/hook"}}}
+	m := Manifest{Name: "x", Schema: 1, Setup: []packSetupStep{{ID: "bad", Path: "setup/hook"}}}
 	if err := validatePackFacets(root, &m); err == nil || !strings.Contains(err.Error(), "symlink component") {
 		t.Fatalf("got %v, want intermediate symlink rejection", err)
 	}
@@ -78,7 +78,7 @@ func TestPackSetupValidationRejectsIntermediateSymlink(t *testing.T) {
 
 func TestPackIntegrationSetupMustReferenceDeclaredHook(t *testing.T) {
 	root := t.TempDir()
-	m := packManifest{Name: "x", Schema: 1, Integrations: []packIntegration{{Name: "CRM", MCP: "crm", Setup: "missing"}}}
+	m := Manifest{Name: "x", Schema: 1, Integrations: []Integration{{Name: "CRM", MCP: "crm", Setup: "missing"}}}
 	if err := validatePackFacets(root, &m); err == nil || !strings.Contains(err.Error(), "unknown setup hook") {
 		t.Fatalf("got %v, want unknown setup hook failure", err)
 	}
@@ -86,19 +86,19 @@ func TestPackIntegrationSetupMustReferenceDeclaredHook(t *testing.T) {
 
 func TestPackSetupFingerprintChangesWithHookBytes(t *testing.T) {
 	root := writeSetupPack(t, true)
-	p, err := loadPack(root)
+	p, err := LoadPack(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bom := computeHostBoM(p, "", func(string) bool { return false })
-	first, _, err := computeHostExecFingerprint(root, bom)
+	bom := ComputeHostBoM(p, "", func(string) bool { return false })
+	first, _, err := ComputeHostExecFingerprint(root, bom)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "setup", "account"), []byte("#!/bin/sh\necho changed\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	second, _, err := computeHostExecFingerprint(root, bom)
+	second, _, err := ComputeHostExecFingerprint(root, bom)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestRunRequiredPackSetupProbesAppliesAndReprobes(t *testing.T) {
 		return nil
 	}}}
 	var out bytes.Buffer
-	if err := runPackSetup(env, &out, root, nil, true); err != nil {
+	if err := RunPackSetup(env, &out, root, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	if checks != 2 || applies != 1 {
@@ -155,7 +155,7 @@ func TestRunPackSetupRejectsHookChangedAfterAcceptance(t *testing.T) {
 		probes++
 		return "", false, nil
 	}, RunInteractiveFn: func(string, ...string) error { applies++; return nil }}}
-	err := runPackSetup(env, &bytes.Buffer{}, root, nil, true)
+	err := RunPackSetup(env, &bytes.Buffer{}, root, nil, true)
 	if err == nil || !strings.Contains(err.Error(), "changed since acceptance") {
 		t.Fatalf("mutated hook error = %v", err)
 	}
@@ -192,7 +192,7 @@ func TestRunPackSetupExecutesSnapshotWhenSourceChangesAfterCheck(t *testing.T) {
 		ready = true
 		return nil
 	}}}
-	if err := runPackSetup(env, &bytes.Buffer{}, root, nil, true); err != nil {
+	if err := RunPackSetup(env, &bytes.Buffer{}, root, nil, true); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -200,7 +200,7 @@ func TestRunPackSetupExecutesSnapshotWhenSourceChangesAfterCheck(t *testing.T) {
 func TestRunRequiredPackSetupSkipsOptionalSteps(t *testing.T) {
 	root := writeSetupPack(t, false)
 	// Assert on the HOOK specifically, not on "nothing may ever be probed".
-	// runPackSetup also asks the host which MCP servers it can serve locally,
+	// RunPackSetup also asks the host which MCP servers it can serve locally,
 	// which is an unrelated bounded probe. That probe used to be skipped only
 	// because this fixture left env.run nil — production behaviour keyed off a
 	// fixture gap, which is precisely what the seam refactor removes.
@@ -210,7 +210,7 @@ func TestRunRequiredPackSetupSkipsOptionalSteps(t *testing.T) {
 		}
 		return "", false, fmt.Errorf("nothing else is available in this fixture")
 	}, RunInteractiveFn: func(string, ...string) error { t.Fatal("optional hook was run"); return nil }}}
-	if err := runPackSetup(env, &bytes.Buffer{}, root, nil, true); err != nil {
+	if err := RunPackSetup(env, &bytes.Buffer{}, root, nil, true); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -224,13 +224,13 @@ func TestRunPackSetupRunsRequestedOptionalStep(t *testing.T) {
 		}
 		return "", false, fmt.Errorf("not ready")
 	}, RunInteractiveFn: func(string, ...string) error { ready = true; return nil }}}
-	if err := runPackSetup(env, &bytes.Buffer{}, root, []string{"account"}, true); err != nil {
+	if err := RunPackSetup(env, &bytes.Buffer{}, root, []string{"account"}, true); err != nil {
 		t.Fatal(err)
 	}
 	if !ready {
 		t.Fatal("requested optional setup hook was not run")
 	}
-	if err := runPackSetup(env, &bytes.Buffer{}, root, []string{"missing"}, true); err == nil {
+	if err := RunPackSetup(env, &bytes.Buffer{}, root, []string{"missing"}, true); err == nil {
 		t.Fatal("unknown requested setup id must fail")
 	}
 }
@@ -245,7 +245,7 @@ func TestRunPackSetupRejectsUnknownBeforeAnyHook(t *testing.T) {
 		probes++
 		return "", false, nil
 	}, RunInteractiveFn: func(string, ...string) error { applies++; return nil }}}
-	if err := runPackSetup(env, &bytes.Buffer{}, root, []string{"typo"}, true); err == nil {
+	if err := RunPackSetup(env, &bytes.Buffer{}, root, []string{"typo"}, true); err == nil {
 		t.Fatal("unknown hook should fail")
 	}
 	if probes != 0 || applies != 0 {
@@ -257,7 +257,7 @@ func TestRunPackSetupNonInteractiveNeverAppliesUnreadyHook(t *testing.T) {
 	root := writeSetupPack(t, true)
 	applies := 0
 	env := hostenv.Env{System: &systest.Fake{RunTimedFn: func(string, ...string) (string, bool, error) { return "", false, fmt.Errorf("not ready") }, RunInteractiveFn: func(string, ...string) error { applies++; return nil }}}
-	err := runPackSetup(env, &bytes.Buffer{}, root, nil, false)
+	err := RunPackSetup(env, &bytes.Buffer{}, root, nil, false)
 	if err == nil || !strings.Contains(err.Error(), "interactive authorization") {
 		t.Fatalf("error = %v", err)
 	}
@@ -275,10 +275,10 @@ func TestPlanPackSetupRequestsAssignsHookToOwningPack(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(second, "setup", "extra"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustWritePack(t, second, packManifest{Name: "second", Schema: 1, Setup: []packSetupStep{{
+	mustWritePack(t, second, Manifest{Name: "second", Schema: 1, Setup: []packSetupStep{{
 		ID: "extra", Path: "setup/extra", CheckArgs: []string{"check"}, ApplyArgs: []string{"apply"},
 	}}})
-	p, err := loadPack(second)
+	p, err := LoadPack(second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,19 +286,19 @@ func TestPlanPackSetupRequestsAssignsHookToOwningPack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fp, _, err := computeHostExecFingerprintWithSetup(second, computeHostBoM(p, "", func(string) bool { return false }), map[string][]byte{"extra": hookBytes})
+	fp, _, err := computeHostExecFingerprintWithSetup(second, ComputeHostBoM(p, "", func(string) bool { return false }), map[string][]byte{"extra": hookBytes})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mutatePackTrustStore(func(store *packTrustStore) error {
-		store.recordAcceptance(store.trustKey(second), packTrustRecord{
-			Path: canonicalizePackRoot(second), Fingerprint: fp,
+	if _, err := mutatePackTrustStore(func(store *PackTrustStore) error {
+		store.RecordAcceptance(store.TrustKey(second), PackTrustRecord{
+			Path: CanonicalizePackRoot(second), Fingerprint: fp,
 		})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	plan, err := planPackSetupRequests([]string{first, second}, []string{"extra"})
+	plan, err := PlanPackSetupRequests([]string{first, second}, []string{"extra"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,12 +309,12 @@ func TestPlanPackSetupRequestsAssignsHookToOwningPack(t *testing.T) {
 
 func TestPlanPackSetupRequestsRejectsAmbiguousHookBeforeExecution(t *testing.T) {
 	first := writeSetupPack(t, false)
-	repeated, err := planPackSetupRequests([]string{first, first}, []string{"account"})
+	repeated, err := PlanPackSetupRequests([]string{first, first}, []string{"account"})
 	if err != nil || len(repeated[first]) != 1 {
 		t.Fatalf("repeating one pack must not create ambiguous ownership: plan=%v error=%v", repeated, err)
 	}
 	second := writeSetupPack(t, false)
-	plan, err := planPackSetupRequests([]string{first, second}, []string{"account"})
+	plan, err := PlanPackSetupRequests([]string{first, second}, []string{"account"})
 	if err == nil || !strings.Contains(err.Error(), "multiple active packs") ||
 		!strings.Contains(err.Error(), first) || !strings.Contains(err.Error(), second) {
 		t.Fatalf("plan=%v error=%v", plan, err)
@@ -332,27 +332,27 @@ func TestPackSetupPlanRunsOptionalHookOnlyForItsOwner(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(first, "setup", "ignored"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustWritePack(t, first, packManifest{Name: "first", Schema: 1, Setup: []packSetupStep{{
+	mustWritePack(t, first, Manifest{Name: "first", Schema: 1, Setup: []packSetupStep{{
 		ID: "ignored", Path: "setup/ignored", CheckArgs: []string{"check"}, ApplyArgs: []string{"apply"},
 	}}})
 	second := writeSetupPack(t, false)
-	p, err := loadPack(first)
+	p, err := LoadPack(first)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fp, _, err := computeHostExecFingerprint(first, computeHostBoM(p, "", func(string) bool { return false }))
+	fp, _, err := ComputeHostExecFingerprint(first, ComputeHostBoM(p, "", func(string) bool { return false }))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mutatePackTrustStore(func(store *packTrustStore) error {
-		store.recordAcceptance(store.trustKey(first), packTrustRecord{
-			Path: canonicalizePackRoot(first), Fingerprint: fp,
+	if _, err := mutatePackTrustStore(func(store *PackTrustStore) error {
+		store.RecordAcceptance(store.TrustKey(first), PackTrustRecord{
+			Path: CanonicalizePackRoot(first), Fingerprint: fp,
 		})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	plan, err := planPackSetupRequests([]string{first, second}, []string{"account"})
+	plan, err := PlanPackSetupRequests([]string{first, second}, []string{"account"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func TestPackSetupPlanRunsOptionalHookOnlyForItsOwner(t *testing.T) {
 	}}}
 	var out bytes.Buffer
 	for _, root := range []string{first, second} {
-		if err := runPackSetup(env, &out, root, plan[root], true); err != nil {
+		if err := RunPackSetup(env, &out, root, plan[root], true); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -379,16 +379,5 @@ func TestPackSetupPlanRunsOptionalHookOnlyForItsOwner(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "ignored") || !strings.Contains(out.String(), "Connect account") {
 		t.Fatalf("setup transcript did not reflect owner routing:\n%s", out.String())
-	}
-}
-
-func TestNormalizeSetupPackArg(t *testing.T) {
-	if got := normalizeSetupPackArg("acme/work-pack"); got != "https://github.com/acme/work-pack.git" {
-		t.Fatalf("got %q", got)
-	}
-	for _, unchanged := range []string{"./local", "/tmp/local", "https://github.com/a/b.git", "git@github.com:a/b.git"} {
-		if got := normalizeSetupPackArg(unchanged); got != unchanged {
-			t.Fatalf("normalize %q = %q", unchanged, got)
-		}
 	}
 }

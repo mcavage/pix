@@ -23,6 +23,7 @@ import (
 	"pix/host/config"
 	"pix/host/mcp"
 	"pix/host/rpc"
+	"pix/host/workflow/pack"
 	"pix/host/workspace"
 	"slices"
 	"strings"
@@ -419,7 +420,7 @@ func TestRecordMcpLoadReceipt_ExactSandboxDerivation(t *testing.T) {
 func TestPackIntegrations_FoldIntoStaticSetAndReceipt(t *testing.T) {
 	dir := t.TempDir()
 	root := filepath.Join(dir, "transient-pack")
-	mustWritePack(t, root, packManifest{Name: "transient", Schema: 1, Integrations: []packIntegration{
+	mustWritePack(t, root, pack.Manifest{Name: "transient", Schema: 1, Integrations: []pack.Integration{
 		{Name: "Fastmail", MCP: "fastmail"},
 		{Name: "Notion", MCP: "notion"},
 	}})

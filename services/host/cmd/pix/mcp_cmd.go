@@ -17,6 +17,7 @@ import (
 	"pix/host/launcher"
 	"pix/host/mcp"
 	"pix/host/rpc"
+	"pix/host/workflow/pack"
 	"pix/host/workspace"
 )
 
@@ -61,7 +62,7 @@ func runMcpRegister(argv []string) {
 		os.Exit(1)
 	}
 	env := defaultShellEnv()
-	if err := registerServers(cfg, env, os.Stdout, argv, launcher.FindHostBinary, activeContainerMCP(cfg)); err != nil {
+	if err := registerServers(cfg, env, os.Stdout, argv, launcher.FindHostBinary, pack.ActiveContainerMCP(cfg)); err != nil {
 		fmt.Fprintf(os.Stderr, "pix mcp register: %v\n", err)
 		if errors.Is(err, mcp.ErrSbxUnavailable) {
 			os.Exit(rpc.ExitServiceDown)
