@@ -8,7 +8,10 @@
 
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"pix/host/sys"
+)
 
 // spawnDetachedServe: no detached-session spawn on this platform.
 func spawnDetachedServe(string, []string, string) (serveChildHandle, error) {
@@ -28,9 +31,8 @@ func tryServeSpawnLock(fn func() error) (bool, error) {
 	return true, fn()
 }
 
-// withFlock: no flock on this platform; run fn unserialized (task-lifecycle
-// callers lose cross-process mutual exclusion, not correctness of a single
-// process).
-func withFlock(_ string, fn func() error) error {
-	return fn()
-}
+// withFlock delegates to sys, which owns the one implementation (and its
+// //go:build split). Kept as a name here because the serve lock path reads
+// better without a package qualifier, and because deleting the name would churn
+// call sites for no gain.
+func withFlock(lockPath string, fn func() error) error { return sys.Lock(lockPath, fn) }

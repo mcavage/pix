@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"pix/host/sys"
 	"syscall"
 
 	"pix/host/config"
@@ -127,24 +128,8 @@ func tryFlock(lockPath string, fn func() error) (bool, error) {
 	return true, fn()
 }
 
-// withFlock is the shared BLOCKING flock helper (factored out of withTaskLock
-// so the flock dance is not duplicated): ensure the dir, open/create the lock
-// file, take syscall.Flock(LOCK_EX), run fn, then ALWAYS release (LOCK_UN) +
-// close via defer. Callers must not os.Exit inside fn. Blocking is correct for
-// task-lifecycle ops (sub-second critical sections); the spawn path uses
-// tryFlock above so it stays deadline-bounded.
-func withFlock(lockPath string, fn func() error) error {
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
-		return fmt.Errorf("create lock dir: %w", err)
-	}
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return fmt.Errorf("open lock %s: %w", lockPath, err)
-	}
-	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("acquire lock %s: %w", lockPath, err)
-	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	return fn()
-}
+// withFlock delegates to sys, which owns the one implementation (and its
+// //go:build split). Kept as a name here because the serve lock path reads
+// better without a package qualifier, and because deleting the name would churn
+// call sites for no gain.
+func withFlock(lockPath string, fn func() error) error { return sys.Lock(lockPath, fn) }

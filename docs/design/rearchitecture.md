@@ -208,11 +208,57 @@ rather than containing them.
       11**, and all 11 remaining are on the four DOMAIN probes that deliberately
       do not live in `sys` and leave with their packages in Phase 3. Net **-623
       lines**. Gate green.
-- [ ] **Phase 2** — `cli` + kong. Not started. Library decided; the command
-      contract is specified above. Start with `models`, which is the verb whose
-      behaviour is best understood right now.
-- [ ] **Phase 3** — domain packages. Not started. Phase 1 unblocked it by
-      removing the `shellEnv` coupling.
+- [~] **Phase 2** — `services/host/cli` landed: the command contract, the
+      single exit-code table, `cli.Run[T]`, and `cli.Usage[T]` (so `pix help
+      <verb>` is generated from the parser rather than a hand-written twin).
+      **`models` is migrated** as the worked example, with five tests that assert
+      output and exit codes without forking a process. **33 verbs remain.**
+- [~] **Phase 3** — `monitor/tui` extracted (3,129 lines). `cmd/pix` is
+      **40,905 -> 37,493**. Seven domains remain.
+
+### Migrating the next verb (Phase 2)
+
+Copy `models_cmd.go`. The whole recipe:
+
+1. Declare the verb tree as structs with `cmd:`/`arg:`/`help:` tags. One type
+   per subcommand even when two share flags — kong dispatches on the type, so a
+   shared type cannot tell which subcommand was selected. Embed the shared flags
+   instead (see `hostQuery`).
+2. Each leaf gets `Run(*cli.Deps) error`. Return errors; never `os.Exit`. Write
+   to `d.Out`/`d.Err`; never `os.Stdout`.
+3. `cli.Usagef` for a bad invocation (exit 2, usage printed). `cli.SilentError`
+   when the command has already reported the problem in its own words.
+4. Point main's `case` at `cli.Run[YourCmd]`, and point any `pix help <verb>`
+   entry at `cli.Usage[YourCmd]` so the hand-written usage string can be deleted.
+5. Delete the hand-rolled arg loop and its usage constant. If the verb's tests
+   re-exec the test binary to observe an exit code, they no longer need to.
+
+### Choosing the next package (Phase 3)
+
+Rank by OUTBOUND coupling — how many symbols the rest of `cmd/pix` needs FROM
+the candidate — not by size. Measured today:
+
+| domain     | files | LOC   | symbols the rest of cmd/pix needs |
+|------------|-------|-------|-----------------------------------|
+| monitor    | 2     | 3,280 | 2   ← done                        |
+| memory     | 1     | 509   | 13                                |
+| serve      | 11    | 1,983 | 21                                |
+| readiness  | 9     | 1,937 | 28 (mostly to/from doctor_*)      |
+| knowledge  | 1     | 1,050 | 38                                |
+| slack      | 2     | 1,885 | 40                                |
+| mcp        | 4     | 2,012 | 56                                |
+| task       | 1     | 2,559 | 61                                |
+| pack       | 5     | 5,476 | 65                                |
+
+`monitor` went first because its seam was already one-directional (`RunTUI`,
+`TUIConfig`). `readiness` is the most valuable next move but should be taken
+TOGETHER with `doctor_*`: doctor is readiness's renderer, and most of the 28
+references cross that line. `pack` is last for a reason.
+
+Beware the measurement: a naive identifier regex reports ~25 external symbols
+for monitor when the true answer is 2, because common local names (`state`,
+`result`, `check`, `parse`) collide with declarations elsewhere. Confirm with
+the compiler before believing a number.
 
 ### What Phase 1 actually found
 

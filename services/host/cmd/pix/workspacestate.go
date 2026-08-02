@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pix/host/sys"
 )
 
 // writeWorkspaceStateFile writes <workspace>/.pix/<name> without ever
@@ -105,52 +106,9 @@ func removeWorkspaceStateFile(workspace, name string) error {
 	return nil
 }
 
-// atomicWriteInDir writes dir/name via a same-dir temp file + os.Rename.
-// The destination is never opened, so an existing symlink there is replaced,
-// never followed; an interrupted write can never truncate an existing file.
-// This is LEAF-safe only: it protects the FINAL path component (name), not a
-// symlinked ancestor of dir itself — callers that write into an
-// attacker-influenced tree (workspace .pix/, XDG config dirs) still need
-// their own Lstat-the-parent check (see writeWorkspaceStateFile) if a
-// symlinked *directory* is also in scope. Shared by writeWorkspaceStateFile,
-// writePackLockBytes (pack.go), and defaultShellEnv's writeFile (doctor.go).
+// atomicWriteInDir delegates to sys, which owns the one hardened writer. It was
+// duplicated there when the OS seams moved; a second copy of an fsync-then-
+// rename is exactly the kind of thing that gets fixed in one place only.
 func atomicWriteInDir(dir, name string, data []byte, perm os.FileMode) error {
-	tmp, err := os.CreateTemp(dir, name+".tmp-")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	// chmod the REQUESTED mode before Sync (CreateTemp makes 0600): fchmod on
-	// the open handle, so the fsync below flushes data AND metadata with the
-	// intended mode already in place — the file is never made visible (or made
-	// durable) under a mode other than the one the caller asked for.
-	if err := tmp.Chmod(perm); err != nil {
-		tmp.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	// fsync before rename: the write must be durable on disk before the atomic
-	// rename makes it visible at the destination name, so a crash between
-	// rename and the next read can never observe a zero-length/truncated file
-	// (the OS buffer cache alone doesn't guarantee that ordering on all
-	// filesystems).
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := os.Rename(tmpName, filepath.Join(dir, name)); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	return nil
+	return sys.AtomicWriteInDir(dir, name, data, perm)
 }

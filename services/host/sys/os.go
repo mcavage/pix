@@ -84,3 +84,8 @@ func AtomicWriteInDir(dir, name string, data []byte, perm os.FileMode) error {
 func RunTimedDefault(name string, args ...string) (string, bool, error) {
 	return RunTimed(ProbeTimeout, name, args...)
 }
+
+// Lock is the package-level form of FS.Lock, for the few callers that hold a
+// lock without holding a System (the serve supervisor takes its spawn lock
+// before any command context exists).
+func Lock(lockPath string, fn func() error) error { return withFlock(lockPath, fn) }
