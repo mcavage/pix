@@ -2300,7 +2300,7 @@ func writeMemoryScope(ws string, p *packInfo) {
 // degraded (errNotAPack), effectivePack is "" and memory stays unscoped, even
 // though cfg.Pack/o.Pack still name the (unavailable) configured pack.
 func writePackContextFiles(cfg *config.Config, o runOpts, effectivePack string) {
-	if _, err := ensurePixGitExclude(o.Workspace); err != nil {
+	if _, err := workspace.EnsureGitExclude(o.Workspace); err != nil {
 		fmt.Fprintf(os.Stderr, "pix: could not add .pix ws state to git excludes: %v\n", err)
 	}
 	writeOllamaBridgeFile(o.Workspace, cfg.OllamaBridgeModel)
@@ -2339,13 +2339,13 @@ func runPackCmd(argv []string) {
 	case "new":
 		runPackNew(env, os.Stdout, rest)
 	case "add":
-		runPackAdd(env, os.Stdout, rest)
+		runPackAdd(env, os.Stdout, rest, registerServers)
 	case "ls":
 		runPackLs(os.Stdout)
 	case "show":
 		runPackShow(os.Stdout, rest)
 	case "use":
-		runPackUse(env, os.Stdout, rest)
+		runPackUse(env, os.Stdout, rest, registerServers)
 	case "rm":
 		runPackRm(os.Stdout, rest)
 	default:
@@ -2474,7 +2474,14 @@ func runPackNew(env hostenv.Env, out io.Writer, rest []string) {
 
 // runPackAdd writes one artifact into a pack (implicit-create), then registers
 // it by presence (skills/knowledge are discovered by convention).
-func runPackAdd(env hostenv.Env, out io.Writer, rest []string) {
+// RegisterFn registers the named servers with the sbx gateway. Activating a
+// pack registers the MCP servers it declares, but pack may not call mcp —
+// both are capabilities — so the caller supplies this. Same seam, same reason,
+// as slack.RegisterFn.
+type RegisterFn func(cfg *config.Config, env hostenv.Env, out io.Writer, names []string,
+	hostResolver func() (string, error), containers map[string]config.MCPContainer) error
+
+func runPackAdd(env hostenv.Env, out io.Writer, rest []string, register RegisterFn) {
 	if len(rest) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: pix pack add <skill|knowledge|proxy|mcp> <name> [PACK] [flags]")
 		os.Exit(2)
@@ -2772,7 +2779,7 @@ func runPackAdd(env hostenv.Env, out io.Writer, rest []string) {
 			// cfg.MCP (added == false) — it is idempotent, and a retry after a
 			// failed gateway registration must actually re-register instead of
 			// silently doing nothing.
-			if err := registerServers(cfg, env, out, []string{name}, launcher.FindHostBinary, packContainerMCP(p)); err != nil {
+			if err := register(cfg, env, out, []string{name}, launcher.FindHostBinary, packContainerMCP(p)); err != nil {
 				fmt.Fprintf(out, "note: mcp registration: %v\n", err)
 			}
 			solicitPackCredentials(env, os.Stdin, out, cli.IsTTY(os.Stdin), p)
@@ -2953,7 +2960,7 @@ func solicitPackCredentials(env hostenv.Env, in io.Reader, out io.Writer, tty bo
 	}
 }
 
-func runPackUse(env hostenv.Env, out io.Writer, rest []string) {
+func runPackUse(env hostenv.Env, out io.Writer, rest []string, register RegisterFn) {
 	// --yes / -y accepts the F5 Tier-1 host BoM without prompting (the ONLY way
 	// a non-TTY adoption of a host-exec pack can proceed — it fails closed
 	// otherwise).
@@ -3330,7 +3337,7 @@ func runPackUse(env hostenv.Env, out io.Writer, rest []string) {
 	// false) and must still re-register, and a pack changing gog_account while
 	// redeclaring an existing `gog` server must re-register the new account.
 	if all := packMcpNames(p); len(all) > 0 {
-		if err := registerServers(cfg, env, out, all, launcher.FindHostBinary, packContainerMCP(p)); err != nil {
+		if err := register(cfg, env, out, all, launcher.FindHostBinary, packContainerMCP(p)); err != nil {
 			fmt.Fprintf(out, "note: mcp registration: %v\n", err)
 		}
 	}

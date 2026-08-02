@@ -29,6 +29,7 @@ import (
 	"testing"
 
 	"pix/host/config"
+	"pix/host/workspace"
 )
 
 // --- forged pack.lock: local-path adoption ----------------------------------
@@ -40,7 +41,7 @@ import (
 // os.Exits on refusal).
 func TestPackUse_ForgedPackLockDoesNotSkipGate(t *testing.T) {
 	if os.Getenv("PIX_TEST_TRUST") == "forged-lock" {
-		runPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")})
+		runPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")}, registerServers)
 		return // exit 0 == the forged lock skipped the gate
 	}
 	dir := t.TempDir()
@@ -105,13 +106,13 @@ func TestPackUse_ForgedLockAttributionScrubbed(t *testing.T) {
 	mustWritePack(t, other, packManifest{Name: "other", Schema: 1})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root})
+	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers)
 	if l := readPackLock(root); slices.Contains(l.MCP, config.GWServerName) {
 		t.Fatalf("forged attribution survived adoption: %+v (must be scrubbed + regenerated fresh)", l)
 	}
 	// Switch away: the user's own MCP must survive.
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{other})
+	runPackUse(fakeGitEnv(nil), &out, []string{other}, registerServers)
 	cfg2, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +139,7 @@ func TestPackUse_ForgedSymlinkLockScrubbedNotFollowed(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root})
+	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers)
 	if b, err := os.ReadFile(victim); err != nil || string(b) != "host secret\n" {
 		t.Errorf("symlink target must be untouched, got %q (err=%v)", b, err)
 	}
@@ -159,7 +160,7 @@ func TestPackUse_ForgedSymlinkLockScrubbedNotFollowed(t *testing.T) {
 func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	if os.Getenv("PIX_TEST_TRUST") == "gog-regate" {
 		hostBinaryResolver = func() (string, error) { return "pix-host", nil }
-		runPackUse(localMCPEnv(config.GWServerName), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")})
+		runPackUse(localMCPEnv(config.GWServerName), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")}, registerServers)
 		return
 	}
 	dir := t.TempDir()
@@ -180,11 +181,11 @@ func TestPackUse_ChangedGogAccountRegates(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackUse(localMCPEnv(config.GWServerName), &out, []string{root, "--yes"}) // accept with a@
+	runPackUse(localMCPEnv(config.GWServerName), &out, []string{root, "--yes"}, registerServers) // accept with a@
 	// Same account: re-activation must NOT re-prompt (in-process; a misfiring
 	// gate would os.Exit and fail the test binary).
 	out.Reset()
-	runPackUse(localMCPEnv(config.GWServerName), &out, []string{root})
+	runPackUse(localMCPEnv(config.GWServerName), &out, []string{root}, registerServers)
 	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("unchanged surface must not re-gate:\n%s", out.String())
 	}
@@ -234,7 +235,7 @@ func TestHostLaunch_MutatedProxyScriptRefusesUntilReaccepted(t *testing.T) {
 	root := phase2HostPack(t, dir, "work", "platformio")
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"})
+	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers)
 	installedAt := filepath.Join(hostPackBinDir(), "platformio")
 	if _, err := os.Stat(installedAt); err != nil {
 		t.Fatalf("accepted wrapper not installed: %v\n%s", err, out.String())
@@ -266,7 +267,7 @@ func TestHostLaunch_MutatedProxyScriptRefusesUntilReaccepted(t *testing.T) {
 
 	// Re-accept: the gate fires again and, once accepted, launch works.
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"})
+	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers)
 	if !strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("the mutated script must have re-fired the gate:\n%s", out.String())
 	}
@@ -291,10 +292,10 @@ func TestPackSwitch_BetweenAcceptedPacksNoReprompt(t *testing.T) {
 	rootB := phase2HostPack(t, dir, "b", "b-tool")
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"})
-	runPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"})
+	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerServers)
+	runPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"}, registerServers)
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{rootA}) // no --yes, non-TTY
+	runPackUse(fakeGitEnv(nil), &out, []string{rootA}, registerServers) // no --yes, non-TTY
 	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("switching back to an accepted pack must not re-prompt:\n%s", out.String())
 	}
@@ -319,7 +320,7 @@ func TestPackRm_ClearsHostWrappersWhenPackDirGone(t *testing.T) {
 	root := phase2HostPack(t, dir, "work", "platformio")
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"})
+	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers)
 	installedAt := filepath.Join(hostPackBinDir(), "platformio")
 	if _, err := os.Stat(installedAt); err != nil {
 		t.Fatalf("wrapper not installed: %v", err)
@@ -353,7 +354,7 @@ func TestClearHostPackWrappers_ReturnsErrorAndKeepsAttribution(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	// Make hostPackBinDir a symlink.
-	agent := hostAgentDir()
+	agent := workspace.HostAgentDir()
 	if err := os.MkdirAll(agent, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +404,7 @@ func TestRefreshHostPackWrappers_FailClosedNoPartialSet(t *testing.T) {
 		Bins:    []packBin{{Name: "fm", Path: "bin/fm", SHA: sha256Hex(binBytes), Host: true}}})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"})
+	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers)
 	for _, n := range []string{"tool", "fm"} {
 		if _, err := os.Stat(filepath.Join(hostPackBinDir(), n)); err != nil {
 			t.Fatalf("accepted item %q not installed: %v\n%s", n, err, out.String())

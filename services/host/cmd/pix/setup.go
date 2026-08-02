@@ -206,7 +206,7 @@ func runSetupCmd(argv []string) {
 		if parsed.assumeYes {
 			useArgs = append([]string{"--yes"}, useArgs...)
 		}
-		runPackUse(env, os.Stdout, useArgs)
+		runPackUse(env, os.Stdout, useArgs, registerServers)
 		if cfg, err := config.Load(); err == nil && strings.TrimSpace(cfg.Pack) != "" {
 			activatedPacks = append(activatedPacks, cfg.Pack)
 		}

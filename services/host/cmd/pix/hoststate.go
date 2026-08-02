@@ -29,6 +29,7 @@ import (
 	"pix/host/hostenv"
 	"pix/host/readiness"
 	"pix/host/secret"
+	"pix/host/workspace"
 	"slices"
 	"strings"
 	"unicode"
@@ -252,7 +253,7 @@ func buildHostStateHost(cfg *config.Config) hostStateHost {
 // It mirrors runHostLaunch's preconditions so host-state never claims "ready"
 // for a bare host.enabled flag or a partially upgraded installation.
 func hostProvisioned() bool {
-	dir := hostAgentDir()
+	dir := workspace.HostAgentDir()
 	if _, err := os.Stat(filepath.Join(dir, "settings.json")); err != nil {
 		return false
 	}

@@ -127,7 +127,7 @@ func TestPackUse_AdoptedPackSkipsPrivateKnowledgeRef(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root})
+	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -177,7 +177,7 @@ func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
-	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"})
+	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerServers)
 
 	lockA := readPackLock(rootA)
 	if slices.Contains(lockA.MCP, config.GWServerName) {
@@ -185,7 +185,7 @@ func TestPackUse_LockOnlyRecordsWhatThisActivationAdded(t *testing.T) {
 	}
 
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{rootB})
+	runPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerServers)
 
 	cfgAfterB, err := config.Load()
 	if err != nil {
@@ -246,14 +246,14 @@ func TestPackUse_RestoresGogAccountToPriorValueOnSwitchAway(t *testing.T) {
 	mustWritePack(t, rootPersonal, packManifest{Name: "personal", Schema: 1})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{rootWork})
+	runPackUse(fakeGitEnv(nil), &out, []string{rootWork}, registerServers)
 	cfgWork, _ := config.Load()
 	if cfgWork.GogAccount != "work@company.com" {
 		t.Fatalf("pack use work should set gog_account, got %q", cfgWork.GogAccount)
 	}
 
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{rootPersonal})
+	runPackUse(fakeGitEnv(nil), &out, []string{rootPersonal}, registerServers)
 	cfgPersonal, _ := config.Load()
 	if cfgPersonal.GogAccount != "manual@example.com" {
 		t.Errorf("switching to a pack with no gog_account should restore the PRIOR value, got %q, want %q", cfgPersonal.GogAccount, "manual@example.com")
@@ -278,7 +278,7 @@ func TestPackRm_RemovesActivePackContributions(t *testing.T) {
 
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"})
+	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers)
 	cfgActive, _ := config.Load()
 	if !slices.Contains(cfgActive.MCP, "fastmail") || cfgActive.GogAccount != "work@company.com" {
 		t.Fatalf("setup: pack use did not attach as expected: %+v", cfgActive)
@@ -414,7 +414,7 @@ func TestPackAdd_Mcp_CanonicalizesActivePackComparison(t *testing.T) {
 
 	t.Chdir(dir)
 	var out bytes.Buffer
-	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", "./work", "--yes"})
+	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", "./work", "--yes"}, registerServers)
 
 	if strings.Contains(out.String(), "activate the pack to attach it") {
 		t.Errorf("finding #7: relative path should have matched the active pack, got:\n%s", out.String())

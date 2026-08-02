@@ -10,6 +10,7 @@ import (
 
 	"pix/host/cli"
 	"pix/host/config"
+	"pix/host/workspace"
 )
 
 // --- config gate: host.enabled / host.autonomy (config_cli test style) ---
@@ -436,7 +437,7 @@ func TestHostPinnedPiPackage_MatchesDockerfile(t *testing.T) {
 func TestHostProvisioned_RequiresPinnedPiVersion(t *testing.T) {
 	state := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", state)
-	dir := hostAgentDir()
+	dir := workspace.HostAgentDir()
 	if err := os.MkdirAll(filepath.Join(dir, "extensions"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -486,8 +487,8 @@ func TestBuildHostArgs(t *testing.T) {
 func TestHostAgentDir_HonorsXDGStateHome(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", tmp)
-	if got, want := hostAgentDir(), filepath.Join(tmp, "pix", "host-agent"); got != want {
-		t.Errorf("hostAgentDir = %q, want %q", got, want)
+	if got, want := workspace.HostAgentDir(), filepath.Join(tmp, "pix", "host-agent"); got != want {
+		t.Errorf("workspace.HostAgentDir = %q, want %q", got, want)
 	}
 }
 

@@ -1,4 +1,4 @@
-package main
+package workspace
 
 import (
 	"os"
@@ -25,9 +25,9 @@ func TestEnsurePixGitExcludePreservesKnowledgePointer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changed, err := ensurePixGitExclude(dir)
+	changed, err := EnsureGitExclude(dir)
 	if err != nil || !changed {
-		t.Fatalf("ensurePixGitExclude = (%v, %v), want (true, nil)", changed, err)
+		t.Fatalf("EnsureGitExclude = (%v, %v), want (true, nil)", changed, err)
 	}
 	got, err := os.ReadFile(exclude)
 	if err != nil {
@@ -59,10 +59,10 @@ func TestEnsurePixGitExcludePreservesKnowledgePointer(t *testing.T) {
 
 func TestEnsurePixGitExcludeIsIdempotent(t *testing.T) {
 	dir := initGitRepo(t)
-	if _, err := ensurePixGitExclude(dir); err != nil {
+	if _, err := EnsureGitExclude(dir); err != nil {
 		t.Fatal(err)
 	}
-	changed, err := ensurePixGitExclude(dir)
+	changed, err := EnsureGitExclude(dir)
 	if err != nil || changed {
 		t.Fatalf("second ensure = (%v, %v), want (false, nil)", changed, err)
 	}
@@ -90,7 +90,7 @@ func TestEnsurePixGitExcludeConcurrentRunsPreserveExistingRules(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := ensurePixGitExclude(dir)
+			_, err := EnsureGitExclude(dir)
 			errs <- err
 		}()
 	}
@@ -128,7 +128,7 @@ func TestEnsurePixGitExcludeRefusesSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if changed, err := ensurePixGitExclude(dir); err == nil || changed {
+	if changed, err := EnsureGitExclude(dir); err == nil || changed {
 		t.Fatalf("symlink ensure = (%v, %v), want (false, error)", changed, err)
 	}
 	got, err := os.ReadFile(victim)
@@ -141,7 +141,7 @@ func TestEnsurePixGitExcludeRefusesSymlink(t *testing.T) {
 }
 
 func TestEnsurePixGitExcludeSkipsNonGitDirectory(t *testing.T) {
-	changed, err := ensurePixGitExclude(t.TempDir())
+	changed, err := EnsureGitExclude(t.TempDir())
 	if err != nil || changed {
 		t.Fatalf("non-git ensure = (%v, %v), want (false, nil)", changed, err)
 	}

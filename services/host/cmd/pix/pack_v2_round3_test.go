@@ -227,7 +227,7 @@ func TestPackAddMcp_LockWrittenBeforeSaveFailure(t *testing.T) {
 	if os.Getenv("PIX_TEST_SAVEFAIL") == "add" {
 		// Child: exits 1 at the commit point (Save fails on the read-only dir).
 		// --yes accepts the Phase-2 Tier-1 gate so the commit point is reached.
-		runPackAdd(fakeGitEnv(nil), os.Stdout, []string{"mcp", "fastmail", os.Getenv("PIX_TEST_PACK_ROOT"), "--yes"})
+		runPackAdd(fakeGitEnv(nil), os.Stdout, []string{"mcp", "fastmail", os.Getenv("PIX_TEST_PACK_ROOT"), "--yes"}, registerServers)
 		return
 	}
 	if os.Getuid() == 0 {

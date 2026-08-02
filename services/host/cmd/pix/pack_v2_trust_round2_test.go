@@ -108,7 +108,7 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 	mustWritePack(t, other, packManifest{Name: "other", Schema: 1})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root}) // activate (legit)
+	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers) // activate (legit)
 
 	// Simulate the pull-forgery: the ACTIVE pack's lock now claims the user's
 	// own entries as this pack's contribution.
@@ -119,7 +119,7 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 
 	// Same-pack REACTIVATION (the previously-skipped scrub path).
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{root})
+	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers)
 	cfg2, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +133,7 @@ func TestPackUse_SamePackLockForgeryCannotDeleteUserConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{other})
+	runPackUse(fakeGitEnv(nil), &out, []string{other}, registerServers)
 	cfg3, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -339,7 +339,7 @@ func TestPackUse_RemoteMCPReferenceRequiresYes(t *testing.T) {
 		Integrations: []packIntegration{{Name: "Docs", MCP: "docs", URL: "https://docs.example.test/mcp"}}})
 
 	var out bytes.Buffer
-	runPackUse(localMCPEnv("fastmail"), &out, []string{"--yes", root})
+	runPackUse(localMCPEnv("fastmail"), &out, []string{"--yes", root}, registerServers)
 	if !strings.Contains(out.String(), "Remote MCP:") {
 		t.Errorf("the consent screen must disclose the endpoint, got:\n%s", out.String())
 	}
@@ -366,7 +366,7 @@ func TestPackUse_GogReferenceStaysTier0(t *testing.T) {
 		Integrations: []packIntegration{{Name: "gog", MCP: config.GWServerName, Env: "GOG_KEYRING"}}})
 
 	var out bytes.Buffer
-	runPackUse(localMCPEnv(), &out, []string{root}) // no --yes, non-TTY
+	runPackUse(localMCPEnv(), &out, []string{root}, registerServers) // no --yes, non-TTY
 	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("a gog reference must adopt silently (Tier-0), got:\n%s", out.String())
 	}
@@ -520,7 +520,7 @@ func TestPackUse_ForgedRemoteCannotEvictOtherPacksAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"})
+	runPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"}, registerServers)
 	store, err := loadPackTrustStore()
 	if err != nil {
 		t.Fatal(err)
@@ -536,7 +536,7 @@ func TestPackUse_ForgedRemoteCannotEvictOtherPacksAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{rootE, "--yes"})
+	runPackUse(fakeGitEnv(nil), &out, []string{rootE, "--yes"}, registerServers)
 
 	after, err := loadPackTrustStore()
 	if err != nil {

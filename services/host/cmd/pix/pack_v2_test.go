@@ -143,7 +143,7 @@ func TestPackAdd_Proxy_ScaffoldsWrapperAndManifest(t *testing.T) {
 	root := filepath.Join(dir, "pack")
 	env := fakeGitEnv(nil)
 	var out bytes.Buffer
-	runPackAdd(env, &out, []string{"proxy", "warehouse", root})
+	runPackAdd(env, &out, []string{"proxy", "warehouse", root}, registerServers)
 
 	binFile := filepath.Join(root, "bin", "warehouse")
 	fi, err := os.Stat(binFile)
@@ -172,7 +172,7 @@ func TestPackAdd_Proxy_Host_NoRecreateLine(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	root := filepath.Join(dir, "pack")
 	var out bytes.Buffer
-	runPackAdd(fakeGitEnv(nil), &out, []string{"proxy", "platformio", root, "--host"})
+	runPackAdd(fakeGitEnv(nil), &out, []string{"proxy", "platformio", root, "--host"}, registerServers)
 	if strings.Contains(out.String(), "pix run --replace") {
 		t.Errorf("host proxy should not print the sandbox recreate line, got:\n%s", out.String())
 	}
@@ -241,7 +241,7 @@ func TestPackAdd_Mcp_NotActive_NoAttachNoRecreate(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	root := filepath.Join(dir, "pack")
 	var out bytes.Buffer
-	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--env", "FASTMAIL_TOKEN"})
+	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--env", "FASTMAIL_TOKEN"}, registerServers)
 
 	p, err := loadPack(root)
 	if err != nil {
@@ -287,7 +287,7 @@ func TestPackAdd_Mcp_Active_AttachesAndPrintsRecreate(t *testing.T) {
 	var out bytes.Buffer
 	// F5 (Phase 2): attaching an MCP to the active pack is Tier-1 — the host
 	// BoM gate fires; --yes accepts it non-interactively (tests have no TTY).
-	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--yes"})
+	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--yes"}, registerServers)
 
 	cfg2, err := config.Load()
 	if err != nil {
@@ -346,12 +346,12 @@ func TestPackUse_ReversibleSwitch(t *testing.T) {
 
 	// F5 (Phase 2): packs declaring an integration.mcp are Tier-1 — --yes
 	// accepts the host BoM non-interactively (tests have no TTY).
-	runPackUse(env, &out, []string{rootA, "--yes"})
+	runPackUse(env, &out, []string{rootA, "--yes"}, registerServers)
 	cfgAfterA1, _ := config.Load()
 	wantAfterA := append([]string(nil), cfgAfterA1.MCP...)
 
 	out.Reset()
-	runPackUse(env, &out, []string{rootB, "--yes"})
+	runPackUse(env, &out, []string{rootB, "--yes"}, registerServers)
 	cfgAfterB, _ := config.Load()
 	if !slices.Contains(cfgAfterB.MCP, "usermcp") {
 		t.Errorf("user-added mcp must survive a switch, cfg.MCP = %v", cfgAfterB.MCP)
@@ -364,7 +364,7 @@ func TestPackUse_ReversibleSwitch(t *testing.T) {
 	}
 
 	out.Reset()
-	runPackUse(env, &out, []string{rootA, "--yes"})
+	runPackUse(env, &out, []string{rootA, "--yes"}, registerServers)
 	cfgAfterA2, _ := config.Load()
 
 	if !stringSlicesEqualUnordered(cfgAfterA2.MCP, wantAfterA) {
@@ -423,12 +423,12 @@ func TestPackUse_KnowledgeReversible(t *testing.T) {
 
 	env := fakeGitEnv(nil)
 	var out bytes.Buffer
-	runPackUse(env, &out, []string{rootA})
+	runPackUse(env, &out, []string{rootA}, registerServers)
 	cfgA, _ := config.Load()
 	wantA := append([]string(nil), cfgA.KnowledgeBundles...)
 
 	out.Reset()
-	runPackUse(env, &out, []string{rootB})
+	runPackUse(env, &out, []string{rootB}, registerServers)
 	cfgB, _ := config.Load()
 	aID := knowledge.CanonicalizeKnowledgeBundle(filepath.Join(rootA, "knowledge"))
 	bID := knowledge.CanonicalizeKnowledgeBundle(filepath.Join(rootB, "knowledge"))
@@ -440,7 +440,7 @@ func TestPackUse_KnowledgeReversible(t *testing.T) {
 	}
 
 	out.Reset()
-	runPackUse(env, &out, []string{rootA})
+	runPackUse(env, &out, []string{rootA}, registerServers)
 	cfgA2, _ := config.Load()
 	if !stringSlicesEqualUnordered(cfgA2.KnowledgeBundles, wantA) {
 		t.Errorf("reversible switch: knowledge_bundles after A->B->A = %v, want %v", cfgA2.KnowledgeBundles, wantA)
@@ -471,7 +471,7 @@ func TestPackUse_PrivateKnowledgeNeverTravels(t *testing.T) {
 	}})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root})
+	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -504,7 +504,7 @@ func TestPackAddKnowledge_RefAndPrivateFlags(t *testing.T) {
 	t.Setenv("PIX_CONFIG", filepath.Join(dir, "config.toml"))
 	root := filepath.Join(dir, "pack")
 	var out bytes.Buffer
-	runPackAdd(fakeGitEnv(nil), &out, []string{"knowledge", "my-notes", root, "--ref", "/tmp/notes", "--private"})
+	runPackAdd(fakeGitEnv(nil), &out, []string{"knowledge", "my-notes", root, "--ref", "/tmp/notes", "--private"}, registerServers)
 
 	p, err := loadPack(root)
 	if err != nil {
@@ -534,7 +534,7 @@ func TestPackUse_AlwaysPrintsRecreateLine(t *testing.T) {
 	mustWritePack(t, root, packManifest{Name: "p", Schema: 1})
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root})
+	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers)
 	if !strings.Contains(out.String(), "pix run --replace") {
 		t.Errorf("pack use must always print the recreate line, got:\n%s", out.String())
 	}

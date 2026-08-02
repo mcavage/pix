@@ -21,7 +21,7 @@ func TestPackUse_ForgedDirectorySymlinkLockScrubbedNotFollowed(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root})
+	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers)
 	if fi, err := os.Lstat(packLockPath(root)); err != nil || !fi.Mode().IsRegular() {
 		t.Errorf("pack.lock must be a fresh regular file after adoption, got %v (err=%v)", fi, err)
 	}

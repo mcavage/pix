@@ -31,13 +31,14 @@ import (
 	"strings"
 
 	"pix/host/config"
+	"pix/host/workspace"
 )
 
 // hostPackBinDir is where the ACTIVE pack's host-mode wrappers live:
-// <hostAgentDir>/bin. State-flavored and rebuildable (cleared + refreshed from
+// <workspace.HostAgentDir>/bin. State-flavored and rebuildable (cleared + refreshed from
 // the active pack), exactly like the rest of the host agent dir. It reaches a
 // PATH in exactly one place: hostChildEnv (hostrun.go) — host mode only.
-func hostPackBinDir() string { return filepath.Join(hostAgentDir(), "bin") }
+func hostPackBinDir() string { return filepath.Join(workspace.HostAgentDir(), "bin") }
 
 // hashFileSHA256 returns the lowercase hex sha256 of the file at path. It is
 // the ADR-4 duplicate of the hashing core inside verifyPluginSHA

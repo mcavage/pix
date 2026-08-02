@@ -50,7 +50,7 @@ func TestPackNew_InitsAndAddSkill(t *testing.T) {
 
 	// add a skill -> SkillsDir now populated.
 	out.Reset()
-	runPackAdd(env, &out, []string{"skill", "deploy", root})
+	runPackAdd(env, &out, []string{"skill", "deploy", root}, registerServers)
 	sk := filepath.Join(root, "skills", "deploy", "SKILL.md")
 	if _, err := os.Stat(sk); err != nil {
 		t.Fatalf("skill not written: %v", err)

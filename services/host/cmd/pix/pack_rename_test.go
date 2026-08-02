@@ -418,7 +418,7 @@ func TestPackUse_DefaultAlias_ResolvesToPackDir(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &buf, []string{"default"})
+	runPackUse(fakeGitEnv(nil), &buf, []string{"default"}, registerServers)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -451,7 +451,7 @@ func TestPackUse_PersonalAlias_DeprecatedButResolvesToDefault(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &buf, []string{"personal"})
+	runPackUse(fakeGitEnv(nil), &buf, []string{"personal"}, registerServers)
 
 	cfg, err := config.Load()
 	if err != nil {

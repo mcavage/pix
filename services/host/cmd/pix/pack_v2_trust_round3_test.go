@@ -38,6 +38,7 @@ import (
 	"pix/host/config"
 	"pix/host/hostenv"
 	"pix/host/sys/systest"
+	"pix/host/workspace"
 )
 
 // --- #1: cross-process lock, fresh-load mutations ------------------------------
@@ -161,7 +162,7 @@ func TestPackUse_MigratesPhase1LocalActivation(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{rootB})
+	runPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerServers)
 	cfg2, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +210,7 @@ func TestPackUse_AdoptedPackLockNeverMigrated(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{rootB})
+	runPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerServers)
 	cfg2, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -298,7 +299,7 @@ func TestPackRm_ClearFailureExitsNonZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Make the clear FAIL: hostPackBinDir is a symlink (never traversed).
-	if err := os.MkdirAll(hostAgentDir(), 0o755); err != nil {
+	if err := os.MkdirAll(workspace.HostAgentDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	elsewhere := filepath.Join(dir, "elsewhere")
@@ -353,7 +354,7 @@ func TestRefreshHostPackWrappers_LenientClearFailureSurfaced(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(hostAgentDir(), 0o755); err != nil {
+	if err := os.MkdirAll(workspace.HostAgentDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	elsewhere := filepath.Join(dir, "elsewhere")
@@ -444,14 +445,14 @@ func TestPackUse_NewCommitSameFingerprintDoesNotRegate(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}) // accept once
+	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers) // accept once
 
 	// A README-only pull: new commit, identical host-exec surface.
 	if err := recordPackAdoptionInTrustStore(root, url, "c2"); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{root}) // no --yes, non-TTY
+	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers) // no --yes, non-TTY
 	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("a commit bump with an unchanged fingerprint must not re-prompt:\n%s", out.String())
 	}

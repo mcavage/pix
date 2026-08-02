@@ -129,21 +129,6 @@ then launch with ` + "`pix host`" + `.
 `
 }
 
-// hostAgentDir is PI_CODING_AGENT_DIR for host mode:
-// $XDG_STATE_HOME/pix/host-agent (default ~/.local/state/pix/host-agent).
-// State-flavored on purpose (rebuildable symlinks + installs, never precious),
-// beside tasks/ — honoring XDG_STATE_HOME exactly like taskStateRoot.
-func hostAgentDir() string {
-	if x := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); x != "" {
-		return filepath.Join(x, "pix", "host-agent")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
-	return filepath.Join(home, ".local", "state", "pix", "host-agent")
-}
-
 // hostHarnessDirs are the repo harness dirs symlinked into the host agent dir.
 // Only dirs that EXIST in the checkout are linked (e.g. prompts/ was removed
 // from the tree; a missing dir is skipped, never an error).
@@ -343,7 +328,7 @@ func runHostSetup(errw *os.File) error {
 	if err != nil {
 		return fmt.Errorf("host setup needs a pix checkout to symlink the harness from: %w", err)
 	}
-	dir := hostAgentDir()
+	dir := workspace.HostAgentDir()
 	if err := provisionHostAgentDir(root, dir, errw); err != nil {
 		return err
 	}
@@ -626,7 +611,7 @@ func runHostLaunch(o hostOpts) {
 		os.Exit(1)
 	}
 
-	agentDir := hostAgentDir()
+	agentDir := workspace.HostAgentDir()
 	if _, err := os.Stat(filepath.Join(agentDir, "settings.json")); err != nil {
 		fmt.Fprintf(os.Stderr, "pix host: %s is not provisioned — run `pix host setup` first\n", agentDir)
 		os.Exit(1)

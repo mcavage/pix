@@ -130,8 +130,8 @@ func TestRefreshHostPackWrappers_ConcurrentRefreshesNoOrphan(t *testing.T) {
 	// Accept BOTH surfaces once (acceptance is per identity and survives
 	// switches — see TestPackSwitch_BetweenAcceptedPacksNoReprompt).
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"})
-	runPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"})
+	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerServers)
+	runPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"}, registerServers)
 
 	stop := make(chan struct{})
 	violations, auditWG := auditHostWrapperInvariant(stop)
@@ -190,7 +190,7 @@ func TestPackRm_RacingRefreshNeverOrphans(t *testing.T) {
 	root := phase2HostPack(t, dir, "work", "platformio")
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"})
+	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers)
 	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "platformio")); err != nil {
 		t.Fatalf("setup: accepted wrapper not installed: %v\n%s", err, out.String())
 	}

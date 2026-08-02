@@ -312,7 +312,7 @@ func TestPackUse_Tier1NonTTYFailsClosed(t *testing.T) {
 		// The pack's mcp must classify as a LOCAL host command for Tier-1
 		// (round-2 C: a remote reference no longer gates).
 		hostBinaryResolver = func() (string, error) { return "pix-host", nil }
-		runPackUse(localMCPEnv("fastmail"), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")})
+		runPackUse(localMCPEnv("fastmail"), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")}, registerServers)
 		return // exit 0 == the gate did NOT fail closed
 	}
 	dir := t.TempDir()
@@ -372,7 +372,7 @@ func TestPackUse_Tier0StillSilent(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root}) // NO --yes, no TTY: must succeed
+	runPackUse(fakeGitEnv(nil), &out, []string{root}, registerServers) // NO --yes, no TTY: must succeed
 	if strings.Contains(out.String(), "[y/N]") || strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("Tier-0 must adopt silently, got:\n%s", out.String())
 	}
@@ -397,7 +397,7 @@ func TestPackUse_AcceptanceSticksAcrossReactivation(t *testing.T) {
 		Integrations: []packIntegration{{Name: "Fastmail", MCP: "fastmail"}}})
 
 	var out bytes.Buffer
-	runPackUse(localMCPEnv("fastmail"), &out, []string{root, "--yes"})
+	runPackUse(localMCPEnv("fastmail"), &out, []string{root, "--yes"}, registerServers)
 	store, serr := loadPackTrustStore()
 	if serr != nil {
 		t.Fatal(serr)
@@ -412,7 +412,7 @@ func TestPackUse_AcceptanceSticksAcrossReactivation(t *testing.T) {
 	// Reactivation without --yes on a non-TTY: a misfiring gate would
 	// os.Exit(1) here and fail the whole test binary.
 	out.Reset()
-	runPackUse(localMCPEnv("fastmail"), &out, []string{root})
+	runPackUse(localMCPEnv("fastmail"), &out, []string{root}, registerServers)
 	if strings.Contains(out.String(), "adds these integrations to Pix") {
 		t.Errorf("covered BoM must not re-render the gate screen:\n%s", out.String())
 	}
@@ -423,7 +423,7 @@ func TestPackUse_AcceptanceSticksAcrossReactivation(t *testing.T) {
 // closed again on a non-TTY. Subprocess (runPackUse os.Exits on refusal).
 func TestPackUse_NewHostFacetRetriggersGate(t *testing.T) {
 	if os.Getenv("PIX_TEST_PHASE2") == "regate" {
-		runPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")})
+		runPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT")}, registerServers)
 		return
 	}
 	dir := t.TempDir()
@@ -434,7 +434,7 @@ func TestPackUse_NewHostFacetRetriggersGate(t *testing.T) {
 	mustWritePack(t, root, packManifest{Name: "work", Schema: 1,
 		Integrations: []packIntegration{{Name: "Fastmail", MCP: "fastmail"}}})
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}) // adopt + accept
+	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers) // adopt + accept
 
 	// The manifest gains a host wrapper AFTER adoption.
 	mustWritePack(t, root, packManifest{Name: "work", Schema: 1,
@@ -469,7 +469,7 @@ func TestPackUse_NewHostFacetRetriggersGate(t *testing.T) {
 // OUTRIGHT — even with --yes, before anything commits.
 func TestPackUse_BinShaMismatchRefusesActivation(t *testing.T) {
 	if os.Getenv("PIX_TEST_PHASE2") == "binsha" {
-		runPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT"), "--yes"})
+		runPackUse(fakeGitEnv(nil), os.Stdout, []string{os.Getenv("PIX_TEST_PACK_ROOT"), "--yes"}, registerServers)
 		return
 	}
 	dir := t.TempDir()
@@ -649,7 +649,7 @@ func TestPackUse_HostWrapperSwapOnSwitch(t *testing.T) {
 	rootB := phase2HostPack(t, dir, "b", "b-tool")
 
 	var out bytes.Buffer
-	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"})
+	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerServers)
 	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "a-tool")); err != nil {
 		t.Fatalf("pack use A must install a-tool: %v\noutput:\n%s", err, out.String())
 	}
@@ -658,7 +658,7 @@ func TestPackUse_HostWrapperSwapOnSwitch(t *testing.T) {
 	}
 
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"})
+	runPackUse(fakeGitEnv(nil), &out, []string{rootB, "--yes"}, registerServers)
 	if _, err := os.Stat(filepath.Join(hostPackBinDir(), "b-tool")); err != nil {
 		t.Fatalf("pack use B must install b-tool: %v", err)
 	}

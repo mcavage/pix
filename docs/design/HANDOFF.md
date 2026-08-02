@@ -76,13 +76,33 @@ extracted package cannot import `package main`.
 took `memory` from 11 to 5 without touching `memory.go`. The numbers in
 `architecture.md` predate `workspace`, `service` and `readiness`.
 
-Remaining, inbound ascending: onboard (6), pack (8), slack (9), reset (9),
-status (21), gworkspace (23), task (25), run+sandbox (47). `doctor` (34) and
-`setup` (58) stay — a high inbound count is what a composition root looks like,
-and "fixing" it would be wrong.
+Remaining, inbound ascending: onboard (6), pack (6), reset (9), gworkspace (19),
+status (20), task (25), run+sandbox (47). `doctor` (30) and `setup` (56) stay —
+a high inbound count is what a composition root looks like, and "fixing" it
+would be wrong.
 
 Three counts are noise in EVERY domain: `main`, `version`, `defaultShellEnv`.
 Subtract them first.
+
+### pack is next, and it is a pack/run separation
+
+pack is 5,443 lines and reads as 6 inbound, but three of those are noise and
+the real content is one boundary:
+
+```
+runOpts                <- sbxargs.go     pack.applyPackToLaunch takes run's options
+writeOllamaBridgeFile  <- run.go         pack.writePackContextFiles calls run's writer
+hostBinaryResolver     <- main.go        4x localMCPClassifier(env, hostBinaryResolver)
+```
+
+`applyPackToLaunch`, `applyPackStackToLaunch` and `writePackContextFiles` are
+LAUNCH functions that live in pack.go. They are run's half of the boundary, not
+pack's — pack proper is resolve / validate / trust / activate. Move those three
+to run's side first and re-measure; the rest is `hostBinaryResolver` becoming a
+parameter of the four `localMCPClassifier` callers, which is the same inversion
+`slack.RegisterFn` and `pack.RegisterFn` already did.
+
+Both RegisterFn seams are already in place, so pack no longer calls mcp.
 
 ### The recipe
 

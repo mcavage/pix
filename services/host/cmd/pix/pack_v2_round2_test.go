@@ -204,7 +204,7 @@ func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
-	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"})
+	runPackUse(fakeGitEnv(nil), &out, []string{rootA, "--yes"}, registerServers)
 	aID := knowledge.CanonicalizeKnowledgeBundle(filepath.Join(rootA, "knowledge"))
 	cfg, _ := config.Load()
 	if !slices.Contains(cfg.KnowledgeBundles, aID) || !slices.Contains(cfg.MCP, "a-mcp") {
@@ -226,7 +226,7 @@ func TestPackUse_EmptyLockSwitchRemovesNothing(t *testing.T) {
 	}
 
 	out.Reset()
-	runPackUse(fakeGitEnv(nil), &out, []string{rootB})
+	runPackUse(fakeGitEnv(nil), &out, []string{rootB}, registerServers)
 	cfg2, _ := config.Load()
 	if !slices.Contains(cfg2.KnowledgeBundles, aID) {
 		t.Errorf("empty lock: the switch must remove NOTHING (no manifest fallback), lost %q from %v", aID, cfg2.KnowledgeBundles)
@@ -256,9 +256,9 @@ func TestPackUse_SamePackReactivationPreservesAttribution(t *testing.T) {
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
 	// The reactivation needs no --yes: the first use recorded the acceptance.
-	runPackUse(env, &out, []string{rootA, "--yes"})
+	runPackUse(env, &out, []string{rootA, "--yes"}, registerServers)
 	out.Reset()
-	runPackUse(env, &out, []string{rootA}) // same-pack reactivation
+	runPackUse(env, &out, []string{rootA}, registerServers) // same-pack reactivation
 
 	lock := readPackLock(rootA)
 	if !slices.Contains(lock.MCP, "a-mcp") {
@@ -266,7 +266,7 @@ func TestPackUse_SamePackReactivationPreservesAttribution(t *testing.T) {
 	}
 
 	out.Reset()
-	runPackUse(env, &out, []string{rootB})
+	runPackUse(env, &out, []string{rootB}, registerServers)
 	cfg, _ := config.Load()
 	if slices.Contains(cfg.MCP, "a-mcp") {
 		t.Errorf("switching to B after a same-pack reactivation must still remove a-mcp, cfg.MCP = %v", cfg.MCP)
@@ -298,7 +298,7 @@ func TestPackUse_SamePackReactivationReconcilesRemovedFields(t *testing.T) {
 
 	env := fakeGitEnv(nil)
 	var out bytes.Buffer
-	runPackUse(env, &out, []string{root})
+	runPackUse(env, &out, []string{root}, registerServers)
 	cfg1, _ := config.Load()
 	if cfg1.GogAccount != "work@company.com" || cfg1.OllamaBridgeModel != "work-model" {
 		t.Fatalf("setup: pack did not layer config: %+v", cfg1)
@@ -307,7 +307,7 @@ func TestPackUse_SamePackReactivationReconcilesRemovedFields(t *testing.T) {
 	// The author drops both fields from the manifest, then re-uses the pack.
 	mustWritePack(t, root, packManifest{Name: "work", Schema: 1})
 	out.Reset()
-	runPackUse(env, &out, []string{root})
+	runPackUse(env, &out, []string{root}, registerServers)
 	cfg2, _ := config.Load()
 	if cfg2.GogAccount != "manual@example.com" {
 		t.Errorf("removed gog_account must revert to prior on re-use, got %q", cfg2.GogAccount)
@@ -345,7 +345,7 @@ func TestPackUse_RegistersMcpAlreadyPresentInConfig(t *testing.T) {
 
 	var out bytes.Buffer
 	// --yes: Tier-1 pack (declares an mcp); tests have no TTY (Phase-2 gate).
-	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"})
+	runPackUse(fakeGitEnv(nil), &out, []string{root, "--yes"}, registerServers)
 	// mcp.RegisterServers must be INVOKED for an already-present pack MCP (retry
 	// recovery), not skipped by an only-newly-added gate — observable as its own
 	// per-server line for fastmail (here classified remote in the fake env).
@@ -373,7 +373,7 @@ func TestPackAdd_Mcp_RetryReregisters(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--yes"})
+	runPackAdd(fakeGitEnv(nil), &out, []string{"mcp", "fastmail", root, "--yes"}, registerServers)
 	// Re-invocation is observable as mcp.RegisterServers' own per-server line for
 	// fastmail (here classified remote in the fake env), not the error-only note.
 	if !strings.Contains(out.String(), "fastmail") {
